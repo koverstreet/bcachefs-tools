@@ -24,7 +24,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
 use crate::opts::data_type_str;
-use crate::locking::{ByteLock, Locked};
+use crate::locking::{ByteLock, Guard as _, Locked};
 use crate::sb::errors::SbErrorId;
 use crate::types::{bits_to_longs, Le64};
 use crate::util::kernel::unlikely;
@@ -1015,7 +1015,7 @@ impl Fs {
     pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
         let state = self.state_lock_write();
         for ca in self.members() {
-            let nouse = ca.buckets_nouse.published_writer(&state);
+            let nouse = state.writer_of(&ca.buckets_nouse);
             assert!(nouse.with(|w| w.is_empty()), "buckets_nouse allocated twice");
             if nouse.rebuild(bits_to_longs(ca.mi.get().nbuckets as usize), |_| ()).is_err() {
                 return self.throw(bch_errcode::BCH_ERR_ENOMEM_buckets_nouse);
@@ -1030,7 +1030,7 @@ impl Dev {
     /// both have - and its bucket bitmaps with them; nothing changed on
     /// failure.
     pub fn buckets_resize(&self, state: &StateLockWrite<'_>, nbuckets: u64) -> Result<(), BchError> {
-        self.buckets_resize_writer(self.bucket_gens.published_writer(state), nbuckets)
+        self.buckets_resize_writer(state.writer_of(&self.bucket_gens), nbuckets)
     }
 
     /// buckets_resize()'s, by @gens, bucket_gens' writer: under state_lock,
@@ -1069,7 +1069,7 @@ impl Dev {
             first_bucket:         mi.first_bucket,
             nbuckets_minus_first: (mi.nbuckets - u64::from(mi.first_bucket)) as usize,
         };
-        let gens = self.bucket_gens.value_mut().published_writer_mut();
+        let gens = self.bucket_gens.published_writer_mut();
         debug_assert!(gens.read_head(&read_lock()).is_none(), "bucket gens allocated twice");
         if gens.rebuild_head(mi.nbuckets as usize, head, |_, _| Ok::<(), Infallible>(())).is_err() {
             return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_bucket_gens);

@@ -26,7 +26,8 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawReadLock, RawRwLock, RawTryLock, SharedGuard};
+use super::{Exclusive, ExclusiveGuard, Locked, RawLock, RawLockBase, RawReadLock, RawRwLock, RawTryLock, Shared,
+            SharedGuard};
 use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::sched;
@@ -192,8 +193,10 @@ unsafe impl<R: RawRwLock, const F: u32> RawRwLock for Memalloc<R, F> {
 
 unsafe impl<R: ::pin_init::Zeroable, const F: u32> ::pin_init::Zeroable for Memalloc<R, F> {}
 
-impl<'a, R: RawRwLock<GuardState = ()>, const F: u32, G: Sync, P> SharedGuard<'a, Memalloc<R, F>, G, P> {
-    pub fn with_write<T>(&mut self, f: impl FnOnce(&mut ExclusiveGuard<'_, Memalloc<R, F>, G, P>) -> T) -> T {
+impl<'a, R: RawRwLock<GuardState = ()>, const F: u32, G: Sync, P, A> SharedGuard<'a, Memalloc<R, F>, G, P, Shared, A> {
+    pub fn with_write<T>(&mut self, f: impl FnOnce(&mut ExclusiveGuard<'_, Memalloc<R, F>, G, P, Exclusive, A>) -> T)
+        -> T
+    {
         /*
          * Raw of the inner rwsem: our caller holds the lock read via the
          * guard, so its memalloc scope stays set across this temporary
@@ -202,13 +205,13 @@ impl<'a, R: RawRwLock<GuardState = ()>, const F: u32, G: Sync, P> SharedGuard<'a
          */
         let lock = self.lock();
         unsafe { lock.raw().0.unlock_read(()) };
-        let ret = f(&mut lock.write());
+        let ret = f(&mut lock.write().placed());
         unsafe { lock.raw().0.lock_read() };
         ret
     }
 }
 
-impl<'a, R: RawLock<GuardState = ()>, const F: u32, G, P> ExclusiveGuard<'a, Memalloc<R, F>, G, P> {
+impl<'a, R: RawLock<GuardState = ()>, const F: u32, G, P, A> ExclusiveGuard<'a, Memalloc<R, F>, G, P, Exclusive, A> {
     pub fn with_unlocked<T>(&mut self, f: impl FnOnce() -> T) -> T {
         /*
          * Raw drop/retake of just the lock: the guard keeps its memalloc

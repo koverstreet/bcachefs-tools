@@ -2650,9 +2650,12 @@ fn in_place(f: &CFieldDef) -> bool {
     f.inline || f.group || (f.anon && f.c_decl.is_none())
 }
 
-/// A Locked<R, G, P>, as @ty, Rust source: R, G and P - G and P (), as Locked's
-/// defaults, when they're left out.
+/// A Locked<R, G, P>, as @ty, Rust source - or a Placed one: R, G and P - G
+/// and P (), as Locked's defaults, when they're left out.
 pub fn lock_args(ty: &str) -> Result<Option<[String; 3]>, String> {
+    if let Some([locked, _]) = container_args(ty, "Placed")?.as_deref() {
+        return lock_args(locked);
+    }
     Ok(match container_args(ty, "Locked")?.as_deref() {
         Some([r, rest @ ..]) if rest.len() <= 2 => {
             let arg = |n: usize| rest.get(n).cloned().unwrap_or_else(|| "()".into());

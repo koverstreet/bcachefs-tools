@@ -470,8 +470,11 @@ pub struct bch_fs_capacity {
     #[pin]
     #[init(new_lock!((), "&c->capacity.mark_lock"))]
     #[c("struct percpu_rwsem_noio mark_lock")]
-    pub mark_lock: crate::locking::PercpuRwsemNoio,
+    pub mark_lock: crate::util::place::Placed<crate::locking::PercpuRwsemNoio, MarkLockAt>,
 }
+
+/// mark_lock's place, for what it covers to name.
+pub type MarkLockAt = crate::at!(bch_fs_capacity.mark_lock);
 
 #[placed(Fs.allocator)]
 #[pin_data]

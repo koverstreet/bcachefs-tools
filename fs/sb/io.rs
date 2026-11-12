@@ -142,7 +142,7 @@ use crate::c;
 use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::locking::AsLockedBy;
+use crate::locking::Guard as _;
 use crate::sb::errors::SbErrorId;
 use crate::sb::members;
 use crate::data_structures::bitmap::LeBitmap;
@@ -1967,7 +1967,7 @@ impl Fs {
     /// The superblock @sb holds, to resize - and each online device's grown
     /// with it, under the same sb_lock.
     pub fn sb_resize<'a>(&'a self, sb: &'a mut SbLockGuard<'_>) -> FsSbResize<'a> {
-        assert!(core::ptr::eq(sb.lock(), &self.sb), "sb_resize(): another filesystem's sb_lock");
+        assert!(core::ptr::eq(sb.lock(), &*self.sb), "sb_resize(): another filesystem's sb_lock");
         FsSbResize { fs: self, disk_sb: sb }
     }
 }
@@ -2000,7 +2000,7 @@ impl SbResize for FsSbResize<'_> {
         for ca in self.fs.online_members() {
             // SAFETY: our devices', under the sb_lock we hold - mutably, and
             // nothing else of it is borrowed meanwhile
-            let io = unsafe { ca.disk_sb.locked_by().protected_mut() };
+            let io = unsafe { ca.disk_sb.protected_mut() };
             io.realloc(&ca.disk_sb, (io.buf.sb().u64s() as isize + d) as u32).ok()?;
         }
         Some(())
@@ -2018,14 +2018,14 @@ pub struct DevSbMut<'a> {
 impl Fs {
     /// That @ca's superblock is the one @sb locks: sb_lock is ours, @ca ours.
     fn dev_sb_check(&self, sb: &SbLockGuard<'_>, ca: &Dev) {
-        assert!(core::ptr::eq(sb.lock(), &self.sb), "dev_sb(): another filesystem's sb_lock");
+        assert!(core::ptr::eq(sb.lock(), &*self.sb), "dev_sb(): another filesystem's sb_lock");
         assert!(core::ptr::eq(ca.fs(), self), "dev_sb(): another filesystem's device {}", ca.dev_idx);
     }
 
     /// @ca's superblock, under sb_lock: None if it has none, not attached.
     pub fn dev_sb<'a>(&self, sb: &'a SbLockGuard<'_>, ca: &'a Dev) -> Option<&'a bch_sb_buf> {
         self.dev_sb_check(sb, ca);
-        let io = ca.disk_sb.protected(sb);
+        let io = sb.get_of(&ca.disk_sb);
         (!io.buf.sb.is_null()).then_some(&io.buf)
     }
 
@@ -2035,7 +2035,7 @@ impl Fs {
         self.dev_sb_check(sb, ca);
         // SAFETY: @sb holds sb_lock, which protects it - mutably borrowed, so
         // nothing else of it is
-        let io = unsafe { ca.disk_sb.locked_by().protected_mut() };
+        let io = unsafe { ca.disk_sb.protected_mut() };
         (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb: sb.sb(), io, ca })
     }
 }
@@ -2126,7 +2126,7 @@ impl Fs {
         let fs_sb = sb.sb();
         devs.iter().map(move |ca| {
             // SAFETY: as dev_sb_mut()'s - each device's once, by @seen
-            let io = unsafe { ca.disk_sb.locked_by().protected_mut() };
+            let io = unsafe { ca.disk_sb.protected_mut() };
             (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb, io, ca })
         })
     }

@@ -26,7 +26,7 @@ use crate::format::{DataType, SbFeature};
 use crate::fs::{Dev, Fs, SbLockGuard};
 use crate::journal::sb::buckets_to_sb;
 use crate::c::JournalGuard;
-use crate::locking::LockedBy;
+use crate::locking::{Guard as _, LockedBy};
 use crate::util::alloc::KVVec;
 use crate::util::closure::StackClosure;
 use crate::util::kernel::totalram_bytes;
@@ -275,7 +275,7 @@ impl Splice {
 }
 
 /* The ring, and its nr for those without the lock */
-pub type JournalBuckets = LockedBy<JournalRing, Volatile<u32>, crate::field!(super.fs->journal.lock)>;
+pub type JournalBuckets = LockedBy<JournalRing, Volatile<u32>, c::JournalLockAt>;
 
 pub fn new() -> JournalBuckets {
     let ring = JournalRing {
@@ -289,11 +289,11 @@ pub fn new() -> JournalBuckets {
 
 impl Dev {
     pub fn journal_ring<'g>(&'g self, j: &'g JournalGuard<'_>) -> &'g JournalRing {
-        self.journal.buckets.protected(j)
+        j.get_of(&self.journal.buckets)
     }
 
     pub fn journal_ring_mut<'g>(&'g self, j: &'g mut JournalGuard<'_>) -> &'g mut JournalRing {
-        self.journal.buckets.protected_mut(j)
+        j.get_mut_of(&self.journal.buckets)
     }
 
     pub fn with_journal_ring<R>(&self, f: impl FnOnce(&mut JournalRing) -> R) -> R {
@@ -322,7 +322,7 @@ impl c::journal_device {
 
     /// Before the journal starts: through the only reference to it.
     pub fn ring_mut(&mut self) -> &mut JournalRing {
-        self.buckets.value_mut().get_mut()
+        self.buckets.get_mut()
     }
 }
 

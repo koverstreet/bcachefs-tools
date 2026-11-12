@@ -74,6 +74,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Fs, SbLockGuard};
+use crate::locking::Guard as _;
 use crate::opts::OptFn;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members;
@@ -706,7 +707,7 @@ impl SbFieldOps for c::bch_sb_field_disk_groups {
         };
         let src = &groups.entries;
 
-        fs.disk_groups.published_writer(&*sb).rebuild(src.len(), |dst| groups_to_cpu(dst, src, sb.sb()))
+        sb.writer::<crate::field!(disk_groups)>().rebuild(src.len(), |dst| groups_to_cpu(dst, src, sb.sb()))
             .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_groups_to_cpu))
     }
 }

@@ -326,6 +326,17 @@ impl<R: RawLockBase, G, P> Drop for Locked<R, G, P> {
     }
 }
 
+/// For #[c_lock]'s asserts, as Locked's: it's at a Placed's start.
+impl<R: RawLockBase, G, P, A> Placed<Locked<R, G, P>, A> {
+    pub const PROTECTED_OFFSET: usize = Locked::<R, G, P>::PROTECTED_OFFSET;
+    pub const PUBLISHED_OFFSET: usize = Locked::<R, G, P>::PUBLISHED_OFFSET;
+
+    /// As Locked::get_mut(): the lock stays where it is.
+    pub fn get_mut(&mut self) -> &mut G {
+        unsafe { &mut *self.protected.get() }
+    }
+}
+
 /// A lock placed in its parent, at A: its guards carry A, so a guard knows
 /// where its lock is.
 impl<R: RawLock, G, P, A> Placed<Locked<R, G, P>, A> {
@@ -431,7 +442,7 @@ impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A> ExclusiveGuard<'a, R, G, P, U, A
     }
 
     /// The guard, of a lock placed at @B: Placed<Locked, B>'s alone to call.
-    fn placed<B>(self) -> ExclusiveGuard<'a, R, G, P, U, B> {
+    pub(super) fn placed<B>(self) -> ExclusiveGuard<'a, R, G, P, U, B> {
         let mut g = core::mem::ManuallyDrop::new(self);
         ExclusiveGuard { lock: g.lock, state: g.state.take(), _not_send: PhantomData }
     }
@@ -508,7 +519,7 @@ impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A> SharedGuard<'a, R, G, P, U, A> {
     }
 
     /// As ExclusiveGuard::placed().
-    fn placed<B>(self) -> SharedGuard<'a, R, G, P, U, B> {
+    pub(super) fn placed<B>(self) -> SharedGuard<'a, R, G, P, U, B> {
         let mut g = core::mem::ManuallyDrop::new(self);
         SharedGuard { lock: g.lock, state: g.state.take(), _not_send: PhantomData }
     }
@@ -558,35 +569,103 @@ impl<R: RawLockBase, G, P, U: Unlock<R>, A> Drop for SharedGuard<'_, R, G, P, U,
     }
 }
 
-/// A guard, shared or exclusive: the lock it holds, for a placed LockedBy to
-/// check it's the one it's under.
-pub trait Held {
-    type Raw: RawLockBase;
-    fn held(&self) -> *const Self::Raw;
-}
+/// What a LockedBy names for its L, and is had through: a placed lock's
+/// guard, by the lock's place. Its root is where paths to what it covers
+/// start: the struct its lock is placed in. So writer::<field!(opts)>() of an
+/// sb_lock guard is its own filesystem's opts - nothing to check.
+///
+/// get_of() and the rest are had by reference instead, for a LockedBy no path
+/// reaches - a device's, under its filesystem's lock: checked to name this
+/// guard's place, but not that it's this lock - not another filesystem's.
+///
+/// # Safety
+/// While one lives, what Name names is held - shared, or alone if Alone - and
+/// root() is the struct it's in.
+pub(crate) unsafe trait Guard {
+    type Name;
+    type Root;
 
-impl<R: RawLockBase, G, P, U: Unlock<R>, A> Held for SharedGuard<'_, R, G, P, U, A> {
-    type Raw = R;
-    fn held(&self) -> *const R {
-        self.lock.raw()
+    fn root(&self) -> &Self::Root;
+
+    fn writer<'g, F>(&'g self) -> &'g <<F::To as AsLockedBy>::P as Publish>::Writer
+    where
+        F: Path<Self::Root>,
+        F::To: AsLockedBy<L = Self::Name, G: 'g, P: Publish + 'g> + 'g,
+    {
+        unsafe { F::get(self.root()).locked_by().published_writer() }
+    }
+
+    fn get_of<'g, C: AsLockedBy<L = Self::Name>>(&'g self, c: &'g C) -> &'g C::G {
+        unsafe { c.locked_by().protected() }
+    }
+
+    fn get_mut_of<'g, C: AsLockedBy<L = Self::Name>>(&'g mut self, c: &'g C) -> &'g mut C::G
+    where
+        Self: Alone,
+    {
+        unsafe { c.locked_by().protected_mut() }
+    }
+
+    fn writer_of<'g, C>(&'g self, c: &'g C) -> &'g <C::P as Publish>::Writer
+    where
+        C: AsLockedBy<L = Self::Name, P: Publish>,
+    {
+        unsafe { c.locked_by().published_writer() }
     }
 }
 
-impl<R: RawLockBase, G, P, U: Unlock<R>, A> Held for ExclusiveGuard<'_, R, G, P, U, A> {
-    type Raw = R;
-    fn held(&self) -> *const R {
-        self.lock.raw()
+/// A Guard held alone: what it covers is had by &mut.
+///
+/// # Safety
+/// While one lives, nothing else holds what it names.
+pub(crate) unsafe trait Alone: Guard {}
+
+unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: 'a> Guard for SharedGuard<'a, R, G, P, U, A>
+where
+    Placed<Locked<R, G, P>, A>: Contained,
+{
+    type Name = A;
+    type Root = <Placed<Locked<R, G, P>, A> as Contained>::Parent;
+
+    fn root(&self) -> &Self::Root {
+        unsafe { placed_lock(self.lock) }.container()
     }
 }
+
+unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: 'a> Guard for ExclusiveGuard<'a, R, G, P, U, A>
+where
+    Placed<Locked<R, G, P>, A>: Contained,
+{
+    type Name = A;
+    type Root = <Placed<Locked<R, G, P>, A> as Contained>::Parent;
+
+    fn root(&self) -> &Self::Root {
+        unsafe { placed_lock(self.lock) }.container()
+    }
+}
+
+/// The Placed that @lock is the value of.
+///
+/// # Safety
+/// @lock is a guard of place A's: Placed<Locked, A>'s methods alone make
+/// one, of the Locked at its start.
+unsafe fn placed_lock<R: RawLockBase, G, P, A>(lock: &Locked<R, G, P>) -> &Placed<Locked<R, G, P>, A> {
+    unsafe { &*core::ptr::from_ref(lock).cast() }
+}
+
+// an exclusive guard's U is a mode no other holder shares
+unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: 'a> Alone for ExclusiveGuard<'a, R, G, P, U, A>
+where
+    Placed<Locked<R, G, P>, A>: Contained,
+{}
 
 /// Locked's two halves, for data that can't live in its lock: @G, reached only
 /// with that lock held, and @P, published - anyone's, it derefs to it. Laid
 /// out as G then P, as Locked's are.
 ///
-/// Which lock that is, @L says: a path - field!(capacity.mark_lock) - from the
-/// struct it's placed in, a Placed<LockedBy, at!(...)>, whose protected()
-/// checks the guard it's shown is that lock's. With none, () - only the owner
-/// knows, and checks only unsafely.
+/// Which lock that is, @L names: its place - at!(Fs.sb), of a Placed<Locked>
+/// - whose guards have it, as a Guard. With none, () - only the owner knows,
+/// and has it only unsafely.
 #[repr(C)]
 pub struct LockedBy<G, P = (), L = ()> {
     protected: UnsafeCell<G>,
@@ -659,7 +738,7 @@ impl<G, P, L> Deref for LockedBy<G, P, L> {
     }
 }
 
-/// A LockedBy as a Placed holds it: itself, or - in a struct C shares - a
+/// A LockedBy as a struct holds it: itself, or - in a struct C shares - a
 /// RustOnly of it.
 pub trait AsLockedBy {
     type G;
@@ -686,57 +765,6 @@ where
     type L = L;
     fn locked_by(&self) -> &LockedBy<G, P, L> {
         self
-    }
-}
-
-/// A LockedBy placed in its parent, its lock at its L from there: its G, had
-/// by showing a guard of that lock.
-impl<C: AsLockedBy, A> Placed<C, A> {
-    #[track_caller]
-    fn check<H: Held, LG, LP>(&self, guard: &H)
-    where
-        Self: Contained,
-        C::L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>>,
-    {
-        let lock = C::L::get(self.container());
-        assert!(core::ptr::eq(guard.held(), lock.raw()), "a LockedBy shown a guard of another lock");
-    }
-
-    /// G, while @guard holds its lock.
-    #[track_caller]
-    pub(crate) fn protected<'g, H: Held, LG, LP>(&'g self, guard: &'g H) -> &'g C::G
-    where
-        Self: Contained,
-        C::L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>>,
-    {
-        self.check(guard);
-        unsafe { self.locked_by().protected() }
-    }
-
-    /// G alone, while @guard holds its lock exclusively.
-    #[track_caller]
-    pub(crate) fn protected_mut<'g, R: RawLockBase, LG, LP, U: Unlock<R>>(
-        &'g self,
-        guard: &'g mut ExclusiveGuard<'_, R, LG, LP, U>,
-    ) -> &'g mut C::G
-    where
-        Self: Contained,
-        C::L: Path<<Self as Contained>::Parent, To = Locked<R, LG, LP>>,
-    {
-        self.check(&*guard);
-        unsafe { self.locked_by().protected_mut() }
-    }
-
-    /// P as its writer has it, while @guard holds its lock.
-    #[track_caller]
-    pub(crate) fn published_writer<'g, H: Held, LG, LP>(&'g self, guard: &'g H) -> &'g <C::P as Publish>::Writer
-    where
-        Self: Contained,
-        C::L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>>,
-        C::P: Publish,
-    {
-        self.check(guard);
-        unsafe { self.locked_by().published_writer() }
     }
 }
 

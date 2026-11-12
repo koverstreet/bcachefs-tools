@@ -514,7 +514,11 @@ impl JournalPublished {
     }
 }
 
-pub type JournalGuard<'a> = ExclusiveGuard<'a, c::spinlock_t, JournalLocked, JournalPublished>;
+pub type JournalGuard<'a> =
+    ExclusiveGuard<'a, c::spinlock_t, JournalLocked, JournalPublished, crate::locking::Exclusive, JournalLockAt>;
+
+/// The journal lock's place, for what it covers to name.
+pub type JournalLockAt = crate::at!(journal.lock);
 
 /* pin_resize_lock's: the journal pin fifo's entries, a power of two of them */
 #[repr(C)]
@@ -555,7 +559,7 @@ nest! {
         #[pin]
         #[init_locked(JournalPublished::closed(), "&j->lock")]
         #[c_lock("spinlock_t lock")]
-        pub lock: Locked<c::spinlock_t, JournalLocked, JournalPublished>,
+        pub lock: Placed<Locked<c::spinlock_t, JournalLocked, JournalPublished>, JournalLockAt>,
 
         #[c("unsigned long flags")]
         pub flags: crate::data_structures::bitmap::AtomicBitflags<c::journal_flags>,
@@ -716,7 +720,7 @@ impl journal {
 pub struct journal_device {
     #[pin]
     #[init(RustOnly::new(crate::journal::buckets::new()))]
-    pub buckets: Placed<rust_only!(JournalBuckets), crate::at!(journal_device.buckets)>,
+    pub buckets: rust_only!(JournalBuckets),
 
     pub sectors_free: Volatile<c_uint>,
 

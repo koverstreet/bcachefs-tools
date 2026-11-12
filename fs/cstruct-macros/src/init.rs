@@ -114,12 +114,20 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         if let Some(a) = f.attrs.iter().find(|a| a.path().is_ident("init_locked")) {
             let args: TokenStream = a.parse_args()?;
             let n = name.to_string();
+            /* a placed lock: its At around it, its data's AtInner in it */
+            let field = if is_placed(ty) {
+                quote!(crate::util::place::at::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(
+                    |at| crate::util::place::Placed::new(at, lock(inner))))
+            } else {
+                quote!(lock(inner))
+            };
             inits.push(quote!(#name <- {
-                let lock = |at| crate::new_lock!(
+                let lock = |inner| crate::new_lock!(
                     <- <<<Self as crate::util::place::Field<{ crate::util::place::name(#n) }>>::Type
-                        as crate::util::place::Wrapper>::Inner>::init(at), #args);
+                        as crate::util::place::Wrapper>::Inner>::init(inner), #args);
                 unsafe {
-                    crate::util::place::at_inner::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(lock)
+                    crate::util::place::at_inner::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(
+                        |inner| #field)
                 }
             },));
             continue;
@@ -127,9 +135,12 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         if is_placed(ty) {
             let value = init.unwrap_or_else(|| quote!(::pin_init::zeroed()));
             let n = name.to_string();
-            inits.push(quote!(#name <- unsafe {
-                crate::util::place::at::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(
-                    |at| crate::util::place::Placed::new(at, #value))
+            inits.push(quote!(#name <- {
+                let value = #value;
+                unsafe {
+                    crate::util::place::at::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(
+                        |at| crate::util::place::Placed::new(at, value))
+                }
             },));
             continue;
         }

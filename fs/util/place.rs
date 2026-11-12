@@ -498,12 +498,10 @@ impl<C, A> Placed<C, A> {
     }
 }
 
-impl<C: Unpin, A> Placed<C, A> {
-    /// C, through the only reference to the field: what it holds may change,
-    /// but not where it is - its At stays.
-    pub(crate) fn value_mut(&mut self) -> &mut C {
-        &mut self.value
-    }
+// A placed Locked's data is placed as a Locked's is: C is at its start.
+unsafe impl<C: Wrapper, A> Wrapper for Placed<C, A> {
+    type Inner = C::Inner;
+    const INNER_OFFSET: usize = core::mem::offset_of!(Self, value) + C::INNER_OFFSET;
 }
 
 impl<C, A> core::ops::Deref for Placed<C, A> {

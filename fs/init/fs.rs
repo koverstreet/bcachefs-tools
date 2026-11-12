@@ -24,7 +24,7 @@ use crate::init::registry::register;
 use crate::init::rw::writes_disabled;
 use crate::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
-use crate::locking::{ExclusiveGuard, Held, Noio, PercpuRwsemNoio, RawLockBase, SharedGuard};
+use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwsemNoio, RawLockBase, Shared, SharedGuard};
 use crate::{bch_verbose, new_lock, prt};
 use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, version, Holder};
@@ -61,7 +61,8 @@ c_extern! {
 }
 
 /// sb_lock, held: the superblock, and c->sb, which it publishes
-pub type SbLockGuard<'a> = ExclusiveGuard<'a, Noio<c::mutex>, c::bch_fs_sb, c::bch_sb_cpu>;
+pub type SbLockGuard<'a> =
+    ExclusiveGuard<'a, Noio<c::mutex>, c::bch_fs_sb, c::bch_sb_cpu, Exclusive, crate::at!(Fs.sb)>;
 
 impl SbLockGuard<'_> {
     pub fn fs_member_mut(&mut self, dev_idx: u32) -> &mut c::bch_member {
@@ -72,18 +73,20 @@ impl SbLockGuard<'_> {
 
 pub struct StateLockRead<'a> {
     fs:     &'a Fs,
-    _guard: SharedGuard<'a, c::rw_semaphore>,
+    _guard: SharedGuard<'a, c::rw_semaphore, (), (), Shared, crate::at!(Fs.state_lock)>,
 }
 
 pub struct StateLockWrite<'a> {
     fs:     &'a Fs,
-    _guard: ExclusiveGuard<'a, c::rw_semaphore>,
+    _guard: ExclusiveGuard<'a, c::rw_semaphore, (), (), Exclusive, crate::at!(Fs.state_lock)>,
 }
 
-impl Held for StateLockWrite<'_> {
-    type Raw = c::rw_semaphore;
-    fn held(&self) -> *const c::rw_semaphore {
-        self._guard.held()
+/// Its guard: what state_lock covers is had through it.
+impl<'a> core::ops::Deref for StateLockWrite<'a> {
+    type Target = ExclusiveGuard<'a, c::rw_semaphore, (), (), Exclusive, crate::at!(Fs.state_lock)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self._guard
     }
 }
 
@@ -94,7 +97,7 @@ impl<'a> StateLockWrite<'a> {
 
     /// c->devs[], as their writer has them.
     pub(crate) fn devs(&self) -> &[RcuPtrWriter<ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize] {
-        self.fs.devs.published_writer(&self._guard)
+        self.writer::<crate::field!(devs)>()
     }
 }
 
@@ -127,7 +130,7 @@ impl Fs {
     }
 
     pub fn opts_writer<'a>(&'a self, sb: &'a mut SbLockGuard<'_>) -> &'a c::PublishedOptsWriter {
-        self.opts.published_writer(&*sb)
+        sb.writer::<crate::field!(opts)>()
     }
 
     /// log2 of the block size, in 512-byte sectors
@@ -206,7 +209,7 @@ impl Fs {
         self.holder.as_ref().expect("a filesystem's holder, from alloc()")
     }
 
-    pub fn mark_lock(&self) -> &PercpuRwsemNoio {
+    pub fn mark_lock(&self) -> &crate::util::place::Placed<PercpuRwsemNoio, c::MarkLockAt> {
         &self.capacity.mark_lock
     }
 

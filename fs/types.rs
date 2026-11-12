@@ -368,16 +368,14 @@ pub struct Dev {
     pub uuid: c::__uuid_t,
     pub name: [c_char; c::BDEVNAME_SIZE as usize],
     #[pin]
-    #[init(Kobject::new::<Dev>())]
+    #[init(unsafe { Kobject::new::<Dev>() })]
     #[c("struct kobject kobj")]
     pub(crate) kobj: Placed<Kobject, crate::at!(Dev.kobj)>,
 
     /// Its superblock, sb_lock's - through Fs::dev_sb() - and the block
     /// device it's on, fixed while it's attached.
     #[c("struct bch_sb_handle disk_sb")]
-    #[pin]
-    #[init(::pin_init::init_zeroed())]
-    pub disk_sb: Placed<LockedBy<c::bch_sb_io, c::bch_sb_bdev, crate::field!(fs->sb)>, crate::at!(Dev.disk_sb)>,
+    pub disk_sb: LockedBy<c::bch_sb_io, c::bch_sb_bdev, crate::at!(Fs.sb)>,
     /// Its superblock's layout, for what can't take sb_lock to read disk_sb -
     /// whose buffer write_super can reallocate: the allocator, steering clear
     /// of superblock buckets. Copied as it's attached, and as it's edited -
@@ -398,16 +396,10 @@ pub struct Dev {
     #[c("GENRADIX(struct bucket) buckets_gc")]
     pub buckets_gc: SharedGenRadix<c::bucket>,
     #[c("struct bucket_gens __rcu *bucket_gens")]
-    #[pin]
-    #[init(::pin_init::init_zeroed())]
-    pub bucket_gens: Placed<LockedBy<(), c::BucketGensArray, crate::field!(fs->state_lock)>,
-                            crate::at!(Dev.bucket_gens)>,
+    pub bucket_gens: LockedBy<(), c::BucketGensArray, crate::at!(Fs.state_lock)>,
     /* allocated once, by migrate, and read without a lock */
     #[c("struct bucket_bitmap_words __rcu *buckets_nouse")]
-    #[pin]
-    #[init(::pin_init::init_zeroed())]
-    pub buckets_nouse: Placed<LockedBy<(), c::BucketBitmapWords, crate::field!(fs->state_lock)>,
-                              crate::at!(Dev.buckets_nouse)>,
+    pub buckets_nouse: LockedBy<(), c::BucketBitmapWords, crate::at!(Fs.state_lock)>,
 
     #[pin]
     #[init(c::bucket_bitmap::init())]
@@ -590,7 +582,7 @@ pub struct Fs {
     pub cl: c::closure,
 
     #[pin]
-    #[init(Kobject::new::<Fs>())]
+    #[init(unsafe { Kobject::new::<Fs>() })]
     #[c("struct kobject kobj")]
     pub(crate) kobj: Placed<Kobject, crate::at!(Fs.kobj)>,
     #[c("unsigned long flags")]
@@ -647,7 +639,7 @@ pub struct Fs {
     #[pin]
     #[init(new_lock!((), "&c->state_lock"))]
     #[c("struct rw_semaphore state_lock")]
-    pub state_lock: Locked<c::rw_semaphore>,
+    pub state_lock: Placed<Locked<c::rw_semaphore>, crate::at!(Fs.state_lock)>,
 
     /* Counts outstanding writes, for clean transition to read-only */
     #[c("struct enumerated_ref writes")]
@@ -672,11 +664,8 @@ pub struct Fs {
 
     /// Written under state_lock: StateLockWrite::devs().
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]
-    #[pin]
-    #[init(::pin_init::init_zeroed())]
-    pub devs: Placed<LockedBy<(), [crate::util::rcu::RcuPtr<crate::util::refcount::ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize],
-                              crate::field!(state_lock)>,
-                     crate::at!(Fs.devs)>,
+    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<crate::util::refcount::ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize],
+                       crate::at!(Fs.state_lock)>,
     #[c("struct bch_devs_mask devs_online")]
     pub devs_online: c::AtomicDevsMask,
     #[c("struct bch_devs_mask devs_removed")]
@@ -686,10 +675,9 @@ pub struct Fs {
 
     /// The options: read by anyone, an option at a time - written under
     /// sb_lock, which publishes them - Fs::opts_writer().
-    #[pin]
     #[init(LockedBy::new((), (*options).into()))]
     #[c("struct bch_opts opts")]
-    pub opts: Placed<LockedBy<(), c::PublishedOpts, crate::field!(sb)>, crate::at!(Fs.opts)>,
+    pub opts: LockedBy<(), c::PublishedOpts, crate::at!(Fs.sb)>,
     pub opt_change_lock: c::mutex,
     /// Odd while options change, bumped under opt_change_lock by
     /// OptChange, taking it and dropping it; read without it.
@@ -705,7 +693,7 @@ pub struct Fs {
     #[pin]
     #[init(crate::new_lock!(Default::default(), ::pin_init::zeroed(), "&c->sb_lock"))]
     #[c_anon("struct mutex_noio sb_lock; struct bch_fs_sb disk_sb; struct bch_sb_cpu sb")]
-    pub sb: MutexNoio<c::bch_fs_sb, c::bch_sb_cpu>,
+    pub sb: Placed<MutexNoio<c::bch_fs_sb, c::bch_sb_cpu>, crate::at!(Fs.sb)>,
     #[c("unsigned long incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))]")]
     pub incompat_versions_requested: crate::data_structures::bitmap::AtomicBitArray<{
         bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize) }>,
@@ -782,17 +770,13 @@ pub struct Fs {
     /// The in-memory accounting table, under mark_lock.
     #[pin]
     #[init(RustOnly::new(LockedBy::new(crate::alloc::accounting_mem::Table::default(), ())))]
-    pub(crate) accounting: Placed<rust_only!(LockedBy<crate::alloc::accounting_mem::Table, (),
-                                                       crate::field!(capacity.mark_lock)>),
-                                  crate::at!(Fs.accounting)>,
+    pub(crate) accounting: rust_only!(LockedBy<crate::alloc::accounting_mem::Table, (), c::MarkLockAt>),
     /// The replicas table, behind its own lock: alloc/replicas.rs's alone.
     #[pin]
     #[init(RustOnly::new(crate::new_lock!(crate::alloc::replicas::ReplicasCpu::new(), "&c->replicas")))]
     pub(crate) replicas: rust_only!(PercpuRwsemNoio<crate::alloc::replicas::ReplicasCpu>),
     #[c("struct bch_disk_groups_cpu __rcu *disk_groups")]
-    #[pin]
-    #[init(::pin_init::init_zeroed())]
-    pub disk_groups: Placed<LockedBy<(), c::DiskGroups, crate::field!(sb)>, crate::at!(Fs.disk_groups)>,
+    pub disk_groups: LockedBy<(), c::DiskGroups, crate::at!(Fs.sb)>,
     #[pin]
     #[init(c::bch_fs_capacity::init())]
     pub capacity: c::bch_fs_capacity,
