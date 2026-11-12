@@ -5,12 +5,12 @@ use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags, BKEY_U64S}
 use crate::btree::cache::Bounce;
 use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::sort::{
-    bch2_btree_build_aux_trees, bch2_btree_node_compact, bch2_btree_node_set_needs_whiteout,
-    bch2_btree_node_sort, bch2_drop_whiteouts, bch2_sort_whiteouts, CompactMode, WriteSortRuns,
+    bch2_btree_node_compact, bch2_btree_node_set_needs_whiteout, bch2_sort_whiteouts, btree_node_sort,
+    build_aux_trees, drop_whiteouts, CompactMode, WriteSortRuns,
 };
 use crate::btree::node::bset::MAX_BSETS;
 use crate::btree::node::{BtreeNode, NodeContents};
-use crate::btree::path::{LockedNode, Paths, PathsUpdates};
+use crate::btree::path::{LockedNode, Paths, PathsUpdates, Write};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
 use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
@@ -386,7 +386,7 @@ pub(crate) fn node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, mut ty: BtreeWri
     assert!(contents.data().magic.get() == fs.bset_magic());
     assert!(plain_bytes(&contents.data().format) == plain_bytes(&contents.format));
 
-    bch2_sort_whiteouts(fs, b);
+    bch2_sort_whiteouts(fs, b, unsafe { b.contents_mut() });
 
     let contents = unsafe { b.contents() };
     let Some(mut w) = BsetWrite::build(unsafe { Fs::borrow_raw(fs.as_ptr()) }, b, contents) else {
@@ -679,7 +679,7 @@ pub fn trans_submit_write_bios(trans: &BtreeTrans<'_>) {
 /*
  * Work that must be done with write lock held:
  */
-pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &BtreeNode) -> bool {
+pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
     if !b.flags.just_written() {
         return false;
     }
@@ -701,12 +701,12 @@ pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &BtreeNode) -> bool {
      * XXX: decide if we really want to unconditionally sort down to a
      * single bset:
      */
-    let nsets = unsafe { b.contents() }.nsets;
+    let nsets = b.contents().nsets;
     let invalidated_iter = if nsets > 1 {
-        bch2_btree_node_sort(fs, b, 0, nsets.into());
+        btree_node_sort(fs, b.node(), b.contents_mut(), 0, nsets.into());
         true
     } else {
-        bch2_drop_whiteouts(b, CompactMode::COMPACT_ALL)
+        drop_whiteouts(b.node(), b.contents_mut(), CompactMode::COMPACT_ALL)
     };
 
     bch2_btree_node_set_needs_whiteout(b);
@@ -715,14 +715,14 @@ pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &BtreeNode) -> bool {
      * If later we don't unconditionally sort down to a single bset, we have
      * to ensure this is still true:
      */
-    let contents = unsafe { b.contents_mut() };
+    let (b, contents) = (b.node(), b.contents_mut());
     assert!(contents.last_set().end_offset as usize <= b.written_end());
 
     if let Some(bne) = b.want_new_bset(contents, fs) {
         b.keys_mut(contents).bset_init_next(bne);
     }
 
-    bch2_btree_build_aux_trees(b);
+    build_aux_trees(b, contents);
 
     invalidated_iter
 }
@@ -748,7 +748,7 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b:
 
         /* don't cycle lock unnecessarily: */
         if b.flags.just_written() && six_trylock_ip(lock, SIX_LOCK_write, crate::ret_ip!()) {
-            bch2_btree_post_write_cleanup(fs, b);
+            bch2_btree_post_write_cleanup(fs, &mut unsafe { LockedNode::new_write(b) });
             trans.node_unlock_write_pathless(paths, b);
         }
 
@@ -756,10 +756,17 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b:
             unsafe { six_lock_downgrade(lock) };
         }
     } else {
+        assert!(lock_type_held != SIX_LOCK_write, "node_write_trans() of a node held for write: node_write_locked()");
         node_write(trans, b, ty, flags);
-        if lock_type_held == SIX_LOCK_write && b.flags.just_written() {
-            bch2_btree_post_write_cleanup(fs, b);
-        }
+    }
+}
+
+/// node_write_trans(), of a node held for write.
+pub(crate) fn node_write_locked(trans: &BtreeTrans<'_>, b: &mut LockedNode<'_, BtreeNode, Write>,
+                                ty: BtreeWriteType, flags: BtreeWriteFlags) {
+    node_write(trans, b, ty, flags);
+    if b.flags.just_written() {
+        bch2_btree_post_write_cleanup(trans.fs(), b);
     }
 }
 
@@ -772,13 +779,14 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b:
  *
  * Returns true if we sorted (i.e. invalidated iterators
  */
-pub(in crate::btree) fn bch2_btree_init_next(t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>, b: &BtreeNode) {
+pub(in crate::btree) fn bch2_btree_init_next(t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
+                                             b: &mut LockedNode<'_, BtreeNode, Write>) {
     let trans = t.trans();
     let fs = trans.fs();
     let mut reinit_iter = false;
 
     ebug_assert!(six_lock_counts(b.c.lock.six()).n[c::six_lock_type::SIX_LOCK_write as usize] != 0);
-    let contents = unsafe { b.contents() };
+    let contents = b.contents();
     assert!(!b.bset_written(&contents.set[1]));
     assert!(!b.flags.just_written());
 
@@ -786,28 +794,27 @@ pub(in crate::btree) fn bch2_btree_init_next(t: &TransAttempt<'_, '_>, pu: &mut 
         !b.flags.write_in_flight() &&
         contents.should_compact_all(fs)
     {
-        node_write_trans(trans, &mut pu.paths, b, c::six_lock_type::SIX_LOCK_write,
-                         BtreeWriteType::init_next_bset, BtreeWriteFlags::empty());
+        node_write_locked(trans, b, BtreeWriteType::init_next_bset, BtreeWriteFlags::empty());
         reinit_iter = true;
     }
 
-    if unsafe { b.contents() }.nsets as u32 == MAX_BSETS &&
+    if b.contents().nsets as u32 == MAX_BSETS &&
         bch2_btree_node_compact(fs, b)
     {
         reinit_iter = true;
     }
 
-    let contents = unsafe { b.contents_mut() };
+    let (n, contents) = (b.node(), b.contents_mut());
     assert!((contents.nsets as u32) < MAX_BSETS);
 
-    if let Some(bne) = b.want_new_bset(contents, fs) {
-        b.keys_mut(contents).bset_init_next(bne);
+    if let Some(bne) = n.want_new_bset(contents, fs) {
+        n.keys_mut(contents).bset_init_next(bne);
     }
 
-    bch2_btree_build_aux_trees(b);
+    build_aux_trees(n, contents);
 
     if reinit_iter {
-        trans.node_reinit_iter(t, pu, unsafe { LockedNode::new(b) });
+        trans.node_reinit_iter(t, pu, b.held());
     }
 }
 

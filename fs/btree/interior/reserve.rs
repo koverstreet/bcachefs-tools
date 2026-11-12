@@ -14,7 +14,7 @@ use crate::btree::cache::UnhashedNode;
 use crate::btree::iter::CommitOpts;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::bset::bch2_bset_init_first;
-use crate::btree::node::sort::{bch2_btree_build_aux_trees, bch2_btree_sort_into};
+use crate::btree::node::sort::{bch2_btree_sort_into, build_aux_trees};
 use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
@@ -46,8 +46,8 @@ use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, BTREE_RESERVE_MAX};
  *
  * Assumes all keys will successfully pack with the new format.
  */
-fn format_fits(b: &BtreeNode, new_f: &c::bkey_format) -> bool {
-    let contents = unsafe { b.contents() };
+fn format_fits(b: LockedNode<'_, BtreeNode>, new_f: &c::bkey_format) -> bool {
+    let contents = b.contents();
     b.fits_u64s(contents.nr.u64s_with_format(&contents.format, new_f))
 }
 
@@ -326,7 +326,7 @@ impl<'t> InteriorUpdate<'t> {
 
         contents.data_mut().set_new_extent_overwrite(true);
 
-        bch2_btree_build_aux_trees(n);
+        build_aux_trees(n, contents);
 
         let state = n.live_state();
         let (n, held) = node.hash(state).unwrap_or_else(|e| panic!("a new node's transition to live: {e}"));
@@ -338,10 +338,10 @@ impl<'t> InteriorUpdate<'t> {
     }
 
     /// A copy of @b, compacted.
-    pub(crate) fn alloc_replacement(&self, paths: &mut Paths<'_>, b: &BtreeNode) -> NewNode<'_> {
+    pub(crate) fn alloc_replacement(&self, paths: &mut Paths<'_>, b: LockedNode<'_, BtreeNode>) -> NewNode<'_> {
         let fs = self.fs();
         let mut n = self.alloc_node(paths, b.c.level.into());
-        let b_contents = unsafe { b.contents() };
+        let b_contents = b.contents();
         let mut format = b.calc_format(b_contents);
 
         /*
@@ -360,7 +360,7 @@ impl<'t> InteriorUpdate<'t> {
         contents.data_mut().format = format;
         contents.set_format(format);
 
-        bch2_btree_sort_into(fs, &n, b);
+        bch2_btree_sort_into(fs, &mut n, b);
 
         n.contents().reset_sib_u64s();
         n
@@ -378,7 +378,7 @@ impl<'t> InteriorUpdate<'t> {
         let contents = n.contents_mut();
         contents.data_mut().format = format;
         contents.set_format(format);
-        bch2_btree_build_aux_trees(&n);
+        build_aux_trees(n.node(), n.contents_mut());
 
         let locks_want = paths[path].locks_want();
         paths[path].bits.set_locks_want(locks_want + 1);

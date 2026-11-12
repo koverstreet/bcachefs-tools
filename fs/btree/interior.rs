@@ -789,14 +789,14 @@ impl<'t> InteriorUpdate<'t> {
     }
 
     /// The parent keys that go in @n inserted into it, @path's at its level.
-    fn insert_parent_keys(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) -> Result<(), BchError> {
-        split_merge::split_insert_keys(self.t, paths, path, n.held(), &mut self.owned.borrow_mut().parent_keys)
+    fn insert_parent_keys(&self, paths: &mut Paths<'_>, path: PathIdx, n: &mut NewNode<'_>) -> Result<(), BchError> {
+        split_merge::split_insert_keys(self.t, paths, path, n, &mut self.owned.borrow_mut().parent_keys)
     }
 
     /// The parent keys that go in @b inserted into it from @path's iterator
     /// there: @b is the node @path holds at its level.
     fn insert_parent_keys_at(&self, paths: &mut Paths<'_>, path: PathIdx,
-                             b: LockedNode<'_, BtreeNode>) -> Result<(), BchError> {
+                             b: &mut LockedNode<'_, BtreeNode, Write>) -> Result<(), BchError> {
         let node_iter = paths[path].l[usize::from(b.c.level)].iter;
         split_merge::insert_keys_interior(self.t, paths, path, b, node_iter,
                                           &mut self.owned.borrow_mut().parent_keys)
@@ -820,12 +820,12 @@ impl<'t> InteriorUpdate<'t> {
     /// other paths, so nothing relocks an old node and sees what the new one
     /// replaced. @new in the order they're written.
     pub(crate) fn replace(&self, paths: &mut Paths<'_>, old: &[(PathIdx, LockedNode<'_, BtreeNode>)],
-                          new: &[NewNode<'_>]) {
+                          new: &mut [NewNode<'_>]) {
         for &(_, b) in old {
             self.will_free_node(&b);
         }
-        for n in new {
-            self.write_new_node(paths, n);
+        for n in new.iter_mut() {
+            self.write_new_node(n);
         }
         for &(idx, b) in old {
             self.node_free_inmem(paths, idx, b);

@@ -31,7 +31,7 @@ use crate::util::Printbuf;
 use crate::util::kernel::local_clock;
 use cstruct_macros::{bitfield, c_export, c_name, c_typedef, CStruct};
 use crate::locking::{Locked, LockedBy};
-use crate::locking::six::{six_lock_increment_ip, SixHold};
+use crate::locking::six::{six_lock_increment_ip, six_lock_write_held, SixHold};
 use crate::c::six_lock_type;
 use core::cmp::Ordering;
 use core::ffi::{c_int, c_ulong};
@@ -286,6 +286,17 @@ impl<'t> Paths<'t> {
     pub(crate) fn held_btree_node(&self, idx: PathIdx, level: usize) -> Option<LockedNode<'t, BtreeNode>> {
         let b = self[idx].locked_btree_node(level)?;
         Some(unsafe { LockedNode::new(&*ptr::from_ref(b.node())) })
+    }
+
+    /// held_btree_node(), of a node the path holds for intent and the
+    /// transaction for write - through this path, or another at the node: an
+    /// update to a leaf another update's path locked.
+    pub(crate) fn write_locked_node(&self, idx: PathIdx, level: usize) -> LockedNode<'t, BtreeNode, Write> {
+        assert!(self[idx].locked_type_nowrite(level) == BTREE_NODE_INTENT_LOCKED,
+                "path {idx} doesn't hold level {level} for intent");
+        let b = self.held_btree_node(idx, level).expect("a write locked path's node is a btree node");
+        assert!(six_lock_write_held(b.c.lock.six()), "path {idx}'s node at level {level} isn't write locked");
+        unsafe { LockedNode::new_write(b.node()) }
     }
 }
 
@@ -1691,6 +1702,8 @@ pub struct Write;
 
 /// A node a path has locked, borrowed from the attempt as a key is: good until
 /// the attempt's next unlock or error, which nothing checks (see TransRef).
+// XXX: nor does anything stop two Writes of one node: write_locked_node()
+// hands them out from the path table, which the writes under them need
 pub struct LockedNode<'p, T: PathNode, M = Held> {
     node:  &'p T,
     _mode: PhantomData<M>,

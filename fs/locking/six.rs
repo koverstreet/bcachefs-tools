@@ -1189,6 +1189,11 @@ pub fn six_lock_wakeup_all(lock: &c::six_lock) {
  * Return: the number of times a lock is held for read, intent and write.
  */
 #[c_export]
+/// Whether it's held for write: by its intent holder, if anyone.
+pub fn six_lock_write_held(lock: &c::six_lock) -> bool {
+    atomic_read(lock) & SIX_LOCK_HELD_write != 0
+}
+
 pub fn six_lock_counts(lock: &c::six_lock) -> c::six_lock_count {
     let mut ret = six_lock_count::default();
 

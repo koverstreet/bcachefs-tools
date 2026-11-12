@@ -4,6 +4,7 @@ use super::bset::{BsetTree, MAX_BSETS};
 use super::iter::KeyIter;
 use super::keys::{key_at, keys_in, Keys};
 use super::{BtreeNode, BtreeNrKeys, NodeContents};
+use crate::btree::path::{LockedNode, Write};
 use crate::btree::bkey::{self, BkeyP, BKEY_FORMAT_CURRENT, BKEY_U64S};
 use crate::btree::cache::Bounce;
 use crate::c;
@@ -17,7 +18,6 @@ use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{plain_bytes, Head};
 use crate::data_structures::array_vec::ArrayVec;
 use core::cmp::Ordering;
-use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ops::Range;
 use cstruct_macros::{c_enum, Plain};
@@ -312,7 +312,7 @@ fn sort_bkey_ptrs(keys: &Keys<'_>, ptrs: &mut [u64]) {
     }
 }
 
-pub fn bch2_sort_whiteouts(fs: &Fs, b: &BtreeNode) {
+pub fn bch2_sort_whiteouts(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents) {
     let u64s = b.whiteout_u64s.get() as usize;
 
     if u64s == 0 {
@@ -321,7 +321,6 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &BtreeNode) {
 
     let mut bounce = Bounce::new(fs, u64s * size_of::<u64>());
     let buf = &mut bounce.u64s()[..u64s];
-    let contents = unsafe { b.contents_mut() };
     let keys = b.keys(contents);
 
     {
@@ -374,11 +373,7 @@ fn should_compact_bset(b: &BtreeNode, contents: &NodeContents, set: usize, compa
     }
 }
 
-pub fn bch2_drop_whiteouts(b: &BtreeNode, mode: CompactMode) -> bool {
-    drop_whiteouts(b, unsafe { b.contents_mut() }, mode)
-}
-
-fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactMode) -> bool {
+pub fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactMode) -> bool {
     let write_block = b.written_end();
     let mut ret = false;
 
@@ -435,7 +430,7 @@ fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactMode)
     ret
 }
 
-fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, start_idx: usize, end_idx: usize) {
+pub fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, start_idx: usize, end_idx: usize) {
     let shift = end_idx - start_idx - 1;
     let sorting_entire_node = start_idx == 0 && end_idx == contents.nsets as usize;
 
@@ -505,16 +500,16 @@ fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, start_id
     keys.verify_btree_nr_keys();
 }
 
-pub fn bch2_btree_sort_into(fs: &Fs, dst: &BtreeNode, src: &BtreeNode) {
+pub fn bch2_btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src: LockedNode<'_, BtreeNode>) {
     let start_time = local_clock();
 
-    let dst_contents = unsafe { dst.contents_mut() };
-    assert!(dst_contents.nsets == 1, "sorting into a node with {} bsets", dst_contents.nsets);
+    let nsets = dst.contents().nsets;
+    assert!(nsets == 1, "sorting into a node with {nsets} bsets");
 
-    let mut dst = dst.keys_mut(dst_contents);
+    let mut dst = dst.keys_mut();
     dst.sets.set_no_aux_tree(0);
 
-    let src_contents = unsafe { src.contents() };
+    let src_contents = src.contents();
     let src_keys = src.keys(src_contents);
     let mut src_iter = KeyIter::default();
     src_iter.init_from_start(&src_keys);
@@ -565,8 +560,8 @@ pub fn bch2_btree_sort_into(fs: &Fs, dst: &BtreeNode, src: &BtreeNode) {
  * We're about to add another bset to the btree node, so if there's currently
  * too many bsets - sort some of them together:
  */
-pub fn bch2_btree_node_compact(fs: &Fs, b: &BtreeNode) -> bool {
-    let contents = unsafe { b.contents_mut() };
+pub fn bch2_btree_node_compact(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
+    let (b, contents) = (b.node(), b.contents_mut());
     let nsets = contents.nsets as usize;
     let unwritten_idx = contents.sets().iter().position(|t| !b.bset_written(t)).unwrap_or(nsets);
     let mut ret = false;
@@ -580,11 +575,7 @@ pub fn bch2_btree_node_compact(fs: &Fs, b: &BtreeNode) -> bool {
     ret
 }
 
-pub fn bch2_btree_build_aux_trees(b: &BtreeNode) {
-    build_aux_trees(b, unsafe { b.contents_mut() })
-}
-
-fn build_aux_trees(b: &BtreeNode, contents: &mut NodeContents) {
+pub fn build_aux_trees(b: &BtreeNode, contents: &mut NodeContents) {
     let nsets = contents.nsets as usize;
     let written: [bool; MAX_BSETS as usize] = core::array::from_fn(|i| i < nsets && b.bset_written(&contents.set[i]));
     let mut keys = b.keys_mut(contents);
@@ -613,17 +604,13 @@ impl WriteSortRuns {
     }
 }
 
-pub fn bch2_btree_node_set_needs_whiteout(b: &BtreeNode) {
-    b.keys_mut(unsafe { b.contents_mut() }).iter_mut().for_each(|k| k.set_needs_whiteout(true));
+pub fn bch2_btree_node_set_needs_whiteout(b: &mut LockedNode<'_, BtreeNode, Write>) {
+    b.keys_mut().iter_mut().for_each(|k| k.set_needs_whiteout(true));
 }
 
-pub fn bch2_maybe_compact_whiteouts(_fs: &Fs, b: &BtreeNode) -> bool {
-    let contents = unsafe { b.contents_mut() };
+pub fn bch2_maybe_compact_whiteouts(_fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
+    let (b, contents) = (b.node(), b.contents_mut());
     let compact = contents.sets().iter().enumerate().any(|(set, t)| should_compact_bset_lazy(&contents.nr, set, t));
 
     compact && drop_whiteouts(b, contents, CompactMode::COMPACT_LAZY)
-}
-
-pub fn bch2_btree_node_sort(fs: &Fs, b: &BtreeNode, start_idx: c_uint, end_idx: c_uint) {
-    btree_node_sort(fs, b, unsafe { b.contents_mut() }, start_idx as usize, end_idx as usize)
 }

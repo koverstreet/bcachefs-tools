@@ -97,12 +97,13 @@ fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     });
 
     trans.node_lock_write(paths, idx, level)?;
-    unsafe { b.contents_mut() }.data_mut().min_key = new_min;
+    let mut b = paths.write_locked_node(idx, level);
+    b.contents_mut().data_mut().min_key = new_min;
 
     let ret = journal_overlay::insert(&mut fs.not_rw(), Btree(b.c.btree_id.into()), level as u32 + 1, new.key());
     if ret.is_ok() {
-        drop_keys_outside_node(b.node());
-        unsafe { b.contents_mut() }.key.set_key(new.key());
+        drop_keys_outside_node(b.node(), b.contents_mut());
+        b.contents_mut().key.set_key(new.key());
     }
 
     trans.node_unlock_write(paths, idx, level);
@@ -125,14 +126,15 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     });
 
     trans.node_lock_write(paths, idx, level)?;
+    let mut b = paths.write_locked_node(idx, level);
 
     let mut not_rw = fs.not_rw();
     let ret = journal_overlay::delete(&mut not_rw, btree, level as u32 + 1, b.contents().key_i().k.p).and_then(|()| {
-        unsafe { b.contents_mut() }.data_mut().max_key = new_max;
+        b.contents_mut().data_mut().max_key = new_max;
         journal_overlay::insert(&mut not_rw, btree, level as u32 + 1, new.key())
     });
     if ret.is_ok() {
-        drop_keys_outside_node(b.node());
+        drop_keys_outside_node(b.node(), b.contents_mut());
 
         let bc = &fs.btree.cache;
 
@@ -150,7 +152,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
         /* unhash, rehash */
         fs.btree_node_transition_state(b.node(), c::btree_node_cache_state::FREEABLE)
             .expect("a node leaving the hash table, write locked");
-        unsafe { b.contents_mut() }.key.set_key(new.key());
+        b.contents_mut().key.set_key(new.key());
         fs.btree_node_transition_state(b.node(), b.live_state()).expect("a node back into the hash table, write locked");
 
         /*

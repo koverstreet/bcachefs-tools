@@ -914,10 +914,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let idx = iter.raw.path;
         let mut paths = trans.paths();
-        let b = paths.held_btree_node(idx, lvl).expect("a node, peeked");
 
         trans.node_lock_write(&mut paths, idx, lvl)?;
-        trans.node_prep_for_write(self, &mut paths.paths_and_updates(), b.node());
+        let mut b = paths.write_locked_node(idx, lvl);
+        trans.node_prep_for_write(self, &mut paths.paths_and_updates(), &mut b);
 
         if usize::from(key.k().u64s) > b.keys_u64s_remaining(b.contents()) {
             trans.node_unlock_write(&mut paths, idx, lvl);
@@ -927,17 +927,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut node_iter = KeyIter::default();
         node_iter.init(fs, &b.keys(b.contents()), &key.k().p);
 
-        unsafe {
-            trans.bset_insert_key(&mut paths, idx, b.node(), &mut node_iter, key.as_mut());
+        unsafe { trans.bset_insert_key(&mut paths, idx, &mut b, &mut node_iter, key.as_mut()) };
 
-            let contents = b.node().contents_mut();
-            let set = contents.last_set().data_offset;
-            let mut keys = b.node().keys_mut(contents);
-            let i = keys.bset_head_mut(set);
-            i.journal_seq = Le64::new(fs.journal.lock.seq_ondisk.get().max(i.journal_seq.get()));
+        let set = b.contents().last_set().data_offset;
+        let mut keys = b.keys_mut();
+        let i = keys.bset_head_mut(set);
+        i.journal_seq = Le64::new(fs.journal.lock.seq_ondisk.get().max(i.journal_seq.get()));
 
-            fs.btree_node_set_dirty(b.node());
-        }
+        fs.btree_node_set_dirty(b.node());
         trans.node_unlock_write(&mut paths, idx, lvl);
         Ok(())
     }

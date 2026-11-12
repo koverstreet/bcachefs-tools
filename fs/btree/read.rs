@@ -12,7 +12,7 @@ use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::cache::{bch2_btree_id_level_to_text, btree_pos_to_text, Bounce};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags};
-use crate::btree::node::sort::{bch2_btree_build_aux_trees, SortRuns};
+use crate::btree::node::sort::{build_aux_trees, SortRuns};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::path::Paths;
 use crate::btree::trans::BtreeTrans;
@@ -340,8 +340,7 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
  * mean we have to drop keys that are no longer inside the node:
  */
 #[cold]
-pub fn drop_keys_outside_node(b: &BtreeNode) {
-    let contents = unsafe { b.contents_mut() };
+pub fn drop_keys_outside_node(b: &BtreeNode, contents: &mut NodeContents) {
     let (min_key, max_key) = (contents.data().min_key, contents.data().max_key);
 
     let mut keys = b.keys_mut(contents);
@@ -352,7 +351,7 @@ pub fn drop_keys_outside_node(b: &BtreeNode) {
      * depend on the values of min/max key:
      */
     keys.sets.set_no_aux_tree(0);
-    bch2_btree_build_aux_trees(b);
+    build_aux_trees(b, contents);
     contents.nr = b.keys(contents).btree_node_count_keys();
 
     let _ = b.for_each_key(contents, |k| {
@@ -466,7 +465,7 @@ fn node_read_done(v: &mut NodeValidate<'_>) -> Result<(), BchError> {
     contents.reset_sib_u64s();
 
     if p.range_updated {
-        drop_keys_outside_node(b);
+        drop_keys_outside_node(b, contents);
     }
 
     if p.written == 0 {

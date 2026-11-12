@@ -129,8 +129,8 @@ impl BtreeTrans<'_> {
             }
 
             if !i.cached() {
-                let b = unsafe { leaf(&pu.paths, i) };
-                self.node_prep_for_write(t, &mut pu, b);
+                let mut b = pu.paths.write_locked_node(i.path, i.level().into());
+                self.node_prep_for_write(t, &mut pu, &mut b);
             }
         }
 
@@ -924,7 +924,7 @@ impl BtreeTrans<'_> {
 
             if !i.cached() {
                 let (path, k) = (i.path, i.key_ptr());
-                unsafe { self.insert_key_leaf(t, &mut pu, path, &mut *<BkeyI>::from_raw_mut(k), seq) };
+                self.insert_key_leaf(t, &mut pu, path, unsafe { &mut *<BkeyI>::from_raw_mut(k) }, seq);
             } else if !i.key_cache_already_flushed() {
                 unsafe { bch2_btree_insert_key_cached(self, &mut pu.paths, &raw mut pu.updates[idx]) };
             } else {

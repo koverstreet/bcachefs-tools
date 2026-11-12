@@ -14,12 +14,11 @@ use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::btree::node::BtreeNode;
-use crate::btree::path::Paths;
 use crate::btree::trigger::{key_trigger, TriggerOp};
-use crate::btree::write::{node_write_if_need, node_write_trans, BtreeWriteFlags};
+use crate::btree::write::{node_write_if_need, node_write_locked, BtreeWriteFlags};
 use crate::cstructs::c::BtreeWriteType;
 use crate::c;
-use crate::c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
+use crate::c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
 use crate::data_structures::array_vec::ArrayVec;
@@ -86,7 +85,7 @@ impl InteriorUpdate<'_> {
      * needs @b->key in its committed-to-disk form (parent_keys / set_root)
      * must instead pair with bch2_btree_update_emit_new_node_key earlier.
      */
-    pub(super) fn write_new_node(&self, paths: &mut Paths<'_>, n: &NewNode<'_>) {
+    pub(super) fn write_new_node(&self, n: &mut NewNode<'_>) {
         let fs = self.fs();
 
         unsafe { self.new_nodes() }.push(NewPointer::node(fs, n));
@@ -111,7 +110,7 @@ impl InteriorUpdate<'_> {
             }
         }
 
-        node_write_trans(self.trans(), paths, n, SIX_LOCK_write, BtreeWriteType::initial, BtreeWriteFlags::empty());
+        node_write_locked(self.trans(), n, BtreeWriteType::initial, BtreeWriteFlags::empty());
     }
 
     /*
@@ -503,9 +502,9 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
                 assert!(b.flags.dirty(), "an interior update's node not dirty");
 
                 if ret.is_ok() {
-                    let contents = unsafe { b.contents_mut() };
-                    let t = *contents.last_set();
-                    let mut keys = b.keys_mut(contents);
+                    let mut w = paths.write_locked_node(idx, level);
+                    let t = *w.contents().last_set();
+                    let mut keys = w.keys_mut();
                     let last = keys.bset_head_mut(t.data_offset);
 
                     last.journal_seq = Le64::new(journal_seq.max(last.journal_seq.get()));
