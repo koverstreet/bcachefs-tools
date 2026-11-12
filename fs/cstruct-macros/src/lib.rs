@@ -395,11 +395,12 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
 /// struct holding a Rust type with invariants - a RustOnly - isn't, and
 /// #[derive(Init)] can't zero it. core's atomics are, as their integers are,
 /// though pin_init has no impl for them, and the orphan rule allows none
-/// here: their fields aren't bounds.
+/// here: their fields aren't bounds. Nor has it one for Cell, whose zeroes
+/// are its T's: a Cell's bound is its T's.
 fn maybe_zeroable(def: &cstruct::CStructDef) -> TokenStream {
     let bounds: Vec<TokenStream> = def.fields.iter()
         .filter(|f| !is_core_atomic(&f.ty))
-        .map(|f| tokens(&f.ty))
+        .map(|f| tokens(cell_inner(&f.ty).unwrap_or(&f.ty)))
         .map(|ty| quote!(#ty: for<'__dummy> ::pin_init::Zeroable))
         .collect();
     let whr = (!bounds.is_empty()).then(|| quote!(where #(#bounds),*));
@@ -410,6 +411,13 @@ fn maybe_zeroable(def: &cstruct::CStructDef) -> TokenStream {
         #[automatically_derived]
         unsafe impl<#generics> ::pin_init::Zeroable for #ty #whr {}
     }
+}
+
+/// @ty's T, if it's a Cell<T>, by any path.
+fn cell_inner(ty: &str) -> Option<&str> {
+    let (path, rest) = ty.trim().split_once('<')?;
+    (path.rsplit("::").next().map(str::trim) == Some("Cell")).then_some(())?;
+    rest.trim_end().strip_suffix('>')
 }
 
 /// One of core::sync::atomic's integer, bool or pointer atomics, by any path

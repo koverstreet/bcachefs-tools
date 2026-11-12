@@ -2120,9 +2120,9 @@ pub fn peek_parallel<'k, 't, const N: usize>(
 
 impl<'t> BtreeIter<'t> {
     pub fn uninit() -> BtreeIter<'t> {
-        // SAFETY: all zeroes is an iterator with no paths - whose exit, its
-        // drop, puts none
-        unsafe { core::mem::zeroed() }
+        // all zeroes is an iterator with no paths - whose exit, its drop, puts
+        // none
+        ::pin_init::zeroed()
     }
 
     /// The key pointing to @btree's root - none unless the root's just below
