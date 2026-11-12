@@ -629,9 +629,11 @@ impl StripeNew {
         let fs = &*self.fs;
         let mut s = self.lock();
 
+        // out of the table before they're closed: a bucket nothing was
+        // written to is free once it is, and can be had by the next stripe
+        s.buckets_del(fs);
         s.blocks = Default::default();
         s.res = None;
-        s.buckets_del(fs);
 
         if let Some(claim) = s.slot_claim.take() {
             claim.put(fs);
