@@ -49,7 +49,7 @@ use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::plain_bytes;
 use crate::accounting;
 use crate::alloc::accounting_mem;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags};
+use crate::btree::iter::{btree_iter_params_valid, BtreeIter, BtreeIterFlags};
 use crate::btree_trans;
 use core::mem::offset_of;
 use core::ops::ControlFlow;
@@ -414,11 +414,9 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
         flags |= BtreeIterFlags::NOT_EXTENTS;
     }
 
-    // an id past the last is what bch2_btree_iter_params_valid() refuses first
-    let valid = Btree::from_raw(arg.btree).is_some_and(|btree| unsafe {
-        c::bch2_btree_iter_params_valid(btree, arg.level, arg.start, arg.end,
-            c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
-    });
+    // an id past the last is what btree_iter_params_valid() refuses first
+    let valid = Btree::from_raw(arg.btree)
+        .is_some_and(|btree| btree_iter_params_valid(btree, arg.level, arg.start, arg.end, flags));
     if !valid {
         return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_query_btree_keys_bad_params);
     }

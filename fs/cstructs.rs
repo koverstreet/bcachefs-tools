@@ -117,7 +117,7 @@ pub mod c {
     pub use crate::btree::node::bset::{BSET_TREE_NR_TYPES, MAX_BSETS};
     pub use super::btree_check_types::*;
     pub use crate::btree::interior::{BTREE_NODE_RESERVE, BTREE_RESERVE_MAX, BtreeReserveCache, bch_fs_btree_interior_updates, bch_fs_btree_reserve_cache, btree_alloc};
-    pub use crate::btree::iter::{bch2_btree_iter_params_valid, trans_for_each_path_inorder_iter, trans_may_drop_updates};
+    pub use crate::btree::iter::{trans_for_each_path_inorder_iter, trans_may_drop_updates};
     pub use super::btree_journal_overlay_defs::*;
     pub use crate::btree::journal_overlay::{OverwriteRange, OverwriteRanges, OverwriteRangesLive, OverwriteRangesLiveWriter, journal_key, journal_key_flags, journal_key_id, journal_key_journal_pos, journal_key_src, journal_keys, journal_ptr, journal_replay};
     pub(crate) use crate::btree::journal_overlay::{__journal_key_flags_forward, __journal_key_id_forward};

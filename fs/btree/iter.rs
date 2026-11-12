@@ -1800,7 +1800,15 @@ impl<'t> BtreeIter<'t> {
     }
 }
 
-fn btree_iter_params_valid(btree: Btree, level: u32, start: Bpos, end: Bpos, flags: BtreeIterFlags) -> bool {
+/*
+ * Check iterator parameters from an untrusted source (e.g. an ioctl) against
+ * the preconditions the iterator code enforces with assertions. Kernel
+ * callers know these rules; user-controlled (btree, level, range, flags)
+ * combinations must be validated first:
+ */
+pub fn btree_iter_params_valid(btree: Btree, level: u32, start: Bpos, end: Bpos, flags: BtreeIterFlags)
+    -> bool
+{
     if btree.0 >= c::BTREE_ID_NR {
         return false;
     }
@@ -2004,16 +2012,6 @@ pub unsafe fn bch2_trans_iter_init_outlined(trans: &BtreeTrans<'_>, #[lent(trans
     unsafe { iter.cast::<BtreeIter<'_>>().write(BtreeIter::init_in(trans, paths, btree_id, pos, flags, ip)) }
 }
 
-/*
- * Check iterator parameters from an untrusted source (e.g. an ioctl) against
- * the preconditions the iterator code enforces with assertions. Kernel
- * callers know these rules; user-controlled (btree, level, range, flags)
- * combinations must be validated first:
- */
-pub fn bch2_btree_iter_params_valid(btree: Btree, level: c_uint, start: Bpos, end: Bpos,
-                                    flags: c::btree_iter_update_trigger_flags) -> bool {
-    btree_iter_params_valid(btree, level, start, end, BtreeIterFlags::from_bits_retain(flags.bits()))
-}
 
 /*
  * Low-level iterator init: takes level and flags exactly as given - no
