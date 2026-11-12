@@ -24,7 +24,7 @@
 //! use when free space is lopsided enough that where copies go decides how
 //! much fits. What the caches hand out is capped by how far allocation can
 //! go before that could change. A commit charges what it adds to usage to
-//! its reservation (bch2_trans_account_disk_usage_change()); the write puts
+//! its reservation (account_disk_usage_change()); the write puts
 //! the rest.
 //!
 //! bch_fs_capacity is made by its Init and freed by its drop: its locks, and
@@ -32,7 +32,7 @@
 
 
 use crate::fs::Dev;
-use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::errcode::{ret_to_c, BchError};
@@ -306,13 +306,6 @@ pub(crate) fn account_disk_usage_change(t: &TransAttempt<'_, '_>) {
         trans_inconsistent(t, &crate::message!(
             "disk usage increased {should_not_have_added} more than {res_sectors} sectors reserved"));
     }
-}
-
-/// # Safety
-/// @trans is committing.
-#[c_export]
-pub unsafe fn bch2_trans_account_disk_usage_change(trans: &BtreeTrans<'_>) {
-    account_disk_usage_change(&unsafe { trans.attempt_in_progress() })
 }
 
 // ── Placeable space ──────────────────────────────────────────────────────

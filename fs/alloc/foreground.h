@@ -19,9 +19,6 @@ static inline struct bch_dev *ob_dev(struct bch_fs *c, struct open_bucket *ob)
 	return bch2_dev_have_ref(c, ob->dev);
 }
 
-DEFINE_FREE(alloc_request_put, struct alloc_request *,
-	    if (!IS_ERR_OR_NULL(_T)) alloc_request_put(_T))
-
 static inline struct write_point_specifier writepoint_hashed(unsigned long v)
 {
 	return (struct write_point_specifier) { .v = v | 1 };

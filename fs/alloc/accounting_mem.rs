@@ -7,11 +7,11 @@ use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
-                         LoopFlow, TransAttempt};
+use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, LoopFlow,
+                         TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
@@ -27,8 +27,6 @@ use crate::util::rcu;
 use crate::util::vstructs::{bytes_of, plain_bytes, ArmError, Unvalidated, Validated};
 use crate::util::Printbuf;
 use crate::{btree_trans, fsck_err, fsck_err_on, percpu_field};
-use core::ffi::c_int;
-use cstruct_macros::c_export;
 use zerocopy::IntoBytes;
 
 #[derive(Clone, Copy)]
@@ -828,14 +826,6 @@ pub(crate) fn mem_add<M: MarkHeld>(fs: &Fs, a: Delta<'_>, gc: bool, mark: &mut M
             c.add(d);
         }
     }).0)
-}
-
-#[c_export]
-pub unsafe fn bch2_accounting_mem_add(trans: &BtreeTrans<'_>, k: BkeySC<'_>) -> c_int {
-    let fs = trans.fs();
-    let a = Delta::from(k.arm::<Accounting>().expect("an accounting key"));
-    let usage = mem_add(fs, a, false, &mut unsafe { fs.mark_lock().read_held() });
-    ret_to_c(usage.map(|u| trans.fs_usage_delta_add(u)))
 }
 
 fn journal_pos_to_bversion(res: &c::journal_res, offset: usize) -> Bversion {

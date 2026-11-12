@@ -123,7 +123,7 @@ impl Fs {
         READ_ONLY_EVENTS.wake();
 
         /*
-         * Wake threads parked in __bch2_wait_on_allocator: going-RO won't
+         * Wake threads parked in wait_on_allocator(): going-RO won't
          * complete while they hold open closures on freelist_wait, and they
          * won't otherwise notice the fs is shutting down.
          */

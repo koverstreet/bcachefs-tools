@@ -62,11 +62,11 @@
 use crate::fs::Dev;
 use crate::alloc::discard::fast_discard_bucket_add;
 use crate::alloc::disk_groups::Target;
-use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::can_make_progress;
-use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::locking::ExclusiveGuard;
@@ -88,7 +88,7 @@ use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{RefBorrow, RefGuard, Refcount};
 use crate::util::{Printbuf, ToText};
-use core::ffi::{c_int, c_long, c_uint, c_ulong};
+use core::ffi::{c_long, c_uint, c_ulong};
 use core::convert::Infallible;
 use core::ops::Deref;
 use core::ptr::NonNull;
@@ -784,7 +784,7 @@ impl Fs {
 // ── Requests ─────────────────────────────────────────────────────────────
 
 /// An allocation request, in transaction memory - an attempt's - its trace
-/// emptied when it's dropped: alloc_request_put().
+/// emptied when it's dropped.
 pub struct AllocRequest<'a>(&'a mut c::alloc_request);
 
 impl<'a, 't> TransAttempt<'a, 't> {
@@ -846,7 +846,7 @@ impl c::alloc_request {
     }
 
     /// Its trace emptied - its storage freed, if it spilled to the heap - for
-    /// a retry, and by alloc_request_put().
+    /// a retry, and when its AllocRequest is dropped.
     pub(crate) fn trace_reset(&mut self) {
         drop(core::mem::take(&mut *self.trace));
     }
@@ -1336,22 +1336,6 @@ impl c::open_buckets {
                 .filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));
         }
     }
-}
-
-/// bch2_wait_on_allocator()'s, with @cl on a waitlist.
-///
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe fn __bch2_wait_on_allocator(trans: &BtreeTrans<'_>, req: &mut c::alloc_request, err: c_int,
-                                       cl: &Opaque<c::closure>) {
-    let Err(err) = ret_to_result_void(err) else { panic!("waiting on the allocator without an error") };
-    unsafe { trans.attempt_in_progress() }.sleep_on_allocator(req, err, cl)
-}
-
-#[c_export]
-pub fn alloc_request_put(req: &mut c::alloc_request) {
-    req.trace_reset()
 }
 
 /// @dev's @bucket's slot in the open buckets' hash.

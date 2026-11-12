@@ -602,7 +602,7 @@ impl<'t> InteriorUpdate<'t> {
          * flush, which can't finish until it does - and discards, the only
          * thing that would free buckets, stopped with writes. Below the
          * reclaim watermark a node allocation can wait on the btree reserve
-         * forever (unmount hanging in __bch2_wait_on_allocator()):
+         * forever (unmount hanging in wait_on_allocator()):
          */
         if fs.flags.get(c::bch_fs_flags::going_ro) && (watermark as u32) < wm::reclaim as u32 {
             watermark = wm::reclaim;
