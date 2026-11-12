@@ -4,7 +4,7 @@
 //!
 //! A Folio is a page cache folio the caller holds locked, as a read holds the
 //! folios it fills: the lock keeps it in the page cache, so a Folio is Copy
-//! and takes no ref; get() and put() are for the refs a caller has besides.
+//! and takes no ref.
 //! Its bcachefs state - bch_folio, vfs/pagecache.c's - is created on it before
 //! it's read into, and partially_uptodate is the read's to keep; the rest is
 //! under the state's lock, lock_state()'s.
@@ -15,9 +15,10 @@
 //! or a fault's page - for its holder to lock: a FolioGuard, a Folio until
 //! it's dropped.
 //!
-//! A Mapping is an inode's page cache: where a read finds and adds folios. A
-//! Readahead is the VFS's readahead_control: the locked folios it asks a read
-//! of, each given out with a ref, and given back - unread - by unread().
+//! A Mapping is an inode's page cache: where a read finds and adds folios - a
+//! NewFolio, alloc_folio()'s, with a ref of its own till it's in. A Readahead
+//! is the VFS's readahead_control: the locked folios it asks a read of, given
+//! back - unread - by unread().
 
 use super::buffered_write::WriteBegun;
 use super::inode::InodeInfo;
@@ -161,16 +162,6 @@ impl Folio {
     /// Its writeback is ours: FolioGuard::start_writeback()'s, ended once.
     pub unsafe fn end_writeback(self) {
         unsafe { c::folio_end_writeback(self.as_ptr()) }
-    }
-
-    pub fn get(self) {
-        unsafe { c::folio_get(self.as_ptr()) }
-    }
-
-    /// # Safety
-    /// The caller has a ref, besides its lock, and gives it up.
-    pub unsafe fn put(self) {
-        unsafe { c::folio_put(self.as_ptr()) }
     }
 
     pub(super) fn state_ptr(self) -> Option<NonNull<c::bch_folio>> {
@@ -400,8 +391,42 @@ impl Drop for LockedFolio {
     fn drop(&mut self) {
         unsafe {
             c::folio_unlock(self.0.as_ptr());
-            self.0.put();
+            c::folio_put(self.0.as_ptr());
         }
+    }
+}
+
+/// A folio for a mapping, Mapping::alloc_folio()'s, with a ref of its own:
+/// not locked, and in no page cache till add_folio() puts it in, locked.
+/// Dropped before then, its bcachefs state is freed and it's put.
+pub struct NewFolio {
+    folio:    Folio,
+    in_cache: bool,
+}
+
+impl NewFolio {
+    /// In the page cache, which keeps it: its ref given up, and its lock the
+    /// caller's.
+    pub fn into_cached(self) -> Folio {
+        assert!(self.in_cache, "a new folio given out before it's in the page cache");
+        self.folio
+    }
+}
+
+impl Deref for NewFolio {
+    type Target = Folio;
+
+    fn deref(&self) -> &Folio {
+        &self.folio
+    }
+}
+
+impl Drop for NewFolio {
+    fn drop(&mut self) {
+        if !self.in_cache {
+            self.folio.free_state();
+        }
+        unsafe { c::folio_put(self.folio.as_ptr()) }
     }
 }
 
@@ -569,18 +594,23 @@ impl Mapping {
         }
     }
 
-    /// A folio for this page cache, locked and with a ref, in none yet.
-    pub fn alloc_folio(self, gfp: c::gfp_t, order: u32) -> Option<Folio> {
+    /// A folio for this page cache, in none yet.
+    pub fn alloc_folio(self, gfp: c::gfp_t, order: u32) -> Option<NewFolio> {
         let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
-        NonNull::new(unsafe { c::rust_filemap_alloc_folio(gfp, order) }).map(Folio)
+        NonNull::new(unsafe { c::rust_filemap_alloc_folio(gfp, order) })
+            .map(|f| NewFolio { folio: Folio(f), in_cache: false })
     }
 
-    /// @folio, alloc_folio()'s, at @index: locked, and the ref the caller
-    /// keeps.
-    pub fn add_folio(self, folio: Folio, index: u64, gfp: c::gfp_t) -> Result<(), BchError> {
+    /// @folio at @index, locked: filemap_add_folio().
+    pub fn add_folio(self, folio: &mut NewFolio, index: u64, gfp: c::gfp_t) -> Result<(), BchError> {
+        assert!(!folio.in_cache, "a folio added to the page cache twice");
         let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
         let ret = unsafe { c::filemap_add_folio(self.as_ptr(), folio.as_ptr(), index as _, gfp) };
-        if ret < 0 { Err(BchError::from_raw(ret)) } else { Ok(()) }
+        if ret < 0 {
+            return Err(BchError::from_raw(ret));
+        }
+        folio.in_cache = true;
+        Ok(())
     }
 }
 
@@ -617,15 +647,20 @@ impl Readahead<'_> {
         unsafe { Mapping::from_raw(self.0.mapping) }
     }
 
-    /// The next folio asked for: locked, and with a ref the caller puts.
+    /// The next folio asked for, locked - the page cache keeps it:
+    /// readahead_folio().
     pub fn next(&mut self) -> Option<Folio> {
-        NonNull::new(unsafe { c::__readahead_folio(self.0) }).map(Folio)
+        let folio = NonNull::new(unsafe { c::__readahead_folio(self.0) })?;
+        unsafe { c::folio_put(folio.as_ptr()) };
+        Some(Folio(folio))
     }
 
-    /// @folio given back unread, its bcachefs state freed: the VFS unlocks it.
-    /// Back to front, so readahead_control's window stays contiguous.
+    /// @folio given back unread, its bcachefs state freed, and with a ref for
+    /// the VFS, which unlocks and puts it - readahead_folio() again. Back to
+    /// front, so readahead_control's window stays contiguous.
     pub fn unread(&mut self, folio: Folio) {
         folio.free_state();
+        unsafe { c::folio_get(folio.as_ptr()) };
         let n = folio.nr_pages();
         self.0._nr_pages += n as u32;
         self.0._index -= n as core::ffi::c_ulong;
