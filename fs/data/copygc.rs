@@ -350,6 +350,7 @@ struct Copygc<'f, 'w> {
     ctxt:      MovingCtxt<'w>,
     set:       &'w InFlightSet<'f>,
     in_flight: Fifo<Pin<KBox<InFlight<'f>>>>,
+    prefer_device: bool,
 }
 
 impl<'f, 'w> Copygc<'f, 'w> {
@@ -661,10 +662,16 @@ impl<'f, 'w> Copygc<'f, 'w> {
             Ok(()) => {}
         }
 
-        if self.should_do_ec(devs) {
-            self.get_stripe_buckets(batch)?;
-        } else {
+        let do_ec = self.should_do_ec(devs);
+        if !do_ec || self.prefer_device {
             self.get_buckets(batch, devs)?;
+        }
+        if do_ec && batch.is_empty() {
+            self.get_stripe_buckets(batch)?;
+        }
+        // Global stripe cleanup must not indefinitely starve a pressured device.
+        if do_ec && !devs.is_empty() {
+            self.prefer_device = !self.prefer_device;
         }
 
         *picked = batch.len();
@@ -771,7 +778,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
     stats.reset();
     let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, writepoint_ptr(&fs.copygc.write_point), false),
                             "allocating copygc's moving context")?;
-    let mut cg = Copygc { fs, me, ctxt, set, in_flight: Fifo::new() };
+    let mut cg = Copygc { fs, me, ctxt, set, in_flight: Fifo::new(), prefer_device: true };
     let clock = &fs.io_clock[WRITE];
     let mut ret = Ok(());
 
