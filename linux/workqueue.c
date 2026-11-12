@@ -37,6 +37,8 @@ struct wq_worker {
 	struct workqueue_struct	*wq;
 	struct task_struct	*task;
 	struct work_struct	*current_work;
+	/* @current_work, queued again while it runs: where, to wake when it's done */
+	struct workqueue_struct	*requeued_on;
 };
 
 struct workqueue_struct {
@@ -100,7 +102,7 @@ static bool set_work_pending(struct work_struct *work)
  * itself (or is re-queued by someone else) while running is both pending and
  * running at once. Which worker holds it is the only reliable answer.
  */
-static bool work_running(struct work_struct *work)
+static struct wq_worker *work_runner(struct work_struct *work)
 {
 	struct workqueue_struct *wq;
 
@@ -109,10 +111,15 @@ static bool work_running(struct work_struct *work)
 
 		list_for_each_entry(w, &wq->workers, list)
 			if (w->current_work == work)
-				return true;
+				return w;
 	}
 
-	return false;
+	return NULL;
+}
+
+static bool work_running(struct work_struct *work)
+{
+	return work_runner(work) != NULL;
 }
 
 /*
@@ -192,10 +199,16 @@ static int worker_thread(void *arg)
 		/*
 		 * Anything still queued may have been passed over by a worker
 		 * that then slept - including because it was this very item,
-		 * skipped for non-reentrancy.
+		 * skipped for non-reentrancy. That includes another queue's
+		 * workers, if the item was queued there while it ran here: an
+		 * async task, requeued to another queue from inside its poll.
 		 */
 		if (!list_empty(&wq->pending_work))
 			wake_idle_workers(wq);
+		if (worker->requeued_on) {
+			wake_idle_workers(worker->requeued_on);
+			worker->requeued_on = NULL;
+		}
 	}
 	pthread_mutex_unlock(&wq_lock);
 
@@ -211,6 +224,16 @@ static void __queue_work(struct workqueue_struct *wq,
 	struct wq_worker *w;
 
 	list_add_tail(&work->entry, &wq->pending_work);
+
+	/*
+	 * Running already, on a worker of this queue or another: this queue's
+	 * workers pass it over until that run ends, so the worker running it
+	 * wakes them then - after its run it can't look at the item, which may
+	 * be freed.
+	 */
+	w = work_runner(work);
+	if (w)
+		w->requeued_on = wq;
 
 	/*
 	 * Nobody free to take it, and room to grow: another worker. The first
