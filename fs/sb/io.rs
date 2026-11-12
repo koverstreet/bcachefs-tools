@@ -1994,9 +1994,24 @@ impl SbResize for FsSbResize<'_> {
 /// A device's superblock, to edit: its shared contents only by sync(), from
 /// the filesystem's, its own directly - Fs::dev_sb_mut()'s.
 pub struct DevSbMut<'a> {
-    fs_sb: &'a bch_sb,
-    io:    &'a mut c::bch_sb_io,
-    ca:    &'a Dev,
+    fs_sb:   &'a bch_sb,
+    io:      &'a mut c::bch_sb_io,
+    ca:      &'a Dev,
+    /// ca->sb_read_scratch, what the write's read back reads into
+    scratch: &'a mut [u8],
+}
+
+impl<'a> DevSbMut<'a> {
+    /// @ca's, from the split that hands each device's superblock out once,
+    /// and so its scratch: None if it has none, not attached.
+    fn take(fs_sb: &'a bch_sb, devs: &mut members::DevPieces<'a, crate::at!(Fs.sb), crate::field!(disk_sb)>,
+            ca: &'a Dev)
+        -> Option<Self>
+    {
+        let io = devs.take(ca);
+        let s = ca.sb_read_scratch.as_ref().expect("a device's sb_read_scratch, from its alloc");
+        (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb, io, ca, scratch: unsafe { &mut *s.buf.get() } })
+    }
 }
 
 impl Fs {
@@ -2017,8 +2032,7 @@ impl Fs {
     pub fn dev_sb_mut<'a>(&self, sb: &'a mut SbLockGuard<'_>, ca: &'a Dev) -> Option<DevSbMut<'a>> {
         self.dev_sb_check(sb, ca);
         let (fs_sb, mut devs) = sb.split_devs::<crate::field!(disk_sb)>();
-        let io = devs.take(ca);
-        (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb: fs_sb.sb(), io, ca })
+        DevSbMut::take(fs_sb.sb(), &mut devs, ca)
     }
 }
 
@@ -2103,21 +2117,18 @@ impl Fs {
 
         let (fs_sb, mut pieces) = sb.split_devs::<crate::field!(disk_sb)>();
         let fs_sb = fs_sb.sb();
-        devs.iter().map(move |ca| {
-            let io = pieces.take(ca);
-            (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb, io, ca })
-        })
+        devs.iter().map(move |ca| DevSbMut::take(fs_sb, &mut pieces, ca))
     }
 }
 
 // ── Superblock IOs in flight together ────────────────────────────────────
 
 /// A device's superblock with an IO in flight on it - its bio, mapped to its
-/// buffer or to @buf: nothing of either reachable until SbIos::wait() hands
-/// it back.
+/// buffer, or for a read to its scratch: nothing of either reachable until
+/// SbIos::wait() hands it back.
 struct Frozen<'a> {
-    sb:  DevSbMut<'a>,
-    buf: Option<&'a mut [u8]>,
+    sb:   DevSbMut<'a>,
+    read: bool,
 }
 
 /// Superblock IOs to devices, submitted together and waited on together:
@@ -2142,14 +2153,14 @@ impl<'a> SbIos<'a> {
     pub fn write(self: Pin<&mut Self>, sb: DevSbMut<'a>, sector: u64, bytes: usize) -> Result<(), BchError> {
         // blk-wbt throttles all writes but those with REQ_SYNC and REQ_IDLE
         let opf = c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META | c::REQ_FUA;
-        self.submit(Frozen { sb, buf: None }, opf, sector, bytes)
+        self.submit(Frozen { sb, read: false }, opf, sector, bytes)
     }
 
-    /// @buf read from @sector of @sb's device.
-    pub fn read(self: Pin<&mut Self>, sb: DevSbMut<'a>, sector: u64, buf: &'a mut [u8]) -> Result<(), BchError> {
+    /// @sb's scratch read from @sector of its device.
+    pub fn read(self: Pin<&mut Self>, sb: DevSbMut<'a>, sector: u64) -> Result<(), BchError> {
         let opf = c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META;
-        let bytes = buf.len();
-        self.submit(Frozen { sb, buf: Some(buf) }, opf, sector, bytes)
+        let bytes = sb.scratch.len();
+        self.submit(Frozen { sb, read: true }, opf, sector, bytes)
     }
 
     fn submit(self: Pin<&mut Self>, f: Frozen<'a>, opf: u32, sector: u64, bytes: usize) -> Result<(), BchError> {
@@ -2160,12 +2171,13 @@ impl<'a> SbIos<'a> {
         let r = this.gather.get();
 
         let (bio, sb_buf) = f.sb.io.bio(&f.sb.ca.disk_sb, opf, sector);
-        // SAFETY: frozen: nothing reaches its bio or buffer, or @buf, until
-        // wait() has waited on the gather
+        // frozen: nothing reaches its bio, buffer or scratch until wait() has
+        // waited on the gather
         unsafe {
-            match &mut f.buf {
-                Some(buf) => bio.remap_read(buf).submit_gathered(r),
-                None      => bio.remap_write(&sb_buf[..bytes]).submit_gathered(r),
+            if f.read {
+                bio.remap_read(f.sb.scratch).submit_gathered(r)
+            } else {
+                bio.remap_write(&sb_buf[..bytes]).submit_gathered(r)
             }
         }
         Ok(())
@@ -2229,20 +2241,6 @@ impl DevSbMut<'_> {
 
         let block = crate::util::kernel::bdev_logical_block_size(self.ca.disk_sb.bdev()) as usize;
         (sector, self.io.buf.sb_bytes().len().next_multiple_of(block))
-    }
-}
-
-impl<'a> DevSbMut<'a> {
-    /// ca->sb_read_scratch, what's read back into.
-    ///
-    /// # Safety
-    /// Not had twice at once.
-    unsafe fn scratch(&self) -> &'a mut [u8] {
-        let ca: &'a Dev = self.ca;
-        let s = ca.sb_read_scratch.as_ref().expect("a device's sb_read_scratch, from its alloc");
-        // SAFETY: used only by a superblock write, under the sb_lock we hold;
-        // once at a time, the caller's
-        unsafe { &mut *s.buf.get() }
     }
 }
 
@@ -2422,11 +2420,9 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
     pin_init::stack_pin_init!(let ios = SbIos::new());
     for dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
         let sector = dev_sb.io.buf.sb().layout.sb_offset[0].get();
-        // SAFETY: once, until its read's waited on
-        let scratch = unsafe { dev_sb.scratch() };
-        scratch.fill(0);
-        dev_sb.ca.io_done_add(crate::util::kernel::READ, DataType::sb, (scratch.len() >> 9) as u64);
-        ios.as_mut().read(dev_sb, sector, scratch)?;
+        dev_sb.scratch.fill(0);
+        dev_sb.ca.io_done_add(crate::util::kernel::READ, DataType::sb, (dev_sb.scratch.len() >> 9) as u64);
+        ios.as_mut().read(dev_sb, sector)?;
     }
 
     for (dev_sb, ret) in ios.as_mut().wait() {
@@ -2435,8 +2431,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
             continue;
         }
 
-        // SAFETY: once - its read, which had it, waited on
-        let read = cast_plain::<Head<bch_sb>>(unsafe { dev_sb.scratch() }).expect("a header's worth").seq.get();
+        let read = cast_plain::<Head<bch_sb>>(&*dev_sb.scratch).expect("a header's worth").seq.get();
         let expected = dev_sb.io.seq;
 
         if read != expected {
