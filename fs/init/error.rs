@@ -464,9 +464,7 @@ fn prt_actioning(out: &mut Printbuf, action: &[u8]) {
 }
 
 fn error_action_name(a: c::bch_error_actions) -> &'static str {
-    // SAFETY: the table's strings, static
-    unsafe { CStr::from_ptr(crate::opts::c_export::bch2_error_actions[a.0 as usize].cast()) }
-        .to_str().unwrap_or("?")
+    a.name().unwrap_or("?")
 }
 
 /// The verdict on an fsck error, reported as the options say, or asked. An
