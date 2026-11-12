@@ -203,12 +203,12 @@ fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Optio
     }
 
     let count = iter.count() as u64;
-    let ret = count.min(inode.vfs().size().saturating_sub(offset));
-    if ret == 0 {
+    let len = count.min(inode.vfs().size().saturating_sub(offset));
+    if len == 0 {
         return Ok(0);
     }
 
-    let rounded = ret.next_multiple_of(u64::from(fs.opts().block_size.get()));
+    let rounded = len.next_multiple_of(u64::from(fs.opts().block_size.get()));
     let mut iter = iter.hold_back(if rounded < count { (count - rounded) as usize } else { 0 });
 
     let inum = inode.inum();
@@ -230,7 +230,7 @@ fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Optio
 
     unsafe {
         let callers = CallersIter::new(&mut iter);
-        dio.start_inline(Queue::system_dfl(), move |d| dio_task(d, end, callers, offset, inum, flags, ret as usize))
+        dio.start_inline(Queue::system_dfl(), move |d| dio_task(d, end, callers, offset, inum, flags, len as usize))
     };
     drop(iter);
 
