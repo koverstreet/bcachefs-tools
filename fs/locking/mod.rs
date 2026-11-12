@@ -54,7 +54,7 @@ pub(crate) use raw::{rust_raw_spin_lock, rust_raw_spin_unlock};
 // for util/sleep.rs's waitqueue_init(): the shim's waitqueue lock
 #[cfg(not(kernel))]
 pub(crate) use raw::rust_spin_lock_init;
-pub use lock::{AsLockedBy, Exclusive, ExclusiveGuard, Locked, LockedBy, RawLock, RawLockBase, RawNestedLock, RawReadLock, RawRwLock, RawSixLock, RawTimedLock, RawTryLock, RawTryReadLock, Shared, SharedGuard,
+pub use lock::{AsLocked, AsLockedBy, Exclusive, ExclusiveGuard, Locked, LockedBy, RawLock, RawLockBase, RawNestedLock, RawReadLock, RawRwLock, RawSixLock, RawTimedLock, RawTryLock, RawTryReadLock, Shared, SharedGuard,
               SixIntent, SixWrite, SixWriteIntent, Unlock};
 pub(crate) use lock::{Alone, Guard};
 pub use noio::{mutex_noio, percpu_rwsem_noio, Memalloc, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};

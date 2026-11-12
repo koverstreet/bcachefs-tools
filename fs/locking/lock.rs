@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::util::place::{Contained, Path, Placed};
+use crate::util::place::{Contained, Path, Place, Placed};
 use crate::util::projections::Publish;
 use core::cell::UnsafeCell;
 use core::ffi::{c_ulong, c_void, CStr};
@@ -337,23 +337,71 @@ impl<R: RawLockBase, G, P, A> Placed<Locked<R, G, P>, A> {
     }
 }
 
+/// A Locked as a Placed holds it: itself, or - in a struct C shares - a
+/// RustOnly of it, at LOCKED_OFFSET.
+pub trait AsLocked {
+    type R: RawLockBase;
+    type G;
+    type P;
+    const LOCKED_OFFSET: usize;
+    fn locked(&self) -> &Locked<Self::R, Self::G, Self::P>;
+}
+
+impl<R: RawLockBase, G, P> AsLocked for Locked<R, G, P> {
+    type R = R;
+    type G = G;
+    type P = P;
+    const LOCKED_OFFSET: usize = 0;
+    fn locked(&self) -> &Self {
+        self
+    }
+}
+
+impl<R: RawLockBase, G, P, const U64S: usize, const ALIGN: usize> AsLocked
+    for crate::types::RustOnly<Locked<R, G, P>, U64S, ALIGN>
+where
+    crate::types::Align<ALIGN>: crate::types::AlignMarker,
+{
+    type R = R;
+    type G = G;
+    type P = P;
+    const LOCKED_OFFSET: usize = Self::T_OFFSET;
+    fn locked(&self) -> &Locked<R, G, P> {
+        self
+    }
+}
+
 /// A lock placed in its parent, at A: its guards carry A, so a guard knows
 /// where its lock is.
-impl<R: RawLock, G, P, A> Placed<Locked<R, G, P>, A> {
-    pub fn lock(&self) -> ExclusiveGuard<'_, R, G, P, Exclusive, A> {
-        (**self).lock().placed()
+impl<C: AsLocked, A> Placed<C, A> {
+    pub fn lock(&self) -> ExclusiveGuard<'_, C::R, C::G, C::P, Exclusive, A>
+    where
+        C::R: RawLock,
+    {
+        self.locked().lock().placed()
     }
-}
 
-impl<R: RawReadLock, G: Sync, P, A> Placed<Locked<R, G, P>, A> {
-    pub fn read(&self) -> SharedGuard<'_, R, G, P, Shared, A> {
-        (**self).read().placed()
+    pub fn try_lock(&self) -> Option<ExclusiveGuard<'_, C::R, C::G, C::P, Exclusive, A>>
+    where
+        C::R: RawTryLock,
+    {
+        self.locked().try_lock().map(ExclusiveGuard::placed)
     }
-}
 
-impl<R: RawRwLock, G: Sync, P, A> Placed<Locked<R, G, P>, A> {
-    pub fn write(&self) -> ExclusiveGuard<'_, R, G, P, Exclusive, A> {
-        (**self).write().placed()
+    pub fn read(&self) -> SharedGuard<'_, C::R, C::G, C::P, Shared, A>
+    where
+        C::R: RawReadLock,
+        C::G: Sync,
+    {
+        self.locked().read().placed()
+    }
+
+    pub fn write(&self) -> ExclusiveGuard<'_, C::R, C::G, C::P, Exclusive, A>
+    where
+        C::R: RawRwLock,
+        C::G: Sync,
+    {
+        self.locked().write().placed()
     }
 }
 
@@ -620,43 +668,51 @@ pub(crate) unsafe trait Guard {
 /// While one lives, nothing else holds what it names.
 pub(crate) unsafe trait Alone: Guard {}
 
-unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: 'a> Guard for SharedGuard<'a, R, G, P, U, A>
+unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Guard for SharedGuard<'a, R, G, P, U, A>
 where
-    Placed<Locked<R, G, P>, A>: Contained,
+    A::Type: Contained + PlacedLock<R, G, P>,
 {
     type Name = A;
-    type Root = <Placed<Locked<R, G, P>, A> as Contained>::Parent;
+    type Root = <A::Type as Contained>::Parent;
 
     fn root(&self) -> &Self::Root {
-        unsafe { placed_lock(self.lock) }.container()
+        unsafe { A::Type::of_lock(self.lock) }.container()
     }
 }
 
-unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: 'a> Guard for ExclusiveGuard<'a, R, G, P, U, A>
+unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Guard for ExclusiveGuard<'a, R, G, P, U, A>
 where
-    Placed<Locked<R, G, P>, A>: Contained,
+    A::Type: Contained + PlacedLock<R, G, P>,
 {
     type Name = A;
-    type Root = <Placed<Locked<R, G, P>, A> as Contained>::Parent;
+    type Root = <A::Type as Contained>::Parent;
 
     fn root(&self) -> &Self::Root {
-        unsafe { placed_lock(self.lock) }.container()
+        unsafe { A::Type::of_lock(self.lock) }.container()
     }
 }
 
-/// The Placed that @lock is the value of.
-///
-/// # Safety
-/// @lock is a guard of place A's: Placed<Locked, A>'s methods alone make
-/// one, of the Locked at its start.
-unsafe fn placed_lock<R: RawLockBase, G, P, A>(lock: &Locked<R, G, P>) -> &Placed<Locked<R, G, P>, A> {
-    unsafe { &*core::ptr::from_ref(lock).cast() }
+/// A placed lock's field: what its guards' root() finds it by.
+pub(crate) trait PlacedLock<R: RawLockBase, G, P> {
+    /// The field @lock is in.
+    ///
+    /// # Safety
+    /// @lock is a guard of this field's place's: Placed's lock methods alone
+    /// make one, of the Locked it holds.
+    unsafe fn of_lock(lock: &Locked<R, G, P>) -> &Self;
+}
+
+impl<C: AsLocked, A> PlacedLock<C::R, C::G, C::P> for Placed<C, A> {
+    unsafe fn of_lock(lock: &Locked<C::R, C::G, C::P>) -> &Self {
+        // the value's at a Placed's start
+        unsafe { &*core::ptr::from_ref(lock).byte_sub(C::LOCKED_OFFSET).cast() }
+    }
 }
 
 // an exclusive guard's U is a mode no other holder shares
-unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: 'a> Alone for ExclusiveGuard<'a, R, G, P, U, A>
+unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Alone for ExclusiveGuard<'a, R, G, P, U, A>
 where
-    Placed<Locked<R, G, P>, A>: Contained,
+    A::Type: Contained + PlacedLock<R, G, P>,
 {}
 
 /// Locked's two halves, for data that can't live in its lock: @G, reached only
