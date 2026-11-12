@@ -27,7 +27,7 @@
 //! Both share `Queue::system_dfl()`, so a task wedged by one can starve the
 //! other: a single fault can show up as two failures.
 
-use bcachefs_kernel::util::task::{waiter, Completion, Done, Resumable, Spawn};
+use bcachefs_kernel::util::task::{waiter, Completion, Done, Resumable};
 use bcachefs_kernel::util::task::spawn_detached;
 use bcachefs_kernel::util::workqueue::Queue;
 
@@ -42,7 +42,7 @@ use std::time::Duration;
 /// @f as a task on @q, nothing joining it.
 fn spawn<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, f: F) {
     // SAFETY: 'static: it borrows nothing
-    unsafe { spawn_detached(Spawn::Queue(q), f) }.unwrap();
+    unsafe { spawn_detached(q, f) }.unwrap();
 }
 
 /// Run `f` on a helper thread and fail rather than hang if it wedges.

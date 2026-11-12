@@ -26,7 +26,7 @@ use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::rcu::Detach;
 use crate::util::refcount::TryRefcount;
 use crate::util::sleep::Sleep;
-use crate::util::task::{spawn_static, Spawn};
+use crate::util::task::spawn_static;
 use crate::util::workqueue::{Workqueue, WqFlags};
 
 /*
@@ -165,7 +165,7 @@ impl Fs {
         let fs_ref = unsafe { BackRef::new(self) };
         let fs = unsafe { fs_ref.get() };
 
-        if spawn_static(Spawn::Queue(&fs.btree.async_ops.worker), task(write, fs_ref, a)).is_err() {
+        if spawn_static(&fs.btree.async_ops.worker, task(write, fs_ref, a)).is_err() {
             self.btree.async_ops.op_done();
         }
     }

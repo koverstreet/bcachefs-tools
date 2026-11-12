@@ -38,7 +38,7 @@ use crate::util::bio::{bch2_bio_map, buf_nr_bvecs, of_bio, Bio, BioBox, BioBuffe
 use crate::util::kernel::random_u64_below;
 use crate::util::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, READ};
 use crate::util::log::{LogLevel, LogMsg};
-use crate::util::task::{spawn_static, waiter, Resumable, Resume, Spawn};
+use crate::util::task::{spawn_static, waiter, Resumable, Resume};
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
                             Plain, SelfSized, Unsized, Unvalidated};
 use crate::util::workqueue::{run_raw, RawWork};
@@ -1147,7 +1147,7 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
     let key = BtreeKeyBuf::new(btree, level, k);
     let io = m.io_start(false, fs.btree_sectors());
 
-    spawn_static(Spawn::Queue(&fs.btree.read_complete_wq), rewrite_if_bad(write, fs_ref, key, r, io))
+    spawn_static(&fs.btree.read_complete_wq, rewrite_if_bad(write, fs_ref, key, r, io))
 }
 
 /// The inline data keys of the leaf @key points to checked against their own

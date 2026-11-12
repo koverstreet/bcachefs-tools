@@ -21,7 +21,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
 use crate::util::refcount::TryRefcount;
-use crate::util::task::{spawn_static, Spawn};
+use crate::util::task::spawn_static;
 use crate::util::vstructs::{cast_plain, cast_plain_mut};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
@@ -212,7 +212,7 @@ pub fn bch2_inline_data_poison(c: &Opaque<Fs>, btree: Btree, k: BkeySC<'_>, read
     let fs_ref = unsafe { BackRef::new(fs) };
     let key = BtreeKeyBuf::new(btree, 0, k);
 
-    if let Err(e) = spawn_static(Spawn::Queue(Queue::system_dfl()), poison(write, fs_ref, key, read_pos, record)) {
+    if let Err(e) = spawn_static(Queue::system_dfl(), poison(write, fs_ref, key, read_pos, record)) {
         bch_err_ratelimited!(fs, "poisoning inline data that failed its checksum: {}", e.msg());
     }
 }

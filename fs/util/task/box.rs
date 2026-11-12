@@ -6,12 +6,16 @@
 //! its task: the home made, and the future, which may consume what can't be
 //! dropped, like a guard to be ended, made only once there's memory for it.
 //!
-//! The future is made by an async closure handed the home: it may borrow the
-//! home, but only for as long as the closure's call, which no lifetime it can
-//! name outlives - so it can't keep the borrow past the task. A box with no
-//! done of its owner's frees itself when its task is done; spawn_detached()
-//! is one started at once. A Join is a task its spawner awaits, for what it
-//! returns, through a CompletionReturn.
+//! A Shared task's future is made by an async closure handed &H: it may
+//! borrow the home, but only for as long as the closure's call, which no
+//! lifetime it can name outlives - so it can't keep the borrow past the task -
+//! and others may meanwhile, through the box; with no done of its owner's,
+//! the box frees itself when its task is done. An Exclusive task's is what a
+//! closure returns, handed Pin<&mut H>: a future with a name, if it's an
+//! #[in_place] fn's, so a pool can be sized for its box - exclusive_size().
+//! Started, the box is the task's alone, freed when it's done: spawn_detached()'s,
+//! a Join's. A Join is a task its spawner awaits, for what it returns, through
+//! a CompletionReturn.
 
 use crate::c;
 use crate::errcode::BchError;
@@ -32,8 +36,18 @@ use pin_init::PinInit;
 /// the box keeps it.
 type FutureOf<M, H> = <M as AsyncFnOnce<(&'static H,)>>::CallOnceFuture;
 
-/// A TaskSlot's allocation: of @M's task, from @A.
-type Mem<'q, H, M, A> = WithTask<'q, H, FutureOf<M, H>, A>;
+/// An Exclusive task's future: what @M returns, given the home as its own -
+/// a type with a name, if M calls an #[in_place] fn, so a pool can be sized
+/// for it.
+type FutureOfMut<M, H> = <M as FnOnce<(Pin<&'static mut H>,)>>::Output;
+
+/// A TaskSlot whose task shares its home: the future has &H, and so may the
+/// box's owner, who keeps the box while the task runs.
+pub struct Shared;
+
+/// A TaskSlot whose task has its home to itself: the future has Pin<&mut H>,
+/// and started, the box is the task's alone - freed when it's done.
+pub struct Exclusive;
 
 /// One allocation, from @A: the task of a future borrowing @home, then the
 /// home, and what frees it - A, and the size it gave. The task's head is the
@@ -60,15 +74,19 @@ impl<H, F: Future<Output = ()>, A: Alloc + Copy> WithTask<'_, H, F, A> {
 
 /// A TaskBox's memory, its home made and its task not yet: allocated apart
 /// from making the future, a failed allocation consumes none of what the
-/// future would. Not bounded by @M's AsyncFnOnce: a bound naming its future
-/// type would be what rustc infers the closure's signature from, and that's
-/// for one lifetime, not every one.
-pub struct TaskSlot<'q, H, M, A: Alloc + Copy = Kmalloc> {
+/// future would. @K is how the task has its home, Shared or Exclusive. Not
+/// bounded by @M's AsyncFnOnce: a bound naming its future type would be what
+/// rustc infers the closure's signature from, and that's for one lifetime,
+/// not every one.
+pub struct TaskSlot<'q, H, M, A: Alloc + Copy = Kmalloc, K = Shared> {
     home: NonNull<H>,
     /// The home dropped, and the memory freed
     free: unsafe fn(NonNull<H>),
-    _p:   PhantomData<(&'q Queue, fn() -> M, A)>,
+    _p:   PhantomData<(&'q Queue, fn() -> M, A, K)>,
 }
+
+// Its home, which nothing else has yet, as a Box's
+unsafe impl<H: Send, M, A: Alloc + Copy + Send, K> Send for TaskSlot<'_, H, M, A, K> {}
 
 impl<'q, H, M> TaskSlot<'q, H, M>
 where
@@ -95,28 +113,8 @@ where
     where
         BchError: From<E>,
     {
-        let layout = Layout::new::<Mem<'q, H, M, A>>();
-        // Not zeroed: each of its fields is written
-        let mem = alloc.alloc(layout)?;
-        let w = mem.cast::<Mem<'q, H, M, A>>().as_ptr();
-        unsafe {
-            (&raw mut (*w).alloc).write(alloc);
-            (&raw mut (*w).given).write(mem.len());
-            if let Err(e) = init_at(home, &raw mut (*w).home) {
-                alloc.free(mem.cast(), Layout::from_size_align_unchecked(mem.len(), layout.align()));
-                return Err(e.into());
-            }
-            Ok(Self {
-                home: NonNull::new_unchecked(&raw mut (*w).home),
-                free: free_slot::<H, FutureOf<M, H>, A>,
-                _p:   PhantomData,
-            })
-        }
-    }
-
-    /// The home, before there's a task to borrow it.
-    pub fn home(&mut self) -> Pin<&mut H> {
-        unsafe { Pin::new_unchecked(self.home.as_mut()) }
+        let home = unsafe { alloc_mem::<H, FutureOf<M, H>, A, E, _>(alloc, Layout::new::<()>(), |_| home)? };
+        Ok(Self { home, free: free_slot::<H, FutureOf<M, H>, A>, _p: PhantomData })
     }
 
     /// The task to be, for a Done its owner arms before it starts: where it
@@ -137,37 +135,153 @@ where
     {
         let home = ManuallyDrop::new(self).home;
         unsafe {
-            let w = Mem::<'q, H, M, A>::of_home(home).as_ptr();
-            (&raw mut (*w).done).write(done);
-            let future = make(&*(&raw const (*w).home));
-            let task = Task::new(at, future, Self::task_done);
-            if let Err(e) = init_at(task, (&raw mut (*w).task).cast()) {
-                free_slot::<H, FutureOf<M, H>, A>(home);
-                return Err(e);
-            }
-            Ok(TaskBox { home,
-                         task: (*w).task.assume_init_ref().task(),
-                         free: free::<H, FutureOf<M, H>, A>,
-                         _q:   PhantomData })
-        }
-    }
-
-    unsafe fn task_done(task: NonNull<Task<'q, FutureOf<M, H>>>, (): ()) {
-        unsafe {
-            let w = task.as_ptr().byte_sub(core::mem::offset_of!(Mem<'q, H, M, A>, task))
-                .cast::<Mem<'q, H, M, A>>();
-            let home = NonNull::new_unchecked(&raw mut (*w).home);
-            match (*w).done {
-                Some(done) => done(home),
-                None => free::<H, FutureOf<M, H>, A>(home),
-            }
+            let task = init_task::<H, _, A>(home, at, make(home.as_ref()), done)?;
+            Ok(TaskBox { home, task, free: free::<H, FutureOf<M, H>, A>, _q: PhantomData })
         }
     }
 }
 
-impl<H, M, A: Alloc + Copy> Drop for TaskSlot<'_, H, M, A> {
+impl<'q, H, M, A: Alloc + Copy> TaskSlot<'q, H, M, A, Exclusive>
+where
+    H: Send + 'static,
+    M: FnOnce<(Pin<&'static mut H>,)>,
+    FutureOfMut<M, H>: Future<Output = ()> + Send,
+{
+    /// An Exclusive task's TaskSlot, from @alloc.
+    pub fn exclusive_in<E>(alloc: A, home: impl PinInit<H, E>) -> Result<Self, BchError>
+    where
+        BchError: From<E>,
+    {
+        Self::exclusive_tail_in(alloc, Layout::new::<()>(), |_| home)
+    }
+
+    /// exclusive_in(), with @tail after the box, in the same allocation - a
+    /// bio's bvecs - the home made by @home from where it is.
+    pub fn exclusive_tail_in<E, I>(alloc: A, tail: Layout, home: impl FnOnce(NonNull<u8>) -> I)
+        -> Result<Self, BchError>
+    where
+        I: PinInit<H, E>,
+        BchError: From<E>,
+    {
+        let home = unsafe { alloc_mem::<H, FutureOfMut<M, H>, A, E, I>(alloc, tail, home)? };
+        Ok(Self { home, free: free_slot::<H, FutureOfMut<M, H>, A>, _p: PhantomData })
+    }
+
+    /// The task of the future @make makes from the home, started to run on
+    /// @q: the box is the task's from here, freed when it's done.
+    ///
+    /// # Safety
+    /// @q, and what @make holds and its future borrows beyond the home,
+    /// outlive the task; the home, handed @make as 'static, is borrowed by
+    /// nothing but the future it makes.
+    pub unsafe fn start(self, q: &'q Queue, make: M) {
+        unsafe { self.make(q, make).start() }
+    }
+
+    /// start(), its first poll run here.
+    ///
+    /// # Safety
+    /// As start()'s.
+    pub unsafe fn start_inline(self, q: &'q Queue, make: M) {
+        unsafe { self.make(q, make).start_inline() }
+    }
+
+    unsafe fn make(self, q: &'q Queue, make: M) -> TaskRef {
+        let home = ManuallyDrop::new(self).home;
+        unsafe {
+            let future = make(Pin::new_unchecked(&mut *home.as_ptr()));
+            init_task::<H, _, A>(home, Spawn::Queue(q), future, None)
+        }.expect("a queue's task: only a thread's fails to start")
+    }
+}
+
+/// The size of an Exclusive box of @H and @F's task, from @A, with @tail:
+/// what a pool's elements are, for one.
+pub fn exclusive_size<H, F: Future<Output = ()>, A: Alloc + Copy>(tail: Layout) -> usize {
+    box_layout::<H, F, A>(tail).0.size()
+}
+
+/// A box with @tail after it, and where the tail is.
+fn box_layout<'q, H, F: Future<Output = ()>, A: Alloc + Copy>(tail: Layout) -> (Layout, usize) {
+    let (layout, at) = Layout::new::<WithTask<'q, H, F, A>>().extend(tail).expect("a box and its tail");
+    (layout.pad_to_align(), at)
+}
+
+impl<H, M, A: Alloc + Copy, K> TaskSlot<'_, H, M, A, K> {
+    /// The home, before there's a task to borrow it.
+    pub fn home(&mut self) -> Pin<&mut H> {
+        unsafe { Pin::new_unchecked(self.home.as_mut()) }
+    }
+}
+
+impl<H, M, A: Alloc + Copy, K> Drop for TaskSlot<'_, H, M, A, K> {
     fn drop(&mut self) {
         unsafe { (self.free)(self.home) }
+    }
+}
+
+/// The memory of a box from @alloc, and @tail after it - A and the size it
+/// gave written in for its free - and the home made in it, by what @home
+/// makes of where the tail is. Not zeroed: each of its fields is written, and
+/// a pool's element is as big as a bio with BIO_MAX_VECS bvecs.
+///
+/// # Safety
+/// F is the future the box's task will be.
+unsafe fn alloc_mem<'q, H, F: Future<Output = ()>, A: Alloc + Copy, E, I>(
+    alloc: A, tail: Layout, home: impl FnOnce(NonNull<u8>) -> I,
+) -> Result<NonNull<H>, BchError>
+where
+    I: PinInit<H, E>,
+    BchError: From<E>,
+{
+    let (layout, at) = box_layout::<H, F, A>(tail);
+    let mem = alloc.alloc(layout)?;
+    let w = mem.cast::<WithTask<'q, H, F, A>>().as_ptr();
+    unsafe {
+        (&raw mut (*w).alloc).write(alloc);
+        (&raw mut (*w).given).write(mem.len());
+        if let Err(e) = init_at(home(mem.cast::<u8>().add(at)), &raw mut (*w).home) {
+            alloc.free(mem.cast(), Layout::from_size_align_unchecked(mem.len(), layout.align()));
+            return Err(e.into());
+        }
+        Ok(NonNull::new_unchecked(&raw mut (*w).home))
+    }
+}
+
+/// The task of @future in @home's box, to run @at: the box freed if it can't
+/// be made.
+///
+/// # Safety
+/// @home is alloc_mem::<H, F, A>()'s, its task not made, and @future borrows
+/// nothing of it but the home.
+unsafe fn init_task<'q, H, F: Future<Output = ()> + Send, A: Alloc + Copy>(
+    home: NonNull<H>, at: Spawn<'q, '_>, future: F, done: Option<unsafe fn(NonNull<H>)>,
+) -> Result<TaskRef, BchError> {
+    unsafe {
+        let w = WithTask::<'q, H, F, A>::of_home(home).as_ptr();
+        (&raw mut (*w).done).write(done);
+        let task = Task::new(at, future, task_done::<H, F, A>);
+        if let Err(e) = init_at(task, (&raw mut (*w).task).cast()) {
+            free_slot::<H, F, A>(home);
+            return Err(e);
+        }
+        Ok((*w).task.assume_init_ref().task())
+    }
+}
+
+/// A box's task's done: its owner's, or the box freed.
+///
+/// # Safety
+/// The executor's, as the task's done function: @task is finished.
+unsafe fn task_done<'q, H, F: Future<Output = ()>, A: Alloc + Copy>(task: NonNull<Task<'q, F>>, (): ()) {
+    unsafe {
+        let w = task.as_ptr().byte_sub(core::mem::offset_of!(WithTask<'q, H, F, A>, task))
+            .cast::<WithTask<'q, H, F, A>>();
+        let home = NonNull::new_unchecked(&raw mut (*w).home);
+        match (*w).done {
+            Some(done) => done(home),
+            None => free::<H, F, A>(home),
+        }
     }
 }
 
@@ -266,21 +380,18 @@ impl<H> Drop for TaskBox<'_, H> {
     }
 }
 
-/// A task nothing joins, in a box of its own, started.
+/// A task nothing joins, in a box of its own, started on @q.
 ///
 /// # Safety
-/// Its queue, and what the future borrows, outlive the task.
-pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(at: Spawn<'_, '_>, future: F) -> Result<(), BchError> {
-    let task = TaskSlot::alloc(())?.init(at, async move |_: &()| future.await, None)?;
-    unsafe { task.start_unchecked() };
+/// @q, and what the future borrows, outlive the task.
+pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(q: &Queue, future: F) -> Result<(), BchError> {
+    unsafe { TaskSlot::exclusive_in(Kmalloc, ())?.start(q, move |_| future) };
     Ok(())
 }
 
 /// spawn_detached(), for a task that borrows nothing, on a queue that lasts.
-pub fn spawn_static<F: Future<Output = ()> + Send + 'static>(at: Spawn<'static, '_>, future: F)
-    -> Result<(), BchError>
-{
-    unsafe { spawn_detached(at, future) }
+pub fn spawn_static<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, future: F) -> Result<(), BchError> {
+    unsafe { spawn_detached(q, future) }
 }
 
 /// A task its spawner awaits, for what it returns: its CompletionReturn's
@@ -304,11 +415,9 @@ impl<T: Send> Join<T> {
     where
         F: Future<Output = T> + Send + 'a,
     {
-        let slot = TaskSlot::alloc(())?;
+        let slot = TaskSlot::exclusive_in(Kmalloc, ())?;
         let (wait, ret) = CompletionReturn::new(&mut self.0, waiter);
-        let task = slot.init(Spawn::Queue(q), async move |_: &()| ret.complete(future.await), None)
-            .expect("a queue's task: nothing in it fails");
-        unsafe { task.start_unchecked() };
+        unsafe { slot.start(q, move |_| async move { ret.complete(future.await) }) };
         Ok(wait)
     }
 }
