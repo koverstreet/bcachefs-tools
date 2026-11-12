@@ -3,16 +3,17 @@
 //! A moving context: what a mover's moves are issued and counted in - the
 //! walks that issue them are move_data.rs. A move is asynchronous: move_extent()
 //! returns once the read is issued, and the rest runs in the update's task
-//! (moving_update.rs) on the movers' workqueue - not on the mover's stack, which
-//! may already be deep: a stripe repair's moves run inside reconcile's walk.
-//! The context's waits sleep on its EventCount, woken by every completion
-//! counted in the context.
+//! (moving_update.rs) on the context's run queue. The run queue runs only in
+//! the context's waits, so all of a mover's updates run on its own thread,
+//! between its own steps. The waits sleep on the run queue's EventCount,
+//! woken by a task becoming ready and by every completion counted in the
+//! context.
 //!
 //! The context's updates are a fifo, in the order they were issued: an
 //! update's seq is its index there. It's what orders their writes - each
 //! starts once every update issued before it has started its - and what
 //! IoMark is: an update's seq, done once everything issued before it is. The
-//! mover issues to it and its updates' tasks finish in it, so it's locked.
+//! mover's thread's alone, issuing and finishing, so not locked.
 //!
 //! The context is pinned - its IO holds refs on it - and owns its
 //! transaction, trans(), which ratelimit(), flush_all() and move_extent()
@@ -31,17 +32,15 @@ use crate::fs::Fs;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
-use crate::util::task::waiter;
-use crate::util::futex::EventCount;
+use crate::util::task::{waiter, RunQueue};
 use crate::util::sleep::Sleep;
 use crate::types::Fifo;
 use crate::util::gather::{Gather, GatherRef};
+use core::cell::{Cell, UnsafeCell};
 use core::marker::PhantomData;
-use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicI32, AtomicPtr};
+use core::ptr::NonNull;
+use core::sync::atomic::AtomicI32;
 use core::sync::atomic::Ordering::Relaxed;
-use crate::locking::Locked;
-use crate::new_lock;
 use pin_init::{pin_data, pin_init};
 
 pub use c::MoveStats;
@@ -128,7 +127,7 @@ pub struct InFlightUpdate {
 #[pin_data]
 pub struct MovingContext {
     trans:          TransGuard<'static>,
-    stats:          AtomicPtr<MoveStats>,
+    stats:          Cell<NonNull<MoveStats>>,
     wp:             c::write_point_specifier,
     wait_on_copygc: bool,
 
@@ -138,35 +137,19 @@ pub struct MovingContext {
 
     io:             IoCounts,
 
-    /* Woken by every completion, for wait_until(): Moving::wake() */
-    events:         EventCount,
     /*
-     * Its data updates in flight - the mover's, and its updates' tasks', on
-     * the movers' workqueue
+     * Its updates' tasks, run in its waits - data/moving_update.rs - whose
+     * EventCount every completion wakes: Moving::wake()
      */
     #[pin]
-    updates:        Locked<c::mutex, Updates>,
-}
-
-/// A context's data updates in flight, in the order they were issued, by seq -
-/// an update's index in the fifo - and the first whose write hasn't started.
-struct Updates {
-    fifo:       Fifo<InFlightUpdate, u64>,
-    write_next: u64,
-}
-
-impl Updates {
-    /// Update @seq's write starting: the next update's turn, if every update
-    /// before it has started.
-    fn write_start(&mut self, seq: u64) {
-        self.fifo.get_mut(seq).expect("an update not in flight").started = true;
-        while self.fifo.get(self.write_next).is_some_and(|u| u.started) {
-            self.write_next += 1;
-        }
-        if let Some(turn) = self.fifo.get_mut(self.write_next).and_then(|u| u.turn.take()) {
-            turn.put(());
-        }
-    }
+    runq:           RunQueue,
+    /*
+     * Its data updates in flight, in the order they were issued, by seq - an
+     * update's index in it - and the first whose write hasn't started. The
+     * mover's thread's alone.
+     */
+    updates:        UnsafeCell<Fifo<InFlightUpdate, u64>>,
+    write_next:     Cell<u64>,
 }
 
 /* In flight: what ratelimit() throttles on, and flush_all() waits out */
@@ -247,13 +230,14 @@ impl<'a> MovingCtxt<'a> {
     {
         let init = pin_init!(MovingContext {
             trans:          unsafe { TransGuard::from_raw(__bch2_trans_get(fs, crate::trans_fn_idx!())) },
-            stats:          AtomicPtr::new(ptr::from_ref(stats).cast_mut()),
+            stats:          Cell::new(NonNull::from(stats)),
             wp,
             wait_on_copygc,
             in_flight <- Gather::new(),
             io:             Default::default(),
-            events:         EventCount::new(),
-            updates <- new_lock!(Updates { fifo: Fifo::new(), write_next: 0 }, (), "moving_ctxt.updates"),
+            runq:           pin_init::zeroed(),
+            updates:        UnsafeCell::new(Fifo::new()),
+            write_next:     Cell::new(0),
         }? BchError);
         let ctxt = alloc_pinned(init)?;
         Ok(MovingCtxt { ctxt: NonNull::new(ctxt).expect("alloc_pinned() returns its allocation"), life: PhantomData })
@@ -298,12 +282,12 @@ impl<'a> Moving<'a> {
 
     /// Count moves from here on into @stats.
     pub fn set_stats(&self, stats: &'a MoveStats) {
-        self.0.stats.store(ptr::from_ref(stats).cast_mut(), Relaxed)
+        self.0.stats.set(NonNull::from(stats))
     }
 
     pub fn stats(&self) -> &'a MoveStats {
         // SAFETY: set from a &'a MoveStats
-        unsafe { &*self.0.stats.load(Relaxed) }
+        unsafe { self.0.stats.get().as_ref() }
     }
 
     pub(crate) fn io(&self) -> &IoCounts {
@@ -314,27 +298,30 @@ impl<'a> Moving<'a> {
         self.0.wp
     }
 
-    fn with_updates<R>(&self, f: impl FnOnce(&mut Updates) -> R) -> R {
-        f(&mut self.0.updates.lock())
+    fn with_updates<R>(&self, f: impl FnOnce(&mut Fifo<InFlightUpdate, u64>) -> R) -> R {
+        // SAFETY: the mover's thread's alone, and not reentered: @f is
+        // ours, and touches nothing of the context's but the fifo
+        f(unsafe { &mut *self.0.updates.get() })
     }
 
     /// Room for one more update, for update_issue().
     pub(crate) fn updates_reserve(&self) -> Result<(), AllocError> {
-        self.with_updates(|u| u.fifo.reserve(1))
+        self.with_updates(|f| f.reserve(1))
     }
 
     /// An update issued: its seq. @turn holds its turn to write till every
     /// update issued before it has started its write.
     pub(crate) fn update_issue(&self, turn: GatherRef<(), waiter::Async>) -> u64 {
-        self.with_updates(|u| {
-            let seq = u.fifo.back_idx();
-            let turn = if seq == u.write_next {
+        let w = self.0.write_next.get();
+        self.with_updates(|f| {
+            let seq = f.back_idx();
+            let turn = if seq == w {
                 turn.put(());
                 None
             } else {
                 Some(turn)
             };
-            if u.fifo.push_back(InFlightUpdate { turn, ..Default::default() }).is_err() {
+            if f.push_back(InFlightUpdate { turn, ..Default::default() }).is_err() {
                 unreachable!("an update issued without updates_reserve()");
             }
             seq
@@ -344,27 +331,37 @@ impl<'a> Moving<'a> {
     /// Update @seq's write starting - or, at exit, never to: the next update's
     /// turn, if every update before it has started.
     pub(crate) fn update_write_start(&self, seq: u64) {
-        self.with_updates(|u| u.write_start(seq))
+        let mut w = self.0.write_next.get();
+        self.with_updates(|f| {
+            f.get_mut(seq).expect("an update not in flight").started = true;
+            while f.get(w).is_some_and(|u| u.started) {
+                w += 1;
+            }
+            if let Some(turn) = f.get_mut(w).and_then(|u| u.turn.take()) {
+                turn.put(());
+            }
+        });
+        self.0.write_next.set(w);
     }
 
     /// Update @seq done: off the fifo, once everything issued before it is.
     pub(crate) fn update_done(&self, seq: u64) {
-        self.with_updates(|u| {
-            u.write_start(seq);
-            u.fifo.get_mut(seq).expect("an update not in flight").done = true;
-            while u.fifo.peek_front().is_some_and(|u| u.done) {
-                u.fifo.pop_front();
+        self.update_write_start(seq);
+        self.with_updates(|f| {
+            f.get_mut(seq).expect("an update not in flight").done = true;
+            while f.peek_front().is_some_and(|u| u.done) {
+                f.pop_front();
             }
         });
     }
 
     /// No update in flight.
     pub(crate) fn updates_idle(&self) -> bool {
-        self.with_updates(|u| u.fifo.is_empty())
+        self.with_updates(|f| f.is_empty())
     }
 
     pub(crate) fn wake(&self) {
-        self.0.events.wake()
+        self.runq().events().wake()
     }
 
     /// Wait until fewer than the filesystem's limits are in flight - and, if
@@ -422,28 +419,44 @@ impl<'a> Moving<'a> {
         self.trans().unlock_long();
     }
 
-    /// Waits until @cond, sleeping with the transaction unlocked. @cond is
-    /// called once per wake, so it may be a trylock.
+    /// Waits until @cond, running the context's tasks as they become ready and
+    /// sleeping with the transaction unlocked. @cond is called once per wake,
+    /// so it may be a trylock.
     pub fn wait_until<T>(&self, mut cond: impl FnMut() -> Option<T>) -> T {
-        let events = &self.0.events;
+        let runq = self.runq();
+        let events = runq.events();
         loop {
+            // A task may run a transaction of its own - an EC allocation
+            // failure parks its extent - which mustn't wait on ours
+            if runq.has_ready() {
+                self.trans().unlock_long();
+                runq.run();
+            }
             // before @cond, so a wake after it isn't missed
             let seen = events.snapshot();
             if let Some(v) = cond() {
                 return v;
             }
             self.trans().unlock_long();
-            let Ok(()) = events.wait(seen, Sleep::UNINTERRUPTIBLE.freezable());
+
+            if !runq.has_ready() {
+                let Ok(()) = events.wait(seen, Sleep::UNINTERRUPTIBLE.freezable());
+            }
         }
     }
 
+    pub(crate) fn runq(&self) -> core::pin::Pin<&RunQueue> {
+        // SAFETY: the context's, pinned, and live while borrowed
+        unsafe { core::pin::Pin::new_unchecked(&self.0.runq) }
+    }
+
     pub fn io_mark(&self) -> IoMark {
-        IoMark(self.with_updates(|u| u.fifo.back_idx()))
+        IoMark(self.with_updates(|f| f.back_idx()))
     }
 
     /// Whether everything issued before @mark has completed.
     pub fn io_done(&self, mark: IoMark) -> bool {
-        self.with_updates(|u| u.fifo.front_idx()) >= mark.0
+        self.with_updates(|f| f.front_idx()) >= mark.0
     }
 }
 

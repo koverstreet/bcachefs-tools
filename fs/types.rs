@@ -828,13 +828,6 @@ pub struct Fs {
            ENOMEM_fs_other_alloc)]
     #[c("struct workqueue_struct *btree_update_wq")]
     pub btree_update_wq: Late<Workqueue>,
-    /*
-     * Movers' data update tasks: not btree_update_wq, as an update's write
-     * may wait on the allocator for its own index updates, which run there
-     */
-    #[late(Workqueue::new(c"bcachefs_move", WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::UNBOUND, 0),
-           ENOMEM_fs_other_alloc)]
-    pub move_wq: Late<Workqueue>,
     #[pin]
     #[init(BioSet::new(1, true), ENOMEM_bio_read_init)]
     #[c("struct bio_set bio_read")]

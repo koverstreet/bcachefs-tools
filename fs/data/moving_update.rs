@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A mover's data update: a data update's task (update_task.rs) on the
-//! movers' workqueue. What bounds how much a mover has in flight is ratelimit(), on
-//! the context's counts.
+//! A mover's data update: a data update's task (update_task.rs) on the moving
+//! context's run queue. The run queue runs only in the mover's waits, so
+//! updates run on the mover's thread between its own steps: a mover can't
+//! issue faster than it completes, and its work stays out of everyone else's
+//! way.
 //!
 //! Writes start in the order the reads were issued: a mover walks keys in
 //! order, and data written in order is laid out together. An update's turn is
@@ -91,8 +93,8 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     }).await;
     drop(read_io);
     if let Err(e) = issued {
-        drop(bucket);
         u.exit(crate::errcode::ret_to_c(Err::<(), _>(e)));
+        drop(bucket);
         return;
     }
 
@@ -118,10 +120,8 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
             crate::data::update_index::ec_alloc_failed(&mut u);
         }
     }
-    // before exit()'s wake of the context, whose owner may be waiting for
-    // the bucket - copygc's wait_done()
-    drop(bucket);
     u.exit(err);
+    drop(bucket);
 }
 
 /// # Safety
@@ -146,7 +146,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
 
     // SAFETY: flush_all() waits for every task before the context goes
     let task = unsafe {
-        update_task::spawn(t, Spawn::Queue(&t.fs().move_wq), bch_errcode::BCH_ERR_ENOMEM_move_extent)
+        update_task::spawn(t, Spawn::Run(moving.runq()), bch_errcode::BCH_ERR_ENOMEM_move_extent)
     }?;
     // On error init() has cleaned up, and the task is dropped unstarted
     let mut u = match task.init(t, Some(iter), Some(moving), moving.write_point(), io_opts, *data_opts, btree, k) {
