@@ -1237,57 +1237,24 @@ impl Dev {
 
 // ── References ───────────────────────────────────────────────────────────
 
-/// A ref on a device - ca->ref: it stays a member while this is held. Put
-/// on drop; cloned with bch2_dev_get().
-/// A NonNull, so Option<DevRef> has C's layout: a nullable bch_dev *.
-pub struct DevRef(core::ptr::NonNull<Dev>);
+/// A ref on a device - ca->ref: it stays a member while this is held.
+/// Option<DevRef> has C's layout: a nullable bch_dev *.
+pub type DevRef = RefGuard<Dev>;
 
-// SAFETY: a ref on a Sync device, which C takes and puts from any thread
-unsafe impl Send for DevRef {}
+/// A device, counted by ca->ref, which its removal drains before it's freed:
+/// bch2_dev_get() and bch2_dev_put(), as members.h's inlines are.
+unsafe impl Refcount for Dev {
+    unsafe fn inc(&self) {
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        assert!(self.ref_.fetch_add(1, Ordering::SeqCst) >= 1, "bch_dev->ref get with no ref held");
 
-impl DevRef {
-    /// # Safety
-    /// @ca holds a ref that's this one's now: bch2_dev_lookup()'s.
-    pub unsafe fn from_raw(ca: *mut Dev) -> Self {
-        DevRef(core::ptr::NonNull::new(ca).expect("a device ref on no device"))
+        #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+        unsafe { self.ref_.inc() };
     }
 
-    /// For C functions taking *mut bch_dev.
-    pub fn as_mut_ptr(&self) -> *mut Dev {
-        self.0.as_ptr()
+    unsafe fn dec(&self) {
+        unsafe { dev_put(self.as_ptr()) }
     }
-}
-
-impl core::ops::Deref for DevRef {
-    type Target = Dev;
-
-    fn deref(&self) -> &Dev {
-        // SAFETY: the ref keeps it
-        unsafe { self.0.as_ref() }
-    }
-}
-
-impl Clone for DevRef {
-    fn clone(&self) -> Self {
-        self.get_ref()
-    }
-}
-
-impl Drop for DevRef {
-    fn drop(&mut self) {
-        // SAFETY: our ref, put once
-        unsafe { dev_put(self.0.as_ptr()) };
-    }
-}
-
-/// bch2_dev_get(), as members.h's inline - which C still calls - is.
-fn dev_get(ca: &Dev) {
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    assert!(ca.ref_.fetch_add(1, Ordering::SeqCst) >= 1, "bch_dev->ref get with no ref held");
-
-    // SAFETY: a ref held, so it's live
-    #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-    unsafe { ca.ref_.inc() };
 }
 
 /// bch2_dev_put(), as members.h's inline is. A raw pointer, not a reference:
@@ -1320,28 +1287,33 @@ pub(crate) unsafe fn dev_put(ca: *mut Dev) {
 /// removal can complete while this is held. For contexts that block on
 /// state_lock, where a DevRef mustn't be held: recheck ca.removing under the
 /// lock before touching member state.
-pub struct DevOuterRef(*mut Dev);
+pub type DevOuterRef = RefGuard<DevOuter>;
 
-impl DevOuterRef {
-    /// For C functions taking *mut bch_dev.
-    pub fn as_mut_ptr(&self) -> *mut Dev {
-        self.0
+/// A device, counted by ca->ref_outer.
+#[repr(transparent)]
+pub struct DevOuter(Dev);
+
+impl DevOuter {
+    fn of(ca: &Dev) -> &Self {
+        unsafe { &*core::ptr::from_ref(ca).cast() }
     }
 }
 
-impl core::ops::Deref for DevOuterRef {
+impl Deref for DevOuter {
     type Target = Dev;
 
     fn deref(&self) -> &Dev {
-        // SAFETY: the ref keeps the memory
-        unsafe { &*self.0 }
+        &self.0
     }
 }
 
-impl Drop for DevOuterRef {
-    fn drop(&mut self) {
-        // SAFETY: our ref, put once
-        unsafe { (*self.0).ref_outer.dec() }
+unsafe impl Refcount for DevOuter {
+    unsafe fn inc(&self) {
+        unsafe { self.ref_outer.inc() }
+    }
+
+    unsafe fn dec(&self) {
+        unsafe { self.ref_outer.dec() }
     }
 }
 
@@ -1568,15 +1540,12 @@ impl Dev {
     /// A ref on it - bch2_dev_get(): the device is alive, being in hand, so
     /// the get can't fail.
     pub fn get_ref(&self) -> DevRef {
-        dev_get(self);
-        DevRef(core::ptr::NonNull::from(self))
+        unsafe { RefGuard::get(self) }
     }
 
     /// An outer ref on it - bch2_dev_get_outer().
     pub fn outer_ref(&self) -> DevOuterRef {
-        // SAFETY: the device is in hand, so live
-        unsafe { self.ref_outer.inc() };
-        DevOuterRef(self.as_ptr())
+        unsafe { RefGuard::get(DevOuter::of(self)) }
     }
 
     /// Whether @b is one of its buckets: bucket_valid().
