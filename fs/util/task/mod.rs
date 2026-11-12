@@ -43,7 +43,7 @@
 //! An await of a Completion that isn't done names its Done in the poll's
 //! Polled - lent to every poll through Context::ext() - and returns Pending.
 //! An await waits on one thing: two named in one poll is a bug, and panics -
-//! poll_once() starts a future without awaiting it. When the poll returns,
+//! eager!() starts a future without awaiting it. When the poll returns,
 //! run() publishes the Done in @waiting - not before, because only then has
 //! every level of the state machine stored where it resumes. The IO's
 //! completer marks the Done and calls wake(), which takes @waiting from that
@@ -510,24 +510,63 @@ pub fn current_task() -> impl Future<Output = TaskRef> {
     core::future::poll_fn(|cx| Poll::Ready(task_in(cx).expect("polled outside a task of ours")))
 }
 
-/// Polls @f once, in this task's poll, and goes on: @f is started, not awaited.
-/// What it parks on is forgotten - wake() writes nothing to a task not parked
-/// on that Done, and @f, awaited later, looks at it again - and the task's
-/// target is put back as it was. Where @f resumes is the task's when it's
-/// awaited: an await of something already done doesn't move the task.
-pub fn poll_once<F: Future>(mut f: Pin<&mut F>) -> impl Future<Output = Poll<F::Output>> + '_ {
+/// @f, a pinned future, polled once, in this task's poll, and gone on from:
+/// started, and awaited later. What it parks on is forgotten - wake() writes
+/// nothing to a task not parked on that Done, and @f, awaited later, looks at
+/// it again - and the task's target is put back as it was. Where it resumes
+/// is the task's when it's awaited: an await of something already done
+/// doesn't move the task.
+///
+///     let read = pin!(read::read(rbio, inum, flags, ()));
+///     let read = eager!(read);
+///     ...
+///     read.await
+#[macro_export]
+macro_rules! eager {
+    ($f:expr) => {
+        $crate::util::task::eager_start($f).await
+    };
+}
+
+#[doc(hidden)]
+pub fn eager_start<F: Future>(f: Pin<&mut F>) -> impl Future<Output = Eager<'_, F>> {
+    let mut f = Some(f);
     core::future::poll_fn(move |cx| {
         let task = task_in(cx).expect("polled outside a task of ours");
         debug_assert!(polled_of(cx).parks_on.is_none());
         let target = &unsafe { task.0.as_ref() }.target;
         let was = target.get();
 
+        let mut f = f.take().expect("eager!(), polled again");
         let ret = f.as_mut().poll(cx);
 
         polled_of(cx).parks_on = None;
         target.set(was);
-        Poll::Ready(ret)
+        Poll::Ready(match ret {
+            Poll::Ready(out) => Eager::Done(Some(out)),
+            Poll::Pending    => Eager::Started(f),
+        })
     })
+}
+
+/// A future eager!() started: what it came to, if that first poll finished it.
+pub enum Eager<'f, F: Future> {
+    Done(Option<F::Output>),
+    Started(Pin<&'f mut F>),
+}
+
+// the output is moved out, never pinned
+impl<F: Future> Unpin for Eager<'_, F> {}
+
+impl<F: Future> Future for Eager<'_, F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        match self.get_mut() {
+            Eager::Done(out) => Poll::Ready(out.take().expect("an eager future's output, awaited twice")),
+            Eager::Started(f) => f.as_mut().poll(cx),
+        }
+    }
 }
 
 struct Polled {

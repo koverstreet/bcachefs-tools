@@ -23,11 +23,10 @@ use crate::util::iov_iter::IovIter;
 use crate::util::mempool::Mempool;
 use crate::util::ops::IntoRaw;
 use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, poll_once, waiter, CompletionReturn, Resume, Return, TaskSlot};
+use crate::util::task::{exclusive_size, waiter, CompletionReturn, Resume, Return, TaskSlot};
 use crate::util::workqueue::Queue;
 use core::pin::{pin, Pin};
 use core::ptr::{self, NonNull};
-use core::task::Poll;
 use cstruct_macros::in_place;
 use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
 
@@ -132,8 +131,8 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersI
             let err_report = unsafe { dio.rbio.err_report.as_ref() };
             stack_pin_init!(let splits = Splits::new());
 
-            let mut own = pin!(read::read(&mut dio.rbio, inum, flags));
-            let started = poll_once(own.as_mut()).await;
+            let own = pin!(read::read(&mut dio.rbio, inum, flags));
+            let own = crate::eager!(own);
 
             let failed = loop {
                 if iter.get().count() == 0 {
@@ -161,11 +160,7 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersI
                 }
             };
             let splits = splits.wait(Resume::Inline).await;
-            let own = match started {
-                Poll::Ready(ret) => ret,
-                Poll::Pending => own.await,
-            };
-            own.and(splits).and(ret)
+            own.await.and(splits).and(ret)
         }
     };
 
