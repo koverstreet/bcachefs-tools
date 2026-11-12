@@ -56,11 +56,10 @@ c_enum! {
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
-pub union bch_replicas_padded {
+pub struct bch_replicas_padded {
     #[c("u8 bytes[struct_size_t(struct bch_replicas_entry_v1, devs, BCH_BKEY_PTRS_MAX)]")]
     pub bytes: [u8; core::mem::size_of::<Head<c::bch_replicas_entry_v1>>()
                     + c::BCH_BKEY_PTRS_MAX as usize * core::mem::size_of::<u8>()],
-    pub e: Head<c::bch_replicas_entry_v1>,
 }
 c_default!(bch_replicas_padded);
 
@@ -168,13 +167,6 @@ const ENTRY_BYTES: usize = DEVS + c::BCH_BKEY_PTRS_MAX as usize;
 struct EntryBuf<'a>(&'a mut [u8; ENTRY_BYTES]);
 
 impl EntryBuf<'_> {
-    /// # Safety
-    /// @e has room for BCH_BKEY_PTRS_MAX devices.
-    unsafe fn from_c<'a>(e: *mut Head<c::bch_replicas_entry_v1>) -> EntryBuf<'a> {
-        // SAFETY: the caller's - and any bytes are an entry's
-        EntryBuf(unsafe { &mut *e.cast() })
-    }
-
     fn start(&mut self, data_type: DataType, nr_required: u8) {
         self.0[..DEVS].copy_from_slice(&[data_type.0 as u8, 0, nr_required]);
     }
@@ -254,8 +246,7 @@ pub(crate) fn entry_acct(b: &[u8; ENTRY_BYTES], data_type: DataType) -> DiskAcco
 /// @k's entry, as bkey_to_replicas() makes it: what gc keeps of a stripe's.
 pub(crate) fn bkey_replicas_padded(fs: &Fs, k: BkeySC<'_>) -> c::bch_replicas_padded {
     let mut r = c::bch_replicas_padded::default();
-    // SAFETY: any bytes are an entry's
-    bkey_to_replicas(fs, &mut EntryBuf(unsafe { &mut r.bytes }), k);
+    bkey_to_replicas(fs, &mut EntryBuf(&mut r.bytes), k);
     r
 }
 
@@ -264,8 +255,18 @@ pub(crate) struct DevlistEntry(c::bch_replicas_padded);
 
 impl DevlistEntry {
     pub(crate) fn new(data_type: DataType, devs: c::bch_devs_list) -> Self {
+        assert!(data_type.0 != 0 &&
+                data_type != DataType::sb &&
+                data_type.0 < c::BCH_DATA_NR,
+                "replicas entry of data type {}", data_type.0);
+
         let mut r = c::bch_replicas_padded::default();
-        unsafe { bch2_devlist_to_replicas(&raw mut r.e, data_type, devs) };
+        let mut e = EntryBuf(&mut r.bytes);
+        e.start(data_type, 1);
+        for &d in devs.as_slice() {
+            e.add_dev(d);
+        }
+        e.sort();
         DevlistEntry(r)
     }
 }
@@ -273,10 +274,7 @@ impl DevlistEntry {
 impl PartialEq for DevlistEntry {
     /* Zeroed, then filled in: bytewise is bch2_replicas_entry_eq() */
     fn eq(&self, other: &Self) -> bool {
-        let bytes = |r: &c::bch_replicas_padded| unsafe {
-            core::slice::from_raw_parts(core::ptr::from_ref(r).cast::<u8>(), size_of::<c::bch_replicas_padded>())
-        };
-        bytes(&self.0) == bytes(&other.0)
+        self.0.bytes == other.0.bytes
     }
 }
 
@@ -284,7 +282,7 @@ impl core::ops::Deref for DevlistEntry {
     type Target = Entry;
 
     fn deref(&self) -> &Entry {
-        unsafe { from_ffi(&raw const self.0.e) }
+        unsafe { from_ffi(self.0.bytes.as_ptr().cast()) }
     }
 }
 
@@ -294,26 +292,6 @@ pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: DataType) ->
     let mut b = [0; ENTRY_BYTES];
     bkey_to_replicas(fs, &mut EntryBuf(&mut b), k);
     entry_acct(&b, data_type)
-}
-
-/// The entry for data of @data_type on @devs.
-///
-/// # Safety
-/// @e has room for BCH_BKEY_PTRS_MAX devices.
-pub unsafe fn bch2_devlist_to_replicas(e: *mut Head<c::bch_replicas_entry_v1>, data_type: DataType,
-                                       devs: c::bch_devs_list) {
-    assert!(data_type.0 != 0 &&
-            data_type != DataType::sb &&
-            data_type.0 < c::BCH_DATA_NR,
-            "replicas entry of data type {}", data_type.0);
-
-    // SAFETY: the caller's
-    let mut e = unsafe { EntryBuf::from_c(e) };
-    e.start(data_type, 1);
-    for &d in devs.as_slice() {
-        e.add_dev(d);
-    }
-    e.sort();
 }
 
 // ── The superblock's entries ─────────────────────────────────────────────

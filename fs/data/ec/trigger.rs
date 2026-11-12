@@ -465,8 +465,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
     if let Some(n) = new {
         let r = bkey_replicas_padded(fs, n.untyped());
         let sectors = i64::from(n.v().sectors.get()) * i64::from(n.v().nr_redundant);
-        // SAFETY: any bytes are an entry's
-        accounting::add_at(t, &entry_acct(unsafe { &r.bytes }, parity), &[sectors], gc)?;
+        accounting::add_at(t, &entry_acct(&r.bytes, parity), &[sectors], gc)?;
         if let Some(m) = m {
             m.lock.lock().r = r;
         }
