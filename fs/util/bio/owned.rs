@@ -6,6 +6,8 @@
 //! - BioBox<T>: a T from a BioSet<T>, a bioset whose front_pad is the rest of
 //!   the T - or, from BioBox::new(), a T and its inline bvecs, in one
 //!   allocation of their own. Dropped, it's put to its set, or freed.
+//! - TaskSlot::exclusive_bio_in(): a T that's a task's home, its bvecs inline
+//!   after the task's box; the T's drop uninit()s its bio.
 //!
 //! They deref to the T, and change it through Pin<&mut T>: the T holds its
 //! bio, which is pinned.
@@ -20,6 +22,7 @@
 
 use core::alloc::Layout;
 use core::cell::UnsafeCell;
+use core::future::Future;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, Ordering::{Acquire, Release}};
 use core::ops::{Deref, DerefMut};
@@ -31,10 +34,10 @@ use pin_init::{pin_data, PinInit};
 use super::{bio_of, of_bio, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, Buffers, HasBio,
             MapBuf};
 use crate::util::gather::{Fold, GatherRef, Width};
-use crate::util::task::Waiter;
+use crate::util::task::{Exclusive, TaskSlot, Waiter};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::alloc::{current_gfp_context_raw, init_at, kfree, kzalloc};
+use crate::util::alloc::{current_gfp_context_raw, init_at, kfree, kzalloc, Alloc};
 use crate::util::ffi::Opaque;
 
 pub struct BioInPlace(*mut c::bio);
@@ -375,19 +378,60 @@ impl<T: HasBio> BioBox<T> {
         let (layout, vecs) = inline_layout::<T>(nr_vecs);
         let p = kzalloc(layout).map_err(|_| BchError::from(c::ENOMEM))?;
         let t = p.as_ptr().cast::<T>();
-        let bio = bio_of(t);
 
         unsafe {
-            c::bio_init(bio, bdev, p.as_ptr().add(vecs).cast(), nr_vecs, opf as _);
-            match init_at(init(BioInPlace(bio)), t) {
+            match init_at(inline_bio(bdev, p.add(vecs), nr_vecs, opf, init), t) {
                 Ok(()) => Ok(BioBox { t: p.cast(), buffers: BioBuffersUnmanaged }),
                 Err(e) => {
-                    c::bio_uninit(bio);
                     kfree(p, layout);
                     Err(e)
                 }
             }
         }
+    }
+}
+
+/// The room for @nr_vecs bvecs inline: a bio's, after what it's in.
+pub fn inline_vecs(nr_vecs: u16) -> Layout {
+    Layout::array::<c::bio_vec>(nr_vecs.into()).expect("a u16's worth of bvecs")
+}
+
+/// A T, its bio's bvecs the @nr_vecs at @vecs - inline, after what it's in,
+/// inline_vecs()'s room: its bio bio_init()'d, then the rest made by @init.
+/// Its drop is to uninit() the bio, as a BioBox's is.
+///
+/// # Safety
+/// @vecs is room for @nr_vecs bvecs, that lasts as long as the T.
+pub unsafe fn inline_bio<T: HasBio, E, I>(bdev: *mut c::block_device, vecs: NonNull<u8>, nr_vecs: u16, opf: u32,
+                                          init: impl FnOnce(BioInPlace) -> I) -> impl PinInit<T, E>
+where
+    I: PinInit<T, E>,
+{
+    unsafe {
+        ::pin_init::pin_init_from_closure(move |t: *mut T| {
+            let bio = bio_of(t);
+            c::bio_init(bio, bdev, vecs.as_ptr().cast(), nr_vecs, opf as _);
+            init_at(init(BioInPlace(bio)), t).inspect_err(|_| c::bio_uninit(bio))
+        })
+    }
+}
+
+impl<'q, T, M, A> TaskSlot<'q, T, M, A, Exclusive>
+where
+    T: HasBio + Send + 'static,
+    A: Alloc + Copy,
+    M: FnOnce<(Pin<&'static mut T>,)>,
+    <M as FnOnce<(Pin<&'static mut T>,)>>::Output: Future<Output = ()> + Send,
+{
+    /// An Exclusive task's TaskSlot from @alloc, its home a T whose bio's
+    /// @nr_vecs bvecs are inline, after the box: inline_bio()'s.
+    pub fn exclusive_bio_in<E, I>(alloc: A, bdev: *mut c::block_device, nr_vecs: u16, opf: u32,
+                                  init: impl FnOnce(BioInPlace) -> I) -> Result<Self, BchError>
+    where
+        I: PinInit<T, E>,
+        BchError: From<E>,
+    {
+        Self::exclusive_tail_in(alloc, inline_vecs(nr_vecs), |vecs| unsafe { inline_bio(bdev, vecs, nr_vecs, opf, init) })
     }
 }
 
@@ -420,9 +464,7 @@ impl<T: HasBio, B: MapBuf> BioBox<T, BioBuffersMapped<B>> {
 }
 
 fn inline_layout<T>(nr_vecs: u16) -> (Layout, usize) {
-    let (layout, vecs) = Layout::new::<T>()
-        .extend(Layout::array::<c::bio_vec>(nr_vecs.into()).expect("a u16's worth of bvecs"))
-        .expect("a T and its bvecs");
+    let (layout, vecs) = Layout::new::<T>().extend(inline_vecs(nr_vecs)).expect("a T and its bvecs");
     (layout.pad_to_align(), vecs)
 }
 

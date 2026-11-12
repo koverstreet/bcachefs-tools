@@ -130,7 +130,7 @@ pub(crate) use iter::nth_page;
 pub(crate) use user_pages::{dirty_pages_exit, dirty_pages_init};
 pub use buffers::{BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
                   Buffers, MapBuf};
-pub use owned::{BioBox, BioInPlace, BioLend, BioSet, Either, FrontPad, Gathered, Lent};
+pub use owned::{inline_bio, inline_vecs, BioBox, BioInPlace, BioLend, BioSet, Either, FrontPad, Gathered, Lent};
 
 fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)
@@ -201,6 +201,14 @@ impl Bio {
     /// For its own methods, and C's: never moved out of.
     fn raw_mut(self: Pin<&mut Self>) -> &mut c::bio {
         self.project().bio
+    }
+
+    /// bio_uninit(): an inline_bio()'s, as what holds it drops.
+    ///
+    /// # Safety
+    /// Not used after.
+    pub unsafe fn uninit(self: Pin<&mut Self>) {
+        unsafe { c::bio_uninit(self.raw_mut()) }
     }
 
     pub fn range(&self) -> BioRange<'_> {
