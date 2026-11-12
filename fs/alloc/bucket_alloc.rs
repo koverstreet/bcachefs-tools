@@ -55,7 +55,7 @@ use crate::format::{Bpos, Btree, DataType};
 
 const BUCKET_MASK: u64 = (1 << FREESPACE_GENBITS_SHIFT) - 1;
 
-impl c::alloc_request {
+impl c::alloc_request<'_, '_> {
     /// Whether bucket @b of @ca is in the wrong place for it: a btree node's
     /// outside the device's btree bitmap, or other data's inside it.
     fn btree_bitmap_mismatch(&self, ca: &Dev, b: u64) -> bool {
@@ -151,7 +151,7 @@ impl Fs {
     /// failing device would take the filesystem read-only) - or the devices
     /// can't hold its copies at all.
     fn alloc_should_bail(&self, ca: &Dev, req: &c::alloc_request) -> bool {
-        let have_replicas = req.nr_effective != 0 || req.devs_have().is_some_and(|d| d.nr != 0);
+        let have_replicas = req.nr_effective != 0 || req.devs_have.is_some_and(|d| d.nr != 0);
 
         have_replicas &&
             (!self.allocator.rw_devs[req.data_type.0 as usize].test(ca.dev_idx.into()) ||
@@ -502,7 +502,7 @@ impl TransAttempt<'_, '_> {
 
                 fs.times[c::bch_time_stats::blocked_allocate as usize].track_event_change(true);
 
-                let may_block = !req.cl.is_null() &&
+                let may_block = req.cl.is_some() &&
                     !req.flags.contains(c::bch_write_flags::alloc_nowait) &&
                     !req.will_retry();
                 let err = if !may_block {

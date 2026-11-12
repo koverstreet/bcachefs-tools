@@ -689,8 +689,8 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
 
     let ret = lockrestart_do(trans, |t| {
         let dev_stripe = dev_stripe_state_get(t, v.disk_label.into())?;
-        let mut req = t.alloc_request(target, false, core::ptr::null_mut(), 0, 0,
-                                      c::bch_watermark::normal, c::bch_write_flags::empty(), cl.as_ptr())?;
+        let mut req = t.alloc_request(target, false, None, 0, 0,
+                                      c::bch_watermark::normal, c::bch_write_flags::empty(), Some(cl.as_opaque()))?;
         let ret = new_stripe_alloc_buckets(t, &mut req, dev_stripe, &mut ns.lock(), true);
         match ret {
             Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {

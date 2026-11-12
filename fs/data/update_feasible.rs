@@ -236,9 +236,8 @@ impl TransAttempt<'_, '_> {
         if data_opts.write_flags.contains(w::must_ec) {
             // The ec_alloc_failed subtypes park the extent; a restart must
             // stay one, or an extent that only needed a retry is parked
-            let mut req = self.alloc_request(data_opts.target.into(), false, core::ptr::null_mut(), 0, replicas,
-                                             c::bch_watermark::normal, w::empty(),
-                                             core::ptr::null_mut())?;
+            let mut req = self.alloc_request(data_opts.target.into(), false, None, 0, replicas,
+                                             c::bch_watermark::normal, w::empty(), None)?;
             // alloc_request() leaves it to the caller. The write path caps it
             // from the options; this probe runs uncapped
             req.ec_max_data_blocks = 0;

@@ -1352,10 +1352,10 @@ pub(crate) fn __write(mut op: Running<Op>) {
             let io_in_flight = op.open_buckets.nr != 0;
 
             let ret = lockrestart_do(&trans, |t| {
-                let cl = (!io_in_flight).then(|| op.closure().into_ref().as_ptr()).unwrap_or(core::ptr::null_mut());
+                let cl = (!io_in_flight).then(|| op.closure().into_ref());
                 let mut req = t.alloc_request(op.target.into(),
                                               op.opts.erasure_code != 0 && !op.has(w::cached),
-                                              &mut op.devs_have,
+                                              Some(&op.devs_have),
                                               op.bits.nr_replicas().into(),
                                               op.opts.data_replicas.into(),
                                               c::bch_watermark::from_bits(op.bits.watermark().into()),
@@ -1365,11 +1365,13 @@ pub(crate) fn __write(mut op: Running<Op>) {
 
                 let ret = t.alloc_sectors(&mut req, op.write_point);
                 // the write point last found, whatever came of allocating from it
-                wp = NonNull::new(req.wp).map(|p| unsafe { &*p.as_ptr() });
+                wp = req.wp;
 
                 match ret {
                     Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) && wait_on_allocator_sync => {
                         let ret = t.wait_on_allocator(&mut req, e, &op.closure());
+                        // it borrows the op, which the index update writes
+                        drop(req);
                         __write_index(&mut op);
                         op.failed.reset_devs();
                         ret?;

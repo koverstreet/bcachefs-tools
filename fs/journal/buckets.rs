@@ -452,9 +452,8 @@ fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::bch_watermark, cl: &Sta
             let trans = btree_trans!(fs);
             let first = bu.is_empty();
             let ob = lockrestart_do(&trans, |t| {
-                let mut req = t.alloc_request(0, false, core::ptr::null_mut(), 1, 0, watermark,
-                                              c::bch_write_flags::empty(),
-                                              if first { cl.as_ptr() } else { core::ptr::null_mut() })?;
+                let mut req = t.alloc_request(0, false, None, 1, 0, watermark, c::bch_write_flags::empty(),
+                                              first.then(|| cl.as_opaque()))?;
                 req.data_type = DataType::journal;
                 match t.bucket_alloc(&mut req, ca) {
                     Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {

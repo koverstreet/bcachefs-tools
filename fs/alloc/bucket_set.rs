@@ -36,7 +36,7 @@ use core::sync::atomic::Ordering::Relaxed;
 /// that's as many as there can be.
 type Restricted = ArrayVec<(u32, u32), { c::BCH_REPLICAS_MAX as usize }>;
 
-impl c::alloc_request {
+impl c::alloc_request<'_, '_> {
     /// @ob, added: its device chosen, its durability counted, its pin in
     /// ptrs. Whether that's the request done: its durability met, or the one
     /// copy of a cached write, a stripe's block, or a cache device's bucket.
@@ -282,9 +282,9 @@ impl TransAttempt<'_, '_> {
 
         let (nr_replicas, cl) = (req.nr_replicas, req.cl);
         req.nr_replicas = (req.nr_effective + 1) as u8;
-        req.cl = core::ptr::null_mut();
+        req.cl = None;
         // a cached copy spends no durable space
-        req.devs_required = core::ptr::null();
+        req.devs_required = None;
 
         let ret = self.bucket_alloc_set(req, &mut wp.stripe);
 

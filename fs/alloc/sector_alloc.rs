@@ -46,11 +46,11 @@ use core::sync::atomic::Ordering::Relaxed;
 use c::bch_write_flags as w;
 use crate::format::{Bpos, DataType, BkeyType};
 
-impl c::alloc_request {
+impl c::alloc_request<'_, '_> {
     /// The devices it has copies on: its caller's, and the buckets it's got.
     fn devs_used(&self, fs: &Fs) -> c::DevsMask {
         let mut used = c::DevsMask::default();
-        for &dev in self.devs_have().map_or(&[][..], |d| &d.data[..d.nr as usize]) {
+        for &dev in self.devs_have.map_or(&[][..], |d| &d.data[..d.nr as usize]) {
             used.set(dev.into());
         }
         for ob in self.ptrs.iter(fs) {
@@ -90,7 +90,7 @@ impl<'f> TransAttempt<'_, 'f> {
     /// @req's buckets, its write point @wp locked: Ok(false) if alignment
     /// left it no space, and it's to be retried. @orig_target is the target
     /// its caller asked for, which a widened attempt clears from @req.
-    fn alloc_sectors_wp(&self, req: &mut c::alloc_request, wp: &mut WritePointGuard<'_>, orig_target: u32)
+    fn alloc_sectors_wp(&self, req: &mut c::alloc_request<'_, 'f>, wp: &mut WritePointGuard<'_>, orig_target: u32)
         -> Result<bool, BchError>
     {
         let fs = self.fs();
@@ -112,7 +112,7 @@ impl<'f> TransAttempt<'_, 'f> {
             let used = req.devs_used(fs);
             req.devs_may_alloc.d.andnot(&used);
             req.devs_chosen.d = used;
-            req.devs_required = fs.dev_alloc_required(req).map_or(core::ptr::null(), |m| core::ptr::from_ref(m).cast());
+            req.devs_required = fs.dev_alloc_required(req);
 
             let mut err = self.write_point_buckets(req, wp).err();
 
@@ -180,7 +180,7 @@ impl<'f> TransAttempt<'_, 'f> {
             // wait
             if matches(err, bch_errcode::BCH_ERR_freelist_empty) &&
                !matches(err, bch_errcode::BCH_ERR_bucket_alloc_no_progress) &&
-               !req.cl.is_null() && !req.flags.contains(w::alloc_nowait) {
+               req.cl.is_some() && !req.flags.contains(w::alloc_nowait) {
                 continue;
             }
 
@@ -247,7 +247,7 @@ impl<'f> TransAttempt<'_, 'f> {
     /// Space for a write of @req's, from the write point @spec names: that,
     /// locked, its buckets @req's copies, as much as all of them have free
     /// in its sectors_free.
-    pub(crate) fn alloc_sectors_req(&self, req: &mut c::alloc_request, spec: WritePointSpec<'f>)
+    pub(crate) fn alloc_sectors_req(&self, req: &mut c::alloc_request<'_, 'f>, spec: WritePointSpec<'f>)
         -> Result<(&'f c::write_point, WritePointGuard<'f>), BchError>
     {
         let fs = self.fs();
@@ -267,7 +267,7 @@ impl<'f> TransAttempt<'_, 'f> {
             let write_points_nr = a.write_points_hash_lock.write_points_nr.get();
 
             let (wp, mut g) = fs.writepoint_find(self, spec);
-            req.wp = core::ptr::from_ref(wp).cast_mut();
+            req.wp = Some(wp);
             req.data_type = wp.alloc.data_type;
 
             match self.alloc_sectors_wp(req, &mut g, orig_target) {
@@ -335,7 +335,7 @@ pub struct LockedWritePoint<'f> {
 
 impl<'f> TransAttempt<'_, 'f> {
     /// @write_point, locked, with buckets allocated for @req.
-    pub fn alloc_sectors(&self, req: &mut c::alloc_request, write_point: c::write_point_specifier)
+    pub fn alloc_sectors(&self, req: &mut c::alloc_request<'_, 'f>, write_point: c::write_point_specifier)
         -> Result<LockedWritePoint<'f>, BchError>
     {
         let (wp, g) = self.alloc_sectors_req(req, write_point.spec(self.fs()))?;

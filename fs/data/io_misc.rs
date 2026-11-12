@@ -97,10 +97,10 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
         }
 
         let mut e = t.bkey_alloc(c::BKEY_EXTENT_U64s_MAX as u32)?;
-        let mut devs_have = c::bch_devs_list::default();
-        let mut req = t.alloc_request(opts.foreground_target.into(), false, &mut devs_have,
+        let devs_have = c::bch_devs_list::default();
+        let mut req = t.alloc_request(opts.foreground_target.into(), false, Some(&devs_have),
                                       nr_replicas, nr_replicas, c::bch_watermark::normal,
-                                      c::bch_write_flags::empty(), cl.as_ptr())?;
+                                      c::bch_write_flags::empty(), Some(cl.as_opaque()))?;
         let wp = match t.alloc_sectors(&mut req, write_point) {
             Ok(wp) => wp,
             Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {

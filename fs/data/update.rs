@@ -491,9 +491,9 @@ impl c::data_update {
                 let r = lockrestart_do(trans, |t| {
                     let op = &mut self.op;
                     let nr = op.bits.nr_replicas().into();
-                    t.alloc_request(op.target.into(), false, &mut op.devs_have, nr, nr,
+                    t.alloc_request(op.target.into(), false, Some(&op.devs_have), nr, nr,
                                     c::bch_watermark::from_bits(op.bits.watermark().into()),
-                                    op.flags(), cl.as_ptr())
+                                    op.flags(), Some(cl.as_opaque()))
                         .and_then(|mut req| t.alloc_sectors(&mut req, op.write_point))
                 });
                 let wp = match r {

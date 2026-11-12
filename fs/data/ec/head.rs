@@ -488,7 +488,7 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
     // makes only what's still missing.
     t.allocate_dropping_locks_big(|| {
         if i.new_buf.is_none() {
-            let wait = NonNull::new(req.cl).map_or(MemWait::Never, MemWait::Closure);
+            let wait = req.cl.map_or(MemWait::Never, |cl| MemWait::Closure(NonNull::from(cl).cast()));
             i.new_buf = Some(StripeBuf::new_whole(fs, i.new_stripe.stripe(), wait)?);
         }
 

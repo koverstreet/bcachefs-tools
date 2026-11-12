@@ -105,7 +105,7 @@ fn can_use_btree_node(fs: &Fs, res: &DiskReservation<'_>, target: u32, k: BkeySC
     durability >= available
 }
 
-impl InteriorUpdate<'_> {
+impl<'t> InteriorUpdate<'t> {
     /// The disk space, and the nodes, leaf and interior, that @nr_nodes says
     /// the update might need, reserved.
     pub(super) fn reserve(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], target: u32, commit: CommitOpts,
@@ -127,11 +127,13 @@ impl InteriorUpdate<'_> {
 
         let target = [target, fs.opts.metadata_target.get().into(), fs.opts.foreground_target.get().into()]
             .into_iter().find(|&t| t != 0).unwrap_or(0);
-        let mut devs_have = c::bch_devs_list::default();
+        let devs_have = c::bch_devs_list::default();
         let nr_replicas = self.disk_res.nr_replicas.get();
+        // before the request, which holds it once it's to block
+        stack_pin_init!(let cl = StackClosure::new());
         let t = unsafe { trans.attempt_in_progress() };
-        let mut req = paths.lend(|| t.alloc_request(target, false, &mut devs_have, nr_replicas, nr_replicas,
-                                                    watermark, write, ptr::null_mut()))?;
+        let mut req = paths.lend(|| t.alloc_request(target, false, Some(&devs_have), nr_replicas, nr_replicas,
+                                                    watermark, write, None))?;
 
         let ret = match self.reserve_get(paths, nr_nodes, &mut req) {
             Err(e) if e.matches(c::EAGAIN) || e.matches(c::ENOMEM) => {
@@ -145,8 +147,7 @@ impl InteriorUpdate<'_> {
                     return fs.throw(bch_errcode::BCH_ERR_journal_reclaim_would_deadlock);
                 }
 
-                stack_pin_init!(let cl = StackClosure::new());
-                req.cl = cl.as_ptr();
+                req.cl = Some(cl.as_opaque());
 
                 let ret = loop {
                     match self.reserve_get(paths, nr_nodes, &mut req) {
@@ -182,7 +183,7 @@ impl InteriorUpdate<'_> {
         ret
     }
 
-    fn reserve_get(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], req: &mut c::alloc_request)
+    fn reserve_get(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], req: &mut c::alloc_request<'_, 't>)
         -> Result<(), BchError>
     {
         let trans = self.trans;
@@ -194,7 +195,7 @@ impl InteriorUpdate<'_> {
          * Protects reaping from the btree node cache and using the btree node
          * open bucket reserve:
          */
-        trans.btree_cache_cannibalize_lock(NonNull::new(req.cl))?;
+        trans.btree_cache_cannibalize_lock(req.cl.map(|cl| NonNull::from(cl).cast()))?;
 
         let ret = (|| {
             for (interior, &nr) in nr_nodes.iter().enumerate() {
@@ -210,7 +211,7 @@ impl InteriorUpdate<'_> {
         ret
     }
 
-    fn node_alloc_from_allocator(&self, paths: &mut Paths<'_>, interior: bool, req: &mut c::alloc_request)
+    fn node_alloc_from_allocator(&self, paths: &mut Paths<'_>, interior: bool, req: &mut c::alloc_request<'_, 't>)
         -> Result<Reserved, BchError>
     {
         let trans = self.trans;

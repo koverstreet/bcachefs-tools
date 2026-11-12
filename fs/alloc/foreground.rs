@@ -143,19 +143,14 @@ c_enum! {
 }
 
 nest! {
-    #[derive(CStruct)]*
-    #[repr(C)]*
-    pub struct alloc_request {
-        pub cl: *mut c::closure,
+    pub struct alloc_request<'r, 'f> {
+        pub cl: Option<&'r Opaque<c::closure>>,
         pub wake_all_counter_snapshot: u32,
         pub nr_replicas: u8,
         pub ec_replicas: u8,
         pub ec_max_data_blocks: u8, /* 0 = no cap */
         pub target: c_uint,
-        #[c_bitfield]
         #>[bitfield(u8)]
-        #>[derive(CStruct)]-
-        #>[repr(C)]-
         pub bits: pub struct alloc_request_bits {
             ec:                        bool,
             new_stripe_alloc:          bool,
@@ -170,8 +165,8 @@ nest! {
         pub watermark: c::bch_watermark,
         pub flags: c::bch_write_flags,
         pub data_type: DataType,
-        pub devs_have: *mut c::bch_devs_list,
-        pub wp: *mut c::write_point,
+        pub devs_have: Option<&'r c::bch_devs_list>,
+        pub wp: Option<&'f c::write_point>,
 
         /* These fields are used primarily by open_bucket_add_buckets */
         pub ptrs: c::open_buckets,
@@ -186,7 +181,7 @@ nest! {
         pub devs_chosen: c::bch_devs_mask,
 
         /* devices this allocation should use first, see dev_alloc_required() */
-        pub devs_required: *const c::bch_devs_mask,
+        pub devs_required: Option<&'f Volatile<c::DevsMask>>,
 
         /* bch2_bucket_alloc_set_trans(): */
         pub devs_sorted: c::dev_alloc_list,
@@ -207,7 +202,6 @@ nest! {
 
         pub btree_bitmap: c::alloc_btree_bitmap,
 
-        #[c_inline]
         #>[derive(Clone, Copy, Default)]
         pub counters: pub struct alloc_request_counters {
             pub buckets_seen: u64,
@@ -780,16 +774,18 @@ impl Fs {
 
 /// An allocation request, in transaction memory - an attempt's - its trace
 /// emptied when it's dropped.
-pub struct AllocRequest<'a>(&'a mut c::alloc_request);
+pub struct AllocRequest<'a, 'f>(&'a mut c::alloc_request<'a, 'f>);
 
 impl<'a, 't> TransAttempt<'a, 't> {
     /// A request for @nr_replicas copies - or erasure coded, if
     /// @erasure_code and @ec_replicas is 2 or more - in the attempt's memory,
     /// its trace emptied when it's dropped.
     #[allow(clippy::too_many_arguments)]
-    pub fn alloc_request(&self, target: u32, erasure_code: bool, devs_have: *mut c::bch_devs_list,
+    pub fn alloc_request(&self, target: u32, erasure_code: bool, devs_have: Option<&'a c::bch_devs_list>,
                          nr_replicas: u32, ec_replicas: u32, watermark: c::bch_watermark,
-                         flags: c::bch_write_flags, cl: *mut c::closure) -> Result<AllocRequest<'a>, BchError> {
+                         flags: c::bch_write_flags, cl: Option<&'a Opaque<c::closure>>)
+        -> Result<AllocRequest<'a, 't>, BchError>
+    {
         let req = c::alloc_request::new(self.fs(), target, erasure_code, devs_have, nr_replicas, ec_replicas,
                                         watermark, flags, cl);
         Ok(AllocRequest(self.alloc_init(req)?))
@@ -813,15 +809,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 }
 
-impl c::alloc_request {
+impl<'r, 'f> c::alloc_request<'r, 'f> {
     /// alloc_request_get()'s: zeroed, but for what it's given, and its trace.
     #[allow(clippy::too_many_arguments)]
-    fn new(fs: &Fs, target: u32, erasure_code: bool, devs_have: *mut c::bch_devs_list, nr_replicas: u32,
-           ec_replicas: u32, watermark: c::bch_watermark, flags: c::bch_write_flags, cl: *mut c::closure)
-        -> impl ::pin_init::Init<Self, Infallible> + '_
+    fn new(fs: &Fs, target: u32, erasure_code: bool, devs_have: Option<&'r c::bch_devs_list>, nr_replicas: u32,
+           ec_replicas: u32, watermark: c::bch_watermark, flags: c::bch_write_flags,
+           cl: Option<&'r Opaque<c::closure>>)
+        -> impl ::pin_init::Init<Self, Infallible>
     {
-        // SAFETY: zeroed - each of its fields but the trace a C type, valid
-        // zeroed; the trace's storage, bytes - then each written in place,
+        // SAFETY: zeroed - each of its fields but the trace valid zeroed, its
+        // references None; the trace's storage, bytes - then each written in place,
         // through the pointer: no reference to it till the trace is made
         unsafe {
             ::pin_init::init_from_closure(move |slot: *mut Self| {
@@ -846,12 +843,6 @@ impl c::alloc_request {
         drop(core::mem::take(&mut *self.trace));
     }
 
-    /// The devices already holding a copy, if its caller said.
-    pub fn devs_have(&self) -> Option<&c::bch_devs_list> {
-        // SAFETY: null, or the caller's list, which outlives the request
-        unsafe { self.devs_have.as_ref() }
-    }
-
     /// An attempt recorded in its trace - on @dev, BCH_SB_MEMBER_INVALID for
     /// none, or U8_MAX for the open bucket pool - for the allocator stuck
     /// dump, @err its error if it failed. @wake_counter_snapshot is the
@@ -868,7 +859,7 @@ impl c::alloc_request {
                 .with_will_retry_target_devices(b.will_retry_target_devices())
                 .with_will_retry_set_devices(b.will_retry_set_devices())
                 .with_copygc_can_make_progress(copygc_can_make_progress)
-                .with_have_cl(!self.cl.is_null()),
+                .with_have_cl(self.cl.is_some()),
             err: err.map_or(0, |e| ret_to_c(Err(e)) as i16),
             wake_counter_snapshot,
             free_buckets,
@@ -912,28 +903,28 @@ impl c::alloc_request {
     /// Its closure waiting on @list, to retry when it's woken - or already
     /// waiting: false if it has none, it's not to block.
     pub fn closure_wait(&self, list: &c::closure_waitlist) -> bool {
-        let Some(cl) = NonNull::new(self.cl) else { return false };
+        let Some(cl) = self.cl else { return false };
         // SAFETY: its caller's closure, which outlives the request
-        unsafe { closure_wait(list, cl) };
+        unsafe { closure_wait(list, NonNull::from(cl).cast()) };
         true
     }
 }
 
-impl core::ops::Deref for AllocRequest<'_> {
-    type Target = c::alloc_request;
+impl<'a, 'f> core::ops::Deref for AllocRequest<'a, 'f> {
+    type Target = c::alloc_request<'a, 'f>;
 
-    fn deref(&self) -> &c::alloc_request {
+    fn deref(&self) -> &c::alloc_request<'a, 'f> {
         self.0
     }
 }
 
-impl core::ops::DerefMut for AllocRequest<'_> {
-    fn deref_mut(&mut self) -> &mut c::alloc_request {
+impl<'a, 'f> core::ops::DerefMut for AllocRequest<'a, 'f> {
+    fn deref_mut(&mut self) -> &mut c::alloc_request<'a, 'f> {
         self.0
     }
 }
 
-impl Drop for AllocRequest<'_> {
+impl Drop for AllocRequest<'_, '_> {
     fn drop(&mut self) {
         self.0.trace_reset()
     }
@@ -998,9 +989,9 @@ impl Fs {
         write!(out, "will_retry_target_devices:\t{}\n", u8::from(b.will_retry_target_devices()));
         write!(out, "will_retry_set_devices:\t{}\n", u8::from(b.will_retry_set_devices()));
         write!(out, "copygc_can_make_progress:\t{}\n", u8::from(b.copygc_can_make_progress()));
-        write!(out, "have_cl:\t{}\n", u8::from(!req.cl.is_null()));
+        write!(out, "have_cl:\t{}\n", u8::from(req.cl.is_some()));
 
-        if let Some(devs) = req.devs_have().filter(|d| d.nr != 0) {
+        if let Some(devs) = req.devs_have.filter(|d| d.nr != 0) {
             write!(out, "devs_have:\t");
             for (i, &dev) in devs.data[..devs.nr as usize].iter().enumerate() {
                 if i != 0 {

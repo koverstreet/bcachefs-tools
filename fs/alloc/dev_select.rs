@@ -96,12 +96,11 @@ impl c::dev_stripe_state {
     }
 }
 
-impl c::alloc_request {
+impl c::alloc_request<'_, '_> {
     /// The devices placement requires of it - dev_alloc_required()'s - read
     /// now: None if none are.
     pub fn devs_required(&self) -> Option<c::DevsMask> {
-        // SAFETY: null, or a slot of the filesystem's published Placement
-        unsafe { self.devs_required.cast::<Volatile<c::DevsMask>>().as_ref() }.map(Volatile::get)
+        self.devs_required.map(Volatile::get)
     }
 
     /// Whether taking a partial bucket on @dev leaves the copies still to
