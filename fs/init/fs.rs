@@ -88,8 +88,7 @@ impl<'a> StateLockWrite<'a> {
 
     /// c->devs[], as their writer has them.
     pub(crate) fn devs(&self) -> &[RcuPtrWriter<ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize] {
-        // state_lock is held, for as long as we are
-        unsafe { self.fs.devs.published_writer() }
+        self.fs.devs.published_writer(&self._guard)
     }
 }
 
@@ -122,9 +121,7 @@ impl Fs {
     }
 
     pub fn opts_writer<'a>(&'a self, sb: &'a mut SbLockGuard<'_>) -> &'a c::PublishedOptsWriter {
-        assert!(core::ptr::eq(sb.lock(), &self.sb), "opts_writer(): another filesystem's sb_lock");
-        // SAFETY: @sb holds sb_lock, and is borrowed mutably while this is
-        unsafe { self.opts.published_writer() }
+        self.opts.published_writer(&*sb)
     }
 
     /// log2 of the block size, in 512-byte sectors

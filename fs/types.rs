@@ -375,7 +375,9 @@ pub struct Dev {
     /// Its superblock, sb_lock's - through Fs::dev_sb() - and the block
     /// device it's on, fixed while it's attached.
     #[c("struct bch_sb_handle disk_sb")]
-    pub disk_sb: LockedBy<c::bch_sb_io, c::bch_sb_bdev>,
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    pub disk_sb: Placed<LockedBy<c::bch_sb_io, c::bch_sb_bdev, crate::field!(fs->sb)>, crate::at!(Dev.disk_sb)>,
     /// Its superblock's layout, for what can't take sb_lock to read disk_sb -
     /// whose buffer write_super can reallocate: the allocator, steering clear
     /// of superblock buckets. Copied as it's attached, and as it's edited -
@@ -662,7 +664,11 @@ pub struct Fs {
 
     /// Written under state_lock: StateLockWrite::devs().
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]
-    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<crate::util::refcount::ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize]>,
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    pub devs: Placed<LockedBy<(), [crate::util::rcu::RcuPtr<crate::util::refcount::ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize],
+                              crate::field!(state_lock)>,
+                     crate::at!(Fs.devs)>,
     #[c("struct bch_devs_mask devs_online")]
     pub devs_online: c::AtomicDevsMask,
     #[c("struct bch_devs_mask devs_removed")]
@@ -672,9 +678,10 @@ pub struct Fs {
 
     /// The options: read by anyone, an option at a time - written under
     /// sb_lock, which publishes them - Fs::opts_writer().
+    #[pin]
     #[init(LockedBy::new((), (*options).into()))]
     #[c("struct bch_opts opts")]
-    pub opts: LockedBy<(), c::PublishedOpts>,
+    pub opts: Placed<LockedBy<(), c::PublishedOpts, crate::field!(sb)>, crate::at!(Fs.opts)>,
     pub opt_change_lock: c::mutex,
     /// Odd while options change, bumped under opt_change_lock by
     /// OptChange, taking it and dropping it; read without it.

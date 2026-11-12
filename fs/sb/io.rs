@@ -142,6 +142,7 @@ use crate::c;
 use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
+use crate::locking::AsLockedBy;
 use crate::sb::errors::SbErrorId;
 use crate::sb::members;
 use crate::data_structures::bitmap::LeBitmap;
@@ -1999,7 +2000,7 @@ impl SbResize for FsSbResize<'_> {
         for ca in self.fs.online_members() {
             // SAFETY: our devices', under the sb_lock we hold - mutably, and
             // nothing else of it is borrowed meanwhile
-            let io = unsafe { ca.disk_sb.protected_mut() };
+            let io = unsafe { ca.disk_sb.locked_by().protected_mut() };
             io.realloc(&ca.disk_sb, (io.buf.sb().u64s() as isize + d) as u32).ok()?;
         }
         Some(())
@@ -2024,9 +2025,7 @@ impl Fs {
     /// @ca's superblock, under sb_lock: None if it has none, not attached.
     pub fn dev_sb<'a>(&self, sb: &'a SbLockGuard<'_>, ca: &'a Dev) -> Option<&'a bch_sb_buf> {
         self.dev_sb_check(sb, ca);
-        // SAFETY: @sb holds sb_lock, which protects it - and every &mut of
-        // it is had through a guard borrowed mutably
-        let io = unsafe { ca.disk_sb.protected() };
+        let io = ca.disk_sb.protected(sb);
         (!io.buf.sb.is_null()).then_some(&io.buf)
     }
 
@@ -2036,7 +2035,7 @@ impl Fs {
         self.dev_sb_check(sb, ca);
         // SAFETY: @sb holds sb_lock, which protects it - mutably borrowed, so
         // nothing else of it is
-        let io = unsafe { ca.disk_sb.protected_mut() };
+        let io = unsafe { ca.disk_sb.locked_by().protected_mut() };
         (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb: sb.sb(), io, ca })
     }
 }
@@ -2127,7 +2126,7 @@ impl Fs {
         let fs_sb = sb.sb();
         devs.iter().map(move |ca| {
             // SAFETY: as dev_sb_mut()'s - each device's once, by @seen
-            let io = unsafe { ca.disk_sb.protected_mut() };
+            let io = unsafe { ca.disk_sb.locked_by().protected_mut() };
             (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb, io, ca })
         })
     }
