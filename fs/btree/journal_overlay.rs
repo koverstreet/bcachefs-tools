@@ -20,10 +20,10 @@
 //!    two, or starts one with a neighbour.
 //!
 //! Who changes what:
-//!  - The keys themselves, and pre_sort, change only where nothing else reads
-//!    them: sorting, before the btree runs; inserts, from the recovery task
-//!    before anything runs alongside it, which insert_take() asserts; the
-//!    last ref's put. keys_mut() is that contract.
+//!  - The keys themselves change only where nothing else reads them: before
+//!    the filesystem can go rw - sorting, inserts, accounting read's merging
+//!    - which a NotRw shows, their LockedBy's; the last ref's put, and what
+//!    keys_mut() is for. pre_sort, before the btree runs.
 //!  - Overwriting happens later too, from any thread, under overwrite_lock -
 //!    which journal replay's commits take, in C - while the keys are read
 //!    without it. So a key's overwritten flag and range are words the lock
@@ -46,7 +46,7 @@ use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
-use crate::locking::{ExclusiveGuard, Locked};
+use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy};
 use crate::util::projections::{Volatile, VolatilePublish};
 use crate::util::alloc::{darray_exit, DArrayLoan, KVVec};
 use crate::util::ffi::Opaque;
@@ -184,10 +184,11 @@ published! {
 pub struct journal_keys {
     /*
      * The keys, a gap buffer: data_structures/gap_buffer.rs, whose fields C reads as
-     * its own. Written only where nothing else reads them: keys_mut()
+     * its own. Written only where nothing else reads them: before the
+     * filesystem can go rw - and by the last ref, and keys_mut()'s
      */
     #[c_anon("size_t nr; size_t size; struct journal_key *data; struct journal_key preallocated[0]; size_t gap")]
-    pub keys: UnsafeCell<GapBuffer<c::journal_key>>,
+    pub keys: LockedBy<GapBuffer<c::journal_key>, (), NotRw<'static>>,
     /* Bumped by each insert: an iterator that saw another searches again */
     pub seq: AtomicU64,
 
@@ -202,10 +203,10 @@ pub struct journal_keys {
 
     /*
      * What the journal read kept, by seq from journal_entries_base_seq: the
-     * keys'. Written only before the filesystem can go rw: NotRw.
+     * keys'. Written only before the filesystem can go rw.
      */
     #[c_anon("GENRADIX(struct journal_replay *) entries")]
-    entries: UnsafeCell<JournalEntries>,
+    entries: LockedBy<JournalEntries, (), NotRw<'static>>,
 
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&keys->overwrite_lock"))]
@@ -239,7 +240,7 @@ impl<'a> NotRw<'a> {
     /// # Safety
     /// No other reference to them lives meanwhile.
     pub(crate) unsafe fn journal_entries(&self) -> &'a mut JournalEntries {
-        unsafe { &mut *self.fs.journal_keys_held().entries.get() }
+        unsafe { self.fs.journal_keys_held().entries.protected_mut() }
     }
 }
 
@@ -365,24 +366,24 @@ impl c::journal_keys {
     }
 
     pub fn entries(&self) -> &JournalEntries {
-        unsafe { &*self.entries.get() }
+        unsafe { &*self.entries.data_ptr() }
     }
 
     pub fn keys(&self) -> &GapBuffer<c::journal_key> {
-        // SAFETY: written only through keys_mut(), with nothing reading
-        unsafe { &*self.keys.get() }
+        // written only with nothing reading
+        unsafe { &*self.keys.data_ptr() }
     }
 
     /// # Safety
-    /// Nothing else reads or writes the keys, or pre_sort, while it's held:
-    /// sorting, before the btree runs; the recovery task, before anything runs
-    /// alongside it; the last ref.
+    /// Nothing else reads or writes the keys while it's held: the last ref,
+    /// or a writer that can't have a NotRw.
     pub(crate) unsafe fn keys_mut(&self) -> &mut GapBuffer<c::journal_key> {
-        unsafe { &mut *self.keys.get() }
+        unsafe { self.keys.protected_mut() }
     }
 
     /// # Safety
-    /// As keys_mut().
+    /// Nothing else reads or writes pre_sort while it's held: before the btree
+    /// runs, sorting and inserts; the last ref.
     unsafe fn pre_sort(&self) -> DArrayLoan<'_, c::journal_key> {
         // SAFETY: the caller's; kvmalloc()'d, if allocated
         unsafe { DArrayLoan::new(&mut *self.pre_sort.get()) }
@@ -494,8 +495,8 @@ impl c::journal_keys {
     }
 
     /// The keys marked overwritten dropped, the rest kept in order.
-    pub(crate) unsafe fn drop_overwritten(&self) {
-        let keys = unsafe { self.keys_mut() };
+    pub(crate) fn drop_overwritten(&self, not_rw: &mut NotRw<'_>) {
+        let keys = not_rw.get_mut_of(&self.keys);
         let s = keys.make_contiguous();
         let mut nr = 0;
         for i in 0..s.len() {
@@ -505,6 +506,12 @@ impl c::journal_keys {
             }
         }
         keys.truncate(nr);
+    }
+
+    /// Key @k, to edit in place: its own, or in the journal entry it was read
+    /// from - had alone, not rw.
+    pub(crate) fn key_mut<'a>(&'a self, _not_rw: &'a mut NotRw<'_>, k: &c::journal_key) -> &'a mut BkeyI {
+        unsafe { &mut *BkeyI::from_raw_mut(self.key_k(k)) }
     }
 }
 
@@ -716,8 +723,8 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
     let idx = jk.search(btree, level, k.k.p);
 
-    let _not_rw = unsafe { fs.not_rw() };
-    let keys = unsafe { jk.keys_mut() };
+    let mut not_rw = unsafe { fs.not_rw() };
+    let keys = not_rw.get_mut_of(&jk.keys);
 
     if let Some(o) = keys.get_mut(idx).filter(|o| jk.key_cmp(&n, o).is_eq()) {
         let ok = jk.key(o);
@@ -1035,8 +1042,8 @@ fn journal_seq_is_rewound(fs: &Fs, seq: u64) -> bool {
 pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     let jk = fs.journal_keys_get().expect("journal keys sorted after recovery was done with them");
     let jk = jk.value();
-    // SAFETY: before the btree runs, the keys are recovery's alone
-    let keys = unsafe { jk.keys_mut() };
+    let mut not_rw = unsafe { fs.not_rw() };
+    let keys = not_rw.get_mut_of(&jk.keys);
     let (mut nr_read, mut nr_extra_sorts) = (0usize, 0usize);
     let start_seq = match fs.journal_scrub_seq.get() { 0 => fs.journal_replay_seq_start.get(), s => s };
 

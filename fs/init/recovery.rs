@@ -24,6 +24,7 @@ use crate::sb::io::{check_version_downgrade, sb_upgrade, SbWrite};
 use crate::snapshots::snapshot::snapshots_read;
 use crate::snapshots::subvolume;
 use crate::types::Le64;
+use crate::locking::Guard as _;
 use crate::util::alloc::KVVec;
 use crate::util::kernel::{cond_resched, sort_nonatomic, unlikely};
 use crate::util::log::LogMsg;
@@ -47,6 +48,19 @@ pub struct NotRw<'a> {
     pub(crate) fs: &'a Fs,
     _task:         core::marker::PhantomData<*mut ()>,
 }
+
+/// What's written only before the filesystem can go rw is a LockedBy of
+/// NotRw: had through one, alone - nothing else runs.
+unsafe impl crate::locking::Guard for NotRw<'_> {
+    type Name = NotRw<'static>;
+    type Root = Fs;
+
+    fn root(&self) -> &Fs {
+        self.fs
+    }
+}
+
+unsafe impl crate::locking::Alone for NotRw<'_> {}
 
 impl Fs {
     /// # Safety
@@ -607,7 +621,7 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
      * threads
      */
     if let Some(jk) = fs.journal_keys_get() {
-        unsafe { jk.value().keys_mut() }.make_contiguous();
+        unsafe { fs.not_rw() }.get_mut_of(&jk.value().keys).make_contiguous();
     }
 
     fs.flags.set(Flag::may_go_rw, true);

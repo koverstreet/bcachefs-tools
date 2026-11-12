@@ -6,7 +6,7 @@ use crate::accounting::{self, accounting_bkey, is_mem, key_to_text,
 use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, LoopFlow,
                          TransAttempt};
 use crate::btree::trans::TransGuard;
@@ -16,6 +16,7 @@ use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
+use crate::init::recovery::NotRw;
 use crate::locking::{percpu_rwsem_noio, Exclusive, ExclusiveGuard, Guard, Shared, SharedGuard};
 use crate::debug::trace::events;
 use crate::util::alloc::{AllocError, KVVec};
@@ -396,7 +397,9 @@ fn read_key(fs: &Fs, entries: &mut KVVec<Entry>, k: BkeySC<'_>) -> Result<(), Bc
 
 /// Journal key @i's newer deltas, the keys after it at its position, added
 /// into it and marked overwritten: the index past them.
-fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &c::journal_keys, i: usize) -> Result<usize, BchError> {
+fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &c::journal_keys, not_rw: &mut NotRw<'_>, i: usize)
+    -> Result<usize, BchError>
+{
     let keys = jk.keys();
     let key = |j: usize| jk.key(&keys[j]);
     let same_pos = |j: usize| j < keys.len() && jk.key_cmp(&keys[i], &keys[j]).is_eq();
@@ -434,7 +437,7 @@ fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &c::journal_keys, i: usi
         end += 1;
     }
 
-    let k = unsafe { &mut *BkeyI::from_raw_mut(jk.key_k(&keys[i])) };
+    let k = jk.key_mut(not_rw, &keys[i]);
     for j in i + 1..end {
         let n = key(j);
         if BkeySC::from(n).arm::<Accounting>().is_some() {
@@ -445,16 +448,16 @@ fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &c::journal_keys, i: usi
     Ok(end)
 }
 
-fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &c::journal_keys,
+fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &c::journal_keys, not_rw: &mut NotRw<'_>,
                        entries: &mut KVVec<Entry>, i: usize) -> Result<usize, BchError>
 {
-    let next = accumulate_newer(ctx, fs, journal_keys, i)?;
+    let next = accumulate_newer(ctx, fs, journal_keys, not_rw, i)?;
     read_key(fs, entries, journal_keys.key(&journal_keys.keys()[i]).into())?;
     Ok(next)
 }
 
-fn read_walk(trans: &TransGuard<'_>, journal_keys: &c::journal_keys, entries: &mut KVVec<Entry>)
-    -> Result<(), BchError>
+fn read_walk(trans: &TransGuard<'_>, journal_keys: &c::journal_keys, not_rw: &mut NotRw<'_>,
+             entries: &mut KVVec<Entry>) -> Result<(), BchError>
 {
     let fs = trans.fs();
     let keys = journal_keys.keys();
@@ -481,7 +484,7 @@ fn read_walk(trans: &TransGuard<'_>, journal_keys: &c::journal_keys, entries: &m
         }
 
         while jk < end && cmp(k.k.p, jk).is_gt() {
-            jk = accumulate_and_read(t, fs, journal_keys, entries, jk)?;
+            jk = accumulate_and_read(t, fs, journal_keys, not_rw, entries, jk)?;
         }
 
         while jk < end && cmp(k.k.p, jk).is_eq() &&
@@ -491,7 +494,7 @@ fn read_walk(trans: &TransGuard<'_>, journal_keys: &c::journal_keys, entries: &m
         }
 
         if jk < end && cmp(k.k.p, jk).is_eq() {
-            jk = accumulate_and_read(t, fs, journal_keys, entries, jk)?;
+            jk = accumulate_and_read(t, fs, journal_keys, not_rw, entries, jk)?;
         }
 
         let acc_k = DiskAccountingPos::from_bpos(k.k.p);
@@ -511,7 +514,7 @@ fn read_walk(trans: &TransGuard<'_>, journal_keys: &c::journal_keys, entries: &m
 
     lockrestart_do(trans, |t| {
         while jk < end {
-            jk = accumulate_and_read(t, fs, journal_keys, entries, jk)?;
+            jk = accumulate_and_read(t, fs, journal_keys, not_rw, entries, jk)?;
         }
         Ok(())
     })
@@ -686,6 +689,7 @@ fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
  * journal)
  */
 fn read(fs: &Fs) -> Result<(), BchError> {
+    let mut not_rw = unsafe { fs.not_rw() };
     let trans = btree_trans!(fs);
 
     /*
@@ -706,7 +710,7 @@ fn read(fs: &Fs) -> Result<(), BchError> {
     let journal_keys = fs.journal_keys_get().expect("accounting read after recovery was done with the journal keys");
     let journal_keys = journal_keys.value();
     let mut entries = KVVec::new();
-    let walked = read_walk(&trans, journal_keys, &mut entries);
+    let walked = read_walk(&trans, journal_keys, &mut not_rw, &mut entries);
 
     /*
      * Entries were inserted unsorted during the btree/journal walk above.
@@ -719,7 +723,9 @@ fn read(fs: &Fs) -> Result<(), BchError> {
     walked?;
 
     trans.unlock();
-    unsafe { journal_keys.drop_overwritten() };
+    journal_keys.drop_overwritten(&mut not_rw);
+    /* the fixups' commits insert journal keys, under a NotRw of their own */
+    drop(not_rw);
 
     /* Assert no duplicates - the btree/journal walk must produce unique keys */
     {
