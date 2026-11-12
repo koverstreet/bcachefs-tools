@@ -664,11 +664,6 @@ pub fn alloc_to_v4(k: BkeySC<'_>) -> c::AllocV4 {
     a
 }
 
-#[c_export]
-pub fn __bch2_alloc_to_v4(k: BkeySC<'_>, out: &mut c::AllocV4) {
-    *out = alloc_to_v4(k);
-}
-
 impl Fs {
     /// The io clock for @rw, as a bucket's io_time holds it - never 0, which
     /// is none: bch2_current_io_time().

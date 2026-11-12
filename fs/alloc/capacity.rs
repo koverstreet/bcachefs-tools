@@ -41,7 +41,6 @@ use crate::fs::Fs;
 use crate::init::error::trans_inconsistent;
 use crate::percpu_field;
 use crate::debug::trace::events;
-use crate::util::backtrace::prt_symbol;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::unlikely;
@@ -51,7 +50,7 @@ use crate::util::rcu::read_lock;
 use crate::util::{HumanReadable, Printbuf};
 use c::{DevsMask, PlacementWriter};
 use core::cell::Cell;
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::c_int;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};
 use cstruct_macros::c_export;
@@ -841,13 +840,6 @@ impl Fs {
 pub fn bch2_disk_reservation_add_slowpath(c: &Opaque<Fs>, res: &c::disk_reservation, sectors: u64,
                                           flags: c::bch_reservation_flags) -> c_int {
     ret_to_c(Fs::from_c(c).disk_reservation_add_slowpath(res, sectors, flags))
-}
-
-/// buckets.h's bch2_disk_reservation_add()'s, at fewer replicas than asked:
-/// @ip is where.
-#[c_export]
-pub fn bch2_disk_reservation_degraded(c: &Opaque<Fs>, wanted: c_uint, got: c_uint, sectors: u64, ip: c_ulong) {
-    Fs::from_c(c).disk_reservation_degraded(wanted, got, sectors, |out| prt_symbol(out, ip));
 }
 
 impl<'f> DiskReservation<'f> {

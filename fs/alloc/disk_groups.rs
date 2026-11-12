@@ -535,11 +535,6 @@ pub fn bch2_target_to_mask(c: &Opaque<Fs>, target: c_uint) -> *const c::bch_devs
     Fs::from_c(c).target_to_mask(Target::decode(target), &rcu).map_or(core::ptr::null(), |m| m)
 }
 
-#[c_export]
-pub fn bch2_dev_in_target_rcu(c: &Opaque<Fs>, dev: c_uint, target: c_uint) -> bool {
-    Fs::from_c(c).dev_in_target(dev, Target::decode(target), &read_lock())
-}
-
 impl Fs {
     /// Spreading key for candidate device @dev: the number of copies already
     /// chosen - @chosen - in its failure domain. Sorting candidates by this
