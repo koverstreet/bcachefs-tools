@@ -1133,8 +1133,7 @@ impl Fs {
     /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
     /// past the section, and the guard hands it out only while it's held.
     pub(crate) fn io_ref_tryget<R: IoRefIdx>(&self, ca: &Dev) -> Option<DevIoRef<R>> {
-        // SAFETY: as above
-        DevIoRef::tryget_live(DevIo::<R>::of(unsafe { &*core::ptr::from_ref(ca) }))
+        DevIoRef::tryget_live(DevIo::<R>::of(ca))
     }
 
     /// What @f makes of each device it doesn't skip: each step its own RCU
@@ -1411,26 +1410,6 @@ pub type DevIoRef<R> = RefGuard<DevIo<R>>;
 // Rust reads through it is as synchronized as the C it reads.
 unsafe impl Sync for Dev {}
 
-/// The last device looked up, its ref kept while lookups keep hitting it:
-/// bch2_dev_iterate(), for walks whose keys mostly stay on one device.
-#[derive(Default)]
-pub struct DevCache(Option<DevRef>);
-
-impl DevCache {
-    /// Device @dev, if there is one: bch2_dev_iterate_noerror().
-    pub fn get(&mut self, fs: &Fs, dev: u32) -> Option<&DevRef> {
-        if self.0.as_ref().is_none_or(|ca| u32::from(ca.dev_idx) != dev) {
-            self.0 = fs.dev_get(dev);
-        }
-        self.0.as_ref()
-    }
-
-    /// get(), a missing device reported: bch2_dev_iterate().
-    pub fn tryget(&mut self, fs: &Fs, dev: u32) -> Result<&DevRef, BchError> {
-        self.get(fs, dev).ok_or_else(|| fs.dev_missing(dev))
-    }
-}
-
 impl Fs {
     /// Whether device @dev has its block device open: bch2_dev_idx_is_online().
     pub fn dev_idx_is_online(&self, dev: u32) -> bool {
@@ -1553,9 +1532,8 @@ impl Dev {
     /// Its block device's name, model and serial, and whether it's rotational.
     pub(crate) fn identity(&self) -> c::bch_dev_identity {
         let mut id = c::bch_dev_identity::default();
-        let bdev = self.disk_sb.bdev;
-        crate::init::dev::read_identity(unsafe { &*bdev }, &mut id);
-        id.rotational = unsafe { c::bch2_bdev_rot(bdev) };
+        crate::init::dev::read_identity(self.disk_sb.bdev(), &mut id);
+        id.rotational = unsafe { c::bch2_bdev_rot(self.disk_sb.bdev) };
         id
     }
 
