@@ -43,7 +43,7 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::node::{iter::KeyIter, BtreeNode};
 use crate::btree::path::LockedNode;
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
 use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy};
@@ -763,18 +763,6 @@ pub(crate) fn insert(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: &BkeyI
 /// A deleted key at @pos: what's there in the btree, gone.
 pub(crate) fn delete(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, pos: Bpos) -> Result<(), BchError> {
     insert(not_rw, btree, level, BkeyI::<c::Deleted>::at(pos).as_ref())
-}
-
-/// Only from the recovery thread while we're still RO - once we're RW, the
-/// keys are read from multiple threads.
-///
-/// # Safety
-/// @k is a key, all of its u64s there.
-#[c_export]
-pub unsafe fn bch2_journal_key_insert(c: &Opaque<Fs>, btree: Btree, level: c_uint,
-                                      k: *const c::bkey_i) -> c_int {
-    // SAFETY: the caller's
-    ret_to_c(insert(&mut Fs::from_c(c).not_rw(), btree, level, unsafe { &*BkeyI::from_raw(k) }))
 }
 
 // ── Iterating: a btree node's keys, with the journal's overlaid ──────────
