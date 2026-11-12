@@ -175,17 +175,17 @@ impl Drop for NewNode {
 
 /// A GenRadix allocated through shared references, as C uses one from
 /// several threads at once: genradix_ptr_alloc() is safe against concurrent
-/// allocation and lookup, and a node never moves. Its entries aren't its to
-/// lend, then - it hands out pointers, for whatever serializes access to
-/// them to make references of. Rust's own: not Copy, and freed on drop. A
-/// GENRADIX(T) to C, where C shares one - a fast_list's.
+/// allocation and lookup, and a node never moves. Its entries are shared,
+/// then: a T is Sync, and what changes it is its own - a lock in it, atomics,
+/// a LockedBy. Rust's own: not Copy, and freed on drop. A GENRADIX(T) to C,
+/// where C shares one - a fast_list's.
 #[repr(transparent)]
 pub struct SharedGenRadix<T>(UnsafeCell<GenRadix<T>>);
 
 // SAFETY: allocation and lookup are C's, safe from any thread; the entries
-// are reached only through pointers, whose users answer for them
+// are had shared, so T: Sync
 unsafe impl<T: Send> Send for SharedGenRadix<T> {}
-unsafe impl<T: Send> Sync for SharedGenRadix<T> {}
+unsafe impl<T: Send + Sync> Sync for SharedGenRadix<T> {}
 
 // SAFETY: zeroed is empty, as GenRadix's is
 unsafe impl<T> Zeroable for SharedGenRadix<T> {}
@@ -230,15 +230,15 @@ impl<T: Zeroable> SharedGenRadix<T> {
     /// The entry at @idx - None if its node was never allocated: as
     /// genradix_ptr(). A T, by Zeroable, if nothing has written it.
     #[inline]
-    pub fn get_raw(&self, idx: usize) -> Option<NonNull<T>> {
+    pub fn get(&self, idx: usize) -> Option<&T> {
         let p = unsafe { c::__genradix_ptr(self.tree(), GenRadix::<T>::offset(idx)?) };
-        NonNull::new(p.cast::<T>())
+        NonNull::new(p.cast::<T>()).map(|p| unsafe { p.as_ref() })
     }
 
-    /// GenRadix::iter_from(), the entries as get_raw()'s.
+    /// GenRadix::iter_from()'s.
     #[inline]
-    pub fn iter_from_raw(&self, idx: usize) -> RawIter<'_, T> {
-        RawIter::new(self.tree(), idx)
+    pub fn iter_from(&self, idx: usize) -> Iter<'_, T> {
+        Iter(RawIter::new(self.tree(), idx))
     }
 }
 

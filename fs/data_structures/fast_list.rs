@@ -48,7 +48,7 @@ c_opaque!(fast_list_pcpu);
 pub struct fast_list {
     /* the items, by slot: allocated by any CPU at once */
     #[c("GENRADIX(void *) items")]
-    pub items: SharedGenRadix<*mut c_void>,
+    pub items: SharedGenRadix<Item>,
     #[c("struct ida slots_allocated")]
     pub slots_allocated: Opaque<c::ida>,
     /* set by init() and exit(), which take the list shared, as C's pointer is */
@@ -60,6 +60,13 @@ c_default!(fast_list);
 // SAFETY: zeroed is a valid uninitialized ida, as in C's kzalloc()'d struct;
 // fast_list_init() initializes it
 unsafe impl ::pin_init::Zeroable for Opaque<c::ida> {}
+
+/// A slot's item, C's void *: other CPUs change it as it's read.
+#[repr(transparent)]
+pub struct Item(AtomicPtr<c_void>);
+
+// SAFETY: zeroed is null, no item
+unsafe impl ::pin_init::Zeroable for Item {}
 
 /// What a refill gets, and a full cache spills: half of it.
 const BATCH: usize = 16;
@@ -96,9 +103,7 @@ impl c::fast_list {
 
     /// @idx's slot: get_idx() allocated its node.
     fn slot(&self, idx: u32) -> &AtomicPtr<c_void> {
-        let p = self.items.get_raw(idx as usize).expect("a fast_list slot get_idx() didn't allocate");
-        // SAFETY: a slot of the radix, a pointer, which nodes never move
-        unsafe { AtomicPtr::from_ptr(p.as_ptr()) }
+        &self.items.get(idx as usize).expect("a fast_list slot get_idx() didn't allocate").0
     }
 
     /// The items from slot @idx on, with their slots. Other CPUs change the
@@ -111,11 +116,7 @@ impl c::fast_list {
     pub fn items_from<'g>(&'g self, idx: usize, _rcu: &'g ReadGuard)
         -> impl Iterator<Item = (usize, NonNull<c_void>)> + 'g
     {
-        self.items.iter_from_raw(idx).filter_map(|(i, slot)| {
-            // SAFETY: as slot()'s
-            let item = unsafe { AtomicPtr::from_ptr(slot.as_ptr()) }.load(Acquire);
-            NonNull::new(item).map(|item| (i, item))
-        })
+        self.items.iter_from(idx).filter_map(|(i, slot)| NonNull::new(slot.0.load(Acquire)).map(|item| (i, item)))
     }
 
     /// A new slot from the IDA, its radix node allocated.

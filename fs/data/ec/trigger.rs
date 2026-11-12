@@ -62,7 +62,7 @@ impl c::bch_fs_ec {
     /// gc's copy of stripe @idx, if it has one.
     pub fn gc_stripe(&self, idx: u64) -> Option<&c::gc_stripe> {
         // SAFETY: an entry - a Locked, all of whose state is behind its lock
-        self.gc_stripes.get_raw(idx as usize).map(|m| unsafe { m.as_ref() })
+        self.gc_stripes.get(idx as usize)
     }
 
     /// gc_stripe(), allocated - zeroed, not alive - if it wasn't.

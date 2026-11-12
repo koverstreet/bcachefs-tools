@@ -306,7 +306,7 @@ impl Dev {
 impl Dev {
     /// Bucket @b's gc state, if it's one of the device's: gc_bucket().
     pub fn gc_bucket(&self, b: u64) -> Option<&c::bucket> {
-        self.bucket_valid(b).then(|| self.buckets_gc.get_raw(b as usize)).flatten().map(|g| unsafe { g.as_ref() })
+        self.bucket_valid(b).then(|| self.buckets_gc.get(b as usize)).flatten()
     }
 }
 

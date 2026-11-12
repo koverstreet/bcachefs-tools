@@ -84,7 +84,7 @@ pub struct MemquotaType {
     pub limits:       [QuotaLimit; c::Q_COUNTERS as usize],
     #[pin]
     pub(crate) lock:  Locked<c::mutex>,
-    pub(crate) table: SharedGenRadix<Memquota>,
+    pub(crate) table: SharedGenRadix<crate::locking::LockedBy<Memquota>>,
 }
 
 impl MemquotaType {
@@ -388,19 +388,19 @@ mod vfs {
         fn get(&self, idx: usize) -> Option<&c::Memquota> {
             // SAFETY: the lock's - this type's counters are only touched
             // under it
-            self.q.table.get_raw(idx).map(|p| unsafe { p.as_ref() })
+            self.q.table.get(idx).map(|e| unsafe { e.protected() })
         }
 
         /// @idx's entry, which the caller preallocated.
         fn get_mut(&mut self, idx: usize) -> &mut c::Memquota {
-            let mut p = self.q.table.get_raw(idx).expect("preallocated");
+            let e = self.q.table.get(idx).expect("preallocated");
             // SAFETY: as get()'s, and &mut self
-            unsafe { p.as_mut() }
+            unsafe { e.protected_mut() }
         }
 
         fn iter_from(&self, idx: usize) -> impl Iterator<Item = (usize, &c::Memquota)> {
             // SAFETY: as get()'s
-            self.q.table.iter_from_raw(idx).map(|(pos, p)| (pos, unsafe { p.as_ref() }))
+            self.q.table.iter_from(idx).map(|(pos, e)| (pos, unsafe { e.protected() }))
         }
 
         /// Whether @idx may have @v more of @counter, and the warnings that
