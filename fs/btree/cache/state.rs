@@ -10,6 +10,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_counts, six_lock_wakeup_all};
+use crate::locking::Guard as _;
 use crate::prt;
 use crate::util::closure::closure_wake_up;
 use crate::util::hash::GoldenRatio;
@@ -37,12 +38,12 @@ impl BtreeNode {
         unsafe { self.hash_val.get().write_volatile(v) }
     }
 
-    pub fn cache_state(&self, _lists: &BtreeCacheGuard<'_>) -> State {
-        unsafe { *self.cache_state.protected() }
+    pub fn cache_state(&self, lists: &BtreeCacheGuard<'_>) -> State {
+        *lists.get_of(&self.cache_state)
     }
 
-    fn set_cache_state(&self, _lists: &mut BtreeCacheGuard<'_>, s: State) {
-        unsafe { *self.cache_state.protected_mut() = s }
+    fn set_cache_state(&self, lists: &mut BtreeCacheGuard<'_>, s: State) {
+        *lists.get_mut_of(&self.cache_state) = s
     }
 }
 

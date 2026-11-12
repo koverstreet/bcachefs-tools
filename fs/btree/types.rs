@@ -267,7 +267,11 @@ pub struct BtreeCacheLists {
 pub(crate) type BtreeCacheMutex = Memalloc<cs::mutex, { PF_MEMALLOC_NOIO | PF_MEMALLOC_NORECLAIM | PF_MEMALLOC_NOWARN }>;
 
 /// bc->lock, held.
-pub type BtreeCacheGuard<'a> = ExclusiveGuard<'a, BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>;
+pub type BtreeCacheGuard<'a> =
+    ExclusiveGuard<'a, BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive, crate::locking::Exclusive, BtreeCacheLockAt>;
+
+/// bc->lock's place, for what it covers to name.
+pub type BtreeCacheLockAt = crate::at!(bch_fs_btree_cache.lock);
 
 crate::published! {
     /// A live list's nodes, clean and dirty: changed with its list, read
@@ -328,7 +332,7 @@ pub struct bch_fs_btree_cache {
     #[pin]
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->lock"))]
     #[c_lock("struct mutex lock")]
-    pub lock: Locked<BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>,
+    pub lock: crate::util::place::Placed<Locked<BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>, BtreeCacheLockAt>,
     #[pin]
     pub shrinkers: [cs::btree_cache_shrinker; 2],
 

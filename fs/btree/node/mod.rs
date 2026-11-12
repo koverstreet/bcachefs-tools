@@ -154,7 +154,7 @@ pub struct BtreeNode {
     pub list: ListLinks,
 
     #[c("enum btree_node_cache_state cache_state")]
-    pub cache_state: LockedBy<cs::btree_node_cache_state>,
+    pub cache_state: LockedBy<cs::btree_node_cache_state, (), crate::btree::types::BtreeCacheLockAt>,
 
     /* its slot in bc->nodes */
     pub nodes_idx: u32,
