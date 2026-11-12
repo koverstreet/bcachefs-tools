@@ -957,21 +957,21 @@ pub fn shard_cpu_init(fs: &Fs) {
     #[cfg(kernel)]
     {
         use crate::util::kernel::{cpumask_local_spread, nr_cpu_ids};
+        use core::sync::atomic::Ordering::Relaxed;
 
         let bits = fs.opts().shard_inode_numbers_bits.get() as u32;
         if bits == 0 {
             return;
         }
 
-        // At filesystem startup, before anything reads it:
-        let shard_cpu = unsafe { &mut (*fs.as_ptr()).inode_shard_cpu };
+        let shard_cpu = &fs.inode_shard_cpu;
         let nr_shards = 1usize << bits;
         // The option's range, up to 8 bits, keeps it within inode_shard_cpu[]:
         assert!(nr_shards <= shard_cpu.len(), "{nr_shards} inode number shards");
 
-        for (shard, cpu) in shard_cpu[..nr_shards].iter_mut().enumerate() {
+        for (shard, cpu) in shard_cpu[..nr_shards].iter().enumerate() {
             let c = cpumask_local_spread(shard as u32);
-            *cpu = if c < nr_cpu_ids() { c as u16 } else { 0 };
+            cpu.store(if c < nr_cpu_ids() { c as u16 } else { 0 }, Relaxed);
         }
     }
     #[cfg(not(kernel))]

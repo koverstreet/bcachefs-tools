@@ -624,7 +624,7 @@ impl BsetWrite {
         unsafe { wbio_init(bio) };
         unsafe { (&raw mut wbio.bounce).write(bounce) };
         wbio.sector_offset  = b.written.get().into();
-        wbio.shard_cpu      = b.shard(contents, fs).map(|shard| fs.inode_shard_cpu[shard]);
+        wbio.shard_cpu      = b.shard(contents, fs).map(|shard| fs.inode_shard_cpu[shard].load(Relaxed));
         wbio.start_time     = start_time;
         unsafe { (&raw mut wbio.failed).write(Default::default()) };
         wbio.wbio.wbio.c    = Some(fs);

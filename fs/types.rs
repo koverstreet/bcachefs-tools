@@ -24,7 +24,7 @@ use crate::types::{RustOnly, bits_to_longs, rust_only};
 use crate::util::rcu::RcuHead;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ushort};
-use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU32, AtomicU64};
+use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU16, AtomicU32, AtomicU64};
 use cstruct_macros::{c_name, c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, Late, TypeInfo};
 use pin_init::pin_data;
 use crate::format::Bpos;
@@ -716,7 +716,7 @@ pub struct Fs {
      * bch2_trans_begin(): each shard's worth of btree-node working set
      * gravitates to a fixed CPU's L1/L2.
      */
-    pub inode_shard_cpu: [u16; 256],
+    pub inode_shard_cpu: [AtomicU16; 256],
 
     #[c("struct delayed_work maybe_schedule_btree_bitmap_gc")]
     #[pin]

@@ -541,7 +541,7 @@ impl<'f> TransGuard<'f> {
             t.nr_paths_max.set(s.lock.nr_max_paths.get() as _);
         }
         t.shard_cpu.set(if c.opts().shard_inode_numbers_bits.get() != 0 {
-            c.inode_shard_cpu[c.inode_shard_idx() as usize] as i16
+            c.inode_shard_cpu[c.inode_shard_idx() as usize].load(Ordering::Relaxed) as i16
         } else {
             -1
         });
