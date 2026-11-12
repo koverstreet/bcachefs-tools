@@ -16,7 +16,7 @@ use crate::util::kernel::unlikely;
 use crate::util::log::{print_lines, LogLevel};
 use crate::util::Printbuf;
 use core::cmp::Ordering;
-use cstruct_macros::{c_export, c_name, CStruct};
+use cstruct_macros::{c_name, CStruct};
 
 #[repr(C)]
 #[c_name(btree_node_iter_set)]
@@ -666,19 +666,4 @@ impl BtreeNode {
             self.bfloat_to_text(contents, out, k);
         }
     }
-}
-
-/*
- * For C: pointers into the node in, offsets inside. A node C passes is
- * locked, so its contents can be read.
- */
-
-#[c_export]
-pub fn bch2_btree_node_iter_init_from_start(iter: &mut KeyIter, b: &BtreeNode) {
-    iter.init_from_start(&b.keys(unsafe { b.contents() }));
-}
-
-#[c_export]
-pub fn bch2_btree_node_iter_advance(iter: &mut KeyIter, b: &BtreeNode) {
-    iter.advance(&b.keys(unsafe { b.contents() }));
 }

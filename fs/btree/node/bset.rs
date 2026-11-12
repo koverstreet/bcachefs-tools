@@ -19,7 +19,6 @@ use crate::util::vstructs::{cast_plain_mut, cast_plain_slice, cast_plain_slice_m
 use crate::util::Printbuf;
 use core::cmp::Ordering;
 use core::fmt;
-use core::ffi::c_uint;
 use core::mem::offset_of;
 use cstruct_macros::{c_name, CStruct, c_const, c_enum, c_export};
 
@@ -793,24 +792,6 @@ pub fn bch2_bset_init_first(b: &BtreeNode, i: *mut Head<c::bset>) {
     let mut keys = b.keys_mut(unsafe { b.contents_mut() });
     let offset = keys.as_keys().offset_of(i);
     keys.bset_init_first(offset);
-}
-
-#[c_export]
-pub fn bch2_bkey_to_bset(b: &BtreeNode, k: *mut c::bkey_packed) -> *mut BsetTree {
-    let contents = unsafe { b.contents() };
-    let keys = b.keys(contents);
-    let set = keys.bkey_to_bset(keys.offset_of(k));
-    (&raw const contents.set[set]).cast_mut()
-}
-
-#[c_export]
-pub fn bch2_bkey_prev_filter(b: &BtreeNode, t: *mut BsetTree, k: *mut c::bkey_packed,
-                             min_key_type: c_uint) -> *mut c::bkey_packed {
-    let contents = unsafe { b.contents() };
-    let keys = b.keys(contents);
-    let t = &contents.set[contents.set_index(t)];
-    keys.bkey_prev_filter(t, keys.offset_of(k), min_key_type)
-        .map_or(core::ptr::null_mut(), |p| keys.ptr_at(p))
 }
 
 #[c_export]

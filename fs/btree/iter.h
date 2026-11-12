@@ -2,7 +2,6 @@
 #ifndef _BCACHEFS_BTREE_ITER_H
 #define _BCACHEFS_BTREE_ITER_H
 
-#include "btree/bset.h"
 #include "btree/cache.h"
 #include "btree/node/bset_gen.h"
 #include "btree/node/iter_gen.h"

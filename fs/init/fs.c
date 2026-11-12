@@ -30,7 +30,6 @@
 #include "btree/journal_overlay.h"
 #include "btree/interior.h"
 #include "btree/locking.h"
-#include "btree/read.h"
 #include "btree/write.h"
 
 #include "data/checksum.h"
