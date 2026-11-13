@@ -236,12 +236,12 @@ impl<'f> OptChange<'f> {
     /// Set @opt to @v - in the superblock if it's a field of it, @ca's member
     /// for a device option - and for a filesystem option in c->opts, no longer
     /// as mount set it; both under one sb_lock. Whether it changed.
-    pub fn set(&self, ca: Option<&Dev>, opt: &Opt, v: u64, val: &[u8]) -> bool {
+    pub fn set(&self, ca: Option<&Dev>, opt: &Opt, v: u64, val: &[u8]) -> Result<bool, BchError> {
         let fs = self.fs;
         let mut sb = fs.sb_lock();
 
         let changed = if opt.in_sb() {
-            let changed = crate::opts::opt_set_sb(&mut sb, ca.map(|ca| ca.dev_idx.into()), opt, v, Some(val));
+            let changed = crate::opts::opt_set_sb(&mut sb, ca.map(|ca| ca.dev_idx.into()), opt, v, Some(val))?;
             if changed {
                 fs.write_super(&mut sb);
             }
@@ -255,7 +255,7 @@ impl<'f> OptChange<'f> {
             fs.opts_writer(&mut sb).set(opt.id, v);
             fs.mount_opts.clear(opt.id.0 as usize);
         }
-        changed
+        Ok(changed)
     }
 }
 

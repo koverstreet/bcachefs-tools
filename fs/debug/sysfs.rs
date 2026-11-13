@@ -397,7 +397,7 @@ fn opt_store(c: &Fs, ca: Option<&Dev>, id: c::OptId, s: &str) -> Result<(), BchE
     let v = opts::opt_parse(Some(c), opt, Some(val), None)?;
     change.pre_set(ca, 0, id, v)?;
 
-    if change.set(ca, opt, v, val) {
+    if change.set(ca, opt, v, val)? {
         change.post_set(ca, 0, id, v);
     }
     Ok(())

@@ -776,8 +776,9 @@ pub trait SbOpt: Sync {
     fn member(&self) -> bool;
     /// None if the struct it's on isn't there: no ext section, no member @dev.
     fn get(&self, sb: &c::bch_sb<Unvalidated>, dev: u32) -> Option<u64>;
-    /// Whether it changed: None if the struct it's on isn't there.
-    fn set(&self, sb: &mut c::bch_sb_buf, dev: u32, v: u64) -> Option<bool>;
+    /// Whether it changed: None if the struct it's on isn't there, Err if @v
+    /// doesn't fit in the field.
+    fn set(&self, sb: &mut c::bch_sb_buf, dev: u32, v: u64) -> Result<Option<bool>, BchError>;
 }
 
 /// What an option's superblock field is on, found in a superblock: the
@@ -835,45 +836,29 @@ impl OptHost for c::bch_member {
     }
 }
 
-/// A one bit field's accessors take a bool, the rest a u64.
-pub trait FieldValue: Copy + 'static {
-    fn to_u64(self) -> u64;
-    /// As a setter's mask truncates it.
-    fn from_u64(v: u64) -> Self;
+/// A superblock field, by its accessors - a bitfield's, or an integer
+/// field's: set is Err for a value that doesn't fit.
+pub struct Field<T: ?Sized> {
+    pub get: fn(&T) -> u64,
+    pub set: fn(&mut T, u64) -> Result<(), ()>,
 }
 
-impl FieldValue for u64 {
-    fn to_u64(self) -> u64 { self }
-    fn from_u64(v: u64) -> Self { v }
-}
-
-impl FieldValue for bool {
-    fn to_u64(self) -> u64 { self as u64 }
-    fn from_u64(v: u64) -> Self { v & 1 != 0 }
-}
-
-/// A superblock field, by its accessors - c_bitmask!'s, or an integer
-/// field's.
-pub struct Field<T: ?Sized, V> {
-    pub get: fn(&T) -> V,
-    pub set: fn(&mut T, V),
-}
-
-impl<T: OptHost + ?Sized, V: FieldValue> SbOpt for Field<T, V> {
+impl<T: OptHost + ?Sized> SbOpt for Field<T> {
     fn member(&self) -> bool {
         T::MEMBER
     }
 
     fn get(&self, sb: &c::bch_sb<Unvalidated>, dev: u32) -> Option<u64> {
-        T::with(sb, dev, |t| (self.get)(t).to_u64())
+        T::with(sb, dev, |t| (self.get)(t))
     }
 
-    fn set(&self, sb: &mut c::bch_sb_buf, dev: u32, v: u64) -> Option<bool> {
+    fn set(&self, sb: &mut c::bch_sb_buf, dev: u32, v: u64) -> Result<Option<bool>, BchError> {
         T::with_mut(sb, dev, |t| {
-            let changed = v != (self.get)(t).to_u64();
-            (self.set)(t, V::from_u64(v));
-            changed
-        })
+            let changed = v != (self.get)(t);
+            (self.set)(t, v)
+                .map(|()| changed)
+                .map_err(|()| Errcode::BCH_ERR_ERANGE_option_too_big.into())
+        }).transpose()
     }
 }
 
@@ -1403,19 +1388,22 @@ pub fn fs_opts(sb: &c::bch_sb<Unvalidated>, opts: &c::bch_opts, out: &mut Printb
 }
 
 /// Set @opt in @sb, to @v - for a device option in member @dev's - @val its
-/// string for a member string option: whether it changed.
-pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, val: Option<&[u8]>) -> bool {
+/// string for a member string option: whether it changed. Err if @v doesn't
+/// fit in its field: options with no max have only the field's.
+pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, val: Option<&[u8]>)
+    -> Result<bool, BchError>
+{
     let v = opt.to_sb_field(v);
     let mut changed = false;
 
     if let (true, None, Some(f)) = (opt.has(c::OptFlags::OPT_FS), dev, opt.fs_field()) {
-        changed = f.set(sb, 0, v).unwrap_or(false);
+        changed = f.set(sb, 0, v)?.unwrap_or(false);
     }
 
     if let (true, Some(dev), Some(f)) = (opt.has(c::OptFlags::OPT_DEVICE), dev, opt.member_field()) {
-        let Some(c) = f.set(sb, dev, v) else {
+        let Some(c) = f.set(sb, dev, v)? else {
             warn_no_member(opt, dev);
-            return false;
+            return Ok(false);
         };
         changed = c;
 
@@ -1430,7 +1418,7 @@ pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, v
         let m = members::sb_member(sb.sb(), dev).filter(|m| m.alive()).and_then(|_| sb.member_mut(dev));
         let Some(m) = m else {
             warn_no_member(opt, dev);
-            return false;
+            return Ok(false);
         };
         let val = val.unwrap_or_default();
         // zero padded, so equal strings compare equal in the interning
@@ -1441,20 +1429,20 @@ pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, v
         }
     }
 
-    changed
+    Ok(changed)
 }
 
 impl Fs {
     /// Set @opt in the superblock - in device @ca's member for a device
     /// option - @val its string for a member string option, and write it if
     /// that changed it: whether it did.
-    pub fn opt_set_sb(&self, ca: Option<&Dev>, opt: &Opt, v: u64, val: Option<&[u8]>) -> bool {
+    pub fn opt_set_sb(&self, ca: Option<&Dev>, opt: &Opt, v: u64, val: Option<&[u8]>) -> Result<bool, BchError> {
         let mut sb = self.sb_lock();
-        let changed = opt_set_sb(&mut sb, ca.map(|ca| ca.dev_idx.into()), opt, v, val);
+        let changed = opt_set_sb(&mut sb, ca.map(|ca| ca.dev_idx.into()), opt, v, val)?;
         if changed {
             self.write_super(&mut sb);
         }
-        changed
+        Ok(changed)
     }
 }
 

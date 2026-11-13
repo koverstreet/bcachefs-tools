@@ -142,7 +142,8 @@ fn opt_set_sb_all(sb: &mut c::bch_sb_buf, dev_idx: Option<u32>, opts: &mut c::bc
 
     for opt in &opts::OPTS {
         let v = if opts.defined(opt.id) { opts.get(opt.id) } else { opts::DEFAULTS.get(opt.id) };
-        opts::opt_set_sb(sb, dev_idx, opt, v, None);
+        opts::opt_set_sb(sb, dev_idx, opt, v, None)
+            .unwrap_or_else(|e| die(&format!("error setting {}={v}: {e}", opt.name)));
     }
 }
 

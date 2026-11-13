@@ -194,7 +194,11 @@ fn set_option_offline(
                 failed.insert(name.as_str());
                 continue;
             }
-            fs.opt_set_sb(None, opt, val, Some(value.as_bytes()));
+            if let Err(e) = fs.opt_set_sb(None, opt, val, Some(value.as_bytes())) {
+                eprintln!("Error setting {name}={value}: {e}");
+                failed.insert(name.as_str());
+                continue;
+            }
             modified = true;
         }
 
@@ -235,7 +239,11 @@ fn set_option_offline(
                     failed.insert(name.as_str());
                     continue;
                 }
-                fs.opt_set_sb(Some(&*ca), opt, val, Some(value.as_bytes()));
+                if let Err(e) = fs.opt_set_sb(Some(&*ca), opt, val, Some(value.as_bytes())) {
+                    eprintln!("Error setting {name}={value} on device {idx}: {e}");
+                    failed.insert(name.as_str());
+                    continue;
+                }
                 modified = true;
             }
         }

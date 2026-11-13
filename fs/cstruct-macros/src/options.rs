@@ -175,16 +175,27 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         None => quote!(None),
         Some(SbField::Field { host, field }) => {
             let host = head(host);
-            quote!(Some(&#o::Field::<c::#host, u64> {
+            quote!(Some(&#o::Field::<c::#host> {
                 get: |t| u64::from(t.#field.get()),
-                set: |t, v| t.#field.set(v as _),
+                set: |t, v| Ok(t.#field.set(v.try_into().map_err(|_| ())?)),
             } as &dyn #o::SbOpt))
         }
         Some(SbField::Accessors { host, getter, setter }) => {
             let host = head(host);
-            let setter = setter.clone().unwrap_or_else(|| format_ident!("set_{getter}"));
-            quote!(Some(&#o::Field::<c::#host, _> { get: |t| t.#getter(), set: |t, v| t.#setter(v) }
-                        as &dyn #o::SbOpt))
+            let setter = match setter {
+                Some(s) => format_ident!("{s}_checked"),
+                None    => format_ident!("set_{getter}_checked"),
+            };
+            // a bool option's field takes a bool if it's one bit, else a u64 -
+            // erasure_code's is 16
+            let v = match a.kind == "bool" {
+                true  => quote!(match v { 0 => false, 1 => true, _ => return Err(()) }.into()),
+                false => quote!(v),
+            };
+            quote!(Some(&#o::Field::<c::#host> {
+                get: |t| u64::from(t.#getter()),
+                set: |t, v| t.#setter(#v),
+            } as &dyn #o::SbOpt))
         }
     };
     let hint = match &a.hint {

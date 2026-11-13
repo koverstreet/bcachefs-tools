@@ -1355,8 +1355,7 @@ c_bitmask! {
     }
 }
 
-/// The compression options, each in two fields: _HI is the bits it grew -
-/// The compression type, split across two fields.
+/// The compression options, each in two fields: _HI is the bits it grew.
 impl bch_sb__head {
     pub fn compression_type(&self) -> u64 {
         self.compression_type_lo() | self.compression_type_hi() << 4
@@ -1366,14 +1365,16 @@ impl bch_sb__head {
         self.background_compression_type_lo() | self.background_compression_type_hi() << 4
     }
 
-    pub fn set_compression_type(&mut self, v: u64) {
-        self.set_compression_type_lo(v);
-        self.set_compression_type_hi(v >> 4);
+    pub fn set_compression_type_checked(&mut self, v: u64) -> Result<(), ()> {
+        self.set_compression_type_hi_checked(v >> 4)?;
+        self.set_compression_type_lo(v & 15);
+        Ok(())
     }
 
-    pub fn set_background_compression_type(&mut self, v: u64) {
-        self.set_background_compression_type_lo(v);
-        self.set_background_compression_type_hi(v >> 4);
+    pub fn set_background_compression_type_checked(&mut self, v: u64) -> Result<(), ()> {
+        self.set_background_compression_type_hi_checked(v >> 4)?;
+        self.set_background_compression_type_lo(v & 15);
+        Ok(())
     }
 }
 

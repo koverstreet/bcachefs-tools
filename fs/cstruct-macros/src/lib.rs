@@ -455,12 +455,13 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     let item = bitfield_struct(item)?;
     let name = &item.ident;
     let mut out = TokenStream::new();
-    // Each member, not padding: its name, setter and updater, type, and
+    // Each member, not padding: its name, setters and updater, type, and
     // visibility
     let members: Vec<_> = item.fields.iter()
         .map(|f| (f.ident.as_ref().expect("named members").to_string(), f))
         .filter(|(m, _)| !m.starts_with('_'))
-        .map(|(m, f)| (format_ident!("{m}"), format_ident!("set_{m}"), format_ident!("update_{m}"), &f.ty, &f.vis))
+        .map(|(m, f)| (format_ident!("{m}"), format_ident!("set_{m}"), format_ident!("set_{m}_checked"),
+                       format_ident!("update_{m}"), &f.ty, &f.vis))
         .collect();
     // pub(self): its module's, which has the bitfield itself
     let outside = |vis: &syn::Visibility| !matches!(vis, syn::Visibility::Restricted(r)
@@ -470,7 +471,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     // bitfield_struct's, which has the getter and setter but not this.
     // XXX Deprecated when real field projections arrive: x op= v through a
     // projected place instead.
-    let update = members.iter().map(|(m, set, update, ty, vis)| quote! {
+    let update = members.iter().map(|(m, set, _, update, ty, vis)| quote! {
         #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) { self.#set(f(self.#m())) }
     });
     out.extend(quote!(impl #name { #(#update)* }));
@@ -478,17 +479,26 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     // For a struct holding one in a #[members] field: its getters and
     // setters for that struct - not pub(self)'s
     let fns = members.iter().filter(|(.., vis)| outside(vis))
-        .map(|(m, set, update, ty, vis)| quote! {
+        .map(|(m, set, set_checked, update, ty, vis)| quote! {
             #vis fn #m(&self) -> #ty { let b = self.$field; b.#m() }
             #vis fn #set(&mut self, v: #ty) { let mut b = self.$field; b.#set(v); self.$field = b; }
+            // bitfield_struct's name, which for a type_ is set_type__checked
+            #[allow(non_snake_case)]
+            #vis fn #set_checked(&mut self, v: #ty) -> Result<(), ()> {
+                let mut b = self.$field; b.#set_checked(v)?; self.$field = b; Ok(())
+            }
             #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) {
                 let mut b = self.$field; b.#set(f(b.#m())); self.$field = b;
             }
         }).collect::<Vec<_>>();
     let cell_fns = members.iter().filter(|(.., vis)| outside(vis))
-        .map(|(m, set, update, ty, vis)| quote! {
+        .map(|(m, set, set_checked, update, ty, vis)| quote! {
             #vis fn #m(&self) -> #ty { self.$field.get().#m() }
             #vis fn #set(&self, v: #ty) { let mut b = self.$field.get(); b.#set(v); self.$field.set(b); }
+            #[allow(non_snake_case)]
+            #vis fn #set_checked(&self, v: #ty) -> Result<(), ()> {
+                let mut b = self.$field.get(); b.#set_checked(v)?; self.$field.set(b); Ok(())
+            }
             #vis fn #update(&self, f: impl FnOnce(#ty) -> #ty) {
                 let mut b = self.$field.get(); b.#set(f(b.#m())); self.$field.set(b);
             }
@@ -1286,7 +1296,8 @@ pub fn ioctl(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// Bitfields in a flags word: c_bitmask! { LE64_BITMASK(struct foo, field),
 /// strip PREFIX_ { NAME(start, end), ... } }. Rust gets, on foo, name() and
 /// set_name() for each - NAME without PREFIX_, lowercased - as C's NAME() and
-/// SET_NAME(): the bits [start, end) of field, as a u64.
+/// SET_NAME(): the bits [start, end) of field, as a u64 - and
+/// set_name_checked(), Err for a value too big for them.
 #[proc_macro]
 pub fn c_bitmask(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_bitmask!", || bitmask_expand(input.into()))
@@ -1347,26 +1358,35 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
         });
         // C's LE*_BITMASK() defines NAME_MAX: the largest value it holds
         let (max, get_m) = (format_ident!("{}_MAX", m.to_uppercase()), format_ident!("{m}"));
-        let (set_fn, update_fn) = (format_ident!("set_{set_m}"), format_ident!("update_{set_m}"));
+        let (set_fn, set_checked, update_fn) =
+            (format_ident!("set_{set_m}"), format_ident!("set_{set_m}_checked"), format_ident!("update_{set_m}"));
         // One bit is a flag: bool, as the accessors on bindgen's structs had it.
         let one_bit = matches!((int_of(&e.start), int_of(&e.end)), (Some(s), Some(e)) if e == s + 1);
         let (ty, from, to) = match one_bit {
             true => (quote!(bool), quote!(!= 0), quote!(as u64)),
             false => (quote!(u64), quote!(), quote!()),
         };
+        let ones = quote!((u64::MAX >> (64 - ((#end) - (#start)))));
         methods.extend(quote! {
-            pub const #max: u64 = u64::MAX >> (64 - ((#end) - (#start)));
+            pub const #max: u64 = #ones;
             pub fn #get_m(&self) -> #ty {
-                ((#get >> (#start)) & (u64::MAX >> (64 - ((#end) - (#start))))) #from
+                ((#get >> (#start)) & #ones) #from
             }
         });
         // update_x(f): set_x(f(x())). XXX Deprecated when real field
         // projections arrive: x op= v through a projected place instead.
         setters.extend(quote! {
             pub fn #set_fn(&mut self, v: #ty) {
-                let mask = (u64::MAX >> (64 - ((#end) - (#start)))) << (#start);
+                let mask = #ones << (#start);
                 let new = (#get & !mask) | (((v #to) << (#start)) & mask);
                 #set;
+            }
+            pub fn #set_checked(&mut self, v: #ty) -> Result<(), ()> {
+                if (v #to) > #ones {
+                    return Err(());
+                }
+                self.#set_fn(v);
+                Ok(())
             }
             pub fn #update_fn(&mut self, f: impl FnOnce(#ty) -> #ty) {
                 self.#set_fn(f(self.#get_m()))
