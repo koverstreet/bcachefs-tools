@@ -23,12 +23,12 @@ use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
 use crate::inode_opts::{get_fs, get_io_opts};
 use crate::debug::trace::events;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::{Kmalloc, KVVec};
 use crate::util::log::LogMsg;
 use crate::locking::Locked;
 use crate::util::gather::{Fold, Gather, GatherRef};
 use crate::util::backref::BackRef;
-use crate::util::task::{spawn_static, waiter};
+use crate::util::task::{waiter, TaskSlot};
 use crate::{bch_err, bch_err_ratelimited, bch_info, new_lock, prt};
 use core::ffi::c_int;
 use pin_init::{stack_pin_init, PinInit};
@@ -134,9 +134,9 @@ pub type BadRef = GatherRef<Bad, waiter::Sync>;
 /// The node @key points to, its replicas on the devices that are there read,
 /// and the verdict made: what's bad queued for repair, or the node lost if
 /// every one read is.
-async fn node_verdict(fs: BackRef<Fs>, key: BtreeKeyBuf, mut reads: Replicas<ReplicaRead<'static>>) -> Bad {
+async fn node_verdict(fs: BackRef<Fs>, key: BtreeKeyBuf, reads: &mut Replicas<ReplicaRead<'static>>) -> Bad {
     let fs = &*fs;
-    let read = read_replicas(&mut reads).await;
+    let read = read_replicas(reads).await;
 
     let (mut checked, mut bad) = (0, 0);
     for (r, read) in reads.iter().zip(read) {
@@ -175,7 +175,11 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
     let fs_ref = unsafe { BackRef::new(fs) };
     let fs = unsafe { fs_ref.get() };
 
-    let mut reads = Replicas::new();
+    // made in the task's box, its home: room for BCH_BKEY_PTRS_MAX replicas
+    // is a kilobyte, and this can be under scrub(), under the moves
+    // flush_all() runs on its stack
+    let mut slot = TaskSlot::exclusive_in(Kmalloc, ::pin_init::init_zeroed::<Replicas<ReplicaRead<'static>>>())?;
+    let reads = slot.home().get_mut();
     let mut ret = Ok(());
 
     let kp = k.arm::<Ptrs>().expect("a btree node pointer has pointers");
@@ -193,8 +197,11 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
 
     if !reads.is_empty() {
         let (key, found) = (BtreeKeyBuf::new(btree, level, k), found.get());
-        ret = ret.and(spawn_static(&fs.btree.read_complete_wq,
-                                   async move { found.put(node_verdict(fs_ref, key, reads).await) }));
+        unsafe {
+            slot.start(&fs.btree.read_complete_wq, move |reads| async move {
+                found.put(node_verdict(fs_ref, key, reads.get_mut()).await)
+            })
+        };
     }
     ret
 }
