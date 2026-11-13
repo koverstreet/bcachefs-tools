@@ -206,9 +206,9 @@ fn main() {
     }
     wrappers.compile("bcachefs_shim_static_wrappers");
 
-    // And what the wrappers call in libbcachefs.a - chacha_zeroize_state()'s
-    // memzero_explicit(): linked after them too, as ld.bfd takes an archive's
-    // member only for what comes before it. -bundle, as fs/build.rs links it.
+    // And what the wrappers call in libbcachefs.a: linked after them too, as
+    // ld.bfd takes an archive's member only for what comes before it.
+    // -bundle, as fs/build.rs links it.
     println!("cargo:rustc-link-search={}", root.display());
     println!("cargo:rustc-link-lib=static:-bundle=bcachefs");
 

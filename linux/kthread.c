@@ -111,11 +111,6 @@ bool kthread_should_stop(void)
 	return test_bit(KTHREAD_SHOULD_STOP, &current->kthread_flags);
 }
 
-bool kthread_freezable_should_stop(bool *was_frozen)
-{
-	return test_bit(KTHREAD_SHOULD_STOP, &current->kthread_flags);
-}
-
 /**
  * kthread_stop - stop a thread created by kthread_create().
  * @k: thread created by kthread_create().

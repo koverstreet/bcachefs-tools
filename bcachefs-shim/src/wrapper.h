@@ -23,7 +23,6 @@
 #include "include/linux/refcount.h"
 #include "include/linux/rcupdate.h"
 #include "include/linux/sched.h"
-#include "include/linux/semaphore.h"
 #include "include/linux/seqlock.h"
 #include "include/linux/srcu.h"
 #include "include/linux/string.h"

@@ -800,6 +800,7 @@ mod vfs {
     /// What an xattr of @ty lists under for @dentry's caller - None if it
     /// doesn't: the handler's prefix, or its name for a POSIX ACL's. As
     /// bch2_xattr_list_prefix().
+    #[cfg(kernel)]
     pub fn list_prefix(ty: XattrType, dentry: *mut c::dentry) -> Option<&'static CStr> {
         let handler: &c::xattr_handler = match ty {
             XattrType::USER              => &USER_HANDLER,

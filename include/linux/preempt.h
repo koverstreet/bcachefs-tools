@@ -4,8 +4,19 @@
 #include <linux/cleanup.h>
 #include <linux/irqflags.h>
 
-extern void preempt_disable(void);
-extern void preempt_enable(void);
+/*
+ * In the kernel, preempt_disable() pins the task to the current CPU so
+ * percpu data accessed via this_cpu_ptr() can be read/written non-atomically
+ * without another task on the same CPU racing.
+ *
+ * Userspace storage is genuinely per-thread (DEFINE_PER_CPU lives in a TLS
+ * chunk; alloc_percpu() returns offsets into the same chunk - see
+ * linux/percpu.c), so this_cpu_ptr() always resolves to memory only the
+ * calling thread owns: preempt_disable() has nothing to protect. Cross-thread
+ * reads via per_cpu_ptr() were never protected by it in the kernel either.
+ */
+static inline void preempt_disable(void) {}
+static inline void preempt_enable(void) {}
 
 #define sched_preempt_enable_no_resched()	preempt_enable()
 #define preempt_enable_no_resched()		preempt_enable()

@@ -5,7 +5,6 @@
 #include <string.h>
 #include <linux/types.h>	/* for size_t */
 
-extern void memzero_explicit(void *, size_t);
 
 #define kstrndup(s, n, gfp)		strndup(s, n)
 #define kstrdup(s, gfp)			strdup(s)

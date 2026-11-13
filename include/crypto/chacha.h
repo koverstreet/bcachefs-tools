@@ -87,9 +87,4 @@ static inline void chacha20_crypt(struct chacha_state *state, u8 *dst, const u8 
 	iv[0] += DIV_ROUND_UP(bytes, CHACHA_BLOCK_SIZE);
 }
 
-static inline void chacha_zeroize_state(struct chacha_state *state)
-{
-	memzero_explicit(state, sizeof(*state));
-}
-
 #endif

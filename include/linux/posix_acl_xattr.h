@@ -28,7 +28,5 @@ typedef struct {
 	posix_acl_xattr_entry	a_entries[0];
 } posix_acl_xattr_header;
 
-extern const struct xattr_handler nop_posix_acl_access;
-extern const struct xattr_handler nop_posix_acl_default;
 
 #endif	/* _POSIX_ACL_XATTR_H */
