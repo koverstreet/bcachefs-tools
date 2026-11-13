@@ -181,8 +181,3 @@ pub fn bch2_prt_task_backtrace(out: &mut Printbuf, task: *mut c::task_struct, sk
     let _scope = MemallocFlags::for_gfp(gfp);
     ret_to_c(prt_task_backtrace(out, task, skipnr))
 }
-
-#[c_export]
-pub fn bch2_prt_backtrace(out: &mut Printbuf, stack: &c::bch_stacktrace) {
-    prt_backtrace(out, stack);
-}

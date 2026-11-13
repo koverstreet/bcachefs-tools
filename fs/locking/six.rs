@@ -121,8 +121,7 @@ pub struct six_lock {
     pub owner: AtomicPtr<c::task_struct>,
     /* the intent lock's holder's */
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    #[c("bch_stacktrace owner_stack")]
-    pub owner_stack: crate::util::ffi::Opaque<c::bch_stacktrace>,
+    pub owner_stack: crate::types::rust_only!(crate::util::alloc::KVVec<c_ulong>),
     #[c_lock("raw_spinlock_t wait_lock")]
     pub wait_lock: Locked<c::raw_spinlock_t, six_lock_waiters>,
     #[c("struct lockdep_map dep_map")]

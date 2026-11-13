@@ -14,14 +14,14 @@ use crate::errcode::bch_errcode;
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
-use crate::util::alloc::{DArrayLoan, KVVec, Kmalloc};
+use crate::util::alloc::{KVVec, Kmalloc};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::mempool::{Mempool, Raw};
 use crate::util::rcu::Srcu;
 use crate::util::workqueue::{Workqueue, WqFlags};
-use crate::types::{CacheAligned, DArray, NeBytes, RustOnly, bits_to_longs, c_default, rust_only};
+use crate::types::{CacheAligned, NeBytes, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::btree::node_scan::NodeScan;
 use crate::btree::path::BtreePath;
 use crate::new_lock;
@@ -35,7 +35,7 @@ use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Init,
+use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_xmacro, placed, CStruct, Init,
                      Late, TypeInfo};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
@@ -150,11 +150,14 @@ c_default!(btree_root);
 /// root_lock's: each btree's root as the journal and the clean section
 /// record it - key, level, alive. The known btrees', and the rest's, which
 /// early journal replay adds as it finds them: the slots only move then.
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(CStruct, Init)]
 pub struct BtreeRoots {
     pub roots_known: [cs::btree_root; cs::BTREE_ID_NR as usize],
-    pub roots_extra: DArray<cs::btree_root>,
+    #[pin]
+    #[init(RustOnly::new(KVVec::new()))]
+    pub roots_extra: rust_only!(KVVec<cs::btree_root>),
 }
 
 impl BtreeRoots {
@@ -165,9 +168,7 @@ impl BtreeRoots {
         if id < nr_known {
             return Some(&self.roots_known[id as usize]);
         }
-        let idx = (id - nr_known) as usize;
-        // SAFETY: roots_extra's nr are its elements
-        (idx < self.roots_extra.nr).then(|| unsafe { &*self.roots_extra.data.add(idx) })
+        self.roots_extra.get((id - nr_known) as usize)
     }
 
     pub fn get_mut(&mut self, id: u32) -> Option<&mut cs::btree_root> {
@@ -175,9 +176,7 @@ impl BtreeRoots {
         if id < nr_known {
             return Some(&mut self.roots_known[id as usize]);
         }
-        let idx = (id - nr_known) as usize;
-        // SAFETY: as get()'s
-        (idx < self.roots_extra.nr).then(|| unsafe { &mut *self.roots_extra.data.add(idx) })
+        self.roots_extra.get_mut((id - nr_known) as usize)
     }
 }
 
@@ -188,13 +187,10 @@ impl BtreeRootsGuard<'_> {
     /// Slots up to btree @id's, empty, and how many there are published: for
     /// a btree past the known ones that the journal has a root for.
     pub fn grow_to(&mut self, id: u32) -> Result<(), BchError> {
-        {
-            let mut extra = unsafe { DArrayLoan::new(&mut self.roots_extra) };
-            while id >= extra.len() as u32 + Btree::NR {
-                extra.push(cs::btree_root::default())?;
-            }
+        while id >= self.roots_extra.len() as u32 + Btree::NR {
+            self.roots_extra.push(cs::btree_root::default())?;
         }
-        let nr = self.roots_extra.nr as u32;
+        let nr = self.roots_extra.len() as u32;
         self.published().roots_nr_extra.set(nr);
         Ok(())
     }
@@ -309,7 +305,7 @@ impl BtreeCacheLive {
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_btree_cache {
     #[pin]
-    #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->root_lock"))]
+    #[init(crate::new_lock!(<- BtreeRoots::init(), ::pin_init::zeroed(), "&bc->root_lock"))]
     #[c_lock("struct mutex root_lock")]
     pub roots: Locked<cs::mutex, BtreeRoots, BtreeRootsLive>,
 
@@ -663,11 +659,6 @@ pub struct trans_kmalloc_trace {
     pub bytes: usize,
 }
 
-c_typedef! {
-    #[c("DARRAY(struct trans_kmalloc_trace) darray_trans_kmalloc_trace")]
-    pub type darray_trans_kmalloc_trace = KVVec<cs::trans_kmalloc_trace>;
-}
-
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_trans_subbuf<T: ?Sized = [u64]> {
@@ -792,8 +783,7 @@ pub struct BtreeTrans<'f> {
     #[c("struct trans_mem mem")]
     pub mem: Cell<TransMem>,
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    #[c("darray_trans_kmalloc_trace trans_kmalloc_trace")]
-    pub trans_kmalloc_trace: Cell<cs::darray_trans_kmalloc_trace>,
+    pub trans_kmalloc_trace: rust_only!(Cell<KVVec<cs::trans_kmalloc_trace>>),
 
     pub nr_sorted: Cell<cs::PathIdx>,
     pub nr_paths: Cell<cs::PathIdx>,
@@ -818,8 +808,7 @@ pub struct BtreeTrans<'f> {
     pub last_begin_ip: Cell<c_ulong>,
     pub last_restarted_ip: Cell<c_ulong>,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    #[c("bch_stacktrace last_restarted_trace")]
-    pub last_restarted_trace: Cell<cs::bch_stacktrace>,
+    pub last_restarted_trace: rust_only!(Cell<KVVec<c_ulong>>),
     pub last_unlock_ip: Cell<c_ulong>,
     pub srcu_lock_time: Cell<c_ulong>,
     pub srcu_idx: Cell<c_int>,
@@ -930,7 +919,7 @@ c_default!(btree_trans_buf);
 #[derive(CStruct)]
 pub struct TransStatsLocked {
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
+    pub trans_kmalloc_trace: rust_only!(KVVec<cs::trans_kmalloc_trace>),
     pub max_paths_text: Printbuf,
 }
 

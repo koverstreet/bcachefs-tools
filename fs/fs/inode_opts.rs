@@ -29,7 +29,6 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::sb::errors::FsckFlags;
 use crate::snapshots::{snapshot, subvolume};
-use crate::util::alloc::{darray_exit, DArrayLoan};
 use crate::util::ffi::{c_str, Opaque};
 use crate::util::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
@@ -315,8 +314,7 @@ pub fn bch2_inode_opts_get_inode(
 
 /// A walk's per_snapshot_io_opts, Rust's: C's CLASS(per_snapshot_io_opts).
 /// Made as per_snapshot_io_opts_init() makes it - the change cookie one
-/// behind, so the first get_io_opts() takes the filesystem's - and its
-/// darray freed on drop, as _exit() frees it.
+/// behind, so the first get_io_opts() takes the filesystem's.
 pub struct PerSnapshotIoOpts(c::per_snapshot_io_opts);
 
 impl PerSnapshotIoOpts {
@@ -336,12 +334,6 @@ impl core::ops::DerefMut for PerSnapshotIoOpts {
     fn deref_mut(&mut self) -> &mut c::per_snapshot_io_opts { &mut self.0 }
 }
 
-impl Drop for PerSnapshotIoOpts {
-    fn drop(&mut self) {
-        // SAFETY: a darray get_io_opts() grew
-        unsafe { darray_exit(&mut self.0.d) };
-    }
-}
 
 /// The io options @k's data is written with: a btree node pointer's, the
 /// filesystem's metadata options; a file's data, its inode's, as of its
@@ -391,12 +383,11 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
                 s.fs_io_opts = get_fs(fs, metadata);
                 s.metadata   = metadata;
                 s.cur_inum   = 0;
-                s.d.nr       = 0;
+                s.d.clear();
             }
 
             if matches!(mode, Mode::User) {
-                // SAFETY: C's darray, as darray_push() grows it
-                let mut d = unsafe { DArrayLoan::new(&mut s.d) };
+                let d = &mut s.d;
 
                 if s.cur_inum != inum {
                     d.clear();

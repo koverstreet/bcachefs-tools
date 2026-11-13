@@ -533,7 +533,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
             roots.published().roots_error[id as usize].set(0);
 
             /* every journal entry carries every root, this version's btrees or not: */
-            let nr_roots = Btree::NR + roots.roots_extra.nr as u32;
+            let nr_roots = Btree::NR + roots.roots_extra.len() as u32;
             drop(roots);
             if id >= Btree::NR {
                 fs.journal_entry_res_resize(&fs.btree.root_journal_res,

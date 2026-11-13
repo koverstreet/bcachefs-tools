@@ -5,12 +5,7 @@
 use crate::cstructs::c;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
-use cstruct_macros::{CStruct, c_const, c_extern, c_typedef, TypeInfo};
-
-c_typedef! {
-    #[c("DARRAY(unsigned long) bch_stacktrace")]
-    pub type bch_stacktrace = crate::util::alloc::KVVec<c_ulong>;
-}
+use cstruct_macros::{CStruct, c_const, c_extern, TypeInfo};
 
 c_const! {
     /* alloc_workqueue()'s WQ_* flags, for util/workqueue.rs: util.c checks them */

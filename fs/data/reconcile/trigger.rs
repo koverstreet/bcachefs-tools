@@ -25,7 +25,7 @@ use crate::util::printbuf::Msg;
 use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
 use cstruct_macros::{c_enum, CStruct};
-use crate::types::DArray;
+use crate::util::alloc::KVVec;
 use crate::format::{Bpos, Btree};
 
 c_enum! {
@@ -46,8 +46,7 @@ pub struct snapshot_io_opts_entry {
     pub io_opts: c::bch_inode_opts,
 }
 
-#[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default)]
 pub struct per_snapshot_io_opts {
     pub cur_inum: u64,
     pub metadata: bool,
@@ -56,7 +55,7 @@ pub struct per_snapshot_io_opts {
     pub dev_cookie: c::bch_devs_mask,
 
     pub fs_io_opts: c::bch_inode_opts,
-    pub d: DArray<c::snapshot_io_opts_entry>,
+    pub d: KVVec<c::snapshot_io_opts_entry>,
 }
 
 /// The work btree a key with @r is tracked in: rb_work_id().
