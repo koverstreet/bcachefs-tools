@@ -31,8 +31,11 @@ const ENUM_DECL_ATTRS: [&str; 2] = ["flags", "when"];
 /// ..` - a version's. An arm is `/// doc #[..]* name[(Type)] [= value]`, a
 /// value not written the last's plus one.
 fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
+    // a declaration starts its line: one in a doc comment is an example
+    let starts_line = |&(i, _): &(usize, &str)|
+        source[..i].rsplit('\n').next().is_some_and(|l| l.trim().is_empty());
     let decl = [format!("pub enum {name} {{"), format!("pub enum {name}: ")].iter()
-        .find_map(|d| source.find(d.as_str()))?;
+        .find_map(|d| source.match_indices(d.as_str()).find(starts_line))?.0;
     let start = ["tagged_union! {", "c_enum! {"].iter()
         .filter_map(|m| source[..decl].rfind(m))
         .max()?;
