@@ -1,6 +1,8 @@
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -12,8 +14,8 @@
 
 #include <linux/percpu.h>
 #include <linux/rcupdate.h>
+#include <linux/jiffies.h>
 #include <linux/sched.h>
-#include <linux/timer.h>
 
 __thread struct task_struct *current;
 
@@ -57,23 +59,12 @@ void schedule(void)
 		      v, NULL, NULL, 0);
 }
 
-struct process_timer {
-	struct timer_list timer;
-	struct task_struct *task;
-};
-
-static void process_timeout(struct timer_list *t)
-{
-	struct process_timer *timeout =
-		container_of(t, struct process_timer, timer);
-
-	wake_up_process(timeout->task);
-}
-
 long schedule_timeout(long timeout)
 {
-	struct process_timer timer;
+	struct timespec to;
 	unsigned long expire;
+	u64 ns;
+	int v;
 
 	switch (timeout)
 	{
@@ -105,11 +96,24 @@ long schedule_timeout(long timeout)
 
 	expire = timeout + jiffies;
 
-	timer.task = current;
-	timer_setup_on_stack(&timer.timer, process_timeout, 0);
-	mod_timer(&timer.timer, expire);
-	schedule();
-	timer_delete_sync(&timer.timer);
+	/*
+	 * schedule(), till @to: run out, it's woken as the kernel's timer would
+	 * wake it
+	 */
+	clock_gettime(CLOCK_MONOTONIC, &to);
+	ns = to.tv_nsec + jiffies_to_nsecs(timeout);
+	to.tv_sec += ns / NSEC_PER_SEC;
+	to.tv_nsec = ns % NSEC_PER_SEC;
+
+	rcu_quiescent_state();
+
+	while ((v = READ_ONCE(current->state)) != TASK_RUNNING)
+		if (futex(&current->state, FUTEX_WAIT_BITSET|FUTEX_PRIVATE_FLAG,
+			  v, &to, NULL, FUTEX_BITSET_MATCH_ANY) &&
+		    errno == ETIMEDOUT) {
+			__set_current_state(TASK_RUNNING);
+			break;
+		}
 
 	timeout = expire - jiffies;
 out:
