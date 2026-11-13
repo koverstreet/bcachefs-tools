@@ -208,6 +208,9 @@ pub(crate) struct Promoted<'r> {
 /// The promote of @k for read @orig, if there's to be one. With @failed, it's
 /// the self-heal. A transaction restart, the one error it mustn't swallow, is
 /// returned; anything else is no promote.
+// Out of line: inlined, the update's setup - its opts, copied into the task -
+// is in the frame of every read's fragment_of()
+#[inline(never)]
 pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, orig: &'r Rbio,
                                 opts: &c::bch_inode_opts, failed: Option<&mut c::bch_io_failures>)
     -> Result<Option<Promoted<'r>>, BchError>
