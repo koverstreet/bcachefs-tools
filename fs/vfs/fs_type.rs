@@ -162,9 +162,12 @@ impl Bcachefs {
         }
     }
 
-    /// Open and start the filesystem, no superblock existing yet.
-    fn start(fc: &mut FsContext<Self>, claimed: Claimed, opts: &mut c::bch_opts) -> Result<OpenFs, BchError> {
-        let p = fc.ctx();
+    /// Open the filesystem, its mount options set: those parsed only once it's
+    /// open too.
+    // Out of line: @later is a bch_opts, which inlined would stay in the frame
+    // under all of recovery
+    #[inline(never)]
+    fn open_opts(p: &MountParams, claimed: Claimed, opts: &mut c::bch_opts) -> Result<OpenFs, BchError> {
         let fs = claimed.open(opts, p.user_key.as_ref().map(|k| &k.0))?;
 
         if opts.defined(opt_id::Opt_discard) {
@@ -177,6 +180,13 @@ impl Bcachefs {
         crate::opts::parse_mount_opts_into(Some(&fs), &mut later, None, p.parse_later.as_bytes(), false)?;
         fs.opts_writer(&mut fs.sb_lock()).apply(&later);
         set_mount_opts(&fs, &later);
+        Ok(fs)
+    }
+
+    /// Open and start the filesystem, no superblock existing yet.
+    fn start(fc: &mut FsContext<Self>, claimed: Claimed, opts: &mut c::bch_opts) -> Result<OpenFs, BchError> {
+        let p = fc.ctx();
+        let fs = Self::open_opts(p, claimed, opts)?;
 
         // The status channel is scoped to recovery: c->stdio mustn't outlive
         // the reference free drops on the file it points into, and the
