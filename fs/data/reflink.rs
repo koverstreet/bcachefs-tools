@@ -385,7 +385,14 @@ impl BkeyOps for c::ReflinkP {
         let p = v.k.arm::<c::ReflinkP>().expect("a reflink_p").v();
 
         bkey_fsck_err_on!(v, p.idx() < p.front_pad.get() as u64, id::reflink_p_front_pad_bad,
-                          "idx < front_pad ({} < {})", p.idx(), p.front_pad.get())
+                          "idx < front_pad ({} < {})", p.idx(), p.front_pad.get())?;
+
+        // what it covers ends at an indirect position there can be: what's
+        // added to idx - cutting its front, remapping it - stays within that
+        let end = p.idx() + v.k.k.size as u64 + p.back_pad.get() as u64;
+        bkey_fsck_err_on!(v, end > c::ReflinkP::IDX_MAX, id::reflink_p_idx_bad,
+                          "past the maximum indirect position: idx {} + size {} + back_pad {} > {}",
+                          p.idx(), { v.k.k.size }, p.back_pad.get(), c::ReflinkP::IDX_MAX)
     }
 
     #[cold]

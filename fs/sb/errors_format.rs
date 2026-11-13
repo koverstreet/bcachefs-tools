@@ -469,6 +469,7 @@ pub enum SbErrorId {
     journal_entry_datetime_bad_size = 440,
     inline_data_csum_type_bad = 441,
     journal_entry_btree_root_bad_level = 442,
+    reflink_p_idx_bad = 443,
 }
 
 #[repr(C)]
