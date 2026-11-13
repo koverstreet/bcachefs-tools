@@ -470,10 +470,11 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
         g.s = Some(s);
     }
 
-    let s = g.s.as_deref().expect("the head's stripe, just made");
+    let c::HeadState { s, reuse_pos, .. } = &mut **g;
+    let s = s.as_deref().expect("the head's stripe, just made");
     let mut i = s.lock();
     if !i.allocated {
-        stripe_alloc_or_reuse(t, req, dev_stripe_state_get(t, h.disk_label)?, &mut i, s.fs_ref())?;
+        stripe_alloc_or_reuse(t, req, dev_stripe_state_get(t, h.disk_label)?, &mut i, s.fs_ref(), reuse_pos)?;
 
         fs.event_inc_trace(events::stripe_alloc, |out| {
             prt!(out, "\nnew: {}", i.new_stripe.stripe().to_text(fs));

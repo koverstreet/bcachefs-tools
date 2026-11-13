@@ -35,7 +35,9 @@ use crate::util::vstructs::Validated;
 use core::ops::ControlFlow;
 use core::pin::Pin;
 use pin_init::{init, init_zeroed, Init};
-use crate::format::Btree;
+use crate::format::{Bpos, Btree};
+
+const REUSE_SCAN_LIMIT: usize = 64;
 
 /// The old stripe a stripe being made reuses - a stripe it's packed into, or
 /// the one a repair rebuilds: held open, its key, and its buffer, which the
@@ -208,19 +210,45 @@ pub(crate) fn init_new_stripe_from_old(s: &mut Internal, carry: u32, move_: u32,
     }
 }
 
-/// Pack @s into the first stripe in the stripe lru it may be packed into:
-/// stripe_alloc_blocked if there's none.
-fn stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchError> {
+/// With @resume, search a bounded slice of the LRU, continuing next time.
+/// Without it, search from the beginning: fresh bucket allocation failed.
+/// stripe_alloc_blocked if no reusable stripe was found.
+fn stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal, mut resume: Option<&mut Bpos>) -> Result<(), BchError> {
     let fs = t.fs();
     let lru = LruPos::range(LruId::Stripes);
-    let mut iter = BtreeIter::new(t, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
-    let found = iter.for_each_max_norestart(t, lru.end().to_bpos(), |_, k| {
-        Ok(match get_old_stripe(t, s, k.k.p.offset)? {
+    let (start, end) = (lru.start().to_bpos(), lru.end().to_bpos());
+    let from = resume.as_deref().copied().filter(|p| (start..=end).contains(p)).unwrap_or(start);
+    let mut left = REUSE_SCAN_LIMIT;
+    let mut exhausted = true;
+    let mut iter = BtreeIter::new(t, Btree::lru, from, BtreeIterFlags::empty());
+    let found = iter.for_each_max_norestart(t, end, |_, k| {
+        // The stripe LRU mixes labels and redundancies. An optional search
+        // must not walk it all under the write-point lock for every stripe.
+        if resume.is_some() && left == 0 {
+            exhausted = false;
+            return Ok(ControlFlow::Break(None));
+        }
+        let pos = k.k.p;
+        if let Some(p) = resume.as_deref_mut() {
+            // Retry this candidate if looking it up restarts the transaction.
+            *p = pos;
+            left -= 1;
+        }
+        let found = get_old_stripe(t, s, pos.offset)?;
+        if let Some(p) = resume.as_deref_mut() {
+            *p = pos.nosnap_successor();
+        }
+        Ok(match found {
             Some(b) => ControlFlow::Break(Some(b)),
-            None    => ControlFlow::Continue(()),
+            None => ControlFlow::Continue(()),
         })
     })?;
 
+    if found.is_none() && exhausted {
+        if let Some(p) = resume {
+            *p = start;
+        }
+    }
     let Some(b) = found else { return fs.throw(bch_errcode::BCH_ERR_stripe_alloc_blocked) };
     init_new_stripe_from_old(s, b.live & !b.bad, b.live & b.bad, false);
     Ok(())
@@ -229,8 +257,8 @@ fn stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchErr
 /// stripe_reuse(), which is an optimization: what can't be reused can be
 /// allocated. Only an error that means allocating can't work either - a
 /// restart, going read-only - is returned.
-pub(crate) fn try_stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchError> {
-    match stripe_reuse(t, s) {
+pub(crate) fn try_stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal, resume: Option<&mut Bpos>) -> Result<(), BchError> {
+    match stripe_reuse(t, s, resume) {
         Err(e) if is_restart(&e) || e.matches(c::EROFS) => Err(e),
         _ => Ok(()),
     }
