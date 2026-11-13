@@ -39,6 +39,8 @@ pub struct Seen {
     /// mirror's.
     pub raced:     AtomicU64,
     pub rehash:    AtomicU64,
+    /// Rehashes into a smaller table: shrink()'s.
+    pub shrunk:    AtomicU64,
     /// Placements with no chain, linking a bigger table.
     pub grown:     AtomicU64,
     /// Claimed chains let go: something on one changed, or was another's.

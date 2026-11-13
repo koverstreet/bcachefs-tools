@@ -309,13 +309,19 @@ fn writer_op<I: TestItem, S: CuckooHasher, const W: usize>(
 
     // An eighth of the ops on the hot keys, which are only ever inserted - a
     // map's entry replaced under readers, after the first - the rest on any:
-    // inserts mostly, then removes mostly, in turn, so the table fills and
-    // empties and rehashes. Each key's writer is its index mod WRITERS.
+    // inserts mostly, then removes mostly, then removes only, in turn, so the
+    // table fills, and rehashes, and empties to the hot keys, and shrinks.
+    // Each key's writer is its index mod WRITERS.
     let hot = r & 7 == 0;
     let share = if hot { HOT } else { KEYS } / WRITERS;
     let i = (r >> 3) as usize % share * WRITERS + w;
-    let filling = (nr / 25_000) % 2 == 0;
-    let insert = hot || ((r >> 32) % 4 != 0) == filling;
+    let phase = nr % 50_000;
+    let filling = phase < 25_000;
+    let insert = hot || match phase {
+        0..25_000      => (r >> 32) % 4 != 0,
+        25_000..37_500 => (r >> 32) % 4 == 0,
+        _              => false,
+    };
 
     let (st, k) = (&keys[i], key(i));
     let seq = st.seq.load(Relaxed);
@@ -346,6 +352,11 @@ fn writer_op<I: TestItem, S: CuckooHasher, const W: usize>(
     } else {
         (t.remove(&k).map_or(0, I::value), 0)
     };
+    // emptying, now and then a shrink, against the other writers' ops; its
+    // allocation failing, injected, leaves the table as it was
+    if !filling && (r >> 48) & 0xff == 0 {
+        let _ = t.shrink();
+    }
     if got != want {
         fail(fails, "insert or remove", k, seq, want, got);
     }
@@ -530,11 +541,11 @@ fn round<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str, 
     let n = |c: &AtomicU64| HumanReadable(c.load(Relaxed));
     let mut msg = Printbuf::new();
     prt!(&mut msg, "cuckoo torture {table}, {name:<10} {ms}ms, {readers} readers: {} lookups checked, \
-                    {} raced an op; {} writer ops, {} moves; retries {} unstable waits {} own-seed probes {} rehashes {} grown {} \
-                    busy {} withdrawn {} stale {}\n",
+                    {} raced an op; {} writer ops, {} moves; retries {} unstable waits {} own-seed probes {} rehashes {} \
+                    shrunk {} grown {} busy {} withdrawn {} stale {}\n",
          HumanReadable(checked), HumanReadable(raced.into_inner()), HumanReadable(ops.into_inner()),
-         HumanReadable(t.moved()), n(&seen.retry), n(&seen.unstable), n(&seen.raced), n(&seen.rehash), n(&seen.grown),
-         n(&seen.busy), n(&seen.withdrawn), n(&seen.stale));
+         HumanReadable(t.moved()), n(&seen.retry), n(&seen.unstable), n(&seen.raced), n(&seen.rehash),
+         n(&seen.shrunk), n(&seen.grown), n(&seen.busy), n(&seen.withdrawn), n(&seen.stale));
     kernel::pr_info!("{}", msg.as_str());
     Ok(())
 }

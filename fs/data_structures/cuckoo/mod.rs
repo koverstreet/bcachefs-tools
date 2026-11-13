@@ -421,6 +421,14 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         self.grow_early()
     }
 
+    /// Emptied to a quarter of what make_room() keeps it to, a rehash into a
+    /// table half that full: for a caller that can block, after removes - a
+    /// table never shrinks by itself. Fails, the table unchanged, only if it
+    /// can't allocate.
+    pub fn shrink(&self) -> Result<(), AllocError> {
+        self.shrink_sparse()
+    }
+
     /// Take @key out: its item, if it was in.
     pub fn remove<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
     where I::Target: Borrow<Q>

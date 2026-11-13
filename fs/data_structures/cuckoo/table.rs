@@ -92,8 +92,10 @@
 //! older: a newest that can't place an item gets a bigger one linked after
 //! it, and an allocation failure partway leaves the rest to the next rehash.
 //! clear() retires every slot, dropping the items, and unlinks every table,
-//! so an insert still on one meets a retired slot or no table and goes on. A
-//! table only shrinks by clear().
+//! so an insert still on one meets a retired slot or no table and goes on.
+//! shrink() is a rehash too, into a smaller table: one a quarter full of what
+//! make_room() keeps it to, into one half full - far enough from both that a
+//! table holding steady does neither.
 //!
 //! A wait is from a newer table on an older, from a key's slot 0 on its
 //! others, or by a writer holding nothing: none is part of a cycle.
@@ -637,32 +639,63 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         Ok(())
     }
 
-    /// Past three quarters of what fits(), a rehash now - or for two ways,
-    /// whose fits() is near what they can hold at all, past 40% full.
+    /// What make_room() keeps 2^@bits slots to: three quarters of what
+    /// fits() - or for two ways, whose fits() is near what they can hold at
+    /// all, 40% full.
+    fn roomy(&self, bits: u32) -> bool {
+        let nr = self.nr.load(Relaxed);
+        let spare = if W == 2 { nr / 8 } else { nr / 3 };
+        fits::<W>(bits, nr + spare, &self.faults)
+    }
+
+    /// Past what roomy() allows, a rehash now.
     pub(super) fn grow_early(&self) -> Result<(), AllocError> {
-        let roomy = |bits| {
-            let nr = self.nr.load(Relaxed);
-            let spare = if W == 2 { nr / 8 } else { nr / 3 };
-            fits::<W>(bits, nr + spare, &self.faults)
-        };
         // most often there's room: seen without the lock, which every caller
         // would otherwise take
-        if self.tables(&read_lock()).last().is_none_or(|t| roomy(t.bits())) {
+        if self.tables(&read_lock()).last().is_none_or(|t| self.roomy(t.bits())) {
             return Ok(());
         }
 
         let g = self.lock.lock();
         let Some(newest) = self.tables_locked(&g).last() else { return Ok(()) };
-        if roomy(newest.bits()) {
+        if self.roomy(newest.bits()) {
             return Ok(());
         }
 
         let mut bits = newest.bits() + 1;
-        while !roomy(bits) {
+        while !self.roomy(bits) {
             bits += 1;
         }
         self.link(&g, bits, false)?;
         saw!(self.faults, rehash);
+        let _ = self.drain(&g);
+        Ok(())
+    }
+
+    /// What 2^@bits slots shrink to: twice the smallest roomy() table, if
+    /// it's under half of @bits'.
+    fn shrunk(&self, bits: u32) -> Option<u32> {
+        let mut to = MIN_BITS;
+        while !self.roomy(to) {
+            to += 1;
+        }
+        (bits > to + 1).then_some(to + 1)
+    }
+
+    /// A quarter as full as roomy() allows, or less: a rehash into the table
+    /// twice the smallest it allows.
+    pub(super) fn shrink_sparse(&self) -> Result<(), AllocError> {
+        // most often it's not: seen without the lock, as grow_early()
+        if self.tables(&read_lock()).last().is_none_or(|t| self.shrunk(t.bits()).is_none()) {
+            return Ok(());
+        }
+
+        let g = self.lock.lock();
+        let Some(newest) = self.tables_locked(&g).last() else { return Ok(()) };
+        let Some(bits) = self.shrunk(newest.bits()) else { return Ok(()) };
+
+        self.link(&g, bits, false)?;
+        saw!(self.faults, shrunk);
         let _ = self.drain(&g);
         Ok(())
     }
