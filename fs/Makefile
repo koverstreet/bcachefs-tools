@@ -61,7 +61,6 @@ bcachefs-y		:=			\
 	init/error.o				\
 	init/fs.o				\
 	locking/locking.o			\
-	util/enumerated_ref.o			\
 	util/printbuf.o				\
 	util/rcu.o				\
 	util/util.o				\

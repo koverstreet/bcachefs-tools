@@ -18,11 +18,6 @@ const char * const bch2_fs_flag_strs[] = {
 	BCH_FS_FLAGS()
 	NULL
 };
-
-const char * const bch2_write_refs[] = {
-	BCH_WRITE_REFS()
-	NULL
-};
 #undef x
 
 static int kern_soh_to_loglevel(const char *fmt)

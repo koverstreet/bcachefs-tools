@@ -211,7 +211,6 @@ c_enum! {
     #[prefix(BCH_DEV_READ_REF_)]
     #[nr(BCH_DEV_READ_REF_NR)]
     pub enum bch_dev_read_ref: u32 {
-        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
         rust,
         bch2_online_devs,
         read_fua_test,
@@ -233,7 +232,6 @@ c_enum! {
     #[prefix(BCH_DEV_WRITE_REF_)]
     #[nr(BCH_DEV_WRITE_REF_NR)]
     pub enum bch_dev_write_ref: u32 {
-        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
         rust,
         journal_write,
         journal_discard,
@@ -327,11 +325,10 @@ pub struct Dev {
     #[init(AtomicRef::new(()))]
     #[c("u32 ref_outer")]
     pub ref_outer: AtomicRef<()>,
-    #[c("struct enumerated_ref io_ref[2]")]
+    #[c("struct { struct percpu_ref ref; u32 ref_released; } io_ref[2]")]
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|i| crate::util::enumerated_ref::EnumeratedRef::new(
-        if i == WRITE { c::bch_dev_write_ref::NR } else { c::bch_dev_read_ref::NR }, None)))]
-    pub io_ref: [crate::util::enumerated_ref::EnumeratedRef; 2],
+    #[init(::pin_init::pin_init_array_from_fn(|_| crate::util::refcount::PercpuRef::new_dead::<()>()))]
+    pub io_ref: [crate::util::refcount::PercpuRef; 2],
 
     /// Its filesystem, from the start, attached or not: bch2_dev_add()
     /// writes its superblock before it has a slot, and what fails before then
@@ -544,31 +541,6 @@ c_const! {
     pub const BCH_LINK_MAX: u32 = c::U32_MAX;
 }
 
-c_enum! {
-    #[closed]
-    #[prefix(BCH_WRITE_REF_)]
-    #[nr(BCH_WRITE_REF_NR)]
-    #[c_list(BCH_WRITE_REFS)]
-    pub enum bch_write_ref: u32 {
-        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
-        rust,
-        journal,
-        trans,
-        write,
-        promote,
-        node_rewrite,
-        fallocate,
-        fsync,
-        dio_write,
-        discard,
-        discard_fast,
-        check_discard_freespace_key,
-        invalidate,
-        btree_write_buffer,
-        btree_node_scrub,
-    }
-}
-
 /// The filesystem: struct bch_fs, to C. Rust allocates it and frees it -
 /// alloc(), its kobject's release - so its Rust-typed fields get their
 /// initializers, from Fs::init(), and their Drop; init_from() and the
@@ -644,12 +616,12 @@ pub struct Fs {
     pub state_lock: Placed<Locked<c::rw_semaphore>, crate::at!(Fs.state_lock)>,
 
     /* Counts outstanding writes, for clean transition to read-only */
-    #[c("struct enumerated_ref writes")]
+    #[c_anon("struct { struct percpu_ref ref; u32 ref_released; }")]
     #[init(crate::util::alloc::init_or(
-        crate::util::enumerated_ref::EnumeratedRef::new(c::bch_write_ref::NR, Some(crate::init::rw::writes_disabled)),
+        crate::util::refcount::PercpuRef::new_dead::<crate::init::rw::WritesDisabled>(),
         c::bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc))]
     #[pin]
-    pub writes: crate::util::enumerated_ref::EnumeratedRef,
+    pub writes: crate::util::refcount::PercpuRef,
 
     /*
      * Analagous to c->writes, for asynchronous ops that don't necessarily

@@ -229,7 +229,6 @@ use crate::locking::MemallocFlags;
 use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, member_state_str, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
-use crate::types::CStatic;
 use crate::util::alloc::{alloc_pinned, free_pinned, kbox_pin_init};
 use crate::util::file::read_file;
 use crate::util::kernel::{ktime_get_real_seconds, READ, WRITE};
@@ -389,17 +388,6 @@ pub struct bch_devs_list {
     pub data: [u8; c::BCH_BKEY_PTRS_MAX as usize],
 }
 
-
-static DEV_READ_REF_NAMES: CStatic<[*const c_char; names::c_table_len::<c::bch_dev_read_ref>()]> =
-    unsafe { CStatic::new(crate::c_names_table!(c::bch_dev_read_ref)) };
-
-static DEV_WRITE_REF_NAMES: CStatic<[*const c_char; names::c_table_len::<c::bch_dev_write_ref>()]> =
-    unsafe { CStatic::new(crate::c_names_table!(c::bch_dev_write_ref)) };
-
-pub(crate) fn io_ref_names(rw: usize) -> *const *const c_char {
-    if rw == READ { DEV_READ_REF_NAMES.as_ptr() } else { DEV_WRITE_REF_NAMES.as_ptr() }
-}
-
 fn may_add(fs: &Fs, sb: &c::bch_sb) -> Result<(), BchError> {
     let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_default();
 
@@ -433,7 +421,8 @@ impl Dev {
         }
 
         if !self.io_ref[rw].is_zero() {
-            unsafe { self.io_ref[rw].stop(io_ref_names(rw)) };
+            self.io_ref[rw].stop();
+            self.io_ref[rw].wait();
         }
     }
 

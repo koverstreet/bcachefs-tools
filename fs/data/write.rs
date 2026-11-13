@@ -954,9 +954,8 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
          * removal/ro):
          */
         let ca = if ty == DataType::btree {
-            /* btree/write.c's endio puts it, as its kind */
-            fs.dev_get_ioref_kind(ptr.dev().into(), READ,
-                                  c::bch_dev_read_ref::btree_node_write as u32)
+            /* btree/write.rs's endio puts it */
+            fs.dev_get_ioref_raw(ptr.dev().into(), READ)
         } else {
             let r = match &mut cas {
                 Some(cas) => Some(cas[i].take().expect("a nocow write without its io refs")),

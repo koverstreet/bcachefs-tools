@@ -14,7 +14,7 @@ use crate::util::sleep::Sleep;
 /// A count and its value, as an Arc's, but not owning its memory: it starts
 /// at one, the owner's ref. The value is had only through a ref, and the put
 /// that leaves none, once it's stopped, drops it; the owner frees the memory
-/// after wait(). For slow paths: PercpuRef and EnumeratedRef are percpu.
+/// after wait(). For slow paths: PercpuRef is percpu.
 ///
 /// wait() sleeps on the count itself: the store of RELEASED, after the value's
 /// dropped, is the last write a put makes, and the wake after it only hashes

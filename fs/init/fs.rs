@@ -33,7 +33,7 @@ use crate::util::names;
 use crate::util::Printbuf;
 use crate::util::alloc::{Arc, KVVec};
 use crate::util::backref::BackRef;
-use crate::util::enumerated_ref::EnumeratedRef;
+use crate::util::refcount::PercpuRef;
 use crate::util::ffi::c_char;
 use crate::util::kernel::READ;
 use crate::util::sched;
@@ -52,12 +52,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 pub use crate::sb::members::DevRef;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::c_extern;
 use crate::format::{Btree, MemberState, MetadataVersion, SbFeature};
-
-c_extern! {
-    pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
-}
 
 /// sb_lock, held: the superblock, and c->sb, which it publishes
 pub type SbLockGuard<'a> =
@@ -1134,14 +1129,9 @@ impl Fs {
 }
 
 /// While one is held, the filesystem can't finish going read-only
-pub type WriteRef = RefGuard<EnumeratedRef>;
+pub type WriteRef = RefGuard<PercpuRef>;
 
 impl Fs {
-    pub fn write_refs_to_text(&self, out: &mut Printbuf) {
-        // SAFETY: bch2_write_refs names c->writes' kinds
-        unsafe { self.writes.to_text(out, c::bch2_write_refs.as_ptr()) }
-    }
-
     /// For work holding a write ref: going read-only drains it
     pub fn write_ref_wq(&self) -> &crate::util::workqueue::Queue {
         &self.write_ref_wq

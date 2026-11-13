@@ -36,6 +36,7 @@ use crate::locking::{ExclusiveGuard, Locked, MemallocFlags};
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, KVVec};
 use crate::util::closure::closure_wake_up;
 use crate::util::place::{container_of, Contained};
+use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
 use crate::util::workqueue::{cancel_work_sync, run_raw, RawWork};
 use crate::util::{Printbuf, ToText};
@@ -508,19 +509,16 @@ impl BtreeTrans<'_> {
     /// going read-only. It may leave the transaction unlocked.
     pub fn write_buffer_tryflush(&self) -> Result<(), BchError> {
         let fs = self.fs();
-        let write_ref = c::bch_write_ref::btree_write_buffer as u32;
 
         if fs.btree.write_buffer.iter().all(|wb| wb.is_empty()) {
             return Ok(());
         }
 
-        if !fs.writes.tryget_kind(write_ref) {
+        let Some(_write) = fs.writes.tryget_live() else {
             return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
-        }
+        };
 
-        let ret = self.write_buffer_flush_nocheck_rw();
-        unsafe { fs.writes.put_kind(write_ref) };
-        ret
+        self.write_buffer_flush_nocheck_rw()
     }
 }
 

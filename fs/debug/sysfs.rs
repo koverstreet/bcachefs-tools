@@ -119,7 +119,6 @@ const INTERNAL: &[Attr<Fs>] = &[
     Attr::ro(c"open_buckets",           |c, out| c.open_buckets_to_text(out, None)),
     Attr::ro(c"open_buckets_partial",   |c, out| c.open_buckets_partial_to_text(out)),
     Attr::ro(c"discards",               |c, out| c.discards_to_text(out)),
-    Attr::ro(c"write_refs",             |c, out| c.write_refs_to_text(out)),
     Attr::ro(c"nocow_lock_table",       |c, out| c.nocow_locks.to_text(out)),
     Attr::ro(c"replicas",               |c, out| c.replicas.read().to_text(out)),
     Attr::ro(c"io_timers_read",         |c, out| c.io_clock[READ].to_text(out)),
@@ -507,8 +506,6 @@ const DEV: &[Attr<Dev>] = &[
     Attr::ro(c"open_buckets",           |ca, out| ca.fs().open_buckets_to_text(out, Some(ca))),
     Attr::ro(c"discards",               |ca, out| ca.fast_discards_to_text(out)),
 
-    Attr::ro(c"read_refs",              |ca, out| ca.io_refs_to_text(out, READ)),
-    Attr::ro(c"write_refs",             |ca, out| ca.io_refs_to_text(out, WRITE)),
 ];
 
 /// Sectors read and written, by data type, as JSON.

@@ -7,7 +7,6 @@ pub mod closure;
 #[cfg(CONFIG_DEBUG_FS)]
 pub mod debugfs;
 pub mod demangle;
-pub mod enumerated_ref;
 pub mod ffi;
 pub mod file;
 #[cfg(kernel)]

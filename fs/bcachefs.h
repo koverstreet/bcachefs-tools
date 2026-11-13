@@ -19,10 +19,6 @@
 #define pr_fmt(fmt) "%s() " fmt "\n", __func__
 #endif
 
-#ifdef CONFIG_BCACHEFS_DEBUG
-#define ENUMERATED_REF_DEBUG
-#endif
-
 #ifndef dynamic_fault
 #define dynamic_fault(...)		0
 #endif
@@ -80,7 +76,6 @@
 #include "closure.h"
 
 #include "util/clock_gen.h"
-#include "util/enumerated_ref_gen.h"
 #include <linux/idr.h>
 #include <linux/percpu.h>
 #include "data_structures/fast_list_gen.h"

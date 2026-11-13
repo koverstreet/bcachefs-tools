@@ -40,7 +40,7 @@ nest! {
         #[c("void *started")]
         pub started: Option<crate::vfs::inode::DioStarted>,
         #[c("void *write_ref")]
-        pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::enumerated_ref::EnumeratedRef>>,
+        pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
 
         /* must be last: */
         pub op: c::bch_write_op,

@@ -190,7 +190,6 @@ pub mod c {
     pub use super::snapshots_types::*;
     pub use super::types::*;
     pub use crate::util::clock::{io_clock, IO_CLOCK_PCPU_SECTORS};
-    pub use crate::util::enumerated_ref::{enumerated_ref, enumerated_ref_to_text, rust___enumerated_ref_tryget, rust_enumerated_ref_get, rust_enumerated_ref_is_zero, rust_enumerated_ref_put, rust_enumerated_ref_tryget};
     pub use crate::data_structures::fast_list::{fast_list, fast_list_pcpu};
     pub use crate::locking::{mutex_noio, percpu_rwsem_noio};
     pub use crate::util::mean_and_variance::{mean_and_variance};
@@ -220,5 +219,4 @@ pub mod c {
     pub use crate::alloc::background::{BUCKET_GC_GEN_MAX};
     pub use crate::btree::cache::bch2_btree_id_level_to_text;
     pub use crate::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL, BCH_CREATE_TMPFILE};
-    pub use crate::fs::bch2_write_refs;
 }

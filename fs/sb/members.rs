@@ -1112,12 +1112,12 @@ impl Fs {
         (R::RW == READ || ca.mi.get().state == MemberState::rw).then_some(ca)
     }
 
-    /// dev_get_ioref(), the ref of C's kind @idx, for one C puts - the caller
-    /// puts it with put_kind(): bch2_dev_get_ioref().
-    pub fn dev_get_ioref_kind(&self, dev: u32, rw: usize, idx: u32) -> Option<&Dev> {
+    /// dev_get_ioref(), the ref not in a guard: the caller puts io_ref[@rw]
+    /// itself - bch2_dev_get_ioref().
+    pub fn dev_get_ioref_raw(&self, dev: u32, rw: usize) -> Option<&Dev> {
         let rcu = read_lock();
         let ca = self.dev_rcu(dev, &rcu)?;
-        if !ca.io_ref[rw].tryget_kind(idx) {
+        if !ca.io_ref[rw].try_inc_live() {
             return None;
         }
 
@@ -1126,7 +1126,7 @@ impl Fs {
             return Some(unsafe { &*core::ptr::from_ref(ca) });
         }
 
-        unsafe { ca.io_ref[rw].put_kind(idx) };
+        unsafe { ca.io_ref[rw].dec() };
         None
     }
 
@@ -1565,12 +1565,6 @@ impl Dev {
     /// The latest IO's latency, for reads (READ) or writes (WRITE).
     pub fn cur_latency(&self, rw: usize) -> i64 {
         self.cur_latency[rw].load(Ordering::Relaxed)
-    }
-
-    /// The IO refs held, by kind - for reads (READ) or writes (WRITE).
-    pub fn io_refs_to_text(&self, out: &mut Printbuf, rw: usize) {
-        // SAFETY: the names of io_ref[rw]'s kinds
-        unsafe { self.io_ref[rw].to_text(out, crate::init::dev::io_ref_names(rw)) }
     }
 
     /// The data types with data on it, by the superblock's replicas: a mask

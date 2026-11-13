@@ -21,7 +21,6 @@ use crate::init::passes::RecoveryPass;
 use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::init::btree_init_rw;
-use crate::c;
 use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
 use crate::c::JournalGuard;
@@ -33,6 +32,7 @@ use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
 use crate::util::futex::EventCount;
 use crate::util::kernel::WRITE;
 use crate::util::rcu::read_lock;
+use crate::util::refcount::{OnRelease, PercpuRef, WaitableRef};
 use crate::util::sleep::Sleep;
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
@@ -175,7 +175,7 @@ impl StateLockWrite<'_> {
          */
         fs.reconcile_stop();
 
-        fs.writes.stop_async();
+        fs.writes.stop();
 
         /*
          * If we're not doing an emergency shutdown, we want to wait on
@@ -386,9 +386,14 @@ pub(crate) fn read_only_work(fs: &Fs) {
     fs.state_lock_write().read_only();
 }
 
-pub(crate) unsafe extern "C" fn writes_disabled(writes: *mut c::enumerated_ref) {
-    let fs = unsafe { &*writes.byte_sub(core::mem::offset_of!(Fs, writes)).cast::<Fs>() };
-    fs.flags.set(Flag::write_disable_complete, true);
-    READ_ONLY_EVENTS.wake();
+/// c->writes' release: the last write is done, going read-only can go on.
+pub(crate) struct WritesDisabled;
+
+impl OnRelease for WritesDisabled {
+    unsafe fn released(writes: *mut PercpuRef) {
+        let fs = unsafe { &*writes.byte_sub(core::mem::offset_of!(Fs, writes)).cast::<Fs>() };
+        fs.flags.set(Flag::write_disable_complete, true);
+        READ_ONLY_EVENTS.wake();
+    }
 }
 

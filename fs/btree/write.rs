@@ -34,6 +34,7 @@ use crate::types::{Le16, Le64};
 use crate::util::bio::{bch2_bio_map, buf_nr_bvecs, of_bio, MapBuf};
 use crate::util::kernel::{dump_stack, local_clock, unlikely, READ};
 use crate::util::log::LogMsg;
+use crate::util::refcount::Refcount;
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
 use crate::util::workqueue::{run_raw, RawWork};
@@ -266,7 +267,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
      * btree writes yet (due to device removal/ro):
      */
     if let Some(ca) = ca {
-        unsafe { ca.io_ref[READ].put_kind(c::bch_dev_read_ref::btree_node_write as u32) };
+        unsafe { ca.io_ref[READ].dec() };
     }
 
     if let Some(parent) = parent {

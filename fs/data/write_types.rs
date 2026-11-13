@@ -212,7 +212,7 @@ nest! {
         /* c->writes, held till it's done - a data update's holds its own */
         #[c("void *write_ref")]
         #[init(None)]
-        pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::enumerated_ref::EnumeratedRef>>,
+        pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
 
         /* Must be last - and its bio set up by the op's owner, before init() */
         #[init(unsafe { crate::util::alloc::untouched() })]
