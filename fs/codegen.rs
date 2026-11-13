@@ -228,6 +228,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "logfc", "super_set_uuid", "super_set_sysfs_name_uuid",
     // static inlines: util/refcount/percpu.rs's PercpuRef
     "percpu_ref_get", "percpu_ref_put", "percpu_ref_tryget", "percpu_ref_tryget_live", "percpu_ref_kill",
+    "percpu_ref_reinit", "percpu_ref_is_zero",
     // data_structures/fast_list.rs: static inlines; the rest of the ida the kernel crate binds
     "ida_init", "ida_find_first",
     // util/log.rs: a long message printk()ed in pieces, the console held across them
@@ -274,6 +275,7 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*", "key_type_user", "NUMA_NO_NODE",
+                                 "PERCPU_REF_INIT_DEAD",
                                  // before 7.1/7.2, as above
                                  "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS",
                                  "LZ4HC_MEM_COMPRESS", "LZ4HC_MIN_CLEVEL",

@@ -52,7 +52,7 @@ mod percpu;
 mod placed;
 
 pub use atomic::AtomicRef;
-pub use percpu::PercpuRef;
+pub use percpu::{OnRelease, PercpuRef};
 
 #[cfg(kernel)]
 pub use kernel::sync::aref::{ARef, AlwaysRefCounted};
