@@ -165,7 +165,7 @@ impl Fs {
         let fs_ref = unsafe { BackRef::new(self) };
         let fs = unsafe { fs_ref.get() };
 
-        if spawn_static(&fs.btree.async_ops.worker, task(write, fs_ref, a)).is_err() {
+        if spawn_static(&fs.btree.async_ops.worker, move || task(write, fs_ref, a)).is_err() {
             self.btree.async_ops.op_done();
         }
     }

@@ -1395,7 +1395,7 @@ mod boxed {
         let wait = {
             let _noio = MemallocFlags::noio();
             join.spawn(Queue::system_dfl(),
-                       ec::io::read_extent(fs, p.data_btree, p.data_pos, bio, &p.pick, p.flags, msg), waiter)
+                       move || ec::io::read_extent(fs, p.data_btree, p.data_pos, bio, &p.pick, p.flags, msg), waiter)
         }.map_err(|_| fs.err(err::BCH_ERR_ENOMEM_ec_read_extent))?;
         wait.resume_on(Resume::SPAWNED).await.expect("a joined task's output, handed back")
     }

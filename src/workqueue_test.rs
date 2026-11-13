@@ -42,7 +42,7 @@ use std::time::Duration;
 /// @f as a task on @q, nothing joining it.
 fn spawn<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, f: F) {
     // SAFETY: 'static: it borrows nothing
-    unsafe { spawn_detached(q, f) }.unwrap();
+    unsafe { spawn_detached(q, move || f) }.unwrap();
 }
 
 /// Run `f` on a helper thread and fail rather than hang if it wedges.

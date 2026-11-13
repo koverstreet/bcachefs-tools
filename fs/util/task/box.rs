@@ -379,18 +379,24 @@ impl<H> Drop for TaskBox<'_, H> {
     }
 }
 
-/// A task nothing joins, in a box of its own, started on @q.
+/// A task nothing joins, in a box of its own, started on @q: @make's future,
+/// made in the box - the caller's frame holds only what @make captures, not
+/// the state machine.
 ///
 /// # Safety
 /// @q, and what the future borrows, outlive the task.
-pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(q: &Queue, future: F) -> Result<(), BchError> {
-    unsafe { TaskSlot::exclusive_in(Kmalloc, ())?.start(q, move |_| future) };
+pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(q: &Queue, make: impl FnOnce() -> F)
+    -> Result<(), BchError>
+{
+    unsafe { TaskSlot::exclusive_in(Kmalloc, ())?.start(q, move |_| make()) };
     Ok(())
 }
 
 /// spawn_detached(), for a task that borrows nothing, on a queue that lasts.
-pub fn spawn_static<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, future: F) -> Result<(), BchError> {
-    unsafe { spawn_detached(q, future) }
+pub fn spawn_static<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, make: impl FnOnce() -> F)
+    -> Result<(), BchError>
+{
+    unsafe { spawn_detached(q, make) }
 }
 
 /// A task its spawner awaits, for what it returns: its CompletionReturn's
@@ -407,16 +413,17 @@ impl<T: Send> Join<T> {
         Join(None)
     }
 
-    /// @future run as a task on @q, for @waiter to wait on - the
-    /// CompletionReturn, which outlives nothing @future borrows.
-    pub fn spawn<'a, F>(&'a mut self, q: &Queue, future: F, waiter: waiter::Async)
+    /// @make's future run as a task on @q, for @waiter to wait on - the
+    /// CompletionReturn, which outlives nothing the future borrows. Made in
+    /// the box, as spawn_detached()'s.
+    pub fn spawn<'a, F>(&'a mut self, q: &Queue, make: impl FnOnce() -> F + Send + 'a, waiter: waiter::Async)
         -> Result<CompletionReturn<'a, T>, BchError>
     where
         F: Future<Output = T> + Send + 'a,
     {
         let slot = TaskSlot::exclusive_in(Kmalloc, ())?;
         let (wait, ret) = CompletionReturn::new(&mut self.0, waiter);
-        unsafe { slot.start(q, move |_| async move { ret.complete(future.await) }) };
+        unsafe { slot.start(q, move |_| async move { ret.complete(make().await) }) };
         Ok(wait)
     }
 }

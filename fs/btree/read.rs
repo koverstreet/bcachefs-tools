@@ -1146,7 +1146,7 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
     let key = BtreeKeyBuf::new(btree, level, k);
     let io = m.io_start(false, fs.btree_sectors());
 
-    spawn_static(&fs.btree.read_complete_wq, rewrite_if_bad(write, fs_ref, key, r, io))
+    spawn_static(&fs.btree.read_complete_wq, move || rewrite_if_bad(write, fs_ref, key, r, io))
 }
 
 /// The inline data keys of the leaf @key points to checked against their own
