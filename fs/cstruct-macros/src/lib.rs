@@ -281,7 +281,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         let field = &f.ident;
         forward.extend(quote!(#fwd!([#generics] #name #over, #field);));
     }
-    let flex = tokens(&vstructs::flex_array(&def)?);
+    let flex = vstructs::flex_array(&def)?;
     let zeroable = maybe_zeroable(&def);
     Ok(quote!(#forward #flex #zeroable))
 }
@@ -539,7 +539,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
             .unwrap_or_else(|| args.storage.clone())
     };
     let item = &s.item;
-    let (info, plain) = (typeinfo::info(&ident, &ident, "Struct", &[]), tokens(&vstructs::plain(name, &[&held])));
+    let (info, plain) = (typeinfo::info(&ident, &ident, "Struct", &[]), vstructs::plain(&ident, &[tokens(&held)]));
     // The struct as tokens, not text: an error in a member points at it
     Ok(quote! {
         #out

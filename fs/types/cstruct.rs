@@ -37,6 +37,7 @@ pub struct CStructDef {
     /// family's definition, X__head, whose name the family's type X<S> has
     /// (util/vstructs.rs).
     pub type_name: Option<syn::Ident>,
+    pub attrs:     Vec<syn::Attribute>,
     pub generics:  syn::Generics,
     pub kind:      CKind,
     pub fields:    Vec<CFieldDef>,
@@ -312,71 +313,6 @@ fn join_flat(toks: &[Flat]) -> String {
     out
 }
 
-// ---- attributes ------------------------------------------------------------
-
-/// A family attribute's arguments (cstruct-macros' vstructs.rs):
-/// `#[counted(PATH, tail = ..)]`, `#[unsized_vstruct(tail = ..)]`,
-/// `#[grown(from = FIELD)]`; `bkey`, for a key's value.
-#[derive(Debug, Default)]
-pub struct FamilyArgs {
-    /// The one argument that isn't `key = value`: the count, a field path.
-    pub count: Option<String>,
-    /// `tail = [E]` or `tail = NAME: [E]`: the tail's name, if it's named,
-    /// and E.
-    pub tail: Option<(Option<String>, String)>,
-    /// `from = FIELD`.
-    pub from: Option<String>,
-    /// `bkey`: a key's value - its btree/bkey/types.rs impls too.
-    pub bkey: bool,
-}
-
-/// @src, a family attribute's arguments: an error for one it doesn't take -
-/// @takes, of "count", "tail" and "from" - or one not written as its kind is.
-/// The caller names the attribute and the struct.
-pub fn parse_family_args(src: &str, takes: &[&str]) -> Result<FamilyArgs, String> {
-    use proc_macro2::{Delimiter, TokenStream, TokenTree};
-    let text = |t: &[TokenTree]| rust_text(&t.iter().cloned().collect::<TokenStream>());
-    let mut args = FamilyArgs::default();
-    for part in split_commas(src.parse().map_err(|e| format!("({src}): {e}"))?) {
-        let part: Vec<TokenTree> = part.into_iter().collect();
-        let (kind, set) = match part.as_slice() {
-            [] => continue,
-            [TokenTree::Ident(k), TokenTree::Punct(eq), v @ ..] if eq.as_char() == '=' => {
-                let bad = || format!("({}) not understood", text(&part));
-                match ident(k).as_str() {
-                    "tail" => {
-                        let (name, slice) = match v {
-                            [TokenTree::Ident(n), TokenTree::Punct(c), s @ ..] if c.as_char() == ':' => (Some(ident(n)), s),
-                            s => (None, s),
-                        };
-                        let elem = match slice {
-                            [TokenTree::Group(g)] if g.delimiter() == Delimiter::Bracket && !g.stream().is_empty() &&
-                                !g.stream().into_iter().any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ';')) =>
-                                rust_text(&g.stream()),
-                            _ => return Err(format!("tail = [E] - a slice - not tail = {}", text(v))),
-                        };
-                        ("tail", args.tail.replace((name, elem)).is_some())
-                    }
-                    "from" => match v {
-                        [TokenTree::Ident(f)] => ("from", args.from.replace(ident(f)).is_some()),
-                        _ => return Err(bad()),
-                    },
-                    k => return Err(format!("no argument {k}")),
-                }
-            }
-            [TokenTree::Ident(k)] if k == "bkey" => ("bkey", core::mem::replace(&mut args.bkey, true)),
-            p => ("count", args.count.replace(text(p)).is_some()),
-        };
-        if !takes.contains(&kind) {
-            return Err(format!("doesn't take ({})", text(&part)));
-        }
-        if set {
-            return Err(format!("{kind} given twice"));
-        }
-    }
-    Ok(args)
-}
-
 // ---- structs ---------------------------------------------------------------
 
 /// The struct or union @d; None if it's an enum.
@@ -415,7 +351,7 @@ fn parse_struct(d: syn::DeriveInput) -> Result<Option<CStructDef>, String> {
     let type_name = d.attrs.iter()
         .filter(|a| a.path().is_ident("type_name") || a.path().is_ident("type_name_of"))
         .find_map(|a| a.parse_args::<syn::Ident>().ok());
-    Ok(Some(CStructDef { ident: d.ident, type_name, generics: d.generics, kind, fields }))
+    Ok(Some(CStructDef { ident: d.ident, type_name, attrs: d.attrs, generics: d.generics, kind, fields }))
 }
 
 /// The width of integer type @ty, in bits.
