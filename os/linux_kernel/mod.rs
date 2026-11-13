@@ -10,6 +10,7 @@ pub mod kthread;
 pub mod ops;
 pub mod sched;
 pub mod seq_file;
+pub mod shrinker;
 pub mod super_block;
 pub mod thread_with_file;
 mod user_pages;

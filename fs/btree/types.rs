@@ -29,7 +29,7 @@ use crate::util::projections::Volatile;
 use crate::util::vstructs::Validated;
 use crate::util::ffi::Opaque;
 use crate::util::percpu::PerCpu;
-use crate::util::shrinker::Shrinker;
+use crate::os::shrinker::Shrinker;
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;

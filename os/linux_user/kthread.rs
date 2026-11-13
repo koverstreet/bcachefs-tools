@@ -404,7 +404,7 @@ pub unsafe extern "C" fn kthread_create_name(thread_fn: Option<unsafe extern "C"
             Err(e) => ret = e.raw_os_error().unwrap_or(c::ENOMEM as i32),
         }
 
-        unsafe { c::run_shrinkers(c::GFP_KERNEL, true) };
+        super::shrinker::run_shrinkers(c::GFP_KERNEL, true);
     }
     (-(ret as isize)) as *mut c::task_struct
 }

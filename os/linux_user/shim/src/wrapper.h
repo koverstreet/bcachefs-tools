@@ -54,6 +54,7 @@
 #define RUST_FN_HELPER(ret, name, params, args)				\
 static inline ret RUST_FN_HELPER_##name params { return name args; }
 
+RUST_FN_HELPER(void, rcu_init,			(void), ())
 RUST_FN_HELPER(void, rcu_register_thread,	(void), ())
 RUST_FN_HELPER(void, rcu_unregister_thread,	(void), ())
 RUST_FN_HELPER(void, rcu_quiescent_state,	(void), ())

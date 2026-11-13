@@ -35,7 +35,6 @@ pub mod raid;
 pub mod rcu;
 pub mod rcu_pending;
 pub mod refcount;
-pub mod shrinker;
 pub mod siphash;
 pub mod sleep;
 pub mod sysfs;

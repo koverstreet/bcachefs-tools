@@ -35,7 +35,7 @@ use crate::util::kmem_cache::KmemCache;
 use crate::util::place::{Contained, PlacedDrop};
 use crate::util::rcu::{read_lock, ReadGuard, SrcuReadGuard};
 use crate::util::rcu_pending::{Mode, RcuPending};
-use crate::util::shrinker::{Shrink, Shrinker};
+use crate::os::shrinker::{Shrink, Shrinker};
 use crate::os::workqueue::Queue;
 use crate::util::time_stats::TimeStats;
 use crate::util::{Printbuf, ToText};

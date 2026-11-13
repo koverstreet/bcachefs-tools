@@ -107,7 +107,7 @@ use crate::btree::node::bset::BsetStats;
 use crate::btree::node::BtreeNode;
 use crate::util::alloc::{kvfree_sized, kvzalloc};
 use crate::util::place::{Contained, PlacedDrop};
-use crate::util::shrinker::{Shrink, Shrinker};
+use crate::os::shrinker::{Shrink, Shrinker};
 use crate::util::sleep::Sleep;
 use crate::c;
 use crate::debug::trace::events;

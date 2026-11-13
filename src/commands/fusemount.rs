@@ -111,7 +111,7 @@ fn ensure_thread_init() {
 /// thread serves the session when it isn't spawned (an image file:
 /// fuser::mount2()), and destroy() runs on it.
 fn shrinkers_init() {
-    unsafe { c::linux_shrinkers_init() };
+    bcachefs_kernel::os::shrinker::linux_shrinkers_init();
     THREAD_INITIALIZED.with(|init| init.set(true));
 }
 

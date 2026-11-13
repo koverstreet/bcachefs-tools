@@ -16,12 +16,9 @@ use crate::c;
 use crate::util::alloc::AllocError;
 use crate::util::place::{Contained, PlacedDrop};
 
-// struct shrinker's: the kernel crate's bindings', in-kernel, which have
-// unsigned long as usize
-#[cfg(kernel)]
+// struct shrinker's: the kernel crate's bindings', which have unsigned long
+// as usize
 use kernel::ffi::c_ulong;
-#[cfg(not(kernel))]
-use core::ffi::c_ulong;
 
 pub(crate) trait Shrink: Contained + PlacedDrop + Sync {
     fn shrinker(&self) -> &Shrinker<Self>;

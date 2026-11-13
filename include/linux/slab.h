@@ -10,11 +10,13 @@
 #include <linux/log2.h>
 #include <linux/overflow.h>
 #include <linux/page.h>
-#include <linux/shrinker.h>
 #include <linux/types.h>
 
 #include <stdlib.h>
 #include <sys/mman.h>
+
+/* os/linux_user/shrinker.rs */
+void run_shrinkers(gfp_t gfp_mask, bool);
 
 #define alloc_hooks(_do, ...)		_do
 

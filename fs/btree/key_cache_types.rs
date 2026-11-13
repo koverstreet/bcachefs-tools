@@ -4,7 +4,7 @@
 
 use crate::btree::key_cache::shrink_table;
 use crate::cstructs::c;
-use crate::util::shrinker::Shrinker;
+use crate::os::shrinker::Shrinker;
 use crate::os::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicIsize, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;

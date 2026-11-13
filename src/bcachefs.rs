@@ -445,7 +445,7 @@ fn main() -> ExitCode {
     // fuse will call this after daemonizing, we can't create threads before
     // note that mount may invoke fusemount, via -t bcachefs.fuse
     if !commands::defers_shrinkers(cmd_name) {
-        unsafe { c::linux_shrinkers_init() };
+        bcachefs_kernel::os::shrinker::linux_shrinkers_init();
     }
 
     check_kernel_warnings();
