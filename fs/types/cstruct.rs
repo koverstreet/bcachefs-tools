@@ -170,21 +170,20 @@ impl CEnumKind {
 /// template is pasted into one identifier.
 #[derive(Debug, Clone)]
 pub struct CFromList {
-    pub list:     String,
-    pub params:   Vec<String>,
-    pub template: String,
+    pub list:     syn::Ident,
+    pub params:   Vec<syn::Ident>,
+    pub template: proc_macro2::TokenStream,
 }
 
-/// An enum, and what its values can be. @name is None only while a
-/// tag_enum() is being parsed.
+/// An enum, and what its values can be.
 #[derive(Debug, Clone)]
 pub struct CEnumDef {
     pub kind:     CEnumKind,
-    pub name:     Option<String>,
+    pub name:     syn::Ident,
     /// Its doc comment.
     pub docs:     Vec<String>,
     /// The integer type: u32, i32, u64.
-    pub repr:     String,
+    pub repr:     syn::Ident,
     pub variants: Vec<CEnumVariant>,
     /// `LIST(params) => VARIANT [= value]`: variants from lists, each in
     /// place before the written one at its index - expand_enum_list() makes
@@ -203,24 +202,24 @@ pub struct CEnumDef {
 impl CEnumDef {
     /// What @v prints as: its #[label], or its name - past its #[prefix], if
     /// it has one. Not a flag's, whose names would be its bits'.
-    pub fn label<'a>(&self, v: &'a CEnumVariant) -> Option<&'a str> {
-        v.label.as_deref().or_else(|| {
+    pub fn label(&self, v: &CEnumVariant) -> Option<String> {
+        v.label.clone().or_else(|| {
             (self.kind != CEnumKind::Flags).then_some(())?;
-            let p = self.prefix.as_deref().unwrap_or_default();
-            Some(v.name.strip_prefix(p).unwrap_or(&v.name))
+            let (p, name) = (self.prefix.as_deref().unwrap_or_default(), v.name.to_string());
+            Some(name.strip_prefix(p).unwrap_or(&name).to_string())
         })
     }
 }
 
-/// An enum's variant. Its value is Rust source, or none for the one after the
-/// last; the generator replaces them with what they evaluate to. Its label is
-/// what it prints as, `#[label("..")]`: a list's variant's is the argument its
+/// An enum's variant. Its value, or none for the one after the last; the
+/// generator replaces them with what they evaluate to. Its label is what it
+/// prints as, `#[label("..")]`: a list's variant's is the argument its
 /// template pastes into the name - `stripe`, of `concat(BCH_WATERMARK_, name)` - as
 /// C's string tables have it; none, its name.
 #[derive(Debug, Clone)]
 pub struct CEnumVariant {
-    pub name:   String,
-    pub value:  Option<String>,
+    pub name:   syn::Ident,
+    pub value:  Option<syn::Expr>,
     pub label:  Option<String>,
     pub docs:   Vec<String>,
 }
@@ -308,7 +307,6 @@ pub enum CItem {
     XMacro(CXMacro),
     Bitmask(CBitmask),
     Ioctl(CIoctl),
-    Enum(CEnumDef),
 }
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -696,17 +694,16 @@ pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
     }
     input.parse::<syn::Visibility>()?;
     input.parse::<syn::Token![enum]>()?;
-    let name = ident(&input.parse()?);
-    let what = name.clone();
-    let kind = kind.ok_or_else(|| input.error(format!("{what}: #[open], #[closed] or #[flags]")))?;
+    let name: syn::Ident = input.parse()?;
+    let kind = kind.ok_or_else(|| input.error(format!("{name}: #[open], #[closed] or #[flags]")))?;
     input.parse::<syn::Token![:]>()?;
-    let repr = ident(&input.parse()?);
-    if int_bits(&repr).is_none() {
-        return Err(input.error(format!("{what}: REPR is an integer type")));
+    let repr: syn::Ident = input.parse()?;
+    if int_bits(&repr.to_string()).is_none() {
+        return Err(input.error(format!("{name}: REPR is an integer type")));
     }
     let body;
     syn::braced!(body in input);
-    let def = CEnumDef { kind, name: Some(name), docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
+    let def = CEnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
                          own_to_text, prefix, nr };
     Ok((def, others, body.parse()?))
 }
@@ -739,23 +736,23 @@ pub fn parse_variant(v: proc_macro2::TokenStream)
         syn::Fields::Unnamed(f) if f.unnamed.len() == 1 => f.unnamed.into_iter().next().map(|f| f.ty),
         f => return Err(syn::Error::new_spanned(f, format!("{}: a variant's payload is a type, (Type)", v.ident))),
     };
-    let value = v.discriminant.map(|(_, x)| rust_text(&x));
-    Ok((CEnumVariant { name: ident(&v.ident), value, label, docs }, others, ty))
+    let value = v.discriminant.map(|(_, x)| x);
+    Ok((CEnumVariant { name: v.ident, value, label, docs }, others, ty))
 }
 
 /// list_enum!'s body: its head, then { A = expr, B, ... },
 /// or `LIST(params) => template` for each of a list's entries.
-fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
-    m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
+pub fn parse_list_enum(input: proc_macro2::TokenStream) -> Result<CEnumDef, String> {
+    syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         let (mut e, _, body) = parse_enum_head(input)?;
         for v in split_commas(body) {
-            match parse_from_list(&v) {
+            match parse_from_list(&v)? {
                 Some(f) => e.from.push((e.variants.len(), f)),
                 None => e.variants.push(parse_variant(v)?.0),
             }
         }
         Ok(e)
-    }).map_err(syn_err("list_enum!: expected #[open|closed|flags] pub enum NAME: REPR { ... }"))
+    }, input).map_err(syn_err("list_enum!: expected #[open|closed|flags] pub enum NAME: REPR { ... }"))
 }
 
 /// @i as the tokenizer has an identifier: a raw one without its r#.
@@ -796,21 +793,25 @@ impl CTaggedUnion {
     }
 }
 
-/// `LIST(params) => template` at @item - a list_enum! variant - if it is one.
-fn parse_from_list(item: &proc_macro2::TokenStream) -> Option<CFromList> {
+/// `LIST(params) => template` at @item - a list_enum! variant - if it is one:
+/// params, each bound to an entry's argument in turn, ending at `..`.
+fn parse_from_list(item: &proc_macro2::TokenStream) -> syn::Result<Option<CFromList>> {
     use proc_macro2::{Delimiter, TokenTree};
     let t: Vec<TokenTree> = item.clone().into_iter().collect();
-    match t.as_slice() {
-        [TokenTree::Ident(list), TokenTree::Group(params), TokenTree::Punct(eq), TokenTree::Punct(gt), template @ ..]
-            if params.delimiter() == Delimiter::Parenthesis && eq.as_char() == '=' && gt.as_char() == '>' &&
-               !template.is_empty() =>
-            Some(CFromList {
-                list:     ident(list),
-                params:   split_commas(params.stream()).iter().map(rust_text).collect(),
-                template: rust_text(&template.iter().cloned().collect::<proc_macro2::TokenStream>()),
-            }),
-        _ => None,
+    let [TokenTree::Ident(list), TokenTree::Group(group), TokenTree::Punct(eq), TokenTree::Punct(gt), template @ ..]
+        = t.as_slice() else { return Ok(None) };
+    if group.delimiter() != Delimiter::Parenthesis || eq.as_char() != '=' || gt.as_char() != '>' || template.is_empty() {
+        return Ok(None);
     }
+    let mut params = Vec::new();
+    for p in split_commas(group.stream()) {
+        match p.into_iter().collect::<Vec<_>>().as_slice() {
+            [TokenTree::Ident(i)] => params.push(i.clone()),
+            [TokenTree::Punct(a), TokenTree::Punct(b)] if a.as_char() == '.' && b.as_char() == '.' => break,
+            _ => return Err(syn::Error::new(group.span(), format!("{list}(params): each a name, or .. for the rest"))),
+        }
+    }
+    Ok(Some(CFromList { list: list.clone(), params, template: template.iter().cloned().collect() }))
 }
 
 /// @template, its concat(A, b, ..)s spelled as paste!'s [<A b ..>].
@@ -825,25 +826,21 @@ pub fn paste_concat(template: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// What @f's template makes of one entry of its list, @entry its source: its
-/// parameters substituted, then its camel(n)s and concat(A, b, ..)s pasted.
-fn from_list_entry(f: &CFromList, entry: &str) -> Result<Vec<proc_macro2::TokenTree>, String> {
+/// What @f's template makes of one entry of its list, @entry: its parameters
+/// substituted, then its camel(n)s and concat(A, b, ..)s pasted.
+fn from_list_entry(f: &CFromList, entry: &proc_macro2::TokenStream) -> Result<Vec<proc_macro2::TokenTree>, String> {
     use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
     let list = &f.list;
-    let lex = |s: &str| s.parse::<TokenStream>().map_err(|e| format!("{list}: {s}: {e}"));
-    let args = split_commas(lex(entry)?);
-    let mut bound: Vec<(&str, &TokenStream)> = Vec::new();
+    let args = split_commas(entry.clone());
+    let mut bound: Vec<(&Ident, &TokenStream)> = Vec::new();
     for (n, p) in f.params.iter().enumerate() {
-        if p == ".." {
-            break;
-        }
         let arg = args.get(n).ok_or_else(|| format!("{list}: entry ({entry}) has no {p}"))?;
         bound.push((p, arg));
     }
 
-    fn subst(ts: TokenStream, bound: &[(&str, &TokenStream)]) -> TokenStream {
+    fn subst(ts: TokenStream, bound: &[(&Ident, &TokenStream)]) -> TokenStream {
         ts.into_iter().flat_map(|t| match t {
-            TokenTree::Ident(i) => match bound.iter().find(|(p, _)| i == p) {
+            TokenTree::Ident(i) => match bound.iter().find(|(p, _)| i == **p) {
                 Some((_, arg)) => (*arg).clone(),
                 None => TokenStream::from(TokenTree::Ident(i)),
             },
@@ -897,48 +894,52 @@ fn from_list_entry(f: &CFromList, entry: &str) -> Result<Vec<proc_macro2::TokenT
         }
         Ok(out)
     }
-    paste(subst(lex(&f.template)?, &bound), &name, &bad)
+    paste(subst(f.template.clone(), &bound), &name, &bad)
 }
 
-/// list_enum! @e's variants from its first list, @entries each the source of one
-/// entry's arguments, in their place: each `NAME [= value]`, a value cast to
-/// the enum's integer type, as a list's can be any integer type.
-pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), String> {
+/// list_enum! @e's variants from its first list, @entries each one entry's
+/// arguments, in their place: each `NAME [= value]`, a value cast to the
+/// enum's integer type, as a list's can be any integer type.
+pub fn expand_enum_list(e: &mut CEnumDef, entries: &[proc_macro2::TokenStream]) -> Result<(), String> {
+    use proc_macro2::{Ident, TokenStream, TokenTree};
     if e.from.is_empty() {
         return Ok(());
     }
     let (at, f) = e.from.remove(0);
-    let mut variants = Vec::new();
-    use proc_macro2::{TokenStream, TokenTree};
-    let lex = |s: &str| s.parse::<TokenStream>().map_err(|err| format!("{}: {s}: {err}", f.list));
-    let text = |t: &[TokenTree]| rust_text(&t.iter().cloned().collect::<TokenStream>());
+    let (list, repr) = (&f.list, &e.repr);
 
     // the parameter the template pastes into the name: its argument, the label
-    fn idents(ts: TokenStream, out: &mut Vec<String>) {
+    fn idents(ts: TokenStream, out: &mut Vec<Ident>) {
         for t in ts {
             match t {
-                TokenTree::Ident(i) => out.push(ident(&i)),
+                TokenTree::Ident(i) => out.push(i),
                 TokenTree::Group(g) => idents(g.stream(), out),
                 _ => {}
             }
         }
     }
-    let before_eq: TokenStream = lex(&f.template)?.into_iter()
+    let before_eq: TokenStream = f.template.clone().into_iter()
         .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == '='))
         .collect();
     let mut name_idents = Vec::new();
     idents(before_eq, &mut name_idents);
     let label_param = name_idents.iter().find_map(|s| f.params.iter().position(|p| p == s));
 
+    let mut variants = Vec::new();
     for entry in entries {
         let toks = from_list_entry(&f, entry)?;
         let (name, value) = match &toks[..] {
-            [TokenTree::Ident(name)] => (ident(name), None),
-            [TokenTree::Ident(name), TokenTree::Punct(eq), v @ ..] if eq.as_char() == '=' && !v.is_empty() =>
-                (ident(name), Some(format!("(({}) as {})", text(v), e.repr))),
-            _ => return Err(format!("{}: the template gives {} - not NAME [= value]", f.list, text(&toks))),
+            [TokenTree::Ident(name)] => (name.clone(), None),
+            [TokenTree::Ident(name), TokenTree::Punct(eq), v @ ..] if eq.as_char() == '=' && !v.is_empty() => {
+                let v: TokenStream = v.iter().cloned().collect();
+                let value = syn::parse2(quote::quote!((#v) as #repr))
+                    .map_err(|err| format!("{list}: {name} = {v}: {err}"))?;
+                (name.clone(), Some(value))
+            }
+            _ => return Err(format!("{list}: the template gives {} - not NAME [= value]",
+                                    toks.into_iter().collect::<TokenStream>())),
         };
-        let label = label_param.and_then(|n| split_commas(lex(entry).ok()?).into_iter().nth(n))
+        let label = label_param.and_then(|n| split_commas(entry.clone()).into_iter().nth(n))
             .and_then(|a| match a.into_iter().collect::<Vec<_>>().as_slice() {
                 [TokenTree::Ident(l)] => Some(ident(l)),
                 _ => None,
@@ -953,31 +954,30 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), Stri
     Ok(())
 }
 
-/// list_enum! @e as source, for its next list's callback: its variants, and
-/// the lists not yet expanded in their place.
-pub fn enum_text(e: &CEnumDef) -> String {
-    let mut t = format!("#[{}] {}{}pub enum {}: {} {{ ", e.kind.attr(),
-                        if e.own_to_text { "#[own_to_text] " } else { "" },
-                        e.prefix.as_deref().map(|p| format!("#[prefix({p})] ")).unwrap_or_default()
-                            + if e.nr { "#[nr] " } else { "" },
-                        e.name.as_deref().unwrap_or("_"), e.repr);
-    let lists = |t: &mut String, i: usize| for (at, f) in &e.from {
-        if *at == i {
-            t.push_str(&format!("{}({}) => {}, ", f.list, f.params.join(", "), f.template));
-        }
+/// list_enum! @e, for its next list's callback: its variants, and the lists
+/// not yet expanded in their place.
+pub fn enum_tokens(e: &CEnumDef) -> proc_macro2::TokenStream {
+    use quote::{format_ident, quote};
+    let kind = format_ident!("{}", e.kind.attr());
+    let own_to_text = e.own_to_text.then(|| quote!(#[own_to_text]));
+    let prefix = e.prefix.as_ref().map(|p| format_ident!("{p}")).map(|p| quote!(#[prefix(#p)]));
+    let nr = e.nr.then(|| quote!(#[nr]));
+    let (name, repr) = (&e.name, &e.repr);
+    let lists = |i: usize| -> proc_macro2::TokenStream {
+        e.from.iter().filter(|(at, _)| *at == i).map(|(_, f)| {
+            let (list, params, template) = (&f.list, &f.params, &f.template);
+            quote!(#list(#(#params,)* ..) => #template,)
+        }).collect()
     };
+    let mut body = proc_macro2::TokenStream::new();
     for (i, v) in e.variants.iter().enumerate() {
-        lists(&mut t, i);
-        if let Some(l) = &v.label {
-            t.push_str(&format!("#[label({l:?})] "));
-        }
-        match &v.value {
-            Some(x) => t.push_str(&format!("{} = {x}, ", v.name)),
-            None => t.push_str(&format!("{}, ", v.name)),
-        }
+        body.extend(lists(i));
+        let (docs, name, value) = (&v.docs, &v.name, v.value.as_ref().map(|x| quote!(= #x)));
+        let label = v.label.as_ref().map(|l| quote!(#[label(#l)]));
+        body.extend(quote!(#(#[doc = #docs])* #label #name #value,));
     }
-    lists(&mut t, e.variants.len());
-    t + "}"
+    body.extend(lists(e.variants.len()));
+    quote!(#[#kind] #own_to_text #prefix #nr pub enum #name: #repr { #body })
 }
 
 /// @ty's generic arguments, if it's @name<..> by any path.
@@ -1114,13 +1114,12 @@ pub fn parse_cstruct(item: &proc_macro2::TokenStream) -> Result<CStructDef, Stri
     parse_struct(d)?.ok_or_else(|| expected.to_string())
 }
 
-/// The item a macro's text is, as its macro: c_xmacro!, list_enum!, c_bitmask!
-/// or c_ioctl!.
+/// The item a macro's text is, as its macro: c_xmacro!, c_bitmask! or
+/// c_ioctl!.
 pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
     let m = syn::parse_str::<syn::Macro>(src).map_err(|e| format!("{src}: {e}"))?;
     Ok(vec![match m.path.get_ident().map(ident).as_deref() {
         Some("c_xmacro")  => CItem::XMacro(parse_xmacro(&m)?),
-        Some("list_enum") => CItem::Enum(parse_enum(&m)?),
         Some("c_bitmask") => CItem::Bitmask(parse_bitmask(&m)?),
         Some("c_ioctl")   => CItem::Ioctl(parse_ioctl(&m)?),
         _ => return Err(format!("{src}: not one of the macros")),

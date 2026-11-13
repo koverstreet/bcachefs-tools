@@ -29,22 +29,22 @@
 //! plus one.
 //! tagged_union!'s tag enum is one, its arms the union's.
 
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Ident, Literal, TokenStream, TokenTree};
+use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 
-use crate::cstruct::{doc_of, parse_enum_head, parse_variant, rust_text, split_commas, CEnumDef, CEnumKind,
-                     CEnumVariant};
-use crate::{enum_gen, comma_list, tokens};
+use crate::cstruct::{doc_of, parse_enum_head, parse_variant, split_commas, CEnumDef, CEnumKind, CEnumVariant};
+use crate::{enum_gen, comma_list};
 
 pub(crate) struct Arm {
     pub docs:  Vec<String>,
-    pub name:  String,
+    pub name:  Ident,
     /// What it prints as, `#[label("..")]`, where that isn't its name
     pub label: Option<String>,
     /// Its value's type, `name(Type)`
-    pub ty:    Option<String>,
-    pub value: String,
-    pub cols:  Vec<Vec<String>>,
+    pub ty:    Option<syn::Type>,
+    pub value: syn::Expr,
+    pub cols:  Vec<Cell>,
     /// The #[mask]'s prefix from this arm on, `#[mask_prefix(P)]`
     pub mask_prefix: Option<String>,
 }
@@ -53,13 +53,37 @@ pub(crate) struct Arm {
 /// another enum's values, a bit each; another enum's variant, of the arm's
 /// name; or a value of a type.
 pub(crate) enum Column {
-    Flags(String),
-    Set(String),
+    Flags(syn::Type),
+    Set(syn::Type),
     Enum(CEnumDef),
-    Value(String),
+    Value(syn::Type),
 }
 
-pub(crate) type Columns = Vec<(String, Column)>;
+pub(crate) type Columns = Vec<(Ident, Column)>;
+
+/// An arm's #[COLUMN(..)]: a set's names, or an enum or value column's value.
+#[derive(Clone)]
+pub(crate) enum Cell {
+    Names(Vec<Ident>),
+    Value(syn::Expr),
+}
+
+impl Cell {
+    fn names(&self) -> &[Ident] {
+        match self {
+            Cell::Names(n) => n,
+            Cell::Value(_) => &[],
+        }
+    }
+
+    /// An enum or value column's: arms() gives each arm's its value.
+    fn value(&self) -> &syn::Expr {
+        match self {
+            Cell::Value(v) => v,
+            Cell::Names(_) => unreachable!("an enum or value column's cell is a value"),
+        }
+    }
+}
 
 fn is_punct(t: Option<&TokenTree>, c: char) -> bool {
     matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c)
@@ -67,19 +91,21 @@ fn is_punct(t: Option<&TokenTree>, c: char) -> bool {
 
 /// #[arm_columns(NAME: FLAGS | NAME: set(ENUM) | NAME: enum(..) | NAME: value(T), ..)]
 pub(crate) fn columns(args: TokenStream) -> Result<Columns, String> {
+    const SYNTAX: &str = "#[arm_columns(NAME: FLAGS | NAME: set(ENUM) | NAME: enum(..) | NAME: value(T), ..)]";
+    let ty = |ts: TokenStream| syn::parse2::<syn::Type>(ts).map_err(|e| format!("{SYNTAX}: {e}"));
     comma_list(args).into_iter().map(|c| Ok(match c.as_slice() {
         [TokenTree::Ident(n), colon, TokenTree::Ident(kind), TokenTree::Group(g)]
             if is_punct(Some(colon), ':') && g.delimiter() == Delimiter::Parenthesis && kind == "set" =>
-            (n.to_string(), Column::Set(rust_text(&g.stream()))),
+            (n.clone(), Column::Set(ty(g.stream())?)),
         [TokenTree::Ident(n), colon, TokenTree::Ident(kind), TokenTree::Group(g)]
             if is_punct(Some(colon), ':') && g.delimiter() == Delimiter::Parenthesis && kind == "enum" =>
-            (n.to_string(), Column::Enum(tag_enum(g.stream())?)),
+            (n.clone(), Column::Enum(tag_enum(g.stream())?)),
         [TokenTree::Ident(n), colon, TokenTree::Ident(kind), TokenTree::Group(g)]
             if is_punct(Some(colon), ':') && g.delimiter() == Delimiter::Parenthesis && kind == "value" =>
-            (n.to_string(), Column::Value(rust_text(&g.stream()))),
-        [TokenTree::Ident(n), colon, ty @ ..] if is_punct(Some(colon), ':') && !ty.is_empty() =>
-            (n.to_string(), Column::Flags(rust_text(&ty.iter().cloned().collect::<TokenStream>()))),
-        _ => return Err("#[arm_columns(NAME: FLAGS | NAME: set(ENUM) | NAME: enum(..) | NAME: value(T), ..)]".to_string()),
+            (n.clone(), Column::Value(ty(g.stream())?)),
+        [TokenTree::Ident(n), colon, rest @ ..] if is_punct(Some(colon), ':') && !rest.is_empty() =>
+            (n.clone(), Column::Flags(ty(rest.iter().cloned().collect())?)),
+        _ => return Err(SYNTAX.to_string()),
     })).collect()
 }
 
@@ -88,49 +114,57 @@ pub(crate) fn columns(args: TokenStream) -> Result<Columns, String> {
 pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<Vec<Arm>, String> {
     let mut arms = Vec::new();
     // the last value written, and how many arms after it this one is
-    let mut base: (Option<String>, u64) = (None, 0);
+    let mut base: (Option<syn::Expr>, u64) = (None, 0);
     for v in split_commas(body) {
         let (v, attrs, ty) = parse_variant(v).map_err(|e| e.to_string())?;
         let name = v.name;
         if typed && ty.is_none() {
             return Err(format!("{name}: an arm is `name(Type) [= value]`"));
         }
-        let mut cols: Vec<Vec<String>> = vec![Vec::new(); columns.len()];
+        let mut cols: Vec<Option<Cell>> = vec![None; columns.len()];
         let mut mask_prefix = None;
         for a in attrs {
             if a.path().is_ident("mask_prefix") {
-                let p: syn::Ident = a.parse_args().map_err(|e| format!("{name}: #[mask_prefix(P)]: {e}"))?;
+                let p: Ident = a.parse_args().map_err(|e| format!("{name}: #[mask_prefix(P)]: {e}"))?;
                 mask_prefix = Some(p.to_string());
                 continue;
             }
-            let i = columns.iter().position(|(c, _)| a.path().is_ident(c))
-                .ok_or_else(|| format!("{name}: #[{}]: not one of its #[arm_columns]", rust_text(a.path())))?;
+            let path = a.path();
+            let i = columns.iter().position(|(c, _)| path.is_ident(c))
+                .ok_or_else(|| format!("{name}: #[{}]: not one of its #[arm_columns]", quote!(#path)))?;
             let err = |e: syn::Error| format!("{name}: #[{}(..)]: {e}", columns[i].0);
-            cols[i] = match columns[i].1 {
-                Column::Enum(_) | Column::Value(_) => vec![rust_text(&a.parse_args::<TokenStream>().map_err(err)?)],
-                _ => a.parse_args_with(Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated).map_err(err)?
-                    .iter().map(|f| f.to_string()).collect(),
-            };
+            cols[i] = Some(match columns[i].1 {
+                Column::Enum(_) | Column::Value(_) => Cell::Value(a.parse_args().map_err(err)?),
+                _ => Cell::Names(a.parse_args_with(Punctuated::<Ident, syn::Token![,]>::parse_terminated)
+                    .map_err(err)?.into_iter().collect()),
+            });
         }
         let value = match v.value {
             Some(val) => {
                 base = (Some(val.clone()), 0);
                 val
             }
-            None => match &base.0 {
-                None => base.1.to_string(),
-                Some(b) => match parse_int(b) {
-                    Some(n) => (n + base.1).to_string(),
-                    None => format!("({b}) + {}", base.1),
-                },
-            },
+            None => {
+                let k = Literal::u64_unsuffixed(base.1);
+                match &base.0 {
+                    None => syn::parse_quote!(#k),
+                    Some(b) => match int_of(b) {
+                        Some(n) => {
+                            let n = Literal::u64_unsuffixed(n + base.1);
+                            syn::parse_quote!(#n)
+                        }
+                        None => syn::parse_quote!((#b) + #k),
+                    },
+                }
+            }
         };
         base.1 += 1;
-        if let Some(((c, _), _)) = columns.iter().zip(&cols)
-            .find(|((_, c), v)| matches!(c, Column::Enum(_) | Column::Value(_)) && v.is_empty()) {
-            return Err(format!("{name}: no #[{c}(..)]"));
-        }
-        arms.push(Arm { docs: v.docs, name, label: v.label, ty: ty.map(|t| rust_text(&t)), value, cols, mask_prefix });
+        let cols = columns.iter().zip(cols).map(|((c, col), cell)| match (col, cell) {
+            (_, Some(cell)) => Ok(cell),
+            (Column::Enum(_) | Column::Value(_), None) => Err(format!("{name}: no #[{c}(..)]")),
+            (Column::Flags(_) | Column::Set(_), None) => Ok(Cell::Names(Vec::new())),
+        }).collect::<Result<_, _>>()?;
+        arms.push(Arm { docs: v.docs, name, label: v.label, ty, value, cols, mask_prefix });
     }
     // the entries are one shape: every arm's (name, value, Type, ..), or every one's (name, value, ..)
     if arms.iter().any(|a| a.ty.is_some()) && arms.iter().any(|a| a.ty.is_none()) {
@@ -142,7 +176,8 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
 /// An enum of a declaration: `[#[..]] pub enum NAME: REPR { arms }`.
 pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
     let (mut e, attrs, body) = syn::parse::Parser::parse2(parse_enum_head, input).map_err(|e| e.to_string())?;
-    let err = |m: String| format!("{}: {m}", e.name.as_deref().unwrap_or("_"));
+    let name = e.name.clone();
+    let err = |m: String| format!("{name}: {m}");
     let (mut columns, mut mask) = (Vec::new(), None);
     for a in attrs {
         let args = || a.parse_args::<TokenStream>().map_err(|e| err(e.to_string()));
@@ -150,11 +185,14 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
             Some("arm_columns") => columns = self::columns(args()?).map_err(err)?,
             Some("mask")        => mask = Some(CEnumDef { kind: CEnumKind::Flags, ..tag_enum(args()?).map_err(err)? }),
             Some("doc")         => e.docs.extend(doc_of(&a)),
-            _ => return Err(err(format!("#[{}]: not one of list_enum!'s", rust_text(a.path())))),
+            _ => {
+                let path = a.path();
+                return Err(err(format!("#[{}]: not one of list_enum!'s", quote!(#path))));
+            }
         }
     }
-    if (e.kind == CEnumKind::Flags || e.name.is_none()) && !columns.is_empty() {
-        return Err(err("#[arm_columns] are a named enum's, not flags' - bits".into()));
+    if e.kind == CEnumKind::Flags && !columns.is_empty() {
+        return Err(err("#[arm_columns] are an enum's, not flags' - bits".into()));
     }
     if e.kind == CEnumKind::Flags && mask.is_some() {
         return Err(err("#[mask] is of bit numbers, not flags".into()));
@@ -165,12 +203,10 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
     }
 
     let mut out = generate(&e, &arms, &columns);
-    if let Some(name) = &e.name {
-        out.extend(entries(name, &arms));
-    }
+    out.extend(entries(&name, &arms));
     for (i, (_, col)) in columns.iter().enumerate() {
         if let Column::Enum(k) = col {
-            out.extend(enum_of(k, arms.iter().map(|a| (a, a.cols[i][0].as_str()))));
+            out.extend(enum_of(k, arms.iter().map(|a| (a, a.cols[i].value()))));
         }
     }
     if let Some(m) = &mask {
@@ -182,38 +218,39 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
 /// `[closed,] NAME: REPR, prefix = P[, nr]`: a tag enum's,
 /// or an enum column's.
 pub(crate) fn tag_enum(args: TokenStream) -> Result<CEnumDef, String> {
-    let mut e = CEnumDef { kind: CEnumKind::Open, name: None, docs: Vec::new(), repr: String::new(), variants: Vec::new(),
-                           from: Vec::new(), own_to_text: false, prefix: None, nr: false };
+    let (mut kind, mut name, mut prefix, mut nr) = (CEnumKind::Open, None, None, false);
     for part in comma_list(args) {
         match part.as_slice() {
-            [TokenTree::Ident(c)] if c == "closed" => e.kind = CEnumKind::Closed,
+            [TokenTree::Ident(c)] if c == "closed" => kind = CEnumKind::Closed,
             [TokenTree::Ident(c)] if c == "open" => {}
-            [TokenTree::Ident(c)] if c == "nr" => e.nr = true,
+            [TokenTree::Ident(c)] if c == "nr" => nr = true,
             [TokenTree::Ident(n), c, TokenTree::Ident(r)] if is_punct(Some(c), ':') =>
-                (e.name, e.repr) = (Some(n.to_string()), r.to_string()),
+                name = Some((n.clone(), r.clone())),
             [TokenTree::Ident(k), eq, TokenTree::Ident(v)] if is_punct(Some(eq), '=') => match k.to_string().as_str() {
-                "prefix" => e.prefix = Some(v.to_string()),
+                "prefix" => prefix = Some(v.to_string()),
                 _ => return Err(format!("{k} = ..: not prefix")),
             },
             _ => return Err("expected [closed,] NAME: REPR, prefix = PREFIX[, nr]".into()),
         }
     }
-    if e.name.is_none() || e.prefix.is_none() {
+    let (Some((name, repr)), Some(prefix)) = (name, prefix) else {
         return Err("an enum needs NAME: REPR and prefix = PREFIX".into());
-    }
-    Ok(e)
+    };
+    Ok(CEnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
+                  own_to_text: false, prefix: Some(prefix), nr })
 }
 
-/// Enum @e of @arms, each valued by its &str.
-fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a str)>) -> TokenStream {
+/// Enum @e of @arms, each valued by its expression.
+fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a syn::Expr)>) -> TokenStream {
+    let repr = &e.repr;
     let def = CEnumDef {
         variants: arms.map(|(a, v)| CEnumVariant {
             name:   a.name.clone(),
             // an expression's type may not be the enum's, BCH_VERSION()'s
             // u64: as a list's value is, it's cast
-            value:  Some(match parse_int(v) {
-                Some(_) => v.to_string(),
-                None => format!("(({v}) as {})", e.repr),
+            value:  Some(match int_of(v) {
+                Some(_) => v.clone(),
+                None => syn::parse_quote!((#v) as #repr),
             }),
             label:  a.label.clone(),
             docs:   a.docs.clone(),
@@ -228,6 +265,7 @@ fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a str)>) -> 
 /// #[mask_prefix] last written on an arm up to it and the name. A flag prints
 /// as its arm's name, as a list's does.
 fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
+    let (repr, bits_ty) = (&m.repr, &bits.name);
     let mut prefix = m.prefix.clone();
     let def = CEnumDef {
         variants: arms.iter().map(|a| {
@@ -235,15 +273,16 @@ fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
             let p = prefix.as_deref().unwrap_or_default();
             // an arm written with its prefix, one not an identifier past it,
             // is a flag written with the mask's
-            let past = bits.prefix.as_deref().and_then(|b| a.name.strip_prefix(b));
-            let name = past.unwrap_or(&a.name);
+            let (arm, written) = (&a.name, a.name.to_string());
+            let past = bits.prefix.as_deref().and_then(|b| written.strip_prefix(b));
+            let bit = match bits.kind {
+                CEnumKind::Closed => quote!((#bits_ty::#arm as u32)),
+                _ => quote!(#bits_ty::#arm.0),
+            };
             CEnumVariant {
-                name:   past.map_or_else(|| a.name.clone(), |n| format!("{p}{n}")),
-                value:  Some(format!("1{} << {}", m.repr, match bits.kind {
-                    CEnumKind::Closed => format!("({}::{} as u32)", bits.name.as_deref().unwrap_or_default(), a.name),
-                    _ => format!("{}::{}.0", bits.name.as_deref().unwrap_or_default(), a.name),
-                })),
-                label:  Some(a.label.clone().unwrap_or_else(|| name.to_string())),
+                name:   past.map_or_else(|| arm.clone(), |n| format_ident!("{p}{n}")),
+                value:  Some(syn::parse_quote!((1 as #repr) << #bit)),
+                label:  Some(a.label.clone().unwrap_or_else(|| past.unwrap_or(&written).to_string())),
                 docs:   a.docs.clone(),
             }
         }).collect(),
@@ -254,96 +293,112 @@ fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
 
 /// Enum @e of @arms, and a const fn of it per column.
 pub(crate) fn generate(e: &CEnumDef, arms: &[Arm], columns: &Columns) -> TokenStream {
-    let mut out = enum_of(e, arms.iter().map(|a| (a, a.value.as_str())));
+    let mut out = enum_of(e, arms.iter().map(|a| (a, &a.value)));
 
-    let name = e.name.as_deref().unwrap_or("_");
+    let name = &e.name;
     // a tag no arm has: none of a set; no value, so a value's is an Option
     let other = e.kind != CEnumKind::Closed;
-    let fns: String = columns.iter().enumerate()
+    let fns: Vec<TokenStream> = columns.iter().enumerate()
         .map(|(i, (col_name, col))| {
-            let fn_arms: String = arms.iter()
-                .map(|a| format!("Self::{} => {},\n", a.name, col.value(&a.name, &a.cols[i], other)))
-                .chain(other.then(|| format!("_ => {},\n", col.none())))
-                .collect();
-            format!("pub const fn {col_name}(self) -> {} {{\n match self {{\n{fn_arms}}}\n}}\n", col.ty(other))
+            let arm_names = arms.iter().map(|a| &a.name);
+            let values = arms.iter().map(|a| col.value(&a.name, &a.cols[i], other));
+            let none = other.then(|| col.none()).map(|n| quote!(_ => #n,));
+            let ty = col.ty(other);
+            quote! {
+                pub const fn #col_name(self) -> #ty {
+                    match self {
+                        #(Self::#arm_names => #values,)*
+                        #none
+                    }
+                }
+            }
         })
         .collect();
     if !fns.is_empty() {
-        out.extend(tokens(&format!("#[allow(dead_code)] impl {name} {{\n{fns}}}")));
+        out.extend(quote!(#[allow(dead_code)] impl #name { #(#fns)* }));
     }
     out
 }
 
 /// NAME_arms!(cb [pre]): cb! { [pre] (name, value, [Type], [column]..), .. },
 /// an entry per arm - a list's form, so xmacro_select can select from it.
-pub(crate) fn entries(name: &str, arms: &[Arm]) -> TokenStream {
-    let entries: String = arms.iter()
-        .map(|a| [a.name.clone(), a.value.clone()].into_iter().chain(a.ty.as_deref().map(arm_path))
-             .chain(a.cols.iter().map(|c| format!("[{}]", c.join(", "))))
-             .collect::<Vec<_>>().join(", "))
-        .map(|row| format!("({row}),"))
-        .collect();
-    tokens(&format!("#[allow(unused_macros)] macro_rules! {name}_arms {{ \
-                         ($($cb:ident)::+ $([$($pre:tt)*])?) => {{ \
-                             $($cb)::+ ! {{ $([$($pre)*])? {entries} }} \
-                         }}; \
-                     }} \
-                     #[allow(unused_imports)] pub(crate) use {name}_arms;"))
+pub(crate) fn entries(name: &Ident, arms: &[Arm]) -> TokenStream {
+    let macro_name = format_ident!("{name}_arms");
+    let rows = arms.iter().map(|a| {
+        let (name, value) = (&a.name, &a.value);
+        let ty = a.ty.as_ref().map(arm_path).map(|t| quote!(, #t));
+        let cols = a.cols.iter().map(|c| match c {
+            Cell::Names(n) => quote!([#(#n),*]),
+            Cell::Value(v) => quote!([#v]),
+        });
+        quote!((#name, #value #ty #(, #cols)*),)
+    });
+    quote! {
+        #[allow(unused_macros)]
+        macro_rules! #macro_name {
+            ($($cb:ident)::+ $([$($pre:tt)*])?) => {
+                $($cb)::+ ! { $([$($pre)*])? #(#rows)* }
+            };
+        }
+        #[allow(unused_imports)]
+        pub(crate) use #macro_name;
+    }
 }
 
 impl Column {
     /// The const fn's type: an enum or value column's an Option, if @other -
     /// a tag no arm has.
-    fn ty(&self, other: bool) -> String {
+    fn ty(&self, other: bool) -> TokenStream {
         let ty = match self {
-            Column::Flags(ty) | Column::Value(ty) => ty.clone(),
-            Column::Set(_)    => "u64".into(),
-            Column::Enum(e)   => e.name.clone().unwrap_or_default(),
+            Column::Flags(ty) | Column::Value(ty) => quote!(#ty),
+            Column::Set(_)    => quote!(u64),
+            Column::Enum(e)   => { let n = &e.name; quote!(#n) }
         };
         match self {
-            Column::Enum(_) | Column::Value(_) if other => format!("Option<{ty}>"),
+            Column::Enum(_) | Column::Value(_) if other => quote!(Option<#ty>),
             _ => ty,
         }
     }
 
     /// Arm @arm's: its set of @cell's names, its variant of the column's
     /// enum, or its value - Some, if @other makes it an Option.
-    fn value(&self, arm: &str, cell: &[String], other: bool) -> String {
+    fn value(&self, arm: &Ident, cell: &Cell, other: bool) -> TokenStream {
         let v = match self {
-            Column::Flags(ty) => cell.iter().fold(format!("{ty}::empty()"), |v, f| format!("{v}.union({ty}::{f})")),
-            Column::Set(ty)   => cell.iter().fold("0u64".into(), |v, f| format!("{v} | 1u64 << {ty}::{f}.into_bits()")),
-            Column::Enum(e)   => format!("{}::{arm}", e.name.as_deref().unwrap_or_default()),
-            Column::Value(ty) => format!("(({}) as {ty})", cell[0]),
+            Column::Flags(ty) => cell.names().iter().fold(self.none(), |v, f| quote!(#v.union(#ty::#f))),
+            Column::Set(ty)   => cell.names().iter().fold(self.none(), |v, f| quote!(#v | 1u64 << #ty::#f.into_bits())),
+            Column::Enum(e)   => { let n = &e.name; quote!(#n::#arm) }
+            Column::Value(ty) => { let x = cell.value(); quote!(((#x) as #ty)) }
         };
         match self {
-            Column::Enum(_) | Column::Value(_) if other => format!("Some({v})"),
+            Column::Enum(_) | Column::Value(_) if other => quote!(Some(#v)),
             _ => v,
         }
     }
 
     /// A tag no arm has: an empty set, no variant or value.
-    fn none(&self) -> String {
+    fn none(&self) -> TokenStream {
         match self {
-            Column::Enum(_) | Column::Value(_) => "None".into(),
-            _ => self.value("", &[], false),
+            Column::Flags(ty) => quote!(#ty::empty()),
+            Column::Set(_)    => quote!(0u64),
+            Column::Enum(_) | Column::Value(_) => quote!(None),
         }
     }
 }
 
 /// An arm's type as a path from anywhere in the crate, for macros that expand
 /// at their callers.
-pub(crate) fn arm_path(ty: &str) -> String {
-    match ty.trim().strip_prefix("c::") {
-        Some(rest) => format!("crate::c::{rest}"),
-        None => ty.trim().to_string(),
+pub(crate) fn arm_path(ty: &syn::Type) -> TokenStream {
+    match ty {
+        syn::Type::Path(p) if p.qself.is_none() && p.path.leading_colon.is_none() &&
+                              p.path.segments.first().is_some_and(|s| s.ident == "c") => quote!(crate::#ty),
+        _ => quote!(#ty),
     }
 }
 
-/// An integer literal, decimal or 0x hex, as a discriminant is written.
-pub(crate) fn parse_int(s: &str) -> Option<u64> {
-    let s = s.replace('_', "");
-    match s.strip_prefix("0x") {
-        Some(h) => u64::from_str_radix(h, 16).ok(),
-        None => s.parse().ok(),
+/// An integer literal's value, decimal or 0x hex, as a discriminant is written.
+pub(crate) fn int_of(x: &syn::Expr) -> Option<u64> {
+    match x {
+        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(i), .. }) => i.base10_parse().ok(),
+        _ => None,
     }
 }

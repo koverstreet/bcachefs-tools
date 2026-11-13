@@ -220,7 +220,7 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
     let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(body))) = (trees.get(k + 1), trees.get(k + 2)) else {
         return Err("tagged_union!: expected pub enum NAME { .. }".into());
     };
-    let name = name.to_string();
+    let (ident, name) = (name.clone(), name.to_string());
     let err = |m: &str| format!("tagged_union! {name}: {m}");
 
     let text = |ts: &TokenStream| rust_text(ts);
@@ -262,9 +262,9 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
     if let Some(e) = &tag_enum {
         out.extend(enum_decl::generate(e, &arms, &Vec::new()));
     }
-    out.extend(enum_decl::entries(&name, &arms));
+    out.extend(enum_decl::entries(&ident, &arms));
 
-    let tag_enum_name = |e: &CEnumDef| e.name.clone().unwrap_or_default();
+    let tag_enum_name = |e: &CEnumDef| e.name.to_string();
     let closed = |e: &CEnumDef| e.kind == CEnumKind::Closed;
     let (tag_ty, tag_enum_ty, tag_is_enum) = match (&tag_enum, tag_ty) {
         (Some(e), None) if closed(e) => (format!("c::{}", tag_enum_name(e)), String::new(), true),
@@ -275,7 +275,7 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
 
     let arm_value = |a: &enum_decl::Arm| match &tag_enum {
         Some(e) if closed(e) => format!("c::{}::{}", tag_enum_name(e), a.name),
-        _ => a.value.clone(),
+        _ => rust_text(&a.value),
     };
     let tu = CTaggedUnion {
         name: name.clone(),
@@ -286,7 +286,9 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
         tag_enum: tag_enum_ty,
         tag_is_enum,
         plain,
-        arms: arms.iter().map(|a| CTaggedArm { name: a.name.clone(), ty: a.ty.clone().unwrap(), value: arm_value(a) }).collect(),
+        arms: arms.iter().map(|a| CTaggedArm {
+            name: a.name.to_string(), ty: rust_text(a.ty.as_ref().expect("typed arms")), value: arm_value(a),
+        }).collect(),
         pad,
         packed,
         size: size.ok_or_else(|| err("no #[size(..)] - what it's a function of, pad, header or arm"))?,
@@ -776,13 +778,14 @@ fn generate(d: &Decl, tu: &CTaggedUnion) -> Result<TokenStream, String> {
                      \n")
             })
             .collect();
+        let arm_path = |a: &CTaggedArm| arm_path(&syn::parse_str(&a.ty).expect("an arm's type"));
         let match_arms: String = arms.iter()
             .map(|a| format!("crate::c::{en}Ref::{}($a) => {{ $(type $A<S> = {}<S>;)? $body }}\n",
-                             a.name, arm_path(&a.ty)))
+                             a.name, arm_path(a)))
             .collect();
         let tag_arms: String = arms.iter()
             .map(|a| format!("if t == ({}) as {tag_ty} {{ type $A<S> = {}<S>; $body }} else ",
-                             a.value, arm_path(&a.ty)))
+                             a.value, arm_path(a)))
             .collect();
         let dispatch = format!(
             "#[allow(unused_macros)]\n\
