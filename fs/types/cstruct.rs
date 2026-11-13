@@ -15,10 +15,6 @@
 //   xmacro! { NAME { (args), (args), ... } }: an x-macro list - a
 //   macro, NAME!(cb), that hands the whole list to cb!.
 //
-//   c_bitmask! { LE64_BITMASK(struct foo, field), strip PREFIX_ {
-//       NAME(start, end), ... } }: bitfields in a flags word - accessors on
-//   foo named for NAME without PREFIX_, lowercased.
-//
 //   ioctl! { NAME = _IOW(type, nr, ARG), ... }: ioctl numbers - a marker
 //   type binding the opcode to ARG, the opcode computed from the target's own
 //   _IOC constants (fs/util/ioctl.rs).
@@ -87,40 +83,6 @@ pub(crate) struct XMap {
     pub(crate) params:   Vec<syn::Ident>,
     /// An entry's arguments, mapped: params, and concat(A, b) pastes.
     pub(crate) template: proc_macro2::TokenStream,
-}
-
-/// Bitfields in one flags word: @macro_name is LE64_BITMASK, LE32_BITMASK,
-/// LE16_BITMASK or BITMASK; @field[@index] the flags word.
-#[derive(Debug)]
-pub(crate) struct Bitmask {
-    pub(crate) macro_name: syn::Ident,
-    /// The struct's name: foo, of `struct foo`, `struct Head<foo>` or
-    /// `struct foo<STATE>`.
-    pub(crate) name:       syn::Ident,
-    /// `struct Head<foo>`: a family's C definition, foo__head.
-    pub(crate) head:       bool,
-    /// `struct foo<STATE>`: a family's type in a state.
-    pub(crate) state:      Option<syn::Ident>,
-    pub(crate) field:      syn::Ident,
-    pub(crate) index:      Option<syn::LitInt>,
-    pub(crate) strip:      Option<String>,
-    pub(crate) entries:    Vec<BitmaskEntry>,
-}
-
-#[derive(Debug)]
-pub(crate) struct BitmaskEntry {
-    pub(crate) name:  syn::Ident,
-    pub(crate) start: syn::Expr,
-    pub(crate) end:   syn::Expr,
-}
-
-impl Bitmask {
-    /// The Rust accessor for @name: PREFIX_ stripped, lowercased.
-    pub(crate) fn method(&self, name: &syn::Ident) -> String {
-        let name = name.to_string();
-        let n = self.strip.as_deref().and_then(|p| name.strip_prefix(p)).unwrap_or(&name);
-        rust_ident(&n.to_lowercase())
-    }
 }
 
 /// ioctl!: ioctl numbers, C's #define NAME _IOW(type, nr, arg).
@@ -222,25 +184,6 @@ pub(crate) struct EnumVariant {
     pub(crate) docs:   Vec<String>,
 }
 
-const RUST_KEYWORDS: &[&str] = &[
-    "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn",
-    "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
-    "return", "static", "struct", "super", "trait", "true", "type", "unsafe", "use",
-    "where", "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final",
-    "macro", "override", "priv", "typeof", "unsized", "virtual", "yield", "try", "union",
-    "gen",
-];
-
-/// A C name as Rust spells it: a keyword gets a _ - type is type_, as
-/// bindgen has it.
-pub(crate) fn rust_ident(name: &str) -> String {
-    if RUST_KEYWORDS.contains(&name) {
-        format!("{name}_")
-    } else {
-        name.to_string()
-    }
-}
-
 // ---- structs ---------------------------------------------------------------
 
 /// The struct or union @d; None if it's an enum.
@@ -293,7 +236,7 @@ pub(crate) fn int_bits(ty: &str) -> Option<u32> {
     })
 }
 
-// ---- xmacro!, c_bitmask!, ioctl! ---------------------------------------
+// ---- xmacro!, ioctl! ---------------------------------------------------
 
 /// xmacro!'s body: NAME { (args), ... }
 pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<XMacro, String> {
@@ -350,89 +293,6 @@ pub(crate) fn split_commas(ts: proc_macro2::TokenStream) -> Vec<proc_macro2::Tok
         out.pop();
     }
     out
-}
-
-/// c_bitmask!'s body: LE64_BITMASK(struct foo, field), strip PREFIX_ { NAME(start, end), ... }
-pub(crate) fn parse_bitmask(input: proc_macro2::TokenStream) -> Result<Bitmask, String> {
-    syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
-        input.call(syn::Attribute::parse_outer)?;
-        let macro_name: syn::Ident = input.parse()?;
-        if !matches!(macro_name.to_string().as_str(), "LE64_BITMASK" | "LE32_BITMASK" | "LE16_BITMASK" | "BITMASK") {
-            return Err(syn::Error::new(macro_name.span(), format!("{macro_name}: not a bitmask macro")));
-        }
-        let args;
-        syn::parenthesized!(args in input);
-        args.parse::<syn::Token![struct]>()?;
-        let ty: syn::Path = args.parse()?;
-        args.parse::<syn::Token![,]>()?;
-
-        // the flags word: a field, or an element of one
-        let word: syn::Expr = args.parse()?;
-        let bad_word = || syn::Error::new_spanned(&word, format!(
-            "{macro_name}: the flags word is a field, or an element of one: flags[0]"));
-        let field = |e: &syn::Expr| match e {
-            syn::Expr::Path(p) => p.path.get_ident().cloned().ok_or_else(bad_word),
-            _ => Err(bad_word()),
-        };
-        let (field, index) = match &word {
-            syn::Expr::Index(i) => match &*i.index {
-                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(n), .. }) => (field(&i.expr)?, Some(n.clone())),
-                _ => return Err(bad_word()),
-            },
-            e => (field(e)?, None),
-        };
-
-        // NAME, or NAME<ARG>
-        let bad = || syn::Error::new_spanned(&ty, format!(
-            "{macro_name}: expected a struct type - struct foo, struct Head<foo> for a family's, or struct \
-             foo<STATE> for a family's type in a state"));
-        let (n, arg) = match ty.segments.iter().collect::<Vec<_>>().as_slice() {
-            [s] => (s.ident.clone(), match &s.arguments {
-                syn::PathArguments::None => None,
-                syn::PathArguments::AngleBracketed(a) => match a.args.iter().collect::<Vec<_>>().as_slice() {
-                    [syn::GenericArgument::Type(syn::Type::Path(t))] => Some(t.path.get_ident().cloned().ok_or_else(bad)?),
-                    _ => return Err(bad()),
-                },
-                _ => return Err(bad()),
-            }),
-            _ => return Err(bad()),
-        };
-        let (name, head, state) = match arg {
-            None => (n, false, None),
-            // a family's C definition, X__head (util/vstructs.rs): its header's
-            // fields, which each state's definition derefs to
-            Some(f) if n == "Head" => (f, true, None),
-            // a family's type in a state: a #[grown] type's value in place, for
-            // its floor's fields - every view of it reaches X<Validated>
-            Some(st) if st == "Whole" || st == "Validated" || st == "Unvalidated" => (n, false, Some(st)),
-            Some(_) => return Err(bad()),
-        };
-
-        input.parse::<Option<syn::Token![,]>>()?;
-        let strip = match input.peek(syn::Ident) && input.fork().parse::<syn::Ident>()? == "strip" {
-            true => {
-                input.parse::<syn::Ident>()?;
-                Some(input.parse::<syn::Ident>()?.to_string())
-            }
-            false => None,
-        };
-
-        let list;
-        syn::braced!(list in input);
-        let mut entries = Vec::new();
-        while !list.is_empty() {
-            let name: syn::Ident = list.parse()?;
-            let range;
-            syn::parenthesized!(range in list);
-            let range = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated(&range)?;
-            let [start, end] = range.into_iter().collect::<Vec<_>>().try_into().map_err(|_|
-                syn::Error::new(name.span(), format!("{name}: expected NAME(start, end)")))?;
-            entries.push(BitmaskEntry { name, start, end });
-            list.parse::<Option<syn::Token![,]>>()?;
-        }
-
-        Ok(Bitmask { macro_name, name, head, state, field, index, strip, entries })
-    }, input).map_err(|e| e.to_string())
 }
 
 /// ioctl!'s body: NAME = _IOW(type, nr, ARG), ... - _IO without the ARG.

@@ -36,7 +36,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion};
 use crate::fs::Fs;
 use crate::{dirent, inode};
-use crate::typeinfo::{self, AccessError, FieldTarget, ResolveError, TypeInfo};
+use crate::typeinfo::{self, AccessError, FieldRef, ResolveError, TypeInfo};
 use crate::util::names::Names;
 use core::fmt;
 use core::mem::size_of;
@@ -120,10 +120,10 @@ pub(crate) fn parse_val<'p>(type_: u8, field: &'p str, val: &'p str) -> Result<u
         .ok_or(SetError::BadValue { field, val, valid })
 }
 
-fn write<'p>(buf: &mut [u8], field: &'p str, target: &FieldTarget, v: u64)
+fn write<'p>(buf: &mut [u8], field: &'p str, target: &FieldRef, v: u64)
     -> Result<(), SetError<'p>>
 {
-    typeinfo::write(buf, target, v).map_err(|err| SetError::Access { field, err })
+    typeinfo::write_scalar(buf, target, v).map_err(|err| SetError::Access { field, err })
 }
 
 impl TransBkey<'_, '_> {
@@ -195,7 +195,7 @@ impl TransBkey<'_, '_> {
         let v = parse_val(type_, field, val)?;
 
         // grown to reach the field, if it doesn't
-        let need_val_u64s = (target.0.offset + target.0.len).div_ceil(8);
+        let need_val_u64s = (target.offset + target.len).div_ceil(8);
         if self.k().val_bytes() < need_val_u64s * size_of::<u64>() {
             self.set_val_u64s(need_val_u64s)?;
         }

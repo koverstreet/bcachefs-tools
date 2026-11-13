@@ -52,7 +52,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::{Errcode, BchError};
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::inode;
-use bcachefs_kernel::typeinfo::{self, FieldTarget, StructInfo, TypeInfo};
+use bcachefs_kernel::typeinfo::{self, StructInfo, TypeInfo};
 use bcachefs_kernel::util::vstructs::Head;
 use bch_bindgen::c::DegradedAction;
 use clap::Parser;
@@ -357,42 +357,35 @@ fn render_fields(val: &[u8], info: &'static StructInfo, paths: &[&str]) -> Resul
 
     let mut out = String::new();
     for path in paths {
-        let (r, bm) = typeinfo::resolve_with_bits(info, path).map_err(|e| anyhow!("{e}"))?;
-        let line = match bm {
-            Some(bm) => match typeinfo::read_bits(val, &r, bm) {
-                Ok(v) => v.to_string(),
-                Err(AccessError::OutOfBounds { .. }) => "0".to_string(),
-                Err(e) => bail!("{path}: {e}"),
-            },
-            None => match r.kind {
-                FieldKind::Int { .. } | FieldKind::Bits { .. } => read_int(path, &r)?,
-                // a #[bitfield]'s word, whole
-                FieldKind::Struct(w) if matches!(w.shape, typeinfo::Shape::Bitfield(_)) => read_int(path, &r)?,
-                FieldKind::Array { elem, n, stride }
-                        if matches!(elem, FieldKind::Int { .. }) => {
-                    (0..*n)
-                        .map(|i| read_int(path, &FieldRef {
-                            offset: r.offset + i * stride,
-                            kind: elem,
-                            len: *stride,
-                        }))
-                        .collect::<Result<Vec<_>>>()?
-                        .join(" ")
-                }
-                // A vartail's length is however much value remains:
-                FieldKind::VarTail { elem, stride }
-                        if matches!(elem, FieldKind::Int { .. }) => {
-                    (0..(val.len().saturating_sub(r.offset) / stride))
-                        .map(|i| read_int(path, &FieldRef {
-                            offset: r.offset + i * stride,
-                            kind: elem,
-                            len: *stride,
-                        }))
-                        .collect::<Result<Vec<_>>>()?
-                        .join(" ")
-                }
-                _ => bail!("{path}: not a scalar or integer-array field"),
-            },
+        let r = typeinfo::resolve_with_bits(info, path).map_err(|e| anyhow!("{e}"))?;
+        let line = match r.kind {
+            FieldKind::Int { .. } | FieldKind::Bits { .. } => read_int(path, &r)?,
+            // a #[bitfield]'s word, whole
+            FieldKind::Struct(w) if matches!(w.shape, typeinfo::Shape::Bitfield(_)) => read_int(path, &r)?,
+            FieldKind::Array { elem, n, stride }
+                    if matches!(elem, FieldKind::Int { .. }) => {
+                (0..*n)
+                    .map(|i| read_int(path, &FieldRef {
+                        offset: r.offset + i * stride,
+                        kind: elem,
+                        len: *stride,
+                    }))
+                    .collect::<Result<Vec<_>>>()?
+                    .join(" ")
+            }
+            // A vartail's length is however much value remains:
+            FieldKind::VarTail { elem, stride }
+                    if matches!(elem, FieldKind::Int { .. }) => {
+                (0..(val.len().saturating_sub(r.offset) / stride))
+                    .map(|i| read_int(path, &FieldRef {
+                        offset: r.offset + i * stride,
+                        kind: elem,
+                        len: *stride,
+                    }))
+                    .collect::<Result<Vec<_>>>()?
+                    .join(" ")
+            }
+            _ => bail!("{path}: not a scalar or integer-array field"),
         };
         writeln!(out, "{line}").unwrap();
     }
@@ -910,7 +903,7 @@ fn cmd_set(
 // (which carries the BCH_SB_* flag words, #[bitfield]s), written back via
 // bch2_write_super so the csum is recomputed and every sb copy updated.
 
-fn sb_field(field: &str) -> Result<FieldTarget> {
+fn sb_field(field: &str) -> Result<typeinfo::FieldRef> {
     typeinfo::resolve_with_bits(<Head<c::bch_sb> as typeinfo::TypeInfo>::INFO, field)
         .map_err(|e| anyhow!("{e}"))
 }
@@ -924,17 +917,14 @@ fn sb_dev(fs: &Fs, dev: u32) -> Result<bcachefs_kernel::fs::DevRef> {
 }
 
 fn cmd_sb_get(fs: &Fs, dev: Option<u32>, field: &str) -> Result<String> {
-    let (r, bm) = sb_field(field)?;
+    let r = sb_field(field)?;
     let ca = dev.map(|d| sb_dev(fs, d)).transpose()?;
     let sb = fs.sb_lock();
     let buf = match &ca {
         Some(ca) => fs.dev_sb(&sb, ca).ok_or_else(|| anyhow!("device {} has no superblock", ca.dev_idx))?.sb_bytes(),
         None     => sb.sb_bytes(),
     };
-    let v = match bm {
-        Some(bm) => typeinfo::read_bits(buf, &r, bm),
-        None => typeinfo::read_scalar(buf, &r),
-    }.map_err(|e| anyhow!("{field}: {e}"))?;
+    let v = typeinfo::read_scalar(buf, &r).map_err(|e| anyhow!("{field}: {e}"))?;
     Ok(format!("{field} = {v} (0x{v:x})\n"))
 }
 
@@ -947,8 +937,8 @@ fn cmd_sb_set(fs: &Fs, dev: Option<u32>, field: &str, v: u64) -> Result<String> 
     let edited = match &ca {
         Some(ca) => fs.dev_sb_mut(&mut sb, ca)
             .ok_or_else(|| anyhow!("device {} has no superblock", ca.dev_idx))?
-            .edit_header(|h| typeinfo::write(h, &target, v)),
-        None     => sb.edit_header(|h| typeinfo::write(h, &target, v)),
+            .edit_header(|h| typeinfo::write_scalar(h, &target, v)),
+        None     => sb.edit_header(|h| typeinfo::write_scalar(h, &target, v)),
     };
     edited
         .map_err(|e| anyhow!("{field}: {e}"))?

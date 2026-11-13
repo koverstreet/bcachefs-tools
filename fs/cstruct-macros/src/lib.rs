@@ -17,8 +17,6 @@
 //!   xmacro_select!       NAME!(xmacro_select [TOKEN => cb]): cb! handed
 //!                        the rows with TOKEN in them - a flag in a flags
 //!                        column
-//!   c_bitmask! { .. }    bitfields in a flags word: a getter and a setter
-//!                        on the struct for each
 //!   ioctl! { .. }        ioctl numbers: a marker type for each, its opcode
 //!                        and argument type
 //!   #[bch_enum(..)]      an enum, open, closed or flags: the type that is,
@@ -61,7 +59,7 @@ use quote::{format_ident, quote, ToTokens};
 mod cstruct {
     include!("../../types/cstruct.rs");
 }
-use cstruct::{enum_tokens, expand_enum_list, generic_arg, int_of, parse_bitmask, parse_cstruct, parse_ioctl,
+use cstruct::{enum_tokens, expand_enum_list, generic_arg, int_of, parse_cstruct, parse_ioctl,
               parse_list_enum, parse_xmacro, split_commas, EnumDef, EnumKind, EnumVariant, XEntry};
 
 mod args_stored_once;
@@ -1306,120 +1304,5 @@ pub fn ioctl(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             });
         }
         Ok(out)
-    })
-}
-
-/// Bitfields in a flags word: c_bitmask! { LE64_BITMASK(struct foo, field),
-/// strip PREFIX_ { NAME(start, end), ... } }. Rust gets, on foo, name() and
-/// set_name() for each - NAME without PREFIX_, lowercased - as C's NAME() and
-/// SET_NAME(): the bits [start, end) of field, as a u64 - and
-/// set_name_checked(), Err for a value too big for them.
-#[proc_macro]
-pub fn c_bitmask(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("c_bitmask!", || bitmask_expand(input.into()))
-}
-
-fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
-    let b = parse_bitmask(input)?;
-    let vs = quote!(crate::util::vstructs);
-    let (name, field) = (&b.name, &b.field);
-
-    // An LE*_BITMASK field is a little-endian integer - Le32, Le64 - read and
-    // written with get() and set(); a BITMASK one, native.
-    let f = match &b.index {
-        Some(i) => quote!(#field[#i]),
-        None => quote!(#field),
-    };
-    let (get, set) = if b.macro_name == "BITMASK" {
-        (quote!(self.#f as u64), quote!(self.#f = new as _))
-    } else {
-        (quote!(u64::from(self.#f.get())), quote!(self.#f.set(new as _)))
-    };
-
-    // The runtime table of them (typeinfo.rs's BitmaskField): this struct
-    // field's, as a const named for them - bch_sb_flags_0_BITMASKS - which
-    // typeinfo.rs's registry must list, so that a new one can't be left out.
-    // The field is as written, which typeinfo.rs resolves: flags[0]
-    let (table, field_path) = match &b.index {
-        Some(i) => (format!("{name}_{field}_{i}_BITMASKS"), format!("{field}[{i}]")),
-        None => (format!("{name}_{field}_BITMASKS"), field.to_string()),
-    };
-    // The type the accessors are on, and as typeinfo names it, its
-    // TypeInfo's: a family's C definition, X__head; a family's type in a
-    // state, which has it as X<Whole>
-    let (rust_type, info_ty) = match (&b.state, b.head) {
-        (Some(st), _) => (quote!(#name<#vs::#st>), quote!(#name<#vs::Whole>)),
-        (None, true) => {
-            let head = format_ident!("{name}__head");
-            (quote!(#head), quote!(#head))
-        }
-        (None, false) => (quote!(#name), quote!(#name)),
-    };
-    let struct_name = quote!(<#info_ty as crate::typeinfo::TypeInfo>::INFO.name);
-    let mut table_entries = Vec::new();
-
-    let mut methods = TokenStream::new();
-    let mut setters = TokenStream::new();
-    for e in &b.entries {
-        let m = b.method(&e.name);
-        let (start, end) = (&e.start, &e.end);
-        table_entries.push(quote! {
-            crate::typeinfo::BitmaskField { struct_name: #struct_name, field: #field_path, name: #m,
-                                            lo: (#start) as u8, hi: (#end) as u8 }
-        });
-        // C's LE*_BITMASK() defines NAME_MAX: the largest value it holds
-        let (max, get_m) = (format_ident!("{}_MAX", m.to_uppercase()), format_ident!("{m}"));
-        let (set_fn, set_checked, update_fn) =
-            (format_ident!("set_{m}"), format_ident!("set_{m}_checked"), format_ident!("update_{m}"));
-        // One bit is a flag: bool, as the accessors on bindgen's structs had it.
-        let one_bit = matches!((int_of(&e.start), int_of(&e.end)), (Some(s), Some(e)) if e == s + 1);
-        let (ty, from, to) = match one_bit {
-            true => (quote!(bool), quote!(!= 0), quote!(as u64)),
-            false => (quote!(u64), quote!(), quote!()),
-        };
-        let ones = quote!((u64::MAX >> (64 - ((#end) - (#start)))));
-        methods.extend(quote! {
-            pub const #max: u64 = #ones;
-            pub fn #get_m(&self) -> #ty {
-                ((#get >> (#start)) & #ones) #from
-            }
-        });
-        // update_x(f): set_x(f(x())). XXX Deprecated when real field
-        // projections arrive: x op= v through a projected place instead.
-        setters.extend(quote! {
-            pub fn #set_fn(&mut self, v: #ty) {
-                let mask = #ones << (#start);
-                let new = (#get & !mask) | (((v #to) << (#start)) & mask);
-                #set;
-            }
-            pub fn #set_checked(&mut self, v: #ty) -> Result<(), ()> {
-                if (v #to) > #ones {
-                    return Err(());
-                }
-                self.#set_fn(v);
-                Ok(())
-            }
-            pub fn #update_fn(&mut self, f: impl FnOnce(#ty) -> #ty) {
-                self.#set_fn(f(self.#get_m()))
-            }
-        });
-    }
-
-    // A family's C struct, X__head: its state definitions, which have C's
-    // fields inline and no DerefMut to it, get the setters too - the getters
-    // they reach through their Deref
-    let state_setters = b.head.then(|| {
-        let state_impls = format_ident!("__{name}__state_impls");
-        quote!(#state_impls! { #setters })
-    });
-
-    let table_id = format_ident!("{table}");
-    let msg = format!("{table}: not in typeinfo.rs's BITMASKS - add it");
-    Ok(quote! {
-        impl #rust_type { #methods #setters }
-        #state_setters
-        #[allow(non_upper_case_globals)]
-        pub const #table_id: &[crate::typeinfo::BitmaskField] = &[#(#table_entries),*];
-        const _: () = assert!(crate::typeinfo::bitmasks_listed(#table), #msg);
     })
 }

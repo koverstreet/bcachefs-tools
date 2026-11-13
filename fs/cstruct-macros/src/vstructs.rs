@@ -372,13 +372,7 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
 /// definitions. Every family has @name__unvalidated and @name__validated: a
 /// plain alias where a state shares another's definition, so a container's
 /// ArmOf impls can name each state's - concrete types, not projections.
-///
-/// And __@name__state_impls!{ items }: the items, impl'd on each of
-/// @with_fields, the definitions with C's fields inline - for c_bitmask!'s
-/// setters, which the Deref to C's struct can't reach: there's no DerefMut.
-fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident, with_fields: &[Ident])
-    -> TokenStream
-{
+fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident) -> TokenStream {
     let vs = vs();
     let fam = format_ident!("{name}__family");
     let aliases = [("unvalidated", unvalidated), ("validated", validated)].into_iter()
@@ -388,7 +382,6 @@ fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident, w
             #[allow(non_camel_case_types)]
             pub type #alias = #def;
         });
-    let state_impls = format_ident!("__{name}__state_impls");
     quote! {
         #[doc(hidden)]
         #[allow(non_camel_case_types)]
@@ -401,14 +394,6 @@ fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident, w
         }
 
         #(#aliases)*
-
-        #[doc(hidden)]
-        #[allow(unused_macros)]
-        macro_rules! #state_impls {
-            ($($items:tt)*) => {
-                #(impl #with_fields { $($items)* })*
-            };
-        }
     }
 }
 
@@ -476,7 +461,7 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
                                         checked against them when it's made");
     out.extend(state("Validated", "what C read and validated, its counts trusted as C trusts them"));
     out.extend(members_on(name, shape.fields, &[&unvalidated, &validated])?);
-    out.extend(family(name, &unvalidated, &validated, &validated, &[unvalidated.clone(), validated.clone()]));
+    out.extend(family(name, &unvalidated, &validated, &validated));
     out.extend(generic_type(name,
         &Generic { default: "Validated", unsized_states: &unsized_states, arm_of: None,
                    whole: None, ffi: Some(&shape.ffi), typestate: false },
@@ -781,7 +766,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
             }
         }));
         out.extend(members_on(name, fields, &[&all])?);
-        out.extend(family(name, &all, &all, &ffi, &[]));
+        out.extend(family(name, &all, &all, &ffi));
         out.extend(whole_arm_ref(&ffi, is_plain));
         out.extend(generic_type(name, &sized_generic(&all, &ffi, &derives, &states, false), &generic_doc));
         out.extend(bkey_impls);
@@ -880,7 +865,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     // field's getters there, its setters on the definition
     out.extend(members_on(name, floor, &[&fl, &ty])?);
     // the cast checks the floor: an unvalidated one is as good
-    out.extend(family(name, &ty, &ty, &ffi, &[]));
+    out.extend(family(name, &ty, &ty, &ffi));
     out.extend(whole_arm_ref(&ffi, is_plain));
     out.extend(generic_type(name, &sized_generic(&ty, &ffi, &derives, &states, true), &generic_doc));
     // all of it is a value in place, every field there: X's methods, on
