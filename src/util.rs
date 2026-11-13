@@ -119,6 +119,21 @@ pub fn subvol_root(path: &Path) -> Result<std::path::PathBuf> {
     Ok(root)
 }
 
+/// A y/n answer from stdin, after the caller's question: yes if it starts
+/// with y or Y.
+pub fn ask_yn() -> bool {
+    use std::io::{BufRead, Write};
+
+    print!(" (y,n) ");
+    let _ = io::stdout().flush();
+
+    let mut line = String::new();
+    if matches!(io::stdin().lock().read_line(&mut line), Err(_) | Ok(0)) {
+        crate::wrappers::super_io::die("error reading from standard input");
+    }
+    matches!(line.as_bytes().first(), Some(b'y' | b'Y'))
+}
+
 /// The name of a bch_sb_error_id - the same table fsck and the
 /// superblock error counters use.
 pub fn sb_error_name(id: u32) -> String {

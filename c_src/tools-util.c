@@ -98,24 +98,6 @@ u64 read_file_u64(int dirfd, const char *path)
 	return v;
 }
 
-bool ask_yn(void)
-{
-	const char *short_yes = "yY";
-	char *buf = NULL;
-	size_t buflen = 0;
-	bool ret;
-
-	fputs(" (y,n) ", stdout);
-	fflush(stdout);
-
-	if (getline(&buf, &buflen, stdin) < 0)
-		die("error reading from standard input");
-
-	ret = strchr(short_yes, buf[0]);
-	free(buf);
-	return ret;
-}
-
 /* crc32c */
 
 static u32 crc32c_default(u32 crc, const void *buf, size_t size)

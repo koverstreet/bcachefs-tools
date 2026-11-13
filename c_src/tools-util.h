@@ -67,6 +67,4 @@ do {									\
 char *read_file_str(int, const char *);
 u64 read_file_u64(int, const char *);
 
-bool ask_yn(void);
-
 #endif /* _TOOLS_UTIL_H */

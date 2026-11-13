@@ -269,8 +269,7 @@ pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
 
         if !force {
             print!("Proceed anyway (existing signatures will be wiped)?");
-            let _ = std::io::Write::flush(&mut std::io::stdout());
-            if !unsafe { bch_bindgen::c::ask_yn() } {
+            if !crate::util::ask_yn() {
                 std::process::exit(1);
             }
         }
