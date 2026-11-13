@@ -17,14 +17,14 @@ use crate::data_structures::genradix::SharedGenRadix;
 use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI64, AtomicU64};
-use cstruct_macros::{bitfield, placed, CStruct, Init, TypeInfo};
+use cstruct_macros::{bitfield, placed, MaybeZeroable, Init, TypeInfo, BitfieldMembers};
 use nestify::nest;
 use pin_init::pin_data;
 
 /// gc's copy of a stripe, which check_allocations counts its blocks' sectors
 /// into.
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct gc_stripe {
     pub lock: Locked<ByteLock, GcStripeData>,
 }
@@ -34,9 +34,9 @@ nest! {
     /// @ptrs are referenced, and there's one of these per stripe, not per
     /// bucket.
     #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
     pub struct GcStripeData {
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub bits: pub struct gc_stripe_bits {
             /* does a corresponding key exist in stripes btree? */
@@ -56,7 +56,7 @@ nest! {
 #[placed(Fs.ec)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_ec {
     /// Stripe buffers' memory in use, against ec_stripe_buf_limit: Rust's
     /// alone.

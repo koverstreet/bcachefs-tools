@@ -31,7 +31,7 @@ use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
 use crate::util::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
-use cstruct_macros::{bitfield, bch_enum, placed, CStruct, Init, Late};
+use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Init, Late, BitfieldMembers};
 use nestify::nest;
 
 /* btree write buffer steals 8 bits for its own purposes: */
@@ -120,7 +120,7 @@ nest! {
     #[placed(JournalLocked.in_flight[], index = idx: u8)]
     #[pin_data]
     #[repr(C)]
-    #[derive(CStruct, Init)]
+    #[derive(MaybeZeroable, BitfieldMembers, Init)]
     pub struct journal_buf {
         pub io: c::closure,
         pub data: JsetBuf,
@@ -149,7 +149,7 @@ nest! {
                                                 buf_size was bigger */
         pub u64s_reserved: c_uint,
 
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u16)]
         pub bits: pub struct journal_buf_bits {
             separate_flush:             bool,
@@ -229,7 +229,7 @@ pub struct WriteAlloc {
 pub type WriteAllocLockedBy = LockedBy<WriteAlloc>;
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct journal_entry_pin {
     pub locked: PinLockedBy,
     /* the entry it holds, 0 for none */
@@ -237,7 +237,7 @@ pub struct journal_entry_pin {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct journal_res {
     pub ref_: bool,
     pub has_overwrites: bool,
@@ -247,7 +247,7 @@ pub struct journal_res {
 }
 
 nest! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(Clone, Copy, MaybeZeroable)]*
     #[repr(C)]*
     pub union journal_res_state {
         pub atomic: pub struct journal_res_state_atomic {
@@ -264,9 +264,10 @@ nest! {
          * 24 + idx*10. That invariant lets count() / inc() / state_buf_put()
          * index a count with a single shift, not a switch.
          */
+        #>[derive(BitfieldMembers)]
         pub fields: pub struct journal_res_state_fields {
-            #[c_bitfield]
-            #>[derive(Clone, Copy, CStruct)]-
+            #[members]
+            #>[derive(Clone, Copy, MaybeZeroable)]-
             #>[repr(C)]-
             #>[bitfield(u64)]
             pub bits: pub struct journal_res_state_bits {
@@ -308,7 +309,7 @@ pub const JOURNAL_ENTRY_CLOSED_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX - 1;
 pub const JOURNAL_ENTRY_ERROR_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct journal_space {
     /* Units of 512 bytes sectors: */
     pub next_entry: c_uint, /* How big the next journal entry can be */
@@ -342,7 +343,7 @@ pub enum JournalFlag {
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct journal_bio {
     pub ca: *mut Dev,
     pub buf: *mut c::journal_buf,
@@ -354,7 +355,7 @@ c_default!(journal_bio);
 crate::has_bio!(journal_bio, bio);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct journal_rewind_range {
     pub from: u64,
     pub to: u64,
@@ -364,7 +365,7 @@ pub struct journal_rewind_range {
 #[placed(journal.lock.*)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct JournalLocked {
     pub cur_entry_sectors: c_uint,
     pub cur_entry_offset_if_blocked: c_uint,
@@ -405,7 +406,7 @@ pub struct JournalLocked {
 published! {
     /// Everything a reservation reads, in one cacheline, beside the counter
     /// its cmpxchg takes the line exclusive for.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct JournalHot {
         pub __align: CacheAligned,
         pub reservations: AtomicU64,
@@ -430,7 +431,7 @@ published! {
 
 published! {
     /// j->lock's, written under it and read without it.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct JournalPublished {
         pub hot: JournalHot,
 
@@ -474,7 +475,7 @@ published! {
 
 published! {
     /// reclaim_lock's: written by reclaim, read by anyone.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct ReclaimPublished {
         pub last_flushed: Volatile<c_ulong>,
         pub nr_direct_reclaim: Volatile<u64>,
@@ -499,7 +500,7 @@ pub type JournalLockAt = crate::at!(journal.lock);
 
 /* pin_resize_lock's: the journal pin fifo's entries, a power of two of them */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct PinBuf {
     pub entries: KVVec<crate::journal::pins::PinList>,
 }
@@ -509,7 +510,7 @@ pub struct PinBuf {
  * j->lock's, and pin_resize_lock's writer's while it replaces the buffer
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct PinRange {
     pub pin_front: Volatile<u64>,
     pub pin_back:  Volatile<u64>,
@@ -527,7 +528,7 @@ pub type RewindRanges = LockedBy<KVVec<c::journal_rewind_range>, (), NotRw<'stat
 nest! {
     #[placed(Fs.journal)]
     #[pin_data]
-    #[derive(CStruct)]*
+    #[derive(MaybeZeroable)]*
     #[derive(Init, Late)]
     #[repr(C)]*
     pub struct journal {
@@ -676,7 +677,7 @@ impl journal {
 #[placed(Dev.journal)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct journal_device {
     #[pin]
     #[init(crate::journal::buckets::new())]
@@ -704,7 +705,7 @@ unsafe impl Send for journal_device {}
  * journal_entry_res - reserve space in every journal entry:
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct journal_entry_res {
     /* written by entry_res_resize(), under j->lock */
     pub u64s: Volatile<c_uint>,
@@ -737,7 +738,7 @@ pub struct journal_entry_res {
  * @clean:	Last flush entry was empty (filesystem was clean).
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct journal_start_info {
     pub last_seq: u64,
     pub replay_end: u64,

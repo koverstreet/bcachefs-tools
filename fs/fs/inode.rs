@@ -59,7 +59,7 @@ use crate::{bch_err_fn, bch_err_msg, bkey_fsck_err_on, prt};
 use core::mem::size_of;
 use core::ops::ControlFlow;
 use core::ffi::CStr;
-use cstruct_macros::{CStruct, c_bitmask, TypeInfo};
+use cstruct_macros::{MaybeZeroable, c_bitmask, TypeInfo};
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
 use crate::util::projections::Volatile;
@@ -71,7 +71,7 @@ pub type u96 = u64;
 macro_rules! __bch_inode_unpacked_0 {
     ([$(pub $f:ident: $ft:ty),* $(,)?] $(($_name:tt, $_bits:tt)),* $(,)?) => { ::paste::paste! {
         #[repr(C)]
-        #[derive(Clone, Copy, Debug, Default, CStruct, TypeInfo)]
+        #[derive(Clone, Copy, Debug, Default, MaybeZeroable, TypeInfo)]
         pub struct bch_inode_unpacked {
             $(pub $f: $ft,)*
             $(pub $_name: [<u $_bits>],)*
@@ -139,7 +139,7 @@ macro_rules! __BKEY_INODE_BUF_XSUM_0 {
 BCH_INODE_FIELDS_v3!(__BKEY_INODE_BUF_XSUM_0);
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct bkey_inode_buf {
     /* C's typed key: a v3 inode's header, its fields in _pad */
     pub inode: BkeyI<c::InodeV3>,

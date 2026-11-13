@@ -23,10 +23,10 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_int, CStr};
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
-use cstruct_macros::{CStruct, bch_enum, TypeInfo};
+use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_log_msg {
     pub c: *mut Fs,
     pub loglevel: u8,

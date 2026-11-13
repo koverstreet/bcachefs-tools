@@ -8,7 +8,7 @@ use crate::locking::{ByteLock, Locked, Lockdep};
 use crate::types::{bits_to_longs, c_opaque};
 use crate::data_structures::bitmap::BitArray;
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{bch_enum, CStruct};
+use cstruct_macros::{bch_enum, MaybeZeroable};
 use pin_init::pin_data;
 
 /// A disk label's striping of new stripes' buckets across its devices - in
@@ -16,7 +16,7 @@ use pin_init::pin_data;
 /// label's stripe heads, and repairs. Freed only with the filesystem.
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct ec_dev_stripe_state {
     #[pin]
     pub lock: Locked<Lockdep<ByteLock>, DevStripes>,
@@ -28,7 +28,7 @@ pub struct ec_dev_stripe_state {
 /// stripes' data blocks, and of their parity, have been spread across the
 /// devices, for the allocator to go on spreading them.
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct DevStripes {
     pub block_stripe: c::dev_stripe_state,
     pub parity_stripe: c::dev_stripe_state,
@@ -71,7 +71,7 @@ c_opaque!(ec_stripe_new);
 /// freed with the filesystem.
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct ec_stripe_head {
     #[pin]
     pub lock: Locked<Lockdep<ByteLock>, HeadState>,
@@ -87,7 +87,7 @@ pub struct ec_stripe_head {
 /// count of the allocator's RW device changes: set together, by
 /// stripe_head_devs_update(), whenever that's moved on.
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, MaybeZeroable)]
 pub struct HeadDevs {
     /// The allocator's rw_devs_change_count they're as of
     pub change_count: c_ulong,
@@ -101,7 +101,7 @@ pub struct HeadDevs {
 /// What a stripe head's lock protects: the devices it makes stripes on, and
 /// the stripe being filled - the head's, till it hands it on.
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, MaybeZeroable)]
 pub struct HeadState {
     pub devs: HeadDevs,
 

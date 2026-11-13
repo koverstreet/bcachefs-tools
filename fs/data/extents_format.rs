@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, bch_enum, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{bitfield, c_bitmask, bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -148,7 +148,6 @@ pub enum ExtentEntryType {
 
 /* Compressed/uncompressed size are stored biased by 1: */
 #[bitfield(u64, align = 8)]
-#[derive(CStruct)]
 pub struct bch_extent_crc32 {
     #[bits(default = 1 << ExtentEntryType::crc32.0)]
     pub(self) type_:       u2,
@@ -166,9 +165,9 @@ pub const CRC32_NONCE_MAX: u32 = 0;
 
 nest! {
     #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
     pub struct bch_extent_crc64 {
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_crc64_bits {
             #[bits(default = 1 << ExtentEntryType::crc64.0)]
@@ -190,9 +189,9 @@ pub const CRC64_NONCE_MAX: u32 = (1 << 10) - 1;
 
 nest! {
     #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
     pub struct bch_extent_crc128 {
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_crc128_bits {
             #[bits(default = 1 << ExtentEntryType::crc128.0)]
@@ -215,7 +214,6 @@ pub const CRC128_NONCE_MAX: u32 = (1 << 13) - 1;
  * @reservation - pointer hasn't been written to, just reserved
  */
 #[bitfield(u64, align = 8)]
-#[derive(CStruct)]
 pub struct bch_extent_ptr {
     #[bits(default = 1 << ExtentEntryType::ptr.0)]
     pub(self) type_:      u1,
@@ -228,7 +226,6 @@ pub struct bch_extent_ptr {
 }
 
 #[bitfield(u64)]
-#[derive(CStruct)]
 pub struct bch_extent_stripe_ptr {
     #[bits(default = 1 << ExtentEntryType::stripe_ptr.0)]
     pub(self) type_:      u5,
@@ -245,7 +242,6 @@ pub enum ExtentFlag {
 }
 
 #[bitfield(u64)]
-#[derive(CStruct)]
 pub struct bch_extent_flags {
     #[bits(default = 1 << ExtentEntryType::flags.0)]
     pub(self) type_: u7,
@@ -264,7 +260,7 @@ pub struct bch_extent_entry {
 
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct BtreePtr {
     pub v: c::bch_val,
 
@@ -274,7 +270,7 @@ pub struct BtreePtr {
 
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct BtreePtrV2 {
     pub v: c::bch_val,
 
@@ -296,7 +292,7 @@ c_bitmask! {
 
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Extent {
     pub v: c::bch_val,
 
@@ -346,7 +342,7 @@ pub const BKEY_BTREE_PTR_VAL_U64s_MAX: usize =
 pub const BKEY_BTREE_PTR_U64s_MAX: usize = c::BKEY_U64s + c::BKEY_BTREE_PTR_VAL_U64s_MAX;
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Reservation {
     pub v: c::bch_val,
 
@@ -357,7 +353,7 @@ pub struct Reservation {
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InlineData {
     pub v: c::bch_val,
     pub data: [u8; 0],
@@ -375,7 +371,7 @@ pub struct InlineData {
  * recorded - reads of it fail without checking it again.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InlineDataCsum {
     pub csum_type: u8,
     pub flags: u8,
@@ -388,7 +384,7 @@ pub const BCH_INLINE_DATA_POISONED: u8 = 1 << 0;
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InlineDataV2 {
     pub v: c::bch_val,
     pub csum: InlineDataCsum,

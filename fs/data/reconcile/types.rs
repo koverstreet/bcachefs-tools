@@ -11,13 +11,13 @@ use crate::new_lock;
 use crate::data::reconcile::work::StripesPending;
 use crate::util::kthread::Daemon;
 use core::sync::atomic::{AtomicBool, AtomicI32};
-use cstruct_macros::{placed, CStruct, Init, TypeInfo};
+use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo};
 use pin_init::pin_data;
 
 #[placed(Fs.reconcile)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_reconcile {
     /*
      * The thread, from start to stop - which doesn't mean it's running: it

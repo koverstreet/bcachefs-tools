@@ -87,7 +87,7 @@ use crate::{bch_err_msg, fs_fatal_error};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
-use cstruct_macros::{CStruct, Init, Late, TypeInfo};
+use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
@@ -95,7 +95,7 @@ use crate::format::{Bpos, Btree, DataType};
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init, Late)]
+#[derive(MaybeZeroable, TypeInfo, Init, Late)]
 pub struct bch_fs_copygc {
     /* The thread, from start to stop: data/copygc.rs */
     #[pin]

@@ -13,7 +13,7 @@ use crate::vfs::vfs_inode::VfsInode;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
 use core::ffi::{c_int, c_void};
-use cstruct_macros::{bch_enum, CStruct, TypeInfo};
+use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo};
 use pin_init::pin_data;
 #[cfg(not(NO_BCACHEFS_FS))]
 use crate::btree::iter::BtreeTrans;
@@ -27,7 +27,7 @@ use crate::btree::iter::BtreeTrans;
  */
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct InodeInfo {
     #[pin]
     pub v: VfsInode,
@@ -114,7 +114,7 @@ pub enum InodeInfoFlag {
  * range neither of them scanned.
  */
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct InodeReserved {
     pub ei_reserved_replicas: u8,
     pub ei_reserved_state: u8,
@@ -123,7 +123,7 @@ pub struct InodeReserved {
 published! {
     /// InodeReserved's range: written under ei_reserved_lock, and read without
     /// it by the buffered write path, to take the lock only for a folio in it.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct InodeReservedRange {
         pub ei_reserved_start: Volatile<u64>,
         pub ei_reserved_end: Volatile<u64>,
@@ -132,7 +132,7 @@ published! {
 
 /// An inode's quota accounting, under ei_quota_lock.
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct InodeQuota {
     pub ei_qid: c::bch_qid,
     /// sectors reserved for writes, charged to ei_qid ahead of i_blocks

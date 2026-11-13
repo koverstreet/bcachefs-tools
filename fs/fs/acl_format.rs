@@ -9,12 +9,12 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32};
-use cstruct_macros::{tagged_union, CStruct, Plain, TypeInfo};
+use cstruct_macros::{tagged_union, MaybeZeroable, Plain, TypeInfo};
 
 pub const BCH_ACL_VERSION: u32 = 0x0001;
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_acl_entry {
     pub e_tag: Le16,
     pub e_perm: Le16,
@@ -22,14 +22,14 @@ pub struct bch_acl_entry {
 }
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_acl_entry_short {
     pub e_tag: Le16,
     pub e_perm: Le16,
 }
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_acl_header {
     pub a_version: Le32,
 }

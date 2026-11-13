@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{bch_enum, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{bch_enum, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 #[bch_enum(open)]
 #[repr(u32)]
@@ -14,7 +14,7 @@ pub enum LoggedOpsInum {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpTruncate {
     pub v: c::bch_val,
     pub subvol: Le32,
@@ -32,7 +32,7 @@ pub enum LoggedOpFinsertState {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpFinsert {
     pub v: c::bch_val,
     pub state: u8,
@@ -58,7 +58,7 @@ pub struct LoggedOpFinsert {
  * that may have changed since.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpInodeOptPropagate {
     pub v: c::bch_val,
     pub inum: Le64,
@@ -67,7 +67,7 @@ pub struct LoggedOpInodeOptPropagate {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpStripeUpdate {
     pub v: c::bch_val,
     pub old_idx: Le64,

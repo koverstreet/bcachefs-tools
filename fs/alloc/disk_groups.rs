@@ -83,7 +83,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Unvalidated;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, TypeInfo, bch_enum};
+use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
 use crate::sb::io::SbResize;
 use crate::types::c_default;
 use nestify::nest;
@@ -102,7 +102,7 @@ pub enum TargetType {
 }
 
 nest! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(Clone, Copy, MaybeZeroable)]*
     #[repr(C)]*
     pub struct target {
         pub type_: c::TargetType,
@@ -116,7 +116,7 @@ nest! {
 c_default!(target);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_disk_group_cpu {
     pub deleted: bool,
     pub parent: u16,

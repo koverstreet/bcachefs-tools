@@ -20,10 +20,10 @@ use crate::format::Btree;
 use core::mem::size_of;
 use crate::types::c_default;
 use crate::util::alloc::{kbox_zeroed_nofail, kzalloc_nofail, KBox};
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct bkey_buf {
     pub k: *mut c::bkey_i,
     pub onstack: [u64; 12],

@@ -24,7 +24,7 @@ use crate::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{bch_enum, placed, CStruct, Init};
+use cstruct_macros::{bch_enum, placed, MaybeZeroable, Init};
 use pin_init::pin_data;
 
 #[bch_enum(closed)]
@@ -42,7 +42,7 @@ pub enum AsyncObjKind {
 #[placed(Fs.async_objs[], index = idx: c_uint)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct async_obj_list {
     pub list: c::fast_list,
 }

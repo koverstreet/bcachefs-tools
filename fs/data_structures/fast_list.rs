@@ -35,7 +35,7 @@ use core::mem::ManuallyDrop;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 use crate::types::{c_default, c_opaque};
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::SharedGenRadix;
@@ -44,7 +44,7 @@ use crate::data_structures::genradix::SharedGenRadix;
 c_opaque!(fast_list_pcpu);
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct fast_list {
     /* the items, by slot: allocated by any CPU at once */
     pub items: SharedGenRadix<Item>,

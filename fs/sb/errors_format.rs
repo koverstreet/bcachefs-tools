@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::types::Le64;
 use zerocopy::byteorder::little_endian as le;
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{bitfield, c_bitmask, bch_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bitfield, c_bitmask, bch_enum, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 use nestify::nest;
 
 #[bch_enum(flags)]
@@ -472,7 +472,7 @@ pub enum SbErrorId {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_error_entry {
     pub v: Le64,
     pub last_error_time: Le64,
@@ -480,7 +480,7 @@ pub struct bch_sb_field_error_entry {
 
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_errors {
     pub field: Head<c::bch_sb_field>,
     pub entries: [c::bch_sb_field_error_entry; 0],
@@ -510,7 +510,7 @@ c_bitmask! {
 /* align(8): C's v is __le64 v[2]; its bitfield's le::U128 is aligned to 1 */
 nest! {
     #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
     pub struct bch_sb_field_error_entry_v2 {
         #>[bitfield(u128, repr = le::U128, from = le::U128::new, into = le::U128::get)]
         pub v: pub struct bch_sb_field_error_entry_v2_bits {
@@ -524,7 +524,7 @@ nest! {
 
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_errors_v2 {
     pub field: Head<c::bch_sb_field>,
     pub entries: [c::bch_sb_field_error_entry_v2; 0],

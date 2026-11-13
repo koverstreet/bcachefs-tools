@@ -27,13 +27,13 @@ use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::sync::atomic::Ordering;
-use cstruct_macros::{CStruct, TypeInfo};
+use cstruct_macros::{MaybeZeroable, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
 use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeature};
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
 pub struct bch_dev_identity {
     pub name: [c_char; 16 + 1],
     pub model: [c_char; 64 + 1],
@@ -43,7 +43,7 @@ pub struct bch_dev_identity {
 c_default!(bch_dev_identity);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_member_cpu {
     pub nbuckets: u64, /* device size */
     pub nbuckets_minus_first: u64,

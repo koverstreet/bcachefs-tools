@@ -6,10 +6,10 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct folio_vec {
     pub fv_folio: *mut c::folio,
     pub fv_offset: usize,
@@ -18,7 +18,7 @@ pub struct folio_vec {
 c_default!(folio_vec);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct quota_res {
     pub sectors: u64,
 }

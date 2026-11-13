@@ -4,14 +4,14 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_bitmask, bch_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_bitmask, bch_enum, c_xmacro, whole, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 pub const BLOCKDEV_INODE_MAX: u32 = 4096;
 pub const BCACHEFS_ROOT_INO: u32 = 4096;
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct Inode {
     pub v: c::bch_val,
 
@@ -23,7 +23,7 @@ pub struct Inode {
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct InodeV2 {
     pub v: c::bch_val,
 
@@ -36,7 +36,7 @@ pub struct InodeV2 {
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InodeV3 {
     pub v: c::bch_val,
 
@@ -53,7 +53,7 @@ pub struct InodeV3 {
 pub const INODEv3_FIELDS_START_INITIAL: u32 = 6;
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct InodeGeneration {
     pub v: c::bch_val,
 
@@ -234,7 +234,7 @@ c_bitmask! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct InodeAllocCursor {
     pub v: c::bch_val,
     pub bits: u8,

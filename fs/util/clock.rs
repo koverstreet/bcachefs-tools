@@ -39,7 +39,7 @@ use crate::util::{Printbuf, ToText};
 use core::panic::Location;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
-use cstruct_macros::{CStruct, Init};
+use cstruct_macros::{MaybeZeroable, Init};
 use pin_init::{pin_data, pinned_drop};
 
 /* Amount to buffer up on a percpu counter */
@@ -48,7 +48,7 @@ pub const IO_CLOCK_PCPU_SECTORS: u32 = 128;
 #[allow(non_camel_case_types)]
 #[pin_data(PinnedDrop)]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct io_clock {
     pub now: AtomicI64,
     #[init(PerCpu::init())]

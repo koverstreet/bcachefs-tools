@@ -9,7 +9,7 @@ use crate::util::alloc::KVVec;
 use crate::os::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
-use cstruct_macros::{CStruct, bitfield, bch_enum};
+use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -25,7 +25,7 @@ pub const PRINTBUF_INLINE_TABSTOPS: u32 = 8;
 nest! {
     /// Through fmt::Write, `\t`, `\r` and `\n` are tabstops and indent.
     #[repr(C)]
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable, BitfieldMembers)]
     pub struct Printbuf {
         pub buf: *mut c_char,
         pub size: c_uint,
@@ -35,7 +35,7 @@ nest! {
         pub indent: c_uint,
         /// Set by Probe::Job, until the job's write.
         fmt_job: bool,
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub bits: pub struct printbuf_bits {
             pub allocation_failure: bool,
@@ -60,7 +60,7 @@ nest! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct printbuf_restore {
     pub pos: c_uint,
     pub last_newline: c_uint,

@@ -55,20 +55,21 @@ use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
-use cstruct_macros::{bitfield, bch_enum, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, TypeInfo, BitfieldMembers};
 use crate::types::c_default;
 use nestify::nest;
 use crate::format::{Bpos, CompressionType, SbFeature};
 
 nest! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
+    #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
     #[repr(C)]
     pub union bch_compression_opt {
         pub value: u8,
+        #>[derive(BitfieldMembers)]
         #>[repr(C)]
         pub fields: pub struct bch_compression_opt_fields {
-            #[c_bitfield]
-            #>[derive(Clone, Copy, CStruct, TypeInfo)]-
+            #[members]
+            #>[derive(Clone, Copy, MaybeZeroable, TypeInfo)]-
             #>[bitfield(u8)]
             pub bits: pub struct bch_compression_opt_bits {
                 type_: u4,
@@ -138,7 +139,7 @@ pub enum BbufType {
  * assembles its own decode sequence out of these.
  */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct bbuf {
     pub c: *mut Fs,
     pub b: *mut c_void,

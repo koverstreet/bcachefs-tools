@@ -7,7 +7,7 @@ use crate::types::c_default;
 use crate::util::projections::Volatile;
 use core::ffi::c_uint;
 use core::sync::atomic::{AtomicI32, AtomicI64};
-use cstruct_macros::{CStruct, TypeInfo};
+use cstruct_macros::{MaybeZeroable, TypeInfo};
 use nestify::nest;
 use crate::format::{Bpos, DataType};
 
@@ -16,7 +16,7 @@ nest! {
     /// on any thread - and what a data job's progress reads as it goes.
     /// Shared throughout, so every field is a Volatile, written one writer at
     /// a time, or an atomic, by many.
-    #[derive(CStruct, TypeInfo)]*
+    #[derive(MaybeZeroable, TypeInfo)]*
     #[repr(C)]*
     pub struct MoveStats {
         pub ret: Volatile<c::IoctlDataEventRet>,
@@ -41,7 +41,7 @@ nest! {
 c_default!(MoveStats);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]
 pub struct move_bucket_key {
     pub bucket: Bpos,
     pub generation: c_uint,
@@ -53,7 +53,7 @@ pub struct move_bucket_key {
  * data/copygc.rs.
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct move_bucket {
     pub count: AtomicI32,
 }

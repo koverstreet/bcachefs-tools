@@ -7,7 +7,7 @@ use crate::types::{c_default};
 use crate::util::alloc::init_at;
 use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 use core::marker::PhantomData;
 use core::sync::atomic::AtomicIsize;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
@@ -17,7 +17,7 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
  * like read side of rwsem, but conflict with other state:
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct two_state_lock_t {
     pub v: AtomicIsize,
     /// Woken as the last holder unlocks

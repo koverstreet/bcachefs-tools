@@ -90,11 +90,11 @@ use core::convert::Infallible;
 use core::ops::Deref;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
-use cstruct_macros::{bitfield, bch_enum, CStruct};
+use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, BitfieldMembers};
 use nestify::nest;
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct dev_alloc_list {
     pub nr: c_uint,
     pub data: [u8; c::BCH_SB_MEMBERS_MAX as usize],
@@ -103,10 +103,10 @@ c_default!(dev_alloc_list);
 
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
     pub struct alloc_trace_entry {
         pub dev: u8,
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub bits: pub struct alloc_trace_entry_bits {
             new_stripe_alloc:          bool,

@@ -3,9 +3,8 @@
 //! union - the runtime type information kvdb introspects values with.
 //!
 //! INFO describes every field: name, offset (`offset_of!`, so the compiler
-//! guarantees it) and kind. The fields are cstruct.rs's parse - every struct
-//! deriving TypeInfo is a CStruct - and a field's kind is its type's,
-//! cstruct::field_type().
+//! guarantees it) and kind. The fields are cstruct.rs's parse, and a field's
+//! kind is its type's, cstruct::field_type().
 //!
 //! Field types it can't describe - pointers, function pointers, generics,
 //! kernel-internal structs - are Opaque rather than an error, so deriving it

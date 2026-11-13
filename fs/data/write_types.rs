@@ -7,7 +7,7 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::types::{NeBytes, c_default};
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, Init, bitfield, bch_enum, TypeInfo};
+use cstruct_macros::{MaybeZeroable, Init, bitfield, bch_enum, TypeInfo, BitfieldMembers};
 use nestify::nest;
 use pin_init::pin_data;
 use crate::format::{Bpos, Bversion};
@@ -36,9 +36,10 @@ pub enum WriteFlagBit {
 }
 
 nest! {
-    #[derive(CStruct, TypeInfo)]*
+    #[derive(MaybeZeroable, TypeInfo)]*
     #[repr(C)]*
     pub struct bch_write_bio {
+        #>[derive(BitfieldMembers)]
         pub wbio: pub struct bch_write_bio_wbio {
             /* set at submit: 'static as a write op's fs() is */
             pub c: Option<&'static Fs>,
@@ -57,8 +58,8 @@ nest! {
 
             pub dev: u8,
 
-            #[c_bitfield]
-            #>[derive(CStruct, TypeInfo)]-
+            #[members]
+            #>[derive(MaybeZeroable, TypeInfo)]-
             #>[repr(C)]-
             #>[bitfield(u8)]
             pub bits: pub struct bch_write_bio_bits {
@@ -83,7 +84,7 @@ nest! {
     /* made by init(): bch2_write_op_init() */
     #[pin_data]
     #[repr(C)]
-    #[derive(CStruct, TypeInfo, Init)]
+    #[derive(MaybeZeroable, BitfieldMembers, TypeInfo, Init)]
     #[init_args(fs: &Fs, opts: c::bch_inode_opts)]
     pub struct bch_write_op {
         pub cl: crate::util::ffi::Opaque<c::closure>,
@@ -100,7 +101,7 @@ nest! {
         pub error: i16, /* dio write path expects it to hold -ERESTARTSYS... */
         pub io_error: u8,
 
-        #[c_bitfield]
+        #[members]
         #[init(bch_write_op_bits::new()
                .with_csum_type(fs.data_checksum_type(&opts).0 as u8)
                .with_compression_opt(opts.compression)

@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{bch_enum, c_xmacro, CStruct, Plain};
+use cstruct_macros::{bch_enum, c_xmacro, MaybeZeroable, Plain};
 
 /*
  * Wrapper for stack-allocated struct bkey_packed.
@@ -18,7 +18,7 @@ use cstruct_macros::{bch_enum, c_xmacro, CStruct, Plain};
  * padding.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain)]
 pub struct bkey_packed_padded {
     pub _pad: [u8; 8],
     pub k: c::bkey_packed,
@@ -47,7 +47,7 @@ c_xmacro! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct bkey_format_state {
     pub field_min: [u64; c::BkeyField::BKEY_NR_FIELDS as usize],
     pub field_max: [u64; c::BkeyField::BKEY_NR_FIELDS as usize],

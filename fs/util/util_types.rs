@@ -4,10 +4,10 @@
 
 use crate::cstructs::c;
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{CStruct, TypeInfo};
+use cstruct_macros::{MaybeZeroable, TypeInfo};
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_ratelimit {
     /* Next time we want to do some work, in nanoseconds */
     pub next: u64,
@@ -21,7 +21,7 @@ pub struct bch_ratelimit {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_pd_controller {
     pub rate: c::bch_ratelimit,
     pub last_update: c_ulong,
@@ -47,7 +47,7 @@ pub struct bch_pd_controller {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct memalloc_flags {
     pub flags: c_uint,
 }

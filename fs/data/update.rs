@@ -51,7 +51,7 @@ use core::ffi::{c_int, c_uint};
 use pin_init::stack_pin_init;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{CStruct, bitfield, bch_enum};
+use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
 use c::DataUpdateType as Type;
 use crate::data::read::{ReadFor, ReadDone, Rbio};
 use crate::types::c_default;
@@ -85,7 +85,7 @@ pub enum DataUpdateType {
  */
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, CStruct)]
+    #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers)]
     pub struct data_update_opts {
         pub type_: c::DataUpdateType,
         pub ptrs_io_error: u16,
@@ -93,7 +93,7 @@ nest! {
         pub ptrs_kill_ec: u16,
         pub extra_replicas: u8,
         pub target: u16,
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub bits: pub struct data_update_opts_bits {
             no_devs_have:      bool,
@@ -112,7 +112,7 @@ c_default!(data_update_opts);
 /// An update's key in the in-flight table: where it is, and whether it's
 /// copygc's - so one of each can be in flight at a position.
 #[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]
 pub struct data_update_key {
     pub btree: Btree,
     pub pos: Bpos,
@@ -120,7 +120,7 @@ pub struct data_update_key {
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct data_update {
     pub rcu: c::rcu_head,
     /* extent being updated: */

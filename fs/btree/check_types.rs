@@ -8,7 +8,7 @@ use crate::util::projections::Volatile;
 use crate::locking::{Locked, SeqLock};
 use crate::new_lock;
 use core::cmp::Ordering;
-use cstruct_macros::{bitfield, bch_enum, CStruct, Init, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, Init, TypeInfo, BitfieldMembers};
 use pin_init::pin_data;
 use nestify::nest;
 use crate::format::{Bpos, Btree};
@@ -25,9 +25,9 @@ pub enum GcPhase {
 
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
     pub struct gc_pos {
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u16)]
         pub bits: pub struct gc_pos_bits {
             #[bits(8)] pub phase: c::GcPhase,
@@ -113,7 +113,7 @@ impl Eq for gc_pos {}
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_gc {
     /// How far gc's walk has got: not_running, when there's none.
     pub pos: SeqLock<c::gc_pos>,
@@ -153,7 +153,7 @@ impl bch_fs_gc {
 }
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_fs_gc_gens {
     /* gc_gens's: where its walk is, for sysfs */
     pub pos: Volatile<c::bbpos>,

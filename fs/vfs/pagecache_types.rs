@@ -7,7 +7,7 @@
 use crate::cstructs::c;
 use crate::locking::Locked;
 use crate::types::c_default;
-use cstruct_macros::{bitfield, bch_enum, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, BitfieldMembers, MaybeZeroable, TypeInfo};
 use nestify::nest;
 use core::sync::atomic::AtomicI32;
 
@@ -50,9 +50,9 @@ impl FolioSectorState {
 
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, TypeInfo)]
     pub struct bch_folio_sector {
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub bits: pub struct bch_folio_sector_bits {
             /* Uncompressed, fully allocated replicas (or on disk reservation): */
@@ -81,7 +81,7 @@ pub const BCH_WRITEPAGE_BUF_BYTES: usize =
 /// completion with the folio unlocked, so the folio lock doesn't cover it.
 /// s[] has a sector of the folio each.
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct FolioState {
     /* is s[] up to date with the btree? says nothing about the data */
     pub state_uptodate: bool,
@@ -96,7 +96,7 @@ pub struct FolioState {
 }
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_folio {
     pub write_count: AtomicI32,
     /*

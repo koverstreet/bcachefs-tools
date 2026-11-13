@@ -12,7 +12,7 @@ use core::mem::{size_of, ManuallyDrop};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::{Acquire, AcqRel, Relaxed, SeqCst}};
-use cstruct_macros::{placed, CStruct, Init, Late, TypeInfo};
+use cstruct_macros::{placed, MaybeZeroable, Init, Late, TypeInfo};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::OpenBucket;
 use crate::btree::iter::{BtreeTrans, CommitOpts, TransAttempt, Watermark};
@@ -55,7 +55,7 @@ pub(crate) use split_merge::{check_topology, check_topology_msg, foreground_mayb
                              node_rewrite, split_leaf};
 
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, MaybeZeroable)]
 pub struct btree_alloc {
     pub ob: c::open_buckets,
     pub k: PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
@@ -74,7 +74,7 @@ pub const BTREE_NODE_RESERVE: u32 = c::BTREE_RESERVE_MAX * 4;
  * reserves fail halfway through) - instead, we can stick them here:
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct BtreeReserveCache {
     pub nr: c_uint,
     pub data: [c::btree_alloc; c::BTREE_NODE_RESERVE as usize * 2],
@@ -82,7 +82,7 @@ pub struct BtreeReserveCache {
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_btree_reserve_cache {
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), (), "&c->btree.reserve_cache.lock"))]
@@ -146,7 +146,7 @@ fn write_blocked<'a>(b: &'a BtreeNode, updates: &'a mut UpdatesGuard<'_>) -> &'a
 #[placed(c::bch_fs_btree.interior_updates)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init, Late)]
+#[derive(MaybeZeroable, TypeInfo, Init, Late)]
 pub struct bch_fs_btree_interior_updates {
     #[late(Mempool::kmalloc(1, size_of::<BtreeUpdate>()), ENOMEM_btree_interior_update_pool_init)]
     pub pool: Late<Mempool<Kmalloc>>,

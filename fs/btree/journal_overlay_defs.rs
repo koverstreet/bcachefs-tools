@@ -4,7 +4,7 @@
 
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 use crate::format::{Bpos, Btree};
 
 /*
@@ -12,7 +12,7 @@ use crate::format::{Bpos, Btree};
  * seq @seq - after an insert, searched for again
  */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct journal_iter {
     pub btree_id: Btree,
     pub level: c_uint,

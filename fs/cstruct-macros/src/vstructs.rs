@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 //! What util/vstructs.rs's traits need of a type C shares, from its
 //! definition: #[derive(Plain)] - and #[bitfield], every one of which is -
-//! #[counted_by(FIELD)], a CStruct's FlexArray, #[derive(View)], its
+//! #[derive(FlexArray)], from #[counted_by(FIELD)], #[derive(View)], its
 //! fields' projections on a View of it, and the families of definitions,
 //! one per state: #[unsized_vstruct], an unsized vstruct's; #[grown], a type
 //! that grew between format versions.
@@ -720,9 +720,11 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&Ident, usize
     let states = [("Validated", all.clone()), ("Unvalidated", all.clone())];
     let derives = derive_names(def);
     // X is generated: a derive generic_type() doesn't forward would be
-    // X__whole's alone, out of X's reach. CStruct reads the struct as
-    // written, which is X__whole
-    if let Some(d) = derives.iter().find(|d| *d != "CStruct" && !WHOLE_DERIVES.iter().any(|w| d == w)) {
+    // X__whole's alone, out of X's reach. Ours of the struct as written are
+    // X__whole's, and are what C's struct is
+    let of_whole = ["MaybeZeroable", "BitfieldMembers", "FlexArray"];
+    if let Some(d) = derives.iter()
+        .find(|d| !of_whole.iter().chain(WHOLE_DERIVES).any(|w| d == w)) {
         return Err(format!("{name}: #[derive({d})], but {name} - {name}<Whole> - is generated, and has \
                             only the derives generic_type() forwards to it: {}", WHOLE_DERIVES.join(", ")));
     }
@@ -1281,13 +1283,12 @@ fn rename_struct(item: TokenStream, def: &CStructDef, to: &Ident) -> Result<Toke
     Ok(out)
 }
 
-/// A CStruct's FlexArray, from #[counted_by(FIELD)] on its trailing `[T; 0]`
-/// - nothing if it has none.
+/// #[derive(FlexArray)], from #[counted_by(FIELD)] on the trailing `[T; 0]`.
 pub(crate) fn flex_array(def: &CStructDef) -> Result<TokenStream, String> {
     let name = &def.ident;
     let Some((i, f, count)) = def.fields.iter().enumerate().find_map(|(i, f)| Some((i, f, f.counted_by.as_ref()?)))
     else {
-        return Ok(TokenStream::new());
+        return Err(format!("{name}: no #[counted_by(FIELD)] field"));
     };
     let elem = match flex_elem(&f.ty) {
         Some(elem) if i + 1 == def.fields.len() => elem,

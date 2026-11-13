@@ -61,7 +61,7 @@ use core::mem::size_of;
 use core::pin::Pin;
 use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{bitfield, CStruct, Init};
+use cstruct_macros::{bitfield, MaybeZeroable, Init, BitfieldMembers};
 use c::Errcode as e;
 use c::FsFlag as f;
 use crate::journal::JournalEntries;
@@ -73,7 +73,7 @@ use pin_init::{pin_data, pinned_drop};
 use crate::format::{Bpos, Btree, BkeyType};
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct journal_ptr {
     pub csum_good: bool,
     pub csum: c::bch_csum,
@@ -88,7 +88,7 @@ pub struct journal_ptr {
  * during cache_registration
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct journal_replay {
     pub ptrs: KVVec<c::journal_ptr>,
 
@@ -100,7 +100,8 @@ pub struct journal_replay {
 }
 
 nest! {
-    #[derive(CStruct)]*
+    #[derive(MaybeZeroable)]*
+    #[derive(BitfieldMembers)]
     #[repr(C)]
     pub struct journal_key {
         #>[repr(C)]
@@ -114,15 +115,15 @@ nest! {
             },
             pub allocated_k: *mut c::bkey_i,
         },
-        #[c_bitfield]
-        #>[derive(CStruct)]-
+        #[members]
+        #>[derive(MaybeZeroable)]-
         #>[bitfield(u16)]
         pub id: pub struct journal_key_id {
             #[bits(8)] pub btree_id: Btree,
             level:       u8,
         },
-        #[c_bitfield]
-        #>[derive(CStruct)]-
+        #[members]
+        #>[derive(MaybeZeroable)]-
         #>[bitfield(u8)]
         pub flags: pub struct journal_key_flags {
             allocated:   bool,
@@ -153,7 +154,7 @@ unsafe impl RcuElement for OverwriteRange {}
 
 /* overwrite_lock's: how many of the ranges are in use, the first a sentinel */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct OverwriteRanges {
     pub overwrites_nr: usize,
 }
@@ -161,7 +162,7 @@ pub struct OverwriteRanges {
 published! {
     /// The ranges, read without overwrite_lock under RCU: a key's
     /// overwritten_range indexes them.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct OverwriteRangesLive {
         pub ranges: RcuArray<OverwriteRange>,
     }
@@ -172,7 +173,7 @@ published! {
 /// put drops them.
 #[pin_data(PinnedDrop)]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct journal_keys {
     /*
      * The keys, a gap buffer: data_structures/gap_buffer.rs, whose fields C reads as

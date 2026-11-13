@@ -163,11 +163,11 @@ use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 use crate::data::ptrs::BtreePtrs;
 use crate::types::c_default;
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 use crate::format::{Bpos, Btree, BkeyType};
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct trans_for_each_path_inorder_iter {
     pub sorted_idx: PathIdx,
     pub path_idx: PathIdx,
@@ -179,7 +179,7 @@ pub struct trans_for_each_path_inorder_iter {
  * nest: an inner one ending doesn't end the outer.
  */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct trans_may_drop_updates {
     pub trans: *mut BtreeTrans<'static>,
     pub old: bool,

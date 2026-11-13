@@ -24,7 +24,7 @@ use crate::prt;
 use crate::util::printbuf::Msg;
 use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
-use cstruct_macros::{bch_enum, CStruct};
+use cstruct_macros::{bch_enum, MaybeZeroable};
 use crate::util::alloc::KVVec;
 use crate::format::{Bpos, Btree};
 
@@ -39,7 +39,7 @@ pub enum SetNeedsReconcileCtx {
 
 /* Inodes in different snapshots may have different IO options: */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct snapshot_io_opts_entry {
     pub snapshot: u32,
     pub io_opts: c::bch_inode_opts,

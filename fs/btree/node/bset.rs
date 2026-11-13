@@ -20,7 +20,7 @@ use crate::util::Printbuf;
 use core::cmp::Ordering;
 use core::fmt;
 use core::mem::offset_of;
-use cstruct_macros::{CStruct, bch_enum};
+use cstruct_macros::{MaybeZeroable, bch_enum};
 
 /*
  * BKEYS:
@@ -160,7 +160,7 @@ use cstruct_macros::{CStruct, bch_enum};
 pub const MAX_BSETS: u32 = 3;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct BsetTree {
     /*
      * We construct a binary tree in an array as if the array
@@ -253,14 +253,14 @@ pub const BSET_TREE_NR_TYPES: u32 = 3;
 
 /* bset_stats.sets[]: the counts for one bset tree type */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct BsetStatsSet {
     pub nr: usize,
     pub bytes: usize,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct BsetStats {
     pub sets: [BsetStatsSet; c::BSET_TREE_NR_TYPES as usize],
 

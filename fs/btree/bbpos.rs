@@ -2,12 +2,12 @@
 
 use crate::c;
 use core::cmp::Ordering;
-use cstruct_macros::{CStruct, Plain, bitfield};
+use cstruct_macros::{MaybeZeroable, Plain, bitfield, BitfieldMembers};
 use nestify::nest;
 use crate::format::{Bpos, Btree};
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain)]
 pub struct bbpos {
     pub btree: Btree,
     pub pos: Bpos,
@@ -23,9 +23,9 @@ unsafe impl crate::util::projections::TearSafe for bbpos {}
  */
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
     pub struct blbpos {
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u16)]
         pub bits: pub struct blbpos_bits {
             #[bits(16)] pub btree: Btree,

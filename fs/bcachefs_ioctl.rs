@@ -7,7 +7,7 @@ use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
-use cstruct_macros::{bch_enum, c_ioctl, counted, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bch_enum, c_ioctl, counted, MaybeZeroable, Plain, TypeInfo, FlexArray};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -133,7 +133,7 @@ c_ioctl! {
  */
 #[counted]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_get_damage {
     /* in: capacity; out: the true count, which may be more */
     pub nr_entries: u32,
@@ -175,7 +175,7 @@ pub const BCH_READDIR_subvolumes_only: u32 = 1 << 1;
  * @used	- out: bytes of @buf filled
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_readdir_flags {
     pub pos: [u64; 2],
     pub buf: u64,
@@ -192,7 +192,7 @@ pub struct bch_ioctl_readdir_flags {
  * details come from BCHFS_IOC_GET_DAMAGE on the file itself.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_readdir_entry {
     pub reclen: u32,
     pub d_type: u8,
@@ -209,7 +209,7 @@ impl crate::util::vstructs::SelfSized for bch_ioctl_readdir_entry {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_err_msg {
     pub msg_ptr: u64,
     pub msg_len: u32,
@@ -224,7 +224,7 @@ pub struct bch_ioctl_err_msg {
  * this UUID.
  */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_query_uuid {
     pub uuid: c::__uuid_t,
 }
@@ -278,7 +278,7 @@ c_default!(bch_ioctl_query_uuid);
  */
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_disk {
     pub flags: u32,
     pub pad: u32,
@@ -286,7 +286,7 @@ pub struct bch_ioctl_disk {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_v2 {
     pub flags: u32,
     pub pad: u32,
@@ -305,7 +305,7 @@ pub struct bch_ioctl_disk_v2 {
  * failed or spare) unless the appropriate BCH_FORCE_IF_* flags are set.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_set_state {
     pub flags: u32,
     pub new_state: u8,
@@ -314,7 +314,7 @@ pub struct bch_ioctl_disk_set_state {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_set_state_v2 {
     pub flags: u32,
     pub new_state: u8,
@@ -345,7 +345,7 @@ pub enum DataOp {
  * job. The file descriptor is O_CLOEXEC.
  */
 nest! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
+    #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
     #[repr(C, align(8))]
     pub struct bch_ioctl_data {
         pub op: u16,
@@ -422,7 +422,7 @@ pub enum DataProgressDataTypeSpecial {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_ioctl_data_progress {
     pub data_type: u8,
     pub btree_id: u8,
@@ -443,7 +443,7 @@ pub enum IoctlDataEventRet {
 }
 
 nest! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
+    #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
     #[repr(C, align(8))]
     pub struct bch_ioctl_data_event {
         pub type_: u8,
@@ -460,7 +460,7 @@ c_default!(bch_ioctl_data_event);
 
 #[counted(r.nr_devs, tail = devs: [u8])]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_replicas_usage {
     pub sectors: u64,
     pub r: Head<c::bch_replicas_entry_v1>,
@@ -481,7 +481,7 @@ pub struct bch_replicas_usage {
  * Returns -ERANGE if @replica_entries_bytes was too small
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_fs_usage {
     pub capacity: u64,
     pub used: u64,
@@ -495,7 +495,7 @@ pub struct bch_ioctl_fs_usage {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_dev_usage_type {
     pub buckets: u64,
     pub sectors: u64,
@@ -510,7 +510,7 @@ pub struct bch_ioctl_dev_usage_type {
  * sectors.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_dev_usage {
     pub dev: u64,
     pub flags: u32,
@@ -528,7 +528,7 @@ pub struct bch_ioctl_dev_usage {
 /* Obsolete */
 #[counted(nr_data_types)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_dev_usage_v2 {
     pub dev: u64,
     pub flags: u32,
@@ -557,7 +557,7 @@ pub struct bch_ioctl_dev_usage_v2 {
  * Returns -ERANGE if buffer provided is too small
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_read_super {
     pub flags: u32,
     pub pad: u32,
@@ -573,7 +573,7 @@ pub struct bch_ioctl_read_super {
  * Returns -ENOENT if not found
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_get_idx {
     pub dev: u64,
 }
@@ -585,7 +585,7 @@ pub struct bch_ioctl_disk_get_idx {
  * @nbuckets	- new number of buckets
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_resize {
     pub flags: u32,
     pub pad: u32,
@@ -594,7 +594,7 @@ pub struct bch_ioctl_disk_resize {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_resize_v2 {
     pub flags: u32,
     pub pad: u32,
@@ -610,7 +610,7 @@ pub struct bch_ioctl_disk_resize_v2 {
  * @nbuckets	- new number of buckets
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_resize_journal {
     pub flags: u32,
     pub pad: u32,
@@ -619,7 +619,7 @@ pub struct bch_ioctl_disk_resize_journal {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_resize_journal_v2 {
     pub flags: u32,
     pub pad: u32,
@@ -629,7 +629,7 @@ pub struct bch_ioctl_disk_resize_journal_v2 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_subvolume {
     pub flags: u32,
     pub dirfd: u32,
@@ -640,7 +640,7 @@ pub struct bch_ioctl_subvolume {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_subvolume_v2 {
     pub flags: u32,
     pub dirfd: u32,
@@ -660,7 +660,7 @@ pub const BCH_SUBVOL_SNAPSHOT_RO: u32 = 1 << 1;
  */
 #[counted(nr_devs)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_fsck_offline {
     pub flags: u64,
     pub opts: u64, /* string */
@@ -678,7 +678,7 @@ pub struct bch_ioctl_fsck_offline {
  * but with the kernel's implementation of fsck:
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_fsck_online {
     pub flags: u64,
     pub opts: u64, /* string */
@@ -698,7 +698,7 @@ pub struct bch_ioctl_fsck_online {
  * Returns -ERANGE if @replica_entries_bytes was too small
  */
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, MaybeZeroable, TypeInfo)]
 pub struct bch_ioctl_query_accounting {
     pub capacity: u64,
     pub used: u64,
@@ -734,7 +734,7 @@ pub const BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR: u32 = 8;
  * Entries from BCH_REPLICAS_MAX up are zero.
  */
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, MaybeZeroable, TypeInfo)]
 pub struct bch_ioctl_query_accounting_v2 {
     pub capacity: u64,
     pub used: u64,
@@ -753,7 +753,7 @@ pub const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u32 = 1 << 0;
 
 #[counted(nr)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_query_counters {
     pub nr: u16,
     pub flags: u16,
@@ -762,7 +762,7 @@ pub struct bch_ioctl_query_counters {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_subvol_dirent {
     pub reclen: u32,
     pub subvolid: u32,
@@ -801,7 +801,7 @@ impl crate::util::vstructs::SelfSized for bch_ioctl_subvol_dirent {
  * with a bigger one.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_subvol_readdir {
     pub pos: u32,
     pub buf_size: u32,
@@ -825,7 +825,7 @@ pub struct bch_ioctl_subvol_readdir {
  * reachable from the fd, -ERANGE if the buffer is too small.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_subvol_to_path {
     pub subvolid: u32,
     pub buf_size: u32,
@@ -852,7 +852,7 @@ pub struct bch_ioctl_subvol_to_path {
  * add fields to bch_ioctl_snapshot_node_v2, which is size-negotiated.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_node {
     pub id: u32, /* snapshot ID */
     pub parent: u32, /* parent snapshot ID, 0 for root */
@@ -865,7 +865,7 @@ pub struct bch_ioctl_snapshot_node {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, FlexArray, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_tree_query {
     pub tree_id: u32, /* in: 0 = infer from fd's subvol */
     pub master_subvol: u32, /* out */
@@ -887,7 +887,7 @@ pub struct bch_ioctl_snapshot_tree_query {
  * to know what's present.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_node_v2 {
     pub id: u32, /* snapshot ID */
     pub parent: u32, /* parent snapshot ID, 0 for root */
@@ -902,7 +902,7 @@ pub struct bch_ioctl_snapshot_node_v2 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, FlexArray, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_tree_query_v2 {
     pub tree_id: u32, /* in: 0 = infer from fd's subvol */
     pub master_subvol: u32, /* out */
@@ -936,7 +936,7 @@ pub enum ProgressUnit {
  * the point of having the room here now, so that widening isn't an ABI break.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_recovery_pass_mask {
     pub v: [u64; 2],
 }
@@ -966,7 +966,7 @@ pub struct bch_recovery_pass_mask {
  * spinner rather than an empty bar.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_ioctl_recovery_status {
     pub passes_scheduled_sb: c::bch_recovery_pass_mask,
     pub passes_scheduled_ephemeral: c::bch_recovery_pass_mask,
@@ -1002,7 +1002,7 @@ pub const BCH_PREAD_RAW_ERR_ec_reconstruct: u32 = 1 << 3;
  * extent poisoning so corrupted data can be recovered.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_pread_raw {
     pub offset: u64,
     pub len: u64,
@@ -1020,7 +1020,7 @@ pub struct bch_ioctl_pread_raw {
  * poison flag, allowing the data to be read again normally.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_unpoison {
     pub offset: u64,
     pub len: u64,
@@ -1084,7 +1084,7 @@ pub const BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts: u32 = 1 << 3;
  * Returns -ERANGE if @buf_size is too small to hold even one key.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_query_btree_keys {
     pub btree: u32,
     pub level: u32,

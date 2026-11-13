@@ -31,12 +31,12 @@ use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 
 /* Btree nodes: */
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, CStruct)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, MaybeZeroable)]
 pub struct BtreeNrKeys {
     /*
      * Amount of live metadata (i.e. size of node after a compaction) in
@@ -84,14 +84,14 @@ impl BtreeNrKeys {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct BkeyUnpackField {
     pub byte_offset: i8,
     pub shift_right: u8, /* 64 - bits, or 64 if field has no bits in packed */
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct BtreeNode {
     pub c: cs::btree_bkey_cached_common,
 
@@ -157,7 +157,7 @@ pub struct BtreeNode {
 /// A node's keys, their buffer, their format and its key: the node lock's -
 /// written with it held for write, read with it held any way.
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct NodeContents {
     /* swapped for a sort's bounce buffer, with the node held for write */
     pub data: *mut Head<cs::btree_node>,

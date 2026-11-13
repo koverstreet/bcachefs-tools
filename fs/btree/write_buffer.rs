@@ -47,7 +47,7 @@ use core::marker::PhantomData;
 use core::mem::{offset_of, size_of};
 use core::ptr::NonNull;
 use core::sync::atomic::fence;
-use cstruct_macros::{placed, CStruct, Init, TypeInfo, bch_enum};
+use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo, bch_enum};
 use nestify::nest;
 use pin_init::pin_data;
 
@@ -92,7 +92,7 @@ pub const BTREE_WRITE_BUFERED_VAL_U64s_MAX: u32 = 4;
  */
 #[cfg(target_endian = "little")]
 nest! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(Clone, Copy, MaybeZeroable)]*
     #[repr(C)]
     pub struct wb_key_ref {
         #>[repr(C)]
@@ -114,7 +114,7 @@ nest! {
 
 #[cfg(target_endian = "big")]
 nest! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(Clone, Copy, MaybeZeroable)]*
     #[repr(C)]
     pub struct wb_key_ref {
         #>[repr(C)]
@@ -136,7 +136,7 @@ nest! {
 c_default!(wb_key_ref);
 
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, MaybeZeroable)]
 pub struct btree_write_buffered_key {
     pub journal_seq: u64,
 
@@ -194,7 +194,7 @@ type FlushingGuard<'a> = ExclusiveGuard<'a, c::mutex, Flushing, FlushingLive>;
 #[placed(c::bch_fs_btree_write_buffer.inc_pin)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct wb_inc_pin {
     pub pin: c::journal_entry_pin,
 }
@@ -203,7 +203,7 @@ pub struct wb_inc_pin {
 #[placed(c::bch_fs_btree_write_buffer.flushing_pin)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct wb_flushing_pin {
     pub pin: c::journal_entry_pin,
 }
@@ -213,7 +213,7 @@ const _: () = assert!(offset_of!(wb_inc_pin, pin) == 0 && offset_of!(wb_flushing
 #[placed(c::bch_fs_btree.write_buffer[], index = idx: u32)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_btree_write_buffer {
     #[pin]
     #[init(new_lock!(Inc::default(), ::pin_init::zeroed(), "&wb->inc.lock"))]

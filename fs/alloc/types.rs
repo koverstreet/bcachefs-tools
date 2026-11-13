@@ -17,7 +17,7 @@ use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64, AtomicU8};
-use cstruct_macros::{bitfield, bch_enum, placed, CStruct, Fieldwise, Init, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Fieldwise, Init, TypeInfo, BitfieldMembers};
 use pin_init::pin_data;
 use nestify::nest;
 
@@ -171,7 +171,7 @@ nest! {
     #[placed(bch_fs_allocator.open_buckets[], index = idx: c::open_bucket_idx_t)]
     #[pin_data]
     #[repr(C)]
-    #[derive(CStruct, Init)]
+    #[derive(MaybeZeroable, Init)]
     pub struct open_bucket {
         #[pin]
         #[init(new_lock!((), ::pin_init::zeroed(), "&ob->lock"))]
@@ -222,15 +222,15 @@ unsafe impl crate::util::projections::AtomicWord for OpenBucketId {
 
 published! {
     /// An open bucket's identity: written under its lock, read without it.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable, BitfieldMembers)]
     pub struct OpenBucketIdentity {
-        #[c_bitfield]
+        #[members]
         pub id: Volatile<OpenBucketId>,
     }
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct open_buckets {
     pub nr: c::open_bucket_idx_t,
     pub v: [Option<OpenBucketIdx>; c::BCH_BKEY_PTRS_MAX as usize],
@@ -250,7 +250,7 @@ pub struct open_buckets {
  * to the rest of the hands, starving the other devs in the meantime.
  */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct dev_stripe_state {
     pub next_alloc: [u64; c::BCH_SB_MEMBERS_MAX as usize],
     pub cached_devs: c::bch_devs_mask,
@@ -271,7 +271,7 @@ pub enum WritePointStatus {
 
 /* the write point lock's: what a write allocating from it uses */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct WritePointLocked {
     /* calculated based on how many pointers we're actually going to use: */
     pub sectors_free: c_uint,
@@ -287,7 +287,7 @@ published! {
     /// Which write point it is, and when it was last used: written under its
     /// lock - and the identity under write_points_hash_lock too - and read
     /// without either, to find one or the one to reuse.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct WritePointId {
         pub last_used: Volatile<u64>,
         pub write_point: Volatile<c_ulong>,
@@ -296,7 +296,7 @@ published! {
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 #[init_args(data_type: DataType)]
 pub struct write_point_alloc {
     pub __align: CacheAligned,
@@ -311,7 +311,7 @@ pub struct write_point_alloc {
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 #[init_args(data_type: DataType)]
 pub struct write_point {
     #[pin]
@@ -325,7 +325,7 @@ pub struct write_point {
 /* writes_lock's: the writes waiting for their index updates, and the clock of
  * the write point's state */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct WritePointWrites {
     pub writes: c::WriteOpList,
     pub last_state_change: u64,
@@ -337,7 +337,7 @@ published! {
     /// What state the write point's writes are in, and how long it's spent
     /// in each: written under writes_lock, read without it - the state by
     /// bch2_write_queue()'s check, the times by write_points_to_text().
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct WritePointState {
         pub state: Volatile<u32>,
         pub time: [Volatile<u64>; c::WritePointStatus::NR as usize],
@@ -346,7 +346,7 @@ published! {
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct write_point_io {
     pub __align: CacheAligned,
     #[pin]
@@ -359,7 +359,7 @@ pub struct write_point_io {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable)]
 pub struct write_point_specifier {
     pub v: c_ulong,
 }
@@ -369,7 +369,7 @@ published! {
     /// decides how much fits: recomputed with the reservation caches - from
     /// what it was, for hysteresis - and read without the lock by the
     /// allocator, as a placement preference - see dev_alloc_required().
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct Placement {
         /* bit n - 1: placement decides how much fits at n replicas */
         pub placement_constrained: Volatile<c_ulong>,
@@ -380,7 +380,7 @@ published! {
 
 /* capacity.pcpu's counters: each CPU's a delta, summed over them */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_fs_capacity_counters {
     pub usage: c::bch_fs_usage_base,
@@ -389,7 +389,7 @@ pub struct bch_fs_capacity_counters {
 }
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_fs_capacity_pcpu {
     pub counters: bch_fs_capacity_counters,
     /*
@@ -402,7 +402,7 @@ pub struct bch_fs_capacity_pcpu {
 /// See alloc/capacity.rs.
 #[pin_data(PinnedDrop)]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_capacity {
     /* sectors: recalc_capacity()'s, under state_lock, read without it */
     pub capacity: crate::util::projections::Volatile<u64>,
@@ -437,7 +437,7 @@ pub type MarkLockAt = crate::at!(bch_fs_capacity.mark_lock);
 #[placed(Fs.allocator)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_allocator {
     pub rw_devs: [c::AtomicDevsMask; c::DataType::NR as usize],
     /* bumped as a device goes read-write or read-only, under state_lock;
@@ -478,7 +478,7 @@ pub struct bch_fs_allocator {
 
 /* freelist_lock's: the open buckets not in use, and the partial list */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct OpenBucketsFree {
     pub open_buckets_freelist: Option<OpenBucketIdx>,
     pub open_buckets_partial: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
@@ -488,7 +488,7 @@ published! {
     /// How many there are of each, read without freelist_lock: whether
     /// there's an open bucket to be had, whether the partial list is worth
     /// taking the lock for.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct OpenBucketsFreeNr {
         pub open_buckets_nr_free: Volatile<c::open_bucket_idx_t>,
         pub open_buckets_partial_nr: Volatile<c::open_bucket_idx_t>,
@@ -499,7 +499,7 @@ published! {
     /// The write points in use, of write_points[], and their hash, by the
     /// specifier each was last used for: read without write_points_hash_lock
     /// - write_point.rs.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct WritePointsHash {
         pub write_points_nr: Volatile<c_uint>,
         pub write_points_hash: [Volatile<Option<WritePointIdx>>; c::WRITE_POINT_HASH_NR as usize],
@@ -511,7 +511,7 @@ published! {
 #[placed(Fs.discards)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_discards {
     #[pin]
     pub(crate) work: ReffedWork<do_discards_work, crate::field!(super.writes)>,

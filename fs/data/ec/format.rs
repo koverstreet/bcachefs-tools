@@ -4,17 +4,17 @@
 
 use crate::cstructs::c;
 use crate::types::Le16;
-use cstruct_macros::{bitfield, whole, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bitfield, whole, MaybeZeroable, Plain, TypeInfo, BitfieldMembers};
 use nestify::nest;
 
 nest! {
     #[whole(tail = ptrs: [u8], bkey)]
     #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
     pub struct Stripe {
         pub v: c::bch_val,
         pub sectors: Le16,
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub bits: pub struct bch_stripe_bits {
             algorithm:       u4,

@@ -18,7 +18,7 @@
 
 use core::cmp::{Ordering, Reverse};
 use core::ffi::c_int;
-use cstruct_macros::{CStruct, bitfield, TypeInfo};
+use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use crate::btree::bkey::ValidateFlags;
 use crate::c;
 pub use crate::cstructs::sb_errors_format::{FsckFlags, SbErrorId};
@@ -35,9 +35,9 @@ use nestify::nest;
 
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, TypeInfo)]
     pub struct bch_sb_error_entry_cpu {
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u64)]
         pub bits: pub struct bch_sb_error_entry_cpu_bits {
             id: u16,

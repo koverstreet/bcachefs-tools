@@ -28,10 +28,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::types::Le64;
-use cstruct_macros::{CStruct, Plain};
+use cstruct_macros::{MaybeZeroable, Plain};
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain)]
 pub struct SIPHASH_KEY {
     pub k0: Le64,
     pub k1: Le64,

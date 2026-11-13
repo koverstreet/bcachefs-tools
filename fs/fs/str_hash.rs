@@ -25,12 +25,12 @@ use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
 use bitflags::bitflags;
 use core::ffi::c_void;
-use cstruct_macros::{CStruct, TypeInfo};
+use cstruct_macros::{MaybeZeroable, TypeInfo};
 use crate::types::c_default;
 use crate::format::{Bpos, Btree, BkeyType, SbFeature};
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
 pub struct bch_hash_info {
     pub inum_snapshot: u32,
     pub type_: u8,

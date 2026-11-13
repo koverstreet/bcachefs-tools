@@ -12,7 +12,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 
 /*
  * Streaming median + MAD (median absolute deviation), via a
@@ -46,7 +46,7 @@ use cstruct_macros::CStruct;
  * roughly "spread around typical."
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct mean_and_variance {
     pub n: i64,
     pub sum: i64,

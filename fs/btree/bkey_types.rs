@@ -13,7 +13,7 @@ use crate::cstructs::c as cs;
 use crate::cstructs::c::BkeyType_arms;
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, bch_enum};
+use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
 use nestify::nest;
 use crate::format::Btree;
 
@@ -102,7 +102,7 @@ use crate::format::Btree;
 
 /* bkey with split value, const */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct bkey_s_c {
     pub k: *const cs::bkey,
     pub v: *const cs::bch_val,
@@ -112,13 +112,13 @@ c_default!(bkey_s_c);
 /* bkey with split value */
 nest! {
     #[repr(C)]
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct bkey_s {
         #>[repr(C)]
-        #>[derive(Clone, Copy, CStruct)]
+        #>[derive(Clone, Copy, MaybeZeroable)]
         pub split: pub union bkey_s_split {
             #>[repr(C)]
-            #>[derive(Clone, Copy, CStruct)]
+            #>[derive(Clone, Copy, MaybeZeroable)]
             pub kv: pub struct bkey_s_kv {
                 pub k: *mut cs::bkey,
                 pub v: *mut cs::bch_val,
@@ -161,9 +161,9 @@ pub enum BkeyValidateFrom {
 
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
     pub struct bkey_validate_context {
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u16)]
         pub bits: pub struct bkey_validate_context_bits {
             #[bits(8)] pub from: cs::BkeyValidateFrom,
@@ -171,7 +171,7 @@ nest! {
         },
         pub level: u8,
         pub btree: Btree,
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub root_bits: pub struct bkey_validate_context_root_bits {
             root:  bool,

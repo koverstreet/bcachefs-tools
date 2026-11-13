@@ -21,12 +21,12 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bch_enum, TypeInfo};
+use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
 use crate::types::c_default;
 use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits};
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
 pub union bch_extent_crc {
     pub type_: u8,
     pub crc32: c::bch_extent_crc32,
@@ -37,7 +37,7 @@ c_default!(bch_extent_crc);
 
 /* bkey_ptrs: generically over any key type that has ptrs */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct bkey_ptrs_c {
     pub start: *const c::bch_extent_entry,
     pub end: *const c::bch_extent_entry,
@@ -45,7 +45,7 @@ pub struct bkey_ptrs_c {
 c_default!(bkey_ptrs_c);
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct bkey_ptrs {
     pub start: *mut c::bch_extent_entry,
     pub end: *mut c::bch_extent_entry,
@@ -74,7 +74,7 @@ c_default!(bkey_ptrs);
  * special-case it themselves.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct bkey_durability {
     pub online: u8,
     pub total: u8,
@@ -113,7 +113,7 @@ pub struct bkey_durability {
 
 #[repr(C)]
 /// Equal as bch2_crc_unpacked_cmp() says: every field.
-#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable, TypeInfo)]
 pub struct bch_extent_crc_unpacked {
     pub compressed_size: u32,
     pub uncompressed_size: u32,
@@ -130,7 +130,7 @@ pub struct bch_extent_crc_unpacked {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct extent_ptr_decoded {
     pub has_ec: bool,
     pub do_ec_reconstruct: bool,
@@ -143,7 +143,7 @@ pub struct extent_ptr_decoded {
 /// What failed reading or writing a key's pointers, for C: its size, not its
 /// layout - C asks it what it holds.
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, MaybeZeroable, TypeInfo)]
 pub struct bch_io_failures {
     pub(crate) failures: IoFailures<{ c::BCH_BKEY_PTRS_MAX as usize }>,
 }

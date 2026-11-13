@@ -25,7 +25,7 @@ use crate::published;
 use crate::types::c_default;
 use crate::util::projections::Volatile;
 use crate::util::workqueue::ReffedWork;
-use cstruct_macros::{placed, CStruct, Init, TypeInfo, bch_enum};
+use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo, bch_enum};
 use pin_init::pin_data;
 use crate::format::{Btree, SbFeature};
 
@@ -53,7 +53,7 @@ pub enum RunRecoveryPassFlags {
 /// What the runner keeps under its lock - taken with interrupts off, as
 /// scheduling can come from where they are. Nothing else reads it.
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
 pub struct bch_recovery_runner {
     /*
      * When current_pass started, monotonic, for recovery_status to print
@@ -91,7 +91,7 @@ c_default!(bch_recovery_runner);
 published! {
     /// What the runner publishes: read without its lock - by C, by the
     /// allocator, a word at a time - and written by the runner under it.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct RecoveryWords {
         /* counterpart to c->sb.recovery_passes_required */
         pub scheduled_passes_ephemeral: Volatile<u64>,
@@ -107,7 +107,7 @@ published! {
 #[placed(Fs.recovery)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_recovery {
     /*
      * The running pass's progress, for recovery_status to read. One

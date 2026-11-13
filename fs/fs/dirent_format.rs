@@ -33,7 +33,7 @@ use crate::types::{c_default, Le32, Le64};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::mem::offset_of;
-use cstruct_macros::{bitfield, CStruct, TypeInfo, SizedVal};
+use cstruct_macros::{bitfield, MaybeZeroable, TypeInfo, SizedVal, BitfieldMembers};
 use nestify::nest;
 use zerocopy::byteorder::little_endian as le;
 
@@ -50,8 +50,8 @@ use zerocopy::byteorder::little_endian as le;
  * collision:
  */
 nest! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
-    #[derive(SizedVal)]
+    #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
+    #[derive(SizedVal, BitfieldMembers)]
     #[repr(C, align(8))]
     pub struct Dirent {
         pub v: cs::bch_val,
@@ -72,8 +72,8 @@ nest! {
          * Copy of mode bits 12-15 from the target inode - so userspace can get
          * the filetype without having to do a stat()
          */
-        #[c_bitfield]
-        #>[derive(Clone, Copy, CStruct, TypeInfo)]-
+        #[members]
+        #>[derive(Clone, Copy, MaybeZeroable, TypeInfo)]-
         #>[bitfield(u8)]
         pub bits: pub struct bch_dirent_bits {
             d_type:     u5,

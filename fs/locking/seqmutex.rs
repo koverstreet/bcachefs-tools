@@ -12,10 +12,10 @@ use crate::cstructs::c;
 use core::convert::Infallible;
 use core::ffi::{c_void, CStr};
 use core::sync::atomic::{AtomicU32, Ordering};
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct seqmutex {
     pub lock: c::mutex,
     /* C writes it under the mutex */

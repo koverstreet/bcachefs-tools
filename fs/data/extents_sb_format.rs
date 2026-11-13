@@ -4,11 +4,11 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_extent_type_u64s {
     pub field: Head<c::bch_sb_field>,
     pub d: [u8; 0],

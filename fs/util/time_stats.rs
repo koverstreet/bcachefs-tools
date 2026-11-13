@@ -35,7 +35,7 @@ use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{percpu_field, warn_on_once};
 use core::pin::Pin;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
-use cstruct_macros::{CStruct, Init};
+use cstruct_macros::{MaybeZeroable, Init};
 use pin_init::{pinned_drop, pin_data};
 use crate::new_lock;
 use crate::types::c_default;
@@ -50,27 +50,27 @@ pub const NR_QUANTILES: u32 = 15;
 /* written under the stats' lock, read without it - write.c's congestion
  * accounting, the device's congested_to_text() */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct quantile_entry {
     pub m: Volatile<u64>,
     pub step: Volatile<u64>,
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct quantiles {
     pub entries: [c::quantile_entry; c::NR_QUANTILES as usize],
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct time_stat_buffer_entry {
     pub start: Volatile<u64>,
     pub end: Volatile<u64>,
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct time_stat_buffer {
     /*
      * Guards nr and entries for its own cpu: interrupts off - or on
@@ -94,7 +94,7 @@ pub const TIME_STATS_MV_WEIGHT: u32 = 8;
 
 /* the stats' lock's: all in nanoseconds */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct TimeStatsLocked {
     pub min_duration: u64,
     pub max_duration: u64,
@@ -113,7 +113,7 @@ c_default!(TimeStatsLocked);
 
 #[pin_data(PinnedDrop)]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct bch2_time_stats {
     #[pin]
     #[init(new_lock!(c::TimeStatsLocked::new(), "&stats->lock"))]
@@ -128,7 +128,7 @@ pub struct bch2_time_stats {
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct bch2_time_stats_quantiles {
     #[pin]
     #[init(c::bch2_time_stats::init())]

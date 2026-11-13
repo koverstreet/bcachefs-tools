@@ -6,7 +6,7 @@
 //
 // The items:
 //
-//   #[derive(CStruct)] struct / union, named fields.
+//   The derives' struct / union, named fields.
 //
 //   #[type_name(NAME)] on the struct: its name to TypeInfo, where the item's
 //   differs - a family's definition, X__head, whose name the family's type
@@ -29,7 +29,7 @@ pub(crate) enum CKind {
     Union,
 }
 
-/// A #[derive(CStruct)] struct or union: its name and fields, in order.
+/// A derive's struct or union: its name and fields, in order.
 pub(crate) struct CStructDef {
     /// The item's name.
     pub(crate) ident:     syn::Ident,
@@ -54,8 +54,8 @@ pub(crate) struct CFieldDef {
     pub(crate) ident:    syn::Ident,
     pub(crate) ty:       syn::Type,
     pub(crate) vis:      syn::Visibility,
-    /// #[c_bitfield]: its type is a bitfield-struct type, whose members are
-    /// the struct's too.
+    /// #[members]: its type is a #[bitfield] type, whose members are the
+    /// struct's too.
     pub(crate) bitfield: bool,
     /// #[counted_by(FIELD)], on a trailing `[T; 0]`: the field its length
     /// is - C's __counted_by(), as the struct's FlexArray impl.
@@ -262,7 +262,7 @@ fn parse_struct(d: syn::DeriveInput) -> Result<Option<CStructDef>, String> {
     };
     let fields_of = fields
         .filter(|_| d.generics.const_params().next().is_none())
-        .ok_or_else(|| format!("{name}: a CStruct has named fields, and no const generics - an unsized \
+        .ok_or_else(|| format!("{name}: named fields, and no const generics - an unsized \
                                 vstruct's states are each its own definition: #[unsized_vstruct]"))?;
 
     let mut fields = Vec::new();
@@ -275,7 +275,7 @@ fn parse_struct(d: syn::DeriveInput) -> Result<Option<CStructDef>, String> {
                     .map_err(|_| format!("{name}: #[counted_by(FIELD)] takes the field that counts it"))?);
             }
         }
-        let (bitfield, placed_at) = (bare("c_bitfield"), bare("placed_at"));
+        let (bitfield, placed_at) = (bare("members"), bare("placed_at"));
         let ident = f.ident.expect("named fields");
         fields.push(CFieldDef { ident, ty: f.ty, vis: f.vis, bitfield, counted_by, placed_at });
     }
@@ -874,7 +874,7 @@ pub(crate) fn generic_arg<'a>(ty: &'a syn::Type, name: &str) -> Option<&'a syn::
 
 /// Parse a derive's input: exactly one struct or union.
 pub(crate) fn parse_cstruct(item: &proc_macro2::TokenStream) -> Result<CStructDef, String> {
-    let expected = "#[derive(CStruct)] is for structs and unions with named fields";
+    let expected = "expected a struct or union with named fields";
     let d = syn::parse2::<syn::DeriveInput>(item.clone()).map_err(|e| format!("{expected} - {e}"))?;
     parse_struct(d)?.ok_or_else(|| expected.to_string())
 }

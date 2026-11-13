@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{bitfield, bch_enum, CStruct};
+use cstruct_macros::{bitfield, bch_enum};
 
 /*
  * rebalance on disk data structures:
@@ -53,7 +53,6 @@ use cstruct_macros::{bitfield, bch_enum, CStruct};
  */
 
 #[bitfield(u64)]
-#[derive(CStruct)]
 pub struct bch_extent_rebalance_v1 {
     #[bits(default = 1 << c::ExtentEntryType::rebalance_v1.0)]
     pub(self) type_:                   u6,
@@ -75,7 +74,6 @@ pub struct bch_extent_rebalance_v1 {
 }
 
 #[bitfield(u64)]
-#[derive(CStruct)]
 pub struct bch_extent_reconcile {
     #[bits(default = 1 << c::ExtentEntryType::reconcile.0)]
     pub(self) type_:                   u8,
@@ -101,7 +99,6 @@ pub struct bch_extent_reconcile {
 }
 
 #[bitfield(u64)]
-#[derive(CStruct)]
 pub struct bch_extent_reconcile_bp {
     #[bits(default = 1 << c::ExtentEntryType::reconcile_bp.0)]
     pub(self) type_: u9,

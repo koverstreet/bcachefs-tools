@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le16;
-use cstruct_macros::{bch_enum, whole, CStruct, TypeInfo};
+use cstruct_macros::{bch_enum, whole, MaybeZeroable, TypeInfo};
 
 /* An xattr's type - its namespace; Xattr.x_type: */
 #[bch_enum(open)]
@@ -20,7 +20,7 @@ pub enum XattrType {
 
 #[whole(tail = x_name_and_value: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct Xattr {
     pub v: c::bch_val,
     pub x_type: u8,

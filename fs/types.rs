@@ -25,7 +25,7 @@ use crate::util::rcu::RcuHead;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU16, AtomicU32, AtomicU64};
-use cstruct_macros::{bch_enum, placed, CStruct, Fieldwise, Init, Late, TypeInfo};
+use cstruct_macros::{bch_enum, placed, MaybeZeroable, Fieldwise, Init, Late, TypeInfo};
 use pin_init::pin_data;
 use crate::format::{Bpos, Btree};
 
@@ -141,7 +141,7 @@ pub enum TimeStat {
 pub const GC_MERGE_NODES: u32 = 4;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct io_count {
     pub sectors: [[u64; c::DataType::NR as usize]; 2],
@@ -189,7 +189,7 @@ pub type BucketBitmapWords = crate::util::rcu::RcuArray<crate::data_structures::
 crate::published! {
     /// A bucket_bitmap's bits: read without its lock - by copygc, while a
     /// check sets and frees them - so they're atomic words under RCU.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct BucketBits {
         pub buckets: c::BucketBitmapWords,
         /// Bits set
@@ -203,7 +203,7 @@ crate::published! {
 /// Rust for all of it.
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct bucket_bitmap {
     #[pin]
     #[init(crate::new_lock!((), ::pin_init::zeroed(), "&ca->bucket_bitmap.lock"))]
@@ -224,7 +224,7 @@ pub const CONGESTED_MAX: u32 = 1024;
 
 #[pin_data(PinnedDrop)]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init, RcuHead)]
+#[derive(MaybeZeroable, TypeInfo, Init, RcuHead)]
 #[init_args(fs: &crate::fs::Fs)]
 pub struct Dev {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -445,7 +445,7 @@ pub enum FsFlag {
 #[placed(Fs.btree_debug[], index = id: c_uint)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct btree_debug {}
 
 pub const BCH_LINK_MAX: u32 = c::U32_MAX;
@@ -457,7 +457,7 @@ pub const BCH_LINK_MAX: u32 = c::U32_MAX;
 /// Borrowed by Rust as &Fs; OpenFs owns one opened from userspace.
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init, Late)]
+#[derive(MaybeZeroable, TypeInfo, Init, Late)]
 #[init_args(options: &c::bch_opts)]
 pub struct Fs {
     pub cl: c::closure,

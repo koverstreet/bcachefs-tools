@@ -37,7 +37,7 @@ use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, 
 use core::convert::Infallible;
 use core::ffi::c_uint;
 use core::sync::atomic::{AtomicU8, Ordering};
-use cstruct_macros::{CStruct, bitfield, Fieldwise, TypeInfo, bch_enum};
+use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, TypeInfo, bch_enum, BitfieldMembers};
 use core::cell::Cell;
 use nestify::nest;
 use crate::format::{Bpos, Btree, DataType, BkeyType};
@@ -50,7 +50,7 @@ pub enum ReservationFlags {
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct disk_reservation_destructable {
     pub r: c::DiskReservation<'static>,
 }
@@ -64,7 +64,7 @@ pub const BCH_DEV_POS_FRAC_BITS: u32 = 32;
 /// A bucket's gc state, in memory: fsck has one for every bucket on every
 /// device, so it's 16 bytes, the lock one of them.
 #[repr(C, align(4))]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct bucket {
     pub lock: Locked<ByteLock, BucketData>,
 }
@@ -73,9 +73,9 @@ nest! {
     /// What a bucket's lock protects. Packed, so it starts right after the
     /// lock byte; laid out so the u32s are aligned all the same.
     #[repr(C, packed)]
-    #[derive(Clone, Copy, Default, CStruct)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
     pub struct BucketData {
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub bits: pub struct bucket_bits {
             gen_valid: u1,
@@ -92,7 +92,7 @@ nest! {
 /// The header of a device's bucket generations: C's bucket_gens fields
 /// between nbuckets and b[].
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct BucketGensHead {
     pub first_bucket: u16,
     pub nbuckets_minus_first: usize,
@@ -107,14 +107,14 @@ pub type BucketGensArray = crate::util::rcu::RcuArray<core::sync::atomic::Atomic
 
 /* Only info on bucket countns: */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage {
     pub buckets: [u64; c::DataType::NR as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage_type {
     pub buckets: u64,
@@ -128,14 +128,14 @@ pub struct bch_dev_usage_type {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage_full {
     pub d: [c::bch_dev_usage_type; c::DataType::NR as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_fs_usage_base {
     pub hidden: u64,
@@ -159,7 +159,7 @@ impl bch_fs_usage_base {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_fs_usage_short {
     pub capacity: u64,
     pub used: u64,
@@ -168,7 +168,7 @@ pub struct bch_fs_usage_short {
 
 /* Free space by the replica count it's placeable at: [n - 1] at n or more */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_fs_placeable {
     /* waiting on copygc, if need be */
     pub eventual: [u64; c::BCH_REPLICAS_MAX as usize],
@@ -190,7 +190,7 @@ pub struct bch_fs_placeable {
  * that embeds one is Default.
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct DiskReservation<'f> {
     pub c: &'f Fs,
     pub sectors: Cell<u64>,

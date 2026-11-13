@@ -1555,12 +1555,12 @@ mod tests {
 mod unsized_tests {
     use super::*;
     use crate::types::{Le16, Le32};
-    use cstruct_macros::{unsized_vstruct, CStruct, Plain};
+    use cstruct_macros::{unsized_vstruct, MaybeZeroable, Plain};
 
     /// A container of tents: 8 bytes of header, its u64s counting what follows.
     #[unsized_vstruct]
     #[repr(C)]
-    #[derive(Default, CStruct, Plain)]
+    #[derive(Default, MaybeZeroable, Plain)]
     pub struct tcont {
         u64s:      Le32,
         pub tag:   u32,
@@ -1573,7 +1573,7 @@ mod unsized_tests {
     /// An entry, its u64s counting itself, as a superblock field's does.
     #[unsized_vstruct]
     #[repr(C)]
-    #[derive(Default, CStruct, Plain)]
+    #[derive(Default, MaybeZeroable, Plain)]
     pub struct tent {
         u64s:      Le16,
         pub ty:    u16,

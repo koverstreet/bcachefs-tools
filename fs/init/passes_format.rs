@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{c_bitmask, bch_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_bitmask, bch_enum, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 
 #[bch_enum(flags)]
 #[prefix(PASS_)]
@@ -271,7 +271,7 @@ pub enum RecoveryPass {
 
 /* We normally enumerate recovery passes in the order we run them: */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct recovery_pass_entry {
     pub last_run: Le64,
     pub last_runtime: Le32,
@@ -286,7 +286,7 @@ c_bitmask! {
 
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_recovery_passes {
     pub field: Head<c::bch_sb_field>,
     pub start: [c::recovery_pass_entry; 0],

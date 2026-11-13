@@ -29,7 +29,7 @@ use crate::util::rcu::rcu_assign_pointer;
 use crate::util::Printbuf;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::os::kernel::local_clock;
-use cstruct_macros::{bitfield, CStruct};
+use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};
 use crate::locking::{Locked, LockedBy};
 use crate::locking::six::{six_lock_increment_ip, six_lock_write_held, SixHold};
 use crate::c::SixLockType;
@@ -111,7 +111,7 @@ impl<T> NodePtr<T> {
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct btree_path_level<T: PathNode = cs::btree_bkey_cached_common> {
     /* a cached path's is a struct bkey_cached's */
     pub b: NodePtr<T>,
@@ -140,7 +140,7 @@ pub struct btree_path_bits {
 /// BtreePath<bkey_cached>, or - the default - any path, its levels seen as
 /// their common parts. All are C's struct btree_path.
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable, BitfieldMembers)]
 pub struct BtreePath<T: PathNode = cs::btree_bkey_cached_common> {
     pub sorted_idx: cs::PathIdx,
     pub ref_: u8,
@@ -149,7 +149,7 @@ pub struct BtreePath<T: PathNode = cs::btree_bkey_cached_common> {
     /* btree_iter_copy starts here: */
     pub pos: Bpos,
 
-    #[c_bitfield]
+    #[members]
     pub bits: btree_path_bits,
     pub nodes_locked: u8,
 

@@ -23,7 +23,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::sb::io::SbFieldOps;
 use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
-use cstruct_macros::{bch_enum, CStruct, TypeInfo};
+use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo};
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::data_structures::genradix::SharedGenRadix;
@@ -33,7 +33,7 @@ use pin_init::{pin_data, pin_init, PinInit};
 use crate::format::Btree;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_qid {
     pub q: [u32; c::QuotaType::QTYP_NR.0 as usize],
 }

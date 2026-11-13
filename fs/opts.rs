@@ -47,7 +47,7 @@ use crate::cstructs::c::InodeOptId_arms;
 use crate::c::{bch_member, bch_sb_field_ext, CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt, WriteDegradedAction, MemberState, BCH_REPLICAS_MAX, BCH_SB_SECTOR};
 use crate::format::DataType;
 use crate::types::bits_to_longs;
-use cstruct_macros::{CStruct, bch_enum, Options, TypeInfo};
+use cstruct_macros::{MaybeZeroable, bch_enum, Options, TypeInfo};
 
 /*
  * Mount options; we also store defaults in the superblock.
@@ -106,7 +106,7 @@ pub const BCH_OPTS_MAX: u32 = 128;
 
 /* options, by OptId: which are set */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_opts_mask {
     pub d: [c_ulong; bits_to_longs(c::BCH_OPTS_MAX as usize)],
 }
@@ -123,7 +123,7 @@ pub type AtomicOptsMask = crate::data_structures::bitmap::AtomicBitArray<{ bits_
  * those this bch_opts sets - mount options as parsed have only those given.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo, Options)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Options)]
 pub struct bch_opts {
     /// Filesystem block size
     #[opt(uint(512, 1 << 15),
@@ -678,7 +678,7 @@ macro_rules! __bch_inode_opts_1 {
         };
 
         #[repr(C)]
-        #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+        #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
         pub struct bch_inode_opts {
             $($acc)*
             pub __bch_inode_opts_bits: [u8; ([$(stringify!($_name)),*].len() * 1).div_ceil(8)],

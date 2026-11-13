@@ -5,11 +5,11 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le32, Le64};
 use core::ffi::c_ulong;
-use cstruct_macros::{c_bitmask, c_xmacro, grown, whole, CStruct, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{c_bitmask, c_xmacro, grown, whole, MaybeZeroable, Plain, TypeInfo, View, SizedVal};
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct Alloc {
     pub v: c::bch_val,
     pub fields: u8,
@@ -32,7 +32,7 @@ c_xmacro! {
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct AllocV2 {
     pub v: c::bch_val,
     pub nr_fields: u8,
@@ -55,7 +55,7 @@ c_xmacro! {
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct AllocV3 {
     pub v: c::bch_val,
     pub journal_seq: Le64,
@@ -99,7 +99,7 @@ c_bitmask! {
  */
 #[grown(from = journal_seq_empty, bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct AllocV4 {
     pub v: c::bch_val,
     pub journal_seq_nonempty: u64,
@@ -134,7 +134,7 @@ c_bitmask! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, Plain, TypeInfo, View, SizedVal)]
+#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, View, SizedVal)]
 pub struct BucketGens {
     pub v: c::bch_val,
     pub gens: [u8; BucketGens::NR],

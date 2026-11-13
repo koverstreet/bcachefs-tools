@@ -91,7 +91,7 @@ use core::cell::Cell;
 use core::ffi::c_uint;
 use core::ops::ControlFlow;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{CStruct, TypeInfo, tagged_union};
+use cstruct_macros::{MaybeZeroable, TypeInfo, tagged_union};
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
 #[allow(non_camel_case_types)]
@@ -101,7 +101,7 @@ pub type reconcile_scan_device = c_uint;
 pub type reconcile_scan_inum = u64;
 
 tagged_union! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(Clone, Copy, MaybeZeroable)]*
     /// A scan reconcile's asked for - of what, and for a device's or an
     /// inode's, which.
     #[derive(TypeInfo)]

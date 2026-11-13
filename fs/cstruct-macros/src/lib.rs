@@ -3,10 +3,15 @@
 //! Each parses its input with fs/types/cstruct.rs, so a mistake is a compile
 //! error at the item, and expands to its Rust side:
 //!
-//!   #[derive(CStruct)]   a struct or union: Zeroable, and its
-//!                        #[c_bitfield] members on it
+//!   #[derive(MaybeZeroable)]
+//!                        a struct or union: Zeroable if its fields are
+//!   #[derive(BitfieldMembers)]
+//!                        a #[members] field's bitfield members, on the
+//!                        struct
+//!   #[derive(FlexArray)] #[counted_by] on a trailing [T; 0]: its FlexArray
+//!                        (vstructs.rs)
 //!   #[bitfield(uN)]      bitfield_struct::bitfield, and forwarders for the
-//!                        struct that holds one in a #[c_bitfield] field
+//!                        struct that holds one in a #[members] field
 //!   c_xmacro! { .. }     an x-macro list: NAME!(cb), handing cb! the whole
 //!                        list
 //!   xmacro_select!       NAME!(xmacro_select [TOKEN => cb]): cb! handed
@@ -26,9 +31,7 @@
 //!                        an enum, the arms its variants (tagged_union.rs)
 //!   #[derive(TypeInfo)]  runtime type information, for kvdb (typeinfo.rs)
 //!   #[derive(Plain)]     util/vstructs.rs's Plain, checked at compile time;
-//!                        a #[bitfield] is Plain too, and #[counted_by] on a
-//!                        CStruct's trailing [T; 0] is its FlexArray
-//!                        (vstructs.rs)
+//!                        a #[bitfield] is Plain too (vstructs.rs)
 //!   #[derive(View)]      a projection for each field on a View of the type:
 //!                        its fields read as zero past a short value's end
 //!                        (vstructs.rs)
@@ -136,14 +139,27 @@ pub fn derive_options(input: proc_macro::TokenStream) -> proc_macro::TokenStream
     expand_syn("#[derive(Options)]", || options::derive(syn::parse(input)?))
 }
 
-/// `#[derive(CStruct)]`: a struct or union's Zeroable impl, the members of
-/// a `#[c_bitfield]` field - one of a #[bitfield] type - forwarded to it,
-/// and with `#[counted_by(FIELD)]` on a trailing `[T; 0]`, FIELD its length,
-/// its FlexArray (vstructs.rs).
+/// `#[derive(MaybeZeroable)]`: a struct or union's Zeroable impl, if every
+/// field is - see maybe_zeroable().
 /// `#[type_name_of(NAME)]` is what #[type_name] leaves for the derives.
-#[proc_macro_derive(CStruct, attributes(c_bitfield, type_name_of, counted_by))]
-pub fn derive_cstruct(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("#[derive(CStruct)]", || cstruct_expand(input.into()))
+#[proc_macro_derive(MaybeZeroable, attributes(type_name_of))]
+pub fn derive_maybe_zeroable(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(MaybeZeroable)]", || Ok(maybe_zeroable(&parse_cstruct(&input.into())?)))
+}
+
+/// `#[derive(BitfieldMembers)]`: the members of a `#[members]` field - one of
+/// a #[bitfield] type - on the struct, forwarded to it.
+#[proc_macro_derive(BitfieldMembers, attributes(members))]
+pub fn derive_bitfield_members(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(BitfieldMembers)]", || bitfield_members(input.into()))
+}
+
+/// `#[derive(FlexArray)]`: util/vstructs.rs's FlexArray, from
+/// `#[counted_by(FIELD)]` on a trailing `[T; 0]`, FIELD its length - see
+/// vstructs.rs.
+#[proc_macro_derive(FlexArray, attributes(counted_by))]
+pub fn derive_flex_array(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(FlexArray)]", || vstructs::flex_array(&parse_cstruct(&input.into())?))
 }
 
 /// `#[type_name(NAME)]`, before the derives, on a struct whose name isn't
@@ -232,11 +248,14 @@ pub fn derive_view(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[derive(View)]", || vstructs::derive_view(input.into()))
 }
 
-fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
+fn bitfield_members(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input)?;
     let name = &def.ident;
+    if !def.fields.iter().any(|f| f.bitfield) {
+        return Err(format!("{name}: no #[members] field"));
+    }
 
-    // A #[c_bitfield] field's members, on the struct: its type's forwarders
+    // A #[members] field's members, on the struct: its type's forwarders
     // (#[bitfield]), by the type's own path - a Cell's setting through &self.
     // Not a Volatile one's: that's a word, read and written whole.
     let mut forward = TokenStream::new();
@@ -248,7 +267,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
             (None, None)    => (&f.ty, "_forward"),
         };
         let syn::Type::Path(syn::TypePath { qself: None, path }) = bt else {
-            return Err(format!("{name}.{}: #[c_bitfield] is for a field of a #[bitfield] type", f.ident));
+            return Err(format!("{name}.{}: #[members] is for a field of a #[bitfield] type", f.ident));
         };
         let mut fwd = path.clone();
         let last = fwd.segments.last_mut().expect("a path has a segment");
@@ -256,9 +275,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         let field = &f.ident;
         forward.extend(quote!(#fwd!([#generics] #name #over, #field);));
     }
-    let flex = vstructs::flex_array(&def)?;
-    let zeroable = maybe_zeroable(&def);
-    Ok(quote!(#forward #flex #zeroable))
+    Ok(forward)
 }
 
 /// Zeroable when every field is - as bindgen's C structs are, deriving
@@ -299,7 +316,7 @@ pub(crate) fn is_core_atomic(ty: &syn::Type) -> bool {
 }
 
 /// bitfield_struct::bitfield - and __NAME_forward!([GENERICS] STRUCT, field),
-/// which #[derive(CStruct)] invokes for a #[c_bitfield] field of this type:
+/// which #[derive(BitfieldMembers)] invokes for a #[members] field of this type:
 /// each member's getter and setter on the struct that holds it, as C had a
 /// bitfield's members on its struct. Not `_` members: those are padding.
 ///
@@ -316,9 +333,8 @@ pub(crate) fn is_core_atomic(ty: &syn::Type) -> bool {
 /// forwarders the same - pub(self), for one only its own module may set, has
 /// none.
 ///
-/// With #[derive(CStruct)], the bitfield is itself the struct - C's `struct
-/// bch_extent_ptr { __u64 type:1, ...; }`. `align = 8` aligns it to 8, which a
-/// u64 bitfield needs said on i386 (Align8U64).
+/// `align = 8` aligns it to 8, which a u64 bitfield needs said on i386
+/// (Align8U64).
 #[proc_macro_attribute]
 pub fn bitfield(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[bitfield]", || bitfield_expand(attr.into(), item.into()))
@@ -436,12 +452,12 @@ pub fn whole(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
 
 fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let args = bitfield_args(attr)?;
-    let s = bitfield_struct(item)?;
-    let name = &s.item.ident;
+    let item = bitfield_struct(item)?;
+    let name = &item.ident;
     let mut out = TokenStream::new();
     // Each member, not padding: its name, setter and updater, type, and
     // visibility
-    let members: Vec<_> = s.item.fields.iter()
+    let members: Vec<_> = item.fields.iter()
         .map(|f| (f.ident.as_ref().expect("named members").to_string(), f))
         .filter(|(m, _)| !m.starts_with('_'))
         .map(|(m, f)| (format_ident!("{m}"), format_ident!("set_{m}"), format_ident!("update_{m}"), &f.ty, &f.vis))
@@ -459,42 +475,40 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     });
     out.extend(quote!(impl #name { #(#update)* }));
 
-    if !s.c_struct {
-        // A member of a struct: its getters and setters for that struct -
-        // not pub(self)'s
-        let fns = members.iter().filter(|(.., vis)| outside(vis))
-            .map(|(m, set, update, ty, vis)| quote! {
-                #vis fn #m(&self) -> #ty { let b = self.$field; b.#m() }
-                #vis fn #set(&mut self, v: #ty) { let mut b = self.$field; b.#set(v); self.$field = b; }
-                #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) {
-                    let mut b = self.$field; b.#set(f(b.#m())); self.$field = b;
-                }
-            }).collect::<Vec<_>>();
-        let cell_fns = members.iter().filter(|(.., vis)| outside(vis))
-            .map(|(m, set, update, ty, vis)| quote! {
-                #vis fn #m(&self) -> #ty { self.$field.get().#m() }
-                #vis fn #set(&self, v: #ty) { let mut b = self.$field.get(); b.#set(v); self.$field.set(b); }
-                #vis fn #update(&self, f: impl FnOnce(#ty) -> #ty) {
-                    let mut b = self.$field.get(); b.#set(f(b.#m())); self.$field.set(b);
-                }
-            }).collect::<Vec<_>>();
-        let fwd = format_ident!("__{name}_forward");
-        let fwd_cell = format_ident!("__{name}_forward_cell");
-        out.extend(quote! {
-            #[allow(unused_macros)]
-            macro_rules! #fwd {
-                ([$($g:tt)*] $s:ty, $field:ident) => { impl $($g)* $s { #(#fns)* } };
+    // For a struct holding one in a #[members] field: its getters and
+    // setters for that struct - not pub(self)'s
+    let fns = members.iter().filter(|(.., vis)| outside(vis))
+        .map(|(m, set, update, ty, vis)| quote! {
+            #vis fn #m(&self) -> #ty { let b = self.$field; b.#m() }
+            #vis fn #set(&mut self, v: #ty) { let mut b = self.$field; b.#set(v); self.$field = b; }
+            #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) {
+                let mut b = self.$field; b.#set(f(b.#m())); self.$field = b;
             }
-            #[allow(unused_imports)]
-            pub(crate) use #fwd;
-            #[allow(unused_macros)]
-            macro_rules! #fwd_cell {
-                ([$($g:tt)*] $s:ty, $field:ident) => { impl $($g)* $s { #(#cell_fns)* } };
+        }).collect::<Vec<_>>();
+    let cell_fns = members.iter().filter(|(.., vis)| outside(vis))
+        .map(|(m, set, update, ty, vis)| quote! {
+            #vis fn #m(&self) -> #ty { self.$field.get().#m() }
+            #vis fn #set(&self, v: #ty) { let mut b = self.$field.get(); b.#set(v); self.$field.set(b); }
+            #vis fn #update(&self, f: impl FnOnce(#ty) -> #ty) {
+                let mut b = self.$field.get(); b.#set(f(b.#m())); self.$field.set(b);
             }
-            #[allow(unused_imports)]
-            pub(crate) use #fwd_cell;
-        });
-    }
+        }).collect::<Vec<_>>();
+    let fwd = format_ident!("__{name}_forward");
+    let fwd_cell = format_ident!("__{name}_forward_cell");
+    out.extend(quote! {
+        #[allow(unused_macros)]
+        macro_rules! #fwd {
+            ([$($g:tt)*] $s:ty, $field:ident) => { impl $($g)* $s { #(#fns)* } };
+        }
+        #[allow(unused_imports)]
+        pub(crate) use #fwd;
+        #[allow(unused_macros)]
+        macro_rules! #fwd_cell {
+            ([$($g:tt)*] $s:ty, $field:ident) => { impl $($g)* $s { #(#cell_fns)* } };
+        }
+        #[allow(unused_imports)]
+        pub(crate) use #fwd_cell;
+    });
 
     let (storage, rest) = (&args.storage, &args.rest);
     let align8 = args.align8.then(|| quote! {
@@ -510,7 +524,6 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
             .find_map(|a| key_value(a).filter(|(k, _)| k == "repr").map(|(_, v)| v))
             .unwrap_or_else(|| storage.to_token_stream())
     };
-    let item = &s.item;
     let (info, plain) = (typeinfo::info(name, name, "Struct", &[]), vstructs::plain(name, &[held]));
     // The struct as tokens, not text: an error in a member points at it
     Ok(quote! {
@@ -611,30 +624,18 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
     Ok(BitfieldArgs { storage, rest, align8 })
 }
 
-/// A #[bitfield] struct, its attributes that are ours taken out: CStruct and
-/// TypeInfo from its derive - C's struct, and we give the TypeInfo.
-struct BitfieldStruct {
-    /// The struct, for bitfield-struct: its members canonical
-    item:     syn::ItemStruct,
-    /// #[derive(CStruct)]: the bitfield is C's struct, not a member of one
-    c_struct: bool,
-}
-
-fn bitfield_struct(item: TokenStream) -> Result<BitfieldStruct, String> {
+/// A #[bitfield] struct, for bitfield-struct: its members canonical, and
+/// TypeInfo out of its derive - we give the TypeInfo.
+fn bitfield_struct(item: TokenStream) -> Result<syn::ItemStruct, String> {
     let mut item: syn::ItemStruct = syn::parse2(item).map_err(|e| format!("expected a struct - {e}"))?;
     let name = item.ident.clone();
-    let mut c_struct = false;
     let mut attrs = Vec::new();
     for a in std::mem::take(&mut item.attrs) {
         if a.path().is_ident("derive") {
             let derives = a.parse_args_with(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)
                 .map_err(|e| format!("{name}: {e}"))?;
             let kept: Vec<_> = derives.into_iter()
-                .filter(|p| match p.segments.last().map(|s| s.ident.to_string()).as_deref() {
-                    Some("CStruct") => { c_struct = true; false }
-                    Some("TypeInfo") => false,
-                    _ => true,
-                })
+                .filter(|p| !p.segments.last().is_some_and(|s| s.ident == "TypeInfo"))
                 .collect();
             if !kept.is_empty() {
                 let derive = respan(quote!(derive(#(#kept),*)), a.path().segments[0].ident.span());
@@ -651,7 +652,7 @@ fn bitfield_struct(item: TokenStream) -> Result<BitfieldStruct, String> {
     for m in members.named.iter_mut() {
         bitfield_member(m)?;
     }
-    Ok(BitfieldStruct { item, c_struct })
+    Ok(item)
 }
 
 /// One member: `name: uN` and `name: bool` with their #[bits(N)] and Rust

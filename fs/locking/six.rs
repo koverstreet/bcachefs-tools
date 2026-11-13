@@ -27,7 +27,7 @@ use core::mem::ManuallyDrop;
 use core::ptr::{self, null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr, AtomicU32};
-use cstruct_macros::{bch_enum, CStruct};
+use cstruct_macros::{bch_enum, MaybeZeroable};
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -52,7 +52,7 @@ unsafe impl AtomicWord for SixLockType {
 
 /* its own thread's, read by the waker and by other threads' cycle detectors */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct six_lock_waiter {
     pub trans_start_time: Volatile<u64>,
     pub task: AtomicPtr<c::task_struct>,
@@ -66,7 +66,7 @@ c_default!(six_lock_waiter);
 
 /* filled under wait_lock, read without it by the cycle detector: @w last */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct six_lock_wait_slot {
     pub w: AtomicPtr<c::six_lock_waiter>,
     pub start_time: Volatile<u64>,
@@ -92,7 +92,7 @@ type WaitList = InlineVec<c::six_lock_wait_slot, { SIX_LOCK_INLINE_WAITERS as us
  * the free.
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct six_lock_waiters {
     pub next_free_hint: u16,
     /* C has no use for it; six_lock_exit() frees it */
@@ -100,7 +100,7 @@ pub struct six_lock_waiters {
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct six_lock {
     pub state: AtomicI32,
     /* written by the write lock's holder, read without the lock */
@@ -123,7 +123,7 @@ pub enum SixLockInitFlags {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct six_lock_count {
     pub n: [c_uint; 3],
 }

@@ -105,7 +105,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use crate::types::c_default;
-use cstruct_macros::{args_stored_once, bch_enum, in_place, CStruct, Init, TypeInfo};
+use cstruct_macros::{args_stored_once, bch_enum, in_place, MaybeZeroable, Init, TypeInfo};
 use crate::format::{Bpos, Btree, Bversion, DataType, MetadataVersion, Nonce};
 
 type F = c::ReadFlags;
@@ -128,7 +128,7 @@ pub enum ReadFor {
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct ReadErrs {
     pub errors: u32,
     pub msg:    Printbuf,
@@ -136,7 +136,7 @@ pub struct ReadErrs {
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct ReadErrReport {
     #[pin]
     #[init(crate::new_lock!(ReadErrs { errors: 0, msg: Printbuf::new() }, "bch_read_err_report"))]
@@ -144,7 +144,7 @@ pub struct ReadErrReport {
 }
 
 #[pin_data]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 #[repr(C)]
 pub struct Rbio {
     pub c: *mut Fs,

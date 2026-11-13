@@ -47,7 +47,7 @@ use crate::util::workqueue::Queue;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_ulong, CStr};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{CStruct, Init, TypeInfo};
+use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
 use crate::locking::{Locked, MemallocFlags};
 use crate::new_lock;
 use pin_init::pin_data;
@@ -62,7 +62,7 @@ use crate::format::{Bpos, Btree, MemberState};
  * no-op.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct fsck_damaged_path {
     pub inum: u64,
     pub snapshot: u32,
@@ -114,7 +114,7 @@ impl ErrorsLocked {
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_errors {
     /* What the error paths keep: init/error.rs */
     #[pin]

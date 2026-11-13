@@ -35,7 +35,7 @@ use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{atomic_bitfield, bitfield, bch_enum, placed, CStruct, Init, Late, TypeInfo, list_enum};
+use cstruct_macros::{atomic_bitfield, bitfield, bch_enum, placed, MaybeZeroable, Init, Late, TypeInfo, list_enum, BitfieldMembers};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -45,13 +45,13 @@ use crate::format::{Bpos, Btree, BtreeFlags, BkeyType};
 /* Btree nodes: */
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct btree_write {
     pub journal: cs::journal_entry_pin,
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct btree_bkey_cached_common {
     pub lock: Locked<cs::six_lock>,
     pub level: u8,
@@ -110,7 +110,7 @@ pub enum BtreeCacheNotFreedReason {
 pub type BtreeNodeList = crate::list!(BtreeNode, list);
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct btree_cache_list {
     pub clean: BtreeNodeList,
     pub dirty: BtreeNodeList,
@@ -122,14 +122,14 @@ c_default!(btree_cache_list);
 #[placed(cs::bch_fs_btree_cache.shrinkers[], index = idx: u32)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct btree_cache_shrinker {
     pub(crate) shrink: Shrinker<Self>,
 }
 
 /* On disk root - see async splits: */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct btree_root {
     pub key: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
     pub level: u8,
@@ -142,7 +142,7 @@ c_default!(btree_root);
 /// early journal replay adds as it finds them: the slots only move then.
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct BtreeRoots {
     pub roots_known: [cs::btree_root; Btree::NR as usize],
     #[pin]
@@ -195,7 +195,7 @@ crate::published! {
     /// one load, without a miss into the node - and the error reading it
     /// left; and how many btrees there are past the known ones. Fixed at
     /// BTREE_ID_NR_MAX, so nothing here moves when roots_extra grows.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct BtreeRootsLive {
         pub roots_b: [Volatile<c_ulong>; cs::BTREE_ID_NR_MAX as usize],
         pub roots_error: [Volatile<i16>; cs::BTREE_ID_NR_MAX as usize],
@@ -220,7 +220,7 @@ impl BtreeRootsLive {
 /// bc->lock's: the live lists - unpinned and pinned - the freeable and freed
 /// lists, the counts, and the window of nodes pinned.
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct BtreeCacheLists {
     pub live: [cs::btree_cache_list; 2],
     pub freeable: BtreeNodeList,
@@ -256,7 +256,7 @@ pub type BtreeCacheLockAt = crate::at!(bch_fs_btree_cache.lock);
 crate::published! {
     /// A live list's nodes, clean and dirty: changed with its list, read
     /// without bc->lock - the shrinker's count, the write throttle.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct BtreeCacheLiveNr {
         pub nr_clean: Volatile<usize>,
         pub nr_dirty: Volatile<usize>,
@@ -264,7 +264,7 @@ crate::published! {
 }
 
 crate::published! {
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct BtreeCacheLive {
         pub live_nr: [BtreeCacheLiveNr; 2],
         /* read by the shrinker's count and the allocator, without bc->lock */
@@ -286,7 +286,7 @@ impl BtreeCacheLive {
 #[placed(cs::bch_fs_btree.cache)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_btree_cache {
     #[pin]
     #[init(crate::new_lock!(<- BtreeRoots::init(), ::pin_init::zeroed(), "&bc->root_lock"))]
@@ -440,14 +440,14 @@ nest! {
     /// iterator, k - change only through &mut self, iter.rs's methods; through
     /// &self, only key_cache_path, which an update sets up. Hence its Cell.
     #[repr(C)]
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable, BitfieldMembers)]
     pub struct BtreeIter<'t> {
         pub(in crate::btree) trans: *mut BtreeTrans<'static>,
         pub(in crate::btree) path: cs::PathIdx,
         pub(in crate::btree) update_path: cs::PathIdx,
         pub(in crate::btree) key_cache_path: core::cell::Cell<cs::PathIdx>,
 
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub(in crate::btree) bits: pub struct btree_iter_bits {
             #[bits(8)] pub(self) btree_id: Btree,
@@ -497,7 +497,7 @@ pub const BKEY_CACHED_DIRTY: u32 = 1;
 pub const BKEY_CACHED_IMMEDIATE_FLUSH: u32 = 2;
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct bkey_cached {
     pub c: cs::btree_bkey_cached_common,
 
@@ -544,12 +544,12 @@ impl bkey_cached {
 /* Transaction types: */
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, CStruct)]
+    #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers)]
     pub struct btree_insert_entry {
         pub flags: c_uint,
         pub sort_order: u8,
         pub bkey_type: u8,
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u16)]
         pub bits: pub struct btree_insert_entry_bits {
             #[bits(8)] pub btree_id: Btree,
@@ -583,7 +583,7 @@ pub const BTREE_ITER_INITIAL: u32 = 64;
 pub const BTREE_ITER_MAX: u32 = 1 << 10;
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct btree_trans_commit_hook {
     pub fn_: Option<unsafe extern "C" fn(*mut BtreeTrans<'_>, *mut cs::btree_trans_commit_hook) -> c_int>,
     pub next: *mut cs::btree_trans_commit_hook,
@@ -595,21 +595,21 @@ pub const BTREE_TRANS_MEM_MAX: u32 = 1 << 16;
 pub const BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS: c_long = cs::NSEC_PER_MSEC as c_long;
 
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, MaybeZeroable)]
 pub struct btree_trans_paths {
     pub nr_paths: c_ulong,
     pub paths: [BtreePath; 0],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct trans_kmalloc_trace {
     pub ip: c_ulong,
     pub bytes: usize,
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct btree_trans_subbuf<T: ?Sized = [u64]> {
     pub base: u16,
     pub u64s: u16,
@@ -635,7 +635,7 @@ impl<T: ?Sized> Default for btree_trans_subbuf<T> {
 /// hands out is in use, by reference - and cleared on every begin; so it's
 /// reallocated only by begin, when nothing it handed out is used again.
 #[repr(C)]
-#[derive(CStruct, Default)]
+#[derive(MaybeZeroable, Default)]
 pub struct TransMem {
     pub(crate) buf:                    crate::util::alloc::Vec<u64, Kmalloc, u32>,
     /* bytes: what the next begin grows it to, restarted for room */
@@ -714,7 +714,7 @@ pub struct btree_trans_bits {
  *    released periodically to avoid stalling reclaim
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable, BitfieldMembers)]
 pub struct BtreeTrans<'f> {
     pub c: &'f Fs,
 
@@ -735,7 +735,7 @@ pub struct BtreeTrans<'f> {
     pub shard_cpu: Cell<i16>,
     pub fn_idx: Cell<u8>,
     pub lock_must_abort: AtomicU8,
-    #[c_bitfield]
+    #[members]
     pub bits: Cell<btree_trans_bits>,
     pub restart_count: Cell<u32>,
     #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
@@ -840,7 +840,7 @@ impl BtreeTrans<'_> {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct btree_trans_buf {
     pub trans: *mut BtreeTrans<'static>,
 }
@@ -849,7 +849,7 @@ c_default!(btree_trans_buf);
 /// A transaction function's stats' lock's: what's kept of its biggest - its
 /// memory's allocations, and its paths, as text.
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct TransStatsLocked {
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
     pub trans_kmalloc_trace: KVVec<cs::trans_kmalloc_trace>,
@@ -859,7 +859,7 @@ pub struct TransStatsLocked {
 crate::published! {
     /// Its high water marks: raised under the lock, read without it - by
     /// bch2_trans_get(), sizing the transaction it gets.
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable)]
     pub struct TransStatsMax {
         pub nr_max_paths: Volatile<c_uint>,
         pub max_mem: Volatile<c_uint>,
@@ -868,7 +868,7 @@ crate::published! {
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct btree_transaction_stats {
     #[pin]
     #[init(cs::bch2_time_stats::init())]
@@ -888,7 +888,7 @@ pub const BCH_TRANSACTIONS_NR: u32 = 128;
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_btree_trans {
     #[pin]
     #[init(new_lock!((), "&c->btree.trans.lock"))]
@@ -921,7 +921,7 @@ pub struct bch_fs_btree_trans {
 /// The transaction stats as JSON, for sysfs: made at a read's offset 0, read
 /// a page at a time after.
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct TransStatsJson {
     pub buf: Printbuf,
 }
@@ -997,7 +997,7 @@ pub enum BtreeNodeRewriteReason {
  * ~capacity/1000/btree_node_size entries, which keeps memory tiny.
  */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct btree_evicted_size {
     pub mask: u64, /* table size - 1 (power of 2) */
     pub entries: *mut u64,
@@ -1008,7 +1008,7 @@ pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
 pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << cs::BTREE_EVICTED_SIZE_HASH_BITS) - 1;
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct btree_write_stats {
     pub nr: AtomicI64,
     pub bytes: AtomicI64,
@@ -1018,7 +1018,7 @@ c_default!(btree_write_stats);
 #[placed(Fs.btree)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init, Late)]
+#[derive(MaybeZeroable, TypeInfo, Init, Late)]
 #[init_args(opts: &c::bch_opts)]
 pub struct bch_fs_btree {
     #[init((btree_max_u64s(opts.btree_node_size) / 3) as u16)]

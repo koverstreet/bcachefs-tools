@@ -246,7 +246,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use pin_init::pinned_drop;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{CStruct, bitfield, TypeInfo};
+use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 #[cfg(kernel)]
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::place::Contained, crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
@@ -262,7 +262,7 @@ use nestify::nest;
 /// two, zeroes past the superblock. Each of a device's superblock, the
 /// filesystem's copy, and what format builds.
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_sb_buf {
     pub sb:          *mut Head<c::bch_sb>,
     pub buffer_size: usize,
@@ -276,7 +276,7 @@ c_default!(bch_sb_buf);
 /// from. Edited in place through its bch_sb_buf; resized only through
 /// Fs::sb_resize(), which grows its devices' with it.
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_fs_sb {
     buf: c::bch_sb_buf,
 }
@@ -302,12 +302,12 @@ nest! {
     /// A device's superblock, and what reads and writes it: what changes
     /// while the device is a filesystem's, under its sb_lock.
     #[repr(C)]
-    #[derive(CStruct, TypeInfo)]
+    #[derive(MaybeZeroable, BitfieldMembers, TypeInfo)]
     pub struct bch_sb_io {
         pub buf: c::bch_sb_buf,
         /// Its bio, as big as the buffer, if @have_bio: Rust's alone
         pub bio: SbBio,
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub bits: pub struct bch_sb_handle_bits {
             have_layout: u1,
@@ -328,7 +328,7 @@ impl Default for bch_sb_io {
 /// The block device a superblock was read from, open: fixed while the
 /// device is a filesystem's.
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_sb_bdev {
     pub s_bdev_file: *mut c::file,
     pub bdev: *mut c::block_device,
@@ -342,7 +342,7 @@ c_default!(bch_sb_bdev);
 /// A superblock read from a device: bch2_read_super()'s. To C, one struct
 /// of both halves' members.
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_sb_handle {
     pub io: bch_sb_io,
     pub dev: bch_sb_bdev,
@@ -365,13 +365,13 @@ unsafe impl crate::util::projections::TearSafe for DevsMask {}
 pub type AtomicDevsMask = AtomicBitArray<{ bits_to_longs(c::BCH_SB_MEMBERS_MAX as usize) }>;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_devs_mask {
     pub d: DevsMask,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_devs_list {
     pub nr: u8,
     pub data: [u8; c::BCH_BKEY_PTRS_MAX as usize],

@@ -6,12 +6,12 @@ use crate::cstructs::c;
 #[cfg(not(NO_BCACHEFS_FS))]
 #[cfg(not(NO_BCACHEFS_FS))]
 use crate::util::{alloc::KVmalloc, bio::BioSet, late::Late, mempool::Mempool, workqueue::{Workqueue, WqFlags}};
-use cstruct_macros::{CStruct, Init, Late, TypeInfo};
+use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
 use pin_init::pin_data;
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init, Late)]
+#[derive(MaybeZeroable, TypeInfo, Init, Late)]
 pub struct bch_fs_vfs {
     pub inodes: c::fast_list,
     /* every VFS inode of ours, and which subvolumes hold an inode number */

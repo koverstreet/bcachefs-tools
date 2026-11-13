@@ -20,7 +20,7 @@ use crate::init::error::id;
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, fsck_err_on};
 use core::sync::atomic::{Ordering, AtomicU32};
-use cstruct_macros::{CStruct, Init, TypeInfo};
+use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::alloc::KVVec;
@@ -29,7 +29,7 @@ use crate::format::{Btree, BkeyType};
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_logged_ops {
     /*
      * Test knob: KEY_TYPE_logged_op_* whose next cursor update should fail,

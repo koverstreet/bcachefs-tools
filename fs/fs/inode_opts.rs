@@ -35,7 +35,7 @@ use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, inode, logged_ops, opts};
 use core::ffi::CStr;
 use core::ops::ControlFlow;
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 use crate::format::{Btree, BkeyType};
 
 /*
@@ -44,7 +44,7 @@ use crate::format::{Btree, BkeyType};
  * snapshots of the inode (the propagate logged op, finished after commit).
  */
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, MaybeZeroable)]
 pub struct inode_opt_change {
     pub reconcile_changed: bool,
     pub propagate: c::bkey_i_logged_op_inode_opt_propagate,

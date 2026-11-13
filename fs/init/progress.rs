@@ -26,7 +26,7 @@ use crate::init::passes;
 use crate::os::kernel::local_clock;
 use crate::util::{Printbuf, ToText};
 use core::ffi::CStr;
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 use crate::locking::SeqLock;
 use crate::format::Btree;
 
@@ -45,7 +45,7 @@ use crate::format::Btree;
  * and goes through init/progress.rs's functions.
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct progress_indicator {
     pub(crate) state: SeqLock<crate::init::progress::ProgressState>,
 }

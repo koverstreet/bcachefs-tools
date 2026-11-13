@@ -5,10 +5,10 @@
 #![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
-use cstruct_macros::{CStruct, TypeInfo};
+use cstruct_macros::{MaybeZeroable, TypeInfo};
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_writepage_io {
     pub inode: *mut c::InodeInfo,
 

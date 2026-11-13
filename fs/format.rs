@@ -77,7 +77,7 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by
                             vstruct_container, Head, FlexArray, Unvalidated, VStructError, VstructMut, VstructRef};
 use crate::btree::bkey::BkeyPHeader;
 use core::mem::offset_of;
-use cstruct_macros::{bitfield, c_bitmask, bch_enum, grown, tagged_union, unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{bitfield, c_bitmask, bch_enum, grown, tagged_union, unsized_vstruct, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 
 #[path = "alloc/accounting_format.rs"] pub mod accounting;
 pub use accounting::{DataType, DataTypes};
@@ -89,7 +89,7 @@ pub use members::{MemberInitialized, MemberState};
 pub type __uuid_t = c::uuid_t;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bkey_format {
     pub key_u64s: u8,
     pub nr_fields: u8,
@@ -110,7 +110,7 @@ pub struct bkey_format {
  */
 #[cfg(target_endian = "little")]
 #[repr(C, packed(4))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Bpos {
     pub snapshot: u32,
     pub offset: u64,
@@ -119,7 +119,7 @@ pub struct Bpos {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Bpos {
     pub inode: u64,
     pub offset: u64, /* Points to end of extent - sectors */
@@ -128,14 +128,14 @@ pub struct Bpos {
 
 /* Empty placeholder struct, for container_of() */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_val {
     pub __nothing: [u64; 0],
 }
 
 #[cfg(target_endian = "little")]
 #[repr(C, packed(4))]
-#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable, Plain, TypeInfo)]
 pub struct Bversion {
     pub lo: u64,
     pub hi: u32,
@@ -143,7 +143,7 @@ pub struct Bversion {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable, Plain, TypeInfo)]
 pub struct Bversion {
     pub hi: u32,
     pub lo: u64,
@@ -199,13 +199,13 @@ pub struct bkey_format_bits {
  */
 #[cfg(target_endian = "little")]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
 pub struct bkey {
     /* Size of combined key and value, in u64s */
     pub u64s: u8,
 
     /* Format of key (0 for format local to btree node) */
-    #[c_bitfield]
+    #[members]
     pub format_bits: bkey_format_bits,
 
     /* Type of the value */
@@ -220,13 +220,13 @@ pub struct bkey {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
 pub struct bkey {
     /* Size of combined key and value, in u64s */
     pub u64s: u8,
 
     /* Format of key (0 for format local to btree node) */
-    #[c_bitfield]
+    #[members]
     pub format_bits: bkey_format_bits,
 
     /* Type of the value */
@@ -240,7 +240,7 @@ pub struct bkey {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
 pub struct bkey_packed {
     pub _data: [u64; 0],
 
@@ -254,7 +254,7 @@ pub struct bkey_packed {
      * needs_whiteout - bkey_packed() will be cheaper if format is the high
      * bits of the bitfield
      */
-    #[c_bitfield]
+    #[members]
     pub format_bits: bkey_format_bits,
 
     /* Type of the value */
@@ -273,7 +273,7 @@ vstruct!(bkey_packed, u64s, start = 0);
 c_default!(bkey_packed);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_le128 {
     pub lo: Le64,
     pub hi: Le64,
@@ -305,7 +305,7 @@ pub enum BkeyField {
 
 /* bkey with inline value */
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bkey_i {
     pub _data: [u64; 0],
 
@@ -478,26 +478,26 @@ pub enum BkeyType {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Deleted {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Whiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct ExtentWhiteout {
     pub v: c::bch_val,
 }
 
 #[grown(from = err, bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Error {
     pub v: c::bch_val,
     pub err: u8,
@@ -542,34 +542,34 @@ pub enum ErrorKeyReason {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Cookie {
     pub v: c::bch_val,
     pub cookie: Le64,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct HashWhiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Set {
     pub v: c::bch_val,
 }
 
 /* 128 bits, sufficient for cryptographic MACs: */
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_csum {
     pub lo: Le64,
     pub hi: Le64,
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Backpointer {
     pub v: c::bch_val,
     pub btree_id: u8,
@@ -616,7 +616,7 @@ c_bitmask! {
 /// header are defined across the crate, and their vstruct!() reads it.
 #[unsized_vstruct(tail = [u64])]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field {
     pub _data: [u64; 0],
     pub(crate) u64s: Le32,
@@ -841,7 +841,7 @@ pub const BCH_SINGLE_DEVICE_SB_FIELDS: u32 =
 
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal {
     pub field: Head<c::bch_sb_field>,
     pub buckets: [Le64; 0],
@@ -849,7 +849,7 @@ pub struct bch_sb_field_journal {
 vstruct!(unsized bch_sb_field_journal, field.u64s, start = 0);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_v2_entry {
     pub start: Le64,
     pub nr: Le64,
@@ -857,7 +857,7 @@ pub struct bch_sb_field_journal_v2_entry {
 
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_v2 {
     pub field: Head<c::bch_sb_field>,
 
@@ -868,19 +868,19 @@ vstruct!(unsized bch_sb_field_journal_v2, field.u64s, start = 0);
 /* BCH_SB_FIELD_crypt: */
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct Nonce {
     pub d: [Le32; 4],
 }
 
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_key {
     pub key: [Le64; 4],
 }
 
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_encrypted_key {
     pub magic: Le64,
     pub key: c::bch_key,
@@ -895,7 +895,7 @@ pub struct bch_encrypted_key {
  */
 #[whole]
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_crypt {
     pub field: Head<c::bch_sb_field>,
 
@@ -933,7 +933,7 @@ c_bitmask! {
  */
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry {
     u64s: Le16,
     pub btree_id: u8,
@@ -949,7 +949,7 @@ vstruct_container!(jset_entry, thin c::bkey_i);
 
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_clean {
     pub field: Head<c::bch_sb_field>,
 
@@ -967,7 +967,7 @@ vstruct_container!(bch_sb_field_clean, jset_entry);
 /* sections from before btrees_lost_data are 88 bytes: what validate accepts */
 #[grown(from = btrees_lost_data)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_ext {
     pub field: Head<c::bch_sb_field>,
     pub recovery_passes_required: [Le64; 2],
@@ -1177,7 +1177,7 @@ pub const BCH_SB_SECTOR: u32 = 8;
 pub const BCH_SB_LAYOUT_SIZE_BITS_MAX: u32 = 16; /* 32 MB */
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_layout {
     pub magic: c::__uuid_t, /* bcachefs superblock UUID */
     pub layout_type: u8,
@@ -1212,7 +1212,7 @@ pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
  */
 #[unsized_vstruct]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb {
     pub csum: c::bch_csum,
     pub version: Le16,
@@ -1687,7 +1687,7 @@ macro_rules! jset_entry_keys {
     ($($name:ident),*) => { $(
         #[unsized_vstruct]
         #[repr(C)]
-        #[derive(Default, CStruct, Plain, TypeInfo)]
+        #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
         pub struct $name {
             pub entry: Head<c::jset_entry>,
             pub start: [c::bkey_i; 0],
@@ -1703,7 +1703,7 @@ jset_entry_keys!(jset_entry_btree_keys, jset_entry_btree_root, jset_entry_overwr
 /* Legacy, no longer written: */
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_prio_ptrs {
     pub entry: Head<c::jset_entry>,
     pub _data: [u64; 0],
@@ -1722,7 +1722,7 @@ vstruct!(unsized jset_entry_prio_ptrs, entry.u64s);
  */
 #[whole]
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_blacklist {
     pub entry: Head<c::jset_entry>,
     pub seq: Le64,
@@ -1731,7 +1731,7 @@ vstruct!(jset_entry_blacklist, repr.entry.u64s);
 
 #[whole]
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_blacklist_v2 {
     pub entry: Head<c::jset_entry>,
     pub start: Le64,
@@ -1751,7 +1751,7 @@ pub enum FsUsageType {
 
 #[whole]
 #[repr(C, packed)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_usage {
     pub entry: Head<c::jset_entry>,
     pub v: Le64,
@@ -1761,7 +1761,7 @@ vstruct!(jset_entry_usage, repr.entry.u64s);
 /* r's devs[] are in the tail: the entry's size is its u64s, not r's nr_devs */
 #[unsized_vstruct(tail = [u8])]
 #[repr(C, packed)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_data_usage {
     pub entry: Head<c::jset_entry>,
     pub v: Le64,
@@ -1771,7 +1771,7 @@ vstruct!(unsized jset_entry_data_usage, entry.u64s);
 
 #[whole]
 #[repr(C, packed)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_clock {
     pub entry: Head<c::jset_entry>,
     pub rw: u8,
@@ -1781,7 +1781,7 @@ pub struct jset_entry_clock {
 vstruct!(jset_entry_clock, repr.entry.u64s);
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_dev_usage_type {
     pub buckets: Le64,
     pub sectors: Le64,
@@ -1790,7 +1790,7 @@ pub struct jset_entry_dev_usage_type {
 
 #[unsized_vstruct]
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_dev_usage {
     pub entry: Head<c::jset_entry>,
     pub dev: Le32,
@@ -1805,7 +1805,7 @@ vstruct!(unsized jset_entry_dev_usage, entry.u64s);
 
 #[unsized_vstruct]
 #[repr(C, align(8))]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_log {
     pub entry: Head<c::jset_entry>,
     pub d: [u8; 0],
@@ -1814,7 +1814,7 @@ vstruct!(unsized jset_entry_log, entry.u64s);
 
 #[whole]
 #[repr(C, align(8))]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_datetime {
     pub entry: Head<c::jset_entry>,
     pub seconds: Le64,
@@ -1823,7 +1823,7 @@ vstruct!(jset_entry_datetime, repr.entry.u64s);
 
 #[whole]
 #[repr(C, align(8))]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_rewind_limit {
     pub entry: Head<c::jset_entry>,
     pub seq: Le64,
@@ -1836,7 +1836,7 @@ vstruct!(jset_entry_rewind_limit, repr.entry.u64s);
  */
 #[whole]
 #[repr(C, align(8))]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_rewind {
     pub entry: Head<c::jset_entry>,
     pub from: Le64,
@@ -1856,7 +1856,7 @@ vstruct!(jset_entry_rewind, repr.entry.u64s);
  */
 #[unsized_vstruct]
 #[repr(C, align(8))]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset {
     pub csum: c::bch_csum,
 
@@ -1923,7 +1923,7 @@ pub const BTREE_MAX_DEPTH: u32 = 4;
  */
 #[unsized_vstruct]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bset {
     pub seq: Le64,
 
@@ -2012,7 +2012,7 @@ c_bitmask! {
 
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
 pub struct btree_node {
     pub csum: c::bch_csum,
     pub magic: Le64,
@@ -2045,7 +2045,7 @@ c_bitmask! {
 
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
 pub struct btree_node_entry {
     pub csum: c::bch_csum,
 

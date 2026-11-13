@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
-use cstruct_macros::{bch_enum, counters, tagged_union, whole, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bch_enum, counters, tagged_union, whole, MaybeZeroable, Plain, TypeInfo};
 use crate::format::Bpos;
 
 /*
@@ -50,7 +50,7 @@ use crate::format::Bpos;
 
 #[whole(tail = d: [u64], bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Accounting {
     pub v: c::bch_val,
     pub d: [u64; 0],
@@ -88,7 +88,7 @@ pub type Replicas = Head<c::bch_replicas_entry_v1>;
 crate::accounting::acct_counters!(ReplicasCounters { sectors });
 
 tagged_union! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
+    #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
     #[derive(TypeInfo)]
     #[tag(type_: u8)]
     #[tag_enum(DiskAccountingType: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]

@@ -162,7 +162,7 @@ use crate::util::gather::Gather;
 use crate::util::task::waiter;
 use crate::os::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
-use cstruct_macros::{CStruct, TypeInfo, bch_enum};
+use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
 use core::mem::{size_of, size_of_val};
 use crate::data_structures::array_vec::ArrayVec;
 use core::pin::Pin;
@@ -185,7 +185,7 @@ pub enum SbWriteFlags {
  * a field at a time - written only under it. sb_lock publishes it.
  */
 published! {
-#[derive(CStruct, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_sb_cpu {
     pub uuid: [Volatile<u8>; 16],
     pub user_uuid: [Volatile<u8>; 16],

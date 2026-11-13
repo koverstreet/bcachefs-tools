@@ -71,7 +71,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             let Some(field) = &f.ident else {
                 return Err(Error::new_spanned(f, format!("{name}: #[derive(Fieldwise)] is for named fields")));
             };
-            if f.attrs.iter().any(|a| a.path().is_ident("c_bitfield")) {
+            if f.attrs.iter().any(|a| a.path().is_ident("members")) {
                 return Err(Error::new_spanned(field,
                     format!("{name}.{field}: #[derive(Fieldwise)] can't see into a bitfield")));
             }

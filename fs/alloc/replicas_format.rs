@@ -4,11 +4,11 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{counted, unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{counted, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 
 #[counted(nr_devs)]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_replicas_entry_v0 {
     pub data_type: u8,
     pub nr_devs: u8,
@@ -17,7 +17,7 @@ pub struct bch_replicas_entry_v0 {
 
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_replicas_v0 {
     pub field: Head<c::bch_sb_field>,
     pub entries: [Head<c::bch_replicas_entry_v0>; 0],
@@ -26,7 +26,7 @@ vstruct!(unsized bch_sb_field_replicas_v0, field.u64s, start = 0);
 
 #[counted(nr_devs)]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_replicas_entry_v1 {
     pub data_type: u8,
     pub nr_devs: u8,
@@ -37,7 +37,7 @@ pub struct bch_replicas_entry_v1 {
 
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_replicas {
     pub field: Head<c::bch_sb_field>,
     pub entries: [Head<c::bch_replicas_entry_v1>; 0],

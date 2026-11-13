@@ -8,7 +8,7 @@ use crate::util::shrinker::Shrinker;
 use crate::util::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicIsize, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{placed, CStruct, Init, TypeInfo};
+use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo};
 use pin_init::pin_data;
 use crate::format::Bpos;
 
@@ -17,7 +17,7 @@ use crate::format::Bpos;
 #[placed(c::bch_fs_btree_key_cache.shrinker)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, Init)]
+#[derive(MaybeZeroable, Init)]
 pub struct btree_key_cache_shrinker {
     pub(crate) shrink: Shrinker<Self>,
     /* the table shrunk once scan() has emptied it: its allocation, off reclaim */
@@ -28,7 +28,7 @@ pub struct btree_key_cache_shrinker {
 #[placed(c::bch_fs_btree.key_cache)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_btree_key_cache {
     #[pin]
     #[init(::pin_init::init_zeroed())]
@@ -94,7 +94,7 @@ impl bch_fs_btree_key_cache {
 }
 
 #[repr(C, align(4))]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]
 pub struct bkey_cached_key {
     pub btree_id: u32,
     pub pos: Bpos,

@@ -5,19 +5,19 @@
 #![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
-use cstruct_macros::{bitfield, CStruct};
+use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
 
 nest! {
     #[repr(C)]
-    #[derive(CStruct)]
+    #[derive(MaybeZeroable, BitfieldMembers)]
     pub struct dio_write {
         pub req: *mut c::kiocb,
         pub mapping: crate::vfs::folio::Mapping,
         pub inode: *mut c::InodeInfo,
         pub mm: Option<crate::os::kernel::Mm>,
         pub iov: *const c::iovec,
-        #[c_bitfield]
+        #[members]
         #>[bitfield(u8)]
         pub bits: pub struct dio_write_bits {
             loop_:     u1,

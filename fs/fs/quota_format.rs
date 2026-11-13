@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{bch_enum, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 /* KEY_TYPE_quota: */
 #[bch_enum(open)]
@@ -26,14 +26,14 @@ pub enum QuotaCounter {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_quota_counter {
     pub hardlimit: Le64,
     pub softlimit: Le64,
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Quota {
     pub v: c::bch_val,
     pub c: [c::bch_quota_counter; c::QuotaCounter::Q_COUNTERS.0 as usize],
@@ -41,14 +41,14 @@ pub struct Quota {
 
 /* BCH_SB_FIELD_quota: */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_quota_counter {
     pub timelimit: Le32,
     pub warnlimit: Le32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_quota_type {
     pub flags: Le64,
     pub c: [c::bch_sb_quota_counter; c::QuotaCounter::Q_COUNTERS.0 as usize],
@@ -56,7 +56,7 @@ pub struct bch_sb_quota_type {
 
 #[whole]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_quota {
     pub field: Head<c::bch_sb_field>,
     pub q: [c::bch_sb_quota_type; c::QuotaType::QTYP_NR.0 as usize],

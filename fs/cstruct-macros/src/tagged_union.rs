@@ -4,7 +4,7 @@
 //! tag's value as the discriminant:
 //!
 //!   tagged_union! {
-//!       #[derive(Clone, Copy, CStruct, TypeInfo)]*
+//!       #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
 //!       #[tag(type_: u8)]
 //!       #[tag_enum(DiskAccountingType: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]
 //!       #[pad(Bpos)]

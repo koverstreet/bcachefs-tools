@@ -12,7 +12,7 @@ use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitArray;
 use crate::util::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicBool, AtomicU32};
-use cstruct_macros::{bch_enum, placed, CStruct, Init, TypeInfo};
+use cstruct_macros::{bch_enum, placed, MaybeZeroable, Init, TypeInfo};
 use pin_init::pin_data;
 
 pub const IS_ANCESTOR_BITMAP: u32 = 128;
@@ -45,7 +45,7 @@ pub enum SnapshotIdState {
  * atomic - C still sees plain integers.
  */
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(MaybeZeroable)]
 pub struct snapshot_t {
     pub state: AtomicU32,
     pub parent: AtomicU32,
@@ -83,7 +83,7 @@ pub type SnapshotTable = crate::util::rcu::RcuArray<c::snapshot_t>;
 #[placed(Fs.snapshots)]
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_snapshots {
     pub table: c::SnapshotTable,
     /// The table's writers' lock: taken by table_write(), in snapshot.rs.
@@ -109,7 +109,7 @@ pub struct bch_fs_snapshots {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, CStruct)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, MaybeZeroable)]
 pub struct subvol_inum {
     /* we can't have padding in this struct: */
     pub subvol: u64,

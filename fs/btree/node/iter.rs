@@ -16,17 +16,17 @@ use crate::os::kernel::unlikely;
 use crate::util::log::{print_lines, LogLevel};
 use crate::util::Printbuf;
 use core::cmp::Ordering;
-use cstruct_macros::CStruct;
+use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct KeyIterSet {
     pub k: u16,
     pub end: u16,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct KeyIter {
     pub data: [KeyIterSet; cs::MAX_BSETS as usize],
 }

@@ -27,7 +27,7 @@ use core::iter;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 use crate::types::c_default;
-use cstruct_macros::{CStruct, c_xmacro, TypeInfo, list_enum};
+use cstruct_macros::{MaybeZeroable, c_xmacro, TypeInfo, list_enum};
 
 c_xmacro! {
     BLK_ERRS {
@@ -676,7 +676,7 @@ macro_rules! __bch_errcode_max_0 {
     ([$($acc:tt)*] $(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! {
         #[allow(non_snake_case)]
         #[repr(C)]
-        #[derive(Clone, Copy, CStruct, TypeInfo)]
+        #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
         pub union bch_errcode_max {
             $($acc)*
             $(pub [<BCH_ERR_ $err>]: [crate::util::ffi::c_char; (($nr) + 1) as usize],)*
