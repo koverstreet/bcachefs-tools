@@ -33,7 +33,7 @@ use crate::format::{Bpos, Btree, BkeyType, SbFeature};
 #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
 pub struct bch_hash_info {
     pub inum_snapshot: u32,
-    pub type_: u8,
+    pub type_: c::StrHashKind,
     pub is_31bit: bool,
     pub cf_encoding: *mut c::unicode_map,
     /*
@@ -90,15 +90,14 @@ impl StrHash {
 
         let k0 = info.siphash_key.k0.get().to_le_bytes();
 
-        match info.type_ as u32 {
-            t if t == T::crc32c.0 => Self::Crc32c(crc32c(!0, &k0)),
-            t if t == T::crc64.0 => Self::Crc64(crc64_be(!0, &k0)),
-            t if t == T::siphash_old.0 ||
-                 t == T::siphash.0 => {
+        match info.type_ {
+            T::crc32c => Self::Crc32c(crc32c(!0, &k0)),
+            T::crc64  => Self::Crc64(crc64_be(!0, &k0)),
+            T::siphash_old | T::siphash => {
                 let k = &info.siphash_key;
                 Self::SipHash(SipHash24::new(k.k0.get(), k.k1.get()))
             }
-            t => panic!("bch_hash_info: str_hash type {t} isn't one"),
+            t => panic!("bch_hash_info: str_hash type {} isn't one", t.0),
         }
     }
 
@@ -394,14 +393,14 @@ pub fn new_inode_type(fs: &Fs) -> c::StrHashKind {
 pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_hash_info {
     let mut info = c::bch_hash_info {
         inum_snapshot: inode.bi_snapshot,
-        type_:         inode.str_hash().0 as u8,
+        type_:         inode.str_hash(),
         is_31bit:      inode.flag(c::InodeFlags::BCH_INODE_31bit_dirent_offset),
         cf_encoding:   inode::cf_encoding(fs, inode),
         siphash_key:   c::SIPHASH_KEY { k0: inode.bi_hash_seed, ..Default::default() },
     };
 
     // siphash_old's key is the first 16 bytes of the seed's sha256
-    if info.type_ == c::StrHashKind::siphash_old.0 as u8 {
+    if info.type_ == c::StrHashKind::siphash_old {
         let seed = plain_bytes(&inode.bi_hash_seed);
         let mut digest = [0u8; 32];
         // SAFETY: @seed's bytes in, a sha256 digest's out
