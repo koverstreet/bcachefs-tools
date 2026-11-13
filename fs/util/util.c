@@ -8,7 +8,6 @@
 
 #include <linux/bio.h>
 #include <linux/blkdev.h>
-#include <linux/debugfs.h>
 #include <linux/kthread.h>
 #include <linux/percpu.h>
 #include <linux/preempt.h>
@@ -285,12 +284,16 @@ bool bch2_capable(int cap)
 	return capable(cap);
 }
 
-/* For util/debugfs.rs: debugfs_create_file() is, in the kernel, a _Generic() over its fops' type */
+#ifdef __KERNEL__
+#include <linux/debugfs.h>
+
+/* For os/linux_kernel/debugfs.rs: debugfs_create_file() is a _Generic() over its fops' type */
 struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct dentry *parent,
 					void *data, const struct file_operations *fops)
 {
 	return debugfs_create_file(name, mode, parent, data, fops);
 }
+#endif
 
 #ifdef __KERNEL__
 #include <linux/cpumask.h>

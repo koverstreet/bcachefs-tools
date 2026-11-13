@@ -1,29 +1,7 @@
-use std::ffi::CString;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use crate::c;
 
 extern crate tiny_http;
-
-/// The file at @path under debugfs, or its directory listed as HTML, into
-/// @out: or a negative errno.
-fn debugfs_read(path: &str, out: &mut Vec<u8>) -> Result<(), libc::c_int> {
-    let c_path = CString::new(path).map_err(|_| -libc::EINVAL)?;
-
-    let mut buf: *mut libc::c_char = std::ptr::null_mut();
-    let mut len = 0;
-    let f = unsafe { libc::open_memstream(&mut buf, &mut len) };
-    if f.is_null() {
-        return Err(-libc::ENOMEM);
-    }
-
-    let ret = unsafe { c::debugfs_read_or_html_dirlist(c_path.as_ptr(), f.cast()) };
-    unsafe { libc::fclose(f) };
-    out.extend_from_slice(unsafe { std::slice::from_raw_parts(buf.cast::<u8>(), len) });
-    unsafe { libc::free(buf.cast()) };
-
-    if ret < 0 { Err(ret) } else { Ok(()) }
-}
 
 fn http_thread(server: tiny_http::Server) {
     use tiny_http::{Response};
@@ -46,10 +24,9 @@ fn http_thread(server: tiny_http::Server) {
             tiny_http::Method::Get => {
                 let mut body = Vec::new();
                 let ret = match path.strip_prefix("debug").filter(|p| p.is_empty() || p.starts_with('/')) {
-                    Some(debug_path) => debugfs_read(debug_path, &mut body),
-                    None => bcachefs_kernel::os::kobject::read_or_html_dirlist(path, &mut body)
-                        .map_err(|e| e.class()),
-                };
+                    Some(debug_path) => bcachefs_kernel::os::debugfs::read_or_html_dirlist(debug_path, &mut body),
+                    None => bcachefs_kernel::os::kobject::read_or_html_dirlist(path, &mut body),
+                }.map_err(|e| e.class());
 
                 match ret {
                     Ok(())   => Response::from_string(String::from_utf8_lossy(&body).into_owned()),

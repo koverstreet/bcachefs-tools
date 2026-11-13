@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! /sys/kernel/debug/bcachefs/<fs>/: each file a DebugFile (util/debugfs.rs).
+//! /sys/kernel/debug/bcachefs/<fs>/: each file a DebugFile (os/*/debugfs.rs).
 //!
 //! The btree walks don't start until BCH_FS_may_go_rw: until then journal
 //! replay is changing the journal keys' gap buffer, which iteration reads.
@@ -23,7 +23,7 @@ use crate::btree::trans::transaction_fn;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::util::debugfs::{self, DebugFile, DebugOut};
+use crate::os::debugfs::{self, DebugFile, DebugOut};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::place::Contained;
 use crate::util::{rcu, Printbuf};
@@ -423,9 +423,9 @@ impl PrintOnce for BtreeDeadlock {
 /* Creating and removing them */
 
 /// /sys/kernel/debug/bcachefs/, if debugfs is up.
-static BCH_DEBUG: AtomicPtr<c::dentry> = AtomicPtr::new(core::ptr::null_mut());
+static BCH_DEBUG: AtomicPtr<crate::os::debugfs::Dentry> = AtomicPtr::new(core::ptr::null_mut());
 
-fn dentry_ptr(d: Option<NonNull<c::dentry>>) -> *mut c::dentry {
+fn dentry_ptr(d: Option<NonNull<crate::os::debugfs::Dentry>>) -> *mut crate::os::debugfs::Dentry {
     d.map_or(core::ptr::null_mut(), NonNull::as_ptr)
 }
 

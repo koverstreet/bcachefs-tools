@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#[cfg(CONFIG_DEBUG_FS)]
+pub mod debugfs;
 // The kernel's, cfg(not(kernel)) inside, until userspace has its own
 #[path = "../linux_kernel/file.rs"]
 pub mod file;

@@ -266,3 +266,11 @@ static void rand_init(void)
 	BUG_ON(urandom_fd < 0);
 }
 #endif
+
+/*
+ * Defined in the tools binary (src/http.rs), and called by
+ * os/linux_user/debugfs.rs. A weak empty definition lets other links of this
+ * archive, such as the bcachefs-kernel crate tests, resolve the symbol. The
+ * tools binary's strong definition overrides it.
+ */
+__attribute__((weak)) void bch2_start_http_lazy(void) {}

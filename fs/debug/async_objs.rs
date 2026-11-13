@@ -130,7 +130,7 @@ use crate::data::update_task::Update;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::bio::Bio;
-use crate::util::debugfs::{self, DebugFile, DebugOut};
+use crate::os::debugfs::{self, DebugFile, DebugOut};
 use crate::util::place::Contained;
 use crate::util::rcu;
 use crate::util::{Printbuf, ToText};
@@ -236,7 +236,7 @@ impl DebugFile for AsyncObjList {
 }
 
 /// debug_init()'s, in its directory @parent.
-pub(crate) fn debugfs_init(fs: &Fs, parent: NonNull<c::dentry>) {
+pub(crate) fn debugfs_init(fs: &Fs, parent: NonNull<crate::os::debugfs::Dentry>) {
     let dir = debugfs::create_dir(c"async_objs", Some(parent));
     // SAFETY: filesystem init, before anything reads it
     unsafe { (*fs.as_ptr()).async_obj_dir = dir.map_or(core::ptr::null_mut(), NonNull::as_ptr) };

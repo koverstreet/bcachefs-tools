@@ -733,11 +733,11 @@ pub struct Fs {
     /* DEBUG JUNK */
 
     #[cfg(CONFIG_DEBUG_FS)]
-    pub fs_debug_dir: *mut c::dentry,
+    pub fs_debug_dir: *mut crate::os::debugfs::Dentry,
     #[cfg(CONFIG_DEBUG_FS)]
-    pub btree_debug_dir: *mut c::dentry,
+    pub btree_debug_dir: *mut crate::os::debugfs::Dentry,
     #[cfg(CONFIG_DEBUG_FS)]
-    pub async_obj_dir: *mut c::dentry,
+    pub async_obj_dir: *mut crate::os::debugfs::Dentry,
     #[cfg(CONFIG_DEBUG_FS)]
     #[pin]
     pub btree_debug: [c::btree_debug; Btree::NR as usize],

@@ -7,10 +7,8 @@
  */
 
 #include "closure.h"
-#include <linux/debugfs.h>
 #include <linux/export.h>
 #include <linux/rcupdate.h>
-#include <linux/seq_file.h>
 #include <linux/sched/debug.h>
 
 enum new_closure_state {

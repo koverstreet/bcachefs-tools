@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#[cfg(CONFIG_DEBUG_FS)]
+pub mod debugfs;
 pub mod file;
 pub mod fs_context;
 pub mod fs_type;

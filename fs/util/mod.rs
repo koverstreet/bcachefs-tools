@@ -4,8 +4,6 @@ pub mod backtrace;
 pub mod bio;
 pub mod clock;
 pub mod closure;
-#[cfg(CONFIG_DEBUG_FS)]
-pub mod debugfs;
 pub mod demangle;
 pub mod ffi;
 pub mod futex;
