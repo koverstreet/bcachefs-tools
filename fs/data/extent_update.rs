@@ -310,7 +310,7 @@ impl<'t> TransAttempt<'_, 't> {
              * existing inodes by the upgrade's scheduled passes; version upgrades
              * always run, so by the time we're doing io the flags are trustworthy:
              */
-            *opts = if likely(inode.v().bi_flags.get() & u64::from(c::InodeFlags::has_inode_opts.bits()) == 0) {
+            *opts = if likely(!inode.v().flags().contains(c::InodeFlags::has_inode_opts)) {
                 inode_opts::get_fs(fs, false)
             } else {
                 let k = k.arm::<inode::Inodes>().expect("an inode: to_v3() is ENOENT for anything else");

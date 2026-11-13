@@ -264,7 +264,7 @@ fn check_inode<'t>(
     }
 
     if u.bi_hash_seed != st.snapshot_root.bi_hash_seed ||
-       u.inode_str_hash() != st.snapshot_root.inode_str_hash() {
+       u.str_hash() != st.snapshot_root.str_hash() {
         str_hash::repair_inode_hash_info(t, &mut u, &st.snapshot_root)?;
     }
 

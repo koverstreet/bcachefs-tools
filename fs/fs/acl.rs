@@ -396,7 +396,7 @@ mod vfs {
 
         // The flag clear means there's no ACL xattr: skip the lookup, and have
         // the VFS cache that there's none
-        if inode.bi_flags & ty.inode_flag().bits() == 0 {
+        if !inode.flag(ty.inode_flag()) {
             v.vfs().set_cached_acl(ty, None);
             return Ok(None);
         }
@@ -431,14 +431,14 @@ mod vfs {
             let mut k = acl.to_xattr(t, ty)?;
             str_hash::set::<Xattrs>(t, &hash_info, inum, &mut k, str_hash::SetFlags::empty(),
                                     UpdateTriggerFlags::empty())?;
-            inode.bi_flags |= ty.inode_flag().bits();
+            inode.set_flag(ty.inode_flag(), true);
         } else {
             let search = xattr::XattrKey { ty: ty.xattr_type(), name: OsStr::from_bytes(b"") };
             match str_hash::delete::<Xattrs>(t, &hash_info, inum, &search) {
                 Err(e) if e.matches(c::ENOENT) => {}
                 r => r?,
             }
-            inode.bi_flags &= !ty.inode_flag().bits();
+            inode.set_flag(ty.inode_flag(), false);
         }
         Ok(())
     }

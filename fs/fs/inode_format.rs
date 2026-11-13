@@ -4,45 +4,48 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_bitmask, bch_enum, xmacro, whole, MaybeZeroable, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{bitfield, bch_enum, xmacro, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 pub const BLOCKDEV_INODE_MAX: u32 = 4096;
 pub const BCACHEFS_ROOT_INO: u32 = 4096;
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, BitfieldMembers)]
 pub struct Inode {
     pub v: c::bch_val,
 
     pub bi_hash_seed: Le64,
-    pub bi_flags: Le32,
+    #[members]
+    pub bi_flags: InodeBiFlags,
     pub bi_mode: Le16,
     pub fields: [u8; 0],
 }
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, BitfieldMembers)]
 pub struct InodeV2 {
     pub v: c::bch_val,
 
     pub bi_journal_seq: Le64,
     pub bi_hash_seed: Le64,
-    pub bi_flags: Le64,
+    #[members]
+    pub bi_flags: InodeV2BiFlags,
     pub bi_mode: Le16,
     pub fields: [u8; 0],
 }
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct InodeV3 {
     pub v: c::bch_val,
 
     pub bi_journal_seq: Le64,
     pub bi_hash_seed: Le64,
-    pub bi_flags: Le64,
+    #[members]
+    pub bi_flags: InodeV3BiFlags,
     pub bi_sectors: Le64,
     pub bi_size: Le64,
     pub bi_version: Le64,
@@ -209,28 +212,36 @@ pub enum InodeFlagBit {
     has_default_acl = 14,
 }
 
-c_bitmask! {
-    LE32_BITMASK(struct Inode, bi_flags) {
-        INODEv1_STR_HASH(20, 24),
-        INODEv1_NR_FIELDS(24, 31),
-        INODEv1_NEW_VARINT(31, 32),
-    }
+#[bitfield(Le32)]
+pub struct InodeBiFlags {
+    #[bits(20, from = InodeFlags::from_bits_retain)]
+    flags:      InodeFlags,
+    #[bits(4)]
+    str_hash:   c::StrHashKind,
+    nr_fields:  u7,
+    new_varint: bool,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct InodeV2, bi_flags) {
-        INODEv2_STR_HASH(20, 24),
-        INODEv2_NR_FIELDS(24, 31),
-    }
+#[bitfield(Le64)]
+pub struct InodeV2BiFlags {
+    #[bits(20, from = InodeFlags::from_bits_retain)]
+    flags:      InodeFlags,
+    #[bits(4)]
+    str_hash:   c::StrHashKind,
+    nr_fields:  u7,
+    __:         u33,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct InodeV3, bi_flags) {
-        INODEv3_STR_HASH(20, 24),
-        INODEv3_NR_FIELDS(24, 31),
-        INODEv3_FIELDS_START(31, 36),
-        INODEv3_MODE(36, 52),
-    }
+#[bitfield(Le64)]
+pub struct InodeV3BiFlags {
+    #[bits(20, from = InodeFlags::from_bits_retain)]
+    flags:        InodeFlags,
+    #[bits(4)]
+    str_hash:     c::StrHashKind,
+    nr_fields:    u7,
+    fields_start: u5,
+    mode:         u16,
+    __:           u12,
 }
 
 #[repr(C)]

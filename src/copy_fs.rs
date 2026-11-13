@@ -162,7 +162,7 @@ fn unlink_and_rm(
         },
     )?;
 
-    if child.bi_flags & c::InodeFlags::unlinked.bits() == 0 {
+    if !child.flag(c::InodeFlags::unlinked) {
         return Ok(());
     }
 

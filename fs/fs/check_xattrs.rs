@@ -42,18 +42,18 @@ fn check_acl_flag(
     acl: AclType,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let flag = acl.inode_flag().bits();
+    let flag = acl.inode_flag();
 
     for i in st.inode.visible_mut(t, &st.s, k.k.p.snapshot) {
         // One repair per visible version, bounded only by snapshot count:
         t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
 
         if !i.whiteout &&
-           fsck_err_on!(t, i.inode.bi_flags & flag == 0, acl.flag_wrong(),
+           fsck_err_on!(t, !i.inode.flag(flag), acl.flag_wrong(),
                         "inode has {0} acl xattr but BCH_INODE_has_{0}_acl not set\n{1}\n{2}",
                         acl.name(), i.inode, k.to_text(fs))? {
             let mut u = i.inode;
-            u.bi_flags |= flag;
+            u.set_flag(flag, true);
             inode::fsck_write(t, &mut u)?;
         }
     }

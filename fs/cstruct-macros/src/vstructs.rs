@@ -429,6 +429,20 @@ fn state_methods(ffi: &Ident) -> TokenStream {
     }
 }
 
+/// A #[members] field's members on each of @defs too - a family's definitions
+/// in place, with C's fields inline: their Deref to C's struct can't reach
+/// its setters.
+fn members_on(name: &Ident, fields: &[FieldDef], defs: &[&Ident]) -> Result<TokenStream, String> {
+    let mut out = TokenStream::new();
+    for f in fields.iter().filter(|f| f.bitfield) {
+        if let Some(fwd) = crate::members_forwarder(name, f)? {
+            let field = &f.ident;
+            out.extend(defs.iter().map(|d| quote!(#fwd!([] #d, #field);)));
+        }
+    }
+    Ok(out)
+}
+
 /// The family of a type whose count is its own - an unsized vstruct's, a
 /// #[counted] type's: both states laid out as @shape - Unvalidated, bytes
 /// from outside, its count checked against them; Validated, its count
@@ -461,14 +475,7 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
     let mut out = state("Unvalidated", "bytes from outside - off a device, from the kernel - its count \
                                         checked against them when it's made");
     out.extend(state("Validated", "what C read and validated, its counts trusted as C trusts them"));
-    // A #[members] field's members, on each state too: the Deref to C's
-    // struct can't reach its setters
-    for f in shape.fields.iter().filter(|f| f.bitfield) {
-        if let Some(fwd) = crate::members_forwarder(name, f)? {
-            let field = &f.ident;
-            out.extend(quote!(#fwd!([] #unvalidated, #field); #fwd!([] #validated, #field);));
-        }
-    }
+    out.extend(members_on(name, shape.fields, &[&unvalidated, &validated])?);
     out.extend(family(name, &unvalidated, &validated, &validated, &[unvalidated.clone(), validated.clone()]));
     out.extend(generic_type(name,
         &Generic { default: "Validated", unsized_states: &unsized_states, arm_of: None,
@@ -773,6 +780,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
                 (self as *mut Self).cast()
             }
         }));
+        out.extend(members_on(name, fields, &[&all])?);
         out.extend(family(name, &all, &all, &ffi, &[]));
         out.extend(whole_arm_ref(&ffi, is_plain));
         out.extend(generic_type(name, &sized_generic(&all, &ffi, &derives, &states, false), &generic_doc));

@@ -50,12 +50,12 @@ const FLAGS: [(F, u32, u32); 5] = [
 
 /// The inode flags of @fl, each flag's bit there given by @bit - and those
 /// bits cleared from @fl, leaving any it has no flag for.
-fn flags_from(fl: &mut u32, bit: impl Fn(&(F, u32, u32)) -> u32) -> u32 {
-    let mut flags = 0;
+fn flags_from(fl: &mut u32, bit: impl Fn(&(F, u32, u32)) -> u32) -> F {
+    let mut flags = F::empty();
     for f in &FLAGS {
         if *fl & bit(f) != 0 {
             *fl &= !bit(f);
-            flags |= f.0.bits();
+            flags |= f.0;
         }
     }
     flags
@@ -65,8 +65,8 @@ fn flags_from(fl: &mut u32, bit: impl Fn(&(F, u32, u32)) -> u32) -> u32 {
 /// the project and casefolding if they're Some - the project stored +1.
 #[derive(Default)]
 struct FileattrSet {
-    mask:     u32,
-    flags:    u32,
+    mask:     F,
+    flags:    F,
     project:  Option<u32>,
     casefold: Option<bool>,
 }
@@ -77,8 +77,8 @@ impl FileattrSet {
     {
         let fs = t.fs();
         let file_type = bi.bi_mode as u32 & c::S_IFMT;
-        let others_may = (F::nodump | F::noatime).bits();
-        if file_type != c::S_IFREG && file_type != c::S_IFDIR && self.flags & !others_may != 0 {
+        let others_may = F::nodump | F::noatime;
+        if file_type != c::S_IFREG && file_type != c::S_IFDIR && !others_may.contains(self.flags) {
             return fs.throw(Errcode::BCH_ERR_EINVAL_setattr_bad_file_type);
         }
 
@@ -91,7 +91,7 @@ impl FileattrSet {
             InodeOpt::of(c::InodeOptId::project).set_own(bi, true);
         }
 
-        bi.bi_flags = bi.bi_flags & !self.mask | self.flags;
+        bi.set_flags(bi.flags().difference(self.mask).union(self.flags));
         bi.bi_ctime = fs.timespec_to_time(inode.vfs().current_time()) as u64;
         Ok(())
     }
@@ -135,11 +135,11 @@ impl InodeInfo {
             stat.btime = fs.time_to_timespec(self.ei_inode.bi_otime.get() as i64);
         }
 
-        let flags = self.ei_inode.bi_flags.get();
+        let flags = self.ei_inode.bi_flags.get().flags();
         for (flag, attr) in [(F::immutable, c::STATX_ATTR_IMMUTABLE),
                              (F::append,    c::STATX_ATTR_APPEND),
                              (F::nodump,    c::STATX_ATTR_NODUMP)] {
-            if flags & flag.bits() != 0 {
+            if flags.contains(flag) {
                 stat.attributes |= attr as u64;
             }
             stat.attributes_mask |= attr as u64;
@@ -165,7 +165,7 @@ impl InodeInfo {
         -> Result<(), BchError>
     {
         let fs = self.fs();
-        let all = FLAGS.iter().fold(0, |m, f| m | f.0.bits());
+        let all = FLAGS.iter().fold(F::empty(), |m, f| m | f.0);
         let mut s = FileattrSet::default();
 
         if fa.fsx_valid() {

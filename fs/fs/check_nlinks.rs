@@ -179,7 +179,7 @@ fn check_nlinks_update_inode(
     let link = links[*idx];
 
     let nlink = u.nlink();
-    let unlinked = u.bi_flags & c::InodeFlags::unlinked.bits() != 0;
+    let unlinked = u.flag(c::InodeFlags::unlinked);
 
     if fsck_err_on!(t, nlink != link.count || (unlinked && u.bi_nlink != 0),
                     id::inode_wrong_nlink,

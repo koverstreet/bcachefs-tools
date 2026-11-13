@@ -614,12 +614,7 @@ mod vfs {
             // rehash everything and update the dirent keys.
             crate::dirent::empty_dir_trans(t, inum)?;
 
-            let flag = c::InodeFlags::BCH_INODE_31bit_dirent_offset.bits();
-            if defined {
-                bi.bi_flags |= flag;
-            } else {
-                bi.bi_flags &= !flag;
-            }
+            bi.set_flag(c::InodeFlags::BCH_INODE_31bit_dirent_offset, defined);
         }
 
         opt.set_own(bi, defined);

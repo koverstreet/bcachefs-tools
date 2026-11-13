@@ -149,7 +149,7 @@ pub mod c {
     pub use crate::dirent::{ RenameMode};
     pub use super::fs_inode_format::*;
     pub use crate::inode_opts::{inode_opt_change};
-    pub use crate::inode::{VolatileInodeUnpacked, bch_inode_unpacked, bch_inode_unpacked_bi_flags_BITMASKS, bkey_inode_buf, u96};
+    pub use crate::inode::{VolatileInodeUnpacked, bch_inode_unpacked, bkey_inode_buf, u96};
     pub use super::fs_logged_ops_format::*;
     pub use crate::logged_ops::{bch_fs_logged_ops};
     pub use super::fs_quota_format::*;

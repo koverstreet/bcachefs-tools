@@ -20,7 +20,7 @@ use crate::data::checksum::crc64_be;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::os_str::OsStrExt;
 use crate::util::siphash::SipHash24;
-use crate::util::{Printbuf, ToText};
+use crate::util::Printbuf;
 use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
 use bitflags::bitflags;
@@ -394,7 +394,7 @@ pub fn new_inode_type(fs: &Fs) -> c::StrHashKind {
 pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_hash_info {
     let mut info = c::bch_hash_info {
         inum_snapshot: inode.bi_snapshot,
-        type_:         inode.inode_str_hash() as u8,
+        type_:         inode.str_hash().0 as u8,
         is_31bit:      inode.flag(c::InodeFlags::BCH_INODE_31bit_dirent_offset),
         cf_encoding:   inode::cf_encoding(fs, inode),
         siphash_key:   c::SIPHASH_KEY { k0: inode.bi_hash_seed, ..Default::default() },
@@ -429,23 +429,6 @@ impl PartialEq for c::bch_hash_info {
         self.siphash_key   == other.siphash_key
     }
 }
-
-/// An INODE_STR_HASH() value, for formatting with {}.
-pub struct StrHashType(pub u64);
-
-impl ToText for StrHashType {
-    fn to_text(&self, out: &mut Printbuf) {
-        let t = match self.0 {
-            0 => c::StrHashKind::crc32c,
-            1 => c::StrHashKind::crc64,
-            2 => c::StrHashKind::siphash_old,
-            3 => c::StrHashKind::siphash,
-            n => return write!(out, "(invalid str_hash type {n})"),
-        };
-        t.to_text(out)
-    }
-}
-crate::display_via_to_text!(StrHashType);
 
 /// @inode's string hash: its type and seed, and if it's a casefolded
 /// directory, the unicode map to fold names with - which the filesystem has to
@@ -528,14 +511,14 @@ pub fn repair_inode_hash_info(
                   "inum {}: inode hash info in snapshots {}, {} mismatch\n{} {:x}\n{} {:x}\n\
                    setting the version in snapshot {} to the snapshot root's",
                   snapshot_root.bi_inum, bad_inode.bi_snapshot, snapshot_root.bi_snapshot,
-                  StrHashType(bad_inode.inode_str_hash()), bad_inode.bi_hash_seed,
-                  StrHashType(snapshot_root.inode_str_hash()), snapshot_root.bi_hash_seed,
+                  bad_inode.str_hash(), bad_inode.bi_hash_seed,
+                  snapshot_root.str_hash(), snapshot_root.bi_hash_seed,
                   bad_inode.bi_snapshot)? {
         return Ok(());
     }
 
     bad_inode.bi_hash_seed = snapshot_root.bi_hash_seed;
-    bad_inode.set_inode_str_hash(snapshot_root.inode_str_hash());
+    bad_inode.set_str_hash(snapshot_root.str_hash());
 
     inode::fsck_write(t, bad_inode)?;
     t.commit_lazy(None, CommitFlags::NO_ENOSPC)
