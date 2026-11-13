@@ -35,55 +35,6 @@ void die(const char *fmt, ...)
 	_exit(EXIT_FAILURE);
 }
 
-/*
- * Fatal-signal handler: print signal name and a unified backtrace via
- * bch2_prt_task_backtrace (libunwind + util/demangle.rs + libdw line info),
- * then re-raise. SA_RESETHAND means our handler ran once and the default
- * disposition is restored, so re-raising terminates with the kernel's
- * default action (core dump if ulimit -c permits).
- *
- * Strictly speaking bch2_prt_task_backtrace allocates (printbuf grow,
- * darray_push), which isn't async-signal-safe. In practice the failure
- * paths that bring us here (NULL deref, assert, illegal insn) aren't on
- * malloc's call path, so this works reliably; if it ever does deadlock,
- * the user can SIGKILL and inspect the core file.
- */
-static void fatal_signal_handler(int signo)
-{
-	const char *name;
-	switch (signo) {
-	case SIGSEGV: name = "\nbcachefs: fatal SIGSEGV\n"; break;
-	case SIGILL:  name = "\nbcachefs: fatal SIGILL\n";  break;
-	case SIGBUS:  name = "\nbcachefs: fatal SIGBUS\n";  break;
-	case SIGFPE:  name = "\nbcachefs: fatal SIGFPE\n";  break;
-	case SIGABRT: name = "\nbcachefs: fatal SIGABRT\n"; break;
-	default:      name = "\nbcachefs: fatal signal\n";  break;
-	}
-	(void) !write(STDERR_FILENO, name, strlen(name));
-
-	struct printbuf buf = PRINTBUF;
-	bch2_prt_task_backtrace(&buf, current, 1, GFP_NOWAIT);
-	(void) !write(STDERR_FILENO, buf.buf, buf.pos);
-	printbuf_exit(&buf);
-
-	raise(signo);
-	_exit(128 + signo);
-}
-
-void bch2_install_fatal_signal_handlers(void)
-{
-	struct sigaction sa = {};
-	sa.sa_handler = fatal_signal_handler;
-	sa.sa_flags = SA_NODEFER | SA_RESETHAND;
-	sigemptyset(&sa.sa_mask);
-
-	static const int signals[] = {
-		SIGSEGV, SIGILL, SIGBUS, SIGFPE, SIGABRT,
-	};
-	for (size_t i = 0; i < ARRAY_SIZE(signals); i++)
-		sigaction(signals[i], &sa, NULL);
-}
-
 char *vmprintf(const char *fmt, va_list args)
 {
 	char *str;

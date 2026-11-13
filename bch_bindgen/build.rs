@@ -118,7 +118,6 @@ fn main() {
         .allowlist_function("ask_yn")
         .allowlist_function("read_file_str")
         .allowlist_function("read_file_u64")
-        .allowlist_function("bch2_install_fatal_signal_handlers")
         .allowlist_function("copy_fs")
         .blocklist_function("bch2_prt_vprintf")
         .blocklist_function("bch2_inode_opts_get_inode")

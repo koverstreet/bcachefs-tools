@@ -329,12 +329,54 @@ fn opts_table() -> String {
     out
 }
 
+/*
+ * Fatal-signal handler: print signal name and a unified backtrace via
+ * dump_stack() (libunwind + util/demangle.rs + libdw line info), then
+ * re-raise. SA_RESETHAND means our handler ran once and the default
+ * disposition is restored, so re-raising terminates with the kernel's
+ * default action (core dump if ulimit -c permits).
+ *
+ * Strictly speaking dump_stack() allocates, which isn't async-signal-safe.
+ * In practice the failure paths that bring us here (NULL deref, assert,
+ * illegal insn) aren't on malloc's call path, so this works reliably; if it
+ * ever does deadlock, the user can SIGKILL and inspect the core file.
+ */
+extern "C" fn fatal_signal_handler(signo: libc::c_int) {
+    let name: &[u8] = match signo {
+        libc::SIGSEGV => b"\nbcachefs: fatal SIGSEGV\n",
+        libc::SIGILL  => b"\nbcachefs: fatal SIGILL\n",
+        libc::SIGBUS  => b"\nbcachefs: fatal SIGBUS\n",
+        libc::SIGFPE  => b"\nbcachefs: fatal SIGFPE\n",
+        libc::SIGABRT => b"\nbcachefs: fatal SIGABRT\n",
+        _             => b"\nbcachefs: fatal signal\n",
+    };
+    unsafe { libc::write(libc::STDERR_FILENO, name.as_ptr().cast(), name.len()) };
+
+    bcachefs_kernel::util::backtrace::dump_stack();
+
+    unsafe {
+        libc::raise(signo);
+        libc::_exit(128 + signo);
+    }
+}
+
+fn install_fatal_signal_handlers() {
+    let mut sa: libc::sigaction = unsafe { core::mem::zeroed() };
+    sa.sa_sigaction = fatal_signal_handler as extern "C" fn(libc::c_int) as libc::sighandler_t;
+    sa.sa_flags = libc::SA_NODEFER | libc::SA_RESETHAND;
+    unsafe { libc::sigemptyset(&mut sa.sa_mask) };
+
+    for signo in [libc::SIGSEGV, libc::SIGILL, libc::SIGBUS, libc::SIGFPE, libc::SIGABRT] {
+        unsafe { libc::sigaction(signo, &sa, core::ptr::null_mut()) };
+    }
+}
+
 fn main() -> ExitCode {
     // panic = "abort" in Cargo.toml ensures Rust panics can't be swallowed
-    // by catch_unwind; this installs C-side handlers for SIGABRT/SIGSEGV/
-    // SIGILL/SIGBUS/SIGFPE so a panic or fatal fault prints a unified
-    // backtrace via bch2_prt_task_backtrace before the kernel core-dumps.
-    unsafe { c::bch2_install_fatal_signal_handlers(); }
+    // by catch_unwind; this installs handlers for SIGABRT/SIGSEGV/SIGILL/
+    // SIGBUS/SIGFPE so a panic or fatal fault prints a unified backtrace
+    // before the kernel core-dumps.
+    install_fatal_signal_handlers();
 
     // The Rust runtime starts with SIGPIPE ignored, so writing to a closed
     // pipe returns EPIPE - which println! reports by panicking. Restore

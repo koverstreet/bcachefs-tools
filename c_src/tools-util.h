@@ -23,8 +23,6 @@
 void die(const char *, ...)
 	__attribute__ ((format (printf, 1, 2))) noreturn;
 
-void bch2_install_fatal_signal_handlers(void);
-
 char *vmprintf(const char *fmt, va_list args)
 	__attribute__ ((format (printf, 1, 0)));
 
