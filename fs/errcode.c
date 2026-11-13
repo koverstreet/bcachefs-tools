@@ -106,6 +106,6 @@ int __bch2_err_throw(struct bch_fs *c, int err)
 {
 	BUG_ON(err >= 0);
 	this_cpu_inc(c->counters.now[BCH_COUNTER_error_throw]);
-	trace_error_throw(c, bch2_err_str(err));
+	trace_error_throw(c->name, bch2_err_str(err));
 	return err;
 }

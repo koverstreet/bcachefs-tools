@@ -7,8 +7,8 @@
 #include <linux/tracepoint.h>
 
 DECLARE_EVENT_CLASS(fs_str,
-	TP_PROTO(struct bch_fs *c, const char *str),
-	TP_ARGS(c, str),
+	TP_PROTO(const char *fs, const char *str),
+	TP_ARGS(fs, str),
 
 	TP_STRUCT__entry(
 		__array(char,		fs, 40			)
@@ -16,7 +16,7 @@ DECLARE_EVENT_CLASS(fs_str,
 	),
 
 	TP_fast_assign(
-		strscpy(__entry->fs, c->name, sizeof(__entry->fs));
+		strscpy(__entry->fs, fs, sizeof(__entry->fs));
 		__assign_str(str);
 	),
 
@@ -28,7 +28,7 @@ DECLARE_EVENT_CLASS(fs_str,
 
 #if !defined(CONFIG_BCACHEFS_PATH_TRACEPOINTS) && !defined(_TRACE_BCACHEFS_H)
 #define x(n, ...)							\
-	static inline void trace_##n(struct bch_fs *c, const char *s) {}\
+	static inline void trace_##n(const char *fs, const char *s) {}\
 	static inline bool trace_##n##_enabled(void) { return false; }
 	BCH_PATH_TRACEPOINTS()
 #undef x
@@ -36,8 +36,8 @@ DECLARE_EVENT_CLASS(fs_str,
 
 #define x(n, ...)							\
 	DEFINE_EVENT(fs_str, n,						\
-		TP_PROTO(struct bch_fs *c, const char *str),		\
-		TP_ARGS(c, str)						\
+		TP_PROTO(const char *fs, const char *str),		\
+		TP_ARGS(fs, str)					\
 	);
 	BCH_PERSISTENT_COUNTERS()
 	BCH_NOCOUNTER_TRACEPOINTS()

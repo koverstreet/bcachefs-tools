@@ -76,10 +76,9 @@ macro_rules! trace_events {
 
                 #[cfg($on)]
                 fn trace(fs: &Fs, msg: &Printbuf) {
-                    // SAFETY: @fs is live, and @msg a C string the tracepoint
-                    // copies
+                    // SAFETY: C strings, which the tracepoint copies
                     unsafe {
-                        tracepoints::[<rust_do_trace_ $name>](fs.as_ptr(), msg.as_c_str().as_ptr());
+                        tracepoints::[<rust_do_trace_ $name>](fs.name().as_ptr(), msg.as_c_str().as_ptr());
                     }
                 }
 
@@ -98,14 +97,14 @@ c::BCH_PATH_TRACEPOINTS!(trace_events
 #[cfg(all(kernel, CONFIG_TRACEPOINTS))]
 mod tracepoints {
     use crate::c;
-    use crate::fs::Fs;
 
     macro_rules! tracepoint_externs {
         ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
             unsafe extern "C" {
                 $(
                     pub(super) static [<__tracepoint_ $name>]: c::tracepoint;
-                    pub(super) fn [<rust_do_trace_ $name>](c: *mut Fs, str: *const ::core::ffi::c_char);
+                    pub(super) fn [<rust_do_trace_ $name>](fs: *const ::core::ffi::c_char,
+                                                           str: *const ::core::ffi::c_char);
                 )*
             }
         } };
