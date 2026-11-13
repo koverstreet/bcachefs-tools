@@ -21,7 +21,7 @@ use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
 use crate::util::alloc::{KVmalloc, Kmalloc};
 use crate::util::maybe_rcu_alloc::{alloc_at, Retired};
-use crate::util::percpu::{CpuShared, PerCpu, PerCpuRef};
+use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
 use crate::util::rcu::{Flavor, GpCookie};
 use crate::os::workqueue::{flush_work, Queue};
 
@@ -723,7 +723,7 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         }
 
         unsafe {
-            c::free_percpu((*this).p.cast());
+            free_percpu((*this).p.cast());
             (&raw mut (*this).p).write(ptr::null_mut());
         }
     }

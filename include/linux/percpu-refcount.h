@@ -3,7 +3,6 @@
 
 #include <linux/atomic.h>
 #include <linux/kernel.h>
-#include <linux/percpu.h>
 
 struct percpu_ref;
 typedef void (percpu_ref_func_t)(struct percpu_ref *);

@@ -8,7 +8,7 @@ use core::hint::spin_loop;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{fence, AtomicU32, Ordering};
 
-use crate::util::percpu::CpuGuard;
+use crate::os::percpu::CpuGuard;
 
 /// A sequence lock over a T: readers copy the value out without taking
 /// anything, and retry a copy a write overlapped; writers have it alone.

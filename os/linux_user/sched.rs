@@ -65,6 +65,15 @@ pub fn need_resched() -> bool {
     false
 }
 
+/// # Safety
+/// @task is a task, live.
+pub unsafe fn task_pid(task: *mut c::task_struct) -> c_int {
+    unsafe { (*task).pid }
+}
+
+/// Nothing to tell a scheduler here.
+pub fn set_current_wake_cpu(_cpu: c_int) {}
+
 /// A kthread's: its own task_struct, before anything asks for one.
 pub(crate) fn set_current(p: *mut c::task_struct) {
     CURRENT.with(|cur| cur.set(p));
@@ -183,7 +192,7 @@ pub extern "C" fn linux_thread_init() {
         /* only knowable from in here */
         (*p).pid = rustix::thread::gettid().as_raw_nonzero().get();
         c::rcu_register_thread();
-        c::bch_percpu_thread_init();
+        super::percpu::thread_init();
     }
 }
 

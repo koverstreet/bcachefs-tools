@@ -5,7 +5,6 @@
 
 #include <pthread.h>
 #include <linux/cleanup.h>
-#include <linux/preempt.h>
 
 struct percpu_rw_semaphore {
 	pthread_mutex_t		lock;

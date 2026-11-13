@@ -78,8 +78,7 @@
 //!   reading the offset and adding adds, atomically, to the CPU it left -
 //!   right for a counter, which is only ever summed. The load likewise reads
 //!   the CPU it left. cmpxchg disables it, as C's does.
-//! - Elsewhere, and in userspace - whose per-CPU areas are per thread, found
-//!   through a C thread-local - C's, out of line.
+//! - Elsewhere, C's, out of line.
 //!
 //! Each arch's are written once, for every width: the asm takes the
 //! operand's register modifier, which sizes the instruction.
@@ -89,7 +88,7 @@
 //! arm64. Around a ThisCpu on x86 that's three calls where C makes none - a
 //! cost for a slowpath, not yet for anything hotter.
 
-use core::ffi::{c_int, c_uint, c_ulong, c_void};
+use core::ffi::{c_int, c_uint, c_ulong};
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::NonNull;
@@ -102,11 +101,24 @@ use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
 pub use crate::c::{
-    bch2_this_cpu_add_u32, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u32, bch2_this_cpu_cmpxchg_u64,
+    free_percpu, bch2_this_cpu_add_u32, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u32, bch2_this_cpu_cmpxchg_u64,
     bch2_this_cpu_ptr, bch2_per_cpu_ptr, bch2_cpu_possible_next,
-    bch2_preempt_disable, bch2_preempt_enable, bch2_migrate_disable, bch2_migrate_enable,
-    bch2_raw_smp_processor_id, bch2_task_pid, bch2_set_current_wake_cpu,
 };
+
+/// The task kept on its CPU, till migrate_enable().
+pub fn migrate_disable() {
+    unsafe { c::bch2_migrate_disable() }
+}
+
+pub fn migrate_enable() {
+    unsafe { c::bch2_migrate_enable() }
+}
+
+/// The CPU the task's on: unless it's kept there, it may not be by the time
+/// this is used.
+pub fn raw_smp_processor_id() -> c_uint {
+    unsafe { c::bch2_raw_smp_processor_id() }
+}
 
 // ── The operations, an arch's own ────────────────────────────────────────
 
@@ -123,7 +135,7 @@ pub unsafe trait PerCpuWord: Copy + Eq {
     unsafe fn this_cpu_cmpxchg(pcp: *mut Self, old: Self, new: Self) -> Self;
 }
 
-#[cfg(all(kernel, target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 mod arch {
     use super::{bch2_this_cpu_ptr, PerCpuWord, Pinned};
 
@@ -170,7 +182,7 @@ mod arch {
     }
 }
 
-#[cfg(all(kernel, target_arch = "aarch64"))]
+#[cfg(target_arch = "aarch64")]
 mod arch {
     use super::{CpuGuard, PerCpuWord, Pinned};
     use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -224,7 +236,7 @@ mod arch {
     }
 }
 
-#[cfg(not(all(kernel, any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod arch {
     use super::{bch2_this_cpu_add_u32, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u32,
                 bch2_this_cpu_cmpxchg_u64, bch2_this_cpu_ptr, PerCpuWord, Pinned};
@@ -277,14 +289,14 @@ unsafe impl Pinned for CpuGuard {}
 impl CpuGuard {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        unsafe { bch2_preempt_disable() };
+        unsafe { c::bch2_preempt_disable() };
         CpuGuard { _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
     }
 }
 
 impl Drop for CpuGuard {
     fn drop(&mut self) {
-        unsafe { bch2_preempt_enable() };
+        unsafe { c::bch2_preempt_enable() };
     }
 }
 
@@ -379,10 +391,7 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
         // pcpu_alloc_noprof() - which kernel Rust calls directly, as its
         // allocator does krealloc_noprof()
         let gfp = current_gfp_context_raw(gfp);
-        #[cfg(kernel)]
         let p = unsafe { c::pcpu_alloc_noprof(size_of::<T>(), align_of::<T>(), false, gfp) };
-        #[cfg(not(kernel))]
-        let p = unsafe { c::__alloc_percpu_gfp(size_of::<T>(), align_of::<T>(), gfp) };
         if p.is_null() { Err(AllocError) } else { Ok(PerCpu(p.cast())) }
     }
 
@@ -404,24 +413,15 @@ pub type InitCopy<T, C> = unsafe extern "C" fn(copy: *mut T, ctx: *mut C, cpu: c
 
 impl<T> PerCpu<T> {
     /// Every possible CPU's copy, initialized by @init: bch2_alloc_percpu_init().
-    /// In userspace a CPU is a thread's slot, and a thread that starts later
-    /// is a CPU coming online - @init runs on its copy then, until the PerCpu
-    /// is freed.
     ///
     /// # Safety
     /// @init only initializes the copy it's given, from zeroes; @ctx lives
     /// until the PerCpu is freed.
     pub unsafe fn alloc_init<C>(init: InitCopy<T, C>, ctx: *mut C) -> Result<Self, AllocError> {
         let p = PerCpu::<MaybeUninit<T>>::alloc()?.into_raw().cast::<T>();
-        #[cfg(kernel)]
         for cpu in possible_cpus() {
             unsafe { init(bch2_per_cpu_ptr(p.cast(), cpu).cast(), ctx, cpu) };
         }
-        #[cfg(not(kernel))]
-        unsafe {
-            c::__bch2_alloc_percpu_init(p.cast(), Some(core::mem::transmute::<InitCopy<T, C>, InitCopy<c_void, c_void>>(init)),
-                                        ctx.cast())
-        };
         Ok(PerCpu(p))
     }
 }
@@ -437,10 +437,7 @@ impl PerCpuU64s {
     pub fn new(n: usize) -> Result<Self, AllocError> {
         let size = n * size_of::<u64>();
         let gfp = current_gfp_context_raw(c::GFP_KERNEL);
-        #[cfg(kernel)]
         let p = unsafe { c::pcpu_alloc_noprof(size, align_of::<u64>(), false, gfp) };
-        #[cfg(not(kernel))]
-        let p = unsafe { c::__alloc_percpu_gfp(size, align_of::<u64>(), gfp) };
         Ok(Self { p: NonNull::new(p.cast()).ok_or(AllocError)?, n })
     }
 

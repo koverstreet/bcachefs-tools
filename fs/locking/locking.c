@@ -14,6 +14,7 @@
  * at link. A plain declaration binds to one shared definition.
  */
 
+#include <linux/irqflags.h>
 #include <linux/local_lock.h>
 #include <linux/lockdep.h>
 #include <linux/mutex.h>

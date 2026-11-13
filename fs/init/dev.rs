@@ -234,7 +234,7 @@ use crate::os::file::read_file;
 use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
 use crate::os::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_dev, log_no_fs, LogLevel};
-use crate::util::percpu::PerCpu;
+use crate::os::percpu::PerCpu;
 use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Head;

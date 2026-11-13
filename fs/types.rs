@@ -18,7 +18,7 @@ use crate::util::place::Placed;
 use crate::util::refcount::AtomicRef;
 use crate::os::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
-use crate::util::percpu::{Counters, PerCpu};
+use crate::os::percpu::{Counters, PerCpu};
 use crate::data_structures::genradix::SharedGenRadix;
 use crate::types::{bits_to_longs};
 use crate::util::rcu::RcuHead;

@@ -9,8 +9,6 @@
 #include <linux/bio.h>
 #include <linux/blkdev.h>
 #include <linux/kthread.h>
-#include <linux/percpu.h>
-#include <linux/preempt.h>
 #include <linux/rcupdate.h>
 #include <linux/string.h>
 #include <linux/types.h>
@@ -21,6 +19,18 @@
 
 #include "util.h"
 
+/*
+ * static_branch_unlikely(), for Rust where it has no asm of its own
+ * (util/jump_label.rs): out of line, @key isn't a constant the asm can name -
+ * the key's count, as static_branch_unlikely() reads it without
+ * CONFIG_JUMP_LABEL.
+ */
+bool bch2_static_branch_unlikely(struct static_key_false *key)
+{
+	return static_key_enabled(&key->key);
+}
+
+#ifdef __KERNEL__
 /*
  * this_cpu_add() and _cmpxchg(), for Rust where it has no asm of its own
  * (util/percpu.rs). @pcp is a _t __percpu *: the prototype Rust generates
@@ -41,17 +51,6 @@ BCH2_THIS_CPU_OPS(u32)
 BCH2_THIS_CPU_OPS(u64)
 #undef BCH2_THIS_CPU_OPS
 
-/*
- * static_branch_unlikely(), for Rust where it has no asm of its own
- * (util/jump_label.rs): out of line, @key isn't a constant the asm can name -
- * the key's count, as static_branch_unlikely() reads it without
- * CONFIG_JUMP_LABEL.
- */
-bool bch2_static_branch_unlikely(struct static_key_false *key)
-{
-	return static_key_enabled(&key->key);
-}
-
 /* ...per_cpu_ptr(), and the possible CPUs: the one after @cpu, -1 at the end */
 void *bch2_per_cpu_ptr(void *pcp, unsigned cpu)
 {
@@ -60,20 +59,17 @@ void *bch2_per_cpu_ptr(void *pcp, unsigned cpu)
 
 int bch2_cpu_possible_next(int cpu)
 {
-#ifdef __KERNEL__
 	cpu = cpumask_next(cpu, cpu_possible_mask);
 	return cpu < nr_cpu_ids ? cpu : -1;
-#else
-	return cpu + 1 < bch_percpu_nr_cpus ? cpu + 1 : -1;
-#endif
 }
 
-/* ...this CPU's: its copy, preemption and migration, and its id */
+/* ...this CPU's copy */
 void *bch2_this_cpu_ptr(void *pcp)
 {
 	return this_cpu_ptr((void __percpu *) (unsigned long) pcp);
 }
 
+/* ...this CPU's: preemption and migration, and its id */
 void bch2_preempt_disable(void)
 {
 	preempt_disable();
@@ -111,10 +107,11 @@ int bch2_task_pid(struct task_struct *task)
  */
 void bch2_set_current_wake_cpu(int cpu)
 {
-#if defined(__KERNEL__) && !defined(CONFIG_SCHED_ALT)
+#ifndef CONFIG_SCHED_ALT
 	WRITE_ONCE(current->wake_cpu, cpu);
 #endif
 }
+#endif
 
 /*
  * For Rust: the kernel's Rust allocator API has no __GFP_NOFAIL. Out of line,

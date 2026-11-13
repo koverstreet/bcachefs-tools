@@ -32,6 +32,17 @@ pub fn need_resched() -> bool {
     unsafe { c::bch2_need_resched() }
 }
 
+/// # Safety
+/// @task is a task, live.
+pub unsafe fn task_pid(task: *mut c::task_struct) -> core::ffi::c_int {
+    unsafe { c::bch2_task_pid(task) }
+}
+
+/// The CPU this task's to be woken on next, for the scheduler.
+pub fn set_current_wake_cpu(cpu: core::ffi::c_int) {
+    unsafe { c::bch2_set_current_wake_cpu(cpu) }
+}
+
 /// Whether @task is running on a CPU: @task is any task's, read under RCU,
 /// which a task's freeing waits for.
 #[cfg(CONFIG_SMP)]

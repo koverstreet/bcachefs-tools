@@ -26,7 +26,7 @@
 
 use crate::c;
 use crate::util::alloc::AllocError;
-use crate::util::percpu::{IrqGuard, PerCpu, PerCpuRef};
+use crate::os::percpu::{free_percpu, IrqGuard, PerCpu, PerCpuRef};
 use crate::util::rcu::ReadGuard;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::{c_uint, c_void};
@@ -204,7 +204,7 @@ impl c::fast_list {
             for lp in unsafe { PerCpuRef::<Cache>::from_raw(buffer.cast()) }.cpus() {
                 self.free_slots(unsafe { lp.as_mut() }.0.drain(..));
             }
-            unsafe { c::free_percpu(buffer.cast()) };
+            unsafe { free_percpu(buffer.cast()) };
         }
 
         // a slot still allocated is an item still on the list

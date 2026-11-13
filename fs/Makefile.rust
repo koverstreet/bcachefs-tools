@@ -340,13 +340,18 @@ $(obj)/bch_builtins.o: $(src)/vendor/bch_builtins/lib.rs FORCE
 # Asm from the kernel's own headers, as kbuild makes the kernel crate's
 # (generated_arch_*_asm.rs): the C preprocessor over a .rs.S with the C
 # build's flags, what precedes "// Cut here." the C and the rest Rust. Ours are
-# util/'s *_asm.rs.S; Makefile.rust.vendor's, the vendored kernel crate's.
+# util/'s and os/linux_kernel/'s *_asm.rs.S; Makefile.rust.vendor's, the
+# vendored kernel crate's.
 quiet_cmd_bch_rscpp = RSCPP   $@
       cmd_bch_rscpp = $(CPP) $(c_flags) -xc -C -P $< | sed '1,/^\/\/ Cut here.$$/d' >$@
 
 bch-arch-asm-rs := $(addprefix rust/,percpu_asm.rs jump_label_asm.rs)
 
-$(addprefix $(obj)/,$(bch-arch-asm-rs)): $(obj)/rust/%.rs: $(src)/util/%.rs.S FORCE
+$(obj)/rust/percpu_asm.rs: $(src)/../os/linux_kernel/percpu_asm.rs.S FORCE
+	$(Q)mkdir -p $(@D)
+	$(call if_changed_dep,bch_rscpp)
+
+$(obj)/rust/jump_label_asm.rs: $(src)/util/jump_label_asm.rs.S FORCE
 	$(Q)mkdir -p $(@D)
 	$(call if_changed_dep,bch_rscpp)
 

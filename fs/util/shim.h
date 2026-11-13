@@ -19,6 +19,7 @@ struct task_struct;
  * kernel and userspace, for Rust
  */
 
+#ifdef __KERNEL__
 void bch2_this_cpu_add_u32(u32 *pcp, u32 val);
 void bch2_this_cpu_add_u64(u64 *pcp, u64 val);
 u32 bch2_this_cpu_cmpxchg_u32(u32 *pcp, u32 old, u32 new);
@@ -33,6 +34,7 @@ void bch2_migrate_enable(void);
 unsigned bch2_raw_smp_processor_id(void);
 int bch2_task_pid(struct task_struct *task);
 void bch2_set_current_wake_cpu(int cpu);
+#endif
 
 bool bch2_static_branch_unlikely(struct static_key_false *key);
 
@@ -78,9 +80,8 @@ void bch2_rust_warn(const char *file, unsigned line);
 int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key);
 
 #ifndef __KERNEL__
-/* the userspace shim's: linux/stacktrace.c's, and linux/percpu.c's */
+/* the userspace shim's: linux/stacktrace.c's */
 void bch2_symbolize(char *out, size_t size, unsigned long addr);
-void __bch2_alloc_percpu_init(void *pcv, void (*init)(void *, void *, unsigned), void *ctx);
 #endif
 
 #endif /* _BCACHEFS_UTIL_SHIM_H */

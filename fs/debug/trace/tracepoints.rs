@@ -163,7 +163,7 @@ unsafe extern "C" fn perf_probe(data: *mut c_void, fs: *const c_char, s: *const 
     let _preempt = PreemptNotrace::disable();
 
     let call = data.cast::<c::trace_event_call>();
-    let head = unsafe { crate::util::percpu::bch2_this_cpu_ptr((*call).perf_events.cast()) }
+    let head = unsafe { crate::os::percpu::bch2_this_cpu_ptr((*call).perf_events.cast()) }
         .cast::<c::hlist_head>();
     if !unsafe { c::bpf_prog_array_valid(call) } &&
         unsafe { ptr::read_volatile(&raw const (*head).first) }.is_null() {

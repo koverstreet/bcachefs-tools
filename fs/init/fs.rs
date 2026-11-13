@@ -39,7 +39,7 @@ use crate::os::kernel::READ;
 use crate::os::sched;
 use crate::os::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
-use crate::util::percpu::PerCpu;
+use crate::os::percpu::PerCpu;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::{read_lock, RcuPtrWriter};
 use crate::util::refcount::{ARef, RefGuard, WaitableRef};
@@ -157,7 +157,7 @@ impl Fs {
         if bits == 0 {
             return 0;
         }
-        let pid = unsafe { crate::util::percpu::bch2_task_pid(sched::current()) };
+        let pid = unsafe { sched::task_pid(sched::current()) };
         crate::util::hash::hash_64(pid as u64, bits.into())
     }
 

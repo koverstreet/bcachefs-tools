@@ -22,7 +22,7 @@ use crate::debug::trace::events;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::log::{print_str, LogLevel, LogMsg};
-use crate::util::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
+use crate::os::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
 use crate::util::printbuf::{Join, Msg};
 use crate::util::rcu;
 use crate::util::vstructs::{bytes_of, plain_bytes, ArmError, Unvalidated, Validated};

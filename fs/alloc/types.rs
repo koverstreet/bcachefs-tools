@@ -12,7 +12,7 @@ use crate::{new_lock, new_work};
 use crate::types::{CacheAligned, c_default};
 use crate::util::bio::BioSet;
 use crate::os::workqueue::ReffedWork;
-use crate::util::percpu::{Counters, PerCpu};
+use crate::os::percpu::{Counters, PerCpu};
 use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};

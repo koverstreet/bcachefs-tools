@@ -28,7 +28,7 @@ use crate::new_lock;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Validated;
 use crate::util::ffi::Opaque;
-use crate::util::percpu::PerCpu;
+use crate::os::percpu::PerCpu;
 use crate::os::shrinker::Shrinker;
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};

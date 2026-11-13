@@ -27,7 +27,7 @@ use crate::util::closure::closure_wait_event_timeout_by;
 use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
 use crate::os::kernel::{jiffies, likely, msecs_to_jiffies, race_fault, time_after, HZ, READ};
-use crate::util::percpu::{bch2_migrate_disable, bch2_migrate_enable, bch2_raw_smp_processor_id};
+use crate::os::percpu::{migrate_disable, migrate_enable, raw_smp_processor_id};
 use crate::util::rcu::SrcuReadGuard;
 use crate::util::sleep::Sleep;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
@@ -178,16 +178,16 @@ impl BtreeTrans<'_> {
         let shard_cpu = self.shard_cpu.get();
         if !self.migrate_disabled() &&
            shard_cpu >= 0 &&
-           shard_cpu as c_uint == unsafe { bch2_raw_smp_processor_id() } {
+           shard_cpu as c_uint == raw_smp_processor_id() {
             self.set_migrate_disabled(true);
-            unsafe { bch2_migrate_disable() };
+            migrate_disable();
         }
     }
 
     pub(crate) fn enable_migrate(&self) {
         if self.migrate_disabled() {
             self.set_migrate_disabled(false);
-            unsafe { bch2_migrate_enable() };
+            migrate_enable();
         }
     }
 

@@ -23,8 +23,8 @@ use crate::data_structures::bitmap::AtomicBitmap;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::types::bits_to_longs;
 use crate::os::kernel::time_after64;
-use crate::util::percpu::{bch2_raw_smp_processor_id, bch2_set_current_wake_cpu, bch2_task_pid, CpuGuard, PerCpu,
-                          PerCpuRef};
+use crate::os::percpu::{free_percpu, raw_smp_processor_id, CpuGuard, PerCpu, PerCpuRef};
+use crate::os::sched::{set_current_wake_cpu, task_pid};
 use crate::util::log::{print_str, LogLevel};
 use crate::util::rcu::{self, ReadGuard};
 use crate::util::Printbuf;
@@ -123,7 +123,7 @@ fn bkey_cached_common_to_text(out: &mut Printbuf, b: &c::btree_bkey_cached_commo
     let pid = {
         let _rcu = rcu::read_lock();
         let owner = b.lock.six().owner.load(Relaxed);
-        if owner.is_null() { 0 } else { unsafe { bch2_task_pid(owner) } }
+        if owner.is_null() { 0 } else { unsafe { task_pid(owner) } }
     };
 
     prt!(out, "\t{:p} {} {} l={}:{}", b, if b.cached { 'c' } else { 'b' },
@@ -156,7 +156,7 @@ pub(crate) unsafe fn bch2_btree_trans_to_text(out: &mut Printbuf, trans: *mut Bt
         out.tabstop_push(32);
     }
 
-    prt!(out, "{} {}\n", if task.is_null() { 0 } else { unsafe { bch2_task_pid(task) } }, trans.fn_name());
+    prt!(out, "{} {}\n", if task.is_null() { 0 } else { unsafe { task_pid(task) } }, trans.fn_name());
 
     if foreign_bits(trans.0).journal_replay_not_finished() {
         prt!(out, "has journal_keys ref\n");
@@ -311,7 +311,7 @@ impl LockGraph {
             if n != 0 {
                 write!(out, "<- ");
             }
-            write!(out, "{} ", if task.is_null() { 0 } else { unsafe { bch2_task_pid(task) } });
+            write!(out, "{} ", if task.is_null() { 0 } else { unsafe { task_pid(task) } });
         }
         out.newline();
     }
@@ -624,7 +624,7 @@ pub(crate) fn graphs_exit() {
     for g in unsafe { PerCpuRef::from_raw(graphs) }.cpus() {
         unsafe { ptr::drop_in_place(g.as_ptr().cast_mut()) };
     }
-    unsafe { c::free_percpu(graphs.cast()) };
+    unsafe { free_percpu(graphs.cast()) };
 }
 
 /// With @cycle, a check, as debugfs's: see Cycle.
@@ -757,8 +757,8 @@ pub(crate) fn bch2_six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &c::btree_b
      * so the hint has to survive from the schedule() that follows.
      */
     let shard_cpu = trans.shard_cpu.get();
-    if shard_cpu >= 0 && shard_cpu as c_uint != unsafe { bch2_raw_smp_processor_id() } {
-        unsafe { bch2_set_current_wake_cpu(shard_cpu.into()) };
+    if shard_cpu >= 0 && shard_cpu as c_uint != raw_smp_processor_id() {
+        set_current_wake_cpu(shard_cpu.into());
     }
 
     match check_for_deadlock(ptr::from_ref(trans).cast_mut(), None) {

@@ -124,6 +124,7 @@ dependencies = [
  "bcachefs-shim",
  "bitfield-struct",
  "bitflags 2.11.1",
+ "libc",
  "linux-raw-sys",
  "log",
  "nestify",

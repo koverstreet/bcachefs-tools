@@ -115,7 +115,7 @@ use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
 use super::{Contents, Cuckoo, CuckooHasher, CuckooItem, Faults, Held, Mode};
 use crate::util::alloc::AllocError;
 use crate::os::kernel::random_u64;
-use crate::util::percpu::CpuGuard;
+use crate::os::percpu::CpuGuard;
 use crate::util::rcu::{kvfree_rcu, read_lock, RcuArray, RcuArrayHead, RcuElement, ReadGuard};
 
 const MAX_KICKS: usize = 16;

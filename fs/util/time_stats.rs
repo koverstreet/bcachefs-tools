@@ -30,7 +30,7 @@ use crate::c;
 use crate::locking::{ExclusiveGuard, Locked};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::os::kernel::{local_clock, time_after64};
-use crate::util::percpu::{PerCpu, PerCpuRef, CpuShared};
+use crate::os::percpu::{free_percpu, PerCpu, PerCpuRef, CpuShared};
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{percpu_field, warn_on_once};
 use core::pin::Pin;
@@ -597,7 +597,7 @@ impl PinnedDrop for c::bch2_time_stats {
         if !p.is_null() {
             // SAFETY: alloc_percpu()'d by update_at(), and ours: the stats
             // are going
-            unsafe { c::free_percpu(p) };
+            unsafe { free_percpu(p) };
         }
     }
 }

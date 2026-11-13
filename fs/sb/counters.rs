@@ -27,7 +27,7 @@ use crate::os::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
 use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
-use crate::util::percpu::PerCpu;
+use crate::os::percpu::PerCpu;
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 pub const NR_RECENT_COUNTERS: u32 = 20;

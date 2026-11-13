@@ -11,6 +11,7 @@ pub mod kernel;
 pub mod kobject;
 pub mod kthread;
 pub mod ops;
+pub mod percpu;
 pub mod sched;
 pub mod seq_file;
 pub mod shrinker;

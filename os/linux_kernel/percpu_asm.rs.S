@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * util/percpu.rs's asm, from the headers of the kernel the module is built
+ * percpu.rs's asm, from the headers of the kernel the module is built
  * against - what the kernel patches at boot, arm64's alternatives and their
  * cpucap numbers, is as that kernel has it. Run through the C preprocessor
  * with the C build's flags; what follows the cut is Rust, so it can't hold

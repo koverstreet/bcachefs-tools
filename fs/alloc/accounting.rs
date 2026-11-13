@@ -64,7 +64,7 @@ use crate::types::ArmOf;
 use crate::util::rcu;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, EntryWalk, Head, Unvalidated, VStructError};
 use crate::util::log::{log_no_fs, LogLevel};
-use crate::util::percpu::Counters as _;
+use crate::os::percpu::Counters as _;
 use crate::util::printbuf::Join;
 use crate::util::Printbuf;
 use crate::{bch_err_fn, bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, percpu_field};

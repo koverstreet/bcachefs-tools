@@ -21,7 +21,6 @@ pub mod module_param;
 pub mod names;
 pub mod os_str;
 pub mod par;
-pub mod percpu;
 pub mod place;
 #[cfg(not(kernel))]
 pub mod plymouth;

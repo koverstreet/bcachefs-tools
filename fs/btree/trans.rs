@@ -33,8 +33,8 @@ use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64};
 use crate::util::log::LogMsg;
 use crate::util::log::{log_no_fs, LogLevel};
 #[cfg(kernel)]
-use crate::util::percpu::CpuGuard;
-use crate::util::percpu::{bch2_task_pid, Counters};
+use crate::os::percpu::CpuGuard;
+use crate::os::percpu::Counters;
 use crate::util::rcu;
 use crate::util::refcount::{RefGuard, TryRefcount};
 use crate::os::sched;
@@ -441,7 +441,7 @@ fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
 
     c.with_trans_list(|list| {
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            let pid = unsafe { bch2_task_pid(sched::current()) };
+            let pid = unsafe { sched::task_pid(sched::current()) };
 
             unsafe { (*p).locking_wait.task.store(sched::current(), Ordering::Relaxed) };
 
@@ -454,7 +454,7 @@ fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
                  * already have a btree_trans initialized.
                  */
                 assert!(!(!pos_task.is_null() &&
-                          pid == unsafe { bch2_task_pid(pos_task) } &&
+                          pid == unsafe { sched::task_pid(pos_task) } &&
                           foreign_bits(pos).locked()));
             }
         }

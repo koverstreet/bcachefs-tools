@@ -9,6 +9,7 @@ pub mod file;
 pub mod kernel;
 pub mod kobject;
 pub mod kthread;
+pub mod percpu;
 pub mod sched;
 pub mod shrinker;
 pub mod sysfs;

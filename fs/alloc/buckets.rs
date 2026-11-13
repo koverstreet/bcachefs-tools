@@ -29,7 +29,7 @@ use crate::sb::errors::SbErrorId;
 use crate::types::bits_to_longs;
 use crate::os::kernel::unlikely;
 use crate::util::log::LogMsg;
-use crate::util::percpu::{Counters, PerCpu};
+use crate::os::percpu::{Counters, PerCpu};
 use crate::util::rcu::{read_lock, RcuArrayWriter, ReadGuard};
 use crate::data_structures::bitmap::AtomicBitmap;
 use crate::util::{Printbuf, ToText};
