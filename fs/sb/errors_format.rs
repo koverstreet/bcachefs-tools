@@ -490,8 +490,9 @@ vstruct!(unsized bch_sb_field_errors, field.u64s, start = 0);
 
 #[bitfield(Le64)]
 pub struct bch_sb_field_error_entry_v {
-    #[bits(16)] id: SbErrorId,
-    #[bits(48)] nr: u64,
+    #[bits(16)]
+    id:             SbErrorId,
+    nr:             u48,
 }
 
 /*

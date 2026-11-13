@@ -20,9 +20,9 @@ pub struct bch_disk_group {
 #[bitfield(Le64)]
 pub struct bch_disk_group_flags {
     deleted:                    bool,
-    #[bits(5)]  data_allowed:   u64,
-    #[bits(18)] parent:         u64,
-    #[bits(40)] __:             u64,
+    data_allowed:               u5,
+    parent:                     u18,
+    __:                         u40,
 }
 
 #[unsized_vstruct]

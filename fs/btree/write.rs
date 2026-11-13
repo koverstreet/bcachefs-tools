@@ -549,7 +549,7 @@ impl BsetWrite {
         assert!(i.seq == contents.data().keys.seq);
 
         i.version = Le16::new(fs.sb.version.get());
-        i.set_offset(b.written.get().into());
+        i.set_offset(b.written.get());
         i.set_csum_type(fs.meta_checksum_type());
 
         Some(Self { fs, bounce, first, keys_at, bytes: bytes_to_write, sectors: sectors_to_write })

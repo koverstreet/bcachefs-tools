@@ -100,18 +100,18 @@ pub const BCH_MEMBER_V1_BYTES: u32 = 56;
 pub struct bch_member_flags {
     #[bits(4)]  state:              MemberState,
     /* 4-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
-    #[bits(10)] __:                 u64,
+    __:                             u10,
     discard:                        bool,
-    #[bits(5)]  data_allowed:       u64,
-    #[bits(8)]  group:              u64,
-    #[bits(2)]  durability:         u64,
+    data_allowed:                   u5,
+    group:                          u8,
+    durability:                     u2,
     freespace_initialized:          bool,
     resize_on_mount:                bool,
     rotational:                     bool,
     rotational_set:                 bool,
     #[bits(4)]  initialized:        MemberInitialized,
     /* 38-46 free, was FAILURE_DOMAIN (now a string, member.failure_domain) */
-    #[bits(26)] __:                 u64,
+    __:                             u26,
 }
 
 #[bch_enum(open)]

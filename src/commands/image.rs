@@ -124,11 +124,11 @@ fn count_input_size(dir: &std::fs::File) -> u64 {
 fn set_data_allowed_for_image_update(fs: &Fs) {
     let mut sb = fs.sb_lock();
 
-    sb.fs_member_mut(0).set_data_allowed(DataType::user.bit());
+    sb.fs_member_mut(0).set_data_allowed(DataType::user.bit() as u8);
 
     sb.fs_member_mut(1).set_data_allowed(
-        DataType::journal.bit()
-            | DataType::btree.bit(),
+        (DataType::journal.bit()
+            | DataType::btree.bit()) as u8,
     );
 
     // Not started yet: the start persists this. It needs the in-memory
@@ -325,7 +325,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     {
         let mut sb = fs.sb_lock();
         let m = sb.fs_member_mut(0);
-        let allowed = m.data_allowed() | DataType::btree.bit();
+        let allowed = m.data_allowed() | DataType::btree.bit() as u8;
         m.set_data_allowed(allowed);
         fs.write_super(&mut sb);
     }
@@ -365,7 +365,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
     // Allow journal on primary device
     let m = sb.fs_member_mut(0);
-    let allowed = m.data_allowed() | DataType::journal.bit();
+    let allowed = m.data_allowed() | DataType::journal.bit() as u8;
     m.set_data_allowed(allowed);
 
     // Set nbuckets

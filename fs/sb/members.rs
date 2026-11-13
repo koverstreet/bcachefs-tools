@@ -275,7 +275,7 @@ pub trait SbMembersMut: SbResize {
     /// members_v1, the mirror of members_v2 that versions before
     /// extent_flags read - or none, for a superblock they can't.
     fn members_cpy_v2_v1(&mut self) -> Result<(), BchError> {
-        if self.sb().version_incompat() > MetadataVersion::extent_flags.0.into() {
+        if u32::from(self.sb().version_incompat()) > MetadataVersion::extent_flags.0 {
             self.field_resize::<c::bch_sb_field_members_v1>(0);
             return Ok(());
         }
@@ -351,7 +351,7 @@ fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<Unvalid
     sb_err_on!(err, bucket_size < block_size, BCH_ERR_invalid_sb_members,
                "device {i}: bucket size {bucket_size} smaller than block size {block_size}")?;
 
-    sb_err_on!(err, u64::from(bucket_size) < sb.btree_node_size(), BCH_ERR_invalid_sb_members,
+    sb_err_on!(err, bucket_size < sb.btree_node_size(), BCH_ERR_invalid_sb_members,
                "device {i}: bucket size {bucket_size} smaller than btree node size {}",
                sb.btree_node_size())?;
 
@@ -516,7 +516,7 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
 
     write!(out, "State:\t{}\n", m.state());
     write!(out, "Data allowed:\t");
-    data_types_to_text(out, m.data_allowed());
+    data_types_to_text(out, m.data_allowed().into());
     out.newline();
     has_data_to_text(out, sb, idx);
     write!(out, "Rotational:\t{}\n", m.rotational() as u8);
@@ -606,9 +606,9 @@ impl c::bch_member {
             failure_domain:         0,
             state:                  self.state(),
             discard:                self.discard(),
-            data_allowed:           DataTypes::from_bits_retain(self.data_allowed() as u16),
+            data_allowed:           DataTypes::from_bits_retain(self.data_allowed().into()),
             // one-biased on disk: 0 is the default, 1
-            durability:             self.durability().checked_sub(1).unwrap_or(1) as u8,
+            durability:             self.durability().checked_sub(1).unwrap_or(1),
             freespace_initialized:  self.freespace_initialized(),
             initialized:            self.initialized(),
             resize_on_mount:        self.resize_on_mount(),
@@ -1672,7 +1672,7 @@ mod tests {
             assert_eq!(plain_bytes(&m)[..BCH_MEMBER_V1_BYTES], plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
         }
 
-        sb.sb_mut().set_version_incompat(MetadataVersion::extent_flags.0 as u64 + 1);
+        sb.sb_mut().set_version_incompat(MetadataVersion::extent_flags.0 as u16 + 1);
         sb.members_cpy_v2_v1().unwrap();
         assert!(sb.field::<c::bch_sb_field_members_v1>().is_none());
     }

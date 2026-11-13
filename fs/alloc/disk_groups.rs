@@ -179,7 +179,7 @@ trait DiskGroup {
 
 impl DiskGroup for c::bch_disk_group {
     fn deleted(&self) -> bool { self.flags0.deleted() }
-    fn parent(&self)  -> u32  { self.flags0.parent() as u32 }
+    fn parent(&self)  -> u32  { self.flags0.parent() }
     fn label(&self)   -> &[u8] { label_bytes(&self.label) }
 }
 
@@ -274,7 +274,7 @@ fn group_add(sb: &mut (impl SbResize + ?Sized), parent: u32, name: &[u8]) -> u32
     g.label = Default::default();
     g.label[..name.len()].copy_from_slice(name);
     g.flags0.set_deleted(false);
-    g.flags0.set_parent(parent.into());
+    g.flags0.set_parent(parent);
     g.flags0.set_data_allowed(c::bch_disk_group_flags::DATA_ALLOWED_MAX);
 
     i as u32
@@ -474,8 +474,7 @@ fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], s
 pub(crate) fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &[u8]) -> Result<(), BchError> {
     let v = dev_label_resolve(&mut fs.sb_resize(sb), name)?;
     // more groups than a member's 8 bit group field can name
-    sb.fs_member_mut(dev).set_group_checked(v.into())
-        .map_err(|()| BchError::from(Errcode::BCH_ERR_ENOSPC_disk_label_add))?;
+    sb.fs_member_mut(dev).set_group(v.try_into().map_err(|_| BchError::from(Errcode::BCH_ERR_ENOSPC_disk_label_add))?);
     c::bch_sb_field_disk_groups::to_cpu(fs, sb)
 }
 
@@ -712,7 +711,7 @@ mod tests {
     }
 
     /// (alive, group) per member, group an index + 1.
-    fn add_members(sb: &mut c::bch_sb_handle, members: &[(bool, u64)]) {
+    fn add_members(sb: &mut c::bch_sb_handle, members: &[(bool, u8)]) {
         let bytes = size_of::<Head<c::bch_sb_field_members_v2>>() +
                     size_of::<c::bch_member>() * members.len();
         let mi = sb.field_resize::<c::bch_sb_field_members_v2>((bytes / 8) as u32).unwrap();
@@ -735,7 +734,7 @@ mod tests {
     /// @parent: index + 1.
     fn group(name: &str, parent: u32, deleted: bool) -> c::bch_disk_group {
         let mut g = c::bch_disk_group { label: label(name), ..Default::default() };
-        g.flags0.set_parent(parent.into());
+        g.flags0.set_parent(parent);
         g.flags0.set_deleted(deleted);
         g
     }

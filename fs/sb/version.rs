@@ -162,7 +162,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
     let extent_bp_shift_needed = (fs.opts().encoded_extent_max.get() >> 9).ilog2() + 1;
     if extent_bp_shift_needed > u32::from(fs.sb.extent_bp_shift.get()) {
         prt!(out, "extent_bp_shift too small: must repair backpointers\n");
-        sb.sb_mut().set_extent_bp_shift(extent_bp_shift_needed.into());
+        sb.sb_mut().set_extent_bp_shift(extent_bp_shift_needed as u8);
 
         let ext = ext(&mut sb);
         ext.recovery_passes_required[0] |= pass(RecoveryPass::check_extents_to_backpointers);

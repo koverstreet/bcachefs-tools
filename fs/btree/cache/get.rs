@@ -59,7 +59,7 @@ fn btree_check_header(fs: &Fs, b: &BtreeNode) {
     let k = BkeySC::from(contents.key_i());
 
     if Btree(b.c.btree_id.into()) != data.btree_id() ||
-        u64::from(b.c.level) != data.level() ||
+        b.c.level != data.level() ||
         data.max_key != k.k.p ||
         k.arm::<c::BtreePtrV2>().is_some_and(|p| data.min_key != p.v().min_key) {
         btree_bad_header(fs, b);
@@ -221,7 +221,7 @@ impl BtreeTrans<'_> {
         prefetch_aux(b);
 
         ebug_assert!(Btree(b.c.btree_id.into()) == paths[idx].btree_id());
-        ebug_assert!(unsafe { b.contents() }.data().level() == level as u64);
+        ebug_assert!(usize::from(unsafe { b.contents() }.data().level()) == level);
         btree_check_header(fs, b);
 
         let down = paths.down_key();
@@ -303,7 +303,7 @@ impl BtreeTrans<'_> {
         prefetch_aux(b);
 
         ebug_assert!(Btree(b.c.btree_id.into()) == paths[idx].btree_id());
-        ebug_assert!(unsafe { b.contents() }.data().level() == level as u64);
+        ebug_assert!(usize::from(unsafe { b.contents() }.data().level()) == level);
         btree_check_header(self.fs(), b);
 
         Ok((b, held))

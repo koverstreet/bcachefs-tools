@@ -384,7 +384,7 @@ fn may_add(fs: &Fs, sb: &c::bch_sb) -> Result<(), BchError> {
         return fs.throw(Errcode::BCH_ERR_mismatched_block_size);
     }
 
-    if u64::from(m.bucket_size.get()) < fs.sb_lock().sb().btree_node_size() {
+    if m.bucket_size.get() < fs.sb_lock().sb().btree_node_size() {
         return fs.throw(Errcode::BCH_ERR_bucket_size_too_small);
     }
 

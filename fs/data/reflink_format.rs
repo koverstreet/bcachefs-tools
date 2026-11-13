@@ -26,7 +26,7 @@ pub struct ReflinkP {
 
 #[bitfield(Le64)]
 pub struct ReflinkPIdxFlags {
-    #[bits(56)] idx:    u64,
+    idx:                u56,
     error:              bool,
     may_update_options: bool,
     __:                 u6,

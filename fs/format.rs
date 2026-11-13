@@ -916,7 +916,7 @@ vstruct!(bch_sb_field_crypt, field.u64s, start = 0);
 #[bitfield(Le64)]
 pub struct bch_sb_field_crypt_flags {
     #[bits(4)]  kdf_type:   KdfType,
-    #[bits(60)] __:         u64,
+    __:                     u60,
 }
 
 #[bch_enum(open)]
@@ -930,10 +930,10 @@ pub enum KdfType {
 #[bitfield(Le64)]
 pub struct bch_sb_field_crypt_kdf_flags {
     /* stored as base 2 log of scrypt params: */
-    #[bits(16)] scrypt_n:   u64,
-    #[bits(16)] scrypt_r:   u64,
-    #[bits(16)] scrypt_p:   u64,
-    #[bits(16)] __:         u64,
+    scrypt_n:               u16,
+    scrypt_r:               u16,
+    scrypt_p:               u16,
+    __:                     u16,
 }
 
 /*
@@ -1005,13 +1005,13 @@ vstruct!(bch_sb_field_ext, field.u64s, start = 0);
 
 #[bitfield(Le64)]
 pub struct bch_sb_field_ext_flags0 {
-    #[bits(20)] dev_readahead:              u64,
-    #[bits(6)]  ec_stripe_buf_limit:        u64,
-    #[bits(12)] scrub_max_rewind_secs:      u64,
-    #[bits(4)]  discard_buffer:             u64,
-    #[bits(7)]  btree_cache_shrinker_seeks: u64,
-    #[bits(12)] missing_dev_timeout:        u64,
-    #[bits(3)]  journal_replicas:           u64,
+    dev_readahead:                          u20,
+    ec_stripe_buf_limit:                    u6,
+    scrub_max_rewind_secs:                  u12,
+    discard_buffer:                         u4,
+    btree_cache_shrinker_seeks:             u7,
+    missing_dev_timeout:                    u12,
+    journal_replicas:                       u3,
 }
 
 // Superblock:
@@ -1291,16 +1291,16 @@ pub struct bch_sb_flags0 {
     #[bits(6)]  csum_type:          CsumType,
     #[bits(4)]  error_action:       ErrorAction,
 
-    #[bits(16)] btree_node_size:    u64,
+    btree_node_size:                u16,
 
-    #[bits(5)]  gc_reserve:         u64,
-    #[bits(7)]  root_reserve:       u64,
+    gc_reserve:                     u5,
+    root_reserve:                   u7,
 
     #[bits(4)]  meta_csum_type:     CsumOpt,
     #[bits(4)]  data_csum_type:     CsumOpt,
 
-    #[bits(4)]  meta_replicas_want: u64,
-    #[bits(4)]  data_replicas_want: u64,
+    meta_replicas_want:             u4,
+    data_replicas_want:             u4,
 
     posix_acl:                      bool,
     usrquota:                       bool,
@@ -1317,98 +1317,96 @@ pub struct bch_sb_flags0 {
 #[bitfield(Le64)]
 pub struct bch_sb_flags1 {
     #[bits(4)]  str_hash_type:          StrHashOpt,
-    #[bits(4)]  compression_type_lo:    u64,
+    compression_type_lo:                u4,
     inode_32bit:                        bool,
 
     macs_128_bit:                       bool,
-    #[bits(4)]  encryption_type:        u64,
+    encryption_type:                    u4,
 
     /*
      * Max size of an extent that may require bouncing to read or write
      * (checksummed, compressed): 64k
      */
-    #[bits(6)]  encoded_extent_max_bits: u64,
+    encoded_extent_max_bits:             u6,
 
-    #[bits(4)]  meta_replicas_req:      u64,
-    #[bits(4)]  data_replicas_req:      u64,
+    meta_replicas_req:                  u4,
+    data_replicas_req:                  u4,
 
-    #[bits(12)] promote_target:         u64,
-    #[bits(12)] foreground_target:      u64,
-    #[bits(12)] background_target:      u64,
+    promote_target:                     u12,
+    foreground_target:                  u12,
+    background_target:                  u12,
 }
 
 #[bitfield(Le64)]
 pub struct bch_sb_flags2 {
-    #[bits(4)]  background_compression_type_lo: u64,
-    #[bits(60)] gc_reserve_bytes:               u64,
+    background_compression_type_lo:             u4,
+    gc_reserve_bytes:                           u60,
 }
 
 #[bitfield(Le64)]
 pub struct bch_sb_flags3 {
-    #[bits(16)] erasure_code:           u64,
-    #[bits(12)] metadata_target:        u64,
+    erasure_code:                       u16,
+    metadata_target:                    u12,
     shard_inums:                        bool,
-    #[bits(1)]  __:                     u64,
-    #[bits(32)] journal_flush_delay:    u64,
+    __:                                 u1,
+    journal_flush_delay:                u32,
     journal_flush_disabled:             bool,
     multi_device:                       bool,
 }
 
 #[bitfield(Le64)]
 pub struct bch_sb_flags4 {
-    #[bits(32)] journal_reclaim_delay:          u64,
+    journal_reclaim_delay:                      u32,
     journal_transaction_names:                  bool,
     nocow:                                      bool,
-    #[bits(20)] write_buffer_size:              u64,
+    write_buffer_size:                          u20,
     #[bits(2)]  version_upgrade:                VersionUpgradeOpt,
 
-    #[bits(4)]  compression_type_hi:            u64,
-    #[bits(4)]  background_compression_type_hi: u64,
+    compression_type_hi:                        u4,
+    background_compression_type_hi:             u4,
 }
 
 /// The compression options, each in two fields: _HI is the bits it grew.
 impl bch_sb__head {
-    pub fn compression_type(&self) -> u64 {
+    pub fn compression_type(&self) -> u8 {
         self.compression_type_lo() | self.compression_type_hi() << 4
     }
 
-    pub fn background_compression_type(&self) -> u64 {
+    pub fn background_compression_type(&self) -> u8 {
         self.background_compression_type_lo() | self.background_compression_type_hi() << 4
     }
 
-    pub fn set_compression_type_checked(&mut self, v: u64) -> Result<(), ()> {
+    pub fn set_compression_type_checked(&mut self, v: u8) -> Result<(), ()> {
         self.set_compression_type_hi_checked(v >> 4)?;
-        self.set_compression_type_lo(v & 15);
-        Ok(())
+        self.set_compression_type_lo_checked(v & 15)
     }
 
-    pub fn set_background_compression_type_checked(&mut self, v: u64) -> Result<(), ()> {
+    pub fn set_background_compression_type_checked(&mut self, v: u8) -> Result<(), ()> {
         self.set_background_compression_type_hi_checked(v >> 4)?;
-        self.set_background_compression_type_lo(v & 15);
-        Ok(())
+        self.set_background_compression_type_lo_checked(v & 15)
     }
 }
 
 #[bitfield(Le64)]
 pub struct bch_sb_flags5 {
-    #[bits(16)] version_upgrade_complete:   u64,
-    #[bits(16)] allocator_stuck_timeout:    u64,
-    #[bits(16)] version_incompat:           u64,
-    #[bits(16)] version_incompat_allowed:   u64,
+    version_upgrade_complete:               u16,
+    allocator_stuck_timeout:                u16,
+    version_incompat:                       u16,
+    version_incompat_allowed:               u16,
 }
 
 #[bitfield(Le64)]
 pub struct bch_sb_flags6 {
-    #[bits(4)]  shard_inums_nbits:      u64,
-    #[bits(10)] write_error_timeout:    u64,
-    #[bits(6)]  csum_err_retry_nr:      u64,
+    shard_inums_nbits:                  u4,
+    write_error_timeout:                u10,
+    csum_err_retry_nr:                  u6,
     #[bits(2)]  degraded_action:        DegradedAction,
     casefold:                           bool,
     rebalance_ac_only:                  bool,
-    #[bits(16)] writeback_timeout:      u64,
-    #[bits(8)]  extent_bp_shift:        u64,
+    writeback_timeout:                  u16,
+    extent_bp_shift:                    u8,
     #[bits(2)]  scrub_journal:          ScrubJournalOpt,
-    #[bits(8)]  ec_max_data_blocks:     u64,
+    ec_max_data_blocks:                 u8,
     move_writes_fua:                    bool,
     /*
      * Set by `bcachefs dump --sanitize` when it scrubs dirent names: the names
@@ -1417,7 +1415,7 @@ pub struct bch_sb_flags6 {
      */
     dirents_sanitized:                  bool,
     #[bits(2)]  write_degraded_action:  WriteDegradedAction,
-    #[bits(2)]  __:                     u64,
+    __:                                 u2,
 }
 
 pub const BCH_SB_EXTENT_BP_SHIFT_DEFAULT: u32 = 10;
@@ -2014,7 +2012,7 @@ pub struct bset_flags {
     __:                     u10,
 
     /* Sector offset within the btree node: */
-    #[bits(16)] offset:     u64,
+    offset:                 u16,
 }
 
 #[unsized_vstruct(tail = [u64])]
@@ -2042,24 +2040,24 @@ c_default!(btree_node__head);
 
 #[bitfield(Le64)]
 pub struct btree_node_flags {
-    #[bits(4)]  id_lo:              u64,
-    #[bits(4)]  level:              u64,
+    id_lo:                          u4,
+    level:                          u4,
     new_extent_overwrite:           bool,
-    #[bits(16)] id_hi:              u64,
+    id_hi:                          u16,
     /* 25-32 unused */
     __:                             u7,
-    #[bits(32)] seq:                u64,
+    seq:                            u32,
 }
 
 /// The btree id, in two fields: id_hi is the bits it grew.
 impl btree_node__head {
     pub fn btree_id(&self) -> Btree {
-        Btree((self.id_lo() | self.id_hi() << 4) as u32)
+        Btree(u32::from(self.id_lo()) | u32::from(self.id_hi()) << 4)
     }
 
     pub fn set_btree_id(&mut self, id: Btree) {
-        self.set_id_lo(id.0 as u64 & 15);
-        self.set_id_hi(id.0 as u64 >> 4);
+        self.set_id_lo(id.0 as u8 & 15);
+        self.set_id_hi((id.0 >> 4).try_into().expect("a btree id fits its 20 bits"));
     }
 }
 

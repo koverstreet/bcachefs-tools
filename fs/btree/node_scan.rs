@@ -236,7 +236,7 @@ impl<'f> DevScan<'f> {
         let bn = self.buf.node().contents.get_mut().data();
         let id = bn.btree_id();
         if btree_id_can_reconstruct(id.0) ||
-           bn.level() >= c::BTREE_MAX_DEPTH as u64 ||
+           u32::from(bn.level()) >= c::BTREE_MAX_DEPTH ||
            id.0 >= c::BTREE_ID_NR_MAX {
             return Ok(());
         }
@@ -247,10 +247,10 @@ impl<'f> DevScan<'f> {
             .with_generation(ca.bucket_gen(ca.sector_to_bucket(offset), &read_lock()).unwrap_or(u8::MAX));
         let mut n = FoundBtreeNode {
             btree:           id,
-            level:           bn.level() as u8,
+            level:           bn.level(),
             range_updated:   false,
             sectors_written: 0,
-            seq:             bn.seq() as u32,
+            seq:             bn.seq(),
             journal_seq:     0,
             cookie:          bn.keys.seq.get(),
             min_key:         bn.min_key,
@@ -464,7 +464,7 @@ pub(crate) fn btree_node_is_stale(fs: &Fs, b: LockedNode<'_, BtreeNode>) -> bool
     let bn = contents.data();
 
     in_range(&nodes, Btree(b.c.btree_id.into()), b.c.level, bn.min_key, contents.key.k.p)
-        .any(|n| u64::from(n.seq) > bn.seq())
+        .any(|n| n.seq > bn.seq())
 }
 
 fn run_scan(fs: &Fs, out: &mut Printbuf) -> Result<(), BchError> {

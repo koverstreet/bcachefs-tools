@@ -312,7 +312,7 @@ impl<'t> InteriorUpdate<'t> {
         data._ptr = Default::default();
         data.flags = Default::default();
         data.set_btree_id(self.btree);
-        data.set_level(level as u64);
+        data.set_level(level as u8);
         let seq = data.keys.seq;
 
         if let Some(mut p) = contents.key.key_mut().as_s().arm::<c::BtreePtrV2>() {
@@ -352,7 +352,7 @@ impl<'t> InteriorUpdate<'t> {
 
         let contents = n.contents_mut();
         // a 32 bit counter, which wraps
-        contents.data_mut().set_seq((b_contents.data().seq() + 1) & c::btree_node_flags::SEQ_MAX);
+        contents.data_mut().set_seq(b_contents.data().seq().wrapping_add(1));
 
         set_range(contents, b_contents.data().min_key, b_contents.data().max_key);
 

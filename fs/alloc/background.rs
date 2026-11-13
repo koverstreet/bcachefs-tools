@@ -656,7 +656,7 @@ pub fn alloc_to_v4(k: BkeySC<'_>) -> c::AllocV4 {
         a.stripe_refcount      = (u.stripe != 0).into();
         a
     });
-    a.set_backpointers_start(c::BCH_ALLOC_V4_U64s as u64);
+    a.set_backpointers_start(c::BCH_ALLOC_V4_U64s as u8);
     a
 }
 
@@ -678,7 +678,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             // Widened to all of today's struct: say so, for a kernel that
             // reads by BACKPOINTERS_START - one from before it read by length
             // would drop what's written past an older start
-            a.v_mut().set_backpointers_start(c::BCH_ALLOC_V4_U64s as u64);
+            a.v_mut().set_backpointers_start(c::BCH_ALLOC_V4_U64s as u8);
             return Ok(a);
         }
 
@@ -939,10 +939,10 @@ impl c::AllocV4 {
     /// inline: alloc_v4_u64s_noerror().
     fn u64s_noerror(&self) -> usize {
         let start = match self.backpointers_start() {
-            0 => u64::from(c::BCH_ALLOC_V4_U64s_V0),
-            s => s,
+            0 => c::BCH_ALLOC_V4_U64s_V0 as usize,
+            s => s.into(),
         };
-        (start + self.nr_backpointers() * (size_of::<c::Backpointer>() / size_of::<u64>()) as u64) as usize
+        start + usize::from(self.nr_backpointers()) * (size_of::<c::Backpointer>() / size_of::<u64>())
     }
 
     /// How far its generation is past its oldest pointer's, wrapping:

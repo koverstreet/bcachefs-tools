@@ -131,8 +131,8 @@ pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::AllocV4>() / size_of::<u64>();
 pub struct AllocV4Flags {
     need_discard:                   bool,
     need_inc_gen:                   bool,
-    #[bits(6)] backpointers_start:  u64,
-    #[bits(6)] nr_backpointers:     u64,
+    backpointers_start:             u6,
+    nr_backpointers:                u6,
     __:                             u18,
 }
 

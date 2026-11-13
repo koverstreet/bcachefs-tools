@@ -221,7 +221,7 @@ pub fn format(
     sb.sb_mut().user_uuid.b = opts.uuid.unwrap_or_else(|| *uuid::Uuid::new_v4().as_bytes());
     sb.sb_mut().nr_devices = dev_slice.len() as u8;
 
-    sb.sb_mut().set_version_incompat_allowed(opts.version as u64);
+    sb.sb_mut().set_version_incompat_allowed(opts.version as u16);
     // These are no longer options, only for compatibility with old versions
     sb.sb_mut().set_meta_replicas_req(1);
     sb.sb_mut().set_data_replicas_req(1);
@@ -300,7 +300,7 @@ pub fn format(
                     let path_idx = sb.disk_path_find_or_create(val.to_bytes()).unwrap_or_else(|e|
                         die(&format!("error creating disk path {}: {e}", val.to_string_lossy())));
                     // Recompute m after sb modification (may have been reallocated)
-                    sb.member_mut(idx as u32).unwrap().set_group(path_idx as u64 + 1);
+                    sb.member_mut(idx as u32).unwrap().set_group((path_idx + 1).try_into().expect("a disk group a member can name"));
                 }
                 c::OptId::Opt_failure_domain => {
                     let bytes = val.to_bytes();
@@ -324,10 +324,10 @@ pub fn format(
     let background = parse_target(&sb, dev_slice, target_str(c::OptId::Opt_background_target));
     let promote    = parse_target(&sb, dev_slice, target_str(c::OptId::Opt_promote_target));
     let metadata   = parse_target(&sb, dev_slice, target_str(c::OptId::Opt_metadata_target));
-    sb.sb_mut().set_foreground_target(foreground as u64);
-    sb.sb_mut().set_background_target(background as u64);
-    sb.sb_mut().set_promote_target(promote as u64);
-    sb.sb_mut().set_metadata_target(metadata as u64);
+    sb.sb_mut().set_foreground_target(foreground);
+    sb.sb_mut().set_background_target(background);
+    sb.sb_mut().set_promote_target(promote);
+    sb.sb_mut().set_metadata_target(metadata);
 
     // Encryption
     if opts.encrypted {

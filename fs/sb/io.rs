@@ -547,7 +547,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
 
         let current = c::bcachefs_metadata_version_current as u64;
         sb_err_on!(out, c::BCH_VERSION_MAJOR(sb.version.get().into()) > c::BCH_VERSION_MAJOR(current) ||
-                        sb.version_incompat() > current, BCH_ERR_invalid_sb_features,
+                        u64::from(sb.version_incompat()) > current, BCH_ERR_invalid_sb_features,
                    "Filesystem has incompatible version {}, current version {}",
                    version(sb.version.get()), version(current as u32))?;
     }
@@ -588,7 +588,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
 
     #[cfg(kernel)]
     if sb.shard_inums_nbits() == 0 {
-        let btree_node_bytes = sb.btree_node_size() << 9;
+        let btree_node_bytes = u64::from(sb.btree_node_size()) << 9;
         // the members, as C reads them - not yet validated
         let fs_size = (0..sb.number_of_devices()).map(|i| {
             let m = crate::sb::members::sb_member(sb, i).unwrap_or_default();
@@ -596,7 +596,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
         }).sum::<u64>();
         let bits = crate::inode::shard_bits_default(
             crate::os::kernel::num_online_cpus(), fs_size << 9, btree_node_bytes);
-        sb.set_shard_inums_nbits(bits.into());
+        sb.set_shard_inums_nbits(bits as u8);
     }
 
     validate_layout(&sb.layout, out)?;
@@ -705,7 +705,7 @@ impl Fs {
             let mut sb = self.sb_lock();
             if version.0 > self.sb.version_incompat.get().into() {
                 let s = sb.sb_mut();
-                let max = s.version_incompat().max(version.0.into());
+                let max = s.version_incompat().max(version.0 as u16);
                 s.set_version_incompat(max);
                 self.write_super(&mut sb);
             }
@@ -770,11 +770,11 @@ pub(crate) fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool
     let current = c::bcachefs_metadata_version_current;
     let s = sb.sb_mut();
 
-    if s.version_upgrade_complete() > current.into() {
-        s.set_version_upgrade_complete(current.into());
+    if u32::from(s.version_upgrade_complete()) > current {
+        s.set_version_upgrade_complete(current as u16);
     }
-    if s.version_incompat_allowed() > current.into() {
-        s.set_version_incompat_allowed(current.into());
+    if u32::from(s.version_incompat_allowed()) > current {
+        s.set_version_incompat_allowed(current as u16);
     }
     if u32::from(fs.sb.version.get()) > current {
         s.version = Le16::new(current as u16);
@@ -801,7 +801,7 @@ pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: u32, incompat: 
     s.version = Le16::new(new as u16);
     if incompat {
         s.features[0] |= c::BCH_SB_FEATURES_ALL;
-        let max = s.version_incompat_allowed().max(new.into());
+        let max = s.version_incompat_allowed().max(new as u16);
         s.set_version_incompat_allowed(max);
     }
 }
@@ -1149,7 +1149,7 @@ impl bch_sb_handle {
             s.set_journal_reclaim_delay(1000);
         }
         if s.version_upgrade_complete() == 0 {
-            s.set_version_upgrade_complete(version.into());
+            s.set_version_upgrade_complete(version as u16);
         }
         if version <= MetadataVersion::disk_accounting_v2.0 && s.allocator_stuck_timeout() == 0 {
             s.set_allocator_stuck_timeout(30);
@@ -2758,17 +2758,17 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     set_all(&cpu.uuid, src.uuid.b);
     set_all(&cpu.user_uuid, src.user_uuid.b);
     cpu.version                 .set(src.version.get());
-    cpu.version_incompat        .set(src.version_incompat() as u16);
-    cpu.version_incompat_allowed.set(src.version_incompat_allowed() as u16);
+    cpu.version_incompat        .set(src.version_incompat());
+    cpu.version_incompat_allowed.set(src.version_incompat_allowed());
     cpu.version_min             .set(src.version_min.get());
-    cpu.version_upgrade_complete.set(src.version_upgrade_complete() as u16);
+    cpu.version_upgrade_complete.set(src.version_upgrade_complete());
     cpu.nr_devices              .set(src.nr_devices);
     cpu.clean                   .set(src.clean() as u8);
-    cpu.encryption_type         .set(src.encryption_type() as u8);
+    cpu.encryption_type         .set(src.encryption_type());
 
     cpu.extent_bp_shift.set(match src.extent_bp_shift() {
         0 => c::BCH_SB_EXTENT_BP_SHIFT_DEFAULT as u8,
-        shift => shift as u8,
+        shift => shift,
     });
 
     let nsec_per_time_unit = src.time_precision.get();

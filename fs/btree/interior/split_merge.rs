@@ -442,7 +442,7 @@ impl SplitLayout {
 fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, paths: &mut Paths<'_>, srcs: &[Node<'_>],
                  DstLayout { format, min_key, max_key }: DstLayout) -> NewNode<'u> {
     // a 32 bit counter, which wraps
-    let seq = (srcs.iter().map(|s| s.contents().data().seq()).max().unwrap_or(0) + 1) & c::btree_node_flags::SEQ_MAX;
+    let seq = srcs.iter().map(|s| s.contents().data().seq()).max().unwrap_or(0).wrapping_add(1);
     let mut n = update.alloc_node(paths, usize::from(srcs[0].c.level));
     let contents = n.contents_mut();
     assert!(contents.nsets == 1, "packing into a node with {} bsets", contents.nsets);

@@ -562,9 +562,9 @@ impl c::bch_sb_field_crypt {
     /// has to run before the first passphrase is set on it.
     pub fn kdf_init(&mut self) {
         self.set_kdf_type(c::KdfType::scrypt);
-        self.set_scrypt_n(16384u64.ilog2().into());
-        self.set_scrypt_r(8u64.ilog2().into());
-        self.set_scrypt_p(16u64.ilog2().into());
+        self.set_scrypt_n(16384u16.ilog2() as u16);
+        self.set_scrypt_r(8u16.ilog2() as u16);
+        self.set_scrypt_p(16u16.ilog2() as u16);
     }
 
     pub fn derive_passphrase(&self, passphrase: &[u8]) -> Result<c::bch_key, BchError> {
