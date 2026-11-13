@@ -12,6 +12,7 @@
 //!     are visible to it;
 //!  3. walk the inodes again, fixing any whose link count doesn't match.
 
+use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
@@ -95,9 +96,9 @@ fn check_nlinks_find_hardlinks(
     let mut iter = BtreeIter::new(&trans, Btree::inodes, pos(0, start), iter_flags());
 
     let ret = iter.for_each(&trans, |_, _, k| {
-        if !inode::bkey_is_inode(k.k) {
+        let Some(k) = k.arm::<inode::Inodes>() else {
             return Ok(ControlFlow::Continue(()));
-        }
+        };
 
         let u = inode::unpack(fs, k);
 
@@ -159,9 +160,9 @@ fn check_nlinks_update_inode(
     links:     &[Nlink],
     idx:       &mut usize,
 ) -> Result<(), BchError> {
-    if !inode::bkey_is_inode(k.k) {
+    let Some(k) = k.arm::<inode::Inodes>() else {
         return Ok(());
-    }
+    };
 
     let mut u = inode::unpack(t.fs(), k);
 

@@ -702,7 +702,7 @@ fn first_inode_snapshot(t: &TransAttempt<'_, '_>, inum: u64) -> Result<u32, BchE
                                   BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, k| Ok(
-        if inode::bkey_is_inode(k.k) {
+        if k.k.is_inode() {
             ControlFlow::Break(Some(k.k.p.snapshot))
         } else {
             ControlFlow::Continue(())

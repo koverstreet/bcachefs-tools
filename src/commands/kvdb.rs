@@ -320,8 +320,8 @@ fn render_key(fs: &Fs, k: &BkeySC<'_>, key_only: bool) -> String {
 /// Inodes are read through the decoded form, bch_inode_unpacked, as update
 /// writes them: the varint-packed fields have no fixed position.
 fn render_key_fields(fs: &Fs, k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
-    if inode::bkey_is_inode(k.k) {
-        let u = inode::unpack(fs, *k);
+    if let Some(i) = k.arm::<inode::Inodes>() {
+        let u = inode::unpack(fs, i);
         let bytes = unsafe {
             core::slice::from_raw_parts(&u as *const _ as *const u8,
                                         size_of::<c::bch_inode_unpacked>())

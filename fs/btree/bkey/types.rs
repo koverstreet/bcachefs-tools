@@ -352,6 +352,7 @@ pub mod prelude {
     pub use crate::data::durability::BkeyVDurability;
     pub use crate::data::extents::BkeyVExtents;
     pub use crate::data::ptrs::BkeyVPtrs;
+    pub use crate::inode::BkeyVInode;
 }
 
 impl<'a, V: ?Sized + BkeyVal> BkeyV for BkeySC<'a, V> {

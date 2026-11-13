@@ -155,15 +155,13 @@ pub struct WalkerEntry {
 
 impl WalkerEntry {
     fn new(fs: &Fs, k: BkeySC<'_>) -> Self {
-        let whiteout = !inode::bkey_is_inode(k.k);
-        let inode = if whiteout {
-            c::bch_inode_unpacked {
+        let (inode, whiteout) = match k.arm::<inode::Inodes>() {
+            Some(i) => (inode::unpack(fs, i), false),
+            None    => (c::bch_inode_unpacked {
                 bi_inum:     k.k.p.offset,
                 bi_snapshot: k.k.p.snapshot,
                 ..Default::default()
-            }
-        } else {
-            inode::unpack(fs, k)
+            }, true),
         };
         WalkerEntry { inode, whiteout, count: 0 }
     }
@@ -505,7 +503,7 @@ impl InodeWalker {
                 return Ok(());
             }
 
-            if inode::bkey_is_inode(k.k) {
+            if k.k.is_inode() {
                 inodes.push(WalkerEntry::new(fs, k))?;
             } else {
                 deletes.push(id)?;
@@ -674,7 +672,7 @@ pub fn reconstruct_subvol_root(
     let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, 0),
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
     let root = iter.for_each_norestart(t, |_, k| Ok(
-        match inode::bkey_is_inode(k.k).then(|| inode::unpack(fs, k)) {
+        match k.arm::<inode::Inodes>().map(|k| inode::unpack(fs, k)) {
             Some(u) if u.bi_subvol == subvol => ControlFlow::Break(Some(u.bi_inum)),
             _ => ControlFlow::Continue(()),
         }))?;

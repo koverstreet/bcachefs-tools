@@ -550,7 +550,7 @@ fn dirent_has_target(t: &TransAttempt<'_, '_>, d: BkeySC<'_>) -> Result<bool, Bc
         DirentTarget::Inode(inum) => {
             let mut iter = BtreeIter::new(t, Btree::inodes,
                                           spos(0, inum, d.k.p.snapshot), BtreeIterFlags::empty());
-            Ok(inode::bkey_is_inode(iter.peek_slot(t)?.expect("a slot always has a key").k))
+            Ok(iter.peek_slot(t)?.expect("a slot always has a key").k.is_inode())
         }
     }
 }

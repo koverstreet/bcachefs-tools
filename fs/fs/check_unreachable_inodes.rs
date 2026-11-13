@@ -10,6 +10,7 @@
 //!
 //! XXX: racy w.r.t. hardlink removal in online fsck.
 
+use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{spos, POS_MIN};
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
@@ -64,9 +65,9 @@ fn find_oldest_inode_needs_reattach(
             return Ok(ControlFlow::Continue(()));
         }
 
-        if !inode::bkey_is_inode(k.k) {
+        let Some(k) = k.arm::<inode::Inodes>() else {
             return Ok(ControlFlow::Break(()));
-        }
+        };
 
         let parent = inode::unpack(fs, k);
         if !inode_should_reattach(&parent) {
@@ -143,10 +144,10 @@ fn attached_descendant_version(
                                   BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_max_norestart(t, spos(0, inum, end), |_, k| {
-        if !inode::bkey_is_inode(k.k) ||
-           !snapshot::is_ancestor(t, k.k.p.snapshot, inode.bi_snapshot) {
+        let Some(k) = k.arm::<inode::Inodes>()
+            .filter(|k| snapshot::is_ancestor(t, k.k.p.snapshot, inode.bi_snapshot)) else {
             return Ok(ControlFlow::Continue(()));
-        }
+        };
 
         let u = inode::unpack(fs, k);
         if u.has_backpointer() && u.bi_parent_subvol == 0 {
@@ -230,9 +231,9 @@ fn check_unreachable_inode(
     k:    crate::btree::bkey::BkeySC<'_>,
     seen: &mut SubvolRootSeen,
 ) -> Result<(), BchError> {
-    if !inode::bkey_is_inode(k.k) {
+    let Some(k) = k.arm::<inode::Inodes>() else {
         return Ok(());
-    }
+    };
 
     let mut u = inode::unpack(t.fs(), k);
 

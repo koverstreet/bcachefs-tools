@@ -250,9 +250,9 @@ fn check_inode<'t>(
         return Ok(());
     }
 
-    if !inode::bkey_is_inode(k.k) {
+    let Some(k) = k.arm::<inode::Inodes>() else {
         return Ok(());
-    }
+    };
 
     let pos = k.k.p;
     let mut u = inode::unpack(fs, k);

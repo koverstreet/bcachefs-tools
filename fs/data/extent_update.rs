@@ -313,6 +313,7 @@ impl<'t> TransAttempt<'_, 't> {
             *opts = if likely(inode.v().bi_flags.get() & u64::from(c::InodeFlags::has_inode_opts.bits()) == 0) {
                 inode_opts::get_fs(fs, false)
             } else {
+                let k = k.arm::<inode::Inodes>().expect("an inode: to_v3() is ENOENT for anything else");
                 inode_opts::get_inode(fs, &inode::unpack(fs, k))
             };
 

@@ -39,7 +39,8 @@ use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::os::kernel::random_u64;
 use crate::{bch_err_ratelimited, bch_warn, trans_inconsistent};
-use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC, Typed, POS_MIN, SPOS_MAX, BkeyOps};
+use crate::btree::bkey::{bkey_family, pos, spos, BKEY_U64S, BkeyFamily, BkeyI, BkeyS, BkeySC, POS_MIN, SPOS_MAX,
+                         BkeyOps};
 use crate::init::passes::{self, RecoveryPass};
 use crate::util::varint;
 use core::mem::{offset_of, align_of};
@@ -238,13 +239,13 @@ fn v1_field(in_: &[u8], _bits: u32) -> Option<(u128, usize)> {
     Some((u128::from_be_bytes(be), len))
 }
 
-/// Unpack @k, an inode of any version (see bkey_is_inode()), reporting
-/// nothing: Err(what did unpack, and the field it stopped at) if a field
-/// doesn't - it, and the fields after it, are left zero.
+/// Unpack @k, reporting nothing: Err(what did unpack, and the field it
+/// stopped at) if a field doesn't - it, and the fields after it, are left
+/// zero.
 // result_large_err: Ok is the same bch_inode_unpacked, so boxing Err would
 // shrink nothing
 #[allow(clippy::type_complexity, clippy::result_large_err)]
-fn try_unpack(k: BkeySC<'_>)
+fn try_unpack(k: BkeySC<'_, Inodes>)
     -> Result<c::bch_inode_unpacked, (c::bch_inode_unpacked, usize)>
 {
     let mut u = c::bch_inode_unpacked {
@@ -259,7 +260,7 @@ fn try_unpack(k: BkeySC<'_>)
     // bi_flags is 32 bits: the flags field's bits above that - most of v3's
     // fields_start, and its mode - are dropped.
     let ret = match k.typed() {
-        Typed::inode_v3(i) => {
+        InodesTyped::inode_v3(i) => {
             let v = i.v();
             u.bi_journal_seq = v.bi_journal_seq.get();
             u.bi_hash_seed   = v.bi_hash_seed;
@@ -272,7 +273,7 @@ fn try_unpack(k: BkeySC<'_>)
             unpack_fields(&mut u, true, fields_at(V3_FIELDS_OFFSET),
                           v.inodev3_nr_fields() as usize, varint_field)
         }
-        Typed::inode_v2(i) => {
+        InodesTyped::inode_v2(i) => {
             let v = i.v();
             u.bi_journal_seq = v.bi_journal_seq.get();
             u.bi_hash_seed   = v.bi_hash_seed;
@@ -282,7 +283,7 @@ fn try_unpack(k: BkeySC<'_>)
             unpack_fields(&mut u, false, fields_at(offset_of!(c::InodeV2, repr.fields)),
                           v.inodev2_nr_fields() as usize, varint_field)
         }
-        Typed::inode(i) => {
+        InodesTyped::inode(i) => {
             let v = i.v();
             u.bi_hash_seed   = v.bi_hash_seed;
             u.bi_flags       = v.bi_flags.get();
@@ -297,7 +298,6 @@ fn try_unpack(k: BkeySC<'_>)
                 unpack_fields(&mut u, false, in_, nr_fields, v1_field)
             }
         }
-        _ => panic!("unpacking a key that isn't an inode: {}", k.k),
     };
 
     match ret {
@@ -314,11 +314,11 @@ fn try_unpack(k: BkeySC<'_>)
 ///
 /// Not the value's to_text: an inode's unpacks it, and would fail here again.
 #[cold]
-fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usize) {
+fn unpack_error(fs: &Fs, k: BkeySC<'_, Inodes>, u: &c::bch_inode_unpacked, fieldnr: usize) {
     macro_rules! names {
         ($($name:ident = $bits:literal,)*) => { &[$(stringify!($name),)*] };
     }
-    let names: &[&str] = if matches!(k.typed(), Typed::inode_v3(_)) {
+    let names: &[&str] = if matches!(k.typed(), InodesTyped::inode_v3(_)) {
         inode_fields_v3!(names)
     } else {
         inode_fields_v2!(names)
@@ -347,18 +347,18 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usiz
     }
 }
 
-/// Unpack @k, an inode of any version (see bkey_is_inode()). A field that
-/// doesn't decode is reported, and left zero with the fields after it.
-pub fn unpack(fs: &Fs, k: BkeySC<'_>) -> c::bch_inode_unpacked {
+/// Unpack @k. A field that doesn't decode is reported, and left zero with the
+/// fields after it.
+pub fn unpack(fs: &Fs, k: BkeySC<'_, Inodes>) -> c::bch_inode_unpacked {
     try_unpack(k).unwrap_or_else(|(u, fieldnr)| {
         unpack_error(fs, k, &u, fieldnr);
         u
     })
 }
 
-impl<'a> From<&'a c::bkey_inode_buf> for BkeySC<'a> {
+impl<'a> From<&'a c::bkey_inode_buf> for BkeySC<'a, Inodes> {
     fn from(b: &'a c::bkey_inode_buf) -> Self {
-        BkeySC::from(b.as_ref())
+        BkeySC::from(b.as_ref()).arm::<Inodes>().expect("pack() makes an inode")
     }
 }
 
@@ -462,40 +462,65 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
 // ── Reading keys, without unpacking ──────────────────────────────────────
 
-/// Whether @k is an inode, of any version: as C's bkey_is_inode().
-pub fn bkey_is_inode(k: &c::bkey) -> bool {
-    [BkeyType::inode, BkeyType::inode_v2, BkeyType::inode_v3]
-        .iter()
-        .any(|t| k.type_ == t.0 as u8)
-}
+bkey_family!(
+    /// An inode, of any version, BkeyTypeFlags::inode: a key armed to it -
+    /// BkeySC<'_, Inodes>, BkeyS<'_, Inodes>, &BkeyI<Inodes> - is read
+    /// through typed(), or without unpacking through BkeyVInode.
+    Inodes: inode);
 
-/// @k's mode, without unpacking it - an inode of any version, 0 for anything
-/// else.
-pub fn mode(k: BkeySC<'_>) -> u32 {
-    match k.typed() {
-        Typed::inode(i)    => i.v().bi_mode.get() as u32,
-        Typed::inode_v2(i) => i.v().bi_mode.get() as u32,
-        Typed::inode_v3(i) => i.v().inodev3_mode() as u32,
-        _                  => 0,
+/// What every inode version has, read and written without unpacking it, in
+/// whichever form it's held: any BkeyV armed to Inodes.
+pub trait BkeyVInode: BkeyV<V = Inodes> {
+    fn mode(&self) -> u32 {
+        match self.as_sc().typed() {
+            InodesTyped::inode(i)    => i.v().bi_mode.get() as u32,
+            InodesTyped::inode_v2(i) => i.v().bi_mode.get() as u32,
+            InodesTyped::inode_v3(i) => i.v().inodev3_mode() as u32,
+        }
+    }
+
+    /// Its flags field, all of it: as bkey_inode_flags(). v3 keeps the mode
+    /// and other packed fields above bit 20.
+    fn flags_field(&self) -> u64 {
+        match self.as_sc().typed() {
+            InodesTyped::inode(i)    => i.v().bi_flags.get() as u64,
+            InodesTyped::inode_v2(i) => i.v().bi_flags.get(),
+            InodesTyped::inode_v3(i) => i.v().bi_flags.get(),
+        }
+    }
+
+    /// Its flags (InodeFlags bits): the low 32 bits.
+    fn flags(&self) -> u32 {
+        self.flags_field() as u32
+    }
+
+    /// Set its flags field, all of it: as bkey_inode_flags_set().
+    fn set_flags_field(&mut self, f: u64) where Self: BkeyVMut {
+        match self.as_s().typed() {
+            InodesTyped::inode(mut i)    => i.v_mut().bi_flags = (f as u32).into(),
+            InodesTyped::inode_v2(mut i) => i.v_mut().bi_flags = f.into(),
+            InodesTyped::inode_v3(mut i) => i.v_mut().bi_flags = f.into(),
+        }
+    }
+
+    /// Stamp it with the journal sequence number it's committed in - an inode
+    /// v1 has nowhere to: as bkey_inode_journal_seq_set().
+    fn set_journal_seq(&mut self, seq: u64) where Self: BkeyVMut {
+        match self.as_s().typed() {
+            InodesTyped::inode(_)        => {}
+            InodesTyped::inode_v2(mut i) => i.v_mut().bi_journal_seq = seq.into(),
+            InodesTyped::inode_v3(mut i) => i.v_mut().bi_journal_seq = seq.into(),
+        }
     }
 }
 
-/// @k's flags field, all of it, without unpacking it - an inode of any
-/// version, 0 for anything else: as bkey_inode_flags(). v3 keeps the mode
-/// and other packed fields above bit 20.
-fn flags_field(k: BkeySC<'_>) -> u64 {
-    match k.typed() {
-        Typed::inode(i)    => i.v().bi_flags.get() as u64,
-        Typed::inode_v2(i) => i.v().bi_flags.get(),
-        Typed::inode_v3(i) => i.v().bi_flags.get(),
-        _                  => 0,
-    }
-}
+impl<K: BkeyV<V = Inodes>> BkeyVInode for K {}
 
-/// @k's flags (InodeFlags bits), without unpacking it - an inode of any
-/// version, 0 for anything else. The low 32 bits.
-pub fn flags(k: BkeySC<'_>) -> u32 {
-    flags_field(k) as u32
+impl c::bkey {
+    /// Whether it's an inode, of any version: as C's bkey_is_inode().
+    pub fn is_inode(&self) -> bool {
+        <Inodes as BkeyFamily>::contains(self)
+    }
 }
 
 // ── Lookups and writes ───────────────────────────────────────────────────
@@ -505,9 +530,9 @@ fn peek_slot<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>)
     -> Result<c::bch_inode_unpacked, BchError>
 {
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
-    if !bkey_is_inode(k.k) {
+    let Some(k) = k.arm::<Inodes>() else {
         return Err(t.fs().err(Errcode::BCH_ERR_ENOENT_inode));
-    }
+    };
     Ok(unpack(t.fs(), k))
 }
 
@@ -646,8 +671,8 @@ pub fn find_oldest_snapshot(
         if k.k.p.offset != inum {
             ControlFlow::Break(())
         } else {
-            if bkey_is_inode(k.k) &&
-               crate::snapshots::snapshot::is_ancestor(t, snapshot, k.k.p.snapshot) {
+            if let Some(k) = k.arm::<Inodes>()
+                .filter(|k| crate::snapshots::snapshot::is_ancestor(t, snapshot, k.k.p.snapshot)) {
                 root = Some(unpack(fs, k));
             }
             ControlFlow::Continue(())
@@ -676,7 +701,7 @@ pub fn find_any_snapshot(t: &TransAttempt<'_, '_>, inum: u64)
     iter.for_each_norestart(t, |_, k| Ok(
         if k.k.p.offset != inum {
             ControlFlow::Break(None)
-        } else if bkey_is_inode(k.k) {
+        } else if let Some(k) = k.arm::<Inodes>() {
             ControlFlow::Break(Some(unpack(fs, k)))
         } else {
             ControlFlow::Continue(())
@@ -757,10 +782,10 @@ pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchErr
 /// leaves it - in transaction memory: as bch2_inode_to_v3(). ENOENT if it
 /// isn't an inode.
 pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &BkeyI) -> Result<TransBkey<'a, 't>, BchError> {
-    if !bkey_is_inode(&k.k) {
+    let Some(k) = BkeySC::from(k).arm::<Inodes>() else {
         return Err(BchError::from(c::ENOENT));
-    }
-    pack_trans(t, &unpack(t.fs(), BkeySC::from(k)))
+    };
+    pack_trans(t, &unpack(t.fs(), k))
 }
 
 // ── Validate, to_text ────────────────────────────────────────────────────
@@ -784,6 +809,7 @@ fn validate_str_hash(v: &BkeyValidate<'_, '_>, str_hash: u64) -> Result<(), BchE
 
 #[cold]
 fn inode_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    let k = k.arm::<Inodes>().expect("an inode type's to_text");
     // with no filesystem - show-super's sb_clean - nothing to report a bad one to
     let inode = match fs {
         Some(fs) => unpack(fs, k),
@@ -1104,38 +1130,6 @@ fn is_unlinked(flags: u64) -> bool {
     flags & c::InodeFlags::has_child_snapshot.bits() as u64 == 0
 }
 
-/// @k's flags field: flags_field(), for a key being edited.
-fn flags_field_mut(k: &mut BkeyS<'_>) -> u64 {
-    match k.as_s().typed() {
-        Typed::inode(i)    => i.v().bi_flags.get() as u64,
-        Typed::inode_v2(i) => i.v().bi_flags.get(),
-        Typed::inode_v3(i) => i.v().bi_flags.get(),
-        _                  => 0,
-    }
-}
-
-/// Set @k's flags field, all of it: as bkey_inode_flags_set(). @k is an
-/// inode.
-fn set_flags_field(k: &mut BkeyS<'_>, f: u64) {
-    match k.as_s().typed() {
-        Typed::inode(mut i)    => i.v_mut().bi_flags = (f as u32).into(),
-        Typed::inode_v2(mut i) => i.v_mut().bi_flags = f.into(),
-        Typed::inode_v3(mut i) => i.v_mut().bi_flags = f.into(),
-        _                      => panic!("setting the flags of a key that isn't an inode"),
-    }
-}
-
-/// Stamp @k with the journal sequence number it's committed in - an inode v1
-/// has nowhere to: as bkey_inode_journal_seq_set(). @k is an inode.
-fn set_journal_seq(k: &mut BkeyS<'_>, seq: u64) {
-    match k.as_s().typed() {
-        Typed::inode(_)        => {}
-        Typed::inode_v2(mut i) => i.v_mut().bi_journal_seq = seq.into(),
-        Typed::inode_v3(mut i) => i.v_mut().bi_journal_seq = seq.into(),
-        _                      => panic!("setting the journal_seq of a key that isn't an inode"),
-    }
-}
-
 /// The version of the inode at @p that @p's snapshot inherited - the oldest
 /// ancestor's - through @iter, left at it; None if there's none, as
 /// bch2_inode_get_iter_snapshot_parent(). Skips non-inode keys, going on up
@@ -1144,7 +1138,7 @@ fn snapshot_parent<'i, 'a>(
     t:     &'i TransAttempt<'a, '_>,
     iter:  &'i mut BtreeIter<'a>,
     mut p: Bpos,
-) -> Result<Option<BkeySC<'i>>, BchError> {
+) -> Result<Option<BkeySC<'i, Inodes>>, BchError> {
     loop {
         *iter = BtreeIter::new(t, Btree::inodes, p.successor(),
                                BtreeIterFlags::ALL_SNAPSHOTS);
@@ -1156,11 +1150,11 @@ fn snapshot_parent<'i, 'a>(
             return Ok(None);
         };
 
-        if bkey_is_inode(k.k) {
+        p = k.k.p;
+        if let Some(k) = k.arm::<Inodes>() {
             // Polonius: @iter isn't touched again.
             return Ok(Some(unsafe { crate::btree::iter::polonius_key(k) }));
         }
-        p = k.k.p;
     }
 }
 
@@ -1177,7 +1171,7 @@ pub fn has_child_snapshots(t: &TransAttempt<'_, '_>, p: Bpos) -> Result<bool, Bc
                                   BtreeIterFlags::ALL_SNAPSHOTS);
     let found = iter.find_max_norestart(t, p.predecessor(), |_, k| {
         Ok(crate::snapshots::snapshot::is_ancestor(t, k.k.p.snapshot, p.snapshot) &&
-           bkey_is_inode(k.k))
+           k.k.is_inode())
     })?;
     Ok(found.is_some())
 }
@@ -1185,17 +1179,17 @@ pub fn has_child_snapshots(t: &TransAttempt<'_, '_>, p: Bpos) -> Result<bool, Bc
 /// The inode @k is first being written in this snapshot: if it has no
 /// versions in descendants after all, its has_child_snapshot goes - and with
 /// @have_child, it's set. As update_inode_has_children().
-fn update_has_children(t: &TransAttempt<'_, '_>, k: &mut BkeyS<'_>, have_child: bool)
+fn update_has_children(t: &TransAttempt<'_, '_>, mut k: BkeyS<'_, Inodes>, have_child: bool)
     -> Result<(), BchError>
 {
     if !have_child && has_child_snapshots(t, k.k.p)? {
         return Ok(());
     }
 
-    let f = flags_field_mut(k);
+    let f = k.flags_field();
     let has = c::InodeFlags::has_child_snapshot.bits() as u64;
     if have_child != (f & has != 0) {
-        set_flags_field(k, f ^ has);
+        k.set_flags_field(f ^ has);
     }
     Ok(())
 }
@@ -1213,13 +1207,13 @@ fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: Bpos, have_child: boo
         return Ok(());
     }
 
-    let f = flags_field(k);
+    let f = k.flags_field();
     let has = c::InodeFlags::has_child_snapshot.bits() as u64;
     if have_child != (f & has != 0) {
         // As bch2_bkey_make_mut(): a copy, queued as the update.
         let mut u = t.bkey_make_mut_noupdate(k)?;
         t.update(&iter, &u, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
-        set_flags_field(&mut BkeyS::from(&mut u), f ^ has);
+        BkeyS::from(&mut u).set_flags_field(f ^ has);
     }
     Ok(())
 }
@@ -1241,18 +1235,18 @@ pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), B
        op.flags.contains(UpdateTriggerFlags::INSERT) {
         let seq = t.journal_res_seq();
         assert!(seq != 0, "atomic trigger without a journal reservation");
-        set_journal_seq(&mut op.new, seq);
+        op.new.as_s().arm::<Inodes>().expect("inserting an inode").set_journal_seq(seq);
     }
 
-    let nr = bkey_is_inode(op.new.k) as i64 - bkey_is_inode(op.old.k) as i64;
+    let nr = op.new.k.is_inode() as i64 - op.old.k.is_inode() as i64;
     if op.flags.intersects(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::GC) && nr != 0 {
         crate::accounting::add(t, crate::accounting::NrInodes {}, crate::accounting::NrInodesCounters { nr },
                                op.flags.contains(UpdateTriggerFlags::GC))?;
     }
 
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        let unlinked_delta = is_unlinked(flags_field_mut(&mut op.new)) as i32 -
-                             is_unlinked(flags_field(op.old)) as i32;
+        let unlinked = |k: BkeySC<'_>| k.arm::<Inodes>().is_some_and(|k| is_unlinked(k.flags_field()));
+        let unlinked_delta = unlinked(op.new.as_sc()) as i32 - unlinked(op.old) as i32;
         if unlinked_delta != 0 {
             t.bit_mod_buffered(Btree::deleted_inodes, op.new.k.p, unlinked_delta > 0)?;
         }
@@ -1269,7 +1263,7 @@ pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), B
         // When an inode is first updated in a new snapshot, we may need to
         // clear has_child_snapshot
         if deleted_delta > 0 {
-            update_has_children(t, &mut op.new, false)?;
+            update_has_children(t, op.new.as_s().arm::<Inodes>().expect("an inode made"), false)?;
         }
     }
 
@@ -1306,14 +1300,14 @@ fn may_delete_deleted_inode(
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
     let k_pos = k.k.p;
 
-    let missing = (!bkey_is_inode(k.k)).then(|| fs.err(Errcode::BCH_ERR_ENOENT_inode));
-    if fsck_err_on!(t, from_deleted_inodes && missing.is_some(), id::deleted_inode_missing,
+    let k = k.arm::<Inodes>();
+    if fsck_err_on!(t, from_deleted_inodes && k.is_none(), id::deleted_inode_missing,
                     "nonexistent inode {}:{} in deleted_inodes btree", { p.offset }, { p.snapshot })? {
         return delete();
     }
-    if let Some(e) = missing {
-        return Err(e);
-    }
+    let Some(k) = k else {
+        return Err(fs.err(Errcode::BCH_ERR_ENOENT_inode));
+    };
 
     *inode = unpack(fs, k);
 
@@ -1434,7 +1428,7 @@ fn rm_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<u32, BchEr
 
     let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum.inum, snapshot),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::CACHED);
-    let is_inode = bkey_is_inode(iter.peek_slot(t)?.expect("a slot always has a key").k);
+    let is_inode = iter.peek_slot(t)?.expect("a slot always has a key").k.is_inode();
 
     if !is_inode {
         fs_inconsistent!(fs, "inode {}:{} not found when deleting", inum.inum, snapshot);
@@ -1557,7 +1551,7 @@ fn delete_ancestor_snapshot_inodes(trans: &BtreeTrans<'_>, mut p: Bpos) -> Resul
     loop {
         let parent = lockrestart_do(trans, |t| {
             let mut iter = BtreeIter::uninit();
-            Ok(snapshot_parent(t, &mut iter, p)?.map(|k| (k.k.p, is_unlinked(flags_field(k)))))
+            Ok(snapshot_parent(t, &mut iter, p)?.map(|k| (k.k.p, is_unlinked(k.flags_field()))))
         })?;
 
         let Some((parent, true)) = parent else { return Ok(()) };

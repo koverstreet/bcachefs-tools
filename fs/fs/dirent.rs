@@ -785,7 +785,7 @@ fn lookup_first_inode(t: &TransAttempt<'_, '_>, inum: u64)
     let ret = iter.for_each_norestart(t, |_, k| Ok(
         if k.k.p.offset != inum {
             ControlFlow::Break(None)
-        } else if inode::bkey_is_inode(k.k) {
+        } else if let Some(k) = k.arm::<inode::Inodes>() {
             ControlFlow::Break(Some(inode::unpack(fs, k)))
         } else {
             ControlFlow::Continue(())

@@ -420,7 +420,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
                                   BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
     while let Some(k) = iter.peek_prev_min(t, pos(0, inode.bi_inum))? {
         let id = k.k.p.snapshot;
-        let child = inode::bkey_is_inode(k.k).then(|| inode::unpack(fs, k));
+        let child = k.arm::<inode::Inodes>().map(|k| inode::unpack(fs, k));
 
         // An update per version can overflow the transaction: commit as we go.
         // The restart re-drives us, the adopt path above resumes, and versions

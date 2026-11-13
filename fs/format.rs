@@ -356,6 +356,8 @@ pub enum BkeyTypeFlags {
     user_data   = 1 << 8,
     /* The data itself, inline in the value, direct or indirect */
     inline_data = 1 << 9,
+    /* An inode, of any version */
+    inode       = 1 << 10,
 }
 
 #[bch_enum(open)]
@@ -394,6 +396,7 @@ pub enum BkeyType {
     #[flags(extent, allocation, user_data)]
     reservation(c::Reservation) = 7,
     /// Inode metadata (v1, legacy)
+    #[flags(inode)]
     inode(c::Inode) = 8,
     /// Tracks generation numbers for deleted inodes
     inode_generation(c::InodeGeneration) = 9,
@@ -432,6 +435,7 @@ pub enum BkeyType {
     /// Snapshot tree node with parent, children, and subvolume references
     snapshot(c::Snapshot) = 22,
     /// Inode metadata (v2) with journal sequence number
+    #[flags(inode)]
     inode_v2(c::InodeV2) = 23,
     /// Bucket allocation metadata (v3, legacy)
     alloc_v3(c::AllocV3) = 24,
@@ -445,6 +449,7 @@ pub enum BkeyType {
     /// Reverse pointer from a bucket back to the extent referencing it
     backpointer(c::Backpointer) = 28,
     /// Inode metadata (v3, current) with compact encoding
+    #[flags(inode)]
     inode_v3(c::InodeV3) = 29,
     /// Packed bucket generation numbers (256 per key)
     bucket_gens(c::BucketGens) = 30,

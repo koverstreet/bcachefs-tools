@@ -814,7 +814,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
             break;
         }
         let snap = k.k.p.snapshot;
-        if snap != snapshot && crate::inode::bkey_is_inode(k.k) {
+        if snap != snapshot && k.k.is_inode() {
             path.reset();
             match crate::namei::inum_snapshot_to_path(t, inum, snap, path) {
                 Err(e) if !is_restart(&e) => ret = Err(e),

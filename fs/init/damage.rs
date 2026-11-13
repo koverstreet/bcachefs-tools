@@ -36,7 +36,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
-use crate::inode::{self, bkey_is_inode};
+use crate::inode;
 use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId};
 use crate::snapshots::subvolume;
 use crate::util::{DateTime, Printbuf};
@@ -188,7 +188,7 @@ pub fn record_key(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos, err: SbErro
 
 fn inode_exists(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<bool, BchError> {
     let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, snapshot), BtreeIterFlags::ALL_SNAPSHOTS);
-    Ok(iter.peek_slot(t)?.is_some_and(|k| bkey_is_inode(k.k)))
+    Ok(iter.peek_slot(t)?.is_some_and(|k| k.k.is_inode()))
 }
 
 /// record_key(), for damage found after the fact, when the file may be gone
@@ -332,7 +332,7 @@ pub fn record_lost_extents(fs: &Fs) {
         let mut iter = BtreeIter::new(&trans, Btree::inodes, spos(0, r.start.inode, 0), flags);
         let ret = iter.for_each_max_commit(&trans, spos(0, r.end.inode, u32::MAX), flags, None,
                                            CommitFlags::NO_ENOSPC, |t, _, k| {
-            if !bkey_is_inode(k.k) || inode::unpack(fs, k).bi_sectors == 0 {
+            if k.arm::<inode::Inodes>().is_none_or(|k| inode::unpack(fs, k).bi_sectors == 0) {
                 return Ok(());
             }
             // not record_data_loss(), which narrows on the btree a position

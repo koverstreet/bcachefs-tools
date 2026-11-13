@@ -388,7 +388,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
                     let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, 0),
                                                   BtreeIterFlags::ALL_SNAPSHOTS);
                     iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, inode_k| {
-                        if inode::bkey_is_inode(inode_k.k) {
+                        if let Some(inode_k) = inode_k.arm::<inode::Inodes>() {
                             let inode = inode::unpack(fs, inode_k);
                             let e = c::snapshot_io_opts_entry {
                                 snapshot: inode_k.k.p.snapshot,
@@ -465,8 +465,10 @@ fn claimed_off_path(t: &TransAttempt<'_, '_>, inum: u64, ancestor: u32, origin_s
     iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, k| {
         let snapshot = k.k.p.snapshot;
 
-        if !inode::bkey_is_inode(k.k) ||
-           snapshot == ancestor ||
+        let Some(k) = k.arm::<inode::Inodes>() else {
+            return Ok(());
+        };
+        if snapshot == ancestor ||
            !snapshot::is_ancestor(t, snapshot, ancestor) ||
            snapshot::is_ancestor(t, origin_snapshot, snapshot) {
             return Ok(());
@@ -551,7 +553,7 @@ fn peek_inode<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>)
     -> Result<Option<c::bch_inode_unpacked>, BchError>
 {
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
-    Ok(inode::bkey_is_inode(k.k).then(|| inode::unpack(t.fs(), k)))
+    Ok(k.arm::<inode::Inodes>().map(|k| inode::unpack(t.fs(), k)))
 }
 
 /*

@@ -152,8 +152,9 @@ impl TransBkey<'_, '_> {
     {
         if field.starts_with("ptrs[") {
             self.set_ptr_field(fs, field, val)
-        } else if inode::bkey_is_inode(self.k()) {
-            self.set_inode(fs, field, val)
+        } else if let Some(k) = BkeySC::from(&*self).arm::<inode::Inodes>() {
+            let u = inode::unpack(fs, k);
+            self.set_inode(u, field, val)
         } else if self.k().type_ as u32 == BkeyType::dirent.0 {
             dirent::set_field(self, fs, field, val)
         } else {
@@ -203,9 +204,10 @@ impl TransBkey<'_, '_> {
         write(k.val_bytes_mut(), field, &target, v)
     }
 
-    fn set_inode<'p>(&mut self, fs: &Fs, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
-        let mut u = inode::unpack(fs, BkeySC::from(&*self));
-
+    /// Set @field of inode @u, unpacked from this key, and pack it back.
+    fn set_inode<'p>(&mut self, mut u: c::bch_inode_unpacked, field: &'p str, val: &'p str)
+        -> Result<(), SetError<'p>>
+    {
         let target = typeinfo::resolve_with_bits(
             <c::bch_inode_unpacked as TypeInfo>::INFO, field)?;
         let v = parse_val(self.k().type_, field, val)?;

@@ -901,10 +901,10 @@ fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
                                       BtreeIterFlags::empty());
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
 
-        if !inode::bkey_is_inode(k.k) {
+        let Some(k) = k.arm::<inode::Inodes>() else {
             bch_err!(fs, "root inode not found");
             return fs.throw(Errcode::BCH_ERR_ENOENT_inode);
-        }
+        };
 
         let mut inode = inode::unpack(fs, k);
         inode.bi_subvol = c::BCACHEFS_ROOT_SUBVOL;

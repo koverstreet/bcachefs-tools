@@ -3,7 +3,7 @@
 //! The write path's in place writes, over extents that allow them: nocow.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC, Typed};
+use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::data::keylist::KeyRoom;
@@ -150,10 +150,12 @@ fn bkey_get_dev_iorefs(fs: &Fs, k: BkeySC<'_, Ptrs>, cas: &mut [Option<DevWriteR
 
 fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) -> Result<u64, BchError> {
     let mut iter = BtreeIter::new(t, Btree::inodes, inode_pos, BtreeIterFlags::CACHED);
-    let k = iter.peek_slot(t)?.expect("a slot");
+    let Some(k) = iter.peek_slot(t)?.expect("a slot").arm::<inode::Inodes>() else {
+        return Err(t.fs().err(Errcode::BCH_ERR_ENOENT_inode));
+    };
 
     Ok(match k.typed() {
-        Typed::inode_v3(i) => i.v().bi_size.get(),
+        inode::InodesTyped::inode_v3(i) => i.v().bi_size.get(),
         _ => inode::unpack(t.fs(), k).bi_size,
     })
 }

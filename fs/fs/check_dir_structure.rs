@@ -35,6 +35,7 @@ use crate::init::progress::Progress;
 use crate::snapshots::subvolume;
 use crate::dirent::{self, Dirent};
 use crate::{inode, lostfound, namei};
+use crate::inode::Inodes;
 use crate::util::alloc::KVVec;
 use crate::util::Printbuf;
 use crate::util::log::LogMsg;
@@ -190,7 +191,7 @@ fn bi_depth_renumber_one(
     let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, snapshot),
                                   BtreeIterFlags::empty());
 
-    let Some(k) = iter.peek_slot(t)?.filter(|k| inode::bkey_is_inode(k.k)) else {
+    let Some(k) = iter.peek_slot(t)?.and_then(|k| k.arm::<Inodes>()) else {
         return Err(Errcode::BCH_ERR_ENOENT_inode.into());
     };
 
@@ -223,7 +224,7 @@ fn bi_depth_renumber(
     Ok(())
 }
 
-fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), BchError> {
+fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_, Inodes>) -> Result<(), BchError> {
     let fs = t.fs();
     let mut path: KVVec<u64> = KVVec::new();
     let mut snapshot = inode_k.k.p.snapshot;
@@ -278,9 +279,9 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
         inode_iter.set_pos(spos(0, inode.bi_dir, snapshot));
         // Should have been caught in dirents pass
         let parent_inode = bch_err_msg!(fs, match inode_iter.peek_slot(t) {
-            Ok(Some(k)) if inode::bkey_is_inode(k.k) => Ok(inode::unpack(fs, k)),
-            ret => Err(ret.err()
-                .unwrap_or(Errcode::BCH_ERR_ENOENT_inode.into())),
+            Ok(k) => k.and_then(|k| k.arm::<Inodes>()).map(|k| inode::unpack(fs, k))
+                .ok_or(Errcode::BCH_ERR_ENOENT_inode.into()),
+            Err(e) => Err(e),
         }, "error looking up parent directory")?;
 
         min_bi_depth = parent_inode.bi_depth;
@@ -348,15 +349,15 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
     iter.for_each_reverse_commit(&trans, POS_MIN, None,
         CommitFlags::NO_ENOSPC,
         |t, _, k| {
-            if inode::mode(k) & c::S_IFMT != c::S_IFDIR {
+            let Some(k) = k.arm::<Inodes>().filter(|k| k.mode() & c::S_IFMT == c::S_IFDIR) else {
                 return Ok(());
-            }
+            };
 
             // check_inodes has already stripped BCH_INODE_unlinked from every
             // directory but the root of an unlinked subvolume, and a subvolume
             // root ends every walk - so skipping these can't hide a directory
             // loop:
-            if inode::flags(k) & c::InodeFlags::unlinked.bits() != 0 {
+            if k.flags() & c::InodeFlags::unlinked.bits() != 0 {
                 return Ok(());
             }
 
