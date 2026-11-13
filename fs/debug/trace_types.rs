@@ -4,9 +4,9 @@
 //! besides BCH_PERSISTENT_COUNTERS()'s, and debug/trace.rs's trace-only
 //! events.
 
-use cstruct_macros::c_xmacro;
+use cstruct_macros::xmacro;
 
-c_xmacro! {
+xmacro! {
     BCH_NOCOUNTER_TRACEPOINTS {
         (accounting_mem_insert),
         (journal_entry_close),
@@ -19,7 +19,7 @@ c_xmacro! {
     }
 }
 
-c_xmacro! {
+xmacro! {
     BCH_PATH_TRACEPOINTS {
         (update_by_path),
         (btree_path_traverse_start),

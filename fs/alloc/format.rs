@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le32, Le64};
 use core::ffi::c_ulong;
-use cstruct_macros::{c_bitmask, c_xmacro, grown, whole, MaybeZeroable, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{c_bitmask, xmacro, grown, whole, MaybeZeroable, Plain, TypeInfo, View, SizedVal};
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
@@ -17,7 +17,7 @@ pub struct Alloc {
     pub data: [u8; 0],
 }
 
-c_xmacro! {
+xmacro! {
     BCH_ALLOC_FIELDS_V1 {
         (read_time, 16),
         (write_time, 16),
@@ -42,7 +42,7 @@ pub struct AllocV2 {
     pub data: [u8; 0],
 }
 
-c_xmacro! {
+xmacro! {
     BCH_ALLOC_FIELDS_V2 {
         (read_time, 64),
         (write_time, 64),

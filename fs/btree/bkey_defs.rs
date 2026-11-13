@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{bch_enum, c_xmacro, MaybeZeroable, Plain};
+use cstruct_macros::{bch_enum, xmacro, MaybeZeroable, Plain};
 
 /*
  * Wrapper for stack-allocated struct bkey_packed.
@@ -35,7 +35,7 @@ pub enum BkeyPackPosRet {
 #[allow(non_camel_case_types)]
 pub type compiled_unpack_fn = Option<unsafe extern "C" fn(*mut c::bkey, *const c::bkey_packed)>;
 
-c_xmacro! {
+xmacro! {
     bkey_fields {
         (BKEY_FIELD_INODE, p.inode),
         (BKEY_FIELD_OFFSET, p.offset),

@@ -17,7 +17,7 @@
 //!
 //! FS_IOC_GETVERSION and FS_IOC_{GET,SET}FSLABEL are the VFS's numbers, bound
 //! from the kernel's headers, so their Ioctl impls are here: bcachefs_ioctl.rs's
-//! c_ioctl! table is of numbers it defines, for C too.
+//! ioctl! table is of numbers it defines.
 
 #![allow(non_camel_case_types)]
 

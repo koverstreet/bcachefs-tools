@@ -12,14 +12,14 @@
 //!                        (vstructs.rs)
 //!   #[bitfield(uN)]      bitfield_struct::bitfield, and forwarders for the
 //!                        struct that holds one in a #[members] field
-//!   c_xmacro! { .. }     an x-macro list: NAME!(cb), handing cb! the whole
+//!   xmacro! { .. }       an x-macro list: NAME!(cb), handing cb! the whole
 //!                        list
 //!   xmacro_select!       NAME!(xmacro_select [TOKEN => cb]): cb! handed
 //!                        the rows with TOKEN in them - a flag in a flags
 //!                        column
 //!   c_bitmask! { .. }    bitfields in a flags word: a getter and a setter
 //!                        on the struct for each
-//!   c_ioctl! { .. }      ioctl numbers: a marker type for each, its opcode
+//!   ioctl! { .. }        ioctl numbers: a marker type for each, its opcode
 //!                        and argument type
 //!   #[bch_enum(..)]      an enum, open, closed or flags: the type that is,
 //!                        and its values
@@ -701,7 +701,7 @@ fn bilge_width(t: &Ident) -> Option<(u32, Ident)> {
     Some((n, format_ident!("u{int}")))
 }
 
-/// An x-macro list: c_xmacro! { NAME { (args), ... } }: a macro,
+/// An x-macro list: xmacro! { NAME { (args), ... } }: a macro,
 /// NAME!(cb), which expands to cb! { (args), ... } - and NAME!(cb [..]),
 /// to cb! { [..] (args), ... }: a list_enum! built from lists passes on the
 /// variants so far. cb may be a path.
@@ -712,8 +712,8 @@ fn bilge_width(t: &Ident) -> Option<(u32, Ident)> {
 /// SUB's, mapped, and those after, and calls the next; the last calls cb!. They're named by path, through
 /// crate::cstructs::c - NAME is expanded wherever it's used.
 #[proc_macro]
-pub fn c_xmacro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("c_xmacro!", || xmacro(input.into()))
+pub fn xmacro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("xmacro!", || xmacro_expand(input.into()))
 }
 
 /// A list's rows, selected: NAME!(xmacro_select [TOKEN => cb]) expands to
@@ -769,8 +769,8 @@ pub fn xmacro_select(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     })
 }
 
-/// c_xmacro!'s expansion: NAME!(cb), which calls cb! with the list's rows.
-fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
+/// xmacro!'s expansion: NAME!(cb), which calls cb! with the list's rows.
+fn xmacro_expand(input: TokenStream) -> Result<TokenStream, String> {
     let x = parse_xmacro(input)?;
     let name = &x.name;
     // The plain entries from @from to @to: none of them a list spliced in
@@ -1195,7 +1195,7 @@ fn names_gen(e: &CEnumDef, name: &Ident) -> TokenStream {
 
 /// ioctl numbers, C's _IO*() #defines:
 ///
-///   c_ioctl! {
+///   ioctl! {
 ///       BCH_IOCTL_DISK_ADD = _IOW(0xbc, 4, c::bch_ioctl_disk),
 ///       BCHFS_IOC_REINHERIT_ATTRS = _IOR(0xbc, 64, *const core::ffi::c_char),
 ///   }
@@ -1204,8 +1204,8 @@ fn names_gen(e: &CEnumDef, name: &Ident) -> TokenStream {
 /// util::ioctl::Ioctl: the opcode, made by util::ioctl's _IO*() from the
 /// target's own constants, and the argument type.
 #[proc_macro]
-pub fn c_ioctl(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("c_ioctl!", || {
+pub fn ioctl(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("ioctl!", || {
         let io = parse_ioctl(input.into())?;
 
         let mut out = TokenStream::new();

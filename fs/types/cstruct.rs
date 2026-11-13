@@ -12,14 +12,14 @@
 //   differs - a family's definition, X__head, whose name the family's type
 //   X<S> has (util/vstructs.rs).
 //
-//   c_xmacro! { NAME { (args), (args), ... } }: an x-macro list - a
+//   xmacro! { NAME { (args), (args), ... } }: an x-macro list - a
 //   macro, NAME!(cb), that hands the whole list to cb!.
 //
 //   c_bitmask! { LE64_BITMASK(struct foo, field), strip PREFIX_ {
 //       NAME(start, end), ... } }: bitfields in a flags word - accessors on
 //   foo named for NAME without PREFIX_, lowercased.
 //
-//   c_ioctl! { NAME = _IOW(type, nr, ARG), ... }: ioctl numbers - a marker
+//   ioctl! { NAME = _IOW(type, nr, ARG), ... }: ioctl numbers - a marker
 //   type binding the opcode to ARG, the opcode computed from the target's own
 //   _IOC constants (fs/util/ioctl.rs).
 
@@ -129,7 +129,7 @@ impl CBitmask {
     }
 }
 
-/// c_ioctl!: ioctl numbers, C's #define NAME _IOW(type, nr, arg).
+/// ioctl!: ioctl numbers, C's #define NAME _IOW(type, nr, arg).
 #[derive(Debug)]
 pub(crate) struct CIoctl {
     pub(crate) entries: Vec<CIoctlEntry>,
@@ -299,9 +299,9 @@ pub(crate) fn int_bits(ty: &str) -> Option<u32> {
     })
 }
 
-// ---- c_xmacro!, c_bitmask!, c_ioctl! ---------------------------------------
+// ---- xmacro!, c_bitmask!, ioctl! ---------------------------------------
 
-/// c_xmacro!'s body: NAME { (args), ... }
+/// xmacro!'s body: NAME { (args), ... }
 pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<CXMacro, String> {
     use proc_macro2::{Delimiter, TokenTree};
     syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
@@ -441,7 +441,7 @@ pub(crate) fn parse_bitmask(input: proc_macro2::TokenStream) -> Result<CBitmask,
     }, input).map_err(|e| e.to_string())
 }
 
-/// c_ioctl!'s body: NAME = _IOW(type, nr, ARG), ... - _IO without the ARG.
+/// ioctl!'s body: NAME = _IOW(type, nr, ARG), ... - _IO without the ARG.
 pub(crate) fn parse_ioctl(input: proc_macro2::TokenStream) -> Result<CIoctl, String> {
     let entries = syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         let mut entries = Vec::new();

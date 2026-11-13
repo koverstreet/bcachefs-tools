@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! ioctl numbers, as the kernel's _IO*() macros make them, and the trait
-//! c_ioctl! (bcachefs_ioctl.rs) gives each ioctl: its number bound to its
+//! ioctl! (bcachefs_ioctl.rs) gives each ioctl: its number bound to its
 //! argument type, so a call can't pair the wrong two.
 //!
 //! An ioctl number packs a direction, a type (bcachefs's is 0xbc), a number

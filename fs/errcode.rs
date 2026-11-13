@@ -27,9 +27,9 @@ use core::iter;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 use crate::types::c_default;
-use cstruct_macros::{MaybeZeroable, c_xmacro, TypeInfo, list_enum};
+use cstruct_macros::{MaybeZeroable, xmacro, TypeInfo, list_enum};
 
-c_xmacro! {
+xmacro! {
     BLK_ERRS {
         (NOTSUPP, 1),
         (TIMEOUT, 2),
@@ -53,7 +53,7 @@ c_xmacro! {
     }
 }
 
-c_xmacro! {
+xmacro! {
     ZSTD_ERRS {
         (GENERIC, 508),
         (prefix_unknown, 509),
@@ -84,7 +84,7 @@ c_xmacro! {
     }
 }
 
-c_xmacro! {
+xmacro! {
     BCH_ERRCODES {
         (EIO, blockdev_io_error, 0),
         BLK_ERRS((n, nr) => (BCH_ERR_blockdev_io_error, concat(BLK_STS_, n), nr)),

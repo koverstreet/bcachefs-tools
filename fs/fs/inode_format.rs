@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_bitmask, bch_enum, c_xmacro, whole, MaybeZeroable, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_bitmask, bch_enum, xmacro, whole, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 pub const BLOCKDEV_INODE_MAX: u32 = 4096;
 pub const BCACHEFS_ROOT_INO: u32 = 4096;
@@ -61,7 +61,7 @@ pub struct InodeGeneration {
     pub pad: Le32,
 }
 
-c_xmacro! {
+xmacro! {
     /*
      * bi_subvol and bi_parent_subvol are only set for subvolume roots:
      */
@@ -94,7 +94,7 @@ c_xmacro! {
     }
 }
 
-c_xmacro! {
+xmacro! {
     BCH_INODE_FIELDS_v3 {
         (bi_atime, 96),
         (bi_ctime, 96),

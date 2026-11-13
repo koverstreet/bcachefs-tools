@@ -7,7 +7,7 @@ use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
-use cstruct_macros::{bch_enum, c_ioctl, counted, MaybeZeroable, Plain, TypeInfo, FlexArray};
+use cstruct_macros::{bch_enum, ioctl, counted, MaybeZeroable, Plain, TypeInfo, FlexArray};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -39,7 +39,7 @@ pub const BCH_BY_INDEX: u32 = 1 << 4;
  */
 pub const BCH_READ_DEV: u32 = 1 << 5;
 
-c_ioctl! {
+ioctl! {
     /* filesystem ioctls: */
 
     BCH_IOCTL_QUERY_UUID		= _IOR(0xbc,	1,  c::bch_ioctl_query_uuid),
@@ -89,7 +89,7 @@ pub const FSOP_GOING_FLAGS_DEFAULT: u32 = 0x0;	/* going down */
 pub const FSOP_GOING_FLAGS_LOGFLUSH: u32 = 0x1;	/* flush log but not data */
 pub const FSOP_GOING_FLAGS_NOLOGFLUSH: u32 = 0x2;	/* don't flush log nor data */
 
-c_ioctl! {
+ioctl! {
     /* ioctl below act on a particular file, not the filesystem as a whole: */
 
     BCHFS_IOC_REINHERIT_ATTRS		= _IOR(0xbc, 64, *const c_char),

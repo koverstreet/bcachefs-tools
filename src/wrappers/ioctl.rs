@@ -1,6 +1,6 @@
 //! Typed ioctl calls over the ioctls bcachefs_ioctl.rs defines.
 //!
-//! Its c_ioctl! lists (re-exported here, with the argument structs) give
+//! Its ioctl! lists (re-exported here, with the argument structs) give
 //! each ioctl a marker type, binding the opcode to its argument type so a
 //! call site can't pair the wrong two. This module adds the calls
 //! themselves: the three argument shapes, and one errno-to-io::Error
