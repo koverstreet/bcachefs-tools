@@ -352,6 +352,7 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
     let mut bindings = String::from_utf8(result.stdout).expect("bindgen output utf8")
         .replace("pub const RUST_CONST_HELPER_", "pub const ");
     bindings += &opaque_arrays_zeroable(&bindings);
+    bindings += bitfield_unit_zeroable(&bindings);
     std::fs::write(format!("{out}/bindings.rs"), bindings).expect("write bindings.rs");
 
     // None, or one with the wrapper's path baked into its #include: the bare
@@ -377,6 +378,17 @@ fn opaque_arrays_zeroable(bindings: &str) -> String {
                           unsafe impl<T: ::pin_init::Zeroable> ::pin_init::Zeroable \
                           for __BindgenOpaqueArray{n}<T> {{}}\n"))
         .collect()
+}
+
+/// The same for a struct's bitfields, __BindgenBitfieldUnit - debug/trace's
+/// trace_event_fields: bindgen defines it only for bindings that have one.
+fn bitfield_unit_zeroable(bindings: &str) -> &'static str {
+    if bindings.contains("pub struct __BindgenBitfieldUnit<") {
+        "\n// SAFETY: its storage, bytes: zeroed, every bitfield is 0\n\
+         unsafe impl<S: ::pin_init::Zeroable> ::pin_init::Zeroable for __BindgenBitfieldUnit<S> {}\n"
+    } else {
+        ""
+    }
 }
 
 /// Escape regex metacharacters in a path, for --blocklist-file: unescaped, the
