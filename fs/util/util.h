@@ -136,9 +136,6 @@ static inline struct list_head *list_pop(struct list_head *head)
 #define list_pop_entry(head, type, member)		\
 	container_of_or_null(list_pop(head), type, member)
 
-struct bio *bch2_bio_map_and_chain(struct block_device *, void *, size_t,
-				   sector_t, blk_opf_t, gfp_t,
-				   struct bio_set *);
 
 #define closure_bio_submit(bio, cl)					\
 do {									\

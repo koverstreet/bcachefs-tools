@@ -120,9 +120,10 @@ fn main() {
         // bindings have them in-kernel; add as needed:
         .allowlist_var("ENOENT|ENOMEM|EINVAL|ENAMETOOLONG|ERANGE|ENODATA|E2BIG|EACCES|EBUSY")
         .allowlist_var("ECHILD|EROFS|EXDEV|ENOTDIR|EIO|ENOTEMPTY|EFBIG|ENOSPC|EINTR|EPERM|EFAULT|ENOKEY|EAGAIN")
-        // The vendored C fs/ uses - closures - is the shim's too: not
-        // bcachefs's, so not the fs crate's to define.
+        // The vendored C fs/ uses - closures, bio mapping - is the shim's
+        // too: not bcachefs's, so not the fs crate's to define.
         .allowlist_file(format!("{}/vendor/closure.h", fs_dir.display()))
+        .allowlist_file(format!("{}/vendor/bio_map.h", fs_dir.display()))
         // The raid library: userspace's stand-in for the kernel's raid6 and
         // xor, as fs/util/raid.rs uses it.
         .allowlist_function("raid_init|raid_zero|raid_gen|raid_rec")

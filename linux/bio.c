@@ -264,6 +264,15 @@ again:
 		bio->bi_end_io(bio);
 }
 
+void bio_chain(struct bio *bio, struct bio *parent)
+{
+	BUG_ON(bio->bi_private || bio->bi_end_io);
+
+	bio->bi_private = parent;
+	bio->bi_end_io	= bio_chain_endio;
+	bio_inc_remaining(parent);
+}
+
 void bio_reset(struct bio *bio, struct block_device *bdev, unsigned int opf)
 {
 	unsigned long flags = bio->bi_flags & (~0UL << BIO_RESET_BITS);

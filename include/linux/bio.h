@@ -224,9 +224,10 @@ extern void bio_put(struct bio *);
 
 void bio_add_virt_nofail(struct bio *, void *, unsigned);
 
-static inline void bio_add_vmalloc(struct bio *bio, void *vaddr, unsigned len)
+static inline bool bio_add_vmalloc(struct bio *bio, void *vaddr, unsigned len)
 {
 	bio_add_virt_nofail(bio, vaddr, len);
+	return true;
 }
 
 struct bio *bio_alloc_clone(struct block_device *, struct bio *,

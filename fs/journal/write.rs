@@ -4,12 +4,9 @@
 //! checksummed and submitted - a preflush first, if its flush goes
 //! separately - and, once written, completed in seq order.
 
-use core::ffi::c_void;
 use core::mem::{self, offset_of};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
-
-use cstruct_macros::c_extern;
 
 use crate::alloc::disk_groups::Target;
 use crate::alloc::replicas::DevlistEntry;
@@ -49,11 +46,6 @@ use crate::{log_msg_ratelimited, prt};
 const IOPRIO_RT: u16 = 1 << 13;
 
 crate::has_closure!(c::journal_buf, io);
-
-c_extern! {
-    pub fn bch2_bio_map_and_chain(bdev: *mut c::block_device, base: *mut c_void, size: usize, sector: u64,
-                                  opf: c::blk_opf_t, gfp: c::gfp_t, bs: *mut c::bio_set) -> *mut c::bio;
-}
 
 impl c::journal_buf {
     fn head(&self) -> &Head<c::jset> {
@@ -813,8 +805,8 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
              * returns one bio.
              */
             let bio = unsafe {
-                bch2_bio_map_and_chain(ca.disk_sb.bdev, w.data.as_ptr().cast(), (sectors << 9) as usize, *offset,
-                                       opf, c::GFP_NOIO, ja.bio_set.as_ptr())
+                c::bch2_bio_map_and_chain(ca.disk_sb.bdev, w.data.as_ptr().cast(), (sectors << 9) as usize, *offset,
+                                          opf, c::GFP_NOIO, ja.bio_set.as_ptr())
             };
             let jbio = unsafe { jbio_of(bio) };
 

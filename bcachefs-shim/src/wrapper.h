@@ -39,6 +39,7 @@
 #include "include/crypto/chacha.h"
 #include "include/crypto/poly1305.h"
 #include "fs/vendor/closure.h"
+#include "fs/vendor/bio_map.h"
 #include "raid/raid.h"		/* raid_gen(), raid_rec(): the kernel's raid6/xor, in userspace */
 
 #include <errno.h>
