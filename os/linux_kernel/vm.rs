@@ -6,8 +6,8 @@
 
 use crate::c;
 use crate::util::ffi::Opaque;
-use crate::util::file::File;
-use crate::util::ops::{from_raw, into_raw};
+use crate::os::file::File;
+use crate::os::ops::{from_raw, into_raw};
 use crate::vfs::folio::FolioRef;
 
 /// A page fault on a mapping: the kernel's vm_fault.

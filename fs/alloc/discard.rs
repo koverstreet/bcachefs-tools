@@ -72,7 +72,7 @@ use crate::util::time_stats::TimeStats;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::task::waiter;
-use crate::util::kernel::{bdev_max_discard_sectors, unlikely, READ};
+use crate::os::kernel::{bdev_max_discard_sectors, unlikely, READ};
 use crate::util::place::Contained;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;

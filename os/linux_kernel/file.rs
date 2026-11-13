@@ -30,14 +30,14 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::KBox;
 use crate::util::ffi::{c_char, Opaque};
-use crate::util::ops::{from_raw, SelfOf};
+use crate::os::ops::{from_raw, SelfOf};
 use core::ffi::{c_int, CStr};
 use core::pin::Pin;
 
 #[cfg(kernel)]
 use {
     crate::errcode::{errptr_to_result, loff_to_result, ret_to_result_void},
-    crate::util::kernel::loff,
+    crate::os::kernel::loff,
     crate::vfs::folio::Mapping,
     core::ffi::{c_uint, c_void},
     core::marker::PhantomData,
@@ -45,7 +45,7 @@ use {
     core::ptr::NonNull,
     kernel::fs::file::FileDescriptorReservation,
     kernel::sync::aref::ARef,
-    crate::util::kernel::current_comm,
+    crate::os::kernel::current_comm,
 };
 
 // long, as the bindings have it: the kernel's is isize, core's i64

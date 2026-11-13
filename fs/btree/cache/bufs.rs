@@ -10,7 +10,7 @@ use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::kfree;
-use crate::util::kernel::is_vmalloc_addr;
+use crate::os::kernel::is_vmalloc_addr;
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::ptr::NonNull;
@@ -346,7 +346,7 @@ pub unsafe fn node_data_free(b: NonNull<BtreeNode>) {
      */
     #[cfg(kernel)]
     unsafe {
-        use crate::util::kernel::PAGE_SIZE;
+        use crate::os::kernel::PAGE_SIZE;
 
         c::mm_account_reclaimed_pages(((*p).buf_bytes() / PAGE_SIZE) as _);
         if !bufs.aux_data.is_null() {

@@ -313,7 +313,7 @@ use crate::util::log::{LogLevel, LogMsg};
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
-use crate::util::kernel::{cold_path, likely, unlikely};
+use crate::os::kernel::{cold_path, likely, unlikely};
 use crate::util::place::Contained;
 use crate::util::{HumanReadable, Printbuf};
 use core::fmt;
@@ -716,8 +716,8 @@ impl c::bch_fs_snapshots {
             // depth 0 under a parent is damage, check_depth()'s: C's
             // get_random_u32_below(0) is any u32, and the walk runs off the root
             let n = match s.depth() {
-                0     => crate::util::kernel::random_u64() as u32,
-                depth => crate::util::kernel::random_u64_below(depth as u64) as u32,
+                0     => crate::os::kernel::random_u64() as u32,
+                depth => crate::os::kernel::random_u64_below(depth as u64) as u32,
             };
             t.nth_parent(id, n)
         })

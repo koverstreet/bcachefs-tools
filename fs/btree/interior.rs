@@ -37,7 +37,7 @@ use crate::util::alloc::{AllocBox, KVVec, Kmalloc};
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_symbol;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
-use crate::util::kernel::local_clock;
+use crate::os::kernel::local_clock;
 use crate::util::place::{Contained, Placed};
 use crate::util::time_stats::TimeStats;
 use crate::util::{late::Late, mempool::Mempool, workqueue::{run_raw, RawWork, Workqueue, WqFlags}};

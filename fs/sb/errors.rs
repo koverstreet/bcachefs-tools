@@ -28,7 +28,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::{prt, sb_err_on};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::util::alloc::{kvvec_insert, KVVec};
-use crate::util::kernel::ktime_get_real_seconds;
+use crate::os::kernel::ktime_get_real_seconds;
 use crate::util::{DateTime, Printbuf};
 use crate::sb::io::SbResize;
 use nestify::nest;

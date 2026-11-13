@@ -7,7 +7,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::format::Btree;
 use crate::fs::Fs;
-use crate::util::kernel::totalram_bytes;
+use crate::os::kernel::totalram_bytes;
 use core::ops::{ControlFlow, RangeInclusive};
 
 /// What's pinned stays in memory, shrinker-exempt, until this drops. There's one

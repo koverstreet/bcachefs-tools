@@ -19,7 +19,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::errcode::BchError;
 use crate::util::alloc::{current_gfp_context_raw, AllocError};
-use crate::util::kernel::PAGE_SIZE;
+use crate::os::kernel::PAGE_SIZE;
 use crate::util::mempool::{Mempool, Raw};
 use pin_init::{pin_data, pin_init, PinInit};
 

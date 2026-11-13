@@ -37,7 +37,7 @@ use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::dirent::{self, DirentTarget};
 use crate::namei;
-use crate::util::kernel::random_u64;
+use crate::os::kernel::random_u64;
 use crate::{bch_err_ratelimited, bch_warn, trans_inconsistent};
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC, Typed, POS_MIN, SPOS_MAX, BkeyOps};
 use crate::init::passes::{self, RecoveryPass};
@@ -909,7 +909,7 @@ impl ToText for c::bch_inode_unpacked {
 pub fn shard_cpu_init(fs: &Fs) {
     #[cfg(kernel)]
     {
-        use crate::util::kernel::{cpumask_local_spread, nr_cpu_ids};
+        use crate::os::kernel::{cpumask_local_spread, nr_cpu_ids};
         use core::sync::atomic::Ordering::Relaxed;
 
         let bits = fs.opts().shard_inode_numbers_bits.get() as u32;

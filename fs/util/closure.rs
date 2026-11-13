@@ -15,7 +15,7 @@
 use crate::c;
 use crate::util::alloc::KBox;
 use crate::util::ffi::Opaque;
-use crate::util::kernel::jiffies;
+use crate::os::kernel::jiffies;
 use crate::util::refcount::{RefBorrow, RefGuard, Refcount, TryRefcount};
 use crate::util::workqueue::Queue;
 use core::cell::UnsafeCell;

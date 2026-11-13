@@ -32,7 +32,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::passes;
 use crate::util::alloc::AllocError;
-use crate::util::kernel::{cold_path, unlikely};
+use crate::os::kernel::{cold_path, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::vstructs::plain_bytes;
 use crate::{accounting, bch_err, fs_inconsistent, fsck_err_on, prt};

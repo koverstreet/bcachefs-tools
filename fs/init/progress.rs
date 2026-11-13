@@ -23,7 +23,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::passes;
-use crate::util::kernel::local_clock;
+use crate::os::kernel::local_clock;
 use crate::util::{Printbuf, ToText};
 use core::ffi::CStr;
 use cstruct_macros::CStruct;
@@ -67,7 +67,7 @@ crate::module_param! {
 fn maybe_delay() {
     let ms = recovery_progress_delay_ms.get();
     if ms != 0 {
-        crate::util::kernel::msleep(ms);
+        crate::os::kernel::msleep(ms);
     }
 }
 

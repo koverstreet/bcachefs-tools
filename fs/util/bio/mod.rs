@@ -100,8 +100,6 @@ mod buffers;
 mod iter;
 mod owned;
 pub mod pages;
-#[cfg(kernel)]
-mod user_pages;
 
 /// @f with the block layer's plug held: the bios it submits held back to be
 /// merged, then issued together - blk_start_plug() and blk_finish_plug(). The
@@ -137,7 +135,7 @@ fn req_op(opf: u32) -> u32 {
 /// How many bvecs mapping @len bytes at @p takes: a page each for vmalloc
 /// memory, one for the direct map.
 pub fn buf_nr_bvecs(p: *const u8, len: usize) -> usize {
-    use crate::util::kernel::{is_vmalloc_addr, PAGE_SIZE};
+    use crate::os::kernel::{is_vmalloc_addr, PAGE_SIZE};
     if is_vmalloc_addr(p) {
         return (len + (p as usize & (PAGE_SIZE - 1))).div_ceil(PAGE_SIZE);
     }
@@ -197,7 +195,7 @@ impl Bio {
     }
 
     /// For its own methods, and C's: never moved out of.
-    fn raw_mut(self: Pin<&mut Self>) -> &mut c::bio {
+    pub(crate) fn raw_mut(self: Pin<&mut Self>) -> &mut c::bio {
         self.project().bio
     }
 
@@ -229,7 +227,7 @@ impl Bio {
     /// All its bvecs, wherever its position is: its owner's walk -
     /// BioOwner::range_all() - or, for C, a bio's whose ref we were given.
     /// Panics on a clone.
-    fn range_all(&self) -> BioRange<'_> {
+    pub(crate) fn range_all(&self) -> BioRange<'_> {
         assert!(!self.cloned(), "the _all walk of a cloned bio: its bvecs are its parent's");
         // SAFETY: its own bvecs, bi_vcnt of them
         let size = (0..u32::from(self.bio.bi_vcnt)).map(|i| unsafe { self.bvec(i) }.bv_len).sum();
@@ -318,7 +316,7 @@ impl Bio {
     /// A random u64 of its data overwritten: the debug corrupt ratios'.
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub fn corrupt(self: Pin<&mut Self>) {
-        use crate::util::kernel::{random_u64, random_u64_below};
+        use crate::os::kernel::{random_u64, random_u64_below};
         let u64s = self.bio.bi_iter.bi_size / 8;
         if u64s == 0 {
             return;

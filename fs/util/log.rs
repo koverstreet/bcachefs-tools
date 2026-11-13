@@ -95,9 +95,7 @@ pub fn log_opts(opts: &c::bch_opts, level: LogLevel, msg: &dyn ToText) {
         msg.to_text(&mut buf);
         // SAFETY: @opts' stdio is the fsck thread's redirect, live for as
         // long as its opts are
-        let stdio = unsafe {
-            crate::util::thread_with_file::StdioRedirect::from_c(opts.stdio as *mut c::stdio_redirect)
-        };
+        let stdio = unsafe { &*(opts.stdio as usize as *const crate::os::thread_with_file::StdioRedirect) };
         let _ = stdio.write(true, buf.as_bytes());
         return;
     }
@@ -216,7 +214,7 @@ const PRINTK_LIMIT: usize = 1024;
 /// the person running the fsck, which a mount that only wants those gets -
 /// and if this is the task it's for.
 #[cfg(kernel)]
-pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::util::thread_with_file::StdioRedirect> {
+pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::os::thread_with_file::StdioRedirect> {
     let stdio = fs.stdio.load(Ordering::Acquire);
     let filter = fs.stdio_filter.load(Ordering::Relaxed);
     if stdio.is_null() ||
@@ -225,7 +223,7 @@ pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::util::thread
         return None;
     }
     // SAFETY: the filesystem's redirect, set while it's attached
-    Some(unsafe { crate::util::thread_with_file::StdioRedirect::from_c(stdio) })
+    Some(unsafe { &*stdio })
 }
 
 /// @s at printk level @level - None, the previous message's - if the

@@ -160,7 +160,7 @@ use core::sync::atomic::AtomicPtr;
 use crate::util::bio::{Bio, BioBox, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::task::waiter;
-use crate::util::kernel::NSEC_PER_SEC;
+use crate::os::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
 use cstruct_macros::{CStruct, TypeInfo, bch_enum};
 use core::mem::{size_of, size_of_val};
@@ -595,7 +595,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
             m.nbuckets.get() * u64::from(m.bucket_size.get())
         }).sum::<u64>();
         let bits = crate::inode::shard_bits_default(
-            crate::util::kernel::num_online_cpus(), fs_size << 9, btree_node_bytes);
+            crate::os::kernel::num_online_cpus(), fs_size << 9, btree_node_bytes);
         sb.set_shard_inums_nbits(bits.into());
     }
 
@@ -1083,7 +1083,7 @@ impl c::bch_sb_io {
     fn realloc(&mut self, dev: &c::bch_sb_bdev, u64s: u32) -> Result<(), BchError> {
         let mut bytes = size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>();
         if !dev.bdev.is_null() {
-            bytes = bytes.max(crate::util::kernel::bdev_logical_block_size(dev.bdev()) as usize);
+            bytes = bytes.max(crate::os::kernel::bdev_logical_block_size(dev.bdev()) as usize);
         }
         let size = bytes.next_power_of_two();
 
@@ -1369,7 +1369,7 @@ fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
     sb.io.buf.sb_mut().csum = csum;
 
     let bytes = sb.io.buf.sb_bytes().len()
-        .next_multiple_of(crate::util::kernel::bdev_logical_block_size(sb.dev.bdev()) as usize);
+        .next_multiple_of(crate::os::kernel::bdev_logical_block_size(sb.dev.bdev()) as usize);
     sb.io.write_fua(&sb.dev, sector, bytes)
 }
 
@@ -1504,7 +1504,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
     };
 
     let block_bytes = u32::from(header(&mut sb).block_size.get()) << 9;
-    let dev_block = crate::util::kernel::bdev_logical_block_size(sb.dev.bdev());
+    let dev_block = crate::os::kernel::bdev_logical_block_size(sb.dev.bdev());
     if block_bytes < dev_block && opts.direct_io_or_default() {
         if buffered_instead(opts) {
             return Err(c::EINTR.into());
@@ -2228,7 +2228,7 @@ impl DevSbMut<'_> {
         let csum = self.io.buf.sb().as_unvalidated().checksum();
         self.io.buf.sb_mut().csum = csum;
 
-        let block = crate::util::kernel::bdev_logical_block_size(self.ca.disk_sb.bdev()) as usize;
+        let block = crate::os::kernel::bdev_logical_block_size(self.ca.disk_sb.bdev()) as usize;
         (sector, self.io.buf.sb_bytes().len().next_multiple_of(block))
     }
 }
@@ -2376,7 +2376,7 @@ fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(
     }
 
     let s = sb.sb_mut();
-    s.write_time = Le64::new(crate::util::kernel::ktime_get_real_seconds() as u64);
+    s.write_time = Le64::new(crate::os::kernel::ktime_get_real_seconds() as u64);
     if fs.flags.get(f::error) {
         s.set_has_errors(true);
     }
@@ -2410,7 +2410,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
     for dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
         let sector = dev_sb.io.buf.sb().layout.sb_offset[0].get();
         dev_sb.scratch.fill(0);
-        dev_sb.ca.io_done_add(crate::util::kernel::READ, DataType::sb, (dev_sb.scratch.len() >> 9) as u64);
+        dev_sb.ca.io_done_add(crate::os::kernel::READ, DataType::sb, (dev_sb.scratch.len() >> 9) as u64);
         ios.as_mut().read(dev_sb, sector)?;
     }
 
@@ -2458,7 +2458,7 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
                 continue;
             }
             let (sector, bytes) = dev_sb.copy_for(fs, idx);
-            dev_sb.ca.io_done_add(crate::util::kernel::WRITE, DataType::sb, (bytes >> 9) as u64);
+            dev_sb.ca.io_done_add(crate::os::kernel::WRITE, DataType::sb, (bytes >> 9) as u64);
             ios.as_mut().write(dev_sb, sector, bytes)?;
             wrote = true;
         }

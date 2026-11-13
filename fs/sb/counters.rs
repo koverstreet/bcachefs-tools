@@ -23,7 +23,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::{Le64, c_default};
-use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
+use crate::os::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
@@ -294,7 +294,7 @@ pub fn counters_init(fs: &Fs) {
 pub mod ioctl {
     use super::*;
     use crate::errcode::{Errcode, BchError};
-    use crate::util::ioctl::UserVstruct;
+    use crate::os::ioctl::UserVstruct;
 
     /// The counters, by stable id, up to the user's @nr of them: now, or at
     /// mount (BCH_IOCTL_QUERY_COUNTERS_MOUNT). @nr comes back as the number

@@ -518,7 +518,7 @@ pub struct bch_opts {
           default = VersionUpgradeOpt::compatible.0)]
     pub version_upgrade: u8,
 
-    /// Pointer to a struct stdio_redirect
+    /// Pointer to a StdioRedirect (os/linux_kernel/thread_with_file.rs)
     #[opt(uint(0, i64::MAX))]
     pub stdio: u64,
 
@@ -1394,7 +1394,7 @@ pub fn fs_opts(sb: &c::bch_sb<Unvalidated>, opts: &c::bch_opts, out: &mut Printb
     fs_opts.apply(opts);
 
     #[cfg(all(kernel, not(CONFIG_TRANSPARENT_HUGEPAGE)))]
-    if fs_opts.block_size as usize > crate::util::kernel::PAGE_SIZE {
+    if fs_opts.block_size as usize > crate::os::kernel::PAGE_SIZE {
         prt!(out, "cannot mount bs > ps filesystem without CONFIG_TRANSPARENT_HUGEPAGE\n");
         return Err(Errcode::BCH_ERR_EINVAL_block_size_needs_thp.into());
     }

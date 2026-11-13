@@ -18,7 +18,7 @@ use crate::new_lock;
 use crate::util::alloc::{kbox_pin_init, KBox};
 use crate::util::ffi::Opaque;
 use crate::util::rcu::FreeAnytime;
-use crate::util::file::{File, FileOps, FileVTable, UserBuf};
+use crate::os::file::{File, FileOps, FileVTable, UserBuf};
 use crate::util::Printbuf;
 use core::ffi::CStr;
 use core::ops::{ControlFlow, Deref, DerefMut};

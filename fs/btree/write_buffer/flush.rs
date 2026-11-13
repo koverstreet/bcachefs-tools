@@ -18,7 +18,7 @@ use crate::util::vstructs::plain_bytes;
 use crate::locking::MemallocFlags;
 use crate::data_structures::sort::heapsort_by_lt;
 use crate::util::alloc::KVVec;
-use crate::util::kernel::{local_clock, num_online_cpus, race_fault};
+use crate::os::kernel::{local_clock, num_online_cpus, race_fault};
 use crate::util::par::{self, Backend};
 use crate::util::projections::VolatileWriter;
 use crate::util::time_stats::TimeStats;

@@ -12,7 +12,7 @@ use crate::format::Bpos;
 use crate::fs::Fs;
 use crate::prt;
 use crate::types::Le64;
-use crate::util::kernel::{likely, random_u64};
+use crate::os::kernel::{likely, random_u64};
 use crate::util::log::{log_no_fs, print_lines, LogLevel};
 use crate::util::printbuf::Msg;
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, Head};

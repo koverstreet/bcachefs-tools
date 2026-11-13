@@ -729,7 +729,7 @@ use crate::snapshots::subvolume;
 use crate::util::bio::{of_bio, Bio};
 use crate::util::closure::{ClosureRef, HasClosure, Running};
 use crate::util::ffi::Opaque;
-use crate::util::kernel::{current_runtime, local_clock, unlikely, READ, WRITE};
+use crate::os::kernel::{current_runtime, local_clock, unlikely, READ, WRITE};
 use crate::util::log::{LogMsg, Ratelimit};
 use crate::util::refcount::TryRefcount;
 use crate::util::time_stats::TimeStats;
@@ -1161,7 +1161,7 @@ fn __wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, state:
     let state = state as u32;
     let old = s.state.get();
     if state != old {
-        let now = crate::util::kernel::ktime_get_ns();
+        let now = crate::os::kernel::ktime_get_ns();
         let runtime = current_runtime(now);
 
         if state == c::WritePointStatus::runnable as u32 {
@@ -1171,7 +1171,7 @@ fn __wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, state:
             t.set(t.get().wrapping_add(runtime.wrapping_sub(w.last_runtime)));
         }
 
-        if w.last_state_change != 0 && crate::util::kernel::time_after64(now, w.last_state_change) {
+        if w.last_state_change != 0 && crate::os::kernel::time_after64(now, w.last_state_change) {
             let t = &s.time[old as usize];
             t.set(t.get().wrapping_add(now - w.last_state_change));
         }

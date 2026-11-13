@@ -21,7 +21,7 @@ use {
     core::ptr::{read_volatile, write_volatile, NonNull},
     crate::acl::{AclType, PosixAcl},
     crate::errcode::{ret_to_result_void, BchError},
-    crate::util::kernel::loff,
+    crate::os::kernel::loff,
     kernel::sync::aref::{ARef, AlwaysRefCounted},
     super::folio::Mapping,
     super::super_block::SuperBlock,
@@ -408,7 +408,7 @@ impl VfsInode {
 
     /// Its page cache's folios at least @bytes: mapping_set_folio_min_order().
     pub fn set_folio_min_size(&mut self, bytes: usize) {
-        let order = bytes.div_ceil(crate::util::kernel::PAGE_SIZE).next_power_of_two().trailing_zeros();
+        let order = bytes.div_ceil(crate::os::kernel::PAGE_SIZE).next_power_of_two().trailing_zeros();
         unsafe { c::mapping_set_folio_min_order((*self.as_ptr()).i_mapping, order) }
     }
 
@@ -454,4 +454,4 @@ unsafe impl AlwaysRefCounted for VfsInode {
 
 // SAFETY: a struct inode, repr(transparent), its reference i_count's
 #[cfg(kernel)]
-unsafe impl crate::util::super_block::IsInode for VfsInode {}
+unsafe impl crate::os::super_block::IsInode for VfsInode {}

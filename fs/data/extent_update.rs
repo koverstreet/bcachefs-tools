@@ -32,7 +32,7 @@ use crate::init::error::count_fsck_err;
 use crate::debug::trace::events;
 use crate::sb::errors::SbErrorId;
 use crate::util::ffi::Opaque;
-use crate::util::kernel::{likely, unlikely};
+use crate::os::kernel::{likely, unlikely};
 use crate::util::log::LogMsg;
 use crate::{inode, inode_opts, prt};
 use core::ops::ControlFlow;

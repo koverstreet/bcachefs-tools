@@ -33,7 +33,7 @@ use crate::{bch_info, btree_trans, prt};
 use crate::sb::errors::SbErrorId;
 use crate::util::Printbuf;
 use crate::util::backtrace::prt_task_backtrace;
-use crate::util::kernel::{dump_stack, local_clock};
+use crate::os::kernel::{dump_stack, local_clock};
 use crate::util::log::LogMsg;
 use crate::util::sched;
 use crate::util::time_stats::TimeStats;

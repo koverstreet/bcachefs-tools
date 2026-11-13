@@ -14,7 +14,7 @@ use crate::cstructs::c::{bkey_fields, BkeyPackPosRet};
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::format::BkeyField::{self, *};
 use crate::format::{bkey_format, Bpos, BkeyType};
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut};
 use crate::util::{Printbuf, ToText};
 

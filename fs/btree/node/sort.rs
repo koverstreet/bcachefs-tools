@@ -10,7 +10,7 @@ use crate::btree::cache::Bounce;
 use crate::c;
 use crate::fs::Fs;
 use crate::types::Le64;
-use crate::util::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
+use crate::os::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{AllocBox, Kmalloc};
 use crate::util::mempool::Mempool;

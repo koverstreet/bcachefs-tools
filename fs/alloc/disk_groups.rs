@@ -336,7 +336,7 @@ impl Fs {
     pub fn target_congested(&self, target: u16) -> bool {
         #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
         {
-            let now = crate::util::kernel::local_clock();
+            let now = crate::os::kernel::local_clock();
             let rcu = read_lock();
             let rw = c::bch_devs_mask { d: self.allocator.rw_devs[DataType::user.0 as usize].load() };
             let devs = self.target_to_mask(Target::decode(target.into()), &rcu).unwrap_or(&rw);
@@ -347,7 +347,7 @@ impl Fs {
                 nr += 1;
             }
             // no devices: not congested
-            nr != 0 && crate::util::kernel::random_u64_below(nr * u64::from(c::CONGESTED_MAX)) < total
+            nr != 0 && crate::os::kernel::random_u64_below(nr * u64::from(c::CONGESTED_MAX)) < total
         }
         #[cfg(CONFIG_BCACHEFS_NO_LATENCY_ACCT)]
         false

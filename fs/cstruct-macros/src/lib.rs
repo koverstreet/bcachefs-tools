@@ -47,7 +47,7 @@
 //!   #[in_place(Fut)]     an async fn whose future is named Fut, for a task
 //!                        held in place, or a box's pool, by type (in_place.rs)
 //!
-//! On syn and quote - vendor/kernel-rust's: the kernel build compiles this
+//! On syn and quote - os/linux_kernel/vendor's: the kernel build compiles this
 //! with a bare rustc.
 
 use proc_macro2::{Delimiter, Group, Ident, Literal, Spacing, Span, TokenStream, TokenTree};

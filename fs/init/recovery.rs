@@ -26,7 +26,7 @@ use crate::snapshots::subvolume;
 use crate::types::Le64;
 use crate::locking::Guard as _;
 use crate::util::alloc::KVVec;
-use crate::util::kernel::{cond_resched, sort_nonatomic, unlikely};
+use crate::os::kernel::{cond_resched, sort_nonatomic, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;

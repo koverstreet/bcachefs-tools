@@ -8,19 +8,11 @@ pub mod closure;
 pub mod debugfs;
 pub mod demangle;
 pub mod ffi;
-pub mod file;
-#[cfg(kernel)]
-pub mod fs_context;
-#[cfg(kernel)]
-pub mod fs_type;
 pub mod futex;
 pub mod gather;
 pub mod hash;
 pub mod ioctl;
-#[cfg(kernel)]
-pub mod iov_iter;
 pub mod jump_label;
-pub mod kernel;
 pub mod kmem_cache;
 pub mod kobject;
 pub mod kthread;
@@ -31,7 +23,6 @@ pub mod mean_and_variance;
 pub mod mempool;
 pub mod module_param;
 pub mod names;
-pub mod ops;
 pub mod os_str;
 pub mod par;
 pub mod percpu;
@@ -46,21 +37,13 @@ pub mod rcu;
 pub mod rcu_pending;
 pub mod refcount;
 pub mod sched;
-#[cfg(kernel)]
-pub mod seq_file;
 pub mod shrinker;
 pub mod siphash;
 pub mod sleep;
-#[cfg(kernel)]
-pub mod super_block;
 pub mod sysfs;
 pub mod task;
 pub mod time_stats;
-#[cfg(kernel)]
-pub mod thread_with_file;
 pub mod varint;
-#[cfg(kernel)]
-pub mod vm;
 pub mod volatile;
 pub mod vstructs;
 pub mod workqueue;

@@ -35,8 +35,8 @@ use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
 use crate::util::bio::{bch2_bio_map, buf_nr_bvecs, of_bio, Bio, BioBox, BioBuffersMapped, BioOwner};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
-use crate::util::kernel::random_u64_below;
-use crate::util::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, READ};
+use crate::os::kernel::random_u64_below;
+use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, READ};
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::task::{spawn_static, waiter, Resumable, Resume};
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,

@@ -78,7 +78,7 @@ use crate::util::time_stats::TimeStats;
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
 use crate::data_structures::inline_vec::InlineVec;
-use crate::util::kernel::{jiffies, time_after, unlikely, HZ};
+use crate::os::kernel::{jiffies, time_after, unlikely, HZ};
 use crate::util::log::{print_str, LogLevel};
 use crate::util::place::Contained;
 use crate::util::projections::Volatile;

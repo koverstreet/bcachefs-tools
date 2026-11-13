@@ -30,7 +30,7 @@ use crate::format::{MemberState, SbFeature};
 use crate::fs::{Fs, StateLockWrite};
 use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
 use crate::util::futex::EventCount;
-use crate::util::kernel::WRITE;
+use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{OnRelease, PercpuRef, WaitableRef};
 use crate::util::sleep::Sleep;

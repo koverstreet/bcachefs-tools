@@ -12,7 +12,7 @@ use crate::format::Bpos;
 use crate::fs::Fs;
 use crate::prt;
 use crate::debug::trace::events;
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::log::{print_lines, LogLevel};
 use crate::util::Printbuf;
 use core::cmp::Ordering;
@@ -46,7 +46,7 @@ fn prefetch_four_cachelines(p: *const u64) {
     }
     #[cfg(not(target_arch = "x86_64"))]
     for i in 0..4 {
-        crate::util::kernel::prefetch(p.cast::<u8>().wrapping_add(crate::types::L1_CACHE_BYTES * i));
+        crate::os::kernel::prefetch(p.cast::<u8>().wrapping_add(crate::types::L1_CACHE_BYTES * i));
     }
 }
 

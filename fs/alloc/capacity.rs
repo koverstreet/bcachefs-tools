@@ -42,7 +42,7 @@ use crate::init::error::trans_inconsistent;
 use crate::percpu_field;
 use crate::debug::trace::events;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::percpu::{CpuGuard, PerCpuRef};
 use crate::util::rcu::read_lock;

@@ -60,7 +60,7 @@ use crate::util::alloc::KVVec;
 use crate::data_structures::cuckoo::{Cuckoo, CuckooHasher, CuckooItem, CuckooMultimap, Entry, Faults, Registration};
 use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
-use crate::util::kernel::{cond_resched, local_clock, num_online_cpus, random_u64, random_u64_below};
+use crate::os::kernel::{cond_resched, local_clock, num_online_cpus, random_u64, random_u64_below};
 use crate::util::par::{self, Backend};
 use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::util::projections::Volatile;

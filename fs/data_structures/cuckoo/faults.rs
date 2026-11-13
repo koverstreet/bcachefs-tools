@@ -63,7 +63,7 @@ impl Faults {
     pub(super) fn read_window(&self) { spins(self.read_window) }
 
     pub(super) fn alloc_fail(&self) -> bool {
-        self.alloc_fail != 0 && crate::util::kernel::random_u64_below(self.alloc_fail.into()) == 0
+        self.alloc_fail != 0 && crate::os::kernel::random_u64_below(self.alloc_fail.into()) == 0
     }
 
     pub(super) fn dense(&self) -> bool { self.dense }

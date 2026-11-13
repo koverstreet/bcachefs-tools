@@ -26,12 +26,12 @@ use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
 use crate::util::closure::closure_wait_event_timeout_by;
 use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
-use crate::util::kernel::{jiffies, likely, msecs_to_jiffies, race_fault, time_after, HZ, READ};
+use crate::os::kernel::{jiffies, likely, msecs_to_jiffies, race_fault, time_after, HZ, READ};
 use crate::util::percpu::{bch2_migrate_disable, bch2_migrate_enable, bch2_raw_smp_processor_id};
 use crate::util::rcu::SrcuReadGuard;
 use crate::util::sleep::Sleep;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-use crate::util::{kernel::local_clock, time_stats::TimeStats};
+use crate::{os::kernel::local_clock, util::time_stats::TimeStats};
 use crate::util::Printbuf;
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed}};
 use core::ffi::{c_int, c_long, c_uint, c_ulong};

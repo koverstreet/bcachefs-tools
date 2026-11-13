@@ -19,7 +19,7 @@ use crate::format::{CompressionType, BkeyType, MetadataVersion};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::printbuf::Msg;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;

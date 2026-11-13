@@ -42,7 +42,7 @@ use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::sb::errors::FsckFlags;
 use crate::sb::members::DevRef;
-use crate::util::kernel::{local_clock, READ};
+use crate::os::kernel::{local_clock, READ};
 use crate::{bch_err, bch_info, bch_verbose, fsck_err, fsck_err_flags, fsck_err_on};
 use crate::c::Errcode;
 use crate::format::{Bpos, Btree, DataType, BkeyType, SbFeature};

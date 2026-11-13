@@ -46,7 +46,7 @@
            type_alias_impl_trait, async_fn_traits, unboxed_closures)]
 #![allow(internal_features)]
 // A type's record says which type each name it writes is: type_name(), const.
-// ret_ip!(), C's _RET_IP_ - see util/kernel.rs.
+// ret_ip!(), C's _RET_IP_ - see os/linux_kernel/kernel.rs.
 #![cfg_attr(bch_return_address, feature(core_intrinsics))]
 // A cfg the build doesn't declare is an error, not a warning: a misspelled
 // CONFIG_ is code silently compiled out. And the kernel version checks,
@@ -188,6 +188,9 @@ pub mod snapshots {
 pub mod cstructs;
 pub mod data_structures;
 pub mod locking;
+#[cfg_attr(kernel, path = "../os/linux_kernel/mod.rs")]
+#[cfg_attr(not(kernel), path = "../os/linux_user/mod.rs")]
+pub mod os;
 pub mod typeinfo;
 pub mod util;
 /// The VFS, for its Rust entry points - kernel only, as C's

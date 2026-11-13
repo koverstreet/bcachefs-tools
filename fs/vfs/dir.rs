@@ -40,7 +40,7 @@ use crate::locking::LockedBy;
 use crate::str_hash;
 use crate::util::alloc::{flags, KBox};
 use crate::util::ffi::{c_char, Opaque};
-use crate::util::file::{File, FileOps, FileVTable, UserBuf};
+use crate::os::file::{File, FileOps, FileVTable, UserBuf};
 use crate::types::CStatic;
 use cstruct_macros::vtable;
 

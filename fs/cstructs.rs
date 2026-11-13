@@ -44,7 +44,6 @@
 #[path = "snapshots/format.rs"] pub mod snapshots_format;
 #[path = "snapshots/types.rs"] pub mod snapshots_types;
 #[path = "types.rs"] pub mod types;
-#[path = "util/thread_with_file_types.rs"] pub mod util_thread_with_file_types;
 #[path = "util/two_state_shared_lock_types.rs"] pub mod util_two_state_shared_lock_types;
 #[path = "util/util_types.rs"] pub mod util_util_types;
 #[path = "vfs/buffered_types.rs"] pub mod vfs_buffered_types;
@@ -194,7 +193,6 @@ pub mod c {
     pub use crate::locking::seqmutex::seqmutex;
     pub use crate::util::siphash::{SIPHASH_KEY};
     pub use crate::locking::six::*;
-    pub use super::util_thread_with_file_types::*;
     pub use crate::util::time_stats::{NR_QUANTILES, TIME_STATS_MV_WEIGHT, TimeStatsLocked, bch2_time_stats, bch2_time_stats_quantiles, quantile_entry, quantiles, time_stat_buffer, time_stat_buffer_entry};
     pub use super::util_two_state_shared_lock_types::*;
     pub use super::util_util_types::*;

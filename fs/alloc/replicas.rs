@@ -26,7 +26,7 @@ use crate::format::{DataType, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
 use crate::sb::members::member_exists;
-use crate::util::kernel::{cold_path, likely};
+use crate::os::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;

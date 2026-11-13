@@ -10,7 +10,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::MemallocFlags;
 use crate::{prt, sb_err_on};
-use crate::util::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
+use crate::os::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::workqueue::Queue;
 use crate::util::backtrace::prt_current_backtrace;
 use crate::util::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors, ToText};

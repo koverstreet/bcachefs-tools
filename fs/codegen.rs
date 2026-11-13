@@ -48,13 +48,13 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/xxhash.h",			// data/checksum.rs's xxhash
     "crypto/chacha.h",			// its encryption
     "crypto/poly1305.h",		// and MACs
-    "linux/fs_context.h",		// struct fs_context, logfc(): util/fs_context.rs's - the kernel crate's is opaque
+    "linux/fs_context.h",		// struct fs_context, logfc(): os/linux_kernel/fs_context.rs's - the kernel crate's is opaque
     "linux/percpu-refcount.h",		// percpu_ref_get(), _put(): a DevRef's ca->ref, static inlines
     "linux/idr.h",			// ida_init(), ida_find_first(): fast_list.rs's slots - static inlines
     "linux/console.h",			// console_trylock(): util/log.rs holds the console across a message
     "linux/bio.h",			// bio_set_dev(), util/bio.rs's; bio_iov_vecs_to_alloc(),
-					// util/iov_iter.rs's; bio_release_pages(),
-					// util/bio/user_pages.rs's - static inlines
+					// os/linux_kernel/iov_iter.rs's; bio_release_pages(),
+					// os/linux_kernel/user_pages.rs's - static inlines
     "linux/task_io_accounting_ops.h",	// task_io_account_write(): vfs/direct_write.rs's
     "linux/kthread.h",			// kthread_use_mm(): an async DIO write's continuation
     "linux/swap.h",			// mm_account_reclaimed_pages(): btree/cache.rs's node buffers
@@ -135,7 +135,7 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/srcu.h",			// srcu_read_lock(), srcu_read_unlock()
     "linux/srcutree.h",			// synchronize_srcu_expedited(): an export,
     "linux/srcutiny.h",			// or with TINY_SRCU a static inline
-    // util/kernel.rs, kthread.rs, workqueue.rs and sched.rs: exports and
+    // os/linux_kernel/kernel.rs, util/kthread.rs, workqueue.rs and sched.rs: exports and
     // static inlines, the shim's functions in userspace
     "linux/alloc_tag.h",		// mem_alloc_profiling_enabled()
     "linux/sched/clock.h",		// local_clock(), sched_clock()
@@ -176,7 +176,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "folio_batch_init", "folio_batch_count", "folio_batch_release",
     // vfs/aops.rs: the kernel's, in an inode's table
     "filemap_migrate_folio", "generic_error_remove_folio",
-    // util/bio/user_pages.rs
+    // os/linux_kernel/user_pages.rs
     "folio_mark_dirty",
     // vfs/pagecache.rs
     "__filemap_get_folio", "folio_attach_private", "folio_test_writeback", "folio_wait_stable",
@@ -230,7 +230,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "chacha_init", "chacha20_crypt",
     "poly1305_init", "poly1305_update", "poly1305_final",
     "request_key", "rust_user_key_data",
-    // util/fs_context.rs and util/super_block.rs: static inlines, and the
+    // os/linux_kernel/fs_context.rs and super_block.rs: static inlines, and the
     // log behind errorfc() and invalf()
     "logfc", "super_set_uuid", "super_set_sysfs_name_uuid",
     // static inlines: util/refcount/percpu.rs's PercpuRef
@@ -242,7 +242,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "console_trylock", "console_unlock",
     // util/rcu.rs's Srcu: static inlines, and synchronize_srcu_expedited() is with TINY_SRCU
     "srcu_read_lock", "srcu_read_unlock", "synchronize_srcu_expedited",
-    // util/kernel.rs, kthread.rs, workqueue.rs and sched.rs
+    // os/linux_kernel/kernel.rs, util/kthread.rs, workqueue.rs and sched.rs
     "mem_alloc_profiling_enabled", "local_clock", "msleep", "ktime_get_ns", "get_random_u64",
     "queue_work", "queue_delayed_work", "kthread_stop", "sched_clock", "cpumask_local_spread",
     // vfs/vfs_inode.rs, for the inode cache: static inlines, inode_state_*() from 6.19

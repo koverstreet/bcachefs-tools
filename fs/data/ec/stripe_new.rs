@@ -152,7 +152,7 @@ use crate::util::alloc::{AllocError, KBox, KVVec};
 use crate::util::backref::BackRef;
 use crate::util::gather::{Gather, GatherRefSlot};
 use crate::util::refcount::{RefGuard, Refcount};
-use crate::util::kernel::local_clock;
+use crate::os::kernel::local_clock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Spawn, TaskBox, TaskRef, TaskSlot};
 use crate::util::workqueue::Queue;

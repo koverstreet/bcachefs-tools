@@ -29,7 +29,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
 use crate::util::closure::StackClosure;
-use crate::util::kernel::WRITE;
+use crate::os::kernel::WRITE;
 use crate::util::log::should_print_err;
 use crate::util::{max_of, Printbuf};
 use crate::{bch_err_fn, bch_err_ratelimited, inode, logged_ops};

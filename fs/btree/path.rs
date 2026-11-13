@@ -28,7 +28,7 @@ use crate::util::log::LogMsg;
 use crate::util::rcu::rcu_assign_pointer;
 use crate::util::Printbuf;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-use crate::util::kernel::local_clock;
+use crate::os::kernel::local_clock;
 use cstruct_macros::{bitfield, CStruct};
 use crate::locking::{Locked, LockedBy};
 use crate::locking::six::{six_lock_increment_ip, six_lock_write_held, SixHold};

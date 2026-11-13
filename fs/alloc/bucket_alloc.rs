@@ -45,7 +45,7 @@ use crate::fs::Fs;
 use crate::opts::data_type_str;
 use crate::debug::trace::events;
 use crate::util::Printbuf;
-use crate::util::kernel::{unlikely, WRITE};
+use crate::os::kernel::{unlikely, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
 use core::sync::atomic::Ordering::Relaxed;

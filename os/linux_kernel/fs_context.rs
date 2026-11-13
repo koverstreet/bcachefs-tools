@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! A mount's or reconfigure's struct fs_context, for a filesystem type T
-//! (util/fs_type.rs): its parameters as T parses them, T::Context in
+//! (fs_type.rs): its parameters as T parses them, T::Context in
 //! fs_private; the log that reaches the caller, errorfc() and friends; and
 //! sget, as the two things T can ask of it:
 //!

@@ -41,7 +41,7 @@ use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId};
 use crate::snapshots::subvolume;
 use crate::util::{DateTime, Printbuf};
 use crate::util::alloc::{kvvec_insert, KVVec};
-use crate::util::kernel::ktime_get_real_seconds;
+use crate::os::kernel::ktime_get_real_seconds;
 use crate::util::vstructs::Validated;
 use crate::{bch_err, bch_err_ratelimited, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
 use c::bch_sb_field_error_entry_v2 as Entry;

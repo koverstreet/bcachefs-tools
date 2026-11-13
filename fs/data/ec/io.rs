@@ -20,7 +20,7 @@ use crate::init::passes;
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::util::bio::{Bio, BioOwner, Gathered};
 use crate::util::gather::{Fold, Gather};
-use crate::util::kernel::{local_clock, PAGE_SIZE, WRITE};
+use crate::os::kernel::{local_clock, PAGE_SIZE, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::task::{waiter, Resume, Waiter};
 use crate::util::vstructs::Validated;

@@ -28,7 +28,7 @@ use crate::fs::Fs;
 use crate::locking::six::{six_lock_increment_ip, six_unlock_ip, SixHold};
 use crate::prt;
 use crate::util::closure::StackClosure;
-use crate::util::kernel::WRITE;
+use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
 use pin_init::stack_pin_init;
 use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, BTREE_RESERVE_MAX};

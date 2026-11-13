@@ -11,7 +11,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::six::six_lock_counts;
 use crate::prt;
-use crate::util::kernel::cond_resched;
+use crate::os::kernel::cond_resched;
 use crate::util::log::LogMsg;
 use crate::util::place::PlacedDrop;
 use c::BtreeNodeCacheState as State;

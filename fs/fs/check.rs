@@ -877,11 +877,11 @@ pub mod ioctl {
     use crate::init::registry::{self, Claim, FsHandle, Opener};
     use crate::init::passes::{RECOVERY_PASS_NAMES, passes_match, run_passes, PassFlags};
     use crate::opts::parse_mount_opts_cstr;
-    use crate::util::kernel::{capable, Capability};
+    use crate::os::kernel::{capable, Capability};
     use crate::util::place::Contained;
     use crate::util::refcount::TryRefcount;
-    use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
-    use crate::util::ioctl::{UserStr, UserVstruct};
+    use crate::os::thread_with_file::{StdioRedirect, ThreadWithFile};
+    use crate::os::ioctl::{UserStr, UserVstruct};
     use kernel::ffi::c_int;
 
     /// The options at user address @addr, or none if it's 0.
@@ -913,7 +913,7 @@ pub mod ioctl {
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
 
-        opts.set_stdio(thr.stdio().as_c() as u64);
+        opts.set_stdio(thr.stdio().as_ptr() as u64);
         opts.set_read_only(true);
         opts.set_ratelimit_errors(false);
         // We need request_key() to be called before we punt to kthread:
@@ -1009,7 +1009,7 @@ pub mod ioctl {
         let mut ret = Err(BchError::from(c::EAGAIN));
         if let Some(_run) = fs.recovery.run_lock.try_lock() {
             fs.stdio_filter.store(crate::util::sched::current(), Relaxed);
-            fs.stdio.store(stdio.as_c(), Release);
+            fs.stdio.store(stdio.as_ptr(), Release);
 
             // XXX: can we figure out a way to do this without mucking with c->opts?
             let old_fix_errors = fs.opts.fix_errors.get();

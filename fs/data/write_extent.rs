@@ -12,7 +12,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::util::bio::{pages, Bio};
-use crate::util::kernel::{unlikely, PAGE_SECTORS, PAGE_SIZE, READ, WRITE};
+use crate::os::kernel::{unlikely, PAGE_SECTORS, PAGE_SIZE, READ, WRITE};
 use c::WriteFlags as w;
 use core::ffi::c_void;
 use crate::format::{Bversion, BkeyType};
@@ -551,7 +551,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
             if write_corrupt_ratio != 0 {
                 let s = size(dst);
                 set_size(dst, dst_len);
-                if crate::util::kernel::random_u64_below(write_corrupt_ratio.into()) == 0 {
+                if crate::os::kernel::random_u64_below(write_corrupt_ratio.into()) == 0 {
                     unsafe { Bio::from_raw_mut(dst) }.corrupt();
                 }
                 set_size(dst, s);

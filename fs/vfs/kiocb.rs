@@ -6,8 +6,8 @@
 use super::inode::InodeInfo;
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::file::File;
-use crate::util::iov_iter::IovIter;
+use crate::os::file::File;
+use crate::os::iov_iter::IovIter;
 use core::ffi::c_int;
 use core::ptr::NonNull;
 

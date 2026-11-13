@@ -47,7 +47,7 @@ use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::types::Le64;
 use crate::util::ffi::Opaque;
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::fmt;

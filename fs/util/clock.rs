@@ -31,7 +31,7 @@ use crate::c;
 use crate::locking::Locked;
 use crate::{new_lock, prt};
 use crate::util::alloc::{AllocError, KVVec};
-use crate::util::kernel::HZ;
+use crate::os::kernel::HZ;
 use crate::util::percpu::{CpuGuard, PerCpu};
 use crate::util::sched;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd, SleepError};

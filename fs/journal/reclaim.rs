@@ -23,7 +23,7 @@ use crate::journal::pins::PinsRead;
 use crate::locking::{ExclusiveGuard, MemallocFlags};
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
-use crate::util::kernel::{bdev_max_discard_sectors, blkdev_issue_discard, cond_resched, jiffies, jiffies_to_msecs,
+use crate::os::kernel::{bdev_max_discard_sectors, blkdev_issue_discard, cond_resched, jiffies, jiffies_to_msecs,
                           msecs_to_jiffies, time_after, time_in_range, totalram_bytes, HZ};
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::place::Contained;

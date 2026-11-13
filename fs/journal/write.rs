@@ -34,7 +34,7 @@ use crate::locking::MemallocFlags;
 use crate::sb::members::{DevIo, DevIoRef};
 use crate::util::bio::plugged;
 use crate::util::closure::Running;
-use crate::util::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies, time_after_eq, unlikely,
+use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies, time_after_eq, unlikely,
                           WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;

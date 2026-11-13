@@ -34,7 +34,7 @@ use crate::journal::validate::journal_entry_validate;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::kmalloc;
 use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
-use crate::util::kernel::{likely, prefetch, unlikely};
+use crate::os::kernel::{likely, prefetch, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::init::recovery::NotRw;

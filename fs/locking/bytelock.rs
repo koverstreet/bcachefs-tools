@@ -31,7 +31,7 @@
 use super::{Locked, RawLock, RawLockBase, RawMovableLock, RawTimedLock, RawTryLock};
 use core::sync::atomic::{AtomicU8, Ordering};
 use crate::util::futex::{futex_wait, futex_wake};
-use crate::util::kernel::jiffies;
+use crate::os::kernel::jiffies;
 use crate::util::sleep::Sleep;
 use core::convert::Infallible;
 use core::ffi::{c_long, c_ulong, c_void, CStr};

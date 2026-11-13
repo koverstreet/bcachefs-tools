@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 # The kernel's pin-init, for the userspace build: the vendored source as it is
-# (fs/vendor/kernel-rust/pin-init, replaced wholesale on update, so nothing of
+# (os/linux_kernel/vendor/pin-init, replaced wholesale on update, so nothing of
 # ours lives there), built as a crate. In-kernel it's the kernel's own pin-init,
 # or this source when the module builds the vendored stack
 # (fs/Makefile.rust.vendor) - so in-place initializers are written once for
@@ -16,7 +16,7 @@ rust-version = "1.85.0"
 publish = false
 
 [lib]
-path = "../../fs/vendor/kernel-rust/pin-init/src/lib.rs"
+path = "../../../linux_kernel/vendor/pin-init/src/lib.rs"
 # Its examples need allocator_api: the kernel's to run, not ours
 doctest = false
 

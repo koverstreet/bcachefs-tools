@@ -489,7 +489,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::opts::data_type_str;
-use crate::util::kernel::{unlikely, READ, WRITE};
+use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
 use crate::util::varint;

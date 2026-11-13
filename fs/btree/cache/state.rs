@@ -14,7 +14,7 @@ use crate::locking::Guard as _;
 use crate::prt;
 use crate::util::closure::closure_wake_up;
 use crate::util::hash::GoldenRatio;
-use crate::util::kernel::is_vmalloc_addr;
+use crate::os::kernel::is_vmalloc_addr;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use c::BtreeNodeCacheState as State;

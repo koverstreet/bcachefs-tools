@@ -16,7 +16,7 @@ use crate::fs::{Dev, Fs};
 use crate::format::{Btree, DataType, BkeyType};
 use crate::snapshots::subvolume;
 use crate::util::closure::Running;
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::{btree_trans, fs_inconsistent, inode};
 use c::WriteFlags as w;

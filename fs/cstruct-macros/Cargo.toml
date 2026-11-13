@@ -11,7 +11,7 @@ name = "cstruct_macros"
 proc-macro = true
 
 # The kernel/DKMS build compiles this with a plain rustc, against the vendored
-# syn, quote and proc-macro2 (vendor/kernel-rust).
+# syn, quote and proc-macro2 (os/linux_kernel/vendor).
 [dependencies]
 proc-macro2 = "1"
 quote = "1"

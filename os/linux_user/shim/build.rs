@@ -6,11 +6,11 @@
 // exactly once.
 use std::path::PathBuf;
 
-include!("../clang_target.rs");
-include!("../fs/build_config.rs");
+include!("../../../clang_target.rs");
+include!("../../../fs/build_config.rs");
 
 /// Every struct and union is Zeroable when all its fields are, as the kernel's
-/// bindgen_parameters has it (fs/vendor/kernel-rust): a C struct embedded in a
+/// bindgen_parameters has it (os/linux_kernel/vendor): a C struct embedded in a
 /// Rust-initialized one can start zeroed, as C's kzalloc() would leave it.
 #[derive(Debug)]
 struct MaybeZeroable;
@@ -37,8 +37,9 @@ fn main() {
         .expect("ENV Var 'CARGO_MANIFEST_DIR' Expected")
         .into();
     let root = top_dir
-        .parent()
-        .expect("bcachefs-shim should have a parent dir")
+        .ancestors()
+        .nth(3)
+        .expect("bcachefs-shim should be at os/linux_user/shim")
         .to_path_buf();
     let fs_dir = root.join("fs");
     let include_dir = root.join("include");
@@ -51,8 +52,8 @@ fn main() {
     for h in ["vendor/closure.h", "vendor/bio_map.h", "vendor/bio_iov_iter.h", "locking/shim.h", "util/shim.h"] {
         println!("cargo:rerun-if-changed={}", fs_dir.join(h).display());
     }
-    println!("cargo:rerun-if-changed=../clang_target.rs");
-    println!("cargo:rerun-if-changed=../fs/build_config.rs");
+    println!("cargo:rerun-if-changed=../../../clang_target.rs");
+    println!("cargo:rerun-if-changed=../../../fs/build_config.rs");
     rerun_if_userspace_config_changed(&root);
     println!("cargo:rerun-if-changed={}", include_dir.display());
 
@@ -216,7 +217,7 @@ fn main() {
     // build's $PWD) so dh-cargo-built-using sees this lib as built from our own
     // in-tree source and skips it, rather than aborting on a build path no
     // Debian package owns. Mirrors the same declaration in fs/build.rs and
-    // bch_bindgen/build.rs. `root` is top_dir's parent, i.e. the workspace root.
+    // bch_bindgen/build.rs. `root` is the workspace root.
     println!(
         "dh-cargo:deb-built-using=bcachefs_shim_static_wrappers=0={}",
         root.display()

@@ -22,7 +22,7 @@ use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::alloc::KVVec;
-use crate::util::kernel::HZ;
+use crate::os::kernel::HZ;
 use crate::util::rcu::read_lock;
 use core::ptr::NonNull;
 

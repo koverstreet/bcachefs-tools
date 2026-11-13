@@ -12,9 +12,9 @@ use super::pagecache::ContigFolios;
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::{flags, KBox};
-use crate::util::iov_iter::IovIter;
-use crate::util::kernel::{cond_resched, current_id, fatal_signal_pending, likely, unlikely, PAGE_SIZE};
-use crate::util::ops::{from_raw, IntoRaw};
+use crate::os::iov_iter::IovIter;
+use crate::os::kernel::{cond_resched, current_id, fatal_signal_pending, likely, unlikely, PAGE_SIZE};
+use crate::os::ops::{from_raw, IntoRaw};
 use core::ffi::c_void;
 use kernel::page::PAGE_SHIFT;
 

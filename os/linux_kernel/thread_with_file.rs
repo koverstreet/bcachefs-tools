@@ -4,7 +4,7 @@
 //! reading and writing the fd, and closing the fd stops it.
 //!
 //! Two layers. ThreadWithFile<T> is a kthread running on a T, behind a file
-//! whose ops are T's own (util/file.rs) - the data job's progress file.
+//! whose ops are T's own (file.rs) - the data job's progress file.
 //! Stdio<T> makes the file a stream: a StdioRedirect between file and
 //! thread, for fsck - and for mounting's status fd, a stdio file with no
 //! thread, the mounting task printing to it itself.
@@ -57,9 +57,9 @@ use crate::types::Fifo;
 use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
 use crate::util::ffi::c_char;
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
-use crate::util::file::{file_data, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
+use crate::os::file::{file_data, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
 use crate::util::futex::EventCount;
-use crate::util::kernel::current_comm;
+use crate::os::kernel::current_comm;
 use crate::util::kthread::Kthread;
 use crate::util::projections::Volatile;
 use crate::util::sleep::Sleep;
@@ -226,14 +226,8 @@ impl StdioRedirect {
         })
     }
 
-    pub fn as_c(&self) -> *mut c::stdio_redirect {
-        core::ptr::from_ref(self).cast_mut().cast()
-    }
-
-    /// # Safety
-    /// @p is as_c()'s, of a redirect that's live for 'a.
-    pub unsafe fn from_c<'a>(p: *mut c::stdio_redirect) -> &'a Self {
-        unsafe { &*p.cast::<Self>() }
+    pub fn as_ptr(&self) -> *mut Self {
+        core::ptr::from_ref(self).cast_mut()
     }
 
     fn done(&self) -> bool {

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! bcachefs, the filesystem type: what mounting, and reconfiguring, a
-//! filesystem is. The type is util/fs_type.rs's FsType, over the safe
-//! fs_context and superblock interface of util/fs_context.rs and
-//! util/super_block.rs. This file is bcachefs's policy on top of it.
+//! filesystem is. The type is os/linux_kernel/fs_type.rs's FsType, over the
+//! safe fs_context and superblock interface of its fs_context.rs and
+//! super_block.rs. This file is bcachefs's policy on top of it.
 //!
 //! A mount (get_tree):
 //! - The FsHandle for its devices (init/registry.rs): a filesystem already
@@ -34,11 +34,11 @@ use crate::fs::Fs;
 use crate::fs::{Claimed, OpenFs};
 use crate::init::registry::{self, Claim, FsHandle, Key, Opener, Opening};
 use crate::OptId;
+use crate::os::fs_context::{FsContext, FsParam, ParamValue};
+use crate::os::fs_type::{FsType, FsTypeTable, SuperData};
+use crate::os::super_block::{ReconfSuper, Root};
 use crate::util::alloc::KVVec;
-use crate::util::fs_context::{FsContext, FsParam, ParamValue};
-use crate::util::fs_type::{FsType, FsTypeTable, SuperData};
 use crate::util::printbuf::Printbuf;
-use crate::util::super_block::{ReconfSuper, Root};
 use crate::util::vstructs::plain_bytes_mut;
 use kernel::sync::aref::ARef;
 use pin_init::{init, Init};

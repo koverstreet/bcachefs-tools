@@ -30,7 +30,7 @@ use crate::fs::Fs;
 use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
 use crate::prt;
 use crate::util::hash::hash_64;
-use crate::util::kernel::local_clock;
+use crate::os::kernel::local_clock;
 use crate::util::{HumanReadable, Nsecs, Printbuf, ToText};
 use core::ffi::{c_uint, c_ulong};
 

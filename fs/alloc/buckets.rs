@@ -27,7 +27,7 @@ use crate::opts::data_type_str;
 use crate::locking::{ByteLock, Guard as _, Locked};
 use crate::sb::errors::SbErrorId;
 use crate::types::{bits_to_longs, Le64};
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::log::LogMsg;
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::rcu::{read_lock, RcuArrayWriter, ReadGuard};

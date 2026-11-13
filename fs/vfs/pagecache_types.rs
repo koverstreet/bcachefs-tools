@@ -75,7 +75,7 @@ nest! {
  * Used to size the writepage_buf_pool reserve.
  */
 pub const BCH_WRITEPAGE_BUF_BYTES: usize =
-    ((crate::util::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<c::bch_folio_sector>();
+    ((crate::os::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<c::bch_folio_sector>();
 
 /// A folio's sector state, under its bch_folio's lock: written by writeback
 /// completion with the folio unlocked, so the folio lock doesn't cover it.

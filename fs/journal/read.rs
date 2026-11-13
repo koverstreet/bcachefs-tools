@@ -26,7 +26,7 @@ use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
 use crate::util::alloc::{init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, KVVec};
 use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioOwner};
-use crate::util::kernel::{local_clock, PAGE_SIZE};
+use crate::os::kernel::{local_clock, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated, Validated, VStruct};

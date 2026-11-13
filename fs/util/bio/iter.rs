@@ -23,7 +23,7 @@ use super::{Bio, BioData};
 use crate::util::place::Contained;
 use crate::util::volatile::VolatileSlice;
 use crate::c;
-use crate::util::kernel::PAGE_SIZE;
+use crate::os::kernel::PAGE_SIZE;
 
 /// Page @n of the run starting at @page: in the kernel, one struct page after
 /// another, as bvec_iter_page(); in userspace, a page is its address.

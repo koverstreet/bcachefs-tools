@@ -17,8 +17,8 @@ use crate::acl::{self, AclType, PosixAcl};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::ffi::{c_char, opt_bytes_mut};
-use crate::util::file::File;
-use crate::util::ops::IntoRaw;
+use crate::os::file::File;
+use crate::os::ops::IntoRaw;
 use crate::xattr;
 use cstruct_macros::vtable;
 

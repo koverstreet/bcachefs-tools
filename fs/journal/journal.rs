@@ -142,7 +142,7 @@ use crate::format::DataType;
 use crate::util::closure::{closure_fn_addr, closure_has_waiters, closure_wait, closure_wait_event,
                            closure_wait_event_timeout, closure_waiting, closure_wake_up, detached, waitlist_first,
                            StackClosure};
-use crate::util::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffies, time_after, unlikely, HZ, WRITE};
+use crate::os::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffies, time_after, unlikely, HZ, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
 use crate::util::printbuf::HumanReadable;

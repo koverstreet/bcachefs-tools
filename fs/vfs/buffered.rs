@@ -35,7 +35,7 @@ use crate::fs::Fs;
 use crate::inode_opts::get_inode;
 use crate::util::alloc::{KVVec, Kmalloc};
 use crate::util::bio::{bvec_offset, inline_vecs, plugged, Bio, BioBuffersUnmanaged, BioOwner, BioRange, HasBio};
-use crate::util::kernel::PAGE_SIZE;
+use crate::os::kernel::PAGE_SIZE;
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, CompletionReturn, Return, TaskSlot};

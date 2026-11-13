@@ -8,7 +8,7 @@ use super::{AllTypes, BkeyI, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
 use crate::btree::node::NodeContents;
 use crate::c;
 use crate::format::{Bpos, BkeyType};
-use crate::util::kernel::likely;
+use crate::os::kernel::likely;
 use crate::util::vstructs::{cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, vstruct,
                             Unsized, Unvalidated, VstructMut, VstructRef};
 use cstruct_macros::Plain;

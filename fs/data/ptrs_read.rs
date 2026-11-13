@@ -17,7 +17,7 @@ use crate::data::read::{BCH_READ_ERR_checksum, BCH_READ_ERR_decompression, BCH_R
 use crate::errcode::Errcode;
 use crate::util::Printbuf;
 use crate::sb::errors::blk_sts_sb_err;
-use crate::util::kernel::{cold_path, random_u64_below, unlikely, READ};
+use crate::os::kernel::{cold_path, random_u64_below, unlikely, READ};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_int;
 use core::ops::{Deref, DerefMut};

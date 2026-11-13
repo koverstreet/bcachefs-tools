@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The VFS's side of vfs_ops! (util/ops.rs): what its ops are passed and
+//! The VFS's side of vfs_ops! (os/linux_kernel/ops.rs): what its ops are passed and
 //! return, as FromRaw and IntoRaw impls, and SelfOf's &self - what the
 //! superblock's s_fs_info points to, found from whatever the op is passed.
 
@@ -12,8 +12,8 @@ use crate::acl::{AclType, PosixAcl};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::ffi::c_char;
-use crate::util::ops::{from_raw, into_raw, SelfOf};
-use crate::util::seq_file::SeqFile;
+use crate::os::ops::{from_raw, into_raw, SelfOf};
+use crate::os::seq_file::SeqFile;
 
 use super::dentry::Dentry;
 use super::export::NameBuf;

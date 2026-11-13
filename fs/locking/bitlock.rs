@@ -11,7 +11,7 @@
 //! waiter's futex_wait() does between its count and its read.
 
 use crate::util::futex::{futex_wait, futex_wake, FutexWord};
-use crate::util::kernel::jiffies;
+use crate::os::kernel::jiffies;
 use crate::util::sleep::{Sleep, SleepEnd};
 use core::ffi::{c_long, c_ulong};
 use core::sync::atomic::Ordering;

@@ -12,7 +12,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
 use crate::prt;
-use crate::util::kernel::local_clock;
+use crate::os::kernel::local_clock;
 use crate::util::time_stats::TimeStats;
 use bitflags::bitflags;
 use c::BtreeNodeCacheState as State;

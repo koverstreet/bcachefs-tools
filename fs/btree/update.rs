@@ -23,7 +23,7 @@ use core::cmp::Ordering;
 use crate::errcode::{Errcode, err_ptr, BchError};
 use crate::fs::Fs;
 use crate::journal::entries::EntryWriter;
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::vstructs::{Validated, ValidatedEntries, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;

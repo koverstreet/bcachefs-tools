@@ -39,7 +39,7 @@ use crate::fs::Fs;
 use crate::opts::data_type_str;
 use crate::debug::trace::events;
 use crate::sb::errors::SbErrorId;
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use core::sync::atomic::Ordering::Relaxed;
 
 use c::WriteFlags as w;

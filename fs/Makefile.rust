@@ -258,7 +258,7 @@ endif
 # kernel doesn't ship its own built for the host. From the vendored stack's
 # sources.
 bch-host := $(obj)/rust-host
-bch-host-src := $(src)/vendor/kernel-rust
+bch-host-src := $(src)/../os/linux_kernel/vendor
 
 quiet_cmd_bch_host = RUSTC H  $@
       cmd_bch_host = $(RUSTC) $(filter-out --edition=%,$(rust_common_flags)) \

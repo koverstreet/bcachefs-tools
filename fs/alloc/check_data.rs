@@ -40,7 +40,7 @@ use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
 use crate::util::alloc::{AVec, ConstAlign};
-use crate::util::kernel::PAGE_SIZE;
+use crate::os::kernel::PAGE_SIZE;
 use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioOwner};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;

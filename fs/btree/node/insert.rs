@@ -27,7 +27,7 @@ use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
 use crate::journal::pins::Pin;
 use crate::types::Le64;
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::log::LogMsg;
 
 /// A whiteout for @pos - packed, if it packs - in @b's unwritten whiteouts:

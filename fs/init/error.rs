@@ -39,7 +39,7 @@ use crate::fs::Fs;
 use crate::prt;
 use crate::sb::errors::{FsckFlags, SbErrorId};
 use crate::util::alloc::KVVec;
-use crate::util::kernel::{jiffies, time_after, HZ};
+use crate::os::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
 use crate::util::printbuf::Msg;
 use crate::util::prompt::{Choice, Prompt, Question, Reply};

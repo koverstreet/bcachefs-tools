@@ -26,7 +26,7 @@ use crate::util::{raid, Printbuf};
 use crate::util::alloc::{kbox_pin_init, ABox, AVec, AllocError, ConstAlign, KBox};
 use crate::util::backref::BackRef;
 use crate::util::closure::{closure_wait, closure_wake_up};
-use crate::util::kernel::PAGE_SIZE;
+use crate::os::kernel::PAGE_SIZE;
 use crate::util::log::{LogLevel, LogMsg, Ratelimit};
 use crate::util::sleep::Sleep;
 use crate::util::vstructs::Validated;
@@ -73,7 +73,7 @@ pub(crate) enum MemWait {
 
 impl Fs {
     fn stripe_buf_limit(&self) -> usize {
-        crate::util::kernel::totalram_bytes() / 100 * usize::from(self.opts().ec_stripe_buf_limit.get())
+        crate::os::kernel::totalram_bytes() / 100 * usize::from(self.opts().ec_stripe_buf_limit.get())
     }
 
     /// @bytes of stripe buffer memory, counted - unless that would go over

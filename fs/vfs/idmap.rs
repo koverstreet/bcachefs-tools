@@ -15,8 +15,8 @@ use core::ptr::read_volatile;
 use crate::acl::PosixAcl;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
-use crate::util::file::File;
-use crate::util::kernel::{current_fsgid, current_fsuid};
+use crate::os::file::File;
+use crate::os::kernel::{current_fsgid, current_fsuid};
 use crate::vfs::vfs_inode::VfsInode;
 
 /// The VFS's idmap pointer: const from 7.4.

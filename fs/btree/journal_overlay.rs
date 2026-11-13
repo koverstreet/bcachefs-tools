@@ -50,7 +50,7 @@ use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Ref};
 use crate::util::projections::{Volatile, VolatilePublish};
 use crate::util::alloc::KVVec;
 use crate::data_structures::gap_buffer::GapBuffer;
-use crate::util::kernel::cond_resched;
+use crate::os::kernel::cond_resched;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::place::Placed;
 use crate::util::rcu::{self, ReadGuard, RcuArray, RcuElement};

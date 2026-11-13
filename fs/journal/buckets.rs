@@ -29,7 +29,7 @@ use crate::c::JournalGuard;
 use crate::locking::{Guard as _, LockedBy};
 use crate::util::alloc::KVVec;
 use crate::util::closure::StackClosure;
-use crate::util::kernel::totalram_bytes;
+use crate::os::kernel::totalram_bytes;
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_dev, bch_err_fn, bch_err_fn_dev, bch_err_msg, btree_trans, prt};

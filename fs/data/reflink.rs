@@ -45,7 +45,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::sb::errors::FsckFlags;
 use crate::snapshots::subvolume;
 use crate::types::{GenRadix, Le32, Le64};
-use crate::util::kernel::{fatal_signal_pending, unlikely};
+use crate::os::kernel::{fatal_signal_pending, unlikely};
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{cast_plain, cast_plain_mut};
 use crate::util::Printbuf;

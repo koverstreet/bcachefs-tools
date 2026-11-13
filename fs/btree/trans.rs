@@ -28,7 +28,7 @@ use crate::util::backtrace::{prt_backtrace, save_backtrace};
 use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
 use crate::util::closure::ClosureRef;
 use crate::util::ffi::{c_char, Opaque};
-use crate::util::kernel::{cond_resched, local_clock, prefetch, time_after64};
+use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64};
 #[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
 use crate::util::log::LogMsg;
 use crate::util::log::{log_no_fs, LogLevel};
@@ -752,7 +752,7 @@ impl BtreeTrans<'_> {
 
     pub(crate) fn maybe_inject_restart(&self, ip: c_ulong) -> Result<(), BchError> {
         #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
-        if crate::util::kernel::ktime_get_ns() & !(!0u64 << (10 + self.restart_count_this_trans.get()).min(63)) == 0 {
+        if crate::os::kernel::ktime_get_ns() & !(!0u64 << (10 + self.restart_count_this_trans.get()).min(63)) == 0 {
             self.fs().event_inc_trace(events::trans_restart_injected, |out| prt!(out, "{}", self.fn_name()));
             return Err(self.restart_ip(Errcode::BCH_ERR_transaction_restart_fault_inject, ip));
         }

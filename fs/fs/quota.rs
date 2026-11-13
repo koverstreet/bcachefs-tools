@@ -218,7 +218,7 @@ mod vfs {
     use crate::locking::{ExclusiveGuard, Guard as _};
     use crate::sb::io::SbResize;
     use crate::util::ffi::c_char;
-    use crate::util::kernel::ktime_get_real_seconds;
+    use crate::os::kernel::ktime_get_real_seconds;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
     use core::ffi::{c_int, c_uint};

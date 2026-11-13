@@ -20,7 +20,7 @@ use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
 use crate::journal::pins::{flush_degraded, pin_resize};
 use crate::journal::reclaim::discard_work;
-use crate::util::kernel::WRITE;
+use crate::os::kernel::WRITE;
 use crate::data_structures::list::ListLinks;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy};
 use core::cell::Cell;

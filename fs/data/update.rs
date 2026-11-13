@@ -41,7 +41,7 @@ use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::locking::MemallocFlags;
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::should_print_err;
@@ -403,7 +403,7 @@ impl c::data_update {
         let fs = self.fs();
         let block_size = u32::from(fs.opts().block_size.get());
         let buf_bytes = buf_bytes.next_multiple_of(block_size);
-        let nr_vecs = buf_bytes.div_ceil(crate::util::kernel::PAGE_SIZE as u32);
+        let nr_vecs = buf_bytes.div_ceil(crate::os::kernel::PAGE_SIZE as u32);
 
         let layout = core::alloc::Layout::array::<c::bio_vec>(nr_vecs as usize).map_err(|_| BchError::from(c::ENOMEM))?;
         self.bvecs = crate::util::alloc::kzalloc(layout).map_err(|_| BchError::from(c::ENOMEM))?.as_ptr().cast();

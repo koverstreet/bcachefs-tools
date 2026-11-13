@@ -15,7 +15,7 @@ use crate::fs::{Dev, StateLockWrite};
 use crate::init::error::id;
 use crate::util::bio::BioSet;
 use crate::util::closure::closure_wait_event;
-use crate::util::kernel::jiffies;
+use crate::os::kernel::jiffies;
 use crate::{bch_err, fsck_err_on, warn_on};
 
 impl c::journal {

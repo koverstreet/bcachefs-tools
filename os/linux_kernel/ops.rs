@@ -68,7 +68,7 @@ pub(crate) trait SelfOf<P> {
 macro_rules! from_raw {
     ($($(#[doc = $d:expr])* $t:ty = $raw:ty => |$r:ident| $e:expr;)*) => {$(
         $(#[doc = $d])*
-        impl<'a> $crate::util::ops::FromRaw for $t {
+        impl<'a> $crate::os::ops::FromRaw for $t {
             type Raw = $raw;
             #[allow(unused_unsafe)]
             unsafe fn from_raw($r: $raw) -> Self { unsafe { $e } }
@@ -81,7 +81,7 @@ pub(crate) use from_raw;
 macro_rules! into_raw {
     ($($(#[doc = $d:expr])* $t:ty => $raw:ty: |$v:ident| $e:expr;)*) => {$(
         $(#[doc = $d])*
-        impl $crate::util::ops::IntoRaw<$raw> for $t {
+        impl $crate::os::ops::IntoRaw<$raw> for $t {
             fn into_raw(self) -> $raw { let $v = self; $e }
         }
     )*};
@@ -211,8 +211,8 @@ macro_rules! vfs_ops {
     (@adapter_fn [$($cfg:tt)*] [$P:ident $Impl:ty] [$($sa:ident)?] $name:ident
                  [$($arg:ident: $ty:ty),*] [$ret:ty] []) => {
         $($cfg)*
-        unsafe extern "C" fn $name<RawRet>($($arg: <$ty as $crate::util::ops::FromRaw>::Raw),*) -> RawRet
-        where $ret: $crate::util::ops::IntoRaw<RawRet>
+        unsafe extern "C" fn $name<RawRet>($($arg: <$ty as $crate::os::ops::FromRaw>::Raw),*) -> RawRet
+        where $ret: $crate::os::ops::IntoRaw<RawRet>
         {
             $crate::vfs_ops!(@call [$P $Impl] [$($sa)?] $name [$($arg: $ty),*])
         }
@@ -220,16 +220,16 @@ macro_rules! vfs_ops {
     (@call [$P:ident $Impl:ty] [$sa:ident] $name:ident [$($arg:ident: $ty:ty),*]) => {
         // SAFETY: FromRaw's and SelfOf's
         unsafe {
-            let this: &$Impl = $crate::util::ops::SelfOf::<$P>::self_of(&$sa);
-            $(let $arg: $ty = $crate::util::ops::FromRaw::from_raw($arg);)*
-            $crate::util::ops::IntoRaw::into_raw(this.$name($($arg),*))
+            let this: &$Impl = $crate::os::ops::SelfOf::<$P>::self_of(&$sa);
+            $(let $arg: $ty = $crate::os::ops::FromRaw::from_raw($arg);)*
+            $crate::os::ops::IntoRaw::into_raw(this.$name($($arg),*))
         }
     };
     (@call [$P:ident $Impl:ty] [] $name:ident [$($arg:ident: $ty:ty),*]) => {
         // SAFETY: FromRaw's
         unsafe {
-            $(let $arg: $ty = $crate::util::ops::FromRaw::from_raw($arg);)*
-            $crate::util::ops::IntoRaw::into_raw(<$Impl>::$name($($arg),*))
+            $(let $arg: $ty = $crate::os::ops::FromRaw::from_raw($arg);)*
+            $crate::os::ops::IntoRaw::into_raw(<$Impl>::$name($($arg),*))
         }
     };
 }

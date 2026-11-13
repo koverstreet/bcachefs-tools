@@ -251,9 +251,9 @@ TAGS:
 tags:
 	ctags -R .
 
-# Not the kernel-only C: fs/vendor/kernel-rust (the vendored kernel Rust
+# Not the kernel-only C: os/linux_kernel/vendor (the vendored kernel Rust
 # stack's helpers) and dkms/ (module-version.c).
-SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './fs/vendor/kernel-rust/*' ! -path './dkms/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
+SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './os/linux_kernel/*' ! -path './dkms/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
 # Strip find(1)'s leading './' so objects land at build/<path>, not build/./<path>.
 SRCS:=$(patsubst ./%,%,$(SRCS))
 
@@ -282,7 +282,7 @@ BCACHEFS_DEPS=libbcachefs.a
 # and bch_bindgen's generates every binding and x-macro table we have. Leaving
 # it out meant editing it changed nothing until something else happened to make
 # cargo run - a stale binary that looks like a rebuilt one.
-RUST_SRCS:=$(shell find src fs bch_bindgen bcachefs-shim -type f ! -path 'fs/vendor/kernel-rust/*' -iname '*.rs') build.rs
+RUST_SRCS:=$(shell find src fs bch_bindgen os/linux_user -type f -iname '*.rs') build.rs
 
 bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 	$(Q)$(CARGO_BUILD)
@@ -431,12 +431,15 @@ install_dracut: dracut/90bcachefs/module-setup.sh
 
 # The module's source tree, in $(1), for DKMS or dkms-reload-interactive: fs/
 # whole - a list of files is how Makefile.rust.vendor was left out of 1.39.0 -
-# less dotfiles and objects; plus what lives outside fs/, and build.vars.
+# less dotfiles and objects; os/linux_kernel, at the same path from fs/ as
+# here; plus what lives outside fs/, and build.vars.
 # Source mtimes are kept, so kbuild rebuilds only what changed.
 define bch-stage-module
-	$(Q)mkdir -p $(1)/src/fs/bcachefs
+	$(Q)mkdir -p $(1)/src/fs/bcachefs $(1)/src/fs/os/linux_kernel
 	$(Q)tar -C fs --exclude='*/.*' --exclude='*.o' --exclude='*.d' -cf - . | \
 		tar -C $(1)/src/fs/bcachefs --no-same-owner -xf -
+	$(Q)tar -C os/linux_kernel --exclude='*/.*' --exclude='*.o' --exclude='*.d' -cf - . | \
+		tar -C $(1)/src/fs/os/linux_kernel --no-same-owner -xf -
 	$(Q)cp -p dkms/Makefile $(1)/
 	$(Q)cp -p dkms/module-version.c version.h $(1)/src/fs/bcachefs/
 	$(Q)cp -p signing/bcachefs-signing-ca.pem $(1)/src/fs/bcachefs/scripts/

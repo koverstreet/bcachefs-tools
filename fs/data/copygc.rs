@@ -75,7 +75,7 @@ use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
 use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Private, RegisterError, Registration};
 use crate::util::siphash::SipHash13Key;
-use crate::util::kernel::{cond_resched, WRITE};
+use crate::os::kernel::{cond_resched, WRITE};
 use crate::util::kthread::{Daemon, Kthread, KthreadSelf};
 use crate::util::late::Late;
 use crate::util::rcu::{read_lock, Detach};

@@ -2,7 +2,7 @@
 
 //! A filesystem type, struct file_system_type, as a trait: FsType. What a
 //! mount of it is - get_tree() - and how its parameters parse, over an
-//! FsContext (util/fs_context.rs) whose fs_private is the type's Context.
+//! FsContext (fs_context.rs) whose fs_private is the type's Context.
 //! Its superblock owns a Data (SuperData), through s_fs_info: given up at
 //! create_super(), taken back when kill_sb drops it.
 //!

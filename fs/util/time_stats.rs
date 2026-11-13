@@ -29,7 +29,7 @@
 use crate::c;
 use crate::locking::{ExclusiveGuard, Locked};
 use crate::data_structures::eytzinger::Eytzinger0;
-use crate::util::kernel::{local_clock, time_after64};
+use crate::os::kernel::{local_clock, time_after64};
 use crate::util::percpu::{PerCpu, PerCpuRef, CpuShared};
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{percpu_field, warn_on_once};

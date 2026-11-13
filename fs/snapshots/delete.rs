@@ -1247,7 +1247,7 @@ fn fix_child_of_deleted_snapshot(
         for s in &mut skip {
             if live_child_of(deleted, *s).is_some() {
                 let n = if depth > 1 {
-                    crate::util::kernel::random_u64_below((depth - 1) as u64) as u32
+                    crate::os::kernel::random_u64_below((depth - 1) as u64) as u32
                 } else {
                     0
                 };

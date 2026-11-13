@@ -16,7 +16,7 @@ use crate::init::passes::{self, RecoveryPass};
 use crate::sb::members::DevRef;
 use crate::types::Le64;
 use crate::util::alloc::KVVec;
-use crate::util::kernel::local_clock;
+use crate::os::kernel::local_clock;
 use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
 use crate::util::Printbuf;

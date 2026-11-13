@@ -82,7 +82,7 @@ const slab_flags_t RUST_CONST_HELPER_SLAB_ACCOUNT	= SLAB_ACCOUNT;
  */
 const unsigned int RUST_CONST_HELPER_MINORBITS		= MINORBITS;
 
-/* util/super_block.rs and fs_context.rs: BIT()s, which bindgen can't evaluate */
+/* os/linux_kernel/super_block.rs and fs_context.rs: BIT()s, which bindgen can't evaluate */
 const unsigned long RUST_CONST_HELPER_SB_RDONLY		= SB_RDONLY;
 const unsigned long RUST_CONST_HELPER_SB_NOSEC		= SB_NOSEC;
 const unsigned long RUST_CONST_HELPER_SB_ACTIVE		= SB_ACTIVE;
@@ -177,7 +177,7 @@ const __poll_t RUST_CONST_HELPER_EPOLLHUP		= EPOLLHUP;
 /* lz4's compression workspace: a sizeof() */
 const size_t RUST_CONST_HELPER_LZ4_MEM_COMPRESS		= LZ4_MEM_COMPRESS;
 
-/* jiffies a second, util/kernel.rs's */
+/* jiffies a second, os/linux_kernel/kernel.rs's */
 const unsigned long RUST_CONST_HELPER_HZ		= HZ;
 
 /* locking/noio.rs's: the holes util/pf_memalloc.h picked, as C has them */

@@ -204,7 +204,7 @@ macro_rules! btree_err {
 
 macro_rules! btree_err_on {
     ($v:expr, $cond:expr, $flags:expr, $at:expr, $err:expr, $($msg:tt)*) => {
-        if $crate::util::kernel::unlikely($cond) {
+        if $crate::os::kernel::unlikely($cond) {
             $crate::btree::validate::btree_err!($v, $flags, $at, $err, $($msg)*)
         } else {
             Ok(false)

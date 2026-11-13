@@ -23,17 +23,17 @@ use crate::inode_opts;
 use crate::locking::Locked;
 use crate::prt;
 use crate::debug::trace::events;
-use crate::util::kernel::ktime_get_ns;
+use crate::os::kernel::ktime_get_ns;
 use crate::util::{Nsecs, Printbuf};
 use crate::util::rcu::read_lock;
-use crate::util::seq_file::SeqFile;
+use crate::os::seq_file::SeqFile;
 use cstruct_macros::vtable;
 
 use super::dentry::Dentry;
 use super::inode::{InodeInfo, ATTR_ATIME, ATTR_CTIME, ATTR_MTIME};
 
-/// One of ours: s_fs_info is its Fs. The type is util/super_block.rs's.
-pub type SuperBlock = crate::util::super_block::SuperBlock<Fs>;
+/// One of ours: s_fs_info is its Fs. The type is os/linux_kernel/super_block.rs's.
+pub type SuperBlock = crate::os::super_block::SuperBlock<Fs>;
 
 impl Fs {
     /// The VFS superblock it's mounted as: None while it isn't.

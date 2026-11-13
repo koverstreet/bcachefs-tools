@@ -19,7 +19,7 @@ use crate::init::passes::RecoveryPass;
 use crate::locking::six::SixHold;
 use crate::prt;
 use crate::types::L1_CACHE_BYTES;
-use crate::util::kernel::{likely, prefetch, race_fault, unlikely};
+use crate::os::kernel::{likely, prefetch, race_fault, unlikely};
 use crate::util::log::LogMsg;
 use c::BtreeNodeCacheState as State;
 use c::SixLockType::{self, SIX_LOCK_read};

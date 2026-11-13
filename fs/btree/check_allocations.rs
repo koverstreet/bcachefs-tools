@@ -25,7 +25,7 @@ use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::types::Le16;
 use crate::util::Printbuf;
-use crate::util::kernel::READ;
+use crate::os::kernel::READ;
 use crate::{bch_err_fn, bch_err_msg, btree_trans, fsck_err_on, mustfix_fsck_err_on, prt};
 
 /* marking of btree keys/nodes: */

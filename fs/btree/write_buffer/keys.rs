@@ -4,7 +4,7 @@ use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::c;
 use crate::data::keylist;
 use crate::util::alloc::{AllocError, KVVec};
-use crate::util::kernel::prefetch;
+use crate::os::kernel::prefetch;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use core::marker::PhantomData;

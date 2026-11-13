@@ -5,7 +5,7 @@
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::file::File;
+use crate::os::file::File;
 
 /// Write access to a file's mount for as long as this lives: the mount can't
 /// go read-only meanwhile.

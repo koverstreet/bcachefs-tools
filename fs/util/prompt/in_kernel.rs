@@ -4,8 +4,8 @@ use super::{Question, Reply, UNANSWERED};
 use crate::c;
 use crate::fs::Fs;
 use crate::util::alloc::KVVec;
-use crate::util::kernel::{jiffies, HZ};
-use crate::util::thread_with_file::StdioRedirect;
+use crate::os::kernel::{jiffies, HZ};
+use crate::os::thread_with_file::StdioRedirect;
 use crate::util::Printbuf;
 use kernel::ffi::{c_long, c_ulong};
 

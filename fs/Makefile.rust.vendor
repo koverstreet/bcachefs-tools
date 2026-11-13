@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 # The vendored Rust stack: a patched copy of the kernel's rust/ (7.1), in
-# fs/vendor/kernel-rust, built into $(obj)/vrust and bundled into bcachefs.ko,
+# os/linux_kernel/vendor, built into $(obj)/vrust and bundled into bcachefs.ko,
 # for when the kernel's own Rust can't be used (fs/Makefile.rust decides).
 # Its Rust symbols stay module-local; only the kernel's C ABI crosses the .ko
 # boundary. The kernel tree is only read.
 
 VRD	:= $(obj)/vrust
 VRD_ABS	:= $(abspath $(VRD))
-VENDOR	:= $(src)/vendor/kernel-rust
+VENDOR	:= $(src)/../os/linux_kernel/vendor
 
 # ---- adapting the kernel's build to our rustc ------------------------------
 # The kernel's KBUILD_RUSTFLAGS (set even with CONFIG_RUST=n), rustc_cfg and
@@ -108,7 +108,7 @@ endif
 
 # ---- the vendored crates ---------------------------------------------------
 # Built by Makefile.rust's rules; all vendored, so all lint-capped. The
-# kernel's own rules for them are in vendor/kernel-rust/Makefile.
+# kernel's own rules for them are in os/linux_kernel/vendor/Makefile.
 
 # bindgen, as the kernel's rule does it: the carried bindgen_parameters, and
 # the kernel's C flags less the ones libclang can't parse.

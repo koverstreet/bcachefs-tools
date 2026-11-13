@@ -55,7 +55,7 @@ use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::KVVec;
-use crate::util::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
+use crate::os::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::data_structures::sort::heapsort_by;

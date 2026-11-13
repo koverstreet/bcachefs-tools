@@ -289,7 +289,7 @@ fn sort_impl<S: ?Sized>(
             swap(v, j, k);
         }
 
-        crate::util::kernel::cond_resched();
+        crate::os::kernel::cond_resched();
     }
 
     // sort
@@ -320,7 +320,7 @@ fn sort_impl<S: ?Sized>(
             swap(v, j, k);
         }
 
-        crate::util::kernel::cond_resched();
+        crate::os::kernel::cond_resched();
     }
 }
 

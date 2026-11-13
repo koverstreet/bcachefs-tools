@@ -42,7 +42,7 @@ use crate::inode_opts::reinherit_attrs;
 use crate::snapshots::subvolume;
 use crate::str_hash;
 use crate::util::alloc::KVVec;
-use crate::util::kernel::{capable, Capability};
+use crate::os::kernel::{capable, Capability};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;

@@ -10,7 +10,7 @@ publish = false
 
 [lib]
 proc-macro = true
-path = "../../../fs/vendor/kernel-rust/pin-init/internal/src/lib.rs"
+path = "../../../../linux_kernel/vendor/pin-init/internal/src/lib.rs"
 
 [dependencies]
 syn = { version = "2.0", features = ["full", "visit-mut"] }

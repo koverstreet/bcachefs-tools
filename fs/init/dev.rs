@@ -230,8 +230,8 @@ use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, member_state_str, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::util::alloc::{alloc_pinned, free_pinned, kbox_pin_init};
-use crate::util::file::read_file;
-use crate::util::kernel::{ktime_get_real_seconds, READ, WRITE};
+use crate::os::file::read_file;
+use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
 use crate::util::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_dev, log_no_fs, LogLevel};
 use crate::util::names;
@@ -1630,7 +1630,7 @@ impl Dev {
     pub fn congested_read(&self, now: u64) -> u32 {
         let mut congested = i64::from(self.congested.load(Relaxed));
         let last = self.congested_last.load(Relaxed);
-        if crate::util::kernel::time_after64(now, last) {
+        if crate::os::kernel::time_after64(now, last) {
             congested -= (now.wrapping_sub(last) >> 12) as i64;
         }
         congested.clamp(0, c::CONGESTED_MAX.into()) as u32
@@ -1657,7 +1657,7 @@ impl Dev {
     /// An IO of @rw's, submitted at @submit_time, completed: its latency in
     /// the device's average and quantiles, and - a read's - its congestion.
     pub fn latency_acct(&self, submit_time: u64, rw: usize) {
-        use crate::util::kernel::{local_clock, time_after64};
+        use crate::os::kernel::{local_clock, time_after64};
         use crate::util::time_stats::TimeStats;
         use core::sync::atomic::Ordering::SeqCst;
 
@@ -1706,7 +1706,7 @@ impl Dev {
     /// How congested its IO is - its latency, against what's expected.
     #[cold]
     pub fn congested_to_text(&self, out: &mut Printbuf) {
-        use crate::util::kernel::{local_clock, READ, WRITE};
+        use crate::os::kernel::{local_clock, READ, WRITE};
         let now = local_clock();
         out.tabstop_push(32);
         write!(out, "current:\t{}%\n", self.congested_read(now) * 100 / c::CONGESTED_MAX);

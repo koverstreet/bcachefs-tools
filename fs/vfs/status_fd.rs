@@ -18,7 +18,7 @@ use crate::init::chardev::{fs_ioctl, ioctl_ret};
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::ioctl::Ioctl;
-use crate::util::thread_with_file::{Stdio, StdioFile, ThreadWithFile};
+use crate::os::thread_with_file::{Stdio, StdioFile, ThreadWithFile};
 use core::ffi::c_void;
 use core::mem::size_of;
 use core::ptr::NonNull;
@@ -126,7 +126,7 @@ impl StatusFile {
     /// returned drops: recovery's over, however it went.
     pub(crate) fn attach<'a>(&'a self, fs: &'a Fs) -> Attached<'a> {
         fs.stdio_user_only.store(true, Relaxed);
-        fs.stdio.store(self.status().redirect.as_c(), Release);
+        fs.stdio.store(self.status().redirect.as_ptr(), Release);
         *self.status().data.fs.lock() = Some(NonNull::from(fs));
         Attached { file: self, fs }
     }

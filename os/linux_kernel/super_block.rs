@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The VFS's struct super_block for a filesystem type T (util/fs_type.rs).
+//! The VFS's struct super_block for a filesystem type T (fs_type.rs).
 //! Generic over what its s_fs_info points to, T's SuperData::Target. Also
 //! the three states mount has one in, all with s_umount held for writing, as
 //! sget returns it:

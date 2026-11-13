@@ -22,7 +22,7 @@
 //! recover() goes a page at a time.
 
 use crate::c;
-use crate::util::kernel::PAGE_SIZE;
+use crate::os::kernel::PAGE_SIZE;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::{c_int, c_void};
 

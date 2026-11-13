@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "fs", "fs/cstruct-macros", "bcachefs-shim", "bcachefs-shim/pin-init", "bcachefs-shim/pin-init/internal", "bch_bindgen", "doc/docgen"]
+members = [".", "fs", "fs/cstruct-macros", "os/linux_user/shim", "os/linux_user/shim/pin-init", "os/linux_user/shim/pin-init/internal", "bch_bindgen", "doc/docgen"]
 default-members = [".", "fs"]
 
 [package]

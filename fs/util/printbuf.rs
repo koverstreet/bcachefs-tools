@@ -6,7 +6,7 @@ use core::ops::{Deref, DerefMut};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::KVVec;
-use crate::util::kernel::PAGE_SIZE;
+use crate::os::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
 use cstruct_macros::{CStruct, bitfield, bch_enum};

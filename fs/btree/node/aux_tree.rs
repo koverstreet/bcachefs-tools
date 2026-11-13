@@ -10,7 +10,7 @@ use crate::c;
 use crate::format::Bpos;
 use crate::types::{L1_CACHE_BYTES, SMP_CACHE_BYTES};
 use crate::data_structures::eytzinger::Eytzinger1;
-use crate::util::kernel::{likely, prefetch, unlikely};
+use crate::os::kernel::{likely, prefetch, unlikely};
 use crate::util::vstructs::{cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, Plain};
 use cstruct_macros::Plain;
 

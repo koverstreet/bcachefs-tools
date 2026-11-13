@@ -32,7 +32,7 @@ use crate::inode_opts::get_io_opts;
 use crate::locking::six::{six_lock_counts, six_lock_downgrade, six_lock_tryupgrade, six_trylock_ip};
 use crate::types::{Le16, Le64};
 use crate::util::bio::{bch2_bio_map, buf_nr_bvecs, of_bio, MapBuf};
-use crate::util::kernel::{dump_stack, local_clock, unlikely, READ};
+use crate::os::kernel::{dump_stack, local_clock, unlikely, READ};
 use crate::util::log::LogMsg;
 use crate::util::refcount::Refcount;
 use crate::util::time_stats::TimeStats;

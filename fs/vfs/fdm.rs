@@ -7,7 +7,7 @@
 use crate::c;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::hash::hash_64;
-use crate::util::kernel::{current_id, random_u64};
+use crate::os::kernel::{current_id, random_u64};
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::{Acquire, Release}};
 

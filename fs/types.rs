@@ -9,7 +9,7 @@ use crate::cstructs::c;
 use crate::new_lock;
 use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitflags;
-use crate::util::kernel::WRITE;
+use crate::os::kernel::WRITE;
 use crate::util::kobject::Kobject;
 use crate::util::projections::Volatile;
 use crate::util::bio::BioSet;
@@ -481,7 +481,7 @@ pub struct Fs {
     /// This, stdio_filter and stdio_user_only: set as a redirect attaches and
     /// detaches - the status fd's, online fsck's - and read by every print,
     /// on any thread. stdio published last, Release, and read Acquire.
-    pub stdio: AtomicPtr<c::stdio_redirect>,
+    pub stdio: AtomicPtr<crate::os::thread_with_file::StdioRedirect>,
     pub stdio_filter: AtomicPtr<c::task_struct>,
     /*
      * Online fsck redirects everything it prints; mounting doesn't - a boot

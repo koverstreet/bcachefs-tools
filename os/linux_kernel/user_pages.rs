@@ -9,10 +9,10 @@
 //! context, requeued there if the check was an endio's.
 //! bio_set_pages_dirty() and bio_check_pages_dirty(), which 7.2 unexported.
 
-use super::Bio;
+use super::iov_iter::IovIter;
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::iov_iter::IovIter;
+use crate::util::bio::Bio;
 use crate::util::task::requeue;
 use crate::util::workqueue::Queue;
 use core::ffi::{c_int, c_uint};

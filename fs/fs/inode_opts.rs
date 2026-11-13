@@ -30,7 +30,7 @@ use crate::init::error::id;
 use crate::sb::errors::FsckFlags;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::ffi::c_str;
-use crate::util::kernel::unlikely;
+use crate::os::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, inode, logged_ops, opts};
 use core::ffi::CStr;

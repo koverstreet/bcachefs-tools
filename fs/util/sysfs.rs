@@ -256,7 +256,7 @@ unsafe extern "C" fn store<D: Dir>(kobj: *mut c::kobject, attr: *mut c::attribut
 /// @buf is a PAGE_SIZE buffer.
 pub unsafe fn show_page(buf: *mut c_char, f: impl FnOnce(&mut Printbuf) -> Result<(), BchError>) -> isize {
     // SAFETY: the caller's
-    let mut out = unsafe { Printbuf::new_extern(buf, crate::util::kernel::PAGE_SIZE) };
+    let mut out = unsafe { Printbuf::new_extern(buf, crate::os::kernel::PAGE_SIZE) };
 
     match f(&mut out) {
         Ok(()) => {

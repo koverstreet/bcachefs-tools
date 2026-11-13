@@ -15,7 +15,7 @@ nest! {
         pub req: *mut c::kiocb,
         pub mapping: crate::vfs::folio::Mapping,
         pub inode: *mut c::InodeInfo,
-        pub mm: Option<crate::util::kernel::Mm>,
+        pub mm: Option<crate::os::kernel::Mm>,
         pub iov: *const c::iovec,
         #[c_bitfield]
         #>[bitfield(u8)]

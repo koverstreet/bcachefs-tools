@@ -88,7 +88,7 @@ use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init, PinInit};
 use crate::util::bio::{inline_vecs, reset_bvec_offset, Bio, BioBox, BioBuffersOwned, BioBuffersUnmanaged, BioClone,
                        BioInPlace, BioLend, BioOwner, BioRange, Buffers, HasBio, Lent};
 use crate::util::gather::{Gather, GatherRef};
-use crate::util::kernel::{local_clock, READ};
+use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{AllocBox, AllocError, Kmalloc};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
@@ -1515,7 +1515,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
         let dev = read_corrupt_device.get();
         let ratio = read_corrupt_ratio.get();
         if ratio != 0 && (dev < 0 || dev == f.plan.pick.ptr.dev() as i32) &&
-           crate::util::kernel::random_u64_below(ratio.into()) == 0 {
+           crate::os::kernel::random_u64_below(ratio.into()) == 0 {
             f.bio_mut().corrupt();
         }
     }

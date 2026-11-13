@@ -22,7 +22,7 @@ use crate::util::closure::ClosureRef;
 use crate::data_structures::bitmap::AtomicBitmap;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::types::bits_to_longs;
-use crate::util::kernel::time_after64;
+use crate::os::kernel::time_after64;
 use crate::util::percpu::{bch2_raw_smp_processor_id, bch2_set_current_wake_cpu, bch2_task_pid, CpuGuard, PerCpu,
                           PerCpuRef};
 use crate::util::log::{print_str, LogLevel};

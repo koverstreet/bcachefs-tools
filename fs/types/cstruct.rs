@@ -2,7 +2,7 @@
 //
 // Parsing the items the macros (fs/cstruct-macros) take, which include!()
 // this file - so it's plain `//` comments - and build on syn: the kernel
-// build's, vendor/kernel-rust, with a bare rustc.
+// build's, os/linux_kernel/vendor, with a bare rustc.
 //
 // The items:
 //

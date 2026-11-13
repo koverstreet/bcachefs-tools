@@ -40,7 +40,7 @@ use crate::sb::counters::COUNTERS;
 use crate::sb::members;
 use crate::prt;
 use crate::util::ffi::c_char;
-use crate::util::kernel::{READ, WRITE};
+use crate::os::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;

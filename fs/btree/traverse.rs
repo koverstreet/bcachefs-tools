@@ -26,7 +26,7 @@ use crate::fs::Fs;
 use crate::prt;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::closure::StackClosure;
-use crate::util::kernel::race_fault;
+use crate::os::kernel::race_fault;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use pin_init::stack_pin_init;

@@ -47,8 +47,9 @@ use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGu
 use crate::errcode::BchError;
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
+use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::util::{alloc::{AllocBox, KVmalloc}, bio::{Bio, BioRange},
-                  kernel::{unlikely, READ, WRITE}, late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
+                  late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
@@ -252,7 +253,7 @@ unsafe fn bbuf_exit(buf: &mut c::bbuf) {
     match buf.type_ {
         bb::BB_none => {}
         #[cfg(kernel)]
-        bb::BB_vmap => unsafe { c::vunmap(buf.b.map_addr(|a| a & !(crate::util::kernel::PAGE_SIZE - 1))) },
+        bb::BB_vmap => unsafe { c::vunmap(buf.b.map_addr(|a| a & !(crate::os::kernel::PAGE_SIZE - 1))) },
         #[cfg(not(kernel))]
         bb::BB_vmap => unreachable!(),
         /* its Bbuf's AllocBox's */
@@ -324,7 +325,7 @@ fn virt_contig(r: BioRange<'_>) -> Option<NonNull<u8>> {
 fn vmap<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Option<Bbuf<'a>> {
     use crate::util::alloc::KVVec;
     use crate::util::bio::{nth_page, Segment};
-    use crate::util::kernel::PAGE_SIZE;
+    use crate::os::kernel::PAGE_SIZE;
 
     let pages_of = |s: &Segment<'_>| ((s.offset + s.len) as usize).div_ceil(PAGE_SIZE);
     let offset = r.segments().next()?.offset as usize;

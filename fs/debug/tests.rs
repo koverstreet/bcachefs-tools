@@ -16,7 +16,7 @@ use crate::errcode::{
     ENOENT_bkey_type_mismatch,
 };
 use crate::fs::Fs;
-use crate::util::kernel::{local_clock, random_u64_below};
+use crate::os::kernel::{local_clock, random_u64_below};
 use crate::util::par::{self, Backend};
 use crate::prt;
 use crate::util::printbuf::{HumanReadable, Printbuf};

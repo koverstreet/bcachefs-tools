@@ -31,7 +31,7 @@ use crate::locking::MemallocFlags;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::types::CStatic;
 use crate::util::alloc::{init_at, kzalloc, KBox};
-use crate::util::kernel::PAGE_SECTORS_SHIFT;
+use crate::os::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::BioRange;
 
 use super::buffered;

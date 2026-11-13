@@ -36,7 +36,7 @@ use crate::util::alloc::{Arc, KVVec};
 use crate::util::backref::BackRef;
 use crate::util::refcount::PercpuRef;
 use crate::util::ffi::c_char;
-use crate::util::kernel::READ;
+use crate::os::kernel::READ;
 use crate::util::sched;
 use crate::util::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
@@ -402,7 +402,7 @@ impl Fs {
 
     /// In the filesystem's time units.
     pub fn current_time(&self) -> u64 {
-        self.timespec_to_time(crate::util::kernel::ktime_get_coarse_real_ts64()) as u64
+        self.timespec_to_time(crate::os::kernel::ktime_get_coarse_real_ts64()) as u64
     }
 
     pub fn set_loglevel(&self, level: u32) {
@@ -434,7 +434,7 @@ impl Fs {
                  out: &mut Printbuf) -> Result<(), BchError> {
         let p = self.as_ptr();
 
-        self.stdio.store(opts.stdio as usize as *mut c::stdio_redirect, Relaxed);
+        self.stdio.store(opts.stdio as usize as *mut _, Relaxed);
         self.recovery_task.store(sched::current(), Relaxed);
 
         #[cfg(kernel)]
