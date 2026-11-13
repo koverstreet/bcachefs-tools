@@ -102,7 +102,7 @@ use core::sync::atomic::{AtomicBool, AtomicI16, Ordering::Relaxed};
 use core::ops::ControlFlow;
 use core::alloc::Layout;
 use core::future::Future;
-use core::pin::{pin, Pin};
+use core::pin::Pin;
 use core::task::{Context, Poll};
 use crate::types::c_default;
 use cstruct_macros::{args_stored_once, c_const, c_enum, c_name, in_place, CStruct, Init, TypeInfo};
@@ -703,9 +703,11 @@ pub fn data_read_sb_err(e: BchError) -> SbErrorId {
 }
 
 #[cold]
-fn retry_report(trans: &BtreeTrans<'_>, read: &Rbio, read_pos: Bpos, k: BkeySC<'_>,
+fn retry_report(read: &Rbio, read_pos: Bpos, k: BkeySC<'_>,
                 failed: &c::bch_io_failures, orig_ret: Result<(), BchError>, ret: Result<(), BchError>) {
-    let fs = trans.fs();
+    let fs = read.fs();
+    let trans = btree_trans!(fs);
+    let trans = &trans;
     let ret = ret.err();
     let have_key = !k.k.key_type().is_deleted();
 
@@ -804,6 +806,23 @@ fn trace_read<E: Event<Kind = Sectors>>(read: &Rbio, e: E, sectors: u64, k: Bkey
     });
 }
 
+/// The options a read of @k goes by: an indirect extent's own, looked up into
+/// @indirect, or the read's.
+// Out of line, and into @indirect: a bch_inode_opts returned through
+// fragment_of()'s frame is two of them there
+#[inline(never)]
+fn read_opts<'o>(t: &TransAttempt<'_, '_>, orig: &'o Rbio, k: BkeySC<'_>, indirect: &'o mut Option<c::bch_inode_opts>)
+    -> Result<&'o c::bch_inode_opts, BchError>
+{
+    if k.arm::<Indirect>().is_none() {
+        return Ok(&orig.opts);
+    }
+    Ok(indirect.insert(get_io_opts(t, None, k)?))
+}
+
+// Out of line: inlined, its btree update is in the frame of every read's
+// fragment_of()
+#[inline(never)]
 fn read_inline(t: &TransAttempt<'_, '_>, read: &Rbio, mut r: BioRange<'_>, e: Extent<'_>, flags: F,
                in_retry: bool) -> Result<(), BchError> {
     let fs = t.fs();
@@ -862,6 +881,7 @@ fn read_inline_csum_err(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, in
     ret
 }
 
+#[cold]
 fn read_extent_pick_err(t: &TransAttempt<'_, '_>, orig: &Rbio, e: Extent<'_>, flags: F, ret: BchError,
                         failed: Option<&mut FailureState>) -> BchError {
     let fs = t.fs();
@@ -1152,7 +1172,8 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
     // TODO: carry the compact reconcile opts through the read and write paths
     // instead of a full bch_inode_opts; then the read bio can hold the
     // effective opts per extent, and this goes.
-    let opts = if k.arm::<Indirect>().is_some() { get_io_opts(t, None, k)? } else { orig.opts };
+    let mut indirect_opts = None;
+    let opts = read_opts(t, orig, k, &mut indirect_opts)?;
 
     // If it's being moved internally, we don't want to flag it as a cache
     // hit:
@@ -1174,7 +1195,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
     let promote = if !orig.is_update() &&
                      ((opts.promote_target != 0 && flags.contains(F::may_promote) && !pick.do_ec_reconstruct) ||
                       have_io_error) {
-        promote_alloc(t, k, orig, &opts, failed.map(|f| &mut f.io))?
+        promote_alloc(t, k, orig, opts, failed.map(|f| &mut f.io))?
     } else {
         None
     };
@@ -1596,33 +1617,54 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
     Ok(())
 }
 
+/// The retry's next fragment, made into @f, and the walk's step past it.
+#[inline(never)]
+fn retry_fragment<'r, P: WalkPos>(read: &'r Rbio, at: Locate<'_>, walk: &mut Walk<'r, P>,
+                                  failed: &mut FailureState, prev_read: &mut BkeyBuf, f: &mut Option<Fragment<'r>>)
+    -> Result<Step, BchError>
+{
+    let trans = btree_trans!(read.fs());
+    lockrestart_do(&trans, |t| {
+        let e = locate(t, at, walk.range())?;
+        retry_fragment_of(t, read, e, walk, failed, prev_read, f)
+    })
+}
+
+/// retry_fragment()'s fragment of @e, which locate() found.
+// Apart: what it makes isn't in the frame locate()'s walk of the btree runs
+// under
+#[inline(never)]
+fn retry_fragment_of<'r, P: WalkPos>(t: &TransAttempt<'_, '_>, read: &'r Rbio, e: Extent<'_>, walk: &mut Walk<'r, P>,
+                                     failed: &mut FailureState, prev_read: &mut BkeyBuf, f: &mut Option<Fragment<'r>>)
+    -> Result<Step, BchError>
+{
+    if !e.k.and_val_eq(BkeySC::from(&*prev_read)) {
+        failed.io.reset_devs();
+        prev_read.reassemble(e.k);
+    }
+    let (range, step) = walk.fragment(&e);
+    if let Some(p) = fragment_of(t, read, range, e, Some(&mut *failed), walk.flags, walk.split, u32::MAX)? {
+        *f = Some(p.make(read)?);
+    }
+    Ok(step)
+}
+
 #[args_stored_once]
 async fn retry_walk(read: &Rbio, range: BioRange<'_>, at: Locate<'_>,
                     failed: &mut FailureState, prev_read: &mut BkeyBuf, flags: F) -> Result<(), BchError> {
     assert!(range.is_of(read.bio()), "a retry of another bio's range");
     let mut walk = Walk { read, pos: range.pos(), flags, split: true };
     let ret = loop {
-        let step = {
-            let trans = btree_trans!(read.fs());
-            lockrestart_do(&trans, |t| {
-                let e = locate(t, at, walk.range())?;
-                if !e.k.and_val_eq(BkeySC::from(&*prev_read)) {
-                    failed.io.reset_devs();
-                    prev_read.reassemble(e.k);
-                }
-                let (range, step) = walk.fragment(&e);
-                fragment_of(t, read, range, e, Some(&mut *failed), walk.flags, walk.split, u32::MAX)?
-                    .map(|p| p.make(read)).transpose()
-                    .map(|f| (f, step))
-            })
-        };
+        let mut f = None;
+        let step = retry_fragment(read, at, &mut walk, failed, prev_read, &mut f);
 
-        let step = match step {
-            Ok((Some(mut f), step)) => {
-                let ret = fragment_io(&mut f, read, Resume::queue(Queue::system_dfl()), Some(&mut failed.io.ec_msg)).await;
+        let step = match (step, &mut f) {
+            (Ok(step), Some(frag)) => {
+                let ret = fragment_io(frag, read, Resume::queue(Queue::system_dfl()), Some(&mut failed.io.ec_msg)).await;
+                let f = f.take().expect("the fragment just read");
                 f.end_in_retry(read, failed, ret).map(|()| step)
             }
-            step => step.map(|(_, step)| step),
+            (step, _) => step,
         };
         if let ControlFlow::Break(ret) = walk.step(step) {
             break ret;
@@ -1635,27 +1677,36 @@ async fn retry_walk(read: &Rbio, range: BioRange<'_>, at: Locate<'_>,
     ret
 }
 
+/// The key at @data_pos, into @sk, if it's still the one @pick was read from.
+// Out of line, as are the other steps of the read's futures: a step's
+// transaction and iterator, inlined, are in the poll's frame - under every
+// await, and whatever the await runs on this stack. And a step makes its
+// Fragment into the caller's Option: one returned, or moved through the poll,
+// is a copy of it in the frame.
+#[inline(never)]
+fn retry_key(fs: &Fs, data_btree: Btree, data_pos: Bpos, pick: &c::extent_ptr_decoded, sk: &mut BkeyBuf) {
+    // @pick may have been moved to the part of the extent read, with
+    // @data_pos: matched by where its data starts
+    let data_offset = data_pos.offset.wrapping_sub(pick.crc.offset.into());
+    let trans = btree_trans!(fs);
+    let _ = lockrestart_do(&trans, |t| {
+        let mut iter = BtreeIter::new(t, data_btree, data_pos, BtreeIterFlags::empty());
+        if let Some(k) = iter.peek_slot(t)? {
+            if k.arm::<Ptrs>().is_some_and(|kp| kp.matches_ptr(fs, &pick.ptr, data_offset)) {
+                sk.reassemble(k);
+            }
+        }
+        Ok(())
+    });
+}
+
 #[args_stored_once]
 async fn retry(read: &Rbio, s: &mut RetryState<'_>, at: Locate<'_>) -> Result<(), BchError> {
     let fs = read.fs();
     let RetryState { plan: Plan { range, flags, read_pos, data_btree, data_pos, pick, .. }, ret: orig_ret,
                      ref mut failures, .. } = *s;
     let mut sk = BkeyBuf::new();
-    {
-        // @pick may have been moved to the part of the extent read, with
-        // @data_pos: matched by where its data starts
-        let data_offset = data_pos.offset.wrapping_sub(pick.crc.offset.into());
-        let trans = btree_trans!(fs);
-        let _ = lockrestart_do(&trans, |t| {
-            let mut iter = BtreeIter::new(t, data_btree, data_pos, BtreeIterFlags::empty());
-            if let Some(k) = iter.peek_slot(t)? {
-                if k.arm::<Ptrs>().is_some_and(|kp| kp.matches_ptr(fs, &pick.ptr, data_offset)) {
-                    sk.reassemble(k);
-                }
-            }
-            Ok(())
-        });
-    }
+    retry_key(fs, data_btree, data_pos, &pick, &mut sk);
 
     if let Err(e) = orig_ret {
         if !BkeySC::from(&sk).k.key_type().is_deleted() {
@@ -1668,8 +1719,7 @@ async fn retry(read: &Rbio, s: &mut RetryState<'_>, at: Locate<'_>) -> Result<()
     let ret = retry_walk(read, range, at, failures, &mut sk, flags).await;
 
     let reported = if read.is_update() && ret.is_err_and(read_err_benign) { Ok(()) } else { ret };
-    let trans = btree_trans!(fs);
-    retry_report(&trans, read, read_pos, BkeySC::from(&sk), &failures.io, orig_ret, reported);
+    retry_report(read, read_pos, BkeySC::from(&sk), &failures.io, orig_ret, reported);
     ret
 }
 
@@ -1759,41 +1809,66 @@ fn start_task(t: &TransAttempt<'_, '_>, reconstruct: bool, start: impl FnOnce(bo
     t.trans().set_notrace_relock_fail();
 }
 
+/// An update's read of @k, its first fragment made into @f.
+#[inline(never)]
+fn update_fragment<'r>(rbio: &'r Rbio, k: &BkeyI, btree: Btree, buf: BioRange<'r>, flags: F, dev: c_uint,
+                       f: &mut Option<Fragment<'r>>) -> Result<(), BchError>
+{
+    let e = Extent { read_pos: k.k.start_pos(), btree, k: BkeySC::from(k), offset: 0, sectors: buf.len() >> 9 };
+    let trans = btree_trans!(rbio.fs());
+    lockrestart_do(&trans, |t| {
+        if let Some(p) = fragment_of(t, rbio, buf, e, None, flags, false, dev)? {
+            *f = Some(p.make(rbio)?);
+        }
+        Ok(())
+    })
+}
+
+/// The update's read once @f's done: done, or @f's retry, to await.
+#[inline(never)]
+fn update_end<'r>(rbio: &'r Rbio, k: &'r BkeyI, btree: Btree, buf: BioRange<'r>, f: &mut Option<Fragment<'r>>,
+                  ret: Result<(), BchError>) -> Result<ReadDone, RetryBox<'r>>
+{
+    let f = f.take().expect("an update's fragment, ended once");
+    let pick = f.plan.landed.then_some(f.plan.pick);
+    match f.end(ret) {
+        Outcome::Done(ret) => Ok(ReadDone { ret, pick, ptrs_io_error: 0, poisoned: None }),
+        Outcome::Retry(mut s) => {
+            s.plan.range = buf;
+            Err(retry_boxed(rbio, s, Locate::Key(k, btree)))
+        }
+    }
+}
+
 #[args_stored_once]
 pub async fn read_update(rbio: &mut Rbio, k: &BkeyI, btree: Btree, flags: F, dev: c_uint) -> ReadDone {
     let buf = rbio.bio().range();
     let read = 'read: {
         // the fragment's gone before the retry's await: a future keeps a
         // local's slot till its scope ends, moved out of or not
-        let (pick, end) = {
-            let mut f = {
-                let e = Extent { read_pos: k.k.start_pos(), btree, k: BkeySC::from(k), offset: 0,
-                                 sectors: buf.len() >> 9 };
-                let trans = btree_trans!(rbio.fs());
-                match lockrestart_do(&trans, |t| {
-                    fragment_of(t, rbio, buf, e, None, flags, false, dev)?.map(|p| p.make(rbio)).transpose()
-                }) {
-                    Ok(Some(f)) => f,
-                    p => break 'read ReadDone { ret: p.map(|_| ()), pick: None, ptrs_io_error: 0, poisoned: None },
-                }
+        let retry = {
+            let mut f = None;
+            if let Err(e) = update_fragment(rbio, k, btree, buf, flags, dev, &mut f) {
+                break 'read ReadDone { ret: Err(e), pick: None, ptrs_io_error: 0, poisoned: None };
+            }
+            let Some(frag) = f.as_mut() else {
+                break 'read ReadDone { ret: Ok(()), pick: None, ptrs_io_error: 0, poisoned: None };
             };
-            let ret = if f.plan.pick.do_ec_reconstruct {
+            let ret = if frag.plan.pick.do_ec_reconstruct {
                 Ok(())
             } else {
-                let target = resume_target(&f);
-                fragment_io(&mut f, rbio, target, None).await
+                let target = resume_target(frag);
+                fragment_io(frag, rbio, target, None).await
             };
             if ret.is_err() {
                 rbio.saw_error.store(true, Relaxed);
             }
-            (f.plan.landed.then_some(f.plan.pick), f.end(ret))
+            match update_end(rbio, k, btree, buf, &mut f, ret) {
+                Ok(done) => break 'read done,
+                Err(retry) => retry,
+            }
         };
-        let mut s = match end {
-            Outcome::Done(ret) => break 'read ReadDone { ret, pick, ptrs_io_error: 0, poisoned: None },
-            Outcome::Retry(s) => s,
-        };
-        s.plan.range = buf;
-        let (ret, failures) = retry_boxed(rbio, s, Locate::Key(k, btree)).await;
+        let (ret, failures) = retry.await;
         ReadDone { ret, pick: failures.read, ptrs_io_error: ptrs_io_error(rbio.fs(), BkeySC::from(k), &failures.io),
                    poisoned: failures.poisoned }
     };
@@ -1834,65 +1909,17 @@ impl ReadHooks for () {}
 #[args_stored_once]
 pub async fn read<H: ReadHooks>(orig: &Rbio, inum: c::subvol_inum, flags: F, mut hooks: H) -> Result<(), BchError> {
     stack_pin_init!(let reads = Reads::new());
-    let (walked, own) = {
-        let mut own = None;
-        let fs = orig.fs();
-        let trans = btree_trans!(fs);
-        let mut walk = Walk { read: orig, pos: BioIter, flags, split: false };
-        let mut iter = BtreeIter::new(&trans, Btree::extents, pos(inum.inum, walk.range().pos().bi_sector),
-                                      BtreeIterFlags::SLOTS);
-        let ret = for_each_in_subvolume_max(&trans, &mut iter, pos(inum.inum, u64::MAX), inum.subvol as u32,
-                                            BtreeIterFlags::SLOTS, |t, iter, k| {
-            let step = extent_of(t, iter.pos(), k).and_then(|e| {
-                let end = e.read_pos.offset + u64::from(e.sectors);
-                if end <= hooks.read_from() {
-                    return Ok(Step::More(((end - e.read_pos.offset) << 9) as u32));
-                }
-                if walk.range().len() >> 9 < e.sectors {
-                    hooks.extend(t, orig, e.k, e.sectors)?;
-                }
-                let (range, step) = walk.fragment(&e);
-                hooks.extent(orig, range, e.k);
-                let started = fragment_of(t, orig, range, e, None, walk.flags, walk.split, u32::MAX)
-                    .and_then(|p| p.map_or(Ok(None), |p| p.start(t, orig, &reads, step != Step::Last)));
-                match started {
-                    // the read's own bio, the walk's last: read below, once it's done
-                    Ok(Some(f)) => own = Some(f),
-                    Ok(None) => {}
-                    // the extent's error is the read's, and the walk goes on
-                    Err(e) if !e.matches(err::BCH_ERR_transaction_restart) => orig.set_ret(Err(e)),
-                    Err(e) => return Err(e),
-                }
-                Ok(step)
-            });
-            match step {
-                Err(e) if e.matches(err::BCH_ERR_transaction_restart) => {
-                    if !hooks.give_up(orig) {
-                        return Err(e);
-                    }
-                    t.restarts_handled();
-                    Ok(LoopFlow::Break(()))
-                }
-                step => match walk.step(step) {
-                    ControlFlow::Break(ret) => ret.map(LoopFlow::Break),
-                    ControlFlow::Continue(()) => Ok(LoopFlow::ContinueFrom(pos(inum.inum, walk.range().pos().bi_sector))),
-                },
-            }
-        });
-
-        if let Err(e) = ret {
-            if !e.matches(err::BCH_ERR_extent_poisoned) {
-                let mut m = log_msg_ratelimited!(fs);
-                read_err_msg(&trans, &mut m, orig, pos(inum.inum, walk.range().pos().bi_sector));
-                write!(m, "data read error: {e}");
-            }
-        }
-        (ret, own)
-    };
+    let mut own = None;
+    let walked = read_walk(orig, inum, flags, &mut hooks, &reads, &mut own);
     {
         // the read's own bio's task: the fragment in the task's future alone,
-        // and the future gone before the wait below
-        let own = pin!(own.map(|f| fragment_task(reads.get(), f, orig)));
+        // made where it lives, and the future gone before the wait below
+        stack_pin_init!(let own = unsafe {
+            ::pin_init::pin_init_from_closure(|slot: *mut Option<FragmentFut<'_>>| {
+                slot.write(own.map(|f| fragment_task(reads.get(), f, orig)));
+                Ok::<_, core::convert::Infallible>(())
+            })
+        });
         if let Some(own) = own.as_pin_mut() {
             own.await;
         }
@@ -1900,4 +1927,63 @@ pub async fn read<H: ReadHooks>(orig: &Rbio, inum: c::subvol_inum, flags: F, mut
     let ret = reads.wait(Resume::SPAWNED).await;
     orig.done();
     walked.and(ret).and(orig.ret())
+}
+
+/// read()'s walk of the extents it reads: each fragment's task started as it's
+/// made, but for the read's own bio's, made into @own.
+#[inline(never)]
+fn read_walk<'r, H: ReadHooks>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, hooks: &mut H, reads: &Reads,
+                               own: &mut Option<Fragment<'r>>) -> Result<(), BchError> {
+    let fs = orig.fs();
+    let trans = btree_trans!(fs);
+    let mut walk = Walk { read: orig, pos: BioIter, flags, split: false };
+    let mut iter = BtreeIter::new(&trans, Btree::extents, pos(inum.inum, walk.range().pos().bi_sector),
+                                  BtreeIterFlags::SLOTS);
+    let ret = for_each_in_subvolume_max(&trans, &mut iter, pos(inum.inum, u64::MAX), inum.subvol as u32,
+                                        BtreeIterFlags::SLOTS, |t, iter, k| {
+        let step = extent_of(t, iter.pos(), k).and_then(|e| {
+            let end = e.read_pos.offset + u64::from(e.sectors);
+            if end <= hooks.read_from() {
+                return Ok(Step::More(((end - e.read_pos.offset) << 9) as u32));
+            }
+            if walk.range().len() >> 9 < e.sectors {
+                hooks.extend(t, orig, e.k, e.sectors)?;
+            }
+            let (range, step) = walk.fragment(&e);
+            hooks.extent(orig, range, e.k);
+            let started = fragment_of(t, orig, range, e, None, walk.flags, walk.split, u32::MAX)
+                .and_then(|p| p.map_or(Ok(None), |p| p.start(t, orig, reads, step != Step::Last)));
+            match started {
+                // the read's own bio, the walk's last: read by read(), once it's done
+                Ok(Some(f)) => *own = Some(f),
+                Ok(None) => {}
+                // the extent's error is the read's, and the walk goes on
+                Err(e) if !e.matches(err::BCH_ERR_transaction_restart) => orig.set_ret(Err(e)),
+                Err(e) => return Err(e),
+            }
+            Ok(step)
+        });
+        match step {
+            Err(e) if e.matches(err::BCH_ERR_transaction_restart) => {
+                if !hooks.give_up(orig) {
+                    return Err(e);
+                }
+                t.restarts_handled();
+                Ok(LoopFlow::Break(()))
+            }
+            step => match walk.step(step) {
+                ControlFlow::Break(ret) => ret.map(LoopFlow::Break),
+                ControlFlow::Continue(()) => Ok(LoopFlow::ContinueFrom(pos(inum.inum, walk.range().pos().bi_sector))),
+            },
+        }
+    });
+
+    if let Err(e) = ret {
+        if !e.matches(err::BCH_ERR_extent_poisoned) {
+            let mut m = log_msg_ratelimited!(fs);
+            read_err_msg(&trans, &mut m, orig, pos(inum.inum, walk.range().pos().bi_sector));
+            write!(m, "data read error: {e}");
+        }
+    }
+    ret
 }

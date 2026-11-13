@@ -1726,6 +1726,8 @@ fn bucket_io_time_reset(t: &TransAttempt<'_, '_>, bucket: Bpos, rw: usize) -> Re
 }
 
 /// From the read path, partway through its attempt; a restart is the read's.
+// Out of line: inlined, its btree update is in the read's frame
+#[inline(never)]
 pub(crate) fn bucket_read_time_reset(t: &TransAttempt<'_, '_>, bucket: Bpos) -> Result<(), BchError> {
     t.relock()?;
     bucket_io_time_reset(t, bucket, READ)
