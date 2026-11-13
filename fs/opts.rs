@@ -128,7 +128,7 @@ pub struct bch_opts {
     /// Filesystem block size
     #[opt(uint(512, 1 << 15),
           flags = fs | format | human_readable | must_be_pow_2 | sb_field_sectors,
-          sb = bch_sb::block_size,
+          sb = bch_sb.block_size,
           default = 4 << 10,
           hint = "size")]
     pub block_size: u16,
@@ -583,7 +583,7 @@ pub struct bch_opts {
     /// Specifies the bucket size; must be greater than the btree node size
     #[opt(uint(0, i64::MAX),
           flags = device | human_readable | sb_field_sectors,
-          sb = bch_member::bucket_size,
+          sb = bch_member.bucket_size,
           hint = "size")]
     pub bucket_size: u32,
 
@@ -852,7 +852,8 @@ impl FieldValue for bool {
     fn from_u64(v: u64) -> Self { v & 1 != 0 }
 }
 
-/// A superblock field, by its accessors - c_bitmask!'s.
+/// A superblock field, by its accessors - c_bitmask!'s, or an integer
+/// field's.
 pub struct Field<T: ?Sized, V> {
     pub get: fn(&T) -> V,
     pub set: fn(&mut T, V),

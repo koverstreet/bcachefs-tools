@@ -1257,12 +1257,6 @@ impl bch_sb<Unvalidated> {
     }
 }
 
-c_bitmask! {
-    LE16_BITMASK(struct Head<bch_sb>, block_size), strip BCH_SB_ {
-        BCH_SB_BLOCK_SIZE(0, 16),
-    }
-}
-
 /*
  * Flags:
  * BCH_SB_INITALIZED	- set on first mount

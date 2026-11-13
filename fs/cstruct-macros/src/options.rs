@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! /// Filesystem block size
-//! #[opt(uint(512, 1 << 15), flags = fs | format | human_readable, sb = bch_sb::block_size,
+//! #[opt(uint(512, 1 << 15), flags = fs | format | human_readable, sb = bch_sb.block_size,
 //!       default = 4 << 10, hint = "size")]
 //! pub block_size: u16,
 //! ```
@@ -13,8 +13,9 @@
 //! `bitfield(Enum[, allowed])`, `with(OPT_FN)`, `str_member(member_field)` -
 //! a string or bitfield option's choices are its enum's Names. Then, each
 //! optional: `flags`, the OPT_* when it may be set, lowercase; `sb`, its
-//! superblock field's getter, `struct::getter`, its setter set_getter, or
-//! `struct::getter / setter`; `default`; `hint`.
+//! superblock field - `struct.field`, a little-endian integer, or by its
+//! getter, `struct::getter`, its setter set_getter, or `struct::getter /
+//! setter`; `default`; `hint`.
 //!
 //! It makes, from the fields in order - each one's id, Opt_name:
 //!
@@ -49,10 +50,18 @@ struct OptAttr {
     kind:    Ident,
     args:    Vec<Expr>,
     flags:   Vec<Ident>,
-    /// host::getter [/ setter]
-    sb:      Option<(Ident, Ident, Option<Ident>)>,
+    sb:      Option<SbField>,
     default: Option<Expr>,
     hint:    Option<Expr>,
+}
+
+/// An option's superblock field, on @host: an Le* integer, or what its
+/// accessors read and write.
+enum SbField {
+    /// host.field
+    Field { host: Ident, field: Ident },
+    /// host::getter [/ setter]
+    Accessors { host: Ident, getter: Ident, setter: Option<Ident> },
 }
 
 impl Parse for OptAttr {
@@ -76,13 +85,18 @@ impl Parse for OptAttr {
                     .into_iter().collect(),
                 "sb" => {
                     let host = input.parse()?;
-                    input.parse::<Token![::]>()?;
-                    let getter = input.parse()?;
-                    let setter = match input.parse::<Option<Token![/]>>()? {
-                        Some(_) => Some(input.parse()?),
-                        None => None,
-                    };
-                    a.sb = Some((host, getter, setter));
+                    a.sb = Some(match input.parse::<Option<Token![.]>>()? {
+                        Some(_) => SbField::Field { host, field: input.parse()? },
+                        None => {
+                            input.parse::<Token![::]>()?;
+                            let getter = input.parse()?;
+                            let setter = match input.parse::<Option<Token![/]>>()? {
+                                Some(_) => Some(input.parse()?),
+                                None => None,
+                            };
+                            SbField::Accessors { host, getter, setter }
+                        }
+                    });
                 }
                 "default" => a.default = Some(input.parse()?),
                 "hint" => a.hint = Some(input.parse()?),
@@ -152,14 +166,22 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
             quote!(#(c::OptFlags::#f.bits())|*)
         }
     };
+    // the head: what either state of a superblock has its fields on
+    let head = |host: &Ident| match host == "bch_sb" {
+        true => format_ident!("bch_sb__head"),
+        false => host.clone(),
+    };
     let sb = match &a.sb {
         None => quote!(None),
-        Some((host, getter, setter)) => {
-            // the head: what either state of a superblock has its fields on
-            let host = match host == "bch_sb" {
-                true => format_ident!("bch_sb__head"),
-                false => host.clone(),
-            };
+        Some(SbField::Field { host, field }) => {
+            let host = head(host);
+            quote!(Some(&#o::Field::<c::#host, u64> {
+                get: |t| u64::from(t.#field.get()),
+                set: |t, v| t.#field.set(v as _),
+            } as &dyn #o::SbOpt))
+        }
+        Some(SbField::Accessors { host, getter, setter }) => {
+            let host = head(host);
             let setter = setter.clone().unwrap_or_else(|| format_ident!("set_{getter}"));
             quote!(Some(&#o::Field::<c::#host, _> { get: |t| t.#getter(), set: |t, v| t.#setter(v) }
                         as &dyn #o::SbOpt))

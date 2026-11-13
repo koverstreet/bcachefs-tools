@@ -96,12 +96,6 @@ pub const BCH_MEMBER_NBUCKETS_MAX: u32 = c::INT_MAX as u32 - 64;
 pub const BCH_MEMBER_V1_BYTES: u32 = 56;
 
 c_bitmask! {
-    LE16_BITMASK(struct bch_member, bucket_size), strip BCH_MEMBER_ {
-        BCH_MEMBER_BUCKET_SIZE(0, 16),
-    }
-}
-
-c_bitmask! {
     LE64_BITMASK(struct bch_member, flags), strip BCH_MEMBER_ {
         BCH_MEMBER_STATE(0, 4),
         /* 4-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
