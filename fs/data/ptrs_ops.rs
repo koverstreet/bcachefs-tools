@@ -365,7 +365,7 @@ impl BkeyOps for c::BtreePtrV2 {
 
         crate::prt!(out, "\nseq {:x} written {} min_key {}{} ",
                     bp.seq.get(), bp.sectors_written.get(),
-                    if bp.btree_ptr_range_updated() { "R " } else { "" },
+                    if bp.range_updated() { "R " } else { "" },
                     { bp.min_key });
         bkey_ptrs_to_text(out, fs, k);
     }

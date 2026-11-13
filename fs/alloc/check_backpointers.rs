@@ -437,7 +437,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         let Some(bp) = bp_k.arm::<c::Backpointer>() else { return Ok(ControlFlow::Continue(())) };
         let v = *bp.v();
 
-        if before_bucket_gen && (v.bucket_gen != a.generation || { v.flags } != 0) {
+        if before_bucket_gen && (v.bucket_gen != a.generation || v.flags.into_bits() != 0) {
             backpointer_del(t, Btree::backpointers, bp_k.k.p)?;
             nr_deletes += 1;
 

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
+use cstruct_macros::{bitfield, bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -270,7 +270,7 @@ pub struct BtreePtr {
 
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct BtreePtrV2 {
     pub v: c::bch_val,
 
@@ -278,16 +278,17 @@ pub struct BtreePtrV2 {
     pub mem_ptr: crate::util::projections::Volatile<u64>,
     pub seq: Le64,
     pub sectors_written: Le16,
-    pub flags: Le16,
+    #[members]
+    pub flags: BtreePtrV2Flags,
     pub min_key: Bpos,
     pub _data: [u64; 0],
     pub start: [c::bch_extent_ptr; 0],
 }
 
-c_bitmask! {
-    LE16_BITMASK(struct BtreePtrV2, flags) {
-        BTREE_PTR_RANGE_UPDATED(0, 1),
-    }
+#[bitfield(Le16)]
+pub struct BtreePtrV2Flags {
+    range_updated:  bool,
+    __:             u15,
 }
 
 #[whole(tail = _data: [u64], bkey)]

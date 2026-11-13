@@ -44,7 +44,7 @@ use crate::util::printbuf::parse_human_u64;
 use crate::util::sysfs::parse_int;
 use core::ffi::{CStr, c_ulong};
 use crate::cstructs::c::InodeOptId_arms;
-use crate::c::{bch_member, bch_sb_field_ext, CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt, WriteDegradedAction, MemberState, BCH_REPLICAS_MAX, BCH_SB_SECTOR};
+use crate::c::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt, WriteDegradedAction, MemberState, BCH_REPLICAS_MAX, BCH_SB_SECTOR};
 use crate::format::DataType;
 use crate::types::bits_to_longs;
 use cstruct_macros::{MaybeZeroable, bch_enum, Options, TypeInfo};
@@ -589,7 +589,7 @@ pub struct bch_opts {
 
     /// Data written to this device will be considered
     /// to have already been replicated n times
-    #[opt(uint(0, bch_member::DURABILITY_MAX - 1),
+    #[opt(uint(0, c::bch_member_flags::DURABILITY_MAX - 1),
           flags = device | runtime | sb_field_one_bias,
           sb = bch_member::durability,
           default = 1,
@@ -630,7 +630,7 @@ pub struct bch_opts {
 
     /// Per-device readahead window size; summed across
     ///  all devices to set the filesystem readahead
-    #[opt(uint(0, bch_sb_field_ext::DEV_READAHEAD_MAX << 9),
+    #[opt(uint(0, c::bch_sb_field_ext_flags0::DEV_READAHEAD_MAX << 9),
           flags = fs | mount | runtime | human_readable | sb_field_sectors,
           sb = bch_sb_field_ext::dev_readahead,
           default = 2 << 20,

@@ -718,13 +718,8 @@ macro_rules! bitmasks {
     };
 }
 bitmasks! {
-    AllocV3_flags_BITMASKS, AllocV4_flags_BITMASKS, Backpointer_flags_BITMASKS,
-    BtreePtrV2_flags_BITMASKS, bch_disk_group_flags_0_BITMASKS,
-    bch_member_flags_BITMASKS, ReflinkP_idx_flags_BITMASKS, bch_sb_field_crypt_flags_BITMASKS,
-    bch_sb_field_crypt_kdf_flags_BITMASKS, bch_sb_field_error_entry_v_BITMASKS,
-    bch_sb_field_ext_flags0_BITMASKS, Snapshot_flags_BITMASKS,
-    Subvolume_flags_BITMASKS, bset_flags_BITMASKS, btree_node_flags_BITMASKS,
-    jset_flags_BITMASKS, recovery_pass_entry_flags_BITMASKS,
+    Snapshot_flags_BITMASKS, Subvolume_flags_BITMASKS, bset_flags_BITMASKS, btree_node_flags_BITMASKS,
+    jset_flags_BITMASKS,
 }
 
 /// Whether BITMASKS lists @name: c_bitmask!'s check that its table is here.

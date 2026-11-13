@@ -4,13 +4,14 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_bitmask, whole, MaybeZeroable, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{bitfield, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers)]
 pub struct ReflinkP {
     pub v: c::bch_val,
-    pub idx_flags: Le64,
+    #[members]
+    pub idx_flags: ReflinkPIdxFlags,
     /*
      * A reflink pointer might point to an indirect extent which is then
      * later split (by copygc or rebalance). If we only pointed to part of
@@ -23,12 +24,12 @@ pub struct ReflinkP {
     pub back_pad: Le32,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct ReflinkP, idx_flags), strip REFLINK_P_ {
-        REFLINK_P_IDX(0, 56),
-        REFLINK_P_ERROR(56, 57),
-        REFLINK_P_MAY_UPDATE_OPTIONS(57, 58),
-    }
+#[bitfield(Le64)]
+pub struct ReflinkPIdxFlags {
+    #[bits(56)] idx:    u64,
+    error:              bool,
+    may_update_options: bool,
+    __:                 u6,
 }
 
 #[whole(tail = _data: [u64], bkey)]

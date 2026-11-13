@@ -85,11 +85,11 @@ impl ErrorEntry for c::bch_sb_field_error_entry {
     const V2: bool = false;
 
     fn id(&self) -> SbErrorId {
-        SbErrorId(self.bch_sb_error_entry_id() as u32)
+        SbErrorId(self.v.id() as u32)
     }
 
     fn nr(&self) -> u64 {
-        self.bch_sb_error_entry_nr()
+        self.v.nr()
     }
 
     fn first(&self) -> u64 {

@@ -390,9 +390,9 @@ impl BkeyOps for c::ReflinkP {
         // what it covers ends at an indirect position there can be: what's
         // added to idx - cutting its front, remapping it - stays within that
         let end = p.idx() + v.k.k.size as u64 + p.back_pad.get() as u64;
-        bkey_fsck_err_on!(v, end > c::ReflinkP::IDX_MAX, id::reflink_p_idx_bad,
+        bkey_fsck_err_on!(v, end > c::ReflinkPIdxFlags::IDX_MAX, id::reflink_p_idx_bad,
                           "past the maximum indirect position: idx {} + size {} + back_pad {} > {}",
-                          p.idx(), { v.k.k.size }, p.back_pad.get(), c::ReflinkP::IDX_MAX)
+                          p.idx(), { v.k.k.size }, p.back_pad.get(), c::ReflinkPIdxFlags::IDX_MAX)
     }
 
     #[cold]
@@ -450,8 +450,8 @@ impl BkeyOps for c::ReflinkP {
 /// Either kind: reflink_ps' indices are offsets in inode 0, so nothing past it
 /// can be referenced - and gc's table, built in key order, is in offset order.
 fn indirect_pos_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    bkey_fsck_err_on!(v, bkey_gt(v.k.k.p, pos(0, c::ReflinkP::IDX_MAX)), id::reflink_v_pos_bad,
-                      "indirect extent above maximum position 0:{}", c::ReflinkP::IDX_MAX)
+    bkey_fsck_err_on!(v, bkey_gt(v.k.k.p, pos(0, c::ReflinkPIdxFlags::IDX_MAX)), id::reflink_v_pos_bad,
+                      "indirect extent above maximum position 0:{}", c::ReflinkPIdxFlags::IDX_MAX)
 }
 
 impl BkeyOps for c::ReflinkV {
@@ -814,7 +814,7 @@ unsafe fn __make_extent_indirect(
      * filesystem: we need to implement wraparound, with a cursor in the
      * logged ops btree:
      */
-    if bkey_ge(reflink_iter.pos(), pos(0, c::ReflinkP::IDX_MAX - orig.k.size as u64)) {
+    if bkey_ge(reflink_iter.pos(), pos(0, c::ReflinkPIdxFlags::IDX_MAX - orig.k.size as u64)) {
         return Err(c::ENOSPC.into());
     }
 

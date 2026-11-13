@@ -3139,7 +3139,7 @@ mod tests {
         let f = field(&mut buf, c::SbFieldType::ext, 15);
         let e = f.arm::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
         let w = e.whole().expect("all of it");
-        assert_eq!((w.flags0.get(), e.flags0().get(), size_of_val(e)), (7, 7, 120));
+        assert_eq!((w.flags0.into_bits().get(), e.flags0().into_bits().get(), size_of_val(e)), (7, 7, 120));
 
         let mut buf = [0u64; 16];
         let f = field(&mut buf, c::SbFieldType::ext, 10);

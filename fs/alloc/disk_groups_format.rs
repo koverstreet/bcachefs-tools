@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::Le64;
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{c_bitmask, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bitfield, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 
 pub const BCH_SB_LABEL_SIZE: u32 = 32;
 
@@ -13,15 +13,16 @@ pub const BCH_SB_LABEL_SIZE: u32 = 32;
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_disk_group {
     pub label: [u8; c::BCH_SB_LABEL_SIZE as usize],
-    pub flags: [Le64; 2],
+    pub flags0: bch_disk_group_flags,
+    pub flags1: Le64,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct bch_disk_group, flags[0]) {
-        BCH_GROUP_DELETED(0, 1),
-        BCH_GROUP_DATA_ALLOWED(1, 6),
-        BCH_GROUP_PARENT(6, 24),
-    }
+#[bitfield(Le64)]
+pub struct bch_disk_group_flags {
+    deleted:                    bool,
+    #[bits(5)]  data_allowed:   u64,
+    #[bits(18)] parent:         u64,
+    #[bits(40)] __:             u64,
 }
 
 #[unsized_vstruct]

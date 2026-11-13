@@ -93,7 +93,7 @@ fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
 
     let new = btree_ptr_to_v2(b.contents(), |_, v| {
         v.min_key = new_min;
-        v.set_btree_ptr_range_updated(true.into());
+        v.set_range_updated(true);
     });
 
     trans.node_lock_write(paths, idx, level)?;
@@ -122,7 +122,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
 
     let new = btree_ptr_to_v2(b.contents(), |k, v| {
         k.p = new_max;
-        v.set_btree_ptr_range_updated(true.into());
+        v.set_range_updated(true);
     });
 
     trans.node_lock_write(paths, idx, level)?;

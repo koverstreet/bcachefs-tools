@@ -3,9 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default, Le32, Le64};
+use crate::types::{c_default, Le64};
 use core::ffi::c_ulong;
-use cstruct_macros::{c_bitmask, xmacro, grown, whole, MaybeZeroable, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{bitfield, xmacro, grown, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View,
+                     SizedVal};
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
@@ -55,11 +56,12 @@ xmacro! {
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct AllocV3 {
     pub v: c::bch_val,
     pub journal_seq: Le64,
-    pub flags: Le32,
+    #[members]
+    pub flags: AllocV3Flags,
     pub nr_fields: u8,
     pub generation: u8,
     pub oldest_gen: u8,
@@ -67,11 +69,11 @@ pub struct AllocV3 {
     pub data: [u8; 0],
 }
 
-c_bitmask! {
-    LE32_BITMASK(struct AllocV3, flags), strip BCH_ALLOC_V3_ {
-        BCH_ALLOC_V3_NEED_DISCARD(0, 1),
-        BCH_ALLOC_V3_NEED_INC_GEN(1, 2),
-    }
+#[bitfield(Le32)]
+pub struct AllocV3Flags {
+    need_discard: bool,
+    need_inc_gen: bool,
+    __:           u30,
 }
 
 /*
@@ -99,11 +101,12 @@ c_bitmask! {
  */
 #[grown(from = journal_seq_empty, bkey)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct AllocV4 {
     pub v: c::bch_val,
     pub journal_seq_nonempty: u64,
-    pub flags: u32,
+    #[members]
+    pub flags: AllocV4Flags,
     pub generation: u8,
     pub oldest_gen: u8,
     pub data_type: u8,
@@ -124,13 +127,13 @@ pub const BCH_ALLOC_V4_U64s_V0: u32 = 6;
 #[allow(non_upper_case_globals)]
 pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::AllocV4>() / size_of::<u64>();
 
-c_bitmask! {
-    BITMASK(struct AllocV4, flags), strip BCH_ALLOC_V4_ {
-        BCH_ALLOC_V4_NEED_DISCARD(0, 1),
-        BCH_ALLOC_V4_NEED_INC_GEN(1, 2),
-        BCH_ALLOC_V4_BACKPOINTERS_START(2, 8),
-        BCH_ALLOC_V4_NR_BACKPOINTERS(8, 14),
-    }
+#[bitfield(u32)]
+pub struct AllocV4Flags {
+    need_discard:                   bool,
+    need_inc_gen:                   bool,
+    #[bits(6)] backpointers_start:  u64,
+    #[bits(6)] nr_backpointers:     u64,
+    __:                             u18,
 }
 
 #[repr(C, align(8))]

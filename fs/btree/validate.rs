@@ -61,7 +61,7 @@ fn ptr_sectors_written(k: BkeySC<'_>) -> u32 {
 }
 
 fn ptr_range_updated(k: &BkeyI) -> bool {
-    BkeySC::from(k).arm::<c::BtreePtrV2>().is_some_and(|v2| v2.v().btree_ptr_range_updated())
+    BkeySC::from(k).arm::<c::BtreePtrV2>().is_some_and(|v2| v2.v().range_updated())
 }
 
 fn err_msg(out: &mut Printbuf, ca: Option<&Dev>, b: &BtreeNode, at: ErrAt, msg: &dyn ToText) {
@@ -332,7 +332,7 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
         if let Some(bp) = &v2 {
             let bp = bp.v();
 
-            if bp.btree_ptr_range_updated() {
+            if bp.range_updated() {
                 if write {
                     return Err(v.write_err(ErrAt::NODE,
                         crate::message!("pointer has range updated, but the node has never been written")));

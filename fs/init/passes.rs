@@ -339,7 +339,7 @@ impl SbFieldOps for c::bch_sb_field_recovery_passes {
             names::prt_name(out, <Pass as names::Names>::ENTRIES, from_stable(stable) as u64);
             prt!(out, "\t{}\t{}{}\n", DateTime(e.last_run.get() as i64),
                  Nsecs(u64::from(e.last_runtime.get()) * NSEC_PER_SEC),
-                 if e.bch_recovery_pass_no_ratelimit() { " (no ratelimit)" } else { "" });
+                 if e.no_ratelimit() { " (no ratelimit)" } else { "" });
         }
     }
 }
@@ -377,7 +377,7 @@ fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a
 /// passes, and the in-memory one of failing passes, each with its own entries.
 pub fn entry_ratelimited(e: &c::recovery_pass_entry, runtime_fraction: u32) -> bool {
     let now = ktime_get_real_seconds() as u64;
-    !e.bch_recovery_pass_no_ratelimit() &&
+    !e.no_ratelimit() &&
         u64::from(e.last_runtime.get()) * u64::from(runtime_fraction) > now.wrapping_sub(e.last_run.get())
 }
 
@@ -395,8 +395,8 @@ pub fn want_ratelimit(fs: &Fs, pass: Pass, runtime_fraction: u32) -> bool {
 /// ran: a repair that found more to do.
 pub fn set_no_ratelimit(fs: &Fs, pass: Pass) {
     let mut sb = fs.sb_lock();
-    if let Some(e) = entry_mut(fs, &mut sb, pass).filter(|e| !e.bch_recovery_pass_no_ratelimit()) {
-        e.set_bch_recovery_pass_no_ratelimit(true);
+    if let Some(e) = entry_mut(fs, &mut sb, pass).filter(|e| !e.no_ratelimit()) {
+        e.set_no_ratelimit(true);
         fs.write_super(&mut sb);
     }
 }
@@ -419,7 +419,7 @@ fn pass_complete(fs: &Fs, pass: Pass, start_time: i64) {
         let end_time = ktime_get_real_seconds();
         e.last_run = Le64::new(end_time as u64);
         e.last_runtime = Le32::new((end_time - start_time).max(0) as u32);
-        e.set_bch_recovery_pass_no_ratelimit(false);
+        e.set_no_ratelimit(false);
     }
     fs.write_super(&mut sb);
 }

@@ -178,8 +178,8 @@ trait DiskGroup {
 }
 
 impl DiskGroup for c::bch_disk_group {
-    fn deleted(&self) -> bool { self.bch_group_deleted() }
-    fn parent(&self)  -> u32  { self.bch_group_parent() as u32 }
+    fn deleted(&self) -> bool { self.flags0.deleted() }
+    fn parent(&self)  -> u32  { self.flags0.parent() as u32 }
     fn label(&self)   -> &[u8] { label_bytes(&self.label) }
 }
 
@@ -258,7 +258,7 @@ fn groups_reserve(sb: &mut (impl SbResize + ?Sized), n: usize) -> Result<(), Bch
         .ok_or(BchError::from(Errcode::BCH_ERR_ENOSPC_disk_label_add))?;
 
     for g in &mut groups.entries[nr..] {
-        g.set_bch_group_deleted(true);
+        g.flags0.set_deleted(true);
     }
     Ok(())
 }
@@ -273,9 +273,9 @@ fn group_add(sb: &mut (impl SbResize + ?Sized), parent: u32, name: &[u8]) -> u32
 
     g.label = Default::default();
     g.label[..name.len()].copy_from_slice(name);
-    g.set_bch_group_deleted(false);
-    g.set_bch_group_parent(parent.into());
-    g.set_bch_group_data_allowed(c::bch_disk_group::BCH_GROUP_DATA_ALLOWED_MAX);
+    g.flags0.set_deleted(false);
+    g.flags0.set_parent(parent.into());
+    g.flags0.set_data_allowed(c::bch_disk_group_flags::DATA_ALLOWED_MAX);
 
     i as u32
 }
@@ -452,8 +452,8 @@ fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, target: 
 
 fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], sb: &c::bch_sb) {
     for (d, s) in dst.iter_mut().zip(src.iter()) {
-        d.deleted = s.bch_group_deleted();
-        d.parent  = s.bch_group_parent() as u16;
+        d.deleted = s.flags0.deleted();
+        d.parent  = s.flags0.parent() as u16;
         d.label   = s.label;
     }
 
@@ -473,7 +473,9 @@ fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], s
 
 pub(crate) fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &[u8]) -> Result<(), BchError> {
     let v = dev_label_resolve(&mut fs.sb_resize(sb), name)?;
-    sb.fs_member_mut(dev).set_group(v.into());
+    // more groups than a member's 8 bit group field can name
+    sb.fs_member_mut(dev).set_group_checked(v.into())
+        .map_err(|()| BchError::from(Errcode::BCH_ERR_ENOSPC_disk_label_add))?;
     c::bch_sb_field_disk_groups::to_cpu(fs, sb)
 }
 
@@ -733,8 +735,8 @@ mod tests {
     /// @parent: index + 1.
     fn group(name: &str, parent: u32, deleted: bool) -> c::bch_disk_group {
         let mut g = c::bch_disk_group { label: label(name), ..Default::default() };
-        g.set_bch_group_parent(parent.into());
-        g.set_bch_group_deleted(deleted);
+        g.flags0.set_parent(parent.into());
+        g.flags0.set_deleted(deleted);
         g
     }
 
@@ -781,7 +783,7 @@ mod tests {
         let groups = sb_groups(sb.sb());
         assert_eq!(groups.iter().map(|g| g.parent()).collect::<Vec<_>>(), [0, 1, 1, 0]);
         assert!(groups.iter().all(|g| !g.deleted() &&
-            g.bch_group_data_allowed() == c::bch_disk_group::BCH_GROUP_DATA_ALLOWED_MAX));
+            g.flags0.data_allowed() == c::bch_disk_group_flags::DATA_ALLOWED_MAX));
         assert_eq!(path(groups, 2), "ssd.slow");
     }
 
@@ -806,7 +808,7 @@ mod tests {
         let mut sb = new_sb();
         sb.disk_path_find_or_create(b"a_longer_label").unwrap();
         sb.disk_path_find_or_create(b"b").unwrap();
-        sb.field_mut::<c::bch_sb_field_disk_groups>().unwrap().entries[0].set_bch_group_deleted(true);
+        sb.field_mut::<c::bch_sb_field_disk_groups>().unwrap().entries[0].flags0.set_deleted(true);
 
         assert_eq!(sb.disk_path_find(b"a_longer_label"), None);
         assert_eq!(sb.disk_path_find_or_create(b"c").unwrap(), 0);

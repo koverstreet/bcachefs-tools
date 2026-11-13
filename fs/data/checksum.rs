@@ -533,7 +533,7 @@ impl Fs {
 impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
     fn validate(_sb: &c::bch_sb<Unvalidated>, crypt: &c::bch_sb_field_crypt<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
-        let kdf = crypt.bch_crypt_kdf_type();
+        let kdf = crypt.kdf_type();
         sb_err_on!(err, kdf != u64::from(c::KdfType::BCH_KDF_SCRYPT.0), BCH_ERR_invalid_sb_crypt,
                    "bad kdf type {kdf}")?;
         Ok(())
@@ -541,10 +541,10 @@ impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
 
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
                 crypt: &c::bch_sb_field_crypt<Unvalidated>) {
-        write!(out, "KFD:               {}\n", crypt.bch_crypt_kdf_type());
-        write!(out, "scrypt n:          {}\n", crypt.bch_kdf_scrypt_n());
-        write!(out, "scrypt r:          {}\n", crypt.bch_kdf_scrypt_r());
-        write!(out, "scrypt p:          {}\n", crypt.bch_kdf_scrypt_p());
+        write!(out, "KFD:               {}\n", crypt.kdf_type());
+        write!(out, "scrypt n:          {}\n", crypt.scrypt_n());
+        write!(out, "scrypt r:          {}\n", crypt.scrypt_r());
+        write!(out, "scrypt p:          {}\n", crypt.scrypt_p());
     }
 }
 
@@ -561,14 +561,14 @@ impl c::bch_sb_field_crypt {
     /// unencrypted - formatted with --no_passphrase - never had any, so this
     /// has to run before the first passphrase is set on it.
     pub fn kdf_init(&mut self) {
-        self.set_bch_crypt_kdf_type(c::KdfType::BCH_KDF_SCRYPT.0.into());
-        self.set_bch_kdf_scrypt_n(16384u64.ilog2().into());
-        self.set_bch_kdf_scrypt_r(8u64.ilog2().into());
-        self.set_bch_kdf_scrypt_p(16u64.ilog2().into());
+        self.set_kdf_type(c::KdfType::BCH_KDF_SCRYPT.0.into());
+        self.set_scrypt_n(16384u64.ilog2().into());
+        self.set_scrypt_r(8u64.ilog2().into());
+        self.set_scrypt_p(16u64.ilog2().into());
     }
 
     pub fn derive_passphrase(&self, passphrase: &[u8]) -> Result<c::bch_key, BchError> {
-        let kdf = self.bch_crypt_kdf_type();
+        let kdf = self.kdf_type();
         assert!(kdf == u64::from(c::KdfType::BCH_KDF_SCRYPT.0), "unknown kdf type {kdf}");
 
         /*
@@ -577,7 +577,7 @@ impl c::bch_sb_field_crypt {
          * mean nothing ever initialized them - the key in this
          * superblock was never wrapped with a passphrase.
          */
-        let (n_log, r_log, p_log) = (self.bch_kdf_scrypt_n(), self.bch_kdf_scrypt_r(), self.bch_kdf_scrypt_p());
+        let (n_log, r_log, p_log) = (self.scrypt_n(), self.scrypt_r(), self.scrypt_p());
         // A corrupt superblock's: scrypt takes N as a u64, r and p as u32s
         if n_log >= 64 || r_log >= 32 || p_log >= 32 {
             std::eprintln!("cannot derive a key from a passphrase: scrypt parameters out of range \

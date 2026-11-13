@@ -169,7 +169,7 @@ impl BkeyOps for c::Backpointer {
         let mut bp = k.arm::<c::Backpointer>().expect("a backpointer");
         let v = bp.v_mut();
 
-        v.flags = { v.flags }.swap_bytes();
+        v.flags = c::BackpointerFlags::from_bits(v.flags.into_bits().swap_bytes());
         v.bucket_len = { v.bucket_len }.swap_bytes();
         let mut pos = v.pos;
         pos.swab();

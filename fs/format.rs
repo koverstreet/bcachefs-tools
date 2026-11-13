@@ -574,41 +574,42 @@ pub struct bch_csum {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers)]
 pub struct Backpointer {
     pub v: c::bch_val,
     pub btree_id: u8,
     pub level: u8,
     pub data_type: u8,
     pub bucket_gen: u8,
-    pub flags: u32,
+    #[members]
+    pub flags: BackpointerFlags,
     pub bucket_len: u32,
     pub pos: Bpos,
 }
 
-c_bitmask! {
-    BITMASK(struct Backpointer, flags), strip BACKPOINTER_ {
-        /*
-         * Denormalized cache of "is this bp's extent listed in reconcile_phys?":
-         *
-         * fsck needs to check that the reconcile_phys btrees agree with the extents
-         * btree, but a direct reconcile_phys <-> extents check would be expensive:
-         * for every reconcile_phys entry (keyed by bucket position), we'd have to do
-         * a random lookup against the extents btree. Instead, mirror the work_id into
-         * the backpointer so fsck can do two cheap pairwise checks:
-         *
-         *   - reconcile_phys <-> backpointers: both keyed by bucket position, indexed
-         *   - backpointers   <-> extents:	already required for backpointer fsck
-         *
-         * Invariant: when bp.flags PHYS != 0, reconcile_phys[PHYS] must have an entry
-         * at bp.k.p, and the extent must carry a bch_extent_reconcile entry whose
-         * rb_work_id_phys() equals PHYS. Every path that mutates reconcile_opts on an
-         * extent must keep the bp's PHYS flag in sync.
-         */
-        BACKPOINTER_RECONCILE_PHYS(0, 2),
-        BACKPOINTER_ERASURE_CODED(2, 3),
-        BACKPOINTER_STRIPE_PTR(3, 4),
-    }
+#[bitfield(u32)]
+pub struct BackpointerFlags {
+    /*
+     * Denormalized cache of "is this bp's extent listed in reconcile_phys?":
+     *
+     * fsck needs to check that the reconcile_phys btrees agree with the extents
+     * btree, but a direct reconcile_phys <-> extents check would be expensive:
+     * for every reconcile_phys entry (keyed by bucket position), we'd have to do
+     * a random lookup against the extents btree. Instead, mirror the work_id into
+     * the backpointer so fsck can do two cheap pairwise checks:
+     *
+     *   - reconcile_phys <-> backpointers: both keyed by bucket position, indexed
+     *   - backpointers   <-> extents:	already required for backpointer fsck
+     *
+     * Invariant: when bp.flags PHYS != 0, reconcile_phys[PHYS] must have an entry
+     * at bp.k.p, and the extent must carry a bch_extent_reconcile entry whose
+     * rb_work_id_phys() equals PHYS. Every path that mutates reconcile_opts on an
+     * extent must keep the bp's PHYS flag in sync.
+     */
+    #[bits(2)] reconcile_phys:  u64,
+    erasure_coded:              bool,
+    stripe_ptr:                 bool,
+    __:                         u28,
 }
 
 /* Optional/variable size superblock sections: */
@@ -900,20 +901,22 @@ pub struct bch_encrypted_key {
  */
 #[whole]
 #[repr(C)]
-#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb_field_crypt {
     pub field: Head<c::bch_sb_field>,
 
-    pub flags: Le64,
-    pub kdf_flags: Le64,
+    #[members]
+    pub flags: bch_sb_field_crypt_flags,
+    #[members]
+    pub kdf_flags: bch_sb_field_crypt_kdf_flags,
     pub key: c::bch_encrypted_key,
 }
 vstruct!(bch_sb_field_crypt, field.u64s, start = 0);
 
-c_bitmask! {
-    LE64_BITMASK(struct bch_sb_field_crypt, flags) {
-        BCH_CRYPT_KDF_TYPE(0, 4),
-    }
+#[bitfield(Le64)]
+pub struct bch_sb_field_crypt_flags {
+    #[bits(4)]  kdf_type:   u64,
+    #[bits(60)] __:         u64,
 }
 
 #[bch_enum(open)]
@@ -923,13 +926,13 @@ pub enum KdfType {
     BCH_KDF_NR = 1,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct bch_sb_field_crypt, kdf_flags) {
-        /* stored as base 2 log of scrypt params: */
-        BCH_KDF_SCRYPT_N(0, 16),
-        BCH_KDF_SCRYPT_R(16, 32),
-        BCH_KDF_SCRYPT_P(32, 48),
-    }
+#[bitfield(Le64)]
+pub struct bch_sb_field_crypt_kdf_flags {
+    /* stored as base 2 log of scrypt params: */
+    #[bits(16)] scrypt_n:   u64,
+    #[bits(16)] scrypt_r:   u64,
+    #[bits(16)] scrypt_p:   u64,
+    #[bits(16)] __:         u64,
 }
 
 /*
@@ -972,13 +975,14 @@ vstruct_container!(bch_sb_field_clean, jset_entry);
 /* sections from before btrees_lost_data are 88 bytes: what validate accepts */
 #[grown(from = btrees_lost_data)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb_field_ext {
     pub field: Head<c::bch_sb_field>,
     pub recovery_passes_required: [Le64; 2],
     pub errors_silent: [Le64; 8],
     pub btrees_lost_data: Le64,
-    pub flags0: Le64,
+    #[members]
+    pub flags0: bch_sb_field_ext_flags0,
     /*
      * Like btrees_lost_data, but never cleared - btrees_lost_data gates
      * reconstruction and is cleared when repair completes; this is the
@@ -998,16 +1002,15 @@ pub struct bch_sb_field_ext {
 }
 vstruct!(bch_sb_field_ext, field.u64s, start = 0);
 
-c_bitmask! {
-    LE64_BITMASK(struct bch_sb_field_ext, flags0), strip BCH_SB_EXT_ {
-        BCH_SB_EXT_DEV_READAHEAD(0, 20),
-        BCH_SB_EXT_EC_STRIPE_BUF_LIMIT(20, 26),
-        BCH_SB_EXT_SCRUB_MAX_REWIND_SECS(26, 38),
-        BCH_SB_EXT_DISCARD_BUFFER(38, 42),
-        BCH_SB_EXT_BTREE_CACHE_SHRINKER_SEEKS(42, 49),
-        BCH_SB_EXT_MISSING_DEV_TIMEOUT(49, 61),
-        BCH_SB_EXT_JOURNAL_REPLICAS(61, 64),
-    }
+#[bitfield(Le64)]
+pub struct bch_sb_field_ext_flags0 {
+    #[bits(20)] dev_readahead:              u64,
+    #[bits(6)]  ec_stripe_buf_limit:        u64,
+    #[bits(12)] scrub_max_rewind_secs:      u64,
+    #[bits(4)]  discard_buffer:             u64,
+    #[bits(7)]  btree_cache_shrinker_seeks: u64,
+    #[bits(12)] missing_dev_timeout:        u64,
+    #[bits(3)]  journal_replicas:           u64,
 }
 
 // Superblock:

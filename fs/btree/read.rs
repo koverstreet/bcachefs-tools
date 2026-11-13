@@ -394,7 +394,7 @@ impl NodePtr {
             written,
             end:           if written != 0 { written } else { fs.btree_sectors() as usize },
             seq:           v2.map(|v2| v2.seq.get()),
-            range_updated: v2.is_some_and(|v2| v2.btree_ptr_range_updated()),
+            range_updated: v2.is_some_and(|v2| v2.range_updated()),
         }
     }
 }

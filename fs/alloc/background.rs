@@ -646,7 +646,7 @@ pub fn alloc_to_v4(k: BkeySC<'_>) -> c::AllocV4 {
         let u = AllocUnpacked::new(k);
         let mut a = c::AllocV4::default();
         a.journal_seq_nonempty = u.journal_seq;
-        a.flags                = u.need_discard.into();
+        a.set_need_discard(u.need_discard);
         a.generation           = u.generation;
         a.oldest_gen           = u.oldest_gen;
         a.data_type            = u.data_type;

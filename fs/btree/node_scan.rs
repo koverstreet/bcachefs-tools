@@ -120,7 +120,7 @@ impl FoundBtreeNode {
         k.v.seq = Le64::new(self.cookie);
         k.v.sectors_written = Le16::new(self.sectors_written);
         k.v.min_key = self.min_key;
-        k.v.set_btree_ptr_range_updated(self.range_updated.into());
+        k.v.set_range_updated(self.range_updated);
         k.ptrs[..self.ptrs.len()].copy_from_slice(&self.ptrs);
         k
     }

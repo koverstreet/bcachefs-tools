@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{c_bitmask, bch_enum, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, unsized_vstruct, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
 
 /*
  * We refer to members with bitmasks in various places - but we need to get rid
@@ -40,7 +40,7 @@ pub enum MemberErrorType {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_member {
     pub uuid: c::__uuid_t,
     pub nbuckets: Le64, /* device size */
@@ -50,7 +50,8 @@ pub struct bch_member {
     pub pad: [u8; 3],
     pub last_mount: Le64, /* time_t */
 
-    pub flags: Le64,
+    #[members]
+    pub flags: bch_member_flags,
     pub iops: [Le32; 4],
     pub errors: [Le64; c::MemberErrorType::NR as usize],
     pub errors_at_reset: [Le64; c::MemberErrorType::NR as usize],
@@ -95,21 +96,22 @@ pub const BCH_MEMBER_NBUCKETS_MAX: u32 = c::INT_MAX as u32 - 64;
 
 pub const BCH_MEMBER_V1_BYTES: u32 = 56;
 
-c_bitmask! {
-    LE64_BITMASK(struct bch_member, flags), strip BCH_MEMBER_ {
-        BCH_MEMBER_STATE(0, 4),
-        /* 4-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
-        BCH_MEMBER_DISCARD(14, 15),
-        BCH_MEMBER_DATA_ALLOWED(15, 20),
-        BCH_MEMBER_GROUP(20, 28),
-        BCH_MEMBER_DURABILITY(28, 30),
-        BCH_MEMBER_FREESPACE_INITIALIZED(30, 31),
-        BCH_MEMBER_RESIZE_ON_MOUNT(31, 32),
-        BCH_MEMBER_ROTATIONAL(32, 33),
-        BCH_MEMBER_ROTATIONAL_SET(33, 34),
-        BCH_MEMBER_INITIALIZED(34, 38),
-        /* 38-46 free, was FAILURE_DOMAIN (now a string, member.failure_domain) */
-    }
+#[bitfield(Le64)]
+pub struct bch_member_flags {
+    #[bits(4)]  state:              u64,
+    /* 4-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
+    #[bits(10)] __:                 u64,
+    discard:                        bool,
+    #[bits(5)]  data_allowed:       u64,
+    #[bits(8)]  group:              u64,
+    #[bits(2)]  durability:         u64,
+    freespace_initialized:          bool,
+    resize_on_mount:                bool,
+    rotational:                     bool,
+    rotational_set:                 bool,
+    #[bits(4)]  initialized:        u64,
+    /* 38-46 free, was FAILURE_DOMAIN (now a string, member.failure_domain) */
+    #[bits(26)] __:                 u64,
 }
 
 #[bch_enum(open)]

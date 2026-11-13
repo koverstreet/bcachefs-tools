@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::types::Le64;
 use zerocopy::byteorder::little_endian as le;
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{bitfield, c_bitmask, bch_enum, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 use nestify::nest;
 
 #[bch_enum(flags)]
@@ -475,7 +475,7 @@ pub enum SbErrorId {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_error_entry {
-    pub v: Le64,
+    pub v: bch_sb_field_error_entry_v,
     pub last_error_time: Le64,
 }
 
@@ -488,11 +488,10 @@ pub struct bch_sb_field_errors {
 }
 vstruct!(unsized bch_sb_field_errors, field.u64s, start = 0);
 
-c_bitmask! {
-    LE64_BITMASK(struct bch_sb_field_error_entry, v) {
-        BCH_SB_ERROR_ENTRY_ID(0, 16),
-        BCH_SB_ERROR_ENTRY_NR(16, 64),
-    }
+#[bitfield(Le64)]
+pub struct bch_sb_field_error_entry_v {
+    #[bits(16)] id: u64,
+    #[bits(48)] nr: u64,
 }
 
 /*
