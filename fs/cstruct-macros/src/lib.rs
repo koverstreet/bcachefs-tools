@@ -494,9 +494,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
             #vis fn #set_checked(&mut self, v: #ty) -> Result<(), ()> {
                 let mut b = self.$field; b.#set_checked(v)?; self.$field = b; Ok(())
             }
-            #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) {
-                let mut b = self.$field; b.#set(f(b.#m())); self.$field = b;
-            }
+            #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) { self.#set(f(self.#m())) }
         }).collect::<Vec<_>>();
     let cell_fns = members.iter().filter(|(.., vis)| outside(vis))
         .map(|(m, set, set_checked, update, ty, vis)| quote! {
@@ -506,9 +504,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
             #vis fn #set_checked(&self, v: #ty) -> Result<(), ()> {
                 let mut b = self.$field.get(); b.#set_checked(v)?; self.$field.set(b); Ok(())
             }
-            #vis fn #update(&self, f: impl FnOnce(#ty) -> #ty) {
-                let mut b = self.$field.get(); b.#set(f(b.#m())); self.$field.set(b);
-            }
+            #vis fn #update(&self, f: impl FnOnce(#ty) -> #ty) { self.#set(f(self.#m())) }
         }).collect::<Vec<_>>();
     let fwd = format_ident!("__{name}_forward");
     let fwd_cell = format_ident!("__{name}_forward_cell");
