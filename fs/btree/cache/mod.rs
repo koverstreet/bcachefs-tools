@@ -114,7 +114,7 @@ use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::prt;
 use crate::util::closure::{closure_wait, closure_wake_up};
-use crate::util::sched::current;
+use crate::os::sched::current;
 use crate::fs::Fs;
 use crate::util::vstructs::Head;
 use core::mem::offset_of;

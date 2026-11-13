@@ -453,7 +453,7 @@ impl c::journal {
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         {
             let t = self.stop_thread.load(Relaxed);
-            assert!(t.is_null() || t == crate::util::sched::current() || self.halted(),
+            assert!(t.is_null() || t == crate::os::sched::current() || self.halted(),
                     "journal reservation after the journal stopped");
         }
 

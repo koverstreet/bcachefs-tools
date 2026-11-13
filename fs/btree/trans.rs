@@ -37,7 +37,7 @@ use crate::util::percpu::CpuGuard;
 use crate::util::percpu::{bch2_task_pid, Counters};
 use crate::util::rcu;
 use crate::util::refcount::{RefGuard, TryRefcount};
-use crate::util::sched;
+use crate::os::sched;
 use crate::util::time_stats::__bch2_time_stats_update;
 use crate::util::vstructs::{Unvalidated, UnvalidatedEntries, VstructRefEntries};
 use crate::util::{Printbuf, ToText};

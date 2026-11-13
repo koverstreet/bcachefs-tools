@@ -76,7 +76,7 @@ impl Fs {
         assert!(!self.flags.get(Flag::rw));
         /* the journal keys are frozen for the scrub, whose reads run on workqueues */
         assert!(!self.flags.get(Flag::scrub_journal));
-        assert!(self.recovery_task.load(Relaxed) == crate::util::sched::current());
+        assert!(self.recovery_task.load(Relaxed) == crate::os::sched::current());
 
         NotRw { fs: self, _task: core::marker::PhantomData }
     }

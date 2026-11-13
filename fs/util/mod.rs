@@ -36,7 +36,6 @@ pub mod raid;
 pub mod rcu;
 pub mod rcu_pending;
 pub mod refcount;
-pub mod sched;
 pub mod shrinker;
 pub mod siphash;
 pub mod sleep;

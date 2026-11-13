@@ -7,6 +7,7 @@ pub mod ioctl;
 pub mod iov_iter;
 pub mod kernel;
 pub mod ops;
+pub mod sched;
 pub mod seq_file;
 pub mod super_block;
 pub mod thread_with_file;

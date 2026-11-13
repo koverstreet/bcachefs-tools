@@ -19,7 +19,7 @@ use crate::locking::six::SixHold;
 use crate::prt;
 use crate::os::kernel::{cond_resched, local_clock, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
-use crate::util::sched::current;
+use crate::os::sched::current;
 use crate::util::time_stats::TimeStats;
 use c::BtreeNodeCacheState as State;
 use c::SixLockType::{self, SIX_LOCK_read, SIX_LOCK_write};

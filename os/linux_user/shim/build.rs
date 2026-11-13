@@ -119,6 +119,8 @@ fn main() {
         .allowlist_type("cds_.*")
         // wrapper.h's consts: codegen.h's, in-kernel
         .allowlist_var("RUST_CONST_HELPER_.*")
+        // and its functions named by macros: liburcu's flavour's
+        .allowlist_function("RUST_FN_HELPER_.*")
         // File mode bits: the kernel crate's bindings have them in-kernel.
         .allowlist_var("S_IF.*")
         .allowlist_var("S_ISGID")
@@ -181,9 +183,11 @@ fn main() {
         .generate()
         .expect("BindGen Generation Failure: [bcachefs-shim]");
 
-    // wrapper.h's consts, by the names of the macros they're of
+    // wrapper.h's consts and functions, by the names of the macros they're of
     std::fs::write(out_dir.join("bindings.rs"),
-                   bindings.to_string().replace("pub const RUST_CONST_HELPER_", "pub const "))
+                   bindings.to_string()
+                       .replace("pub const RUST_CONST_HELPER_", "pub const ")
+                       .replace("pub fn RUST_FN_HELPER_", "pub fn "))
         .expect("Writing to output file failed for: `bindings.rs`");
 
     // Compile the static-inline wrappers bindgen generated, matching the clang

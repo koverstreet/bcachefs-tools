@@ -42,7 +42,7 @@ impl c::journal {
         self.reclaim_stop();
 
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        self.stop_thread.store(crate::util::sched::current(), Relaxed);
+        self.stop_thread.store(crate::os::sched::current(), Relaxed);
         self.flush_pins(u64::MAX);
 
         /*

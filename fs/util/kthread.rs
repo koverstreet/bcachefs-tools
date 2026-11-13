@@ -230,7 +230,7 @@ impl Kthread {
     pub fn freezing() -> bool {
         // SAFETY: of the current task
         #[cfg(kernel)]
-        let f = unsafe { c::freezing(crate::util::sched::current()) };
+        let f = unsafe { c::freezing(crate::os::sched::current()) };
         #[cfg(not(kernel))]
         let f = false;
         f

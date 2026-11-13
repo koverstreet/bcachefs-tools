@@ -108,7 +108,10 @@ struct task_struct {
 
 #define MAX_RT_PRIO	0
 
-extern __thread struct task_struct *current;
+/* os/linux_user/sched.rs */
+struct task_struct *get_current(void);
+#define current get_current()
+void set_current(struct task_struct *);
 
 void linux_thread_init(void);
 void linux_thread_exit(void);

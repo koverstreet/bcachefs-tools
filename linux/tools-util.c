@@ -251,3 +251,18 @@ u32 crc32c(u32 crc, const void *buf, size_t size)
 }
 
 #endif /* HAVE_WORKING_IFUNC */
+
+#include <sys/syscall.h>
+#ifndef SYS_getrandom
+#include <linux/bug.h>
+
+/* getrandom()'s, with no syscall for it: include/linux/random.h */
+int urandom_fd;
+
+__attribute__((constructor(101)))
+static void rand_init(void)
+{
+	urandom_fd = open("/dev/urandom", O_RDONLY);
+	BUG_ON(urandom_fd < 0);
+}
+#endif

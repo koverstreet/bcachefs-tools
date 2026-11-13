@@ -38,7 +38,7 @@ use crate::list;
 use crate::locking::{spinlock_t, Locked};
 use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use crate::data_structures::list::ListLinks;
-use crate::util::sched;
+use crate::os::sched;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd};
 use core::ptr;
 

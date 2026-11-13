@@ -25,7 +25,7 @@ static void *kthread_start_fn(void *data)
 	rcu_register_thread();
 	bch_percpu_thread_init();
 
-	current = data;
+	set_current(data);
 	current->pid = syscall(SYS_gettid);	/* only knowable from in here */
 	schedule();
 	current->thread_fn(current->thread_data);

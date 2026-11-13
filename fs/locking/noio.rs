@@ -30,7 +30,7 @@ use super::{Exclusive, ExclusiveGuard, Locked, RawLock, RawLockBase, RawMovableL
             SharedGuard};
 use crate::cstructs::c;
 use crate::types::c_default;
-use crate::util::sched;
+use crate::os::sched;
 use core::ffi::{c_uint, c_void, CStr};
 
 pub(crate) use crate::c::{PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};

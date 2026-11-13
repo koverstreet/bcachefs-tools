@@ -33,7 +33,7 @@ use crate::{new_lock, prt};
 use crate::util::alloc::{AllocError, KVVec};
 use crate::os::kernel::HZ;
 use crate::util::percpu::{CpuGuard, PerCpu};
-use crate::util::sched;
+use crate::os::sched;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd, SleepError};
 use crate::util::{Printbuf, ToText};
 use core::panic::Location;

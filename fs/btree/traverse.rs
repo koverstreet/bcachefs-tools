@@ -460,7 +460,7 @@ impl BtreeTrans<'_> {
             prt!(&mut *msg, "\n");
         }
 
-        let _ = prt_task_backtrace(&mut msg, crate::util::sched::current(), 1);
+        let _ = prt_task_backtrace(&mut msg, crate::os::sched::current(), 1);
 
         let mut msg = msg.indent(2);
         match check_topology_msg(t, b, &mut msg) {

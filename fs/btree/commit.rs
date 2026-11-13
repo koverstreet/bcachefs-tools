@@ -38,7 +38,7 @@ use crate::os::kernel::{likely, prefetch, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::init::recovery::NotRw;
-use crate::util::sched;
+use crate::os::sched;
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{plain_bytes, EntryWalk, Unsized, Unvalidated, Validated};
 use crate::{bch_err, fs_fatal_error, fs_inconsistent, prt};

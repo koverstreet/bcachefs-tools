@@ -35,7 +35,7 @@ use crate::util::Printbuf;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::os::kernel::{dump_stack, local_clock};
 use crate::util::log::LogMsg;
-use crate::util::sched;
+use crate::os::sched;
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::Head;
 

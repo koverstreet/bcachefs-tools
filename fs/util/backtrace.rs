@@ -23,7 +23,7 @@ use crate::c;
 use crate::prt;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::demangle::prt_demangled;
-use crate::util::sched;
+use crate::os::sched;
 use crate::util::Printbuf;
 use core::ffi::{c_uint, c_ulong};
 
