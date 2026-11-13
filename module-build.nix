@@ -63,11 +63,6 @@ stdenv.mkDerivation {
     "RUST_LIB_SRC=${moduleRustLibSrc}"
   ];
 
-  postPatch = ''
-    substituteInPlace src/fs/bcachefs/Makefile \
-      --replace-fail '$(objtree)/vmlinux' '${kernel.dev}/vmlinux'
-  '';
-
   installPhase = ''
     runHook preInstall
     make -C ${kernel.dev}/lib/modules/${kernel.modDirVersion}/build M=$(pwd) modules_install "''${makeFlags[@]}" "''${installFlags[@]}"
