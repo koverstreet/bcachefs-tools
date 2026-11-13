@@ -18,7 +18,7 @@ nest! {
         pub mm: Option<crate::util::kernel::Mm>,
         pub iov: *const c::iovec,
         #[c_bitfield]
-        #>[bitfield(u8, ty = u32)]
+        #>[bitfield(u8)]
         pub bits: pub struct dio_write_bits {
             loop_:     u1,
             extending: u1,

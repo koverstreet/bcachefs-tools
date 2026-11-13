@@ -641,8 +641,8 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
     let repr = repr_attrs(&item);
     let derives = derive_names(&item);
     // X is generated: a derive generic_type() doesn't forward would be
-    // X__whole's alone, out of X's reach. CStruct is C's record of the
-    // struct as written, which is X__whole's
+    // X__whole's alone, out of X's reach. CStruct reads the struct as
+    // written, which is X__whole
     if let Some(d) = derives.iter().find(|d| *d != "CStruct" && !WHOLE_DERIVES.contains(&d.as_str())) {
         return Err(format!("{name}: #[derive({d})], but {name} - {name}<Whole> - is generated, and has \
                             only the derives generic_type() forwards to it: {}", WHOLE_DERIVES.join(", ")));

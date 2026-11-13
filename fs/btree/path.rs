@@ -122,7 +122,7 @@ pub struct btree_path_level<T: PathNode = cs::btree_bkey_cached_common> {
 }
 copy!([T: PathNode] btree_path_level<T>);
 
-#[bitfield(u16, ty = u32)]
+#[bitfield(u16)]
 pub struct btree_path_bits {
     #[bits(7)] pub btree_id: Btree,
     cached:           bool,

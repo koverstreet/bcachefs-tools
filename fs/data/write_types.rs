@@ -60,7 +60,7 @@ nest! {
             #[c_bitfield]
             #>[derive(CStruct, TypeInfo)]-
             #>[repr(C)]-
-            #>[bitfield(u8, ty = u32)]
+            #>[bitfield(u8)]
             pub bits: pub struct bch_write_bio_bits {
                 split:             u1,
                 bounce:            u1,

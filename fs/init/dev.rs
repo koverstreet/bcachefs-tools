@@ -308,7 +308,7 @@ nest! {
         /// Its bio, as big as the buffer, if @have_bio: Rust's alone
         pub bio: SbBio,
         #[c_bitfield]
-        #>[bitfield(u8, ty = u32)]
+        #>[bitfield(u8)]
         pub bits: pub struct bch_sb_handle_bits {
             have_layout: u1,
             have_bio:    u1,

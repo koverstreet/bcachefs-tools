@@ -37,7 +37,7 @@ nest! {
     #[derive(Clone, Copy, Default, CStruct)]
     pub struct GcStripeData {
         #[c_bitfield]
-        #>[bitfield(u8, ty = u32)]
+        #>[bitfield(u8)]
         pub bits: pub struct gc_stripe_bits {
             /* does a corresponding key exist in stripes btree? */
             alive: u1,

@@ -147,7 +147,7 @@ pub enum ExtentEntryType {
 }
 
 /* Compressed/uncompressed size are stored biased by 1: */
-#[bitfield(u64, ty = u32, align = 8)]
+#[bitfield(u64, align = 8)]
 #[derive(CStruct)]
 pub struct bch_extent_crc32 {
     #[bits(default = 1 << ExtentEntryType::crc32.0)]

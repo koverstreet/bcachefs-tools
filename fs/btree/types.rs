@@ -550,7 +550,7 @@ nest! {
         pub sort_order: u8,
         pub bkey_type: u8,
         #[c_bitfield]
-        #>[bitfield(u16, ty = u8)]
+        #>[bitfield(u16)]
         pub bits: pub struct btree_insert_entry_bits {
             #[bits(8)] pub btree_id: Btree,
             level:                     u3,

@@ -3,7 +3,7 @@
 //! Each parses its input with fs/types/cstruct.rs, so a mistake is a compile
 //! error at the item, and expands to its Rust side:
 //!
-//!   #[derive(CStruct)]   a #[repr(C)] struct or union: Zeroable, and its
+//!   #[derive(CStruct)]   a struct or union: Zeroable, and its
 //!                        #[c_bitfield] members on it
 //!   #[bitfield(uN)]      bitfield_struct::bitfield, and forwarders for the
 //!                        struct that holds one in a #[c_bitfield] field
@@ -58,8 +58,8 @@ use quote::{format_ident, quote, ToTokens};
 mod cstruct {
     include!("../../types/cstruct.rs");
 }
-use cstruct::{bitfield_type, bitfield_wrapper, enum_text, expand_enum_list, parse_cstruct, parse_items, rust_ident,
-              spell_concat, CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
+use cstruct::{bitfield_type, bitfield_wrapper, enum_text, expand_enum_list, parse_cstruct, parse_items,
+              paste_concat, CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
 mod args_stored_once;
 mod atomic_bitfield;
@@ -110,11 +110,6 @@ fn expand_syn(what: &str, f: impl FnOnce() -> syn::Result<TokenStream>) -> proc_
 /// Rust code a macro made, as tokens: it always parses, or the macro has a bug.
 fn tokens(code: &str) -> TokenStream {
     code.parse().unwrap()
-}
-
-/// The #[cfg(..)] on an item, if it has one.
-fn cfg_attr(cfg: &Option<cstruct::Cfg>) -> TokenStream {
-    cfg.as_ref().map(|c| tokens(&c.to_rust())).map(|c| quote!(#[cfg(#c)])).unwrap_or_default()
 }
 
 /// @decl through @list - LIST!(@callback [decl]) - which calls @callback back
@@ -168,10 +163,10 @@ pub fn derive_options(input: proc_macro::TokenStream) -> proc_macro::TokenStream
     expand_syn("#[derive(Options)]", || options::derive(syn::parse(input)?))
 }
 
-/// `#[derive(CStruct)]`: a #[repr(C)] struct or union's Zeroable impl, its
-/// pointer fields checked thin, the members of a `#[c_bitfield]` field - one
-/// of a #[bitfield] type - forwarded to it, and with `#[counted_by(FIELD)]`
-/// on a trailing `[T; 0]`, FIELD its length, its FlexArray (vstructs.rs).
+/// `#[derive(CStruct)]`: a struct or union's Zeroable impl, the members of
+/// a `#[c_bitfield]` field - one of a #[bitfield] type - forwarded to it,
+/// and with `#[counted_by(FIELD)]` on a trailing `[T; 0]`, FIELD its length,
+/// its FlexArray (vstructs.rs).
 /// `#[type_name_of(NAME)]` is what #[type_name] leaves for the derives.
 #[proc_macro_derive(CStruct, attributes(c_bitfield, type_name_of, counted_by))]
 pub fn derive_cstruct(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -267,11 +262,7 @@ pub fn derive_view(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
     let text = format!("#[derive(CStruct)] {input}");
     let def = parse_cstruct(&text)?;
-    if !def.repr_c() {
-        return Err(format!("{} must be #[repr(C)]: C shares it", def.name));
-    }
 
-    let name = def.rust_ident();
     // A #[c_bitfield] field's members, on the struct: its type's forwarders
     // (#[bitfield]), by the type's own path - a Cell's setting through &self.
     // Not a Volatile one's: that's a word, read and written whole.
@@ -290,13 +281,9 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         let (fwd, field) = (tokens(&format!("{path}__{ty}{suffix}")), tokens(&f.rust_name()));
         forward.extend(quote!(#fwd!([#generics] #over, #field);));
     }
-    // a pointer field C reads is a thin one
-    let thin: TokenStream = def.fields.iter()
-        .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), at_default(&f.ty, &def))], None))
-        .collect();
     let flex = tokens(&vstructs::flex_array(&def)?);
     let zeroable = maybe_zeroable(&def);
-    Ok(quote!(#forward #flex #zeroable const _: () = { #thin };))
+    Ok(quote!(#forward #flex #zeroable))
 }
 
 /// Zeroable when every field is - as bindgen's C structs are, deriving
@@ -343,14 +330,14 @@ pub(crate) fn is_core_atomic(ty: &str) -> bool {
                    "AtomicULong")
 }
 
-/// bitfield_struct::bitfield, recorded - and __NAME_forward!([GENERICS] STRUCT, field),
+/// bitfield_struct::bitfield - and __NAME_forward!([GENERICS] STRUCT, field),
 /// which #[derive(CStruct)] invokes for a #[c_bitfield] field of this type:
-/// each member's getter and setter on the struct that holds it, as C has a
+/// each member's getter and setter on the struct that holds it, as C had a
 /// bitfield's members on its struct. Not `_` members: those are padding.
 ///
 /// Members are written as bilge has them, the type giving the width:
 ///
-///   #[bitfield(u64, ty = u32)]
+///   #[bitfield(u64)]
 ///   pub struct foo_bits { type_: u2, offset: u40, cached: bool, __pad: u3, .. }
 ///
 /// `name: uN` is N bits, read and written as N rounded up to an integer -
@@ -359,13 +346,11 @@ pub(crate) fn is_core_atomic(ty: &str) -> bool {
 /// bool member's #[bits(..)] gives only its options, as #[bits(default = 1)]
 /// does. Members are pub, as C's are, unless written otherwise, and their
 /// forwarders the same - pub(self), for one only its own module may set, has
-/// none. ty is C's declared type of the integer members, which C lays the
-/// bitfield out by - the storage type if not given: the generator's, not
-/// passed on.
+/// none.
 ///
 /// With #[derive(CStruct)], the bitfield is itself the struct - C's `struct
-/// bch_extent_ptr { __u64 type:1, ...; }` - and `align = 8` is __aligned(8),
-/// which a u64 bitfield needs said on i386 (Align8U64).
+/// bch_extent_ptr { __u64 type:1, ...; }`. `align = 8` aligns it to 8, which a
+/// u64 bitfield needs said on i386 (Align8U64).
 #[proc_macro_attribute]
 pub fn bitfield(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[bitfield]", || bitfield_expand(attr.into(), item.into()))
@@ -485,30 +470,17 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     let args = bitfield_args(attr)?;
     let s = bitfield_struct(item)?;
     let name = &s.name;
-    if args.align8 && !s.c_struct {
-        return Err(format!("{name}: align = 8 is a C struct's - #[derive(CStruct)]"));
-    }
-
-    // The bitfield's record: a member of a struct in C - when it's the struct
-    // itself, of the struct recorded below, as NAME_bits.
-    let rec_args = match &args.ty {
-        Some(ty) => format!("{}, ty = {ty}", args.storage),
-        None     => args.storage.clone(),
-    };
-    let text = if s.c_struct {
-        format!("#[bitfield({rec_args})] pub struct {name}_bits {}", s.body())
-    } else {
-        format!("#[bitfield({rec_args})] pub struct {name} {}", s.body())
-    };
-    let bf = one_item!(&text, Bitfield, "a bitfield struct");
     let mut out = TokenStream::new();
     let ident = format_ident!("{name}");
     // Each member, not padding: its name, setter and updater, type, and
     // visibility
-    let members: Vec<_> = bf.fields.iter().map(|(m, ty, _)| (rust_ident(m), ty)).filter(|(m, _)| !m.starts_with('_'))
+    let members: Vec<_> = s.item.fields.iter()
+        .map(|f| (f.ident.as_ref().expect("named members").to_string(), &f.ty))
+        .filter(|(m, _)| !m.starts_with('_'))
         .map(|(m, ty)| {
             let vis = s.vis.iter().find(|(n, _)| *n == m).map_or("pub", |(_, v)| v.as_str());
-            (format_ident!("{m}"), format_ident!("set_{m}"), format_ident!("update_{m}"), tokens(ty), tokens(vis))
+            (format_ident!("{m}"), format_ident!("set_{m}"), format_ident!("update_{m}"), ty.to_token_stream(),
+             tokens(vis))
         })
         .collect();
 
@@ -522,13 +494,8 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     });
     out.extend(quote!(impl #ident { #(#update)* }));
 
-    if s.c_struct {
-        let repr = if args.align8 { "#[repr(C, align(8))]" } else { "#[repr(C)]" };
-        let text = format!("{repr} #[derive(CStruct)] \
-                            pub struct {name} {{ #[c_bitfield] pub bits: {name}_bits, }}");
-        one_item!(&text, Struct, "a struct");
-    } else {
-        // A member of a C struct: its getters and setters for that struct -
+    if !s.c_struct {
+        // A member of a struct: its getters and setters for that struct -
         // not pub(self)'s: its module's, which has the bitfield itself
         let fns = members.iter().filter(|(.., vis)| vis.to_string().replace(' ', "") != "pub(self)")
             .map(|(m, set, update, ty, vis)| quote! {
@@ -645,9 +612,7 @@ struct BitfieldArgs {
     storage: String,
     /// The rest of bitfield-struct's
     rest:    Vec<TokenStream>,
-    /// `ty = T`: C's declared type of the integer members
-    ty:      Option<String>,
-    /// `align = 8`: C's __aligned(8), on a u64 bitfield that's a C struct
+    /// `align = 8`: aligned to 8, as a u64 isn't on i386
     align8:  bool,
 }
 
@@ -667,10 +632,8 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
         _ => return Err("expected the storage type first: #[bitfield(uN, ..)]".into()),
     };
     rest.remove(0);
-    let mut ty = None;
     let mut align = None;
     rest.retain(|a| match key_value(a) {
-        Some((k, v)) if k == "ty"    => { ty = Some(v); false }
         Some((k, v)) if k == "align" => { align = Some(v); false }
         _ => true,
     });
@@ -679,7 +642,7 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
         Some("8") if storage == "u64" => true,
         Some(n) => return Err(format!("align = {n}: there's only align = 8, on u64 storage")),
     };
-    Ok(BitfieldArgs { storage, rest, ty, align8 })
+    Ok(BitfieldArgs { storage, rest, align8 })
 }
 
 /// A #[bitfield] struct, its attributes that are ours taken out: CStruct and
@@ -692,13 +655,6 @@ struct BitfieldStruct {
     c_struct: bool,
     /// Each member's name and visibility
     vis:      Vec<(String, String)>,
-}
-
-impl BitfieldStruct {
-    /// Its body, those members - for the record
-    fn body(&self) -> TokenStream {
-        self.item.fields.to_token_stream()
-    }
 }
 
 fn bitfield_struct(item: TokenStream) -> Result<BitfieldStruct, String> {
@@ -851,7 +807,7 @@ pub fn xmacro_select(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     })
 }
 
-/// c_xmacro!'s expansion: the list's record, and NAME!(cb).
+/// c_xmacro!'s expansion: NAME!(cb), which calls cb! with the list's rows.
 fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
     let text = format!("c_xmacro! {{ {input} }}");
     let x = one_item!(&text, XMacro, "NAME { (args), ... }");
@@ -900,7 +856,7 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
                 let pattern = quote!((#($#params:tt),*));
                 // The template: params are $p, and concat(A, p) is paste!'s
                 // [<A $p>] - the mapping is expanded inside paste!.
-                let template = spell_concat(&m.template, |p| format!("[<{}>]", p.join(" ")))?;
+                let template = paste_concat(&m.template)?;
                 let not_word = |c: char| !(c.is_ascii_alphanumeric() || c == '_');
                 let arg = |a: &str| -> String {
                     let mut out = String::new();
@@ -1043,7 +999,7 @@ pub fn bch_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
 
 /// list_enum!'s list's callback: { [decl] (entry), (entry), ... } - the enum
 /// with its first list's variants in their place: through the next list, if
-/// it has another, or recorded so.
+/// it has another, or generated.
 #[doc(hidden)]
 #[proc_macro]
 pub fn __list_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -1276,49 +1232,6 @@ fn names_gen(e: &CEnumDef, name: &str) -> TokenStream {
         });
     }
     out
-}
-
-/// @ty, a field's type, at its struct's default instance - its lifetimes
-/// 'static, its type parameters their defaults: for a check outside the
-/// struct's generics, of what neither changes.
-fn at_default(ty: &str, def: &cstruct::CStructDef) -> String {
-    let mut out = String::new();
-    let mut rest = ty;
-    while let Some(i) = rest.find(|ch: char| ch == '\'' || ch.is_alphabetic() || ch == '_') {
-        out.push_str(&rest[..i]);
-        let start = i + usize::from(rest[i..].starts_with('\''));
-        let len = rest[start..].find(|ch: char| !(ch.is_alphanumeric() || ch == '_')).unwrap_or(rest.len() - start);
-        let word = &rest[i..start + len];
-        let default = if start > i {
-            def.lifetimes.iter().any(|l| l == word).then_some("'static")
-        } else {
-            def.type_params.iter().find(|p| p.name == word).map(|p| p.default.as_str())
-        };
-        out.push_str(default.unwrap_or(word));
-        rest = &rest[start + len..];
-    }
-    out.push_str(rest);
-    out
-}
-
-/// That each pointer fn @name passes C - parameters @params, return type
-/// @ret - is one: a compile error if it's fat, a pointer to an unsized type,
-/// whose metadata C has nowhere for. improper_ctypes can't say so: rustc
-/// doesn't report it in what a proc macro generates. A pointer to an unsized
-/// vstruct is to its header, Head<T>, which is C's struct.
-fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, String)], ret: Option<&str>) -> TokenStream {
-    let cfg = cfg_attr(cfg);
-    params.iter()
-        .map(|(n, ty)| (n.as_str(), ty.as_str()))
-        .chain(ret.map(|r| ("its return", r)))
-        .filter(|(_, ty)| ty.trim_start().starts_with(['*', '&']))
-        .map(|(n, ty)| {
-            let msg = format!("{name}: {n}'s {ty} is a fat pointer, which C has no place for - \
-                               a pointer to an unsized vstruct T is to Head<T>");
-            let ty = tokens(ty);
-            quote!(#cfg assert!(::core::mem::size_of::<#ty>() == ::core::mem::size_of::<*const u8>(), #msg);)
-        })
-        .collect()
 }
 
 /// ioctl numbers, C's _IO*() #defines:
