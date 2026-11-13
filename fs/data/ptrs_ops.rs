@@ -17,17 +17,14 @@ use crate::format::{Btree, CompressionType};
 
 /// A pointer, against the rest of the key and its device: extent_ptr_validate().
 /// One to a device that isn't there passes - check_fix_ptrs() repairs it.
-fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, Ptrs>, ptr: &c::bch_extent_ptr,
-                       size_ondisk: u32) -> Result<(), BchError> {
+fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, duplicate_devs: &c::DevsMask,
+                       ptr: &c::bch_extent_ptr, size_ondisk: u32) -> Result<(), BchError> {
     if u32::from(ptr.dev()) == c::BCH_SB_MEMBER_INVALID {
         return Ok(());
     }
 
-    for ptr2 in p.ptrs(v.fs) {
-        bkey_fsck_err_on!(v, !core::ptr::eq(ptr, ptr2) && ptr.dev() == ptr2.dev(),
-                          id::ptr_to_duplicate_device,
-                          "multiple pointers to same device ({})", ptr.dev())?;
-    }
+    bkey_fsck_err_on!(v, duplicate_devs.test(ptr.dev().into()), id::ptr_to_duplicate_device,
+                      "multiple pointers to same device ({})", ptr.dev())?;
 
     let dev = {
         let rcu = read_lock();
@@ -69,6 +66,16 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let entries_start = k.val_bytes().as_ptr() as usize + range.start;
     let entries_u64s = range.len() / 8;
 
+    // Find duplicates up front so the first pointer to a duplicated device
+    // still reports the error before any later entry's validation.
+    let mut seen_devs = c::DevsMask::default();
+    let mut duplicate_devs = c::DevsMask::default();
+    for ptr in p.ptrs(fs) {
+        if u32::from(ptr.dev()) != c::BCH_SB_MEMBER_INVALID && seen_devs.test_and_set(ptr.dev().into()) {
+            duplicate_devs.set(ptr.dev().into());
+        }
+    }
+
     // btree_sectors(): a node's on-disk size, where a pointer has no crc
     let mut size_ondisk = if is_btree_ptr { fs.opts().btree_node_size.get() >> 9 } else { k.k.size };
     let mut nonce = None;
@@ -94,7 +101,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
         match e {
             ExtentEntry::ptr(ptr) => {
-                extent_ptr_validate(v, p, ptr, size_ondisk)?;
+                extent_ptr_validate(v, &duplicate_devs, ptr, size_ondisk)?;
 
                 bkey_fsck_err_on!(v, ptr.cached() != 0 && have_ec, id::ptr_cached_and_erasure_coded,
                                   "cached, erasure coded ptr")?;

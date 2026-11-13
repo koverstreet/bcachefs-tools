@@ -351,6 +351,7 @@ struct Copygc<'f, 'w> {
     set:       &'w InFlightSet<'f>,
     in_flight: Fifo<Pin<KBox<InFlight<'f>>>>,
     prefer_device: bool,
+    stripe_pos: Bpos,
 }
 
 impl<'f, 'w> Copygc<'f, 'w> {
@@ -546,27 +547,36 @@ impl<'f, 'w> Copygc<'f, 'w> {
         Ok((s.v().lru_pos() == lru.time).then_some(s))
     }
 
-    fn get_stripe_buckets(&self, batch: &mut Batch<'f>) -> Result<(), BchError> {
+    fn get_stripe_buckets(&self, batch: &mut Batch<'f>) -> Result<Bpos, BchError> {
         let trans = self.trans();
         let lru = LruPos::range(LruId::Stripes);
-        let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
+        let mut iter = BtreeIter::new(trans, Btree::lru, self.stripe_pos, BtreeIterFlags::empty());
 
-        iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
-            let mut s_iter = BtreeIter::new(t, Btree::stripes, Bpos::default(), BtreeIterFlags::empty());
-            let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
+        // Resume the last stripe: a full batch may have taken only some of
+        // its blocks. Wrap before reporting no work, but don't rescan the
+        // same rejected prefix at the start of every batch.
+        for end in [lru.end().to_bpos(), self.stripe_pos] {
+            if let Some(pos) = iter.for_each_max(trans, end, |t, _, lru_k| {
+                let mut s_iter = BtreeIter::new(t, Btree::stripes, Bpos::default(), BtreeIterFlags::empty());
+                let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
-            for b in s.data_blocks().filter(|b| b.sectors() != 0) {
-                let ptr = b.ptr();
-                let Ok(Some(ca)) = t.fs().dev_bkey_tryget(s.into(), ptr.dev().into()) else { continue };
+                for b in s.data_blocks().filter(|b| b.sectors() != 0) {
+                    let ptr = b.ptr();
+                    let Ok(Some(ca)) = t.fs().dev_bkey_tryget(s.into(), ptr.dev().into()) else { continue };
 
-                self.try_add(t, batch, ca.ptr_bucket_pos(&ptr), u64::MAX)?;
+                    self.try_add(t, batch, ca.ptr_bucket_pos(&ptr), u64::MAX)?;
 
-                if batch_full(batch, self.in_flight.len()) {
-                    return Ok(LoopFlow::Break(()));
+                    if batch_full(batch, self.in_flight.len()) {
+                        return Ok(LoopFlow::Break(Some(lru_k.k.p)));
+                    }
                 }
+                Ok(LoopFlow::Continue)
+            })? {
+                return Ok(pos);
             }
-            Ok(LoopFlow::Continue)
-        })
+            iter.set_pos(lru.start().to_bpos());
+        }
+        Ok(lru.start().to_bpos())
     }
 
     /// Whether this pass should take the stripe lru's buckets: whether the
@@ -643,38 +653,13 @@ impl<'f, 'w> Copygc<'f, 'w> {
         self.trans().unlock_long();
     }
 
-    fn pick_and_evacuate(&mut self, batch: &mut Batch<'f>, picked: &mut usize, devs: &mut KVVec<CopygcDev>)
-        -> Result<(), BchError>
-    {
-        let fs = self.fs;
+    fn evacuate_batch(&mut self, batch: &mut Batch<'f>) -> Result<(), BchError> {
         let data_opts = c::data_update_opts {
             type_:        c::bch_data_update_types::BCH_DATA_UPDATE_copygc,
             commit_flags: c::bch_trans_commit_flags::from_bits_retain(c::bch_watermark::BCH_WATERMARK_copygc as u32),
             ..Default::default()
         };
 
-        match self.trans().write_buffer_tryflush() {
-            Err(e) if e.matches(c::EROFS) => return Err(e),
-            Err(e) => {
-                fs_fatal_error!(fs, "{}: from bch2_btree_write_buffer_tryflush()", e.msg());
-                return Err(e);
-            }
-            Ok(()) => {}
-        }
-
-        let do_ec = self.should_do_ec(devs);
-        if !do_ec || self.prefer_device {
-            self.get_buckets(batch, devs)?;
-        }
-        if do_ec && batch.is_empty() {
-            self.get_stripe_buckets(batch)?;
-        }
-        // Global stripe cleanup must not indefinitely starve a pressured device.
-        if do_ec && !devs.is_empty() {
-            self.prefer_device = !self.prefer_device;
-        }
-
-        *picked = batch.len();
         self.in_flight.reserve(batch.len())?;
         // popped from the end: in the order picked
         batch.reverse();
@@ -692,6 +677,41 @@ impl<'f, 'w> Copygc<'f, 'w> {
             // SAFETY: @count is the InFlight's, pinned, and the FIFO drops
             // it only once the count's back to 0 (wait_done())
             unsafe { self.ctxt.evacuate_bucket(count, key, data_opts) }?;
+        }
+        Ok(())
+    }
+
+    fn pick_and_evacuate(&mut self, batch: &mut Batch<'f>, picked: &mut usize, devs: &mut KVVec<CopygcDev>)
+        -> Result<(), BchError>
+    {
+        let fs = self.fs;
+        match self.trans().write_buffer_tryflush() {
+            Err(e) if e.matches(c::EROFS) => return Err(e),
+            Err(e) => {
+                fs_fatal_error!(fs, "{}: from bch2_btree_write_buffer_tryflush()", e.msg());
+                return Err(e);
+            }
+            Ok(()) => {}
+        }
+
+        let do_ec = self.should_do_ec(devs);
+        let seen = self.ctxt.stats().sectors_seen();
+        if !do_ec || self.prefer_device {
+            self.get_buckets(batch, devs)?;
+            *picked = batch.len();
+            self.evacuate_batch(batch)?;
+        }
+        // Selected buckets may evacuate without processing any extents. Try
+        // stripes before the no-work backoff, but don't retry either picker.
+        if do_ec && self.ctxt.stats().sectors_seen() == seen &&
+            !Kthread::should_stop() && !Kthread::freezing() {
+            self.stripe_pos = self.get_stripe_buckets(batch)?;
+            *picked += batch.len();
+            self.evacuate_batch(batch)?;
+        }
+        // Global stripe cleanup must not indefinitely starve a pressured device.
+        if do_ec && !devs.is_empty() {
+            self.prefer_device = !self.prefer_device;
         }
         Ok(())
     }
@@ -778,7 +798,10 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
     stats.reset();
     let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, writepoint_ptr(&fs.copygc.write_point), false),
                             "allocating copygc's moving context")?;
-    let mut cg = Copygc { fs, me, ctxt, set, in_flight: Fifo::new(), prefer_device: true };
+    let mut cg = Copygc {
+        fs, me, ctxt, set, in_flight: Fifo::new(), prefer_device: true,
+        stripe_pos: LruPos::range(LruId::Stripes).start().to_bpos(),
+    };
     let clock = &fs.io_clock[WRITE];
     let mut ret = Ok(());
 
