@@ -2,10 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <linux/sched.h>
-
-#include "util/printbuf.h"
-#include "util/util.h"
+#include <linux/printk.h>
 
 /*
  * The kernel's printk parses the KERN_SOH loglevel prefix from the
@@ -43,12 +40,4 @@ void printk(const char *fmt, ...)
 	va_start(args, fmt);
 	vprintk(fmt, args);
 	va_end(args);
-}
-
-void dump_stack(void)
-{
-	struct printbuf buf = PRINTBUF;
-	bch2_prt_task_backtrace(&buf, current, 1, GFP_KERNEL);
-	fputs(buf.buf ?: "", stderr);
-	printbuf_exit(&buf);
 }
