@@ -75,7 +75,7 @@ pub use crate::c::{
 /// first. Lockdep's lock_cmp_fn, as kCFI hashes it.
 #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
 pub type LockCmpFn = unsafe extern "C" fn(a: *const kernel::bindings::lockdep_map,
-                                          b: *const kernel::bindings::lockdep_map) -> c_int;
+                                          b: *const kernel::bindings::lockdep_map) -> core::ffi::c_int;
 
 #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
 impl<G, P> super::Locked<c::mutex, G, P> {
