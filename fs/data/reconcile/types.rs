@@ -34,9 +34,9 @@ pub struct bch_fs_reconcile {
     #[pin]
     #[init(SeqLock::new(Status::new()))]
     pub(crate) status: SeqLock<Status>,
-    pub work_stats: c::bch_move_stats,
+    pub work_stats: c::MoveStats,
     pub progress: c::progress_indicator,
-    pub scan_stats: c::bch_move_stats,
+    pub scan_stats: c::MoveStats,
 
     /*
      * The scans the option change in progress has requested: the reconcile

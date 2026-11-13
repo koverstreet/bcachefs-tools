@@ -310,7 +310,7 @@ impl<'t> TransAttempt<'_, 't> {
              * existing inodes by the upgrade's scheduled passes; version upgrades
              * always run, so by the time we're doing io the flags are trustworthy:
              */
-            *opts = if likely(inode.v().bi_flags.get() & u64::from(c::bch_inode_flags::has_inode_opts.bits()) == 0) {
+            *opts = if likely(inode.v().bi_flags.get() & u64::from(c::InodeFlags::has_inode_opts.bits()) == 0) {
                 inode_opts::get_fs(fs, false)
             } else {
                 inode_opts::get_inode(fs, &inode::unpack(fs, k))
@@ -398,9 +398,9 @@ impl<'t> TransAttempt<'_, 't> {
         if s.disk_sectors_delta > disk_res.sectors() as i64 {
             disk_res.add_physical((s.disk_sectors_delta - disk_res.sectors() as i64) as u64, s.new_nr_replicas,
                                   if !check_enospc || !s.usage_increasing {
-                                      c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL
+                                      c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL
                                   } else {
-                                      c::bch_reservation_flags::empty()
+                                      c::ReservationFlags::empty()
                                   })?;
         }
 
@@ -408,7 +408,7 @@ impl<'t> TransAttempt<'_, 't> {
         self.extent_update_i_size_sectors(iter, (k.k().p.offset << 9).min(new_i_size),
                                           s.i_sectors_delta, &mut opts)?;
 
-        k.set_needs_reconcile(self, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_foreground,
+        k.set_needs_reconcile(self, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                               change_cookie)?;
         self.update(iter, &k, UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
 

@@ -77,7 +77,7 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by
                             vstruct_container, Head, FlexArray, Unvalidated, VStructError, VstructMut, VstructRef};
 use crate::btree::bkey::BkeyPHeader;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, bitfield, c_bitmask, bch_enum, grown, tagged_union, unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{bitfield, c_bitmask, bch_enum, grown, tagged_union, unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
 
 #[path = "alloc/accounting_format.rs"] pub mod accounting;
 pub use accounting::{DataType, DataTypes};
@@ -110,7 +110,6 @@ pub struct bkey_format {
  */
 #[cfg(target_endian = "little")]
 #[repr(C, packed(4))]
-#[c_name(bpos)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct Bpos {
     pub snapshot: u32,
@@ -120,16 +119,12 @@ pub struct Bpos {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
-#[c_name(bpos)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct Bpos {
     pub inode: u64,
     pub offset: u64, /* Points to end of extent - sectors */
     pub snapshot: u32,
 }
-
-/// C's name, as bindgen's declarations of C functions spell it.
-pub type bpos = Bpos;
 
 /* Empty placeholder struct, for container_of() */
 #[repr(C)]
@@ -140,7 +135,6 @@ pub struct bch_val {
 
 #[cfg(target_endian = "little")]
 #[repr(C, packed(4))]
-#[c_name(bversion)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, Plain, TypeInfo)]
 pub struct Bversion {
     pub lo: u64,
@@ -149,7 +143,6 @@ pub struct Bversion {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
-#[c_name(bversion)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, Plain, TypeInfo)]
 pub struct Bversion {
     pub hi: u32,
@@ -300,7 +293,7 @@ pub const KEY_FORMAT_CURRENT: u32 = 1;
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum bch_bkey_fields {
+pub enum BkeyField {
     BKEY_FIELD_INODE,
     BKEY_FIELD_OFFSET,
     BKEY_FIELD_SNAPSHOT,
@@ -332,7 +325,6 @@ impl FlexArray for bkey_i {
 }
 
 #[bch_enum(flags)]
-#[c_name(bch_bkey_type_flags)]
 #[prefix(BKEY_TYPE_)]
 #[repr(u32)]
 pub enum BkeyTypeFlags {
@@ -367,7 +359,6 @@ pub enum BkeyTypeFlags {
 }
 
 #[bch_enum(open)]
-#[c_name(bch_bkey_type)]
 #[prefix(KEY_TYPE_)]
 #[nr]
 #[arm_columns(flags: BkeyTypeFlags)]
@@ -474,7 +465,7 @@ pub enum BkeyType {
     /// Logged stripe creation/update operation for crash recovery
     logged_op_stripe_update(c::LoggedOpStripeUpdate) = 37,
     /// Errors that damaged an inode, recorded in the same transaction as
-    /// the repair that did the damage: a sorted list of bch_sb_error_id
+    /// the repair that did the damage: a sorted list of SbErrorId
     damage(c::Damage) = 38,
     /// Logged propagation of inode io options to ancestor snapshot versions
     logged_op_inode_opt_propagate(c::LoggedOpInodeOptPropagate) = 39,
@@ -486,25 +477,19 @@ pub enum BkeyType {
     indirect_inline_data_v2(c::IndirectInlineDataV2) = 41,
 }
 
-/// C's name, as bindgen's declarations of C functions spell it.
-pub type bch_bkey_type = BkeyType;
-
 #[repr(C)]
-#[c_name(bch_deleted)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Deleted {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[c_name(bch_whiteout)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Whiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[c_name(bch_extent_whiteout)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct ExtentWhiteout {
     pub v: c::bch_val,
@@ -512,7 +497,6 @@ pub struct ExtentWhiteout {
 
 #[grown(from = err, bkey)]
 #[repr(C)]
-#[c_name(bch_error)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct Error {
     pub v: c::bch_val,
@@ -533,7 +517,6 @@ pub struct Error {
  * decompress error id without a reason here breaks the build.
  */
 #[bch_enum(open)]
-#[c_name(bch_key_type_errors)]
 #[prefix(KEY_TYPE_ERROR_)]
 #[repr(u32)]
 pub enum ErrorKeyReason {
@@ -559,7 +542,6 @@ pub enum ErrorKeyReason {
 }
 
 #[repr(C)]
-#[c_name(bch_cookie)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Cookie {
     pub v: c::bch_val,
@@ -567,14 +549,12 @@ pub struct Cookie {
 }
 
 #[repr(C)]
-#[c_name(bch_hash_whiteout)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct HashWhiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[c_name(bch_set)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Set {
     pub v: c::bch_val,
@@ -589,7 +569,6 @@ pub struct bch_csum {
 }
 
 #[repr(C, align(8))]
-#[c_name(bch_backpointer)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Backpointer {
     pub v: c::bch_val,
@@ -646,7 +625,6 @@ pub struct bch_sb_field {
 vstruct!(unsized bch_sb_field, u64s, start = 0);
 
 #[bch_enum(flags)]
-#[c_name(btree_id_flags)]
 #[prefix(BTREE_IS_)]
 #[repr(u32)]
 pub enum BtreeFlags {
@@ -661,7 +639,6 @@ pub enum BtreeFlags {
 
 #[bch_enum(open)]
 #[own_to_text]
-#[c_name(btree_id)]
 #[prefix(BTREE_ID_)]
 #[nr]
 #[arm_columns(flags: BtreeFlags, holds: set(BkeyType))]
@@ -799,14 +776,11 @@ impl crate::util::ToText for Btree {
 }
 crate::display_via_to_text!(Btree);
 
-/// C's name, as bindgen's declarations of C functions spell it.
-pub type btree_id = Btree;
-
 /* A superblock field is one of its sections, by its type: */
 tagged_union! {
     #[storage(c::bch_sb_field)]
     #[tag(type_: u32)]
-    #[tag_enum(bch_sb_field_type: u32, prefix = BCH_SB_FIELD_, nr)]
+    #[tag_enum(SbFieldType: u32, prefix = BCH_SB_FIELD_, nr)]
     #[size(header)]
     pub enum bch_sb_field {
         /// Journal bucket list for this device
@@ -860,8 +834,8 @@ tagged_union! {
  * not:
  */
 pub const BCH_SINGLE_DEVICE_SB_FIELDS: u32 =
-    (1 << c::bch_sb_field_type::journal.0) |
-    (1 << c::bch_sb_field_type::journal_v2.0);
+    (1 << c::SbFieldType::journal.0) |
+    (1 << c::SbFieldType::journal_v2.0);
 
 /* BCH_SB_FIELD_journal: */
 
@@ -894,7 +868,6 @@ vstruct!(unsized bch_sb_field_journal_v2, field.u64s, start = 0);
 /* BCH_SB_FIELD_crypt: */
 
 #[repr(C)]
-#[c_name(nonce)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct Nonce {
     pub d: [Le32; 4],
@@ -940,7 +913,7 @@ c_bitmask! {
 
 #[bch_enum(open)]
 #[repr(u32)]
-pub enum bch_kdf_types {
+pub enum KdfType {
     BCH_KDF_SCRYPT = 0,
     BCH_KDF_NR = 1,
 }
@@ -1049,7 +1022,6 @@ pub const fn BCH_VERSION(major: u64, minor: u64) -> u64 { (major << 10) | minor 
 
 #[bch_enum(open)]
 #[own_to_text]
-#[c_name(bcachefs_metadata_version)]
 #[prefix(bcachefs_metadata_version_)]
 #[nr]
 #[repr(u32)]
@@ -1462,7 +1434,6 @@ pub const BCH_SB_FEATURES_ALL: u64 =
     (1 << c::SbFeature::incompat_version_field.0);
 
 #[bch_enum(open)]
-#[c_name(bch_sb_feature)]
 #[prefix(BCH_FEATURE_)]
 #[nr]
 #[repr(u32)]
@@ -1502,7 +1473,7 @@ pub enum SbFeature {
 #[prefix(BCH_COMPAT_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_sb_compat {
+pub enum SbCompat {
     alloc_info = 0,
     alloc_metadata = 1,
     extents_above_btree_updates_done = 2,
@@ -1517,7 +1488,7 @@ pub enum bch_sb_compat {
 #[bch_enum(open)]
 #[prefix(BCH_VERSION_UPGRADE_)]
 #[repr(u32)]
-pub enum bch_version_upgrade_opts {
+pub enum VersionUpgradeOpt {
     compatible = 0,
     incompatible = 1,
     none = 2,
@@ -1531,7 +1502,7 @@ pub const BCH_BKEY_PTRS_MAX: u32 = 16;
 #[prefix(BCH_ON_ERROR_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_error_actions {
+pub enum ErrorAction {
     /// Log the error but continue normal operation without attempting
     /// repair
     BCH_ON_ERROR_continue = 0,
@@ -1571,7 +1542,7 @@ pub enum DegradedAction {
 #[prefix(BCH_WRITE_DEGRADED_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_write_degraded_actions {
+pub enum WriteDegradedAction {
     degraded = 0,
     yes = 1,
     no = 2,
@@ -1581,7 +1552,7 @@ pub enum bch_write_degraded_actions {
 #[prefix(BCH_STR_HASH_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_str_hash_type {
+pub enum StrHashKind {
     crc32c = 0,
     crc64 = 1,
     siphash_old = 2,
@@ -1592,7 +1563,7 @@ pub enum bch_str_hash_type {
 #[prefix(BCH_STR_HASH_OPT_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_str_hash_opts {
+pub enum StrHashOpt {
     crc32c = 0,
     crc64 = 1,
     siphash = 2,
@@ -1602,7 +1573,7 @@ pub enum bch_str_hash_opts {
 #[prefix(BCH_CSUM_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_csum_type {
+pub enum CsumType {
     none = 0,
     crc32c_nonzero = 1,
     crc64_nonzero = 2,
@@ -1617,7 +1588,7 @@ pub enum bch_csum_type {
 #[prefix(BCH_CSUM_OPT_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_csum_opt {
+pub enum CsumOpt {
     none = 0,
     crc32c = 1,
     crc64 = 2,
@@ -1625,7 +1596,6 @@ pub enum bch_csum_opt {
 }
 
 #[bch_enum(open)]
-#[c_name(bch_compression_type)]
 #[prefix(BCH_COMPRESSION_TYPE_)]
 #[nr]
 #[repr(u32)]
@@ -1638,14 +1608,11 @@ pub enum CompressionType {
     incompressible = 5,
 }
 
-/// C's name, as bindgen's declarations of C functions spell it.
-pub type bch_compression_type = CompressionType;
-
 #[bch_enum(open)]
 #[prefix(BCH_COMPRESSION_OPT_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_compression_opts {
+pub enum CompressionOpt {
     none = 0,
     lz4 = 1,
     gzip = 2,
@@ -1656,7 +1623,7 @@ pub enum bch_compression_opts {
 #[prefix(BCH_SCRUB_JOURNAL_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_scrub_journal_opts {
+pub enum ScrubJournalOpt {
     unclean = 0,
     no = 1,
     always = 2,
@@ -1674,7 +1641,7 @@ pub const JSET_KEYS_U64s: usize = size_of::<Head<c::jset_entry>>() / size_of::<u
 tagged_union! {
     #[storage(c::jset_entry)]
     #[tag(type_: u8)]
-    #[tag_enum(bch_jset_entry_type: u32, prefix = BCH_JSET_ENTRY_, nr)]
+    #[tag_enum(JsetEntryType: u32, prefix = BCH_JSET_ENTRY_, nr)]
     #[size(header)]
     pub enum jset_entry {
         /// Btree key updates
@@ -1776,7 +1743,7 @@ vstruct!(jset_entry_blacklist_v2, repr.entry.u64s);
 #[prefix(BCH_FS_USAGE_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_fs_usage_type {
+pub enum FsUsageType {
     reserved = 0,
     inodes = 1,
     key_version = 2,

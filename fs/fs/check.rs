@@ -8,7 +8,7 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
@@ -310,7 +310,7 @@ impl InodeWalker {
 
         // walk() invalidates on the restart: the retry refetches the versions,
         // the one just written included
-        Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
+        Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
     }
 
     /// @k, in @iter's btree, has to belong to an inode of the matching type:
@@ -362,7 +362,7 @@ impl InodeWalker {
         let nr_keys = count_inode_keys(t, inode_pos, btree, Some(&mut buf))?;
         if nr_keys == 0 {
             bch_err!(fs, "check_key_has_inode: error finding live keys in inode");
-            return Err(fs.err(bch_errcode::BCH_ERR_shutdown_with_errors_unfixed));
+            return Err(fs.err(Errcode::BCH_ERR_shutdown_with_errors_unfixed));
         }
 
         if nr_keys >= COUNT_INODE_KEYS_MAX {
@@ -395,7 +395,7 @@ impl InodeWalker {
                 let Some(g) = good_ancestor else {
                     reconstruct_inode(t, btree, k.k.p.snapshot, k.k.p.inode, None)?;
                     t.commit(None, CommitFlags::NO_ENOSPC)?;
-                    return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit));
+                    return Err(t.restart(Errcode::BCH_ERR_transaction_restart_commit));
                 };
 
                 // A good ancestor is visible from @k, so the walk resolved @k
@@ -583,7 +583,7 @@ fn delete_stray_key<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeIter<'t>) -> Resul
     let res = DiskReservation::new(t.fs());
     t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
-    Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit))
+    Err(t.restart(Errcode::BCH_ERR_transaction_restart_commit))
 }
 
 /// Where @inum's last extent, as @snapshot sees it, ends, in bytes: the
@@ -660,7 +660,7 @@ pub fn reconstruct_subvol_root(
 
     if !fs.snapshots.is_leaf(snapshot)? {
         bch_err!(fs, "need to reconstruct subvol {subvol}, but snapshot {snapshot} is an interior node");
-        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
+        return Err(fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented));
     }
 
     if let Some(inum) = inum {
@@ -681,7 +681,7 @@ pub fn reconstruct_subvol_root(
 
     root.ok_or_else(|| {
         bch_err!(fs, "no root inode found for subvol {subvol}, can't reconstruct");
-        fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented)
+        fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented)
     })
 }
 
@@ -703,7 +703,7 @@ pub fn reconstruct_subvol(
     let v = k.v_mut();
     v.snapshot = snapshot.into();
     v.inode    = root.into();
-    v.set_state(c::bch_subvolume_state::live);
+    v.set_state(c::SubvolumeState::live);
     t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())?;
 
     let mut s = bch_err_msg!(fs,
@@ -713,7 +713,7 @@ pub fn reconstruct_subvol(
     let s = s.v_mut();
     let tree = s.tree();
     s.subvol = subvol.into();
-    s.set_state(c::bch_snapshot_state::live);
+    s.set_state(c::SnapshotState::live);
 
     let mut st = bch_err_msg!(fs,
         t.bkey_get_mut::<c::SnapshotTree>(Btree::snapshot_trees, pos(0, tree as u64),
@@ -846,7 +846,7 @@ impl Fs {
     /// fsck(8)'s exit status for what the filesystem's errors came to - 1
     /// fixed, 4 left, 8 a fatal error, ORed - each said in @out.
     pub fn fsck_errcode(&self, out: &mut Printbuf) -> core::ffi::c_int {
-        use c::bch_fs_flags as Flag;
+        use c::FsFlag as Flag;
 
         let mut ret = 0;
         for (flag, bit, what) in [
@@ -896,7 +896,7 @@ pub mod ioctl {
         let arg = user.head()?;
 
         if arg.flags != 0 {
-            return Err(bch_errcode::BCH_ERR_EINVAL_fsck_offline_bad_flags.into());
+            return Err(Errcode::BCH_ERR_EINVAL_fsck_offline_bad_flags.into());
         }
 
         if !capable(Capability::SysAdmin) {
@@ -931,8 +931,8 @@ pub mod ioctl {
             });
 
         if let Ok(fs) = &fs {
-            if fs.opts.errors() == c::bch_error_actions::panic {
-                fs.opts_writer(&mut fs.sb_lock()).set_errors(c::bch_error_actions::ro);
+            if fs.opts.errors() == c::ErrorAction::panic {
+                fs.opts_writer(&mut fs.sb_lock()).set_errors(c::ErrorAction::ro);
             }
         }
 
@@ -971,11 +971,11 @@ pub mod ioctl {
 
     pub fn fsck_online(fs: &Fs, arg: c::bch_ioctl_fsck_online) -> Result<c_int, BchError> {
         if arg.flags != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_fsck_online_bad_flags);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_fsck_online_bad_flags);
         }
 
         if !capable(Capability::SysAdmin) {
-            return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
+            return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
         }
 
         let opts = user_opts(arg.opts)?;
@@ -993,7 +993,7 @@ pub mod ioctl {
         let online = passes_match(PassFlags::ONLINE);
         let mut passes = passes_match(PassFlags::FSCK) & online;
 
-        if opts.defined(c::bch_opt_id::Opt_recovery_passes) {
+        if opts.defined(c::OptId::Opt_recovery_passes) {
             passes = opts.recovery_passes;
 
             if passes & online != passes {
@@ -1002,7 +1002,7 @@ pub mod ioctl {
                 unsafe { buf.prt_bitflags(RECOVERY_PASS_NAMES.as_ptr().cast(), passes & !online) };
                 prt!(&mut buf, " online\n");
                 let _ = stdio.write(false, buf.as_bytes());
-                return -fs.err(bch_errcode::BCH_ERR_EINVAL_fsck_online_bad_passes).raw();
+                return -fs.err(Errcode::BCH_ERR_EINVAL_fsck_online_bad_passes).raw();
             }
         }
 
@@ -1016,19 +1016,19 @@ pub mod ioctl {
             {
                 let mut sb = fs.sb_lock();
                 let w = fs.opts_writer(&mut sb);
-                w.fix_errors.set(if opts.defined(c::bch_opt_id::Opt_fix_errors) {
+                w.fix_errors.set(if opts.defined(c::OptId::Opt_fix_errors) {
                     opts.fix_errors
                 } else {
-                    c::fsck_err_opts::ask as u8
+                    c::FsckErrOpt::ask as u8
                 });
                 w.fsck.set(1);
             }
-            fs.flags.set(c::bch_fs_flags::in_fsck, true);
+            fs.flags.set(c::FsFlag::in_fsck, true);
 
             ret = run_passes(&fs, passes, true)
                 .map(|()| fs.fsck_errcode(&mut buf));
 
-            fs.flags.set(c::bch_fs_flags::in_fsck, false);
+            fs.flags.set(c::FsFlag::in_fsck, false);
 
             fs.stdio.store(core::ptr::null_mut(), Release);
             fs.stdio_filter.store(core::ptr::null_mut(), Relaxed);

@@ -274,7 +274,7 @@ fn generate_cli_doc() -> ExitCode {
 fn opts_table() -> String {
     use bcachefs_kernel::opts::{opt_to_text, OptType, DEFAULTS, OPTS};
     use bcachefs_kernel::util::Printbuf;
-    use c::opt_flags as f;
+    use c::OptFlags as f;
     use std::fmt::Write;
 
     let scopes = [(f::OPT_FS, "fs"), (f::OPT_FORMAT, "format"), (f::OPT_MOUNT, "mount"),

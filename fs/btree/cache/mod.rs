@@ -111,7 +111,7 @@ use crate::util::shrinker::{Shrink, Shrinker};
 use crate::util::sleep::Sleep;
 use crate::c;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::prt;
 use crate::util::closure::{closure_wait, closure_wake_up};
 use crate::util::sched::current;
@@ -167,7 +167,7 @@ pub unsafe fn btree_evicted_size_init(c: *mut Fs) -> Result<(), BchError> {
     let nr = 1usize << bits;
 
     let Ok(entries) = kvzalloc(nr * size_of::<u64>()) else {
-        return fs.throw(bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc);
+        return fs.throw(Errcode::BCH_ERR_ENOMEM_fs_other_alloc);
     };
     unsafe {
         let e = &raw mut (*c).btree.evicted_size;
@@ -244,12 +244,12 @@ impl BtreeNode {
     /// current bits - passing it to transition_state_locked() is a no-op when
     /// the node is already in the right state, so callers don't need "do we
     /// need to transition?" conditionals.
-    pub fn live_state(&self) -> c::btree_node_cache_state {
+    pub fn live_state(&self) -> c::BtreeNodeCacheState {
         let f = self.flags.load();
         if f.dirty() || f.write_in_flight() {
-            c::btree_node_cache_state::DIRTY
+            c::BtreeNodeCacheState::DIRTY
         } else {
-            c::btree_node_cache_state::CLEAN
+            c::BtreeNodeCacheState::CLEAN
         }
     }
 }
@@ -318,7 +318,7 @@ fn cannibalize_lock(fs: &Fs, cl: Option<NonNull<c::closure>>) -> Result<(), BchE
     }
 
     let Some(cl) = cl else {
-        return fs.throw(bch_errcode::BCH_ERR_ENOMEM_btree_cache_cannibalize_lock);
+        return fs.throw(Errcode::BCH_ERR_ENOMEM_btree_cache_cannibalize_lock);
     };
 
     unsafe { closure_wait(&bc.alloc_wait, cl) };
@@ -330,7 +330,7 @@ fn cannibalize_lock(fs: &Fs, cl: Option<NonNull<c::closure>>) -> Result<(), BchE
         return Ok(());
     }
 
-    fs.throw(bch_errcode::BCH_ERR_btree_cache_cannibalize_lock_blocked)
+    fs.throw(Errcode::BCH_ERR_btree_cache_cannibalize_lock_blocked)
 }
 
 // ── The shrinkers ────────────────────────────────────────────────────────
@@ -366,7 +366,7 @@ impl c::bch_fs_btree_cache {
             let mut name = Printbuf::new();
             prt!(&mut name, "{}-{list}", fs.name().to_str().unwrap_or("?"));
             Shrinker::register(s, name.as_c_str(), seeks * mult, 0)
-                .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init))?;
+                .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_fs_btree_cache_init))?;
         }
         Ok(())
     }
@@ -488,7 +488,7 @@ impl ToText for c::bch_fs_btree_cache {
         prt!(out, "not freed:\n");
 
         for (i, &nr) in l.not_freed.iter().enumerate() {
-            prt!(out, "  {}\t{nr}\n", c::bch_btree_cache_not_freed_reasons::from_bits(i as u32));
+            prt!(out, "  {}\t{nr}\n", c::BtreeCacheNotFreedReason::from_bits(i as u32));
         }
     }
 }

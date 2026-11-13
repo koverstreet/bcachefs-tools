@@ -6,8 +6,8 @@
 
 use crate::init::passes::RecoveryPass;
 use crate::c;
-use crate::c::bch_fs_flags as Flag;
-use crate::c::bch_version_upgrade_opts as Upgrade;
+use crate::c::FsFlag as Flag;
+use crate::c::VersionUpgradeOpt as Upgrade;
 use crate::format::{Btree, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes::{passes_from_stable, passes_to_stable, prt_stable};
@@ -156,7 +156,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
 
     if u32::from(fs.sb.version_upgrade_complete.get()) <
        MetadataVersion::autofix_errors.0 {
-        sb.sb_mut().set_error_action(c::bch_error_actions::fix_safe.0.into());
+        sb.sb_mut().set_error_action(c::ErrorAction::fix_safe.0.into());
     }
 
     let extent_bp_shift_needed = (fs.opts().encoded_extent_max.get() >> 9).ilog2() + 1;

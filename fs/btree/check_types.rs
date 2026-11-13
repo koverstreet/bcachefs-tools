@@ -16,7 +16,7 @@ use crate::format::{Bpos, Btree};
 #[bch_enum(closed)]
 #[prefix(GC_PHASE_)]
 #[repr(u32)]
-pub enum gc_phase {
+pub enum GcPhase {
     not_running,
     start,
     sb,
@@ -30,7 +30,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16)]
         pub bits: pub struct gc_pos_bits {
-            #[bits(8)] pub phase: c::gc_phase,
+            #[bits(8)] pub phase: c::GcPhase,
             #[bits(8)] pub btree: Btree,
         },
         pub level: u16,
@@ -74,14 +74,14 @@ pub fn gc_btree_order(btree: Btree) -> i32 {
  */
 impl gc_pos {
     /* Position of (the start of) a gc phase: */
-    pub fn of_phase(phase: c::gc_phase) -> Self {
+    pub fn of_phase(phase: c::GcPhase) -> Self {
         Self { bits: c::gc_pos_bits::new().with_phase(phase), ..Default::default() }
     }
 
     /// gc_pos_btree(): @pos at @level of @btree, in gc's walk of the btrees.
     pub fn in_btree(btree: Btree, level: u16, pos: Bpos) -> Self {
         Self {
-            bits: c::gc_pos_bits::new().with_phase(c::gc_phase::btree).with_btree(btree),
+            bits: c::gc_pos_bits::new().with_phase(c::GcPhase::btree).with_btree(btree),
             level,
             pos,
         }
@@ -128,7 +128,7 @@ pub struct bch_fs_gc {
 }
 
 impl bch_fs_gc {
-    pub fn phase(&self) -> c::gc_phase {
+    pub fn phase(&self) -> c::GcPhase {
         self.pos.read().bits.phase()
     }
 

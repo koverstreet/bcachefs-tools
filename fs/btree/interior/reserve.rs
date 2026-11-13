@@ -21,7 +21,7 @@ use crate::data::keylist::KeyRoom;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::{POS_MIN, SPOS_MAX};
 use crate::format::{BkeyType, Bpos, DataType};
 use crate::fs::Fs;
@@ -108,18 +108,18 @@ impl<'t> InteriorUpdate<'t> {
     /// The disk space, and the nodes, leaf and interior, that @nr_nodes says
     /// the update might need, reserved.
     pub(super) fn reserve(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], target: u32, commit: CommitOpts,
-                          write: c::bch_write_flags) -> Result<(), BchError> {
-        use c::bch_watermark as wm;
+                          write: c::WriteFlags) -> Result<(), BchError> {
+        use c::Watermark as wm;
 
         let t = self.t();
         let trans = t.trans();
         let fs = self.fs();
         let watermark = commit.get_watermark();
         let flags = commit.to_c();
-        let disk_res_flags = if flags.contains(c::bch_trans_commit_flags::no_enospc) {
-            c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL
+        let disk_res_flags = if flags.contains(c::TransCommitFlags::no_enospc) {
+            c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL
         } else {
-            c::bch_reservation_flags::empty()
+            c::ReservationFlags::empty()
         };
 
         self.disk_res.add((nr_nodes[0] + nr_nodes[1]) as u64 * u64::from(fs.btree_sectors()),
@@ -141,16 +141,16 @@ impl<'t> InteriorUpdate<'t> {
                  * flag
                  */
                 if e.matches(c::EAGAIN) &&
-                   flags.contains(c::bch_trans_commit_flags::journal_reclaim) &&
+                   flags.contains(c::TransCommitFlags::journal_reclaim) &&
                    (watermark as u32) < wm::reclaim as u32 {
-                    return fs.throw(bch_errcode::BCH_ERR_journal_reclaim_would_deadlock);
+                    return fs.throw(Errcode::BCH_ERR_journal_reclaim_would_deadlock);
                 }
 
                 req.cl = Some(cl.as_opaque());
 
                 let ret = loop {
                     match self.reserve_get(paths, nr_nodes, &mut req) {
-                        Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
+                        Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => {
                             if let Err(e) = paths.lend(|| t.wait_on_allocator(&mut req, e, cl.as_opaque())) {
                                 break Err(e);
                             }
@@ -240,7 +240,7 @@ impl<'t> InteriorUpdate<'t> {
 
                 /* check if it has sufficient durability */
 
-                let target = if req.flags.contains(c::bch_write_flags::only_specified_devs) {
+                let target = if req.flags.contains(c::WriteFlags::only_specified_devs) {
                     req.target
                 } else {
                     0
@@ -419,8 +419,8 @@ impl<'t> InteriorUpdate<'t> {
     fn take_node(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) {
         let level = usize::from(n.c.level);
         let hold = unsafe {
-            six_lock_increment_ip(n.c.lock.six(), c::six_lock_type::SIX_LOCK_write, 0);
-            SixHold::from_raw(&n.c.lock, c::six_lock_type::SIX_LOCK_write)
+            six_lock_increment_ip(n.c.lock.six(), c::SixLockType::SIX_LOCK_write, 0);
+            SixHold::from_raw(&n.c.lock, c::SixLockType::SIX_LOCK_write)
         };
         paths[path].put_level(level, &n.c, hold);
         paths[path].lock_taken(level);
@@ -435,7 +435,7 @@ impl<'t> InteriorUpdate<'t> {
 
         node_free(fs, &b);
 
-        let _ = fs.btree_node_transition_state(&b, c::btree_node_cache_state::FREEABLE);
+        let _ = fs.btree_node_transition_state(&b, c::BtreeNodeCacheState::FREEABLE);
         self.trans().node_forget(paths, &b);
     }
 }
@@ -472,13 +472,13 @@ impl BtreeUpdate {
 
                 b.flags.set_need_write(false);
                 node_free(fs, b);
-                let _ = fs.btree_node_transition_state(b, c::btree_node_cache_state::FREEABLE);
+                let _ = fs.btree_node_transition_state(b, c::BtreeNodeCacheState::FREEABLE);
             } else {
                 assert!(r.ob.nr == 0, "a node taken from the reserve, kept but never written");
             }
 
             trans.node_unlock_write_pathless(paths, b);
-            unsafe { six_unlock_ip(b.c.lock.six(), c::six_lock_type::SIX_LOCK_intent, crate::ret_ip!()) };
+            unsafe { six_unlock_ip(b.c.lock.six(), c::SixLockType::SIX_LOCK_intent, crate::ret_ip!()) };
         }
 
         o.consumed.clear();

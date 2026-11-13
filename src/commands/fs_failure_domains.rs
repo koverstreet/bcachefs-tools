@@ -25,7 +25,7 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
-use crate::wrappers::accounting::{AccountingEntry, disk_accounting_type};
+use crate::wrappers::accounting::{AccountingEntry, DiskAccountingType};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::util::vstructs::ArmError;
@@ -320,7 +320,7 @@ fn fs_failure_domains_to_text(out: &mut Printbuf, cli: &Cli, name_mode: DeviceNa
     let sysfs_path = sysfs::sysfs_path_from_fd(handle.sysfs_fd())?;
     let devs = sysfs::fs_get_devices(&sysfs_path, name_mode)?;
 
-    let acct = handle.query_accounting(disk_accounting_type::replicas.bit())
+    let acct = handle.query_accounting(DiskAccountingType::replicas.bit())
         .map_err(|e| anyhow!("query_accounting ioctl failed (kernel too old?): {}", e))?;
     let acct_refs: Vec<&AccountingEntry> = acct.entries.iter().collect();
 

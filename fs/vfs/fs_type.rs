@@ -29,11 +29,11 @@ use core::ffi::{c_int, CStr};
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fs::{Claimed, OpenFs};
 use crate::init::registry::{self, Claim, FsHandle, Key, Opener, Opening};
-use crate::opt_id;
+use crate::OptId;
 use crate::util::alloc::KVVec;
 use crate::util::fs_context::{FsContext, FsParam, ParamValue};
 use crate::util::fs_type::{FsType, FsTypeTable, SuperData};
@@ -113,7 +113,7 @@ fn wipe(b: &mut [u8]) {
 
 /// @opts' defined options, as the mount's.
 fn set_mount_opts(fs: &Fs, opts: &c::bch_opts) {
-    for id in (0..crate::opts::NR).filter(|&id| opts.defined(c::bch_opt_id(id as u32))) {
+    for id in (0..crate::opts::NR).filter(|&id| opts.defined(c::OptId(id as u32))) {
         fs.mount_opts.set(id);
     }
 }
@@ -169,8 +169,8 @@ impl Bcachefs {
     fn open_opts(p: &MountParams, claimed: Claimed, opts: &mut c::bch_opts) -> Result<OpenFs, BchError> {
         let fs = claimed.open(opts, p.user_key.as_ref().map(|k| &k.0))?;
 
-        if opts.defined(opt_id::Opt_discard) {
-            fs.flags.set(c::bch_fs_flags::discard_mount_opt_set, true);
+        if opts.defined(OptId::Opt_discard) {
+            fs.flags.set(c::FsFlag::discard_mount_opt_set, true);
         }
         set_mount_opts(&fs, opts);
 
@@ -456,9 +456,9 @@ impl FsType for Bcachefs {
         // fc->sb_flags, not c->opts.read_only: emergency ro stops the
         // filesystem without rewriting the option, so that would find nothing
         // to do and report success, read-only.
-        if !rdonly && fs.flags.get(c::bch_fs_flags::emergency_ro) {
+        if !rdonly && fs.flags.get(c::FsFlag::emergency_ro) {
             fc.errorfc(format_args!("cannot go read-write: filesystem is in emergency read-only"));
-            return fs.throw(bch_errcode::BCH_ERR_emergency_ro);
+            return fs.throw(Errcode::BCH_ERR_emergency_ro);
         }
 
         let want_ro = fc.ctx().opts.read_only;
@@ -482,7 +482,7 @@ impl FsType for Bcachefs {
                     // caller; the throw discards the errcode
                     crate::bch_err!(fs, "error going read-write: {}", e.msg());
                     fc.errorfc(format_args!("error going read-write: {}", e.msg()));
-                    return fs.throw(bch_errcode::BCH_ERR_EINVAL_reconfigure_read_write);
+                    return fs.throw(Errcode::BCH_ERR_EINVAL_reconfigure_read_write);
                 }
                 sb.set_rdonly(false);
             }
@@ -491,7 +491,7 @@ impl FsType for Bcachefs {
         }
 
         let opts = &fc.ctx().opts;
-        if opts.defined(opt_id::Opt_errors) {
+        if opts.defined(OptId::Opt_errors) {
             fs.opts_writer(&mut fs.sb_lock()).errors.set(opts.errors);
         }
         Ok(())

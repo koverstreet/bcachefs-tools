@@ -13,7 +13,7 @@ use crate::data::ec::stripe::StripeKey;
 use crate::data::ec::stripe_new::{BlockDevsWriter, Internal, InternalGuard, Slot, StripeBlock};
 use crate::data::ec::stripe_new_reuse::{should_reuse_stripe, try_stripe_reuse};
 use crate::data::ec::trigger::ec_stripe_mem_alloc;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::types::Align8U64;
 use crate::util::backref::BackRef;
@@ -156,7 +156,7 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: 
     let mut sum = frac.iter().flatten().fold(0u64, |sum, &f| sum.wrapping_add(f));
 
     let flags = req.flags;
-    req.flags |= c::bch_write_flags::alloc_nowait;
+    req.flags |= c::WriteFlags::alloc_nowait;
     let mut ret = Ok(());
 
     for i in 0..MAX {
@@ -227,7 +227,7 @@ fn copygc_can_run_on_devs(fs: &Fs, devs: &c::bch_devs_mask) -> bool {
 fn will_not_allocate(fs: &Fs, req: &mut c::alloc_request, s: &Internal) -> bool {
     req.devs_may_alloc.d.not_and(&s.devs.d);
 
-    req.watermark == c::bch_watermark::copygc || !copygc_can_run_on_devs(fs, &req.devs_may_alloc)
+    req.watermark == c::Watermark::copygc || !copygc_can_run_on_devs(fs, &req.devs_may_alloc)
 }
 
 /// @s cut down to the blocks it got, of @nr_blocks with @nr_parity: its data
@@ -293,16 +293,16 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
     saved.save(req);
 
     req.devs_may_alloc = s.devs;
-    if req.watermark == c::bch_watermark::copygc {
-        req.flags |= c::bch_write_flags::alloc_nowait;
+    if req.watermark == c::Watermark::copygc {
+        req.flags |= c::WriteFlags::alloc_nowait;
     }
 
     let mut ret = dev_stripe.lock.lock_trans(t).and_then(|mut g| alloc_buckets(t, req, g.protected(), s));
 
     // as C's: the errors themselves, not their classes
-    let blocked = BchError::from(bch_errcode::BCH_ERR_bucket_alloc_blocked);
+    let blocked = BchError::from(Errcode::BCH_ERR_bucket_alloc_blocked);
     let full = ret.err()
-        .filter(|&e| may_shrink && (e == blocked || e == BchError::from(bch_errcode::BCH_ERR_freelist_empty)))
+        .filter(|&e| may_shrink && (e == blocked || e == BchError::from(Errcode::BCH_ERR_freelist_empty)))
         .filter(|_| will_not_allocate(fs, req, s));
     if let Some(err) = full {
         let moving = s.blocks.iter().filter(|b| b.moving()).count();
@@ -318,7 +318,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
             if err == blocked {
                 fs.alloc_waiters_unpark();
             }
-            ret = fs.throw(bch_errcode::BCH_ERR_stripe_insufficient_devices);
+            ret = fs.throw(Errcode::BCH_ERR_stripe_insufficient_devices);
         }
     }
 
@@ -338,7 +338,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
 /// member, and this is the bottom of a write path.
 #[derive(::pin_init::Zeroable)]
 struct ReqSaved {
-    flags:          c::bch_write_flags,
+    flags:          c::WriteFlags,
     data_type:      DataType,
     ptrs:           c::open_buckets,
     nr_replicas:    u8,
@@ -380,7 +380,7 @@ pub(crate) fn new_stripe_key(fs: &Fs, key: &mut StripeKey, algorithm: u8, nr_dat
     v.nr_blocks = nr_data + nr_parity;
     v.nr_redundant = nr_parity;
     v.csum_granularity_bits = (fs.opts().encoded_extent_max.get() >> 9).ilog2() as u8;
-    v.csum_type = c::bch_csum_type::crc32c.0 as u8;
+    v.csum_type = c::CsumType::crc32c.0 as u8;
     v.disk_label = disk_label;
     let can_widen = v.want_can_widen(fs.ec_rw_member_devs_nr(disk_label, sectors),
                                      fs.opts().ec_max_data_blocks.get().into());
@@ -409,7 +409,7 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
 
     /* OpenStripe::tryget()'s insert, under the walk's locks, can't grow the table: */
     t.allocate_dropping_locks(|| {
-        fs.ec.stripes_open.make_room().map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_stripe_open))
+        fs.ec.stripes_open.make_room().map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_stripe_open))
     })?;
 
     let mut iter = BtreeIter::new(t, Btree::stripes, start, BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
@@ -418,7 +418,7 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
 
         if bkey_gt(k.k.p, pos(0, u32::MAX.into())) {
             if start == min_pos {
-                return fs.throw(bch_errcode::BCH_ERR_ENOSPC_stripe_create);
+                return fs.throw(Errcode::BCH_ERR_ENOSPC_stripe_create);
             }
             start = min_pos;
             return Ok(LoopFlow::ContinueFrom(min_pos));
@@ -448,8 +448,8 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, 
     }
 
     let saved = (req.watermark, req.flags);
-    req.watermark = c::bch_watermark::stripe;
-    req.flags |= c::bch_write_flags::alloc_nowait;
+    req.watermark = c::Watermark::stripe;
+    req.flags |= c::WriteFlags::alloc_nowait;
     let ret = new_stripe_alloc_buckets(t, req, dev_stripe, s, false);
     (req.watermark, req.flags) = saved;
 
@@ -476,11 +476,11 @@ pub(crate) fn stripe_alloc_or_reuse(t: &TransAttempt<'_, '_>, req: &mut c::alloc
 
     if s.res.as_ref().is_none_or(|r| r.sectors() == 0) {
         // NOFAIL: it doesn't fail
-        let _ = s.reserve_parity(stripe_fs, c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL);
+        let _ = s.reserve_parity(stripe_fs, c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL);
     }
 
     t.allocate_dropping_locks(|| {
-        t.fs().ec.stripes_new_buckets.make_room().map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_stripe_new_bucket))
+        t.fs().ec.stripes_new_buckets.make_room().map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_stripe_new_bucket))
     })?;
     s.buckets_add(t.fs())?;
     s.allocated = true;

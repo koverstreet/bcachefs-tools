@@ -56,7 +56,7 @@ use pin_init::stack_pin_init;
 pub struct BtreeReadBio {
     work:       c::work_struct,
     fs:         &'static Fs,
-    ca:         Option<DevIoRef<c::bch_dev_read_ref>>,
+    ca:         Option<DevIoRef<c::DevReadRefKind>>,
     b:          NonNull<BtreeNode>,
     start_time: u64,
     /* its slot on its async object list */
@@ -82,8 +82,8 @@ impl c::bset__head {
         }
     }
 
-    fn checksum_type(&self) -> c::bch_csum_type {
-        c::bch_csum_type(self.csum_type() as u32)
+    fn checksum_type(&self) -> c::CsumType {
+        c::CsumType(self.csum_type() as u32)
     }
 }
 
@@ -253,7 +253,7 @@ pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     let contents = unsafe { b.contents() };
     let k = BkeySC::from(contents.key_i());
 
-    let dev = match k.pick_read_device(fs, None, 0, c::bch_read_flags::empty()) {
+    let dev = match k.pick_read_device(fs, None, 0, c::ReadFlags::empty()) {
         Ok(Some(pick)) => pick.ptr.dev().into(),
         _ => {
             prt!(out, "error getting device to read from: invalid device\n");
@@ -372,7 +372,7 @@ fn node_header_to_text(out: &mut Printbuf, bn: &Head<c::btree_node>) {
 
 pub fn read_done(fs: &Fs, ca: &Dev, b: &BtreeNode, failed: Option<&mut c::bch_io_failures>,
                  err_msg: &mut Printbuf) -> Result<(), BchError> {
-    fs.times[c::bch_time_stats::btree_node_read_done as usize]
+    fs.times[c::TimeStat::btree_node_read_done as usize]
         .time(|| node_read_done(&mut NodeValidate { fs, b, io: NodeIo::Read { ca, failed, err_msg } }))
 }
 
@@ -695,7 +695,7 @@ fn validate_vals(v: &mut NodeValidate<'_>) -> Result<(), BchError> {
             let u = k.disassemble(contents, &mut tmp);
 
             match btree_node_bkey_val_validate(fs, b, u, ValidateFlags::empty()) {
-                Err(err) if err == BchError::from(c::bch_errcode::BCH_ERR_fsck_delete_bkey) => true,
+                Err(err) if err == BchError::from(c::Errcode::BCH_ERR_fsck_delete_bkey) => true,
                 _ if crate::debug::params::inject_invalid_keys() && u.k.bversion == c::Bversion::MAX => true,
                 r => { r?; false }
             }
@@ -814,7 +814,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
             break ret;
         }
         match BkeySC::from(unsafe { b.contents() }.key_i())
-            .pick_read_device(fs, Some(&failed), 0, c::bch_read_flags::empty()) {
+            .pick_read_device(fs, Some(&failed), 0, c::ReadFlags::empty()) {
             Ok(Some(pick)) => rb.pick = pick,
             _ => break ret,
         }
@@ -829,7 +829,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
             Some(ca) => {
                 unsafe { Bio::from_raw_mut(&raw mut rb.bio) }.set_dev(ca.disk_sb.bdev);
                 unsafe { c::submit_bio_wait(&raw mut rb.bio) };
-                ca.account_io_completion(c::bch_member_error_type::read, rb.start_time, rb.bio.bi_status == 0);
+                ca.account_io_completion(c::MemberErrorType::read, rb.start_time, rb.bio.bi_status == 0);
             }
             None => rb.bio.bi_status = c::BLK_STS_REMOVED,
         }
@@ -862,7 +862,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
 
         if !used {
             prt!(&mut buf, "retry success");
-        } else if used_err(c::bch_errcode::BCH_ERR_btree_node_validate_err_csum) {
+        } else if used_err(c::Errcode::BCH_ERR_btree_node_validate_err_csum) {
             prt!(&mut buf, "checksum error, no good replica: read as is, contents unverified");
         } else {
             prt!(&mut buf, "repair success");
@@ -877,7 +877,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         buf.newline();
 
         /* the replica we're using lost keys: the btree lost data */
-        if used && used_err(c::bch_errcode::BCH_ERR_btree_node_validate_err_keys_lost) {
+        if used && used_err(c::Errcode::BCH_ERR_btree_node_validate_err_keys_lost) {
             let _ = btree_lost_data(fs, &mut buf, btree);
         }
     } else {
@@ -887,8 +887,8 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
     buf.set_level(if ret.is_err() { LogLevel::ERR } else { LogLevel::NOTICE });
     drop(buf);
 
-    unsafe { async_objs::list_del(fs, c::bch_async_obj_lists::btree_read_bio, &mut rb.list_idx) };
-    fs.times[c::bch_time_stats::btree_node_read as usize].update(rb.start_time);
+    unsafe { async_objs::list_del(fs, c::AsyncObjKind::btree_read_bio, &mut rb.list_idx) };
+    fs.times[c::TimeStat::btree_node_read as usize].update(rb.start_time);
 
     let contents = unsafe { b.contents() };
     if ret.is_ok() &&
@@ -912,7 +912,7 @@ unsafe extern "C" fn read_endio(bio: *mut c::bio) {
     let rb = unsafe { &mut *of_bio::<BtreeReadBio>(bio) };
 
     if let Some(ca) = &rb.ca {
-        ca.account_io_completion(c::bch_member_error_type::read, rb.start_time, rb.bio.bi_status == 0);
+        ca.account_io_completion(c::MemberErrorType::read, rb.start_time, rb.bio.bi_status == 0);
     }
 
     unsafe { rb.fs.btree.read_complete_wq.queue_work(&raw mut rb.work) };
@@ -930,7 +930,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
 
     fs.event_inc_trace(events::btree_node_read, |out| prt!(out, "{}", b.pos_to_text(fs)));
 
-    let Ok(Some(pick)) = key.pick_read_device(fs, None, 0, c::bch_read_flags::empty()) else {
+    let Ok(Some(pick)) = key.pick_read_device(fs, None, 0, c::ReadFlags::empty()) else {
         let mut msg = log_msg_ratelimited!(fs);
 
         prt!(&mut msg, "btree node read error: no device to read from\n at {}\n", b.pos_to_text(fs));
@@ -946,7 +946,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
         return;
     };
 
-    let ca = fs.dev_get_ioref::<c::bch_dev_read_ref>(pick.ptr.dev().into());
+    let ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
 
     let (data, bytes) = (unsafe { b.contents() }.data.cast::<u8>(), b.buf_bytes());
     let bio = unsafe {
@@ -970,7 +970,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
     rb.bio.bi_end_io    = Some(read_endio);
     unsafe { bch2_bio_map(bio, data.cast(), bytes) };
 
-    let list = &fs.async_objs[c::bch_async_obj_lists::btree_read_bio as usize].list;
+    let list = &fs.async_objs[c::AsyncObjKind::btree_read_bio as usize].list;
     rb.list_idx = list.add(NonNull::from(&mut *rb).cast()).unwrap_or(0);
 
     if let Some(ca) = &rb.ca {
@@ -1024,7 +1024,7 @@ impl Fs {
         let mut n = b.unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
         unsafe { n.contents_mut() }.set_key(k);
         n.set_id(id, level as usize);
-        let (b, held) = n.hash(c::btree_node_cache_state::CLEAN)
+        let (b, held) = n.hash(c::BtreeNodeCacheState::CLEAN)
             .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}"));
 
         b.flags.set_read_in_flight(true);
@@ -1034,8 +1034,8 @@ impl Fs {
         node_read(&trans, b, true);
 
         let ret = if b.flags.read_error() {
-            let _ = self.btree_node_transition_state(b, c::btree_node_cache_state::FREEABLE);
-            Err(self.err(c::bch_errcode::BCH_ERR_btree_node_read_error))
+            let _ = self.btree_node_transition_state(b, c::BtreeNodeCacheState::FREEABLE);
+            Err(self.err(c::Errcode::BCH_ERR_btree_node_read_error))
         } else {
             self.btree_set_root_for_read(b);
             Ok(())
@@ -1055,7 +1055,7 @@ pub type Replicas<T> = ArrayVec<T, { c::BCH_BKEY_PTRS_MAX as usize }>;
 /// pointer: its buffer and bio, and a ref on its device.
 pub struct ReplicaRead<'f> {
     fs:      &'f Fs,
-    ca:      DevIoRef<c::bch_dev_read_ref>,
+    ca:      DevIoRef<c::DevReadRefKind>,
     bio:     BioBox<Bio, BioBuffersMapped<Bounce<'f>>>,
     /// Its pointer's, by position in the key, as ptrs_io_error's bits are
     pub ptr_bit: u32,
@@ -1065,12 +1065,12 @@ impl<'f> ReplicaRead<'f> {
     /// The replica on @dev of the node @k points to - None if there's none
     /// there to read.
     pub fn new(fs: &'f Fs, k: BkeySC<'_>, dev: u32) -> Result<Option<Self>, BchError> {
-        let pick = k.pick_read_device(fs, None, dev, c::bch_read_flags::hard_require_read_device)?;
+        let pick = k.pick_read_device(fs, None, dev, c::ReadFlags::hard_require_read_device)?;
         let Some(pick) = pick else { return Ok(None) };
         let ptr_bit = dev_ptr_bit(fs, k, pick.ptr.dev().into());
 
-        let ca = fs.dev_get_ioref::<c::bch_dev_read_ref>(pick.ptr.dev().into())
-            .ok_or_else(|| fs.err(c::bch_errcode::BCH_ERR_device_offline))?;
+        let ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into())
+            .ok_or_else(|| fs.err(c::Errcode::BCH_ERR_device_offline))?;
 
         let bytes = fs.opts.btree_node_size.get() as usize;
         let mut bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
@@ -1135,7 +1135,7 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
     }
 
     let fs = m.trans().fs();
-    let write = fs.writes.tryget_live().ok_or_else(|| fs.err(c::bch_errcode::BCH_ERR_erofs_no_writes))?;
+    let write = fs.writes.tryget_live().ok_or_else(|| fs.err(c::Errcode::BCH_ERR_erofs_no_writes))?;
     // the task holds it, and its write ref: going read-only waits for that
     let fs_ref = unsafe { BackRef::new(fs) };
     let fs = unsafe { fs_ref.get() };

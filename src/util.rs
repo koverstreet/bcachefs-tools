@@ -134,7 +134,7 @@ pub fn ask_yn() -> bool {
     matches!(line.as_bytes().first(), Some(b'y' | b'Y'))
 }
 
-/// The name of a bch_sb_error_id - the same table fsck and the
+/// The name of an SbErrorId - the same table fsck and the
 /// superblock error counters use.
 pub fn sb_error_name(id: u32) -> String {
     SbErrorId(id).to_string()

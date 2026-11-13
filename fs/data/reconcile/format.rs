@@ -55,7 +55,7 @@ use cstruct_macros::{bitfield, bch_enum, CStruct};
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_rebalance_v1 {
-    #[bits(default = 1 << c::bch_extent_entry_type::rebalance_v1.0)]
+    #[bits(default = 1 << c::ExtentEntryType::rebalance_v1.0)]
     pub(self) type_:                   u6,
     unused:                            u3,
 
@@ -77,7 +77,7 @@ pub struct bch_extent_rebalance_v1 {
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_reconcile {
-    #[bits(default = 1 << c::bch_extent_entry_type::reconcile.0)]
+    #[bits(default = 1 << c::ExtentEntryType::reconcile.0)]
     pub(self) type_:                   u8,
     unused:                            u2,
     ptrs_moving:                       u5,
@@ -103,7 +103,7 @@ pub struct bch_extent_reconcile {
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_reconcile_bp {
-    #[bits(default = 1 << c::bch_extent_entry_type::reconcile_bp.0)]
+    #[bits(default = 1 << c::ExtentEntryType::reconcile_bp.0)]
     pub(self) type_: u9,
     idx:   u55,
 }
@@ -112,7 +112,7 @@ pub struct bch_extent_reconcile_bp {
 #[prefix(BCH_RECONCILE_)]
 /* subset of BCH_INODE_OPTS */
 #[repr(u32)]
-pub enum bch_reconcile_opts {
+pub enum ReconcileOpt {
     data_replicas,
     data_checksum,
     erasure_code,
@@ -134,7 +134,7 @@ impl bch_extent_reconcile {
                 r.[<set_ $name _from_inode>](opts.[<$name _from_inode>]().into());
             )* } };
         }
-        c::bch_reconcile_opts_arms!(opts);
+        c::ReconcileOpt_arms!(opts);
         r
     }
 
@@ -146,7 +146,7 @@ impl bch_extent_reconcile {
                 (stringify!($name), u64::from(opts.$name), Self::[<$name:upper _BITS>]),
             )*] } };
         }
-        c::bch_reconcile_opts_arms!(opts).into_iter()
+        c::ReconcileOpt_arms!(opts).into_iter()
             .filter(|&(_, v, bits)| v >> bits != 0)
             .map(|(name, v, _)| (name, v))
     }
@@ -176,7 +176,7 @@ pub enum ReconcileType {
 #[bch_enum(open)]
 #[prefix(RECONCILE_WORK_)]
 #[repr(u32)]
-pub enum reconcile_work_id {
+pub enum ReconcileWorkId {
     none,
     hipri,
     normal,

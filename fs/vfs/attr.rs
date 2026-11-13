@@ -26,7 +26,7 @@ use core::ffi::c_int;
 use crate::acl::{self, AclType};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
 use crate::quota::QuotaAcctMode;
@@ -37,7 +37,7 @@ use super::iattr::Iattr;
 use super::idmap::MntIdmap;
 use super::inode::{InodeInfo, ATTR_CTIME, ATTR_SIZE};
 
-use c::bch_inode_flags as F;
+use c::InodeFlags as F;
 
 /// Each flag's bit in FS_IOC_GETFLAGS's flags, and in FS_IOC_FSGETXATTR's.
 const FLAGS: [(F, u32, u32); 5] = [
@@ -79,7 +79,7 @@ impl FileattrSet {
         let file_type = bi.bi_mode as u32 & c::S_IFMT;
         let others_may = (F::nodump | F::noatime).bits();
         if file_type != c::S_IFREG && file_type != c::S_IFDIR && self.flags & !others_may != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_setattr_bad_file_type);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_setattr_bad_file_type);
         }
 
         if let Some(casefold) = self.casefold.filter(|&cf| cf != bi.casefold(fs)) {
@@ -88,7 +88,7 @@ impl FileattrSet {
 
         if let Some(project) = self.project {
             bi.bi_project = project;
-            InodeOpt::of(c::inode_opt_id::project).set_own(bi, true);
+            InodeOpt::of(c::InodeOptId::project).set_own(bi, true);
         }
 
         bi.bi_flags = bi.bi_flags & !self.mask | self.flags;
@@ -151,13 +151,13 @@ impl InodeInfo {
         let xflags = FLAGS.iter().filter(|f| bi.flag(f.0)).fold(0, |x, f| x | f.2);
 
         unsafe { c::fileattr_fill_xflags(fa, xflags) };
-        if InodeOpt::of(c::inode_opt_id::project).is_own(&bi) {
+        if InodeOpt::of(c::InodeOptId::project).is_own(&bi) {
             fa.fsx_xflags |= c::FS_XFLAG_PROJINHERIT;
         }
         if bi.casefold(self.fs()) {
             fa.flags |= c::FS_CASEFOLD_FL;
         }
-        fa.fsx_projid = self.ei_quota.lock().ei_qid.q[c::quota_types::QTYP_PRJ.0 as usize];
+        fa.fsx_projid = self.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ.0 as usize];
     }
 
     /// @dentry is this inode's.
@@ -173,11 +173,11 @@ impl InodeInfo {
             s.mask = all;
             s.flags |= flags_from(&mut fa.fsx_xflags, |f| f.2);
             if fa.fsx_xflags != 0 {
-                return fs.throw(bch_errcode::BCH_ERR_unsupported_fsx_flag);
+                return fs.throw(Errcode::BCH_ERR_unsupported_fsx_flag);
             }
 
             if fa.fsx_projid >= u32::MAX {
-                return fs.throw(bch_errcode::BCH_ERR_projid_too_big);
+                return fs.throw(Errcode::BCH_ERR_projid_too_big);
             }
             let project = self.ei_inode.bi_project.get();
             if (project != 0 || fa.fsx_projid != 0) && project != fa.fsx_projid + 1 {
@@ -191,7 +191,7 @@ impl InodeInfo {
             fa.flags &= !c::FS_CASEFOLD_FL;
             s.flags |= flags_from(&mut fa.flags, |f| f.1);
             if fa.flags != 0 {
-                return fs.throw(bch_errcode::BCH_ERR_unsupported_fa_flag);
+                return fs.throw(Errcode::BCH_ERR_unsupported_fa_flag);
             }
         }
 
@@ -274,10 +274,10 @@ impl InodeInfo {
         let old_qid = self.ei_quota.lock().ei_qid;
         let mut qid = old_qid;
         if let Some(uid) = uid {
-            qid.q[c::quota_types::QTYP_USR.0 as usize] = uid;
+            qid.q[c::QuotaType::QTYP_USR.0 as usize] = uid;
         }
         if let Some(gid) = kgid {
-            qid.q[c::quota_types::QTYP_GRP.0 as usize] = v.gid_of(gid);
+            qid.q[c::QuotaType::QTYP_GRP.0 as usize] = v.gid_of(gid);
         }
 
         lock.quota_transfer(qid, !0, QuotaAcctMode::PREALLOC)?;

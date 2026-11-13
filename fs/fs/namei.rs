@@ -34,7 +34,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::dirent::{self, d_type_str, Dirent, DirentTarget, Dirents};
-use crate::errcode::{bch_errcode, BchError, Found};
+use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode;
@@ -129,7 +129,7 @@ pub fn create_trans(
 
     *new_subvol = subvolume::get(t, dir.subvol as u32, true)?;
     if new_subvol.ro() ||
-       new_subvol.state_decoded() == Some(c::bch_subvolume_state::unlinked) {
+       new_subvol.state_decoded() == Some(c::SubvolumeState::unlinked) {
         return Err(BchError::from(c::EROFS));
     }
 
@@ -143,14 +143,14 @@ pub fn create_trans(
         inode::init_late(fs, new_inode, now, uid, gid, mode, rdev, Some(dir_u));
 
         if flags & c::BCH_CREATE_TMPFILE != 0 {
-            new_inode.set_flag(c::bch_inode_flags::unlinked, true);
+            new_inode.set_flag(c::InodeFlags::unlinked, true);
         }
 
         if acl.is_some() {
-            new_inode.set_flag(c::bch_inode_flags::has_access_acl, true);
+            new_inode.set_flag(c::InodeFlags::has_access_acl, true);
         }
         if default_acl.is_some() {
-            new_inode.set_flag(c::bch_inode_flags::has_default_acl, true);
+            new_inode.set_flag(c::InodeFlags::has_default_acl, true);
         }
 
         inode::create(t, &mut inode_iter, new_inode, dir_snapshot, inodes_32bit(fs, dir_u))?;
@@ -170,13 +170,13 @@ pub fn create_trans(
 
         // Not a subvolume root?
         if new_inode.bi_subvol as u64 != snapshot_src.subvol {
-            return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_snapshot_not_subvol_root));
+            return Err(fs.err(Errcode::BCH_ERR_EINVAL_snapshot_not_subvol_root));
         }
 
         // If we're not root, we have to own the subvolume being snapshotted
         // - in that order: capable() records using the capability.
         if uid != 0 && !capable(Capability::Fowner) && new_inode.bi_uid != uid {
-            return Err(fs.err(bch_errcode::BCH_ERR_EPERM_non_admin_or_owner));
+            return Err(fs.err(Errcode::BCH_ERR_EPERM_non_admin_or_owner));
         }
 
         flags |= c::BCH_CREATE_SUBVOL;
@@ -377,7 +377,7 @@ pub fn unlink_trans(
     }
 
     if deleting_subvol && inode_u.bi_subvol == 0 {
-        return Err(fs.err(bch_errcode::BCH_ERR_ENOENT_not_subvol));
+        return Err(fs.err(Errcode::BCH_ERR_ENOENT_not_subvol));
     }
 
     // Recursive subvolume destroy not allowed (yet?)
@@ -391,7 +391,7 @@ pub fn unlink_trans(
         // No dirent will ever point at this inode again - deletion belongs
         // to the subvolume path, though: the inode reaper keys off
         // bch2_inode_is_subvolume_root() to leave it alone.
-        inode_u.set_flag(c::bch_inode_flags::unlinked, true);
+        inode_u.set_flag(c::InodeFlags::unlinked, true);
 
         // If we're deleting a subvolume, we need to really delete the
         // dirent, not just emit a whiteout in the current snapshot:
@@ -451,11 +451,11 @@ pub fn rename_trans(
     dst_inode_u:    &mut c::bch_inode_unpacked,
     src_name:       &OsStr,
     dst_name:       &OsStr,
-    mode:           c::bch_rename_mode,
+    mode:           c::RenameMode,
     src_opt_change: &mut c::inode_opt_change,
     dst_opt_change: &mut c::inode_opt_change,
 ) -> Result<(), BchError> {
-    use c::bch_rename_mode::*;
+    use c::RenameMode::*;
 
     let fs = t.fs();
     let mut src_dir_iter = BtreeIter::uninit();
@@ -594,7 +594,7 @@ pub fn rename_trans(
         if dst_inode_u.bi_subvol != 0 {
             subvolume::require_no_children(t, dst_inode_u.bi_subvol)?;
             subvolume::unlink(t, dst_inode_u.bi_subvol)?;
-            dst_inode_u.set_flag(c::bch_inode_flags::unlinked, true);
+            dst_inode_u.set_flag(c::InodeFlags::unlinked, true);
         } else {
             inode::nlink_dec(t, dst_inode_u);
         }
@@ -707,7 +707,7 @@ fn first_inode_snapshot(t: &TransAttempt<'_, '_>, inum: u64) -> Result<u32, BchE
         } else {
             ControlFlow::Continue(())
         }))?
-        .ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot))
+        .ok_or_else(|| t.fs().err(Errcode::BCH_ERR_ENOENT_snapshot))
 }
 
 /// Walk up from inode @inum - in subvolume @subvol, or in @snapshot -
@@ -757,7 +757,7 @@ fn inum_to_path_up(
         }
 
         if inode.bi_dir == 0 && inode.bi_dir_offset == 0 {
-            ret = Err(fs.err(bch_errcode::BCH_ERR_ENOENT_inode_no_backpointer));
+            ret = Err(fs.err(Errcode::BCH_ERR_ENOENT_inode_no_backpointer));
             break;
         }
 
@@ -952,11 +952,11 @@ fn check_dirent_inode_dirent(
                      "directory with missing backpointer\n{}\n{}",
                      d.k().to_text(fs), target)?;
 
-        fsck_err_on!(t, target.flag(c::bch_inode_flags::unlinked), id::inode_unlinked_but_has_dirent,
+        fsck_err_on!(t, target.flag(c::InodeFlags::unlinked), id::inode_unlinked_but_has_dirent,
                      "inode unlinked but has dirent\n{}\n{}",
                      d.k().to_text(fs), target)?;
 
-        target.set_flag(c::bch_inode_flags::unlinked, false);
+        target.set_flag(c::InodeFlags::unlinked, false);
         target.bi_dir        = d_pos.inode;
         target.bi_dir_offset = d_pos.offset;
         return inode::fsck_write(t, target);
@@ -1049,7 +1049,7 @@ fn check_dirent_inode_dirent(
                         target.bi_inum, target.bi_snapshot,
                         d_type_str(d.d_type()), buf)? {
             target.bi_nlink = target.bi_nlink.wrapping_add(1);
-            target.set_flag(c::bch_inode_flags::unlinked, false);
+            target.set_flag(c::InodeFlags::unlinked, false);
             inode::fsck_write(t, target)?;
         }
     }
@@ -1121,11 +1121,11 @@ fn propagate_has_case_insensitive(t: &TransAttempt<'_, '_>, mut inum: c::subvol_
         let mut iter = BtreeIter::uninit();
         let mut inode = inode::peek(t, &mut iter, inum, BtreeIterFlags::empty())?;
 
-        if inode.flag(c::bch_inode_flags::has_case_insensitive) {
+        if inode.flag(c::InodeFlags::has_case_insensitive) {
             break;
         }
 
-        inode.set_flag(c::bch_inode_flags::has_case_insensitive, true);
+        inode.set_flag(c::InodeFlags::has_case_insensitive, true);
         inode::write(t, &mut iter, &mut inode)?;
 
         if subvol_inum_eq(inum, c::subvol_inum::ROOT) {
@@ -1147,10 +1147,10 @@ pub fn maybe_propagate_has_case_insensitive(
     inode: &mut c::bch_inode_unpacked,
 ) -> Result<(), BchError> {
     if inode.casefold(t.fs()) {
-        inode.set_flag(c::bch_inode_flags::has_case_insensitive, true);
+        inode.set_flag(c::InodeFlags::has_case_insensitive, true);
     }
 
-    if !inode.flag(c::bch_inode_flags::has_case_insensitive) {
+    if !inode.flag(c::InodeFlags::has_case_insensitive) {
         return Ok(());
     }
 
@@ -1189,7 +1189,7 @@ pub fn check_inode_has_case_insensitive(
         return Ok(());
     }
 
-    if inode.casefold(fs) && !inode.flag(c::bch_inode_flags::has_case_insensitive) {
+    if inode.casefold(fs) && !inode.flag(c::InodeFlags::has_case_insensitive) {
         let mut buf = Printbuf::new();
         write!(buf,"casefolded dir with has_case_insensitive not set\ninum {}:{} ",
                inode.bi_inum, inode.bi_snapshot);
@@ -1197,12 +1197,12 @@ pub fn check_inode_has_case_insensitive(
         inum_snapshot_to_path(t, inode.bi_inum, inode.bi_snapshot, &mut buf)?;
 
         if fsck_err!(t, id::inode_has_case_insensitive_not_set, "{}", buf)? {
-            inode.set_flag(c::bch_inode_flags::has_case_insensitive, true);
+            inode.set_flag(c::InodeFlags::has_case_insensitive, true);
             *do_update = true;
         }
     }
 
-    if !inode.flag(c::bch_inode_flags::has_case_insensitive) {
+    if !inode.flag(c::InodeFlags::has_case_insensitive) {
         return Ok(());
     }
 
@@ -1216,14 +1216,14 @@ pub fn check_inode_has_case_insensitive(
 
         dir = inode::find_by_inum_snapshot(t, dir.bi_dir, snapshot, BtreeIterFlags::empty())?;
 
-        if !dir.flag(c::bch_inode_flags::has_case_insensitive) {
+        if !dir.flag(c::InodeFlags::has_case_insensitive) {
             let mut buf = Printbuf::new();
             writeln!(buf,"parent of casefolded dir with has_case_insensitive not set");
 
             inum_snapshot_to_path(t, dir.bi_inum, dir.bi_snapshot, &mut buf)?;
 
             if fsck_err!(t, id::inode_parent_has_case_insensitive_not_set, "{}", buf)? {
-                dir.set_flag(c::bch_inode_flags::has_case_insensitive, true);
+                dir.set_flag(c::InodeFlags::has_case_insensitive, true);
                 inode::fsck_write(t, &mut dir)?;
                 repairing_parents = true;
             }
@@ -1238,7 +1238,7 @@ pub fn check_inode_has_case_insensitive(
 
     if repairing_parents {
         t.commit(None, CommitFlags::NO_ENOSPC)?;
-        return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
+        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested));
     }
 
     Ok(())

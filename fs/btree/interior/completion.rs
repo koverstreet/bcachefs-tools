@@ -19,11 +19,11 @@ use crate::btree::trigger::{key_trigger, TriggerOp};
 use crate::btree::write::{node_write_if_need, node_write_locked, BtreeWriteFlags};
 use crate::cstructs::c::BtreeWriteType;
 use crate::c;
-use crate::c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read};
+use crate::c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
 use crate::data_structures::array_vec::ArrayVec;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fs_fatal_error;
 use crate::types::Le64;
@@ -142,7 +142,7 @@ impl InteriorUpdate<'_> {
 
             while let Some(p) = blocked.remove_current() {
                 *unsafe { p.mode.protected_mut() } = Some(Mode::Update);
-                fs.journal.pin_copy(&self.journal, &p.journal, c::journal_pin_type::JOURNAL_PIN_TYPE_other,
+                fs.journal.pin_copy(&self.journal, &p.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other,
                                     Some(update_reparent_journal_pin_flush));
 
                 /*
@@ -166,7 +166,7 @@ impl InteriorUpdate<'_> {
          * when the new nodes are persistent and reachable on disk:
          */
         for w in [b.current_write(), b.prev_write()] {
-            fs.journal.pin_copy(&self.journal, &w.journal, c::journal_pin_type::JOURNAL_PIN_TYPE_other,
+            fs.journal.pin_copy(&self.journal, &w.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other,
                                 Some(will_free_node_journal_pin_flush));
             fs.journal.pin_drop(&w.journal);
         }
@@ -224,7 +224,7 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
                                     deleted_u64s);
         key_trigger(t, &mut op)?;
 
-        t.journal_entry_add(c::bch_jset_entry_type::overwrite, btree.0 as u8, level as u8, i.key.key().as_bytes())?;
+        t.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8, i.key.key().as_bytes())?;
     }
 
     for i in u.new_nodes_locked(commit_lock).iter_mut() {
@@ -236,7 +236,7 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
 
         let mut k = t.bkey_reassemble_room(BkeySC::from(i.key.key()),
                                            c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
-        k.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_foreground, 0)?;
+        k.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground, 0)?;
 
         /*
          * This is not strictly the best way of doing this, what we
@@ -255,7 +255,7 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
             };
             match unsafe { BtreeNodeIter::at_node(t, b.as_ref()) } {
                 Ok(_)                                                                => *update_node_key = true,
-                Err(e) if e == BchError::from(bch_errcode::BCH_ERR_btree_node_dying) => strip_reconcile(fs, k.as_s()),
+                Err(e) if e == BchError::from(Errcode::BCH_ERR_btree_node_dying) => strip_reconcile(fs, k.as_s()),
                 Err(e)                                                               => return Err(e),
             }
         }
@@ -273,9 +273,9 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
         };
         if !update_node_key || root {
             let (ty, level) = if root {
-                (c::bch_jset_entry_type::btree_root, level)
+                (c::JsetEntryType::btree_root, level)
             } else {
-                (c::bch_jset_entry_type::btree_keys, level + 1)
+                (c::JsetEntryType::btree_keys, level + 1)
             };
             t.journal_entry_add(ty, btree.0 as u8, level as u8, k.as_ref().as_bytes())?;
         } else {
@@ -399,7 +399,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
         let ret = lockrestart_do(&trans, |t| {
             nodes_written_trans(t, u, &mut commit_lock)?;
             t.commit(Some(&u.disk_res), CommitOpts::new()
-                     .watermark(Watermark::INTERIOR_UPDATES)
+                     .watermark(Watermark::interior_updates)
                      .flags(CommitFlags::NO_ENOSPC | CommitFlags::NO_CHECK_RW | CommitFlags::JOURNAL_RECLAIM))?;
             journal_seq = t.journal_res_seq();
             Ok(())

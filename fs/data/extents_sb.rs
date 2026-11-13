@@ -9,7 +9,7 @@ use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
 use crate::c;
 use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{set_all, SbFieldOps};
 use crate::util::vstructs::{Head, Unvalidated};
@@ -17,7 +17,7 @@ use crate::util::Printbuf;
 use crate::sb::io::SbResize;
 
 fn ours() -> impl Iterator<Item = u8> {
-    (0..c::bch_extent_entry_type::NR).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8)
+    (0..c::ExtentEntryType::NR).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8)
 }
 
 /// A section's sizes, @d: a 0 ends them.
@@ -35,7 +35,7 @@ fn sizes_to_cpu(theirs: &[u8]) -> ([u8; 31], u8) {
     for (d, s) in u64s.iter_mut().zip(ours()) {
         *d = s;
     }
-    (u64s, nr.max(c::bch_extent_entry_type::NR as usize) as u8)
+    (u64s, nr.max(c::ExtentEntryType::NR as usize) as u8)
 }
 
 impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
@@ -73,13 +73,13 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
 
     /// This version's sizes.
     fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        let u64s = (size_of::<Head<c::bch_sb_field>>() + c::bch_extent_entry_type::NR as usize)
+        let u64s = (size_of::<Head<c::bch_sb_field>>() + c::ExtentEntryType::NR as usize)
             .div_ceil(size_of::<u64>());
         let mut sb = fs.sb_resize(sb);
         let e = sb.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);
         let Some(e) = e else {
             crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
-            return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_extent_type_u64s);
+            return fs.throw(Errcode::BCH_ERR_ENOSPC_sb_extent_type_u64s);
         };
 
         for (d, s) in e.d.iter_mut().zip(ours()) {
@@ -101,7 +101,7 @@ mod tests {
         let b = plain_bytes_mut(buf);
         let f = cast_plain_mut::<Head<c::bch_sb_field>>(b).unwrap();
         f.set_val_u64s(u64s);
-        f.type_ = Le32::new(c::bch_sb_field_type::extent_type_u64s.0);
+        f.type_ = Le32::new(c::SbFieldType::extent_type_u64s.0);
         b[size_of::<Head<c::bch_sb_field>>()..][..sizes.len()].copy_from_slice(sizes);
         c::bch_sb_field::<Unvalidated>::from_bytes(b).unwrap().arm().unwrap()
     }
@@ -114,7 +114,7 @@ mod tests {
 
         let (u64s, known) = sizes_to_cpu(&[9, 9, 9]);
         assert_eq!(u64s[..ours.len()], ours[..]);
-        assert_eq!(known, c::bch_extent_entry_type::NR as u8);
+        assert_eq!(known, c::ExtentEntryType::NR as u8);
 
         let newer = [&ours[..], &[4, 5]].concat();
         let (u64s, known) = sizes_to_cpu(&newer);

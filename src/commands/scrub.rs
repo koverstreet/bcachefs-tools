@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bch_bindgen::c::{
-    bch_ioctl_data, bch_ioctl_data_args, bch_ioctl_data_event_ret, bch_ioctl_data_progress,
+    bch_ioctl_data, bch_ioctl_data_args, IoctlDataEventRet, bch_ioctl_data_progress,
     bch_ioctl_data_scrub,
 };
 use clap::Parser;
@@ -47,7 +47,7 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
 
 fn start_scrub(ioctl_fd: std::os::fd::BorrowedFd, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
     let cmd = bch_ioctl_data {
-        op: bch_bindgen::c::bch_data_ops::scrub.0 as u16,
+        op: bch_bindgen::c::DataOp::scrub.0 as u16,
         args: bch_ioctl_data_args {
             scrub: bch_ioctl_data_scrub { dev: dev_idx, data_types },
         },
@@ -74,7 +74,7 @@ impl ScrubDev {
 
         let status = if self.progress_fd.is_some() {
             format!("{}/sec", fmt_bytes_human(rate))
-        } else if self.ret_status == bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_device_offline.0 as u8 {
+        } else if self.ret_status == IoctlDataEventRet::BCH_IOCTL_DATA_EVENT_RET_device_offline.0 as u8 {
             "offline".to_string()
         } else {
             "complete".to_string()

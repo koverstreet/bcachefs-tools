@@ -21,11 +21,13 @@ use cstruct_macros::{bitfield, bch_enum, placed, CStruct, Fieldwise, Init, TypeI
 use pin_init::pin_data;
 use nestify::nest;
 
+/// How deep into the reserves an allocation - or a commit, its flags word's low
+/// bits - may dip. Usually unset: 0, stripe, is normal for the ENOSPC gate.
 #[bch_enum(closed)]
 #[prefix(BCH_WATERMARK_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_watermark {
+pub enum Watermark {
     stripe,
     normal,
     copygc,
@@ -186,7 +188,7 @@ nest! {
          * the block in the stripe this open_bucket corresponds to:
          */
         pub ec_idx: Volatile<u8>,
-        /* enum bch_data_type */
+        /* enum DataType */
         pub data_type: Volatile<u8>,
         /* handle already removed from ca->nr_open_buckets (bucket left free):
          * under freelist_lock */
@@ -259,7 +261,7 @@ c_default!(dev_stripe_state);
 #[prefix(WRITE_POINT_)]
 #[nr]
 #[repr(u32)]
-pub enum write_point_state {
+pub enum WritePointStatus {
     stopped,
     waiting_io,
     waiting_work,
@@ -338,7 +340,7 @@ published! {
     #[derive(CStruct)]
     pub struct WritePointState {
         pub state: Volatile<u32>,
-        pub time: [Volatile<u64>; c::write_point_state::NR as usize],
+        pub time: [Volatile<u64>; c::WritePointStatus::NR as usize],
     }
 }
 

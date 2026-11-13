@@ -4,17 +4,17 @@ use super::NewKey;
 use crate::btree::bkey::{bkey_val_to_text, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::btree::journal_overlay::peek_max;
-use crate::btree::locking::btree_node_locked_type::BTREE_NODE_UNLOCKED;
+use crate::btree::locking::BtreeNodeLockedType::BTREE_NODE_UNLOCKED;
 use crate::btree::path::{NodePtr, PathIdx, Paths};
 use crate::btree::trans::BtreeTrans;
 use crate::c;
 use crate::data_structures::cuckoo::Entry;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::locking::six::SixHold;
 use crate::locking::MemallocFlags;
 use crate::prt;
-use c::six_lock_type::SIX_LOCK_read;
+use c::SixLockType::SIX_LOCK_read;
 use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -51,7 +51,7 @@ impl BtreeTrans<'_> {
                     Some(got) => got,
                     None => {
                         crate::bch_err_ratelimited!(fs, "error allocating memory for key cache item, btree {btree}");
-                        return fs.throw(bch_errcode::BCH_ERR_ENOMEM_btree_key_cache_create);
+                        return fs.throw(Errcode::BCH_ERR_ENOMEM_btree_key_cache_create);
                     }
                 }
             }
@@ -73,13 +73,13 @@ impl BtreeTrans<'_> {
                 paths[ck_path].mark_locked_noreset(0, BTREE_NODE_UNLOCKED);
 
                 let new_k = match t.allocate_dropping_locks_in(paths, || {
-                    NewKey::alloc(key_u64s).ok_or(BchError::from(bch_errcode::BCH_ERR_ENOMEM_btree_key_cache_fill))
+                    NewKey::alloc(key_u64s).ok_or(BchError::from(Errcode::BCH_ERR_ENOMEM_btree_key_cache_fill))
                 }) {
                     Ok(new_k) => new_k,
                     Err(e) if e.matches(c::ENOMEM) => {
                         crate::bch_err_ratelimited!(fs, "error allocating memory for key cache key, btree {} u64s {}",
                                                     btree, key_u64s);
-                        return fs.throw(bch_errcode::BCH_ERR_ENOMEM_btree_key_cache_fill);
+                        return fs.throw(Errcode::BCH_ERR_ENOMEM_btree_key_cache_fill);
                     }
                     Err(e) => return Err(e),
                 };
@@ -90,7 +90,7 @@ impl BtreeTrans<'_> {
             paths[ck_path].mark_locked_noreset(0, BTREE_NODE_UNLOCKED);
             t.allocate_dropping_locks_in(paths, || bc.bkey_cached_keys_add(&mut ck))?;
             t.allocate_dropping_locks_in(paths, || {
-                bc.table.make_room().map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_btree_key_cache_insert))
+                bc.table.make_room().map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_btree_key_cache_insert))
             })?;
 
             ck.set_key(k);
@@ -236,7 +236,7 @@ impl BtreeTrans<'_> {
         };
 
         match ret {
-            Err(e) if !e.matches(bch_errcode::BCH_ERR_transaction_restart) => {
+            Err(e) if !e.matches(Errcode::BCH_ERR_transaction_restart) => {
                 self.node_unlock(paths, idx, 0);
                 paths[idx].l[0].b = NodePtr::err(e);
             }

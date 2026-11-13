@@ -23,12 +23,12 @@ use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BKEY_U64S};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
-use crate::c::bch_fs_flags as Flag;
-use crate::c::journal_pin_type::JOURNAL_PIN_TYPE_other;
-use crate::c::wb_flush_caller as Caller;
+use crate::c::FsFlag as Flag;
+use crate::c::JournalPinType::JOURNAL_PIN_TYPE_other;
+use crate::c::WbFlushCaller as Caller;
 use crate::data::keylist::PaddedKey;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BtreeFlags};
 use crate::fs::Fs;
 use crate::journal::pins::Pin;
@@ -61,7 +61,7 @@ use pin_init::pin_data;
 #[prefix(BCH_WB_BTREE_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_wb_btree {
+pub enum WbBtree {
     accounting,
     lru,
     need_discard,
@@ -78,9 +78,9 @@ pub enum bch_wb_btree {
 /*
  * Catch the "added BTREE_IS_write_buffer but forgot BCH_WRITE_BUFFER_BTREES"
  * footgun at compile time: count the write_buffer bits in BCH_BTREE_IDS() and
- * compare against bch_wb_btree::NR.
+ * compare against WbBtree::NR.
  */
-const _: () = assert!(crate::btrees_with(BtreeFlags::write_buffer).count_ones() == bch_wb_btree::NR as u32,
+const _: () = assert!(crate::btrees_with(BtreeFlags::write_buffer).count_ones() == WbBtree::NR as u32,
                       "BCH_WRITE_BUFFER_BTREES() is out of sync with BCH_BTREE_IDS() write_buffer flags");
 
 #[allow(non_upper_case_globals)]
@@ -148,7 +148,7 @@ pub struct btree_write_buffered_key {
 #[prefix(WB_FLUSH_)]
 #[nr]
 #[repr(u32)]
-pub enum wb_flush_caller {
+pub enum WbFlushCaller {
     thread,
     journal_pin,
     sync,
@@ -179,7 +179,7 @@ crate::published! {
         pub keys:              KeysLive,
         pub sorted:            KeysLive,
         pub nr_flushes:        Volatile<u64>,
-        pub nr_flushes_caller: [Volatile<u64>; c::wb_flush_caller::NR as usize],
+        pub nr_flushes_caller: [Volatile<u64>; c::WbFlushCaller::NR as usize],
         pub nr_keys_flushed:   Volatile<u64>,
         pub nr_keys_fast:      Volatile<u64>,
         pub nr_keys_slowpath:  Volatile<u64>,
@@ -269,8 +269,8 @@ impl c::bch_fs_btree_write_buffer {
         self.container().container()
     }
 
-    fn wb_btree(&self) -> c::bch_wb_btree {
-        c::bch_wb_btree::from_bits(self.idx.get())
+    fn wb_btree(&self) -> c::WbBtree {
+        c::WbBtree::from_bits(self.idx.get())
     }
 
     fn pin(&self, b: Buf) -> &Pin {
@@ -299,7 +299,7 @@ impl c::bch_fs_btree_write_buffer {
         self.fs().journal.pin_drop(self.pin(b))
     }
 
-    fn queue_flush(&self, caller: c::wb_flush_caller) {
+    fn queue_flush(&self, caller: c::WbFlushCaller) {
         self.flush_work_caller.set(caller as u32);
         unsafe { self.fs().btree.write_buffer_wq.queue_work((&raw const self.flush_work).cast_mut()) };
     }
@@ -341,27 +341,27 @@ impl Fs {
 }
 
 /// @btree's slot among the write buffered btrees.
-pub fn wb_btree_idx(btree: Btree) -> c::bch_wb_btree {
+pub fn wb_btree_idx(btree: Btree) -> c::WbBtree {
     macro_rules! idx {
         ($(($name:ident, $nr:expr)),* $(,)?) => {
             $(if btree == Btree::$name {
-                return c::bch_wb_btree::$name;
+                return c::WbBtree::$name;
             })*
         };
     }
-    bch_wb_btree_arms!(idx);
+    WbBtree_arms!(idx);
     panic!("btree {btree} has no write buffer")
 }
 
-pub fn wb_btree_to_btree(idx: c::bch_wb_btree) -> Btree {
+pub fn wb_btree_to_btree(idx: c::WbBtree) -> Btree {
     macro_rules! btree {
         ($(($name:ident, $nr:expr)),* $(,)?) => {
             match idx {
-                $(c::bch_wb_btree::$name => Btree::$name,)*
+                $(c::WbBtree::$name => Btree::$name,)*
             }
         };
     }
-    bch_wb_btree_arms!(btree)
+    WbBtree_arms!(btree)
 }
 
 fn insert_err(fs: &Fs, btree: Btree, k: &BkeyI) -> BchError {
@@ -393,7 +393,7 @@ fn wb_pin_le(wb: &c::bch_fs_btree_write_buffer, max_seq: u64) -> bool {
     (flushing != 0 && flushing <= max_seq)
 }
 
-fn any_wb_pin_le(fs: &Fs, max_seq: u64, did_work: &mut bool, caller: c::wb_flush_caller) -> bool {
+fn any_wb_pin_le(fs: &Fs, max_seq: u64, did_work: &mut bool, caller: c::WbFlushCaller) -> bool {
     let wb = fs.btree.write_buffer.iter().find(|wb| wb_pin_le(wb, max_seq));
     if let Some(wb) = wb {
         wb.queue_flush(caller);
@@ -415,7 +415,7 @@ fn any_wb_pin_le(fs: &Fs, max_seq: u64, did_work: &mut bool, caller: c::wb_flush
  * @caller is recorded only by the dispatcher diagnostic counter (see below);
  * worker-driven flushes always count as WB_FLUSH_thread.
  */
-fn flush_seq(trans: &BtreeTrans<'_>, max_seq: u64, did_work: &mut bool, caller: c::wb_flush_caller)
+fn flush_seq(trans: &BtreeTrans<'_>, max_seq: u64, did_work: &mut bool, caller: c::WbFlushCaller)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -500,7 +500,7 @@ impl BtreeTrans<'_> {
         }
 
         let Some(_write) = fs.writes.tryget_live() else {
-            return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
+            return fs.throw(Errcode::BCH_ERR_erofs_no_writes);
         };
 
         self.write_buffer_flush_nocheck_rw()
@@ -537,7 +537,7 @@ impl Fs {
  */
 fn flush_work_fn(wb: &c::bch_fs_btree_write_buffer) {
     let fs = wb.fs();
-    let caller = c::wb_flush_caller::from_bits(wb.flush_work_caller.get());
+    let caller = c::WbFlushCaller::from_bits(wb.flush_work_caller.get());
 
     {
         let _noio = MemallocFlags::noio();
@@ -677,7 +677,7 @@ impl WbFlush<'_> {
 
             /* can we avoid the unconditional restart? */
             fs.event_inc_trace(events::trans_restart_write_buffer_flush, |out| prt!(out, "{}", trans.fn_name()));
-            return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_write_buffer_flush));
+            return Err(t.restart(Errcode::BCH_ERR_transaction_restart_write_buffer_flush));
         }
 
         f.seen_error = true;
@@ -746,7 +746,7 @@ impl Fs {
 
             prt!(out, "nr flushes:\t{}\n",             f.nr_flushes.get());
             for (j, n) in f.nr_flushes_caller.iter().enumerate() {
-                prt!(out, "  {}:\t{}\n", c::wb_flush_caller::from_bits(j as u32).name(), n.get());
+                prt!(out, "  {}:\t{}\n", c::WbFlushCaller::from_bits(j as u32).name(), n.get());
             }
             prt!(out, "keys flushed:\t{}\n",           f.nr_keys_flushed.get());
             prt!(out, "keys fast:\t{}\n",              f.nr_keys_fast.get());
@@ -765,7 +765,7 @@ impl Fs {
 
         prt!(out, "Time stats (shared):\n");
         let mut indent = out.indent(2);
-        self.times[c::bch_time_stats::btree_write_buffer_flush as usize].to_text(&mut indent);
+        self.times[c::TimeStat::btree_write_buffer_flush as usize].to_text(&mut indent);
     }
 
     pub fn btree_write_buffer_stop(&self) {
@@ -795,7 +795,7 @@ impl Fs {
         /*
          * Matches the journal's default buf size (JOURNAL_ENTRY_SIZE_MIN /
          * 64 slots); grows via bch2_btree_write_buffer_resize() as the journal
-         * grows. With bch_wb_btree::NR independent instances, keeping this small
+         * grows. With WbBtree::NR independent instances, keeping this small
          * matters — at 1<<16 the baseline was ~27 MB per fs.
          */
         let initial_size = 1 << 10;

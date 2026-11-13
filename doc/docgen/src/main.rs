@@ -18,14 +18,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
-// Enum declarations: a #[bch_enum], c_enum! or tagged_union! in the Rust source
+// Enum declarations: a #[bch_enum], list_enum! or tagged_union! in the Rust source
 // ---------------------------------------------------------------------------
 
 /// The attributes of an enum declaration's arms that are columns, after name,
 /// value and doc: entries 3, 4.
 const ENUM_DECL_ATTRS: [&str; 2] = ["flags", "when"];
 
-/// The arms of enum @name as #[bch_enum], tagged_union! or c_enum! declares
+/// The arms of enum @name as #[bch_enum], tagged_union! or list_enum! declares
 /// it, as a C list's entries: name, value as written, the arm's doc comment as
 /// a C string, its ENUM_DECL_ATTRS, and the date its doc starts with, `/// 2018-11:
 /// ..` - a version's. An arm is `/// doc #[..]* name[(Type)] [= value]`, a
@@ -36,7 +36,7 @@ fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
         source[..i].rsplit('\n').next().is_some_and(|l| l.trim().is_empty());
     let decl = [format!("pub enum {name} {{"), format!("pub enum {name}: ")].iter()
         .find_map(|d| source.match_indices(d.as_str()).find(starts_line))?.0;
-    let start = ["#[bch_enum(", "tagged_union! {", "c_enum! {"].iter()
+    let start = ["#[bch_enum(", "tagged_union! {", "list_enum! {"].iter()
         .filter_map(|m| source[..decl].rfind(m))
         .max()?;
     if source[start..decl].contains("\n}\n") {
@@ -583,7 +583,7 @@ struct EnumList {
 const ENUM_LISTS: &[EnumList] = &[
     EnumList {
         key: "error-actions",
-        enum_name: "bch_error_actions",
+        enum_name: "ErrorAction",
         default: Some("fix_safe"),
         doc_field: Some(2),
         flags_field: None,
@@ -593,7 +593,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "csum-opts",
-        enum_name: "bch_csum_opt",
+        enum_name: "CsumOpt",
         default: Some("crc32c"),
         doc_field: None,
         flags_field: None,
@@ -603,7 +603,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "compression-opts",
-        enum_name: "bch_compression_opts",
+        enum_name: "CompressionOpt",
         default: Some("none"),
         doc_field: None,
         flags_field: None,
@@ -613,7 +613,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "str-hash-opts",
-        enum_name: "bch_str_hash_opts",
+        enum_name: "StrHashOpt",
         default: Some("siphash"),
         doc_field: None,
         flags_field: None,
@@ -633,7 +633,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "time-stats",
-        enum_name: "bch_time_stats",
+        enum_name: "TimeStat",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -663,7 +663,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "counters",
-        enum_name: "bch_persistent_counters",
+        enum_name: "PersistentCounter",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -892,7 +892,7 @@ fn main() {
 
     // --- Simple enum lists ---
     // From each enum's declaration wherever in fs/ it lives - a #[bch_enum],
-    // c_enum! or tagged_union! - found by name, so an enum moving between
+    // list_enum! or tagged_union! - found by name, so an enum moving between
     // files doesn't break the docs.
     let mut sources = Vec::new();
     walk_c_files(&root.join("fs"), &mut |path| {
@@ -902,7 +902,7 @@ fn main() {
     });
     for el in ENUM_LISTS {
         let Some(entries) = sources.iter().find_map(|s| parse_enum_decl(s, el.enum_name)) else {
-            eprintln!("error: no enum {} in fs/ - not a #[bch_enum], c_enum! or tagged_union! declaration",
+            eprintln!("error: no enum {} in fs/ - not a #[bch_enum], list_enum! or tagged_union! declaration",
                       el.enum_name);
             errors += 1;
             continue;

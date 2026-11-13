@@ -21,7 +21,7 @@
 use crate::alloc::foreground::{FreelistGuard, OpenBucket, OpenBucketRef};
 use crate::btree::iter::{is_restart, TransAttempt};
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::ec::head::{head_get, stripe_head_put};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -53,7 +53,7 @@ impl c::alloc_request<'_, '_> {
         self.ptrs.push(ob);
 
         self.nr_effective >= u32::from(self.nr_replicas) ||
-            self.flags.contains(c::bch_write_flags::cached) || ec || durability == 0
+            self.flags.contains(c::WriteFlags::cached) || ec || durability == 0
     }
 
     /// Whether the open bucket @ob - a write point's, or the partial list's
@@ -198,8 +198,8 @@ impl TransAttempt<'_, '_> {
                         break;
                     }
                     Err(e) if is_restart(&e) ||
-                              e.matches(bch_errcode::BCH_ERR_operation_blocked) ||
-                              e.matches(bch_errcode::BCH_ERR_open_buckets_empty) => return Err(e),
+                              e.matches(Errcode::BCH_ERR_operation_blocked) ||
+                              e.matches(Errcode::BCH_ERR_open_buckets_empty) => return Err(e),
                     Err(e) => ret = Err(e),
                 }
             }
@@ -211,7 +211,7 @@ impl TransAttempt<'_, '_> {
         }
 
         ret?;
-        let e = fs.err(bch_errcode::BCH_ERR_insufficient_devices);
+        let e = fs.err(Errcode::BCH_ERR_insufficient_devices);
         req.trace_add(c::BCH_SB_MEMBER_INVALID as u8, Some(e), 0, 0, false);
         Err(e)
     }

@@ -272,7 +272,7 @@ const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
 
 fn stop(fs: &Fs) -> Result<(), BchError> {
     if Kthread::should_stop() || !fs.reconcile_enabled() {
-        return Err(c::bch_errcode::BCH_ERR_reconcile_scan_stop.into());
+        return Err(c::Errcode::BCH_ERR_reconcile_scan_stop.into());
     }
     Ok(())
 }
@@ -374,7 +374,7 @@ fn scan_indirect(trans: &TransGuard<'_>, scan: &c::reconcile_scan, res: &DiskRes
                                   BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS);
     iter.for_each_commit(trans, Some(res), NO_ENOSPC, |t, iter, k| {
         if k.k.start_pos() >= pos(0, refs.end) {
-            return Err(c::bch_errcode::BCH_ERR_fc_break.into());
+            return Err(c::Errcode::BCH_ERR_fc_break.into());
         }
         res.put();
         update_opts(t, Some(&mut **s), opts, iter, 0, k, scan)
@@ -454,14 +454,14 @@ fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>
     macro_rules! trace {
         ($(($n:ident, $v:expr, $ty:ty)),* $(,)?) => { crate::paste! {
             match scan.type_() {
-                $(c::reconcile_scan_type::$n =>
+                $(c::ReconcileScanType::$n =>
                     fs.event_add_trace(events::[<reconcile_scan_ $n>], sectors, msg),)*
             }
         } };
     }
     crate::data::reconcile::work::reconcile_scan_arms!(trace);
 
-    update_reconcile_opts(t, s, opts, iter, level, k, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change)
+    update_reconcile_opts(t, s, opts, iter, level, k, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change)
 }
 
 // The set_fs_needs_reconcile recovery pass, once, upgrading from

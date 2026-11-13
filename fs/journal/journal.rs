@@ -125,12 +125,12 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
 
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::c::journal_cycle_flags as Cycle;
-use crate::c::journal_flags as Journal;
+use crate::c::JournalCycleFlags as Cycle;
+use crate::c::JournalFlag as Journal;
 use crate::c::{buf_waiters, BufWait, JournalGuard, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT,
                JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT};
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, SbFeature};
 use crate::journal::pins::PinsRead;
 use crate::locking::{Guard as _, MemallocFlags};
@@ -265,7 +265,7 @@ impl c::journal {
         let ret = !self.lock.can_discard.get() &&
             self.lock.seq_ondisk.get() == fs.journal_cur_seq() &&
             self.lock.cur_entry_error.get() != 0 &&
-            (flags & c::BCH_WATERMARK_MASK) >= c::bch_watermark::reclaim as u32;
+            (flags & c::BCH_WATERMARK_MASK) >= c::Watermark::reclaim as u32;
 
         if ret {
             let mut msg = LogMsg::new(fs);
@@ -600,7 +600,7 @@ impl c::journal {
         }
 
         if self.lock.blocked.get() != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_journal_blocked);
+            return fs.throw(Errcode::BCH_ERR_journal_blocked);
         }
 
         let cur_entry_error = self.lock.cur_entry_error.get();
@@ -611,7 +611,7 @@ impl c::journal {
         self.error()?;
 
         if self.pin_range().used() >= self.pin_range().pin_size.get() {
-            return fs.throw(bch_errcode::BCH_ERR_journal_pin_full);
+            return fs.throw(Errcode::BCH_ERR_journal_pin_full);
         }
 
         /*
@@ -640,13 +640,13 @@ impl c::journal {
          * live entry.
          */
         if g.in_flight.free() < 2 {
-            return fs.throw(bch_errcode::BCH_ERR_journal_max_in_flight);
+            return fs.throw(Errcode::BCH_ERR_journal_max_in_flight);
         }
 
         let cur_seq = fs.journal_cur_seq();
 
         if self.reservations().count(state_idx(cur_seq + 1)) != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_journal_max_open);
+            return fs.throw(Errcode::BCH_ERR_journal_max_open);
         }
 
         if unlikely(cur_seq >= c::JOURNAL_SEQ_MAX) {
@@ -654,7 +654,7 @@ impl c::journal {
             let mut msg = LogMsg::new(fs);
             prt!(&mut *msg, "cannot start: journal seq overflow\n");
             fs.emergency_read_only_locked(&mut msg, g);
-            return fs.throw(bch_errcode::BCH_ERR_journal_shutdown);
+            return fs.throw(Errcode::BCH_ERR_journal_shutdown);
         }
 
         if unlikely(fs.journal_seq_is_blacklisted(cur_seq + 1, false)) {
@@ -662,11 +662,11 @@ impl c::journal {
             let mut msg = LogMsg::new(fs);
             prt!(&mut *msg, "attempting to open blacklisted journal seq {}\n", cur_seq + 1);
             fs.emergency_read_only_locked(&mut msg, g);
-            return fs.throw(bch_errcode::BCH_ERR_journal_shutdown);
+            return fs.throw(Errcode::BCH_ERR_journal_shutdown);
         }
 
         if g.free_buf.as_ptr().is_null() {
-            return fs.throw(bch_errcode::BCH_ERR_journal_buf_enomem);
+            return fs.throw(Errcode::BCH_ERR_journal_buf_enomem);
         }
 
         assert!(g.cur_entry_sectors != 0, "opening a journal entry with no room for one on disk");
@@ -677,7 +677,7 @@ impl c::journal {
             .clamp(0, i64::from(c::JOURNAL_ENTRY_CLOSED_VAL) - 1);
 
         if u64s <= g.early_journal_entries.len() as i64 {
-            return fs.throw(bch_errcode::BCH_ERR_journal_full);
+            return fs.throw(Errcode::BCH_ERR_journal_full);
         }
 
         let was_empty = self.pin_range().used() == 0;
@@ -817,7 +817,7 @@ impl c::journal {
         }
     }
 
-    fn should_close(&self, g: &c::JournalLocked, flags: c::journal_cycle_flags) -> bool {
+    fn should_close(&self, g: &c::JournalLocked, flags: c::JournalCycleFlags) -> bool {
         if !self.reservations().is_open() {
             return false;
         }
@@ -833,7 +833,7 @@ impl c::journal {
         flags.contains(Cycle::JOURNAL_CYCLE_force_close) || g.in_flight.len() <= 1
     }
 
-    fn should_open(&self, flags: c::journal_cycle_flags) -> bool {
+    fn should_open(&self, flags: c::JournalCycleFlags) -> bool {
         !self.reservations().is_open() &&
             (flags.contains(Cycle::JOURNAL_CYCLE_must_open) || closure_has_waiters(&self.flush_wait))
     }
@@ -857,7 +857,7 @@ impl c::journal {
      * Returns: error from open if open was attempted and failed, else 0.
      */
     pub(crate) fn cycle_locked(&self, pins: &PinsRead<'_>, g: &mut JournalGuard<'_>,
-                               mut flags: c::journal_cycle_flags) -> Result<(), BchError> {
+                               mut flags: c::JournalCycleFlags) -> Result<(), BchError> {
         loop {
             if flags.is_empty() && !self.should_cycle_for_flush_waiters(g) {
                 return Ok(());
@@ -879,7 +879,7 @@ impl c::journal {
         }
     }
 
-    pub fn cycle(&self, flags: c::journal_cycle_flags) {
+    pub fn cycle(&self, flags: c::JournalCycleFlags) {
         let pins = self.pins();
         let _ = self.cycle_locked(&pins, &mut self.lock.lock(), flags);
     }
@@ -994,7 +994,7 @@ impl c::journal {
      * clearing.
      */
     fn res_unblocked(&self) {
-        use c::bch_time_stats as Time;
+        use c::TimeStat as Time;
 
         let fs = self.fs();
         for t in [Time::blocked_journal_max_open,
@@ -1007,7 +1007,7 @@ impl c::journal {
     }
 
     fn __res_get(&self, res: &mut c::journal_res, flags: u32) -> Result<(), BchError> {
-        use c::bch_time_stats as Time;
+        use c::TimeStat as Time;
 
         let fs = self.fs();
 
@@ -1019,11 +1019,11 @@ impl c::journal {
             self.error()?;
 
             if self.lock.blocked.get() != 0 {
-                return fs.throw(bch_errcode::BCH_ERR_journal_blocked);
+                return fs.throw(Errcode::BCH_ERR_journal_blocked);
             }
 
             if (flags & c::BCH_WATERMARK_MASK) < self.lock.hot.watermark.get() {
-                break fs.throw(bch_errcode::BCH_ERR_journal_full);
+                break fs.throw(Errcode::BCH_ERR_journal_full);
             }
 
             let pins = self.pins();
@@ -1065,22 +1065,22 @@ impl c::journal {
         };
 
         if self.error_check_stuck(err, flags) {
-            err = fs.err(bch_errcode::BCH_ERR_journal_stuck);
+            err = fs.err(Errcode::BCH_ERR_journal_stuck);
         }
 
-        let blocked = [(bch_errcode::BCH_ERR_journal_blocked,       Time::blocked_journal_blocked),
-                       (bch_errcode::BCH_ERR_journal_max_in_flight, Time::blocked_journal_max_in_flight),
-                       (bch_errcode::BCH_ERR_journal_max_open,      Time::blocked_journal_max_open),
-                       (bch_errcode::BCH_ERR_journal_full,          Time::blocked_journal_full),
-                       (bch_errcode::BCH_ERR_journal_pin_full,      Time::blocked_journal_pin_full),
-                       (bch_errcode::BCH_ERR_journal_buf_enomem,    Time::blocked_journal_buf_enomem),
-                       (bch_errcode::BCH_ERR_journal_stuck,         Time::blocked_journal_stuck)]
+        let blocked = [(Errcode::BCH_ERR_journal_blocked,       Time::blocked_journal_blocked),
+                       (Errcode::BCH_ERR_journal_max_in_flight, Time::blocked_journal_max_in_flight),
+                       (Errcode::BCH_ERR_journal_max_open,      Time::blocked_journal_max_open),
+                       (Errcode::BCH_ERR_journal_full,          Time::blocked_journal_full),
+                       (Errcode::BCH_ERR_journal_pin_full,      Time::blocked_journal_pin_full),
+                       (Errcode::BCH_ERR_journal_buf_enomem,    Time::blocked_journal_buf_enomem),
+                       (Errcode::BCH_ERR_journal_stuck,         Time::blocked_journal_stuck)]
             .into_iter().find(|&(e, _)| err == e.into());
         if let Some((_, t)) = blocked {
             fs.times[t as usize].track_event_change(true);
         }
 
-        if err.matches(bch_errcode::BCH_ERR_operation_blocked) {
+        if err.matches(Errcode::BCH_ERR_operation_blocked) {
             fs.event_inc_trace(events::journal_res_get_blocked, |out| {
                 prt!(out, "{}\n", err.msg());
                 out.make_room(4096);
@@ -1095,7 +1095,7 @@ impl c::journal {
          * Journal is full - can't rely on reclaim from work item due to
          * freezing:
          */
-        if (err == bch_errcode::BCH_ERR_journal_full.into() || err == bch_errcode::BCH_ERR_journal_pin_full.into()) &&
+        if (err == Errcode::BCH_ERR_journal_full.into() || err == Errcode::BCH_ERR_journal_pin_full.into()) &&
             flags & c::JOURNAL_RES_GET_NONBLOCK == 0 &&
             (self.flags.get(Journal::low_on_space) || self.flags.get(Journal::low_on_pin)) {
             if let Some(mut reclaim) = self.reclaim_lock.try_lock() {
@@ -1139,7 +1139,7 @@ impl c::journal {
         let ret = Cell::new(Ok(()));
         let mut got = || {
             ret.set(self.__res_get(res, flags));
-            !ret.get().is_err_and(|e| e.matches(bch_errcode::BCH_ERR_operation_blocked))
+            !ret.get().is_err_and(|e| e.matches(Errcode::BCH_ERR_operation_blocked))
         };
         let mut wait = |timeout| wait_on(&self.async_wait, &mut got, timeout);
 
@@ -1293,7 +1293,7 @@ impl c::journal {
          * waiting forever; fsync gets the error and unblocks.
          */
         if self.lock.err_seq.get() != 0 && seq > self.lock.flushed_seq_ondisk.get() {
-            return fs.throw(bch_errcode::BCH_ERR_journal_flush_err);
+            return fs.throw(Errcode::BCH_ERR_journal_flush_err);
         }
 
         /* if seq was written, but not flushed - flush a newer one instead */
@@ -1350,11 +1350,11 @@ impl c::journal {
 
         /* Don't update time_stats when @seq is already flushed: */
         if ret == Ok(false) {
-            fs.times[c::bch_time_stats::journal_flush_seq as usize].update(start_time);
+            fs.times[c::TimeStat::journal_flush_seq as usize].update(start_time);
         }
 
         if self.lock.err_seq.get() != 0 && seq > self.lock.flushed_seq_ondisk.get() {
-            fs.throw(bch_errcode::BCH_ERR_journal_flush_err)
+            fs.throw(Errcode::BCH_ERR_journal_flush_err)
         } else {
             Ok(())
         }
@@ -1436,7 +1436,7 @@ impl c::journal {
          */
         let mut res = c::journal_res::default();
         let u64s = (size_of::<Head<c::jset_entry>>() / size_of::<u64>()) as u32;
-        self.res_get(&mut res, u64s, c::bch_watermark::reclaim as u32, None)?;
+        self.res_get(&mut res, u64s, c::Watermark::reclaim as u32, None)?;
         unsafe { self.__flush_seq_async(res.seq, NonNull::new_unchecked(cl.as_ptr())) };
         self.res_put(&mut res);
 
@@ -1449,14 +1449,14 @@ impl c::journal {
         let fs = self.fs();
 
         let Some(_write) = fs.writes.tryget_live() else {
-            return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
+            return fs.throw(Errcode::BCH_ERR_erofs_no_writes);
         };
 
         self.__meta()
     }
 
     /// An entry journalled before the journal runs, into its first entry.
-    pub fn early_entry_add(&self, ty: c::bch_jset_entry_type, btree_id: u8, level: u8, data: &[u8])
+    pub fn early_entry_add(&self, ty: c::JsetEntryType, btree_id: u8, level: u8, data: &[u8])
         -> Result<(), BchError>
     {
         let u64s = size_of::<Head<c::jset_entry>>() / size_of::<u64>() + data.len().div_ceil(size_of::<u64>());
@@ -1508,7 +1508,7 @@ impl c::journal {
                     Some(new)
                 });
 
-                self.fs().times[c::bch_time_stats::blocked_journal_blocked as usize]
+                self.fs().times[c::TimeStat::blocked_journal_blocked as usize]
                     .track_event_change(false);
             }
         }
@@ -1603,7 +1603,7 @@ impl c::journal {
 
     #[cold]
     fn __debug_to_text(&self, out: &mut Printbuf, g: &JournalGuard<'_>) {
-        use c::journal_space_from::*;
+        use c::JournalSpaceFrom::*;
 
         let fs = self.fs();
         let now = jiffies();
@@ -1630,10 +1630,10 @@ impl c::journal {
         prt!(out, "rewind_seq:\t{}\n",                  self.lock.rewind_seq.get());
         prt!(out, "rewind_seq_ondisk:\t{}\n",           self.lock.rewind_seq_ondisk.get());
         prt!(out, "watermark:\t");
-        c::bch_watermark::from_bits(self.lock.hot.watermark.get()).to_text(out);
+        c::Watermark::from_bits(self.lock.hot.watermark.get()).to_text(out);
         out.newline();
         prt!(out, "watermark_open_buckets:\t");
-        c::bch_watermark::from_bits(self.lock.watermark_open_buckets.get().into()).to_text(out);
+        c::Watermark::from_bits(self.lock.watermark_open_buckets.get().into()).to_text(out);
         out.newline();
         prt!(out, "each entry reserved:\t{}\n",         self.lock.entry_u64s_reserved.get());
         prt!(out, "nr flush writes:\t{}\n",             g.nr_flush_writes);
@@ -1727,7 +1727,7 @@ impl NotRw<'_> {
         let fs = self.fs;
         self.get_mut_of(&fs.journal.rewind_ranges).push(c::journal_rewind_range { from, to })?;
 
-        fs.journal.early_entry_add(c::bch_jset_entry_type::rewind, 0, 0,
+        fs.journal.early_entry_add(c::JsetEntryType::rewind, 0, 0,
                                    [from.to_le(), to.to_le()].as_bytes())
     }
 }

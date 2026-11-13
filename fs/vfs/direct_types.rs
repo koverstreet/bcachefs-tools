@@ -14,7 +14,7 @@ nest! {
     pub struct dio_write {
         pub req: *mut c::kiocb,
         pub mapping: crate::vfs::folio::Mapping,
-        pub inode: *mut c::bch_inode_info,
+        pub inode: *mut c::InodeInfo,
         pub mm: Option<crate::util::kernel::Mm>,
         pub iov: *const c::iovec,
         #[c_bitfield]

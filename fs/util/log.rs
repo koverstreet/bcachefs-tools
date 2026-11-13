@@ -36,7 +36,7 @@ c_default!(bch_log_msg);
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum kern_loglevels {
+pub enum KernLoglevel {
     LOGLEVEL_emerg = 0,
     LOGLEVEL_alert = 1,
     LOGLEVEL_crit = 2,

@@ -30,7 +30,7 @@ use crate::btree::read::node_replica_good;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::checksum::csum_err_msg;
 use crate::data::ec::stripe::ptr_matches_stripe_m;
 use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
@@ -71,7 +71,7 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: Btree, level: u32, 
             cached(node_iter.iter(), b.expect("the node a btree node pointer points to"))?;
             return Ok(true);
         }
-        Err(e) if e.matches(bch_errcode::BCH_ERR_no_btree_node_nofill) => {}
+        Err(e) if e.matches(Errcode::BCH_ERR_no_btree_node_nofill) => {}
         Err(e) => return Err(e),
     }
 
@@ -101,7 +101,7 @@ pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: Btree, level
     let mut n: TransBkey<'_, '_> = n.into();
 
     let opts = get_io_opts(t, None, k.into())?;
-    n.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+    n.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
 
     if n.k().is_btree_ptr() {
         if n.as_sc().can_read(fs) {
@@ -109,7 +109,7 @@ pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: Btree, level
         }
         // rw, so a cached node is written out now
         return btree_ptr_unreadable(t, btree, level, n.as_sc(), |iter, b| {
-            t.btree_node_rewrite(iter, b, 0, CommitOpts::new(), c::bch_write_flags::empty())
+            t.btree_node_rewrite(iter, b, 0, CommitOpts::new(), c::WriteFlags::empty())
         }).map(|_| ());
     }
 
@@ -140,7 +140,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
         return Ok(false);
     }
 
-    let Some(ca) = fs.dev_get_ioref::<c::bch_dev_read_ref>(dev) else {
+    let Some(ca) = fs.dev_get_ioref::<c::DevReadRefKind>(dev) else {
         return Ok(false);
     };
 
@@ -166,7 +166,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     let good = if is_btree_ptr {
         node_replica_good(fs, k.into(), buf, &mut why)
     } else {
-        let ty = c::bch_csum_type(p.crc.csum_type.into());
+        let ty = c::CsumType(p.crc.csum_type.into());
         let csum = fs.checksum(ty, extent_nonce(k.k.bversion, &p.crc), &buf[..bytes]);
         if csum != p.crc.csum {
             csum_err_msg(&mut why, ty, p.crc.csum, csum);
@@ -314,7 +314,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
 
         if !cached && data_type == DataType::btree && bucket_type == DataType::sb {
             bch_err!(fs, "btree and superblock in the same bucket - cannot repair");
-            return fs.throw(bch_errcode::BCH_ERR_fsck_repair_unimplemented);
+            return fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented);
         }
 
         // Data in a superblock bucket: every superblock write lands on it, so
@@ -402,7 +402,7 @@ fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: Btree, mut new
                         "extent without valid dirty pointers\n{}", new.as_sc().to_text(fs))?;
 
         let opts = get_io_opts(t, None, new.as_sc())?;
-        new.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+        new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
     } else {
         inode_fsck_err!(t, damage_pos, id::extent_ptrs_all_invalid,
                         "extent without valid pointers\n{}", new.as_sc().to_text(fs))?;
@@ -418,7 +418,7 @@ pub(crate) fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btr
     let fs = t.fs();
 
     // We don't yet do btree key updates correctly for when we're RW
-    assert!(!fs.flags.get(c::bch_fs_flags::rw), "checking a key's pointers with the filesystem rw");
+    assert!(!fs.flags.get(c::FsFlag::rw), "checking a key's pointers with the filesystem rw");
 
     if !k.k.is_btree_ptr() && !k.can_read(fs) {
         let repaired = no_valid_pointers_repair(t, btree, k)?;
@@ -498,7 +498,7 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
     }
 
     let opts = get_io_opts(t, None, k)?;
-    new.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+    new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
 
     // A btree node pointer kept for its cached node, with no pointer left,
     // gets one to BCH_SB_MEMBER_INVALID - which nothing reads or marks -
@@ -521,5 +521,5 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
     }
 
     t.btree_node_update_key_at_pos_raw(btree, level, new)?;
-    Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit))
+    Err(t.restart(Errcode::BCH_ERR_transaction_restart_commit))
 }

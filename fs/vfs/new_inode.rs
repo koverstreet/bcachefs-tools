@@ -107,7 +107,7 @@ impl NewInode {
 
         *self.ei_quota.get_mut() = InodeQuota { ei_qid: crate::quota::qid(bi), ei_quota_reserved: 0 };
         if subvol.snap() {
-            self.ei_flags.set(c::bch_inode_info_flags::EI_INODE_SNAPSHOT, true);
+            self.ei_flags.set(c::InodeInfoFlag::EI_INODE_SNAPSHOT, true);
         }
 
         // SAFETY: C's, initialized at build time

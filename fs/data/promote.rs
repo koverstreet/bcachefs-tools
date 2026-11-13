@@ -19,7 +19,7 @@ use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::{is_restart, TransAttempt};
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::extents::BkeyVExtents;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::read::Rbio;
@@ -74,9 +74,9 @@ struct InFlight {
 
 impl InFlight {
     fn tryget(fs: &Fs) -> Result<Self, BchError> {
-        let write = fs.writes.tryget_live().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_nopromote_no_writes))?;
+        let write = fs.writes.tryget_live().ok_or_else(|| fs.err(Errcode::BCH_ERR_nopromote_no_writes))?;
         if !fs.promote_limit_tryget() {
-            return fs.throw(bch_errcode::BCH_ERR_nopromote_ratelimited);
+            return fs.throw(Errcode::BCH_ERR_nopromote_ratelimited);
         }
         // SAFETY: the filesystem outlives the write ref, which going read-only
         // waits for
@@ -111,7 +111,7 @@ async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
     }
 
     u.write(read).await;
-    fs.times[c::bch_time_stats::data_promote as usize].update(start_time);
+    fs.times[c::TimeStat::data_promote as usize].update(start_time);
     drop(listed);
     u.exit(0);
     drop(in_flight);
@@ -124,17 +124,17 @@ fn should_promote(fs: &Fs, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<()
 
     if k.arm::<Ptrs>().is_some_and(|k| k.has_target(fs, Target::decode(opts.promote_target.into()))) {
         fs.event_inc(events::data_read_nopromote_already_promoted);
-        return fs.throw(bch_errcode::BCH_ERR_nopromote_already_promoted);
+        return fs.throw(Errcode::BCH_ERR_nopromote_already_promoted);
     }
 
     if k.extent_is_unwritten(fs) {
         fs.event_inc(events::data_read_nopromote_unwritten);
-        return fs.throw(bch_errcode::BCH_ERR_nopromote_unwritten);
+        return fs.throw(Errcode::BCH_ERR_nopromote_unwritten);
     }
 
     if fs.target_congested(opts.promote_target) {
         fs.event_inc(events::data_read_nopromote_congested);
-        return fs.throw(bch_errcode::BCH_ERR_nopromote_congested);
+        return fs.throw(Errcode::BCH_ERR_nopromote_congested);
     }
 
     Ok(())
@@ -149,12 +149,12 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
         should_promote(fs, k, opts)?;
     }
 
-    use c::bch_write_flags as w;
+    use c::WriteFlags as w;
     let mut update_opts = c::data_update_opts { write_flags: w::alloc_nowait, ..Default::default() };
 
     match failed.as_deref() {
         Some(f) if !f.is_empty() => {
-            update_opts.type_ = c::bch_data_update_types::self_heal;
+            update_opts.type_ = c::DataUpdateType::self_heal;
             update_opts.target = opts.background_target;
 
             if let Some(kp) = k.arm::<Ptrs>() {
@@ -167,11 +167,11 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
             }
 
             if update_opts.ptrs_kill == 0 {
-                return fs.throw(bch_errcode::BCH_ERR_nopromote_no_rewrites);
+                return fs.throw(Errcode::BCH_ERR_nopromote_no_rewrites);
             }
         }
         _ => {
-            update_opts.type_ = c::bch_data_update_types::promote;
+            update_opts.type_ = c::DataUpdateType::promote;
             update_opts.target = opts.promote_target;
             update_opts.extra_replicas = 1;
             update_opts.write_flags |= w::cached | w::only_specified_devs;
@@ -184,7 +184,7 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     // SAFETY: the task borrows nothing, and promote_wq is drained before the
     // filesystem is freed
     let task = unsafe {
-        update_task::spawn(t, Spawn::Queue(orig.fs().promote_wq()), bch_errcode::BCH_ERR_nopromote_enomem)
+        update_task::spawn(t, Spawn::Queue(orig.fs().promote_wq()), Errcode::BCH_ERR_nopromote_enomem)
     }?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
     // box is dropped

@@ -19,7 +19,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, C
                          TransAttempt};
 use crate::c;
 use crate::dirent::{self, Dirent};
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::init::passes;
 use crate::inode;
 use crate::namei;
@@ -89,7 +89,7 @@ impl InodeInfo {
         let quota = if flags & c::BCH_CREATE_SUBVOL != 0 {
             flags & c::BCH_CREATE_SNAPSHOT == 0
         } else {
-            !self.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT)
+            !self.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT)
         };
 
         let inum = lockrestart_do(&trans, |t| {
@@ -382,7 +382,7 @@ impl InodeOps for DirOps {
     fn rename(_idmap: MntIdmap<'_>, src_dir: &InodeInfo, src_dentry: Dentry<'_>,
               dst_dir: &InodeInfo, dst_dentry: Dentry<'_>, flags: c_uint) -> Result<(), BchError>
     {
-        use c::bch_rename_mode::*;
+        use c::RenameMode::*;
 
         let fs = src_dir.fs();
         let src_inode = src_dentry.inode();
@@ -396,7 +396,7 @@ impl InodeOps for DirOps {
         };
 
         if flags & !(c::RENAME_NOREPLACE | c::RENAME_EXCHANGE | c::RENAME_WHITEOUT) != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_rename_bad_flags);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_rename_bad_flags);
         }
 
         if mode == BCH_RENAME_OVERWRITE {
@@ -452,8 +452,8 @@ impl InodeOps for DirOps {
                                         Some(src_dentry.name()), uid, gid,
                                         (c::S_IFCHR | c::WHITEOUT_MODE) as c::umode_t, 0,
                                         None, None, c::subvol_inum::default(), 0)?;
-                    if !src_dir.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
-                        quota::acct(fs, quota::qid(w), c::quota_counters::Q_INO.0 as usize, 1,
+                    if !src_dir.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
+                        quota::acct(fs, quota::qid(w), c::QuotaCounter::Q_INO.0 as usize, 1,
                                     QuotaAcctMode::PREALLOC)?;
                     }
                 }
@@ -481,7 +481,7 @@ impl InodeOps for DirOps {
 
         // Whether it happened or not, the project quota is the inode's, as
         // written:
-        let prj = 1 << c::quota_types::QTYP_PRJ.0;
+        let prj = 1 << c::QuotaType::QTYP_PRJ.0;
         for inode in [Some(src_inode), dst_inode].into_iter().flatten() {
             let _ = locks.get(inode).quota_transfer(quota::qid(&inode.inode()), prj,
                                                     QuotaAcctMode::NOCHECK);
@@ -518,5 +518,5 @@ fn dirent_to_missing_inode(t: &TransAttempt<'_, '_>, d: Dirent<'_>, dir: c::subv
     // Scheduling the pass takes sb_lock, and may write the superblock
     t.unlock();
     passes::run_explicit(fs, &mut msg, RecoveryPass::check_dirents,
-                         c::bch_run_recovery_pass_flags::empty())
+                         c::RunRecoveryPassFlags::empty())
 }

@@ -35,10 +35,10 @@ pub const NR_RECENT_COUNTERS: u32 = 20;
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_counters {
-    mount: [AtomicU64; c::bch_persistent_counters::NR as usize],
-    pub now: PerCpu<[u64; c::bch_persistent_counters::NR as usize]>,
+    mount: [AtomicU64; c::PersistentCounter::NR as usize],
+    pub now: PerCpu<[u64; c::PersistentCounter::NR as usize]>,
 
-    recent: [[AtomicU64; c::bch_persistent_counters::NR as usize]; c::NR_RECENT_COUNTERS as usize],
+    recent: [[AtomicU64; c::PersistentCounter::NR as usize]; c::NR_RECENT_COUNTERS as usize],
 }
 c_default!(bch_fs_counters);
 
@@ -73,12 +73,12 @@ macro_rules! counter_events {
             impl Event for events::$name {
                 type Kind = event_kind!($ty);
 
-                const IDX: usize = c::bch_persistent_counters::$name as usize;
+                const IDX: usize = c::PersistentCounter::$name as usize;
             }
         )*
     };
 }
-c::bch_persistent_counters_arms!(counter_events);
+c::PersistentCounter_arms!(counter_events);
 
 pub struct CounterInfo {
     pub name: &'static str,
@@ -86,7 +86,7 @@ pub struct CounterInfo {
     pub is_sectors: bool,
 }
 
-// From bch_persistent_counters_arms!(): (name, index, [stable id], [type]).
+// From PersistentCounter_arms!(): (name, index, [stable id], [type]).
 macro_rules! counter_is_sectors {
     (TYPE_SECTORS) => { true };
     ($other:tt) => { false };
@@ -98,7 +98,7 @@ macro_rules! counter_table {
         )*];
     };
 }
-c::bch_persistent_counters_arms!(counter_table);
+c::PersistentCounter_arms!(counter_table);
 
 impl Fs {
     /// Count @_e once: event_inc().
@@ -140,8 +140,8 @@ impl Fs {
 // ioctl by stable id. mount[] and recent[] are written racing readers that
 // only print them, as in C: each a u64 on its own, so relaxed atomics.
 
-const NR: usize = c::bch_persistent_counters::NR as usize;
-const NR_STABLE: usize = c::bch_persistent_counters_stable::NR as usize;
+const NR: usize = c::PersistentCounter::NR as usize;
+const NR_STABLE: usize = c::PersistentCounterStable::NR as usize;
 
 impl c::bch_fs_counters {
     /// Counter @i, every CPU's count summed.
@@ -293,7 +293,7 @@ pub fn counters_init(fs: &Fs) {
 #[cfg(not(NO_BCACHEFS_CHARDEV))]
 pub mod ioctl {
     use super::*;
-    use crate::errcode::{bch_errcode, BchError};
+    use crate::errcode::{Errcode, BchError};
     use crate::util::ioctl::UserVstruct;
 
     /// The counters, by stable id, up to the user's @nr of them: now, or at
@@ -306,7 +306,7 @@ pub mod ioctl {
 
         let flags = u32::from(arg.flags);
         if flags & !c::BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0 || arg.pad != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_query_counters_bad_flags);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_query_counters_bad_flags);
         }
         let mount = flags & c::BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0;
 

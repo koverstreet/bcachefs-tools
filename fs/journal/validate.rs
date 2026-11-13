@@ -5,7 +5,7 @@ use core::mem::{offset_of, size_of};
 
 use crate::alloc::replicas::SbEntry;
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{Btree, DataType};
 use crate::fs::{Dev, Fs};
 use crate::btree::bkey::{BkeySC, ValidateFlags};
@@ -45,7 +45,7 @@ fn err_msg(out: &mut Printbuf, version: u32, jset: Option<JsetPos>, entry: Optio
 
     if let Some(e) = entry {
         prt!(out, " type=");
-        c::bch_jset_entry_type(e.type_.into()).to_text(out);
+        c::JsetEntryType(e.type_.into()).to_text(out);
     }
 
     match jset {
@@ -78,7 +78,7 @@ impl<'a> Ctx<'a> {
     fn jset(fs: &'a Fs, h: &Head<c::jset>, flags: ValidateFlags) -> Self {
         let mut from = c::bkey_validate_context::default();
         from.bits.set_flags(flags);
-        from.bits.set_from(c::bkey_validate_from::journal);
+        from.bits.set_from(c::BkeyValidateFrom::journal);
         from.journal_seq = h.seq.get();
 
         Ctx {
@@ -105,7 +105,7 @@ impl<'a> Ctx<'a> {
         } else {
             sb_error_count(self.fs, err);
             if fs_inconsistent(self.fs, &message!("corrupt metadata before write: {}\n", buf)) {
-                return self.fs.throw(bch_errcode::BCH_ERR_fsck_errors_not_fixed);
+                return self.fs.throw(Errcode::BCH_ERR_fsck_errors_not_fixed);
             }
         }
         Ok(())
@@ -141,7 +141,7 @@ fn head_mut(e: &mut [u8]) -> &mut Head<c::jset_entry> {
  */
 fn journal_key_lost(fs: &Fs, from: &c::bkey_validate_context) {
     if from.bits.flags().contains(ValidateFlags::write) ||
-       from.bits.from() != c::bkey_validate_from::journal {
+       from.bits.from() != c::BkeyValidateFrom::journal {
         return;
     }
 
@@ -260,7 +260,7 @@ fn journal_entry_btree_keys_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &[u8
     while at < last {
         if !first {
             out.newline();
-            c::bch_jset_entry_type(h.type_.into()).to_text(out);
+            c::JsetEntryType(h.type_.into()).to_text(out);
             prt!(out, ": ");
         }
         /* We may be called on entries that haven't been validated: */
@@ -412,7 +412,7 @@ impl EntryOps for c::jset_entry_usage<Unvalidated> {
 
     fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "type=");
-        c::bch_fs_usage_type(self.entry.btree_id.into()).to_text(out);
+        c::FsUsageType(self.entry.btree_id.into()).to_text(out);
         prt!(out, " v={}", self.v.get());
     }
 }
@@ -533,9 +533,9 @@ pub(crate) fn journal_entry_validate(fs: &Fs, e: &mut [u8], version: u32, big_en
 }
 
 pub fn journal_entry_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &c::jset_entry<Unvalidated>) {
-    c::bch_jset_entry_type(e.type_.into()).to_text(out);
+    c::JsetEntryType(e.type_.into()).to_text(out);
 
-    if u32::from(e.type_) < c::bch_jset_entry_type::NR {
+    if u32::from(e.type_) < c::JsetEntryType::NR {
         prt!(out, ": ");
         if let Ok(r) = e.typed() {
             c::jset_entry_match!(r, a => a.to_text(out, fs))
@@ -606,7 +606,7 @@ pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64
                              name, sector, seq,
                              c::BCH_VERSION_MAJOR(version.into()), c::BCH_VERSION_MINOR(version.into())) {
         /* don't try to continue: */
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_entry_version_incompatible);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_journal_entry_version_incompatible);
     }
 
     journal_entry_err_on!(ctx, !crate::data::checksum::checksum_type_valid(fs, h.csum_type()), jset_unknown_csum,
@@ -653,7 +653,7 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<c::jse
                              name, sector, seq,
                              c::BCH_VERSION_MAJOR(version.into()), c::BCH_VERSION_MINOR(version.into())) {
         /* don't try to continue: */
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_validate_version_incompatible);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_journal_validate_version_incompatible);
     }
 
     let bytes = h.bytes();

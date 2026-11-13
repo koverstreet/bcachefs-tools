@@ -9,14 +9,14 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed};
 use crate::alloc::discard::discard_opt_enabled;
 use crate::btree::cache::BTREE_WRITE_IO_LIMIT;
 use crate::c;
-use crate::c::journal_bucket_stage::{JOURNAL_BUCKET_cur, JOURNAL_BUCKET_discard};
-use crate::c::journal_flags as Journal;
-use crate::c::journal_pin_type::{JOURNAL_PIN_TYPE_btree0, JOURNAL_PIN_TYPE_key_cache, JOURNAL_PIN_TYPE_NR};
-use crate::c::journal_space_from::{self as SpaceFrom, *};
+use crate::c::JournalBucketStage::{JOURNAL_BUCKET_cur, JOURNAL_BUCKET_discard};
+use crate::c::JournalFlag as Journal;
+use crate::c::JournalPinType::{JOURNAL_PIN_TYPE_btree0, JOURNAL_PIN_TYPE_key_cache, JOURNAL_PIN_TYPE_NR};
+use crate::c::JournalSpaceFrom::{self as SpaceFrom, *};
 use crate::c::JournalGuard;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, SbFeature};
 use crate::fs::{Dev, Fs};
 use crate::journal::pins::PinsRead;
@@ -42,8 +42,8 @@ fn round_down(x: u32, m: u32) -> u32 {
 impl c::journal {
     /// The lowest watermark it takes reservations at, read without the
     /// journal's lock, which it's written under.
-    pub fn watermark(&self) -> c::bch_watermark {
-        c::bch_watermark::from_bits(self.lock.hot.watermark.get())
+    pub fn watermark(&self) -> c::Watermark {
+        c::Watermark::from_bits(self.lock.hot.watermark.get())
     }
 
     /// The open bucket pool can't serve below @watermark - 0 for all of them:
@@ -63,7 +63,7 @@ impl c::journal {
     }
 
     pub fn set_watermark(&self, g: &mut JournalGuard<'_>) {
-        use c::bch_time_stats as Time;
+        use c::TimeStat as Time;
         let fs = self.fs();
         let clean = u64::from(g.space[journal_space_clean as usize].total);
         let total = u64::from(g.space[journal_space_total as usize].total);
@@ -76,14 +76,14 @@ impl c::journal {
 
         let open_buckets = self.lock.watermark_open_buckets.get();
         let watermark = if low_on_space || low_on_pin || low_on_wb {
-            c::bch_watermark::reclaim
+            c::Watermark::reclaim
         } else {
-            c::bch_watermark::stripe
+            c::Watermark::stripe
         } as u32;
 
         let watermark = watermark.max(open_buckets.into());
 
-        let times = |t: c::bch_time_stats| &fs.times[t as usize];
+        let times = |t: c::TimeStat| &fs.times[t as usize];
         let mut changed = false;
         changed |= times(Time::blocked_journal_low_on_space).track_event_change(low_on_space);
         changed |= times(Time::blocked_journal_low_on_pin).track_event_change(low_on_pin);
@@ -291,7 +291,7 @@ impl c::journal {
                 can_discard |= should_discard;
 
                 if should_discard &&
-                    fs.flags.get(c::bch_fs_flags::rw_init_done) &&
+                    fs.flags.get(c::FsFlag::rw_init_done) &&
                     self.flags.get(Journal::running) &&
                     self.error().is_ok() {
                     ja.discard.queue(&self.discard_wq);
@@ -316,7 +316,7 @@ impl c::journal {
             }
 
             g.cur_entry_sectors = 0;
-            g.published().cur_entry_error.set(-fs.err(bch_errcode::BCH_ERR_insufficient_journal_devices).raw());
+            g.published().cur_entry_error.set(-fs.err(Errcode::BCH_ERR_insufficient_journal_devices).raw());
             return;
         }
 
@@ -343,7 +343,7 @@ impl c::journal {
         let cur_entry_error = if g.cur_entry_sectors != 0 {
             0
         } else {
-            -fs.err(bch_errcode::BCH_ERR_journal_full).raw()
+            -fs.err(Errcode::BCH_ERR_journal_full).raw()
         };
         g.published().cur_entry_error.set(cur_entry_error);
 
@@ -364,7 +364,7 @@ impl c::journal {
     fn dev_do_discards(&self, ca: &Dev) {
         let fs = self.fs();
 
-        let Some(ca) = fs.dev_get_ioref::<c::bch_dev_write_ref>(ca.dev_idx.into()) else {
+        let Some(ca) = fs.dev_get_ioref::<c::DevWriteRefKind>(ca.dev_idx.into()) else {
             return;
         };
         let _d = ca.journal.discard_lock.lock();
@@ -453,7 +453,7 @@ impl c::journal {
     /* returns true if we did work */
     fn flush_pins_locked(&self, reclaim: &mut ReclaimGuard<'_>, seq_to_flush: u64, allowed_below_seq: u32,
                          mut min_any: usize, mut min_key_cache: usize) -> usize {
-        use c::bch_time_stats as Time;
+        use c::TimeStat as Time;
         let fs = self.fs();
         let mut nr_flushed = 0;
 
@@ -700,7 +700,7 @@ impl c::journal {
         }
 
         if seq_to_flush >= self.fs().journal_cur_seq() {
-            self.cycle(c::journal_cycle_flags::JOURNAL_CYCLE_must_close);
+            self.cycle(c::JournalCycleFlags::JOURNAL_CYCLE_must_close);
         }
 
         /*
@@ -832,7 +832,7 @@ impl c::journal {
 
     #[cold]
     pub fn reclaim_to_text(&self, out: &mut Printbuf) {
-        use c::bch_time_stats as Time;
+        use c::TimeStat as Time;
         let fs = self.fs();
         let now = jiffies();
 
@@ -916,7 +916,7 @@ fn reclaim_thread(j: &c::journal, me: &KthreadSelf<'_>) {
     Kthread::set_freezable();
 
     let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(),
-        || (fs.flags.get(c::bch_fs_flags::rw) || Kthread::should_stop()).then_some(()));
+        || (fs.flags.get(c::FsFlag::rw) || Kthread::should_stop()).then_some(()));
 
     j.reclaim_lock.lock().published().last_flushed.set(jiffies());
 

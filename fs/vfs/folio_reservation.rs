@@ -11,9 +11,9 @@ use core::ops::Range;
 
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
-use crate::c::bch_folio_sector_state as SectorState;
-use crate::c::bch_reservation_flags as ReservationFlags;
-use crate::errcode::{bch_errcode, BchError};
+use crate::c::FolioSectorState as SectorState;
+use crate::c::ReservationFlags as ReservationFlags;
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 
 use super::folio::{FolioSpan, FolioStateGuard, Folio};
@@ -164,7 +164,7 @@ impl<'i> FolioReservation<'i> {
                 reserved = reserved_offset.clamp(offset, offset + len) - offset;
 
                 if reserved == 0 {
-                    return fs.throw(bch_errcode::BCH_ERR_ENOSPC_disk_reservation);
+                    return fs.throw(Errcode::BCH_ERR_ENOSPC_disk_reservation);
                 }
 
                 sectors.end = blocks_out(fs, offset, reserved).end;

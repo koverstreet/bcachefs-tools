@@ -366,7 +366,7 @@ mod vfs {
     use core::ffi::{c_int, c_void, CStr};
     use crate::btree::bkey::pos;
     use crate::btree::iter::{lockrestart_do, CommitFlags};
-    use crate::errcode::{bch_errcode, ret_to_class};
+    use crate::errcode::{Errcode, ret_to_class};
     use crate::inode_opts::{self, InodeOpt};
     use crate::locking::MemallocFlags;
     use crate::opts::{self, OptChange};
@@ -532,11 +532,11 @@ mod vfs {
 
         let Some(opt) = name.to_str().ok().and_then(opts::opt_lookup)
             .filter(|opt| opt.id.inode_opt().is_some()) else {
-            return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_xattr_get_bad_opt));
+            return Err(fs.err(Errcode::BCH_ERR_EINVAL_xattr_get_bad_opt));
         };
         let id = opt.id;
         let Some(inode_opt) = id.inode_opt() else {
-            return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_xattr_get_not_inode_opt));
+            return Err(fs.err(Errcode::BCH_ERR_EINVAL_xattr_get_not_inode_opt));
         };
 
         if !inode_opts.defined(id) || !(all || inode_opt.is_own(inode)) {
@@ -603,18 +603,18 @@ mod vfs {
     ) -> Result<(), BchError> {
         let fs = t.fs();
 
-        if opt.id() == c::inode_opt_id::casefold {
+        if opt.id() == c::InodeOptId::casefold {
             inode::set_casefold(t, inum, bi, v as u32)?;
         }
 
-        if opt.id() == c::inode_opt_id::inodes_32bit &&
+        if opt.id() == c::InodeOptId::inodes_32bit &&
            fs.request_incompat_feature(
                MetadataVersion::bcachefs_metadata_version_31bit_dirent_offset).is_ok() {
             // Make sure the dir is empty, as otherwise we'd need to
             // rehash everything and update the dirent keys.
             crate::dirent::empty_dir_trans(t, inum)?;
 
-            let flag = c::bch_inode_flags::BCH_INODE_31bit_dirent_offset.bits();
+            let flag = c::InodeFlags::BCH_INODE_31bit_dirent_offset.bits();
             if defined {
                 bi.bi_flags |= flag;
             } else {
@@ -635,11 +635,11 @@ mod vfs {
         let fs = v.fs();
 
         let Some(opt) = name.to_str().ok().and_then(opts::opt_lookup) else {
-            return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_xattr_set_bad_opt));
+            return Err(fs.err(Errcode::BCH_ERR_EINVAL_xattr_set_bad_opt));
         };
         let opt_id = opt.id;
         let Some(inode_opt) = opt_id.inode_opt() else {
-            return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_xattr_set_not_inode_opt));
+            return Err(fs.err(Errcode::BCH_ERR_EINVAL_xattr_set_not_inode_opt));
         };
 
         let defined = value.is_some();
@@ -678,7 +678,7 @@ mod vfs {
 
             // inode fields accessible via the xattr interface are stored
             // with a +1 bias, so that 0 means unset:
-            if inode_opt.id() == c::inode_opt_id::project {
+            if inode_opt.id() == c::InodeOptId::project {
                 let projid = if inode_v != 0 { inode_v - 1 } else { 0 };
                 lock.set_projid(projid as u32)?;
             }
@@ -687,7 +687,7 @@ mod vfs {
             lock.write_inode(0, |t, bi| inode_opt_set(t, inum, bi, inode_opt, inode_v, defined))?;
         }
 
-        if inode_opt.id() == c::inode_opt_id::casefold {
+        if inode_opt.id() == c::InodeOptId::casefold {
             dentry.casefold_changed();
         }
 

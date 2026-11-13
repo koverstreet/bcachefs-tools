@@ -10,15 +10,15 @@ use super::packed::BkeyPHeader;
 use super::{spos, BkeyP, BKEY_U64S};
 use crate::btree::node::{BkeyUnpackField, NodeContents};
 use crate::c;
-use crate::cstructs::c::{bkey_fields, bkey_pack_pos_ret};
+use crate::cstructs::c::{bkey_fields, BkeyPackPosRet};
 use crate::debug::params::debug_check_bkey_unpack;
-use crate::format::bch_bkey_fields::{self, *};
+use crate::format::BkeyField::{self, *};
 use crate::format::{bkey_format, Bpos, BkeyType};
 use crate::util::kernel::unlikely;
 use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut};
 use crate::util::{Printbuf, ToText};
 
-const POS_FIELDS: [bch_bkey_fields; 3] = [BKEY_FIELD_INODE, BKEY_FIELD_OFFSET, BKEY_FIELD_SNAPSHOT];
+const POS_FIELDS: [BkeyField; 3] = [BKEY_FIELD_INODE, BKEY_FIELD_OFFSET, BKEY_FIELD_SNAPSHOT];
 
 /// Where a packed key's position bits start in its high word: past the header,
 /// on big endian.
@@ -86,7 +86,7 @@ impl<'a> PackState<'a> {
     }
 
     #[inline(always)]
-    fn set_inc_field_unchecked(&mut self, f: bch_bkey_fields, v: u64) {
+    fn set_inc_field_unchecked(&mut self, f: BkeyField, v: u64) {
         let mut bits = self.format.bits(f);
 
         if bits != 0 {
@@ -107,7 +107,7 @@ impl<'a> PackState<'a> {
     }
 
     #[inline(always)]
-    fn set_inc_field(&mut self, f: bch_bkey_fields, v: u64) -> bool {
+    fn set_inc_field(&mut self, f: BkeyField, v: u64) -> bool {
         let offset = self.format.offset(f);
 
         if v < offset {
@@ -142,7 +142,7 @@ impl<'a> UnpackState<'a> {
     }
 
     #[inline(always)]
-    fn get_inc_field(&mut self, f: bch_bkey_fields) -> u64 {
+    fn get_inc_field(&mut self, f: BkeyField) -> u64 {
         let mut bits = self.format.bits(f);
         let offset = self.format.offset(f);
         let mut v = 0;
@@ -730,7 +730,7 @@ impl NodeContents {
         }
 
         let (bytes, kb) = (plain_bytes(buf), at as u32 * 8);
-        let field = |f: bch_bkey_fields| unpack_field_fast(bytes, kb, &self.unpack[f as usize], self.format.offset(f));
+        let field = |f: BkeyField| unpack_field_fast(bytes, kb, &self.unpack[f as usize], self.format.offset(f));
 
         let out = Bpos {
             inode:    field(BKEY_FIELD_INODE),
@@ -778,9 +778,9 @@ impl NodeContents {
      * Padding requirement is identical to bch2_bkey_pack_pos() — see
      * struct bkey_packed_padded.
      */
-    pub fn pack_pos_lossy(&self, buf: &mut [u64], at: u16, p: Bpos) -> bkey_pack_pos_ret {
+    pub fn pack_pos_lossy(&self, buf: &mut [u64], at: u16, p: Bpos) -> BkeyPackPosRet {
         let Some((v, exact)) = self.format.pos_fields_lossy(p) else {
-            return bkey_pack_pos_ret::BKEY_PACK_POS_FAIL;
+            return BkeyPackPosRet::BKEY_PACK_POS_FAIL;
         };
 
         self.pack_pos_fields(buf, at, v);
@@ -789,7 +789,7 @@ impl NodeContents {
             self.pack_pos_verify(&buf[at as usize..], &p, exact);
         }
 
-        if exact { bkey_pack_pos_ret::BKEY_PACK_POS_EXACT } else { bkey_pack_pos_ret::BKEY_PACK_POS_SMALLER }
+        if exact { BkeyPackPosRet::BKEY_PACK_POS_EXACT } else { BkeyPackPosRet::BKEY_PACK_POS_SMALLER }
     }
 
     /// @v, a position's fields past their offsets, into the key at @at in

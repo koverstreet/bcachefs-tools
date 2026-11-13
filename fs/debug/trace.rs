@@ -44,7 +44,7 @@ macro_rules! event_types {
 #[allow(non_camel_case_types)]
 pub mod events {
     use crate::c;
-    c::bch_persistent_counters_arms!(event_types);
+    c::PersistentCounter_arms!(event_types);
     c::BCH_NOCOUNTER_TRACEPOINTS!(event_types);
     c::BCH_PATH_TRACEPOINTS!(event_types);
 }
@@ -84,7 +84,7 @@ macro_rules! trace_events {
         )*
     } };
 }
-c::bch_persistent_counters_arms!(trace_events);
+c::PersistentCounter_arms!(trace_events);
 c::BCH_NOCOUNTER_TRACEPOINTS!(trace_events);
 c::BCH_PATH_TRACEPOINTS!(trace_events
     [all(kernel, CONFIG_TRACEPOINTS, CONFIG_BCACHEFS_PATH_TRACEPOINTS)]);

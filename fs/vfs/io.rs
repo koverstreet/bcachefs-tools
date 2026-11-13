@@ -13,7 +13,7 @@ use crate::c;
 use crate::data::durability::BkeyVDurability;
 use crate::data::extents::BkeyVExtents;
 use crate::data::{io_misc, reflink};
-use crate::errcode::{bch_errcode, ret_to_class, BchError};
+use crate::errcode::{Errcode, ret_to_class, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
@@ -40,7 +40,7 @@ use super::vfs_inode::VfsInode;
 #[pin_data]
 #[repr(C)]
 pub(crate) struct NocowFlush {
-    ca:   DevIoRef<c::bch_dev_write_ref>,
+    ca:   DevIoRef<c::DevWriteRefKind>,
     #[pin]
     bio:  Bio,
 }
@@ -71,7 +71,7 @@ impl InodeInfo {
 
         stack_pin_init!(let g = Gather::<(), waiter::Sync>::new());
         for dev in devs.d.iter() {
-            let ca = fs.dev_rcu(dev as u32, &read_lock()).and_then(|ca| fs.io_ref_tryget::<c::bch_dev_write_ref>(ca));
+            let ca = fs.dev_rcu(dev as u32, &read_lock()).and_then(|ca| fs.io_ref_tryget::<c::DevWriteRefKind>(ca));
             let Some(ca) = ca else { continue };
             let bdev = ca.disk_sb.bdev;
 
@@ -192,7 +192,7 @@ impl InodeInfo {
     /// Whether writeback writes the folio back, and with it i_size: if not,
     /// the caller updates i_size.
     fn truncate_folio(&self, index: u64, start: u64, end: u64) -> Result<bool, BchError> {
-        use c::bch_folio_sector_state as SectorState;
+        use c::FolioSectorState as SectorState;
 
         let fs = self.fs();
         let mapping = self.vfs().mapping();
@@ -322,7 +322,7 @@ impl InodeInfo {
     }
 
     pub(crate) fn truncate(&self, idmap: MntIdmap<'_>, attr: &mut c::iattr) -> Result<(), BchError> {
-        use c::bch_inode_info_flags::{EI_INODE_ERROR, EI_INODE_FLUSH_ON_CLOSE};
+        use c::InodeInfoFlag::{EI_INODE_ERROR, EI_INODE_FLUSH_ON_CLOSE};
 
         let fs = self.fs();
         let v = self.vfs();
@@ -460,7 +460,7 @@ impl InodeInfo {
         let v = self.vfs();
 
         if (offset | len) & (fs.block_bytes() - 1) != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_fcollapse_finsert_unaligned);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_fcollapse_finsert_unaligned);
         }
 
         if insert {
@@ -469,10 +469,10 @@ impl InodeInfo {
             }
 
             if offset >= v.size() {
-                return fs.throw(bch_errcode::BCH_ERR_EINVAL_finsert_past_eof);
+                return fs.throw(Errcode::BCH_ERR_EINVAL_finsert_past_eof);
             }
         } else if offset + len >= v.size() {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_fcollapse_past_eof);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_fcollapse_past_eof);
         }
 
         v.mapping().write_invalidate_range(offset, u64::MAX)?;
@@ -662,7 +662,7 @@ pub(super) fn fallocate(inode: &InodeInfo, file: &File, mode: c_int, offset: i64
     } else if mode == c::FALLOC_FL_COLLAPSE_RANGE {
         inode.fcollapse_finsert(offset, len, false)
     } else {
-        fs.throw(bch_errcode::BCH_ERR_unsupported_fallocate_mode)
+        fs.throw(Errcode::BCH_ERR_unsupported_fallocate_mode)
     };
 
     inode.clear_reserved();
@@ -788,15 +788,15 @@ pub(super) fn remap_file_range(src: &InodeInfo, file_src: &File, pos_src: i64, f
     let (pos_src, pos_dst, mut len) = (pos_src as u64, pos_dst as u64, len as u64);
 
     if remap_flags & !(c::REMAP_FILE_DEDUP | c::REMAP_FILE_ADVISORY) != 0 {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_remap_bad_flags);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_remap_bad_flags);
     }
 
     if pos_src & (block_bytes - 1) != 0 || pos_dst & (block_bytes - 1) != 0 {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_remap_unaligned);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_remap_unaligned);
     }
 
     if core::ptr::eq(src, dst) && pos_src.abs_diff(pos_dst) < len {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_remap_overlapping);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_remap_overlapping);
     }
 
     /*

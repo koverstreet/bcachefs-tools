@@ -7,15 +7,15 @@ use crate::btree::node::BtreeNode;
 use crate::btree::types::BtreeCacheGuard;
 use crate::c;
 use crate::data_structures::list::Walk;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::six::six_lock_counts;
 use crate::prt;
 use crate::util::kernel::cond_resched;
 use crate::util::log::LogMsg;
 use crate::util::place::PlacedDrop;
-use c::btree_node_cache_state as State;
-use c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
+use c::BtreeNodeCacheState as State;
+use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -71,7 +71,7 @@ impl Fs {
 
         for _ in 0..bc.lock.nr_reserve.get() {
             let Some(b) = node_mem_alloc(self) else {
-                return self.throw(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
+                return self.throw(Errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
             };
             let b = unsafe { cached_node(self, b.as_ptr()) };
             let held = new_node_lock(b);

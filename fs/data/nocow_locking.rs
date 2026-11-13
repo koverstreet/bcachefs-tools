@@ -26,7 +26,7 @@ use crate::fs::Dev;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::BchError;
@@ -75,7 +75,7 @@ impl NocowKind {
 }
 
 fn is_contended(e: &BchError) -> bool {
-    e.matches(bch_errcode::BCH_ERR_nocow_trylock_contended)
+    e.matches(Errcode::BCH_ERR_nocow_trylock_contended)
 }
 
 // ── A hash bucket ────────────────────────────────────────────────────────
@@ -123,20 +123,20 @@ impl NocowLockBucket {
             Some(i) => {
                 let held = self.l[i].load(Relaxed);
                 if held.signum() == -v.signum() {
-                    return fs.throw(bch_errcode::BCH_ERR_nocow_trylock_contended);
+                    return fs.throw(Errcode::BCH_ERR_nocow_trylock_contended);
                 }
                 i
             }
             None => {
                 let i = self.l.iter().position(|l| l.load(Relaxed) == 0)
-                    .ok_or_else(|| fs.err(bch_errcode::BCH_ERR_nocow_trylock_bucket_full))?;
+                    .ok_or_else(|| fs.err(Errcode::BCH_ERR_nocow_trylock_bucket_full))?;
                 self.b[i].store(dev_bucket, Relaxed);
                 i
             }
         };
 
         if self.l[i].load(Relaxed).checked_add(v).is_none() {
-            return fs.throw(bch_errcode::BCH_ERR_nocow_trylock_contended);
+            return fs.throw(Errcode::BCH_ERR_nocow_trylock_contended);
         }
         self.l[i].fetch_add(v, AcqRel);
         Ok(())
@@ -232,7 +232,7 @@ impl NocowLocks {
                     continue;
                 }
 
-                let _contended = fs.times[c::bch_time_stats::nocow_lock_contended as usize].timer();
+                let _contended = fs.times[c::TimeStat::nocow_lock_contended as usize].timer();
                 if ret.as_ref().is_err_and(is_contended) {
                     ret = l.wait_until(trans, || {
                         let r = l.trylock(fs, b, kind);
@@ -244,7 +244,7 @@ impl NocowLocks {
                 }
 
                 let e = ret.unwrap_err();
-                assert!(e.matches(bch_errcode::BCH_ERR_nocow_trylock_bucket_full),
+                assert!(e.matches(Errcode::BCH_ERR_nocow_trylock_bucket_full),
                         "nocow lock: unexpected error {e}");
                 for &(b2, l2) in &order[..n] {
                     l2.unlock(b2, kind);

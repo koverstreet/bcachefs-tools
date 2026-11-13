@@ -29,7 +29,7 @@ use crate::data::ec::update::{block_for_each_extent, Extent};
 use crate::data::moving::Moving;
 use crate::data::ptrs::{extent_nonce, ptr_eq, BkeyVPtrs, BkeyVPtrsMut, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
 use crate::inode_opts::get_io_opts;
@@ -58,7 +58,7 @@ fn extent_good_in_buf(fs: &Fs, k: BkeySC<'_>, s: BkeySC<'_, c::Stripe<Validated>
     let sp = &s.v().block_ptrs()[block as usize];
     let block_sectors = u64::from(s.v().sectors.get());
 
-    if b.err[PRE][block as usize] != Some(bch_errcode::BCH_ERR_stripe_read_csum_err.into()) ||
+    if b.err[PRE][block as usize] != Some(Errcode::BCH_ERR_stripe_read_csum_err.into()) ||
        b.data[block as usize].is_none() {
         return false;
     }
@@ -79,7 +79,7 @@ fn extent_good_in_buf(fs: &Fs, k: BkeySC<'_>, s: BkeySC<'_, c::Stripe<Validated>
     // within the block's buffer, as above
     let start = ((offset - u64::from(b.offset)) << 9) as usize;
     let extent = &b.block(block as usize)[start..start + ((p.crc.compressed_size as usize) << 9)];
-    fs.checksum(c::bch_csum_type(p.crc.csum_type.into()), extent_nonce(k.k.bversion, &p.crc), extent) == p.crc.csum
+    fs.checksum(c::CsumType(p.crc.csum_type.into()), extent_nonce(k.k.bversion, &p.crc), extent) == p.crc.csum
 }
 
 /// Damage recorded against every extent in @blocks of stripe @s - found by
@@ -163,7 +163,7 @@ fn drop_block_extent(t: &TransAttempt<'_, '_>, idx: u64, block: u32, bp: BkeySC<
 
     if n.as_sc().can_read(fs) {
         let opts = get_io_opts(t, None, k)?;
-        n.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+        n.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
     } else {
         n.set_error(fs, ErrorKeyReason::device_removed);
     }
@@ -235,7 +235,7 @@ impl StripeBlocks {
     pub(crate) fn get(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>) -> Result<Self, BchError> {
         let v = s.v();
         let Some(counts) = v.blockcounts() else {
-            return fs.throw(bch_errcode::BCH_ERR_stripe_unknown_csum_type);
+            return fs.throw(Errcode::BCH_ERR_stripe_unknown_csum_type);
         };
         let rcu = read_lock();
         let mut b = StripeBlocks { live: 0, bad: 0 };
@@ -279,7 +279,7 @@ fn stripe_repair_usable_devs(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, b: St
     let all = *devs;
     for i in all.d.iter().filter(|&i| !carried.d.test(i)) {
         let usable = fs.dev_rcu(i as u32, &rcu).is_some_and(|ca| {
-            ca.free_buckets_at(&ca.usage_read_fast(), c::bch_watermark::normal) != 0 ||
+            ca.free_buckets_at(&ca.usage_read_fast(), c::Watermark::normal) != 0 ||
                 copygc::can_make_progress(ca, &mark)
         });
         if !usable {
@@ -316,7 +316,7 @@ fn stripe_repair_nothing_to_do(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, s
 
     let opts = get_io_opts(t, None, s.untyped())?;
     update_reconcile_opts(t, None, &opts, iter, 0, s.untyped(),
-                          c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other)?;
+                          c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)?;
     t.commit(None, CommitFlags::NO_ENOSPC)
 }
 
@@ -554,7 +554,7 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, trans: &TransGuard<'_>, ca: 
     let r = match scrub_block(fs, s, block) {
         Ok(r) if r.bad_sectors > 0 => r,
         Ok(_) => return Ok(()),
-        Err(e) if e == bch_errcode::BCH_ERR_ENOMEM_stripe_buf.into() => return Err(e),
+        Err(e) if e == Errcode::BCH_ERR_ENOMEM_stripe_buf.into() => return Err(e),
         // Couldn't read it: an IO error is counted by the device, and a
         // stale pointer means the stripe went away under us
         Err(_) => return Ok(()),
@@ -570,7 +570,7 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, trans: &TransGuard<'_>, ca: 
     let n = if ret.is_ok() { &stats.sectors_error_corrected } else { &stats.sectors_error_uncorrected };
     n.fetch_add(r.bad_sectors as i64, Relaxed);
 
-    let ty = c::bch_csum_type(s.v().csum_type.into());
+    let ty = c::CsumType(s.v().csum_type.into());
     let mut msg = log_msg_ratelimited!(fs);
     write!(msg, "scrub: stripe block {block} on {}: {} sectors don't match the stripe's checksums, expected ",
            ca, r.bad_sectors);
@@ -599,7 +599,7 @@ pub(crate) fn repair_read(trans: &TransGuard<'_>, s: BkeySC<'_, c::Stripe<Valida
 
     let mut buf = loop {
         match StripeBuf::new_whole(fs, s, MemWait::Blocked) {
-            Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
+            Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => {
                 trans.unlock_long();
                 fs.stripe_buf_mem_wait(bytes);
             }
@@ -632,13 +632,13 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
     // Ours until it's set up, as a head holds its stripe until it's handed
     // on: its room in new_stripes kept, so handing it on can't fail.
     fs.ec.new_stripes.lock().reserve()
-        .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc))?;
-    let b = match StripeNew::alloc(fs, devs, c::bch_watermark::normal, v.disk_label.into(),
+        .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc))?;
+    let b = match StripeNew::alloc(fs, devs, c::Watermark::normal, v.disk_label.into(),
                                    v.bits.algorithm().into(), nr_new_data, v.nr_redundant.into(), v.sectors.get().into()) {
         Ok(b) => b,
         Err(_) => {
             release_held(fs);
-            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
+            return fs.throw(Errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
         }
     };
     let ns: &StripeNew = &b;
@@ -654,7 +654,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
                 claim.put(fs);
                 drop(i);
                 discard_held(fs, b);
-                return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
+                return fs.throw(Errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
             }
         }
 
@@ -674,7 +674,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
         let mut i = ns.lock();
         StripeBuf::new_whole(fs, i.new_stripe.stripe(), MemWait::Never)
             .map(|buf| i.new_buf = Some(buf))
-            .and_then(|()| if narrowing { i.reserve_parity(ns.fs_ref(), c::bch_reservation_flags::empty()) } else { Ok(()) })
+            .and_then(|()| if narrowing { i.reserve_parity(ns.fs_ref(), c::ReservationFlags::empty()) } else { Ok(()) })
     }.and_then(|()| lockrestart_do(trans, |t| stripe_idx_alloc(t, &mut ns.lock())));
     if let Err(e) = ret {
         discard_held(fs, b);
@@ -686,12 +686,12 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
     let ret = lockrestart_do(trans, |t| {
         let dev_stripe = dev_stripe_state_get(t, v.disk_label.into())?;
         let mut req = t.alloc_request(target, false, None, 0, 0,
-                                      c::bch_watermark::normal, c::bch_write_flags::empty(), Some(cl.as_opaque()))?;
+                                      c::Watermark::normal, c::WriteFlags::empty(), Some(cl.as_opaque()))?;
         let ret = new_stripe_alloc_buckets(t, &mut req, dev_stripe, &mut ns.lock(), true);
         match ret {
-            Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
+            Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => {
                 t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
-                Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
+                Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
             }
             ret => ret,
         }
@@ -720,7 +720,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
 
     if !narrowing {
         // NOFAIL: it doesn't fail
-        let _ = i.reserve_parity(ns.fs_ref(), c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL);
+        let _ = i.reserve_parity(ns.fs_ref(), c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL);
     }
 
     // As ec_old_stripe_read(), for an old stripe the caller has already read,

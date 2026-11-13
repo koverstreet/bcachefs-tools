@@ -4,13 +4,12 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_name, c_bitmask, bch_enum, grown, CStruct, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{c_bitmask, bch_enum, grown, CStruct, Plain, TypeInfo, View, SizedVal};
 
 pub const BCACHEFS_ROOT_SUBVOL: u32 = 1;
 
 #[grown(from = creation_parent, bkey)]
 #[repr(C)]
-#[c_name(bch_subvolume)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct Subvolume {
     pub v: c::bch_val,
@@ -44,7 +43,7 @@ pub struct Subvolume {
  * deleted:  no longer referenced, delete_dead_snapshots may delete
  */
 #[repr(u32)]
-pub enum bch_subvolume_state {
+pub enum SubvolumeState {
     live = 0x4ad5447e,
     unlinked = 0x2d358e8f,
     deleted = 0x3c6b2d4c,
@@ -65,7 +64,6 @@ c_bitmask! {
 
 #[grown(from = depth, bkey)]
 #[repr(C)]
-#[c_name(bch_snapshot)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct Snapshot {
     pub v: c::bch_val,
@@ -120,14 +118,14 @@ pub struct Snapshot {
  * below), so sparse bit corruption can't turn one legal state into another.
  */
 #[repr(u32)]
-pub enum bch_snapshot_state {
+pub enum SnapshotState {
     live = 0x757c47a2,
     will_delete = 0x3316a8d2,
     no_keys = 0x372b5a01,
     deleted = 0x7cd4a225,
 }
 
-// The state codewords' distances, as the comment on bch_snapshot_state
+// The state codewords' distances, as the comment on SnapshotState
 // says: every snapshot and subvolume state at least 14 bit flips from every
 // other, of either kind, and 14 to 18 from a zeroed field and from an
 // all-ones one. Every pair, from the enums - a state added is checked.
@@ -135,7 +133,7 @@ macro_rules! codewords {
     ([] $(($n:tt, $v:expr)),* $(,)?) => { &[$($v),*] };
 }
 const _: () = {
-    let lists: [&[u32]; 2] = [bch_snapshot_state_arms!(codewords []), bch_subvolume_state_arms!(codewords [])];
+    let lists: [&[u32]; 2] = [SnapshotState_arms!(codewords []), SubvolumeState_arms!(codewords [])];
     let mut a = 0;
     while a < lists.len() {
         let mut i = 0;
@@ -177,7 +175,6 @@ c_bitmask! {
  * subvolume that other snapshots were created from:
  */
 #[repr(C)]
-#[c_name(bch_snapshot_tree)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View, SizedVal)]
 pub struct SnapshotTree {
     pub v: c::bch_val,

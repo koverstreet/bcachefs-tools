@@ -19,7 +19,7 @@ use kernel::page::PAGE_SHIFT;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags};
 use crate::c;
-use crate::c::bch_folio_sector_state as SectorState;
+use crate::c::FolioSectorState as SectorState;
 use crate::data::durability::BkeyVDurability;
 use crate::data::extents::BkeyVExtents;
 use crate::errcode::{errptr_to_result, BchError};

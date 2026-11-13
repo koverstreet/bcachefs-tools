@@ -31,7 +31,7 @@ use pin_init::pin_data;
 #[prefix(BCH_ASYNC_OBJ_LIST_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_async_obj_lists {
+pub enum AsyncObjKind {
     data_update,
     rbio,
     write_op,
@@ -56,7 +56,7 @@ use core::ptr::NonNull;
 /// so is what its to_text() reads through it: the debugfs walk reads what it
 /// finds there under RCU.
 pub unsafe trait AsyncObj {
-    const LIST: c::bch_async_obj_lists;
+    const LIST: c::AsyncObjKind;
 
     fn to_text(&self, out: &mut Printbuf, fs: &Fs);
 }
@@ -111,7 +111,7 @@ impl Drop for AsyncObjSlot {
 ///
 /// # Safety
 /// @idx is the object's, from async_object_list_add() on that list.
-pub unsafe fn list_del(fs: &Fs, list: c::bch_async_obj_lists, idx: &mut core::ffi::c_uint) {
+pub unsafe fn list_del(fs: &Fs, list: c::AsyncObjKind, idx: &mut core::ffi::c_uint) {
     fs.async_objs[list as usize].list.remove(*idx);
     *idx = 0;
 }
@@ -140,7 +140,7 @@ pub fn async_obj_init(fs: &Fs) -> Result<(), BchError> {
     for l in &fs.async_objs {
         // SAFETY: filesystem init, before anything is listed
         if unsafe { l.list.init() }.is_err() {
-            return fs.throw(c::bch_errcode::BCH_ERR_ENOMEM_async_obj_init);
+            return fs.throw(c::Errcode::BCH_ERR_ENOMEM_async_obj_init);
         }
     }
     Ok(())
@@ -188,7 +188,7 @@ macro_rules! list_table {
     ($(($name:ident, $nr:expr)),* $(,)?) => { crate::paste! {
         /// Each list's name, and how its objects are shown: indexed as
         /// async_objs[].
-        const LISTS: [(&CStr, ObjToText); c::bch_async_obj_lists::NR as usize] = [$((
+        const LISTS: [(&CStr, ObjToText); c::AsyncObjKind::NR as usize] = [$((
             match CStr::from_bytes_with_nul(concat!(stringify!($name), "\0").as_bytes()) {
                 Ok(name) => name,
                 Err(_)   => panic!(),
@@ -197,7 +197,7 @@ macro_rules! list_table {
         )),*];
     }};
 }
-bch_async_obj_lists_arms!(list_table);
+AsyncObjKind_arms!(list_table);
 
 impl c::async_obj_list {
     /// The filesystem it's one of the async_objs[] of.

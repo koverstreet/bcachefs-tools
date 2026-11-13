@@ -9,15 +9,15 @@ use crate::btree::trans::BtreeTrans;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::c;
 use crate::data_structures::sort::heapsort_by;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::util::alloc::{flags, KVVec};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::{fs_fatal_error, prt};
-use c::journal_pin_type::JOURNAL_PIN_TYPE_key_cache;
-use c::six_lock_type::SIX_LOCK_intent;
+use c::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
+use c::SixLockType::SIX_LOCK_intent;
 use core::ffi::c_int;
 use core::mem::offset_of;
 use core::sync::atomic::Ordering::Relaxed;
@@ -57,8 +57,8 @@ fn bkey_cached_check_pin(fs: &Fs, ck: &c::bkey_cached) {
 }
 
 fn journal_low_on_space(fs: &Fs) -> bool {
-    fs.journal.flags.get(c::journal_flags::low_on_space) ||
-        fs.journal.flags.get(c::journal_flags::low_on_pin)
+    fs.journal.flags.get(c::JournalFlag::low_on_space) ||
+        fs.journal.flags.get(c::JournalFlag::low_on_pin)
 }
 
 fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, journal_seq: u64,
@@ -99,7 +99,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
          * the update
          */
         let last_seq = j.lock.last_seq.get();
-        let watermark = if ck.journal.seq() == last_seq { Watermark::RECLAIM } else { Watermark::BTREE };
+        let watermark = if ck.journal.seq() == last_seq { Watermark::reclaim } else { Watermark::btree };
 
         let mut commit_flags = commit_flags;
         if ck.journal.seq() != last_seq || !journal_low_on_space(fs) {
@@ -211,7 +211,7 @@ pub(crate) unsafe extern "C" fn bch2_btree_key_cache_journal_flush(j: *mut c::jo
         });
 
         if let Err(e) = &ret {
-            if !e.matches(bch_errcode::BCH_ERR_journal_reclaim_would_deadlock) && fs.journal.error().is_ok() {
+            if !e.matches(Errcode::BCH_ERR_journal_reclaim_would_deadlock) && fs.journal.error().is_ok() {
                 fs_fatal_error!(fs, "flushing key cache: {}", e.msg());
             }
         }
@@ -282,7 +282,7 @@ impl Fs {
                     btree_key_cache_flush_pos(t, *k, 0, CommitFlags::NO_JOURNAL_RES, false)
                 });
                 if let Err(e) = ret {
-                    if !e.matches(bch_errcode::BCH_ERR_journal_reclaim_would_deadlock) && self.journal.error().is_ok() {
+                    if !e.matches(Errcode::BCH_ERR_journal_reclaim_would_deadlock) && self.journal.error().is_ok() {
                         return crate::bch_err_fn!(self, Err(e));
                     }
                 }
@@ -315,7 +315,7 @@ pub unsafe fn bch2_btree_insert_key_cached(trans: &BtreeTrans<'_>, paths: &mut P
     ck.set_key(BkeySC::from(insert));
 
     if !ck.dirty() {
-        ebug_assert!(!fs.flags.get(c::bch_fs_flags::clean_shutdown));
+        ebug_assert!(!fs.flags.get(c::FsFlag::clean_shutdown));
         ck.set_flag(c::BKEY_CACHED_DIRTY);
         bc.nr_dirty.fetch_add(1, Relaxed);
 
@@ -397,7 +397,7 @@ pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Path
              */
             paths[i].bits.set_should_be_locked(false);
             trans.path_unlock(paths, i);
-            paths[i].l[0].b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_drop.into());
+            paths[i].l[0].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_drop.into());
         }
     }
 

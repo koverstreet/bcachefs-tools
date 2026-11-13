@@ -33,7 +33,7 @@ pub const IS_ANCESTOR_BITMAP: u32 = 128;
  */
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum snapshot_id_state {
+pub enum SnapshotIdState {
     SNAPSHOT_ID_empty,
     SNAPSHOT_ID_live,
     SNAPSHOT_ID_deleted,

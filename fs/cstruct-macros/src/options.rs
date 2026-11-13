@@ -19,7 +19,7 @@
 //! It makes, from the fields in order - each one's id, Opt_name:
 //!
 //! ```text
-//! bch_opt_id               the ids, and NR - a #[bch_enum(open)]
+//! OptId               the ids, and NR - a #[bch_enum(open)]
 //! bch_opts::TABLE          each option's Opt (opts.rs), by id
 //! bch_opts::DEFAULTS       each one's default, all defined
 //! get(), set(), defined(), apply()   by id; set() sets it defined, in the
@@ -149,7 +149,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         true => quote!(0),
         false => {
             let f = a.flags.iter().map(|f| format_ident!("OPT_{}", f.to_string().to_uppercase()));
-            quote!(#(c::opt_flags::#f.bits())|*)
+            quote!(#(c::OptFlags::#f.bits())|*)
         }
     };
     let sb = match &a.sb {
@@ -182,9 +182,9 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
     let name = name.to_string();
     Ok(quote! {
         #o::Opt {
-            id:    bch_opt_id::#id,
+            id:    OptId::#id,
             name:  #name,
-            flags: c::opt_flags::from_bits_retain(#flags),
+            flags: c::OptFlags::from_bits_retain(#flags),
             ty:    #ty,
             min:   #min,
             max:   #max,
@@ -197,7 +197,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
 
 enum Accessor {
     Bool,
-    /// A string option's choices' enum, through c_enum!'s from_bits() and
+    /// A string option's choices' enum, through #[bch_enum]'s from_bits() and
     /// into_bits(): a closed enum's from_bits() panics on a value that isn't
     /// one, and a string option's value is an index into its choices - so
     /// one, unless something set it around the parser.
@@ -286,7 +286,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let readers = |p: &Place<'_>| -> TokenStream {
         let get = opts.iter().map(|f| {
             let (id, v) = (f.id(), (p.load)(f.name));
-            quote!(bch_opt_id::#id => #v as u64,)
+            quote!(OptId::#id => #v as u64,)
         });
         let accessors = opts.iter().map(|f| {
             let (ty, conv, _) = accessor(f);
@@ -296,21 +296,21 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             quote! {
                 pub fn #n(&self) -> #ty { #value }
                 pub fn #or_default(&self) -> #ty {
-                    if self.defined(bch_opt_id::#id) { self.#n() } else { #dflt }
+                    if self.defined(OptId::#id) { self.#n() } else { #dflt }
                 }
             }
         });
         let defined = (p.defined)(quote!(id));
         quote! {
             /// Its value for @id - defined or not.
-            pub fn get(&self, id: bch_opt_id) -> u64 {
+            pub fn get(&self, id: OptId) -> u64 {
                 match id {
                     #(#get)*
                     _ => panic!("not an option: {}", id.0),
                 }
             }
 
-            pub fn defined(&self, id: bch_opt_id) -> bool {
+            pub fn defined(&self, id: OptId) -> bool {
                 #defined
             }
 
@@ -323,13 +323,13 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         let set = opts.iter().map(|f| {
             let (id, ty) = (f.id(), f.ty);
             let s = (p.store)(f.name, quote!(v as #ty));
-            quote!(bch_opt_id::#id => #s,)
+            quote!(OptId::#id => #s,)
         });
         let apply = opts.iter().map(|f| {
             let (n, id) = (f.name, f.id());
-            let (s, d) = ((p.store)(n, quote!(src.#n)), (p.define)(quote!(bch_opt_id::#id)));
+            let (s, d) = ((p.store)(n, quote!(src.#n)), (p.define)(quote!(OptId::#id)));
             quote! {
-                if src.defined.test(bch_opt_id::#id) {
+                if src.defined.test(OptId::#id) {
                     #s;
                     #d;
                 }
@@ -339,7 +339,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             let (ty, _, back) = accessor(f);
             let (n, id) = (f.name, f.id());
             let set_n = format_ident!("set_{n}");
-            let (s, d) = ((p.store)(n, back), (p.define)(quote!(bch_opt_id::#id)));
+            let (s, d) = ((p.store)(n, back), (p.define)(quote!(OptId::#id)));
             quote! {
                 pub fn #set_n(#recv, v: #ty) {
                     #s;
@@ -350,7 +350,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         let define = (p.define)(quote!(id));
         quote! {
             /// Set, and defined.
-            pub fn set(#recv, id: bch_opt_id, v: u64) {
+            pub fn set(#recv, id: OptId, v: u64) {
                 match id {
                     #(#set)*
                     _ => panic!("not an option: {}", id.0),
@@ -393,14 +393,14 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         #[cstruct_macros::bch_enum(open)]
         #[nr]
         #[repr(u32)]
-        pub enum bch_opt_id {
+        pub enum OptId {
             #(#[label(#labels)] #ids,)*
         }
 
         const _: () = assert!(#nr <= BCH_OPTS_MAX as usize, "more options than BCH_OPTS_MAX");
 
         impl #name {
-            /// Each option, by bch_opt_id.
+            /// Each option, by OptId.
             pub const TABLE: [crate::opts::Opt; #nr] = [#(#table),*];
 
             /// Each option's default, all defined.
@@ -409,7 +409,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
                 #(#defaults)*
                 let mut i = 0;
                 while i < #nr {
-                    opts.defined.set(bch_opt_id(i as u32));
+                    opts.defined.set(OptId(i as u32));
                     i += 1;
                 }
                 opts

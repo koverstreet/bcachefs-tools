@@ -28,7 +28,7 @@ use crate::data::ec::open::{OpenStripe, StripeClaim};
 use crate::data::ec::repair::StripeBlocks;
 use crate::data::ec::stripe::{StripeKey, STRIPE_LRU_POS_EMPTY};
 use crate::data::ec::stripe_new::{Internal, Slot};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::{kbox_into_inner, kbox_pin_init, KBox};
 use crate::util::vstructs::Validated;
@@ -171,7 +171,7 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
         Ok(r) => s.reuse = Some(r),
         Err(claim) => {
             claim.put(fs);
-            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
+            return fs.throw(Errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
         }
     }
     Ok(Some(b))
@@ -221,7 +221,7 @@ fn stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchErr
         })
     })?;
 
-    let Some(b) = found else { return fs.throw(bch_errcode::BCH_ERR_stripe_alloc_blocked) };
+    let Some(b) = found else { return fs.throw(Errcode::BCH_ERR_stripe_alloc_blocked) };
     init_new_stripe_from_old(s, b.live & !b.bad, b.live & b.bad, false);
     Ok(())
 }

@@ -13,7 +13,7 @@ use crate::vfs::vfs_inode::VfsInode;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
 use core::ffi::{c_int, c_void};
-use cstruct_macros::{c_name, bch_enum, CStruct, TypeInfo};
+use cstruct_macros::{bch_enum, CStruct, TypeInfo};
 use pin_init::pin_data;
 #[cfg(not(NO_BCACHEFS_FS))]
 use crate::btree::iter::BtreeTrans;
@@ -27,7 +27,6 @@ use crate::btree::iter::BtreeTrans;
  */
 #[pin_data]
 #[repr(C)]
-#[c_name(bch_inode_info)]
 #[derive(CStruct, TypeInfo)]
 pub struct InodeInfo {
     #[pin]
@@ -39,7 +38,7 @@ pub struct InodeInfo {
     pub ei_reserved: Locked<c::spinlock_t, InodeReserved, InodeReservedRange>,
 
     pub ei_inodes_idx: c_uint,
-    pub ei_flags: AtomicBitflags<c::bch_inode_info_flags>,
+    pub ei_flags: AtomicBitflags<c::InodeInfoFlag>,
 
     #[pin]
     pub ei_update_lock: Locked<c::mutex>,
@@ -83,12 +82,9 @@ c_default!(InodeInfo);
 // are only zeroes until their init
 unsafe impl ::pin_init::Zeroable for InodeInfo {}
 
-/// C's name, as FFI declarations spell it.
-pub type bch_inode_info = InodeInfo;
-
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum bch_inode_info_flags {
+pub enum InodeInfoFlag {
     /*
      * A btree error on this inode: the VFS inode and the btree's may
      * disagree
@@ -145,7 +141,7 @@ pub struct InodeQuota {
 
 #[bch_enum(flags)]
 #[repr(u32)]
-pub enum bch_inode_lock_op {
+pub enum InodeLockOp {
     INODE_PAGECACHE_BLOCK = 1 << 0,
     INODE_UPDATE_LOCK = 1 << 1,
 }
@@ -154,7 +150,7 @@ pub enum bch_inode_lock_op {
 #[cfg(not(NO_BCACHEFS_FS))]
 #[allow(non_camel_case_types)]
 pub type inode_set_fn = Option<unsafe extern "C" fn(*mut BtreeTrans<'_>,
-                                                    *mut c::bch_inode_info,
+                                                    *mut c::InodeInfo,
                                                     *mut c::bch_inode_unpacked, *mut c_void)
                                                     -> c_int>;
 

@@ -85,8 +85,8 @@ use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{bch_err, log_msg_ratelimited, warn_once, SPOS_MAX};
-use c::bch_errcode as err;
-use c::reconcile_work_id as w;
+use c::Errcode as err;
+use c::ReconcileWorkId as w;
 use core::cell::Cell;
 use core::ffi::c_uint;
 use core::ops::ControlFlow;
@@ -106,7 +106,7 @@ tagged_union! {
     /// inode's, which.
     #[derive(TypeInfo)]
     #[tag(type_)]
-    #[tag_enum(closed, reconcile_scan_type: u32, prefix = RECONCILE_SCAN_)]
+    #[tag_enum(closed, ReconcileScanType: u32, prefix = RECONCILE_SCAN_)]
     #[pad([u64; 2])]
     #[size(pad)]
     #[plain]
@@ -154,7 +154,7 @@ impl PhaseKind {
 /// A walk of @btree from @start to @end, for work of @priority.
 pub struct Phase {
     kind:     PhaseKind,
-    priority: c::reconcile_work_id,
+    priority: c::ReconcileWorkId,
     btree:    Btree,
     start:    Bpos,
     end:      Bpos,
@@ -168,12 +168,12 @@ impl Phase {
 }
 
 /// Work id @priority's btree node backpointers, in reconcile_scan.
-const fn btree_phase(priority: c::reconcile_work_id) -> Phase {
+const fn btree_phase(priority: c::ReconcileWorkId) -> Phase {
     Phase { kind: PhaseKind::Btree, priority, btree: Btree::reconcile_scan,
             start: pos(priority.0 as u64, 0), end: pos(priority.0 as u64, u64::MAX) }
 }
 
-const fn walk_phase(kind: PhaseKind, priority: c::reconcile_work_id, btree: Btree) -> Phase {
+const fn walk_phase(kind: PhaseKind, priority: c::ReconcileWorkId, btree: Btree) -> Phase {
     Phase { kind, priority, btree, start: POS_MIN, end: SPOS_MAX }
 }
 
@@ -507,7 +507,7 @@ impl<'a, 'f> Walker<'a, 'f> {
 
         let opts = get_io_opts(t, Some(&mut *self.s), k)?;
         update_reconcile_opts(t, Some(&mut *self.s), &opts, iter, level, k,
-                              c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other)?;
+                              c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)?;
 
         // The reconcile opts are committed here, not carried into the data
         // update: move_extent() unlocks to start the IO, and past that the
@@ -529,7 +529,7 @@ impl<'a, 'f> Walker<'a, 'f> {
         };
         if let Some(dev) = read_dev {
             d.read_dev = dev;
-            d.read_flags = c::bch_read_flags::soft_require_read_device;
+            d.read_flags = c::ReadFlags::soft_require_read_device;
         }
 
         if work.btree == Btree::reconcile_pending {
@@ -601,7 +601,7 @@ impl<'a, 'f> Walker<'a, 'f> {
         // none: a write buffer race
         let Some(bp) = bp_iter.peek_slot(t)?.and_then(BkeyI::<c::Backpointer>::from_key) else { return Ok(()) };
 
-        if fs.data_update_in_flight(bp.v.target(), c::bch_data_update_types::reconcile) {
+        if fs.data_update_in_flight(bp.v.target(), c::DataUpdateType::reconcile) {
             return Ok(());
         }
 
@@ -648,7 +648,7 @@ fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
     let mut walker = Walker::new(&ctxt)?;
     let mut work_pos = c::bbpos { btree: phase.btree, pos: pos(dev.into(), 0) };
 
-    while ctxt.ratelimit().is_ok() && fs.reconcile_enabled() && !fs.flags.get(c::bch_fs_flags::going_ro) {
+    while ctxt.ratelimit().is_ok() && fs.reconcile_enabled() && !fs.flags.get(c::FsFlag::going_ro) {
         let trans = ctxt.trans();
 
         let Ok(Some(p)) = walker.work.next(trans, &mut work_pos, pos(dev.into(), u64::MAX)) else { break };
@@ -729,7 +729,7 @@ impl<'f> Reconciler<'f, '_> {
     /// What stops a phase, if anything, given the kicks seen when the phases
     /// started.
     fn interrupted(&self, kick: u32) -> Option<Interrupt> {
-        if self.ctxt.ratelimit().is_err() || self.fs.flags.get(c::bch_fs_flags::going_ro) {
+        if self.ctxt.ratelimit().is_err() || self.fs.flags.get(c::FsFlag::going_ro) {
             Some(Interrupt::Stopped)
         } else if !self.fs.reconcile_enabled() {
             Some(Interrupt::Disabled)
@@ -1131,7 +1131,7 @@ impl Fs {
     pub fn reconcile_scan_pending_to_text(&self, out: &mut Printbuf) {
         // No multithreaded btree access until BCH_FS_may_go_rw, and we're no
         // longer modifying the journal keys gap buffer
-        if !self.flags.get(c::bch_fs_flags::may_go_rw) {
+        if !self.flags.get(c::FsFlag::may_go_rw) {
             return;
         }
 

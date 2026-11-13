@@ -422,7 +422,7 @@ fn pass_name(pass: u32) -> &'static str {
 }
 
 fn units_name(units: u32) -> &'static str {
-    if units == c::bch_progress_units::keys.0 {
+    if units == c::ProgressUnit::keys.0 {
         "keys"
     } else {
         "nodes"

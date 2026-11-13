@@ -2,8 +2,8 @@
 //! `#[derive(ToText)]`: a fieldless enum, printed as its variant's name -
 //! util/printbuf.rs's, here because this is the crate our macros live in.
 //!
-//! A variant prints as its own name, or as `#[label("..")]` names it: c_enum!
-//! labels the variants an x-macro makes with the name the list gives each, as
+//! A variant prints as its own name, or as `#[label("..")]` names it: list_enum!
+//! labels the variants a list makes with the name the list gives each, as
 //! C's string tables have them. It makes
 //!
 //! ```text

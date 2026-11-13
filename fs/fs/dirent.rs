@@ -14,7 +14,7 @@ use cstruct_macros::bch_enum;
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum bch_rename_mode {
+pub enum RenameMode {
     BCH_RENAME,
     BCH_RENAME_OVERWRITE,
     BCH_RENAME_EXCHANGE,
@@ -36,7 +36,7 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 #[cfg(CONFIG_UNICODE)]
 use crate::errcode::ret_to_result_void as ret_to_result;
 use crate::format::{Bpos, Btree, BkeyType};
@@ -356,7 +356,7 @@ pub fn casefold<'a>(
     _info: &c::bch_hash_info,
     _name: &OsStr,
 ) -> Result<&'a OsStr, BchError> {
-    Err(t.fs().err(bch_errcode::BCH_ERR_no_casefolding_without_utf8))
+    Err(t.fs().err(Errcode::BCH_ERR_no_casefolding_without_utf8))
 }
 
 /// The name @name is hashed and looked up by in a directory with @info -
@@ -478,7 +478,7 @@ pub fn empty_dir_snapshot(
         let Some(d) = Dirent::new(k) else { return Ok(()) };
         match d.target() {
             DirentTarget::Subvol { parent, .. } if parent != subvol => Ok(()),
-            _ => Err(t.fs().err(bch_errcode::BCH_ERR_ENOTEMPTY_dir_not_empty)),
+            _ => Err(t.fs().err(Errcode::BCH_ERR_ENOTEMPTY_dir_not_empty)),
         }
     })
 }
@@ -574,7 +574,7 @@ pub fn readdir(
 
         let mut need_second_pass = false;
         match str_hash::check_key::<Dirents>(t, None, hash_info, k, &mut need_second_pass) {
-            Err(e) if e.matches(bch_errcode::BCH_ERR_str_hash_key_repaired) =>
+            Err(e) if e.matches(Errcode::BCH_ERR_str_hash_key_repaired) =>
                 return Ok(ControlFlow::Continue(())),
             r => r?,
         }
@@ -653,9 +653,9 @@ pub fn rename(
     dst_hash: &c::bch_hash_info,
     src_name: &OsStr,
     dst_name: &OsStr,
-    mode:     c::bch_rename_mode,
+    mode:     c::RenameMode,
 ) -> Result<Renamed, BchError> {
-    use c::bch_rename_mode::*;
+    use c::RenameMode::*;
 
     let mut r = Renamed::default();
     let mut src_iter = BtreeIter::uninit();
@@ -790,7 +790,7 @@ fn lookup_first_inode(t: &TransAttempt<'_, '_>, inum: u64)
         } else {
             ControlFlow::Continue(())
         }))
-        .and_then(|found| found.ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOENT_inode)));
+        .and_then(|found| found.ok_or_else(|| fs.err(Errcode::BCH_ERR_ENOENT_inode)));
 
     crate::bch_err_msg!(fs, ret, "fetching inode {inum}")
 }

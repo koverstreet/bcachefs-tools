@@ -34,7 +34,7 @@ use crate::fs::Dev;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN, ValidateFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::prt;
 use crate::sb::errors::{FsckFlags, SbErrorId};
@@ -82,7 +82,7 @@ pub(crate) struct FsckErrState {
     /// The verdict, once there's been one
     pub(crate) ret:         Option<BchError>,
     /// FSCK_FIX_yes or FSCK_FIX_no for all of them: a Y or N answer
-    pub(crate) fix:         Option<c::fsck_err_opts>,
+    pub(crate) fix:         Option<c::FsckErrOpt>,
     pub(crate) last_msg:    Option<KVVec<u8>>,
 }
 
@@ -160,9 +160,9 @@ fn __fsck_err(
     let (fs, trans) = ctx.fsck_err_ctx();
     let e = fsck_err_verdict(fs, trans, pos, flags, err, msg);
 
-    if e.matches(bch_errcode::BCH_ERR_fsck_fix) {
+    if e.matches(Errcode::BCH_ERR_fsck_fix) {
         Ok(true)
-    } else if e.matches(bch_errcode::BCH_ERR_fsck_ignore) {
+    } else if e.matches(Errcode::BCH_ERR_fsck_ignore) {
         Ok(false)
     } else {
         Err(e)
@@ -286,8 +286,8 @@ pub fn bkey_fsck_err(
 ) -> BchError {
     let e = bkey_fsck_err_verdict(v.fs, v.k, v.from, err, msg);
 
-    if e.matches(bch_errcode::BCH_ERR_fsck_fix) || e.matches(bch_errcode::BCH_ERR_fsck_ignore) {
-        v.fs.err(bch_errcode::BCH_ERR_fsck_delete_bkey)
+    if e.matches(Errcode::BCH_ERR_fsck_fix) || e.matches(Errcode::BCH_ERR_fsck_ignore) {
+        v.fs.err(Errcode::BCH_ERR_fsck_delete_bkey)
     } else {
         e
     }
@@ -461,7 +461,7 @@ fn prt_actioning(out: &mut Printbuf, action: &[u8]) {
     write!(out, "ing");
 }
 
-fn error_action_name(a: c::bch_error_actions) -> &'static str {
+fn error_action_name(a: c::ErrorAction) -> &'static str {
     a.name().unwrap_or("?")
 }
 
@@ -472,9 +472,9 @@ fn error_action_name(a: c::bch_error_actions) -> &'static str {
 #[cold]
 pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos, mut flags: FsckFlags,
                         err: SbErrorId, msg: &dyn ToText) -> BchError {
-    use bch_errcode as e;
-    use c::bch_error_actions as a;
-    use c::bch_fs_flags as fl;
+    use Errcode as e;
+    use c::ErrorAction as a;
+    use c::FsFlag as fl;
 
     flags |= flags_extra(err);
 
@@ -513,7 +513,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
     }
     out.write_bytes_indented(text);
 
-    let fix_errors = c::fsck_err_opts::from_bits(fs.opts.fix_errors.get().into());
+    let fix_errors = c::FsckErrOpt::from_bits(fs.opts.fix_errors.get().into());
     let errors = fs.opts.errors();
     let (mut inconsistent, mut exiting) = (false, false);
 
@@ -568,13 +568,13 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     write!(out, ", continuing");
                     fs.err(e::BCH_ERR_fsck_ignore)
                 }
-            } else if fix_errors == c::fsck_err_opts::exit {
+            } else if fix_errors == c::FsckErrOpt::exit {
                 write!(out, ", exiting");
                 fs.err(e::BCH_ERR_fsck_errors_not_fixed)
             } else if flags.contains(FsckFlags::CAN_FIX) {
                 let fix = s.as_ref().and_then(|s| s.fix).unwrap_or(fix_errors);
 
-                if fix == c::fsck_err_opts::ask {
+                if fix == c::FsckErrOpt::ask {
                     cnt.print = false;
 
                     let answer = match ask(fs, trans, &mut out, action) {
@@ -584,8 +584,8 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     };
                     if let Some(s) = s.as_deref_mut() {
                         match answer {
-                            Answer::AllNo  => s.fix = Some(c::fsck_err_opts::no),
-                            Answer::AllYes => s.fix = Some(c::fsck_err_opts::yes),
+                            Answer::AllNo  => s.fix = Some(c::FsckErrOpt::no),
+                            Answer::AllYes => s.fix = Some(c::FsckErrOpt::yes),
                             _ => {}
                         }
                     }
@@ -594,7 +594,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     } else {
                         e::BCH_ERR_fsck_ignore
                     })
-                } else if fix == c::fsck_err_opts::yes ||
+                } else if fix == c::FsckErrOpt::yes ||
                           (fs.opts.nochanges.get() != 0 && !flags.contains(FsckFlags::CAN_IGNORE)) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
@@ -613,7 +613,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
             };
 
             let ret = if ret.matches(e::BCH_ERR_fsck_ignore) &&
-                         (fix_errors == c::fsck_err_opts::exit || !flags.contains(FsckFlags::CAN_IGNORE)) {
+                         (fix_errors == c::FsckErrOpt::exit || !flags.contains(FsckFlags::CAN_IGNORE)) {
                 fs.err(e::BCH_ERR_fsck_errors_not_fixed)
             } else {
                 ret
@@ -663,8 +663,8 @@ fn report(fs: &Fs, out: &mut Printbuf, s: Option<&mut FsckErrState>, cnt: Counte
 /// filesystem's error flags.
 fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: SbErrorId,
           st: impl Sized, mut ret: BchError) -> BchError {
-    use bch_errcode as e;
-    use c::bch_fs_flags as fl;
+    use Errcode as e;
+    use c::FsFlag as fl;
 
     drop(st);
 
@@ -697,13 +697,13 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
                              msg: &dyn ToText) -> BchError {
     let vflags = from.bits.flags();
     if vflags.contains(ValidateFlags::silent) {
-        return fs.err(bch_errcode::BCH_ERR_fsck_delete_bkey);
+        return fs.err(Errcode::BCH_ERR_fsck_delete_bkey);
     }
 
     let mut flags = FsckFlags::empty();
     if !vflags.intersects(ValidateFlags::write | ValidateFlags::commit) {
         if error_silent(fs, err) {
-            return fs.err(bch_errcode::BCH_ERR_fsck_delete_bkey);
+            return fs.err(Errcode::BCH_ERR_fsck_delete_bkey);
         }
         flags |= FsckFlags::AUTOFIX | FsckFlags::CAN_FIX;
     }
@@ -711,7 +711,7 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
     let from_ty = from.bits.from();
     let msg = Msg(|out: &mut Printbuf| {
         write!(out, "invalid bkey in {}", from_ty.name());
-        if from_ty == c::bkey_validate_from::journal {
+        if from_ty == c::BkeyValidateFrom::journal {
             write!(out, " journal seq={} offset={}", from.journal_seq, from.journal_offset);
         }
         let btree = from.btree;
@@ -823,7 +823,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
         }
         iter.advance();
     }
-    ret.and_then(|()| Err(t.fs().err(bch_errcode::BCH_ERR_ENOENT_inode)))
+    ret.and_then(|()| Err(t.fs().err(Errcode::BCH_ERR_ENOENT_inode)))
 }
 
 /// One damaged path, and what happened to it.
@@ -917,9 +917,9 @@ impl Fs {
     /// emergency read-only, or panic - and noted in @out: whether we're going
     /// read-only.
     pub fn inconsistent_error(&self, out: &mut Printbuf) -> bool {
-        use c::bch_error_actions as a;
+        use c::ErrorAction as a;
 
-        self.flags.set(c::bch_fs_flags::error, true);
+        self.flags.set(c::FsFlag::error, true);
         match self.opts.errors() {
             a::BCH_ON_ERROR_continue => false,
             a::fix_safe | a::ro => {
@@ -940,15 +940,15 @@ impl Fs {
     pub fn topology_error(&self, out: &mut Printbuf) -> BchError {
         write!(out, "btree topology error: ");
 
-        self.flags.set(c::bch_fs_flags::topology_error, true);
-        if !self.flags.get(c::bch_fs_flags::in_recovery) {
+        self.flags.set(c::FsFlag::topology_error, true);
+        if !self.flags.get(c::FsFlag::in_recovery) {
             self.inconsistent_error(out);
         } else if let Err(e) = crate::init::passes::run_explicit(self, out,
                 RecoveryPass::check_topology,
-                c::bch_run_recovery_pass_flags::from_bits_retain(0)) {
+                c::RunRecoveryPassFlags::from_bits_retain(0)) {
             return e;
         }
-        self.err(bch_errcode::BCH_ERR_btree_need_topology_repair)
+        self.err(Errcode::BCH_ERR_btree_need_topology_repair)
     }
 }
 
@@ -1010,10 +1010,10 @@ impl Fs {
 impl Dev {
     /// An IO error of type @ty: counted, and a write's starting the write
     /// error clock, which io_error_work() reads.
-    pub fn io_error(&self, ty: c::bch_member_error_type) {
+    pub fn io_error(&self, ty: c::MemberErrorType) {
         self.errors[ty.0 as usize].fetch_add(1, Relaxed);
 
-        if ty == c::bch_member_error_type::write && self.write_errors_start.load(Relaxed) == 0 {
+        if ty == c::MemberErrorType::write && self.write_errors_start.load(Relaxed) == 0 {
             self.write_errors_start.store(jiffies() as usize, Relaxed);
         }
 
@@ -1033,7 +1033,7 @@ pub(crate) fn io_error_work(ca: &Dev) {
 
     let state = fs.state_lock_write();
     if ca.removing() ||
-       fs.flags.get(c::bch_fs_flags::stopping) ||
+       fs.flags.get(c::FsFlag::stopping) ||
        ca.mi.get().state >= MemberState::ro {
         return;
     }

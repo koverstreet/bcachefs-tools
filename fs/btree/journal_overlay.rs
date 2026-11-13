@@ -62,8 +62,8 @@ use core::pin::Pin;
 use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{bitfield, CStruct, Init};
-use c::bch_errcode as e;
-use c::bch_fs_flags as f;
+use c::Errcode as e;
+use c::FsFlag as f;
 use crate::journal::JournalEntries;
 use crate::types::{c_default};
 use crate::util::vstructs::Head;
@@ -1000,9 +1000,9 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
         for entry in j.entries() {
             let rewind = seq_rewound && entry.level == 0 && !btree_id_is_alloc(entry.btree_id.into());
             let want = if rewind {
-                c::bch_jset_entry_type::overwrite
+                c::JsetEntryType::overwrite
             } else {
-                c::bch_jset_entry_type::btree_keys
+                c::JsetEntryType::btree_keys
             };
             if u32::from(entry.type_) != want.0 {
                 continue;

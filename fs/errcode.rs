@@ -27,7 +27,7 @@ use core::iter;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 use crate::types::c_default;
-use cstruct_macros::{CStruct, c_xmacro, TypeInfo, c_enum};
+use cstruct_macros::{CStruct, c_xmacro, TypeInfo, list_enum};
 
 c_xmacro! {
     BLK_ERRS {
@@ -686,12 +686,12 @@ macro_rules! __bch_errcode_max_0 {
 BCH_ERRCODES!(__bch_errcode_max_0 []);
 c_default!(bch_errcode_max);
 
-c_enum! {
+list_enum! {
     #[open]
-    pub enum bch_errcode: u32 {
+    pub enum Errcode: u32 {
         BCH_ERR_START = 2048,
-        BCH_ERRCODES(class, err, nr) => concat(BCH_ERR_, err) = bch_errcode::BCH_ERR_START.0 + (nr as u32),
-        BCH_ERR_MAX = bch_errcode::BCH_ERR_START.0
+        BCH_ERRCODES(class, err, nr) => concat(BCH_ERR_, err) = Errcode::BCH_ERR_START.0 + (nr as u32),
+        BCH_ERR_MAX = Errcode::BCH_ERR_START.0
         + (core::mem::size_of::<c::bch_errcode_max>() as u32),
     }
 }
@@ -702,13 +702,13 @@ pub mod status {
     pub const BLK_STS_REMOVED: u8 = 128;
 }
 
-pub fn blk_status_to_bch_err(err: u8) -> c::bch_errcode {
+pub fn blk_status_to_bch_err(err: u8) -> c::Errcode {
     macro_rules! statuses {
         ($(($n:ident, $nr:tt)),* $(,)?) => { ::paste::paste! {
             match err {
-                0 => bch_errcode(0),
-                $(c::[<BLK_STS_ $n>] => bch_errcode::[<BCH_ERR_BLK_STS_ $n>],)*
-                _ => bch_errcode::BCH_ERR_BLK_STS_UNKNOWN,
+                0 => Errcode(0),
+                $(c::[<BLK_STS_ $n>] => Errcode::[<BCH_ERR_BLK_STS_ $n>],)*
+                _ => Errcode::BCH_ERR_BLK_STS_UNKNOWN,
             }
         } };
     }
@@ -716,17 +716,17 @@ pub fn blk_status_to_bch_err(err: u8) -> c::bch_errcode {
 }
 
 // Each errcode by its BCH_ERRCODES() name: transaction_restart for
-// bch_errcode::BCH_ERR_transaction_restart.
+// Errcode::BCH_ERR_transaction_restart.
 macro_rules! errcode_names {
     ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! { $(
         #[allow(non_upper_case_globals)]
-        pub const $err: bch_errcode = bch_errcode::[<BCH_ERR_ $err>];
+        pub const $err: Errcode = Errcode::[<BCH_ERR_ $err>];
     )* } };
 }
 c::BCH_ERRCODES!(errcode_names);
 
-const START: u32 = bch_errcode::BCH_ERR_START.0;
-const N: usize = (bch_errcode::BCH_ERR_MAX.0 - START) as usize;
+const START: u32 = Errcode::BCH_ERR_START.0;
+const N: usize = (Errcode::BCH_ERR_MAX.0 - START) as usize;
 
 #[allow(dead_code, non_upper_case_globals)]
 mod class {
@@ -737,7 +737,7 @@ mod class {
 
     macro_rules! codes {
         ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! { $(
-            pub(super) const [<BCH_ERR_ $err>]: u32 = super::bch_errcode::[<BCH_ERR_ $err>].0;
+            pub(super) const [<BCH_ERR_ $err>]: u32 = super::Errcode::[<BCH_ERR_ $err>].0;
         )* } };
     }
     crate::c::BCH_ERRCODES!(codes);
@@ -776,7 +776,7 @@ fn errname(err: u32) -> Option<&'static str> {
 }
 
 /// A bcachefs error code or errno, positive: errnos below BCH_ERR_START (2048),
-/// bcachefs's own above. Unlike bch_errcode, a raw errno never makes an invalid
+/// bcachefs's own above. Unlike Errcode, a raw errno never makes an invalid
 /// discriminant.
 ///
 /// Positive always: C's -errcode is negative only at the boundary. Taken in,
@@ -788,8 +788,8 @@ pub struct BchError(i32);
 // The bcachefs codes extend the errnos, so every errno is a BchError - as the
 // bindings spell them (u32) or as libc does (i32), positive either way.
 
-impl From<bch_errcode> for BchError {
-    fn from(code: bch_errcode) -> Self { Self(code.0 as i32) }
+impl From<Errcode> for BchError {
+    fn from(code: Errcode) -> Self { Self(code.0 as i32) }
 }
 
 impl From<u32> for BchError {

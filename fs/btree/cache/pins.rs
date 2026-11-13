@@ -127,8 +127,8 @@ impl Fs {
         b.flags.set_pinned(true);
 
         let dirty = match b.cache_state(&lists) {
-            c::btree_node_cache_state::CLEAN => false,
-            c::btree_node_cache_state::DIRTY => true,
+            c::BtreeNodeCacheState::CLEAN => false,
+            c::BtreeNodeCacheState::DIRTY => true,
             _ => return,
         };
 

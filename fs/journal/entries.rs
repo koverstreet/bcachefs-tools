@@ -25,7 +25,7 @@ const HEADER_U64S: usize = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
 /// An entry's header, of @ty, for @btree_id at @level, with @u64s of value:
 /// journal_entry_init().
 #[inline(always)]
-fn header(ty: c::bch_jset_entry_type, btree_id: u8, level: u8, u64s: usize) -> u64 {
+fn header(ty: c::JsetEntryType, btree_id: u8, level: u8, u64s: usize) -> u64 {
     let mut e = Head::<c::jset_entry>::default();
     e.type_ = ty.0 as u8;
     e.btree_id = btree_id;
@@ -67,7 +67,7 @@ impl<'a> EntryWriter<'a> {
     /// and its value for the caller to write all of -
     /// __bch2_journal_add_entry().
     #[inline(always)]
-    pub fn add_entry(&mut self, ty: c::bch_jset_entry_type, btree_id: u8, level: u8, u64s: usize)
+    pub fn add_entry(&mut self, ty: c::JsetEntryType, btree_id: u8, level: u8, u64s: usize)
         -> Result<&'a mut [u64], NoRoom>
     {
         let (hdr, v) = self.reserve(HEADER_U64S + u64s)?.split_at_mut(HEADER_U64S);
@@ -79,13 +79,13 @@ impl<'a> EntryWriter<'a> {
     /// what's written uses all of it: bch2_journal_res_put()'s fill.
     pub fn pad(&mut self) {
         if !self.room.is_empty() {
-            core::mem::take(&mut self.room).fill(header(c::bch_jset_entry_type::btree_keys, 0, 0, 0));
+            core::mem::take(&mut self.room).fill(header(c::JsetEntryType::btree_keys, 0, 0, 0));
         }
     }
 
     /// An entry of @ty, for @btree_id at @level, holding @data, zero padded to
     /// a u64: journal_entry_set().
-    pub fn push_bytes(&mut self, ty: c::bch_jset_entry_type, btree_id: u8, level: u8, data: &[u8])
+    pub fn push_bytes(&mut self, ty: c::JsetEntryType, btree_id: u8, level: u8, data: &[u8])
         -> Result<(), NoRoom>
     {
         let v = self.add_entry(ty, btree_id, level, data.len().div_ceil(size_of::<u64>()))?.as_mut_bytes();

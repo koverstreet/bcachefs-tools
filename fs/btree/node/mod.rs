@@ -31,12 +31,11 @@ use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
-use cstruct_macros::{c_name, CStruct};
+use cstruct_macros::CStruct;
 
 /* Btree nodes: */
 
 #[repr(C)]
-#[c_name(btree_nr_keys)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, CStruct)]
 pub struct BtreeNrKeys {
     /*
@@ -85,7 +84,6 @@ impl BtreeNrKeys {
 }
 
 #[repr(C)]
-#[c_name(bkey_unpack_field)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct BkeyUnpackField {
     pub byte_offset: i8,
@@ -93,7 +91,6 @@ pub struct BkeyUnpackField {
 }
 
 #[repr(C)]
-#[c_name(btree)]
 #[derive(CStruct)]
 pub struct BtreeNode {
     pub c: cs::btree_bkey_cached_common,
@@ -147,7 +144,7 @@ pub struct BtreeNode {
     /* lru list */
     pub list: ListLinks,
 
-    pub cache_state: LockedBy<cs::btree_node_cache_state, (), crate::btree::types::BtreeCacheLockAt>,
+    pub cache_state: LockedBy<cs::BtreeNodeCacheState, (), crate::btree::types::BtreeCacheLockAt>,
 
     /* its slot in bc->nodes */
     pub nodes_idx: u32,
@@ -194,7 +191,7 @@ pub struct NodeContents {
      * the slow path via byte_aligned_fields = false.
      */
     pub byte_aligned_fields: bool,
-    pub unpack: [BkeyUnpackField; cs::bch_bkey_fields::BKEY_NR_FIELDS as usize],
+    pub unpack: [BkeyUnpackField; cs::BkeyField::BKEY_NR_FIELDS as usize],
 
     /*
      * Sets of sorted keys - the real btree node - plus a binary search tree

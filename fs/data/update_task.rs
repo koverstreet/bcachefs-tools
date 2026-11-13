@@ -90,7 +90,7 @@ pub struct Update {
 ///
 /// # Safety
 /// @at, and what the body borrows, outlive the task.
-pub unsafe fn spawn<'q, M>(t: &TransAttempt<'_, '_>, at: Spawn<'q, 'static>, enomem: c::bch_errcode)
+pub unsafe fn spawn<'q, M>(t: &TransAttempt<'_, '_>, at: Spawn<'q, 'static>, enomem: c::Errcode)
     -> Result<Spawned<'q, M>, BchError>
 where
     M: for<'h> AsyncFnOnce<(&'h Update,), Output = ()>,
@@ -259,7 +259,7 @@ impl PinnedDrop for Update {
 // completing just after: the XXX at the top of async_objs.rs. A mover's
 // doesn't read its context, which isn't freed a grace period after it's done
 unsafe impl AsyncObj for Update {
-    const LIST: c::bch_async_obj_lists = c::bch_async_obj_lists::data_update;
+    const LIST: c::AsyncObjKind = c::AsyncObjKind::data_update;
 
     #[cold]
     fn to_text(&self, out: &mut Printbuf, _: &Fs) {

@@ -22,7 +22,7 @@ use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_eq, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::c;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::btree::bkey::BkeyOps;
@@ -55,8 +55,8 @@ impl c::Stripe {
 
     /// A checksum type this version doesn't know is an error, not a guess.
     pub fn csum_type_check(&self, fs: &Fs) -> Result<(), BchError> {
-        if u32::from(self.csum_type) >= c::bch_csum_type::NR {
-            return fs.throw(bch_errcode::BCH_ERR_stripe_unknown_csum_type);
+        if u32::from(self.csum_type) >= c::CsumType::NR {
+            return fs.throw(Errcode::BCH_ERR_stripe_unknown_csum_type);
         }
         Ok(())
     }
@@ -77,7 +77,7 @@ impl c::Stripe {
     /// A checksum's size - None for a type this version doesn't know:
     /// stripe_csum_bytes().
     fn csum_bytes(&self) -> Option<u32> {
-        c::bch_csum_type(self.csum_type.into()).bytes()
+        c::CsumType(self.csum_type.into()).bytes()
     }
 
     fn ptrs_bytes(&self) -> usize {
@@ -284,7 +284,7 @@ impl BkeyOps for c::Stripe {
 
         // nr_redundant past nr_blocks is damage, printed as is
         write!(out, "algo {} sectors {} blocks {}:{} csum {} gran ",
-               s.algorithm(), s.sectors.get(), s.nr_data(), s.nr_redundant, c::bch_csum_type(s.csum_type.into()));
+               s.algorithm(), s.sectors.get(), s.nr_data(), s.nr_redundant, c::CsumType(s.csum_type.into()));
         match 1u64.checked_shl(s.csum_granularity_bits.into()) {
             Some(gran) => write!(out, "{gran}"),
             None => write!(out, "(invalid shift {})", s.csum_granularity_bits),

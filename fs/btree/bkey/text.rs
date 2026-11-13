@@ -9,7 +9,7 @@ use core::fmt;
 #[cfg(feature = "std")]
 use core::str::FromStr;
 #[cfg(feature = "std")]
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 #[cfg(feature = "std")]
 use super::{POS_MAX, POS_MIN, SPOS_MAX};
 use crate::format::Bpos;
@@ -28,7 +28,7 @@ fn parse_bpos_u64(s: &str) -> Result<u64, BchError> {
     match s {
         "U64_MAX" => Ok(u64::MAX),
         "U32_MAX" => Ok(u32::MAX as u64),
-        _        => s.parse().map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bpos)),
+        _        => s.parse().map_err(|_| BchError::from(Errcode::BCH_ERR_EINVAL_parse_bpos)),
     }
 }
 
@@ -37,7 +37,7 @@ fn parse_bpos_u64(s: &str) -> Result<u64, BchError> {
 fn parse_bpos_u32(s: &str) -> Result<u32, BchError> {
     match s {
         "U32_MAX" => Ok(u32::MAX),
-        _        => s.parse().map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bpos)),
+        _        => s.parse().map_err(|_| BchError::from(Errcode::BCH_ERR_EINVAL_parse_bpos)),
     }
 }
 
@@ -58,7 +58,7 @@ impl FromStr for Bpos {
             return Ok(SPOS_MAX);
         }
 
-        let err = || BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bpos);
+        let err = || BchError::from(Errcode::BCH_ERR_EINVAL_parse_bpos);
 
         let mut fields = s.split(':');
         let ino_str = fields.next().ok_or_else(err)?;

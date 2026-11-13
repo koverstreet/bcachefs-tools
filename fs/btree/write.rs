@@ -64,9 +64,9 @@ crate::has_bio!(BtreeWriteBio, wbio.bio);
 
 #[bch_enum(closed)]
 #[prefix(__BTREE_WRITE_)]
-#[mask(BtreeWriteFlags: u32, prefix = BTREE_WRITE_, c_name = btree_write_flags)]
+#[mask(BtreeWriteFlags: u32, prefix = BTREE_WRITE_)]
 #[repr(u32)]
-pub enum btree_write_flag_bit {
+pub enum BtreeWriteFlagBit {
     only_if_need = cs::BTREE_WRITE_TYPE_BITS,
     already_started,
 }
@@ -121,7 +121,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNod
     let fs = t.fs();
 
     let mut iter = match unsafe { BtreeNodeIter::at_node(t, b) } {
-        Err(e) if e == BchError::from(c::bch_errcode::BCH_ERR_btree_node_dying) => return Ok(()),
+        Err(e) if e == BchError::from(c::Errcode::BCH_ERR_btree_node_dying) => return Ok(()),
         r => r?,
     };
     let node = iter.iter().node_at_iter_level(t).expect("the node the iterator was got for, at its level");
@@ -136,17 +136,17 @@ fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNod
         .drop_ptrs_noerror(fs, |p| wbio.failed.dev(p.p.ptr.dev().into()).is_some());
 
     if n.as_sc().durability_safe(fs).nr_ptrs == 0 {
-        return Err(fs.err(c::bch_errcode::BCH_ERR_btree_node_write_all_failed));
+        return Err(fs.err(c::Errcode::BCH_ERR_btree_node_write_all_failed));
     }
 
     if !wbio.failed.is_empty() {
         let opts = get_io_opts(t, None, n.as_sc())?;
-        n.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+        n.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
     }
 
     t.btree_node_update_key(iter.iter(), node, n,
                             CommitOpts::new()
-                                .watermark(Watermark::INTERIOR_UPDATES)
+                                .watermark(Watermark::interior_updates)
                                 .flags(CommitFlags::JOURNAL_RECLAIM | CommitFlags::NO_ENOSPC | CommitFlags::NO_CHECK_RW),
                             wbio.failed.is_empty())
 }
@@ -225,15 +225,15 @@ unsafe fn write_work(wbio: NonNull<BtreeWriteBio>) {
         }
     }
 
-    fs.times[c::bch_time_stats::btree_node_write as usize].update(wbio.start_time);
+    fs.times[c::TimeStat::btree_node_write as usize].update(wbio.start_time);
     unsafe {
-        async_objs::list_del(fs, c::bch_async_obj_lists::btree_write_bio, &mut wbio.list_idx);
+        async_objs::list_del(fs, c::AsyncObjKind::btree_write_bio, &mut wbio.list_idx);
         c::bio_put(&raw mut wbio.wbio.bio);
     }
 
     lockrestart_do(&trans, |_| {
         /* identity pinned: write_in_flight (cleared below) blocks reclaim */
-        let idx = trans.node_lock_with_path(&mut trans.paths(), &b.c, c::six_lock_type::SIX_LOCK_read, 0)?;
+        let idx = trans.node_lock_with_path(&mut trans.paths(), &b.c, c::SixLockType::SIX_LOCK_read, 0)?;
         write_done(&trans, b);
         let mut paths = trans.paths();
         trans.node_unlock(&mut paths, idx, b.c.level as usize);
@@ -250,7 +250,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let (ca, dev, status) = (wbio.ca(), wbio.wbio.dev, wbio.bio.bi_status);
 
     if let Some(ca) = ca {
-        ca.account_io_completion(c::bch_member_error_type::write, wbio.wbio.submit_time, status == 0);
+        ca.account_io_completion(c::MemberErrorType::write, wbio.wbio.submit_time, status == 0);
         ca.write_unflushed();
     }
 
@@ -312,7 +312,7 @@ fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, n: &m
         btree: Btree(b.c.btree_id.into()),
         ..Default::default()
     };
-    from.bits.set_from(c::bkey_validate_from::btree_node);
+    from.bits.set_from(c::BkeyValidateFrom::btree_node);
     from.bits.set_flags(ValidateFlags::write);
 
     let k = BkeySC::from(unsafe { b.contents() }.key_i());
@@ -572,7 +572,7 @@ impl BsetWrite {
         let i = self.bset();
 
         /* bch2_validate_bset will be modifying: */
-        let validate_before_checksum = c::bch_csum_type(i.csum_type() as u32).is_encryption() ||
+        let validate_before_checksum = c::CsumType(i.csum_type() as u32).is_encryption() ||
             (i.version.get() as u32) < c::bcachefs_metadata_version_current;
 
         /* if we're going to be encrypting, check metadata validity first: */
@@ -645,7 +645,7 @@ impl BsetWrite {
         stats.nr.fetch_add(1, Relaxed);
         stats.bytes.fetch_add(bytes as i64, Relaxed);
 
-        let list = &fs.async_objs[c::bch_async_obj_lists::btree_write_bio as usize].list;
+        let list = &fs.async_objs[c::AsyncObjKind::btree_write_bio as usize].list;
         wbio.list_idx = list.add(ptr::NonNull::from(&mut *wbio).cast()).unwrap_or(0);
 
         fs.btree.cache.nr_in_flight_inner.fetch_add(1, Relaxed);
@@ -728,14 +728,14 @@ pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, 
 
 /// btree_node_write_if_need()
 pub(crate) fn node_write_if_need(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode,
-                                 lock_type_held: c::six_lock_type) {
+                                 lock_type_held: c::SixLockType) {
     let (ty, flags) = unpack(BtreeWriteFlags::only_if_need.bits());
     node_write_trans(trans, paths, b, lock_type_held, ty, flags)
 }
 
 pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode,
-                               lock_type_held: c::six_lock_type, ty: BtreeWriteType, flags: BtreeWriteFlags) {
-    use c::six_lock_type::*;
+                               lock_type_held: c::SixLockType, ty: BtreeWriteType, flags: BtreeWriteFlags) {
+    use c::SixLockType::*;
 
     let fs = trans.fs();
     let lock = b.c.lock.six();
@@ -784,7 +784,7 @@ pub(in crate::btree) fn bch2_btree_init_next(t: &TransAttempt<'_, '_>, pu: &mut 
     let fs = trans.fs();
     let mut reinit_iter = false;
 
-    ebug_assert!(six_lock_counts(b.c.lock.six()).n[c::six_lock_type::SIX_LOCK_write as usize] != 0);
+    ebug_assert!(six_lock_counts(b.c.lock.six()).n[c::SixLockType::SIX_LOCK_write as usize] != 0);
     let contents = b.contents();
     assert!(!b.bset_written(&contents.set[1]));
     assert!(!b.flags.just_written());

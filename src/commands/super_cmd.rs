@@ -12,7 +12,7 @@
 use anyhow::{anyhow, Result};
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::c;
-use bcachefs_kernel::sb::sb_field_type;
+use bcachefs_kernel::sb::SbFieldType;
 use clap::Parser;
 
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -43,12 +43,12 @@ pub struct ShowSuperCli {
 
 fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
-    let ext_bit = sb_field_type::ext.bit();
+    let ext_bit = SbFieldType::ext.bit();
     let mut fields = ext_bit;
     let mut field_only = None;
     let mut print_default_fields = true;
 
-    let field_type = |name: &str| sb_field_type::from_name(name)
+    let field_type = |name: &str| SbFieldType::from_name(name)
         .ok_or_else(|| anyhow!("invalid superblock field: {name}"));
 
     if let Some(ref f) = cli.fields {
@@ -84,11 +84,11 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         let mut fields = fields;
         if print_default_fields {
             if sb.field::<c::bch_sb_field_members_v2>().is_some() {
-                fields |= sb_field_type::members_v2.bit();
+                fields |= SbFieldType::members_v2.bit();
             } else {
-                fields |= sb_field_type::members_v1.bit();
+                fields |= SbFieldType::members_v1.bit();
             }
-            fields |= sb_field_type::errors.bit();
+            fields |= SbFieldType::errors.bit();
         }
 
         let mut buf = Printbuf::new();

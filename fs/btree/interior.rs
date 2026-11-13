@@ -24,7 +24,7 @@ use crate::data::keylist::{Keylist, PaddedKey};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::list::ListLinks;
 use crate::data_structures::ref_cell::RefCell;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
@@ -253,7 +253,7 @@ type NewPointers = ArrayVec<NewPointer, UPDATE_NODES_MAX>;
 struct StartNode {
     start:          Bpos,
     end:            Bpos,
-    needed_rewrite: c::btree_node_rewrite_reason,
+    needed_rewrite: c::BtreeNodeRewriteReason,
     written:        u16,
     sectors:        u16,
     remaining:      u16,
@@ -372,8 +372,8 @@ pub(crate) struct BtreeUpdate {
 // each field says
 unsafe impl Sync for BtreeUpdate {}
 
-fn rewrite_reason(b: &BtreeNode) -> c::btree_node_rewrite_reason {
-    use c::btree_node_rewrite_reason as r;
+fn rewrite_reason(b: &BtreeNode) -> c::BtreeNodeRewriteReason {
+    use c::BtreeNodeRewriteReason as r;
     if b.flags.need_rewrite_ptr_written_zero() {
         r::ptr_written_zero
     } else if b.flags.need_rewrite_error() {
@@ -390,7 +390,7 @@ macro_rules! rewrite_reason_strs {
         const REWRITE_REASON_STRS: &[&str] = &[$(stringify!($name),)*];
     };
 }
-c::btree_node_rewrite_reason_arms!(rewrite_reason_strs);
+c::BtreeNodeRewriteReason_arms!(rewrite_reason_strs);
 
 /// An update, in an element of the interior updates' pool.
 type UpdateBox = AllocBox<BtreeUpdate, &'static Mempool<Kmalloc>>;
@@ -508,7 +508,7 @@ pub(crate) struct StartOpts {
     pub split:        bool,
     pub target:       u32,
     pub commit:       CommitOpts,
-    pub write:        c::bch_write_flags,
+    pub write:        c::WriteFlags,
     /// split_leaf()'s: the key that didn't fit, so btree_split() doesn't
     /// compact a leaf that still wouldn't have room for it
     pub new_key_u64s: u32,
@@ -554,7 +554,7 @@ impl<'t> InteriorUpdate<'t> {
                 StartOpts { mut split, target, mut commit, write, new_key_u64s, range }: StartOpts,
                 ip_started: c_ulong) -> Result<Self, BchError>
     {
-        use c::bch_watermark as wm;
+        use c::Watermark as wm;
 
         let trans = t.trans();
         let fs = trans.fs();
@@ -576,16 +576,16 @@ impl<'t> InteriorUpdate<'t> {
          * reclaim watermark a node allocation can wait on the btree reserve
          * forever (unmount hanging in wait_on_allocator()):
          */
-        if fs.flags.get(c::bch_fs_flags::going_ro) && (watermark as u32) < wm::reclaim as u32 {
+        if fs.flags.get(c::FsFlag::going_ro) && (watermark as u32) < wm::reclaim as u32 {
             watermark = wm::reclaim;
         }
         commit = commit.watermark(Watermark::from(watermark));
 
-        let journal_low = || fs.journal.flags.get(c::journal_flags::low_on_space) ||
-                              fs.journal.flags.get(c::journal_flags::low_on_pin);
+        let journal_low = || fs.journal.flags.get(c::JournalFlag::low_on_space) ||
+                              fs.journal.flags.get(c::JournalFlag::low_on_pin);
         if (watermark as u32) < wm::reclaim as u32 && journal_low() {
-            if commit.to_c().contains(c::bch_trans_commit_flags::journal_reclaim) {
-                return Err(BchError::from(bch_errcode::BCH_ERR_journal_reclaim_would_deadlock));
+            if commit.to_c().contains(c::TransCommitFlags::journal_reclaim) {
+                return Err(BchError::from(Errcode::BCH_ERR_journal_reclaim_would_deadlock));
             }
 
             /*
@@ -700,8 +700,8 @@ impl<'t> InteriorUpdate<'t> {
             if crate::util::log::should_print_err(&e) &&
                !e.matches(c::ENOSPC) &&
                !e.matches(c::EROFS) &&
-               e != BchError::from(bch_errcode::BCH_ERR_journal_reclaim_would_deadlock) &&
-               e != BchError::from(bch_errcode::BCH_ERR_journal_shutdown) {
+               e != BchError::from(Errcode::BCH_ERR_journal_reclaim_would_deadlock) &&
+               e != BchError::from(Errcode::BCH_ERR_journal_shutdown) {
                 crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());
             }
             return Err(e);
@@ -852,7 +852,7 @@ impl<'t> InteriorUpdate<'t> {
         this.reserve_put(this.trans(), paths, false);
         this.pending_put();
 
-        fs.times[c::bch_time_stats::btree_interior_update_foreground as usize].update(start_time);
+        fs.times[c::TimeStat::btree_interior_update_foreground as usize].update(start_time);
     }
 }
 
@@ -887,7 +887,7 @@ unsafe fn update_free(update: NonNull<BtreeUpdate>, trans: &BtreeTrans<'_>, path
     u.disk_res.put();
     u.reserve_put(trans, paths, rollback.is_some());
 
-    fs.times[c::bch_time_stats::btree_interior_update_total as usize].update(u.start_time);
+    fs.times[c::TimeStat::btree_interior_update_total as usize].update(u.start_time);
 
     let updates = &fs.btree.interior_updates;
     let mut g = updates.lock.lock();
@@ -955,7 +955,7 @@ fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWrite
 {
     for (id, r) in roots(fs, root_lock, skip) {
         let k = r.key.key();
-        w.add_entry(c::bch_jset_entry_type::btree_root, id as u8, r.level, k.k.u64s.into())?
+        w.add_entry(c::JsetEntryType::btree_root, id as u8, r.level, k.k.u64s.into())?
             .as_mut_bytes().copy_from_slice(k.as_bytes());
     }
     Ok(())

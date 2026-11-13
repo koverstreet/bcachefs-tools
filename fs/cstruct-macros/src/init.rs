@@ -68,7 +68,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         None => None,
     };
     // the name C has it by, as the lockdep classes are named
-    let parent = match input.attrs.iter().find(|a| a.path().is_ident("c_name_of")) {
+    let parent = match input.attrs.iter().find(|a| a.path().is_ident("type_name_of")) {
         Some(a) => a.parse_args::<Ident>()?.to_string(),
         None => input.ident.to_string(),
     };
@@ -229,13 +229,13 @@ pub(crate) fn initializer(a: &Attribute, name: &Ident) -> syn::Result<TokenStrea
     match errcode {
         Some((i, err)) => {
             let init: TokenStream = toks[..i].iter().cloned().collect();
-            Ok(quote!(crate::util::alloc::init_or(#init, crate::errcode::bch_errcode::#err)))
+            Ok(quote!(crate::util::alloc::init_or(#init, crate::errcode::Errcode::#err)))
         }
         None if !toks.is_empty() => Ok(toks.into_iter().collect()),
         None => {
             let attr = a.path().to_token_stream();
             Err(Error::new_spanned(a, format!("{name}: #[{attr}(EXPR)] or #[{attr}(EXPR, ERRCODE)]: the field's \
-                                               initializer, and the bch_errcode its failure is")))
+                                               initializer, and the Errcode its failure is")))
         }
     }
 }

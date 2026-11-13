@@ -9,10 +9,10 @@ use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
 use crate::c;
-use crate::c::bch_fs_flags as Flag;
-use crate::c::journal_flags as Journal;
+use crate::c::FsFlag as Flag;
+use crate::c::JournalFlag as Journal;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, Btree};
 use crate::util::vstructs::plain_bytes;
 use crate::locking::MemallocFlags;
@@ -124,7 +124,7 @@ fn flush_one_slowpath<'a>(t: &TransAttempt<'a, 'a>, iter: &BtreeIter<'a>, wb: &m
 
     t.update(iter, &t.bkey_copy(wb.k())?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(None, CommitOpts::new()
-             .watermark(Watermark::RECLAIM)
+             .watermark(Watermark::reclaim)
              .flags(CommitFlags::NO_ENOSPC |
                     CommitFlags::NO_CHECK_RW |
                     CommitFlags::NO_JOURNAL_RES |
@@ -307,7 +307,7 @@ fn flush_sorted_range(
         let mut accounting_accumulated = false;
         let r = loop {
             if race_fault() {
-                break fs.throw(bch_errcode::BCH_ERR_journal_reclaim_would_deadlock);
+                break fs.throw(Errcode::BCH_ERR_journal_reclaim_would_deadlock);
             }
 
             let r = flush_one(&t, wb, &mut iter, &mut k, &mut write_locked,
@@ -323,7 +323,7 @@ fn flush_sorted_range(
 
         match r {
             Ok(()) => k.set_seq(0),
-            Err(e) if e == bch_errcode::BCH_ERR_journal_reclaim_would_deadlock.into() => cnt.slowpath += 1,
+            Err(e) if e == Errcode::BCH_ERR_journal_reclaim_would_deadlock.into() => cnt.slowpath += 1,
             Err(e) => {
                 ret = Err(e);
                 break;
@@ -375,10 +375,10 @@ fn flush_sorted_sharded(
                     let trans = btree_trans!(fs);
                     let wb = &fs.btree.write_buffer[wb_idx];
 
-                    fs.times[c::bch_time_stats::btree_write_buffer_flush_shard_sched_delay as usize]
+                    fs.times[c::TimeStat::btree_write_buffer_flush_shard_sched_delay as usize]
                         .update(queued_time);
 
-                    fs.times[c::bch_time_stats::btree_write_buffer_flush_shard_work as usize]
+                    fs.times[c::TimeStat::btree_write_buffer_flush_shard_work as usize]
                         .time(|| flush_sorted_range(&trans, wb, shard, accounting_replay_done, cnt))
                 }).inspect_err(|_| spawn_failed = true)?;
             }
@@ -400,7 +400,7 @@ fn flush_sorted_sharded(
 }
 
 pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_buffer, g: &mut FlushingGuard<'_>,
-                           caller: c::wb_flush_caller) -> Result<(), BchError> {
+                           caller: c::WbFlushCaller) -> Result<(), BchError> {
     let fs = trans.fs();
     let j = &fs.journal;
     let btree = wb_btree_to_btree(wb.wb_btree());
@@ -548,7 +548,7 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
 
                 let ret = commit_do(trans, None,
                                     CommitOpts::new()
-                                    .watermark(Watermark::RECLAIM)
+                                    .watermark(Watermark::reclaim)
                                     .flags(CommitFlags::JOURNAL_RECLAIM |
                                            CommitFlags::NO_CHECK_RW |
                                            CommitFlags::NO_ENOSPC |
@@ -595,7 +595,7 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
         fs_fatal_error!(fs, "{}", e.msg());
     }
 
-    fs.times[c::bch_time_stats::btree_write_buffer_flush as usize].update(start_time);
+    fs.times[c::TimeStat::btree_write_buffer_flush as usize].update(start_time);
 
     *live.nr_flushes.place()                     += 1;
     *live.nr_flushes_caller[caller as usize].place() += 1;

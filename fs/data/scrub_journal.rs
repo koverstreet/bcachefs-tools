@@ -190,7 +190,7 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
         }
         match ReplicaRead::new(fs, k, dev) {
             Ok(Some(r)) => reads.push(r),
-            Ok(None)    => ret = ret.and(fs.throw(c::bch_errcode::BCH_ERR_no_device_to_read_from)),
+            Ok(None)    => ret = ret.and(fs.throw(c::Errcode::BCH_ERR_no_device_to_read_from)),
             Err(e)      => ret = ret.and(Err(e)),
         }
     }
@@ -212,8 +212,8 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
 fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &c::bch_inode_opts, btree: Btree,
                 level: u32, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
     let data_opts = c::data_update_opts {
-        type_:      c::bch_data_update_types::scrub_no_repair,
-        read_flags: c::bch_read_flags::hard_require_read_device,
+        type_:      c::DataUpdateType::scrub_no_repair,
+        read_flags: c::ReadFlags::hard_require_read_device,
         read_dev:   dev,
         ..Default::default()
     };
@@ -510,7 +510,7 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
     let io_opts = get_io_opts(t, None, k)?;
 
     let data_opts = c::data_update_opts {
-        type_:         c::bch_data_update_types::self_heal,
+        type_:         c::DataUpdateType::self_heal,
         target:        io_opts.background_target.into(),
         ptrs_io_error: bad_devs as u16,
         ptrs_kill:     bad_devs as u16,

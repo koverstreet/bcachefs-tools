@@ -34,7 +34,7 @@ use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, Com
                          TransBkey, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, BkeyVDurability};
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::update::ptr_bits_to_text;
@@ -288,8 +288,8 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
     let res = &u.op.res;
     if s.disk_sectors_delta > res.sectors() as i64 {
         res.add_physical((s.disk_sectors_delta - res.sectors() as i64) as u64, s.new_nr_replicas,
-                         if s.usage_increasing { c::bch_reservation_flags::empty() }
-                         else { c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL })?;
+                         if s.usage_increasing { c::ReservationFlags::empty() }
+                         else { c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL })?;
     }
 
     t.log_str(u.opts.type_.name().as_bytes())?;
@@ -304,7 +304,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
      * incorrectly written data due to needs_rb already being set on the
      * existing extent
      */
-    new.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_foreground,
+    new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                             u.op.opts.change_cookie)?;
 
     if u.op.opts.change_cookie == fs.opt_change_cookie.get() {
@@ -324,12 +324,12 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
                    old_durability.total, new_durability.total, opts.data_replicas);
             key_to_text(&mut msg, fs, u, k.as_sc(), new.as_sc(), insert.as_sc());
             fs.emergency_read_only(&mut msg);
-            return fs.throw(bch_errcode::BCH_ERR_emergency_ro);
+            return fs.throw(Errcode::BCH_ERR_emergency_ro);
         }
     }
 
     /* This is the real set_needs_reconcile() call */
-    insert.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_foreground,
+    insert.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                                u.op.opts.change_cookie)?;
 
     t.update(iter, &insert, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
@@ -443,7 +443,7 @@ pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -
         let mut new: TransBkey<'_, '_> = new.into();
 
         let opts = get_io_opts(t, None, k)?;
-        new.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_foreground,
+        new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                                 u.op.opts.change_cookie.wrapping_sub(1))?;
         t.update(iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
 
@@ -484,6 +484,6 @@ pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
      * ec_alloc_failed itself is suppressed there because it parks.
      */
     if ret.is_ok() && !parked {
-        u.op.error = -fs.err(bch_errcode::BCH_ERR_ec_alloc_failed_pending_race).raw() as i16;
+        u.op.error = -fs.err(Errcode::BCH_ERR_ec_alloc_failed_pending_race).raw() as i16;
     }
 }

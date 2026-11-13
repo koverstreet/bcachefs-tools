@@ -33,10 +33,6 @@
 // flags as not FFI-safe (e.g. its_array); harmless, and allowed on the
 // kernel's own bindings crate. Userspace's are clean, so there it warns.
 #![cfg_attr(kernel, allow(improper_ctypes))]
-// kCFI hashes a repr(C) struct in an extern "C" signature by its Rust name:
-// where that isn't C's - Fs is struct bch_fs - cfi_encoding gives C's, or no
-// call through a pointer typed in C's name matches. Makefile.rust allows it.
-#![cfg_attr(kernel, feature(cfi_encoding))]
 // util/rcu.rs's FreeAnytime, an auto trait, which its frees specialize on
 // (rustc_attrs is #[rustc_specialization_trait]), and util/task's
 // Context::ext(), how a poll finds its task - its ContextBuilder is
@@ -455,10 +451,7 @@ pub mod c {
     }
 }
 
-#[allow(non_camel_case_types)]
-pub type opt_id = c::bch_opt_id;
-#[allow(non_camel_case_types)]
-pub type btree_id = Btree;
+pub use crate::c::OptId;
 
 macro_rules! btree_ids_known {
     ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
@@ -539,7 +532,7 @@ pub fn path_to_cstr<P: AsRef<std::path::Path>>(p: P) -> CString {
     CString::new(p.as_ref().as_os_str().as_bytes()).unwrap()
 }
 
-impl c::bch_sb_field_type {
+impl c::SbFieldType {
     pub fn bit(self) -> u32 {
         1u32 << self.0
     }
@@ -580,7 +573,7 @@ impl DataType {
     }
 }
 
-impl c::disk_accounting_type {
+impl c::DiskAccountingType {
     pub fn bit(self) -> u32 {
         1u32 << self.0
     }
@@ -604,8 +597,8 @@ impl From<MetadataVersion> for u32 {
     }
 }
 
-impl From<c::bch_opt_id> for u32 {
-    fn from(id: c::bch_opt_id) -> u32 {
+impl From<c::OptId> for u32 {
+    fn from(id: c::OptId) -> u32 {
         id.0
     }
 }
@@ -616,8 +609,8 @@ impl From<BkeyType> for u32 {
     }
 }
 
-impl From<c::disk_accounting_type> for u32 {
-    fn from(t: c::disk_accounting_type) -> u32 {
+impl From<c::DiskAccountingType> for u32 {
+    fn from(t: c::DiskAccountingType) -> u32 {
         t.0
     }
 }

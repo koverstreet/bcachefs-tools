@@ -190,7 +190,7 @@ impl journal_buf {
  */
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum journal_pin_type {
+pub enum JournalPinType {
     JOURNAL_PIN_TYPE_btree3,
     JOURNAL_PIN_TYPE_btree2,
     JOURNAL_PIN_TYPE_btree1,
@@ -208,7 +208,7 @@ pub type journal_pin_flush_fn = Option<unsafe extern "C" fn(j: *mut c::journal, 
 pub struct PinLocked {
     pub list:     ListLinks,
     pub flush:    Cell<c::journal_pin_flush_fn>,
-    pub pin_type: Cell<c::journal_pin_type>,
+    pub pin_type: Cell<c::JournalPinType>,
 }
 
 // Zeroed, it's a pin never set: on no list, no flush function, JOURNAL_PIN_TYPE_btree3
@@ -317,7 +317,7 @@ pub struct journal_space {
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum journal_space_from {
+pub enum JournalSpaceFrom {
     journal_space_discarded,
     journal_space_clean_ondisk,
     journal_space_clean,
@@ -328,7 +328,7 @@ pub enum journal_space_from {
 #[bch_enum(closed)]
 #[prefix(JOURNAL_)]
 #[repr(u32)]
-pub enum journal_flags {
+pub enum JournalFlag {
     degraded,
     replay_done,
     running,
@@ -376,7 +376,7 @@ pub struct JournalLocked {
     pub free_buf: JsetBuf,
 
     pub dirty_entry_bytes: usize,
-    pub space: [c::journal_space; c::journal_space_from::journal_space_nr as usize],
+    pub space: [c::journal_space; c::JournalSpaceFrom::journal_space_nr as usize],
     pub last_flush_write: c_ulong,
     pub nr_flush_writes: u64,
     pub nr_noflush_writes: u64,
@@ -537,7 +537,7 @@ nest! {
         #[init_locked(JournalPublished::closed(), "&j->lock")]
         pub lock: Placed<Locked<c::spinlock_t, JournalLocked, JournalPublished>, JournalLockAt>,
 
-        pub flags: crate::data_structures::bitmap::AtomicBitflags<c::journal_flags>,
+        pub flags: crate::data_structures::bitmap::AtomicBitflags<c::JournalFlag>,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         #[init(AtomicPtr::new((-(c::EROFS as isize)) as *mut c::task_struct))]
         pub stop_thread: AtomicPtr<c::task_struct>,
@@ -659,7 +659,7 @@ const _: () = assert!(core::mem::size_of::<JournalHot>() == core::mem::align_of:
 /* Where each stage of a journal bucket's life starts: journal/buckets.rs */
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum journal_bucket_stage {
+pub enum JournalBucketStage {
     JOURNAL_BUCKET_discard,
     JOURNAL_BUCKET_dirty_ondisk,
     JOURNAL_BUCKET_dirty,

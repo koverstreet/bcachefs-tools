@@ -13,7 +13,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::check;
-use crate::errcode::{bch_errcode, BchError, Found};
+use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::progress::Progress;
@@ -43,7 +43,7 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
     let d = namei::inode_get_dirent(t, &mut dirent_iter, u, &mut snapshot).found()?;
     let points = d.is_some_and(|k| namei::dirent_points_to_inode(Dirent::new(k).expect("a dirent"), u));
 
-    if !points && u.bi_subvol != 0 && u.flag(c::bch_inode_flags::has_child_snapshot) {
+    if !points && u.bi_subvol != 0 && u.flag(c::InodeFlags::has_child_snapshot) {
         // An old version of a renamed subvolume root has no dirent, as
         // expected: the rename can't clear arbitrarily many old backpointers
         u.clear_backpointer();
@@ -70,13 +70,13 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
 
     if let Some(k) = d {
         if points &&
-           fsck_err_on!(t, u.flag(c::bch_inode_flags::unlinked), id::inode_unlinked_but_has_dirent,
+           fsck_err_on!(t, u.flag(c::InodeFlags::unlinked), id::inode_unlinked_but_has_dirent,
                         "inode unlinked but has dirent\n{u}\n{}", k.to_text(fs))? {
             // A dirent points here, so the unlinked flag is wrong, and
             // clearing it is the whole repair: nlink becomes 1 (check_nlinks
             // recounts hardlinks), and the trigger drops the deleted_inodes
             // entry
-            u.set_flag(c::bch_inode_flags::unlinked, false);
+            u.set_flag(c::InodeFlags::unlinked, false);
             changed = true;
         }
     }
@@ -153,7 +153,7 @@ fn check_inode_subvol(
     // that's a deletion in flight, which reconstructing would revert. Anything
     // else strips the reference, below.
     let snapshot_agrees = snapshot.as_ref().is_some_and(|s| {
-        s.state_decoded() == Some(c::bch_snapshot_state::live) &&
+        s.state_decoded() == Some(c::SnapshotState::live) &&
             s.subvol.get() == u.bi_subvol
     });
 
@@ -213,7 +213,7 @@ fn check_unlinked_dir(
 
     match dirent::empty_dir_snapshot(t, pos.offset, 0, pos.snapshot) {
         Ok(()) => return Ok(false),
-        Err(e) if e.matches(bch_errcode::BCH_ERR_ENOTEMPTY_dir_not_empty) => {}
+        Err(e) if e.matches(Errcode::BCH_ERR_ENOTEMPTY_dir_not_empty) => {}
         Err(e) => return Err(e),
     }
 
@@ -222,7 +222,7 @@ fn check_unlinked_dir(
         return Ok(false);
     }
 
-    u.set_flag(c::bch_inode_flags::unlinked, false);
+    u.set_flag(c::InodeFlags::unlinked, false);
     Ok(true)
 }
 
@@ -288,7 +288,7 @@ fn check_inode<'t>(
         changed |= check_inode_dirent_inode(t, &mut u)?;
     }
 
-    if u.is_dir() && u.flag(c::bch_inode_flags::unlinked) {
+    if u.is_dir() && u.flag(c::InodeFlags::unlinked) {
         changed |= check_unlinked_dir(t, pos, &mut u)?;
     }
 
@@ -299,19 +299,19 @@ fn check_inode<'t>(
     }
 
     let has_child = inode::has_child_snapshots(t, pos)?;
-    if fsck_err_on!(t, has_child != u.flag(c::bch_inode_flags::has_child_snapshot),
+    if fsck_err_on!(t, has_child != u.flag(c::InodeFlags::has_child_snapshot),
                     id::inode_has_child_snapshots_wrong,
                     "inode has_child_snapshots flag wrong (should be {})\n{u}", has_child as u32)? {
-        u.set_flag(c::bch_inode_flags::has_child_snapshot, has_child);
+        u.set_flag(c::InodeFlags::has_child_snapshot, has_child);
         changed = true;
     }
 
     // An unlinked subvolume root is the subvolume path's to delete -
     // check_subvols() resumes it - not the inode reaper's
-    if u.flag(c::bch_inode_flags::unlinked) &&
+    if u.flag(c::InodeFlags::unlinked) &&
        !u.is_subvolume_root() &&
-       !u.flag(c::bch_inode_flags::has_child_snapshot) {
-        if !fs.flags.get(c::bch_fs_flags::started) {
+       !u.flag(c::InodeFlags::has_child_snapshot) {
+        if !fs.flags.get(c::FsFlag::started) {
             // Offline, only make sure it's on the deleted list: a logged
             // operation may still refer to it - a crash mid-truncate of an open
             // unlinked file - so delete_dead_inodes runs after logged ops
@@ -332,10 +332,10 @@ fn check_inode<'t>(
     }
 
     let has_opts = u.has_opts();
-    if fsck_err_on!(t, u.flag(c::bch_inode_flags::has_inode_opts) != has_opts,
+    if fsck_err_on!(t, u.flag(c::InodeFlags::has_inode_opts) != has_opts,
                     id::inode_has_inode_opts_flag_wrong,
                     "inode has_inode_opts flag wrong, should be {}\n{u}", has_opts as u32)? {
-        u.set_flag(c::bch_inode_flags::has_inode_opts, has_opts);
+        u.set_flag(c::InodeFlags::has_inode_opts, has_opts);
         changed = true;
     }
 

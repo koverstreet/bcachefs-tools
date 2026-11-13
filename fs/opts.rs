@@ -6,7 +6,7 @@
 //! Terms:
 //! - An option, Opt: what its field's #[opt] says of one - its type and
 //!   bounds, when it may be set (flags, OPT_*), where the superblock keeps
-//!   it, if it does. OPTS is indexed by bch_opt_id.
+//!   it, if it does. OPTS is indexed by OptId.
 //! - A value is a u64, whatever the option's type: a bool's 0 or 1, a string
 //!   option's index into its choices, a bitfield's bits.
 //! - bch_opts: a value for each option, and whether it's defined - mount
@@ -30,8 +30,7 @@
 
 use crate::fs::Dev;
 use crate::c;
-use crate::opt_id;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::inode_opts::InodeOpt;
 use crate::sb::io::SbState;
@@ -44,8 +43,8 @@ use crate::util::{HumanReadable, Printbuf};
 use crate::util::printbuf::parse_human_u64;
 use crate::util::sysfs::parse_int;
 use core::ffi::{CStr, c_ulong};
-use crate::cstructs::c::inode_opt_id_arms;
-use crate::c::{bch_member, bch_sb_field_ext, bch_compression_opts, bch_csum_opt, bch_error_actions, bch_str_hash_opts, bch_version_upgrade_opts, bch_write_degraded_actions, MemberState, BCH_REPLICAS_MAX, BCH_SB_SECTOR};
+use crate::cstructs::c::InodeOptId_arms;
+use crate::c::{bch_member, bch_sb_field_ext, CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt, WriteDegradedAction, MemberState, BCH_REPLICAS_MAX, BCH_SB_SECTOR};
 use crate::format::DataType;
 use crate::types::bits_to_longs;
 use cstruct_macros::{CStruct, bch_enum, Options, TypeInfo};
@@ -65,7 +64,7 @@ use cstruct_macros::{CStruct, bch_enum, Options, TypeInfo};
 /* When can be set: */
 #[bch_enum(flags)]
 #[repr(u32)]
-pub enum opt_flags {
+pub enum OptFlags {
     OPT_FS = 1 << 0,                /* Filesystem option */
     OPT_DEVICE = 1 << 1,            /* Device option */
     OPT_INODE = 1 << 2,             /* Inode option */
@@ -95,7 +94,7 @@ pub const OPT_SHOW_MOUNT_STYLE: u32 = 1 << 1;
 #[bch_enum(closed)]
 #[prefix(FSCK_FIX_)]
 #[repr(u32)]
-pub enum fsck_err_opts {
+pub enum FsckErrOpt {
     exit = 0,
     yes = 1,
     no = 2,
@@ -105,7 +104,7 @@ pub enum fsck_err_opts {
 /* how many options a bch_opts_mask has room for */
 pub const BCH_OPTS_MAX: u32 = 128;
 
-/* options, by bch_opt_id: which are set */
+/* options, by OptId: which are set */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_opts_mask {
@@ -120,7 +119,7 @@ pub type AtomicOptsMask = crate::data_structures::bitmap::AtomicBitArray<{ bits_
  * The options, a field each: its #[opt] - its type, when it may be set, its
  * superblock field, its default - and its doc comment, its help.
  * #[derive(Options)] (cstruct-macros/src/options.rs) makes their ids,
- * bch_opt_id, in field order, and their table, opts.rs's OPTS. @defined:
+ * OptId, in field order, and their table, opts.rs's OPTS. @defined:
  * those this bch_opts sets - mount options as parsed have only those given.
  */
 #[repr(C)]
@@ -143,10 +142,10 @@ pub struct bch_opts {
     pub btree_node_size: u32,
 
     /// Action to take on filesystem error
-    #[opt(str(bch_error_actions),
+    #[opt(str(ErrorAction),
           flags = fs | format | mount | runtime,
           sb = bch_sb::error_action,
-          default = bch_error_actions::fix_safe.0)]
+          default = ErrorAction::fix_safe.0)]
     pub errors: u8,
 
     /// Number of consecutive write errors allowed before kicking out a device
@@ -188,17 +187,17 @@ pub struct bch_opts {
     pub encoded_extent_max: u32,
 
     /// Checksum type for metadata writes
-    #[opt(str(bch_csum_opt),
+    #[opt(str(CsumOpt),
           flags = fs | format | mount_old | runtime,
           sb = bch_sb::meta_csum_type,
-          default = bch_csum_opt::crc32c.0)]
+          default = CsumOpt::crc32c.0)]
     pub metadata_checksum: u8,
 
     /// Checksum type for data writes
-    #[opt(str(bch_csum_opt),
+    #[opt(str(CsumOpt),
           flags = fs | inode | format | mount_old | runtime,
           sb = bch_sb::data_csum_type,
-          default = bch_csum_opt::crc32c.0)]
+          default = CsumOpt::crc32c.0)]
     pub data_checksum: u8,
 
     /// Number of read retries on checksum error
@@ -209,21 +208,21 @@ pub struct bch_opts {
     #[opt(with(crate::data::compress::OPT),
           flags = fs | inode | format | mount_old | runtime,
           sb = bch_sb::compression_type,
-          default = bch_compression_opts::none.0)]
+          default = CompressionOpt::none.0)]
     pub compression: u8,
 
     /// Compression type for background moves
     #[opt(with(crate::data::compress::OPT),
           flags = fs | inode | format | mount_old | runtime,
           sb = bch_sb::background_compression_type,
-          default = bch_compression_opts::none.0)]
+          default = CompressionOpt::none.0)]
     pub background_compression: u8,
 
     /// Hash function for directory entries and xattrs
-    #[opt(str(bch_str_hash_opts),
+    #[opt(str(StrHashOpt),
           flags = fs | format | mount | runtime,
           sb = bch_sb::str_hash_type,
-          default = bch_str_hash_opts::siphash.0)]
+          default = StrHashOpt::siphash.0)]
     pub str_hash: u8,
 
     /// Device or label for metadata writes
@@ -334,10 +333,10 @@ pub struct bch_opts {
     pub degraded: u8,
 
     /// Write fewer copies than asked for rather than returning ENOSPC; the default does so only while a device is missing or not read-write
-    #[opt(str(bch_write_degraded_actions),
+    #[opt(str(WriteDegradedAction),
           flags = fs | mount | format | runtime,
           sb = bch_sb::write_degraded_action,
-          default = bch_write_degraded_actions::degraded.0)]
+          default = WriteDegradedAction::degraded.0)]
     pub write_degraded: u8,
 
     /// Seconds to wait at mount for member devices that haven't appeared yet, before applying the degraded action; 0 means use the built-in default
@@ -402,7 +401,7 @@ pub struct bch_opts {
     pub fsck_memory_usage_percent: u8,
 
     /// Fix errors during fsck without asking
-    #[opt(with(crate::opts::FIX_ERRORS), flags = fs | mount, default = (fsck_err_opts::exit as u32))]
+    #[opt(with(crate::opts::FIX_ERRORS), flags = fs | mount, default = (FsckErrOpt::exit as u32))]
     pub fix_errors: u8,
 
     /// Ratelimit error messages during fsck
@@ -433,7 +432,7 @@ pub struct bch_opts {
     pub journal_rewind_discard_buffer_percent: u8,
 
     /// Scrub data written in the last few journal entries during recovery
-    #[opt(str(bch_scrub_journal_opts), flags = fs | mount, sb = bch_sb::scrub_journal)]
+    #[opt(str(ScrubJournalOpt), flags = fs | mount, sb = bch_sb::scrub_journal)]
     pub scrub_recent_journal_entries: u8,
 
     /// Maximum time in seconds the journal scrub will rewind (default 10)
@@ -513,10 +512,10 @@ pub struct bch_opts {
 
     /// Set superblock to latest version,
     /// allowing any new features to be used
-    #[opt(str(bch_version_upgrade_opts),
+    #[opt(str(VersionUpgradeOpt),
           flags = fs | mount | runtime,
           sb = bch_sb::version_upgrade,
-          default = bch_version_upgrade_opts::compatible.0)]
+          default = VersionUpgradeOpt::compatible.0)]
     pub version_upgrade: u8,
 
     /// Pointer to a struct stdio_redirect
@@ -598,7 +597,7 @@ pub struct bch_opts {
     pub durability: u8,
 
     /// Allowed data types for this device: journal, btree, and/or user
-    #[opt(bitfield(bch_data_type, 1 << DataType::journal.0 | 1 << DataType::btree.0 | 1 << DataType::user.0),
+    #[opt(bitfield(DataType, 1 << DataType::journal.0 | 1 << DataType::btree.0 | 1 << DataType::user.0),
           flags = device | format,
           sb = bch_member::data_allowed,
           default = 1 << DataType::journal.0 | 1 << DataType::btree.0 | 1 << DataType::user.0,
@@ -653,7 +652,7 @@ pub struct bch_opts {
 /* inode opts: */
 macro_rules! __bch_inode_opts_0 {
     ([$($acc:tt)*] $(($_name:tt, $_nr:expr, [$_bits:tt])),* $(,)?) => { ::paste::paste! {
-        inode_opt_id_arms!(__bch_inode_opts_1 [
+        InodeOptId_arms!(__bch_inode_opts_1 [
             $($acc)*
             $(pub $_name: [<u $_bits>],)*
         ]);
@@ -688,11 +687,11 @@ macro_rules! __bch_inode_opts_1 {
         }
     } };
 }
-inode_opt_id_arms!(__bch_inode_opts_0 [pub __bch_inode_opts_align: [u64; 0],]);
+InodeOptId_arms!(__bch_inode_opts_0 [pub __bch_inode_opts_align: [u64; 0],]);
 
-pub const NR: usize = opt_id::NR as usize;
+pub const NR: usize = OptId::NR as usize;
 
-/// By bch_opt_id: bch_opts' #[opt]s.
+/// By OptId: bch_opts' #[opt]s.
 pub static OPTS: [Opt; NR] = c::bch_opts::TABLE;
 
 /// Each option's default, all defined.
@@ -757,9 +756,9 @@ pub(crate) const fn size_of_field<T, F>(_: fn(&T) -> &F) -> usize {
 }
 
 pub struct Opt {
-    pub id:    opt_id,
+    pub id:    OptId,
     pub name:  &'static str,
-    pub flags: c::opt_flags,
+    pub flags: c::OptFlags,
     pub ty:    OptType,
     /// Bounds, inclusive: max 0 is none.
     pub min:   u64,
@@ -809,7 +808,7 @@ impl OptHost for c::bch_sb_field_ext {
     const MEMBER: bool = false;
 
     fn with<R>(sb: &c::bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
-        let src = Unvalidated::field(sb, c::bch_sb_field_type::ext)?.as_bytes();
+        let src = Unvalidated::field(sb, c::SbFieldType::ext)?.as_bytes();
         let mut ext = Self::default();
         let dst = plain_bytes_mut(&mut ext);
         let n = src.len().min(dst.len());
@@ -881,9 +880,9 @@ impl<T: OptHost + ?Sized, V: FieldValue> SbOpt for Field<T, V> {
 pub(crate) const FIX_ERRORS: OptFn = OptFn {
     parse: |_, val, err| {
         let Some(val) = val else {
-            return Ok((c::fsck_err_opts::yes as u32).into());
+            return Ok((c::FsckErrOpt::yes as u32).into());
         };
-        let choices: &[&str] = crate::names_by_value!(c::fsck_err_opts);
+        let choices: &[&str] = crate::names_by_value!(c::FsckErrOpt);
         choices.iter().position(|n| n.as_bytes() == val).map(|v| v as u64).ok_or_else(|| {
             if let Some(err) = err {
                 write!(err, "fix_errors: invalid selection");
@@ -891,11 +890,11 @@ pub(crate) const FIX_ERRORS: OptFn = OptFn {
             c::EINVAL.into()
         })
     },
-    to_text: |out, _, _, v| names::prt_name(out, c::fsck_err_opts::ENTRIES, v),
+    to_text: |out, _, _, v| names::prt_name(out, c::FsckErrOpt::ENTRIES, v),
     validate: None,
 };
 
-impl opt_id {
+impl OptId {
     pub fn opt(self) -> &'static Opt {
         &OPTS[self.0 as usize]
     }
@@ -906,7 +905,7 @@ impl opt_id {
 }
 
 impl Opt {
-    pub fn has(&self, flag: c::opt_flags) -> bool {
+    pub fn has(&self, flag: c::OptFlags) -> bool {
         self.flags.intersects(flag)
     }
 
@@ -937,13 +936,13 @@ impl Opt {
     /// Its value from its superblock field's: the field may hold it scaled.
     pub fn from_sb_field(&self, v: u64) -> u64 {
         let mut v = v;
-        if self.has(c::opt_flags::OPT_SB_FIELD_ONE_BIAS) {
+        if self.has(c::OptFlags::OPT_SB_FIELD_ONE_BIAS) {
             v = v.wrapping_sub(1);
         }
-        if self.has(c::opt_flags::OPT_SB_FIELD_ILOG2) {
+        if self.has(c::OptFlags::OPT_SB_FIELD_ILOG2) {
             v = 1u64.checked_shl(v as u32).unwrap_or(0);
         }
-        if self.has(c::opt_flags::OPT_SB_FIELD_SECTORS) {
+        if self.has(c::OptFlags::OPT_SB_FIELD_SECTORS) {
             v <<= 9;
         }
         v
@@ -952,13 +951,13 @@ impl Opt {
     /// Its superblock field's value for @v: from_sb_field()'s inverse.
     pub fn to_sb_field(&self, v: u64) -> u64 {
         let mut v = v;
-        if self.has(c::opt_flags::OPT_SB_FIELD_SECTORS) {
+        if self.has(c::OptFlags::OPT_SB_FIELD_SECTORS) {
             v >>= 9;
         }
-        if self.has(c::opt_flags::OPT_SB_FIELD_ILOG2) {
+        if self.has(c::OptFlags::OPT_SB_FIELD_ILOG2) {
             v = v.checked_ilog2().unwrap_or(0).into();
         }
-        if self.has(c::opt_flags::OPT_SB_FIELD_ONE_BIAS) {
+        if self.has(c::OptFlags::OPT_SB_FIELD_ONE_BIAS) {
             v = v.wrapping_add(1);
         }
         v
@@ -977,12 +976,12 @@ impl Opt {
 // ── bch_opts ─────────────────────────────────────────────────────────────
 
 impl c::bch_opts_mask {
-    pub const fn test(&self, id: opt_id) -> bool {
+    pub const fn test(&self, id: OptId) -> bool {
         let (i, bits) = (id.0 as usize, core::ffi::c_ulong::BITS as usize);
         self.d[i / bits] >> (i % bits) & 1 != 0
     }
 
-    pub const fn set(&mut self, id: opt_id) {
+    pub const fn set(&mut self, id: OptId) {
         let (i, bits) = (id.0 as usize, core::ffi::c_ulong::BITS as usize);
         self.d[i / bits] |= 1 << (i % bits);
     }
@@ -1034,16 +1033,16 @@ pub fn opt_validate(opt: &Opt, v: u64, mut err: Option<&mut Printbuf>) -> Result
     }
 
     if v < opt.min {
-        fail!(bch_errcode::BCH_ERR_ERANGE_option_too_small, "too small (min {})", opt.min);
+        fail!(Errcode::BCH_ERR_ERANGE_option_too_small, "too small (min {})", opt.min);
     }
     if opt.max != 0 && v > opt.max {
-        fail!(bch_errcode::BCH_ERR_ERANGE_option_too_big, "too big (max {})", opt.max);
+        fail!(Errcode::BCH_ERR_ERANGE_option_too_big, "too big (max {})", opt.max);
     }
-    if opt.has(c::opt_flags::OPT_SB_FIELD_SECTORS) && v & 511 != 0 {
-        fail!(bch_errcode::BCH_ERR_opt_parse_error, "not a multiple of 512");
+    if opt.has(c::OptFlags::OPT_SB_FIELD_SECTORS) && v & 511 != 0 {
+        fail!(Errcode::BCH_ERR_opt_parse_error, "not a multiple of 512");
     }
-    if opt.has(c::opt_flags::OPT_MUST_BE_POW_2) && !v.is_power_of_two() {
-        fail!(bch_errcode::BCH_ERR_opt_parse_error, "must be a power of two");
+    if opt.has(c::OptFlags::OPT_MUST_BE_POW_2) && !v.is_power_of_two() {
+        fail!(Errcode::BCH_ERR_opt_parse_error, "must be a power of two");
     }
     match opt.ty {
         OptType::Fn(OptFn { validate: Some(validate), .. }) => validate(v, err),
@@ -1095,18 +1094,18 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
         OptType::Bool => match val.unwrap_or(b"1") {
             b"1" | b"true" | b"yes" => 1,
             b"0" | b"false" | b"no" => 0,
-            _ => fail!(bch_errcode::BCH_ERR_option_not_bool, "must be bool"),
+            _ => fail!(Errcode::BCH_ERR_option_not_bool, "must be bool"),
         },
         OptType::Uint => {
             let Some(val) = val else {
-                fail!(bch_errcode::BCH_ERR_EINVAL_opt_parse_uint_required, "required value");
+                fail!(Errcode::BCH_ERR_EINVAL_opt_parse_uint_required, "required value");
             };
             if val.starts_with(b"-") {
-                fail!(bch_errcode::BCH_ERR_option_negative, "must be a non-negative number");
+                fail!(Errcode::BCH_ERR_option_negative, "must be a non-negative number");
             }
             let v = core::str::from_utf8(val)
                 .map_err(|_| BchError::from(c::EINVAL))
-                .and_then(|s| if opt.has(c::opt_flags::OPT_HUMAN_READABLE) {
+                .and_then(|s| if opt.has(c::OptFlags::OPT_HUMAN_READABLE) {
                     parse_human_u64(s)
                 } else {
                     parse_int(s)
@@ -1118,7 +1117,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
         }
         OptType::Str(choices) => {
             let Some(val) = val else {
-                fail!(bch_errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
+                fail!(Errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
             };
             match choices.iter().position(|c| c.as_bytes() == val) {
                 Some(i) => i as u64,
@@ -1127,17 +1126,17 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
         }
         OptType::Bitfield { choices, allowed } => {
             let Some(val) = val else {
-                fail!(bch_errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
+                fail!(Errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
             };
             match read_flag_list(val, choices, allowed) {
                 Ok(v)    => v,
-                Err(bad) => fail!(bch_errcode::BCH_ERR_opt_parse_error, "invalid flag {}",
+                Err(bad) => fail!(Errcode::BCH_ERR_opt_parse_error, "invalid flag {}",
                                   core::str::from_utf8(bad).unwrap_or("(not UTF-8)")),
             }
         }
         OptType::StrMember { size, .. } => {
             let Some(val) = val else {
-                fail!(bch_errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
+                fail!(Errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
             };
             if val.len() > size {
                 fail!(c::ENAMETOOLONG, "too long (max {size} bytes)");
@@ -1147,7 +1146,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
         }
         OptType::Fn(f) => match (f.parse)(fs, val, err.as_deref_mut()) {
             Ok(v) => v,
-            Err(e) if e == bch_errcode::BCH_ERR_option_needs_open_fs.into() => return Err(e),
+            Err(e) if e == Errcode::BCH_ERR_option_needs_open_fs.into() => return Err(e),
             Err(e) => fail!(e, "parse error"),
         },
     };
@@ -1184,16 +1183,16 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
     }
     let val = val.map(|v| opt_val_synonym(name_str.unwrap_or_default(), v));
 
-    if !opt.has(c::opt_flags::OPT_MOUNT | c::opt_flags::OPT_MOUNT_OLD) {
-        return Err(bch_errcode::BCH_ERR_option_name.into());
+    if !opt.has(c::OptFlags::OPT_MOUNT | c::OptFlags::OPT_MOUNT_OLD) {
+        return Err(Errcode::BCH_ERR_option_name.into());
     }
 
-    if (opt.id == opt_id::Opt_usrquota || opt.id == opt_id::Opt_grpquota) && !cfg!(CONFIG_BCACHEFS_QUOTA) {
-        return Err(bch_errcode::BCH_ERR_option_name.into());
+    if (opt.id == OptId::Opt_usrquota || opt.id == OptId::Opt_grpquota) && !cfg!(CONFIG_BCACHEFS_QUOTA) {
+        return Err(Errcode::BCH_ERR_option_name.into());
     }
 
     let v = match opt_parse(fs, opt, val, Some(err)) {
-        Err(e) if e == bch_errcode::BCH_ERR_option_needs_open_fs.into() => {
+        Err(e) if e == Errcode::BCH_ERR_option_needs_open_fs.into() => {
             if let Some(later) = parse_later {
                 later.write_bytes(name);
                 write!(later, "=");
@@ -1208,7 +1207,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
         r => r?,
     };
 
-    if opt.has(c::opt_flags::OPT_MOUNT_OLD) {
+    if opt.has(c::OptFlags::OPT_MOUNT_OLD) {
         log_no_fs(LogLevel::ERR, crate::message!(
             "option {} may no longer be specified at mount time; set via sysfs opts dir", opt.name));
         return Ok(());
@@ -1236,7 +1235,7 @@ pub fn parse_mount_opts_into(fs: Option<&Fs>, opts: &mut c::bch_opts, mut parse_
 
         let mut err = Printbuf::new();
         match parse_one_mount_opt(fs, Some(opts), parse_later.as_deref_mut(), name, val, &mut err) {
-            Err(e) if e == bch_errcode::BCH_ERR_option_name.into() && ignore_unknown => {}
+            Err(e) if e == Errcode::BCH_ERR_option_name.into() && ignore_unknown => {}
             Err(e) => {
                 log_no_fs(LogLevel::ERR, crate::message!("Error parsing option {}", err.as_str()));
                 return Err(e);
@@ -1286,7 +1285,7 @@ pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&c::bch_sb<Un
     }
 
     match opt.ty {
-        OptType::Bool | OptType::Uint if opt.has(c::opt_flags::OPT_HUMAN_READABLE) => prt!(out, "{}", HumanReadable(v)),
+        OptType::Bool | OptType::Uint if opt.has(c::OptFlags::OPT_HUMAN_READABLE) => prt!(out, "{}", HumanReadable(v)),
         OptType::Bool | OptType::Uint => write!(out, "{}", v as i64),
         OptType::Str(choices) => match choices.get(v as usize) {
             Some(_) if v < opt.min || v > opt.max => write!(out, "(invalid option {})", v as i64),
@@ -1350,7 +1349,7 @@ fn warn_no_member(opt: &Opt, dev: u32) {
 
 /// Option @id as the superblock has it - a device option, as member @dev's:
 /// 0 if it doesn't.
-pub fn opt_from_sb(sb: &c::bch_sb<Unvalidated>, id: opt_id, dev: Option<u32>) -> u64 {
+pub fn opt_from_sb(sb: &c::bch_sb<Unvalidated>, id: OptId, dev: Option<u32>) -> u64 {
     let opt = id.opt();
     let v = match dev {
         None => opt.fs_field().and_then(|f| f.get(sb, 0)).unwrap_or(0),
@@ -1397,7 +1396,7 @@ pub fn fs_opts(sb: &c::bch_sb<Unvalidated>, opts: &c::bch_opts, out: &mut Printb
     #[cfg(all(kernel, not(CONFIG_TRANSPARENT_HUGEPAGE)))]
     if fs_opts.block_size as usize > crate::util::kernel::PAGE_SIZE {
         prt!(out, "cannot mount bs > ps filesystem without CONFIG_TRANSPARENT_HUGEPAGE\n");
-        return Err(bch_errcode::BCH_ERR_EINVAL_block_size_needs_thp.into());
+        return Err(Errcode::BCH_ERR_EINVAL_block_size_needs_thp.into());
     }
     Ok(fs_opts)
 }
@@ -1408,25 +1407,25 @@ pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, v
     let v = opt.to_sb_field(v);
     let mut changed = false;
 
-    if let (true, None, Some(f)) = (opt.has(c::opt_flags::OPT_FS), dev, opt.fs_field()) {
+    if let (true, None, Some(f)) = (opt.has(c::OptFlags::OPT_FS), dev, opt.fs_field()) {
         changed = f.set(sb, 0, v).unwrap_or(false);
     }
 
-    if let (true, Some(dev), Some(f)) = (opt.has(c::opt_flags::OPT_DEVICE), dev, opt.member_field()) {
+    if let (true, Some(dev), Some(f)) = (opt.has(c::OptFlags::OPT_DEVICE), dev, opt.member_field()) {
         let Some(c) = f.set(sb, dev, v) else {
             warn_no_member(opt, dev);
             return false;
         };
         changed = c;
 
-        if opt.id == opt_id::Opt_rotational {
+        if opt.id == OptId::Opt_rotational {
             let m = sb.member_mut(dev).expect("set above");
             changed |= !m.rotational_set();
             m.set_rotational_set(true);
         }
     }
 
-    if let (OptType::StrMember { get_mut, .. }, true, Some(dev)) = (&opt.ty, opt.has(c::opt_flags::OPT_DEVICE), dev) {
+    if let (OptType::StrMember { get_mut, .. }, true, Some(dev)) = (&opt.ty, opt.has(c::OptFlags::OPT_DEVICE), dev) {
         let m = members::sb_member(sb.sb(), dev).filter(|m| m.alive()).and_then(|_| sb.member_mut(dev));
         let Some(m) = m else {
             warn_no_member(opt, dev);

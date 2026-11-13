@@ -170,7 +170,7 @@ impl TransBkey<'_, '_, PtrsMut> {
         {
             at
         } else {
-            entries.extend(crc_entry(&p.crc, c::bch_extent_entry_type::crc32));
+            entries.extend(crc_entry(&p.crc, c::ExtentEntryType::crc32));
             self.entries_end()
         };
 
@@ -216,7 +216,7 @@ impl TransBkey<'_, '_, PtrsMut> {
         // which may no longer fit the old entry's nonce field: replace it with
         // a larger entry in the same position. The caller leaves room for a
         // crc128.
-        let entry = crc_entry(&new, c::bch_extent_entry_type(old_ty));
+        let entry = crc_entry(&new, c::ExtentEntryType(old_ty));
         self.drop_entry(fs, at);
         self.insert_entry(at, &entry).expect("room for a crc128: narrowing's caller makes it");
         true
@@ -227,7 +227,7 @@ impl TransBkey<'_, '_, PtrsMut> {
 /// bch2_extent_crc_append(). @k is a key with pointers, its entries running
 /// to its value's end.
 pub(crate) fn extent_crc_append(k: &mut KeyRoom<'_>, crc: &c::bch_extent_crc_unpacked) -> Result<(), NoRoom> {
-    let e = crc_entry(crc, c::bch_extent_entry_type::crc32);
+    let e = crc_entry(crc, c::ExtentEntryType::crc32);
     let val_u64s = k.k().val_u64s();
     assert!(val_u64s + e.len() <= c::BKEY_EXTENT_VAL_U64s_MAX as usize,
             "appending a crc past an extent's largest value");
@@ -236,8 +236,8 @@ pub(crate) fn extent_crc_append(k: &mut KeyRoom<'_>, crc: &c::bch_extent_crc_unp
 
 /// @crc as the smallest crc entry it packs into, of type @min or larger, in
 /// u64s.
-pub(crate) fn crc_entry(crc: &c::bch_extent_crc_unpacked, min: c::bch_extent_entry_type) -> ArrayVec<u64, 3> {
-    use c::bch_extent_entry_type as t;
+pub(crate) fn crc_entry(crc: &c::bch_extent_crc_unpacked, min: c::ExtentEntryType) -> ArrayVec<u64, 3> {
+    use c::ExtentEntryType as t;
     let words = |b: &[u8]| b.chunks(8).map(|w| u64::from_ne_bytes(w.try_into().unwrap())).collect();
 
     if let Some(e) = (min.0 <= t::crc32.0).then(|| c::bch_extent_crc32::pack(crc)).flatten() {

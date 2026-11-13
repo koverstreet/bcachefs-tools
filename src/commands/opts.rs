@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use anyhow::{bail, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::errcode::bch_errcode;
+use bcachefs_kernel::errcode::Errcode;
 use bcachefs_kernel::opts::{Opt, OptType};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use clap::{Arg, ArgAction, ArgMatches};
@@ -17,7 +17,7 @@ fn leak(s: String) -> &'static str {
 fn for_each_opt(flag_filter: u32, mut f: impl FnMut(&'static str, &'static Opt)) {
     for opt in &bcachefs_kernel::opts::OPTS {
         if opt.flags.bits() & flag_filter == 0 { continue }
-        if opt.flags.bits() & c::opt_flags::OPT_HIDDEN.bits() != 0 { continue }
+        if opt.flags.bits() & c::OptFlags::OPT_HIDDEN.bits() != 0 { continue }
         f(opt.name, opt);
     }
 }
@@ -163,7 +163,7 @@ pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
 
 /// Look up a bcachefs option by name, handling --nooption negation for booleans.
 /// Returns (opt_id, opt_ref, negated).
-pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::bch_opt_id, &'static Opt, bool)> {
+pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::OptId, &'static Opt, bool)> {
     if let Some(r) = bch_opt_lookup(name) {
         return Some((r.0, r.1, false));
     }
@@ -173,7 +173,7 @@ pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::bch_opt_id, &'static Opt
 }
 
 /// Look up a bcachefs option by name. Returns the typed option id and reference.
-pub fn bch_opt_lookup(name: &str) -> Option<(c::bch_opt_id, &'static Opt)> {
+pub fn bch_opt_lookup(name: &str) -> Option<(c::OptId, &'static Opt)> {
     bcachefs_kernel::opts::opt_lookup(name).map(|opt| (opt.id, opt))
 }
 
@@ -213,7 +213,7 @@ pub(crate) fn parse_opt_val(
     let mut err = Printbuf::new();
     match bcachefs_kernel::opts::opt_parse(None, opt, Some(val_str.as_bytes()), Some(&mut err)) {
         Ok(v) => Ok(Some(v)),
-        Err(e) if e == bch_errcode::BCH_ERR_option_needs_open_fs.into() => Ok(None),
+        Err(e) if e == Errcode::BCH_ERR_option_needs_open_fs.into() => Ok(None),
         Err(_) => {
             let msg = err.as_str();
             if msg.is_empty() {

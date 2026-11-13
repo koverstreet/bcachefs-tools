@@ -78,7 +78,7 @@ const PRINT_INTERVAL: u64 = 10 * 1_000_000_000;
 #[derive(Clone, Copy, ::pin_init::Zeroable)]
 pub(crate) struct ProgressState {
     msg:        Option<&'static CStr>,
-    units:      c::bch_progress_units,
+    units:      c::ProgressUnit,
     pos:        c::bbpos,
     /// local_clock() at which it's next due to print
     next_print: u64,
@@ -90,7 +90,7 @@ pub(crate) struct ProgressState {
 }
 
 impl ProgressState {
-    fn new(msg: Option<&'static CStr>, units: c::bch_progress_units, total: u64) -> Self {
+    fn new(msg: Option<&'static CStr>, units: c::ProgressUnit, total: u64) -> Self {
         Self {
             msg: msg.map(strip_bch2),
             units,
@@ -222,13 +222,13 @@ impl c::progress_indicator {
     /// init_mask(), quietly with no @msg.
     pub(crate) fn init_masks(&self, fs: &Fs, msg: Option<&'static CStr>, leaf_mask: u64, inner_mask: u64) {
         let total = total_nodes(fs, leaf_mask, inner_mask);
-        let new = ProgressState::new(msg, c::bch_progress_units::nodes, total);
+        let new = ProgressState::new(msg, c::ProgressUnit::nodes, total);
         self.state.write(|s| *s = new);
     }
 
     /// Start reporting work that isn't a btree walk - no node to count, no
     /// position - of @total @units, counted by update_count().
-    pub fn init_count(&self, msg: Option<&'static CStr>, units: c::bch_progress_units, total: u64) {
+    pub fn init_count(&self, msg: Option<&'static CStr>, units: c::ProgressUnit, total: u64) {
         let new = ProgressState::new(msg, units, total);
         self.state.write(|s| *s = new);
     }
@@ -290,7 +290,7 @@ impl c::progress_indicator {
 
     /// What BCH_IOCTL_RECOVERY_STATUS reports: units, seen, total - from the
     /// one copy.
-    pub fn status(&self) -> (c::bch_progress_units, u64, u64) {
+    pub fn status(&self) -> (c::ProgressUnit, u64, u64) {
         let s = self.state.read();
         (s.units, s.seen, s.total)
     }

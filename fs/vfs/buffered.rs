@@ -45,7 +45,7 @@ use core::ptr::NonNull;
 use cstruct_macros::in_place;
 use pin_init::{pin_data, pin_init, pinned_drop};
 
-type F = c::bch_read_flags;
+type F = c::ReadFlags;
 
 const PAGE_SECTORS: u64 = (PAGE_SIZE >> 9) as u64;
 

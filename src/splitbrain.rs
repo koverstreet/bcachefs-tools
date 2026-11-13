@@ -75,7 +75,7 @@ pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Diverge
 
         let ret = dev_in_fs(best_handle.sb(), Some(best_handle.dev.bdev()), handle, opts);
 
-        if ret.is_err_and(|e| e.matches(c::bch_errcode::BCH_ERR_device_splitbrain)) {
+        if ret.is_err_and(|e| e.matches(c::Errcode::BCH_ERR_device_splitbrain)) {
             let sb = handle.sb();
             out.push(Divergent {
                 path: path.clone(),

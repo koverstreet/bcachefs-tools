@@ -524,12 +524,12 @@ mod tests {
     /// straight through `?`, and behind a context someone adds later.
     #[test]
     fn splitbrain_is_recognised_through_anyhow() {
-        let sb = || BchError::from(c::bch_errcode::BCH_ERR_device_splitbrain);
+        let sb = || BchError::from(c::Errcode::BCH_ERR_device_splitbrain);
 
         assert!(is_splitbrain(&anyhow::Error::from(sb())));
         assert!(is_splitbrain(&anyhow::Error::from(sb()).context("scanning for devices")));
 
-        let other = BchError::from(c::bch_errcode::BCH_ERR_device_has_been_removed);
+        let other = BchError::from(c::Errcode::BCH_ERR_device_has_been_removed);
         assert!(!is_splitbrain(&anyhow::Error::from(other)));
         assert!(!is_splitbrain(&anyhow::anyhow!("not a bcachefs error at all")));
     }
@@ -587,7 +587,7 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<Unlocked> {
 /// exactly as it does when there is no split brain.
 fn is_splitbrain(err: &anyhow::Error) -> bool {
     err.downcast_ref::<BchError>()
-        .is_some_and(|e| e.matches(c::bch_errcode::BCH_ERR_device_splitbrain))
+        .is_some_and(|e| e.matches(c::Errcode::BCH_ERR_device_splitbrain))
 }
 
 /// Scan for the filesystem's devices, and if its history has forked, ask.

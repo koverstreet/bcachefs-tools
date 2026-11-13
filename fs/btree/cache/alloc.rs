@@ -12,7 +12,7 @@ use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
 use crate::data_structures::list::Walk;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
@@ -21,8 +21,8 @@ use crate::util::kernel::{cond_resched, local_clock, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::sched::current;
 use crate::util::time_stats::TimeStats;
-use c::btree_node_cache_state as State;
-use c::six_lock_type::{self, SIX_LOCK_read, SIX_LOCK_write};
+use c::BtreeNodeCacheState as State;
+use c::SixLockType::{self, SIX_LOCK_read, SIX_LOCK_write};
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use core::ptr::NonNull;
@@ -256,7 +256,7 @@ impl BtreeTrans<'_> {
                 break 'got_mem got;
             }
 
-            return Err(bch_errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc.into());
+            return Err(Errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc.into());
         };
 
         assert!(!BtreeNodeList::linked(b), "a node allocated off a list");
@@ -277,7 +277,7 @@ impl BtreeTrans<'_> {
         b.whiteout_u64s.set(0);
         b.keys_mut(contents).btree_keys_init();
 
-        fs.times[c::bch_time_stats::btree_node_mem_alloc as usize].update(start_time);
+        fs.times[c::TimeStat::btree_node_mem_alloc as usize].update(start_time);
 
         let n = UnhashedNode { fs, b, held: ManuallyDrop::new(held) };
 
@@ -295,7 +295,7 @@ impl BtreeTrans<'_> {
     /* Slowpath, don't want it inlined into btree_iter_traverse() */
     #[inline(never)]
     pub(super) fn btree_node_fill(&self, paths: &mut Paths<'_>, path: Option<PathIdx>, k: &BkeyI, btree: Btree,
-                                  level: usize, lock_type: six_lock_type, sync: bool)
+                                  level: usize, lock_type: SixLockType, sync: bool)
         -> Result<Option<(&BtreeNode, SixHold<'_>)>, BchError>
     {
         let fs = self.fs();
@@ -340,7 +340,7 @@ impl BtreeTrans<'_> {
                     prt!(out, "{}\n", self.fn_name());
                     bch2_btree_path_to_text(out, self, p, &paths[p]);
                 });
-                return Err(self.restart(bch_errcode::BCH_ERR_transaction_restart_fill_mem_alloc_fail));
+                return Err(self.restart(Errcode::BCH_ERR_transaction_restart_fill_mem_alloc_fail));
             }
             r => r?,
         };

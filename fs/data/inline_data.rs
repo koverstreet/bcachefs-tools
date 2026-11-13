@@ -77,7 +77,7 @@ impl<'a> InlineDataRef<'a> {
     /// Ok if it has no checksum or its data matches it.
     pub fn verify(&self) -> Result<(), CsumMismatch> {
         let Some(h) = self.csum else { return Ok(()) };
-        let ty = c::bch_csum_type(h.csum_type.into());
+        let ty = c::CsumType(h.csum_type.into());
         let got = ty.checksum_unkeyed(self.data);
         if got == h.csum { Ok(()) } else { Err(CsumMismatch { ty, want: h.csum, got }) }
     }
@@ -86,7 +86,7 @@ impl<'a> InlineDataRef<'a> {
     /// data, in hex.
     pub fn to_text(&self, out: &mut Printbuf) {
         if let Some(h) = self.csum {
-            let ty = c::bch_csum_type(h.csum_type.into());
+            let ty = c::CsumType(h.csum_type.into());
             prt!(out, "csum {ty} ");
             h.csum.to_text(out, ty);
             prt!(out, " offset {} ", h.offset.get());
@@ -122,7 +122,7 @@ impl<'a> InlineDataMut<'a> {
 
 /// An inline data key's data that doesn't match its checksum.
 pub struct CsumMismatch {
-    pub ty:   c::bch_csum_type,
+    pub ty:   c::CsumType,
     pub want: c::bch_csum,
     pub got:  c::bch_csum,
 }
@@ -139,9 +139,9 @@ impl c::InlineDataCsum {
     /// type, whatever the filesystem is.
     pub fn new(fs: &Fs, opts: &c::bch_inode_opts, data: &[u8]) -> Self {
         let ty = if opts.nocow != 0 {
-            c::bch_csum_type::none
+            c::CsumType::none
         } else {
-            c::bch_csum_opt(opts.data_checksum.into()).to_type(fs, true)
+            c::CsumOpt(opts.data_checksum.into()).to_type(fs, true)
         };
         Self { csum_type: ty.0 as u8, csum: ty.checksum_unkeyed(data), ..Default::default() }
     }
@@ -153,8 +153,8 @@ impl c::InlineDataCsum {
 
 pub(crate) fn csum_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let h = InlineDataRef::of(v.k).and_then(|d| d.csum).expect("an inline data key with a checksum");
-    let ty = c::bch_csum_type(h.csum_type.into());
-    bkey_fsck_err_on!(v, ty.0 >= c::bch_csum_type::NR || ty.is_encryption(),
+    let ty = c::CsumType(h.csum_type.into());
+    bkey_fsck_err_on!(v, ty.0 >= c::CsumType::NR || ty.is_encryption(),
                       id::inline_data_csum_type_bad, "inline data with checksum type {}", h.csum_type)
 }
 

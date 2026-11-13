@@ -19,7 +19,7 @@ use crate::btree::iter::{
 use crate::c;
 use crate::check::SnapshotsSeen;
 use crate::dirent::{Dirent, DirentTarget};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fsck_err_on;
 use crate::init::error::id;
@@ -43,13 +43,13 @@ fn add_nlink(fs: &Fs, t: &mut KVVec<Nlink>, inum: u64, snapshot: u32) -> Result<
 
         if t.reserve(new_size - t.len()).is_err() {
             bch_err!(fs, "fsck: error allocating memory for nlink_table, size {}", new_size);
-            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_fsck_add_nlink);
+            return fs.throw(Errcode::BCH_ERR_ENOMEM_fsck_add_nlink);
         }
     }
 
     // Can't fail: there's room.
     t.push(Nlink { inum, snapshot, count: 0 })
-        .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_fsck_add_nlink))
+        .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_fsck_add_nlink))
 }
 
 fn inc_link(
@@ -178,7 +178,7 @@ fn check_nlinks_update_inode(
     let link = links[*idx];
 
     let nlink = u.nlink();
-    let unlinked = u.bi_flags & c::bch_inode_flags::unlinked.bits() != 0;
+    let unlinked = u.bi_flags & c::InodeFlags::unlinked.bits() != 0;
 
     if fsck_err_on!(t, nlink != link.count || (unlinked && u.bi_nlink != 0),
                     id::inode_wrong_nlink,

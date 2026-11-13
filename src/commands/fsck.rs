@@ -343,7 +343,7 @@ fn run_userspace_fsck(devices: &[String], fs_opts: c::bch_opts) -> Result<()> {
     // shutdown_with_errors reports the errors fsck_errcode() already counted:
     // not a shutdown that failed
     let ret2 = fs.exit();
-    if ret2 != 0 && !BchError::from_raw(ret2).matches(c::bch_errcode::BCH_ERR_shutdown_with_errors) {
+    if ret2 != 0 && !BchError::from_raw(ret2).matches(c::Errcode::BCH_ERR_shutdown_with_errors) {
         eprintln!("error shutting down filesystem: {}", crate::wrappers::bch_err_str(ret2));
         process::exit(ret | 8);
     }

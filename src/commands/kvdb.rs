@@ -49,7 +49,7 @@ use bcachefs_kernel::btree::iter::{
     TransBkey, UpdateTriggerFlags,
 };
 use bcachefs_kernel::c;
-use bcachefs_kernel::errcode::{bch_errcode, BchError};
+use bcachefs_kernel::errcode::{Errcode, BchError};
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::inode;
 use bcachefs_kernel::typeinfo::{self, FieldTarget, StructInfo, TypeInfo};
@@ -513,7 +513,7 @@ fn cmd_read(fs: &Fs, op: ReadOp, btree: Btree, pos: Bpos, level: u32, filtered: 
                 // are the user's, not the transaction's: stash and abort
                 // the retry loop with a stand-in errcode.
                 user_err = Some(e);
-                BchError::from(bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch)
+                BchError::from(Errcode::BCH_ERR_ENOENT_bkey_type_mismatch)
             }),
             None => Ok("(no key)\n".to_string()),
         }
@@ -670,7 +670,7 @@ fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
 }
 
 fn no_key_err() -> BchError {
-    bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch.into()
+    Errcode::BCH_ERR_ENOENT_bkey_type_mismatch.into()
 }
 
 fn cmd_update(
@@ -815,7 +815,7 @@ fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, level: u32, assigns
 fn cmd_rewrite(fs: &Fs, btree: Btree, pos: Bpos, level: u32) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     lockrestart_do(&trans, |t| {
-        t.btree_node_rewrite_pos(btree, level, pos, 0, CommitFlags::NO_ENOSPC, c::bch_write_flags::empty())
+        t.btree_node_rewrite_pos(btree, level, pos, 0, CommitFlags::NO_ENOSPC, c::WriteFlags::empty())
     })
     .map_err(|e| anyhow!("rewriting the node the level {level} pointer of {btree} at {pos} points to: {e}"))?;
     Ok(String::new())
@@ -1483,7 +1483,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     // against: commit-only validation (invalid state codewords, subvolume ->
     // interior node references) stays off in this instance.
     fs_opts.set_no_commit_validate(true);
-    fs_opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
+    fs_opts.set_errors(c::ErrorAction::BCH_ON_ERROR_continue);
     if cli.verbose > 0 {
         fs_opts.set_verbose(true);
     }

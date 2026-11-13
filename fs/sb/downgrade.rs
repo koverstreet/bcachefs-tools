@@ -14,7 +14,7 @@ use core::mem::size_of;
 use crate::init::passes::RecoveryPass;
 use crate::btree::bkey::ValidateFlags;
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes;
 use crate::{prt, sb_err_on};
@@ -85,7 +85,7 @@ impl SbFieldOps for Section {
     /// the section as it was: the write goes on.
     fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         // have_stripes() reads the btree roots
-        if !fs.flags.get(c::bch_fs_flags::btree_running) {
+        if !fs.flags.get(c::FsFlag::btree_running) {
             return Ok(());
         }
 
@@ -107,7 +107,7 @@ impl SbFieldOps for Section {
 
         let mut sb = fs.sb_resize(sb);
         let Some(d) = sb.field_resize::<Section>((bytes / size_of::<u64>()) as u32) else {
-            let _ = fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_downgrade);
+            let _ = fs.err(Errcode::BCH_ERR_ENOSPC_sb_downgrade);
             return Ok(());
         };
         let d = &mut bytes_of_mut(d)[SECTION_HEAD..];

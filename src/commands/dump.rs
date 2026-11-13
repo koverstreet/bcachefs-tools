@@ -16,7 +16,7 @@ use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::journal::{entry_type, journal_entry_type};
+use bcachefs_kernel::journal::{entry_type, JsetEntryType};
 use bcachefs_kernel::util::vstructs::{assume_validated, cast_plain, cast_plain_slice, Head, SelfSized, Unvalidated};
 use bcachefs_kernel::POS_MIN;
 
@@ -243,7 +243,7 @@ fn sanitize_journal(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Resu
         let csum_type = j.csum_type() as u32;
         let mut modified = false;
 
-        if c::bch_csum_type(csum_type).is_encryption() {
+        if c::CsumType(csum_type).is_encryption() {
             if fs.encryption_key().is_none() {
                 bail!("journal entry at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
@@ -254,9 +254,9 @@ fn sanitize_journal(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Resu
 
         for e in j.entries_mut() {
             let e = e.map_err(|e| anyhow!("journal entry at {pos:#x}: {e}"))?;
-            if matches!(entry_type(e), journal_entry_type::btree_keys
-                                     | journal_entry_type::btree_root
-                                     | journal_entry_type::write_buffer_keys) {
+            if matches!(entry_type(e), JsetEntryType::btree_keys
+                                     | JsetEntryType::btree_root
+                                     | JsetEntryType::write_buffer_keys) {
                 for k in e.entries_mut() {
                     let k = k.map_err(|e| anyhow!("journal entry at {pos:#x}: {e}"))?;
                     // SAFETY: XXX: off disk, not validated - sanitize_val()
@@ -270,7 +270,7 @@ fn sanitize_journal(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Resu
         if modified {
             // Re-encrypt (symmetric) if encrypted, then recompute the csum so
             // the entry stays checksum-valid instead of csum-cleared.
-            if c::bch_csum_type(csum_type).is_encryption() {
+            if c::CsumType(csum_type).is_encryption() {
                 j.encrypt(&fs).map_err(|e| anyhow!("re-encrypting journal entry at {pos:#x}: {e}"))?;
             }
             j.csum = j.checksum(&fs);
@@ -325,7 +325,7 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
         };
         let mut modified = false;
 
-        if c::bch_csum_type(csum_type).is_encryption() {
+        if c::CsumType(csum_type).is_encryption() {
             if fs.encryption_key().is_none() {
                 bail!("btree node bset at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
@@ -398,7 +398,7 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
         if modified {
             // Re-encrypt (symmetric) if encrypted, then recompute the bset csum
             // over the btree_node (first bset) or btree_node_entry.
-            if c::bch_csum_type(csum_type).is_encryption() {
+            if c::CsumType(csum_type).is_encryption() {
                 bset_encrypt(&fs, &mut buf[pos..], first, bset_byte_offset as u32)
                     .map_err(|e| anyhow!("re-encrypting btree node bset at {pos:#x}: {e}"))?;
             }
@@ -653,8 +653,8 @@ fn cmd_dump(cli: DumpCli) -> Result<()> {
     opts.set_nochanges(true);
     opts.set_norecovery(true);
     opts.set_degraded(c::DegradedAction::very);
-    opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
-    opts.set_fix_errors(c::fsck_err_opts::no as u8);
+    opts.set_errors(c::ErrorAction::BCH_ON_ERROR_continue);
+    opts.set_fix_errors(c::FsckErrOpt::no as u8);
 
     if cli.noexcl {
         opts.set_noexcl(true);

@@ -33,7 +33,7 @@ pub enum IopsMeasurement {
 #[prefix(BCH_MEMBER_ERROR_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_member_error_type {
+pub enum MemberErrorType {
     read = 0,
     write = 1,
     checksum = 2,
@@ -52,8 +52,8 @@ pub struct bch_member {
 
     pub flags: Le64,
     pub iops: [Le32; 4],
-    pub errors: [Le64; c::bch_member_error_type::NR as usize],
-    pub errors_at_reset: [Le64; c::bch_member_error_type::NR as usize],
+    pub errors: [Le64; c::MemberErrorType::NR as usize],
+    pub errors_at_reset: [Le64; c::MemberErrorType::NR as usize],
     pub errors_reset_time: Le64,
     pub seq: Le64,
     pub btree_allocated_bitmap: Le64,
@@ -119,7 +119,6 @@ c_bitmask! {
 }
 
 #[bch_enum(open)]
-#[c_name(bch_member_state)]
 #[prefix(BCH_MEMBER_STATE_)]
 #[nr]
 #[repr(u8)]
@@ -131,7 +130,6 @@ pub enum MemberState {
 }
 
 #[bch_enum(open)]
-#[c_name(bch_member_initialized)]
 #[prefix(BCH_MEMBER_INITIALIZED_)]
 #[nr]
 #[repr(u8)]

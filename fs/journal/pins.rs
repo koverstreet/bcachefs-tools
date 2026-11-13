@@ -18,10 +18,10 @@ use core::sync::atomic::{fence, AtomicI32, Ordering::{Acquire, Relaxed, Release,
 use pin_init::{pin_data, PinInit, Zeroable};
 
 use crate::c;
-use crate::c::journal_pin_type as PinType;
+use crate::c::JournalPinType as PinType;
 use crate::alloc::replicas::SbEntry;
 use crate::data_structures::list::List;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, SharedGuard};
@@ -127,7 +127,7 @@ impl PinDevs {
 
 #[derive(Zeroable)]
 struct PinLists {
-    unflushed: [PinListHead; c::journal_pin_type::JOURNAL_PIN_TYPE_NR as usize],
+    unflushed: [PinListHead; c::JournalPinType::JOURNAL_PIN_TYPE_NR as usize],
     flushed:   PinListHead,
 }
 
@@ -264,7 +264,7 @@ impl c::journal {
     /// @seq's pins to @out, @seq first moved up to last_seq: true once it's
     /// past the last entry.
     pub fn seq_pins_to_text(&self, out: &mut Printbuf, seq: &mut u64, nr: Option<&mut c_uint>) -> bool {
-        if !self.flags.get(c::journal_flags::running) {
+        if !self.flags.get(c::JournalFlag::running) {
             return true;
         }
 
@@ -818,7 +818,7 @@ fn resize(j: &c::journal) -> Result<(), BchError> {
 
     let entries = new_entries(new_size.next_power_of_two() as usize);
     fs.event_inc_trace(events::journal_pin_resize, |out| prt!(out, "new size: {}", new_size));
-    let mut entries = entries.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_pin_fifo))?;
+    let mut entries = entries.map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_pin_fifo))?;
 
     let mut g = j.pin_resize_lock.write();
 
@@ -900,7 +900,7 @@ pub(crate) fn start(j: &c::journal, last_seq: u64, cur_seq: u64) -> Result<(), B
     let entries = entries.map_err(|_| {
         bch_err!(fs, "error allocating journal pin fifo: {} dirty journal entries ({}-{}), {} bytes",
                  cur_seq - last_seq, last_seq, cur_seq, (size as usize).saturating_mul(size_of::<PinList>()));
-        fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_pin_fifo)
+        fs.err(Errcode::BCH_ERR_ENOMEM_journal_pin_fifo)
     })?;
 
     for seq in last_seq..cur_seq {

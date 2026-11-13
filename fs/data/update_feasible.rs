@@ -19,7 +19,7 @@ use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::copygc;
 use crate::data::durability::{extent_ptr_durability, BkeyVDurability};
 use crate::data::ec::head::{head_get, stripe_head_put};
@@ -30,7 +30,7 @@ use crate::fs::Fs;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 
-use c::bch_write_flags as w;
+use c::WriteFlags as w;
 
 #[derive(Clone, Copy, Default)]
 struct Available {
@@ -41,14 +41,14 @@ struct Available {
 
 fn no_room<T>(fs: &Fs, need_copygc: bool) -> Result<T, BchError> {
     fs.throw(if need_copygc {
-        bch_errcode::BCH_ERR_data_update_fail_need_copygc
+        Errcode::BCH_ERR_data_update_fail_need_copygc
     } else {
-        bch_errcode::BCH_ERR_data_update_fail_no_rw_devs
+        Errcode::BCH_ERR_data_update_fail_no_rw_devs
     })
 }
 
-fn watermark(data_opts: &c::data_update_opts) -> c::bch_watermark {
-    c::bch_watermark::from_bits(data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK)
+fn watermark(data_opts: &c::data_update_opts) -> c::Watermark {
+    c::Watermark::from_bits(data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK)
 }
 
 impl Fs {
@@ -163,7 +163,7 @@ impl Fs {
                                       devs_have: &c::bch_devs_list, k: BkeySC<'_>,
                                       mut trace: Option<&mut Printbuf>) -> Result<(), BchError> {
         let btree = k.arm::<BtreePtrs>();
-        if let Some(b) = btree.filter(|_| data_opts.type_ == c::bch_data_update_types::reconcile) {
+        if let Some(b) = btree.filter(|_| data_opts.type_ == c::DataUpdateType::reconcile) {
             return self.write_btree_feasible(opts, data_opts, b, trace);
         }
 
@@ -237,7 +237,7 @@ impl TransAttempt<'_, '_> {
             // The ec_alloc_failed subtypes park the extent; a restart must
             // stay one, or an extent that only needed a retry is parked
             let mut req = self.alloc_request(data_opts.target.into(), false, None, 0, replicas,
-                                             c::bch_watermark::normal, w::empty(), None)?;
+                                             c::Watermark::normal, w::empty(), None)?;
             // alloc_request() leaves it to the caller. The write path caps it
             // from the options; this probe runs uncapped
             req.ec_max_data_blocks = 0;

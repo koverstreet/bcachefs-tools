@@ -34,7 +34,7 @@
 use crate::fs::Dev;
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
@@ -105,9 +105,9 @@ pub(crate) fn recalc_capacity(fs: &Fs) {
     // Cached: every reservation that comes up short asks, and only this
     // changes it
     if all_devs_rw {
-        fs.flags.set(c::bch_fs_flags::all_devs_rw, true);
+        fs.flags.set(c::FsFlag::all_devs_rw, true);
     } else {
-        fs.flags.set(c::bch_fs_flags::all_devs_rw, false);
+        fs.flags.set(c::FsFlag::all_devs_rw, false);
     }
 
     #[cfg(kernel)]
@@ -619,13 +619,13 @@ impl Fs {
     }
 
     /// May we write fewer copies than were asked for, rather than returning
-    /// ENOSPC? See enum bch_write_degraded_actions for why the default is
+    /// ENOSPC? See enum WriteDegradedAction for why the default is
     /// what it is.
     fn write_degraded_ok(&self) -> bool {
         match self.opts.write_degraded() {
-            c::bch_write_degraded_actions::yes => true,
-            c::bch_write_degraded_actions::no  => false,
-            _ => !self.flags.get(c::bch_fs_flags::all_devs_rw),
+            c::WriteDegradedAction::yes => true,
+            c::WriteDegradedAction::no  => false,
+            _ => !self.flags.get(c::FsFlag::all_devs_rw),
         }
     }
 
@@ -644,7 +644,7 @@ impl Fs {
     /// the reserve factor leaves of that - the last, at @nr_replicas, is what
     /// it had to fit in. Then what's reserved, and the devices as they are.
     fn disk_reservation_enospc_to_text(&self, out: &mut Printbuf, free: &FreeSpace, sectors: u64,
-                                       nr_replicas: u32, flags: c::bch_reservation_flags) {
+                                       nr_replicas: u32, flags: c::ReservationFlags) {
         let slot = disk_res_slot(nr_replicas);
         let [placeable, unreserved, avail] = free.dist.partition_stages(&free.counters);
         let at_or_above = |s: &[u64; REPLICAS_MAX], n: usize| -> u64 { s[n..].iter().sum() };
@@ -652,7 +652,7 @@ impl Fs {
 
         write!(out, "{} at {nr_replicas} replicas: {} available at {nr_replicas} or more",
                sz(sectors), sz(at_or_above(&avail, slot)));
-        if flags.contains(c::bch_reservation_flags::BCH_DISK_RESERVATION_PARTIAL) {
+        if flags.contains(c::ReservationFlags::BCH_DISK_RESERVATION_PARTIAL) {
             write!(out, ", partial");
         }
         write!(out, "\n");
@@ -745,7 +745,7 @@ impl Fs {
     #[cold]
     #[inline(never)]
     fn disk_reservation_add_slowpath(&self, res: &DiskReservation<'_>, sectors: u64,
-                                     flags: c::bch_reservation_flags) -> Result<(), BchError> {
+                                     flags: c::ReservationFlags) -> Result<(), BchError> {
         let slot = disk_res_slot(res.nr_replicas.get());
         let want = sectors + SECTORS_CACHE;
 
@@ -788,8 +788,8 @@ impl Fs {
     /// NOFAIL, whether there is or not.
     #[cold]
     fn disk_reservation_add_recompute(&self, res: &DiskReservation<'_>, mut sectors: u64,
-                                      flags: c::bch_reservation_flags) -> Result<(), BchError> {
-        use c::bch_reservation_flags as F;
+                                      flags: c::ReservationFlags) -> Result<(), BchError> {
+        use c::ReservationFlags as F;
 
         let nr_replicas = res.nr_replicas.get();
         let slot = disk_res_slot(nr_replicas);
@@ -816,14 +816,14 @@ impl Fs {
             drop(g);
 
             // after a shutdown nothing is writable: that's not out of space
-            if self.flags.get(c::bch_fs_flags::emergency_ro) {
-                return Err(self.err(bch_errcode::BCH_ERR_emergency_ro));
+            if self.flags.get(c::FsFlag::emergency_ro) {
+                return Err(self.err(Errcode::BCH_ERR_emergency_ro));
             }
 
             self.event_inc_trace(events::disk_reservation_enospc, |out| {
                 self.disk_reservation_enospc_to_text(out, &free, sectors, nr_replicas, flags)
             });
-            return Err(self.err(bch_errcode::BCH_ERR_ENOSPC_disk_reservation));
+            return Err(self.err(Errcode::BCH_ERR_ENOSPC_disk_reservation));
         }
 
         self.online_reserved_at(nr_replicas).add(sectors);
@@ -865,7 +865,7 @@ impl<'f> DiskReservation<'f> {
     /// already holds. On ENOSPC, at fewer copies if write_degraded allows it:
     /// its nr_replicas is then the count to write at.
     #[track_caller]
-    pub fn add(&self, sectors: u64, mut nr_replicas: u32, flags: c::bch_reservation_flags) -> Result<(), BchError> {
+    pub fn add(&self, sectors: u64, mut nr_replicas: u32, flags: c::ReservationFlags) -> Result<(), BchError> {
         let wanted = nr_replicas;
         loop {
             let ret = self.add_physical(sectors * u64::from(nr_replicas), nr_replicas, flags);
@@ -891,7 +891,7 @@ impl<'f> DiskReservation<'f> {
     ///
     /// XXX: a smell - that arithmetic probably belongs elsewhere, and when it
     /// goes, so does this.
-    pub fn add_physical(&self, sectors: u64, nr_replicas: u32, flags: c::bch_reservation_flags)
+    pub fn add_physical(&self, sectors: u64, nr_replicas: u32, flags: c::ReservationFlags)
         -> Result<(), BchError>
     {
         self.set_nr_replicas(nr_replicas);
@@ -946,7 +946,7 @@ impl<'f> DiskReservation<'f> {
         }
     }
 
-    pub fn as_mut_ptr(&self) -> *mut c::disk_reservation {
+    pub fn as_mut_ptr(&self) -> *mut c::DiskReservation<'static> {
         core::ptr::from_ref(self).cast_mut().cast()
     }
 

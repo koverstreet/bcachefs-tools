@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-//! c_enum!'s declaration: an enum written as Rust writes one, each variant
+//! An enum's declaration, #[bch_enum]'s or list_enum!'s: each variant
 //! with its doc, its columns and its value - and a key type's, its value's
 //! type, `deleted(c::Deleted)`:
 //!
@@ -9,13 +9,13 @@
 //!                          type's flags
 //!     NAME: set(ENUM)      a set of ENUM's values, a u64 a bit each - a
 //!                          btree's key types
-//!     NAME: enum([closed,] K: REPR, prefix = P[, nr][, c_name = C])
+//!     NAME: enum([closed,] K: REPR, prefix = P[, nr])
 //!                          an enum K of the same variants, valued by the
 //!                          column: its fn is K's variant - a recovery pass's
 //!                          stable id
 //!     NAME: value(T)       a T, any const expression - an inode option's
 //!                          width
-//!   #[mask(NAME: REPR, prefix = P[, c_name = C])]
+//!   #[mask(NAME: REPR, prefix = P)]
 //!                        the #[flags] NAME of bit numbers, 1 << each value;
 //!                        a variant's #[mask_prefix(P)] is its prefix from
 //!                        that variant on
@@ -34,7 +34,7 @@ use syn::punctuated::Punctuated;
 
 use crate::cstruct::{doc_of, parse_enum_head, parse_variant, rust_text, split_commas, CEnumDef, CEnumKind,
                      CEnumVariant};
-use crate::{c_enum_gen, comma_list, tokens};
+use crate::{enum_gen, comma_list, tokens};
 
 pub(crate) struct Arm {
     pub docs:  Vec<String>,
@@ -49,7 +49,7 @@ pub(crate) struct Arm {
     pub mask_prefix: Option<String>,
 }
 
-/// An #[arm_columns] column: a set of a #[flags] c_enum!'s flags, or of
+/// An #[arm_columns] column: a set of a #[bch_enum(flags)]'s flags, or of
 /// another enum's values, a bit each; another enum's variant, of the arm's
 /// name; or a value of a type.
 pub(crate) enum Column {
@@ -139,8 +139,8 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
     Ok(arms)
 }
 
-/// c_enum! of a declaration: `[#[..]] pub enum NAME|_: REPR { arms }`.
-pub(crate) fn c_enum(input: TokenStream) -> Result<TokenStream, String> {
+/// An enum of a declaration: `[#[..]] pub enum NAME: REPR { arms }`.
+pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
     let (mut e, attrs, body) = syn::parse::Parser::parse2(parse_enum_head, input).map_err(|e| e.to_string())?;
     let err = |m: String| format!("{}: {m}", e.name.as_deref().unwrap_or("_"));
     let (mut columns, mut mask) = (Vec::new(), None);
@@ -150,7 +150,7 @@ pub(crate) fn c_enum(input: TokenStream) -> Result<TokenStream, String> {
             Some("arm_columns") => columns = self::columns(args()?).map_err(err)?,
             Some("mask")        => mask = Some(CEnumDef { kind: CEnumKind::Flags, ..tag_enum(args()?).map_err(err)? }),
             Some("doc")         => e.docs.extend(doc_of(&a)),
-            _ => return Err(err(format!("#[{}]: not one of c_enum!'s", rust_text(a.path())))),
+            _ => return Err(err(format!("#[{}]: not one of list_enum!'s", rust_text(a.path())))),
         }
     }
     if (e.kind == CEnumKind::Flags || e.name.is_none()) && !columns.is_empty() {
@@ -179,11 +179,11 @@ pub(crate) fn c_enum(input: TokenStream) -> Result<TokenStream, String> {
     Ok(out)
 }
 
-/// `[closed,] NAME: REPR, prefix = P[, nr][, c_name = C]`: a tag enum's,
+/// `[closed,] NAME: REPR, prefix = P[, nr]`: a tag enum's,
 /// or an enum column's.
 pub(crate) fn tag_enum(args: TokenStream) -> Result<CEnumDef, String> {
     let mut e = CEnumDef { kind: CEnumKind::Open, name: None, docs: Vec::new(), repr: String::new(), variants: Vec::new(),
-                           from: Vec::new(), own_to_text: false, c_name: None, prefix: None, nr: false };
+                           from: Vec::new(), own_to_text: false, prefix: None, nr: false };
     for part in comma_list(args) {
         match part.as_slice() {
             [TokenTree::Ident(c)] if c == "closed" => e.kind = CEnumKind::Closed,
@@ -193,10 +193,9 @@ pub(crate) fn tag_enum(args: TokenStream) -> Result<CEnumDef, String> {
                 (e.name, e.repr) = (Some(n.to_string()), r.to_string()),
             [TokenTree::Ident(k), eq, TokenTree::Ident(v)] if is_punct(Some(eq), '=') => match k.to_string().as_str() {
                 "prefix" => e.prefix = Some(v.to_string()),
-                "c_name" => e.c_name = Some(v.to_string()),
-                _ => return Err(format!("{k} = ..: not prefix or c_name")),
+                _ => return Err(format!("{k} = ..: not prefix")),
             },
-            _ => return Err("expected [closed,] NAME: REPR, prefix = PREFIX[, nr][, c_name = C]".into()),
+            _ => return Err("expected [closed,] NAME: REPR, prefix = PREFIX[, nr]".into()),
         }
     }
     if e.name.is_none() || e.prefix.is_none() {
@@ -205,13 +204,11 @@ pub(crate) fn tag_enum(args: TokenStream) -> Result<CEnumDef, String> {
     Ok(e)
 }
 
-/// Enum @e of @arms, each valued by its &str: the c_enum! it is, as its Rust
-/// and its record.
+/// Enum @e of @arms, each valued by its &str.
 fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a str)>) -> TokenStream {
     let def = CEnumDef {
         variants: arms.map(|(a, v)| CEnumVariant {
             name:   a.name.clone(),
-            c_name: None,
             // an expression's type may not be the enum's, BCH_VERSION()'s
             // u64: as a list's value is, it's cast
             value:  Some(match parse_int(v) {
@@ -223,10 +220,10 @@ fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a str)>) -> 
         }).collect(),
         ..e.clone()
     };
-    c_enum_gen(&def)
+    enum_gen(&def)
 }
 
-/// #[mask(NAME: REPR, prefix = P[, c_name = C])]: flags @m of bit numbers
+/// #[mask(NAME: REPR, prefix = P)]: flags @m of bit numbers
 /// @bits, a flag per arm, 1 << its value - named P and the arm's name, or the
 /// #[mask_prefix] last written on an arm up to it and the name. A flag prints
 /// as its arm's name, as a list's does.
@@ -242,7 +239,6 @@ fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
             let name = past.unwrap_or(&a.name);
             CEnumVariant {
                 name:   past.map_or_else(|| a.name.clone(), |n| format!("{p}{n}")),
-                c_name: (prefix != m.prefix).then(|| format!("{p}{name}")),
                 value:  Some(format!("1{} << {}", m.repr, match bits.kind {
                     CEnumKind::Closed => format!("({}::{} as u32)", bits.name.as_deref().unwrap_or_default(), a.name),
                     _ => format!("{}::{}.0", bits.name.as_deref().unwrap_or_default(), a.name),
@@ -253,7 +249,7 @@ fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
         }).collect(),
         ..m.clone()
     };
-    c_enum_gen(&def)
+    enum_gen(&def)
 }
 
 /// Enum @e of @arms, and a const fn of it per column.

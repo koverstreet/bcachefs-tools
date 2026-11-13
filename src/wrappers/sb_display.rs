@@ -15,7 +15,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::c::bch_sb_handle;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::sb::{self, sb_field_type};
+use bcachefs_kernel::sb::{self, SbFieldType};
 use bcachefs_kernel::sb::io::SbState;
 use bcachefs_kernel::util::vstructs::Unvalidated;
 
@@ -70,7 +70,7 @@ pub fn sb_to_text_with_names(
     sb: &c::bch_sb,
     print_layout: bool,
     fields: u32,
-    field_only: Option<sb_field_type>,
+    field_only: Option<SbFieldType>,
 ) {
     // Build UUID= device string for scanning
     let uuid = uuid::Uuid::from_bytes(sb.user_uuid.b);
@@ -88,12 +88,12 @@ pub fn sb_to_text_with_names(
     } else {
         out.tabstop_push(44);
 
-        let member_mask = sb_field_type::members_v1.bit()
-            | sb_field_type::members_v2.bit();
+        let member_mask = SbFieldType::members_v1.bit()
+            | SbFieldType::members_v2.bit();
         sb::io::sb_to_text(out, fs, sb_as_read, print_layout, fields & !member_mask);
 
         // members_v1
-        if (fields & sb_field_type::members_v1.bit()) != 0 {
+        if (fields & SbFieldType::members_v1.bit()) != 0 {
             if let Some(mi1) = sb::members::members_v1(sb) {
                 for i in 0..mi1.nr_devices() {
                     if let Some(m) = mi1.get(i) {
@@ -104,7 +104,7 @@ pub fn sb_to_text_with_names(
         }
 
         // members_v2
-        if (fields & sb_field_type::members_v2.bit()) != 0 {
+        if (fields & SbFieldType::members_v2.bit()) != 0 {
             if let Some(mi2) = sb::members::members_v2(sb) {
                 for i in 0..mi2.nr_devices() {
                     if let Some(m) = mi2.get(i) {

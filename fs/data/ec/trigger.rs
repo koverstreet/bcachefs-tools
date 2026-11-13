@@ -27,7 +27,7 @@ use crate::c;
 use crate::data::ec::stripe::{StripeK, STRIPE_LRU_POS_EMPTY};
 use crate::data::ptrs::BkeyVPtrs;
 use crate::data::reconcile::trigger::data_to_rb_work_pos;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::passes;
@@ -191,7 +191,7 @@ fn stripe_refcount_saturated(fs: &Fs, bucket: Bpos, stripe: u64, overflow: bool)
          if overflow { "adding ref to" } else { "dropping ref to" });
 
     let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::check_alloc_info,
-                                 c::bch_run_recovery_pass_flags::from_bits_retain(0));
+                                 c::RunRecoveryPassFlags::from_bits_retain(0));
 }
 
 /// Block @i's part of @a, the alloc key of its bucket @bucket, for @s going
@@ -252,7 +252,7 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &Dev, s: StripeK<'_>, 
                  { bucket.inode }, { bucket.offset });
             prt!(&mut msg, "stripe_refcount {} but dirty_sectors {}\n", a.stripe_refcount, a.dirty_sectors);
 
-            let flags = c::bch_run_recovery_pass_flags::from_bits_retain(0);
+            let flags = c::RunRecoveryPassFlags::from_bits_retain(0);
             let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations, flags);
             let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::check_alloc_info, flags);
 
@@ -280,7 +280,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     let Some(ca) = fs.dev_bkey_tryget(s.untyped(), dev).unwrap_or(None) else {
         cold_path();
         if dev != c::BCH_SB_MEMBER_INVALID && !flags.contains(UpdateTriggerFlags::OVERWRITE) {
-            return fs.throw(bch_errcode::BCH_ERR_mark_stripe);
+            return fs.throw(Errcode::BCH_ERR_mark_stripe);
         }
         return Ok(());
     };
@@ -294,7 +294,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     if flags.contains(UpdateTriggerFlags::GC) {
         let Some(g) = ca.gc_bucket(bucket.offset) else {
             fs_inconsistent!(fs, "reference to invalid bucket on device {dev}\n{}", s.to_text(fs));
-            return fs.throw(bch_errcode::BCH_ERR_mark_stripe);
+            return fs.throw(Errcode::BCH_ERR_mark_stripe);
         };
         t.gc_bucket_mod(&ca, g, flags, |a| mark_stripe_bucket_alloc(t, &ca, s, i, deleting, bucket, a, flags))?;
     }
@@ -442,7 +442,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
         let new = new.expect("gc marks keys going in");
         let Ok(m) = fs.ec.gc_stripe_alloc(idx) else {
             bch_err!(fs, "error allocating memory for gc_stripes, idx {idx}");
-            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_mark_stripe);
+            return fs.throw(Errcode::BCH_ERR_ENOMEM_mark_stripe);
         };
 
         let v = new.v();
@@ -490,8 +490,8 @@ pub fn ec_stripe_mem_alloc(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>) -> Re
     let idx = iter.pos().offset;
 
     t.allocate_dropping_locks(|| {
-        if fs.gc.phase() != c::gc_phase::not_running && fs.ec.gc_stripe_alloc(idx).is_err() {
-            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_stripe_mem_alloc);
+        if fs.gc.phase() != c::GcPhase::not_running && fs.ec.gc_stripe_alloc(idx).is_err() {
+            return fs.throw(Errcode::BCH_ERR_ENOMEM_ec_stripe_mem_alloc);
         }
         Ok(())
     })

@@ -10,7 +10,7 @@ use pin_init::pin_data;
 use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts, TransAttempt};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
-use crate::c::bch_fs_flags as Flag;
+use crate::c::FsFlag as Flag;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Registration};
 use crate::errcode::BchError;
 use crate::format::{Bpos, Btree};
@@ -96,7 +96,7 @@ impl Op {
         };
 
         if self.op == AsyncBtreeOp::Rewrite {
-            t.btree_node_rewrite(iter.iter(), b, 0, CommitOpts::new(), c::bch_write_flags::empty())
+            t.btree_node_rewrite(iter.iter(), b, 0, CommitOpts::new(), c::WriteFlags::empty())
         } else {
             let trans = t.trans();
             super::interior::foreground_maybe_merge(t, &mut trans.paths(), iter.iter().path, level as usize,
@@ -144,7 +144,7 @@ async fn task(_write: WriteRef, fs: BackRef<Fs>, a: OpBox) {
     let trans = crate::btree_trans!(fs);
     if let Err(e) = lockrestart_do(&trans, |t| a.run(t)) {
         if !e.matches(c::ENOENT) && !e.matches(c::EROFS) &&
-           !e.matches(c::bch_errcode::BCH_ERR_no_btree_node_nofill) {
+           !e.matches(c::Errcode::BCH_ERR_no_btree_node_nofill) {
             crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());
         }
     }

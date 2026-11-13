@@ -64,7 +64,7 @@ use crate::btree::bkey::{pos, BkeyV};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -277,7 +277,7 @@ pub(crate) fn dev_wait_amount(ca: &Dev, mark: &impl MarkHeld) -> (i64, bool) {
         return (wait, low_on_space);
     }
 
-    let watermark = c::bch_watermark::stripe;
+    let watermark = c::Watermark::stripe;
     let fragmented_allowed = (ca.free_buckets_at(&usage, watermark).wrapping_add(ca.buckets_reserved(watermark))
         .wrapping_mul(bucket_size).wrapping_add(leaving as u64) >> 1) as i64;
     let fragmented = usage_full.d.iter().enumerate()
@@ -401,19 +401,19 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let Ok(ca) = fs.dev_bucket_tryget(bucket) else { return Ok(None) };
 
         if !ca.is_rw() || !ca.is_online() {
-            let _ = fs.err(bch_errcode::BCH_ERR_bucket_not_moveable_dev_not_rw);
+            let _ = fs.err(Errcode::BCH_ERR_bucket_not_moveable_dev_not_rw);
             return Ok(None);
         }
 
         /* Bucket still being written? */
         if fs.bucket_is_open(bucket.inode as u32, bucket.offset) {
-            let _ = fs.err(bch_errcode::BCH_ERR_bucket_not_moveable_bucket_open);
+            let _ = fs.err(Errcode::BCH_ERR_bucket_not_moveable_bucket_open);
             return Ok(None);
         }
 
         /* We won't be able to evacuate it if there's missing backpointers */
         if ca.bucket_backpointer_mismatch.test(bucket.offset) {
-            let _ = fs.err(bch_errcode::BCH_ERR_bucket_not_moveable_bp_mismatch);
+            let _ = fs.err(Errcode::BCH_ERR_bucket_not_moveable_bp_mismatch);
             return Ok(None);
         }
 
@@ -423,7 +423,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let lru_idx = a.lru_idx_fragmentation(&ca);
 
         if lru_idx == 0 || lru_idx > time {
-            let _ = fs.err(bch_errcode::BCH_ERR_bucket_not_moveable_lru_race);
+            let _ = fs.err(Errcode::BCH_ERR_bucket_not_moveable_lru_race);
             return Ok(None);
         }
         Ok(Some(a.generation.into()))
@@ -623,8 +623,8 @@ impl<'f, 'w> Copygc<'f, 'w> {
     {
         let fs = self.fs;
         let data_opts = c::data_update_opts {
-            type_:        c::bch_data_update_types::copygc,
-            commit_flags: c::bch_trans_commit_flags::from_bits_retain(c::bch_watermark::copygc as u32),
+            type_:        c::DataUpdateType::copygc,
+            commit_flags: c::TransCommitFlags::from_bits_retain(c::Watermark::copygc as u32),
             ..Default::default()
         };
 
@@ -680,7 +680,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
             /* no entries in LRU btree found, or got to end: */
             Err(e) if e.matches(c::ENOENT) => Ok(()),
             /* we're being stopped - normal, not something to report: */
-            Err(e) if e.matches(bch_errcode::BCH_ERR_kthread_cancelled) => Ok(()),
+            Err(e) if e.matches(Errcode::BCH_ERR_kthread_cancelled) => Ok(()),
             r => r,
         };
         let ret = match ret {
@@ -738,7 +738,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
      * start (logged_ops::note_unfinished()).
      */
     let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(),
-        || (fs.flags.get(c::bch_fs_flags::rw) || Kthread::should_stop()).then_some(()));
+        || (fs.flags.get(c::FsFlag::rw) || Kthread::should_stop()).then_some(()));
     if Kthread::should_stop() {
         return Ok(());
     }

@@ -719,7 +719,7 @@ use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write_extent::write_extent;
 use crate::data::write_nocow::nocow_write;
 use crate::debug::async_objs;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::fs::{Dev, Fs};
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
@@ -736,7 +736,7 @@ use crate::util::time_stats::TimeStats;
 use crate::util::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{btree_trans, log_msg_ratelimited, prt};
-use c::bch_write_flags as w;
+use c::WriteFlags as w;
 use c::{WritePointStateWriter, WritePointWrites};
 use core::fmt;
 use core::pin::Pin;
@@ -751,7 +751,7 @@ crate::module_param! {
 type Op = c::bch_write_op;
 
 /// A write bio's io ref on its device.
-pub(crate) type DevWriteRef = DevIoRef<c::bch_dev_write_ref>;
+pub(crate) type DevWriteRef = DevIoRef<c::DevWriteRefKind>;
 
 impl c::bch_write_op {
     pub(crate) fn flags(&self) -> w {
@@ -796,7 +796,7 @@ fn write_op_end(op: Running<Op>) {
     let fs = op.fs();
     let mut op = op.end();
     unsafe {
-        async_objs::list_del(fs, c::bch_async_obj_lists::write_op, &mut op.as_mut().list_idx);
+        async_objs::list_del(fs, c::AsyncObjKind::write_op, &mut op.as_mut().list_idx);
         if let Some(end_io) = op.as_ref().end_io {
             end_io(op.as_ptr());
         }
@@ -892,7 +892,7 @@ impl c::bch_write_bio {
 
 pub(crate) fn index_update_wq(op: &Op) -> &'static Queue {
     let fs = op.fs();
-    if op.bits.watermark() == c::bch_watermark::copygc as u8 {
+    if op.bits.watermark() == c::Watermark::copygc as u8 {
         &fs.copygc.wq
     } else {
         &fs.btree_update_wq
@@ -1026,7 +1026,7 @@ extern "C" fn __write_done(mut op: Running<Op>) {
         op.error = ret_to_c(fs.journal.error()) as i16;
     }
 
-    fs.times[c::bch_time_stats::data_write as usize].update(op.start_time);
+    fs.times[c::TimeStat::data_write as usize].update(op.start_time);
     op.res.put();
 
     drop(op.write_ref.take());
@@ -1057,7 +1057,7 @@ fn write_drop_io_error_ptrs(op: &mut Op) -> Result<(), BchError> {
             }
 
             if BkeySC::from(&*k).durability_safe(fs).nr_ptrs == 0 {
-                return Err(fs.err(bch_errcode::BCH_ERR_data_write_io));
+                return Err(fs.err(Errcode::BCH_ERR_data_write_io));
             }
         }
         Ok(())
@@ -1157,17 +1157,17 @@ fn __write_index(op: &mut Op) {
     op.open_buckets.drain(fs).for_each(drop);
 }
 
-fn __wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, state: c::write_point_state) {
+fn __wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, state: c::WritePointStatus) {
     let state = state as u32;
     let old = s.state.get();
     if state != old {
         let now = crate::util::kernel::ktime_get_ns();
         let runtime = current_runtime(now);
 
-        if state == c::write_point_state::runnable as u32 {
+        if state == c::WritePointStatus::runnable as u32 {
             w.last_runtime = runtime;
-        } else if old == c::write_point_state::runnable as u32 {
-            let t = &s.time[c::write_point_state::running as usize];
+        } else if old == c::WritePointStatus::runnable as u32 {
+            let t = &s.time[c::WritePointStatus::running as usize];
             t.set(t.get().wrapping_add(runtime.wrapping_sub(w.last_runtime)));
         }
 
@@ -1183,11 +1183,11 @@ fn __wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, state:
 fn wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, running: bool) {
     let empty = w.writes.is_empty();
     let state = if running {
-        c::write_point_state::runnable
+        c::WritePointStatus::runnable
     } else if !empty {
-        c::write_point_state::waiting_io
+        c::WritePointStatus::waiting_io
     } else {
-        c::write_point_state::stopped
+        c::WritePointStatus::stopped
     };
 
     __wp_update_state(w, s, state);
@@ -1207,8 +1207,8 @@ extern "C" fn write_index(mut op: Running<Op>) {
     {
         let mut g = wp.io.writes_lock.lock();
         let (w, s) = g.parts();
-        if s.state.get() == c::write_point_state::waiting_io as u32 {
-            __wp_update_state(w, s, c::write_point_state::waiting_work);
+        if s.state.get() == c::WritePointStatus::waiting_io as u32 {
+            __wp_update_state(w, s, c::WritePointStatus::waiting_work);
         }
         unsafe { w.writes.push_back(op.as_ref()) };
     }
@@ -1219,10 +1219,10 @@ extern "C" fn write_index(mut op: Running<Op>) {
 fn write_queue(op: &mut Op, wp: &'static c::write_point) {
     op.wp = Some(wp);
 
-    if wp.io.writes_lock.state.get() == c::write_point_state::stopped as u32 {
+    if wp.io.writes_lock.state.get() == c::WritePointStatus::stopped as u32 {
         let mut g = wp.io.writes_lock.lock();
         let (w, s) = g.parts();
-        __wp_update_state(w, s, c::write_point_state::waiting_io);
+        __wp_update_state(w, s, c::WritePointStatus::waiting_io);
     }
 }
 
@@ -1269,7 +1269,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let fua = wbio.bio.bi_opf & c::REQ_FUA != 0;
 
     if let Some(ca) = ca {
-        ca.account_io_completion(c::bch_member_error_type::write, wbio.wbio.submit_time,
+        ca.account_io_completion(c::MemberErrorType::write, wbio.wbio.submit_time,
                                  status == 0);
         if !fua {
             ca.write_unflushed();
@@ -1357,7 +1357,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
                                               Some(&op.devs_have),
                                               op.bits.nr_replicas().into(),
                                               op.opts.data_replicas.into(),
-                                              c::bch_watermark::from_bits(op.bits.watermark().into()),
+                                              c::Watermark::from_bits(op.bits.watermark().into()),
                                               op.flags(),
                                               cl)?;
                 req.ec_max_data_blocks = fs.opts().ec_max_data_blocks.get() as _;
@@ -1367,14 +1367,14 @@ pub(crate) fn __write(mut op: Running<Op>) {
                 wp = req.wp;
 
                 match ret {
-                    Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) && wait_on_allocator_sync => {
+                    Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) && wait_on_allocator_sync => {
                         let ret = t.wait_on_allocator(&mut req, e, &op.closure());
                         // it borrows the op, which the index update writes
                         drop(req);
                         __write_index(&mut op);
                         op.failed.reset_devs();
                         ret?;
-                        Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
+                        Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
                     }
                     r => r,
                 }
@@ -1383,7 +1383,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
 
             let ret = match ret {
                 Err(_) if io_in_flight => break,
-                Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => break,
+                Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => break,
                 r => r,
             };
 
@@ -1403,7 +1403,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
                  * and retrying on that would never end. Giving up means the write
                  * fails, which is what happened before any of this.
                  */
-                if unlikely(ret.as_ref().is_err_and(|e| e.matches(bch_errcode::BCH_ERR_data_write_need_fresh_buckets))) &&
+                if unlikely(ret.as_ref().is_err_and(|e| e.matches(Errcode::BCH_ERR_data_write_need_fresh_buckets))) &&
                    !retried_for_encoded {
                     retried_for_encoded = true;
                     l.retire_short(op.crc.compressed_size);
@@ -1565,7 +1565,7 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
     assert!(op.pos != crate::POS_MAX, "a write at POS_MAX");
 
     let obj = core::ptr::from_mut::<Op>(&mut op).cast();
-    op.list_idx = fs.async_objs[c::bch_async_obj_lists::write_op as usize].list
+    op.list_idx = fs.async_objs[c::AsyncObjKind::write_op as usize].list
         .add(NonNull::new(obj).expect("an op")).unwrap_or(0);
 
     if op.has(w::only_specified_devs) {
@@ -1579,15 +1579,15 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
         if unlikely(op.wbio.bio.bi_iter.bi_size & (fs.opts().block_size.get() as u32 - 1) != 0) {
             write_op_error(&op, op.pos.offset, format_args!("misaligned write"));
             crate::warn_on!(true);
-            return Err(fs.err(bch_errcode::BCH_ERR_data_write_misaligned));
+            return Err(fs.err(Errcode::BCH_ERR_data_write_misaligned));
         }
 
         if fs.opts().nochanges.get() != 0 {
-            return Err(fs.err(bch_errcode::BCH_ERR_erofs_no_writes));
+            return Err(fs.err(Errcode::BCH_ERR_erofs_no_writes));
         }
 
         if !op.has(w::BCH_WRITE_move) {
-            op.write_ref = Some(fs.writes.tryget_live().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_erofs_no_writes))?);
+            op.write_ref = Some(fs.writes.tryget_live().ok_or_else(|| fs.err(Errcode::BCH_ERR_erofs_no_writes))?);
         }
         Ok(())
     })();
@@ -1626,7 +1626,7 @@ pub fn __write_op_to_text(out: &mut Printbuf, op: &Op) {
     op.flags().to_text(&mut out);
     out.newline();
 
-    prt!(out, "watermark:\t{}\n", c::bch_watermark::from_bits(op.bits.watermark().into()).name());
+    prt!(out, "watermark:\t{}\n", c::Watermark::from_bits(op.bits.watermark().into()).name());
 
     prt!(out, "nr_replicas:\t{}\n", op.bits.nr_replicas());
     prt!(out, "devs_have:\t");

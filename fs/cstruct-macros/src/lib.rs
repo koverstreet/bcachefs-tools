@@ -18,7 +18,7 @@
 //!                        and argument type
 //!   #[bch_enum(..)]      an enum, open, closed or flags: the type that is,
 //!                        and its values
-//!   c_enum! { .. }       a #[bch_enum] with variants from lists
+//!   list_enum! { .. }    a #[bch_enum] with variants from lists
 //!   atomic_bitfield! { .. }
 //!                        a bitfield's value, and an atomic word of it
 //!   tagged_union! { .. } a tagged union with a stable representation: C's
@@ -117,15 +117,6 @@ fn cfg_attr(cfg: &Option<cstruct::Cfg>) -> TokenStream {
     cfg.as_ref().map(|c| tokens(&c.to_rust())).map(|c| quote!(#[cfg(#c)])).unwrap_or_default()
 }
 
-/// For a type C knows as @c_name: kCFI hashes an extern "C" fn's repr(C)
-/// struct by its Rust name, and an enum or a transparent newtype as its
-/// integer - neither what C's prototype says. In the kernel only, where the
-/// feature's allowed (mod.rs).
-fn cfi_encoding(c_name: &str) -> TokenStream {
-    let enc = format!("{}{c_name}", c_name.len());
-    quote!(#[cfg_attr(kernel, cfi_encoding = #enc)])
-}
-
 /// @decl through @list - LIST!(@callback [decl]) - which calls @callback back
 /// with its entries: { [decl] (entry), (entry), ... }. The declaration goes as
 /// tokens, not text, so what's defined in it keeps its spans.
@@ -181,33 +172,31 @@ pub fn derive_options(input: proc_macro::TokenStream) -> proc_macro::TokenStream
 /// pointer fields checked thin, the members of a `#[c_bitfield]` field - one
 /// of a #[bitfield] type - forwarded to it, and with `#[counted_by(FIELD)]`
 /// on a trailing `[T; 0]`, FIELD its length, its FlexArray (vstructs.rs).
-/// `#[c_name_of(NAME)]` is what #[c_name] leaves for the derives.
-#[proc_macro_derive(CStruct, attributes(c_bitfield, c_name_of, counted_by))]
+/// `#[type_name_of(NAME)]` is what #[type_name] leaves for the derives.
+#[proc_macro_derive(CStruct, attributes(c_bitfield, type_name_of, counted_by))]
 pub fn derive_cstruct(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[derive(CStruct)]", || cstruct_expand(input.into()))
 }
 
-/// `#[c_name(NAME)]`, before the derives, on a struct or union C shares
-/// whose Rust name isn't C's: NAME is C's. The derives get it as
-/// #[c_name_of(NAME)] - after the item's other attributes, as a derive's
-/// helper comes after the derive - and kCFI its encoding (cfi_encoding()),
-/// so a prototype naming it hashes as C's does. A family's C definition gets
-/// one from vstructs.rs.
+/// `#[type_name(NAME)]`, before the derives, on a struct whose name isn't
+/// the type's: a family's definition, X__head, whose type is X<S>
+/// (vstructs.rs), or a tagged union's storage. The derives get it as
+/// #[type_name_of(NAME)] - after the item's other attributes, as a derive's
+/// helper comes after the derive - and TypeInfo names it so.
 #[proc_macro_attribute]
-pub fn c_name(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand_syn("#[c_name]", || {
+pub fn type_name(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[type_name]", || {
         let name: syn::Ident = syn::parse(attr)
-            .map_err(|e| syn::Error::new(e.span(), "takes C's name for the type"))?;
+            .map_err(|e| syn::Error::new(e.span(), "takes the type's name"))?;
         let mut item: syn::DeriveInput = syn::parse(item)?;
-        item.attrs.push(syn::parse_quote!(#[c_name_of(#name)]));
-        let cfi = cfi_encoding(&name.to_string());
-        Ok(quote!(#cfi #item))
+        item.attrs.push(syn::parse_quote!(#[type_name_of(#name)]));
+        Ok(quote!(#item))
     })
 }
 
 /// `#[derive(TypeInfo)]`: runtime type information for a struct or union C
 /// shares - see typeinfo.rs.
-#[proc_macro_derive(TypeInfo, attributes(c_name_of))]
+#[proc_macro_derive(TypeInfo, attributes(type_name_of))]
 pub fn derive_type_info(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[derive(TypeInfo)]", || typeinfo::derive(input.into()))
 }
@@ -796,7 +785,7 @@ fn bilge_width(t: &str) -> Option<(u32, String)> {
 
 /// An x-macro list: c_xmacro! { NAME { (args), ... } }: a macro,
 /// NAME!(cb), which expands to cb! { (args), ... } - and NAME!(cb [..]),
-/// to cb! { [..] (args), ... }: a c_enum! built from lists passes on the
+/// to cb! { [..] (args), ... }: a list_enum! built from lists passes on the
 /// variants so far. cb may be a path.
 ///
 /// An entry can be another list, SUB(), or another list's entries mapped,
@@ -965,26 +954,26 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
 /// template`, a variant for each entry - which an enum declaration can't
 /// say: #[bch_enum]'s, written as
 ///
-///   c_enum! { #[open] pub enum NAME: REPR { .., LIST(params) => template, .. } }
+///   list_enum! { #[open] pub enum NAME: REPR { .., LIST(params) => template, .. } }
 #[proc_macro]
-pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("c_enum!", || {
+pub fn list_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("list_enum!", || {
         let input = TokenStream::from(input);
         if !from_lists(&input) {
-            return enum_decl::c_enum(input);
+            return enum_decl::declaration(input);
         }
-        let text = format!("c_enum! {{ {input} }}");
-        let e = one_item!(&text, Enum, C_ENUM_SYNTAX);
+        let text = format!("list_enum! {{ {input} }}");
+        let e = one_item!(&text, Enum, LIST_ENUM_SYNTAX);
         Ok(match e.from.first() {
-            Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", input),
-            None => c_enum_gen(&e),
+            Some((_, f)) => through_list(&f.list, "cstruct_macros::__list_enum", input),
+            None => enum_gen(&e),
         })
     })
 }
 
-const C_ENUM_SYNTAX: &str = "#[open|closed|flags] pub enum NAME: REPR { ... }";
+const LIST_ENUM_SYNTAX: &str = "#[open|closed|flags] pub enum NAME: REPR { ... }";
 
-/// Whether c_enum! @input has variants from a list: `LIST(params) => ..`.
+/// Whether list_enum! @input has variants from a list: `LIST(params) => ..`.
 fn from_lists(input: &TokenStream) -> bool {
     let Some(TokenTree::Group(body)) = input.clone().into_iter().last() else { return false };
     comma_list(body.stream()).iter().any(|v| v.windows(2).any(|w| matches!(w,
@@ -1018,14 +1007,13 @@ pub fn atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStrea
 /// A variant prints and parses as its name, or its #[label("..")] - past
 /// `#[prefix(P)]`, for names written with it. `#[nr]`: Self::NR, past the
 /// largest value - a number, not one of its values. `#[own_to_text]`: it
-/// prints as more than its name, by its own ToText. `#[c_name(NAME)]`: its
-/// TypeInfo's name.
+/// prints as more than its name, by its own ToText.
 ///
 /// A variant is written with its doc, and its columns - `#[arm_columns(..)]`,
 /// enum_decl.rs - each made a const fn of the enum:
 ///
 ///   #[bch_enum(open)]
-///   #[c_name(btree_id)] #[prefix(BTREE_ID_)] #[nr]
+///   #[prefix(BTREE_ID_)] #[nr]
 ///   #[arm_columns(flags: BtreeFlags, holds: set(BkeyType))]
 ///   #[repr(u32)]
 ///   pub enum Btree {
@@ -1049,37 +1037,37 @@ pub fn bch_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
         }
         let repr = repr.ok_or_else(|| format!("{}: #[repr(uN)]: its integer type", item.ident))?;
         let (vis, name, variants) = (&item.vis, &item.ident, &item.variants);
-        enum_decl::c_enum(quote!(#[#kind] #(#attrs)* #vis enum #name: #repr { #variants }))
+        enum_decl::declaration(quote!(#[#kind] #(#attrs)* #vis enum #name: #repr { #variants }))
     })
 }
 
-/// c_enum!'s list's callback: { [decl] (entry), (entry), ... } - the enum
+/// list_enum!'s list's callback: { [decl] (entry), (entry), ... } - the enum
 /// with its first list's variants in their place: through the next list, if
 /// it has another, or recorded so.
 #[doc(hidden)]
 #[proc_macro]
-pub fn __c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("c_enum!", || {
+pub fn __list_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("list_enum!", || {
         let (decl, entries) = list_callback(input.into())?;
-        let mut e = one_item!(&format!("c_enum! {{ {decl} }}"), Enum, C_ENUM_SYNTAX);
+        let mut e = one_item!(&format!("list_enum! {{ {decl} }}"), Enum, LIST_ENUM_SYNTAX);
         expand_enum_list(&mut e, &entries)
             .map_err(|err| format!("{}: {err}", e.name.as_deref().unwrap_or("_")))?;
         let decl = enum_text(&e);
         Ok(match e.from.first() {
-            Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", tokens(&decl)),
-            None => c_enum_gen(&e),
+            Some((_, f)) => through_list(&f.list, "cstruct_macros::__list_enum", tokens(&decl)),
+            None => enum_gen(&e),
         })
     })
 }
 
 /// Enum @e: the type, its values, and their names.
-fn c_enum_gen(e: &CEnumDef) -> TokenStream {
+fn enum_gen(e: &CEnumDef) -> TokenStream {
     let repr = format_ident!("{}", e.repr);
     let names: Vec<Ident> = e.variants.iter().map(|v| format_ident!("{}", v.name)).collect();
 
     // A variant with no value counts from the last that has one - not from
     // the one before it, which would make a const chain as long as the enum:
-    // too deep for rustc, at bch_persistent_counters' hundreds. A closed
+    // too deep for rustc, at PersistentCounter's hundreds. A closed
     // enum's is Rust's own, the one before it plus one.
     let mut out = TokenStream::new();
     let mut values = Vec::new();
@@ -1216,7 +1204,7 @@ fn c_enum_gen(e: &CEnumDef) -> TokenStream {
 
     if let Some(name) = &e.name {
         out.extend(names_gen(e, name));
-        out.extend(tokens(&typeinfo::info_of(name, e.c_ident().unwrap_or(name), "Enum", "")));
+        out.extend(tokens(&typeinfo::info_of(name, name, "Enum", "")));
 
         // Zeroed is a value of it - so a struct holding one can be Zeroable:
         // any integer is an open enum's or flags', a closed enum's only if a
@@ -1401,7 +1389,7 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
     let c_struct = b.c_type.trim_start_matches("struct ").trim();
     let table = format!("{c_struct}_{}_BITMASKS",
                         field.replace(|c: char| !c.is_alphanumeric(), "_").trim_end_matches('_'));
-    // Each entry's struct as typeinfo names it, C's name: its TypeInfo's - a
+    // Each entry's struct as typeinfo names it, its TypeInfo's - a
     // family's type in a state has it as X<Whole>
     let info_ty = tokens(&match b.rust_type.split_once('<') {
         Some((x, _)) => format!("{x}<crate::util::vstructs::Whole>"),

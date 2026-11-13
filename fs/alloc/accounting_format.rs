@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
-use cstruct_macros::{c_name, bch_enum, counters, tagged_union, whole, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bch_enum, counters, tagged_union, whole, CStruct, Plain, TypeInfo};
 use crate::format::Bpos;
 
 /*
@@ -50,7 +50,6 @@ use crate::format::Bpos;
 
 #[whole(tail = d: [u64], bkey)]
 #[repr(C)]
-#[c_name(bch_accounting)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct Accounting {
     pub v: c::bch_val,
@@ -60,10 +59,9 @@ pub struct Accounting {
 pub const BCH_ACCOUNTING_MAX_COUNTERS: u32 = 3;
 
 #[bch_enum(open)]
-#[c_name(bch_data_type)]
 #[prefix(BCH_DATA_)]
 #[nr]
-#[mask(DataTypes: u16, prefix = BCH_DATA_MASK_, c_name = bch_data_types)]
+#[mask(DataTypes: u16, prefix = BCH_DATA_MASK_)]
 #[repr(u32)]
 pub enum DataType {
     free = 0,
@@ -80,9 +78,6 @@ pub enum DataType {
     multiple = 11,
 }
 
-/// C's name, as bindgen's declarations of C functions spell it.
-pub type bch_data_type = DataType;
-
 impl From<DataType> for DataTypes {
     fn from(t: DataType) -> Self {
         Self::from_bits_retain(1 << t.0)
@@ -94,10 +89,9 @@ crate::accounting::acct_counters!(ReplicasCounters { sectors });
 
 tagged_union! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
-    #[c_name(disk_accounting_pos)]
     #[derive(TypeInfo)]
     #[tag(type_: u8)]
-    #[tag_enum(disk_accounting_type: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]
+    #[tag_enum(DiskAccountingType: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]
     #[pad(Bpos)]
     #[size(pad)]
     #[packed]
@@ -109,7 +103,6 @@ tagged_union! {
          */
         nr_inodes(
             #[repr(C)]
-            #[c_name(bch_acct_nr_inodes)]
             #[counters(nr)]
             pub struct NrInodes {}
         ) = 0,
@@ -120,7 +113,6 @@ tagged_union! {
          */
         persistent_reserved(
             #[repr(C)]
-            #[c_name(bch_acct_persistent_reserved)]
             #[counters(sectors)]
             pub struct PersistentReserved {
                 pub nr_replicas: u8,
@@ -150,7 +142,6 @@ tagged_union! {
          */
         dev_data_type(
             #[repr(C)]
-            #[c_name(bch_acct_dev_data_type)]
             #[counters(buckets, sectors, fragmented)]
             pub struct DevDataType {
                 pub dev: u8,
@@ -170,7 +161,6 @@ tagged_union! {
          */
         compression(
             #[repr(C)]
-            #[c_name(bch_acct_compression)]
             #[counters(nr_extents, uncompressed, compressed)]
             pub struct Compression {
                 pub type_: u8,
@@ -192,7 +182,6 @@ tagged_union! {
          */
         snapshot(
             #[repr(C, packed)]
-            #[c_name(bch_acct_snapshot)]
             #[counters(keys, key_bytes, sectors)]
             pub struct Snapshot {
                 pub id: u32,
@@ -210,7 +199,6 @@ tagged_union! {
          */
         btree(
             #[repr(C, packed)]
-            #[c_name(bch_acct_btree)]
             #[counters(sectors, nodes, interior)]
             pub struct Btree {
                 pub id: u32,
@@ -223,7 +211,6 @@ tagged_union! {
          */
         rebalance_work(
             #[repr(C)]
-            #[c_name(bch_acct_rebalance_work)]
             #[counters(sectors)]
             pub struct RebalanceWork {}
         ) = 7,
@@ -243,7 +230,6 @@ tagged_union! {
          */
         inum(
             #[repr(C, packed)]
-            #[c_name(bch_acct_inum)]
             #[counters(nr_extents, sectors, disk_sectors)]
             pub struct Inum {
                 pub inum: u64,
@@ -252,7 +238,6 @@ tagged_union! {
 
         reconcile_work(
             #[repr(C)]
-            #[c_name(bch_acct_reconcile_work)]
             #[counters(data, metadata)]
             pub struct ReconcileWork {
                 pub type_: u8,
@@ -261,7 +246,6 @@ tagged_union! {
 
         dev_leaving(
             #[repr(C, packed)]
-            #[c_name(bch_acct_dev_leaving)]
             #[counters(sectors)]
             pub struct DevLeaving {
                 pub dev: u32,
@@ -287,7 +271,6 @@ tagged_union! {
          */
         stripe_frag(
             #[repr(C)]
-            #[c_name(bch_acct_stripe_frag)]
             #[counters(data, empty)]
             pub struct StripeFrag {
                 pub nr_empty: u8,
@@ -307,7 +290,6 @@ tagged_union! {
          */
         dev_stripe_frag(
             #[repr(C)]
-            #[c_name(bch_acct_dev_stripe_frag)]
             #[counters(data, empty)]
             pub struct DevStripeFrag {
                 pub dev: u8,

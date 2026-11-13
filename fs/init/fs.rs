@@ -8,7 +8,7 @@
 use crate::init::passes::RecoveryPass;
 use crate::btree::node::BtreeNode;
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::alloc::foreground::allocator_foreground_init;
 use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::init::{btree_exit, btree_init};
@@ -253,18 +253,18 @@ impl Fs {
         e
     }
 
-    pub fn throw<T>(&self, error: bch_errcode) -> Result<T, BchError> {
+    pub fn throw<T>(&self, error: Errcode) -> Result<T, BchError> {
         Err(self.err(error))
     }
 
-    pub fn require<T>(&self, value: Option<T>, error: bch_errcode) -> Result<T, BchError> {
+    pub fn require<T>(&self, value: Option<T>, error: Errcode) -> Result<T, BchError> {
         match value {
             Some(v) => Ok(v),
             None    => self.throw(error),
         }
     }
 
-    pub fn ensure(&self, condition: bool, error: bch_errcode) -> Result<(), BchError> {
+    pub fn ensure(&self, condition: bool, error: Errcode) -> Result<(), BchError> {
         if condition {
             Ok(())
         } else {
@@ -321,17 +321,17 @@ impl Fs {
 
     pub fn casefold_enabled(&self) -> Result<(), BchError> {
         if !cfg!(CONFIG_UNICODE) {
-            return self.throw(bch_errcode::BCH_ERR_no_casefolding_without_utf8);
+            return self.throw(Errcode::BCH_ERR_no_casefolding_without_utf8);
         }
         if self.opts().casefold_disabled.get() != 0 {
-            return self.throw(bch_errcode::BCH_ERR_casefolding_disabled);
+            return self.throw(Errcode::BCH_ERR_casefolding_disabled);
         }
         Ok(())
     }
 
     #[track_caller]
     pub fn write_super_ret(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        self.write_super_flags(sb, c::bch_sb_write_flags::empty())
+        self.write_super_flags(sb, c::SbWriteFlags::empty())
     }
 
     /// c->sb and member info updated from the superblock, without writing it
@@ -415,7 +415,7 @@ impl Fs {
 /// leaving their handles zeroed; on failure, it's exited.
 fn alloc(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Holder>,
          user_key: Option<&c::bch_key>, out: &mut Printbuf) -> Result<OpenFs, BchError> {
-    let c = crate::util::alloc::alloc_pinned_or(Fs::init(opts), bch_errcode::BCH_ERR_ENOMEM_fs_alloc)?;
+    let c = crate::util::alloc::alloc_pinned_or(Fs::init(opts), Errcode::BCH_ERR_ENOMEM_fs_alloc)?;
     let fs = unsafe {
         (*c).holder = Some(holder);
         OpenFs::from_raw(NonNull::new_unchecked(c))
@@ -445,14 +445,14 @@ impl Fs {
         allocator_foreground_init(self);
 
         /* must be initialized before we throw any errors */
-        let now = PerCpu::alloc().map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_fs_counters_init))?;
+        let now = PerCpu::alloc().map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_fs_counters_init))?;
         unsafe { (*p).counters.now = now };
 
         {
             let mut sb = self.sb_lock();
             sb_to_fs(self, &mut sb, sbs[0].io.buf.sb())?;
             self.sb_resize(&mut sb).members_v2_init()
-                .ok_or_else(|| self.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2))?;
+                .ok_or_else(|| self.err(Errcode::BCH_ERR_ENOSPC_sb_members_v2))?;
         }
 
         shard_cpu_init(self);
@@ -464,7 +464,7 @@ impl Fs {
             prt_bdevname(&mut name, Some(sbs[0].dev.bdev()));
         }
         if name.allocation_failure() {
-            return Err(bch_errcode::BCH_ERR_ENOMEM_fs_name_alloc.into());
+            return Err(Errcode::BCH_ERR_ENOMEM_fs_name_alloc.into());
         }
         // strscpy()
         let dst = unsafe { &mut (*p).name };
@@ -496,14 +496,14 @@ impl Fs {
                          BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
                          (BCH_FS_DEFAULT_UTF8_ENCODING >> 8) & 0xff,
                          BCH_FS_DEFAULT_UTF8_ENCODING & 0xff);
-                    return self.throw(bch_errcode::BCH_ERR_EINVAL_utf8_load_failed);
+                    return self.throw(Errcode::BCH_ERR_EINVAL_utf8_load_failed);
                 }
             }
         }
         #[cfg(not(CONFIG_UNICODE))]
         if self.feature(SbFeature::casefolding) {
             prt!(out, "Cannot mount a filesystem with casefolding on a kernel without CONFIG_UNICODE\n");
-            return self.throw(bch_errcode::BCH_ERR_EINVAL_casefolding_no_unicode);
+            return self.throw(Errcode::BCH_ERR_EINVAL_casefolding_no_unicode);
         }
 
         for i in 0..self.nr_devices() {
@@ -546,7 +546,7 @@ impl Fs {
 
     #[inline(never)]
     fn opt_version_init(&self, out: &mut Printbuf) -> Result<(), BchError> {
-        use c::bch_fs_flags as Flag;
+        use c::FsFlag as Flag;
         let opts = self.opts();
 
         {
@@ -584,7 +584,7 @@ impl Fs {
 
         let mut mount_opts = Printbuf::new();
         crate::opts::opts_to_text(&mut mount_opts, &opts.load(), Some(self), Some(self.sb_lock().sb().as_unvalidated()),
-                                  None, c::opt_flags::OPT_MOUNT.bits(), 0, c::OPT_SHOW_MOUNT_STYLE);
+                                  None, c::OptFlags::OPT_MOUNT.bits(), 0, c::OPT_SHOW_MOUNT_STYLE);
         if !mount_opts.as_bytes().is_empty() {
             prt!(out, "with options: ");
             out.write_bytes(mount_opts.as_bytes());
@@ -641,7 +641,7 @@ impl Fs {
         if self.sb_lock().sb().initialized() {
             if !self.feature(SbFeature::new_extent_overwrite) {
                 prt!(out, "feature new_extent_overwrite not set, filesystem no longer supported\n");
-                return self.throw(bch_errcode::BCH_ERR_EINVAL_missing_new_extent_overwrite);
+                return self.throw(Errcode::BCH_ERR_EINVAL_missing_new_extent_overwrite);
             }
         }
 
@@ -665,13 +665,13 @@ impl Fs {
         }
         let parent = &crate::init::module::BCACHEFS_KOBJ.0;
         if name.allocation_failure() || self.kobj.add(Some(parent), name.as_c_str()).is_err() {
-            return self.throw(bch_errcode::BCH_ERR_sysfs_init_error);
+            return self.throw(Errcode::BCH_ERR_sysfs_init_error);
         }
 
         let _state = self.state_lock_write();
         for ca in self.members() {
             if ca.sysfs_online().is_err() {
-                return self.throw(bch_errcode::BCH_ERR_sysfs_init_error);
+                return self.throw(Errcode::BCH_ERR_sysfs_init_error);
             }
         }
         Ok(())
@@ -805,7 +805,7 @@ impl Drop for OpenFs {
 
 impl Fs {
     pub fn stop(&self) -> Result<(), BchError> {
-        use c::bch_fs_flags as Flag;
+        use c::FsFlag as Flag;
         let p = self.as_ptr();
 
         if !self.flags.swap(Flag::stopping, true) {
@@ -845,13 +845,13 @@ impl Fs {
         }
 
         if self.flags.get(Flag::emergency_ro) {
-            return self.throw(bch_errcode::BCH_ERR_shutdown_with_emergency_ro);
+            return self.throw(Errcode::BCH_ERR_shutdown_with_emergency_ro);
         }
         if self.flags.get(Flag::error) {
-            return self.throw(bch_errcode::BCH_ERR_shutdown_with_errors_unfixed);
+            return self.throw(Errcode::BCH_ERR_shutdown_with_errors_unfixed);
         }
         if self.flags.get(Flag::errors_fixed) {
-            return self.throw(bch_errcode::BCH_ERR_shutdown_with_errors_fixed);
+            return self.throw(Errcode::BCH_ERR_shutdown_with_errors_fixed);
         }
         Ok(())
     }
@@ -958,8 +958,8 @@ pub fn filter_dead(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts,
         let name = sbs[i].dev.name().to_str().unwrap_or("?");
         match dev_in_fs(sbs[best].io.buf.sb(), Some(sbs[best].dev.bdev()), &sbs[i], opts) {
             Ok(()) => {}
-            Err(e) if e.matches(bch_errcode::BCH_ERR_device_has_been_removed) ||
-                      e.matches(bch_errcode::BCH_ERR_device_splitbrain) => {
+            Err(e) if e.matches(Errcode::BCH_ERR_device_has_been_removed) ||
+                      e.matches(Errcode::BCH_ERR_device_splitbrain) => {
                 if let Some(out) = out.as_deref_mut() {
                     prt!(out, "Not using device {name}: {}\n", e.msg());
                 }
@@ -1007,12 +1007,12 @@ impl Fs {
     }
 
     fn bring_up(&self, err: &mut Printbuf) -> Result<(), BchError> {
-        use c::bch_fs_flags as Flag;
+        use c::FsFlag as Flag;
         assert!(!self.flags.get(Flag::started));
 
         // the open skipped what a start needs: opt_version_init()
         if self.opts().will_not_start.get() != 0 {
-            return self.throw(bch_errcode::BCH_ERR_EINVAL_will_not_start);
+            return self.throw(Errcode::BCH_ERR_EINVAL_will_not_start);
         }
         // superblock writes from here on are part of bringing it up
         self.flags.set(Flag::start_begun, true);
@@ -1070,7 +1070,7 @@ impl Fs {
 
         if self.opts().no_version_check.get() != 0 {
             prt!(err, "Cannot start with opts.no_version_check\n");
-            return self.throw(bch_errcode::BCH_ERR_EINVAL_no_version_check_start);
+            return self.throw(Errcode::BCH_ERR_EINVAL_no_version_check_start);
         }
 
         let degraded = self.opts().degraded();
@@ -1101,9 +1101,9 @@ impl Fs {
             // set has a readable copy; past that, only degraded=very.
             let online = c::bch_devs_mask { d: self.devs_online.load() };
             return self.throw(if self.can_read_fs_with_devs(&online, c::BCH_FORCE_IF_DEGRADED, Some(err)) {
-                bch_errcode::BCH_ERR_insufficient_devices_data_intact
+                Errcode::BCH_ERR_insufficient_devices_data_intact
             } else {
-                bch_errcode::BCH_ERR_insufficient_devices_data_lost
+                Errcode::BCH_ERR_insufficient_devices_data_lost
             });
         };
 
@@ -1111,9 +1111,9 @@ impl Fs {
         let rw = c::bch_devs_mask { d: self.allocator.rw_devs[0].load() };
         if !self.can_read_fs_with_devs(&online, flags, Some(&mut *err)) ||
            (self.opts().read_only.get() == 0 &&
-            !can_write_with_devs(self, &rw, c::bch_write_check::BCH_WRITE_CHECK_start, flags, err)) {
+            !can_write_with_devs(self, &rw, c::WriteCheck::BCH_WRITE_CHECK_start, flags, err)) {
             self.missing_devs_to_text(err);
-            return self.throw(bch_errcode::BCH_ERR_insufficient_devices_to_start);
+            return self.throw(Errcode::BCH_ERR_insufficient_devices_to_start);
         }
         Ok(())
     }

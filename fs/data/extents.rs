@@ -150,9 +150,9 @@ pub struct bch_io_failures {
 
 #[bch_enum(closed)]
 #[prefix(__BCH_READ_)]
-#[mask(bch_read_flags: u32, prefix = BCH_READ_)]
+#[mask(ReadFlags: u32, prefix = BCH_READ_)]
 #[repr(u32)]
-pub enum __bch_read_flags {
+pub enum ReadFlagBit {
     retry_if_stale,
     may_promote,
     user_mapped,
@@ -495,7 +495,7 @@ fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &c::extent_ptr_decoded, r: &c::ex
             lc.csum_type == rc.csum_type &&
             lc.nonce == rc.nonce &&
             !crc_is_compressed(lc) &&
-            c::bch_csum_type(lc.csum_type.into()).mergeable() &&
+            c::CsumType(lc.csum_type.into()).mergeable() &&
             u32::from(lc.offset) + lc.live_size == lc.compressed_size &&
             rc.offset == 0 &&
             (lc.csum_type == 0 ||
@@ -570,7 +570,7 @@ pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
                 // The csum type is mergeable, as merge() panics if it isn't:
                 // ptrs_mergeable() checked it, with the pointer after this
                 // entry - validate has one after every crc entry
-                cl.csum = c::bch_csum_type(cl.csum_type.into())
+                cl.csum = c::CsumType(cl.csum_type.into())
                     .merge(cl.csum, cr.csum, (cr.uncompressed_size << 9) as usize);
                 cl.uncompressed_size += cr.uncompressed_size;
                 cl.compressed_size += cr.compressed_size;

@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn snapshot_table() {
         let info = snapshot_info();
-        assert_eq!(info.name, "bch_snapshot");
+        assert_eq!(info.name, "Snapshot");
         assert_eq!(info.size, core::mem::size_of::<c::Snapshot>());
     }
 

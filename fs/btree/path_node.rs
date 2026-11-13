@@ -7,12 +7,12 @@ use core::ptr;
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::btree::journal_overlay::peek_slot;
-use crate::btree::locking::btree_node_locked_type::*;
+use crate::btree::locking::BtreeNodeLockedType::*;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{KeyVal, LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::c;
-use crate::errcode::bch_errcode;
+use crate::errcode::Errcode;
 use crate::format::Btree;
 use crate::locking::six::{six_lock_increment_ip, SixHold};
 use crate::prt;
@@ -148,7 +148,7 @@ impl BtreeTrans<'_> {
         for idx in self.path_idxs() {
             for l in 0..c::BTREE_MAX_DEPTH as usize {
                 if paths[idx].l[l].b.is(&b.c) && !paths[idx].locked(l) {
-                    paths[idx].l[l].b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_drop.into());
+                    paths[idx].l[l].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_drop.into());
                 }
             }
         }

@@ -301,7 +301,7 @@ impl Fs {
              Nsecs(local_clock().wrapping_sub(wp.alloc.lock.last_used.get())));
 
         for (i, t) in wp.io.writes_lock.time.iter().enumerate() {
-            prt!(out, " {}: {}", c::write_point_state::from_bits(i as u32), Nsecs(t.get()));
+            prt!(out, " {}: {}", c::WritePointStatus::from_bits(i as u32), Nsecs(t.get()));
         }
         writeln!(out);
 

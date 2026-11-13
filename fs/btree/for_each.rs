@@ -7,7 +7,7 @@ use super::trans_attempt::{is_restart, lockrestart_do, lockrestart_do_in, Commit
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{LockedNode, Paths};
-use crate::errcode::{BchError, bch_errcode};
+use crate::errcode::{BchError, Errcode};
 use crate::fs::Fs;
 use crate::SPOS_MAX;
 use core::ops::ControlFlow;
@@ -415,8 +415,8 @@ impl<'t> BtreeIter<'t> {
             let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
                 keys.begin(t, paths, self)?;
                 match self.key(t, paths, keys, &mut f) {
-                    Err(e) if e.matches(bch_errcode::BCH_ERR_fc_continue) => Ok(Some(Step::Next)),
-                    Err(e) if e.matches(bch_errcode::BCH_ERR_fc_break)    => Ok(Some(Step::Break(()))),
+                    Err(e) if e.matches(Errcode::BCH_ERR_fc_continue) => Ok(Some(Step::Next)),
+                    Err(e) if e.matches(Errcode::BCH_ERR_fc_break)    => Ok(Some(Step::Break(()))),
                     Ok(Some(step)) => {
                         // a spent attempt's step has nothing queued: what
                         // ignore_restarts() ran committed for itself

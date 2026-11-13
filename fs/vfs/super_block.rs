@@ -166,7 +166,7 @@ impl SuperOps for Fs {
         let mut out = Printbuf::new();
         // No superblock: with the filesystem, every option's to_text reads it
         crate::opts::opts_to_text(&mut out, &self.opts().load(), Some(self), None, Some(&c::bch_opts_mask::load(&self.mount_opts)),
-                                  c::opt_flags::OPT_MOUNT.bits(), c::opt_flags::OPT_HIDDEN.bits(),
+                                  c::OptFlags::OPT_MOUNT.bits(), c::OptFlags::OPT_HIDDEN.bits(),
                                   c::OPT_SHOW_MOUNT_STYLE);
         if out.allocation_failure() {
             return Err(BchError::from(c::ENOMEM));
@@ -192,7 +192,7 @@ impl SuperOps for Fs {
     }
 
     fn unfreeze_fs(&self, _sb: &SuperBlock) -> Result<(), BchError> {
-        if self.flags.get(c::bch_fs_flags::emergency_ro) {
+        if self.flags.get(c::FsFlag::emergency_ro) {
             return Ok(());
         }
         self.state_lock_write().read_write()

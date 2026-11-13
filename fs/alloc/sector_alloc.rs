@@ -30,7 +30,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::BkeyS;
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::extents::bkey_append_ptr;
 use crate::data::keylist::KeyRoom;
 use crate::data::ptrs::PtrsMut;
@@ -42,7 +42,7 @@ use crate::sb::errors::SbErrorId;
 use crate::util::kernel::unlikely;
 use core::sync::atomic::Ordering::Relaxed;
 
-use c::bch_write_flags as w;
+use c::WriteFlags as w;
 use crate::format::{Bpos, DataType, BkeyType};
 
 impl c::alloc_request<'_, '_> {
@@ -118,7 +118,7 @@ impl<'f> TransAttempt<'_, 'f> {
             // before the retries below, which are gated on an error - and the
             // first drops the target: a targeted write would spill outside it
             // instead of replicating within it
-            if matches(err, bch_errcode::BCH_ERR_ec_alloc_failed) {
+            if matches(err, Errcode::BCH_ERR_ec_alloc_failed) {
                 if req.flags.contains(w::must_ec) {
                     return Err(err.expect("an error"));
                 }
@@ -128,8 +128,8 @@ impl<'f> TransAttempt<'_, 'f> {
                 continue;
             }
 
-            if let Some(e) = err.filter(|&e| !e.matches(bch_errcode::BCH_ERR_freelist_empty) &&
-                                             !e.matches(bch_errcode::BCH_ERR_insufficient_devices)) {
+            if let Some(e) = err.filter(|&e| !e.matches(Errcode::BCH_ERR_freelist_empty) &&
+                                             !e.matches(Errcode::BCH_ERR_insufficient_devices)) {
                 return Err(e);
             }
 
@@ -150,7 +150,7 @@ impl<'f> TransAttempt<'_, 'f> {
 
             if req.nr_effective < u32::from(req.nr_replicas) && req.bits.ec() {
                 if req.flags.contains(w::must_ec) {
-                    return fs.throw(bch_errcode::BCH_ERR_ec_alloc_failed_no_usable_block);
+                    return fs.throw(Errcode::BCH_ERR_ec_alloc_failed_no_usable_block);
                 }
                 req.bits.set_ec(false);
                 req.bits.set_will_retry_target_devices(true);
@@ -158,15 +158,15 @@ impl<'f> TransAttempt<'_, 'f> {
                 continue;
             }
 
-            if (matches(err, bch_errcode::BCH_ERR_insufficient_devices) ||
-                matches(err, bch_errcode::BCH_ERR_bucket_alloc_no_progress)) && req.nr_effective != 0 {
+            if (matches(err, Errcode::BCH_ERR_insufficient_devices) ||
+                matches(err, Errcode::BCH_ERR_bucket_alloc_no_progress)) && req.nr_effective != 0 {
                 // fewer copies than asked for, succeeding: counted, as nothing
                 // else counts it. insufficient_devices is what a reservation
                 // should have refused; no_progress is space copygc hasn't
                 // compacted yet
                 if req.nr_effective < u32::from(req.nr_replicas) &&
                    !req.flags.contains(w::replicas_best_effort) {
-                    fs.sb_error_count(match matches(err, bch_errcode::BCH_ERR_insufficient_devices) {
+                    fs.sb_error_count(match matches(err, Errcode::BCH_ERR_insufficient_devices) {
                         true  => SbErrorId::write_degraded_insufficient_devices,
                         false => SbErrorId::write_degraded_no_progress,
                     });
@@ -177,8 +177,8 @@ impl<'f> TransAttempt<'_, 'f> {
             // an allocation blocks only with no retry left: one that didn't -
             // its last try succeeding - and is short of copies goes again, to
             // wait
-            if matches(err, bch_errcode::BCH_ERR_freelist_empty) &&
-               !matches(err, bch_errcode::BCH_ERR_bucket_alloc_no_progress) &&
+            if matches(err, Errcode::BCH_ERR_freelist_empty) &&
+               !matches(err, Errcode::BCH_ERR_bucket_alloc_no_progress) &&
                req.cl.is_some() && !req.flags.contains(w::alloc_nowait) {
                 continue;
             }
@@ -193,7 +193,7 @@ impl<'f> TransAttempt<'_, 'f> {
 
         if req.bits.ec() && req.flags.contains(w::must_ec) &&
            !req.ptrs.iter(fs).any(|ob| !ob.ec.load(Relaxed).is_null()) {
-            return fs.throw(bch_errcode::BCH_ERR_ec_alloc_failed_no_ec_bucket);
+            return fs.throw(Errcode::BCH_ERR_ec_alloc_failed_no_ec_bucket);
         }
 
         // a target with durability 0 devices: a cached copy on one too - not
@@ -284,8 +284,8 @@ impl<'f> TransAttempt<'_, 'f> {
                     g.ptrs = core::mem::take(&mut req.ptrs);
                     drop(g);
 
-                    let blocked = e.matches(bch_errcode::BCH_ERR_bucket_alloc_blocked);
-                    if !(blocked || e.matches(bch_errcode::BCH_ERR_freelist_empty)) ||
+                    let blocked = e.matches(Errcode::BCH_ERR_bucket_alloc_blocked);
+                    if !(blocked || e.matches(Errcode::BCH_ERR_freelist_empty)) ||
                        !fs.try_decrease_writepoints(self, write_points_nr) {
                         return Err(e);
                     }

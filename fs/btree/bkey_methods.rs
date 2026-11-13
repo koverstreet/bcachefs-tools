@@ -92,8 +92,8 @@ impl From<NoRoom> for SetError<'_> {
 /// when the format has a real schema.
 fn field_enum(type_: u8, field: &str) -> Option<EnumValues> {
     match (type_ as u32, field) {
-        (ty, "state") if ty == BkeyType::snapshot.0  => Some(<c::bch_snapshot_state as Names>::ENTRIES),
-        (ty, "state") if ty == BkeyType::subvolume.0 => Some(<c::bch_subvolume_state as Names>::ENTRIES),
+        (ty, "state") if ty == BkeyType::snapshot.0  => Some(<c::SnapshotState as Names>::ENTRIES),
+        (ty, "state") if ty == BkeyType::subvolume.0 => Some(<c::SubvolumeState as Names>::ENTRIES),
         _ => None,
     }
 }

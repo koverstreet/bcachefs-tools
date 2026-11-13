@@ -405,7 +405,7 @@ fn fuse_rename(
     src_name: &OsStr,
     dst_dir:  c::subvol_inum,
     dst_name: &OsStr,
-    mode:     c::bch_rename_mode,
+    mode:     c::RenameMode,
 ) -> Result<c::bch_inode_unpacked, BchError> {
     let mut src_dir_u: c::bch_inode_unpacked = Default::default();
     let mut dst_dir_u: c::bch_inode_unpacked = Default::default();
@@ -1340,20 +1340,20 @@ impl Filesystem for BcachefsFs {
                 reply.error(Errno::ENOENT);
                 return;
             }
-            c::bch_rename_mode::BCH_RENAME_EXCHANGE
+            c::RenameMode::BCH_RENAME_EXCHANGE
         } else if dst_exists {
             if flags.contains(RenameFlags::RENAME_NOREPLACE) {
                 reply.error(Errno::EEXIST);
                 return;
             }
-            c::bch_rename_mode::BCH_RENAME_OVERWRITE
+            c::RenameMode::BCH_RENAME_OVERWRITE
         } else {
-            c::bch_rename_mode::BCH_RENAME
+            c::RenameMode::BCH_RENAME
         };
 
         match fuse_rename(fs, src_dir, name, dst_dir, newname, mode) {
             Ok(dst_bi) => {
-                if mode == c::bch_rename_mode::BCH_RENAME_OVERWRITE {
+                if mode == c::RenameMode::BCH_RENAME_OVERWRITE {
                     self.inode_unlinked(c::subvol_inum { subvol: dst_dir.subvol, inum: dst_bi.bi_inum },
                                         &dst_bi);
                 }

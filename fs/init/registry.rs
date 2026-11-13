@@ -18,7 +18,7 @@ use core::ffi::CStr;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, ret_to_result_void, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
 use crate::locking::Locked;
 use crate::sb::io::Holder;
@@ -261,7 +261,7 @@ pub fn register(fs: &Fs) -> Result<(), BchError> {
     let mut registry = REGISTRY.lock();
 
     if fs.sb.multi_device.get() && registry.open.iter().any(|f| fs_uuid(f) == fs_uuid(fs)) {
-        return fs.throw(bch_errcode::BCH_ERR_filesystem_uuid_already_open);
+        return fs.throw(Errcode::BCH_ERR_filesystem_uuid_already_open);
     }
     // SAFETY: exit() deregisters it before freeing it
     Ok(registry.open.push(unsafe { BackRef::new(fs) })?)

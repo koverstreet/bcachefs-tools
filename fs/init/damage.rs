@@ -6,7 +6,7 @@
 //! A damage key is an inode version's - one per (0, inum, snapshot), at that
 //! position - and its value the same records the superblock's errors
 //! section keeps, in the same vocabulary as the error counters and fsck:
-//! per bch_sb_error_id, an occurrence count and the times of the first and
+//! per SbErrorId, an occurrence count and the times of the first and
 //! last occurrence (bch_sb_field_error_entry_v2), strictly ascending by id.
 //! A count saturates, and a value holds what a key's u8 of u64s does,
 //! MAX_ENTRIES: past that, new ids aren't recorded.

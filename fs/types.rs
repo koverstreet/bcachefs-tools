@@ -25,7 +25,7 @@ use crate::util::rcu::RcuHead;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU16, AtomicU32, AtomicU64};
-use cstruct_macros::{c_name, bch_enum, placed, CStruct, Fieldwise, Init, Late, TypeInfo};
+use cstruct_macros::{bch_enum, placed, CStruct, Fieldwise, Init, Late, TypeInfo};
 use pin_init::pin_data;
 use crate::format::{Bpos, Btree};
 
@@ -33,7 +33,7 @@ use crate::format::{Bpos, Btree};
 #[prefix(BCH_TIME_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_time_stats {
+pub enum TimeStat {
     /// Allocate memory in the btree node cache for a new btree node
     btree_node_mem_alloc,
     /// Split a full btree node into two new nodes
@@ -151,7 +151,7 @@ pub struct io_count {
 #[prefix(BCH_DEV_READ_REF_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_dev_read_ref {
+pub enum DevReadRefKind {
     rust,
     bch2_online_devs,
     read_fua_test,
@@ -171,7 +171,7 @@ pub enum bch_dev_read_ref {
 #[prefix(BCH_DEV_WRITE_REF_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_dev_write_ref {
+pub enum DevWriteRefKind {
     rust,
     journal_write,
     journal_discard,
@@ -213,7 +213,7 @@ pub struct bucket_bitmap {
 #[bch_enum(closed)]
 #[prefix(BCH_DEV_)]
 #[repr(u32)]
-pub enum bch_dev_flags {
+pub enum DevFlag {
     /// a write completed that the device may still hold in its volatile
     /// cache; journal_write_preflush() clears it when it flushes the
     /// device.
@@ -224,7 +224,6 @@ pub const CONGESTED_MAX: u32 = 1024;
 
 #[pin_data(PinnedDrop)]
 #[repr(C)]
-#[c_name(bch_dev)]
 #[derive(CStruct, TypeInfo, Init, RcuHead)]
 #[init_args(fs: &crate::fs::Fs)]
 pub struct Dev {
@@ -282,11 +281,11 @@ pub struct Dev {
      */
     pub mi: crate::util::projections::Volatile<c::bch_member_cpu>,
     pub btree_allocated_bitmap_gc: crate::util::projections::Volatile<u64>,
-    pub errors: [AtomicI64; c::bch_member_error_type::NR as usize],
+    pub errors: [AtomicI64; c::MemberErrorType::NR as usize],
     /// Written racing C's plain reads and stores, as C's are: atomic here,
     /// so Rust's are through a shared bch_dev.
     pub write_errors_start: crate::data_structures::bitmap::AtomicULong,
-    pub flags: AtomicBitflags<c::bch_dev_flags>,
+    pub flags: AtomicBitflags<c::DevFlag>,
 
     pub uuid: c::__uuid_t,
     pub name: [c_char; c::BDEVNAME_SIZE as usize],
@@ -409,7 +408,7 @@ pub struct Dev {
 #[bch_enum(closed)]
 #[prefix(BCH_FS_)]
 #[repr(u32)]
-pub enum bch_fs_flags {
+pub enum FsFlag {
     new_fs,
     start_begun,
     started,
@@ -458,7 +457,6 @@ pub const BCH_LINK_MAX: u32 = c::U32_MAX;
 /// Borrowed by Rust as &Fs; OpenFs owns one opened from userspace.
 #[pin_data]
 #[repr(C)]
-#[c_name(bch_fs)]
 #[derive(CStruct, TypeInfo, Init, Late)]
 #[init_args(options: &c::bch_opts)]
 pub struct Fs {
@@ -467,7 +465,7 @@ pub struct Fs {
     #[pin]
     #[init(unsafe { Kobject::new::<Fs>() })]
     pub(crate) kobj: Placed<Kobject, crate::at!(Fs.kobj)>,
-    pub flags: AtomicBitflags<c::bch_fs_flags>,
+    pub flags: AtomicBitflags<c::FsFlag>,
 
     #[init(-1)]
     pub minor: c_int,
@@ -518,7 +516,7 @@ pub struct Fs {
     /* Counts outstanding writes, for clean transition to read-only */
     #[init(crate::util::alloc::init_or(
         crate::util::refcount::PercpuRef::new_dead::<crate::init::rw::WritesDisabled>(),
-        c::bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc))]
+        c::Errcode::BCH_ERR_ENOMEM_fs_other_alloc))]
     #[pin]
     pub writes: crate::util::refcount::PercpuRef,
 
@@ -587,14 +585,14 @@ pub struct Fs {
     pub counters_recent: crate::util::workqueue::DelayedWork,
     #[pin]
     #[init(::pin_init::pin_init_array_from_fn(|_| c::bch2_time_stats::init()))]
-    pub times: [c::bch2_time_stats; c::bch_time_stats::NR as usize],
+    pub times: [c::bch2_time_stats; c::TimeStat::NR as usize],
     #[pin]
     #[init(c::bch_fs_errors::init())]
     pub errors: c::bch_fs_errors,
 
     /* What's in flight, for debugfs: debug/async_objs.rs */
     #[pin]
-    pub async_objs: [c::async_obj_list; c::bch_async_obj_lists::NR as usize],
+    pub async_objs: [c::async_obj_list; c::AsyncObjKind::NR as usize],
 
     #[pin]
     #[late]

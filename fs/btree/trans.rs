@@ -13,7 +13,7 @@ use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, BtreePath
 use crate::c;
 use crate::data_structures::bitmap::Bitmap;
 use crate::debug::trace::events;
-use crate::errcode::{BchError, bch_errcode};
+use crate::errcode::{BchError, Errcode};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::journal::validate::journal_entry_to_text;
@@ -276,7 +276,7 @@ impl<'f> BtreeTrans<'f> {
 
     /// TransAttempt::restart(), for what C calls in the middle of an attempt
     /// without one: the lock paths.
-    pub(crate) fn restart(&self, error: bch_errcode) -> BchError {
+    pub(crate) fn restart(&self, error: Errcode) -> BchError {
         self.restart_ip(error, Self::restart as *const () as c_ulong)
     }
 
@@ -498,8 +498,8 @@ impl<'f> TransGuard<'f> {
          * No multithreaded btree access until we've gone RW and are no longer
          * modifying the journal keys gap buffer
          */
-        ebug_assert!(c.flags.get(c::bch_fs_flags::may_go_rw) ||
-                     c.flags.get(c::bch_fs_flags::scrub_journal) ||
+        ebug_assert!(c.flags.get(c::FsFlag::may_go_rw) ||
+                     c.flags.get(c::FsFlag::scrub_journal) ||
                      sched::current() == c.recovery_task.load(Ordering::Relaxed));
 
         let trans = TransGuard { trans: bch2_trans_alloc(c) };
@@ -537,7 +537,7 @@ impl<'f> TransGuard<'f> {
         });
         t.locking_wait.task.store(sched::current(), Ordering::Relaxed);
         t.set_journal_replay_not_finished(
-            !c.journal.flags.get(c::journal_flags::replay_done) &&
+            !c.journal.flags.get(c::JournalFlag::replay_done) &&
             c.journal_keys_get().map(RefGuard::leak).is_some());
         bch2_trans_paths_init(t);
 
@@ -754,7 +754,7 @@ impl BtreeTrans<'_> {
         #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
         if crate::util::kernel::ktime_get_ns() & !(!0u64 << (10 + self.restart_count_this_trans.get()).min(63)) == 0 {
             self.fs().event_inc_trace(events::trans_restart_injected, |out| prt!(out, "{}", self.fn_name()));
-            return Err(self.restart_ip(bch_errcode::BCH_ERR_transaction_restart_fault_inject, ip));
+            return Err(self.restart_ip(Errcode::BCH_ERR_transaction_restart_fault_inject, ip));
         }
         #[cfg(not(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS))]
         let _ = ip;
@@ -815,14 +815,14 @@ impl BtreeTrans<'_> {
 
         if self.mem_with(|m| m.used_mempool) || new_bytes > c::BTREE_TRANS_MEM_MAX {
             ebug_assert!(old_bytes < new_bytes as usize);
-            return bch_errcode::BCH_ERR_ENOMEM_trans_kmalloc.into();
+            return Errcode::BCH_ERR_ENOMEM_trans_kmalloc.into();
         }
 
         self.mem_with(|m| m.realloc_bytes_required = new_bytes);
         c.event_inc_trace(events::trans_restart_mem_realloced, |out| {
             prt!(out, "{}\nbytes {}\n", self.fn_name(), new_bytes);
         });
-        self.restart_ip(bch_errcode::BCH_ERR_transaction_restart_mem_realloced, ret_ip)
+        self.restart_ip(Errcode::BCH_ERR_transaction_restart_mem_realloced, ret_ip)
     }
 
     /**
@@ -867,12 +867,12 @@ impl BtreeTrans<'_> {
          * trans_begin calls see the flag already clear and skip cheaply.
          */
         if self.journal_replay_not_finished() &&
-           c.journal.flags.get(c::journal_flags::replay_done) {
+           c.journal.flags.get(c::JournalFlag::replay_done) {
             drop(unsafe { RefGuard::adopt(&c.journal_keys) });
             self.set_journal_replay_not_finished(false);
         }
 
-        if self.restarted() == bch_errcode::BCH_ERR_transaction_restart_mem_realloced {
+        if self.restarted() == Errcode::BCH_ERR_transaction_restart_mem_realloced {
             self.mem_realloc(paths);
         }
 
@@ -1028,15 +1028,15 @@ impl BtreeTrans<'_> {
 impl BtreeTrans<'_> {
     /// restart_ip(), less the backtrace: for a transaction this thread may not
     /// be running, whose restart this thread's backtrace wouldn't explain.
-    pub(crate) fn restart_foreign_task(&self, err: bch_errcode, ip: c_ulong) -> BchError {
-        assert!(BchError::from(err).matches(bch_errcode::BCH_ERR_transaction_restart));
+    pub(crate) fn restart_foreign_task(&self, err: Errcode, ip: c_ulong) -> BchError {
+        assert!(BchError::from(err).matches(Errcode::BCH_ERR_transaction_restart));
 
         self.set_restarted(err);
         self.last_restarted_ip.set(ip);
         err.into()
     }
 
-    pub(crate) fn restart_ip(&self, err: bch_errcode, ip: c_ulong) -> BchError {
+    pub(crate) fn restart_ip(&self, err: Errcode, ip: c_ulong) -> BchError {
         self.restart_foreign_task(err, ip);
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         {

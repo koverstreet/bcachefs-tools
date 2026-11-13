@@ -16,7 +16,7 @@
 use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::data_structures::cuckoo::{Cuckoo, CuckooMultimap, Entry};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::Bpos;
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
@@ -130,7 +130,7 @@ impl InodeCache {
                     Some(old) => break Some(old),
                     None => continue,
                 },
-                Err(_) => break Some(Err(inode.fs().err(bch_errcode::BCH_ERR_ENOMEM_inode_cache_insert))),
+                Err(_) => break Some(Err(inode.fs().err(Errcode::BCH_ERR_ENOMEM_inode_cache_insert))),
             }
         };
         if let Some(ret) = lost {
@@ -165,7 +165,7 @@ impl InodeCache {
     fn add_holder(&self, fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
         let _noio = MemallocFlags::noio();
         let (i, subvol) = holder(inum);
-        self.by_inum.add(i, subvol).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_inode_cache_insert))
+        self.by_inum.add(i, subvol).map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_inode_cache_insert))
     }
 
     fn remove_holder(&self, inum: c::subvol_inum) {
@@ -224,7 +224,7 @@ fn holder(inum: c::subvol_inum) -> (u64, u32) {
 /// open - so fsck mustn't delete it.
 pub fn or_descendents_is_open(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError> {
     let fs = t.fs();
-    if !fs.flags.get(c::bch_fs_flags::started) {
+    if !fs.flags.get(c::FsFlag::started) {
         return Ok(false);
     }
 

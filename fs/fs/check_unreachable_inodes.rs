@@ -119,7 +119,7 @@ fn find_attached_dirent_in_descendant<'a, 't>(
         DstSlot::Empty => {
             let dir = inode::find_by_inum_snapshot(t, d.k.p.inode, inode.bi_snapshot,
                                                    BtreeIterFlags::empty()).found()?;
-            if dir.is_none_or(|dir| dir.flag(c::bch_inode_flags::unlinked)) {
+            if dir.is_none_or(|dir| dir.flag(c::InodeFlags::unlinked)) {
                 return Ok(None);
             }
         }

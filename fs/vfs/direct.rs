@@ -13,7 +13,7 @@
 use super::kiocb::{self, Kiocb};
 use crate::c;
 use crate::data::read::{self, ReadErrReport, Rbio};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::inode_opts::get_inode;
 use crate::util::alloc::Kmalloc;
 use crate::util::bio::{inline_vecs, plugged, Bio, HasBio};
@@ -30,7 +30,7 @@ use core::ptr::{self, NonNull};
 use cstruct_macros::{args_stored_once, in_place};
 use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
 
-type F = c::bch_read_flags;
+type F = c::ReadFlags;
 type Splits = Gather<Result<(), BchError>, waiter::Async>;
 type SplitRef = GatherRef<Result<(), BchError>, waiter::Async>;
 type Pool = &'static Mempool<Kmalloc>;
@@ -199,7 +199,7 @@ fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Optio
 
     /* bios must be 512 byte aligned: */
     if (offset | iter.count() as u64) & (c::SECTOR_SIZE as u64 - 1) != 0 {
-        return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_unaligned_io));
+        return Err(fs.err(Errcode::BCH_ERR_EINVAL_unaligned_io));
     }
 
     let count = iter.count() as u64;

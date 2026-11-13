@@ -5,15 +5,14 @@
 //!
 //!   tagged_union! {
 //!       #[derive(Clone, Copy, CStruct, TypeInfo)]*
-//!       #[c_name(disk_accounting_pos)]
 //!       #[tag(type_: u8)]
-//!       #[tag_enum(disk_accounting_type: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]
+//!       #[tag_enum(DiskAccountingType: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]
 //!       #[pad(Bpos)]
 //!       #[size(pad)]
 //!       #[packed]
 //!       pub enum DiskAccountingPos {
 //!           /* No subtypes - number of inodes in the entire filesystem */
-//!           nr_inodes(#[repr(C)] #[c_name(bch_acct_nr_inodes)] pub struct NrInodes {}) = 0,
+//!           nr_inodes(#[repr(C)] pub struct NrInodes {}) = 0,
 //!           replicas(Replicas) = 2,
 //!           ...
 //!       }
@@ -22,7 +21,7 @@
 //!   tagged_union! {
 //!       #[storage(c::jset_entry)]
 //!       #[tag(type_: u8)]
-//!       #[tag_enum(bch_jset_entry_type: u32, prefix = BCH_JSET_ENTRY_, nr)]
+//!       #[tag_enum(JsetEntryType: u32, prefix = BCH_JSET_ENTRY_, nr)]
 //!       #[size(header)]
 //!       pub enum jset_entry {
 //!           /// Btree key updates
@@ -38,8 +37,8 @@
 //! arm type and what it nests, not for the storage. It's reported where it's
 //! written: the definition keeps its tokens' spans.
 //!
-//! `#[tag_enum([closed,] NAME: REPR, prefix = P[, nr][, c_name = C])]`:
-//! the tag's enum, a c_enum! of the arms (enum_decl.rs) - open, or closed and
+//! `#[tag_enum([closed,] NAME: REPR, prefix = P[, nr])]`:
+//! the tag's enum, a #[bch_enum] of the arms (enum_decl.rs) - open, or closed and
 //! the tag stored as it, `#[tag(FIELD)]`. NAME_arms! is the arms as a list,
 //! (name, value, Type), for what's made from each.
 //!
@@ -69,7 +68,7 @@
 //! Generated, for the first declaration:
 //!
 //!  - `union DiskAccountingPos__ffi`: the storage, what C and disk see -
-//!    C's struct disk_accounting_pos, by its #[c_name]; Plain, its pad being
+//!    named DiskAccountingPos to TypeInfo; Plain, its pad being
 //!    every byte of it;
 //!  - `DiskAccountingPos<S>`, the storage in a state, Validated unless
 //!    named, as a family's types are (util/vstructs.rs): Unvalidated, bytes
@@ -186,7 +185,6 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
 
     let mut attrs = String::new();
     let mut arm_attrs = TokenStream::new();
-    let mut c_name = None;
     let mut ours: Vec<(String, TokenStream)> = Vec::new();
     let mut k = 0;
     while is_punct(trees.get(k), '#') {
@@ -204,8 +202,6 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
         let n = 2 + usize::from(star);
         if star {
             arm_attrs.extend(trees[k..k + n].iter().cloned());
-        } else if head == "c_name" {
-            c_name = Some(rust_text(&args));
         } else if matches!(head.as_str(), "tag" | "tag_enum" | "storage" | "pad" | "size" | "packed" | "plain") {
             ours.push((head, args));
         } else {
@@ -283,7 +279,6 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
     };
     let tu = CTaggedUnion {
         name: name.clone(),
-        c_name,
         union: storage.is_some(),
         storage,
         tag_field,
@@ -360,7 +355,6 @@ fn generate(d: &Decl, tu: &CTaggedUnion) -> Result<TokenStream, String> {
     }
     let (attrs, vis) = (&d.attrs, &d.vis);
     let name = &tu.name;
-    let c_name = tu.c_name.as_deref().unwrap_or(name);
     let en = camel(name);
     // the arms by value: named for the union, but where that's the storage's
     // own name - DiskAccountingPos, C's disk_accounting_pos - its Arm
@@ -441,7 +435,7 @@ fn generate(d: &Decl, tu: &CTaggedUnion) -> Result<TokenStream, String> {
                       {vis} u: {name}__arms,\n\
                   }}\n\
                   \n\
-                  #[::cstruct_macros::c_name({c_name})]\n{attrs}{storage_attrs}{vis} union {s_ty} {{\n\
+                  #[::cstruct_macros::type_name({name})]\n{attrs}{storage_attrs}{vis} union {s_ty} {{\n\
                       {vis} t: {name}__tagged,\n\
                       {pad_field}\
                   }}\n\

@@ -20,7 +20,7 @@ use crate::debug::trace::events;
 use crate::prt;
 use crate::snapshots::snapshot::{has_overwrites, is_ancestor};
 use core::cmp::Ordering;
-use crate::errcode::{bch_errcode, err_ptr, BchError};
+use crate::errcode::{Errcode, err_ptr, BchError};
 use crate::fs::Fs;
 use crate::journal::entries::EntryWriter;
 use crate::util::kernel::unlikely;
@@ -37,10 +37,10 @@ use zerocopy::IntoBytes;
 
 #[bch_enum(closed)]
 #[prefix(__BCH_TRANS_COMMIT_)]
-#[mask(bch_trans_commit_flags: u32, prefix = BCH_TRANS_COMMIT_)]
+#[mask(TransCommitFlags: u32, prefix = BCH_TRANS_COMMIT_)]
 #[repr(u32)]
-pub enum __bch_trans_commit_flags {
-    /* First bits for bch_watermark: */
+pub enum TransCommitFlagBit {
+    /* First bits for Watermark: */
     /// don't check for enospc
     no_enospc = c::BCH_WATERMARK_BITS + 1,
     /// don't attempt to take a ref on c->writes
@@ -150,11 +150,11 @@ impl Fs {
         msg.to_text(&mut buf);
 
         if buf.allocation_failure() {
-            return Err(bch_errcode::BCH_ERR_ENOMEM_trans_log_msg.into());
+            return Err(Errcode::BCH_ERR_ENOMEM_trans_log_msg.into());
         }
 
-        if !self.journal.flags.get(c::journal_flags::running) {
-            self.journal.early_entry_add(c::bch_jset_entry_type::log, 0, 1, buf.as_bytes())
+        if !self.journal.flags.get(c::JournalFlag::running) {
+            self.journal.early_entry_add(c::JsetEntryType::log, 0, 1, buf.as_bytes())
         } else {
             let trans = crate::btree_trans!(self);
             commit_do(&trans, None, flags, |t| t.log_msg(&buf))
@@ -176,7 +176,7 @@ impl Fs {
     ) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
         match trans.delete_range_flags(btree_id, start, end, iter_flags.bits() | update_flags.bits()) {
-            Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart_nested) => Ok(()),
+            Err(e) if e.matches(Errcode::BCH_ERR_transaction_restart_nested) => Ok(()),
             r => r,
         }
     }
@@ -227,7 +227,7 @@ impl Fs {
      * blocking.
      */
     pub fn journal_log_msg(&self, msg: &dyn ToText) -> Result<(), BchError> {
-        self.log_msg_with(CommitOpts::new().watermark(Watermark::RECLAIM), msg)
+        self.log_msg_with(CommitOpts::new().watermark(Watermark::reclaim), msg)
     }
 }
 
@@ -332,7 +332,7 @@ impl TransAttempt<'_, '_> {
 
     /// An entry of @ty for @btree at @level, holding @data, with this
     /// transaction's commit.
-    pub(crate) fn journal_entry_add(&self, ty: c::bch_jset_entry_type, btree: u8, level: u8, data: &[u8])
+    pub(crate) fn journal_entry_add(&self, ty: c::JsetEntryType, btree: u8, level: u8, data: &[u8])
         -> Result<(), BchError>
     {
         let u64s = c::JSET_KEYS_U64s + data.len().div_ceil(size_of::<u64>());
@@ -345,14 +345,14 @@ impl TransAttempt<'_, '_> {
 
     /// @s into the journal, with this transaction's commit.
     pub fn log_str(&self, s: &[u8]) -> Result<(), BchError> {
-        self.journal_entry_add(c::bch_jset_entry_type::log, 0, 1, s)
+        self.journal_entry_add(c::JsetEntryType::log, 0, 1, s)
     }
 
     /// @msg into the journal, with this transaction's commit;
     /// ENOMEM_trans_log_msg if building @msg ran out of memory.
     pub fn log_msg(&self, msg: &Printbuf) -> Result<(), BchError> {
         if msg.allocation_failure() {
-            return Err(bch_errcode::BCH_ERR_ENOMEM_trans_log_msg.into());
+            return Err(Errcode::BCH_ERR_ENOMEM_trans_log_msg.into());
         }
         self.log_str(msg.as_bytes())
     }
@@ -360,7 +360,7 @@ impl TransAttempt<'_, '_> {
     /// @k, a key of @btree at @level, into the journal with this
     /// transaction's commit.
     pub fn log_bkey(&self, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
-        self.journal_entry_add(c::bch_jset_entry_type::log_bkey, btree.0 as u8, level as u8,
+        self.journal_entry_add(c::JsetEntryType::log_bkey, btree.0 as u8, level as u8,
                                k.as_bytes())
     }
 
@@ -932,7 +932,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             if paths[iter.key_cache_path.get()].key_cached().expect("a traversed key cache path's entry").dirty() {
                 self.fs().event_inc_trace(events::trans_restart_key_cache_raced, |out| prt!(out, "{}", t.fn_name()));
-                return Err(self.restart(bch_errcode::BCH_ERR_transaction_restart_key_cache_raced));
+                return Err(self.restart(Errcode::BCH_ERR_transaction_restart_key_cache_raced));
             }
 
             t.path_set_should_be_locked(paths, iter.key_cache_path.get());
@@ -1033,7 +1033,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
              * skipped. Runtime callers (extent splits) are excluded so
              * their whiteouts stay atomic with the extent update:
              */
-            if self.fs().flags.get(c::bch_fs_flags::in_fsck) {
+            if self.fs().flags.get(c::FsFlag::in_fsck) {
                 self.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
             }
 
@@ -1087,7 +1087,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         assert!(k.k.key_type().is_deleted(), "an empty slot with a key in it");
 
         if bkey_gt(k.k.p, end) {
-            return Err(self.fs().err(bch_errcode::BCH_ERR_ENOSPC_btree_slot));
+            return Err(self.fs().err(Errcode::BCH_ERR_ENOSPC_btree_slot));
         }
 
         Ok(())
@@ -1144,7 +1144,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return self.insert(btree, n, UpdateTriggerFlags::empty());
         }
 
-        self.journal_entry_add(c::bch_jset_entry_type::write_buffer_keys, btree.0 as u8, 0, k.as_bytes())
+        self.journal_entry_add(c::JsetEntryType::write_buffer_keys, btree.0 as u8, 0, k.as_bytes())
     }
 
     pub fn insert<V: ?Sized + ValidatedVal>(
@@ -1246,12 +1246,12 @@ impl BtreeTrans<'_> {
             }
         };
 
-        if !ret.matches(bch_errcode::BCH_ERR_delete_range_done) {
+        if !ret.matches(Errcode::BCH_ERR_delete_range_done) {
             return Err(ret);
         }
 
         if restart_count != self.restart_count() {
-            return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
+            return Err(BchError::from(Errcode::BCH_ERR_transaction_restart_nested));
         }
         Ok(())
     }
@@ -1261,7 +1261,7 @@ fn delete_range_one<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>, end:
     -> Result<(), BchError>
 {
     let Some((it, k)) = iter.peek_with(t, &mut t.trans().paths(), |i, t, p| i.peek_max_in(t, p, end))? else {
-        return Err(bch_errcode::BCH_ERR_delete_range_done.into());
+        return Err(Errcode::BCH_ERR_delete_range_done.into());
     };
 
     let res = DiskReservation::new(t.fs());

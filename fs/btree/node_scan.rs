@@ -14,7 +14,7 @@ use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::LockedNode;
 use crate::btree::read::read_done;
-use crate::c::{self, bch_errcode, BtreePtrV2};
+use crate::c::{self, Errcode, BtreePtrV2};
 use crate::data::ptrs::extent_ptr_to_text;
 use crate::errcode::BchError;
 use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
@@ -205,7 +205,7 @@ impl<'f> DevScan<'f> {
         let submit_time = local_clock();
         // remapped each read: read_done swaps the node's buffer
         let ret = bio.remap_read(buf.bytes(bytes)).submit_wait();
-        ca.account_io_completion(c::bch_member_error_type::read, submit_time, ret.is_ok());
+        ca.account_io_completion(c::MemberErrorType::read, submit_time, ret.is_ok());
         ret
     }
 
@@ -222,7 +222,7 @@ impl<'f> DevScan<'f> {
             return Ok(());
         }
 
-        let csum_type = c::bch_csum_type(bn.keys.csum_type() as u32);
+        let csum_type = c::CsumType(bn.keys.csum_type() as u32);
         if csum_type.is_encryption() {
             if fs.encryption_key().is_none() {
                 return Ok(());
@@ -376,7 +376,7 @@ fn scan_for_btree_nodes(fs: &Fs) -> Result<(), BchError> {
 
     if nodes.is_empty() {
         bch_err!(fs, "bch2_scan_for_btree_nodes: no btree nodes found");
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_node_scan_no_nodes);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_node_scan_no_nodes);
     }
 
     dump_nodes(fs, "nodes found", &nodes);
@@ -469,7 +469,7 @@ pub(crate) fn btree_node_is_stale(fs: &Fs, b: LockedNode<'_, BtreeNode>) -> bool
 
 fn run_scan(fs: &Fs, out: &mut Printbuf) -> Result<(), BchError> {
     passes::run_explicit(fs, out, RecoveryPass::scan_for_btree_nodes,
-                         c::bch_run_recovery_pass_flags::empty())
+                         c::RunRecoveryPassFlags::empty())
 }
 
 pub(crate) fn btree_has_scanned_nodes(fs: &Fs, btree: Btree, out: &mut Printbuf) -> Result<bool, BchError> {
@@ -500,7 +500,7 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
         let k = n.to_key();
 
         let mut from = c::bkey_validate_context { level: (level + 1) as u8, btree, ..Default::default() };
-        from.bits.set_from(c::bkey_validate_from::btree_node);
+        from.bits.set_from(c::BkeyValidateFrom::btree_node);
         assert!(crate::btree::bkey::bkey_validate(
             &BkeyValidate { fs, k: k.as_bkey_i().as_sc().into(), from: &from }).is_ok());
 

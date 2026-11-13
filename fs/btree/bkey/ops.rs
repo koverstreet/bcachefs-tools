@@ -187,7 +187,7 @@ pub fn bkey_val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
 /// The value, by its type's validate - checked first that it's as long as
 /// the type's shortest.
 pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    if v.fs.flags.get(c::bch_fs_flags::no_invalid_checks) {
+    if v.fs.flags.get(c::FsFlag::no_invalid_checks) {
         return Ok(());
     }
 
@@ -217,7 +217,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     use crate::bkey_fsck_err_on;
     let k = v.k.k;
 
-    if v.fs.flags.get(c::bch_fs_flags::no_invalid_checks) {
+    if v.fs.flags.get(c::FsFlag::no_invalid_checks) {
         return Ok(());
     }
 

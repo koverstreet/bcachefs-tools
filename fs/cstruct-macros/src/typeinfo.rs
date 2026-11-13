@@ -24,15 +24,15 @@ use crate::tokens;
 const OPAQUE: &str = "crate::typeinfo::FieldKind::Opaque";
 
 /// The type names a field kind may reference as `<T as TypeInfo>::INFO`:
-/// each must have TypeInfo itself. By the name the field's type is written
-/// with: a type renamed to Rust's name (#[c_name]) goes here by that name.
+/// each must have TypeInfo itself, by the name the field's type is written
+/// with.
 fn derives_type_info(name: &str) -> bool {
     name.starts_with("bch_") ||
         matches!(name, "Bpos" | "bkey" | "Bversion" |
                        "Rbio" | "ReadErrReport")
 }
 
-/// By C's name: a family's C definition, X__head, is struct X to C.
+/// By its type's name: a family's definition, X__head, is X.
 pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input.to_string())?;
     let name = &def.name;

@@ -57,7 +57,7 @@ use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, 
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::ptrs::Ptrs;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -125,7 +125,7 @@ pub(crate) struct DiscardRelease {
 /// in c->discards.in_flight, released when it's dropped, and its device's
 /// write io ref.
 pub(crate) struct Discard {
-    ca:         DevIoRef<c::bch_dev_write_ref>,
+    ca:         DevIoRef<c::DevWriteRefKind>,
     dev_bucket: u64,
 }
 
@@ -247,7 +247,7 @@ fn dev_bucket_nouse(fs: &Fs, bucket: Bpos) -> bool {
 /// Discards on, for @ca: the mount option, if it was given, or the device's
 /// own.
 pub(crate) fn discard_opt_enabled(fs: &Fs, ca: &Dev) -> bool {
-    if fs.flags.get(c::bch_fs_flags::discard_mount_opt_set) {
+    if fs.flags.get(c::FsFlag::discard_mount_opt_set) {
         fs.opts.discard.get() != 0
     } else {
         ca.mi.get().discard
@@ -265,7 +265,7 @@ impl c::bch_fs_discards {
         let rcu = read_lock();
         match fs.dev_rcu(bucket.inode as u32, &rcu) {
             Some(ca) if !ca.discard_slot_free(fastpath) =>
-                Err(NotAdded::Full(fs.err(bch_errcode::BCH_ERR_max_discards_in_flight))),
+                Err(NotAdded::Full(fs.err(Errcode::BCH_ERR_max_discards_in_flight))),
             _ => Ok(()),
         }
     }
@@ -314,7 +314,7 @@ impl Dev {
 impl Discard {
     /// @bucket claimed for a discard by @ca, and a slot on it - unless one's
     /// in flight for it, or @ca has as many as it may.
-    fn claim(ca: DevIoRef<c::bch_dev_write_ref>, bucket: Bpos, fastpath: bool) -> Result<Self, NotAdded> {
+    fn claim(ca: DevIoRef<c::DevWriteRefKind>, bucket: Bpos, fastpath: bool) -> Result<Self, NotAdded> {
         let fs = ca.fs();
         let dev_bucket = bucket_to_u64(bucket);
         let mut claimed = fs.discards.in_flight.lock();
@@ -323,7 +323,7 @@ impl Discard {
             return Err(NotAdded::Exists);
         }
         if !ca.discard_slot_get(fastpath) {
-            return Err(NotAdded::Full(fs.err(bch_errcode::BCH_ERR_max_discards_in_flight)));
+            return Err(NotAdded::Full(fs.err(Errcode::BCH_ERR_max_discards_in_flight)));
         }
         if claimed.push(dev_bucket).is_err() {
             ca.discard_slot_put();
@@ -433,7 +433,7 @@ impl<'a> Worker<'a> {
             return Ok(());
         }
 
-        let Some(ca) = fs.dev_get_ioref::<c::bch_dev_write_ref>(bucket.inode as u32) else {
+        let Some(ca) = fs.dev_get_ioref::<c::DevWriteRefKind>(bucket.inode as u32) else {
             self.s.write(|s| s.not_rw += bucket_size);
             return Ok(());
         };
@@ -470,7 +470,7 @@ impl<'a> Worker<'a> {
             let mut msg = LogMsg::new(fs);
             prt!(msg, "Discarded bucket that is no longer BCH_DATA_need_discard!\n{}", a.as_sc().to_text(fs));
             fs.emergency_read_only(&mut msg);
-            return fs.throw(bch_errcode::BCH_ERR_emergency_ro);
+            return fs.throw(Errcode::BCH_ERR_emergency_ro);
         }
 
         let orig = BkeyBuf::from_key(a.as_sc().untyped());
@@ -483,7 +483,7 @@ impl<'a> Worker<'a> {
         v.set_data_type(DataType::free);
 
         t.update(iter, &a, UpdateTriggerFlags::IS_DISCARD)?;
-        t.commit(None, CommitOpts::new().watermark(Watermark::RECLAIM)
+        t.commit(None, CommitOpts::new().watermark(Watermark::reclaim)
                  .flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC))?;
 
         let orig = BkeySC::from(&orig);
@@ -555,7 +555,7 @@ fn calculate_discard_sectors_to_release(trans: &TransGuard<'_>, s: &DiscardState
 
             let pending  = sectors * buckets(DataType::need_discard);
             let free     = sectors * buckets(DataType::free);
-            let reserve  = sectors * ca.buckets_reserved(c::bch_watermark::stripe);
+            let reserve  = sectors * ca.buckets_reserved(c::Watermark::stripe);
             let capacity = sectors * ca.mi.get().nbuckets;
             let buffer   = capacity * u64::from(fs.opts.journal_rewind_discard_buffer_percent.get()) / 100;
             let buffer_clamped = (buffer as i64).min((free as i64 - reserve as i64 * 4).max(0));
@@ -643,11 +643,11 @@ fn do_discards(fs: &Fs) {
             // room - unless the device is going, when it's left
             let full = match w.one_bucket(t, bucket, bucket_size) {
                 Ok(()) => false,
-                Err(e) if e.matches(bch_errcode::BCH_ERR_max_discards_in_flight) => true,
+                Err(e) if e.matches(Errcode::BCH_ERR_max_discards_in_flight) => true,
                 // restarts too: this bucket again
                 Err(e) => return Err(e),
             };
-            let ca = full.then(|| fs.dev_get_ioref::<c::bch_dev_write_ref>(bucket.inode as u32)).flatten();
+            let ca = full.then(|| fs.dev_get_ioref::<c::DevWriteRefKind>(bucket.inode as u32)).flatten();
 
             // Reaped as we go: each holds its claim, and its io ref, till its
             // bucket's marked free
@@ -678,7 +678,7 @@ fn do_discards(fs: &Fs) {
         let mut again = false;
         if r.flush_journal {
             trans.unlock_long();
-            let ret = fs.times[c::bch_time_stats::blocked_discard_journal_flush as usize].time(|| fs.journal_flush());
+            let ret = fs.times[c::TimeStat::blocked_discard_journal_flush as usize].time(|| fs.journal_flush());
             if let Err(e) = ret {
                 break Err(e);
             }
@@ -734,7 +734,7 @@ impl Fs {
         let must = self.rw_devs_rcu(&read_lock()).any(|ca| {
             let u = ca.usage_read_fast();
             u.buckets[DataType::free.0 as usize] <
-                ca.buckets_reserved(c::bch_watermark::stripe) * 4 &&
+                ca.buckets_reserved(c::Watermark::stripe) * 4 &&
             u.buckets[DataType::need_discard.0 as usize] != 0
         });
         if must {
@@ -763,7 +763,7 @@ pub(crate) fn do_discards_fast(ca: &Dev) {
         let bucket = pos(ca.dev_idx.into(), bucket);
         ret = loop {
             match lockrestart_do(&trans, |t| w.one_bucket(t, bucket, ca.mi.get().bucket_size.into())) {
-                Err(e) if e.matches(bch_errcode::BCH_ERR_max_discards_in_flight) => ca.discard_slot_wait(&trans, true),
+                Err(e) if e.matches(Errcode::BCH_ERR_max_discards_in_flight) => ca.discard_slot_wait(&trans, true),
                 r => break r,
             }
         };
@@ -813,7 +813,7 @@ fn dev_is_rw(ca: &Dev) -> bool {
 impl Dev {
     pub fn should_invalidate_buckets(&self, u: &c::bch_dev_usage) -> u64 {
         let reserved = self.reserved_sectors.get().div_ceil(self.mi.get().bucket_size.into())
-            .max(self.buckets_reserved(c::bch_watermark::stripe));
+            .max(self.buckets_reserved(c::Watermark::stripe));
         let want_free = reserved + (self.mi.get().nbuckets >> 5);
         let free = u.buckets[DataType::free.0 as usize];
         let cached = u.buckets[DataType::cached.0 as usize] as i64;
@@ -859,7 +859,7 @@ fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &Dev, bucket: Bpos, 
 
     BtreeIter::new(trans, Btree::backpointers, *bp_range.start(), BtreeIterFlags::empty())
         .for_each_max_commit(trans, *bp_range.end(), BtreeIterFlags::empty(), Some(&res),
-                             CommitOpts::new().watermark(Watermark::BTREE_COPYGC).flags(CommitFlags::NO_ENOSPC),
+                             CommitOpts::new().watermark(Watermark::btree_copygc).flags(CommitFlags::NO_ENOSPC),
                              |t, _, k| {
             let Some(bp) = k.arm::<c::Backpointer>() else { return Ok(()) };
             if bp.v().bucket_gen != generation {

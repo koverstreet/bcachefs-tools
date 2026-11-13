@@ -8,7 +8,7 @@
 //! value, as C's string tables are, is names_by_value!(T), made where it's
 //! wanted.
 //!
-//! What prints them is generic code over that, not code per enum: c_enum!'s
+//! What prints them is generic code over that, not code per enum: #[bch_enum]'s
 //! ToText for an open enum is a call to prt_name(), one copy, and #[inline] -
 //! an enum nothing prints costs nothing.
 

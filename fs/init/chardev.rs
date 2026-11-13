@@ -35,7 +35,7 @@
 
 use crate::init::passes::RecoveryPass;
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, WriteRef};
 use crate::locking::Locked;
 use crate::util::ffi::Opaque;
@@ -77,7 +77,7 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
     use crate::check::ioctl::fsck_online;
     use crate::sb::counters::ioctl::query_counters;
 
-    use bch_errcode as E;
+    use Errcode as E;
 
     match cmd {
         <c::BCH_IOCTL_QUERY_UUID as Ioctl>::OPCODE =>
@@ -98,7 +98,7 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
         <c::BCH_IOCTL_DISK_GET_IDX as Ioctl>::OPCODE =>
             input::<c::BCH_IOCTL_DISK_GET_IDX, _>(user, |a| disk_get_idx(fs, a)),
 
-        _ if !fs.flags.get(c::bch_fs_flags::started) =>
+        _ if !fs.flags.get(c::FsFlag::started) =>
             fs.throw(E::BCH_ERR_EINVAL_ioctl_not_started),
 
         <c::BCH_IOCTL_DATA as Ioctl>::OPCODE =>
@@ -168,7 +168,7 @@ pub fn ioctl_ret(ret: Result<c_long, BchError>) -> c_long {
 /* The queries */
 
 fn accounting_read_done(fs: &Fs) -> bool {
-    fs.flags.get(c::bch_fs_flags::new_fs) ||
+    fs.flags.get(c::FsFlag::new_fs) ||
         fs.recovery.runner.passes_complete.get() &
             (1 << RecoveryPass::accounting_read as u32) != 0
 }
@@ -179,7 +179,7 @@ fn query_uuid(fs: &Fs) -> Result<c::bch_ioctl_query_uuid, BchError> {
 
 fn fs_usage(fs: &Fs, user: UserArg<c::bch_ioctl_fs_usage>) -> Result<(), BchError> {
     if !accounting_read_done(fs) {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_fs_usage_accounting_not_read);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_fs_usage_accounting_not_read);
     }
     let entries_bytes = user.read()?.replica_entries_bytes;
 
@@ -207,10 +207,10 @@ fn fs_usage(fs: &Fs, user: UserArg<c::bch_ioctl_fs_usage>) -> Result<(), BchErro
 /// @dst. v1's outputs are a prefix of v2's.
 fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
                     dst: impl FnOnce(usize) -> UserSlice) -> Result<(), BchError> {
-    use c::disk_accounting_type as T;
+    use c::DiskAccountingType as T;
 
     if !accounting_read_done(fs) {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_query_accounting_not_read);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_query_accounting_not_read);
     }
 
     /*
@@ -224,7 +224,7 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
      */
     let privileged = 1 << T::inum.0 | 1 << T::snapshot.0;
     if arg.accounting_types_mask & privileged != 0 && !capable(Capability::SysAdmin) {
-        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
     }
 
     /*
@@ -235,7 +235,7 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
      * at all - an absent entry is a reading userspace can act on, a zero
      * would be a lie.
      */
-    if fs.sb.compat.get() & 1 << c::bch_sb_compat::stripe_frag_accounting.0 == 0 {
+    if fs.sb.compat.get() & 1 << c::SbCompat::stripe_frag_accounting.0 == 0 {
         arg.accounting_types_mask &= !(1 << T::stripe_frag.0 |
                                        1 << T::dev_stripe_frag.0);
     }
@@ -288,7 +288,7 @@ fn query_accounting_v2(fs: &Fs, user: UserArg<c::bch_ioctl_query_accounting_v2>)
 /* obsolete, didn't allow for new data types: */
 fn dev_usage(fs: &Fs, arg: &mut c::bch_ioctl_dev_usage) -> Result<(), BchError> {
     if arg.flags & !c::BCH_BY_INDEX != 0 || arg.pad[..3] != [0; 3] {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_dev_usage_bad_flags);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_dev_usage_bad_flags);
     }
     let ca = dev_lookup(fs, arg.dev, arg.flags)?;
     let src = ca.usage_full_read_fast();
@@ -306,11 +306,11 @@ fn dev_usage(fs: &Fs, arg: &mut c::bch_ioctl_dev_usage) -> Result<(), BchError> 
 
 fn dev_usage_v2(fs: &Fs, user: UserVstruct<c::bch_ioctl_dev_usage_v2>) -> Result<(), BchError> {
     if !accounting_read_done(fs) {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_dev_usage_v2_accounting_not_read);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_dev_usage_v2_accounting_not_read);
     }
     let mut arg = user.head()?;
     if arg.flags & !c::BCH_BY_INDEX != 0 || arg.pad[..3] != [0; 3] {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_dev_usage_v2_bad_flags);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_dev_usage_v2_bad_flags);
     }
     let ca = dev_lookup(fs, arg.dev, arg.flags)?;
     let src = ca.usage_full_read_fast();
@@ -335,7 +335,7 @@ fn dev_usage_v2(fs: &Fs, user: UserVstruct<c::bch_ioctl_dev_usage_v2>) -> Result
 fn read_super(fs: &Fs, arg: c::bch_ioctl_read_super) -> Result<(), BchError> {
     admin(fs)?;
     if arg.flags & !(c::BCH_BY_INDEX | c::BCH_READ_DEV) != 0 || arg.pad != 0 {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_read_super_bad_flags);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_read_super_bad_flags);
     }
 
     let sb_lock = fs.sb_lock();
@@ -344,7 +344,7 @@ fn read_super(fs: &Fs, arg: c::bch_ioctl_read_super) -> Result<(), BchError> {
         ca = dev_lookup(fs, arg.dev, arg.flags)?;
         match fs.dev_sb(&sb_lock, &ca) {
             Some(sb) => sb,
-            None     => return fs.throw(bch_errcode::BCH_ERR_device_offline),
+            None     => return fs.throw(Errcode::BCH_ERR_device_offline),
         }
     } else {
         &**sb_lock
@@ -372,14 +372,14 @@ fn disk_get_idx(fs: &Fs, arg: c::bch_ioctl_disk_get_idx) -> Result<c_int, BchErr
     let dev = huge_decode_dev(arg.dev);
     admin(fs)?;
     if dev == 0 {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_disk_get_idx_bad_dev);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_disk_get_idx_bad_dev);
     }
 
     let rcu = read_lock();
     let idx = fs.online_devs_rcu(&rcu).find(|ca| ca.dev == dev).map(|ca| ca.dev_idx);
     match idx {
         Some(idx) => Ok(idx.into()),
-        None      => fs.throw(bch_errcode::BCH_ERR_ENOENT_dev_idx_not_found),
+        None      => fs.throw(Errcode::BCH_ERR_ENOENT_dev_idx_not_found),
     }
 }
 
@@ -398,7 +398,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
     admin(fs)?;
 
     if arg.flags & !FLAGS.iter().fold(0, |m, (f, _)| m | f) != 0 {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_query_btree_keys_bad_flags);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_query_btree_keys_bad_flags);
     }
     let mut flags = FLAGS.iter()
         .filter(|(f, _)| arg.flags & f != 0)
@@ -413,7 +413,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
     let valid = Btree::from_raw(arg.btree)
         .is_some_and(|btree| btree_iter_params_valid(btree, arg.level, arg.start, arg.end, flags));
     if !valid {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_query_btree_keys_bad_params);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_query_btree_keys_bad_params);
     }
 
     /* bound per-call kernel allocation; the caller loops anyways */
@@ -539,10 +539,10 @@ fn dev_lookup_outer(fs: &Fs, dev: u64, flags: u32) -> Result<DevOuterRef, BchErr
 }
 
 fn admin(fs: &Fs) -> Result<(), BchError> {
-    if capable(Capability::SysAdmin) { Ok(()) } else { fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin) }
+    if capable(Capability::SysAdmin) { Ok(()) } else { fs.throw(Errcode::BCH_ERR_EPERM_non_admin) }
 }
 
-fn disk_add(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcode) -> Result<(), BchError> {
+fn disk_add(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags != 0 || a.pad != 0 {
         return fs.throw(bad_flags);
@@ -554,7 +554,7 @@ fn disk_add(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcode) 
     msg.report(&mut err, ret, |ret, err| bch_err_msg!(fs, ret, "{}", err))
 }
 
-fn disk_remove(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcode) -> Result<(), BchError> {
+fn disk_remove(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags & !FORCE_FLAGS != 0 || a.pad != 0 {
         return fs.throw(bad_flags);
@@ -571,7 +571,7 @@ fn disk_remove(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcod
     })
 }
 
-fn disk_online(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcode) -> Result<(), BchError> {
+fn disk_online(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags != 0 || a.pad != 0 {
         return fs.throw(bad_flags);
@@ -588,7 +588,7 @@ fn disk_online(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcod
     })
 }
 
-fn disk_offline(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcode) -> Result<(), BchError> {
+fn disk_offline(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags & !FORCE_FLAGS != 0 || a.pad != 0 {
         return fs.throw(bad_flags);
@@ -605,7 +605,7 @@ fn disk_offline(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errco
     })
 }
 
-fn disk_set_state(fs: &Fs, a: c::bch_ioctl_disk_set_state, msg: ErrMsg, bad_args: bch_errcode)
+fn disk_set_state(fs: &Fs, a: c::bch_ioctl_disk_set_state, msg: ErrMsg, bad_args: Errcode)
     -> Result<(), BchError>
 {
     admin(fs)?;
@@ -620,7 +620,7 @@ fn disk_set_state(fs: &Fs, a: c::bch_ioctl_disk_set_state, msg: ErrMsg, bad_args
     msg.report(&mut err, ret, |ret, _| bch_err_msg_dev!(&ca, ret, "setting device state"))
 }
 
-fn disk_resize(fs: &Fs, a: c::bch_ioctl_disk_resize, msg: ErrMsg, bad_flags: bch_errcode)
+fn disk_resize(fs: &Fs, a: c::bch_ioctl_disk_resize, msg: ErrMsg, bad_flags: Errcode)
     -> Result<(), BchError>
 {
     admin(fs)?;
@@ -640,7 +640,7 @@ fn disk_resize(fs: &Fs, a: c::bch_ioctl_disk_resize, msg: ErrMsg, bad_flags: bch
 }
 
 fn disk_resize_journal(fs: &Fs, a: c::bch_ioctl_disk_resize_journal, msg: ErrMsg,
-                       bad_flags: bch_errcode, too_big: bch_errcode) -> Result<(), BchError> {
+                       bad_flags: Errcode, too_big: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags & !c::BCH_BY_INDEX != 0 || a.pad != 0 {
         return fs.throw(bad_flags);
@@ -680,11 +680,11 @@ fn data_job(job: &DataJob, _write_ref: WriteRef) {
     // SAFETY: the job's write ref keeps the filesystem
     let ret = crate::data::move_data::data_job(unsafe { job.fs.as_ref() }, stats, &job.arg);
 
-    if ret.err() == Some(bch_errcode::BCH_ERR_device_offline.into()) {
-        stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_device_offline);
+    if ret.err() == Some(Errcode::BCH_ERR_device_offline.into()) {
+        stats.ret.set(c::IoctlDataEventRet::BCH_IOCTL_DATA_EVENT_RET_device_offline);
     } else {
-        stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_done);
-        stats.at.data_type.set(DataType(c::data_progress_data_type_special::DATA_PROGRESS_DATA_TYPE_done.0));
+        stats.ret.set(c::IoctlDataEventRet::BCH_IOCTL_DATA_EVENT_RET_done);
+        stats.at.data_type.set(DataType(c::DataProgressDataTypeSpecial::DATA_PROGRESS_DATA_TYPE_done.0));
     }
 }
 
@@ -696,7 +696,7 @@ impl FileOps for DataJob {
         let (ret, data_type, pos) = (stats.ret.get(), stats.at.data_type.get(), stats.at.pos.get());
 
         let mut e = c::bch_ioctl_data_event::default();
-        e.type_ = c::bch_data_event::BCH_DATA_EVENT_PROGRESS.0 as u8;
+        e.type_ = c::DataEvent::BCH_DATA_EVENT_PROGRESS.0 as u8;
         e.ret   = ret.0 as u8;
 
         let mut p = c::bch_ioctl_data_progress::default();
@@ -707,7 +707,7 @@ impl FileOps for DataJob {
         p.sectors_error_corrected   = stats.sectors_error_corrected.load(Relaxed) as u64;
         p.sectors_error_uncorrected = stats.sectors_error_uncorrected.load(Relaxed) as u64;
 
-        if c::bch_data_ops(self.arg.op.into()) == c::bch_data_ops::scrub {
+        if c::DataOp(self.arg.op.into()) == c::DataOp::scrub {
             let scrub = self.arg.scrub();
             if let Some(ca) = fs.dev_get(scrub.dev) {
                 let u = ca.usage_full_read_fast();
@@ -722,7 +722,7 @@ impl FileOps for DataJob {
         e.payload.p = p;
 
         if buf.len() < size_of::<c::bch_ioctl_data_event>() {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_data_read_short_buf);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_data_read_short_buf);
         }
 
         // SAFETY: zero initialized, then set: every byte is initialized
@@ -741,11 +741,11 @@ fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
         .ok_or(BchError::from(c::EROFS))?;
 
     if !capable(Capability::SysAdmin) {
-        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
     }
 
-    if u32::from(arg.op) >= c::bch_data_ops::NR || arg.flags != 0 {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_data_bad_op);
+    if u32::from(arg.op) >= c::DataOp::NR || arg.flags != 0 {
+        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_data_bad_op);
     }
 
     let job = ThreadWithFile::new(Ok(DataJob {
@@ -803,7 +803,7 @@ impl FileOps for Ctl {
         let fs = MINORS.lock().0.get(minor as usize).copied().flatten().map(|fs| {
             // SAFETY: live while it's in MINORS
             let fs = unsafe { fs.as_ref() };
-            fs.ro_ref.tryget().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ioctl_fs_stopping))
+            fs.ro_ref.tryget().ok_or_else(|| fs.err(Errcode::BCH_ERR_ioctl_fs_stopping))
         });
 
         ioctl_ret(match fs {
@@ -822,7 +822,7 @@ impl Fs {
                 Some(i) => { minors.0[i] = fs; i as u32 }
                 None if (minors.0.len() as u32) < MINOR_GLOBAL && minors.0.push(fs).is_ok() =>
                     minors.0.len() as u32 - 1,
-                None => return self.throw(bch_errcode::BCH_ERR_chardev_init_error),
+                None => return self.throw(Errcode::BCH_ERR_chardev_init_error),
             }
         };
         // SAFETY: ours, set up as the filesystem's opened
@@ -837,7 +837,7 @@ impl Fs {
                 unsafe { (*self.as_ptr()).chardev = dev.as_ptr() };
                 Ok(())
             }
-            Err(_) => self.throw(bch_errcode::BCH_ERR_chardev_init_error),
+            Err(_) => self.throw(Errcode::BCH_ERR_chardev_init_error),
         }
     }
 

@@ -28,7 +28,7 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
 };
 use crate::c;
-use crate::errcode::{bch_errcode, BchError, Found};
+use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::progress::Progress;
@@ -54,7 +54,7 @@ fn dirent_points_to_inode(
     }
 
     bch_warn!(fs, "{}", namei::dirent_inode_mismatch(fs, k, inode));
-    fs.throw(bch_errcode::BCH_ERR_ENOENT_dirent_doesnt_match_inode)
+    fs.throw(Errcode::BCH_ERR_ENOENT_dirent_doesnt_match_inode)
 }
 
 fn remove_backpointer(
@@ -104,7 +104,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
     // Unlinking zeroes fs_path_parent: a subvolume on its way to deletion has
     // no path by design, and isn't ours to reattach.
-    if start_sv.state_decoded() != Some(c::bch_subvolume_state::live) {
+    if start_sv.state_decoded() != Some(c::SubvolumeState::live) {
         return Ok(());
     }
 
@@ -191,7 +191,7 @@ fn bi_depth_renumber_one(
                                   BtreeIterFlags::empty());
 
     let Some(k) = iter.peek_slot(t)?.filter(|k| inode::bkey_is_inode(k.k)) else {
-        return Err(bch_errcode::BCH_ERR_ENOENT_inode.into());
+        return Err(Errcode::BCH_ERR_ENOENT_inode.into());
     };
 
     let mut inode = inode::unpack(fs, k);
@@ -280,7 +280,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
         let parent_inode = bch_err_msg!(fs, match inode_iter.peek_slot(t) {
             Ok(Some(k)) if inode::bkey_is_inode(k.k) => Ok(inode::unpack(fs, k)),
             ret => Err(ret.err()
-                .unwrap_or(bch_errcode::BCH_ERR_ENOENT_inode.into())),
+                .unwrap_or(Errcode::BCH_ERR_ENOENT_inode.into())),
         }, "error looking up parent directory")?;
 
         min_bi_depth = parent_inode.bi_depth;
@@ -356,7 +356,7 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
             // directory but the root of an unlinked subvolume, and a subvolume
             // root ends every walk - so skipping these can't hide a directory
             // loop:
-            if inode::flags(k) & c::bch_inode_flags::unlinked.bits() != 0 {
+            if inode::flags(k) & c::InodeFlags::unlinked.bits() != 0 {
                 return Ok(());
             }
 

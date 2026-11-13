@@ -25,7 +25,7 @@ use crate::c;
 use crate::data::extents::Extents;
 use crate::data::keylist::KeyRoom;
 use crate::data::reflink;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
 use crate::util::closure::StackClosure;
@@ -70,9 +70,9 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
     // cut to what's reserved, rounded down to a block.
     let new_replicas = u32::from(opts.data_replicas).saturating_sub(nr_overwritable.into());
     let res = DiskReservation::new(fs);
-    let _ = res.add(sectors, new_replicas, c::bch_reservation_flags::BCH_DISK_RESERVATION_PARTIAL);
+    let _ = res.add(sectors, new_replicas, c::ReservationFlags::BCH_DISK_RESERVATION_PARTIAL);
     if res.sectors() == 0 && new_replicas != 0 {
-        return Err(fs.err(bch_errcode::BCH_ERR_ENOSPC_disk_reservation));
+        return Err(fs.err(Errcode::BCH_ERR_ENOSPC_disk_reservation));
     }
     // write_degraded may have reserved fewer copies than asked for
     let shortfall = new_replicas - res.nr_replicas.get();
@@ -80,7 +80,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
     if new_replicas != 0 {
         sectors = (res.sectors() / u64::from(res.nr_replicas.get())) >> fs.block_bits() << fs.block_bits();
         if sectors == 0 {
-            return Err(fs.err(bch_errcode::BCH_ERR_ENOSPC_disk_reservation));
+            return Err(fs.err(Errcode::BCH_ERR_ENOSPC_disk_reservation));
         }
     }
 
@@ -99,13 +99,13 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
         let mut e = t.bkey_alloc(c::BKEY_EXTENT_U64s_MAX as u32)?;
         let devs_have = c::bch_devs_list::default();
         let mut req = t.alloc_request(opts.foreground_target.into(), false, Some(&devs_have),
-                                      nr_replicas, nr_replicas, c::bch_watermark::normal,
-                                      c::bch_write_flags::empty(), Some(cl.as_opaque()))?;
+                                      nr_replicas, nr_replicas, c::Watermark::normal,
+                                      c::WriteFlags::empty(), Some(cl.as_opaque()))?;
         let wp = match t.alloc_sectors(&mut req, write_point) {
             Ok(wp) => wp,
-            Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
+            Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => {
                 t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
-                return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
+                return Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested));
             }
             Err(e) => return Err(e),
         };
@@ -325,7 +325,7 @@ fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, offset: u64, le
         }
 
         if offset >= inode_u.bi_size {
-            return t.fs().throw(bch_errcode::BCH_ERR_EINVAL_finsert_offset_past_eof);
+            return t.fs().throw(Errcode::BCH_ERR_EINVAL_finsert_offset_past_eof);
         }
     }
 
@@ -399,7 +399,7 @@ fn __resume_finsert(
     op:                  &mut BkeyI<c::LoggedOpFinsert>,
     mut i_sectors_delta: Option<&mut i64>,
 ) -> Result<(), BchError> {
-    use c::logged_op_finsert_state as S;
+    use c::LoggedOpFinsertState as S;
 
     let fs = trans.fs();
     let inum = c::subvol_inum { subvol: op.v.subvol.get() as u64, inum: op.v.inum.get() };
@@ -485,7 +485,7 @@ fn __resume_finsert(
                  * already ours and only a split adds anything.
                  */
                 if from_ancestor && !shared_data {
-                    disk_res.add(copy.k().size as u64, nr_replicas, c::bch_reservation_flags::empty())?;
+                    disk_res.add(copy.k().size as u64, nr_replicas, c::ReservationFlags::empty())?;
                 }
 
                 if bkey_lt(k_start, src_pos) {
@@ -495,7 +495,7 @@ fn __resume_finsert(
                     /* Splitting compressed extent? */
                     if snapshot == k_snapshot {
                         let _ = disk_res.add(copy.k().size as u64, nr_replicas,
-                                             c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL);
+                                             c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL);
                     }
                 }
 

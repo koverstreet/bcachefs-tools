@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 
 use anyhow::{bail, Result};
-use bcachefs_kernel::{btree_id, c};
+use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
@@ -199,7 +199,7 @@ pub struct Cli {
     mode: Mode,
 
     /// Btree to list from
-    #[arg(short, long, default_value_t=btree_id::extents)]
+    #[arg(short, long, default_value_t=Btree::extents)]
     btree: Btree,
 
     /// Bkey type to list
@@ -243,10 +243,10 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
     fs_opts.set_read_only(true);
     fs_opts.set_norecovery(true);
     fs_opts.set_degraded(DegradedAction::very);
-    fs_opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
+    fs_opts.set_errors(c::ErrorAction::BCH_ON_ERROR_continue);
 
     if opt.fsck {
-        fs_opts.set_fix_errors(c::fsck_err_opts::yes as u8);
+        fs_opts.set_fix_errors(c::FsckErrOpt::yes as u8);
         fs_opts.set_norecovery(false);
     }
 

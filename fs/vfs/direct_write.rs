@@ -11,7 +11,7 @@ use crate::btree_trans;
 use crate::c;
 use crate::data::durability::BkeyVDurability;
 use crate::data::write::bch2_write;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::inode_opts;
@@ -25,7 +25,7 @@ use crate::util::refcount::TryRefcount;
 use crate::vfs::folio::Mapping;
 use crate::vfs::inode::InodeInfo;
 use crate::vfs::kiocb::Kiocb;
-use c::bch_write_flags as w;
+use c::WriteFlags as w;
 use core::ops::ControlFlow;
 use core::ptr::NonNull;
 
@@ -180,7 +180,7 @@ fn dio_write_end(dio: &mut Dio) {
     unsafe { c::bio_release_pages(dio.bio_mut(), false) };
 
     if unlikely(dio.op.error != 0) {
-        inode.ei_flags.set(c::bch_inode_info_flags::EI_INODE_ERROR, true);
+        inode.ei_flags.set(c::InodeInfoFlag::EI_INODE_ERROR, true);
     }
 }
 
@@ -275,7 +275,7 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
             break Err(e);
         }
 
-        match d.op.res.add(sectors, d.op.opts.data_replicas.into(), c::bch_reservation_flags::empty()) {
+        match d.op.res.add(sectors, d.op.opts.data_replicas.into(), c::ReservationFlags::empty()) {
             Ok(()) => {
                 let nr_replicas = d.op.res.nr_replicas.get();
                 d.op.bits.set_nr_replicas(nr_replicas as u8);
@@ -380,7 +380,7 @@ pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
 
         let (ki_pos, count) = (k.pos(), it.count() as u64);
         if unlikely((ki_pos | count) & (fs.block_bytes() - 1) != 0) {
-            break 'out fs.err(bch_errcode::BCH_ERR_EINVAL_unaligned_io).class() as isize;
+            break 'out fs.err(Errcode::BCH_ERR_EINVAL_unaligned_io).class() as isize;
         }
 
         let started = inode.dio_start();

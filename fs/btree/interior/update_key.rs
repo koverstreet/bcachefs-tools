@@ -13,7 +13,7 @@ use crate::btree::path::LockedNode;
 use crate::btree::trigger::{key_trigger, TriggerOp};
 use crate::c;
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::util::vstructs::Validated;
 
@@ -124,9 +124,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 key_trigger(self, &mut op)?;
             }
 
-            self.journal_entry_add(c::bch_jset_entry_type::overwrite, b.c.btree_id as u8, b.c.level + 1,
+            self.journal_entry_add(c::JsetEntryType::overwrite, b.c.btree_id as u8, b.c.level + 1,
                                    b.contents().key_i().as_bytes())?;
-            self.journal_entry_add(c::bch_jset_entry_type::btree_root, b.c.btree_id as u8, b.c.level,
+            self.journal_entry_add(c::JsetEntryType::btree_root, b.c.btree_id as u8, b.c.level,
                                    key.as_ref().as_bytes())?;
 
             /*
@@ -164,7 +164,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut commit_lock = trans.mutex_lock(&mut trans.paths(), &fs.btree.interior_updates.commit_lock)?;
 
         let Some(update) = b.will_make_reachable.update() else {
-            return Err(trans.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
+            return Err(trans.restart(Errcode::BCH_ERR_transaction_restart_nested));
         };
 
         /*

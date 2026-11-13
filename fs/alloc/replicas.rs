@@ -21,7 +21,7 @@ use crate::alloc::accounting_mem::{self, MarkWrite};
 use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
@@ -43,7 +43,7 @@ use crate::types::c_default;
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum bch_write_check {
+pub enum WriteCheck {
     /* Starting: is there anywhere to write each data type at all? */
     BCH_WRITE_CHECK_start,
     /*
@@ -126,7 +126,7 @@ impl SbEntry<'_> {
         let invalid = |err: &mut Printbuf, msg: fmt::Arguments<'_>| {
             write!(err, "{msg} in entry ");
             self.to_text(err);
-            Err(bch_errcode::BCH_ERR_invalid_replicas_entry.into())
+            Err(Errcode::BCH_ERR_invalid_replicas_entry.into())
         };
 
         if self.devs.is_empty() {
@@ -310,7 +310,7 @@ fn v0_entries(b: &[u8]) -> impl Iterator<Item = SbEntry<'_>> {
 /// The superblock's replicas entries: replicas', if it has the section, else
 /// replicas_v0's.
 pub fn sb_entries<S: SbState>(sb: &c::bch_sb<S>) -> impl Iterator<Item = SbEntry<'_>> {
-    type T = c::bch_sb_field_type;
+    type T = c::SbFieldType;
     let v1 = S::field(sb, T::replicas).map(|f| v1_entries(f.as_bytes()));
     let v0 = v1.is_none().then(|| S::field(sb, T::replicas_v0)).flatten()
         .map(|f| v0_entries(f.as_bytes()));
@@ -324,7 +324,7 @@ impl<S: SbState> c::bch_sb<S> {
         sb_entries(self).any(|e| u32::from(e.data_type) == DataType::journal.0)
     }
 
-    /// The data types with data on @dev: a mask, by bch_data_type.
+    /// The data types with data on @dev: a mask, by DataType.
     pub fn dev_has_data(&self, dev: u32) -> u32 {
         sb_entries(self)
             .filter(|e| e.data_type < 32 && e.devs.iter().any(|&d| u32::from(d) == dev))
@@ -380,7 +380,7 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32,
 /// user data at all, and leaving rw, no fewer replicas than configured of
 /// each - than there are now, if that's fewer - unless @flags allows going
 /// degraded. If not, why in @err.
-pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bch_write_check,
+pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::WriteCheck,
                        flags: u32, err: &mut Printbuf) -> bool {
     type D = DataType;
 
@@ -414,7 +414,7 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bc
         }
     }
 
-    if check == c::bch_write_check::BCH_WRITE_CHECK_start {
+    if check == c::WriteCheck::BCH_WRITE_CHECK_start {
         return true;
     }
 
@@ -589,7 +589,7 @@ impl ReplicasCpu {
     fn to_sb(&self, sb: &mut (impl SbResize + ?Sized)) -> bool {
         /// Section @F, resized, the other one deleted: its entries' bytes.
         fn section<'a, F: SbField + Unsized + ?Sized + 'a>(sb: &'a mut (impl SbResize + ?Sized), u64s: u32,
-                                                         other: c::bch_sb_field_type) -> Option<&'a mut [u8]> {
+                                                         other: c::SbFieldType) -> Option<&'a mut [u8]> {
             sb.field_resize::<F>(u64s)?;
             sb.field_delete(other);
             Some(&mut bytes_of_mut(sb.field_mut::<F>().expect("just resized"))[SECTION_HEAD..])
@@ -607,9 +607,9 @@ impl ReplicasCpu {
         let bytes = SECTION_HEAD + self.entries().flat_map(|e| parts(e, v1)).map(<[u8]>::len).sum::<usize>();
         let u64s = bytes.div_ceil(size_of::<u64>()) as u32;
         let out = if v1 {
-            section::<c::bch_sb_field_replicas>(sb, u64s, c::bch_sb_field_type::replicas_v0)
+            section::<c::bch_sb_field_replicas>(sb, u64s, c::SbFieldType::replicas_v0)
         } else {
-            section::<c::bch_sb_field_replicas_v0>(sb, u64s, c::bch_sb_field_type::replicas)
+            section::<c::bch_sb_field_replicas_v0>(sb, u64s, c::SbFieldType::replicas)
         };
         let Some(out) = out else { return false };
 
@@ -624,7 +624,7 @@ impl ReplicasCpu {
 
     /// to_sb(), no room an error.
     fn write_sb(&self, fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        fs.ensure(self.to_sb(&mut fs.sb_resize(sb)), bch_errcode::BCH_ERR_ENOSPC_sb_replicas)
+        fs.ensure(self.to_sb(&mut fs.sb_resize(sb)), Errcode::BCH_ERR_ENOSPC_sb_replicas)
     }
 
     /// Validated as a section is, its entries against @sb's members: none
@@ -640,7 +640,7 @@ impl ReplicasCpu {
             if let Some(p) = prev.filter(|&p| self.entries.slot(p) == self.entries.slot(i)) {
                 write!(err, "duplicate replicas entry ");
                 self.entry(p).to_text(err);
-                return Err(bch_errcode::BCH_ERR_invalid_sb_replicas.into());
+                return Err(Errcode::BCH_ERR_invalid_sb_replicas.into());
             }
             prev = Some(i);
         }
@@ -680,7 +680,7 @@ fn verify_entry(_e: &Entry) {
 fn section_validate<'a, I: Iterator<Item = SbEntry<'a>>>(sb: &c::bch_sb<Unvalidated>, walk: impl Fn() -> I,
                                                          err: &mut Printbuf) -> Result<(), BchError> {
     ReplicasCpu::from_entries(walk, |_| true)
-        .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_cpu_replicas))?
+        .map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_cpu_replicas))?
         .validate(sb, err)
 }
 
@@ -703,10 +703,10 @@ impl SbFieldOps for c::bch_sb_field_replicas {
     /// The table, from this section or replicas_v0: at open - after, it
     /// would lose the refs.
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        assert!(!fs.flags.get(c::bch_fs_flags::started), "replicas table rebuilt with refs held");
+        assert!(!fs.flags.get(c::FsFlag::started), "replicas table rebuilt with refs held");
 
         let mut new = ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))
-            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
+            .map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
         new.sort();
         *fs.replicas.write() = new;
         Ok(())
@@ -770,7 +770,7 @@ impl Fs {
             let mut r = self.replicas.write();
             let mut dirty = false;
             if r.find(e).is_none() {
-                let new = r.with(e).map_err(|_| self.err(bch_errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
+                let new = r.with(e).map_err(|_| self.err(Errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
                 new.write_sb(self, &mut sb)?;
                 *r = new;
                 dirty = true;
@@ -887,7 +887,7 @@ impl Fs {
                     accounting_mem::has_replicas(self, &mark, e))
                 .map_err(|_| {
                     crate::bch_err!(self, "error allocating c->replicas_gc");
-                    self.err(bch_errcode::BCH_ERR_ENOMEM_replicas_gc)
+                    self.err(Errcode::BCH_ERR_ENOMEM_replicas_gc)
                 })?;
             new.write_sb(self, &mut sb)?;
             *r = new;
@@ -1003,7 +1003,7 @@ mod tests {
         assert!(r.validate(sb.sb(), &mut err).is_ok());
 
         let mut r = r.with(entry(&e)).unwrap();
-        assert!(r.validate(sb.sb(), &mut err).unwrap_err().matches(bch_errcode::BCH_ERR_invalid_sb_replicas));
+        assert!(r.validate(sb.sb(), &mut err).unwrap_err().matches(Errcode::BCH_ERR_invalid_sb_replicas));
     }
 
     /// An entry cut short at a section's end - C's walk stopped there - is

@@ -207,7 +207,7 @@ impl InodeInfo {
                 self.ei_inum.subvol, self.ei_inum.inum);
 
         if delete {
-            if !self.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+            if !self.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
                 let _ = quota::acct(fs, qid, quota::Q_SPC, -(v.blocks() as i64), QuotaAcctMode::WARN);
                 let _ = quota::acct(fs, qid, quota::Q_INO, -1, QuotaAcctMode::WARN);
             }
@@ -225,7 +225,7 @@ impl InodeInfo {
         fence(SeqCst);
     }
 
-    pub fn raw(&self) -> *mut c::bch_inode_info {
+    pub fn raw(&self) -> *mut c::InodeInfo {
         core::ptr::from_ref(self).cast_mut()
     }
 
@@ -281,7 +281,7 @@ impl InodeInfo {
             v.set_ctime(fs.time_to_timespec(bi.bi_ctime as i64));
         }
 
-        use c::bch_inode_flags as F;
+        use c::InodeFlags as F;
         for (on, flag) in [(bi.flag(F::sync),      c::S_SYNC),
                            (bi.flag(F::immutable), c::S_IMMUTABLE),
                            (bi.flag(F::append),    c::S_APPEND),
@@ -463,7 +463,7 @@ impl<'i> UpdateLock<'i> {
         }
 
         // Quotas don't count snapshot inodes: only the qid changes.
-        if !inode.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+        if !inode.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
             // blocks(): stable, under ei_quota_lock
             quota::transfer(fs, qtypes, qid, q.ei_qid, inode.vfs().blocks() + q.ei_quota_reserved, mode)?;
         }
@@ -477,20 +477,20 @@ impl<'i> UpdateLock<'i> {
     /// Move the inode to project @projid, quota and all.
     pub fn set_projid(&self, projid: u32) -> Result<(), BchError> {
         let mut qid = self.inode.ei_quota.lock().ei_qid;
-        qid.q[c::quota_types::QTYP_PRJ.0 as usize] = projid;
+        qid.q[c::QuotaType::QTYP_PRJ.0 as usize] = projid;
 
-        self.quota_transfer(qid, 1 << c::quota_types::QTYP_PRJ.0, QuotaAcctMode::PREALLOC)
+        self.quota_transfer(qid, 1 << c::QuotaType::QTYP_PRJ.0, QuotaAcctMode::PREALLOC)
     }
 
     /// Move the inode to @dir's project, if moving it into @dir would: it has
     /// no project of its own, and @dir's is different.
     pub fn inherit_project(&self, dir: &InodeInfo) -> Result<(), BchError> {
-        let project = InodeOpt::of(c::inode_opt_id::project);
+        let project = InodeOpt::of(c::InodeOptId::project);
         let (bi, dir_bi) = (self.inode.inode(), dir.inode());
         if project.is_own(&bi) || project.get(&dir_bi) == project.get(&bi) {
             return Ok(());
         }
-        self.set_projid(dir.ei_quota.lock().ei_qid.q[c::quota_types::QTYP_PRJ.0 as usize])
+        self.set_projid(dir.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ.0 as usize])
     }
 
     /// Change the inode with @set, in a transaction of its own that's
@@ -580,7 +580,7 @@ impl InodeInfo {
 
         self.vfs().set_blocks(blocks.wrapping_add_signed(sectors));
 
-        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
             return;
         }
 
@@ -626,7 +626,7 @@ impl InodeInfo {
     pub(crate) fn quota_reservation_add(&self, res: &mut c::quota_res, sectors: u64, check_enospc: bool)
         -> Result<(), BchError>
     {
-        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
             return Ok(());
         }
 

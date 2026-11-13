@@ -19,7 +19,7 @@
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::c;
 use crate::data::ec::stripe::{shape, Shape, StripeKey, MAX_BLOCKS};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::errors::SbErrorId;
 use crate::util::{raid, Printbuf};
@@ -88,7 +88,7 @@ impl Fs {
                 // or already here, as C's closure_wait() allows
                 unsafe { closure_wait(&self.ec.stripe_buf_wait, cl) };
             }
-            return self.throw(bch_errcode::BCH_ERR_stripe_buf_mem_blocked);
+            return self.throw(Errcode::BCH_ERR_stripe_buf_mem_blocked);
         }
         *in_use += bytes;
         Ok(())
@@ -201,7 +201,7 @@ impl StripeBuf {
             for i in blocks_in(blocks) {
                 match block_buf(bytes) {
                     Ok(b) => buf.data[i] = Some(b),
-                    Err(_) => return fs.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_buf),
+                    Err(_) => return fs.throw(Errcode::BCH_ERR_ENOMEM_stripe_buf),
                 }
             }
             Ok(())
@@ -209,7 +209,7 @@ impl StripeBuf {
         // the box's own allocation failing is the one bare ENOMEM
         match kbox_pin_init(init) {
             Ok(buf) => Ok(Pin::into_inner(buf)),
-            Err(e) if e == BchError::from(c::ENOMEM) => fs.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_buf),
+            Err(e) if e == BchError::from(c::ENOMEM) => fs.throw(Errcode::BCH_ERR_ENOMEM_stripe_buf),
             Err(e) => Err(e),
         }
     }
@@ -308,7 +308,7 @@ pub(crate) fn block_checksum(s: BkeySC<'_, c::Stripe<Validated>>, b: &StripeBuf,
 
     let start = ((offset - b.offset) << 9) as usize;
     let granule = &b.block(block as usize)[start..start + ((len << 9) as usize)];
-    c::bch_csum_type(sh.csum_type.into()).checksum_unkeyed(granule)
+    c::CsumType(sh.csum_type.into()).checksum_unkeyed(granule)
 }
 
 /// Every block's checksums, into @key, from a buffer of the whole stripe.
@@ -354,7 +354,7 @@ fn validate_checksums(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut St
             let got = block_checksum(s, buf, i, offset);
 
             if want != got {
-                buf.err[e][i as usize] = Some(fs.err(bch_errcode::BCH_ERR_stripe_read_csum_err));
+                buf.err[e][i as usize] = Some(fs.err(Errcode::BCH_ERR_stripe_read_csum_err));
                 buf.csum_good[i as usize] = want;
                 buf.csum_bad[i as usize] = got;
 
@@ -362,7 +362,7 @@ fn validate_checksums(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut St
                 // any more
                 let dev = s.v().block_ptrs()[i as usize].dev();
                 if let Some(ca) = fs.dev_get(dev.into()) {
-                    ca.io_error(c::bch_member_error_type::checksum);
+                    ca.io_error(c::MemberErrorType::checksum);
                 }
                 break;
             }
@@ -423,7 +423,7 @@ fn do_recov(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, r
 
     let sh = buf.shape(s);
     if buf.nr_failed(PRE) > sh.nr_redundant {
-        return fs.throw(bch_errcode::BCH_ERR_stripe_reconstruct_insufficient_blocks);
+        return fs.throw(Errcode::BCH_ERR_stripe_reconstruct_insufficient_blocks);
     }
     assert!(has_all(buf), "reconstructing from a stripe buffer without every block");
 
@@ -440,7 +440,7 @@ fn do_recov(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, r
     validate_checksums(fs, s, buf, true, POST);
 
     if buf.failed_mask(POST) & required != 0 {
-        return fs.throw(bch_errcode::BCH_ERR_stripe_read_csum_err);
+        return fs.throw(Errcode::BCH_ERR_stripe_read_csum_err);
     }
     Ok(())
 }
@@ -450,14 +450,14 @@ fn do_recov(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, r
 /// A stale read of a stripe that isn't open is an expected race, not an
 /// error.
 fn read_maybe_spurious(buf: &StripeBuf, i: usize, e: Option<BchError>, is_open: bool) -> bool {
-    e == Some(bch_errcode::BCH_ERR_stripe_read_ptr_stale.into()) && !buf.stale.test(i) && !is_open
+    e == Some(Errcode::BCH_ERR_stripe_read_ptr_stale.into()) && !buf.stale.test(i) && !is_open
 }
 
 /// Whether every error is a device that's offline: a device going offline
 /// is reported once, by the device, and every stripe that touches it saying
 /// so again is noise.
 pub fn errs_only_dev_offline(buf: &StripeBuf) -> bool {
-    let offline = BchError::from(bch_errcode::BCH_ERR_stripe_read_device_offline);
+    let offline = BchError::from(Errcode::BCH_ERR_stripe_read_device_offline);
     let nr = buf.nr_blocks as usize;
     buf.err.iter().all(|e| e[..nr].iter().all(|e| e.is_none_or(|e| e == offline)))
 }
@@ -473,8 +473,8 @@ fn errs_to_text_one(out: &mut Printbuf, fs: &Fs, s: BkeySC<'_, c::Stripe<Validat
         let name = ca.as_ref().map_or("(invalid device)", |ca| ca.name().to_str().unwrap_or("?"));
         write!(out, "block {i} {name}: {error}");
 
-        if error == bch_errcode::BCH_ERR_stripe_read_csum_err.into() {
-            let ty = c::bch_csum_type(v.csum_type.into());
+        if error == Errcode::BCH_ERR_stripe_read_csum_err.into() {
+            let ty = c::CsumType(v.csum_type.into());
             write!(out, " expected ");
             buf.csum_good[i].to_text(out, ty);
             write!(out, " got ");
@@ -518,7 +518,7 @@ pub fn validate(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBu
         return Ok(());
     }
 
-    let stale = Some(bch_errcode::BCH_ERR_stripe_read_ptr_stale.into());
+    let stale = Some(Errcode::BCH_ERR_stripe_read_ptr_stale.into());
     let mut have_stale_race = false;
     for i in 0..usize::from(s.v().nr_blocks) {
         let e = buf.err[PRE][i];
@@ -535,7 +535,7 @@ pub fn validate(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBu
     }
 
     match do_recov(fs, s, buf, required) {
-        Err(_) if !is_open && have_stale_race => fs.throw(bch_errcode::BCH_ERR_stripe_reconstruct_stale_race),
+        Err(_) if !is_open && have_stale_race => fs.throw(Errcode::BCH_ERR_stripe_reconstruct_stale_race),
         ret => ret,
     }
 }
@@ -549,7 +549,7 @@ pub fn validate_msg(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut Stri
     if ret.is_ok() && buf.nr_failed(PRE) == 0 && buf.nr_failed(POST) == 0 {
         return Ok(());
     }
-    if ret == Err(bch_errcode::BCH_ERR_stripe_reconstruct_stale_race.into()) {
+    if ret == Err(Errcode::BCH_ERR_stripe_reconstruct_stale_race.into()) {
         return ret;
     }
     if ret.is_ok() && errs_only_dev_offline(buf) {
@@ -561,7 +561,7 @@ pub fn validate_msg(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut Stri
     // drive is found - and whether reconstruction saved us is another
     // question. Per block, as the read path counts per failure. Devices
     // offline and IO errors aren't counted, as above.
-    let csum_err = Some(bch_errcode::BCH_ERR_stripe_read_csum_err.into());
+    let csum_err = Some(Errcode::BCH_ERR_stripe_read_csum_err.into());
     let nr = usize::from(s.v().nr_blocks);
     for _ in buf.err[PRE][..nr].iter().filter(|&&e| e == csum_err) {
         fs.sb_error_count(SbErrorId::stripe_read_csum_err);

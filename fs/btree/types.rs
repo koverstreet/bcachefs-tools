@@ -10,7 +10,7 @@ use crate::btree::node::{sort::SortRun, BtreeNode};
 use crate::c;
 use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
-use crate::errcode::bch_errcode;
+use crate::errcode::Errcode;
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
@@ -35,7 +35,7 @@ use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{atomic_bitfield, c_name, bitfield, bch_enum, placed, CStruct, Init, Late, TypeInfo, c_enum};
+use cstruct_macros::{atomic_bitfield, bitfield, bch_enum, placed, CStruct, Init, Late, TypeInfo, list_enum};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -69,7 +69,7 @@ pub struct btree_bkey_cached_common {
 #[bch_enum(closed)]
 #[prefix(BTREE_NODE_CACHE_)]
 #[repr(u32)]
-pub enum btree_node_cache_state {
+pub enum BtreeNodeCacheState {
     NONE,           /* off all lists; not in cache (kzalloc default) */
     FREED,          /* on bc->freed_{pcpu,nonpcpu}; no data buffer */
     FREEABLE,       /* on bc->freeable; has data; not hashed */
@@ -79,7 +79,7 @@ pub enum btree_node_cache_state {
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum btree_node_sibling {
+pub enum BtreeNodeSibling {
     btree_prev_sib,
     btree_next_sib,
 }
@@ -90,7 +90,7 @@ pub enum btree_node_sibling {
 #[prefix(BCH_BTREE_CACHE_NOT_FREED_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_btree_cache_not_freed_reasons {
+pub enum BtreeCacheNotFreedReason {
     cache_reserve,
     lock_intent,
     lock_write,
@@ -238,7 +238,7 @@ pub struct BtreeCacheLists {
     /* shrinker stats */
     pub nr_freed: usize,
     pub nr_requested: usize,
-    pub not_freed: [u64; cs::bch_btree_cache_not_freed_reasons::NR as usize],
+    pub not_freed: [u64; cs::BtreeCacheNotFreedReason::NR as usize],
 }
 
 /// bc->lock: its holder never enters reclaim, which would take it again
@@ -361,9 +361,9 @@ pub struct bch_fs_btree_cache {
 
 #[bch_enum(closed)]
 #[prefix(BTREE_ITER_FLAG_BIT_)]
-#[mask(btree_iter_update_trigger_flags: u32, prefix = BTREE_ITER_)]
+#[mask(BtreeIterUpdateTriggerFlags: u32, prefix = BTREE_ITER_)]
 #[repr(u32)]
-pub enum btree_iter_flag_bit {
+pub enum BtreeIterFlagBit {
     slots,
     prev,
     intent,
@@ -440,7 +440,6 @@ nest! {
     /// iterator, k - change only through &mut self, iter.rs's methods; through
     /// &self, only key_cache_path, which an update sets up. Hence its Cell.
     #[repr(C)]
-    #[c_name(btree_iter)]
     #[derive(CStruct)]
     pub struct BtreeIter<'t> {
         pub(in crate::btree) trans: *mut BtreeTrans<'static>,
@@ -489,9 +488,6 @@ impl BtreeIter<'_> {
         self.bits.set_btree_id(btree);
     }
 }
-
-/// C's name, as FFI declarations spell it: *mut c::btree_iter.
-pub type btree_iter = BtreeIter<'static>;
 
 
 /* Key cache: */
@@ -639,7 +635,6 @@ impl<T: ?Sized> Default for btree_trans_subbuf<T> {
 /// hands out is in use, by reference - and cleared on every begin; so it's
 /// reallocated only by begin, when nothing it handed out is used again.
 #[repr(C)]
-#[c_name(trans_mem)]
 #[derive(CStruct, Default)]
 pub struct TransMem {
     pub(crate) buf:                    crate::util::alloc::Vec<u64, Kmalloc, u32>,
@@ -701,7 +696,7 @@ pub struct btree_trans_bits {
     /* Rust's: the TransAttempts made and not yet ended */
     #[bits(8)] attempts_live:       u8,
     __pad25:                        u7,
-    #[bits(16)] pub restarted: cs::bch_errcode,
+    #[bits(16)] pub restarted: cs::Errcode,
     __pad:                          u16,
 }
 
@@ -719,7 +714,6 @@ pub struct btree_trans_bits {
  *    released periodically to avoid stalling reclaim
  */
 #[repr(C)]
-#[c_name(btree_trans)]
 #[derive(CStruct)]
 pub struct BtreeTrans<'f> {
     pub c: &'f Fs,
@@ -795,7 +789,7 @@ pub struct BtreeTrans<'f> {
      */
     pub journal_seq_to_pin: Cell<u64>,
     pub journal_seq: Cell<*mut u64>,
-    pub disk_res: Cell<*mut cs::disk_reservation>,
+    pub disk_res: Cell<*mut cs::DiskReservation<'static>>,
     pub flush: Cell<*mut cs::closure>,
 
     pub fs_usage_delta: Cell<cs::bch_fs_usage_base>,
@@ -937,7 +931,6 @@ pub struct TransStatsJson {
 #[bch_enum(closed)]
 #[prefix(BTREE_WRITE_)]
 #[nr]
-#[c_name(btree_write_type)]
 #[repr(u32)]
 pub enum BtreeWriteType {
     initial = 0,
@@ -984,7 +977,7 @@ const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
 #[bch_enum(closed)]
 #[prefix(BTREE_NODE_REWRITE_)]
 #[repr(u32)]
-pub enum btree_node_rewrite_reason {
+pub enum BtreeNodeRewriteReason {
     none,
     unknown,
     error,
@@ -1074,7 +1067,7 @@ pub struct bch_fs_btree {
      * buffers and locks.
      */
     #[pin]
-    pub write_buffer: [cs::bch_fs_btree_write_buffer; cs::bch_wb_btree::NR as usize],
+    pub write_buffer: [cs::bch_fs_btree_write_buffer; cs::WbBtree::NR as usize],
     /*
      * Per-btree flush_work runs on write_buffer_wq; once the sorted key
      * list crosses a threshold the flush parallelizes across CPUs by
@@ -1134,9 +1127,8 @@ fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool<Kmalloc>, BchError
 }
 
 /* Btree ID properties: */
-c_enum! {
+list_enum! {
     #[open]
-    #[c_name(btree_node_type)]
     #[prefix(BKEY_TYPE_)]
     #[nr]
     pub enum BtreeNodeType: u32 {
@@ -1303,7 +1295,7 @@ impl FromStr for Btree {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         <Btree as crate::util::names::Names>::ENTRIES.iter().find(|&&(n, _)| n == s)
             .and_then(|&(_, v)| Btree::from_raw(v as u32))
-            .ok_or(bch_errcode::BCH_ERR_EINVAL_parse_btree_id.into())
+            .ok_or(Errcode::BCH_ERR_EINVAL_parse_btree_id.into())
     }
 }
 
@@ -1314,6 +1306,6 @@ impl FromStr for BkeyType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         crate::util::names::value_of(<Self as crate::util::names::Names>::ENTRIES, s)
             .map(|v| BkeyType(v as u32))
-            .ok_or_else(|| bch_errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
+            .ok_or_else(|| Errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
     }
 }

@@ -44,7 +44,7 @@ fn sb_opts(sb: &bch_sb_handle) -> bch_opts {
 /// What the filesystem says to do about a missing device, unless the caller
 /// said otherwise on the command line.
 fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> c::DegradedAction {
-    if cli_opts.defined(c::bch_opt_id::Opt_degraded) {
+    if cli_opts.defined(c::OptId::Opt_degraded) {
         return cli_opts.degraded();
     }
 
@@ -372,7 +372,7 @@ mod tests {
             // errcode parent-chain walk BUG_ON()s rather than bounds-checking,
             // so what's being asserted here is as much "doesn't abort" as
             // "doesn't match".
-            BchError::from_raw(c::bch_errcode::BCH_ERR_MAX.0 as i32 + 1),
+            BchError::from_raw(c::Errcode::BCH_ERR_MAX.0 as i32 + 1),
         ] {
             assert_eq!(Situation::of(&e), None, "{e:?}");
         }

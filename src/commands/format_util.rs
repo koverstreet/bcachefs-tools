@@ -43,7 +43,7 @@ pub struct DevOpts {
     pub path: CString,
     /// Deferred device options (labels): their values are resolved against
     /// the superblock being built, after it exists.
-    pub opt_strs: Vec<(c::bch_opt_id, CString)>,
+    pub opt_strs: Vec<(c::OptId, CString)>,
     pub sb_offset: u64,
     pub sb_end: u64,
     pub nbuckets: u64,
@@ -152,7 +152,7 @@ fn opt_set_sb_all(sb: &mut c::bch_sb_buf, dev_idx: Option<u32>, opts: &mut c::bc
 ///
 /// Exits on fatal errors (matching the C `die()` behavior).
 pub fn format(
-    fs_opt_strs: &[(c::bch_opt_id, String)],
+    fs_opt_strs: &[(c::OptId, String)],
     mut fs_opts: c::bch_opts,
     opts: FormatOpts<'_>,
     dev_slice: &mut [DevOpts],
@@ -165,7 +165,7 @@ pub fn format(
         }
     }
 
-    if !fs_opts.defined(c::bch_opt_id::Opt_block_size) {
+    if !fs_opts.defined(c::OptId::Opt_block_size) {
         let block_size = pick_block_size(&fs_opts, dev_slice);
         fs_opts.set_block_size(block_size as u16);
     }
@@ -182,7 +182,7 @@ pub fn format(
 
     for dev in dev_slice.iter_mut() {
         let opts = &mut dev.opts;
-        if !opts.defined(c::bch_opt_id::Opt_bucket_size) {
+        if !opts.defined(c::OptId::Opt_bucket_size) {
             let clamped = dev_bucket_size_clamp(fs_opts, dev.fs_size, fs_bucket_size);
             opts.set_bucket_size(clamped as u32);
         }
@@ -194,7 +194,7 @@ pub fn format(
     }
 
     // Calculate btree node size
-    if !fs_opts.defined(c::bch_opt_id::Opt_btree_node_size) {
+    if !fs_opts.defined(c::OptId::Opt_btree_node_size) {
         let mut s = bcachefs_kernel::opts::DEFAULTS.btree_node_size;
         for dev in dev_slice.iter() {
             s = s.min(dev.opts.bucket_size);
@@ -281,7 +281,7 @@ pub fn format(
 
         let fd = dev.fd();
         let opts = &mut dev.opts;
-        if !opts.defined(c::bch_opt_id::Opt_rotational) {
+        if !opts.defined(c::OptId::Opt_rotational) {
             let nonrot = crate::wrappers::bdev::nonrot(fd);
             opts.set_rotational(!nonrot);
         }
@@ -295,13 +295,13 @@ pub fn format(
     for (idx, dev) in dev_slice.iter().enumerate() {
         for (opt_id, val) in &dev.opt_strs {
             match *opt_id {
-                c::bch_opt_id::Opt_label => {
+                c::OptId::Opt_label => {
                     let path_idx = sb.disk_path_find_or_create(val.to_bytes()).unwrap_or_else(|e|
                         die(&format!("error creating disk path {}: {e}", val.to_string_lossy())));
                     // Recompute m after sb modification (may have been reallocated)
                     sb.member_mut(idx as u32).unwrap().set_group(path_idx as u64 + 1);
                 }
-                c::bch_opt_id::Opt_failure_domain => {
+                c::OptId::Opt_failure_domain => {
                     let bytes = val.to_bytes();
                     let m = sb.member_mut(idx as u32).unwrap();
                     if bytes.len() > m.failure_domain.len() {
@@ -319,10 +319,10 @@ pub fn format(
     // Targets
     // the last given, as a later option overrides an earlier
     let target_str = |id| fs_opt_strs.iter().rev().find(|(i, _)| *i == id).map(|(_, s)| s.as_str());
-    let foreground = parse_target(&sb, dev_slice, target_str(c::bch_opt_id::Opt_foreground_target));
-    let background = parse_target(&sb, dev_slice, target_str(c::bch_opt_id::Opt_background_target));
-    let promote    = parse_target(&sb, dev_slice, target_str(c::bch_opt_id::Opt_promote_target));
-    let metadata   = parse_target(&sb, dev_slice, target_str(c::bch_opt_id::Opt_metadata_target));
+    let foreground = parse_target(&sb, dev_slice, target_str(c::OptId::Opt_foreground_target));
+    let background = parse_target(&sb, dev_slice, target_str(c::OptId::Opt_background_target));
+    let promote    = parse_target(&sb, dev_slice, target_str(c::OptId::Opt_promote_target));
+    let metadata   = parse_target(&sb, dev_slice, target_str(c::OptId::Opt_metadata_target));
     sb.sb_mut().set_foreground_target(foreground as u64);
     sb.sb_mut().set_background_target(background as u64);
     sb.sb_mut().set_promote_target(promote as u64);
@@ -470,7 +470,7 @@ fn dev_bucket_size_clamp(fs_opts: c::bch_opts, dev_size: u64, fs_bucket_size: u6
 
     // Largest bucket size that still gives >= 2048 buckets
     let mut max_size = rounddown_pow_of_two(dev_size / (min_nr_nbuckets * 4));
-    if fs_opts.defined(c::bch_opt_id::Opt_btree_node_size) {
+    if fs_opts.defined(c::OptId::Opt_btree_node_size) {
         max_size = max_size.max(fs_opts.btree_node_size as u64);
     }
     if max_size * min_nr_nbuckets > dev_size {
@@ -534,7 +534,7 @@ pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[DevOpts]) -> u32 {
 pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[DevOpts]) -> u64 {
     // Hard minimum: bucket must hold a btree node
     let mut bucket_size = opts.block_size as u64;
-    if opts.defined(c::bch_opt_id::Opt_btree_node_size) {
+    if opts.defined(c::OptId::Opt_btree_node_size) {
         bucket_size = bucket_size.max(opts.btree_node_size as u64);
     }
 
@@ -594,7 +594,7 @@ pub fn check_bucket_size(opts: &c::bch_opts, dev: &DevOpts) {
         ));
     }
 
-    if opts.defined(c::bch_opt_id::Opt_btree_node_size)
+    if opts.defined(c::OptId::Opt_btree_node_size)
         && dev.opts.bucket_size < opts.btree_node_size
     {
         die(&format!(

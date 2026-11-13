@@ -4,7 +4,7 @@ use bch_bindgen::c;
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
-use crate::wrappers::accounting::{AccountingEntry, CompressionType, disk_accounting_type, ReconcileType};
+use crate::wrappers::accounting::{AccountingEntry, CompressionType, DiskAccountingType, ReconcileType};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::format::{DataType, MetadataVersion};
 use bcachefs_kernel::util::vstructs::ArmError;
@@ -116,22 +116,22 @@ fn fs_usage_v1_to_text(
     let has = |f: Field| -> bool { fields.contains(&f) };
 
     let mut accounting_types: u32 =
-        disk_accounting_type::replicas.bit() |
-        disk_accounting_type::persistent_reserved.bit();
+        DiskAccountingType::replicas.bit() |
+        DiskAccountingType::persistent_reserved.bit();
 
     if has(Field::Compression) {
-        accounting_types |= disk_accounting_type::compression.bit();
+        accounting_types |= DiskAccountingType::compression.bit();
     }
     if has(Field::Btree) {
-        accounting_types |= disk_accounting_type::btree.bit();
+        accounting_types |= DiskAccountingType::btree.bit();
     }
     if has(Field::RebalanceWork) {
         let version_reconcile = u32::from(MetadataVersion::reconcile) as u64;
         if bcachefs_kernel_version() < version_reconcile {
-            accounting_types |= disk_accounting_type::rebalance_work.bit();
+            accounting_types |= DiskAccountingType::rebalance_work.bit();
         } else {
-            accounting_types |= disk_accounting_type::reconcile_work.bit();
-            accounting_types |= disk_accounting_type::dev_leaving.bit();
+            accounting_types |= DiskAccountingType::reconcile_work.bit();
+            accounting_types |= DiskAccountingType::dev_leaving.bit();
         }
     }
 
@@ -214,7 +214,7 @@ fn fs_usage_v1_to_text(
     // Compression
     if has(Field::Compression) {
         let compr: Vec<_> = sorted.iter()
-            .filter(|e| e.pos.type_() == disk_accounting_type::compression)
+            .filter(|e| e.pos.type_() == DiskAccountingType::compression)
             .collect();
         if !compr.is_empty() {
             out.aligned(|sub| {
@@ -242,7 +242,7 @@ fn fs_usage_v1_to_text(
     // Btree usage
     if has(Field::Btree) {
         let btrees: Vec<_> = sorted.iter()
-            .filter(|e| e.pos.type_() == disk_accounting_type::btree)
+            .filter(|e| e.pos.type_() == DiskAccountingType::btree)
             .collect();
         if !btrees.is_empty() {
             out.aligned(|sub| {
@@ -259,7 +259,7 @@ fn fs_usage_v1_to_text(
     // Rebalance / reconcile work
     if has(Field::RebalanceWork) {
         let rebalance: Vec<_> = sorted.iter()
-            .filter(|e| e.pos.type_() == disk_accounting_type::rebalance_work)
+            .filter(|e| e.pos.type_() == DiskAccountingType::rebalance_work)
             .collect();
         if !rebalance.is_empty() {
             write!(out, "\nPending rebalance work:\n");
@@ -269,7 +269,7 @@ fn fs_usage_v1_to_text(
         }
 
         let reconcile: Vec<_> = sorted.iter()
-            .filter(|e| e.pos.type_() == disk_accounting_type::reconcile_work)
+            .filter(|e| e.pos.type_() == DiskAccountingType::reconcile_work)
             .collect();
         if !reconcile.is_empty() {
             out.aligned(|sub| {
@@ -526,14 +526,14 @@ fn devs_usage_to_text(
     let has = |f: Field| -> bool { fields.contains(&f) };
 
     // Query dev_leaving accounting if available
-    let dev_leaving_map = match handle.query_accounting(disk_accounting_type::dev_leaving.bit()) {
+    let dev_leaving_map = match handle.query_accounting(DiskAccountingType::dev_leaving.bit()) {
         Ok(result) => result.entries,
         Err(_) => Vec::new(),
     };
 
     // The kernel withholds these until the accounting has been computed, so an
     // absent entry means unknown, not zero.
-    let dev_stripe_frag_map = match handle.query_accounting(disk_accounting_type::dev_stripe_frag.bit()) {
+    let dev_stripe_frag_map = match handle.query_accounting(DiskAccountingType::dev_stripe_frag.bit()) {
         Ok(result) => result.entries,
         Err(_) => Vec::new(),
     };

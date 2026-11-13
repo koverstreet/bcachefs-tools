@@ -12,7 +12,7 @@ use crossterm::{
 };
 
 use crate::util::run_tui;
-use crate::wrappers::accounting::{disk_accounting_type, ReconcileType};
+use crate::wrappers::accounting::{DiskAccountingType, ReconcileType};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use crate::wrappers::handle::BcachefsHandle;
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -84,7 +84,7 @@ fn reconcile_status_to_text(
         .map(|s| s.trim().parse::<u64>().unwrap_or(0))
         .unwrap_or(0);
 
-    let result = handle.query_accounting(disk_accounting_type::reconcile_work.bit())
+    let result = handle.query_accounting(DiskAccountingType::reconcile_work.bit())
         .map_err(|e| anyhow!("query_accounting: {}", e))?;
 
     // Build array of [data_sectors, metadata_sectors] per reconcile type

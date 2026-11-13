@@ -4,7 +4,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::{
     entry_type, entry_btree_id, entry_log_str_eq,
-    journal_entry_missing_range, journal_entry_type, journal_ptrs_to_text,
+    journal_entry_missing_range, JsetEntryType, journal_ptrs_to_text,
 };
 use bcachefs_kernel::journal::validate::journal_entry_to_text;
 use bcachefs_kernel::fs::Fs;
@@ -20,12 +20,12 @@ use bcachefs_kernel::format::Btree;
 // ---- entry classification ----
 
 fn entry_is_transaction_start(entry: &c::jset_entry) -> bool {
-    entry_type(entry) == journal_entry_type::log
+    entry_type(entry) == JsetEntryType::log
         && entry.level == 0
 }
 
 fn entry_is_log_msg(entry: &c::jset_entry) -> bool {
-    if !(entry_type(entry) == journal_entry_type::log
+    if !(entry_type(entry) == JsetEntryType::log
         && entry.level != 0)
     {
         return false;
@@ -46,20 +46,20 @@ fn entry_is_log_msg(entry: &c::jset_entry) -> bool {
 fn entry_is_print_key(entry: &c::jset_entry) -> bool {
     matches!(
         entry_type(entry),
-        journal_entry_type::btree_root
-            | journal_entry_type::btree_keys
-            | journal_entry_type::write_buffer_keys
-            | journal_entry_type::overwrite
+        JsetEntryType::btree_root
+            | JsetEntryType::btree_keys
+            | JsetEntryType::write_buffer_keys
+            | JsetEntryType::overwrite
     )
 }
 
 fn entry_is_non_transaction(entry: &c::jset_entry) -> bool {
     matches!(
         entry_type(entry),
-        journal_entry_type::btree_root
-            | journal_entry_type::datetime
-            | journal_entry_type::usage
-            | journal_entry_type::clock
+        JsetEntryType::btree_root
+            | JsetEntryType::datetime
+            | JsetEntryType::usage
+            | JsetEntryType::clock
     )
 }
 
@@ -120,7 +120,7 @@ impl Default for JournalFilter {
 fn entry_matches_btree_filter(f: &JournalFilter, entry: &c::jset_entry) -> bool {
     f.btree_filter == !0u64
         || (entry.level == 0
-            && entry_type(entry) != journal_entry_type::btree_root
+            && entry_type(entry) != JsetEntryType::btree_root
             && (1u64 << entry.btree_id) & f.btree_filter != 0)
 }
 
@@ -163,8 +163,8 @@ fn entry_matches_range(
         return false;
     }
     let t = entry_type(entry);
-    if t != journal_entry_type::btree_keys
-        && t != journal_entry_type::overwrite
+    if t != JsetEntryType::btree_keys
+        && t != JsetEntryType::overwrite
     {
         return false;
     }
@@ -224,7 +224,7 @@ fn should_print_transaction(
     f: &JournalFilter,
     entries: &[&c::jset_entry],
 ) -> bool {
-    debug_assert!(entry_type(entries[0]) == journal_entry_type::log);
+    debug_assert!(entry_type(entries[0]) == JsetEntryType::log);
 
     if f.log && entry_is_log_only(entries) {
         return true;
@@ -306,9 +306,9 @@ fn journal_entry_header_to_text(
 fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
     if entry_is_transaction_start(entry)
         || matches!(entry_type(entry),
-            journal_entry_type::btree_root
-                | journal_entry_type::datetime
-                | journal_entry_type::usage)
+            JsetEntryType::btree_root
+                | JsetEntryType::datetime
+                | JsetEntryType::usage)
     {
         2
     } else {
@@ -394,7 +394,7 @@ fn journal_replay_print(c_fs: *mut Fs, f: &JournalFilter, p: &c::journal_replay,
         );
 
         for entry in j.entries() {
-            if entry_type(entry) == journal_entry_type::datetime {
+            if entry_type(entry) == JsetEntryType::datetime {
                 journal_entry_to_text(&mut buf, Some(unsafe { Fs::borrow_raw(c_fs) }), entry.as_unvalidated());
                 break;
             }
@@ -619,8 +619,8 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
     opts.set_norecovery(true);
     opts.set_read_only(true);
     opts.set_degraded(c::DegradedAction::very);
-    opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
-    opts.set_fix_errors(c::fsck_err_opts::yes as u8);
+    opts.set_errors(c::ErrorAction::BCH_ON_ERROR_continue);
+    opts.set_fix_errors(c::FsckErrOpt::yes as u8);
     opts.set_retain_recovery_info(true);
     opts.set_read_journal_only(true);
     opts.set_read_entire_journal(true);

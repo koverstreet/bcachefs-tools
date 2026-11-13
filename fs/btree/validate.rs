@@ -4,7 +4,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_header_validate, bkey_val_validate, AllTypes, BkeyI, BkeyP, BkeySC, FamilyVal,
                          ValidateFlags, BKEY_U64S};
 use crate::btree::{compat::__bch2_bkey_compat, node::{BtreeNode, NodeContents}, read::BsetHolder};
-use crate::c::{self, bch_errcode as e};
+use crate::c::{self, Errcode as e};
 use crate::data::ptrs::BkeyVRead;
 use crate::errcode::BchError;
 use crate::format::{BkeyType, Btree};
@@ -125,7 +125,7 @@ impl NodeValidate<'_> {
                 }
 
                 let have_retry = matches!(BkeySC::from(unsafe { b.contents() }.key_i())
-                                              .pick_read_device(fs, failed.as_deref(), 0, c::bch_read_flags::empty()),
+                                              .pick_read_device(fs, failed.as_deref(), 0, c::ReadFlags::empty()),
                                           Ok(Some(_)));
 
                 /*
@@ -185,7 +185,7 @@ impl NodeValidate<'_> {
     pub fn csum_bad(&mut self) {
         let fs = self.fs;
         if let NodeIo::Read { ca, failed, .. } = &mut self.io {
-            ca.io_error(c::bch_member_error_type::checksum);
+            ca.io_error(c::MemberErrorType::checksum);
 
             if let Some(f) = failed.as_deref_mut() {
                 if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::BCH_ERR_btree_node_validate_err_keys_lost)) {
@@ -378,7 +378,7 @@ pub(crate) fn validate_from(b: &BtreeNode, flags: ValidateFlags) -> c::bkey_vali
         btree: Btree(b.c.btree_id.into()),
         ..Default::default()
     };
-    from.bits.set_from(c::bkey_validate_from::btree_node);
+    from.bits.set_from(c::BkeyValidateFrom::btree_node);
     from.bits.set_flags(flags);
     from
 }

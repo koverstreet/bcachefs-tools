@@ -21,11 +21,11 @@ use crate::init::passes::RecoveryPass;
 use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::init::btree_init_rw;
-use crate::c::bch_fs_flags as Flag;
-use crate::c::journal_flags as Journal;
+use crate::c::FsFlag as Flag;
+use crate::c::JournalFlag as Journal;
 use crate::c::JournalGuard;
 use crate::data::ec::head::stripe_heads_stop;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{MemberState, SbFeature};
 use crate::fs::{Fs, StateLockWrite};
 use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
@@ -261,24 +261,24 @@ impl StateLockWrite<'_> {
         assert!(fs.flags.get(Flag::may_go_rw));
 
         if warn_on!(fs.feature(SbFeature::no_alloc_info)) {
-            return fs.throw(bch_errcode::BCH_ERR_erofs_no_alloc_info);
+            return fs.throw(Errcode::BCH_ERR_erofs_no_alloc_info);
         }
 
         assert!(fs.flags.get(Flag::may_upgrade_downgrade));
 
         if fs.flags.get(Flag::initial_gc_unfixed) {
             bch_err!(fs, "cannot go rw, unfixed btree errors");
-            return fs.throw(bch_errcode::BCH_ERR_erofs_unfixed_errors);
+            return fs.throw(Errcode::BCH_ERR_erofs_unfixed_errors);
         }
 
         if fs.feature(SbFeature::small_image) {
             bch_err!(fs, "cannot go rw, filesystem is an unresized image file");
-            return fs.throw(bch_errcode::BCH_ERR_erofs_filesystem_full);
+            return fs.throw(Errcode::BCH_ERR_erofs_filesystem_full);
         }
 
         if fs.feature(SbFeature::no_default_sb) {
             bch_err!(fs, "cannot go rw, run bcachefs migrate-superblock first");
-            return fs.throw(bch_errcode::BCH_ERR_erofs_sb_not_migrated);
+            return fs.throw(Errcode::BCH_ERR_erofs_sb_not_migrated);
         }
 
         if fs.flags.get(Flag::rw) {
@@ -291,7 +291,7 @@ impl StateLockWrite<'_> {
         {
             let mut sb = fs.sb_lock();
             fs.sb_resize(&mut sb).members_v2_init()
-                .ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2))?;
+                .ok_or_else(|| fs.err(Errcode::BCH_ERR_ENOSPC_sb_members_v2))?;
         }
 
         fs.flags.set(Flag::clean_shutdown, false);
@@ -367,15 +367,15 @@ impl StateLockWrite<'_> {
         let pass_last = u32::from(opts.recovery_pass_last.get());
 
         if pass_last != 0 && pass_last < RecoveryPass::journal_replay as u32 {
-            return fs.throw(bch_errcode::BCH_ERR_erofs_norecovery);
+            return fs.throw(Errcode::BCH_ERR_erofs_norecovery);
         }
 
         if opts.nochanges.get() != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_erofs_nochanges);
+            return fs.throw(Errcode::BCH_ERR_erofs_nochanges);
         }
 
         if fs.feature(SbFeature::no_alloc_info) {
-            return fs.throw(bch_errcode::BCH_ERR_erofs_no_alloc_info);
+            return fs.throw(Errcode::BCH_ERR_erofs_no_alloc_info);
         }
 
         self.start_rw()

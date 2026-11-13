@@ -8,7 +8,6 @@ use crate::util::vstructs::{vstruct, Head};
 use cstruct_macros::{c_bitmask, bch_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 #[bch_enum(flags)]
-#[c_name(bch_recovery_pass_flags)]
 #[prefix(PASS_)]
 #[repr(u32)]
 pub enum PassFlags {
@@ -26,11 +25,9 @@ pub enum PassFlags {
  * never change:
  */
 #[bch_enum(closed)]
-#[c_name(bch_recovery_pass)]
 #[prefix(BCH_RECOVERY_PASS_)]
 #[nr]
-#[arm_columns(stable: enum(RecoveryPassStable: u32, prefix = BCH_RECOVERY_PASS_STABLE_,
-                           c_name = bch_recovery_pass_stable),
+#[arm_columns(stable: enum(RecoveryPassStable: u32, prefix = BCH_RECOVERY_PASS_STABLE_),
               when: PassFlags, depends: set(RecoveryPass))]
 #[repr(u32)]
 pub enum RecoveryPass {

@@ -4,14 +4,13 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_name, c_bitmask, bch_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_bitmask, bch_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
 
 pub const BLOCKDEV_INODE_MAX: u32 = 4096;
 pub const BCACHEFS_ROOT_INO: u32 = 4096;
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
-#[c_name(bch_inode)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct Inode {
     pub v: c::bch_val,
@@ -24,7 +23,6 @@ pub struct Inode {
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
-#[c_name(bch_inode_v2)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct InodeV2 {
     pub v: c::bch_val,
@@ -38,7 +36,6 @@ pub struct InodeV2 {
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
-#[c_name(bch_inode_v3)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct InodeV3 {
     pub v: c::bch_val,
@@ -56,7 +53,6 @@ pub struct InodeV3 {
 pub const INODEv3_FIELDS_START_INITIAL: u32 = 6;
 
 #[repr(C, align(8))]
-#[c_name(bch_inode_generation)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct InodeGeneration {
     pub v: c::bch_val,
@@ -137,7 +133,7 @@ c_xmacro! {
 #[arm_columns(bits: value(u32))]
 /* subset of BCH_INODE_FIELDS */
 #[repr(u32)]
-pub enum inode_opt_id {
+pub enum InodeOptId {
     #[bits(8)]  data_checksum,
     #[bits(8)]  compression,
     #[bits(32)] project,
@@ -155,7 +151,7 @@ pub enum inode_opt_id {
 /* bits 20+ reserved for packed fields below: */
 #[bch_enum(open)]
 #[prefix(__BCH_INODE_)]
-#[mask(bch_inode_flags: u32, prefix = BCH_INODE_)]
+#[mask(InodeFlags: u32, prefix = BCH_INODE_)]
 /*
  * BCH_INODE_unlinked means we definitively know that there isn't, and
  * shouldn't be, a dirent pointing to this inode: it is (or is about to
@@ -195,7 +191,7 @@ pub enum inode_opt_id {
  * the bits unconditionally.
  */
 #[repr(u32)]
-pub enum __bch_inode_flags {
+pub enum InodeFlagBit {
     sync = 0,
     immutable = 1,
     append = 2,
@@ -238,7 +234,6 @@ c_bitmask! {
 }
 
 #[repr(C)]
-#[c_name(bch_inode_alloc_cursor)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct InodeAllocCursor {
     pub v: c::bch_val,

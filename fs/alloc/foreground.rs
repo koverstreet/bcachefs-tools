@@ -61,7 +61,7 @@ use crate::alloc::discard::fast_discard_bucket_add;
 use crate::alloc::disk_groups::Target;
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::copygc::can_make_progress;
 use crate::errcode::{ret_to_c, BchError};
 use crate::format::DataType;
@@ -133,7 +133,7 @@ pub(crate) type AllocTrace = InlineVec<c::alloc_trace_entry, 16>;
  */
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum alloc_btree_bitmap {
+pub enum AllocBtreeBitmap {
     BTREE_BITMAP_NO,
     BTREE_BITMAP_YES,
     BTREE_BITMAP_ANY,
@@ -159,8 +159,8 @@ nest! {
             /* failure domains are a hard requirement, not a preference (erasure coding): */
             failure_domains_required:  bool,
         },
-        pub watermark: c::bch_watermark,
-        pub flags: c::bch_write_flags,
+        pub watermark: c::Watermark,
+        pub flags: c::WriteFlags,
         pub data_type: DataType,
         pub devs_have: Option<&'r c::bch_devs_list>,
         pub wp: Option<&'f c::write_point>,
@@ -197,7 +197,7 @@ nest! {
          */
         pub target_frac: u64,
 
-        pub btree_bitmap: c::alloc_btree_bitmap,
+        pub btree_bitmap: c::AllocBtreeBitmap,
 
         #>[derive(Clone, Copy, Default)]
         pub counters: pub struct alloc_request_counters {
@@ -532,8 +532,8 @@ impl Fs {
 
 /// The open buckets kept back from allocations at @watermark: more, the lower
 /// it is, so what frees open buckets can still get them.
-pub(crate) fn open_buckets_reserved(watermark: c::bch_watermark) -> u32 {
-    use c::bch_watermark as w;
+pub(crate) fn open_buckets_reserved(watermark: c::Watermark) -> u32 {
+    use c::Watermark as w;
     match watermark {
         w::interior_updates        => 0,
         w::reclaim                 => c::OPEN_BUCKETS_COUNT / 6,
@@ -561,8 +561,8 @@ impl Fs {
     /// isn't starved: one short of the top, to leave interior updates a way.
     pub(crate) fn open_buckets_starved_watermark(&self) -> u32 {
         let nr_free = u32::from(self.allocator.freelist_lock.open_buckets_nr_free.get());
-        (0..c::bch_watermark::NR - 1).find(|&w| nr_free >= open_buckets_reserved(c::bch_watermark::from_bits(w)))
-            .unwrap_or(c::bch_watermark::NR - 1)
+        (0..c::Watermark::NR - 1).find(|&w| nr_free >= open_buckets_reserved(c::Watermark::from_bits(w)))
+            .unwrap_or(c::Watermark::NR - 1)
     }
 
     /// Bucket @bucket of @ca, of generation @generation, opened: None if it's
@@ -572,16 +572,16 @@ impl Fs {
                                           generation: u8) -> Result<Option<OpenBucket>, BchError>
     {
         let a = &self.allocator;
-        let times = |t: c::bch_time_stats| &self.times[t as usize];
+        let times = |t: c::TimeStat| &self.times[t as usize];
         let dev = ca.dev_idx;
 
         let mut g = a.freelist_lock.lock();
 
         if unlikely(u32::from(a.freelist_lock.open_buckets_nr_free.get()) <= open_buckets_reserved(req.watermark)) {
-            times(c::bch_time_stats::blocked_allocate_open_bucket).track_event_change(true);
+            times(c::TimeStat::blocked_allocate_open_bucket).track_event_change(true);
             return Err(self.err(match req.closure_wait(&a.open_buckets_wait) {
-                true  => bch_errcode::BCH_ERR_open_bucket_alloc_blocked,
-                false => bch_errcode::BCH_ERR_open_buckets_empty,
+                true  => Errcode::BCH_ERR_open_bucket_alloc_blocked,
+                false => Errcode::BCH_ERR_open_buckets_empty,
             }));
         }
 
@@ -612,8 +612,8 @@ impl Fs {
         ca.nr_open_buckets.set(ca.nr_open_buckets.get().wrapping_add(1));
         a.hash_add(&g, ob);
 
-        times(c::bch_time_stats::blocked_allocate_open_bucket).track_event_change(false);
-        times(c::bch_time_stats::blocked_allocate).track_event_change(false);
+        times(c::TimeStat::blocked_allocate_open_bucket).track_event_change(false);
+        times(c::TimeStat::blocked_allocate).track_event_change(false);
         // SAFETY: the pin just taken, ours
         Ok(Some(unsafe { OpenBucket::from_idx(self, ob.idx()) }))
     }
@@ -779,8 +779,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// its trace emptied when it's dropped.
     #[allow(clippy::too_many_arguments)]
     pub fn alloc_request(&self, target: u32, erasure_code: bool, devs_have: Option<&'a c::bch_devs_list>,
-                         nr_replicas: u32, ec_replicas: u32, watermark: c::bch_watermark,
-                         flags: c::bch_write_flags, cl: Option<&'a Opaque<c::closure>>)
+                         nr_replicas: u32, ec_replicas: u32, watermark: c::Watermark,
+                         flags: c::WriteFlags, cl: Option<&'a Opaque<c::closure>>)
         -> Result<AllocRequest<'a, 't>, BchError>
     {
         let req = c::alloc_request::new(self.fs(), target, erasure_code, devs_have, nr_replicas, ec_replicas,
@@ -799,8 +799,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
             self.sleep_on_allocator(req, err, cl);
         }
         let fs = self.fs();
-        if fs.flags.get(c::bch_fs_flags::emergency_ro) {
-            return fs.throw(crate::c::bch_errcode::BCH_ERR_emergency_ro);
+        if fs.flags.get(c::FsFlag::emergency_ro) {
+            return fs.throw(crate::c::Errcode::BCH_ERR_emergency_ro);
         }
         Ok(())
     }
@@ -810,7 +810,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
     /// alloc_request_get()'s: zeroed, but for what it's given, and its trace.
     #[allow(clippy::too_many_arguments)]
     fn new(fs: &Fs, target: u32, erasure_code: bool, devs_have: Option<&'r c::bch_devs_list>, nr_replicas: u32,
-           ec_replicas: u32, watermark: c::bch_watermark, flags: c::bch_write_flags,
+           ec_replicas: u32, watermark: c::Watermark, flags: c::WriteFlags,
            cl: Option<&'r Opaque<c::closure>>)
         -> impl ::pin_init::Init<Self, Infallible>
     {
@@ -964,7 +964,7 @@ impl Fs {
     /// Whether @req could allocate from @ca: a device in its target, if it may
     /// only use those, read-write, online, and taking its data type.
     fn dev_may_alloc(&self, ca: &Dev, req: &c::alloc_request) -> bool {
-        if req.flags.contains(c::bch_write_flags::only_specified_devs) && req.target != 0 &&
+        if req.flags.contains(c::WriteFlags::only_specified_devs) && req.target != 0 &&
            !self.dev_in_target(ca.dev_idx.into(), Target::decode(req.target), &read_lock()) {
             return false;
         }
@@ -1040,7 +1040,7 @@ impl Fs {
         self.alloc_request_to_text(&mut out.indent(2), req);
         write!(out, "\n");
 
-        if err.matches(bch_errcode::BCH_ERR_bucket_alloc_blocked) {
+        if err.matches(Errcode::BCH_ERR_bucket_alloc_blocked) {
             write!(out, "Allocator debug:\n");
             self.alloc_debug_to_text(&mut out.indent(2));
             write!(out, "\n");
@@ -1065,7 +1065,7 @@ impl Fs {
                     let sectors = u64::from(ca.mi.get().bucket_size);
                     need_discard += sectors * u.buckets[DataType::need_discard.0 as usize];
                     free         += sectors * u.buckets[DataType::free.0 as usize];
-                    reserve      += sectors * ca.buckets_reserved(c::bch_watermark::stripe);
+                    reserve      += sectors * ca.buckets_reserved(c::Watermark::stripe);
                 }
             }
 
@@ -1079,11 +1079,11 @@ impl Fs {
             write!(out, "\n");
         }
 
-        if err.matches(bch_errcode::BCH_ERR_open_bucket_alloc_blocked) {
+        if err.matches(Errcode::BCH_ERR_open_bucket_alloc_blocked) {
             self.fs_open_buckets_to_text(out);
         }
 
-        if self.journal.watermark() != c::bch_watermark::stripe {
+        if self.journal.watermark() != c::Watermark::stripe {
             write!(out, "Journal debug:\n");
             self.journal.to_text(&mut out.indent(2));
         }
@@ -1101,7 +1101,7 @@ impl TransAttempt<'_, '_> {
     /// first.
     fn sleep_on_allocator(&self, req: &mut c::alloc_request, err: BchError, cl: &Opaque<c::closure>) {
         let fs = self.fs();
-        let blocked = err.matches(bch_errcode::BCH_ERR_bucket_alloc_blocked);
+        let blocked = err.matches(Errcode::BCH_ERR_bucket_alloc_blocked);
         let until = jiffies().wrapping_add(c_ulong::from(fs.opts.allocator_stuck_timeout.get()) * HZ);
 
         self.unlock();
@@ -1134,7 +1134,7 @@ impl TransAttempt<'_, '_> {
 
             // going emergency read-only, a draining device may never have
             // buckets free: waiting again could block read_only_work forever
-            if fs.flags.get(c::bch_fs_flags::emergency_ro) || !blocked || fs.alloc_wait_advanced(req) {
+            if fs.flags.get(c::FsFlag::emergency_ro) || !blocked || fs.alloc_wait_advanced(req) {
                 return;
             }
 
@@ -1240,7 +1240,7 @@ impl Dev {
         writeln!(out);
 
         write!(out, "reserves:\n");
-        for w in (0..c::bch_watermark::NR).map(c::bch_watermark::from_bits) {
+        for w in (0..c::Watermark::NR).map(c::Watermark::from_bits) {
             write!(out, "{w}\t{}\r\n", self.buckets_reserved(w));
         }
         writeln!(out);
@@ -1313,7 +1313,7 @@ impl c::open_buckets {
             let err = if f.errcode != 0 {
                 BchError::from_raw(f.errcode.into())
             } else {
-                bch_errcode::BCH_ERR_data_write_io.into()
+                Errcode::BCH_ERR_data_write_io.into()
             };
             self.iter(fs).filter(|ob| u32::from(ob.id().dev()) == u32::from(f.dev))
                 .filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));

@@ -17,7 +17,7 @@ use crate::format::{Btree, MemberState, Nonce};
 use crate::c;
 use crate::util::Printbuf;
 use crate::data::checksum::{checksum_type_valid, csum_vstruct, BCH_NONCE_JOURNAL};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::init::error::id;
 use crate::journal::buckets::JournalRing;
@@ -39,8 +39,7 @@ use core::ptr::NonNull;
 use pin_init::stack_pin_init;
 use validate::Jset;
 
-#[allow(non_camel_case_types)]
-pub type journal_entry_type = c::bch_jset_entry_type;
+pub use crate::c::JsetEntryType;
 
 // ---- jset helpers ----
 
@@ -58,8 +57,8 @@ impl c::jset__head {
         }
     }
 
-    fn checksum_type(&self) -> c::bch_csum_type {
-        c::bch_csum_type(self.csum_type() as u32)
+    fn checksum_type(&self) -> c::CsumType {
+        c::CsumType(self.csum_type() as u32)
     }
 }
 
@@ -89,7 +88,7 @@ impl c::jset<Unvalidated> {
     pub(crate) fn empty(&self) -> bool {
         self.seq == self.last_seq &&
             !self.entries().flatten().any(|e| {
-                entry_type(e) == c::bch_jset_entry_type::btree_keys && e.u64s() != 0
+                entry_type(e) == c::JsetEntryType::btree_keys && e.u64s() != 0
             })
     }
 }
@@ -146,7 +145,7 @@ unsafe impl pin_init::ZeroableOption for Replay {}
 impl Replay {
     fn new(fs: &Fs, j: &[u8], csum_good: bool) -> Result<Self, BchError> {
         let bytes = offset_of!(c::journal_replay, j) + j.len();
-        let p = kvzalloc(bytes).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))?
+        let p = kvzalloc(bytes).map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_entry_add))?
             .cast::<c::journal_replay>();
         unsafe {
             let Ok(()) = init_at(KVVec::new(), &raw mut (*p.as_ptr()).ptrs);
@@ -234,7 +233,7 @@ impl JournalEntries {
 
     fn slot(&mut self, fs: &Fs, seq: u64) -> Result<&mut Option<Replay>, BchError> {
         self.0.get_or_alloc(Self::idx(fs, seq))
-            .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))
+            .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_entry_add))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Replay> {
@@ -282,7 +281,7 @@ pub fn journal_pos_from_member_info_set(fs: &Fs, sb: &mut crate::fs::SbLockGuard
         let ja = &ca.journal;
         let m = sb.fs_member_mut(ca.dev_idx.into());
 
-        let cur = ca.with_journal_ring(|r| r.idx(c::journal_bucket_stage::JOURNAL_BUCKET_cur));
+        let cur = ca.with_journal_ring(|r| r.idx(c::JournalBucketStage::JOURNAL_BUCKET_cur));
         m.last_journal_bucket = Le32::new(cur);
         m.last_journal_bucket_offset = Le32::new(u32::from(ca.mi.get().bucket_size) - ja.sectors_free.get());
     }
@@ -399,8 +398,8 @@ fn journal_replay_maybe_drop_overwrites<'j>(fs: &Fs, j: &'j mut c::jset<Unvalida
         while src < j.len() {
             let e = c::jset_entry::<Unvalidated>::from_bytes(&j[src..]).expect("an entry that fits");
             let (len, ty) = (size_of_val(e), entry_type(e));
-            if ty != c::bch_jset_entry_type::log &&
-               ty != c::bch_jset_entry_type::overwrite {
+            if ty != c::JsetEntryType::log &&
+               ty != c::JsetEntryType::overwrite {
                 j.copy_within(src..src + len, dst);
                 dst += len;
             }
@@ -468,7 +467,7 @@ impl ReadState<'_> {
             bch_err!(fs, "journal entry sequence numbers span too large a range: cannot replay, contact developers\n\
                           base {} last_seq currently {}, but have seq {}",
                      fs.journal_entries_base_seq.get(), self.last_seq, seq);
-            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add);
+            return fs.throw(Errcode::BCH_ERR_ENOMEM_journal_entry_add);
         }
 
         let keep_from = self.keep_from();
@@ -533,7 +532,7 @@ impl ReadState<'_> {
             prt!(&mut buf, " ");
             journal_ptr_to_text(&mut buf, fs, &entry_ptr);
 
-            dup.ptrs.push(entry_ptr).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
+            dup.ptrs.push(entry_ptr).map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
 
             fsck_err_on!(fs, same_device, id::journal_entry_dup_same_device,
                          "duplicate journal entry on same device\n{}", buf)?;
@@ -552,7 +551,7 @@ impl ReadState<'_> {
             /* The first ptr should represent the jset we kept: */
             Some(dup) => i.ptrs.extend_from_slice(dup.ptrs()),
             None      => i.ptrs.push(entry_ptr),
-        }.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
+        }.map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
 
         *slot = Some(i);
         Ok(())
@@ -761,7 +760,7 @@ impl<'a> DevReader<'a> {
     fn new(fs: &'a Fs, ca: &'a Dev, ring: &'a mut JournalRing) -> Result<Self, BchError> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
         let mut buf = AVec::<u8, ConstAlign<PAGE_SIZE>>::new(PAGE_SIZE);
-        buf.try_reserve_exact(bytes).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_read_buf_realloc))?;
+        buf.try_reserve_exact(bytes).map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_read_buf_realloc))?;
         unsafe { buf.set_len(bytes) };
         let mut buf = buf.into_boxed_slice();
         buf.fill(0);
@@ -791,7 +790,7 @@ impl<'a> DevReader<'a> {
         let submit_time = local_clock();
         let ret = self.read(offset, ca.bucket_bytes() as usize);
 
-        ca.account_io_completion(c::bch_member_error_type::read, submit_time, ret.is_ok());
+        ca.account_io_completion(c::MemberErrorType::read, submit_time, ret.is_ok());
 
         if ret.is_err() {
             crate::bch_err_dev_ratelimited!(ca, "journal read error: sector {}", offset);
@@ -844,7 +843,7 @@ impl<'a> DevReader<'a> {
             let j = c::jset::<Unvalidated>::from_bytes_mut(j).expect("a jset, cut to fit its bucket");
             let (csum_good, csum) = jset_csum_good(fs, j);
 
-            ca.account_io_completion(c::bch_member_error_type::checksum, 0, csum_good);
+            ca.account_io_completion(c::MemberErrorType::checksum, 0, csum_good);
 
             if !csum_good {
                 /*
@@ -998,7 +997,7 @@ impl<'a> DevReader<'a> {
     }
 }
 
-fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::bch_dev_read_ref>>,
+fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::DevReadRefKind>>,
                 full_read: bool) -> Result<(), BchError> {
     par::scope(Backend::Workqueue(Queue::system_dfl()), |s| {
         for ca in devs.iter() {
@@ -1023,7 +1022,7 @@ fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::bch_dev_re
 }
 
 fn journal_devs(fs: &Fs, want: impl Fn(&Dev) -> bool, degraded: bool)
-    -> Result<KVVec<DevIoRef<c::bch_dev_read_ref>>, BchError>
+    -> Result<KVVec<DevIoRef<c::DevReadRefKind>>, BchError>
 {
     let mut devs = KVVec::new();
     for ca in fs.members() {
@@ -1034,11 +1033,11 @@ fn journal_devs(fs: &Fs, want: impl Fn(&Dev) -> bool, degraded: bool)
         let state = ca.mi.get().state;
         let ioref = (state == MemberState::rw ||
                      state == MemberState::ro)
-            .then(|| fs.dev_get_ioref::<c::bch_dev_read_ref>(ca.dev_idx.into()))
+            .then(|| fs.dev_get_ioref::<c::DevReadRefKind>(ca.dev_idx.into()))
             .flatten();
         match ioref {
             Some(ca) => devs.push(ca)?,
-            None if degraded => fs.journal.flags.set(c::journal_flags::degraded, true),
+            None if degraded => fs.journal.flags.set(c::JournalFlag::degraded, true),
             None => {}
         }
     }
@@ -1165,7 +1164,7 @@ pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
     for range in rewind_ranges.iter() {
         let Some(p) = entries.get(fs, range.to) else {
             bch_err!(fs, "journal rewind: flush entry at seq {} not found", range.to);
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_rewind_before_discard);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_journal_rewind_before_discard);
         };
 
         need_from = need_from.min(p.j.last_seq.get());
@@ -1290,7 +1289,7 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
     let devs = journal_devs(fs, |ca| {
         fs.opts.read_entire_journal.get() != 0 ||
             fs.opts.fsck.get() != 0 ||
-            ca.has_data() & (1 << c::bch_data_type::journal.0) != 0
+            ca.has_data() & (1 << c::DataType::journal.0) != 0
     }, true)?;
     read_devices(fs, &read, devs, false)?;
 
@@ -1324,7 +1323,7 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
             if rewind_seq != 0 && rewind < rewind_seq {
                 bch_err!(fs, "cannot rewind to {}: discards have invalidated journal entries before {}",
                          rewind, rewind_seq);
-                return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_rewind_before_discard);
+                return fs.throw(Errcode::BCH_ERR_EINVAL_journal_rewind_before_discard);
             }
             drop_before = drop_before.min(rewind);
             prt!(&mut buf, " (rewinding from {})", rewind);
@@ -1444,15 +1443,15 @@ impl Fs {
     pub fn journal_scrub_will_run(&self) -> bool {
         let opt = u32::from(self.opts.scrub_recent_journal_entries.get());
         opt != 0 &&
-            (self.sb.clean.get() == 0 || opt == c::bch_scrub_journal_opts::always.0)
+            (self.sb.clean.get() == 0 || opt == c::ScrubJournalOpt::always.0)
     }
 }
 
 // ---- entry type conversion ----
 
 /// Convert entry type byte to the raw journal entry type.
-pub fn entry_type(entry: &Head<c::jset_entry>) -> c::bch_jset_entry_type {
-    c::bch_jset_entry_type(entry.type_ as u32)
+pub fn entry_type(entry: &Head<c::jset_entry>) -> c::JsetEntryType {
+    c::JsetEntryType(entry.type_ as u32)
 }
 
 /// Convert entry btree_id byte to the enum, if it's a known btree.

@@ -8,7 +8,7 @@ use super::format::FIELDS;
 use super::BKEY_U64S;
 use crate::c;
 use crate::cstructs::c::bkey_fields;
-use crate::format::bch_bkey_fields::{self, *};
+use crate::format::BkeyField::{self, *};
 use crate::format::bkey_format;
 use crate::types::field_size;
 
@@ -24,7 +24,7 @@ impl Emit<'_> {
     }
 }
 
-fn compile_bkey_field(format: &bkey_format, out: &mut Emit<'_>, field: bch_bkey_fields,
+fn compile_bkey_field(format: &bkey_format, out: &mut Emit<'_>, field: BkeyField,
                       dst_offset: u8, dst_size: usize, eax_zeroed: &mut bool) {
     let bits = format.bits(field);
     let offset = format.offset(field);

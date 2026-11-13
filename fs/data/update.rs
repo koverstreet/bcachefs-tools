@@ -26,7 +26,7 @@ use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
 use crate::btree::iter::{is_restart, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, extent_ptr_durability,
                                BkeyVDurability};
 use crate::data::moving::Moving;
@@ -52,8 +52,8 @@ use pin_init::stack_pin_init;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{CStruct, bitfield, bch_enum};
-use c::bch_data_update_types as Type;
-use crate::data::read::{bch_read_for, ReadDone, Rbio};
+use c::DataUpdateType as Type;
+use crate::data::read::{ReadFor, ReadDone, Rbio};
 use crate::types::c_default;
 use core::sync::atomic::AtomicBool;
 use nestify::nest;
@@ -62,7 +62,7 @@ use crate::format::{Bpos, Btree, CompressionType};
 #[bch_enum(closed)]
 #[prefix(BCH_DATA_UPDATE_)]
 #[repr(u32)]
-pub enum bch_data_update_types {
+pub enum DataUpdateType {
     other,
     copygc,
     reconcile,
@@ -87,7 +87,7 @@ nest! {
     #[repr(C)]
     #[derive(Clone, Copy, CStruct)]
     pub struct data_update_opts {
-        pub type_: c::bch_data_update_types,
+        pub type_: c::DataUpdateType,
         pub ptrs_io_error: u16,
         pub ptrs_kill: u16,
         pub ptrs_kill_ec: u16,
@@ -102,9 +102,9 @@ nest! {
         },
 
         pub read_dev: c_uint,
-        pub read_flags: c::bch_read_flags,
-        pub write_flags: c::bch_write_flags,
-        pub commit_flags: c::bch_trans_commit_flags,
+        pub read_flags: c::ReadFlags,
+        pub write_flags: c::WriteFlags,
+        pub commit_flags: c::TransCommitFlags,
     }
 }
 c_default!(data_update_opts);
@@ -145,8 +145,8 @@ pub struct data_update {
 /// The read failed only because the extent changed under it - the key was
 /// gone on retry, or the bucket's gen moved - so no data was lost.
 pub fn read_err_benign(e: BchError) -> bool {
-    e.matches(bch_errcode::BCH_ERR_data_read_key_overwritten) ||
-        e.matches(bch_errcode::BCH_ERR_data_read_ptr_stale_race)
+    e.matches(Errcode::BCH_ERR_data_read_key_overwritten) ||
+        e.matches(Errcode::BCH_ERR_data_read_ptr_stale_race)
 }
 
 /// Whether a failure is traced as a data_update_fail event. Routine failures
@@ -156,14 +156,14 @@ pub fn read_err_benign(e: BchError) -> bool {
 /// ec_alloc_failed_pending_race don't, and are traced.
 pub fn fail_should_trace(type_: Type, e: BchError) -> bool {
     let parks = matches!(type_, Type::reconcile | Type::promote) &&
-        e.matches(bch_errcode::BCH_ERR_data_update_fail_no_rw_devs);
+        e.matches(Errcode::BCH_ERR_data_update_fail_no_rw_devs);
 
-    !(e.matches(bch_errcode::BCH_ERR_data_update_fail_in_flight) ||
-      e.matches(bch_errcode::BCH_ERR_data_update_fail_need_copygc) ||
-      e.matches(bch_errcode::BCH_ERR_data_update_fail_would_block) ||
-      e.matches(bch_errcode::BCH_ERR_operation_blocked) ||
-      (e.matches(bch_errcode::BCH_ERR_ec_alloc_failed) &&
-       !e.matches(bch_errcode::BCH_ERR_ec_alloc_failed_transient)) ||
+    !(e.matches(Errcode::BCH_ERR_data_update_fail_in_flight) ||
+      e.matches(Errcode::BCH_ERR_data_update_fail_need_copygc) ||
+      e.matches(Errcode::BCH_ERR_data_update_fail_would_block) ||
+      e.matches(Errcode::BCH_ERR_operation_blocked) ||
+      (e.matches(Errcode::BCH_ERR_ec_alloc_failed) &&
+       !e.matches(Errcode::BCH_ERR_ec_alloc_failed_transient)) ||
       parks)
 }
 
@@ -211,7 +211,7 @@ impl Fs {
             }
         }
         self.event_inc(events::data_update_in_flight);
-        self.throw(bch_errcode::BCH_ERR_data_update_fail_in_flight)
+        self.throw(Errcode::BCH_ERR_data_update_fail_in_flight)
     }
 }
 
@@ -420,9 +420,9 @@ impl c::data_update {
         }
 
         let read_for = if self.opts.type_ == Type::scrub {
-            bch_read_for::BCH_READ_FOR_scrub
+            ReadFor::BCH_READ_FOR_scrub
         } else {
-            bch_read_for::BCH_READ_FOR_update
+            ReadFor::BCH_READ_FOR_update
         };
         let rbio = Rbio::update(fs, *io_opts, read_for, unsafe { BioInPlace::at(self.rbio.bio.as_ptr()) });
         if let Err(e) = unsafe { init_at(rbio, &raw mut self.rbio) } {
@@ -452,7 +452,7 @@ impl c::data_update {
         let size = u64::from(self.key().k.size);
         match ret_to_result_void(ret) {
             Ok(()) => fs.event_add_trace(events::data_update, size, |out| self.to_text(out)),
-            Err(e) if e.matches(bch_errcode::BCH_ERR_data_update_done) =>
+            Err(e) if e.matches(Errcode::BCH_ERR_data_update_done) =>
                 fs.event_add_trace(events::data_update_no_io, size, |out| {
                     self.to_text(out);
                     prt!(out, "\nret:\t{e}\n");
@@ -489,13 +489,13 @@ impl c::data_update {
                     let op = &mut self.op;
                     let nr = op.bits.nr_replicas().into();
                     t.alloc_request(op.target.into(), false, Some(&op.devs_have), nr, nr,
-                                    c::bch_watermark::from_bits(op.bits.watermark().into()),
+                                    c::Watermark::from_bits(op.bits.watermark().into()),
                                     op.flags(), Some(cl.as_opaque()))
                         .and_then(|mut req| t.alloc_sectors(&mut req, op.write_point))
                 });
                 let wp = match r {
                     Ok(wp) => wp,
-                    Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
+                    Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => {
                         trans.unlock();
                         cl.sync();
                         continue;
@@ -560,12 +560,12 @@ impl c::data_update {
         self.op.version = self.k.key().k().bversion;
         self.op.target = data_opts.target;
         self.op.write_point = wp;
-        use c::bch_write_flags as w;
+        use c::WriteFlags as w;
         self.op.set(w::pages_stable | w::pages_owned | w::data_encoded |
                     w::BCH_WRITE_move | data_opts.write_flags);
         self.op.bits.set_compression_opt(io_opts.background_compression);
         let watermark = (data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK)
-            .max(c::bch_watermark::normal as u32);
+            .max(c::Watermark::normal as u32);
         self.op.bits.set_watermark(watermark as u8);
 
         let ret = self.init_body(t, iter, io_opts, pos);
@@ -595,12 +595,12 @@ impl c::data_update {
                 Ok(false) => Ok(()),
                 // the key was deleted
                 Ok(true) => t.commit(Some(&self.op.res), CommitFlags::NO_ENOSPC)
-                    .and_then(|()| fs.throw(bch_errcode::BCH_ERR_data_update_fail_no_snapshot)),
+                    .and_then(|()| fs.throw(Errcode::BCH_ERR_data_update_fail_no_snapshot)),
                 Err(e) => Err(e),
             };
             // can't repair yet, waiting on other recovery passes
-            r.map_err(|e| if e.matches(bch_errcode::BCH_ERR_recovery_will_run) {
-                fs.err(bch_errcode::BCH_ERR_data_update_fail_no_snapshot)
+            r.map_err(|e| if e.matches(Errcode::BCH_ERR_recovery_will_run) {
+                fs.err(Errcode::BCH_ERR_data_update_fail_no_snapshot)
             } else {
                 e
             })?;
@@ -608,7 +608,7 @@ impl c::data_update {
 
         if self.opts.extra_replicas != 0 {
             // the reservation's first charge: the op's init() made it empty
-            self.op.res.add(k.k.size.into(), self.opts.extra_replicas.into(), c::bch_reservation_flags::empty())?;
+            self.op.res.add(k.k.size.into(), self.opts.extra_replicas.into(), c::ReservationFlags::empty())?;
         }
 
         if self.opts.ptrs_kill != 0 && self.op.opts.data_checksum != 0 {
@@ -636,10 +636,10 @@ impl c::data_update {
                 // An encrypted extent must stay encrypted - but only its class
                 // is forced, not its exact type: reconcile must be able to
                 // change the MAC width, or a wide_macs change livelocks it
-                let csum = c::bch_csum_type(p.crc.csum_type.into());
+                let csum = c::CsumType(p.crc.csum_type.into());
                 if csum.is_encryption() {
                     self.op.nonce = (u32::from(p.crc.nonce) + u32::from(p.crc.offset)) as u16;
-                    if !c::bch_csum_type(self.op.bits.csum_type().into()).is_encryption() {
+                    if !c::CsumType(self.op.bits.csum_type().into()).is_encryption() {
                         self.op.bits.set_csum_type(p.crc.csum_type);
                     }
                 }
@@ -660,7 +660,7 @@ impl c::data_update {
             // lost durability needs every copy it asks for
             let d = k.durability(t)?;
             if d.online >= io_opts.data_replicas {
-                self.op.set(c::bch_write_flags::replicas_best_effort);
+                self.op.set(c::WriteFlags::replicas_best_effort);
             }
 
             // Short of data_replicas, don't rereplicate up to it unless
@@ -670,7 +670,7 @@ impl c::data_update {
                 self.op.res.nr_replicas.get();
             if keeping == 0 {
                 nr = nr.max(1);
-                self.op.clear(c::bch_write_flags::cached);
+                self.op.clear(c::WriteFlags::cached);
             }
             self.op.bits.set_nr_replicas(nr as u8);
 
@@ -688,7 +688,7 @@ impl c::data_update {
                 if let Some(iter) = iter {
                     extent_drop_ptrs(t, iter, k, io_opts, &self.opts)?;
                 }
-                return fs.throw(bch_errcode::BCH_ERR_data_update_done_no_writes_needed);
+                return fs.throw(Errcode::BCH_ERR_data_update_done_no_writes_needed);
             }
 
             // Check that the write can allocate, rather than failing in
@@ -707,7 +707,7 @@ impl c::data_update {
             }
             held.in_flight = fs.data_update_in_flight_add(self, pos)?;
         } else if unwritten {
-            return fs.throw(bch_errcode::BCH_ERR_data_update_done_unwritten);
+            return fs.throw(Errcode::BCH_ERR_data_update_done_unwritten);
         }
 
         let k = BkeySC::from(self.k.key());
@@ -725,7 +725,7 @@ impl c::data_update {
                 None => {
                     let Some(moving) = self.moving() else {
                         // a promote mustn't block, or they'd pile up
-                        return fs.throw(bch_errcode::BCH_ERR_nocow_lock_blocked);
+                        return fs.throw(Errcode::BCH_ERR_nocow_lock_blocked);
                     };
                     // @t's transaction is the mover's own here. Wait for the
                     // locks, or until nothing we have in flight could release
@@ -744,7 +744,7 @@ impl c::data_update {
 
         if unwritten {
             t.ignore_restarts(|trans| self.update_unwritten_extent(trans))?;
-            return fs.throw(bch_errcode::BCH_ERR_data_update_done_unwritten);
+            return fs.throw(Errcode::BCH_ERR_data_update_done_unwritten);
         }
 
         t.unlock();
@@ -837,14 +837,14 @@ impl c::data_update {
 
         // A bitrotted extent gets a new checksum so it can be moved; its
         // poison bit keeps reads of it returning errors
-        if unlikely(ret == Err(bch_errcode::BCH_ERR_data_read_csum_err.into()) &&
+        if unlikely(ret == Err(Errcode::BCH_ERR_data_read_csum_err.into()) &&
                     self.key().arm::<Ptrs>().is_some_and(|k| k.poisoned(fs))) {
             if let Some(crc) = &mut crc {
                 let nonce = crate::data::ptrs::extent_nonce(self.key().k.bversion, crc);
                 // what was read is at the buffer's start, whatever the bio's
                 // iter was left at
                 let data = self.rbio.bio().range().take(crc.compressed_size << 9);
-                crc.csum = fs.checksum_range(c::bch_csum_type(crc.csum_type.into()), nonce, data);
+                crc.csum = fs.checksum_range(c::CsumType(crc.csum_type.into()), nonce, data);
                 ret = Ok(());
             }
         }

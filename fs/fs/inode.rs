@@ -33,7 +33,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::c;
-use crate::errcode::{bch_errcode, BchError, Found};
+use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::dirent::{self, DirentTarget};
 use crate::namei;
@@ -58,7 +58,6 @@ use crate::util::log::LogMsg;
 use crate::{bch_err_fn, bch_err_msg, bkey_fsck_err_on, prt};
 use core::mem::size_of;
 use core::ops::ControlFlow;
-use crate::btree_id;
 use core::ffi::CStr;
 use cstruct_macros::{CStruct, c_bitmask, TypeInfo};
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
@@ -343,7 +342,7 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usiz
     for (field, pass) in passes {
         if names.iter().position(|n| *n == field).is_some_and(|i| fieldnr <= i) {
             // As C: unpack has no error to return.
-            let _ = passes::run_explicit(fs, &mut msg, pass, c::bch_run_recovery_pass_flags::from_bits_retain(0));
+            let _ = passes::run_explicit(fs, &mut msg, pass, c::RunRecoveryPassFlags::from_bits_retain(0));
         }
     }
 }
@@ -387,9 +386,9 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
     let mut out = c::bkey_inode_buf::default();
 
-    let mut flags = inode.bi_flags as u64 & !(c::bch_inode_flags::has_inode_opts.bits() as u64);
+    let mut flags = inode.bi_flags as u64 & !(c::InodeFlags::has_inode_opts.bits() as u64);
     if inode.has_opts() {
-        flags |= c::bch_inode_flags::has_inode_opts.bits() as u64;
+        flags |= c::InodeFlags::has_inode_opts.bits() as u64;
     }
 
     let k = &mut out.inode;
@@ -493,7 +492,7 @@ fn flags_field(k: BkeySC<'_>) -> u64 {
     }
 }
 
-/// @k's flags (bch_inode_flags bits), without unpacking it - an inode of any
+/// @k's flags (InodeFlags bits), without unpacking it - an inode of any
 /// version, 0 for anything else. The low 32 bits.
 pub fn flags(k: BkeySC<'_>) -> u32 {
     flags_field(k) as u32
@@ -507,7 +506,7 @@ fn peek_slot<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>)
 {
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
     if !bkey_is_inode(k.k) {
-        return Err(t.fs().err(bch_errcode::BCH_ERR_ENOENT_inode));
+        return Err(t.fs().err(Errcode::BCH_ERR_ENOENT_inode));
     }
     Ok(unpack(t.fs(), k))
 }
@@ -654,7 +653,7 @@ pub fn find_oldest_snapshot(
             ControlFlow::Continue(())
         }))?;
 
-    root.ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOENT_inode))
+    root.ok_or_else(|| fs.err(Errcode::BCH_ERR_ENOENT_inode))
 }
 
 /// Any surviving version of @inum, in any snapshot - ancestor, descendant or
@@ -682,7 +681,7 @@ pub fn find_any_snapshot(t: &TransAttempt<'_, '_>, inum: u64)
         } else {
             ControlFlow::Continue(())
         }))?
-        .ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOENT_inode))
+        .ok_or_else(|| fs.err(Errcode::BCH_ERR_ENOENT_inode))
 }
 
 /// @inode packed, in transaction memory - at no snapshot, which is for the
@@ -746,7 +745,7 @@ pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchErr
     let mut packed = pack(inode);
     packed.inode.k.p.snapshot = u32::MAX;
     fs.btree_insert(
-        btree_id::inodes,
+        Btree::inodes,
         packed.as_mut(),
         None,
         CommitFlags::empty(),
@@ -778,7 +777,7 @@ fn validate_pos(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 /// A str_hash type that isn't one.
 fn validate_str_hash(v: &BkeyValidate<'_, '_>, str_hash: u64) -> Result<(), BchError> {
-    let nr = c::bch_str_hash_type::NR as u64;
+    let nr = c::StrHashKind::NR as u64;
     bkey_fsck_err_on!(v, str_hash >= nr, id::inode_str_hash_invalid,
                       "invalid str hash type ({str_hash} >= {nr})")
 }
@@ -867,7 +866,7 @@ fn fields_to_text(out: &mut Printbuf, inode: &c::bch_inode_unpacked) {
     writeln!(out, "mode={:o} ({d_type_name})", inode.bi_mode);
 
     write!(out, "flags=");
-    c::bch_inode_flags::from_bits_retain(inode.bi_flags as u32).to_text(out);
+    c::InodeFlags::from_bits_retain(inode.bi_flags as u32).to_text(out);
     writeln!(out, "({:x})", inode.bi_flags);
 
     writeln!(out, "journal_seq={}", inode.bi_journal_seq);
@@ -974,7 +973,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
     let idx = if is_32bit { 0 } else { 1 + fs.inode_shard_idx() };
     let (min, max) = cursor_range(fs, idx);
 
-    let cursor_pos = pos(c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64, idx);
+    let cursor_pos = pos(c::LoggedOpsInum::LOGGED_OPS_INUM_inode_cursors.0 as u64, idx);
 
     let cursor = t.bkey_get_mut::<c::InodeAllocCursor>(Btree::logged_ops, cursor_pos,
                                                        BtreeIterFlags::CACHED,
@@ -1058,7 +1057,7 @@ pub fn create<'a>(
         }
 
         if start == min {
-            return Err(fs.err(bch_errcode::BCH_ERR_ENOSPC_inode_create));
+            return Err(fs.err(Errcode::BCH_ERR_ENOSPC_inode_create));
         }
 
         // Retry from start
@@ -1071,7 +1070,7 @@ pub fn create<'a>(
 
 impl BkeyOps for c::InodeAllocCursor {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        bkey_fsck_err_on!(v, v.k.k.p.inode != c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64,
+        bkey_fsck_err_on!(v, v.k.k.p.inode != c::LoggedOpsInum::LOGGED_OPS_INUM_inode_cursors.0 as u64,
                           id::inode_alloc_cursor_inode_bad, "k.p.inode bad")
     }
 
@@ -1101,8 +1100,8 @@ impl BkeyOps for c::InodeAllocCursor {
 /// An unlinked inode that no descendant snapshot has a version of: one to
 /// delete. As bkey_is_unlinked_inode().
 fn is_unlinked(flags: u64) -> bool {
-    flags & c::bch_inode_flags::unlinked.bits() as u64 != 0 &&
-    flags & c::bch_inode_flags::has_child_snapshot.bits() as u64 == 0
+    flags & c::InodeFlags::unlinked.bits() as u64 != 0 &&
+    flags & c::InodeFlags::has_child_snapshot.bits() as u64 == 0
 }
 
 /// @k's flags field: flags_field(), for a key being edited.
@@ -1194,7 +1193,7 @@ fn update_has_children(t: &TransAttempt<'_, '_>, k: &mut BkeyS<'_>, have_child: 
     }
 
     let f = flags_field_mut(k);
-    let has = c::bch_inode_flags::has_child_snapshot.bits() as u64;
+    let has = c::InodeFlags::has_child_snapshot.bits() as u64;
     if have_child != (f & has != 0) {
         set_flags_field(k, f ^ has);
     }
@@ -1215,7 +1214,7 @@ fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: Bpos, have_child: boo
     }
 
     let f = flags_field(k);
-    let has = c::bch_inode_flags::has_child_snapshot.bits() as u64;
+    let has = c::InodeFlags::has_child_snapshot.bits() as u64;
     if have_child != (f & has != 0) {
         // As bch2_bkey_make_mut(): a copy, queued as the update.
         let mut u = t.bkey_make_mut_noupdate(k)?;
@@ -1307,7 +1306,7 @@ fn may_delete_deleted_inode(
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
     let k_pos = k.k.p;
 
-    let missing = (!bkey_is_inode(k.k)).then(|| fs.err(bch_errcode::BCH_ERR_ENOENT_inode));
+    let missing = (!bkey_is_inode(k.k)).then(|| fs.err(Errcode::BCH_ERR_ENOENT_inode));
     if fsck_err_on!(t, from_deleted_inodes && missing.is_some(), id::deleted_inode_missing,
                     "nonexistent inode {}:{} in deleted_inodes btree", { p.offset }, { p.snapshot })? {
         return delete();
@@ -1328,7 +1327,7 @@ fn may_delete_deleted_inode(
         if from_deleted_inodes {
             return delete();
         }
-        return Err(fs.err(bch_errcode::BCH_ERR_inode_is_subvolume_root));
+        return Err(fs.err(Errcode::BCH_ERR_inode_is_subvolume_root));
     }
 
     if inode.is_dir() {
@@ -1342,8 +1341,8 @@ fn may_delete_deleted_inode(
         ret?;
     }
 
-    let not_unlinked = (!inode.flag(c::bch_inode_flags::unlinked))
-        .then(|| fs.err(bch_errcode::BCH_ERR_inode_not_unlinked));
+    let not_unlinked = (!inode.flag(c::InodeFlags::unlinked))
+        .then(|| fs.err(Errcode::BCH_ERR_inode_not_unlinked));
     if fsck_err_on!(t, from_deleted_inodes && not_unlinked.is_some(), id::deleted_inode_not_unlinked,
                     "non-deleted inode {}:{} in deleted_inodes btree", { p.offset }, { p.snapshot })? {
         return delete();
@@ -1352,8 +1351,8 @@ fn may_delete_deleted_inode(
         return Err(e);
     }
 
-    let has_child = inode.flag(c::bch_inode_flags::has_child_snapshot)
-        .then(|| fs.err(bch_errcode::BCH_ERR_inode_has_child_snapshot));
+    let has_child = inode.flag(c::InodeFlags::has_child_snapshot)
+        .then(|| fs.err(Errcode::BCH_ERR_inode_has_child_snapshot));
     if fsck_err_on!(t, from_deleted_inodes && has_child.is_some(),
                     id::deleted_inode_has_child_snapshots,
                     "inode with child snapshots {}:{} in deleted_inodes btree",
@@ -1367,20 +1366,20 @@ fn may_delete_deleted_inode(
     if has_child_snapshots(t, k_pos)? {
         if fsck_err!(t, id::inode_has_child_snapshots_wrong,
                      "inode has_child_snapshots flag wrong (should be set)\n{}", inode)? {
-            inode.set_flag(c::bch_inode_flags::has_child_snapshot, true);
+            inode.set_flag(c::InodeFlags::has_child_snapshot, true);
             fsck_write(t, inode)?;
         }
 
         if !from_deleted_inodes {
             t.commit(None, CommitFlags::NO_ENOSPC)?;
-            return Err(fs.err(bch_errcode::BCH_ERR_inode_has_child_snapshot));
+            return Err(fs.err(Errcode::BCH_ERR_inode_has_child_snapshot));
         }
 
         return delete();
     }
 
     if from_deleted_inodes {
-        if fs.flags.get(c::bch_fs_flags::clean_recovery) &&
+        if fs.flags.get(c::FsFlag::clean_recovery) &&
            !fsck_err!(t, id::deleted_inode_but_clean,
                       "filesystem marked as clean but have deleted inode {}:{}",
                       { p.offset }, { p.snapshot })? {
@@ -1439,7 +1438,7 @@ fn rm_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<u32, BchEr
 
     if !is_inode {
         fs_inconsistent!(fs, "inode {}:{} not found when deleting", inum.inum, snapshot);
-        return Err(fs.err(bch_errcode::BCH_ERR_ENOENT_inode));
+        return Err(fs.err(Errcode::BCH_ERR_ENOENT_inode));
     }
 
     t.delete_at(&iter, UpdateTriggerFlags::empty())?;
@@ -1705,7 +1704,7 @@ pub fn init_late(
                 $(inode.[<bi_ $name>] = parent.[<bi_ $name>];)*
             } };
         }
-        c::inode_opt_id_arms!(inherit);
+        c::InodeOptId_arms!(inherit);
     }
 
     if !inode.is_dir() {
@@ -1713,7 +1712,7 @@ pub fn init_late(
     }
 
     if inode.casefold(fs) {
-        inode.set_flag(c::bch_inode_flags::has_case_insensitive, true);
+        inode.set_flag(c::InodeFlags::has_case_insensitive, true);
     }
 }
 
@@ -1762,7 +1761,7 @@ pub fn set_casefold(
 
     // Not supported on individual files.
     if !inode.is_dir() {
-        return Err(fs.err(bch_errcode::BCH_ERR_casefold_opt_is_dir_only));
+        return Err(fs.err(Errcode::BCH_ERR_casefold_opt_is_dir_only));
     }
 
     dirent::empty_dir_trans(t, inum)?;
@@ -1772,7 +1771,7 @@ pub fn set_casefold(
     fs.check_set_feature(SbFeature::casefolding);
 
     inode.bi_casefold = v.wrapping_add(1) as _; // stored +1, 0 for unset
-    inode.bi_fields_set |= 1 << c::inode_opt_id::casefold.0;
+    inode.bi_fields_set |= 1 << c::InodeOptId::casefold.0;
 
     namei::maybe_propagate_has_case_insensitive(t, inum, inode)
 }
@@ -1799,7 +1798,7 @@ impl c::bch_inode_unpacked {
     /// every inode has, two for a directory - and 0 if it's unlinked: as
     /// bch2_inode_nlink_get().
     pub fn nlink(&self) -> u32 {
-        if self.flag(c::bch_inode_flags::unlinked) {
+        if self.flag(c::InodeFlags::unlinked) {
             0
         } else {
             self.bi_nlink.wrapping_add(self.nlink_bias())
@@ -1810,10 +1809,10 @@ impl c::bch_inode_unpacked {
     pub fn set_nlink(&mut self, nlink: u32) {
         if nlink != 0 {
             self.bi_nlink = nlink.wrapping_sub(self.nlink_bias());
-            self.set_flag(c::bch_inode_flags::unlinked, false);
+            self.set_flag(c::InodeFlags::unlinked, false);
         } else {
             self.bi_nlink = 0;
-            self.set_flag(c::bch_inode_flags::unlinked, true);
+            self.set_flag(c::InodeFlags::unlinked, true);
         }
     }
 
@@ -1832,11 +1831,11 @@ impl c::bch_inode_unpacked {
     }
 
     /// Whether flag @f (BCH_INODE_*) is set.
-    pub fn flag(&self, f: c::bch_inode_flags) -> bool {
+    pub fn flag(&self, f: c::InodeFlags) -> bool {
         self.bi_flags & f.bits() != 0
     }
 
-    pub fn set_flag(&mut self, f: c::bch_inode_flags, v: bool) {
+    pub fn set_flag(&mut self, f: c::InodeFlags, v: bool) {
         if v {
             self.bi_flags |= f.bits();
         } else {
@@ -1900,7 +1899,7 @@ impl c::bch_inode_unpacked {
                 false $(|| self.[<bi_ $name>] != 0)*
             } };
         }
-        c::inode_opt_id_arms!(any_set)
+        c::InodeOptId_arms!(any_set)
     }
 }
 
@@ -1912,11 +1911,11 @@ const BCH_LINK_MAX: u32 = u32::MAX;
 pub fn nlink_inc(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked)
     -> Result<(), BchError>
 {
-    if inode.flag(c::bch_inode_flags::unlinked) {
-        inode.set_flag(c::bch_inode_flags::unlinked, false);
+    if inode.flag(c::InodeFlags::unlinked) {
+        inode.set_flag(c::InodeFlags::unlinked, false);
     } else {
         if inode.bi_nlink == BCH_LINK_MAX - inode.nlink_bias() {
-            return Err(BchError::from(bch_errcode::BCH_ERR_too_many_links));
+            return Err(BchError::from(Errcode::BCH_ERR_too_many_links));
         }
         nlink_add(t, inode, 1)?;
     }
@@ -1962,14 +1961,14 @@ fn nlink_out_of_range(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     let log = crate::init::error::count_fsck_err(fs, err, &mut msg);
     msg.set_suppressed(!log);
 
-    passes::run_explicit(fs, &mut msg, pass, c::bch_run_recovery_pass_flags::from_bits_retain(0))
+    passes::run_explicit(fs, &mut msg, pass, c::RunRecoveryPassFlags::from_bits_retain(0))
 }
 
 /// One link fewer to @inode - unlinked, when it had none left: as
 /// bch2_inode_nlink_dec(). An unlinked inode losing a link is a transaction
 /// inconsistency, and changes nothing.
 pub fn nlink_dec(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked) {
-    let unlinked = inode.flag(c::bch_inode_flags::unlinked);
+    let unlinked = inode.flag(c::InodeFlags::unlinked);
 
     if unlinked && inode.bi_nlink != 0 {
         trans_inconsistent!(t, "inode {} unlinked but link count nonzero", inode.bi_inum);
@@ -1984,7 +1983,7 @@ pub fn nlink_dec(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked) {
     if inode.bi_nlink != 0 {
         inode.bi_nlink -= 1;
     } else {
-        inode.set_flag(c::bch_inode_flags::unlinked, true);
+        inode.set_flag(c::InodeFlags::unlinked, true);
     }
 }
 
@@ -2031,7 +2030,7 @@ mod tests {
         assert_eq!(v.bi_dir, u.bi_dir);
         assert_eq!(v.bi_casefold, u.bi_casefold);
         // An option field is set - bi_casefold - so pack sets has_inode_opts:
-        assert!(v.flag(c::bch_inode_flags::has_inode_opts));
+        assert!(v.flag(c::InodeFlags::has_inode_opts));
     }
 
     /// A value cut off at a field: Err at that field, the fields before it

@@ -15,7 +15,7 @@ use cstruct_macros::bch_enum;
 
 #[bch_enum(flags)]
 #[repr(u32)]
-pub enum journal_cycle_flags {
+pub enum JournalCycleFlags {
     JOURNAL_CYCLE_must_close = 1 << 0,
     JOURNAL_CYCLE_must_open = 1 << 1,
     JOURNAL_CYCLE_force_close = 1 << 2,
@@ -24,13 +24,13 @@ pub enum journal_cycle_flags {
 /* First bits for BCH_WATERMARK: */
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum journal_res_flags {
+pub enum JournalResFlag {
     __JOURNAL_RES_GET_NONBLOCK = c::BCH_WATERMARK_BITS,
     __JOURNAL_RES_GET_CHECK,
 }
 
-pub const JOURNAL_RES_GET_NONBLOCK: u32 = 1 << c::journal_res_flags::__JOURNAL_RES_GET_NONBLOCK as u32;
-pub const JOURNAL_RES_GET_CHECK: u32 = 1 << c::journal_res_flags::__JOURNAL_RES_GET_CHECK as u32;
+pub const JOURNAL_RES_GET_NONBLOCK: u32 = 1 << c::JournalResFlag::__JOURNAL_RES_GET_NONBLOCK as u32;
+pub const JOURNAL_RES_GET_CHECK: u32 = 1 << c::JournalResFlag::__JOURNAL_RES_GET_CHECK as u32;
 
 impl c::journal {
     /// For C, which writes what it changes through it as its locks allow.
@@ -45,7 +45,7 @@ impl c::journal {
     /// journal_shutdown if it's halted: bch2_journal_error().
     pub fn error(&self) -> Result<(), BchError> {
         if self.halted() {
-            Err(crate::errcode::bch_errcode::BCH_ERR_journal_shutdown.into())
+            Err(crate::errcode::Errcode::BCH_ERR_journal_shutdown.into())
         } else {
             Ok(())
         }

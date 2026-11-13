@@ -7,7 +7,7 @@ use bcachefs_kernel::btree::bkey::ValidateFlags;
 use bcachefs_kernel::c;
 use bcachefs_kernel::util::vstructs::Head;
 use bch_bindgen::sb::io as sb_io;
-use bch_bindgen::sb::sb_field_type;
+use bch_bindgen::sb::SbFieldType;
 use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};
@@ -183,8 +183,8 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
         return Err(anyhow!("Member {} does not exist in source superblock", dev_idx));
     }
 
-    src_sb.field_delete(sb_field_type::journal);
-    src_sb.field_delete(sb_field_type::journal_v2);
+    src_sb.field_delete(SbFieldType::journal);
+    src_sb.field_delete(SbFieldType::journal_v2);
     src_sb.sb_mut().dev_idx = dev_idx as u8;
 
     // Read fields safely before layout mutation
@@ -249,7 +249,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
     };
 
     let mut buf = Printbuf::new();
-    bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb_buf.sb().as_unvalidated(), true, sb_field_type::members_v2.bit());
+    bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb_buf.sb().as_unvalidated(), true, SbFieldType::members_v2.bit());
     println!("Found superblock:\n{}", buf);
 
     if cli.yes {

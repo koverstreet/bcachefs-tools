@@ -9,7 +9,7 @@ use cstruct_macros::{bch_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 #[bch_enum(flags)]
 #[repr(u32)]
-pub enum bch_counters_flags {
+pub enum CounterFlags {
     TYPE_COUNTER = 1 << 0,  /* event counters */
     TYPE_SECTORS = 1 << 1,  /* amount counters, the unit is sectors */
 }
@@ -17,10 +17,10 @@ pub enum bch_counters_flags {
 #[bch_enum(closed)]
 #[prefix(BCH_COUNTER_)]
 #[nr]
-#[arm_columns(stable: enum(bch_persistent_counters_stable: u32, prefix = BCH_COUNTER_STABLE_, nr),
-              flags: bch_counters_flags)]
+#[arm_columns(stable: enum(PersistentCounterStable: u32, prefix = BCH_COUNTER_STABLE_, nr),
+              flags: CounterFlags)]
 #[repr(u32)]
-pub enum bch_persistent_counters {
+pub enum PersistentCounter {
     /// Filesystem sync operations
     #[stable(110)] #[flags(TYPE_COUNTER)] sync_fs,
     /// Fsync operations

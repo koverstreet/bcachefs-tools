@@ -102,9 +102,9 @@ impl WriteOp {
         op.subvol      = subvol;
         op.pos         = spos(inum, offset >> 9, u32::MAX);
         op.new_i_size  = new_i_size;
-        op.set(c::bch_write_flags::sync);
+        op.set(c::WriteFlags::sync);
 
-        let submit_err = op.res.add((data.len() >> 9) as u64, replicas, c::bch_reservation_flags::empty()).err();
+        let submit_err = op.res.add((data.len() >> 9) as u64, replicas, c::ReservationFlags::empty()).err();
         if submit_err.is_none() {
             // BCH_WRITE_sync: done when this returns, so @data outlives it
             unsafe { closure::call(NonNull::from(&mut *op), bch2_write, None) };
@@ -165,7 +165,7 @@ impl ReadOp {
         inode: &c::bch_inode_unpacked,
         buf: &mut [u8],
     ) -> Self {
-        type F = c::bch_read_flags;
+        type F = c::ReadFlags;
         let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
         let mut b = fs.bio_read.alloc(std::ptr::null_mut(), 1, c::req_op_REQ_OP_READ,

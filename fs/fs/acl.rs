@@ -149,10 +149,10 @@ impl AclType {
         Self::ALL.into_iter().find(|acl| acl.xattr_type() == ty)
     }
 
-    pub fn inode_flag(self) -> c::bch_inode_flags {
+    pub fn inode_flag(self) -> c::InodeFlags {
         match self {
-            Self::Access  => c::bch_inode_flags::has_access_acl,
-            Self::Default => c::bch_inode_flags::has_default_acl,
+            Self::Access  => c::InodeFlags::has_access_acl,
+            Self::Default => c::InodeFlags::has_default_acl,
         }
     }
 
@@ -191,7 +191,7 @@ mod vfs {
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
-    use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
+    use crate::errcode::{Errcode, ret_to_result_void as ret_to_result, BchError};
     use crate::inode;
     use crate::snapshots::subvolume;
     use crate::str_hash;
@@ -225,7 +225,7 @@ mod vfs {
             t.allocate_dropping_locks(|| {
                 let gfp = crate::util::alloc::current_gfp_context_raw(c::GFP_KERNEL);
                 NonNull::new(unsafe { c::posix_acl_alloc(nr, gfp) }).map(PosixAcl)
-                    .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOMEM_acl))
+                    .ok_or(BchError::from(Errcode::BCH_ERR_ENOMEM_acl))
             })
         }
 

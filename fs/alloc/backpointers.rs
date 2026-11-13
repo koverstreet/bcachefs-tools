@@ -48,7 +48,7 @@ use crate::c;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
@@ -193,11 +193,11 @@ impl c::Backpointer {
 
     /// Its reconcile phys bits: its extent's work, for a pointer on a
     /// rotational device - bp_reconcile_phys().
-    pub fn reconcile_work_phys(&self) -> c::reconcile_work_id {
-        c::reconcile_work_id(self.reconcile_phys() as u32)
+    pub fn reconcile_work_phys(&self) -> c::ReconcileWorkId {
+        c::ReconcileWorkId(self.reconcile_phys() as u32)
     }
 
-    pub fn set_reconcile_work_phys(&mut self, w: c::reconcile_work_id) {
+    pub fn set_reconcile_work_phys(&mut self, w: c::ReconcileWorkId) {
         self.set_reconcile_phys(w.0.into());
     }
 }
@@ -213,9 +213,9 @@ pub fn backpointers_match(l: &c::Backpointer, r: &c::Backpointer) -> bool {
 }
 
 /// Pending work isn't tracked by bucket.
-pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> c::reconcile_work_id {
+pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> c::ReconcileWorkId {
     if level != 0 || !fs.dev_rotational(dev) {
-        return c::reconcile_work_id::none;
+        return c::ReconcileWorkId::none;
     }
     k.reconcile_work_id(fs).phys()
 }
@@ -296,7 +296,7 @@ fn backpointer_mod_err(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, new_bp: &Bk
         prt!(&mut out, "for {}", orig_k.to_text(fs));
     }
 
-    passes::run_explicit(fs, &mut msg, pass, c::bch_run_recovery_pass_flags::from_bits_retain(0))
+    passes::run_explicit(fs, &mut msg, pass, c::RunRecoveryPassFlags::from_bits_retain(0))
 }
 
 fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>,
@@ -329,7 +329,7 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
 pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: &mut BkeyI<c::Backpointer>,
                               insert: bool) -> Result<(), BchError> {
     let phys = bp.v.reconcile_work_phys();
-    if phys != c::reconcile_work_id::none {
+    if phys != c::ReconcileWorkId::none {
         let btree = phys.phys_btree().expect("phys bits that are never pending: bp_reconcile_phys()'s");
         t.bit_mod_buffered(btree, bp.k.p, insert)?;
     }
@@ -453,7 +453,7 @@ fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
     }
 
     if b.will_make_reachable() {
-        return fs.throw(bch_errcode::BCH_ERR_backpointer_to_overwritten_btree_node);
+        return fs.throw(Errcode::BCH_ERR_backpointer_to_overwritten_btree_node);
     }
 
     backpointer_target_not_found(t, bp, node_k, last_flushed, commit)?;
@@ -493,7 +493,7 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
 
     match get_node(t, bp, iter, last_flushed, commit) {
         Ok(b) => Ok(b.map(|b| BkeySC::from(b.contents().key_i()))),
-        Err(e) if e.matches(bch_errcode::BCH_ERR_backpointer_to_overwritten_btree_node) => Ok(None),
+        Err(e) if e.matches(Errcode::BCH_ERR_backpointer_to_overwritten_btree_node) => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -596,10 +596,10 @@ impl BpScanIter<'_> {
                     self.batch.reserve(more).is_ok()
                 };
                 if grew {
-                    return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_backpointer_scan_grow));
+                    return Err(t.restart(Errcode::BCH_ERR_transaction_restart_backpointer_scan_grow));
                 }
                 if self.batch.is_empty() {
-                    return t.fs().throw(bch_errcode::BCH_ERR_ENOMEM_backpointer_scan);
+                    return t.fs().throw(Errcode::BCH_ERR_ENOMEM_backpointer_scan);
                 }
                 return Ok(ControlFlow::Break(()));
             }

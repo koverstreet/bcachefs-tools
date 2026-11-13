@@ -158,7 +158,7 @@ macro_rules! extent_entries {
         }
     } };
 }
-c::bch_extent_entry_type_arms!(extent_entries);
+c::ExtentEntryType_arms!(extent_entries);
 
 /// The lowest set bit of @b's first word; u32::MAX if it has none.
 fn entry_type(b: &[u8]) -> Option<u32> {
@@ -366,7 +366,7 @@ unsafe impl<S: KeyState> InFamily<PtrsTypes> for FamilyVal<BtreePtrsTypes, S> {}
 // SAFETY: as above
 unsafe impl<S: KeyState> InFamily<PtrsMutTypes> for FamilyVal<BtreePtrsTypes, S> {}
 
-pub const EXTENT_POISONED: u64 = 1 << c::bch_extent_flags_e::poisoned.0;
+pub const EXTENT_POISONED: u64 = 1 << c::ExtentFlag::poisoned.0;
 
 /// The extent entries of a key with pointers, in whichever form it's held:
 /// any BkeyV whose value is a PtrsBkey - armed to Ptrs, or to one of them.
@@ -901,7 +901,7 @@ fn crc_size_raw<T: TryFrom<u32>>(size: u32) -> Option<T> {
 
 /// @crc's checksum type's size in bytes, if it's one this version knows.
 fn crc_csum_bytes(crc: &c::bch_extent_crc_unpacked) -> Option<u32> {
-    c::bch_csum_type(u32::from(crc.csum_type)).bytes()
+    c::CsumType(u32::from(crc.csum_type)).bytes()
 }
 
 /// The checksum's bytes, lo's then hi's - where a packed entry's come from.
@@ -1033,7 +1033,7 @@ pub fn extent_nonce(version: Bversion, crc: &c::bch_extent_crc_unpacked) -> Nonc
 /// Whether @crc's data is checksummed or compressed - read back whole, so
 /// bounded by encoded_extent_max.
 pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
-    crc.csum_type as u32 != c::bch_csum_type::none.0 || crc_is_compressed(crc)
+    crc.csum_type as u32 != c::CsumType::none.0 || crc_is_compressed(crc)
 }
 
 /// Drop @k's stale cached pointers, if it has any, as an update through @iter:
@@ -1125,7 +1125,7 @@ mod tests {
 
     /// Our sizes, as a filesystem's table has them for the types we know.
     fn ours() -> std::vec::Vec<u8> {
-        (0..c::bch_extent_entry_type::NR).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8).collect()
+        (0..c::ExtentEntryType::NR).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8).collect()
     }
 
     /// @table as a filesystem's entry lengths.
@@ -1188,7 +1188,7 @@ mod tests {
                 "a crc128 doesn't fit in a word");
     }
 
-    fn crc(csum_type: c::bch_csum_type, size: u32, offset: u16, nonce: u16) -> c::bch_extent_crc_unpacked {
+    fn crc(csum_type: c::CsumType, size: u32, offset: u16, nonce: u16) -> c::bch_extent_crc_unpacked {
         // a checksum as wide as its type, every byte nonzero
         let n = csum_type.bytes().unwrap() as usize;
         let mut b = [0u8; 16];
@@ -1213,7 +1213,7 @@ mod tests {
 
     #[test]
     fn ptr_swab_reads_the_other_endianness() {
-        use c::bch_csum_type as t;
+        use c::CsumType as t;
 
         let c32 = c::bch_extent_crc32::pack(&crc(t::crc32c, 8, 0, 0)).unwrap();
         let c64 = c::bch_extent_crc64::pack(&crc(t::chacha20_poly1305_80, 8, 0, 3)).unwrap();
@@ -1253,7 +1253,7 @@ mod tests {
 
         // not compressed: no size or compression type; crc.nonce 3 is three
         // 512 byte sectors, 24 ChaCha20 blocks
-        let mut crc = crc(c::bch_csum_type::chacha20_poly1305_128, 128, 0, 3);
+        let mut crc = crc(c::CsumType::chacha20_poly1305_128, 128, 0, 3);
         assert_eq!(words(extent_nonce(version, &crc)),
                    [24, 0x5566_7788, 0x1122_3344, 0x1000_009a]);
 

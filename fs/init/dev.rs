@@ -222,7 +222,7 @@ use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::iter::UpdateTriggerFlags;
 use crate::data::migrate::{dev_data_drop, dev_data_drop_by_backpointers, dev_remove_stripes, DevDrop};
 use crate::debug::sysfs::{DevDir, DEV_GROUPS};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
@@ -381,11 +381,11 @@ fn may_add(fs: &Fs, sb: &c::bch_sb) -> Result<(), BchError> {
     let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_default();
 
     if u64::from(sb.block_size.get()) != fs.block_bytes() >> 9 {
-        return fs.throw(bch_errcode::BCH_ERR_mismatched_block_size);
+        return fs.throw(Errcode::BCH_ERR_mismatched_block_size);
     }
 
     if u64::from(m.bucket_size()) < fs.sb_lock().sb().btree_node_size() {
-        return fs.throw(bch_errcode::BCH_ERR_bucket_size_too_small);
+        return fs.throw(Errcode::BCH_ERR_bucket_size_too_small);
     }
 
     Ok(())
@@ -652,7 +652,7 @@ impl Fs {
     pub fn dev_alloc(&self, dev_idx: u32) -> Result<(), BchError> {
         let member = sb_member(self.sb_lock().sb(), dev_idx).unwrap_or_default();
 
-        let ca = dev_alloc(self, &member).ok_or_else(|| self.err(bch_errcode::BCH_ERR_ENOMEM_dev_alloc))?;
+        let ca = dev_alloc(self, &member).ok_or_else(|| self.err(Errcode::BCH_ERR_ENOMEM_dev_alloc))?;
 
         ca.attach(&self.state_lock_write(), dev_idx);
         Ok(())
@@ -709,13 +709,13 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_
         return Ok(());
     }
     if fs.uuid.b != dev.uuid.b {
-        return Err(bch_errcode::BCH_ERR_device_not_a_member_of_filesystem.into());
+        return Err(Errcode::BCH_ERR_device_not_a_member_of_filesystem.into());
     }
     if !member_exists(fs, dev.dev_idx.into()) {
-        return Err(bch_errcode::BCH_ERR_device_has_been_removed.into());
+        return Err(Errcode::BCH_ERR_device_has_been_removed.into());
     }
     if fs.block_size != dev.block_size {
-        return Err(bch_errcode::BCH_ERR_mismatched_block_size.into());
+        return Err(Errcode::BCH_ERR_mismatched_block_size.into());
     }
 
     let member_seq = MetadataVersion::member_seq.0;
@@ -739,7 +739,7 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_
             prt_bdevname(out, dev_bdev);
             prt!(out, " {}\nNot using older sb", DateTime(dev.write_time.get() as i64));
         }));
-        return Err(bch_errcode::BCH_ERR_device_splitbrain.into());
+        return Err(Errcode::BCH_ERR_device_splitbrain.into());
     }
 
     if seq_from_fs != 0 && seq_from_fs < dev.seq.get() {
@@ -757,7 +757,7 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_
             prt!(out, " has {}\nNot using ", dev.seq.get());
             prt_bdevname(out, dev_bdev);
         }));
-        return Err(bch_errcode::BCH_ERR_device_splitbrain.into());
+        return Err(Errcode::BCH_ERR_device_splitbrain.into());
     }
     Ok(())
 }
@@ -771,14 +771,14 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
     if ca.is_online() {
         prt!(err, "Cannot attach {}: already have device {} online in slot {}\n",
              sb.dev.name().to_str().unwrap_or("?"), ca, sb.sb().dev_idx);
-        return fs.throw(bch_errcode::BCH_ERR_device_already_online);
+        return fs.throw(Errcode::BCH_ERR_device_already_online);
     }
 
     let capacity = sb.dev.capacity();
     if capacity < u64::from(mi.bucket_size) * mi.nbuckets {
         prt!(err, "Cannot online {}: device too small (capacity {} filesystem size {} nbuckets {})\n",
              sb.dev.name().to_str().unwrap_or("?"), capacity, u64::from(mi.bucket_size) * mi.nbuckets, mi.nbuckets);
-        return fs.throw(bch_errcode::BCH_ERR_device_size_too_small);
+        return fs.throw(Errcode::BCH_ERR_device_size_too_small);
     }
 
     assert!(ca.io_ref[READ].is_zero(), "attaching device {ca} with read refs");
@@ -916,7 +916,7 @@ impl StateLockWrite<'_> {
             let mut new_rw_devs = c::bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
             new_rw_devs.d.clear(ca.dev_idx.into());
 
-            return can_write_with_devs(fs, &new_rw_devs, c::bch_write_check::BCH_WRITE_CHECK_dev_leaving_rw,
+            return can_write_with_devs(fs, &new_rw_devs, c::WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
                                        flags, err);
         }
 
@@ -951,7 +951,7 @@ impl StateLockWrite<'_> {
         }
 
         if !self.dev_state_allowed(ca, new_state, flags, err) {
-            return fs.throw(bch_errcode::BCH_ERR_device_state_not_allowed);
+            return fs.throw(Errcode::BCH_ERR_device_state_not_allowed);
         }
 
         if new_state != MemberState::rw {
@@ -1007,10 +1007,10 @@ impl StateLockWrite<'_> {
 
         if !fs.can_read_fs_with_devs(&new_devs, flags, Some(err)) ||
            (fs.opts().read_only.get() == 0 &&
-            !can_write_with_devs(fs, &new_rw_devs, c::bch_write_check::BCH_WRITE_CHECK_dev_leaving_rw,
+            !can_write_with_devs(fs, &new_rw_devs, c::WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
                                  flags, err)) {
             prt!(err, "Cannot offline required disk\n");
-            return fs.throw(bch_errcode::BCH_ERR_device_state_not_allowed);
+            return fs.throw(Errcode::BCH_ERR_device_state_not_allowed);
         }
 
         Ok(())
@@ -1134,7 +1134,7 @@ impl StateLockWrite<'_> {
             /* The device is staying; allow new references to it again: */
             ca.removing.set(false);
 
-            if fs.flags.get(c::bch_fs_flags::rw) &&
+            if fs.flags.get(c::FsFlag::rw) &&
                ca.mi.get().state == MemberState::rw &&
                !ca.io_ref[READ].is_zero() {
                 self.dev_read_write(ca);
@@ -1171,7 +1171,7 @@ impl Fs {
         let state = self.state_lock_write();
 
         if ca.removing() {
-            return self.throw(bch_errcode::BCH_ERR_device_has_been_removed);
+            return self.throw(Errcode::BCH_ERR_device_has_been_removed);
         }
 
         state.dev_set_state(ca, new_state, flags, err)
@@ -1182,7 +1182,7 @@ impl Fs {
     pub fn dev_remove(&self, ca: DevOuterRef, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
         let ca_p = ca.as_ptr();
         let dev_idx = ca.dev_idx;
-        let fast_device_removal = self.sb.compat.get() & (1 << c::bch_sb_compat::no_stale_ptrs.0) != 0 &&
+        let fast_device_removal = self.sb.compat.get() & (1 << c::SbCompat::no_stale_ptrs.0) != 0 &&
             self.request_incompat_feature(MetadataVersion::fast_device_removal).is_ok();
 
         let slot = {
@@ -1227,7 +1227,7 @@ impl Fs {
     fn dev_set_initialized(&self, ca: &Dev, state: MemberInitialized) -> Result<(), BchError> {
         let mut sb = self.sb_lock();
         sb.fs_member_mut(ca.dev_idx.into()).set_initialized(state.0.into());
-        self.write_super_flags(&mut sb, c::bch_sb_write_flags::empty())
+        self.write_super_flags(&mut sb, c::SbWriteFlags::empty())
     }
 
     pub fn dev_add_initialize(&self, ca: &Dev) -> Result<(), BchError> {
@@ -1276,7 +1276,7 @@ impl Fs {
         may_add(self, sb.sb())?;
 
         let ca = dev_alloc(self, &dev_mi).ok_or(BchError::from(c::ENOMEM))?;
-        let started = self.flags.get(c::bch_fs_flags::started);
+        let started = self.flags.get(c::FsFlag::started);
         let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
 
         bch_err_fn!(self, (|| -> Result<(), BchError> {
@@ -1395,9 +1395,9 @@ impl Fs {
          * would find its device offline - stop() has put the io refs - and
          * restart them:
          */
-        if self.flags.get(c::bch_fs_flags::stopping) {
+        if self.flags.get(c::FsFlag::stopping) {
             prt!(err, "filesystem is shutting down\n");
-            return self.throw(bch_errcode::BCH_ERR_ioctl_fs_stopping);
+            return self.throw(Errcode::BCH_ERR_ioctl_fs_stopping);
         }
 
         let mut sb = read_super(path, &mut opts, Some(self.holder()))
@@ -1484,7 +1484,7 @@ impl Fs {
         let state = self.state_lock_write();
 
         if ca.removing() {
-            return self.throw(bch_errcode::BCH_ERR_device_has_been_removed);
+            return self.throw(Errcode::BCH_ERR_device_has_been_removed);
         }
 
         if !ca.is_online() {
@@ -1502,14 +1502,14 @@ impl Fs {
         let state = self.state_lock_write();
 
         if ca.removing() {
-            return self.throw(bch_errcode::BCH_ERR_device_has_been_removed);
+            return self.throw(Errcode::BCH_ERR_device_has_been_removed);
         }
 
         let old_nbuckets = ca.mi.get().nbuckets;
 
         if nbuckets < old_nbuckets {
             prt!(err, "Cannot shrink yet\n");
-            return self.throw(bch_errcode::BCH_ERR_EINVAL_dev_resize_shrink);
+            return self.throw(Errcode::BCH_ERR_EINVAL_dev_resize_shrink);
         }
 
         let wakeup_reconcile_pending = nbuckets > old_nbuckets;
@@ -1520,7 +1520,7 @@ impl Fs {
 
         if nbuckets > u64::from(c::BCH_MEMBER_NBUCKETS_MAX) {
             prt!(err, "New device size too big ({} greater than max {})\n", nbuckets, c::BCH_MEMBER_NBUCKETS_MAX);
-            return self.throw(bch_errcode::BCH_ERR_device_size_too_big);
+            return self.throw(Errcode::BCH_ERR_device_size_too_big);
         }
 
         let bucket_size = u64::from(ca.mi.get().bucket_size);
@@ -1528,7 +1528,7 @@ impl Fs {
             let capacity = ca.disk_sb.capacity();
             if capacity < bucket_size * nbuckets {
                 prt!(err, "New size {} larger than device size {}\n", bucket_size * nbuckets, capacity);
-                return self.throw(bch_errcode::BCH_ERR_device_size_too_small);
+                return self.throw(Errcode::BCH_ERR_device_size_too_small);
             }
         }
 
@@ -1582,7 +1582,7 @@ impl Fs {
 
         self.members()
             .find(|ca| ca.name().to_bytes() == name)
-            .ok_or(bch_errcode::BCH_ERR_ENOENT_dev_not_found.into())
+            .ok_or(Errcode::BCH_ERR_ENOENT_dev_not_found.into())
     }
 
     /// @devs by name, space separated; one there isn't, by its number.
@@ -1743,9 +1743,9 @@ unsafe fn bdev_get_fs(bdev: *mut c::block_device) -> Option<RoRef> {
 
     let r = r?;
     let fs = r.container();
-    let started = |fs: &Fs| fs.flags.get(c::bch_fs_flags::started);
+    let started = |fs: &Fs| fs.flags.get(c::FsFlag::started);
     let Ok(()) = fs.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
-        (started(fs) || fs.flags.get(c::bch_fs_flags::stopping)).then_some(())
+        (started(fs) || fs.flags.get(c::FsFlag::stopping)).then_some(())
     });
     // stopped without starting: our ref is what bch2_fs_stop() waits for
     started(fs).then_some(r)

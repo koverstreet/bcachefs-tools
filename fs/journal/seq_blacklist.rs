@@ -39,7 +39,7 @@ use crate::sb_err_on;
 use crate::bch_verbose;
 use crate::c;
 use crate::util::vstructs::Unvalidated;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::Le64;
@@ -60,7 +60,7 @@ impl SbFieldOps for Section {
 
             if let Some(next) = f.start.get(i + 1).filter(|n| end > n.start.get()) {
                 write!(err, "entry {} out of order with next entry ({end} > {})", i + 1, next.start.get());
-                return Err(bch_errcode::BCH_ERR_invalid_sb_journal_seq_blacklist.into());
+                return Err(Errcode::BCH_ERR_invalid_sb_journal_seq_blacklist.into());
             }
         }
         Ok(())
@@ -91,7 +91,7 @@ impl SbFieldOps for Section {
                 }
                 Eytzinger0::sort_by(t, |l, r| l.start.cmp(&r.start));
             })
-        }.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_blacklist_table_init))
+        }.map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_blacklist_table_init))
     }
 }
 
@@ -204,7 +204,7 @@ impl Fs {
     pub fn journal_seq_blacklist_add(&self, start: u64, end: u64) -> Result<(), BchError> {
         let mut sb = self.sb_lock();
         if !section_add(&mut self.sb_resize(&mut sb), start, end) {
-            return self.throw(bch_errcode::BCH_ERR_ENOSPC_sb_journal_seq_blacklist);
+            return self.throw(Errcode::BCH_ERR_ENOSPC_sb_journal_seq_blacklist);
         }
         self.write_super_ret(&mut sb)?;
         Section::to_cpu(self, &mut sb)
@@ -250,7 +250,7 @@ pub(crate) fn blacklist_entries_gc(fs: &Fs, guard: &mut SbLockGuard<'_>) -> bool
     bch_verbose!(fs, "nr blacklist entries was {nr}, now {new_nr}");
 
     if new_nr == 0 {
-        sb.field_delete(c::bch_sb_field_type::journal_seq_blacklist);
+        sb.field_delete(c::SbFieldType::journal_seq_blacklist);
     } else {
         let shrunk = sb.field_resize::<Section>(sb_field_u64s::<Section>(new_nr)).is_some();
         assert!(shrunk, "shrinking the blacklist section failed");

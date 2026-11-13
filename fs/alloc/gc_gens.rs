@@ -9,7 +9,7 @@ use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFl
 use crate::c;
 use crate::data::ptrs::drop_stale_ptrs;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::init::passes::{self, RecoveryPass};
@@ -23,7 +23,7 @@ use crate::util::Printbuf;
 use crate::{bch_err, btree_trans};
 
 fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
-    let enomem = |_| fs.err(bch_errcode::BCH_ERR_ENOMEM_gc_gens);
+    let enomem = |_| fs.err(Errcode::BCH_ERR_ENOMEM_gc_gens);
 
     let mut oldest_gens: KVVec<(DevRef, KVVec<u8>)> = KVVec::new();
     for ca in fs.members() {
@@ -57,7 +57,7 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
             .for_each_commit(&trans, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {
                 res.put();
 
-                if fs.flags.get(c::bch_fs_flags::going_ro) {
+                if fs.flags.get(c::FsFlag::going_ro) {
                     return Err(BchError::from(c::EROFS));
                 }
 
@@ -83,10 +83,10 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
 
     fs.gc_gens.pos.set(c::bbpos::default());
 
-    fs.times[c::bch_time_stats::btree_gc as usize].update(start_time);
+    fs.times[c::TimeStat::btree_gc as usize].update(start_time);
     fs.event_inc_trace(events::gc_gens_end, |_| {});
 
-    let no_stale_ptrs = 1 << c::bch_sb_compat::no_stale_ptrs.0;
+    let no_stale_ptrs = 1 << c::SbCompat::no_stale_ptrs.0;
     if fs.sb.compat.get() & no_stale_ptrs == 0 {
         let mut sb = fs.sb_lock();
         let compat = &mut sb.sb_mut().compat[0];
@@ -135,6 +135,6 @@ impl Fs {
     /// gc_gens, scheduled to run in the background.
     pub fn gc_gens_async(&self) {
         let _ = passes::run_explicit(self, &mut Printbuf::new(), RecoveryPass::gc_gens,
-                                     c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ephemeral);
+                                     c::RunRecoveryPassFlags::RUN_RECOVERY_PASS_ephemeral);
     }
 }

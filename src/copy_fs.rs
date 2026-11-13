@@ -28,7 +28,7 @@ use bcachefs_kernel::util::rcu::read_lock;
 use bcachefs_kernel::data::io_misc;
 use bcachefs_kernel::xattr::XattrType;
 use bcachefs_kernel::{acl, dirent, inode, namei, str_hash, xattr};
-use bcachefs_kernel::errcode::{BchError, bch_errcode};
+use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::fs::Fs;
 
 use crate::util::AlignedBuf;
@@ -162,7 +162,7 @@ fn unlink_and_rm(
         },
     )?;
 
-    if child.bi_flags & c::bch_inode_flags::unlinked.bits() == 0 {
+    if child.bi_flags & c::InodeFlags::unlinked.bits() == 0 {
         return Ok(());
     }
 
@@ -186,7 +186,7 @@ fn create_or_update_link(
     let os_name = OsStr::from_bytes(name.to_bytes());
 
     match dirent::lookup(fs, dir_inum, &dir_hash, os_name) {
-        Err(e) if e.matches(bch_errcode::BCH_ERR_ENOENT_str_hash_lookup) => {
+        Err(e) if e.matches(Errcode::BCH_ERR_ENOENT_str_hash_lookup) => {
             // Fall through to create
         }
         Err(e) => return Err(e),
@@ -342,9 +342,9 @@ fn copy_xattrs(
             acl = v;
             acl_flags.push(
                 if xattr_type == XattrType::POSIX_ACL_ACCESS {
-                    c::bch_inode_flags::has_access_acl
+                    c::InodeFlags::has_access_acl
                 } else {
-                    c::bch_inode_flags::has_default_acl
+                    c::InodeFlags::has_default_acl
                 });
             &acl[..]
         } else {
@@ -477,12 +477,12 @@ fn link_data(
             .expect("room for a pointer");
 
         let res = DiskReservation::new(fs);
-        res.add(sectors, 1, c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL)?;
+        res.add(sectors, 1, c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL)?;
 
         btree::iter::trans_commit_do(fs, Some(&res), CommitFlags::empty(), |t| {
             let mut new = t.bkey_reassemble_room(k.key().into(), c::BKEY_EXTENT_U64s_MAX * size_of::<u64>())?;
             let opts = get_io_opts(t, None, new.as_sc())?;
-            new.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+            new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
             t.insert(Btree::extents, new, UpdateTriggerFlags::empty())
         })?;
 

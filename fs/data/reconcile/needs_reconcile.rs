@@ -27,7 +27,7 @@ use crate::util::Printbuf;
 use core::mem::size_of;
 
 /// Option @o's need_rb bit.
-pub(crate) fn rb_bit(o: c::bch_reconcile_opts) -> u8 {
+pub(crate) fn rb_bit(o: c::ReconcileOpt) -> u8 {
     1 << o.0
 }
 
@@ -39,7 +39,7 @@ fn should_have_rb_opts(k: &c::bkey, r: &c::bch_extent_reconcile) -> bool {
         macro_rules! any_from_inode {
             ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { false $(|| r.[<$name _from_inode>]() != 0)* } };
         }
-        if c::bch_reconcile_opts_arms!(any_from_inode) {
+        if c::ReconcileOpt_arms!(any_from_inode) {
             return true;
         }
     }
@@ -61,7 +61,7 @@ struct NeedsReconcile {
 fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_inode_opts)
     -> Result<Option<NeedsReconcile>, BchError>
 {
-    use c::bch_reconcile_opts as o;
+    use c::ReconcileOpt as o;
     let fs = t.fs();
     let btree = k.k.is_btree_ptr();
 
@@ -74,7 +74,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
 
     let poisoned = k.poisoned(fs);
     let compression_type = c::bch_compression_opt::to_type(r.background_compression(), fs);
-    let csum_type = if opts.nocow == 0 { fs.data_checksum_type_rb(&r) } else { c::bch_csum_type::none };
+    let csum_type = if opts.nocow == 0 { fs.data_checksum_type_rb(&r) } else { c::CsumType::none };
     let stripe = k.k.key_type() == BkeyType::stripe;
 
     let (mut incompressible, mut unwritten, mut ec) = (false, false, false);
@@ -246,11 +246,11 @@ fn dev_scan_cookie_set(t: &TransAttempt<'_, '_>, k: &impl BkeyVPtrs, cache: Opti
 /// cookie set meanwhile isn't missed.
 #[allow(clippy::too_many_arguments)]
 fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>, k: &impl BkeyVPtrs,
-                        ctx: c::set_needs_reconcile_ctx, opt_change_cookie: u32,
+                        ctx: c::SetNeedsReconcileCtx, opt_change_cookie: u32,
                         old: Option<&c::bch_extent_reconcile>, new: &c::bch_extent_reconcile,
                         mut new_need_rb: u8) -> Result<(), BchError> {
-    use c::bch_reconcile_opts as o;
-    use c::set_needs_reconcile_ctx as x;
+    use c::ReconcileOpt as o;
+    use c::SetNeedsReconcileCtx as x;
     let fs = t.fs();
 
     if ctx == x::SET_NEEDS_RECONCILE_opt_change || ctx == x::SET_NEEDS_RECONCILE_opt_change_indirect {
@@ -307,7 +307,7 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
                 }
             )* };
         }
-        c::bch_reconcile_opts_arms!(diff);
+        c::ReconcileOpt_arms!(diff);
     });
     fsck_err!(t, id::extent_io_opts_not_set, "extent with incorrect/missing reconcile opts:\n{}\nnew reconcile : {}{}",
               k.as_sc().untyped().to_text(fs), Msg(|out: &mut Printbuf| extent_reconcile_to_text(out, Some(fs), new)), diff)?;
@@ -322,7 +322,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
     /// or dropped. New work must be allowed - new_needs_rb_allowed().
     /// bch2_bkey_set_needs_reconcile(); its room is what it's grown into.
     pub fn set_needs_reconcile(&mut self, t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>,
-                               opts: &c::bch_inode_opts, ctx: c::set_needs_reconcile_ctx,
+                               opts: &c::bch_inode_opts, ctx: c::SetNeedsReconcileCtx,
                                opt_change_cookie: u32) -> Result<(), BchError> {
         let fs = t.fs();
 
@@ -334,7 +334,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
         let Some(mut k) = self.reborrow().arm::<PtrsMut>() else {
             let stripe = self.reborrow().arm::<c::Stripe>().expect("with pointers, and not PtrsMut: a stripe");
             return set_needs_reconcile_stripe(t, s, stripe,
-                new.need_rb() & rb_bit(c::bch_reconcile_opts::data_replicas) != 0);
+                new.need_rb() & rb_bit(c::ReconcileOpt::data_replicas) != 0);
         };
         let old = k.reconcile_opts(fs).copied();
         let new_need_rb = new.need_rb() & !old.map_or(0, |old| old.need_rb());
@@ -405,7 +405,7 @@ pub(crate) fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &
     let opts = get_io_opts(t, None, BkeySC::from(&op.new).untyped())?;
     let needed = u32::from(op.new.k.u64s) + SET_NEEDS_RECONCILE_ROOM;
     op.new_with_room(t, needed)?
-        .set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other, 0)
+        .set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)
 }
 
 /// @k, at @iter, with its reconcile state brought in line with @opts, as an
@@ -415,7 +415,7 @@ pub(crate) fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &
 /// bch2_update_reconcile_opts().
 pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>,
                              opts: &c::bch_inode_opts, iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>,
-                             ctx: c::set_needs_reconcile_ctx) -> Result<(), BchError> {
+                             ctx: c::SetNeedsReconcileCtx) -> Result<(), BchError> {
     let flags = iter.iter_flags();
     assert!(!flags.contains(BtreeIterFlags::IS_EXTENTS), "update_reconcile_opts() on an extents iterator");
     assert!(!flags.contains(BtreeIterFlags::FILTER_SNAPSHOTS),
@@ -434,7 +434,7 @@ pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_sna
     }
 
     t.btree_node_edit_key(iter.btree(), level, iter.pos(), |n| n.set_needs_reconcile(t, s, opts, ctx, 0))?;
-    Err(t.restart(c::bch_errcode::BCH_ERR_transaction_restart_commit))
+    Err(t.restart(c::Errcode::BCH_ERR_transaction_restart_commit))
 }
 
 /// @k's reconcile state taken off - its reconcile entries, and the padding

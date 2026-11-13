@@ -54,7 +54,7 @@ fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, Ptrs>, ptr: &c::b
 
 /// The entry types a btree node pointer may have.
 fn btree_ptr_entry_type_allowed(ty: u32) -> bool {
-    use c::bch_extent_entry_type as t;
+    use c::ExtentEntryType as t;
     [t::ptr, t::reconcile, t::reconcile_bp]
         .iter().any(|a| a.0 == ty)
 }
@@ -90,7 +90,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                 (bytes.as_ptr() as usize - entries_start) / 8, entries_u64s));
         }
 
-        bkey_fsck_err_on!(v, is_btree_ptr && ty < c::bch_extent_entry_type::NR && !btree_ptr_entry_type_allowed(ty),
+        bkey_fsck_err_on!(v, is_btree_ptr && ty < c::ExtentEntryType::NR && !btree_ptr_entry_type_allowed(ty),
                           id::btree_ptr_has_non_ptr, "has non allowed field")?;
 
         match e {
@@ -122,7 +122,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
             }
             ExtentEntry::crc32(_) | ExtentEntry::crc64(_) | ExtentEntry::crc128(_) => {
                 let crc = crc_unpack(k.k, e).expect("a crc");
-                let csum_type = c::bch_csum_type(crc.csum_type.into());
+                let csum_type = c::CsumType(crc.csum_type.into());
 
                 bkey_fsck_err_on!(v, !csum_type.valid(fs), id::ptr_crc_csum_type_unknown,
                                   "invalid checksum type")?;
@@ -185,7 +185,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     if !is_btree_ptr {
         bkey_fsck_err_on!(v, !have_non_inval_dev_ptrs, id::extent_ptrs_all_invalid,
                           "extent without valid pointers")?;
-        bkey_fsck_err_on!(v, v.from.from() == c::bkey_validate_from::commit &&
+        bkey_fsck_err_on!(v, v.from.from() == c::BkeyValidateFrom::commit &&
                              !have_non_inval_dev_ptrs_dirty,
                           id::extent_ptrs_all_invalid, "extent without valid dirty pointers")?;
     }
@@ -209,7 +209,7 @@ pub(crate) fn extent_ptr_to_text(out: &mut Printbuf, fs: Option<&Fs>, ptr: &c::b
                 write!(out, " d={}", ca.mi.get().durability);
             }
 
-            let gens_valid = fs.flags.get(c::bch_fs_flags::new_fs) ||
+            let gens_valid = fs.flags.get(c::FsFlag::new_fs) ||
                 fs.recovery.runner.passes_complete.get() & (1 << RecoveryPass::alloc_read as u32) != 0;
             // dev_ptr_stale_rcu()'s -1 for a bucket the device doesn't have
             let stale = if gens_valid { ca.ptr_stale(ptr, rcu).map_or(-1, i32::from) } else { 0 };
@@ -235,7 +235,7 @@ fn csum_word_raw(w: Le64) -> u64 {
 fn crc_unpacked_to_text(out: &mut Printbuf, crc: &c::bch_extent_crc_unpacked) {
     write!(out, "c_size {} size {} offset {} nonce {} csum {} {:x}:{:x}  compress ",
            crc.compressed_size, crc.uncompressed_size, crc.offset, crc.nonce,
-           c::bch_csum_type(crc.csum_type.into()),
+           c::CsumType(crc.csum_type.into()),
            csum_word_raw(crc.csum.hi), csum_word_raw(crc.csum.lo));
     CompressionType(crc.compression_type.into()).to_text(out);
 }
@@ -280,7 +280,7 @@ pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
             ExtentEntry::stripe_ptr(ec) => write!(out, "idx {} block {}", ec.idx(), ec.block()),
             ExtentEntry::rebalance_v1(r) => extent_rebalance_v1_to_text(out, Some(fs), r),
             ExtentEntry::reconcile(r) => extent_reconcile_to_text(out, Some(fs), r),
-            ExtentEntry::flags(f) => crate::util::names::prt_set::<c::bch_extent_flags_e>(out, f.flags()),
+            ExtentEntry::flags(f) => crate::util::names::prt_set::<c::ExtentFlag>(out, f.flags()),
             ExtentEntry::reconcile_bp(r) => write!(out, "idx {}", r.idx()),
             ExtentEntry::Unknown { bytes, .. } | ExtentEntry::Invalid { bytes, .. } |
             ExtentEntry::PastEnd { bytes, .. } => {

@@ -396,7 +396,7 @@ pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>
 }
 
 /// alloc_pinned(), the allocation failing with @err - @init with its own.
-pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchError>, err: crate::errcode::bch_errcode)
+pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchError>, err: crate::errcode::Errcode)
     -> Result<*mut T, crate::errcode::BchError>
 {
     enum Failed {
@@ -871,7 +871,7 @@ pub unsafe fn untouched<T>() -> impl ::pin_init::Init<T> {
 
 /// @init, failing with @err: an allocation's ENOMEM, as the error that says
 /// which it was
-pub fn init_or<T, E>(init: impl ::pin_init::PinInit<T, E>, err: crate::errcode::bch_errcode)
+pub fn init_or<T, E>(init: impl ::pin_init::PinInit<T, E>, err: crate::errcode::Errcode)
     -> impl ::pin_init::PinInit<T, crate::errcode::BchError> {
     unsafe { ::pin_init::pin_init_from_closure(move |slot| init_at(init, slot).map_err(|_| err.into())) }
 }

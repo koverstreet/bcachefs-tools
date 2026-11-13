@@ -20,7 +20,7 @@ use crate::util::Printbuf;
 use core::cmp::Ordering;
 use core::fmt;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, CStruct, bch_enum};
+use cstruct_macros::{CStruct, bch_enum};
 
 /*
  * BKEYS:
@@ -160,7 +160,6 @@ use cstruct_macros::{c_name, CStruct, bch_enum};
 pub const MAX_BSETS: u32 = 3;
 
 #[repr(C)]
-#[c_name(bset_tree)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct BsetTree {
     /*
@@ -243,7 +242,6 @@ impl BsetTree {
 }
 
 #[bch_enum(closed)]
-#[c_name(bset_aux_tree_type)]
 #[repr(u32)]
 pub enum AuxTreeType {
     BSET_NO_AUX_TREE,
@@ -255,7 +253,6 @@ pub const BSET_TREE_NR_TYPES: u32 = 3;
 
 /* bset_stats.sets[]: the counts for one bset tree type */
 #[repr(C)]
-#[c_name(bset_stats_set)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct BsetStatsSet {
     pub nr: usize,
@@ -263,7 +260,6 @@ pub struct BsetStatsSet {
 }
 
 #[repr(C)]
-#[c_name(bset_stats)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct BsetStats {
     pub sets: [BsetStatsSet; c::BSET_TREE_NR_TYPES as usize],

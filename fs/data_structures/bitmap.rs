@@ -350,7 +350,7 @@ impl<const W: usize> Deref for AtomicBitArray<W> {
 // ── Flags ────────────────────────────────────────────────────────────────
 
 /// A #[closed] enum as bit numbers - set_bit()'s, as BCH_FS_FLAGS are - and
-/// the words a set of it takes: c_enum!'s, from the enum's values.
+/// the words a set of it takes: #[bch_enum]'s, from the enum's values.
 pub trait BitEnum: Copy {
     type Words: Deref<Target = AtomicBitmap> + ::pin_init::Zeroable;
 

@@ -22,7 +22,7 @@ use crate::data::ec::buf::{MemWait, StripeBuf};
 use crate::data::ec::stripe_new::{self, Internal, Slot, StripeBlock, StripeNew, StripeNewBox};
 use crate::data::ec::stripe_new_reuse::OldRead;
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, MemberState};
 use crate::fs::Fs;
 use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
@@ -218,17 +218,17 @@ fn stripe_head_devs_update(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>
 /// stops erasure coding for it, the filesystem going read-only or the label
 /// too few devices.
 pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, algo: u32, redundancy: u32,
-                       watermark: c::bch_watermark) -> Result<(&'f c::ec_stripe_head, HeadGuard<'f>), BchError> {
+                       watermark: c::Watermark) -> Result<(&'f c::ec_stripe_head, HeadGuard<'f>), BchError> {
     let fs = t.fs();
     if redundancy == 0 {
-        return fs.throw(bch_errcode::BCH_ERR_ec_alloc_failed_no_redundancy);
+        return fs.throw(Errcode::BCH_ERR_ec_alloc_failed_no_redundancy);
     }
     // SAFETY: boxed - pinned - and freed only with @fs
     let fs_lifetime = |h: &c::ec_stripe_head| -> &'f c::ec_stripe_head { unsafe { &*core::ptr::from_ref(h) } };
 
     let mut heads = fs.ec.stripe_heads.lock_trans(t)?;
-    if fs.flags.get(c::bch_fs_flags::going_ro) {
-        return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
+    if fs.flags.get(c::FsFlag::going_ro) {
+        return fs.throw(Errcode::BCH_ERR_erofs_no_writes);
     }
 
     let found = heads.iter()
@@ -245,8 +245,8 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
             // bch2_fs_ec_stop() may have been through this head while we
             // waited: it sets going_ro before it starts, so anything we
             // started now would be missed
-            if fs.flags.get(c::bch_fs_flags::going_ro) {
-                return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
+            if fs.flags.get(c::FsFlag::going_ro) {
+                return fs.throw(Errcode::BCH_ERR_erofs_no_writes);
             }
             (h, g)
         }
@@ -260,7 +260,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
             }? BchError));
             let pushed = new.and_then(|h| Ok(heads.push(h)?));
             if pushed.is_err() {
-                return fs.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_head_alloc);
+                return fs.throw(Errcode::BCH_ERR_ENOMEM_stripe_head_alloc);
             }
             let h = fs_lifetime(heads.last().expect("just pushed"));
             // taken before the list's lock is let go: no one's seen it yet
@@ -276,7 +276,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
     }
 
     if g.devs.insufficient {
-        return fs.throw(bch_errcode::BCH_ERR_ec_alloc_failed_insufficient_devs);
+        return fs.throw(Errcode::BCH_ERR_ec_alloc_failed_insufficient_devs);
     }
     Ok((h, g))
 }
@@ -317,7 +317,7 @@ pub(crate) fn stripe_heads_stop(fs: &Fs, ca: Option<&Dev>) {
     for h in heads.iter() {
         let mut g = h.lock.lock();
         if head_stripe(&g).is_some_and(|s| stripe_on_dev(&s.lock(), ca)) {
-            stripe_head_detach(fs, &mut g, Some(BchError::from(bch_errcode::BCH_ERR_erofs_no_writes)));
+            stripe_head_detach(fs, &mut g, Some(BchError::from(Errcode::BCH_ERR_erofs_no_writes)));
         }
     }
 }
@@ -407,7 +407,7 @@ fn alloc_for_head(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>, max_dat
 
     let failed = || {
         bch_err!(fs, "failed to allocate new stripe");
-        fs.err(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc)
+        fs.err(Errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc)
     };
     // its room in new_stripes, for when it's handed on
     fs.ec.new_stripes.lock().reserve().map_err(|_| failed())?;
@@ -523,7 +523,7 @@ pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request,
     let fs = t.fs();
     let redundancy = u32::from(req.ec_replicas).wrapping_sub(1);
     let disk_label = match Target::decode(req.target) {
-        Target::Group(g) if g > u8::MAX.into() => return fs.throw(bch_errcode::BCH_ERR_ec_alloc_failed_disk_label_too_big),
+        Target::Group(g) if g > u8::MAX.into() => return fs.throw(Errcode::BCH_ERR_ec_alloc_failed_disk_label_too_big),
         Target::Group(g) => g + 1, /* 0 == no label */
         _ => 0,
     };
@@ -534,8 +534,8 @@ pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request,
         Err(e) => {
             stripe_head_put(fs, g);
             // Not fatal to the write - the allocator falls back to replication:
-            Err(if e.matches(bch_errcode::BCH_ERR_stripe_insufficient_devices) {
-                fs.err(bch_errcode::BCH_ERR_ec_alloc_failed_stripe_alloc)
+            Err(if e.matches(Errcode::BCH_ERR_stripe_insufficient_devices) {
+                fs.err(Errcode::BCH_ERR_ec_alloc_failed_stripe_alloc)
             } else {
                 e
             })

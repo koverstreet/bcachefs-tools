@@ -310,7 +310,7 @@ macro_rules! tracepoints {
             TracingStatic::new(bpf_raw_event_map([<__tracepoint_ $name>].get()));
     )* } };
 }
-c::bch_persistent_counters_arms!(tracepoints);
+c::PersistentCounter_arms!(tracepoints);
 c::BCH_NOCOUNTER_TRACEPOINTS!(tracepoints);
 #[cfg(CONFIG_BCACHEFS_PATH_TRACEPOINTS)]
 c::BCH_PATH_TRACEPOINTS!(tracepoints);

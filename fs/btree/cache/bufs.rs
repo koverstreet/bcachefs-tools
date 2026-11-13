@@ -4,7 +4,7 @@ use crate::btree::locking::bch2_btree_lock_init;
 use crate::btree::node::bset::BSET_CACHELINE;
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
@@ -199,7 +199,7 @@ impl NodeBufs {
                 self.data = alloc_raw(Mem::Kvmalloc, bytes, gfp);
             }
             if self.data.is_null() {
-                return fs.throw(bch_errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc);
+                return fs.throw(Errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc);
             }
         }
 
@@ -207,7 +207,7 @@ impl NodeBufs {
             let bytes = ((1usize << self.byte_order) / BSET_CACHELINE) * size_of::<u64>();
             self.aux_data = alloc_raw(Mem::Kvmalloc, bytes, gfp);
             if self.aux_data.is_null() {
-                return fs.throw(bch_errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc);
+                return fs.throw(Errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc);
             }
         }
 
@@ -250,9 +250,9 @@ fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: c::gfp_t) -> Option<No
         init_list_head((&raw mut (*p).write_blocked).cast());
         (*p).byte_order = fs.opts.btree_node_size.get().ilog2() as u8;
         let flags = if pcpu_read_locks {
-            c::six_lock_init_flags::SIX_LOCK_INIT_PCPU
+            c::SixLockInitFlags::SIX_LOCK_INIT_PCPU
         } else {
-            c::six_lock_init_flags::empty()
+            c::SixLockInitFlags::empty()
         };
         bch2_btree_lock_init(&raw mut (*p).c, flags, gfp);
     }
@@ -285,7 +285,7 @@ pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: c::gf
 
 /// A new node's locks, intent and write: no one else has it to hold them.
 pub(super) fn new_node_lock(b: &BtreeNode) -> SixHold<'_> {
-    b.c.lock.try_lock_as(c::six_lock_type::SIX_LOCK_intent)
+    b.c.lock.try_lock_as(c::SixLockType::SIX_LOCK_intent)
         .and_then(|intent| intent.try_write().ok())
         .expect("a new node locked by someone else")
 }

@@ -38,7 +38,7 @@ use crate::alloc::foreground::OpenBucket;
 use crate::btree::bkey::pos;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::copygc::{can_make_progress, dev_wait_amount};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -50,7 +50,7 @@ use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
 use core::sync::atomic::Ordering::Relaxed;
 
-use c::alloc_btree_bitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO, BTREE_BITMAP_YES};
+use c::AllocBtreeBitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO, BTREE_BITMAP_YES};
 use crate::format::{Bpos, Btree, DataType};
 
 const BUCKET_MASK: u64 = (1 << FREESPACE_GENBITS_SHIFT) - 1;
@@ -156,7 +156,7 @@ impl Fs {
         have_replicas &&
             (!self.allocator.rw_devs[req.data_type.0 as usize].test(ca.dev_idx.into()) ||
              !req.bits.copygc_can_make_progress() ||
-             (req.watermark == c::bch_watermark::copygc && req.data_type != DataType::btree) ||
+             (req.watermark == c::Watermark::copygc && req.data_type != DataType::btree) ||
              self.dev_sizes_mismatched(req))
     }
 
@@ -177,7 +177,7 @@ impl Fs {
         write!(out, "will_retry_target_devices\t{}\n", u8::from(req.bits.will_retry_target_devices()));
         write!(out, "will_retry_all_devices\t{}\n", u8::from(req.bits.will_retry_all_devices()));
         write!(out, "will_retry_set_devices\t{}\n", u8::from(req.bits.will_retry_set_devices()));
-        write!(out, "blocking\t{}\n", u8::from(!req.flags.contains(c::bch_write_flags::alloc_nowait)));
+        write!(out, "blocking\t{}\n", u8::from(!req.flags.contains(c::WriteFlags::alloc_nowait)));
         write!(out, "free\t{}\n", req.usage.buckets[DataType::free.0 as usize]);
         write!(out, "need_discard\t{}\n", req.usage.buckets[DataType::need_discard.0 as usize]);
         write!(out, "copygc_wait\t{}\n",
@@ -212,7 +212,7 @@ impl TransAttempt<'_, '_> {
         let iter = BtreeIter::new(self, Btree::freespace, pos(ca.dev_idx.into(), p),
                                   BtreeIterFlags::NOPRESERVE);
         let (generation, journal_seq_empty) = match check_freespace_key(self, &iter, FreespaceCheck::Allocator) {
-            Err(e) if e == bch_errcode::BCH_ERR_bucket_not_allocatable.into() => return Ok(None),
+            Err(e) if e == Errcode::BCH_ERR_bucket_not_allocatable.into() => return Ok(None),
             r => r?,
         };
 
@@ -491,7 +491,7 @@ impl TransAttempt<'_, '_> {
 
             // before check_allocations the counts may be wrong: above the
             // normal watermark, look anyway
-            if avail == 0 && !(req.watermark as u32 > c::bch_watermark::normal as u32 &&
+            if avail == 0 && !(req.watermark as u32 > c::Watermark::normal as u32 &&
                                fs.recovery.runner.pass_done.get() <
                                RecoveryPass::check_allocations) {
                 copygc_can_make_progress = can_make_progress(ca, &fs.mark_lock().read());
@@ -500,21 +500,21 @@ impl TransAttempt<'_, '_> {
                     fs.copygc_wakeup();
                 }
 
-                fs.times[c::bch_time_stats::blocked_allocate as usize].track_event_change(true);
+                fs.times[c::TimeStat::blocked_allocate as usize].track_event_change(true);
 
                 let may_block = req.cl.is_some() &&
-                    !req.flags.contains(c::bch_write_flags::alloc_nowait) &&
+                    !req.flags.contains(c::WriteFlags::alloc_nowait) &&
                     !req.will_retry();
                 let err = if !may_block {
-                    bch_errcode::BCH_ERR_freelist_empty
+                    Errcode::BCH_ERR_freelist_empty
                 } else if fs.alloc_should_bail(ca, req) {
-                    bch_errcode::BCH_ERR_bucket_alloc_no_progress
+                    Errcode::BCH_ERR_bucket_alloc_no_progress
                 } else if !waiting {
                     req.closure_wait(&fs.allocator.freelist_wait);
                     waiting = true;
                     continue;
                 } else {
-                    bch_errcode::BCH_ERR_bucket_alloc_blocked
+                    Errcode::BCH_ERR_bucket_alloc_blocked
                 };
                 break (Err(fs.err(err)), wake_counter_snapshot, avail);
             }
@@ -523,7 +523,7 @@ impl TransAttempt<'_, '_> {
                 ca.alloc_wake();
             }
             let ob = self.bucket_alloc_from(ca, req, freespace)
-                .and_then(|ob| ob.ok_or_else(|| fs.err(bch_errcode::BCH_ERR_no_buckets_found)));
+                .and_then(|ob| ob.ok_or_else(|| fs.err(Errcode::BCH_ERR_no_buckets_found)));
             break (ob, wake_counter_snapshot, avail);
         };
 
@@ -538,11 +538,11 @@ impl TransAttempt<'_, '_> {
 
                 fs.event_inc_trace(events::bucket_alloc, |out| fs.bucket_alloc_to_text(out, ca, req, Ok(ob)));
             }
-            Err(e) if e.matches(bch_errcode::BCH_ERR_open_buckets_empty) ||
-                      e.matches(bch_errcode::BCH_ERR_open_bucket_alloc_blocked) => {
+            Err(e) if e.matches(Errcode::BCH_ERR_open_buckets_empty) ||
+                      e.matches(Errcode::BCH_ERR_open_bucket_alloc_blocked) => {
                 fs.event_inc_trace(events::open_bucket_alloc_fail, |out| fs.fs_open_buckets_to_text(out));
             }
-            Err(e) if !e.matches(bch_errcode::BCH_ERR_transaction_restart) && !req.will_retry() => {
+            Err(e) if !e.matches(Errcode::BCH_ERR_transaction_restart) && !req.will_retry() => {
                 fs.event_inc_trace(events::bucket_alloc_fail, |out| fs.bucket_alloc_to_text(out, ca, req, Err(*e)));
             }
             Err(_) => {}

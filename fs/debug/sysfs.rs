@@ -30,7 +30,7 @@ use core::ffi::CStr;
 
 use crate::accounting;
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{CompressionType, DataType};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
@@ -151,7 +151,7 @@ const INTERNAL: &[Attr<Fs>] = &[
         // Deletion stopping because it was told to isn't the write failing -
         // and cancelled's errno is EINTR, which a write must not return:
         match crate::snapshots::delete::delete_dead_snapshots_forced(c) {
-            Err(e) if e.matches(bch_errcode::BCH_ERR_cancelled) => Ok(()),
+            Err(e) if e.matches(Errcode::BCH_ERR_cancelled) => Ok(()),
             ret => ret,
         }
     })),
@@ -286,15 +286,15 @@ macro_rules! file_name {
 
 macro_rules! time_stat_names {
     ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
-        const TIME_STAT_NAMES: [&CStr; c::bch_time_stats::NR as usize] = [$(file_name!($name),)*];
+        const TIME_STAT_NAMES: [&CStr; c::TimeStat::NR as usize] = [$(file_name!($name),)*];
     };
 }
-c::bch_time_stats_arms!(time_stat_names);
+c::TimeStat_arms!(time_stat_names);
 
 // Each its own table: a group's files are its kobject's, so which directory
 // a file's in is which table its attribute is from
-static TIME_STATS: ListAttrs<{ c::bch_time_stats::NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
-static TIME_STATS_JSON: ListAttrs<{ c::bch_time_stats::NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
+static TIME_STATS: ListAttrs<{ c::TimeStat::NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
+static TIME_STATS_JSON: ListAttrs<{ c::TimeStat::NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
 
 // ── counters/ ───────────────────────────────────────────────────────────────
 //
@@ -303,12 +303,12 @@ static TIME_STATS_JSON: ListAttrs<{ c::bch_time_stats::NR as usize }> = ListAttr
 
 macro_rules! counter_names {
     ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
-        const COUNTER_NAMES: [&CStr; c::bch_persistent_counters::NR as usize] = [$(file_name!($name),)*];
+        const COUNTER_NAMES: [&CStr; c::PersistentCounter::NR as usize] = [$(file_name!($name),)*];
     };
 }
-c::bch_persistent_counters_arms!(counter_names);
+c::PersistentCounter_arms!(counter_names);
 
-static COUNTER_FILES: ListAttrs<{ c::bch_persistent_counters::NR as usize }> = ListAttrs::new(&COUNTER_NAMES, 0o644);
+static COUNTER_FILES: ListAttrs<{ c::PersistentCounter::NR as usize }> = ListAttrs::new(&COUNTER_NAMES, 0o644);
 
 fn counter_to_text(c: &Fs, i: usize, out: &mut Printbuf) {
     let count = c.counter_read(i);
@@ -328,13 +328,13 @@ fn counter_to_text(c: &Fs, i: usize, out: &mut Printbuf) {
 // An option's file is its attribute in OPT_FILES: options/ has the filesystem
 // options', and a device's dir the device options', among its own files.
 
-/// Each option's file, by bch_opt_id - which option a file is, from where
+/// Each option's file, by OptId - which option a file is, from where
 /// its attribute is: writable if it may be set at runtime.
-static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&crate::cstr_names!(c::bch_opt_id), &{
+static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&crate::cstr_names!(c::OptId), &{
     let mut modes = [0o444; opts::NR];
     let mut i = 0;
     while i < opts::NR {
-        if c::bch_opts::TABLE[i].flags.bits() & c::opt_flags::OPT_RUNTIME.bits() != 0 {
+        if c::bch_opts::TABLE[i].flags.bits() & c::OptFlags::OPT_RUNTIME.bits() != 0 {
             modes[i] = 0o644;
         }
         i += 1;
@@ -343,11 +343,11 @@ static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&crate::cstr_n
 });
 
 /// The option @attr is the file of, if it's one.
-fn opt_from_attr(attr: &c::attribute) -> Option<c::bch_opt_id> {
-    OPT_FILES.index(attr).map(|i| c::bch_opt_id(i as u32))
+fn opt_from_attr(attr: &c::attribute) -> Option<c::OptId> {
+    OPT_FILES.index(attr).map(|i| c::OptId(i as u32))
 }
 
-fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::bch_opt_id, out: &mut Printbuf)
+fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::OptId, out: &mut Printbuf)
     -> Result<(), BchError>
 {
     let opt = id.opt();
@@ -358,21 +358,21 @@ fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::bch_opt_id, out: &mut Printbuf)
         Some(ca) if matches!(opt.ty, OptType::StrMember { .. }) => {
             // The value lives in the member, not a u64 - render it here:
             let Some(m) = members::sb_member(sb.sb(), ca.dev_idx as u32) else {
-                return c.throw(bch_errcode::BCH_ERR_ENOENT_dev_idx_not_found);
+                return c.throw(Errcode::BCH_ERR_ENOENT_dev_idx_not_found);
             };
             out.write_bytes(opt.member_str(&m));
             out.write_bytes(b"\n");
             return Ok(());
         }
         Some(ca) => {
-            if !(opt.has(c::opt_flags::OPT_DEVICE) && opt.member_field().is_some()) {
-                return c.throw(bch_errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
+            if !(opt.has(c::OptFlags::OPT_DEVICE) && opt.member_field().is_some()) {
+                return c.throw(Errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
             }
             opts::opt_from_sb(sb.sb().as_unvalidated(), id, Some(ca.dev_idx.into()))
         }
         None => {
-            if !opt.has(c::opt_flags::OPT_FS) {
-                return c.throw(bch_errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
+            if !opt.has(c::OptFlags::OPT_FS) {
+                return c.throw(Errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
             }
             c.opts.get(id)
         }
@@ -383,7 +383,7 @@ fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::bch_opt_id, out: &mut Printbuf)
     Ok(())
 }
 
-fn opt_store(c: &Fs, ca: Option<&Dev>, id: c::bch_opt_id, s: &str) -> Result<(), BchError> {
+fn opt_store(c: &Fs, ca: Option<&Dev>, id: c::OptId, s: &str) -> Result<(), BchError> {
     let opt = id.opt();
     // strim()
     let val = s.trim_matches(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')).as_bytes();
@@ -407,7 +407,7 @@ fn opt_store(c: &Fs, ca: Option<&Dev>, id: c::bch_opt_id, s: &str) -> Result<(),
 /// - but none that's hidden.
 const fn opts_with_files(fs: bool) -> [bool; opts::NR] {
     let (hidden, fs_opt, dev_opt) =
-        (c::opt_flags::OPT_HIDDEN.bits(), c::opt_flags::OPT_FS.bits(), c::opt_flags::OPT_DEVICE.bits());
+        (c::OptFlags::OPT_HIDDEN.bits(), c::OptFlags::OPT_FS.bits(), c::OptFlags::OPT_DEVICE.bits());
     let mut which = [false; opts::NR];
     let mut i = 0;
     while i < opts::NR {
@@ -447,10 +447,10 @@ static INTERNAL_FILES: Files<{ INTERNAL.len() + 1 }> = Files::new(INTERNAL);
 static INTERNAL_BIN_FILES: BinFiles<2> = BinFiles::new([&TRANS_STATS_JSON]);
 static OPTS_FILES: Files<{ nr_true(&FS_OPTS) + 1 }> = Files::with_list::<Fs, { opts::NR }>(&[], &OPT_FILES, &FS_OPTS);
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-static TIME_STATS_FILES: Files<{ c::bch_time_stats::NR as usize + 1 }> = Files::list(&TIME_STATS);
+static TIME_STATS_FILES: Files<{ c::TimeStat::NR as usize + 1 }> = Files::list(&TIME_STATS);
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-static TIME_STATS_JSON_FILES: Files<{ c::bch_time_stats::NR as usize + 1 }> = Files::list(&TIME_STATS_JSON);
-static COUNTERS_FILES: Files<{ c::bch_persistent_counters::NR as usize + 1 }> = Files::list(&COUNTER_FILES);
+static TIME_STATS_JSON_FILES: Files<{ c::TimeStat::NR as usize + 1 }> = Files::list(&TIME_STATS_JSON);
+static COUNTERS_FILES: Files<{ c::PersistentCounter::NR as usize + 1 }> = Files::list(&COUNTER_FILES);
 
 static FS_GROUP: Group = Group::new(None, &FS_FILES);
 static INTERNAL_GROUP: Group = Group::with_bin(Some(c"internal"), &INTERNAL_FILES, &INTERNAL_BIN_FILES);
@@ -559,7 +559,7 @@ pub(crate) static DEV_GROUPS: Groups<2> = Groups::new([&DEV_GROUP]);
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn started(c: &Fs) -> Result<(), BchError> {
-    if c.flags.get(c::bch_fs_flags::started) {
+    if c.flags.get(c::FsFlag::started) {
         Ok(())
     } else {
         Err(c::EPERM.into())

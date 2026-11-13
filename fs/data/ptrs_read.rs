@@ -14,7 +14,7 @@ use crate::fs::Dev;
 use super::*;
 use crate::debug::params as debug_params;
 use crate::data::read::{BCH_READ_ERR_checksum, BCH_READ_ERR_decompression, BCH_READ_ERR_ec_reconstruct, BCH_READ_ERR_io};
-use crate::errcode::bch_errcode;
+use crate::errcode::Errcode;
 use crate::util::Printbuf;
 use crate::sb::errors::blk_sts_sb_err;
 use crate::util::kernel::{cold_path, random_u64_below, unlikely, READ};
@@ -119,7 +119,7 @@ impl<const N: usize> IoFailures<N> {
     /// bch2_mark_io_failure().
     pub fn mark(&mut self, p: &c::extent_ptr_decoded, err: BchError) {
         assert!(err.raw() != 0, "marking an io failure that isn't one");
-        assert!(!err.matches(bch_errcode::BCH_ERR_transaction_restart),
+        assert!(!err.matches(Errcode::BCH_ERR_transaction_restart),
                 "marking a transaction restart as an io failure");
 
         let f = self.dev_mut(p.ptr.dev().into());
@@ -127,7 +127,7 @@ impl<const N: usize> IoFailures<N> {
 
         if p.do_ec_reconstruct {
             f.ec_errcode = code;
-        } else if err.raw() == bch_errcode::BCH_ERR_data_read_retry_csum_err.0 as i32 {
+        } else if err.raw() == Errcode::BCH_ERR_data_read_retry_csum_err.0 as i32 {
             f.csum_nr = f.csum_nr.saturating_add(1);
         } else {
             f.errcode = code;
@@ -145,7 +145,7 @@ impl<const N: usize> IoFailures<N> {
                 errors |= BCH_READ_ERR_ec_reconstruct;
             }
             if f.errcode != 0 {
-                errors |= if BchError::from_raw(-i32::from(f.errcode)).matches(bch_errcode::BCH_ERR_decompress) {
+                errors |= if BchError::from_raw(-i32::from(f.errcode)).matches(Errcode::BCH_ERR_decompress) {
                     BCH_READ_ERR_decompression
                 } else {
                     BCH_READ_ERR_io
@@ -158,7 +158,7 @@ impl<const N: usize> IoFailures<N> {
     /// Count, by status, each failure that came back from the block layer.
     pub fn count_blk_errors(&self, fs: &Fs) {
         let count = |code: i16| {
-            if code != 0 && BchError::from_raw(-i32::from(code)).matches(bch_errcode::BCH_ERR_blockdev_io_error) {
+            if code != 0 && BchError::from_raw(-i32::from(code)).matches(Errcode::BCH_ERR_blockdev_io_error) {
                 fs.sb_error_count(blk_sts_sb_err(code.into()));
             }
         };
@@ -174,7 +174,7 @@ impl<const N: usize> IoFailures<N> {
     pub fn all_dev_removed(&self) -> bool {
         self.devs().iter().all(|f| {
             f.csum_nr == 0 && f.ec_errcode == 0 &&
-                BchError::from_raw(-i32::from(f.errcode)).matches(bch_errcode::BCH_ERR_BLK_STS_REMOVED)
+                BchError::from_raw(-i32::from(f.errcode)).matches(Errcode::BCH_ERR_BLK_STS_REMOVED)
         })
     }
 
@@ -230,7 +230,7 @@ fn dev_latency(ca: Option<&Dev>) -> u64 {
 /// Whether @p1 is a better read than @p2, of latencies @l1 and @l2:
 /// ptr_better(). The last choice is random.
 fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_ptr_decoded, mut l2: u64,
-              preferred_dev: u32, flags: c::bch_read_flags) -> bool {
+              preferred_dev: u32, flags: c::ReadFlags) -> bool {
     if debug_params::force_reconstruct_read() {
         return p1.do_ec_reconstruct > p2.do_ec_reconstruct;
     }
@@ -259,7 +259,7 @@ fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_p
         return c1;
     }
 
-    if unlikely(flags.contains(c::bch_read_flags::soft_require_read_device)) {
+    if unlikely(flags.contains(c::ReadFlags::soft_require_read_device)) {
         if u32::from(p1.ptr.dev()) == preferred_dev {
             if fs.dev_rotational(p2.ptr.dev().into()) {
                 return true;
@@ -287,8 +287,8 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
     /// nothing to read: it's unwritten, or has no pointers but cached ones, or
     /// none. An error is why nothing could be picked.
     fn pick_read_device(&self, fs: &Fs, failed: Option<&c::bch_io_failures>, preferred_dev: u32,
-                        flags: c::bch_read_flags) -> Result<Option<c::extent_ptr_decoded>, BchError> {
-        use c::bch_errcode as e;
+                        flags: c::ReadFlags) -> Result<Option<c::extent_ptr_decoded>, BchError> {
+        use c::Errcode as e;
         let key = self.as_sc();
 
         if key.k.key_type() == BkeyType::error {
@@ -312,7 +312,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
                 }
 
                 let dev = u32::from(p.ptr.dev());
-                if flags.contains(c::bch_read_flags::hard_require_read_device) && dev != preferred_dev {
+                if flags.contains(c::ReadFlags::hard_require_read_device) && dev != preferred_dev {
                     continue;
                 }
 

@@ -6,7 +6,7 @@ use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN, ValidateFlags};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::MemallocFlags;
 use crate::{prt, sb_err_on};
@@ -139,7 +139,7 @@ fn sb_member_find_slot(fs: &Fs, sb: &c::bch_sb) -> Result<u32, BchError> {
     if nr_deleted != 0 {
         crate::bch_err!(fs, "unable to allocate new member, but have {nr_deleted} deleted: run fsck");
     }
-    Err(bch_errcode::BCH_ERR_ENOSPC_sb_members.into())
+    Err(Errcode::BCH_ERR_ENOSPC_sb_members.into())
 }
 
 /// A member slot for a new device, members_v2 and nr_devices grown to hold
@@ -152,7 +152,7 @@ pub(crate) fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, 
     let u64s = (MEMBERS_V2_HEAD + stride * nr as usize).div_ceil(size_of::<u64>());
 
     fs.sb_resize(sb).field_resize::<c::bch_sb_field_members_v2>(u64s as u32)
-        .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOSPC_sb_members))?;
+        .ok_or(BchError::from(Errcode::BCH_ERR_ENOSPC_sb_members))?;
     sb.sb_mut().nr_devices = nr as u8;
     Ok(dev)
 }
@@ -234,7 +234,7 @@ impl<'a> MembersV1<'a> {
 
 /// Construct a MembersV2 reader from a superblock.
 pub fn members_v2<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV2<'_>> {
-    let f = S::field(sb, c::bch_sb_field_type::members_v2)?.as_bytes();
+    let f = S::field(sb, c::SbFieldType::members_v2)?.as_bytes();
     let stride = cast_plain::<Head<c::bch_sb_field_members_v2>>(f)?.member_bytes.get().into();
     Some(MembersV2 {
         members: members_in(f, MEMBERS_V2_HEAD, stride)?,
@@ -244,7 +244,7 @@ pub fn members_v2<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV2<'_>> {
 
 /// Construct a MembersV1 reader from a superblock.
 pub fn members_v1<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV1<'_>> {
-    let f = S::field(sb, c::bch_sb_field_type::members_v1)?.as_bytes();
+    let f = S::field(sb, c::SbFieldType::members_v1)?.as_bytes();
     Some(MembersV1 {
         members: members_in(f, MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES)?,
         nr_devices: S::head(sb).nr_devices.into(),
@@ -287,7 +287,7 @@ pub trait SbMembersMut: SbResize {
         let nr = u32::from(self.sb().nr_devices);
         let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * nr as usize).div_ceil(size_of::<u64>());
         self.field_resize::<c::bch_sb_field_members_v1>(u64s as u32)
-            .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOSPC_sb_members))?;
+            .ok_or(BchError::from(Errcode::BCH_ERR_ENOSPC_sb_members))?;
 
         for i in 0..nr {
             let m = members_v2(self.sb()).and_then(|v2| v2.get(i)).expect("members_v2: every member");
@@ -329,7 +329,7 @@ impl<T: SbResize + ?Sized> SbMembersMut for T {}
 // ── Validating, and printing ─────────────────────────────────────────────
 
 /// By value, as a member's arrays of them are.
-const MEMBER_ERROR_NAMES: &[&str] = crate::names_by_value!(c::bch_member_error_type);
+const MEMBER_ERROR_NAMES: &[&str] = crate::names_by_value!(c::MemberErrorType);
 const IOPS_NAMES: &[&str] = crate::names_by_value!(c::IopsMeasurement);
 
 /// A __nonstring field: NUL terminated only if shorter than the field.
@@ -338,7 +338,7 @@ fn nonstring(b: &[u8]) -> &[u8] {
 }
 
 fn invalid() -> Result<(), BchError> {
-    Err(bch_errcode::BCH_ERR_invalid_sb_members.into())
+    Err(Errcode::BCH_ERR_invalid_sb_members.into())
 }
 
 fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<Unvalidated>, i: u32) -> Result<(), BchError> {
@@ -913,7 +913,7 @@ crate::fs_delayed_work! {
         if want_schedule {
             // Ignored, as C ignored it
             let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::btree_bitmap_gc,
-                                         c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ratelimit);
+                                         c::RunRecoveryPassFlags::RUN_RECOVERY_PASS_ratelimit);
         }
 
         fs.maybe_schedule_btree_bitmap_gc.queue(Queue::system_long(), nsecs_to_jiffies(24 * 60 * 60 * NSEC_PER_SEC));
@@ -1023,7 +1023,7 @@ impl Fs {
     /// dev_missing_atomic(), and the error for it.
     fn dev_missing(&self, dev: u32) -> BchError {
         self.dev_missing_atomic(dev);
-        self.err(bch_errcode::BCH_ERR_ENOENT_dev_not_found)
+        self.err(Errcode::BCH_ERR_ENOENT_dev_not_found)
     }
 
     /// Whether there's a device @dev: bch2_dev_exists().
@@ -1084,7 +1084,7 @@ impl Fs {
         let ca = self.dev_tryget(bucket.inode as u32)?;
         if !ca.bucket_valid(bucket.offset) {
             ca.bucket_missing(bucket.offset);
-            return Err(self.err(bch_errcode::BCH_ERR_ENOENT_dev_bucket_not_found));
+            return Err(self.err(Errcode::BCH_ERR_ENOENT_dev_bucket_not_found));
         }
         Ok(ca)
     }
@@ -1150,12 +1150,12 @@ impl Fs {
     }
 
     /// Every online device, an io ref for reading on each: for_each_online_member().
-    pub fn online_members(&self) -> impl Iterator<Item = DevIoRef<c::bch_dev_read_ref>> + '_ {
+    pub fn online_members(&self) -> impl Iterator<Item = DevIoRef<c::DevReadRefKind>> + '_ {
         self.io_members(!0)
     }
 
     /// The rw devices, an io ref for writing on each: for_each_rw_member().
-    pub fn rw_members(&self) -> impl Iterator<Item = DevIoRef<c::bch_dev_write_ref>> + '_ {
+    pub fn rw_members(&self) -> impl Iterator<Item = DevIoRef<c::DevWriteRefKind>> + '_ {
         self.io_members(1 << MemberState::rw.0)
     }
 
@@ -1179,7 +1179,7 @@ impl Fs {
 
         count_fsck_err(self, if removed { id::ptr_to_removed_device } else { id::ptr_to_invalid_device }, out);
         passes::run_explicit(self, out, RecoveryPass::check_allocations,
-                             c::bch_run_recovery_pass_flags::empty())
+                             c::RunRecoveryPassFlags::empty())
     }
 
     /// dev_missing_bkey_msg(), logged.
@@ -1298,17 +1298,17 @@ unsafe impl Refcount for DevOuter {
     }
 }
 
-/// Which of a device's io refs: bch_dev_read_ref for io_ref[READ],
-/// bch_dev_write_ref for io_ref[WRITE].
+/// Which of a device's io refs: DevReadRefKind for io_ref[READ],
+/// DevWriteRefKind for io_ref[WRITE].
 pub trait IoRefIdx: 'static {
     const RW: usize;
 }
 
-impl IoRefIdx for c::bch_dev_read_ref {
+impl IoRefIdx for c::DevReadRefKind {
     const RW: usize = READ;
 }
 
-impl IoRefIdx for c::bch_dev_write_ref {
+impl IoRefIdx for c::DevWriteRefKind {
     const RW: usize = WRITE;
 }
 
@@ -1489,8 +1489,8 @@ impl Dev {
     /// unless it's a checksum check, which isn't IO - and a success, which
     /// ends a run of write errors, or a failure, counted against the device.
     /// From any context, an endio's included.
-    pub fn account_io_completion(&self, ty: c::bch_member_error_type, submit_time: u64, success: bool) {
-        use c::bch_member_error_type as T;
+    pub fn account_io_completion(&self, ty: c::MemberErrorType, submit_time: u64, success: bool) {
+        use c::MemberErrorType as T;
 
         #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
         if ty != T::checksum {
@@ -1518,7 +1518,7 @@ impl Dev {
     /// A write completed that the device may still have in its volatile
     /// cache, for the journal's next preflush.
     pub fn write_unflushed(&self) {
-        let f = c::bch_dev_flags::unflushed_writes;
+        let f = c::DevFlag::unflushed_writes;
         if !self.flags.get(f) {
             self.flags.set(f, true);
         }
@@ -1549,7 +1549,7 @@ impl Dev {
     }
 
     /// The data types with data on it, by the superblock's replicas: a mask
-    /// of bch_data_types.
+    /// of DataTypes.
     pub fn has_data(&self) -> u32 {
         self.fs().sb_lock().sb().dev_has_data(self.dev_idx.into())
     }

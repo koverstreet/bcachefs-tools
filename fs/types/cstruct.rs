@@ -9,9 +9,9 @@
 //   #[derive(CStruct)] struct / union, named fields - #[repr(C)], optionally
 //   packed and align(N). Fields can have #[cfg].
 //
-//   #[c_name(NAME)] on the struct: C's name for it, where Rust's differs - a
-//   family's C definition, X__head, whose name the family's type X<S> has in
-//   Rust (util/vstructs.rs).
+//   #[type_name(NAME)] on the struct: its name to TypeInfo, where the item's
+//   differs - a family's definition, X__head, whose name the family's type
+//   X<S> has (util/vstructs.rs).
 //
 //   c_xmacro! { NAME { (args), (args), ... } }: an x-macro list - a
 //   macro, NAME!(cb), that hands the whole list to cb!.
@@ -83,10 +83,10 @@ pub struct TypeParam {
 /// repr may be per configuration: cfg_attr(PRED, repr(...)).
 #[derive(Debug)]
 pub struct CStructDef {
-    /// C's name - its Rust one too, but for #[c_name]: rust_name.
+    /// Its name - the item's too, but for #[type_name]: rust_name.
     pub name:      String,
-    /// Its Rust name, where C's differs - #[c_name(NAME)]: a family's C
-    /// definition, X__head, whose own name the family's type X<S> takes (see
+    /// The item's name, where the type's differs - #[type_name(NAME)]: a
+    /// family's definition, X__head, whose own name the family's type X<S> takes (see
     /// util/vstructs.rs). rust_ident() is the name to impl and lay out by.
     pub rust_name: Option<String>,
     /// Its lifetime parameters, as written.
@@ -101,7 +101,7 @@ pub struct CStructDef {
 }
 
 impl CStructDef {
-    /// Its Rust name: C's, but for #[c_name].
+    /// The item's name: the type's, but for #[type_name].
     pub fn rust_ident(&self) -> &str {
         self.rust_name.as_deref().unwrap_or(&self.name)
     }
@@ -308,10 +308,8 @@ pub struct CEnumDef {
     /// them, a list at a time.
     pub from:     Vec<(usize, CFromList)>,
     /// #[own_to_text]: it prints as more than its name - an open or flags
-    /// enum c_enum! otherwise gives ToText.
+    /// enum #[bch_enum] otherwise gives ToText.
     pub own_to_text: bool,
-    /// #[c_name(NAME)]: C's name for it, where Rust's differs.
-    pub c_name:   Option<String>,
     /// #[prefix(P)]: what C's names for its variants start with, Rust's
     /// without it.
     pub prefix:   Option<String>,
@@ -320,11 +318,6 @@ pub struct CEnumDef {
 }
 
 impl CEnumDef {
-    /// Its name as C has it: C's, or for #[c_name], that.
-    pub fn c_ident(&self) -> Option<&str> {
-        self.c_name.as_deref().or(self.name.as_deref())
-    }
-
     /// What @v prints as: its #[label], or its name - past its #[prefix], if
     /// it has one. Not a flag's, whose names would be its bits'.
     #[allow(dead_code)]
@@ -337,7 +330,7 @@ impl CEnumDef {
     }
 }
 
-/// A c_enum! variant. Its value is Rust source, or none for the one after the
+/// An enum's variant. Its value is Rust source, or none for the one after the
 /// last; the generator replaces them with what they evaluate to. Its label is
 /// what it prints as, `#[label("..")]`: a list's variant's is the argument its
 /// template pastes into the name - `stripe`, of `concat(BCH_WATERMARK_, name)` - as
@@ -345,8 +338,6 @@ impl CEnumDef {
 #[derive(Debug, Clone)]
 pub struct CEnumVariant {
     pub name:   String,
-    /// C's name for it, `#[c_name(..)]`, where #[prefix] doesn't make it
-    pub c_name: Option<String>,
     pub value:  Option<String>,
     pub label:  Option<String>,
     #[allow(dead_code)]
@@ -373,8 +364,6 @@ pub struct CTaggedArm {
 #[derive(Debug)]
 pub struct CTaggedUnion {
     pub name:      String,
-    /// #[c_name(NAME)]: C's name, where Rust's differs.
-    pub c_name:    Option<String>,
     /// `union NAME in STORAGE`: unsized, over another's storage - see
     /// storage; else `struct NAME`, its own sized storage, which this
     /// defines.
@@ -615,8 +604,8 @@ struct ItemAttrs {
     bitfield:  Option<String>,
     /// #[bitfield(.., ty = T)]: C's declared type of its integer members.
     bitfield_ty: Option<String>,
-    /// #[c_name(NAME)]: C's name for it, where Rust's differs.
-    c_name:    Option<String>,
+    /// #[type_name(NAME)]: its name, where the item's differs.
+    type_name: Option<String>,
 }
 
 // ---- structs ---------------------------------------------------------------
@@ -678,7 +667,7 @@ fn parse_struct(d: &syn::DeriveInput, a: ItemAttrs) -> Result<Option<CStructDef>
         fields.push(CFieldDef { name: field, ty, vis, bitfield, bits, counted_by, placed_at, cfg });
     }
 
-    let (name, rust_name) = match a.c_name {
+    let (name, rust_name) = match a.type_name {
         Some(c) => (c, Some(name)),
         None    => (name, None),
     };
@@ -884,14 +873,14 @@ fn parse_ioctl(m: &syn::Macro) -> Result<CIoctl, String> {
     Ok(CIoctl { entries })
 }
 
-/// A c_enum!'s head, `#[open|closed|flags] pub enum NAME: REPR`, with no
+/// An enum's head, `#[open|closed|flags] pub enum NAME: REPR`, with no
 /// variants yet; the attributes that aren't
 /// its, and its body.
 #[allow(dead_code)]
 pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
         -> syn::Result<(CEnumDef, Vec<syn::Attribute>, proc_macro2::TokenStream)> {
     let mut kind = None;
-    let (mut own_to_text, mut c_name, mut prefix, mut nr) = (false, None, None, false);
+    let (mut own_to_text, mut prefix, mut nr) = (false, None, false);
     let mut others = Vec::new();
     for a in input.call(syn::Attribute::parse_outer)? {
         let id = |a: &syn::Attribute| a.parse_args::<syn::Ident>().map(|n| ident(&n));
@@ -900,7 +889,6 @@ pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
             Some("closed")      => kind = Some(CEnumKind::Closed),
             Some("flags")       => kind = Some(CEnumKind::Flags),
             Some("own_to_text") => own_to_text = true,
-            Some("c_name")      => c_name = Some(id(&a)?),
             Some("prefix")      => prefix = Some(id(&a)?),
             Some("nr")          => nr = true,
             _ => others.push(a),
@@ -919,7 +907,7 @@ pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
     let body;
     syn::braced!(body in input);
     let def = CEnumDef { kind, name: Some(name), docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
-                         own_to_text, c_name, prefix, nr };
+                         own_to_text, prefix, nr };
     Ok((def, others, body.parse()?))
 }
 
@@ -933,17 +921,16 @@ pub fn doc_of(a: &syn::Attribute) -> Option<String> {
     }
 }
 
-/// A c_enum! variant, `[#[..]] NAME[(Type)] [= value]`: its doc and #[label]
+/// An enum's variant, `[#[..]] NAME[(Type)] [= value]`: its doc and #[label]
 /// read into its CEnumVariant; its other attributes, and its type.
 #[allow(dead_code)]
 pub fn parse_variant(v: proc_macro2::TokenStream)
         -> syn::Result<(CEnumVariant, Vec<syn::Attribute>, Option<syn::Type>)> {
     let v: syn::Variant = syn::parse2(v)?;
-    let (mut c_name, mut label, mut docs, mut others) = (None, None, Vec::new(), Vec::new());
+    let (mut label, mut docs, mut others) = (None, Vec::new(), Vec::new());
     for a in v.attrs {
         match doc_of(&a) {
             Some(d) => docs.push(d),
-            _ if a.path().is_ident("c_name") => c_name = Some(a.parse_args::<syn::Ident>()?.to_string()),
             _ if a.path().is_ident("label") => label = Some(a.parse_args::<syn::LitStr>()?.value()),
             _ => others.push(a),
         }
@@ -954,10 +941,10 @@ pub fn parse_variant(v: proc_macro2::TokenStream)
         f => return Err(syn::Error::new_spanned(f, format!("{}: a variant's payload is a type, (Type)", v.ident))),
     };
     let value = v.discriminant.map(|(_, x)| rust_text(&x));
-    Ok((CEnumVariant { name: ident(&v.ident), c_name, value, label, docs }, others, ty))
+    Ok((CEnumVariant { name: ident(&v.ident), value, label, docs }, others, ty))
 }
 
-/// c_enum!'s body, as its record has it: its head, then { A = expr, B, ... },
+/// list_enum!'s body, as its record has it: its head, then { A = expr, B, ... },
 /// or `LIST(params) => template` for each of a list's entries.
 fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
     m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
@@ -969,7 +956,7 @@ fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
             }
         }
         Ok(e)
-    }).map_err(syn_err("c_enum!: expected #[open|closed|flags] pub enum NAME: REPR { ... }"))
+    }).map_err(syn_err("list_enum!: expected #[open|closed|flags] pub enum NAME: REPR { ... }"))
 }
 
 /// @i as the tokenizer has an identifier: a raw one without its r#.
@@ -1053,10 +1040,10 @@ fn item_attrs_of(attrs: &[syn::Attribute]) -> Result<ItemAttrs, String> {
                 _ => None,
             });
         }
-        // #[c_name], or what it expands to - a family's macro sees it
+        // #[type_name], or what it expands to - a family's macro sees it
         // unexpanded, the derives expanded
-        if let (true, Ok(n)) = (is("c_name") || is("c_name_of"), attr.parse_args::<syn::Ident>()) {
-            a.c_name = Some(ident(&n));
+        if let (true, Ok(n)) = (is("type_name") || is("type_name_of"), attr.parse_args::<syn::Ident>()) {
+            a.type_name = Some(ident(&n));
         }
     }
     Ok(a)
@@ -1095,7 +1082,7 @@ impl CTaggedUnion {
     }
 }
 
-/// `LIST(params) => template` at @item - a c_enum! variant - if it is one.
+/// `LIST(params) => template` at @item - a list_enum! variant - if it is one.
 fn parse_from_list(item: &proc_macro2::TokenStream) -> Option<CFromList> {
     use proc_macro2::{Delimiter, TokenTree};
     let t: Vec<TokenTree> = item.clone().into_iter().collect();
@@ -1200,7 +1187,7 @@ fn from_list_entry(f: &CFromList, entry: &str) -> Result<Vec<proc_macro2::TokenT
     paste(subst(lex(&f.template)?, &bound), &name, &bad)
 }
 
-/// c_enum! @e's variants from its first list, @entries each the source of one
+/// list_enum! @e's variants from its first list, @entries each the source of one
 /// entry's arguments, in their place: each `NAME [= value]`, a value cast to
 /// the enum's integer type, as a list's can be any integer type.
 #[allow(dead_code)]
@@ -1244,7 +1231,7 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), Stri
                 [TokenTree::Ident(l)] => Some(ident(l)),
                 _ => None,
             });
-        variants.push(CEnumVariant { name, c_name: None, value, label, docs: Vec::new() });
+        variants.push(CEnumVariant { name, value, label, docs: Vec::new() });
     }
     let n = variants.len();
     e.variants.splice(at..at, variants);
@@ -1254,13 +1241,12 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), Stri
     Ok(())
 }
 
-/// c_enum! @e as source: its variants, and the lists not yet expanded in their
+/// list_enum! @e as source: its variants, and the lists not yet expanded in their
 /// place - with all expanded, the record's form.
 #[allow(dead_code)]
 pub fn enum_text(e: &CEnumDef) -> String {
-    let mut t = format!("#[{}] {}{}{}pub enum {}: {} {{ ", e.kind.attr(),
+    let mut t = format!("#[{}] {}{}pub enum {}: {} {{ ", e.kind.attr(),
                         if e.own_to_text { "#[own_to_text] " } else { "" },
-                        e.c_name.as_deref().map(|c| format!("#[c_name({c})] ")).unwrap_or_default(),
                         e.prefix.as_deref().map(|p| format!("#[prefix({p})] ")).unwrap_or_default()
                             + if e.nr { "#[nr] " } else { "" },
                         e.name.as_deref().unwrap_or("_"), e.repr);
@@ -1271,9 +1257,6 @@ pub fn enum_text(e: &CEnumDef) -> String {
     };
     for (i, v) in e.variants.iter().enumerate() {
         lists(&mut t, i);
-        if let Some(c) = &v.c_name {
-            t.push_str(&format!("#[c_name({c})] "));
-        }
         if let Some(l) = &v.label {
             t.push_str(&format!("#[label({l:?})] "));
         }
@@ -1443,7 +1426,7 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
     if let Ok(m) = syn::parse_str::<syn::Macro>(src) {
         match m.path.get_ident().map(ident).as_deref() {
             Some("c_xmacro") => return Ok(vec![CItem::XMacro(parse_xmacro(&m)?)]),
-            Some("c_enum") => return Ok(vec![CItem::Enum(parse_enum(&m)?)]),
+            Some("list_enum") => return Ok(vec![CItem::Enum(parse_enum(&m)?)]),
             Some("c_bitmask") => return Ok(vec![CItem::Bitmask(parse_bitmask(&m)?)]),
             Some("c_ioctl") => return Ok(vec![CItem::Ioctl(parse_ioctl(&m)?)]),
             _ => {}

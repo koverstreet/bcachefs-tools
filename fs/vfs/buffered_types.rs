@@ -10,7 +10,7 @@ use cstruct_macros::{CStruct, TypeInfo};
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_writepage_io {
-    pub inode: *mut c::bch_inode_info,
+    pub inode: *mut c::InodeInfo,
 
     /* must be last: */
     pub op: c::bch_write_op,

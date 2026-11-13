@@ -4,12 +4,12 @@
 //! "Cycle detection" in locking.rs.
 
 use crate::btree::iter::BtreeTrans;
-use crate::btree::locking::{btree_node_locked_type, btree_node_pos};
+use crate::btree::locking::{BtreeNodeLockedType, btree_node_pos};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{table_allocated, table_header, BtreePath, PathNode};
 use crate::btree::trans::foreign_bits;
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
@@ -45,7 +45,7 @@ impl Trans {
         unsafe { (&raw const (*self.0).locking).cast::<*mut c::btree_bkey_cached_common>().read_volatile() }
     }
 
-    fn lock_want(self) -> c::six_lock_type {
+    fn lock_want(self) -> c::SixLockType {
         unsafe { (*self.0).locking_wait.lock_want.get() }
     }
 
@@ -92,7 +92,7 @@ impl Trans {
         }
     }
 
-    fn restart_foreign_task(self, err: bch_errcode) -> BchError {
+    fn restart_foreign_task(self, err: Errcode) -> BchError {
         let ip = Self::restart_foreign_task as *const () as c_ulong;
         self.own().restart_foreign_task(err, ip)
     }
@@ -105,8 +105,8 @@ impl Trans {
 }
 
 /// btree_node_locked_type() of a path another thread may be changing.
-fn path_locked_type(path: *const BtreePath, level: usize) -> btree_node_locked_type {
-    btree_node_locked_type::of(unsafe { (&raw const (*path).nodes_locked).read_volatile() }, level)
+fn path_locked_type(path: *const BtreePath, level: usize) -> BtreeNodeLockedType {
+    BtreeNodeLockedType::of(unsafe { (&raw const (*path).nodes_locked).read_volatile() }, level)
 }
 
 /// trans_paths_allocated() and trans_paths_nr(), of a path table another
@@ -185,9 +185,9 @@ pub(crate) unsafe fn bch2_btree_trans_to_text(out: &mut Printbuf, trans: *mut Bt
              path.btree_id(), path.level(), path.pos);
 
         for l in 0..c::BTREE_MAX_DEPTH as usize {
-            let lock_type = btree_node_locked_type::of(path.nodes_locked, l);
+            let lock_type = BtreeNodeLockedType::of(path.nodes_locked, l);
 
-            if lock_type != btree_node_locked_type::BTREE_NODE_UNLOCKED {
+            if lock_type != BtreeNodeLockedType::BTREE_NODE_UNLOCKED {
                 if let Ok(Some(b)) = path.l[l].b.get() {
                     prt!(out, "    {} l={} ", btree_lock_type_char(lock_type as i32), l);
                     bkey_cached_common_to_text(out, unsafe { b.as_ref() });
@@ -206,7 +206,7 @@ pub(crate) unsafe fn bch2_btree_trans_to_text(out: &mut Printbuf, trans: *mut Bt
     }
 }
 
-fn lock_type_conflicts(t1: btree_node_locked_type, t2: c::six_lock_type) -> bool {
+fn lock_type_conflicts(t1: BtreeNodeLockedType, t2: c::SixLockType) -> bool {
     t1 as i32 + t2 as i32 > 1
 }
 
@@ -227,7 +227,7 @@ pub(crate) enum Cycle {
 struct TransWaitingForLock {
     trans:        *mut BtreeTrans<'static>,
     node_want:    *mut c::btree_bkey_cached_common,
-    lock_want:    c::six_lock_type,
+    lock_want:    c::SixLockType,
 
     /* for iterating over held locks :*/
     level:        usize,
@@ -248,7 +248,7 @@ impl TransWaitingForLock {
         Self {
             trans:        null_mut(),
             node_want:    null_mut(),
-            lock_want:    c::six_lock_type::SIX_LOCK_read,
+            lock_want:    c::SixLockType::SIX_LOCK_read,
             level:        0,
             path_idx:     0,
             waitlist_idx: 0,
@@ -386,7 +386,7 @@ impl LockGraph {
 
         if i == 0 {
             self.trace_would_deadlock(trans);
-            Err(Cycle::Restart(trans.restart_foreign_task(bch_errcode::BCH_ERR_transaction_restart_would_deadlock)))
+            Err(Cycle::Restart(trans.restart_foreign_task(Errcode::BCH_ERR_transaction_restart_would_deadlock)))
         } else {
             trans.set_must_abort();
             trans.wake_up();
@@ -499,7 +499,7 @@ impl LockGraph {
             write!(out, "{}", trans.fn_name());
         });
 
-        Cycle::Restart(trans.own().restart(bch_errcode::BCH_ERR_transaction_restart_deadlock_waitlist_alloc))
+        Cycle::Restart(trans.own().restart(Errcode::BCH_ERR_transaction_restart_deadlock_waitlist_alloc))
     }
 
     fn scan_held_locks(&mut self, rcu: &ReadGuard, cycle: bool) -> Result<Step, Cycle> {
@@ -530,7 +530,7 @@ impl LockGraph {
                 let level = self.g[top].level;
                 let lock_held = path_locked_type(path, level);
 
-                if lock_held == btree_node_locked_type::BTREE_NODE_UNLOCKED {
+                if lock_held == BtreeNodeLockedType::BTREE_NODE_UNLOCKED {
                     self.g[top].level += 1;
                     continue;
                 }
@@ -646,7 +646,7 @@ pub(crate) fn check_for_deadlock(trans: *mut BtreeTrans<'_>, mut cycle: Option<&
         }
 
         g.trace_would_deadlock(trans);
-        return Err(Cycle::Restart(trans.own().restart(bch_errcode::BCH_ERR_transaction_restart_would_deadlock)));
+        return Err(Cycle::Restart(trans.own().restart(Errcode::BCH_ERR_transaction_restart_would_deadlock)));
     }
 
     g.down(trans);
@@ -744,7 +744,7 @@ pub(crate) fn bch2_six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &c::btree_b
      */
     if let Some(b) = BtreeNode::from_common(b) {
         if node_reuse_race(trans, b) {
-            return -trans.fs().err(bch_errcode::BCH_ERR_no_btree_node_reused).raw();
+            return -trans.fs().err(Errcode::BCH_ERR_no_btree_node_reused).raw();
         }
     }
 

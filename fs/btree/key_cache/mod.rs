@@ -23,7 +23,7 @@ use crate::btree::path::Paths;
 use crate::btree::trans::BtreeTrans;
 use crate::c;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
@@ -39,7 +39,7 @@ use crate::util::shrinker::{Shrink, Shrinker};
 use crate::util::workqueue::Queue;
 use crate::util::time_stats::TimeStats;
 use crate::util::{Printbuf, ToText};
-use c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_write};
+use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
 #[cfg(kernel)]
 use core::ffi::c_int;
 use core::ffi::c_ulong;
@@ -204,7 +204,7 @@ impl c::bch_fs_btree_key_cache {
      */
     fn bkey_cached_keys_add(&self, ck: &mut LockedEntry<'_>) -> Result<(), BchError> {
         ck.keys_idx = self.keys.add(ck.ck.cast())
-            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_btree_key_cache_create))?;
+            .map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_btree_key_cache_create))?;
         Ok(())
     }
 
@@ -345,7 +345,7 @@ impl BtreeTrans<'_> {
         }
 
         let ck = match t.allocate_dropping_locks_in(paths, || {
-            NewEntry::alloc(key_u64s).ok_or(BchError::from(bch_errcode::BCH_ERR_ENOMEM_btree_key_cache_create))
+            NewEntry::alloc(key_u64s).ok_or(BchError::from(Errcode::BCH_ERR_ENOMEM_btree_key_cache_create))
         }) {
             Ok(ck) => Some(ck),
             Err(e) if e.matches(c::ENOMEM) => None,
@@ -355,9 +355,9 @@ impl BtreeTrans<'_> {
         if let Some(ck) = ck {
             let ck = ck.into_raw();
             let flags = if pcpu_readers {
-                c::six_lock_init_flags::SIX_LOCK_INIT_PCPU
+                c::SixLockInitFlags::SIX_LOCK_INIT_PCPU
             } else {
-                c::six_lock_init_flags::empty()
+                c::SixLockInitFlags::empty()
             };
             unsafe {
                 bch2_btree_lock_init(&raw mut (*ck.as_ptr()).c, flags, c::GFP_KERNEL);
@@ -486,7 +486,7 @@ impl c::bch_fs_btree_key_cache {
 
         self.shrink_iter.store(pos, Relaxed);
 
-        fs.times[c::bch_time_stats::btree_key_cache_scan as usize].update(start_time);
+        fs.times[c::TimeStat::btree_key_cache_scan as usize].update(start_time);
 
         Some(freed)
     }
@@ -525,7 +525,7 @@ impl c::bch_fs_btree_key_cache {
         drop(srcu);
 
         let nr_dirty = self.nr_dirty.load(Relaxed);
-        if nr_dirty != 0 && fs.journal.error().is_ok() && fs.flags.get(c::bch_fs_flags::was_rw) {
+        if nr_dirty != 0 && fs.journal.error().is_ok() && fs.flags.get(c::FsFlag::was_rw) {
             panic!("btree key cache shutdown error: nr_dirty nonzero ({nr_dirty})");
         }
 
@@ -547,14 +547,14 @@ impl c::bch_fs_btree_key_cache {
         for i in 0..2 {
             let slot = unsafe { self.pending.get().cast::<Pending>().add(i) };
             if unsafe { init_at(RcuPending::new(srcu, Free {}), slot) }.is_err() {
-                return fs.throw(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
+                return fs.throw(Errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
             }
         }
 
         let mut name = Printbuf::new();
         prt!(&mut name, "{}-btree_key_cache", fs.name().to_str().unwrap_or("?"));
         Shrinker::register(&self.shrinker, name.as_c_str(), 1, 0)
-            .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init))
+            .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_fs_btree_cache_init))
     }
 }
 

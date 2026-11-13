@@ -25,7 +25,7 @@ use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans};
 use crate::btree::trans::{__bch2_trans_get, TransGuard};
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
@@ -49,7 +49,7 @@ impl MoveStats {
     /// Zeroed - field by field, as a data job's progress may be read
     /// meanwhile.
     pub fn reset(&self) {
-        self.ret.set(c::bch_ioctl_data_event_ret(0));
+        self.ret.set(c::IoctlDataEventRet(0));
         self.at.data_type.set(DataType::user);
         self.at.pos.set(c::bbpos::default());
         self.at.dev.set(0);
@@ -375,10 +375,10 @@ impl<'a> Moving<'a> {
         }
 
         if Kthread::should_stop() {
-            return fs.throw(bch_errcode::BCH_ERR_kthread_cancelled);
+            return fs.throw(Errcode::BCH_ERR_kthread_cancelled);
         }
-        if fs.flags.get(c::bch_fs_flags::going_ro) {
-            return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
+        if fs.flags.get(c::FsFlag::going_ro) {
+            return fs.throw(Errcode::BCH_ERR_erofs_no_writes);
         }
         if Kthread::freezing() {
             self.trans().unlock_long();

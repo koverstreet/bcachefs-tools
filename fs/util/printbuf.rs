@@ -9,13 +9,13 @@ use crate::util::alloc::KVVec;
 use crate::util::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
-use cstruct_macros::{CStruct, bitfield, bch_enum, c_name};
+use cstruct_macros::{CStruct, bitfield, bch_enum};
 use nestify::nest;
 use crate::format::Bpos;
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum printbuf_si {
+pub enum PrintbufSi {
     PRINTBUF_UNITS_2,       /* use binary powers of 2^10 */
     PRINTBUF_UNITS_10,      /* use powers of 10^3 (standard SI) */
 }
@@ -24,7 +24,6 @@ pub const PRINTBUF_INLINE_TABSTOPS: u32 = 8;
 
 nest! {
     /// Through fmt::Write, `\t`, `\r` and `\n` are tabstops and indent.
-    #[c_name(printbuf)]
     #[repr(C)]
     #[derive(CStruct)]
     pub struct Printbuf {
@@ -44,7 +43,7 @@ nest! {
             overflow:               bool,
             /* Ratelimited or already printed */
             suppress:               bool,
-            #[bits(1)] pub si_units: c::printbuf_si,
+            #[bits(1)] pub si_units: c::PrintbufSi,
             human_readable_units:   bool,
             has_indent_or_tabstops: bool,
             pub may_vmalloc:        bool,
@@ -609,7 +608,7 @@ impl Printbuf {
         self.make_room(10);
 
         const UNITS: &[u8] = b"\0kMGTPEZY";
-        let base: u64 = if matches!(self.si_units(), c::printbuf_si::PRINTBUF_UNITS_10) { 1000 } else { 1024 };
+        let base: u64 = if matches!(self.si_units(), c::PrintbufSi::PRINTBUF_UNITS_10) { 1000 } else { 1024 };
         let (mut u, mut r) = (0, 0);
 
         while u + 1 < UNITS.len() && v >= base {

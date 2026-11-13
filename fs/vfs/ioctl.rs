@@ -25,7 +25,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags, TransAttempt};
 use crate::c;
 use crate::data::read::ReadErrReport;
 use crate::dirent;
-use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::inode_opts::reinherit_attrs as reinherit;
 use crate::str_hash;
@@ -124,7 +124,7 @@ fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Res
         <c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS as Ioctl>::OPCODE =>
             no_arg::<c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, _>(|| {
                 if !MntIdmap::of(file).owner_or_capable(inode.vfs()) && !capable(Capability::SysAdmin) {
-                    return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin_or_owner);
+                    return fs.throw(Errcode::BCH_ERR_EPERM_non_admin_or_owner);
                 }
                 reflink_p_propagate_opts(fs, inode.inum())
             }),
@@ -224,7 +224,7 @@ fn subvolume_create(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMsg
 fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &mut Printbuf)
     -> Result<(), BchError>
 {
-    use bch_errcode as E;
+    use Errcode as E;
     use c::{BCH_SUBVOL_SNAPSHOT_CREATE as SNAPSHOT, BCH_SUBVOL_SNAPSHOT_RO as RO};
 
     if a.flags & !(SNAPSHOT | RO) != 0 {
@@ -317,7 +317,7 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMs
 {
     let ret = (|| {
         if a.flags != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_subvol_destroy_bad_flags);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_subvol_destroy_bad_flags);
         }
 
         let r = Removing::start(a.dirfd as c_int, a.dst_ptr)?;
@@ -357,7 +357,7 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
         return Err(c::EINVAL.into());
     }
     if !MntIdmap::of(file).owner_or_capable(inode.vfs()) {
-        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin_or_owner);
+        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin_or_owner);
     }
 
     let pos = a.offset as c::loff_t;
@@ -374,9 +374,9 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
     }
 
     let flags = if a.flags & c::BCH_PREAD_RAW_no_poison_check != 0 {
-        c::bch_read_flags::no_poison_check
+        c::ReadFlags::no_poison_check
     } else {
-        c::bch_read_flags::empty()
+        c::ReadFlags::empty()
     };
 
     // The reads' completions add to it, under its lock
@@ -400,14 +400,14 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
 
 fn set_label(fs: &Fs, file: &File, user: UserArg<[u8; FSLABEL_MAX]>) -> Result<(), BchError> {
     if !capable(Capability::SysAdmin) {
-        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
     }
 
     let mut label = [0u8; LABEL_SIZE];
     user.bytes_at(0, LABEL_SIZE).reader().read_slice(&mut label)?;
     let Some(len) = label.iter().position(|&b| b == 0) else {
         bch_err!(fs, "unable to set label with more than {} bytes", LABEL_SIZE - 1);
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_setlabel_too_long);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_setlabel_too_long);
     };
 
     let _write = WriteAccess::get(file)?;
@@ -420,7 +420,7 @@ fn set_label(fs: &Fs, file: &File, user: UserArg<[u8; FSLABEL_MAX]>) -> Result<(
 
 fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
     if !capable(Capability::SysAdmin) {
-        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
     }
     let flags = user.read()?;
 
@@ -447,7 +447,7 @@ fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
             fs.emergency_read_only(&mut msg);
             Ok(())
         }
-        _ => fs.throw(bch_errcode::BCH_ERR_EINVAL_goingdown_bad_flags),
+        _ => fs.throw(Errcode::BCH_ERR_EINVAL_goingdown_bad_flags),
     }
 }
 

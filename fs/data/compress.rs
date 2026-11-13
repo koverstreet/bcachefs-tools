@@ -42,7 +42,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::c::{self, bbuf_type as bb, bch_compression_opts as opts, bch_errcode as e};
+use crate::c::{self, BbufType as bb, CompressionOpt as opts, Errcode as e};
 use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
 use crate::errcode::BchError;
 use crate::init::error::{count_fsck_err, id};
@@ -103,7 +103,7 @@ impl bch_compression_opt {
                 }
             };
         }
-        c::bch_compression_opts_arms!(map)
+        c::CompressionOpt_arms!(map)
     }
 
     /// A type there is, and a level only with one.
@@ -124,7 +124,7 @@ impl bch_compression_opt {
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum bbuf_type {
+pub enum BbufType {
     BB_none,
     BB_vmap,
     BB_pool,
@@ -141,7 +141,7 @@ pub enum bbuf_type {
 pub struct bbuf {
     pub c: *mut Fs,
     pub b: *mut c_void,
-    pub type_: c::bbuf_type,
+    pub type_: c::BbufType,
     pub rw: c_int,
 }
 c_default!(bbuf);
@@ -177,7 +177,7 @@ fn opt_feature(t: usize) -> u64 {
             }
         };
     }
-    c::bch_compression_opts_arms!(map)
+    c::CompressionOpt_arms!(map)
 }
 
 fn zstd_errcode(code: u32) -> e {

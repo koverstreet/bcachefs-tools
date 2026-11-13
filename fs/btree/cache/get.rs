@@ -3,7 +3,7 @@
 use super::{bch2_btree_id_level_to_text, btree_ptr_hash_val, cached_node};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
-use crate::btree::locking::btree_node_locked_type;
+use crate::btree::locking::BtreeNodeLockedType;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{bch2_btree_path_to_text, NodePtr, PathIdx, Paths};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write};
@@ -12,7 +12,7 @@ use crate::btree::validate::node_btree;
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, Btree};
 use crate::fs::Fs;
 use crate::init::passes::RecoveryPass;
@@ -21,8 +21,8 @@ use crate::prt;
 use crate::types::L1_CACHE_BYTES;
 use crate::util::kernel::{likely, prefetch, race_fault, unlikely};
 use crate::util::log::LogMsg;
-use c::btree_node_cache_state as State;
-use c::six_lock_type::{self, SIX_LOCK_read};
+use c::BtreeNodeCacheState as State;
+use c::SixLockType::{self, SIX_LOCK_read};
 
 fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
     let p = BkeySC::from(k).arm::<c::BtreePtrV2>()?;
@@ -89,7 +89,7 @@ impl BtreeTrans<'_> {
             prt!(out, "{}\n", self.fn_name());
             bch2_btree_path_to_text(out, self, idx, &paths[idx]);
         });
-        self.restart(bch_errcode::BCH_ERR_transaction_restart_lock_node_reused)
+        self.restart(Errcode::BCH_ERR_transaction_restart_lock_node_reused)
     }
 
     #[inline(never)]
@@ -119,7 +119,7 @@ impl BtreeTrans<'_> {
 
     #[inline(never)]
     fn btree_node_get_slowpath(&self, paths: &mut Paths<'_>, idx: PathIdx, k: &BkeyI, level: usize,
-                               lock_type: six_lock_type, flags: BtreeIterFlags)
+                               lock_type: SixLockType, flags: BtreeIterFlags)
         -> Result<(&BtreeNode, SixHold<'_>), BchError>
     {
         let fs = self.fs();
@@ -135,7 +135,7 @@ impl BtreeTrans<'_> {
             let (b, mut held) = match fs.btree_cache_find(k) {
                 None => {
                     if unlikely(flags.contains(BtreeIterFlags::NOFILL)) {
-                        return Err(fs.err(bch_errcode::BCH_ERR_no_btree_node_nofill));
+                        return Err(fs.err(Errcode::BCH_ERR_no_btree_node_nofill));
                     }
 
                     /*
@@ -151,18 +151,18 @@ impl BtreeTrans<'_> {
                     }
                 }
                 Some(b) => {
-                    if paths[idx].locked_type(level + 1) == btree_node_locked_type::BTREE_NODE_READ_LOCKED {
+                    if paths[idx].locked_type(level + 1) == BtreeNodeLockedType::BTREE_NODE_READ_LOCKED {
                         self.node_unlock(paths, idx, level + 1);
                     }
 
                     self.locking_hash_val.set(hash_val);
                     self.locking_root_id.set(Btree(u32::MAX));
                     let held = match self.node_lock(paths, idx, &b.c, level, lock_type) {
-                        Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => return Err(e),
+                        Err(e) if e.matches(Errcode::BCH_ERR_transaction_restart) => return Err(e),
                         r => r,
                     };
 
-                    if unlikely(held.as_ref().is_err_and(|e| *e == bch_errcode::BCH_ERR_no_btree_node_reused.into()) ||
+                    if unlikely(held.as_ref().is_err_and(|e| *e == Errcode::BCH_ERR_no_btree_node_reused.into()) ||
                                 b.hash_val() != hash_val ||
                                 b.c.level as usize != level ||
                                 race_fault()) {
@@ -206,7 +206,7 @@ impl BtreeTrans<'_> {
             break (b, held);
         };
 
-        if paths[idx].locked_type(level + 1) == btree_node_locked_type::BTREE_NODE_READ_LOCKED {
+        if paths[idx].locked_type(level + 1) == BtreeNodeLockedType::BTREE_NODE_READ_LOCKED {
             self.node_unlock(paths, idx, level + 1);
         }
 
@@ -216,7 +216,7 @@ impl BtreeTrans<'_> {
             }
 
             drop(held);
-            return Err(bch_errcode::BCH_ERR_btree_node_read_err_cached.into());
+            return Err(Errcode::BCH_ERR_btree_node_read_err_cached.into());
         }
 
         prefetch_aux(b);
@@ -252,7 +252,7 @@ impl BtreeTrans<'_> {
      */
     #[inline(always)]
     pub(crate) fn btree_node_get(&self, paths: &mut Paths<'_>, idx: PathIdx, k: &BkeyI, level: usize,
-                                 lock_type: six_lock_type, flags: BtreeIterFlags)
+                                 lock_type: SixLockType, flags: BtreeIterFlags)
         -> Result<(&BtreeNode, SixHold<'_>), BchError>
     {
         ebug_assert!(level < c::BTREE_MAX_DEPTH as usize);
@@ -273,7 +273,7 @@ impl BtreeTrans<'_> {
             return self.btree_node_get_slowpath(paths, idx, k, level, lock_type, flags);
         };
 
-        if paths[idx].locked_type(level + 1) == btree_node_locked_type::BTREE_NODE_READ_LOCKED {
+        if paths[idx].locked_type(level + 1) == BtreeNodeLockedType::BTREE_NODE_READ_LOCKED {
             self.node_unlock(paths, idx, level + 1);
         }
 
@@ -281,7 +281,7 @@ impl BtreeTrans<'_> {
         self.locking_root_id.set(Btree(u32::MAX));
         let held = match self.node_lock(paths, idx, &b.c, level, lock_type) {
             Ok(held) => held,
-            Err(e) if e == bch_errcode::BCH_ERR_no_btree_node_reused.into() =>
+            Err(e) if e == Errcode::BCH_ERR_no_btree_node_reused.into() =>
                 return self.btree_node_get_slowpath(paths, idx, k, level, lock_type, flags),
             Err(e) => return Err(e),
         };
@@ -364,7 +364,7 @@ impl BtreeTrans<'_> {
 
         self.node_unlock_write(paths, idx, level);
         self.node_unlock(paths, idx, level);
-        paths[idx].l[level].b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_drop.into());
+        paths[idx].l[level].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_drop.into());
         self.node_forget(paths, b);
         Ok(())
     }

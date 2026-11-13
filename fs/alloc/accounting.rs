@@ -56,7 +56,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyTag, BKEY_U64S, POS_MIN, ValidateFlags, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{self, Bpos};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -132,10 +132,10 @@ pub(crate) fn replicas_entry(pos: &DiskAccountingPos<Unvalidated>) -> Option<&c:
 
 pub fn is_mem<S>(pos: &DiskAccountingPos<S>) -> bool {
     let t = pos.type_();
-    (t.0 as usize) < TYPE_NR && t != disk_accounting_type::inum
+    (t.0 as usize) < TYPE_NR && t != DiskAccountingType::inum
 }
 
-const TYPE_NR: usize = disk_accounting_type::NR as usize;
+const TYPE_NR: usize = DiskAccountingType::NR as usize;
 
 macro_rules! type_nr_counters {
     ($(($t:ident, $id:expr, $ty:ty)),* $(,)?) => { ::paste::paste! {{
@@ -377,7 +377,7 @@ fn mod_gc(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[u64]) -> Resul
             accounting_mem::mem_add(fs, a, true, &mut mark)
         };
         match r {
-            Err(e) if e.matches(bch_errcode::BCH_ERR_btree_insert_need_mark_replicas) =>
+            Err(e) if e.matches(Errcode::BCH_ERR_btree_insert_need_mark_replicas) =>
                 t.drop_locks_do(|| update_sb_one(fs, p))?,
             r => return r.map(|_| ()),
         }

@@ -30,7 +30,7 @@ use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
 use crate::c;
 use crate::util::vstructs::{bytes_of, Unsized, Unvalidated, Validated};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::io::{SbFieldOps, SbResize};
 use crate::types::{Le32, Le64};
@@ -85,8 +85,8 @@ enum Csum {
 
 impl Csum {
     /// An encryption type's is keyed by @fs's key: panics without one.
-    fn new(fs: Option<&Fs>, ty: c::bch_csum_type, mut nonce: Nonce) -> Self {
-        use c::bch_csum_type as t;
+    fn new(fs: Option<&Fs>, ty: c::CsumType, mut nonce: Nonce) -> Self {
+        use c::CsumType as t;
         match ty {
             t::crc32c          => Csum::Crc32c { seed: 0, xor: 0 },
             t::crc32c_nonzero  => Csum::Crc32c { seed: u32::MAX.into(), xor: u32::MAX.into() },
@@ -165,37 +165,37 @@ impl Csum {
 
 /// The checksum of vstruct @v whose first field is its checksum: of all of it
 /// after that field - C's csum_vstruct(). @fs for an encryption type's key.
-pub fn csum_vstruct<T: Unsized + ?Sized>(fs: Option<&Fs>, ty: c::bch_csum_type, nonce: Nonce,
+pub fn csum_vstruct<T: Unsized + ?Sized>(fs: Option<&Fs>, ty: c::CsumType, nonce: Nonce,
                                          v: &T) -> c::bch_csum {
     checksum(fs, ty, nonce, &bytes_of(v)[size_of::<c::bch_csum>()..])
 }
 
 /// @data's checksum: Fs::checksum()'s, and checksum_unkeyed()'s.
-fn checksum(fs: Option<&Fs>, ty: c::bch_csum_type, nonce: Nonce, data: &[u8]) -> c::bch_csum {
+fn checksum(fs: Option<&Fs>, ty: c::CsumType, nonce: Nonce, data: &[u8]) -> c::bch_csum {
     let mut csum = Csum::new(fs, ty, nonce);
     csum.update(data);
     csum.finish()
 }
 
-impl c::bch_csum_type {
+impl c::CsumType {
     /// Whether it's an encryption type: bch2_csum_type_is_encryption().
     pub fn is_encryption(self) -> bool {
-        matches!(self, c::bch_csum_type::chacha20_poly1305_80 |
-                       c::bch_csum_type::chacha20_poly1305_128)
+        matches!(self, c::CsumType::chacha20_poly1305_80 |
+                       c::CsumType::chacha20_poly1305_128)
     }
 
     /// Its checksum's size in bytes - None for a type this version doesn't
     /// know: bch_crc_bytes[].
     pub fn bytes(self) -> Option<u32> {
         Some(match self {
-            c::bch_csum_type::none                  => 0,
-            c::bch_csum_type::crc32c_nonzero |
-            c::bch_csum_type::crc32c                => 4,
-            c::bch_csum_type::crc64_nonzero |
-            c::bch_csum_type::crc64 |
-            c::bch_csum_type::xxhash                => 8,
-            c::bch_csum_type::chacha20_poly1305_80  => 10,
-            c::bch_csum_type::chacha20_poly1305_128 => 16,
+            c::CsumType::none                  => 0,
+            c::CsumType::crc32c_nonzero |
+            c::CsumType::crc32c                => 4,
+            c::CsumType::crc64_nonzero |
+            c::CsumType::crc64 |
+            c::CsumType::xxhash                => 8,
+            c::CsumType::chacha20_poly1305_80  => 10,
+            c::CsumType::chacha20_poly1305_128 => 16,
             _ => return None,
         })
     }
@@ -204,15 +204,15 @@ impl c::bch_csum_type {
     /// bch2_checksum_merge() - so an extent with it can merge:
     /// bch2_checksum_mergeable().
     pub fn mergeable(self) -> bool {
-        matches!(self, c::bch_csum_type::none |
-                       c::bch_csum_type::crc32c |
-                       c::bch_csum_type::crc64)
+        matches!(self, c::CsumType::none |
+                       c::CsumType::crc32c |
+                       c::CsumType::crc64)
     }
 
     /// Whether @fs can use it - a type this version knows, and an encryption
     /// type only with the key loaded: bch2_checksum_type_valid().
     pub fn valid(self, fs: &Fs) -> bool {
-        self.0 < c::bch_csum_type::NR && (!self.is_encryption() || fs.encryption_key().is_some())
+        self.0 < c::CsumType::NR && (!self.is_encryption() || fs.encryption_key().is_some())
     }
 
     /// @data's checksum, of a type that takes no key - nor so a nonce, or a
@@ -245,7 +245,7 @@ impl c::bch_csum_type {
 impl c::bch_csum {
     /// As many of its bytes as a @ty checksum has, in hex - all 16, for a
     /// type this version doesn't know: bch2_csum_to_text().
-    pub fn to_text(&self, out: &mut Printbuf, ty: c::bch_csum_type) {
+    pub fn to_text(&self, out: &mut Printbuf, ty: c::CsumType) {
         let bytes = crate::util::vstructs::plain_bytes(self);
         for b in &bytes[..ty.bytes().unwrap_or(16) as usize] {
             write!(out, "{b:02x}");
@@ -253,20 +253,20 @@ impl c::bch_csum {
     }
 }
 
-pub fn csum_err_msg(out: &mut Printbuf, ty: c::bch_csum_type, expected: c::bch_csum, got: c::bch_csum) {
+pub fn csum_err_msg(out: &mut Printbuf, ty: c::CsumType, expected: c::bch_csum, got: c::bch_csum) {
     write!(out, "checksum error, type {ty}: got ");
     got.to_text(out, ty);
     write!(out, " should be ");
     expected.to_text(out, ty);
 }
 
-impl c::bch_csum_opt {
+impl c::CsumOpt {
     /// The checksum type it writes, for data or metadata - metadata's crcs
     /// are the nonzero variants: bch2_csum_opt_to_type(). An unknown opt is
     /// an incompat feature, so warned about, and crc32c.
-    pub fn to_type(self, fs: &Fs, data: bool) -> c::bch_csum_type {
-        use c::bch_csum_opt as o;
-        use c::bch_csum_type as t;
+    pub fn to_type(self, fs: &Fs, data: bool) -> c::CsumType {
+        use c::CsumOpt as o;
+        use c::CsumType as t;
         match self {
             o::none   => t::none,
             o::crc32c => if data { t::crc32c } else { t::crc32c_nonzero },
@@ -284,51 +284,51 @@ impl Fs {
     /// The checksum type data written with @opts gets - none for nocow, which
     /// can't checksum what it overwrites in place, and encrypted on an
     /// encrypted filesystem.
-    pub fn data_checksum_type(&self, opts: &c::bch_inode_opts) -> c::bch_csum_type {
+    pub fn data_checksum_type(&self, opts: &c::bch_inode_opts) -> c::CsumType {
         if opts.nocow != 0 {
-            return c::bch_csum_type::none;
+            return c::CsumType::none;
         }
         if self.sb.encryption_type.get() != 0 {
             return if self.opts().wide_macs.get() != 0 {
-                c::bch_csum_type::chacha20_poly1305_128
+                c::CsumType::chacha20_poly1305_128
             } else {
-                c::bch_csum_type::chacha20_poly1305_80
+                c::CsumType::chacha20_poly1305_80
             };
         }
-        c::bch_csum_opt(opts.data_checksum.into()).to_type(self, true)
+        c::CsumOpt(opts.data_checksum.into()).to_type(self, true)
     }
 
-    pub fn meta_checksum_type(&self) -> c::bch_csum_type {
+    pub fn meta_checksum_type(&self) -> c::CsumType {
         if self.sb.encryption_type.get() != 0 {
-            return c::bch_csum_type::chacha20_poly1305_128;
+            return c::CsumType::chacha20_poly1305_128;
         }
-        c::bch_csum_opt(self.opts().metadata_checksum.get().into()).to_type(self, false)
+        c::CsumOpt(self.opts().metadata_checksum.get().into()).to_type(self, false)
     }
 
     /// The checksum type data reconciled to @r is written with - encrypted,
     /// whatever @r says, on an encrypted filesystem: bch2_data_checksum_type_rb().
-    pub fn data_checksum_type_rb(&self, r: &c::bch_extent_reconcile) -> c::bch_csum_type {
+    pub fn data_checksum_type_rb(&self, r: &c::bch_extent_reconcile) -> c::CsumType {
         if self.sb.encryption_type.get() != 0 {
             return if self.opts().wide_macs.get() != 0 {
-                c::bch_csum_type::chacha20_poly1305_128
+                c::CsumType::chacha20_poly1305_128
             } else {
-                c::bch_csum_type::chacha20_poly1305_80
+                c::CsumType::chacha20_poly1305_80
             };
         }
-        c::bch_csum_opt(r.data_checksum().into()).to_type(self, true)
+        c::CsumOpt(r.data_checksum().into()).to_type(self, true)
     }
 
     /// @data's checksum of type @ty, with @nonce - an encryption type's under
     /// the filesystem's key. A type this version doesn't know checksums to
     /// zero.
-    pub fn checksum(&self, ty: c::bch_csum_type, nonce: Nonce, data: &[u8]) -> c::bch_csum {
+    pub fn checksum(&self, ty: c::CsumType, nonce: Nonce, data: &[u8]) -> c::bch_csum {
         checksum(Some(self), ty, nonce, data)
     }
 
     /// The checksum of @r's data. As checksum(). Not inlined: a Csum is 344
     /// bytes, and the write path, where it's called from, is deep.
     #[inline(never)]
-    pub fn checksum_range(&self, ty: c::bch_csum_type, nonce: Nonce, r: BioRange<'_>) -> c::bch_csum {
+    pub fn checksum_range(&self, ty: c::CsumType, nonce: Nonce, r: BioRange<'_>) -> c::bch_csum {
         let mut csum = Csum::new(Some(self), ty, nonce);
         for chunk in r {
             // SAFETY: the chunk's bytes, mapped
@@ -390,7 +390,7 @@ impl Fs {
     fn chacha20_key(&self) -> Result<&c::bch_key, BchError> {
         let Some(key) = self.encryption_key() else {
             crate::fs_inconsistent!(self, "attempting to encrypt without encryption key");
-            return self.throw(bch_errcode::BCH_ERR_no_encryption_key);
+            return self.throw(Errcode::BCH_ERR_no_encryption_key);
         };
         Ok(key)
     }
@@ -398,7 +398,7 @@ impl Fs {
     /// @data encrypted with @ty under the filesystem's key - or decrypted,
     /// ChaCha20 being its own inverse. Nothing, for a type that isn't
     /// encryption.
-    pub fn encrypt(&self, ty: c::bch_csum_type, nonce: Nonce, data: &mut [u8]) -> Result<(), BchError> {
+    pub fn encrypt(&self, ty: c::CsumType, nonce: Nonce, data: &mut [u8]) -> Result<(), BchError> {
         if ty.is_encryption() {
             chacha20(self.chacha20_key()?, nonce, data);
         }
@@ -436,7 +436,7 @@ impl Fs {
                           len_a: u32, len_b: u32, new_csum_type: u32) -> Result<(), BchError> {
         use crate::data::ptrs::{crc_is_compressed, extent_nonce};
         let fs = self;
-        let (old_ty, new_ty) = (c::bch_csum_type(crc_old.csum_type.into()), c::bch_csum_type(new_csum_type));
+        let (old_ty, new_ty) = (c::CsumType(crc_old.csum_type.into()), c::CsumType(new_csum_type));
         let sectors = bio.raw().bi_iter.bi_size >> 9;
 
         assert!(len_a + len_b <= sectors, "rechecksumming {len_a} + {len_b} sectors of a bio of {sectors}");
@@ -474,7 +474,7 @@ impl Fs {
                                  crc_old.csum.hi.get(), crc_old.csum.lo.get(), merged.hi.get(), merged.lo.get());
                 crate::warn_on!(true);
             }
-            return fs.throw(bch_errcode::BCH_ERR_recompute_checksum);
+            return fs.throw(Errcode::BCH_ERR_recompute_checksum);
         }
 
         let mut crc_nonce = u32::from(crc_old.nonce);
@@ -507,7 +507,7 @@ impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
     fn validate(_sb: &c::bch_sb<Unvalidated>, crypt: &c::bch_sb_field_crypt<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let kdf = crypt.bch_crypt_kdf_type();
-        sb_err_on!(err, kdf != u64::from(c::bch_kdf_types::BCH_KDF_SCRYPT.0), BCH_ERR_invalid_sb_crypt,
+        sb_err_on!(err, kdf != u64::from(c::KdfType::BCH_KDF_SCRYPT.0), BCH_ERR_invalid_sb_crypt,
                    "bad kdf type {kdf}")?;
         Ok(())
     }
@@ -534,7 +534,7 @@ impl c::bch_sb_field_crypt {
     /// unencrypted - formatted with --no_passphrase - never had any, so this
     /// has to run before the first passphrase is set on it.
     pub fn kdf_init(&mut self) {
-        self.set_bch_crypt_kdf_type(c::bch_kdf_types::BCH_KDF_SCRYPT.0.into());
+        self.set_bch_crypt_kdf_type(c::KdfType::BCH_KDF_SCRYPT.0.into());
         self.set_bch_kdf_scrypt_n(16384u64.ilog2().into());
         self.set_bch_kdf_scrypt_r(8u64.ilog2().into());
         self.set_bch_kdf_scrypt_p(16u64.ilog2().into());
@@ -542,7 +542,7 @@ impl c::bch_sb_field_crypt {
 
     pub fn derive_passphrase(&self, passphrase: &[u8]) -> Result<c::bch_key, BchError> {
         let kdf = self.bch_crypt_kdf_type();
-        assert!(kdf == u64::from(c::bch_kdf_types::BCH_KDF_SCRYPT.0), "unknown kdf type {kdf}");
+        assert!(kdf == u64::from(c::KdfType::BCH_KDF_SCRYPT.0), "unknown kdf type {kdf}");
 
         /*
          * Stored as log2, so r and p of 1 are legal and only N can be
@@ -555,7 +555,7 @@ impl c::bch_sb_field_crypt {
         if n_log >= 64 || r_log >= 32 || p_log >= 32 {
             std::eprintln!("cannot derive a key from a passphrase: scrypt parameters out of range \
                             (N=2^{n_log}, r=2^{r_log}, p=2^{p_log})");
-            return Err(bch_errcode::BCH_ERR_crypt_kdf_failed.into());
+            return Err(Errcode::BCH_ERR_crypt_kdf_failed.into());
         }
         let r = 1u64 << r_log;
         let p = 1u64 << p_log;
@@ -566,7 +566,7 @@ impl c::bch_sb_field_crypt {
                  parameters (N=1, r={r}, p={p}; N must be at least 2). Its master key\n\
                  is stored unencrypted, and whatever is setting a passphrase did not\n\
                  initialize the KDF parameters first.");
-            return Err(bch_errcode::BCH_ERR_EINVAL_crypt_no_kdf_params.into());
+            return Err(Errcode::BCH_ERR_EINVAL_crypt_no_kdf_params.into());
         }
 
         let salt = b"bcache\0";
@@ -579,7 +579,7 @@ impl c::bch_sb_field_crypt {
         if ret != 0 {
             std::eprintln!("scrypt returned {ret} ({}) deriving a key with N={}, r={r}, p={p}",
                            std::io::Error::last_os_error(), 1u64 << n_log);
-            return Err(bch_errcode::BCH_ERR_crypt_kdf_failed.into());
+            return Err(Errcode::BCH_ERR_crypt_kdf_failed.into());
         }
         Ok(key)
     }
@@ -654,7 +654,7 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
             Ok(key) => key,
             Err(e) => {
                 eprintln!("error deriving key from passphrase: {e}");
-                return Some(Err(BchError::from(c::bch_errcode::BCH_ERR_crypt_kdf_failed)));
+                return Some(Err(BchError::from(c::Errcode::BCH_ERR_crypt_kdf_failed)));
             }
         };
         let mut sb_key = crypt.key.clone();
@@ -676,7 +676,7 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
         Err(e)                => format!("error reading passphrase: {e}"),
     };
     eprintln!("{why}");
-    Err(c::bch_errcode::BCH_ERR_no_encryption_key.into())
+    Err(c::Errcode::BCH_ERR_no_encryption_key.into())
 }
 
 /// The user's key, for @sb: from the keyring - or in userspace, failing
@@ -749,8 +749,8 @@ pub fn encryption_init(fs: &Fs, user_key: Option<&c::bch_key>) -> Result<(), Bch
 
 /// Whether checksum type @t is one this version has, and one @fs can use.
 pub(crate) fn checksum_type_valid(fs: &Fs, t: u64) -> bool {
-    t < c::bch_csum_type::NR.into() &&
-        !(c::bch_csum_type(t as u32).is_encryption() && fs.encryption_key().is_none())
+    t < c::CsumType::NR.into() &&
+        !(c::CsumType(t as u32).is_encryption() && fs.encryption_key().is_none())
 }
 
 // ── Turning encryption on and off ────────────────────────────────────────
@@ -765,7 +765,7 @@ pub(crate) fn checksum_type_valid(fs: &Fs, t: u64) -> bool {
 pub fn disable_encryption(fs: &Fs) -> Result<(), BchError> {
     let mut sb = fs.sb_lock();
     let Some(crypt) = sb.field::<c::bch_sb_field_crypt>() else {
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_disable_encryption_no_crypt);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_disable_encryption_no_crypt);
     };
     // XXX: as C had it - but a key that isn't encrypted is the one that has
     // nothing to do, so this looks inverted
@@ -803,7 +803,7 @@ pub fn enable_encryption(fs: &Fs, keyed: bool) -> Result<(), BchError> {
     let u64s = (size_of::<c::bch_sb_field_crypt>() / size_of::<u64>()) as u32;
     match fs.sb_resize(&mut sb).field_get_minsize::<c::bch_sb_field_crypt>(u64s) {
         Some(crypt) => crypt.key = sb_key,
-        None => return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_crypt),
+        None => return fs.throw(Errcode::BCH_ERR_ENOSPC_sb_crypt),
     }
     sb.sb_mut().set_encryption_type(1);
 

@@ -14,7 +14,7 @@ use core::sync::atomic::AtomicI32;
 #[bch_enum(closed)]
 #[prefix(SECTOR_)]
 #[repr(u32)]
-pub enum bch_folio_sector_state {
+pub enum FolioSectorState {
     unallocated,
     reserved,
     dirty,
@@ -22,7 +22,7 @@ pub enum bch_folio_sector_state {
     allocated,
 }
 
-impl bch_folio_sector_state {
+impl FolioSectorState {
     pub fn dirty(self) -> Self {
         match self {
             Self::unallocated => Self::dirty,
@@ -61,7 +61,7 @@ nest! {
             replicas_reserved: u4,
         },
         /*
-         * FIXME: a bch_folio_sector_state, once buffered.c is Rust: C can't
+         * FIXME: a FolioSectorState, once buffered.c is Rust: C can't
          * have it as one - an enum bitfield takes the enum's alignment, and
          * would make this 4 bytes, not 2.
          */

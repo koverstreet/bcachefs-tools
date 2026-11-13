@@ -83,7 +83,7 @@ fn fix_work_btree(t: &TransAttempt<'_, '_>, want: Option<Btree>, pos: Bpos,
 /// changes while the work's pending. @bp's made @want, its phys btree entries
 /// moved with them: backpointer_set_reconcile_phys().
 fn backpointer_set_reconcile_phys(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>,
-                                  want: c::reconcile_work_id) -> Result<(), BchError> {
+                                  want: c::ReconcileWorkId) -> Result<(), BchError> {
     let have = bp.v().reconcile_work_phys();
 
     let mut n = t.bkey_make_mut_noupdate(bp)?;
@@ -100,7 +100,7 @@ fn backpointer_set_reconcile_phys(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Ba
 
 /// @bp's reconcile phys bits, not @want - for @extent, if it's found -
 /// reported, and fixed: whether they were. reconcile_phys_wrong().
-fn reconcile_phys_wrong(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>, want: c::reconcile_work_id,
+fn reconcile_phys_wrong(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>, want: c::ReconcileWorkId,
                         extent: Option<BkeySC<'_>>) -> Result<bool, BchError> {
     let fs = t.fs();
     let for_extent = Msg(|out: &mut Printbuf| if let Some(e) = extent {
@@ -189,7 +189,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
         return Ok(());
     }
 
-    let work_id = data_k.map_or(c::reconcile_work_id::none, |k| k.reconcile_work_id(fs));
+    let work_id = data_k.map_or(c::ReconcileWorkId::none, |k| k.reconcile_work_id(fs));
     let want = work_id.btree();
     let set = btrees_set(&work);
 
@@ -207,13 +207,13 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
 
     let Some(data_k) = data_k else { return Ok(()) };
 
-    if work_id.phys() != c::reconcile_work_id::none {
+    if work_id.phys() != c::ReconcileWorkId::none {
         check_extent_reconcile_phys(t, btree, data_k, last_flushed)?;
     }
 
     let opts = get_io_opts(t, Some(&mut **s), data_k)?;
     update_reconcile_opts(t, Some(&mut **s), &opts, data_iter, 0, data_k,
-                          c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other)
+                          c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)
 }
 
 /// Data btree @btree against the work btrees: check_reconcile_work_data_btree().
@@ -286,13 +286,13 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
     let deleted = BkeyI::<c::Deleted>::at(pos);
 
     let mut bp = bp_k.and_then(|k| k.arm::<c::Backpointer>());
-    let mut w = bp.map_or(c::reconcile_work_id::none, |bp| bp.v().reconcile_work_phys());
+    let mut w = bp.map_or(c::ReconcileWorkId::none, |bp| bp.v().reconcile_work_phys());
 
     // The "set, shouldn't be" direction: what the bits should be is what the
     // backpointer's extent says, computed as extent_ptr_to_bp() does - so
     // this and the data btrees' direction can't disagree. Only backpointers
     // with bits set pay for the lookup.
-    if let Some(bp_v) = bp.filter(|_| w != c::reconcile_work_id::none) {
+    if let Some(bp_v) = bp.filter(|_| w != c::ReconcileWorkId::none) {
         let mut iter = BtreeIter::uninit();
         match backpointer_get_key(t, bp_v, &mut iter, BtreeIterFlags::empty(), last_flushed.borrow())? {
             None => {
@@ -300,7 +300,7 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
                 // and may have deleted it, committing - don't touch it again.
                 // Its phys btree entry goes below.
                 bp = None;
-                w = c::reconcile_work_id::none;
+                w = c::ReconcileWorkId::none;
             }
             Some((_, k)) => {
                 let want = bp_reconcile_phys(fs, bp_v.v().level.into(), bp_v.k.p.inode as u32, k);
@@ -370,7 +370,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
 
     let opts = get_io_opts(t, None, k.into())?;
     update_reconcile_opts(t, None, &opts, iter, level, k.into(),
-                          c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other)?;
+                          c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)?;
 
     let bp_pos = k.reconcile_bp_pos(fs);
     // @k, with its reconcile_bp entry made @idx, as the pointer to its node
@@ -451,7 +451,7 @@ fn check_reconcile_work_btrees(trans: &TransGuard<'_>) -> Result<(), BchError> {
 /// through reconcile_bp_get_key(), which reports and deletes one whose
 /// pointer isn't there or isn't its.
 fn check_reconcile_btree_bps(trans: &TransGuard<'_>) -> Result<(), BchError> {
-    use c::reconcile_work_id as w;
+    use c::ReconcileWorkId as w;
     let fs = trans.fs();
     fs.recovery.progress.init(fs, c"check_reconcile_btree_bps", &[Btree::reconcile_scan], &[]);
 
@@ -538,7 +538,7 @@ pub fn rotational_changed(fs: &Fs, ca: &Dev) {
     }
 
     if let Err(e) = crate::init::passes::run_explicit(fs, &mut msg, RecoveryPass::check_reconcile_work,
-                                                      c::bch_run_recovery_pass_flags::from_bits_retain(0)) {
+                                                      c::RunRecoveryPassFlags::from_bits_retain(0)) {
         write!(msg, "error scheduling check_reconcile_work: {e}\n");
         msg.set_level(LogLevel::ERR);
     }

@@ -484,7 +484,7 @@ use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, Loop
                          UpdateTriggerFlags};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -1402,7 +1402,7 @@ impl TransAttempt<'_, '_> {
 #[cold]
 fn inval_bucket_key(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     crate::fs_inconsistent!(fs, "reference to invalid bucket\n{}", k.to_text(fs));
-    fs.throw(bch_errcode::BCH_ERR_trigger_alloc)
+    fs.throw(Errcode::BCH_ERR_trigger_alloc)
 }
 
 /// stripe_refcount counts the bucket_to_stripe entries for the bucket. Gone
@@ -1442,7 +1442,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         return Ok(());
     }
 
-    let ca = fs.dev_bucket_tryget(p).map_err(|_| fs.err(bch_errcode::BCH_ERR_trigger_alloc))?;
+    let ca = fs.dev_bucket_tryget(p).map_err(|_| fs.err(Errcode::BCH_ERR_trigger_alloc))?;
 
     let old_a = alloc_to_v4(op.old);
     // A copy, for gc, which only reads it - its keys are the btree's, of any
@@ -1459,7 +1459,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
                 prt!(msg, "alloc trigger in {}: key isn't all of a current alloc_v4 - not from alloc_to_v4_mut()\n{}",
                      t.fn_name(), BkeySC::from(&op.new).to_text(fs));
                 fs.emergency_read_only(&mut msg);
-                return fs.throw(bch_errcode::BCH_ERR_emergency_ro);
+                return fs.throw(Errcode::BCH_ERR_emergency_ro);
             }
         }
     };
@@ -1498,7 +1498,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         // re-establishes bucket state from the stripes and backpointers, and
         // makes these transitions itself - need_discard to parity, re-marking
         // a stripe's parity bucket - so not while it runs
-        let in_fsck = fs.flags.get(c::bch_fs_flags::in_fsck);
+        let in_fsck = fs.flags.get(c::FsFlag::in_fsck);
 
         if !in_fsck && unlikely(old_a.stripe_refcount != 0 && new_a.stripe_refcount == 0) {
             let new = new_key(new_a);

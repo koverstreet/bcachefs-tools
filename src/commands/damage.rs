@@ -5,7 +5,7 @@
 // damaged finds the files - cost proportional to recorded damage,
 // not tree size - and BCHFS_IOC_GET_DAMAGE per file returns its
 // accumulated error list (unioned across ancestor snapshots) as
-// bch_sb_error_id, printed with the same names fsck and the superblock
+// SbErrorId, printed with the same names fsck and the superblock
 // error counters use.
 
 use std::ffi::CStr;

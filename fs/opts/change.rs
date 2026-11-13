@@ -8,10 +8,10 @@
 
 use crate::format::{MemberState, SbFeature};
 use crate::fs::Dev;
-use super::{opt_id, opt_to_text, Opt, OPTS};
+use super::{opt_to_text, Opt, OptId, OPTS};
 use crate::c;
 use crate::data::compress;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::ExclusiveGuard;
 use crate::sb::io::SbFieldOps;
@@ -20,19 +20,19 @@ use crate::util::printbuf::Printbuf;
 impl Fs {
     /// Before setting option @id to @v, for device @ca or the filesystem,
     /// without an OptChange - offline: as OptChange::pre_set().
-    pub fn opt_hook_pre_set(&self, ca: Option<&Dev>, id: opt_id, v: u64) -> Result<(), BchError> {
+    pub fn opt_hook_pre_set(&self, ca: Option<&Dev>, id: OptId, v: u64) -> Result<(), BchError> {
         opt_hook_pre_set(self, ca, 0, id, v, true)
     }
 }
 
 /// The reconcile scans an option change needs, registered before it and
 /// done after: those of what it changes the io options of.
-fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, post: bool)
+fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bool)
     -> Result<(), BchError>
 {
     use c::reconcile_scan as scan;
 
-    if !fs.flags.get(c::bch_fs_flags::started) {
+    if !fs.flags.get(c::FsFlag::started) {
         return Ok(());
     }
 
@@ -40,31 +40,31 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, post: b
     let dev = || u32::from(ca.expect("a device option").dev_idx);
 
     match id {
-        opt_id::Opt_foreground_target |
-        opt_id::Opt_background_target |
-        opt_id::Opt_promote_target |
-        opt_id::Opt_compression |
-        opt_id::Opt_background_compression |
-        opt_id::Opt_data_checksum |
-        opt_id::Opt_data_replicas |
-        opt_id::Opt_erasure_code |
-        opt_id::Opt_nocow => bracket(if inum == 0 {
+        OptId::Opt_foreground_target |
+        OptId::Opt_background_target |
+        OptId::Opt_promote_target |
+        OptId::Opt_compression |
+        OptId::Opt_background_compression |
+        OptId::Opt_data_checksum |
+        OptId::Opt_data_replicas |
+        OptId::Opt_erasure_code |
+        OptId::Opt_nocow => bracket(if inum == 0 {
             scan::fs()
         } else {
             scan::from_arm::<c::reconcile_scan_inum>(inum)
         })?,
-        opt_id::Opt_metadata_target |
-        opt_id::Opt_metadata_checksum |
-        opt_id::Opt_metadata_replicas => bracket(scan::from_arm(c::reconcile_scan_metadata {}))?,
-        opt_id::Opt_durability => {
+        OptId::Opt_metadata_target |
+        OptId::Opt_metadata_checksum |
+        OptId::Opt_metadata_replicas => bracket(scan::from_arm(c::reconcile_scan_metadata {}))?,
+        OptId::Opt_durability => {
             if !post && v > ca.expect("a device option").mi.get().durability.into() {
                 fs.request_scan(scan::from_arm(c::reconcile_scan_pending {}), false)?;
             }
             bracket(scan::from_arm::<c::reconcile_scan_device>(dev()))?;
         }
         // The cap is in stripe.can_widen: existing stripes converge to it
-        opt_id::Opt_ec_max_data_blocks => bracket(scan::from_arm(c::reconcile_scan_stripes {}))?,
-        opt_id::Opt_label | opt_id::Opt_failure_domain => {
+        OptId::Opt_ec_max_data_blocks => bracket(scan::from_arm(c::reconcile_scan_stripes {}))?,
+        OptId::Opt_label | OptId::Opt_failure_domain => {
             // The in-memory label tree before the scan wakes: reconcile reads
             // the groups' devs masks. An error (ENOMEM) leaves it stale until
             // the next superblock swap
@@ -74,7 +74,7 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, post: b
 
             // Only the label is in targets: a failure domain only spreads
             // future allocations
-            if id == opt_id::Opt_label {
+            if id == OptId::Opt_label {
                 bracket(scan::from_arm(c::reconcile_scan_pending {}))?;
                 // Data on the device may now be outside its target
                 bracket(scan::from_arm::<c::reconcile_scan_device>(dev()))?;
@@ -88,35 +88,35 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, post: b
 /// Before setting option @id to @v - for device @ca, or inode @inum, or with
 /// neither (0) the filesystem: what it needs, and whether it may be; with
 /// @change, the scans it needs registered.
-fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, change: bool)
+fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, change: bool)
     -> Result<(), BchError>
 {
     match id {
-        opt_id::Opt_state => {
+        OptId::Opt_state => {
             if let Some(ca) = ca {
                 return fs.dev_set_state(ca, MemberState(v as u8), c::BCH_FORCE_IF_DEGRADED, None);
             }
         }
-        opt_id::Opt_compression | opt_id::Opt_background_compression => {
+        OptId::Opt_compression | OptId::Opt_background_compression => {
             compress::check_set_has_compressed_data(fs, v as u8)?;
         }
-        opt_id::Opt_erasure_code => {
+        OptId::Opt_erasure_code => {
             if v != 0 {
                 fs.check_set_feature(SbFeature::ec);
             }
         }
-        opt_id::Opt_rotational => {
+        OptId::Opt_rotational => {
             // Offline: there's no post hook, and nothing to race with
             if let Some(ca) = ca {
-                if change && v != u64::from(ca.mi.get().rotational) && !fs.flags.get(c::bch_fs_flags::started) {
+                if change && v != u64::from(ca.mi.get().rotational) && !fs.flags.get(c::FsFlag::started) {
                     crate::data::reconcile::check::rotational_changed(fs, ca);
                 }
             }
         }
-        opt_id::Opt_casefold_disabled => {
+        OptId::Opt_casefold_disabled => {
             if v != 0 && fs.sb.features.get() & 1 << SbFeature::casefolding.0 != 0 {
                 crate::bch_err!(fs, "cannot mount with casefolding disabled: casefolding already in use");
-                return fs.throw(bch_errcode::BCH_ERR_casefolding_in_use);
+                return fs.throw(Errcode::BCH_ERR_casefolding_in_use);
             }
         }
         _ => {}
@@ -138,8 +138,8 @@ pub(crate) fn opts_hooks_pre_set(fs: &Fs) -> Result<(), BchError> {
 
 /// After setting option @id to @v, as opt_hook_pre_set(): logged, and what
 /// the change starts.
-fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
-    if fs.flags.get(c::bch_fs_flags::started) {
+fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
+    if fs.flags.get(c::FsFlag::started) {
         let mut buf = Printbuf::new();
         write!(buf, "opt change: {}=", id.opt().name);
         opt_to_text(&mut buf, Some(fs), None, id.opt(), v, 0);
@@ -157,9 +157,9 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
     let _ = opt_hook_io(fs, ca, inum, id, v, true);
 
     match id {
-        opt_id::Opt_reconcile_enabled | opt_id::Opt_read_only => fs.reconcile_wakeup(),
-        opt_id::Opt_copygc_enabled => fs.copygc_wakeup(),
-        opt_id::Opt_discard => {
+        OptId::Opt_reconcile_enabled | OptId::Opt_read_only => fs.reconcile_wakeup(),
+        OptId::Opt_copygc_enabled => fs.copygc_wakeup(),
+        OptId::Opt_discard => {
             if ca.is_none() {
                 let mut sb = fs.sb_lock();
                 for ca in fs.members() {
@@ -168,10 +168,10 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
                 fs.write_super(&mut sb);
             }
         }
-        opt_id::Opt_durability => {
+        OptId::Opt_durability => {
             let state = fs.state_lock_read();
             if let Some(ca) = ca {
-                if fs.flags.get(c::bch_fs_flags::rw) && ca.is_online() &&
+                if fs.flags.get(c::FsFlag::rw) && ca.is_online() &&
                    ca.mi.get().state == MemberState::rw {
                     fs.dev_allocator_set_rw(ca.dev_idx.into(), true);
                     state.recalc_capacity();
@@ -180,20 +180,20 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
         }
         // XXX: in the future we'll likely want to do compatible upgrades at
         // runtime as well, but right now there's nothing that does that
-        opt_id::Opt_version_upgrade => {
-            if v == c::bch_version_upgrade_opts::incompatible.0.into() {
+        OptId::Opt_version_upgrade => {
+            if v == c::VersionUpgradeOpt::incompatible.0.into() {
                 fs.upgrade_incompat();
             }
         }
         // Online: the new value has to be live before the pass runs
-        opt_id::Opt_rotational => {
+        OptId::Opt_rotational => {
             if let Some(ca) = ca {
-                if fs.flags.get(c::bch_fs_flags::started) {
+                if fs.flags.get(c::FsFlag::started) {
                     crate::data::reconcile::check::rotational_changed(fs, ca);
                 }
             }
         }
-        opt_id::Opt_btree_cache_shrinker_seeks => {
+        OptId::Opt_btree_cache_shrinker_seeks => {
             fs.btree.cache.set_shrinker_seeks(v as _);
         }
         _ => {}
@@ -225,11 +225,11 @@ impl<'f> OptChange<'f> {
     /// Before setting option @id to @v - for device @ca, or inode @inum, or
     /// with neither (0) the filesystem: records what the change needs, and
     /// fails if it may not.
-    pub fn pre_set(&mut self, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) -> Result<(), BchError> {
+    pub fn pre_set(&mut self, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) -> Result<(), BchError> {
         opt_hook_pre_set(self.fs, ca, inum, id, v, true)
     }
 
-    pub fn post_set(&self, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
+    pub fn post_set(&self, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
         opt_hook_post_set(self.fs, ca, inum, id, v)
     }
 

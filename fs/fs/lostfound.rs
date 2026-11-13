@@ -19,7 +19,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::dirent::{self, Dirent, DirentTarget, Dirents};
-use crate::errcode::{bch_errcode, BchError, Found};
+use crate::errcode::{Errcode, BchError, Found};
 use crate::{inode, inode_opts};
 use crate::namei;
 use crate::snapshots::{snapshot, subvolume};
@@ -58,7 +58,7 @@ fn lostfound_dirent(
         _ => {
             bch_err!(fs, "lost+found in snapshot {snapshot} is not a directory:\n  {}",
                      k.to_text(fs));
-            Err(fs.err(bch_errcode::BCH_ERR_ENOENT_not_directory))
+            Err(fs.err(Errcode::BCH_ERR_ENOENT_not_directory))
         }
     }
 }
@@ -72,7 +72,7 @@ fn find_snapshot_tree_subvol(t: &TransAttempt<'_, '_>, tree: u32) -> Result<u32,
                 ControlFlow::Break(Some(s.subvol.get())),
             _ => ControlFlow::Continue(()),
         }))?
-        .ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOENT_no_snapshot_tree_subvol))
+        .ok_or_else(|| t.fs().err(Errcode::BCH_ERR_ENOENT_no_snapshot_tree_subvol))
 }
 
 /// @msg goes out at err if this fails.
@@ -202,7 +202,7 @@ fn create_or_restore_lostfound(
 
     let Ok(Some(root_snapshot)) = fs.snapshots.live_descendent(tree_root) else {
         bch_err!(fs, "snapshot tree {tree} has no live snapshot, cannot create lost+found");
-        return Err(fs.err(bch_errcode::BCH_ERR_ENOENT_snapshot));
+        return Err(fs.err(Errcode::BCH_ERR_ENOENT_snapshot));
     };
 
     // One lost+found per tree works only if every branch inherits from where
@@ -210,7 +210,7 @@ fn create_or_restore_lostfound(
     if !snapshot::is_ancestor(t, snapshot, root_snapshot) {
         bch_err!(fs, "lost+found for snapshot {snapshot} belongs in snapshot {root_snapshot}, \
                       which it does not inherit from (snapshot tree {tree}, root snapshot {tree_root})");
-        return Err(fs.err(bch_errcode::BCH_ERR_snapshot_lostfound_unreachable));
+        return Err(fs.err(Errcode::BCH_ERR_snapshot_lostfound_unreachable));
     }
 
     // Hashing at root_snapshot with @snapshot's root_hash: check_dirents has
@@ -276,11 +276,11 @@ pub fn inode_should_reattach(inode: &c::bch_inode_unpacked) -> bool {
     // renamed after a snapshot, its old version is disconnected, as expected.
     // Taking a snapshot always rewrites the root inode, so a version with
     // has_child_snapshot is never the visible one.
-    if inode.bi_subvol != 0 && inode.flag(c::bch_inode_flags::has_child_snapshot) {
+    if inode.bi_subvol != 0 && inode.flag(c::InodeFlags::has_child_snapshot) {
         return false;
     }
 
-    !inode.has_backpointer() && !inode.flag(c::bch_inode_flags::unlinked)
+    !inode.has_backpointer() && !inode.flag(c::InodeFlags::unlinked)
 }
 
 /// Hide the dirent at @d_pos from @snapshot, a descendant of its snapshot,
@@ -368,7 +368,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     let Some(name) = chosen else {
         bch_err!(fs, "reattaching inode {}:{}: lost+found entries {base} through {base}.999 all taken",
                  inode.bi_inum, inode.bi_snapshot);
-        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
+        return Err(fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented));
     };
 
     // Not is_dir(): a subvolume root's DT_SUBVOL dirent doesn't count towards

@@ -139,7 +139,6 @@ macro_rules! __bkey_typed {
 BkeyType_arms!(__bkey_typed);
 
 #[bch_enum(flags)]
-#[c_name(bch_validate_flags)]
 #[prefix(BCH_VALIDATE_)]
 #[repr(u32)]
 pub enum ValidateFlags {
@@ -151,7 +150,7 @@ pub enum ValidateFlags {
 #[bch_enum(closed)]
 #[prefix(BKEY_VALIDATE_)]
 #[repr(u32)]
-pub enum bkey_validate_from {
+pub enum BkeyValidateFrom {
     unknown,
     superblock,
     journal,
@@ -167,7 +166,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16)]
         pub bits: pub struct bkey_validate_context_bits {
-            #[bits(8)] pub from: cs::bkey_validate_from,
+            #[bits(8)] pub from: cs::BkeyValidateFrom,
             #[bits(8, from = ValidateFlags::from_bits_retain)] pub flags: ValidateFlags,
         },
         pub level: u8,

@@ -24,7 +24,7 @@ use crate::c;
 use crate::data::ptrs::Ptrs;
 use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::data::reflink::Indirect;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::sb::errors::FsckFlags;
@@ -50,12 +50,12 @@ pub struct inode_opt_change {
     pub propagate: c::bkey_i_logged_op_inode_opt_propagate,
 }
 
-const NR: usize = c::inode_opt_id::NR as usize;
+const NR: usize = c::InodeOptId::NR as usize;
 
 struct Desc {
     name: &'static CStr,
     /// The filesystem option it is
-    opt:  c::bch_opt_id,
+    opt:  c::OptId,
     get:  fn(&c::bch_inode_unpacked) -> u64,
     set:  fn(&mut c::bch_inode_unpacked, u64),
 }
@@ -63,36 +63,36 @@ struct Desc {
 macro_rules! descs {
     ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { [$(Desc {
         name: c_str(concat!(stringify!($name), "\0")),
-        opt:  c::bch_opt_id::[<Opt_ $name>],
+        opt:  c::OptId::[<Opt_ $name>],
         get:  |inode| inode.[<bi_ $name>] as u64,
         set:  |inode, v| inode.[<bi_ $name>] = v as _,
     }),*] } };
 }
 
-/// In inode_opt_id's order.
-const DESCS: [Desc; NR] = c::inode_opt_id_arms!(descs);
+/// In InodeOptId's order.
+const DESCS: [Desc; NR] = c::InodeOptId_arms!(descs);
 
-/// An inode option: an inode_opt_id below inode_opt_id::NR.
+/// An inode option: an InodeOptId below InodeOptId::NR.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct InodeOpt(c::inode_opt_id);
+pub struct InodeOpt(c::InodeOptId);
 
 impl InodeOpt {
-    pub const fn of(id: c::inode_opt_id) -> Self {
-        assert!(id.0 < c::inode_opt_id::NR, "not an inode option");
+    pub const fn of(id: c::InodeOptId) -> Self {
+        assert!(id.0 < c::InodeOptId::NR, "not an inode option");
         InodeOpt(id)
     }
 
     pub fn all() -> impl Iterator<Item = InodeOpt> {
-        (0..c::inode_opt_id::NR).map(|i| InodeOpt(c::inode_opt_id(i)))
+        (0..c::InodeOptId::NR).map(|i| InodeOpt(c::InodeOptId(i)))
     }
 
     /// The inode option filesystem option @id is, if it's one: as
     /// bch2_opt_to_inode_opt().
-    pub fn from_opt_id(id: c::bch_opt_id) -> Option<InodeOpt> {
+    pub fn from_opt_id(id: c::OptId) -> Option<InodeOpt> {
         Self::all().find(|opt| opt.opt_id() == id)
     }
 
-    pub fn id(self) -> c::inode_opt_id {
+    pub fn id(self) -> c::InodeOptId {
         self.0
     }
 
@@ -104,7 +104,7 @@ impl InodeOpt {
         &DESCS[self.idx()]
     }
 
-    pub fn opt_id(self) -> c::bch_opt_id {
+    pub fn opt_id(self) -> c::OptId {
         self.desc().opt
     }
 
@@ -144,7 +144,7 @@ pub fn reinherit_attrs(dst: &mut c::bch_inode_unpacked, src: &c::bch_inode_unpac
     let mut ret = false;
 
     for opt in InodeOpt::all() {
-        if !dst.is_dir() && opt.id() == c::inode_opt_id::casefold {
+        if !dst.is_dir() && opt.id() == c::InodeOptId::casefold {
             continue;
         }
 
@@ -222,7 +222,7 @@ pub fn get_fs(fs: &Fs, metadata: bool) -> c::bch_inode_opts {
     macro_rules! get {
         ($(($name:ident, $($rest:tt)*)),* $(,)?) => { $(ret.$name = o.$name.get() as _;)* };
     }
-    c::inode_opt_id_arms!(get);
+    c::InodeOptId_arms!(get);
     ret.change_cookie = fs.opt_change_cookie.get();
 
     if metadata {
@@ -243,10 +243,10 @@ pub fn get_fs(fs: &Fs, metadata: bool) -> c::bch_inode_opts {
 pub fn opts_to_text(out: &mut Printbuf, fs: &Fs, opts: &c::bch_inode_opts) {
     macro_rules! values {
         ($(($name:ident, $($rest:tt)*)),* $(,)?) => { crate::paste! {
-            [$((c::bch_opt_id::[<Opt_ $name>], opts.$name as u64)),*]
+            [$((c::OptId::[<Opt_ $name>], opts.$name as u64)),*]
         } };
     }
-    for (i, (id, v)) in c::inode_opt_id_arms!(values).into_iter().enumerate() {
+    for (i, (id, v)) in c::InodeOptId_arms!(values).into_iter().enumerate() {
         if i != 0 {
             write!(out, ",");
         }
@@ -271,7 +271,7 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
             }
         )* } };
     }
-    c::inode_opt_id_arms!(get);
+    c::InodeOptId_arms!(get);
 
     /*
      * Forward compatibility: inodes written by newer versions may carry
@@ -281,7 +281,7 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
      * btree read time: that would reject valid inodes from newer
      * versions.)
      */
-    if unlikely(ret.data_checksum as u32 >= c::bch_csum_opt::NR) {
+    if unlikely(ret.data_checksum as u32 >= c::CsumOpt::NR) {
         ret.data_checksum = fs.opts.data_checksum.get() as _;
         ret.set_data_checksum_from_inode(false);
     }
@@ -425,7 +425,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
                 opts.[<set_ $name _from_inode>](old.[<$name _from_inode>]() != 0);
             )* } };
         }
-        c::bch_reconcile_opts_arms!(from_inode);
+        c::ReconcileOpt_arms!(from_inode);
 
         // The entry was written under the fixups of its day: today's may
         // have grown, and downstream needs a combination valid under them.
@@ -434,7 +434,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
         // A checksum or compression type we don't know is an incompat
         // feature, so shouldn't have mounted - this is for a versioning
         // mistake: the filesystem's options, as get_inode() falls back to.
-        if unlikely(opts.data_checksum as u32 >= c::bch_csum_opt::NR) {
+        if unlikely(opts.data_checksum as u32 >= c::CsumOpt::NR) {
             opts.data_checksum = fs.opts.data_checksum.get() as _;
             opts.set_data_checksum_from_inode(false);
         }
@@ -529,7 +529,7 @@ fn merge_into_ancestor(
             continue;
         }
 
-        if opt.id() == c::inode_opt_id::data_replicas {
+        if opt.id() == c::InodeOptId::data_replicas {
             v = v.max(claimed);
         } else if claimed != 0 && !src_is_master {
             continue;
@@ -596,7 +596,7 @@ fn propagate_one(
          * finding work is the upgrade, not a bug.
          */
         let mut flags = FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE;
-        if t.fs().sb.compat.get() & (1 << c::bch_sb_compat::inode_opts_propagated.0) == 0 {
+        if t.fs().sb.compat.get() & (1 << c::SbCompat::inode_opts_propagated.0) == 0 {
             flags |= FsckFlags::ERR_SILENT;
         }
 
@@ -761,7 +761,7 @@ impl c::inode_opt_change {
 /// No logged op - fsck reruns from the start anyway, and a begin in its climb
 /// would invalidate check_inodes()'s iterator.
 pub fn check_propagated(t: &TransAttempt<'_, '_>, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
-    if !inode.flag(c::bch_inode_flags::has_inode_opts) {
+    if !inode.flag(c::InodeFlags::has_inode_opts) {
         return Ok(());
     }
 
@@ -781,7 +781,7 @@ pub fn check_propagated(t: &TransAttempt<'_, '_>, inode: &c::bch_inode_unpacked)
      */
     if repaired {
         t.commit(None, CommitFlags::NO_ENOSPC)?;
-        return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
+        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested));
     }
 
     Ok(())

@@ -145,7 +145,7 @@ use crate::data::ec::stripe_new_blocks::new_stripe_key;
 use crate::data::ec::stripe_new_reuse::Reuse;
 use crate::data::ec::stripe_new_tasks::{stripe_done, stripe_task};
 use crate::data::moving::MovingIo;
-use crate::errcode::{bch_errcode, BchError, FirstErr};
+use crate::errcode::{Errcode, BchError, FirstErr};
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags};
 use crate::util::alloc::{AllocError, KBox, KVVec};
@@ -165,7 +165,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
-use c::ec_stripe_new_state as State;
+use c::EcStripeNewState as State;
 
 // ── A stripe being made ──────────────────────────────────────────────────
 
@@ -190,7 +190,7 @@ pub struct StripeNew {
     /// Why it's cancelled - a writer's IO failed, or its head gave up on it:
     /// the first error
     pub(crate) err:       FirstErr,
-    /// An ec_stripe_new_state
+    /// An EcStripeNewState
     state:                AtomicU32,
 
     #[pin]
@@ -317,7 +317,7 @@ pub(crate) struct Internal {
     maker:                Option<IoRef>,
 
     pub(crate) devs:      c::bch_devs_mask,
-    pub(crate) watermark: c::bch_watermark,
+    pub(crate) watermark: c::Watermark,
 
     pub(crate) allocated:           bool,
 
@@ -408,7 +408,7 @@ impl StripeNew {
     /// task, made - open: ec_new_stripe_alloc(). Its one io ref is its
     /// maker's, in @maker.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn alloc(fs: &Fs, devs: c::bch_devs_mask, watermark: c::bch_watermark, disk_label: u32, algorithm: u32,
+    pub(crate) fn alloc(fs: &Fs, devs: c::bch_devs_mask, watermark: c::Watermark, disk_label: u32, algorithm: u32,
              nr_data: u32, nr_parity: u32, blocksize: u32) -> Result<StripeNewBox, BchError> {
         let init = pin_init!(StripeNew {
             // SAFETY: its head, a repair on reconcile's thread - stopped
@@ -529,7 +529,7 @@ unsafe impl Refcount for StripeNew {
 
 impl Internal {
     /// Open, on @devs, at @watermark: its keys zeroed, for new_stripe_key().
-    fn new(devs: c::bch_devs_mask, watermark: c::bch_watermark) -> impl PinInit<Self> {
+    fn new(devs: c::bch_devs_mask, watermark: c::Watermark) -> impl PinInit<Self> {
         pin_init!(Internal {
             write:               None,
             task:                None,
@@ -574,7 +574,7 @@ impl Internal {
 
     /// Its parity's disk reservation: the stripe's sectors for each parity
     /// block, which a full stripe's data was reserved without.
-    pub(crate) fn reserve_parity(&mut self, stripe_fs: &BackRef<Fs>, flags: c::bch_reservation_flags)
+    pub(crate) fn reserve_parity(&mut self, stripe_fs: &BackRef<Fs>, flags: c::ReservationFlags)
         -> Result<(), BchError>
     {
         let v = self.new_stripe.stripe().v();
@@ -602,7 +602,7 @@ impl Internal {
                 Ok(Err(_)) => panic!("bucket {}:{} in two stripes being made", id.dev(), id.bucket()),
                 Err(AllocError) => {
                     self.buckets_del(fs);
-                    return fs.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_new_bucket);
+                    return fs.throw(Errcode::BCH_ERR_ENOMEM_stripe_new_bucket);
                 }
             }
         }

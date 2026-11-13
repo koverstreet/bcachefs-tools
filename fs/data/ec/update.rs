@@ -15,7 +15,7 @@ use crate::c;
 use crate::data::durability::drop_extra_durability;
 use crate::data::ec::stripe::{carried_blocks, ptr_in_block, Block};
 use crate::data::ptrs::{brand, BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, Ptrs, PtrsMut};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
@@ -130,7 +130,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
 
     if bp.v().level != 0 {
         fs_inconsistent!(fs, "found btree node in erasure coded bucket:\n{}", bp.untyped().to_text(fs));
-        return fs.throw(bch_errcode::BCH_ERR_erasure_coding_found_btree_node);
+        return fs.throw(Errcode::BCH_ERR_erasure_coding_found_btree_node);
     }
 
     let Some((iter, k)) = ext else {
@@ -222,7 +222,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
         })?;
     }
 
-    n.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other, 0)?;
+    n.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)?;
     t.update(iter, &n, UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
 
     count(&mut u.stats.done, bp);
@@ -287,7 +287,7 @@ pub(crate) fn stripe_update_extents<'k>(trans: &BtreeTrans<'_>, old: BkeySC<'k, 
     let carried = carried_blocks(old_block_map, old, new).or_else(|why| {
         bch_err!(fs, "stripe update: block map {old_block_map:?}: {why}\nold: {}\nnew: {}",
                  old.untyped().to_text(fs), new.untyped().to_text(fs));
-        fs.throw(bch_errcode::BCH_ERR_erasure_coding_stripe_update_err)
+        fs.throw(Errcode::BCH_ERR_erasure_coding_stripe_update_err)
     })?;
 
     trans.write_buffer_flush_sync()?;
@@ -304,8 +304,8 @@ pub(crate) fn stripe_update_extents<'k>(trans: &BtreeTrans<'_>, old: BkeySC<'k, 
 /// Making a stripe completes space already taken, and holds open buckets
 /// and writes until it's done: it can't wait behind the journal's free space
 /// throttle (dev_starved_watermark()), or a full filesystem deadlocks.
-pub(crate) fn create_watermark(w: c::bch_watermark) -> c::bch_watermark {
-    use c::bch_watermark as W;
+pub(crate) fn create_watermark(w: c::Watermark) -> c::Watermark {
+    use c::Watermark as W;
     if w as u32 > W::copygc as u32 { w } else { W::copygc }
 }
 
@@ -347,7 +347,7 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
         BkeySC::from(b).arm::<c::Stripe>().expect("a stripe, as read")
     }
     let map = &op.v.old_block_map[..old_blocks_nr.min(op.v.old_block_map.len())];
-    stripe_update_extents(trans, stripe(&old), stripe(&new), map, create_watermark(c::bch_watermark::normal).into())
+    stripe_update_extents(trans, stripe(&old), stripe(&new), map, create_watermark(c::Watermark::normal).into())
 }
 
 impl crate::btree::bkey::BkeyOps for c::LoggedOpStripeUpdate {

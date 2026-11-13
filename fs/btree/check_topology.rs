@@ -22,7 +22,7 @@ use crate::btree::path::{DownKey, LockedNode, NodePtr, PathIdx, Paths};
 use crate::btree::read::drop_keys_outside_node;
 use crate::btree::trans::BtreeTrans;
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, Bpos, Btree};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
 use crate::init::error::id;
@@ -150,7 +150,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
         }
 
         /* unhash, rehash */
-        fs.btree_node_transition_state(b.node(), c::btree_node_cache_state::FREEABLE)
+        fs.btree_node_transition_state(b.node(), c::BtreeNodeCacheState::FREEABLE)
             .expect("a node leaving the hash table, write locked");
         b.contents_mut().key.set_key(new.key());
         fs.btree_node_transition_state(b.node(), b.live_state()).expect("a node back into the hash table, write locked");
@@ -617,11 +617,11 @@ fn drop_root(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, k: &BkeyI) ->
         b.flags.set_permanent(false);
     }
 
-    let _ = fs.btree_node_transition_state(b.node(), c::btree_node_cache_state::FREEABLE);
+    let _ = fs.btree_node_transition_state(b.node(), c::BtreeNodeCacheState::FREEABLE);
 
     trans.node_unlock_write(&mut paths, idx, level);
     trans.node_unlock(&mut paths, idx, level);
-    paths[idx].l[level].b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_drop.into());
+    paths[idx].l[level].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_drop.into());
     trans.node_forget(&mut paths, b.node());
     Ok(())
 }

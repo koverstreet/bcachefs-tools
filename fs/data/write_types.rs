@@ -14,9 +14,9 @@ use crate::format::{Bpos, Bversion};
 
 #[bch_enum(closed)]
 #[prefix(__BCH_WRITE_)]
-#[mask(bch_write_flags: u32, prefix = BCH_WRITE_)]
+#[mask(WriteFlags: u32, prefix = BCH_WRITE_)]
 #[repr(u32)]
-pub enum __bch_write_flags {
+pub enum WriteFlagBit {
     alloc_nowait,
     cached,
     data_encoded,
@@ -104,7 +104,7 @@ nest! {
         #[init(bch_write_op_bits::new()
                .with_csum_type(fs.data_checksum_type(&opts).0 as u8)
                .with_compression_opt(opts.compression)
-               .with_watermark(c::bch_watermark::normal as u8))]
+               .with_watermark(c::Watermark::normal as u8))]
         #>[bitfield(u32, repr = NeBytes<3>, from = NeBytes::<3>::from_u32, into = NeBytes::<3>::to_u32)]
         pub bits: pub struct bch_write_op_bits {
             /*
@@ -178,7 +178,7 @@ nest! {
 
         /* Reserved at @res.nr_replicas, which is not @nr_replicas - see above */
         #[init(c::DiskReservation::new(unsafe { crate::util::backref::BackRef::new(fs).get() }))]
-        pub res: c::disk_reservation,
+        pub res: c::DiskReservation<'static>,
 
         pub open_buckets: c::open_buckets,
 
@@ -214,7 +214,7 @@ crate::has_closure!(c::bch_write_op, cl);
 /// A write point's writes, waiting for their index updates.
 pub type WriteOpList = crate::list!(c::bch_write_op, wp_list);
 
-const _: () = assert!((c::__bch_write_flags::convert_unwritten as u32) < u16::BITS,
+const _: () = assert!((c::WriteFlagBit::convert_unwritten as u32) < u16::BITS,
                       "the write flags don't fit in bch_write_op's flags");
 
 impl c::bch_write_op {

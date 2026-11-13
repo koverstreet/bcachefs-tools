@@ -2,21 +2,21 @@
 
 use super::{bch2_btree_pos_to_text, cached_node};
 use crate::btree::node::BtreeNode;
-use crate::btree::types::{bch_btree_cache_not_freed_reasons as NotFreed, BtreeCacheGuard, BtreeWriteType};
+use crate::btree::types::{BtreeCacheNotFreedReason as NotFreed, BtreeCacheGuard, BtreeWriteType};
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
 use crate::data_structures::list::Walk;
 use crate::debug::params::btree_shrinker_disabled;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
 use crate::prt;
 use crate::util::kernel::local_clock;
 use crate::util::time_stats::TimeStats;
 use bitflags::bitflags;
-use c::btree_node_cache_state as State;
-use c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read};
+use c::BtreeNodeCacheState as State;
+use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
 
 /*
  * Dirty nodes are journal reclaim's to write - but during journal replay it
@@ -27,9 +27,9 @@ use c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read};
  * what it can't free it writes (btree_cache_replay_write()).
  */
 fn replay_writeback(fs: &Fs) -> bool {
-    !fs.journal.flags.get(c::journal_flags::replay_done) &&
-        fs.flags.get(c::bch_fs_flags::rw) &&
-        !fs.flags.get(c::bch_fs_flags::going_ro)
+    !fs.journal.flags.get(c::JournalFlag::replay_done) &&
+        fs.flags.get(c::FsFlag::rw) &&
+        !fs.flags.get(c::FsFlag::going_ro)
 }
 
 impl c::bch_fs_btree_cache {
@@ -50,7 +50,7 @@ bitflags! {
 impl Fs {
     fn noreclaim(&self, lists: &mut BtreeCacheGuard<'_>, flags: ReclaimFlags, reason: NotFreed) -> BchError {
         lists.not_freed[reason as usize] += flags.contains(ReclaimFlags::SHRINKER) as u64;
-        self.err(bch_errcode::BCH_ERR_ENOMEM_btree_node_reclaim)
+        self.err(Errcode::BCH_ERR_ENOMEM_btree_node_reclaim)
     }
 
     fn reclaim_checks(&self, lists: &mut BtreeCacheGuard<'_>, b: &BtreeNode, flags: ReclaimFlags)
@@ -194,7 +194,7 @@ impl Fs {
         lists.nr_freed     += freed;
         lists.nr_requested += nr;
 
-        self.times[c::bch_time_stats::btree_node_cache_scan as usize].update(start_time);
+        self.times[c::TimeStat::btree_node_cache_scan as usize].update(start_time);
 
         self.event_inc_trace(events::btree_cache_scan, |out| {
             prt!(out, "scanned {nr_to_scan} nodes, can free {can_free}, freed {freed}, writing {writeback}")

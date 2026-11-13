@@ -70,7 +70,7 @@ use core::ffi::{c_int, c_uint};
 use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_class, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, ret_to_class, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
 use crate::types::CStatic;
@@ -210,7 +210,7 @@ impl FileData for InodeFile {
     unsafe fn release(file: *mut c::file) {
         // SAFETY: as ops_of()'s
         let inode = unsafe { Self::ops_of(file) };
-        if inode.ei_flags.swap(c::bch_inode_info_flags::EI_INODE_FLUSH_ON_CLOSE, false) {
+        if inode.ei_flags.swap(c::InodeInfoFlag::EI_INODE_FLUSH_ON_CLOSE, false) {
             unsafe { c::filemap_flush((*inode.vfs().as_ptr()).i_mapping) };
         }
     }
@@ -220,8 +220,8 @@ impl FileData for InodeFile {
 /// read-only: @flags the mapping's VM_*.
 fn mmap_check(fs: &Fs, flags: c_ulong) -> Result<(), BchError> {
     let shared_writable = c::VM_SHARED | c::VM_WRITE;
-    if flags & shared_writable == shared_writable && fs.flags.get(c::bch_fs_flags::emergency_ro) {
-        return fs.throw(bch_errcode::BCH_ERR_mmap_emergency_ro);
+    if flags & shared_writable == shared_writable && fs.flags.get(c::FsFlag::emergency_ro) {
+        return fs.throw(Errcode::BCH_ERR_mmap_emergency_ro);
     }
     Ok(())
 }

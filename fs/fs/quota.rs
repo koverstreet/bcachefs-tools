@@ -35,11 +35,10 @@ use crate::format::Btree;
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_qid {
-    pub q: [u32; c::quota_types::QTYP_NR.0 as usize],
+    pub q: [u32; c::QuotaType::QTYP_NR.0 as usize],
 }
 
 #[bch_enum(closed)]
-#[c_name(quota_acct_mode)]
 #[prefix(KEY_TYPE_QUOTA_)]
 #[repr(u32)]
 pub enum QuotaAcctMode {
@@ -63,7 +62,7 @@ pub struct MemquotaCounter {
 /// One id's in-memory quota - a uid's, a gid's or a project's.
 #[derive(Clone, Copy, Default, PartialEq, ::pin_init::Zeroable)]
 pub struct Memquota {
-    pub c: [MemquotaCounter; c::quota_counters::Q_COUNTERS.0 as usize],
+    pub c: [MemquotaCounter; c::QuotaCounter::Q_COUNTERS.0 as usize],
 }
 
 /// A limit from the superblock: written under sb_lock, read without a lock,
@@ -80,7 +79,7 @@ pub struct QuotaLimit {
 /// with it held. quota.rs's guard is the way in.
 #[pin_data]
 pub struct MemquotaType {
-    pub limits:       [QuotaLimit; c::quota_counters::Q_COUNTERS.0 as usize],
+    pub limits:       [QuotaLimit; c::QuotaCounter::Q_COUNTERS.0 as usize],
     #[pin]
     pub(crate) lock:  Locked<c::mutex>,
     pub(crate) table: SharedGenRadix<crate::locking::LockedBy<Memquota, (), MemquotaType>>,
@@ -119,7 +118,7 @@ impl Quotas {
         })
     }
 
-    /// Type @qtype's: a quota_types.
+    /// Type @qtype's: a QuotaType.
     pub fn get(&self, qtype: usize) -> &MemquotaType {
         match qtype {
             0 => &self.usr,
@@ -130,8 +129,8 @@ impl Quotas {
     }
 }
 
-const TYPES: [&str; c::quota_types::QTYP_NR.0 as usize] = ["user", "group", "project"];
-const COUNTERS: [&str; c::quota_counters::Q_COUNTERS.0 as usize] = ["space", "inodes"];
+const TYPES: [&str; c::QuotaType::QTYP_NR.0 as usize] = ["user", "group", "project"];
+const COUNTERS: [&str; c::QuotaCounter::Q_COUNTERS.0 as usize] = ["space", "inodes"];
 
 // ── The superblock section ───────────────────────────────────────────────
 
@@ -153,8 +152,8 @@ impl SbFieldOps for c::bch_sb_field_quota<Validated> {
 impl crate::btree::bkey::BkeyOps for c::Quota {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let ty = v.k.k.p.inode;
-        bkey_fsck_err_on!(v, ty >= c::quota_types::QTYP_NR.0 as u64, id::quota_type_invalid,
-                          "invalid quota type ({ty} >= {})", c::quota_types::QTYP_NR.0)
+        bkey_fsck_err_on!(v, ty >= c::QuotaType::QTYP_NR.0 as u64, id::quota_type_invalid,
+                          "invalid quota type ({ty} >= {})", c::QuotaType::QTYP_NR.0)
     }
 
     #[cold]
@@ -169,14 +168,14 @@ impl crate::btree::bkey::BkeyOps for c::Quota {
 
 /// The quota types the mount options turn on.
 pub fn enabled_qtypes(fs: &Fs) -> u32 {
-    (fs.opts.usrquota.get() as u32) << c::quota_types::QTYP_USR.0 |
-    (fs.opts.grpquota.get() as u32) << c::quota_types::QTYP_GRP.0 |
-    (fs.opts.prjquota.get() as u32) << c::quota_types::QTYP_PRJ.0
+    (fs.opts.usrquota.get() as u32) << c::QuotaType::QTYP_USR.0 |
+    (fs.opts.grpquota.get() as u32) << c::QuotaType::QTYP_GRP.0 |
+    (fs.opts.prjquota.get() as u32) << c::QuotaType::QTYP_PRJ.0
 }
 
 /// The quota types in mask @qtypes.
 pub fn set_qtypes(qtypes: u32) -> impl Iterator<Item = usize> {
-    (0..c::quota_types::QTYP_NR.0 as usize).filter(move |i| qtypes & (1 << i) != 0)
+    (0..c::QuotaType::QTYP_NR.0 as usize).filter(move |i| qtypes & (1 << i) != 0)
 }
 
 /// The ids an inode's usage is charged to.
@@ -188,8 +187,8 @@ pub fn qid(u: &c::bch_inode_unpacked) -> c::bch_qid {
 pub use vfs::*;
 
 /// The space and inode counters, as acct() takes them.
-pub const Q_SPC: usize = c::quota_counters::Q_SPC.0 as usize;
-pub const Q_INO: usize = c::quota_counters::Q_INO.0 as usize;
+pub const Q_SPC: usize = c::QuotaCounter::Q_SPC.0 as usize;
+pub const Q_INO: usize = c::QuotaCounter::Q_INO.0 as usize;
 
 /// Without quotas, nothing's counted.
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
@@ -215,7 +214,7 @@ mod vfs {
     use crate::btree::bkey::{pos, BkeyI, POS_MIN};
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
-    use crate::errcode::{bch_errcode, ret_to_class};
+    use crate::errcode::{Errcode, ret_to_class};
     use crate::locking::{ExclusiveGuard, Guard as _};
     use crate::sb::io::SbResize;
     use crate::util::ffi::c_char;
@@ -230,7 +229,7 @@ mod vfs {
     /// as s_flags is the kernel's c_ulong - usize - and not core's.
     const SB_RDONLY_BIT: u32 = 0;
 
-    const QTYP_NR: usize = c::quota_types::QTYP_NR.0 as usize;
+    const QTYP_NR: usize = c::QuotaType::QTYP_NR.0 as usize;
 
     /// @s's fieldmask, in hex, then @fields: one a line, names in a column 20
     /// wide - as C's to_text tabstop.
@@ -311,7 +310,7 @@ mod vfs {
     #[derive(Default)]
     struct QuotaMsgs {
         nr: usize,
-        m:  [(usize, u32); QTYP_NR * c::quota_counters::Q_COUNTERS.0 as usize * 2],
+        m:  [(usize, u32); QTYP_NR * c::QuotaCounter::Q_COUNTERS.0 as usize * 2],
     }
 
     impl QuotaMsgs {
@@ -464,7 +463,7 @@ mod vfs {
     }
 
     /// @f, with each type in @qtypes locked - in type order, as C's
-    /// mutex_lock_nested() subclasses: a lock class each, quota_types.rs - and
+    /// mutex_lock_nested() subclasses: a lock class each, QuotaType.rs - and
     /// then, unlocked, the warnings it prepared for @qid.
     fn with_locks<'a>(
         fs:     &'a Fs,
@@ -680,7 +679,7 @@ mod vfs {
         {
             let mut sb = fs.sb_lock();
             if sb_get_or_create_quota(&mut fs.sb_resize(&mut sb)).is_none() {
-                return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_quota);
+                return fs.throw(Errcode::BCH_ERR_ENOSPC_sb_quota);
             }
 
             sb_quota_read(fs, &sb);
@@ -742,23 +741,23 @@ mod vfs {
 
         /* Accounting must be enabled at mount time: */
         if uflags & (c::FS_QUOTA_UDQ_ACCT | c::FS_QUOTA_GDQ_ACCT | c::FS_QUOTA_PDQ_ACCT) != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_enable_acct);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_enable_acct);
         }
 
         /* Can't enable enforcement without accounting: */
         if uflags & c::FS_QUOTA_UDQ_ENFD != 0 && fs.opts.usrquota.get() == 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_enable_usrquota);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_enable_usrquota);
         }
         if uflags & c::FS_QUOTA_GDQ_ENFD != 0 && fs.opts.grpquota.get() == 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_enable_grpquota);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_enable_grpquota);
         }
         if uflags & c::FS_QUOTA_PDQ_ENFD != 0 && fs.opts.prjquota.get() == 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_enable_prjquota);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_enable_prjquota);
         }
 
         let mut sb = fs.sb_lock();
         if sb_get_or_create_quota(&mut fs.sb_resize(&mut sb)).is_none() {
-            return bch_err_fn!(fs, fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_quota));
+            return bch_err_fn!(fs, fs.throw(Errcode::BCH_ERR_ENOSPC_sb_quota));
         }
 
         set_sb_quotas(&mut sb, uflags, true);
@@ -791,12 +790,12 @@ mod vfs {
         }
 
         let types = [
-            (c::FS_USER_QUOTA,  fs.opts.usrquota.get(), c::quota_types::QTYP_USR,
-             bch_errcode::BCH_ERR_EINVAL_quota_remove_usrquota),
-            (c::FS_GROUP_QUOTA, fs.opts.grpquota.get(), c::quota_types::QTYP_GRP,
-             bch_errcode::BCH_ERR_EINVAL_quota_remove_grpquota),
-            (c::FS_PROJ_QUOTA,  fs.opts.prjquota.get(), c::quota_types::QTYP_PRJ,
-             bch_errcode::BCH_ERR_EINVAL_quota_remove_prjquota),
+            (c::FS_USER_QUOTA,  fs.opts.usrquota.get(), c::QuotaType::QTYP_USR,
+             Errcode::BCH_ERR_EINVAL_quota_remove_usrquota),
+            (c::FS_GROUP_QUOTA, fs.opts.grpquota.get(), c::QuotaType::QTYP_GRP,
+             Errcode::BCH_ERR_EINVAL_quota_remove_grpquota),
+            (c::FS_PROJ_QUOTA,  fs.opts.prjquota.get(), c::QuotaType::QTYP_PRJ,
+             Errcode::BCH_ERR_EINVAL_quota_remove_prjquota),
         ];
 
         for (flag, enabled, qtype, err) in types {
@@ -859,7 +858,7 @@ mod vfs {
 
         let ty = ty as usize;
         if ty >= QTYP_NR {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_set_info_bad_type);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_set_info_bad_type);
         }
 
         if (1 << ty) & enabled_qtypes(fs) == 0 {
@@ -868,13 +867,13 @@ mod vfs {
 
         let mask = info.i_fieldmask as u32;
         if mask & !(c::QC_SPC_TIMER | c::QC_INO_TIMER | c::QC_SPC_WARNS | c::QC_INO_WARNS) != 0 {
-            return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_set_info_bad_field);
+            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_set_info_bad_field);
         }
 
         let mut sb = fs.sb_lock();
         let mut disk_sb = fs.sb_resize(&mut sb);
         let Some(sb_quota) = sb_get_or_create_quota(&mut disk_sb) else {
-            return bch_err_fn!(fs, fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_quota));
+            return bch_err_fn!(fs, fs.throw(Errcode::BCH_ERR_ENOSPC_sb_quota));
         };
 
         let q = &mut sb_quota.q[ty];

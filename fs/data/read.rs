@@ -72,7 +72,7 @@ use crate::data::{compress::bio_uncompress, ec, inline_data::{self, CsumMismatch
 use crate::data::ptrs::{crc_is_compressed, extent_nonce, BkeyVPtrs, BkeyVRead, Ptrs, PtrsMut,
                         EXTENT_POISONED};
 use crate::data::reflink::{lookup_indirect_extent, Indirect};
-use crate::errcode::{bch_errcode as err, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{Errcode as err, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Dev, Fs};
 use crate::init::{damage, error::{bch2_inum_offset_err_msg_trans, inum_offset_err_msg}};
 use crate::inode_opts::get_io_opts;
@@ -105,10 +105,10 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use crate::types::c_default;
-use cstruct_macros::{args_stored_once, bch_enum, c_name, in_place, CStruct, Init, TypeInfo};
+use cstruct_macros::{args_stored_once, bch_enum, in_place, CStruct, Init, TypeInfo};
 use crate::format::{Bpos, Btree, Bversion, DataType, MetadataVersion, Nonce};
 
-type F = c::bch_read_flags;
+type F = c::ReadFlags;
 
 #[allow(non_upper_case_globals)]
 pub const BCH_READ_ERR_checksum: u32 = 1 << 0;
@@ -121,7 +121,7 @@ pub const BCH_READ_ERR_ec_reconstruct: u32 = 1 << 3;
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum bch_read_for {
+pub enum ReadFor {
     BCH_READ_FOR_read,
     BCH_READ_FOR_update,
     BCH_READ_FOR_scrub,
@@ -136,7 +136,6 @@ pub struct ReadErrs {
 
 #[pin_data]
 #[repr(C)]
-#[c_name(bch_read_err_report)]
 #[derive(CStruct, TypeInfo, Init)]
 pub struct ReadErrReport {
     #[pin]
@@ -145,7 +144,6 @@ pub struct ReadErrReport {
 }
 
 #[pin_data]
-#[c_name(bch_read_bio)]
 #[derive(CStruct, TypeInfo)]
 #[repr(C)]
 pub struct Rbio {
@@ -155,7 +153,7 @@ pub struct Rbio {
     pub saw_error: AtomicBool,
     pub self_healing: AtomicBool,
     pub ret: AtomicI16,
-    pub read_for: bch_read_for,
+    pub read_for: ReadFor,
 
     pub subvol: u32,
     pub opts: c::bch_inode_opts,
@@ -193,21 +191,21 @@ impl Rbio {
     }
 
     fn is_update(&self) -> bool {
-        self.read_for != bch_read_for::BCH_READ_FOR_read
+        self.read_for != ReadFor::BCH_READ_FOR_read
     }
 
     fn decodes(&self) -> bool {
-        self.read_for != bch_read_for::BCH_READ_FOR_update
+        self.read_for != ReadFor::BCH_READ_FOR_update
     }
 
     pub fn new<'a>(fs: &'a Fs, opts: c::bch_inode_opts, subvol: u32, err_report: Option<&'a ReadErrReport>,
                    bio: BioInPlace) -> impl PinInit<Self, BchError> + 'a {
         let err_report = err_report.map(|r| unsafe { BackRef::new(r) });
-        Self::with(fs.as_ptr(), local_clock(), bch_read_for::BCH_READ_FOR_read, subvol, opts, err_report, bio)
+        Self::with(fs.as_ptr(), local_clock(), ReadFor::BCH_READ_FOR_read, subvol, opts, err_report, bio)
     }
 
     /// A data update's read bio.
-    pub(crate) fn update(fs: &Fs, opts: c::bch_inode_opts, read_for: bch_read_for, bio: BioInPlace)
+    pub(crate) fn update(fs: &Fs, opts: c::bch_inode_opts, read_for: ReadFor, bio: BioInPlace)
         -> impl PinInit<Self, BchError>
     {
         Self::with(fs.as_ptr(), local_clock(), read_for, 0, opts, None, bio)
@@ -219,7 +217,7 @@ impl Rbio {
         Self::with(orig.c, orig.start_time, orig.read_for, 0, c::bch_inode_opts::default(), None, bio)
     }
 
-    fn with(c: *mut Fs, start_time: u64, read_for: bch_read_for, subvol: u32, opts: c::bch_inode_opts,
+    fn with(c: *mut Fs, start_time: u64, read_for: ReadFor, subvol: u32, opts: c::bch_inode_opts,
             err_report: Option<BackRef<ReadErrReport>>, bio: BioInPlace) -> impl PinInit<Self, BchError> {
         pin_init!(Rbio {
             c,
@@ -239,7 +237,7 @@ impl Rbio {
     /// request, not a split.
     fn done(&self) {
         if self.start_time != 0 {
-            self.fs().times[c::bch_time_stats::data_read as usize].update(self.start_time);
+            self.fs().times[c::TimeStat::data_read as usize].update(self.start_time);
         }
     }
 
@@ -280,7 +278,7 @@ impl Rbio {
 }
 
 unsafe impl AsyncObj for Rbio {
-    const LIST: c::bch_async_obj_lists = c::bch_async_obj_lists::rbio;
+    const LIST: c::AsyncObjKind = c::AsyncObjKind::rbio;
 
     #[cold]
     fn to_text(&self, out: &mut Printbuf, _: &Fs) {
@@ -392,7 +390,7 @@ struct Fragment<'r> {
     /* first, to be dropped before the bio it lists */
     listed: AsyncObjSlot,
     kind:   Kind<'r>,
-    ca:     Option<DevIoRef<c::bch_dev_read_ref>>,
+    ca:     Option<DevIoRef<c::DevReadRefKind>>,
     plan:   Plan<'r>,
 }
 
@@ -776,7 +774,7 @@ fn retry_state(mut f: Fragment<'_>, ret: Result<(), BchError>) -> RetryState<'_>
 
 fn resume_target(f: &Fragment<'_>) -> Resume<'static> {
     let crc = &f.plan.pick.crc;
-    let csum_type = c::bch_csum_type(crc.csum_type.into());
+    let csum_type = c::CsumType(crc.csum_type.into());
     if f.plan.narrow_crcs || matches!(f.kind, Kind::Promote(..)) ||
               crc_is_compressed(crc) || csum_type.is_encryption() {
         Resume::queue(Queue::system_dfl())
@@ -930,7 +928,7 @@ fn narrow_crcs_from_read(fs: &Fs, rbio: &Rbio, p: &Plan<'_>) {
         return;
     }
 
-    if !fs.flags.get(c::bch_fs_flags::rw) {
+    if !fs.flags.get(c::FsFlag::rw) {
         return;
     }
 
@@ -1037,7 +1035,7 @@ fn maybe_poison_extent(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, fla
     -> Result<(), BchError>
 {
     let fs = t.fs();
-    if !poison_extents_on_checksum_error.get() || !fs.flags.get(c::bch_fs_flags::rw) {
+    if !poison_extents_on_checksum_error.get() || !fs.flags.get(c::FsFlag::rw) {
         return Ok(());
     }
 
@@ -1105,7 +1103,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
         Err(ret) => return Err(read_extent_pick_err(t, orig, e, flags, ret, failed)),
     };
 
-    let csum_type = c::bch_csum_type(pick.crc.csum_type.into());
+    let csum_type = c::CsumType(pick.crc.csum_type.into());
     if csum_type.is_encryption() && fs.encryption_key().is_none() {
         let mut m = log_msg_ratelimited!(fs);
         read_err_msg_in_attempt(t, &mut m, orig, read_pos)?;
@@ -1113,7 +1111,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
         return Err(fs.err(err::BCH_ERR_data_read_no_encryption_key));
     }
 
-    let ca: Option<DevIoRef<c::bch_dev_read_ref>> =
+    let ca: Option<DevIoRef<c::DevReadRefKind>> =
         if !pick.do_ec_reconstruct { fs.dev_get_ioref(pick.ptr.dev().into()) } else { None };
 
     // Stale dirty pointers are treated as IO errors, but @failed isn't
@@ -1259,7 +1257,7 @@ enum How<'r> {
 struct Planned<'r, 'k> {
     how:  How<'r>,
     plan: Plan<'r>,
-    ca:   Option<DevIoRef<c::bch_dev_read_ref>>,
+    ca:   Option<DevIoRef<c::DevReadRefKind>>,
     k:    BkeySC<'k>,
 }
 
@@ -1454,7 +1452,7 @@ fn device_read_done(f: &Fragment<'_>, fs: &Fs, submit_time: u64, status: Result<
     -> Result<(), BchError>
 {
     if let Some(ca) = f.ca.as_deref() {
-        ca.account_io_completion(c::bch_member_error_type::read, submit_time, status.is_ok());
+        ca.account_io_completion(c::MemberErrorType::read, submit_time, status.is_ok());
     }
     status.map_err(|e| fs.err(e))
 }
@@ -1536,7 +1534,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
     let dst = p.range;
     let mut crc = p.pick.crc;
     let mut nonce = extent_nonce(p.version, &crc);
-    let csum_type = c::bch_csum_type(crc.csum_type.into());
+    let csum_type = c::CsumType(crc.csum_type.into());
 
     let csum = fs.checksum_range(csum_type, nonce, src);
     let csum_good = csum == p.pick.crc.csum || no_data_io;
@@ -1550,7 +1548,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
     }
 
     if let Some(ca) = ca {
-        ca.account_io_completion(c::bch_member_error_type::checksum, 0, csum_good);
+        ca.account_io_completion(c::MemberErrorType::checksum, 0, csum_good);
     }
 
     // XXX
@@ -1562,7 +1560,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
     }
 
     let decrypt = |src: BioRange<'_>, crc: &c::bch_extent_crc_unpacked, nonce: Nonce| -> Result<(), BchError> {
-        if c::bch_csum_type(crc.csum_type.into()).is_encryption() {
+        if c::CsumType(crc.csum_type.into()).is_encryption() {
             fs.encrypt_range(nonce, src).map_err(|_| fs.err(err::BCH_ERR_data_read_decrypt_err))
         } else {
             Ok(())

@@ -343,7 +343,7 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 
 fn migrate_fs(
     fs_path: &str,
-    fs_opt_strs: &[(c::bch_opt_id, String)],
+    fs_opt_strs: &[(c::OptId, String)],
     mut fs_opts: c::bch_opts,
     format_opts: FormatOpts<'_>,
     force: bool,
@@ -577,7 +577,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 
         // This is normall set in fs_init if BCH_FEATURE_no_default_sb is
         // cleared - but fs_init already happened:
-        fs.flags.set(c::bch_fs_flags::may_upgrade_downgrade, true);
+        fs.flags.set(c::FsFlag::may_upgrade_downgrade, true);
     }
 
     fs.start()
@@ -611,7 +611,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 // ---- Public command entry points ----
 
 fn cmd_migrate(argv: Vec<String>) -> Result<()> {
-    let opt_flags = c::opt_flags::OPT_FORMAT.bits();
+    let opt_flags = c::OptFlags::OPT_FORMAT.bits();
 
     let mut fs_path: Option<String> = None;
     let mut encrypted = false;
@@ -619,7 +619,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
     let mut force = false;
 
     let mut fs_opts: c::bch_opts = Default::default();
-    let mut deferred_opts: Vec<(c::bch_opt_id, String)> = Vec::new();
+    let mut deferred_opts: Vec<(c::OptId, String)> = Vec::new();
 
     let mut i = 1;
     while i < argv.len() {

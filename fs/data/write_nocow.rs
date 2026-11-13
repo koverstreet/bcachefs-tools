@@ -11,7 +11,7 @@ use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
 use crate::data::write::{index_update_wq, to_wbio, wbio_init, submit_wbio_replicas, write_done,
                          write_endio, write_op_error, DevWriteRef};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::format::{Btree, DataType, BkeyType};
 use crate::snapshots::subvolume;
@@ -19,7 +19,7 @@ use crate::util::closure::Running;
 use crate::util::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::{btree_trans, fs_inconsistent, inode};
-use c::bch_write_flags as w;
+use c::WriteFlags as w;
 use core::ops::ControlFlow;
 
 type Op = c::bch_write_op;
@@ -79,7 +79,7 @@ fn nocow_write_convert_one_unwritten<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeI
     let mut opts = c::bch_inode_opts::default();
 
     t.extent_update_i_size_sectors(iter, (new.k().p.offset << 9).min(op.new_i_size), 0, &mut opts)?;
-    new.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_foreground,
+    new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                             op.opts.change_cookie)?;
     t.update(iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)
 }
@@ -120,7 +120,7 @@ fn nocow_write_convert_unwritten(op: &mut Op) {
 
 fn __nocow_write_done(op: &mut Op) {
     if unlikely(op.io_error != 0) {
-        op.set_error(op.fs().err(bch_errcode::BCH_ERR_data_write_io));
+        op.set_error(op.fs().err(Errcode::BCH_ERR_data_write_io));
     } else if unlikely(op.has(w::convert_unwritten)) {
         nocow_write_convert_unwritten(op);
     }
@@ -239,10 +239,10 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
                     let ret = if stale.is_none() {
                         fs_inconsistent!(fs, "pointer to invalid bucket in nocow path on device {}\n  {}",
                                          ptr.dev(), k.to_text(fs));
-                        fs.err(bch_errcode::BCH_ERR_data_write_invalid_ptr)
+                        fs.err(Errcode::BCH_ERR_data_write_invalid_ptr)
                     } else {
                         /* We can retry this: */
-                        fs.err(bch_errcode::BCH_ERR_transaction_restart)
+                        fs.err(Errcode::BCH_ERR_transaction_restart)
                     };
 
                     bkey_unlock_cas(fs, k, devs, NocowKind::Update);

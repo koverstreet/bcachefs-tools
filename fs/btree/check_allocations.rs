@@ -18,7 +18,7 @@ use crate::btree::trans::BtreeTrans;
 use crate::btree::trigger::{key_trigger, TriggerOp};
 use crate::c;
 use crate::data::reflink::{gc_reflink_add, gc_reflink_done, gc_reflink_free, gc_reflink_start};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{Btree, BtreeFlags, DataType};
 use crate::fs::{Dev, Fs};
 use crate::init::error::id;
@@ -54,7 +54,7 @@ fn gc_mark_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, iter: &BtreeI
     if t.has_updates() {
         let res = DiskReservation::new(fs);
         t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
-        return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit));
+        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_commit));
     }
 
     if btree == Btree::reflink && level == 0 {
@@ -76,7 +76,7 @@ fn gc_btree_root(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(), BchError>
     let mut iter = BtreeNodeIter::new(t, btree, POS_MIN, 0, level.into(), BtreeIterFlags::empty());
 
     if !iter.peek(t)?.is_some_and(|b| fs.btree_id_root(btree.0).is_some_and(|r| ptr::eq(r, &*b))) {
-        return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_lock_root_race));
+        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_lock_root_race));
     }
     let b = t.trans().paths().held_btree_node(iter.iter().path, level.into()).expect("the node it peeked");
 
@@ -135,7 +135,7 @@ fn gc_btrees(fs: &Fs) -> Result<(), BchError> {
          * Otherwise, we can delay the repair to the next
          * mount or offline fsck.
          */
-        if fs.flags.get(c::bch_fs_flags::in_fsck) {
+        if fs.flags.get(c::FsFlag::in_fsck) {
             target_depth = 0;
         }
 
@@ -146,7 +146,7 @@ fn gc_btrees(fs: &Fs) -> Result<(), BchError> {
 }
 
 fn mark_superblocks(fs: &Fs) -> Result<(), BchError> {
-    fs.gc.set_pos(c::gc_pos::of_phase(c::gc_phase::sb));
+    fs.gc.set_pos(c::gc_pos::of_phase(c::GcPhase::sb));
 
     fs.trans_mark_dev_sbs(UpdateTriggerFlags::GC)
 }
@@ -307,7 +307,7 @@ fn gc_alloc_done(fs: &Fs) -> Result<(), BchError> {
 fn gc_alloc_start(fs: &Fs) -> Result<(), BchError> {
     for ca in fs.members() {
         if ca.buckets_gc.prealloc_n(ca.mi.get().nbuckets as usize).is_err() {
-            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_gc_alloc_start);
+            return fs.throw(Errcode::BCH_ERR_ENOMEM_gc_alloc_start);
         }
     }
 
@@ -372,7 +372,7 @@ fn gc(fs: &Fs) -> Result<(), BchError> {
     gc_alloc_start(fs)?;
     gc_reflink_start(fs);
 
-    fs.gc.set_pos(c::gc_pos::of_phase(c::gc_phase::start));
+    fs.gc.set_pos(c::gc_pos::of_phase(c::GcPhase::start));
 
     bch_err_msg!(fs, mark_superblocks(fs), "marking superblocks")?;
 
@@ -427,7 +427,7 @@ fn check_allocations(fs: &Fs) -> Result<(), BchError> {
      */
     fs.alloc_wake_all();
 
-    if ret.is_ok() && !fs.flags.get(c::bch_fs_flags::errors_not_fixed) {
+    if ret.is_ok() && !fs.flags.get(c::FsFlag::errors_not_fixed) {
         fs.sb_members_clean_deleted();
     }
 

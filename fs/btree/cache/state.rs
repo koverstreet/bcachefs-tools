@@ -6,7 +6,7 @@ use crate::btree::node::BtreeNode;
 use crate::btree::types::{BtreeCacheGuard, BtreeCacheLists, BtreeNodeList};
 use crate::c;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_counts, six_lock_wakeup_all};
@@ -17,7 +17,7 @@ use crate::util::hash::GoldenRatio;
 use crate::util::kernel::is_vmalloc_addr;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
-use c::btree_node_cache_state as State;
+use c::BtreeNodeCacheState as State;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::SeqCst};
 
@@ -84,7 +84,7 @@ impl Fs {
          * lists and is safe under bc->lock alone.
          */
         ebug_assert!((state_hashed(old) && state_hashed(new)) ||
-                     six_lock_counts(b.c.lock.six()).n[c::six_lock_type::SIX_LOCK_write as usize] != 0,
+                     six_lock_counts(b.c.lock.six()).n[c::SixLockType::SIX_LOCK_write as usize] != 0,
                      "cache state {old:?} -> {new:?} without the node write locked");
         assert!(!(state_has_buffer(old) || state_has_buffer(new)) || !data.is_null(),
                 "cache state {old:?} -> {new:?} of a node with no buffer");
@@ -121,8 +121,8 @@ impl Fs {
             b.set_hash_val(lists, node_key_hash_val(&unsafe { b.contents() }.key));
             ret = match bc.table.insert_new(unsafe { Entry::new(NonNull::from(b)) }) {
                 Ok(Ok(()))  => Ok(()),
-                Ok(Err(_))  => Err(bch_errcode::BCH_ERR_EEXIST_btree_node_cache_insert.into()),
-                Err(_)      => Err(bch_errcode::BCH_ERR_ENOMEM_btree_node_cache_insert.into()),
+                Ok(Err(_))  => Err(Errcode::BCH_ERR_EEXIST_btree_node_cache_insert.into()),
+                Err(_)      => Err(Errcode::BCH_ERR_ENOMEM_btree_node_cache_insert.into()),
             };
             if ret.is_err() {
                 b.set_hash_val(lists, 0);

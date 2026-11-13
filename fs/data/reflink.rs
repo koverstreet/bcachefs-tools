@@ -38,7 +38,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
 use crate::c;
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_one;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::data::inline_data::InlineDataRef;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -287,7 +287,7 @@ fn gc_write_reflink_key(
 
     let Some(r) = r.filter(|r| r.offset == k.k.p.offset && r.size == k.k.size) else {
         bch_err!(fs, "unexpected inconsistency walking reflink table at gc finish");
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_reflink_gc_table_mismatch);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_reflink_gc_table_mismatch);
     };
 
     let r_refcount = r.refcount.load(Relaxed) as u32;
@@ -347,7 +347,7 @@ pub(crate) fn gc_reflink_add(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     }
 
     let r = table.get_or_alloc(nr)
-        .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_gc_reflink_start))?;
+        .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_gc_reflink_start))?;
     r.offset   = offset;
     r.size     = k.k.size;
     r.refcount = AtomicI32::new(0);
@@ -519,7 +519,7 @@ fn indirect_extent_not_missing(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::Reflin
     }
 
     t.commit(None, CommitFlags::NO_ENOSPC)?;
-    Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
+    Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
 }
 
 /// @p refers to @missing, which the reflink btree has nothing in: an fsck
@@ -648,7 +648,7 @@ fn trans_trigger_reflink_p_segment(
     *idx = k.k.p.offset;
 
     let Some(k) = k.arm::<Indirect>() else {
-        return if overwrite { Ok(()) } else { fs.throw(bch_errcode::BCH_ERR_missing_indirect_extent) };
+        return if overwrite { Ok(()) } else { fs.throw(Errcode::BCH_ERR_missing_indirect_extent) };
     };
     let refcount = k.refcount();
 
@@ -827,7 +827,7 @@ unsafe fn __make_extent_indirect(
     refcount.fill(0);
     val.copy_from_slice(BkeySC::from(&*orig).val_bytes());
 
-    r_v.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other, 0)?;
+    r_v.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)?;
 
     t.update(&reflink_iter, &r_v, UpdateTriggerFlags::empty())?;
 
@@ -890,7 +890,7 @@ pub fn remap_range(
         MetadataVersion::reflink_p_may_update_opts).is_ok();
 
     let Some(_write_ref) = fs.writes.tryget_live() else {
-        return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
+        return fs.throw(Errcode::BCH_ERR_erofs_no_writes);
     };
 
     fs.check_set_feature(SbFeature::reflink);

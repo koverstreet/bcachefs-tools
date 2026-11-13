@@ -334,7 +334,7 @@ pub(crate) fn run_mem_triggers(t: &TransAttempt<'_, '_>, paths: &Paths<'_>) -> R
         }
     }
 
-    if t.fs().gc.phase() != c::gc_phase::not_running {
+    if t.fs().gc.phase() != c::GcPhase::not_running {
         run_gc_triggers(t, paths)?;
     }
     Ok(())

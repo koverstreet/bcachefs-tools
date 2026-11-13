@@ -13,7 +13,6 @@ use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::accounting;
 use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
-use bcachefs_kernel::btree_id;
 use bcachefs_kernel::util::{HumanReadable, ToText};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bch_bindgen::c;
@@ -23,7 +22,7 @@ use bcachefs_kernel::data::moving::{MoveStats, MovingCtxt};
 use bcachefs_kernel::alloc::disk_groups::Target;
 use bcachefs_kernel::fs::{Fs, btree_id_is_alloc};
 use bcachefs_kernel::util::printbuf::Printbuf;
-use bcachefs_kernel::sb::sb_field_type;
+use bcachefs_kernel::sb::SbFieldType;
 use bcachefs_kernel::{POS_MIN, SPOS_MAX, pos};
 use clap::Parser;
 
@@ -148,7 +147,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
     let stats = MoveStats::default();
     let ctxt = MovingCtxt::new(fs, &stats, c::write_point_specifier::hashed(1), false)
         .map_err(|_| anyhow!("allocating a moving context"))?;
-    let btree_id_nr = btree_id::NR;
+    let btree_id_nr = Btree::NR;
 
     for btree in 0..btree_id_nr {
         if !move_alloc && btree_id_is_alloc(btree) {
@@ -166,7 +165,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
                 return Ok(false);
             }
 
-            opts.write_flags |= c::bch_write_flags::only_specified_devs;
+            opts.write_flags |= c::WriteFlags::only_specified_devs;
             Ok(true)
         })
         .map_err(|e| anyhow!("moving btree {}: {}", btree_id, e))?;
@@ -180,7 +179,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut iter = BtreeIter::new(
         &trans,
-        btree_id::alloc,
+        Btree::alloc,
         pos(0, u64::MAX),
         bcachefs_kernel::btree::iter::BtreeIterFlags::empty(),
     );
@@ -242,7 +241,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     {
         let mut indented = buf.indent(2);
 
-        let btree_id_nr = btree_id::NR;
+        let btree_id_nr = Btree::NR;
         for i in 0..btree_id_nr {
             if btree_id_is_alloc(i) && !keep_alloc {
                 continue;
@@ -398,7 +397,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
 /// Create a new filesystem image from a directory.
 fn image_create_inner(
-    fs_opt_strs: &[(c::bch_opt_id, String)],
+    fs_opt_strs: &[(c::OptId, String)],
     fs_opts: c::bch_opts,
     mut format_opts: FormatOpts<'_>,
     dev_opts: DevOpts,
@@ -458,7 +457,7 @@ fn image_create_inner(
     if verbosity > 1 {
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
-        bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb.sb().as_unvalidated(), false, sb_field_type::members_v2.bit());
+        bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb.sb().as_unvalidated(), false, SbFieldType::members_v2.bit());
         print!("{}", buf);
     }
     drop(sb);
@@ -615,7 +614,7 @@ fn image_update_inner(
         println!("Deleting xattrs");
     }
     fs.btree_delete_range(
-        btree_id::xattrs,
+        Btree::xattrs,
         POS_MIN,
         SPOS_MAX,
         bcachefs_kernel::btree::iter::BtreeIterFlags::ALL_SNAPSHOTS,
@@ -662,11 +661,11 @@ fn image_update_inner(
 
 fn image_create_usage() {
     let fs_opts = opts_usage_str(
-        c::opt_flags::OPT_FORMAT.bits() | c::opt_flags::OPT_FS.bits(),
-        c::opt_flags::OPT_DEVICE.bits(),
+        c::OptFlags::OPT_FORMAT.bits() | c::OptFlags::OPT_FS.bits(),
+        c::OptFlags::OPT_DEVICE.bits(),
     );
     let dev_opts = opts_usage_str(
-        c::opt_flags::OPT_DEVICE.bits(),
+        c::OptFlags::OPT_DEVICE.bits(),
         0,
     );
 
@@ -704,9 +703,9 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 }
 
 fn cmd_image_create(argv: Vec<String>) -> Result<()> {
-    let opt_flags = c::opt_flags::OPT_FORMAT.bits()
-        | c::opt_flags::OPT_FS.bits()
-        | c::opt_flags::OPT_DEVICE.bits();
+    let opt_flags = c::OptFlags::OPT_FORMAT.bits()
+        | c::OptFlags::OPT_FS.bits()
+        | c::OptFlags::OPT_DEVICE.bits();
 
     let mut source: Option<String> = None;
     let mut keep_alloc = false;
@@ -724,7 +723,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     let mut dev_opts: c::bch_opts = Default::default();
 
     let mut fs_opts: c::bch_opts = Default::default();
-    let mut deferred_opts: Vec<(c::bch_opt_id, String)> = Vec::new();
+    let mut deferred_opts: Vec<(c::OptId, String)> = Vec::new();
 
     let mut image_path: Option<String> = None;
 
@@ -763,9 +762,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                     match parse_opt_val(opt, &val_str)? {
                         None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => {
-                            if opt.flags.bits() & c::opt_flags::OPT_DEVICE.bits() != 0 {
+                            if opt.flags.bits() & c::OptFlags::OPT_DEVICE.bits() != 0 {
                                 dev_opts.set(opt_id, v);
-                            } else if opt.flags.bits() & c::opt_flags::OPT_FS.bits() != 0 {
+                            } else if opt.flags.bits() & c::OptFlags::OPT_FS.bits() != 0 {
                                 fs_opts.set(opt_id, v);
                             }
                         }
@@ -931,7 +930,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     d.fs_size = dev_fs_size;
     d.opts = dev_opts;
     if let Some(l) = dev_label_cstr {
-        d.opt_strs.push((c::bch_opt_id::Opt_label, l));
+        d.opt_strs.push((c::OptId::Opt_label, l));
     }
 
     image_create_inner(

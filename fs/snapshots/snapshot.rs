@@ -305,7 +305,7 @@ use crate::locking::ExclusiveGuard;
 use crate::{bch_err, bkey_fsck_err_on};
 use crate::init::error::{id, BkeyValidate};
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::passes;
 use crate::snapshots::{check_snapshots, delete, subvolume};
@@ -352,8 +352,8 @@ impl<'g> Table<'g> {
         self.entry(id).unwrap_or_else(|| panic!("snapshot tree walk: {id} not in the table"))
     }
 
-    fn id_state(&self, id: u32) -> c::snapshot_id_state {
-        self.entry(id).map_or(c::snapshot_id_state::SNAPSHOT_ID_empty, |s| s.state())
+    fn id_state(&self, id: u32) -> c::SnapshotIdState {
+        self.entry(id).map_or(c::SnapshotIdState::SNAPSHOT_ID_empty, |s| s.state())
     }
 
     /// 0 for none.
@@ -371,15 +371,15 @@ impl<'g> Table<'g> {
     }
 
     /// See bch_fs_snapshots::live_descendent().
-    fn live_descendent(&self, mut id: u32) -> Result<Option<u32>, bch_errcode> {
+    fn live_descendent(&self, mut id: u32) -> Result<Option<u32>, Errcode> {
         loop {
-            let s = self.entry(id).ok_or(bch_errcode::BCH_ERR_invalid_snapshot_node)?;
-            if s.state() == c::snapshot_id_state::SNAPSHOT_ID_live {
+            let s = self.entry(id).ok_or(Errcode::BCH_ERR_invalid_snapshot_node)?;
+            if s.state() == c::SnapshotIdState::SNAPSHOT_ID_live {
                 return Ok(Some(id));
             }
             // deleted nodes are single-child
             match s.children() {
-                [_, c1] if c1 != 0 => return Err(bch_errcode::BCH_ERR_snapshot_multiple_descendents),
+                [_, c1] if c1 != 0 => return Err(Errcode::BCH_ERR_snapshot_multiple_descendents),
                 [0, _]             => return Ok(None),
                 [c0, _]            => id = c0,
             }
@@ -459,11 +459,11 @@ impl<'g> Table<'g> {
 
         loop {
             let mut live = s.children().into_iter()
-                .filter(|&c| self.id_state(c) == c::snapshot_id_state::SNAPSHOT_ID_live);
+                .filter(|&c| self.id_state(c) == c::SnapshotIdState::SNAPSHOT_ID_live);
 
             let child = match (live.next(), live.next()) {
                 (Some(c), None) => c,
-                _ => return (s.state() == c::snapshot_id_state::SNAPSHOT_ID_live && id != orig)
+                _ => return (s.state() == c::SnapshotIdState::SNAPSHOT_ID_live && id != orig)
                     .then_some(id),
             };
 
@@ -480,8 +480,8 @@ fn table_idx(id: u32) -> usize {
 /// An entry's fields, each read on its own: one being rewritten can mix old
 /// and new - see mark_snapshot().
 impl c::snapshot_t {
-    fn state(&self) -> c::snapshot_id_state {
-        c::snapshot_id_state::from_bits(self.state.load(Ordering::Relaxed))
+    fn state(&self) -> c::SnapshotIdState {
+        c::SnapshotIdState::from_bits(self.state.load(Ordering::Relaxed))
     }
     fn parent(&self) -> u32        { self.parent.load(Ordering::Relaxed) }
     fn children(&self) -> [u32; 2] { self.children.each_ref().map(|c| c.load(Ordering::Relaxed)) }
@@ -521,7 +521,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     let mut w = fs.snapshots.table_write();
 
     if w.make_room(id).is_err() {
-        return fs.throw(bch_errcode::BCH_ERR_ENOMEM_mark_snapshot);
+        return fs.throw(Errcode::BCH_ERR_ENOMEM_mark_snapshot);
     }
 
     let table = w.table();
@@ -538,11 +538,11 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     };
 
     let state = v.state_compat();
-    let id_state = if state != c::bch_snapshot_state::no_keys &&
-                      state != c::bch_snapshot_state::deleted {
-        c::snapshot_id_state::SNAPSHOT_ID_live
+    let id_state = if state != c::SnapshotState::no_keys &&
+                      state != c::SnapshotState::deleted {
+        c::SnapshotIdState::SNAPSHOT_ID_live
     } else {
-        c::snapshot_id_state::SNAPSHOT_ID_deleted
+        c::SnapshotIdState::SNAPSHOT_ID_deleted
     };
 
     store(&e.state, id_state.into_bits());
@@ -586,7 +586,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     }
     e.is_ancestor.store(&is_ancestor);
 
-    if state == c::bch_snapshot_state::will_delete {
+    if state == c::SnapshotState::will_delete {
         // Schedule the deleter. This may run as a BTREE_TRIGGER_atomic
         // trigger - btree write locks held, committed to the commit - so the
         // schedule must be ephemeral (no sb_lock) and best-effort: an error
@@ -597,7 +597,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
         // otherwise it schedules the async runner.
         let mut buf = Printbuf::new();
         let _ = passes::run_explicit(fs, &mut buf, RecoveryPass::delete_dead_snapshots,
-                                     c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ephemeral);
+                                     c::RunRecoveryPassFlags::RUN_RECOVERY_PASS_ephemeral);
     }
     Ok(())
 }
@@ -657,7 +657,7 @@ impl c::bch_fs_snapshots {
     pub fn is_leaf(&self, id: u32) -> Result<bool, BchError> {
         match self.with_table(|t| t.entry(id).map(|s| s.children()[0])) {
             Some(child) => Ok(child == 0),
-            None        => self.fs().throw(bch_errcode::BCH_ERR_invalid_snapshot_node),
+            None        => self.fs().throw(Errcode::BCH_ERR_invalid_snapshot_node),
         }
     }
 
@@ -678,13 +678,13 @@ impl c::bch_fs_snapshots {
         self.with_table(|t| t.root(id))
     }
 
-    pub fn id_state(&self, id: u32) -> c::snapshot_id_state {
+    pub fn id_state(&self, id: u32) -> c::SnapshotIdState {
         self.with_table(|t| t.id_state(id))
     }
 
     /// @id is a live node: as bch2_snapshot_exists().
     pub fn exists(&self, id: u32) -> bool {
-        self.id_state(id) == c::snapshot_id_state::SNAPSHOT_ID_live
+        self.id_state(id) == c::SnapshotIdState::SNAPSHOT_ID_live
     }
 
     /// Of a child of @parent; 0 for no parent. Panics if @parent isn't in the
@@ -743,7 +743,7 @@ impl c::bch_fs_snapshots {
         let known = [s.parent.get(), s.children[0].get(), s.children[1].get()];
         self.with_table(|t| {
             let mut claims = t.0.iter().enumerate()
-                .filter(|(_, n)| n.state() == c::snapshot_id_state::SNAPSHOT_ID_live)
+                .filter(|(_, n)| n.state() == c::SnapshotIdState::SNAPSHOT_ID_live)
                 .filter(|(_, n)| if parent { n.children().contains(&id) } else { n.parent() == id })
                 .map(|(idx, _)| u32::MAX - idx as u32)
                 .filter(|n_id| !known.contains(n_id));
@@ -758,7 +758,7 @@ impl c::bch_fs_snapshots {
     /// For node @id, about to be created.
     pub fn table_make_room(&self, id: u32) -> Result<(), BchError> {
         self.table_write().make_room(id)
-            .map_err(|_| self.fs().err(bch_errcode::BCH_ERR_ENOMEM_mark_snapshot))
+            .map_err(|_| self.fs().err(Errcode::BCH_ERR_ENOMEM_mark_snapshot))
     }
 
     pub(crate) fn table_write(&self) -> TableWrite<'_> {
@@ -969,8 +969,8 @@ pub fn val(k: BkeySC<'_>) -> Option<c::Snapshot> {
 /// The state codeword nearest @v and its Hamming distance - the first, on a
 /// tie. Codewords are >= 14 bits apart, so within 6 bits the nearest is the
 /// original.
-pub fn state_nearest(v: u32) -> (c::bch_snapshot_state, u32) {
-    let mut best = (c::bch_snapshot_state::live, 33);
+pub fn state_nearest(v: u32) -> (c::SnapshotState, u32) {
+    let mut best = (c::SnapshotState::live, 33);
     for s in SNAPSHOT_STATES {
         let dist = (v ^ s.0).count_ones();
         if dist < best.1 {
@@ -980,11 +980,11 @@ pub fn state_nearest(v: u32) -> (c::bch_snapshot_state, u32) {
     best
 }
 
-const SNAPSHOT_STATES: [c::bch_snapshot_state; 4] = [
-    c::bch_snapshot_state::live,
-    c::bch_snapshot_state::will_delete,
-    c::bch_snapshot_state::no_keys,
-    c::bch_snapshot_state::deleted,
+const SNAPSHOT_STATES: [c::SnapshotState; 4] = [
+    c::SnapshotState::live,
+    c::SnapshotState::will_delete,
+    c::SnapshotState::no_keys,
+    c::SnapshotState::deleted,
 ];
 
 /// Any snapshot node, in place or whole - the struct reaches these too.
@@ -995,36 +995,36 @@ impl c::Snapshot<Validated> {
     pub fn tree(&self) -> u32         { self.tree.get() }
 
     /// None if the field is 0 - the key predates it - or damaged.
-    pub fn state_field(&self) -> Option<c::bch_snapshot_state> {
+    pub fn state_field(&self) -> Option<c::SnapshotState> {
         state_field(self.state().get())
     }
 
     /// The node's state, on any key: zero isn't a valid state, so a zero
     /// field means the key predates it, and the old flag bits are
     /// authoritative.
-    pub fn state_compat(&self) -> c::bch_snapshot_state {
+    pub fn state_compat(&self) -> c::SnapshotState {
         match self.state().get() {
             0 => self.state_from_flags(),
-            s => c::bch_snapshot_state(s),
+            s => c::SnapshotState(s),
         }
     }
 
     /// The state the legacy flags imply.
-    pub fn state_from_flags(&self) -> c::bch_snapshot_state {
+    pub fn state_from_flags(&self) -> c::SnapshotState {
         if self.deleted_obsolete() {
-            c::bch_snapshot_state::deleted
+            c::SnapshotState::deleted
         } else if self.no_keys_obsolete() {
-            c::bch_snapshot_state::no_keys
+            c::SnapshotState::no_keys
         } else if self.will_delete_obsolete() {
-            c::bch_snapshot_state::will_delete
+            c::SnapshotState::will_delete
         } else {
-            c::bch_snapshot_state::live
+            c::SnapshotState::live
         }
     }
 
     /// From the legacy flags if the key predates the state field; None if the
     /// field is damaged.
-    pub fn state_decoded(&self) -> Option<c::bch_snapshot_state> {
+    pub fn state_decoded(&self) -> Option<c::SnapshotState> {
         if self.state() == 0 {
             Some(self.state_from_flags())
         } else {
@@ -1037,8 +1037,8 @@ impl c::Snapshot<Validated> {
 impl c::Snapshot<Whole> {
     /// And the legacy flags to match - SUBVOL_OBSOLETE from @subvol, so set
     /// that first.
-    pub fn set_state(&mut self, state: c::bch_snapshot_state) {
-        use c::bch_snapshot_state as S;
+    pub fn set_state(&mut self, state: c::SnapshotState) {
+        use c::SnapshotState as S;
 
         let flags = match state {
             S::live        => Some((false, self.subvol.get() != 0, false, false)),
@@ -1075,7 +1075,7 @@ impl fmt::Display for c::Snapshot {
         } else if state_field(state).is_none() {
             write!(f, " state {state:#x} invalid (flags {flags:#x}:{obsolete})")
         } else {
-            let state = c::bch_snapshot_state(state);
+            let state = c::SnapshotState(state);
             write!(f, " {state}")?;
 
             // The obsolete flags are dual-written shadows of the state field
@@ -1123,7 +1123,7 @@ impl fmt::Display for ObsoleteFlags {
     }
 }
 
-fn state_field(state: u32) -> Option<c::bch_snapshot_state> {
+fn state_field(state: u32) -> Option<c::SnapshotState> {
     SNAPSHOT_STATES.into_iter().find(|&s| s.0 == state)
 }
 
@@ -1178,7 +1178,7 @@ impl BkeyOps for c::Snapshot {
         // machinery's remedy is dropping the key; on-disk violations are fsck's
         // to handle, gently). Zero state is legal - pre-upgrade keys are
         // rewritten with only their other fields touched:
-        if v.from.from() == c::bkey_validate_from::commit &&
+        if v.from.from() == c::BkeyValidateFrom::commit &&
            v.fs.opts().no_commit_validate.get() == 0 {
             let state = if has_field!(k, state) { s.state.get() } else { 0 };
 
@@ -1192,12 +1192,12 @@ impl BkeyOps for c::Snapshot {
             // can't be removed from the tree at runtime. will_delete retains the
             // backref: it points at the subvolume's tombstone, which the deletion
             // path checks (check_should_delete_leaf()).
-            let st = c::bch_snapshot_state(state);
+            let st = c::SnapshotState(state);
             bkey_fsck_err_on!(v, s.subvol.get() != 0 &&
                               (children[0] != 0 ||
                                (state != 0 &&
-                                st != c::bch_snapshot_state::live &&
-                                st != c::bch_snapshot_state::will_delete)),
+                                st != c::SnapshotState::live &&
+                                st != c::SnapshotState::will_delete)),
                               id::snapshot_should_not_have_subvol,
                               "snapshot with subvol must be a live or will_delete leaf")?;
         }
@@ -1249,7 +1249,7 @@ pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree,
     t.bkey_get_val::<c::SnapshotTree>(Btree::snapshot_trees, pos(0, id as u64),
                                       BtreeIterFlags::empty())
         .map_err(|e| if e.matches(c::ENOENT) {
-            t.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot_tree)
+            t.fs().err(Errcode::BCH_ERR_ENOENT_snapshot_tree)
         } else {
             e
         })
@@ -1262,8 +1262,8 @@ pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
     let mut iter = BtreeIter::uninit();
     match t.bkey_get_empty_slot(&mut iter, Btree::snapshot_trees, POS_MIN,
                                 pos(0, u32::MAX as u64)) {
-        Err(e) if e.matches(bch_errcode::BCH_ERR_ENOSPC_btree_slot) =>
-            return t.fs().throw(bch_errcode::BCH_ERR_ENOSPC_snapshot_tree),
+        Err(e) if e.matches(Errcode::BCH_ERR_ENOSPC_btree_slot) =>
+            return t.fs().throw(Errcode::BCH_ERR_ENOSPC_snapshot_tree),
         r => r?,
     }
 
@@ -1295,7 +1295,7 @@ fn create_snapids(
     for (new_id, &subvol) in new_snapids.iter_mut().zip(subvols) {
         let p = match iter.prev_slot(t)? {
             Some(k) if k.k.p.offset != 0 => k.k.p,
-            _ => return fs.throw(bch_errcode::BCH_ERR_ENOSPC_snapshot_create),
+            _ => return fs.throw(Errcode::BCH_ERR_ENOSPC_snapshot_create),
         };
 
         let mut n = t.bkey_alloc_typed::<c::Snapshot>()?;
@@ -1314,7 +1314,7 @@ fn create_snapids(
         skip.sort_unstable();
         v.skip = skip.map(Into::into);
 
-        v.set_state(c::bch_snapshot_state::live);
+        v.set_state(c::SnapshotState::live);
 
         t.update(&iter, &n, UpdateTriggerFlags::empty())?;
         mark_snapshot(fs, BkeySC::from(n.as_ref()))?;
@@ -1345,7 +1345,7 @@ fn node_create_children(
 
     if n_parent.v().children() != [0, 0] {
         bch_err!(fs, "Trying to add child snapshot nodes to parent that already has children");
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_parent_already_has_children);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_snapshot_parent_already_has_children);
     }
 
     create_snapids(t, parent, n_parent.v().tree(), new_snapids, subvols)?;
@@ -1353,7 +1353,7 @@ fn node_create_children(
     let v = n_parent.v_mut();
     v.children = [new_snapids[0].into(), new_snapids[1].into()];
     v.subvol   = 0u32.into();
-    v.set_state(c::bch_snapshot_state::live);
+    v.set_state(c::SnapshotState::live);
     Ok(())
 }
 
@@ -1377,7 +1377,7 @@ pub fn node_create(t: &TransAttempt<'_, '_>, parent: u32, new_snapids: &mut [u32
     -> Result<(), BchError>
 {
     if new_snapids.len() != subvols.len() {
-        return t.fs().throw(bch_errcode::BCH_ERR_invalid_snapshot_node);
+        return t.fs().throw(Errcode::BCH_ERR_invalid_snapshot_node);
     }
     assert_eq!(parent == 0, new_snapids.len() == 1);
     assert_eq!(parent != 0, new_snapids.len() == 2);
@@ -1420,7 +1420,7 @@ pub(crate) fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
     // going RW, so we mark that pass as required in the superblock -
     // otherwise, we could end up deleting keys with missing snapshot nodes
     // instead
-    assert!(fs.flags.get(c::bch_fs_flags::new_fs) || !fs.flags.get(c::bch_fs_flags::may_go_rw),
+    assert!(fs.flags.get(c::FsFlag::new_fs) || !fs.flags.get(c::FsFlag::may_go_rw),
             "snapshots_read after going rw");
 
     // Initializing the is_ancestor bitmaps requires ancestors to already be
@@ -1439,7 +1439,7 @@ pub(crate) fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
 
         let _ = writeln!(msg, "Found {nr_empty_interior} empty interior snapshot nodes");
         passes::run_explicit(fs, &mut msg, RecoveryPass::delete_dead_interior_snapshots,
-                             c::bch_run_recovery_pass_flags::empty())?;
+                             c::RunRecoveryPassFlags::empty())?;
     }
     Ok(())
 }
@@ -1467,7 +1467,7 @@ pub fn check_key_has_snapshot<'a>(
     iter: &BtreeIter<'a>,
     k:    BkeySC<'_>,
 ) -> Result<bool, BchError> {
-    if t.fs().snapshots.id_state(k.k.p.snapshot) == c::snapshot_id_state::SNAPSHOT_ID_live {
+    if t.fs().snapshots.id_state(k.k.p.snapshot) == c::SnapshotIdState::SNAPSHOT_ID_live {
         return Ok(false);
     }
     check_snapshots::check_key_has_snapshot(t, Some(iter), k)
@@ -1530,7 +1530,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
         Err(e) if is_restart(&e) => return Err(e),
         Err(e) => { let _ = write!(out, "{}", e.msg()); }
         Ok(s) => {
-            let _ = write!(out, "{} ", c::bch_snapshot_state(s.state.get()));
+            let _ = write!(out, "{} ", c::SnapshotState(s.state.get()));
             let subvol = s.subvol.get();
             if subvol != 0 {
                 let _ = write!(out, "subvol {subvol}");

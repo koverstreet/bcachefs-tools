@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bch_bindgen::c::DegradedAction;
-use bch_bindgen::c::bch_persistent_counters;
+use bch_bindgen::c::PersistentCounter;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::counters::COUNTERS;
 use clap::Parser;
@@ -50,7 +50,7 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
         .context("opening filesystem")?;
 
     if to_reset.is_empty() {
-        for i in 0..bch_persistent_counters::NR as usize {
+        for i in 0..PersistentCounter::NR as usize {
             fs.counter_reset(i);
         }
     } else {

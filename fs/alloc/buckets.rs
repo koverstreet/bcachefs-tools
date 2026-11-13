@@ -14,7 +14,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, C
                          UpdateTriggerFlags, Watermark};
 use crate::btree::trans::TransGuard;
 use crate::c;
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::data::ec::stripe::{ptr_matches_stripe, ptr_matches_stripe_m};
 use crate::data::ptrs::{BkeyVPtrs, DecodedPtr, Ptrs};
 use crate::data::reconcile::needs_reconcile::extent_trigger_set_needs_reconcile;
@@ -37,14 +37,14 @@ use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, 
 use core::convert::Infallible;
 use core::ffi::c_uint;
 use core::sync::atomic::{AtomicU8, Ordering};
-use cstruct_macros::{c_name, CStruct, bitfield, Fieldwise, TypeInfo, bch_enum};
+use cstruct_macros::{CStruct, bitfield, Fieldwise, TypeInfo, bch_enum};
 use core::cell::Cell;
 use nestify::nest;
 use crate::format::{Bpos, Btree, DataType, BkeyType};
 
 #[bch_enum(flags)]
 #[repr(u32)]
-pub enum bch_reservation_flags {
+pub enum ReservationFlags {
     BCH_DISK_RESERVATION_NOFAIL = 1 << 0,
     BCH_DISK_RESERVATION_PARTIAL = 1 << 1,
 }
@@ -52,7 +52,7 @@ pub enum bch_reservation_flags {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct disk_reservation_destructable {
-    pub r: c::disk_reservation,
+    pub r: c::DiskReservation<'static>,
 }
 
 pub const RESERVE_FACTOR: u32 = 6;
@@ -190,7 +190,6 @@ pub struct bch_fs_placeable {
  * that embeds one is Default.
  */
 #[repr(C)]
-#[c_name(disk_reservation)]
 #[derive(CStruct)]
 pub struct DiskReservation<'f> {
     pub c: &'f Fs,
@@ -198,9 +197,6 @@ pub struct DiskReservation<'f> {
     pub generation: Cell<u32>,
     pub nr_replicas: Cell<c_uint>,
 }
-
-/// C's name, as FFI declarations and the structs embedding one spell it.
-pub type disk_reservation = DiskReservation<'static>;
 
 // ── Bucket addressing ────────────────────────────────────────────────────
 
@@ -396,7 +392,7 @@ impl TransAttempt<'_, '_> {
         }
 
         if b_gen != ptr_gen && ptr.cached() != 0 {
-            let no_stale_ptrs = 1 << c::bch_sb_compat::no_stale_ptrs.0;
+            let no_stale_ptrs = 1 << c::SbCompat::no_stale_ptrs.0;
             if fsck_err_on!(self, fs.sb.compat.get() & no_stale_ptrs != 0,
                             id::stale_ptr_with_no_stale_ptrs_feature,
                             "stale cached ptr, but have no_stale_ptrs feature\n{}", k.to_text(fs))? {
@@ -405,7 +401,7 @@ impl TransAttempt<'_, '_> {
                 *compat = Le64::new(compat.get() & !no_stale_ptrs);
                 fs.write_super(&mut sb);
             }
-            return Err(bch_errcode::BCH_ERR_cached_ptr_stale.into());
+            return Err(Errcode::BCH_ERR_cached_ptr_stale.into());
         }
 
         if b_gen != ptr_gen {
@@ -448,13 +444,13 @@ impl TransAttempt<'_, '_> {
 
         let print = count_fsck_err(fs, err, &mut buf);
         let ret = passes::run_explicit(fs, &mut buf, RecoveryPass::check_allocations,
-                                       c::bch_run_recovery_pass_flags::from_bits_retain(0));
+                                       c::RunRecoveryPassFlags::from_bits_retain(0));
 
         let ret = if fatal {
             self.updates_to_text(&mut buf);
             fs.inconsistent_error(&mut buf);
             // a recovery in progress can have it go back a pass instead
-            ret.and_then(|()| fs.throw(bch_errcode::BCH_ERR_bucket_ref_update))
+            ret.and_then(|()| fs.throw(Errcode::BCH_ERR_bucket_ref_update))
         } else {
             Ok(())
         };
@@ -497,7 +493,7 @@ fn trigger_pointer_dev_missing(fs: &Fs, k: BkeySC<'_>, dev: u32, insert: bool) -
     // C's: thrown, so counted and traced, then overwritten by what the
     // message returns
     if insert {
-        let _ = fs.err(bch_errcode::BCH_ERR_trigger_pointer);
+        let _ = fs.err(Errcode::BCH_ERR_trigger_pointer);
     }
 
     let mut msg = log_msg_ratelimited!(fs);
@@ -539,7 +535,7 @@ fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC
     if !ca.bucket_valid(bucket.offset) {
         if insert {
             ca.bucket_missing(bucket.offset);
-            return fs.throw(bch_errcode::BCH_ERR_trigger_pointer);
+            return fs.throw(Errcode::BCH_ERR_trigger_pointer);
         }
         return Ok(sectors);
     }
@@ -571,7 +567,7 @@ fn mark_stripe_ptr_no_match(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, idx: u64) -
          k.to_text(fs));
     count_fsck_err(fs, id::stripe_update_stale_stripe_ptr, &mut msg);
     passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
-                         c::bch_run_recovery_pass_flags::from_bits_retain(0))
+                         c::RunRecoveryPassFlags::from_bits_retain(0))
 }
 
 /// An erasure coded pointer's sectors, in its block of the stripe - the key
@@ -613,7 +609,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
     if flags.contains(UpdateTriggerFlags::GC) {
         let Ok(m) = fs.ec.gc_stripe_alloc(idx) else {
             bch_err!(fs, "error allocating memory for gc_stripes, idx {idx}");
-            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_mark_stripe_ptr);
+            return fs.throw(Errcode::BCH_ERR_ENOMEM_mark_stripe_ptr);
         };
 
         let acct = {
@@ -667,7 +663,7 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
         let disk_sectors = match trigger_pointer(t, btree, level, k.into(), &d, flags) {
             Ok(s) => s,
             // only a cached pointer is ever stale: it isn't counted
-            Err(e) if e.matches(bch_errcode::BCH_ERR_cached_ptr_stale) => continue,
+            Err(e) if e.matches(Errcode::BCH_ERR_cached_ptr_stale) => continue,
             Err(e) => return Err(e),
         };
 
@@ -843,8 +839,8 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64,
              data_type_str(data_type), data_type_str(data_type));
         count_fsck_err(fs, id::bucket_metadata_type_mismatch, &mut msg);
         passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
-                             c::bch_run_recovery_pass_flags::from_bits_retain(0))?;
-        return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
+                             c::RunRecoveryPassFlags::from_bits_retain(0))?;
+        return fs.throw(Errcode::BCH_ERR_metadata_bucket_inconsistency);
     }
 
     if u32::from(cur) != data_type.0 || a.v().dirty_sectors != sectors {
@@ -863,7 +859,7 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64, data_type
     let Some(g) = ca.gc_bucket(b) else {
         fs_inconsistent(fs, message!("reference to invalid bucket on device {} when marking metadata type {}",
                                      ca.dev_idx, data_type_str(data_type)));
-        return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
+        return fs.throw(Errcode::BCH_ERR_metadata_bucket_inconsistency);
     };
 
     t.gc_bucket_mod(ca, g, flags, |a| {
@@ -871,14 +867,14 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64, data_type
         if a.data_type != 0 && cur != data_type {
             fs_inconsistent(fs, message!("different types of data in same bucket: {}, {}",
                                          data_type_str(cur), data_type_str(data_type)));
-            return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
+            return fs.throw(Errcode::BCH_ERR_metadata_bucket_inconsistency);
         }
         if u64::from(a.dirty_sectors) + u64::from(sectors) > u64::from(ca.mi.get().bucket_size) {
             fs_inconsistent(fs, message!(
                 "bucket {}:{b} gen {} data type {} sector count overflow: {} + {sectors} > bucket size",
                 ca.dev_idx, a.generation, data_type_str(if a.data_type != 0 { cur } else { data_type }),
                 a.dirty_sectors));
-            return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
+            return fs.throw(Errcode::BCH_ERR_metadata_bucket_inconsistency);
         }
 
         a.data_type      = data_type.0 as u8;
@@ -904,7 +900,7 @@ pub fn trans_mark_metadata_bucket(trans: &TransGuard<'_>, ca: &Dev, b: u64, data
     if flags.contains(UpdateTriggerFlags::GC) {
         lockrestart_do(trans, |t| mark_metadata_bucket_gc(t, ca, b, data_type, sectors, flags))
     } else if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        commit_do(trans, None, CommitOpts::new().watermark(Watermark::BTREE),
+        commit_do(trans, None, CommitOpts::new().watermark(Watermark::btree),
                   |t| trans_mark_metadata_bucket_key(t, ca, b, data_type, sectors))
     } else {
         panic!("marking metadata, neither gc nor transactional");
@@ -1002,7 +998,7 @@ impl Fs {
             let nouse = state.writer_of(&ca.buckets_nouse);
             assert!(nouse.with(|w| w.is_empty()), "buckets_nouse allocated twice");
             if nouse.rebuild(bits_to_longs(ca.mi.get().nbuckets as usize), |_| ()).is_err() {
-                return self.throw(bch_errcode::BCH_ERR_ENOMEM_buckets_nouse);
+                return self.throw(Errcode::BCH_ERR_ENOMEM_buckets_nouse);
             }
         }
         Ok(())
@@ -1024,7 +1020,7 @@ impl Dev {
     {
         let fs = self.fs();
         if gens.read_head(&read_lock()).is_some() && self.buckets_nouse.with(|w| !w.is_empty()) {
-            return fs.throw(bch_errcode::BCH_ERR_no_resize_with_buckets_nouse);
+            return fs.throw(Errcode::BCH_ERR_no_resize_with_buckets_nouse);
         }
 
         let head = c::BucketGensHead {
@@ -1037,7 +1033,7 @@ impl Dev {
             }
             self.bucket_backpointer_mismatch.resize(self, nbuckets)?;
             self.bucket_backpointer_empty.resize(self, nbuckets)
-        }).or_else(|_| fs.throw(bch_errcode::BCH_ERR_ENOMEM_bucket_gens))?
+        }).or_else(|_| fs.throw(Errcode::BCH_ERR_ENOMEM_bucket_gens))?
     }
 
     /// Its usage counters and bucket generations, as it's set up:
@@ -1045,7 +1041,7 @@ impl Dev {
     pub fn buckets_alloc(&mut self) -> Result<(), BchError> {
         match PerCpu::alloc() {
             Ok(u)  => self.usage = u,
-            Err(_) => return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_usage_init),
+            Err(_) => return self.fs().throw(Errcode::BCH_ERR_ENOMEM_usage_init),
         }
         // a new device: no old gens to keep, no backpointer bitmaps to resize
         let mi = self.mi.get();
@@ -1056,7 +1052,7 @@ impl Dev {
         let gens = self.bucket_gens.published_writer_mut();
         debug_assert!(gens.read_head(&read_lock()).is_none(), "bucket gens allocated twice");
         if gens.rebuild_head(mi.nbuckets as usize, head, |_, _| Ok::<(), Infallible>(())).is_err() {
-            return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_bucket_gens);
+            return self.fs().throw(Errcode::BCH_ERR_ENOMEM_bucket_gens);
         }
         Ok(())
     }
@@ -1077,8 +1073,8 @@ impl Dev {
 impl Dev {
     /// The buckets held back from allocations at @watermark - for those at the
     /// watermarks under it: bch2_dev_buckets_reserved().
-    pub fn buckets_reserved(&self, watermark: c::bch_watermark) -> u64 {
-        use c::bch_watermark as w;
+    pub fn buckets_reserved(&self, watermark: c::Watermark) -> u64 {
+        use c::Watermark as w;
         let (some, btree) = (self.mi.get().nbuckets >> 6, u64::from(self.nr_btree_reserve));
 
         match watermark {
@@ -1095,7 +1091,7 @@ impl Dev {
     /// Its free buckets in @usage, less the open ones and @watermark's
     /// reserve, at least 0: __dev_buckets_free(). nr_open_buckets is the
     /// allocator's, read unlocked, as C does.
-    pub fn free_buckets_at(&self, usage: &c::bch_dev_usage, watermark: c::bch_watermark) -> u64 {
+    pub fn free_buckets_at(&self, usage: &c::bch_dev_usage, watermark: c::Watermark) -> u64 {
         let open = self.nr_open_buckets.get();
         let free = usage.buckets[DataType::free.0 as usize];
         // as C's: u64s, then max_t(s64, 0, ..)

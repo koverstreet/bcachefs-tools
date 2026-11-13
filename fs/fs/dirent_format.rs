@@ -33,7 +33,7 @@ use crate::types::{c_default, Le32, Le64};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, bitfield, CStruct, TypeInfo, SizedVal};
+use cstruct_macros::{bitfield, CStruct, TypeInfo, SizedVal};
 use nestify::nest;
 use zerocopy::byteorder::little_endian as le;
 
@@ -50,7 +50,6 @@ use zerocopy::byteorder::little_endian as le;
  * collision:
  */
 nest! {
-    #[c_name(bch_dirent)]
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
     #[derive(SizedVal)]
     #[repr(C, align(8))]
@@ -338,7 +337,7 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<super::Dirent<'k>, BchEr
 
     if let DirentName::Casefolded { cf, .. } = names {
         let cf = cf.as_bytes();
-        bkey_fsck_err_on!(v, v.from.from() == c::bkey_validate_from::commit &&
+        bkey_fsck_err_on!(v, v.from.from() == c::BkeyValidateFrom::commit &&
                           cf.len() > c::BCH_NAME_MAX as usize,
                           id::dirent_cf_name_too_big,
                           "dirent w/ cf name too big ({} > {})", cf.len(), c::BCH_NAME_MAX)?;

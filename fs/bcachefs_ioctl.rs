@@ -297,7 +297,7 @@ pub struct bch_ioctl_disk_v2 {
 /*
  * BCH_IOCTL_DISK_SET_STATE: modify state of a member device of a filesystem
  *
- * @new_state		- one of the bch_member_state states (rw, ro, failed,
+ * @new_state		- one of the MemberState states (rw, ro, failed,
  *			  spare)
  *
  * Will refuse to change member state if we would then have insufficient devices
@@ -327,7 +327,7 @@ pub struct bch_ioctl_disk_set_state_v2 {
 #[prefix(BCH_DATA_OP_)]
 #[nr]
 #[repr(u32)]
-pub enum bch_data_ops {
+pub enum DataOp {
     scrub = 0,
     rereplicate = 1,
     migrate = 2,
@@ -408,7 +408,7 @@ unsafe impl kernel::transmute::FromBytes for bch_ioctl_data {}
 
 #[bch_enum(open)]
 #[repr(u32)]
-pub enum bch_data_event {
+pub enum DataEvent {
     BCH_DATA_EVENT_PROGRESS = 0,
     /* XXX: add an event for reporting errors */
     BCH_DATA_EVENT_NR = 1,
@@ -416,7 +416,7 @@ pub enum bch_data_event {
 
 #[bch_enum(open)]
 #[repr(u32)]
-pub enum data_progress_data_type_special {
+pub enum DataProgressDataTypeSpecial {
     DATA_PROGRESS_DATA_TYPE_phys = 254,
     DATA_PROGRESS_DATA_TYPE_done = 255,
 }
@@ -437,7 +437,7 @@ pub struct bch_ioctl_data_progress {
 
 #[bch_enum(open)]
 #[repr(u32)]
-pub enum bch_ioctl_data_event_ret {
+pub enum IoctlDataEventRet {
     BCH_IOCTL_DATA_EVENT_RET_done = 1,
     BCH_IOCTL_DATA_EVENT_RET_device_offline = 2,
 }
@@ -921,7 +921,7 @@ pub struct bch_ioctl_snapshot_tree_query_v2 {
 #[bch_enum(open)]
 #[prefix(BCH_PROGRESS_UNITS_)]
 #[repr(u32)]
-pub enum bch_progress_units {
+pub enum ProgressUnit {
     nodes = 0,
     keys = 1,
 }
@@ -974,7 +974,7 @@ pub struct bch_ioctl_recovery_status {
     pub passes_remaining: c::bch_recovery_pass_mask,
 
     pub pass: u32, /* enum bch_recovery_pass, 0 = idle */
-    pub units: u32, /* enum bch_progress_units */
+    pub units: u32, /* enum ProgressUnit */
     pub seen: u64,
     pub total: u64,
 }

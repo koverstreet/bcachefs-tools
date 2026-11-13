@@ -30,7 +30,7 @@ use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::init::passes::RecoveryPass;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, BkeyValidate};
 use crate::init::passes;
@@ -64,7 +64,7 @@ fn missing(fs: &Fs, subvol: u32) -> Result<(), BchError> {
     msg.set_suppressed(!log);
 
     passes::run_explicit(fs, &mut msg, RecoveryPass::check_inodes,
-                         c::bch_run_recovery_pass_flags::from_bits_retain(0))
+                         c::RunRecoveryPassFlags::from_bits_retain(0))
 }
 
 /// A tombstone is ENOENT_subvolume_deleted.
@@ -77,8 +77,8 @@ pub fn get_key(
 
     let mut ret = t.bkey_get_key::<c::Subvolume>(Btree::subvolumes, pos(0, subvol as u64),
                                                    BtreeIterFlags::CACHED);
-    if matches!(&ret, Ok(k) if k.v.state_decoded() == Some(c::bch_subvolume_state::deleted)) {
-        ret = Err(fs.err(bch_errcode::BCH_ERR_ENOENT_subvolume_deleted));
+    if matches!(&ret, Ok(k) if k.v.state_decoded() == Some(c::SubvolumeState::deleted)) {
+        ret = Err(fs.err(Errcode::BCH_ERR_ENOENT_subvolume_deleted));
     }
     if let Err(e) = &ret {
         if e.matches(c::ENOENT) && inconsistent_if_not_found {
@@ -125,7 +125,7 @@ pub fn get_snapshot_nowarn(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32,
 /// directory.
 pub fn is_unlinked(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<bool, BchError> {
     match get(t, subvol, false) {
-        Ok(s) => Ok(s.state_decoded() == Some(c::bch_subvolume_state::unlinked)),
+        Ok(s) => Ok(s.state_decoded() == Some(c::SubvolumeState::unlinked)),
         Err(e) if e.matches(c::ENOENT) => Ok(false),
         Err(e) => Err(e),
     }
@@ -135,7 +135,7 @@ pub fn is_unlinked(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<bool, BchErr
 pub fn is_ro_trans(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchError> {
     let s = get(t, subvol, true)?;
 
-    if s.ro() || s.state_decoded() == Some(c::bch_subvolume_state::unlinked) {
+    if s.ro() || s.state_decoded() == Some(c::SubvolumeState::unlinked) {
         return Err(BchError::from(c::EROFS));
     }
     Ok(s.snapshot())
@@ -152,7 +152,7 @@ pub fn require_no_children(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), 
                                   BtreeIterFlags::empty());
     match iter.peek(t)? {
         Some(k) if k.k.p.inode == subvol as u64 =>
-            Err(t.fs().err(bch_errcode::BCH_ERR_ENOTEMPTY_subvol_not_empty)),
+            Err(t.fs().err(Errcode::BCH_ERR_ENOTEMPTY_subvol_not_empty)),
         _ => Ok(()),
     }
 }
@@ -222,10 +222,10 @@ pub fn val(k: BkeySC<'_>) -> Option<c::Subvolume> {
     c::Subvolume::val_copy_pad(k)
 }
 
-const SUBVOLUME_STATES: [c::bch_subvolume_state; 3] = [
-    c::bch_subvolume_state::live,
-    c::bch_subvolume_state::unlinked,
-    c::bch_subvolume_state::deleted,
+const SUBVOLUME_STATES: [c::SubvolumeState; 3] = [
+    c::SubvolumeState::live,
+    c::SubvolumeState::unlinked,
+    c::SubvolumeState::deleted,
 ];
 
 /// Any subvolume, in place or whole - the struct reaches these too.
@@ -233,18 +233,18 @@ impl c::Subvolume<Validated> {
     pub fn snapshot(&self) -> u32 { self.snapshot.get() }
 
     /// None if the field is 0 - the key predates it - or damaged.
-    pub fn state_field(&self) -> Option<c::bch_subvolume_state> {
+    pub fn state_field(&self) -> Option<c::SubvolumeState> {
         SUBVOLUME_STATES.into_iter().find(|&s| s.0 == self.state().get())
     }
 
     /// The state the legacy UNLINKED_OBSOLETE flag implies.
-    pub fn state_from_flags(&self) -> c::bch_subvolume_state {
-        if self.unlinked_obsolete() { c::bch_subvolume_state::unlinked } else { c::bch_subvolume_state::live }
+    pub fn state_from_flags(&self) -> c::SubvolumeState {
+        if self.unlinked_obsolete() { c::SubvolumeState::unlinked } else { c::SubvolumeState::live }
     }
 
     /// From the legacy flag if the key predates the state field; None if the
     /// field is damaged.
-    pub fn state_decoded(&self) -> Option<c::bch_subvolume_state> {
+    pub fn state_decoded(&self) -> Option<c::SubvolumeState> {
         if self.state() == 0 { Some(self.state_from_flags()) } else { self.state_field() }
     }
 }
@@ -255,15 +255,15 @@ impl c::Subvolume<Whole> {
     /// wiped and recovered from the flag comes back unlinked, so the deletion
     /// reruns rather than being reverted, and an old kernel keeps deleting a
     /// tombstone.
-    pub fn set_state(&mut self, state: c::bch_subvolume_state) {
-        self.set_unlinked_obsolete(state != c::bch_subvolume_state::live);
+    pub fn set_state(&mut self, state: c::SubvolumeState) {
+        self.set_unlinked_obsolete(state != c::SubvolumeState::live);
         self.state = state.0.into();
     }
 }
 
 /// See snapshot::state_nearest().
-fn state_nearest(raw: u32) -> (c::bch_subvolume_state, u32) {
-    let mut best = (c::bch_subvolume_state::live, 33);
+fn state_nearest(raw: u32) -> (c::SubvolumeState, u32) {
+    let mut best = (c::SubvolumeState::live, 33);
     for st in SUBVOLUME_STATES {
         let dist = (raw ^ st.0).count_ones();
         if dist < best.1 {
@@ -292,7 +292,7 @@ impl BkeyOps for c::Subvolume {
         // Only at commit, never on existing keys. Only Ok(false) fails: is_leaf()
         // errors for ids not in the table yet, and create() commits the subvolume
         // with its new snapshot nodes, before their trigger adds them.
-        if v.from.from() == c::bkey_validate_from::commit &&
+        if v.from.from() == c::BkeyValidateFrom::commit &&
            v.fs.opts().no_commit_validate.get() == 0 {
             if has_field!(k, state) {
                 bkey_fsck_err_on!(v, s.state != 0 && s.state_field().is_none(), id::subvol_state_bad,
@@ -333,7 +333,7 @@ impl BkeyOps for c::Subvolume {
             write!(out, " {state}");
 
             // The legacy flag disagreeing with the state
-            if s.unlinked_obsolete() != (state != c::bch_subvolume_state::live) {
+            if s.unlinked_obsolete() != (state != c::SubvolumeState::live) {
                 write!(out, " unlinked_obsolete={}", s.unlinked_obsolete() as u32);
             }
         } else {
@@ -420,7 +420,7 @@ fn check_subvol<'a, 't>(
             fsck_err_report!(fs, id::subvol_state_bad,
                              "subvolume has invalid state {raw:#x} (nearest codeword {nearest} is {dist} bits away):\n{}",
                              s.to_text(fs));
-            return fs.throw(bch_errcode::BCH_ERR_fsck_repair_unimplemented);
+            return fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented);
         };
 
         if fix {
@@ -430,7 +430,7 @@ fn check_subvol<'a, 't>(
 
     // A tombstone only waits for its snapshot to be reaped; none of the checks
     // below apply, and its root inode may already be gone.
-    if s.v().state_decoded() == Some(c::bch_subvolume_state::deleted) {
+    if s.v().state_decoded() == Some(c::SubvolumeState::deleted) {
         return Ok(());
     }
 
@@ -443,7 +443,7 @@ fn check_subvol<'a, 't>(
             let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
             prt!(&mut msg, "subvolume points to missing snapshot\n{}\n", s.to_text(fs));
             passes::run_explicit(fs, &mut msg, RecoveryPass::reconstruct_snapshots,
-                                 c::bch_run_recovery_pass_flags::from_bits_retain(0))?;
+                                 c::RunRecoveryPassFlags::from_bits_retain(0))?;
             return Err(e);
         }
         Err(e) => return Err(e),
@@ -461,7 +461,7 @@ fn check_subvol<'a, 't>(
                 fsck_err_report!(fs, id::snapshot_subvol_backref_wrong,
                                  "snapshot {snapid} is claimed by subvolume {backref}, which it backrefs, and also by {id}:\n{}\n{}",
                                  s.to_text(fs), n.v());
-                return fs.throw(bch_errcode::BCH_ERR_fsck_repair_unimplemented);
+                return fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented);
             }
             Err(e) if !e.matches(c::ENOENT) => return Err(e),
             _ => {}
@@ -475,10 +475,10 @@ fn check_subvol<'a, 't>(
         fsck_err_report!(fs, id::subvol_snapshot_not_leaf,
                          "subvolume points to interior snapshot node:\n{}\n{}",
                          s.to_text(fs), n.v());
-        return fs.throw(bch_errcode::BCH_ERR_fsck_repair_unimplemented);
+        return fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented);
     }
 
-    if s.v().state_decoded() == Some(c::bch_subvolume_state::unlinked) {
+    if s.v().state_decoded() == Some(c::SubvolumeState::unlinked) {
         // Repairs above may still be queued: commit them, and rerun
         // check_subvol() - whose fixes are then in, and don't refire -
         // before deleting. Free when nothing's queued.
@@ -498,11 +498,11 @@ fn check_subvol<'a, 't>(
         n.v_mut(t)?.subvol = (id as u32).into();
     }
 
-    if fsck_err_on!(t, n.v().state_decoded() != Some(c::bch_snapshot_state::live),
+    if fsck_err_on!(t, n.v().state_decoded() != Some(c::SnapshotState::live),
                     id::snapshot_subvol_state_mismatch,
                     "subvolume points to a snapshot that isn't live:\n{}\n{}",
                     s.to_text(fs), n.v())? {
-        n.v_mut(t)?.set_state(c::bch_snapshot_state::live);
+        n.v_mut(t)?.set_state(c::SnapshotState::live);
     }
 
     if fsck_err_on!(t, id == c::BCACHEFS_ROOT_SUBVOL as u64 && s.v().fs_path_parent() != 0,
@@ -588,7 +588,7 @@ fn check_subvols(fs: &Fs) -> Result<(), BchError> {
                          |t, iter, k| check_subvol(t, iter, k))?;
 
     // A clean pass lets check_key_has_snapshot trust the in-memory table
-    if !fs.flags.get(c::bch_fs_flags::error) {
+    if !fs.flags.get(c::FsFlag::error) {
         passes::set_btree_clean(fs, Btree::subvolumes);
     }
     Ok(())
@@ -606,7 +606,7 @@ fn check_subvol_child(
     let s = val(s_iter.peek_slot(t)?.expect("a slot always has a key"));
 
     // A missing subvolume means a stray entry, not a failed pass
-    if fsck_err_on!(t, s.is_none_or(|s| s.state_decoded() != Some(c::bch_subvolume_state::live) ||
+    if fsck_err_on!(t, s.is_none_or(|s| s.state_decoded() != Some(c::SubvolumeState::live) ||
                                         s.fs_path_parent().get() as u64 != k.k.p.inode),
                     id::subvol_children_bad,
                     "incorrect entry in subvolume_children btree {}:{}",
@@ -643,7 +643,7 @@ fn get_mut<'a, 't>(t: &TransAttempt<'a, 't>, subvol: u32)
 }
 
 /// For unlinking and deleting: also takes it out of the filesystem tree.
-fn set_state_trans(t: &TransAttempt<'_, '_>, subvol: u32, state: c::bch_subvolume_state)
+fn set_state_trans(t: &TransAttempt<'_, '_>, subvol: u32, state: c::SubvolumeState)
     -> Result<(), BchError>
 {
     let mut k = get_mut(t, subvol)?;
@@ -722,7 +722,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
         u.v_mut().master_subvol = 0.into();
     }
 
-    set_state_trans(t, subvol, c::bch_subvolume_state::deleted)?;
+    set_state_trans(t, subvol, c::SubvolumeState::deleted)?;
     crate::snapshots::delete::node_set_deleted(t, snapid)
 }
 
@@ -779,7 +779,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
         Ok(())
     })?;
 
-    set_state_trans(t, subvol, c::bch_subvolume_state::unlinked)?;
+    set_state_trans(t, subvol, c::SubvolumeState::unlinked)?;
 
     // There's no unlinked-subvolumes btree, as there is for inodes: if we
     // crash while it's still open, check_subvols finds and deletes it
@@ -809,8 +809,8 @@ pub fn create(
     let mut dst_iter = BtreeIter::uninit();
     match t.bkey_get_empty_slot(&mut dst_iter, Btree::subvolumes, POS_MIN,
                                 pos(0, u32::MAX as u64)) {
-        Err(e) if e.matches(bch_errcode::BCH_ERR_ENOSPC_btree_slot) =>
-            return fs.throw(bch_errcode::BCH_ERR_ENOSPC_subvolume_create),
+        Err(e) if e.matches(Errcode::BCH_ERR_ENOSPC_btree_slot) =>
+            return fs.throw(Errcode::BCH_ERR_ENOSPC_subvolume_create),
         r => r?,
     }
     let new_id = dst_iter.pos().offset as u32;
@@ -846,7 +846,7 @@ pub fn create(
     v.otime.hi        = 0.into();
     v.set_ro(ro);
     v.set_snap(src != 0);
-    v.set_state(c::bch_subvolume_state::live);
+    v.set_state(c::SubvolumeState::live);
     let v = *k.v();
 
     t.update(&dst_iter, &k, UpdateTriggerFlags::empty())?;
@@ -871,7 +871,7 @@ pub(crate) fn initialize(fs: &Fs) -> Result<(), BchError> {
     v.parent = 0.into();
     v.subvol = (c::BCACHEFS_ROOT_SUBVOL).into();
     v.tree   = (1u32).into();
-    v.set_state(c::bch_snapshot_state::live);
+    v.set_state(c::SnapshotState::live);
 
     let mut root_volume = BkeyI::<c::Subvolume>::new();
     root_volume.k.p.offset = c::BCACHEFS_ROOT_SUBVOL as u64;
@@ -879,7 +879,7 @@ pub(crate) fn initialize(fs: &Fs) -> Result<(), BchError> {
     v.flags    = 0.into();
     v.snapshot = (u32::MAX).into();
     v.inode    = ((c::BCACHEFS_ROOT_INO as u64)).into();
-    v.set_state(c::bch_subvolume_state::live);
+    v.set_state(c::SubvolumeState::live);
 
     fs.btree_insert(Btree::snapshot_trees, &mut root_tree, None, CommitFlags::empty(),
                     BtreeIterFlags::empty())?;
@@ -903,7 +903,7 @@ fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
 
         if !inode::bkey_is_inode(k.k) {
             bch_err!(fs, "root inode not found");
-            return fs.throw(bch_errcode::BCH_ERR_ENOENT_inode);
+            return fs.throw(Errcode::BCH_ERR_ENOENT_inode);
         }
 
         let mut inode = inode::unpack(fs, k);

@@ -34,9 +34,10 @@ use super::types::{BtreeIter, BtreeTrans};
 use super::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
+pub use crate::c::Watermark;
 use crate::errcode::{
     BchError,
-    bch_errcode,
+    Errcode,
     errptr_to_result,
     ret_to_result_void as ret_to_result,
 };
@@ -177,7 +178,7 @@ impl Drop for TransMayDropUpdates<'_, '_> {
 /// Whether @e is a transaction restart: the attempt is over, and the loop
 /// it's in begins again.
 pub fn is_restart(e: &BchError) -> bool {
-    e.matches(bch_errcode::BCH_ERR_transaction_restart)
+    e.matches(Errcode::BCH_ERR_transaction_restart)
 }
 
 pub fn lockrestart_do<'t, T, F>(trans: &BtreeTrans<'t>, mut f: F) -> Result<T, BchError>
@@ -460,7 +461,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if let Err(e) = f(&self.lend_owner()) {
             return e;
         }
-        self.trans.begin().restart(bch_errcode::BCH_ERR_transaction_restart_nested)
+        self.trans.begin().restart(Errcode::BCH_ERR_transaction_restart_nested)
     }
 
     /// End this attempt for @f, work that runs loops of its own, lending it the
@@ -478,7 +479,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if let Err(e) = f(&self.lend_owner()) {
             return e;
         }
-        self.trans.begin().restart(bch_errcode::BCH_ERR_transaction_restart_nested)
+        self.trans.begin().restart(Errcode::BCH_ERR_transaction_restart_nested)
     }
 
     /// Commit only once the transaction's memory is getting full: for a key
@@ -500,7 +501,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// The transaction has to know: it's marked restarted and its restart_count
     /// bumped, which bch2_trans_begin() and verify_not_restarted() go by.
-    pub fn restart(&self, error: bch_errcode) -> BchError {
+    pub fn restart(&self, error: Errcode) -> BchError {
         self.trans.restart(error)
     }
 
@@ -533,7 +534,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     #[inline(always)]
     pub fn relock_or_nested(&self) -> Result<(), BchError> {
         if self.trans.restart_count() != self.restart_count.get() {
-            return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
+            return Err(BchError::from(Errcode::BCH_ERR_transaction_restart_nested));
         }
         self.relock()
     }
@@ -542,7 +543,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub(in crate::btree) fn relock_or_nested_in(&self, paths: &mut Paths<'_>) -> Result<(), BchError> {
         assert!(self.live.get(), "relock of an attempt that ended");
         if self.trans.restart_count() != self.restart_count.get() {
-            return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
+            return Err(BchError::from(Errcode::BCH_ERR_transaction_restart_nested));
         }
         self.trans.relock_from(paths)
     }
@@ -589,7 +590,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
         unlock(locks);
         let v = alloc().map_err(|e| {
-            if e.matches(c::ENOMEM) { self.fs().err(bch_errcode(e.raw() as u32)) } else { e }
+            if e.matches(c::ENOMEM) { self.fs().err(Errcode(e.raw() as u32)) } else { e }
         })?;
         relock(locks)?;
         Ok(v)
@@ -635,7 +636,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
                     if trans.restart_count.get() != orig_restart_count {
                         return Err(BchError::from_raw(
-                            bch_errcode::BCH_ERR_transaction_restart_nested.0 as i32));
+                            Errcode::BCH_ERR_transaction_restart_nested.0 as i32));
                     }
                     return Ok(v);
                 }
@@ -912,7 +913,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let mut iter = BtreeNodeIter::new(self, btree, key.k().p, level + 1, level, BtreeIterFlags::INTENT);
         if iter.peek(self)?.is_none() {
-            return Err(fs.err(bch_errcode::BCH_ERR_no_btree_node_shallow));
+            return Err(fs.err(Errcode::BCH_ERR_no_btree_node_shallow));
         }
 
         let idx = iter.raw.path;
@@ -924,7 +925,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         if usize::from(key.k().u64s) > b.keys_u64s_remaining(b.contents()) {
             trans.node_unlock_write(&mut paths, idx, lvl);
-            return Err(fs.err(bch_errcode::BCH_ERR_btree_insert_btree_node_full));
+            return Err(fs.err(Errcode::BCH_ERR_btree_insert_btree_node_full));
         }
 
         let mut node_iter = KeyIter::default();
@@ -949,14 +950,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let mut iter = BtreeNodeIter::new(self, btree, pos, level + 1, level, BtreeIterFlags::INTENT);
         if iter.peek(self)?.is_none() {
-            return Err(self.fs().err(bch_errcode::BCH_ERR_no_btree_node_shallow));
+            return Err(self.fs().err(Errcode::BCH_ERR_no_btree_node_shallow));
         }
 
         let idx = iter.raw.path;
         let mut paths = trans.paths();
         let b = paths.held_btree_node(idx, level as usize).expect("a node, peeked");
 
-        node_write_trans(trans, &mut paths, b.node(), c::six_lock_type::SIX_LOCK_intent,
+        node_write_trans(trans, &mut paths, b.node(), c::SixLockType::SIX_LOCK_intent,
                          BtreeWriteType::interior, BtreeWriteFlags::empty());
         Ok(())
     }
@@ -968,7 +969,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         node:        BtreeNodeRef,
         target:      u32,
         flags:       impl Into<CommitOpts>,
-        write_flags: c::bch_write_flags,
+        write_flags: c::WriteFlags,
     ) -> Result<(), BchError> {
         let trans = self.trans();
         super::interior::node_rewrite(self, &mut trans.paths(), iter, unsafe { &*node.as_ptr() }, target,
@@ -983,7 +984,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         pos:         Bpos,
         target:      u32,
         flags:       impl Into<CommitOpts>,
-        write_flags: c::bch_write_flags,
+        write_flags: c::WriteFlags,
     ) -> Result<(), BchError> {
         assert!(level > 0, "btree_node_rewrite_pos() of a leaf");
         let mut node_iter = BtreeNodeIter::new(self, btree, pos, level + 1, level - 1, BtreeIterFlags::empty());
@@ -998,7 +999,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut node_iter = BtreeNodeIter::new(self, btree, k.k.p, c::BTREE_MAX_DEPTH, level, BtreeIterFlags::empty());
         match node_iter.peek_ref(self)? {
             Some(b) if btree_ptr_hash_val(b.key_sc()) == btree_ptr_hash_val(k) =>
-                self.btree_node_rewrite(node_iter.iter(), b, 0, flags, c::bch_write_flags::empty()),
+                self.btree_node_rewrite(node_iter.iter(), b, 0, flags, c::WriteFlags::empty()),
             _ => Err(BchError::from(c::ENOENT)),
         }
     }
@@ -1198,27 +1199,6 @@ impl<V: ?Sized + ValidatedVal> AsMut<BkeyI> for TransBkey<'_, '_, V> {
     }
 }
 
-/// The low bits of the commit flags: how deep into the reserves the commit may
-/// dip. Usually unset: 0, stripe, is normal for the ENOSPC gate.
-#[derive(Clone, Copy)]
-pub struct Watermark(c::bch_watermark);
-
-impl Watermark {
-    pub const STRIPE:           Self = Watermark(c::bch_watermark::stripe);
-    pub const NORMAL:           Self = Watermark(c::bch_watermark::normal);
-    pub const COPYGC:           Self = Watermark(c::bch_watermark::copygc);
-    pub const BTREE:            Self = Watermark(c::bch_watermark::btree);
-    pub const BTREE_COPYGC:     Self = Watermark(c::bch_watermark::btree_copygc);
-    pub const RECLAIM:          Self = Watermark(c::bch_watermark::reclaim);
-    pub const INTERIOR_UPDATES: Self = Watermark(c::bch_watermark::interior_updates);
-}
-
-impl From<c::bch_watermark> for Watermark {
-    fn from(w: c::bch_watermark) -> Self {
-        Watermark(w)
-    }
-}
-
 /// A Watermark and CommitFlags, in C's one word. The commits take
 /// `impl Into<CommitOpts>`, so CommitFlags alone do: a CommitOpts is only
 /// needed for a watermark.
@@ -1238,27 +1218,27 @@ impl CommitOpts {
     }
 
     pub const fn watermark(self, w: Watermark) -> Self {
-        CommitOpts((self.0 & !Self::WATERMARK_MASK) | (w.0 as u32 & Self::WATERMARK_MASK))
+        CommitOpts((self.0 & !Self::WATERMARK_MASK) | (w as u32 & Self::WATERMARK_MASK))
     }
 
-    pub(crate) fn get_watermark(self) -> c::bch_watermark {
-        c::bch_watermark::from_bits(self.0 & Self::WATERMARK_MASK)
+    pub(crate) fn get_watermark(self) -> c::Watermark {
+        c::Watermark::from_bits(self.0 & Self::WATERMARK_MASK)
     }
 
-    pub(crate) const fn to_c(self) -> c::bch_trans_commit_flags {
-        c::bch_trans_commit_flags::from_bits_retain(self.0)
+    pub(crate) const fn to_c(self) -> c::TransCommitFlags {
+        c::TransCommitFlags::from_bits_retain(self.0)
     }
 
     /// A btree update's watermark: copygc's becomes btree_copygc, and below
     /// btree, btree - btree_update_set_watermark_hipri().
     pub fn watermark_hipri(self) -> Self {
-        use c::bch_watermark as wm;
+        use c::Watermark as wm;
         let w = match wm::from_bits(self.0 & Self::WATERMARK_MASK) {
             wm::copygc                         => wm::btree_copygc,
             w if (w as u32) < wm::btree as u32 => wm::btree,
             w                                                => w,
         };
-        self.watermark(Watermark(w))
+        self.watermark(w)
     }
 }
 
@@ -1271,7 +1251,7 @@ impl From<CommitFlags> for CommitOpts {
 impl ToText for CommitOpts {
     fn to_text(&self, out: &mut Printbuf) {
         let watermark = self.get_watermark();
-        let flags = c::bch_trans_commit_flags::from_bits_retain(self.0 & !Self::WATERMARK_MASK);
+        let flags = c::TransCommitFlags::from_bits_retain(self.0 & !Self::WATERMARK_MASK);
 
         crate::prt!(out, "watermark={watermark}");
         if !flags.is_empty() {
@@ -1280,8 +1260,8 @@ impl ToText for CommitOpts {
     }
 }
 
-impl From<c::bch_trans_commit_flags> for CommitOpts {
-    fn from(flags: c::bch_trans_commit_flags) -> Self {
+impl From<c::TransCommitFlags> for CommitOpts {
+    fn from(flags: c::TransCommitFlags) -> Self {
         CommitOpts(flags.bits())
     }
 }

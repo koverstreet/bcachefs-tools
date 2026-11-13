@@ -336,7 +336,7 @@ impl TopState {
         name_mode: DeviceNameMode,
     ) -> Result<Self> {
         let ioctl_fd = handle.ioctl_fd();
-        let nr_stable = bch_bindgen::c::bch_persistent_counters_stable::NR as u16;
+        let nr_stable = bch_bindgen::c::PersistentCounterStable::NR as u16;
 
         let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
         let start_vals = read_counters(ioctl_fd, 0, nr_stable)?;
@@ -572,7 +572,7 @@ fn run_non_interactive(
     name_mode: DeviceNameMode,
 ) -> Result<()> {
     let ioctl_fd   = handle.ioctl_fd();
-    let nr_stable  = bch_bindgen::c::bch_persistent_counters_stable::NR as u16;
+    let nr_stable  = bch_bindgen::c::PersistentCounterStable::NR as u16;
     let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
     let sysfs_path = sysfs_path_from_fd(handle.sysfs_fd())?;
 

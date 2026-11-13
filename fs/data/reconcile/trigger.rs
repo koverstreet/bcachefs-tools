@@ -30,7 +30,7 @@ use crate::format::{Bpos, Btree};
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum set_needs_reconcile_ctx {
+pub enum SetNeedsReconcileCtx {
     SET_NEEDS_RECONCILE_opt_change,
     SET_NEEDS_RECONCILE_opt_change_indirect,
     SET_NEEDS_RECONCILE_foreground,
@@ -58,8 +58,8 @@ pub struct per_snapshot_io_opts {
 }
 
 /// The work btree a key with @r is tracked in: rb_work_id().
-pub fn rb_work_id(r: Option<&c::bch_extent_reconcile>) -> c::reconcile_work_id {
-    use c::reconcile_work_id as w;
+pub fn rb_work_id(r: Option<&c::bch_extent_reconcile>) -> c::ReconcileWorkId {
+    use c::ReconcileWorkId as w;
     match r {
         Some(r) if r.need_rb() != 0 =>
             if r.pending() != 0 { w::pending }
@@ -69,10 +69,10 @@ pub fn rb_work_id(r: Option<&c::bch_extent_reconcile>) -> c::reconcile_work_id {
     }
 }
 
-impl c::reconcile_work_id {
+impl c::ReconcileWorkId {
     /// The btree this work is tracked in, none for none: reconcile_work_btree[].
     pub fn btree(self) -> Option<Btree> {
-        use c::reconcile_work_id as w;
+        use c::ReconcileWorkId as w;
         Some(match self {
             w::hipri   => Btree::reconcile_hipri,
             w::normal  => Btree::reconcile_work,
@@ -90,7 +90,7 @@ impl c::reconcile_work_id {
     /// The phys btree work with this id is tracked in, by bucket position:
     /// reconcile_work_phys_btree[].
     pub fn phys_btree(self) -> Option<Btree> {
-        use c::reconcile_work_id as w;
+        use c::ReconcileWorkId as w;
         Some(match self {
             w::hipri  => Btree::reconcile_hipri_phys,
             w::normal => Btree::reconcile_work_phys,
@@ -163,18 +163,18 @@ pub trait BkeyVReconcile: BkeyV {
 
     /// The work btree it's tracked in - a stripe's by its needs_reconcile, as
     /// stripes have no reconcile entry: bch2_bkey_reconcile_work_id().
-    fn reconcile_work_id(&self, fs: &Fs) -> c::reconcile_work_id
+    fn reconcile_work_id(&self, fs: &Fs) -> c::ReconcileWorkId
     where Self::V: BkeyVal<State = Validated>
     {
         let key = self.as_sc();
         if let Some(s) = key.arm::<c::Stripe>() {
             return if s.v().needs_reconcile() != 0 {
-                c::reconcile_work_id::hipri
+                c::ReconcileWorkId::hipri
             } else {
-                c::reconcile_work_id::none
+                c::ReconcileWorkId::none
             };
         }
-        key.arm::<Ptrs>().map_or(c::reconcile_work_id::none, |k| rb_work_id(k.reconcile_opts(fs)))
+        key.arm::<Ptrs>().map_or(c::ReconcileWorkId::none, |k| rb_work_id(k.reconcile_opts(fs)))
     }
 }
 
@@ -245,7 +245,7 @@ pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u3
 // ── the trigger ──────────────────────────────────────────────────────────
 
 /// What a reconcile entry counts toward reconcile_work accounting: its need_rb
-/// bits - their accounting types are bch_reconcile_opts' order - pending in
+/// bits - their accounting types are ReconcileOpt's order - pending in
 /// place of target and replicas, or high_priority added: rb_accounting_counters().
 fn rb_accounting_counters(r: Option<&c::bch_extent_reconcile>) -> u32 {
     let Some(r) = r else { return 0 };
@@ -373,7 +373,7 @@ pub fn extent_reconcile_validate(v: &BkeyValidate<'_, '_>, r: &c::bch_extent_rec
     bkey_fsck_err_on!(v, r.pending() != 0 && r.need_rb() == 0, id::extent_reconcile_bad_pending,
                       "pending incorrectly set")?;
     bkey_fsck_err_on!(v, r.hipri() != 0 &&
-                         r.need_rb() & (1 << c::bch_reconcile_opts::data_replicas.0) == 0,
+                         r.need_rb() & (1 << c::ReconcileOpt::data_replicas.0) == 0,
                       id::extent_reconcile_bad_hipri, "hipri incorrectly set")?;
     bkey_fsck_err_on!(v, r.data_replicas() == 0, id::extent_reconcile_bad_replicas, "bad replicas")
 }
@@ -393,7 +393,7 @@ macro_rules! reconcile_opts_to_text {
         from_inode(out, r.data_replicas_from_inode());
 
         write!(out, " checksum=");
-        c::bch_csum_opt(r.data_checksum().into()).to_text(out);
+        c::CsumOpt(r.data_checksum().into()).to_text(out);
         from_inode(out, r.data_checksum_from_inode());
 
         if r.background_compression() != 0 || r.background_compression_from_inode() != 0 {
@@ -426,7 +426,7 @@ pub fn extent_rebalance_v1_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::b
 /// What it needs, then its options: bch2_extent_reconcile_to_text().
 pub fn extent_reconcile_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::bch_extent_reconcile) {
     write!(out, "need_rb=");
-    crate::util::names::prt_set::<c::bch_reconcile_opts>(out, r.need_rb().into());
+    crate::util::names::prt_set::<c::ReconcileOpt>(out, r.need_rb().into());
     if r.hipri() != 0 {
         write!(out, " hipri");
     }

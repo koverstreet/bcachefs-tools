@@ -4,17 +4,16 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_name, bch_enum, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{bch_enum, CStruct, Plain, TypeInfo, SizedVal};
 
 #[bch_enum(open)]
 #[repr(u32)]
-pub enum logged_ops_inums {
+pub enum LoggedOpsInum {
     LOGGED_OPS_INUM_logged_ops,
     LOGGED_OPS_INUM_inode_cursors,
 }
 
 #[repr(C)]
-#[c_name(bch_logged_op_truncate)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpTruncate {
     pub v: c::bch_val,
@@ -26,14 +25,13 @@ pub struct LoggedOpTruncate {
 
 #[bch_enum(open)]
 #[repr(u32)]
-pub enum logged_op_finsert_state {
+pub enum LoggedOpFinsertState {
     LOGGED_OP_FINSERT_start,
     LOGGED_OP_FINSERT_shift_extents,
     LOGGED_OP_FINSERT_finish,
 }
 
 #[repr(C)]
-#[c_name(bch_logged_op_finsert)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpFinsert {
     pub v: c::bch_val,
@@ -60,7 +58,6 @@ pub struct LoggedOpFinsert {
  * that may have changed since.
  */
 #[repr(C)]
-#[c_name(bch_logged_op_inode_opt_propagate)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpInodeOptPropagate {
     pub v: c::bch_val,
@@ -70,7 +67,6 @@ pub struct LoggedOpInodeOptPropagate {
 }
 
 #[repr(C)]
-#[c_name(bch_logged_op_stripe_update)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpStripeUpdate {
     pub v: c::bch_val,

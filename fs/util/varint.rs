@@ -16,7 +16,7 @@
 //! accesses - what an inlined memcpy() of a length known only at runtime is
 //! in C - never a slice copy, which is a call to memcpy().
 
-use crate::c::bch_errcode;
+use crate::c::Errcode;
 use crate::errcode::BchError;
 
 /// The most bytes an encoded integer takes.
@@ -73,7 +73,7 @@ fn store(out: &mut [u8], w: u64) {
 }
 
 fn decode_error() -> BchError {
-    BchError::from(bch_errcode::BCH_ERR_varint_decode_error)
+    BchError::from(Errcode::BCH_ERR_varint_decode_error)
 }
 
 /// Encode @v at the start of @out: how many bytes it took. Panics if @out is

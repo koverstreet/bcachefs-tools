@@ -11,7 +11,7 @@ use crate::btree::iter::{
 use crate::c;
 use crate::check::{self, SnapshotsSeen};
 use crate::dirent::{self, Dirent, DirentTarget, Dirents};
-use crate::errcode::{bch_errcode, BchError, Found};
+use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
@@ -85,7 +85,7 @@ enum StrHash {
 
 impl StrHash {
     fn new(info: &c::bch_hash_info) -> Self {
-        use c::bch_str_hash_type as T;
+        use c::StrHashKind as T;
 
         let k0 = info.siphash_key.k0.get().to_le_bytes();
 
@@ -173,7 +173,7 @@ pub fn lookup_in_snapshot<'i, 'a, T: HashTable>(
         }))?;
 
     found.and_then(|k| visible_key::<T>(inum, k))
-        .ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOENT_str_hash_lookup))
+        .ok_or_else(|| t.fs().err(Errcode::BCH_ERR_ENOENT_str_hash_lookup))
 }
 
 /// In subvolume and inode @inum: the key found, through @iter, or
@@ -208,7 +208,7 @@ pub fn hole<'a, T: HashTable>(
     match iter.find_max_norestart(t, pos(inum.inum, u64::MAX),
                                   |_, k| Ok(visible_key::<T>(inum, k).is_none()))? {
         Some(_) => Ok(()),
-        None    => Err(t.fs().err(bch_errcode::BCH_ERR_ENOSPC_str_hash_create)),
+        None    => Err(t.fs().err(Errcode::BCH_ERR_ENOSPC_str_hash_create)),
     }
 }
 
@@ -287,7 +287,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
         }))?;
 
     let Some(k) = found else {
-        return Err(fs.err(bch_errcode::BCH_ERR_ENOSPC_str_hash_create));
+        return Err(fs.err(Errcode::BCH_ERR_ENOSPC_str_hash_create));
     };
 
     if let Some(k) = visible_key::<T>(inum, k) {
@@ -296,7 +296,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
             return Ok(Some(unsafe { polonius_key(k) }));
         }
     } else if must_replace {
-        return Err(fs.err(bch_errcode::BCH_ERR_ENOENT_str_hash_set_must_replace));
+        return Err(fs.err(Errcode::BCH_ERR_ENOENT_str_hash_set_must_replace));
     } else if let Some(slot) = slot.as_mut() {
         core::mem::swap(iter, slot);
     }
@@ -320,7 +320,7 @@ pub fn set_in_snapshot<'t, T: HashTable>(
     let mut iter = BtreeIter::uninit();
     match set_or_get_in_snapshot::<T>(t, &mut iter, hash_info, inum, snapshot, insert,
                                       set_flags, update_flags)? {
-        Some(_) => Err(t.fs().err(bch_errcode::BCH_ERR_EEXIST_str_hash_set)),
+        Some(_) => Err(t.fs().err(Errcode::BCH_ERR_EEXIST_str_hash_set)),
         None    => Ok(()),
     }
 }
@@ -377,15 +377,15 @@ pub fn delete<T: HashTable>(
 
 /// The hash type a new inode's dirents and xattrs get, from the str_hash
 /// option. A value that isn't an option is a bug.
-pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
+pub fn new_inode_type(fs: &Fs) -> c::StrHashKind {
     match fs.opts().str_hash() {
-        c::bch_str_hash_opts::crc32c  => c::bch_str_hash_type::crc32c,
-        c::bch_str_hash_opts::crc64   => c::bch_str_hash_type::crc64,
-        c::bch_str_hash_opts::siphash => {
+        c::StrHashOpt::crc32c  => c::StrHashKind::crc32c,
+        c::StrHashOpt::crc64   => c::StrHashKind::crc64,
+        c::StrHashOpt::siphash => {
             if fs.feature(SbFeature::new_siphash) {
-                c::bch_str_hash_type::siphash
+                c::StrHashKind::siphash
             } else {
-                c::bch_str_hash_type::siphash_old
+                c::StrHashKind::siphash_old
             }
         }
         o => panic!("str_hash option {} isn't one", o.0),
@@ -398,13 +398,13 @@ pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bc
     let mut info = c::bch_hash_info {
         inum_snapshot: inode.bi_snapshot,
         type_:         inode.inode_str_hash() as u8,
-        is_31bit:      inode.flag(c::bch_inode_flags::BCH_INODE_31bit_dirent_offset),
+        is_31bit:      inode.flag(c::InodeFlags::BCH_INODE_31bit_dirent_offset),
         cf_encoding:   inode::cf_encoding(fs, inode),
         siphash_key:   c::SIPHASH_KEY { k0: inode.bi_hash_seed, ..Default::default() },
     };
 
     // siphash_old's key is the first 16 bytes of the seed's sha256
-    if info.type_ == c::bch_str_hash_type::siphash_old.0 as u8 {
+    if info.type_ == c::StrHashKind::siphash_old.0 as u8 {
         let seed = plain_bytes(&inode.bi_hash_seed);
         let mut digest = [0u8; 32];
         // SAFETY: @seed's bytes in, a sha256 digest's out
@@ -439,10 +439,10 @@ pub struct StrHashType(pub u64);
 impl ToText for StrHashType {
     fn to_text(&self, out: &mut Printbuf) {
         let t = match self.0 {
-            0 => c::bch_str_hash_type::crc32c,
-            1 => c::bch_str_hash_type::crc64,
-            2 => c::bch_str_hash_type::siphash_old,
-            3 => c::bch_str_hash_type::siphash,
+            0 => c::StrHashKind::crc32c,
+            1 => c::StrHashKind::crc64,
+            2 => c::StrHashKind::siphash_old,
+            3 => c::StrHashKind::siphash,
             n => return write!(out, "(invalid str_hash type {n})"),
         };
         t.to_text(out)
@@ -458,7 +458,7 @@ pub fn hash_info_init(
     inode: &c::bch_inode_unpacked,
 ) -> Result<c::bch_hash_info, BchError> {
     if inode.casefold(fs) && fs.cf_encoding.load(core::sync::atomic::Ordering::Relaxed).is_null() {
-        return fs.throw(bch_errcode::BCH_ERR_casefold_dir_but_disabled);
+        return fs.throw(Errcode::BCH_ERR_casefold_dir_but_disabled);
     }
     Ok(hash_info_init_unchecked(fs, inode))
 }
@@ -700,7 +700,7 @@ impl Repair<'_> {
             }
         }
         msg.set_suppressed(false);
-        Err(fs.err(bch_errcode::BCH_ERR_EEXIST_str_hash_set))
+        Err(fs.err(Errcode::BCH_ERR_EEXIST_str_hash_set))
     }
 
     /// @k and @dup, ahead of it in its probe sequence, have the same name:
@@ -824,7 +824,7 @@ impl Repair<'_> {
                              UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
         self.repair_key::<Dirents>(t, new.as_sc(), None)?;
-        Err(fs.err(bch_errcode::BCH_ERR_str_hash_key_repaired))
+        Err(fs.err(Errcode::BCH_ERR_str_hash_key_repaired))
     }
 
     /// The rest of check_key(), for a key not at the offset it hashes to:

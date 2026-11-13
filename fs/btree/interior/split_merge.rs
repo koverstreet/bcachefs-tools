@@ -23,7 +23,7 @@ use crate::c;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data::keylist::{keys, keys_mut};
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, BkeyValidate};
@@ -594,7 +594,7 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
         live_u64s > split_threshold(fs) ||
         b.shard_pivot(contents, fs) != POS_MIN;
 
-    let stat = if split { c::bch_time_stats::btree_node_split } else { c::bch_time_stats::btree_node_compact };
+    let stat = if split { c::TimeStat::btree_node_split } else { c::TimeStat::btree_node_compact };
     let _timer = fs.times[stat as usize].timer();
 
     let mut nodes: ArrayVec<NewNode<'_>, 2> = if split {
@@ -709,7 +709,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
                 prt!(out, "l={} written {}/{} u64s remaining {}", level, b.written.get(),
                      fs.btree_sectors() / fs.block_sectors(), b.keys_u64s_remaining(b.contents()));
             });
-            Err(trans.restart(bch_errcode::BCH_ERR_transaction_restart_split_race))
+            Err(trans.restart(Errcode::BCH_ERR_transaction_restart_split_race))
         } else {
             btree_split(update, paths, path, b.held(), true)
         };
@@ -821,8 +821,8 @@ fn merge_btree_nodes(fs: &Fs) -> Result<(), BchError> {
 
 crate::recovery_pass!(merge_btree_nodes => merge_btree_nodes);
 
-const PREV_SIB: usize = c::btree_node_sibling::btree_prev_sib as usize;
-const NEXT_SIB: usize = c::btree_node_sibling::btree_next_sib as usize;
+const PREV_SIB: usize = c::BtreeNodeSibling::btree_prev_sib as usize;
+const NEXT_SIB: usize = c::BtreeNodeSibling::btree_next_sib as usize;
 
 fn merge_threshold(fs: &Fs) -> usize {
     fs.btree_max_u64s() / 3
@@ -955,7 +955,7 @@ fn merge_sibling<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: Path
                      level: usize) -> Result<Option<(Option<Node<'n>>, u16)>, BchError> {
     let trans = t.trans();
     match trans.path_traverse(t, paths, path, BtreeIterFlags::NOFILL) {
-        Err(e) if e.matches(bch_errcode::BCH_ERR_no_btree_node_nofill) => {
+        Err(e) if e.matches(Errcode::BCH_ERR_no_btree_node_nofill) => {
             /*
              * Nofill failure dropped all of the path's locks, but left
              * l[level + 1].b pointing at the parent. Relock the parent
@@ -970,7 +970,7 @@ fn merge_sibling<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: Path
              * we've copied the sibling's btree_ptr off the parent.
              */
             if !trans.node_relock(paths, path, level + 1) {
-                return Err(trans.restart(bch_errcode::BCH_ERR_transaction_restart_lock_node_reused));
+                return Err(trans.restart(Errcode::BCH_ERR_transaction_restart_lock_node_reused));
             }
 
             let sib_parent = paths.held_btree_node(path, level + 1).expect("a sibling's parent, relocked");
@@ -1128,7 +1128,7 @@ pub(crate) fn merge(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathI
 
     let ret = merge_in(t, paths, path, level, commit, &mut srcs);
     if matches!(ret, Ok(true)) {
-        fs.times[c::bch_time_stats::btree_node_merge as usize].update(start_time);
+        fs.times[c::TimeStat::btree_node_merge as usize].update(start_time);
         if let Some(n) = merge_count {
             *n += 1;
         }
@@ -1137,7 +1137,7 @@ pub(crate) fn merge(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathI
     trans.verify_locks(paths);
 
     let ret = match ret {
-        Err(e) if e.matches(bch_errcode::BCH_ERR_journal_reclaim_would_deadlock) => Ok(()),
+        Err(e) if e.matches(Errcode::BCH_ERR_journal_reclaim_would_deadlock) => Ok(()),
         ret => ret.map(|_| ()),
     };
     let ret = ret.and_then(|()| trans.relock_from(paths));
@@ -1167,12 +1167,12 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
      * deadlock:
      */
     let watermark = commit.get_watermark();
-    if watermark == c::bch_watermark::interior_updates {
+    if watermark == c::Watermark::interior_updates {
         return Ok(false);
     }
 
-    let commit = if watermark as u32 <= c::bch_watermark::reclaim as u32 {
-        commit.watermark(Watermark::BTREE).flags(CommitFlags::JOURNAL_RECLAIM)
+    let commit = if watermark as u32 <= c::Watermark::reclaim as u32 {
+        commit.watermark(Watermark::btree).flags(CommitFlags::JOURNAL_RECLAIM)
     } else {
         commit
     };
@@ -1420,7 +1420,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
 /// # Safety
 /// @merge_count is null, or a counter merges are counted in.
 pub unsafe fn __bch2_foreground_maybe_merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
-                                            path: PathIdx, level: c_uint, flags: c::bch_trans_commit_flags,
+                                            path: PathIdx, level: c_uint, flags: c::TransCommitFlags,
                                             merge_count: *mut u64) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
     ret_to_c(merge(&t, paths, path, level as usize, flags.into(), unsafe { merge_count.as_mut() }))
@@ -1502,7 +1502,7 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
 /// @target, if not 0.
 pub(crate) fn node_rewrite<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'t>,
                                b: &BtreeNode, target: u32, commit: CommitOpts,
-                               write: c::bch_write_flags) -> Result<(), BchError> {
+                               write: c::WriteFlags) -> Result<(), BchError> {
     assert!(!b.is_fake(), "rewriting a fake btree node");
 
     let ret = node_rewrite_in(t, paths, iter, b,

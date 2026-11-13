@@ -10,7 +10,7 @@ use core::ops::Range;
 
 use crate::c;
 use crate::util::vstructs::Unvalidated;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::journal::buckets;
 use crate::{prt, sb_err_on};
@@ -21,7 +21,7 @@ use crate::util::alloc::KVVec;
 use crate::util::Printbuf;
 
 fn invalid() -> BchError {
-    bch_errcode::BCH_ERR_invalid_sb_journal.into()
+    Errcode::BCH_ERR_invalid_sb_journal.into()
 }
 
 /// @runs are on the device and don't overlap - so they total no more than
@@ -119,7 +119,7 @@ pub(crate) fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets
     let runs = || buckets.chunk_by(|a, b| a + 1 == *b);
     let u64s = sb_field_u64s::<c::bch_sb_field_journal_v2>(runs().count());
     let Some(j) = dev_sb.field_resize::<c::bch_sb_field_journal_v2>(u64s) else {
-        return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_journal);
+        return fs.throw(Errcode::BCH_ERR_ENOSPC_sb_journal);
     };
 
     for (d, run) in j.d.iter_mut().zip(runs()) {
@@ -135,7 +135,7 @@ pub(crate) fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets
 /// for devices where it isn't or a v1 field is left.
 pub(crate) fn sb_journal_sort(fs: &Fs) -> Result<(), BchError> {
     assert!(fs.sb.clean.get() != 0);
-    assert!(!fs.flags.get(c::bch_fs_flags::rw));
+    assert!(!fs.flags.get(c::FsFlag::rw));
 
     let mut sb = fs.sb_lock();
     let mut dirty = false;

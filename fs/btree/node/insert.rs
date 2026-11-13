@@ -22,7 +22,7 @@ use crate::btree::write::{bch2_btree_init_next, bch2_btree_post_write_cleanup, _
                           BtreeWriteFlags};
 use crate::c;
 use crate::cstructs::c as cs;
-use crate::errcode::{bch_errcode, ret_to_c};
+use crate::errcode::{Errcode, ret_to_c};
 use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
 use crate::journal::pins::Pin;
@@ -57,8 +57,8 @@ impl BtreeNode {
     }
 }
 
-fn journal_pin_type_btree(level: u8) -> c::journal_pin_type {
-    c::journal_pin_type::from_bits(c::journal_pin_type::JOURNAL_PIN_TYPE_btree0 as u32 - u32::from(level))
+fn journal_pin_type_btree(level: u8) -> c::JournalPinType {
+    c::JournalPinType::from_bits(c::JournalPinType::JOURNAL_PIN_TYPE_btree0 as u32 - u32::from(level))
 }
 
 /// # Safety
@@ -88,7 +88,7 @@ unsafe fn node_flush(j: *mut c::journal, pin: *mut Pin, idx: usize, seq: u64) ->
     let trans = crate::btree_trans!(fs);
     let ret = lockrestart_do(&trans, |t| {
         let trans = t.trans();
-        let path_idx = trans.node_lock_with_path(&mut trans.paths(), &b.c, c::six_lock_type::SIX_LOCK_read,
+        let path_idx = trans.node_lock_with_path(&mut trans.paths(), &b.c, c::SixLockType::SIX_LOCK_read,
                                                  hash_val)?;
 
         let _ = b.flags.fetch_update(Relaxed, Relaxed, |f| {
@@ -107,7 +107,7 @@ unsafe fn node_flush(j: *mut c::journal, pin: *mut Pin, idx: usize, seq: u64) ->
     });
 
     match ret {
-        Err(e) if e.matches(bch_errcode::BCH_ERR_no_btree_node_reused) => 0,
+        Err(e) if e.matches(Errcode::BCH_ERR_no_btree_node_reused) => 0,
         r => ret_to_c(r),
     }
 }

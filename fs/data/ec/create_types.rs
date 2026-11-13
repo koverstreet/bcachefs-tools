@@ -53,7 +53,7 @@ pub struct DevStripes {
 #[prefix(EC_STRIPE_NEW_)]
 #[nr]
 #[repr(u32)]
-pub enum ec_stripe_new_state {
+pub enum EcStripeNewState {
     open,
     filling,
     in_flight,
@@ -79,7 +79,7 @@ pub struct ec_stripe_head {
     pub disk_label: c_uint,
     pub algo: c_uint,
     pub redundancy: c_uint,
-    pub watermark: c::bch_watermark,
+    pub watermark: c::Watermark,
 }
 
 /// The devices a stripe head makes stripes on - its disk label's, as

@@ -12,7 +12,7 @@ use crate::btree::iter::{commit_do, trans_commit_do, BtreeIterFlags, BtreeNodeIt
                          TransAttempt, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay::{journal_keys_put_initial, keys_sort, shoot_down_journal_keys};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::fs::{btree_id_can_reconstruct, btree_id_is_alloc, Fs};
 use crate::init::error::{self, id};
 use crate::init::passes::{self, run_explicit_sb};
@@ -33,8 +33,8 @@ use crate::util::Printbuf;
 use crate::{inode, logged_ops, namei, quota};
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose, btree_trans, fs_fatal_error, fsck_err_on,
             message, mustfix_fsck_err, mustfix_fsck_err_on, prt};
-use c::bch_fs_flags as Flag;
-use c::bch_progress_units as Units;
+use c::FsFlag as Flag;
+use c::ProgressUnit as Units;
 use core::cmp::Ordering;
 use core::sync::atomic::Ordering::Relaxed;
 use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature};
@@ -138,7 +138,7 @@ pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: Btree) -> Result<(), 
     /* The last error, as C's ?: chain kept it: every pass is scheduled */
     let mut ret = Ok(());
     let mut run = |w: &mut SbWrite<'_>, pass| {
-        if let Err(e) = run_explicit_sb(fs, msg, pass, c::bch_run_recovery_pass_flags::empty(), Some(w)) {
+        if let Err(e) = run_explicit_sb(fs, msg, pass, c::RunRecoveryPassFlags::empty(), Some(w)) {
             ret = Err(e);
         }
     };
@@ -206,7 +206,7 @@ fn reconstruct_alloc(fs: &Fs) {
         }
 
         let compat = &w.published().compat;
-        compat.set(compat.get() & !(1 << c::bch_sb_compat::alloc_info.0));
+        compat.set(compat.get() & !(1 << c::SbCompat::alloc_info.0));
 
         let opts = fs.opts_writer(&mut w);
         opts.recovery_passes.set(opts.recovery_passes.get() | passes::passes_from_stable(v));
@@ -334,7 +334,7 @@ fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, id
                   passes::bit(Pass::check_topology);
     if fs.recovery.runner.passes_complete.get() & scanned == 0 {
         bch_err!(fs, "have key in journal replay for btree depth that does not exist, confused\n{}", buf);
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_replay_key_bad_btree_depth);
+        return fs.throw(Errcode::BCH_ERR_EINVAL_journal_replay_key_bad_btree_depth);
     }
 
     if !k.allocated() {
@@ -347,7 +347,7 @@ fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, id
     let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, 0, iter_flags);
     iter.iter().traverse(t)?;
     t.btree_increase_depth(iter.iter())?;
-    Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
+    Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
 }
 
 fn journal_sort_seq_cmp(l: &c::journal_key, r: &c::journal_key) -> Ordering {
@@ -398,7 +398,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
 
         let flags = CommitOpts::new()
             .flags(replay_flags | CommitFlags::JOURNAL_RECLAIM | CommitFlags::NO_JOURNAL_RES)
-            .watermark(Watermark::RECLAIM);
+            .watermark(Watermark::reclaim);
         if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_accounting_key(t, jk, k)) {
             fs_fatal_error!(fs, "error replaying accounting; {}", e.msg());
             return Err(e);
@@ -442,7 +442,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
          * journal-space watermark ever trips.
          */
         let self_reclaim = fs.btree.cache.nr_self_reclaim.load(Relaxed);
-        let replayed = fs.journal.watermark() == c::bch_watermark::stripe &&
+        let replayed = fs.journal.watermark() == c::Watermark::stripe &&
             self_reclaim == 0 &&
             commit_do(&trans, None,
                       replay_flags | CommitFlags::JOURNAL_RECLAIM |
@@ -473,7 +473,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
 
         let mut flags = CommitOpts::new().flags(replay_flags);
         if !k.allocated() {
-            flags = flags.flags(CommitFlags::NO_JOURNAL_RES).watermark(Watermark::RECLAIM);
+            flags = flags.flags(CommitFlags::NO_JOURNAL_RES).watermark(Watermark::reclaim);
         }
         if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_key(t, jk, idx)) {
             return bch_err_msg!(fs, Err(e), "while replaying key at btree={} level={}:", k.btree_id(), k.level());
@@ -541,7 +541,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
             }
         }
         Ok(c::JsetEntryRef::usage(u)) => {
-            if u.entry.btree_id == c::bch_fs_usage_type::key_version.0 as u8 {
+            if u.entry.btree_id == c::FsUsageType::key_version.0 as u8 {
                 fs.key_version.store(u.v.get() as i64, Relaxed);
             }
         }
@@ -667,7 +667,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     let read_journal = fs.sb.clean.get() == 0 ||
         fs.opts.retain_recovery_info.get() != 0 ||
         fs.opts.journal_rewind.get() != 0 ||
-        u32::from(fs.opts.scrub_recent_journal_entries.get()) == c::bch_scrub_journal_opts::always.0;
+        u32::from(fs.opts.scrub_recent_journal_entries.get()) == c::ScrubJournalOpt::always.0;
     let mut use_clean = !read_journal;
 
     if read_journal {
@@ -699,7 +699,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                                 id::clean_but_journal_not_empty,
                                 "filesystem marked clean but journal not empty")? {
             let mut sb = fs.sb_lock();
-            let compat = fs.sb.compat.get() & !(1 << c::bch_sb_compat::alloc_info.0);
+            let compat = fs.sb.compat.get() & !(1 << c::SbCompat::alloc_info.0);
             sb.published().compat.set(compat);
             sb.sb_mut().set_clean(false);
             sb.published().clean.set(0);
@@ -740,7 +740,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     if use_clean {
         let Some(c) = clean.as_deref() else {
             bch_err!(fs, "no superblock clean section found");
-            return fs.throw(bch_errcode::BCH_ERR_fsck_repair_impossible);
+            return fs.throw(Errcode::BCH_ERR_fsck_repair_impossible);
         };
 
         journal_start.cur_seq = c.journal_seq.get().wrapping_add(1);
@@ -788,11 +788,11 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         let mut sb = fs.sb_lock();
         let w = fs.opts_writer(&mut sb);
         let fix = w.fix_errors.get();
-        if fix == c::fsck_err_opts::yes as u8 || fix == c::fsck_err_opts::ask as u8 {
-            w.fix_errors.set(c::fsck_err_opts::no as u8);
+        if fix == c::FsckErrOpt::yes as u8 || fix == c::FsckErrOpt::ask as u8 {
+            w.fix_errors.set(c::FsckErrOpt::no as u8);
         }
-        if u32::from(w.errors.get()) == c::bch_error_actions::fix_safe.0 {
-            w.errors.set(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
+        if u32::from(w.errors.get()) == c::ErrorAction::fix_safe.0 {
+            w.errors.set(c::ErrorAction::BCH_ON_ERROR_continue.0 as u8);
         }
     }
 
@@ -972,7 +972,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         }
 
         if !error {
-            w.set_compat(c::bch_sb_compat::alloc_info);
+            w.set_compat(c::SbCompat::alloc_info);
         }
 
         if fs.opts.fsck.get() != 0 &&
@@ -1011,7 +1011,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
         if complete(Pass::check_extents) &&
            complete(Pass::check_indirect_extents) {
-            w.set_compat(c::bch_sb_compat::no_stale_ptrs);
+            w.set_compat(c::SbCompat::no_stale_ptrs);
         }
 
         /*
@@ -1019,7 +1019,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          * the stripe fragmentation counters true.
          */
         if complete(Pass::check_allocations) {
-            w.set_compat(c::bch_sb_compat::stripe_frag_accounting);
+            w.set_compat(c::SbCompat::stripe_frag_accounting);
         }
 
         /*
@@ -1028,7 +1028,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          * snapshots - and a later violation is a bug, not legacy state.
          */
         if complete(Pass::check_inodes) {
-            w.set_compat(c::bch_sb_compat::inode_opts_propagated);
+            w.set_compat(c::SbCompat::inode_opts_propagated);
         }
     }
 
@@ -1060,15 +1060,15 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
 
     {
         let mut sb = fs.sb_lock();
-        sb.sb_mut().compat[0] |= 1 << c::bch_sb_compat::extents_above_btree_updates_done.0 |
-                                 1 << c::bch_sb_compat::bformat_overflow_done.0 |
-                                 1 << c::bch_sb_compat::no_stale_ptrs.0 |
-                                 1 << c::bch_sb_compat::stripe_frag_accounting.0 |
-                                 1 << c::bch_sb_compat::inode_opts_propagated.0;
+        sb.sb_mut().compat[0] |= 1 << c::SbCompat::extents_above_btree_updates_done.0 |
+                                 1 << c::SbCompat::bformat_overflow_done.0 |
+                                 1 << c::SbCompat::no_stale_ptrs.0 |
+                                 1 << c::SbCompat::stripe_frag_accounting.0 |
+                                 1 << c::SbCompat::inode_opts_propagated.0;
 
         check_version_downgrade(fs, &mut sb);
 
-        if u32::from(fs.opts.version_upgrade.get()) != c::bch_version_upgrade_opts::none.0 {
+        if u32::from(fs.opts.version_upgrade.get()) != c::VersionUpgradeOpt::none.0 {
             let current = c::bcachefs_metadata_version_current;
             sb_upgrade(fs, &mut sb, current, false);
             sb.sb_mut().set_version_upgrade_complete(current.into());

@@ -46,4 +46,4 @@ pub mod keyutils;
 pub mod sb;
 
 pub use bcachefs_kernel::accounting;
-pub use bcachefs_kernel::opt_id;
+pub use bcachefs_kernel::OptId;

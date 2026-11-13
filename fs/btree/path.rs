@@ -9,7 +9,7 @@ use crate::btree::cache::bch2_btree_id_level_to_text;
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::{Keys, KeysMut};
-use crate::btree::locking::btree_node_locked_type::{self, *};
+use crate::btree::locking::BtreeNodeLockedType::{self, *};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::traverse::advance_to_pos;
 use crate::c;
@@ -19,7 +19,7 @@ use crate::data_structures::bitmap::Bitmap;
 use crate::debug::params::debug_check_iterators;
 use crate::debug::trace::{events, TraceEvent};
 use crate::prt;
-use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, BchError};
+use crate::errcode::{Errcode, err_ptr, errptr_or_null, BchError};
 use crate::format::{BkeyType, Bpos, Btree};
 use crate::types::{bits_to_longs, Lent};
 use crate::util::alloc::kvzalloc_nofail;
@@ -29,10 +29,10 @@ use crate::util::rcu::rcu_assign_pointer;
 use crate::util::Printbuf;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::kernel::local_clock;
-use cstruct_macros::{bitfield, c_name, CStruct};
+use cstruct_macros::{bitfield, CStruct};
 use crate::locking::{Locked, LockedBy};
 use crate::locking::six::{six_lock_increment_ip, six_lock_write_held, SixHold};
-use crate::c::six_lock_type;
+use crate::c::SixLockType;
 use core::cmp::Ordering;
 use core::ffi::{c_int, c_ulong};
 use core::marker::PhantomData;
@@ -140,7 +140,6 @@ pub struct btree_path_bits {
 /// BtreePath<bkey_cached>, or - the default - any path, its levels seen as
 /// their common parts. All are C's struct btree_path.
 #[repr(C)]
-#[c_name(btree_path)]
 #[derive(CStruct)]
 pub struct BtreePath<T: PathNode = cs::btree_bkey_cached_common> {
     pub sorted_idx: cs::PathIdx,
@@ -233,10 +232,10 @@ impl Paths<'_> {
                                     should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> Result<(), c_int> {
         ebug_assert!(self[idx].write_locked(level), "taking write at a level not marked for it");
         let node = self[idx].held_node(level);
-        let readers = self.trans.node_lock_counts(self, None, node, level).n[c::six_lock_type::SIX_LOCK_read as usize] as c_int;
+        let readers = self.trans.node_lock_counts(self, None, node, level).n[c::SixLockType::SIX_LOCK_read as usize] as c_int;
 
         match unsafe {
-            SixHold::from_raw(&node.as_ref().lock, six_lock_type::SIX_LOCK_intent)
+            SixHold::from_raw(&node.as_ref().lock, SixLockType::SIX_LOCK_intent)
                 .write_waiting_over(readers, wait, should_sleep_fn, ip)
         } {
             Ok(write) => {
@@ -244,7 +243,7 @@ impl Paths<'_> {
                 Ok(())
             }
             Err((intent, e)) => {
-                self[idx].mark_locked_noreset(level, btree_node_locked_type::from_six(intent.into_raw()));
+                self[idx].mark_locked_noreset(level, BtreeNodeLockedType::from_six(intent.into_raw()));
                 Err(e)
             }
         }
@@ -1018,7 +1017,7 @@ impl BtreeTrans<'_> {
 
         if paths[idx].cached() {
             self.node_unlock(paths, idx, 0);
-            paths[idx].l[0].b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_up.into());
+            paths[idx].l[0].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_up.into());
         } else {
             let level = self.path_up_until_good_node(paths, idx, cmp);
 
@@ -1108,7 +1107,7 @@ impl BtreeTrans<'_> {
             path.bits.set_locks_want(locks_want as u8);
             path.nodes_locked = 0;
             for l in &mut path.l {
-                l.b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_init.into());
+                l.b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_init.into());
             }
             #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
             {
@@ -1269,7 +1268,7 @@ impl BtreePath {
 
 // ── To text ─────────────────────────────────────────────────────────────────
 
-fn btree_node_locked_str(t: btree_node_locked_type) -> &'static str {
+fn btree_node_locked_str(t: BtreeNodeLockedType) -> &'static str {
     match t {
         BTREE_NODE_UNLOCKED      => "unlocked",
         BTREE_NODE_READ_LOCKED   => "read",
@@ -1762,10 +1761,10 @@ impl<'p, T: PathNode> UnlockedNode<'p, T> {
 /// What every level of a path table the transaction has reallocated away from
 /// holds, in debug builds: for a path pointer kept across the realloc.
 pub(crate) fn btree_path_poison<T>() -> NodePtr<T> {
-    NodePtr::err(BchError::from(bch_errcode::BCH_ERR_no_btree_node_stale_paths))
+    NodePtr::err(BchError::from(Errcode::BCH_ERR_no_btree_node_stale_paths))
 }
 
-impl btree_node_locked_type {
+impl BtreeNodeLockedType {
     /// The lock at @level in a path's nodes_locked: two bits a level, the six
     /// lock type plus one.
     pub fn of(nodes_locked: u8, level: usize) -> Self {
@@ -1773,20 +1772,20 @@ impl btree_node_locked_type {
     }
 
     /// Held as six lock type @ty: the two number them the same.
-    pub fn from_six(ty: six_lock_type) -> Self {
+    pub fn from_six(ty: SixLockType) -> Self {
         Self::from_bits(ty as i32)
     }
 
     /// The six lock type it's held as, locked.
-    pub fn six(self) -> six_lock_type {
-        six_lock_type::from_bits(self as u32)
+    pub fn six(self) -> SixLockType {
+        SixLockType::from_bits(self as u32)
     }
 }
 
 impl<T: PathNode> BtreePath<T> {
     /// Another hold on the level's node, as @want, if the level's is no
     /// weaker.
-    pub fn increment_level(&self, level: usize, want: six_lock_type) -> Option<SixHold<'_>> {
+    pub fn increment_level(&self, level: usize, want: SixLockType) -> Option<SixHold<'_>> {
         let locked = self.locked_type(level);
         (locked != BTREE_NODE_UNLOCKED && locked as i32 >= want as i32).then(|| {
             ManuallyDrop::new(unsafe { SixHold::from_raw(self.held_lock(level), locked.six()) }).increment(want)
@@ -1795,7 +1794,7 @@ impl<T: PathNode> BtreePath<T> {
 
     /// The level's node, relocked as @ty if nothing's written it since the
     /// level's lock_seq: if it's still the node the level had.
-    pub fn relock_level(&mut self, level: usize, ty: six_lock_type) -> bool {
+    pub fn relock_level(&mut self, level: usize, ty: SixLockType) -> bool {
         let Some(node) = self.l[level].b.get().ok().flatten() else { return false };
         let node = unsafe { node.as_ref() };
         let Some(hold) = node.common().lock.relock_as(ty, self.l[level].lock_seq) else { return false };
@@ -1808,7 +1807,7 @@ impl<T: PathNode> BtreePath<T> {
     fn change_level(&mut self, level: usize, f: impl FnOnce(SixHold<'_>) -> Option<SixHold<'_>>) {
         let Some(hold) = self.take_level(level) else { return };
 
-        let locked = f(hold).map_or(BTREE_NODE_UNLOCKED, |hold| btree_node_locked_type::from_six(hold.into_raw()));
+        let locked = f(hold).map_or(BTREE_NODE_UNLOCKED, |hold| BtreeNodeLockedType::from_six(hold.into_raw()));
         self.mark_locked_noreset(level, locked);
     }
 
@@ -1820,7 +1819,7 @@ impl<T: PathNode> BtreePath<T> {
 
         self.l[level].b = NodePtr::node(NonNull::from(node));
         self.l[level].lock_seq = node.common().lock.six().seq.get();
-        self.mark_locked_noreset(level, btree_node_locked_type::from_six(hold.into_raw()));
+        self.mark_locked_noreset(level, BtreeNodeLockedType::from_six(hold.into_raw()));
     }
 
     /// For a lock just taken - not one changed or handed between paths: its
@@ -1937,11 +1936,11 @@ impl<T: PathNode> BtreePath<T> {
         level < c::BTREE_MAX_DEPTH as usize && self.l[level].b.is_node()
     }
 
-    pub(crate) fn locked_type(&self, level: usize) -> btree_node_locked_type {
-        btree_node_locked_type::of(self.nodes_locked, level)
+    pub(crate) fn locked_type(&self, level: usize) -> BtreeNodeLockedType {
+        BtreeNodeLockedType::of(self.nodes_locked, level)
     }
 
-    pub(crate) fn locked_type_nowrite(&self, level: usize) -> btree_node_locked_type {
+    pub(crate) fn locked_type_nowrite(&self, level: usize) -> BtreeNodeLockedType {
         match self.locked_type(level) {
             BTREE_NODE_WRITE_LOCKED => BTREE_NODE_INTENT_LOCKED,
             have => have,
@@ -1960,23 +1959,23 @@ impl<T: PathNode> BtreePath<T> {
         self.locked_type(level) != BTREE_NODE_UNLOCKED
     }
 
-    pub(crate) fn mark_locked_noreset(&mut self, level: usize, ty: btree_node_locked_type) {
+    pub(crate) fn mark_locked_noreset(&mut self, level: usize, ty: BtreeNodeLockedType) {
         /* relying on this to avoid a branch */
-        const { assert!(c::six_lock_type::SIX_LOCK_read as i32 == 0 && c::six_lock_type::SIX_LOCK_intent as i32 == 1) };
+        const { assert!(c::SixLockType::SIX_LOCK_read as i32 == 0 && c::SixLockType::SIX_LOCK_intent as i32 == 1) };
 
         self.nodes_locked &= !(3 << (level << 1));
         self.nodes_locked |= ((ty as i32 + 1) as u8) << (level << 1);
     }
 
-    pub(crate) fn lock_want_six(&self, level: usize) -> c::six_lock_type {
+    pub(crate) fn lock_want_six(&self, level: usize) -> c::SixLockType {
         if level < self.locks_want() as usize {
-            c::six_lock_type::SIX_LOCK_intent
+            c::SixLockType::SIX_LOCK_intent
         } else {
-            c::six_lock_type::SIX_LOCK_read
+            c::SixLockType::SIX_LOCK_read
         }
     }
 
-    pub(crate) fn lock_want(&self, level: usize) -> btree_node_locked_type {
+    pub(crate) fn lock_want(&self, level: usize) -> BtreeNodeLockedType {
         let (path_level, locks_want) = (self.level() as usize, self.locks_want() as usize);
 
         if level < path_level {

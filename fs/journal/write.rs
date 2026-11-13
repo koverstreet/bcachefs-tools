@@ -15,16 +15,16 @@ use crate::btree::bkey::{BkeySC, ValidateFlags};
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::btree::write_buffer;
 use crate::c;
-use crate::c::journal_bucket_stage::JOURNAL_BUCKET_cur;
-use crate::c::journal_flags as Journal;
-use crate::c::journal_space_from::journal_space_discarded;
+use crate::c::JournalBucketStage::JOURNAL_BUCKET_cur;
+use crate::c::JournalFlag as Journal;
+use crate::c::JournalSpaceFrom::journal_space_discarded;
 use crate::c::{buf_waiters, JournalGuard, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT, JOURNAL_BUF_NOFLUSH,
                JOURNAL_BUF_NOT_IN_FLIGHT};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::write::DevWriteRef;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, Fs};
 use crate::journal::entries::EntryWriter;
@@ -169,13 +169,13 @@ fn __write_alloc(j: &c::journal, a: &mut c::WriteAlloc, w: &mut c::journal_buf, 
         fs.dev_alloc_list_devs(&mut a.stripe, devs, &chosen, &mut a.wp_domain_keys, &mut devs_sorted);
 
         /* The lowest score in the best failure domain, ties in sort order: */
-        let mut ca: Option<DevIoRef<c::bch_dev_write_ref>> = None;
+        let mut ca: Option<DevIoRef<c::DevWriteRefKind>> = None;
         for &i in &devs_sorted.data[..devs_sorted.nr as usize] {
             if ca.as_ref().is_some_and(|ca| a.wp_domain_keys[usize::from(i)] != a.wp_domain_keys[usize::from(ca.dev_idx)]) {
                 break;
             }
 
-            let Some(cand) = fs.dev_get_ioref::<c::bch_dev_write_ref>(i.into()) else { continue };
+            let Some(cand) = fs.dev_get_ioref::<c::DevWriteRefKind>(i.into()) else { continue };
             let ja = &cand.journal;
 
             /*
@@ -280,7 +280,7 @@ fn write_alloc(j: &c::journal, w: &mut c::journal_buf, replicas: &mut u32) -> Re
     if *replicas != 0 {
         Ok(())
     } else {
-        Err(fs.err(bch_errcode::BCH_ERR_insufficient_journal_devices))
+        Err(fs.err(Errcode::BCH_ERR_insufficient_journal_devices))
     }
 }
 
@@ -348,7 +348,7 @@ fn update_last_seq_ondisk(j: &c::journal, pins: &PinsRead<'_>, g: &mut JournalGu
 
             match refs.iter_mut().find(|(r, _)| *r == devs_r) {
                 Some((_, nr)) => *nr += 1,
-                None => refs.try_push((devs_r, 1)).map_err(|_| j.fs().err(bch_errcode::BCH_ERR_ENOMEM_journal_buf))?,
+                None => refs.try_push((devs_r, 1)).map_err(|_| j.fs().err(Errcode::BCH_ERR_ENOMEM_journal_buf))?,
             }
 
             pins.seq_set_devs(seq, &c::bch_devs_list::default());
@@ -406,9 +406,9 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
 
     let no_flush = w.head().no_flush();
     let time = if no_flush {
-        c::bch_time_stats::journal_noflush_write
+        c::TimeStat::journal_noflush_write
     } else {
-        c::bch_time_stats::journal_flush_write
+        c::TimeStat::journal_flush_write
     };
     fs.times[time as usize].update(j.write_start_time.get());
 
@@ -454,7 +454,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
 
     if unlikely(write_failed || flush_failed || err.is_err()) {
         if w.devs_written.nr == 0 {
-            err = Err(fs.err(bch_errcode::BCH_ERR_journal_write_err));
+            err = Err(fs.err(Errcode::BCH_ERR_journal_write_err));
         }
 
         /*
@@ -548,14 +548,14 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
          * Must come before signaling write completion, for
          * journal.stop():
          */
-        if j.watermark() != c::bch_watermark::stripe {
+        if j.watermark() != c::Watermark::stripe {
             j.reclaim_kick();
         }
 
         j.update_last_seq(&pins, &mut g);
         j.space_available(&mut g);
 
-        fs.times[c::bch_time_stats::blocked_journal_max_in_flight as usize].track_event_change(false);
+        fs.times[c::TimeStat::blocked_journal_max_in_flight as usize].track_event_change(false);
 
         j.wake_async_wait();
     }
@@ -571,7 +571,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
      */
     core::sync::atomic::fence(SeqCst);
 
-    let _ = j.cycle_locked(&pins, &mut g, c::journal_cycle_flags::empty());
+    let _ = j.cycle_locked(&pins, &mut g, c::JournalCycleFlags::empty());
 
     /*
      * We don't typically trigger journal writes from here - the next journal
@@ -721,7 +721,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let fs = j.fs();
     let status = jbio.bio.bi_status;
 
-    ca.account_io_completion(c::bch_member_error_type::write, jbio.submit_time, status == 0);
+    ca.account_io_completion(c::MemberErrorType::write, jbio.submit_time, status == 0);
     ca.write_unflushed();
 
     if status != 0 {
@@ -743,7 +743,7 @@ unsafe extern "C" fn write_preflush_endio(bio: *mut c::bio) {
     let fs = j.fs();
     let status = jbio.bio.bi_status;
 
-    ca.account_io_completion(c::bch_member_error_type::write, jbio.submit_time, status == 0);
+    ca.account_io_completion(c::MemberErrorType::write, jbio.submit_time, status == 0);
 
     if status != 0 {
         let _g = j.err_lock.lock();
@@ -841,7 +841,7 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
              * A member with no completed writes since its last
              * flush has nothing for this flush to make durable:
              */
-            if !ca.flags.swap(c::bch_dev_flags::unflushed_writes, false) &&
+            if !ca.flags.swap(c::DevFlag::unflushed_writes, false) &&
                 !w.devs_written.has(ca.dev_idx) {
                 continue;
             }
@@ -919,11 +919,11 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
             continue;
         }
 
-        let ty = c::bch_jset_entry_type(i.type_.into());
+        let ty = c::JsetEntryType(i.type_.into());
 
         /* write buffer keys are retyped to btree keys below: */
-        if ty == c::bch_jset_entry_type::btree_keys ||
-            ty == c::bch_jset_entry_type::write_buffer_keys {
+        if ty == c::JsetEntryType::btree_keys ||
+            ty == c::JsetEntryType::write_buffer_keys {
             empty = false;
         }
 
@@ -937,10 +937,10 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
          * to c->btree_roots we have to get any missing btree roots and
          * add them to this journal entry:
          */
-        if ty == c::bch_jset_entry_type::btree_root {
+        if ty == c::JsetEntryType::btree_root {
             fs.journal_entry_to_btree_root(i);
             btree_roots_have |= 1 << i.btree_id;
-        } else if ty == c::bch_jset_entry_type::write_buffer_keys {
+        } else if ty == c::JsetEntryType::write_buffer_keys {
             let intake = wb.as_mut().expect("write buffer keys in a journal entry not flushing to the write buffer");
             if let Err(e) = intake.entry(i) {
                 crate::fs_fatal_error!(fs, "flushing journal keys to btree write buffer: {}", e.msg());
@@ -966,7 +966,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
         btree_roots_to_journal_entries(fs, ew, btree_roots_have).expect("root_journal_res's room");
 
         let mut d = c::jset_entry_datetime::default();
-        d.entry.type_ = c::bch_jset_entry_type::datetime.0 as u8;
+        d.entry.type_ = c::JsetEntryType::datetime.0 as u8;
         d.seconds.set(ktime_get_real_seconds() as u64);
         ew.push_entry(d).expect("super_entries_journal_res's room");
 
@@ -980,7 +980,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
     if sectors > w.sectors {
         crate::fs_fatal_error!(fs, ": journal write overran available space, {} > {} (extra {u64s} reserved {}/{})",
                                w.jset().bytes(), w.sectors << 9, w.u64s_reserved, j.lock.entry_u64s_reserved.get());
-        return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_journal_write_overran_available_space));
+        return Err(fs.err(Errcode::BCH_ERR_EINVAL_journal_write_overran_available_space));
     }
 
     Ok(())
@@ -1314,7 +1314,7 @@ impl c::journal {
             }
 
             let mut r = c::jset_entry_rewind_limit::default();
-            r.entry.type_ = c::bch_jset_entry_type::rewind_limit.0 as u8;
+            r.entry.type_ = c::JsetEntryType::rewind_limit.0 as u8;
             r.seq.set(self.lock.rewind_seq.get().min(seq + 1));
             Some(r)
         } else {

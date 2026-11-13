@@ -70,7 +70,7 @@ fn dirents_32bit(file: &File) -> bool {
 fn cookie_shift(hash: &c::bch_hash_info) -> u32 {
     if hash.is_31bit {
         0
-    } else if hash.type_ as u32 == c::bch_str_hash_type::crc32c.0 {
+    } else if hash.type_ as u32 == c::StrHashKind::crc32c.0 {
         1
     } else {
         32

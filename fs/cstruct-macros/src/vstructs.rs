@@ -395,8 +395,8 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
 /// #[unsized_vstruct]: the family of an unsized vstruct's definitions, one
 /// per state (util/vstructs.rs' Family), from C's struct as written.
 ///
-/// C's definition is the item, renamed X__head, with #[c_name(X)]: C has it
-/// as struct X, Rust as Head<X> - X<S> is the family's type in state S,
+/// The item is the definition, renamed X__head, with #[type_name(X)]: Head<X>
+/// - X<S> is the family's type in state S,
 /// Validated unless named (generic_type()). Each state's definition,
 /// X__unvalidated and X__validated, is Rust's alone: a DST, the header and
 /// then its tail, as long as its count says - which derefs to the header,
@@ -522,7 +522,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 ///
 /// X<S> is a generic struct over its definition in state S. X<Whole> - X -
 /// is the whole struct, every field a field: the item, renamed X__whole with
-/// #[c_name(X)], C's struct. X__floor is the fields before FIELD, every valid
+/// #[type_name(X)]. X__floor is the fields before FIELD, every valid
 /// value's. X<Validated> - Unvalidated too, as the cast checks the floor - is
 /// a value in place, a DST: the floor's fields, then the bytes there are, at
 /// exactly the value's length; it derefs to the floor, to read. A field from
@@ -548,7 +548,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// version since: a superblock section or journal entry of fixed fields.
 ///
 /// X<S> is a generic struct over its definition in state S. X<Whole> - X -
-/// is the struct: the item, renamed X__whole with #[c_name(X)], C's struct.
+/// is the struct: the item, renamed X__whole with #[type_name(X)].
 /// X<Validated> and X<Unvalidated> are a value in place, a DST: X's fields,
 /// those that hold a count private, then the bytes past them there are, at
 /// exactly the value's length; it derefs to X, to read, and X's methods.
@@ -1172,9 +1172,8 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
     out
 }
 
-/// @item, a struct, as @to - with #[c_name], C's name for it: its own, which
-/// it keeps, or added before its other attributes, so it expands before the
-/// derives among them.
+/// @item, a struct, as @to - with #[type_name], its own name, before its
+/// other attributes, so it expands before the derives among them.
 fn rename_struct(item: TokenStream, def: &CStructDef, to: &str) -> Result<TokenStream, String> {
     let name = def.rust_ident();
     let mut tts: Vec<TokenTree> = item.into_iter().collect();
@@ -1185,7 +1184,7 @@ fn rename_struct(item: TokenStream, def: &CStructDef, to: &str) -> Result<TokenS
     tts[at + 1] = TokenTree::Ident(Ident::new(to, tts[at + 1].span()));
     let mut out = TokenStream::new();
     if def.rust_name.is_none() {
-        out.extend(tokens(&format!("#[::cstruct_macros::c_name({})]", def.name)));
+        out.extend(tokens(&format!("#[::cstruct_macros::type_name({})]", def.name)));
     }
     out.extend(tts.into_iter());
     Ok(out)

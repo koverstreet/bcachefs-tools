@@ -85,8 +85,8 @@ pub enum Plan {
 
 /// The plan for @k, its io options @opts: reconcile_set_data_opts().
 pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<Plan, BchError> {
-    use c::bch_reconcile_opts as o;
-    use c::bch_write_flags as w;
+    use c::ReconcileOpt as o;
+    use c::WriteFlags as w;
     let fs = t.fs();
 
     let Some(kp) = k.arm::<Ptrs>() else { return Ok(Plan::Nothing) };
@@ -96,7 +96,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     let only = |opt| r.need_rb() == rb_bit(opt);
 
     let mut d = c::data_update_opts {
-        type_: c::bch_data_update_types::reconcile,
+        type_: c::DataUpdateType::reconcile,
         target: r.background_target(),
         // Never wait on the allocator mid-write: a blocked data update holds
         // a read-time snapshot of the extent while other movers rewrite it,
@@ -117,7 +117,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     // versioning was wrong - and getting it wrong would otherwise panic
     // converting it. The io options have had the same fallback: safe to take.
     let mut rb = r;
-    if u32::from(rb.data_checksum()) >= c::bch_csum_opt::NR {
+    if u32::from(rb.data_checksum()) >= c::CsumOpt::NR {
         rb.set_data_checksum(opts.data_checksum);
     }
     if !c::bch_compression_opt::valid(rb.background_compression()) {
@@ -315,7 +315,7 @@ pub fn park(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeyS
 /// pending list. check_reconcile_pending_err().
 pub fn parks_on(t: &TransAttempt<'_, '_>, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
                 k: BkeySC<'_>, e: BchError) -> Result<(), BchError> {
-    use c::bch_errcode as err;
+    use c::Errcode as err;
     let fs = t.fs();
 
     if e.matches(err::BCH_ERR_ec_alloc_failed_transient) ||
@@ -346,7 +346,7 @@ pub fn pending_mod(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k
 {
     let fs = t.fs();
     let Some(r) = k.arm::<Ptrs>().and_then(|kp| kp.reconcile_opts(fs).copied()) else { return Ok(()) };
-    if r.need_rb() == 0 || (rb_work_id(Some(&r)) == c::reconcile_work_id::pending) == set {
+    if r.need_rb() == 0 || (rb_work_id(Some(&r)) == c::ReconcileWorkId::pending) == set {
         return Ok(());
     }
 

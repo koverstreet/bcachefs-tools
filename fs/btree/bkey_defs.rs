@@ -26,7 +26,7 @@ pub struct bkey_packed_padded {
 
 #[bch_enum(closed)]
 #[repr(u32)]
-pub enum bkey_pack_pos_ret {
+pub enum BkeyPackPosRet {
     BKEY_PACK_POS_EXACT,
     BKEY_PACK_POS_SMALLER,
     BKEY_PACK_POS_FAIL,
@@ -49,6 +49,6 @@ c_xmacro! {
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct bkey_format_state {
-    pub field_min: [u64; c::bch_bkey_fields::BKEY_NR_FIELDS as usize],
-    pub field_max: [u64; c::bch_bkey_fields::BKEY_NR_FIELDS as usize],
+    pub field_min: [u64; c::BkeyField::BKEY_NR_FIELDS as usize],
+    pub field_max: [u64; c::BkeyField::BKEY_NR_FIELDS as usize],
 }

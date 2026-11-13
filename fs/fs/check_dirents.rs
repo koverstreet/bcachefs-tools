@@ -28,7 +28,7 @@ use crate::btree::iter::{
 use crate::c;
 use crate::check::{self, InodeWalker, SnapshotsSeen};
 use crate::dirent::{self, Dirent, DirentTarget, Dirents};
-use crate::errcode::{bch_errcode, BchError, Found};
+use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::progress::Progress;
@@ -208,7 +208,7 @@ fn check_dirent_parent_subvol<'t>(
 
     let Some(new_parent) = new_parent else {
         bch_err!(fs, "could not find a subvol for snapshot {d_snapshot}");
-        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
+        return Err(fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented));
     };
 
     // The dirent is rewritten at its own position, which may be an interior
@@ -242,7 +242,7 @@ fn check_dirent_to_subvol<'t>(
     // would say - this is a raw read, for the key. Else the dirent outlives it,
     // and fsck stops converging once the sweep removes it.
     let s = s.filter(|s| {
-        s.v().state_decoded() != Some(c::bch_subvolume_state::deleted)
+        s.v().state_decoded() != Some(c::SubvolumeState::deleted)
     });
 
     let Some(s) = s else {
@@ -276,7 +276,7 @@ fn check_dirent_to_subvol<'t>(
     let Some(mut subvol_root) = inode::find_by_inum_snapshot(t, target_inum, target_snapshot,
                                                              BtreeIterFlags::empty()).found()? else {
         bch_err!(fs, "subvol {child} points to missing inode root {target_inum}");
-        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
+        return Err(fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented));
     };
 
     if fsck_err_on!(t, parent != subvol_root.bi_parent_subvol, id::inode_bi_parent_wrong,
@@ -321,7 +321,7 @@ fn maybe_reconstruct_inum(
 
         check::reconstruct_inode(t, btree, snapshot, inum, Some(d_type))?;
         t.commit(None, CommitFlags::NO_ENOSPC)?;
-        return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit));
+        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_commit));
     }
 
     Ok(false)
@@ -487,7 +487,7 @@ fn check_dirent<'t>(
         Ok(()) => {}
         // A casefold mismatch repair deletes the dirent and recreates it
         // where it hashes to: nothing more to check here.
-        Err(e) if e.matches(bch_errcode::BCH_ERR_str_hash_key_repaired) => return Ok(()),
+        Err(e) if e.matches(Errcode::BCH_ERR_str_hash_key_repaired) => return Ok(()),
         Err(e) => {
             // A hash info repair leaves the walker's inodes - and hash_info,
             // initialized from them - stale:

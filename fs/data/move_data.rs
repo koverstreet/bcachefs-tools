@@ -43,7 +43,7 @@ use crate::btree::read::btree_node_scrub;
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeLevels, CommitFlags, CommitOpts, TransAttempt};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
-use crate::c::bch_errcode as err;
+use crate::c::Errcode as err;
 use crate::data::ec::repair::{scrub_stripe_block, stripe_block_to_scrub};
 use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
 use crate::data::moving_update;
@@ -122,7 +122,7 @@ impl<'a> Moving<'a> {
             moving_update::move_extent(self, t, bucket, iter, k, opts, data_opts, found)
         } else if !is_scrub(data_opts.type_) {
             self.move_btree_node(t, opts, data_opts, iter, level, k)
-        } else if data_opts.type_ == c::bch_data_update_types::scrub {
+        } else if data_opts.type_ == c::DataUpdateType::scrub {
             btree_node_scrub(self, iter.btree(), level, k, data_opts.read_dev)
         } else {
             // scrub_no_repair: node scrub repairs, and the journal scrub
@@ -145,10 +145,10 @@ impl<'a> Moving<'a> {
 
     fn move_btree_node(&self, t: &TransAttempt<'_, 'a>, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
                        iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>) -> Result<(), BchError> {
-        use c::bch_watermark as wm;
+        use c::Watermark as wm;
         let fs = t.fs();
 
-        if data_opts.type_ != c::bch_data_update_types::copygc {
+        if data_opts.type_ != c::DataUpdateType::copygc {
             if let Err(e) = t.can_do_data_update(opts, data_opts, k, None) {
                 if !is_restart(&e) {
                     move_btree_node_trace(fs, opts, data_opts, k, Err(e));
@@ -196,7 +196,7 @@ impl Mover<'_, '_> {
 
         let fs = t.fs();
         let opts = get_io_opts(t, s.as_deref_mut(), k)?;
-        update_reconcile_opts(t, s, &opts, iter, level, k, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other)?;
+        update_reconcile_opts(t, s, &opts, iter, level, k, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)?;
         t.commit_lazy(Some(&DiskReservation::new(fs)), CommitFlags::NO_ENOSPC)?;
 
         let mut data_opts = c::data_update_opts { read_dev: u32::MAX, ..Default::default() };
@@ -532,7 +532,7 @@ impl Moving<'_> {
 /// any; of an extent, a checksummed one.
 fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(), BchError> {
     let ctxt = MovingCtxt::new(fs, stats, c::write_point_specifier::hashed(current_id()), false)?;
-    stats.at.data_type.set(DataType(c::data_progress_data_type_special::DATA_PROGRESS_DATA_TYPE_phys.0));
+    stats.at.data_type.set(DataType(c::DataProgressDataTypeSpecial::DATA_PROGRESS_DATA_TYPE_phys.0));
 
     let _ = ctxt.trans().write_buffer_flush_sync();
 
@@ -553,9 +553,9 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(),
             }
         }
 
-        data_opts.type_ = c::bch_data_update_types::scrub;
+        data_opts.type_ = c::DataUpdateType::scrub;
         data_opts.read_dev = dev;
-        data_opts.read_flags = c::bch_read_flags::hard_require_read_device;
+        data_opts.read_flags = c::ReadFlags::hard_require_read_device;
         Ok(true)
     })
 }
@@ -564,8 +564,8 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(),
 pub fn data_job(fs: &Fs, stats: &MoveStats, op: &c::bch_ioctl_data) -> Result<(), BchError> {
     stats.reset();
 
-    match c::bch_data_ops(op.op.into()) {
-        c::bch_data_ops::scrub => {
+    match c::DataOp(op.op.into()) {
+        c::DataOp::scrub => {
             // so tests don't fail spuriously: every btree node that needs
             // repair is seen
             fs.btree_interior_updates_flush();

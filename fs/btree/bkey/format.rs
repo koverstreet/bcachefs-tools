@@ -6,7 +6,7 @@ use crate::c;
 use crate::cstructs::c::{bkey_fields, bkey_format_state};
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::errcode::BchError;
-use crate::format::bch_bkey_fields::{self, *};
+use crate::format::BkeyField::{self, *};
 use crate::format::{bkey_format, Bpos};
 use crate::sb_err_on;
 use crate::types::{field_size, Le64};
@@ -19,7 +19,7 @@ macro_rules! field_ids {
 }
 
 /// A key's fields, in the order they're packed.
-pub(super) const FIELDS: [bch_bkey_fields; NR_FIELDS] = bkey_fields!(field_ids);
+pub(super) const FIELDS: [BkeyField; NR_FIELDS] = bkey_fields!(field_ids);
 
 macro_rules! format_current {
     ($( ($id:ident, $($field:ident).+) ),* $(,)?) => {{
@@ -48,11 +48,11 @@ pub(super) fn u64_bitmask(bits: u32) -> u64 {
 }
 
 impl bkey_format {
-    pub fn bits(&self, f: bch_bkey_fields) -> u32 {
+    pub fn bits(&self, f: BkeyField) -> u32 {
         self.bits_per_field[f as usize] as u32
     }
 
-    pub fn offset(&self, f: bch_bkey_fields) -> u64 {
+    pub fn offset(&self, f: BkeyField) -> u64 {
         self.field_offset[f as usize].get()
     }
 
@@ -66,7 +66,7 @@ impl bkey_format {
      * bigger than a u64... that will cause confusion and issues (like with
      * bkey_packed_successor())
      */
-    fn set_field(&mut self, f: bch_bkey_fields, bits: u32, offset: u64) {
+    fn set_field(&mut self, f: BkeyField, bits: u32, offset: u64) {
         let unpacked_bits = BKEY_FORMAT_CURRENT.bits(f);
         let unpacked_max = u64_bitmask(unpacked_bits);
 
@@ -77,7 +77,7 @@ impl bkey_format {
         self.field_offset[f as usize]   = Le64::new(offset);
     }
 
-    fn field_overflows(&self, f: bch_bkey_fields) -> bool {
+    fn field_overflows(&self, f: BkeyField) -> bool {
         let f_bits = self.bits(f);
         let unpacked_bits = BKEY_FORMAT_CURRENT.bits(f);
         let field_offset = self.offset(f);
@@ -140,7 +140,7 @@ impl bkey_format_state {
         s
     }
 
-    fn add(&mut self, f: bch_bkey_fields, v: u64) {
+    fn add(&mut self, f: BkeyField, v: u64) {
         self.field_min[f as usize] = self.field_min[f as usize].min(v);
         self.field_max[f as usize] = self.field_max[f as usize].max(v);
     }
