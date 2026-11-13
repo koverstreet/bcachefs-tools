@@ -549,7 +549,7 @@ impl c::bch_fs_btree_key_cache {
 
         let mut name = Printbuf::new();
         prt!(&mut name, "{}-btree_key_cache", fs.name().to_str().unwrap_or("?"));
-        Shrinker::register(&self.shrinker, name.as_c_str(), 1, 1 << 14)
+        Shrinker::register(&self.shrinker, name.as_c_str(), 1, 0)
             .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init))
     }
 }
