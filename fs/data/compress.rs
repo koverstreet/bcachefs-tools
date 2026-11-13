@@ -877,7 +877,7 @@ fn opt_parse(val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchE
     if let Some(i) = colon {
         let l = core::str::from_utf8(&s[i + 1..])
             .map_err(|_| BchError::from(c::EINVAL))
-            .and_then(crate::util::sysfs::parse_int::<u32>)
+            .and_then(crate::os::sysfs::parse_int::<u32>)
             .and_then(|l| if l > 15 || (t == 0 && l != 0) { Err(c::EINVAL.into()) } else { Ok(l) });
         level = match l {
             Ok(l)    => l,

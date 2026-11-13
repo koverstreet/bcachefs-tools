@@ -37,7 +37,7 @@ use crate::util::refcount::PercpuRef;
 use crate::util::ffi::c_char;
 use crate::os::kernel::READ;
 use crate::os::sched;
-use crate::util::kobject::{GroupList, KobjOwner, Kobject};
+use crate::os::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::percpu::PerCpu;
 use crate::util::printbuf::prt_bdevname;

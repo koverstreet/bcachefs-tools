@@ -12,8 +12,8 @@
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::kobject::{GroupList, Groups, KobjOwner, KobjPlace, Kobject};
-use crate::util::sysfs::Dir;
+use crate::os::kobject::{GroupList, Groups, KobjOwner, KobjPlace, Kobject};
+use crate::os::sysfs::Dir;
 use core::ffi::c_int;
 use core::ptr::NonNull;
 
@@ -48,7 +48,7 @@ unsafe impl Dir for Root {
 unsafe impl KobjPlace for Root {
     type Owner = Root;
 
-    unsafe fn owner(kobj: *mut c::kobject) -> *mut Root {
+    unsafe fn owner(kobj: *mut Kobject) -> *mut Root {
         kobj.cast()
     }
 }

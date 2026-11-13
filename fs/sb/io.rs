@@ -1039,8 +1039,8 @@ impl c::bch_sb_bdev {
 
     /// The device's sysfs directory's kobject.
     #[cfg(kernel)]
-    pub fn kobj(&self) -> &crate::util::kobject::Kobject {
-        unsafe { crate::util::kobject::Kobject::from_raw((&raw const self.bdev().bd_device.kobj).cast_mut()) }
+    pub fn kobj(&self) -> &crate::os::kobject::Kobject {
+        unsafe { crate::os::kobject::Kobject::from_raw((&raw const self.bdev().bd_device.kobj).cast_mut()) }
     }
 
     /// The path it was opened by

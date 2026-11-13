@@ -3,7 +3,6 @@
 
 #include <linux/backing-dev.h>
 #include <linux/blk_types.h>
-#include <linux/kobject.h>
 #include <linux/types.h>
 
 #define MAX_LFS_FILESIZE 	((loff_t)LLONG_MAX)

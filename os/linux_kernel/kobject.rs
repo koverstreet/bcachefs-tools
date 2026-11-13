@@ -17,15 +17,43 @@ use core::ptr::NonNull;
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
+use crate::os::sysfs::{self, obj_of, Bin, Dir, Files};
+use crate::util::ffi::c_char;
 use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
-use crate::util::sysfs::{self, Dir, Files};
 
-/// A sysfs file read and written in pages at an offset: a bin_attribute,
-/// for a static.
+/// A Bin's file: a bin_attribute, for a static.
 #[repr(transparent)]
-pub struct BinFile(pub c::bin_attribute);
+pub struct BinFile(c::bin_attribute);
 
 unsafe impl Sync for BinFile {}
+
+impl BinFile {
+    pub(crate) const fn new<B: Bin>(name: &'static CStr, mode: u16) -> Self {
+        let mut a: c::bin_attribute = ::pin_init::zeroed();
+        a.attr = sysfs::attribute(name, mode);
+        a.read = Some(bin_read::<B>);
+        a.write = Some(bin_write::<B>);
+        BinFile(a)
+    }
+}
+
+unsafe extern "C" fn bin_read<B: Bin>(_file: *mut c::file, kobj: *mut c::kobject, _attr: *const c::bin_attribute,
+                                      buf: *mut c_char, off: c::loff_t, count: usize) -> isize {
+    // SAFETY: the file's kobject, B::Dir's; kernfs's buffer, of @count bytes
+    let (obj, buf) = unsafe {
+        (obj_of::<B::Dir>(kobj.cast()), core::slice::from_raw_parts_mut(buf.cast::<u8>(), count))
+    };
+    B::read(obj, buf, off as u64).map_or_else(|e| e.class() as isize, |n| n as isize)
+}
+
+unsafe extern "C" fn bin_write<B: Bin>(_file: *mut c::file, kobj: *mut c::kobject, _attr: *const c::bin_attribute,
+                                       buf: *mut c_char, off: c::loff_t, count: usize) -> isize {
+    // SAFETY: as bin_read()'s
+    let (obj, buf) = unsafe {
+        (obj_of::<B::Dir>(kobj.cast()), core::slice::from_raw_parts(buf.cast::<u8>(), count))
+    };
+    B::write(obj, buf, off as u64).map_or_else(|e| e.class() as isize, |n| n as isize)
+}
 
 /// A group's bin files: NULL terminated, N files plus one.
 #[repr(transparent)]
@@ -73,29 +101,21 @@ impl Group {
 
         // where the kernel has them: a union with attrs_const from 6.19, and
         // bin_attrs one with bin_attrs_new before 6.18
-        #[cfg(kernel)]
         #[cfg(linux_ge = "6.19")]
         {
             g.__bindgen_anon_2.attrs = attrs;
             g.bin_attrs = bin_attrs;
         }
-        #[cfg(kernel)]
         #[cfg(linux_ge = "6.18")]
         #[cfg(not(linux_ge = "6.19"))]
         {
             g.attrs = attrs;
             g.bin_attrs = bin_attrs;
         }
-        #[cfg(kernel)]
         #[cfg(not(linux_ge = "6.18"))]
         {
             g.attrs = attrs;
             g.__bindgen_anon_1.bin_attrs_new = bin_attrs;
-        }
-        #[cfg(not(kernel))]
-        {
-            g.attrs = attrs;
-            g.bin_attrs = bin_attrs;
         }
         Group(g)
     }
@@ -138,13 +158,13 @@ pub(crate) unsafe trait KobjPlace {
 
     /// # Safety
     /// @kobj is at this place.
-    unsafe fn owner(kobj: *mut c::kobject) -> *mut Self::Owner;
+    unsafe fn owner(kobj: *mut Kobject) -> *mut Self::Owner;
 }
 
 unsafe impl<A: Place<Type = Self, Base: Enclosing<Visible = A::Base>>> KobjPlace for Placed<Kobject, A> {
     type Owner = A::Base;
 
-    unsafe fn owner(kobj: *mut c::kobject) -> *mut A::Base {
+    unsafe fn owner(kobj: *mut Kobject) -> *mut A::Base {
         unsafe { container_of_raw(kobj.cast::<Self>()) }
     }
 }
@@ -179,7 +199,7 @@ impl<T: KobjOwner> Ktype<T> {
     };
 
     unsafe extern "C" fn release(kobj: *mut c::kobject) {
-        unsafe { T::release(NonNull::new_unchecked(<T::Dir as Dir>::Kobj::owner(kobj))) }
+        unsafe { T::release(NonNull::new_unchecked(<T::Dir as Dir>::Kobj::owner(kobj.cast()))) }
     }
 }
 
@@ -230,7 +250,6 @@ impl Kobject {
 
     /// In sysfs: added, and not deleted since.
     pub fn in_sysfs(&self) -> bool {
-        // a bool in userspace's kobject, an unsigned bitfield in the kernel's
         u32::from(unsafe { (*self.as_ptr()).state_in_sysfs() }) != 0
     }
 
@@ -244,19 +263,16 @@ impl Kobject {
     }
 
     /// A link in its directory, @name, to @target's: sysfs_create_link().
-    #[cfg(kernel)]
     pub fn link(&self, target: &Kobject, name: &CStr) -> Result<(), BchError> {
         ret_to_result_void(unsafe { c::sysfs_create_link(self.as_ptr(), target.as_ptr(), name.as_ptr().cast()) })
     }
 
     /// link()'s @name, removed.
-    #[cfg(kernel)]
     pub fn unlink(&self, name: &CStr) {
         unsafe { c::sysfs_remove_link(self.as_ptr(), name.as_ptr().cast()) }
     }
 
     /// A KOBJ_CHANGE uevent, @env its VAR=value strings.
-    #[cfg(kernel)]
     pub fn uevent_change(&self, env: &[&CStr]) -> Result<(), BchError> {
         use crate::util::alloc::KVVec;
 

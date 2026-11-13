@@ -10,7 +10,7 @@ use crate::new_lock;
 use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::os::kernel::WRITE;
-use crate::util::kobject::Kobject;
+use crate::os::kobject::Kobject;
 use crate::util::projections::Volatile;
 use crate::util::bio::BioSet;
 use crate::util::late::Late;

@@ -9,7 +9,6 @@
 #include <linux/backing-dev.h>
 #include <linux/types.h>
 #include <linux/bvec.h>
-#include <linux/kobject.h>
 #include <linux/mutex.h>
 #include <linux/rwsem.h>
 
@@ -53,17 +52,7 @@ struct gendisk {
 	struct backing_dev_info	__bdi;
 };
 
-struct hd_struct {
-	struct kobject		kobj;
-};
-
 struct block_device {
-	struct kobject		kobj;
-
-	struct			{
-		struct kobject	kobj;
-	}			bd_device;
-
 	dev_t			bd_dev;
 	char			name[BDEVNAME_SIZE];
 	struct inode		*bd_inode;
@@ -76,8 +65,6 @@ struct block_device {
 
 	struct mutex		bd_holder_lock;
 };
-
-#define bdev_kobj(_bdev) (&((_bdev)->kobj))
 
 /*
  * Block error status values.  See block/blk-core:blk_errors for the details.

@@ -82,6 +82,7 @@ fn main() {
         .bitfield_enum("bch_trans_commit_flags")
         .bitfield_enum("bch_write_flags")
         .allowlist_function("sysfs_.*")
+        .allowlist_function("debugfs_read_or_html_dirlist")
         .allowlist_var("linux_page_size")
         .allowlist_function("cmd_.*")
         .allowlist_function(".*_cmds")

@@ -431,8 +431,9 @@ install_dracut: dracut/90bcachefs/module-setup.sh
 
 # The module's source tree, in $(1), for DKMS or dkms-reload-interactive: fs/
 # whole - a list of files is how Makefile.rust.vendor was left out of 1.39.0 -
-# less dotfiles and objects; os/linux_kernel, at the same path from fs/ as
-# here; plus what lives outside fs/, and build.vars.
+# less dotfiles and objects; os/linux_kernel, and what it shares with
+# os/linux_user from os/, at the same path from fs/ as here; plus what lives
+# outside fs/, and build.vars.
 # Source mtimes are kept, so kbuild rebuilds only what changed.
 define bch-stage-module
 	$(Q)mkdir -p $(1)/src/fs/bcachefs $(1)/src/fs/os/linux_kernel
@@ -440,6 +441,7 @@ define bch-stage-module
 		tar -C $(1)/src/fs/bcachefs --no-same-owner -xf -
 	$(Q)tar -C os/linux_kernel --exclude='*/.*' --exclude='*.o' --exclude='*.d' -cf - . | \
 		tar -C $(1)/src/fs/os/linux_kernel --no-same-owner -xf -
+	$(Q)cp -p os/*.rs $(1)/src/fs/os/
 	$(Q)cp -p dkms/Makefile $(1)/
 	$(Q)cp -p dkms/module-version.c version.h $(1)/src/fs/bcachefs/
 	$(Q)cp -p signing/bcachefs-signing-ca.pem $(1)/src/fs/bcachefs/scripts/

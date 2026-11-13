@@ -5,9 +5,11 @@
 pub mod file;
 #[path = "../linux_kernel/kernel.rs"]
 pub mod kernel;
+pub mod kobject;
 pub mod kthread;
 pub mod sched;
 pub mod shrinker;
+pub mod sysfs;
 pub mod workqueue;
 #[path = "../linux_kernel/ops.rs"]
 pub mod ops;

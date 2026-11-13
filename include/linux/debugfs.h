@@ -15,10 +15,12 @@
 #ifndef _DEBUGFS_H_
 #define _DEBUGFS_H_
 
-#include <linux/fs.h>
-#include <linux/seq_file.h>
+#include <stdio.h>
+#include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/compiler.h>
+#include <linux/fs.h>
+#include <linux/seq_file.h>
 
 struct file_operations;
 
@@ -30,5 +32,8 @@ struct dentry *debugfs_create_dir(const char *, struct dentry *);
 
 void debugfs_remove(struct dentry *);
 void debugfs_remove_recursive(struct dentry *);
+
+/* The file at @path under debugfs written to @out, or its dir listed as HTML */
+int debugfs_read_or_html_dirlist(const char *path, FILE *out);
 
 #endif

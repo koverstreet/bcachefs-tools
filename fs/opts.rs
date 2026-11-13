@@ -41,7 +41,7 @@ use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::names::{self, Names};
 use crate::util::{HumanReadable, Printbuf};
 use crate::util::printbuf::parse_human_u64;
-use crate::util::sysfs::parse_int;
+use crate::os::sysfs::parse_int;
 use core::ffi::{CStr, c_ulong};
 use crate::cstructs::c::InodeOptId_arms;
 use crate::c::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt, WriteDegradedAction, MemberState, BCH_REPLICAS_MAX, BCH_SB_SECTOR};

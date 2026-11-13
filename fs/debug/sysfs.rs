@@ -3,7 +3,7 @@
 //! /sys/fs/bcachefs/<uuid>/: the filesystem's sysfs files.
 //!
 //! The filesystem's directory is its kobject's, FsDir; its subdirectories are
-//! named attribute groups of it (util/kobject.rs), so FsDir reads and writes
+//! named attribute groups of it (os/*/kobject.rs), so FsDir reads and writes
 //! their files too, each told by the table its attribute is in. A device's
 //! dir is DevDir, its kobject's. Files are one of:
 //! - a table of Attrs - name, mode, what reading and writing do: the fs dir,
@@ -39,15 +39,14 @@ use crate::opts::{self, OptChange, OptType};
 use crate::sb::counters::COUNTERS;
 use crate::sb::members;
 use crate::prt;
-use crate::util::ffi::c_char;
 use crate::os::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;
-use crate::util::kobject::{BinFile, BinFiles, Group, Groups, Kobject};
+use crate::os::kobject::{BinFile, BinFiles, Group, Groups, Kobject};
 use crate::util::place::Placed;
 use crate::util::printbuf::parse_human_u64;
-use crate::util::sysfs::{self, parse_int, Attr, Dir, Files, ListAttrs};
+use crate::os::sysfs::{self, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{HumanReadable, Printbuf, ToText};
 
 // ── the fs dir ──────────────────────────────────────────────────────────────
@@ -58,7 +57,7 @@ unsafe impl Dir for FsDir {
     type Obj = Fs;
     type Kobj = Placed<Kobject, crate::at!(Fs.kobj)>;
 
-    fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
+    fn show(c: &Fs, attr: &sysfs::Attribute, out: &mut Printbuf) -> Result<(), BchError> {
         if let Some(i) = TIME_STATS.index(attr) {
             c.times[i].to_text(out);
         } else if let Some(i) = TIME_STATS_JSON.index(attr) {
@@ -73,7 +72,7 @@ unsafe impl Dir for FsDir {
         Ok(())
     }
 
-    fn store(c: &Fs, attr: &c::attribute, s: &str) -> Result<(), BchError> {
+    fn store(c: &Fs, attr: &sysfs::Attribute, s: &str) -> Result<(), BchError> {
         if let Some(i) = TIME_STATS.index(attr).or_else(|| TIME_STATS_JSON.index(attr)) {
             c.times[i].reset();
         } else if let Some(i) = COUNTER_FILES.index(attr) {
@@ -213,61 +212,49 @@ fn trans_stats_json(c: &Fs, out: &mut Printbuf) {
     write!(out, "}}\n");
 }
 
-unsafe extern "C" fn trans_stats_json_read(_file: *mut c::file, kobj: *mut c::kobject,
-                                           _attr: *const c::bin_attribute, buf: *mut c_char,
-                                           off: c::loff_t, count: usize) -> isize {
-    // SAFETY: the filesystem's kobject, which has this file
-    let c = unsafe { sysfs::obj_of::<FsDir>(kobj) };
+struct TransStatsJson;
 
-    let mut json = c.btree.trans.stats_json.lock();
-    let out = &mut json.buf;
+impl sysfs::Bin for TransStatsJson {
+    type Dir = FsDir;
 
-    if off == 0 {
-        out.reset();
-        trans_stats_json(c, out);
-        if out.allocation_failure() {
-            return -(c::ENOMEM as isize);
+    fn read(c: &Fs, buf: &mut [u8], off: u64) -> Result<usize, BchError> {
+        let mut json = c.btree.trans.stats_json.lock();
+        let out = &mut json.buf;
+
+        if off == 0 {
+            out.reset();
+            trans_stats_json(c, out);
+            if out.allocation_failure() {
+                return Err(c::ENOMEM.into());
+            }
         }
+
+        let bytes = out.as_bytes();
+        let Some(rest) = bytes.get(off as usize..).filter(|r| !r.is_empty()) else {
+            return Ok(0);
+        };
+        let n = buf.len().min(rest.len());
+        buf[..n].copy_from_slice(&rest[..n]);
+        Ok(n)
     }
 
-    let bytes = out.as_bytes();
-    let Some(rest) = bytes.get(off as usize..).filter(|r| !r.is_empty()) else {
-        return 0;
-    };
-    let n = count.min(rest.len());
-    // SAFETY: kernfs's buffer, of @count bytes
-    unsafe { core::ptr::copy_nonoverlapping(rest.as_ptr(), buf.cast::<u8>(), n) };
-    n as isize
-}
+    /// Any write resets every transaction's stats.
+    fn write(c: &Fs, buf: &[u8], _off: u64) -> Result<usize, BchError> {
+        for (_, s) in trans_stats(c) {
+            let mut locked = s.lock.lock();
+            s.duration.reset();
+            s.lock_hold_times.reset();
+            s.lock_wait_times.reset();
 
-/// Any write resets every transaction's stats.
-unsafe extern "C" fn trans_stats_json_write(_file: *mut c::file, kobj: *mut c::kobject,
-                                            _attr: *const c::bin_attribute, _buf: *mut c_char,
-                                            _off: c::loff_t, count: usize) -> isize {
-    // SAFETY: the filesystem's kobject, which has this file
-    let c = unsafe { sysfs::obj_of::<FsDir>(kobj) };
-
-    for (_, s) in trans_stats(c) {
-        let mut locked = s.lock.lock();
-        s.duration.reset();
-        s.lock_hold_times.reset();
-        s.lock_wait_times.reset();
-
-        locked.published().nr_max_paths.set(0);
-        locked.published().max_mem.set(0);
-        locked.max_paths_text = Printbuf::new();
+            locked.published().nr_max_paths.set(0);
+            locked.published().max_mem.set(0);
+            locked.max_paths_text = Printbuf::new();
+        }
+        Ok(buf.len())
     }
-    count as isize
 }
 
-static TRANS_STATS_JSON: BinFile = BinFile({
-    let mut a: c::bin_attribute = ::pin_init::zeroed();
-    a.attr.name = c"btree_trans_stats_json".as_ptr().cast();
-    a.attr.mode = 0o644;
-    a.read = Some(trans_stats_json_read);
-    a.write = Some(trans_stats_json_write);
-    a
-});
+static TRANS_STATS_JSON: BinFile = BinFile::new::<TransStatsJson>(c"btree_trans_stats_json", 0o644);
 
 // ── time_stats/, time_stats_json/ ───────────────────────────────────────────
 //
@@ -343,7 +330,7 @@ static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&crate::cstr_n
 });
 
 /// The option @attr is the file of, if it's one.
-fn opt_from_attr(attr: &c::attribute) -> Option<c::OptId> {
+fn opt_from_attr(attr: &sysfs::Attribute) -> Option<c::OptId> {
     OPT_FILES.index(attr).map(|i| c::OptId(i as u32))
 }
 
@@ -533,7 +520,7 @@ unsafe impl Dir for DevDir {
     type Obj = Dev;
     type Kobj = Placed<Kobject, crate::at!(Dev.kobj)>;
 
-    fn show(ca: &Dev, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
+    fn show(ca: &Dev, attr: &sysfs::Attribute, out: &mut Printbuf) -> Result<(), BchError> {
         match opt_from_attr(attr) {
             Some(id) => opt_show(ca.fs(), Some(ca), id, out),
             // SAFETY: a device's files that aren't options' are DEV's
@@ -541,7 +528,7 @@ unsafe impl Dir for DevDir {
         }
     }
 
-    fn store(ca: &Dev, attr: &c::attribute, s: &str) -> Result<(), BchError> {
+    fn store(ca: &Dev, attr: &sysfs::Attribute, s: &str) -> Result<(), BchError> {
         match opt_from_attr(attr) {
             Some(id) => opt_store(ca.fs(), Some(ca), id, s),
             // SAFETY: as show()'s

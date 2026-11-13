@@ -232,7 +232,7 @@ use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
 use crate::util::alloc::{alloc_pinned, free_pinned, kbox_pin_init};
 use crate::os::file::read_file;
 use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
-use crate::util::kobject::{GroupList, KobjOwner, Kobject};
+use crate::os::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_dev, log_no_fs, LogLevel};
 use crate::util::percpu::PerCpu;
 use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
