@@ -20,7 +20,8 @@
 #ifndef __LINUX_BIO_H
 #define __LINUX_BIO_H
 
-#include <linux/mempool.h>
+#include <linux/slab.h>
+#include <linux/wait.h>
 #include <linux/bug.h>
 #include <linux/err.h>
 
@@ -178,50 +179,6 @@ static inline void bio_clear_flag(struct bio *bio, unsigned int bit)
 	bio->bi_flags &= ~(1U << bit);
 }
 
-extern struct bio *bio_split(struct bio *bio, int sectors,
-			     gfp_t gfp, struct bio_set *bs);
-
-static inline struct bio *bio_next_split(struct bio *bio, int sectors,
-					 gfp_t gfp, struct bio_set *bs)
-{
-	if (sectors >= bio_sectors(bio))
-		return bio;
-
-	return bio_split(bio, sectors, gfp, bs);
-}
-
-struct bio_set {
-	unsigned int front_pad;
-	unsigned int back_pad;
-	mempool_t bio_pool;
-	mempool_t bvec_pool;
-};
-
-
-static inline void bioset_free(struct bio_set *bs)
-{
-	kfree(bs);
-}
-
-void bioset_exit(struct bio_set *);
-int bioset_init(struct bio_set *, unsigned, unsigned, int);
-
-extern struct bio_set fs_bio_set;
-
-#define BIO_POOL_SIZE 2
-
-extern struct bio_set *bioset_create(unsigned int, unsigned int);
-extern struct bio_set *bioset_create_nobvec(unsigned int, unsigned int);
-enum {
-	BIOSET_NEED_BVECS	= 1 << 0,
-	BIOSET_NEED_RESCUER	= 1 << 1,
-};
-
-struct bio *bio_alloc_bioset(struct block_device *, unsigned,
-			     blk_opf_t, gfp_t, struct bio_set *);
-
-extern void bio_put(struct bio *);
-
 void bio_add_virt_nofail(struct bio *, void *, unsigned);
 
 static inline bool bio_add_vmalloc(struct bio *bio, void *vaddr, unsigned len)
@@ -230,20 +187,11 @@ static inline bool bio_add_vmalloc(struct bio *bio, void *vaddr, unsigned len)
 	return true;
 }
 
-struct bio *bio_alloc_clone(struct block_device *, struct bio *,
-			    gfp_t, struct bio_set *);
-
-struct bio *bio_alloc(struct block_device *, unsigned,
-		      blk_opf_t, gfp_t);
-
-struct bio *bio_kmalloc(unsigned int, gfp_t);
-
 extern void bio_endio(struct bio *);
 
 extern void bio_advance(struct bio *, unsigned);
 
 extern void bio_reset(struct bio *, struct block_device *, unsigned);
-void bio_chain(struct bio *, struct bio *);
 
 extern void bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
 			       struct bio *src, struct bvec_iter *src_iter);

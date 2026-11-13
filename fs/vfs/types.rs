@@ -21,13 +21,13 @@ pub struct bch_fs_vfs {
     pub(crate) inode_cache: crate::vfs::inode_cache::InodeCache,
 
     #[cfg(not(NO_BCACHEFS_FS))]
-    #[late(BioSet::new(4, true), ENOMEM_writepage_bioset_init)]
+    #[late(BioSet::new(4), ENOMEM_writepage_bioset_init)]
     pub writepage_bioset: Late<BioSet<c::bch_writepage_io>>,
     #[cfg(not(NO_BCACHEFS_FS))]
-    #[late(BioSet::new(4, true), ENOMEM_dio_write_bioset_init)]
+    #[late(BioSet::new(4), ENOMEM_dio_write_bioset_init)]
     pub dio_write_bioset: Late<BioSet<c::dio_write>>,
     #[cfg(not(NO_BCACHEFS_FS))]
-    #[late(BioSet::new(1, false), ENOMEM_nocow_flush_bioset_init)]
+    #[late(BioSet::new(1), ENOMEM_nocow_flush_bioset_init)]
     pub nocow_flush_bioset: Late<BioSet<crate::vfs::io::NocowFlush>>,
     #[cfg(not(NO_BCACHEFS_FS))]
     #[late(Mempool::kvmalloc(4, c::BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]

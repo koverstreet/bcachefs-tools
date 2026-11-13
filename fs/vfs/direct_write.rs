@@ -17,7 +17,7 @@ use crate::fs::Fs;
 use crate::inode_opts;
 use crate::snapshots::subvolume;
 use crate::util::alloc::kmalloc;
-use crate::util::bio::Bio;
+use crate::util::bio::{bio_put, Bio};
 use crate::util::closure;
 use crate::os::iov_iter::{IovIter, IovIterFields};
 use crate::os::kernel::{current_id, likely, task_io_account_write, unlikely, Mm};
@@ -143,7 +143,7 @@ unsafe fn dio_write_done(dio: *mut Dio) -> isize {
 
     let mut ret = if d.op.error != 0 { isize::from(d.op.error) } else { (d.written << 9) as isize };
     let (write_ref, started) = (d.write_ref.take(), d.started.take());
-    unsafe { c::bio_put(d.bio_mut()) };
+    unsafe { bio_put(d.bio_mut()) };
 
     drop(write_ref);
 
@@ -390,12 +390,11 @@ pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
             locked = None;
         }
 
-        let bio = unsafe {
-            c::bio_alloc_bioset(core::ptr::null_mut(),
-                                c::bio_iov_vecs_to_alloc(it.as_ptr(), c::BIO_MAX_VECS as i32) as u16,
-                                c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE,
-                                c::GFP_KERNEL, fs.vfs.dio_write_bioset.as_ptr())
-        };
+        let bio = fs.vfs.dio_write_bioset.alloc_raw(
+            core::ptr::null_mut(),
+            unsafe { c::bio_iov_vecs_to_alloc(it.as_ptr(), c::BIO_MAX_VECS as i32) } as u16,
+            c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE,
+            c::GFP_KERNEL);
         let dio = unsafe { crate::util::bio::of_bio::<Dio>(bio) };
         let d = unsafe { &mut *dio };
         d.req           = k.as_ptr();
@@ -413,7 +412,7 @@ pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
 
         if unlikely(!mapping.is_empty()) {
             if let Err(e) = mapping.write_invalidate_range(ki_pos, ki_pos + count - 1) {
-                unsafe { c::bio_put(bio) };
+                unsafe { bio_put(bio) };
                 drop(started);
                 break 'out e.class() as isize;
             }

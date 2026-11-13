@@ -11,7 +11,7 @@ use crate::data::write::{to_wbio, wbio_init, write_op_error};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
-use crate::util::bio::{pages, Bio};
+use crate::util::bio::{bio_put, pages, Bio};
 use crate::os::kernel::{unlikely, PAGE_SECTORS, PAGE_SIZE, READ, WRITE};
 use c::WriteFlags as w;
 use core::ffi::c_void;
@@ -79,7 +79,7 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: *mut c::bio, buf: *m
 
     let pages = (output_available + offset).div_ceil(PAGE_SIZE as u32);
 
-    let bio = unsafe { c::bio_alloc_bioset(core::ptr::null_mut(), pages as _, 0, c::GFP_NOIO, fs.bio_write.as_ptr()) };
+    let bio = fs.bio_write.alloc_raw(core::ptr::null_mut(), pages as _, 0, c::GFP_NOIO);
     let wbio = unsafe { wbio_init(bio) };
     wbio.wbio.bits.set_put_bio(1);
     /* copy WRITE_SYNC flag */
@@ -368,7 +368,7 @@ fn dst_put(fs: &Fs, dst: *mut c::bio) {
             pages::free_pages_pool(&fs.bio_bounce, &mut *dst);
         }
         if wbio.wbio.bits.put_bio() != 0 {
-            c::bio_put(dst);
+            bio_put(dst);
         }
     }
 }
@@ -582,7 +582,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
         assert!(total_output == total_input, "a split of a bio we didn't bounce, its output not its input");
 
         unsafe {
-            dst = c::bio_split(src, (total_input >> 9) as i32, c::GFP_NOIO, fs.bio_write.as_ptr());
+            dst = fs.bio_write.split(src, total_input >> 9, c::GFP_NOIO);
             wbio_init(dst).wbio.bits.set_put_bio(1);
             /* copy WRITE_SYNC flag */
             (*dst).bi_opf = (*src).bi_opf;

@@ -126,7 +126,8 @@ pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Segment,
 pub(crate) use iter::nth_page;
 pub use buffers::{BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
                   Buffers, MapBuf};
-pub use owned::{inline_bio, inline_vecs, BioBox, BioInPlace, BioLend, BioSet, Either, FrontPad, Gathered, Lent};
+pub use owned::{bio_put, inline_bio, inline_vecs, BioBox, BioInPlace, BioLend, BioPool, BioSet, Either, FrontPad,
+                Gathered, Lent};
 
 fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)

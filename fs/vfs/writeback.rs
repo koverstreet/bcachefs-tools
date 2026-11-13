@@ -13,7 +13,7 @@ use crate::fs::Fs;
 use crate::inode_opts;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocBox;
-use crate::util::bio::{plugged, Bio, BioBuffersUnmanaged, BioOwner};
+use crate::util::bio::{bio_put, plugged, Bio, BioBuffersUnmanaged, BioOwner};
 use crate::util::closure::{self, closure_wait, StackClosure};
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::os::ops::from_raw;
@@ -153,7 +153,7 @@ unsafe fn writepage_io_done(op: *mut c::bch_write_op) {
         drop(unsafe { Writeback::from_io(f.folio) });
     }
 
-    unsafe { c::bio_put(&mut io.op.wbio.bio) };
+    unsafe { bio_put(&mut io.op.wbio.bio) };
 }
 
 fn writepage_do_io(w: &mut WritepageState) {
@@ -168,10 +168,8 @@ fn writepage_do_io(w: &mut WritepageState) {
  */
 fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeInfo,
                       sector: u64, nr_replicas: u32, res_nr_replicas: u32) {
-    let bio = unsafe {
-        c::bio_alloc_bioset(core::ptr::null_mut(), c::BIO_MAX_VECS as u16, c::req_op_REQ_OP_WRITE,
-                            c::GFP_KERNEL, fs.vfs.writepage_bioset.as_ptr())
-    };
+    let bio = fs.vfs.writepage_bioset.alloc_raw(core::ptr::null_mut(), c::BIO_MAX_VECS as u16,
+                                                c::req_op_REQ_OP_WRITE, c::GFP_KERNEL);
     let io = unsafe { crate::util::bio::of_bio::<Io>(bio) };
     let i = unsafe { &mut *io };
 

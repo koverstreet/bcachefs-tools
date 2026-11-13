@@ -726,7 +726,7 @@ use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIo, DevIoRef};
 use crate::snapshots::subvolume;
-use crate::util::bio::{of_bio, Bio};
+use crate::util::bio::{bio_put, of_bio, Bio};
 use crate::util::closure::{ClosureRef, HasClosure, Running};
 use crate::util::ffi::Opaque;
 use crate::os::kernel::{current_runtime, local_clock, unlikely, READ, WRITE};
@@ -970,9 +970,7 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
         };
 
         let n: &mut c::bch_write_bio = if i + 1 != last {
-            let bio = unsafe {
-                c::bio_alloc_clone(core::ptr::null_mut(), &raw mut wbio.bio, c::GFP_NOIO, fs.replica_set.as_ptr())
-            };
+            let bio = unsafe { fs.replica_set.alloc_clone(&raw mut wbio.bio, c::GFP_NOIO) };
             let n = unsafe { to_wbio(bio) };
 
             n.bio.bi_end_io     = wbio.bio.bi_end_io;
@@ -1300,7 +1298,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     }
 
     if wbio.wbio.bits.put_bio() != 0 {
-        unsafe { c::bio_put(bio) };
+        unsafe { bio_put(bio) };
     }
 
     match parent {

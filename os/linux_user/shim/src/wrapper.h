@@ -37,7 +37,6 @@
 #include "include/crypto/chacha.h"
 #include "include/crypto/poly1305.h"
 #include "fs/vendor/closure.h"
-#include "fs/vendor/bio_map.h"
 #include "fs/vendor/bio_iov_iter.h"
 #include "fs/locking/shim.h"
 #include "fs/util/shim.h"

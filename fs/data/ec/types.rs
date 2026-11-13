@@ -114,7 +114,7 @@ pub struct bch_fs_ec {
     /// The stripe block IO's bios: destroyed with the filesystem, after its
     /// rounds of IO, which wait for them
     #[pin]
-    #[init(BioSet::new(1, true))]
+    #[init(BioSet::new(1))]
     pub block_bioset: BioSet<EcBio>,
 
     /// gc's copies of the stripes: trigger.rs's alone - allocated as the gc

@@ -514,7 +514,7 @@ pub struct bch_fs_discards {
     #[pin]
     pub(crate) work: ReffedWork<do_discards_work, crate::field!(super.writes)>,
     #[pin]
-    #[init(BioSet::new(4, false))]
+    #[init(BioSet::new(4))]
     pub(crate) bioset: BioSet<DiscardBio>,
 
     /// Buckets with a discard issued, by any worker, not yet marked free.

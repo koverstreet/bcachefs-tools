@@ -1023,7 +1023,7 @@ pub struct bch_fs_btree {
     pub write_stats: [cs::btree_write_stats; cs::BtreeWriteType::NR as usize],
 
     #[pin]
-    #[init(BioSet::new(1, true), ENOMEM_fs_other_alloc)]
+    #[init(BioSet::new(1), ENOMEM_fs_other_alloc)]
     pub bio: BioSet<Either<crate::btree::read::BtreeReadBio, crate::btree::write::BtreeWriteBio>>,
     #[pin]
     #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]

@@ -663,17 +663,17 @@ pub struct Fs {
            ENOMEM_fs_other_alloc)]
     pub btree_update_wq: Late<Workqueue>,
     #[pin]
-    #[init(BioSet::new(1, true), ENOMEM_bio_read_init)]
+    #[init(BioSet::new(1), ENOMEM_bio_read_init)]
     pub bio_read: BioSet<crate::data::read::Rbio>,
     #[pin]
-    #[init(BioSet::new(1, true), ENOMEM_bio_read_split_init)]
+    #[init(BioSet::new(1), ENOMEM_bio_read_split_init)]
     pub bio_read_split: BioSet<crate::data::read::Rbio>,
     #[pin]
     #[init(crate::data::read::retry_pool(), ENOMEM_fs_other_alloc)]
     pub read_retry_pool: crate::util::mempool::Mempool<crate::util::alloc::Kmalloc>,
-    #[late(BioSet::new(1, true), ENOMEM_bio_write_init)]
+    #[late(BioSet::new(1), ENOMEM_bio_write_init)]
     pub bio_write: Late<BioSet<c::bch_write_bio>>,
-    #[late(BioSet::new(4, false), ENOMEM_bio_write_init)]
+    #[late(BioSet::new(4), ENOMEM_bio_write_init)]
     pub replica_set: Late<BioSet<c::bch_write_bio>>,
     #[pin]
     #[init(crate::util::bio::pages::BouncePool::new(options), ENOMEM_bio_bounce_pages_init)]

@@ -29,16 +29,17 @@ use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
 
-use pin_init::{pin_data, PinInit};
+use pin_init::{pin_data, pin_init, PinInit};
 
 use super::{bio_of, of_bio, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, Buffers, HasBio,
             MapBuf};
 use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{Exclusive, TaskSlot, Waiter};
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::alloc::{current_gfp_context_raw, init_at, kfree, kzalloc, Alloc};
-use crate::util::ffi::Opaque;
+use crate::errcode::BchError;
+use crate::os::kernel::PAGE_SIZE;
+use crate::util::alloc::{init_at, kfree, kzalloc, Alloc, Kmalloc};
+use crate::util::mempool::Mempool;
 
 pub struct BioInPlace(*mut c::bio);
 
@@ -153,12 +154,211 @@ impl Drop for Lent<'_> {
 
 // ── BioSet, BioBox ───────────────────────────────────────────────────────
 
-/// Rust's, made by new() and destroyed on drop - in a struct C may share, as
-/// its struct bio_set - or C's, borrowed by from_c().
+/// A set's bios, untyped: each a bio with what it's in before it and its
+/// bvecs inline after, in one allocation from a pool of elements sized for
+/// BIO_MAX_VECS - where it's less, the allocator's first, as any pool's
+/// allocations. A bio's bi_pool is its BioPool, so it's put back knowing
+/// nothing else of it.
+#[pin_data]
+pub struct BioPool {
+    #[pin]
+    pool:      Mempool<Kmalloc>,
+    front_pad: usize,
+}
+
+/// A bioset of T's bios: a BioPool, its front_pad a T's.
+#[pin_data]
 #[repr(transparent)]
 pub struct BioSet<T: FrontPad> {
-    set: Opaque<c::bio_set>,
+    #[pin]
+    set: BioPool,
     _t:  PhantomData<fn() -> T>,
+}
+
+/// A bio with @front_pad bytes before it and @nr_vecs bvecs after: its
+/// allocation, and where the bvecs start.
+fn bio_layout(front_pad: usize, nr_vecs: u16) -> (Layout, usize) {
+    let bio = Layout::from_size_align(front_pad + size_of::<c::bio>(), align_of::<c::bio>())
+        .expect("a bio and what it's in");
+    let (layout, vecs) = bio.extend(inline_vecs(nr_vecs)).expect("a bio and its bvecs");
+    (layout.pad_to_align(), vecs)
+}
+
+impl BioPool {
+    fn new(pool_size: u32, front_pad: usize) -> impl PinInit<Self, BchError> {
+        pin_init!(Self {
+            pool <- Mempool::kmalloc(pool_size as usize, bio_layout(front_pad, c::BIO_MAX_VECS as u16).0.size()),
+            front_pad,
+        }? BchError)
+    }
+
+    /// bio_alloc_bioset(): a bio with room for @nr_vecs bvecs. Null past
+    /// BIO_MAX_VECS, or where the pool can't wait - a NORECLAIM scope;
+    /// otherwise it waits on the pool.
+    pub fn alloc_raw(&self, bdev: *mut c::block_device, nr_vecs: u16, opf: u32, gfp: c::gfp_t) -> *mut c::bio {
+        let (layout, vecs) = bio_layout(self.front_pad, nr_vecs);
+        let Ok(p) = self.pool.alloc_gfp(layout, gfp) else {
+            return core::ptr::null_mut();
+        };
+        /*
+         * Given a whole element, as bvec_alloc() falls back to its mempool's,
+         * it has room for BIO_MAX_VECS: bio_put() frees what's recorded, so
+         * the element goes back to the reserve.
+         */
+        let nr_vecs = if p.len() > layout.size() { c::BIO_MAX_VECS as u16 } else { nr_vecs };
+        let p = p.cast::<u8>();
+        unsafe {
+            let bio = p.add(self.front_pad).cast::<c::bio>().as_ptr();
+            c::bio_init(bio, bdev, p.add(vecs).cast().as_ptr(), nr_vecs, opf as _);
+            (*bio).bi_pool = core::ptr::from_ref(self).cast_mut().cast();
+            bio
+        }
+    }
+
+    /// bio_alloc_clone(): a bio of @src's bvecs from where it is, none of its
+    /// own - for no device, bio_set_dev()'s after.
+    ///
+    /// # Safety
+    /// @src is live, and its bvecs outlive the clone.
+    pub unsafe fn alloc_clone(&self, src: *mut c::bio, gfp: c::gfp_t) -> *mut c::bio {
+        let bio = self.alloc_raw(core::ptr::null_mut(), 0, unsafe { (*src).bi_opf }, gfp);
+        if !bio.is_null() {
+            unsafe { super::buffers::clone_from(&mut *bio, &*src, (*src).bi_iter) };
+        }
+        bio
+    }
+
+    /// bio_split(): @bio's first @sectors, a clone, and @bio advanced past
+    /// them.
+    ///
+    /// # Safety
+    /// As alloc_clone()'s.
+    pub unsafe fn split(&self, bio: *mut c::bio, sectors: u32, gfp: c::gfp_t) -> *mut c::bio {
+        let size = unsafe { (*bio).bi_iter.bi_size };
+        assert!(sectors != 0 && sectors < size >> 9, "splitting {sectors} sectors off a {size} byte bio");
+
+        let split = unsafe { self.alloc_clone(bio, gfp) };
+        if !split.is_null() {
+            unsafe {
+                (*split).bi_iter.bi_size = sectors << 9;
+                c::bio_advance(bio, sectors << 9);
+            }
+        }
+        split
+    }
+
+    /*
+     * Allocate a bio (possibly a chain of bios via chain()) covering
+     * [base, base+size) on @bdev starting at sector @sector. Each bio in the
+     * chain is capped at BIO_MAX_VECS bvecs; physically contiguous buffers fit
+     * in one bvec and the chain typically has length 1.
+     *
+     * The returned bio is the tail of the chain (the last chunk in sector
+     * order), left unsubmitted for the caller to configure (bi_end_io,
+     * bi_private, any wrapper state) and submit. Earlier chunks are chained
+     * to the bio that immediately follows them and submitted here in sector
+     * order, so the block layer sees requests in forward order; callers
+     * should wrap their submission in blk_start_plug()/blk_finish_plug() to
+     * give the driver a chance to merge.
+     *
+     * When the caller's tail bio completes, the chain's bi_status reflects
+     * any error propagated from the earlier chunks.
+     *
+     * REQ_PREFLUSH, if set in @opf, applies only to the first (sector-lowest)
+     * bio in the chain.
+     */
+    /// # Safety
+    /// [base, base+size) lives till the chain's IO is done.
+    pub unsafe fn map_and_chain(&self, bdev: *mut c::block_device, mut base: *mut u8, mut size: usize,
+                                mut sector: u64, mut opf: u32, gfp: c::gfp_t) -> *mut c::bio {
+        let mut tail: *mut c::bio = core::ptr::null_mut();
+        let mut nr_bvecs = super::buf_nr_bvecs(base, size);
+        let max_vecs = c::BIO_MAX_VECS as usize;
+
+        while size != 0 {
+            let (mut chunk_size, mut chunk_bvecs) = (size, nr_bvecs);
+
+            if chunk_bvecs > max_vecs {
+                let offset = base.addr() & (PAGE_SIZE - 1);
+
+                chunk_size = max_vecs * PAGE_SIZE - offset;
+                chunk_bvecs = max_vecs;
+                assert!(chunk_size <= size);
+            }
+
+            let bio = self.alloc_raw(bdev, chunk_bvecs as u16, opf, gfp);
+            opf &= !c::REQ_PREFLUSH; /* only on the first bio */
+
+            unsafe {
+                super::bch2_bio_map(bio, base.cast(), chunk_size);
+                (*bio).bi_iter.bi_sector = sector;
+
+                if !tail.is_null() {
+                    /*
+                     * Chain the previous (earlier-sector) bio to this one
+                     * and submit it now: submission order is sector-forward
+                     * so the elevator can merge with adjacent writes.
+                     */
+                    chain(tail, bio);
+                    c::submit_bio(tail);
+                }
+            }
+            tail = bio;
+
+            base       = base.wrapping_add(chunk_size);
+            sector    += (chunk_size >> 9) as u64;
+            size      -= chunk_size;
+            nr_bvecs  -= chunk_bvecs;
+        }
+
+        tail
+    }
+}
+
+/// bio_chain(), for our bios: @bio's completion is one of @parent's - its
+/// status passed on, then it's put back to its set.
+///
+/// # Safety
+/// Both a BioPool's, @bio not yet submitted.
+unsafe fn chain(bio: *mut c::bio, parent: *mut c::bio) {
+    unsafe {
+        (*bio).bi_private = parent.cast();
+        (*bio).bi_end_io  = Some(chain_endio);
+        c::bio_inc_remaining(parent);
+    }
+}
+
+unsafe extern "C" fn chain_endio(bio: *mut c::bio) {
+    unsafe {
+        let parent = (*bio).bi_private.cast::<c::bio>();
+        if (*bio).bi_status != 0 && (*parent).bi_status == 0 {
+            (*parent).bi_status = (*bio).bi_status;
+        }
+        bio_put(bio);
+        c::bio_endio(parent);
+    }
+}
+
+/// bio_put(): a set's bio back to its pool. What it's in isn't dropped, as
+/// C's isn't.
+///
+/// # Safety
+/// @bio is a BioPool's, and nothing uses it after.
+pub unsafe fn bio_put(bio: *mut c::bio) {
+    unsafe {
+        let set = (*bio).bi_pool.cast::<BioPool>().as_ref().expect("bio_put() of a bio no BioSet made");
+        let (layout, _) = bio_layout(set.front_pad, (*bio).bi_max_vecs);
+        c::bio_uninit(bio);
+        set.pool.free(NonNull::new_unchecked(bio.byte_sub(set.front_pad)).cast(), layout);
+    }
+}
+
+impl<T: FrontPad> Deref for BioSet<T> {
+    type Target = BioPool;
+
+    fn deref(&self) -> &BioPool {
+        &self.set
+    }
 }
 
 /// What a bioset puts in front of its bios: a HasBio type's, or the larger of
@@ -178,33 +378,17 @@ impl<A: HasBio, B: HasBio> FrontPad for Either<A, B> {
 }
 
 impl<T: FrontPad> BioSet<T> {
-    /// For C's bio_alloc_bioset() and bio_split(), allocating a T's bio.
-    pub fn as_ptr(&self) -> *mut c::bio_set {
-        self.set.as_ptr()
-    }
-
-    /// @pool_size bios held in reserve, and bvecs with them if @need_bvecs:
-    /// for bios allocated with more than fit inline. Nothing to undo if it
-    /// fails.
-    pub fn new(pool_size: u32, need_bvecs: bool) -> impl PinInit<Self, BchError> {
-        let flags = if need_bvecs { c::BIOSET_NEED_BVECS as i32 } else { 0 };
-        // SAFETY: initialized in place, where it stays - pinned
-        unsafe {
-            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                ret_to_result_void(c::bioset_init(slot.cast(), pool_size, T::FRONT_PAD as u32, flags))
-            })
-        }
+    /// @pool_size bios, with BIO_MAX_VECS bvecs each, held in reserve.
+    /// Nothing to undo if it fails.
+    pub fn new(pool_size: u32) -> impl PinInit<Self, BchError> {
+        pin_init!(Self {
+            set <- BioPool::new(pool_size, T::FRONT_PAD),
+            _t: PhantomData,
+        }? BchError)
     }
 }
 
 impl<T: HasBio> BioSet<T> {
-    /// Panics if its front_pad isn't a T's.
-    pub fn from_c(set: &c::bio_set) -> &Self {
-        assert_eq!(set.front_pad as usize, T::BIO_OFFSET, "a bioset of another type's bios");
-        // SAFETY: a transparent bio_set
-        unsafe { &*core::ptr::from_ref(set).cast() }
-    }
-
     /// A T with a bio for @bdev, @opf, of @nr_vecs bvecs - inline, or the
     /// set's - and its other fields from @init. GFP_KERNEL: NOIO or NOFS is
     /// the caller's memalloc scope's. Fails only if @init does, or past
@@ -230,9 +414,7 @@ impl<T: HasBio> BioSet<T> {
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        // SAFETY: a live bioset
-        let gfp = current_gfp_context_raw(c::GFP_KERNEL);
-        let bio = unsafe { c::bio_alloc_bioset(bdev, B::nr_vecs(&src) as _, opf as _, gfp, self.set.as_ptr()) };
+        let bio = self.alloc_raw(bdev, B::nr_vecs(&src), opf, c::GFP_KERNEL);
         let mut b = Self::init_new(bio, init)?;
         let buffers = B::fill(b.bio_mut(), src)?;
         let t = core::mem::ManuallyDrop::new(b).t;
@@ -254,8 +436,7 @@ impl<T: HasBio> BioSet<T> {
             // SAFETY: a bio's T
             Ok(()) => Ok(BioBox { t: unsafe { NonNull::new_unchecked(t) }, buffers: BioBuffersUnmanaged }),
             Err(e) => {
-                // SAFETY: the bio just allocated, its one ref
-                unsafe { c::bio_put(bio) };
+                unsafe { bio_put(bio) };
                 Err(e)
             }
         }
@@ -265,24 +446,8 @@ impl<T: HasBio> BioSet<T> {
 unsafe impl<T: FrontPad> ::pin_init::Zeroable for BioSet<T> {}
 
 unsafe impl<T: FrontPad> crate::util::late::LateInit for BioSet<T> {
-    /// bioset_initialized()
-    #[cfg(kernel)]
     fn is_made(&self) -> bool {
-        unsafe { !(*self.set.as_ptr()).bio_slab.is_null() }
-    }
-
-    /// Userspace's has no slab: its bio pool's
-    #[cfg(not(kernel))]
-    fn is_made(&self) -> bool {
-        unsafe { !(*self.set.as_ptr()).bio_pool.elements.is_null() }
-    }
-}
-
-impl<T: FrontPad> Drop for BioSet<T> {
-    /// Its bios are all back: its owner's teardown waits for them.
-    fn drop(&mut self) {
-        // SAFETY: new()'s, never moved: a C bioset is only ever borrowed
-        unsafe { c::bioset_exit(self.set.as_ptr()) }
+        self.set.pool.is_made()
     }
 }
 
@@ -494,7 +659,7 @@ impl<T: HasBio, B: Buffers> Drop for BioBox<T, B> {
             let (pool, nr_vecs) = ((*bio).bi_pool, (*bio).bi_max_vecs);
             core::ptr::drop_in_place(t);
             if !pool.is_null() {
-                c::bio_put(bio);
+                bio_put(bio);
             } else {
                 c::bio_uninit(bio);
                 kfree(self.t.cast(), inline_layout::<T>(nr_vecs).0);

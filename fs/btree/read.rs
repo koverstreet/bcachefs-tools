@@ -33,7 +33,7 @@ use crate::fs::{Dev, Fs, WriteRef};
 use crate::init::{damage::note_lost_extents, error::id, passes::RecoveryPass, recovery::btree_lost_data};
 use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
-use crate::util::bio::{bch2_bio_map, buf_nr_bvecs, of_bio, Bio, BioBox, BioBuffersMapped, BioOwner};
+use crate::util::bio::{bch2_bio_map, bio_put, buf_nr_bvecs, of_bio, Bio, BioBox, BioBuffersMapped, BioOwner};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::random_u64_below;
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, READ};
@@ -896,7 +896,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         fs.async_btree_op(b, contents, AsyncBtreeOp::MergeNoRead);
     }
 
-    unsafe { c::bio_put(&raw mut rb.bio) };
+    unsafe { bio_put(&raw mut rb.bio) };
     read_done_wake(b);
 }
 
@@ -941,13 +941,10 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
     let ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
 
     let (data, bytes) = (unsafe { b.contents() }.data.cast::<u8>(), b.buf_bytes());
-    let bio = unsafe {
-        c::bio_alloc_bioset(ptr::null_mut(),
-                            buf_nr_bvecs(data, bytes) as _,
-                            c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META,
-                            c::GFP_NOIO,
-                            fs.btree.bio.as_ptr())
-    };
+    let bio = fs.btree.bio.alloc_raw(ptr::null_mut(),
+                                     buf_nr_bvecs(data, bytes) as _,
+                                     c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META,
+                                     c::GFP_NOIO);
     let rb = unsafe { of_bio::<BtreeReadBio>(bio) };
     unsafe {
         (&raw mut (*rb).fs).write(Fs::borrow_raw(fs.as_ptr()));

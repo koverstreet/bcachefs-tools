@@ -155,7 +155,13 @@ impl<A: Elements> Mempool<A> {
 
     /// An element, for C to hold: free_raw() takes it back.
     pub fn alloc_raw(&self) -> Result<NonNull<u8>, AllocError> {
-        let gfp = element_gfp(c::GFP_KERNEL);
+        self.alloc_raw_gfp(c::GFP_KERNEL)
+    }
+
+    /// alloc_raw(), allocating with @gfp - as the task's memalloc scope
+    /// says.
+    pub fn alloc_raw_gfp(&self, gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {
+        let gfp = element_gfp(gfp);
         let layout = self.layout();
         let mut gfp_temp = first_try(gfp);
 
@@ -252,21 +258,27 @@ impl Mempool<KVmalloc> {
 /// case. free() goes by the size alloc() gave: an element back to the pool,
 /// anything smaller to A.
 impl<A: Elements> Mempool<A> {
-    fn alloc_or_element(&self, layout: Layout, zeroed: bool) -> Result<NonNull<[u8]>, AllocError> {
+    /// Alloc's alloc(), allocating with @gfp - as the task's memalloc scope
+    /// says.
+    pub fn alloc_gfp(&self, layout: Layout, gfp: c::gfp_t) -> Result<NonNull<[u8]>, AllocError> {
+        self.alloc_or_element(layout, false, gfp)
+    }
+
+    fn alloc_or_element(&self, layout: Layout, zeroed: bool, gfp: c::gfp_t) -> Result<NonNull<[u8]>, AllocError> {
         let size = self.element_size();
         if layout.size() > size || layout.align() > 8 {
             return Err(AllocError);
         }
 
         if layout.size() < size {
-            let gfp = first_try(element_gfp(c::GFP_KERNEL));
+            let gfp = first_try(element_gfp(gfp));
             let gfp = if zeroed { gfp | c::__GFP_ZERO } else { gfp };
             if let Some(p) = A::element_alloc(layout, gfp) {
                 return Ok(NonNull::slice_from_raw_parts(p, layout.size()));
             }
         }
 
-        let p = self.alloc_raw()?;
+        let p = self.alloc_raw_gfp(gfp)?;
         if zeroed {
             unsafe { p.write_bytes(0, size) };
         }
@@ -276,11 +288,11 @@ impl<A: Elements> Mempool<A> {
 
 unsafe impl<A: Elements> Alloc for Mempool<A> {
     fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.alloc_or_element(layout, false)
+        self.alloc_or_element(layout, false, c::GFP_KERNEL)
     }
 
     fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.alloc_or_element(layout, true)
+        self.alloc_or_element(layout, true, c::GFP_KERNEL)
     }
 
     unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {

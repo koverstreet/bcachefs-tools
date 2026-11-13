@@ -32,7 +32,7 @@ use crate::journal::pins::PinsRead;
 use crate::journal::validate::jset_validate;
 use crate::locking::MemallocFlags;
 use crate::sb::members::{DevIo, DevIoRef};
-use crate::util::bio::plugged;
+use crate::util::bio::{bio_put, plugged};
 use crate::util::closure::Running;
 use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies, time_after_eq, unlikely,
                           WRITE};
@@ -732,7 +732,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
 
     unsafe { c::closure_put(&raw mut w.io) };
     drop(unsafe { DevWriteRef::adopt(DevIo::of(ca)) });
-    unsafe { c::bio_put(bio) };
+    unsafe { bio_put(bio) };
 }
 
 unsafe extern "C" fn write_preflush_endio(bio: *mut c::bio) {
@@ -753,7 +753,7 @@ unsafe extern "C" fn write_preflush_endio(bio: *mut c::bio) {
 
     unsafe { c::closure_put(&raw mut w.io) };
     drop(unsafe { DevWriteRef::adopt(DevIo::of(ca)) });
-    unsafe { c::bio_put(bio) };
+    unsafe { bio_put(bio) };
 }
 
 unsafe fn closure_bio_submit(bio: *mut c::bio, w: &c::journal_buf) {
@@ -805,8 +805,8 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
              * returns one bio.
              */
             let bio = unsafe {
-                c::bch2_bio_map_and_chain(ca.disk_sb.bdev, w.data.as_ptr().cast(), (sectors << 9) as usize, *offset,
-                                          opf, c::GFP_NOIO, ja.bio_set.as_ptr())
+                ja.bio_set.map_and_chain(ca.disk_sb.bdev, w.data.as_ptr().cast(), (sectors << 9) as usize, *offset,
+                                         opf, c::GFP_NOIO)
             };
             let jbio = unsafe { jbio_of(bio) };
 
@@ -847,11 +847,10 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
             }
 
             let ja = &ca.journal;
-            let bio = unsafe {
-                c::bio_alloc_bioset(ca.disk_sb.bdev, 0,
-                                    c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META | c::REQ_PREFLUSH,
-                                    c::GFP_NOIO, ja.bio_set.as_ptr())
-            };
+            let bio = ja.bio_set.alloc_raw(ca.disk_sb.bdev, 0,
+                                           c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META |
+                                           c::REQ_PREFLUSH,
+                                           c::GFP_NOIO);
             let jbio = unsafe { jbio_of(bio) };
 
             jbio.ca = ptr::from_ref::<Dev>(&ca).cast_mut();

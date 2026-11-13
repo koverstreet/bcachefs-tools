@@ -31,7 +31,7 @@ use crate::init::error::BkeyValidate;
 use crate::inode_opts::get_io_opts;
 use crate::locking::six::{six_lock_counts, six_lock_downgrade, six_lock_tryupgrade, six_trylock_ip};
 use crate::types::{Le16, Le64};
-use crate::util::bio::{bch2_bio_map, buf_nr_bvecs, of_bio, MapBuf};
+use crate::util::bio::{bch2_bio_map, bio_put, buf_nr_bvecs, of_bio, MapBuf};
 use crate::os::kernel::{dump_stack, local_clock, unlikely, READ};
 use crate::util::log::LogMsg;
 use crate::util::refcount::Refcount;
@@ -227,7 +227,7 @@ unsafe fn write_work(wbio: NonNull<BtreeWriteBio>) {
     fs.times[c::TimeStat::btree_node_write as usize].update(wbio.start_time);
     unsafe {
         async_objs::list_del(fs, c::AsyncObjKind::btree_write_bio, &mut wbio.list_idx);
-        c::bio_put(&raw mut wbio.wbio.bio);
+        bio_put(&raw mut wbio.wbio.bio);
     }
 
     lockrestart_do(&trans, |_| {
@@ -270,7 +270,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
 
     if let Some(parent) = parent {
         unsafe {
-            c::bio_put(bio);
+            bio_put(bio);
             c::bio_endio(&raw mut (*parent).bio);
         }
         return;
@@ -611,13 +611,10 @@ impl BsetWrite {
          */
 
         let (data, len) = (bounce.as_raw().0, (sectors as usize) << 9);
-        let bio = unsafe {
-            c::bio_alloc_bioset(ptr::null_mut(),
-                                buf_nr_bvecs(data, len) as _,
-                                c::req_op_REQ_OP_WRITE | c::REQ_META | c::REQ_SYNC | c::REQ_IDLE,
-                                c::GFP_NOIO,
-                                fs.btree.bio.as_ptr())
-        };
+        let bio = fs.btree.bio.alloc_raw(ptr::null_mut(),
+                                         buf_nr_bvecs(data, len) as _,
+                                         c::req_op_REQ_OP_WRITE | c::REQ_META | c::REQ_SYNC | c::REQ_IDLE,
+                                         c::GFP_NOIO);
         let wbio = unsafe { &mut *of_bio::<BtreeWriteBio>(bio) };
         unsafe { wbio_init(bio) };
         unsafe { (&raw mut wbio.bounce).write(bounce) };

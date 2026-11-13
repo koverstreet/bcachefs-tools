@@ -261,8 +261,8 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
 
         let bio: *mut c::bio = if k.k.p.offset < op.pos.offset + sectors {
             unsafe {
-                let bio = c::bio_split(&raw mut op.wbio.bio, (k.k.p.offset - op.pos.offset) as i32,
-                                       c::GFP_KERNEL, fs.bio_write.as_ptr());
+                let bio = fs.bio_write.split(&raw mut op.wbio.bio, (k.k.p.offset - op.pos.offset) as u32,
+                                             c::GFP_KERNEL);
                 wbio_init(bio).wbio.bits.set_put_bio(1);
                 (*bio).bi_opf = op.wbio.bio.bi_opf;
                 bio

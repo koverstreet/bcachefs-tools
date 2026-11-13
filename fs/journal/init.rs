@@ -233,7 +233,7 @@ impl Dev {
          * fastpath ring (the effective parallel-write ceiling for hot-path
          * allocations).
          */
-        self.journal.bio_set.init(state, || BioSet::new(c::JOURNAL_STATE_BUF_NR, true))
+        self.journal.bio_set.init(state, || BioSet::new(c::JOURNAL_STATE_BUF_NR))
             .map_err(|_| self.fs().err(Errcode::ENOMEM_dev_journal_init))
     }
 }

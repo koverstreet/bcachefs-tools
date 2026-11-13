@@ -46,9 +46,6 @@ pub mod c {
     pub use bch_crc32c as crc32c;
 
     pub use crate::compress::*;
-
-    // The kernel's name, for its allocation tagging
-    pub use self::mempool_init as mempool_init_noprof;
 }
 
 pub mod print {

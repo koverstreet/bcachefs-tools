@@ -131,17 +131,24 @@ unsafe impl<'a> Buffers for BioClone<'a> {
     }
 
     fn fill(bio: Pin<&mut Bio>, src: BioRange<'a>) -> Result<Self, BchError> {
-        let (b, s) = (bio.raw_mut(), src.bio().raw());
-        assert!(b.bi_bdev.is_null(), "a clone made for a device: it's bio_set_dev()'s, after");
-        b.bi_flags |= 1 << c::BIO_CLONED;
-        b.bi_ioprio = s.bi_ioprio;
-        clone_hints(b, s);
-        b.bi_iter = src.pos();
-        bi_io_vec!(clone b, s);
+        unsafe { clone_from(bio.raw_mut(), src.bio().raw(), src.pos()) };
         Ok(Self(PhantomData))
     }
 
     fn release(&mut self, _: Pin<&mut Bio>) {}
+}
+
+/// __bio_clone(), of @s from @iter, into a bio of no bvecs and no device.
+///
+/// # Safety
+/// @s's bvecs outlive @b.
+pub(super) unsafe fn clone_from(b: &mut c::bio, s: &c::bio, iter: c::bvec_iter) {
+    assert!(b.bi_bdev.is_null(), "a clone made for a device: it's bio_set_dev()'s, after");
+    b.bi_flags |= 1 << c::BIO_CLONED;
+    b.bi_ioprio = s.bi_ioprio;
+    clone_hints(b, s);
+    b.bi_iter = iter;
+    bi_io_vec!(clone b, s);
 }
 
 /// The rest of __bio_clone()'s copies, as each kernel's struct bio has them;

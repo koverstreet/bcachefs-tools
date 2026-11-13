@@ -65,7 +65,7 @@ const KERNEL_HEADERS: &[&str] = &[
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
 /// vendored library code, and codegen.h's wrappers of kernel macros.
-const VENDORED_HEADERS: &[&str] = &["vendor/closure.h", "vendor/bio_map.h", "vendor/bio_iov_iter.h",
+const VENDORED_HEADERS: &[&str] = &["vendor/closure.h", "vendor/bio_iov_iter.h",
                                     "locking/shim.h", "util/shim.h", "codegen.h"];
 
 /// Under the kernel include trees, what isn't blocklisted: uapi/ (see
@@ -161,7 +161,6 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "bch2_closure_wait", "closure_wake_up", "closure_nr_remaining",
     "set_closure_fn", "closure_queue", "bch2_closure_sub", "closure_debug_destroy",
     "closure_set_waiting", "closure_val_checks",
-    "bch2_bio_map_and_chain",
     "rust_page_folio", "rust_folio_page_idx", "folio_size",
     // vfs/folio.rs: folios, mappings and readahead
     "folio_get_private", "rust_filemap_alloc_folio", "folio_pos", "folio_nr_pages",
@@ -187,8 +186,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "fault_in_readable", "filemap_write_and_wait_range", "filemap_flush",
     "totalram_pages", "si_mem_available", "set_freezable", "freezing", "try_to_freeze",
     "bio_set_dev", "bio_iov_vecs_to_alloc", "bio_release_pages",
-    // data/write.rs
-    "bio_split", "bio_inc_remaining",
+    // util/bio/owned.rs
+    "bio_advance", "bio_inc_remaining",
     // vfs/direct_write.rs: static inlines, and the VFS's write checks
     "inode_dio_begin", "inode_dio_end", "iocb_is_dsync", "generic_write_checks", "generic_write_sync",
     "file_remove_privs",
