@@ -2,8 +2,8 @@
 
 //! Block device utilities.
 //!
-//! Pure Rust replacements for get_size(), get_blocksize(), fd_to_dev_model()
-//! from tools-util.c. These work on any fd (block device or regular file).
+//! get_size(), get_blocksize(), fd_to_dev_model(), blkid_check(): these work
+//! on any fd (block device or regular file).
 
 use std::fs::Metadata;
 use std::os::fd::OwnedFd;

@@ -19,7 +19,6 @@
 #include <stdio.h>
 
 #include "bcachefs.h"
-#include "tools-util.h"
 
 #include <linux/percpu.h>
 

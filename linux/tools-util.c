@@ -17,7 +17,6 @@
 #include "bcachefs_ioctl.h"
 #include "bcachefs.h"
 #include "tools-util.h"
-#include "src/rust_to_c.h"
 
 void die(const char *fmt, ...)
 {

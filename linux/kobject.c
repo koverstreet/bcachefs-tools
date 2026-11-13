@@ -1,6 +1,6 @@
 #include <linux/kobject.h>
 #include <linux/mutex.h>
-#include "../c_src/tools-util.h"
+#include "tools-util.h"
 
 #include "util/printbuf.h"
 #include "util/util.h"
