@@ -30,11 +30,11 @@ use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, c_ulong};
 use cstruct_macros::{c_export, c_extern};
 
-// bch2_prt_symbol(): @addr's symbol, "name+0xoff", and " file:line" if libdw
-// knows it - linux/stacktrace.c, the userspace shim's %pB.
+// bch2_symbolize(): @addr's symbol, "name+0xoff", and " file:line" if libdw
+// knows it, into @out - linux/stacktrace.c, the userspace shim's %pB.
 c_extern! {
     #[cfg(not(kernel))]
-    pub fn bch2_prt_symbol(out: *mut Printbuf, addr: c_ulong);
+    pub fn bch2_symbolize(out: *mut core::ffi::c_char, size: usize, addr: c_ulong);
 }
 
 /// @sym, a symbol "name..." as the symbolizer printed it, to @out: the name
@@ -115,11 +115,11 @@ pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
 /// @addr's symbol, demangled, to @out.
 #[cfg(not(kernel))]
 pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
-    let mut sym = Printbuf::new();
+    let mut sym = [0u8; 4096];
 
-    // SAFETY: our printbuf
-    unsafe { bch2_prt_symbol(sym.as_raw(), addr) };
-    prt_symbol_demangled(out, sym.as_str());
+    unsafe { bch2_symbolize(sym.as_mut_ptr().cast(), sym.len(), addr) };
+    let sym = core::ffi::CStr::from_bytes_until_nul(&sym).map_or("", |s| s.to_str().unwrap_or(""));
+    prt_symbol_demangled(out, sym);
 }
 
 /// @stack, a frame a line, as the kernel prints them: "[<0>] " and the

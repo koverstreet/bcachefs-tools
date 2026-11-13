@@ -4,12 +4,12 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
 #include <linux/sched.h>
 
-#include "util/printbuf.h"
 #include "util/util.h"
 
 /*
@@ -266,26 +266,29 @@ static const char *dw_addr_to_src(unsigned long addr, int *lineno)
 #endif
 #endif
 
-void bch2_prt_symbol(struct printbuf *out, unsigned long addr)
+void bch2_symbolize(char *out, size_t size, unsigned long addr)
 {
+	int pos;
 #ifdef HAVE_UNW_GET_PROC_NAME_BY_IP
 	char name[512];
 	unw_word_t off;
 
 	if (!unw_get_proc_name_by_ip(unw_local_addr_space, addr,
 				     name, sizeof(name), &off, NULL))
-		prt_printf(out, "%s+0x%lx", name, (unsigned long) off);
+		pos = snprintf(out, size, "%s+0x%lx", name, (unsigned long) off);
 	else
-		prt_printf(out, "0x%lx", addr);
+		pos = snprintf(out, size, "0x%lx", addr);
 #else
 	Dl_info info;
 
 	if (dladdr((void *) addr, &info) && info.dli_sname)
-		prt_printf(out, "%s+0x%lx", info.dli_sname,
-			   addr - (unsigned long) info.dli_saddr);
+		pos = snprintf(out, size, "%s+0x%lx", info.dli_sname,
+			       addr - (unsigned long) info.dli_saddr);
 	else
-		prt_printf(out, "0x%lx", addr);
+		pos = snprintf(out, size, "0x%lx", addr);
 #endif
+	if (pos < 0 || (size_t) pos >= size)
+		return;
 
 	/*
 	 * A frame's address is where the call returns to, which can be the next
@@ -297,7 +300,7 @@ void bch2_prt_symbol(struct printbuf *out, unsigned long addr)
 	int lineno = 0;
 	const char *src = dw_addr_to_src(addr - 1, &lineno);
 	if (src)
-		prt_printf(out, " %s:%d", src, lineno);
+		snprintf(out + pos, size - pos, " %s:%d", src, lineno);
 
 	pthread_mutex_unlock(&dw_lock);
 }
