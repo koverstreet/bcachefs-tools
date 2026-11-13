@@ -38,19 +38,6 @@ pub mod c {
 		include!(concat!(env!("OUT_DIR"), "/non_fs.rs"));
 	}
 	pub use generated::*;
-
-	// sysfs_read_or_html_dirlist is declared in include/linux/kobject.h (the
-	// kernel-compat tree, bcachefs-shim's territory) but is really a tools HTTP
-	// helper that takes a printbuf (an fs/ type). It slips through every crate's
-	// origin filter - bcachefs-shim can't emit it (no printbuf), the fs/ and
-	// tools crates blocklist include/ - so bind it by hand here. Ideally its C
-	// declaration moves to c_src/.
-	unsafe extern "C" {
-		pub fn sysfs_read_or_html_dirlist(
-			path: *const ::core::ffi::c_char,
-			out: *mut bcachefs_kernel::util::printbuf::Printbuf,
-		) -> ::core::ffi::c_int;
-	}
 }
 
 pub mod data;

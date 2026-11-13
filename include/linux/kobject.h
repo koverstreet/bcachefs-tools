@@ -16,6 +16,8 @@
 #ifndef _KOBJECT_H_
 #define _KOBJECT_H_
 
+#include <stdio.h>
+
 #include <linux/atomic.h>
 #include <linux/bug.h>
 #include <linux/compiler.h>
@@ -86,7 +88,7 @@ struct kobject *kobject_get(struct kobject *);
 
 static inline void kobject_uevent_env(struct kobject *kobj, int flags, char **envp) {}
 
-int sysfs_read_or_html_dirlist(const char *, struct printbuf *);
+int sysfs_read_or_html_dirlist(const char *, FILE *);
 int sysfs_write(const char *, const char *, size_t);
 
 #define fs_kobj	NULL

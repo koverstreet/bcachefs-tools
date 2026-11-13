@@ -2,7 +2,6 @@ use std::ffi::CString;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::c;
-use bcachefs_kernel::util::printbuf::Printbuf;
 
 extern crate tiny_http;
 
@@ -27,15 +26,25 @@ fn http_thread(server: tiny_http::Server) {
 
         let response = match request.method() {
             tiny_http::Method::Get => {
-                let mut buf = Printbuf::new();
+                let mut buf: *mut libc::c_char = std::ptr::null_mut();
+                let mut len = 0;
+                let out = unsafe { libc::open_memstream(&mut buf, &mut len) };
+                if out.is_null() {
+                    let _ = request.respond(Response::from_string("Out of memory").with_status_code(500));
+                    continue;
+                }
 
-                let ret = unsafe { c::sysfs_read_or_html_dirlist(c_path.as_ptr(), buf.as_raw()) };
+                let ret = unsafe { c::sysfs_read_or_html_dirlist(c_path.as_ptr(), out.cast()) };
+                unsafe { libc::fclose(out) };
+                let body = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(buf.cast::<u8>(), len) })
+                    .into_owned();
+                unsafe { libc::free(buf.cast()) };
 
                 if ret < 0 {
                     Response::from_string(format!("Error {}", ret))
                         .with_status_code(403)
                 } else {
-                    Response::from_string(buf.as_str())
+                    Response::from_string(body)
                 }
             }
 

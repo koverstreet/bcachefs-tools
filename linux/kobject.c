@@ -2,7 +2,6 @@
 #include <linux/mutex.h>
 #include "tools-util.h"
 
-#include "util/printbuf.h"
 #include "util/util.h"
 
 static DEFINE_MUTEX(kobj_lock);
@@ -225,9 +224,9 @@ struct attribute *path_lookup(const char *path, struct kobject **_dir,
 	return NULL;
 }
 
-static int debugfs_read_or_html_dirlist(const char *, struct printbuf *);
+static int debugfs_read_or_html_dirlist(const char *, FILE *);
 
-int sysfs_read_or_html_dirlist(const char *path, struct printbuf *out)
+int sysfs_read_or_html_dirlist(const char *path, FILE *out)
 {
 	guard(mutex)(&kobj_lock);
 
@@ -241,71 +240,66 @@ int sysfs_read_or_html_dirlist(const char *path, struct printbuf *out)
 	const struct bin_attribute *bin_attr;
 	struct attribute *attr = errptr_try(path_lookup(path, &dir, &grp, &bin_attr));
 	if (bin_attr) {
+		char buf[PAGE_SIZE];
 		loff_t off = 0;
 		while (true) {
-			try(bch2_printbuf_make_room(out, PAGE_SIZE));
-
-			ssize_t ret = bin_attr->read(NULL, dir, bin_attr,
-						     &out->buf[out->pos],
-						     off, PAGE_SIZE);
+			ssize_t ret = bin_attr->read(NULL, dir, bin_attr, buf, off, PAGE_SIZE);
 			if (ret <= 0)
 				break;
 
-			BUG_ON(ret > printbuf_remaining(out));
-			out->pos += ret;
+			fwrite(buf, 1, ret, out);
 			off += ret;
-			printbuf_nul_terminate(out);
 		}
 		return 0;
 	} else if (!attr && grp) {
-		prt_str(out, "<html>\n");
+		fputs("<html>\n", out);
 
-		prt_printf(out, "<p> %s </p>", path);
+		fprintf(out, "<p> %s </p>", path);
 
 		size_t nr = 0;
 		for (struct attribute **i = grp->attrs; i && *i; i++, nr++)
-			prt_printf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->name, (*i)->name);
+			fprintf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->name, (*i)->name);
 
 		for (const struct bin_attribute *const *i = grp->bin_attrs; i && *i; i++, nr++)
-			prt_printf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->attr.name, (*i)->attr.name);
+			fprintf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->attr.name, (*i)->attr.name);
 
-		prt_printf(out, "<p> %zu files </p>\n", nr);
+		fprintf(out, "<p> %zu files </p>\n", nr);
 
-		prt_str(out, "</html>\n");
+		fputs("</html>\n", out);
 		return 0;
 	} else if (!attr) {
-		prt_str(out, "<html>\n");
+		fputs("<html>\n", out);
 
-		prt_printf(out, "<p> %s </p>", path);
+		fprintf(out, "<p> %s </p>", path);
 
 		darray_for_each(dir->groups, i)
-			prt_printf(out, "<p> <a href=%s/%s>%s/</a></p>\n", path, (*i)->name, (*i)->name);
+			fprintf(out, "<p> <a href=%s/%s>%s/</a></p>\n", path, (*i)->name, (*i)->name);
 
 		darray_for_each(dir->subdirs, i)
-			prt_printf(out, "<p> <a href=%s/%s>%s/</a></p>\n", path, (*i)->name, (*i)->name);
+			fprintf(out, "<p> <a href=%s/%s>%s/</a></p>\n", path, (*i)->name, (*i)->name);
 
 		if (dir == root_kobj)
-			prt_printf(out, "<p> <a href=debug>debug/</a></p>\n");
+			fputs("<p> <a href=debug>debug/</a></p>\n", out);
 
-		prt_printf(out, "<p> %zu subdirs </p>\n", dir->groups.nr + dir->subdirs.nr);
+		fprintf(out, "<p> %zu subdirs </p>\n", dir->groups.nr + dir->subdirs.nr);
 
 		darray_for_each(dir->files, i)
-			prt_printf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->name, (*i)->name);
+			fprintf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->name, (*i)->name);
 
 		darray_for_each(dir->bin_files, i)
-			prt_printf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->attr.name, (*i)->attr.name);
+			fprintf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->attr.name, (*i)->attr.name);
 
-		prt_printf(out, "<p> %zu files </p>\n", dir->files.nr + dir->bin_files.nr);
+		fprintf(out, "<p> %zu files </p>\n", dir->files.nr + dir->bin_files.nr);
 
-		prt_str(out, "</html>\n");
+		fputs("</html>\n", out);
 		return 0;
 	} else {
-		try(bch2_printbuf_make_room(out, PAGE_SIZE));
+		char buf[PAGE_SIZE];
 
-		int ret = dir->ktype->sysfs_ops->show(dir, attr, out->buf);
+		int ret = dir->ktype->sysfs_ops->show(dir, attr, buf);
 		if (ret < 0)
 			return ret;
-		out->pos = ret;
+		fwrite(buf, 1, ret, out);
 		return 0;
 	}
 }
@@ -422,35 +416,32 @@ struct debugfs_dentry *debugfs_path_lookup(const char *path)
 	}
 }
 
-static int debugfs_read_or_html_dirlist(const char *path, struct printbuf *out)
+static int debugfs_read_or_html_dirlist(const char *path, FILE *out)
 {
 	struct debugfs_dentry *d = errptr_try(debugfs_path_lookup(path));
 	ssize_t ret = 0;
 
 	if (S_ISDIR(d->i.mode)) {
-		prt_str(out, "<html>\n");
+		fputs("<html>\n", out);
 
-		prt_printf(out, "<p> %s </p>", path);
+		fprintf(out, "<p> %s </p>", path);
 
 		darray_for_each(d->children, i)
-			prt_printf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->d.name, (*i)->d.name);
+			fprintf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->d.name, (*i)->d.name);
 
-		prt_str(out, "</html>\n");
+		fputs("</html>\n", out);
 	} else {
 		struct file f = { .f_inode = &d->i };
 		try(d->fops->open(&d->i, &f));
 
+		char buf[PAGE_SIZE];
 		loff_t pos = 0;
 		while (true) {
-			try(bch2_printbuf_make_room(out, PAGE_SIZE));
-
-			ret = d->fops->read(&f, &out->buf[out->pos], printbuf_remaining(out), &pos);
+			ret = d->fops->read(&f, buf, PAGE_SIZE, &pos);
 			if (ret <= 0)
 				break;
 
-			BUG_ON(ret > printbuf_remaining(out));
-			out->pos += ret;
-			printbuf_nul_terminate(out);
+			fwrite(buf, 1, ret, out);
 		}
 
 		d->fops->release(&d->i, &f);
