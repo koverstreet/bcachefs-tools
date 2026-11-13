@@ -151,7 +151,7 @@ pub mod c {
     pub use crate::errcode::status::BLK_STS_REMOVED;
     pub(crate) use crate::errcode::{BCH_ERRCODES, BLK_ERRS, ZSTD_ERRS, __BCH_ERRCODES_0, __BCH_ERRCODES_1};
     pub use super::fs_acl_format::*;
-    pub use crate::dirent::{BCH_RENAME, BCH_RENAME_EXCHANGE, BCH_RENAME_OVERWRITE, bch2_dir_emit, bch2_filldir64_specialization_to_text, bch2_readdir_fault_in, bch_rename_mode, filldir64_specialization_to_text};
+    pub use crate::dirent::{BCH_RENAME, BCH_RENAME_EXCHANGE, BCH_RENAME_OVERWRITE, bch_rename_mode};
     pub use super::fs_inode_format::*;
     pub use crate::inode_opts::{inode_opt_change};
     pub use crate::inode::{VolatileInodeUnpacked, bch_inode_unpacked, bch_inode_unpacked_bi_flags_BITMASKS, bkey_inode_buf, u96};

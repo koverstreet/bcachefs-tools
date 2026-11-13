@@ -9,87 +9,9 @@
 
 #include "bcachefs.h"
 
-#include "alloc/background.h"
-#include "alloc/buckets.h"
-#include "btree/cache.h"
-#include "btree/iter.h"
-#include "btree/update.h"
-#include "data/reconcile/trigger.h"
-#include "init/error.h"
-#include "alloc/disk_groups.h"
-#include "alloc/foreground.h"
-#include "alloc/replicas.h"
-
-#include "btree/bkey.h"
-#include "btree/check_gen.h"
-#include "btree/node/bset_gen.h"
-#include "btree/node/iter_gen.h"
-#include "btree/path_gen.h"
-#include "btree/types_gen.h"
-#include "btree/node_gen.h"
-#include "btree/journal_overlay.h"
-#include "btree/interior.h"
-#include "btree/locking.h"
-#include "btree/write.h"
-
-#include "data/checksum.h"
-#include "data/compress.h"
-#include "data_structures/darray.h"
-#include "bcachefs_ioctl.h"
-#include "btree/bbpos.h"
-#include "btree/bkey_buf.h"
-#include "data/read.h"
-#include "data/write_gen.h"
-#include "data/update_gen.h"
-#include "data/move_gen.h"
-#include "data/nocow_locking_gen.h"
-#include "data/reconcile/work_gen.h"
-#include "data/write.h"
-
-#ifdef CONFIG_DEBUG_FS
-#include "debug/async_objs.h"
-#endif
-
-#include "fs/inode.h"
-#include "snapshots/types_gen.h"
-#include "snapshots/subvolume_gen.h"
-#include "util/siphash_gen.h"
-#include "fs/str_hash_gen.h"
-#include "fs/dirent.h"
-#include "fs/quota_gen.h"
-
-#include "init/chardev.h"
-#include "init/passes.h"
-#include "init/fs.h"
-
-#include "journal/journal.h"
-#include "journal/reclaim.h"
-
-#include "sb/counters.h"
-#include "sb/errors_gen.h"
-#include "sb/io.h"
-#include "sb/members.h"
-
-#include "snapshots/snapshot.h"
-
-#include "vfs/fs.h"
-#include "vfs/io.h"
-#include "vfs/direct.h"
-
-#include "util/enumerated_ref.h"
 #ifdef __KERNEL__
 #include "util/thread_with_file_gen.h"
 #endif
-
-#include <linux/backing-dev.h>
-#include <linux/blkdev.h>
-#include <linux/debugfs.h>
-#include <linux/device.h>
-#include <linux/idr.h>
-#include <linux/module.h>
-#include <linux/percpu.h>
-#include <linux/random.h>
-#include <linux/sysfs.h>
 
 #define x(n, ...)	#n,
 const char * const bch2_fs_flag_strs[] = {

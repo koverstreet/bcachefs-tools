@@ -167,7 +167,7 @@ pub enum DirentName<'k> {
 }
 
 impl<'k> DirentName<'k> {
-    /// The name as given: as bch2_dirent_get_name().
+    /// The name as given.
     pub fn name(&self) -> &'k OsStr {
         match *self {
             DirentName::Plain(name) | DirentName::Casefolded { name, .. } => name,

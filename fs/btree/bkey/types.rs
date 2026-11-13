@@ -121,14 +121,6 @@ impl<'a, V: ?Sized + BkeyVal> BkeySC<'a, V> {
     fn cast<W: ?Sized + BkeyVal>(self) -> BkeySC<'a, W> {
         BkeySC { k: self.k, v: self.v, iter: PhantomData, val: PhantomData }
     }
-
-    /// For C, which takes a typed key, bkey_s_c_<type>, without a lifetime.
-    ///
-    /// # Safety
-    /// It's handed to C within 'a, and not kept past it.
-    pub(crate) unsafe fn to_c(self) -> BkeySC<'static, V> {
-        BkeySC { k: unsafe { &*(self.k as *const c::bkey) }, v: self.v, iter: PhantomData, val: PhantomData }
-    }
 }
 
 impl<'a, V: ?Sized + BkeyVal + ArmRef> BkeySC<'a, V> {

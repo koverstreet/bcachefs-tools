@@ -52,22 +52,12 @@ subdir-ccflags-y += -Wno-error=frame-larger-than=
 # "note: xyz changed in GCC X.X"
 subdir-ccflags-y += $(call cc-disable-warning, psabi)
 
-# fs/dirent.c's copy of struct getdents_callback64, checked against the
-# kernel's (pahole on vmlinux) in external builds; without the check, the
-# filldir fastpath is compiled out. In-tree, fs/readdir.c is the same tree.
-$(obj)/fs/dirent.o: $(obj)/bch2_getdents_layout.h
-$(obj)/bch2_getdents_layout.h: FORCE
-	$(Q)$(CONFIG_SHELL) $(src)/scripts/getdents-layout.sh \
-		"$(if $(KBUILD_EXTMOD),$(objtree)/vmlinux,)" $@
-clean-files += bch2_getdents_layout.h
-
 obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
 	data_structures/darray.o		\
 	debug/trace.o				\
 	errcode.o				\
-	fs/dirent.o				\
 	init/error.o				\
 	init/fs.o				\
 	locking/locking.o			\

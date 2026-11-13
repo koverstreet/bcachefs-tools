@@ -173,7 +173,6 @@ const INTERNAL: &[Attr<Fs>] = &[
         c.fs_open_buckets_to_text(out);
     }),
     Attr::ro(c"usage_base",             usage_base_to_text),
-    Attr::ro(c"filldir64_specialization", |_, out| c::filldir64_specialization_to_text(out)),
 ];
 
 // internal/btree_trans_stats_json, a bin_attribute: kernfs reads one a page a

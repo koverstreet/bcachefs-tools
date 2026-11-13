@@ -16,11 +16,6 @@ use crate::util::kobject::{GroupList, Groups, KobjOwner, KobjPlace, Kobject};
 use crate::util::sysfs::Dir;
 use core::ffi::c_int;
 use core::ptr::NonNull;
-use cstruct_macros::c_extern;
-
-c_extern! {
-    fn bch2_dirent_init();
-}
 
 #[cfg(kernel)]
 crate::module_info!("license" = "GPL");
@@ -94,7 +89,6 @@ fn bcachefs_init() -> c_int {
     crate::btree::bkey::pack_test();
 
     crate::util::futex::bch2_futex_init();
-    unsafe { bch2_dirent_init() };
     crate::init::registry::bch2_fs_registry_init();
 
     unsafe { BCACHEFS_KOBJ.0.init::<Root>() };

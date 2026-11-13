@@ -10,9 +10,7 @@
 
 #![allow(non_camel_case_types)]
 
-use cstruct_macros::{c_enum, c_extern};
-use crate::btree::iter::BtreeTrans;
-use crate::util::Printbuf;
+use cstruct_macros::c_enum;
 
 c_enum! {
     #[closed]
@@ -21,18 +19,6 @@ c_enum! {
         BCH_RENAME_OVERWRITE,
         BCH_RENAME_EXCHANGE,
     }
-}
-
-c_extern! {
-    pub fn bch2_readdir_fault_in(ctx: *mut c::dir_context);
-    pub fn bch2_dir_emit(trans: *mut BtreeTrans<'_>, ctx: *mut c::dir_context,
-                         d: c::bkey_s_c_dirent, target: c::subvol_inum) -> c_int;
-    pub fn bch2_filldir64_specialization_to_text(out: *mut Printbuf);
-}
-
-/// Whether readdir's specialized filldir64 is in use, and why not.
-pub fn filldir64_specialization_to_text(out: &mut Printbuf) {
-    unsafe { bch2_filldir64_specialization_to_text(out.as_raw()) }
 }
 
 #[path = "dirent_format.rs"]
@@ -45,6 +31,7 @@ use format::D_NAME_OFFSET;
 use format::D_NAMES_OFFSET;
 
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC};
+use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     lockrestart_do, BtreeIter, BtreeIterFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
@@ -64,7 +51,6 @@ use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::ops::ControlFlow;
 use core::ptr::NonNull;
-use cstruct_macros::c_export;
 
 // ── A valid dirent ───────────────────────────────────────────────────────
 
@@ -390,16 +376,6 @@ pub fn maybe_casefold<'a>(
 
 // ── Reading dirents ──────────────────────────────────────────────────────
 
-/// For C: @d's name, as bch2_dirent_get_name().
-///
-/// # Safety
-/// @d is a dirent from the btree - valid - as C's callers' are.
-#[c_export]
-pub unsafe extern "C" fn bch2_dirent_get_name(d: c::bkey_s_c_dirent) -> c::qstr {
-    let k = c::bkey_s_c::from(d);
-    qstr(Dirent::new(unsafe { BkeySC::from_c(&k) }).expect("a dirent").name())
-}
-
 /// What @d, a dirent in directory @dir, points at - an inode in @dir's
 /// subvolume, or a subvolume's root. None for a subvolume's dirent that lists
 /// in another subvolume.
@@ -534,41 +510,61 @@ impl<'c> DirContext<'c> {
         unsafe { (*self.0.as_ptr()).pos as u64 }
     }
 
-    /// Fault in getdents64's buffer up front, so emit()'s fast path, which
-    /// writes holding locks, doesn't fault: as bch2_readdir_fault_in().
-    fn fault_in(&mut self) {
-        unsafe { c::bch2_readdir_fault_in(self.0.as_ptr()) }
-    }
+    /// Emit @d, pointing at @target, unlocking @t. False once the buffer is
+    /// full.
+    fn emit(&mut self, t: &TransAttempt<'_, '_>, d: Dirent<'_>, target: c::subvol_inum) -> bool {
+        let ctx = self.0.as_ptr();
+        let offset = d.k().k.p.offset;
 
-    /// Emit @d, pointing at @target - which may unlock @trans: as
-    /// bch2_dir_emit(). False once the buffer is full.
-    fn emit(&mut self, t: &TransAttempt<'_, '_>, d: Dirent<'_>, target: c::subvol_inum)
-        -> Result<bool, BchError>
-    {
-        // SAFETY: for bch2_dir_emit(), which copies the entry out, not keeping it
-        let d = unsafe { d.k().to_c() };
-        match unsafe { c::bch2_dir_emit(t.raw(), self.0.as_ptr(), d, target) } {
-            0              => Ok(true),
-            ret if ret > 0 => Ok(false),
-            ret            => Err(BchError::from_raw(-ret)),
+        // Although not required by the kernel code, updating ctx->pos is
+        // needed for the bcachefs FUSE driver. Without this update, the FUSE
+        // implementation will be stuck in an infinite loop when reading
+        // directories (via the bcachefs_fuse_readdir callback): its actor
+        // computes each entry's resume-after cookie as its pos argument + 1.
+        // In kernel space, ctx->pos is updated by the VFS code.
+        unsafe { (*ctx).pos = offset as _ };
+
+        let k = BkeyBuf::from_key(d.k().into());
+        let d = Dirent::new(BkeySC::from(&k)).expect("a dirent");
+        let name = d.name().as_bytes();
+        let d_type = match d.d_type() as u32 {
+            c::DT_SUBVOL => c::DT_DIR,
+            d_type       => d_type,
+        };
+
+        // The actor copies to userspace and can fault, so it can't run with
+        // btree locks held — drop them, then relock for the next iteration.
+        t.unlock();
+
+        let emitted = unsafe {
+            let actor = (*ctx).actor.expect("a dir_context's actor");
+            actor(ctx, name.as_ptr().cast(), name.len() as c_int, (*ctx).pos as _, target.inum, d_type)
+        };
+        // the userspace shim's actor returns 0 to continue, the kernel's true
+        #[cfg(not(kernel))]
+        let emitted = emitted == 0;
+
+        if emitted {
+            unsafe { (*ctx).pos = (offset + 1) as _ };
         }
+        // Don't relock here: a restart return would cause the walk to retry
+        // the current key without advancing the iter, which re-emits the
+        // just-emitted dirent. Let the next peek relock transparently.
+        emitted
     }
 }
 
 /// Emit directory @dir's entries to @ctx, from ctx->pos: as bch2_readdir().
 ///
 /// Each dirent is checked against its hash first - one in the wrong place is
-/// repaired, as fsck would, and skipped. Emitting is C's, bch2_dir_emit():
-/// the getdents64 fast path writes to userspace holding locks, and anything
-/// else unlocks - the walk relocks at the next key.
+/// repaired, as fsck would, and skipped. Emitting unlocks - the walk relocks
+/// at the next key.
 pub fn readdir(
     fs:        &Fs,
     dir:       c::subvol_inum,
     hash_info: &mut c::bch_hash_info,
     mut ctx:   DirContext<'_>,
 ) -> Result<(), BchError> {
-    ctx.fault_in();
-
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, Btree::dirents, pos(dir.inum, ctx.pos()),
                                   BtreeIterFlags::empty());
@@ -588,7 +584,7 @@ pub fn readdir(
             return Ok(ControlFlow::Continue(()));
         };
 
-        Ok(if ctx.emit(t, d, target)? {
+        Ok(if ctx.emit(t, d, target) {
             ControlFlow::Continue(())
         } else {
             ControlFlow::Break(())
