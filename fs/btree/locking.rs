@@ -972,7 +972,7 @@ impl BtreeTrans<'_> {
         }
     }
 
-    pub(crate) fn relock_traced(&self, paths: &mut Paths<'_>, trace: bool) -> Result<(), BchError> {
+    pub(crate) fn relock_traced(&self, paths: &mut Paths<'_>, trace: bool, ret_ip: c_ulong) -> Result<(), BchError> {
         self.verify_locks(paths);
 
         let restarted = self.restarted();
@@ -990,7 +990,9 @@ impl BtreeTrans<'_> {
             if let Err(f) = self.path_get_locks(paths, i, false, Some(bch_errcode::BCH_ERR_transaction_restart_relock)) {
                 if let Some(old_path) = old_path {
                     self.fs().event_inc_trace(events::trans_restart_relock, |out| {
-                        prt!(out, "{}\n", self.fn_name());
+                        prt!(out, "{} ", self.fn_name());
+                        prt_symbol(out, ret_ip);
+                        prt!(out, "\n");
                         self.get_locks_fail_to_text(paths, out, &old_path, i, &f);
                     });
                 } else if trace {
@@ -1010,26 +1012,29 @@ impl BtreeTrans<'_> {
     }
 
     /// Take back the locks unlock() dropped: a transaction restart if they've
-    /// changed hands meanwhile.
+    /// changed hands meanwhile. Inlined, as unlock() is, so that the trace of a
+    /// relock that fails has the caller's address.
+    #[inline(always)]
     pub fn relock(&self) -> Result<(), BchError> {
         if self.locked() && self.restarted().0 == 0 {
             return Ok(());
         }
-        self.relock_traced(&mut self.paths(), true)
+        self.relock_traced(&mut self.paths(), true, crate::ret_ip!())
     }
 
     /// relock(), with the path table had already: for what C lends it to.
+    #[inline(always)]
     pub(crate) fn relock_from(&self, paths: &mut Paths<'_>) -> Result<(), BchError> {
         if self.locked() && self.restarted().0 == 0 {
             return Ok(());
         }
-        self.relock_traced(paths, true)
+        self.relock_traced(paths, true, crate::ret_ip!())
     }
 
     /// relock(), always attempted and without the tracepoint: as
     /// bch2_trans_relock_notrace().
     pub fn relock_notrace(&self) -> Result<(), BchError> {
-        self.relock_traced(&mut self.paths(), false)
+        self.relock_traced(&mut self.paths(), false, 0)
     }
 
     /// Inlined, so that last_unlock_ip is the caller's address.
@@ -1262,9 +1267,10 @@ impl BtreeTrans<'_> {
         if let Some(g) = l.try_lock() {
             return Ok(g);
         }
-        self.unlock_from(paths, crate::ret_ip!());
+        let ret_ip = crate::ret_ip!();
+        self.unlock_from(paths, ret_ip);
         let g = l.lock();
-        self.relock_traced(paths, true)?;
+        self.relock_traced(paths, true, ret_ip)?;
         Ok(g)
     }
 

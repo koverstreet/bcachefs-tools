@@ -378,6 +378,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.wait_until(ev, cond)
     }
 
+    #[inline(always)]
     pub fn relock(&self) -> Result<(), BchError> {
         assert!(self.live.get(), "relock of an attempt that ended");
         self.trans.relock()
@@ -529,6 +530,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Retake the locks after what dropped them: a restart if they changed
     /// hands, or transaction_restart_nested, not relocked, if what dropped
     /// them ran attempts of its own.
+    #[inline(always)]
     pub fn relock_or_nested(&self) -> Result<(), BchError> {
         if self.trans.restart_count() != self.restart_count.get() {
             return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
@@ -536,6 +538,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.relock()
     }
 
+    #[inline(always)]
     pub(in crate::btree) fn relock_or_nested_in(&self, paths: &mut Paths<'_>) -> Result<(), BchError> {
         assert!(self.live.get(), "relock of an attempt that ended");
         if self.trans.restart_count() != self.restart_count.get() {
