@@ -58,7 +58,7 @@ use quote::{format_ident, quote, ToTokens};
 mod cstruct {
     include!("../../types/cstruct.rs");
 }
-use cstruct::{bitfield_type, bitfield_wrapper, enum_text, expand_enum_list, parse_cstruct, parse_items,
+use cstruct::{enum_text, expand_enum_list, generic_arg, parse_cstruct, parse_items,
               paste_concat, CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
 mod args_stored_once;
@@ -260,26 +260,28 @@ pub fn derive_view(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
-    let text = format!("#[derive(CStruct)] {input}");
-    let def = parse_cstruct(&text)?;
+    let def = parse_cstruct(&input)?;
+    let name = &def.ident;
 
     // A #[c_bitfield] field's members, on the struct: its type's forwarders
     // (#[bitfield]), by the type's own path - a Cell's setting through &self.
     // Not a Volatile one's: that's a word, read and written whole.
     let mut forward = TokenStream::new();
-    let (generics, over) = def.impl_generics();
-    let (generics, over) = (tokens(&generics), tokens(&over));
+    let (generics, over, _) = def.generics.split_for_impl();
     for f in def.fields.iter().filter(|f| f.bitfield) {
-        let bt = bitfield_type(&f.ty);
-        let suffix = match bitfield_wrapper(&f.ty) {
-            None         => "_forward",
-            Some("Cell") => "_forward_cell",
-            Some(_)      => continue,
+        let (bt, suffix) = match (generic_arg(&f.ty, "Cell"), generic_arg(&f.ty, "Volatile")) {
+            (Some(t), _)    => (t, "_forward_cell"),
+            (None, Some(_)) => continue,
+            (None, None)    => (&f.ty, "_forward"),
         };
-        let (path, ty) = bt.rsplit_once("::").map_or(("", bt.as_str()), |(p, t)| (p, t));
-        let path = if path.is_empty() { String::new() } else { format!("{path}::") };
-        let (fwd, field) = (tokens(&format!("{path}__{ty}{suffix}")), tokens(&f.rust_name()));
-        forward.extend(quote!(#fwd!([#generics] #over, #field);));
+        let syn::Type::Path(syn::TypePath { qself: None, path }) = bt else {
+            return Err(format!("{name}.{}: #[c_bitfield] is for a field of a #[bitfield] type", f.ident));
+        };
+        let mut fwd = path.clone();
+        let last = fwd.segments.last_mut().expect("a path has a segment");
+        last.ident = format_ident!("__{}{suffix}", last.ident);
+        let field = &f.ident;
+        forward.extend(quote!(#fwd!([#generics] #name #over, #field);));
     }
     let flex = tokens(&vstructs::flex_array(&def)?);
     let zeroable = maybe_zeroable(&def);
@@ -295,39 +297,32 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
 /// here: their fields aren't bounds. Nor has it one for Cell, whose zeroes
 /// are its T's: a Cell's bound is its T's.
 fn maybe_zeroable(def: &cstruct::CStructDef) -> TokenStream {
-    let bounds: Vec<TokenStream> = def.fields.iter()
+    let mut generics = def.generics.clone();
+    generics.make_where_clause().predicates.extend(def.fields.iter()
         .filter(|f| !is_core_atomic(&f.ty))
-        .map(|f| tokens(cell_inner(&f.ty).unwrap_or(&f.ty)))
-        .map(|ty| quote!(#ty: for<'__dummy> ::pin_init::Zeroable))
-        .collect();
-    let whr = (!bounds.is_empty()).then(|| quote!(where #(#bounds),*));
-    let (generics, ty) = def.impl_generics();
-    let (generics, ty) = (tokens(&generics), tokens(&ty));
+        .map(|f| generic_arg(&f.ty, "Cell").unwrap_or(&f.ty))
+        .map(|ty| -> syn::WherePredicate { syn::parse_quote!(#ty: for<'__dummy> ::pin_init::Zeroable) }));
+    let (generics, over, whr) = generics.split_for_impl();
+    let name = &def.ident;
     quote! {
         // SAFETY: every field is Zeroable, and padding may be zero
         #[automatically_derived]
-        unsafe impl<#generics> ::pin_init::Zeroable for #ty #whr {}
+        unsafe impl #generics ::pin_init::Zeroable for #name #over #whr {}
     }
-}
-
-/// @ty's T, if it's a Cell<T>, by any path.
-fn cell_inner(ty: &str) -> Option<&str> {
-    let (path, rest) = ty.trim().split_once('<')?;
-    (path.rsplit("::").next().map(str::trim) == Some("Cell")).then_some(())?;
-    rest.trim_end().strip_suffix('>')
 }
 
 /// One of core::sync::atomic's integer, bool or pointer atomics, by any path
 /// - or an array of one, of any depth - or data_structures/bitmap.rs's
 /// AtomicULong, AtomicUsize as C's unsigned long.
-pub(crate) fn is_core_atomic(ty: &str) -> bool {
-    let ty = ty.trim();
-    let elem = ty.trim_start_matches(|c: char| c == '[' || c.is_whitespace());
-    let ty = if elem.len() < ty.len() { elem.split(';').next().unwrap_or(elem) } else { ty };
-    let name = ty.trim().split('<').next().unwrap_or("").rsplit("::").next().unwrap_or("").trim();
-    matches!(name, "AtomicBool" | "AtomicPtr" | "AtomicU8" | "AtomicI8" | "AtomicU16" | "AtomicI16" |
-                   "AtomicU32" | "AtomicI32" | "AtomicU64" | "AtomicI64" | "AtomicUsize" | "AtomicIsize" |
-                   "AtomicULong")
+pub(crate) fn is_core_atomic(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Array(a) => is_core_atomic(&a.elem),
+        syn::Type::Path(p) => p.path.segments.last().is_some_and(|s| matches!(s.ident.to_string().as_str(),
+            "AtomicBool" | "AtomicPtr" | "AtomicU8" | "AtomicI8" | "AtomicU16" | "AtomicI16" |
+            "AtomicU32" | "AtomicI32" | "AtomicU64" | "AtomicI64" | "AtomicUsize" | "AtomicIsize" |
+            "AtomicULong")),
+        _ => false,
+    }
 }
 
 /// bitfield_struct::bitfield - and __NAME_forward!([GENERICS] STRUCT, field),
@@ -518,13 +513,13 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         out.extend(quote! {
             #[allow(unused_macros)]
             macro_rules! #fwd {
-                ([$($g:tt)*] $s:ty, $field:ident) => { impl<$($g)*> $s { #(#fns)* } };
+                ([$($g:tt)*] $s:ty, $field:ident) => { impl $($g)* $s { #(#fns)* } };
             }
             #[allow(unused_imports)]
             pub(crate) use #fwd;
             #[allow(unused_macros)]
             macro_rules! #fwd_cell {
-                ([$($g:tt)*] $s:ty, $field:ident) => { impl<$($g)*> $s { #(#cell_fns)* } };
+                ([$($g:tt)*] $s:ty, $field:ident) => { impl $($g)* $s { #(#cell_fns)* } };
             }
             #[allow(unused_imports)]
             pub(crate) use #fwd_cell;
@@ -546,7 +541,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
             .unwrap_or_else(|| args.storage.clone())
     };
     let item = &s.item;
-    let (info, plain) = (tokens(&typeinfo::info(name, "Struct", "")), tokens(&vstructs::plain(name, &[&held])));
+    let (info, plain) = (typeinfo::info(&ident, &ident, "Struct", &[]), tokens(&vstructs::plain(name, &[&held])));
     // The struct as tokens, not text: an error in a member points at it
     Ok(quote! {
         #out
@@ -1160,7 +1155,7 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
 
     if let Some(name) = &e.name {
         out.extend(names_gen(e, name));
-        out.extend(tokens(&typeinfo::info_of(name, name, "Enum", "")));
+        out.extend(typeinfo::info(&ty, &ty, "Enum", &[]));
 
         // Zeroed is a value of it - so a struct holding one can be Zeroable:
         // any integer is an open enum's or flags', a closed enum's only if a

@@ -157,7 +157,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             Some(init) => quote!(#name <- #init,),
             // SAFETY: core's atomics are their integers, and zero is one -
             // Zeroable, but for the impl the orphan rule doesn't allow us
-            None if crate::is_core_atomic(&ty.to_token_stream().to_string()) =>
+            None if crate::is_core_atomic(ty) =>
                 quote!(#name: unsafe { ::core::mem::zeroed() },),
             None => {
                 let init = place::field_init(name);

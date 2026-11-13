@@ -29,79 +29,39 @@ pub enum CKind {
     Union,
 }
 
-/// A type parameter of a CStruct: its bounds, as written.
-#[derive(Debug)]
-pub struct TypeParam {
-    pub name:    String,
-    pub bounds:  String,
-}
-
 /// A #[derive(CStruct)] struct or union: its name and fields, in order.
-#[derive(Debug)]
 pub struct CStructDef {
-    /// Its name - the item's too, but for #[type_name]: rust_name.
-    pub name:      String,
-    /// The item's name, where the type's differs - #[type_name(NAME)]: a
-    /// family's definition, X__head, whose own name the family's type X<S> takes (see
-    /// util/vstructs.rs). rust_ident() is the name to impl and lay out by.
-    pub rust_name: Option<String>,
-    /// Its lifetime parameters, as written.
-    pub lifetimes: Vec<String>,
-    pub type_params: Vec<TypeParam>,
+    /// The item's name.
+    pub ident:     syn::Ident,
+    /// #[type_name(NAME)]: the type's name, where the item's differs - a
+    /// family's definition, X__head, whose name the family's type X<S> has
+    /// (util/vstructs.rs).
+    pub type_name: Option<syn::Ident>,
+    pub generics:  syn::Generics,
     pub kind:      CKind,
     pub fields:    Vec<CFieldDef>,
 }
 
 impl CStructDef {
-    /// The item's name: the type's, but for #[type_name].
-    pub fn rust_ident(&self) -> &str {
-        self.rust_name.as_deref().unwrap_or(&self.name)
-    }
-
-    /// 'a, T: Bound and X<'a, T>: for an impl over all of the struct's
-    /// generics.
-    pub fn impl_generics(&self) -> (String, String) {
-        let params: Vec<String> = self.lifetimes.iter().cloned()
-            .chain(self.type_params.iter().map(|p| if p.bounds.is_empty() { p.name.clone() } else { format!("{}: {}", p.name, p.bounds) }))
-            .collect();
-        let args: Vec<String> = self.lifetimes.iter().cloned()
-            .chain(self.type_params.iter().map(|p| p.name.clone()))
-            .collect();
-        (params.join(", "), self.rust_type_with(&args))
-    }
-
-    fn rust_type_with(&self, args: &[String]) -> String {
-        match args {
-            [] => self.rust_ident().to_string(),
-            l  => format!("{}<{}>", self.rust_ident(), l.join(", ")),
-        }
+    /// The type's name: #[type_name]'s, or the item's.
+    pub fn name(&self) -> &syn::Ident {
+        self.type_name.as_ref().unwrap_or(&self.ident)
     }
 }
 
-/// One field: its name - type, not type_ - and its Rust type as written.
-#[derive(Debug)]
 pub struct CFieldDef {
-    pub name:     String,
-    pub ty:       String,
-    /// Its visibility, as written: `pub`, `pub(crate)`, or empty.
-    pub vis:      String,
+    pub ident:    syn::Ident,
+    pub ty:       syn::Type,
+    pub vis:      syn::Visibility,
     /// #[c_bitfield]: its type is a bitfield-struct type, whose members are
     /// the struct's too.
     pub bitfield: bool,
     /// #[counted_by(FIELD)], on a trailing `[T; 0]`: the field its length
     /// is - C's __counted_by(), as the struct's FlexArray impl.
-    pub counted_by: Option<String>,
+    pub counted_by: Option<syn::Ident>,
     /// #[placed_at]: the field #[placed] added, its place's At - which
     /// #[derive(Init)]'s init() takes. (cstruct-macros' place.rs.)
     pub placed_at: bool,
-}
-
-impl CFieldDef {
-
-    /// The field's name as Rust spells it: a keyword gets a _.
-    pub fn rust_name(&self) -> String {
-        rust_ident(&self.name)
-    }
 }
 
 /// An x-macro list.
@@ -370,14 +330,6 @@ pub fn rust_ident(name: &str) -> String {
     }
 }
 
-/// The C name of Rust identifier @name: rust_ident() undone.
-pub fn c_ident(name: &str) -> String {
-    match name.strip_suffix('_') {
-        Some(kw) if RUST_KEYWORDS.contains(&kw) => kw.to_string(),
-        _ => name.to_string(),
-    }
-}
-
 // ---- tokens ------------------------------------------------------------
 
 /// A token, as the text is written from: a word - an identifier, a literal,
@@ -505,63 +457,45 @@ pub fn parse_family_args(src: &str, takes: &[&str]) -> Result<FamilyArgs, String
     Ok(args)
 }
 
-/// Item attributes we read; others are skipped.
-#[derive(Default)]
-struct ItemAttrs {
-    /// #[type_name(NAME)]: its name, where the item's differs.
-    type_name: Option<String>,
-}
-
 // ---- structs ---------------------------------------------------------------
 
-/// The struct or union @d, after its attributes @a; None if it's an enum.
-fn parse_struct(d: &syn::DeriveInput, a: ItemAttrs) -> Result<Option<CStructDef>, String> {
-    let name = ident(&d.ident);
-    let (kind, fields) = match &d.data {
-        syn::Data::Struct(s) => (CKind::Struct, match &s.fields {
-            syn::Fields::Named(f) => Some(&f.named),
+/// The struct or union @d; None if it's an enum.
+fn parse_struct(d: syn::DeriveInput) -> Result<Option<CStructDef>, String> {
+    let name = &d.ident;
+    let (kind, fields) = match d.data {
+        syn::Data::Struct(s) => (CKind::Struct, match s.fields {
+            syn::Fields::Named(f) => Some(f.named),
             _ => None,
         }),
-        syn::Data::Union(u) => (CKind::Union, Some(&u.fields.named)),
+        syn::Data::Union(u) => (CKind::Union, Some(u.fields.named)),
         syn::Data::Enum(_) => return Ok(None),
     };
     let fields_of = fields
         .filter(|_| d.generics.const_params().next().is_none())
         .ok_or_else(|| format!("{name}: a CStruct has named fields, and no const generics - an unsized \
                                 vstruct's states are each its own definition: #[unsized_vstruct]"))?;
-    let type_params = d.generics.type_params()
-        .map(|p| TypeParam {
-            name:    ident(&p.ident),
-            bounds:  p.bounds.iter().map(rust_text).collect::<Vec<_>>().join(" + "),
-        })
-        .collect();
-    let lifetimes = d.generics.lifetimes().map(|l| format!("'{}", l.lifetime.ident)).collect();
 
     let mut fields = Vec::new();
     for f in fields_of {
         let mut counted_by = None;
         let bare = |n: &str| f.attrs.iter().any(|a| matches!(&a.meta, syn::Meta::Path(p) if p.is_ident(n)));
         for attr in &f.attrs {
-            let is = |n: &str| attr.path().is_ident(n);
-            if is("counted_by") {
-                counted_by = Some(ident(&attr.parse_args::<syn::Ident>()
-                    .map_err(|_| format!("{name}: #[counted_by(FIELD)] takes the field that counts it"))?));
+            if attr.path().is_ident("counted_by") {
+                counted_by = Some(attr.parse_args::<syn::Ident>()
+                    .map_err(|_| format!("{name}: #[counted_by(FIELD)] takes the field that counts it"))?);
             }
         }
         let (bitfield, placed_at) = (bare("c_bitfield"), bare("placed_at"));
-        let vis = rust_text(&f.vis);
-        let field = c_ident(&ident(f.ident.as_ref().expect("named fields")));
-        let ty = rust_text(&f.ty);
-        fields.push(CFieldDef { name: field, ty, vis, bitfield, counted_by, placed_at });
+        let ident = f.ident.expect("named fields");
+        fields.push(CFieldDef { ident, ty: f.ty, vis: f.vis, bitfield, counted_by, placed_at });
     }
 
-    let (name, rust_name) = match a.type_name {
-        Some(c) => (c, Some(name)),
-        None    => (name, None),
-    };
-    Ok(Some(CStructDef {
-        name, rust_name, lifetimes, type_params, kind, fields,
-    }))
+    // #[type_name], or what it expands to - a family's macro sees it
+    // unexpanded, the derives expanded
+    let type_name = d.attrs.iter()
+        .filter(|a| a.path().is_ident("type_name") || a.path().is_ident("type_name_of"))
+        .find_map(|a| a.parse_args::<syn::Ident>().ok());
+    Ok(Some(CStructDef { ident: d.ident, type_name, generics: d.generics, kind, fields }))
 }
 
 /// The width of integer type @ty, in bits.
@@ -829,20 +763,6 @@ fn ident(i: &syn::Ident) -> String {
     i.to_string().trim_start_matches("r#").to_string()
 }
 
-/// The attributes of an item we read, from @attrs.
-fn item_attrs_of(attrs: &[syn::Attribute]) -> Result<ItemAttrs, String> {
-    let mut a = ItemAttrs::default();
-    for attr in attrs {
-        let is = |n: &str| attr.path().is_ident(n);
-        // #[type_name], or what it expands to - a family's macro sees it
-        // unexpanded, the derives expanded
-        if let (true, Ok(n)) = (is("type_name") || is("type_name_of"), attr.parse_args::<syn::Ident>()) {
-            a.type_name = Some(ident(&n));
-        }
-    }
-    Ok(a)
-}
-
 impl CTaggedUnion {
     pub fn check(&self) -> Result<(), String> {
         let tu = self;
@@ -1060,10 +980,6 @@ pub fn enum_text(e: &CEnumDef) -> String {
     t + "}"
 }
 
-fn type_of(s: &str) -> Option<syn::Type> {
-    syn::parse_str(s).ok()
-}
-
 /// @ty's generic arguments, if it's @name<..> by any path.
 fn generic_args<'a>(ty: &'a syn::Type, name: &str) -> Option<Vec<&'a syn::GenericArgument>> {
     let syn::Type::Path(p) = ty else { return None };
@@ -1150,9 +1066,9 @@ fn int_type(ty: &syn::Type) -> Option<IntType> {
 }
 
 /// A field's Rust type, as #[derive(TypeInfo)] describes it.
-pub enum FieldType {
-    /// `[elem; n]`, both as Rust source
-    Array { elem: String, n: String },
+pub enum FieldType<'a> {
+    /// `[elem; n]`
+    Array { elem: &'a syn::Type, n: &'a syn::Expr },
     /// A pointer, reference, function or generic: nothing to describe
     Opaque,
     /// Anything else: the integer it is, if it's one, and the last segment
@@ -1161,46 +1077,41 @@ pub enum FieldType {
 }
 
 /// What @ty is, for #[derive(TypeInfo)].
-pub fn field_type(ty: &str) -> Result<FieldType, String> {
-    Ok(match type_of(ty).ok_or_else(|| format!("{ty}: not a type"))? {
-        syn::Type::Array(a) => FieldType::Array { elem: rust_text(&a.elem), n: rust_text(&a.len) },
-        t => match path_names(&t) {
-            Some(p) => FieldType::Named { int: int_type(&t), name: p.last().cloned().unwrap_or_default() },
+pub fn field_type(ty: &syn::Type) -> FieldType<'_> {
+    match ty {
+        syn::Type::Array(a) => FieldType::Array { elem: &a.elem, n: &a.len },
+        t => match path_names(t) {
+            Some(p) => FieldType::Named { int: int_type(t), name: p.last().cloned().unwrap_or_default() },
             None => FieldType::Opaque,
         },
-    })
+    }
 }
 
-/// A #[c_bitfield] field's bitfield type, from its type @ty: the type, or a
-/// Volatile<T>'s or Cell<T>'s T - a word read and written whole, whose
-/// members C declares in its place all the same.
-pub fn bitfield_type(ty: &str) -> String {
-    bitfield_wrapper(ty).and_then(|w| match container_args(ty, w) {
-        Ok(Some(args)) if args.len() == 1 => Some(args[0].trim().to_string()),
+/// E, if @ty is `[E; 0]`: C's flexible array member.
+pub fn flex_elem(ty: &syn::Type) -> Option<&syn::Type> {
+    match ty {
+        syn::Type::Array(syn::TypeArray {
+            elem, len: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(n), .. }), ..
+        }) if n.base10_digits() == "0" => Some(elem),
         _ => None,
-    }).unwrap_or_else(|| ty.trim().to_string())
+    }
 }
 
-/// What a #[c_bitfield] field's bitfield is wrapped in, if anything:
-/// "Volatile" or "Cell".
-pub fn bitfield_wrapper(ty: &str) -> Option<&'static str> {
-    ["Volatile", "Cell"].into_iter().find(|w| matches!(container_args(ty, w), Ok(Some(a)) if a.len() == 1))
-}
-
-/// @ty's type arguments, Rust source, if it's @name<...> - one of
-/// types/lib.rs's containers of C's, by any path.
-fn container_args(ty: &str, name: &str) -> Result<Option<Vec<String>>, String> {
-    let t = type_of(ty).ok_or_else(|| format!("{ty}: not a type"))?;
-    Ok(generic_args(&t, name).map(|args| args.iter().map(rust_text).collect()))
+/// @ty's T, if it's @name<T> by any path.
+pub fn generic_arg<'a>(ty: &'a syn::Type, name: &str) -> Option<&'a syn::Type> {
+    match generic_args(ty, name)?.as_slice() {
+        [syn::GenericArgument::Type(t)] => Some(t),
+        _ => None,
+    }
 }
 
 // ---- entry points ----------------------------------------------------------
 
 /// Parse a derive's input: exactly one struct or union.
-pub fn parse_cstruct(src: &str) -> Result<CStructDef, String> {
+pub fn parse_cstruct(item: &proc_macro2::TokenStream) -> Result<CStructDef, String> {
     let expected = "#[derive(CStruct)] is for structs and unions with named fields";
-    let d = syn::parse_str::<syn::DeriveInput>(src).map_err(|e| format!("{expected} - {e}"))?;
-    parse_struct(&d, item_attrs_of(&d.attrs)?)?.ok_or_else(|| expected.to_string())
+    let d = syn::parse2::<syn::DeriveInput>(item.clone()).map_err(|e| format!("{expected} - {e}"))?;
+    parse_struct(d)?.ok_or_else(|| expected.to_string())
 }
 
 /// The item a macro's text is, as its macro: c_xmacro!, list_enum!, c_bitmask!

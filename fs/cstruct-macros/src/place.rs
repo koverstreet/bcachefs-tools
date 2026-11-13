@@ -282,7 +282,7 @@ const INNER_AT_FIELD: &str = "_placed_in_";
 /// Whether @f is an At of no bytes - not an element's index - which
 /// TypeInfo doesn't describe.
 pub(crate) fn is_empty_at_field(f: &CFieldDef) -> bool {
-    f.placed_at && (f.name == AT_FIELD || f.name.starts_with(INNER_AT_FIELD))
+    f.placed_at && (f.ident == AT_FIELD || f.ident.to_string().starts_with(INNER_AT_FIELD))
 }
 
 /// Field<N> for field @name, of type @ty, of @inst_ty - @impl_g and @where_c

@@ -15,12 +15,10 @@
 //! reference to that type's own INFO, so that type must have TypeInfo too, or
 //! the `<T as TypeInfo>` bound fails to resolve (a loud, actionable error).
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
+use quote::{format_ident, quote};
 
-use crate::cstruct::{field_type, parse_cstruct, CKind, FieldType, IntType};
-use crate::tokens;
-
-const OPAQUE: &str = "crate::typeinfo::FieldKind::Opaque";
+use crate::cstruct::{field_type, flex_elem, parse_cstruct, CKind, FieldType, IntType};
 
 /// The type names a field kind may reference as `<T as TypeInfo>::INFO`:
 /// each must have TypeInfo itself, by the name the field's type is written
@@ -33,85 +31,83 @@ fn derives_type_info(name: &str) -> bool {
 
 /// By its type's name: a family's definition, X__head, is X.
 pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&input.to_string())?;
-    let name = &def.name;
-    let inst = def.rust_ident();
+    let def = parse_cstruct(&input)?;
+    let inst = &def.ident;
 
     let shape = match def.kind {
         CKind::Struct => "Struct",
         CKind::Union  => "Union",
     };
 
-    let mut fields = String::new();
+    let mut fields = Vec::new();
     if def.kind == CKind::Struct {
         // a place's At is zero bytes of nothing: not described
         let described: Vec<_> = def.fields.iter().filter(|f| !crate::place::is_empty_at_field(f)).collect();
         let last = described.len().saturating_sub(1);
         for (i, f) in described.into_iter().enumerate() {
-            let field = f.rust_name();
-            fields.push_str(&format!(
-                "crate::typeinfo::FieldInfo {{ \
-                     name: \"{field}\", \
-                     offset: ::core::mem::offset_of!({inst}, {field}), \
-                     kind: {} \
-                 }},\n", kind(&f.ty, i == last)?));
+            let (field, kind) = (&f.ident, kind(&f.ty, i == last));
+            let name = field.to_string();
+            fields.push(quote! {
+                crate::typeinfo::FieldInfo {
+                    name: #name,
+                    offset: ::core::mem::offset_of!(#inst, #field),
+                    kind: #kind,
+                }
+            });
         }
     }
 
-    Ok(tokens(&info_of(inst, name, shape, &fields)))
+    Ok(info(inst, def.name(), shape, &fields))
 }
 
-/// The TypeInfo impl for @name: @fields its FieldInfo entries - none for a
-/// type described by its size alone.
-pub(crate) fn info(name: &str, shape: &str, fields: &str) -> String {
-    info_of(name, name, shape, fields)
-}
-
-/// info(), for Rust type @ty, named @name.
-pub(crate) fn info_of(ty: &str, name: &str, shape: &str, fields: &str) -> String {
-    format!(
-        "#[automatically_derived]\n\
-         impl crate::typeinfo::TypeInfo for {ty} {{\n\
-             const INFO: &'static crate::typeinfo::StructInfo = &crate::typeinfo::StructInfo {{\n\
-                 name: \"{name}\",\n\
-                 size: ::core::mem::size_of::<{ty}>(),\n\
-                 shape: crate::typeinfo::Shape::{shape},\n\
-                 fields: &[{fields}],\n\
-             }};\n\
-         }}\n")
+/// The TypeInfo impl for @ty, named @name: @fields its FieldInfo entries -
+/// none for a type described by its size alone.
+pub(crate) fn info(ty: &Ident, name: &Ident, shape: &str, fields: &[TokenStream]) -> TokenStream {
+    let (name, shape) = (name.to_string(), format_ident!("{shape}"));
+    quote! {
+        #[automatically_derived]
+        impl crate::typeinfo::TypeInfo for #ty {
+            const INFO: &'static crate::typeinfo::StructInfo = &crate::typeinfo::StructInfo {
+                name: #name,
+                size: ::core::mem::size_of::<#ty>(),
+                shape: crate::typeinfo::Shape::#shape,
+                fields: &[#(#fields),*],
+            };
+        }
+    }
 }
 
 /// The `FieldKind` expression for a field of Rust type @ty; @last: it's the
 /// struct's last field, where `[T; 0]` is C's flexible array member, x[] -
 /// as long as the value.
-fn kind(ty: &str, last: bool) -> Result<String, String> {
-    Ok(match field_type(ty)? {
+fn kind(ty: &syn::Type, last: bool) -> TokenStream {
+    match field_type(ty) {
         FieldType::Array { elem, n } => {
-            let elem_kind = kind(&elem, false)?;
-            let stride = format!("::core::mem::size_of::<{elem}>()");
-            if last && n == "0" {
-                format!("crate::typeinfo::FieldKind::VarTail {{ elem: &{elem_kind}, stride: {stride} }}")
+            let elem_kind = kind(elem, false);
+            let stride = quote!(::core::mem::size_of::<#elem>());
+            if last && flex_elem(ty).is_some() {
+                quote!(crate::typeinfo::FieldKind::VarTail { elem: &#elem_kind, stride: #stride })
             } else {
-                format!("crate::typeinfo::FieldKind::Array {{ elem: &{elem_kind}, n: {n}, stride: {stride} }}")
+                quote!(crate::typeinfo::FieldKind::Array { elem: &#elem_kind, n: #n, stride: #stride })
             }
         }
-        FieldType::Opaque => OPAQUE.into(),
-        FieldType::Named { int, name } => match int {
-            Some(IntType { bytes, endian, signed }) => {
-                let bytes = match bytes {
-                    Some(b) => format!("{b}u8"),
-                    None    => format!("::core::mem::size_of::<{ty}>() as u8"),
-                };
-                format!("crate::typeinfo::FieldKind::Int {{ \
-                             bytes: {bytes}, \
-                             endian: crate::typeinfo::Endian::{endian}, \
-                             signed: {signed} \
-                         }}")
+        FieldType::Named { int: Some(IntType { bytes, endian, signed }), .. } => {
+            let bytes = match bytes {
+                Some(b) => quote!(#b),
+                None    => quote!(::core::mem::size_of::<#ty>() as u8),
+            };
+            let endian = format_ident!("{endian}");
+            quote! {
+                crate::typeinfo::FieldKind::Int {
+                    bytes: #bytes,
+                    endian: crate::typeinfo::Endian::#endian,
+                    signed: #signed,
+                }
             }
-            None if derives_type_info(&name) =>
-                format!("crate::typeinfo::FieldKind::Struct(<{ty} as crate::typeinfo::TypeInfo>::INFO)"),
-            None => OPAQUE.into(),
-        },
-    })
+        }
+        FieldType::Named { name, .. } if derives_type_info(&name) =>
+            quote!(crate::typeinfo::FieldKind::Struct(<#ty as crate::typeinfo::TypeInfo>::INFO)),
+        FieldType::Named { .. } | FieldType::Opaque => quote!(crate::typeinfo::FieldKind::Opaque),
+    }
 }
 

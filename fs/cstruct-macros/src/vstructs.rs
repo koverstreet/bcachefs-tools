@@ -14,7 +14,10 @@
 
 use proc_macro2::{Delimiter, Ident, TokenStream, TokenTree};
 
-use crate::cstruct::{field_type, parse_cstruct, parse_family_args, CFieldDef, CKind, CStructDef, FieldType};
+use quote::quote;
+
+use crate::cstruct::{flex_elem, generic_arg, parse_cstruct, parse_family_args, rust_text, CFieldDef, CKind,
+                     CStructDef};
 use crate::tokens;
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
@@ -22,19 +25,19 @@ use crate::tokens;
 /// C definition's - #[unsized_vstruct]'s X__head - and then its tail's
 /// elements, Plain too, as the attribute checks.
 pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&input.to_string())?;
+    let def = parse_cstruct(&input)?;
     if def.kind != CKind::Struct {
-        return Err(format!("{}: Plain is for structs", def.name));
+        return Err(format!("{}: Plain is for structs", def.name()));
     }
-    let tys: Vec<&str> = def.fields.iter().map(|f| f.ty.as_str()).collect();
-    Ok(tokens(&plain(def.rust_ident(), &tys)))
+    let tys: Vec<String> = def.fields.iter().map(|f| rust_text(&f.ty)).collect();
+    Ok(tokens(&plain(&def.ident.to_string(), &tys)))
 }
 
 /// #[derive(SizedVal)]: the marker, for a key value - as an on-disk value,
 /// any bytes of it are one.
 pub(crate) fn derive_sized_val(input: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&input.to_string())?;
-    let name = def.rust_ident();
+    let def = parse_cstruct(&input)?;
+    let name = &def.ident;
     // the same struct in every state, but from outside: OfSized
     Ok(tokens(&format!("// SAFETY: an on-disk value, any bytes of which are one\n\
                         unsafe impl crate::btree::bkey::SizedVal for {name} {{}}\n\
@@ -47,12 +50,12 @@ pub(crate) fn derive_sized_val(input: TokenStream) -> Result<TokenStream, String
 /// Plain for @name, whose fields are of types @tys: the impl, and the
 /// checks that make it sound - a compile error if it isn't. Native too, as
 /// itself.
-pub(crate) fn plain(name: &str, tys: &[&str]) -> String {
+pub(crate) fn plain(name: &str, tys: &[impl AsRef<str>]) -> String {
     let fields: String = tys.iter()
-        .map(|ty| format!("crate::util::vstructs::assert_plain::<{ty}>();\n"))
+        .map(|ty| format!("crate::util::vstructs::assert_plain::<{}>();\n", ty.as_ref()))
         .collect();
     let sizes: String = tys.iter()
-        .map(|ty| format!(" + ::core::mem::size_of::<{ty}>()"))
+        .map(|ty| format!(" + ::core::mem::size_of::<{}>()", ty.as_ref()))
         .collect();
     // and Native as itself: a struct reads as a struct. In-kernel, the
     // kernel's own FromBytes and AsBytes - what uaccess's UserSlice reads and
@@ -84,19 +87,19 @@ const VIEW_METHODS: &[&str] = &["new", "get", "set", "whole", "whole_mut", "proj
 /// make it `v.field`. Not for fields named `_..`, padding and C's internals,
 /// or a trailing `[T; 0]`: a flexible array is View::as_bytes()'s.
 pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&input.to_string())?;
+    let def = parse_cstruct(&input)?;
     if def.kind != CKind::Struct {
-        return Err(format!("{}: a View is of a struct", def.name));
+        return Err(format!("{}: a View is of a struct", def.name()));
     }
-    let name = def.rust_ident();
+    let name = &def.ident;
     let (mut get, mut get_mut) = (String::new(), String::new());
     for f in &def.fields {
-        let field = f.rust_name();
-        let ty = f.ty.trim();
-        if field.starts_with('_') || matches!(field_type(ty)?, FieldType::Array { n, .. } if n == "0") {
+        let field = &f.ident;
+        let ty = rust_text(&f.ty);
+        if field.to_string().starts_with('_') || flex_elem(&f.ty).is_some() {
             continue;
         }
-        if VIEW_METHODS.contains(&field.as_str()) {
+        if VIEW_METHODS.iter().any(|m| field == m) {
             return Err(format!("{name}.{field}: a View's own method is named {field} - \
                                 its projection would be hidden"));
         }
@@ -123,17 +126,23 @@ const VS: &str = "crate::util::vstructs";
 
 /// A field of C's struct as a state's definition has it, inline: pub only
 /// where C's is pub and holds no count - not the count, written private or
-/// pub(crate), nor an embedded header, Head<..>, whose own count it is, nor
+/// pub(crate), nor an embedded header, Head<..> or an array of them, whose
+/// own count it is, nor
 /// one of @private, which the family names: a counted type's count. Those
 /// read through the definition's Deref to its head, and can't be written: a
 /// count changes only through what holds the value.
 fn inline_field(f: &CFieldDef, private: &[&str]) -> String {
-    let vis = if f.vis == "pub" && !f.ty.contains("Head<") && !private.contains(&f.rust_name().as_str()) {
+    let public = matches!(f.vis, syn::Visibility::Public(_));
+    let elem = match &f.ty {
+        syn::Type::Array(a) => &*a.elem,
+        t => t,
+    };
+    let vis = if public && generic_arg(elem, "Head").is_none() && !private.iter().any(|p| f.ident == p) {
         "pub "
     } else {
         ""
     };
-    format!("    {vis}{}: {},\n", f.rust_name(), f.ty.trim())
+    format!("    {vis}{}: {},\n", f.ident, rust_text(&f.ty))
 }
 
 /// @item's #[repr(..)]s, as written.
@@ -193,16 +202,16 @@ fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
     let Shape { repr, fields, private, head, deref, tail, elem, ffi: _, tail_at } = *shape;
     let tail_at = tail_at.map(str::to_string).unwrap_or_else(|| format!("::core::mem::size_of::<{head}>()"));
     let plain_fields: String = fields.iter()
-        .map(|f| format!("{VS}::assert_plain::<{}>();\n", f.ty.trim()))
+        .map(|f| format!("{VS}::assert_plain::<{}>();\n", rust_text(&f.ty)))
         .collect();
     let inline: String = fields.iter().map(|f| inline_field(f, private)).collect();
     let offsets: String = fields.iter()
         .map(|f| format!("assert!(::core::mem::offset_of!({ty}, {0}) == ::core::mem::offset_of!({head}, {0}),\n\
-                              \"{ty}.{0}: not at {head}'s offset\");\n", f.rust_name()))
+                              \"{ty}.{0}: not at {head}'s offset\");\n", f.ident))
         .collect();
     let tail_start = match fields.last() {
         Some(l) => format!("::core::mem::offset_of!({ty}, {}) + ::core::mem::size_of::<{}>()",
-                           l.rust_name(), l.ty.trim()),
+                           l.ident, rust_text(&l.ty)),
         None => "0".to_string(),
     };
     format!(
@@ -409,21 +418,21 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
 /// superblock field's, past its header; a btree node's, its bset's keys - or
 /// `tail = NAME: [E]`, an array the states call NAME.
 pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&item.to_string())?;
-    let name = def.rust_ident().to_string();
+    let def = parse_cstruct(&item)?;
+    let name = def.ident.to_string();
     let last = def.fields.last().ok_or_else(|| format!("{name}: an unsized vstruct has fields"))?;
     let args = parse_family_args(&attr.to_string(), &["tail"]).map_err(|e| format!("{name}: {e}"))?;
     let (tail, elem) = match args.tail {
-        None => match field_type(&last.ty)? {
-            FieldType::Array { elem, n } if n == "0" => (last.rust_name(), elem),
-            _ => return Err(format!("{name}: its last field, {}, isn't a flexible array, [E; 0] - \
-                                     #[unsized_vstruct(tail = [E])] says what its tail holds",
-                                    last.name)),
+        None => match flex_elem(&last.ty) {
+            Some(elem) => (last.ident.to_string(), rust_text(elem)),
+            None => return Err(format!("{name}: its last field, {}, isn't a flexible array, [E; 0] - \
+                                        #[unsized_vstruct(tail = [E])] says what its tail holds",
+                                       last.ident)),
         },
         Some((tail, elem)) => (tail.unwrap_or_else(|| "_tail".to_string()), elem),
     };
     let ffi = format!("{name}__head");
-    let last = last.rust_name();
+    let last = last.ident.to_string();
     // C's fields, inline in each state's definition - but its flexible array,
     // where that's the tail
     let fields = if tail == last { &def.fields[..def.fields.len() - 1] } else { &def.fields[..] };
@@ -464,14 +473,14 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
 /// elements past it - and CountedHead, the way to its Unvalidated definition
 /// from what holds its bytes.
 pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&item.to_string())?;
-    let name = def.rust_ident().to_string();
+    let def = parse_cstruct(&item)?;
+    let name = def.ident.to_string();
     let ffi = format!("{name}__head");
 
     let args = parse_family_args(&attr.to_string(), &["count", "tail"]).map_err(|e| format!("{name}: {e}"))?;
     let count = args.count.unwrap_or_else(|| "nr_entries".to_string());
     let count_field = count.split('.').next().unwrap_or_default().to_string();
-    if !def.fields.iter().any(|f| f.rust_name() == count_field) {
+    if !def.fields.iter().any(|f| f.ident == count_field) {
         return Err(format!("{name}: #[counted({count})], but {name} has no field {count_field} - \
                             name its count, #[counted(FIELD)] or #[counted(FIELD.COUNT)]"));
     }
@@ -483,13 +492,13 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
                                format!("::core::mem::size_of::<{ffi}>()")),
         None => {
             let last = def.fields.last().ok_or_else(|| format!("{name}: a counted type has fields"))?;
-            match field_type(&last.ty)? {
-                FieldType::Array { elem, n } if n == "0" =>
-                    (last.rust_name(), elem, &def.fields[..def.fields.len() - 1],
-                     format!("::core::mem::offset_of!({ffi}, {})", last.rust_name())),
-                _ => return Err(format!("{name}: its last field, {}, isn't a flexible array, [E; 0] - \
-                                         #[counted(.., tail = [E])] says where its array is",
-                                        last.name)),
+            match flex_elem(&last.ty) {
+                Some(elem) =>
+                    (last.ident.to_string(), rust_text(elem), &def.fields[..def.fields.len() - 1],
+                     format!("::core::mem::offset_of!({ffi}, {})", last.ident)),
+                None => return Err(format!("{name}: its last field, {}, isn't a flexible array, [E; 0] - \
+                                            #[counted(.., tail = [E])] says where its array is",
+                                           last.ident)),
             }
         }
     };
@@ -529,13 +538,13 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 /// FIELD on is a getter, zero past the end, and whole() is all of it, X, if
 /// it's all there.
 pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&item.to_string())?;
-    let name = def.name.clone();
+    let def = parse_cstruct(&item)?;
+    let name = def.name();
     let args = parse_family_args(&attr.to_string(), &["from", "bkey"]).map_err(|e| format!("{name}: {e}"))?;
     let from = args.from.as_deref()
         .ok_or_else(|| format!("{name}: #[grown(from = FIELD)], FIELD the first field an older \
                                 version's value may lack"))?;
-    let at = def.fields.iter().position(|f| f.rust_name() == from)
+    let at = def.fields.iter().position(|f| f.ident == from)
         .ok_or_else(|| format!("{name}: #[grown(from = {from})], but {name} has no field {from}"))?;
     if at == 0 {
         return Err(format!("{name}: #[grown(from = {from})]: every valid value has at least one field"));
@@ -565,27 +574,27 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// it starts, for a tail that's more than that array - bch_stripe's
 /// pointers, then checksums and sector counts its header sizes.
 pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&item.to_string())?;
-    let args = parse_family_args(&attr.to_string(), &["tail", "bkey"]).map_err(|e| format!("{}: {e}", def.name))?;
+    let def = parse_cstruct(&item)?;
+    let name = def.name();
+    let args = parse_family_args(&attr.to_string(), &["tail", "bkey"]).map_err(|e| format!("{name}: {e}"))?;
     let tail = match args.tail {
         None => None,
-        Some((None, _)) => return Err(format!("{}: #[whole(tail = NAME: [E])] - the tail is C's last \
-                                               field, NAME: [E; 0], named", def.name)),
+        Some((None, _)) => return Err(format!("{name}: #[whole(tail = NAME: [E])] - the tail is C's last \
+                                               field, NAME: [E; 0], named")),
         Some((Some(tail), elem)) => {
-            let at = def.fields.iter().position(|f| f.rust_name() == tail)
-                .ok_or_else(|| format!("{}: #[whole(tail = {tail}: ..)], but it has no field {tail}", def.name))?;
+            let at = def.fields.iter().position(|f| f.ident == tail)
+                .ok_or_else(|| format!("{name}: #[whole(tail = {tail}: ..)], but it has no field {tail}"))?;
             // [E; 0] - or any zero-length array, for a tail of bytes
-            match field_type(&def.fields[at].ty)? {
-                FieldType::Array { elem: e, n }
-                    if n == "0" && (e.trim() == elem.trim() || elem.trim() == "u8") => {}
-                _ => return Err(format!("{}: #[whole(tail = {tail}: [{elem}])], but its field {tail} \
-                                         isn't [{elem}; 0]", def.name)),
+            match flex_elem(&def.fields[at].ty) {
+                Some(e) if rust_text(e) == elem || elem == "u8" => {}
+                _ => return Err(format!("{name}: #[whole(tail = {tail}: [{elem}])], but its field {tail} \
+                                         isn't [{elem}; 0]")),
             }
             // after it, only C's other names for where it starts
             for f in &def.fields[at + 1..] {
-                if !matches!(field_type(&f.ty)?, FieldType::Array { n, .. } if n == "0") {
-                    return Err(format!("{}.{}: after the tail, {tail}, a field that isn't a \
-                                        zero-length array - C's other name for its start", def.name, f.name));
+                if flex_elem(&f.ty).is_none() {
+                    return Err(format!("{name}.{}: after the tail, {tail}, a field that isn't a \
+                                        zero-length array - C's other name for its start", f.ident));
                 }
             }
             Some((tail, elem))
@@ -605,7 +614,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
                 tail: Option<(String, String)>, bkey: bool)
     -> Result<TokenStream, String>
 {
-    let name = def.rust_ident().to_string();
+    let name = def.ident.to_string();
     // A key's value: what a mutable copy of a key read as one is - and a
     // grown type's struct, had by value
     let bkey_impls = match (bkey, grew) {
@@ -650,7 +659,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
     // the tail, C's last field - or the bytes past C's fields
     let (fields, tail_name, elem, tail_at) = match &tail {
         Some((t, e)) => {
-            let at = def.fields.iter().position(|f| f.rust_name() == *t).unwrap_or(def.fields.len());
+            let at = def.fields.iter().position(|f| f.ident == t).unwrap_or(def.fields.len());
             (&def.fields[..at], t.as_str(), e.as_str(), Some(format!("::core::mem::offset_of!({ffi}, {t})")))
         }
         None => (&def.fields[..], "_rest", "u8", None),
@@ -699,23 +708,23 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
     let ty = format!("{name}__validated");
 
     let floor_fields: String = floor.iter()
-        .map(|f| format!("    pub {}: {},\n", f.rust_name(), f.ty.trim()))
+        .map(|f| format!("    pub {}: {},\n", f.ident, rust_text(&f.ty)))
         .collect();
-    let floor_tys: Vec<&str> = floor.iter().map(|f| f.ty.trim()).collect();
+    let floor_tys: Vec<String> = floor.iter().map(|f| rust_text(&f.ty)).collect();
     let floor_offsets: String = floor.iter()
         .map(|f| format!("assert!(::core::mem::offset_of!({fl}, {0}) == ::core::mem::offset_of!({ffi}, {0}));\n",
-                         f.rust_name()))
+                         f.ident))
         .collect();
 
     const METHODS: &[&str] = &["whole", "whole_mut", "as_bytes", "as_bytes_mut"];
     let mut getters = String::new();
     for f in later {
-        let field = f.rust_name();
-        if METHODS.contains(&field.as_str()) {
+        let field = &f.ident;
+        if METHODS.iter().any(|m| field == m) {
             return Err(format!("{name}.{field}: {ty}'s own method is named {field} - its getter \
                                 would be hidden"));
         }
-        let fty = f.ty.trim();
+        let fty = rust_text(&f.ty);
         getters.push_str(&format!(
             "/// {field}, or zero where the value ends before it: one written\n\
              /// before {name} had it.\n\
@@ -1175,16 +1184,16 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
 /// @item, a struct, as @to - with #[type_name], its own name, before its
 /// other attributes, so it expands before the derives among them.
 fn rename_struct(item: TokenStream, def: &CStructDef, to: &str) -> Result<TokenStream, String> {
-    let name = def.rust_ident();
+    let name = &def.ident;
     let mut tts: Vec<TokenTree> = item.into_iter().collect();
     let at = tts.windows(2)
         .position(|w| matches!((&w[0], &w[1]), (TokenTree::Ident(s), TokenTree::Ident(n))
-                               if s.to_string() == "struct" && n.to_string() == name))
+                               if s == "struct" && n == name))
         .ok_or_else(|| format!("{name}: a family is made from a struct"))?;
     tts[at + 1] = TokenTree::Ident(Ident::new(to, tts[at + 1].span()));
     let mut out = TokenStream::new();
-    if def.rust_name.is_none() {
-        out.extend(tokens(&format!("#[::cstruct_macros::type_name({})]", def.name)));
+    if def.type_name.is_none() {
+        out.extend(quote!(#[::cstruct_macros::type_name(#name)]));
     }
     out.extend(tts.into_iter());
     Ok(out)
@@ -1193,19 +1202,19 @@ fn rename_struct(item: TokenStream, def: &CStructDef, to: &str) -> Result<TokenS
 /// A CStruct's FlexArray, from #[counted_by(FIELD)] on its trailing `[T; 0]`
 /// - empty if it has none.
 pub(crate) fn flex_array(def: &CStructDef) -> Result<String, String> {
-    let name = def.rust_ident();
-    let Some((i, f)) = def.fields.iter().enumerate().find(|(_, f)| f.counted_by.is_some()) else {
+    let name = def.ident.to_string();
+    let Some((i, f, count)) = def.fields.iter().enumerate().find_map(|(i, f)| Some((i, f, f.counted_by.as_ref()?)))
+    else {
         return Ok(String::new());
     };
-    let count = f.counted_by.as_deref().unwrap_or_default();
-    let elem = match field_type(&f.ty)? {
-        FieldType::Array { elem, n } if n == "0" && i + 1 == def.fields.len() => elem,
-        _ => return Err(format!("{name}.{}: #[counted_by] is for the last field, a [T; 0]", f.name)),
+    let elem = match flex_elem(&f.ty) {
+        Some(elem) if i + 1 == def.fields.len() => rust_text(elem),
+        _ => return Err(format!("{name}.{}: #[counted_by] is for the last field, a [T; 0]", f.ident)),
     };
-    if !def.fields.iter().any(|g| g.rust_name() == count) {
-        return Err(format!("{name}.{}: #[counted_by({count})]: {name} has no field {count}", f.name));
+    if !def.fields.iter().any(|g| g.ident == *count) {
+        return Err(format!("{name}.{}: #[counted_by({count})]: {name} has no field {count}", f.ident));
     }
-    Ok(flex_impl(name, &format!("::core::mem::offset_of!({name}, {})", f.rust_name()), &elem, count))
+    Ok(flex_impl(&name, &format!("::core::mem::offset_of!({name}, {})", f.ident), &elem, &count.to_string()))
 }
 
 /// FlexArray for @name: @elem from @tail_at, as many as @count says.
