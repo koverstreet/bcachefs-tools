@@ -7,7 +7,7 @@ use kernel::page::PAGE_SHIFT;
 
 use pin_init::{pin_data, pin_init, stack_pin_init};
 
-use crate::btree::bkey::{bkey_lt, pos};
+use crate::btree::bkey::{bkey_ge, pos};
 use crate::btree::iter::{lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
@@ -505,8 +505,14 @@ impl InodeInfo {
                                       BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
         let mut ret = Ok(());
 
-        while ret.is_ok() && bkey_lt(iter.pos(), end_pos) {
+        while ret.is_ok() {
             let step = lockrestart_do(&trans, |t| -> Result<bool, BchError> {
+                // each try, not each step: a step that restarts may have moved
+                // @iter to the end
+                if bkey_ge(iter.pos(), end_pos) {
+                    return Ok(true);
+                }
+
                 let mut i_sectors_delta = 0;
                 let mut quota_res = self.quota_reservation();
 
