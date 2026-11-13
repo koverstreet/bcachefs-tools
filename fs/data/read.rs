@@ -1316,36 +1316,18 @@ impl<'r> Planned<'r, '_> {
     fn start(self, t: &TransAttempt<'_, '_>, orig: &'r Rbio, reads: &Reads, split_trace: bool,
              own: &mut Option<Fragment<'r>>) -> Result<(), BchError>
     {
+        match self.how {
+            How::Own => return self.make(orig, own),
+            How::Promote(_) => return self.start_promote(t, orig, reads, split_trace),
+            How::Clone | How::Bounce(..) => {}
+        }
+
         let fs = orig.fs();
         let Planned { how, plan, ca, k } = self;
         let bounce = match how {
-            How::Own => return Planned { how, plan, ca, k }.make(orig, own),
-            How::Promote(_) => {
-                let mut f = None;
-                Planned { how, plan, ca, k }.make(orig, &mut f)?;
-                let f = f.expect("the promote's fragment, just made");
-                if split_trace {
-                    fs.event_inc_trace(events::data_read_split, |out| f.to_text(out));
-                }
-
-                let _noio = MemallocFlags::noio();
-                let slot = match TaskSlot::exclusive_in(&FRAGMENTS, ()) {
-                    Ok(slot) => slot,
-                    // the promote ended with the error, not dropped unstarted
-                    Err(e) => {
-                        f.free(Err(e));
-                        return Err(e);
-                    }
-                };
-                let r = reads.get();
-                let make = move |_| fragment_task(r, f, orig);
-                start_task(t, plan.pick.do_ec_reconstruct, |inline| unsafe {
-                    if inline { slot.start_inline(Queue::system_dfl(), make) } else { slot.start(Queue::system_dfl(), make) }
-                });
-                return Ok(());
-            }
             How::Clone => None,
             How::Bounce(size, gfp) => Some((&*fs.bio_bounce, fs.opts().block_size.get().into(), size, gfp)),
+            How::Own | How::Promote(_) => unreachable!("a fragment start() made or started above"),
         };
         let nr_vecs = bounce.as_ref().map_or(0, BioBuffersOwned::nr_vecs);
         let opf = orig.bio().raw().bi_opf;
@@ -1374,6 +1356,40 @@ impl<'r> Planned<'r, '_> {
         let make = move |home| fragment_task(r, Fragment { ca, ..Fragment::new(orig.fs(), Kind::Home(home, buffers), plan) },
                                              orig);
         start_task(t, plan.pick.do_ec_reconstruct, |inline| unsafe {
+            if inline { slot.start_inline(Queue::system_dfl(), make) } else { slot.start(Queue::system_dfl(), make) }
+        });
+        Ok(())
+    }
+
+    /// start(), for a promote's fragment: its bio is the promote's, and the
+    /// task in a box from the module's pool.
+    // Apart: the fragment, made here and moved into its task, isn't in the
+    // frame of every read's start()
+    #[inline(never)]
+    fn start_promote(self, t: &TransAttempt<'_, '_>, orig: &'r Rbio, reads: &Reads, split_trace: bool)
+        -> Result<(), BchError>
+    {
+        let fs = orig.fs();
+        let reconstruct = self.plan.pick.do_ec_reconstruct;
+        let mut f = None;
+        self.make(orig, &mut f)?;
+        let f = f.expect("the promote's fragment, just made");
+        if split_trace {
+            fs.event_inc_trace(events::data_read_split, |out| f.to_text(out));
+        }
+
+        let _noio = MemallocFlags::noio();
+        let slot = match TaskSlot::exclusive_in(&FRAGMENTS, ()) {
+            Ok(slot) => slot,
+            // the promote ended with the error, not dropped unstarted
+            Err(e) => {
+                f.free(Err(e));
+                return Err(e);
+            }
+        };
+        let r = reads.get();
+        let make = move |_| fragment_task(r, f, orig);
+        start_task(t, reconstruct, |inline| unsafe {
             if inline { slot.start_inline(Queue::system_dfl(), make) } else { slot.start(Queue::system_dfl(), make) }
         });
         Ok(())
