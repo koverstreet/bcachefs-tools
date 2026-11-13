@@ -56,7 +56,6 @@ obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
 	data_structures/darray.o		\
-	debug/trace.o				\
 	errcode.o				\
 	init/error.o				\
 	init/fs.o				\
