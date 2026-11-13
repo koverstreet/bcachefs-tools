@@ -14,11 +14,6 @@
  */
 #define cmp_int(l, r) (((l) > (r)) - ((l) < (r)))
 
-void sort_r(void *base, size_t num, size_t size,
-	    cmp_r_func_t cmp_func,
-	    swap_r_func_t swap_func,
-	    const void *priv);
-
 static inline void sort(void *base, size_t num, size_t size,
 			int (*cmp_func)(const void *, const void *),
 			void (*swap_func)(void *, void *, int size))
@@ -27,6 +22,5 @@ static inline void sort(void *base, size_t num, size_t size,
 }
 
 #define sort_nonatomic(...)	sort(__VA_ARGS__)
-#define sort_r_nonatomic(...)	sort_r(__VA_ARGS__)
 
 #endif

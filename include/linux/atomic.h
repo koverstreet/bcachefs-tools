@@ -298,55 +298,6 @@ static inline bool a_type##_try_cmpxchg_release(a_type##_t *v, i_type *old, i_ty
 DEF_ATOMIC_OPS(atomic,		int)
 DEF_ATOMIC_OPS(atomic_long,	long)
 
-#ifndef ATOMIC64_SPINLOCK
 DEF_ATOMIC_OPS(atomic64,	s64)
-#else
-s64 atomic64_read(const atomic64_t *v);
-static inline s64 atomic64_read_acquire(const atomic64_t *v)
-{
-	s64 ret = atomic64_read(v);
-	smp_mb__after_atomic();
-	return ret;
-}
-
-void atomic64_set(atomic64_t *v, s64);
-
-s64 atomic64_add_return(s64, atomic64_t *);
-s64 atomic64_sub_return(s64, atomic64_t *);
-void atomic64_add(s64, atomic64_t *);
-void atomic64_sub(s64, atomic64_t *);
-
-s64 atomic64_xchg(atomic64_t *, s64);
-s64 atomic64_cmpxchg(atomic64_t *, s64, s64);
-bool atomic64_try_cmpxchg(atomic64_t *, s64 *, s64);
-
-#define atomic64_add_negative(a, v)	(atomic64_add_return((a), (v)) < 0)
-#define atomic64_inc(v)			atomic64_add(1LL, (v))
-#define atomic64_inc_return(v)		atomic64_add_return(1LL, (v))
-#define atomic64_inc_and_test(v)	(atomic64_inc_return(v) == 0)
-#define atomic64_sub_and_test(a, v)	(atomic64_sub_return((a), (v)) == 0)
-#define atomic64_dec(v)			atomic64_sub(1LL, (v))
-#define atomic64_dec_return(v)		atomic64_sub_return(1LL, (v))
-#define atomic64_dec_and_test(v)	(atomic64_dec_return((v)) == 0)
-#define atomic64_inc_not_zero(v)	atomic64_add_unless((v), 1LL, 0LL)
-
-static inline s64 atomic64_add_return_release(s64 i, atomic64_t *v)
-{
-	smp_mb__before_atomic();
-	return atomic64_add_return(i, v);
-}
-
-static inline s64 atomic64_cmpxchg_acquire(atomic64_t *v, s64 old, s64 new)
-{
-	return atomic64_cmpxchg(v, old, new);
-}
-
-static inline s64 atomic64_sub_return_release(s64 i, atomic64_t *v)
-{
-       smp_mb__before_atomic();
-       return atomic64_sub_return(i, v);
-}
-
-#endif
 
 #endif /* __TOOLS_LINUX_ATOMIC_H */
