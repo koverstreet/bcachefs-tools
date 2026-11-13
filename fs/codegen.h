@@ -26,6 +26,7 @@
 #include <linux/notifier.h>
 #include <linux/numa.h>
 #include <linux/pagemap.h>
+#include <linux/perf_event.h>
 /* struct folio_batch: pagevec.h's, before 7.1 */
 #if __has_include(<linux/folio_batch.h>)
 #include <linux/folio_batch.h>
@@ -253,6 +254,42 @@ static inline void *rust_vmap(struct page **pages, unsigned int count)
 {
 	return vmap(pages, count, VM_MAP, PAGE_KERNEL);
 }
+
+/* macros: what debug/trace.rs's tracepoints and their probes run under */
+static inline void rust_preempt_disable_notrace(void)
+{
+	preempt_disable_notrace();
+}
+
+static inline void rust_preempt_enable_notrace(void)
+{
+	preempt_enable_notrace();
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7,0,0)
+/*
+ * a tracepoint's read side from 7.0: srcu_read_lock_fast_notrace()'s __percpu
+ * pointer, which bindgen's wrapper would declare without its address space, as
+ * a cookie
+ */
+static inline unsigned long rust_srcu_read_lock_fast_notrace(struct srcu_struct *ssp)
+{
+	return (unsigned long) srcu_read_lock_fast_notrace(ssp);
+}
+
+static inline void rust_srcu_read_unlock_fast_notrace(struct srcu_struct *ssp, unsigned long scp)
+{
+	srcu_read_unlock_fast_notrace(ssp, (struct srcu_ctr __percpu *) scp);
+}
+#endif
+
+#ifdef CONFIG_PERF_EVENTS
+/* perf_arch_fetch_caller_regs(), a macro: where a perf probe's callchain starts */
+static inline void rust_perf_fetch_caller_regs(struct pt_regs *regs)
+{
+	perf_fetch_caller_regs(regs);
+}
+#endif
 
 /* dereference_key_locked() is a macro: a user key's payload, its sem held */
 static inline const void *rust_user_key_data(struct key *key, unsigned short *len)

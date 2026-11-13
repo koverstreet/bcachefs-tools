@@ -60,6 +60,8 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/kthread.h",			// kthread_use_mm(): an async DIO write's continuation
     "linux/swap.h",			// mm_account_reclaimed_pages(): btree/cache.rs's node buffers
     "linux/vmalloc.h",			// __vmalloc_noprof(): the same
+    "linux/trace_events.h",		// struct trace_event_call and the rest: debug/trace.rs's
+					// tracepoints' events, and what their probes call
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -143,6 +145,10 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/workqueue.h",		// queue_work(), queue_delayed_work()
     "linux/cpumask.h",			// cpumask_local_spread()
     "linux/numa.h",			// NUMA_NO_NODE
+    "linux/trace_events.h",
+    "linux/trace_seq.h",		// trace_events.h's struct trace_iterator holds them
+    "linux/seq_buf.h",
+    "linux/ring_buffer.h",		// and its structs point to these
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -252,6 +258,14 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "clear_inode",
     // vfs/buffered_write.rs: a static inline
     "fgf_set_order",
+    // debug/trace.rs's tracepoints: exports, static inlines, and codegen.h's -
+    // srcu's from 7.0
+    "trace_event_reg", "trace_event_raw_init", "trace_trigger_soft_disabled",
+    "trace_event_buffer_reserve", "trace_event_buffer_commit",
+    "trace_raw_output_prep", "trace_event_printf", "trace_handle_return",
+    "perf_trace_buf_alloc", "perf_trace_run_bpf_submit", "bpf_prog_array_valid", "bpf_trace_run2",
+    "rust_srcu_read_lock_fast_notrace", "rust_srcu_read_unlock_fast_notrace",
+    "rust_preempt_disable_notrace", "rust_preempt_enable_notrace", "rust_perf_fetch_caller_regs",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
                                   "__genradix", "genradix_iter",
@@ -259,7 +273,10 @@ const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state"
                                   "xxh64_state", "chacha_state", "poly1305_desc_ctx",
                                   // the kernel crate's fs_context and fs_parameter are opaque
                                   "fs_context", "fs_parameter", "fs_context_operations",
-                                  "readahead_control", "folio_batch"];
+                                  "readahead_control", "folio_batch",
+                                  // debug/trace.rs's statics
+                                  "trace_event_call", "trace_event_class", "trace_event_fields",
+                                  "trace_event_functions", "trace_entry", "trace_event_buffer"];
 /// Structs in an unblocklisted header - defined there, or only declared, as
 /// uidgid.h declares user_namespace - that kernel::bindings binds: a second
 /// copy would be a different type - and bindgen, stopped at one, doesn't
@@ -276,7 +293,7 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*", "key_type_user", "NUMA_NO_NODE",
-                                 "PERCPU_REF_INIT_DEAD",
+                                 "PERCPU_REF_INIT_DEAD", "TRACE_EVENT_FL_TRACEPOINT", "FILTER_OTHER",
                                  // before 7.1/7.2, as above
                                  "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS",
                                  "LZ4HC_MEM_COMPRESS", "LZ4HC_MIN_CLEVEL",
