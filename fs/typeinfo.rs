@@ -52,8 +52,9 @@ pub enum Shape {
     Struct,
     Union,
     Enum,
-    /// A #[bitfield]: a word, its fields its members' bits of it.
-    Bitfield,
+    /// A #[bitfield]: a word, in that byte order, its fields its members'
+    /// bits of it.
+    Bitfield(Endian),
 }
 
 pub struct StructInfo {
@@ -330,7 +331,7 @@ pub fn resolve_with_bits<'p>(
     // bare bit name: "no_keys"
     if !path.contains('.') {
         let member = info.fields.iter().find_map(|f| match &f.kind {
-            FieldKind::Struct(w) if w.shape == Shape::Bitfield =>
+            FieldKind::Struct(w) if matches!(w.shape, Shape::Bitfield(_)) =>
                 w.fields.iter().find(|m| m.name == path).map(|m| (f.offset, m)),
             _ => None,
         });
@@ -394,13 +395,26 @@ fn is_le(endian: Endian) -> bool {
     }
 }
 
+/// A #[bitfield]'s word, as a field: its width and byte order - read and
+/// written whole as the integer it is, as its members are bits of it.
+fn bitfield_word(kind: &FieldKind) -> Option<(u8, Endian)> {
+    match kind {
+        FieldKind::Struct(StructInfo { shape: Shape::Bitfield(endian), size, .. }) if *size <= 8 =>
+            Some((*size as u8, *endian)),
+        _ => None,
+    }
+}
+
 /// Read a scalar field's raw bits (not sign-extended; see [`sign_extend`]).
 pub fn read_scalar(buf: &[u8], r: &FieldRef) -> Result<u64, AccessError> {
     match *r.kind {
         FieldKind::Int { bytes, endian, .. } => read_word(buf, r.offset, bytes, endian),
         FieldKind::Bits { bytes, endian, lo, hi } =>
             Ok((read_word(buf, r.offset, bytes, endian)? >> lo) & bits_mask(lo, hi)),
-        _ => Err(AccessError::NotScalar),
+        ref k => match bitfield_word(k) {
+            Some((bytes, endian)) => read_word(buf, r.offset, bytes, endian),
+            None => Err(AccessError::NotScalar),
+        },
     }
 }
 
@@ -452,18 +466,8 @@ pub fn sign_extend(v: u64, bytes: u8) -> i64 {
 /// Write a scalar field. `v` holds the raw bits: for a signed field, pass the
 /// two's-complement value (`-5i64 as u64`).
 pub fn write_scalar(buf: &mut [u8], r: &FieldRef, v: u64) -> Result<(), AccessError> {
-    match *r.kind {
-        FieldKind::Int { bytes, endian, signed } => {
-            let fits = if signed {
-                sign_extend(v, bytes) as u64 == v
-            } else {
-                bytes == 8 || v >> (8 * bytes) == 0
-            };
-            if !fits {
-                return Err(AccessError::Overflow { bytes, val: v });
-            }
-            write_word(buf, r.offset, bytes, endian, v)
-        }
+    let (bytes, endian, signed) = match *r.kind {
+        FieldKind::Int { bytes, endian, signed } => (bytes, endian, signed),
         // as write_bits(): read-modify-write of the word, an oversized value
         // an error
         FieldKind::Bits { bytes, endian, lo, hi } => {
@@ -472,10 +476,22 @@ pub fn write_scalar(buf: &mut [u8], r: &FieldRef, v: u64) -> Result<(), AccessEr
                 return Err(AccessError::BitsOverflow { bits: hi - lo, val: v });
             }
             let old = read_word(buf, r.offset, bytes, endian)?;
-            write_word(buf, r.offset, bytes, endian, old & !(mask << lo) | (v << lo))
+            return write_word(buf, r.offset, bytes, endian, old & !(mask << lo) | (v << lo));
         }
-        _ => Err(AccessError::NotScalar),
+        ref k => match bitfield_word(k) {
+            Some((bytes, endian)) => (bytes, endian, false),
+            None => return Err(AccessError::NotScalar),
+        },
+    };
+    let fits = if signed {
+        sign_extend(v, bytes) as u64 == v
+    } else {
+        bytes == 8 || v >> (8 * bytes) == 0
+    };
+    if !fits {
+        return Err(AccessError::Overflow { bytes, val: v });
     }
+    write_word(buf, r.offset, bytes, endian, v)
 }
 
 /// Read a declared bit range of a scalar field.
@@ -623,7 +639,7 @@ fn fields_to_text(
                 bits_to_text(out, info, f.name, None, buf, offset, &f.kind)?;
                 writeln!(out)?;
             }
-            FieldKind::Struct(w) if w.shape == Shape::Bitfield => {
+            FieldKind::Struct(w) if matches!(w.shape, Shape::Bitfield(_)) => {
                 bitfield_to_text(out, w, buf, offset)?;
                 writeln!(out)?;
             }
@@ -875,6 +891,24 @@ mod tests {
         let mut s = String::new();
         struct_to_text(&mut s, info, &buf).unwrap();
         assert!(s.contains("flags: 10 (subvol_obsolete|no_keys_obsolete)"), "{s}");
+    }
+
+    /// A #[bitfield]'s word reads and writes whole, as the integer it is, its
+    /// members bits of it - as tests set an inode's bi_flags, a number.
+    #[test]
+    fn bitfield_word() {
+        let info = <c::bch_sb__head as TypeInfo>::INFO;
+        let mut buf = [0u8; core::mem::size_of::<c::bch_sb__head>()];
+        let field = |path| resolve_with_bits(info, path).unwrap().0;
+        let (word, clean, csum_type) = (field("flags0"), field("clean"), field("csum_type"));
+
+        write_scalar(&mut buf, &word, 1 << 1 | 3 << 2).unwrap();
+        assert_eq!(read_scalar(&buf, &clean).unwrap(), 1);
+        assert_eq!(read_scalar(&buf, &csum_type).unwrap(), 3);
+
+        write_scalar(&mut buf, &csum_type, 2).unwrap();
+        assert_eq!(read_scalar(&buf, &word).unwrap(), 1 << 1 | 2 << 2);
+        assert_eq!(&buf[word.offset..word.offset + 8], &(1u64 << 1 | 2 << 2).to_le_bytes());
     }
 
     #[test]

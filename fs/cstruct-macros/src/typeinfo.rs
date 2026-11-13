@@ -34,8 +34,8 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
     let inst = &def.ident;
 
     let shape = match def.kind {
-        StructKind::Struct => "Struct",
-        StructKind::Union  => "Union",
+        StructKind::Struct => quote!(Struct),
+        StructKind::Union  => quote!(Union),
     };
 
     let mut fields = Vec::new();
@@ -68,10 +68,10 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
     Ok(info(inst, def.name(), shape, &fields))
 }
 
-/// The TypeInfo impl for @ty, named @name: @fields its FieldInfo entries -
-/// none for a type described by its size alone.
-pub(crate) fn info(ty: &Ident, name: &Ident, shape: &str, fields: &[TokenStream]) -> TokenStream {
-    let (name, shape) = (name.to_string(), format_ident!("{shape}"));
+/// The TypeInfo impl for @ty, named @name, its Shape @shape: @fields its
+/// FieldInfo entries - none for a type described by its size alone.
+pub(crate) fn info(ty: &Ident, name: &Ident, shape: TokenStream, fields: &[TokenStream]) -> TokenStream {
+    let name = name.to_string();
     quote! {
         #[automatically_derived]
         impl crate::typeinfo::TypeInfo for #ty {

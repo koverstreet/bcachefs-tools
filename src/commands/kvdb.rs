@@ -366,6 +366,8 @@ fn render_fields(val: &[u8], info: &'static StructInfo, paths: &[&str]) -> Resul
             },
             None => match r.kind {
                 FieldKind::Int { .. } | FieldKind::Bits { .. } => read_int(path, &r)?,
+                // a #[bitfield]'s word, whole
+                FieldKind::Struct(w) if matches!(w.shape, typeinfo::Shape::Bitfield(_)) => read_int(path, &r)?,
                 FieldKind::Array { elem, n, stride }
                         if matches!(elem, FieldKind::Int { .. }) => {
                     (0..*n)

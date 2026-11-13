@@ -565,7 +565,8 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         }
         lo = hi;
     }
-    let (info, plain) = (typeinfo::info(name, name, "Bitfield", &member_info), vstructs::plain(name, &[held]));
+    let shape = quote!(Bitfield(crate::typeinfo::Endian::#endian));
+    let (info, plain) = (typeinfo::info(name, name, shape, &member_info), vstructs::plain(name, &[held]));
     // The struct as tokens, not text: an error in a member points at it
     Ok(quote! {
         #out
@@ -1183,7 +1184,7 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
     }
 
     out.extend(names_gen(e, name));
-    out.extend(typeinfo::info(name, name, "Enum", &[]));
+    out.extend(typeinfo::info(name, name, quote!(Enum), &[]));
 
     // Zeroed is a value of it - so a struct holding one can be Zeroable:
     // any integer is an open enum's or flags', a closed enum's only if a
