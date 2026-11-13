@@ -44,7 +44,7 @@ use syn::punctuated::Punctuated;
 use syn::{bracketed, token, Error, Field, Fields, FnArg, Ident, ItemStruct, Lifetime, LitStr, Pat, PatType, Path,
           Token, Type};
 
-use crate::cstruct::CFieldDef;
+use crate::cstruct::FieldDef;
 
 /// Where #[placed] says a type lives: at Base.field; as an element of the
 /// array there, holding its index as @0, of integer type @1; or as an
@@ -281,7 +281,7 @@ const INNER_AT_FIELD: &str = "_placed_in_";
 
 /// Whether @f is an At of no bytes - not an element's index - which
 /// TypeInfo doesn't describe.
-pub(crate) fn is_empty_at_field(f: &CFieldDef) -> bool {
+pub(crate) fn is_empty_at_field(f: &FieldDef) -> bool {
     f.placed_at && (f.ident == AT_FIELD || f.ident.to_string().starts_with(INNER_AT_FIELD))
 }
 

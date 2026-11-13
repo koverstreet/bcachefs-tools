@@ -17,7 +17,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::cstruct::{field_type, flex_elem, parse_cstruct, CKind, FieldType, IntType};
+use crate::cstruct::{field_type, flex_elem, parse_cstruct, StructKind, FieldType, IntType};
 
 /// The type names a field kind may reference as `<T as TypeInfo>::INFO`:
 /// each must have TypeInfo itself, by the name the field's type is written
@@ -34,12 +34,12 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
     let inst = &def.ident;
 
     let shape = match def.kind {
-        CKind::Struct => "Struct",
-        CKind::Union  => "Union",
+        StructKind::Struct => "Struct",
+        StructKind::Union  => "Union",
     };
 
     let mut fields = Vec::new();
-    if def.kind == CKind::Struct {
+    if def.kind == StructKind::Struct {
         // a place's At is zero bytes of nothing: not described
         let described: Vec<_> = def.fields.iter().filter(|f| !crate::place::is_empty_at_field(f)).collect();
         let last = described.len().saturating_sub(1);

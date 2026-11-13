@@ -158,7 +158,7 @@ use quote::{format_ident, quote};
 use syn::parse::ParseStream;
 use syn::{parse_quote, Token};
 
-use crate::cstruct::{CEnumDef, CEnumKind};
+use crate::cstruct::{EnumDef, EnumKind};
 use crate::enum_decl::{self, arm_path};
 
 /// A tagged_union!'s declaration, as generate() takes it.
@@ -302,7 +302,7 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
     let err = |m: &str| format!("tagged_union! {name}: {m}");
 
     let mut tag: Option<(Ident, Option<syn::Type>)> = None;
-    let mut tag_enum: Option<CEnumDef> = None;
+    let mut tag_enum: Option<EnumDef> = None;
     let (mut storage, mut pad, mut size, mut packed, mut plain) = (None, None, None, false, false);
     for a in &ours {
         let kind = a.path().get_ident().map(ToString::to_string).unwrap_or_default();
@@ -346,8 +346,8 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
     }
     out.extend(enum_decl::entries(&name, &arms));
 
-    let closed = |e: &CEnumDef| e.kind == CEnumKind::Closed;
-    let c_path = |e: &CEnumDef| -> syn::Type {
+    let closed = |e: &EnumDef| e.kind == EnumKind::Closed;
+    let c_path = |e: &EnumDef| -> syn::Type {
         let n = &e.name;
         parse_quote!(c::#n)
     };

@@ -24,13 +24,13 @@
 //   _IOC constants (fs/util/ioctl.rs).
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum CKind {
+pub(crate) enum StructKind {
     Struct,
     Union,
 }
 
 /// A derive's struct or union: its name and fields, in order.
-pub(crate) struct CStructDef {
+pub(crate) struct StructDef {
     /// The item's name.
     pub(crate) ident:     syn::Ident,
     /// #[type_name(NAME)]: the type's name, where the item's differs - a
@@ -39,18 +39,18 @@ pub(crate) struct CStructDef {
     pub(crate) type_name: Option<syn::Ident>,
     pub(crate) attrs:     Vec<syn::Attribute>,
     pub(crate) generics:  syn::Generics,
-    pub(crate) kind:      CKind,
-    pub(crate) fields:    Vec<CFieldDef>,
+    pub(crate) kind:      StructKind,
+    pub(crate) fields:    Vec<FieldDef>,
 }
 
-impl CStructDef {
+impl StructDef {
     /// The type's name: #[type_name]'s, or the item's.
     pub(crate) fn name(&self) -> &syn::Ident {
         self.type_name.as_ref().unwrap_or(&self.ident)
     }
 }
 
-pub(crate) struct CFieldDef {
+pub(crate) struct FieldDef {
     pub(crate) ident:    syn::Ident,
     pub(crate) ty:       syn::Type,
     pub(crate) vis:      syn::Visibility,
@@ -67,23 +67,23 @@ pub(crate) struct CFieldDef {
 
 /// An x-macro list.
 #[derive(Debug)]
-pub(crate) struct CXMacro {
+pub(crate) struct XMacro {
     pub(crate) name:     syn::Ident,
-    pub(crate) entries:  Vec<CXEntry>,
+    pub(crate) entries:  Vec<XEntry>,
 }
 
 /// An entry of an x-macro list.
 #[derive(Debug)]
-pub(crate) enum CXEntry {
+pub(crate) enum XEntry {
     /// (args)
     Args(proc_macro2::Group),
     /// SUB() - another list's entries, here - or SUB((params) => (template)):
     /// SUB's entries, each mapped to the template.
-    Sub { list: syn::Ident, map: Option<CXMap> },
+    Sub { list: syn::Ident, map: Option<XMap> },
 }
 
 #[derive(Debug)]
-pub(crate) struct CXMap {
+pub(crate) struct XMap {
     pub(crate) params:   Vec<syn::Ident>,
     /// An entry's arguments, mapped: params, and concat(A, b) pastes.
     pub(crate) template: proc_macro2::TokenStream,
@@ -92,7 +92,7 @@ pub(crate) struct CXMap {
 /// Bitfields in one flags word: @macro_name is LE64_BITMASK, LE32_BITMASK,
 /// LE16_BITMASK or BITMASK; @field[@index] the flags word.
 #[derive(Debug)]
-pub(crate) struct CBitmask {
+pub(crate) struct Bitmask {
     pub(crate) macro_name: syn::Ident,
     /// The struct's name: foo, of `struct foo`, `struct Head<foo>` or
     /// `struct foo<STATE>`.
@@ -104,17 +104,17 @@ pub(crate) struct CBitmask {
     pub(crate) field:      syn::Ident,
     pub(crate) index:      Option<syn::LitInt>,
     pub(crate) strip:      Option<String>,
-    pub(crate) entries:    Vec<CBitmaskEntry>,
+    pub(crate) entries:    Vec<BitmaskEntry>,
 }
 
 #[derive(Debug)]
-pub(crate) struct CBitmaskEntry {
+pub(crate) struct BitmaskEntry {
     pub(crate) name:  syn::Ident,
     pub(crate) start: syn::Expr,
     pub(crate) end:   syn::Expr,
 }
 
-impl CBitmask {
+impl Bitmask {
     /// The Rust accessor for @name: PREFIX_ stripped, lowercased - and with a
     /// leading _ if that starts with a digit: BCH_SB_128_BIT_MACS.
     pub(crate) fn method(&self, name: &syn::Ident) -> String {
@@ -131,15 +131,15 @@ impl CBitmask {
 
 /// ioctl!: ioctl numbers, C's #define NAME _IOW(type, nr, arg).
 #[derive(Debug)]
-pub(crate) struct CIoctl {
-    pub(crate) entries: Vec<CIoctlEntry>,
+pub(crate) struct IoctlList {
+    pub(crate) entries: Vec<IoctlEntry>,
 }
 
 /// One ioctl: @dir is its _IO*() macro - _IO, _IOR, _IOW or _IOWR - and
 /// @ty and @nr its type and number. @arg is the argument's Rust type, None
 /// for _IO.
 #[derive(Debug)]
-pub(crate) struct CIoctlEntry {
+pub(crate) struct IoctlEntry {
     pub(crate) name:  syn::Ident,
     pub(crate) dir:   syn::Ident,
     pub(crate) ty:    syn::Expr,
@@ -149,7 +149,7 @@ pub(crate) struct CIoctlEntry {
 
 /// What an enum's values can be.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum CEnumKind {
+pub(crate) enum EnumKind {
     /// Only ever those listed: a Rust enum.
     Closed,
     /// Anything, from outside: a newtype with the values as constants.
@@ -158,13 +158,13 @@ pub(crate) enum CEnumKind {
     Flags,
 }
 
-impl CEnumKind {
+impl EnumKind {
     /// The attribute that says it: #[closed], #[open], #[flags].
     pub(crate) fn attr(self) -> &'static str {
         match self {
-            CEnumKind::Closed => "closed",
-            CEnumKind::Open   => "open",
-            CEnumKind::Flags  => "flags",
+            EnumKind::Closed => "closed",
+            EnumKind::Open   => "open",
+            EnumKind::Flags  => "flags",
         }
     }
 }
@@ -173,7 +173,7 @@ impl CEnumKind {
 /// arguments are bound to the params - `..` the rest - and `concat(A, b)` in the
 /// template is pasted into one identifier.
 #[derive(Debug, Clone)]
-pub(crate) struct CFromList {
+pub(crate) struct FromList {
     pub(crate) list:     syn::Ident,
     pub(crate) params:   Vec<syn::Ident>,
     pub(crate) template: proc_macro2::TokenStream,
@@ -181,18 +181,18 @@ pub(crate) struct CFromList {
 
 /// An enum, and what its values can be.
 #[derive(Debug, Clone)]
-pub(crate) struct CEnumDef {
-    pub(crate) kind:     CEnumKind,
+pub(crate) struct EnumDef {
+    pub(crate) kind:     EnumKind,
     pub(crate) name:     syn::Ident,
     /// Its doc comment.
     pub(crate) docs:     Vec<String>,
     /// The integer type: u32, i32, u64.
     pub(crate) repr:     syn::Ident,
-    pub(crate) variants: Vec<CEnumVariant>,
+    pub(crate) variants: Vec<EnumVariant>,
     /// `LIST(params) => VARIANT [= value]`: variants from lists, each in
     /// place before the written one at its index - expand_enum_list() makes
     /// them, a list at a time.
-    pub(crate) from:     Vec<(usize, CFromList)>,
+    pub(crate) from:     Vec<(usize, FromList)>,
     /// #[own_to_text]: it prints as more than its name - an open or flags
     /// enum #[bch_enum] otherwise gives ToText.
     pub(crate) own_to_text: bool,
@@ -203,12 +203,12 @@ pub(crate) struct CEnumDef {
     pub(crate) nr:       bool,
 }
 
-impl CEnumDef {
+impl EnumDef {
     /// What @v prints as: its #[label], or its name - past its #[prefix], if
     /// it has one. Not a flag's, whose names would be its bits'.
-    pub(crate) fn label(&self, v: &CEnumVariant) -> Option<String> {
+    pub(crate) fn label(&self, v: &EnumVariant) -> Option<String> {
         v.label.clone().or_else(|| {
-            (self.kind != CEnumKind::Flags).then_some(())?;
+            (self.kind != EnumKind::Flags).then_some(())?;
             let (p, name) = (self.prefix.as_deref().unwrap_or_default(), v.name.to_string());
             Some(name.strip_prefix(p).unwrap_or(&name).to_string())
         })
@@ -221,7 +221,7 @@ impl CEnumDef {
 /// template pastes into the name - `stripe`, of `concat(BCH_WATERMARK_, name)` - as
 /// C's string tables have it; none, its name.
 #[derive(Debug, Clone)]
-pub(crate) struct CEnumVariant {
+pub(crate) struct EnumVariant {
     pub(crate) name:   syn::Ident,
     pub(crate) value:  Option<syn::Expr>,
     pub(crate) label:  Option<String>,
@@ -250,14 +250,14 @@ pub(crate) fn rust_ident(name: &str) -> String {
 // ---- structs ---------------------------------------------------------------
 
 /// The struct or union @d; None if it's an enum.
-fn parse_struct(d: syn::DeriveInput) -> Result<Option<CStructDef>, String> {
+fn parse_struct(d: syn::DeriveInput) -> Result<Option<StructDef>, String> {
     let name = &d.ident;
     let (kind, fields) = match d.data {
-        syn::Data::Struct(s) => (CKind::Struct, match s.fields {
+        syn::Data::Struct(s) => (StructKind::Struct, match s.fields {
             syn::Fields::Named(f) => Some(f.named),
             _ => None,
         }),
-        syn::Data::Union(u) => (CKind::Union, Some(u.fields.named)),
+        syn::Data::Union(u) => (StructKind::Union, Some(u.fields.named)),
         syn::Data::Enum(_) => return Ok(None),
     };
     let fields_of = fields
@@ -277,7 +277,7 @@ fn parse_struct(d: syn::DeriveInput) -> Result<Option<CStructDef>, String> {
         }
         let (bitfield, placed_at) = (bare("members"), bare("placed_at"));
         let ident = f.ident.expect("named fields");
-        fields.push(CFieldDef { ident, ty: f.ty, vis: f.vis, bitfield, counted_by, placed_at });
+        fields.push(FieldDef { ident, ty: f.ty, vis: f.vis, bitfield, counted_by, placed_at });
     }
 
     // #[type_name], or what it expands to - a family's macro sees it
@@ -285,7 +285,7 @@ fn parse_struct(d: syn::DeriveInput) -> Result<Option<CStructDef>, String> {
     let type_name = d.attrs.iter()
         .filter(|a| a.path().is_ident("type_name") || a.path().is_ident("type_name_of"))
         .find_map(|a| a.parse_args::<syn::Ident>().ok());
-    Ok(Some(CStructDef { ident: d.ident, type_name, attrs: d.attrs, generics: d.generics, kind, fields }))
+    Ok(Some(StructDef { ident: d.ident, type_name, attrs: d.attrs, generics: d.generics, kind, fields }))
 }
 
 /// The width of integer type @ty, in bits.
@@ -302,7 +302,7 @@ pub(crate) fn int_bits(ty: &str) -> Option<u32> {
 // ---- xmacro!, c_bitmask!, ioctl! ---------------------------------------
 
 /// xmacro!'s body: NAME { (args), ... }
-pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<CXMacro, String> {
+pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<XMacro, String> {
     use proc_macro2::{Delimiter, TokenTree};
     syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         input.call(syn::Attribute::parse_outer)?;
@@ -313,7 +313,7 @@ pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<CXMacro, S
         let mut entries = Vec::new();
         while !list.is_empty() {
             entries.push(match list.parse::<TokenTree>()? {
-                TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => CXEntry::Args(g),
+                TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => XEntry::Args(g),
                 // SUB(), or SUB((params) => (template))
                 TokenTree::Ident(sub) => {
                     let inner;
@@ -328,10 +328,10 @@ pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<CXMacro, S
                             inner.parse::<syn::Token![=>]>()?;
                             let template;
                             syn::parenthesized!(template in inner);
-                            Some(CXMap { params, template: template.parse()? })
+                            Some(XMap { params, template: template.parse()? })
                         }
                     };
-                    CXEntry::Sub { list: sub, map }
+                    XEntry::Sub { list: sub, map }
                 }
                 t => return Err(syn::Error::new(t.span(), "expected (args) or SUB(..)")),
             });
@@ -339,7 +339,7 @@ pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<CXMacro, S
                 list.parse::<syn::Token![,]>()?;
             }
         }
-        Ok(CXMacro { name, entries })
+        Ok(XMacro { name, entries })
     }, input).map_err(|e| format!("an entry is (args), SUB(), or SUB((params) => (args)) - {e}"))
 }
 
@@ -359,7 +359,7 @@ pub(crate) fn split_commas(ts: proc_macro2::TokenStream) -> Vec<proc_macro2::Tok
 }
 
 /// c_bitmask!'s body: LE64_BITMASK(struct foo, field), strip PREFIX_ { NAME(start, end), ... }
-pub(crate) fn parse_bitmask(input: proc_macro2::TokenStream) -> Result<CBitmask, String> {
+pub(crate) fn parse_bitmask(input: proc_macro2::TokenStream) -> Result<Bitmask, String> {
     syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         input.call(syn::Attribute::parse_outer)?;
         let macro_name: syn::Ident = input.parse()?;
@@ -433,16 +433,16 @@ pub(crate) fn parse_bitmask(input: proc_macro2::TokenStream) -> Result<CBitmask,
             let range = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated(&range)?;
             let [start, end] = range.into_iter().collect::<Vec<_>>().try_into().map_err(|_|
                 syn::Error::new(name.span(), format!("{name}: expected NAME(start, end)")))?;
-            entries.push(CBitmaskEntry { name, start, end });
+            entries.push(BitmaskEntry { name, start, end });
             list.parse::<Option<syn::Token![,]>>()?;
         }
 
-        Ok(CBitmask { macro_name, name, head, state, field, index, strip, entries })
+        Ok(Bitmask { macro_name, name, head, state, field, index, strip, entries })
     }, input).map_err(|e| e.to_string())
 }
 
 /// ioctl!'s body: NAME = _IOW(type, nr, ARG), ... - _IO without the ARG.
-pub(crate) fn parse_ioctl(input: proc_macro2::TokenStream) -> Result<CIoctl, String> {
+pub(crate) fn parse_ioctl(input: proc_macro2::TokenStream) -> Result<IoctlList, String> {
     let entries = syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         let mut entries = Vec::new();
         while !input.is_empty() {
@@ -462,7 +462,7 @@ pub(crate) fn parse_ioctl(input: proc_macro2::TokenStream) -> Result<CIoctl, Str
                 ("_IOR" | "_IOW" | "_IOWR", _) => return Err(err(format!("expected {dir}(type, nr, ARG)"))),
                 _ => return Err(err(format!("{dir} isn't _IO, _IOR, _IOW or _IOWR"))),
             };
-            entries.push(CIoctlEntry { name, dir, ty, nr, arg });
+            entries.push(IoctlEntry { name, dir, ty, nr, arg });
             input.parse::<Option<syn::Token![,]>>()?;
         }
         Ok(entries)
@@ -470,23 +470,23 @@ pub(crate) fn parse_ioctl(input: proc_macro2::TokenStream) -> Result<CIoctl, Str
     if entries.is_empty() {
         return Err("expected NAME = _IOW(type, nr, ARG), ...".into());
     }
-    Ok(CIoctl { entries })
+    Ok(IoctlList { entries })
 }
 
 /// An enum's head, `#[open|closed|flags] pub enum NAME: REPR`, with no
 /// variants yet; the attributes that aren't
 /// its, and its body.
 pub(crate) fn parse_enum_head(input: syn::parse::ParseStream<'_>)
-        -> syn::Result<(CEnumDef, Vec<syn::Attribute>, proc_macro2::TokenStream)> {
+        -> syn::Result<(EnumDef, Vec<syn::Attribute>, proc_macro2::TokenStream)> {
     let mut kind = None;
     let (mut own_to_text, mut prefix, mut nr) = (false, None, false);
     let mut others = Vec::new();
     for a in input.call(syn::Attribute::parse_outer)? {
         let id = |a: &syn::Attribute| a.parse_args::<syn::Ident>().map(|n| ident(&n));
         match a.path().get_ident().map(|i| i.to_string()).as_deref() {
-            Some("open")        => kind = Some(CEnumKind::Open),
-            Some("closed")      => kind = Some(CEnumKind::Closed),
-            Some("flags")       => kind = Some(CEnumKind::Flags),
+            Some("open")        => kind = Some(EnumKind::Open),
+            Some("closed")      => kind = Some(EnumKind::Closed),
+            Some("flags")       => kind = Some(EnumKind::Flags),
             Some("own_to_text") => own_to_text = true,
             Some("prefix")      => prefix = Some(id(&a)?),
             Some("nr")          => nr = true,
@@ -504,7 +504,7 @@ pub(crate) fn parse_enum_head(input: syn::parse::ParseStream<'_>)
     }
     let body;
     syn::braced!(body in input);
-    let def = CEnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
+    let def = EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
                          own_to_text, prefix, nr };
     Ok((def, others, body.parse()?))
 }
@@ -520,9 +520,9 @@ pub(crate) fn doc_of(a: &syn::Attribute) -> Option<String> {
 }
 
 /// An enum's variant, `[#[..]] NAME[(Type)] [= value]`: its doc and #[label]
-/// read into its CEnumVariant; its other attributes, and its type.
+/// read into its EnumVariant; its other attributes, and its type.
 pub(crate) fn parse_variant(v: proc_macro2::TokenStream)
-        -> syn::Result<(CEnumVariant, Vec<syn::Attribute>, Option<syn::Type>)> {
+        -> syn::Result<(EnumVariant, Vec<syn::Attribute>, Option<syn::Type>)> {
     let v: syn::Variant = syn::parse2(v)?;
     let (mut label, mut docs, mut others) = (None, Vec::new(), Vec::new());
     for a in v.attrs {
@@ -538,12 +538,12 @@ pub(crate) fn parse_variant(v: proc_macro2::TokenStream)
         f => return Err(syn::Error::new_spanned(f, format!("{}: a variant's payload is a type, (Type)", v.ident))),
     };
     let value = v.discriminant.map(|(_, x)| x);
-    Ok((CEnumVariant { name: v.ident, value, label, docs }, others, ty))
+    Ok((EnumVariant { name: v.ident, value, label, docs }, others, ty))
 }
 
 /// list_enum!'s body: its head, then { A = expr, B, ... },
 /// or `LIST(params) => template` for each of a list's entries.
-pub(crate) fn parse_list_enum(input: proc_macro2::TokenStream) -> Result<CEnumDef, String> {
+pub(crate) fn parse_list_enum(input: proc_macro2::TokenStream) -> Result<EnumDef, String> {
     syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         let (mut e, _, body) = parse_enum_head(input)?;
         for v in split_commas(body) {
@@ -563,7 +563,7 @@ fn ident(i: &syn::Ident) -> String {
 
 /// `LIST(params) => template` at @item - a list_enum! variant - if it is one:
 /// params, each bound to an entry's argument in turn, ending at `..`.
-fn parse_from_list(item: &proc_macro2::TokenStream) -> syn::Result<Option<CFromList>> {
+fn parse_from_list(item: &proc_macro2::TokenStream) -> syn::Result<Option<FromList>> {
     use proc_macro2::{Delimiter, TokenTree};
     let t: Vec<TokenTree> = item.clone().into_iter().collect();
     let [TokenTree::Ident(list), TokenTree::Group(group), TokenTree::Punct(eq), TokenTree::Punct(gt), template @ ..]
@@ -579,12 +579,12 @@ fn parse_from_list(item: &proc_macro2::TokenStream) -> syn::Result<Option<CFromL
             _ => return Err(syn::Error::new(group.span(), format!("{list}(params): each a name, or .. for the rest"))),
         }
     }
-    Ok(Some(CFromList { list: list.clone(), params, template: template.iter().cloned().collect() }))
+    Ok(Some(FromList { list: list.clone(), params, template: template.iter().cloned().collect() }))
 }
 
 /// What @f's template makes of one entry of its list, @entry: its parameters
 /// substituted, then its camel(n)s and concat(A, b, ..)s pasted.
-fn from_list_entry(f: &CFromList, entry: &proc_macro2::TokenStream) -> Result<Vec<proc_macro2::TokenTree>, String> {
+fn from_list_entry(f: &FromList, entry: &proc_macro2::TokenStream) -> Result<Vec<proc_macro2::TokenTree>, String> {
     use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
     let list = &f.list;
     let args = split_commas(entry.clone());
@@ -656,7 +656,7 @@ fn from_list_entry(f: &CFromList, entry: &proc_macro2::TokenStream) -> Result<Ve
 /// list_enum! @e's variants from its first list, @entries each one entry's
 /// arguments, in their place: each `NAME [= value]`, a value cast to the
 /// enum's integer type, as a list's can be any integer type.
-pub(crate) fn expand_enum_list(e: &mut CEnumDef, entries: &[proc_macro2::TokenStream]) -> Result<(), String> {
+pub(crate) fn expand_enum_list(e: &mut EnumDef, entries: &[proc_macro2::TokenStream]) -> Result<(), String> {
     use proc_macro2::{Ident, TokenStream, TokenTree};
     if e.from.is_empty() {
         return Ok(());
@@ -700,7 +700,7 @@ pub(crate) fn expand_enum_list(e: &mut CEnumDef, entries: &[proc_macro2::TokenSt
                 [TokenTree::Ident(l)] => Some(ident(l)),
                 _ => None,
             });
-        variants.push(CEnumVariant { name, value, label, docs: Vec::new() });
+        variants.push(EnumVariant { name, value, label, docs: Vec::new() });
     }
     let n = variants.len();
     e.variants.splice(at..at, variants);
@@ -712,7 +712,7 @@ pub(crate) fn expand_enum_list(e: &mut CEnumDef, entries: &[proc_macro2::TokenSt
 
 /// list_enum! @e, for its next list's callback: its variants, and the lists
 /// not yet expanded in their place.
-pub(crate) fn enum_tokens(e: &CEnumDef) -> proc_macro2::TokenStream {
+pub(crate) fn enum_tokens(e: &EnumDef) -> proc_macro2::TokenStream {
     use quote::{format_ident, quote};
     let kind = format_ident!("{}", e.kind.attr());
     let own_to_text = e.own_to_text.then(|| quote!(#[own_to_text]));
@@ -873,7 +873,7 @@ pub(crate) fn generic_arg<'a>(ty: &'a syn::Type, name: &str) -> Option<&'a syn::
 // ---- entry points ----------------------------------------------------------
 
 /// Parse a derive's input: exactly one struct or union.
-pub(crate) fn parse_cstruct(item: &proc_macro2::TokenStream) -> Result<CStructDef, String> {
+pub(crate) fn parse_cstruct(item: &proc_macro2::TokenStream) -> Result<StructDef, String> {
     let expected = "expected a struct or union with named fields";
     let d = syn::parse2::<syn::DeriveInput>(item.clone()).map_err(|e| format!("{expected} - {e}"))?;
     parse_struct(d)?.ok_or_else(|| expected.to_string())

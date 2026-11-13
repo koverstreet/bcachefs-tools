@@ -18,7 +18,7 @@ use syn::parse::ParseStream;
 use syn::punctuated::Punctuated;
 use syn::{parse_quote, Token};
 
-use crate::cstruct::{flex_elem, generic_arg, parse_cstruct, split_commas, CFieldDef, CKind, CStructDef};
+use crate::cstruct::{flex_elem, generic_arg, parse_cstruct, split_commas, FieldDef, StructKind, StructDef};
 
 fn vs() -> TokenStream {
     quote!(crate::util::vstructs)
@@ -30,7 +30,7 @@ fn vs() -> TokenStream {
 /// elements, Plain too, as the attribute checks.
 pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input)?;
-    if def.kind != CKind::Struct {
+    if def.kind != StructKind::Struct {
         return Err(format!("{}: Plain is for structs", def.name()));
     }
     let tys: Vec<&syn::Type> = def.fields.iter().map(|f| &f.ty).collect();
@@ -89,7 +89,7 @@ const VIEW_METHODS: &[&str] = &["new", "get", "set", "whole", "whole_mut", "proj
 /// or a trailing `[T; 0]`: a flexible array is View::as_bytes()'s.
 pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input)?;
-    if def.kind != CKind::Struct {
+    if def.kind != StructKind::Struct {
         return Err(format!("{}: a View is of a struct", def.name()));
     }
     let name = &def.ident;
@@ -198,7 +198,7 @@ fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> 
 /// own count it is, nor one of @private, which the family names: a counted
 /// type's count. Those read through the definition's Deref to its head, and
 /// can't be written: a count changes only through what holds the value.
-fn inline_field(f: &CFieldDef, private: &[Ident]) -> TokenStream {
+fn inline_field(f: &FieldDef, private: &[Ident]) -> TokenStream {
     let public = matches!(f.vis, syn::Visibility::Public(_));
     let elem = match &f.ty {
         syn::Type::Array(a) => &*a.elem,
@@ -210,7 +210,7 @@ fn inline_field(f: &CFieldDef, private: &[Ident]) -> TokenStream {
 }
 
 /// The item's #[repr]s, as written.
-fn repr_attrs(def: &CStructDef) -> TokenStream {
+fn repr_attrs(def: &StructDef) -> TokenStream {
     let repr = def.attrs.iter().filter(|a| a.path().is_ident("repr"));
     quote!(#(#repr)*)
 }
@@ -220,7 +220,7 @@ struct Shape<'a> {
     /// The item's #[repr]s, as written.
     repr:    TokenStream,
     /// C's fields it has inline, at @head's offsets.
-    fields:  &'a [CFieldDef],
+    fields:  &'a [FieldDef],
     /// Those the family makes private: a counted type's count.
     private: Vec<Ident>,
     /// What precedes the tail: C's struct, or a grown type's floor.
@@ -678,7 +678,7 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// Both have a definition of all of it, every field inline: X__whole, if it
 /// grew - its Whole; else X__validated, its every state. Only that one is
 /// handed to C, as_ffi(): it's the one sure to hold all of C's struct.
-fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&Ident, usize)>,
+fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)>,
                 tail: Option<(Ident, syn::Type)>, bkey: bool)
     -> Result<TokenStream, String>
 {
@@ -901,7 +901,7 @@ fn sized_generic<'a>(inplace: &'a Ident, whole: &'a Ident, derives: &'a [Ident],
 }
 
 /// The traits @def derives.
-fn derive_names(def: &CStructDef) -> Vec<Ident> {
+fn derive_names(def: &StructDef) -> Vec<Ident> {
     def.attrs.iter()
         .filter(|a| a.path().is_ident("derive"))
         .filter_map(|a| a.parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated).ok())
@@ -1265,7 +1265,7 @@ fn generic_type(name: &Ident, g: &Generic<'_>, doc: &str) -> TokenStream {
 
 /// @item, a struct, as @to - with #[type_name], its own name, before its
 /// other attributes, so it expands before the derives among them.
-fn rename_struct(item: TokenStream, def: &CStructDef, to: &Ident) -> Result<TokenStream, String> {
+fn rename_struct(item: TokenStream, def: &StructDef, to: &Ident) -> Result<TokenStream, String> {
     let name = &def.ident;
     let mut tts: Vec<TokenTree> = item.into_iter().collect();
     let at = tts.windows(2)
@@ -1284,7 +1284,7 @@ fn rename_struct(item: TokenStream, def: &CStructDef, to: &Ident) -> Result<Toke
 }
 
 /// #[derive(FlexArray)], from #[counted_by(FIELD)] on the trailing `[T; 0]`.
-pub(crate) fn flex_array(def: &CStructDef) -> Result<TokenStream, String> {
+pub(crate) fn flex_array(def: &StructDef) -> Result<TokenStream, String> {
     let name = &def.ident;
     let Some((i, f, count)) = def.fields.iter().enumerate().find_map(|(i, f)| Some((i, f, f.counted_by.as_ref()?)))
     else {

@@ -33,8 +33,8 @@ use proc_macro2::{Delimiter, Ident, Literal, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 
-use crate::cstruct::{doc_of, int_of, parse_enum_head, parse_variant, split_commas, CEnumDef, CEnumKind,
-                     CEnumVariant};
+use crate::cstruct::{doc_of, int_of, parse_enum_head, parse_variant, split_commas, EnumDef, EnumKind,
+                     EnumVariant};
 use crate::{enum_gen, comma_list};
 
 pub(crate) struct Arm {
@@ -56,7 +56,7 @@ pub(crate) struct Arm {
 pub(crate) enum Column {
     Flags(syn::Type),
     Set(syn::Type),
-    Enum(CEnumDef),
+    Enum(EnumDef),
     Value(syn::Type),
 }
 
@@ -184,7 +184,7 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
         let args = || a.parse_args::<TokenStream>().map_err(|e| err(e.to_string()));
         match a.path().get_ident().map(|i| i.to_string()).as_deref() {
             Some("arm_columns") => columns = self::columns(args()?).map_err(err)?,
-            Some("mask")        => mask = Some(CEnumDef { kind: CEnumKind::Flags, ..tag_enum(args()?).map_err(err)? }),
+            Some("mask")        => mask = Some(EnumDef { kind: EnumKind::Flags, ..tag_enum(args()?).map_err(err)? }),
             Some("doc")         => e.docs.extend(doc_of(&a)),
             _ => {
                 let path = a.path();
@@ -192,10 +192,10 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
             }
         }
     }
-    if e.kind == CEnumKind::Flags && !columns.is_empty() {
+    if e.kind == EnumKind::Flags && !columns.is_empty() {
         return Err(err("#[arm_columns] are an enum's, not flags' - bits".into()));
     }
-    if e.kind == CEnumKind::Flags && mask.is_some() {
+    if e.kind == EnumKind::Flags && mask.is_some() {
         return Err(err("#[mask] is of bit numbers, not flags".into()));
     }
     let arms = arms(body, &columns, false).map_err(err)?;
@@ -218,11 +218,11 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
 
 /// `[closed,] NAME: REPR, prefix = P[, nr]`: a tag enum's,
 /// or an enum column's.
-pub(crate) fn tag_enum(args: TokenStream) -> Result<CEnumDef, String> {
-    let (mut kind, mut name, mut prefix, mut nr) = (CEnumKind::Open, None, None, false);
+pub(crate) fn tag_enum(args: TokenStream) -> Result<EnumDef, String> {
+    let (mut kind, mut name, mut prefix, mut nr) = (EnumKind::Open, None, None, false);
     for part in comma_list(args) {
         match part.as_slice() {
-            [TokenTree::Ident(c)] if c == "closed" => kind = CEnumKind::Closed,
+            [TokenTree::Ident(c)] if c == "closed" => kind = EnumKind::Closed,
             [TokenTree::Ident(c)] if c == "open" => {}
             [TokenTree::Ident(c)] if c == "nr" => nr = true,
             [TokenTree::Ident(n), c, TokenTree::Ident(r)] if is_punct(Some(c), ':') =>
@@ -237,15 +237,15 @@ pub(crate) fn tag_enum(args: TokenStream) -> Result<CEnumDef, String> {
     let (Some((name, repr)), Some(prefix)) = (name, prefix) else {
         return Err("an enum needs NAME: REPR and prefix = PREFIX".into());
     };
-    Ok(CEnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
+    Ok(EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
                   own_to_text: false, prefix: Some(prefix), nr })
 }
 
 /// Enum @e of @arms, each valued by its expression.
-fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a syn::Expr)>) -> TokenStream {
+fn enum_of<'a>(e: &EnumDef, arms: impl Iterator<Item = (&'a Arm, &'a syn::Expr)>) -> TokenStream {
     let repr = &e.repr;
-    let def = CEnumDef {
-        variants: arms.map(|(a, v)| CEnumVariant {
+    let def = EnumDef {
+        variants: arms.map(|(a, v)| EnumVariant {
             name:   a.name.clone(),
             // an expression's type may not be the enum's, BCH_VERSION()'s
             // u64: as a list's value is, it's cast
@@ -265,10 +265,10 @@ fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a syn::Expr)
 /// @bits, a flag per arm, 1 << its value - named P and the arm's name, or the
 /// #[mask_prefix] last written on an arm up to it and the name. A flag prints
 /// as its arm's name, as a list's does.
-fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
+fn mask_of(m: &EnumDef, bits: &EnumDef, arms: &[Arm]) -> TokenStream {
     let (repr, bits_ty) = (&m.repr, &bits.name);
     let mut prefix = m.prefix.clone();
-    let def = CEnumDef {
+    let def = EnumDef {
         variants: arms.iter().map(|a| {
             prefix = a.mask_prefix.clone().or(prefix.take());
             let p = prefix.as_deref().unwrap_or_default();
@@ -277,10 +277,10 @@ fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
             let (arm, written) = (&a.name, a.name.to_string());
             let past = bits.prefix.as_deref().and_then(|b| written.strip_prefix(b));
             let bit = match bits.kind {
-                CEnumKind::Closed => quote!((#bits_ty::#arm as u32)),
+                EnumKind::Closed => quote!((#bits_ty::#arm as u32)),
                 _ => quote!(#bits_ty::#arm.0),
             };
-            CEnumVariant {
+            EnumVariant {
                 name:   past.map_or_else(|| arm.clone(), |n| format_ident!("{p}{n}")),
                 value:  Some(syn::parse_quote!((1 as #repr) << #bit)),
                 label:  Some(a.label.clone().unwrap_or_else(|| past.unwrap_or(&written).to_string())),
@@ -293,12 +293,12 @@ fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
 }
 
 /// Enum @e of @arms, and a const fn of it per column.
-pub(crate) fn generate(e: &CEnumDef, arms: &[Arm], columns: &Columns) -> TokenStream {
+pub(crate) fn generate(e: &EnumDef, arms: &[Arm], columns: &Columns) -> TokenStream {
     let mut out = enum_of(e, arms.iter().map(|a| (a, &a.value)));
 
     let name = &e.name;
     // a tag no arm has: none of a set; no value, so a value's is an Option
-    let other = e.kind != CEnumKind::Closed;
+    let other = e.kind != EnumKind::Closed;
     let fns: Vec<TokenStream> = columns.iter().enumerate()
         .map(|(i, (col_name, col))| {
             let arm_names = arms.iter().map(|a| &a.name);

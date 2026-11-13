@@ -62,7 +62,7 @@ mod cstruct {
     include!("../../types/cstruct.rs");
 }
 use cstruct::{enum_tokens, expand_enum_list, generic_arg, int_of, parse_bitmask, parse_cstruct, parse_ioctl,
-              parse_list_enum, parse_xmacro, split_commas, CEnumDef, CEnumKind, CEnumVariant, CXEntry};
+              parse_list_enum, parse_xmacro, split_commas, EnumDef, EnumKind, EnumVariant, XEntry};
 
 mod args_stored_once;
 mod atomic_bitfield;
@@ -286,7 +286,7 @@ fn bitfield_members(input: TokenStream) -> Result<TokenStream, String> {
 /// though pin_init has no impl for them, and the orphan rule allows none
 /// here: their fields aren't bounds. Nor has it one for Cell, whose zeroes
 /// are its T's: a Cell's bound is its T's.
-fn maybe_zeroable(def: &cstruct::CStructDef) -> TokenStream {
+fn maybe_zeroable(def: &cstruct::StructDef) -> TokenStream {
     let mut generics = def.generics.clone();
     generics.make_where_clause().predicates.extend(def.fields.iter()
         .filter(|f| !is_core_atomic(&f.ty))
@@ -775,13 +775,13 @@ fn xmacro_expand(input: TokenStream) -> Result<TokenStream, String> {
     let name = &x.name;
     // The plain entries from @from to @to: none of them a list spliced in
     let args = |from: usize, to: usize| x.entries[from..to].iter().map(|e| match e {
-        CXEntry::Args(g) => g,
-        CXEntry::Sub { .. } => unreachable!("taken between the lists spliced in"),
+        XEntry::Args(g) => g,
+        XEntry::Sub { .. } => unreachable!("taken between the lists spliced in"),
     });
 
     let mut out = TokenStream::new();
     let subs: Vec<usize> = x.entries.iter().enumerate()
-        .filter(|(_, e)| matches!(e, CXEntry::Sub { .. }))
+        .filter(|(_, e)| matches!(e, XEntry::Sub { .. }))
         .map(|(i, _)| i)
         .collect();
 
@@ -806,7 +806,7 @@ fn xmacro_expand(input: TokenStream) -> Result<TokenStream, String> {
     let carry = quote!(($($cb)::+) ($($pre)?));
     let step = |n: usize| format_ident!("__{name}_{n}");
     for (n, &i) in subs.iter().enumerate() {
-        let CXEntry::Sub { map, .. } = &x.entries[i] else { unreachable!() };
+        let XEntry::Sub { map, .. } = &x.entries[i] else { unreachable!() };
         let (pattern, mapped) = match map {
             None => (quote!(($($e:tt)*)), quote!(($($e)*))),
             Some(m) => {
@@ -819,7 +819,7 @@ fn xmacro_expand(input: TokenStream) -> Result<TokenStream, String> {
         let acc = quote!($($acc)* $(#mapped,)* #after);
         let next = match subs.get(n + 1) {
             Some(&j) => {
-                let CXEntry::Sub { list: next_list, .. } = &x.entries[j] else { unreachable!() };
+                let XEntry::Sub { list: next_list, .. } = &x.entries[j] else { unreachable!() };
                 let next_step = step(n + 1);
                 quote!(#path::#next_list!(#path::#next_step [#carry #acc]);)
             }
@@ -837,7 +837,7 @@ fn xmacro_expand(input: TokenStream) -> Result<TokenStream, String> {
     }
     // The callback's [pre] bracketed, as the plain list's: an optional single
     // tt after a path callback is ambiguous with its `::`.
-    let CXEntry::Sub { list: first, .. } = &x.entries[subs[0]] else { unreachable!() };
+    let XEntry::Sub { list: first, .. } = &x.entries[subs[0]] else { unreachable!() };
     let (step0, lits0) = (step(0), lits(0, subs[0]));
     out.extend(quote! {
         #[allow(unused_macros)]
@@ -983,7 +983,7 @@ pub fn __list_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 /// Enum @e: the type, its values, and their names.
-fn enum_gen(e: &CEnumDef) -> TokenStream {
+fn enum_gen(e: &EnumDef) -> TokenStream {
     let repr = &e.repr;
     let names: Vec<&Ident> = e.variants.iter().map(|v| &v.name).collect();
 
@@ -997,7 +997,7 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
     let mut raw_values = Vec::new();
     let mut base = None;
     let mut n = 0;
-    for (v, CEnumVariant { value, .. }) in names.iter().zip(&e.variants) {
+    for (v, EnumVariant { value, .. }) in names.iter().zip(&e.variants) {
         let k = Literal::usize_unsuffixed(n);
         raw_values.push(match (value, base) {
             (Some(x), _) => quote!(#x),
@@ -1006,9 +1006,9 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
         });
         values.push(match (value, base, e.kind) {
             (Some(x), ..) => Some(quote!(#x)),
-            (None, _, CEnumKind::Closed) => None,
-            (None, Some(b), CEnumKind::Open) => Some(quote!(Self::#b.0 + #k)),
-            (None, Some(b), CEnumKind::Flags) => Some(quote!(Self::#b.bits() + #k)),
+            (None, _, EnumKind::Closed) => None,
+            (None, Some(b), EnumKind::Open) => Some(quote!(Self::#b.0 + #k)),
+            (None, Some(b), EnumKind::Flags) => Some(quote!(Self::#b.bits() + #k)),
             (None, None, _) => Some(quote!(#k)),
         });
         if value.is_some() {
@@ -1021,9 +1021,9 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
     // counters' stable ids aren't
     let nr = e.nr.then(|| {
         let int = names.iter().map(|v| match e.kind {
-            CEnumKind::Closed => quote!(Self::#v as #repr),
-            CEnumKind::Open   => quote!(Self::#v.0),
-            CEnumKind::Flags  => quote!(Self::#v.bits()),
+            EnumKind::Closed => quote!(Self::#v as #repr),
+            EnumKind::Open   => quote!(Self::#v.0),
+            EnumKind::Flags  => quote!(Self::#v.bits()),
         });
         quote!({ let mut n = 0; #(if #int + 1 > n { n = #int + 1; })* n })
     });
@@ -1037,7 +1037,7 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
     let discs = values.iter().map(|v| v.as_ref().map(|x| quote!(= #x)));
     let values = values.iter().map(|v| v.as_ref().expect("only a closed enum's goes unwritten"));
     out.extend(match e.kind {
-        CEnumKind::Closed => {
+        EnumKind::Closed => {
             // what it prints as: its list's name for it, as C's string table has it
             let labels = e.variants.iter().map(|v| e.label(v).map(|l| quote!(#[label(#l)])));
             let msg = format!("{name}::from_bits(): not a {name}");
@@ -1075,7 +1075,7 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
                 }
             }
         }
-        CEnumKind::Open => quote! {
+        EnumKind::Open => quote! {
             #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
             #[repr(transparent)]
             #attrs
@@ -1090,7 +1090,7 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
             unsafe impl crate::util::vstructs::Plain for #name {}
             crate::one_word!(#name);
         },
-        CEnumKind::Flags => quote! {
+        EnumKind::Flags => quote! {
             ::bitflags::bitflags! {
                 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
                 #[repr(transparent)]
@@ -1125,7 +1125,7 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
     // Zeroed is a value of it - so a struct holding one can be Zeroable:
     // any integer is an open enum's or flags', a closed enum's only if a
     // variant is 0 - as written, or the first, counting from 0
-    let has_zero = e.kind != CEnumKind::Closed || e.variants.iter().enumerate()
+    let has_zero = e.kind != EnumKind::Closed || e.variants.iter().enumerate()
         .any(|(i, v)| match &v.value {
             None    => i == 0,
             Some(x) => int_of(x) == Some(0),
@@ -1145,7 +1145,7 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
 /// flags type's bits. An open or flags one prints through it - ToText, and
 /// Display through that - unless it's #[own_to_text]; a closed one derives
 /// ToText.
-fn names_gen(e: &CEnumDef, name: &Ident) -> TokenStream {
+fn names_gen(e: &EnumDef, name: &Ident) -> TokenStream {
     let labelled: Vec<(String, &Ident)> = e.variants.iter()
         .filter_map(|v| e.label(v).map(|l| (l, &v.name)))
         .collect();
@@ -1155,9 +1155,9 @@ fn names_gen(e: &CEnumDef, name: &Ident) -> TokenStream {
 
     let n = quote!(crate::util::names);
     let entries = labelled.iter().map(|(l, v)| match e.kind {
-        CEnumKind::Closed => quote!((#l, Self::#v as u64)),
-        CEnumKind::Open   => quote!((#l, Self::#v.0 as u64)),
-        CEnumKind::Flags  => quote!((#l, #n::bit(Self::#v.bits() as u64))),
+        EnumKind::Closed => quote!((#l, Self::#v as u64)),
+        EnumKind::Open   => quote!((#l, Self::#v.0 as u64)),
+        EnumKind::Flags  => quote!((#l, #n::bit(Self::#v.bits() as u64))),
     });
     let mut out = quote! {
         impl #n::Names for #name {
@@ -1167,12 +1167,12 @@ fn names_gen(e: &CEnumDef, name: &Ident) -> TokenStream {
 
     let to_text = match e.kind {
         _ if e.own_to_text => None,
-        CEnumKind::Closed  => None,
-        CEnumKind::Open    => Some(quote!(#n::prt_name(out, <Self as #n::Names>::ENTRIES, self.0 as u64))),
-        CEnumKind::Flags   => Some(quote!(#n::prt_flags(out, <Self as #n::Names>::ENTRIES, self.bits() as u64))),
+        EnumKind::Closed  => None,
+        EnumKind::Open    => Some(quote!(#n::prt_name(out, <Self as #n::Names>::ENTRIES, self.0 as u64))),
+        EnumKind::Flags   => Some(quote!(#n::prt_flags(out, <Self as #n::Names>::ENTRIES, self.bits() as u64))),
     };
     // A closed enum's derive gives it name(); an open one's is here
-    if e.kind == CEnumKind::Open && !e.own_to_text {
+    if e.kind == EnumKind::Open && !e.own_to_text {
         out.extend(quote! {
             impl #name {
                 /// Its name: None for a value this version has none for.
