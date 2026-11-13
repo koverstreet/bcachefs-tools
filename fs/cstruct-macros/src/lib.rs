@@ -255,27 +255,33 @@ fn bitfield_members(input: TokenStream) -> Result<TokenStream, String> {
         return Err(format!("{name}: no #[members] field"));
     }
 
-    // A #[members] field's members, on the struct: its type's forwarders
-    // (#[bitfield]), by the type's own path - a Cell's setting through &self.
-    // Not a Volatile one's: that's a word, read and written whole.
     let mut forward = TokenStream::new();
     let (generics, over, _) = def.generics.split_for_impl();
     for f in def.fields.iter().filter(|f| f.bitfield) {
-        let (bt, suffix) = match (generic_arg(&f.ty, "Cell"), generic_arg(&f.ty, "Volatile")) {
-            (Some(t), _)    => (t, "_forward_cell"),
-            (None, Some(_)) => continue,
-            (None, None)    => (&f.ty, "_forward"),
-        };
-        let syn::Type::Path(syn::TypePath { qself: None, path }) = bt else {
-            return Err(format!("{name}.{}: #[members] is for a field of a #[bitfield] type", f.ident));
-        };
-        let mut fwd = path.clone();
-        let last = fwd.segments.last_mut().expect("a path has a segment");
-        last.ident = format_ident!("__{}{suffix}", last.ident);
-        let field = &f.ident;
-        forward.extend(quote!(#fwd!([#generics] #name #over, #field);));
+        if let Some(fwd) = members_forwarder(name, f)? {
+            let field = &f.ident;
+            forward.extend(quote!(#fwd!([#generics] #name #over, #field);));
+        }
     }
     Ok(forward)
+}
+
+/// A #[members] field's members, on the struct: its type's forwarder
+/// (#[bitfield]), by the type's own path - a Cell's setting through &self.
+/// None for a Volatile one: that's a word, read and written whole.
+pub(crate) fn members_forwarder(name: &Ident, f: &cstruct::FieldDef) -> Result<Option<syn::Path>, String> {
+    let (bt, suffix) = match (generic_arg(&f.ty, "Cell"), generic_arg(&f.ty, "Volatile")) {
+        (Some(t), _)    => (t, "_forward_cell"),
+        (None, Some(_)) => return Ok(None),
+        (None, None)    => (&f.ty, "_forward"),
+    };
+    let syn::Type::Path(syn::TypePath { qself: None, path }) = bt else {
+        return Err(format!("{name}.{}: #[members] is for a field of a #[bitfield] type", f.ident));
+    };
+    let mut fwd = path.clone();
+    let last = fwd.segments.last_mut().expect("a path has a segment");
+    last.ident = format_ident!("__{}{suffix}", last.ident);
+    Ok(Some(fwd))
 }
 
 /// Zeroable when every field is - as bindgen's C structs are, deriving
@@ -1346,20 +1352,15 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
     let mut setters = TokenStream::new();
     for e in &b.entries {
         let m = b.method(&e.name);
-        // set_128_bit_macs: the setter's set_ makes it a name already
-        let set_m = match m.strip_prefix('_') {
-            Some(s) if s.starts_with(|c: char| c.is_ascii_digit()) => s,
-            _ => m.as_str(),
-        };
         let (start, end) = (&e.start, &e.end);
         table_entries.push(quote! {
-            crate::typeinfo::BitmaskField { struct_name: #struct_name, field: #field_path, name: #set_m,
+            crate::typeinfo::BitmaskField { struct_name: #struct_name, field: #field_path, name: #m,
                                             lo: (#start) as u8, hi: (#end) as u8 }
         });
         // C's LE*_BITMASK() defines NAME_MAX: the largest value it holds
         let (max, get_m) = (format_ident!("{}_MAX", m.to_uppercase()), format_ident!("{m}"));
         let (set_fn, set_checked, update_fn) =
-            (format_ident!("set_{set_m}"), format_ident!("set_{set_m}_checked"), format_ident!("update_{set_m}"));
+            (format_ident!("set_{m}"), format_ident!("set_{m}_checked"), format_ident!("update_{m}"));
         // One bit is a flag: bool, as the accessors on bindgen's structs had it.
         let one_bit = matches!((int_of(&e.start), int_of(&e.end)), (Some(s), Some(e)) if e == s + 1);
         let (ty, from, to) = match one_bit {

@@ -2827,7 +2827,13 @@ fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &bch_sb) -> Result<(), Bch
     d.time_precision = src.time_precision;
     d.write_time     = src.write_time;
 
-    d.flags          = src.flags;
+    d.flags0         = src.flags0;
+    d.flags1         = src.flags1;
+    d.flags2         = src.flags2;
+    d.flags3         = src.flags3;
+    d.flags4         = src.flags4;
+    d.flags5         = src.flags5;
+    d.flags6         = src.flags6;
     d.features       = src.features;
     d.compat         = src.compat;
 

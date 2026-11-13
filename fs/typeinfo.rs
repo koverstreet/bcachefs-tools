@@ -708,9 +708,7 @@ bitmasks! {
     InodeV2_bi_flags_BITMASKS, InodeV3_bi_flags_BITMASKS,
     bch_member_flags_BITMASKS, ReflinkP_idx_flags_BITMASKS, bch_sb_field_crypt_flags_BITMASKS,
     bch_sb_field_crypt_kdf_flags_BITMASKS, bch_sb_field_error_entry_v_BITMASKS,
-    bch_sb_field_ext_flags0_BITMASKS, bch_sb_flags_0_BITMASKS, bch_sb_flags_1_BITMASKS,
-    bch_sb_flags_2_BITMASKS, bch_sb_flags_3_BITMASKS, bch_sb_flags_4_BITMASKS,
-    bch_sb_flags_5_BITMASKS, bch_sb_flags_6_BITMASKS, Snapshot_flags_BITMASKS,
+    bch_sb_field_ext_flags0_BITMASKS, Snapshot_flags_BITMASKS,
     Subvolume_flags_BITMASKS, bset_flags_BITMASKS, btree_node_flags_BITMASKS,
     jset_flags_BITMASKS, recovery_pass_entry_flags_BITMASKS,
 }

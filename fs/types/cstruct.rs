@@ -115,17 +115,11 @@ pub(crate) struct BitmaskEntry {
 }
 
 impl Bitmask {
-    /// The Rust accessor for @name: PREFIX_ stripped, lowercased - and with a
-    /// leading _ if that starts with a digit: BCH_SB_128_BIT_MACS.
+    /// The Rust accessor for @name: PREFIX_ stripped, lowercased.
     pub(crate) fn method(&self, name: &syn::Ident) -> String {
         let name = name.to_string();
         let n = self.strip.as_deref().and_then(|p| name.strip_prefix(p)).unwrap_or(&name);
-        let n = n.to_lowercase();
-        if n.starts_with(|c: char| c.is_ascii_digit()) {
-            format!("_{n}")
-        } else {
-            rust_ident(&n)
-        }
+        rust_ident(&n.to_lowercase())
     }
 }
 

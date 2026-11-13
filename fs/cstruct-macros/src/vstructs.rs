@@ -434,7 +434,7 @@ fn state_methods(ffi: &Ident) -> TokenStream {
 /// from outside, its count checked against them; Validated, its count
 /// trusted as C trusts it - and Validated its Whole, the header never having
 /// grown.
-fn own_count_family(name: &Ident, shape: &Shape<'_>) -> TokenStream {
+fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, String> {
     let vs = vs();
     let state = |st: &str, what: &str| -> TokenStream {
         let ty = format_ident!("{name}__{}", st.to_lowercase());
@@ -461,12 +461,20 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> TokenStream {
     let mut out = state("Unvalidated", "bytes from outside - off a device, from the kernel - its count \
                                         checked against them when it's made");
     out.extend(state("Validated", "what C read and validated, its counts trusted as C trusts them"));
+    // A #[members] field's members, on each state too: the Deref to C's
+    // struct can't reach its setters
+    for f in shape.fields.iter().filter(|f| f.bitfield) {
+        if let Some(fwd) = crate::members_forwarder(name, f)? {
+            let field = &f.ident;
+            out.extend(quote!(#fwd!([] #unvalidated, #field); #fwd!([] #validated, #field);));
+        }
+    }
     out.extend(family(name, &unvalidated, &validated, &validated, &[unvalidated.clone(), validated.clone()]));
     out.extend(generic_type(name,
         &Generic { default: "Validated", unsized_states: &unsized_states, arm_of: None,
                    whole: None, ffi: Some(&shape.ffi), typestate: false },
         &doc));
-    out
+    Ok(out)
 }
 
 /// #[unsized_vstruct]: the family of an unsized vstruct's definitions, one
@@ -519,7 +527,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
                     #msg);
         };
     });
-    out.extend(own_count_family(name, &shape));
+    out.extend(own_count_family(name, &shape)?);
     Ok(out)
 }
 
@@ -585,7 +593,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
         // alignment only if its elements are: else it claims bytes past it
         const _: () = assert!(::core::mem::size_of::<#elem>() % ::core::mem::align_of::<#ffi>() == 0, #msg);
     });
-    out.extend(own_count_family(name, &shape));
+    out.extend(own_count_family(name, &shape)?);
     Ok(out)
 }
 

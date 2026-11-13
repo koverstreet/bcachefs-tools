@@ -60,8 +60,8 @@ struct OptAttr {
 enum SbField {
     /// host.field
     Field { host: Ident, field: Ident },
-    /// host::getter [/ setter]
-    Accessors { host: Ident, getter: Ident, setter: Option<Ident> },
+    /// host::getter
+    Accessors { host: Ident, getter: Ident },
 }
 
 impl Parse for OptAttr {
@@ -89,12 +89,7 @@ impl Parse for OptAttr {
                         Some(_) => SbField::Field { host, field: input.parse()? },
                         None => {
                             input.parse::<Token![::]>()?;
-                            let getter = input.parse()?;
-                            let setter = match input.parse::<Option<Token![/]>>()? {
-                                Some(_) => Some(input.parse()?),
-                                None => None,
-                            };
-                            SbField::Accessors { host, getter, setter }
+                            SbField::Accessors { host, getter: input.parse()? }
                         }
                     });
                 }
@@ -180,12 +175,9 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
                 set: |t, v| Ok(t.#field.set(v.try_into().map_err(|_| ())?)),
             } as &dyn #o::SbOpt))
         }
-        Some(SbField::Accessors { host, getter, setter }) => {
+        Some(SbField::Accessors { host, getter }) => {
             let host = head(host);
-            let setter = match setter {
-                Some(s) => format_ident!("{s}_checked"),
-                None    => format_ident!("set_{getter}_checked"),
-            };
+            let setter = format_ident!("set_{getter}_checked");
             // a bool option's field takes a bool if it's one bit, else a u64 -
             // erasure_code's is 16
             let v = match a.kind == "bool" {

@@ -298,7 +298,7 @@ pub struct bch_opts {
     pub root_reserve_percent: u8,
 
     /// Store full 128 bits of cryptographic MACs, instead of 80
-    #[opt(bool, flags = fs | format | mount | runtime, sb = bch_sb::_128_bit_macs / set_128_bit_macs)]
+    #[opt(bool, flags = fs | format | mount | runtime, sb = bch_sb::macs_128_bit)]
     pub wide_macs: u8,
 
     /// Enable inline data extents

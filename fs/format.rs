@@ -1212,7 +1212,7 @@ pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
  */
 #[unsized_vstruct]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb {
     pub csum: c::bch_csum,
     pub version: Le16,
@@ -1234,7 +1234,13 @@ pub struct bch_sb {
     pub time_base_hi: Le32,
     pub time_precision: Le32,
 
-    pub flags: [Le64; 7],
+    #[members] pub flags0: bch_sb_flags0,
+    #[members] pub flags1: bch_sb_flags1,
+    #[members] pub flags2: bch_sb_flags2,
+    #[members] pub flags3: bch_sb_flags3,
+    #[members] pub flags4: bch_sb_flags4,
+    #[members] pub flags5: bch_sb_flags5,
+    #[members] pub flags6: bch_sb_flags6,
     pub write_time: Le64,
     pub features: [Le64; 2],
     pub compat: [Le64; 2],
@@ -1269,90 +1275,86 @@ impl bch_sb<Unvalidated> {
  *			   algorithm in use, if/when we get more than one
  */
 
-c_bitmask! {
-    LE64_BITMASK(struct Head<bch_sb>, flags[0]), strip BCH_SB_ {
-        BCH_SB_INITIALIZED(0, 1),
-        BCH_SB_CLEAN(1, 2),
-        BCH_SB_CSUM_TYPE(2, 8),
-        BCH_SB_ERROR_ACTION(8, 12),
+#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+pub struct bch_sb_flags0 {
+    initialized:                    bool,
+    clean:                          bool,
+    #[bits(6)]  csum_type:          u64,
+    #[bits(4)]  error_action:       u64,
 
-        BCH_SB_BTREE_NODE_SIZE(12, 28),
+    #[bits(16)] btree_node_size:    u64,
 
-        BCH_SB_GC_RESERVE(28, 33),
-        BCH_SB_ROOT_RESERVE(33, 40),
+    #[bits(5)]  gc_reserve:         u64,
+    #[bits(7)]  root_reserve:       u64,
 
-        BCH_SB_META_CSUM_TYPE(40, 44),
-        BCH_SB_DATA_CSUM_TYPE(44, 48),
+    #[bits(4)]  meta_csum_type:     u64,
+    #[bits(4)]  data_csum_type:     u64,
 
-        BCH_SB_META_REPLICAS_WANT(48, 52),
-        BCH_SB_DATA_REPLICAS_WANT(52, 56),
+    #[bits(4)]  meta_replicas_want: u64,
+    #[bits(4)]  data_replicas_want: u64,
 
-        BCH_SB_POSIX_ACL(56, 57),
-        BCH_SB_USRQUOTA(57, 58),
-        BCH_SB_GRPQUOTA(58, 59),
-        BCH_SB_PRJQUOTA(59, 60),
+    posix_acl:                      bool,
+    usrquota:                       bool,
+    grpquota:                       bool,
+    prjquota:                       bool,
 
-        BCH_SB_HAS_ERRORS(60, 61),
-        BCH_SB_HAS_TOPOLOGY_ERRORS(61, 62),
+    has_errors:                     bool,
+    has_topology_errors:            bool,
 
-        BCH_SB_BIG_ENDIAN(62, 63),
-        BCH_SB_PROMOTE_WHOLE_EXTENTS(63, 64),
-    }
+    big_endian:                     bool,
+    promote_whole_extents:          bool,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct Head<bch_sb>, flags[1]), strip BCH_SB_ {
-        BCH_SB_STR_HASH_TYPE(0, 4),
-        BCH_SB_COMPRESSION_TYPE_LO(4, 8),
-        BCH_SB_INODE_32BIT(8, 9),
+#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+pub struct bch_sb_flags1 {
+    #[bits(4)]  str_hash_type:          u64,
+    #[bits(4)]  compression_type_lo:    u64,
+    inode_32bit:                        bool,
 
-        BCH_SB_128_BIT_MACS(9, 10),
-        BCH_SB_ENCRYPTION_TYPE(10, 14),
+    macs_128_bit:                       bool,
+    #[bits(4)]  encryption_type:        u64,
 
-        /*
-         * Max size of an extent that may require bouncing to read or write
-         * (checksummed, compressed): 64k
-         */
-        BCH_SB_ENCODED_EXTENT_MAX_BITS(14, 20),
+    /*
+     * Max size of an extent that may require bouncing to read or write
+     * (checksummed, compressed): 64k
+     */
+    #[bits(6)]  encoded_extent_max_bits: u64,
 
-        BCH_SB_META_REPLICAS_REQ(20, 24),
-        BCH_SB_DATA_REPLICAS_REQ(24, 28),
+    #[bits(4)]  meta_replicas_req:      u64,
+    #[bits(4)]  data_replicas_req:      u64,
 
-        BCH_SB_PROMOTE_TARGET(28, 40),
-        BCH_SB_FOREGROUND_TARGET(40, 52),
-        BCH_SB_BACKGROUND_TARGET(52, 64),
-    }
+    #[bits(12)] promote_target:         u64,
+    #[bits(12)] foreground_target:      u64,
+    #[bits(12)] background_target:      u64,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct Head<bch_sb>, flags[2]), strip BCH_SB_ {
-        BCH_SB_BACKGROUND_COMPRESSION_TYPE_LO(0, 4),
-        BCH_SB_GC_RESERVE_BYTES(4, 64),
-    }
+#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+pub struct bch_sb_flags2 {
+    #[bits(4)]  background_compression_type_lo: u64,
+    #[bits(60)] gc_reserve_bytes:               u64,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct Head<bch_sb>, flags[3]), strip BCH_SB_ {
-        BCH_SB_ERASURE_CODE(0, 16),
-        BCH_SB_METADATA_TARGET(16, 28),
-        BCH_SB_SHARD_INUMS(28, 29),
-        BCH_SB_JOURNAL_FLUSH_DELAY(30, 62),
-        BCH_SB_JOURNAL_FLUSH_DISABLED(62, 63),
-        BCH_SB_MULTI_DEVICE(63, 64),
-    }
+#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+pub struct bch_sb_flags3 {
+    #[bits(16)] erasure_code:           u64,
+    #[bits(12)] metadata_target:        u64,
+    shard_inums:                        bool,
+    #[bits(1)]  __:                     u64,
+    #[bits(32)] journal_flush_delay:    u64,
+    journal_flush_disabled:             bool,
+    multi_device:                       bool,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct Head<bch_sb>, flags[4]), strip BCH_SB_ {
-        BCH_SB_JOURNAL_RECLAIM_DELAY(0, 32),
-        BCH_SB_JOURNAL_TRANSACTION_NAMES(32, 33),
-        BCH_SB_NOCOW(33, 34),
-        BCH_SB_WRITE_BUFFER_SIZE(34, 54),
-        BCH_SB_VERSION_UPGRADE(54, 56),
+#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+pub struct bch_sb_flags4 {
+    #[bits(32)] journal_reclaim_delay:          u64,
+    journal_transaction_names:                  bool,
+    nocow:                                      bool,
+    #[bits(20)] write_buffer_size:              u64,
+    #[bits(2)]  version_upgrade:                u64,
 
-        BCH_SB_COMPRESSION_TYPE_HI(56, 60),
-        BCH_SB_BACKGROUND_COMPRESSION_TYPE_HI(60, 64),
-    }
+    #[bits(4)]  compression_type_hi:            u64,
+    #[bits(4)]  background_compression_type_hi: u64,
 }
 
 /// The compression options, each in two fields: _HI is the bits it grew.
@@ -1378,36 +1380,35 @@ impl bch_sb__head {
     }
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct Head<bch_sb>, flags[5]), strip BCH_SB_ {
-        BCH_SB_VERSION_UPGRADE_COMPLETE(0, 16),
-        BCH_SB_ALLOCATOR_STUCK_TIMEOUT(16, 32),
-        BCH_SB_VERSION_INCOMPAT(32, 48),
-        BCH_SB_VERSION_INCOMPAT_ALLOWED(48, 64),
-    }
+#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+pub struct bch_sb_flags5 {
+    #[bits(16)] version_upgrade_complete:   u64,
+    #[bits(16)] allocator_stuck_timeout:    u64,
+    #[bits(16)] version_incompat:           u64,
+    #[bits(16)] version_incompat_allowed:   u64,
 }
 
-c_bitmask! {
-    LE64_BITMASK(struct Head<bch_sb>, flags[6]), strip BCH_SB_ {
-        BCH_SB_SHARD_INUMS_NBITS(0, 4),
-        BCH_SB_WRITE_ERROR_TIMEOUT(4, 14),
-        BCH_SB_CSUM_ERR_RETRY_NR(14, 20),
-        BCH_SB_DEGRADED_ACTION(20, 22),
-        BCH_SB_CASEFOLD(22, 23),
-        BCH_SB_REBALANCE_AC_ONLY(23, 24),
-        BCH_SB_WRITEBACK_TIMEOUT(24, 40),
-        BCH_SB_EXTENT_BP_SHIFT(40, 48),
-        BCH_SB_SCRUB_JOURNAL(48, 50),
-        BCH_SB_EC_MAX_DATA_BLOCKS(50, 58),
-        BCH_SB_MOVE_WRITES_FUA(58, 59),
-        /*
-         * Set by `bcachefs dump --sanitize` when it scrubs dirent names: the names
-         * (and therefore their str_hash positions) are meaningless, so fsck must skip
-         * the dirent hash-consistency check rather than "repair" the artifacts.
-         */
-        BCH_SB_DIRENTS_SANITIZED(59, 60),
-        BCH_SB_WRITE_DEGRADED_ACTION(60, 62),
-    }
+#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+pub struct bch_sb_flags6 {
+    #[bits(4)]  shard_inums_nbits:      u64,
+    #[bits(10)] write_error_timeout:    u64,
+    #[bits(6)]  csum_err_retry_nr:      u64,
+    #[bits(2)]  degraded_action:        u64,
+    casefold:                           bool,
+    rebalance_ac_only:                  bool,
+    #[bits(16)] writeback_timeout:      u64,
+    #[bits(8)]  extent_bp_shift:        u64,
+    #[bits(2)]  scrub_journal:          u64,
+    #[bits(8)]  ec_max_data_blocks:     u64,
+    move_writes_fua:                    bool,
+    /*
+     * Set by `bcachefs dump --sanitize` when it scrubs dirent names: the names
+     * (and therefore their str_hash positions) are meaningless, so fsck must skip
+     * the dirent hash-consistency check rather than "repair" the artifacts.
+     */
+    dirents_sanitized:                  bool,
+    #[bits(2)]  write_degraded_action:  u64,
+    #[bits(2)]  __:                     u64,
 }
 
 pub const BCH_SB_EXTENT_BP_SHIFT_DEFAULT: u32 = 10;
