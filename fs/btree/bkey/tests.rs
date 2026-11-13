@@ -89,7 +89,7 @@ fn key_type_info() {
     use crate::data::inline_data::{CSUM, DATA};
     use crate::data::reflink::REFCOUNT;
 
-    assert_eq!(BkeyType::snapshot.info().unwrap().name, "bch_snapshot");
+    assert_eq!(BkeyType::snapshot.info().unwrap().name, "Snapshot");
     assert_eq!("snapshot".parse::<BkeyType>().ok(), Some(BkeyType::snapshot));
     assert!("no_such_type".parse::<BkeyType>().is_err());
 
