@@ -365,7 +365,7 @@ fn render_fields(val: &[u8], info: &'static StructInfo, paths: &[&str]) -> Resul
                 Err(e) => bail!("{path}: {e}"),
             },
             None => match r.kind {
-                FieldKind::Int { .. } => read_int(path, &r)?,
+                FieldKind::Int { .. } | FieldKind::Bits { .. } => read_int(path, &r)?,
                 FieldKind::Array { elem, n, stride }
                         if matches!(elem, FieldKind::Int { .. }) => {
                     (0..*n)
@@ -905,7 +905,7 @@ fn cmd_set(
 
 // ---------------------------------------------------------------------------
 // superblock fields — same field engine as keys, anchored on bch_sb::INFO
-// (which carries the BCH_SB_* LE64_BITMASK fields), written back via
+// (which carries the BCH_SB_* flag words, #[bitfield]s), written back via
 // bch2_write_super so the csum is recomputed and every sb copy updated.
 
 fn sb_field(field: &str) -> Result<FieldTarget> {

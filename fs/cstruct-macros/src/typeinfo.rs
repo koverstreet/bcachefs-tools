@@ -17,7 +17,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::cstruct::{field_type, flex_elem, parse_cstruct, StructKind, FieldType, IntType};
+use crate::cstruct::{field_type, flex_elem, generic_arg, parse_cstruct, StructKind, FieldType, IntType};
 
 /// The type names a field kind may reference as `<T as TypeInfo>::INFO`:
 /// each must have TypeInfo itself, by the name the field's type is written
@@ -44,7 +44,16 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
         let described: Vec<_> = def.fields.iter().filter(|f| !crate::place::is_empty_at_field(f)).collect();
         let last = described.len().saturating_sub(1);
         for (i, f) in described.into_iter().enumerate() {
-            let (field, kind) = (&f.ident, kind(&f.ty, i == last));
+            // a #[members] field is its bitfield's - a Cell's or a Volatile's,
+            // the same bytes
+            let kind = match f.bitfield {
+                true => {
+                    let ty = generic_arg(&f.ty, "Cell").or(generic_arg(&f.ty, "Volatile")).unwrap_or(&f.ty);
+                    quote!(crate::typeinfo::FieldKind::Struct(<#ty as crate::typeinfo::TypeInfo>::INFO))
+                }
+                false => kind(&f.ty, i == last),
+            };
+            let field = &f.ident;
             let name = field.to_string();
             fields.push(quote! {
                 crate::typeinfo::FieldInfo {

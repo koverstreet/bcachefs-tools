@@ -524,7 +524,43 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
             .find_map(|a| key_value(a).filter(|(k, _)| k == "repr").map(|(_, v)| v))
             .unwrap_or_else(|| storage.to_token_stream())
     };
-    let (info, plain) = (typeinfo::info(name, name, "Struct", &[]), vstructs::plain(name, &[held]));
+    // TypeInfo: each member but padding, as its bits of the word - the
+    // storage integer, in its repr's byte order. A u128's aren't: kvdb's
+    // integers are up to 8 bytes
+    let bytes = match storage.to_string().as_str() {
+        "u8" => Some(1u8),
+        "u16" => Some(2),
+        "u32" => Some(4),
+        "u64" => Some(8),
+        _ => None,
+    };
+    let little = syn::parse2::<syn::Type>(held.clone()).ok()
+        .and_then(|t| match t {
+            syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+            _ => None,
+        })
+        .is_some_and(|r| matches!(r.as_str(), "Le16" | "Le32" | "Le64"));
+    let endian = format_ident!("{}", if little { "Little" } else { "Native" });
+    let mut lo = 0u32;
+    let mut member_info = Vec::new();
+    for (f, bytes) in item.fields.iter().filter_map(|f| Some((f, bytes?))) {
+        let m = f.ident.as_ref().expect("named members");
+        let hi = lo + member_width(f)?;
+        if !m.to_string().starts_with('_') {
+            let (m, lo, hi) = (m.to_string(), lo as u8, hi as u8);
+            member_info.push(quote! {
+                crate::typeinfo::FieldInfo {
+                    name: #m,
+                    offset: 0,
+                    kind: crate::typeinfo::FieldKind::Bits {
+                        bytes: #bytes, endian: crate::typeinfo::Endian::#endian, lo: #lo, hi: #hi,
+                    },
+                }
+            });
+        }
+        lo = hi;
+    }
+    let (info, plain) = (typeinfo::info(name, name, "Bitfield", &member_info), vstructs::plain(name, &[held]));
     // The struct as tokens, not text: an error in a member points at it
     Ok(quote! {
         #out
@@ -688,6 +724,21 @@ fn bitfield_member(m: &mut syn::Field) -> Result<(), String> {
     }
     m.ident.as_mut().unwrap().set_span(at(name.span()));
     Ok(())
+}
+
+/// @m's width: its #[bits(N, ..)]'s N, which bitfield_member() gives every
+/// member.
+fn member_width(m: &syn::Field) -> Result<u32, String> {
+    let name = m.ident.as_ref().expect("a named member");
+    m.attrs.iter()
+        .find(|a| a.path().is_ident("bits"))
+        .and_then(|a| match &a.meta {
+            syn::Meta::List(l) => l.tokens.clone().into_iter().next(),
+            _ => None,
+        })
+        .and_then(|t| syn::parse2::<syn::LitInt>(t.into()).ok())
+        .and_then(|n| n.base10_parse().ok())
+        .ok_or_else(|| format!("{name}: #[bits(N, ..)], N an integer literal"))
 }
 
 /// A bilge member type's width and the Rust type it's read as: bool, and uN

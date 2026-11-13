@@ -33,6 +33,10 @@
 //! rather than the derive. Bits resolve by bare name when it doesn't
 //! collide with a field (`no_keys`) or qualified as `<field>.<bit>`
 //! (`flags.subvol` — the `subvol` *field* wins the bare name).
+//!
+//! A #[bitfield]'s members are part of its type: its TypeInfo describes each
+//! (`Shape::Bitfield`, `FieldKind::Bits`), and a field of it resolves as a
+//! bit range does - `flags0.clean`, or bare, `clean`.
 
 /// Byte order of an integer field. `Native` is for in-memory types bound as
 /// plain `u32`/`u64`; on-disk formats always use explicit `Little`/`Big`.
@@ -48,6 +52,8 @@ pub enum Shape {
     Struct,
     Union,
     Enum,
+    /// A #[bitfield]: a word, its fields its members' bits of it.
+    Bitfield,
 }
 
 pub struct StructInfo {
@@ -112,6 +118,13 @@ pub enum FieldKind {
     /// Not interpretable (pointer, union contents, kernel-internal type).
     /// Byte extent is derived from the following field's offset.
     Opaque,
+    /// A #[bitfield]'s member: bits @lo..@hi of the word at its offset.
+    Bits {
+        bytes: u8,
+        endian: Endian,
+        lo: u8,
+        hi: u8,
+    },
 }
 
 pub trait TypeInfo {
@@ -132,8 +145,7 @@ pub struct BitmaskField {
 
 impl BitmaskField {
     pub fn mask(&self) -> u64 {
-        let width = self.hi - self.lo;
-        if width >= 64 { !0 } else { (1u64 << width) - 1 }
+        bits_mask(self.lo, self.hi)
     }
 
     /// Does this bit range live in `field` (`idx`: array element)?
@@ -201,7 +213,7 @@ impl core::fmt::Display for ResolveError<'_> {
 
 fn kind_len(kind: &FieldKind, bound: usize) -> usize {
     match kind {
-        FieldKind::Int { bytes, .. } => *bytes as usize,
+        FieldKind::Int { bytes, .. } | FieldKind::Bits { bytes, .. } => *bytes as usize,
         FieldKind::Struct(s) => s.size,
         FieldKind::Array { n, stride, .. } => n * stride,
         FieldKind::VarTail { .. } => 0,
@@ -304,7 +316,8 @@ pub fn resolve<'p>(
 /// Resolve a path that may name either a field (`parent`, `btime.hi`) or a
 /// declared bit range (`no_keys`, `flags.subvol`). Fields always win the
 /// bare name; a bit whose name collides with a field stays reachable in the
-/// qualified `<field>.<bit>` form.
+/// qualified `<field>.<bit>` form. A #[bitfield] field's members are bits
+/// too - `flags0.clean`, or `clean` - as its accessors are the struct's.
 pub fn resolve_with_bits<'p>(
     info: &'static StructInfo,
     path: &'p str,
@@ -316,6 +329,14 @@ pub fn resolve_with_bits<'p>(
 
     // bare bit name: "no_keys"
     if !path.contains('.') {
+        let member = info.fields.iter().find_map(|f| match &f.kind {
+            FieldKind::Struct(w) if w.shape == Shape::Bitfield =>
+                w.fields.iter().find(|m| m.name == path).map(|m| (f.offset, m)),
+            _ => None,
+        });
+        if let Some((offset, m)) = member {
+            return Ok((FieldRef { offset, kind: &m.kind, len: kind_len(&m.kind, 0) }, None));
+        }
         if let Some(bm) = bitmask_fields(info.name).find(|b| b.name == path) {
             return Ok((resolve(info, bm.field)?, Some(bm)));
         }
@@ -375,23 +396,52 @@ fn is_le(endian: Endian) -> bool {
 
 /// Read a scalar field's raw bits (not sign-extended; see [`sign_extend`]).
 pub fn read_scalar(buf: &[u8], r: &FieldRef) -> Result<u64, AccessError> {
-    let FieldKind::Int { bytes, endian, .. } = r.kind else {
-        return Err(AccessError::NotScalar);
-    };
-    let b = *bytes as usize;
-    let end = r.offset + b;
+    match *r.kind {
+        FieldKind::Int { bytes, endian, .. } => read_word(buf, r.offset, bytes, endian),
+        FieldKind::Bits { bytes, endian, lo, hi } =>
+            Ok((read_word(buf, r.offset, bytes, endian)? >> lo) & bits_mask(lo, hi)),
+        _ => Err(AccessError::NotScalar),
+    }
+}
+
+/// The mask of a bit range @lo..@hi's width.
+fn bits_mask(lo: u8, hi: u8) -> u64 {
+    let width = hi - lo;
+    if width >= 64 { !0 } else { (1u64 << width) - 1 }
+}
+
+/// The @bytes wide integer at @offset, in byte order @endian.
+fn read_word(buf: &[u8], offset: usize, bytes: u8, endian: Endian) -> Result<u64, AccessError> {
+    let b = bytes as usize;
+    let end = offset + b;
     if end > buf.len() {
         return Err(AccessError::OutOfBounds { need: end, have: buf.len() });
     }
 
     let mut tmp = [0u8; 8];
-    if is_le(*endian) {
-        tmp[..b].copy_from_slice(&buf[r.offset..end]);
+    if is_le(endian) {
+        tmp[..b].copy_from_slice(&buf[offset..end]);
         Ok(u64::from_le_bytes(tmp))
     } else {
-        tmp[8 - b..].copy_from_slice(&buf[r.offset..end]);
+        tmp[8 - b..].copy_from_slice(&buf[offset..end]);
         Ok(u64::from_be_bytes(tmp))
     }
+}
+
+/// read_word(), written: @v fits in @bytes.
+fn write_word(buf: &mut [u8], offset: usize, bytes: u8, endian: Endian, v: u64) -> Result<(), AccessError> {
+    let b = bytes as usize;
+    let end = offset + b;
+    if end > buf.len() {
+        return Err(AccessError::OutOfBounds { need: end, have: buf.len() });
+    }
+
+    if is_le(endian) {
+        buf[offset..end].copy_from_slice(&v.to_le_bytes()[..b]);
+    } else {
+        buf[offset..end].copy_from_slice(&v.to_be_bytes()[8 - b..]);
+    }
+    Ok(())
 }
 
 pub fn sign_extend(v: u64, bytes: u8) -> i64 {
@@ -402,30 +452,30 @@ pub fn sign_extend(v: u64, bytes: u8) -> i64 {
 /// Write a scalar field. `v` holds the raw bits: for a signed field, pass the
 /// two's-complement value (`-5i64 as u64`).
 pub fn write_scalar(buf: &mut [u8], r: &FieldRef, v: u64) -> Result<(), AccessError> {
-    let FieldKind::Int { bytes, endian, signed } = r.kind else {
-        return Err(AccessError::NotScalar);
-    };
-    let b = *bytes as usize;
-    let end = r.offset + b;
-    if end > buf.len() {
-        return Err(AccessError::OutOfBounds { need: end, have: buf.len() });
+    match *r.kind {
+        FieldKind::Int { bytes, endian, signed } => {
+            let fits = if signed {
+                sign_extend(v, bytes) as u64 == v
+            } else {
+                bytes == 8 || v >> (8 * bytes) == 0
+            };
+            if !fits {
+                return Err(AccessError::Overflow { bytes, val: v });
+            }
+            write_word(buf, r.offset, bytes, endian, v)
+        }
+        // as write_bits(): read-modify-write of the word, an oversized value
+        // an error
+        FieldKind::Bits { bytes, endian, lo, hi } => {
+            let mask = bits_mask(lo, hi);
+            if v & !mask != 0 {
+                return Err(AccessError::BitsOverflow { bits: hi - lo, val: v });
+            }
+            let old = read_word(buf, r.offset, bytes, endian)?;
+            write_word(buf, r.offset, bytes, endian, old & !(mask << lo) | (v << lo))
+        }
+        _ => Err(AccessError::NotScalar),
     }
-
-    let fits = if *signed {
-        sign_extend(v, *bytes) as u64 == v
-    } else {
-        b == 8 || v >> (8 * b) == 0
-    };
-    if !fits {
-        return Err(AccessError::Overflow { bytes: *bytes, val: v });
-    }
-
-    if is_le(*endian) {
-        buf[r.offset..end].copy_from_slice(&v.to_le_bytes()[..b]);
-    } else {
-        buf[r.offset..end].copy_from_slice(&v.to_be_bytes()[8 - b..]);
-    }
-    Ok(())
 }
 
 /// Read a declared bit range of a scalar field.
@@ -497,28 +547,59 @@ fn bits_to_text(
 ) -> core::fmt::Result {
     let r = FieldRef { offset, kind, len: 0 };
     let Ok(v) = read_scalar(buf, &r) else { return Ok(()) };
+    set_bits_to_text(out, v, bitmask_fields(info.name)
+        .filter(|bm| bm.matches_field(name, idx))
+        .map(|bm| (bm.name, bm.lo, bm.hi)))
+}
 
+/// The ranges of @v named in @bits that aren't zero: ` (subvol|state=1)`.
+fn set_bits_to_text<'a>(
+    out: &mut dyn core::fmt::Write,
+    v: u64,
+    bits: impl Iterator<Item = (&'a str, u8, u8)>,
+) -> core::fmt::Result {
     let mut first = true;
-    for bm in bitmask_fields(info.name) {
-        if !bm.matches_field(name, idx) {
-            continue;
-        }
-        let bits = (v >> bm.lo) & bm.mask();
+    for (name, lo, hi) in bits {
+        let bits = (v >> lo) & bits_mask(lo, hi);
         if bits == 0 {
             continue;
         }
         write!(out, "{}", if first { " (" } else { "|" })?;
         first = false;
-        if bm.hi - bm.lo == 1 {
-            write!(out, "{}", bm.name)?;
+        if hi - lo == 1 {
+            write!(out, "{name}")?;
         } else {
-            write!(out, "{}={bits}", bm.name)?;
+            write!(out, "{name}={bits}")?;
         }
     }
     if !first {
         write!(out, ")")?;
     }
     Ok(())
+}
+
+/// A #[bitfield] field: its word, and its members that are set - or, a word
+/// kvdb can't read, a u128's, its bytes.
+fn bitfield_to_text(
+    out: &mut dyn core::fmt::Write,
+    w: &'static StructInfo,
+    buf: &[u8],
+    offset: usize,
+) -> core::fmt::Result {
+    let Some(&FieldKind::Bits { bytes, endian, .. }) = w.fields.first().map(|m| &m.kind) else {
+        for b in buf.get(offset..(offset + w.size).min(buf.len())).unwrap_or_default() {
+            write!(out, "{b:02x}")?;
+        }
+        return Ok(());
+    };
+    let Ok(v) = read_word(buf, offset, bytes, endian) else {
+        return write!(out, "(beyond end of value)");
+    };
+    write!(out, "{v}")?;
+    set_bits_to_text(out, v, w.fields.iter().filter_map(|m| match m.kind {
+        FieldKind::Bits { lo, hi, .. } => Some((m.name, lo, hi)),
+        _ => None,
+    }))
 }
 
 fn fields_to_text(
@@ -540,6 +621,10 @@ fn fields_to_text(
             FieldKind::Int { .. } => {
                 int_to_text(out, buf, offset, &f.kind)?;
                 bits_to_text(out, info, f.name, None, buf, offset, &f.kind)?;
+                writeln!(out)?;
+            }
+            FieldKind::Struct(w) if w.shape == Shape::Bitfield => {
+                bitfield_to_text(out, w, buf, offset)?;
                 writeln!(out)?;
             }
             FieldKind::Struct(inner) => {
@@ -572,6 +657,10 @@ fn fields_to_text(
                 let n = buf.len().saturating_sub(offset) / stride.max(&1);
                 writeln!(out, "({n} trailing elements)")?;
             }
+            FieldKind::Bits { .. } => match read_scalar(buf, &FieldRef { offset, kind: &f.kind, len: 0 }) {
+                Ok(v) => writeln!(out, "{v}")?,
+                Err(_) => writeln!(out, "(beyond end of value)")?,
+            },
             FieldKind::Opaque => {
                 let end = info
                     .fields
