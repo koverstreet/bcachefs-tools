@@ -62,7 +62,7 @@ use crate::util::task::{waiter, Completion, Done, Waiter};
 use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
-use cstruct_macros::{c_export, Init};
+use cstruct_macros::Init;
 use pin_init::pin_data;
 
 // A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
@@ -687,49 +687,11 @@ impl<O: BioOwner, B> Drop for Remapped<'_, O, B> {
     }
 }
 
-// ── For C ────────────────────────────────────────────────────────────────
-
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-#[c_export]
-pub unsafe fn bch2_corrupt_bio(bio: *mut c::bio) {
-    unsafe { Bio::from_raw_mut(bio) }.corrupt()
-}
-
-#[c_export]
-pub unsafe fn bch2_bio_to_text(out: &mut Printbuf, bio: *mut c::bio) {
-    unsafe { Bio::from_raw(bio) }.to_text(out)
-}
-
-#[c_export]
-pub fn bch2_buf_nr_bvecs(p: *const c_void, len: usize) -> usize {
-    buf_nr_bvecs(p.cast(), len)
-}
-
-#[c_export]
 pub unsafe fn bch2_bio_map(bio: *mut c::bio, base: *mut c_void, size: usize) {
     unsafe { Bio::from_raw_mut(bio).map(base.cast(), size) }
 }
 
-#[c_export]
 pub unsafe fn memcpy_to_bio(dst: *mut c::bio, dst_iter: c::bvec_iter, src: *const c_void) {
     let dst = unsafe { Bio::from_raw(dst).range_at(dst_iter) };
     dst.copy_from(unsafe { core::slice::from_raw_parts(src.cast(), dst.len() as usize) });
-}
-
-/// As much as both have, copied, both iters advanced past it.
-#[c_export]
-pub unsafe fn bch2_bio_copy_data_iter(dst: *mut c::bio, dst_iter: &mut c::bvec_iter,
-                                      src: *mut c::bio, src_iter: &mut c::bvec_iter) {
-    let mut d = unsafe { Bio::from_raw(dst).range_at(*dst_iter) };
-    let mut s = unsafe { Bio::from_raw(src).range_at(*src_iter) };
-    let n = d.copy_from_range(s);
-    d.advance(n);
-    s.advance(n);
-    *dst_iter = d.pos();
-    *src_iter = s.pos();
-}
-
-#[c_export]
-pub unsafe fn bch2_zero_fill_bio_iter(bio: *mut c::bio, start: c::bvec_iter) {
-    unsafe { Bio::from_raw(bio).range_at(start) }.zero()
 }

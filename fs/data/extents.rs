@@ -21,7 +21,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{c_export, CStruct, c_enum, TypeInfo};
+use cstruct_macros::{CStruct, c_enum, TypeInfo};
 use crate::types::c_default;
 use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits};
 
@@ -398,7 +398,6 @@ fn shrink_val(mut k: BkeyS<'_>, val_u64s: usize) {
 }
 
 /// The change in @k's u64s, never above 0.
-#[c_export]
 pub fn bch2_cut_front_s(c: &Fs, where_: Bpos, k: BkeyS<'_>) -> c_int {
     let u64s = c_int::from(k.k.u64s);
     let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");
@@ -407,7 +406,6 @@ pub fn bch2_cut_front_s(c: &Fs, where_: Bpos, k: BkeyS<'_>) -> c_int {
 }
 
 /// The change in @k's u64s, never above 0.
-#[c_export]
 pub fn bch2_cut_back_s(where_: Bpos, k: BkeyS<'_>) -> c_int {
     let u64s = c_int::from(k.k.u64s);
     let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");

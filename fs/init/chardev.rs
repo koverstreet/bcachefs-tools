@@ -65,7 +65,7 @@ use core::ptr::NonNull;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use core::ffi::{c_void, CStr};
-use cstruct_macros::{c_export, vtable};
+use cstruct_macros::vtable;
 use crate::util::alloc::KVec;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::{UserPtr, UserSlice};
@@ -163,11 +163,6 @@ fn global_ioctl(cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
 /// What the syscall returns: an error as its class.
 pub fn ioctl_ret(ret: Result<c_long, BchError>) -> c_long {
     ret.unwrap_or_else(|e| e.class() as c_long)
-}
-
-#[c_export]
-pub fn bch2_fs_ioctl(c: &Opaque<Fs>, cmd: c_uint, arg: *mut c_void) -> c_long {
-    ioctl_ret(fs_ioctl(Fs::from_c(c), cmd, UserPtr::from_ptr(arg)))
 }
 
 /* The queries */

@@ -21,7 +21,6 @@ use c::six_lock_type::SIX_LOCK_intent;
 use core::ffi::c_int;
 use core::mem::offset_of;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::c_export;
 
 /*
  * A dirty cached key holds a journal pin on the oldest entry its updates are
@@ -302,8 +301,7 @@ impl Fs {
 /// # Safety
 /// @insert_entry is the transaction's, its path a cached one traversed to its
 /// entry, and write locked.
-#[c_export]
-pub unsafe fn bch2_btree_insert_key_cached(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
+pub unsafe fn bch2_btree_insert_key_cached(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
                                            insert_entry: *mut c::btree_insert_entry) {
     let fs = trans.fs();
     let bc = &fs.btree.key_cache;
@@ -365,8 +363,7 @@ pub unsafe fn bch2_btree_insert_key_cached(trans: &BtreeTrans<'_>, #[lent(trans)
 
 /// # Safety
 /// @path is the transaction's, a cached one holding its entry write locked.
-#[c_export]
-pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
+pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
                                         path: *mut BtreePath) {
     let fs = trans.fs();
     let bc = &fs.btree.key_cache;

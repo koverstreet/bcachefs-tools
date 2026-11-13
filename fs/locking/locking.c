@@ -14,11 +14,17 @@
  * at link. A plain declaration binds to one shared definition.
  */
 
-#include "bcachefs.h"
-#include "locking/locking.h"
-#include "locking/six.h"
+#include <linux/local_lock.h>
+#include <linux/lockdep.h>
+#include <linux/mutex.h>
+#include <linux/percpu-rwsem.h>
+#include <linux/rwsem.h>
+#include <linux/sched/mm.h>
+#include <linux/spinlock.h>
 
 #include <trace/events/lock.h>
+
+#include "locking/shim.h"
 
 /* btree/locking.rs: btree node locks, which lockdep doesn't track */
 

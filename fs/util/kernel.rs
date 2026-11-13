@@ -172,8 +172,8 @@ macro_rules! ret_ip {
     () => { 0 as core::ffi::c_ulong };
 }
 
-/// race_fault(): bcachefs.h's dynamic_fault("bcachefs:race") - which no
-/// kernel we build against has, so it's 0 in C too.
+/// race_fault(): dynamic_fault("bcachefs:race"), which no kernel we build
+/// against has.
 pub fn race_fault() -> bool {
     false
 }

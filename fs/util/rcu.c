@@ -4,7 +4,8 @@
  * The C that util/rcu.rs calls: init_srcu_struct() is a macro under lockdep.
  */
 
-#include "bcachefs.h"
+#include <linux/srcu.h>
+
 #include "util/shim.h"
 
 int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key)

@@ -21,13 +21,10 @@ use crate::data::ec::stripe::ptr_matches_stripe;
 use crate::data::ptrs::{crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::util::ffi::Opaque;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
 use crate::data_structures::array_vec::ArrayVec;
-use core::ffi::c_uint;
-use cstruct_macros::c_export;
 use crate::format::{Btree, MemberState};
 
 impl Fs {
@@ -398,11 +395,6 @@ pub fn drop_extra_ec_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<
 }
 
 // ── C's ──────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_dev_durability(c: &Opaque<Fs>, dev: c_uint) -> c_uint {
-    Fs::from_c(c).dev_durability(dev, &read_lock())
-}
 
 #[cfg(test)]
 mod tests {

@@ -5,7 +5,6 @@
 use core::ffi::{c_int, c_uint};
 use core::ptr;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
-use cstruct_macros::c_export;
 use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, ValidateFlags,
                          BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX};
 use crate::btree::cache::btree_ptr_hash_val;
@@ -1420,8 +1419,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
 
 /// # Safety
 /// @merge_count is null, or a counter merges are counted in.
-#[c_export]
-pub unsafe fn __bch2_foreground_maybe_merge(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
+pub unsafe fn __bch2_foreground_maybe_merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
                                             path: PathIdx, level: c_uint, flags: c::bch_trans_commit_flags,
                                             merge_count: *mut u64) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };

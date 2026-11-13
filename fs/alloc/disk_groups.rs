@@ -79,12 +79,11 @@ use crate::opts::OptFn;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members;
 use crate::{prt, sb_err_on};
-use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Unvalidated;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{c_export, CStruct, c_rcu_array, TypeInfo, c_const, c_enum};
+use cstruct_macros::{CStruct, c_rcu_array, TypeInfo, c_const, c_enum};
 use crate::sb::io::SbResize;
 use crate::types::c_default;
 use nestify::nest;
@@ -529,12 +528,6 @@ impl Fs {
 //
 // C calls these holding rcu: the nested read lock each takes is so Rust can
 // borrow - what's returned is good for the caller's read side section.
-
-#[c_export]
-pub fn bch2_target_to_mask(c: &Opaque<Fs>, target: c_uint) -> *const c::bch_devs_mask {
-    let rcu = read_lock();
-    Fs::from_c(c).target_to_mask(Target::decode(target), &rcu).map_or(core::ptr::null(), |m| m)
-}
 
 impl Fs {
     /// Spreading key for candidate device @dev: the number of copies already

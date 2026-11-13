@@ -13,7 +13,7 @@ use core::ffi::{c_int, c_uint, c_void};
 use core::ops::{ControlFlow, Range};
 use core::ptr::NonNull;
 
-use cstruct_macros::{c_export, vtable};
+use cstruct_macros::vtable;
 use kernel::page::PAGE_SHIFT;
 
 use crate::btree::bkey::{pos, BkeySC};
@@ -217,20 +217,6 @@ pub(super) fn blocks_out(fs: &Fs, offset: usize, len: usize) -> Range<usize> {
 pub(super) fn blocks_in(fs: &Fs, offset: usize, len: usize) -> Range<usize> {
     let block_bytes = fs.block_bytes() as usize;
     offset.next_multiple_of(block_bytes) >> 9..(offset + len) / block_bytes * block_bytes >> 9
-}
-
-#[c_export]
-pub fn __bch2_folio_create(folio: *mut c::folio, gfp: c::gfp_t) -> *mut c::bch_folio {
-    let _scope = MemallocFlags::for_gfp(gfp);
-    unsafe { Folio::from_raw(folio) }.alloc_state().map_or(core::ptr::null_mut(), NonNull::as_ptr)
-}
-
-#[c_export]
-pub fn bch2_folio_create(folio: *mut c::folio, gfp: c::gfp_t) -> *mut c::bch_folio {
-    let _scope = MemallocFlags::for_gfp(gfp);
-    let folio = unsafe { Folio::from_raw(folio) };
-    folio.create_state();
-    folio.state_ptr().map_or(core::ptr::null_mut(), NonNull::as_ptr)
 }
 
 impl SectorState {

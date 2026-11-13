@@ -158,12 +158,12 @@ use crate::util::{max_of, Printbuf};
 use crate::SPOS_MAX;
 use bitflags::bitflags;
 use core::cell::Cell;
-use core::ffi::{c_ulong, c_uint};
+use core::ffi::c_ulong;
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 use crate::data::ptrs::BtreePtrs;
 use crate::types::{c_default, Lent};
-use cstruct_macros::{CStruct, c_export};
+use cstruct_macros::CStruct;
 use crate::format::{Bpos, Btree, BkeyType};
 
 #[repr(C)]
@@ -1889,29 +1889,9 @@ unsafe fn peek_c(iter: *mut c::btree_iter,
 }
 
 /// # Safety
-/// @iter is an initialized iterator, which C hands over for the call.
-#[c_export]
-pub unsafe fn bch2_btree_iter_peek_node(iter: *mut c::btree_iter) -> *mut BtreeNode {
-    unsafe {
-        with_attempt(iter, |iter, t, paths| match iter.peek_node_in(t, paths) {
-            Ok(b)  => b.map_or(ptr::null_mut(), |b| ptr::from_ref(b.node()).cast_mut()),
-            Err(e) => err_ptr(e),
-        })
-    }
-}
-
-/// # Safety
 /// As bch2_btree_iter_peek_node()'s.
-#[c_export]
 pub unsafe fn bch2_btree_iter_advance(iter: *mut c::btree_iter) -> bool {
     unsafe { with_paths(iter, |iter, paths| iter.advance_in(paths)) }
-}
-
-/// # Safety
-/// As bch2_btree_iter_peek_node()'s.
-#[c_export]
-pub unsafe fn bch2_btree_iter_rewind(iter: *mut c::btree_iter) -> bool {
-    unsafe { with_paths(iter, |iter, paths| iter.rewind_in(paths)) }
 }
 
 /**
@@ -1924,7 +1904,6 @@ pub unsafe fn bch2_btree_iter_rewind(iter: *mut c::btree_iter) -> bool {
  */
 /// # Safety
 /// As bch2_btree_iter_peek_node()'s.
-#[c_export]
 pub unsafe fn bch2_btree_iter_peek_max(iter: *mut c::btree_iter, end: *const Bpos) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, t, paths| iter.peek_max_in(t, paths, *end)) }
 }
@@ -1952,7 +1931,6 @@ pub unsafe fn bch2_btree_iter_peek_max(iter: *mut c::btree_iter, end: *const Bpo
  */
 /// # Safety
 /// As bch2_btree_iter_peek_node()'s.
-#[c_export]
 pub unsafe fn bch2_btree_iter_peek_prev_min(iter: *mut c::btree_iter, end: Bpos) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, t, paths| iter.peek_prev_min_in(t, paths, end)) }
 }
@@ -1966,7 +1944,6 @@ pub unsafe fn bch2_btree_iter_peek_prev_min(iter: *mut c::btree_iter, end: Bpos)
  */
 /// # Safety
 /// As bch2_btree_iter_peek_node()'s.
-#[c_export]
 pub unsafe fn bch2_btree_iter_peek_slot(iter: *mut c::btree_iter) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, t, paths| iter.peek_slot_in(t, paths)) }
 }
@@ -1982,27 +1959,12 @@ pub unsafe fn bch2_btree_iter_peek_slot(iter: *mut c::btree_iter) -> c::bkey_s_c
  */
 /// # Safety
 /// As bch2_btree_iter_peek_node()'s.
-#[c_export]
 pub unsafe fn bch2_btree_iter_peek_slot_max(iter: *mut c::btree_iter, end: Bpos) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, t, paths| iter.peek_slot_max_in(t, paths, end)) }
 }
 
 /// # Safety
-/// @iter is an initialized iterator, or zeroed, C's for the call.
-#[c_export]
-pub unsafe fn bch2_btree_iter_peek_root(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                        iter: *mut c::btree_iter, btree: Btree, level: c_uint) -> c::bkey_s_c {
-    let t = unsafe { trans.attempt_in_progress() };
-    match unsafe { (*iter.cast::<BtreeIter<'static>>()).peek_root_in(&t, paths, btree, level) } {
-        Ok(Some(k)) => BkeySC::from(unsafe { k.as_ref() }).into(),
-        Ok(None)    => c::bkey_s_c::default(),
-        Err(e)      => c::bkey_s_c { k: err_ptr(e), v: ptr::null() },
-    }
-}
-
-/// # Safety
 /// @iter is an initialized iterator, or one exit()ed, or zeroed.
-#[c_export]
 pub unsafe fn bch2_trans_iter_exit(iter: *mut c::btree_iter) {
     unsafe {
         let iter = &mut *iter.cast::<BtreeIter<'static>>();
@@ -2014,16 +1976,6 @@ pub unsafe fn bch2_trans_iter_exit(iter: *mut c::btree_iter) {
     }
 }
 
-/// # Safety
-/// @iter is valid for writes, and holds no paths.
-#[c_export]
-pub unsafe fn bch2_trans_iter_init_outlined(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                            iter: *mut c::btree_iter, btree_id: Btree, pos: Bpos,
-                                            flags: c::btree_iter_update_trigger_flags, ip: c_ulong) {
-    let flags = BtreeIterFlags::from_bits_retain(flags.bits());
-    unsafe { iter.cast::<BtreeIter<'_>>().write(BtreeIter::init_in(trans, paths, btree_id, pos, flags, ip)) }
-}
-
 
 /*
  * Low-level iterator init: takes level and flags exactly as given - no
@@ -2032,47 +1984,6 @@ pub unsafe fn bch2_trans_iter_init_outlined(trans: &BtreeTrans<'_>, #[lent(trans
  * snapshot semantics, e.g. the query_btree_keys ioctl; validate untrusted
  * parameters with bch2_btree_iter_params_valid() first:
  */
-/// # Safety
-/// As bch2_trans_iter_init_outlined()'s.
-#[c_export]
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn __bch2_trans_iter_init_ll(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                        iter: *mut c::btree_iter, btree_id: Btree, pos: Bpos,
-                                        locks_want: c_uint, depth: c_uint,
-                                        flags: c::btree_iter_update_trigger_flags, ip: c_ulong) {
-    let flags = BtreeIterFlags::from_bits_retain(flags.bits());
-    unsafe {
-        iter.cast::<BtreeIter<'_>>()
-            .write(BtreeIter::init_ll_in(trans, paths, btree_id, pos, locks_want, depth, flags, ip))
-    }
-}
-
-/// # Safety
-/// As bch2_trans_iter_init_outlined()'s.
-#[c_export]
-pub unsafe fn __bch2_trans_node_iter_init(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                          iter: *mut c::btree_iter, btree_id: Btree, pos: Bpos,
-                                          locks_want: c_uint, depth: c_uint,
-                                          flags: c::btree_iter_update_trigger_flags) {
-    let flags = BtreeIterFlags::from_bits_retain(flags.bits());
-    unsafe {
-        iter.cast::<BtreeIter<'_>>()
-            .write(BtreeIter::node_iter_init_in(trans, paths, btree_id, pos, locks_want, depth, flags,
-                                                crate::ret_ip!()))
-    }
-}
-
-/// # Safety
-/// @dst is valid for writes, and holds no paths; @src is an initialized
-/// iterator.
-#[c_export]
-pub unsafe fn bch2_trans_copy_iter(dst: *mut c::btree_iter, src: *mut c::btree_iter) {
-    unsafe {
-        let src = &*src.cast::<BtreeIter<'static>>();
-        let copy = src.copy_in(&mut Paths::lent(&*src.trans));
-        dst.cast::<BtreeIter<'static>>().write(copy);
-    }
-}
 
 /// XXX polonius: NLL problem case #3. A loop that returns the key it stops
 /// at, borrowed from its iterator, and advances otherwise:

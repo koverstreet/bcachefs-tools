@@ -2,6 +2,8 @@
 #define __TOOLS_LINUX_MUTEX_H
 
 #include <pthread.h>
+#include <linux/cleanup.h>
+#include <linux/types.h>
 
 struct mutex {
 	pthread_mutex_t lock;

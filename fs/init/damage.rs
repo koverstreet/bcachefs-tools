@@ -31,9 +31,9 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN, SPOS_MAX};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::inode::{self, bkey_is_inode};
@@ -46,9 +46,7 @@ use crate::util::vstructs::Validated;
 use crate::{bch_err, bch_err_ratelimited, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
 use c::bch_sb_field_error_entry_v2 as Entry;
 use core::cmp::Ordering;
-use core::ffi::c_int;
 use core::mem::size_of;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, BkeyType};
 
 // ── The key ──────────────────────────────────────────────────────────────
@@ -285,11 +283,6 @@ pub fn keys_merge<'a, 't>(
 }
 
 /* For C's: in the attempt C has in progress */
-
-#[c_export]
-pub extern "C" fn bch2_damage_record(trans: &BtreeTrans<'_>, pos: Bpos, err: SbErrorId) -> c_int {
-    ret_to_c(record(&unsafe { trans.attempt_in_progress() }, pos, err))
-}
 
 // ── Lost extents ─────────────────────────────────────────────────────────
 

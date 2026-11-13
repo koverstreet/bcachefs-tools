@@ -7,17 +7,13 @@ use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::snapshots::subvolume::delete_unlinked;
-use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
+use crate::types::{RustOnly, bits_to_longs, rust_only};
 use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitArray;
 use crate::util::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicBool, AtomicU32};
-use cstruct_macros::{c_const, c_enum, c_rcu_array, placed, CStruct, c_typedef, Init, TypeInfo};
+use cstruct_macros::{c_const, c_enum, c_rcu_array, placed, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
-
-c_typedef! {
-    pub type snapshot_id_list = DArray<u32>;
-}
 
 c_const! {
     #[c_int]

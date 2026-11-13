@@ -246,12 +246,12 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use pin_init::pinned_drop;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_export, CStruct, bitfield, c_typedef, TypeInfo};
+use cstruct_macros::{CStruct, bitfield, TypeInfo};
 #[cfg(kernel)]
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::place::Contained, crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
      core::sync::atomic::Ordering::Acquire};
-use crate::types::{DArray, RustOnly, bits_to_longs, c_default, rust_only};
+use crate::types::{RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::bio::{Bio, BioBox};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
@@ -357,11 +357,6 @@ impl Default for bch_sb_handle {
     fn default() -> Self {
         bch_sb_handle { io: Default::default(), dev: Default::default() }
     }
-}
-
-c_typedef! {
-    #[c("DARRAY(struct bch_sb_handle) bch_sb_handles")]
-    pub type bch_sb_handles = DArray<c::bch_sb_handle>;
 }
 
 /// A set of devices, by index.
@@ -1713,7 +1708,6 @@ fn ewma_add(ewma: u64, val: u64, weight: u32) -> u64 {
 }
 
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-#[c_export]
 pub fn bch2_latency_acct(ca: &Dev, submit_time: u64, rw: c_int) {
     ca.latency_acct(submit_time, rw as usize)
 }

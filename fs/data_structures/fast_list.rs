@@ -29,13 +29,13 @@ use crate::util::alloc::AllocError;
 use crate::util::percpu::{IrqGuard, PerCpu, PerCpuRef};
 use crate::util::rcu::ReadGuard;
 use crate::data_structures::array_vec::ArrayVec;
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::{c_uint, c_void};
 use core::iter;
 use core::mem::ManuallyDrop;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
-use cstruct_macros::{c_export, CStruct};
+use cstruct_macros::CStruct;
 use crate::types::{c_default, c_opaque};
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::SharedGenRadix;
@@ -247,18 +247,4 @@ impl Drop for Slot<'_> {
     fn drop(&mut self) {
         self.list.put_idx(self.idx)
     }
-}
-
-// ── For C ────────────────────────────────────────────────────────────────
-
-/// @item's slot, or -ENOMEM.
-#[c_export]
-pub fn fast_list_add(l: &c::fast_list, item: *mut c_void) -> c_int {
-    let item = NonNull::new(item).expect("a NULL item for a fast_list");
-    l.add(item).map_or(-(c::ENOMEM as c_int), |idx| idx as c_int)
-}
-
-#[c_export]
-pub fn fast_list_remove(l: &c::fast_list, idx: c_uint) {
-    l.remove(idx)
 }

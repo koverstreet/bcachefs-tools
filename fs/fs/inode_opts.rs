@@ -24,7 +24,7 @@ use crate::c;
 use crate::data::ptrs::Ptrs;
 use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::data::reflink::Indirect;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::sb::errors::FsckFlags;
@@ -33,10 +33,9 @@ use crate::util::ffi::{c_str, Opaque};
 use crate::util::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, inode, logged_ops, opts};
-use core::ffi::{c_int, CStr};
-use core::mem::MaybeUninit;
+use core::ffi::CStr;
 use core::ops::ControlFlow;
-use cstruct_macros::{c_export, CStruct};
+use cstruct_macros::CStruct;
 use crate::format::{Btree, BkeyType};
 
 /*
@@ -301,7 +300,6 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
     ret
 }
 
-#[c_export]
 pub fn bch2_inode_opts_get_inode(
     c:     &Opaque<Fs>,
     inode: &c::bch_inode_unpacked,
@@ -454,16 +452,6 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
         }
     }
     Ok(opts)
-}
-
-/// # Safety
-/// C has an attempt in progress on @trans; @s's darray is C's.
-#[c_export]
-pub unsafe fn bch2_bkey_get_io_opts(trans: &BtreeTrans<'_>, s: Option<&mut c::per_snapshot_io_opts>, k: BkeySC<'_>,
-                                    opts: &mut MaybeUninit<c::bch_inode_opts>) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(get_io_opts(&t, s, k).map(|o| { opts.write(o); }))
 }
 
 // ── Propagation to ancestor snapshots ────────────────────────────────────

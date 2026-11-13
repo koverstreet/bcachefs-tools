@@ -476,33 +476,3 @@ impl<T: StdioFile> ThreadWithFile<Stdio<T>> {
         Ok((file.install(), r))
     }
 }
-
-/* For C's prints */
-
-/// # Safety
-/// @stdio is a live redirect's, @buf @len bytes.
-#[cstruct_macros::c_export]
-pub unsafe extern "C" fn bch2_stdio_redirect_write(stdio: *mut c::stdio_redirect, nonblocking: bool,
-                                                   buf: *const c_char, len: usize) -> isize {
-    let stdio = unsafe { StdioRedirect::from_c(stdio) };
-    let msg = unsafe { core::slice::from_raw_parts(buf.cast::<u8>(), len) };
-    match stdio.write(nonblocking, msg) {
-        Ok(())  => len as isize,
-        Err(e)  => -(e.raw() as isize),
-    }
-}
-
-/// The fsck question's answer, a line into @line: 0, or a -errcode - ETIME
-/// if @timeout jiffies passed first.
-///
-/// # Safety
-/// @stdio is a live redirect's; @line a darray.
-#[cstruct_macros::c_export]
-pub unsafe extern "C" fn bch2_stdio_redirect_readline_timeout(stdio: *mut c::stdio_redirect,
-                                                              line: *mut c::darray_char,
-                                                              timeout: c_ulong) -> c_int {
-    let stdio = unsafe { StdioRedirect::from_c(stdio) };
-    // SAFETY: C's darray, its buffer kvmalloc()'d
-    let mut line = unsafe { crate::util::alloc::DArrayLoan::new(&mut *line) };
-    crate::errcode::ret_to_c(stdio.readline_timeout(&mut line, timeout))
-}

@@ -6,15 +6,10 @@
 
 use crate::cstructs::c;
 use crate::locking::Locked;
-use crate::types::{DArray, c_default};
-use cstruct_macros::{bitfield, c_enum, c_typedef, CStruct, TypeInfo};
+use crate::types::c_default;
+use cstruct_macros::{bitfield, c_enum, CStruct, TypeInfo};
 use nestify::nest;
 use core::sync::atomic::AtomicI32;
-
-c_typedef! {
-    #[c("DARRAY(struct folio *) folios")]
-    pub type folios = DArray<*mut c::folio>;
-}
 
 c_enum! {
     #[closed]

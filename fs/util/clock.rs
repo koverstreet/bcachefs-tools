@@ -28,22 +28,19 @@
 //! an increment, and the task state and the wake order its recheck after one.
 
 use crate::c;
-use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::{new_lock, prt};
 use crate::types::{rust_only, RustOnly};
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::kernel::HZ;
-use crate::util::ffi::Opaque;
 use crate::util::percpu::{CpuGuard, PerCpu};
 use crate::util::sched;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd, SleepError};
 use crate::util::{Printbuf, ToText};
-use core::ffi::c_int;
 use core::panic::Location;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
-use cstruct_macros::{c_const, c_export, CStruct, Init};
+use cstruct_macros::{c_const, CStruct, Init};
 use pin_init::{pin_data, pinned_drop};
 
 c_const! {
@@ -202,11 +199,6 @@ impl io_clock {
             unsafe { c::wake_up_process(t.task) };
         }
     }
-}
-
-#[c_export]
-pub fn bch2_increment_clock(c: &Opaque<Fs>, sectors: u64, rw: c_int) {
-    Fs::from_c(c).io_clock[rw as usize].increment(sectors)
 }
 
 impl ToText for io_clock {

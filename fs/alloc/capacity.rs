@@ -35,14 +35,13 @@ use crate::fs::Dev;
 use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::bch_errcode;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::init::error::trans_inconsistent;
 use crate::percpu_field;
 use crate::debug::trace::events;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
-use crate::util::ffi::Opaque;
 use crate::util::kernel::unlikely;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::percpu::{CpuGuard, PerCpuRef};
@@ -50,10 +49,8 @@ use crate::util::rcu::read_lock;
 use crate::util::{HumanReadable, Printbuf};
 use c::{DevsMask, PlacementWriter};
 use core::cell::Cell;
-use core::ffi::c_int;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};
-use cstruct_macros::c_export;
 use pin_init::pinned_drop;
 
 // ── Capacity ─────────────────────────────────────────────────────────────
@@ -833,13 +830,6 @@ impl Fs {
         res.sectors.set(res.sectors.get() + sectors);
         Ok(())
     }
-}
-
-/// buckets.h's fastpath's, when this CPU's cache is short.
-#[c_export]
-pub fn bch2_disk_reservation_add_slowpath(c: &Opaque<Fs>, res: &c::disk_reservation, sectors: u64,
-                                          flags: c::bch_reservation_flags) -> c_int {
-    ret_to_c(Fs::from_c(c).disk_reservation_add_slowpath(res, sectors, flags))
 }
 
 impl<'f> DiskReservation<'f> {

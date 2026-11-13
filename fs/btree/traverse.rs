@@ -7,7 +7,6 @@ use core::cmp::Ordering;
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::ptr::{self, NonNull};
 
-use cstruct_macros::c_export;
 
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -835,8 +834,7 @@ impl BtreeTrans<'_> {
 
 // ── For C ───────────────────────────────────────────────────────────────────
 
-#[c_export]
-pub fn bch2_btree_path_traverse_one(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx,
+pub fn bch2_btree_path_traverse_one(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx,
                                     flags: c::btree_iter_update_trigger_flags) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
     ret_to_c(trans.path_traverse_one(&t, paths, path, BtreeIterFlags::from_bits_retain(flags.bits())))

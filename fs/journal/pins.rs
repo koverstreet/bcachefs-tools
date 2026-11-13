@@ -15,7 +15,6 @@ use core::mem::offset_of;
 use core::ptr;
 use core::sync::atomic::{fence, AtomicI32, Ordering::{Acquire, Relaxed, Release, SeqCst}};
 
-use cstruct_macros::c_export;
 use pin_init::{pin_data, PinInit, Zeroable};
 
 use crate::c;
@@ -921,7 +920,6 @@ pub(crate) fn start(j: &c::journal, last_seq: u64, cur_seq: u64) -> Result<(), B
     Ok(())
 }
 
-#[c_export]
 pub fn bch2_journal_pin_set(j: &c::journal, seq: u64, pin: &c::journal_entry_pin,
                             ty: c::journal_pin_type, flush: c::journal_pin_flush_fn) {
     j.pin_set(seq, pin, ty, flush)

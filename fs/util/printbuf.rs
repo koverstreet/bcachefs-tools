@@ -1,15 +1,15 @@
 #![allow(non_camel_case_types)]
 
-use core::ffi::{CStr, c_int, c_uint, c_void};
+use core::ffi::{CStr, c_uint, c_void};
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::util::alloc::KVVec;
 use crate::util::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
-use cstruct_macros::{CStruct, bitfield, c_const, c_enum, c_export, c_name};
+use cstruct_macros::{CStruct, bitfield, c_const, c_enum, c_name};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -720,11 +720,6 @@ impl Printbuf {
         }
     }
 
-    fn nul_terminate(&mut self) {
-        self.make_room(1);
-        self.nul_terminate_reserved();
-    }
-
     fn prt_chars(&mut self, c: u8, n: usize) {
         self.make_room(n);
 
@@ -868,95 +863,6 @@ unsafe fn c_strs<'a>(list: *const *const c_char) -> impl Iterator<Item = &'a CSt
     (0..).map(move |i| unsafe { *list.add(i) })
         .take_while(|p| !p.is_null())
         .map(|p| unsafe { CStr::from_ptr(p.cast()) })
-}
-
-// ── For C ────────────────────────────────────────────────────────────────
-
-/// C's name for a method: `export!(bch2_prt_tab() => tab);`.
-macro_rules! export {
-    ($name:ident($($arg:ident: $t:ty),*) $(-> $r:ty)? => $method:ident) => {
-        #[c_export]
-        pub fn $name(out: &mut Printbuf $(, $arg: $t)*) $(-> $r)? { out.$method($($arg),*) }
-    };
-}
-
-export!(bch2_printbuf_exit() => exit);
-export!(bch2_printbuf_tabstops_reset() => tabstops_reset);
-export!(bch2_printbuf_indent_add(spaces: c_uint) => indent_add);
-export!(bch2_printbuf_indent_add_nextline(spaces: c_uint) => indent_add_nextline);
-export!(bch2_printbuf_indent_sub(spaces: c_uint) => indent_sub);
-export!(bch2_prt_newline() => newline);
-export!(bch2_prt_tab() => tab);
-export!(bch2_prt_tab_rjust() => tab_rjust);
-export!(bch2_prt_human_readable_u64(v: u64) => human_readable_u64);
-export!(bch2_printbuf_tabstop_align() => tabstop_align);
-export!(bch2_printbuf_reset() => reset);
-
-export!(bch2_printbuf_nul_terminate() => nul_terminate);
-
-#[c_export]
-pub fn bch2_printbuf_remaining(out: &mut Printbuf) -> c_uint {
-    out.remaining() as c_uint
-}
-
-#[c_export]
-pub fn bch2_prt_chars(out: &mut Printbuf, c: u8, n: c_uint) {
-    out.prt_chars(c, n as usize)
-}
-
-/// Contiguous hex dump, same output as printk's %*phN - which the userspace
-/// build can't use: libc vsnprintf prints kernel %p extensions as raw
-/// pointers.
-///
-/// # Safety
-/// @b is @n bytes.
-#[c_export]
-pub unsafe fn bch2_prt_hex_bytes(out: &mut Printbuf, b: *const u8, n: c_uint) {
-    for b in unsafe { core::slice::from_raw_parts(b, n as usize) } {
-        write!(out, "{b:02x}");
-    }
-}
-
-/// For prt_printf(), which stays C: what vsnprintf() wrote since @pos.
-#[c_export]
-pub fn bch2_printbuf_do_indent(out: &mut Printbuf, pos: c_uint) {
-    out.do_indent(pos as usize)
-}
-
-#[c_export]
-pub fn bch2_printbuf_make_room(out: &mut Printbuf, extra: c_uint) -> c_int {
-    out.grow(extra as usize).map_or_else(|e| -(e as c_int), |()| 0)
-}
-
-#[c_export]
-pub fn bch2_printbuf_tabstop_push(buf: &mut Printbuf, spaces: c_uint) -> c_int {
-    if buf.tabstop_push(spaces) { 0 } else { -(c::EINVAL as c_int) }
-}
-
-/// # Safety
-/// @str is @count bytes.
-#[c_export]
-pub unsafe fn bch2_prt_bytes_indented(out: &mut Printbuf, str: *const c_char, count: c_uint) {
-    out.write_bytes_indented(unsafe { core::slice::from_raw_parts(str.cast(), count as usize) })
-}
-
-/// # Safety
-/// @list is NULL-terminated.
-#[c_export]
-pub unsafe fn bch2_prt_string_option(out: &mut Printbuf, list: *const *const c_char, selected: usize) {
-    for (i, s) in unsafe { c_strs(list) }.enumerate() {
-        let (open, close): (&[u8], &[u8]) = if i == selected { (b"[", b"] ") } else { (b"", b" ") };
-        out.write_bytes(open);
-        out.write_bytes_indented(s.to_bytes());
-        out.write_bytes(close);
-    }
-}
-
-/// # Safety
-/// @list is NULL-terminated.
-#[c_export]
-pub unsafe fn bch2_prt_bitflags(out: &mut Printbuf, list: *const *const c_char, flags: u64) {
-    unsafe { out.prt_bitflags(list, flags) }
 }
 
 /// @bdev's name: as the kernel's %pg prints it, its disk's and partition's;
@@ -1179,18 +1085,6 @@ pub fn parse_human_u64(s: &str) -> Result<u64, BchError> {
         return Err(erange());
     }
     Ok(v)
-}
-
-/// parse_human_u64() for C: @res is 0 if it fails.
-///
-/// # Safety
-/// @cp is a C string.
-#[c_export]
-pub unsafe fn bch2_strtou64_h(cp: *const c_char, res: &mut u64) -> c_int {
-    let s = unsafe { CStr::from_ptr(cp.cast()) }.to_str().map_err(|_| BchError::from(c::EINVAL));
-    let ret = s.and_then(parse_human_u64);
-    *res = ret.unwrap_or(0);
-    ret_to_c(ret.map(drop))
 }
 
 /// @iter's items with @sep between each: `prt!(out, "{}", Join(", ", offsets))`.
@@ -1435,9 +1329,8 @@ mod tests {
                             (c"16E", -34, 0), (c"15.9E", 0, 18331451923248866918), (c"1x", -22, 0),
                             (c"1 ", -22, 0), (c"18446744073709551615", 0, u64::MAX),
                             (c"18446744073709551616", -34, 0)] {
-            let mut r = 1;
-            assert_eq!(unsafe { bch2_strtou64_h(s.as_ptr().cast(), &mut r) }, ret, "{s:?}");
-            assert_eq!(r, v, "{s:?}");
+            let r = parse_human_u64(s.to_str().unwrap()).map_err(|e| -e.raw());
+            assert_eq!(r, if ret == 0 { Ok(v) } else { Err(ret) }, "{s:?}");
         }
     }
 }

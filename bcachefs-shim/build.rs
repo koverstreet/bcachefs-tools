@@ -131,8 +131,6 @@ fn main() {
         .allowlist_file(format!("{}/locking/shim.h", fs_dir.display()))
         .allowlist_file(format!("{}/util/shim.h", fs_dir.display()))
         .allowlist_function("snprintf")
-        // include/linux/kobject.h's darrays: fs/'s, not the shim's
-        .blocklist_file(format!("{}/data_structures/.*", fs_dir.display()))
         // The raid library: userspace's stand-in for the kernel's raid6 and
         // xor, as fs/util/raid.rs uses it.
         .allowlist_function("raid_init|raid_zero|raid_gen|raid_rec")

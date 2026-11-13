@@ -45,7 +45,7 @@ use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed, SeqCst}};
-use cstruct_macros::{c_enum, c_export};
+use cstruct_macros::c_enum;
 
 #[repr(C)]
 pub struct BtreeWriteBio {
@@ -352,7 +352,6 @@ fn unpack(flags: c_uint) -> (BtreeWriteType, BtreeWriteFlags) {
     (BtreeWriteType::from_bits(flags & cs::BTREE_WRITE_TYPE_MASK as c_uint), BtreeWriteFlags::from_bits_truncate(flags))
 }
 
-#[c_export]
 pub fn __bch2_btree_node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, flags: c_uint) {
     let (ty, flags) = unpack(flags);
     node_write(trans, b, ty, flags)

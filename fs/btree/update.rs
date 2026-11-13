@@ -20,18 +20,18 @@ use crate::debug::trace::events;
 use crate::prt;
 use crate::snapshots::snapshot::{has_overwrites, is_ancestor};
 use core::cmp::Ordering;
-use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, err_ptr, BchError};
 use crate::fs::Fs;
 use crate::journal::entries::EntryWriter;
 use crate::util::kernel::unlikely;
 use crate::util::vstructs::{Validated, ValidatedEntries, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::{c_uint, c_ulong};
 use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
-use cstruct_macros::{c_export, c_enum};
+use cstruct_macros::c_enum;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use zerocopy::IntoBytes;
 
@@ -372,7 +372,6 @@ impl TransAttempt<'_, '_> {
 
 /// # Safety
 /// @trans is in an attempt; @buf is one of its sub-buffers.
-#[c_export]
 pub unsafe fn __bch2_trans_subbuf_alloc(trans: &BtreeTrans<'_>, buf: *mut c::btree_trans_subbuf,
                                         u64s: c_uint, _ip: c_ulong) -> *mut core::ffi::c_void {
     let t = unsafe { trans.attempt_in_progress() };
@@ -380,29 +379,6 @@ pub unsafe fn __bch2_trans_subbuf_alloc(trans: &BtreeTrans<'_>, buf: *mut c::btr
         Ok(s)  => s.as_ptr().cast(),
         Err(e) => err_ptr(e),
     }
-}
-
-/// # Safety
-/// @trans is in an attempt; @k is a key, @k_buf_u64s of room, that stays
-/// where it is until the attempt's over.
-#[c_export]
-#[must_use]
-pub unsafe fn bch2_trans_update_ip<'t>(trans: &'t BtreeTrans<'t>, iter: &BtreeIter<'t>, k: *mut c::bkey_i,
-                                       k_buf_u64s: c_uint, flags: c::btree_iter_update_trigger_flags,
-                                       ip: c_ulong) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    let k = unsafe { TransBkey::from_raw_room(&t, k, k_buf_u64s) };
-    ret_to_c(t.update_ip(iter, UpdateKey::borrowed(&k), UpdateTriggerFlags::from_bits_retain(flags.bits()), ip))
-}
-
-/// # Safety
-/// As bch2_trans_update_ip()'s, @k's u64s of room.
-#[c_export]
-pub unsafe fn bch2_btree_insert_trans(trans: &BtreeTrans<'_>, btree: Btree, k: *mut c::bkey_i,
-                                      flags: c::btree_iter_update_trigger_flags) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    let k = unsafe { TransBkey::from_raw_room(&t, k, (*k).k.u64s.into()) };
-    ret_to_c(t.insert_raw(btree, UpdateKey::borrowed(&k), flags.bits()))
 }
 
 impl<'a, 't> TransAttempt<'a, 't> {

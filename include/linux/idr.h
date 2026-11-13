@@ -12,6 +12,9 @@
 #ifndef __IDR_H__
 #define __IDR_H__
 
+#include <linux/kernel.h>
+#include <linux/mutex.h>
+
 struct idr {
 };
 

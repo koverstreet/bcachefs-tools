@@ -30,7 +30,7 @@ use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::init::passes::RecoveryPass;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, BkeyValidate};
 use crate::init::passes;
@@ -43,7 +43,6 @@ use crate::util::log::{LogLevel, LogMsg};
 use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report, prt};
 use core::mem::offset_of;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
 /// Whether subvolume key @k is long enough to have @field.
@@ -120,18 +119,6 @@ pub fn get_snapshot(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchErr
 /// For callers that handle a missing subvolume themselves: not reported.
 pub fn get_snapshot_nowarn(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchError> {
     __get_snapshot(t, subvol, false)
-}
-
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe fn bch2_subvolume_get_snapshot(
-    trans:  &BtreeTrans<'_>,
-    subvol: u32,
-    snapid: &mut u32,
-) -> core::ffi::c_int {
-    ret_to_c(get_snapshot(&unsafe { trans.attempt_in_progress() }, subvol)
-             .map(|s| *snapid = s))
 }
 
 /// Unlinked is the only state in which a subvolume's root may be an unlinked

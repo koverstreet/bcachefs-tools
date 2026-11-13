@@ -34,21 +34,20 @@ use crate::fs::Dev;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN, ValidateFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::prt;
 use crate::sb::errors::{FsckFlags, SbErrorId};
 use crate::util::alloc::KVVec;
-use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
 use crate::util::printbuf::Msg;
 use crate::util::prompt::{Choice, Prompt, Question, Reply};
 use crate::util::workqueue::Queue;
 use crate::util::{Printbuf, ToText};
-use core::ffi::{c_int, c_ulong, CStr};
+use core::ffi::{c_ulong, CStr};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_export, CStruct, Init, TypeInfo};
+use cstruct_macros::{CStruct, Init, TypeInfo};
 use crate::locking::{Locked, MemallocFlags};
 use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
@@ -728,32 +727,6 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
 
 // ── For C: the fsck errors ───────────────────────────────────────────────
 
-/// # Safety
-/// @trans is NULL or in an attempt. For error.c's __bch2_fsck_err(): @c, or
-/// @trans's filesystem.
-#[c_export]
-pub unsafe fn bch2_fsck_err_str(c: Option<&Opaque<Fs>>, trans: Option<&BtreeTrans<'_>>, pos: Bpos,
-                                flags: FsckFlags, err: SbErrorId, msg: &Printbuf) -> c_int {
-    let fs = c.map_or_else(|| trans.expect("a filesystem or a transaction").fs(), Fs::from_c);
-    let t = trans.map(|t| unsafe { t.attempt_in_progress() });
-    ret_to_c(Err::<(), _>(fsck_err_verdict(fs, t.as_ref(), pos, flags, err, msg)))
-}
-
-/// # Safety
-/// @k a key, @from its context. For error.c's __bch2_bkey_fsck_err().
-#[c_export]
-pub unsafe fn bch2_bkey_fsck_err_str(c: &Opaque<Fs>, k: c::bkey_s_c, from: &c::bkey_validate_context,
-                                     err: SbErrorId, msg: &Printbuf) -> c_int {
-    // SAFETY: the caller's
-    let k = unsafe { BkeySC::from_c(&k) };
-    ret_to_c(Err::<(), _>(bkey_fsck_err_verdict(Fs::from_c(c), k, from, err, msg)))
-}
-
-#[c_export]
-pub fn __bch2_count_fsck_err(c: &Opaque<Fs>, id: SbErrorId, msg: &mut Printbuf) -> bool {
-    count_fsck_err(Fs::from_c(c), id, msg)
-}
-
 pub(crate) fn fsck_errs_seen(fs: &Fs) -> bool {
     !fs.errors.state.lock().msgs.is_empty()
 }
@@ -934,7 +907,6 @@ pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol:
 
 /// inum_offset_err_msg(), in transactions of its own - so never from inside
 /// an attempt: that's the attempt's end. For C's callers.
-#[c_export]
 pub fn bch2_inum_offset_err_msg_trans(trans: &BtreeTrans<'_>, out: &mut Printbuf, subvol: u32, pos: Bpos) {
     let _ = lockrestart_do(trans, |t| inum_offset_err_msg(t, out, subvol, pos));
 }
@@ -1027,30 +999,6 @@ impl Fs {
     }
 }
 
-/// # Safety
-/// @trans is NULL, or in an attempt. For error.c's
-/// bch2_fs_inconsistent() and bch2_trans_inconsistent().
-#[c_export]
-pub unsafe fn bch2_fs_trans_inconsistent_str(c: &Opaque<Fs>, trans: Option<&BtreeTrans<'_>>,
-                                             msg: &Printbuf) -> bool {
-    // SAFETY: the caller's
-    let t = trans.map(|t| unsafe { t.attempt_in_progress() });
-    fs_trans_inconsistent(Fs::from_c(c), t.as_ref(), msg)
-}
-
-#[c_export]
-pub fn __bch2_topology_error(c: &Opaque<Fs>, out: &mut Printbuf) -> c_int {
-    ret_to_c(Err::<(), _>(Fs::from_c(c).topology_error(out)))
-}
-
-/// # Safety
-/// @func is a string. For error.c's bch2_fatal_error().
-#[c_export]
-pub unsafe fn bch2_fatal_error_str(c: &Opaque<Fs>, func: *const c_char, msg: &Printbuf) {
-    // SAFETY: the caller's
-    fs_fatal_error(Fs::from_c(c), unsafe { CStr::from_ptr(func.cast()) }, msg)
-}
-
 // ── IO errors ────────────────────────────────────────────────────────────
 //
 // A device's IO errors are counted as they happen, and writes failing for
@@ -1101,11 +1049,6 @@ pub(crate) fn io_error_work(ca: &Dev) {
     if dev || fs.emergency_read_only(&mut buf) {
         print_str(fs, LogLevel::ERR, &mut buf);
     }
-}
-
-#[c_export]
-pub fn bch2_io_error(ca: &Dev, ty: c::bch_member_error_type) {
-    ca.io_error(ty)
 }
 
 // ── Macros: the functions above, with message!() written for you ──────────

@@ -20,15 +20,12 @@
 //! fails.
 
 use crate::c;
-use crate::errcode::ret_to_c;
 use crate::prt;
-use crate::locking::MemallocFlags;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::demangle::prt_demangled;
 use crate::util::sched;
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_uint, c_ulong};
-use cstruct_macros::c_export;
+use core::ffi::{c_uint, c_ulong};
 
 // bch2_symbolize(): @addr's symbol, "name+0xoff", and " file:line" if libdw
 // knows it, into @out - linux/stacktrace.c, the userspace shim's %pB.
@@ -99,7 +96,7 @@ pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
         if !sym.starts_with(b"_R") {
             return;
         }
-        let _noreclaim = MemallocFlags::noreclaim();
+        let _noreclaim = crate::locking::MemallocFlags::noreclaim();
         if bounce.extend_from_slice(sym).is_err() {
             return;
         }
@@ -181,12 +178,4 @@ pub extern "C" fn dump_stack() {
     let mut out = Printbuf::new();
     let _ = prt_task_backtrace(&mut out, sched::current(), 0);
     let _ = std::io::stderr().write_all(out.as_str().as_bytes());
-}
-
-#[c_export]
-pub fn bch2_prt_task_backtrace(out: &mut Printbuf, task: *mut c::task_struct, skipnr: c_uint, gfp: c::gfp_t)
-    -> c_int
-{
-    let _scope = MemallocFlags::for_gfp(gfp);
-    ret_to_c(prt_task_backtrace(out, task, skipnr))
 }

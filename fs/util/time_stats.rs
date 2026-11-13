@@ -35,7 +35,7 @@ use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{percpu_field, warn_on_once};
 use core::pin::Pin;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
-use cstruct_macros::{c_export, CStruct, Init, c_const};
+use cstruct_macros::{CStruct, Init, c_const};
 use pin_init::{pinned_drop, pin_data};
 use crate::new_lock;
 use crate::types::c_default;
@@ -613,12 +613,6 @@ impl PinnedDrop for c::bch2_time_stats {
 
 // ── For C ────────────────────────────────────────────────────────────────
 
-#[c_export]
-pub fn bch2_pr_time_units(out: &mut Printbuf, ns: u64) {
-    Nsecs(ns).to_text(out)
-}
-
-#[c_export]
 pub fn __bch2_time_stats_update(stats: &c::bch2_time_stats, start: u64, end: u64) {
     stats.update_at(start, end)
 }

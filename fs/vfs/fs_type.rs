@@ -40,7 +40,6 @@ use crate::util::fs_type::{FsType, FsTypeTable, SuperData};
 use crate::util::printbuf::Printbuf;
 use crate::util::super_block::{ReconfSuper, Root};
 use crate::util::vstructs::plain_bytes_mut;
-use cstruct_macros::c_export;
 use kernel::sync::aref::ARef;
 use pin_init::{init, Init};
 
@@ -533,12 +532,10 @@ fn hex2bin(dst: &mut [u8], hex: &[u8]) -> bool {
 
 static BCACHEFS_TYPE: FsTypeTable<Bcachefs> = FsTypeTable::new();
 
-#[c_export]
 pub fn bch2_fs_type_register() -> c_int {
     BCACHEFS_TYPE.register().map_or_else(|e| e.to_errno(), |()| 0)
 }
 
-#[c_export]
 pub fn bch2_fs_type_unregister() {
     BCACHEFS_TYPE.unregister()
 }

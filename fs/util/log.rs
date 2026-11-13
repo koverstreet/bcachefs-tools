@@ -18,13 +18,12 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::locking::{rust_raw_spin_lock, rust_raw_spin_unlock};
 use crate::types::c_default;
-use crate::util::ffi::{c_char, Opaque};
 use crate::util::{Printbuf, ToText};
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::{c_int, CStr};
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
-use cstruct_macros::{CStruct, c_enum, c_export, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, c_enum, TypeInfo};
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -47,13 +46,6 @@ c_enum! {
         LOGLEVEL_info = 6,
         LOGLEVEL_debug = 7,
     }
-}
-
-c_extern! {
-    #[c_printf(2, 3)]
-    pub fn __bch2_print(c: *mut Fs, fmt: *const c_char, ...);
-    pub fn bch2_ratelimit_suppress(c: *mut Fs, rs: *mut c::ratelimit_state,
-                                   func: *const c_char) -> bool;
 }
 
 pub use crate::c::{bch2_ratelimit_state_init, ___ratelimit, bch2_rust_warn};
@@ -330,21 +322,6 @@ pub fn print_lines(prefix: &[u8], lines: &[u8]) {
     }
 }
 
-/// C's string, or a printbuf that's never had any: nothing.
-unsafe fn c_bytes<'a>(s: *const c_char) -> Option<&'a [u8]> {
-    // SAFETY: the caller's
-    unsafe { crate::util::ffi::opt_cstr(s) }.map(CStr::to_bytes)
-}
-
-/// # Safety
-/// @str is NULL or a string.
-#[c_export]
-pub unsafe fn bch2_print_str_loglevel(c: &Opaque<Fs>, loglevel: c_int, str: *const c_char) {
-    if let Some(s) = unsafe { c_bytes(str) } {
-        print_bytes(Fs::from_c(c), u8::try_from(loglevel).ok(), s)
-    }
-}
-
 /// A message built up in pieces and printed when dropped - C's
 /// CLASS(bch_log_msg). Continuation lines are indented under the first and
 /// raw `\t`/`\r` columns aligned; it goes out whole, through
@@ -363,13 +340,6 @@ pub fn log_msg_start(out: &mut Printbuf, name: &CStr) {
     write!(out, "bcachefs ({}): ", name.to_str().unwrap_or("?"));
     #[cfg(not(kernel))]
     let _ = name;
-}
-
-/// # Safety
-/// @fs_or_dev_name is a string.
-#[c_export]
-pub unsafe fn __bch2_log_msg_start(fs_or_dev_name: *const c_char, out: &mut Printbuf) {
-    log_msg_start(out, unsafe { CStr::from_ptr(fs_or_dev_name.cast()) })
 }
 
 impl<'a> LogMsg<'a> {

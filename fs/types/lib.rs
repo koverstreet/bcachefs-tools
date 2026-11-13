@@ -9,7 +9,7 @@
 //! bitmask accessors and C not yet converted are macros there too: c_enum!,
 //! c_const!, c_typedef!, c_xmacro!, c_bitmask!, c_verbatim!.
 //!
-//! And C's container types, which the types hold: DArray, GenRadix, Fifo -
+//! And C's container types, which the types hold: GenRadix, Fifo -
 //! and c_opaque!, for the types C has only behind pointers.
 //!
 //! Only rustc knows a Rust type's layout, and only for the target it compiles
@@ -185,23 +185,8 @@ le_int!(Le16: u16, Le32: u32, Le64: u64);
 // ---- C's containers ------------------------------------------------------
 //
 // Laid out as the C macros make them; C is the code that uses them, Rust only
-// holds them, so they're opaque - darray's layout is C's, not Vec's. A field
-// of one is declared in C with its macro - the generator's container_c().
-
-/// DARRAY(T) - DARRAY_PREALLOCATED(T, N) - data_structures/darray.h. Not Clone or
-/// Copy: it owns its allocation, and a copy would be a second owner.
-#[repr(C)]
-pub struct DArray<T, const N: usize = 0> {
-    pub nr:           usize,
-    pub size:         usize,
-    pub data:         *mut T,
-    pub preallocated: [T; N],
-}
-
-// SAFETY: zeroed is empty, with nothing allocated - as a kzalloc()'d struct
-// holding one has always started out; the preallocated elements, if any, are
-// Ts zeroed
-unsafe impl<T: ::pin_init::Zeroable, const N: usize> ::pin_init::Zeroable for DArray<T, N> {}
+// holds them, so they're opaque. A field of one is declared in C with its
+// macro - the generator's container_c().
 
 /// How a tagged_union! says which arm it holds: stabby's IDeterminant
 /// (docs.rs/stabby), n-way, over a layout that's given rather than chosen.
@@ -223,23 +208,6 @@ pub trait Determinant<U: ?Sized> {
 pub trait ArmOf<U: ?Sized> {
     type Tag;
     const TAG: Self::Tag;
-}
-
-/// Empty, as C's `= {}`: nothing allocated.
-impl<T> Default for DArray<T> {
-    fn default() -> Self {
-        Self { nr: 0, size: 0, data: core::ptr::null_mut(), preallocated: [] }
-    }
-}
-
-impl<T, const N: usize> DArray<T, N> {
-    pub fn as_slice(&self) -> &[T] {
-        if self.nr == 0 { &[] } else { unsafe { core::slice::from_raw_parts(self.data, self.nr) } }
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        if self.nr == 0 { &mut [] } else { unsafe { core::slice::from_raw_parts_mut(self.data, self.nr) } }
-    }
 }
 
 // ---- Rust's own, in C's structs ---------------------------------------------
@@ -440,26 +408,6 @@ impl<T> core::ops::Deref for CStatic<T> {
     }
 }
 
-/// data_structures/darray.h's DEFINE_DARRAY()s: C's typedefs are its own, these the
-/// same types for Rust.
-#[allow(non_camel_case_types)]
-pub mod darrays {
-    use super::DArray;
-    use crate::util::ffi::c_char;
-
-    pub type darray_char = DArray<c_char>;
-    pub type darray_u8   = DArray<u8>;
-    pub type darray_u16  = DArray<u16>;
-    pub type darray_u32  = DArray<u32>;
-    pub type darray_u64  = DArray<u64>;
-    pub type darray_s8   = DArray<i8>;
-    pub type darray_s16  = DArray<i16>;
-    pub type darray_s32  = DArray<i32>;
-    pub type darray_s64  = DArray<i64>;
-    pub type darray_str  = DArray<*mut c_char>;
-    pub type darray_const_str = DArray<*const c_char>;
-}
-
 /// GENRADIX(T) - linux/generic-radix-tree.h. C's type[0] is __aligned(1):
 /// the element type only, not its alignment.
 #[repr(C)]
@@ -487,7 +435,6 @@ macro_rules! typeinfo_opaque {
         }
     };
 }
-typeinfo_opaque!(DArray<T, N>, T, const N: usize);
 typeinfo_opaque!(GenRadix<T>, T);
 typeinfo_opaque!(Fifo<T, I>, T, I: crate::data_structures::fifo::FifoIdx);
 

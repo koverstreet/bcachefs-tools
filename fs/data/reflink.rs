@@ -29,16 +29,16 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyFamily, BkeyI, BkeyS, BkeySC,
+use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyI, BkeyS, BkeySC,
                          BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN};
 use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_one;
-use crate::errcode::{bch_errcode, err_ptr, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::data::inline_data::InlineDataRef;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -51,11 +51,9 @@ use crate::util::vstructs::{cast_plain, cast_plain_mut};
 use crate::util::Printbuf;
 use crate::{bch_err, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err, prt};
 use core::cell::UnsafeCell;
-use core::ffi::c_uint;
 use core::mem::size_of;
 use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::Relaxed};
-use cstruct_macros::c_export;
 use crate::format::{Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, MetadataVersion, SbFeature};
 
 pub type IndirectTypes = ByFlag<{ BkeyTypeFlags_bits::indirect }>;
@@ -94,12 +92,6 @@ pub trait BkeyVIndirect: BkeyV<V = Indirect> {
 }
 
 impl<K: BkeyV<V = Indirect>> BkeyVIndirect for K {}
-
-/// bkey_is_indirect(), for C.
-#[c_export]
-pub fn bch2_bkey_is_indirect(k: &c::bkey) -> bool {
-    <Indirect as BkeyFamily>::contains(k)
-}
 
 impl c::bkey {
     /// The type a direct extent of its type is, made indirect: deleted for a
@@ -635,30 +627,6 @@ pub fn lookup_indirect_extent<'a, 'k>(
 
     *offset_into_extent = reflink_offset.wrapping_sub(k.k.start_offset()) as i64;
     Ok(k)
-}
-
-/// For C's read path: lookup_indirect_extent(), an error as an ERR_PTR().
-#[c_export]
-pub fn bch2_lookup_indirect_extent<'t>(
-    trans:              &'t BtreeTrans<'t>,
-    iter:               &mut BtreeIter<'t>,
-    offset_into_extent: &mut i64,
-    p:                  BkeySC<'_>,
-    should_commit:      bool,
-    iter_flags:         c_uint,
-) -> c::bkey_s_c {
-    // SAFETY: C calls this in an attempt
-    let t = unsafe { trans.attempt_in_progress() };
-    let p = p.arm::<c::ReflinkP>().expect("a reflink_p");
-
-    match lookup_indirect_extent(&t, iter, offset_into_extent, p, should_commit,
-                                 BtreeIterFlags::from_bits_retain(iter_flags)) {
-        Ok(k)  => k.into(),
-        Err(e) => c::bkey_s_c {
-            k: err_ptr(e),
-            v: core::ptr::null_mut(),
-        },
-    }
 }
 
 // ── reflink pointer trigger ──────────────────────────────────────────────

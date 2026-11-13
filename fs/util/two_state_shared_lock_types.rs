@@ -7,8 +7,7 @@ use crate::types::{c_default, rust_only, RustOnly};
 use crate::util::alloc::init_at;
 use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
-use cstruct_macros::{c_export, CStruct};
-use core::ffi::c_int;
+use cstruct_macros::CStruct;
 use core::marker::PhantomData;
 use core::sync::atomic::AtomicIsize;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
@@ -112,19 +111,4 @@ pub unsafe fn two_state_lock_init(lock: *mut c::two_state_lock_t) {
         (&raw mut (*lock).v).write(AtomicIsize::new(0));
         let Ok(()) = init_at(RustOnly::new(EventCount::new()), &raw mut (*lock).wait);
     }
-}
-
-#[c_export]
-pub fn bch2_two_state_trylock(lock: &c::two_state_lock_t, s: c_int) -> bool {
-    lock.trylock(s != 0)
-}
-
-#[c_export]
-pub fn bch2_two_state_lock(lock: &c::two_state_lock_t, s: c_int) {
-    lock.lock_raw(s != 0)
-}
-
-#[c_export]
-pub fn bch2_two_state_unlock(lock: &c::two_state_lock_t, s: c_int) {
-    lock.unlock_raw(s != 0)
 }

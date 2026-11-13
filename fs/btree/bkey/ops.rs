@@ -5,7 +5,7 @@ use crate::btree::bkey::{BkeyS, BkeySC, ValidateFlags};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::btree::trigger::Trigger;
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags, MetadataVersion};
 use crate::fs::Fs;
 use crate::init::error::BkeyValidate;
@@ -13,8 +13,6 @@ use crate::prt;
 use crate::util::Printbuf;
 use crate::util::ffi::Opaque;
 use core::fmt;
-use core::ffi::c_int;
-use cstruct_macros::c_export;
 
 /// A key type's methods, on its value's type: each a no-op where the type
 /// has none.
@@ -131,11 +129,6 @@ pub fn bpos_to_text(out: &mut Printbuf, p: Bpos) {
     }
 }
 
-#[c_export]
-pub fn bch2_bpos_to_text(out: &mut Printbuf, pos: Bpos) {
-    bpos_to_text(out, pos)
-}
-
 #[cold]
 pub fn bkey_to_text(out: &mut Printbuf, k: &c::bkey) {
     prt!(out, "u64s {} type ", k.u64s);
@@ -192,7 +185,6 @@ pub fn bkey_val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     }
 }
 
-#[c_export]
 pub fn bch2_bkey_val_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
     bkey_val_to_text(out, c.map(Fs::from_c), k)
 }
@@ -288,11 +280,6 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 pub fn bkey_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_header_validate(v)?;
     bkey_val_validate(v)
-}
-
-#[c_export]
-pub fn bch2_bkey_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(bkey_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 /// bch2_bkey_swab_val(): the value byte swapped, by its type's swab.

@@ -13,7 +13,7 @@ use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, BtreePath
 use crate::c;
 use crate::data_structures::bitmap::Bitmap;
 use crate::debug::trace::events;
-use crate::errcode::{BchError, bch_errcode, err_ptr};
+use crate::errcode::{BchError, bch_errcode};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::journal::validate::journal_entry_to_text;
@@ -42,13 +42,12 @@ use crate::util::time_stats::__bch2_time_stats_update;
 use crate::util::vstructs::{Unvalidated, UnvalidatedEntries, VstructRefEntries};
 use crate::util::{Printbuf, ToText};
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
+use core::ffi::{c_uint, c_ulong, CStr};
 use core::marker::PhantomData;
 use core::mem::{offset_of, size_of, size_of_val};
 use core::ops::ControlFlow;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use cstruct_macros::c_export;
 
 /// btree_trans!(fs): a transaction named for the function it's created in.
 /// Transaction stats and lock contention are reported per function, under that
@@ -1118,7 +1117,6 @@ pub fn transaction_fns() -> impl Iterator<Item = &'static CStr> {
     (0..TRANSACTION_FNS.len()).map_while(transaction_fn)
 }
 
-#[c_export]
 pub fn bch2_trans_get_fn_idx(fn_: *const c_char) -> c_uint {
     for (i, slot) in TRANSACTION_FNS.iter().enumerate() {
         let cur = slot.load(Ordering::Acquire);
@@ -1137,63 +1135,21 @@ pub fn bch2_trans_get_fn_idx(fn_: *const c_char) -> c_uint {
 
 // ── C's entry points ────────────────────────────────────────────────────────
 
-#[c_export]
 pub fn __bch2_trans_get(c: &Fs, fn_idx: c_uint) -> *mut BtreeTrans<'static> {
     TransGuard::new_fn(c, fn_idx).into_raw().cast()
 }
 
 /// # Safety
 /// @trans is __bch2_trans_get()'s, and isn't used after.
-#[c_export]
 pub unsafe fn bch2_trans_put(trans: *mut BtreeTrans<'_>) {
     drop(unsafe { TransGuard::from_raw(trans) })
 }
 
-#[c_export]
 #[inline(always)]
-pub fn bch2_trans_begin(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) -> u32 {
+pub fn bch2_trans_begin(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>) -> u32 {
     trans.begin_from(paths, crate::ret_ip!())
 }
 
-#[c_export]
-#[inline(always)]
-pub fn __bch2_trans_kmalloc(trans: &BtreeTrans<'_>, size: usize, _ip: c_ulong) -> *mut c_void {
-    err_ptr(trans.kmalloc_grow(size, crate::ret_ip!()))
-}
-
-#[c_export]
-pub fn bch2_trans_restart_ip(trans: &BtreeTrans<'_>, err: c_int, ip: c_ulong) -> c_int {
-    assert!(err > 0);
-    -trans.restart_ip(bch_errcode::from_bits(err as _), ip).raw()
-}
-
-#[c_export]
-pub fn bch2_trans_restart_error(trans: &BtreeTrans<'_>, restart_count: u32) -> ! {
-    trans.restart_error(restart_count)
-}
-
-#[c_export]
-pub fn bch2_trans_unlocked_or_in_restart_error(trans: &BtreeTrans<'_>) -> ! {
-    trans.unlocked_or_in_restart_error()
-}
-
-#[c_export]
-pub fn bch2_trans_has_updates(trans: &BtreeTrans<'_>) -> bool {
-    trans.has_updates()
-}
-
-#[c_export]
-pub fn bch2_trans_reset_updates(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
+pub fn bch2_trans_reset_updates(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>) {
     trans.reset_updates(paths)
-}
-
-#[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
-#[c_export]
-pub fn __bch2_trans_maybe_inject_restart(trans: &BtreeTrans<'_>, ip: c_ulong) -> c_int {
-    crate::errcode::ret_to_c(trans.maybe_inject_restart(ip))
-}
-
-#[c_export]
-pub fn bch2_current_has_btree_trans(c: &Fs) -> bool {
-    c.current_has_btree_trans()
 }

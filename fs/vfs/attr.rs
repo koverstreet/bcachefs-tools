@@ -31,7 +31,6 @@ use crate::inode;
 use crate::inode_opts::InodeOpt;
 use crate::quota::QuotaAcctMode;
 use crate::snapshots::subvolume;
-use cstruct_macros::c_export;
 
 use super::dentry::Dentry;
 use super::iattr::Iattr;

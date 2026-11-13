@@ -123,7 +123,7 @@ use crate::util::{HumanReadable, Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::{Relaxed, Release, SeqCst};
-use cstruct_macros::{c_const, c_export};
+use cstruct_macros::c_const;
 use crate::format::{Btree, BkeyType};
 
 impl c::btree_evicted_size {
@@ -402,12 +402,6 @@ impl Fs {
 
 // ── Text ─────────────────────────────────────────────────────────────────
 
-#[c_export]
-pub fn bch2_btree_id_to_text(out: &mut Printbuf, btree: Btree) {
-    btree.to_text(out)
-}
-
-#[c_export]
 pub fn bch2_btree_id_level_to_text(out: &mut Printbuf, btree: Btree, level: c_uint) {
     prt!(out, "btree={btree} level={level}");
 }
@@ -425,7 +419,6 @@ pub fn btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level: c_uin
     bkey_val_to_text(out, Some(fs), k);
 }
 
-#[c_export]
 pub fn bch2_btree_pos_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     let k = BkeySC::from(unsafe { b.contents() }.key_i());
     btree_pos_to_text(out, fs, Btree(b.c.btree_id.into()), b.c.level.into(), k)

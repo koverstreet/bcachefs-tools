@@ -149,28 +149,6 @@ fn verbatim_types(c: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The typedefs @c's DEFINE_DARRAY*()s make - data_structures/darray.h:
-/// DEFINE_DARRAY(foo) and the like are darray_foo, DEFINE_DARRAY_NAMED(name,
-/// ...) name.
-fn darray_typedefs(c: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for (i, _) in c.match_indices("DEFINE_DARRAY") {
-        let rest = &c[i + "DEFINE_DARRAY".len()..];
-        let Some(open) = rest.find('(') else { continue };
-        let variant = &rest[..open];
-        let arg = rest[open + 1..].split(|ch: char| ch == ',' || ch == ')').next().unwrap_or("").trim();
-        if arg.is_empty() || !arg.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
-            continue;
-        }
-        match variant {
-            "_NAMED" | "_NAMED_FREE_ITEM" => out.push(arg.to_string()),
-            "" | "_PREALLOCATED" | "_FREE_ITEM" => out.push(format!("darray_{arg}")),
-            _ => {}
-        }
-    }
-    out
-}
-
 /// The type a record defines - by its C name, and its Rust one where that
 /// differs (#[c_name]), as a field may name it either way - and the types it
 /// holds by value: the ones C must see defined first. A pointer needs only a
@@ -550,10 +528,7 @@ fn file_h(header: &str, records: &[&Record], paths: &BTreeMap<String, String>,
             format!("unsigned char\t{}[{size}]", f.name)
         })
     };
-    // data_structures/darray.h's own darray_foos are typedefs too (types/lib.rs's
-    // darrays has them for Rust)
-    let kind = |name: &str| lookup(name).cloned()
-        .or_else(|| name.starts_with("darray_").then(|| name.to_string()));
+    let kind = |name: &str| lookup(name).cloned();
     let body = emit_items(&items, &opaque, &kind)?;
 
     // The Rust layout, which C must have: every field C names, and each
@@ -695,12 +670,7 @@ fn main() {
                     }
                     // a field of one is C's pointer to its buffer's struct
                     Some(CItem::RcuArray(a)) => c_name(&a.alias, format!("struct {} __rcu *", a.c_name)),
-                    // a darray type is C's typedef, which its DEFINE_DARRAY*()
-                    // makes: Rust's is a DArray alias, with no record
                     Some(CItem::Verbatim(v)) => {
-                        for n in darray_typedefs(&v.text) {
-                            c_name(&n, n.clone());
-                        }
                         for (n, ty) in verbatim_types(&v.text) {
                             c_name(&n, ty);
                         }

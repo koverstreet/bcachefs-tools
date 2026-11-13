@@ -18,7 +18,7 @@
 #include <pthread.h>
 #include <stdio.h>
 
-#include "bcachefs.h"
+#include <linux/kernel.h>
 
 #include <linux/percpu.h>
 

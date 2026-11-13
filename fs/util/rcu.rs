@@ -52,7 +52,6 @@ use crate::data_structures::dst_array::{DstArray, DstHead};
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
-use crate::util::ffi::c_char;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::projections::Publish;
 use crate::util::refcount::{ARef, AlwaysRefCounted};

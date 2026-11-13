@@ -6,7 +6,6 @@ use core::mem::size_of;
 use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
 
-use cstruct_macros::c_export;
 use zerocopy::IntoBytes;
 
 use crate::accounting::Accounting;
@@ -1167,7 +1166,6 @@ unsafe extern "C" fn commit_journal_pin_flush(_j: *mut c::journal, _pin: *mut c:
     0
 }
 
-#[c_export]
 pub fn __bch2_trans_commit(trans: &BtreeTrans<'_>, flags: c::bch_trans_commit_flags, lazy: bool) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
     ret_to_c(trans.commit_trans(&t, flags.into(), lazy))

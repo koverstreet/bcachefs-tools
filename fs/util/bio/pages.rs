@@ -11,20 +11,17 @@
 //! pool. Pages that never did - a bio's that mustn't take from it - are
 //! free_pages()'s.
 
-use core::ffi::{c_uint, c_void};
+use core::ffi::c_void;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::errcode::BchError;
 use crate::util::alloc::{current_gfp_context_raw, AllocError};
-use crate::util::ffi::Opaque;
 use crate::util::kernel::PAGE_SIZE;
 use crate::util::mempool::{Mempool, Raw};
 use pin_init::{pin_data, pin_init, PinInit};
-use cstruct_macros::c_export;
 
 use super::iter::page_address;
 
@@ -147,16 +144,4 @@ unsafe fn free(pool: Option<&BouncePool>, bio: &mut c::bio) {
         }
     }
     bio.bi_vcnt = 0;
-}
-
-// ── For C ────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_bio_alloc_pages_pool(fs: &Fs, bio: &mut c::bio, bs: c_uint, size: usize, gfp: c::gfp_t) {
-    alloc_pages_pool(&fs.bio_bounce, bio, bs, size, gfp).expect("bounce pages for C, outside NORECLAIM")
-}
-
-#[c_export]
-pub unsafe fn bch2_bio_free_pages_pool(c: &Opaque<Fs>, bio: &mut c::bio) {
-    unsafe { free_pages_pool(&Fs::from_c(c).bio_bounce, bio) }
 }

@@ -27,6 +27,17 @@ impl Bpos {
     }
 }
 
+unsafe fn bkey_swab_key(f: Option<&c::bkey_format>, k: *mut c::bkey_packed) {
+    let f = if unsafe { (*BkeyP::from_raw(k)).is_packed() } {
+        f.expect("a packed key to swab, with no format")
+    } else {
+        &crate::btree::bkey::BKEY_FORMAT_CURRENT
+    };
+
+    let words = unsafe { core::slice::from_raw_parts_mut(k.cast::<u64>(), f.key_u64s as usize) };
+    crate::util::vstructs::plain_bytes_mut(words)[core::mem::offset_of!(c::bkey_packed, key_start)..].reverse();
+}
+
 /// __bch2_bkey_compat(): @k, in a node at @level of @btree that @version on
 /// a machine @big_endian or not wrote, made this version's and this
 /// machine's to read, or back to write: each step in reverse to write.
@@ -56,8 +67,6 @@ pub unsafe fn __bch2_bkey_compat(fs: Option<&Fs>, _level: c_uint, btree: Btree, 
     for i in 0..NR_COMPAT {
         match if write { NR_COMPAT - 1 - i } else { i } {
             0 => {
-                use crate::btree::bkey::c_export::bkey_swab_key;
-
                 if big_endian != cfg!(target_endian = "big") {
                     unsafe { bkey_swab_key(f, k) };
                 } else if cfg!(CONFIG_BCACHEFS_DEBUG) {

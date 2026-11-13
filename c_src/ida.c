@@ -16,7 +16,6 @@
  * need id -> pointer translation.
  */
 
-#include "bcachefs.h"
 #include <linux/idr.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>

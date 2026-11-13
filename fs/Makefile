@@ -55,12 +55,7 @@ subdir-ccflags-y += $(call cc-disable-warning, psabi)
 obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
-	data_structures/darray.o		\
-	errcode.o				\
-	init/error.o				\
-	init/fs.o				\
 	locking/locking.o			\
-	util/printbuf.o				\
 	util/rcu.o				\
 	util/util.o				\
 	vendor/bio_iov_iter.o			\

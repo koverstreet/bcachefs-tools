@@ -35,7 +35,6 @@ use crate::util::kernel::jiffies;
 use crate::util::sleep::Sleep;
 use core::convert::Infallible;
 use core::ffi::{c_long, c_ulong, c_void, CStr};
-use cstruct_macros::c_export;
 use pin_init::Zeroable;
 
 const UNLOCKED:  u8 = 0;
@@ -135,15 +134,7 @@ unsafe impl RawTimedLock for ByteLock {
 // ── C's, while C takes them ──────────────────────────────────────────────
 
 /// # Safety
-/// @l is a ByteLock: a byte only ever locked as one, or zeroed.
-#[c_export]
-pub unsafe fn bch2_byte_lock(l: *mut u8) {
-    unsafe { (*l.cast::<ByteLock>()).take() }
-}
-
-/// # Safety
 /// @l is a ByteLock the caller holds.
-#[c_export]
 pub unsafe fn bch2_byte_unlock(l: *mut u8) {
     unsafe { (*l.cast::<ByteLock>()).release() }
 }

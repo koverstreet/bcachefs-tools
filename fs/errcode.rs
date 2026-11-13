@@ -8,10 +8,10 @@
 //! userspace see.
 //!
 //! ERRCODES, generated from BCH_ERRCODES(), holds each errcode's name and
-//! parent; errcode.c keeps C's own copy for its C callers. Parents are written
-//! as an errno or BCH_ERR_<name>, and `class` resolves both to numbers - the
-//! errnos from the kernel's bindings, or linux-raw-sys's in userspace. An
-//! errno's name is errname()'s, strerror()'s in userspace.
+//! parent. Parents are written as an errno or BCH_ERR_<name>, and `class`
+//! resolves both to numbers - the errnos from the kernel's bindings, or
+//! linux-raw-sys's in userspace. An errno's name is errname()'s, strerror()'s
+//! in userspace.
 //!
 //! A number with no entry has no parent and stands for itself. That includes
 //! codes past BCH_ERR_MAX: the tools and the DKMS module are versioned
@@ -27,7 +27,7 @@ use core::iter;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 use crate::types::c_default;
-use cstruct_macros::{CStruct, c_enum, c_export, c_extern, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, c_enum, c_xmacro, TypeInfo};
 
 c_xmacro! {
     BLK_ERRS(BLK_STS) {
@@ -694,10 +694,6 @@ c_enum! {
         BCH_ERR_MAX = (c::BCH_ERR_START as u32)
         + (core::mem::size_of::<c::bch_errcode_max>() as u32),
     }
-}
-
-c_extern! {
-    pub fn __bch2_err_class(bch_err: c_int) -> c_int;
 }
 
 // The status's, beside the errcode of the same name

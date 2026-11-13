@@ -2986,48 +2986,17 @@ fn container_args(ty: &str, name: &str) -> Result<Option<Vec<String>>, String> {
     Ok(generic_args(&t, name).map(|args| args.iter().map(rust_text).collect()))
 }
 
-/// A DArray<T> or DArray<T, N> - types/lib.rs's, C's DARRAY() - as @ty, Rust
-/// source: T, and N if it's there.
-fn darray_args(ty: &str) -> Result<Option<(String, Option<String>)>, String> {
-    Ok(match container_args(ty, "DArray")?.as_deref() {
-        Some([elem]) => Some((elem.clone(), None)),
-        Some([elem, nr]) => Some((elem.clone(), Some(nr.clone()))),
-        _ => None,
-    })
-}
-
-/// @decl of container type @ty - a DArray or a GenRadix - as C declares it,
-/// by the container's macro: DARRAY(T), DARRAY_PREALLOCATED(T, N),
-/// GENRADIX(T). None if @ty is no container.
+/// @decl of container type @ty - a GenRadix - as C declares it, by the
+/// container's macro: GENRADIX(T). None if @ty is no container.
 fn container_c(ty: &str, decl: &str, kind: &dyn Fn(&str) -> Option<String>)
     -> Result<Option<String>, String>
 {
-    let elem_c = |elem: &str| canon_c(elem, "", false, kind)
-        .map(|e| e.trim().to_string())
-        .ok_or_else(|| format!("{decl}: {ty}'s element type {elem} has no C rendering"));
-    if let Some((elem, nr)) = darray_args(ty)? {
-        let elem = elem_c(&elem)?;
-        return Ok(Some(match nr {
-            None => format!("DARRAY({elem}) {decl}"),
-            Some(n) => format!("DARRAY_PREALLOCATED({elem}, {}) {decl}", darray_nr_c(&n)
-                .ok_or_else(|| format!("{decl}: {ty}'s length {n} has no C rendering"))?),
-        }));
-    }
     if let Some([elem]) = container_args(ty, "GenRadix")?.as_deref() {
-        return Ok(Some(format!("GENRADIX({}) {decl}", elem_c(elem)?)));
+        let elem_c = canon_c(elem, "", false, kind)
+            .ok_or_else(|| format!("{decl}: {ty}'s element type {elem} has no C rendering"))?;
+        return Ok(Some(format!("GENRADIX({}) {decl}", elem_c.trim())));
     }
     Ok(None)
-}
-
-/// DArray<T, N>'s N as C: a const generic, so a constant's in braces.
-fn darray_nr_c(n: &str) -> Option<String> {
-    match syn::parse_str::<syn::Expr>(n).ok()? {
-        syn::Expr::Block(b) => match b.block.stmts.as_slice() {
-            [syn::Stmt::Expr(e, None)] => c_dim(e),
-            _ => None,
-        },
-        e => c_dim(&e),
-    }
 }
 
 /// A declaration of each struct, union and enum @c names inside parentheses -
@@ -3173,34 +3142,18 @@ pub fn emit_items(items: &[CItem],
                 under_cfg(&e.cfg, t + end)?
             }
             CItem::Const(c) => under_cfg(&c.cfg, format!("#define {}\t{}\n", c.name, c.c_value()?))?,
-            CItem::Typedef(t) => match (&t.c_decl, darray_args(&t.ty)?) {
-                // data_structures/darray.h's: the typedef and its cleanup class
-                (None, Some((elem, nr))) => {
-                    let elem = canon_c(&elem, "", false, kind)
-                        .ok_or_else(|| format!("typedef {}: {elem} has no C rendering", t.name))?;
-                    under_cfg(&t.cfg, match nr {
-                        None => format!("DEFINE_DARRAY_NAMED({}, {});\n", t.name, elem.trim()),
-                        Some(n) => {
-                            let n = darray_nr_c(&n).ok_or_else(|| format!(
-                                "typedef {}: {}'s length {n} has no C rendering", t.name, t.ty))?;
-                            format!("typedef DARRAY_PREALLOCATED({}, {n}) {};\nDEFINE_DARRAY_CLASS({})\n",
-                                    elem.trim(), t.name, t.name)
-                        }
-                    })?
-                }
-                _ => {
-                    let decl = match &t.c_decl {
-                        Some(d) => d.clone(),
-                        None => match container_c(&t.ty, &t.name, kind).map_err(|e| format!("typedef {e}"))? {
-                            Some(d) => d,
-                            None => canon_c(&t.ty, &t.name, false, kind)
-                                .ok_or_else(|| format!("typedef {}: {} has no C rendering - it needs a #[c(\"...\")]",
-                                                       t.name, t.ty))?,
-                        },
-                    };
-                    under_cfg(&t.cfg, format!("typedef {decl};\n"))?
-                }
-            },
+            CItem::Typedef(t) => {
+                let decl = match &t.c_decl {
+                    Some(d) => d.clone(),
+                    None => match container_c(&t.ty, &t.name, kind).map_err(|e| format!("typedef {e}"))? {
+                        Some(d) => d,
+                        None => canon_c(&t.ty, &t.name, false, kind)
+                            .ok_or_else(|| format!("typedef {}: {} has no C rendering - it needs a #[c(\"...\")]",
+                                                   t.name, t.ty))?,
+                    },
+                };
+                under_cfg(&t.cfg, format!("typedef {decl};\n"))?
+            }
             // C's own definition: the generator asserts it's the Rust type's.
             CItem::Same(_) => continue,
             CItem::RcuArray(a) => emit_rcu_array(a, items, opaque, kind)

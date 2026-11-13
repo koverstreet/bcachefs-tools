@@ -14,8 +14,6 @@
 
 #include <uuid/uuid.h>
 
-#include "bcachefs_ioctl.h"
-#include "bcachefs.h"
 #include "tools-util.h"
 
 void die(const char *fmt, ...)

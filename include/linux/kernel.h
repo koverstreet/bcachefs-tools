@@ -181,12 +181,6 @@ do {							\
 	BUG();						\
 } while (0)
 
-struct printbuf;
-extern void prt_u64(struct printbuf *out, u64 num);
-
-extern __printf(2, 0) void prt_vprintf(struct printbuf *out, const char *fmt, va_list args);
-extern __printf(2, 3) void prt_printf(struct printbuf *out, const char *fmt, ...);
-
 static const char hex_asc[] = "0123456789abcdef";
 #define hex_asc_lo(x)	hex_asc[((x) & 0x0f)]
 #define hex_asc_hi(x)	hex_asc[((x) & 0xf0) >> 4]

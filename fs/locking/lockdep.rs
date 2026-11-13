@@ -101,12 +101,6 @@ struct byte_lock_lockdep {
 	u8			lock;
 	struct lockdep_map	dep_map;
 };
-
-static inline void byte_lock_lockdep_unlock(struct byte_lock_lockdep *l)
-{
-	lock_release(&l->dep_map, _THIS_IP_);
-	bch2_byte_unlock(&l->lock);
-}
 "#);
 
 unsafe impl<R: RawLockBase> RawLockBase for Lockdep<R> {

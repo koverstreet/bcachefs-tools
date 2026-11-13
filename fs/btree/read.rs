@@ -50,7 +50,6 @@ use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
-use cstruct_macros::c_export;
 use pin_init::stack_pin_init;
 
 #[repr(C)]
@@ -737,8 +736,7 @@ crate::module_param! {
     perm = 0o644, desc = "";
 }
 
-#[c_export]
-pub fn bch2_btree_node_wait_on_read(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
+pub fn bch2_btree_node_wait_on_read(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
     if unlikely(!trans.queued_write_bios.get().is_null()) {
         trans_submit_write_bios(trans);
     }
@@ -746,8 +744,7 @@ pub fn bch2_btree_node_wait_on_read(trans: &BtreeTrans<'_>, #[lent(trans)] paths
     trans.wait_on_node_flag(paths, b, c::btree_flags::BTREE_NODE_read_in_flight);
 }
 
-#[c_export]
-pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
+pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
     /*
      * The write we're about to wait on may be sitting unsubmitted on
      * our own queued_write_bios (e.g. the btree cache cannibalize and

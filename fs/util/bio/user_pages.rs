@@ -17,7 +17,6 @@ use crate::util::task::requeue;
 use crate::util::workqueue::Queue;
 use core::ffi::{c_int, c_uint};
 use core::pin::Pin;
-use cstruct_macros::c_export;
 
 use crate::c::bch2_bio_iov_iter_get_pages;
 
@@ -53,9 +52,4 @@ impl Bio {
         }
         unsafe { c::bio_release_pages(self.as_mut().raw_mut(), redirty) };
     }
-}
-
-#[c_export]
-pub unsafe fn bch2_bio_set_pages_dirty(bio: *mut c::bio) {
-    unsafe { Bio::from_raw_mut(bio) }.set_pages_dirty()
 }

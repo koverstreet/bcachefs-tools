@@ -33,7 +33,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
+use crate::errcode::{bch_errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::dirent::{self, DirentTarget};
 use crate::namei;
@@ -53,16 +53,14 @@ use crate::btree::iter::{
 use crate::btree::trans::TransGuard;
 use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
-use crate::util::ffi::opt_cstr;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
-use core::mem::MaybeUninit;
 use crate::{bch_err_fn, bch_err_msg, bkey_fsck_err_on, prt};
 use core::mem::size_of;
 use core::ops::ControlFlow;
 use crate::btree_id;
 use core::ffi::CStr;
-use cstruct_macros::{c_export, CStruct, c_bitmask, c_typedef, c_verbatim, TypeInfo};
+use cstruct_macros::{CStruct, c_bitmask, c_typedef, c_verbatim, TypeInfo};
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
 use crate::util::projections::Volatile;
@@ -575,27 +573,6 @@ pub fn peek<'a>(
     __peek(t, iter, inum, flags, None)
 }
 
-/// For C's VFS, data and reflink code, through bch2_inode_peek():
-/// __bch2_inode_peek().
-///
-/// # Safety
-/// @warn NULL or a string, valid for the call.
-#[c_export]
-pub unsafe extern "C" fn __bch2_inode_peek<'t>(
-    trans: &'t BtreeTrans<'t>,
-    iter:  &mut BtreeIter<'t>,
-    inode: &mut MaybeUninit<c::bch_inode_unpacked>,
-    inum:  c::subvol_inum,
-    flags: core::ffi::c_uint,
-    warn:  *const crate::util::ffi::c_char,
-) -> core::ffi::c_int {
-    let warn = unsafe { opt_cstr(warn) };
-
-    ret_to_c(__peek(&unsafe { trans.attempt_in_progress() }, iter,
-                    inum, BtreeIterFlags::from_bits_retain(flags), warn)
-             .map(|i| { inode.write(i); }))
-}
-
 /// As peek(), as seen in @snapshot: as bch2_inode_peek_snapshot(), without
 /// the warning.
 pub fn peek_snapshot<'a>(
@@ -742,18 +719,6 @@ pub fn write_flags<'t>(
     let mut k = pack_trans(t, inode)?;
     k.k_mut().p.snapshot = iter.snapshot();
     t.update(iter, &k, flags)
-}
-
-/// For C's inode options, and bch2_inode_write(): bch2_inode_write_flags().
-#[c_export]
-pub extern "C" fn bch2_inode_write_flags<'t>(
-    trans: &'t BtreeTrans<'t>,
-    iter:  &mut BtreeIter<'t>,
-    inode: &mut c::bch_inode_unpacked,
-    flags: c::btree_iter_update_trigger_flags,
-) -> core::ffi::c_int {
-    ret_to_c(write_flags(&unsafe { trans.attempt_in_progress() }, iter,
-                         inode, UpdateTriggerFlags::from_bits_retain(flags.bits())))
 }
 
 /// Queue writing @inode back through @iter, which peeked it: as

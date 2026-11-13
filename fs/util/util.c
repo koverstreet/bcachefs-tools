@@ -20,18 +20,8 @@
 #include <linux/static_key.h>
 #include <linux/version.h>
 
+#include "enum_kind.h"
 #include "util.h"
-
-bool bch2_is_zero(const void *_p, size_t n)
-{
-	const char *p = _p;
-	size_t i;
-
-	for (i = 0; i < n; i++)
-		if (p[i])
-			return false;
-	return true;
-}
 
 /*
  * this_cpu_add() and _cmpxchg(), for Rust where it has no asm of its own
@@ -140,19 +130,6 @@ void mempool_kvfree(void *element, void *pool_data)
 	kvfree(element);
 }
 #endif
-
-__sched int bch2_bit_wait_io_timeout(struct wait_bit_key *word, int mode)
-{
-	unsigned long now = jiffies;
-
-	if (time_after_eq(now, word->timeout))
-		return -EAGAIN;
-	io_schedule_timeout(word->timeout - now);
-	if (signal_pending_state(mode, current))
-		return -EINTR;
-
-	return 0;
-}
 
 /*
  * For Rust: the kernel's Rust allocator API has no __GFP_NOFAIL. Out of line,

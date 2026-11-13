@@ -19,7 +19,7 @@ use crate::data_structures::bitmap::Bitmap;
 use crate::debug::params::debug_check_iterators;
 use crate::debug::trace::{events, TraceEvent};
 use crate::prt;
-use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, BchError};
 use crate::format::{BkeyType, Bpos, Btree};
 use crate::types::{bits_to_longs, Lent};
 use crate::util::alloc::kvzalloc_nofail;
@@ -29,7 +29,7 @@ use crate::util::rcu::rcu_assign_pointer;
 use crate::util::Printbuf;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::kernel::local_clock;
-use cstruct_macros::{bitfield, c_export, c_name, c_typedef, CStruct};
+use cstruct_macros::{bitfield, c_name, c_typedef, CStruct};
 use crate::locking::{Locked, LockedBy};
 use crate::locking::six::{six_lock_increment_ip, six_lock_write_held, SixHold};
 use crate::c::six_lock_type;
@@ -1590,36 +1590,12 @@ pub fn bch2_trans_paths_exit(trans: &BtreeTrans<'_>) {
     trans.table_retire(allocated);
 }
 
-#[c_export]
-pub fn bch2_path_put(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx, intent: bool) {
+pub fn bch2_path_put(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, intent: bool) {
     trans.path_put(paths, path, intent)
 }
 
-#[c_export]
-pub fn __bch2_btree_path_make_mut(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx,
-                                  intent: bool, ip: c_ulong) -> PathIdx {
-    trans.path_make_mut_clone(paths, path, intent, ip)
-}
-
-#[c_export]
-pub fn __bch2_btree_path_set_pos(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx,
-                                 new_pos: &Bpos, intent: bool, ip: c_ulong) -> PathIdx {
-    trans.path_set_pos(paths, path, *new_pos, intent, ip)
-}
-
-#[c_export]
 pub fn bch2_btree_path_to_text(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path_idx: PathIdx, path: &BtreePath) {
     path.to_text(out, path_idx)
-}
-
-#[c_export]
-pub fn __bch2_btree_trans_too_many_iters(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) -> c_int {
-    trans.fs().event_inc_trace(events::trans_restart_too_many_iters, |out| {
-        prt!(out, "{}\n", trans.fn_name());
-        trans.paths_to_text(out, paths);
-    });
-
-    ret_to_c(Err::<(), _>(trans.restart(bch_errcode::BCH_ERR_transaction_restart_too_many_iters)))
 }
 
 /// What a path's levels point at: a btree node, or - a cached path's - a key

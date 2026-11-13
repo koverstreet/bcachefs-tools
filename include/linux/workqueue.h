@@ -1,6 +1,7 @@
 #ifndef __TOOLS_LINUX_WORKQUEUE_H
 #define __TOOLS_LINUX_WORKQUEUE_H
 
+#include <linux/atomic.h>
 #include <linux/list.h>
 #include <linux/timer.h>
 

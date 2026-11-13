@@ -18,7 +18,7 @@
 
 use core::cmp::{Ordering, Reverse};
 use core::ffi::c_int;
-use cstruct_macros::{c_export, CStruct, bitfield, c_typedef, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, bitfield, c_xmacro, TypeInfo};
 use crate::btree::bkey::ValidateFlags;
 use crate::c;
 pub use crate::cstructs::sb_errors_format::{FsckFlags, SbErrorId};
@@ -28,12 +28,9 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::{prt, sb_err_on};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::util::alloc::{kvvec_insert, KVVec};
-use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::ktime_get_real_seconds;
-use crate::util::names;
 use crate::util::{DateTime, Printbuf};
 use crate::sb::io::SbResize;
-use crate::types::DArray;
 use nestify::nest;
 
 nest! {
@@ -49,11 +46,6 @@ nest! {
         pub first_error_time: u64,
         pub last_error_time: u64,
     }
-}
-
-c_typedef! {
-    #[c("DARRAY(struct bch_sb_error_entry_cpu) bch_sb_errors_cpu")]
-    pub type bch_sb_errors_cpu = DArray<c::bch_sb_error_entry_cpu>;
 }
 
 /*
@@ -131,12 +123,6 @@ c_xmacro! {
 }
 
 // ── Error ids, and their names ───────────────────────────────────────────────
-
-/// The ids' names, as C's table has them.
-#[c_export]
-#[c("const char * const bch2_sb_error_strs[]")]
-pub static bch2_sb_error_strs: [*const c_char; names::c_table_len::<SbErrorId>()] =
-    crate::c_names_table!(SbErrorId);
 
 /// @ids by name, comma separated.
 pub fn prt_error_ids(out: &mut Printbuf, ids: impl IntoIterator<Item = SbErrorId>) {
@@ -377,7 +363,6 @@ macro_rules! decompress_map {
 
 /// @err a BCH_ERR_decompress errcode, as buf_uncompress() throws: what it's
 /// counted as.
-#[c_export]
 pub fn bch2_decompress_sb_err(err: c_int) -> SbErrorId {
     c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, SbErrorId, data_decompress_err_])
 }
@@ -449,10 +434,5 @@ impl Fs {
                  DateTime(e.first_error_time as i64), DateTime(e.last_error_time as i64));
         }
     }
-}
-
-#[c_export]
-pub fn bch2_sb_error_count(c: &Opaque<Fs>, err: SbErrorId) {
-    Fs::from_c(c).sb_error_count(err)
 }
 

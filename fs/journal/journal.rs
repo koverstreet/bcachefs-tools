@@ -122,7 +122,6 @@ use core::ptr::{self, NonNull};
 use core::sync::atomic::fence;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
 
-use cstruct_macros::c_export;
 
 use crate::btree::iter::TransAttempt;
 use crate::c;
@@ -1750,14 +1749,8 @@ fn flush_seq_err_wake(wait: *const c::closure_waitlist) {
     }
 }
 
-#[c_export]
-pub fn bch2_journal_res_put(j: &c::journal, res: &mut c::journal_res) {
-    j.res_put(res)
-}
-
 /// # Safety
 /// @cl is a live closure, on no waitlist.
-#[c_export]
 pub unsafe fn __bch2_journal_flush_seq_async(j: &c::journal, seq: u64, cl: *mut c::closure)
     -> *mut c::closure_waitlist
 {

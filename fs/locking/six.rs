@@ -27,7 +27,7 @@ use core::mem::ManuallyDrop;
 use core::ptr::{self, null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr, AtomicU32};
-use cstruct_macros::{c_const, c_enum, c_export, CStruct};
+use cstruct_macros::{c_const, c_enum, CStruct};
 
 c_enum! {
     #[closed]
@@ -656,7 +656,6 @@ fn do_six_trylock(lock: &six_lock, ty: six_lock_type, try_: bool) -> bool {
  *
  * Return: true on success, false on failure.
  */
-#[c_export]
 pub fn six_trylock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) -> bool {
     if !do_six_trylock(lock, ty, true) {
         return false;
@@ -679,7 +678,6 @@ pub fn six_trylock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) -> 
  *
  * Return: true on success, false on failure.
  */
-#[c_export]
 pub fn six_relock_ip(lock: &c::six_lock, ty: c::six_lock_type, seq: c_uint, ip: c_ulong) -> bool {
     if lock.seq.get() != seq || !six_trylock_ip(lock, ty, ip) {
         return false;
@@ -1031,7 +1029,6 @@ fn do_six_unlock_type(lock: &six_lock, ty: six_lock_type) {
  */
 /// # Safety
 /// @lock is held as @ty, by the caller.
-#[c_export]
 pub unsafe fn six_unlock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) {
     use six_lock_type::*;
 
@@ -1068,7 +1065,6 @@ pub unsafe fn six_unlock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulon
  */
 /// # Safety
 /// @lock is held for intent, by the caller.
-#[c_export]
 pub unsafe fn six_lock_downgrade(lock: &c::six_lock) {
     let intent = unsafe { SixHold::from_raw(Locked::from_c(lock), six_lock_type::SIX_LOCK_intent) };
     intent.downgrade().into_raw();
@@ -1116,7 +1112,6 @@ pub unsafe fn six_lock_tryupgrade(lock: &c::six_lock) -> bool {
  */
 /// # Safety
 /// @lock is held as @ty or stronger, by the caller.
-#[c_export]
 pub unsafe fn six_lock_increment_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) {
     use six_lock_type::*;
 
@@ -1153,7 +1148,6 @@ pub unsafe fn six_lock_increment_ip(lock: &c::six_lock, ty: c::six_lock_type, ip
  * This function is never needed in a bug-free program; it's only useful in
  * debug code, e.g. to determine if a cycle detector is at fault.
  */
-#[c_export]
 pub fn six_lock_wakeup_all(lock: &c::six_lock) {
     let state = atomic_read(lock);
 
@@ -1187,7 +1181,6 @@ pub fn six_lock_wakeup_all(lock: &c::six_lock) {
  *
  * Return: the number of times a lock is held for read, intent and write.
  */
-#[c_export]
 /// Whether it's held for write: by its intent holder, if anyone.
 pub fn six_lock_write_held(lock: &c::six_lock) -> bool {
     atomic_read(lock) & SIX_LOCK_HELD_write != 0
@@ -1519,7 +1512,6 @@ unsafe impl RawSixLock for c::six_lock {
  */
 /// # Safety
 /// Nothing holds @lock, or will.
-#[c_export]
 pub unsafe fn six_lock_exit(lock: *mut c::six_lock) {
     unsafe {
         crate::warn_on!((*lock).readers.allocated() && pcpu_read_count(&*lock) != 0);
@@ -1537,7 +1529,6 @@ pub unsafe fn six_lock_exit(lock: *mut c::six_lock) {
 /// Nothing holds or reaches @lock until this returns. What init doesn't set
 /// keeps what it was - zeroes, or six_lock_exit()'s: seq, and readers but
 /// with SIX_LOCK_INIT_PCPU.
-#[c_export]
 pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: *mut c_void,
                               flags: c::six_lock_init_flags, gfp: c::gfp_t) {
     let wait_lock = crate::new_lock!(six_lock_waiters { next_free_hint: 0, list: ManuallyDrop::new(WaitList::new_zeroed()) },

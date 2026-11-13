@@ -16,8 +16,7 @@
 //!
 //! The bkey methods - validate, to_text, swab - are ptrs_ops.rs's; editing a
 //! key's entries, ptrs_edit.rs's; picking a pointer to read, ptrs_read.rs's;
-//! masks of a key's pointers, ptrs_mask.rs's; C's names for all of it,
-//! ptrs_c_export.rs's.
+//! masks of a key's pointers, ptrs_mask.rs's.
 
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, types_with, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, FamilyVal, InFamily, KeyState};
@@ -44,8 +43,6 @@ mod edit;
 mod read;
 #[path = "ptrs_ops.rs"]
 mod ops;
-#[path = "ptrs_c_export.rs"]
-pub mod c_export;
 #[path = "ptrs_mask.rs"]
 mod mask;
 
