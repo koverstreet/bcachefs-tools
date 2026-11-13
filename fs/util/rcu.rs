@@ -56,17 +56,6 @@ use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::projections::Publish;
 use crate::util::refcount::{ARef, AlwaysRefCounted};
 
-#[cfg(not(kernel))]
-unsafe extern "C" {
-    fn urcu_memb_read_lock();
-    fn urcu_memb_read_unlock();
-    fn urcu_memb_synchronize_rcu();
-    fn urcu_memb_call_rcu(rcu: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head));
-    fn urcu_memb_barrier();
-    fn urcu_memb_start_poll_synchronize_rcu() -> c::urcu_gp_poll_state;
-    fn urcu_memb_poll_state_synchronize_rcu(state: c::urcu_gp_poll_state) -> bool;
-}
-
 // ── Reading ──────────────────────────────────────────────────────────────
 
 /// Not Send: the section is the thread's. A NORECLAIM scope while it lives.
@@ -79,7 +68,7 @@ pub struct ReadGuard {
 
 pub fn read_lock() -> ReadGuard {
     #[cfg(not(kernel))]
-    unsafe { urcu_memb_read_lock() };
+    unsafe { c::rcu_read_lock() };
 
     ReadGuard {
         #[cfg(kernel)]
@@ -92,7 +81,7 @@ pub fn read_lock() -> ReadGuard {
 #[cfg(not(kernel))]
 impl Drop for ReadGuard {
     fn drop(&mut self) {
-        unsafe { urcu_memb_read_unlock() };
+        unsafe { c::rcu_read_unlock() };
     }
 }
 
@@ -193,7 +182,7 @@ pub fn synchronize() {
     #[cfg(kernel)]
     unsafe { kernel::bindings::synchronize_rcu() };
     #[cfg(not(kernel))]
-    unsafe { urcu_memb_synchronize_rcu() };
+    unsafe { c::synchronize_rcu() };
 }
 
 // ── Grace periods, polled ────────────────────────────────────────────────
@@ -240,7 +229,7 @@ impl<'a> Flavor<'a> {
             None      => unsafe { kernel::bindings::get_state_synchronize_rcu() },
         });
         #[cfg(not(kernel))]
-        return GpCookie(unsafe { urcu_memb_start_poll_synchronize_rcu() });
+        return GpCookie(unsafe { c::start_poll_synchronize_rcu() });
     }
 
     /// get_state(), and that grace period started: start_poll_synchronize_rcu().
@@ -251,7 +240,7 @@ impl<'a> Flavor<'a> {
             None      => unsafe { kernel::bindings::start_poll_synchronize_rcu() },
         });
         #[cfg(not(kernel))]
-        return GpCookie(unsafe { urcu_memb_start_poll_synchronize_rcu() });
+        return GpCookie(unsafe { c::start_poll_synchronize_rcu() });
     }
 
     /// Whether @c's grace period is over: poll_state_synchronize_rcu().
@@ -262,7 +251,7 @@ impl<'a> Flavor<'a> {
             None      => unsafe { kernel::bindings::poll_state_synchronize_rcu(c.0) },
         };
         #[cfg(not(kernel))]
-        return unsafe { urcu_memb_poll_state_synchronize_rcu(c.0) };
+        return unsafe { c::poll_state_synchronize_rcu(c.0) };
     }
 
     /// Every callback queued with call() run: rcu_barrier().
@@ -273,7 +262,7 @@ impl<'a> Flavor<'a> {
             None      => unsafe { kernel::bindings::rcu_barrier() },
         }
         #[cfg(not(kernel))]
-        unsafe { urcu_memb_barrier() };
+        unsafe { c::rcu_barrier() };
     }
 
     /// @func(@head) a grace period on: call_rcu().
@@ -287,7 +276,7 @@ impl<'a> Flavor<'a> {
             None      => unsafe { kernel::bindings::call_rcu(head, Some(func)) },
         }
         #[cfg(not(kernel))]
-        unsafe { urcu_memb_call_rcu(head, func) };
+        unsafe { c::call_rcu(head, Some(func)) };
     }
 }
 
