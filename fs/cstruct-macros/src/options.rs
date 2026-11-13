@@ -182,7 +182,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
             // erasure_code's is 16
             let v = match a.kind == "bool" {
                 true  => quote!(match v { 0 => false, 1 => true, _ => return Err(()) }.into()),
-                false => quote!(v),
+                false => quote!(v.try_into().map_err(|_| ())?),
             };
             quote!(Some(&#o::Field::<c::#host> {
                 get: |t| u64::from(t.#getter()),

@@ -74,10 +74,6 @@ unsafe impl crate::util::projections::TearSafe for bch_member_cpu {}
 // to edit one, bch_sb_handle::member_mut(), for a member that's all there.
 // ---------------------------------------------------------------------------
 
-pub fn member_state_str(state: u8) -> &'static str {
-    MemberState(state).name().unwrap_or("unknown")
-}
-
 const BCH_MEMBER_V1_BYTES: usize = c::BCH_MEMBER_V1_BYTES as usize;
 const MEMBERS_V2_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v2>>();
 const MEMBERS_V1_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v1>>();
@@ -518,7 +514,7 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
     }
     write!(out, "Last superblock write:\t{}\n", m.seq.get());
 
-    write!(out, "State:\t{}\n", member_state_str(m.state() as u8));
+    write!(out, "State:\t{}\n", m.state());
     write!(out, "Data allowed:\t");
     data_types_to_text(out, m.data_allowed());
     out.newline();
@@ -572,7 +568,7 @@ fn member_to_text_short<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &
         }
     }
 
-    write!(out, "State:\t{}\n", member_state_str(m.state() as u8));
+    write!(out, "State:\t{}\n", m.state());
     has_data_to_text(out, sb, idx);
 }
 
@@ -608,13 +604,13 @@ impl c::bch_member {
             first_bucket,
             bucket_size:            self.bucket_size.get(),
             failure_domain:         0,
-            state:                  MemberState(self.state() as u8),
+            state:                  self.state(),
             discard:                self.discard(),
             data_allowed:           DataTypes::from_bits_retain(self.data_allowed() as u16),
             // one-biased on disk: 0 is the default, 1
             durability:             self.durability().checked_sub(1).unwrap_or(1) as u8,
             freespace_initialized:  self.freespace_initialized(),
-            initialized:            MemberInitialized(self.initialized() as u8),
+            initialized:            self.initialized(),
             resize_on_mount:        self.resize_on_mount(),
             rotational:             self.rotational(),
             btree_bitmap_shift:     self.btree_bitmap_shift,

@@ -609,7 +609,7 @@ pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64
         return fs.throw(Errcode::BCH_ERR_EINVAL_journal_entry_version_incompatible);
     }
 
-    journal_entry_err_on!(ctx, !crate::data::checksum::checksum_type_valid(fs, h.csum_type()), jset_unknown_csum,
+    journal_entry_err_on!(ctx, !h.csum_type().valid(fs), jset_unknown_csum,
                           "{} sector {} seq {}: journal entry with unknown csum type {}",
                           name, sector, seq, h.csum_type());
 

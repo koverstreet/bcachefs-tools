@@ -227,7 +227,7 @@ use crate::fs::{Fs, StateLockWrite};
 use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
 use crate::sb::io::{read_super, SbReadScratch};
-use crate::sb::members::{member_exists, member_state_str, mi_field_upgrades, sb_member,
+use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::util::alloc::{alloc_pinned, free_pinned, kbox_pin_init};
 use crate::os::file::read_file;
@@ -950,7 +950,7 @@ impl StateLockWrite<'_> {
             self.dev_read_only(ca);
         }
 
-        log_dev(ca, LogLevel::NOTICE, &Msg(|out: &mut Printbuf| prt!(out, "{}", member_state_str(new_state.0))));
+        log_dev(ca, LogLevel::NOTICE, &Msg(|out: &mut Printbuf| prt!(out, "{new_state}")));
 
         if do_reconcile_scan {
             fs.request_scan(s, false)?;
@@ -958,7 +958,7 @@ impl StateLockWrite<'_> {
 
         {
             let mut sb = fs.sb_lock();
-            sb.fs_member_mut(ca.dev_idx.into()).set_state(new_state.0.into());
+            sb.fs_member_mut(ca.dev_idx.into()).set_state(new_state);
             fs.write_super(&mut sb);
         }
 
@@ -1208,7 +1208,7 @@ impl Fs {
 
     fn dev_set_initialized(&self, ca: &Dev, state: MemberInitialized) -> Result<(), BchError> {
         let mut sb = self.sb_lock();
-        sb.fs_member_mut(ca.dev_idx.into()).set_initialized(state.0.into());
+        sb.fs_member_mut(ca.dev_idx.into()).set_initialized(state);
         self.write_super_flags(&mut sb, c::SbWriteFlags::empty())
     }
 
@@ -1292,7 +1292,7 @@ impl Fs {
                 /* success: */
 
                 dev_mi.last_mount = (ktime_get_real_seconds() as u64).into();
-                dev_mi.set_initialized(MemberInitialized::pre_dev_usage.0.into());
+                dev_mi.set_initialized(MemberInitialized::pre_dev_usage);
 
                 *w.fs_member_mut(dev_idx) = dev_mi;
 

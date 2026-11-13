@@ -98,7 +98,7 @@ pub const BCH_MEMBER_V1_BYTES: u32 = 56;
 
 #[bitfield(Le64)]
 pub struct bch_member_flags {
-    #[bits(4)]  state:              u64,
+    #[bits(4)]  state:              MemberState,
     /* 4-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
     #[bits(10)] __:                 u64,
     discard:                        bool,
@@ -109,7 +109,7 @@ pub struct bch_member_flags {
     resize_on_mount:                bool,
     rotational:                     bool,
     rotational_set:                 bool,
-    #[bits(4)]  initialized:        u64,
+    #[bits(4)]  initialized:        MemberInitialized,
     /* 38-46 free, was FAILURE_DOMAIN (now a string, member.failure_domain) */
     #[bits(26)] __:                 u64,
 }

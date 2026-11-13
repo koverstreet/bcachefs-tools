@@ -490,7 +490,7 @@ vstruct!(unsized bch_sb_field_errors, field.u64s, start = 0);
 
 #[bitfield(Le64)]
 pub struct bch_sb_field_error_entry_v {
-    #[bits(16)] id: u64,
+    #[bits(16)] id: SbErrorId,
     #[bits(48)] nr: u64,
 }
 
@@ -514,7 +514,8 @@ nest! {
     pub struct bch_sb_field_error_entry_v2 {
         #>[bitfield(u128, repr = le::U128, from = le::U128::new, into = le::U128::get)]
         pub v: pub struct bch_sb_field_error_entry_v2_bits {
-            id:               u16,
+            #[bits(16)]
+            id:               SbErrorId,
             nr:               u32,
             last_error_time:  u40,
             first_error_time: u40,

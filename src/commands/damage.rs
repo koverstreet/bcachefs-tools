@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use bch_bindgen::c;
+use bcachefs_kernel::sb::errors::SbErrorId;
 use bcachefs_kernel::util::vstructs::{plain_bytes, Head, VstructRefEntries};
 use clap::{Parser, Subcommand};
 
-use crate::util::{open_dir, sb_error_name};
+use crate::util::open_dir;
 use crate::wrappers::ioctl::{ioctl_none, ioctl_ptr, ioctl_rw, IoctlBuf,
     BCHFS_IOC_CLEAR_DAMAGE, BCHFS_IOC_GET_DAMAGE, BCHFS_IOC_READDIR_FLAGS};
 
@@ -66,7 +67,7 @@ enum Subcommands {
 /// section keeps: error id, a saturating occurrence count, and first and
 /// last occurrence times.
 struct DamageEntry {
-    id:    u32,
+    id:    SbErrorId,
     nr:    u64,
     first: i64,
     last:  i64,
@@ -104,7 +105,7 @@ fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
 
         return Ok(buf.get().map_err(std::io::Error::other)?.entries.iter()
             .map(|e| DamageEntry {
-                id:    e.v.id() as u32,
+                id:    e.v.id(),
                 nr:    e.v.nr() as u64,
                 first: e.v.first_error_time() as i64,
                 last:  e.v.last_error_time() as i64,
@@ -206,7 +207,7 @@ fn cmd_ls(path: &Path, recursive: bool) -> Result<()> {
             match entry_errors(&dir, e) {
                 Some(errs) if !errs.is_empty() =>
                     println!("{name}: {}",
-                             errs.iter().map(|e| sb_error_name(e.id))
+                             errs.iter().map(|e| e.id.to_string())
                                  .collect::<Vec<_>>().join(" ")),
                 _ => println!("{name}"),
             }
@@ -227,7 +228,7 @@ fn cmd_show(path: &Path) -> Result<()> {
 
     for e in errs {
         println!("{:<48} nr {:<8} first {}  last {}",
-                 sb_error_name(e.id), e.nr, e.first_seen(), e.last_seen());
+                 e.id.to_string(), e.nr, e.first_seen(), e.last_seen());
     }
     Ok(())
 }

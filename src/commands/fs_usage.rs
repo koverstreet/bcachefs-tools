@@ -6,7 +6,7 @@ use clap::Parser;
 use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{AccountingEntry, CompressionType, DiskAccountingType, ReconcileType};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
-use bcachefs_kernel::format::{DataType, MetadataVersion};
+use bcachefs_kernel::format::{DataType, MemberState, MetadataVersion};
 use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bcachefs_kernel::btree;
@@ -592,7 +592,7 @@ fn devs_usage_to_text(
                 let hidden = usage.hidden_sectors();
                 let capacity = usage.capacity_sectors() - hidden;
                 let used = usage.used_sectors() - hidden;
-                let state = bcachefs_kernel::sb::members::member_state_str(usage.state);
+                let state = MemberState(usage.state);
 
                 let pct = (usage.used_buckets() * 100).checked_div(usage.nr_buckets).unwrap_or(0);
                 write!(sub, "{}\t{}\r{}\r{:>2}%\r", state, Sectors(capacity), Sectors(used), pct);
@@ -618,7 +618,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
         return;
     };
 
-    let state = bcachefs_kernel::sb::members::member_state_str(u.state);
+    let state = MemberState(u.state);
     let pct = (u.used_buckets() * 100).checked_div(u.nr_buckets).unwrap_or(0);
 
     out.aligned(|sub| {

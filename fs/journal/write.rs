@@ -997,7 +997,7 @@ fn write_checksum(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError
     h.version.set(fs.sb.version.get().into());
 
     h.set_big_endian(cfg!(target_endian = "big"));
-    h.set_csum_type(csum_type.0 as u64);
+    h.set_csum_type(csum_type);
     h.set_has_overwrites(has_overwrites);
 
     if csum_type.is_encryption() {

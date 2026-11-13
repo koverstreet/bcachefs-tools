@@ -40,7 +40,8 @@ nest! {
         #[members]
         #>[bitfield(u64)]
         pub bits: pub struct bch_sb_error_entry_cpu_bits {
-            id: u16,
+            #[bits(16)]
+            id: SbErrorId,
             nr: u48,
         },
         pub first_error_time: u64,
@@ -85,7 +86,7 @@ impl ErrorEntry for c::bch_sb_field_error_entry {
     const V2: bool = false;
 
     fn id(&self) -> SbErrorId {
-        SbErrorId(self.v.id() as u32)
+        self.v.id()
     }
 
     fn nr(&self) -> u64 {
@@ -105,7 +106,7 @@ impl ErrorEntry for c::bch_sb_field_error_entry_v2 {
     const V2: bool = true;
 
     fn id(&self) -> SbErrorId {
-        SbErrorId(self.v.id().into())
+        self.v.id()
     }
 
     fn nr(&self) -> u64 {
@@ -126,7 +127,7 @@ impl c::bch_sb_field_error_entry_v2 {
     /// is a time, as C's setters pin them: a wrapped one would be worse.
     pub(crate) fn new(id: SbErrorId, nr: u64, first: u64, last: u64) -> Self {
         let mut e = Self::default();
-        e.v.set_id(id.0 as u16);
+        e.v.set_id(id);
         e.v.set_nr(nr.min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
         e.v.set_first_error_time(first.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
         e.v.set_last_error_time(last.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
@@ -137,7 +138,7 @@ impl c::bch_sb_field_error_entry_v2 {
 /// Memory's count as v2 has it.
 impl From<&c::bch_sb_error_entry_cpu> for c::bch_sb_field_error_entry_v2 {
     fn from(s: &c::bch_sb_error_entry_cpu) -> Self {
-        Self::new(SbErrorId(s.id().into()), s.nr(), s.first_error_time, s.last_error_time)
+        Self::new(s.id(), s.nr(), s.first_error_time, s.last_error_time)
     }
 }
 
@@ -149,7 +150,7 @@ fn validate<E: ErrorEntry>(entries: &[E], err: &mut Printbuf) -> Result<(), BchE
         sb_err_on!(err, e.first() > e.last(), BCH_ERR_invalid_sb_errors,
                    "entry with first occurrence after last (id {})", e.id())?;
 
-        sb_err_on!(err, entries.get(i + 1).is_some_and(|n| e.id().0 >= n.id().0), BCH_ERR_invalid_sb_errors,
+        sb_err_on!(err, entries.get(i + 1).is_some_and(|n| e.id() >= n.id()), BCH_ERR_invalid_sb_errors,
                    "entries out of order")?;
     }
     Ok(())
@@ -358,7 +359,7 @@ fn cpu_entry(id: SbErrorId, nr: u64, first: u64, last: u64) -> c::bch_sb_error_e
         last_error_time:  last,
         ..Default::default()
     };
-    e.set_id(id.0 as u16);
+    e.set_id(id);
     e.set_nr(nr.min(CPU_NR_MAX));
     e
 }
@@ -372,7 +373,7 @@ impl<E: ErrorEntry> From<&E> for c::bch_sb_error_entry_cpu {
 /// One error's counts from both sections: summed, over the union of their
 /// time ranges.
 pub(crate) fn merge(a: c::bch_sb_error_entry_cpu, b: c::bch_sb_error_entry_cpu) -> c::bch_sb_error_entry_cpu {
-    cpu_entry(SbErrorId(a.id().into()), a.nr().saturating_add(b.nr()),
+    cpu_entry(a.id(), a.nr().saturating_add(b.nr()),
               a.first_error_time.min(b.first_error_time),
               a.last_error_time.max(b.last_error_time))
 }
@@ -384,7 +385,7 @@ impl Fs {
         let now = ktime_get_real_seconds() as u64;
         let mut counts = self.errors.counts.lock();
 
-        match counts.binary_search_by_key(&err.0, |e| e.id().into()) {
+        match counts.binary_search_by_key(&err, |e| e.id()) {
             Ok(i) => {
                 let e = &mut counts[i];
                 e.update_nr(|n| (n + 1).min(CPU_NR_MAX));
@@ -405,7 +406,7 @@ impl Fs {
         }
 
         for e in self.errors.counts.lock().iter() {
-            prt!(out, "{} \t{}\t{}\t{}\n", SbErrorId(e.id().into()), e.nr(),
+            prt!(out, "{} \t{}\t{}\t{}\n", e.id(), e.nr(),
                  DateTime(e.first_error_time as i64), DateTime(e.last_error_time as i64));
         }
     }

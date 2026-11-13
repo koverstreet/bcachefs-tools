@@ -154,8 +154,8 @@ impl BkeyOps for c::Backpointer {
         }
         prt!(out, "{}", { v.pos });
 
-        if v.reconcile_phys() != 0 {
-            prt!(out, " reconcile_phys={}", v.reconcile_work_phys());
+        if v.reconcile_phys() != c::ReconcileWorkId::none {
+            prt!(out, " reconcile_phys={}", v.reconcile_phys());
         }
         if v.erasure_coded() {
             prt!(out, " ec");
@@ -190,16 +190,6 @@ impl c::Backpointer {
     pub fn target(&self) -> c::bbpos {
         c::bbpos { btree: Btree(self.btree_id.into()), pos: self.pos }
     }
-
-    /// Its reconcile phys bits: its extent's work, for a pointer on a
-    /// rotational device - bp_reconcile_phys().
-    pub fn reconcile_work_phys(&self) -> c::ReconcileWorkId {
-        c::ReconcileWorkId(self.reconcile_phys() as u32)
-    }
-
-    pub fn set_reconcile_work_phys(&mut self, w: c::ReconcileWorkId) {
-        self.set_reconcile_phys(w.0.into());
-    }
 }
 
 /// All but the reconcile phys bits: a cache of the extent's pending work, which
@@ -207,8 +197,8 @@ impl c::Backpointer {
 /// repair, not a mismatch.
 pub fn backpointers_match(l: &c::Backpointer, r: &c::Backpointer) -> bool {
     let (mut l, mut r) = (*l, *r);
-    l.set_reconcile_phys(0);
-    r.set_reconcile_phys(0);
+    l.set_reconcile_phys(c::ReconcileWorkId::none);
+    r.set_reconcile_phys(c::ReconcileWorkId::none);
     plain_bytes(&l) == plain_bytes(&r)
 }
 
@@ -262,7 +252,7 @@ pub fn extent_ptr_to_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, d: &De
         pos:        k.k.p,
         ..Default::default()
     };
-    bp.v.set_reconcile_work_phys(bp_reconcile_phys(fs, level, dev, k));
+    bp.v.set_reconcile_phys(bp_reconcile_phys(fs, level, dev, k));
     bp.v.set_erasure_coded(d.p.has_ec);
     bp.v.set_stripe_ptr(d.p.has_ec && dev == c::BCH_SB_MEMBER_INVALID);
     bp
@@ -328,7 +318,7 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
 /// Also its reconcile phys btree entry. Deleting turns @bp into a deletion.
 pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: &mut BkeyI<c::Backpointer>,
                               insert: bool) -> Result<(), BchError> {
-    let phys = bp.v.reconcile_work_phys();
+    let phys = bp.v.reconcile_phys();
     if phys != c::ReconcileWorkId::none {
         let btree = phys.phys_btree().expect("phys bits that are never pending: bp_reconcile_phys()'s");
         t.bit_mod_buffered(btree, bp.k.p, insert)?;

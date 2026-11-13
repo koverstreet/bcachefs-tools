@@ -70,7 +70,7 @@ use crate::locking::ExclusiveGuard;
 use crate::opts::data_type_str;
 use crate::percpu_field;
 use crate::debug::trace::events;
-use crate::sb::members::{data_types_to_text, member_state_str};
+use crate::sb::members::data_types_to_text;
 use crate::types::{c_default};
 use crate::util::alloc::init_at;
 use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up};
@@ -1013,7 +1013,7 @@ impl Fs {
     }
 
     fn dev_alloc_debug_header(out: &mut Printbuf, ca: &Dev) {
-        write!(out, "Dev {} ({}): {}", ca, ca.dev_idx, member_state_str(ca.mi.get().state.0));
+        write!(out, "Dev {} ({}): {}", ca, ca.dev_idx, ca.mi.get().state);
         if !ca.is_online() {
             write!(out, " (offline)");
         }

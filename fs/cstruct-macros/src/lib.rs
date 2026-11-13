@@ -1161,6 +1161,13 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
                 pub const fn from_bits(v: #repr) -> Self { Self(v) }
                 pub const fn into_bits(self) -> #repr { self.0 }
             }
+            impl From<#name> for u64 {
+                fn from(v: #name) -> u64 { v.0.into() }
+            }
+            impl TryFrom<u64> for #name {
+                type Error = core::num::TryFromIntError;
+                fn try_from(v: u64) -> Result<Self, Self::Error> { #repr::try_from(v).map(Self) }
+            }
             // SAFETY: its integer, every value of which is one
             unsafe impl crate::util::vstructs::Plain for #name {}
             crate::one_word!(#name);

@@ -550,7 +550,7 @@ impl BsetWrite {
 
         i.version = Le16::new(fs.sb.version.get());
         i.set_offset(b.written.get().into());
-        i.set_csum_type(fs.meta_checksum_type().0 as _);
+        i.set_csum_type(fs.meta_checksum_type());
 
         Some(Self { fs, bounce, first, keys_at, bytes: bytes_to_write, sectors: sectors_to_write })
     }
@@ -572,7 +572,7 @@ impl BsetWrite {
         let i = self.bset();
 
         /* bch2_validate_bset will be modifying: */
-        let validate_before_checksum = c::CsumType(i.csum_type() as u32).is_encryption() ||
+        let validate_before_checksum = i.csum_type().is_encryption() ||
             (i.version.get() as u32) < c::bcachefs_metadata_version_current;
 
         /* if we're going to be encrypting, check metadata validity first: */

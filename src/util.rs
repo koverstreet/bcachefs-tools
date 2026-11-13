@@ -6,7 +6,6 @@ use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
-use bcachefs_kernel::sb::errors::SbErrorId;
 use crossterm::{cursor, execute, terminal};
 use rustix::ioctl::{self, Getter};
 
@@ -132,12 +131,6 @@ pub fn ask_yn() -> bool {
         crate::wrappers::super_io::die("error reading from standard input");
     }
     matches!(line.as_bytes().first(), Some(b'y' | b'Y'))
-}
-
-/// The name of an SbErrorId - the same table fsck and the
-/// superblock error counters use.
-pub fn sb_error_name(id: u32) -> String {
-    SbErrorId(id).to_string()
 }
 
 /// Parse a human-readable size string (e.g. "1G", "512M").

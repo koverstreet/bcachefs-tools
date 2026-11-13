@@ -606,7 +606,7 @@ pub struct BackpointerFlags {
      * rb_work_id_phys() equals PHYS. Every path that mutates reconcile_opts on an
      * extent must keep the bp's PHYS flag in sync.
      */
-    #[bits(2)] reconcile_phys:  u64,
+    #[bits(2)] reconcile_phys:  c::ReconcileWorkId,
     erasure_coded:              bool,
     stripe_ptr:                 bool,
     __:                         u28,
@@ -915,15 +915,16 @@ vstruct!(bch_sb_field_crypt, field.u64s, start = 0);
 
 #[bitfield(Le64)]
 pub struct bch_sb_field_crypt_flags {
-    #[bits(4)]  kdf_type:   u64,
+    #[bits(4)]  kdf_type:   KdfType,
     #[bits(60)] __:         u64,
 }
 
 #[bch_enum(open)]
+#[prefix(BCH_KDF_)]
+#[nr]
 #[repr(u32)]
 pub enum KdfType {
-    BCH_KDF_SCRYPT = 0,
-    BCH_KDF_NR = 1,
+    scrypt = 0,
 }
 
 #[bitfield(Le64)]
@@ -1287,16 +1288,16 @@ impl bch_sb<Unvalidated> {
 pub struct bch_sb_flags0 {
     initialized:                    bool,
     clean:                          bool,
-    #[bits(6)]  csum_type:          u64,
-    #[bits(4)]  error_action:       u64,
+    #[bits(6)]  csum_type:          CsumType,
+    #[bits(4)]  error_action:       ErrorAction,
 
     #[bits(16)] btree_node_size:    u64,
 
     #[bits(5)]  gc_reserve:         u64,
     #[bits(7)]  root_reserve:       u64,
 
-    #[bits(4)]  meta_csum_type:     u64,
-    #[bits(4)]  data_csum_type:     u64,
+    #[bits(4)]  meta_csum_type:     CsumOpt,
+    #[bits(4)]  data_csum_type:     CsumOpt,
 
     #[bits(4)]  meta_replicas_want: u64,
     #[bits(4)]  data_replicas_want: u64,
@@ -1315,7 +1316,7 @@ pub struct bch_sb_flags0 {
 
 #[bitfield(Le64)]
 pub struct bch_sb_flags1 {
-    #[bits(4)]  str_hash_type:          u64,
+    #[bits(4)]  str_hash_type:          StrHashOpt,
     #[bits(4)]  compression_type_lo:    u64,
     inode_32bit:                        bool,
 
@@ -1359,7 +1360,7 @@ pub struct bch_sb_flags4 {
     journal_transaction_names:                  bool,
     nocow:                                      bool,
     #[bits(20)] write_buffer_size:              u64,
-    #[bits(2)]  version_upgrade:                u64,
+    #[bits(2)]  version_upgrade:                VersionUpgradeOpt,
 
     #[bits(4)]  compression_type_hi:            u64,
     #[bits(4)]  background_compression_type_hi: u64,
@@ -1401,12 +1402,12 @@ pub struct bch_sb_flags6 {
     #[bits(4)]  shard_inums_nbits:      u64,
     #[bits(10)] write_error_timeout:    u64,
     #[bits(6)]  csum_err_retry_nr:      u64,
-    #[bits(2)]  degraded_action:        u64,
+    #[bits(2)]  degraded_action:        DegradedAction,
     casefold:                           bool,
     rebalance_ac_only:                  bool,
     #[bits(16)] writeback_timeout:      u64,
     #[bits(8)]  extent_bp_shift:        u64,
-    #[bits(2)]  scrub_journal:          u64,
+    #[bits(2)]  scrub_journal:          ScrubJournalOpt,
     #[bits(8)]  ec_max_data_blocks:     u64,
     move_writes_fua:                    bool,
     /*
@@ -1415,7 +1416,7 @@ pub struct bch_sb_flags6 {
      * the dirent hash-consistency check rather than "repair" the artifacts.
      */
     dirents_sanitized:                  bool,
-    #[bits(2)]  write_degraded_action:  u64,
+    #[bits(2)]  write_degraded_action:  WriteDegradedAction,
     #[bits(2)]  __:                     u64,
 }
 
@@ -1898,7 +1899,7 @@ floored_by_self!(bkey_i);
 
 #[bitfield(Le32)]
 pub struct jset_flags {
-    #[bits(4)] csum_type:   u64,
+    #[bits(4)] csum_type:   CsumType,
     big_endian:             bool,
     no_flush:               bool,
     has_overwrites:         bool,
@@ -2006,7 +2007,7 @@ impl bset<Unvalidated> {
 
 #[bitfield(Le32)]
 pub struct bset_flags {
-    #[bits(4)]  csum_type:  u64,
+    #[bits(4)]  csum_type:  CsumType,
 
     big_endian:             bool,
     separate_whiteouts:     bool,

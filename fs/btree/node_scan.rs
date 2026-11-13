@@ -222,7 +222,7 @@ impl<'f> DevScan<'f> {
             return Ok(());
         }
 
-        let csum_type = c::CsumType(bn.keys.csum_type() as u32);
+        let csum_type = bn.keys.csum_type();
         if csum_type.is_encryption() {
             if fs.encryption_key().is_none() {
                 return Ok(());

@@ -371,7 +371,7 @@ fn set_state_offline(device: &str, new_state: c::MemberState) -> Result<()> {
 
     {
         let mut sb = fs.sb_lock();
-        sb.fs_member_mut(dev_idx).set_state(new_state.0.into());
+        sb.fs_member_mut(dev_idx).set_state(new_state);
         fs.write_super_ret(&mut sb)
             .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }

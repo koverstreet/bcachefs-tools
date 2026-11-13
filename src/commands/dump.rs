@@ -240,10 +240,10 @@ fn sanitize_journal(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Resu
     while cast_plain::<Head<c::jset>>(&buf[pos..]).is_some_and(|j| j.magic.get() == jset_magic) {
         let j = c::jset::<Unvalidated>::from_bytes_mut(&mut buf[pos..])
             .map_err(|e| anyhow!("journal entry at {pos:#x} overruns its bucket: {e}"))?;
-        let csum_type = j.csum_type() as u32;
+        let csum_type = j.csum_type();
         let mut modified = false;
 
-        if c::CsumType(csum_type).is_encryption() {
+        if csum_type.is_encryption() {
             if fs.encryption_key().is_none() {
                 bail!("journal entry at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
@@ -270,7 +270,7 @@ fn sanitize_journal(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Resu
         if modified {
             // Re-encrypt (symmetric) if encrypted, then recompute the csum so
             // the entry stays checksum-valid instead of csum-cleared.
-            if c::CsumType(csum_type).is_encryption() {
+            if csum_type.is_encryption() {
                 j.encrypt(&fs).map_err(|e| anyhow!("re-encrypting journal entry at {pos:#x}: {e}"))?;
             }
             j.csum = j.checksum(&fs);
@@ -313,7 +313,7 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
             let n = c::btree_node::<Unvalidated>::from_bytes(&buf[pos..]).map_err(|e| overrun(pos, e))?;
             seq = n.keys.seq.get();
             (pos + std::mem::offset_of!(Head<c::btree_node>, keys), n.bytes(), n.sectors(block_bits),
-             n.keys.csum_type() as u32)
+             n.keys.csum_type())
         } else {
             let Some(n) = cast_plain::<Head<c::btree_node_entry>>(&buf[pos..]) else { break };
             if n.keys.seq.get() != seq {
@@ -321,11 +321,11 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
             }
             let n = c::btree_node_entry::<Unvalidated>::from_bytes(&buf[pos..]).map_err(|e| overrun(pos, e))?;
             (pos + std::mem::offset_of!(Head<c::btree_node_entry>, keys), n.bytes(), n.sectors(block_bits),
-             n.keys.csum_type() as u32)
+             n.keys.csum_type())
         };
         let mut modified = false;
 
-        if c::CsumType(csum_type).is_encryption() {
+        if csum_type.is_encryption() {
             if fs.encryption_key().is_none() {
                 bail!("btree node bset at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
@@ -398,7 +398,7 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
         if modified {
             // Re-encrypt (symmetric) if encrypted, then recompute the bset csum
             // over the btree_node (first bset) or btree_node_entry.
-            if c::CsumType(csum_type).is_encryption() {
+            if csum_type.is_encryption() {
                 bset_encrypt(&fs, &mut buf[pos..], first, bset_byte_offset as u32)
                     .map_err(|e| anyhow!("re-encrypting btree node bset at {pos:#x}: {e}"))?;
             }

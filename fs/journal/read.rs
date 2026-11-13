@@ -16,7 +16,7 @@ use crate::format::{Btree, MemberState, Nonce};
 
 use crate::c;
 use crate::util::Printbuf;
-use crate::data::checksum::{checksum_type_valid, csum_vstruct, BCH_NONCE_JOURNAL};
+use crate::data::checksum::{csum_vstruct, BCH_NONCE_JOURNAL};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::init::error::id;
@@ -56,22 +56,18 @@ impl c::jset__head {
             ],
         }
     }
-
-    fn checksum_type(&self) -> c::CsumType {
-        c::CsumType(self.csum_type() as u32)
-    }
 }
 
 /// A journal entry's checksum covers all of it past its csum, and its
 /// encryption all of it from encrypted_start.
 impl c::jset<Unvalidated> {
     pub fn checksum(&self, fs: &Fs) -> c::bch_csum {
-        csum_vstruct(Some(fs), self.checksum_type(), self.nonce(), self)
+        csum_vstruct(Some(fs), self.csum_type(), self.nonce(), self)
     }
 
     /// Or decrypted: ChaCha20 is its own inverse.
     pub fn encrypt(&mut self, fs: &Fs) -> Result<(), BchError> {
-        let (ty, nonce) = (self.checksum_type(), self.nonce());
+        let (ty, nonce) = (self.csum_type(), self.nonce());
         let start = core::mem::offset_of!(Head<c::jset>, encrypted_start);
         fs.encrypt(ty, nonce, &mut self.as_bytes_mut()[start..])
     }
@@ -347,7 +343,7 @@ fn journal_replay_to_text(out: &mut Printbuf, fs: &Fs, j: &Replay) {
 }
 
 fn jset_csum_good(fs: &Fs, j: &c::jset<Unvalidated>) -> (bool, c::bch_csum) {
-    if !checksum_type_valid(fs, j.csum_type()) {
+    if !j.csum_type().valid(fs) {
         return (false, c::bch_csum::default());
     }
 
@@ -1121,7 +1117,7 @@ fn journal_check_for_missing(fs: &Fs, entries: &JournalEntries, start_seq: u64, 
 fn journal_print_checksum_error(fs: &Fs, j: &Replay) {
     let mut msg = LogMsg::new(fs);
 
-    let csum_type = j.j.checksum_type();
+    let csum_type = j.j.csum_type();
     let mut have_good = false;
 
     prt!(&mut msg, "invalid journal checksum(s) at seq {} ", j.seq());

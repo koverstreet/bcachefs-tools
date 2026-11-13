@@ -1078,7 +1078,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
         for ca in fs.members() {
             let m = sb.fs_member_mut(ca.dev_idx.into());
             m.set_freespace_initialized(false);
-            m.set_initialized(MemberInitialized::pre_dev_usage.0.into());
+            m.set_initialized(MemberInitialized::pre_dev_usage);
         }
 
         fs.write_super(&mut sb);

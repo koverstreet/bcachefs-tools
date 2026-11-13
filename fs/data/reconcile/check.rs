@@ -84,10 +84,10 @@ fn fix_work_btree(t: &TransAttempt<'_, '_>, want: Option<Btree>, pos: Bpos,
 /// moved with them: backpointer_set_reconcile_phys().
 fn backpointer_set_reconcile_phys(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>,
                                   want: c::ReconcileWorkId) -> Result<(), BchError> {
-    let have = bp.v().reconcile_work_phys();
+    let have = bp.v().reconcile_phys();
 
     let mut n = t.bkey_make_mut_noupdate(bp)?;
-    n.v_mut().set_reconcile_work_phys(want);
+    n.v_mut().set_reconcile_phys(want);
 
     if let Some(btree) = have.phys_btree() {
         t.bit_mod_buffered(btree, bp.k.p, false)?;
@@ -108,7 +108,7 @@ fn reconcile_phys_wrong(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>
     });
 
     if fsck_err!(t, id::backpointer_reconcile_phys_wrong, "backpointer reconcile phys should be {}, is {}\n{}{}",
-                 want, bp.v().reconcile_work_phys(), bp.untyped().to_text(fs), for_extent)? {
+                 want, bp.v().reconcile_phys(), bp.untyped().to_text(fs), for_extent)? {
         backpointer_set_reconcile_phys(t, bp, want)?;
         return Ok(true);
     }
@@ -143,8 +143,8 @@ fn check_extent_reconcile_phys(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC
             continue;
         };
 
-        let want_w = want.v.reconcile_work_phys();
-        if bp.v().reconcile_work_phys() == want_w {
+        let want_w = want.v.reconcile_phys();
+        if bp.v().reconcile_phys() == want_w {
             continue;
         }
 
@@ -286,7 +286,7 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
     let deleted = BkeyI::<c::Deleted>::at(pos);
 
     let mut bp = bp_k.and_then(|k| k.arm::<c::Backpointer>());
-    let mut w = bp.map_or(c::ReconcileWorkId::none, |bp| bp.v().reconcile_work_phys());
+    let mut w = bp.map_or(c::ReconcileWorkId::none, |bp| bp.v().reconcile_phys());
 
     // The "set, shouldn't be" direction: what the bits should be is what the
     // backpointer's extent says, computed as extent_ptr_to_bp() does - so

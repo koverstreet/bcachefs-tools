@@ -1244,7 +1244,7 @@ impl c::bch_sb_io {
 /// want the key that's inside it.
 impl bch_sb<Unvalidated> {
     pub fn checksum(&self) -> c::bch_csum {
-        let ty = c::CsumType(self.csum_type() as u32);
+        let ty = self.csum_type();
         assert!(!ty.is_encryption(), "a superblock checksum of encryption type {ty}");
         crate::data::checksum::csum_vstruct(None, ty, Nonce::default(), self)
     }
@@ -1277,9 +1277,9 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
             continue;
         }
 
-        let ty = c::CsumType(h.csum_type() as u32);
+        let ty = h.csum_type();
         sb_err_on!(err, ty.0 >= c::CsumType::NR || ty.is_encryption(),
-                   BCH_ERR_invalid_sb_csum_type, "unknown checksum type {}", h.csum_type())?;
+                   BCH_ERR_invalid_sb_csum_type, "unknown checksum type {ty}")?;
 
         // XXX: verify MACs
         let csum = bch_sb::<Unvalidated>::from_bytes(&buf[..bytes])
@@ -2222,7 +2222,7 @@ impl DevSbMut<'_> {
         let s = self.io.buf.sb_mut();
         s.offset = s.layout.sb_offset[idx];
         let ty = fs.opts().metadata_checksum().to_type(fs, false);
-        s.set_csum_type(ty.0.into());
+        s.set_csum_type(ty);
         let sector = s.offset.get();
 
         let csum = self.io.buf.sb().as_unvalidated().checksum();
@@ -3157,7 +3157,7 @@ mod tests {
         let mut sb = c::bch_sb_handle::default();
         sb.sb_realloc(0).unwrap();
         for (i, e) in sb.field_resize::<E>(sb_field_u64s::<E>(2)).unwrap().entries.iter_mut().enumerate() {
-            e.v.set_id(3 + i as u16);
+            e.v.set_id(c::SbErrorId(3 + i as u32));
             e.v.set_nr(1);
         }
         for (i, d) in sb.field_resize::<Ctrs>(sb_field_u64s::<Ctrs>(3)).unwrap().d.iter_mut().enumerate() {
@@ -3177,8 +3177,8 @@ mod tests {
     fn partial_entry() {
         let (sb, ret, err) = validate_partial(ValidateFlags::empty());
         assert_eq!((ret, err.as_str()), (0, "8 bytes past its last whole entry, dropped"));
-        let ids: Vec<u16> = sb.field::<c::bch_sb_field_errors_v2>().unwrap().entries.iter().map(|e| e.v.id()).collect();
-        assert_eq!(ids, [3, 4]);
+        let ids: Vec<c::SbErrorId> = sb.field::<c::bch_sb_field_errors_v2>().unwrap().entries.iter().map(|e| e.v.id()).collect();
+        assert_eq!(ids, [c::SbErrorId(3), c::SbErrorId(4)]);
         let d: Vec<u64> = sb.field::<c::bch_sb_field_counters>().unwrap().d.iter().map(|d| d.get()).collect();
         assert_eq!(d, [100, 101, 102]);
 

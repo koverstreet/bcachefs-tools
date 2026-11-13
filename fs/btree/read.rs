@@ -81,10 +81,6 @@ impl c::bset__head {
             ],
         }
     }
-
-    fn checksum_type(&self) -> c::CsumType {
-        c::CsumType(self.csum_type() as u32)
-    }
 }
 
 /// What holds a bset: the node, for its first, or a node entry, for each one
@@ -121,7 +117,7 @@ pub trait BsetHolder: Unsized<Head: Plain + SelfSized> {
     /// The checksum of all of it past its csum.
     fn checksum(&self, fs: &Fs, offset: u32) -> c::bch_csum {
         let i = self.bset();
-        csum_vstruct(Some(fs), i.checksum_type(), i.nonce(offset), self)
+        csum_vstruct(Some(fs), i.csum_type(), i.nonce(offset), self)
     }
 
     /// Its bset's header, in its @bytes - its count not yet checked against them.
@@ -160,7 +156,7 @@ impl BsetHolder for c::btree_node<Unvalidated> {
     }
 
     fn encrypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError> {
-        let (ty, nonce) = (self.keys.checksum_type(), self.keys.nonce(offset));
+        let (ty, nonce) = (self.keys.csum_type(), self.keys.nonce(offset));
         let (flags, keys) = (offset_of!(Head<c::btree_node>, flags), Self::BSET);
         let bytes = self.as_bytes_mut();
 
@@ -174,7 +170,7 @@ impl BsetHolder for c::btree_node_entry<Unvalidated> {
     const BSET: usize = offset_of!(Head<c::btree_node_entry>, keys);
 
     fn encrypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError> {
-        let (ty, nonce) = (self.keys.checksum_type(), self.keys.nonce(offset));
+        let (ty, nonce) = (self.keys.csum_type(), self.keys.nonce(offset));
         fs.encrypt(ty, nonce, &mut self.as_bytes_mut()[Self::KEYS..])
     }
 }
@@ -234,7 +230,7 @@ fn replica_bset<H: BsetHolder + ?Sized>(fs: &Fs, buf: &[u8], written: usize, end
     }
 
     let n = H::of(&buf[offset..(written + sectors) << 9]);
-    let ty = n.bset().checksum_type();
+    let ty = n.bset().csum_type();
     if ty.valid(fs) {
         let (stored, csum) = (n.csum(), n.checksum(fs, offset as u32));
         if stored != csum {
@@ -293,9 +289,9 @@ pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
 /// decrypted and its keys printed: its sectors, or None if it's bad.
 fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, contents: &NodeContents,
                                                bytes: &mut [u8], offset: usize) -> Option<usize> {
-    let ty = H::head(bytes).checksum_type();
+    let ty = H::head(bytes).csum_type();
     if !ty.valid(fs) {
-        prt!(out, "unknown checksum type at offset {}: {}\n", offset, H::head(bytes).csum_type());
+        prt!(out, "unknown checksum type at offset {}: {}\n", offset, ty);
         return None;
     }
 
@@ -490,7 +486,7 @@ fn read_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, p: &NodePtr, buf:
         return Ok(BsetRead::End);
     }
 
-    let ty = i.checksum_type();
+    let ty = i.csum_type();
     let good_csum_type = ty.valid(fs);
 
     btree_err_on!(v, !good_csum_type,

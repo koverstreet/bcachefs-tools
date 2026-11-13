@@ -534,7 +534,7 @@ impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
     fn validate(_sb: &c::bch_sb<Unvalidated>, crypt: &c::bch_sb_field_crypt<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let kdf = crypt.kdf_type();
-        sb_err_on!(err, kdf != u64::from(c::KdfType::BCH_KDF_SCRYPT.0), BCH_ERR_invalid_sb_crypt,
+        sb_err_on!(err, kdf != c::KdfType::scrypt, BCH_ERR_invalid_sb_crypt,
                    "bad kdf type {kdf}")?;
         Ok(())
     }
@@ -561,7 +561,7 @@ impl c::bch_sb_field_crypt {
     /// unencrypted - formatted with --no_passphrase - never had any, so this
     /// has to run before the first passphrase is set on it.
     pub fn kdf_init(&mut self) {
-        self.set_kdf_type(c::KdfType::BCH_KDF_SCRYPT.0.into());
+        self.set_kdf_type(c::KdfType::scrypt);
         self.set_scrypt_n(16384u64.ilog2().into());
         self.set_scrypt_r(8u64.ilog2().into());
         self.set_scrypt_p(16u64.ilog2().into());
@@ -569,7 +569,7 @@ impl c::bch_sb_field_crypt {
 
     pub fn derive_passphrase(&self, passphrase: &[u8]) -> Result<c::bch_key, BchError> {
         let kdf = self.kdf_type();
-        assert!(kdf == u64::from(c::KdfType::BCH_KDF_SCRYPT.0), "unknown kdf type {kdf}");
+        assert!(kdf == c::KdfType::scrypt, "unknown kdf type {kdf}");
 
         /*
          * Stored as log2, so r and p of 1 are legal and only N can be
@@ -772,12 +772,6 @@ pub fn encryption_init(fs: &Fs, user_key: Option<&c::bch_key>) -> Result<(), Bch
     let key = decrypt_sb_key(fs, sb.sb(), crypt, user_key)?;
     assert!(sb.published().encryption_key.set(key), "the filesystem's key set before mount");
     Ok(())
-}
-
-/// Whether checksum type @t is one this version has, and one @fs can use.
-pub(crate) fn checksum_type_valid(fs: &Fs, t: u64) -> bool {
-    t < c::CsumType::NR.into() &&
-        !(c::CsumType(t as u32).is_encryption() && fs.encryption_key().is_none())
 }
 
 // ── Turning encryption on and off ────────────────────────────────────────

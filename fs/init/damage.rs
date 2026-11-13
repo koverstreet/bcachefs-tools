@@ -113,7 +113,7 @@ pub fn accumulate(t: &TransAttempt<'_, '_>, inum: u64, mut snapshot: u32)
         let Some(d) = iter.peek_slot(t)?.and_then(|k| k.arm::<c::Damage>()) else { break };
 
         for e in d.v().entries.iter() {
-            match out.binary_search_by_key(&e.id().0, |o| o.id().into()) {
+            match out.binary_search_by_key(&e.id(), |o| o.id()) {
                 Ok(j)  => out[j] = merge(out[j], e.into()),
                 Err(j) => kvvec_insert(&mut out, j, e.into())?,
             }

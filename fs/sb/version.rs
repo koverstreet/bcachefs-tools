@@ -156,7 +156,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
 
     if u32::from(fs.sb.version_upgrade_complete.get()) <
        MetadataVersion::autofix_errors.0 {
-        sb.sb_mut().set_error_action(c::ErrorAction::fix_safe.0.into());
+        sb.sb_mut().set_error_action(c::ErrorAction::fix_safe);
     }
 
     let extent_bp_shift_needed = (fs.opts().encoded_extent_max.get() >> 9).ilog2() + 1;
