@@ -311,8 +311,7 @@ impl<'t> InteriorUpdate<'t> {
         data.magic = crate::types::Le64::new(fs.bset_magic());
         data._ptr = Default::default();
         data.flags = Default::default();
-        data.set_id_lo(self.btree.0 as u64 & 15);
-        data.set_id_hi(self.btree.0 as u64 >> 4);
+        data.set_btree_id(self.btree);
         data.set_level(level as u64);
         let seq = data.keys.seq;
 

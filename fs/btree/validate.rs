@@ -231,10 +231,6 @@ fn compat_btree_node(big_endian: bool, bn: &mut c::btree_node<Unvalidated>) {
     }
 }
 
-pub(crate) fn node_btree(bn: &Head<c::btree_node>) -> u32 {
-    (bn.id_lo() | bn.id_hi() << 4) as u32
-}
-
 pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H, offset: u32) -> Result<(), BchError> {
     let (fs, b) = (v.fs, v.b);
     let contents = unsafe { b.contents() };
@@ -313,7 +309,7 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
                           "incorrect sequence number (wrong btree node)")?;
         }
 
-        btree_err_on!(v, node_btree(bn) != b.c.btree_id.into(),
+        btree_err_on!(v, bn.btree_id() != Btree(b.c.btree_id.into()),
                       FsckFlags::empty(),
                       ErrAt::bset(&bn.keys),
                       id::btree_node_bad_btree,

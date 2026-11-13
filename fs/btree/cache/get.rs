@@ -8,7 +8,6 @@ use crate::btree::node::BtreeNode;
 use crate::btree::path::{bch2_btree_path_to_text, NodePtr, PathIdx, Paths};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write};
 use crate::btree::types::BtreeWriteType;
-use crate::btree::validate::node_btree;
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
 use crate::debug::trace::events;
@@ -46,7 +45,7 @@ fn btree_bad_header(fs: &Fs, b: &BtreeNode) {
     bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(contents.key_i()));
 
     prt!(msg, "\ngot: ");
-    bch2_btree_id_level_to_text(&mut msg, Btree(node_btree(data)), data.level() as u32);
+    bch2_btree_id_level_to_text(&mut msg, data.btree_id(), data.level() as u32);
     prt!(msg, "\nmin {}", data.min_key);
     prt!(msg, "\nmax {}", data.max_key);
 
@@ -59,7 +58,7 @@ fn btree_check_header(fs: &Fs, b: &BtreeNode) {
     let data = contents.data();
     let k = BkeySC::from(contents.key_i());
 
-    if u32::from(b.c.btree_id) != node_btree(data) ||
+    if Btree(b.c.btree_id.into()) != data.btree_id() ||
         u64::from(b.c.level) != data.level() ||
         data.max_key != k.k.p ||
         k.arm::<c::BtreePtrV2>().is_some_and(|p| data.min_key != p.v().min_key) {

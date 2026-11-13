@@ -234,10 +234,10 @@ impl<'f> DevScan<'f> {
         }
 
         let bn = self.buf.node().contents.get_mut().data();
-        let id = bn.id_lo() | bn.id_hi() << 4;
-        if btree_id_can_reconstruct(id as u32) ||
+        let id = bn.btree_id();
+        if btree_id_can_reconstruct(id.0) ||
            bn.level() >= c::BTREE_MAX_DEPTH as u64 ||
-           id >= c::BTREE_ID_NR_MAX as u64 {
+           id.0 >= c::BTREE_ID_NR_MAX {
             return Ok(());
         }
 
@@ -246,7 +246,7 @@ impl<'f> DevScan<'f> {
             .with_dev(ca.dev_idx)
             .with_generation(ca.bucket_gen(ca.sector_to_bucket(offset), &read_lock()).unwrap_or(u8::MAX));
         let mut n = FoundBtreeNode {
-            btree:           Btree(id as u32),
+            btree:           id,
             level:           bn.level() as u8,
             range_updated:   false,
             sectors_written: 0,

@@ -2050,6 +2050,18 @@ pub struct btree_node_flags {
     #[bits(32)] seq:                u64,
 }
 
+/// The btree id, in two fields: id_hi is the bits it grew.
+impl btree_node__head {
+    pub fn btree_id(&self) -> Btree {
+        Btree((self.id_lo() | self.id_hi() << 4) as u32)
+    }
+
+    pub fn set_btree_id(&mut self, id: Btree) {
+        self.set_id_lo(id.0 as u64 & 15);
+        self.set_id_hi(id.0 as u64 >> 4);
+    }
+}
+
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]

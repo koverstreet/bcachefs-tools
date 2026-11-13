@@ -16,7 +16,7 @@ use crate::btree::node::sort::{build_aux_trees, SortRuns};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::path::Paths;
 use crate::btree::trans::BtreeTrans;
-use crate::btree::validate::{btree_err_on, btree_node_bkey_val_validate, node_btree, validate_bset,
+use crate::btree::validate::{btree_err_on, btree_node_bkey_val_validate, validate_bset,
                              validate_bset_keys, ErrAt, NodeIo, NodeValidate};
 use crate::btree::write::trans_submit_write_bios;
 use crate::c;
@@ -364,7 +364,7 @@ const NODE_BYTES: usize = size_of::<Head<c::btree_node>>();
 const FITS: &str = "a bset inside the node, checked against its end";
 
 fn node_header_to_text(out: &mut Printbuf, bn: &Head<c::btree_node>) {
-    bch2_btree_id_level_to_text(out, Btree(node_btree(bn)), bn.level() as c_uint);
+    bch2_btree_id_level_to_text(out, bn.btree_id(), bn.level() as c_uint);
     prt!(out, " seq {:x} {}\n", bn.keys.seq.get(), bn.seq());
     prt!(out, "min: {}\n", bn.min_key);
     prt!(out, "max: {}", bn.max_key);
