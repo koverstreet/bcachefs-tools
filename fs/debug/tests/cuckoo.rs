@@ -924,6 +924,50 @@ fn bench<S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
     Ok(())
 }
 
+/// The load a table reaches before an insert finds no chain: dense, so only
+/// that grows it - the load just before each grow, by the size it grew from.
+fn fill<S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
+    const TRIALS: usize = 8;
+    const MAX_BITS: usize = 20;
+    let mut at: [(u64, u64, u64); MAX_BITS + 1] = [(0, u64::MAX, 0); MAX_BITS + 1];
+    let mut rng = random_u64() | 1;
+
+    for _ in 0..TRIALS {
+        let t = Cuckoo::<u64, S, W>::with_faults(Faults { dense: true, ..Faults::default() });
+        let mut nr = 0u64;
+        loop {
+            let cap = t.capacity();
+            let bits = cap.trailing_zeros() as usize;
+            if cap != 0 && bits > MAX_BITS {
+                break;
+            }
+            t.insert((xorshift(&mut rng) | 1) & !(3 << 62))?;
+            if cap != 0 && t.capacity() != cap {
+                let permille = nr * 1000 / cap as u64;
+                let a = &mut at[bits];
+                (a.0, a.1, a.2) = (a.0 + permille, a.1.min(permille), a.2 + 1);
+            }
+            nr += 1;
+        }
+    }
+
+    let mut msg = Printbuf::new();
+    prt!(&mut msg, "cuckoo fill {table}, load at no chain, ‰ (mean/min of {TRIALS}):");
+    for (bits, &(sum, min, n)) in at.iter().enumerate().filter(|(b, a)| *b >= 8 && a.2 > 0) {
+        prt!(&mut msg, " 2^{bits} {}/{min}", sum / n);
+    }
+    prt!(&mut msg, "\n");
+    kernel::pr_info!("{}", msg.as_str());
+    Ok(())
+}
+
+fn fills() -> TestRet {
+    fill::<SipHash13Key, 2>("siphash, 2-way")?;
+    fill::<SipHash13Key, 3>("siphash, 3-way")?;
+    fill::<GoldenRatio, 2>("golden, 2-way")?;
+    fill::<GoldenRatio, 3>("golden, 3-way")
+}
+
 pub(super) fn test_cuckoo_bench(_fs: &Fs, _nr: u64) -> TestRet {
     bench::<SipHash13Key, 2>("siphash, 2-way")?;
     bench::<SipHash13Key, 3>("siphash, 3-way")?;
@@ -947,6 +991,11 @@ mod tests {
     #[test]
     fn cuckoo() {
         run("cuckoo", models)
+    }
+
+    #[test]
+    fn cuckoo_fill() {
+        run("cuckoo fill", fills)
     }
 
     #[test]
