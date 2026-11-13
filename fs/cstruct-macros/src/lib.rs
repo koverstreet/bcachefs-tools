@@ -455,7 +455,6 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     // XXX Deprecated when real field projections arrive: x op= v through a
     // projected place instead.
     let update = members.iter().map(|(m, set, update, ty, vis)| quote! {
-        #[allow(dead_code)]
         #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) { self.#set(f(self.#m())) }
     });
     out.extend(quote!(impl #name { #(#update)* }));
@@ -1107,7 +1106,7 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
             // The flags as plain integers, for a type-level constant: one
             // that calls bitflags' const fns can cycle in rustc's
             // coherence checking (Debian's 1.97.1)
-            #[allow(non_snake_case, non_upper_case_globals, dead_code)]
+            #[allow(non_snake_case, non_upper_case_globals)]
             pub mod #bits_mod {
                 #[allow(unused_imports)]
                 use {super::*, crate::c::*};
@@ -1304,9 +1303,7 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
             false => (quote!(u64), quote!(), quote!()),
         };
         methods.extend(quote! {
-            #[allow(dead_code)]
             pub const #max: u64 = u64::MAX >> (64 - ((#end) - (#start)));
-            #[allow(dead_code)]
             pub fn #get_m(&self) -> #ty {
                 ((#get >> (#start)) & (u64::MAX >> (64 - ((#end) - (#start))))) #from
             }
@@ -1314,13 +1311,11 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
         // update_x(f): set_x(f(x())). XXX Deprecated when real field
         // projections arrive: x op= v through a projected place instead.
         setters.extend(quote! {
-            #[allow(dead_code)]
             pub fn #set_fn(&mut self, v: #ty) {
                 let mask = (u64::MAX >> (64 - ((#end) - (#start)))) << (#start);
                 let new = (#get & !mask) | (((v #to) << (#start)) & mask);
                 #set;
             }
-            #[allow(dead_code)]
             pub fn #update_fn(&mut self, f: impl FnOnce(#ty) -> #ty) {
                 self.#set_fn(f(self.#get_m()))
             }

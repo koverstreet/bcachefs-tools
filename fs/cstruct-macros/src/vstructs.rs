@@ -108,13 +108,11 @@ pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
     }
     let names: Vec<String> = fields.iter().map(ToString::to_string).collect();
     Ok(quote! {
-        #[allow(dead_code)]
         impl<'a> crate::util::projections::View<'a, #name> {
             #(pub fn #fields(&self) -> crate::util::projections::View<'a, #tys> {
                 self.project(::core::mem::offset_of!(#name, #fields), #names)
             })*
         }
-        #[allow(dead_code)]
         impl<'a> crate::util::projections::ViewMut<'a, #name> {
             #(pub fn #fields(&mut self) -> crate::util::projections::ViewMut<'_, #tys> {
                 self.project(::core::mem::offset_of!(#name, #fields), #names)
@@ -354,7 +352,6 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
             }
         }
 
-        #[allow(dead_code)]
         impl #ty {
             /// Its bytes, every one.
             pub fn as_bytes(&self) -> &[u8] {

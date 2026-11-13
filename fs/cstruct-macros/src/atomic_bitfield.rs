@@ -233,7 +233,6 @@ fn generate(d: &Decl) -> syn::Result<TokenStream> {
 
         unsafe impl ::pin_init::Zeroable for #atomic {}
 
-        #[allow(dead_code)]
         impl #atomic {
             #vis const fn new(v: #name) -> Self {
                 Self(::core::sync::atomic::#atomic_word::new(v.into_bits() as #word))

@@ -254,7 +254,6 @@ macro_rules! vstruct {
         impl [<$t __head>] {
             /// Its count, as a usize - to read: it changes only through what
             /// holds the value, which has room for it to grow.
-            #[allow(dead_code)]
             pub fn $count(&self) -> usize {
                 $crate::util::vstructs::Count::count(&{ self.$count })
             }

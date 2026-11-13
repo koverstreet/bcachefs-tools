@@ -316,7 +316,7 @@ pub(crate) fn generate(e: &CEnumDef, arms: &[Arm], columns: &Columns) -> TokenSt
         })
         .collect();
     if !fns.is_empty() {
-        out.extend(quote!(#[allow(dead_code)] impl #name { #(#fns)* }));
+        out.extend(quote!(impl #name { #(#fns)* }));
     }
     out
 }

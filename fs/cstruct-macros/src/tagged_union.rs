@@ -772,7 +772,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             #(#asserts)*
 
             #[doc = #doc]
-            #[allow(non_camel_case_types, dead_code)]
+            #[allow(non_camel_case_types)]
             #[derive(Clone, Copy)]
             #vis enum #en {
                 #(#by_value)*
@@ -792,19 +792,16 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                 }
 
                 /// Its tag: its variant's.
-                #[allow(dead_code)]
                 #vis fn #tag(&self) -> #tag_enum {
                     #tag_of_raw
                 }
 
                 /// Its head, which every arm starts with: the fields they share.
-                #[allow(dead_code)]
                 #vis fn head(&self) -> #head {
                     *#vs::cast_plain(self.arm_bytes()).expect("an arm starts with the head")
                 }
 
                 /// Its arm's name.
-                #[allow(dead_code)]
                 #vis fn name(&self) -> &'static str {
                     match self {
                         #(#names)*
@@ -814,7 +811,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                 /// Write it at the start of @out - its arm's bytes, then its tag,
                 /// last, as a sized union's new() marks it - and give back the rest
                 /// of @out. Panics if @out is shorter than it: bytes() sizes @out.
-                #[allow(dead_code)]
                 #vis fn write<'o>(&self, out: &'o mut [u8]) -> &'o mut [u8] {
                     let b = self.arm_bytes();
                     let (to, rest) = out.split_at_mut(b.len());
@@ -825,7 +821,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                 }
 
                 /// The values @b holds, one after another: ArmWalk.
-                #[allow(dead_code)]
                 #vis fn walk(b: &[u8]) -> #vs::ArmWalk<'_, Self> {
                     #vs::ArmWalk::new(b)
                 }
@@ -902,7 +897,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             quote! {
                 impl #s_ty<#vs::#st> {
                     /// The tag, whether this version knows it or not.
-                    #[allow(dead_code)]
                     #vis fn #tag(&self) -> #tag_enum {
                         #tag_of_self
                     }
@@ -911,7 +905,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                     /// says, as its ArmRef has it: Err(the tag) if it isn't one of
                     /// ours, or the bytes are fewer than any valid one's. One shorter
                     /// than its type is an older version, its missing fields zero.
-                    #[allow(dead_code)]
                     #vis fn typed(&self) -> Result<#en_ref<'_, #vs::#st>, #tag_enum> {
                         let t: #tag_ty = #det::get(&self.repr);
                         #(#selects)*
@@ -919,7 +912,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                     }
 
                     /// The arm, if the tag is @A's: typed(), for one arm.
-                    #[allow(dead_code)]
                     #vis fn arm<A>(&self) -> Option<&A>
                     where
                         A: #arm_of<Self, Tag = #tag_ty> + #vs::ArmRef + ?Sized,
@@ -931,7 +923,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                     }
 
                     /// arm(), to edit: as its ArmRef has it.
-                    #[allow(dead_code)]
                     #vis fn arm_mut<A>(&mut self) -> Option<&mut A>
                     where
                         A: #arm_of<Self, Tag = #tag_ty> + #vs::ArmRef + ?Sized,
@@ -982,7 +973,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             pub(crate) use #by_tag_mac;
 
             #[doc = #doc]
-            #[allow(non_camel_case_types, dead_code)]
+            #[allow(non_camel_case_types)]
             #[derive(Clone, Copy)]
             #vis enum #en_ref<'a, St: #vs::State = #vs::Validated> {
                 #(#by_ref)*
@@ -1008,7 +999,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
         quote! {
             impl #name<#vs::Unvalidated> {
                 /// From its bytes, as C and disk have them.
-                #[allow(dead_code)]
                 #vis fn from_bytes(b: &[u8; #s_size]) -> Self {
                     // SAFETY: the storage is plain data: any bytes are a valid one
                     Self(unsafe { b.as_ptr().cast::<#s_ty>().read_unaligned() }, ::core::marker::PhantomData)
@@ -1016,7 +1006,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
 
                 /// The arm the tag selects: Err if the tag isn't one of ours, or the
                 /// arm's header says it's longer than the storage holds.
-                #[allow(dead_code)]
                 #vis fn get(&self) -> Result<#en_ref<'_ #unvalidated>, #vs::ArmError<#tag_enum>> {
                     let t: #tag_ty = #det::get(&self.0);
                     let b = &self.as_bytes()[#payload_offset..];
@@ -1026,13 +1015,11 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
 
                 /// Validated, if its arm fits in the storage: get()'s check, kept. A
                 /// tag this version doesn't know passes - a Validated get() says so.
-                #[allow(dead_code)]
                 #vis fn validate(self) -> Result<#name, #vs::ArmError<#tag_enum>> {
                     self.validated().copied()
                 }
 
                 /// validate(), by reference: the same bytes, Validated.
-                #[allow(dead_code)]
                 #vis fn validated(&self) -> Result<&#name, #vs::ArmError<#tag_enum>> {
                     match self.get() {
                         Err(e @ (#vs::ArmError::Bad { .. } | #vs::ArmError::Short(_))) => Err(e),
@@ -1071,13 +1058,13 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
         impl<S> Copy for #name<S> {}
 
         #[doc = #value_doc]
-        #[allow(non_camel_case_types, dead_code)]
+        #[allow(non_camel_case_types)]
         #vis enum #ev {
             #(#by_value)*
         }
 
         #[doc = #ref_doc]
-        #[allow(non_camel_case_types, dead_code)]
+        #[allow(non_camel_case_types)]
         #[derive(Clone, Copy)]
         #vis enum #en_ref<'a #st_param> {
             #(#by_ref)*
@@ -1085,7 +1072,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
 
         impl<'a #st_impl> #en_ref<'a #st_use> {
             #[doc = #len_doc]
-            #[allow(dead_code)]
             #vis fn len(&self) -> usize {
                 match *self {
                     #(#lens)*
@@ -1095,13 +1081,11 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
 
         impl<S> #name<S> {
             /// The tag, whether this version knows it or not.
-            #[allow(dead_code)]
             #vis fn #tag(&self) -> #tag_enum {
                 #tag_of_storage
             }
 
             /// Its bytes, as C and disk have them.
-            #[allow(dead_code)]
             #vis fn as_bytes(&self) -> &[u8; #s_size] {
                 // SAFETY: plain data, every byte of it written: it came from C or disk,
                 // from_bytes() or new(), which starts from zeroes
@@ -1109,13 +1093,11 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             }
 
             /// For C.
-            #[allow(dead_code)]
             #vis fn as_ffi(&self) -> *const #s_ty {
                 &self.0
             }
 
             /// For C, to edit.
-            #[allow(dead_code)]
             #vis fn as_ffi_mut(&mut self) -> *mut #s_ty {
                 &mut self.0
             }
@@ -1125,12 +1107,10 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
 
         impl #name<#vs::Validated> {
             /// Where its arms start, in any state: after the tag.
-            #[allow(dead_code)]
             #vis const ARMS_AT: usize = #payload_offset;
 
             /// The arm the tag selects - Err(the tag) if it isn't one of ours.
             /// Validated, every arm fits in the storage.
-            #[allow(dead_code)]
             #vis fn get(&self) -> Result<#en_ref<'_ #validated>, #tag_enum> {
                 let t: #tag_ty = #det::get(&self.0);
                 let b = &self.as_bytes()[#payload_offset..];
@@ -1139,7 +1119,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             }
 
             /// From an arm: new(), by the arm's type.
-            #[allow(dead_code)]
             #vis fn from_arm<A: #arm_of<#s_ty, Tag = #tag_ty>>(arm: A) -> Self {
                 let mut s = Self::with_payload(arm);
                 #det::set(&mut s, A::TAG);
@@ -1149,7 +1128,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             /// From an arm ending in a flexible array, and that array - as many
             /// elements as the arm's header says: an error if the storage can't
             /// hold them.
-            #[allow(dead_code)]
             #vis fn from_arm_tailed<A>(arm: A, tail: &[A::Elem]) -> Result<Self, #vs::VStructError>
             where A: #arm_of<#s_ty, Tag = #tag_ty> + #vs::FlexArray
             {
@@ -1174,7 +1152,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
 
             /// From an arm: its payload into zeroed storage, then the determinant marks
             /// it - stabby's order, so a tag that's bits of the payload is written last.
-            #[allow(dead_code)]
             #vis fn new(v: #ev) -> Self {
                 match v {
                     #(#news)*
