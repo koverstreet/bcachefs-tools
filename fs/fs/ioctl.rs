@@ -420,7 +420,7 @@ where
                 let hdr = |reclen| c::bch_ioctl_subvol_dirent {
                     reclen,
                     subvolid:        child,
-                    flags:           s.flags.get(),
+                    flags:           s.flags.into_bits().get(),
                     snapshot_parent: s.creation_parent.get(),
                     otime_sec:       otime.tv_sec as u64,
                     otime_nsec:      otime.tv_nsec as u32,
@@ -525,7 +525,7 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
                 parent:   s.parent(),
                 children: s.children(),
                 subvol:   s.subvol(),
-                flags:    s.flags.get(),
+                flags:    s.flags.into_bits().get(),
                 ..Default::default()
             };
             // summed as C did, wrapping: a corrupt counter is a wrong answer, not a panic

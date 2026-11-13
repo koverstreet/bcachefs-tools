@@ -837,7 +837,7 @@ pub fn create(
     let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
     k.k_mut().p = dst_iter.pos();
     let v = k.v_mut();
-    v.flags           = 0.into();
+    v.flags           = Default::default();
     v.snapshot        = new_nodes[0].into();
     v.inode           = inode.into();
     v.creation_parent = src.into();
@@ -867,7 +867,7 @@ pub(crate) fn initialize(fs: &Fs) -> Result<(), BchError> {
     let mut root_snapshot = BkeyI::<c::Snapshot>::new();
     root_snapshot.k.p.offset = u32::MAX as u64;
     let v = &mut root_snapshot.v;
-    v.flags  = 0.into();
+    v.flags  = Default::default();
     v.parent = 0.into();
     v.subvol = (c::BCACHEFS_ROOT_SUBVOL).into();
     v.tree   = (1u32).into();
@@ -876,7 +876,7 @@ pub(crate) fn initialize(fs: &Fs) -> Result<(), BchError> {
     let mut root_volume = BkeyI::<c::Subvolume>::new();
     root_volume.k.p.offset = c::BCACHEFS_ROOT_SUBVOL as u64;
     let v = &mut root_volume.v;
-    v.flags    = 0.into();
+    v.flags    = Default::default();
     v.snapshot = (u32::MAX).into();
     v.inode    = ((c::BCACHEFS_ROOT_INO as u64)).into();
     v.set_state(c::SubvolumeState::live);

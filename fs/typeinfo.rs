@@ -717,9 +717,7 @@ macro_rules! bitmasks {
         const BITMASKS_LISTED: &[&str] = &[$(stringify!($table)),*];
     };
 }
-bitmasks! {
-    Snapshot_flags_BITMASKS, Subvolume_flags_BITMASKS,
-}
+bitmasks! {}
 
 /// Whether BITMASKS lists @name: c_bitmask!'s check that its table is here.
 pub const fn bitmasks_listed(name: &str) -> bool {
@@ -834,42 +832,37 @@ mod tests {
     }
 
     #[test]
-    fn bitmask_resolution() {
+    fn member_resolution() {
         let info = snapshot_info();
 
-        // bare bit name resolves to the containing field + bit range
-        let (r, bm) = resolve_with_bits(info, "no_keys_obsolete").unwrap();
-        let bm = bm.expect("no_keys_obsolete is a declared bit");
-        assert_eq!((bm.lo, bm.hi), (3, 4));
-        assert_eq!(r.offset, 0); // bch_snapshot.flags
+        // a bare member name resolves to its bits of the word
+        let r = resolve_with_bits(info, "no_keys_obsolete").unwrap().0;
+        assert!(matches!(r.kind, FieldKind::Bits { lo: 3, hi: 4, .. }));
+        assert_eq!(r.offset, 0); // Snapshot.flags
 
-        // a field wins the bare name...
-        let (_, bm) = resolve_with_bits(info, "subvol").unwrap();
-        assert!(bm.is_none());
-        // ...the like-named bit stays reachable qualified
-        let (_, bm) = resolve_with_bits(info, "flags.subvol_obsolete").unwrap();
-        assert_eq!(bm.expect("flags.subvol_obsolete is a bit").lo, 1);
+        // qualified, through the word
+        let r = resolve_with_bits(info, "flags.subvol_obsolete").unwrap().0;
+        assert!(matches!(r.kind, FieldKind::Bits { lo: 1, hi: 2, .. }));
 
         assert!(resolve_with_bits(info, "flags.nonexistent").is_err());
     }
 
     #[test]
-    fn bits_roundtrip() {
+    fn member_roundtrip() {
         let info = snapshot_info();
         let mut buf = [0u8; core::mem::size_of::<c::Snapshot>()];
 
-        let (r, bm) = resolve_with_bits(info, "no_keys_obsolete").unwrap();
-        let bm = bm.unwrap();
-        write_bits(&mut buf, &r, bm, 1).unwrap();
-        assert_eq!(read_bits(&buf, &r, bm).unwrap(), 1);
+        let r = resolve_with_bits(info, "no_keys_obsolete").unwrap().0;
+        write_scalar(&mut buf, &r, 1).unwrap();
+        assert_eq!(read_scalar(&buf, &r).unwrap(), 1);
         assert_eq!(buf[0], 8); // NO_KEYS is bit 3
 
         // read-modify-write leaves neighbouring bits alone
-        let (r2, bm2) = resolve_with_bits(info, "flags.subvol_obsolete").unwrap();
-        assert_eq!(read_bits(&buf, &r2, bm2.unwrap()).unwrap(), 0);
+        let r2 = resolve_with_bits(info, "flags.subvol_obsolete").unwrap().0;
+        assert_eq!(read_scalar(&buf, &r2).unwrap(), 0);
 
         assert!(matches!(
-            write_bits(&mut buf, &r, bm, 2),
+            write_scalar(&mut buf, &r, 2),
             Err(AccessError::BitsOverflow { bits: 1, val: 2 })
         ));
     }
@@ -908,9 +901,9 @@ mod tests {
         let mut s: c::Snapshot = Default::default();
         s.set_no_keys_obsolete(true);
         assert!(s.no_keys_obsolete());
-        assert_eq!(s.flags.get(), 8);
+        assert_eq!(s.flags.into_bits().get(), 8);
         s.set_no_keys_obsolete(false);
         assert!(!s.no_keys_obsolete());
-        assert_eq!(s.flags.get(), 0);
+        assert_eq!(s.flags.into_bits().get(), 0);
     }
 }

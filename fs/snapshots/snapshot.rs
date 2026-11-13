@@ -1065,7 +1065,7 @@ impl fmt::Display for c::Snapshot {
         write!(f, " depth {} skiplist {} {} {}",
                self.depth.get(), self.skip[0].get(), self.skip[1].get(), self.skip[2].get())?;
 
-        let flags = self.flags.get();
+        let flags = self.flags.into_bits().get();
         let obsolete = ObsoleteFlags(flags);
         let state = self.state.get();
 
@@ -1302,7 +1302,7 @@ fn create_snapids(
         n.k_mut().p = p;
 
         let v = n.v_mut();
-        v.flags    = 0u32.into();
+        v.flags    = Default::default();
         v.parent   = parent.into();
         v.subvol   = subvol.into();
         v.tree     = tree.into();

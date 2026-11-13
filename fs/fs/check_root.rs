@@ -59,7 +59,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
             k.k_mut().p = pos(0, c::BCACHEFS_ROOT_SUBVOL as u64);
             let v = k.v_mut();
-            v.flags    = 0.into();
+            v.flags    = Default::default();
             v.snapshot = snapshot.into();
             v.inode    = inum.into();
             v.set_state(c::SubvolumeState::live);

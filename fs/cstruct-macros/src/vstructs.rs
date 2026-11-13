@@ -876,6 +876,9 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
         };
     });
     out.extend(dst(&ty, &dst_doc, &shape, methods));
+    // the in place definition derefs to the floor: a floor #[members]
+    // field's getters there, its setters on the definition
+    out.extend(members_on(name, floor, &[&fl, &ty])?);
     // the cast checks the floor: an unvalidated one is as good
     out.extend(family(name, &ty, &ty, &ffi, &[]));
     out.extend(whole_arm_ref(&ffi, is_plain));

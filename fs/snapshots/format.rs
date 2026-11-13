@@ -4,16 +4,17 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_bitmask, bch_enum, grown, MaybeZeroable, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{bitfield, bch_enum, grown, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View, SizedVal};
 
 pub const BCACHEFS_ROOT_SUBVOL: u32 = 1;
 
 #[grown(from = creation_parent, bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct Subvolume {
     pub v: c::bch_val,
-    pub flags: Le32,
+    #[members]
+    pub flags: SubvolumeFlags,
     pub snapshot: Le32,
     pub inode: Le64,
     /*
@@ -49,25 +50,26 @@ pub enum SubvolumeState {
     deleted = 0x3c6b2d4c,
 }
 
-c_bitmask! {
-    LE32_BITMASK(struct Subvolume<Validated>, flags), strip BCH_SUBVOLUME_ {
-        BCH_SUBVOLUME_RO(0, 1),
-        /*
-         * We need to know whether a subvolume is a snapshot so we can know whether we
-         * can delete it (or whether it should just be rm -rf'd)
-         */
-        BCH_SUBVOLUME_SNAP(1, 2),
-        /* Obsolete */
-        BCH_SUBVOLUME_UNLINKED_OBSOLETE(2, 3),
-    }
+#[bitfield(Le32)]
+pub struct SubvolumeFlags {
+    ro:                 bool,
+    /*
+     * We need to know whether a subvolume is a snapshot so we can know whether we
+     * can delete it (or whether it should just be rm -rf'd)
+     */
+    snap:               bool,
+    /* Obsolete */
+    unlinked_obsolete:  bool,
+    __:                 u29,
 }
 
 #[grown(from = depth, bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct Snapshot {
     pub v: c::bch_val,
-    pub flags: Le32,
+    #[members]
+    pub flags: SnapshotFlags,
     pub parent: Le32,
     pub children: [Le32; 2],
     pub subvol: Le32,
@@ -157,14 +159,14 @@ const _: () = {
     }
 };
 
-c_bitmask! {
-    LE32_BITMASK(struct Snapshot<Validated>, flags), strip BCH_SNAPSHOT_ {
-        /* Obsolete */
-        BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(0, 1),
-        BCH_SNAPSHOT_SUBVOL_OBSOLETE(1, 2),
-        BCH_SNAPSHOT_DELETED_OBSOLETE(2, 3),
-        BCH_SNAPSHOT_NO_KEYS_OBSOLETE(3, 4),
-    }
+#[bitfield(Le32)]
+pub struct SnapshotFlags {
+    /* Obsolete */
+    will_delete_obsolete:   bool,
+    subvol_obsolete:        bool,
+    deleted_obsolete:       bool,
+    no_keys_obsolete:       bool,
+    __:                     u28,
 }
 
 /*
