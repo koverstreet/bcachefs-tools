@@ -15,9 +15,6 @@
 #include <uuid/uuid.h>
 
 #include "bcachefs_ioctl.h"
-#include "util/printbuf.h"
-#include "util/util.h"
-
 #include "bcachefs.h"
 #include "tools-util.h"
 #include "src/rust_to_c.h"
@@ -91,9 +88,12 @@ char *read_file_str(int dirfd, const char *path)
 u64 read_file_u64(int dirfd, const char *path)
 {
 	char *buf = read_file_str(dirfd, path);
-	u64 v;
-	if (bch2_strtou64_h(buf, &v))
-		die("read_file_u64: error parsing %s (got %s)", path, buf);
+	char *end;
+
+	errno = 0;
+	u64 v = buf ? strtoull(buf, &end, 10) : 0;
+	if (!buf || errno || end == buf || *end)
+		die("read_file_u64: error parsing %s (got %s)", path, buf ?: "");
 	free(buf);
 	return v;
 }

@@ -114,9 +114,6 @@ fn main() {
         .allowlist_function("request_key")
         .allowlist_function("add_key")
         .allowlist_function("keyctl_search")
-        // tools-util functions for Rust command conversions
-        .allowlist_function("read_file_str")
-        .allowlist_function("read_file_u64")
         .allowlist_function("copy_fs")
         .blocklist_function("bch2_prt_vprintf")
         .blocklist_function("bch2_inode_opts_get_inode")
