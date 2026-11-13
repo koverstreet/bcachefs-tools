@@ -118,7 +118,7 @@ use crate::util::kernel::random_u64;
 use crate::util::percpu::CpuGuard;
 use crate::util::rcu::{kvfree_rcu, read_lock, RcuArray, RcuArrayHead, RcuElement, ReadGuard};
 
-const MAX_KICKS: usize = 32;
+const MAX_KICKS: usize = 16;
 
 const MIN_BITS: u32 = 2;
 
