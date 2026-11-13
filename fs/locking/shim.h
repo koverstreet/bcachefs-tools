@@ -10,7 +10,8 @@
 #include <linux/rwsem.h>
 #include <linux/spinlock.h>
 
-void rust_six_lockdep_set_notrack_class(void *lock);
+struct lockdep_map;
+void rust_lockdep_set_notrack_class(struct lockdep_map *map);
 
 void rust_mutex_init(struct mutex *lock, const char *name, void *key);
 void rust_mutex_assert_held(struct mutex *lock);

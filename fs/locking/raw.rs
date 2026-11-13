@@ -47,7 +47,7 @@ unsafe impl ::pin_init::Zeroable for rw_semaphore {}
 unsafe impl ::pin_init::Zeroable for percpu_rw_semaphore {}
 
 pub use crate::c::{
-    rust_six_lockdep_set_notrack_class, rust_mutex_init, rust_mutex_assert_held,
+    rust_lockdep_set_notrack_class, rust_mutex_init, rust_mutex_assert_held,
     rust_spin_lock_init, rust_spin_lock_irqsave, rust_spin_lock_irqsave_nested,
     rust_spin_unlock_irqrestore, rust_spin_lock_assert_held,
     rust_raw_spin_lock_init, rust_raw_spin_lock, rust_raw_spin_unlock, rust_raw_spin_lock_assert_held,

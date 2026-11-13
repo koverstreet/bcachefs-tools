@@ -162,6 +162,7 @@ fn main() {
         // FFI-safe, without us inventing a layout.
         .opaque_type("srcu_struct")
         .opaque_type("lock_class_key")
+        .opaque_type("lockdep_map")
         .opaque_type("bch_ioctl_data_event")
         // the shim's own stand-ins for kernel structs, empty in
         // include/linux/: reached through bch_fs and bch_dev

@@ -284,7 +284,7 @@ $(bch-host)/libsyn.rmeta: private rs-flags := $(foreach f,clone-impls derive ext
 $(bch-host)/libsyn.rmeta: $(bch-host-src)/syn/lib.rs $(bch-host)/libquote.rmeta FORCE
 	$(call if_changed_dep,bch_host)
 
-# The proc-macros on them, and rust_types_gen:
+# The proc-macros on them:
 bch-pmac-externs := -L$(bch-host) --extern proc_macro2=$(bch-host)/libproc_macro2.rlib \
 	--extern quote=$(bch-host)/libquote.rlib --extern syn=$(bch-host)/libsyn.rlib
 bch-pmac := --cap-lints=allow $(bch-pmac-externs)
@@ -365,11 +365,6 @@ $(obj)/mod.o: $(obj)/rust/bindings.rs $(addprefix $(obj)/,$(bch-arch-asm-rs)) $(
 	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so $(obj)/libnestify.so \
 	$(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o
 
-# mod.o carries the records of the types defined in Rust that C shares
-# (types/lib.rs), in .discard.bch_cstruct: the headers are generated from them,
-# and linking the module discards them.
-RUSTFLAGS_mod.o += --cfg bch_cstruct_records
-
 targets += codegen rust/bindings.rs libpaste.so \
 	libcstruct_macros.so libbitfield_struct.so libnestify.so \
 	$(addprefix rust-host/,libproc_macro2.rmeta libquote.rmeta libsyn.rmeta)
@@ -445,45 +440,3 @@ $(obj)/ksym_len: $(src)/scripts/ksym_len.rs FORCE
 	$(call if_changed,bch_codegen_host)
 
 targets += $(bch-rust-gc-in) ksym_len
-
-# ---- the C of the types defined in Rust ------------------------------------
-# foo/types_gen.h for foo/types.rs (types/lib.rs), written from mod.o's
-# records by rust_types_gen, a host program. In $(obj)/rust, never $(src):
-# userspace generates its own. Every C object waits for them; mod.o and the
-# bindings it's built from can't - they come first.
-#
-# Each record is a section of its own, all of the same name: ld -r makes them
-# one, which objcopy extracts. A record's source path is relative to where
-# rustc ran - or, since 7.0's --remap-path-prefix=$(srcroot)/=, to srcroot:
-# not where this runs in an in-tree O= build, so rust_types_gen is given it.
-#
-# Built with $(RUSTC), not $(HOSTRUSTC), as it links the host rlibs of syn,
-# which $(RUSTC) built for the proc-macros: an rlib links only into its own
-# compiler's crates.
-quiet_cmd_bch_types_gen = RUSTC H  $@
-      cmd_bch_types_gen = $(RUSTC) --edition 2024 -O $(bch-pmac-externs) \
-	-Clinker-flavor=gcc -Clinker=$(HOSTCC) $< -o $@
-
-$(obj)/rust_types_gen: $(src)/types/main.rs $(src)/types/cstruct.rs $(bch-pmac-deps)
-	$(call if_changed,bch_types_gen)
-
-quiet_cmd_bch_cstruct_gen = GEN     $(obj)/rust/*_gen.h
-      cmd_bch_cstruct_gen = $(LD) -r -o $(obj)/rust/cstruct.o $< && \
-	$(OBJCOPY) -O binary -j .discard.bch_cstruct $(obj)/rust/cstruct.o $(obj)/rust/cstruct.bin && \
-	$(obj)/rust_types_gen $(obj)/rust/cstruct.bin $(src) $(obj)/rust $(srcroot) && \
-	touch $@
-
-$(obj)/rust/cstruct.stamp: $(obj)/mod.o $(obj)/rust_types_gen FORCE
-	$(call if_changed,bch_cstruct_gen)
-
-targets += rust_types_gen rust/cstruct.stamp
-
-# After the vendored stack's include: its objects are in bcachefs-y by now.
-subdir-ccflags-y += -I$(obj)/rust
-$(addprefix $(obj)/,$(filter-out rust.o vrust/%,$(bcachefs-y))): | $(obj)/rust/cstruct.stamp
-
-# The headers come from the stamp's recipe: without saying so, make reads their
-# times before it runs, and an object whose header just changed isn't rebuilt.
-# rust_types_gen rewrites only the headers that changed.
-$(obj)/rust/%_gen.h: $(obj)/rust/cstruct.stamp
-	@:

@@ -28,9 +28,10 @@
 
 /* btree/locking.rs: btree node locks, which lockdep doesn't track */
 
-void rust_six_lockdep_set_notrack_class(void *lock)
+/* a lock whose state is Rust's - six - by its map: the macro wants the lock */
+void rust_lockdep_set_notrack_class(struct lockdep_map *map)
 {
-	lockdep_set_notrack_class((struct six_lock *) lock);
+	lockdep_set_notrack_class((struct { struct lockdep_map dep_map; } *) map);
 }
 
 /* raw.rs: struct mutex */

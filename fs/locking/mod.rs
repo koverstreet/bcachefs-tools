@@ -62,7 +62,7 @@ pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_N
                       PF_MEMALLOC_NOWARN};
 #[cfg(kernel)]
 pub(crate) use noio::memalloc_flags;
-pub(crate) use raw::rust_six_lockdep_set_notrack_class;
+pub(crate) use raw::rust_lockdep_set_notrack_class;
 pub use seqlock::SeqLock;
 pub use spinlock::SpinLock;
 pub use seqmutex::SeqMutexSeq;
