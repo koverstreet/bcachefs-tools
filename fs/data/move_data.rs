@@ -44,7 +44,7 @@ use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeLevels, Com
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::c::bch_errcode as err;
-use crate::data::ec::repair::scrub_stripe_block;
+use crate::data::ec::repair::{scrub_stripe_block, stripe_block_to_scrub};
 use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
 use crate::data::moving_update;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
@@ -299,6 +299,9 @@ struct PhysWalker<'a, 'p> {
     last_flushed: WbMaybeFlush,
     /// Buckets below it audited
     audited:      u64,
+    /// The backpointer whose stripe block was scrubbed last: the scrub closed
+    /// the attempt, and the walk comes back to it
+    stripe_scrubbed: Option<Bpos>,
 }
 
 impl PhysWalker<'_, '_> {
@@ -327,10 +330,26 @@ impl PhysWalker<'_, '_> {
                                                   self.last_flushed.borrow())? else { return Ok(()) };
 
         if v.level == 0 && Btree(v.btree_id.into()) == Btree::stripes {
-            return match self.ca.filter(|_| self.w.verify_stripes && moved) {
-                None => Ok(()),
-                Some(ca) => scrub_stripe_block(moving, t, ca, BkeySC::from(bp), k),
-            };
+            let Some(ca) = self.ca.filter(|_| self.w.verify_stripes && moved) else { return Ok(()) };
+            if self.stripe_scrubbed == Some(bp.k.p) {
+                return Ok(());
+            }
+            let Some((stripe, block)) = stripe_block_to_scrub(ca, k, BkeySC::from(bp)) else { return Ok(()) };
+
+            /*
+             * The read with no attempt open: the path to the stripe would be
+             * relocked after it, and the stripes btree is written as stripes
+             * are made - each one a restart, and the block read again
+             */
+            let scrubbed = &mut self.stripe_scrubbed;
+            return Err(t.close(CommitFlags::empty(), |trans| {
+                let s = BkeySC::from(&stripe).arm::<c::Stripe>().expect("a stripe");
+                let ret = scrub_stripe_block(moving, trans, ca, s, block);
+                if !ret.as_ref().is_err_and(is_restart) {
+                    *scrubbed = Some(bp.k.p);
+                }
+                ret
+            }));
         }
 
         // not moving these: resolving them still verified them
@@ -399,6 +418,7 @@ impl Moving<'_> {
             ca:           ca.as_deref(),
             last_flushed: WbMaybeFlush::new().map_err(|_| BchError::from(c::ENOMEM))?,
             audited:      ca.as_ref().map_or(0, |ca| ca.sector_to_bucket(w.start)),
+            stripe_scrubbed: None,
         };
 
         let mut bp_iter = BtreeIter::new(trans, bp_btree, pos(bp_dev, w.start << shift), BtreeIterFlags::empty());

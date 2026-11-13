@@ -526,30 +526,32 @@ fn repair_bad_block(ctxt: &Moving<'_>, trans: &TransGuard<'_>, read: BkeySC<'_, 
     Ok(ours)
 }
 
-/// Stripe @k, which a scrub's phys walk came to by backpointer @bp: its block
-/// on @ca checked against the stripe's checksums, and if it's bad the stripe
-/// repaired, as reconcile would a degraded one. Not by invalidating the
-/// block: its extents outside the bad granule are intact, and may be needed
-/// if the stripe can't be reconstructed. A restart is the walk's, which
-/// retries the block.
+/// Stripe @k's block on @ca that a scrub's phys walk came to by backpointer
+/// @bp, and @k copied, for scrub_stripe_block(): None if @k isn't a stripe
+/// with a block there, or the stripe is open - its blocks are being written,
+/// and its checksums aren't final.
+pub(crate) fn stripe_block_to_scrub(ca: &Dev, k: BkeySC<'_>, bp: BkeySC<'_, c::Backpointer>)
+    -> Option<(BkeyBuf, usize)>
+{
+    let s = k.arm::<c::Stripe>()?;
+    let block = stripe_block_at_bp(ca, s, bp).filter(|_| !ca.fs().stripe_is_open(s.k.p.offset))?;
+    Some((BkeyBuf::from_key(k), block))
+}
+
+/// Block @block of stripe @s - a copy, with no attempt open - on @ca checked
+/// against the stripe's checksums, and if it's bad the stripe repaired, as
+/// reconcile would a degraded one. Not by invalidating the block: its extents
+/// outside the bad granule are intact, and may be needed if the stripe can't
+/// be reconstructed. A restart is the walk's, which retries the block.
 ///
 /// Not inlined: the walk's frame is under every move it issues, and a stripe
 /// repair's locals needn't be.
 #[inline(never)]
-pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca: &Dev,
-                                 bp: BkeySC<'_, c::Backpointer>, k: BkeySC<'_>) -> Result<(), BchError> {
-    let fs = t.fs();
-    let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
-    // An open stripe's blocks are being written: its checksums aren't final
-    let Some(block) = stripe_block_at_bp(ca, s, bp).filter(|_| !fs.stripe_is_open(s.k.p.offset)) else {
-        return Ok(());
-    };
+pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, trans: &TransGuard<'_>, ca: &Dev,
+                                 s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -> Result<(), BchError> {
+    let fs = trans.fs();
 
-    // our own copy of the stripe: no btree locks held for the IO
-    let read = BkeyBuf::from_key(k);
-    let s = BkeySC::from(&read).arm::<c::Stripe>().expect("a stripe");
-
-    let r = match t.drop_locks_do(|| Ok(scrub_block(fs, s, block)))? {
+    let r = match scrub_block(fs, s, block) {
         Ok(r) if r.bad_sectors > 0 => r,
         Ok(_) => return Ok(()),
         Err(e) if e == bch_errcode::BCH_ERR_ENOMEM_stripe_buf.into() => return Err(e),
@@ -558,7 +560,7 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca
         Err(_) => return Ok(()),
     };
 
-    let ret = match t.ignore_restarts(|trans| repair_bad_block(ctxt, trans, s, block)) {
+    let ret = match repair_bad_block(ctxt, trans, s, block) {
         Ok(false) => return Ok(()),
         Err(e) if is_restart(&e) => return Err(e),
         r => r.map(|_| ()),
