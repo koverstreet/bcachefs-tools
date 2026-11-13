@@ -47,6 +47,10 @@ fn main() {
         .join("wrapper.h");
 
     println!("cargo:rerun-if-changed={}", wrapper.display());
+    // what it includes of fs/: the vendored C and the shims' headers
+    for h in ["vendor/closure.h", "vendor/bio_map.h", "vendor/bio_iov_iter.h", "locking/shim.h", "util/shim.h"] {
+        println!("cargo:rerun-if-changed={}", fs_dir.join(h).display());
+    }
     println!("cargo:rerun-if-changed=../clang_target.rs");
     println!("cargo:rerun-if-changed=../fs/build_config.rs");
     rerun_if_userspace_config_changed(&root);
