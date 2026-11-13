@@ -204,21 +204,14 @@ bool bch2_bdev_rot(struct block_device *bdev)
 	return bdev_rot(bdev);
 }
 
-/*
- * For DelayedWork (util/workqueue.rs). The kernel build initializes with a
- * lockdep class per Rust call site, as the kernel crate does - this is the
- * shim's INIT_DELAYED_WORK().
- */
-void bch2_init_delayed_work(struct delayed_work *dwork, work_func_t func)
-{
-	INIT_DELAYED_WORK(dwork, func);
-}
-
-/* For util/workqueue.rs: alloc_workqueue() is a macro, its name a format */
+#ifdef __KERNEL__
+/* For os/linux_kernel/workqueue.rs: alloc_workqueue() is a macro, its name a format */
 struct workqueue_struct *bch2_alloc_workqueue(const char *name, unsigned flags, int max_active)
 {
 	return alloc_workqueue("%s", flags, max_active, name);
 }
+
+#endif
 
 /* For os/linux_kernel/kthread.rs: kthread_create() is a macro */
 struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name)
@@ -278,17 +271,13 @@ bool bch2_rt_or_dl_task_current(void)
 }
 #endif
 
-/* For util/task.rs: INIT_WORK() is a macro, with a lockdep class in the kernel */
-void bch2_init_work(struct work_struct *work, work_func_t func)
-{
-	INIT_WORK(work, func);
-}
-
-/* For util/par.rs: set_worker_desc() takes a format */
+#ifdef __KERNEL__
+/* For os/linux_kernel/workqueue.rs: set_worker_desc() takes a format */
 void bch2_set_worker_desc(const char *desc)
 {
 	set_worker_desc("%s", desc);
 }
+#endif
 
 /* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
 bool bch2_capable(int cap)

@@ -27,7 +27,7 @@ use crate::util::rcu::Detach;
 use crate::util::refcount::TryRefcount;
 use crate::util::sleep::Sleep;
 use crate::util::task::spawn_static;
-use crate::util::workqueue::{Workqueue, WqFlags};
+use crate::os::workqueue::{Workqueue, WqFlags};
 
 /*
  * Ops are small and deduped, but a large fsck can touch millions of nodes -

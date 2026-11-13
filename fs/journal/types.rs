@@ -30,7 +30,7 @@ use crate::os::kthread::Daemon;
 use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
-use crate::util::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
+use crate::os::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
 use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Init, Late, BitfieldMembers};
 use nestify::nest;
 

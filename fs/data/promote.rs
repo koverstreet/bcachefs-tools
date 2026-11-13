@@ -34,7 +34,7 @@ use crate::os::kernel::{current_id, local_clock, num_online_cpus};
 use crate::util::refcount::TryRefcount;
 use crate::util::time_stats::TimeStats;
 use crate::util::task::Spawn;
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use core::ffi::c_int;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;

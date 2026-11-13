@@ -94,7 +94,7 @@ use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
 use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, TaskSlot};
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
 use core::ffi::c_uint;
 use core::sync::atomic::{AtomicBool, AtomicI16, Ordering::Relaxed};

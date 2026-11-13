@@ -155,7 +155,7 @@ use crate::util::refcount::{RefGuard, Refcount};
 use crate::os::kernel::local_clock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Spawn, TaskBox, TaskRef, TaskSlot};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use crate::util::projections::Volatile;
 use crate::util::{HumanReadable, Nsecs, Printbuf};
 use crate::{new_lock, published, prt};

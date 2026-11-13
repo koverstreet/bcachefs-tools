@@ -23,7 +23,7 @@ use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
                        RcuHead, RcuWorkHead};
 use crate::util::sleep::Sleep;
-use crate::util::workqueue::{Queue, Workqueue, WqFlags};
+use crate::os::workqueue::{Queue, Workqueue, WqFlags};
 
 pub(crate) fn alloc_at<T, A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, mode: AllocMode)
     -> Result<NonNull<T>, E>
@@ -379,16 +379,13 @@ static FREE_WQ: AtomicPtr<c::workqueue_struct> = AtomicPtr::new(core::ptr::null_
 
 pub fn free_init() -> Result<(), AllocError> {
     let wq = Workqueue::new(c"bcachefs_rcu_free", WqFlags::UNBOUND, 0)?;
-    FREE_WQ.store(core::mem::ManuallyDrop::new(wq).as_ptr(), Release);
+    FREE_WQ.store(wq.into_raw(), Release);
     Ok(())
 }
 
 /// After barrier(), so nothing's on it.
 pub fn free_exit() {
-    let wq = FREE_WQ.swap(core::ptr::null_mut(), Acquire);
-    if !wq.is_null() {
-        unsafe { c::destroy_workqueue(wq) };
-    }
+    drop(unsafe { Workqueue::from_raw(FREE_WQ.swap(core::ptr::null_mut(), Acquire)) });
 }
 
 unsafe extern "C" fn queue_fn<T, A: Alloc>(rcu: *mut c::rcu_head) {

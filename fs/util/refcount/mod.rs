@@ -35,7 +35,7 @@
 //! ref lent by whatever holds it, as an open bucket list lends its buckets.
 //!
 //! A ref handed across without a guard - into a C list, as an open bucket's
-//! pins are, or to a work item queued (ReffedWork, util/workqueue.rs) - is
+//! pins are, or to a work item queued (ReffedWork, os/*/workqueue.rs) - is
 //! leak()ed and adopt()ed back, by what does the handing: the run adopts its
 //! ref, put as the run ends.
 //!

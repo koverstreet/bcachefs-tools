@@ -135,7 +135,7 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/srcu.h",			// srcu_read_lock(), srcu_read_unlock()
     "linux/srcutree.h",			// synchronize_srcu_expedited(): an export,
     "linux/srcutiny.h",			// or with TINY_SRCU a static inline
-    // os/linux_kernel/kernel.rs, util/kthread.rs, workqueue.rs and sched.rs: exports and
+    // os/linux_kernel/kernel.rs, kthread.rs, workqueue.rs and sched.rs: exports and
     // static inlines, the shim's functions in userspace
     "linux/alloc_tag.h",		// mem_alloc_profiling_enabled()
     "linux/sched/clock.h",		// local_clock(), sched_clock()
@@ -241,7 +241,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "console_trylock", "console_unlock",
     // util/rcu.rs's Srcu: static inlines, and synchronize_srcu_expedited() is with TINY_SRCU
     "srcu_read_lock", "srcu_read_unlock", "synchronize_srcu_expedited",
-    // os/linux_kernel/kernel.rs, util/kthread.rs, workqueue.rs and sched.rs
+    // os/linux_kernel/kernel.rs, kthread.rs, workqueue.rs and sched.rs
     "mem_alloc_profiling_enabled", "local_clock", "msleep", "ktime_get_ns", "get_random_u64",
     "queue_work", "queue_delayed_work", "kthread_stop", "sched_clock", "cpumask_local_spread",
     // vfs/vfs_inode.rs, for the inode cache: static inlines, inode_state_*() from 6.19

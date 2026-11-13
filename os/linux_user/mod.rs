@@ -7,6 +7,7 @@ pub mod file;
 pub mod kernel;
 pub mod kthread;
 pub mod sched;
+pub mod workqueue;
 #[path = "../linux_kernel/ops.rs"]
 pub mod ops;
 pub mod thread_with_file;

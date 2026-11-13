@@ -37,7 +37,7 @@ use crate::util::log::LogMsg;
 use crate::util::refcount::Refcount;
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
-use crate::util::workqueue::{run_raw, RawWork};
+use crate::os::workqueue::{run_raw, RawWork};
 use crate::util::names::Names;
 use crate::util::{rcu, HumanReadable, Printbuf};
 use crate::{fs_fatal_error, fs_inconsistent, log_msg_ratelimited, prt};

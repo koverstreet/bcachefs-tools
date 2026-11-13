@@ -10,7 +10,7 @@ use crate::snapshots::subvolume::delete_unlinked;
 use crate::types::{bits_to_longs};
 use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitArray;
-use crate::util::workqueue::ReffedWork;
+use crate::os::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicBool, AtomicU32};
 use cstruct_macros::{bch_enum, placed, MaybeZeroable, Init, TypeInfo};
 use pin_init::pin_data;

@@ -14,3 +14,4 @@ pub mod super_block;
 pub mod thread_with_file;
 mod user_pages;
 pub mod vm;
+pub mod workqueue;

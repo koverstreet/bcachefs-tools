@@ -93,7 +93,7 @@ use crate::errcode::BchError;
 use crate::os::kthread::{Kthread, KthreadRef};
 use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
 use crate::util::sleep::{sleep_until, Sleep};
-use crate::util::workqueue::{Queue, RawWork};
+use crate::os::workqueue::{Queue, RawWork};
 use core::fmt;
 use core::future::Future;
 use core::cell::Cell;
@@ -339,7 +339,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
         };
         pin_init!(Self {
             header <- pin_init!(Header {
-                work <- crate::new_work!(crate::util::workqueue::run_raw::<Header>, "bcachefs task"),
+                work <- crate::new_work!(crate::os::workqueue::run_raw::<Header>, "bcachefs task"),
                 waiting:   AtomicPtr::new(null_mut()),
                 target:    Cell::new(target),
                 runq,

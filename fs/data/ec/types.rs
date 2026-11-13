@@ -14,7 +14,7 @@ use crate::util::bio::BioSet;
 use crate::data_structures::cuckoo::Cuckoo;
 use crate::util::futex::EventCount;
 use crate::data_structures::genradix::SharedGenRadix;
-use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
+use crate::os::workqueue::{ReffedWork, Workqueue, WqFlags};
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI64, AtomicU64};
 use cstruct_macros::{bitfield, placed, MaybeZeroable, Init, TypeInfo, BitfieldMembers};

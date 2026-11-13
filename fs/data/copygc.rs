@@ -81,7 +81,7 @@ use crate::util::late::Late;
 use crate::util::rcu::{read_lock, Detach};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::data_structures::sort::heapsort_by;
-use crate::util::workqueue::{Workqueue, WqFlags};
+use crate::os::workqueue::{Workqueue, WqFlags};
 use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_msg, fs_fatal_error};
 use core::pin::Pin;

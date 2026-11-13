@@ -43,7 +43,7 @@ use crate::os::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
 use crate::util::printbuf::Msg;
 use crate::util::prompt::{Choice, Prompt, Question, Reply};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_ulong, CStr};
 use core::sync::atomic::Ordering::Relaxed;

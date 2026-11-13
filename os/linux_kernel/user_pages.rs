@@ -14,7 +14,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::util::bio::Bio;
 use crate::util::task::requeue;
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use core::ffi::{c_int, c_uint};
 use core::pin::Pin;
 

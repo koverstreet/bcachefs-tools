@@ -41,7 +41,7 @@ use crate::util::log::{LogLevel, LogMsg};
 use crate::util::task::{spawn_static, waiter, Resumable, Resume};
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
                             Plain, SelfSized, Unsized, Unvalidated};
-use crate::util::workqueue::{run_raw, RawWork};
+use crate::os::workqueue::{run_raw, RawWork};
 use crate::util::{alloc::init_at, backref::BackRef, closure::StackClosure, printbuf::Msg, refcount::TryRefcount};
 use crate::util::{time_stats::TimeStats, Printbuf, ToText};
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};

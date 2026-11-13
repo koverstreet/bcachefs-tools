@@ -49,8 +49,10 @@ void bch2_cond_resched(void);
 bool bch2_fatal_signal_pending(void);
 unsigned bch2_num_online_cpus(void);
 bool bch2_bdev_rot(struct block_device *bdev);
-void bch2_init_delayed_work(struct delayed_work *dwork, work_func_t func);
+#ifdef __KERNEL__
 struct workqueue_struct *bch2_alloc_workqueue(const char *name, unsigned flags, int max_active);
+void bch2_set_worker_desc(const char *desc);
+#endif
 struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name);
 bool bch2_kthread_should_stop(void);
 struct task_struct *bch2_current(void);
@@ -62,8 +64,6 @@ bool bch2_need_resched(void);
 bool bch2_owner_on_cpu(struct task_struct *owner);
 bool bch2_rt_or_dl_task_current(void);
 #endif
-void bch2_init_work(struct work_struct *work, work_func_t func);
-void bch2_set_worker_desc(const char *desc);
 bool bch2_capable(int cap);
 struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct dentry *parent,
 					void *data, const struct file_operations *fops);

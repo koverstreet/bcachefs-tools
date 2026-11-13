@@ -30,7 +30,7 @@ use crate::os::kernel::{local_clock, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated, Validated, VStruct};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use crate::util::ToText;
 use crate::{bch_err, bch_err_dev, bch_info, bch_info_dev, field, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
 use core::mem::offset_of;

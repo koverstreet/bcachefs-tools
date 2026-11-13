@@ -2,13 +2,10 @@
 //! exercised end to end.
 //!
 //! These can't live beside `fs/util/task.rs`: a `cargo test -p
-//! bcachefs-kernel` binary links `-lbcachefs_static_wrappers` but not
-//! libbcachefs.a, so `queue_work()` and the system queues come out undefined.
-//! This crate's build.rs links libbcachefs whole-archive, which is also what
-//! makes `linux/workqueue.c`'s `constructor(102)` run, so the system queues
-//! exist here.
+//! bcachefs-kernel` binary doesn't link libbcachefs.a, the C the executor
+//! still calls into; this crate's build.rs links it whole-archive.
 //!
-//! One test is of linux/workqueue.c's contract - par's workqueue jobs block,
+//! One test is of the shim's workqueues' contract - par's workqueue jobs block,
 //! and rely on the queue having more than one worker; one of the executor's
 //! own - a task never polled twice at once, which its state word, not the
 //! workqueue, guarantees. Both silent if they break: a deadlock elsewhere, or
@@ -29,7 +26,7 @@
 
 use bcachefs_kernel::util::task::{waiter, Completion, Done, Resumable};
 use bcachefs_kernel::util::task::spawn_detached;
-use bcachefs_kernel::util::workqueue::Queue;
+use bcachefs_kernel::os::workqueue::Queue;
 
 use std::future::{poll_fn, Future};
 use std::pin::Pin;

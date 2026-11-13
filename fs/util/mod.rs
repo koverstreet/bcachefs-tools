@@ -44,7 +44,6 @@ pub mod time_stats;
 pub mod varint;
 pub mod volatile;
 pub mod vstructs;
-pub mod workqueue;
 
 pub use printbuf::{Bytes, DateTime, HumanReadable, Join, Nsecs, Printbuf, Sectors, ToText};
 

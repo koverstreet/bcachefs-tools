@@ -21,7 +21,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::{init_at, Alloc, Kmalloc};
 use crate::util::rcu::{Flavor, HasRcuHead, RcuHead};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskRef};
 use core::alloc::Layout;
 use core::future::Future;

@@ -733,7 +733,7 @@ use crate::os::kernel::{current_runtime, local_clock, unlikely, READ, WRITE};
 use crate::util::log::{LogMsg, Ratelimit};
 use crate::util::refcount::TryRefcount;
 use crate::util::time_stats::TimeStats;
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{btree_trans, log_msg_ratelimited, prt};
 use c::WriteFlags as w;

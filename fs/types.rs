@@ -16,7 +16,7 @@ use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::place::Placed;
 use crate::util::refcount::AtomicRef;
-use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
+use crate::os::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
 use crate::data_structures::genradix::SharedGenRadix;
@@ -562,12 +562,12 @@ pub struct Fs {
 
     #[pin]
     #[init(crate::sb::members::BtreeBitmapGcSchedule::init())]
-    pub maybe_schedule_btree_bitmap_gc: crate::util::workqueue::DelayedWork,
+    pub maybe_schedule_btree_bitmap_gc: crate::os::workqueue::DelayedWork,
 
     pub counters: c::bch_fs_counters,
     #[pin]
     #[init(crate::sb::counters::RecentCounters::init())]
-    pub counters_recent: crate::util::workqueue::DelayedWork,
+    pub counters_recent: crate::os::workqueue::DelayedWork,
     #[pin]
     #[init(::pin_init::pin_init_array_from_fn(|_| c::bch2_time_stats::init()))]
     pub times: [c::bch2_time_stats; c::TimeStat::NR as usize],

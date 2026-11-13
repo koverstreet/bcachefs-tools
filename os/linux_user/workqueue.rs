@@ -16,10 +16,12 @@
 //! container() as the parent F runs on.
 //!
 //! DelayedWork is struct delayed_work, in a struct Rust defines and C may
-//! share. The kernel crate's DelayedWork is for Arc-owned work items, and
-//! userspace has none: this is the bare struct, initialized with its function
-//! as C's INIT_DELAYED_WORK() - in-kernel with a lockdep class per call site,
-//! as the kernel crate's. fs_delayed_work!() declares one in bch_fs.
+//! share: the bare struct, initialized with its function as C's
+//! INIT_DELAYED_WORK(). fs_delayed_work!() declares one in bch_fs.
+//!
+//! The kernel port's interface, over the shim's workqueues: queues.rs.
+
+mod queues;
 
 use crate::c;
 use crate::util::alloc::AllocError;
@@ -37,27 +39,16 @@ bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct WqFlags: u32 {
         /// Not bound to a CPU.
-        const UNBOUND       = c::wq_flags_WQ_UNBOUND as u32;
+        const UNBOUND       = 1 << 1;
         /// Frozen during suspend.
-        const FREEZABLE     = c::wq_flags_WQ_FREEZABLE as u32;
+        const FREEZABLE     = 1 << 2;
         /// Has a rescuer, for work memory reclaim waits on.
-        const MEM_RECLAIM   = c::wq_flags_WQ_MEM_RECLAIM as u32;
-        const HIGHPRI       = c::wq_flags_WQ_HIGHPRI as u32;
-        const CPU_INTENSIVE = c::wq_flags_WQ_CPU_INTENSIVE as u32;
-        const PERCPU        = WQ_PERCPU;
+        const MEM_RECLAIM   = 1 << 3;
+        const HIGHPRI       = 1 << 4;
+        const CPU_INTENSIVE = 1 << 5;
+        const PERCPU        = 1 << 8;
     }
 }
-
-// 6.17's flag (128ea9f6ccfb): before it, per-cpu was the default, and
-// it's 0
-#[cfg(kernel)]
-#[cfg(linux_ge = "6.17")]
-const WQ_PERCPU: u32 = c::wq_flags_WQ_PERCPU as u32;
-#[cfg(kernel)]
-#[cfg(not(linux_ge = "6.17"))]
-const WQ_PERCPU: u32 = 0;
-#[cfg(not(kernel))]
-const WQ_PERCPU: u32 = c::wq_flags_WQ_PERCPU as u32;
 
 /// A workqueue Rust owns, destroyed on drop - none until it's made, as a
 /// struct's field C sees as its struct workqueue_struct *.
@@ -84,13 +75,24 @@ impl Workqueue {
     /// C's are.
     pub fn new(name: &CStr, flags: WqFlags, max_active: c_int) -> Result<Self, AllocError> {
         // SAFETY: plain; the name is copied
-        let wq = unsafe { c::bch2_alloc_workqueue(name.as_ptr().cast(), flags.bits(), max_active) };
+        let wq = unsafe { queues::alloc_workqueue_name(name.as_ptr(), flags.bits(), max_active) };
         NonNull::new(wq).map(|wq| Workqueue(Some(wq))).ok_or(AllocError)
     }
 
     /// Whether it's been made.
     pub fn is_some(&self) -> bool {
         self.0.is_some()
+    }
+
+    /// Kept as a pointer, for from_raw() to have back.
+    pub fn into_raw(self) -> *mut c::workqueue_struct {
+        core::mem::ManuallyDrop::new(self).0.map_or(core::ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    /// # Safety
+    /// @wq is into_raw()'s, had back once.
+    pub unsafe fn from_raw(wq: *mut c::workqueue_struct) -> Self {
+        Workqueue(NonNull::new(wq))
     }
 }
 
@@ -110,7 +112,7 @@ impl Drop for Workqueue {
     fn drop(&mut self) {
         if let Some(wq) = self.0.take() {
             // SAFETY: ours, and nothing queues on it after this
-            unsafe { c::destroy_workqueue(wq.as_ptr()) };
+            unsafe { queues::destroy_workqueue(wq.as_ptr()) };
         }
     }
 }
@@ -134,7 +136,7 @@ impl Queue {
     /// Everything queued run, and what that queues, until it's empty:
     /// drain_workqueue().
     pub fn drain(&self) {
-        unsafe { c::drain_workqueue(self.as_ptr()) }
+        unsafe { queues::drain_workqueue(self.as_ptr()) }
     }
 
     pub fn as_ptr(&self) -> *mut c::workqueue_struct {
@@ -144,25 +146,25 @@ impl Queue {
     /// system_long_wq: for work that may run long.
     pub fn system_long() -> &'static Queue {
         // SAFETY: the system's, for as long as there is a system
-        unsafe { Self::from_raw(c::system_long_wq) }
+        unsafe { Self::from_raw((&raw mut queues::EVENTS_LONG).cast()) }
     }
 
     /// system_wq: per-cpu, what schedule_work_on() queues on.
     pub fn system() -> &'static Queue {
         // SAFETY: the system's
-        unsafe { Self::from_raw(c::system_wq) }
+        unsafe { Self::from_raw((&raw mut queues::EVENTS).cast()) }
     }
 
     /// system_dfl_wq: the default, unbound.
     pub fn system_dfl() -> &'static Queue {
         // SAFETY: the system's
-        unsafe { Self::from_raw(c::system_dfl_wq) }
+        unsafe { Self::from_raw((&raw mut queues::EVENTS_UNBOUND).cast()) }
     }
 
     /// system_highpri_wq: per-cpu, high priority.
     pub fn system_highpri() -> &'static Queue {
         // SAFETY: the system's
-        unsafe { Self::from_raw(c::system_highpri_wq) }
+        unsafe { Self::from_raw((&raw mut queues::EVENTS_HIGHPRI).cast()) }
     }
 
     /// Run @work here: queue_work(). False if it was queued already - then
@@ -172,22 +174,16 @@ impl Queue {
     /// @work is initialized, and lives until its function has run.
     pub unsafe fn queue_work(&self, work: *mut c::work_struct) -> bool {
         // SAFETY: the caller's
-        unsafe { c::queue_work(self.as_ptr(), work) }
+        unsafe { queues::queue_work(self.as_ptr(), work) }
     }
 
-    /// queue_work(), to run on @cpu: queue_work_on(). Userspace has no CPU
-    /// to choose.
+    /// queue_work(), to run on @cpu: queue_work_on(). There's no CPU to
+    /// choose here.
     ///
     /// # Safety
     /// As queue_work()'s.
-    pub unsafe fn queue_work_on(&self, cpu: u32, work: *mut c::work_struct) -> bool {
-        #[cfg(kernel)]
-        return unsafe { kernel::bindings::queue_work_on(cpu as core::ffi::c_int, self.as_ptr().cast(), work.cast()) };
-        #[cfg(not(kernel))]
-        {
-            let _ = cpu;
-            unsafe { self.queue_work(work) }
-        }
+    pub unsafe fn queue_work_on(&self, _cpu: u32, work: *mut c::work_struct) -> bool {
+        unsafe { self.queue_work(work) }
     }
 }
 
@@ -196,10 +192,7 @@ impl Queue {
 /// # Safety
 /// @work is initialized.
 pub unsafe fn flush_work(work: *mut c::work_struct) {
-    #[cfg(kernel)]
-    unsafe { kernel::bindings::flush_work(work.cast()) };
-    #[cfg(not(kernel))]
-    unsafe { c::flush_work(work) };
+    unsafe { queues::flush_work(work) };
 }
 
 /// Not queued any more, and not running - waiting out a run that is:
@@ -208,25 +201,19 @@ pub unsafe fn flush_work(work: *mut c::work_struct) {
 /// # Safety
 /// @work is initialized.
 pub unsafe fn cancel_work_sync(work: *mut c::work_struct) -> bool {
-    #[cfg(kernel)]
-    return unsafe { kernel::bindings::cancel_work_sync(work.cast()) };
-    #[cfg(not(kernel))]
-    unsafe { c::cancel_work_sync(work) }
+    unsafe { queues::cancel_work_sync(work) }
 }
+
+/// The running worker's description: userspace's workers have none.
+pub fn set_worker_desc(_desc: &CStr) {}
 
 /// Whether @work is queued or running, as of the look: work_busy(). The shim's
 /// workqueues don't say.
 ///
 /// # Safety
 /// @work is initialized.
-pub unsafe fn work_busy(work: *mut c::work_struct) -> bool {
-    #[cfg(kernel)]
-    return unsafe { kernel::bindings::work_busy(work.cast()) } != 0;
-    #[cfg(not(kernel))]
-    {
-        let _ = work;
-        false
-    }
+pub unsafe fn work_busy(_work: *mut c::work_struct) -> bool {
+    false
 }
 
 pub type WorkFn = unsafe extern "C" fn(*mut c::work_struct);
@@ -248,69 +235,34 @@ pub unsafe extern "C" fn run_raw<T: RawWork>(work: *mut c::work_struct) {
     unsafe { T::run(NonNull::new_unchecked(work.byte_sub(T::WORK).cast())) }
 }
 
-/// INIT_WORK(): a C work_struct, in place, running C's @func - with a lockdep
-/// class of its own, @key, named @name: new_work!()'s.
-#[cfg(kernel)]
-#[doc(hidden)]
-pub fn work_init(
-    func: WorkFn,
-    name: &'static core::ffi::CStr,
-    key:  core::pin::Pin<&'static kernel::sync::LockClassKey>,
-) -> impl ::pin_init::PinInit<c::work_struct> {
-    // SAFETY: initialized in place, all of it
-    unsafe {
-        ::pin_init::pin_init_from_closure(move |slot: *mut c::work_struct| {
-            c::init_work_with_key(slot, Some(func), false, name.as_ptr().cast(), key.as_ptr());
-            Ok(())
-        })
-    }
-}
-
-/// INIT_WORK(), as the shim has it: no lockdep.
-#[cfg(not(kernel))]
+/// INIT_WORK(): a C work_struct, in place, running C's @func: new_work!()'s.
 #[doc(hidden)]
 pub fn work_init(func: WorkFn) -> impl ::pin_init::PinInit<c::work_struct> {
     // SAFETY: initialized in place, all of it
     unsafe {
         ::pin_init::pin_init_from_closure(move |slot: *mut c::work_struct| {
-            c::bch2_init_work(slot, Some(func));
+            queues::init_work(slot, func);
             Ok(())
         })
     }
 }
 
-/// A C work_struct's initializer, running C's @func, its lockdep class the
-/// call site's, named @name: INIT_WORK().
+/// A C work_struct's initializer, running C's @func: INIT_WORK(). @name is
+/// the kernel port's, for its lockdep class.
 #[macro_export]
 macro_rules! new_work {
-    ($func:expr, $name:literal $(,)?) => {{
-        #[cfg(kernel)]
-        let w = $crate::util::workqueue::work_init(
-            $func,
-            const { $crate::util::ffi::c_str(::core::concat!($name, "\0")) },
-            ::kernel::static_lock_class!());
-        #[cfg(not(kernel))]
-        let w = $crate::util::workqueue::work_init($func);
-        w
-    }};
+    ($func:expr, $name:literal $(,)?) => {
+        $crate::os::workqueue::work_init($func)
+    };
 }
 
-/// A DelayedWork's initializer, running C's @func, its work's and timer's
-/// lockdep classes the call site's, named for @name: INIT_DELAYED_WORK().
+/// A DelayedWork's initializer, running C's @func: INIT_DELAYED_WORK(). @name
+/// is the kernel port's, for its lockdep classes.
 #[macro_export]
 macro_rules! new_delayed_work {
-    ($func:expr, $name:literal $(,)?) => {{
-        #[cfg(kernel)]
-        let w = $crate::util::workqueue::DelayedWork::new(
-            $func,
-            const { $crate::util::ffi::c_str(::core::concat!($name, "\0")) },
-            ::kernel::static_lock_class!(),
-            const { $crate::util::ffi::c_str(::core::concat!($name, ".timer\0")) },
-            ::kernel::static_lock_class!());
-        #[cfg(not(kernel))]
-        let w = $crate::util::workqueue::DelayedWork::new($func);
-        w
-    }};
+    ($func:expr, $name:literal $(,)?) => {
+        $crate::os::workqueue::DelayedWork::new($func)
+    };
 }
 
 /// A ReffedWork's function as a type, and the field it runs from: for a
@@ -478,34 +430,13 @@ where
         F::run(p);
     }
 
-    /// INIT_WORK(), with a lockdep class of its own - @key, named @name, a
-    /// static per field in the parent's #[derive(Init)].
-    #[cfg(kernel)]
-    #[doc(hidden)]
-    pub(crate) fn new<E>(
-        at:   F::At,
-        name: &'static core::ffi::CStr,
-        key:  core::pin::Pin<&'static kernel::sync::LockClassKey>,
-    ) -> impl ::pin_init::PinInit<Self, E> {
-        // SAFETY: the work_struct and the At, all of it, written in place
-        unsafe {
-            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                c::init_work_with_key(slot.cast(), Some(Self::work_fn), false, name.as_ptr().cast(),
-                                      key.as_ptr());
-                (&raw mut (*slot)._placed_at).write(at);
-                Ok(())
-            })
-        }
-    }
-
-    /// INIT_WORK(), as the shim has it: no lockdep.
-    #[cfg(not(kernel))]
+    /// INIT_WORK().
     #[doc(hidden)]
     pub(crate) fn new<E>(at: F::At) -> impl ::pin_init::PinInit<Self, E> {
         // SAFETY: the work_struct and the At, all of it, written in place
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                c::bch2_init_work(slot.cast(), Some(Self::work_fn));
+                queues::init_work(slot.cast(), Self::work_fn);
                 (&raw mut (*slot)._placed_at).write(at);
                 Ok(())
             })
@@ -524,38 +455,13 @@ unsafe impl Send for DelayedWork {}
 unsafe impl Sync for DelayedWork {}
 
 impl DelayedWork {
-    /// The work, and its timer, each with a lockdep class of its own.
-    #[cfg(kernel)]
-    #[doc(hidden)]
-    pub fn new(
-        func:       WorkFn,
-        name:       &'static core::ffi::CStr,
-        key:        core::pin::Pin<&'static kernel::sync::LockClassKey>,
-        timer_name: &'static core::ffi::CStr,
-        timer_key:  core::pin::Pin<&'static kernel::sync::LockClassKey>,
-    ) -> impl ::pin_init::PinInit<Self> {
-        // SAFETY: the work and its timer, all there is, initialized in place -
-        // it's pinned - as the kernel crate's DelayedWork::new()
-        unsafe {
-            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                let dwork = slot.cast::<c::delayed_work>();
-                c::init_work_with_key(&raw mut (*dwork).work, Some(func), false,
-                                      name.as_ptr().cast(), key.as_ptr());
-                c::timer_init_key(&raw mut (*dwork).timer, Some(c::delayed_work_timer_fn),
-                                  c::TIMER_IRQSAFE, timer_name.as_ptr().cast(), timer_key.as_ptr());
-                Ok(())
-            })
-        }
-    }
-
-    /// INIT_DELAYED_WORK(), as the shim has it: no lockdep.
-    #[cfg(not(kernel))]
+    /// INIT_DELAYED_WORK().
     #[doc(hidden)]
     pub fn new(func: WorkFn) -> impl ::pin_init::PinInit<Self> {
-        // SAFETY: initialized in place, all of it
+        // SAFETY: initialized in place, all of it - its work_struct
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                c::bch2_init_delayed_work(slot.cast(), Some(func));
+                queues::init_work(&raw mut (*slot.cast::<c::delayed_work>()).work, func);
                 Ok(())
             })
         }
@@ -568,29 +474,23 @@ impl DelayedWork {
     /// Run on @wq after @delay jiffies: queue_delayed_work(). False if it was
     /// already queued - then that run is the one there'll be.
     pub fn queue(&self, wq: &Queue, delay: c_ulong) -> bool {
-        unsafe { c::queue_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
+        unsafe { queues::queue_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
     }
 
     /// Run on @wq after @delay jiffies, from now - re-armed if it was already
     /// queued: mod_delayed_work().
     pub fn modify(&self, wq: &Queue, delay: c_ulong) -> bool {
-        #[cfg(kernel)]
-        return unsafe {
-            kernel::bindings::mod_delayed_work_on(kernel::bindings::wq_misc_consts_WORK_CPU_UNBOUND as c_int,
-                                                  wq.as_ptr().cast(), self.as_ptr().cast(), delay as usize)
-        };
-        #[cfg(not(kernel))]
-        unsafe { c::mod_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
+        unsafe { queues::mod_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
     }
 
     /// Not queued any more - a run under way still runs: cancel_delayed_work().
     pub fn cancel(&self) -> bool {
-        unsafe { c::cancel_delayed_work(self.as_ptr()) }
+        unsafe { queues::cancel_delayed_work(self.as_ptr()) }
     }
 
     /// Not queued any more, and not running - waiting out a run that is:
     /// cancel_delayed_work_sync(). Whether it was pending.
     pub fn cancel_sync(&self) -> bool {
-        unsafe { c::cancel_delayed_work_sync(self.as_ptr()) }
+        unsafe { queues::cancel_delayed_work_sync(self.as_ptr()) }
     }
 }

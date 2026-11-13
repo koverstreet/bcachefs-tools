@@ -26,7 +26,7 @@ use bcachefs_kernel::util::bio::{Bio, BioOwner};
 use bcachefs_kernel::util::closure;
 use bcachefs_kernel::util::sleep::Sleep;
 use bcachefs_kernel::util::task::{waiter, CompletionReturn, Spawn, TaskSlot};
-use bcachefs_kernel::util::workqueue::Queue;
+use bcachefs_kernel::os::workqueue::Queue;
 
 /// Maximum single IO size.
 pub const MAX_IO_SIZE: usize = 1 << 20;

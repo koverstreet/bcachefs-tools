@@ -8,7 +8,7 @@ use crate::published;
 use crate::types::c_default;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::util::projections::Volatile;
-use crate::util::workqueue::DelayedWork;
+use crate::os::workqueue::DelayedWork;
 use crate::vfs::vfs_inode::VfsInode;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]

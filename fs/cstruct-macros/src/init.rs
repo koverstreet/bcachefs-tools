@@ -275,7 +275,7 @@ fn work_func(cfg: &TokenStream, inst_ty: &TokenStream, name: &Ident, f: &Ident) 
         #[automatically_derived]
         // SAFETY: the field's - the one of type ReffedWork<f, _>, its
         // initializer init()'s, below
-        unsafe impl crate::util::workqueue::WorkFunc for #f {
+        unsafe impl crate::os::workqueue::WorkFunc for #f {
             type At = crate::util::place::At<#inst_ty, { crate::util::place::name(#n) }>;
             fn run(p: &#inst_ty) {
                 #f(p)
@@ -293,9 +293,9 @@ fn work_init(parent: &str, name: &Ident) -> syn::Result<TokenStream> {
     Ok(quote! {
         {
             #[cfg(kernel)]
-            let w = |at| crate::util::workqueue::ReffedWork::new(at, #class, ::kernel::static_lock_class!());
+            let w = |at| crate::os::workqueue::ReffedWork::new(at, #class, ::kernel::static_lock_class!());
             #[cfg(not(kernel))]
-            let w = |at| crate::util::workqueue::ReffedWork::new(at);
+            let w = |at| crate::os::workqueue::ReffedWork::new(at);
             // SAFETY: run into the field, by pin_init!()
             unsafe {
                 crate::util::place::at::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(w)

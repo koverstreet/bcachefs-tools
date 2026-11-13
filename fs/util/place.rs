@@ -99,7 +99,7 @@
 //! work_struct does, is given one by a type parameter: ReffedWork<F, R> is
 //! the work_struct of work function F, whose WorkFunc - from the parent's
 //! #[derive(Init)], for the one field of that type - gives it its At, Contained
-//! as any field's type is (util/workqueue.rs).
+//! as any field's type is (os/*/workqueue.rs).
 
 use crate::errcode::BchError;
 use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};

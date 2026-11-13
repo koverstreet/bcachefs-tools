@@ -23,7 +23,7 @@ use crate::util::alloc::{KVmalloc, Kmalloc};
 use crate::util::maybe_rcu_alloc::{alloc_at, Retired};
 use crate::util::percpu::{CpuShared, PerCpu, PerCpuRef};
 use crate::util::rcu::{Flavor, GpCookie};
-use crate::util::workqueue::{flush_work, Queue};
+use crate::os::workqueue::{flush_work, Queue};
 
 #[cfg(kernel)]
 const ACTIVE: usize = kernel::bindings::NUM_ACTIVE_RCU_POLL_OLDSTATE as usize;

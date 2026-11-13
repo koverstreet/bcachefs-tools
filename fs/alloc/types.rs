@@ -11,7 +11,7 @@ use crate::locking::{ByteLock, Locked, Lockdep, SeqLock};
 use crate::{new_lock, new_work};
 use crate::types::{CacheAligned, c_default};
 use crate::util::bio::BioSet;
-use crate::util::workqueue::ReffedWork;
+use crate::os::workqueue::ReffedWork;
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::projections::Volatile;
 use crate::published;

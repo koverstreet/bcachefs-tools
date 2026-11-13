@@ -20,7 +20,7 @@ use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::mempool::Mempool;
 use crate::util::rcu::Srcu;
-use crate::util::workqueue::{Workqueue, WqFlags};
+use crate::os::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, NeBytes, bits_to_longs, c_default};
 use crate::btree::node_scan::NodeScan;
 use crate::btree::path::BtreePath;

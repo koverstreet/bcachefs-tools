@@ -17,7 +17,7 @@ use crate::util::alloc::KBox;
 use crate::util::ffi::Opaque;
 use crate::os::kernel::jiffies;
 use crate::util::refcount::{RefBorrow, RefGuard, Refcount, TryRefcount};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use core::cell::UnsafeCell;
 use core::ffi::{c_long, c_ulong};
 use core::marker::{PhantomData, PhantomPinned};

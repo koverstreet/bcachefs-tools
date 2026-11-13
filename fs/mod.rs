@@ -360,10 +360,7 @@ pub mod c {
     #[cfg(kernel)]
     #[cfg(not(linux_ge = "6.17"))]
     pub type file_kattr = fileattr;
-    // And system_dfl_wq, system_unbound_wq before 6.17 and in userspace, as
-    // the shim's workqueue.h #defines it.
-    #[cfg(not(kernel))]
-    pub use self::system_unbound_wq as system_dfl_wq;
+    // And system_dfl_wq, system_unbound_wq before 6.17.
     #[cfg(kernel)]
     #[cfg(not(linux_ge = "6.17"))]
     pub use self::system_unbound_wq as system_dfl_wq;

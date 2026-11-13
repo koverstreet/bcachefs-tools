@@ -24,7 +24,7 @@ use crate::prt;
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::{Le64, c_default};
 use crate::os::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
 use crate::util::percpu::PerCpu;

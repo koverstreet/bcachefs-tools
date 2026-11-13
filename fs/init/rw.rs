@@ -34,7 +34,7 @@ use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{OnRelease, PercpuRef, WaitableRef};
 use crate::util::sleep::Sleep;
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_info, bch_verbose, prt, warn_on};
 

@@ -35,13 +35,13 @@
 //! and drops every one it didn't, before it returns - as std::thread::scope()
 //! joins its threads.
 
-use crate::c;
 use crate::errcode::BchError;
+use core::ffi::CStr;
 use crate::util::alloc::KVVec;
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kthread::Kthread;
 use crate::util::task::{waiter, Spawn, TaskBox, TaskSlot};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
 use core::cell::{RefCell, UnsafeCell};
 use core::fmt;
@@ -167,7 +167,7 @@ impl<'scope, 'env> Scope<'scope, 'env> {
                 Kthread::set_freezable();
             }
             if let Some(desc) = desc {
-                unsafe { c::bch2_set_worker_desc(desc.as_ptr().cast()) };
+                crate::os::workqueue::set_worker_desc(CStr::from_bytes_until_nul(&desc).unwrap_or_default());
             }
             unsafe { *home.ret.get() = Some(f()) };
         }, Some(job_done))?;

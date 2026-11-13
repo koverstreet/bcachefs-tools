@@ -38,7 +38,7 @@ use crate::util::closure::closure_wake_up;
 use crate::util::place::{container_of, Contained};
 use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
-use crate::util::workqueue::{cancel_work_sync, run_raw, RawWork};
+use crate::os::workqueue::{cancel_work_sync, run_raw, RawWork};
 use crate::util::{Printbuf, ToText};
 use crate::types::{c_default};
 use crate::{btree_trans, new_lock, prt};
@@ -755,7 +755,7 @@ impl Fs {
                 prt!(out, "avg shard size:\t{}\n",     f.nr_keys_flushed.get() / f.nr_shards_total.get());
             }
 
-            let busy = unsafe { crate::util::workqueue::work_busy((&raw const wb.flush_work).cast_mut()) };
+            let busy = unsafe { crate::os::workqueue::work_busy((&raw const wb.flush_work).cast_mut()) };
             prt!(out, "flush work:\t{}\n", if busy { "busy" } else { "idle" });
 
             prt!(out, "\n");

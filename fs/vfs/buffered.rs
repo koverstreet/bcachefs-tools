@@ -39,7 +39,7 @@ use crate::os::kernel::PAGE_SIZE;
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, CompletionReturn, Return, TaskSlot};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use cstruct_macros::in_place;

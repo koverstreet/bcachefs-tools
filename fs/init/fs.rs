@@ -844,7 +844,7 @@ impl Fs {
             /* btree prefetch might have kicked off reads in the background: */
             self.btree_flush_all_reads();
 
-            unsafe { c::flush_work(&raw mut (*p).btree.interior_updates.work) };
+            unsafe { crate::os::workqueue::flush_work(&raw mut (*p).btree.interior_updates.work) };
         }
 
         if self.flags.get(Flag::emergency_ro) {
@@ -1140,7 +1140,7 @@ pub type WriteRef = RefGuard<PercpuRef>;
 
 impl Fs {
     /// For work holding a write ref: going read-only drains it
-    pub fn write_ref_wq(&self) -> &crate::util::workqueue::Queue {
+    pub fn write_ref_wq(&self) -> &crate::os::workqueue::Queue {
         &self.write_ref_wq
     }
 
@@ -1186,10 +1186,10 @@ macro_rules! fs_delayed_work {
         $vis struct $name;
 
         impl $name {
-            $vis fn init() -> impl ::pin_init::PinInit<$crate::util::workqueue::DelayedWork> {
+            $vis fn init() -> impl ::pin_init::PinInit<$crate::os::workqueue::DelayedWork> {
                 #[cfg(kernel)]
                 {
-                    $crate::util::workqueue::DelayedWork::new(
+                    $crate::os::workqueue::DelayedWork::new(
                         Self::work_fn,
                         const { $crate::util::ffi::c_str(concat!(stringify!($name), "\0")) },
                         ::kernel::static_lock_class!(),
@@ -1197,7 +1197,7 @@ macro_rules! fs_delayed_work {
                         ::kernel::static_lock_class!())
                 }
                 #[cfg(not(kernel))]
-                $crate::util::workqueue::DelayedWork::new(Self::work_fn)
+                $crate::os::workqueue::DelayedWork::new(Self::work_fn)
             }
 
             $vis fn run($fs: &$crate::fs::Fs) $body

@@ -22,7 +22,7 @@ use crate::util::backref::BackRef;
 use crate::util::refcount::TryRefcount;
 use crate::util::task::spawn_static;
 use crate::util::vstructs::{cast_plain, cast_plain_mut};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err_ratelimited, bkey_fsck_err_on, btree_trans, prt};
 

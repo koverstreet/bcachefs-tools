@@ -24,7 +24,7 @@ use crate::util::mempool::Mempool;
 use crate::os::ops::IntoRaw;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, CompletionReturn, Resume, Return, TaskSlot};
-use crate::util::workqueue::Queue;
+use crate::os::workqueue::Queue;
 use core::pin::{pin, Pin};
 use core::ptr::{self, NonNull};
 use cstruct_macros::{args_stored_once, in_place};
