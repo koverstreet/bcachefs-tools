@@ -37,6 +37,7 @@ use crate::util::place::{Contained, PlacedDrop};
 use crate::util::rcu::{read_lock, ReadGuard, SrcuReadGuard};
 use crate::util::rcu_pending::{Mode, RcuPending};
 use crate::util::shrinker::{Shrink, Shrinker};
+use crate::util::workqueue::Queue;
 use crate::util::time_stats::TimeStats;
 use crate::util::{Printbuf, ToText};
 use c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_write};
@@ -385,8 +386,18 @@ impl Shrink for c::btree_key_cache_shrinker {
     }
 
     fn scan(&self, nr: usize) -> Option<usize> {
-        self.container().scan(nr)
+        let freed = self.container().scan(nr);
+        if freed.is_some_and(|n| n > 0) {
+            self.shrink_table_work.queue(Queue::system_dfl());
+        }
+        freed
     }
+}
+
+/// shrink_table_work: scan() runs in reclaim, and a smaller table is an
+/// allocation.
+pub(crate) fn shrink_table(s: &c::btree_key_cache_shrinker) {
+    let _ = s.container().table.shrink();
 }
 
 impl PlacedDrop for c::btree_key_cache_shrinker {

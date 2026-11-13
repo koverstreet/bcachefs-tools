@@ -2,9 +2,11 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::key_cache::shrink_table;
 use crate::cstructs::c;
 use crate::types::{rust_only, RustOnly};
 use crate::util::shrinker::Shrinker;
+use crate::util::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicIsize, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{placed, CStruct, Init, TypeInfo};
@@ -20,6 +22,10 @@ use crate::format::Bpos;
 pub struct btree_key_cache_shrinker {
     #[c("struct shrinker *shrink")]
     pub(crate) shrink: Shrinker<Self>,
+    /* the table shrunk once scan() has emptied it: its allocation, off reclaim */
+    #[c("struct work_struct shrink_table_work")]
+    #[pin]
+    pub(crate) shrink_table_work: ReffedWork<shrink_table, crate::field!(super.super.super.ro_ref)>,
 }
 
 #[placed(c::bch_fs_btree.key_cache)]
