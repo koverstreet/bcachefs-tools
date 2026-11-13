@@ -481,7 +481,20 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     let update = members.iter().map(|(m, set, _, update, ty, vis)| quote! {
         #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) { self.#set(f(self.#m())) }
     });
-    out.extend(quote!(impl #name { #(#update)* }));
+    // An integer member's NAME_MAX, the largest value it holds - as C's
+    // LE*_BITMASK() defines
+    let is_int = |ty: &syn::Type| matches!(ty, syn::Type::Path(p)
+        if p.path.get_ident().is_some_and(|i| matches!(i.to_string().as_str(), "u8" | "u16" | "u32" | "u64")));
+    let max = item.fields.iter()
+        .filter(|f| !f.ident.as_ref().expect("named members").to_string().starts_with('_') && is_int(&f.ty))
+        .map(|f| {
+            let (ty, vis) = (&f.ty, &f.vis);
+            let max = format_ident!("{}_MAX", f.ident.as_ref().expect("named members").to_string().to_uppercase());
+            let width = member_width(f)?;
+            Ok(quote!(#vis const #max: #ty = #ty::MAX >> (#ty::BITS - #width);))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    out.extend(quote!(impl #name { #(#update)* #(#max)* }));
 
     // For a struct holding one in a #[members] field: its getters and
     // setters for that struct - not pub(self)'s
