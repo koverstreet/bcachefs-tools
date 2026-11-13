@@ -77,7 +77,7 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by
                             vstruct_container, Head, FlexArray, Unvalidated, VStructError, VstructMut, VstructRef};
 use crate::btree::bkey::BkeyPHeader;
 use core::mem::offset_of;
-use cstruct_macros::{bitfield, c_bitmask, bch_enum, grown, tagged_union, unsized_vstruct, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
+use cstruct_macros::{bitfield, bch_enum, grown, tagged_union, unsized_vstruct, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 
 #[path = "alloc/accounting_format.rs"] pub mod accounting;
 pub use accounting::{DataType, DataTypes};
@@ -1860,14 +1860,15 @@ vstruct!(jset_entry_rewind, repr.entry.u64s);
  */
 #[unsized_vstruct]
 #[repr(C, align(8))]
-#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct jset {
     pub csum: c::bch_csum,
 
     pub magic: Le64,
     pub seq: Le64,
     pub version: Le32,
-    pub flags: Le32,
+    #[members]
+    pub flags: jset_flags,
 
     u64s: Le32, /* size of d[] in u64s */
 
@@ -1895,13 +1896,13 @@ impl jset__head {
 /* A journal entry's keys, Views as its walk yields them: each one's header is whole. */
 floored_by_self!(bkey_i);
 
-c_bitmask! {
-    LE32_BITMASK(struct Head<jset>, flags), strip JSET_ {
-        JSET_CSUM_TYPE(0, 4),
-        JSET_BIG_ENDIAN(4, 5),
-        JSET_NO_FLUSH(5, 6),
-        JSET_HAS_OVERWRITES(6, 7),
-    }
+#[bitfield(Le32)]
+pub struct jset_flags {
+    #[bits(4)] csum_type:   u64,
+    big_endian:             bool,
+    no_flush:               bool,
+    has_overwrites:         bool,
+    __:                     u25,
 }
 
 pub const BCH_JOURNAL_BUCKETS_MIN: u32 = 8;
@@ -1927,7 +1928,7 @@ pub const BTREE_MAX_DEPTH: u32 = 4;
  */
 #[unsized_vstruct]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bset {
     pub seq: Le64,
 
@@ -1940,7 +1941,8 @@ pub struct bset {
      */
     pub journal_seq: Le64,
 
-    pub flags: Le32,
+    #[members]
+    pub flags: bset_flags,
     pub version: Le16,
     u64s: Le16, /* count of d[] in u64s */
 
@@ -2002,27 +2004,28 @@ impl bset<Unvalidated> {
     }
 }
 
-c_bitmask! {
-    LE32_BITMASK(struct Head<bset>, flags), strip BSET_ {
-        BSET_CSUM_TYPE(0, 4),
+#[bitfield(Le32)]
+pub struct bset_flags {
+    #[bits(4)]  csum_type:  u64,
 
-        BSET_BIG_ENDIAN(4, 5),
-        BSET_SEPARATE_WHITEOUTS(5, 6),
+    big_endian:             bool,
+    separate_whiteouts:     bool,
+    __:                     u10,
 
-        /* Sector offset within the btree node: */
-        BSET_OFFSET(16, 32),
-    }
+    /* Sector offset within the btree node: */
+    #[bits(16)] offset:     u64,
 }
 
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct btree_node {
     pub csum: c::bch_csum,
     pub magic: Le64,
 
     /* this flags field is encrypted, unlike bset->flags: */
-    pub flags: Le64,
+    #[members]
+    pub flags: btree_node_flags,
 
     /* Closed interval: */
     pub min_key: Bpos,
@@ -2036,15 +2039,15 @@ pub struct btree_node {
 vstruct!(unsized btree_node, keys.u64s);
 c_default!(btree_node__head);
 
-c_bitmask! {
-    LE64_BITMASK(struct Head<btree_node>, flags), strip BTREE_NODE_ {
-        BTREE_NODE_ID_LO(0, 4),
-        BTREE_NODE_LEVEL(4, 8),
-        BTREE_NODE_NEW_EXTENT_OVERWRITE(8, 9),
-        BTREE_NODE_ID_HI(9, 25),
-        /* 25-32 unused */
-        BTREE_NODE_SEQ(32, 64),
-    }
+#[bitfield(Le64)]
+pub struct btree_node_flags {
+    #[bits(4)]  id_lo:              u64,
+    #[bits(4)]  level:              u64,
+    new_extent_overwrite:           bool,
+    #[bits(16)] id_hi:              u64,
+    /* 25-32 unused */
+    __:                             u7,
+    #[bits(32)] seq:                u64,
 }
 
 #[unsized_vstruct(tail = [u64])]

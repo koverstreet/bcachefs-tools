@@ -352,7 +352,8 @@ impl<'t> InteriorUpdate<'t> {
         }
 
         let contents = n.contents_mut();
-        contents.data_mut().set_seq(b_contents.data().seq() + 1);
+        // a 32 bit counter, which wraps
+        contents.data_mut().set_seq((b_contents.data().seq() + 1) & c::btree_node_flags::SEQ_MAX);
 
         set_range(contents, b_contents.data().min_key, b_contents.data().max_key);
 

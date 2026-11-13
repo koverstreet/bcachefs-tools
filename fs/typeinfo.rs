@@ -718,8 +718,7 @@ macro_rules! bitmasks {
     };
 }
 bitmasks! {
-    Snapshot_flags_BITMASKS, Subvolume_flags_BITMASKS, bset_flags_BITMASKS, btree_node_flags_BITMASKS,
-    jset_flags_BITMASKS,
+    Snapshot_flags_BITMASKS, Subvolume_flags_BITMASKS,
 }
 
 /// Whether BITMASKS lists @name: c_bitmask!'s check that its table is here.
