@@ -23,6 +23,7 @@
 #include "util.h"
 #include "util/jump_label_gen.h"
 #include "util/percpu_gen.h"
+#include "util/log_gen.h"
 
 bool bch2_is_zero(const void *_p, size_t n)
 {
@@ -455,3 +456,23 @@ unsigned bch2_nr_cpu_ids(void)
 	return nr_cpu_ids;
 }
 #endif
+
+/*
+ * For Rust's ratelimited log macros, which keep a ratelimit_state per call
+ * site as bch2_ratelimit() does, but have to initialize it at runtime:
+ */
+void bch2_ratelimit_state_init(struct ratelimit_state *rs)
+{
+	ratelimit_default_init(rs);
+}
+
+/*
+ * For Rust's warn_on!() in the kernel build: the kernel's own warn_on!() pulls
+ * the arch's WARN asm from a file generated in the kernel's build tree
+ * (rust/kernel/generated_arch_warn_asm.rs), which distro headers packages
+ * don't ship, so a DKMS build against them fails:
+ */
+void bch2_rust_warn(const char *file, unsigned line)
+{
+	WARN(1, "WARNING at %s:%u\n", file, line);
+}

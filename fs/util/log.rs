@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Logging, as C's bch_log() family (bcachefs.h): a message is formatted
-//! here, then handed to __bch2_print() whole, so it goes where C's messages go -
-//! the filesystem's loglevel, a stdio redirect, the "previous loglevel" a
-//! continuation line inherits. A message printed as it stands - print_str(),
-//! a LogMsg - is printed here.
+//! Logging, as C's bch_log() family was: a message goes where the filesystem
+//! sends it - past its loglevel, to a stdio redirect, at the "previous
+//! loglevel" a continuation line inherits.
 //!
-//! In-kernel each message is prefixed with the filesystem's name, as
-//! bch2_log_msg() does under BCACHEFS_LOG_PREFIX; userspace prints it bare.
+//! In-kernel each message is prefixed with the filesystem's name; userspace
+//! prints it bare.
 //!
 //! What C shares - struct bch_log_msg, and the C this calls - is declared here
 //! too: util/log_gen.h.
@@ -57,6 +55,7 @@ c_extern! {
     pub fn bch2_ratelimit_state_init(rs: *mut c::ratelimit_state);
     pub fn bch2_ratelimit_suppress(c: *mut Fs, rs: *mut c::ratelimit_state,
                                    func: *const c_char) -> bool;
+    pub fn ___ratelimit(rs: *mut c::ratelimit_state, func: *const c_char) -> c_int;
     pub fn bch2_rust_warn(file: *const c_char, line: c_uint);
 }
 
@@ -122,11 +121,15 @@ fn printk(level: LogLevel, msg: &dyn ToText) {
     let mut buf = Printbuf::new();
     buf.write_bytes(&[0x01, level.0]);
     msg.to_text(&mut buf);
+    printk_buf(&buf)
+}
+
+/// @buf, which starts with its KERN_SOH and level, to the log as data: a '%'
+/// in it is text.
+fn printk_buf(buf: &Printbuf) {
     let s = buf.as_c_str();
-    // SAFETY: a format, and the string it takes
     #[cfg(kernel)]
     unsafe { c::_printk(c"%s".as_ptr().cast(), s.as_ptr()) };
-    // SAFETY: as the kernel's
     #[cfg(not(kernel))]
     unsafe { c::printk(c"%s".as_ptr().cast(), s.as_ptr()) };
 }
@@ -145,7 +148,21 @@ pub fn log_cont(fs: &Fs, msg: &dyn ToText) {
 /// @msg at printk level @level, after the filesystem's name if @prefix, and
 /// a newline if @newline.
 fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
+    // A level sets the one continuations - KERN_CONT, anything not a digit -
+    // print at.
+    let loglevel = if level.is_ascii_digit() {
+        let l = u32::from(level - b'0');
+        fs.prev_loglevel.store(l, Ordering::Relaxed);
+        l
+    } else {
+        fs.prev_loglevel.load(Ordering::Relaxed)
+    };
+    if loglevel > max_loglevel(fs) {
+        return;
+    }
+
     let mut buf = Printbuf::new();
+    buf.write_bytes(&[0x01, level]);
 
     #[cfg(kernel)]
     if prefix {
@@ -158,10 +175,20 @@ fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
         buf.newline();
     }
 
-    // KERN_SOH, level, then the message as data: a '%' in it is text.
-    let fmt = [0x01, level, b'%', b's', 0];
-    unsafe {
-        __bch2_print(fs.as_ptr(), fmt.as_ptr() as *const c_char, buf.buf);
+    #[cfg(kernel)]
+    if let Some(stdio) = stdio_redirect(fs, false) {
+        let _ = stdio.write(true, &buf.as_bytes()[2..]);
+        return;
+    }
+    printk_buf(&buf)
+}
+
+/// The filesystem's loglevel: the most verbose level printed.
+fn max_loglevel(fs: &Fs) -> u32 {
+    match fs.loglevel.load(Ordering::Relaxed) {
+        0 if fs.opts().verbose() => 7,
+        0 => 6,
+        l => l,
     }
 }
 
@@ -228,12 +255,7 @@ pub fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
         }
         None => fs.prev_loglevel.load(Ordering::Relaxed),
     };
-    let max = match fs.loglevel.load(Ordering::Relaxed) {
-        0 if fs.opts().verbose() => 7,
-        0 => 6,
-        l => l,
-    };
-    if level > max {
+    if level > max_loglevel(fs) {
         return;
     }
 
@@ -390,10 +412,11 @@ impl Drop for LogMsg<'_> {
 }
 
 impl Fs {
-    /// Whether to drop a message from @func, by a ratelimit state C keeps -
-    /// and resets: __bch2_ratelimit().
+    /// Whether to drop a message from @func, by @rs: only with the
+    /// ratelimit_errors option.
     pub fn ratelimit_suppress(&self, rs: &c::ratelimit_state, func: &CStr) -> bool {
-        unsafe { bch2_ratelimit_suppress(self.as_ptr(), core::ptr::from_ref(rs).cast_mut(), func.as_ptr().cast()) }
+        self.opts.ratelimit_errors.get() != 0 &&
+            unsafe { ___ratelimit(core::ptr::from_ref(rs).cast_mut(), func.as_ptr().cast()) } == 0
     }
 }
 
@@ -463,7 +486,7 @@ impl Ratelimit {
             self.ready.store(true, Ordering::Release);
         }
 
-        unsafe { bch2_ratelimit_suppress(fs.as_ptr(), state, func.as_ptr().cast()) }
+        fs.ratelimit_suppress(unsafe { &*state }, func)
     }
 }
 
