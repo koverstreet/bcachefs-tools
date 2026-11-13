@@ -339,6 +339,7 @@ pub(crate) fn is_core_atomic(ty: &syn::Type) -> bool {
 /// forwarders the same - pub(self), for one only its own module may set, has
 /// none.
 ///
+/// Storage LeN is a uN, little-endian - an on-disk word: #[bitfield(Le64)].
 /// `align = 8` aligns it to 8, which a u64 bitfield needs said on i386
 /// (Align8U64).
 #[proc_macro_attribute]
@@ -527,19 +528,11 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     });
 
     let (storage, rest) = (&args.storage, &args.rest);
-    let align8 = args.align8.then(|| quote! {
-        , repr = crate::types::Align8U64, from = crate::types::Align8U64::from_u64,
-        into = crate::types::Align8U64::to_u64
-    });
     // What it holds - its repr, else the storage integer - and nothing else:
     // so it's Plain
-    let held = if args.align8 {
-        quote!(crate::types::Align8U64)
-    } else {
-        rest.iter()
-            .find_map(|a| key_value(a).filter(|(k, _)| k == "repr").map(|(_, v)| v))
-            .unwrap_or_else(|| storage.to_token_stream())
-    };
+    let held = rest.iter()
+        .find_map(|a| key_value(a).filter(|(k, _)| k == "repr").map(|(_, v)| v))
+        .unwrap_or_else(|| storage.to_token_stream());
     // TypeInfo: each member but padding, as its bits of the word - the
     // storage integer, in its repr's byte order. A u128's aren't: kvdb's
     // integers are up to 8 bytes
@@ -580,7 +573,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     // The struct as tokens, not text: an error in a member points at it
     Ok(quote! {
         #out
-        #[::bitfield_struct::bitfield(#storage #(, #rest)* #align8)]
+        #[::bitfield_struct::bitfield(#storage #(, #rest)*)]
         #item
         #info
         #plain
@@ -640,10 +633,8 @@ fn respan(ts: TokenStream, span: Span) -> TokenStream {
 /// #[bitfield]'s arguments: bitfield-struct's, its storage first, and ours.
 struct BitfieldArgs {
     storage: Ident,
-    /// The rest of bitfield-struct's
+    /// The rest of bitfield-struct's - with the repr our shorthands say
     rest:    Vec<TokenStream>,
-    /// `align = 8`: aligned to 8, as a u64 isn't on i386
-    align8:  bool,
 }
 
 /// `KEY = VALUE`: KEY, and VALUE.
@@ -657,9 +648,9 @@ fn key_value(toks: &TokenStream) -> Option<(Ident, TokenStream)> {
 
 fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
     let mut rest: Vec<TokenStream> = comma_list(attr).into_iter().map(|a| a.into_iter().collect()).collect();
-    let storage = match rest.first().map(|a| a.clone().into_iter().collect::<Vec<_>>()).as_deref() {
+    let mut storage = match rest.first().map(|a| a.clone().into_iter().collect::<Vec<_>>()).as_deref() {
         Some([TokenTree::Ident(s)]) => s.clone(),
-        _ => return Err("expected the storage type first: #[bitfield(uN, ..)]".into()),
+        _ => return Err("expected the storage type first: #[bitfield(uN, ..)], #[bitfield(LeN, ..)]".into()),
     };
     rest.remove(0);
     let mut align = None;
@@ -667,13 +658,22 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
         Some((k, v)) if k == "align" => { align = Some(v); false }
         _ => true,
     });
-    let align8 = match align {
-        None => false,
-        Some(n) if storage == "u64" && syn::parse2::<syn::LitInt>(n.clone()).is_ok_and(|n| n.base10_digits() == "8") =>
-            true,
-        Some(n) => return Err(format!("align = {n}: there's only align = 8, on u64 storage")),
+    let mut repr = |ty: TokenStream, from: &str, into: &str| {
+        let (from, into) = (format_ident!("{from}"), format_ident!("{into}"));
+        rest.extend([quote!(repr = #ty), quote!(from = #ty::#from), quote!(into = #ty::#into)]);
     };
-    Ok(BitfieldArgs { storage, rest, align8 })
+    // LeN: the uN, little-endian - as on disk
+    if let Some(bits) = storage.to_string().strip_prefix("Le") {
+        repr(quote!(crate::types::#storage), "new", "get");
+        storage = format_ident!("u{bits}");
+    }
+    match align {
+        None => {}
+        Some(n) if storage == "u64" && syn::parse2::<syn::LitInt>(n.clone()).is_ok_and(|n| n.base10_digits() == "8") =>
+            repr(quote!(crate::types::Align8U64), "from_u64", "to_u64"),
+        Some(n) => return Err(format!("align = {n}: there's only align = 8, on u64 storage")),
+    }
+    Ok(BitfieldArgs { storage, rest })
 }
 
 /// A #[bitfield] struct, for bitfield-struct: its members canonical, and

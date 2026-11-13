@@ -1275,7 +1275,7 @@ impl bch_sb<Unvalidated> {
  *			   algorithm in use, if/when we get more than one
  */
 
-#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+#[bitfield(Le64)]
 pub struct bch_sb_flags0 {
     initialized:                    bool,
     clean:                          bool,
@@ -1305,7 +1305,7 @@ pub struct bch_sb_flags0 {
     promote_whole_extents:          bool,
 }
 
-#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+#[bitfield(Le64)]
 pub struct bch_sb_flags1 {
     #[bits(4)]  str_hash_type:          u64,
     #[bits(4)]  compression_type_lo:    u64,
@@ -1328,13 +1328,13 @@ pub struct bch_sb_flags1 {
     #[bits(12)] background_target:      u64,
 }
 
-#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+#[bitfield(Le64)]
 pub struct bch_sb_flags2 {
     #[bits(4)]  background_compression_type_lo: u64,
     #[bits(60)] gc_reserve_bytes:               u64,
 }
 
-#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+#[bitfield(Le64)]
 pub struct bch_sb_flags3 {
     #[bits(16)] erasure_code:           u64,
     #[bits(12)] metadata_target:        u64,
@@ -1345,7 +1345,7 @@ pub struct bch_sb_flags3 {
     multi_device:                       bool,
 }
 
-#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+#[bitfield(Le64)]
 pub struct bch_sb_flags4 {
     #[bits(32)] journal_reclaim_delay:          u64,
     journal_transaction_names:                  bool,
@@ -1380,7 +1380,7 @@ impl bch_sb__head {
     }
 }
 
-#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+#[bitfield(Le64)]
 pub struct bch_sb_flags5 {
     #[bits(16)] version_upgrade_complete:   u64,
     #[bits(16)] allocator_stuck_timeout:    u64,
@@ -1388,7 +1388,7 @@ pub struct bch_sb_flags5 {
     #[bits(16)] version_incompat_allowed:   u64,
 }
 
-#[bitfield(u64, repr = Le64, from = Le64::new, into = Le64::get)]
+#[bitfield(Le64)]
 pub struct bch_sb_flags6 {
     #[bits(4)]  shard_inums_nbits:      u64,
     #[bits(10)] write_error_timeout:    u64,
