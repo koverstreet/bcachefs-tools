@@ -18,6 +18,7 @@ use crate::data::compress::compress_init;
 use crate::data::ec::head::ec_exit;
 use crate::data::reconcile::work::reconcile_exit;
 use crate::debug::sysfs::{FsDir, FS_GROUPS};
+use crate::debug::trace::events;
 use crate::init::dev::{dev_exit, dev_in_fs};
 use crate::init::error::free_fsck_errs;
 use crate::init::registry::register;
@@ -246,7 +247,10 @@ impl Fs {
     /// without throwing it. Cold, as C's unlikely(ret).
     #[cold]
     pub fn err(&self, error: impl Into<BchError>) -> BchError {
-        BchError::from_raw(-unsafe { c::__bch2_err_throw(self.as_ptr(), -error.into().raw()) })
+        let e = error.into();
+        assert!(e.raw() > 0, "throwing {e}, not an error");
+        self.event_inc_trace(events::error_throw, |out| prt!(out, "{e}"));
+        e
     }
 
     pub fn throw<T>(&self, error: bch_errcode) -> Result<T, BchError> {
