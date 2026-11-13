@@ -227,19 +227,9 @@ pub const CONGESTED_MAX: u32 = 1024;
 #[derive(MaybeZeroable, TypeInfo, Init, RcuHead)]
 #[init_args(fs: &crate::fs::Fs)]
 pub struct Dev {
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub ref_: core::sync::atomic::AtomicIsize,
-    /* debug builds' ref checks, from any thread: members.h's and DevRef's */
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub dying: crate::util::projections::Volatile<bool>,
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub last_put: crate::util::projections::Volatile<core::ffi::c_ulong>,
-    #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
     #[pin]
     #[init(crate::util::refcount::PercpuRef::new())]
     pub ref_: crate::util::refcount::PercpuRef,
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub ref_completion: c::completion,
     /*
      * ref_outer keeps the bch_dev allocation alive - nothing more.
      * Unlike ca->ref, holding it does NOT mean the device is still a

@@ -1226,42 +1226,12 @@ pub type DevRef = RefGuard<Dev>;
 /// bch2_dev_get() and bch2_dev_put(), as members.h's inlines are.
 unsafe impl Refcount for Dev {
     unsafe fn inc(&self) {
-        #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        assert!(self.ref_.fetch_add(1, Ordering::SeqCst) >= 1, "bch_dev->ref get with no ref held");
-
-        #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
         unsafe { self.ref_.inc() };
     }
 
     unsafe fn dec(&self) {
-        unsafe { dev_put(self.as_ptr()) }
+        unsafe { self.ref_.dec() };
     }
-}
-
-/// bch2_dev_put(), as members.h's inline is. A raw pointer, not a reference:
-/// once it's put, the last ref's waiter may free the device.
-///
-/// # Safety
-/// @ca holds a ref, which this puts.
-pub(crate) unsafe fn dev_put(ca: *mut Dev) {
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    unsafe {
-        let r = (*ca).ref_.fetch_sub(1, Ordering::SeqCst) - 1;
-        if r < !(*ca).dying.get() as isize {
-            let mut out = Printbuf::new();
-            crate::util::backtrace::prt_symbol(&mut out, (*ca).last_put.get());
-            panic!("bch_dev->ref underflow, last put: {}", out.as_str());
-        }
-        // Not this put's caller, which Rust has no _THIS_IP_ for: that it was
-        // one of Rust's
-        (*ca).last_put.set(dev_put as *const () as usize as c_ulong);
-        if r == 0 {
-            c::complete(core::ptr::addr_of_mut!((*ca).ref_completion));
-        }
-    }
-
-    #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-    unsafe { (*ca).ref_.dec() };
 }
 
 /// ca->ref_outer: keeps the bch_dev's memory alive and nothing else - its

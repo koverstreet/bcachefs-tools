@@ -529,8 +529,6 @@ pub(crate) fn dev_free(ca: ARef<Dev>) {
 
 /// An attached device freed: its reads stopped, its superblock closed.
 pub(crate) fn dev_exit(ca: ARef<Dev>) {
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    assert_eq!(ca.ref_.load(Relaxed), 1);
     ca.io_ref_stop(READ);
     unsafe { ca.sb_handle().free() };
     dev_free(ca);
@@ -595,9 +593,6 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
     let p = alloc_pinned(Dev::init(fs)).ok()?;
     let ca = unsafe { &mut *p };
 
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    unsafe { c::init_completion(&mut ca.ref_completion) };
-
     ca.mi.set(member.to_cpu());
     ca.btree_allocated_bitmap_gc.set(member.btree_allocated_bitmap.get());
 
@@ -608,9 +603,6 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
     ca.uuid = member.uuid;
 
     ca.nr_btree_reserve = c::BTREE_NODE_RESERVE.div_ceil(u32::from(ca.mi.get().bucket_size) / fs.btree_sectors());
-
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    ca.ref_.store(1, Relaxed);
 
     let ok = kbox_pin_init(SbReadScratch::new())
             .map(|s| ca.sb_read_scratch = Some(Pin::into_inner(s))).is_ok() &&
@@ -1115,18 +1107,8 @@ impl StateLockWrite<'_> {
                 self.devs()[ca.dev_idx as usize].take().expect("removing a device that's in c->devs[]")
             };
 
-            #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-            {
-                ca.ref_.stop();
-                ca.ref_.wait();
-            }
-            #[cfg(CONFIG_BCACHEFS_DEBUG)]
-            unsafe {
-                let ca_p = ca.as_ptr();
-                ca.dying.set(true);
-                crate::sb::members::dev_put(ca_p);
-                c::wait_for_completion(&raw mut (*ca_p).ref_completion);
-            }
+            ca.ref_.stop();
+            ca.ref_.wait();
             Ok(slot)
         })();
 
