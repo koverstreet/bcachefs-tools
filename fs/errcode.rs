@@ -30,7 +30,7 @@ use crate::types::c_default;
 use cstruct_macros::{CStruct, c_enum, c_xmacro, TypeInfo};
 
 c_xmacro! {
-    BLK_ERRS(BLK_STS) {
+    BLK_ERRS {
         (NOTSUPP, 1),
         (TIMEOUT, 2),
         (NOSPC, 3),
@@ -54,7 +54,7 @@ c_xmacro! {
 }
 
 c_xmacro! {
-    ZSTD_ERRS(ZSTD_error) {
+    ZSTD_ERRS {
         (GENERIC, 508),
         (prefix_unknown, 509),
         (version_unsupported, 510),
@@ -85,9 +85,9 @@ c_xmacro! {
 }
 
 c_xmacro! {
-    BCH_ERRCODES(x) {
+    BCH_ERRCODES {
         (EIO, blockdev_io_error, 0),
-        BLK_ERRS(BLK_STS(n, nr) => (BCH_ERR_blockdev_io_error, concat(BLK_STS_, n), nr)),
+        BLK_ERRS((n, nr) => (BCH_ERR_blockdev_io_error, concat(BLK_STS_, n), nr)),
         (BCH_ERR_blockdev_io_error, BLK_STS_UNKNOWN, 20),
         (ERANGE, ERANGE_option_too_small, 21),
         (ERANGE, ERANGE_option_too_big, 22),
@@ -566,7 +566,7 @@ c_xmacro! {
         (BCH_ERR_decompress, decompress_zstd_src_len_bad, 505),
         (BCH_ERR_decompress, decompress_zstd_size_mismatch, 506),
         (BCH_ERR_decompress, zstd_error, 507),
-        ZSTD_ERRS(ZSTD_error(n, nr) => (BCH_ERR_zstd_error, concat(ZSTD_error_, n), nr)),
+        ZSTD_ERRS((n, nr) => (BCH_ERR_zstd_error, concat(ZSTD_error_, n), nr)),
         (BCH_ERR_zstd_error, ZSTD_error_unknown, 534),
         (EIO, data_write, 535),
         (BCH_ERR_data_write, data_write_io, 536),

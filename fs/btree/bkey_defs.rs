@@ -37,7 +37,7 @@ c_enum! {
 pub type compiled_unpack_fn = Option<unsafe extern "C" fn(*mut c::bkey, *const c::bkey_packed)>;
 
 c_xmacro! {
-    bkey_fields(x) {
+    bkey_fields {
         (BKEY_FIELD_INODE, p.inode),
         (BKEY_FIELD_OFFSET, p.offset),
         (BKEY_FIELD_SNAPSHOT, p.snapshot),

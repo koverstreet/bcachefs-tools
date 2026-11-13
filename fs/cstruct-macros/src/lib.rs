@@ -794,16 +794,15 @@ fn bilge_width(t: &str) -> Option<(u32, String)> {
     Some((n, format!("u{int}")))
 }
 
-/// An x-macro list: c_xmacro! { NAME(x) { (args), ... } }. Rust gets
+/// An x-macro list: c_xmacro! { NAME { (args), ... } }: a macro,
 /// NAME!(cb), which expands to cb! { (args), ... } - and NAME!(cb [..]),
 /// to cb! { [..] (args), ... }: a c_enum! built from lists passes on the
 /// variants so far. cb may be a path.
 ///
-/// An entry can be another list, SUB(), or another list through a mapping
-/// macro, SUB(MAP(params) => (args)) - C's #define MAP(params) x(args). Then
-/// NAME!(cb) is a chain of macros, one per list it splices in: each is SUB!
-/// handed the entries so far, which adds SUB's, mapped, and those after,
-/// and calls the next; the last calls cb!. They're named by path, through
+/// An entry can be another list, SUB(), or another list's entries mapped,
+/// SUB((params) => (args)). Then NAME!(cb) is a chain of macros, one per
+/// list it splices in: each is SUB! handed the entries so far, which adds
+/// SUB's, mapped, and those after, and calls the next; the last calls cb!. They're named by path, through
 /// crate::cstructs::c - NAME is expanded wherever it's used.
 #[proc_macro]
 pub fn c_xmacro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -866,9 +865,9 @@ pub fn xmacro_select(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
 /// c_xmacro!'s expansion: the list's record, and NAME!(cb).
 fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
     let text = format!("c_xmacro! {{ {input} }}");
-    let x = one_item!(&text, XMacro, "NAME(x) { (args), ... }");
+    let x = one_item!(&text, XMacro, "NAME { (args), ... }");
     let name = format_ident!("{}", x.name);
-    // The list: the brace group after NAME(x), past any attributes
+    // The list: the brace group after NAME, past any attributes
     let list = input.into_iter()
         .filter_map(|t| match t {
             TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => Some(g.stream()),
@@ -1038,13 +1037,6 @@ fn from_lists(input: &TokenStream) -> bool {
 #[proc_macro]
 pub fn atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand_syn("atomic_bitfield!", || atomic_bitfield::atomic_bitfield(input.into()))
-}
-
-/// atomic_bitfield!'s list's callback: { [decl] (row), (row), ... }.
-#[doc(hidden)]
-#[proc_macro]
-pub fn __atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand_syn("atomic_bitfield!", || atomic_bitfield::rows(input.into()))
 }
 
 /// `#[open_enum]` on `#[repr(uN)] pub enum NAME { a = 0, b, ... }`: an enum

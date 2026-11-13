@@ -373,7 +373,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
         trans.unlock_long();
 
         if seq_matches {
-            b.wait_on_flag(c::btree_flags::BTREE_NODE_write_in_flight_inner);
+            b.wait_on_flag(c::BtreeNodeFlags::write_in_flight_inner);
         }
     }
 

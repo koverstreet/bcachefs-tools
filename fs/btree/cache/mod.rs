@@ -255,9 +255,8 @@ impl BtreeNode {
 }
 
 impl BtreeNode {
-    pub fn wait_on_flag(&self, bit: c::btree_flags) {
-        let m = 1 << bit as u32;
-        let Ok(()) = self.flags.wait_until(Sleep::UNINTERRUPTIBLE.io(), |f| f.into_bits() & m == 0);
+    pub fn wait_on_flag(&self, flag: fn(&c::BtreeNodeFlags) -> bool) {
+        let Ok(()) = self.flags.wait_until(Sleep::UNINTERRUPTIBLE.io(), |f| !flag(&f));
     }
 }
 

@@ -7,39 +7,30 @@
 //!   atomic_bitfield! {
 //!       pub struct BtreeNodeFlags: u32 in usize {
 //!           #[bits(3)] write_type: BtreeWriteType,
-//!           BTREE_FLAGS(flag) => flag: bool,
+//!           read_in_flight: bool,
+//!           ...
 //!       }
 //!   }
 //!
 //! BtreeNodeFlags is the value: bitfield-struct's, over the u32, padded to
 //! it. AtomicBtreeNodeFlags is the word: an AtomicUsize - `in usize`, for
 //! C's unsigned long; without it, the value's own integer.
-//!
-//! `LIST(a, ..) => a: T` is a field per row of x-macro LIST, named by the
-//! row's column a - as c_enum!'s rows are: the list stays the one source of
-//! the names, C's accessors and name tables made from it too.
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{braced, parenthesized, Attribute, Ident, LitInt, Token, Type, Visibility};
+use syn::{braced, Attribute, Ident, LitInt, Token, Type, Visibility};
 
 struct Decl {
-    attrs:   Vec<Attribute>,
-    vis:     Visibility,
-    name:    Ident,
-    bits:    Ident,
-    word:    Option<Ident>,
-    entries: Vec<Entry>,
+    attrs:  Vec<Attribute>,
+    vis:    Visibility,
+    name:   Ident,
+    bits:   Ident,
+    word:   Option<Ident>,
+    fields: Vec<Field>,
 }
 
-enum Entry {
-    Field(Field),
-    Rows { list: Ident, cols: Vec<Option<Ident>>, rest: bool, field: Field },
-}
-
-#[derive(Clone)]
 struct Field {
     attrs: Vec<Attribute>,
     name:  Ident,
@@ -52,34 +43,6 @@ impl Parse for Field {
         let name = input.parse()?;
         input.parse::<Token![:]>()?;
         Ok(Field { attrs, name, ty: input.parse()? })
-    }
-}
-
-impl Parse for Entry {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        if !(input.peek(Ident) && input.peek2(syn::token::Paren)) {
-            return Ok(Entry::Field(input.parse()?));
-        }
-        let list = input.parse()?;
-        let inner;
-        parenthesized!(inner in input);
-        let (mut cols, mut rest) = (Vec::new(), false);
-        while !inner.is_empty() {
-            if inner.peek(Token![..]) {
-                inner.parse::<Token![..]>()?;
-                rest = true;
-            } else if inner.peek(Token![_]) {
-                inner.parse::<Token![_]>()?;
-                cols.push(None);
-            } else {
-                cols.push(Some(inner.parse()?));
-            }
-            if !inner.is_empty() {
-                inner.parse::<Token![,]>()?;
-            }
-        }
-        input.parse::<Token![=>]>()?;
-        Ok(Entry::Rows { list, cols, rest, field: input.parse()? })
     }
 }
 
@@ -99,69 +62,13 @@ impl Parse for Decl {
         };
         let body;
         braced!(body in input);
-        let entries = Punctuated::<Entry, Token![,]>::parse_terminated(&body)?.into_iter().collect();
-        Ok(Decl { attrs, vis, name, bits, word, entries })
-    }
-}
-
-impl ToTokens for Field {
-    fn to_tokens(&self, out: &mut TokenStream) {
-        let Field { attrs, name, ty } = self;
-        out.extend(quote!(#(#attrs)* #name: #ty));
-    }
-}
-
-impl ToTokens for Entry {
-    fn to_tokens(&self, out: &mut TokenStream) {
-        out.extend(match self {
-            Entry::Field(f) => quote!(#f),
-            Entry::Rows { list, cols, rest, field } => {
-                let cols = cols.iter().map(|c| c.as_ref().map_or(quote!(_), |c| quote!(#c)));
-                let rest = rest.then(|| quote!(..));
-                quote!(#list(#(#cols,)* #rest) => #field)
-            }
-        });
-    }
-}
-
-impl ToTokens for Decl {
-    fn to_tokens(&self, out: &mut TokenStream) {
-        let Decl { attrs, vis, name, bits, word, entries } = self;
-        let word = word.as_ref().map(|w| quote!(in #w));
-        out.extend(quote!(#(#attrs)* #vis struct #name: #bits #word { #(#entries,)* }));
-    }
-}
-
-/// The declaration with its first list's rows in place, or generated, if it
-/// has no list left.
-fn next(decl: Decl) -> syn::Result<TokenStream> {
-    match decl.entries.iter().find_map(|e| match e { Entry::Rows { list, .. } => Some(list), _ => None }) {
-        Some(list) => Ok(super::through_list(&list.to_string(), "cstruct_macros::__atomic_bitfield", quote!(#decl))),
-        None => generate(&decl),
+        let fields = Punctuated::<Field, Token![,]>::parse_terminated(&body)?.into_iter().collect();
+        Ok(Decl { attrs, vis, name, bits, word, fields })
     }
 }
 
 pub(crate) fn atomic_bitfield(input: TokenStream) -> syn::Result<TokenStream> {
-    next(syn::parse2(input)?)
-}
-
-/// The list's callback: [decl] then its rows, each a field.
-pub(crate) fn rows(input: TokenStream) -> syn::Result<TokenStream> {
-    let (decl, rows) = super::list_callback(input).map_err(|e| syn::Error::new(Span::call_site(), e))?;
-    let mut decl: Decl = syn::parse2(decl)?;
-    let at = decl.entries.iter().position(|e| matches!(e, Entry::Rows { .. })).expect("a list to expand");
-    let Entry::Rows { cols, rest, field, .. } = decl.entries.remove(at) else { unreachable!() };
-    let fields = rows.iter().map(|row| {
-        let row: Vec<String> = row.split(',').map(|c| c.trim().to_string()).collect();
-        if row.len() < cols.len() || (!rest && row.len() > cols.len()) {
-            return Err(syn::Error::new(field.name.span(), format!("a row of {} columns: ({})", row.len(), row.join(", "))));
-        }
-        let col = cols.iter().position(|c| c.as_ref() == Some(&field.name))
-            .ok_or_else(|| syn::Error::new(field.name.span(), "the field is named by one of the row's columns"))?;
-        Ok(Entry::Field(Field { name: Ident::new(&row[col], field.name.span()), ..field.clone() }))
-    }).collect::<syn::Result<Vec<_>>>()?;
-    decl.entries.splice(at..at, fields);
-    next(decl)
+    generate(&syn::parse2(input)?)
 }
 
 fn int_bits(ty: &str) -> Option<usize> {
@@ -188,8 +95,7 @@ fn is_bool(f: &Field) -> bool {
 }
 
 fn generate(d: &Decl) -> syn::Result<TokenStream> {
-    let Decl { attrs, vis, name, bits, word, entries } = d;
-    let fields: Vec<&Field> = entries.iter().map(|e| match e { Entry::Field(f) => f, Entry::Rows { .. } => unreachable!() }).collect();
+    let Decl { attrs, vis, name, bits, word, fields } = d;
     let size = int_bits(&bits.to_string()).ok_or_else(|| syn::Error::new(bits.span(), "the value's integer: u8, u16, u32 or u64"))?;
     let used: usize = fields.iter().map(|f| width(f)).sum::<syn::Result<_>>()?;
     if used > size {
@@ -256,7 +162,7 @@ fn generate(d: &Decl) -> syn::Result<TokenStream> {
     });
 
     // on the futex's words: waits on the value, and a one-bit field as a lock
-    let bit_locks = fields.iter().copied().filter(|f| is_bool(f)).map(|f| {
+    let bit_locks = fields.iter().filter(|f| is_bool(f)).map(|f| {
         let m = &f.name;
         let (lock, unlock, swap) = (format_ident!("lock_{m}"), format_ident!("unlock_{m}"), format_ident!("swap_{m}"));
         let mask = mask(m);

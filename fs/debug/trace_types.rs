@@ -7,7 +7,7 @@
 use cstruct_macros::c_xmacro;
 
 c_xmacro! {
-    BCH_NOCOUNTER_TRACEPOINTS(x) {
+    BCH_NOCOUNTER_TRACEPOINTS {
         (accounting_mem_insert),
         (journal_entry_close),
         (extent_trim_atomic),
@@ -20,7 +20,7 @@ c_xmacro! {
 }
 
 c_xmacro! {
-    BCH_PATH_TRACEPOINTS(x) {
+    BCH_PATH_TRACEPOINTS {
         (update_by_path),
         (btree_path_traverse_start),
         (btree_path_traverse_end),

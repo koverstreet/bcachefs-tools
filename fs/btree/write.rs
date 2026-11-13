@@ -861,9 +861,8 @@ impl Fs {
 
     /// Every node's @flag - a read or a write in flight - waited out: whether
     /// there were any.
-    fn btree_flush_all(&self, flag: c::btree_flags) -> bool {
+    fn btree_flush_all(&self, flag: fn(&BtreeNodeFlags) -> bool) -> bool {
         let nodes = &self.btree.cache.nodes;
-        let m = 1 << flag as u32;
         let mut ret = false;
         let mut idx = 0;
 
@@ -885,7 +884,7 @@ impl Fs {
             let waiting = {
                 let rcu = rcu::read_lock();
                 nodes.items_from(idx, &rcu)
-                    .find(|(_, b)| unsafe { b.cast::<BtreeNode>().as_ref() }.flags.load().into_bits() & m != 0)
+                    .find(|(_, b)| flag(&unsafe { b.cast::<BtreeNode>().as_ref() }.flags.load()))
             };
             let Some((i, b)) = waiting else { return ret };
 
@@ -897,11 +896,11 @@ impl Fs {
     }
 
     pub fn btree_flush_all_reads(&self) -> bool {
-        self.btree_flush_all(c::btree_flags::BTREE_NODE_read_in_flight)
+        self.btree_flush_all(BtreeNodeFlags::read_in_flight)
     }
 
     pub fn btree_flush_all_writes(&self) -> bool {
-        self.btree_flush_all(c::btree_flags::BTREE_NODE_write_in_flight)
+        self.btree_flush_all(BtreeNodeFlags::write_in_flight)
     }
 
     #[cold]

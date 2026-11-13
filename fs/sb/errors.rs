@@ -18,7 +18,7 @@
 
 use core::cmp::{Ordering, Reverse};
 use core::ffi::c_int;
-use cstruct_macros::{CStruct, bitfield, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, bitfield, TypeInfo};
 use crate::btree::bkey::ValidateFlags;
 use crate::c;
 pub use crate::cstructs::sb_errors_format::{FsckFlags, SbErrorId};
@@ -45,80 +45,6 @@ nest! {
         },
         pub first_error_time: u64,
         pub last_error_time: u64,
-    }
-}
-
-/*
- * Block statuses we count separately: what the device said is the first
- * thing worth knowing from a filesystem that's logging IO errors - media
- * errors mean the drive is going, timeouts mean it's hanging, transport
- * errors point at the fabric, and INVAL means the request itself was
- * rejected: not an error the device hit, an error in what we handed it.
- *
- * Curated by hand rather than generated from BLK_ERRS(): sb error ids are
- * permanent on-disk numbers, so we don't spend them on statuses that can't
- * reach a bcachefs completion - DM_REQUEUE is consumed inside dm, and the
- * zone codes want zoned device support we don't have. Anything left out
- * counts as blk_sts_unknown; to promote one, add it here and add a
- * numbered entry in errors_format.rs - the build breaks if you forget.
- */
-c_xmacro! {
-    BCH_BLK_STS_SB_ERRS(x) {
-        (NOTSUPP, notsupp),
-        (TIMEOUT, timeout),
-        (NOSPC, nospc),
-        (TRANSPORT, transport),
-        (TARGET, target),
-        (RESV_CONFLICT, resv_conflict),
-        (MEDIUM, medium),
-        (PROTECTION, protection),
-        (RESOURCE, resource),
-        (IOERR, ioerr),
-        (AGAIN, again),
-        (DEV_RESOURCE, dev_resource),
-        (OFFLINE, offline),
-        (DURATION_LIMIT, duration_limit),
-        (INVAL, inval),
-        (REMOVED, removed),
-    }
-}
-
-/*
- * Decompression failures we count separately: an extent that won't
- * decompress is a different animal from one that won't read or won't
- * checksum - as far as the checksum can tell the data came off the device
- * intact, and then didn't decode. Counting per compression type answers
- * the first question such a report raises, which is whether one algorithm
- * is at fault or all of them are.
- *
- * The zstd codes separate that further: corruption_detected and
- * checksum_wrong say the compressed data is bad, dst_size_too_small and
- * memory_allocation say we drove zstd wrong or couldn't allocate.
- *
- * Curated by hand for the same reason as the block statuses above - sb
- * error ids are permanent on-disk numbers. zstd defines 27 error codes,
- * most of which zstd_decompress_dctx() can't return for the single raw
- * frame we hand it; those count as data_decompress_err_zstd_unknown, and
- * anything not a decompress errcode at all as data_decompress_err_unknown.
- * To promote one, add it here and add a numbered entry in
- * errors_format.rs, and an ErrorKeyReason - the build breaks if
- * you forget.
- */
-c_xmacro! {
-    BCH_DECOMPRESS_SB_ERRS(x) {
-        (decompress_exceeded_max_encoded_extent, exceeded_max_encoded_extent),
-        (decompress_lz4_old, lz4_old),
-        (decompress_lz4, lz4),
-        (decompress_gzip, gzip),
-        (decompress_gzip_size_mismatch, gzip_size_mismatch),
-        (decompress_zstd_src_len_bad, zstd_src_len_bad),
-        (decompress_zstd_size_mismatch, zstd_size_mismatch),
-        (ZSTD_error_corruption_detected, zstd_corruption_detected),
-        (ZSTD_error_checksum_wrong, zstd_checksum_wrong),
-        (ZSTD_error_prefix_unknown, zstd_prefix_unknown),
-        (ZSTD_error_srcSize_wrong, zstd_src_size_wrong),
-        (ZSTD_error_dstSize_tooSmall, zstd_dst_size_too_small),
-        (ZSTD_error_memory_allocation, zstd_memory_allocation),
     }
 }
 
@@ -334,37 +260,86 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
 //
 // Each is passed a failure, negative, and matches on its magnitude.
 
+/*
+ * Block statuses we count separately: what the device said is the first
+ * thing worth knowing from a filesystem that's logging IO errors - media
+ * errors mean the drive is going, timeouts mean it's hanging, transport
+ * errors point at the fabric, and INVAL means the request itself was
+ * rejected: not an error the device hit, an error in what we handed it.
+ *
+ * Curated by hand rather than generated from BLK_ERRS(): sb error ids are
+ * permanent on-disk numbers, so we don't spend them on statuses that can't
+ * reach a bcachefs completion - DM_REQUEUE is consumed inside dm, and the
+ * zone codes want zoned device support we don't have. Anything left out
+ * counts as blk_sts_unknown; to promote one, add it here and add a
+ * numbered entry in errors_format.rs - the build breaks if you forget.
+ */
 /// @err a BCH_ERR_BLK_STS_* errcode, as blk_status_to_bch_err() throws: its
-/// status's error, blk_sts_unknown for one BCH_BLK_STS_SB_ERRS() leaves out.
+/// status's error.
 pub fn blk_sts_sb_err(err: c_int) -> SbErrorId {
-    macro_rules! map {
-        ($(($sts:ident, $name:ident)),* $(,)?) => { ::paste::paste! {
-            match bch_errcode(err.unsigned_abs()) {
-                $(bch_errcode::[<BCH_ERR_BLK_STS_ $sts>] => SbErrorId::[<blk_sts_ $name>],)*
-                _ => SbErrorId::blk_sts_unknown,
-            }
-        } };
+    match bch_errcode(err.unsigned_abs()) {
+        bch_errcode::BCH_ERR_BLK_STS_NOTSUPP => SbErrorId::blk_sts_notsupp,
+        bch_errcode::BCH_ERR_BLK_STS_TIMEOUT => SbErrorId::blk_sts_timeout,
+        bch_errcode::BCH_ERR_BLK_STS_NOSPC => SbErrorId::blk_sts_nospc,
+        bch_errcode::BCH_ERR_BLK_STS_TRANSPORT => SbErrorId::blk_sts_transport,
+        bch_errcode::BCH_ERR_BLK_STS_TARGET => SbErrorId::blk_sts_target,
+        bch_errcode::BCH_ERR_BLK_STS_RESV_CONFLICT => SbErrorId::blk_sts_resv_conflict,
+        bch_errcode::BCH_ERR_BLK_STS_MEDIUM => SbErrorId::blk_sts_medium,
+        bch_errcode::BCH_ERR_BLK_STS_PROTECTION => SbErrorId::blk_sts_protection,
+        bch_errcode::BCH_ERR_BLK_STS_RESOURCE => SbErrorId::blk_sts_resource,
+        bch_errcode::BCH_ERR_BLK_STS_IOERR => SbErrorId::blk_sts_ioerr,
+        bch_errcode::BCH_ERR_BLK_STS_AGAIN => SbErrorId::blk_sts_again,
+        bch_errcode::BCH_ERR_BLK_STS_DEV_RESOURCE => SbErrorId::blk_sts_dev_resource,
+        bch_errcode::BCH_ERR_BLK_STS_OFFLINE => SbErrorId::blk_sts_offline,
+        bch_errcode::BCH_ERR_BLK_STS_DURATION_LIMIT => SbErrorId::blk_sts_duration_limit,
+        bch_errcode::BCH_ERR_BLK_STS_INVAL => SbErrorId::blk_sts_inval,
+        bch_errcode::BCH_ERR_BLK_STS_REMOVED => SbErrorId::blk_sts_removed,
+        _ => SbErrorId::blk_sts_unknown,
     }
-    c::BCH_BLK_STS_SB_ERRS!(map)
 }
 
-/// @err's variant of $ty: $prefix and its BCH_DECOMPRESS_SB_ERRS() name -
-/// zstd_unknown for a zstd error the list leaves out, unknown for the rest.
-macro_rules! decompress_map {
-    ([$err:expr, $ty:ident, $prefix:ident] $(($code:ident, $name:ident)),* $(,)?) => { ::paste::paste! {
-        match bch_errcode($err.unsigned_abs()) {
-            $(bch_errcode::[<BCH_ERR_ $code>] => c::$ty::[<$prefix $name>],)*
-            code if BchError::from(code).matches(bch_errcode::BCH_ERR_zstd_error) =>
-                c::$ty::[<$prefix zstd_unknown>],
-            _ => c::$ty::[<$prefix unknown>],
-        }
-    } };
-}
-
+/*
+ * Decompression failures we count separately: an extent that won't
+ * decompress is a different animal from one that won't read or won't
+ * checksum - as far as the checksum can tell the data came off the device
+ * intact, and then didn't decode. Counting per compression type answers
+ * the first question such a report raises, which is whether one algorithm
+ * is at fault or all of them are.
+ *
+ * The zstd codes separate that further: corruption_detected and
+ * checksum_wrong say the compressed data is bad, dst_size_too_small and
+ * memory_allocation say we drove zstd wrong or couldn't allocate.
+ *
+ * Curated by hand for the same reason as the block statuses above - sb
+ * error ids are permanent on-disk numbers. zstd defines 27 error codes,
+ * most of which zstd_decompress_dctx() can't return for the single raw
+ * frame we hand it; those count as data_decompress_err_zstd_unknown, and
+ * anything not a decompress errcode at all as data_decompress_err_unknown.
+ * To promote one, add it here and add a numbered entry in
+ * errors_format.rs, and an ErrorKeyReason - the build breaks if
+ * you forget.
+ */
 /// @err a BCH_ERR_decompress errcode, as buf_uncompress() throws: what it's
 /// counted as.
 pub fn bch2_decompress_sb_err(err: c_int) -> SbErrorId {
-    c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, SbErrorId, data_decompress_err_])
+    match bch_errcode(err.unsigned_abs()) {
+        bch_errcode::BCH_ERR_decompress_exceeded_max_encoded_extent => SbErrorId::data_decompress_err_exceeded_max_encoded_extent,
+        bch_errcode::BCH_ERR_decompress_lz4_old => SbErrorId::data_decompress_err_lz4_old,
+        bch_errcode::BCH_ERR_decompress_lz4 => SbErrorId::data_decompress_err_lz4,
+        bch_errcode::BCH_ERR_decompress_gzip => SbErrorId::data_decompress_err_gzip,
+        bch_errcode::BCH_ERR_decompress_gzip_size_mismatch => SbErrorId::data_decompress_err_gzip_size_mismatch,
+        bch_errcode::BCH_ERR_decompress_zstd_src_len_bad => SbErrorId::data_decompress_err_zstd_src_len_bad,
+        bch_errcode::BCH_ERR_decompress_zstd_size_mismatch => SbErrorId::data_decompress_err_zstd_size_mismatch,
+        bch_errcode::BCH_ERR_ZSTD_error_corruption_detected => SbErrorId::data_decompress_err_zstd_corruption_detected,
+        bch_errcode::BCH_ERR_ZSTD_error_checksum_wrong => SbErrorId::data_decompress_err_zstd_checksum_wrong,
+        bch_errcode::BCH_ERR_ZSTD_error_prefix_unknown => SbErrorId::data_decompress_err_zstd_prefix_unknown,
+        bch_errcode::BCH_ERR_ZSTD_error_srcSize_wrong => SbErrorId::data_decompress_err_zstd_src_size_wrong,
+        bch_errcode::BCH_ERR_ZSTD_error_dstSize_tooSmall => SbErrorId::data_decompress_err_zstd_dst_size_too_small,
+        bch_errcode::BCH_ERR_ZSTD_error_memory_allocation => SbErrorId::data_decompress_err_zstd_memory_allocation,
+        code if BchError::from(code).matches(bch_errcode::BCH_ERR_zstd_error) =>
+            SbErrorId::data_decompress_err_zstd_unknown,
+        _ => SbErrorId::data_decompress_err_unknown,
+    }
 }
 
 // ── The counts, in memory ────────────────────────────────────────────────────

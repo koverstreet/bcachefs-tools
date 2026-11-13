@@ -19,7 +19,7 @@ pub struct Alloc {
 }
 
 c_xmacro! {
-    BCH_ALLOC_FIELDS_V1(x) {
+    BCH_ALLOC_FIELDS_V1 {
         (read_time, 16),
         (write_time, 16),
         (data_type, 8),
@@ -45,7 +45,7 @@ pub struct AllocV2 {
 }
 
 c_xmacro! {
-    BCH_ALLOC_FIELDS_V2(x) {
+    BCH_ALLOC_FIELDS_V2 {
         (read_time, 64),
         (write_time, 64),
         (dirty_sectors, 32),

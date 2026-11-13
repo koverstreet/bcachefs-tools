@@ -69,7 +69,7 @@ c_xmacro! {
     /*
      * bi_subvol and bi_parent_subvol are only set for subvolume roots:
      */
-    BCH_INODE_FIELDS_v2(x) {
+    BCH_INODE_FIELDS_v2 {
         (bi_atime, 96),
         (bi_ctime, 96),
         (bi_mtime, 96),
@@ -99,7 +99,7 @@ c_xmacro! {
 }
 
 c_xmacro! {
-    BCH_INODE_FIELDS_v3(x) {
+    BCH_INODE_FIELDS_v3 {
         (bi_atime, 96),
         (bi_ctime, 96),
         (bi_mtime, 96),

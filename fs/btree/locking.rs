@@ -1167,11 +1167,10 @@ impl BtreeTrans<'_> {
         }
     }
 
-    /// Waits for @b's flag @bit to clear, under SRCU as wait_until() waits:
+    /// Waits for @b's @flag to clear, under SRCU as wait_until() waits:
     /// trans_wait_on_node_flag().
-    pub(crate) fn wait_on_node_flag(&self, paths: &mut Paths<'_>, b: &BtreeNode, bit: c::btree_flags) {
-        let m = 1 << bit as u32;
-        let clear = |f: BtreeNodeFlags| f.into_bits() & m == 0;
+    pub(crate) fn wait_on_node_flag(&self, paths: &mut Paths<'_>, b: &BtreeNode, flag: fn(&BtreeNodeFlags) -> bool) {
+        let clear = |f: BtreeNodeFlags| !flag(&f);
 
         while !clear(b.flags.load()) {
             match self.srcu_wait_budget(paths) {

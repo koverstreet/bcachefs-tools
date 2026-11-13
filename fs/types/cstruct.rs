@@ -13,7 +13,7 @@
 //   family's C definition, X__head, whose name the family's type X<S> has in
 //   Rust (util/vstructs.rs).
 //
-//   c_xmacro! { NAME(x) { (args), (args), ... } }: an x-macro list - a
+//   c_xmacro! { NAME { (args), (args), ... } }: an x-macro list - a
 //   macro, NAME!(cb), that hands the whole list to cb!.
 //
 //   c_bitmask! { LE64_BITMASK(struct foo, field), strip PREFIX_ {
@@ -184,26 +184,23 @@ impl CFieldDef {
 #[derive(Debug)]
 pub struct CXMacro {
     pub name:     String,
-    pub callback: String,
     pub entries:  Vec<CXEntry>,
 }
 
 /// An entry of an x-macro list.
 #[derive(Debug)]
 pub enum CXEntry {
-    /// (args): its arguments' C text.
-    Args(String),
-    /// SUB() - another list's entries, here - or SUB(MAP(params) =>
-    /// (template)): SUB's entries, each passed through MAP, which C defines
-    /// as #define MAP(params) x(template).
+    /// (args)
+    Args,
+    /// SUB() - another list's entries, here - or SUB((params) => (template)):
+    /// SUB's entries, each mapped to the template.
     Sub { list: String, map: Option<CXMap> },
 }
 
 #[derive(Debug)]
 pub struct CXMap {
-    pub name:     String,
     pub params:   Vec<String>,
-    /// The arguments MAP gives x: params, and concat(A, b) pastes.
+    /// An entry's arguments, mapped: params, and concat(A, b) pastes.
     pub template: String,
 }
 
@@ -737,14 +734,11 @@ pub fn int_bits(ty: &str) -> Option<u32> {
 
 // ---- c_xmacro!, c_bitmask! -------------------------------------------------
 
-/// c_xmacro!'s body: NAME(x) { (args), ... }
+/// c_xmacro!'s body: NAME { (args), ... }
 fn parse_xmacro(m: &syn::Macro) -> Result<CXMacro, String> {
     m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
         input.call(syn::Attribute::parse_outer)?;
         let name: syn::Ident = input.parse()?;
-        let cb;
-        syn::parenthesized!(cb in input);
-        let callback: syn::Ident = cb.parse()?;
         let list;
         syn::braced!(list in input);
 
@@ -753,16 +747,16 @@ fn parse_xmacro(m: &syn::Macro) -> Result<CXMacro, String> {
             entries.push(if list.peek(syn::token::Paren) {
                 let args;
                 syn::parenthesized!(args in list);
-                CXEntry::Args(c_text(&args.parse::<proc_macro2::TokenStream>()?))
+                args.parse::<proc_macro2::TokenStream>()?;
+                CXEntry::Args
             } else {
-                // SUB(), or SUB(MAP(params) => (template))
+                // SUB(), or SUB((params) => (template))
                 let sub: syn::Ident = list.parse()?;
                 let inner;
                 syn::parenthesized!(inner in list);
                 let map = match inner.is_empty() {
                     true => None,
                     false => {
-                        let map: syn::Ident = inner.parse()?;
                         let params;
                         syn::parenthesized!(params in inner);
                         let params = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>
@@ -771,7 +765,7 @@ fn parse_xmacro(m: &syn::Macro) -> Result<CXMacro, String> {
                         let template;
                         syn::parenthesized!(template in inner);
                         let template = c_text(&template.parse::<proc_macro2::TokenStream>()?);
-                        Some(CXMap { name: ident(&map), params, template })
+                        Some(CXMap { params, template })
                     }
                 };
                 CXEntry::Sub { list: ident(&sub), map }
@@ -780,8 +774,8 @@ fn parse_xmacro(m: &syn::Macro) -> Result<CXMacro, String> {
                 list.parse::<syn::Token![,]>()?;
             }
         }
-        Ok(CXMacro { name: ident(&name), callback: ident(&callback), entries })
-    }).map_err(|e| format!("c_xmacro!: an entry is (args), SUB(), or SUB(MAP(params) => (args)) - {e}"))
+        Ok(CXMacro { name: ident(&name), entries })
+    }).map_err(|e| format!("c_xmacro!: an entry is (args), SUB(), or SUB((params) => (args)) - {e}"))
 }
 
 /// c_bitmask!'s body: LE64_BITMASK(struct foo, field), strip PREFIX_ { NAME(start, end), ... }

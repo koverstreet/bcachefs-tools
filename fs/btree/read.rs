@@ -741,7 +741,7 @@ pub fn bch2_btree_node_wait_on_read(trans: &BtreeTrans<'_>, paths: &mut Paths<'_
         trans_submit_write_bios(trans);
     }
 
-    trans.wait_on_node_flag(paths, b, c::btree_flags::BTREE_NODE_read_in_flight);
+    trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::read_in_flight);
 }
 
 pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
@@ -755,7 +755,7 @@ pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, paths: &mut Paths<'
         trans_submit_write_bios(trans);
     }
 
-    trans.wait_on_node_flag(paths, b, c::btree_flags::BTREE_NODE_write_in_flight);
+    trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::write_in_flight);
 }
 
 fn read_done_wake(b: &BtreeNode) {

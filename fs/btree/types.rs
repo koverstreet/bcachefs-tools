@@ -35,7 +35,7 @@ use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_enum, c_xmacro, placed, CStruct, Init,
+use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_enum, placed, CStruct, Init,
                      Late, TypeInfo};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
@@ -957,56 +957,33 @@ pub const BTREE_WRITE_TYPE_MASK: c_ulong =
     (cs::BTREE_WRITE_TYPE_NR as c_ulong).next_power_of_two() - 1;
 pub const BTREE_WRITE_TYPE_BITS: u32 = (cs::BTREE_WRITE_TYPE_NR as u32).next_power_of_two().ilog2();
 
-c_xmacro! {
-    BTREE_FLAGS(x) {
-        (read_in_flight),
-        (read_error),
-        (dirty),
-        (need_write),
-        (write_blocked),
-        (will_make_reachable),
-        (noevict),
-        (write_idx),
-        (accessed),
-        (write_in_flight),
-        (write_in_flight_inner),
-        (just_written),
-        (dying),
-        (fake),
-        (need_rewrite),
-        (need_rewrite_error),
-        (need_rewrite_ptr_written_zero),
-        (never_write),
-        (pinned),
-        (permanent),
-    }
-}
-
-c_enum! {
-    #[closed]
-    pub enum btree_flags: u32 {
-        /* First bits for btree node write type */
-        BTREE_NODE_FLAGS_START = cs::BTREE_WRITE_TYPE_BITS - 1,
-        BTREE_FLAGS(flag) => concat(BTREE_NODE_, flag),
-    }
-}
-
 atomic_bitfield! {
-    /// struct btree's flags: the pending write's type, then BTREE_FLAGS().
+    /// struct btree's flags: the pending write's type, then the node's state.
     pub struct BtreeNodeFlags: u32 in usize {
         #[bits(3)] write_type: BtreeWriteType,
-        BTREE_FLAGS(flag) => flag: bool,
+        read_in_flight: bool,
+        read_error: bool,
+        dirty: bool,
+        need_write: bool,
+        write_blocked: bool,
+        will_make_reachable: bool,
+        noevict: bool,
+        write_idx: bool,
+        accessed: bool,
+        write_in_flight: bool,
+        write_in_flight_inner: bool,
+        just_written: bool,
+        dying: bool,
+        fake: bool,
+        need_rewrite: bool,
+        need_rewrite_error: bool,
+        need_rewrite_ptr_written_zero: bool,
+        never_write: bool,
+        pinned: bool,
+        permanent: bool,
     }
 }
 
-// Where C's set_bit()s and masks have them, until btree/write.c, commit.c
-// and interior.c are Rust
-macro_rules! btree_node_flags_at_c_bits {
-    ([] $(($f:ident)),* $(,)?) => { ::paste::paste! { $(
-        const _: () = assert!(BtreeNodeFlags::[<$f:upper _OFFSET>] == btree_flags::[<BTREE_NODE_ $f>] as usize);
-    )* } };
-}
-crate::cstructs::c::BTREE_FLAGS!(btree_node_flags_at_c_bits []);
 const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
                       BtreeNodeFlags::WRITE_TYPE_BITS == cs::BTREE_WRITE_TYPE_BITS as usize);
 
