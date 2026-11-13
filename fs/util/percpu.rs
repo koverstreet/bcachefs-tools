@@ -93,7 +93,6 @@ use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::NonNull;
-use cstruct_macros::c_extern;
 
 use crate::c;
 use crate::locking::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
@@ -102,22 +101,12 @@ use crate::util::alloc::{current_gfp_context_raw, AllocError};
 use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
-c_extern! {
-    pub fn bch2_this_cpu_add_u32(pcp: *mut u32, val: u32);
-    pub fn bch2_this_cpu_add_u64(pcp: *mut u64, val: u64);
-    pub fn bch2_this_cpu_cmpxchg_u32(pcp: *mut u32, old: u32, new: u32) -> u32;
-    pub fn bch2_this_cpu_cmpxchg_u64(pcp: *mut u64, old: u64, new: u64) -> u64;
-    pub fn bch2_this_cpu_ptr(pcp: *mut c_void) -> *mut c_void;
-    pub fn bch2_per_cpu_ptr(pcp: *mut c_void, cpu: c_uint) -> *mut c_void;
-    pub fn bch2_cpu_possible_next(cpu: c_int) -> c_int;
-    pub fn bch2_preempt_disable();
-    pub fn bch2_preempt_enable();
-    pub fn bch2_migrate_disable();
-    pub fn bch2_migrate_enable();
-    pub fn bch2_raw_smp_processor_id() -> c_uint;
-    pub fn bch2_task_pid(task: *mut c::task_struct) -> c_int;
-    pub fn bch2_set_current_wake_cpu(cpu: c_int);
-}
+pub use crate::c::{
+    bch2_this_cpu_add_u32, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u32, bch2_this_cpu_cmpxchg_u64,
+    bch2_this_cpu_ptr, bch2_per_cpu_ptr, bch2_cpu_possible_next,
+    bch2_preempt_disable, bch2_preempt_enable, bch2_migrate_disable, bch2_migrate_enable,
+    bch2_raw_smp_processor_id, bch2_task_pid, bch2_set_current_wake_cpu,
+};
 
 // ── The operations, an arch's own ────────────────────────────────────────
 
@@ -409,10 +398,6 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
     }
 }
 
-#[cfg(not(kernel))]
-unsafe extern "C" {
-    fn __bch2_alloc_percpu_init(pcv: *mut c_void, init: InitCopy<c_void, c_void>, ctx: *mut c_void);
-}
 
 /// alloc_init()'s initializer, of @copy from zeroes, for CPU @cpu.
 pub type InitCopy<T, C> = unsafe extern "C" fn(copy: *mut T, ctx: *mut C, cpu: c_uint);
@@ -434,8 +419,8 @@ impl<T> PerCpu<T> {
         }
         #[cfg(not(kernel))]
         unsafe {
-            __bch2_alloc_percpu_init(p.cast(), core::mem::transmute::<InitCopy<T, C>, InitCopy<c_void, c_void>>(init),
-                                     ctx.cast())
+            c::__bch2_alloc_percpu_init(p.cast(), Some(core::mem::transmute::<InitCopy<T, C>, InitCopy<c_void, c_void>>(init)),
+                                        ctx.cast())
         };
         Ok(PerCpu(p))
     }

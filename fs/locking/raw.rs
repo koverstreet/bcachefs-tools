@@ -20,10 +20,9 @@ use super::{RawReadLock, RawRwLock, RawTryReadLock};
 use super::{MemallocFlags, RawNestedLock, RawTryLock};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::Opaque;
 use core::convert::Infallible;
-use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
-use cstruct_macros::c_extern;
+use core::ffi::{c_ulong, c_void, CStr};
 
 #[cfg(kernel)]
 use kernel::bindings as b;
@@ -47,60 +46,28 @@ unsafe impl ::pin_init::Zeroable for raw_spinlock_t {}
 unsafe impl ::pin_init::Zeroable for rw_semaphore {}
 unsafe impl ::pin_init::Zeroable for percpu_rw_semaphore {}
 
-c_extern! {
-    pub fn rust_six_lockdep_set_notrack_class(lock: *mut c_void);
-    pub fn rust_mutex_init(lock: *mut c::mutex, name: *const c_char, key: *mut c_void);
-    pub fn rust_mutex_assert_held(lock: *mut c::mutex);
+pub use crate::c::{
+    rust_six_lockdep_set_notrack_class, rust_mutex_init, rust_mutex_assert_held,
+    rust_spin_lock_init, rust_spin_lock_irqsave, rust_spin_lock_irqsave_nested,
+    rust_spin_unlock_irqrestore, rust_spin_lock_assert_held,
+    rust_raw_spin_lock_init, rust_raw_spin_lock, rust_raw_spin_unlock, rust_raw_spin_lock_assert_held,
+    rust_trace_contention_begin, rust_trace_contention_end,
+    rust_local_lock_init, rust_local_lock_irqsave, rust_local_unlock_irqrestore,
+    rust_local_irq_save, rust_local_irq_restore,
+    rust_init_rwsem, rust_rwsem_assert_held, rust_rwsem_assert_held_write,
+    rust_percpu_init_rwsem, rust_percpu_free_rwsem, rust_percpu_down_read, rust_percpu_up_read,
+    rust_percpu_down_write, rust_percpu_up_write,
+    rust_percpu_rwsem_assert_held, rust_percpu_rwsem_assert_held_write,
+};
 
-    pub fn rust_spin_lock_init(lock: *mut c::spinlock_t, name: *const c_char, key: *mut c_void);
-    pub fn rust_spin_lock_irqsave(lock: *mut c::spinlock_t) -> c_ulong;
-    pub fn rust_spin_lock_irqsave_nested(lock: *mut c::spinlock_t, subclass: c_uint) -> c_ulong;
-    pub fn rust_spin_unlock_irqrestore(lock: *mut c::spinlock_t, flags: c_ulong);
-    pub fn rust_spin_lock_assert_held(lock: *mut c::spinlock_t);
-
-    pub fn rust_raw_spin_lock_init(lock: *mut c::raw_spinlock_t, name: *const c_char, key: *mut c_void);
-    pub fn rust_raw_spin_lock(lock: *mut c::raw_spinlock_t);
-    pub fn rust_raw_spin_unlock(lock: *mut c::raw_spinlock_t);
-    pub fn rust_raw_spin_lock_assert_held(lock: *mut c::raw_spinlock_t);
-
-    // lockdep, and the contention tracepoints, for a lock whose state is ours
-    // - six - so no C lock tells them: as C's lock_acquire() and the rest. A
-    // @map is a struct lockdep_map, which userspace hasn't
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    pub fn rust_lockdep_init_map(map: *mut c_void, name: *const c_char, key: *mut c_void);
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    pub fn rust_lock_acquire(map: *mut c_void, trylock: c_int, read: c_int, ip: c_ulong);
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    pub fn rust_lock_release(map: *mut c_void, ip: c_ulong);
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    pub fn rust_lock_contended(map: *mut c_void, ip: c_ulong);
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    pub fn rust_lock_acquired(map: *mut c_void, ip: c_ulong);
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    pub fn rust_debug_check_no_locks_freed(p: *const c_void, len: c_ulong);
-    pub fn rust_trace_contention_begin(lock: *const c_void, flags: c_uint);
-    pub fn rust_trace_contention_end(lock: *const c_void, ret: c_int);
-
-    pub fn rust_local_lock_init(lock: *mut c::local_lock_t);
-    pub fn rust_local_lock_irqsave(lock: *mut c::local_lock_t) -> c_ulong;
-    pub fn rust_local_unlock_irqrestore(lock: *mut c::local_lock_t, flags: c_ulong);
-    pub fn rust_local_irq_save() -> c_ulong;
-    pub fn rust_local_irq_restore(flags: c_ulong);
-
-    pub fn rust_init_rwsem(sem: *mut c::rw_semaphore, name: *const c_char, key: *mut c_void);
-    pub fn rust_rwsem_assert_held(sem: *mut c::rw_semaphore);
-    pub fn rust_rwsem_assert_held_write(sem: *mut c::rw_semaphore);
-
-    pub fn rust_percpu_init_rwsem(sem: *mut c::percpu_rw_semaphore, name: *const c_char,
-                                  key: *mut c_void) -> c_int;
-    pub fn rust_percpu_free_rwsem(sem: *mut c::percpu_rw_semaphore);
-    pub fn rust_percpu_down_read(sem: *mut c::percpu_rw_semaphore);
-    pub fn rust_percpu_up_read(sem: *mut c::percpu_rw_semaphore);
-    pub fn rust_percpu_down_write(sem: *mut c::percpu_rw_semaphore);
-    pub fn rust_percpu_up_write(sem: *mut c::percpu_rw_semaphore);
-    pub fn rust_percpu_rwsem_assert_held(sem: *mut c::percpu_rw_semaphore);
-    pub fn rust_percpu_rwsem_assert_held_write(sem: *mut c::percpu_rw_semaphore);
-}
+// lockdep, and the contention tracepoints, for a lock whose state is ours
+// - six - so no C lock tells them: as C's lock_acquire() and the rest. A
+// @map is a struct lockdep_map, which userspace hasn't
+#[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+pub use crate::c::{
+    rust_lockdep_init_map, rust_lock_acquire, rust_lock_release, rust_lock_contended,
+    rust_lock_acquired, rust_debug_check_no_locks_freed,
+};
 
 // ── struct mutex ─────────────────────────────────────────────────────────
 
@@ -125,7 +92,7 @@ unsafe impl RawLockBase for c::mutex {
     type InitError = Infallible;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { rust_mutex_init(l, name.as_ptr().cast(), key) };
+        unsafe { rust_mutex_init(l.cast(), name.as_ptr().cast(), key) };
         Ok(())
     }
 }
@@ -174,7 +141,7 @@ unsafe impl RawLockBase for c::spinlock_t {
     type InitError = Infallible;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { rust_spin_lock_init(l, name.as_ptr().cast(), key) };
+        unsafe { rust_spin_lock_init(l.cast(), name.as_ptr().cast(), key) };
         Ok(())
     }
 }
@@ -210,7 +177,7 @@ unsafe impl RawLockBase for c::raw_spinlock_t {
     type InitError = Infallible;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { rust_raw_spin_lock_init(l, name.as_ptr().cast(), key) };
+        unsafe { rust_raw_spin_lock_init(l.cast(), name.as_ptr().cast(), key) };
         Ok(())
     }
 }
@@ -237,7 +204,7 @@ unsafe impl RawLockBase for c::rw_semaphore {
     type InitError = Infallible;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { rust_init_rwsem(l, name.as_ptr().cast(), key) };
+        unsafe { rust_init_rwsem(l.cast(), name.as_ptr().cast(), key) };
         Ok(())
     }
 }
@@ -286,7 +253,7 @@ unsafe impl RawLockBase for c::percpu_rw_semaphore {
     type InitError = BchError;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { rust_percpu_init_rwsem(l, name.as_ptr().cast(), key) })
+        ret_to_result_void(unsafe { rust_percpu_init_rwsem(l.cast(), name.as_ptr().cast(), key) })
     }
 
     unsafe fn destroy(&self) {

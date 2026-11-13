@@ -17,11 +17,9 @@ use crate::util::task::requeue;
 use crate::util::workqueue::Queue;
 use core::ffi::{c_int, c_uint};
 use core::pin::Pin;
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 
-c_extern! {
-    fn bch2_bio_iov_iter_get_pages(bio: *mut c::bio, iter: *mut c::iov_iter, align: c_uint) -> c_int;
-}
+use crate::c::bch2_bio_iov_iter_get_pages;
 
 impl Bio {
     /// Its bvecs the pages of @iter's next bytes, pinned, as many as it has

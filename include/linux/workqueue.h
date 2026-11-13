@@ -66,7 +66,7 @@ static inline bool delayed_work_pending(struct delayed_work *dwork)
 	return work_pending(&dwork->work);
 }
 
-enum {
+enum wq_flags {
 	WQ_UNBOUND		= 1 << 1, /* not bound to any cpu */
 	WQ_FREEZABLE		= 1 << 2, /* freeze during suspend */
 	WQ_MEM_RECLAIM		= 1 << 3, /* may be used for memory reclaim */

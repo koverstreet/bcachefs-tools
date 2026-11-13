@@ -45,7 +45,6 @@ use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
-use cstruct_macros::c_extern;
 use pin_init::PinInit;
 
 use crate::c;
@@ -98,9 +97,7 @@ impl Drop for ReadGuard {
     }
 }
 
-c_extern! {
-    fn rust_init_srcu_struct(ssp: *mut c::srcu_struct, name: *const c_char, key: *mut c_void) -> c_int;
-}
+use crate::c::rust_init_srcu_struct;
 
 /// An SRCU domain, C's srcu_struct: cleaned up when it drops.
 #[repr(C)]

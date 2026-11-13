@@ -42,6 +42,7 @@
 #include <linux/sched/mm.h>
 #include "util/util_gen.h"
 #include "util/backtrace_gen.h"
+#include "util/shim.h"
 #include "util/bio_gen.h"
 
 #ifdef CONFIG_BCACHEFS_DEBUG

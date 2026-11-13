@@ -100,6 +100,8 @@ fn main() {
         .constified_enum("ZSTD_ErrorCode")
         // closure_state_CLOSURE_RUNNING, as in-kernel
         .constified_enum("closure_state")
+        // wq_flags_WQ_UNBOUND, as in-kernel
+        .constified_enum("wq_flags")
         // Own only what's defined under include/ — the kernel-compat surface.
         // allowlist_recursively (default) pulls in the system primitives these
         // reference (__u64 etc.), so they're emitted here too.
@@ -124,6 +126,13 @@ fn main() {
         // too: not bcachefs's, so not the fs crate's to define.
         .allowlist_file(format!("{}/vendor/closure.h", fs_dir.display()))
         .allowlist_file(format!("{}/vendor/bio_map.h", fs_dir.display()))
+        .allowlist_file(format!("{}/vendor/bio_iov_iter.h", fs_dir.display()))
+        // fs/'s C shims, over what's a macro or differs from the kernel
+        .allowlist_file(format!("{}/locking/shim.h", fs_dir.display()))
+        .allowlist_file(format!("{}/util/shim.h", fs_dir.display()))
+        .allowlist_function("snprintf")
+        // include/linux/kobject.h's darrays: fs/'s, not the shim's
+        .blocklist_file(format!("{}/data_structures/.*", fs_dir.display()))
         // The raid library: userspace's stand-in for the kernel's raid6 and
         // xor, as fs/util/raid.rs uses it.
         .allowlist_function("raid_init|raid_zero|raid_gen|raid_rec")
@@ -138,14 +147,6 @@ fn main() {
         // kernel's in-kernel, libkeyutils' here.
         .allowlist_function("request_key|keyctl_read|keyctl_revoke")
         .allowlist_var("KEY_SPEC_.*")
-        // Never emit fs/ types: those are bcachefs-kernel's, and some (printbuf)
-        // even carry Rust impls there. allowlist_recursively would otherwise
-        // pull them in through an include/ reference. fs/vendor/ isn't
-        // bcachefs's: "under fs/ but not under fs/vendor/", as an alternation
-        // over the prefixes of vendor/ that can't be completed.
-        .blocklist_file(format!(
-            r"{}/(?:[^v]|v(?:[^e]|e(?:[^n]|n(?:[^d]|d(?:[^o]|o(?:[^r]|r[^/])))))).*",
-            fs_dir.display()))
         // The kernel's DEFINE_LOCK_GUARD / DEFINE_CLASS cleanup machinery
         // (class_*_constructor/destructor/lock_ptr) are never called from Rust,
         // and wrap_static_fns can't emit valid C wrappers for them.

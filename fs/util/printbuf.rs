@@ -9,7 +9,7 @@ use crate::util::alloc::KVVec;
 use crate::util::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
-use cstruct_macros::{CStruct, bitfield, c_const, c_enum, c_export, c_extern, c_name};
+use cstruct_macros::{CStruct, bitfield, c_const, c_enum, c_export, c_name};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -72,11 +72,6 @@ pub struct printbuf_restore {
     pub last_field: c_uint,
     pub indent: c_uint,
     pub cur_tabstop: u8,
-}
-
-c_extern! {
-    #[c_printf(3, 4)]
-    fn snprintf(buf: *mut c_char, size: usize, fmt: *const c_char, ...) -> c_int;
 }
 
 unsafe impl Send for Printbuf {}
@@ -572,7 +567,7 @@ impl Printbuf {
     pub fn prt_ptr(&mut self, fmt: &CStr, p: *const c_void) {
         let len = loop {
             let size = if self.size != 0 { self.remaining() + 1 } else { 0 };
-            let len = unsafe { snprintf(self.buf.wrapping_add(self.pos()), size, fmt.as_ptr().cast(), p) };
+            let len = unsafe { c::snprintf(self.buf.wrapping_add(self.pos()), size as _, fmt.as_ptr().cast(), p) };
             let len = len.max(0) as usize;
             if len > self.remaining() && self.make_room(len) {
                 continue;

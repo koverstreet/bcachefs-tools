@@ -18,7 +18,7 @@
 #include "locking/bytelock_gen.h"
 #include "locking/lockdep_gen.h"
 #include "locking/noio_gen.h"
-#include "locking/raw_gen.h"
+#include "locking/shim.h"
 
 DEFINE_LOCK_GUARD_1(mutex_noio, struct mutex_noio,
 		    _T->flags = memalloc_flags_save(PF_MEMALLOC_NOIO); mutex_lock(&_T->lock->lock),

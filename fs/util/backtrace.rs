@@ -28,14 +28,12 @@ use crate::util::demangle::prt_demangled;
 use crate::util::sched;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, c_ulong};
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 
 // bch2_symbolize(): @addr's symbol, "name+0xoff", and " file:line" if libdw
 // knows it, into @out - linux/stacktrace.c, the userspace shim's %pB.
-c_extern! {
-    #[cfg(not(kernel))]
-    pub fn bch2_symbolize(out: *mut core::ffi::c_char, size: usize, addr: c_ulong);
-}
+#[cfg(not(kernel))]
+pub use crate::c::bch2_symbolize;
 
 /// @sym, a symbol "name..." as the symbolizer printed it, to @out: the name
 /// demangled - a Rust name, mangled; anything else as it is.

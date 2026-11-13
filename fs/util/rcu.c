@@ -5,7 +5,7 @@
  */
 
 #include "bcachefs.h"
-#include "util/rcu_gen.h"
+#include "util/shim.h"
 
 int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key)
 {

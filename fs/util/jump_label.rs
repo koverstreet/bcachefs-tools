@@ -14,13 +14,8 @@
 //! label when the key is enabled. Elsewhere, and in userspace - where a key
 //! is a plain int - it's C's static_branch_unlikely(), out of line.
 
-use crate::c;
-use cstruct_macros::c_extern;
-
 // C's static_branch_unlikely(), out of line, where Rust has no asm of its own.
-c_extern! {
-    pub fn bch2_static_branch_unlikely(key: *mut c::static_key_false) -> bool;
-}
+pub use crate::c::bch2_static_branch_unlikely;
 
 #[cfg(all(kernel, CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64")))]
 include!(concat!(env!("OUT_DIR"), "/jump_label_asm.rs"));

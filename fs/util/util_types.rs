@@ -3,25 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_uint, c_ulong, c_void};
-use cstruct_macros::{CStruct, c_const, c_extern, TypeInfo};
-
-c_const! {
-    /* alloc_workqueue()'s WQ_* flags, for util/workqueue.rs: util.c checks them */
-    #[c_int]
-    pub const BCH_WQ_UNBOUND: u32 = 1 << 1;
-    #[c_int]
-    pub const BCH_WQ_FREEZABLE: u32 = 1 << 2;
-    #[c_int]
-    pub const BCH_WQ_MEM_RECLAIM: u32 = 1 << 3;
-    #[c_int]
-    pub const BCH_WQ_HIGHPRI: u32 = 1 << 4;
-    #[c_int]
-    pub const BCH_WQ_CPU_INTENSIVE: u32 = 1 << 5;
-    #[c_int]
-    pub const BCH_WQ_PERCPU: u32 = 1 << 8;
-}
+use core::ffi::{c_uint, c_ulong};
+use cstruct_macros::{CStruct, TypeInfo};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -69,41 +52,15 @@ pub struct memalloc_flags {
     pub flags: c_uint,
 }
 
-c_extern! {
-    pub fn bch2_debugfs_create_file(name: *const c_char, mode: c::umode_t, parent: *mut c::dentry,
-                                    data: *mut c_void, fops: *const c::file_operations) -> *mut c::dentry;
-    pub fn rust_kzalloc_nofail(size: usize) -> *mut c_void;
-    pub fn rust_kvzalloc_nofail(size: usize) -> *mut c_void;
-    pub fn rust_kfree(p: *const c_void);
-    pub fn rust_kvfree(p: *mut c_void);
-    pub fn rust_kvfree_rcu(p: *mut c_void, head: *mut c::rcu_head);
-    pub fn mempool_kvmalloc(gfp_mask: c::gfp_t, pool_data: *mut c_void) -> *mut c_void;
-    pub fn mempool_kvfree(element: *mut c_void, pool_data: *mut c_void);
-    pub fn rust_bio_pages_alloc(size: usize, gfp: c::gfp_t) -> *mut c_void;
-    pub fn rust_bio_pages_free(p: *mut c_void, size: usize);
-    pub fn rust_kfree_rcu_mightsleep(p: *mut c_void);
-    pub fn bch2_cond_resched();
-    pub fn bch2_fatal_signal_pending() -> bool;
-    pub fn bch2_num_online_cpus() -> c_uint;
-    pub fn bch2_bdev_rot(bdev: *mut c::block_device) -> bool;
-    pub fn bch2_init_delayed_work(dwork: *mut c::delayed_work,
-                                  func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
-    pub fn bch2_alloc_workqueue(name: *const c_char, flags: c_uint, max_active: c_int) -> *mut c::workqueue_struct;
-    pub fn bch2_kthread_create(func: Option<unsafe extern "C" fn(*mut c_void) -> c_int>, data: *mut c_void,
-                               name: *const c_char) -> *mut c::task_struct;
-    pub fn bch2_kthread_should_stop() -> bool;
-    pub fn bch2_current() -> *mut c::task_struct;
-    pub fn bch2_set_current_state(state: c_uint);
-    pub fn bch2_set_current_state_running();
-    pub fn bch2_signal_pending_state(state: c_uint) -> bool;
-    pub fn bch2_need_resched() -> bool;
-    #[cfg(CONFIG_SMP)]
-    pub fn bch2_owner_on_cpu(owner: *mut c::task_struct) -> bool;
-    #[cfg(CONFIG_SMP)]
-    pub fn bch2_rt_or_dl_task_current() -> bool;
-    pub fn bch2_init_work(work: *mut c::work_struct, func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
-    pub fn bch2_set_worker_desc(desc: *const c_char);
-    pub fn bch2_capable(cap: c_int) -> bool;
-    #[cfg(__KERNEL__)]
-    pub fn bch2_nr_cpu_ids() -> c_uint;
-}
+pub use crate::c::{
+    bch2_debugfs_create_file, rust_kzalloc_nofail, rust_kvzalloc_nofail, rust_kfree, rust_kvfree,
+    rust_kvfree_rcu, rust_bio_pages_alloc, rust_bio_pages_free,
+    rust_kfree_rcu_mightsleep, bch2_cond_resched, bch2_fatal_signal_pending, bch2_num_online_cpus,
+    bch2_bdev_rot, bch2_init_delayed_work, bch2_alloc_workqueue, bch2_kthread_create,
+    bch2_kthread_should_stop, bch2_current, bch2_set_current_state, bch2_set_current_state_running,
+    bch2_signal_pending_state, bch2_need_resched, bch2_init_work, bch2_set_worker_desc, bch2_capable,
+};
+#[cfg(CONFIG_SMP)]
+pub use crate::c::{bch2_owner_on_cpu, bch2_rt_or_dl_task_current};
+#[cfg(__KERNEL__)]
+pub use crate::c::bch2_nr_cpu_ids;

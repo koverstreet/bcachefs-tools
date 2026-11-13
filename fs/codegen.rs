@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 // The kernel build's bindgen: what fs/'s Rust uses of the kernel that
 // kernel::bindings doesn't bind - the kernel-side counterpart of bcachefs-shim.
-// Never bcachefs's own headers: they include the *_gen.h the Rust build
-// generates, so binding them would make it depend on its own output. What's
-// bound is kernel headers, carved out of the include trees' blocklist one by
-// one, and vendored library code (the closures).
+// What's bound is kernel headers, carved out of the include trees' blocklist
+// one by one, vendored library code (the closures), and the headers of fs/'s
+// C shims.
 //
 // codegen_main.rs, which the kernel/DKMS Makefile builds and runs, include!s
 // this file - so plain // comments. It drives the bindgen CLI: no crates to
@@ -66,7 +65,8 @@ const KERNEL_HEADERS: &[&str] = &[
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
 /// vendored library code, and codegen.h's wrappers of kernel macros.
-const VENDORED_HEADERS: &[&str] = &["vendor/closure.h", "vendor/bio_map.h", "codegen.h"];
+const VENDORED_HEADERS: &[&str] = &["vendor/closure.h", "vendor/bio_map.h", "vendor/bio_iov_iter.h",
+                                    "locking/shim.h", "util/shim.h", "codegen.h"];
 
 /// Under the kernel include trees, what isn't blocklisted: uapi/ (see
 /// blocklist_dir()), and KERNEL_HEADERS.
@@ -266,6 +266,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "perf_trace_buf_alloc", "perf_trace_run_bpf_submit", "bpf_prog_array_valid", "bpf_trace_run2",
     "rust_srcu_read_lock_fast_notrace", "rust_srcu_read_unlock_fast_notrace",
     "rust_preempt_disable_notrace", "rust_preempt_enable_notrace", "rust_perf_fetch_caller_regs",
+    // fs/'s C shims: locking.c, rcu.c, util.c, vendor/bio_iov_iter.c
+    "rust_.*", "bch2_.*", "mempool_kvmalloc", "mempool_kvfree",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
                                   "__genradix", "genradix_iter",

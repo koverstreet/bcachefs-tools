@@ -40,6 +40,9 @@
 #include "include/crypto/poly1305.h"
 #include "fs/vendor/closure.h"
 #include "fs/vendor/bio_map.h"
+#include "fs/vendor/bio_iov_iter.h"
+#include "fs/locking/shim.h"
+#include "fs/util/shim.h"
 #include "raid/raid.h"		/* raid_gen(), raid_rec(): the kernel's raid6/xor, in userspace */
 
 #include <errno.h>

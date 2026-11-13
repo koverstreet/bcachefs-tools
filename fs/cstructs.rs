@@ -202,9 +202,6 @@ pub mod c {
     pub use crate::util::time_stats::{NR_QUANTILES, TIME_STATS_MV_WEIGHT, TimeStatsLocked, bch2_time_stats, bch2_time_stats_quantiles, quantile_entry, quantiles, time_stat_buffer, time_stat_buffer_entry};
     pub use super::util_two_state_shared_lock_types::*;
     pub use super::util_util_types::*;
-    // Before 6.19 the kernel's bindings have these too: ours, the same
-    // prototype, linking to the kernel's then and to util.c's after.
-    pub use super::util_util_types::{mempool_kvfree, mempool_kvmalloc};
     #[cfg(not(NO_BCACHEFS_FS))]
     pub use super::vfs_buffered_types::*;
     #[cfg(not(NO_BCACHEFS_FS))]

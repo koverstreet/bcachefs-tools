@@ -33,31 +33,31 @@ use core::marker::{PhantomData, PhantomPinned};
 use core::ptr::NonNull;
 
 bitflags! {
-    /// alloc_workqueue()'s WQ_* flags: util.c checks they're C's.
+    /// alloc_workqueue()'s WQ_* flags.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct WqFlags: u32 {
         /// Not bound to a CPU.
-        const UNBOUND       = c::BCH_WQ_UNBOUND;
+        const UNBOUND       = c::wq_flags_WQ_UNBOUND as u32;
         /// Frozen during suspend.
-        const FREEZABLE     = c::BCH_WQ_FREEZABLE;
+        const FREEZABLE     = c::wq_flags_WQ_FREEZABLE as u32;
         /// Has a rescuer, for work memory reclaim waits on.
-        const MEM_RECLAIM   = c::BCH_WQ_MEM_RECLAIM;
-        const HIGHPRI       = c::BCH_WQ_HIGHPRI;
-        const CPU_INTENSIVE = c::BCH_WQ_CPU_INTENSIVE;
+        const MEM_RECLAIM   = c::wq_flags_WQ_MEM_RECLAIM as u32;
+        const HIGHPRI       = c::wq_flags_WQ_HIGHPRI as u32;
+        const CPU_INTENSIVE = c::wq_flags_WQ_CPU_INTENSIVE as u32;
         const PERCPU        = WQ_PERCPU;
     }
 }
 
 // 6.17's flag (128ea9f6ccfb): before it, per-cpu was the default, and
-// bcachefs.h defines it as 0
+// it's 0
 #[cfg(kernel)]
 #[cfg(linux_ge = "6.17")]
-const WQ_PERCPU: u32 = c::BCH_WQ_PERCPU;
+const WQ_PERCPU: u32 = c::wq_flags_WQ_PERCPU as u32;
 #[cfg(kernel)]
 #[cfg(not(linux_ge = "6.17"))]
 const WQ_PERCPU: u32 = 0;
 #[cfg(not(kernel))]
-const WQ_PERCPU: u32 = c::BCH_WQ_PERCPU;
+const WQ_PERCPU: u32 = c::wq_flags_WQ_PERCPU as u32;
 
 /// A workqueue Rust owns, destroyed on drop - none until it's made, as a
 /// struct's field C sees as its struct workqueue_struct *.

@@ -52,12 +52,11 @@ c_enum! {
 c_extern! {
     #[c_printf(2, 3)]
     pub fn __bch2_print(c: *mut Fs, fmt: *const c_char, ...);
-    pub fn bch2_ratelimit_state_init(rs: *mut c::ratelimit_state);
     pub fn bch2_ratelimit_suppress(c: *mut Fs, rs: *mut c::ratelimit_state,
                                    func: *const c_char) -> bool;
-    pub fn ___ratelimit(rs: *mut c::ratelimit_state, func: *const c_char) -> c_int;
-    pub fn bch2_rust_warn(file: *const c_char, line: c_uint);
 }
+
+pub use crate::c::{bch2_ratelimit_state_init, ___ratelimit, bch2_rust_warn};
 
 /// A printk loglevel: KERN_SOH followed by the level, as C's KERN_* strings.
 #[derive(Clone, Copy)]
