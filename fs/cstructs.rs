@@ -193,7 +193,7 @@ pub mod c {
     pub use crate::data_structures::fast_list::{fast_list, fast_list_pcpu};
     pub use crate::locking::{mutex_noio, percpu_rwsem_noio};
     pub use crate::util::mean_and_variance::{mean_and_variance};
-    pub use crate::util::printbuf::{PRINTBUF_INLINE_TABSTOPS, PRINTBUF_UNITS_10, PRINTBUF_UNITS_2, bch2_prt_printf, printbuf_bits, printbuf_restore, printbuf_si};
+    pub use crate::util::printbuf::{PRINTBUF_INLINE_TABSTOPS, PRINTBUF_UNITS_10, PRINTBUF_UNITS_2, printbuf_bits, printbuf_restore, printbuf_si};
     pub(crate) use crate::util::printbuf::{__printbuf_bits_forward};
     pub use crate::locking::seqmutex::seqmutex;
     pub use crate::util::siphash::{SIPHASH_KEY};

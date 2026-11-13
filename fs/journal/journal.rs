@@ -199,7 +199,7 @@ impl c::journal {
 
         let r = unsafe { c::closure_nr_remaining(ptr::from_ref(&buf.io).cast_mut()) };
         prt!(out, "io:\t");
-        unsafe { c::bch2_prt_printf(out.as_raw(), c"%pS".as_ptr().cast(), closure_fn_addr(&buf.io)) };
+        out.prt_ptr(c"%pS", closure_fn_addr(&buf.io) as *const core::ffi::c_void);
         prt!(out, " r {r}\n");
 
         if !buf.data.as_ptr().is_null() {

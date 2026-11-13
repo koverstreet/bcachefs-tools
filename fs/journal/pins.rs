@@ -81,7 +81,7 @@ struct Symbol(*const c_void);
 impl core::fmt::Display for Symbol {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut out = Printbuf::new();
-        unsafe { c::bch2_prt_printf(out.as_raw(), c"%ps".as_ptr().cast(), self.0) };
+        out.prt_ptr(c"%ps", self.0);
         f.write_str(out.as_str())
     }
 }

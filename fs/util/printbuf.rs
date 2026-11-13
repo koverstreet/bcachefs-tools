@@ -1,6 +1,6 @@
 #![allow(non_camel_case_types)]
 
-use core::ffi::{CStr, c_int, c_uint};
+use core::ffi::{CStr, c_int, c_uint, c_void};
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
@@ -75,8 +75,8 @@ pub struct printbuf_restore {
 }
 
 c_extern! {
-    #[c_printf(2, 3)]
-    pub fn bch2_prt_printf(out: *mut Printbuf, fmt: *const c_char, ...);
+    #[c_printf(3, 4)]
+    fn snprintf(buf: *mut c_char, size: usize, fmt: *const c_char, ...) -> c_int;
 }
 
 unsafe impl Send for Printbuf {}
@@ -567,6 +567,24 @@ impl Printbuf {
         true
     }
 
+    /// @p, as the kernel's printf extension @fmt prints it - %pS, %ps, %pg:
+    /// only snprintf() knows them.
+    pub fn prt_ptr(&mut self, fmt: &CStr, p: *const c_void) {
+        let len = loop {
+            let size = if self.size != 0 { self.remaining() + 1 } else { 0 };
+            let len = unsafe { snprintf(self.buf.wrapping_add(self.pos()), size, fmt.as_ptr().cast(), p) };
+            let len = len.max(0) as usize;
+            if len > self.remaining() && self.make_room(len) {
+                continue;
+            }
+            break len;
+        };
+
+        let indent_pos = self.pos();
+        self.pos += len.min(self.remaining()) as u32;
+        self.do_indent(indent_pos);
+    }
+
     /*
      * Print an array of chars, handling embedded control characters:
      *   \n: prt_newline	newline that obeys current indent level
@@ -956,7 +974,7 @@ pub fn prt_bdevname(out: &mut Printbuf, bdev: Option<&c::block_device>) {
         return;
     };
     #[cfg(kernel)]
-    unsafe { c::bch2_prt_printf(out.as_raw(), c"%pg".as_ptr().cast(), core::ptr::from_ref(bdev)) };
+    out.prt_ptr(c"%pg", core::ptr::from_ref(bdev).cast());
     #[cfg(not(kernel))]
     {
         let name = bdev.name.map(|c| c as u8);
