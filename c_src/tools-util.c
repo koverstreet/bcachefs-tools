@@ -12,7 +12,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <blkid.h>
 #include <uuid/uuid.h>
 
 #include "bcachefs_ioctl.h"
@@ -97,80 +96,6 @@ u64 read_file_u64(int dirfd, const char *path)
 		die("read_file_u64: error parsing %s (got %s)", path, buf);
 	free(buf);
 	return v;
-}
-
-/* Check for existing filesystems using blkid and optionally wipe them: */
-void blkid_check(int fd, const char *path, bool force)
-{
-	int blkid_version_code = blkid_get_library_version(NULL, NULL);
-	if (blkid_version_code < 2401) {
-		if (force) {
-			fprintf(
-				stderr,
-				"Continuing with out of date libblkid %s because --force was passed.\n",
-				BLKID_VERSION);
-		} else {
-			// Reference for picking 2.40.1:
-			// https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.40/v2.40.1-ReleaseNotes
-			// https://github.com/util-linux/util-linux/issues/3103
-			die(
-				"Refusing to format when using libblkid %s\n"
-				"libblkid >= 2.40.1 is required to check for existing filesystems\n"
-				"Earlier versions may not recognize some bcachefs filesystems.\n", BLKID_VERSION);
-		}
-	}
-
-	blkid_probe pr;
-	const char *fs_type = NULL, *fs_label = NULL, *pt_type = NULL;
-	size_t fs_type_len, fs_label_len, pt_type_len;
-
-	if (!(pr = blkid_new_probe()))
-		die("blkid error 1");
-	if (blkid_probe_set_device(pr, fd, 0, 0))
-		die("blkid error 2");
-	if (blkid_probe_enable_partitions(pr, true) ||
-	    blkid_probe_set_partitions_flags(pr, BLKID_PARTS_MAGIC) ||
-	    blkid_probe_enable_superblocks(pr, true) ||
-	    blkid_probe_set_superblocks_flags(pr,
-			BLKID_SUBLKS_LABEL|BLKID_SUBLKS_TYPE|BLKID_SUBLKS_MAGIC))
-		die("blkid error 3");
-	if (blkid_do_fullprobe(pr) < 0)
-		die("blkid error 4");
-
-	blkid_probe_lookup_value(pr, "TYPE", &fs_type, &fs_type_len);
-	blkid_probe_lookup_value(pr, "LABEL", &fs_label, &fs_label_len);
-	blkid_probe_lookup_value(pr, "PTTYPE", &pt_type, &pt_type_len);
-
-	if (fs_type || pt_type) {
-		if (fs_type) {
-			if (fs_label)
-				printf("%s contains a %s filesystem labelled '%s'\n",
-				       path, fs_type, fs_label);
-			else
-				printf("%s contains a %s filesystem\n",
-				       path, fs_type);
-		}
-		if (pt_type)
-			printf("%s contains a %s partition table\n", path, pt_type);
-
-		if (!force) {
-			fputs("Proceed anyway (existing signatures will be wiped)?", stdout);
-			if (!ask_yn())
-				exit(EXIT_FAILURE);
-		}
-		/*
-		 * Wipe fs superblock and partition-table signatures both (the
-		 * probe enables BLKID_SUBLKS_MAGIC and BLKID_PARTS_MAGIC), so
-		 * former-partition fs signatures can't linger to confuse
-		 * UUID-based device discovery after a whole-disk format.
-		 */
-		while (blkid_do_probe(pr) == 0) {
-			if (blkid_do_wipe(pr, 0))
-				die("Failed to wipe preexisting metadata.");
-		}
-	}
-
-	blkid_free_probe(pr);
 }
 
 bool ask_yn(void)

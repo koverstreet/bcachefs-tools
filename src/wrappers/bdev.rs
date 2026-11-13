@@ -175,12 +175,119 @@ pub fn open_device(path: &std::ffi::CStr, mode: u32) -> Result<OwnedFd, i32> {
         .map_err(|e| e.raw_os_error())
 }
 
-/// Call the C blkid_check function to probe for existing filesystems.
-pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
+mod blkid {
+    use libc::{c_char, c_int, c_void};
+
+    pub type Probe = *mut c_void;
+
+    pub const PARTS_MAGIC: c_int   = 1 << 3;
+    pub const SUBLKS_LABEL: c_int  = 1 << 1;
+    pub const SUBLKS_TYPE: c_int   = 1 << 5;
+    pub const SUBLKS_MAGIC: c_int  = 1 << 9;
+
+    #[link(name = "blkid")]
     unsafe extern "C" {
-        fn blkid_check(fd: libc::c_int, path: *const libc::c_char, force: bool);
+        pub fn blkid_get_library_version(ver_string: *mut *const c_char, date_string: *mut *const c_char) -> c_int;
+        pub fn blkid_new_probe() -> Probe;
+        pub fn blkid_free_probe(pr: Probe);
+        pub fn blkid_probe_set_device(pr: Probe, fd: c_int, off: i64, size: i64) -> c_int;
+        pub fn blkid_probe_enable_partitions(pr: Probe, enable: c_int) -> c_int;
+        pub fn blkid_probe_set_partitions_flags(pr: Probe, flags: c_int) -> c_int;
+        pub fn blkid_probe_enable_superblocks(pr: Probe, enable: c_int) -> c_int;
+        pub fn blkid_probe_set_superblocks_flags(pr: Probe, flags: c_int) -> c_int;
+        pub fn blkid_do_fullprobe(pr: Probe) -> c_int;
+        pub fn blkid_do_probe(pr: Probe) -> c_int;
+        pub fn blkid_do_wipe(pr: Probe, dryrun: c_int) -> c_int;
+        pub fn blkid_probe_lookup_value(pr: Probe, name: *const c_char, data: *mut *const c_char,
+                                        len: *mut usize) -> c_int;
     }
-    unsafe { blkid_check(fd, path.as_ptr(), force) }
+
+    /// @name's value, as the probe found it.
+    pub fn lookup(pr: Probe, name: &std::ffi::CStr) -> Option<String> {
+        let mut data = core::ptr::null();
+        let mut len = 0;
+        unsafe { blkid_probe_lookup_value(pr, name.as_ptr(), &mut data, &mut len) };
+        (!data.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(data) }.to_string_lossy().into_owned())
+    }
+}
+
+/// Check for existing filesystems using blkid and optionally wipe them.
+pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
+    use crate::wrappers::super_io::die;
+
+    let mut version = core::ptr::null();
+    let version_code = unsafe { blkid::blkid_get_library_version(&mut version, core::ptr::null_mut()) };
+    let version = unsafe { std::ffi::CStr::from_ptr(version) }.to_string_lossy();
+    if version_code < 2401 {
+        if force {
+            eprintln!("Continuing with out of date libblkid {version} because --force was passed.");
+        } else {
+            // Reference for picking 2.40.1:
+            // https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.40/v2.40.1-ReleaseNotes
+            // https://github.com/util-linux/util-linux/issues/3103
+            die(&format!("Refusing to format when using libblkid {version}\n\
+                          libblkid >= 2.40.1 is required to check for existing filesystems\n\
+                          Earlier versions may not recognize some bcachefs filesystems."));
+        }
+    }
+
+    let pr = unsafe { blkid::blkid_new_probe() };
+    if pr.is_null() {
+        die("blkid error 1");
+    }
+    if unsafe { blkid::blkid_probe_set_device(pr, fd, 0, 0) } != 0 {
+        die("blkid error 2");
+    }
+    if unsafe {
+        blkid::blkid_probe_enable_partitions(pr, 1) != 0 ||
+        blkid::blkid_probe_set_partitions_flags(pr, blkid::PARTS_MAGIC) != 0 ||
+        blkid::blkid_probe_enable_superblocks(pr, 1) != 0 ||
+        blkid::blkid_probe_set_superblocks_flags(pr,
+            blkid::SUBLKS_LABEL | blkid::SUBLKS_TYPE | blkid::SUBLKS_MAGIC) != 0
+    } {
+        die("blkid error 3");
+    }
+    if unsafe { blkid::blkid_do_fullprobe(pr) } < 0 {
+        die("blkid error 4");
+    }
+
+    let fs_type = blkid::lookup(pr, c"TYPE");
+    let fs_label = blkid::lookup(pr, c"LABEL");
+    let pt_type = blkid::lookup(pr, c"PTTYPE");
+
+    if fs_type.is_some() || pt_type.is_some() {
+        let path = path.to_string_lossy();
+        if let Some(fs_type) = &fs_type {
+            match &fs_label {
+                Some(label) => println!("{path} contains a {fs_type} filesystem labelled '{label}'"),
+                None        => println!("{path} contains a {fs_type} filesystem"),
+            }
+        }
+        if let Some(pt_type) = &pt_type {
+            println!("{path} contains a {pt_type} partition table");
+        }
+
+        if !force {
+            print!("Proceed anyway (existing signatures will be wiped)?");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            if !unsafe { bch_bindgen::c::ask_yn() } {
+                std::process::exit(1);
+            }
+        }
+        /*
+         * Wipe fs superblock and partition-table signatures both (the
+         * probe enables BLKID_SUBLKS_MAGIC and BLKID_PARTS_MAGIC), so
+         * former-partition fs signatures can't linger to confuse
+         * UUID-based device discovery after a whole-disk format.
+         */
+        while unsafe { blkid::blkid_do_probe(pr) } == 0 {
+            if unsafe { blkid::blkid_do_wipe(pr, 0) } != 0 {
+                die("Failed to wipe preexisting metadata.");
+            }
+        }
+    }
+
+    unsafe { blkid::blkid_free_probe(pr) };
 }
 
 fn fd_metadata(fd: RawFd) -> Metadata {
