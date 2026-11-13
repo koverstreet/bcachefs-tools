@@ -22,7 +22,6 @@ use crate::btree::iter::TransAttempt;
 use crate::btree::path::Paths;
 use crate::btree::trans::BtreeTrans;
 use crate::c;
-use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::{Bpos, Btree};
@@ -431,12 +430,13 @@ impl c::bch_fs_btree_key_cache {
 
         /*
          * From where the last scan stopped, round to it again. What's evicted
-         * is freed with RCU dropped - freeing can allocate, and block - so a
-         * batch at a time, the walk picking up from the slot after: the
-         * entries are the SRCU's, which we hold, not RCU's.
+         * is freed with RCU dropped - freeing can allocate, and block - so the
+         * walk stops at each, and picks up from the slot after: the entries
+         * are the SRCU's, which we hold, not RCU's. One at a time, not a
+         * batch: this runs in reclaim, on whatever stack is left.
          */
         loop {
-            let mut evicted: ArrayVec<LockedEntry<'_>, 32> = ArrayVec::new();
+            let mut evicted = None;
             let (mut done, mut at_end) = (false, true);
 
             for (i, ck) in self.keys_from(pos, &read_lock(), &srcu) {
@@ -452,7 +452,7 @@ impl c::bch_fs_btree_key_cache {
                     inc(&self.stats.skipped_accessed);
                 } else if let Some(mut ck) = bkey_cached_lock_for_evict(ck) {
                     if self.bkey_cached_evict(&mut ck) {
-                        evicted.push(ck);
+                        evicted = Some(ck);
                         inc(&self.stats.freed);
                         freed += 1;
                     }
@@ -466,13 +466,13 @@ impl c::bch_fs_btree_key_cache {
                     (done, at_end) = (true, false);
                     break;
                 }
-                if evicted.is_full() {
+                if evicted.is_some() {
                     at_end = false;
                     break;
                 }
             }
 
-            for ck in evicted {
+            if let Some(ck) = evicted {
                 self.bkey_cached_free_noassert(ck);
             }
 
@@ -505,29 +505,22 @@ impl c::bch_fs_btree_key_cache {
 
         unsafe { self.shrinker.placed_drop() };
 
-        /* freed as the shrinker frees, a batch at a time outside RCU: */
+        /*
+         * freed as the shrinker frees, one at a time outside RCU - not a while
+         * let: its scrutinee's RCU guard would live through the free
+         */
         let srcu = fs.btree.trans.barrier.read_lock();
         let mut pos = 0;
         loop {
-            let mut evicted: ArrayVec<LockedEntry<'_>, 32> = ArrayVec::new();
-
-            for (i, ck) in self.keys_from(pos, &read_lock(), &srcu) {
+            let evicted = self.keys_from(pos, &read_lock(), &srcu).next().map(|(i, ck)| {
                 let mut ck = bkey_cached_trylock(ck).expect("a key cache entry locked at shutdown");
                 assert!(self.bkey_cached_evict(&mut ck), "a key cache entry on bc->keys not in the table");
-                evicted.push(ck);
-
                 pos = i + 1;
-                if evicted.is_full() {
-                    break;
-                }
-            }
+                ck
+            });
 
-            if evicted.is_empty() {
-                break;
-            }
-            for ck in evicted {
-                self.bkey_cached_free_noassert(ck);
-            }
+            let Some(ck) = evicted else { break };
+            self.bkey_cached_free_noassert(ck);
         }
         drop(srcu);
 
