@@ -311,22 +311,30 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
             .find(|s| s.load().item().is_some_and(|it| key_of(&it).borrow() == key))
     }
 
-    fn find_path(&self, key: &I::Target) -> Result<Chain<I>, NotIn> {
+    /// A chain for @key, into @chain: made where it's used, not returned - one
+    /// returned is a copy of it in the caller's frame.
+    fn find_path(&self, key: &I::Target, chain: &mut Chain<I>) -> Result<(), NotIn> {
         let own = self.index(key);
         if let Some(i) = own.into_iter().find(|&i| self.slots[i].is_empty()) {
-            return Ok(Chain { steps: ArrayVec::new(), end: i as u32 });
+            chain.steps.clear();
+            chain.end = i as u32;
+            return Ok(());
         }
-        own.into_iter().map(|start| self.walk(start))
+        own.into_iter().map(|start| self.walk(start, chain))
             .find(|r| !matches!(r, Err(NotIn::NoChain)))
             .unwrap_or(Err(NotIn::NoChain))
     }
 
-    fn walk(&self, mut s: usize) -> Result<Chain<I>, NotIn> {
-        let mut steps: ArrayVec<(u32, I), MAX_KICKS> = ArrayVec::new();
+    fn walk(&self, mut s: usize, chain: &mut Chain<I>) -> Result<(), NotIn> {
+        let steps = &mut chain.steps;
+        steps.clear();
 
         loop {
             let item = match self.slots[s].load() {
-                Contents::Empty => return Ok(Chain { steps, end: s as u32 }),
+                Contents::Empty => {
+                    chain.end = s as u32;
+                    return Ok(());
+                }
                 Contents::Retired => return Err(NotIn::Retired),
                 Contents::Claimed | Contents::Unstable(_) => return Err(NotIn::Busy),
                 Contents::Item(i) => i,
@@ -341,12 +349,13 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
     }
 
     /// A slot for @key, freed to store into, and the CPU held for the store:
-    /// find_path(), then claim_room(). Out of line, as a chain is half a
-    /// kilobyte, and an insert may be deep in a stack - under a btree lock
-    /// wait, say.
+    /// find_path(), then claim_room(). Out of line, as a chain is a few hundred
+    /// bytes, and an insert may be deep in a stack - under a btree lock wait,
+    /// say.
     #[inline(never)]
     fn claim_path(&self, key: &I::Target, moves: &AtomicU64) -> Result<(&'a Slot<I>, CpuGuard), NotIn> {
-        let chain = self.find_path(key)?;
+        let mut chain = Chain { steps: ArrayVec::new(), end: 0 };
+        self.find_path(key, &mut chain)?;
         self.faults.move_window();
         let cpu = CpuGuard::new();
         Ok((self.claim_room(&chain, moves)?, cpu))
