@@ -294,7 +294,7 @@ impl Dev {
     fn discard_slot_put(&self) {
         let n = self.discards_in_flight.fetch_sub(1, Ordering::Release);
         assert!(n != 0, "discards in flight on {} gone below zero", self.name().to_str().unwrap_or("?"));
-        futex_wake(core::ptr::from_ref(&*self.discards_in_flight).cast(), usize::MAX);
+        futex_wake(core::ptr::from_ref(&self.discards_in_flight).cast(), usize::MAX);
     }
 
     /// Sleep until there's room for a discard - the transaction's locks
@@ -306,7 +306,7 @@ impl Dev {
                 return;
             }
             trans.unlock_long();
-            let Ok(()) = futex_wait(&*self.discards_in_flight, n, Sleep::IDLE);
+            let Ok(()) = futex_wait(&self.discards_in_flight, n, Sleep::IDLE);
         }
     }
 }

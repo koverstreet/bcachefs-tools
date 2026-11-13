@@ -9,7 +9,7 @@ use crate::format::DataType;
 use crate::util::alloc::KVVec;
 use crate::locking::{ByteLock, Locked, Lockdep, SeqLock};
 use crate::{new_lock, new_work};
-use crate::types::{CacheAligned, RustOnly, c_default, rust_only};
+use crate::types::{CacheAligned, c_default};
 use crate::util::bio::BioSet;
 use crate::util::workqueue::ReffedWork;
 use crate::util::percpu::{Counters, PerCpu};
@@ -17,7 +17,7 @@ use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64, AtomicU8};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, placed, CStruct, Fieldwise, Init, TypeInfo};
+use cstruct_macros::{bitfield, c_enum, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
 
@@ -25,7 +25,6 @@ c_enum! {
     #[closed]
     #[prefix(BCH_WATERMARK_)]
     #[nr(BCH_WATERMARK_NR)]
-    #[c_list(BCH_WATERMARKS)]
     pub enum bch_watermark: u32 {
         stripe,
         normal,
@@ -37,26 +36,19 @@ c_enum! {
     }
 }
 
-c_const! {
-    #[c_int]
-    pub const BCH_WATERMARK_BITS: u32 = 3;
-    pub const BCH_WATERMARK_MASK: u32 = !(!0 << c::BCH_WATERMARK_BITS);
+pub const BCH_WATERMARK_BITS: u32 = 3;
+pub const BCH_WATERMARK_MASK: u32 = !(!0 << c::BCH_WATERMARK_BITS);
 
-    #[c_int]
-    pub const OPEN_BUCKETS_COUNT: u32 = 4096;
+pub const OPEN_BUCKETS_COUNT: u32 = 4096;
 
-    #[c_int]
-    pub const WRITE_POINT_HASH_NR: u32 = 32;
-    #[c_int]
-    pub const WRITE_POINT_MAX: u32 = 32;
-}
+pub const WRITE_POINT_HASH_NR: u32 = 32;
+pub const WRITE_POINT_MAX: u32 = 32;
 
 /*
  * 0 is never a valid open_bucket_idx_t:
  */
-c_typedef! {
-    pub type open_bucket_idx_t = u16;
-}
+#[allow(non_camel_case_types)]
+pub type open_bucket_idx_t = u16;
 
 /// An open bucket's index in c->allocator.open_buckets - never 0, slot 0
 /// being the sentinel - so a field C has as an open_bucket_idx_t, 0 for none,
@@ -182,16 +174,12 @@ nest! {
     pub struct open_bucket {
         #[pin]
         #[init(new_lock!((), ::pin_init::zeroed(), "&ob->lock"))]
-        #[c_lock("spinlock_t lock")]
         pub lock: Locked<c::spinlock_t, (), OpenBucketIdentity>,
         pub pin: AtomicI32,
         pub sectors_free: Volatile<u32>,
-        #[c("struct ec_stripe_new *ec")]
         pub ec: AtomicPtr<c::ec_stripe_new>,
 
-        #[c("open_bucket_idx_t freelist")]
         pub freelist: Volatile<Option<OpenBucketIdx>>,
-        #[c("open_bucket_idx_t hash")]
         pub hash: Volatile<Option<OpenBucketIdx>>,
 
         /*
@@ -244,7 +232,6 @@ published! {
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct open_buckets {
     pub nr: c::open_bucket_idx_t,
-    #[c("open_bucket_idx_t v[BCH_BKEY_PTRS_MAX]")]
     pub v: [Option<OpenBucketIdx>; c::BCH_BKEY_PTRS_MAX as usize],
 }
 
@@ -314,13 +301,11 @@ published! {
 pub struct write_point_alloc {
     pub __align: CacheAligned,
     /* the next in its hash chain: write_points_hash_lock's */
-    #[c("u8 hash_next")]
     pub hash_next: Volatile<Option<WritePointIdx>>,
     #[init(data_type)]
     pub data_type: DataType,
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->lock"))]
-    #[c_lock("struct byte_lock_lockdep lock")]
     pub lock: Locked<Lockdep<ByteLock>, WritePointLocked, WritePointId>,
 }
 
@@ -329,11 +314,9 @@ pub struct write_point_alloc {
 #[derive(CStruct, Init)]
 #[init_args(data_type: DataType)]
 pub struct write_point {
-    #[c_anon]
     #[pin]
     #[init(write_point_alloc::init(data_type))]
     pub alloc: write_point_alloc,
-    #[c_anon]
     #[pin]
     #[init(write_point_io::init())]
     pub io: write_point_io,
@@ -344,7 +327,6 @@ pub struct write_point {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct WritePointWrites {
-    #[c("struct list_head writes")]
     pub writes: c::WriteOpList,
     pub last_state_change: u64,
     pub last_runtime: u64,
@@ -357,7 +339,6 @@ published! {
     /// bch2_write_queue()'s check, the times by write_points_to_text().
     #[derive(CStruct)]
     pub struct WritePointState {
-        #[c("enum write_point_state state")]
         pub state: Volatile<u32>,
         pub time: [Volatile<u64>; c::WRITE_POINT_STATE_NR as usize],
     }
@@ -374,7 +355,6 @@ pub struct write_point_io {
 
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->writes_lock"))]
-    #[c_lock("spinlock_t writes_lock")]
     pub writes_lock: Locked<c::spinlock_t, WritePointWrites, WritePointState>,
 }
 
@@ -394,7 +374,6 @@ published! {
         /* bit n - 1: placement decides how much fits at n replicas */
         pub placement_constrained: Volatile<c_ulong>,
         /* at n replicas, the devices every such allocation has to use */
-        #[c("struct bch_devs_mask placement_required[BCH_REPLICAS_MAX]")]
         pub placement_required: [Volatile<c::DevsMask>; c::BCH_REPLICAS_MAX as usize],
     }
 }
@@ -412,7 +391,6 @@ pub struct bch_fs_capacity_counters {
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_capacity_pcpu {
-    #[c_anon]
     pub counters: bch_fs_capacity_counters,
     /*
      * The reservation caches, by disk_res_slot(): slots, each changed by
@@ -443,16 +421,13 @@ pub struct bch_fs_capacity {
     /* the reservation caches' recompute, and the placement it decides */
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->capacity.sectors_available_lock"))]
-    #[c_lock("spinlock_t sectors_available_lock")]
     pub sectors_available_lock: Locked<c::spinlock_t, (), Placement>,
 
-    #[c("struct bch_fs_capacity_pcpu __percpu *pcpu")]
     #[init(PerCpu::init())]
     pub pcpu: PerCpu<c::bch_fs_capacity_pcpu>,
 
     #[pin]
     #[init(new_lock!((), "&c->capacity.mark_lock"))]
-    #[c("struct percpu_rwsem_noio mark_lock")]
     pub mark_lock: crate::util::place::Placed<crate::locking::PercpuRwsemNoio, MarkLockAt>,
 }
 
@@ -464,7 +439,6 @@ pub type MarkLockAt = crate::at!(bch_fs_capacity.mark_lock);
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_allocator {
-    #[c("struct bch_devs_mask rw_devs[BCH_DATA_NR]")]
     pub rw_devs: [c::AtomicDevsMask; c::BCH_DATA_NR as usize],
     /* bumped as a device goes read-write or read-only, under state_lock;
      * read without it */
@@ -476,7 +450,6 @@ pub struct bch_fs_allocator {
     /* the open buckets not in use, and the partial list */
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&c->allocator.freelist_lock"))]
-    #[c_lock("spinlock_t freelist_lock")]
     pub freelist_lock: Locked<c::spinlock_t, OpenBucketsFree, OpenBucketsFreeNr>,
     pub freelist_wait: c::closure_waitlist,
     /* jiffies at the last allocator stuck dump; claimed by cmpxchg */
@@ -485,7 +458,6 @@ pub struct bch_fs_allocator {
     pub open_buckets_wait: c::closure_waitlist,
     #[pin]
     pub open_buckets: [c::open_bucket; c::OPEN_BUCKETS_COUNT as usize],
-    #[c("open_bucket_idx_t open_buckets_hash[OPEN_BUCKETS_COUNT]")]
     pub open_buckets_hash: [Volatile<Option<OpenBucketIdx>>; c::OPEN_BUCKETS_COUNT as usize],
 
     #[pin]
@@ -494,7 +466,6 @@ pub struct bch_fs_allocator {
     /* the write point hash's writers, and write_points_nr's */
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->allocator.write_points_hash_lock"))]
-    #[c_lock("struct byte_lock_lockdep write_points_hash_lock")]
     pub write_points_hash_lock: Locked<Lockdep<ByteLock>, (), WritePointsHash>,
 
     #[pin]
@@ -509,9 +480,7 @@ pub struct bch_fs_allocator {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct OpenBucketsFree {
-    #[c("open_bucket_idx_t open_buckets_freelist")]
     pub open_buckets_freelist: Option<OpenBucketIdx>,
-    #[c("open_bucket_idx_t open_buckets_partial[OPEN_BUCKETS_COUNT]")]
     pub open_buckets_partial: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
 }
 
@@ -533,7 +502,6 @@ published! {
     #[derive(CStruct)]
     pub struct WritePointsHash {
         pub write_points_nr: Volatile<c_uint>,
-        #[c("u8 write_points_hash[WRITE_POINT_HASH_NR]")]
         pub write_points_hash: [Volatile<Option<WritePointIdx>>; c::WRITE_POINT_HASH_NR as usize],
     }
 }
@@ -545,21 +513,19 @@ published! {
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_discards {
-    #[c("struct work_struct work")]
     #[pin]
     pub(crate) work: ReffedWork<do_discards_work, crate::field!(super.writes)>,
-    #[c("struct bio_set bioset")]
     #[pin]
     #[init(BioSet::new(4, false))]
     pub(crate) bioset: BioSet<DiscardBio>,
 
     /// Buckets with a discard issued, by any worker, not yet marked free.
     #[pin]
-    #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) in_flight: rust_only!(Locked<c::mutex, KVVec<u64>>),
+    #[init(new_lock!(KVVec::new()))]
+    pub(crate) in_flight: Locked<c::mutex, KVVec<u64>>,
 
     /// The worker's progress, for sysfs and the allocator's stuck report.
     #[pin]
-    #[init(RustOnly::new(SeqLock::new(DiscardState::default())))]
-    pub(crate) s: rust_only!(SeqLock<DiscardState>),
+    #[init(SeqLock::new(DiscardState::default()))]
+    pub(crate) s: SeqLock<DiscardState>,
 }

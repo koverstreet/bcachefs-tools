@@ -149,7 +149,7 @@ impl Replay {
         let p = kvzalloc(bytes).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))?
             .cast::<c::journal_replay>();
         unsafe {
-            let Ok(()) = init_at(crate::types::RustOnly::new(KVVec::new()), &raw mut (*p.as_ptr()).ptrs);
+            let Ok(()) = init_at(KVVec::new(), &raw mut (*p.as_ptr()).ptrs);
             (*p.as_ptr()).csum_good = csum_good;
             core::ptr::copy_nonoverlapping(j.as_ptr(), (&raw mut (*p.as_ptr()).j).cast::<u8>(), j.len());
         }

@@ -4,20 +4,15 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_name, c_bitmask, c_const, c_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, c_bitmask, c_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
 
-c_const! {
-    #[c_int]
-    pub const BLOCKDEV_INODE_MAX: u32 = 4096;
-    #[c_int]
-    pub const BCACHEFS_ROOT_INO: u32 = 4096;
-}
+pub const BLOCKDEV_INODE_MAX: u32 = 4096;
+pub const BCACHEFS_ROOT_INO: u32 = 4096;
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
 #[c_name(bch_inode)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-#[c_packed]
 pub struct Inode {
     pub v: c::bch_val,
 
@@ -31,7 +26,6 @@ pub struct Inode {
 #[repr(C, align(8))]
 #[c_name(bch_inode_v2)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-#[c_packed]
 pub struct InodeV2 {
     pub v: c::bch_val,
 
@@ -46,7 +40,6 @@ pub struct InodeV2 {
 #[repr(C, align(8))]
 #[c_name(bch_inode_v3)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct InodeV3 {
     pub v: c::bch_val,
 
@@ -59,15 +52,12 @@ pub struct InodeV3 {
     pub fields: [u8; 0],
 }
 
-c_const! {
-    #[c_int]
-    pub const INODEv3_FIELDS_START_INITIAL: u32 = 6;
-}
+#[allow(non_upper_case_globals)]
+pub const INODEv3_FIELDS_START_INITIAL: u32 = 6;
 
 #[repr(C, align(8))]
 #[c_name(bch_inode_generation)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
-#[c_packed]
 pub struct InodeGeneration {
     pub v: c::bch_val,
 
@@ -146,7 +136,6 @@ c_enum! {
     #[prefix(Inode_opt_)]
     #[nr(Inode_opt_nr)]
     #[arm_columns(bits: value(u32))]
-    #[c_list(BCH_INODE_OPTS)]
     /* subset of BCH_INODE_FIELDS */
     pub enum inode_opt_id: u32 {
         #[bits(8)]  data_checksum,
@@ -258,7 +247,6 @@ pub struct InodeAllocCursor {
     pub bits: u8,
     pub pad: u8,
     /* C's padding, for __le32's alignment */
-    #[c_anon("")]
     pub __gen_align: [u8; 2],
     pub generation: Le32,
     pub idx: Le64,

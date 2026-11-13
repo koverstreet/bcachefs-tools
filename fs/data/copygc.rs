@@ -69,7 +69,7 @@ use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::debug::trace::events;
-use crate::types::{Fifo, RustOnly, rust_only};
+use crate::types::{Fifo};
 use crate::prt;
 use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
 use crate::util::backtrace::prt_task_backtrace;
@@ -99,8 +99,8 @@ use crate::format::{Bpos, Btree, DataType};
 pub struct bch_fs_copygc {
     /* The thread, from start to stop: data/copygc.rs */
     #[pin]
-    #[init(RustOnly::new(Daemon::new()))]
-    pub(crate) thread: rust_only!(Daemon),
+    #[init(Daemon::new())]
+    pub(crate) thread: Daemon,
     #[pin]
     #[init(c::write_point::init(DataType::user))]
     pub write_point: c::write_point,
@@ -119,7 +119,6 @@ pub struct bch_fs_copygc {
      *
      * Not cleared when copygc is disabled: the devices are still full.
      */
-    #[c("struct bch_devs_mask wants_space")]
     pub wants_space: c::AtomicDevsMask,
 
     /*
@@ -127,14 +126,12 @@ pub struct bch_fs_copygc {
      * a superset of it, same lifetime and locking. Read by EC stripe reuse;
      * see EC_REUSE_FREE_THRESHOLD_PCT.
      */
-    #[c("struct bch_devs_mask low_on_space")]
     pub low_on_space: c::AtomicDevsMask,
 
     /* Dedicated workqueue for btree updates: */
     #[late(Workqueue::new(c"bcachefs_copygc",
                           WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::UNBOUND, 1),
            ENOMEM_fs_other_alloc)]
-    #[c("struct workqueue_struct *wq")]
     pub wq: Late<Workqueue>,
 }
 

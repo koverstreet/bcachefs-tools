@@ -35,11 +35,8 @@ use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, M
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
 pub struct bch_dev_identity {
-    #[c("char name[sizeof(((struct bch_member *) NULL) -> device_name) + 1]")]
     pub name: [c_char; 16 + 1],
-    #[c("char model[sizeof(((struct bch_member *) NULL) -> device_model) + 1]")]
     pub model: [c_char; 64 + 1],
-    #[c("char serial[sizeof(((struct bch_member *) NULL) -> device_serial) + 1]")]
     pub serial: [c_char; 64 + 1],
     pub rotational: bool,
 }
@@ -53,7 +50,6 @@ pub struct bch_member_cpu {
     pub first_bucket: u16, /* index of first bucket used */
     pub bucket_size: u16, /* sectors */
     pub failure_domain: u16,
-    #[c("u16 data_allowed")]
     pub data_allowed: DataTypes,
     pub state: MemberState,
     pub discard: bool,
@@ -86,7 +82,7 @@ const BCH_MEMBER_V1_BYTES: usize = c::BCH_MEMBER_V1_BYTES as usize;
 const MEMBERS_V2_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v2>>();
 const MEMBERS_V1_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v1>>();
 
-/// bcachefs_format.h's BCH_SB_MEMBER_DELETED_UUID.
+/// BCH_SB_MEMBER_DELETED_UUID.
 pub(crate) const MEMBER_DELETED_UUID: [u8; 16] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
@@ -234,11 +230,6 @@ impl<'a> MembersV1<'a> {
     pub fn iter(&self) -> impl Iterator<Item = c::bch_member> + '_ {
         (0..self.nr_devices).filter_map(|i| self.get(i))
     }
-}
-
-/// @ca as C takes a device that may be none: NULL.
-pub fn dev_ptr(ca: Option<&Dev>) -> *mut Dev {
-    ca.map_or(core::ptr::null_mut(), |ca| core::ptr::from_ref(ca).cast_mut())
 }
 
 /// Construct a MembersV2 reader from a superblock.
@@ -1029,11 +1020,6 @@ impl Fs {
         self.devs_rcu_in(self.allocator.rw_devs[data_type.0 as usize].iter(), rcu)
     }
 
-    /// dev_rcu(), a missing device reported: bch2_dev_rcu().
-    pub fn dev_rcu_or_err<'g>(&'g self, dev: u32, rcu: &'g ReadGuard) -> Result<&'g Dev, BchError> {
-        self.dev_rcu(dev, rcu).ok_or_else(|| self.dev_missing(dev))
-    }
-
     /// dev_missing_atomic(), and the error for it.
     fn dev_missing(&self, dev: u32) -> BchError {
         self.dev_missing_atomic(dev);
@@ -1173,11 +1159,6 @@ impl Fs {
         self.io_members(1 << MemberState::rw.0)
     }
 
-    /// The rw and ro devices, an io ref for reading on each: for_each_readable_member().
-    pub fn readable_members(&self) -> impl Iterator<Item = DevIoRef<c::bch_dev_read_ref>> + '_ {
-        self.io_members(1 << MemberState::rw.0 |
-                        1 << MemberState::ro.0)
-    }
 }
 
 // ── Missing devices and buckets, reported ────────────────────────────────

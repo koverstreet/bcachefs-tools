@@ -6,23 +6,17 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::projections::Volatile;
 use core::ffi::c_ulong;
-use cstruct_macros::{c_const, CStruct};
+use cstruct_macros::{CStruct};
 
-c_const! {
-    #[c_int]
-    pub const FDM_NR_HASH: u32 = 3;
+pub const FDM_NR_HASH: u32 = 3;
 
-    #[c_int]
-    pub const FDM_HASH_BITS: u32 = 9;
+pub const FDM_HASH_BITS: u32 = 9;
 
-    #[c_int]
-    pub const FDM_HASH_SIZE: u32 = 1 << c::FDM_HASH_BITS;
-}
+pub const FDM_HASH_SIZE: u32 = 1 << c::FDM_HASH_BITS;
 
 #[repr(C)]
 #[derive(CStruct)]
 pub struct fdm_slot {
-    #[c("struct task_struct *task")]
     pub task: Volatile<usize>,
     pub mapping: Volatile<c_ulong>, /* address_space * | dropped_locks bit */
 }

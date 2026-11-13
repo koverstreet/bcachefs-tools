@@ -33,7 +33,7 @@ use crate::types::{c_default, Le32, Le64};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, bitfield, c_const, CStruct, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bitfield, CStruct, TypeInfo, SizedVal};
 use nestify::nest;
 use zerocopy::byteorder::little_endian as le;
 
@@ -54,17 +54,14 @@ nest! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
     #[derive(SizedVal)]
     #[repr(C, align(8))]
-    #[c_packed]
     pub struct Dirent {
         pub v: cs::bch_val,
 
         /* Target inode number: */
-        #[c_anon]
         #>[repr(C)]
         pub target: pub union bch_dirent_target {
             pub d_inum: Le64,
             /* DT_SUBVOL */
-            #[c_anon]
             #>[repr(C)]
             pub subvol: pub struct bch_dirent_subvol {
                 pub d_child_subvol: Le32,
@@ -85,10 +82,8 @@ nest! {
             d_casefold: u1,
         },
 
-        #[c_anon]
         #>[repr(C, packed)]
         pub name_block: pub union bch_dirent_name_block {
-            #[c_inline]
             #>[repr(C)]
             pub d_cf_name_block: pub struct bch_dirent_cf_name_block {
                 pub d_pad: u8,
@@ -96,7 +91,6 @@ nest! {
                  * C's padding, for __le16's alignment: zerocopy's le::U16 has
                  * none. The block's __packed is the member's, not its type's.
                  */
-                #[c_anon("")]
                 pub __d_name_len_align: u8,
                 pub d_name_len: le::U16,
                 pub d_cf_name_len: le::U16,
@@ -108,15 +102,10 @@ nest! {
 }
 c_default!(Dirent);
 
-c_const! {
-    #[c_int]
-    pub const DT_SUBVOL: u32 = 16;
-    #[c_int]
-    pub const BCH_DT_MAX: u32 = 17;
+pub const DT_SUBVOL: u32 = 16;
+pub const BCH_DT_MAX: u32 = 17;
 
-    #[c_int]
-    pub const BCH_NAME_MAX: u32 = 512;
-}
+pub const BCH_NAME_MAX: u32 = 512;
 
 // ── The target ───────────────────────────────────────────────────────────
 

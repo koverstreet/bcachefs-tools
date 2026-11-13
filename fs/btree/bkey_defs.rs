@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{c_enum, c_typedef, c_xmacro, CStruct, Plain};
+use cstruct_macros::{c_enum, c_xmacro, CStruct, Plain};
 
 /*
  * Wrapper for stack-allocated struct bkey_packed.
@@ -33,9 +33,8 @@ c_enum! {
     }
 }
 
-c_typedef! {
-    pub type compiled_unpack_fn = Option<unsafe extern "C" fn(*mut c::bkey, *const c::bkey_packed)>;
-}
+#[allow(non_camel_case_types)]
+pub type compiled_unpack_fn = Option<unsafe extern "C" fn(*mut c::bkey, *const c::bkey_packed)>;
 
 c_xmacro! {
     bkey_fields(x) {

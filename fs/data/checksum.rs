@@ -30,14 +30,13 @@ use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
 use crate::c;
 use crate::util::vstructs::{bytes_of, Unsized, Unvalidated, Validated};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::io::{SbFieldOps, SbResize};
 use crate::types::{Le32, Le64};
 use crate::util::bio::{Bio, BioRange};
-use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use crate::format::{Bversion, Nonce};
 
 // ── Nonces ───────────────────────────────────────────────────────────────
@@ -49,7 +48,6 @@ pub const CHACHA_BLOCK_SIZE: u32 = 64;
 pub const BCH_NONCE_EXTENT:	u32 = 1 << 28;
 pub const BCH_NONCE_BTREE:	u32 = 2 << 28;
 pub const BCH_NONCE_JOURNAL:	u32 = 3 << 28;
-pub const BCH_NONCE_PRIO:	u32 = 4 << 28;
 pub const BCH_NONCE_POLY:	u32 = 1 << 31;
 
 /// The nonce @offset bytes further into its stream - a whole number of
@@ -424,20 +422,6 @@ impl Fs {
 }
 
 // ── For C ────────────────────────────────────────────────────────────────
-
-/// Fs::rechecksum_bio(), for C.
-///
-/// # Safety
-/// @bio is a bio, not in flight.
-pub unsafe fn bch2_rechecksum_bio(c: &Opaque<Fs>, bio: *mut c::bio, version: Bversion,
-                                  crc_old: c::bch_extent_crc_unpacked,
-                                  crc_a: Option<&mut c::bch_extent_crc_unpacked>,
-                                  crc_b: Option<&mut c::bch_extent_crc_unpacked>,
-                                  len_a: c_uint, len_b: c_uint, new_csum_type: c_uint) -> c_int {
-    // SAFETY: the caller's
-    let bio = unsafe { Bio::from_raw(bio) };
-    ret_to_c(Fs::from_c(c).rechecksum_bio(bio, version, crc_old, crc_a, crc_b, len_a, len_b, new_csum_type))
-}
 
 impl Fs {
     /// @bio's data checksummed afresh, as @new_csum_type, in three: @len_a

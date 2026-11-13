@@ -150,7 +150,7 @@ use crate::util::projections::{AtomicWord, Volatile, VolatileWriter, PublishedOn
 use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
-use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64, rust_only};
+use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
@@ -162,7 +162,7 @@ use crate::util::gather::Gather;
 use crate::util::task::waiter;
 use crate::util::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
-use cstruct_macros::{c_const, CStruct, TypeInfo, c_enum};
+use cstruct_macros::{CStruct, TypeInfo, c_enum};
 use core::mem::{size_of, size_of_val};
 use crate::data_structures::array_vec::ArrayVec;
 use core::pin::Pin;
@@ -188,9 +188,7 @@ c_enum! {
 published! {
 #[derive(CStruct, TypeInfo)]
 pub struct bch_sb_cpu {
-    #[c("__uuid_t uuid")]
     pub uuid: [Volatile<u8>; 16],
-    #[c("__uuid_t user_uuid")]
     pub user_uuid: [Volatile<u8>; 16],
 
     pub version: Volatile<u16>,
@@ -218,7 +216,6 @@ pub struct bch_sb_cpu {
     pub features: Volatile<u64>,
     pub compat: Volatile<u64>,
     pub recovery_passes_required: Volatile<u64>,
-    #[c("unsigned long errors_silent[BITS_TO_LONGS(BCH_FSCK_ERR_MAX)]")]
     pub errors_silent: [Volatile<c_ulong>; bits_to_longs(c::BCH_FSCK_ERR_MAX as usize)],
     pub btrees_lost_data: Volatile<u64>,
     pub btrees_clean: Volatile<u64>,
@@ -228,7 +225,7 @@ pub struct bch_sb_cpu {
      * when encryption is turned on, running. Set once, under sb_lock; read
      * by every encrypted IO, without it.
      */
-    pub encryption_key: rust_only!(PublishedOnce<c::bch_key>),
+    pub encryption_key: PublishedOnce<c::bch_key>,
 }
 }
 
@@ -904,11 +901,7 @@ impl PartialEq for c::bch_sb__head {
     }
 }
 
-/*
- * bcachefs_format.h's JSET_MAGIC and BSET_MAGIC. C keeps its own: they're
- * __cpu_to_le64()s, XORed with the uuid's bytes as they are, which a
- * c_const! - a plain integer - can't say.
- */
+/* XORed with the uuid's bytes as they are */
 const JSET_MAGIC: u64 = 0x245235c1a3625032;
 const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 
@@ -1109,7 +1102,7 @@ impl c::bch_sb_io {
                                                         nr.try_into().expect("a superblock's worth of bvecs"),
                                                         0, |b| b.init())
                 .map_err(|_| BchError::from(c::bch_errcode::BCH_ERR_ENOMEM_sb_bio_realloc))?;
-            *self.bio = Some(bio);
+            self.bio = Some(bio);
         }
         Ok(())
     }
@@ -1134,7 +1127,7 @@ impl c::bch_sb_io {
 
     /// The buffer and bio freed.
     fn free(&mut self) {
-        *self.bio = None;
+        self.bio = None;
         self.buf.free();
     }
 }
@@ -2196,12 +2189,9 @@ impl<'a> SbIos<'a> {
 
 // ── Writing the superblock ───────────────────────────────────────────────
 
-c_const! {
-    /// ca->sb_read_scratch's size: what a write reads back, the primary's
-    /// header and then some.
-    #[c_int]
-    pub const BCH_SB_READ_SCRATCH_BUF_SIZE: u32 = 4096;
-}
+/// ca->sb_read_scratch's size: what a write reads back, the primary's
+/// header and then some.
+pub const BCH_SB_READ_SCRATCH_BUF_SIZE: u32 = 4096;
 
 /// ca->sb_read_scratch: read into by the write's own bio, so aligned as
 /// kmalloc() aligns its size - what O_DIRECT, in userspace, needs.

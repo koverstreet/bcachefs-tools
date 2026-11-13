@@ -12,7 +12,7 @@ use core::mem::{size_of, ManuallyDrop};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::{Acquire, AcqRel, Relaxed, SeqCst}};
-use cstruct_macros::{placed, CStruct, Init, Late, c_const, TypeInfo};
+use cstruct_macros::{placed, CStruct, Init, Late, TypeInfo};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::OpenBucket;
 use crate::btree::iter::{BtreeTrans, CommitOpts, TransAttempt, Watermark};
@@ -31,7 +31,7 @@ use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::journal::pins::Pin;
 use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, SharedGuard};
 use crate::new_lock;
-use crate::types::{rust_only, Fifo, Le64, Lent, RustOnly};
+use crate::types::{Fifo, Le64, Lent};
 use crate::util::Printbuf;
 use crate::util::alloc::{AllocBox, KVVec, Kmalloc};
 use crate::util::backref::BackRef;
@@ -58,19 +58,14 @@ pub(crate) use split_merge::{check_topology, check_topology_msg, foreground_mayb
 #[derive(Default, CStruct)]
 pub struct btree_alloc {
     pub ob: c::open_buckets,
-    #[c_anon("struct { struct bkey_i k; u64 k_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
     pub k: PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
 }
 
-c_const! {
-    /* Maximum number of nodes we might need to allocate atomically: */
-    #[c_int]
-    pub const BTREE_RESERVE_MAX: u32 = c::BTREE_MAX_DEPTH as u32 + (c::BTREE_MAX_DEPTH as u32 - 1);
+/* Maximum number of nodes we might need to allocate atomically: */
+pub const BTREE_RESERVE_MAX: u32 = c::BTREE_MAX_DEPTH as u32 + (c::BTREE_MAX_DEPTH as u32 - 1);
 
-    /* Size of the freelist we allocate btree nodes from: */
-    #[c_int]
-    pub const BTREE_NODE_RESERVE: u32 = c::BTREE_RESERVE_MAX * 4;
-}
+/* Size of the freelist we allocate btree nodes from: */
+pub const BTREE_NODE_RESERVE: u32 = c::BTREE_RESERVE_MAX * 4;
 
 /*
  * Cache of allocated btree nodes - if we allocate a btree node and don't use
@@ -82,7 +77,6 @@ c_const! {
 #[derive(CStruct)]
 pub struct BtreeReserveCache {
     pub nr: c_uint,
-    #[c("struct btree_alloc data[BTREE_NODE_RESERVE * 2]")]
     pub data: [c::btree_alloc; c::BTREE_NODE_RESERVE as usize * 2],
 }
 
@@ -92,7 +86,6 @@ pub struct BtreeReserveCache {
 pub struct bch_fs_btree_reserve_cache {
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), (), "&c->btree.reserve_cache.lock"))]
-    #[c_lock("struct mutex lock")]
     pub lock: Locked<c::mutex, BtreeReserveCache>,
 }
 
@@ -156,23 +149,21 @@ fn write_blocked<'a>(b: &'a BtreeNode, updates: &'a mut UpdatesGuard<'_>) -> &'a
 #[derive(CStruct, TypeInfo, Init, Late)]
 pub struct bch_fs_btree_interior_updates {
     #[late(Mempool::kmalloc(1, size_of::<BtreeUpdate>()), ENOMEM_btree_interior_update_pool_init)]
-    #[c("mempool_t pool")]
     pub pool: Late<Mempool<Kmalloc>>,
     #[pin]
-    #[init(RustOnly::new(new_lock!(Updates::default(), (), "&c->btree.interior_updates.lock")))]
-    lock: Placed<rust_only!(Locked<c::mutex, Updates>), UpdatesLockAt>,
+    #[init(new_lock!(Updates::default(), (), "&c->btree.interior_updates.lock"))]
+    lock: Placed<Locked<c::mutex, Updates>, UpdatesLockAt>,
     /*
      * btree_interior_update_commit_lock is needed for synchronization with
      * btree_node_update_key(): having the lock be at the filesystem level
      * sucks, we'll need to watch for contention
      */
     #[pin]
-    #[init(RustOnly::new(new_lock!((), (), "&c->btree.interior_updates.commit_lock")))]
-    pub(crate) commit_lock: Placed<rust_only!(Locked<c::mutex>), CommitLockAt>,
+    #[init(new_lock!((), (), "&c->btree.interior_updates.commit_lock"))]
+    pub(crate) commit_lock: Placed<Locked<c::mutex>, CommitLockAt>,
     pub wait: c::closure_waitlist,
 
     #[late(Workqueue::new(c"btree_update", WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 8), ENOMEM_btree_interior_update_worker_init)]
-    #[c("struct workqueue_struct *worker")]
     pub worker: Late<Workqueue>,
     #[pin]
     #[init(crate::new_work!(run_raw::<bch_fs_btree_interior_updates>, "&c->btree.interior_updates.work"))]

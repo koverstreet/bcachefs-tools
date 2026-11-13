@@ -4,7 +4,7 @@
 use core::cmp::Ordering;
 use core::marker::PhantomData;
 
-use super::{AllTypes, BkeyI, BkeyS, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
+use super::{AllTypes, BkeyI, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
 use crate::btree::node::NodeContents;
 use crate::c;
 use crate::format::{Bpos, BkeyType};
@@ -281,14 +281,6 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         }
     }
 
-    pub fn disassemble_mut<'a>(&'a mut self, b: &NodeContents, u: &'a mut c::bkey) -> BkeyS<'a, V> {
-        *u = self.unpack(b);
-        BkeyS {
-            k:   u,
-            v:   self.val_mut(&b.format).as_mut_ptr().cast(),
-            val: PhantomData,
-        }
-    }
 }
 
 impl NodeContents {

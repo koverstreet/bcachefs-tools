@@ -40,14 +40,14 @@ use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
 use crate::util::workqueue::{cancel_work_sync, run_raw, RawWork};
 use crate::util::{Printbuf, ToText};
-use crate::types::{c_default, rust_only, RustOnly};
+use crate::types::{c_default};
 use crate::{btree_trans, new_lock, prt};
 use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::mem::{offset_of, size_of};
 use core::ptr::NonNull;
 use core::sync::atomic::fence;
-use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_const, c_enum};
+use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_enum};
 use nestify::nest;
 use pin_init::pin_data;
 
@@ -61,7 +61,6 @@ c_enum! {
     #[closed]
     #[prefix(BCH_WB_BTREE_)]
     #[nr(BCH_WB_BTREE_NR)]
-    #[c_list(BCH_WRITE_BUFFER_BTREES)]
     pub enum bch_wb_btree: u32 {
         accounting,
         lru,
@@ -85,10 +84,8 @@ c_enum! {
 const _: () = assert!(crate::btrees_with(BtreeFlags::write_buffer).count_ones() == BCH_WB_BTREE_NR as u32,
                       "BCH_WRITE_BUFFER_BTREES() is out of sync with BCH_BTREE_IDS() write_buffer flags");
 
-c_const! {
-    #[c_int]
-    pub const BTREE_WRITE_BUFERED_VAL_U64s_MAX: u32 = 4;
-}
+#[allow(non_upper_case_globals)]
+pub const BTREE_WRITE_BUFERED_VAL_U64s_MAX: u32 = 4;
 
 /*
  * Each bch_fs_btree_write_buffer is per-btree, so individual key entries don't
@@ -99,17 +96,13 @@ nest! {
     #[derive(Clone, Copy, CStruct)]*
     #[repr(C)]
     pub struct wb_key_ref {
-        #[c_anon]
         #>[repr(C)]
         pub key: pub union wb_key_ref_key {
-            #[c_anon]
             #>[repr(C, packed)]
             pub pos_idx: pub struct wb_key_ref_pos_idx {
                 pub idx: u32,
-                #[c("u8 pos[sizeof(struct bpos)]")]
                 pub pos: [u8; size_of::<Bpos>()],
             },
-            #[c_anon]
             #>[repr(C)]
             pub words: pub struct wb_key_ref_words {
                 pub lo: u64,
@@ -125,17 +118,13 @@ nest! {
     #[derive(Clone, Copy, CStruct)]*
     #[repr(C)]
     pub struct wb_key_ref {
-        #[c_anon]
         #>[repr(C)]
         pub key: pub union wb_key_ref_key {
-            #[c_anon]
             #>[repr(C, packed)]
             pub pos_idx: pub struct wb_key_ref_pos_idx {
-                #[c("u8 pos[sizeof(struct bpos)]")]
                 pub pos: [u8; size_of::<Bpos>()],
                 pub idx: u32,
             },
-            #[c_anon]
             #>[repr(C)]
             pub words: pub struct wb_key_ref_words {
                 pub hi: u64,
@@ -153,7 +142,6 @@ pub struct btree_write_buffered_key {
     pub journal_seq: u64,
 
     /* BTREE_WRITE_BUFERED_VAL_U64s_MAX only applies to accounting keys */
-    #[c_anon("struct { struct bkey_i k; u64 k_pad[BTREE_WRITE_BUFERED_VAL_U64s_MAX]; }")]
     pub k: PaddedKey<{ BKEY_U64S + c::BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize }>,
 }
 
@@ -161,7 +149,6 @@ c_enum! {
     #[closed]
     #[prefix(WB_FLUSH_)]
     #[nr(WB_FLUSH_NR)]
-    #[c_list(WB_FLUSH_CALLERS)]
     pub enum wb_flush_caller: u32 {
         thread,
         journal_pin,
@@ -231,14 +218,14 @@ const _: () = assert!(offset_of!(wb_inc_pin, pin) == 0 && offset_of!(wb_flushing
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_btree_write_buffer {
     #[pin]
-    #[init(RustOnly::new(new_lock!(Inc::default(), ::pin_init::zeroed(), "&wb->inc.lock")))]
-    pub inc: rust_only!(Locked<c::mutex, Inc, KeysLive>),
+    #[init(new_lock!(Inc::default(), ::pin_init::zeroed(), "&wb->inc.lock"))]
+    pub inc: Locked<c::mutex, Inc, KeysLive>,
     #[pin]
     pub inc_pin: c::wb_inc_pin,
 
     #[pin]
-    #[init(RustOnly::new(new_lock!(Flushing::default(), ::pin_init::zeroed(), "&wb->flushing.lock")))]
-    pub flushing: rust_only!(Locked<c::mutex, Flushing, FlushingLive>),
+    #[init(new_lock!(Flushing::default(), ::pin_init::zeroed(), "&wb->flushing.lock"))]
+    pub flushing: Locked<c::mutex, Flushing, FlushingLive>,
     #[pin]
     pub flushing_pin: c::wb_flushing_pin,
 
@@ -742,7 +729,7 @@ impl Fs {
         }
 
         for wb in &self.btree.write_buffer {
-            let f = &**wb.flushing;
+            let f = &*wb.flushing;
             if f.nr_flushes.get() == 0 {
                 continue;
             }

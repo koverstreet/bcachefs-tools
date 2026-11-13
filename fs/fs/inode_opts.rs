@@ -29,7 +29,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::sb::errors::FsckFlags;
 use crate::snapshots::{snapshot, subvolume};
-use crate::util::ffi::{c_str, Opaque};
+use crate::util::ffi::c_str;
 use crate::util::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, inode, logged_ops, opts};
@@ -298,14 +298,6 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
 
     ret.fixups();
     ret
-}
-
-pub fn bch2_inode_opts_get_inode(
-    c:     &Opaque<Fs>,
-    inode: &c::bch_inode_unpacked,
-    ret:   &mut c::bch_inode_opts,
-) {
-    *ret = get_inode(Fs::from_c(c), inode);
 }
 
 // ── A key's io options ───────────────────────────────────────────────────

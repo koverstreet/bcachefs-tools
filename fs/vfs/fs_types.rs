@@ -16,8 +16,6 @@ use core::ffi::{c_int, c_void};
 use cstruct_macros::{c_name, c_enum, CStruct, TypeInfo};
 use pin_init::pin_data;
 #[cfg(not(NO_BCACHEFS_FS))]
-use cstruct_macros::c_typedef;
-#[cfg(not(NO_BCACHEFS_FS))]
 use crate::btree::iter::BtreeTrans;
 
 /*
@@ -33,21 +31,17 @@ use crate::btree::iter::BtreeTrans;
 #[derive(CStruct, TypeInfo)]
 pub struct InodeInfo {
     #[pin]
-    #[c("struct inode v")]
     pub v: VfsInode,
     /* the inode cache's key: set before it's in, unchanged while it is */
     pub ei_inum: c::subvol_inum,
 
     #[pin]
-    #[c_lock("spinlock_t ei_reserved_lock")]
     pub ei_reserved: Locked<c::spinlock_t, InodeReserved, InodeReservedRange>,
 
     pub ei_inodes_idx: c_uint,
-    #[c("unsigned long ei_flags")]
     pub ei_flags: AtomicBitflags<c::bch_inode_info_flags>,
 
     #[pin]
-    #[c_lock("struct mutex ei_update_lock")]
     pub ei_update_lock: Locked<c::mutex>,
     pub ei_last_dirtied: Volatile<c_ulong>,
     #[pin]
@@ -60,7 +54,6 @@ pub struct InodeInfo {
      * under either.
      */
     #[pin]
-    #[c_lock("struct mutex ei_quota_lock")]
     pub ei_quota: Locked<c::mutex, InodeQuota>,
 
     /*
@@ -72,7 +65,6 @@ pub struct InodeInfo {
      * incremented when we isusue a cache flush, and track here the sequence
      * number that needs flushing.
      */
-    #[c("struct bch_devs_mask ei_devs_need_flush")]
     pub ei_devs_need_flush: c::AtomicDevsMask,
 
     /*
@@ -80,11 +72,9 @@ pub struct InodeInfo {
      * position still locked - which serializes its writers, not
      * ei_update_lock - and read without a lock
      */
-    #[c("struct bch_inode_unpacked ei_inode")]
     pub ei_inode: c::VolatileInodeUnpacked,
 
     #[pin]
-    #[c("struct delayed_work ei_writeback_timer")]
     pub ei_writeback_timer: DelayedWork,
 }
 c_default!(InodeInfo);
@@ -164,12 +154,11 @@ c_enum! {
 
 /* returns 0 if we want to do the update, or error is passed up */
 #[cfg(not(NO_BCACHEFS_FS))]
-c_typedef! {
-    pub type inode_set_fn = Option<unsafe extern "C" fn(*mut BtreeTrans<'_>,
-                                                        *mut c::bch_inode_info,
-                                                        *mut c::bch_inode_unpacked, *mut c_void)
-                                                        -> c_int>;
-}
+#[allow(non_camel_case_types)]
+pub type inode_set_fn = Option<unsafe extern "C" fn(*mut BtreeTrans<'_>,
+                                                    *mut c::bch_inode_info,
+                                                    *mut c::bch_inode_unpacked, *mut c_void)
+                                                    -> c_int>;
 
 /// ei_pagecache_lock's states: adding to the page cache, or blocking adds.
 pub enum PagecacheAdd {}

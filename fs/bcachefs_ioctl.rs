@@ -7,47 +7,37 @@ use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
-use cstruct_macros::{c_const, c_enum, c_ioctl, counted, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_enum, c_ioctl, counted, CStruct, Plain, TypeInfo};
 use nestify::nest;
 use crate::format::Bpos;
 
-c_const! {
-    /*
-     * Flags common to multiple ioctls:
-     */
-    #[c_int]
-    pub const BCH_FORCE_IF_DATA_LOST: u32 = 1 << 0;
-    #[c_int]
-    pub const BCH_FORCE_IF_METADATA_LOST: u32 = 1 << 1;
-    #[c_int]
-    pub const BCH_FORCE_IF_DATA_DEGRADED: u32 = 1 << 2;
-    #[c_int]
-    pub const BCH_FORCE_IF_METADATA_DEGRADED: u32 = 1 << 3;
+/*
+ * Flags common to multiple ioctls:
+ */
+pub const BCH_FORCE_IF_DATA_LOST: u32 = 1 << 0;
+pub const BCH_FORCE_IF_METADATA_LOST: u32 = 1 << 1;
+pub const BCH_FORCE_IF_DATA_DEGRADED: u32 = 1 << 2;
+pub const BCH_FORCE_IF_METADATA_DEGRADED: u32 = 1 << 3;
 
-    #[c_int]
-    pub const BCH_FORCE_IF_LOST: u32 =
-        c::BCH_FORCE_IF_DATA_LOST |
-        c::BCH_FORCE_IF_METADATA_LOST;
-    #[c_int]
-    pub const BCH_FORCE_IF_DEGRADED: u32 =
-        c::BCH_FORCE_IF_DATA_DEGRADED |
-        c::BCH_FORCE_IF_METADATA_DEGRADED;
+pub const BCH_FORCE_IF_LOST: u32 =
+    c::BCH_FORCE_IF_DATA_LOST |
+    c::BCH_FORCE_IF_METADATA_LOST;
+pub const BCH_FORCE_IF_DEGRADED: u32 =
+    c::BCH_FORCE_IF_DATA_DEGRADED |
+    c::BCH_FORCE_IF_METADATA_DEGRADED;
 
-    /*
-     * If cleared, ioctl that refer to a device pass it as a pointer to a pathname
-     * (e.g. /dev/sda1); if set, the dev field is the device's index within the
-     * filesystem:
-     */
-    #[c_int]
-    pub const BCH_BY_INDEX: u32 = 1 << 4;
+/*
+ * If cleared, ioctl that refer to a device pass it as a pointer to a pathname
+ * (e.g. /dev/sda1); if set, the dev field is the device's index within the
+ * filesystem:
+ */
+pub const BCH_BY_INDEX: u32 = 1 << 4;
 
-    /*
-     * For BCH_IOCTL_READ_SUPER: get superblock of a specific device, not filesystem
-     * wide superblock:
-     */
-    #[c_int]
-    pub const BCH_READ_DEV: u32 = 1 << 5;
-}
+/*
+ * For BCH_IOCTL_READ_SUPER: get superblock of a specific device, not filesystem
+ * wide superblock:
+ */
+pub const BCH_READ_DEV: u32 = 1 << 5;
 
 c_ioctl! {
     /* filesystem ioctls: */
@@ -94,17 +84,14 @@ c_ioctl! {
     BCH_IOCTL_QUERY_ACCOUNTING_v2	= _IOW(0xbc,	37, c::bch_ioctl_query_accounting_v2),
 }
 
-c_const! {
-    /* FS_IOC_GOINGDOWN's: */
-    pub const FSOP_GOING_FLAGS_DEFAULT: u32 = 0x0;	/* going down */
-    pub const FSOP_GOING_FLAGS_LOGFLUSH: u32 = 0x1;	/* flush log but not data */
-    pub const FSOP_GOING_FLAGS_NOLOGFLUSH: u32 = 0x2;	/* don't flush log nor data */
-}
+/* FS_IOC_GOINGDOWN's: */
+pub const FSOP_GOING_FLAGS_DEFAULT: u32 = 0x0;	/* going down */
+pub const FSOP_GOING_FLAGS_LOGFLUSH: u32 = 0x1;	/* flush log but not data */
+pub const FSOP_GOING_FLAGS_NOLOGFLUSH: u32 = 0x2;	/* don't flush log nor data */
 
 c_ioctl! {
     /* ioctl below act on a particular file, not the filesystem as a whole: */
 
-    #[c("const char __user *")]
     BCHFS_IOC_REINHERIT_ATTRS		= _IOR(0xbc, 64, *const c_char),
     BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS = _IO(0xbc, 65),
     BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS	= _IO(0xbc, 66),
@@ -115,7 +102,6 @@ c_ioctl! {
      * XFS's number, which other filesystems answer too: _IOR as XFS has it,
      * though it's the flags, FSOP_GOING_FLAGS_*, that the kernel reads.
      */
-    #[c("__u32")]
     FS_IOC_GOINGDOWN			= _IOR(0x58, 125, u32),
     BCHFS_IOC_GET_DAMAGE		= _IOWR(0xbc, 70, Head<c::bch_ioctl_get_damage>),
     /* 69: retired - READDIR_FLAGS before its entries had a reclen */
@@ -152,15 +138,15 @@ pub struct bch_ioctl_get_damage {
     /* in: capacity; out: the true count, which may be more */
     pub nr_entries: u32,
     pub pad: u32,
-    #[c("bch_sb_field_error_entry_v2 entries[]")]
     pub entries: [c::bch_sb_field_error_entry_v2; 0],
 }
 
-c_const! {
-    pub const BCH_READDIR_recursive: u32 = 1 << 0;
-    pub const BCH_READDIR_damaged: u32 = 1 << 2;
-    pub const BCH_READDIR_subvolumes_only: u32 = 1 << 1;
-}
+#[allow(non_upper_case_globals)]
+pub const BCH_READDIR_recursive: u32 = 1 << 0;
+#[allow(non_upper_case_globals)]
+pub const BCH_READDIR_damaged: u32 = 1 << 2;
+#[allow(non_upper_case_globals)]
+pub const BCH_READDIR_subvolumes_only: u32 = 1 << 1;
 
 /*
  * BCHFS_IOC_READDIR_FLAGS: readdir with filters, on the directory the
@@ -362,7 +348,6 @@ c_enum! {
 nest! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
     #[repr(C, align(8))]
-    #[c_packed]
     pub struct bch_ioctl_data {
         pub op: u16,
         pub start_btree: u8,
@@ -372,22 +357,18 @@ nest! {
         pub start_pos: Bpos,
         pub end_pos: Bpos,
 
-        #[c_anon]
         #>[repr(C)]
         pub args: pub union bch_ioctl_data_args {
-            #[c_inline]
             #>[repr(C)]
             pub scrub: pub struct bch_ioctl_data_scrub {
                 pub dev: u32,
                 pub data_types: u32,
             },
-            #[c_inline]
             #>[repr(C)]
             pub migrate: pub struct bch_ioctl_data_migrate {
                 pub dev: u32,
                 pub pad: u32,
             },
-            #[c_anon]
             #>[repr(C)]
             pub __pad: pub struct bch_ioctl_data_pad {
                 pub pad: [u64; 8],
@@ -445,7 +426,6 @@ c_enum! {
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-#[c_packed]
 pub struct bch_ioctl_data_progress {
     pub data_type: u8,
     pub btree_id: u8,
@@ -473,7 +453,6 @@ nest! {
         pub type_: u8,
         pub ret: u8,
         pub pad: [u8; 6],
-        #[c_anon]
         #>[repr(C)]
         pub payload: pub union bch_ioctl_data_event_payload {
             pub p: c::bch_ioctl_data_progress,
@@ -676,10 +655,8 @@ pub struct bch_ioctl_subvolume_v2 {
     pub err: c::bch_ioctl_err_msg,
 }
 
-c_const! {
-    pub const BCH_SUBVOL_SNAPSHOT_CREATE: u32 = 1 << 0;
-    pub const BCH_SUBVOL_SNAPSHOT_RO: u32 = 1 << 1;
-}
+pub const BCH_SUBVOL_SNAPSHOT_CREATE: u32 = 1 << 0;
+pub const BCH_SUBVOL_SNAPSHOT_RO: u32 = 1 << 1;
 
 /*
  * BCH_IOCTL_FSCK_OFFLINE: run fsck from the 'bcachefs fsck' userspace command,
@@ -735,14 +712,10 @@ pub struct bch_ioctl_query_accounting {
     pub accounting_types_mask: u32, /* input parameter */
 
     /* C's typed keys: an accounting value's header, sized, its counters after */
-    #[c("struct bkey_i_accounting accounting[]")]
     pub accounting: [BkeyI<c::Accounting>; 0],
 }
 
-c_const! {
-    #[c_int]
-    pub const BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR: u32 = 8;
-}
+pub const BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR: u32 = 8;
 
 /*
  * BCH_IOCTL_QUERY_ACCOUNTING_v2: as v1, plus free space by replica count
@@ -777,14 +750,10 @@ pub struct bch_ioctl_query_accounting_v2 {
     pub accounting_types_mask: u32, /* input parameter */
 
     /* C's typed keys: an accounting value's header, sized, its counters after */
-    #[c("struct bkey_i_accounting accounting[]")]
     pub accounting: [BkeyI<c::Accounting>; 0],
 }
 
-c_const! {
-    #[c_int]
-    pub const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u32 = 1 << 0;
-}
+pub const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u32 = 1 << 0;
 
 #[counted(nr)]
 #[repr(C)]
@@ -1015,14 +984,17 @@ pub struct bch_ioctl_recovery_status {
     pub total: u64,
 }
 
-c_const! {
-    pub const BCH_PREAD_RAW_no_poison_check: u32 = 1 << 0;
+#[allow(non_upper_case_globals)]
+pub const BCH_PREAD_RAW_no_poison_check: u32 = 1 << 0;
 
-    pub const BCH_PREAD_RAW_ERR_checksum: u32 = 1 << 0;
-    pub const BCH_PREAD_RAW_ERR_io: u32 = 1 << 1;
-    pub const BCH_PREAD_RAW_ERR_decompression: u32 = 1 << 2;
-    pub const BCH_PREAD_RAW_ERR_ec_reconstruct: u32 = 1 << 3;
-}
+#[allow(non_upper_case_globals)]
+pub const BCH_PREAD_RAW_ERR_checksum: u32 = 1 << 0;
+#[allow(non_upper_case_globals)]
+pub const BCH_PREAD_RAW_ERR_io: u32 = 1 << 1;
+#[allow(non_upper_case_globals)]
+pub const BCH_PREAD_RAW_ERR_decompression: u32 = 1 << 2;
+#[allow(non_upper_case_globals)]
+pub const BCH_PREAD_RAW_ERR_ec_reconstruct: u32 = 1 << 3;
 
 /*
  * BCHFS_IOC_PREAD_RAW: O_DIRECT read with extended error reporting.
@@ -1061,12 +1033,14 @@ pub struct bch_ioctl_unpoison {
     pub pad: u32,
 }
 
-c_const! {
-    pub const BCH_IOCTL_QUERY_BTREE_KEYS_slots: u32 = 1 << 0;
-    pub const BCH_IOCTL_QUERY_BTREE_KEYS_prev: u32 = 1 << 1;
-    pub const BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots: u32 = 1 << 2;
-    pub const BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts: u32 = 1 << 3;
-}
+#[allow(non_upper_case_globals)]
+pub const BCH_IOCTL_QUERY_BTREE_KEYS_slots: u32 = 1 << 0;
+#[allow(non_upper_case_globals)]
+pub const BCH_IOCTL_QUERY_BTREE_KEYS_prev: u32 = 1 << 1;
+#[allow(non_upper_case_globals)]
+pub const BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots: u32 = 1 << 2;
+#[allow(non_upper_case_globals)]
+pub const BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts: u32 = 1 << 3;
 
 /*
  * BCH_IOCTL_QUERY_BTREE_KEYS: read keys from a btree, range query

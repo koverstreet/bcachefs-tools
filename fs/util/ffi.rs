@@ -57,14 +57,6 @@ pub use core::ffi::c_char;
 pub use core::ffi::{c_int, c_long, c_longlong, c_schar, c_short, c_uchar, c_uint, c_ulong,
                     c_ulonglong, c_ushort, c_void};
 
-/// The C string at @p, None for a NULL @p.
-///
-/// # Safety
-/// @p NULL or a NUL-terminated string, valid for 'a.
-pub unsafe fn opt_cstr<'a>(p: *const c_char) -> Option<&'a core::ffi::CStr> {
-    (!p.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr(p.cast()) })
-}
-
 /// @size bytes at @p - nothing, for none.
 ///
 /// # Safety
@@ -121,17 +113,3 @@ pub fn strscpy(buf: &mut [c_char], s: &[u8]) {
     buf[n] = 0;
 }
 
-/// @f, given @s as a C string - a copy, NUL terminated, and as C would see
-/// it: up to a NUL in @s, if there's one.
-pub fn with_cstr<R>(s: &str, f: impl FnOnce(&core::ffi::CStr) -> R)
-    -> Result<R, crate::util::alloc::AllocError>
-{
-    use crate::util::alloc::KVVec;
-
-    let mut buf = KVVec::new();
-    buf.extend_from_slice(s.as_bytes())?;
-    buf.push(0)?;
-
-    // can't fail: the NUL pushed ends it, if nothing in @s did
-    Ok(f(core::ffi::CStr::from_bytes_until_nul(&buf).unwrap()))
-}

@@ -66,20 +66,6 @@ pub fn prefetch<T>(p: *const T) {
     let _ = p;
 }
 
-/// Ask @shrink to free @nr objects, as memory pressure would: its
-/// scan_objects(), GFP_KERNEL.
-///
-/// # Safety
-/// @shrink is a live shrinker.
-pub unsafe fn shrinker_scan(shrink: *mut c::shrinker, nr: core::ffi::c_ulong) {
-    let mut sc: c::shrink_control = ::pin_init::zeroed();
-    sc.gfp_mask = c::GFP_KERNEL;
-    sc.nr_to_scan = nr as _;
-
-    let scan = unsafe { (*shrink).scan_objects }.expect("shrinker without scan_objects");
-    unsafe { scan(shrink, &mut sc) };
-}
-
 /// The @i'th CPU of a spread across the online CPUs, NUMA-local ones first:
 /// as cpumask_local_spread(i, NUMA_NO_NODE).
 #[cfg(kernel)]

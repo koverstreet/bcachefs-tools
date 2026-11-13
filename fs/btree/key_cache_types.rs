@@ -4,7 +4,6 @@
 
 use crate::btree::key_cache::shrink_table;
 use crate::cstructs::c;
-use crate::types::{rust_only, RustOnly};
 use crate::util::shrinker::Shrinker;
 use crate::util::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicIsize, AtomicUsize};
@@ -20,10 +19,8 @@ use crate::format::Bpos;
 #[repr(C)]
 #[derive(CStruct, Init)]
 pub struct btree_key_cache_shrinker {
-    #[c("struct shrinker *shrink")]
     pub(crate) shrink: Shrinker<Self>,
     /* the table shrunk once scan() has emptied it: its allocation, off reclaim */
-    #[c("struct work_struct shrink_table_work")]
     #[pin]
     pub(crate) shrink_table_work: ReffedWork<shrink_table, crate::field!(super.super.super.ro_ref)>,
 }
@@ -34,34 +31,39 @@ pub struct btree_key_cache_shrinker {
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_btree_key_cache {
     #[pin]
-    #[init(RustOnly::new(::pin_init::init_zeroed()))]
-    pub(crate) table: rust_only!(crate::btree::key_cache::KeyTable),
+    #[init(::pin_init::init_zeroed())]
+    pub(crate) table: crate::btree::key_cache::KeyTable,
     /* what's in the table, to walk: an entry's slot is from insert to evict */
     #[pin]
-    #[init(RustOnly::new(::pin_init::init_zeroed()))]
-    pub(crate) keys: rust_only!(c::fast_list),
+    #[init(::pin_init::init_zeroed())]
+    pub(crate) keys: c::fast_list,
 
     #[pin]
     pub(crate) shrinker: c::btree_key_cache_shrinker,
     #[pin]
-    #[init(RustOnly::new(AtomicUsize::new(0)))]
-    pub(crate) shrink_iter: rust_only!(AtomicUsize),
+    #[init(AtomicUsize::new(0))]
+    pub(crate) shrink_iter: AtomicUsize,
 
     /* 0: non pcpu reader locks, 1: pcpu reader locks */
     #[pin]
-    #[init(RustOnly::new(::pin_init::init_zeroed()))]
-    pub(crate) pending: rust_only!([crate::btree::key_cache::Pending; 2]),
+    #[init(::pin_init::init_zeroed())]
+    /* set up and exited through the struct shared, in place: setup(), exit() */
+    pub(crate) pending: core::cell::UnsafeCell<[crate::btree::key_cache::Pending; 2]>,
 
     pub nr_keys: AtomicIsize,
     pub nr_dirty: AtomicIsize,
 
     /* shrinker stats */
     #[pin]
-    #[init(RustOnly::new(crate::btree::key_cache::ShrinkStats::new()))]
-    pub(crate) stats: rust_only!(crate::btree::key_cache::ShrinkStats),
+    #[init(crate::btree::key_cache::ShrinkStats::new())]
+    pub(crate) stats: crate::btree::key_cache::ShrinkStats,
 }
 
 impl bch_fs_btree_key_cache {
+    pub(crate) fn pending(&self) -> &[crate::btree::key_cache::Pending; 2] {
+        unsafe { &*self.pending.get() }
+    }
+
     pub fn nr_keys_need_flush(&self) -> usize {
         let nr_dirty = self.nr_dirty.load(Relaxed);
         let nr_keys = self.nr_keys.load(Relaxed);
@@ -93,7 +95,6 @@ impl bch_fs_btree_key_cache {
 
 #[repr(C, align(4))]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
-#[c_packed]
 pub struct bkey_cached_key {
     pub btree_id: u32,
     pub pos: Bpos,

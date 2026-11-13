@@ -20,7 +20,7 @@ use crate::util::Printbuf;
 use core::cmp::Ordering;
 use core::fmt;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, CStruct, c_const, c_enum};
+use cstruct_macros::{c_name, CStruct, c_enum};
 
 /*
  * BKEYS:
@@ -157,9 +157,7 @@ use cstruct_macros::{c_name, CStruct, c_const, c_enum};
  * first key in that range of bytes again.
  */
 
-c_const! {
-    pub const MAX_BSETS: u32 = 3;
-}
+pub const MAX_BSETS: u32 = 3;
 
 #[repr(C)]
 #[c_name(bset_tree)]
@@ -183,10 +181,8 @@ pub struct BsetTree {
     pub end_offset: u16,
 }
 
-c_const! {
-    pub const BSET_NO_AUX_TREE_VAL: u16 = u16::MAX;
-    pub const BSET_RW_AUX_TREE_VAL: u16 = u16::MAX - 1;
-}
+pub const BSET_NO_AUX_TREE_VAL: u16 = u16::MAX;
+pub const BSET_RW_AUX_TREE_VAL: u16 = u16::MAX - 1;
 
 /*
  * BSET_CACHELINE was originally intended to match the hardware cacheline size -
@@ -202,10 +198,7 @@ c_const! {
  * cacheline in the linear search - but the linear search might stop before it
  * gets to the second cacheline.
  */
-c_const! {
-    #[c_int]
-    pub const BSET_CACHELINE: usize = 256;
-}
+pub const BSET_CACHELINE: usize = 256;
 
 impl BsetTree {
     pub fn aux_tree_type(&self) -> AuxTreeType {
@@ -259,10 +252,7 @@ c_enum! {
     }
 }
 
-c_const! {
-    #[c_int]
-    pub const BSET_TREE_NR_TYPES: u32 = 3;
-}
+pub const BSET_TREE_NR_TYPES: u32 = 3;
 
 /* bset_stats.sets[]: the counts for one bset tree type */
 #[repr(C)]
@@ -277,7 +267,6 @@ pub struct BsetStatsSet {
 #[c_name(bset_stats)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct BsetStats {
-    #[c_inline]
     pub sets: [BsetStatsSet; c::BSET_TREE_NR_TYPES as usize],
 
     pub floats: usize,
@@ -524,9 +513,6 @@ impl Keys<'_> {
         self.bkey_prev_filter(t, k, 0)
     }
 
-    pub fn bkey_prev(&self, t: &BsetTree, k: u16) -> Option<u16> {
-        self.bkey_prev_filter(t, k, 1)
-    }
 }
 
 /* Insert */

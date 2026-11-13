@@ -698,12 +698,8 @@ c_enum! {
 
 // The status's, beside the errcode of the same name
 pub mod status {
-    use cstruct_macros::c_const;
-
-    c_const! {
-        /* we're getting away from reusing bi_status, this should go away */
-        pub const BLK_STS_REMOVED: u8 = 128;
-    }
+    /* we're getting away from reusing bi_status, this should go away */
+    pub const BLK_STS_REMOVED: u8 = 128;
 }
 
 pub fn blk_status_to_bch_err(err: u8) -> c::bch_errcode {

@@ -540,11 +540,6 @@ impl<'a, T> PerCpuRef<'a, T> {
         possible_cpus().map(move |cpu| CpuCopy(unsafe { bch2_per_cpu_ptr(self.0.cast(), cpu) }.cast(), PhantomData))
     }
 
-    /// cpus(), with each copy's CPU.
-    pub fn cpus_numbered(self) -> impl Iterator<Item = (c_uint, CpuCopy<'a, T>)> {
-        possible_cpus().map(move |cpu| (cpu, CpuCopy(unsafe { bch2_per_cpu_ptr(self.0.cast(), cpu) }.cast(), PhantomData)))
-    }
-
     pub fn this_cpu<'g>(self, g: &'g impl Pinned) -> ThisCpu<'g, T>
         where 'a: 'g
     {

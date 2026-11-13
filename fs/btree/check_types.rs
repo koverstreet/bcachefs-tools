@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default, rust_only};
+use crate::types::{c_default};
 use crate::util::projections::Volatile;
 use crate::locking::{Locked, SeqLock};
 use crate::new_lock;
@@ -16,7 +16,6 @@ use crate::format::{Bpos, Btree};
 c_enum! {
     #[closed]
     #[prefix(GC_PHASE_)]
-    #[c_list(GC_PHASES)]
     pub enum gc_phase: u32 {
         not_running,
         start,
@@ -118,7 +117,7 @@ impl Eq for gc_pos {}
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_gc {
     /// How far gc's walk has got: not_running, when there's none.
-    pub pos: rust_only!(SeqLock<c::gc_pos>),
+    pub pos: SeqLock<c::gc_pos>,
 
     /*
      * The allocation code needs gc_mark in struct bucket to be correct, but
@@ -126,7 +125,6 @@ pub struct bch_fs_gc {
      */
     #[pin]
     #[init(new_lock!((), "&c->gc.lock"))]
-    #[c_lock("struct rw_semaphore lock")]
     pub lock: Locked<c::rw_semaphore>,
 }
 
@@ -159,7 +157,6 @@ impl bch_fs_gc {
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_gc_gens {
     /* gc_gens's: where its walk is, for sysfs */
-    #[c("struct bbpos pos")]
     pub pos: Volatile<c::bbpos>,
 }
 c_default!(bch_fs_gc_gens);

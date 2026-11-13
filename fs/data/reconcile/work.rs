@@ -91,16 +91,14 @@ use core::cell::Cell;
 use core::ffi::c_uint;
 use core::ops::ControlFlow;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{CStruct, TypeInfo, c_typedef, tagged_union};
+use cstruct_macros::{CStruct, TypeInfo, tagged_union};
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
-c_typedef! {
-    pub type reconcile_scan_device = c_uint;
-}
+#[allow(non_camel_case_types)]
+pub type reconcile_scan_device = c_uint;
 
-c_typedef! {
-    pub type reconcile_scan_inum = u64;
-}
+#[allow(non_camel_case_types)]
+pub type reconcile_scan_inum = u64;
 
 tagged_union! {
     #[derive(Clone, Copy, CStruct)]*

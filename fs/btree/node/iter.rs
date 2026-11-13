@@ -327,16 +327,6 @@ impl KeyIter {
         None
     }
 
-    #[inline]
-    pub fn next_all(&mut self, keys: &Keys<'_>) -> Option<u16> {
-        let ret = self.peek_all();
-
-        if ret.is_some() {
-            self.advance(keys);
-        }
-        ret
-    }
-
     #[inline(always)]
     fn __advance(&mut self, keys: &Keys<'_>) {
         self.data[0].k = keys.bkey_p_next(self.__peek_all());

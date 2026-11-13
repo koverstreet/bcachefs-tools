@@ -11,7 +11,6 @@ use crate::fs::Fs;
 use crate::init::error::BkeyValidate;
 use crate::prt;
 use crate::util::Printbuf;
-use crate::util::ffi::Opaque;
 use core::fmt;
 
 /// A key type's methods, on its value's type: each a no-op where the type
@@ -185,10 +184,6 @@ pub fn bkey_val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     }
 }
 
-pub fn bch2_bkey_val_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    bkey_val_to_text(out, c.map(Fs::from_c), k)
-}
-
 /// The value, by its type's validate - checked first that it's as long as
 /// the type's shortest.
 pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
@@ -280,11 +275,6 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 pub fn bkey_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_header_validate(v)?;
     bkey_val_validate(v)
-}
-
-/// bch2_bkey_swab_val(): the value byte swapped, by its type's swab.
-pub fn bkey_swab_val(fs: Option<&Fs>, k: BkeyS<'_>) {
-    (k.k.key_type().ops().swab)(fs, k)
 }
 
 /// @r might be merged into @l - the same type and version, @r starting where

@@ -226,8 +226,7 @@ impl<'b> KeyRoom<'b> {
 }
 
 /// A key kept in a struct, with room for its value: C's "struct bkey_i key;
-/// u64 key_pad[N];" - a field of one declares that with #[c_anon(..)]. U64S
-/// is the room, the key's header included. Zeroed, as C's structs start, it's
+/// u64 key_pad[N];". U64S is the room, the key's header included. Zeroed, as C's structs start, it's
 /// no key - its u64s 0, short of its own header - until one's written there.
 #[repr(C)]
 #[derive(Clone, Copy)]

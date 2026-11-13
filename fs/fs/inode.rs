@@ -60,15 +60,14 @@ use core::mem::size_of;
 use core::ops::ControlFlow;
 use crate::btree_id;
 use core::ffi::CStr;
-use cstruct_macros::{CStruct, c_bitmask, c_typedef, c_verbatim, TypeInfo};
+use cstruct_macros::{CStruct, c_bitmask, TypeInfo};
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
 use crate::util::projections::Volatile;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, SbFeature};
 
-c_typedef! {
-    pub type u96 = u64;
-}
+#[allow(non_camel_case_types)]
+pub type u96 = u64;
 
 macro_rules! __bch_inode_unpacked_0 {
     ([$(pub $f:ident: $ft:ty),* $(,)?] $(($_name:tt, $_bits:tt)),* $(,)?) => { ::paste::paste! {
@@ -132,12 +131,6 @@ c_bitmask! {
     }
 }
 
-c_verbatim!(r#"
-#include "btree/bkey_gen.h"
-#include "fs/inode_format_gen.h"
-#include "fs/inode_opts_gen.h"
-"#);
-
 macro_rules! __BKEY_INODE_BUF_XSUM_0 {
     ($(($_name:tt, $_bits:tt)),* $(,)?) => {
         #[allow(non_upper_case_globals)]
@@ -150,11 +143,7 @@ BCH_INODE_FIELDS_v3!(__BKEY_INODE_BUF_XSUM_0);
 #[derive(CStruct)]
 pub struct bkey_inode_buf {
     /* C's typed key: a v3 inode's header, its fields in _pad */
-    #[c("struct bkey_i_inode_v3 inode")]
     pub inode: BkeyI<c::InodeV3>,
-    #[c("#define x(_name, _bits)		+ 8 + _bits / 8
-u8 _pad[0 + BCH_INODE_FIELDS_v3()];
-#undef x")]
     pub _pad: [u8; BKEY_INODE_BUF_XSUM_0],
 }
 c_default!(bkey_inode_buf);

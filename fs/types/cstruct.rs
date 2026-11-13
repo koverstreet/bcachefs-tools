@@ -1,64 +1,29 @@
 // SPDX-License-Identifier: GPL-2.0
 //
-// Parsing the C-shared items of Rust source, and writing their C - shared by
-// the two halves of CStruct (see lib.rs), which must agree on every one:
-//   - the macros (fs/cstruct-macros), which parse their input when the fs
-//     crate compiles, and record it;
-//   - rust_types_gen (main.rs), which parses the recorded text again and
-//     writes the C.
+// Parsing the items the macros (fs/cstruct-macros) take, which include!()
+// this file - so it's plain `//` comments - and build on syn: the kernel
+// build's, vendor/kernel-rust, with a bare rustc.
 //
-// Both include!() this file, so it's plain `//` comments, and both are built
-// on syn - the kernel build's, vendor/kernel-rust - with a bare rustc.
-//
-// The macros get their input as a TokenStream and record its to_string(), so
-// an item is parsed by the same code from the same text both times.
-//
-// The items, each with an optional #[cfg(...)] - which C gets as #if:
+// The items:
 //
 //   #[derive(CStruct)] struct / union, named fields - #[repr(C)], optionally
-//   packed and align(N). A field's #[c("...")] is its C declaration, name
-//   included, as C's declarator syntax puts the name inside the type (arrays,
-//   function pointers); #[c_anon("...")] a C declaration that doesn't name the
-//   field (an anonymous union, a run of bitfields), whose layout only the
-//   fields around it check; a field with neither is Rust's alone, and C gets
-//   opaque storage for it. Fields can have #[cfg] too.
-//
-//   A bare #[c_anon] is C's anonymous struct or union: the field's type, a
-//   CStruct of the same file - nest! defines it in place - is written where
-//   the field is, without a name, and has no definition of its own. Its
-//   fields are asserted through the struct it's in. #[c_inline] is the same
-//   for a member C names, of a type it doesn't - struct { ... } name - whose
-//   fields are asserted as name.field; #[c_struct_group] for the kernel's
-//   struct_group(name, ...), its members both name's and the struct's own.
-//
-//   #[c_lock("u8 lock")] on a Locked<R, G, P> (locking/lock.rs): C gets the
-//   lock's declaration, then G and P - CStructs of the same file, unless ()
-//   - each an anonymous member, as Locked lays them out. The record carries
-//   R's size and Locked's offsets of G and P, so the lock and their fields are
-//   asserted where Rust has them, as the struct's own.
+//   packed and align(N). Fields can have #[cfg].
 //
 //   #[c_name(NAME)] on the struct: C's name for it, where Rust's differs - a
 //   family's C definition, X__head, whose name the family's type X<S> has in
-//   Rust (util/vstructs.rs). C knows it only as NAME.
+//   Rust (util/vstructs.rs).
 //
-//   c_verbatim!(r#"..."#): C, carried as is - what hasn't been converted.
-//
-//   c_xmacro! { NAME(x) { (args), (args), ... } }: an x-macro list. C gets
-//   #define NAME() x(args) x(args)... with each entry's text as written;
-//   Rust a macro, NAME!(cb), that hands the whole list to cb!.
+//   c_xmacro! { NAME(x) { (args), (args), ... } }: an x-macro list - a
+//   macro, NAME!(cb), that hands the whole list to cb!.
 //
 //   c_bitmask! { LE64_BITMASK(struct foo, field), strip PREFIX_ {
-//       NAME(start, end), ... } }: bitfields in a flags word. C gets
-//   LE64_BITMASK(NAME, struct foo, field, start, end) for each; Rust,
-//   accessors on foo named for NAME without PREFIX_, lowercased.
+//       NAME(start, end), ... } }: bitfields in a flags word - accessors on
+//   foo named for NAME without PREFIX_, lowercased.
 //
-//   c_ioctl! { NAME = _IOW(type, nr, ARG), ... }: ioctl numbers. C gets
-//   #define NAME _IOW(type, nr, struct arg) for each; Rust, a marker type
-//   binding the opcode to ARG, the opcode computed from the target's own
-//   _IOC constants (fs/util/ioctl.rs) - and the record carries it, for the
-//   generated header to assert C's _IOW() makes the same number.
+//   c_ioctl! { NAME = _IOW(type, nr, ARG), ... }: ioctl numbers - a marker
+//   type binding the opcode to ARG, the opcode computed from the target's own
+//   _IOC constants (fs/util/ioctl.rs).
 
-use quote::ToTokens as _;
 
 /// A cfg() predicate - for C, the #if condition it is.
 #[derive(Debug, Clone)]
@@ -71,27 +36,6 @@ pub enum Cfg {
 }
 
 impl Cfg {
-    /// The C preprocessor condition: a CONFIG_ name is IS_ENABLED(NAME) -
-    /// what rustc_cfg's cfg(CONFIG_X) is, true for =m too, which defines only
-    /// CONFIG_X_MODULE - and any other name defined(NAME); target_endian is
-    /// __BYTE_ORDER__, target_pointer_width __BITS_PER_LONG.
-    #[allow(dead_code)]
-    pub fn to_c(&self) -> Result<String, String> {
-        Ok(match self {
-            Cfg::Name(n) if n.starts_with("CONFIG_") => format!("IS_ENABLED({n})"),
-            Cfg::Name(n) => format!("defined({n})"),
-            Cfg::KeyValue(k, v) if k == "target_endian" && (v == "little" || v == "big") =>
-                format!("__BYTE_ORDER__ == __ORDER_{}_ENDIAN__", v.to_uppercase()),
-            Cfg::KeyValue(k, v) if k == "target_pointer_width" && (v == "32" || v == "64") =>
-                format!("__BITS_PER_LONG == {v}"),
-            Cfg::KeyValue(k, v) => return Err(format!("cfg({k} = \"{v}\") has no C equivalent")),
-            Cfg::Not(c) => format!("!({})", c.to_c()?),
-            Cfg::All(cs) => cs.iter().map(|c| c.to_c().map(|s| format!("({s})")))
-                .collect::<Result<Vec<_>, _>>()?.join(" && "),
-            Cfg::Any(cs) => cs.iter().map(|c| c.to_c().map(|s| format!("({s})")))
-                .collect::<Result<Vec<_>, _>>()?.join(" || "),
-        })
-    }
 
     /// As Rust source, for a #[cfg(...)].
     #[allow(dead_code)]
@@ -113,48 +57,18 @@ pub enum CKind {
 }
 
 impl CKind {
-    #[allow(dead_code)]
-    pub fn keyword(self) -> &'static str {
-        match self {
-            CKind::Struct => "struct",
-            CKind::Union => "union",
-        }
-    }
 }
 
-/// A struct's repr: C's packing and alignment attributes. packed is "1" for
-/// plain packed.
-///
-/// c_packed, #[c_packed]: C's is __packed though Rust's isn't. Every field sits
-/// where C's packing puts it - at its own alignment, as the layout asserts
-/// check; a field C packs off its alignment is one of zerocopy's le:: types,
-/// aligned to 1. For __packed __aligned(N), which Rust's repr can't say:
-/// align(N) and #[c_packed].
+/// A struct's repr: its packing and alignment. packed is "1" for plain
+/// packed.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CRepr {
     pub repr_c:   bool,
     pub packed:   Option<String>,
     pub align:    Option<String>,
-    pub c_packed: bool,
 }
 
 impl CRepr {
-    /// As C attributes, after a struct's closing brace: repr(packed(N)) is
-    /// __packed __aligned(N) - Rust can't say packed and align at once.
-    #[allow(dead_code)]
-    pub fn to_c(&self) -> String {
-        let mut out = String::new();
-        match self.packed.as_deref() {
-            Some("1") => out.push_str(" __packed"),
-            Some(n) => out.push_str(&format!(" __packed __aligned({n})")),
-            None if self.c_packed => out.push_str(" __packed"),
-            None => {}
-        }
-        if let Some(n) = &self.align {
-            out.push_str(&format!(" __aligned({n})"));
-        }
-        out
-    }
 }
 
 /// A type parameter of a CStruct: its bounds and default, as written.
@@ -181,40 +95,15 @@ pub struct CStructDef {
     /// struct is: one layout for every T.
     pub type_params: Vec<TypeParam>,
     pub kind:      CKind,
-    pub cfg:       Option<Cfg>,
     pub repr:      CRepr,
     pub cfg_reprs: Vec<(Cfg, CRepr)>,
     pub fields:    Vec<CFieldDef>,
-    /// C has it as a typedef of this name: #[c_typedef], the struct's own name,
-    /// for typedef struct { ... } name; #[c_typedef(NAME)] for typedef struct
-    /// tag { ... } NAME - the tag the struct's name, NAME the same or not.
-    pub typedef:   Option<String>,
-    /// The typedef's struct has no tag: #[c_typedef], not #[c_typedef(NAME)].
-    pub typedef_anon: bool,
-    /// C's alignment as C spells it - SMP_CACHE_BYTES, sizeof(long) - from
-    /// an alignment marker leading the struct: Rust's repr(align) takes only
-    /// a literal. The generated header asserts the two agree.
-    pub c_align:   Option<String>,
 }
 
 impl CStructDef {
     /// Its Rust name: C's, but for #[c_name].
     pub fn rust_ident(&self) -> &str {
         self.rust_name.as_deref().unwrap_or(&self.name)
-    }
-
-    /// X, if it's a family's definition, X__whole or X__head
-    /// (util/vstructs.rs): the type code names.
-    pub fn family(&self) -> Option<&str> {
-        let rust = self.rust_ident();
-        rust.strip_suffix("__whole").or_else(|| rust.strip_suffix("__head"))
-    }
-
-    /// Its Rust type, its lifetimes elided - X<'_> - as an expression, or an
-    /// impl that doesn't name them, has it.
-    #[allow(dead_code)]
-    pub fn rust_type(&self) -> String {
-        self.rust_type_with(&vec!["'_".to_string(); self.lifetimes.len()])
     }
 
     /// 'a, T: Bound and X<'a, T>: for an impl over all of the struct's
@@ -241,14 +130,6 @@ impl CStructDef {
         self.repr.repr_c || (!self.cfg_reprs.is_empty() && self.cfg_reprs.iter().all(|(_, r)| r.repr_c))
     }
 
-    /// The type as C names it: struct foo, or a typedef's name.
-    #[allow(dead_code)]
-    pub fn c_type(&self) -> String {
-        match &self.typedef {
-            Some(t) => t.clone(),
-            None => format!("{} {}", self.kind.keyword(), self.name),
-        }
-    }
 }
 
 /// A bitfield-struct type (#[bitfield(uN)]): its storage, C's declared type of
@@ -256,24 +137,15 @@ impl CStructDef {
 /// Rust type, width). A member as wide as its C type is a plain member in C;
 /// narrower, a bitfield of that unit.
 #[derive(Debug)]
-#[allow(dead_code)] // cfg and storage: read by rust_types_gen, not the macros
+#[allow(dead_code)]
 pub struct CBitfieldDef {
     pub name:    String,
-    pub cfg:     Option<Cfg>,
     pub storage: String,
     pub ty:      String,
     pub fields:  Vec<(String, String, u32)>,
 }
 
 impl CBitfieldDef {
-    /// The type C declares a member of Rust type @rust_ty: an integer, the
-    /// bitfield's ty - C lays a bitfield out by its members' declared type,
-    /// Rust reads each at its width rounded up; bool and enums, themselves.
-    #[allow(dead_code)] // rust_types_gen's
-    pub fn c_type<'a>(&'a self, rust_ty: &'a str) -> &'a str {
-        let t = rust_ty.trim();
-        if t.starts_with('u') && int_bits(t).is_some() { &self.ty } else { rust_ty }
-    }
 }
 
 /// One field: its name (as C has it - type, not type_), its Rust type as written, its C
@@ -284,25 +156,8 @@ pub struct CFieldDef {
     pub ty:       String,
     /// Its visibility, as written: `pub`, `pub(crate)`, or empty.
     pub vis:      String,
-    pub c_decl:   Option<String>,
-    /// C doesn't name it: #[c_anon("...")], C's declaration in c_decl, or a
-    /// bare #[c_anon], its type written in its place - see in_place_def().
-    // Read by rust_types_gen, not the macros.
-    #[allow(dead_code)]
-    pub anon:     bool,
-    /// #[c_inline]: C names it, but not its type, which is written in its
-    /// place.
-    #[allow(dead_code)]
-    pub inline:   bool,
-    /// #[c_struct_group]: likewise, as the kernel's struct_group(name, ...) -
-    /// its members C's directly too.
-    #[allow(dead_code)]
-    pub group:    bool,
-    /// #[c_lock("...")], on a Locked<R, G, P>: the lock's C declaration, which
-    /// G's and P's members follow, written in its place.
-    pub lock:     Option<String>,
-    /// #[c_bitfield]: its type is a bitfield-struct type, whose members C
-    /// declares in its place.
+    /// #[c_bitfield]: its type is a bitfield-struct type, whose members are
+    /// the struct's too.
     pub bitfield: bool,
     /// #[bits(N)], in a bitfield-struct type: its width.
     pub bits:     Option<u32>,
@@ -311,22 +166,12 @@ pub struct CFieldDef {
     pub counted_by: Option<String>,
     /// #[placed_at]: the field #[placed] added, its place's At - which
     /// #[derive(Init)]'s init() takes. (cstruct-macros' place.rs.)
-    #[allow(dead_code)] // read by the macros, not rust_types_gen
+    #[allow(dead_code)]
     pub placed_at: bool,
     pub cfg:      Option<Cfg>,
-    /// C's __aligned() on the member: from an alignment marker before it.
-    #[allow(dead_code)]
-    pub c_align:  Option<String>,
 }
 
 impl CFieldDef {
-    /// The last segment of the field's type path, generics dropped:
-    /// `bcachefs_types::Foo<T>` -> `Foo`.
-    #[allow(dead_code)]
-    pub fn ty_name(&self) -> &str {
-        let base = self.ty.split('<').next().unwrap_or(&self.ty);
-        base.rsplit("::").next().unwrap_or(base).trim()
-    }
 
     /// The field's name as Rust spells it: a keyword gets a _.
     #[allow(dead_code)]
@@ -335,17 +180,9 @@ impl CFieldDef {
     }
 }
 
-/// C carried as is.
-#[derive(Debug)]
-pub struct CVerbatim {
-    pub cfg:  Option<Cfg>,
-    pub text: String,
-}
-
 /// An x-macro list.
 #[derive(Debug)]
 pub struct CXMacro {
-    pub cfg:      Option<Cfg>,
     pub name:     String,
     pub callback: String,
     pub entries:  Vec<CXEntry>,
@@ -375,18 +212,12 @@ pub struct CXMap {
 /// the flags word, as C and Rust both write it: "flags[0]".
 #[derive(Debug)]
 pub struct CBitmask {
-    pub cfg:        Option<Cfg>,
     pub macro_name: String,
-    /// The struct as written, "struct foo": Rust's name, which the header
-    /// generator renders as C's.
+    /// The struct as written, "struct foo".
     pub c_type:     String,
     /// The type the accessors are on: "foo" - or for `struct Head<foo>`, a
     /// family's C definition, "foo__head".
     pub rust_type:  String,
-    /// C's struct, as Rust names its definition: foo, foo__head, or for
-    /// `struct foo<STATE>`, foo__whole - the name the generator resolves, by
-    /// the record's path to it: another type may be foo too.
-    pub def:        String,
     pub field:      String,
     pub strip:      Option<String>,
     pub entries:    Vec<CBitmaskEntry>,
@@ -417,14 +248,12 @@ impl CBitmask {
 /// c_ioctl!: ioctl numbers, C's #define NAME _IOW(type, nr, arg).
 #[derive(Debug)]
 pub struct CIoctl {
-    pub cfg:     Option<Cfg>,
     pub entries: Vec<CIoctlEntry>,
 }
 
 /// One ioctl: @dir is its _IO*() macro - _IO, _IOR, _IOW or _IOWR - and
 /// @ty and @nr its type and number, as written. @arg is the argument's Rust
-/// type, None for _IO; @c_arg its C type, from #[c("...")], when the Rust
-/// type doesn't say it.
+/// type, None for _IO.
 #[derive(Debug)]
 pub struct CIoctlEntry {
     pub name:  String,
@@ -432,10 +261,9 @@ pub struct CIoctlEntry {
     pub ty:    String,
     pub nr:    String,
     pub arg:   Option<String>,
-    pub c_arg: Option<String>,
 }
 
-/// What an enum's values can be - fs/enum_kind.h's markers.
+/// What an enum's values can be.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CEnumKind {
     /// Only ever those listed: a Rust enum.
@@ -447,15 +275,6 @@ pub enum CEnumKind {
 }
 
 impl CEnumKind {
-    #[allow(dead_code)]
-    pub fn marker(self) -> &'static str {
-        match self {
-            CEnumKind::Closed => "__enum_closed",
-            CEnumKind::Open   => "__enum_open",
-            CEnumKind::Flags  => "__enum_flags",
-        }
-    }
-
     /// The attribute that says it: #[closed], #[open], #[flags].
     pub fn attr(self) -> &'static str {
         match self {
@@ -480,7 +299,6 @@ pub struct CFromList {
 /// anonymous one: constants.
 #[derive(Debug, Clone)]
 pub struct CEnumDef {
-    pub cfg:      Option<Cfg>,
     pub kind:     CEnumKind,
     pub name:     Option<String>,
     /// The integer type: u32, i32, u64.
@@ -551,161 +369,6 @@ pub struct CEnumVariant {
     pub docs:   Vec<String>,
 }
 
-/// c_typedef!: a type alias, C's typedef. @c_decl is its C declarator - the
-/// declaration less `typedef` - where the canonical rendering of @ty isn't.
-#[derive(Debug)]
-pub struct CTypedef {
-    pub cfg:       Option<Cfg>,
-    /// C's name - its Rust one too, but for #[c_name]: rust_name.
-    pub name:      String,
-    pub rust_name: Option<String>,
-    pub ty:        String,
-    pub c_decl:    Option<String>,
-}
-
-impl CTypedef {
-    #[allow(dead_code)]
-    pub fn rust_ident(&self) -> &str {
-        self.rust_name.as_deref().unwrap_or(&self.name)
-    }
-}
-
-/// c_rcu_array!: an RcuArray<@elem[, @head]> C reads, as `struct @c_name {
-/// struct rcu_head rcu; size_t @nr; [@head's fields;] @elem @elems[]; }` - a
-/// field of type @alias is, to C, a __rcu pointer to one.
-#[derive(Debug)]
-pub struct CRcuArray {
-    pub cfg:    Option<Cfg>,
-    pub alias:  String,
-    pub ty:     String,
-    pub elem:   String,
-    pub head:   Option<String>,
-    pub c_name: String,
-    pub nr:     String,
-    pub elems:  String,
-}
-
-/// c_same!: a Rust type with the layout of a C type. The generator checks it:
-/// size, alignment, and the offsets of @fields, which both name. (No cfg: a
-/// c_same! a build leaves out has no record, so nothing to check.)
-#[derive(Debug)]
-pub struct CSame {
-    #[allow(dead_code)]
-    pub c_type:  String,
-    pub rust_ty: String,
-    pub fields:  Vec<String>,
-}
-
-/// c_const!: an integer constant, C's #define.
-#[derive(Debug)]
-pub struct CConst {
-    pub cfg:    Option<Cfg>,
-    pub name:   String,
-    pub ty:     String,
-    /// The #define's type: @ty's, or int under #[c_int].
-    pub c_type: String,
-    pub value:  String,
-}
-
-impl CConst {
-    /// The #define's value: the number rustc evaluated, written so C gives
-    /// it c_type: `5U`, `5ULL`, `((size_t) 5)`. A
-    /// constant's type is what C does with it - %zu, integer promotion,
-    /// signed against unsigned - and a bare number would be int, or
-    /// whatever's wide enough.
-    fn c_value(&self) -> Result<String, String> {
-        let v = self.value.parse::<i128>()
-            .map_err(|_| format!("{}: value {} isn't a number - the records path evaluates every constant",
-                                 self.name, self.value))?;
-        let suffix = match self.c_type.as_str() {
-            "int" | "s32"                   => Some(("", i32::MIN as i128, i32::MAX as i128)),
-            "unsigned" | "u32"              => Some(("U", 0, u32::MAX as i128)),
-            "long"                          => Some(("L", i64::MIN as i128, i64::MAX as i128)),
-            "unsigned long"                 => Some(("UL", 0, u64::MAX as i128)),
-            "long long" | "s64"             => Some(("LL", i64::MIN as i128, i64::MAX as i128)),
-            "unsigned long long" | "u64"    => Some(("ULL", 0, u64::MAX as i128)),
-            _                               => None,
-        };
-        Ok(match suffix {
-            Some((_, min, max)) if v < min || v > max =>
-                return Err(format!("c_const! {}: {v} isn't a {}, its C type", self.name, self.c_type)),
-            // C's negative numbers are a positive literal negated: the
-            // type's minimum has no literal of the type
-            Some((_, min, _)) if v == min && v < 0 =>
-                return Err(format!("c_const! {}: {v}, the minimum of {}, has no C literal", self.name, self.c_type)),
-            Some((s, _, _)) => format!("{v}{s}"),
-            None => {
-                let wide = if i32::try_from(v).is_ok() { "" } else if v < 0 { "LL" } else { "ULL" };
-                format!("(({}) {v}{wide})", self.c_type)
-            }
-        })
-    }
-}
-
-/// Whether integer type @ty, a Rust one, is signed: how a constant's
-/// record, `as u64`, reads back.
-#[allow(dead_code)]
-fn rust_int_signed(ty: &str) -> bool {
-    let last = ty.rsplit("::").next().unwrap_or(ty).trim();
-    last.starts_with('i') || matches!(last, "c_schar" | "c_short" | "c_int" | "c_long" | "c_longlong")
-}
-
-/// A C function Rust calls, from c_extern!. #[must_use] is C's
-/// __must_check, #[cold] its __cold, and a return type of ! its __noreturn;
-/// #[c_printf(FMT, ARGS)], C's alone, is its __printf(FMT, ARGS).
-#[derive(Debug)]
-pub struct CFnDecl {
-    pub cfg:      Option<Cfg>,
-    pub name:     String,
-    /// Each parameter's name and Rust type.
-    pub params:   Vec<(String, String)>,
-    pub variadic: bool,
-    pub ret:      Option<String>,
-    pub must_use: bool,
-    pub cold:     bool,
-    pub printf:   Option<String>,
-}
-
-/// A C variable Rust uses, from c_extern!. One that isn't `mut` is C's
-/// const; #[c("...")] is its C declaration where the Rust type doesn't say
-/// it.
-#[derive(Debug)]
-pub struct CStaticDecl {
-    pub cfg:     Option<Cfg>,
-    pub name:    String,
-    pub ty:      String,
-    pub mutable: bool,
-    pub c_decl:  Option<String>,
-}
-
-/// c_extern!: what Rust calls of a C header - fs/foo/bar_c.rs, of
-/// fs/foo/bar.h. Rust gets an extern "C" block; C, the prototypes, which
-/// bar.h includes, so a declaration that has drifted from the C one is a
-/// conflicting-types error in the C build. And a #[c_export] fn: what C calls
-/// of Rust - its prototype, Rust's side the definition.
-#[derive(Debug)]
-pub struct CExtern {
-    pub cfg:     Option<Cfg>,
-    pub fns:     Vec<CFnDecl>,
-    pub statics: Vec<CStaticDecl>,
-    /// A #[c_export] fn's: a run of them is one block of prototypes.
-    pub export:  bool,
-}
-
-/// @item onto @items, where a #[c_export] after another joins its block: a
-/// run of them is one block of prototypes, as a c_extern!'s is.
-#[allow(dead_code)] // rust_types_gen's
-pub fn push_item(items: &mut Vec<CItem>, mut item: CItem) {
-    if let (CItem::Extern(ex), Some(CItem::Extern(prev))) = (&mut item, items.last_mut()) {
-        if ex.export && prev.export {
-            prev.fns.append(&mut ex.fns);
-            prev.statics.append(&mut ex.statics);
-            return;
-        }
-    }
-    items.push(item);
-}
-
 /// One arm of a tagged_union!: its name, payload type, and tag value.
 #[derive(Debug, Clone)]
 pub struct CTaggedArm {
@@ -714,41 +377,17 @@ pub struct CTaggedArm {
     pub value: String,
 }
 
-/// tagged_union!: a tagged union with a stable representation - what the
-/// enum form (cstruct-macros' tagged_union.rs) is parsed into, and its
-/// record, which is this struct|union form:
-///
-///   pub struct DiskAccountingPos {
-///       tag type_: u8 = c::disk_accounting_type,
-///       arm nr_inodes: NrInodes = 0, ...
-///       pad: Bpos,
-///       size: pad,
-///       packed,
-///   }
+/// tagged_union!: a tagged union with a stable representation, as
+/// cstruct-macros' tagged_union.rs parses its declaration.
 ///
 /// The storage is what C has: the tag, then a union of the arms, overlaid
-/// with the pad, if any. The arms are `arm name: Type = value`. Their types
-/// can be defined in the block too,
-/// `[#[...]] [pub] struct|union NAME { ... }`: they go to nestify::nest!,
-/// with the declaration's `#[...]*`.
-///
-/// `size: pad` says what its size is a function of: nothing, a constant,
-/// the pad's. Or it's the header's count, `size: header` - the storage is
-/// another's, `union NAME in STORAGE { .., size: header }`, a header its
-/// arms embed and run past - and what's generated is only the typed view of
-/// it; its arms' types are another's too. Or it's the tag's, `size: arm`,
-/// `union NAME in HEAD { .., size: arm }`: each value as long as the arm its
-/// tag selects, the head the start of every arm.
-///
-/// For a struct C hands over in memory rather than one read off disk -
-/// reconcile_scan, say - two more, both `size: pad`'s: `tag NAME: enum TYPE`,
-/// the tag a closed C enum, stored as it, the arms' values its variants;
-/// and `plain`, every arm plain data, an arm type not defined here a type of
-/// its own's - a typedef of an integer - rather than a #[counted] family's
-/// head.
+/// with the pad, if any. @size says what its size is a function of: nothing,
+/// a constant, the pad's; the header's count - the storage another's, a
+/// header its arms embed and run past, and what's generated only the typed
+/// view of it; or the tag - each value as long as the arm its tag selects,
+/// the head the start of every arm.
 #[derive(Debug)]
 pub struct CTaggedUnion {
-    pub cfg:       Option<Cfg>,
     pub name:      String,
     /// #[c_name(NAME)]: C's name, where Rust's differs.
     pub c_name:    Option<String>,
@@ -802,13 +441,6 @@ pub enum CTaggedSize {
 }
 
 impl CTaggedSize {
-    fn keyword(self) -> &'static str {
-        match self {
-            Self::Pad    => "pad",
-            Self::Header => "header",
-            Self::Arm    => "arm",
-        }
-    }
 }
 
 /// An arm's type, defined in its tagged_union!'s block.
@@ -819,19 +451,12 @@ pub struct CTaggedDef {
 
 #[derive(Debug)]
 pub enum CItem {
-    Extern(CExtern),
-    TaggedUnion(CTaggedUnion),
     Struct(CStructDef),
     Bitfield(CBitfieldDef),
-    Verbatim(CVerbatim),
     XMacro(CXMacro),
     Bitmask(CBitmask),
     Ioctl(CIoctl),
     Enum(CEnumDef),
-    Const(CConst),
-    Typedef(CTypedef),
-    Same(CSame),
-    RcuArray(CRcuArray),
 }
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -999,7 +624,6 @@ pub fn parse_family_args(src: &str, takes: &[&str]) -> Result<FamilyArgs, String
 /// Item attributes we read; others are skipped.
 #[derive(Default)]
 struct ItemAttrs {
-    cfg:       Option<Cfg>,
     derives:   bool,
     repr:      CRepr,
     cfg_reprs: Vec<(Cfg, CRepr)>,
@@ -1007,20 +631,8 @@ struct ItemAttrs {
     bitfield:  Option<String>,
     /// #[bitfield(.., ty = T)]: C's declared type of its integer members.
     bitfield_ty: Option<String>,
-    /// #[c_typedef] or #[c_typedef(NAME)].
-    typedef:   Option<Option<String>>,
     /// #[c_name(NAME)]: C's name for it, where Rust's differs.
     c_name:    Option<String>,
-    /// #[c("...")] on an item: its C declaration.
-    c_decl:    Option<String>,
-    /// #[c_export] on a fn.
-    c_export:  bool,
-    /// #[must_use] on a fn.
-    must_use:  bool,
-    /// #[cold] on a fn.
-    cold:      bool,
-    /// #[c_printf(FMT, ARGS)] on a fn: its arguments.
-    c_printf:  Option<String>,
 }
 
 // ---- structs ---------------------------------------------------------------
@@ -1054,9 +666,6 @@ fn parse_struct(d: &syn::DeriveInput, a: ItemAttrs) -> Result<Option<CStructDef>
 
     let mut fields = Vec::new();
     for f in fields_of {
-        let mut c_decl = None;
-        let mut anon = false;
-        let mut lock = None;
         let mut bits = None;
         let mut counted_by = None;
         let mut cfg = None;
@@ -1070,17 +679,6 @@ fn parse_struct(d: &syn::DeriveInput, a: ItemAttrs) -> Result<Option<CStructDef>
                 bits = Some(rust_text(&width).parse::<u32>()
                     .map_err(|_| format!("{name}: #[bits({})] takes a width first", rust_text(&l.tokens)))?);
             }
-            for (n, is_anon) in [("c", false), ("c_anon", true)] {
-                if let (true, syn::Meta::List(_)) = (is(n), &attr.meta) {
-                    c_decl = Some(attr.parse_args::<syn::LitStr>()
-                        .map_err(|_| format!("{name}: #[{n}(...)] takes one string, a C declaration"))?.value());
-                    anon = is_anon;
-                }
-            }
-            if is("c_lock") {
-                lock = Some(attr.parse_args::<syn::LitStr>()
-                    .map_err(|_| format!("{name}: #[c_lock(...)] takes one string, the lock's C declaration"))?.value());
-            }
             if is("counted_by") {
                 counted_by = Some(ident(&attr.parse_args::<syn::Ident>()
                     .map_err(|_| format!("{name}: #[counted_by(FIELD)] takes the field that counts it"))?));
@@ -1089,88 +687,25 @@ fn parse_struct(d: &syn::DeriveInput, a: ItemAttrs) -> Result<Option<CStructDef>
                 cfg = Some(cfg_of(&attr.parse_args().map_err(|e| format!("{name}: cfg: {e}"))?)?);
             }
         }
-        anon |= bare("c_anon");
-        let (inline, group, bitfield, placed_at) =
-            (bare("c_inline"), bare("c_struct_group"), bare("c_bitfield"), bare("placed_at"));
+        let (bitfield, placed_at) = (bare("c_bitfield"), bare("placed_at"));
         let vis = rust_text(&f.vis);
         let field = c_ident(&ident(f.ident.as_ref().expect("named fields")));
         let ty = rust_text(&f.ty);
-
-        if let (Some(decl), false) = (&c_decl, anon) {
-            let names_field = decl
-                .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
-                .any(|w| w == field);
-            if !names_field {
-                return Err(format!(
-                    "{name}.{field}: #[c(\"{decl}\")] must declare the field by its own name - \
-                     #[c_anon] is for a declaration that doesn't"));
-            }
-        }
-        if (inline || group) && (anon || c_decl.is_some() || (inline && group)) {
-            return Err(format!("{name}.{field}: #[c_inline] and #[c_struct_group] are the field's type, \
-                                written in its place - one of them, and not a #[c] or #[c_anon] too"));
-        }
-        if let Some(decl) = &lock {
-            if anon || inline || group || c_decl.is_some() {
-                return Err(format!("{name}.{field}: #[c_lock] is the field's C, alone"));
-            }
-            if lock_args(&ty)?.is_none() {
-                return Err(format!("{name}.{field}: #[c_lock] is for a Locked<R, G, P>, not {ty}"));
-            }
-            if lock_name(decl).is_none() {
-                return Err(format!("{name}.{field}: #[c_lock(\"{decl}\")] must end with the lock's name"));
-            }
-        }
-        fields.push(CFieldDef { name: field, ty, vis, c_decl, anon, inline, group, lock, bitfield, bits,
-                                counted_by, placed_at, cfg, c_align: None });
-    }
-
-    // A field of an alignment marker type is no field of C's, but its
-    // __aligned(): the struct's if it comes first, the next member's if not.
-    let mut c_align = None;
-    for k in 0..fields.len() {
-        let Some(expr) = align_marker(&fields[k].ty) else { continue };
-        let f = &mut fields[k];
-        if f.c_decl.is_some() || f.cfg.is_some() {
-            return Err(format!("{name}.{}: an alignment marker is C's __aligned(), not a declaration \
-                                of its own, and in every configuration", f.name));
-        }
-        f.c_decl = Some(String::new());
-        f.anon = true;
-        if k == 0 {
-            c_align = Some(expr.to_string());
-        } else if k + 1 < fields.len() {
-            fields[k + 1].c_align = Some(expr.to_string());
-        } else {
-            return Err(format!("{name}.{}: an alignment marker aligns what follows it, and nothing does",
-                               fields[k].name));
-        }
+        fields.push(CFieldDef { name: field, ty, vis, bitfield, bits, counted_by, placed_at, cfg });
     }
 
     let (name, rust_name) = match a.c_name {
         Some(c) => (c, Some(name)),
         None    => (name, None),
     };
-    let typedef_anon = matches!(a.typedef, Some(None));
-    let typedef = a.typedef.map(|t| t.unwrap_or_else(|| name.clone()));
     Ok(Some(CStructDef {
-        name, rust_name, lifetimes, type_params, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
-        typedef_anon, c_align,
+        name, rust_name, lifetimes, type_params, kind, repr: a.repr, cfg_reprs: a.cfg_reprs, fields,
     }))
-}
-
-/// C's alignment, as C spells it, for a field of one of types/lib.rs's
-/// alignment markers - zero-sized, aligned as C's __aligned() is.
-fn align_marker(ty: &str) -> Option<&'static str> {
-    match ty.trim().rsplit("::").next()? {
-        "CacheAligned" => Some("SMP_CACHE_BYTES"),
-        _ => None,
-    }
 }
 
 /// A bitfield-struct type at @i, after its attributes - the struct with
 /// #[bitfield(@storage)] - and the index after it.
-fn parse_bitfield(d: &syn::DeriveInput, cfg: Option<Cfg>, storage: String, ty: Option<String>)
+fn parse_bitfield(d: &syn::DeriveInput, storage: String, ty: Option<String>)
     -> Result<Option<CBitfieldDef>, String>
 {
     let Some(def) = parse_struct(d, ItemAttrs::default())? else {
@@ -1186,14 +721,7 @@ fn parse_bitfield(d: &syn::DeriveInput, cfg: Option<Cfg>, storage: String, ty: O
         fields.push((f.name, f.ty, width));
     }
     let ty = ty.unwrap_or_else(|| storage.clone());
-    Ok(Some(CBitfieldDef { name: def.name, cfg, storage, ty, fields }))
-}
-
-/// The width of the unit C lays out a bitfield of type @ty in: an integer's,
-/// and bool's - _Bool's byte.
-#[allow(dead_code)]
-fn unit_bits(ty: &str) -> Option<u32> {
-    if ty.trim() == "bool" { Some(8) } else { int_bits(ty) }
+    Ok(Some(CBitfieldDef { name: def.name, storage, ty, fields }))
 }
 
 /// The width of integer type @ty, in bits.
@@ -1252,7 +780,7 @@ fn parse_xmacro(m: &syn::Macro) -> Result<CXMacro, String> {
                 list.parse::<syn::Token![,]>()?;
             }
         }
-        Ok(CXMacro { cfg: None, name: ident(&name), callback: ident(&callback), entries })
+        Ok(CXMacro { name: ident(&name), callback: ident(&callback), entries })
     }).map_err(|e| format!("c_xmacro!: an entry is (args), SUB(), or SUB(MAP(params) => (args)) - {e}"))
 }
 
@@ -1306,15 +834,15 @@ fn parse_bitmask(m: &syn::Macro) -> Result<CBitmask, String> {
             }),
             _ => return Err(bad()),
         };
-        let (rust_type, c_type, def) = match (n.as_str(), arg.as_deref()) {
-            (_, None) => (n.clone(), format!("struct {n}"), n.clone()),
+        let (rust_type, c_type) = match (n.as_str(), arg.as_deref()) {
+            (_, None) => (n.clone(), format!("struct {n}")),
             // a family's C definition, X__head (util/vstructs.rs): its header's
             // fields, which each state's definition derefs to
-            ("Head", Some(f)) => (format!("{f}__head"), format!("struct {f}"), format!("{f}__head")),
+            ("Head", Some(f)) => (format!("{f}__head"), format!("struct {f}")),
             // a family's type in a state: a #[grown] type's value in place, for
             // its floor's fields - every view of it reaches X<Validated>
             (_, Some(st @ ("Whole" | "Validated" | "Unvalidated"))) =>
-                (format!("{n}<crate::util::vstructs::{st}>"), format!("struct {n}"), format!("{n}__whole")),
+                (format!("{n}<crate::util::vstructs::{st}>"), format!("struct {n}")),
             _ => return Err(bad()),
         };
 
@@ -1340,23 +868,16 @@ fn parse_bitmask(m: &syn::Macro) -> Result<CBitmask, String> {
             list.parse::<Option<syn::Token![,]>>()?;
         }
 
-        Ok(CBitmask { cfg: None, macro_name: ident(&macro_name), c_type, rust_type, def, field, strip, entries })
+        Ok(CBitmask { macro_name: ident(&macro_name), c_type, rust_type, field, strip, entries })
     }).map_err(syn_err("c_bitmask!"))
 }
 
-/// c_ioctl!'s body: NAME = _IOW(type, nr, ARG), ... - _IO without the ARG -
-/// with #[c("...")] before an entry for its argument's C type, where the Rust
-/// type doesn't say it.
+/// c_ioctl!'s body: NAME = _IOW(type, nr, ARG), ... - _IO without the ARG.
 fn parse_ioctl(m: &syn::Macro) -> Result<CIoctl, String> {
     let entries = m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
         let mut entries = Vec::new();
         while !input.is_empty() {
-            let mut c_arg = None;
-            for a in input.call(syn::Attribute::parse_outer)? {
-                if a.path().is_ident("c") {
-                    c_arg = Some(a.parse_args::<syn::LitStr>()?.value());
-                }
-            }
+            input.call(syn::Attribute::parse_outer)?;
             let name: syn::Ident = input.parse()?;
             input.parse::<syn::Token![=]>()?;
             let dir: syn::Ident = input.parse()?;
@@ -1371,10 +892,7 @@ fn parse_ioctl(m: &syn::Macro) -> Result<CIoctl, String> {
                 ("_IOR" | "_IOW" | "_IOWR", _) => return Err(err(format!("expected {dir}(type, nr, ARG)"))),
                 _ => return Err(err(format!("{dir} isn't _IO, _IOR, _IOW or _IOWR"))),
             };
-            if arg.is_none() && c_arg.is_some() {
-                return Err(err("#[c(...)] is the argument's C type, and _IO has none".into()));
-            }
-            entries.push(CIoctlEntry { name: ident(&name), dir: ident(&dir), ty, nr, arg, c_arg });
+            entries.push(CIoctlEntry { name: ident(&name), dir: ident(&dir), ty, nr, arg });
             input.parse::<Option<syn::Token![,]>>()?;
         }
         Ok(entries)
@@ -1382,7 +900,7 @@ fn parse_ioctl(m: &syn::Macro) -> Result<CIoctl, String> {
     if entries.is_empty() {
         return Err("c_ioctl!: expected NAME = _IOW(type, nr, ARG), ...".into());
     }
-    Ok(CIoctl { cfg: None, entries })
+    Ok(CIoctl { entries })
 }
 
 /// A c_enum!'s head, `#[open|closed|flags] pub enum NAME: REPR` - NAME `_`
@@ -1422,7 +940,7 @@ pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
     }
     let body;
     syn::braced!(body in input);
-    let def = CEnumDef { cfg: None, kind, name, repr, variants: Vec::new(), from: Vec::new(), own_to_text,
+    let def = CEnumDef { kind, name, repr, variants: Vec::new(), from: Vec::new(), own_to_text,
                          c_name, prefix, nr };
     Ok((def, others, body.parse()?))
 }
@@ -1468,111 +986,11 @@ fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
     }).map_err(syn_err("c_enum!: expected #[open|closed|flags] pub enum NAME: REPR { ... }"))
 }
 
-/// c_typedef!'s body: [#[c("C declarator")]] [#[c_name(NAME)]] pub type NAME = TYPE;
-fn parse_typedef(m: &syn::Macro) -> Result<CTypedef, String> {
-    let t: syn::ItemType = m.parse_body().map_err(|e| format!("c_typedef!: expected pub type NAME = TYPE; - {e}"))?;
-    let mut c_decl = None;
-    let mut c_name = None;
-    for a in &t.attrs {
-        if a.path().is_ident("c") {
-            c_decl = a.parse_args::<syn::LitStr>().ok().map(|s| s.value());
-        }
-        if a.path().is_ident("c_name") {
-            c_name = a.parse_args::<syn::Ident>().ok().map(|n| ident(&n));
-        }
-    }
-    let (name, rust_name) = match c_name {
-        Some(c) => (c, Some(ident(&t.ident))),
-        None    => (ident(&t.ident), None),
-    };
-    Ok(CTypedef { cfg: None, name, rust_name, ty: rust_text(&t.ty), c_decl })
-}
-
 /// @i as the tokenizer has an identifier: a raw one without its r#.
 fn ident(i: &syn::Ident) -> String {
     i.to_string().trim_start_matches("r#").to_string()
 }
 
-/// c_rcu_array!'s body: pub type ALIAS = RcuArray<T[, H]> as struct NAME { NR, ELEMS };
-fn parse_rcu_array(m: &syn::Macro) -> Result<CRcuArray, String> {
-    const EXPECTED: &str = "c_rcu_array!: expected pub type ALIAS = RcuArray<T[, H]> as struct NAME { NR, ELEMS };";
-    let (alias, ty, c_name, nr, elems) = m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
-        input.call(syn::Attribute::parse_outer)?;
-        input.parse::<syn::Visibility>()?;
-        input.parse::<syn::Token![type]>()?;
-        let alias: syn::Ident = input.parse()?;
-        input.parse::<syn::Token![=]>()?;
-        let ty: syn::Type = input.parse()?;
-        input.parse::<syn::Token![as]>()?;
-        input.parse::<syn::Token![struct]>()?;
-        let c_name: syn::Ident = input.parse()?;
-        let fields;
-        syn::braced!(fields in input);
-        let fields = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated(&fields)?;
-        input.parse::<Option<syn::Token![;]>>()?;
-        let [nr, elems] = fields.into_iter().collect::<Vec<_>>().try_into().map_err(|_| syn::Error::new(alias.span(),
-            format!("{alias}: its fields are {{ NR, ELEMS }}: the length's name and the array's")))?;
-        Ok((ident(&alias), rust_text(&ty), ident(&c_name), ident(&nr), ident(&elems)))
-    }).map_err(syn_err(EXPECTED))?;
-    let (elem, head) = match container_args(&ty, "RcuArray")?.as_deref() {
-        Some([elem]) => (elem.clone(), None),
-        Some([elem, head]) => (elem.clone(), Some(head.clone())),
-        _ => return Err(format!("c_rcu_array! {alias}: {ty} isn't an RcuArray<T> or RcuArray<T, H>")),
-    };
-    Ok(CRcuArray { cfg: None, alias, ty, elem, head, c_name, nr, elems })
-}
-
-/// c_same!'s body: struct|union NAME == TYPE [{ field, ... }]
-fn parse_same(m: &syn::Macro) -> Result<CSame, String> {
-    m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
-        use syn::ext::IdentExt as _;
-        input.call(syn::Attribute::parse_outer)?;
-        let kw = input.call(syn::Ident::parse_any)?;
-        if kw != "struct" && kw != "union" {
-            return Err(syn::Error::new(kw.span(), "expected struct NAME == TYPE"));
-        }
-        let name: syn::Ident = input.parse()?;
-        input.parse::<syn::Token![==]>()?;
-        let ty: syn::Type = input.parse()?;
-        let fields = match input.peek(syn::token::Brace) {
-            true => {
-                let list;
-                syn::braced!(list in input);
-                syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated(&list)?
-                    .iter().map(ident).collect()
-            }
-            false => Vec::new(),
-        };
-        Ok(CSame { c_type: format!("{kw} {}", ident(&name)), rust_ty: rust_text(&ty), fields })
-    }).map_err(syn_err("c_same!: expected struct NAME == TYPE [{ field, .. }]"))
-}
-
-/// One of c_const!'s constants: `#[c_int]? pub const NAME: TYPE = EXPR`. The #define
-/// has TYPE's C type; #[c_int], int's: for a constant C had as a plain
-/// number, so its type is the one C was written against, whatever type
-/// Rust wants it in.
-fn parse_consts(m: &syn::Macro) -> Result<Vec<CItem>, String> {
-    let consts = m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
-        let mut v = Vec::new();
-        while !input.is_empty() {
-            v.push(input.parse::<syn::ItemConst>()?);
-        }
-        Ok(v)
-    }).map_err(|e| format!("c_const!: {e}"))?;
-
-    consts.into_iter().map(|c| {
-        let name = c.ident.to_string();
-        let ty = c.ty.to_token_stream().to_string();
-        let c_type = match c.attrs.iter().any(|a| a.path().is_ident("c_int")) {
-            true => "int".to_string(),
-            false => canon_base(&c.ty).ok_or_else(|| format!("c_const! {name}: {ty} has no C type"))?,
-        };
-        Ok(CItem::Const(CConst { cfg: None, name, ty, c_type, value: c.expr.to_token_stream().to_string() }))
-    }).collect()
-}
-
-/// c_extern!'s body: `pub fn NAME(p: T, ...) -> R;` and `pub static [mut]
-/// NAME: T;`, each with a #[cfg] if it has one.
 /// cfg(@m), as Cfg.
 fn cfg_of(m: &syn::Meta) -> Result<Cfg, String> {
     let bad = || format!("cfg({}) not understood", rust_text(m));
@@ -1622,10 +1040,6 @@ fn item_attrs_of(attrs: &[syn::Attribute]) -> Result<ItemAttrs, String> {
             _ => None,
         };
         let is = |n: &str| attr.path().is_ident(n);
-        let bare = |n: &str| matches!(&attr.meta, syn::Meta::Path(p) if p.is_ident(n));
-        if let (true, Some(l)) = (is("cfg"), list) {
-            a.cfg = Some(cfg_of(&l.parse_args().map_err(|e| format!("cfg: {e}"))?)?);
-        }
         if let (true, Some(l)) = (is("derive"), list) {
             a.derives |= flat(&l.tokens).iter().any(|t| matches!(t, Flat::Word(w) if w == "CStruct"));
         }
@@ -1653,391 +1067,13 @@ fn item_attrs_of(attrs: &[syn::Attribute]) -> Result<ItemAttrs, String> {
                 _ => None,
             });
         }
-        a.typedef = if bare("c_typedef") { Some(None) } else { a.typedef };
-        a.repr.c_packed |= bare("c_packed");
-        a.c_export |= bare("c_export");
-        a.must_use |= is("must_use");
-        a.cold |= bare("cold");
-        if let (true, Some(l)) = (is("c_printf"), list) {
-            a.c_printf = Some(c_text(&l.tokens));
-        }
-        if let (true, Ok(s)) = (is("c"), attr.parse_args::<syn::LitStr>()) {
-            a.c_decl = Some(s.value());
-        }
-        if let (true, Ok(t)) = (is("c_typedef"), attr.parse_args::<syn::Ident>()) {
-            a.typedef = Some(Some(ident(&t)));
-        }
         // #[c_name], or what it expands to - a family's macro sees it
         // unexpanded, the derives expanded
         if let (true, Ok(n)) = (is("c_name") || is("c_name_of"), attr.parse_args::<syn::Ident>()) {
             a.c_name = Some(ident(&n));
         }
     }
-    for (_, r) in &mut a.cfg_reprs {
-        r.c_packed = a.repr.c_packed;
-    }
     Ok(a)
-}
-
-/// A fn's parameters - name and @ty's of the type, each - and what follows
-/// them, @ty of its return type: from @what's signature.
-type Params = Vec<(String, String)>;
-fn fn_params(what: &str, sig: &syn::Signature, ty: &mut dyn FnMut(&syn::Type) -> Result<String, String>)
-    -> Result<(Params, Option<String>), String>
-{
-    let name = ident(&sig.ident);
-    let mut params = Vec::new();
-    for p in &sig.inputs {
-        let syn::FnArg::Typed(t) = p else {
-            return Err(format!("{what}: fn {name}: parameter {} not understood", rust_text(p)));
-        };
-        let n = match &*t.pat {
-            syn::Pat::Ident(i) if i.by_ref.is_none() && i.subpat.is_none() => ident(&i.ident),
-            syn::Pat::Wild(_) => "_".into(),
-            _ => return Err(format!("{what}: fn {name}: parameter {} not understood", rust_text(p))),
-        };
-        params.push((n, ty(&t.ty)?));
-    }
-    let ret = match &sig.output {
-        syn::ReturnType::Default => None,
-        syn::ReturnType::Type(_, t) => Some(ty(t)?),
-    };
-    Ok((params, ret))
-}
-
-fn parse_extern(m: &syn::Macro) -> Result<CExtern, String> {
-    let items = m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
-        let mut v = Vec::new();
-        while !input.is_empty() {
-            v.push(input.parse::<syn::ForeignItem>()?);
-        }
-        Ok(v)
-    }).map_err(syn_err("c_extern!: an item is a fn or a static, and its ';'"))?;
-
-    let mut ex = CExtern { cfg: None, fns: Vec::new(), statics: Vec::new(), export: false };
-    for item in &items {
-        match item {
-            syn::ForeignItem::Fn(f) => {
-                let a = item_attrs_of(&f.attrs)?;
-                let (params, ret) = fn_params("c_extern!", &f.sig, &mut |t| Ok(rust_text(t)))?;
-                ex.fns.push(CFnDecl { cfg: a.cfg, name: ident(&f.sig.ident), params, variadic: f.sig.variadic.is_some(),
-                                      ret, must_use: a.must_use, cold: a.cold, printf: a.c_printf });
-            }
-            syn::ForeignItem::Static(s) => {
-                let a = item_attrs_of(&s.attrs)?;
-                ex.statics.push(CStaticDecl { cfg: a.cfg, name: ident(&s.ident), ty: rust_text(&s.ty),
-                                              mutable: matches!(s.mutability, syn::StaticMutability::Mut(_)),
-                                              c_decl: a.c_decl });
-            }
-            _ => return Err(format!("c_extern!: {} isn't a fn or a static", rust_text(item))),
-        }
-    }
-    Ok(ex)
-}
-
-/// Rust's types for C's that a #[c_export] fn may take, as unqualified() has
-/// them, and C's, as c_extern! does: #[repr(transparent)], or c_same! - one
-/// layout either way. References are c_export_type()'s.
-const C_EXPORT_TYPES: &[(&str, &str)] = &[
-    ("BkeySC<'_>",     "c::bkey_s_c"),
-    ("BkeyS<'_>",      "c::bkey_s"),
-    ("BtreeIter<'_>",  "c::btree_iter"),
-];
-
-/// Of C_EXPORT_TYPES, those C changes behind a shared reference - an Opaque,
-/// or Cells: their pointer isn't const.
-const C_EXPORT_OPAQUE: &[&str] = &["BtreeTrans<'_>"];
-
-/// @ty with each path's qualifiers dropped: `&crate::util::ffi::Opaque<crate::fs::Fs>`
-/// is `&Opaque<Fs>`.
-fn unqualified(ty: &syn::Type) -> String {
-    struct Last;
-    impl syn::visit_mut::VisitMut for Last {
-        fn visit_path_mut(&mut self, p: &mut syn::Path) {
-            if let Some(last) = p.segments.pop() {
-                p.segments = [last.into_value()].into_iter().collect();
-            }
-            p.leading_colon = None;
-            syn::visit_mut::visit_path_mut(self, p);
-        }
-    }
-    let mut ty = ty.clone();
-    syn::visit_mut::VisitMut::visit_type_mut(&mut Last, &mut ty);
-    rust_text(&ty)
-}
-
-/// The C type, as c_extern! has it, of a #[c_export] fn's parameter or return
-/// type @ty - and whether it isn't @ty, the value converting by transmute. A
-/// reference is C's pointer: &T const T *, &mut T T *, and Option<&T> one
-/// that may be NULL; Opaque<T> and MaybeUninit<T> are T, and an Opaque's
-/// pointer isn't const, as C changes what's behind it. C_EXPORT_TYPES' are
-/// as it has them, and a closure fn's Running<T> is what C calls it with, a
-/// struct work_struct *. Any other type is C's own: a path to it written
-/// c::NAME, as `crate::c::foo` from a macro_rules! isn't.
-fn c_export_type(ty: &syn::Type) -> (String, bool) {
-    let is = |r: &str, t: &syn::Type| type_of(r).is_some_and(|r| unqualified(&r) == unqualified(t));
-    if let Some(r @ syn::Type::Reference(_)) = arg_of(ty, "Option") {
-        return c_export_type(r);
-    }
-    if arg_of(ty, "Running").is_some() {
-        return ("*mut c::work_struct".into(), true);
-    }
-    if let syn::Type::Reference(r) = ty {
-        let (mut mutable, mut pointee) = (r.mutability.is_some(), &*r.elem);
-        if let Some(t) = arg_of(pointee, "Opaque") {
-            (mutable, pointee) = (true, t);
-        } else if let Some(t) = arg_of(pointee, "MaybeUninit") {
-            pointee = t;
-        } else if C_EXPORT_OPAQUE.iter().any(|r| is(r, pointee)) {
-            mutable = true;
-        }
-        let q = if mutable { "mut" } else { "const" };
-        return (format!("*{q} {}", c_export_type(pointee).0), true);
-    }
-    if let Some((_, c)) = C_EXPORT_TYPES.iter().find(|(r, _)| is(r, ty)) {
-        return (c.to_string(), true);
-    }
-    // the path's qualifiers before c::, as c::
-    struct CNs;
-    impl syn::visit_mut::VisitMut for CNs {
-        fn visit_path_mut(&mut self, p: &mut syn::Path) {
-            if let Some(ns) = p.segments.iter().rposition(|s| is_c_ns(&ident(&s.ident))) {
-                let rest: Vec<_> = p.segments.iter().skip(ns + 1).cloned().collect();
-                p.segments = std::iter::once(syn::PathSegment::from(syn::Ident::new("c", proc_macro2::Span::call_site())))
-                    .chain(rest).collect();
-                p.leading_colon = None;
-            }
-            syn::visit_mut::visit_path_mut(self, p);
-        }
-    }
-    let mut ty = ty.clone();
-    syn::visit_mut::VisitMut::visit_type_mut(&mut CNs, &mut ty);
-    (rust_text(&ty), false)
-}
-
-/// A #[c_export] fn: its prototype, as c_extern!'s, with each type C's
-/// (c_export_type()); and for the definition with C's signature that calls
-/// it, each of its types that isn't C's - its parameters', its return's.
-/// An extern "C" fn is C's symbol itself, and has no such definition.
-pub struct CExport {
-    pub ex:       CExtern,
-    pub extern_c: bool,
-    pub params:   Vec<Option<String>>,
-    pub ret:      Option<String>,
-}
-
-/// A #[c_export] fn, at @i, past its attributes: `[pub] [unsafe] [extern
-/// "C"] fn NAME[<'a, ...>](p: T, ...) [-> R] { ... }`; and the index after it.
-fn parse_export(f: &syn::ItemFn) -> Result<CExport, String> {
-    use syn::visit_mut::VisitMut;
-    let a = item_attrs_of(&f.attrs)?;
-    let name = ident(&f.sig.ident);
-    let extern_c = matches!(&f.sig.abi, Some(syn::Abi { name: Some(n), .. }) if n.value() == "C");
-
-    // Its lifetimes are '_ to the definition with C's signature, which calls
-    // it: the call infers them
-    let mut lifetimes = Vec::new();
-    for g in &f.sig.generics.params {
-        match g {
-            syn::GenericParam::Lifetime(l) => lifetimes.push(l.lifetime.ident.to_string()),
-            _ => return Err(format!("#[c_export] fn {name}: generics are lifetimes only")),
-        }
-    }
-    struct Elide<'a>(&'a [String]);
-    impl VisitMut for Elide<'_> {
-        fn visit_lifetime_mut(&mut self, l: &mut syn::Lifetime) {
-            if self.0.contains(&l.ident.to_string()) {
-                *l = syn::Lifetime::new("'_", l.span());
-            }
-        }
-    }
-
-    // each type as C has it, and as Rust has it if it converts
-    let mut rust = Vec::new();
-    let (params, ret) = fn_params("#[c_export]", &f.sig, &mut |t| {
-        let mut t = t.clone();
-        Elide(&lifetimes).visit_type_mut(&mut t);
-        let (c, converts) = c_export_type(&t);
-        rust.push(converts.then(|| rust_text(&t)));
-        Ok(c)
-    })?;
-    let rust_ret = match ret {
-        Some(_) => rust.pop().flatten(),
-        None => None,
-    };
-    let f = CFnDecl { cfg: a.cfg, name, params, variadic: false, ret, must_use: a.must_use,
-                      cold: a.cold, printf: a.c_printf };
-    let ex = CExtern { cfg: None, fns: vec![f], statics: Vec::new(), export: true };
-    Ok(CExport { ex, extern_c, params: rust, ret: rust_ret })
-}
-
-
-/// A #[c_export] static, at @i, past `static`: `NAME: TYPE [= EXPR];` - C
-/// gets its extern declaration, as a c_extern! static's; and the index after
-/// it. Not mut: what C reads of Rust's is C's const.
-fn parse_export_static(s: &syn::ForeignItemStatic) -> Result<CExport, String> {
-    if !matches!(s.mutability, syn::StaticMutability::None) {
-        return Err("#[c_export]: expected static NAME: TYPE = EXPR; - not mut".into());
-    }
-    let a = item_attrs_of(&s.attrs)?;
-    let s = CStaticDecl { cfg: a.cfg, name: ident(&s.ident), ty: rust_text(&s.ty), mutable: false, c_decl: a.c_decl };
-    let ex = CExtern { cfg: None, fns: Vec::new(), statics: vec![s], export: true };
-    Ok(CExport { ex, extern_c: false, params: Vec::new(), ret: None })
-}
-
-/// An exported item - a fn, or a static, whose record has no value: `static
-/// NAME: TYPE;`, which syn has as Verbatim - if @item is one.
-fn export_of(item: &syn::Item) -> Option<Result<CExport, String>> {
-    match item {
-        syn::Item::Fn(f) => Some(parse_export(f)),
-        syn::Item::Verbatim(v) => syn::parse2::<syn::ForeignItemStatic>(v.clone()).ok().map(|s| parse_export_static(&s)),
-        _ => None,
-    }
-}
-
-/// Whether @item is #[c_export]'s.
-fn is_export(item: &syn::Item) -> bool {
-    let attrs = match item {
-        syn::Item::Fn(f) => f.attrs.clone(),
-        syn::Item::Verbatim(v) => match syn::parse2::<syn::ForeignItemStatic>(v.clone()) {
-            Ok(s) => s.attrs,
-            Err(_) => return false,
-        },
-        _ => return false,
-    };
-    attrs.iter().any(|a| matches!(&a.meta, syn::Meta::Path(p) if p.is_ident("c_export")))
-}
-
-/// #[c_export]'s text, as its macro records it - checked that C can have
-/// the prototype. The macro doesn't see the struct map: a Rust-named type
-/// (CamelCase) is taken as a struct here, and rust_types_gen, which has the
-/// map, renders it or fails.
-#[allow(dead_code)]
-pub fn parse_c_export(text: &str) -> Result<CExport, String> {
-    let expected = "#[c_export]: expected [pub] [unsafe] [extern \"C\"] fn NAME[<'a, ...>](..), or static";
-    let item = syn::parse_str::<syn::Item>(text).map_err(|e| format!("{expected} - {e}"))?;
-    let e = export_of(&item).ok_or(expected)??;
-    emit_extern(&e.ex, &|n| n.starts_with(char::is_uppercase).then(|| format!("struct {n}")))?;
-    Ok(e)
-}
-
-/// tagged_union!'s body: `[vis] struct NAME { tag NAME: TYPE [= TAG_ENUM], arms
-/// from LIST(params) => template | arm NAME: TYPE = VALUE, ..., pad: TYPE,
-/// size: pad, [packed] }`, or `[vis] union NAME in STORAGE { ..., size: header|arm }`.
-fn parse_tagged_union(m: &syn::Macro) -> Result<CTaggedUnion, String> {
-    use proc_macro2::{Delimiter, TokenStream, TokenTree};
-    let body: Vec<TokenTree> = m.tokens.clone().into_iter().collect();
-    let text = |t: &[TokenTree]| rust_text(&t.iter().cloned().collect::<TokenStream>());
-    let is_ident = |t: Option<&TokenTree>, s: &str| matches!(t, Some(TokenTree::Ident(i)) if i == s);
-    let is_punct = |t: Option<&TokenTree>, c: char| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c);
-    let is_group = |t: Option<&TokenTree>, d: Delimiter| matches!(t, Some(TokenTree::Group(g)) if g.delimiter() == d);
-    // past its #[..]s - @attr each one's - and its pub [(..)]
-    let skip_attrs_vis = |t: &[TokenTree], attr: &mut dyn FnMut(&proc_macro2::Group, bool)| -> usize {
-        let mut i = 0;
-        while is_punct(t.get(i), '#') && is_group(t.get(i + 1), Delimiter::Bracket) {
-            let TokenTree::Group(g) = &t[i + 1] else { unreachable!() };
-            let star = is_punct(t.get(i + 2), '*');
-            attr(g, star);
-            i += 2 + usize::from(star);
-        }
-        if is_ident(t.get(i), "pub") {
-            i += 1 + usize::from(is_group(t.get(i + 1), Delimiter::Parenthesis));
-        }
-        i
-    };
-
-    // `#[...]*` are for the arm types defined here - nestify propagates them -
-    // not the storage: skipped
-    let mut c_name = None;
-    let i = skip_attrs_vis(&body, &mut |g, star| {
-        match syn::parse2::<syn::Meta>(g.stream()) {
-            Ok(syn::Meta::List(l)) if !star && l.path.is_ident("c_name") =>
-                if let Ok(n) = syn::parse2::<syn::Ident>(l.tokens) {
-                    c_name = Some(ident(&n));
-                },
-            _ => {}
-        }
-    });
-    const EXPECTED: &str = "tagged_union!: expected struct|union NAME [in STORAGE] { ... }";
-    let (union, name, rest) = match &body[i..] {
-        [TokenTree::Ident(s), TokenTree::Ident(name), rest @ ..] if s == "struct" || s == "union" =>
-            (s == "union", ident(name), rest),
-        _ => return Err(EXPECTED.into()),
-    };
-    let (inner, storage) = match rest {
-        [TokenTree::Group(g)] if g.delimiter() == Delimiter::Brace => (g.stream(), None),
-        [TokenTree::Ident(kw), path @ .., TokenTree::Group(g)]
-            if kw == "in" && !path.is_empty() && g.delimiter() == Delimiter::Brace => (g.stream(), Some(text(path))),
-        _ => return Err(EXPECTED.into()),
-    };
-    let mut size = None;
-    let mut tu = CTaggedUnion { cfg: None, name, c_name, union, storage, tag_field: String::new(),
-                                tag_ty: String::new(), tag_enum: String::new(), tag_is_enum: false,
-                                plain: false,
-                                arms: Vec::new(), pad: None, packed: false,
-                                size: CTaggedSize::Pad, defs: Vec::new() };
-    for item in split_commas(inner) {
-        let item: Vec<TokenTree> = item.into_iter().collect();
-        let eq = item.iter().rposition(|t| is_punct(Some(t), '='));
-        // an arm type defined here: [#[..]] [pub] struct|union NAME { .. }
-        let j = skip_attrs_vis(&item, &mut |_, _| {});
-        match item.get(j..j + 3) {
-            Some([TokenTree::Ident(kw), TokenTree::Ident(n), TokenTree::Group(g)])
-                if (kw == "struct" || kw == "union") && g.delimiter() == Delimiter::Brace => {
-                tu.defs.push(CTaggedDef { name: ident(n) });
-                continue;
-            }
-            _ => {}
-        }
-        let colon = |t: &TokenTree| is_punct(Some(t), ':');
-        match item.as_slice() {
-            [] => {}
-            [TokenTree::Ident(kw), TokenTree::Ident(field), c, rest @ ..] if kw == "tag" && colon(c) => {
-                let rest = match rest {
-                    [TokenTree::Ident(e), rest @ ..] if e == "enum" => {
-                        tu.tag_is_enum = true;
-                        rest
-                    }
-                    rest => rest,
-                };
-                let eq = rest.iter().position(|t| is_punct(Some(t), '=')).unwrap_or(rest.len());
-                tu.tag_field = ident(field);
-                tu.tag_ty = text(&rest[..eq]);
-                tu.tag_enum = text(rest.get(eq + 1..).unwrap_or_default());
-                if tu.tag_ty.is_empty() || (eq < rest.len() && tu.tag_enum.is_empty()) ||
-                   (tu.tag_is_enum && eq < rest.len()) {
-                    return Err("tagged_union!: tag NAME: TYPE [= TAG_ENUM], or tag NAME: enum TYPE".into());
-                }
-            }
-            [TokenTree::Ident(kw), TokenTree::Ident(arm), c, ..] if kw == "arm" && colon(c) => {
-                let eq = eq.ok_or("tagged_union!: arm NAME: TYPE = VALUE")?;
-                tu.arms.push(CTaggedArm { name: ident(arm), ty: text(&item[3..eq]), value: text(&item[eq + 1..]) });
-            }
-            [TokenTree::Ident(kw), c, ty @ ..] if kw == "pad" && colon(c) && !ty.is_empty() =>
-                tu.pad = Some(text(ty)),
-            [TokenTree::Ident(kw), c, TokenTree::Ident(of)] if kw == "size" && colon(c) => {
-                size = Some(match ident(of).as_str() {
-                    "pad"    => CTaggedSize::Pad,
-                    "header" => CTaggedSize::Header,
-                    "arm"    => CTaggedSize::Arm,
-                    _ => return Err(format!("tagged_union!: size: {of} - its size is a function \
-                                             of nothing, its pad's, `size: pad`; of its \
-                                             header's count, `size: header`; or of its tag, \
-                                             its arm's, `size: arm`")),
-                });
-            }
-            [TokenTree::Ident(kw)] if kw == "packed" => tu.packed = true,
-            [TokenTree::Ident(kw)] if kw == "plain" => tu.plain = true,
-            _ => return Err(format!("tagged_union!: {} not understood", text(&item))),
-        }
-    }
-    if tu.tag_field.is_empty() {
-        return Err("tagged_union!: no tag".into());
-    }
-    tu.size = size.ok_or_else(|| format!("tagged_union! {}: no size - what it's a function of, \
-                                          `size: pad`, `size: header` or `size: arm`", tu.name))?;
-    tu.check()?;
-    Ok(tu)
 }
 
 impl CTaggedUnion {
@@ -2264,90 +1300,8 @@ pub fn enum_text(e: &CEnumDef) -> String {
     t + "}"
 }
 
-/// The record's form of @tu, with @arms: each written out.
-#[allow(dead_code)]
-pub fn tagged_union_record_text(tu: &CTaggedUnion, arms: &[CTaggedArm]) -> String {
-    let tag_enum = if tu.tag_enum.is_empty() { String::new() } else { format!(" = {}", tu.tag_enum) };
-    let enum_kw = if tu.tag_is_enum { "enum " } else { "" };
-    let c_name = tu.c_name.as_ref().map_or(String::new(), |c| format!("#[c_name({c})] "));
-    let mut t = format!("tagged_union! {{ {c_name}{} {} {{ tag {}: {enum_kw}{}{tag_enum}, ",
-                        tu.keyword(), tu.name, tu.tag_field, tu.tag_ty);
-    for a in arms {
-        t.push_str(&format!("arm {}: {} = {}, ", a.name, a.ty, a.value));
-    }
-    if let Some(p) = &tu.pad {
-        t.push_str(&format!("pad: {p}, "));
-    }
-    t.push_str(&format!("size: {}, ", tu.size.keyword()));
-    if tu.packed {
-        t.push_str("packed, ");
-    }
-    if tu.plain {
-        t.push_str("plain, ");
-    }
-    t + "} }"
-}
-
 impl CTaggedUnion {
-    fn keyword(&self) -> &'static str {
-        if self.union { "union" } else { "struct" }
-    }
 
-    /// What C calls it: `struct NAME` or `union NAME`.
-    #[allow(dead_code)]
-    pub fn c_type(&self) -> String {
-        format!("{} {}", self.keyword(), self.c_name.as_deref().unwrap_or(&self.name))
-    }
-}
-
-/// tagged_union!'s C - a struct's: the storage over another's has its own -
-/// the tag, then an anonymous union of the arms, inside an anonymous union
-/// with the pad, if there is one. `packed`: the struct and the arms' union
-/// are __packed.
-fn emit_tagged_union(tu: &CTaggedUnion, kind: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
-    let c = |ty: &str, decl: &str| {
-        // a payload is a type the file defines, by its bare name, or c::NAME
-        let bare = ty.trim().trim_start_matches("c::").trim_start_matches("cs::").trim();
-        match kind(bare) {
-            Some(k) if !bare.contains(|ch: char| !(ch.is_alphanumeric() || ch == '_')) =>
-                Some(format!("{k} {decl}")),
-            _ => proto_c(ty, decl, kind),
-        }
-        .ok_or_else(|| format!("tagged_union! {}: {ty} has no C rendering", tu.name))
-    };
-    let packed = if tu.packed { " __packed" } else { "" };
-    let mut arms = String::new();
-    for a in &tu.arms {
-        arms.push_str(&format!("\t\t{};\n", c(&a.ty, &c_ident(&a.name))?));
-    }
-    let tag = c(&tu.tag_ty, &c_ident(&tu.tag_field))?;
-    let tagged = format!("\t{tag};\n\tunion {{\n{arms}\t}}{packed};\n");
-    match &tu.pad {
-        Some(p) => {
-            let indented: String = tagged.lines().map(|l| format!("\t\t{l}\n")).collect();
-            let body = format!("\tunion {{\n\t\tstruct {{\n{indented}\t\t}}{packed};\n\t\t{};\n\t}};\n",
-                               c(p, "_pad")?);
-            under_cfg(&tu.cfg, format!("{} {{\n{body}}};\n", tu.c_type()))
-        }
-        None => under_cfg(&tu.cfg, format!("{} {{\n{tagged}}}{packed};\n", tu.c_type())),
-    }
-}
-
-/// The C declaration of @decl as Rust type @ty, for a prototype: canon_c()'s,
-/// a zero-length array being an extern's unsized one.
-pub fn proto_c(ty: &str, decl: &str, kind: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    canon_c(ty, decl, true, kind)
-}
-
-/// The C declaration of @decl as Rust type @ty - or None if @ty has no C
-/// rendering. A pointer keeps its const - `*const T` is `const T *` - a
-/// function pointer is one, c::NAME is what @kind says C calls it (`struct
-/// foo`, `enum foo`, a typedef's own name), and a zero-length array is a
-/// flexible array: x[] at the end (@last), x[0] elsewhere.
-pub fn canon_c(ty: &str, decl: &str, last: bool, kind: &dyn Fn(&str) -> Option<String>)
-    -> Option<String>
-{
-    proto_ty(&type_of(ty)?, decl.to_string(), false, last, kind)
 }
 
 fn type_of(s: &str) -> Option<syn::Type> {
@@ -2367,14 +1321,6 @@ fn generic_args<'a>(ty: &'a syn::Type, name: &str) -> Option<Vec<&'a syn::Generi
     }
 }
 
-/// T, if @ty is @name<T> by any path.
-fn arg_of<'a>(ty: &'a syn::Type, name: &str) -> Option<&'a syn::Type> {
-    match generic_args(ty, name)?.as_slice() {
-        [syn::GenericArgument::Type(t)] => Some(t),
-        _ => None,
-    }
-}
-
 /// @ty's path's names, if it's a plain path - no generics but lifetimes, which
 /// C doesn't see.
 fn path_names(ty: &syn::Type) -> Option<Vec<String>> {
@@ -2388,120 +1334,6 @@ fn path_names(ty: &syn::Type) -> Option<Vec<String>> {
             Some(p.path.segments.iter().map(|s| ident(&s.ident)).collect()),
         _ => None,
     }
-}
-
-fn proto_ty(ty: &syn::Type, decl: String, konst: bool, last: bool,
-            kind: &dyn Fn(&str) -> Option<String>)
-    -> Option<String>
-{
-    // Head<T>, a family's C definition (util/vstructs.rs), Volatile<T>, a
-    // published word (util/projections.rs), and Cell<T>: to C, T itself
-    if let Some(t) = arg_of(ty, "Head").or_else(|| arg_of(ty, "Volatile")).or_else(|| arg_of(ty, "Cell")) {
-        return proto_ty(t, decl, konst, last, kind);
-    }
-    let q = if konst { "const " } else { "" };
-    // BkeyI<Head<bch_foo>>, by any path: a key whose value is a family's,
-    // whole - C's typed key, struct bkey_i_foo
-    if let Some(name) = bkey_i_arg(ty, kind) {
-        return Some(format!("{q}struct bkey_i_{name} {decl}").trim_end().to_string());
-    }
-    // Option<unsafe extern "C" fn(ARGS) -> RET>: a function pointer.
-    if let Some(f) = arg_of(ty, "Option") {
-        let syn::Type::BareFn(f) = f else { return None };
-        let mut args = f.inputs.iter().map(|a| {
-            // a named parameter: C's, named
-            let n = a.name.as_ref().map(|(n, _)| ident(n)).filter(|n| n != "_").map(|n| c_ident(&n));
-            proto_ty(&a.ty, n.unwrap_or_default(), false, false, kind)
-        }).collect::<Option<Vec<_>>>()?;
-        if f.variadic.is_some() {
-            args.push("...".into());
-        }
-        let args = if args.is_empty() { "void".to_string() } else { args.join(", ") };
-        let inner_decl = format!("(*{q}{decl})({args})");
-        return match &f.output {
-            syn::ReturnType::Default => Some(format!("void {inner_decl}")),
-            syn::ReturnType::Type(_, ret) => proto_ty(ret, inner_decl, false, false, kind),
-        };
-    }
-    match ty {
-        syn::Type::Array(a) => {
-            let n = c_dim(&a.len)?;
-            let n = if n == "0" && last { String::new() } else { n };
-            let decl = if decl.starts_with('*') { format!("({decl})") } else { decl };
-            proto_ty(&a.elem, format!("{decl}[{n}]"), konst, false, kind)
-        }
-        syn::Type::Ptr(p) => proto_ty(&p.elem, format!("*{q}{decl}"), p.const_token.is_some(), false, kind),
-        // never returns: __noreturn is an attribute, not the type
-        syn::Type::Never(_) => Some(format!("void {decl}")),
-        syn::Type::Paren(p) => proto_ty(&p.elem, decl, konst, last, kind),
-        syn::Type::Group(g) => proto_ty(&g.elem, decl, konst, last, kind),
-        // c::NAME, or a type of ours by its Rust name, by any path: C's, from
-        // the struct map - a CStruct by its name whatever its arguments, being
-        // one layout for every T
-        _ => {
-            let name = match ty {
-                syn::Type::Path(p) if p.qself.is_none() => p.path.segments.last().map(|s| ident(&s.ident)),
-                _ => None,
-            };
-            let base = name.and_then(|n| kind(&n)).or_else(|| canon_base(ty))?;
-            Some(base_decl(q, &base, &decl))
-        }
-    }
-}
-
-/// A declaration of @decl as @base - which may itself end in a pointer, as a
-/// c_rcu_array!'s does.
-fn base_decl(q: &str, base: &str, decl: &str) -> String {
-    let sep = if base.ends_with('*') { "" } else { " " };
-    format!("{q}{base}{sep}{decl}").trim_end().to_string()
-}
-
-/// foo, if @ty is BkeyI<V> by any path, V a key value type - or
-/// BkeyI<Head<V>>, an unsized one's: C's struct bkey_i_foo, V's C name being
-/// struct bch_foo, by @kind - V named as Rust names it, or as C does.
-fn bkey_i_arg(ty: &syn::Type, kind: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    let v = arg_of(ty, "BkeyI")?;
-    let v = path_names(arg_of(v, "Head").unwrap_or(v))?.pop()?;
-    kind(&v).unwrap_or_else(|| format!("struct {v}")).strip_prefix("struct bch_").map(str::to_string)
-}
-
-/// c_extern!'s C: a prototype for each fn, an extern declaration for each
-/// static.
-fn emit_extern(ex: &CExtern, kind: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
-    let c = |ty: &str, decl: &str, what: &str| proto_c(ty, decl, kind)
-        .ok_or_else(|| format!("{what}: {ty} has no C rendering"));
-    let mut t = String::new();
-    for f in &ex.fns {
-        let mut params = f.params.iter()
-            .map(|(_, ty)| c(ty, "", &format!("fn {}", f.name)))
-            .collect::<Result<Vec<_>, _>>()?;
-        if f.variadic {
-            params.push("...".into());
-        }
-        let params = if params.is_empty() { "void".to_string() } else { params.join(", ") };
-        let must_check = if f.must_use { "__must_check " } else { "" };
-        let decl = format!("{must_check}{}({params})", f.name);
-        let proto = match f.ret.as_deref().map(str::trim) {
-            None => format!("void {decl}"),
-            Some("!") => format!("void __noreturn {decl}"),
-            Some(r) => c(r, &decl, &format!("fn {}", f.name))?,
-        };
-        let printf = f.printf.as_ref().map(|p| format!("__printf({p}) ")).unwrap_or_default();
-        let cold = if f.cold { "__cold " } else { "" };
-        let proto = format!("{printf}{cold}{proto}");
-        t.push_str(&under_cfg(&f.cfg, format!("{proto};\n"))?);
-    }
-    for s in &ex.statics {
-        // a static that isn't mut is C's const: what it holds, an array's
-        // elements - for a pointer, the pointer
-        let decl = match &s.c_decl {
-            Some(d) => d.clone(),
-            None => type_of(&s.ty).and_then(|t| proto_ty(&t, s.name.clone(), !s.mutable, true, kind))
-                .ok_or_else(|| format!("static {}: {} has no C rendering", s.name, s.ty))?,
-        };
-        t.push_str(&under_cfg(&s.cfg, format!("extern {decl};\n"))?);
-    }
-    under_cfg(&ex.cfg, t)
 }
 
 // ---- emitting C ------------------------------------------------------------
@@ -2584,387 +1416,6 @@ pub fn field_type(ty: &str) -> Result<FieldType, String> {
     })
 }
 
-/// @text, under #if @cfg if there is one.
-fn under_cfg(cfg: &Option<Cfg>, text: String) -> Result<String, String> {
-    Ok(match cfg {
-        Some(c) => format!("#if {}\n{text}#endif\n", c.to_c()?),
-        None => text,
-    })
-}
-
-/// A bitfield member's C name: bitfield-struct takes a leading '_' for
-/// padding, so C's _foo is foo_raw in Rust.
-fn bitfield_c_name(name: &str) -> String {
-    match name.strip_suffix("_raw") {
-        Some(stem) => format!("_{stem}"),
-        None => c_ident(name),
-    }
-}
-
-/// A bitfield-struct member that's padding: Rust's, where C leaves bits
-/// unused.
-fn is_bitfield_pad(name: &str) -> bool {
-    name.starts_with("__pad")
-}
-
-/// The members of bitfield type @bf, as C declares them: least significant
-/// first on little-endian bitfields, the reverse on big-endian - so each is at
-/// the same bits of the same native-endian word either way. A member of an
-/// enum type is C's `enum foo name:N`.
-fn emit_bitfield(bf: &CBitfieldDef, kind: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
-    let decl = |(name, ty, width): &(String, String, u32)| -> Result<String, String> {
-        let ty = bf.c_type(ty);
-        let d = canon_c(ty, &bitfield_c_name(name), false, kind)
-            .ok_or_else(|| format!("{}.{name}: {ty} has no C type", bf.name))?;
-        Ok(if Some(*width) == int_bits(ty) {
-            format!("\t{d};\n")
-        } else {
-            format!("\t{d}:{width};\n")
-        })
-    };
-    // Padding - __pad, __padN, where C skips to a member's next unit or past
-    // the run's end - C does by itself, from the start of the word; from its
-    // end, on big-endian, it's an unnamed member.
-    let mut le = String::new();
-    for f in bf.fields.iter().filter(|f| !is_bitfield_pad(&f.0)) {
-        le.push_str(&decl(f)?);
-    }
-    let mut be = String::new();
-    for f in bf.fields.iter().rev() {
-        if is_bitfield_pad(&f.0) {
-            let base = type_of(&f.1).as_ref().and_then(canon_base)
-                .ok_or_else(|| format!("{}.{}: {} has no C type", bf.name, f.0, f.1))?;
-            be.push_str(&format!("\t{base} :{};\n", f.2));
-        } else {
-            be.push_str(&decl(f)?);
-        }
-    }
-    Ok(format!("#if defined(__LITTLE_ENDIAN_BITFIELD)\n{le}\
-                #elif defined(__BIG_ENDIAN_BITFIELD)\n{be}\
-                #else\n#error edit for your odd byteorder.\n#endif\n"))
-}
-
-/// Whether C writes @f's type in its place: a bare #[c_anon], #[c_inline],
-/// or #[c_struct_group].
-fn in_place(f: &CFieldDef) -> bool {
-    f.inline || f.group || (f.anon && f.c_decl.is_none())
-}
-
-/// A Locked<R, G, P>, as @ty, Rust source - or a Placed one: R, G and P - G
-/// and P (), as Locked's defaults, when they're left out.
-pub fn lock_args(ty: &str) -> Result<Option<[String; 3]>, String> {
-    if let Some([locked, _]) = container_args(ty, "Placed")?.as_deref() {
-        return lock_args(locked);
-    }
-    Ok(match container_args(ty, "Locked")?.as_deref() {
-        Some([r, rest @ ..]) if rest.len() <= 2 => {
-            let arg = |n: usize| rest.get(n).cloned().unwrap_or_else(|| "()".into());
-            Some([r.clone(), arg(0), arg(1)])
-        }
-        _ => None,
-    })
-}
-
-/// What #[c_lock] field @f's Locked protects and publishes, G and P: structs of
-/// @items, which C writes in its place, after the lock - None for ().
-pub fn lock_defs<'a>(f: &CFieldDef, items: &'a [CItem]) -> Result<[Option<&'a CStructDef>; 2], String> {
-    let [_, g, p] = lock_args(&f.ty)?.ok_or_else(|| format!("{}: #[c_lock] is for a Locked, not {}", f.name, f.ty))?;
-    let def = |ty: &str| -> Result<_, String> {
-        if ty == "()" {
-            return Ok(None);
-        }
-        items.iter()
-            .find_map(|i| match i {
-                CItem::Struct(d) if d.name == ty => Some(d),
-                _ => None,
-            })
-            .map(Some)
-            .ok_or_else(|| format!("{}: #[c_lock], but {ty} isn't a struct or union here", f.name))
-    };
-    Ok([def(&g)?, def(&p)?])
-}
-
-/// The name a #[c_lock] declaration gives the lock: its last word.
-pub fn lock_name(decl: &str) -> Option<&str> {
-    let name = decl.trim_end().rsplit(|ch: char| !(ch.is_alphanumeric() || ch == '_')).next()?;
-    (!name.is_empty() && !name.starts_with(|ch: char| ch.is_ascii_digit())).then_some(name)
-}
-
-/// Rust type @ty as an element type and C's array dimensions - `[[T; 2]; N]`
-/// is T and [N][2] - or @ty itself and none. None if a dimension has no C
-/// rendering.
-fn array_of(ty: &str) -> Option<(String, String)> {
-    let ty = type_of(ty)?;
-    let mut elem = &ty;
-    let mut dims = String::new();
-    while let syn::Type::Array(a) = elem {
-        dims.push_str(&format!("[{}]", c_dim(&a.len)?));
-        elem = &a.elem;
-    }
-    Some((rust_text(elem), dims))
-}
-
-/// An array dimension as C: a number, or a constant C has by name - a usize
-/// one, or another `as usize`.
-fn c_dim(e: &syn::Expr) -> Option<String> {
-    let c_name = |p: &syn::Path| match p.segments.iter().map(|s| ident(&s.ident)).collect::<Vec<_>>().as_slice() {
-        [c, name] if is_c_ns(c) => Some(name.clone()),
-        _ => None,
-    };
-    match e {
-        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(n), .. }) => Some(n.to_string().trim_end_matches("usize").into()),
-        syn::Expr::Path(p) => c_name(&p.path),
-        syn::Expr::Cast(c) if rust_text(&c.ty) == "usize" => match &*c.expr {
-            syn::Expr::Path(p) => c_name(&p.path),
-            _ => None,
-        },
-        syn::Expr::Group(g) => c_dim(&g.expr),
-        _ => None,
-    }
-}
-
-/// The type field @f declares in its place, if it does: a struct or union of
-/// @items - for #[c_inline], the element type of an array of one.
-#[allow(dead_code)]
-pub fn in_place_def<'a>(f: &CFieldDef, items: &'a [CItem]) -> Option<&'a CStructDef> {
-    if !in_place(f) {
-        return None;
-    }
-    // a LockedBy<G>, publishing nothing: G, which it holds at its start
-    let ty = type_of(&f.ty).and_then(|t| arg_of(&t, "LockedBy").map(rust_text)).unwrap_or_else(|| f.ty.clone());
-    let (elem, dims) = array_of(&ty)?;
-    if !dims.is_empty() && !f.inline {
-        return None;
-    }
-    items.iter().find_map(|i| match i {
-        CItem::Struct(d) if d.rust_ident() == elem.trim() => Some(d),
-        _ => None,
-    })
-}
-
-/// The types of @items that fields declare in their place: C has no
-/// definition of its own for them.
-#[allow(dead_code)]
-pub fn in_place_types(items: &[CItem]) -> Vec<&str> {
-    let fields = items.iter()
-        .filter_map(|i| match i {
-            CItem::Struct(d) => Some(d),
-            _ => None,
-        })
-        .flat_map(|d| d.fields.iter());
-    let in_place = fields.clone().filter_map(|f| in_place_def(f, items));
-    // what a #[c_lock]'s Locked protects and publishes, written after the lock
-    let locked = fields
-        .filter(|f| f.lock.is_some())
-        .flat_map(|f| lock_defs(f, items).into_iter().flatten().flatten());
-    // and a c_rcu_array!'s header, written in its struct
-    let heads = items.iter()
-        .filter_map(|i| match i {
-            CItem::RcuArray(a) => rcu_array_head(a, items),
-            _ => None,
-        });
-    in_place.chain(locked).chain(heads).map(|d| d.name.as_str()).collect()
-}
-
-/// @a's header's definition, if it has one and it's a struct of @items.
-pub fn rcu_array_head<'a>(a: &CRcuArray, items: &'a [CItem]) -> Option<&'a CStructDef> {
-    let head = a.head.as_deref()?;
-    let name = head.rsplit("::").next()?.trim();
-    items.iter().find_map(|i| match i {
-        CItem::Struct(d) if d.name == name || d.rust_ident() == name => Some(d),
-        _ => None,
-    })
-}
-
-/// c_rcu_array!'s C: the struct of its buffer, laid out as util/rcu.rs's
-/// RcuArrayBuf - the header's fields an anonymous struct, so they're laid out
-/// as Rust's nested header is, and C names them as the buffer's.
-fn emit_rcu_array(a: &CRcuArray, items: &[CItem],
-                  opaque: &dyn Fn(&CStructDef, &CFieldDef) -> Result<String, String>,
-                  kind: &dyn Fn(&str) -> Option<String>)
-    -> Result<String, String>
-{
-    let elems = canon_c(&a.elem, &format!("{}[] __counted_by({})", a.elems, a.nr), true, kind)
-        .ok_or_else(|| format!("its element type {} has no C rendering", a.elem))?;
-    let head = match &a.head {
-        None => String::new(),
-        Some(h) => {
-            let def = rcu_array_head(a, items)
-                .ok_or_else(|| format!("its header {h} isn't a #[repr(C)] struct of this file"))?;
-            let members: String = emit_members(def, items, opaque, kind)?
-                .lines()
-                .map(|l| if l.starts_with('#') { format!("{l}\n") } else { format!("\t{l}\n") })
-                .collect();
-            format!("\tstruct {{\n{members}\t}};\n")
-        }
-    };
-    under_cfg(&a.cfg, format!("struct {} {{\n\tstruct rcu_head\trcu;\n\tsize_t\t\t{};\n{head}\t{elems};\n}};\n",
-                              a.c_name, a.nr))
-}
-
-/// A zero-length array in a union: C can't have a flexible array member
-/// there, but the kernel's __DECLARE_FLEX_ARRAY wraps one in an anonymous
-/// struct, which can.
-fn union_flex_array(ty: &str, name: &str) -> Option<String> {
-    let syn::Type::Array(a) = type_of(ty)? else { return None };
-    if !matches!(&a.len, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(n), .. }) if n.to_string() == "0") {
-        return None;
-    }
-    Some(format!("__DECLARE_FLEX_ARRAY({}, {name})", canon_base(&a.elem)?))
-}
-
-/// The attributes after @def's closing brace - per configuration, if its
-/// repr is, unless C says it once for all of them.
-fn c_attrs(def: &CStructDef) -> Result<String, String> {
-    Ok(if let Some(a) = &def.c_align {
-        format!(" __aligned({a})")
-    } else if def.cfg_reprs.is_empty() {
-        def.repr.to_c()
-    } else {
-        let mut a = String::from("\n");
-        for (k, (cfg, repr)) in def.cfg_reprs.iter().enumerate() {
-            let kw = if k == 0 { "#if" } else { "#elif" };
-            a.push_str(&format!("{kw} {}\n{}\n", cfg.to_c()?, repr.to_c()));
-        }
-        a.push_str("#endif\n");
-        a
-    })
-}
-
-/// A struct's C definition. @opaque gives the C declaration of a Rust-only
-/// field - one with no #[c] and no canonical rendering.
-fn emit_struct(def: &CStructDef, items: &[CItem],
-               opaque: &dyn Fn(&CStructDef, &CFieldDef) -> Result<String, String>,
-               kind: &dyn Fn(&str) -> Option<String>)
-    -> Result<String, String>
-{
-    if !def.repr_c() {
-        return Err(format!("{} must be #[repr(C)]: C shares it", def.name));
-    }
-    let body = emit_members(def, items, opaque, kind)?;
-    let attrs = c_attrs(def)?;
-    let kw = def.kind.keyword();
-    under_cfg(&def.cfg, match &def.typedef {
-        Some(t) if def.typedef_anon => format!("typedef {kw} {{\n{body}}}{attrs} {t};\n"),
-        Some(t) => format!("typedef {kw} {} {{\n{body}}}{attrs} {t};\n", def.name),
-        None => format!("{kw} {} {{\n{body}}}{attrs};\n", def.name),
-    })
-}
-
-/// @def's members, a tab in - an anonymous member's a tab further.
-fn emit_members(def: &CStructDef, items: &[CItem],
-                opaque: &dyn Fn(&CStructDef, &CFieldDef) -> Result<String, String>,
-                kind: &dyn Fn(&str) -> Option<String>)
-    -> Result<String, String>
-{
-    // Consecutive fields under the same cfg share one #if.
-    let mut body = String::new();
-    let mut open: Option<String> = None;
-    // whether C has a member before this one: a flexible array, x[], needs
-    // one - a struct of only x[] is an error to gcc before 15 - so with none
-    // it's x[0], as bch_val's __nothing was written
-    let mut named = false;
-    // the members of @inner, a struct field @f's #[@attr] writes in its place
-    let nested = |f: &CFieldDef, attr: &str, inner: &CStructDef| -> Result<String, String> {
-        if !inner.repr_c() || inner.typedef.is_some() {
-            return Err(format!("{}.{}: #[{attr}]'s type {} must be #[repr(C)], and not a typedef",
-                               def.name, f.name, inner.name));
-        }
-        Ok(emit_members(inner, items, opaque, kind)?
-            .lines()
-            .map(|l| if l.starts_with('#') { format!("{l}\n") } else { format!("\t{l}\n") })
-            .collect())
-    };
-    for (n, f) in def.fields.iter().enumerate() {
-        let last = n + 1 == def.fields.len() && named;
-        let text = if f.bitfield {
-            let bf = items.iter().find_map(|i| match i {
-                CItem::Bitfield(b) if b.name == bitfield_type(&f.ty) => Some(b),
-                _ => None,
-            }).ok_or_else(|| format!("{}.{}: #[c_bitfield], but {} isn't a #[bitfield] type here",
-                                     def.name, f.name, f.ty))?;
-            emit_bitfield(bf, kind)?
-        } else if let Some(lock) = &f.lock {
-            // the lock, then what it protects, then what it publishes: as
-            // Locked lays them out
-            let mut text = format!("\t{lock};\n");
-            for inner in lock_defs(f, items).map_err(|e| format!("{}.{e}", def.name))?.into_iter().flatten() {
-                let members = nested(f, "c_lock", inner)?;
-                text += &format!("\t{} {{\n{members}\t}}{};\n", inner.kind.keyword(), c_attrs(inner)?);
-            }
-            text
-        } else if in_place(f) {
-            let attr = match (f.inline, f.group) {
-                (true, _) => "c_inline",
-                (_, true) => "c_struct_group",
-                _ => "c_anon",
-            };
-            let inner = in_place_def(f, items).ok_or_else(|| format!(
-                "{}.{}: #[{attr}], but {} isn't a struct or union here", def.name, f.name, f.ty))?;
-            let members = nested(f, attr, inner)?;
-            if f.group {
-                // the kernel's: a union of the members, and the same as a
-                // struct of that name
-                let plain = CRepr { repr_c: true, ..CRepr::default() };
-                if inner.kind != CKind::Struct || inner.repr != plain
-                    || inner.c_align.is_some() || !inner.cfg_reprs.is_empty() {
-                    return Err(format!("{}.{}: #[c_struct_group]'s type {} must be a plain #[repr(C)] struct: \
-                                        struct_group() takes no attributes", def.name, f.name, inner.name));
-                }
-                format!("\tstruct_group({},\n{members}\t);\n", f.name)
-            } else {
-                let name = match array_of(&f.ty) {
-                    Some((_, dims)) if f.inline => format!(" {}{dims}", f.name),
-                    _ => String::new(),
-                };
-                format!("\t{} {{\n{members}\t}}{}{name};\n", inner.kind.keyword(), c_attrs(inner)?)
-            }
-        } else if f.c_decl.as_deref() == Some("") {
-            // #[c_anon("")]: Rust's alone, and nothing in C - a zero-sized
-            // alignment marker, say.
-            String::new()
-        } else if let Some(decl) = &f.c_decl {
-            // An x-macro expansion, as written, ends with its #undef: the
-            // members are its, and a ; would be on the directive's line.
-            let directive = decl.lines().last().is_some_and(|l| l.trim_start().starts_with('#'));
-            format!("\t{decl}{}\n", if directive { "" } else { ";" })
-        } else if let Some(decl) = union_flex_array(&f.ty, &f.name).filter(|_| def.kind == CKind::Union) {
-            format!("\t{decl};\n")
-        } else if let Some(decl) = container_c(&f.ty, &f.name, kind)
-            .map_err(|e| format!("{}.{e}", def.name))? {
-            format!("\t{decl};\n")
-        } else if let Some(decl) = canon_c(&f.ty, &f.name, last, kind) {
-            format!("\t{decl};\n")
-        } else {
-            format!("\t{};\n", opaque(def, f)?)
-        };
-        let text = match (&f.c_align, text.strip_suffix(";\n")) {
-            (None, _) => text,
-            (Some(a), Some(decl)) => format!("{decl} __aligned({a});\n"),
-            (Some(_), None) => return Err(format!("{}.{}: after an alignment marker, but C declares it \
-                                                   so __aligned() can't follow", def.name, f.name)),
-        };
-        named |= !text.is_empty();
-        let cond = f.cfg.as_ref().map(Cfg::to_c).transpose()?;
-        if cond != open {
-            if open.is_some() {
-                body.push_str("#endif\n");
-            }
-            if let Some(c) = &cond {
-                body.push_str(&format!("#if {c}\n"));
-            }
-            open = cond;
-        }
-        body.push_str(&text);
-    }
-    if open.is_some() {
-        body.push_str("#endif\n");
-    }
-    Ok(body)
-}
-
-/// @ty's type arguments, Rust source, if it's @name<...> - one of
-/// types/lib.rs's containers of C's, by any path.
 /// A #[c_bitfield] field's bitfield type, from its type @ty: the type, or a
 /// Volatile<T>'s or Cell<T>'s T - a word read and written whole, whose
 /// members C declares in its place all the same.
@@ -2981,285 +1432,14 @@ pub fn bitfield_wrapper(ty: &str) -> Option<&'static str> {
     ["Volatile", "Cell"].into_iter().find(|w| matches!(container_args(ty, w), Ok(Some(a)) if a.len() == 1))
 }
 
+/// @ty's type arguments, Rust source, if it's @name<...> - one of
+/// types/lib.rs's containers of C's, by any path.
 fn container_args(ty: &str, name: &str) -> Result<Option<Vec<String>>, String> {
     let t = type_of(ty).ok_or_else(|| format!("{ty}: not a type"))?;
     Ok(generic_args(&t, name).map(|args| args.iter().map(rust_text).collect()))
 }
 
-/// @decl of container type @ty - a GenRadix - as C declares it, by the
-/// container's macro: GENRADIX(T). None if @ty is no container.
-fn container_c(ty: &str, decl: &str, kind: &dyn Fn(&str) -> Option<String>)
-    -> Result<Option<String>, String>
-{
-    if let Some([elem]) = container_args(ty, "GenRadix")?.as_deref() {
-        let elem_c = canon_c(elem, "", false, kind)
-            .ok_or_else(|| format!("{decl}: {ty}'s element type {elem} has no C rendering"))?;
-        return Ok(Some(format!("GENRADIX({}) {decl}", elem_c.trim())));
-    }
-    Ok(None)
-}
-
-/// A declaration of each struct, union and enum @c names inside parentheses -
-/// in a prototype: a c_extern!'s, a callback field's, a function typedef's. One
-/// a prototype names before it's declared would be the prototype's own, which
-/// conflicts with the real one. An enum too: incomplete until its definition,
-/// as GNU C allows. Macros are left out - they declare nothing until they're
-/// used - and so are comments.
-fn forward_decls(c: &str) -> String {
-    let mut decls = std::collections::BTreeSet::new();
-    let mut depth = 0usize;
-    let mut in_comment = false;
-    for line in c.lines() {
-        if !in_comment && line.trim_start().starts_with('#') {
-            continue;
-        }
-        let b = line.as_bytes();
-        let ident = |i: usize| b.get(i).is_some_and(|&c| c == b'_' || c.is_ascii_alphanumeric());
-        let mut i = 0;
-        while i < b.len() {
-            if in_comment {
-                if b[i..].starts_with(b"*/") {
-                    in_comment = false;
-                    i += 1;
-                }
-            } else if b[i..].starts_with(b"/*") {
-                in_comment = true;
-                i += 1;
-            } else if b[i..].starts_with(b"//") {
-                break;
-            } else if b[i] == b'(' {
-                depth += 1;
-            } else if b[i] == b')' {
-                depth = depth.saturating_sub(1);
-            } else if ident(i) {
-                let start = i;
-                while ident(i) { i += 1; }
-                let word = &line[start..i];
-                if depth > 0 && matches!(word, "struct" | "union" | "enum") {
-                    let rest = line[i..].trim_start();
-                    let n: String = rest.chars().take_while(|&c| c == '_' || c.is_ascii_alphanumeric()).collect();
-                    if !n.is_empty() {
-                        decls.insert(format!("{word} {n};\n"));
-                    }
-                }
-                continue;
-            }
-            i += 1;
-        }
-    }
-    decls.into_iter().collect()
-}
-
-/// The C for @items, in order, after the declarations their prototypes need
-/// (forward_decls()). @opaque as for emit_struct().
-#[allow(dead_code)]
-pub fn emit_items(items: &[CItem],
-                  opaque: &dyn Fn(&CStructDef, &CFieldDef) -> Result<String, String>,
-                  kind: &dyn Fn(&str) -> Option<String>)
-    -> Result<String, String>
-{
-    let in_place = in_place_types(items);
-    let mut out = String::new();
-    for item in items {
-        let text = match item {
-            CItem::Extern(ex) => emit_extern(ex, kind)?,
-            CItem::TaggedUnion(tu) => emit_tagged_union(tu, kind)?,
-            // Declared where its #[c_anon] or #[c_inline] field is.
-            CItem::Struct(def) if in_place.contains(&def.name.as_str()) => continue,
-            CItem::Struct(def) => emit_struct(def, items, opaque, kind)
-                .map_err(|e| format!("struct {}: {e}", def.name))?,
-            // Declared in the C of the struct that has one.
-            CItem::Bitfield(_) => continue,
-            CItem::Verbatim(v) => under_cfg(&v.cfg, format!("{}\n", v.text))?,
-            CItem::XMacro(x) => {
-                // The mappings for the lists spliced in, first: C expands
-                // them where the list is used.
-                let mut t = String::new();
-                for e in &x.entries {
-                    if let CXEntry::Sub { map: Some(m), .. } = e {
-                        t.push_str(&format!("#define {}({})\t\\\n\t{}({})\n", m.name, m.params.join(", "),
-                                            x.callback, spell_concat(&m.template, |p| p.join("##"))?));
-                    }
-                }
-                t.push_str(&format!("#define {}()", x.name));
-                for e in &x.entries {
-                    match e {
-                        CXEntry::Args(a) => t.push_str(&format!("\t\\\n\t{}({a})", x.callback)),
-                        CXEntry::Sub { list, .. } => t.push_str(&format!("\t\\\n\t{list}()")),
-                    }
-                }
-                under_cfg(&x.cfg, t + "\n")?
-            }
-            CItem::Bitmask(b) => {
-                // the struct as Rust names it - if not as C does, C's, which
-                // @kind has from its record
-                let c_type = match kind(&b.def) {
-                    Some(c) if ![format!("struct {}", b.def), format!("union {}", b.def), b.def.clone()].contains(&c) => c,
-                    _ => b.c_type.clone(),
-                };
-                let mut t = String::new();
-                for e in &b.entries {
-                    t.push_str(&format!("{}({}, {}, {}, {}, {});\n",
-                                        b.macro_name, e.name, c_type, b.field, e.start, e.end));
-                }
-                under_cfg(&b.cfg, t)?
-            }
-            CItem::Ioctl(io) => {
-                let mut t = String::new();
-                for e in &io.entries {
-                    let arg = match (&e.arg, &e.c_arg) {
-                        (None, _) => String::new(),
-                        (Some(_), Some(c)) => format!(", {c}"),
-                        (Some(a), None) => {
-                            let c = canon_c(a, "", false, kind)
-                                .ok_or_else(|| format!("{}: {a} has no C rendering - it needs a #[c(\"...\")]", e.name))?;
-                            format!(", {}", c.trim())
-                        }
-                    };
-                    t.push_str(&format!("#define {}\t{}({}, {}{arg})\n", e.name, e.dir, e.ty, e.nr));
-                }
-                under_cfg(&io.cfg, t)?
-            }
-            CItem::Enum(e) => {
-                let mut t = format!("enum {}{} {{\n", e.kind.marker(),
-                                    e.c_ident().map(|n| format!(" {n}")).unwrap_or_default());
-                for v in &e.variants {
-                    match &v.value {
-                        Some(x) => t.push_str(&format!("\t{} = {x},\n", e.c_variant(v))),
-                        None => t.push_str(&format!("\t{},\n", e.c_variant(v))),
-                    }
-                }
-                // past the largest value, as Rust has it - not C's after the last
-                if let Some(nr) = &e.nr {
-                    let past = e.variants.iter().filter_map(|v| v.value.as_deref()?.parse::<i64>().ok())
-                        .max().map_or(0, |m| m + 1);
-                    t.push_str(&format!("\t{nr} = {past},\n"));
-                }
-                // a byte or two wide, where a field holds it: GCC's packed enum
-                // is the smallest type its values fit - a 16 bit one whose
-                // values fit a byte is one, and its size assert says so
-                let end = if matches!(e.repr.as_str(), "u8" | "i8" | "u16" | "i16") { "} __packed;\n" } else { "};\n" };
-                under_cfg(&e.cfg, t + end)?
-            }
-            CItem::Const(c) => under_cfg(&c.cfg, format!("#define {}\t{}\n", c.name, c.c_value()?))?,
-            CItem::Typedef(t) => {
-                let decl = match &t.c_decl {
-                    Some(d) => d.clone(),
-                    None => match container_c(&t.ty, &t.name, kind).map_err(|e| format!("typedef {e}"))? {
-                        Some(d) => d,
-                        None => canon_c(&t.ty, &t.name, false, kind)
-                            .ok_or_else(|| format!("typedef {}: {} has no C rendering - it needs a #[c(\"...\")]",
-                                                   t.name, t.ty))?,
-                    },
-                };
-                under_cfg(&t.cfg, format!("typedef {decl};\n"))?
-            }
-            // C's own definition: the generator asserts it's the Rust type's.
-            CItem::Same(_) => continue,
-            CItem::RcuArray(a) => emit_rcu_array(a, items, opaque, kind)
-                .map_err(|e| format!("c_rcu_array! {}: {e}", a.alias))?,
-        };
-        out.push('\n');
-        out.push_str(&text);
-    }
-    let decls = forward_decls(&out);
-    Ok(if decls.is_empty() { out } else { format!("\n{decls}{out}") })
-}
-
 // ---- entry points ----------------------------------------------------------
-
-/// The type names @text's item writes - its own, and a family definition's
-/// family, its fields', arms' and prototypes', a bitmask's struct's,
-/// c_same!'s Rust type - for its record to say which type each is: each
-/// that's a plain path, under a pointer, reference, array or generic
-/// argument, as the generator looks types up; not the item's generic
-/// parameters. The generator looks a Rust type up by nothing else.
-#[allow(dead_code)]
-pub fn written_types(text: &str) -> Vec<String> {
-    let Ok(items) = parse_items(text) else { return Vec::new() };
-    let generics: Vec<String> = match syn::parse_str::<syn::DeriveInput>(text) {
-        Ok(d) => d.generics.type_params().map(|p| ident(&p.ident))
-            .chain(d.generics.const_params().map(|p| ident(&p.ident))).collect(),
-        Err(_) => Vec::new(),
-    };
-
-    // c_same!'s Rust type, written whole: it's the type the record is of
-    let mut out = Vec::new();
-    let mut tys = Vec::new();
-    for item in &items {
-        match item {
-            CItem::Struct(d) => {
-                // by name alone, its lifetimes elided - type_name() erases them -
-                // and its type parameters defaulted, which is C's struct
-                if d.type_params.len() == generics.len() {
-                    tys.push(d.rust_ident().to_string());
-                }
-                tys.extend(d.family().map(str::to_string));
-                // a #[c_bitfield]'s type is the bitfield's C, which Rust doesn't name
-                tys.extend(d.fields.iter().filter(|f| !f.bitfield).map(|f| f.ty.clone()));
-            }
-            CItem::Bitfield(b) => tys.extend(b.fields.iter().map(|(_, ty, _)| ty.clone())),
-            CItem::Enum(CEnumDef { name: Some(n), .. }) => tys.push(n.clone()),
-            CItem::Bitmask(b) => tys.push(b.def.clone()),
-            CItem::Typedef(t) => tys.extend([t.rust_ident().to_string(), t.ty.clone()]),
-            // a struct's own name: a union over another's storage is generic
-            CItem::TaggedUnion(tu) => tys.extend(tu.arms.iter().map(|a| a.ty.clone()).chain(tu.pad.clone())
-                .chain((!tu.union).then(|| tu.name.clone()))),
-            CItem::Extern(x) => {
-                for f in &x.fns {
-                    tys.extend(f.params.iter().map(|(_, ty)| ty.clone()).chain(f.ret.clone()));
-                }
-                tys.extend(x.statics.iter().map(|s| s.ty.clone()));
-            }
-            CItem::Same(s) => out.push(s.rust_ty.clone()),
-            _ => {}
-        }
-    }
-
-    // A type as C sees one: under pointers, references, arrays, generic
-    // arguments and function pointers, a plain path
-    fn walk(t: &syn::Type, out: &mut Vec<String>) {
-        use syn::Type::*;
-        match t {
-            Ptr(syn::TypePtr { elem, .. }) | Reference(syn::TypeReference { elem, .. }) |
-            Array(syn::TypeArray { elem, .. }) | Slice(syn::TypeSlice { elem, .. }) |
-            Paren(syn::TypeParen { elem, .. }) | Group(syn::TypeGroup { elem, .. }) => walk(elem, out),
-            BareFn(f) => {
-                f.inputs.iter().for_each(|a| walk(&a.ty, out));
-                if let syn::ReturnType::Type(_, r) = &f.output {
-                    walk(r, out);
-                }
-            }
-            Path(p) if p.qself.is_none() && p.path.leading_colon.is_none() => {
-                for a in p.path.segments.iter().filter_map(|s| match &s.arguments {
-                    syn::PathArguments::AngleBracketed(a) => Some(a),
-                    _ => None,
-                }) {
-                    for g in &a.args {
-                        if let syn::GenericArgument::Type(t) = g {
-                            walk(t, out);
-                        }
-                    }
-                }
-                let Some(names) = path_names(t) else { return };
-                if names.iter().any(|n| RUST_KEYWORDS.contains(&n.as_str()) && n != "crate" && n != "super") {
-                    return;
-                }
-                let path = names.join("::");
-                if !out.contains(&path) {
-                    out.push(path);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    for t in tys.iter().filter_map(|t| type_of(t)) {
-        walk(&t, &mut out);
-    }
-    out.retain(|p| !generics.contains(p));
-    out
-}
 
 /// Parse a derive's input: exactly one struct or union.
 #[allow(dead_code)]
@@ -3276,32 +1456,18 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
     // a (..) or [..] invocation
     if let Ok(m) = syn::parse_str::<syn::Macro>(src) {
         match m.path.get_ident().map(ident).as_deref() {
-            Some("c_const") => return parse_consts(&m),
-            Some("c_typedef") => return Ok(vec![CItem::Typedef(parse_typedef(&m)?)]),
             Some("c_xmacro") => return Ok(vec![CItem::XMacro(parse_xmacro(&m)?)]),
             Some("c_enum") => return Ok(vec![CItem::Enum(parse_enum(&m)?)]),
-            Some("tagged_union") => return Ok(vec![CItem::TaggedUnion(parse_tagged_union(&m)?)]),
             Some("c_bitmask") => return Ok(vec![CItem::Bitmask(parse_bitmask(&m)?)]),
             Some("c_ioctl") => return Ok(vec![CItem::Ioctl(parse_ioctl(&m)?)]),
-            Some("c_same") => return Ok(vec![CItem::Same(parse_same(&m)?)]),
-            Some("c_rcu_array") => return Ok(vec![CItem::RcuArray(parse_rcu_array(&m)?)]),
-            Some("c_extern") => return Ok(vec![CItem::Extern(parse_extern(&m)?)]),
-            Some("c_verbatim") => {
-                let text: syn::LitStr = m.parse_body().map_err(|_| "c_verbatim!: takes one string")?;
-                return Ok(vec![CItem::Verbatim(CVerbatim { cfg: None, text: text.value().trim_matches('\n').into() })]);
-            }
             _ => {}
         }
     }
-    if let Some(e) = syn::parse_str::<syn::Item>(src).ok().filter(is_export).as_ref().and_then(export_of) {
-        return Ok(vec![CItem::Extern(e?.ex)]);
-    }
-
     // else a struct or a union: a #[bitfield]'s, or a CStruct
     let d = syn::parse_str::<syn::DeriveInput>(src).map_err(|e| format!("{src}: {e}"))?;
     let a = item_attrs_of(&d.attrs)?;
     if let Some(storage) = a.bitfield.clone() {
-        if let Some(def) = parse_bitfield(&d, a.cfg.clone(), storage, a.bitfield_ty.clone())? {
+        if let Some(def) = parse_bitfield(&d, storage, a.bitfield_ty.clone())? {
             return Ok(vec![CItem::Bitfield(def)]);
         }
     }

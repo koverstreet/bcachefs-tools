@@ -1355,19 +1355,6 @@ pub unsafe fn bch2_btree_lock_init(b: *mut c::btree_bkey_cached_common, flags: c
     }
 }
 
-pub fn bch2_trans_downgrade(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>) {
-    trans.downgrade(paths)
-}
-
-#[inline(always)]
-pub fn bch2_trans_unlock(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>) {
-    trans.unlock_from(paths, crate::ret_ip!())
-}
-
-pub fn bch2_trans_unlock_long(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>) {
-    trans.unlock_long_from(paths, crate::ret_ip!())
-}
-
 impl<R: RawTimedLock, G, P> Locked<R, G, P> {
     /// lock(), in attempt @t: if it isn't free, the btree locks are dropped
     /// to wait for it - bch2_trans_mutex_lock() - and past a short wait, the

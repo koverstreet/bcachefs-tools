@@ -5,27 +5,20 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{c_bitmask, c_const, c_enum, open_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_bitmask, c_enum, open_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
 
-c_const! {
-    /*
-     * We refer to members with bitmasks in various places - but we need to get rid
-     * of this limit:
-     */
-    #[c_int]
-    pub const BCH_SB_MEMBERS_MAX: u32 = 256;
+/*
+ * We refer to members with bitmasks in various places - but we need to get rid
+ * of this limit:
+ */
+pub const BCH_SB_MEMBERS_MAX: u32 = 256;
 
-    /*
-     * Sentinal value - indicates a device that does not exist
-     */
-    #[c_int]
-    pub const BCH_SB_MEMBER_INVALID: u32 = 255;
-}
+/*
+ * Sentinal value - indicates a device that does not exist
+ */
+pub const BCH_SB_MEMBER_INVALID: u32 = 255;
 
-c_const! {
-    #[c_int]
-    pub const BCH_MIN_NR_NBUCKETS: u32 = 1 << 9;
-}
+pub const BCH_MIN_NR_NBUCKETS: u32 = 1 << 9;
 
 #[open_enum]
 #[repr(u32)]
@@ -73,12 +66,9 @@ pub struct bch_member {
     pub last_journal_bucket: Le32,
     pub last_journal_bucket_offset: Le32,
 
-    #[c("__u8 device_name[16] __nonstring")]
     pub device_name: [u8; 16],
-    #[c("__u8 device_model[64] __nonstring")]
     pub device_model: [u8; 64],
     pub flush_errors: Le64,
-    #[c("__u8 device_serial[64] __nonstring")]
     pub device_serial: [u8; 64],
     /*
      * Failure domain: devices sharing a (non-empty) string are in the same
@@ -88,29 +78,23 @@ pub struct bch_member {
      * Interned to a small id in memory (bch_member_cpu.failure_domain) for
      * the allocation path.
      */
-    #[c("__u8 failure_domain[32] __nonstring")]
     pub failure_domain: [u8; 32],
 }
 c_default!(bch_member);
 
-c_const! {
-    /*
-     * btree_allocated_bitmap can represent sector addresses of a u64: it itself has
-     * 64 elements, so 64 - ilog2(64)
-     */
-    #[c_int]
-    pub const BCH_MI_BTREE_BITMAP_SHIFT_MAX: u32 = 58;
+/*
+ * btree_allocated_bitmap can represent sector addresses of a u64: it itself has
+ * 64 elements, so 64 - ilog2(64)
+ */
+pub const BCH_MI_BTREE_BITMAP_SHIFT_MAX: u32 = 58;
 
-    /*
-     * This limit comes from the bucket_gens array - it's a single allocation, and
-     * kernel allocation are limited to INT_MAX
-     */
-    #[c_int]
-    pub const BCH_MEMBER_NBUCKETS_MAX: u32 = c::INT_MAX as u32 - 64;
+/*
+ * This limit comes from the bucket_gens array - it's a single allocation, and
+ * kernel allocation are limited to INT_MAX
+ */
+pub const BCH_MEMBER_NBUCKETS_MAX: u32 = c::INT_MAX as u32 - 64;
 
-    #[c_int]
-    pub const BCH_MEMBER_V1_BYTES: u32 = 56;
-}
+pub const BCH_MEMBER_V1_BYTES: u32 = 56;
 
 c_bitmask! {
     LE16_BITMASK(struct bch_member, bucket_size), strip BCH_MEMBER_ {

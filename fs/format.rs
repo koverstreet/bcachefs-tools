@@ -77,10 +77,8 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by
                             vstruct_container, Head, FlexArray, Unvalidated, VStructError, VstructMut, VstructRef};
 use crate::btree::bkey::BkeyPHeader;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, grown, open_enum,
+use cstruct_macros::{c_name, bitfield, c_bitmask, c_enum, grown, open_enum,
                      tagged_union, unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
-#[cfg(__KERNEL__)]
-use cstruct_macros::c_typedef;
 
 #[path = "alloc/accounting_format.rs"] pub mod accounting;
 pub use accounting::{DataType, DataTypes};
@@ -88,9 +86,8 @@ pub use accounting::{DataType, DataTypes};
 pub use members::{MemberInitialized, MemberState};
 
 #[cfg(__KERNEL__)]
-c_typedef! {
-    pub type __uuid_t = c::uuid_t;
-}
+#[allow(non_camel_case_types)]
+pub type __uuid_t = c::uuid_t;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
@@ -211,7 +208,6 @@ pub struct bkey_format_bits {
 #[cfg(target_endian = "little")]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bkey {
     /* Size of combined key and value, in u64s */
     pub u64s: u8,
@@ -233,7 +229,6 @@ pub struct bkey {
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bkey {
     /* Size of combined key and value, in u64s */
     pub u64s: u8,
@@ -254,7 +249,6 @@ pub struct bkey {
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bkey_packed {
     pub _data: [u64; 0],
 
@@ -281,7 +275,6 @@ pub struct bkey_packed {
      * and it's legal to cast a bkey to a bkey_packed  - so padding it out
      * to the same size as struct bkey should hopefully be safest.
      */
-    #[c("__u8 pad[sizeof(struct bkey) - 3]")]
     pub pad: [u8; core::mem::size_of::<c::bkey>() - 3],
 }
 vstruct!(bkey_packed, u64s, start = 0);
@@ -289,25 +282,22 @@ c_default!(bkey_packed);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_typedef]
 pub struct bch_le128 {
     pub lo: Le64,
     pub hi: Le64,
 }
 
-c_const! {
-    pub const BKEY_U64s: usize = size_of::<c::bkey>() / size_of::<u64>();
-    pub const BKEY_U64s_MAX: u8 = u8::MAX;
-    pub const BKEY_VAL_U64s_MAX: usize = c::BKEY_U64s_MAX as usize - c::BKEY_U64s;
+#[allow(non_upper_case_globals)]
+pub const BKEY_U64s: usize = size_of::<c::bkey>() / size_of::<u64>();
+#[allow(non_upper_case_globals)]
+pub const BKEY_U64s_MAX: u8 = u8::MAX;
+#[allow(non_upper_case_globals)]
+pub const BKEY_VAL_U64s_MAX: usize = c::BKEY_U64s_MAX as usize - c::BKEY_U64s;
 
-    #[c_int]
-    pub const KEY_PACKED_BITS_START: u32 = 24;
+pub const KEY_PACKED_BITS_START: u32 = 24;
 
-    #[c_int]
-    pub const KEY_FORMAT_LOCAL_BTREE: u32 = 0;
-    #[c_int]
-    pub const KEY_FORMAT_CURRENT: u32 = 1;
-}
+pub const KEY_FORMAT_LOCAL_BTREE: u32 = 0;
+pub const KEY_FORMAT_CURRENT: u32 = 1;
 
 c_enum! {
     #[closed]
@@ -385,7 +375,6 @@ c_enum! {
     #[prefix(KEY_TYPE_)]
     #[nr(KEY_TYPE_MAX)]
     #[arm_columns(flags: BkeyTypeFlags)]
-    #[c_list(BCH_BKEY_TYPES)]
     pub enum BkeyType: u32 {
         /// Transient during btree updates; inserting a deleted key removes any
         /// existing key at that position. Stripped during btree node writes.
@@ -599,7 +588,6 @@ pub struct Set {
 /* 128 bits, sufficient for cryptographic MACs: */
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bch_csum {
     pub lo: Le64,
     pub hi: Le64,
@@ -608,7 +596,6 @@ pub struct bch_csum {
 #[repr(C, align(8))]
 #[c_name(bch_backpointer)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
-#[c_packed]
 pub struct Backpointer {
     pub v: c::bch_val,
     pub btree_id: u8,
@@ -685,7 +672,6 @@ c_enum! {
     #[prefix(BTREE_ID_)]
     #[nr(BTREE_ID_NR)]
     #[arm_columns(flags: BtreeFlags, holds: set(BkeyType))]
-    #[c_list(BCH_BTREE_IDS)]
     pub enum Btree: u32 {
         /// File data extent pointers and reservations
         #[flags(extents, snapshots, data, trans_triggers)]
@@ -823,33 +809,6 @@ crate::display_via_to_text!(Btree);
 /// C's name, as bindgen's declarations of C functions spell it.
 pub type btree_id = Btree;
 
-c_verbatim!(r#"
-#include "alloc/replicas_format_gen.h"
-#include "alloc/accounting_format_gen.h"
-#include "alloc/disk_groups_format_gen.h"
-#include "alloc/lru_format_gen.h"
-#include "alloc/format_gen.h"
-#include "data/reconcile/format_gen.h"
-#include "data/extents_format_gen.h"
-#include "data/ec/format_gen.h"
-#include "data/extents_sb_format_gen.h"
-#include "data/reflink_format_gen.h"
-#include "fs/acl_format_gen.h"
-#include "fs/dirent_format_gen.h"
-#include "fs/inode_format_gen.h"
-#include "fs/logged_ops_format_gen.h"
-#include "fs/quota_format_gen.h"
-#include "fs/xattr_format_gen.h"
-#include "sb/errors_format_gen.h"
-#include "init/damage_format_gen.h"
-#include "init/passes_format_gen.h"
-#include "journal/seq_blacklist_format_gen.h"
-#include "sb/counters_format_gen.h"
-#include "sb/downgrade_format_gen.h"
-#include "sb/members_format_gen.h"
-#include "snapshots/format_gen.h"
-"#);
-
 /* A superblock field is one of its sections, by its type: */
 tagged_union! {
     #[storage(c::bch_sb_field)]
@@ -903,15 +862,13 @@ tagged_union! {
     }
 }
 
-c_const! {
-    /*
-     * Most superblock fields are replicated in all device's superblocks - a few are
-     * not:
-     */
-    pub const BCH_SINGLE_DEVICE_SB_FIELDS: u32 =
-        (1 << c::BCH_SB_FIELD_journal as u32) |
-        (1 << c::BCH_SB_FIELD_journal_v2 as u32);
-}
+/*
+ * Most superblock fields are replicated in all device's superblocks - a few are
+ * not:
+ */
+pub const BCH_SINGLE_DEVICE_SB_FIELDS: u32 =
+    (1 << c::BCH_SB_FIELD_journal as u32) |
+    (1 << c::BCH_SB_FIELD_journal_v2 as u32);
 
 /* BCH_SB_FIELD_journal: */
 
@@ -1245,25 +1202,19 @@ c_enum! {
     }
 }
 
-c_const! {
-    /* The oldest version this one reads */
-    pub const bcachefs_metadata_version_min: u32 = c::bcachefs_metadata_version_btree_ptr_sectors_written;
-}
+/* The oldest version this one reads */
+#[allow(non_upper_case_globals)]
+pub const bcachefs_metadata_version_min: u32 = c::bcachefs_metadata_version_btree_ptr_sectors_written;
 
-c_const! {
-    #[c_int]
-    pub const bcachefs_metadata_version_current: u32 = c::bcachefs_metadata_version_max as u32 - 1;
+#[allow(non_upper_case_globals)]
+pub const bcachefs_metadata_version_current: u32 = c::bcachefs_metadata_version_max as u32 - 1;
 
-    #[c_int]
-    pub const BCH_SB_SECTOR: u32 = 8;
+pub const BCH_SB_SECTOR: u32 = 8;
 
-    #[c_int]
-    pub const BCH_SB_LAYOUT_SIZE_BITS_MAX: u32 = 16; /* 32 MB */
-}
+pub const BCH_SB_LAYOUT_SIZE_BITS_MAX: u32 = 16; /* 32 MB */
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bch_sb_layout {
     pub magic: c::__uuid_t, /* bcachefs superblock UUID */
     pub layout_type: u8,
@@ -1278,10 +1229,7 @@ c_default!(bch_sb_layout);
 // before or after
 unsafe impl crate::util::projections::TearSafe for bch_sb_layout {}
 
-c_const! {
-    #[c_int]
-    pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
-}
+pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
 
 /*
  * @offset	- sector where this sb was written
@@ -1302,7 +1250,6 @@ c_const! {
 #[unsized_vstruct]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bch_sb {
     pub csum: c::bch_csum,
     pub version: Le16,
@@ -1452,7 +1399,7 @@ c_bitmask! {
 }
 
 /// The compression options, each in two fields: _HI is the bits it grew -
-/// bcachefs_format.h's BCH_SB_COMPRESSION_TYPE() for C.
+/// The compression type, split across two fields.
 impl bch_sb__head {
     pub fn compression_type(&self) -> u64 {
         self.compression_type_lo() | self.compression_type_hi() << 4
@@ -1505,28 +1452,23 @@ c_bitmask! {
     }
 }
 
-c_const! {
-    #[c_int]
-    pub const BCH_SB_EXTENT_BP_SHIFT_DEFAULT: u32 = 10;
-}
+pub const BCH_SB_EXTENT_BP_SHIFT_DEFAULT: u32 = 10;
 
 
-c_const! {
-    pub const BCH_SB_FEATURES_ALWAYS: u64 =
-        (1 << c::BCH_FEATURE_new_extent_overwrite as u32) |
-        (1 << c::BCH_FEATURE_extents_above_btree_updates as u32) |
-        (1 << c::BCH_FEATURE_btree_updates_journalled as u32) |
-        (1 << c::BCH_FEATURE_alloc_v2 as u32) |
-        (1 << c::BCH_FEATURE_extents_across_btree_nodes as u32);
+pub const BCH_SB_FEATURES_ALWAYS: u64 =
+    (1 << c::BCH_FEATURE_new_extent_overwrite as u32) |
+    (1 << c::BCH_FEATURE_extents_above_btree_updates as u32) |
+    (1 << c::BCH_FEATURE_btree_updates_journalled as u32) |
+    (1 << c::BCH_FEATURE_alloc_v2 as u32) |
+    (1 << c::BCH_FEATURE_extents_across_btree_nodes as u32);
 
-    pub const BCH_SB_FEATURES_ALL: u64 =
-        c::BCH_SB_FEATURES_ALWAYS |
-        (1 << c::BCH_FEATURE_new_siphash as u32) |
-        (1 << c::BCH_FEATURE_btree_ptr_v2 as u32) |
-        (1 << c::BCH_FEATURE_new_varint as u32) |
-        (1 << c::BCH_FEATURE_journal_no_flush as u32) |
-        (1 << c::BCH_FEATURE_incompat_version_field as u32);
-}
+pub const BCH_SB_FEATURES_ALL: u64 =
+    c::BCH_SB_FEATURES_ALWAYS |
+    (1 << c::BCH_FEATURE_new_siphash as u32) |
+    (1 << c::BCH_FEATURE_btree_ptr_v2 as u32) |
+    (1 << c::BCH_FEATURE_new_varint as u32) |
+    (1 << c::BCH_FEATURE_journal_no_flush as u32) |
+    (1 << c::BCH_FEATURE_incompat_version_field as u32);
 
 c_enum! {
     #[open]
@@ -1593,11 +1535,9 @@ c_enum! {
     }
 }
 
-c_const! {
-    pub const BCH_REPLICAS_MAX: u32 = 4;
+pub const BCH_REPLICAS_MAX: u32 = 4;
 
-    pub const BCH_BKEY_PTRS_MAX: u32 = 16;
-}
+pub const BCH_BKEY_PTRS_MAX: u32 = 16;
 
 c_enum! {
     #[open]
@@ -1724,7 +1664,6 @@ c_enum! {
     #[open]
     #[prefix(BCH_COMPRESSION_OPT_)]
     #[nr(BCH_COMPRESSION_OPT_NR)]
-    #[c_list(BCH_COMPRESSION_OPTS)]
     pub enum bch_compression_opts: u32 {
         none = 0,
         lz4 = 1,
@@ -1744,14 +1683,13 @@ c_enum! {
     }
 }
 
-c_const! {
-    /* statfs()'s f_type, and the superblock's s_magic: the kernel's
-     * uapi/linux/magic.h has it too, as BCACHEFS_SUPER_MAGIC */
-    pub const BCACHEFS_STATFS_MAGIC: u32 = 0xca451a4e;
+/* statfs()'s f_type, and the superblock's s_magic: the kernel's
+ * uapi/linux/magic.h has it too, as BCACHEFS_SUPER_MAGIC */
+pub const BCACHEFS_STATFS_MAGIC: u32 = 0xca451a4e;
 
-    /* Journal */
-    pub const JSET_KEYS_U64s: usize = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
-}
+/* Journal */
+#[allow(non_upper_case_globals)]
+pub const JSET_KEYS_U64s: usize = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
 
 /* A journal entry is the type its type says: */
 tagged_union! {
@@ -1923,7 +1861,6 @@ vstruct!(unsized jset_entry_dev_usage, entry.u64s);
 #[unsized_vstruct]
 #[repr(C, align(8))]
 #[derive(Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct jset_entry_log {
     pub entry: Head<c::jset_entry>,
     pub d: [u8; 0],
@@ -1933,7 +1870,6 @@ vstruct!(unsized jset_entry_log, entry.u64s);
 #[whole]
 #[repr(C, align(8))]
 #[derive(Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct jset_entry_datetime {
     pub entry: Head<c::jset_entry>,
     pub seconds: Le64,
@@ -1943,7 +1879,6 @@ vstruct!(jset_entry_datetime, repr.entry.u64s);
 #[whole]
 #[repr(C, align(8))]
 #[derive(Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct jset_entry_rewind_limit {
     pub entry: Head<c::jset_entry>,
     pub seq: Le64,
@@ -1957,7 +1892,6 @@ vstruct!(jset_entry_rewind_limit, repr.entry.u64s);
 #[whole]
 #[repr(C, align(8))]
 #[derive(Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct jset_entry_rewind {
     pub entry: Head<c::jset_entry>,
     pub from: Le64,
@@ -1978,7 +1912,6 @@ vstruct!(jset_entry_rewind, repr.entry.u64s);
 #[unsized_vstruct]
 #[repr(C, align(8))]
 #[derive(Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct jset {
     pub csum: c::bch_csum,
 
@@ -2022,20 +1955,16 @@ c_bitmask! {
     }
 }
 
-c_const! {
-    #[c_int]
-    pub const BCH_JOURNAL_BUCKETS_MIN: u32 = 8;
+pub const BCH_JOURNAL_BUCKETS_MIN: u32 = 8;
 
-    /* Btree: */
+/* Btree: */
 
-    /*
-     * Maximum number of btrees that we will _ever_ have under the current scheme,
-     * where we refer to them with 64 bit bitfields - and we also need a bit for
-     * the interior btree node type:
-     */
-    #[c_int]
-    pub const BTREE_ID_NR_MAX: u32 = 63;
-}
+/*
+ * Maximum number of btrees that we will _ever_ have under the current scheme,
+ * where we refer to them with 64 bit bitfields - and we also need a bit for
+ * the interior btree node type:
+ */
+pub const BTREE_ID_NR_MAX: u32 = 63;
 
 c_enum! {
     #[closed]
@@ -2055,7 +1984,6 @@ c_enum! {
 #[unsized_vstruct]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bset {
     pub seq: Le64,
 
@@ -2145,7 +2073,6 @@ c_bitmask! {
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct btree_node {
     pub csum: c::bch_csum,
     pub magic: Le64,
@@ -2160,14 +2087,6 @@ pub struct btree_node {
     pub format: c::bkey_format,
 
     /* C's vstruct macros find u64s and _data on the node itself: */
-    #[c_anon("union {
-		struct bset keys;
-		struct {
-			u8 pad[22];
-			__le16 u64s;
-			u64 _data[];
-		};
-	}")]
     pub keys: Head<c::bset>,
 }
 vstruct!(unsized btree_node, keys.u64s);
@@ -2187,29 +2106,11 @@ c_bitmask! {
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct btree_node_entry {
     pub csum: c::bch_csum,
 
     /* C's vstruct macros find u64s and _data on the entry itself: */
-    #[c_anon("union {
-		struct bset keys;
-		struct {
-			u8 pad[22];
-			__le16 u64s;
-			u64 _data[];
-		};
-	}")]
     pub keys: Head<c::bset>,
 }
 vstruct!(unsized btree_node_entry, keys.u64s);
 c_default!(btree_node_entry__head);
-
-c_verbatim!(r#"
-_Static_assert(offsetof(struct btree_node, u64s) == offsetof(struct btree_node, keys.u64s) &&
-	       offsetof(struct btree_node, _data) == offsetof(struct btree_node, keys._data),
-	       "btree_node: u64s and _data aren't its bset's");
-_Static_assert(offsetof(struct btree_node_entry, u64s) == offsetof(struct btree_node_entry, keys.u64s) &&
-	       offsetof(struct btree_node_entry, _data) == offsetof(struct btree_node_entry, keys._data),
-	       "btree_node_entry: u64s and _data aren't its bset's");
-"#);

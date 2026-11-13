@@ -19,7 +19,6 @@ use cstruct_macros::CStruct;
 pub struct seqmutex {
     pub lock: c::mutex,
     /* C writes it under the mutex */
-    #[c("u32 seq")]
     pub seq:  AtomicU32,
 }
 

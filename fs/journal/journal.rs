@@ -699,7 +699,7 @@ impl c::journal {
         data.head_mut().seq.set(seq);
         data.head_mut().set_u64s(0);
 
-        let early = mem::take(&mut *g.early_journal_entries);
+        let early = mem::take(&mut g.early_journal_entries);
         if !early.is_empty() {
             let hdr = size_of::<Head<c::jset>>();
             let early_bytes = plain_bytes(&early[..]);
@@ -1467,7 +1467,7 @@ impl c::journal {
         /* j->lock is a spinlock: the entries grow into a new buffer, swapped in under it */
         loop {
             let mut g = self.lock.lock();
-            let v = &mut *g.early_journal_entries;
+            let v = &mut g.early_journal_entries;
             if let Some(dst) = v.extend_zeroed_within_capacity(e.len()) {
                 dst.copy_from_slice(&e);
                 return Ok(());
@@ -1478,7 +1478,7 @@ impl c::journal {
             let mut new = KVVec::with_capacity(want)?;
 
             let mut g = self.lock.lock();
-            let v = &mut *g.early_journal_entries;
+            let v = &mut g.early_journal_entries;
             if v.len() + e.len() <= new.capacity() {
                 for s in [&v[..], &e[..]] {
                     new.extend_zeroed_within_capacity(s.len()).expect("room checked").copy_from_slice(s);

@@ -37,7 +37,7 @@ use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, 
 use core::convert::Infallible;
 use core::ffi::c_uint;
 use core::sync::atomic::{AtomicU8, Ordering};
-use cstruct_macros::{c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
+use cstruct_macros::{c_name, CStruct, bitfield, Fieldwise, TypeInfo, c_enum};
 use core::cell::Cell;
 use nestify::nest;
 use crate::format::{Bpos, Btree, DataType, BkeyType};
@@ -56,22 +56,17 @@ pub struct disk_reservation_destructable {
     pub r: c::disk_reservation,
 }
 
-c_const! {
-    #[c_int]
-    pub const RESERVE_FACTOR: u32 = 6;
+pub const RESERVE_FACTOR: u32 = 6;
 
-    /* A device position as a 32.32 fixed point fraction of its size: see
-     * bch_dev::offset_to_frac() */
-    #[c_int]
-    pub const BCH_DEV_POS_FRAC_BITS: u32 = 32;
-}
+/* A device position as a 32.32 fixed point fraction of its size: see
+ * bch_dev::offset_to_frac() */
+pub const BCH_DEV_POS_FRAC_BITS: u32 = 32;
 
 /// A bucket's gc state, in memory: fsck has one for every bucket on every
 /// device, so it's 16 bytes, the lock one of them.
 #[repr(C, align(4))]
 #[derive(CStruct)]
 pub struct bucket {
-    #[c_lock("u8 lock")]
     pub lock: Locked<ByteLock, BucketData>,
 }
 
@@ -107,12 +102,9 @@ pub struct BucketGensHead {
 // SAFETY: integers; all zeroes is an empty table
 unsafe impl crate::util::rcu::RcuElement for BucketGensHead {}
 
-c_rcu_array! {
-    /// ca->bucket_gens: a device's bucket generations, published under RCU -
-    /// atomics, written in place with readers looking.
-    pub type BucketGensArray = crate::util::rcu::RcuArray<core::sync::atomic::AtomicU8, c::BucketGensHead>
-        as struct bucket_gens { nbuckets, b };
-}
+/// ca->bucket_gens: a device's bucket generations, published under RCU -
+/// atomics, written in place with readers looking.
+pub type BucketGensArray = crate::util::rcu::RcuArray<core::sync::atomic::AtomicU8, c::BucketGensHead>;
 
 /* Only info on bucket countns: */
 #[repr(C)]
@@ -202,13 +194,9 @@ pub struct bch_fs_placeable {
 #[c_name(disk_reservation)]
 #[derive(CStruct)]
 pub struct DiskReservation<'f> {
-    #[c("struct bch_fs *c")]
     pub c: &'f Fs,
-    #[c("u64 sectors")]
     pub sectors: Cell<u64>,
-    #[c("u32 generation")]
     pub generation: Cell<u32>,
-    #[c("unsigned nr_replicas")]
     pub nr_replicas: Cell<c_uint>,
 }
 

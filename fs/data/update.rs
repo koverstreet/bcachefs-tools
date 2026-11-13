@@ -130,14 +130,12 @@ pub struct data_update {
     pub opts: c::data_update_opts,
 
     /* read by the in-flight listing, racily */
-    #[c("bool read_done")]
     pub read_done: AtomicBool,
     /* its key in c->update_table, while it's in: Held's in_flight */
     pub in_flight_key: c::data_update_key,
 
     /* associated with @ctxt: its index in the context's updates */
     pub io_seq: u64,
-    #[c("struct moving_context *ctxt")]
     pub ctxt: *mut crate::data::moving::MovingContext,
 
     pub rbio: Rbio,

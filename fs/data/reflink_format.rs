@@ -9,7 +9,6 @@ use cstruct_macros::{c_name, c_bitmask, whole, CStruct, Plain, TypeInfo, SizedVa
 #[repr(C, align(8))]
 #[c_name(bch_reflink_p)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
-#[c_packed]
 pub struct ReflinkP {
     pub v: c::bch_val,
     pub idx_flags: Le64,
@@ -37,11 +36,9 @@ c_bitmask! {
 #[repr(C, align(8))]
 #[c_name(bch_reflink_v)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct ReflinkV {
     pub v: c::bch_val,
     pub refcount: Le64,
-    #[c("union bch_extent_entry start[0]")]
     pub start: [c::bch_extent_entry; 0],
     pub _data: [u64; 0],
 }

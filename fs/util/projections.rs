@@ -552,15 +552,6 @@ unsafe impl<T> Publish for PublishedOnce<T> {
     type Writer = PublishedOnceWriter<T>;
 }
 
-// SAFETY: a RustOnly of the same size and alignment: a @T, as its Writer has
-// it - laid out as it is, as Publish says
-unsafe impl<T: Publish, const U64S: usize, const ALIGN: usize> Publish for crate::types::RustOnly<T, U64S, ALIGN>
-where
-    crate::types::Align<ALIGN>: crate::types::AlignMarker,
-{
-    type Writer = crate::types::RustOnly<T::Writer, U64S, ALIGN>;
-}
-
 // ── Views ────────────────────────────────────────────────────────────────
 
 /// ViewMut::set() on a field past the end of a view's bytes: one a shorter,

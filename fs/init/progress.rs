@@ -28,7 +28,6 @@ use crate::util::{Printbuf, ToText};
 use core::ffi::CStr;
 use cstruct_macros::CStruct;
 use crate::locking::SeqLock;
-use crate::types::rust_only;
 use crate::format::Btree;
 
 /*
@@ -48,7 +47,7 @@ use crate::format::Btree;
 #[repr(C)]
 #[derive(CStruct)]
 pub struct progress_indicator {
-    pub(crate) state: rust_only!(SeqLock<crate::init::progress::ProgressState>),
+    pub(crate) state: SeqLock<crate::init::progress::ProgressState>,
 }
 
 crate::module_param! {

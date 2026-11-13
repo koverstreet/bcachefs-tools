@@ -43,7 +43,7 @@ use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, 
                             Plain, SelfSized, Unsized, Unvalidated};
 use crate::util::workqueue::{run_raw, RawWork};
 use crate::util::{alloc::init_at, backref::BackRef, closure::StackClosure, printbuf::Msg, refcount::TryRefcount};
-use crate::util::{sleep::Sleep, time_stats::TimeStats, Printbuf, ToText};
+use crate::util::{time_stats::TimeStats, Printbuf, ToText};
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
 use core::ffi::c_uint;
 use core::mem::offset_of;
@@ -1217,15 +1217,5 @@ async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut
 }
 
 impl BtreeNode {
-    /// The node's io lock: its write_in_flight bit, taken by whoever finds it
-    /// clear - no write starts while it's held.
-    pub fn io_lock(&self) {
-        let Ok(()) = self.flags.lock_write_in_flight(Sleep::UNINTERRUPTIBLE.io());
-    }
 
-    pub fn io_unlock(&self) {
-        ebug_assert!(self.flags.write_in_flight(), "io unlock of a node not io locked");
-        self.flags.set_write_in_flight_inner(false);
-        self.flags.unlock_write_in_flight();
-    }
 }

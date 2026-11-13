@@ -17,7 +17,6 @@
 use super::{RawLock, RawLockBase, RawTimedLock, RawTryLock};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
-use cstruct_macros::c_verbatim;
 
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
 use super::raw::{rust_lock_acquire, rust_lock_acquired, rust_lock_contended, rust_lock_release,
@@ -94,14 +93,6 @@ pub struct Lockdep<R> {
     raw:     R,
     dep_map: LockdepMap,
 }
-
-c_verbatim!(r#"
-/* Lockdep<ByteLock>: */
-struct byte_lock_lockdep {
-	u8			lock;
-	struct lockdep_map	dep_map;
-};
-"#);
 
 unsafe impl<R: RawLockBase> RawLockBase for Lockdep<R> {
     type GuardState = R::GuardState;

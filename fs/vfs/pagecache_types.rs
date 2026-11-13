@@ -107,7 +107,6 @@ pub struct bch_folio {
      * readpage_bio_drop_unissued() maintains this.
      */
     pub partially_uptodate: u16,
-    #[c_lock("spinlock_t lock")]
     pub state: Locked<c::spinlock_t, FolioState>,
 }
 c_default!(bch_folio);

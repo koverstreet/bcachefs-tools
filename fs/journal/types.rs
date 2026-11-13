@@ -9,7 +9,7 @@ use crate::cstructs::c;
 use crate::data::keylist::PaddedKey;
 use crate::data::ptrs::IoFailures;
 use crate::data::write::DevWriteRef;
-use crate::types::{CacheAligned, RustOnly, c_default, rust_only};
+use crate::types::{CacheAligned, c_default};
 use crate::util::alloc::{kvfree_sized, kvzalloc_gfp, AllocError, KVVec};
 use crate::data_structures::fixed_fifo::FixedFifo;
 use crate::util::place::{Contained, Placed};
@@ -31,21 +31,18 @@ use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
 use crate::util::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, placed, CStruct, Init, Late};
+use cstruct_macros::{bitfield, c_enum, placed, CStruct, Init, Late};
 use nestify::nest;
 
-c_const! {
-    /* btree write buffer steals 8 bits for its own purposes: */
-    pub const JOURNAL_SEQ_MAX: u64 = (1 << 56) - 1;
+/* btree write buffer steals 8 bits for its own purposes: */
+pub const JOURNAL_SEQ_MAX: u64 = (1 << 56) - 1;
 
-    #[c_int]
-    pub const JOURNAL_STATE_BUF_BITS: u32 = 2;
-    pub const JOURNAL_STATE_BUF_NR: u32 = 1 << c::JOURNAL_STATE_BUF_BITS;
-    pub const JOURNAL_STATE_BUF_MASK: u32 = c::JOURNAL_STATE_BUF_NR - 1;
+pub const JOURNAL_STATE_BUF_BITS: u32 = 2;
+pub const JOURNAL_STATE_BUF_NR: u32 = 1 << c::JOURNAL_STATE_BUF_BITS;
+pub const JOURNAL_STATE_BUF_MASK: u32 = c::JOURNAL_STATE_BUF_NR - 1;
 
-    /* journal bufs: entries open or in flight, at most */
-    pub const JOURNAL_BUF_NR: u32 = 256;
-}
+/* journal bufs: entries open or in flight, at most */
+pub const JOURNAL_BUF_NR: u32 = 256;
 
 /// A journal entry's buffer, freed with it. C moves it whole, data and size
 /// together: between j->free_buf and the bufs in flight.
@@ -126,10 +123,8 @@ nest! {
     #[derive(CStruct, Init)]
     pub struct journal_buf {
         pub io: c::closure,
-        #[c_anon("struct { struct jset *data; unsigned buf_size; }")]
         pub data: JsetBuf,
 
-        #[c_anon("struct { struct bkey_i key; u64 key_pad[BCH_REPLICAS_MAX]; }")]
         pub key: PaddedKey<{ BKEY_U64S + c::BCH_REPLICAS_MAX as usize }>,
         /*
          * @cas mirrors the dev ptrs in @key in append order: cas[i] is the
@@ -138,7 +133,6 @@ nest! {
          * via c->devs[idx], which dev_remove may have cleared while our
          * io_ref still pins the dev object.
          */
-        #[c("struct bch_dev *cas[BCH_REPLICAS_MAX]")]
         #[init(<[Option<DevWriteRef>; c::BCH_REPLICAS_MAX as usize]>::default())]
         pub cas: [Option<DevWriteRef>; c::BCH_REPLICAS_MAX as usize],
         pub devs_written: c::bch_devs_list,
@@ -207,10 +201,9 @@ c_enum! {
     }
 }
 
-c_typedef! {
-    pub type journal_pin_flush_fn = Option<unsafe extern "C" fn(j: *mut c::journal, *mut c::journal_entry_pin,
-                                                                u64) -> c_int>;
-}
+#[allow(non_camel_case_types)]
+pub type journal_pin_flush_fn = Option<unsafe extern "C" fn(j: *mut c::journal, *mut c::journal_entry_pin,
+                                                            u64) -> c_int>;
 
 /* A pin's, its seq's pin list lock's: the list it's on, and what it's on it as */
 pub struct PinLocked {
@@ -222,7 +215,7 @@ pub struct PinLocked {
 // Zeroed, it's a pin never set: on no list, no flush function, JOURNAL_PIN_TYPE_btree3
 unsafe impl ::pin_init::Zeroable for PinLocked {}
 
-pub type PinLockedBy = rust_only!(LockedBy<PinLocked>);
+pub type PinLockedBy = LockedBy<PinLocked>;
 
 #[derive(::pin_init::Zeroable)]
 pub struct WriteAlloc {
@@ -234,7 +227,7 @@ pub struct WriteAlloc {
     pub wp_prev_devs: c::bch_devs_mask,
 }
 
-pub type WriteAllocLockedBy = rust_only!(LockedBy<WriteAlloc>);
+pub type WriteAllocLockedBy = LockedBy<WriteAlloc>;
 
 #[repr(C)]
 #[derive(CStruct)]
@@ -258,12 +251,10 @@ nest! {
     #[derive(Clone, Copy, CStruct)]*
     #[repr(C)]*
     pub union journal_res_state {
-        #[c_anon]
         pub atomic: pub struct journal_res_state_atomic {
             pub counter: c::atomic64_t,
         },
 
-        #[c_anon]
         pub word: pub struct journal_res_state_word {
             pub v: u64,
         },
@@ -274,7 +265,6 @@ nest! {
          * 24 + idx*10. That invariant lets count() / inc() / state_buf_put()
          * index a count with a single shift, not a switch.
          */
-        #[c_anon]
         pub fields: pub struct journal_res_state_fields {
             #[c_bitfield]
             #>[derive(Clone, Copy, CStruct)]-
@@ -293,34 +283,30 @@ nest! {
 }
 c_default!(journal_res_state);
 
-c_const! {
-    #[c_int]
-    pub const JOURNAL_STATE_BUF_COUNT_BITS: u32 = 10; /* matches bufN_count:10 above */
-    pub const JOURNAL_STATE_BUF_COUNT_MAX: u32 = (1 << c::JOURNAL_STATE_BUF_COUNT_BITS) - 1;
-    #[c_int]
-    pub const JOURNAL_STATE_BUF0_SHIFT: u32 = 24; /* cur_entry_offset:22 + idx:2 */
+pub const JOURNAL_STATE_BUF_COUNT_BITS: u32 = 10; /* matches bufN_count:10 above */
+pub const JOURNAL_STATE_BUF_COUNT_MAX: u32 = (1 << c::JOURNAL_STATE_BUF_COUNT_BITS) - 1;
+pub const JOURNAL_STATE_BUF0_SHIFT: u32 = 24; /* cur_entry_offset:22 + idx:2 */
 
-    /* bytes: */
-    pub const JOURNAL_ENTRY_SIZE_MIN: u32 = 64 << 10; /* 64k */
+/* bytes: */
+pub const JOURNAL_ENTRY_SIZE_MIN: u32 = 64 << 10; /* 64k */
 
-    /*
-     * The block layer is fragile with large bios - it should be able to process any
-     * IO incrementally, but...
-     *
-     * 4MB corresponds to bio_kmalloc() -> UIO_MAXIOV
-     */
-    pub const JOURNAL_ENTRY_SIZE_MAX: u32 = 4 << 20; /* 4M */
+/*
+ * The block layer is fragile with large bios - it should be able to process any
+ * IO incrementally, but...
+ *
+ * 4MB corresponds to bio_kmalloc() -> UIO_MAXIOV
+ */
+pub const JOURNAL_ENTRY_SIZE_MAX: u32 = 4 << 20; /* 4M */
 
-    /*
-     * We stash some journal state as sentinal values in cur_entry_offset:
-     * note - cur_entry_offset is in units of u64s
-     */
-    pub const JOURNAL_ENTRY_OFFSET_MAX: u32 = (1 << 22) - 1;
+/*
+ * We stash some journal state as sentinal values in cur_entry_offset:
+ * note - cur_entry_offset is in units of u64s
+ */
+pub const JOURNAL_ENTRY_OFFSET_MAX: u32 = (1 << 22) - 1;
 
-    pub const JOURNAL_ENTRY_BLOCKED_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX - 2;
-    pub const JOURNAL_ENTRY_CLOSED_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX - 1;
-    pub const JOURNAL_ENTRY_ERROR_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX;
-}
+pub const JOURNAL_ENTRY_BLOCKED_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX - 2;
+pub const JOURNAL_ENTRY_CLOSED_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX - 1;
+pub const JOURNAL_ENTRY_ERROR_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -344,7 +330,6 @@ c_enum! {
 c_enum! {
     #[closed]
     #[prefix(JOURNAL_)]
-    #[c_list(JOURNAL_FLAGS)]
     pub enum journal_flags: u32 {
         degraded,
         replay_done,
@@ -391,7 +376,6 @@ pub struct JournalLocked {
     pub seq_write_started: u64,
     pub last_empty_seq: u64,
 
-    #[c_anon("struct { struct jset *free_buf; unsigned free_buf_size; }")]
     pub free_buf: JsetBuf,
 
     pub dirty_entry_bytes: usize,
@@ -412,14 +396,13 @@ pub struct JournalLocked {
      * The fifo is j->lock's; its bufs are used outside it, by their refs.
      */
     #[pin]
-    #[c("struct { u64 front; u64 back; struct journal_buf slots[JOURNAL_BUF_NR]; } in_flight")]
     pub in_flight: FixedFifo<c::journal_buf, { c::JOURNAL_BUF_NR as usize }, u64>,
 
     /*
      * We may queue up some things to be journalled (log messages) before
      * the journal has actually started - stash them here:
      */
-    pub early_journal_entries: rust_only!(KVVec<u64>),
+    pub early_journal_entries: KVVec<u64>,
 }
 
 published! {
@@ -428,7 +411,6 @@ published! {
     #[derive(CStruct)]
     pub struct JournalHot {
         pub __align: CacheAligned,
-        #[c("union journal_res_state reservations")]
         pub reservations: AtomicU64,
         /*
          * seq, as reservations read it: a copy, set with it, so seq's own
@@ -437,7 +419,6 @@ published! {
         pub res_seq: AtomicI64,
         /* Max size of current journal entry */
         pub cur_entry_u64s: Volatile<c_uint>,
-        #[c("enum bch_watermark watermark")]
         pub watermark: Volatile<u32>,
         /*
          * Each open reservation's ring slot, indexed by seq &
@@ -445,7 +426,6 @@ published! {
          * entry has overwrites - copies, so a reservation doesn't touch the
          * journal_buf. Set in journal_entry_open().
          */
-        #[c("struct jset *ring_data[JOURNAL_STATE_BUF_NR]")]
         pub ring_data: [AtomicPtr<Head<c::jset>>; c::JOURNAL_STATE_BUF_NR as usize],
         pub ring_has_overwrites: [Volatile<bool>; c::JOURNAL_STATE_BUF_NR as usize],
     }
@@ -455,7 +435,6 @@ published! {
     /// j->lock's, written under it and read without it.
     #[derive(CStruct)]
     pub struct JournalPublished {
-        #[c_anon]
         pub hot: JournalHot,
 
         /* Sequence number of most recent journal entry (last entry in @pin) */
@@ -525,7 +504,7 @@ pub type JournalLockAt = crate::at!(journal.lock);
 #[repr(C)]
 #[derive(CStruct)]
 pub struct PinBuf {
-    pub entries: rust_only!(KVVec<crate::journal::pins::PinList>),
+    pub entries: KVVec<crate::journal::pins::PinList>,
 }
 
 /*
@@ -544,8 +523,8 @@ pub struct PinRange {
 type FsWrites = crate::field!(super.writes);
 /* And its ro refs, for what doesn't need it rw */
 type FsRoRef = crate::field!(super.ro_ref);
-pub type ReclaimThread = rust_only!(Daemon);
-pub type RewindRanges = rust_only!(LockedBy<KVVec<c::journal_rewind_range>, (), NotRw<'static>>);
+pub type ReclaimThread = Daemon;
+pub type RewindRanges = LockedBy<KVVec<c::journal_rewind_range>, (), NotRw<'static>>;
 
 /* Embedded in struct bch_fs */
 nest! {
@@ -559,14 +538,11 @@ nest! {
 
         #[pin]
         #[init_locked(JournalPublished::closed(), "&j->lock")]
-        #[c_lock("spinlock_t lock")]
         pub lock: Placed<Locked<c::spinlock_t, JournalLocked, JournalPublished>, JournalLockAt>,
 
-        #[c("unsigned long flags")]
         pub flags: crate::data_structures::bitmap::AtomicBitflags<c::journal_flags>,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         #[init(AtomicPtr::new((-(c::EROFS as isize)) as *mut c::task_struct))]
-        #[c("struct task_struct *stop_thread")]
         pub stop_thread: AtomicPtr<c::task_struct>,
 
         /*
@@ -576,7 +552,6 @@ nest! {
          */
         #[pin]
         #[init(new_lock!((), "&j->buf_lock"))]
-        #[c_lock("struct mutex_noio buf_lock")]
         pub buf_lock: Locked<c::mutex_noio>,
 
         /*
@@ -591,17 +566,14 @@ nest! {
 
         #[pin]
         #[init(crate::journal::journal::WriteWork::init())]
-        #[c("struct delayed_work write_work")]
         pub write_work: DelayedWork,
         #[late(Workqueue::new(c"bcachefs_journal",
                               WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
                ENOMEM_fs_other_alloc)]
-        #[c("struct workqueue_struct *wq")]
         pub wq: Late<Workqueue>,
         #[late(Workqueue::new(c"bcachefs_journal_discard",
                               WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 512),
                ENOMEM_fs_other_alloc)]
-        #[c("struct workqueue_struct *discard_wq")]
         pub discard_wq: Late<Workqueue>,
 
         pub flushing_seq: AtomicI64,
@@ -631,21 +603,17 @@ nest! {
          * longer needed, the bucket can be discarded and reused.
          */
         #[pin]
-        #[init(new_lock!(PinBuf { entries: RustOnly::from_value(KVVec::new()) }, ::pin_init::zeroed(),
+        #[init(new_lock!(PinBuf { entries: KVVec::new() }, ::pin_init::zeroed(),
                          "&j->pin_resize_lock"))]
-        #[c_lock("struct percpu_rw_semaphore pin_resize_lock")]
         pub pin_resize_lock: Locked<c::percpu_rw_semaphore, PinBuf, PinRange>,
-        #[c("struct work_struct pin_resize_work")]
         #[pin]
         pub(crate) pin_resize_work: ReffedWork<pin_resize, FsRoRef>,
 
         /* Flushes under-replicated pins when a device comes back: */
-        #[c("struct work_struct flush_degraded_work")]
         #[pin]
         pub(crate) flush_degraded_work: ReffedWork<flush_degraded, FsRoRef>,
 
         /* Drops retired journal buckets reclaim is done with: buckets.rs */
-        #[c("struct work_struct drop_retired_work")]
         #[pin]
         pub(crate) drop_retired_work: ReffedWork<drop_retired, FsWrites>,
 
@@ -653,16 +621,14 @@ nest! {
 
         /* protected by journal writes being allocated in order: */
         #[pin]
-        #[init(RustOnly::new(::pin_init::zeroed::<LockedBy<WriteAlloc>>()))]
+        #[init(::pin_init::zeroed::<LockedBy<WriteAlloc>>())]
         pub write_alloc: WriteAllocLockedBy,
         #[pin]
         #[init(new_lock!((), "&j->err_lock"))]
-        #[c_lock("spinlock_t err_lock")]
         pub err_lock: Locked<c::spinlock_t>,
 
         #[pin]
         #[init(new_lock!((), ::pin_init::zeroed(), "&j->reclaim_lock"))]
-        #[c_lock("struct mutex reclaim_lock")]
         pub reclaim_lock: Locked<c::mutex, (), ReclaimPublished>,
         /*
          * Used for waiting until journal reclaim has freed up space in the
@@ -671,15 +637,13 @@ nest! {
         pub reclaim_wait: EventCount,
         /* from reclaim_start() to reclaim_stop(): journal/reclaim.rs */
         #[pin]
-        #[init(RustOnly::new(Daemon::new()))]
+        #[init(Daemon::new())]
         pub reclaim_thread: ReclaimThread,
         pub next_reclaim: Volatile<c_ulong>,
 
-        #[c("struct journal_entry_pin *flush_in_progress")]
         pub flush_in_progress: AtomicPtr<c::journal_entry_pin>,
         pub flush_in_progress_dropped: Volatile<bool>,
         /* its flush function, for messages: the pin can be freed under them */
-        #[c("void *flush_in_progress_fn")]
         pub flush_in_progress_fn: AtomicPtr<c_void>,
         /* Woken as a pin's flush ends: journal/reclaim.rs */
         pub pin_flush_wait: EventCount,
@@ -689,7 +653,6 @@ nest! {
         #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
         #[pin]
         #[init(crate::new_lockdep_map!("journal res"))]
-        #[c("struct lockdep_map res_map")]
         pub res_map: crate::locking::LockdepMap,
     }
 }
@@ -720,8 +683,8 @@ impl journal {
 #[derive(CStruct, Init)]
 pub struct journal_device {
     #[pin]
-    #[init(RustOnly::new(crate::journal::buckets::new()))]
-    pub buckets: rust_only!(JournalBuckets),
+    #[init(crate::journal::buckets::new())]
+    pub buckets: JournalBuckets,
 
     pub sectors_free: Volatile<c_uint>,
 
@@ -730,14 +693,11 @@ pub struct journal_device {
      * submit time and free on completion; the pool size bounds the
      * mempool reserve, not in-flight depth.
      */
-    #[c("struct bio_set bio_set")]
     pub bio_set: Late<BioSet<journal_bio>>,
 
     #[pin]
     #[init(new_lock!((), "&ca->journal.discard_lock"))]
-    #[c_lock("struct mutex discard_lock")]
     pub discard_lock: Locked<c::mutex>,
-    #[c("struct work_struct discard")]
     #[pin]
     pub(crate) discard: ReffedWork<discard_work, crate::field!(super.io_ref[WRITE])>,
 }

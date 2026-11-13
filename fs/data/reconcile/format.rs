@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{bitfield, c_const, c_enum, open_enum, CStruct};
+use cstruct_macros::{bitfield, c_enum, open_enum, CStruct};
 
 /*
  * rebalance on disk data structures:
@@ -185,15 +185,13 @@ c_enum! {
     }
 }
 
-c_const! {
-    #[c_int]
-    pub const RECONCILE_SCAN_COOKIE_device: u32 = 32;
-    #[c_int]
-    pub const RECONCILE_SCAN_COOKIE_stripes: u32 = 3;
-    #[c_int]
-    pub const RECONCILE_SCAN_COOKIE_pending: u32 = 2;
-    #[c_int]
-    pub const RECONCILE_SCAN_COOKIE_metadata: u32 = 1;
-    #[c_int]
-    pub const RECONCILE_SCAN_COOKIE_fs: u32 = 0;
-}
+#[allow(non_upper_case_globals)]
+pub const RECONCILE_SCAN_COOKIE_device: u32 = 32;
+#[allow(non_upper_case_globals)]
+pub const RECONCILE_SCAN_COOKIE_stripes: u32 = 3;
+#[allow(non_upper_case_globals)]
+pub const RECONCILE_SCAN_COOKIE_pending: u32 = 2;
+#[allow(non_upper_case_globals)]
+pub const RECONCILE_SCAN_COOKIE_metadata: u32 = 1;
+#[allow(non_upper_case_globals)]
+pub const RECONCILE_SCAN_COOKIE_fs: u32 = 0;

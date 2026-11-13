@@ -47,12 +47,9 @@ c_opaque!(fast_list_pcpu);
 #[derive(CStruct)]
 pub struct fast_list {
     /* the items, by slot: allocated by any CPU at once */
-    #[c("GENRADIX(void *) items")]
     pub items: SharedGenRadix<Item>,
-    #[c("struct ida slots_allocated")]
     pub slots_allocated: Opaque<c::ida>,
     /* set by init() and exit(), which take the list shared, as C's pointer is */
-    #[c("struct fast_list_pcpu __percpu *buffer")]
     pub buffer: AtomicPtr<c::fast_list_pcpu>,
 }
 c_default!(fast_list);

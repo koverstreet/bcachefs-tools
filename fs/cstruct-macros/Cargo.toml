@@ -11,8 +11,7 @@ name = "cstruct_macros"
 proc-macro = true
 
 # The kernel/DKMS build compiles this with a plain rustc, against the vendored
-# syn, quote and proc-macro2 (vendor/kernel-rust) - which rust_types_gen,
-# include!ing the same parser (fs/types/cstruct.rs), is built on too.
+# syn, quote and proc-macro2 (vendor/kernel-rust).
 [dependencies]
 proc-macro2 = "1"
 quote = "1"

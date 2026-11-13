@@ -779,11 +779,6 @@ pub struct RcuArray<T: RcuElement, H: RcuElement = ()>(RcuBuf<RcuArrayBuf<T, H>>
 unsafe impl<T: RcuElement, H: RcuElement> ::pin_init::Zeroable for RcuArray<T, H> {}
 
 impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
-    /// For c_rcu_array!'s record, which C's definition is checked against.
-    pub const NR: usize = core::mem::offset_of!(RcuArrayHead<H>, nr);
-    pub const HEAD: usize = core::mem::offset_of!(RcuArrayHead<H>, h);
-    pub const TAIL: usize = RcuArrayBuf::<T, H>::TAIL;
-
     /// None published reads as none.
     pub fn read<'a>(&'a self, g: &'a ReadGuard) -> &'a [T] {
         self.0.read(g).map_or(&[], |b| &b.elems)

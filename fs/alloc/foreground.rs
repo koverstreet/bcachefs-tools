@@ -71,7 +71,7 @@ use crate::opts::data_type_str;
 use crate::percpu_field;
 use crate::debug::trace::events;
 use crate::sb::members::{data_types_to_text, member_state_str};
-use crate::types::{RustOnly, c_default, rust_only};
+use crate::types::{c_default};
 use crate::util::alloc::init_at;
 use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up};
 use crate::util::time_stats::TimeStats;
@@ -104,7 +104,6 @@ c_default!(dev_alloc_list);
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, Default, CStruct)]
-    #[c_typedef]
     pub struct alloc_trace_entry {
         pub dev: u8,
         #[c_bitfield]
@@ -126,7 +125,7 @@ nest! {
 
 /// alloc_request's trace: room for 16 attempts in the request itself, as
 /// C's DARRAY_PREALLOCATED(, 16) had.
-pub(crate) type AllocTrace = rust_only!(InlineVec<c::alloc_trace_entry, 16>);
+pub(crate) type AllocTrace = InlineVec<c::alloc_trace_entry, 16>;
 
 /*
  * alloc_request.btree_bitmap: whether the bucket must be in a region the
@@ -831,7 +830,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
                 (&raw mut (*slot).watermark).write(watermark);
                 (&raw mut (*slot).flags).write(flags);
                 (&raw mut (*slot).devs_have).write(devs_have);
-                init_at(RustOnly::new(InlineVec::new()), &raw mut (*slot).trace)
+                init_at(InlineVec::new(), &raw mut (*slot).trace)
             })
         }
     }
@@ -839,7 +838,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
     /// Its trace emptied - its storage freed, if it spilled to the heap - for
     /// a retry, and when its AllocRequest is dropped.
     pub(crate) fn trace_reset(&mut self) {
-        drop(core::mem::take(&mut *self.trace));
+        drop(core::mem::take(&mut self.trace));
     }
 
     /// An attempt recorded in its trace - on @dev, BCH_SB_MEMBER_INVALID for

@@ -9,8 +9,8 @@
 //! all its parent needs - `[..]` for an element of the Container there is
 //! below. It gives the struct:
 //!
-//! - its At field, `#[placed_at]` - `_placed_at`, zero bytes, char[0] to C;
-//!   or an element's index, NAME, its AtIndex C's TYPE - for the derives
+//! - its At field, `#[placed_at]` - `_placed_at`, zero bytes; or an
+//!   element's index, NAME, its AtIndex TYPE - for the derives
 //!   after it to see as any other field: `#[derive(Init)]` gives its init()
 //!   the At to put there;
 //! - Contained - its parent, and its At;
@@ -29,9 +29,8 @@
 //! PlacedIn, and Base's InitAt for the field - the Container, by
 //! util/place.rs's container() - but neither Contained nor a container() - an
 //! element's place is for the guarantee it never outlives its Base - nor
-//! any rule on its drop. The At field's attributes, #[placed_at] and #[c],
-//! are #[derive(Init)]'s and #[derive(CStruct)]'s, so it has them only if it
-//! has those.
+//! any rule on its drop. The At field's #[placed_at] is #[derive(Init)]'s,
+//! so it has it only if it has that.
 //!
 //! And `#[derive(Init)]` (init.rs) makes a Field<N> for each field of the
 //! structs it's on, N its name's hash - a field as a type, for the children
@@ -129,7 +128,6 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
 
     // Its outer attributes: #[pin_data], its derives, its #[cfg]s
     let mut pin_data: Option<bool> = None;  // whether PinnedDrop
-    let mut cstruct = false;                // whether C has it
     let mut init = false;                   // whether #[derive(Init)]'s
     let mut cfgs = Vec::new();              // for its impls too
     for a in &item.attrs {
@@ -139,7 +137,6 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
         } else if path.is_ident("derive") {
             let derives = a.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?;
             let has = |d: &str| derives.iter().any(|p| p.segments.last().is_some_and(|s| s.ident == d));
-            cstruct |= has("CStruct");
             init |= has("Init");
         } else if path.is_ident("cfg") {
             cfgs.push(a.clone());
@@ -182,33 +179,21 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
     // a field of no bytes
     let field_name = LitStr::new(&field.to_string(), field.span());
     let n = quote!({ crate::util::place::name(#field_name) });
-    let empty_at = || (format_ident!("{AT_FIELD}"), format!("char {AT_FIELD}[0]"));
-    let (at, (at_field, at_decl)) = match &kind {
-        Kind::Field => (quote!(crate::util::place::At<#base, #n>), empty_at()),
-        /* named for its field: C has a Locked's data as the parent's members */
-        Kind::Inner => {
-            let f = format!("{INNER_AT_FIELD}{field}");
-            (quote!(crate::util::place::AtInner<#base, #n>), (format_ident!("{f}"), format!("char {f}[0]")))
-        }
-        Kind::Array(idx, ty) => {
-            let c_ty = match crate::cstruct::field_type(&ty.to_token_stream().to_string()) {
-                Ok(crate::cstruct::FieldType::Named { c: Some(c), .. }) => c,
-                _ => return Err(Error::new_spanned(ty,
-                    format!("{name}: its index, {idx}: {}, isn't an integer C has", ty.to_token_stream()))),
-            };
-            (quote!(crate::util::place::AtIndex<#base, #n, #ty>), (idx.clone(), format!("{c_ty} {idx}")))
-        }
-        Kind::Container => (quote!(crate::util::place::AtIn<#name>), empty_at()),
+    let (at, at_field) = match &kind {
+        Kind::Field => (quote!(crate::util::place::At<#base, #n>), format_ident!("{AT_FIELD}")),
+        /* named for its field: a Locked's data has the parent's members */
+        Kind::Inner => (quote!(crate::util::place::AtInner<#base, #n>), format_ident!("{INNER_AT_FIELD}{field}")),
+        Kind::Array(idx, ty) => (quote!(crate::util::place::AtIndex<#base, #n, #ty>), idx.clone()),
+        Kind::Container => (quote!(crate::util::place::AtIn<#name>), format_ident!("{AT_FIELD}")),
     };
 
-    // The At field, last. #[derive(Init)]'s init() takes the At, and C has a
-    // declaration of it - if they're there: the attributes are theirs
+    // The At, last. #[derive(Init)]'s init() takes the At - if it's there:
+    // the attribute is its
     let Fields::Named(fields) = &mut item.fields else {
         return Err(Error::new_spanned(&item, format!("{name}: is for a struct with named fields")));
     };
     let init_attr = init.then(|| quote!(#[placed_at]));
-    let c_attr = cstruct.then(|| quote!(#[c(#at_decl)]));
-    fields.named.push(Field::parse_named.parse2(quote!(#init_attr #c_attr pub(crate) #at_field: #at))?);
+    fields.named.push(Field::parse_named.parse2(quote!(#init_attr pub(crate) #at_field: #at))?);
 
     let lifetime = arg_lifetime.then(|| quote!(<'a>));
     let init_at = |init: TokenStream| quote! {

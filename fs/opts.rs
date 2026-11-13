@@ -48,7 +48,7 @@ use crate::cstructs::c::inode_opt_id_arms;
 use crate::c::{bch_member, bch_sb_field_ext, BCH_COMPRESSION_OPT_none, BCH_CSUM_OPT_crc32c, BCH_DATA_btree, BCH_DATA_journal, BCH_DATA_user, BCH_MEMBER_STATE_rw, BCH_ON_ERROR_fix_safe, BCH_REPLICAS_MAX, BCH_SB_SECTOR, BCH_STR_HASH_OPT_siphash, BCH_VERSION_UPGRADE_compatible, BCH_WRITE_DEGRADED_degraded};
 use crate::format::DataType;
 use crate::types::bits_to_longs;
-use cstruct_macros::{CStruct, c_const, c_enum, Options, TypeInfo};
+use cstruct_macros::{CStruct, c_enum, Options, TypeInfo};
 
 /*
  * Mount options; we also store defaults in the superblock.
@@ -83,17 +83,15 @@ c_enum! {
     }
 }
 
-c_const! {
-    /* the ratelimit_errors option's default: on in the kernel */
-    pub const RATELIMIT_ERRORS_DEFAULT: bool = cfg!(__KERNEL__);
+/* the ratelimit_errors option's default: on in the kernel */
+pub const RATELIMIT_ERRORS_DEFAULT: bool = cfg!(__KERNEL__);
 
-    /* the verbose option's default: on in debug builds */
-    pub const BCACHEFS_VERBOSE_DEFAULT: bool = cfg!(CONFIG_BCACHEFS_DEBUG);
+/* the verbose option's default: on in debug builds */
+pub const BCACHEFS_VERBOSE_DEFAULT: bool = cfg!(CONFIG_BCACHEFS_DEBUG);
 
-    /* bch2_opt_to_text()'s flags */
-    pub const OPT_SHOW_FULL_LIST: u32 = 1 << 0;
-    pub const OPT_SHOW_MOUNT_STYLE: u32 = 1 << 1;
-}
+/* bch2_opt_to_text()'s flags */
+pub const OPT_SHOW_FULL_LIST: u32 = 1 << 0;
+pub const OPT_SHOW_MOUNT_STYLE: u32 = 1 << 1;
 
 c_enum! {
     #[closed]
@@ -106,16 +104,13 @@ c_enum! {
     }
 }
 
-c_const! {
-    /* how many options a bch_opts_mask has room for */
-    pub const BCH_OPTS_MAX: u32 = 128;
-}
+/* how many options a bch_opts_mask has room for */
+pub const BCH_OPTS_MAX: u32 = 128;
 
 /* options, by bch_opt_id: which are set */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_opts_mask {
-    #[c("unsigned long d[BITS_TO_LONGS(BCH_OPTS_MAX)]")]
     pub d: [c_ulong; bits_to_longs(c::BCH_OPTS_MAX as usize)],
 }
 
@@ -689,16 +684,13 @@ macro_rules! __bch_inode_opts_1 {
         #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
         pub struct bch_inode_opts {
             $($acc)*
-            #[c_anon("#define x(_name, ...)	u64 _name##_from_inode:1;
-BCH_INODE_OPTS()
-#undef x")]
             pub __bch_inode_opts_bits: [u8; ([$(stringify!($_name)),*].len() * 1).div_ceil(8)],
 
             pub change_cookie: u32,
         }
     } };
 }
-inode_opt_id_arms!(__bch_inode_opts_0 [#[c_anon("")] pub __bch_inode_opts_align: [u64; 0],]);
+inode_opt_id_arms!(__bch_inode_opts_0 [pub __bch_inode_opts_align: [u64; 0],]);
 
 pub const NR: usize = opt_id::bch2_opts_nr.0 as usize;
 

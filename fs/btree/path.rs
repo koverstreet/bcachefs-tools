@@ -29,7 +29,7 @@ use crate::util::rcu::rcu_assign_pointer;
 use crate::util::Printbuf;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::kernel::local_clock;
-use cstruct_macros::{bitfield, c_name, c_typedef, CStruct};
+use cstruct_macros::{bitfield, c_name, CStruct};
 use crate::locking::{Locked, LockedBy};
 use crate::locking::six::{six_lock_increment_ip, six_lock_write_held, SixHold};
 use crate::c::six_lock_type;
@@ -40,10 +40,7 @@ use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut, Index, IndexMut};
 use core::ptr::{self, NonNull};
 
-c_typedef! {
-    #[c_name(btree_path_idx_t)]
-    pub type PathIdx = u16;
-}
+pub type PathIdx = u16;
 
 /// Clone and Copy, which #[derive] would bound on T: these have their T only
 /// by pointer.
@@ -117,7 +114,6 @@ impl<T> NodePtr<T> {
 #[derive(CStruct)]
 pub struct btree_path_level<T: PathNode = cs::btree_bkey_cached_common> {
     /* a cached path's is a struct bkey_cached's */
-    #[c("struct btree *b")]
     pub b: NodePtr<T>,
     pub iter: KeyIter,
     pub lock_seq: u32,
@@ -1588,10 +1584,6 @@ pub fn bch2_trans_paths_exit(trans: &BtreeTrans<'_>) {
     let allocated = trans.paths_allocated.replace(ptr::null_mut());
     trans.paths.set(ptr::null_mut());
     trans.table_retire(allocated);
-}
-
-pub fn bch2_path_put(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, intent: bool) {
-    trans.path_put(paths, path, intent)
 }
 
 pub fn bch2_btree_path_to_text(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path_idx: PathIdx, path: &BtreePath) {

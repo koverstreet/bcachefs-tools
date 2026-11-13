@@ -356,13 +356,6 @@ impl<H> TaskBox<'_, H> {
         unsafe { ManuallyDrop::new(self).task.start() };
     }
 
-    /// start_unchecked(), its first poll run here.
-    ///
-    /// # Safety
-    /// As start_unchecked()'s.
-    pub unsafe fn start_inline_unchecked(self) {
-        unsafe { ManuallyDrop::new(self).task.start_inline() };
-    }
 }
 
 impl<H> core::ops::Deref for TaskBox<'_, H> {

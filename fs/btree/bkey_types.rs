@@ -13,7 +13,7 @@ use crate::cstructs::c as cs;
 use crate::cstructs::c::BkeyType_arms;
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_same, c_verbatim};
+use cstruct_macros::{CStruct, bitfield, c_enum};
 use nestify::nest;
 use crate::format::Btree;
 
@@ -114,11 +114,9 @@ nest! {
     #[repr(C)]
     #[derive(CStruct)]
     pub struct bkey_s {
-        #[c_anon]
         #>[repr(C)]
         #>[derive(Clone, Copy, CStruct)]
         pub split: pub union bkey_s_split {
-            #[c_anon]
             #>[repr(C)]
             #>[derive(Clone, Copy, CStruct)]
             pub kv: pub struct bkey_s_kv {
@@ -131,68 +129,11 @@ nest! {
 }
 c_default!(bkey_s);
 
-c_same! { struct bkey_s_c == BkeySC<'static> { k, v } }
-c_same! { struct bkey_s   == BkeyS<'static> { k, v } }
-
-/*
- * C's typed keys: bkey_gen.h defines them, for its checks of Rust's - the
- * c_same!s after them.
- */
-c_verbatim!(r#"
-/*
- * For a given type of value (e.g. struct bch_extent), generates the types for
- * bkey + bch_extent - inline, split, split const. The conversion functions,
- * which also check that the value is of the correct type, are in
- * bkey_types_inline.h.
- *
- * We use anonymous unions for upcasting - e.g. converting from e.g. a
- * bkey_i_extent to a bkey_i - since that's always safe, instead of conversion
- * functions.
- */
-#define x(name, ...)					\
-struct bkey_i_##name {							\
-	union {								\
-		struct bkey		k;				\
-		struct bkey_i		k_i;				\
-	};								\
-	struct bch_##name		v;				\
-};									\
-									\
-struct bkey_s_c_##name {						\
-	union {								\
-	struct {							\
-		const struct bkey	*k;				\
-		const struct bch_##name	*v;				\
-	};								\
-	struct bkey_s_c			s_c;				\
-	};								\
-};									\
-									\
-struct bkey_s_##name {							\
-	union {								\
-	struct {							\
-		struct bkey		*k;				\
-		struct bch_##name	*v;				\
-	};								\
-	struct bkey_s_c_##name		c;				\
-	struct bkey_s			s;				\
-	struct bkey_s_c			s_c;				\
-	};								\
-};
-
-BCH_BKEY_TYPES();
-#undef x
-"#);
-
 macro_rules! __bkey_typed {
     ($( ($name:ident, $nr:literal, $($ty:ident)::+, $flags:tt) ),* $(,)?) => { ::paste::paste! { $(
         pub type [<bkey_i_ $name>]   = BkeyI<$($ty)::+>;
         pub type [<bkey_s_c_ $name>] = BkeySC<'static, $($ty)::+>;
         pub type [<bkey_s_ $name>]   = BkeyS<'static, $($ty)::+>;
-
-        c_same! { struct [<bkey_i_ $name>]   == BkeyI<$($ty)::+> { k, v } }
-        c_same! { struct [<bkey_s_c_ $name>] == BkeySC<'static, $($ty)::+> { k, v } }
-        c_same! { struct [<bkey_s_ $name>]   == BkeyS<'static, $($ty)::+> { k, v } }
     )* } };
 }
 BkeyType_arms!(__bkey_typed);

@@ -7,18 +7,15 @@ use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::snapshots::subvolume::delete_unlinked;
-use crate::types::{RustOnly, bits_to_longs, rust_only};
+use crate::types::{bits_to_longs};
 use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitArray;
 use crate::util::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicBool, AtomicU32};
-use cstruct_macros::{c_const, c_enum, c_rcu_array, placed, CStruct, Init, TypeInfo};
+use cstruct_macros::{c_enum, placed, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 
-c_const! {
-    #[c_int]
-    pub const IS_ANCESTOR_BITMAP: u32 = 128;
-}
+pub const IS_ANCESTOR_BITMAP: u32 = 128;
 
 /*
  * In-memory snapshot table entry, indexed by snapshot ID.
@@ -51,34 +48,23 @@ c_enum! {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct snapshot_t {
-    #[c("enum snapshot_id_state state")]
     pub state: AtomicU32,
-    #[c("u32 parent")]
     pub parent: AtomicU32,
     /* skiplist: random ancestors, sorted ascending; try [2] first */
-    #[c("u32 skip[3]")]
     pub skip: [AtomicU32; 3],
-    #[c("u32 depth")]
     pub depth: AtomicU32,
-    #[c("u32 children[2]")]
     pub children: [AtomicU32; 2], /* normalized: [0] >= [1] */
-    #[c("u32 subvol")]
     pub subvol: AtomicU32, /* Nonzero only if a subvolume points to this node: */
-    #[c("u32 tree")]
     pub tree: AtomicU32,
     /* bit (ancestor - id - 1) set for ancestors within 128 IDs */
-    #[c("unsigned long is_ancestor[BITS_TO_LONGS(IS_ANCESTOR_BITMAP)]")]
     pub is_ancestor: AtomicBitArray<{ bits_to_longs(c::IS_ANCESTOR_BITMAP as usize) }>,
 }
 
 // SAFETY: atomic integers; all zeroes is SNAPSHOT_ID_empty
 unsafe impl crate::util::rcu::RcuElement for snapshot_t {}
 
-c_rcu_array! {
-    /// c->snapshots.table, published under RCU.
-    pub type SnapshotTable = crate::util::rcu::RcuArray<c::snapshot_t>
-        as struct snapshot_table { nr, s };
-}
+/// c->snapshots.table, published under RCU.
+pub type SnapshotTable = crate::util::rcu::RcuArray<c::snapshot_t>;
 
 /*
  * Snapshot creation must prevent userspace from dirtying the page cache while
@@ -103,32 +89,28 @@ pub struct bch_fs_snapshots {
     pub table: c::SnapshotTable,
     /// The table's writers' lock: taken by table_write(), in snapshot.rs.
     #[pin]
-    #[init(RustOnly::new(new_lock!(())))]
-    pub(crate) table_lock: rust_only!(Locked<c::mutex>),
+    #[init(new_lock!(()))]
+    pub(crate) table_lock: Locked<c::mutex>,
     /* a topology repair invalidated descendants' is_ancestor bitmaps: */
-    #[c("bool need_table_rebuild")]
     #[init(AtomicBool::new(false))]
     pub(crate) need_table_rebuild: AtomicBool,
-    #[c("struct percpu_rw_semaphore create_lock")]
     #[pin]
     #[init(new_lock!((), "&c->snapshots.create_lock"))]
     pub create_lock: Locked<c::percpu_rw_semaphore>,
     /// Snapshot deletion's state: Rust's alone - snapshots/delete.rs.
     #[pin]
-    #[init(RustOnly::new(crate::snapshots::delete::SnapshotDelete::init()))]
-    pub(crate) delete: rust_only!(crate::snapshots::delete::SnapshotDelete),
-    #[c("struct work_struct wait_for_pagecache_and_delete_work")]
+    #[init(crate::snapshots::delete::SnapshotDelete::init())]
+    pub(crate) delete: crate::snapshots::delete::SnapshotDelete,
     #[pin]
     pub(crate) wait_for_pagecache_and_delete_work: ReffedWork<delete_unlinked, crate::field!(super.writes)>,
     /// Subvolumes unlinked and waiting for the delete work: Rust's alone.
     #[pin]
-    #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) unlinked: rust_only!(Locked<c::mutex, KVVec<u32>>),
+    #[init(new_lock!(KVVec::new()))]
+    pub(crate) unlinked: Locked<c::mutex, KVVec<u32>>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, CStruct)]
-#[c_typedef]
 pub struct subvol_inum {
     /* we can't have padding in this struct: */
     pub subvol: u64,

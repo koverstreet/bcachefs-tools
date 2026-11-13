@@ -12,14 +12,12 @@ use cstruct_macros::{counted, unsized_vstruct, CStruct, Plain, TypeInfo};
 pub struct bch_replicas_entry_v0 {
     pub data_type: u8,
     pub nr_devs: u8,
-    #[c("__u8 devs[] __counted_by(nr_devs)")]
     pub devs: [u8; 0],
 }
 
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bch_sb_field_replicas_v0 {
     pub field: Head<c::bch_sb_field>,
     pub entries: [Head<c::bch_replicas_entry_v0>; 0],
@@ -40,7 +38,6 @@ pub struct bch_replicas_entry_v1 {
 #[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bch_sb_field_replicas {
     pub field: Head<c::bch_sb_field>,
     pub entries: [Head<c::bch_replicas_entry_v1>; 0],

@@ -40,10 +40,8 @@ nest! {
     #[derive(CStruct, TypeInfo)]*
     #[repr(C)]*
     pub struct bch_write_bio {
-        #[c_struct_group]
         pub wbio: pub struct bch_write_bio_wbio {
             /* set at submit: 'static as a write op's fs() is */
-            #[c("struct bch_fs *c")]
             pub c: Option<&'static Fs>,
             pub parent: *mut c::bch_write_bio,
             /*
@@ -52,7 +50,6 @@ nest! {
              * lookup table before draining refs).  Non-NULL iff we hold an io_ref;
              * doubles as the "we hold the ref" indicator.
              */
-            #[c("struct bch_dev *ca")]
             pub ca: Option<&'static Dev>,
 
             pub submit_time: u64,
@@ -90,12 +87,9 @@ nest! {
     #[derive(CStruct, TypeInfo, Init)]
     #[init_args(fs: &Fs, opts: c::bch_inode_opts)]
     pub struct bch_write_op {
-        #[c("struct closure cl")]
         pub cl: crate::util::ffi::Opaque<c::closure>,
-        #[c("struct bch_fs *c")]
         #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
         pub c: crate::util::backref::BackRef<Fs>,
-        #[c("void (*end_io)(struct bch_write_op *)")]
         pub end_io: Option<unsafe fn(*mut c::bch_write_op)>,
         pub start_time: u64,
 
@@ -180,7 +174,6 @@ nest! {
         pub write_point: c::write_point_specifier,
 
         /* the filesystem's, so 'static: as the op's fs() */
-        #[c("struct write_point *wp")]
         pub wp: Option<&'static c::write_point>,
         pub wp_list: c::list_head,
 
@@ -194,7 +187,6 @@ nest! {
         pub new_i_size: u64,
         pub i_sectors_delta: i64,
 
-        #[c("u64 insert_keys[1 + BKEY_EXTENT_U64s_MAX * 2]")]
         #[init(crate::data::keylist::Keylist::new())]
         pub insert_keys: crate::data::keylist::Keylist<{ c::BKEY_EXTENT_U64s_MAX * 2 }>,
 
@@ -202,7 +194,6 @@ nest! {
          * Bitmask of devices that have had nocow writes issued to them since
          * last flush:
          */
-        #[c("struct bch_devs_mask *devs_need_flush")]
         pub devs_need_flush: *const c::AtomicDevsMask,
 
         /* what failed writing this round's buckets: */
@@ -210,7 +201,6 @@ nest! {
         pub failed: c::bch_io_failures,
 
         /* c->writes, held till it's done - a data update's holds its own */
-        #[c("void *write_ref")]
         #[init(None)]
         pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
 

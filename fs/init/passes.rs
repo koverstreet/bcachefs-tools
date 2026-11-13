@@ -120,18 +120,15 @@ pub struct bch_fs_recovery {
     /* the runner's state, under its lock, and what it publishes */
     #[pin]
     #[init(new_lock!(Default::default(), ::pin_init::zeroed(), "&c->recovery.lock"))]
-    #[c_lock("spinlock_t lock")]
     pub runner: Locked<c::spinlock_t, bch_recovery_runner, RecoveryWords>,
 
     /* passes run under it - and what runs as a pass, it serializes */
     #[pin]
     #[init(new_lock!((), "&c->recovery.run_lock"))]
-    #[c("struct mutex run_lock")]
     pub run_lock: Locked<c::mutex>,
 
     /* the async runner: run_async() */
     #[pin]
-    #[c("struct work_struct work")]
     pub(crate) work: ReffedWork<async_runner, crate::field!(super.writes)>,
 }
 

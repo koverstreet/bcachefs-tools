@@ -24,7 +24,6 @@ c_enum! {
 #[repr(C, align(8))]
 #[c_name(bch_xattr)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-#[c_packed]
 pub struct Xattr {
     pub v: c::bch_val,
     pub x_type: u8,

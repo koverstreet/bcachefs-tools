@@ -11,7 +11,7 @@ use core::ffi::c_uint;
 use core::mem::ManuallyDrop;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering::{Relaxed, SeqCst}};
-use cstruct_macros::{c_const, c_enum};
+use cstruct_macros::{c_enum};
 
 c_enum! {
     #[flags]
@@ -31,10 +31,8 @@ c_enum! {
     }
 }
 
-c_const! {
-    pub const JOURNAL_RES_GET_NONBLOCK: u32 = 1 << c::journal_res_flags::__JOURNAL_RES_GET_NONBLOCK as u32;
-    pub const JOURNAL_RES_GET_CHECK: u32 = 1 << c::journal_res_flags::__JOURNAL_RES_GET_CHECK as u32;
-}
+pub const JOURNAL_RES_GET_NONBLOCK: u32 = 1 << c::journal_res_flags::__JOURNAL_RES_GET_NONBLOCK as u32;
+pub const JOURNAL_RES_GET_CHECK: u32 = 1 << c::journal_res_flags::__JOURNAL_RES_GET_CHECK as u32;
 
 impl c::journal {
     /// For C, which writes what it changes through it as its locks allow.

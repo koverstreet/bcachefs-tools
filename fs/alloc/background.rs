@@ -500,14 +500,11 @@ use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, btree_trans, prt};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
-use cstruct_macros::c_const;
 use crate::format::{Bpos, Btree, DataType, MetadataVersion};
 
-c_const! {
-    /// How far a bucket's generation may get past its oldest pointer's before
-    /// it has to be gc'd: the gen is a u8, compared wrapping.
-    pub const BUCKET_GC_GEN_MAX: u32 = 96;
-}
+/// How far a bucket's generation may get past its oldest pointer's before
+/// it has to be gc'd: the gen is a u8, compared wrapping.
+pub const BUCKET_GC_GEN_MAX: u32 = 96;
 
 // ── Alloc keys before v4 ─────────────────────────────────────────────────
 

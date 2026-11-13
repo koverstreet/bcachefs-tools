@@ -215,7 +215,7 @@ impl c::bch_fs_btree_key_cache {
         drop(held);
 
         let pcpu_readers = ck.c.lock.six().readers.allocated();
-        self.pending[pcpu_readers as usize].enqueue(NonNull::from(ck));
+        self.pending()[pcpu_readers as usize].enqueue(NonNull::from(ck));
     }
 
     fn bkey_cached_free(&self, trans: &BtreeTrans<'_>, ck: LockedEntry<'_>) {
@@ -340,7 +340,7 @@ impl BtreeTrans<'_> {
         let bc = &self.fs().btree.key_cache;
         let pcpu_readers = btree_uses_pcpu_readers(btree);
 
-        if let Some(ck) = bc.pending[pcpu_readers as usize].dequeue_where(bkey_cached_try_claim) {
+        if let Some(ck) = bc.pending()[pcpu_readers as usize].dequeue_where(bkey_cached_try_claim) {
             return Ok(Some(unsafe { claimed(self, ck) }));
         }
 
@@ -368,7 +368,7 @@ impl BtreeTrans<'_> {
             return Ok(Some(bkey_cached_trylock(ck).expect("a new key cache entry locked by someone else")));
         }
 
-        Ok(bc.pending[pcpu_readers as usize].dequeue_from_all_where(bkey_cached_try_claim)
+        Ok(bc.pending()[pcpu_readers as usize].dequeue_from_all_where(bkey_cached_try_claim)
            .map(|ck| unsafe { claimed(self, ck) }))
     }
 }
@@ -536,7 +536,7 @@ impl c::bch_fs_btree_key_cache {
 
         /* through pending's own pointer, which exit() may write by */
         for i in 0..2 {
-            unsafe { RcuPending::exit(&raw mut (*self.pending.as_ptr())[i]) };
+            unsafe { RcuPending::exit(self.pending.get().cast::<Pending>().add(i)) };
         }
     }
 
@@ -545,7 +545,7 @@ impl c::bch_fs_btree_key_cache {
 
         let srcu = unsafe { &*ptr::from_ref(&fs.btree.trans.barrier) }.flavor();
         for i in 0..2 {
-            let slot = unsafe { (&raw mut (*self.pending.as_ptr())[i]) };
+            let slot = unsafe { self.pending.get().cast::<Pending>().add(i) };
             if unsafe { init_at(RcuPending::new(srcu, Free {}), slot) }.is_err() {
                 return fs.throw(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
             }
@@ -574,7 +574,7 @@ impl ToText for c::bch_fs_btree_key_cache {
         prt!(out, "skipped_accessed:\t{}\r\n",   self.stats.skipped_accessed.load(Relaxed));
         prt!(out, "skipped_lock_fail:\t{}\r\n",  self.stats.skipped_lock_fail.load(Relaxed));
         out.newline();
-        prt!(out, "pending:\t{}\r\n",            self.pending.iter().map(|p| p.nr_pending()).sum::<usize>());
+        prt!(out, "pending:\t{}\r\n",            self.pending().iter().map(|p| p.nr_pending()).sum::<usize>());
     }
 }
 

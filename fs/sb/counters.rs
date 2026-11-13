@@ -14,7 +14,7 @@
 
 #![allow(non_camel_case_types)]
 
-use cstruct_macros::{CStruct, c_const, TypeInfo};
+use cstruct_macros::{CStruct, TypeInfo};
 use crate::c;
 use crate::debug::trace::{events, TraceEvent};
 use crate::errcode::BchError;
@@ -30,16 +30,12 @@ use crate::sb::io::SbResize;
 use crate::util::percpu::PerCpu;
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
-c_const! {
-    #[c_int]
-    pub const NR_RECENT_COUNTERS: u32 = 20;
-}
+pub const NR_RECENT_COUNTERS: u32 = 20;
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_counters {
     mount: [AtomicU64; c::BCH_COUNTER_NR as usize],
-    #[c("u64 __percpu *now")]
     pub now: PerCpu<[u64; c::BCH_COUNTER_NR as usize]>,
 
     recent: [[AtomicU64; c::BCH_COUNTER_NR as usize]; c::NR_RECENT_COUNTERS as usize],

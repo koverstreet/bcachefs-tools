@@ -417,7 +417,7 @@ fn alloc(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Hold
          user_key: Option<&c::bch_key>, out: &mut Printbuf) -> Result<OpenFs, BchError> {
     let c = crate::util::alloc::alloc_pinned_or(Fs::init(opts), bch_errcode::BCH_ERR_ENOMEM_fs_alloc)?;
     let fs = unsafe {
-        *(*c).holder = Some(holder);
+        (*c).holder = Some(holder);
         OpenFs::from_raw(NonNull::new_unchecked(c))
     };
     fs.init_from(sbs, opts, user_key, out)?;

@@ -57,7 +57,6 @@ c_enum! {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
 pub struct bch_replicas_padded {
-    #[c("u8 bytes[struct_size_t(struct bch_replicas_entry_v1, devs, BCH_BKEY_PTRS_MAX)]")]
     pub bytes: [u8; core::mem::size_of::<Head<c::bch_replicas_entry_v1>>()
                     + c::BCH_BKEY_PTRS_MAX as usize * core::mem::size_of::<u8>()],
 }

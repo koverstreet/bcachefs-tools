@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default, rust_only, RustOnly};
+use crate::types::{c_default};
 use crate::util::alloc::init_at;
 use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
@@ -18,11 +18,10 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
  */
 #[repr(C)]
 #[derive(CStruct)]
-#[c_typedef]
 pub struct two_state_lock_t {
     pub v: AtomicIsize,
     /// Woken as the last holder unlocks
-    wait: rust_only!(EventCount),
+    wait: EventCount,
 }
 c_default!(two_state_lock_t);
 
@@ -109,6 +108,6 @@ impl<S: TwoState> Drop for TwoStateGuard<'_, S> {
 pub unsafe fn two_state_lock_init(lock: *mut c::two_state_lock_t) {
     unsafe {
         (&raw mut (*lock).v).write(AtomicIsize::new(0));
-        let Ok(()) = init_at(RustOnly::new(EventCount::new()), &raw mut (*lock).wait);
+        let Ok(()) = init_at(EventCount::new(), &raw mut (*lock).wait);
     }
 }

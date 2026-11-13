@@ -50,7 +50,7 @@ const JOURNAL_PIN_MAX: u64 = 1024 * 1024;
 pub type Pin = c::journal_entry_pin;
 
 /* Where a pin's links are: in its locked half */
-const PIN_LIST: usize = offset_of!(Pin, locked) + c::PinLockedBy::T_OFFSET +
+const PIN_LIST: usize = offset_of!(Pin, locked) +
     LockedBy::<c::PinLocked>::PROTECTED_OFFSET + offset_of!(c::PinLocked, list);
 
 type PinListHead = List<Pin, PIN_LIST>;
@@ -830,7 +830,7 @@ fn resize(j: &c::journal) -> Result<(), BchError> {
         return Ok(());
     }
 
-    let old = &mut *g.entries;
+    let old = &mut g.entries;
     let (mask, old_mask) = (entries.len() - 1, old.len() - 1);
     for seq in r.pin_front.get()..r.pin_back.get() {
         let (o, n) = (&mut old[seq as usize & old_mask], &mut entries[seq as usize & mask]);
@@ -910,7 +910,7 @@ pub(crate) fn start(j: &c::journal, last_seq: u64, cur_seq: u64) -> Result<(), B
     }
 
     let mut g = j.pin_resize_lock.write();
-    let old = core::mem::replace(&mut *g.entries, entries);
+    let old = core::mem::replace(&mut g.entries, entries);
     let r = j.pin_range();
     r.pin_front.set(last_seq);
     r.pin_back.set(cur_seq);
@@ -920,7 +920,3 @@ pub(crate) fn start(j: &c::journal, last_seq: u64, cur_seq: u64) -> Result<(), B
     Ok(())
 }
 
-pub fn bch2_journal_pin_set(j: &c::journal, seq: u64, pin: &c::journal_entry_pin,
-                            ty: c::journal_pin_type, flush: c::journal_pin_flush_fn) {
-    j.pin_set(seq, pin, ty, flush)
-}

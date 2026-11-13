@@ -8,10 +8,6 @@
 //! wait() returning, and the owner freeing it, can't race a release still
 //! touching it. The count reaching zero comes before the release, in the
 //! percpu_ref's own data: waiting on that would race it.
-//!
-//! C sees what holds one declare it: #[c_anon("struct { struct percpu_ref
-//! ref; u32 ref_released; }")], C's percpu_ref where it was - in a struct
-//! of its own, so C pads it as Rust does.
 
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};

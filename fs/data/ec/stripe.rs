@@ -37,7 +37,6 @@ use crate::util::Printbuf;
 use crate::data_structures::array_vec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
-use cstruct_macros::c_const;
 
 /// The most blocks a stripe has: a pointer each, of the most a key holds.
 pub(crate) const MAX_BLOCKS: usize = c::BCH_BKEY_PTRS_MAX as usize;
@@ -200,9 +199,7 @@ impl<B: AsMut<[u8]>> StripeCsums<B> {
     }
 }
 
-c_const! {
-    pub const STRIPE_LRU_POS_EMPTY: u64 = 1;
-}
+pub const STRIPE_LRU_POS_EMPTY: u64 = 1;
 
 /// Whether @p is the data block its stripe_ptr names in @s:
 /// bch2_ptr_matches_stripe(). A block past the value matches nothing.

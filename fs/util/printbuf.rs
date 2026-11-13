@@ -9,7 +9,7 @@ use crate::util::alloc::KVVec;
 use crate::util::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
-use cstruct_macros::{CStruct, bitfield, c_const, c_enum, c_name};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_name};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -21,10 +21,7 @@ c_enum! {
     }
 }
 
-c_const! {
-    #[c_int]
-    pub const PRINTBUF_INLINE_TABSTOPS: u32 = 8;
-}
+pub const PRINTBUF_INLINE_TABSTOPS: u32 = 8;
 
 nest! {
     /// Through fmt::Write, `\t`, `\r` and `\n` are tabstops and indent.

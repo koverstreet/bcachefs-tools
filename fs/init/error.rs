@@ -50,7 +50,6 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{CStruct, Init, TypeInfo};
 use crate::locking::{Locked, MemallocFlags};
 use crate::new_lock;
-use crate::types::{RustOnly, rust_only};
 use pin_init::pin_data;
 use crate::format::{Bpos, Btree, MemberState};
 
@@ -119,13 +118,13 @@ impl ErrorsLocked {
 pub struct bch_fs_errors {
     /* What the error paths keep: init/error.rs */
     #[pin]
-    #[init(RustOnly::new(new_lock!(ErrorsLocked::new())))]
-    pub(crate) state: rust_only!(Locked<c::mutex, ErrorsLocked>),
+    #[init(new_lock!(ErrorsLocked::new()))]
+    pub(crate) state: Locked<c::mutex, ErrorsLocked>,
 
     /* The superblock's error counts, by id: sb/errors.rs */
     #[pin]
-    #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) counts: rust_only!(Locked<c::mutex, KVVec<c::bch_sb_error_entry_cpu>>),
+    #[init(new_lock!(KVVec::new()))]
+    pub(crate) counts: Locked<c::mutex, KVVec<c::bch_sb_error_entry_cpu>>,
 }
 
 /// The fsck error ids by their names: id::inode_wrong_nlink.

@@ -123,7 +123,6 @@ use crate::util::{HumanReadable, Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::{Relaxed, Release, SeqCst};
-use cstruct_macros::c_const;
 use crate::format::{Btree, BkeyType};
 
 impl c::btree_evicted_size {
@@ -215,9 +214,7 @@ pub fn node_key_hash_val<const U64S: usize>(k: &PaddedKey<U64S>) -> u64 {
     }
 }
 
-c_const! {
-    pub const BTREE_WRITE_IO_LIMIT: u32 = 64;
-}
+pub const BTREE_WRITE_IO_LIMIT: u32 = 64;
 
 impl c::bch_fs_btree_cache {
     pub fn update_throttle(&self) {

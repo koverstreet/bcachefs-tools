@@ -128,9 +128,7 @@ pub unsafe trait RawSixLock: RawReadLock {
 /// Two things locked by @R: @G, protected - reached only with it held, its
 /// guard derefs to it - and @P, published: anyone's, the lock derefs to it,
 /// held or not; written through the guard's published(), so the lock a
-/// writer holds is the one it's in. Laid out as C's members, the lock then G
-/// then P, so a struct C shares can declare it as them:
-/// #[c_lock("struct mutex lock")].
+/// writer holds is the one it's in.
 #[repr(C)]
 pub struct Locked<R: RawLockBase, G = (), P = ()> {
     raw:       R,
@@ -220,9 +218,6 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
 
     /// Where the G is in a Locked: for C's container_of() from it.
     pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
-
-    /// Where the P is: for #[c_lock]'s asserts.
-    pub const PUBLISHED_OFFSET: usize = core::mem::offset_of!(Self, published);
 
     pub(super) fn raw(&self) -> &R {
         &self.raw
@@ -327,19 +322,14 @@ impl<R: RawLockBase, G, P> Drop for Locked<R, G, P> {
     }
 }
 
-/// For #[c_lock]'s asserts, as Locked's: it's at a Placed's start.
 impl<R: RawLockBase, G, P, A> Placed<Locked<R, G, P>, A> {
-    pub const PROTECTED_OFFSET: usize = Locked::<R, G, P>::PROTECTED_OFFSET;
-    pub const PUBLISHED_OFFSET: usize = Locked::<R, G, P>::PUBLISHED_OFFSET;
-
     /// As Locked::get_mut(): the lock stays where it is.
     pub fn get_mut(&mut self) -> &mut G {
         unsafe { &mut *self.protected.get() }
     }
 }
 
-/// A Locked as a Placed holds it: itself, or - in a struct C shares - a
-/// RustOnly of it, at LOCKED_OFFSET.
+/// A Locked as a Placed holds it.
 pub trait AsLocked {
     type R: RawLockBase;
     type G;
@@ -354,20 +344,6 @@ impl<R: RawLockBase, G, P> AsLocked for Locked<R, G, P> {
     type P = P;
     const LOCKED_OFFSET: usize = 0;
     fn locked(&self) -> &Self {
-        self
-    }
-}
-
-impl<R: RawLockBase, G, P, const U64S: usize, const ALIGN: usize> AsLocked
-    for crate::types::RustOnly<Locked<R, G, P>, U64S, ALIGN>
-where
-    crate::types::Align<ALIGN>: crate::types::AlignMarker,
-{
-    type R = R;
-    type G = G;
-    type P = P;
-    const LOCKED_OFFSET: usize = Self::T_OFFSET;
-    fn locked(&self) -> &Locked<R, G, P> {
         self
     }
 }
@@ -955,8 +931,7 @@ impl<G, P, L> Deref for LockedBy<G, P, L> {
     }
 }
 
-/// A LockedBy as a struct holds it: itself, or - in a struct C shares - a
-/// RustOnly of it.
+/// A LockedBy as a struct holds it.
 pub trait AsLockedBy {
     type G;
     type P;
@@ -969,18 +944,6 @@ impl<G, P, L> AsLockedBy for LockedBy<G, P, L> {
     type P = P;
     type L = L;
     fn locked_by(&self) -> &Self {
-        self
-    }
-}
-
-impl<G, P, L, const U64S: usize, const ALIGN: usize> AsLockedBy for crate::types::RustOnly<LockedBy<G, P, L>, U64S, ALIGN>
-where
-    crate::types::Align<ALIGN>: crate::types::AlignMarker,
-{
-    type G = G;
-    type P = P;
-    type L = L;
-    fn locked_by(&self) -> &LockedBy<G, P, L> {
         self
     }
 }

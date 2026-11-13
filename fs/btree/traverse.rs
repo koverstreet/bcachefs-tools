@@ -4,7 +4,7 @@
 //! nodes on the way locked, and back up to where it's still good.
 
 use core::cmp::Ordering;
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::{c_uint, c_ulong};
 use core::ptr::{self, NonNull};
 
 
@@ -20,7 +20,7 @@ use crate::btree::node::BtreeNode;
 use crate::btree::path::{BtreePath, DownKey, KeyVal, LockedNode, NodePtr, PathIdx, Paths};
 use crate::c;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
 use crate::prt;
@@ -833,10 +833,4 @@ impl BtreeTrans<'_> {
 }
 
 // ── For C ───────────────────────────────────────────────────────────────────
-
-pub fn bch2_btree_path_traverse_one(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx,
-                                    flags: c::btree_iter_update_trigger_flags) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(trans.path_traverse_one(&t, paths, path, BtreeIterFlags::from_bits_retain(flags.bits())))
-}
 

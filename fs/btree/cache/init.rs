@@ -55,7 +55,7 @@ fn btree_cache_exit_locked_dump(fs: &Fs, lists: &BtreeCacheGuard<'_>, b: &BtreeN
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     {
         prt!(msg, "Last taken:\n");
-        crate::util::backtrace::prt_backtrace(&mut msg, unsafe { &*lock.owner_stack.as_ptr() });
+        crate::util::backtrace::prt_backtrace(&mut msg, unsafe { &*lock.owner_stack.get() });
     }
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
     if !owner.is_null() {
@@ -180,6 +180,6 @@ impl Fs {
             crate::warn_on!(bc.nr_in_flight_inner.load(Relaxed) != 0);
         }
 
-        drop(core::mem::take(&mut *bc.roots.lock().roots_extra));
+        drop(core::mem::take(&mut bc.roots.lock().roots_extra));
     }
 }

@@ -241,7 +241,7 @@ use crate::util::rcu::read_lock;
 use crate::util::vstructs::Head;
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err_fn, prt};
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::{c_uint, CStr};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use pin_init::pinned_drop;
@@ -251,7 +251,7 @@ use cstruct_macros::{CStruct, bitfield, TypeInfo};
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::place::Contained, crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
      core::sync::atomic::Ordering::Acquire};
-use crate::types::{RustOnly, bits_to_longs, c_default, rust_only};
+use crate::types::{bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBox};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
@@ -278,7 +278,6 @@ c_default!(bch_sb_buf);
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_sb {
-    #[c_anon("struct bch_sb *sb; size_t buffer_size; u64 dirty")]
     buf: c::bch_sb_buf,
 }
 c_default!(bch_fs_sb);
@@ -297,7 +296,7 @@ impl core::ops::DerefMut for bch_fs_sb {
     }
 }
 
-pub type SbBio = rust_only!(Option<BioBox<Bio>>);
+pub type SbBio = Option<BioBox<Bio>>;
 
 nest! {
     /// A device's superblock, and what reads and writes it: what changes
@@ -305,7 +304,6 @@ nest! {
     #[repr(C)]
     #[derive(CStruct, TypeInfo)]
     pub struct bch_sb_io {
-        #[c_anon("struct bch_sb *sb; size_t buffer_size; u64 dirty")]
         pub buf: c::bch_sb_buf,
         /// Its bio, as big as the buffer, if @have_bio: Rust's alone
         pub bio: SbBio,
@@ -323,7 +321,7 @@ nest! {
 
 impl Default for bch_sb_io {
     fn default() -> Self {
-        bch_sb_io { buf: Default::default(), bio: RustOnly::from_value(None), bits: bch_sb_handle_bits::new(), seq: 0 }
+        bch_sb_io { buf: Default::default(), bio: None, bits: bch_sb_handle_bits::new(), seq: 0 }
     }
 }
 
@@ -336,7 +334,6 @@ pub struct bch_sb_bdev {
     pub bdev: *mut c::block_device,
     pub sb_name: *mut c_char,
     /// A ref, the handle's
-    #[c("void *holder")]
     pub holder: *const crate::sb::io::Holder,
     pub mode: c::blk_mode_t,
 }
@@ -347,9 +344,7 @@ c_default!(bch_sb_bdev);
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_sb_handle {
-    #[c_anon]
     pub io: bch_sb_io,
-    #[c_anon]
     pub dev: bch_sb_bdev,
 }
 
@@ -372,7 +367,6 @@ pub type AtomicDevsMask = AtomicBitArray<{ bits_to_longs(c::BCH_SB_MEMBERS_MAX a
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_devs_mask {
-    #[c("unsigned long d[BITS_TO_LONGS(BCH_SB_MEMBERS_MAX)]")]
     pub d: DevsMask,
 }
 
@@ -619,7 +613,7 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
     ca.ref_.store(1, Relaxed);
 
     let ok = kbox_pin_init(SbReadScratch::new())
-            .map(|s| *ca.sb_read_scratch = Some(Pin::into_inner(s))).is_ok() &&
+            .map(|s| ca.sb_read_scratch = Some(Pin::into_inner(s))).is_ok() &&
         ca.buckets_alloc().is_ok() &&
         PerCpu::alloc().map(|io_done| ca.io_done = io_done).is_ok();
 
@@ -1705,11 +1699,6 @@ impl Dev {
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
 fn ewma_add(ewma: u64, val: u64, weight: u32) -> u64 {
     ((ewma << weight).wrapping_sub(ewma).wrapping_add(val)) >> weight
-}
-
-#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-pub fn bch2_latency_acct(ca: &Dev, submit_time: u64, rw: c_int) {
-    ca.latency_acct(submit_time, rw as usize)
 }
 
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]

@@ -1139,17 +1139,3 @@ pub fn __bch2_trans_get(c: &Fs, fn_idx: c_uint) -> *mut BtreeTrans<'static> {
     TransGuard::new_fn(c, fn_idx).into_raw().cast()
 }
 
-/// # Safety
-/// @trans is __bch2_trans_get()'s, and isn't used after.
-pub unsafe fn bch2_trans_put(trans: *mut BtreeTrans<'_>) {
-    drop(unsafe { TransGuard::from_raw(trans) })
-}
-
-#[inline(always)]
-pub fn bch2_trans_begin(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>) -> u32 {
-    trans.begin_from(paths, crate::ret_ip!())
-}
-
-pub fn bch2_trans_reset_updates(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>) {
-    trans.reset_updates(paths)
-}

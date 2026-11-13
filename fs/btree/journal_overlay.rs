@@ -65,7 +65,7 @@ use cstruct_macros::{bitfield, CStruct, Init};
 use c::bch_errcode as e;
 use c::bch_fs_flags as f;
 use crate::journal::JournalEntries;
-use crate::types::{c_default, rust_only};
+use crate::types::{c_default};
 use crate::util::vstructs::Head;
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 use nestify::nest;
@@ -90,7 +90,7 @@ pub struct journal_ptr {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct journal_replay {
-    pub ptrs: rust_only!(KVVec<c::journal_ptr>),
+    pub ptrs: KVVec<c::journal_ptr>,
 
     pub csum_good: bool,
     pub ignore_blacklisted: bool,
@@ -103,11 +103,9 @@ nest! {
     #[derive(CStruct)]*
     #[repr(C)]
     pub struct journal_key {
-        #[c_anon]
         #>[repr(C)]
         #>[derive(Clone, Copy)]
         pub src: pub union journal_key_src {
-            #[c_anon]
             #>[repr(C)]
             #>[derive(Clone, Copy)]
             pub journal: pub struct journal_key_journal_pos {
@@ -135,9 +133,7 @@ nest! {
          * Set, and overwritten_range, under overwrite_lock, while the keys
          * are read without it: in a byte of their own
          */
-        #[c("u8 overwritten")]
         pub overwritten: VolatilePublish<u8, OverwriteRanges>,
-        #[c("u32 overwritten_range")]
         pub overwritten_range: VolatilePublish<u32, OverwriteRanges>,
     }
 }
@@ -167,7 +163,6 @@ published! {
     /// overwritten_range indexes them.
     #[derive(CStruct)]
     pub struct OverwriteRangesLive {
-        #[c_anon("void *overwrites")]
         pub ranges: RcuArray<OverwriteRange>,
     }
 }
@@ -184,7 +179,6 @@ pub struct journal_keys {
      * its own. Written only where nothing else reads them: before the
      * filesystem can go rw - and by the last ref, and keys_mut()'s
      */
-    #[c_anon("size_t nr; size_t size; struct journal_key *data; struct journal_key preallocated[0]; size_t gap")]
     pub keys: LockedBy<GapBuffer<c::journal_key>, (), NotRw<'static>>,
     /* Bumped by each insert: an iterator that saw another searches again */
     pub seq: AtomicU64,
@@ -195,18 +189,16 @@ pub struct journal_keys {
      * the reset in journal_keys_sort and get merged into the main
      * array after sorting. Written as the keys are.
      */
-    pub pre_sort: rust_only!(LockedBy<KVVec<c::journal_key>, (), NotRw<'static>>),
+    pub pre_sort: LockedBy<KVVec<c::journal_key>, (), NotRw<'static>>,
 
     /*
      * What the journal read kept, by seq from journal_entries_base_seq: the
      * keys'. Written only before the filesystem can go rw.
      */
-    #[c_anon("GENRADIX(struct journal_replay *) entries")]
     pub(crate) entries: LockedBy<JournalEntries, (), NotRw<'static>>,
 
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&keys->overwrite_lock"))]
-    #[c_lock("struct mutex overwrite_lock")]
     pub overwrites: Locked<c::mutex, OverwriteRanges, OverwriteRangesLive>,
 }
 

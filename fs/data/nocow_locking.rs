@@ -43,18 +43,13 @@ use crate::util::{Printbuf, ToText};
 use crate::warn_on_once;
 use crate::data_structures::array_vec::ArrayVec;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering::{AcqRel, Relaxed}};
-use cstruct_macros::c_const;
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use crate::format::Bpos;
 
-c_const! {
-    #[c_int]
-    pub const BUCKET_NOCOW_LOCKS_BITS: u32 = 10;
-    pub const BUCKET_NOCOW_LOCKS: u32 = 1 << c::BUCKET_NOCOW_LOCKS_BITS;
+pub const BUCKET_NOCOW_LOCKS_BITS: u32 = 10;
+pub const BUCKET_NOCOW_LOCKS: u32 = 1 << c::BUCKET_NOCOW_LOCKS_BITS;
 
-    #[c_int]
-    pub const NOCOW_LOCK_BUCKET_SIZE: u32 = 6;
-}
+pub const NOCOW_LOCK_BUCKET_SIZE: u32 = 6;
 
 const NR_SLOTS: usize = c::NOCOW_LOCK_BUCKET_SIZE as usize;
 const NR_BUCKETS: usize = c::BUCKET_NOCOW_LOCKS as usize;

@@ -32,7 +32,6 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::sched;
 use core::ffi::{c_uint, c_void, CStr};
-use cstruct_macros::c_verbatim;
 
 pub(crate) use crate::c::{PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 
@@ -237,27 +236,3 @@ c_default!(percpu_rwsem_noio);
 pub type MutexNoio<G = (), P = ()> = Locked<mutex_noio, G, P>;
 pub type PercpuRwsemNoio<G = (), P = ()> = Locked<percpu_rwsem_noio, G, P>;
 
-c_verbatim!(r#"
-/*
- * Guard-only by design. The saved memalloc flags live in the guard object, so
- * a raw lock/unlock pair would have nowhere to stash them; scoped use also
- * guarantees the LIFO nesting that memalloc_flags_save/restore require. Use
- * guard(mutex_noio)(&m) or scoped_guard(mutex_noio, &m).
- */
-struct mutex_noio {
-	struct mutex		lock;
-};
-
-/*
- * For rwsems like capacity.mark_lock that are taken over allocating work.
- * Guards mirror the kernel's percpu_read/percpu_write, with _noio.
- *
- * A few hot paths take the lock raw (percpu_down_read on the inner
- * percpu_rw_semaphore) rather than via the guard - that's sound only where the
- * caller is already in a NOIO context (e.g. holding a locked btree_trans);
- * such sites reach through .lock with a comment saying why.
- */
-struct percpu_rwsem_noio {
-	struct percpu_rw_semaphore lock;
-};
-"#);

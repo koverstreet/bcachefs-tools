@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bitfield, c_bitmask, c_enum, whole, CStruct, Plain, TypeInfo, SizedVal};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -150,7 +150,6 @@ c_enum! {
 /* Compressed/uncompressed size are stored biased by 1: */
 #[bitfield(u64, ty = u32, align = 8)]
 #[derive(CStruct)]
-#[c_packed]
 pub struct bch_extent_crc32 {
     #[bits(default = 1 << bch_extent_entry_type::crc32.0)]
     pub(self) type_:       u2,
@@ -163,16 +162,12 @@ pub struct bch_extent_crc32 {
     csum:                  u32,
 }
 
-c_const! {
-    pub const CRC32_SIZE_MAX: u32 = 1 << 7;
-    #[c_int]
-    pub const CRC32_NONCE_MAX: u32 = 0;
-}
+pub const CRC32_SIZE_MAX: u32 = 1 << 7;
+pub const CRC32_NONCE_MAX: u32 = 0;
 
 nest! {
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-    #[c_packed]
     pub struct bch_extent_crc64 {
         #[c_bitfield]
         #>[bitfield(u64)]
@@ -191,15 +186,12 @@ nest! {
     }
 }
 
-c_const! {
-    pub const CRC64_SIZE_MAX: u32 = 1 << 9;
-    pub const CRC64_NONCE_MAX: u32 = (1 << 10) - 1;
-}
+pub const CRC64_SIZE_MAX: u32 = 1 << 9;
+pub const CRC64_NONCE_MAX: u32 = (1 << 10) - 1;
 
 nest! {
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-    #[c_packed]
     pub struct bch_extent_crc128 {
         #[c_bitfield]
         #>[bitfield(u64)]
@@ -217,17 +209,14 @@ nest! {
     }
 }
 
-c_const! {
-    pub const CRC128_SIZE_MAX: u32 = 1 << 13;
-    pub const CRC128_NONCE_MAX: u32 = (1 << 13) - 1;
-}
+pub const CRC128_SIZE_MAX: u32 = 1 << 13;
+pub const CRC128_NONCE_MAX: u32 = (1 << 13) - 1;
 
 /*
  * @reservation - pointer hasn't been written to, just reserved
  */
 #[bitfield(u64, align = 8)]
 #[derive(CStruct)]
-#[c_packed]
 pub struct bch_extent_ptr {
     #[bits(default = 1 << bch_extent_entry_type::ptr.0)]
     pub(self) type_:      u1,
@@ -265,23 +254,8 @@ pub struct bch_extent_flags {
     flags: u57,
 }
 
-c_verbatim!(r#"
-union bch_extent_entry {
-	struct bch_extent_ptr ptr;
-	struct bch_extent_crc32 crc32;
-	struct bch_extent_crc64 crc64;
-	struct bch_extent_crc128 crc128;
-	struct bch_extent_stripe_ptr stripe_ptr;
-	struct bch_extent_rebalance_v1 rebalance_v1;
-	struct bch_extent_flags flags;
-	struct bch_extent_reconcile reconcile;
-	struct bch_extent_reconcile_bp reconcile_bp;
-	u64 type;
-};
-"#);
-
-/// An extent entry - C's union bch_extent_entry, above - as Rust names it:
-/// opaque, behind a pointer or as a value's entries, since an entry is as
+/// An extent entry, as Rust names it: opaque, behind a pointer or as a
+/// value's entries, since an entry is as
 /// long as its arm, not the union. Rust reads entries as their arms
 /// (data/extents.rs).
 #[repr(C, align(8))]
@@ -294,7 +268,6 @@ pub struct bch_extent_entry {
 #[repr(C, align(8))]
 #[c_name(bch_btree_ptr)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct BtreePtr {
     pub v: c::bch_val,
 
@@ -306,7 +279,6 @@ pub struct BtreePtr {
 #[repr(C, align(8))]
 #[c_name(bch_btree_ptr_v2)]
 #[derive(Clone, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct BtreePtrV2 {
     pub v: c::bch_val,
 
@@ -330,57 +302,57 @@ c_bitmask! {
 #[repr(C, align(8))]
 #[c_name(bch_extent)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct Extent {
     pub v: c::bch_val,
 
     pub _data: [u64; 0],
-    #[c("union bch_extent_entry start[]")]
     pub start: [c::bch_extent_entry; 0],
 }
 
-c_const! {
-    /* Maximum size (in u64s) a single pointer could be: */
-    pub const BKEY_EXTENT_PTR_U64s_MAX: usize =
-        (size_of::<c::bch_extent_crc128>() +
-         size_of::<c::bch_extent_ptr>()) / size_of::<u64>();
+/* Maximum size (in u64s) a single pointer could be: */
+#[allow(non_upper_case_globals)]
+pub const BKEY_EXTENT_PTR_U64s_MAX: usize =
+    (size_of::<c::bch_extent_crc128>() +
+     size_of::<c::bch_extent_ptr>()) / size_of::<u64>();
 
-    /*
-     * Maximum possible size of an entire extent value:
-     *
-     * BCH_REPLICAS_MAX * 2 pointers because evacuating devices have durability=0
-     * and don't count toward durability accounting, but their pointers remain
-     * until the data is moved. Reconcile adds BCH_SB_MEMBER_INVALID placeholder
-     * pointers to bring durability accounting up to the desired level, so both
-     * sets of pointers coexist.
-     */
-    pub const BKEY_EXTENT_VAL_U64s_MAX: usize =
-        5 + c::BKEY_EXTENT_PTR_U64s_MAX * (c::BCH_REPLICAS_MAX as usize * 2 + 1);
+/*
+ * Maximum possible size of an entire extent value:
+ *
+ * BCH_REPLICAS_MAX * 2 pointers because evacuating devices have durability=0
+ * and don't count toward durability accounting, but their pointers remain
+ * until the data is moved. Reconcile adds BCH_SB_MEMBER_INVALID placeholder
+ * pointers to bring durability accounting up to the desired level, so both
+ * sets of pointers coexist.
+ */
+#[allow(non_upper_case_globals)]
+pub const BKEY_EXTENT_VAL_U64s_MAX: usize =
+    5 + c::BKEY_EXTENT_PTR_U64s_MAX * (c::BCH_REPLICAS_MAX as usize * 2 + 1);
 
-    /* Maximum possible size of an entire extent, key + value: */
-    pub const BKEY_EXTENT_U64s_MAX: usize = c::BKEY_U64s + c::BKEY_EXTENT_VAL_U64s_MAX;
+/* Maximum possible size of an entire extent, key + value: */
+#[allow(non_upper_case_globals)]
+pub const BKEY_EXTENT_U64s_MAX: usize = c::BKEY_U64s + c::BKEY_EXTENT_VAL_U64s_MAX;
 
-    /*
-     * Btree pointers don't carry around checksums:
-     *
-     * BCH_REPLICAS_MAX * 2 pointers because evacuating devices have durability=0
-     * and don't count toward durability accounting, but their pointers remain
-     * until the data is moved. Reconcile adds BCH_SB_MEMBER_INVALID placeholder
-     * pointers to bring durability accounting up to the desired level, so both
-     * sets of pointers coexist.
-     */
-    pub const BKEY_BTREE_PTR_VAL_U64s_MAX: usize =
-        (size_of::<c::BtreePtrV2>() +
-         size_of::<c::bch_extent_ptr>() * c::BCH_REPLICAS_MAX as usize * 2 +
-         size_of::<c::bch_extent_reconcile>() +
-         size_of::<c::bch_extent_reconcile_bp>()) / size_of::<u64>();
-    pub const BKEY_BTREE_PTR_U64s_MAX: usize = c::BKEY_U64s + c::BKEY_BTREE_PTR_VAL_U64s_MAX;
-}
+/*
+ * Btree pointers don't carry around checksums:
+ *
+ * BCH_REPLICAS_MAX * 2 pointers because evacuating devices have durability=0
+ * and don't count toward durability accounting, but their pointers remain
+ * until the data is moved. Reconcile adds BCH_SB_MEMBER_INVALID placeholder
+ * pointers to bring durability accounting up to the desired level, so both
+ * sets of pointers coexist.
+ */
+#[allow(non_upper_case_globals)]
+pub const BKEY_BTREE_PTR_VAL_U64s_MAX: usize =
+    (size_of::<c::BtreePtrV2>() +
+     size_of::<c::bch_extent_ptr>() * c::BCH_REPLICAS_MAX as usize * 2 +
+     size_of::<c::bch_extent_reconcile>() +
+     size_of::<c::bch_extent_reconcile_bp>()) / size_of::<u64>();
+#[allow(non_upper_case_globals)]
+pub const BKEY_BTREE_PTR_U64s_MAX: usize = c::BKEY_U64s + c::BKEY_BTREE_PTR_VAL_U64s_MAX;
 
 #[repr(C, align(8))]
 #[c_name(bch_reservation)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
-#[c_packed]
 pub struct Reservation {
     pub v: c::bch_val,
 

@@ -9,7 +9,6 @@ use crate::data::reconcile::work::Status;
 use crate::locking::{Locked, SeqLock};
 use crate::new_lock;
 use crate::data::reconcile::work::StripesPending;
-use crate::types::{RustOnly, rust_only};
 use crate::util::kthread::Daemon;
 use core::sync::atomic::{AtomicBool, AtomicI32};
 use cstruct_macros::{placed, CStruct, Init, TypeInfo};
@@ -25,16 +24,16 @@ pub struct bch_fs_reconcile {
      * also exits on its own if a pass fails, with thread_exit_ret its error
      */
     #[pin]
-    #[init(RustOnly::new(Daemon::new()))]
-    pub(crate) thread: rust_only!(Daemon),
+    #[init(Daemon::new())]
+    pub(crate) thread: Daemon,
     #[pin]
-    #[init(RustOnly::new(AtomicI32::new(0)))]
-    pub(crate) thread_exit_ret: rust_only!(AtomicI32),
+    #[init(AtomicI32::new(0))]
+    pub(crate) thread_exit_ret: AtomicI32,
 
     /* What it's doing, for sysfs */
     #[pin]
-    #[init(RustOnly::new(SeqLock::new(Status::new())))]
-    pub(crate) status: rust_only!(SeqLock<Status>),
+    #[init(SeqLock::new(Status::new()))]
+    pub(crate) status: SeqLock<Status>,
     pub work_stats: c::bch_move_stats,
     pub progress: c::progress_indicator,
     pub scan_stats: c::bch_move_stats,
@@ -44,8 +43,8 @@ pub struct bch_fs_reconcile {
      * thread doesn't start one of these - see data/reconcile/scan.rs
      */
     #[pin]
-    #[init(RustOnly::new(new_lock!(OptChangeScans::new())))]
-    pub(crate) opt_change_scans: rust_only!(Locked<c::spinlock_t, OptChangeScans>),
+    #[init(new_lock!(OptChangeScans::new()))]
+    pub(crate) opt_change_scans: Locked<c::spinlock_t, OptChangeScans>,
 
     /*
      * Stripes whose repair failed in a way only a change elsewhere can fix
@@ -57,16 +56,15 @@ pub struct bch_fs_reconcile {
      * rotational device, park stripes all at once.
      */
     #[pin]
-    #[init(RustOnly::new(::pin_init::init_zeroed()))]
-    pub(crate) stripes_pending: rust_only!(StripesPending),
+    #[init(::pin_init::init_zeroed())]
+    pub(crate) stripes_pending: StripesPending,
 
     /* Written by the power supply notifier */
     #[pin]
-    #[init(RustOnly::new(AtomicBool::new(false)))]
-    pub(crate) on_battery: rust_only!(AtomicBool),
+    #[init(AtomicBool::new(false))]
+    pub(crate) on_battery: AtomicBool,
     /// Registered with the power supply class, which links it into its chain.
     #[cfg(CONFIG_POWER_SUPPLY)]
-    #[c("struct notifier_block power_notifier")]
     #[pin]
     #[init(::pin_init::init_zeroed())]
     pub(crate) power_notifier:

@@ -223,11 +223,6 @@ impl<'a> Keys<'a> {
         offset
     }
 
-    /// For C, the key at @offset.
-    pub fn ptr_at(&self, offset: u16) -> *mut c::bkey_packed {
-        self.buf.as_ptr().wrapping_add(offset as usize).cast_mut().cast()
-    }
-
     #[inline(always)]
     pub fn keys_between(&self, k: u16, end: u16) -> impl Iterator<Item = (u16, &'a BkeyP)> + use<'a> {
         keys_between(self.buf, k, end)

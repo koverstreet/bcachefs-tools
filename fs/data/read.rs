@@ -105,17 +105,19 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use crate::types::c_default;
-use cstruct_macros::{args_stored_once, c_const, c_enum, c_name, in_place, CStruct, Init, TypeInfo};
+use cstruct_macros::{args_stored_once, c_enum, c_name, in_place, CStruct, Init, TypeInfo};
 use crate::format::{Bpos, Btree, Bversion, DataType, MetadataVersion, Nonce};
 
 type F = c::bch_read_flags;
 
-c_const! {
-    pub const BCH_READ_ERR_checksum: u32 = 1 << 0;
-    pub const BCH_READ_ERR_io: u32 = 1 << 1;
-    pub const BCH_READ_ERR_decompression: u32 = 1 << 2;
-    pub const BCH_READ_ERR_ec_reconstruct: u32 = 1 << 3;
-}
+#[allow(non_upper_case_globals)]
+pub const BCH_READ_ERR_checksum: u32 = 1 << 0;
+#[allow(non_upper_case_globals)]
+pub const BCH_READ_ERR_io: u32 = 1 << 1;
+#[allow(non_upper_case_globals)]
+pub const BCH_READ_ERR_decompression: u32 = 1 << 2;
+#[allow(non_upper_case_globals)]
+pub const BCH_READ_ERR_ec_reconstruct: u32 = 1 << 3;
 
 c_enum! {
     #[closed]
@@ -140,7 +142,6 @@ pub struct ReadErrs {
 pub struct ReadErrReport {
     #[pin]
     #[init(crate::new_lock!(ReadErrs { errors: 0, msg: Printbuf::new() }, "bch_read_err_report"))]
-    #[c_lock("struct mutex lock")]
     pub errs: Locked<c::mutex, ReadErrs>,
 }
 
@@ -152,22 +153,17 @@ pub struct Rbio {
     pub c: *mut Fs,
     pub start_time: u64,
 
-    #[c("bool saw_error")]
     pub saw_error: AtomicBool,
-    #[c("bool self_healing")]
     pub self_healing: AtomicBool,
-    #[c("s16 ret")]
     pub ret: AtomicI16,
     pub read_for: bch_read_for,
 
     pub subvol: u32,
     pub opts: c::bch_inode_opts,
 
-    #[c("struct bch_read_err_report *err_report")]
     pub err_report: Option<BackRef<ReadErrReport>>,
 
     #[pin]
-    #[c("struct { bool lent; struct bio bio; } bio")]
     pub bio: BioLend,
 }
 c_default!(Rbio);
@@ -1283,7 +1279,7 @@ impl<'r> Planned<'r, '_> {
             How::Promote(p) => Kind::Promote(p.rbio.bio.lend(), p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
-                Kind::Bounce(set.alloc_with(core::ptr::null_mut(), 0, (&*fs.bio_bounce, bs, size, gfp), fragment)?)
+                Kind::Bounce(set.alloc_with(core::ptr::null_mut(), 0, (&fs.bio_bounce, bs, size, gfp), fragment)?)
             }
             How::Clone => Kind::Clone(set.alloc_with(core::ptr::null_mut(), 0, plan.range, fragment)?),
             How::Own => Kind::Own(orig.lend()),
@@ -1326,7 +1322,7 @@ impl<'r> Planned<'r, '_> {
         let Planned { how, plan, ca, k } = self;
         let bounce = match how {
             How::Clone => None,
-            How::Bounce(size, gfp) => Some((&*fs.bio_bounce, fs.opts().block_size.get().into(), size, gfp)),
+            How::Bounce(size, gfp) => Some((&fs.bio_bounce, fs.opts().block_size.get().into(), size, gfp)),
             How::Own | How::Promote(_) => unreachable!("a fragment start() made or started above"),
         };
         let nr_vecs = bounce.as_ref().map_or(0, BioBuffersOwned::nr_vecs);

@@ -35,7 +35,7 @@ use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{percpu_field, warn_on_once};
 use core::pin::Pin;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
-use cstruct_macros::{CStruct, Init, c_const};
+use cstruct_macros::{CStruct, Init};
 use pin_init::{pinned_drop, pin_data};
 use crate::new_lock;
 use crate::types::c_default;
@@ -44,11 +44,8 @@ use crate::util::projections::Volatile;
 use core::ffi::c_uint;
 use core::sync::atomic::AtomicUsize;
 
-c_const! {
-    /* a bch2_time_stats_quantiles' - a device's IO latency */
-    #[c_int]
-    pub const NR_QUANTILES: u32 = 15;
-}
+/* a bch2_time_stats_quantiles' - a device's IO latency */
+pub const NR_QUANTILES: u32 = 15;
 
 /* written under the stats' lock, read without it - write.c's congestion
  * accounting, the device's congested_to_text() */
@@ -83,7 +80,6 @@ pub struct time_stat_buffer {
      * design, bounded by nr: so nr and the entries are Volatile, and the
      * lock, which its lockers change, Opaque.
      */
-    #[c("local_lock_t lock")]
     pub lock: Opaque<c::local_lock_t>,
     pub nr: Volatile<c_uint>,
     pub entries: [c::time_stat_buffer_entry; 31],
@@ -93,11 +89,8 @@ pub struct time_stat_buffer {
 unsafe impl CpuShared for time_stat_buffer_entry {}
 unsafe impl CpuShared for time_stat_buffer {}
 
-c_const! {
-    /* default weight for streaming median+MAD: half-life ≈ 2^N samples */
-    #[c_int]
-    pub const TIME_STATS_MV_WEIGHT: u32 = 8;
-}
+/* default weight for streaming median+MAD: half-life ≈ 2^N samples */
+pub const TIME_STATS_MV_WEIGHT: u32 = 8;
 
 /* the stats' lock's: all in nanoseconds */
 #[repr(C)]
@@ -124,12 +117,10 @@ c_default!(TimeStatsLocked);
 pub struct bch2_time_stats {
     #[pin]
     #[init(new_lock!(c::TimeStatsLocked::new(), "&stats->lock"))]
-    #[c_lock("spinlock_t lock")]
     pub lock: Locked<c::spinlock_t, TimeStatsLocked>,
     /* the per-cpu buffer, once events come fast enough: installed under the
      * lock, read without it - released and acquired, for what's in it - and
      * freed when the stats drop */
-    #[c("struct time_stat_buffer __percpu *buffer")]
     pub buffer: AtomicUsize,
     /* a state change event in progress since: track_event_change()'s, unlocked */
     pub last_event_start: Volatile<u64>,

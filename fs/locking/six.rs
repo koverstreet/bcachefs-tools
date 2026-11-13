@@ -27,7 +27,7 @@ use core::mem::ManuallyDrop;
 use core::ptr::{self, null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr, AtomicU32};
-use cstruct_macros::{c_const, c_enum, CStruct};
+use cstruct_macros::{c_enum, CStruct};
 
 c_enum! {
     #[closed]
@@ -56,11 +56,9 @@ unsafe impl AtomicWord for six_lock_type {
 #[derive(CStruct)]
 pub struct six_lock_waiter {
     pub trans_start_time: Volatile<u64>,
-    #[c("struct task_struct *task")]
     pub task: AtomicPtr<c::task_struct>,
     pub lock_want: Volatile<c::six_lock_type>,
     /* the waker's handoff: set, the waiter may return and reuse this */
-    #[c("bool lock_acquired")]
     pub lock_acquired: AtomicBool,
     /* Index in the wait list, set on insert, used for O(1) self-remove. */
     pub slot_idx: Volatile<u16>,
@@ -71,7 +69,6 @@ c_default!(six_lock_waiter);
 #[repr(C)]
 #[derive(CStruct)]
 pub struct six_lock_wait_slot {
-    #[c("struct six_lock_waiter *w")]
     pub w: AtomicPtr<c::six_lock_waiter>,
     pub start_time: Volatile<u64>,
 }
@@ -80,10 +77,7 @@ c_default!(six_lock_wait_slot);
 /* the cycle detector reads them under RCU */
 impl !FreeAnytime for six_lock_wait_slot {}
 
-c_const! {
-    #[c_int]
-    pub const SIX_LOCK_INLINE_WAITERS: u32 = 8;
-}
+pub const SIX_LOCK_INLINE_WAITERS: u32 = 8;
 
 type WaitList = InlineVec<c::six_lock_wait_slot, { SIX_LOCK_INLINE_WAITERS as usize }, usize>;
 
@@ -103,7 +97,6 @@ type WaitList = InlineVec<c::six_lock_wait_slot, { SIX_LOCK_INLINE_WAITERS as us
 pub struct six_lock_waiters {
     pub next_free_hint: u16,
     /* C has no use for it; six_lock_exit() frees it */
-    #[c("u64 list[1 + 2 * SIX_LOCK_INLINE_WAITERS]")]
     pub list: ManuallyDrop<WaitList>,
 }
 
@@ -113,18 +106,14 @@ pub struct six_lock {
     pub state: AtomicI32,
     /* written by the write lock's holder, read without the lock */
     pub seq: Volatile<u32>,
-    #[c("unsigned __percpu *readers")]
     pub readers: PerCpu<c_uint>,
     pub intent_lock_recurse: Volatile<c_uint>,
     pub write_lock_recurse: Volatile<c_uint>,
-    #[c("struct task_struct *owner")]
     pub owner: AtomicPtr<c::task_struct>,
     /* the intent lock's holder's */
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub owner_stack: crate::types::rust_only!(crate::util::alloc::KVVec<c_ulong>),
-    #[c_lock("raw_spinlock_t wait_lock")]
+    pub owner_stack: core::cell::UnsafeCell<crate::util::alloc::KVVec<c_ulong>>,
     pub wait_lock: Locked<c::raw_spinlock_t, six_lock_waiters>,
-    #[c("struct lockdep_map dep_map")]
     pub dep_map: LockdepMap,
 }
 
@@ -152,12 +141,8 @@ pub struct six_lock_count {
  * of the same lock_want are unaffected — the low bits are equal — so callers
  * can compare @start_time directly without masking.
  */
-c_const! {
-    #[c_int]
-    pub const SIX_LOCK_WANT_BITS: u32 = 2;
-    #[c_int]
-    pub const SIX_LOCK_WANT_MASK: u32 = (1 << SIX_LOCK_WANT_BITS) - 1;
-}
+pub const SIX_LOCK_WANT_BITS: u32 = 2;
+pub const SIX_LOCK_WANT_MASK: u32 = (1 << SIX_LOCK_WANT_BITS) - 1;
 
 const SIX_LOCK_HELD_read_OFFSET: u32 = 0;
 const SIX_LOCK_HELD_read: u32 = !(!0u32 << 26);
@@ -241,7 +226,7 @@ fn six_lock_record_acquire(lock: &six_lock, ty: six_lock_type) {
         // a trylock's caller may hold a C spinlock, which isn't a scope
         let _noreclaim = super::MemallocFlags::noreclaim();
         let _ = unsafe {
-            crate::util::backtrace::save_backtrace(&mut *lock.owner_stack.as_ptr(), sched::current(), 1)
+            crate::util::backtrace::save_backtrace(&mut *lock.owner_stack.get(), sched::current(), 1)
         };
     }
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
@@ -1450,20 +1435,6 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
         Ok(unsafe { SixHold::from_raw(locked, six_lock_type::SIX_LOCK_write) })
     }
 
-    /// Write over this intent, as lock_waiting_as() waits, past a trylock if
-    /// @contended. On failure, intent still held.
-    pub fn write_waiting(self, wait: &c::six_lock_waiter, should_sleep_fn: impl FnMut() -> c_int,
-                         ip: c_ulong, contended: bool) -> Result<Self, (Self, c_int)> {
-        let intent = if contended {
-            self
-        } else {
-            match self.try_write() {
-                Ok(write) => return Ok(write),
-                Err(intent) => intent,
-            }
-        };
-        unsafe { intent.write_waiting_over(0, wait, should_sleep_fn, ip) }
-    }
 }
 
 impl c::six_lock {
@@ -1521,7 +1492,7 @@ pub unsafe fn six_lock_exit(lock: *mut c::six_lock) {
 
         ManuallyDrop::drop(&mut (*(&(*lock).wait_lock).data_ptr().cast_mut()).list);
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        drop(core::mem::take(&mut *(*lock).owner_stack.as_ptr()));
+        drop(core::mem::take(&mut *(*lock).owner_stack.get()));
     }
 }
 

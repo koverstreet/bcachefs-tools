@@ -14,12 +14,10 @@ use cstruct_macros::{counted, unsized_vstruct, CStruct, Plain, TypeInfo};
 #[counted(nr_errors)]
 #[repr(C, align(2))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bch_sb_field_downgrade_entry {
     pub version: le::U16,
     pub recovery_passes: [le::U64; 2],
     pub nr_errors: le::U16,
-    #[c("__le16 errors[] __counted_by(nr_errors)")]
     pub errors: [le::U16; 0],
 }
 

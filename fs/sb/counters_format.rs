@@ -22,7 +22,6 @@ c_enum! {
     #[arm_columns(stable: enum(bch_persistent_counters_stable: u32, prefix = BCH_COUNTER_STABLE_,
                                nr = BCH_COUNTER_STABLE_NR),
                   flags: bch_counters_flags)]
-    #[c_list(BCH_PERSISTENT_COUNTERS)]
     pub enum bch_persistent_counters: u32 {
         /// Filesystem sync operations
         #[stable(110)] #[flags(TYPE_COUNTER)] sync_fs,

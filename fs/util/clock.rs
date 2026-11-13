@@ -30,7 +30,6 @@
 use crate::c;
 use crate::locking::Locked;
 use crate::{new_lock, prt};
-use crate::types::{rust_only, RustOnly};
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::kernel::HZ;
 use crate::util::percpu::{CpuGuard, PerCpu};
@@ -40,14 +39,11 @@ use crate::util::{Printbuf, ToText};
 use core::panic::Location;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
-use cstruct_macros::{c_const, CStruct, Init};
+use cstruct_macros::{CStruct, Init};
 use pin_init::{pin_data, pinned_drop};
 
-c_const! {
-    /* Amount to buffer up on a percpu counter */
-    #[c_int]
-    pub const IO_CLOCK_PCPU_SECTORS: u32 = 128;
-}
+/* Amount to buffer up on a percpu counter */
+pub const IO_CLOCK_PCPU_SECTORS: u32 = 128;
 
 #[allow(non_camel_case_types)]
 #[pin_data(PinnedDrop)]
@@ -55,14 +51,13 @@ c_const! {
 #[derive(CStruct, Init)]
 pub struct io_clock {
     pub now: AtomicI64,
-    #[c("u16 __percpu *pcpu_buf")]
     #[init(PerCpu::init())]
     pub pcpu_buf: PerCpu<u16>,
 
     /// The waiters, latest first: Rust's alone.
     #[pin]
-    #[init(RustOnly::new(new_lock!(KVVec::new(), (), "&clock->timer_lock")))]
-    timers: rust_only!(Locked<c::spinlock_t, KVVec<Timer>>),
+    #[init(new_lock!(KVVec::new(), (), "&clock->timer_lock"))]
+    timers: Locked<c::spinlock_t, KVVec<Timer>>,
 }
 
 /// A waiter on a clock: wakes @task when the clock reaches @expire.

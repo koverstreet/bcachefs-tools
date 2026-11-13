@@ -83,16 +83,14 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Unvalidated;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, c_rcu_array, TypeInfo, c_const, c_enum};
+use cstruct_macros::{CStruct, TypeInfo, c_enum};
 use crate::sb::io::SbResize;
 use crate::types::c_default;
 use nestify::nest;
 
 /* a target is 0 for none, then a device's index, then a disk group's */
-c_const! {
-    pub const TARGET_DEV_START: u32 = 1;
-    pub const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
-}
+pub const TARGET_DEV_START: u32 = 1;
+pub const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
 
 /* target.type_: what a target names */
 c_enum! {
@@ -110,7 +108,6 @@ nest! {
     pub struct target {
         pub type_: c::bch_target_type,
 
-        #[c_anon]
         pub id: pub union target_id {
             pub dev: c_uint,
             pub group: c_uint,
@@ -131,11 +128,8 @@ pub struct bch_disk_group_cpu {
 // SAFETY: plain data, a bitmap of devices among it; all zeroes is a group
 unsafe impl crate::util::rcu::RcuElement for bch_disk_group_cpu {}
 
-c_rcu_array! {
-    /// c->disk_groups, published under RCU.
-    pub type DiskGroups = crate::util::rcu::RcuArray<c::bch_disk_group_cpu>
-        as struct bch_disk_groups_cpu { nr, entries };
-}
+/// c->disk_groups, published under RCU.
+pub type DiskGroups = crate::util::rcu::RcuArray<c::bch_disk_group_cpu>;
 
 // ── Targets ──────────────────────────────────────────────────────────────
 

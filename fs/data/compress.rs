@@ -64,7 +64,6 @@ nest! {
     #[repr(C)]
     pub union bch_compression_opt {
         pub value: u8,
-        #[c_anon]
         #>[repr(C)]
         pub fields: pub struct bch_compression_opt_fields {
             #[c_bitfield]

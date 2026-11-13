@@ -18,7 +18,6 @@ use pin_init::pin_data;
 #[repr(C)]
 #[derive(CStruct)]
 pub struct ec_dev_stripe_state {
-    #[c_lock("struct byte_lock_lockdep lock")]
     #[pin]
     pub lock: Locked<Lockdep<ByteLock>, DevStripes>,
 
@@ -75,7 +74,6 @@ c_opaque!(ec_stripe_new);
 #[repr(C)]
 #[derive(CStruct)]
 pub struct ec_stripe_head {
-    #[c_lock("struct byte_lock_lockdep lock")]
     #[pin]
     pub lock: Locked<Lockdep<ByteLock>, HeadState>,
 
@@ -110,6 +108,5 @@ pub struct HeadState {
 
     pub nr_created: u64,
 
-    #[c("struct ec_stripe_new *s")]
     pub s: Option<StripeNewBox>,
 }

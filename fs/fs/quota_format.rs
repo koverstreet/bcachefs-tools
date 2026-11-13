@@ -37,7 +37,6 @@ pub struct bch_quota_counter {
 #[repr(C, align(8))]
 #[c_name(bch_quota)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
-#[c_packed]
 pub struct Quota {
     pub v: c::bch_val,
     pub c: [c::bch_quota_counter; c::Q_COUNTERS as usize],
@@ -61,7 +60,6 @@ pub struct bch_sb_quota_type {
 #[whole]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct bch_sb_field_quota {
     pub field: Head<c::bch_sb_field>,
     pub q: [c::bch_sb_quota_type; c::QTYP_NR as usize],

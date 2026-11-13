@@ -5,13 +5,12 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le32, Le64};
 use core::ffi::c_ulong;
-use cstruct_macros::{c_name, c_bitmask, c_const, c_xmacro, grown, whole, CStruct, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{c_name, c_bitmask, c_xmacro, grown, whole, CStruct, Plain, TypeInfo, View, SizedVal};
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
 #[c_name(bch_alloc)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-#[c_packed]
 pub struct Alloc {
     pub v: c::bch_val,
     pub fields: u8,
@@ -36,7 +35,6 @@ c_xmacro! {
 #[repr(C, align(8))]
 #[c_name(bch_alloc_v2)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-#[c_packed]
 pub struct AllocV2 {
     pub v: c::bch_val,
     pub nr_fields: u8,
@@ -61,7 +59,6 @@ c_xmacro! {
 #[repr(C, align(8))]
 #[c_name(bch_alloc_v3)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct AllocV3 {
     pub v: c::bch_val,
     pub journal_seq: Le64,
@@ -107,7 +104,6 @@ c_bitmask! {
 #[repr(C, align(8))]
 #[c_name(bch_alloc_v4)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-#[c_packed]
 pub struct AllocV4 {
     pub v: c::bch_val,
     pub journal_seq_nonempty: u64,
@@ -127,11 +123,10 @@ pub struct AllocV4 {
     pub pad: u32,
 }
 
-c_const! {
-    #[c_int]
-    pub const BCH_ALLOC_V4_U64s_V0: u32 = 6;
-    pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::AllocV4>() / size_of::<u64>();
-}
+#[allow(non_upper_case_globals)]
+pub const BCH_ALLOC_V4_U64s_V0: u32 = 6;
+#[allow(non_upper_case_globals)]
+pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::AllocV4>() / size_of::<u64>();
 
 c_bitmask! {
     BITMASK(struct AllocV4, flags), strip BCH_ALLOC_V4_ {
@@ -145,7 +140,6 @@ c_bitmask! {
 #[repr(C, align(8))]
 #[c_name(bch_bucket_gens)]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo, View, SizedVal)]
-#[c_packed]
 pub struct BucketGens {
     pub v: c::bch_val,
     pub gens: [u8; BucketGens::NR],
@@ -159,10 +153,8 @@ impl BucketGens {
     pub const MASK: u64 = Self::NR as u64 - 1;
 }
 
-c_const! {
-    pub const DATA_TYPES_MOVABLE: c_ulong =
-        (1 << c::BCH_DATA_btree as u32) |
-        (1 << c::BCH_DATA_user as u32) |
-        (1 << c::BCH_DATA_stripe as u32) |
-        (1 << c::BCH_DATA_multiple as u32);
-}
+pub const DATA_TYPES_MOVABLE: c_ulong =
+    (1 << c::BCH_DATA_btree as u32) |
+    (1 << c::BCH_DATA_user as u32) |
+    (1 << c::BCH_DATA_stripe as u32) |
+    (1 << c::BCH_DATA_multiple as u32);

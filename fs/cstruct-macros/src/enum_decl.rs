@@ -15,8 +15,6 @@
 //!                          stable id
 //!     NAME: value(T)       a T, any const expression - an inode option's
 //!                          width
-//!   #[c_list(LIST)]      C's x-macro of the variants, for C that still
-//!                        expands one: x(name, value, each column's, "doc")
 //!   #[mask(NAME: REPR, prefix = P[, c_name = C])]
 //!                        the #[flags] NAME of bit numbers, 1 << each value;
 //!                        a variant's #[mask_prefix(P)] is its prefix from
@@ -34,9 +32,9 @@
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::punctuated::Punctuated;
 
-use crate::cstruct::{enum_text, parse_enum_head, parse_variant, rust_text, split_commas, CEnumDef, CEnumKind,
+use crate::cstruct::{parse_enum_head, parse_variant, rust_text, split_commas, CEnumDef, CEnumKind,
                      CEnumVariant};
-use crate::{c_enum_gen, comma_list, record, tokens, EnumOf};
+use crate::{c_enum_gen, comma_list, tokens, EnumOf};
 
 pub(crate) struct Arm {
     pub docs:  Vec<String>,
@@ -145,12 +143,11 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
 pub(crate) fn c_enum(input: TokenStream) -> Result<TokenStream, String> {
     let (e, attrs, body) = syn::parse::Parser::parse2(parse_enum_head, input).map_err(|e| e.to_string())?;
     let err = |m: String| format!("{}: {m}", e.name.as_deref().unwrap_or("_"));
-    let (mut columns, mut c_list, mut mask) = (Vec::new(), None, None);
+    let (mut columns, mut mask) = (Vec::new(), None);
     for a in attrs {
         let args = || a.parse_args::<TokenStream>().map_err(|e| err(e.to_string()));
         match a.path().get_ident().map(|i| i.to_string()).as_deref() {
             Some("arm_columns") => columns = self::columns(args()?).map_err(err)?,
-            Some("c_list")      => c_list = Some(rust_text(&args()?)),
             Some("mask")        => mask = Some(CEnumDef { kind: CEnumKind::Flags, ..tag_enum(args()?).map_err(err)? }),
             Some("doc")         => {}
             _ => return Err(err(format!("#[{}]: not one of c_enum!'s", rust_text(a.path())))),
@@ -179,16 +176,13 @@ pub(crate) fn c_enum(input: TokenStream) -> Result<TokenStream, String> {
     if let Some(m) = &mask {
         out.extend(mask_of(m, &e, &arms));
     }
-    if let Some(list) = &c_list {
-        out.extend(c_list_of(list, &arms, &columns));
-    }
     Ok(out)
 }
 
 /// `[closed,] NAME: REPR, prefix = P[, nr = NR][, c_name = C]`: a tag enum's,
 /// or an enum column's.
 pub(crate) fn tag_enum(args: TokenStream) -> Result<CEnumDef, String> {
-    let mut e = CEnumDef { cfg: None, kind: CEnumKind::Open, name: None, repr: String::new(), variants: Vec::new(),
+    let mut e = CEnumDef { kind: CEnumKind::Open, name: None, repr: String::new(), variants: Vec::new(),
                            from: Vec::new(), own_to_text: false, c_name: None, prefix: None, nr: None };
     for part in comma_list(args) {
         match part.as_slice() {
@@ -229,7 +223,7 @@ fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a str)>) -> 
         }).collect(),
         ..e.clone()
     };
-    c_enum_gen(&def, EnumOf::C(&format!("c_enum! {{ {} }}", enum_text(&def))))
+    c_enum_gen(&def, EnumOf::C)
 }
 
 /// #[mask(NAME: REPR, prefix = P[, c_name = C])]: flags @m of bit numbers
@@ -256,7 +250,7 @@ fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
         }).collect(),
         ..m.clone()
     };
-    c_enum_gen(&def, EnumOf::C(&format!("c_enum! {{ {} }}", enum_text(&def))))
+    c_enum_gen(&def, EnumOf::C)
 }
 
 /// Enum @e of @arms, and a const fn of it per column.
@@ -298,26 +292,6 @@ pub(crate) fn entries(name: &str, arms: &[Arm]) -> TokenStream {
                      #[allow(unused_imports)] pub(crate) use {name}_arms;"))
 }
 
-/// #[c_list(LIST)]: C's x-macro of the arms, for C that still expands one -
-/// x(name, value, each column's value, "doc"). A column's values go to C as
-/// rustc evaluates them: the generator puts each in for its __bch_num_N.
-fn c_list_of(list: &str, arms: &[Arm], columns: &Columns) -> TokenStream {
-    let mut nums = Vec::new();
-    let rows: Vec<String> = arms.iter()
-        .map(|a| {
-            let cells: String = columns.iter().zip(&a.cols)
-                .map(|((_, col), c)| {
-                    nums.push(tokens(&col.bits(&a.name, c)));
-                    format!("__bch_num_{}, ", nums.len() - 1)
-                })
-                .collect();
-            format!("({}, {}, {cells}{:?})", a.name, a.value, a.docs.iter()
-                    .map(|l| l.trim()).collect::<Vec<_>>().join(" "))
-        })
-        .collect();
-    record(&format!("c_xmacro! {{ {list}(x) {{ {} }} }}", rows.join(", ")), &nums)
-}
-
 impl Column {
     /// The const fn's type: an enum or value column's an Option, if @other -
     /// a tag no arm has.
@@ -353,16 +327,6 @@ impl Column {
         match self {
             Column::Enum(_) | Column::Value(_) => "None".into(),
             _ => self.value("", &[], false),
-        }
-    }
-
-    /// Arm @arm's, as the u64 the C list has.
-    fn bits(&self, arm: &str, cell: &[String]) -> String {
-        let v = self.value(arm, cell, false);
-        match self {
-            Column::Flags(_) => format!("({v}).bits() as u64"),
-            Column::Enum(_)  => format!("({v}).into_bits() as u64"),
-            _                => format!("({v}) as u64"),
         }
     }
 }

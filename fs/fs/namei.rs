@@ -48,14 +48,13 @@ use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
 use core::ops::ControlFlow;
-use cstruct_macros::c_const;
 use crate::format::{Btree, MetadataVersion};
 
 // create_trans()'s flags:
-c_const! { pub const BCH_CREATE_TMPFILE: u32 = 1 << 0; }
-c_const! { pub const BCH_CREATE_SUBVOL: u32 = 1 << 1; }
-c_const! { pub const BCH_CREATE_SNAPSHOT: u32 = 1 << 2; }
-c_const! { pub const BCH_CREATE_SNAPSHOT_RO: u32 = 1 << 3; }
+pub const BCH_CREATE_TMPFILE: u32 = 1 << 0;
+pub const BCH_CREATE_SUBVOL: u32 = 1 << 1;
+pub const BCH_CREATE_SNAPSHOT: u32 = 1 << 2;
+pub const BCH_CREATE_SNAPSHOT_RO: u32 = 1 << 3;
 
 pub(crate) fn subvol_inum_eq(l: c::subvol_inum, r: c::subvol_inum) -> bool {
     l.subvol == r.subvol && l.inum == r.inum

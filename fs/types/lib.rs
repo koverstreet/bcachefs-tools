@@ -1,109 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Types defined in Rust that C shares: the records their C is written from.
-//!
-//! A struct C shares is a normal #[repr(C)] Rust struct, #[derive(CStruct)]
-//! (fs/cstruct-macros); its fields with a C rendering are C's too, and the
-//! others - a Locked<c::mutex, KVVec<u32>>, say - Rust's alone, which C
-//! reserves opaque storage for. Enums, constants, typedefs, x-macro lists,
-//! bitmask accessors and C not yet converted are macros there too: c_enum!,
-//! c_const!, c_typedef!, c_xmacro!, c_bitmask!, c_verbatim!.
-//!
-//! And C's container types, which the types hold: GenRadix, Fifo -
-//! and c_opaque!, for the types C has only behind pointers.
-//!
-//! Only rustc knows a Rust type's layout, and only for the target it compiles
-//! for - so the C is written from what the target build of this crate says.
-//! Built with --cfg bch_cstruct_records, each of those macros puts a record in
-//! the object's .discard.bch_cstruct section: the item's source and, for a
-//! struct, its layout, each number const-evaluated for the target. The build
-//! extracts the section with objcopy, and rust_types_gen (main.rs), a host
-//! program of its own, writes the headers from it. The object is never run, so
-//! a cross build works the same as a native one. The section is named so that
-//! linking a module drops it: the kernel build reads the records from mod.o
-//! itself, and the module linker script discards .discard.*.
-//!
-//! A record, every number little-endian:
-//!
-//!   magic     "CSR2"
-//!   len       u32, the whole record's
-//!   line      u32, the macro's line in its source file
-//!   file      u32 length, then file!() - the macro's source file
-//!   text      u32 length, then the item as source - which cstruct.rs parses
-//!   nums      u32 count, then u64s: for a struct, its size and alignment,
-//!             then each field's offset, size and alignment, in order
-//!   names     u32 count, then pairs of u32 length and string: a type name
-//!             as the text writes it - the item's own, a field's - then
-//!             the type rustc resolved it to, type_name(): two files'
-//!             Btrees are different types, and the text can't say which
-//!
-//! A source file's records, ordered by line, are a header: foo/types.rs
-//! gives foo/types_gen.h, foo/bar_types.rs foo/bar_gen.h - and foo/bar.rs's
-//! #[c_export]s follow bar_types.rs's there, as foo/bar/mod.rs's do. By file,
-//! not module, as mod.rs's #[path]s make the two differ.
-
-pub const RECORD_MAGIC: [u8; 4] = *b"CSR2";
-
-/// The length of the record for @file, @text, @nums numbers and @names.
-pub const fn record_len(file: &str, text: &str, nums: usize, names: &[(&str, &str)]) -> usize {
-    let mut len = 4 + 4 + 4 + 4 + file.len() + 4 + text.len() + 4 + 8 * nums + 4;
-    let mut i = 0;
-    while i < names.len() {
-        len += 4 + names[i].0.len() + 4 + names[i].1.len();
-        i += 1;
-    }
-    len
-}
-
-const fn put<const LEN: usize>(mut out: [u8; LEN], mut at: usize, b: &[u8]) -> ([u8; LEN], usize) {
-    let mut i = 0;
-    while i < b.len() {
-        out[at] = b[i];
-        at += 1;
-        i += 1;
-    }
-    (out, at)
-}
-
-/// The record: LEN is record_len() of the same arguments.
-pub const fn record<const LEN: usize>(file: &str, line: u32, text: &str, nums: &[u64],
-                                      names: &[(&str, &str)]) -> [u8; LEN] {
-    let out = [0u8; LEN];
-    let (out, at) = put(out, 0, &RECORD_MAGIC);
-    let (out, at) = put(out, at, &(LEN as u32).to_le_bytes());
-    let (out, at) = put(out, at, &line.to_le_bytes());
-    let (out, at) = put(out, at, &(file.len() as u32).to_le_bytes());
-    let (out, at) = put(out, at, file.as_bytes());
-    let (out, at) = put(out, at, &(text.len() as u32).to_le_bytes());
-    let (out, at) = put(out, at, text.as_bytes());
-    let (mut out, mut at) = put(out, at, &(nums.len() as u32).to_le_bytes());
-    let mut i = 0;
-    while i < nums.len() {
-        (out, at) = put(out, at, &nums[i].to_le_bytes());
-        i += 1;
-    }
-    (out, at) = put(out, at, &(names.len() as u32).to_le_bytes());
-    let mut i = 0;
-    while i < names.len() {
-        (out, at) = put(out, at, &(names[i].0.len() as u32).to_le_bytes());
-        (out, at) = put(out, at, names[i].0.as_bytes());
-        (out, at) = put(out, at, &(names[i].1.len() as u32).to_le_bytes());
-        (out, at) = put(out, at, names[i].1.as_bytes());
-        i += 1;
-    }
-    assert!(at == LEN, "CStruct record: length isn't record_len()'s");
-    out
-}
+//! The types the format and the structs C once shared are built from: C's
+//! little-endian integers, the containers C laid out (GenRadix, Fifo), and
+//! what C reads that Rust defines - CStatic, an ops table.
 
 /// The size of the field @f projects to - by its type, so a field of a packed
 /// struct needs no reference. @f is never called.
 pub const fn field_size<S, F>(_f: fn(*const S) -> *const F) -> u64 {
     core::mem::size_of::<F>() as u64
-}
-
-/// The alignment of the field @f projects to's type.
-pub const fn field_align<S, F>(_f: fn(*const S) -> *const F) -> u64 {
-    core::mem::align_of::<F>() as u64
 }
 
 // ---- C's little-endian integers -------------------------------------------
@@ -210,180 +114,19 @@ pub trait ArmOf<U: ?Sized> {
     const TAG: Self::Tag;
 }
 
-// ---- Rust's own, in C's structs ---------------------------------------------
-
-/// A field of a struct C shares that's Rust's alone - a Locked<c::mutex,
-/// KVVec<u32>>, say: C reserves its storage, as opaque bytes of its size and
-/// alignment, and never looks inside; Rust reaches it as a @T, by Deref.
-/// Declared with rust_only!(T), which sizes and aligns it.
-///
-/// To C, it's bytes of its size, aligned as a @T is: the generator declares
-/// it from Rust's layout. To improper_ctypes it's @U64S u64s and an alignment
-/// marker. The lint looks through the *mut bch_fs that extern blocks pass
-/// into every struct bch_fs holds, and a @T - not FFI-safe, and none of C's
-/// business - would fail every one of them; so @T is only a PhantomData,
-/// which the lint doesn't inspect, and its alignment an AlignMarker's.
-///
-/// Rust allocates the struct holding it, with the struct's init() - see
-/// #[derive(Init)] - and new() is the field's initializer there, its
-/// #[init(...)]. So there's always a @T in it, for Deref, and Drop drops it.
-/// It isn't Zeroable, whatever @T is: a field of it with no #[init] is a
-/// compile error, not a zeroed @T.
-#[repr(C)]
-pub struct RustOnly<T, const U64S: usize, const ALIGN: usize = 8>
-where
-    Align<ALIGN>: AlignMarker,
-{
-    _align:  <Align<ALIGN> as AlignMarker>::Marker,
-    /// UnsafeCell: a @T - a lock - may be written through a shared reference
-    storage: core::cell::UnsafeCell<[core::mem::MaybeUninit<u64>; U64S]>,
-    _t:      core::marker::PhantomData<T>,
-}
-
-// SAFETY: it's a @T, behind the storage C reserved
-unsafe impl<T: Send, const U64S: usize, const ALIGN: usize> Send for RustOnly<T, U64S, ALIGN>
-    where Align<ALIGN>: AlignMarker {}
-unsafe impl<T: Sync, const U64S: usize, const ALIGN: usize> Sync for RustOnly<T, U64S, ALIGN>
-    where Align<ALIGN>: AlignMarker {}
-
-unsafe impl<T: crate::util::rcu::HasRcuHead, const U64S: usize, const ALIGN: usize> crate::util::rcu::HasRcuHead
-    for RustOnly<T, U64S, ALIGN> where Align<ALIGN>: AlignMarker
-{
-    const HEAD: usize = T::HEAD;
-    const WORK: bool = T::WORK;
-}
-
-// SAFETY: zeroed storage is a zeroed @T - which, @T being Zeroable, is a @T,
-// as new() would have made one. A @T with invariants zeroes can't satisfy -
-// a lock - isn't Zeroable, so neither is its RustOnly.
-unsafe impl<T: ::pin_init::Zeroable, const U64S: usize, const ALIGN: usize> ::pin_init::Zeroable
-    for RustOnly<T, U64S, ALIGN> where Align<ALIGN>: AlignMarker {}
-
-impl<T, const U64S: usize, const ALIGN: usize> RustOnly<T, U64S, ALIGN>
-where
-    Align<ALIGN>: AlignMarker,
-{
-    /// Where the @T is in a RustOnly.
-    pub const T_OFFSET: usize = core::mem::offset_of!(Self, storage);
-
-    /// The storage holds a @T: rust_only!() sizes and aligns it.
-    const FITS: () = assert!(core::mem::size_of::<T>() <= U64S * 8 && core::mem::align_of::<T>() <= ALIGN,
-                             "RustOnly: storage too small, or too little aligned, for its T");
-
-    /// A RustOnly holding the @T @init makes, in place - it's pinned there.
-    pub fn new<E>(init: impl ::pin_init::PinInit<T, E>) -> impl ::pin_init::PinInit<Self, E> {
-        let () = Self::FITS;
-        // SAFETY: the storage is a @T's, by FITS, so initializing the @T
-        // initializes the RustOnly; on Err, init left nothing to drop.
-        unsafe {
-            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                crate::util::alloc::init_at(init, slot.cast::<T>())
-            })
-        }
-    }
-
-    /// Its @T, for what writes it through a shared reference - as the lock,
-    /// or the owner's rules, the caller holds allow.
-    pub fn as_ptr(&self) -> *mut T {
-        let () = Self::FITS;
-        self.storage.get().cast()
-    }
-
-    /// A RustOnly holding @t, for a struct made by value.
-    pub fn from_value(t: T) -> Self {
-        let () = Self::FITS;
-        let mut this = core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            (&raw mut (*this.as_mut_ptr()).storage).cast::<T>().write(t);
-            this.assume_init()
-        }
-    }
-}
-
-impl<T, const U64S: usize, const ALIGN: usize> Drop for RustOnly<T, U64S, ALIGN>
-where
-    Align<ALIGN>: AlignMarker,
-{
-    fn drop(&mut self) {
-        // SAFETY: a @T, as new() made it - and nothing reaches it after
-        unsafe { core::ptr::drop_in_place(self.storage.get().cast::<T>()) }
-    }
-}
-
-impl<T, const U64S: usize, const ALIGN: usize> core::ops::Deref for RustOnly<T, U64S, ALIGN>
-where
-    Align<ALIGN>: AlignMarker,
-{
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        let () = Self::FITS;
-        // SAFETY: a @T, as new() made it - the containing struct's init()
-        // ran before anyone was handed it
-        unsafe { &*self.storage.get().cast::<T>() }
-    }
-}
-
-/// Only for an Unpin @T: one that's pinned - a lock - mustn't be moved out.
-impl<T: Unpin, const U64S: usize, const ALIGN: usize> core::ops::DerefMut for RustOnly<T, U64S, ALIGN>
-where
-    Align<ALIGN>: AlignMarker,
-{
-    fn deref_mut(&mut self) -> &mut T {
-        let () = Self::FITS;
-        // SAFETY: as deref(), and borrowed uniquely
-        unsafe { &mut *self.storage.get().cast::<T>() }
-    }
-}
-
-/// RustOnly<@T>, its storage sized and aligned for a @T.
-macro_rules! rust_only {
-    ($t:ty) => {
-        $crate::types::RustOnly<$t, { core::mem::size_of::<$t>().div_ceil(8) },
-                                    { $crate::types::rust_only_align(core::mem::align_of::<$t>()) }>
-    };
-}
-
-/// A RustOnly's alignment: its @T's, or a u64's, its storage's element.
-pub const fn rust_only_align(align: usize) -> usize {
-    if align > 8 { align } else { 8 }
-}
-
-/// An alignment, as a type: a field of its Marker - zero-sized, aligned to
-/// @N - aligns its struct as repr(align(N)) would, which takes only a
-/// literal. FFI-safe, as CacheAligned is, so RustOnly can carry its @T's
-/// alignment where improper_ctypes looks.
-pub struct Align<const N: usize>;
-
-pub trait AlignMarker {
-    type Marker;
-}
-
-macro_rules! align_markers {
-    ($($n:literal $m:ident),* $(,)?) => {$(
-        #[repr(C, align($n))]
-        pub struct $m([u8; 0]);
-        impl AlignMarker for Align<$n> {
-            type Marker = $m;
-        }
-    )*};
-}
-align_markers!(8 Align8, 16 Align16, 32 Align32, 64 Align64, 128 Align128, 256 Align256);
-pub(crate) use rust_only;
-
 // ---- Rust's own, that C reads ------------------------------------------------
 
-/// A #[c_export] fn's parameter C doesn't pass: lent, for the call, by one it
-/// does - #[lent(param)].
+/// What one borrow lends out of another, @A, for as long as it lives: a
+/// transaction's paths.
 pub trait Lent<'a, A: ?Sized>: Sized {
     /// # Safety
-    /// As the export's caller - C - promises for the call.
+    /// Nothing else has what it lends while it lives.
     unsafe fn lent(from: &'a A) -> Self;
 }
 
-/// A static C reads, defined in Rust - a #[c_export] static, C's `extern const
-/// T`. Sync for the pointers a C struct holds, which aren't: C reads it from
-/// anywhere, and nothing writes it.
+/// A static C reads, defined in Rust: an ops table. Sync for the pointers a C
+/// struct holds, which aren't: C reads it from anywhere, and nothing writes
+/// it.
 #[repr(transparent)]
 pub struct CStatic<T>(T);
 
@@ -393,8 +136,7 @@ unsafe impl<T> Sync for CStatic<T> {}
 impl<T> CStatic<T> {
     /// # Safety
     /// Nothing in @v is written through a shared reference - no Cell, no
-    /// atomic: its pointers are its only parts that aren't Sync. #[c_export]
-    /// calls this for its statics.
+    /// atomic: its pointers are its only parts that aren't Sync.
     pub const unsafe fn new(v: T) -> Self {
         CStatic(v)
     }

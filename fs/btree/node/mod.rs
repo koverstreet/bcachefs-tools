@@ -98,10 +98,8 @@ pub struct BkeyUnpackField {
 pub struct BtreeNode {
     pub c: cs::btree_bkey_cached_common,
 
-    #[c("u64 hash_val")]
     pub hash_val: core::cell::UnsafeCell<u64>,
 
-    #[c("unsigned long flags")]
     pub flags: cs::AtomicBtreeNodeFlags,
     /*
      * XXX: written and whiteout_u64s are the node writer's: the thread that
@@ -116,7 +114,6 @@ pub struct BtreeNode {
     pub aux_data: *mut c_void,
     pub byte_order: u8,
 
-    #[c_anon]
     pub contents: LockedBy<NodeContents>,
 
     pub writes: [cs::btree_write; 2],
@@ -137,7 +134,6 @@ pub struct BtreeNode {
      * btree_updates that are blocking this node from being
      * written:
      */
-    #[c("struct list_head write_blocked")]
     pub(crate) write_blocked: LockedBy<crate::btree::interior::WriteBlocked, (), crate::btree::interior::UpdatesLockAt>,
 
     /*
@@ -146,14 +142,11 @@ pub struct BtreeNode {
      * another write - because that write also won't yet be reachable and
      * marking it as completed before it's reachable would be incorrect:
      */
-    #[c("unsigned long will_make_reachable")]
     pub will_make_reachable: crate::btree::interior::WillMakeReachable,
 
     /* lru list */
-    #[c("struct list_head list")]
     pub list: ListLinks,
 
-    #[c("enum btree_node_cache_state cache_state")]
     pub cache_state: LockedBy<cs::btree_node_cache_state, (), crate::btree::types::BtreeCacheLockAt>,
 
     /* its slot in bc->nodes */
@@ -161,7 +154,6 @@ pub struct BtreeNode {
 
     // never moved, nor freed while the fs runs: what linking it promises -
     // in a PhantomData, as a bare PhantomPinned isn't FFI-safe
-    #[c_anon("")]
     _pin: PhantomData<PhantomPinned>,
 }
 
@@ -222,7 +214,6 @@ pub struct NodeContents {
     pub unpack_fn_len: u8,
 
     /* Key/pointer for this btree node */
-    #[c_anon("struct { struct bkey_i key; u64 key_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
     pub key: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
 }
 c_default!(NodeContents);
@@ -330,15 +321,6 @@ impl NodeContents {
     pub fn sets(&self) -> &[BsetTree] {
         invariant!(self.nsets as usize <= self.set.len());
         &self.set[..self.nsets as usize]
-    }
-
-    /// Of a pointer C has into set[].
-    pub fn set_index(&self, t: *const BsetTree) -> usize {
-        let i = (t as usize).wrapping_sub(self.set.as_ptr() as usize) / size_of::<BsetTree>();
-
-        ebug_assert!(i < self.set.len() && core::ptr::eq(&self.set[i], t),
-                     "{t:p}, not a set of the node at {:p}", self);
-        i
     }
 
     pub fn last_set(&self) -> &BsetTree {

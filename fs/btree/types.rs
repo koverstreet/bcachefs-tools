@@ -21,7 +21,7 @@ use crate::util::Printbuf;
 use crate::util::mempool::{Mempool, Raw};
 use crate::util::rcu::Srcu;
 use crate::util::workqueue::{Workqueue, WqFlags};
-use crate::types::{CacheAligned, NeBytes, RustOnly, bits_to_longs, c_default, rust_only};
+use crate::types::{CacheAligned, NeBytes, bits_to_longs, c_default};
 use crate::btree::node_scan::NodeScan;
 use crate::btree::path::BtreePath;
 use crate::new_lock;
@@ -35,7 +35,7 @@ use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_xmacro, placed, CStruct, Init,
+use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_enum, c_xmacro, placed, CStruct, Init,
                      Late, TypeInfo};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
@@ -54,7 +54,6 @@ pub struct btree_write {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_bkey_cached_common {
-    #[c_lock("struct six_lock lock")]
     pub lock: Locked<cs::six_lock>,
     pub level: u8,
     pub btree_id: u8,
@@ -94,7 +93,6 @@ c_enum! {
     #[closed]
     #[prefix(BCH_BTREE_CACHE_NOT_FREED_)]
     #[nr(BCH_BTREE_CACHE_NOT_FREED_REASONS_NR)]
-    #[c_list(BCH_BTREE_CACHE_NOT_FREED_REASONS)]
     pub enum bch_btree_cache_not_freed_reasons: u32 {
         cache_reserve,
         lock_intent,
@@ -118,9 +116,7 @@ pub type BtreeNodeList = crate::list!(BtreeNode, list);
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_cache_list {
-    #[c("struct list_head clean")]
     pub clean: BtreeNodeList,
-    #[c("struct list_head dirty")]
     pub dirty: BtreeNodeList,
 }
 c_default!(btree_cache_list);
@@ -132,7 +128,6 @@ c_default!(btree_cache_list);
 #[repr(C)]
 #[derive(CStruct, Init)]
 pub struct btree_cache_shrinker {
-    #[c("struct shrinker *shrink")]
     pub(crate) shrink: Shrinker<Self>,
 }
 
@@ -140,7 +135,6 @@ pub struct btree_cache_shrinker {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_root {
-    #[c_anon("struct { struct bkey_i key; u64 key_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
     pub key: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
     pub level: u8,
     pub alive: u8,
@@ -156,8 +150,8 @@ c_default!(btree_root);
 pub struct BtreeRoots {
     pub roots_known: [cs::btree_root; cs::BTREE_ID_NR as usize],
     #[pin]
-    #[init(RustOnly::new(KVVec::new()))]
-    pub roots_extra: rust_only!(KVVec<cs::btree_root>),
+    #[init(KVVec::new())]
+    pub roots_extra: KVVec<cs::btree_root>,
 }
 
 impl BtreeRoots {
@@ -196,11 +190,8 @@ impl BtreeRootsGuard<'_> {
     }
 }
 
-c_const! {
-    /* A packed root's level, in its node pointer's low bits */
-    #[c_int]
-    pub const BTREE_ROOT_LEVEL_BITS: u32 = 3;
-}
+/* A packed root's level, in its node pointer's low bits */
+pub const BTREE_ROOT_LEVEL_BITS: u32 = 3;
 
 crate::published! {
     /// The roots as they're read without root_lock, by btree id: the root
@@ -236,11 +227,8 @@ impl BtreeRootsLive {
 #[derive(CStruct)]
 pub struct BtreeCacheLists {
     pub live: [cs::btree_cache_list; 2],
-    #[c("struct list_head freeable")]
     pub freeable: BtreeNodeList,
-    #[c("struct list_head freed_pcpu")]
     pub freed_pcpu: BtreeNodeList,
-    #[c("struct list_head freed_nonpcpu")]
     pub freed_nonpcpu: BtreeNodeList,
 
     pub nr_vmalloc: usize,
@@ -306,12 +294,11 @@ impl BtreeCacheLive {
 pub struct bch_fs_btree_cache {
     #[pin]
     #[init(crate::new_lock!(<- BtreeRoots::init(), ::pin_init::zeroed(), "&bc->root_lock"))]
-    #[c_lock("struct mutex root_lock")]
     pub roots: Locked<cs::mutex, BtreeRoots, BtreeRootsLive>,
 
     #[pin]
-    #[init(RustOnly::new(::pin_init::init_zeroed()))]
-    pub(crate) table: rust_only!(crate::btree::cache::NodeTable),
+    #[init(::pin_init::init_zeroed())]
+    pub(crate) table: crate::btree::cache::NodeTable,
     /*
      * We never free a struct btree, except on shutdown - we just put it on
      * the btree_cache_freed list and reuse it later. This simplifies the
@@ -327,7 +314,6 @@ pub struct bch_fs_btree_cache {
      */
     #[pin]
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->lock"))]
-    #[c_lock("struct mutex lock")]
     pub lock: crate::util::place::Placed<Locked<BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>, BtreeCacheLockAt>,
     #[pin]
     pub shrinkers: [cs::btree_cache_shrinker; 2],
@@ -339,17 +325,16 @@ pub struct bch_fs_btree_cache {
      * aren't the cache's, and are freed while we run: they're not on it.
      */
     #[pin]
-    #[init(RustOnly::new(::pin_init::init_zeroed()))]
-    pub nodes: rust_only!(cs::fast_list),
+    #[init(::pin_init::init_zeroed())]
+    pub nodes: cs::fast_list,
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */
     #[pin]
-    #[init(RustOnly::new(AtomicIsize::new(0)))]
-    pub nr_in_flight: rust_only!(AtomicIsize),
+    #[init(AtomicIsize::new(0))]
+    pub nr_in_flight: AtomicIsize,
     pub nr_in_flight_inner: AtomicIsize,
     pub nr_in_flight_wait: cs::closure_waitlist,
     pub __should_throttle_align: CacheAligned,
-    #[c("bool should_throttle")]
     pub should_throttle: AtomicBool,
 
     /*
@@ -359,8 +344,8 @@ pub struct bch_fs_btree_cache {
      * finishes - pins must be released for reclaim to clean btree nodes.
      */
     #[pin]
-    #[init(RustOnly::new(AtomicIsize::new(0)))]
-    pub nr_self_reclaim: rust_only!(AtomicIsize),
+    #[init(AtomicIsize::new(0))]
+    pub nr_self_reclaim: AtomicIsize,
 
     /*
      * If we need to allocate memory for a new btree node and that
@@ -369,11 +354,11 @@ pub struct bch_fs_btree_cache {
      * this at a time:
      */
     #[pin]
-    #[init(RustOnly::new(core::sync::atomic::AtomicPtr::new(core::ptr::null_mut())))]
-    pub alloc_lock: rust_only!(core::sync::atomic::AtomicPtr<cs::task_struct>),
+    #[init(core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))]
+    pub alloc_lock: core::sync::atomic::AtomicPtr<cs::task_struct>,
     #[pin]
-    #[init(RustOnly::new(::pin_init::init_zeroed()))]
-    pub alloc_wait: rust_only!(cs::closure_waitlist),
+    #[init(::pin_init::init_zeroed())]
+    pub alloc_wait: cs::closure_waitlist,
 }
 
 /* Iterator, update, and trigger flags: */
@@ -466,7 +451,6 @@ nest! {
         pub(in crate::btree) trans: *mut BtreeTrans<'static>,
         pub(in crate::btree) path: cs::PathIdx,
         pub(in crate::btree) update_path: cs::PathIdx,
-        #[c("btree_path_idx_t key_cache_path")]
         pub(in crate::btree) key_cache_path: core::cell::Cell<cs::PathIdx>,
 
         #[c_bitfield]
@@ -496,7 +480,6 @@ nest! {
         pub(in crate::btree) ip_allocated: c_ulong,
 
         /* It mustn't outlive the transaction its paths are in */
-        #[c_anon("")]
         _trans: core::marker::PhantomData<&'t BtreeTrans<'t>>,
     }
 }
@@ -518,21 +501,15 @@ pub type btree_iter = BtreeIter<'static>;
 
 /* Key cache: */
 
-c_const! {
-    #[c_int]
-    pub const BKEY_CACHED_ACCESSED: u32 = 0;
-    #[c_int]
-    pub const BKEY_CACHED_DIRTY: u32 = 1;
-    #[c_int]
-    pub const BKEY_CACHED_IMMEDIATE_FLUSH: u32 = 2;
-}
+pub const BKEY_CACHED_ACCESSED: u32 = 0;
+pub const BKEY_CACHED_DIRTY: u32 = 1;
+pub const BKEY_CACHED_IMMEDIATE_FLUSH: u32 = 2;
 
 #[repr(C)]
 #[derive(CStruct)]
 pub struct bkey_cached {
     pub c: cs::btree_bkey_cached_common,
 
-    #[c("unsigned long flags")]
     pub flags: AtomicUsize,
     pub u64s: u16,
     pub key: cs::bkey_cached_key,
@@ -608,28 +585,11 @@ nest! {
     }
 }
 
-c_const! {
-    /* Number of btree paths we preallocate, usually enough */
-    #[c_int]
-    pub const BTREE_ITER_INITIAL: u32 = 64;
+/* Number of btree paths we preallocate, usually enough */
+pub const BTREE_ITER_INITIAL: u32 = 64;
 
-    /*
-     * Lmiit for btree_trans_too_many_iters(); this is enough that almost all code
-     * paths should run inside this limit, and if they don't it usually indicates a
-     * bug (leaking/duplicated btree paths).
-     *
-     * exception: some fsck paths
-     *
-     * bugs with excessive path usage seem to have possibly been eliminated now, so
-     * we might consider eliminating this (and btree_trans_too_many_iter()) at some
-     * point.
-     */
-    #[c_int]
-    pub const BTREE_ITER_NORMAL_LIMIT: u32 = 256;
-
-    /* never exceed limit */
-    pub const BTREE_ITER_MAX: u32 = 1 << 10;
-}
+/* never exceed limit */
+pub const BTREE_ITER_MAX: u32 = 1 << 10;
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -639,11 +599,9 @@ pub struct btree_trans_commit_hook {
 }
 c_default!(btree_trans_commit_hook);
 
-c_const! {
-    pub const BTREE_TRANS_MEM_MAX: u32 = 1 << 16;
+pub const BTREE_TRANS_MEM_MAX: u32 = 1 << 16;
 
-    pub const BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS: c_long = cs::NSEC_PER_MSEC as c_long;
-}
+pub const BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS: c_long = cs::NSEC_PER_MSEC as c_long;
 
 #[repr(C)]
 #[derive(Default, CStruct)]
@@ -665,7 +623,6 @@ pub struct btree_trans_subbuf<T: ?Sized = [u64]> {
     pub base: u16,
     pub u64s: u16,
     pub size: u16,
-    #[c_anon("")]
     pub _entries: core::marker::PhantomData<T>,
 }
 
@@ -690,7 +647,6 @@ impl<T: ?Sized> Default for btree_trans_subbuf<T> {
 #[c_name(trans_mem)]
 #[derive(CStruct, Default)]
 pub struct TransMem {
-    #[c_anon("struct { u32 nr, size; u64 *data; }")]
     pub(crate) buf:                    crate::util::alloc::Vec<u64, Kmalloc, u32>,
     /* bytes: what the next begin grows it to, restarted for room */
     pub(crate) realloc_bytes_required: u32,
@@ -771,7 +727,6 @@ pub struct btree_trans_bits {
 #[c_name(btree_trans)]
 #[derive(CStruct)]
 pub struct BtreeTrans<'f> {
-    #[c("struct bch_fs *c")]
     pub c: &'f Fs,
 
     pub paths_allocated: Cell<*mut c_ulong>,
@@ -780,10 +735,9 @@ pub struct BtreeTrans<'f> {
     pub updates: Cell<*mut cs::btree_insert_entry>,
 
     /* bump allocator, invalidated on transaction restart */
-    #[c("struct trans_mem mem")]
     pub mem: Cell<TransMem>,
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: rust_only!(Cell<KVVec<cs::trans_kmalloc_trace>>),
+    pub trans_kmalloc_trace: Cell<KVVec<cs::trans_kmalloc_trace>>,
 
     pub nr_sorted: Cell<cs::PathIdx>,
     pub nr_paths: Cell<cs::PathIdx>,
@@ -791,7 +745,6 @@ pub struct BtreeTrans<'f> {
     pub nr_updates: Cell<cs::PathIdx>,
     pub shard_cpu: Cell<i16>,
     pub fn_idx: Cell<u8>,
-    #[c("u8 lock_must_abort")]
     pub lock_must_abort: AtomicU8,
     #[c_bitfield]
     pub bits: Cell<btree_trans_bits>,
@@ -808,7 +761,7 @@ pub struct BtreeTrans<'f> {
     pub last_begin_ip: Cell<c_ulong>,
     pub last_restarted_ip: Cell<c_ulong>,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub last_restarted_trace: rust_only!(Cell<KVVec<c_ulong>>),
+    pub last_restarted_trace: Cell<KVVec<c_ulong>>,
     pub last_unlock_ip: Cell<c_ulong>,
     pub srcu_lock_time: Cell<c_ulong>,
     pub srcu_idx: Cell<c_int>,
@@ -821,7 +774,6 @@ pub struct BtreeTrans<'f> {
      * bch2_six_check_for_deadlock() to detect that the node identity
      * rotated while we were about to sleep on it. 0 for cached entries.
      */
-    #[c("struct six_lock_waiter locking_wait")]
     pub locking_wait: cs::six_lock_waiter,
 
     /*
@@ -864,29 +816,21 @@ pub struct BtreeTrans<'f> {
     pub extra_disk_res: Cell<u64>,
     pub extra_disk_res_replicas: Cell<u8>,
 
-    #[c_anon("struct { struct bkey_i btree_path_down; u64 btree_path_down_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
     pub btree_path_down: LockedBy<PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>>,
 
     #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    #[c("struct lockdep_map dep_map")]
     pub dep_map: crate::locking::LockdepMap,
     /* Entries before this are zeroed out on every bch2_trans_get() call */
 
     pub list: cs::list_head,
-    #[c("struct closure ref")]
     pub ref_: Opaque<cs::closure>,
     pub rcu: cs::rcu_head,
 
     /* the first path table: Paths borrows into it */
-    #[c("unsigned long _paths_allocated[BITS_TO_LONGS(BTREE_ITER_INITIAL)]")]
     pub _paths_allocated: Opaque<[c_ulong; bits_to_longs(cs::BTREE_ITER_INITIAL as usize)]>,
-    #[c("struct btree_trans_paths trans_paths")]
     pub trans_paths: Opaque<cs::btree_trans_paths>,
-    #[c("struct btree_path _paths[BTREE_ITER_INITIAL]")]
     pub _paths: Opaque<[BtreePath; cs::BTREE_ITER_INITIAL as usize]>,
-    #[c("btree_path_idx_t _sorted[BTREE_ITER_INITIAL + 4]")]
     pub _sorted: Opaque<[cs::PathIdx; cs::BTREE_ITER_INITIAL as usize + 4]>,
-    #[c("struct btree_insert_entry _updates[BTREE_ITER_INITIAL]")]
     pub _updates: Opaque<[cs::btree_insert_entry; cs::BTREE_ITER_INITIAL as usize]>,
 }
 
@@ -919,7 +863,7 @@ c_default!(btree_trans_buf);
 #[derive(CStruct)]
 pub struct TransStatsLocked {
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: rust_only!(KVVec<cs::trans_kmalloc_trace>),
+    pub trans_kmalloc_trace: KVVec<cs::trans_kmalloc_trace>,
     pub max_paths_text: Printbuf,
 }
 
@@ -948,14 +892,10 @@ pub struct btree_transaction_stats {
     pub lock_wait_times: cs::bch2_time_stats,
     #[pin]
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&s->lock"))]
-    #[c_lock("struct mutex lock")]
     pub lock: Locked<cs::mutex, TransStatsLocked, TransStatsMax>,
 }
 
-c_const! {
-    #[c_int]
-    pub const BCH_TRANSACTIONS_NR: u32 = 128;
-}
+pub const BCH_TRANSACTIONS_NR: u32 = 128;
 
 #[pin_data]
 #[repr(C)]
@@ -963,26 +903,21 @@ c_const! {
 pub struct bch_fs_btree_trans {
     #[pin]
     #[init(new_lock!((), "&c->btree.trans.lock"))]
-    #[c("struct seqmutex lock")]
     pub lock: Locked<cs::seqmutex>,
     /* zeroed, it's empty: List's first push sets it up */
     pub list: cs::list_head,
     #[pin]
     #[init(Mempool::kmalloc(1, core::mem::size_of::<BtreeTrans<'_>>()))]
-    #[c("mempool_t pool")]
     pub pool: Mempool<Kmalloc>,
     #[pin]
     #[init(Mempool::kmalloc(1, c::BTREE_TRANS_MEM_MAX as usize))]
-    #[c("mempool_t malloc_pool")]
     pub malloc_pool: Mempool<Kmalloc>,
     #[pin]
     #[init(PerCpu::alloc(), ENOMEM_fs_other_alloc)]
-    #[c("struct btree_trans_buf __percpu *bufs")]
     pub bufs: PerCpu<cs::btree_trans_buf>,
 
     #[pin]
     #[init(crate::new_srcu!("btree_trans_barrier"))]
-    #[c("struct srcu_struct barrier")]
     pub barrier: Srcu,
 
     #[pin]
@@ -991,7 +926,6 @@ pub struct bch_fs_btree_trans {
 
     #[pin]
     #[init(new_lock!(TransStatsJson { buf: Printbuf::new() }, "&c->btree.trans.stats_json_lock"))]
-    #[c_lock("struct mutex stats_json_lock")]
     pub stats_json: Locked<cs::mutex, TransStatsJson>,
 }
 
@@ -1019,12 +953,9 @@ c_enum! {
     }
 }
 
-c_const! {
-    pub const BTREE_WRITE_TYPE_MASK: c_ulong =
-        (cs::BTREE_WRITE_TYPE_NR as c_ulong).next_power_of_two() - 1;
-    #[c_int]
-    pub const BTREE_WRITE_TYPE_BITS: u32 = (cs::BTREE_WRITE_TYPE_NR as u32).next_power_of_two().ilog2();
-}
+pub const BTREE_WRITE_TYPE_MASK: c_ulong =
+    (cs::BTREE_WRITE_TYPE_NR as c_ulong).next_power_of_two() - 1;
+pub const BTREE_WRITE_TYPE_BITS: u32 = (cs::BTREE_WRITE_TYPE_NR as u32).next_power_of_two().ilog2();
 
 c_xmacro! {
     BTREE_FLAGS(x) {
@@ -1082,7 +1013,6 @@ const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
 c_enum! {
     #[closed]
     #[prefix(BTREE_NODE_REWRITE_)]
-    #[c_list(BTREE_NODE_REWRITE_REASON)]
     pub enum btree_node_rewrite_reason: u32 {
         none,
         unknown,
@@ -1111,11 +1041,8 @@ pub struct btree_evicted_size {
 }
 c_default!(btree_evicted_size);
 
-c_const! {
-    #[c_int]
-    pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
-    pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << cs::BTREE_EVICTED_SIZE_HASH_BITS) - 1;
-}
+pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
+pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << cs::BTREE_EVICTED_SIZE_HASH_BITS) - 1;
 
 #[repr(C)]
 #[derive(CStruct)]
@@ -1137,24 +1064,20 @@ pub struct bch_fs_btree {
     #[pin]
     #[init(Mempool::with(1, crate::btree::cache::bounce_pool_alloc, c::mempool_kvfree,
                          opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
-    #[c("mempool_t bounce_pool")]
     pub bounce_pool: Mempool<Raw>,
 
     pub write_stats: [cs::btree_write_stats; cs::BTREE_WRITE_TYPE_NR as usize],
 
     #[pin]
     #[init(BioSet::new(1, true), ENOMEM_fs_other_alloc)]
-    #[c("struct bio_set bio")]
     pub bio: BioSet<Either<crate::btree::read::BtreeReadBio, crate::btree::write::BtreeWriteBio>>,
     #[pin]
     #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]
-    #[c("mempool_t fill_iter")]
     pub fill_iter: Mempool<Kmalloc>,
     #[pin]
     #[init(Workqueue::new(c"bcachefs_btree_read_complete",
                           WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
            ENOMEM_fs_other_alloc)]
-    #[c("struct workqueue_struct *read_complete_wq")]
     pub read_complete_wq: Workqueue,
     #[pin]
     #[init(crate::util::log::ratelimit_state_init())]
@@ -1166,7 +1089,6 @@ pub struct bch_fs_btree {
     #[late(Workqueue::new(c"bcachefs_btree_write_complete",
                           WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 1),
            ENOMEM_fs_other_alloc)]
-    #[c("struct workqueue_struct *write_complete_wq")]
     pub write_complete_wq: Late<Workqueue>,
 
     pub root_journal_res: cs::journal_entry_res,
@@ -1203,10 +1125,8 @@ pub struct bch_fs_btree {
     #[late(Workqueue::new(c"bcachefs_wb_flush",
                           WqFlags::UNBOUND | WqFlags::MEM_RECLAIM | WqFlags::FREEZABLE, 0),
            ENOMEM_fs_other_alloc)]
-    #[c("struct workqueue_struct *write_buffer_wq")]
     pub write_buffer_wq: Late<Workqueue>,
     #[late(Workqueue::new(c"bcachefs_wb_flush_shard", WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 0), ENOMEM_fs_other_alloc)]
-    #[c("struct workqueue_struct *write_buffer_shard_wq")]
     pub write_buffer_shard_wq: Late<Workqueue>,
     /*
      * Sync flushers (btree_write_buffer_flush_seq) wake the per-btree
@@ -1225,12 +1145,12 @@ pub struct bch_fs_btree {
     #[late]
     pub interior_updates: cs::bch_fs_btree_interior_updates,
     #[pin]
-    #[init(RustOnly::new(crate::btree::async_ops::AsyncOps::init()))]
+    #[init(crate::btree::async_ops::AsyncOps::init())]
     #[late]
-    pub(crate) async_ops: rust_only!(crate::btree::async_ops::AsyncOps),
+    pub(crate) async_ops: crate::btree::async_ops::AsyncOps,
     #[pin]
-    #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) node_scan: rust_only!(NodeScan),
+    #[init(new_lock!(KVVec::new()))]
+    pub(crate) node_scan: NodeScan,
 }
 
 /// What a node of @btree_node_size bytes has room for, past its header.

@@ -31,9 +31,7 @@
 #![allow(unused_features)]
 // The kernel build's generated extern blocks reference kernel types bindgen
 // flags as not FFI-safe (e.g. its_array); harmless, and allowed on the
-// kernel's own bindings crate. Userspace's are clean, so there it warns -
-// though not of c_extern!'s declarations, which rustc doesn't lint in what a
-// proc macro generates: c_extern! checks its own pointers are thin.
+// kernel's own bindings crate. Userspace's are clean, so there it warns.
 #![cfg_attr(kernel, allow(improper_ctypes))]
 // kCFI hashes a repr(C) struct in an extern "C" signature by its Rust name:
 // where that isn't C's - Fs is struct bch_fs - cfi_encoding gives C's, or no
@@ -52,7 +50,6 @@
            type_alias_impl_trait, async_fn_traits, unboxed_closures)]
 #![allow(internal_features)]
 // A type's record says which type each name it writes is: type_name(), const.
-#![cfg_attr(bch_cstruct_records, feature(const_type_name))]
 // ret_ip!(), C's _RET_IP_ - see util/kernel.rs.
 #![cfg_attr(bch_return_address, feature(core_intrinsics))]
 // A cfg the build doesn't declare is an error, not a warning: a misspelled
@@ -289,7 +286,7 @@ pub mod data {
     pub mod write_nocow;
 }
 pub mod errcode;
-/// The on-disk format: bcachefs_format.h's types.
+/// The on-disk format.
 pub mod format;
 pub mod opts;
 
@@ -484,11 +481,6 @@ pub const fn btrees_with(flags: BtreeFlags) -> u64 {
 
 /// Btrees whose keys are snapshotted; C's btree_has_snapshots_mask.
 pub const BTREE_HAS_SNAPSHOTS_MASK: u64 = btrees_with(BtreeFlags::snapshots);
-
-/// Btrees whose keys' positions have a snapshot field, snapshotted or not;
-/// C's btree_has_snapshot_field_mask.
-pub const BTREE_HAS_SNAPSHOT_FIELD_MASK: u64 =
-    btrees_with(BtreeFlags::snapshots.union(BtreeFlags::snapshot_field));
 
 /// Btrees of extents; C's btree_is_extents_mask.
 pub const BTREE_IS_EXTENTS_MASK: u64 = btrees_with(BtreeFlags::extents);

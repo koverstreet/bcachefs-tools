@@ -4,12 +4,9 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_name, c_bitmask, c_const, c_enum, grown, CStruct, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{c_name, c_bitmask, c_enum, grown, CStruct, Plain, TypeInfo, View, SizedVal};
 
-c_const! {
-    #[c_int]
-    pub const BCACHEFS_ROOT_SUBVOL: u32 = 1;
-}
+pub const BCACHEFS_ROOT_SUBVOL: u32 = 1;
 
 #[grown(from = creation_parent, bkey)]
 #[repr(C)]

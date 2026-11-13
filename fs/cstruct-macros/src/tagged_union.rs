@@ -154,15 +154,14 @@
 //! have their own.
 //!
 //! The declaration is parsed into a CTaggedUnion (fs/types/cstruct.rs),
-//! which generate() takes; the record C's header is written from is that,
-//! as the struct|union form rust_types_gen parses.
+//! which generate() takes.
 
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 
-use crate::cstruct::{rust_text, tagged_union_record_text, CEnumDef, CEnumKind, CTaggedArm, CTaggedDef, CTaggedSize,
+use crate::cstruct::{rust_text, CEnumDef, CEnumKind, CTaggedArm, CTaggedDef, CTaggedSize,
                      CTaggedUnion};
 use crate::enum_decl::{self, arm_path};
-use crate::{record, tokens};
+use crate::tokens;
 
 pub(crate) fn tagged_union(input: TokenStream) -> Result<TokenStream, String> {
     let (decl, tu, mut out) = enum_form(&input)?;
@@ -284,7 +283,6 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
         _ => a.value.clone(),
     };
     let tu = CTaggedUnion {
-        cfg: None,
         name: name.clone(),
         c_name,
         union: storage.is_some(),
@@ -564,17 +562,6 @@ fn generate(d: &Decl, tu: &CTaggedUnion) -> Result<TokenStream, String> {
                      const _: () = {vs}::assert_plain::<{p}>();\n")
         })
         .unwrap_or_default();
-    // The C: another's storage has its own
-    let c_record = if tu.storage.is_none() {
-        let nums = [
-            format!("::core::mem::size_of::<{s_ty}>() as u64"),
-            format!("::core::mem::align_of::<{s_ty}>() as u64"),
-            format!("{payload_offset} as u64"),
-        ];
-        record(&tagged_union_record_text(tu, arms), &nums.map(|n| tokens(&n))).to_string()
-    } else {
-        String::new()
-    };
 
     if tu.size == CTaggedSize::Arm {
         // Each value as long as the arm its tag selects - the variant, by
@@ -1029,8 +1016,7 @@ fn generate(d: &Decl, tu: &CTaggedUnion) -> Result<TokenStream, String> {
          {arms_of}\
          {pad_assert}\
          {arm_asserts}\
-         {packed_asserts}\
-         {c_record}",
+         {packed_asserts}",
         validated = st_arg("Validated"),
         gets_validated = gets("Validated",
             &format!("panic!(\"{name}<Validated>: {{err}} - an arm that doesn't fit, in one \\

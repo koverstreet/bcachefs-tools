@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
-use cstruct_macros::{c_name, c_const, c_enum, c_typedef, counters, tagged_union, whole, CStruct, Plain,
+use cstruct_macros::{c_name, c_enum, counters, tagged_union, whole, CStruct, Plain,
                      TypeInfo};
 use crate::format::Bpos;
 
@@ -58,10 +58,7 @@ pub struct Accounting {
     pub d: [u64; 0],
 }
 
-c_const! {
-    #[c_int]
-    pub const BCH_ACCOUNTING_MAX_COUNTERS: u32 = 3;
-}
+pub const BCH_ACCOUNTING_MAX_COUNTERS: u32 = 3;
 
 c_enum! {
     #[open]
@@ -94,15 +91,11 @@ impl From<DataType> for DataTypes {
     }
 }
 
-c_typedef! {
-    #[c_name(bch_acct_replicas)]
-    pub type Replicas = Head<c::bch_replicas_entry_v1>;
-}
+pub type Replicas = Head<c::bch_replicas_entry_v1>;
 crate::accounting::acct_counters!(ReplicasCounters { sectors });
 
 tagged_union! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
-    #[c_typedef]*
     #[c_name(disk_accounting_pos)]
     #[derive(TypeInfo)]
     #[tag(type_: u8)]

@@ -133,8 +133,3 @@ unsafe impl RawTimedLock for ByteLock {
 
 // ── C's, while C takes them ──────────────────────────────────────────────
 
-/// # Safety
-/// @l is a ByteLock the caller holds.
-pub unsafe fn bch2_byte_unlock(l: *mut u8) {
-    unsafe { (*l.cast::<ByteLock>()).release() }
-}

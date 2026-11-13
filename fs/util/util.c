@@ -20,7 +20,6 @@
 #include <linux/static_key.h>
 #include <linux/version.h>
 
-#include "enum_kind.h"
 #include "util.h"
 
 /*

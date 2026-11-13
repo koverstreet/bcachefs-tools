@@ -20,15 +20,11 @@ nest! {
     #[derive(CStruct, TypeInfo)]*
     #[repr(C)]*
     pub struct MoveStats {
-        #[c("enum bch_ioctl_data_event_ret ret")]
         pub ret: Volatile<c::bch_ioctl_data_event_ret>,
 
         /* Where the walk is: data_type and pos, or for phys, dev and offset */
-        #[c_anon]
         pub at: pub struct bch_move_stats_at {
-            #[c("enum bch_data_type data_type")]
             pub data_type: Volatile<DataType>,
-            #[c("struct bbpos pos")]
             pub pos: Volatile<c::bbpos>,
             pub dev: Volatile<c_uint>,
             pub offset: Volatile<u64>,

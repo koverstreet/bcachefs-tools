@@ -12,7 +12,6 @@ nest! {
     #[repr(C, align(8))]
     #[c_name(bch_stripe)]
     #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-    #[c_packed]
     pub struct Stripe {
         pub v: c::bch_val,
         pub sectors: Le16,
