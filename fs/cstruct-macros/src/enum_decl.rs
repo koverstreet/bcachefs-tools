@@ -33,7 +33,8 @@ use proc_macro2::{Delimiter, Ident, Literal, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 
-use crate::cstruct::{doc_of, parse_enum_head, parse_variant, split_commas, CEnumDef, CEnumKind, CEnumVariant};
+use crate::cstruct::{doc_of, int_of, parse_enum_head, parse_variant, split_commas, CEnumDef, CEnumKind,
+                     CEnumVariant};
 use crate::{enum_gen, comma_list};
 
 pub(crate) struct Arm {
@@ -392,13 +393,5 @@ pub(crate) fn arm_path(ty: &syn::Type) -> TokenStream {
         syn::Type::Path(p) if p.qself.is_none() && p.path.leading_colon.is_none() &&
                               p.path.segments.first().is_some_and(|s| s.ident == "c") => quote!(crate::#ty),
         _ => quote!(#ty),
-    }
-}
-
-/// An integer literal's value, decimal or 0x hex, as a discriminant is written.
-pub(crate) fn int_of(x: &syn::Expr) -> Option<u64> {
-    match x {
-        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(i), .. }) => i.base10_parse().ok(),
-        _ => None,
     }
 }

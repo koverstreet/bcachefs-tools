@@ -24,99 +24,102 @@
 //   _IOC constants (fs/util/ioctl.rs).
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CKind {
+pub(crate) enum CKind {
     Struct,
     Union,
 }
 
 /// A #[derive(CStruct)] struct or union: its name and fields, in order.
-pub struct CStructDef {
+pub(crate) struct CStructDef {
     /// The item's name.
-    pub ident:     syn::Ident,
+    pub(crate) ident:     syn::Ident,
     /// #[type_name(NAME)]: the type's name, where the item's differs - a
     /// family's definition, X__head, whose name the family's type X<S> has
     /// (util/vstructs.rs).
-    pub type_name: Option<syn::Ident>,
-    pub attrs:     Vec<syn::Attribute>,
-    pub generics:  syn::Generics,
-    pub kind:      CKind,
-    pub fields:    Vec<CFieldDef>,
+    pub(crate) type_name: Option<syn::Ident>,
+    pub(crate) attrs:     Vec<syn::Attribute>,
+    pub(crate) generics:  syn::Generics,
+    pub(crate) kind:      CKind,
+    pub(crate) fields:    Vec<CFieldDef>,
 }
 
 impl CStructDef {
     /// The type's name: #[type_name]'s, or the item's.
-    pub fn name(&self) -> &syn::Ident {
+    pub(crate) fn name(&self) -> &syn::Ident {
         self.type_name.as_ref().unwrap_or(&self.ident)
     }
 }
 
-pub struct CFieldDef {
-    pub ident:    syn::Ident,
-    pub ty:       syn::Type,
-    pub vis:      syn::Visibility,
+pub(crate) struct CFieldDef {
+    pub(crate) ident:    syn::Ident,
+    pub(crate) ty:       syn::Type,
+    pub(crate) vis:      syn::Visibility,
     /// #[c_bitfield]: its type is a bitfield-struct type, whose members are
     /// the struct's too.
-    pub bitfield: bool,
+    pub(crate) bitfield: bool,
     /// #[counted_by(FIELD)], on a trailing `[T; 0]`: the field its length
     /// is - C's __counted_by(), as the struct's FlexArray impl.
-    pub counted_by: Option<syn::Ident>,
+    pub(crate) counted_by: Option<syn::Ident>,
     /// #[placed_at]: the field #[placed] added, its place's At - which
     /// #[derive(Init)]'s init() takes. (cstruct-macros' place.rs.)
-    pub placed_at: bool,
+    pub(crate) placed_at: bool,
 }
 
 /// An x-macro list.
 #[derive(Debug)]
-pub struct CXMacro {
-    pub name:     String,
-    pub entries:  Vec<CXEntry>,
+pub(crate) struct CXMacro {
+    pub(crate) name:     syn::Ident,
+    pub(crate) entries:  Vec<CXEntry>,
 }
 
 /// An entry of an x-macro list.
 #[derive(Debug)]
-pub enum CXEntry {
+pub(crate) enum CXEntry {
     /// (args)
-    Args,
+    Args(proc_macro2::Group),
     /// SUB() - another list's entries, here - or SUB((params) => (template)):
     /// SUB's entries, each mapped to the template.
-    Sub { list: String, map: Option<CXMap> },
+    Sub { list: syn::Ident, map: Option<CXMap> },
 }
 
 #[derive(Debug)]
-pub struct CXMap {
-    pub params:   Vec<String>,
+pub(crate) struct CXMap {
+    pub(crate) params:   Vec<syn::Ident>,
     /// An entry's arguments, mapped: params, and concat(A, b) pastes.
-    pub template: String,
+    pub(crate) template: proc_macro2::TokenStream,
 }
 
 /// Bitfields in one flags word: @macro_name is LE64_BITMASK, LE32_BITMASK,
-/// LE16_BITMASK or BITMASK; @c_type the C struct type, "struct foo"; @field
-/// the flags word, as C and Rust both write it: "flags[0]".
+/// LE16_BITMASK or BITMASK; @field[@index] the flags word.
 #[derive(Debug)]
-pub struct CBitmask {
-    pub macro_name: String,
-    /// The struct as written, "struct foo".
-    pub c_type:     String,
-    /// The type the accessors are on: "foo" - or for `struct Head<foo>`, a
-    /// family's C definition, "foo__head".
-    pub rust_type:  String,
-    pub field:      String,
-    pub strip:      Option<String>,
-    pub entries:    Vec<CBitmaskEntry>,
+pub(crate) struct CBitmask {
+    pub(crate) macro_name: syn::Ident,
+    /// The struct's name: foo, of `struct foo`, `struct Head<foo>` or
+    /// `struct foo<STATE>`.
+    pub(crate) name:       syn::Ident,
+    /// `struct Head<foo>`: a family's C definition, foo__head.
+    pub(crate) head:       bool,
+    /// `struct foo<STATE>`: a family's type in a state.
+    pub(crate) state:      Option<syn::Ident>,
+    pub(crate) field:      syn::Ident,
+    pub(crate) index:      Option<syn::LitInt>,
+    pub(crate) strip:      Option<String>,
+    pub(crate) entries:    Vec<CBitmaskEntry>,
 }
 
 #[derive(Debug)]
-pub struct CBitmaskEntry {
-    pub name:  String,
-    pub start: String,
-    pub end:   String,
+pub(crate) struct CBitmaskEntry {
+    pub(crate) name:  syn::Ident,
+    pub(crate) start: syn::Expr,
+    pub(crate) end:   syn::Expr,
 }
 
 impl CBitmask {
     /// The Rust accessor for @name: PREFIX_ stripped, lowercased - and with a
     /// leading _ if that starts with a digit: BCH_SB_128_BIT_MACS.
-    pub fn method(&self, name: &str) -> String {
-        let n = self.strip.as_deref().and_then(|p| name.strip_prefix(p)).unwrap_or(name);
+    pub(crate) fn method(&self, name: &syn::Ident) -> String {
+        let name = name.to_string();
+        let n = self.strip.as_deref().and_then(|p| name.strip_prefix(p)).unwrap_or(&name);
         let n = n.to_lowercase();
         if n.starts_with(|c: char| c.is_ascii_digit()) {
             format!("_{n}")
@@ -128,25 +131,25 @@ impl CBitmask {
 
 /// c_ioctl!: ioctl numbers, C's #define NAME _IOW(type, nr, arg).
 #[derive(Debug)]
-pub struct CIoctl {
-    pub entries: Vec<CIoctlEntry>,
+pub(crate) struct CIoctl {
+    pub(crate) entries: Vec<CIoctlEntry>,
 }
 
 /// One ioctl: @dir is its _IO*() macro - _IO, _IOR, _IOW or _IOWR - and
-/// @ty and @nr its type and number, as written. @arg is the argument's Rust
-/// type, None for _IO.
+/// @ty and @nr its type and number. @arg is the argument's Rust type, None
+/// for _IO.
 #[derive(Debug)]
-pub struct CIoctlEntry {
-    pub name:  String,
-    pub dir:   String,
-    pub ty:    String,
-    pub nr:    String,
-    pub arg:   Option<String>,
+pub(crate) struct CIoctlEntry {
+    pub(crate) name:  syn::Ident,
+    pub(crate) dir:   syn::Ident,
+    pub(crate) ty:    syn::Expr,
+    pub(crate) nr:    syn::Expr,
+    pub(crate) arg:   Option<syn::Type>,
 }
 
 /// What an enum's values can be.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CEnumKind {
+pub(crate) enum CEnumKind {
     /// Only ever those listed: a Rust enum.
     Closed,
     /// Anything, from outside: a newtype with the values as constants.
@@ -157,7 +160,7 @@ pub enum CEnumKind {
 
 impl CEnumKind {
     /// The attribute that says it: #[closed], #[open], #[flags].
-    pub fn attr(self) -> &'static str {
+    pub(crate) fn attr(self) -> &'static str {
         match self {
             CEnumKind::Closed => "closed",
             CEnumKind::Open   => "open",
@@ -170,40 +173,40 @@ impl CEnumKind {
 /// arguments are bound to the params - `..` the rest - and `concat(A, b)` in the
 /// template is pasted into one identifier.
 #[derive(Debug, Clone)]
-pub struct CFromList {
-    pub list:     syn::Ident,
-    pub params:   Vec<syn::Ident>,
-    pub template: proc_macro2::TokenStream,
+pub(crate) struct CFromList {
+    pub(crate) list:     syn::Ident,
+    pub(crate) params:   Vec<syn::Ident>,
+    pub(crate) template: proc_macro2::TokenStream,
 }
 
 /// An enum, and what its values can be.
 #[derive(Debug, Clone)]
-pub struct CEnumDef {
-    pub kind:     CEnumKind,
-    pub name:     syn::Ident,
+pub(crate) struct CEnumDef {
+    pub(crate) kind:     CEnumKind,
+    pub(crate) name:     syn::Ident,
     /// Its doc comment.
-    pub docs:     Vec<String>,
+    pub(crate) docs:     Vec<String>,
     /// The integer type: u32, i32, u64.
-    pub repr:     syn::Ident,
-    pub variants: Vec<CEnumVariant>,
+    pub(crate) repr:     syn::Ident,
+    pub(crate) variants: Vec<CEnumVariant>,
     /// `LIST(params) => VARIANT [= value]`: variants from lists, each in
     /// place before the written one at its index - expand_enum_list() makes
     /// them, a list at a time.
-    pub from:     Vec<(usize, CFromList)>,
+    pub(crate) from:     Vec<(usize, CFromList)>,
     /// #[own_to_text]: it prints as more than its name - an open or flags
     /// enum #[bch_enum] otherwise gives ToText.
-    pub own_to_text: bool,
+    pub(crate) own_to_text: bool,
     /// #[prefix(P)]: what C's names for its variants start with, Rust's
     /// without it.
-    pub prefix:   Option<String>,
+    pub(crate) prefix:   Option<String>,
     /// #[nr]: NR, past the largest value - a number, not one of its values.
-    pub nr:       bool,
+    pub(crate) nr:       bool,
 }
 
 impl CEnumDef {
     /// What @v prints as: its #[label], or its name - past its #[prefix], if
     /// it has one. Not a flag's, whose names would be its bits'.
-    pub fn label(&self, v: &CEnumVariant) -> Option<String> {
+    pub(crate) fn label(&self, v: &CEnumVariant) -> Option<String> {
         v.label.clone().or_else(|| {
             (self.kind != CEnumKind::Flags).then_some(())?;
             let (p, name) = (self.prefix.as_deref().unwrap_or_default(), v.name.to_string());
@@ -218,18 +221,11 @@ impl CEnumDef {
 /// template pastes into the name - `stripe`, of `concat(BCH_WATERMARK_, name)` - as
 /// C's string tables have it; none, its name.
 #[derive(Debug, Clone)]
-pub struct CEnumVariant {
-    pub name:   syn::Ident,
-    pub value:  Option<syn::Expr>,
-    pub label:  Option<String>,
-    pub docs:   Vec<String>,
-}
-
-#[derive(Debug)]
-pub enum CItem {
-    XMacro(CXMacro),
-    Bitmask(CBitmask),
-    Ioctl(CIoctl),
+pub(crate) struct CEnumVariant {
+    pub(crate) name:   syn::Ident,
+    pub(crate) value:  Option<syn::Expr>,
+    pub(crate) label:  Option<String>,
+    pub(crate) docs:   Vec<String>,
 }
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -243,74 +239,12 @@ const RUST_KEYWORDS: &[&str] = &[
 
 /// A C name as Rust spells it: a keyword gets a _ - type is type_, as
 /// bindgen has it.
-pub fn rust_ident(name: &str) -> String {
+pub(crate) fn rust_ident(name: &str) -> String {
     if RUST_KEYWORDS.contains(&name) {
         format!("{name}_")
     } else {
         name.to_string()
     }
-}
-
-// ---- tokens ------------------------------------------------------------
-
-/// A token, as the text is written from: a word - an identifier, a literal,
-/// a lifetime - or a punctuation character.
-enum Flat {
-    Word(String),
-    Punct(char),
-}
-
-/// syn's tokens as the tokenizer has them: a group its delimiters, a
-/// lifetime one word, a raw identifier without its r#.
-fn flat(ts: &proc_macro2::TokenStream) -> Vec<Flat> {
-    use proc_macro2::{Delimiter, TokenTree};
-    let mut out = Vec::new();
-    let mut it = ts.clone().into_iter().peekable();
-    while let Some(t) = it.next() {
-        match t {
-            TokenTree::Ident(i) => out.push(Flat::Word(i.to_string().trim_start_matches("r#").to_string())),
-            TokenTree::Literal(l) => out.push(Flat::Word(l.to_string())),
-            TokenTree::Punct(p) if p.as_char() == '\'' && matches!(it.peek(), Some(TokenTree::Ident(_))) => {
-                let Some(TokenTree::Ident(i)) = it.next() else { unreachable!() };
-                out.push(Flat::Word(format!("'{i}")));
-            }
-            TokenTree::Punct(p) => out.push(Flat::Punct(p.as_char())),
-            TokenTree::Group(g) => {
-                let delims = match g.delimiter() {
-                    Delimiter::Parenthesis => Some(('(', ')')),
-                    Delimiter::Bracket     => Some(('[', ']')),
-                    Delimiter::Brace       => Some(('{', '}')),
-                    Delimiter::None        => None,
-                };
-                out.extend(delims.map(|(o, _)| Flat::Punct(o)));
-                out.extend(flat(&g.stream()));
-                out.extend(delims.map(|(_, c)| Flat::Punct(c)));
-            }
-        }
-    }
-    out
-}
-
-/// @t's Rust source, as tokens_to_rust() writes it.
-pub fn rust_text(t: &impl quote::ToTokens) -> String {
-    join_flat(&flat(&t.to_token_stream()))
-}
-
-/// A space only between two words: punctuation stays as written, so `<<`
-/// and `->` come back whole - the tokenizer splits them.
-fn join_flat(toks: &[Flat]) -> String {
-    let word = |t: &Flat| matches!(t, Flat::Word(_));
-    let mut out = String::new();
-    for (n, t) in toks.iter().enumerate() {
-        if n > 0 && word(&toks[n - 1]) && word(t) {
-            out.push(' ');
-        }
-        match t {
-            Flat::Word(s) => out.push_str(s),
-            Flat::Punct(ch) => out.push(*ch),
-        }
-    }
-    out
 }
 
 // ---- structs ---------------------------------------------------------------
@@ -355,7 +289,7 @@ fn parse_struct(d: syn::DeriveInput) -> Result<Option<CStructDef>, String> {
 }
 
 /// The width of integer type @ty, in bits.
-pub fn int_bits(ty: &str) -> Option<u32> {
+pub(crate) fn int_bits(ty: &str) -> Option<u32> {
     Some(match ty.trim() {
         "u8" | "i8" => 8,
         "u16" | "i16" => 16,
@@ -365,11 +299,12 @@ pub fn int_bits(ty: &str) -> Option<u32> {
     })
 }
 
-// ---- c_xmacro!, c_bitmask! -------------------------------------------------
+// ---- c_xmacro!, c_bitmask!, c_ioctl! ---------------------------------------
 
 /// c_xmacro!'s body: NAME { (args), ... }
-fn parse_xmacro(m: &syn::Macro) -> Result<CXMacro, String> {
-    m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
+pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<CXMacro, String> {
+    use proc_macro2::{Delimiter, TokenTree};
+    syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         input.call(syn::Attribute::parse_outer)?;
         let name: syn::Ident = input.parse()?;
         let list;
@@ -377,43 +312,39 @@ fn parse_xmacro(m: &syn::Macro) -> Result<CXMacro, String> {
 
         let mut entries = Vec::new();
         while !list.is_empty() {
-            entries.push(if list.peek(syn::token::Paren) {
-                let args;
-                syn::parenthesized!(args in list);
-                args.parse::<proc_macro2::TokenStream>()?;
-                CXEntry::Args
-            } else {
+            entries.push(match list.parse::<TokenTree>()? {
+                TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => CXEntry::Args(g),
                 // SUB(), or SUB((params) => (template))
-                let sub: syn::Ident = list.parse()?;
-                let inner;
-                syn::parenthesized!(inner in list);
-                let map = match inner.is_empty() {
-                    true => None,
-                    false => {
-                        let params;
-                        syn::parenthesized!(params in inner);
-                        let params = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>
-                            ::parse_terminated(&params)?.iter().map(ident).collect();
-                        inner.parse::<syn::Token![=>]>()?;
-                        let template;
-                        syn::parenthesized!(template in inner);
-                        let template = rust_text(&template.parse::<proc_macro2::TokenStream>()?);
-                        Some(CXMap { params, template })
-                    }
-                };
-                CXEntry::Sub { list: ident(&sub), map }
+                TokenTree::Ident(sub) => {
+                    let inner;
+                    syn::parenthesized!(inner in list);
+                    let map = match inner.is_empty() {
+                        true => None,
+                        false => {
+                            let params;
+                            syn::parenthesized!(params in inner);
+                            let params = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>
+                                ::parse_terminated(&params)?.into_iter().collect();
+                            inner.parse::<syn::Token![=>]>()?;
+                            let template;
+                            syn::parenthesized!(template in inner);
+                            Some(CXMap { params, template: template.parse()? })
+                        }
+                    };
+                    CXEntry::Sub { list: sub, map }
+                }
+                t => return Err(syn::Error::new(t.span(), "expected (args) or SUB(..)")),
             });
             if !list.is_empty() {
                 list.parse::<syn::Token![,]>()?;
             }
         }
-        Ok(CXMacro { name: ident(&name), entries })
-    }).map_err(|e| format!("c_xmacro!: an entry is (args), SUB(), or SUB((params) => (args)) - {e}"))
+        Ok(CXMacro { name, entries })
+    }, input).map_err(|e| format!("an entry is (args), SUB(), or SUB((params) => (args)) - {e}"))
 }
 
-/// c_bitmask!'s body: LE64_BITMASK(struct foo, field), strip PREFIX_ { NAME(start, end), ... }
 /// @ts split at its commas - its groups' are their own.
-pub fn split_commas(ts: proc_macro2::TokenStream) -> Vec<proc_macro2::TokenStream> {
+pub(crate) fn split_commas(ts: proc_macro2::TokenStream) -> Vec<proc_macro2::TokenStream> {
     let mut out = vec![proc_macro2::TokenStream::new()];
     for t in ts {
         match &t {
@@ -427,16 +358,12 @@ pub fn split_commas(ts: proc_macro2::TokenStream) -> Vec<proc_macro2::TokenStrea
     out
 }
 
-/// A parse's error, as the parsers' are: a String.
-fn syn_err(what: &str) -> impl Fn(syn::Error) -> String + '_ {
-    move |e| format!("{what}: {e}")
-}
-
-fn parse_bitmask(m: &syn::Macro) -> Result<CBitmask, String> {
-    m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
+/// c_bitmask!'s body: LE64_BITMASK(struct foo, field), strip PREFIX_ { NAME(start, end), ... }
+pub(crate) fn parse_bitmask(input: proc_macro2::TokenStream) -> Result<CBitmask, String> {
+    syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         input.call(syn::Attribute::parse_outer)?;
         let macro_name: syn::Ident = input.parse()?;
-        if !matches!(ident(&macro_name).as_str(), "LE64_BITMASK" | "LE32_BITMASK" | "LE16_BITMASK" | "BITMASK") {
+        if !matches!(macro_name.to_string().as_str(), "LE64_BITMASK" | "LE32_BITMASK" | "LE16_BITMASK" | "BITMASK") {
             return Err(syn::Error::new(macro_name.span(), format!("{macro_name}: not a bitmask macro")));
         }
         let args;
@@ -444,40 +371,54 @@ fn parse_bitmask(m: &syn::Macro) -> Result<CBitmask, String> {
         args.parse::<syn::Token![struct]>()?;
         let ty: syn::Path = args.parse()?;
         args.parse::<syn::Token![,]>()?;
-        let field = rust_text(&args.parse::<proc_macro2::TokenStream>()?);
+
+        // the flags word: a field, or an element of one
+        let word: syn::Expr = args.parse()?;
+        let bad_word = || syn::Error::new_spanned(&word, format!(
+            "{macro_name}: the flags word is a field, or an element of one: flags[0]"));
+        let field = |e: &syn::Expr| match e {
+            syn::Expr::Path(p) => p.path.get_ident().cloned().ok_or_else(bad_word),
+            _ => Err(bad_word()),
+        };
+        let (field, index) = match &word {
+            syn::Expr::Index(i) => match &*i.index {
+                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(n), .. }) => (field(&i.expr)?, Some(n.clone())),
+                _ => return Err(bad_word()),
+            },
+            e => (field(e)?, None),
+        };
 
         // NAME, or NAME<ARG>
         let bad = || syn::Error::new_spanned(&ty, format!(
             "{macro_name}: expected a struct type - struct foo, struct Head<foo> for a family's, or struct \
              foo<STATE> for a family's type in a state"));
         let (n, arg) = match ty.segments.iter().collect::<Vec<_>>().as_slice() {
-            [s] => (ident(&s.ident), match &s.arguments {
+            [s] => (s.ident.clone(), match &s.arguments {
                 syn::PathArguments::None => None,
                 syn::PathArguments::AngleBracketed(a) => match a.args.iter().collect::<Vec<_>>().as_slice() {
-                    [syn::GenericArgument::Type(syn::Type::Path(t))] => Some(t.path.get_ident().map(ident).ok_or_else(bad)?),
+                    [syn::GenericArgument::Type(syn::Type::Path(t))] => Some(t.path.get_ident().cloned().ok_or_else(bad)?),
                     _ => return Err(bad()),
                 },
                 _ => return Err(bad()),
             }),
             _ => return Err(bad()),
         };
-        let (rust_type, c_type) = match (n.as_str(), arg.as_deref()) {
-            (_, None) => (n.clone(), format!("struct {n}")),
+        let (name, head, state) = match arg {
+            None => (n, false, None),
             // a family's C definition, X__head (util/vstructs.rs): its header's
             // fields, which each state's definition derefs to
-            ("Head", Some(f)) => (format!("{f}__head"), format!("struct {f}")),
+            Some(f) if n == "Head" => (f, true, None),
             // a family's type in a state: a #[grown] type's value in place, for
             // its floor's fields - every view of it reaches X<Validated>
-            (_, Some(st @ ("Whole" | "Validated" | "Unvalidated"))) =>
-                (format!("{n}<crate::util::vstructs::{st}>"), format!("struct {n}")),
-            _ => return Err(bad()),
+            Some(st) if st == "Whole" || st == "Validated" || st == "Unvalidated" => (n, false, Some(st)),
+            Some(_) => return Err(bad()),
         };
 
         input.parse::<Option<syn::Token![,]>>()?;
         let strip = match input.peek(syn::Ident) && input.fork().parse::<syn::Ident>()? == "strip" {
             true => {
                 input.parse::<syn::Ident>()?;
-                Some(ident(&input.parse()?))
+                Some(input.parse::<syn::Ident>()?.to_string())
             }
             false => None,
         };
@@ -489,19 +430,20 @@ fn parse_bitmask(m: &syn::Macro) -> Result<CBitmask, String> {
             let name: syn::Ident = list.parse()?;
             let range;
             syn::parenthesized!(range in list);
-            let [start, end] = split_commas(range.parse()?).try_into().map_err(|_|
+            let range = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated(&range)?;
+            let [start, end] = range.into_iter().collect::<Vec<_>>().try_into().map_err(|_|
                 syn::Error::new(name.span(), format!("{name}: expected NAME(start, end)")))?;
-            entries.push(CBitmaskEntry { name: ident(&name), start: rust_text(&start), end: rust_text(&end) });
+            entries.push(CBitmaskEntry { name, start, end });
             list.parse::<Option<syn::Token![,]>>()?;
         }
 
-        Ok(CBitmask { macro_name: ident(&macro_name), c_type, rust_type, field, strip, entries })
-    }).map_err(syn_err("c_bitmask!"))
+        Ok(CBitmask { macro_name, name, head, state, field, index, strip, entries })
+    }, input).map_err(|e| e.to_string())
 }
 
 /// c_ioctl!'s body: NAME = _IOW(type, nr, ARG), ... - _IO without the ARG.
-fn parse_ioctl(m: &syn::Macro) -> Result<CIoctl, String> {
-    let entries = m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
+pub(crate) fn parse_ioctl(input: proc_macro2::TokenStream) -> Result<CIoctl, String> {
+    let entries = syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         let mut entries = Vec::new();
         while !input.is_empty() {
             input.call(syn::Attribute::parse_outer)?;
@@ -512,20 +454,21 @@ fn parse_ioctl(m: &syn::Macro) -> Result<CIoctl, String> {
             syn::parenthesized!(args in input);
             let err = |e: String| syn::Error::new(name.span(), format!("{name}: {e}"));
             let args = split_commas(args.parse()?);
-            let (ty, nr, arg) = match (ident(&dir).as_str(), args.as_slice()) {
-                ("_IO", [ty, nr]) => (rust_text(ty), rust_text(nr), None),
-                ("_IOR" | "_IOW" | "_IOWR", [ty, nr, arg]) => (rust_text(ty), rust_text(nr), Some(rust_text(arg))),
+            let expr = |t: &proc_macro2::TokenStream| syn::parse2::<syn::Expr>(t.clone());
+            let (ty, nr, arg) = match (dir.to_string().as_str(), args.as_slice()) {
+                ("_IO", [ty, nr]) => (expr(ty)?, expr(nr)?, None),
+                ("_IOR" | "_IOW" | "_IOWR", [ty, nr, arg]) => (expr(ty)?, expr(nr)?, Some(syn::parse2(arg.clone())?)),
                 ("_IO", _) => return Err(err("expected _IO(type, nr)".into())),
                 ("_IOR" | "_IOW" | "_IOWR", _) => return Err(err(format!("expected {dir}(type, nr, ARG)"))),
                 _ => return Err(err(format!("{dir} isn't _IO, _IOR, _IOW or _IOWR"))),
             };
-            entries.push(CIoctlEntry { name: ident(&name), dir: ident(&dir), ty, nr, arg });
+            entries.push(CIoctlEntry { name, dir, ty, nr, arg });
             input.parse::<Option<syn::Token![,]>>()?;
         }
         Ok(entries)
-    }).map_err(syn_err("c_ioctl!: an entry is NAME = _IOW(type, nr, ARG)"))?;
+    }, input).map_err(|e| format!("an entry is NAME = _IOW(type, nr, ARG) - {e}"))?;
     if entries.is_empty() {
-        return Err("c_ioctl!: expected NAME = _IOW(type, nr, ARG), ...".into());
+        return Err("expected NAME = _IOW(type, nr, ARG), ...".into());
     }
     Ok(CIoctl { entries })
 }
@@ -533,7 +476,7 @@ fn parse_ioctl(m: &syn::Macro) -> Result<CIoctl, String> {
 /// An enum's head, `#[open|closed|flags] pub enum NAME: REPR`, with no
 /// variants yet; the attributes that aren't
 /// its, and its body.
-pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
+pub(crate) fn parse_enum_head(input: syn::parse::ParseStream<'_>)
         -> syn::Result<(CEnumDef, Vec<syn::Attribute>, proc_macro2::TokenStream)> {
     let mut kind = None;
     let (mut own_to_text, mut prefix, mut nr) = (false, None, false);
@@ -567,7 +510,7 @@ pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
 }
 
 /// @a's text, if it's a doc comment's line.
-pub fn doc_of(a: &syn::Attribute) -> Option<String> {
+pub(crate) fn doc_of(a: &syn::Attribute) -> Option<String> {
     match &a.meta {
         syn::Meta::NameValue(syn::MetaNameValue {
             path, value: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }), ..
@@ -578,7 +521,7 @@ pub fn doc_of(a: &syn::Attribute) -> Option<String> {
 
 /// An enum's variant, `[#[..]] NAME[(Type)] [= value]`: its doc and #[label]
 /// read into its CEnumVariant; its other attributes, and its type.
-pub fn parse_variant(v: proc_macro2::TokenStream)
+pub(crate) fn parse_variant(v: proc_macro2::TokenStream)
         -> syn::Result<(CEnumVariant, Vec<syn::Attribute>, Option<syn::Type>)> {
     let v: syn::Variant = syn::parse2(v)?;
     let (mut label, mut docs, mut others) = (None, Vec::new(), Vec::new());
@@ -600,7 +543,7 @@ pub fn parse_variant(v: proc_macro2::TokenStream)
 
 /// list_enum!'s body: its head, then { A = expr, B, ... },
 /// or `LIST(params) => template` for each of a list's entries.
-pub fn parse_list_enum(input: proc_macro2::TokenStream) -> Result<CEnumDef, String> {
+pub(crate) fn parse_list_enum(input: proc_macro2::TokenStream) -> Result<CEnumDef, String> {
     syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
         let (mut e, _, body) = parse_enum_head(input)?;
         for v in split_commas(body) {
@@ -610,7 +553,7 @@ pub fn parse_list_enum(input: proc_macro2::TokenStream) -> Result<CEnumDef, Stri
             }
         }
         Ok(e)
-    }, input).map_err(syn_err("list_enum!: expected #[open|closed|flags] pub enum NAME: REPR { ... }"))
+    }, input).map_err(|e| format!("expected #[open|closed|flags] pub enum NAME: REPR {{ ... }} - {e}"))
 }
 
 /// @i as the tokenizer has an identifier: a raw one without its r#.
@@ -637,18 +580,6 @@ fn parse_from_list(item: &proc_macro2::TokenStream) -> syn::Result<Option<CFromL
         }
     }
     Ok(Some(CFromList { list: list.clone(), params, template: template.iter().cloned().collect() }))
-}
-
-/// @template, its concat(A, b, ..)s spelled as paste!'s [<A b ..>].
-pub fn paste_concat(template: &str) -> Result<String, String> {
-    let mut out = template.to_string();
-    while let Some(i) = out.find("concat(") {
-        let j = i + out[i..].find(')').ok_or_else(|| format!("an unclosed concat( in the template {template}"))?;
-        let parts: Vec<&str> = out[i + "concat(".len()..j].split(',').map(str::trim).collect();
-        let pasted = format!("[<{}>]", parts.join(" "));
-        out.replace_range(i..=j, &pasted);
-    }
-    Ok(out)
 }
 
 /// What @f's template makes of one entry of its list, @entry: its parameters
@@ -725,7 +656,7 @@ fn from_list_entry(f: &CFromList, entry: &proc_macro2::TokenStream) -> Result<Ve
 /// list_enum! @e's variants from its first list, @entries each one entry's
 /// arguments, in their place: each `NAME [= value]`, a value cast to the
 /// enum's integer type, as a list's can be any integer type.
-pub fn expand_enum_list(e: &mut CEnumDef, entries: &[proc_macro2::TokenStream]) -> Result<(), String> {
+pub(crate) fn expand_enum_list(e: &mut CEnumDef, entries: &[proc_macro2::TokenStream]) -> Result<(), String> {
     use proc_macro2::{Ident, TokenStream, TokenTree};
     if e.from.is_empty() {
         return Ok(());
@@ -781,7 +712,7 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[proc_macro2::TokenStream]) 
 
 /// list_enum! @e, for its next list's callback: its variants, and the lists
 /// not yet expanded in their place.
-pub fn enum_tokens(e: &CEnumDef) -> proc_macro2::TokenStream {
+pub(crate) fn enum_tokens(e: &CEnumDef) -> proc_macro2::TokenStream {
     use quote::{format_ident, quote};
     let kind = format_ident!("{}", e.kind.attr());
     let own_to_text = e.own_to_text.then(|| quote!(#[own_to_text]));
@@ -839,10 +770,10 @@ fn path_names(ty: &syn::Type) -> Option<Vec<String>> {
 /// platform's, which the compiler supplies - its endianness, Native, Little
 /// or Big, and whether it's signed.
 #[derive(Debug, Clone, Copy)]
-pub struct IntType {
-    pub bytes:  Option<u8>,
-    pub endian: &'static str,
-    pub signed: bool,
+pub(crate) struct IntType {
+    pub(crate) bytes:  Option<u8>,
+    pub(crate) endian: &'static str,
+    pub(crate) signed: bool,
 }
 
 /// The integer type @ty is, if it's one TypeInfo reads as an integer: Rust's
@@ -891,7 +822,7 @@ fn int_type(ty: &syn::Type) -> Option<IntType> {
 }
 
 /// A field's Rust type, as #[derive(TypeInfo)] describes it.
-pub enum FieldType<'a> {
+pub(crate) enum FieldType<'a> {
     /// `[elem; n]`
     Array { elem: &'a syn::Type, n: &'a syn::Expr },
     /// A pointer, reference, function or generic: nothing to describe
@@ -902,7 +833,7 @@ pub enum FieldType<'a> {
 }
 
 /// What @ty is, for #[derive(TypeInfo)].
-pub fn field_type(ty: &syn::Type) -> FieldType<'_> {
+pub(crate) fn field_type(ty: &syn::Type) -> FieldType<'_> {
     match ty {
         syn::Type::Array(a) => FieldType::Array { elem: &a.elem, n: &a.len },
         t => match path_names(t) {
@@ -913,7 +844,7 @@ pub fn field_type(ty: &syn::Type) -> FieldType<'_> {
 }
 
 /// E, if @ty is `[E; 0]`: C's flexible array member.
-pub fn flex_elem(ty: &syn::Type) -> Option<&syn::Type> {
+pub(crate) fn flex_elem(ty: &syn::Type) -> Option<&syn::Type> {
     match ty {
         syn::Type::Array(syn::TypeArray {
             elem, len: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(n), .. }), ..
@@ -922,8 +853,17 @@ pub fn flex_elem(ty: &syn::Type) -> Option<&syn::Type> {
     }
 }
 
+/// An integer literal's value, decimal or 0x hex: a discriminant, a bit
+/// number.
+pub(crate) fn int_of(x: &syn::Expr) -> Option<u64> {
+    match x {
+        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(i), .. }) => i.base10_parse().ok(),
+        _ => None,
+    }
+}
+
 /// @ty's T, if it's @name<T> by any path.
-pub fn generic_arg<'a>(ty: &'a syn::Type, name: &str) -> Option<&'a syn::Type> {
+pub(crate) fn generic_arg<'a>(ty: &'a syn::Type, name: &str) -> Option<&'a syn::Type> {
     match generic_args(ty, name)?.as_slice() {
         [syn::GenericArgument::Type(t)] => Some(t),
         _ => None,
@@ -933,20 +873,8 @@ pub fn generic_arg<'a>(ty: &'a syn::Type, name: &str) -> Option<&'a syn::Type> {
 // ---- entry points ----------------------------------------------------------
 
 /// Parse a derive's input: exactly one struct or union.
-pub fn parse_cstruct(item: &proc_macro2::TokenStream) -> Result<CStructDef, String> {
+pub(crate) fn parse_cstruct(item: &proc_macro2::TokenStream) -> Result<CStructDef, String> {
     let expected = "#[derive(CStruct)] is for structs and unions with named fields";
     let d = syn::parse2::<syn::DeriveInput>(item.clone()).map_err(|e| format!("{expected} - {e}"))?;
     parse_struct(d)?.ok_or_else(|| expected.to_string())
-}
-
-/// The item a macro's text is, as its macro: c_xmacro!, c_bitmask! or
-/// c_ioctl!.
-pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
-    let m = syn::parse_str::<syn::Macro>(src).map_err(|e| format!("{src}: {e}"))?;
-    Ok(vec![match m.path.get_ident().map(ident).as_deref() {
-        Some("c_xmacro")  => CItem::XMacro(parse_xmacro(&m)?),
-        Some("c_bitmask") => CItem::Bitmask(parse_bitmask(&m)?),
-        Some("c_ioctl")   => CItem::Ioctl(parse_ioctl(&m)?),
-        _ => return Err(format!("{src}: not one of the macros")),
-    }])
 }

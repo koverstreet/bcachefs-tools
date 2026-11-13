@@ -58,8 +58,8 @@ use quote::{format_ident, quote, ToTokens};
 mod cstruct {
     include!("../../types/cstruct.rs");
 }
-use cstruct::{enum_tokens, expand_enum_list, generic_arg, parse_cstruct, parse_items, parse_list_enum,
-              paste_concat, CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
+use cstruct::{enum_tokens, expand_enum_list, generic_arg, int_of, parse_bitmask, parse_cstruct, parse_ioctl,
+              parse_list_enum, parse_xmacro, split_commas, CEnumDef, CEnumKind, CEnumVariant, CXEntry};
 
 mod args_stored_once;
 mod atomic_bitfield;
@@ -107,11 +107,6 @@ fn expand_syn(what: &str, f: impl FnOnce() -> syn::Result<TokenStream>) -> proc_
     f().unwrap_or_else(|e| syn::Error::new(e.span(), format!("{what}: {e}")).into_compile_error()).into()
 }
 
-/// Rust code a macro made, as tokens: it always parses, or the macro has a bug.
-fn tokens(code: &str) -> TokenStream {
-    code.parse().unwrap()
-}
-
 /// list_enum! @decl through @list - LIST!(__list_enum [decl]) - which calls
 /// __list_enum back with its entries: { [decl] (entry), (entry), ... }.
 fn through_list(list: &Ident, decl: TokenStream) -> TokenStream {
@@ -133,26 +128,6 @@ fn list_callback(input: TokenStream) -> Result<(TokenStream, Vec<TokenStream>), 
         })
         .collect();
     Ok((decl, entries))
-}
-
-/// @text, which must parse as one item of the kind @is_kind accepts: @what
-/// names that kind for the error.
-fn one_item(text: &str, what: &str, is_kind: fn(&CItem) -> bool) -> Result<CItem, String> {
-    let mut items = parse_items(text)?;
-    match items.pop() {
-        Some(item) if items.is_empty() && is_kind(&item) => Ok(item),
-        _ => Err(format!("expected {what}")),
-    }
-}
-
-/// one_item() of kind CItem::$kind, as what it holds - or return the error.
-macro_rules! one_item {
-    ($text:expr, $kind:ident, $what:expr) => {
-        match one_item($text, $what, |i| matches!(i, CItem::$kind(_)))? {
-            CItem::$kind(x) => x,
-            _ => unreachable!(),
-        }
-    };
 }
 
 /// bch_opts' options, a field each: options.rs.
@@ -462,20 +437,18 @@ pub fn whole(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
 fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let args = bitfield_args(attr)?;
     let s = bitfield_struct(item)?;
-    let name = &s.name;
+    let name = &s.item.ident;
     let mut out = TokenStream::new();
-    let ident = format_ident!("{name}");
     // Each member, not padding: its name, setter and updater, type, and
     // visibility
     let members: Vec<_> = s.item.fields.iter()
-        .map(|f| (f.ident.as_ref().expect("named members").to_string(), &f.ty))
+        .map(|f| (f.ident.as_ref().expect("named members").to_string(), f))
         .filter(|(m, _)| !m.starts_with('_'))
-        .map(|(m, ty)| {
-            let vis = s.vis.iter().find(|(n, _)| *n == m).map_or("pub", |(_, v)| v.as_str());
-            (format_ident!("{m}"), format_ident!("set_{m}"), format_ident!("update_{m}"), ty.to_token_stream(),
-             tokens(vis))
-        })
+        .map(|(m, f)| (format_ident!("{m}"), format_ident!("set_{m}"), format_ident!("update_{m}"), &f.ty, &f.vis))
         .collect();
+    // pub(self): its module's, which has the bitfield itself
+    let outside = |vis: &syn::Visibility| !matches!(vis, syn::Visibility::Restricted(r)
+                                                     if r.in_token.is_none() && r.path.is_ident("self"));
 
     // update_x(f): set_x(f(x())), each member's, as visible as its setter -
     // bitfield_struct's, which has the getter and setter but not this.
@@ -485,12 +458,12 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         #[allow(dead_code)]
         #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) { self.#set(f(self.#m())) }
     });
-    out.extend(quote!(impl #ident { #(#update)* }));
+    out.extend(quote!(impl #name { #(#update)* }));
 
     if !s.c_struct {
         // A member of a struct: its getters and setters for that struct -
-        // not pub(self)'s: its module's, which has the bitfield itself
-        let fns = members.iter().filter(|(.., vis)| vis.to_string().replace(' ', "") != "pub(self)")
+        // not pub(self)'s
+        let fns = members.iter().filter(|(.., vis)| outside(vis))
             .map(|(m, set, update, ty, vis)| quote! {
                 #vis fn #m(&self) -> #ty { let b = self.$field; b.#m() }
                 #vis fn #set(&mut self, v: #ty) { let mut b = self.$field; b.#set(v); self.$field = b; }
@@ -498,7 +471,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
                     let mut b = self.$field; b.#set(f(b.#m())); self.$field = b;
                 }
             }).collect::<Vec<_>>();
-        let cell_fns = members.iter().filter(|(.., vis)| vis.to_string().replace(' ', "") != "pub(self)")
+        let cell_fns = members.iter().filter(|(.., vis)| outside(vis))
             .map(|(m, set, update, ty, vis)| quote! {
                 #vis fn #m(&self) -> #ty { self.$field.get().#m() }
                 #vis fn #set(&self, v: #ty) { let mut b = self.$field.get(); b.#set(v); self.$field.set(b); }
@@ -524,7 +497,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         });
     }
 
-    let (storage, rest) = (format_ident!("{}", args.storage), &args.rest);
+    let (storage, rest) = (&args.storage, &args.rest);
     let align8 = args.align8.then(|| quote! {
         , repr = crate::types::Align8U64, from = crate::types::Align8U64::from_u64,
         into = crate::types::Align8U64::to_u64
@@ -532,14 +505,14 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     // What it holds - its repr, else the storage integer - and nothing else:
     // so it's Plain
     let held = if args.align8 {
-        "crate::types::Align8U64".to_string()
+        quote!(crate::types::Align8U64)
     } else {
         rest.iter()
             .find_map(|a| key_value(a).filter(|(k, _)| k == "repr").map(|(_, v)| v))
-            .unwrap_or_else(|| args.storage.clone())
+            .unwrap_or_else(|| storage.to_token_stream())
     };
     let item = &s.item;
-    let (info, plain) = (typeinfo::info(&ident, &ident, "Struct", &[]), vstructs::plain(&ident, &[tokens(&held)]));
+    let (info, plain) = (typeinfo::info(name, name, "Struct", &[]), vstructs::plain(name, &[held]));
     // The struct as tokens, not text: an error in a member points at it
     Ok(quote! {
         #out
@@ -548,7 +521,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         #info
         #plain
         // SAFETY: Plain - its integer, any bytes of which are one
-        unsafe impl ::pin_init::Zeroable for #ident {}
+        unsafe impl ::pin_init::Zeroable for #name {}
     })
 }
 
@@ -602,18 +575,18 @@ fn respan(ts: TokenStream, span: Span) -> TokenStream {
 
 /// #[bitfield]'s arguments: bitfield-struct's, its storage first, and ours.
 struct BitfieldArgs {
-    storage: String,
+    storage: Ident,
     /// The rest of bitfield-struct's
     rest:    Vec<TokenStream>,
     /// `align = 8`: aligned to 8, as a u64 isn't on i386
     align8:  bool,
 }
 
-/// `KEY = VALUE`: KEY, and VALUE as text.
-fn key_value(toks: &TokenStream) -> Option<(String, String)> {
+/// `KEY = VALUE`: KEY, and VALUE.
+fn key_value(toks: &TokenStream) -> Option<(Ident, TokenStream)> {
     match &toks.clone().into_iter().collect::<Vec<_>>()[..] {
         [TokenTree::Ident(k), TokenTree::Punct(eq), v @ ..] if eq.as_char() == '=' && !v.is_empty() =>
-            Some((k.to_string(), v.iter().cloned().collect::<TokenStream>().to_string())),
+            Some((k.clone(), v.iter().cloned().collect())),
         _ => None,
     }
 }
@@ -621,7 +594,7 @@ fn key_value(toks: &TokenStream) -> Option<(String, String)> {
 fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
     let mut rest: Vec<TokenStream> = comma_list(attr).into_iter().map(|a| a.into_iter().collect()).collect();
     let storage = match rest.first().map(|a| a.clone().into_iter().collect::<Vec<_>>()).as_deref() {
-        Some([TokenTree::Ident(s)]) => s.to_string(),
+        Some([TokenTree::Ident(s)]) => s.clone(),
         _ => return Err("expected the storage type first: #[bitfield(uN, ..)]".into()),
     };
     rest.remove(0);
@@ -630,9 +603,10 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
         Some((k, v)) if k == "align" => { align = Some(v); false }
         _ => true,
     });
-    let align8 = match align.as_deref() {
+    let align8 = match align {
         None => false,
-        Some("8") if storage == "u64" => true,
+        Some(n) if storage == "u64" && syn::parse2::<syn::LitInt>(n.clone()).is_ok_and(|n| n.base10_digits() == "8") =>
+            true,
         Some(n) => return Err(format!("align = {n}: there's only align = 8, on u64 storage")),
     };
     Ok(BitfieldArgs { storage, rest, align8 })
@@ -641,18 +615,15 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
 /// A #[bitfield] struct, its attributes that are ours taken out: CStruct and
 /// TypeInfo from its derive - C's struct, and we give the TypeInfo.
 struct BitfieldStruct {
-    name:     String,
     /// The struct, for bitfield-struct: its members canonical
     item:     syn::ItemStruct,
     /// #[derive(CStruct)]: the bitfield is C's struct, not a member of one
     c_struct: bool,
-    /// Each member's name and visibility
-    vis:      Vec<(String, String)>,
 }
 
 fn bitfield_struct(item: TokenStream) -> Result<BitfieldStruct, String> {
     let mut item: syn::ItemStruct = syn::parse2(item).map_err(|e| format!("expected a struct - {e}"))?;
-    let name = item.ident.to_string();
+    let name = item.ident.clone();
     let mut c_struct = false;
     let mut attrs = Vec::new();
     for a in std::mem::take(&mut item.attrs) {
@@ -678,12 +649,10 @@ fn bitfield_struct(item: TokenStream) -> Result<BitfieldStruct, String> {
     let syn::Fields::Named(members) = &mut item.fields else {
         return Err(format!("{name}: expected members, `name: type`"));
     };
-    let mut vis = Vec::new();
     for m in members.named.iter_mut() {
         bitfield_member(m)?;
-        vis.push((m.ident.as_ref().unwrap().to_string(), m.vis.to_token_stream().to_string()));
     }
-    Ok(BitfieldStruct { name, item, c_struct, vis })
+    Ok(BitfieldStruct { item, c_struct })
 }
 
 /// One member: `name: uN` and `name: bool` with their #[bits(N)] and Rust
@@ -702,7 +671,7 @@ fn bitfield_member(m: &mut syn::Field) -> Result<(), String> {
             syn::Type::Path(p) if p.qself.is_none() => p.path.get_ident().cloned(),
             _ => None,
         }.ok_or_else(|| format!("{name}: a member without #[bits(N)] is uN or bool"))?;
-        let (width, rust_ty) = bilge_width(&t.to_string())
+        let (width, rust_ty) = bilge_width(&t)
             .ok_or_else(|| format!("{name}: {t}: a member without #[bits(N)] is uN or bool"))?;
         // the other attributes, then #[bits(N)] with its options
         let opts = bits.map(|i| m.attrs.remove(i)).and_then(|a| match a.meta {
@@ -712,7 +681,7 @@ fn bitfield_member(m: &mut syn::Field) -> Result<(), String> {
         let width = Literal::u32_unsuffixed(width);
         m.attrs.extend(syn::Attribute::parse_outer.parse2(respan(quote!(#[bits(#width #opts)]), t.span()))
             .expect("an attribute"));
-        m.ty = syn::parse2(respan(tokens(&rust_ty), t.span())).expect("a type");
+        m.ty = syn::parse2(respan(quote!(#rust_ty), t.span())).expect("a type");
     }
     if matches!(m.vis, syn::Visibility::Inherited) {
         m.vis = syn::parse2(respan(quote!(pub), name.span())).expect("a visibility");
@@ -723,13 +692,13 @@ fn bitfield_member(m: &mut syn::Field) -> Result<(), String> {
 
 /// A bilge member type's width and the Rust type it's read as: bool, and uN
 /// for N bits as N rounded up to an integer.
-fn bilge_width(t: &str) -> Option<(u32, String)> {
+fn bilge_width(t: &Ident) -> Option<(u32, Ident)> {
     if t == "bool" {
-        return Some((1, t.to_string()));
+        return Some((1, t.clone()));
     }
-    let n: u32 = t.strip_prefix('u')?.parse().ok().filter(|n| (1..=128).contains(n))?;
+    let n: u32 = t.to_string().strip_prefix('u')?.parse().ok().filter(|n| (1..=128).contains(n))?;
     let int = [8, 16, 32, 64, 128].into_iter().find(|w| *w >= n)?;
-    Some((n, format!("u{int}")))
+    Some((n, format_ident!("u{int}")))
 }
 
 /// An x-macro list: c_xmacro! { NAME { (args), ... } }: a macro,
@@ -767,7 +736,7 @@ pub fn xmacro_select(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
         let pre: Vec<TokenTree> = pre.stream().into_iter().collect();
         let (token, cb) = match pre.as_slice() {
             [TokenTree::Ident(token), TokenTree::Punct(eq), TokenTree::Punct(gt), cb @ ..]
-                if eq.as_char() == '=' && gt.as_char() == '>' && !cb.is_empty() => (token.to_string(), cb),
+                if eq.as_char() == '=' && gt.as_char() == '>' && !cb.is_empty() => (token.clone(), cb),
             _ => return Err("expected [TOKEN => cb] before the list".into()),
         };
         let (cb, args) = match cb {
@@ -776,7 +745,7 @@ pub fn xmacro_select(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
         };
         let cb = cb.iter().cloned().collect::<TokenStream>();
 
-        let is_token = |t: &TokenTree| matches!(t, TokenTree::Ident(i) if i.to_string() == token);
+        let is_token = |t: &TokenTree| matches!(t, TokenTree::Ident(i) if *i == token);
         let mut rows = Vec::new();
         for t in input {
             match t {
@@ -802,18 +771,13 @@ pub fn xmacro_select(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
 
 /// c_xmacro!'s expansion: NAME!(cb), which calls cb! with the list's rows.
 fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
-    let text = format!("c_xmacro! {{ {input} }}");
-    let x = one_item!(&text, XMacro, "NAME { (args), ... }");
-    let name = format_ident!("{}", x.name);
-    // The list: the brace group after NAME, past any attributes
-    let list = input.into_iter()
-        .filter_map(|t| match t {
-            TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => Some(g.stream()),
-            _ => None,
-        })
-        .last()
-        .expect("parse_items found the list");
-    let entries: Vec<TokenStream> = comma_list(list).into_iter().map(|e| e.into_iter().collect()).collect();
+    let x = parse_xmacro(input)?;
+    let name = &x.name;
+    // The plain entries from @from to @to: none of them a list spliced in
+    let args = |from: usize, to: usize| x.entries[from..to].iter().map(|e| match e {
+        CXEntry::Args(g) => g,
+        CXEntry::Sub { .. } => unreachable!("taken between the lists spliced in"),
+    });
 
     let mut out = TokenStream::new();
     let subs: Vec<usize> = x.entries.iter().enumerate()
@@ -822,6 +786,7 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
         .collect();
 
     if subs.is_empty() {
+        let entries = args(0, x.entries.len());
         out.extend(quote! {
             #[allow(unused_macros)]
             macro_rules! #name { ($($cb:ident)::+ $([$($pre:tt)*])?) => { $($cb)::+! { $([$($pre)*])? #(#entries),* } } }
@@ -834,42 +799,28 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
     // The plain entries before the first list spliced in, between each and
     // the next, and after the last.
     let lits = |from: usize, to: usize| {
-        let e = &entries[from..to];
+        let e = args(from, to);
         quote!(#(#e,)*)
     };
     let path = quote!(crate::cstructs::c);
     let carry = quote!(($($cb)::+) ($($pre)?));
-    let step = |n: usize| format_ident!("__{}_{n}", x.name);
+    let step = |n: usize| format_ident!("__{name}_{n}");
     for (n, &i) in subs.iter().enumerate() {
         let CXEntry::Sub { map, .. } = &x.entries[i] else { unreachable!() };
         let (pattern, mapped) = match map {
             None => (quote!(($($e:tt)*)), quote!(($($e)*))),
             Some(m) => {
-                let params = m.params.iter().map(|p| format_ident!("{p}"));
-                let pattern = quote!((#($#params:tt),*));
-                // The template: params are $p, and concat(A, p) is paste!'s
-                // [<A $p>] - the mapping is expanded inside paste!.
-                let template = paste_concat(&m.template)?;
-                let not_word = |c: char| !(c.is_ascii_alphanumeric() || c == '_');
-                let arg = |a: &str| -> String {
-                    let mut out = String::new();
-                    for piece in a.split_inclusive(not_word) {
-                        if m.params.iter().any(|p| p == piece.trim_end_matches(not_word)) {
-                            out.push('$');
-                        }
-                        out.push_str(piece);
-                    }
-                    out.trim().to_string()
-                };
-                (pattern, tokens(&format!("({})", template.split(',').map(arg).collect::<Vec<_>>().join(", "))))
+                let params = &m.params;
+                let template = xmacro_template(m.template.clone(), params);
+                (quote!((#($#params:tt),*)), quote!((#template)))
             }
         };
-        let after = lits(i + 1, subs.get(n + 1).copied().unwrap_or(entries.len()));
+        let after = lits(i + 1, subs.get(n + 1).copied().unwrap_or(x.entries.len()));
         let acc = quote!($($acc)* $(#mapped,)* #after);
         let next = match subs.get(n + 1) {
             Some(&j) => {
                 let CXEntry::Sub { list: next_list, .. } = &x.entries[j] else { unreachable!() };
-                let (next_list, next_step) = (format_ident!("{next_list}"), step(n + 1));
+                let next_step = step(n + 1);
                 quote!(#path::#next_list!(#path::#next_step [#carry #acc]);)
             }
             None => quote!($($cb)::+! { $($pre)? #acc }),
@@ -887,7 +838,7 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
     // The callback's [pre] bracketed, as the plain list's: an optional single
     // tt after a path callback is ambiguous with its `::`.
     let CXEntry::Sub { list: first, .. } = &x.entries[subs[0]] else { unreachable!() };
-    let (first, step0, lits0) = (format_ident!("{first}"), step(0), lits(0, subs[0]));
+    let (step0, lits0) = (step(0), lits(0, subs[0]));
     out.extend(quote! {
         #[allow(unused_macros)]
         macro_rules! #name {
@@ -897,6 +848,33 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
         pub(crate) use #name;
     });
     Ok(out)
+}
+
+/// A mapped list's entry, @template: its @params $p, and concat(A, b, ..)
+/// paste!'s [<A b ..>] - the mapping is expanded inside paste!.
+fn xmacro_template(template: TokenStream, params: &[Ident]) -> TokenStream {
+    let t: Vec<TokenTree> = template.into_iter().collect();
+    let mut out = TokenStream::new();
+    let mut k = 0;
+    while k < t.len() {
+        match (&t[k], t.get(k + 1)) {
+            (TokenTree::Ident(c), Some(TokenTree::Group(g))) if c == "concat" && g.delimiter() == Delimiter::Parenthesis => {
+                let parts = split_commas(g.stream()).into_iter().map(|p| xmacro_template(p, params));
+                out.extend(quote!([< #(#parts)* >]));
+                k += 2;
+                continue;
+            }
+            (TokenTree::Ident(i), _) if params.contains(i) => out.extend(quote!($#i)),
+            (TokenTree::Group(g), _) => {
+                let mut inner = Group::new(g.delimiter(), xmacro_template(g.stream(), params));
+                inner.set_span(g.span());
+                out.extend([TokenTree::Group(inner)]);
+            }
+            (t, _) => out.extend([t.clone()]),
+        }
+        k += 1;
+    }
+    out
 }
 
 /// An enum some of whose variants are built from lists - `LIST(params) =>
@@ -1150,7 +1128,7 @@ fn enum_gen(e: &CEnumDef) -> TokenStream {
     let has_zero = e.kind != CEnumKind::Closed || e.variants.iter().enumerate()
         .any(|(i, v)| match &v.value {
             None    => i == 0,
-            Some(x) => enum_decl::int_of(x) == Some(0),
+            Some(x) => int_of(x) == Some(0),
         });
     if has_zero {
         out.extend(quote! {
@@ -1228,18 +1206,18 @@ fn names_gen(e: &CEnumDef, name: &Ident) -> TokenStream {
 #[proc_macro]
 pub fn c_ioctl(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_ioctl!", || {
-        let text = format!("c_ioctl! {{ {input} }}");
-        let io = one_item!(&text, Ioctl, "NAME = _IOW(type, nr, ARG), ...");
+        let io = parse_ioctl(input.into())?;
 
         let mut out = TokenStream::new();
         for e in &io.entries {
-            let (name, dir, ty, nr) = (format_ident!("{}", e.name), format_ident!("{}", e.dir), tokens(&e.ty), tokens(&e.nr));
-            let (arg, opcode) = match e.arg.as_deref().map(tokens) {
-                Some(a) => (a.clone(), quote!(crate::util::ioctl::#dir::<#a>(#ty, #nr))),
+            let (name, dir, ty, nr) = (&e.name, &e.dir, &e.ty, &e.nr);
+            let (arg, opcode) = match &e.arg {
+                Some(a) => (quote!(#a), quote!(crate::util::ioctl::#dir::<#a>(#ty, #nr))),
                 None => (quote!(()), quote!(crate::util::ioctl::_IO(#ty, #nr))),
             };
             // _IOWR -> dir::WR, _IO -> dir::IO
-            let dir_ty = format_ident!("{}", e.dir.strip_prefix("_IO").filter(|d| !d.is_empty()).unwrap_or("IO"));
+            let dir = dir.to_string();
+            let dir_ty = format_ident!("{}", dir.strip_prefix("_IO").filter(|d| !d.is_empty()).unwrap_or("IO"));
             out.extend(quote! {
                 #[allow(non_camel_case_types)]
                 pub struct #name;
@@ -1264,13 +1242,16 @@ pub fn c_bitmask(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
-    let text = format!("c_bitmask! {{ {input} }}");
-    let b = one_item!(&text, Bitmask, "LE64_BITMASK(struct foo, field), strip PREFIX_ { NAME(start, end), ... }");
+    let b = parse_bitmask(input)?;
+    let vs = quote!(crate::util::vstructs);
+    let (name, field) = (&b.name, &b.field);
 
     // An LE*_BITMASK field is a little-endian integer - Le32, Le64 - read and
     // written with get() and set(); a BITMASK one, native.
-    let field = &b.field;
-    let f = tokens(field);
+    let f = match &b.index {
+        Some(i) => quote!(#field[#i]),
+        None => quote!(#field),
+    };
     let (get, set) = if b.macro_name == "BITMASK" {
         (quote!(self.#f as u64), quote!(self.#f = new as _))
     } else {
@@ -1280,15 +1261,22 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
     // The runtime table of them (typeinfo.rs's BitmaskField): this struct
     // field's, as a const named for them - bch_sb_flags_0_BITMASKS - which
     // typeinfo.rs's registry must list, so that a new one can't be left out.
-    let c_struct = b.c_type.trim_start_matches("struct ").trim();
-    let table = format!("{c_struct}_{}_BITMASKS",
-                        field.replace(|c: char| !c.is_alphanumeric(), "_").trim_end_matches('_'));
-    // Each entry's struct as typeinfo names it, its TypeInfo's - a
-    // family's type in a state has it as X<Whole>
-    let info_ty = tokens(&match b.rust_type.split_once('<') {
-        Some((x, _)) => format!("{x}<crate::util::vstructs::Whole>"),
-        None         => b.rust_type.clone(),
-    });
+    // The field is as written, which typeinfo.rs resolves: flags[0]
+    let (table, field_path) = match &b.index {
+        Some(i) => (format!("{name}_{field}_{i}_BITMASKS"), format!("{field}[{i}]")),
+        None => (format!("{name}_{field}_BITMASKS"), field.to_string()),
+    };
+    // The type the accessors are on, and as typeinfo names it, its
+    // TypeInfo's: a family's C definition, X__head; a family's type in a
+    // state, which has it as X<Whole>
+    let (rust_type, info_ty) = match (&b.state, b.head) {
+        (Some(st), _) => (quote!(#name<#vs::#st>), quote!(#name<#vs::Whole>)),
+        (None, true) => {
+            let head = format_ident!("{name}__head");
+            (quote!(#head), quote!(#head))
+        }
+        (None, false) => (quote!(#name), quote!(#name)),
+    };
     let struct_name = quote!(<#info_ty as crate::typeinfo::TypeInfo>::INFO.name);
     let mut table_entries = Vec::new();
 
@@ -1301,16 +1289,16 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
             Some(s) if s.starts_with(|c: char| c.is_ascii_digit()) => s,
             _ => m.as_str(),
         };
-        let (start, end) = (tokens(&e.start), tokens(&e.end));
+        let (start, end) = (&e.start, &e.end);
         table_entries.push(quote! {
-            crate::typeinfo::BitmaskField { struct_name: #struct_name, field: #field, name: #set_m,
+            crate::typeinfo::BitmaskField { struct_name: #struct_name, field: #field_path, name: #set_m,
                                             lo: (#start) as u8, hi: (#end) as u8 }
         });
         // C's LE*_BITMASK() defines NAME_MAX: the largest value it holds
         let (max, get_m) = (format_ident!("{}_MAX", m.to_uppercase()), format_ident!("{m}"));
         let (set_fn, update_fn) = (format_ident!("set_{set_m}"), format_ident!("update_{set_m}"));
         // One bit is a flag: bool, as the accessors on bindgen's structs had it.
-        let one_bit = matches!((e.start.parse::<u32>(), e.end.parse::<u32>()), (Ok(s), Ok(e)) if e == s + 1);
+        let one_bit = matches!((int_of(&e.start), int_of(&e.end)), (Some(s), Some(e)) if e == s + 1);
         let (ty, from, to) = match one_bit {
             true => (quote!(bool), quote!(!= 0), quote!(as u64)),
             false => (quote!(u64), quote!(), quote!()),
@@ -1342,12 +1330,12 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
     // A family's C struct, X__head: its state definitions, which have C's
     // fields inline and no DerefMut to it, get the setters too - the getters
     // they reach through their Deref
-    let state_setters = b.rust_type.strip_suffix("__head").map(|family| {
-        let state_impls = format_ident!("__{family}__state_impls");
+    let state_setters = b.head.then(|| {
+        let state_impls = format_ident!("__{name}__state_impls");
         quote!(#state_impls! { #setters })
     });
 
-    let (rust_type, table_id) = (tokens(&b.rust_type), format_ident!("{table}"));
+    let table_id = format_ident!("{table}");
     let msg = format!("{table}: not in typeinfo.rs's BITMASKS - add it");
     Ok(quote! {
         impl #rust_type { #methods #setters }
