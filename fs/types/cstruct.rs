@@ -224,84 +224,6 @@ pub struct CEnumVariant {
     pub docs:   Vec<String>,
 }
 
-/// One arm of a tagged_union!: its name, payload type, and tag value.
-#[derive(Debug, Clone)]
-pub struct CTaggedArm {
-    pub name:  String,
-    pub ty:    String,
-    pub value: String,
-}
-
-/// tagged_union!: a tagged union with a stable representation, as
-/// cstruct-macros' tagged_union.rs parses its declaration.
-///
-/// The storage is what C has: the tag, then a union of the arms, overlaid
-/// with the pad, if any. @size says what its size is a function of: nothing,
-/// a constant, the pad's; the header's count - the storage another's, a
-/// header its arms embed and run past, and what's generated only the typed
-/// view of it; or the tag - each value as long as the arm its tag selects,
-/// the head the start of every arm.
-#[derive(Debug)]
-pub struct CTaggedUnion {
-    pub name:      String,
-    /// `union NAME in STORAGE`: unsized, over another's storage - see
-    /// storage; else `struct NAME`, its own sized storage, which this
-    /// defines.
-    pub union:     bool,
-    /// `in STORAGE`: the storage is that type, defined elsewhere, and its C
-    /// too; what's generated is the typed view of it.
-    pub storage:   Option<String>,
-    /// The tag's name: its field, and the accessor.
-    pub tag_field: String,
-    pub tag_ty:    String,
-    /// `= TAG_ENUM`: the tag as handed out, a newtype over an integer the
-    /// tag widens to - or empty, the tag as it is.
-    pub tag_enum:  String,
-    /// `tag NAME: enum TYPE`: the tag is a C enum, closed - stored as it,
-    /// the arms' values its variants. Only in memory: no bytes from outside,
-    /// which could hold a value that isn't one.
-    pub tag_is_enum: bool,
-    /// `plain`: every arm is plain data - one not defined here a type of its
-    /// own's, not a #[counted] family's head.
-    pub plain:     bool,
-    pub arms:      Vec<CTaggedArm>,
-    pub pad:       Option<String>,
-    /// `packed`: C's __packed - for a struct, the payload right after the
-    /// tag whatever the arms' alignment, which is what the format says.
-    pub packed:    bool,
-    /// `size: ..`: what its size is a function of.
-    pub size:      CTaggedSize,
-    /// Arm types defined in the block, for nestify::nest!.
-    pub defs:      Vec<CTaggedDef>,
-}
-
-/// What a tagged_union!'s size is a function of, `size: pad|header|arm`:
-/// the rest follows from it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CTaggedSize {
-    /// Nothing - a constant, its pad's: a struct, its own storage, which
-    /// holds every arm, and a value of plain data.
-    Pad,
-    /// Its header's count: a union over another's storage, an unsized
-    /// vstruct, its arms embedding the header and running past it as far as
-    /// the count says - a family (util/vstructs.rs), each state's reference
-    /// to which has its arm's bytes.
-    Header,
-    /// Its tag: the arm the tag selects, whose size it is - a union, its
-    /// storage the head every arm starts with, the tag in it; a value read
-    /// off bytes and written back to them, no C of its own (ArmSized).
-    Arm,
-}
-
-impl CTaggedSize {
-}
-
-/// An arm's type, defined in its tagged_union!'s block.
-#[derive(Debug, Clone)]
-pub struct CTaggedDef {
-    pub name: String,
-}
-
 #[derive(Debug)]
 pub enum CItem {
     XMacro(CXMacro),
@@ -758,39 +680,6 @@ pub fn parse_list_enum(input: proc_macro2::TokenStream) -> Result<CEnumDef, Stri
 /// @i as the tokenizer has an identifier: a raw one without its r#.
 fn ident(i: &syn::Ident) -> String {
     i.to_string().trim_start_matches("r#").to_string()
-}
-
-impl CTaggedUnion {
-    pub fn check(&self) -> Result<(), String> {
-        let tu = self;
-        // a constant size is a struct's, its own storage, which holds its arms; a
-        // header's count or the arm's own size, a union's over another's storage,
-        // the head its arms start with
-        let ok = match tu.size {
-            CTaggedSize::Pad                       => !tu.union && tu.storage.is_none() && tu.pad.is_some(),
-            CTaggedSize::Header | CTaggedSize::Arm => tu.union && tu.storage.is_some() && tu.pad.is_none(),
-        };
-        if !ok {
-            return Err(format!("tagged_union! {}: `struct NAME {{ .., pad: TYPE, size: pad }}` - its \
-                                own storage, which holds its arms, the pad's size - or `union NAME \
-                                in STORAGE {{ .., size: header }}` - over another's storage, whose \
-                                arms run past its header as far as its count says - or `union NAME \
-                                in HEAD {{ .., size: arm }}` - the head every arm starts with, each \
-                                as long as its arm", tu.name));
-        }
-        if (tu.plain || tu.tag_is_enum) && tu.size != CTaggedSize::Pad {
-            return Err(format!("tagged_union! {}: `plain` and `tag NAME: enum TYPE` are for a \
-                                struct's own storage, `size: pad`", tu.name));
-        }
-        if tu.storage.is_some() {
-            if let Some(d) = tu.defs.first() {
-                return Err(format!("tagged_union! {}: {} is defined here, but the storage is \
-                                    another's - `in STORAGE` - and so are its arms' types",
-                                   tu.name, d.name));
-            }
-        }
-        Ok(())
-    }
 }
 
 /// `LIST(params) => template` at @item - a list_enum! variant - if it is one:
