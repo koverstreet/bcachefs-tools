@@ -14,8 +14,6 @@ use std::time::{Duration, Instant};
 
 unsafe extern "C" {
     fn calloc(n: usize, size: usize) -> *mut c_void;
-    fn pthread_self() -> c::pthread_t;
-    fn pthread_join(thread: c::pthread_t, retval: *mut *mut c_void) -> c_int;
 }
 
 const TASK_RUNNING: u32 = c::TASK_RUNNING;
@@ -38,15 +36,7 @@ fn task_new() -> *mut c::task_struct {
     unsafe {
         (*p).state = TASK_RUNNING as c_int;
         (*p).pid = rustix::thread::gettid().as_raw_nonzero().get();
-        /*
-         * kthread_run() fills this in for the threads it starts; without it
-         * stack_trace_save_tsk() returns no frames at all - so dump_stack()
-         * and every backtrace built on it are silently empty on the thread
-         * that runs most of a tools command.
-         */
-        (*p).thread = pthread_self();
         (*p).usage.counter = 1;
-        c::init_completion(&raw mut (*p).exited);
     }
     p
 }
@@ -76,8 +66,7 @@ pub fn need_resched() -> bool {
 }
 
 /// A kthread's: its own task_struct, before anything asks for one.
-#[unsafe(no_mangle)]
-pub extern "C" fn set_current(p: *mut c::task_struct) {
+pub(crate) fn set_current(p: *mut c::task_struct) {
     CURRENT.with(|cur| cur.set(p));
 }
 
@@ -88,7 +77,7 @@ pub extern "C" fn set_current(p: *mut c::task_struct) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __put_task_struct(t: *mut c::task_struct) {
     unsafe {
-        pthread_join((*t).thread, null_mut());
+        super::kthread::task_free(t);
         c::rcu_free_ptr(t.cast());
     }
 }

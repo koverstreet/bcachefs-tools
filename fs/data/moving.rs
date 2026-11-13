@@ -31,7 +31,7 @@ use crate::format::DataType;
 use crate::fs::Fs;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
 use crate::util::refcount::Refcount;
-use crate::util::kthread::Kthread;
+use crate::os::kthread::Kthread;
 use crate::util::task::{waiter, RunQueue};
 use crate::util::sleep::Sleep;
 use crate::types::Fifo;

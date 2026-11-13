@@ -60,7 +60,7 @@ use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::os::file::{file_data, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
 use crate::util::futex::EventCount;
 use crate::os::kernel::current_comm;
-use crate::util::kthread::Kthread;
+use crate::os::kthread::Kthread;
 use crate::util::projections::Volatile;
 use crate::util::sleep::Sleep;
 use core::ops::{Deref, DerefMut};

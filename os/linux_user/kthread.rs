@@ -14,9 +14,9 @@
 //! fanned out and joined are util::par's.
 //!
 //! The thread's closure is in an allocation the Kthread owns, freed once the
-//! thread's stopped - not the thread's to free: stopped before it first ran,
-//! the kernel's kthread() never calls its function. Userspace's does, so the
-//! closure isn't run once the thread's been told to stop, in either build.
+//! thread's stopped - not the thread's to free: as the kernel port's, though
+//! here a thread stopped before it first ran does call its function, so the
+//! closure isn't run once the thread's been told to stop.
 //!
 //! A daemon is kicked when there's work for it - kick(): a count bumped, then
 //! a wake. Its thread, handed its side (KthreadSelf), notes the count before a
@@ -24,9 +24,13 @@
 //! and whatever it's sleeping in, the wake has it recheck. C's daemons kept the
 //! count themselves, next to an RCU pointer to the thread to wake.
 //!
-//! One implementation for both builds, over C's API - userspace's is
-//! linux/kthread.c - through util.c's wrappers.
+//! The kthreads themselves are below: a std thread with the shim's
+//! task_struct, created stopped - in schedule() till woken - to run its
+//! function, then exit, which kthread_stop() joins. C's kthread_create(),
+//! kthread_stop() and kthread_should_stop() are them too, for the C still
+//! calling them.
 
+use super::sched::{get_current, wake_up_process};
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::locking::Locked;
@@ -34,13 +38,14 @@ use crate::util::alloc::{kbox_pin_init, AllocError, KBox};
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, c_void};
+use core::ffi::{c_char, c_int, c_void, CStr};
 use core::fmt;
 use core::mem::{align_of, needs_drop, size_of, ManuallyDrop};
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering, Ordering::SeqCst};
 use pin_init::{pin_data, pin_init, PinInit};
+use std::thread::JoinHandle;
 
 unsafe extern "C" fn run_raw<F: FnOnce()>(data: *mut c_void) -> c_int {
     // SAFETY: create() wrote an F here
@@ -79,14 +84,14 @@ impl Drop for KthreadTask {
 pub struct KthreadRef(KthreadTask);
 
 impl KthreadRef {
-    /// Created stopped, to run @f once it's woken - or, in userspace, once
-    /// it's stopped, if it's stopped first: @f checks Kthread::should_stop().
+    /// Created stopped, to run @f once it's woken - or once it's stopped, if
+    /// it's stopped first: @f checks Kthread::should_stop().
     ///
     /// # Safety
     /// What @f uses lives until it returns, or the thread's stopped.
     pub unsafe fn create<F: FnOnce() + Send>(name: fmt::Arguments<'_>, f: F) -> Result<Self, BchError> {
-        // the data pointer: in-kernel, a thread stopped before it ran never
-        // calls @f, so it mustn't need dropping
+        // the data pointer, as the kernel port's: there, a thread stopped
+        // before it ran never calls @f, so it mustn't need dropping
         const {
             assert!(size_of::<F>() <= size_of::<*mut c_void>()
                     && align_of::<F>() <= align_of::<*mut c_void>()
@@ -100,7 +105,7 @@ impl KthreadRef {
         write!(name_buf, "{name}");
 
         let task = unsafe {
-            c::bch2_kthread_create(Some(run_raw::<F>), data, name_buf.as_c_str().as_ptr().cast())
+            kthread_create_name(Some(run_raw::<F>), data, name_buf.as_c_str().as_ptr().cast())
         };
         let task = errptr_to_result(NonNull::new(task).expect("kthread_create() gives a task or an error"))?;
         // so it can be stopped after it's exited
@@ -110,13 +115,13 @@ impl KthreadRef {
 
     /// Start it, or wake it from a sleep: wake_up_process().
     pub fn wake(&self) {
-        unsafe { c::wake_up_process(self.0.as_ptr()) };
+        unsafe { wake_up_process(self.0.as_ptr()) };
     }
 
     /// Tell it to stop, and wait for it to: never from the thread itself. It
     /// may have returned already, or never have run.
     pub fn stop(self) {
-        unsafe { c::kthread_stop(self.0.as_ptr()) };
+        unsafe { kthread_stop(self.0.as_ptr()) };
     }
 }
 
@@ -209,42 +214,19 @@ impl Kthread {
     /// Whether the current thread is a kthread told to stop:
     /// kthread_should_stop() - false on a thread that isn't one.
     pub fn should_stop() -> bool {
-        // SAFETY: plain; it checks PF_KTHREAD first
-        unsafe { c::bch2_kthread_should_stop() }
+        let flags = unsafe { (*get_current()).flags };
+        flags & c::PF_KTHREAD != 0 && kthread_should_stop()
     }
 
-    /// Make the current kthread one the freezer stops, as set_freezable():
-    /// it's frozen in place in a freezable sleep (Sleep::freezable()), so
-    /// every long sleep it does must be one, or it holds up suspend.
-    /// Userspace has no freezer.
-    pub fn set_freezable() {
-        // SAFETY: of the current task
-        #[cfg(kernel)]
-        let _ = unsafe { c::set_freezable() };
-    }
+    /// The kernel port's: there's no freezer here.
+    pub fn set_freezable() {}
 
-    /// Whether the freezer wants the current thread: freezing(current). A
-    /// freezable kthread that can go a long while without a freezable sleep
-    /// - copygc, when there's always more to move - checks between pieces of
-    /// work, and stops to try_to_freeze().
     pub fn freezing() -> bool {
-        // SAFETY: of the current task
-        #[cfg(kernel)]
-        let f = unsafe { c::freezing(crate::os::sched::current()) };
-        #[cfg(not(kernel))]
-        let f = false;
-        f
+        false
     }
 
-    /// Freeze here, if the freezer wants us, until thawed: try_to_freeze().
-    /// Whether it froze. With no locks held - they'd stay held till the thaw.
     pub fn try_to_freeze() -> bool {
-        // SAFETY: of the current task
-        #[cfg(kernel)]
-        let f = unsafe { c::try_to_freeze() };
-        #[cfg(not(kernel))]
-        let f = false;
-        f
+        false
     }
 }
 
@@ -322,4 +304,133 @@ impl Daemon {
     pub fn task(&self) -> Option<KthreadTask> {
         self.thread.lock().as_ref().map(Kthread::task)
     }
+}
+
+// ── The kthreads: a std thread and the shim's task_struct ──────────────────
+
+const KTHREAD_SHOULD_STOP: u32 = 1;
+
+unsafe extern "C" {
+    fn calloc(n: usize, size: usize) -> *mut c_void;
+}
+
+/// What a thread's tested and set atomically: kthread_flags.
+fn kthread_flags<'a>(p: *mut c::task_struct) -> &'a AtomicUsize {
+    unsafe { AtomicUsize::from_ptr((&raw mut (*p).kthread_flags).cast()) }
+}
+
+/// A kthread's task_struct, and its thread: joined by kthread_stop(), or
+/// detached when the task's freed.
+#[repr(C)]
+struct KthreadStruct {
+    task:   c::task_struct,
+    thread: Option<JoinHandle<()>>,
+}
+
+fn to_kthread(p: *mut c::task_struct) -> *mut KthreadStruct {
+    p.cast()
+}
+
+/// @p's last ref is put: a kthread's thread, unless it's been joined, is
+/// detached.
+pub(super) unsafe fn task_free(p: *mut c::task_struct) {
+    unsafe {
+        if (*p).flags & c::PF_KTHREAD != 0 {
+            drop((*to_kthread(p)).thread.take());
+        }
+    }
+}
+
+struct Task(*mut c::task_struct);
+
+unsafe impl Send for Task {}
+
+fn kthread_start_fn(p: Task) {
+    let p = p.0;
+    unsafe {
+        super::sched::set_current(p);
+        c::linux_thread_init();
+        c::schedule();
+        (*p).thread_fn.expect("a kthread's function")((*p).thread_data);
+
+        c::put_task_struct(p);
+        c::linux_thread_exit();
+    }
+}
+
+/// kthread_create(), the name formatted: created stopped - wake_up_process()
+/// starts it. Its task_struct, or ERR_PTR(-errno).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kthread_create_name(thread_fn: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
+                                             thread_data: *mut c_void,
+                                             name: *const c_char) -> *mut c::task_struct {
+    let k = unsafe { calloc(1, size_of::<KthreadStruct>()) }.cast::<KthreadStruct>();
+    if k.is_null() {
+        return (-(c::ENOMEM as isize)) as *mut c::task_struct;
+    }
+    let p = unsafe { &raw mut (*k).task };
+
+    let name = unsafe { CStr::from_ptr(name) };
+    unsafe {
+        (&raw mut (*k).thread).write(None);
+
+        let comm = &mut (*p).comm;
+        let len = comm.len() - 1;
+        for (d, &s) in comm[..len].iter_mut().zip(name.to_bytes()) {
+            *d = s as c_char;
+        }
+
+        (*p).flags       |= c::PF_KTHREAD;
+        (*p).thread_fn    = thread_fn;
+        (*p).thread_data  = thread_data;
+        (*p).state        = c::TASK_UNINTERRUPTIBLE as c_int;
+        (*p).signal       = &raw mut (*p)._signal;
+        (*p).usage.counter = 1;
+        c::init_rwsem(&raw mut (*p)._signal.exec_update_lock);
+    }
+
+    let mut ret = 0;
+    for _ in 0..10 {
+        let task = Task(p);
+        match std::thread::Builder::new()
+            .name(name.to_string_lossy().into_owned())
+            .stack_size(256 << 10)
+            .spawn(move || kthread_start_fn(task))
+        {
+            Ok(t) => {
+                unsafe { (*k).thread = Some(t) };
+                return p;
+            }
+            Err(e) => ret = e.raw_os_error().unwrap_or(c::ENOMEM as i32),
+        }
+
+        unsafe { c::run_shrinkers(c::GFP_KERNEL, true) };
+    }
+    (-(ret as isize)) as *mut c::task_struct
+}
+
+/// Whether this kthread should return now: someone's called kthread_stop()
+/// on it, which waits for it to.
+#[unsafe(no_mangle)]
+pub extern "C" fn kthread_should_stop() -> bool {
+    let p = get_current();
+    kthread_flags(p).load(SeqCst) & (1 << KTHREAD_SHOULD_STOP) != 0
+}
+
+/// Set kthread_should_stop() for @p, wake it, and wait for it to exit. It
+/// may never have been woken: it runs its function, then exits.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kthread_stop(p: *mut c::task_struct) -> c_int {
+    unsafe {
+        c::get_task_struct(p);
+
+        kthread_flags(p).fetch_or(1 << KTHREAD_SHOULD_STOP, SeqCst);
+        wake_up_process(p);
+        if let Some(thread) = (*to_kthread(p)).thread.take() {
+            let _ = thread.join();
+        }
+
+        c::put_task_struct(p);
+    }
+    0
 }

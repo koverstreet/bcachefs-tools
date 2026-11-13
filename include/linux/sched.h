@@ -5,7 +5,6 @@
 #include <time.h>
 #include <linux/atomic.h>
 #include <linux/bug.h>
-#include <linux/completion.h>
 #include <linux/jiffies.h>
 #include <linux/rwsem.h>
 #include <linux/time64.h>
@@ -74,8 +73,6 @@
 #define PF_FREEZER_SKIP	0x40000000	/* Freezer should not count it as freezable */
 
 struct task_struct {
-	pthread_t		thread;
-
 	int			(*thread_fn)(void *);
 	void			*thread_data;
 
@@ -86,7 +83,6 @@ struct task_struct {
 
 	/* kthread: */
 	unsigned long		kthread_flags;
-	struct completion	exited;
 
 	unsigned		flags;
 
@@ -111,7 +107,6 @@ struct task_struct {
 /* os/linux_user/sched.rs */
 struct task_struct *get_current(void);
 #define current get_current()
-void set_current(struct task_struct *);
 
 void linux_thread_init(void);
 void linux_thread_exit(void);

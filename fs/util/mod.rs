@@ -15,7 +15,6 @@ pub mod ioctl;
 pub mod jump_label;
 pub mod kmem_cache;
 pub mod kobject;
-pub mod kthread;
 pub mod late;
 pub mod log;
 pub mod maybe_rcu_alloc;

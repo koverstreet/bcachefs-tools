@@ -31,7 +31,7 @@ struct bt_request {
 	unsigned int	size;
 	unsigned int	skipnr;
 	unsigned int	nr_captured;
-	pthread_t	target;
+	pid_t		target;
 	volatile int	done;
 };
 
@@ -41,7 +41,7 @@ static struct bt_request *volatile bt_in_flight;
 static void bt_signal_handler(int sig)
 {
 	struct bt_request *r = bt_in_flight;
-	if (!r || !pthread_equal(pthread_self(), r->target))
+	if (!r || gettid() != r->target)
 		return;
 
 	unw_context_t uc;
@@ -99,12 +99,12 @@ unsigned int stack_trace_save_tsk(struct task_struct *task,
 				  unsigned int size,
 				  unsigned int skipnr)
 {
-	if (!task || !task->thread || !size)
+	if (!task || !task->pid || !size)
 		return 0;
 
 	bt_install_handler_once();
 
-	if (pthread_equal(pthread_self(), task->thread)) {
+	if (gettid() == task->pid) {
 		/* Self-unwind: no signal needed, just walk our own stack. */
 		unw_context_t uc;
 		unw_cursor_t cursor;
@@ -134,11 +134,11 @@ unsigned int stack_trace_save_tsk(struct task_struct *task,
 		.store	= store,
 		.size	= size,
 		.skipnr	= skipnr,
-		.target	= task->thread,
+		.target	= task->pid,
 	};
 	bt_in_flight = &r;
 
-	if (pthread_kill(task->thread, BT_SIGNAL) == 0) {
+	if (tgkill(getpid(), task->pid, BT_SIGNAL) == 0) {
 		while (!__atomic_load_n(&r.done, __ATOMIC_ACQUIRE))
 			sched_yield();
 	}

@@ -90,7 +90,7 @@ pub use r#box::{exclusive_size, spawn_detached, spawn_static, Exclusive, Join, S
 
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::kthread::{Kthread, KthreadRef};
+use crate::os::kthread::{Kthread, KthreadRef};
 use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::workqueue::{Queue, RawWork};

@@ -5,6 +5,7 @@
 pub mod file;
 #[path = "../linux_kernel/kernel.rs"]
 pub mod kernel;
+pub mod kthread;
 pub mod sched;
 #[path = "../linux_kernel/ops.rs"]
 pub mod ops;

@@ -9,7 +9,7 @@ use crate::data::reconcile::work::Status;
 use crate::locking::{Locked, SeqLock};
 use crate::new_lock;
 use crate::data::reconcile::work::StripesPending;
-use crate::util::kthread::Daemon;
+use crate::os::kthread::Daemon;
 use core::sync::atomic::{AtomicBool, AtomicI32};
 use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo};
 use pin_init::pin_data;

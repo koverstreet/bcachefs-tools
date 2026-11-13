@@ -6,6 +6,7 @@ pub mod fs_type;
 pub mod ioctl;
 pub mod iov_iter;
 pub mod kernel;
+pub mod kthread;
 pub mod ops;
 pub mod sched;
 pub mod seq_file;

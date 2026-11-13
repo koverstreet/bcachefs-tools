@@ -26,7 +26,7 @@ use crate::locking::{ExclusiveGuard, Locked, LockedBy};
 use core::cell::Cell;
 use crate::util::bio::BioSet;
 use crate::util::futex::EventCount;
-use crate::util::kthread::Daemon;
+use crate::os::kthread::Daemon;
 use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;

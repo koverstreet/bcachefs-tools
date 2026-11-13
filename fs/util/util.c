@@ -220,7 +220,7 @@ struct workqueue_struct *bch2_alloc_workqueue(const char *name, unsigned flags, 
 	return alloc_workqueue("%s", flags, max_active, name);
 }
 
-/* For util/kthread.rs: kthread_create() is a macro in the kernel, a function in userspace */
+/* For os/linux_kernel/kthread.rs: kthread_create() is a macro */
 struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name)
 {
 	return kthread_create(fn, data, "%s", name);

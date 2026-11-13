@@ -6,7 +6,7 @@
 //! returns. A job's name is its kthread's, seen in ps - a thread's cost
 //! each - or its worker's description while it runs, in workqueue dumps and
 //! backtraces, a workqueue's workers being lighter. For a long-lived thread
-//! of one's own, a daemon, there's util::kthread.
+//! of one's own, a daemon, there's os::kthread.
 //!
 //! The jobs the scope's body spawns are made, not started, until it returns:
 //! then they're started together - if it succeeded. If it didn't, none of
@@ -39,7 +39,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::KVVec;
 use crate::util::gather::{Gather, GatherRef};
-use crate::util::kthread::Kthread;
+use crate::os::kthread::Kthread;
 use crate::util::task::{waiter, Spawn, TaskBox, TaskSlot};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;

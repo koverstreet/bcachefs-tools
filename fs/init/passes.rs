@@ -164,7 +164,7 @@ use crate::types::{Le32, Le64};
 use crate::data_structures::bitmap::LeBitmap;
 use crate::util::names;
 use crate::os::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
-use crate::util::kthread::Kthread;
+use crate::os::kthread::Kthread;
 use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
 use crate::util::projections::AtomicWord;
 use crate::util::vstructs::{Head, Validated, Unvalidated};
