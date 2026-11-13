@@ -637,11 +637,13 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         Ok(())
     }
 
-    /// Past three quarters of what fits(), a rehash now.
+    /// Past three quarters of what fits(), a rehash now - or for two ways,
+    /// whose fits() is near what they can hold at all, past 40% full.
     pub(super) fn grow_early(&self) -> Result<(), AllocError> {
         let roomy = |bits| {
             let nr = self.nr.load(Relaxed);
-            fits::<W>(bits, nr + nr / 3, &self.faults)
+            let spare = if W == 2 { nr / 8 } else { nr / 3 };
+            fits::<W>(bits, nr + spare, &self.faults)
         };
         // most often there's room: seen without the lock, which every caller
         // would otherwise take

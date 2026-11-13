@@ -413,7 +413,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         self.put(item, false, true).expect("a nofail insert failed to allocate").map_or(Ok(()), Err)
     }
 
-    /// Past three quarters full, a rehash now: for a caller that can block,
+    /// Nearly full, a rehash now: for a caller that can block,
     /// ahead of inserts that may not - an insert that finds its table full
     /// grows it, under whatever locks it holds. Fails, the table unchanged,
     /// only if it can't allocate.
