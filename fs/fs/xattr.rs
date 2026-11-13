@@ -364,7 +364,6 @@ mod vfs {
     use crate::format::MetadataVersion;
     use crate::format::BkeyType;
     use core::ffi::{c_int, c_void, CStr};
-    use cstruct_macros::c_export;
     use crate::btree::bkey::pos;
     use crate::btree::iter::{lockrestart_do, CommitFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
@@ -787,15 +786,16 @@ mod vfs {
     };
 
     /// The VFS's: sb->s_xattr.
-    #[c_export]
-    pub static bch2_xattr_handlers: [*const c::xattr_handler; 6] = [
-        core::ptr::addr_of!(USER_HANDLER).cast(),
-        core::ptr::addr_of!(TRUSTED_HANDLER).cast(),
-        core::ptr::addr_of!(SECURITY_HANDLER).cast(),
-        core::ptr::addr_of!(BCACHEFS_HANDLER).cast(),
-        core::ptr::addr_of!(BCACHEFS_EFFECTIVE_HANDLER).cast(),
-        core::ptr::null(),
-    ];
+    pub static XATTR_HANDLERS: CStatic<[*const c::xattr_handler; 6]> = unsafe {
+        CStatic::new([
+            core::ptr::addr_of!(USER_HANDLER).cast(),
+            core::ptr::addr_of!(TRUSTED_HANDLER).cast(),
+            core::ptr::addr_of!(SECURITY_HANDLER).cast(),
+            core::ptr::addr_of!(BCACHEFS_HANDLER).cast(),
+            core::ptr::addr_of!(BCACHEFS_EFFECTIVE_HANDLER).cast(),
+            core::ptr::null(),
+        ])
+    };
 
     /// What an xattr of @ty lists under for @dentry's caller - None if it
     /// doesn't: the handler's prefix, or its name for a POSIX ACL's. As

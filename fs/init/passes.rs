@@ -164,7 +164,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::locking::ExclusiveGuard;
 use crate::sb::io::{SbFieldOps, SbWrite};
 use crate::snapshots::subvolume;
-use crate::types::{Le32, Le64};
+use crate::types::{CStatic, Le32, Le64};
 use crate::data_structures::bitmap::LeBitmap;
 use crate::util::names;
 use crate::util::ffi::c_char;
@@ -179,7 +179,6 @@ use crate::util::{DateTime, Nsecs, Printbuf};
 use crate::{bch_err, bch_info, here, inode, message, prt};
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU32, Ordering};
-use cstruct_macros::c_export;
 
 pub use crate::cstructs::init_passes_format::{PassFlags, RecoveryPass, RecoveryPassStable};
 
@@ -221,10 +220,9 @@ const TO_STABLE: [u8; NR] = {
     t
 };
 
-/// The names, as C's option parsing and printing has them.
-#[c_export]
-#[c("const char * const bch2_recovery_passes[]")]
-pub static bch2_recovery_passes: [*const c_char; names::c_table_len::<Pass>()] = crate::c_names_table!(Pass);
+/// The names, as a NULL-terminated table: for prt_bitflags().
+pub static RECOVERY_PASS_NAMES: CStatic<[*const c_char; names::c_table_len::<Pass>()]> =
+    unsafe { CStatic::new(crate::c_names_table!(Pass)) };
 
 // a mask of passes is a u64
 const _: () = assert!(NR <= 64);

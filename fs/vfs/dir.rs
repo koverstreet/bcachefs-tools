@@ -26,7 +26,7 @@
 //! The 32-bit readdir puts its own dir_context, Readdir32's, in front of the
 //! VFS's: the actor, emit32(), translates each entry and hands it on.
 //!
-//! Dir's FileOps are the directory file_operations, bch2_dir_file_ops;
+//! Dir's FileOps are the directory file_operations, DIR_FILE_OPS;
 //! fsync is still C's.
 
 use core::ffi::{c_int, c_uint};
@@ -41,7 +41,8 @@ use crate::str_hash;
 use crate::util::alloc::{flags, KBox};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::file::{File, FileOps, FileVTable, UserBuf};
-use cstruct_macros::{c_export, vtable};
+use crate::types::CStatic;
+use cstruct_macros::vtable;
 
 use super::io::fsync;
 use super::inode::InodeInfo;
@@ -219,10 +220,11 @@ impl FileOps for Dir {
     }
 }
 
-#[c_export]
-pub static bch2_dir_file_ops: c::file_operations = {
-    let mut ops = FileVTable::<Dir>::OPS;
-    // As a regular file's (file.rs): no module reference by each open
-    ops.owner = core::ptr::null_mut();
-    ops
+pub static DIR_FILE_OPS: CStatic<c::file_operations> = unsafe {
+    CStatic::new({
+        let mut ops = FileVTable::<Dir>::OPS;
+        // As a regular file's (file.rs): no module reference by each open
+        ops.owner = core::ptr::null_mut();
+        ops
+    })
 };

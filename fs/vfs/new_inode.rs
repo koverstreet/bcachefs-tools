@@ -113,15 +113,15 @@ impl NewInode {
         // SAFETY: C's, initialized at build time
         self.v.set_aops(&INODE_AOPS);
         match self.v.mode() as u32 & c::S_IFMT {
-            c::S_IFREG => self.v.set_ops(&super::inode_ops::bch2_file_inode_ops, Some(&super::file::bch2_file_ops)),
-            c::S_IFDIR => self.v.set_ops(&super::inode_ops::bch2_dir_inode_ops, Some(&super::dir::bch2_dir_file_ops)),
+            c::S_IFREG => self.v.set_ops(&super::inode_ops::FILE_INODE_OPS, Some(&*super::file::FILE_OPS)),
+            c::S_IFDIR => self.v.set_ops(&super::inode_ops::DIR_INODE_OPS, Some(&*super::dir::DIR_FILE_OPS)),
             c::S_IFLNK => {
                 self.v.nohighmem();
-                self.v.set_ops(&super::inode_ops::bch2_symlink_inode_ops, None);
+                self.v.set_ops(&super::inode_ops::SYMLINK_INODE_OPS, None);
             }
             _ => {
                 self.v.init_special();
-                self.v.set_ops(&super::inode_ops::bch2_special_inode_ops, None);
+                self.v.set_ops(&super::inode_ops::SPECIAL_INODE_OPS, None);
             }
         }
         self.v.set_folio_min_size(block_bytes as usize);

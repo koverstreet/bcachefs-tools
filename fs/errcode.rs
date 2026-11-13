@@ -710,8 +710,6 @@ pub mod status {
     }
 }
 
-// blk_status_t: a u8, which errcode_gen.h can name before blk_types.h has
-#[c_export]
 pub fn blk_status_to_bch_err(err: u8) -> c::bch_errcode {
     macro_rules! statuses {
         ($(($n:ident, $nr:tt)),* $(,)?) => { ::paste::paste! {

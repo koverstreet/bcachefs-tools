@@ -20,7 +20,7 @@ use crate::util::ffi::{c_char, opt_bytes_mut};
 use crate::util::file::File;
 use crate::util::ops::IntoRaw;
 use crate::xattr;
-use cstruct_macros::{c_export, vtable};
+use cstruct_macros::vtable;
 
 use super::dentry::Dentry;
 use super::idmap::MntIdmap;
@@ -139,11 +139,7 @@ impl InodeOps for SymlinkOps {
 impl InodeOps for SpecialOps {}
 
 // i_op, as NewInode::init() sets it:
-#[c_export]
-pub static bch2_dir_inode_ops: c::inode_operations = InodeVTable::<DirOps>::OPS;
-#[c_export]
-pub static bch2_file_inode_ops: c::inode_operations = InodeVTable::<FileInodeOps>::OPS;
-#[c_export]
-pub static bch2_symlink_inode_ops: c::inode_operations = InodeVTable::<SymlinkOps>::OPS;
-#[c_export]
-pub static bch2_special_inode_ops: c::inode_operations = InodeVTable::<SpecialOps>::OPS;
+pub static DIR_INODE_OPS: c::inode_operations = InodeVTable::<DirOps>::OPS;
+pub static FILE_INODE_OPS: c::inode_operations = InodeVTable::<FileInodeOps>::OPS;
+pub static SYMLINK_INODE_OPS: c::inode_operations = InodeVTable::<SymlinkOps>::OPS;
+pub static SPECIAL_INODE_OPS: c::inode_operations = InodeVTable::<SpecialOps>::OPS;

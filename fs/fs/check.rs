@@ -875,7 +875,7 @@ pub mod ioctl {
     use core::sync::atomic::Ordering::{Relaxed, Release};
     use crate::fs::{OpenFs, RoRef};
     use crate::init::registry::{self, Claim, FsHandle, Opener};
-    use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes, PassFlags};
+    use crate::init::passes::{RECOVERY_PASS_NAMES, passes_match, run_passes, PassFlags};
     use crate::opts::parse_mount_opts_cstr;
     use crate::util::kernel::{capable, Capability};
     use crate::util::place::Contained;
@@ -999,7 +999,7 @@ pub mod ioctl {
             if passes & online != passes {
                 prt!(&mut buf, "Cannot run passes ");
                 // SAFETY: NULL terminated
-                unsafe { buf.prt_bitflags(bch2_recovery_passes.as_ptr().cast(), passes & !online) };
+                unsafe { buf.prt_bitflags(RECOVERY_PASS_NAMES.as_ptr().cast(), passes & !online) };
                 prt!(&mut buf, " online\n");
                 let _ = stdio.write(false, buf.as_bytes());
                 return -fs.err(bch_errcode::BCH_ERR_EINVAL_fsck_online_bad_passes).raw();

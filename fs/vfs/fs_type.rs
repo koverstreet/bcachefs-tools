@@ -224,7 +224,7 @@ impl Bcachefs {
             sb.set_quotactl(&crate::quota::QUOTACTL_OPS,
                             c::QTYPE_MASK_USR | c::QTYPE_MASK_GRP | c::QTYPE_MASK_PRJ);
             // SAFETY: a static table of static handlers, NULL-terminated
-            unsafe { sb.set_xattr_handlers(&crate::xattr::bch2_xattr_handlers) };
+            unsafe { sb.set_xattr_handlers(&*crate::xattr::XATTR_HANDLERS) };
             sb.set_magic(c::BCACHEFS_STATFS_MAGIC as _);
 
             let units = fs.sb.time_units_per_sec.get() as i64;

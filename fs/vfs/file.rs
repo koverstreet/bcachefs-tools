@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A regular file as an open file: its file_operations, bch2_file_ops, and
+//! A regular file as an open file: its file_operations, FILE_OPS, and
 //! the ops of its mappings.
 //!
 //! A regular file has no private data: its state is its inode's, so its ops
@@ -79,7 +79,7 @@ use crate::util::kernel::{current_id, PAGE_SIZE};
 use crate::util::vm::{VmFault, VmFaultRet, VmOps, VmVTable};
 use core::cmp::{max, min};
 use kernel::page::PAGE_SHIFT;
-use cstruct_macros::{c_export, vtable};
+use cstruct_macros::vtable;
 
 use super::direct::bch2_read_iter;
 use super::inode::InodeInfo;
@@ -299,20 +299,21 @@ unsafe extern "C" fn open(vinode: *mut c::inode, file: *mut c::file) -> c_int {
 }
 
 /// i_fop, as NewInode::init() sets it for a regular file.
-#[c_export]
-pub static bch2_file_ops: c::file_operations = {
-    let mut ops = FileVTable::<InodeFile>::OPS;
-    // No module reference taken by each open, as FileVTable has it: the
-    // mount holds one, and an open of a regular file is hot
-    ops.owner            = core::ptr::null_mut();
-    ops.open             = Some(open);
-    ops.read_iter        = Some(bch2_read_iter);
-    ops.write_iter       = Some(bch2_write_iter);
-    #[cfg(CONFIG_TRANSPARENT_HUGEPAGE)]
-    {
-        ops.get_unmapped_area = Some(c::thp_get_unmapped_area);
-    }
-    ops.splice_read      = Some(c::filemap_splice_read);
-    ops.splice_write     = Some(c::iter_file_splice_write);
-    ops
+pub static FILE_OPS: CStatic<c::file_operations> = unsafe {
+    CStatic::new({
+        let mut ops = FileVTable::<InodeFile>::OPS;
+        // No module reference taken by each open, as FileVTable has it: the
+        // mount holds one, and an open of a regular file is hot
+        ops.owner            = core::ptr::null_mut();
+        ops.open             = Some(open);
+        ops.read_iter        = Some(bch2_read_iter);
+        ops.write_iter       = Some(bch2_write_iter);
+        #[cfg(CONFIG_TRANSPARENT_HUGEPAGE)]
+        {
+            ops.get_unmapped_area = Some(c::thp_get_unmapped_area);
+        }
+        ops.splice_read      = Some(c::filemap_splice_read);
+        ops.splice_write     = Some(c::iter_file_splice_write);
+        ops
+    })
 };
