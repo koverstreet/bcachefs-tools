@@ -21,7 +21,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, c_enum, TypeInfo};
+use cstruct_macros::{CStruct, bch_enum, TypeInfo};
 use crate::types::c_default;
 use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits};
 
@@ -148,19 +148,18 @@ pub struct bch_io_failures {
     pub(crate) failures: IoFailures<{ c::BCH_BKEY_PTRS_MAX as usize }>,
 }
 
-c_enum! {
-    #[closed]
-    #[prefix(__BCH_READ_)]
-    #[mask(bch_read_flags: u32, prefix = BCH_READ_)]
-    pub enum __bch_read_flags: u32 {
-        retry_if_stale,
-        may_promote,
-        user_mapped,
-        soft_require_read_device,
-        hard_require_read_device,
-        must_bounce,
-        no_poison_check,
-    }
+#[bch_enum(closed)]
+#[prefix(__BCH_READ_)]
+#[mask(bch_read_flags: u32, prefix = BCH_READ_)]
+#[repr(u32)]
+pub enum __bch_read_flags {
+    retry_if_stale,
+    may_promote,
+    user_mapped,
+    soft_require_read_device,
+    hard_require_read_device,
+    must_bounce,
+    no_poison_check,
 }
 
 /*
@@ -170,7 +169,7 @@ c_enum! {
  */
 const _: () = {
     let (mut extents_btrees_key_types, mut id) = (0, 0);
-    while id < c::BTREE_ID_NR as u32 {
+    while id < Btree::NR as u32 {
         if crate::BTREE_IS_EXTENTS_MASK & (1 << id) != 0 {
             extents_btrees_key_types |= Btree(id).key_types();
         }

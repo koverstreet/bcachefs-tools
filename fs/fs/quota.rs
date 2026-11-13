@@ -23,7 +23,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::sb::io::SbFieldOps;
 use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
-use cstruct_macros::{c_enum, CStruct, TypeInfo};
+use cstruct_macros::{bch_enum, CStruct, TypeInfo};
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::data_structures::genradix::SharedGenRadix;
@@ -35,18 +35,17 @@ use crate::format::Btree;
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_qid {
-    pub q: [u32; c::QTYP_NR as usize],
+    pub q: [u32; c::quota_types::QTYP_NR.0 as usize],
 }
 
-c_enum! {
-    #[closed]
-    #[c_name(quota_acct_mode)]
-    #[prefix(KEY_TYPE_QUOTA_)]
-    pub enum QuotaAcctMode: u32 {
-        PREALLOC,
-        WARN,
-        NOCHECK,
-    }
+#[bch_enum(closed)]
+#[c_name(quota_acct_mode)]
+#[prefix(KEY_TYPE_QUOTA_)]
+#[repr(u32)]
+pub enum QuotaAcctMode {
+    PREALLOC,
+    WARN,
+    NOCHECK,
 }
 
 /// One counter of one id's in-memory quota: its usage, its limits, and the
@@ -64,7 +63,7 @@ pub struct MemquotaCounter {
 /// One id's in-memory quota - a uid's, a gid's or a project's.
 #[derive(Clone, Copy, Default, PartialEq, ::pin_init::Zeroable)]
 pub struct Memquota {
-    pub c: [MemquotaCounter; c::Q_COUNTERS as usize],
+    pub c: [MemquotaCounter; c::quota_counters::Q_COUNTERS.0 as usize],
 }
 
 /// A limit from the superblock: written under sb_lock, read without a lock,
@@ -81,7 +80,7 @@ pub struct QuotaLimit {
 /// with it held. quota.rs's guard is the way in.
 #[pin_data]
 pub struct MemquotaType {
-    pub limits:       [QuotaLimit; c::Q_COUNTERS as usize],
+    pub limits:       [QuotaLimit; c::quota_counters::Q_COUNTERS.0 as usize],
     #[pin]
     pub(crate) lock:  Locked<c::mutex>,
     pub(crate) table: SharedGenRadix<crate::locking::LockedBy<Memquota, (), MemquotaType>>,
@@ -131,8 +130,8 @@ impl Quotas {
     }
 }
 
-const TYPES: [&str; c::QTYP_NR as usize] = ["user", "group", "project"];
-const COUNTERS: [&str; c::Q_COUNTERS as usize] = ["space", "inodes"];
+const TYPES: [&str; c::quota_types::QTYP_NR.0 as usize] = ["user", "group", "project"];
+const COUNTERS: [&str; c::quota_counters::Q_COUNTERS.0 as usize] = ["space", "inodes"];
 
 // ── The superblock section ───────────────────────────────────────────────
 
@@ -154,8 +153,8 @@ impl SbFieldOps for c::bch_sb_field_quota<Validated> {
 impl crate::btree::bkey::BkeyOps for c::Quota {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let ty = v.k.k.p.inode;
-        bkey_fsck_err_on!(v, ty >= c::QTYP_NR as u64, id::quota_type_invalid,
-                          "invalid quota type ({ty} >= {})", c::QTYP_NR)
+        bkey_fsck_err_on!(v, ty >= c::quota_types::QTYP_NR.0 as u64, id::quota_type_invalid,
+                          "invalid quota type ({ty} >= {})", c::quota_types::QTYP_NR.0)
     }
 
     #[cold]
@@ -177,7 +176,7 @@ pub fn enabled_qtypes(fs: &Fs) -> u32 {
 
 /// The quota types in mask @qtypes.
 pub fn set_qtypes(qtypes: u32) -> impl Iterator<Item = usize> {
-    (0..c::QTYP_NR as usize).filter(move |i| qtypes & (1 << i) != 0)
+    (0..c::quota_types::QTYP_NR.0 as usize).filter(move |i| qtypes & (1 << i) != 0)
 }
 
 /// The ids an inode's usage is charged to.
@@ -231,7 +230,7 @@ mod vfs {
     /// as s_flags is the kernel's c_ulong - usize - and not core's.
     const SB_RDONLY_BIT: u32 = 0;
 
-    const QTYP_NR: usize = c::QTYP_NR as usize;
+    const QTYP_NR: usize = c::quota_types::QTYP_NR.0 as usize;
 
     /// @s's fieldmask, in hex, then @fields: one a line, names in a column 20
     /// wide - as C's to_text tabstop.
@@ -312,7 +311,7 @@ mod vfs {
     #[derive(Default)]
     struct QuotaMsgs {
         nr: usize,
-        m:  [(usize, u32); QTYP_NR * c::Q_COUNTERS as usize * 2],
+        m:  [(usize, u32); QTYP_NR * c::quota_counters::Q_COUNTERS.0 as usize * 2],
     }
 
     impl QuotaMsgs {

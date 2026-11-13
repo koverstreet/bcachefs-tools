@@ -548,7 +548,7 @@ pub(crate) struct DevUsage {
 
 impl DevUsage {
     /// Iterate data types with their typed enum key.
-    /// Caps at BCH_DATA_NR to avoid UB if the kernel returns more types than we know.
+    /// Caps at DataType::NR to avoid UB if the kernel returns more types than we know.
     pub fn iter_typed(&self) -> impl Iterator<Item = (DataType, &DevUsageType)> {
 
         let max = DataType::NR as usize;

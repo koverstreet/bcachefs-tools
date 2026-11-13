@@ -24,20 +24,19 @@ use crate::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{c_enum, placed, CStruct, Init};
+use cstruct_macros::{bch_enum, placed, CStruct, Init};
 use pin_init::pin_data;
 
-c_enum! {
-    #[closed]
-    #[prefix(BCH_ASYNC_OBJ_LIST_)]
-    #[nr(BCH_ASYNC_OBJ_NR)]
-    pub enum bch_async_obj_lists: u32 {
-        data_update,
-        rbio,
-        write_op,
-        btree_read_bio,
-        btree_write_bio,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_ASYNC_OBJ_LIST_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_async_obj_lists {
+    data_update,
+    rbio,
+    write_op,
+    btree_read_bio,
+    btree_write_bio,
 }
 
 #[placed(Fs.async_objs[], index = idx: c_uint)]
@@ -189,7 +188,7 @@ macro_rules! list_table {
     ($(($name:ident, $nr:expr)),* $(,)?) => { crate::paste! {
         /// Each list's name, and how its objects are shown: indexed as
         /// async_objs[].
-        const LISTS: [(&CStr, ObjToText); c::BCH_ASYNC_OBJ_NR as usize] = [$((
+        const LISTS: [(&CStr, ObjToText); c::bch_async_obj_lists::NR as usize] = [$((
             match CStr::from_bytes_with_nul(concat!(stringify!($name), "\0").as_bytes()) {
                 Ok(name) => name,
                 Err(_)   => panic!(),

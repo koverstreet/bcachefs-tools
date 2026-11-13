@@ -220,7 +220,7 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
 fn csum_err(op: &Op, csum: c::bch_csum) -> BchError {
     let fs = op.fs();
     let ty = c::bch_csum_type(op.crc.csum_type.into());
-    let ty_name: &dyn core::fmt::Display = if ty.0 < c::BCH_CSUM_NR { &ty } else { &"(unknown)" };
+    let ty_name: &dyn core::fmt::Display = if ty.0 < c::bch_csum_type::NR { &ty } else { &"(unknown)" };
     write_op_error(op, op.pos.offset, format_args!(
         "error verifying existing checksum while moving existing data (memory corruption?)\n  \
          expected {:0x}:{:0x} got {:0x}:{:0x} type {}",

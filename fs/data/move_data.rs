@@ -532,7 +532,7 @@ impl Moving<'_> {
 /// any; of an extent, a checksummed one.
 fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(), BchError> {
     let ctxt = MovingCtxt::new(fs, stats, c::write_point_specifier::hashed(current_id()), false)?;
-    stats.at.data_type.set(DataType(c::DATA_PROGRESS_DATA_TYPE_phys));
+    stats.at.data_type.set(DataType(c::data_progress_data_type_special::DATA_PROGRESS_DATA_TYPE_phys.0));
 
     let _ = ctxt.trans().write_buffer_flush_sync();
 
@@ -564,8 +564,8 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(),
 pub fn data_job(fs: &Fs, stats: &MoveStats, op: &c::bch_ioctl_data) -> Result<(), BchError> {
     stats.reset();
 
-    match u32::from(op.op) {
-        c::BCH_DATA_OP_scrub => {
+    match c::bch_data_ops(op.op.into()) {
+        c::bch_data_ops::scrub => {
             // so tests don't fail spuriously: every btree node that needs
             // repair is seen
             fs.btree_interior_updates_flush();

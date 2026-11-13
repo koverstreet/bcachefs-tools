@@ -31,34 +31,33 @@ use core::ffi::{c_uint, c_ulong};
 use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
-use cstruct_macros::c_enum;
+use cstruct_macros::bch_enum;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use zerocopy::IntoBytes;
 
-c_enum! {
-    #[closed]
-    #[prefix(__BCH_TRANS_COMMIT_)]
-    #[mask(bch_trans_commit_flags: u32, prefix = BCH_TRANS_COMMIT_)]
-    pub enum __bch_trans_commit_flags: u32 {
-        /* First bits for bch_watermark: */
-        /// don't check for enospc
-        no_enospc = c::BCH_WATERMARK_BITS + 1,
-        /// don't attempt to take a ref on c->writes
-        no_check_rw,
-        /// don't take a journal reservation, instead pin journal entry
-        /// referred to by trans->journal_res.seq
-        no_journal_res,
-        /// don't drop noop updates
-        no_skip_noops,
-        /// operation required for journal reclaim; may return error instead
-        /// of deadlocking if BCH_WATERMARK_reclaim not specified
-        journal_reclaim,
-        /// in journal replay
-        journal_replay,
-        /// we're in journal replay - accounting updates have already been
-        /// applied
-        skip_accounting_apply,
-    }
+#[bch_enum(closed)]
+#[prefix(__BCH_TRANS_COMMIT_)]
+#[mask(bch_trans_commit_flags: u32, prefix = BCH_TRANS_COMMIT_)]
+#[repr(u32)]
+pub enum __bch_trans_commit_flags {
+    /* First bits for bch_watermark: */
+    /// don't check for enospc
+    no_enospc = c::BCH_WATERMARK_BITS + 1,
+    /// don't attempt to take a ref on c->writes
+    no_check_rw,
+    /// don't take a journal reservation, instead pin journal entry
+    /// referred to by trans->journal_res.seq
+    no_journal_res,
+    /// don't drop noop updates
+    no_skip_noops,
+    /// operation required for journal reclaim; may return error instead
+    /// of deadlocking if BCH_WATERMARK_reclaim not specified
+    journal_reclaim,
+    /// in journal replay
+    journal_replay,
+    /// we're in journal replay - accounting updates have already been
+    /// applied
+    skip_accounting_apply,
 }
 
 /// The whiteout that deletes @k in @btree. A KEY_TYPE_extent_whiteout says

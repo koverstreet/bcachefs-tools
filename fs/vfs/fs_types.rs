@@ -13,7 +13,7 @@ use crate::vfs::vfs_inode::VfsInode;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
 use core::ffi::{c_int, c_void};
-use cstruct_macros::{c_name, c_enum, CStruct, TypeInfo};
+use cstruct_macros::{c_name, bch_enum, CStruct, TypeInfo};
 use pin_init::pin_data;
 #[cfg(not(NO_BCACHEFS_FS))]
 use crate::btree::iter::BtreeTrans;
@@ -86,22 +86,21 @@ unsafe impl ::pin_init::Zeroable for InodeInfo {}
 /// C's name, as FFI declarations spell it.
 pub type bch_inode_info = InodeInfo;
 
-c_enum! {
-    #[closed]
-    pub enum bch_inode_info_flags: u32 {
-        /*
-         * A btree error on this inode: the VFS inode and the btree's may
-         * disagree
-         */
-        EI_INODE_ERROR = 0,
-        /* in a snapshot subvolume, which quotas don't count */
-        EI_INODE_SNAPSHOT = 1,
-        /*
-         * set by a truncate of a nonempty file to 0: start writeback on
-         * close - see DOC(replace-in-place) in vfs/file.rs
-         */
-        EI_INODE_FLUSH_ON_CLOSE = 2,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum bch_inode_info_flags {
+    /*
+     * A btree error on this inode: the VFS inode and the btree's may
+     * disagree
+     */
+    EI_INODE_ERROR = 0,
+    /* in a snapshot subvolume, which quotas don't count */
+    EI_INODE_SNAPSHOT = 1,
+    /*
+     * set by a truncate of a nonempty file to 0: start writeback on
+     * close - see DOC(replace-in-place) in vfs/file.rs
+     */
+    EI_INODE_FLUSH_ON_CLOSE = 2,
 }
 
 /*
@@ -144,12 +143,11 @@ pub struct InodeQuota {
     pub ei_quota_reserved: u64,
 }
 
-c_enum! {
-    #[flags]
-    pub enum bch_inode_lock_op: u32 {
-        INODE_PAGECACHE_BLOCK = 1 << 0,
-        INODE_UPDATE_LOCK = 1 << 1,
-    }
+#[bch_enum(flags)]
+#[repr(u32)]
+pub enum bch_inode_lock_op {
+    INODE_PAGECACHE_BLOCK = 1 << 0,
+    INODE_UPDATE_LOCK = 1 << 1,
 }
 
 /* returns 0 if we want to do the update, or error is passed up */

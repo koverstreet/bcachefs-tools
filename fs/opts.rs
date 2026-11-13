@@ -45,10 +45,10 @@ use crate::util::printbuf::parse_human_u64;
 use crate::util::sysfs::parse_int;
 use core::ffi::{CStr, c_ulong};
 use crate::cstructs::c::inode_opt_id_arms;
-use crate::c::{bch_member, bch_sb_field_ext, BCH_COMPRESSION_OPT_none, BCH_CSUM_OPT_crc32c, BCH_DATA_btree, BCH_DATA_journal, BCH_DATA_user, BCH_MEMBER_STATE_rw, BCH_ON_ERROR_fix_safe, BCH_REPLICAS_MAX, BCH_SB_SECTOR, BCH_STR_HASH_OPT_siphash, BCH_VERSION_UPGRADE_compatible, BCH_WRITE_DEGRADED_degraded};
+use crate::c::{bch_member, bch_sb_field_ext, bch_compression_opts, bch_csum_opt, bch_error_actions, bch_str_hash_opts, bch_version_upgrade_opts, bch_write_degraded_actions, MemberState, BCH_REPLICAS_MAX, BCH_SB_SECTOR};
 use crate::format::DataType;
 use crate::types::bits_to_longs;
-use cstruct_macros::{CStruct, c_enum, Options, TypeInfo};
+use cstruct_macros::{CStruct, bch_enum, Options, TypeInfo};
 
 /*
  * Mount options; we also store defaults in the superblock.
@@ -63,24 +63,23 @@ use cstruct_macros::{CStruct, c_enum, Options, TypeInfo};
  */
 
 /* When can be set: */
-c_enum! {
-    #[flags]
-    pub enum opt_flags: u32 {
-        OPT_FS = 1 << 0,                /* Filesystem option */
-        OPT_DEVICE = 1 << 1,            /* Device option */
-        OPT_INODE = 1 << 2,             /* Inode option */
-        OPT_FORMAT = 1 << 3,            /* May be specified at format time */
-        OPT_MOUNT = 1 << 4,             /* May be specified at mount time */
-        OPT_RUNTIME = 1 << 5,           /* May be specified at runtime */
-        OPT_HUMAN_READABLE = 1 << 6,
-        OPT_MUST_BE_POW_2 = 1 << 7,     /* Must be power of 2 */
-        OPT_SB_FIELD_SECTORS = 1 << 8,  /* Superblock field is >> 9 of actual value */
-        OPT_SB_FIELD_ILOG2 = 1 << 9,    /* Superblock field is ilog2 of actual value */
-        OPT_SB_FIELD_ONE_BIAS = 1 << 10, /* 0 means default value */
-        OPT_HIDDEN = 1 << 11,
-        OPT_MOUNT_OLD = 1 << 12,        /* May not be specified at mount time, but don't fail the mount */
-        OPT_NODOC = 1 << 13,            /* Omit from generated documentation */
-    }
+#[bch_enum(flags)]
+#[repr(u32)]
+pub enum opt_flags {
+    OPT_FS = 1 << 0,                /* Filesystem option */
+    OPT_DEVICE = 1 << 1,            /* Device option */
+    OPT_INODE = 1 << 2,             /* Inode option */
+    OPT_FORMAT = 1 << 3,            /* May be specified at format time */
+    OPT_MOUNT = 1 << 4,             /* May be specified at mount time */
+    OPT_RUNTIME = 1 << 5,           /* May be specified at runtime */
+    OPT_HUMAN_READABLE = 1 << 6,
+    OPT_MUST_BE_POW_2 = 1 << 7,     /* Must be power of 2 */
+    OPT_SB_FIELD_SECTORS = 1 << 8,  /* Superblock field is >> 9 of actual value */
+    OPT_SB_FIELD_ILOG2 = 1 << 9,    /* Superblock field is ilog2 of actual value */
+    OPT_SB_FIELD_ONE_BIAS = 1 << 10, /* 0 means default value */
+    OPT_HIDDEN = 1 << 11,
+    OPT_MOUNT_OLD = 1 << 12,        /* May not be specified at mount time, but don't fail the mount */
+    OPT_NODOC = 1 << 13,            /* Omit from generated documentation */
 }
 
 /* the ratelimit_errors option's default: on in the kernel */
@@ -93,15 +92,14 @@ pub const BCACHEFS_VERBOSE_DEFAULT: bool = cfg!(CONFIG_BCACHEFS_DEBUG);
 pub const OPT_SHOW_FULL_LIST: u32 = 1 << 0;
 pub const OPT_SHOW_MOUNT_STYLE: u32 = 1 << 1;
 
-c_enum! {
-    #[closed]
-    #[prefix(FSCK_FIX_)]
-    pub enum fsck_err_opts: u32 {
-        exit = 0,
-        yes = 1,
-        no = 2,
-        ask = 3,
-    }
+#[bch_enum(closed)]
+#[prefix(FSCK_FIX_)]
+#[repr(u32)]
+pub enum fsck_err_opts {
+    exit = 0,
+    yes = 1,
+    no = 2,
+    ask = 3,
 }
 
 /* how many options a bch_opts_mask has room for */
@@ -148,7 +146,7 @@ pub struct bch_opts {
     #[opt(str(bch_error_actions),
           flags = fs | format | mount | runtime,
           sb = bch_sb::error_action,
-          default = BCH_ON_ERROR_fix_safe)]
+          default = bch_error_actions::fix_safe.0)]
     pub errors: u8,
 
     /// Number of consecutive write errors allowed before kicking out a device
@@ -193,14 +191,14 @@ pub struct bch_opts {
     #[opt(str(bch_csum_opt),
           flags = fs | format | mount_old | runtime,
           sb = bch_sb::meta_csum_type,
-          default = BCH_CSUM_OPT_crc32c)]
+          default = bch_csum_opt::crc32c.0)]
     pub metadata_checksum: u8,
 
     /// Checksum type for data writes
     #[opt(str(bch_csum_opt),
           flags = fs | inode | format | mount_old | runtime,
           sb = bch_sb::data_csum_type,
-          default = BCH_CSUM_OPT_crc32c)]
+          default = bch_csum_opt::crc32c.0)]
     pub data_checksum: u8,
 
     /// Number of read retries on checksum error
@@ -211,21 +209,21 @@ pub struct bch_opts {
     #[opt(with(crate::data::compress::OPT),
           flags = fs | inode | format | mount_old | runtime,
           sb = bch_sb::compression_type,
-          default = BCH_COMPRESSION_OPT_none)]
+          default = bch_compression_opts::none.0)]
     pub compression: u8,
 
     /// Compression type for background moves
     #[opt(with(crate::data::compress::OPT),
           flags = fs | inode | format | mount_old | runtime,
           sb = bch_sb::background_compression_type,
-          default = BCH_COMPRESSION_OPT_none)]
+          default = bch_compression_opts::none.0)]
     pub background_compression: u8,
 
     /// Hash function for directory entries and xattrs
     #[opt(str(bch_str_hash_opts),
           flags = fs | format | mount | runtime,
           sb = bch_sb::str_hash_type,
-          default = BCH_STR_HASH_OPT_siphash)]
+          default = bch_str_hash_opts::siphash.0)]
     pub str_hash: u8,
 
     /// Device or label for metadata writes
@@ -339,7 +337,7 @@ pub struct bch_opts {
     #[opt(str(bch_write_degraded_actions),
           flags = fs | mount | format | runtime,
           sb = bch_sb::write_degraded_action,
-          default = BCH_WRITE_DEGRADED_degraded)]
+          default = bch_write_degraded_actions::degraded.0)]
     pub write_degraded: u8,
 
     /// Seconds to wait at mount for member devices that haven't appeared yet, before applying the degraded action; 0 means use the built-in default
@@ -404,7 +402,7 @@ pub struct bch_opts {
     pub fsck_memory_usage_percent: u8,
 
     /// Fix errors during fsck without asking
-    #[opt(with(crate::opts::FIX_ERRORS), flags = fs | mount, default = FSCK_FIX_exit)]
+    #[opt(with(crate::opts::FIX_ERRORS), flags = fs | mount, default = (fsck_err_opts::exit as u32))]
     pub fix_errors: u8,
 
     /// Ratelimit error messages during fsck
@@ -518,7 +516,7 @@ pub struct bch_opts {
     #[opt(str(bch_version_upgrade_opts),
           flags = fs | mount | runtime,
           sb = bch_sb::version_upgrade,
-          default = BCH_VERSION_UPGRADE_compatible)]
+          default = bch_version_upgrade_opts::compatible.0)]
     pub version_upgrade: u8,
 
     /// Pointer to a struct stdio_redirect
@@ -566,7 +564,7 @@ pub struct bch_opts {
     #[opt(str(MemberState),
           flags = device | runtime,
           sb = bch_member::state,
-          default = BCH_MEMBER_STATE_rw)]
+          default = MemberState::rw.0)]
     pub state: u64,
 
     /// Device label: position in the label tree
@@ -600,10 +598,10 @@ pub struct bch_opts {
     pub durability: u8,
 
     /// Allowed data types for this device: journal, btree, and/or user
-    #[opt(bitfield(bch_data_type, 1 << BCH_DATA_journal | 1 << BCH_DATA_btree | 1 << BCH_DATA_user),
+    #[opt(bitfield(bch_data_type, 1 << DataType::journal.0 | 1 << DataType::btree.0 | 1 << DataType::user.0),
           flags = device | format,
           sb = bch_member::data_allowed,
-          default = 1 << BCH_DATA_journal | 1 << BCH_DATA_btree | 1 << BCH_DATA_user,
+          default = 1 << DataType::journal.0 | 1 << DataType::btree.0 | 1 << DataType::user.0,
           hint = "types")]
     pub data_allowed: u8,
 
@@ -692,7 +690,7 @@ macro_rules! __bch_inode_opts_1 {
 }
 inode_opt_id_arms!(__bch_inode_opts_0 [pub __bch_inode_opts_align: [u64; 0],]);
 
-pub const NR: usize = opt_id::bch2_opts_nr.0 as usize;
+pub const NR: usize = opt_id::NR as usize;
 
 /// By bch_opt_id: bch_opts' #[opt]s.
 pub static OPTS: [Opt; NR] = c::bch_opts::TABLE;
@@ -883,7 +881,7 @@ impl<T: OptHost + ?Sized, V: FieldValue> SbOpt for Field<T, V> {
 pub(crate) const FIX_ERRORS: OptFn = OptFn {
     parse: |_, val, err| {
         let Some(val) = val else {
-            return Ok(c::FSCK_FIX_yes.into());
+            return Ok((c::fsck_err_opts::yes as u32).into());
         };
         let choices: &[&str] = crate::names_by_value!(c::fsck_err_opts);
         choices.iter().position(|n| n.as_bytes() == val).map(|v| v as u64).ok_or_else(|| {

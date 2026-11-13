@@ -922,7 +922,7 @@ impl c::AllocV4 {
     /// fraction of 1 << 31, for movable data with room it isn't using:
     /// alloc_lru_idx_fragmentation().
     pub fn lru_idx_fragmentation(&self, ca: &Dev) -> u64 {
-        if self.data_type >= c::BCH_DATA_NR as u8 ||
+        if self.data_type >= c::DataType::NR as u8 ||
            !self.data_type().is_movable() ||
            self.sectors_fragmented(ca) == 0 {
             return 0;

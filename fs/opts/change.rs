@@ -181,7 +181,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
         // XXX: in the future we'll likely want to do compatible upgrades at
         // runtime as well, but right now there's nothing that does that
         opt_id::Opt_version_upgrade => {
-            if v == c::BCH_VERSION_UPGRADE_incompatible.into() {
+            if v == c::bch_version_upgrade_opts::incompatible.0.into() {
                 fs.upgrade_incompat();
             }
         }

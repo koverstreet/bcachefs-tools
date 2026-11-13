@@ -12,7 +12,7 @@ use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitArray;
 use crate::util::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicBool, AtomicU32};
-use cstruct_macros::{c_enum, placed, CStruct, Init, TypeInfo};
+use cstruct_macros::{bch_enum, placed, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 
 pub const IS_ANCESTOR_BITMAP: u32 = 128;
@@ -31,13 +31,12 @@ pub const IS_ANCESTOR_BITMAP: u32 = 128;
  * Read under RCU; partial is_ancestor[] updates are tolerable since readers
  * fall back to the skiplist.
  */
-c_enum! {
-    #[closed]
-    pub enum snapshot_id_state: u32 {
-        SNAPSHOT_ID_empty,
-        SNAPSHOT_ID_live,
-        SNAPSHOT_ID_deleted,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum snapshot_id_state {
+    SNAPSHOT_ID_empty,
+    SNAPSHOT_ID_live,
+    SNAPSHOT_ID_deleted,
 }
 
 /*

@@ -24,18 +24,17 @@ use crate::prt;
 use crate::util::printbuf::Msg;
 use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
-use cstruct_macros::{c_enum, CStruct};
+use cstruct_macros::{bch_enum, CStruct};
 use crate::util::alloc::KVVec;
 use crate::format::{Bpos, Btree};
 
-c_enum! {
-    #[closed]
-    pub enum set_needs_reconcile_ctx: u32 {
-        SET_NEEDS_RECONCILE_opt_change,
-        SET_NEEDS_RECONCILE_opt_change_indirect,
-        SET_NEEDS_RECONCILE_foreground,
-        SET_NEEDS_RECONCILE_other,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum set_needs_reconcile_ctx {
+    SET_NEEDS_RECONCILE_opt_change,
+    SET_NEEDS_RECONCILE_opt_change_indirect,
+    SET_NEEDS_RECONCILE_foreground,
+    SET_NEEDS_RECONCILE_other,
 }
 
 /* Inodes in different snapshots may have different IO options: */

@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{bitfield, c_enum, open_enum, CStruct};
+use cstruct_macros::{bitfield, bch_enum, CStruct};
 
 /*
  * rebalance on disk data structures:
@@ -108,18 +108,17 @@ pub struct bch_extent_reconcile_bp {
     idx:   u55,
 }
 
-c_enum! {
-    #[open]
-    #[prefix(BCH_RECONCILE_)]
-    /* subset of BCH_INODE_OPTS */
-    pub enum bch_reconcile_opts: u32 {
-        data_replicas,
-        data_checksum,
-        erasure_code,
-        background_compression,
-        background_target,
-        promote_target,
-    }
+#[bch_enum(open)]
+#[prefix(BCH_RECONCILE_)]
+/* subset of BCH_INODE_OPTS */
+#[repr(u32)]
+pub enum bch_reconcile_opts {
+    data_replicas,
+    data_checksum,
+    erasure_code,
+    background_compression,
+    background_target,
+    promote_target,
 }
 
 impl bch_extent_reconcile {
@@ -161,7 +160,7 @@ impl bch_extent_reconcile {
     }
 }
 
-#[open_enum]
+#[bch_enum(open)]
 #[repr(u32)]
 pub enum ReconcileType {
     replicas = 0,
@@ -174,15 +173,14 @@ pub enum ReconcileType {
     stripes = 7,
 }
 
-c_enum! {
-    #[open]
-    #[prefix(RECONCILE_WORK_)]
-    pub enum reconcile_work_id: u32 {
-        none,
-        hipri,
-        normal,
-        pending,
-    }
+#[bch_enum(open)]
+#[prefix(RECONCILE_WORK_)]
+#[repr(u32)]
+pub enum reconcile_work_id {
+    none,
+    hipri,
+    normal,
+    pending,
 }
 
 #[allow(non_upper_case_globals)]

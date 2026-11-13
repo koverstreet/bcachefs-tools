@@ -1805,7 +1805,7 @@ impl<'t> BtreeIter<'t> {
 pub fn btree_iter_params_valid(btree: Btree, level: u32, start: Bpos, end: Bpos, flags: BtreeIterFlags)
     -> bool
 {
-    if btree.0 >= c::BTREE_ID_NR {
+    if btree.0 >= Btree::NR {
         return false;
     }
 

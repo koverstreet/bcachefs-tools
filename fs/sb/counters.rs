@@ -35,10 +35,10 @@ pub const NR_RECENT_COUNTERS: u32 = 20;
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_counters {
-    mount: [AtomicU64; c::BCH_COUNTER_NR as usize],
-    pub now: PerCpu<[u64; c::BCH_COUNTER_NR as usize]>,
+    mount: [AtomicU64; c::bch_persistent_counters::NR as usize],
+    pub now: PerCpu<[u64; c::bch_persistent_counters::NR as usize]>,
 
-    recent: [[AtomicU64; c::BCH_COUNTER_NR as usize]; c::NR_RECENT_COUNTERS as usize],
+    recent: [[AtomicU64; c::bch_persistent_counters::NR as usize]; c::NR_RECENT_COUNTERS as usize],
 }
 c_default!(bch_fs_counters);
 
@@ -140,8 +140,8 @@ impl Fs {
 // ioctl by stable id. mount[] and recent[] are written racing readers that
 // only print them, as in C: each a u64 on its own, so relaxed atomics.
 
-const NR: usize = c::BCH_COUNTER_NR as usize;
-const NR_STABLE: usize = c::BCH_COUNTER_STABLE_NR as usize;
+const NR: usize = c::bch_persistent_counters::NR as usize;
+const NR_STABLE: usize = c::bch_persistent_counters_stable::NR as usize;
 
 impl c::bch_fs_counters {
     /// Counter @i, every CPU's count summed.

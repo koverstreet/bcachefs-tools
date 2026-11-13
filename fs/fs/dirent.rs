@@ -10,15 +10,14 @@
 
 #![allow(non_camel_case_types)]
 
-use cstruct_macros::c_enum;
+use cstruct_macros::bch_enum;
 
-c_enum! {
-    #[closed]
-    pub enum bch_rename_mode: u32 {
-        BCH_RENAME,
-        BCH_RENAME_OVERWRITE,
-        BCH_RENAME_EXCHANGE,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum bch_rename_mode {
+    BCH_RENAME,
+    BCH_RENAME_OVERWRITE,
+    BCH_RENAME_EXCHANGE,
 }
 
 #[path = "dirent_format.rs"]

@@ -1125,7 +1125,7 @@ mod tests {
 
     /// Our sizes, as a filesystem's table has them for the types we know.
     fn ours() -> std::vec::Vec<u8> {
-        (0..c::BCH_EXTENT_ENTRY_MAX).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8).collect()
+        (0..c::bch_extent_entry_type::NR).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8).collect()
     }
 
     /// @table as a filesystem's entry lengths.

@@ -51,7 +51,7 @@ use core::ffi::{c_int, c_uint};
 use pin_init::stack_pin_init;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{CStruct, bitfield, c_enum};
+use cstruct_macros::{CStruct, bitfield, bch_enum};
 use c::bch_data_update_types as Type;
 use crate::data::read::{bch_read_for, ReadDone, Rbio};
 use crate::types::c_default;
@@ -59,18 +59,17 @@ use core::sync::atomic::AtomicBool;
 use nestify::nest;
 use crate::format::{Bpos, Btree, CompressionType};
 
-c_enum! {
-    #[closed]
-    #[prefix(BCH_DATA_UPDATE_)]
-    pub enum bch_data_update_types: u32 {
-        other,
-        copygc,
-        reconcile,
-        promote,
-        self_heal,
-        scrub,
-        scrub_no_repair,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_DATA_UPDATE_)]
+#[repr(u32)]
+pub enum bch_data_update_types {
+    other,
+    copygc,
+    reconcile,
+    promote,
+    self_heal,
+    scrub,
+    scrub_no_repair,
 }
 
 /*

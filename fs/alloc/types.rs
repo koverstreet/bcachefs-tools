@@ -17,23 +17,22 @@ use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64, AtomicU8};
-use cstruct_macros::{bitfield, c_enum, placed, CStruct, Fieldwise, Init, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
 
-c_enum! {
-    #[closed]
-    #[prefix(BCH_WATERMARK_)]
-    #[nr(BCH_WATERMARK_NR)]
-    pub enum bch_watermark: u32 {
-        stripe,
-        normal,
-        copygc,
-        btree,
-        btree_copygc,
-        reclaim,
-        interior_updates,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_WATERMARK_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_watermark {
+    stripe,
+    normal,
+    copygc,
+    btree,
+    btree_copygc,
+    reclaim,
+    interior_updates,
 }
 
 pub const BCH_WATERMARK_BITS: u32 = 3;
@@ -256,17 +255,16 @@ pub struct dev_stripe_state {
 }
 c_default!(dev_stripe_state);
 
-c_enum! {
-    #[closed]
-    #[prefix(WRITE_POINT_)]
-    #[nr(WRITE_POINT_STATE_NR)]
-    pub enum write_point_state: u32 {
-        stopped,
-        waiting_io,
-        waiting_work,
-        runnable,
-        running,
-    }
+#[bch_enum(closed)]
+#[prefix(WRITE_POINT_)]
+#[nr]
+#[repr(u32)]
+pub enum write_point_state {
+    stopped,
+    waiting_io,
+    waiting_work,
+    runnable,
+    running,
 }
 
 /* the write point lock's: what a write allocating from it uses */
@@ -340,7 +338,7 @@ published! {
     #[derive(CStruct)]
     pub struct WritePointState {
         pub state: Volatile<u32>,
-        pub time: [Volatile<u64>; c::WRITE_POINT_STATE_NR as usize],
+        pub time: [Volatile<u64>; c::write_point_state::NR as usize],
     }
 }
 
@@ -439,7 +437,7 @@ pub type MarkLockAt = crate::at!(bch_fs_capacity.mark_lock);
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_allocator {
-    pub rw_devs: [c::AtomicDevsMask; c::BCH_DATA_NR as usize],
+    pub rw_devs: [c::AtomicDevsMask; c::DataType::NR as usize],
     /* bumped as a device goes read-write or read-only, under state_lock;
      * read without it */
     pub rw_devs_change_count: crate::util::projections::Volatile<c_ulong>,

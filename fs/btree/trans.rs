@@ -518,7 +518,7 @@ impl<'f> TransGuard<'f> {
          */
         let roots_b = &c.btree.cache.roots.roots_b;
         let roots = roots_b.as_ptr().cast::<u8>();
-        for i in (0..c::BTREE_ID_NR as usize * size_of_val(&roots_b[0])).step_by(64) {
+        for i in (0..Btree::NR as usize * size_of_val(&roots_b[0])).step_by(64) {
             prefetch(roots.wrapping_add(i));
         }
 

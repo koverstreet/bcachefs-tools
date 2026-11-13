@@ -5,26 +5,24 @@
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{c_name, c_enum, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bch_enum, whole, CStruct, Plain, TypeInfo, SizedVal};
 
 /* KEY_TYPE_quota: */
-c_enum! {
-    #[open]
-    pub enum quota_types: u32 {
-        QTYP_USR = 0,
-        QTYP_GRP = 1,
-        QTYP_PRJ = 2,
-        QTYP_NR = 3,
-    }
+#[bch_enum(open)]
+#[repr(u32)]
+pub enum quota_types {
+    QTYP_USR = 0,
+    QTYP_GRP = 1,
+    QTYP_PRJ = 2,
+    QTYP_NR = 3,
 }
 
-c_enum! {
-    #[open]
-    pub enum quota_counters: u32 {
-        Q_SPC = 0,
-        Q_INO = 1,
-        Q_COUNTERS = 2,
-    }
+#[bch_enum(open)]
+#[repr(u32)]
+pub enum quota_counters {
+    Q_SPC = 0,
+    Q_INO = 1,
+    Q_COUNTERS = 2,
 }
 
 #[repr(C)]
@@ -39,7 +37,7 @@ pub struct bch_quota_counter {
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Quota {
     pub v: c::bch_val,
-    pub c: [c::bch_quota_counter; c::Q_COUNTERS as usize],
+    pub c: [c::bch_quota_counter; c::quota_counters::Q_COUNTERS.0 as usize],
 }
 
 /* BCH_SB_FIELD_quota: */
@@ -54,7 +52,7 @@ pub struct bch_sb_quota_counter {
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_quota_type {
     pub flags: Le64,
-    pub c: [c::bch_sb_quota_counter; c::Q_COUNTERS as usize],
+    pub c: [c::bch_sb_quota_counter; c::quota_counters::Q_COUNTERS.0 as usize],
 }
 
 #[whole]
@@ -62,6 +60,6 @@ pub struct bch_sb_quota_type {
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_quota {
     pub field: Head<c::bch_sb_field>,
-    pub q: [c::bch_sb_quota_type; c::QTYP_NR as usize],
+    pub q: [c::bch_sb_quota_type; c::quota_types::QTYP_NR.0 as usize],
 }
 vstruct!(bch_sb_field_quota, field.u64s, start = 0);

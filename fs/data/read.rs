@@ -105,7 +105,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use crate::types::c_default;
-use cstruct_macros::{args_stored_once, c_enum, c_name, in_place, CStruct, Init, TypeInfo};
+use cstruct_macros::{args_stored_once, bch_enum, c_name, in_place, CStruct, Init, TypeInfo};
 use crate::format::{Bpos, Btree, Bversion, DataType, MetadataVersion, Nonce};
 
 type F = c::bch_read_flags;
@@ -119,13 +119,12 @@ pub const BCH_READ_ERR_decompression: u32 = 1 << 2;
 #[allow(non_upper_case_globals)]
 pub const BCH_READ_ERR_ec_reconstruct: u32 = 1 << 3;
 
-c_enum! {
-    #[closed]
-    pub enum bch_read_for: u32 {
-        BCH_READ_FOR_read,
-        BCH_READ_FOR_update,
-        BCH_READ_FOR_scrub,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum bch_read_for {
+    BCH_READ_FOR_read,
+    BCH_READ_FOR_update,
+    BCH_READ_FOR_scrub,
 }
 
 #[repr(C)]

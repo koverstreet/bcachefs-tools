@@ -292,12 +292,14 @@ pub struct CFromList {
     pub template: String,
 }
 
-/// c_enum!: an enum, and what its values can be. @name is None for an
-/// anonymous one: constants.
+/// An enum, and what its values can be. @name is None only while a
+/// tag_enum() is being parsed.
 #[derive(Debug, Clone)]
 pub struct CEnumDef {
     pub kind:     CEnumKind,
     pub name:     Option<String>,
+    /// Its doc comment.
+    pub docs:     Vec<String>,
     /// The integer type: u32, i32, u64.
     pub repr:     String,
     pub variants: Vec<CEnumVariant>,
@@ -313,9 +315,8 @@ pub struct CEnumDef {
     /// #[prefix(P)]: what C's names for its variants start with, Rust's
     /// without it.
     pub prefix:   Option<String>,
-    /// #[nr(NR)]: how many it has - C's NR, after the last; Rust's NR, a
-    /// number, not one of its values.
-    pub nr:       Option<String>,
+    /// #[nr]: NR, past the largest value - a number, not one of its values.
+    pub nr:       bool,
 }
 
 impl CEnumDef {
@@ -324,27 +325,13 @@ impl CEnumDef {
         self.c_name.as_deref().or(self.name.as_deref())
     }
 
-    /// @v's name as C has it: its #[c_name], or c_name_of() its name.
-    pub fn c_variant(&self, v: &CEnumVariant) -> String {
-        v.c_name.clone().unwrap_or_else(|| self.c_name_of(&v.name))
-    }
-
-    /// Variant @name's as C has it: #[prefix]'s and its - but a name written
-    /// with the prefix is C's, one that isn't an identifier past it,
-    /// bcachefs_metadata_version_31bit_dirent_offset.
-    pub fn c_name_of(&self, name: &str) -> String {
-        match &self.prefix {
-            Some(p) if !name.starts_with(p.as_str()) => format!("{p}{name}"),
-            _ => name.to_string(),
-        }
-    }
-
-    /// What @v prints as: its #[label], or with a #[prefix] its name past it -
-    /// not a flag's, whose names would be its bits'.
+    /// What @v prints as: its #[label], or its name - past its #[prefix], if
+    /// it has one. Not a flag's, whose names would be its bits'.
     #[allow(dead_code)]
     pub fn label<'a>(&self, v: &'a CEnumVariant) -> Option<&'a str> {
         v.label.as_deref().or_else(|| {
-            let p = self.prefix.as_deref().filter(|_| self.kind != CEnumKind::Flags)?;
+            (self.kind != CEnumKind::Flags).then_some(())?;
+            let p = self.prefix.as_deref().unwrap_or_default();
             Some(v.name.strip_prefix(p).unwrap_or(&v.name))
         })
     }
@@ -897,14 +884,14 @@ fn parse_ioctl(m: &syn::Macro) -> Result<CIoctl, String> {
     Ok(CIoctl { entries })
 }
 
-/// A c_enum!'s head, `#[open|closed|flags] pub enum NAME: REPR` - NAME `_`
-/// for an anonymous enum - with no variants yet; the attributes that aren't
+/// A c_enum!'s head, `#[open|closed|flags] pub enum NAME: REPR`, with no
+/// variants yet; the attributes that aren't
 /// its, and its body.
 #[allow(dead_code)]
 pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
         -> syn::Result<(CEnumDef, Vec<syn::Attribute>, proc_macro2::TokenStream)> {
     let mut kind = None;
-    let (mut own_to_text, mut c_name, mut prefix, mut nr) = (false, None, None, None);
+    let (mut own_to_text, mut c_name, mut prefix, mut nr) = (false, None, None, false);
     let mut others = Vec::new();
     for a in input.call(syn::Attribute::parse_outer)? {
         let id = |a: &syn::Attribute| a.parse_args::<syn::Ident>().map(|n| ident(&n));
@@ -915,17 +902,14 @@ pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
             Some("own_to_text") => own_to_text = true,
             Some("c_name")      => c_name = Some(id(&a)?),
             Some("prefix")      => prefix = Some(id(&a)?),
-            Some("nr")          => nr = Some(id(&a)?),
+            Some("nr")          => nr = true,
             _ => others.push(a),
         }
     }
     input.parse::<syn::Visibility>()?;
     input.parse::<syn::Token![enum]>()?;
-    let name = match input.parse::<Option<syn::Token![_]>>()? {
-        Some(_) => None,
-        None => Some(ident(&input.parse()?)),
-    };
-    let what = name.clone().unwrap_or_else(|| "(anonymous)".into());
+    let name = ident(&input.parse()?);
+    let what = name.clone();
     let kind = kind.ok_or_else(|| input.error(format!("{what}: #[open], #[closed] or #[flags]")))?;
     input.parse::<syn::Token![:]>()?;
     let repr = ident(&input.parse()?);
@@ -934,9 +918,19 @@ pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
     }
     let body;
     syn::braced!(body in input);
-    let def = CEnumDef { kind, name, repr, variants: Vec::new(), from: Vec::new(), own_to_text,
-                         c_name, prefix, nr };
+    let def = CEnumDef { kind, name: Some(name), docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
+                         own_to_text, c_name, prefix, nr };
     Ok((def, others, body.parse()?))
+}
+
+/// @a's text, if it's a doc comment's line.
+pub fn doc_of(a: &syn::Attribute) -> Option<String> {
+    match &a.meta {
+        syn::Meta::NameValue(syn::MetaNameValue {
+            path, value: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }), ..
+        }) if path.is_ident("doc") => Some(s.value()),
+        _ => None,
+    }
 }
 
 /// A c_enum! variant, `[#[..]] NAME[(Type)] [= value]`: its doc and #[label]
@@ -947,10 +941,8 @@ pub fn parse_variant(v: proc_macro2::TokenStream)
     let v: syn::Variant = syn::parse2(v)?;
     let (mut c_name, mut label, mut docs, mut others) = (None, None, Vec::new(), Vec::new());
     for a in v.attrs {
-        match &a.meta {
-            syn::Meta::NameValue(syn::MetaNameValue {
-                path, value: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }), ..
-            }) if path.is_ident("doc") => docs.push(s.value()),
+        match doc_of(&a) {
+            Some(d) => docs.push(d),
             _ if a.path().is_ident("c_name") => c_name = Some(a.parse_args::<syn::Ident>()?.to_string()),
             _ if a.path().is_ident("label") => label = Some(a.parse_args::<syn::LitStr>()?.value()),
             _ => others.push(a),
@@ -1270,7 +1262,7 @@ pub fn enum_text(e: &CEnumDef) -> String {
                         if e.own_to_text { "#[own_to_text] " } else { "" },
                         e.c_name.as_deref().map(|c| format!("#[c_name({c})] ")).unwrap_or_default(),
                         e.prefix.as_deref().map(|p| format!("#[prefix({p})] ")).unwrap_or_default()
-                            + &e.nr.as_deref().map(|n| format!("#[nr({n})] ")).unwrap_or_default(),
+                            + if e.nr { "#[nr] " } else { "" },
                         e.name.as_deref().unwrap_or("_"), e.repr);
     let lists = |t: &mut String, i: usize| for (at, f) in &e.from {
         if *at == i {

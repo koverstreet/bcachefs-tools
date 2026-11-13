@@ -160,7 +160,7 @@ impl BtreeTrans<'_> {
         assert!(u32::from(i.bkey_type) == BtreeNodeType::of(path.level().into(), path.btree_id()).0);
         ebug_assert!(!(i.level() == 0 &&
                        i.btree_id().has_snapshots() &&
-                       i.flags & c::BTREE_UPDATE_internal_snapshot_node == 0 &&
+                       i.flags & c::btree_iter_update_trigger_flags::internal_snapshot_node.bits() == 0 &&
                        fs.journal.flags.get(Journal::replay_done) &&
                        k.k.p.snapshot != 0 &&
                        fs.snapshots.is_leaf(k.k.p.snapshot) == Ok(false)));
@@ -588,7 +588,7 @@ impl BtreeTrans<'_> {
 
         for i in paths.updates() {
             crate::warn_once!(i.level() == 0 &&
-                              i.flags & c::BTREE_TRIGGER_norun == 0 &&
+                              i.flags & c::btree_iter_update_trigger_flags::norun.bits() == 0 &&
                               matches!(i.btree_id(), Btree::extents | Btree::reflink),
                               self.fs(), "{}(): update to {} without a disk reservation",
                               self.fn_name(), i.btree_id());
@@ -700,7 +700,7 @@ impl BtreeTrans<'_> {
             }
 
             for (i, k) in paths.update_keys() {
-                if i.key_cache_already_flushed() || i.flags & c::BTREE_UPDATE_nojournal != 0 {
+                if i.key_cache_already_flushed() || i.flags & c::btree_iter_update_trigger_flags::nojournal.bits() != 0 {
                     continue;
                 }
 
@@ -1054,7 +1054,7 @@ impl BtreeTrans<'_> {
 
             ebug_assert!(pu.paths[i.path].intent_locked(i.level().into()));
 
-            if i.key_cache_already_flushed() || i.flags & c::BTREE_UPDATE_nojournal != 0 {
+            if i.key_cache_already_flushed() || i.flags & c::btree_iter_update_trigger_flags::nojournal.bits() != 0 {
                 idx += 1;
                 continue;
             }

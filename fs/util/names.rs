@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
-//! What an enum built from an x-macro list is named: Names, which c_enum!
-//! implements for each - and #[open_enum] for its own, by its variants'
-//! names.
+//! What an enum is named: Names, which #[bch_enum] implements for each, by
+//! its variants' names.
 //!
 //! A static description, not a visitor: ENTRIES is each variant's name and
 //! value - a flags type's, its bit - and a value with none is "(unknown 7)".

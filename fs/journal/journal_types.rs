@@ -11,24 +11,22 @@ use core::ffi::c_uint;
 use core::mem::ManuallyDrop;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering::{Relaxed, SeqCst}};
-use cstruct_macros::{c_enum};
+use cstruct_macros::bch_enum;
 
-c_enum! {
-    #[flags]
-    pub enum journal_cycle_flags: u32 {
-        JOURNAL_CYCLE_must_close = 1 << 0,
-        JOURNAL_CYCLE_must_open = 1 << 1,
-        JOURNAL_CYCLE_force_close = 1 << 2,
-    }
+#[bch_enum(flags)]
+#[repr(u32)]
+pub enum journal_cycle_flags {
+    JOURNAL_CYCLE_must_close = 1 << 0,
+    JOURNAL_CYCLE_must_open = 1 << 1,
+    JOURNAL_CYCLE_force_close = 1 << 2,
 }
 
 /* First bits for BCH_WATERMARK: */
-c_enum! {
-    #[closed]
-    pub enum journal_res_flags: u32 {
-        __JOURNAL_RES_GET_NONBLOCK = c::BCH_WATERMARK_BITS,
-        __JOURNAL_RES_GET_CHECK,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum journal_res_flags {
+    __JOURNAL_RES_GET_NONBLOCK = c::BCH_WATERMARK_BITS,
+    __JOURNAL_RES_GET_CHECK,
 }
 
 pub const JOURNAL_RES_GET_NONBLOCK: u32 = 1 << c::journal_res_flags::__JOURNAL_RES_GET_NONBLOCK as u32;

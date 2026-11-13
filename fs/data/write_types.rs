@@ -7,33 +7,32 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::types::{NeBytes, c_default};
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, Init, bitfield, c_enum, TypeInfo};
+use cstruct_macros::{CStruct, Init, bitfield, bch_enum, TypeInfo};
 use nestify::nest;
 use pin_init::pin_data;
 use crate::format::{Bpos, Bversion};
 
-c_enum! {
-    #[closed]
-    #[prefix(__BCH_WRITE_)]
-    #[mask(bch_write_flags: u32, prefix = BCH_WRITE_)]
-    pub enum __bch_write_flags: u32 {
-        alloc_nowait,
-        cached,
-        data_encoded,
-        pages_stable,
-        pages_owned,
-        only_specified_devs,
-        must_ec,
-        wrote_data_inline,
-        check_enospc,
-        sync,
-        flush,
-        __BCH_WRITE_move,
-        replicas_best_effort,
-        in_worker,
-        submitted,
-        convert_unwritten,
-    }
+#[bch_enum(closed)]
+#[prefix(__BCH_WRITE_)]
+#[mask(bch_write_flags: u32, prefix = BCH_WRITE_)]
+#[repr(u32)]
+pub enum __bch_write_flags {
+    alloc_nowait,
+    cached,
+    data_encoded,
+    pages_stable,
+    pages_owned,
+    only_specified_devs,
+    must_ec,
+    wrote_data_inline,
+    check_enospc,
+    sync,
+    flush,
+    __BCH_WRITE_move,
+    replicas_best_effort,
+    in_worker,
+    submitted,
+    convert_unwritten,
 }
 
 nest! {

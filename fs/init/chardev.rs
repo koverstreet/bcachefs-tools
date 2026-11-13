@@ -317,7 +317,7 @@ fn dev_usage_v2(fs: &Fs, user: UserVstruct<c::bch_ioctl_dev_usage_v2>) -> Result
 
     arg.state         = ca.mi.get().state.0;
     arg.bucket_size   = ca.mi.get().bucket_size.into();
-    arg.nr_data_types = arg.nr_data_types.min(c::BCH_DATA_NR as u8);
+    arg.nr_data_types = arg.nr_data_types.min(c::DataType::NR as u8);
     arg.nr_buckets    = ca.mi.get().nbuckets - u64::from(ca.mi.get().first_bucket);
     user.set_head(&arg)?;
 
@@ -684,7 +684,7 @@ fn data_job(job: &DataJob, _write_ref: WriteRef) {
         stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_device_offline);
     } else {
         stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_done);
-        stats.at.data_type.set(DataType(c::DATA_PROGRESS_DATA_TYPE_done));
+        stats.at.data_type.set(DataType(c::data_progress_data_type_special::DATA_PROGRESS_DATA_TYPE_done.0));
     }
 }
 
@@ -696,7 +696,7 @@ impl FileOps for DataJob {
         let (ret, data_type, pos) = (stats.ret.get(), stats.at.data_type.get(), stats.at.pos.get());
 
         let mut e = c::bch_ioctl_data_event::default();
-        e.type_ = c::BCH_DATA_EVENT_PROGRESS as u8;
+        e.type_ = c::bch_data_event::BCH_DATA_EVENT_PROGRESS.0 as u8;
         e.ret   = ret.0 as u8;
 
         let mut p = c::bch_ioctl_data_progress::default();
@@ -707,11 +707,11 @@ impl FileOps for DataJob {
         p.sectors_error_corrected   = stats.sectors_error_corrected.load(Relaxed) as u64;
         p.sectors_error_uncorrected = stats.sectors_error_uncorrected.load(Relaxed) as u64;
 
-        if u32::from(self.arg.op) == c::BCH_DATA_OP_scrub {
+        if c::bch_data_ops(self.arg.op.into()) == c::bch_data_ops::scrub {
             let scrub = self.arg.scrub();
             if let Some(ca) = fs.dev_get(scrub.dev) {
                 let u = ca.usage_full_read_fast();
-                p.sectors_total = (c::BCH_DATA_btree as usize..u.d.len())
+                p.sectors_total = (c::DataType::btree.0 as usize..u.d.len())
                     .filter(|&i| scrub.data_types & (1 << i) != 0)
                     .map(|i| u.d[i].sectors)
                     .sum();
@@ -744,7 +744,7 @@ fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
         return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
     }
 
-    if u32::from(arg.op) >= c::BCH_DATA_OP_NR || arg.flags != 0 {
+    if u32::from(arg.op) >= c::bch_data_ops::NR || arg.flags != 0 {
         return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_data_bad_op);
     }
 

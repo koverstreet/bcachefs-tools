@@ -27,7 +27,7 @@ use core::iter;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 use crate::types::c_default;
-use cstruct_macros::{CStruct, c_enum, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, c_xmacro, TypeInfo, c_enum};
 
 c_xmacro! {
     BLK_ERRS {
@@ -690,8 +690,8 @@ c_enum! {
     #[open]
     pub enum bch_errcode: u32 {
         BCH_ERR_START = 2048,
-        BCH_ERRCODES(class, err, nr) => concat(BCH_ERR_, err) = (c::BCH_ERR_START as u32) + (nr as u32),
-        BCH_ERR_MAX = (c::BCH_ERR_START as u32)
+        BCH_ERRCODES(class, err, nr) => concat(BCH_ERR_, err) = bch_errcode::BCH_ERR_START.0 + (nr as u32),
+        BCH_ERR_MAX = bch_errcode::BCH_ERR_START.0
         + (core::mem::size_of::<c::bch_errcode_max>() as u32),
     }
 }

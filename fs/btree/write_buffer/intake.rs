@@ -172,7 +172,7 @@ pub struct Intake<'a> {
     #[cfg(CONFIG_BCACHEFS_TESTS)]
     test_wb_pin_armed: bool,
     /* None once dropped */
-    btrees:  Option<[IntakeBtree<'a>; c::BCH_WB_BTREE_NR as usize]>,
+    btrees:  Option<[IntakeBtree<'a>; c::bch_wb_btree::NR as usize]>,
 }
 
 impl<'a> Intake<'a> {
@@ -413,7 +413,7 @@ impl<'a> Intake<'a> {
          * that btree's intake buffer, compact the darray if mostly-zero, then
          * drop the empty-keys pin and release the locks taken in _start().
          */
-        for idx in (0..c::BCH_WB_BTREE_NR).map(c::bch_wb_btree::from_bits) {
+        for idx in (0..c::bch_wb_btree::NR).map(c::bch_wb_btree::from_bits) {
             let mut accounting = core::mem::take(&mut self.btree(idx).inc.accounting);
             let mut live_accounting_keys = 0;
 

@@ -90,7 +90,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                 (bytes.as_ptr() as usize - entries_start) / 8, entries_u64s));
         }
 
-        bkey_fsck_err_on!(v, is_btree_ptr && ty < c::BCH_EXTENT_ENTRY_MAX && !btree_ptr_entry_type_allowed(ty),
+        bkey_fsck_err_on!(v, is_btree_ptr && ty < c::bch_extent_entry_type::NR && !btree_ptr_entry_type_allowed(ty),
                           id::btree_ptr_has_non_ptr, "has non allowed field")?;
 
         match e {

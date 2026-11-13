@@ -233,7 +233,7 @@ impl Paths<'_> {
                                     should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> Result<(), c_int> {
         ebug_assert!(self[idx].write_locked(level), "taking write at a level not marked for it");
         let node = self[idx].held_node(level);
-        let readers = self.trans.node_lock_counts(self, None, node, level).n[c::SIX_LOCK_read as usize] as c_int;
+        let readers = self.trans.node_lock_counts(self, None, node, level).n[c::six_lock_type::SIX_LOCK_read as usize] as c_int;
 
         match unsafe {
             SixHold::from_raw(&node.as_ref().lock, six_lock_type::SIX_LOCK_intent)
@@ -1962,7 +1962,7 @@ impl<T: PathNode> BtreePath<T> {
 
     pub(crate) fn mark_locked_noreset(&mut self, level: usize, ty: btree_node_locked_type) {
         /* relying on this to avoid a branch */
-        const { assert!(c::SIX_LOCK_read as i32 == 0 && c::SIX_LOCK_intent as i32 == 1) };
+        const { assert!(c::six_lock_type::SIX_LOCK_read as i32 == 0 && c::six_lock_type::SIX_LOCK_intent as i32 == 1) };
 
         self.nodes_locked &= !(3 << (level << 1));
         self.nodes_locked |= ((ty as i32 + 1) as u8) << (level << 1);

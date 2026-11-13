@@ -23,7 +23,7 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_int, CStr};
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
-use cstruct_macros::{CStruct, c_enum, TypeInfo};
+use cstruct_macros::{CStruct, bch_enum, TypeInfo};
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -34,18 +34,17 @@ pub struct bch_log_msg {
 }
 c_default!(bch_log_msg);
 
-c_enum! {
-    #[closed]
-    pub enum kern_loglevels: u32 {
-        LOGLEVEL_emerg = 0,
-        LOGLEVEL_alert = 1,
-        LOGLEVEL_crit = 2,
-        LOGLEVEL_err = 3,
-        LOGLEVEL_warning = 4,
-        LOGLEVEL_notice = 5,
-        LOGLEVEL_info = 6,
-        LOGLEVEL_debug = 7,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum kern_loglevels {
+    LOGLEVEL_emerg = 0,
+    LOGLEVEL_alert = 1,
+    LOGLEVEL_crit = 2,
+    LOGLEVEL_err = 3,
+    LOGLEVEL_warning = 4,
+    LOGLEVEL_notice = 5,
+    LOGLEVEL_info = 6,
+    LOGLEVEL_debug = 7,
 }
 
 pub use crate::c::{bch2_ratelimit_state_init, ___ratelimit, bch2_rust_warn};

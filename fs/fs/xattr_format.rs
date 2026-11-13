@@ -4,20 +4,19 @@
 
 use crate::cstructs::c;
 use crate::types::Le16;
-use cstruct_macros::{c_name, c_enum, whole, CStruct, TypeInfo};
+use cstruct_macros::{c_name, bch_enum, whole, CStruct, TypeInfo};
 
 /* An xattr's type - its namespace; Xattr.x_type: */
-c_enum! {
-    #[open]
-    #[c_name(bch_xattr_type)]
-    #[prefix(KEY_TYPE_XATTR_INDEX_)]
-    pub enum XattrType: u32 {
-        USER              = 0,
-        POSIX_ACL_ACCESS  = 1,
-        POSIX_ACL_DEFAULT = 2,
-        TRUSTED           = 3,
-        SECURITY          = 4,
-    }
+#[bch_enum(open)]
+#[c_name(bch_xattr_type)]
+#[prefix(KEY_TYPE_XATTR_INDEX_)]
+#[repr(u32)]
+pub enum XattrType {
+    USER              = 0,
+    POSIX_ACL_ACCESS  = 1,
+    POSIX_ACL_DEFAULT = 2,
+    TRUSTED           = 3,
+    SECURITY          = 4,
 }
 
 #[whole(tail = x_name_and_value: [u8], bkey)]

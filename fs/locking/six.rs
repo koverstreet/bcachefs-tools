@@ -27,15 +27,14 @@ use core::mem::ManuallyDrop;
 use core::ptr::{self, null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr, AtomicU32};
-use cstruct_macros::{c_enum, CStruct};
+use cstruct_macros::{bch_enum, CStruct};
 
-c_enum! {
-    #[closed]
-    pub enum six_lock_type: u32 {
-        SIX_LOCK_read,
-        SIX_LOCK_intent,
-        SIX_LOCK_write,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum six_lock_type {
+    SIX_LOCK_read,
+    SIX_LOCK_intent,
+    SIX_LOCK_write,
 }
 
 /* C's enum, a u32: zeroes are SIX_LOCK_read, and it's only ever set() to one */
@@ -117,11 +116,10 @@ pub struct six_lock {
     pub dep_map: LockdepMap,
 }
 
-c_enum! {
-    #[flags]
-    pub enum six_lock_init_flags: u32 {
-        SIX_LOCK_INIT_PCPU = 1 << 0,
-    }
+#[bch_enum(flags)]
+#[repr(u32)]
+pub enum six_lock_init_flags {
+    SIX_LOCK_INIT_PCPU = 1 << 0,
 }
 
 #[repr(C)]
@@ -148,8 +146,8 @@ const SIX_LOCK_HELD_read_OFFSET: u32 = 0;
 const SIX_LOCK_HELD_read: u32 = !(!0u32 << 26);
 const SIX_LOCK_HELD_intent: u32 = 1 << 26;
 const SIX_LOCK_HELD_write: u32 = 1 << 27;
-const SIX_LOCK_WAITING_read: u32 = 1 << (28 + SIX_LOCK_read);
-const SIX_LOCK_WAITING_write: u32 = 1 << (28 + SIX_LOCK_write);
+const SIX_LOCK_WAITING_read: u32 = 1 << (28 + (six_lock_type::SIX_LOCK_read as u32));
+const SIX_LOCK_WAITING_write: u32 = 1 << (28 + (six_lock_type::SIX_LOCK_write as u32));
 const SIX_LOCK_NOSPIN: u32 = 1 << 31;
 
 struct six_lock_vals {
@@ -1174,14 +1172,14 @@ pub fn six_lock_write_held(lock: &c::six_lock) -> bool {
 pub fn six_lock_counts(lock: &c::six_lock) -> c::six_lock_count {
     let mut ret = six_lock_count::default();
 
-    ret.n[SIX_LOCK_read as usize] = if !lock.readers.allocated() {
+    ret.n[six_lock_type::SIX_LOCK_read as usize] = if !lock.readers.allocated() {
         atomic_read(lock) & SIX_LOCK_HELD_read
     } else {
         pcpu_read_count(lock)
     };
-    ret.n[SIX_LOCK_intent as usize] = (atomic_read(lock) & SIX_LOCK_HELD_intent != 0) as c_uint +
+    ret.n[six_lock_type::SIX_LOCK_intent as usize] = (atomic_read(lock) & SIX_LOCK_HELD_intent != 0) as c_uint +
         lock.intent_lock_recurse.get();
-    ret.n[SIX_LOCK_write as usize] = (atomic_read(lock) & SIX_LOCK_HELD_write != 0) as c_uint;
+    ret.n[six_lock_type::SIX_LOCK_write as usize] = (atomic_read(lock) & SIX_LOCK_HELD_write != 0) as c_uint;
 
     ret
 }
@@ -1386,7 +1384,7 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
 
             if !lock.readers.allocated() {
                 ebug_assert!(new & SIX_LOCK_HELD_read != 0);
-                new = new.wrapping_sub(L[SIX_LOCK_read as usize].lock_val);
+                new = new.wrapping_sub(L[six_lock_type::SIX_LOCK_read as usize].lock_val);
             }
 
             new |= SIX_LOCK_HELD_intent;

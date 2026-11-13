@@ -154,7 +154,7 @@ impl BucketGens {
 }
 
 pub const DATA_TYPES_MOVABLE: c_ulong =
-    (1 << c::BCH_DATA_btree as u32) |
-    (1 << c::BCH_DATA_user as u32) |
-    (1 << c::BCH_DATA_stripe as u32) |
-    (1 << c::BCH_DATA_multiple as u32);
+    (1 << c::DataType::btree.0) |
+    (1 << c::DataType::user.0) |
+    (1 << c::DataType::stripe.0) |
+    (1 << c::DataType::multiple.0);

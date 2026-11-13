@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_name, bitfield, c_bitmask, c_enum, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bitfield, c_bitmask, bch_enum, whole, CStruct, Plain, TypeInfo, SizedVal};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -130,21 +130,20 @@ use crate::format::Bpos;
  * is neither checksummed nor compressed.
  */
 
-c_enum! {
-    #[open]
-    #[prefix(BCH_EXTENT_ENTRY_)]
-    #[nr(BCH_EXTENT_ENTRY_MAX)]
-    pub enum bch_extent_entry_type: u32 {
-        ptr = 0,
-        crc32 = 1,
-        crc64 = 2,
-        crc128 = 3,
-        stripe_ptr = 4,
-        rebalance_v1 = 5,
-        flags = 6,
-        reconcile = 7,
-        reconcile_bp = 8,
-    }
+#[bch_enum(open)]
+#[prefix(BCH_EXTENT_ENTRY_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_extent_entry_type {
+    ptr = 0,
+    crc32 = 1,
+    crc64 = 2,
+    crc128 = 3,
+    stripe_ptr = 4,
+    rebalance_v1 = 5,
+    flags = 6,
+    reconcile = 7,
+    reconcile_bp = 8,
 }
 
 /* Compressed/uncompressed size are stored biased by 1: */
@@ -238,12 +237,11 @@ pub struct bch_extent_stripe_ptr {
     idx:        u47,
 }
 
-c_enum! {
-    #[open]
-    #[prefix(BCH_EXTENT_FLAG_)]
-    pub enum bch_extent_flags_e: u32 {
-        poisoned = 0,
-    }
+#[bch_enum(open)]
+#[prefix(BCH_EXTENT_FLAG_)]
+#[repr(u32)]
+pub enum bch_extent_flags_e {
+    poisoned = 0,
 }
 
 #[bitfield(u64)]

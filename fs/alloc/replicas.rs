@@ -37,21 +37,20 @@ use crate::util::{Printbuf, ToText};
 use core::fmt;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicI32, Ordering};
-use cstruct_macros::{CStruct, TypeInfo, c_enum};
+use cstruct_macros::{CStruct, TypeInfo, bch_enum};
 use crate::sb::io::SbResize;
 use crate::types::c_default;
 
-c_enum! {
-    #[closed]
-    pub enum bch_write_check: u32 {
-        /* Starting: is there anywhere to write each data type at all? */
-        BCH_WRITE_CHECK_start,
-        /*
-         * A device leaving the rw set: also refuse, unless the matching force
-         * flag is set, if that takes a data type below its configured replicas
-         */
-        BCH_WRITE_CHECK_dev_leaving_rw,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum bch_write_check {
+    /* Starting: is there anywhere to write each data type at all? */
+    BCH_WRITE_CHECK_start,
+    /*
+     * A device leaving the rw set: also refuse, unless the matching force
+     * flag is set, if that takes a data type below its configured replicas
+     */
+    BCH_WRITE_CHECK_dev_leaving_rw,
 }
 
 #[repr(C)]
@@ -256,7 +255,7 @@ impl DevlistEntry {
     pub(crate) fn new(data_type: DataType, devs: c::bch_devs_list) -> Self {
         assert!(data_type.0 != 0 &&
                 data_type != DataType::sb &&
-                data_type.0 < c::BCH_DATA_NR,
+                data_type.0 < c::DataType::NR,
                 "replicas entry of data type {}", data_type.0);
 
         let mut r = c::bch_replicas_padded::default();
@@ -386,8 +385,8 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bc
     type D = DataType;
 
     // have: what the rw set has now; online: what @devs would have
-    let mut have = [0u32; c::BCH_DATA_NR as usize];
-    let mut online = [0u32; c::BCH_DATA_NR as usize];
+    let mut have = [0u32; c::DataType::NR as usize];
+    let mut online = [0u32; c::DataType::NR as usize];
 
     let rcu = read_lock();
     for ca in fs.devs_rcu_in(fs.allocator.rw_devs[0].iter(), &rcu) {

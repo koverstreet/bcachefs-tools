@@ -9,16 +9,15 @@ use crate::util::alloc::KVVec;
 use crate::util::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_name};
+use cstruct_macros::{CStruct, bitfield, bch_enum, c_name};
 use nestify::nest;
 use crate::format::Bpos;
 
-c_enum! {
-    #[closed]
-    pub enum printbuf_si: u32 {
-        PRINTBUF_UNITS_2,       /* use binary powers of 2^10 */
-        PRINTBUF_UNITS_10,      /* use powers of 10^3 (standard SI) */
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum printbuf_si {
+    PRINTBUF_UNITS_2,       /* use binary powers of 2^10 */
+    PRINTBUF_UNITS_10,      /* use powers of 10^3 (standard SI) */
 }
 
 pub const PRINTBUF_INLINE_TABSTOPS: u32 = 8;

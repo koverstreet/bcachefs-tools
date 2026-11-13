@@ -162,7 +162,7 @@ use crate::util::gather::Gather;
 use crate::util::task::waiter;
 use crate::util::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
-use cstruct_macros::{CStruct, TypeInfo, c_enum};
+use cstruct_macros::{CStruct, TypeInfo, bch_enum};
 use core::mem::{size_of, size_of_val};
 use crate::data_structures::array_vec::ArrayVec;
 use core::pin::Pin;
@@ -174,11 +174,10 @@ use crate::format::{Btree, DataType, Nonce, MetadataVersion, SbFeature};
  * bringup: this write is part of bringing the filesystem up - allowed before
  * a start has begun, see __bch2_write_super()
  */
-c_enum! {
-    #[flags]
-    pub enum bch_sb_write_flags: u32 {
-        BCH_SB_WRITE_bringup = 1 << 0,
-    }
+#[bch_enum(flags)]
+#[repr(u32)]
+pub enum bch_sb_write_flags {
+    BCH_SB_WRITE_bringup = 1 << 0,
 }
 
 /*
@@ -216,7 +215,7 @@ pub struct bch_sb_cpu {
     pub features: Volatile<u64>,
     pub compat: Volatile<u64>,
     pub recovery_passes_required: Volatile<u64>,
-    pub errors_silent: [Volatile<c_ulong>; bits_to_longs(c::BCH_FSCK_ERR_MAX as usize)],
+    pub errors_silent: [Volatile<c_ulong>; bits_to_longs(c::SbErrorId::NR as usize)],
     pub btrees_lost_data: Volatile<u64>,
     pub btrees_clean: Volatile<u64>,
 
@@ -533,7 +532,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
     sb_compatible(sb, out)?;
 
     if opts.no_version_check == 0 {
-        let incompat = sb.features[0].get() & (!0u64 << c::BCH_FEATURE_NR);
+        let incompat = sb.features[0].get() & (!0u64 << c::SbFeature::NR);
         let incompat_bit = if incompat != 0 {
             incompat.trailing_zeros()
         } else if sb.features[1].get() != 0 {
@@ -544,7 +543,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
 
         sb_err_on!(out, incompat_bit != 0, BCH_ERR_invalid_sb_features,
                    "Filesystem has incompatible feature bit {incompat_bit}, highest supported {} ({})",
-                   SbFeature(c::BCH_FEATURE_NR - 1), c::BCH_FEATURE_NR - 1)?;
+                   SbFeature(c::SbFeature::NR - 1), c::SbFeature::NR - 1)?;
 
         let current = c::bcachefs_metadata_version_current as u64;
         sb_err_on!(out, c::BCH_VERSION_MAJOR(sb.version.get().into()) > c::BCH_VERSION_MAJOR(current) ||
@@ -874,7 +873,7 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
             let v = crate::opts::opt_from_sb(sb, opt.id, None);
             write!(out, "{}:\t", opt.name);
             crate::opts::opt_to_text(&mut out, None, Some(sb), opt, v,
-                                     c::OPT_HUMAN_READABLE | c::OPT_SHOW_FULL_LIST);
+                                     c::opt_flags::OPT_HUMAN_READABLE.bits() | c::OPT_SHOW_FULL_LIST);
             out.newline();
         }
     }
@@ -2791,7 +2790,7 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
                 crate::init::passes::passes_from_stable(e.recovery_passes_required[0].get()));
 
             // the section's little-endian words as longs: le_bitvector_to_cpu()
-            const _: () = assert!(size_of::<[core::ffi::c_ulong; bits_to_longs(c::BCH_FSCK_ERR_MAX as usize)]>()
+            const _: () = assert!(size_of::<[core::ffi::c_ulong; bits_to_longs(c::SbErrorId::NR as usize)]>()
                                   <= size_of::<[Le64; 8]>());
             let silent = LeBitmap::from_words(&e.errors_silent);
             let bits = core::ffi::c_ulong::BITS as usize;

@@ -72,7 +72,7 @@ macro_rules! descs {
 /// In inode_opt_id's order.
 const DESCS: [Desc; NR] = c::inode_opt_id_arms!(descs);
 
-/// An inode option: an inode_opt_id below Inode_opt_nr.
+/// An inode option: an inode_opt_id below inode_opt_id::NR.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InodeOpt(c::inode_opt_id);
 

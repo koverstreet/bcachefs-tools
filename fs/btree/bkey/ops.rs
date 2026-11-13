@@ -227,7 +227,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     // a leaf's btree, None for an interior node; past the btrees this code
     // knows, nothing's known of its keys
     let btree = (v.from.level == 0).then_some(v.from.btree);
-    if btree.is_some_and(|b| b.0 >= c::BTREE_ID_NR as u32) {
+    if btree.is_some_and(|b| b.0 >= Btree::NR as u32) {
         return Ok(());
     }
 

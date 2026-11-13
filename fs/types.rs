@@ -25,117 +25,116 @@ use crate::util::rcu::RcuHead;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU16, AtomicU32, AtomicU64};
-use cstruct_macros::{c_name, c_enum, placed, CStruct, Fieldwise, Init, Late, TypeInfo};
+use cstruct_macros::{c_name, bch_enum, placed, CStruct, Fieldwise, Init, Late, TypeInfo};
 use pin_init::pin_data;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
-c_enum! {
-    #[closed]
-    #[prefix(BCH_TIME_)]
-    #[nr(BCH_TIME_STAT_NR)]
-    pub enum bch_time_stats: u32 {
-        /// Allocate memory in the btree node cache for a new btree node
-        btree_node_mem_alloc,
-        /// Split a full btree node into two new nodes
-        btree_node_split,
-        /// Compact a full btree node on disk
-        btree_node_compact,
-        /// Merge two adjacent btree nodes
-        btree_node_merge,
-        /// Sort and resort entire btree nodes in memory, after reading from
-        /// disk or for compacting
-        btree_node_sort,
-        /// Read btree nodes from disk
-        btree_node_read,
-        /// Post-read btree node processing
-        btree_node_read_done,
-        /// Write btree node to disk
-        btree_node_write,
-        /// Foreground time for topology-changing btree updates (splits,
-        /// compactions, merges); roughly corresponds to lock held time
-        btree_interior_update_foreground,
-        /// Total time for topology-changing btree updates, including background
-        /// transaction phase after new nodes are written
-        btree_interior_update_total,
-        /// scan btree node cache for eviction
-        btree_node_cache_scan,
-        /// scan btree key cache for eviction
-        btree_key_cache_scan,
-        /// Flush btree write buffer to btree
-        btree_write_buffer_flush,
-        /// Per-shard: queued to start of execution (workqueue scheduling delay)
-        btree_write_buffer_flush_shard_sched_delay,
-        /// Per-shard: actual flush work duration (wb_flush_sorted_range)
-        btree_write_buffer_flush_shard_work,
-        /// GC pass recalculating oldest generation numbers
-        btree_gc,
-        /// Core write path: allocate space, compress, encrypt, checksum, issue
-        /// writes, update extents btree
-        data_write,
-        /// Core read path: look up extents btree, issue reads, checksum,
-        /// decrypt, decompress
-        data_read,
-        /// Promote: write a cached copy of an extent to promote_target on read
-        data_promote,
-        /// Flush journal writes: cache flush to devices then FUA journal writes
-        journal_flush_write,
-        /// Non-flush journal writes, without cache flushes or FUA
-        journal_noflush_write,
-        /// Flush a journal sequence number to disk for sync, fsync, and bucket
-        /// reuse
-        journal_flush_seq,
-        /// Flush btree journal pins
-        journal_pin_flush_btree,
-        /// Flush key cache journal pins
-        journal_pin_flush_key_cache,
-        /// Flush other journal pins
-        journal_pin_flush_other,
-        /// Write the superblock to every member device; held under sb_lock, so
-        /// this is what other superblock writers wait behind
-        sb_write,
-        /// Blocked: journal reclaim not keeping up with reclaiming space
-        blocked_journal_low_on_space,
-        /// Blocked: journal pins (dirty btree nodes, key cache entries) not
-        /// flushed fast enough
-        blocked_journal_low_on_pin,
-        /// Blocked: open buckets running low, throttling new journal work so
-        /// reclaim can free them
-        blocked_journal_low_on_open_buckets,
-        /// Blocked: too many journal writes in flight
-        blocked_journal_max_in_flight,
-        /// Blocked: too many journal entries open, not yet closed for writing
-        blocked_journal_max_open,
-        /// Blocked: waiting for write buffer flush
-        blocked_journal_blocked,
-        /// Blocked: writer hit journal_full (no room in current entry, reclaim
-        /// not keeping up)
-        blocked_journal_full,
-        /// Blocked: writer hit journal_pin_full (pin fifo full, btree node /
-        /// key cache flushers not keeping up)
-        blocked_journal_pin_full,
-        /// Blocked: writer hit journal_buf_enomem (preallocated data buffer not
-        /// topped up)
-        blocked_journal_buf_enomem,
-        /// Blocked: writer hit journal_stuck (10s timeout fired in slowpath
-        /// wait)
-        blocked_journal_stuck,
-        /// Blocked: waiting for key cache flush
-        blocked_key_cache_flush,
-        /// Blocked: bucket allocation waiting, copygc or allocator thread not
-        /// keeping up
-        blocked_allocate,
-        /// Blocked: all open bucket handles in use
-        blocked_allocate_open_bucket,
-        /// Blocked: write buffer full
-        blocked_write_buffer_full,
-        /// Blocked: writeback throttle
-        blocked_writeback_throttle,
-        /// Nocow lock contention
-        nocow_lock_contended,
-        /// Blocked: discard worker waiting for journal flush to advance
-        /// rewind_seq and release buckets
-        blocked_discard_journal_flush,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_TIME_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_time_stats {
+    /// Allocate memory in the btree node cache for a new btree node
+    btree_node_mem_alloc,
+    /// Split a full btree node into two new nodes
+    btree_node_split,
+    /// Compact a full btree node on disk
+    btree_node_compact,
+    /// Merge two adjacent btree nodes
+    btree_node_merge,
+    /// Sort and resort entire btree nodes in memory, after reading from
+    /// disk or for compacting
+    btree_node_sort,
+    /// Read btree nodes from disk
+    btree_node_read,
+    /// Post-read btree node processing
+    btree_node_read_done,
+    /// Write btree node to disk
+    btree_node_write,
+    /// Foreground time for topology-changing btree updates (splits,
+    /// compactions, merges); roughly corresponds to lock held time
+    btree_interior_update_foreground,
+    /// Total time for topology-changing btree updates, including background
+    /// transaction phase after new nodes are written
+    btree_interior_update_total,
+    /// scan btree node cache for eviction
+    btree_node_cache_scan,
+    /// scan btree key cache for eviction
+    btree_key_cache_scan,
+    /// Flush btree write buffer to btree
+    btree_write_buffer_flush,
+    /// Per-shard: queued to start of execution (workqueue scheduling delay)
+    btree_write_buffer_flush_shard_sched_delay,
+    /// Per-shard: actual flush work duration (wb_flush_sorted_range)
+    btree_write_buffer_flush_shard_work,
+    /// GC pass recalculating oldest generation numbers
+    btree_gc,
+    /// Core write path: allocate space, compress, encrypt, checksum, issue
+    /// writes, update extents btree
+    data_write,
+    /// Core read path: look up extents btree, issue reads, checksum,
+    /// decrypt, decompress
+    data_read,
+    /// Promote: write a cached copy of an extent to promote_target on read
+    data_promote,
+    /// Flush journal writes: cache flush to devices then FUA journal writes
+    journal_flush_write,
+    /// Non-flush journal writes, without cache flushes or FUA
+    journal_noflush_write,
+    /// Flush a journal sequence number to disk for sync, fsync, and bucket
+    /// reuse
+    journal_flush_seq,
+    /// Flush btree journal pins
+    journal_pin_flush_btree,
+    /// Flush key cache journal pins
+    journal_pin_flush_key_cache,
+    /// Flush other journal pins
+    journal_pin_flush_other,
+    /// Write the superblock to every member device; held under sb_lock, so
+    /// this is what other superblock writers wait behind
+    sb_write,
+    /// Blocked: journal reclaim not keeping up with reclaiming space
+    blocked_journal_low_on_space,
+    /// Blocked: journal pins (dirty btree nodes, key cache entries) not
+    /// flushed fast enough
+    blocked_journal_low_on_pin,
+    /// Blocked: open buckets running low, throttling new journal work so
+    /// reclaim can free them
+    blocked_journal_low_on_open_buckets,
+    /// Blocked: too many journal writes in flight
+    blocked_journal_max_in_flight,
+    /// Blocked: too many journal entries open, not yet closed for writing
+    blocked_journal_max_open,
+    /// Blocked: waiting for write buffer flush
+    blocked_journal_blocked,
+    /// Blocked: writer hit journal_full (no room in current entry, reclaim
+    /// not keeping up)
+    blocked_journal_full,
+    /// Blocked: writer hit journal_pin_full (pin fifo full, btree node /
+    /// key cache flushers not keeping up)
+    blocked_journal_pin_full,
+    /// Blocked: writer hit journal_buf_enomem (preallocated data buffer not
+    /// topped up)
+    blocked_journal_buf_enomem,
+    /// Blocked: writer hit journal_stuck (10s timeout fired in slowpath
+    /// wait)
+    blocked_journal_stuck,
+    /// Blocked: waiting for key cache flush
+    blocked_key_cache_flush,
+    /// Blocked: bucket allocation waiting, copygc or allocator thread not
+    /// keeping up
+    blocked_allocate,
+    /// Blocked: all open bucket handles in use
+    blocked_allocate_open_bucket,
+    /// Blocked: write buffer full
+    blocked_write_buffer_full,
+    /// Blocked: writeback throttle
+    blocked_writeback_throttle,
+    /// Nocow lock contention
+    nocow_lock_contended,
+    /// Blocked: discard worker waiting for journal flush to advance
+    /// rewind_seq and release buckets
+    blocked_discard_journal_flush,
 }
 
 /* Number of nodes btree coalesce will try to coalesce at once */
@@ -145,45 +144,43 @@ pub const GC_MERGE_NODES: u32 = 4;
 #[derive(Clone, Copy, Default, CStruct, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct io_count {
-    pub sectors: [[u64; c::BCH_DATA_NR as usize]; 2],
+    pub sectors: [[u64; c::DataType::NR as usize]; 2],
 }
 
-c_enum! {
-    #[closed]
-    #[prefix(BCH_DEV_READ_REF_)]
-    #[nr(BCH_DEV_READ_REF_NR)]
-    pub enum bch_dev_read_ref: u32 {
-        rust,
-        bch2_online_devs,
-        read_fua_test,
-        journal_read,
-        fs_journal_alloc,
-        fs_resize_on_mount,
-        btree_node_read,
-        btree_node_read_all_replicas,
-        btree_node_scrub,
-        btree_node_write,
-        btree_node_scan,
-        btree_verify_replicas,
-        io_read,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_DEV_READ_REF_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_dev_read_ref {
+    rust,
+    bch2_online_devs,
+    read_fua_test,
+    journal_read,
+    fs_journal_alloc,
+    fs_resize_on_mount,
+    btree_node_read,
+    btree_node_read_all_replicas,
+    btree_node_scrub,
+    btree_node_write,
+    btree_node_scan,
+    btree_verify_replicas,
+    io_read,
 }
 
-c_enum! {
-    #[closed]
-    #[prefix(BCH_DEV_WRITE_REF_)]
-    #[nr(BCH_DEV_WRITE_REF_NR)]
-    pub enum bch_dev_write_ref: u32 {
-        rust,
-        journal_write,
-        journal_discard,
-        discard_bucket,
-        discard_one_bucket_fast,
-        do_invalidates,
-        nocow_flush,
-        io_write,
-        ec_bucket_zero,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_DEV_WRITE_REF_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_dev_write_ref {
+    rust,
+    journal_write,
+    journal_discard,
+    discard_bucket,
+    discard_one_bucket_fast,
+    do_invalidates,
+    nocow_flush,
+    io_write,
+    ec_bucket_zero,
 }
 
 /// A bucket_bitmap's words: replaced by a copy when the device grows.
@@ -213,15 +210,14 @@ pub struct bucket_bitmap {
     pub bits: Locked<c::mutex, (), BucketBits>,
 }
 
-c_enum! {
-    #[closed]
-    #[prefix(BCH_DEV_)]
-    pub enum bch_dev_flags: u32 {
-        /// a write completed that the device may still hold in its volatile
-        /// cache; journal_write_preflush() clears it when it flushes the
-        /// device.
-        unflushed_writes,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_DEV_)]
+#[repr(u32)]
+pub enum bch_dev_flags {
+    /// a write completed that the device may still hold in its volatile
+    /// cache; journal_write_preflush() clears it when it flushes the
+    /// device.
+    unflushed_writes,
 }
 
 pub const CONGESTED_MAX: u32 = 1024;
@@ -286,7 +282,7 @@ pub struct Dev {
      */
     pub mi: crate::util::projections::Volatile<c::bch_member_cpu>,
     pub btree_allocated_bitmap_gc: crate::util::projections::Volatile<u64>,
-    pub errors: [AtomicI64; c::BCH_MEMBER_ERROR_NR as usize],
+    pub errors: [AtomicI64; c::bch_member_error_type::NR as usize],
     /// Written racing C's plain reads and stores, as C's are: atomic here,
     /// so Rust's are through a shared bch_dev.
     pub write_errors_start: crate::data_structures::bitmap::AtomicULong,
@@ -410,41 +406,40 @@ pub struct Dev {
  * error
  * topology error
  */
-c_enum! {
-    #[closed]
-    #[prefix(BCH_FS_)]
-    pub enum bch_fs_flags: u32 {
-        new_fs,
-        start_begun,
-        started,
-        clean_recovery,
-        btree_running,
-        accounting_replay_done,
-        may_go_rw,
-        scrub_journal,
-        may_upgrade_downgrade,
-        rw,
-        rw_init_done,
-        was_rw,
-        stopping,
-        emergency_ro,
-        going_ro,
-        write_disable_complete,
-        clean_shutdown,
-        in_recovery,
-        running_recovery_passes,
-        in_fsck,
-        initial_gc_unfixed,
-        error,
-        topology_error,
-        errors_fixed,
-        errors_fixed_silent,
-        errors_not_fixed,
-        no_invalid_checks,
-        discard_mount_opt_set,
-        sb_dirty,
-        all_devs_rw,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_FS_)]
+#[repr(u32)]
+pub enum bch_fs_flags {
+    new_fs,
+    start_begun,
+    started,
+    clean_recovery,
+    btree_running,
+    accounting_replay_done,
+    may_go_rw,
+    scrub_journal,
+    may_upgrade_downgrade,
+    rw,
+    rw_init_done,
+    was_rw,
+    stopping,
+    emergency_ro,
+    going_ro,
+    write_disable_complete,
+    clean_shutdown,
+    in_recovery,
+    running_recovery_passes,
+    in_fsck,
+    initial_gc_unfixed,
+    error,
+    topology_error,
+    errors_fixed,
+    errors_fixed_silent,
+    errors_not_fixed,
+    no_invalid_checks,
+    discard_mount_opt_set,
+    sb_dirty,
+    all_devs_rw,
 }
 
 #[cfg(CONFIG_DEBUG_FS)]
@@ -592,14 +587,14 @@ pub struct Fs {
     pub counters_recent: crate::util::workqueue::DelayedWork,
     #[pin]
     #[init(::pin_init::pin_init_array_from_fn(|_| c::bch2_time_stats::init()))]
-    pub times: [c::bch2_time_stats; c::BCH_TIME_STAT_NR as usize],
+    pub times: [c::bch2_time_stats; c::bch_time_stats::NR as usize],
     #[pin]
     #[init(c::bch_fs_errors::init())]
     pub errors: c::bch_fs_errors,
 
     /* What's in flight, for debugfs: debug/async_objs.rs */
     #[pin]
-    pub async_objs: [c::async_obj_list; c::BCH_ASYNC_OBJ_NR as usize],
+    pub async_objs: [c::async_obj_list; c::bch_async_obj_lists::NR as usize],
 
     #[pin]
     #[late]
@@ -762,5 +757,5 @@ pub struct Fs {
     pub async_obj_dir: *mut c::dentry,
     #[cfg(CONFIG_DEBUG_FS)]
     #[pin]
-    pub btree_debug: [c::btree_debug; c::BTREE_ID_NR as usize],
+    pub btree_debug: [c::btree_debug; Btree::NR as usize],
 }

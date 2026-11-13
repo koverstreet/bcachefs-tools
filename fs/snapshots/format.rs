@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_name, c_bitmask, c_enum, grown, CStruct, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{c_name, c_bitmask, bch_enum, grown, CStruct, Plain, TypeInfo, View, SizedVal};
 
 pub const BCACHEFS_ROOT_SUBVOL: u32 = 1;
 
@@ -33,22 +33,21 @@ pub struct Subvolume {
     pub pad: Le32,
 }
 
-c_enum! {
-    #[open]
-    #[prefix(SUBVOLUME_STATE_)]
-    /*
-     * Subvolume lifecycle state: same codeword scheme as Snapshot.state
-     * (below), additionally >= 14 bit flips from every snapshot state so a value
-     * copied across key types reads as garbage, not a legal state:
-     *
-     * unlinked: unlinked from filesystem tree but still has open files
-     * deleted:  no longer referenced, delete_dead_snapshots may delete
-     */
-    pub enum bch_subvolume_state: u32 {
-        live = 0x4ad5447e,
-        unlinked = 0x2d358e8f,
-        deleted = 0x3c6b2d4c,
-    }
+#[bch_enum(open)]
+#[prefix(SUBVOLUME_STATE_)]
+/*
+ * Subvolume lifecycle state: same codeword scheme as Snapshot.state
+ * (below), additionally >= 14 bit flips from every snapshot state so a value
+ * copied across key types reads as garbage, not a legal state:
+ *
+ * unlinked: unlinked from filesystem tree but still has open files
+ * deleted:  no longer referenced, delete_dead_snapshots may delete
+ */
+#[repr(u32)]
+pub enum bch_subvolume_state {
+    live = 0x4ad5447e,
+    unlinked = 0x2d358e8f,
+    deleted = 0x3c6b2d4c,
 }
 
 c_bitmask! {
@@ -84,49 +83,48 @@ pub struct Snapshot {
     pub pad: Le32,
 }
 
-c_enum! {
-    #[open]
-    #[prefix(SNAPSHOT_STATE_)]
-    /*
-     * WILL_DELETE: leaf node that's no longer referenced by a subvolume, still has
-     * keys, will be deleted by delete_dead_snapshots
-     *
-     * SUBVOL: true if a subvol points to this snapshot (why do we have this?
-     * subvols are nonzero)
-     *
-     * DELETED: we never delete snapshot keys, we mark them as deleted so that we
-     * can distinguish between a key for a missing snapshot (and we have no idea
-     * what happened) and a key for a deleted snapshot (delete_dead_snapshots() missed
-     * something, key should be deleted)
-     *
-     * NO_KEYS: we don't remove interior snapshot nodes from snapshot trees at
-     * runtime, since we can't do the adjustements for the depth/skiplist field
-     * atomically - and that breaks e.g. is_ancestor(). Instead, we mark it to be
-     * deleted at the next remount; this tells us that we don't need to run the full
-     * delete_dead_snapshots().
-     *
-     *
-     * XXX - todo item:
-     *
-     * We should guard against a bitflip causing us to delete a snapshot incorrectly
-     * by cross checking with the subvolume btree: delete_dead_snapshots() can take
-     * out more data than any other codepath if it runs incorrectly
-     */
-    /*
-     * The state field licenses the most destructive thing the filesystem can do -
-     * deleting user data - so corruption of it must be detectable, never
-     * misinterpretable. Every state is a randomly generated codeword: a stray
-     * memory stomper almost never lands on a legal state (4 legal values in a
-     * 2^32 space; zero and all-ones are illegal, so a wiped field is detected,
-     * not misread), and any two states are >= 14 bit flips apart (enforced
-     * below), so sparse bit corruption can't turn one legal state into another.
-     */
-    pub enum bch_snapshot_state: u32 {
-        live = 0x757c47a2,
-        will_delete = 0x3316a8d2,
-        no_keys = 0x372b5a01,
-        deleted = 0x7cd4a225,
-    }
+#[bch_enum(open)]
+#[prefix(SNAPSHOT_STATE_)]
+/*
+ * WILL_DELETE: leaf node that's no longer referenced by a subvolume, still has
+ * keys, will be deleted by delete_dead_snapshots
+ *
+ * SUBVOL: true if a subvol points to this snapshot (why do we have this?
+ * subvols are nonzero)
+ *
+ * DELETED: we never delete snapshot keys, we mark them as deleted so that we
+ * can distinguish between a key for a missing snapshot (and we have no idea
+ * what happened) and a key for a deleted snapshot (delete_dead_snapshots() missed
+ * something, key should be deleted)
+ *
+ * NO_KEYS: we don't remove interior snapshot nodes from snapshot trees at
+ * runtime, since we can't do the adjustements for the depth/skiplist field
+ * atomically - and that breaks e.g. is_ancestor(). Instead, we mark it to be
+ * deleted at the next remount; this tells us that we don't need to run the full
+ * delete_dead_snapshots().
+ *
+ *
+ * XXX - todo item:
+ *
+ * We should guard against a bitflip causing us to delete a snapshot incorrectly
+ * by cross checking with the subvolume btree: delete_dead_snapshots() can take
+ * out more data than any other codepath if it runs incorrectly
+ */
+/*
+ * The state field licenses the most destructive thing the filesystem can do -
+ * deleting user data - so corruption of it must be detectable, never
+ * misinterpretable. Every state is a randomly generated codeword: a stray
+ * memory stomper almost never lands on a legal state (4 legal values in a
+ * 2^32 space; zero and all-ones are illegal, so a wiped field is detected,
+ * not misread), and any two states are >= 14 bit flips apart (enforced
+ * below), so sparse bit corruption can't turn one legal state into another.
+ */
+#[repr(u32)]
+pub enum bch_snapshot_state {
+    live = 0x757c47a2,
+    will_delete = 0x3316a8d2,
+    no_keys = 0x372b5a01,
+    deleted = 0x7cd4a225,
 }
 
 // The state codewords' distances, as the comment on bch_snapshot_state

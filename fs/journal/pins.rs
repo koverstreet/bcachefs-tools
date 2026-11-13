@@ -127,7 +127,7 @@ impl PinDevs {
 
 #[derive(Zeroable)]
 struct PinLists {
-    unflushed: [PinListHead; c::JOURNAL_PIN_TYPE_NR as usize],
+    unflushed: [PinListHead; c::journal_pin_type::JOURNAL_PIN_TYPE_NR as usize],
     flushed:   PinListHead,
 }
 

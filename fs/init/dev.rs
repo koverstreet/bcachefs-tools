@@ -1053,7 +1053,7 @@ impl StateLockWrite<'_> {
             /* Check if device still has data before blowing away alloc info */
             let usage = ca.usage_read_fast();
             let mut ret = Ok(());
-            for i in 0..c::BCH_DATA_NR {
+            for i in 0..c::DataType::NR {
                 let t = DataType(i);
                 if !t.is_empty() && !t.is_hidden() && usage.buckets[i as usize] != 0 {
                     if ret.is_ok() {

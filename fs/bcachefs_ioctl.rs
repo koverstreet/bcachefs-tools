@@ -7,7 +7,7 @@ use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
-use cstruct_macros::{c_enum, c_ioctl, counted, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bch_enum, c_ioctl, counted, CStruct, Plain, TypeInfo};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -323,17 +323,16 @@ pub struct bch_ioctl_disk_set_state_v2 {
     pub err: c::bch_ioctl_err_msg,
 }
 
-c_enum! {
-    #[open]
-    #[prefix(BCH_DATA_OP_)]
-    #[nr(BCH_DATA_OP_NR)]
-    pub enum bch_data_ops: u32 {
-        scrub = 0,
-        rereplicate = 1,
-        migrate = 2,
-        rewrite_old_nodes = 3,
-        drop_extra_replicas = 4,
-    }
+#[bch_enum(open)]
+#[prefix(BCH_DATA_OP_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_data_ops {
+    scrub = 0,
+    rereplicate = 1,
+    migrate = 2,
+    rewrite_old_nodes = 3,
+    drop_extra_replicas = 4,
 }
 
 /*
@@ -407,21 +406,19 @@ const _: () = assert!(core::mem::size_of::<bch_ioctl_query_accounting_v2>() ==
 #[cfg(kernel)]
 unsafe impl kernel::transmute::FromBytes for bch_ioctl_data {}
 
-c_enum! {
-    #[open]
-    pub enum bch_data_event: u32 {
-        BCH_DATA_EVENT_PROGRESS = 0,
-        /* XXX: add an event for reporting errors */
-        BCH_DATA_EVENT_NR = 1,
-    }
+#[bch_enum(open)]
+#[repr(u32)]
+pub enum bch_data_event {
+    BCH_DATA_EVENT_PROGRESS = 0,
+    /* XXX: add an event for reporting errors */
+    BCH_DATA_EVENT_NR = 1,
 }
 
-c_enum! {
-    #[open]
-    pub enum data_progress_data_type_special: u32 {
-        DATA_PROGRESS_DATA_TYPE_phys = 254,
-        DATA_PROGRESS_DATA_TYPE_done = 255,
-    }
+#[bch_enum(open)]
+#[repr(u32)]
+pub enum data_progress_data_type_special {
+    DATA_PROGRESS_DATA_TYPE_phys = 254,
+    DATA_PROGRESS_DATA_TYPE_done = 255,
 }
 
 #[repr(C, align(8))]
@@ -438,12 +435,11 @@ pub struct bch_ioctl_data_progress {
     pub sectors_error_uncorrected: u64,
 }
 
-c_enum! {
-    #[open]
-    pub enum bch_ioctl_data_event_ret: u32 {
-        BCH_IOCTL_DATA_EVENT_RET_done = 1,
-        BCH_IOCTL_DATA_EVENT_RET_device_offline = 2,
-    }
+#[bch_enum(open)]
+#[repr(u32)]
+pub enum bch_ioctl_data_event_ret {
+    BCH_IOCTL_DATA_EVENT_RET_done = 1,
+    BCH_IOCTL_DATA_EVENT_RET_device_offline = 2,
 }
 
 nest! {
@@ -922,13 +918,12 @@ pub struct bch_ioctl_snapshot_tree_query_v2 {
  * What a progress indicator is counting: this is uapi because
  * BCH_IOCTL_RECOVERY_STATUS reports it, and a string wouldn't survive the trip.
  */
-c_enum! {
-    #[open]
-    #[prefix(BCH_PROGRESS_UNITS_)]
-    pub enum bch_progress_units: u32 {
-        nodes = 0,
-        keys = 1,
-    }
+#[bch_enum(open)]
+#[prefix(BCH_PROGRESS_UNITS_)]
+#[repr(u32)]
+pub enum bch_progress_units {
+    nodes = 0,
+    keys = 1,
 }
 
 /*

@@ -54,7 +54,7 @@ use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
-use cstruct_macros::{bitfield, c_enum, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, CStruct, TypeInfo};
 use crate::types::c_default;
 use nestify::nest;
 use crate::format::{Bpos, CompressionType, SbFeature};
@@ -122,13 +122,12 @@ impl bch_compression_opt {
     }
 }
 
-c_enum! {
-    #[closed]
-    pub enum bbuf_type: u32 {
-        BB_none,
-        BB_vmap,
-        BB_pool,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum bbuf_type {
+    BB_none,
+    BB_vmap,
+    BB_pool,
 }
 
 /*

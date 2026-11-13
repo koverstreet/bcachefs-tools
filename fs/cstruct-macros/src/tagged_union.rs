@@ -7,8 +7,7 @@
 //!       #[derive(Clone, Copy, CStruct, TypeInfo)]*
 //!       #[c_name(disk_accounting_pos)]
 //!       #[tag(type_: u8)]
-//!       #[tag_enum(disk_accounting_type: u32, prefix = BCH_DISK_ACCOUNTING_,
-//!                  nr = BCH_DISK_ACCOUNTING_TYPE_NR)]
+//!       #[tag_enum(disk_accounting_type: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]
 //!       #[pad(Bpos)]
 //!       #[size(pad)]
 //!       #[packed]
@@ -23,7 +22,7 @@
 //!   tagged_union! {
 //!       #[storage(c::jset_entry)]
 //!       #[tag(type_: u8)]
-//!       #[tag_enum(bch_jset_entry_type: u32, prefix = BCH_JSET_ENTRY_, nr = BCH_JSET_ENTRY_NR)]
+//!       #[tag_enum(bch_jset_entry_type: u32, prefix = BCH_JSET_ENTRY_, nr)]
 //!       #[size(header)]
 //!       pub enum jset_entry {
 //!           /// Btree key updates
@@ -39,7 +38,7 @@
 //! arm type and what it nests, not for the storage. It's reported where it's
 //! written: the definition keeps its tokens' spans.
 //!
-//! `#[tag_enum([closed,] NAME: REPR, prefix = P[, nr = NR][, c_name = C])]`:
+//! `#[tag_enum([closed,] NAME: REPR, prefix = P[, nr][, c_name = C])]`:
 //! the tag's enum, a c_enum! of the arms (enum_decl.rs) - open, or closed and
 //! the tag stored as it, `#[tag(FIELD)]`. NAME_arms! is the arms as a list,
 //! (name, value, Type), for what's made from each.

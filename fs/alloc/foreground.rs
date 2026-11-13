@@ -90,7 +90,7 @@ use core::convert::Infallible;
 use core::ops::Deref;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
-use cstruct_macros::{bitfield, c_enum, CStruct};
+use cstruct_macros::{bitfield, bch_enum, CStruct};
 use nestify::nest;
 
 #[repr(C)]
@@ -131,13 +131,12 @@ pub(crate) type AllocTrace = InlineVec<c::alloc_trace_entry, 16>;
  * alloc_request.btree_bitmap: whether the bucket must be in a region the
  * device's btree bitmap marks (YES), must not be (NO), or may be either (ANY)
  */
-c_enum! {
-    #[closed]
-    pub enum alloc_btree_bitmap: u32 {
-        BTREE_BITMAP_NO,
-        BTREE_BITMAP_YES,
-        BTREE_BITMAP_ANY,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum alloc_btree_bitmap {
+    BTREE_BITMAP_NO,
+    BTREE_BITMAP_YES,
+    BTREE_BITMAP_ANY,
 }
 
 nest! {
@@ -562,8 +561,8 @@ impl Fs {
     /// isn't starved: one short of the top, to leave interior updates a way.
     pub(crate) fn open_buckets_starved_watermark(&self) -> u32 {
         let nr_free = u32::from(self.allocator.freelist_lock.open_buckets_nr_free.get());
-        (0..c::BCH_WATERMARK_NR - 1).find(|&w| nr_free >= open_buckets_reserved(c::bch_watermark::from_bits(w)))
-            .unwrap_or(c::BCH_WATERMARK_NR - 1)
+        (0..c::bch_watermark::NR - 1).find(|&w| nr_free >= open_buckets_reserved(c::bch_watermark::from_bits(w)))
+            .unwrap_or(c::bch_watermark::NR - 1)
     }
 
     /// Bucket @bucket of @ca, of generation @generation, opened: None if it's
@@ -1176,7 +1175,7 @@ impl Fs {
         }
 
         let a = &self.allocator;
-        let mut nr = [0u32; c::BCH_DATA_NR as usize];
+        let mut nr = [0u32; c::DataType::NR as usize];
         for ob in a.open_buckets.iter().filter(|ob| ob.pin.load(Relaxed) != 0) {
             if let Some(n) = nr.get_mut(usize::from(ob.data_type.get())) {
                 *n += 1;

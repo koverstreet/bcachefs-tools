@@ -4,14 +4,13 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_name, c_enum, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bch_enum, CStruct, Plain, TypeInfo, SizedVal};
 
-c_enum! {
-    #[open]
-    pub enum logged_ops_inums: u32 {
-        LOGGED_OPS_INUM_logged_ops,
-        LOGGED_OPS_INUM_inode_cursors,
-    }
+#[bch_enum(open)]
+#[repr(u32)]
+pub enum logged_ops_inums {
+    LOGGED_OPS_INUM_logged_ops,
+    LOGGED_OPS_INUM_inode_cursors,
 }
 
 #[repr(C)]
@@ -25,13 +24,12 @@ pub struct LoggedOpTruncate {
     pub new_i_size: Le64,
 }
 
-c_enum! {
-    #[open]
-    pub enum logged_op_finsert_state: u32 {
-        LOGGED_OP_FINSERT_start,
-        LOGGED_OP_FINSERT_shift_extents,
-        LOGGED_OP_FINSERT_finish,
-    }
+#[bch_enum(open)]
+#[repr(u32)]
+pub enum logged_op_finsert_state {
+    LOGGED_OP_FINSERT_start,
+    LOGGED_OP_FINSERT_shift_extents,
+    LOGGED_OP_FINSERT_finish,
 }
 
 #[repr(C)]

@@ -8,7 +8,7 @@ use crate::locking::{ByteLock, Locked, Lockdep};
 use crate::types::{bits_to_longs, c_opaque};
 use crate::data_structures::bitmap::BitArray;
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{c_enum, CStruct};
+use cstruct_macros::{bch_enum, CStruct};
 use pin_init::pin_data;
 
 /// A disk label's striping of new stripes' buckets across its devices - in
@@ -49,15 +49,14 @@ pub struct DevStripes {
  * writers can go away), so blocking on one can deadlock, while an in_flight
  * stripe always drains.
  */
-c_enum! {
-    #[closed]
-    #[prefix(EC_STRIPE_NEW_)]
-    #[nr(EC_STRIPE_NEW_STATE_NR)]
-    pub enum ec_stripe_new_state: u32 {
-        open,
-        filling,
-        in_flight,
-    }
+#[bch_enum(closed)]
+#[prefix(EC_STRIPE_NEW_)]
+#[nr]
+#[repr(u32)]
+pub enum ec_stripe_new_state {
+    open,
+    filling,
+    in_flight,
 }
 
 /// A set of a stripe's blocks, by index.

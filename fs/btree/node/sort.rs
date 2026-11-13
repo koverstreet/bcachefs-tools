@@ -20,7 +20,7 @@ use crate::data_structures::array_vec::ArrayVec;
 use core::cmp::Ordering;
 use core::mem::offset_of;
 use core::ops::Range;
-use cstruct_macros::{c_enum, Plain};
+use cstruct_macros::{bch_enum, Plain};
 
 /// [k, end), offsets into the node's buffer: u32s, as the unwritten whiteouts
 /// run to its end, past a 512k node's last u16.
@@ -103,13 +103,12 @@ impl<'p> SortRuns<'p> {
     }
 }
 
-c_enum! {
-    #[closed]
-    #[c_name(compact_mode)]
-    pub enum CompactMode: u32 {
-        COMPACT_LAZY,
-        COMPACT_ALL,
-    }
+#[bch_enum(closed)]
+#[c_name(compact_mode)]
+#[repr(u32)]
+pub enum CompactMode {
+    COMPACT_LAZY,
+    COMPACT_ALL,
 }
 
 const NODE_U64S: usize = size_of::<Head<c::btree_node>>() / size_of::<u64>();

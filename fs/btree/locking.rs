@@ -36,7 +36,7 @@ use crate::util::Printbuf;
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed}};
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::{self, NonNull};
-use cstruct_macros::c_enum;
+use cstruct_macros::bch_enum;
 
 /* DOC_LATEX(btree-locking)
  *
@@ -139,14 +139,13 @@ use cstruct_macros::c_enum;
 /* path lock state */
 
 /* matches six lock types */
-c_enum! {
-    #[closed]
-    pub enum btree_node_locked_type: i32 {
-        BTREE_NODE_UNLOCKED = -1,
-        BTREE_NODE_READ_LOCKED = c::SIX_LOCK_read as i32,
-        BTREE_NODE_INTENT_LOCKED = c::SIX_LOCK_intent as i32,
-        BTREE_NODE_WRITE_LOCKED = c::SIX_LOCK_write as i32,
-    }
+#[bch_enum(closed)]
+#[repr(i32)]
+pub enum btree_node_locked_type {
+    BTREE_NODE_UNLOCKED = -1,
+    BTREE_NODE_READ_LOCKED = c::six_lock_type::SIX_LOCK_read as i32,
+    BTREE_NODE_INTENT_LOCKED = c::six_lock_type::SIX_LOCK_intent as i32,
+    BTREE_NODE_WRITE_LOCKED = c::six_lock_type::SIX_LOCK_write as i32,
 }
 
 /* trans locked state */

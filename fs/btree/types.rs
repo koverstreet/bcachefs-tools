@@ -35,8 +35,7 @@ use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_enum, placed, CStruct, Init,
-                     Late, TypeInfo};
+use cstruct_macros::{atomic_bitfield, c_name, bitfield, bch_enum, placed, CStruct, Init, Late, TypeInfo, c_enum};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -67,45 +66,42 @@ pub struct btree_bkey_cached_common {
  * See DOC(btree-node-cache), in btree/cache/mod.rs, for the state machine and
  * the bookkeeping each state implies.
  */
-c_enum! {
-    #[closed]
-    #[prefix(BTREE_NODE_CACHE_)]
-    pub enum btree_node_cache_state: u32 {
-        NONE,           /* off all lists; not in cache (kzalloc default) */
-        FREED,          /* on bc->freed_{pcpu,nonpcpu}; no data buffer */
-        FREEABLE,       /* on bc->freeable; has data; not hashed */
-        CLEAN,          /* on bc->live[pinned].clean; hashed; has data */
-        DIRTY,          /* on bc->live[pinned].dirty; hashed; has data */
-    }
+#[bch_enum(closed)]
+#[prefix(BTREE_NODE_CACHE_)]
+#[repr(u32)]
+pub enum btree_node_cache_state {
+    NONE,           /* off all lists; not in cache (kzalloc default) */
+    FREED,          /* on bc->freed_{pcpu,nonpcpu}; no data buffer */
+    FREEABLE,       /* on bc->freeable; has data; not hashed */
+    CLEAN,          /* on bc->live[pinned].clean; hashed; has data */
+    DIRTY,          /* on bc->live[pinned].dirty; hashed; has data */
 }
 
-c_enum! {
-    #[closed]
-    pub enum btree_node_sibling: u32 {
-        btree_prev_sib,
-        btree_next_sib,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum btree_node_sibling {
+    btree_prev_sib,
+    btree_next_sib,
 }
 
 /* Btree cache: */
 
-c_enum! {
-    #[closed]
-    #[prefix(BCH_BTREE_CACHE_NOT_FREED_)]
-    #[nr(BCH_BTREE_CACHE_NOT_FREED_REASONS_NR)]
-    pub enum bch_btree_cache_not_freed_reasons: u32 {
-        cache_reserve,
-        lock_intent,
-        lock_write,
-        dirty,
-        read_in_flight,
-        write_in_flight,
-        permanent,
-        noevict,
-        write_blocked,
-        will_make_reachable,
-        access_bit,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_BTREE_CACHE_NOT_FREED_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_btree_cache_not_freed_reasons {
+    cache_reserve,
+    lock_intent,
+    lock_write,
+    dirty,
+    read_in_flight,
+    write_in_flight,
+    permanent,
+    noevict,
+    write_blocked,
+    will_make_reachable,
+    access_bit,
 }
 
 /// The node cache's lists: intrusive, one of list.rs's exceptions - a node
@@ -148,7 +144,7 @@ c_default!(btree_root);
 #[repr(C)]
 #[derive(CStruct, Init)]
 pub struct BtreeRoots {
-    pub roots_known: [cs::btree_root; cs::BTREE_ID_NR as usize],
+    pub roots_known: [cs::btree_root; Btree::NR as usize],
     #[pin]
     #[init(KVVec::new())]
     pub roots_extra: KVVec<cs::btree_root>,
@@ -232,7 +228,7 @@ pub struct BtreeCacheLists {
     pub freed_nonpcpu: BtreeNodeList,
 
     pub nr_vmalloc: usize,
-    pub nr_by_btree: [usize; cs::BTREE_ID_NR as usize],
+    pub nr_by_btree: [usize; Btree::NR as usize],
 
     pub pinned_nodes_start: cs::bbpos,
     pub pinned_nodes_end: cs::bbpos,
@@ -242,7 +238,7 @@ pub struct BtreeCacheLists {
     /* shrinker stats */
     pub nr_freed: usize,
     pub nr_requested: usize,
-    pub not_freed: [u64; cs::BCH_BTREE_CACHE_NOT_FREED_REASONS_NR as usize],
+    pub not_freed: [u64; cs::bch_btree_cache_not_freed_reasons::NR as usize],
 }
 
 /// bc->lock: its holder never enters reclaim, which would take it again
@@ -363,72 +359,71 @@ pub struct bch_fs_btree_cache {
 
 /* Iterator, update, and trigger flags: */
 
-c_enum! {
-    #[closed]
-    #[prefix(BTREE_ITER_FLAG_BIT_)]
-    #[mask(btree_iter_update_trigger_flags: u32, prefix = BTREE_ITER_)]
-    pub enum _: u32 {
-        slots,
-        prev,
-        intent,
-        prefetch,
-        is_extents,
-        not_extents,
-        cached,
-        with_key_cache,
-        with_journal,
-        snapshot_field,
-        all_snapshots,
-        filter_snapshots,
-        nofilter_whiteouts,
-        nopreserve,
-        nofill,
-        cached_nofill,
-        key_cache_fill,
-        committed,
-        trim,
-        read_errors,
+#[bch_enum(closed)]
+#[prefix(BTREE_ITER_FLAG_BIT_)]
+#[mask(btree_iter_update_trigger_flags: u32, prefix = BTREE_ITER_)]
+#[repr(u32)]
+pub enum btree_iter_flag_bit {
+    slots,
+    prev,
+    intent,
+    prefetch,
+    is_extents,
+    not_extents,
+    cached,
+    with_key_cache,
+    with_journal,
+    snapshot_field,
+    all_snapshots,
+    filter_snapshots,
+    nofilter_whiteouts,
+    nopreserve,
+    nofill,
+    cached_nofill,
+    key_cache_fill,
+    committed,
+    trim,
+    read_errors,
 
-        #[mask_prefix(BTREE_UPDATE_)]
-        internal_snapshot_node,
-        nojournal,
-        key_cache_reclaim,
-        overwrite_triggered,
+    #[mask_prefix(BTREE_UPDATE_)]
+    internal_snapshot_node,
+    nojournal,
+    key_cache_reclaim,
+    overwrite_triggered,
 
-        /*
-         * BTREE_TRIGGER_norun - don't run triggers at all
-         *
-         * BTREE_TRIGGER_transactional - we're running transactional triggers as part of
-         * a transaction commit: triggers may generate new updates
-         *
-         * BTREE_TRIGGER_atomic - we're running atomic triggers during a transaction
-         * commit: we have our journal reservation, we're holding btree node write
-         * locks, and we know the transaction is going to commit (returning an error
-         * here is a fatal error, causing us to go emergency read-only)
-         *
-         * BTREE_TRIGGER_gc - we're in gc/fsck: running triggers to recalculate e.g. disk usage
-         *
-         * transactional, atomic and gc are the phase a trigger runs in, and every
-         * caller passes exactly one - commit's three passes, gc's check, interior
-         * updates. Triggers rely on it: the reflink_p trigger's transactional and
-         * gc passes share one walk position, right only because one of them runs.
-         * XXX: a bitmask can't say "exactly one"; the phase wants to be in the
-         * trigger's type, dependent typing over the flags.
-         *
-         * BTREE_TRIGGER_insert - @new is entering the btree
-         * BTREE_TRIGGER_overwrite - @old is leaving the btree
-         */
-        #[mask_prefix(BTREE_TRIGGER_)]
-        norun,
-        transactional,
-        atomic,
-        gc,
-        /* written with its prefix: bitflags' insert() is the mask's */
-        BTREE_ITER_FLAG_BIT_insert,
-        overwrite,
-        is_discard,
-        set_needs_reconcile_done,
-    }
+    /*
+     * BTREE_TRIGGER_norun - don't run triggers at all
+     *
+     * BTREE_TRIGGER_transactional - we're running transactional triggers as part of
+     * a transaction commit: triggers may generate new updates
+     *
+     * BTREE_TRIGGER_atomic - we're running atomic triggers during a transaction
+     * commit: we have our journal reservation, we're holding btree node write
+     * locks, and we know the transaction is going to commit (returning an error
+     * here is a fatal error, causing us to go emergency read-only)
+     *
+     * BTREE_TRIGGER_gc - we're in gc/fsck: running triggers to recalculate e.g. disk usage
+     *
+     * transactional, atomic and gc are the phase a trigger runs in, and every
+     * caller passes exactly one - commit's three passes, gc's check, interior
+     * updates. Triggers rely on it: the reflink_p trigger's transactional and
+     * gc passes share one walk position, right only because one of them runs.
+     * XXX: a bitmask can't say "exactly one"; the phase wants to be in the
+     * trigger's type, dependent typing over the flags.
+     *
+     * BTREE_TRIGGER_insert - @new is entering the btree
+     * BTREE_TRIGGER_overwrite - @old is leaving the btree
+     */
+    #[mask_prefix(BTREE_TRIGGER_)]
+    norun,
+    transactional,
+    atomic,
+    gc,
+    /* written with its prefix: bitflags' insert() is the mask's */
+    BTREE_ITER_FLAG_BIT_insert,
+    overwrite,
+    is_discard,
+    set_needs_reconcile_done,
 }
 
 // Btree paths and iterators:
@@ -939,23 +934,22 @@ pub struct TransStatsJson {
 
 /* Btree node write types and flags: */
 
-c_enum! {
-    #[closed]
-    #[prefix(BTREE_WRITE_)]
-    #[nr(BTREE_WRITE_TYPE_NR)]
-    #[c_name(btree_write_type)]
-    pub enum BtreeWriteType: u32 {
-        initial = 0,
-        init_next_bset = 1,
-        cache_reclaim = 2,
-        journal_reclaim = 3,
-        interior = 4,
-    }
+#[bch_enum(closed)]
+#[prefix(BTREE_WRITE_)]
+#[nr]
+#[c_name(btree_write_type)]
+#[repr(u32)]
+pub enum BtreeWriteType {
+    initial = 0,
+    init_next_bset = 1,
+    cache_reclaim = 2,
+    journal_reclaim = 3,
+    interior = 4,
 }
 
 pub const BTREE_WRITE_TYPE_MASK: c_ulong =
-    (cs::BTREE_WRITE_TYPE_NR as c_ulong).next_power_of_two() - 1;
-pub const BTREE_WRITE_TYPE_BITS: u32 = (cs::BTREE_WRITE_TYPE_NR as u32).next_power_of_two().ilog2();
+    (cs::BtreeWriteType::NR as c_ulong).next_power_of_two() - 1;
+pub const BTREE_WRITE_TYPE_BITS: u32 = (cs::BtreeWriteType::NR as u32).next_power_of_two().ilog2();
 
 atomic_bitfield! {
     /// struct btree's flags: the pending write's type, then the node's state.
@@ -987,15 +981,14 @@ atomic_bitfield! {
 const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
                       BtreeNodeFlags::WRITE_TYPE_BITS == cs::BTREE_WRITE_TYPE_BITS as usize);
 
-c_enum! {
-    #[closed]
-    #[prefix(BTREE_NODE_REWRITE_)]
-    pub enum btree_node_rewrite_reason: u32 {
-        none,
-        unknown,
-        error,
-        ptr_written_zero,
-    }
+#[bch_enum(closed)]
+#[prefix(BTREE_NODE_REWRITE_)]
+#[repr(u32)]
+pub enum btree_node_rewrite_reason {
+    none,
+    unknown,
+    error,
+    ptr_written_zero,
 }
 
 /* Filesystem-level btree state: */
@@ -1043,7 +1036,7 @@ pub struct bch_fs_btree {
                          opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
     pub bounce_pool: Mempool<Raw>,
 
-    pub write_stats: [cs::btree_write_stats; cs::BTREE_WRITE_TYPE_NR as usize],
+    pub write_stats: [cs::btree_write_stats; cs::BtreeWriteType::NR as usize],
 
     #[pin]
     #[init(BioSet::new(1, true), ENOMEM_fs_other_alloc)]
@@ -1081,7 +1074,7 @@ pub struct bch_fs_btree {
      * buffers and locks.
      */
     #[pin]
-    pub write_buffer: [cs::bch_fs_btree_write_buffer; cs::BCH_WB_BTREE_NR as usize],
+    pub write_buffer: [cs::bch_fs_btree_write_buffer; cs::bch_wb_btree::NR as usize],
     /*
      * Per-btree flush_work runs on write_buffer_wq; once the sorted key
      * list crosses a threshold the flush parallelizes across CPUs by
@@ -1145,7 +1138,7 @@ c_enum! {
     #[open]
     #[c_name(btree_node_type)]
     #[prefix(BKEY_TYPE_)]
-    #[nr(BKEY_TYPE_NR)]
+    #[nr]
     pub enum BtreeNodeType: u32 {
         btree,
         Btree_arms(kwd, val, ..) => kwd = (val as u32) + 1,

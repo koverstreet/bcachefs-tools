@@ -42,7 +42,7 @@ impl SbFieldOps for Section {
 
         write!(out, "Errors to silently fix:\t");
         let silent = LeBitmap::from_words(&e.errors_silent).iter();
-        prt_error_ids(out, silent.take_while(|&id| id < c::BCH_FSCK_ERR_MAX as usize)
+        prt_error_ids(out, silent.take_while(|&id| id < c::SbErrorId::NR as usize)
                                  .map(|id| SbErrorId(id as u32)));
         out.newline();
 

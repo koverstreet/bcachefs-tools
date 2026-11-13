@@ -16,11 +16,11 @@
 //!                        on the struct for each
 //!   c_ioctl! { .. }      ioctl numbers: a marker type for each, its opcode
 //!                        and argument type
-//!   c_enum! { .. }       an enum, #[open], #[closed] or #[flags]: the type
-//!                        that is, and its values as constants
+//!   #[bch_enum(..)]      an enum, open, closed or flags: the type that is,
+//!                        and its values
+//!   c_enum! { .. }       a #[bch_enum] with variants from lists
 //!   atomic_bitfield! { .. }
 //!                        a bitfield's value, and an atomic word of it
-//!   #[open_enum]         an open enum: c_enum!'s #[open]
 //!   tagged_union! { .. } a tagged union with a stable representation: C's
 //!                        storage, the tag a Determinant of it, declared as
 //!                        an enum, the arms its variants (tagged_union.rs)
@@ -961,51 +961,11 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
     Ok(out)
 }
 
-/// An enum, and what its values can be:
+/// An enum some of whose variants are built from lists - `LIST(params) =>
+/// template`, a variant for each entry - which an enum declaration can't
+/// say: #[bch_enum]'s, written as
 ///
-///   c_enum! { #[open] #[prefix(BTREE_ID_)] pub enum Btree: u32 { extents = 0, ... } }
-///
-/// Each value is also a constant of the module, of the integer type, by C's
-/// name for it - `#[prefix(P)]`'s P and its name; a name written with P is
-/// C's - as C's enum constants are all one namespace, which C refers to by
-/// bare name: in other enums' values, array lengths. The type is built on
-/// those:
-///
-///   #[closed]  a Rust enum
-///   #[open]    a newtype over the integer, the values its constants: a value
-///              from outside can be anything, so it's Plain, and a word a
-///              Volatile can hold
-///   #[flags]   a bitflags type
-///
-/// Any of them can be a #[bitfield]'s member, as C's `enum btree_id
-/// btree_id:8`: it has the const into_bits() bitfield-struct converts with,
-/// and from_bits() - for #[flags], bitflags' from_bits() is the checked one,
-/// so a member names `from = T::from_bits_retain`. A #[closed] enum's member
-/// only ever holds one of its values, as its type says; from_bits() of
-/// anything else is memory corruption, and panics.
-///
-/// An open or closed one with a #[prefix] is named, as it prints and parses,
-/// by its variants' names past it. `#[nr(NR)]`: C's NR after the last, and
-/// NR, a number, not one of its values. A variant with no value is the one
-/// before it plus one, as in C. `_` for the name: an anonymous enum, the
-/// constants alone.
-///
-/// A variant is written with its doc, and its columns - `#[arm_columns(..)]`,
-/// enum_decl.rs - each made a const fn of the enum:
-///
-///   c_enum! {
-///       #[open] #[c_name(btree_id)] #[prefix(BTREE_ID_)] #[nr(BTREE_ID_NR)]
-///       #[arm_columns(flags: BtreeFlags, holds: set(BkeyType))]
-///       pub enum Btree: u32 {
-///           /// File data extent pointers and reservations
-///           #[flags(extents, snapshots, data, trans_triggers)]
-///           #[holds(whiteout, extent, reservation, ..)]
-///           extents = 0,
-///           ...
-///       }
-///   }
-///
-/// Or from lists, `LIST(params) => template`, a variant for each entry.
+///   c_enum! { #[open] pub enum NAME: REPR { .., LIST(params) => template, .. } }
 #[proc_macro]
 pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_enum!", || {
@@ -1017,7 +977,7 @@ pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let e = one_item!(&text, Enum, C_ENUM_SYNTAX);
         Ok(match e.from.first() {
             Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", input),
-            None => c_enum_gen(&e, EnumOf::C),
+            None => c_enum_gen(&e),
         })
     })
 }
@@ -1039,50 +999,57 @@ pub fn atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStrea
     expand_syn("atomic_bitfield!", || atomic_bitfield::atomic_bitfield(input.into()))
 }
 
-/// `#[open_enum]` on `#[repr(uN)] pub enum NAME { a = 0, b, ... }`: an enum
-/// Rust alone has, whose values can be anything - read off disk, written by
-/// another version: c_enum!'s #[open], without the C - no constants of the
-/// module, no record. Each variant is named, as Names has it and it prints,
-/// by its own name, or its `#[label("..")]`; #[own_to_text] as c_enum!'s.
+/// `#[bch_enum(closed|open|flags)]` on `#[repr(uN)] pub enum NAME { .. }`:
+/// what its values can be, and the type that is.
+///
+///   closed  a Rust enum
+///   open    a newtype over the integer, the values its constants: a value
+///           from outside can be anything, so it's Plain, and a word a
+///           Volatile can hold
+///   flags   a bitflags type
+///
+/// Any of them can be a #[bitfield]'s member, as C's `enum btree_id
+/// btree_id:8`: it has the const into_bits() bitfield-struct converts with,
+/// and from_bits() - for flags, bitflags' from_bits() is the checked one, so
+/// a member names `from = T::from_bits_retain`. A closed enum's member only
+/// ever holds one of its values, as its type says; from_bits() of anything
+/// else is memory corruption, and panics.
+///
+/// A variant prints and parses as its name, or its #[label("..")] - past
+/// `#[prefix(P)]`, for names written with it. `#[nr]`: Self::NR, past the
+/// largest value - a number, not one of its values. `#[own_to_text]`: it
+/// prints as more than its name, by its own ToText. `#[c_name(NAME)]`: its
+/// TypeInfo's name.
+///
+/// A variant is written with its doc, and its columns - `#[arm_columns(..)]`,
+/// enum_decl.rs - each made a const fn of the enum:
+///
+///   #[bch_enum(open)]
+///   #[c_name(btree_id)] #[prefix(BTREE_ID_)] #[nr]
+///   #[arm_columns(flags: BtreeFlags, holds: set(BkeyType))]
+///   #[repr(u32)]
+///   pub enum Btree {
+///       /// File data extent pointers and reservations
+///       #[flags(extents, snapshots, data, trans_triggers)]
+///       #[holds(whiteout, extent, reservation, ..)]
+///       extents = 0,
+///       ...
+///   }
 #[proc_macro_attribute]
-pub fn open_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand_syn("#[open_enum]", || {
-        use syn::ext::IdentExt as _;
-        if !attr.is_empty() {
-            return Err(syn::Error::new_spanned(TokenStream::from(attr), "takes no arguments"));
-        }
-        let item: syn::ItemEnum = syn::parse(item)?;
-        let what = |s: &str| format!("{}: {s}", item.ident);
-        let mut repr = None;
-        let mut own_to_text = false;
-        let mut attrs = Vec::new();
+pub fn bch_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[bch_enum]", || {
+        let kind: Ident = syn::parse(attr).map_err(|_| "takes closed, open or flags")?;
+        let item: syn::ItemEnum = syn::parse(item).map_err(|e| e.to_string())?;
+        let (mut repr, mut attrs) = (None, Vec::new());
         for a in &item.attrs {
-            if a.path().is_ident("repr") {
-                repr = Some(a.parse_args::<Ident>()?);
-            } else if a.path().is_ident("own_to_text") {
-                own_to_text = true;
-            } else {
-                attrs.push(a.clone());
+            match a.path().is_ident("repr") {
+                true  => repr = Some(a.parse_args::<Ident>().map_err(|e| format!("{}: {e}", item.ident))?),
+                false => attrs.push(a),
             }
         }
-        let repr = repr.filter(|r| cstruct::int_bits(&r.to_string()).is_some())
-            .ok_or_else(|| syn::Error::new_spanned(&item.ident, what("#[repr(uN)]: its integer type")))?;
-        let mut variants = Vec::new();
-        for v in &item.variants {
-            if !matches!(v.fields, syn::Fields::Unit) {
-                return Err(syn::Error::new_spanned(v, what("its variants are values, without fields")));
-            }
-            let name = v.ident.unraw().to_string();
-            let label = match v.attrs.iter().find(|a| a.path().is_ident("label")) {
-                Some(a) => a.parse_args::<syn::LitStr>()?.value(),
-                None => name.clone(),
-            };
-            let value = v.discriminant.as_ref().map(|(_, x)| x.to_token_stream().to_string());
-            variants.push(CEnumVariant { name, c_name: None, value, label: Some(label), docs: Vec::new() });
-        }
-        let e = CEnumDef { kind: CEnumKind::Open, name: Some(item.ident.to_string()), repr: repr.to_string(),
-                           variants, from: Vec::new(), own_to_text, c_name: None, prefix: None, nr: None };
-        Ok(c_enum_gen(&e, EnumOf::Rust(&item.vis, &attrs)))
+        let repr = repr.ok_or_else(|| format!("{}: #[repr(uN)]: its integer type", item.ident))?;
+        let (vis, name, variants) = (&item.vis, &item.ident, &item.variants);
+        enum_decl::c_enum(quote!(#[#kind] #(#attrs)* #vis enum #name: #repr { #variants }))
     })
 }
 
@@ -1100,71 +1067,55 @@ pub fn __c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let decl = enum_text(&e);
         Ok(match e.from.first() {
             Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", tokens(&decl)),
-            None => c_enum_gen(&e, EnumOf::C),
+            None => c_enum_gen(&e),
         })
     })
 }
 
-/// Whose an enum is: a c_enum!'s - its constants the module's, as C's
-/// are - or Rust's alone, an #[open_enum]'s,
-/// with the visibility and attributes it was written with.
-#[derive(Clone, Copy)]
-enum EnumOf<'a> {
-    C,
-    Rust(&'a syn::Visibility, &'a [syn::Attribute]),
-}
-
-/// Enum @e's Rust - and if it's C's, its record.
-fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
+/// Enum @e: the type, its values, and their names.
+fn c_enum_gen(e: &CEnumDef) -> TokenStream {
     let repr = format_ident!("{}", e.repr);
     let names: Vec<Ident> = e.variants.iter().map(|v| format_ident!("{}", v.name)).collect();
-    // the module's constants are C's, by its names
-    let c_names: Vec<Ident> = e.variants.iter().map(|v| format_ident!("{}", e.c_variant(v))).collect();
 
     // A variant with no value counts from the last that has one - not from
     // the one before it, which would make a const chain as long as the enum:
-    // too deep for rustc, at bch_persistent_counters' hundreds.
+    // too deep for rustc, at bch_persistent_counters' hundreds. A closed
+    // enum's is Rust's own, the one before it plus one.
     let mut out = TokenStream::new();
     let mut values = Vec::new();
     // as plain integers, each by its name: the flags' bits module
     let mut raw_values = Vec::new();
     let mut base = None;
     let mut n = 0;
-    for ((v, c), CEnumVariant { value, .. }) in names.iter().zip(&c_names).zip(&e.variants) {
+    for (v, CEnumVariant { value, .. }) in names.iter().zip(&e.variants) {
         let k = Literal::usize_unsuffixed(n);
         raw_values.push(match (value, base) {
             (Some(x), _) => tokens(x),
-            (None, Some((b, _))) => quote!(#b + #k),
+            (None, Some(b)) => quote!(#b + #k),
             (None, None) => quote!(#k),
         });
-        let value = match (value, base) {
-            (Some(x), _) => {
-                base = Some((v, c));
-                n = 0;
-                tokens(x)
-            }
-            (None, Some((_, b))) if matches!(of, EnumOf::C) => quote!(#b + #k),
-            (None, Some((b, _))) => quote!(Self::#b.0 + #k),
-            (None, None) => quote!(#k),
-        };
-        match of {
-            EnumOf::C => {
-                out.extend(quote!(#[allow(non_upper_case_globals, dead_code)] pub const #c: #repr = #value;));
-                values.push(quote!(#c));
-            }
-            EnumOf::Rust(..) => values.push(value),
+        values.push(match (value, base, e.kind) {
+            (Some(x), ..) => Some(tokens(x)),
+            (None, _, CEnumKind::Closed) => None,
+            (None, Some(b), CEnumKind::Open) => Some(quote!(Self::#b.0 + #k)),
+            (None, Some(b), CEnumKind::Flags) => Some(quote!(Self::#b.bits() + #k)),
+            (None, None, _) => Some(quote!(#k)),
+        });
+        if value.is_some() {
+            base = Some(v);
+            n = 0;
         }
         n += 1;
     }
     // Past the largest, not the last: the values needn't be in order - the
     // counters' stable ids aren't
-    let nr = e.nr.as_ref().map(|nr| {
-        let nr = format_ident!("{nr}");
-        out.extend(quote! {
-            #[allow(non_upper_case_globals, dead_code)]
-            pub const #nr: #repr = { let mut n = 0; #(if #c_names + 1 > n { n = #c_names + 1; })* n };
+    let nr = e.nr.then(|| {
+        let int = names.iter().map(|v| match e.kind {
+            CEnumKind::Closed => quote!(Self::#v as #repr),
+            CEnumKind::Open   => quote!(Self::#v.0),
+            CEnumKind::Flags  => quote!(Self::#v.bits()),
         });
-        nr
+        quote!({ let mut n = 0; #(if #int + 1 > n { n = #int + 1; })* n })
     });
 
     let ty = match &e.name {
@@ -1172,13 +1123,14 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
         None => repr.clone(),
     };
     if let Some(name) = &e.name {
-        let (vis, attrs) = match of {
-            EnumOf::C => (quote!(pub), cfi_encoding(e.c_ident().unwrap_or(name))),
-            EnumOf::Rust(vis, attrs) => (quote!(#vis), quote!(#(#attrs)*)),
-        };
+        let vis = quote!(pub);
+        let attrs = e.docs.iter().map(|d| quote!(#[doc = #d]));
+        let attrs = quote!(#(#attrs)*);
         let name = format_ident!("{name}");
         let bits_mod = format_ident!("{name}_bits");
         let docs: Vec<_> = e.variants.iter().map(|v| { let d = &v.docs; quote!(#(#[doc = #d])*) }).collect();
+        let discs = values.iter().map(|v| v.as_ref().map(|x| quote!(= #x)));
+        let values = values.iter().map(|v| v.as_ref().expect("only a closed enum's goes unwritten"));
         out.extend(match e.kind {
             CEnumKind::Closed => {
                 // what it prints as: its list's name for it, as C's string table has it
@@ -1195,7 +1147,7 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, crate::util::ToText)]
                     #[repr(#repr)]
                     #attrs
-                    #vis enum #name { #(#docs #labels #names = #values,)* }
+                    #vis enum #name { #(#docs #labels #names #discs,)* }
                     impl #name {
                         pub const fn from_bits(v: #repr) -> Self {
                             match v {

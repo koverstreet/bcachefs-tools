@@ -286,15 +286,15 @@ macro_rules! file_name {
 
 macro_rules! time_stat_names {
     ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
-        const TIME_STAT_NAMES: [&CStr; c::BCH_TIME_STAT_NR as usize] = [$(file_name!($name),)*];
+        const TIME_STAT_NAMES: [&CStr; c::bch_time_stats::NR as usize] = [$(file_name!($name),)*];
     };
 }
 c::bch_time_stats_arms!(time_stat_names);
 
 // Each its own table: a group's files are its kobject's, so which directory
 // a file's in is which table its attribute is from
-static TIME_STATS: ListAttrs<{ c::BCH_TIME_STAT_NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
-static TIME_STATS_JSON: ListAttrs<{ c::BCH_TIME_STAT_NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
+static TIME_STATS: ListAttrs<{ c::bch_time_stats::NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
+static TIME_STATS_JSON: ListAttrs<{ c::bch_time_stats::NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
 
 // ── counters/ ───────────────────────────────────────────────────────────────
 //
@@ -303,12 +303,12 @@ static TIME_STATS_JSON: ListAttrs<{ c::BCH_TIME_STAT_NR as usize }> = ListAttrs:
 
 macro_rules! counter_names {
     ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
-        const COUNTER_NAMES: [&CStr; c::BCH_COUNTER_NR as usize] = [$(file_name!($name),)*];
+        const COUNTER_NAMES: [&CStr; c::bch_persistent_counters::NR as usize] = [$(file_name!($name),)*];
     };
 }
 c::bch_persistent_counters_arms!(counter_names);
 
-static COUNTER_FILES: ListAttrs<{ c::BCH_COUNTER_NR as usize }> = ListAttrs::new(&COUNTER_NAMES, 0o644);
+static COUNTER_FILES: ListAttrs<{ c::bch_persistent_counters::NR as usize }> = ListAttrs::new(&COUNTER_NAMES, 0o644);
 
 fn counter_to_text(c: &Fs, i: usize, out: &mut Printbuf) {
     let count = c.counter_read(i);
@@ -447,10 +447,10 @@ static INTERNAL_FILES: Files<{ INTERNAL.len() + 1 }> = Files::new(INTERNAL);
 static INTERNAL_BIN_FILES: BinFiles<2> = BinFiles::new([&TRANS_STATS_JSON]);
 static OPTS_FILES: Files<{ nr_true(&FS_OPTS) + 1 }> = Files::with_list::<Fs, { opts::NR }>(&[], &OPT_FILES, &FS_OPTS);
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-static TIME_STATS_FILES: Files<{ c::BCH_TIME_STAT_NR as usize + 1 }> = Files::list(&TIME_STATS);
+static TIME_STATS_FILES: Files<{ c::bch_time_stats::NR as usize + 1 }> = Files::list(&TIME_STATS);
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-static TIME_STATS_JSON_FILES: Files<{ c::BCH_TIME_STAT_NR as usize + 1 }> = Files::list(&TIME_STATS_JSON);
-static COUNTERS_FILES: Files<{ c::BCH_COUNTER_NR as usize + 1 }> = Files::list(&COUNTER_FILES);
+static TIME_STATS_JSON_FILES: Files<{ c::bch_time_stats::NR as usize + 1 }> = Files::list(&TIME_STATS_JSON);
+static COUNTERS_FILES: Files<{ c::bch_persistent_counters::NR as usize + 1 }> = Files::list(&COUNTER_FILES);
 
 static FS_GROUP: Group = Group::new(None, &FS_FILES);
 static INTERNAL_GROUP: Group = Group::with_bin(Some(c"internal"), &INTERNAL_FILES, &INTERNAL_BIN_FILES);
@@ -512,7 +512,7 @@ const DEV: &[Attr<Dev>] = &[
 #[cold]
 fn io_done_to_text(ca: &Dev, out: &mut Printbuf) {
     let done = ca.io_done.sum();
-    let nr = c::BCH_DATA_NR as usize;
+    let nr = c::DataType::NR as usize;
 
     writeln!(out, "{{");
     for (rw, name) in ["read", "write"].into_iter().enumerate() {
@@ -586,7 +586,7 @@ fn compression_stats_to_text(c: &Fs, out: &mut Printbuf) {
     out.tabstops(&[12, 16, 16, 24]);
     write!(out, "type\tcompressed\runcompressed\raverage extent size\r\n");
 
-    for i in 1..c::BCH_COMPRESSION_TYPE_NR {
+    for i in 1..c::CompressionType::NR {
         let v = accounting::read(c, accounting::Compression { type_: i as u8 });
 
         prt!(out, "{}\t{}\r{}\r{}\r\n", CompressionType(i),

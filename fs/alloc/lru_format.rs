@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
-use cstruct_macros::{c_name, open_enum, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bch_enum, CStruct, Plain, TypeInfo, SizedVal};
 
 #[repr(C, align(8))]
 #[c_name(bch_lru)]
@@ -14,7 +14,7 @@ pub struct Lru {
     pub idx: Le64,
 }
 
-#[open_enum]
+#[bch_enum(open)]
 #[repr(u32)]
 pub enum LruType {
     read = 0,

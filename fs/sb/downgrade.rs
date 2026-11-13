@@ -319,7 +319,7 @@ pub(crate) fn sb_set_downgrade(sb: &mut SbLockGuard<'_>, new_minor: u32, old_min
         passes[0] |= e.recovery_passes[0].get();
         passes[1] |= e.recovery_passes[1].get();
         for id in e.errors.iter().map(|id| usize::from(id.get())) {
-            if id < c::BCH_FSCK_ERR_MAX as usize {
+            if id < c::SbErrorId::NR as usize {
                 let bits = c_ulong::BITS as usize;
                 *cpu.errors_silent[id / bits].place() |= 1 << (id % bits);
             }

@@ -19,7 +19,7 @@
 //! It makes, from the fields in order - each one's id, Opt_name:
 //!
 //! ```text
-//! bch_opt_id               the ids, and bch2_opts_nr - a c_enum!, for C too
+//! bch_opt_id               the ids, and NR - a #[bch_enum(open)]
 //! bch_opts::TABLE          each option's Opt (opts.rs), by id
 //! bch_opts::DEFAULTS       each one's default, all defined
 //! get(), set(), defined(), apply()   by id; set() sets it defined, in the
@@ -149,7 +149,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         true => quote!(0),
         false => {
             let f = a.flags.iter().map(|f| format_ident!("OPT_{}", f.to_string().to_uppercase()));
-            quote!(#(#f)|*)
+            quote!(#(c::opt_flags::#f.bits())|*)
         }
     };
     let sb = match &a.sb {
@@ -390,12 +390,11 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
                    format!(" through PublishedOptsWriter. Laid out as {name} is: to C, one.")];
 
     Ok(quote! {
-        c_enum! {
-            #[open]
-            pub enum bch_opt_id: u32 {
-                #(#[label(#labels)] #ids,)*
-                bch2_opts_nr,
-            }
+        #[cstruct_macros::bch_enum(open)]
+        #[nr]
+        #[repr(u32)]
+        pub enum bch_opt_id {
+            #(#[label(#labels)] #ids,)*
         }
 
         const _: () = assert!(#nr <= BCH_OPTS_MAX as usize, "more options than BCH_OPTS_MAX");

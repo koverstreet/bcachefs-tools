@@ -45,7 +45,7 @@ use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed, SeqCst}};
-use cstruct_macros::c_enum;
+use cstruct_macros::bch_enum;
 
 #[repr(C)]
 pub struct BtreeWriteBio {
@@ -62,14 +62,13 @@ pub struct BtreeWriteBio {
 }
 crate::has_bio!(BtreeWriteBio, wbio.bio);
 
-c_enum! {
-    #[closed]
-    #[prefix(__BTREE_WRITE_)]
-    #[mask(BtreeWriteFlags: u32, prefix = BTREE_WRITE_, c_name = btree_write_flags)]
-    pub enum _: u32 {
-        only_if_need = cs::BTREE_WRITE_TYPE_BITS,
-        already_started,
-    }
+#[bch_enum(closed)]
+#[prefix(__BTREE_WRITE_)]
+#[mask(BtreeWriteFlags: u32, prefix = BTREE_WRITE_, c_name = btree_write_flags)]
+#[repr(u32)]
+pub enum btree_write_flag_bit {
+    only_if_need = cs::BTREE_WRITE_TYPE_BITS,
+    already_started,
 }
 
 const HEADER: &str = "a btree node or node entry header, in its write's buffer";

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_name, c_bitmask, c_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, c_bitmask, bch_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
 
 pub const BLOCKDEV_INODE_MAX: u32 = 4096;
 pub const BCACHEFS_ROOT_INO: u32 = 4096;
@@ -131,88 +131,86 @@ c_xmacro! {
     }
 }
 
-c_enum! {
-    #[open]
-    #[prefix(Inode_opt_)]
-    #[nr(Inode_opt_nr)]
-    #[arm_columns(bits: value(u32))]
-    /* subset of BCH_INODE_FIELDS */
-    pub enum inode_opt_id: u32 {
-        #[bits(8)]  data_checksum,
-        #[bits(8)]  compression,
-        #[bits(32)] project,
-        #[bits(8)]  background_compression,
-        #[bits(8)]  data_replicas,
-        #[bits(16)] promote_target,
-        #[bits(16)] foreground_target,
-        #[bits(16)] background_target,
-        #[bits(16)] erasure_code,
-        #[bits(8)]  nocow,
-        #[bits(8)]  inodes_32bit,
-        #[bits(8)]  casefold,
-    }
+#[bch_enum(open)]
+#[prefix(Inode_opt_)]
+#[nr]
+#[arm_columns(bits: value(u32))]
+/* subset of BCH_INODE_FIELDS */
+#[repr(u32)]
+pub enum inode_opt_id {
+    #[bits(8)]  data_checksum,
+    #[bits(8)]  compression,
+    #[bits(32)] project,
+    #[bits(8)]  background_compression,
+    #[bits(8)]  data_replicas,
+    #[bits(16)] promote_target,
+    #[bits(16)] foreground_target,
+    #[bits(16)] background_target,
+    #[bits(16)] erasure_code,
+    #[bits(8)]  nocow,
+    #[bits(8)]  inodes_32bit,
+    #[bits(8)]  casefold,
 }
 
 /* bits 20+ reserved for packed fields below: */
-c_enum! {
-    #[open]
-    #[prefix(__BCH_INODE_)]
-    #[mask(bch_inode_flags: u32, prefix = BCH_INODE_)]
-    /*
-     * BCH_INODE_unlinked means we definitively know that there isn't, and
-     * shouldn't be, a dirent pointing to this inode: it is (or is about to
-     * be) deleted. check_unreachable_inodes() keys off it to distinguish
-     * "unreachable by design" from damage needing reattach, and setting it
-     * enrolls the inode in the deleted_inodes btree (bch2_trigger_inode())
-     * so a crash can't leak the inode.
-     *
-     * Ordinary inodes carrying it are deleted by the inode reaper - VFS
-     * eviction -> bch2_inode_rm(), or bch2_delete_dead_inodes() after a
-     * crash. Subvolume root inodes carry it too once their subvolume has
-     * been unlinked, but their deletion belongs to the subvolume deletion
-     * path (subvolume state unlinked -> VFS eviction -> snapshot sweep) and
-     * the inode reaper must leave them alone - see
-     * bch2_inode_is_subvolume_root().
-     *
-     * BCH_INODE_has_case_insensitive is set if any descendent is case insensitive -
-     * for overlayfs
-     *
-     * BCH_INODE_has_inode_opts is set iff some field in BCH_INODE_OPTS() is
-     * nonzero on this inode (per-inode option overrides exist). Lets the
-     * extent-update path skip the inode unpack and use fs defaults when the
-     * bit is clear. Maintained by inode::pack(): recomputed from the
-     * BCH_INODE_OPTS fields every pack.
-     *
-     * BCH_INODE_has_access_acl / has_default_acl are set iff a POSIX ACL
-     * xattr of that type (KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS / _DEFAULT)
-     * exists for this inode, so the common no-ACL path in bch2_get_acl() can
-     * short-circuit without an xattr lookup. Maintained at inode create and
-     * in bch2_set_acl_trans().
-     *
-     * All three ride the per_dev_fragmentation_lru version: the upgrade
-     * schedules check_inodes + check_xattrs, which set the flags correctly
-     * on existing inodes (silently - the upgrade entry lists the flag
-     * errors, feeding errors_silent), and fsck verifies both directions
-     * from then on. Version upgrades always run, so consumers can trust
-     * the bits unconditionally.
-     */
-    pub enum __bch_inode_flags: u32 {
-        sync = 0,
-        immutable = 1,
-        append = 2,
-        nodump = 3,
-        noatime = 4,
-        i_size_dirty = 5,
-        i_sectors_dirty = 6,
-        unlinked = 7,
-        backptr_untrusted = 8,
-        has_child_snapshot = 9,
-        has_case_insensitive = 10,
-        __BCH_INODE_31bit_dirent_offset = 11,
-        has_inode_opts = 12,
-        has_access_acl = 13,
-        has_default_acl = 14,
-    }
+#[bch_enum(open)]
+#[prefix(__BCH_INODE_)]
+#[mask(bch_inode_flags: u32, prefix = BCH_INODE_)]
+/*
+ * BCH_INODE_unlinked means we definitively know that there isn't, and
+ * shouldn't be, a dirent pointing to this inode: it is (or is about to
+ * be) deleted. check_unreachable_inodes() keys off it to distinguish
+ * "unreachable by design" from damage needing reattach, and setting it
+ * enrolls the inode in the deleted_inodes btree (bch2_trigger_inode())
+ * so a crash can't leak the inode.
+ *
+ * Ordinary inodes carrying it are deleted by the inode reaper - VFS
+ * eviction -> bch2_inode_rm(), or bch2_delete_dead_inodes() after a
+ * crash. Subvolume root inodes carry it too once their subvolume has
+ * been unlinked, but their deletion belongs to the subvolume deletion
+ * path (subvolume state unlinked -> VFS eviction -> snapshot sweep) and
+ * the inode reaper must leave them alone - see
+ * bch2_inode_is_subvolume_root().
+ *
+ * BCH_INODE_has_case_insensitive is set if any descendent is case insensitive -
+ * for overlayfs
+ *
+ * BCH_INODE_has_inode_opts is set iff some field in BCH_INODE_OPTS() is
+ * nonzero on this inode (per-inode option overrides exist). Lets the
+ * extent-update path skip the inode unpack and use fs defaults when the
+ * bit is clear. Maintained by inode::pack(): recomputed from the
+ * BCH_INODE_OPTS fields every pack.
+ *
+ * BCH_INODE_has_access_acl / has_default_acl are set iff a POSIX ACL
+ * xattr of that type (KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS / _DEFAULT)
+ * exists for this inode, so the common no-ACL path in bch2_get_acl() can
+ * short-circuit without an xattr lookup. Maintained at inode create and
+ * in bch2_set_acl_trans().
+ *
+ * All three ride the per_dev_fragmentation_lru version: the upgrade
+ * schedules check_inodes + check_xattrs, which set the flags correctly
+ * on existing inodes (silently - the upgrade entry lists the flag
+ * errors, feeding errors_silent), and fsck verifies both directions
+ * from then on. Version upgrades always run, so consumers can trust
+ * the bits unconditionally.
+ */
+#[repr(u32)]
+pub enum __bch_inode_flags {
+    sync = 0,
+    immutable = 1,
+    append = 2,
+    nodump = 3,
+    noatime = 4,
+    i_size_dirty = 5,
+    i_sectors_dirty = 6,
+    unlinked = 7,
+    backptr_untrusted = 8,
+    has_child_snapshot = 9,
+    has_case_insensitive = 10,
+    __BCH_INODE_31bit_dirent_offset = 11,
+    has_inode_opts = 12,
+    has_access_acl = 13,
+    has_default_acl = 14,
 }
 
 c_bitmask! {

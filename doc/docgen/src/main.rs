@@ -18,16 +18,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
-// Enum declarations: a c_enum! or tagged_union! in the Rust source
+// Enum declarations: a #[bch_enum], c_enum! or tagged_union! in the Rust source
 // ---------------------------------------------------------------------------
 
 /// The attributes of an enum declaration's arms that are columns, after name,
 /// value and doc: entries 3, 4.
 const ENUM_DECL_ATTRS: [&str; 2] = ["flags", "when"];
 
-/// The arms of enum @name as tagged_union! or c_enum! declares it, as a C
-/// list's entries: name, value as written, the arm's doc comment as a C
-/// string, its ENUM_DECL_ATTRS, and the date its doc starts with, `/// 2018-11:
+/// The arms of enum @name as #[bch_enum], tagged_union! or c_enum! declares
+/// it, as a C list's entries: name, value as written, the arm's doc comment as
+/// a C string, its ENUM_DECL_ATTRS, and the date its doc starts with, `/// 2018-11:
 /// ..` - a version's. An arm is `/// doc #[..]* name[(Type)] [= value]`, a
 /// value not written the last's plus one.
 fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
@@ -36,7 +36,7 @@ fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
         source[..i].rsplit('\n').next().is_some_and(|l| l.trim().is_empty());
     let decl = [format!("pub enum {name} {{"), format!("pub enum {name}: ")].iter()
         .find_map(|d| source.match_indices(d.as_str()).find(starts_line))?.0;
-    let start = ["tagged_union! {", "c_enum! {"].iter()
+    let start = ["#[bch_enum(", "tagged_union! {", "c_enum! {"].iter()
         .filter_map(|m| source[..decl].rfind(m))
         .max()?;
     if source[start..decl].contains("\n}\n") {
@@ -891,9 +891,9 @@ fn main() {
     }
 
     // --- Simple enum lists ---
-    // From each enum's declaration wherever in fs/ it lives - a c_enum! or a
-    // tagged_union! - found by name, so an enum moving between files doesn't
-    // break the docs.
+    // From each enum's declaration wherever in fs/ it lives - a #[bch_enum],
+    // c_enum! or tagged_union! - found by name, so an enum moving between
+    // files doesn't break the docs.
     let mut sources = Vec::new();
     walk_c_files(&root.join("fs"), &mut |path| {
         if path.extension().is_some_and(|e| e == "rs") {
@@ -902,7 +902,7 @@ fn main() {
     });
     for el in ENUM_LISTS {
         let Some(entries) = sources.iter().find_map(|s| parse_enum_decl(s, el.enum_name)) else {
-            eprintln!("error: no enum {} in fs/ - not a c_enum! or a tagged_union! declaration",
+            eprintln!("error: no enum {} in fs/ - not a #[bch_enum], c_enum! or tagged_union! declaration",
                       el.enum_name);
             errors += 1;
             continue;

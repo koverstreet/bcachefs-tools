@@ -31,7 +31,7 @@ use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
 use crate::util::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
-use cstruct_macros::{bitfield, c_enum, placed, CStruct, Init, Late};
+use cstruct_macros::{bitfield, bch_enum, placed, CStruct, Init, Late};
 use nestify::nest;
 
 /* btree write buffer steals 8 bits for its own purposes: */
@@ -188,17 +188,16 @@ impl journal_buf {
  * Something that makes a journal entry dirty - i.e. a btree node that has to be
  * flushed:
  */
-c_enum! {
-    #[closed]
-    pub enum journal_pin_type: u32 {
-        JOURNAL_PIN_TYPE_btree3,
-        JOURNAL_PIN_TYPE_btree2,
-        JOURNAL_PIN_TYPE_btree1,
-        JOURNAL_PIN_TYPE_btree0,
-        JOURNAL_PIN_TYPE_key_cache,
-        JOURNAL_PIN_TYPE_other,
-        JOURNAL_PIN_TYPE_NR,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum journal_pin_type {
+    JOURNAL_PIN_TYPE_btree3,
+    JOURNAL_PIN_TYPE_btree2,
+    JOURNAL_PIN_TYPE_btree1,
+    JOURNAL_PIN_TYPE_btree0,
+    JOURNAL_PIN_TYPE_key_cache,
+    JOURNAL_PIN_TYPE_other,
+    JOURNAL_PIN_TYPE_NR,
 }
 
 #[allow(non_camel_case_types)]
@@ -316,32 +315,30 @@ pub struct journal_space {
     pub total: c_uint,
 }
 
-c_enum! {
-    #[closed]
-    pub enum journal_space_from: u32 {
-        journal_space_discarded,
-        journal_space_clean_ondisk,
-        journal_space_clean,
-        journal_space_total,
-        journal_space_nr,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum journal_space_from {
+    journal_space_discarded,
+    journal_space_clean_ondisk,
+    journal_space_clean,
+    journal_space_total,
+    journal_space_nr,
 }
 
-c_enum! {
-    #[closed]
-    #[prefix(JOURNAL_)]
-    pub enum journal_flags: u32 {
-        degraded,
-        replay_done,
-        running,
-        may_skip_flush,
-        need_flush_write,
-        med_on_space,
-        low_on_space,
-        low_on_pin,
-        low_on_wb,
-        stuck_reported,
-    }
+#[bch_enum(closed)]
+#[prefix(JOURNAL_)]
+#[repr(u32)]
+pub enum journal_flags {
+    degraded,
+    replay_done,
+    running,
+    may_skip_flush,
+    need_flush_write,
+    med_on_space,
+    low_on_space,
+    low_on_pin,
+    low_on_wb,
+    stuck_reported,
 }
 
 #[repr(C)]
@@ -379,7 +376,7 @@ pub struct JournalLocked {
     pub free_buf: JsetBuf,
 
     pub dirty_entry_bytes: usize,
-    pub space: [c::journal_space; c::journal_space_nr as usize],
+    pub space: [c::journal_space; c::journal_space_from::journal_space_nr as usize],
     pub last_flush_write: c_ulong,
     pub nr_flush_writes: u64,
     pub nr_noflush_writes: u64,
@@ -660,14 +657,13 @@ const _: () = assert!(core::mem::size_of::<JournalHot>() == core::mem::align_of:
                       "JournalHot is more than a cacheline");
 
 /* Where each stage of a journal bucket's life starts: journal/buckets.rs */
-c_enum! {
-    #[closed]
-    pub enum journal_bucket_stage: u32 {
-        JOURNAL_BUCKET_discard,
-        JOURNAL_BUCKET_dirty_ondisk,
-        JOURNAL_BUCKET_dirty,
-        JOURNAL_BUCKET_cur,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum journal_bucket_stage {
+    JOURNAL_BUCKET_discard,
+    JOURNAL_BUCKET_dirty_ondisk,
+    JOURNAL_BUCKET_dirty,
+    JOURNAL_BUCKET_cur,
 }
 
 impl journal {

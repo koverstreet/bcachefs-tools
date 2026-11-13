@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
-use cstruct_macros::{c_name, c_enum, counters, tagged_union, whole, CStruct, Plain,
-                     TypeInfo};
+use cstruct_macros::{c_name, bch_enum, counters, tagged_union, whole, CStruct, Plain, TypeInfo};
 use crate::format::Bpos;
 
 /*
@@ -60,26 +59,25 @@ pub struct Accounting {
 
 pub const BCH_ACCOUNTING_MAX_COUNTERS: u32 = 3;
 
-c_enum! {
-    #[open]
-    #[c_name(bch_data_type)]
-    #[prefix(BCH_DATA_)]
-    #[nr(BCH_DATA_NR)]
-    #[mask(DataTypes: u16, prefix = BCH_DATA_MASK_, c_name = bch_data_types)]
-    pub enum DataType: u32 {
-        free = 0,
-        sb = 1,
-        journal = 2,
-        btree = 3,
-        user = 4,
-        cached = 5,
-        parity = 6,
-        stripe = 7,
-        need_gc_gens = 8,
-        need_discard = 9,
-        unstriped = 10,
-        multiple = 11,
-    }
+#[bch_enum(open)]
+#[c_name(bch_data_type)]
+#[prefix(BCH_DATA_)]
+#[nr]
+#[mask(DataTypes: u16, prefix = BCH_DATA_MASK_, c_name = bch_data_types)]
+#[repr(u32)]
+pub enum DataType {
+    free = 0,
+    sb = 1,
+    journal = 2,
+    btree = 3,
+    user = 4,
+    cached = 5,
+    parity = 6,
+    stripe = 7,
+    need_gc_gens = 8,
+    need_discard = 9,
+    unstriped = 10,
+    multiple = 11,
 }
 
 /// C's name, as bindgen's declarations of C functions spell it.
@@ -99,7 +97,7 @@ tagged_union! {
     #[c_name(disk_accounting_pos)]
     #[derive(TypeInfo)]
     #[tag(type_: u8)]
-    #[tag_enum(disk_accounting_type: u32, prefix = BCH_DISK_ACCOUNTING_, nr = BCH_DISK_ACCOUNTING_TYPE_NR)]
+    #[tag_enum(disk_accounting_type: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]
     #[pad(Bpos)]
     #[size(pad)]
     #[packed]

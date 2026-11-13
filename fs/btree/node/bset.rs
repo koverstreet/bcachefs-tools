@@ -20,7 +20,7 @@ use crate::util::Printbuf;
 use core::cmp::Ordering;
 use core::fmt;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, CStruct, c_enum};
+use cstruct_macros::{c_name, CStruct, bch_enum};
 
 /*
  * BKEYS:
@@ -242,14 +242,13 @@ impl BsetTree {
     }
 }
 
-c_enum! {
-    #[closed]
-    #[c_name(bset_aux_tree_type)]
-    pub enum AuxTreeType: u32 {
-        BSET_NO_AUX_TREE,
-        BSET_RO_AUX_TREE,
-        BSET_RW_AUX_TREE,
-    }
+#[bch_enum(closed)]
+#[c_name(bset_aux_tree_type)]
+#[repr(u32)]
+pub enum AuxTreeType {
+    BSET_NO_AUX_TREE,
+    BSET_RO_AUX_TREE,
+    BSET_RW_AUX_TREE,
 }
 
 pub const BSET_TREE_NR_TYPES: u32 = 3;

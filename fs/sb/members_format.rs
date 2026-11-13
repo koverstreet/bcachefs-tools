@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{c_bitmask, c_enum, open_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_bitmask, bch_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 /*
  * We refer to members with bitmasks in various places - but we need to get rid
@@ -20,7 +20,7 @@ pub const BCH_SB_MEMBER_INVALID: u32 = 255;
 
 pub const BCH_MIN_NR_NBUCKETS: u32 = 1 << 9;
 
-#[open_enum]
+#[bch_enum(open)]
 #[repr(u32)]
 pub enum IopsMeasurement {
     seqread = 0,
@@ -29,15 +29,14 @@ pub enum IopsMeasurement {
     randwrite = 3,
 }
 
-c_enum! {
-    #[open]
-    #[prefix(BCH_MEMBER_ERROR_)]
-    #[nr(BCH_MEMBER_ERROR_NR)]
-    pub enum bch_member_error_type: u32 {
-        read = 0,
-        write = 1,
-        checksum = 2,
-    }
+#[bch_enum(open)]
+#[prefix(BCH_MEMBER_ERROR_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_member_error_type {
+    read = 0,
+    write = 1,
+    checksum = 2,
 }
 
 #[repr(C)]
@@ -53,8 +52,8 @@ pub struct bch_member {
 
     pub flags: Le64,
     pub iops: [Le32; 4],
-    pub errors: [Le64; c::BCH_MEMBER_ERROR_NR as usize],
-    pub errors_at_reset: [Le64; c::BCH_MEMBER_ERROR_NR as usize],
+    pub errors: [Le64; c::bch_member_error_type::NR as usize],
+    pub errors_at_reset: [Le64; c::bch_member_error_type::NR as usize],
     pub errors_reset_time: Le64,
     pub seq: Le64,
     pub btree_allocated_bitmap: Le64,
@@ -119,31 +118,29 @@ c_bitmask! {
     }
 }
 
-c_enum! {
-    #[open]
-    #[c_name(bch_member_state)]
-    #[prefix(BCH_MEMBER_STATE_)]
-    #[nr(BCH_MEMBER_STATE_NR)]
-    pub enum MemberState: u8 {
-        rw = 0,
-        ro = 1,
-        evacuating = 2,
-        spare = 3,
-    }
+#[bch_enum(open)]
+#[c_name(bch_member_state)]
+#[prefix(BCH_MEMBER_STATE_)]
+#[nr]
+#[repr(u8)]
+pub enum MemberState {
+    rw = 0,
+    ro = 1,
+    evacuating = 2,
+    spare = 3,
 }
 
-c_enum! {
-    #[open]
-    #[c_name(bch_member_initialized)]
-    #[prefix(BCH_MEMBER_INITIALIZED_)]
-    #[nr(BCH_MEMBER_INITIALIZED_NR)]
-    pub enum MemberInitialized: u8 {
-        initialized = 0,
-        pre_dev_usage = 1,
-        pre_mark_sb = 2,
-        pre_freespace_init = 3,
-        pre_journal_alloc = 4,
-    }
+#[bch_enum(open)]
+#[c_name(bch_member_initialized)]
+#[prefix(BCH_MEMBER_INITIALIZED_)]
+#[nr]
+#[repr(u8)]
+pub enum MemberInitialized {
+    initialized = 0,
+    pre_dev_usage = 1,
+    pre_mark_sb = 2,
+    pre_freespace_init = 3,
+    pre_journal_alloc = 4,
 }
 
 #[unsized_vstruct(tail = [u64])]

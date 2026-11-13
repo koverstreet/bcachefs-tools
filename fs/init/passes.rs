@@ -25,30 +25,29 @@ use crate::published;
 use crate::types::c_default;
 use crate::util::projections::Volatile;
 use crate::util::workqueue::ReffedWork;
-use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_enum};
+use cstruct_macros::{placed, CStruct, Init, TypeInfo, bch_enum};
 use pin_init::pin_data;
 use crate::format::{Btree, SbFeature};
 
-c_enum! {
-    #[flags]
-    pub enum bch_run_recovery_pass_flags: u32 {
-        RUN_RECOVERY_PASS_ratelimit = 1 << 0,
-        /*
-         * Schedule in memory only, without taking sb_lock, so it's safe from
-         * contexts that hold btree locks (e.g. triggers): the schedule touches
-         * only in-memory recovery state and never writes the superblock. The
-         * need is re-derivable, so persistence isn't required.
-         */
-        RUN_RECOVERY_PASS_ephemeral = 1 << 1,
-        /*
-         * Don't schedule if the pass already completed successfully this
-         * instance: for callers that schedule cleanup passes on encountering
-         * damage those passes might not fix. If the pass ran and the damage is
-         * still here, rescheduling can't help - it just re-arms the pass in the
-         * superblock on every encounter, forcing fsck on every subsequent mount.
-         */
-        RUN_RECOVERY_PASS_skip_if_complete = 1 << 2,
-    }
+#[bch_enum(flags)]
+#[repr(u32)]
+pub enum bch_run_recovery_pass_flags {
+    RUN_RECOVERY_PASS_ratelimit = 1 << 0,
+    /*
+     * Schedule in memory only, without taking sb_lock, so it's safe from
+     * contexts that hold btree locks (e.g. triggers): the schedule touches
+     * only in-memory recovery state and never writes the superblock. The
+     * need is re-derivable, so persistence isn't required.
+     */
+    RUN_RECOVERY_PASS_ephemeral = 1 << 1,
+    /*
+     * Don't schedule if the pass already completed successfully this
+     * instance: for callers that schedule cleanup passes on encountering
+     * damage those passes might not fix. If the pass ran and the damage is
+     * still here, rescheduling can't help - it just re-arms the pass in the
+     * superblock on every encounter, forcing fsck on every subsequent mount.
+     */
+    RUN_RECOVERY_PASS_skip_if_complete = 1 << 2,
 }
 
 /// What the runner keeps under its lock - taken with interrupts off, as
@@ -82,9 +81,9 @@ pub struct bch_recovery_runner {
      * but we still want the same last_run/last_runtime throttle so automatic
      * recovery doesn't hammer a pass that keeps failing.
      */
-    pub passes_failing_ratelimit: [c::recovery_pass_entry; c::BCH_RECOVERY_PASS_NR as usize],
+    pub passes_failing_ratelimit: [c::recovery_pass_entry; c::RecoveryPass::NR as usize],
     /* Consecutive failures, for exponential backoff; zeroed on success */
-    pub passes_failing_nr: [u8; c::BCH_RECOVERY_PASS_NR as usize],
+    pub passes_failing_nr: [u8; c::RecoveryPass::NR as usize],
 }
 // rewound_from and rewound_to zeroed are pass 0, recovery_pass_empty: none
 c_default!(bch_recovery_runner);

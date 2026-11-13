@@ -194,7 +194,7 @@ pub struct NodeContents {
      * the slow path via byte_aligned_fields = false.
      */
     pub byte_aligned_fields: bool,
-    pub unpack: [BkeyUnpackField; cs::BKEY_NR_FIELDS as usize],
+    pub unpack: [BkeyUnpackField; cs::bch_bkey_fields::BKEY_NR_FIELDS as usize],
 
     /*
      * Sets of sorted keys - the real btree node - plus a binary search tree

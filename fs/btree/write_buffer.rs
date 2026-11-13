@@ -47,7 +47,7 @@ use core::marker::PhantomData;
 use core::mem::{offset_of, size_of};
 use core::ptr::NonNull;
 use core::sync::atomic::fence;
-use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_enum};
+use cstruct_macros::{placed, CStruct, Init, TypeInfo, bch_enum};
 use nestify::nest;
 use pin_init::pin_data;
 
@@ -57,31 +57,30 @@ use pin_init::pin_data;
  * be kept in sync with BCH_BTREE_IDS() — adding BTREE_IS_write_buffer to a new
  * btree requires a matching entry here.
  */
-c_enum! {
-    #[closed]
-    #[prefix(BCH_WB_BTREE_)]
-    #[nr(BCH_WB_BTREE_NR)]
-    pub enum bch_wb_btree: u32 {
-        accounting,
-        lru,
-        need_discard,
-        backpointers,
-        deleted_inodes,
-        reconcile_work,
-        reconcile_hipri,
-        reconcile_pending,
-        reconcile_work_phys,
-        reconcile_hipri_phys,
-        stripe_backpointers,
-    }
+#[bch_enum(closed)]
+#[prefix(BCH_WB_BTREE_)]
+#[nr]
+#[repr(u32)]
+pub enum bch_wb_btree {
+    accounting,
+    lru,
+    need_discard,
+    backpointers,
+    deleted_inodes,
+    reconcile_work,
+    reconcile_hipri,
+    reconcile_pending,
+    reconcile_work_phys,
+    reconcile_hipri_phys,
+    stripe_backpointers,
 }
 
 /*
  * Catch the "added BTREE_IS_write_buffer but forgot BCH_WRITE_BUFFER_BTREES"
  * footgun at compile time: count the write_buffer bits in BCH_BTREE_IDS() and
- * compare against BCH_WB_BTREE_NR.
+ * compare against bch_wb_btree::NR.
  */
-const _: () = assert!(crate::btrees_with(BtreeFlags::write_buffer).count_ones() == BCH_WB_BTREE_NR as u32,
+const _: () = assert!(crate::btrees_with(BtreeFlags::write_buffer).count_ones() == bch_wb_btree::NR as u32,
                       "BCH_WRITE_BUFFER_BTREES() is out of sync with BCH_BTREE_IDS() write_buffer flags");
 
 #[allow(non_upper_case_globals)]
@@ -145,17 +144,16 @@ pub struct btree_write_buffered_key {
     pub k: PaddedKey<{ BKEY_U64S + c::BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize }>,
 }
 
-c_enum! {
-    #[closed]
-    #[prefix(WB_FLUSH_)]
-    #[nr(WB_FLUSH_NR)]
-    pub enum wb_flush_caller: u32 {
-        thread,
-        journal_pin,
-        sync,
-        maybe,
-        tryflush,
-    }
+#[bch_enum(closed)]
+#[prefix(WB_FLUSH_)]
+#[nr]
+#[repr(u32)]
+pub enum wb_flush_caller {
+    thread,
+    journal_pin,
+    sync,
+    maybe,
+    tryflush,
 }
 
 /// What inc.lock protects: the keys the journal's intake stages, and the
@@ -181,7 +179,7 @@ crate::published! {
         pub keys:              KeysLive,
         pub sorted:            KeysLive,
         pub nr_flushes:        Volatile<u64>,
-        pub nr_flushes_caller: [Volatile<u64>; c::WB_FLUSH_NR as usize],
+        pub nr_flushes_caller: [Volatile<u64>; c::wb_flush_caller::NR as usize],
         pub nr_keys_flushed:   Volatile<u64>,
         pub nr_keys_fast:      Volatile<u64>,
         pub nr_keys_slowpath:  Volatile<u64>,
@@ -797,7 +795,7 @@ impl Fs {
         /*
          * Matches the journal's default buf size (JOURNAL_ENTRY_SIZE_MIN /
          * 64 slots); grows via bch2_btree_write_buffer_resize() as the journal
-         * grows. With BCH_WB_BTREE_NR independent instances, keeping this small
+         * grows. With bch_wb_btree::NR independent instances, keeping this small
          * matters — at 1<<16 the baseline was ~27 MB per fs.
          */
         let initial_size = 1 << 10;

@@ -83,7 +83,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Unvalidated;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, TypeInfo, c_enum};
+use cstruct_macros::{CStruct, TypeInfo, bch_enum};
 use crate::sb::io::SbResize;
 use crate::types::c_default;
 use nestify::nest;
@@ -93,13 +93,12 @@ pub const TARGET_DEV_START: u32 = 1;
 pub const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
 
 /* target.type_: what a target names */
-c_enum! {
-    #[closed]
-    pub enum bch_target_type: u32 {
-        TARGET_NULL,
-        TARGET_DEV,
-        TARGET_GROUP,
-    }
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum bch_target_type {
+    TARGET_NULL,
+    TARGET_DEV,
+    TARGET_GROUP,
 }
 
 nest! {

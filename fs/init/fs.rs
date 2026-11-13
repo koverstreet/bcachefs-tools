@@ -514,7 +514,7 @@ impl Fs {
         }
 
         self.journal_entry_res_resize(&self.btree.root_journal_res,
-            crate::btree::interior::roots_journal_u64s(c::BTREE_ID_NR));
+            crate::btree::interior::roots_journal_u64s(Btree::NR));
         self.journal_entry_res_resize(&self.super_entries_journal_res,
             crate::journal::write::PREP_ENTRIES_U64S as c_uint);
         self.journal_entry_res_resize(&self.rewind_limit_res,

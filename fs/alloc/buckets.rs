@@ -37,17 +37,16 @@ use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, 
 use core::convert::Infallible;
 use core::ffi::c_uint;
 use core::sync::atomic::{AtomicU8, Ordering};
-use cstruct_macros::{c_name, CStruct, bitfield, Fieldwise, TypeInfo, c_enum};
+use cstruct_macros::{c_name, CStruct, bitfield, Fieldwise, TypeInfo, bch_enum};
 use core::cell::Cell;
 use nestify::nest;
 use crate::format::{Bpos, Btree, DataType, BkeyType};
 
-c_enum! {
-    #[flags]
-    pub enum bch_reservation_flags: u32 {
-        BCH_DISK_RESERVATION_NOFAIL = 1 << 0,
-        BCH_DISK_RESERVATION_PARTIAL = 1 << 1,
-    }
+#[bch_enum(flags)]
+#[repr(u32)]
+pub enum bch_reservation_flags {
+    BCH_DISK_RESERVATION_NOFAIL = 1 << 0,
+    BCH_DISK_RESERVATION_PARTIAL = 1 << 1,
 }
 
 #[repr(C)]
@@ -111,7 +110,7 @@ pub type BucketGensArray = crate::util::rcu::RcuArray<core::sync::atomic::Atomic
 #[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage {
-    pub buckets: [u64; c::BCH_DATA_NR as usize],
+    pub buckets: [u64; c::DataType::NR as usize],
 }
 
 #[repr(C)]
@@ -132,7 +131,7 @@ pub struct bch_dev_usage_type {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage_full {
-    pub d: [c::bch_dev_usage_type; c::BCH_DATA_NR as usize],
+    pub d: [c::bch_dev_usage_type; c::DataType::NR as usize],
 }
 
 #[repr(C)]

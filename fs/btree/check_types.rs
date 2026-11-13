@@ -8,20 +8,19 @@ use crate::util::projections::Volatile;
 use crate::locking::{Locked, SeqLock};
 use crate::new_lock;
 use core::cmp::Ordering;
-use cstruct_macros::{bitfield, c_enum, CStruct, Init, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
 use crate::format::{Bpos, Btree};
 
-c_enum! {
-    #[closed]
-    #[prefix(GC_PHASE_)]
-    pub enum gc_phase: u32 {
-        not_running,
-        start,
-        sb,
-        btree,
-    }
+#[bch_enum(closed)]
+#[prefix(GC_PHASE_)]
+#[repr(u32)]
+pub enum gc_phase {
+    not_running,
+    start,
+    sb,
+    btree,
 }
 
 nest! {

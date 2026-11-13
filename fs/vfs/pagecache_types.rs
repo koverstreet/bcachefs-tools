@@ -7,20 +7,19 @@
 use crate::cstructs::c;
 use crate::locking::Locked;
 use crate::types::c_default;
-use cstruct_macros::{bitfield, c_enum, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, CStruct, TypeInfo};
 use nestify::nest;
 use core::sync::atomic::AtomicI32;
 
-c_enum! {
-    #[closed]
-    #[prefix(SECTOR_)]
-    pub enum bch_folio_sector_state: u32 {
-        unallocated,
-        reserved,
-        dirty,
-        dirty_reserved,
-        allocated,
-    }
+#[bch_enum(closed)]
+#[prefix(SECTOR_)]
+#[repr(u32)]
+pub enum bch_folio_sector_state {
+    unallocated,
+    reserved,
+    dirty,
+    dirty_reserved,
+    allocated,
 }
 
 impl bch_folio_sector_state {

@@ -63,9 +63,9 @@ impl Ord for c::bbpos {
 
 impl c::bbpos {
     pub const MIN: Self = c::bbpos { btree: Btree(0), pos: crate::btree::bkey::POS_MIN };
-    /// The last of BTREE_ID_NR - 1.
+    /// The last of Btree::NR - 1.
     pub const MAX: Self = c::bbpos {
-        btree: Btree(c::BTREE_ID_NR as u32 - 1),
+        btree: Btree(Btree::NR as u32 - 1),
         pos:   crate::btree::bkey::SPOS_MAX,
     };
 
@@ -75,7 +75,7 @@ impl c::bbpos {
             return c::bbpos { pos: self.pos.successor(), ..self };
         }
 
-        assert!(self.btree.0 != c::BTREE_ID_NR as u32, "no position after the last btree's last");
+        assert!(self.btree.0 != Btree::NR as u32, "no position after the last btree's last");
         c::bbpos { btree: Btree(self.btree.0 + 1), pos: crate::btree::bkey::POS_MIN }
     }
 }

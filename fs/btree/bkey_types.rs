@@ -13,7 +13,7 @@ use crate::cstructs::c as cs;
 use crate::cstructs::c::BkeyType_arms;
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, c_enum};
+use cstruct_macros::{CStruct, bitfield, bch_enum};
 use nestify::nest;
 use crate::format::Btree;
 
@@ -138,28 +138,26 @@ macro_rules! __bkey_typed {
 }
 BkeyType_arms!(__bkey_typed);
 
-c_enum! {
-    #[flags]
-    #[c_name(bch_validate_flags)]
-    #[prefix(BCH_VALIDATE_)]
-    pub enum ValidateFlags: u32 {
-        write = 1 << 0,
-        commit = 1 << 1,
-        silent = 1 << 2,
-    }
+#[bch_enum(flags)]
+#[c_name(bch_validate_flags)]
+#[prefix(BCH_VALIDATE_)]
+#[repr(u32)]
+pub enum ValidateFlags {
+    write = 1 << 0,
+    commit = 1 << 1,
+    silent = 1 << 2,
 }
 
-c_enum! {
-    #[closed]
-    #[prefix(BKEY_VALIDATE_)]
-    pub enum bkey_validate_from: u32 {
-        unknown,
-        superblock,
-        journal,
-        btree_root,
-        btree_node,
-        commit,
-    }
+#[bch_enum(closed)]
+#[prefix(BKEY_VALIDATE_)]
+#[repr(u32)]
+pub enum bkey_validate_from {
+    unknown,
+    superblock,
+    journal,
+    btree_root,
+    btree_node,
+    commit,
 }
 
 nest! {
