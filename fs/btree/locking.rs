@@ -291,7 +291,7 @@ impl BtreeTrans<'_> {
             for i in self.path_idxs() {
                 let linked = &mut paths[i];
                 if linked.has_node(level, b, seq) {
-                    linked.l[level].lock_seq += 1;
+                    linked.l[level].lock_seq = linked.l[level].lock_seq.wrapping_add(1);
                 }
             }
         }

@@ -1139,7 +1139,7 @@ impl BtreeTrans<'_> {
             }
         }
 
-        self.commit_count.set(self.commit_count.get() + 1);
+        self.commit_count.set(self.commit_count.get().wrapping_add(1));
         drop(_write);
 
         self.downgrade(&mut paths);

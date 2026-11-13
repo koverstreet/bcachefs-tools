@@ -856,7 +856,8 @@ impl BtreeTrans<'_> {
 
         self.reset_updates(paths);
 
-        self.restart_count.set(self.restart_count.get() + 1);
+        // a generation, compared for equality: it wraps, as C's u32 did
+        self.restart_count.set(self.restart_count.get().wrapping_add(1));
         self.mem_with(|m| m.buf.clear());
 
         /*
