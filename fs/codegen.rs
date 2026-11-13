@@ -267,7 +267,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_srcu_read_lock_fast_notrace", "rust_srcu_read_unlock_fast_notrace",
     "rust_preempt_disable_notrace", "rust_preempt_enable_notrace", "rust_perf_fetch_caller_regs",
     // fs/'s C shims: locking.c, rcu.c, util.c, vendor/bio_iov_iter.c
-    "rust_.*", "bch2_.*", "mempool_kvmalloc", "mempool_kvfree",
+    "rust_.*", "bch2_.*",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
                                   "__genradix", "genradix_iter",

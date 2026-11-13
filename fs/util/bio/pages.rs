@@ -11,7 +11,7 @@
 //! pool. Pages that never did - a bio's that mustn't take from it - are
 //! free_pages()'s.
 
-use core::ffi::c_void;
+use core::alloc::Layout;
 use core::ptr::NonNull;
 
 use crate::c;
@@ -20,7 +20,7 @@ use crate::new_lock;
 use crate::errcode::BchError;
 use crate::util::alloc::{current_gfp_context_raw, AllocError};
 use crate::os::kernel::PAGE_SIZE;
-use crate::util::mempool::{Mempool, Raw};
+use crate::util::mempool::{Elements, Mempool};
 use pin_init::{pin_data, pin_init, PinInit};
 
 use super::iter::page_address;
@@ -36,7 +36,7 @@ pub struct BouncePool {
     #[pin]
     lock: Locked<c::mutex>,
     #[pin]
-    pool: Mempool<Raw>,
+    pool: Mempool<BouncePages>,
 }
 
 impl BouncePool {
@@ -44,7 +44,7 @@ impl BouncePool {
         let max = opts.btree_node_size.max(opts.encoded_extent_max);
         pin_init!(Self {
             lock <- new_lock!((), "&c->bio_bounce_pages_lock"),
-            pool <- Mempool::with(max as usize / POOL_LEN, bounce_alloc, bounce_free, POOL_LEN),
+            pool <- Mempool::new(max as usize / POOL_LEN, POOL_LEN),
         }? BchError)
     }
 
@@ -64,13 +64,18 @@ impl BouncePool {
     }
 }
 
-/// Data buffers, overwritten before they're read: not zeroed.
-unsafe extern "C" fn bounce_alloc(gfp: c::gfp_t, _: *mut c_void) -> *mut c_void {
-    unsafe { c::rust_bio_pages_alloc(POOL_LEN, gfp | c::__GFP_SKIP_ZERO) }
-}
+/// The bounce pool's elements: data buffers, overwritten before they're
+/// read, so not zeroed.
+pub struct BouncePages;
 
-unsafe extern "C" fn bounce_free(p: *mut c_void, _: *mut c_void) {
-    unsafe { c::rust_bio_pages_free(p, POOL_LEN) }
+unsafe impl Elements for BouncePages {
+    fn element_alloc(layout: Layout, gfp: c::gfp_t) -> Option<NonNull<u8>> {
+        NonNull::new(unsafe { c::rust_bio_pages_alloc(layout.size(), gfp | c::__GFP_SKIP_ZERO) }.cast())
+    }
+
+    unsafe fn element_free(p: NonNull<u8>, layout: Layout) {
+        unsafe { c::rust_bio_pages_free(p.as_ptr().cast(), layout.size()) }
+    }
 }
 
 /// Allocates pages into @bio up to @size bytes, each allocation a multiple of

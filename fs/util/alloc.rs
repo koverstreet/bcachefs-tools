@@ -551,7 +551,7 @@ pub fn kmalloc(size: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
 
 /// kmalloc()'s alignment of @n bytes: to the largest power of two in it, up
 /// to a page - what IO into it, O_DIRECT's in userspace, needs.
-fn kv_layout(n: usize) -> Result<core::alloc::Layout, AllocError> {
+pub(crate) fn kv_layout(n: usize) -> Result<core::alloc::Layout, AllocError> {
     let align = if n == 0 { 1 } else { 1 << n.ilog2() };
     let align = align.clamp(size_of::<u64>(), crate::os::kernel::PAGE_SIZE);
     core::alloc::Layout::from_size_align(n, align).map_err(|_| AllocError)

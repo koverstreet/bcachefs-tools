@@ -42,6 +42,7 @@ typedef unsigned gfp_t;
 #define __GFP_IO	0
 #define __GFP_NOWARN	0
 #define __GFP_NORETRY	0
+#define __GFP_NOMEMALLOC 0
 #define __GFP_NOFAIL	0
 #define __GFP_ACCOUNT	0
 #define __GFP_RECLAIMABLE 0

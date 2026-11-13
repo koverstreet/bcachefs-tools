@@ -18,7 +18,7 @@ use crate::util::alloc::{KVVec, Kmalloc};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
 use crate::util::Printbuf;
-use crate::util::mempool::{Mempool, Raw};
+use crate::util::mempool::Mempool;
 use crate::util::rcu::Srcu;
 use crate::util::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, NeBytes, bits_to_longs, c_default};
@@ -1017,9 +1017,8 @@ pub struct bch_fs_btree {
     pub foreground_merge_threshold: u16,
 
     #[pin]
-    #[init(Mempool::with(1, crate::btree::cache::bounce_pool_alloc, c::mempool_kvfree,
-                         opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
-    pub bounce_pool: Mempool<Raw>,
+    #[init(Mempool::new(1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
+    pub bounce_pool: Mempool<crate::btree::cache::BounceBufs>,
 
     pub write_stats: [cs::btree_write_stats; cs::BtreeWriteType::NR as usize],
 

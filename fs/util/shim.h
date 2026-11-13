@@ -36,8 +36,6 @@ void bch2_set_current_wake_cpu(int cpu);
 
 bool bch2_static_branch_unlikely(struct static_key_false *key);
 
-void *mempool_kvmalloc(gfp_t gfp_mask, void *pool_data);
-void mempool_kvfree(void *element, void *pool_data);
 void *rust_kzalloc_nofail(size_t size);
 void *rust_kvzalloc_nofail(size_t size);
 void rust_kfree(const void *p);

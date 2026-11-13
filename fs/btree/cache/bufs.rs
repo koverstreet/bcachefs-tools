@@ -9,7 +9,8 @@ use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::kfree;
+use crate::util::alloc::{kfree, KVmalloc};
+use crate::util::mempool::Elements;
 use crate::os::kernel::is_vmalloc_addr;
 use core::alloc::Layout;
 use core::ffi::c_void;
@@ -17,8 +18,16 @@ use core::ptr::NonNull;
 
 /// The bounce pool's elements, kvmalloc()'d as a bounce buffer is: accounted
 /// and reclaimable.
-pub(crate) unsafe extern "C" fn bounce_pool_alloc(gfp: c::gfp_t, size: *mut c_void) -> *mut c_void {
-    unsafe { c::mempool_kvmalloc(gfp | c::__GFP_ACCOUNT | c::__GFP_RECLAIMABLE, size) }
+pub struct BounceBufs;
+
+unsafe impl Elements for BounceBufs {
+    fn element_alloc(layout: Layout, gfp: c::gfp_t) -> Option<NonNull<u8>> {
+        KVmalloc::element_alloc(layout, gfp | c::__GFP_ACCOUNT | c::__GFP_RECLAIMABLE)
+    }
+
+    unsafe fn element_free(p: NonNull<u8>, layout: Layout) {
+        unsafe { KVmalloc::element_free(p, layout) }
+    }
 }
 
 /// Up to a node's size, to sort a node's keys into: kvmalloc()'d, or the
