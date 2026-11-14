@@ -3,6 +3,20 @@
 //! Static branches, for userspace: a key is a plain int, read - and nothing
 //! here enables one, so a branch is never taken.
 
+#![allow(non_camel_case_types)]
+
+#[repr(C)]
+#[derive(::pin_init::MaybeZeroable)]
+pub struct static_key {
+    pub v: core::ffi::c_int,
+}
+
+#[repr(C)]
+#[derive(::pin_init::MaybeZeroable)]
+pub struct static_key_false {
+    pub key: static_key,
+}
+
 /// Whether the static key at field @field of @key, a static laid out as a
 /// @keytyp, is enabled.
 ///

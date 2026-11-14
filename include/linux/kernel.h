@@ -19,7 +19,6 @@
 #include <linux/compiler.h>
 #include <linux/dcache.h>
 #include <linux/kmsan-checks.h>
-#include <linux/static_key.h>
 
 #define BITS_PER_LONG	__BITS_PER_LONG
 

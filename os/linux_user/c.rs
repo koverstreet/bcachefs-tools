@@ -9,6 +9,7 @@
 use bcachefs_shim::c::atomic_t;
 
 pub use super::bio::{bio_vec, bvec_iter};
+pub use super::jump_label::static_key_false;
 use core::ffi::c_void;
 
 use super::blkdev::BlockDevice;
