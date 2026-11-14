@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#ifndef _BCACHEFS_UTIL_PF_MEMALLOC_H
-#define _BCACHEFS_UTIL_PF_MEMALLOC_H
+#ifndef _BCACHEFS_OS_LINUX_KERNEL_PF_MEMALLOC_H
+#define _BCACHEFS_OS_LINUX_KERNEL_PF_MEMALLOC_H
 
 #include <linux/sched.h>
 
@@ -47,4 +47,4 @@
 
 #endif /* PF_MEMALLOC_NORECLAIM */
 
-#endif /* _BCACHEFS_UTIL_PF_MEMALLOC_H */
+#endif /* _BCACHEFS_OS_LINUX_KERNEL_PF_MEMALLOC_H */
