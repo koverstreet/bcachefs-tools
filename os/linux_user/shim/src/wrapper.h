@@ -2,7 +2,6 @@
 
 #include "include/linux/blkdev.h"
 #include "include/linux/delay.h"
-#include "include/linux/device.h"
 #include "include/linux/kernel.h"
 #include "include/linux/llist.h"
 #include "include/linux/lz4.h"
