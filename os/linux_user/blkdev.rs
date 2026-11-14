@@ -179,10 +179,9 @@ pub fn rotational(bdev: &BlockDevice) -> bool {
 /// Its page cache dropped: userspace has none.
 pub fn invalidate(_bdev: &BlockDevice) {}
 
-/// @bio for @bdev: bio_set_dev(). To the C bio, a struct block_device *,
-/// which only points to it.
+/// @bio for @bdev: bio_set_dev().
 pub fn bio_set_dev(bio: &mut c::bio, bdev: *mut BlockDevice) {
-    bio.bi_bdev = bdev.cast();
+    bio.bi_bdev = bdev;
 }
 
 /// The device @bio is for, if it's set: bio_set_dev()'s.
@@ -190,7 +189,7 @@ pub fn bio_set_dev(bio: &mut c::bio, bdev: *mut BlockDevice) {
 /// # Safety
 /// @bio's device, if set, is open.
 pub unsafe fn bio_bdev<'a>(bio: &c::bio) -> Option<&'a BlockDevice> {
-    unsafe { bio.bi_bdev.cast::<BlockDevice>().as_ref() }
+    unsafe { bio.bi_bdev.as_ref() }
 }
 
 // ── IO ───────────────────────────────────────────────────────────────────

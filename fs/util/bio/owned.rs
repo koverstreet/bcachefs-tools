@@ -324,7 +324,7 @@ unsafe fn chain(bio: *mut c::bio, parent: *mut c::bio) {
     unsafe {
         (*bio).bi_private = parent.cast();
         (*bio).bi_end_io  = Some(chain_endio);
-        c::bio_inc_remaining(parent);
+        crate::os::bio::inc_remaining(parent);
     }
 }
 
@@ -348,7 +348,7 @@ pub unsafe fn bio_put(bio: *mut c::bio) {
     unsafe {
         let set = (*bio).bi_pool.cast::<BioPool>().as_ref().expect("bio_put() of a bio no BioSet made");
         let (layout, _) = bio_layout(set.front_pad, (*bio).bi_max_vecs);
-        c::bio_uninit(bio);
+        crate::os::bio::uninit(bio);
         set.pool.free(NonNull::new_unchecked(bio.byte_sub(set.front_pad)).cast(), layout);
     }
 }
@@ -573,7 +573,7 @@ where
         ::pin_init::pin_init_from_closure(move |t: *mut T| {
             let bio = bio_of(t);
             crate::os::bio::init(bio, bdev, vecs.as_ptr().cast(), nr_vecs, opf);
-            init_at(init(BioInPlace(bio)), t).inspect_err(|_| c::bio_uninit(bio))
+            init_at(init(BioInPlace(bio)), t).inspect_err(|_| crate::os::bio::uninit(bio))
         })
     }
 }
@@ -661,7 +661,7 @@ impl<T: HasBio, B: Buffers> Drop for BioBox<T, B> {
             if !pool.is_null() {
                 bio_put(bio);
             } else {
-                c::bio_uninit(bio);
+                crate::os::bio::uninit(bio);
                 kfree(self.t.cast(), inline_layout::<T>(nr_vecs).0);
             }
         }

@@ -61,6 +61,8 @@ pub mod c {
 
     #[cfg(not(kernel))]
     pub use bcachefs_shim::c::*;
+    #[cfg(not(kernel))]
+    pub use crate::os::c::*;
     #[cfg(kernel)]
     pub use kernel::bindings::*;
 

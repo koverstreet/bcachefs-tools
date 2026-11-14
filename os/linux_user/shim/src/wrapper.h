@@ -1,6 +1,5 @@
 #include <urcu.h>
 
-#include "include/linux/bio.h"
 #include "include/linux/blkdev.h"
 #include "include/linux/delay.h"
 #include "include/linux/device.h"
@@ -57,39 +56,3 @@ RUST_FN_HELPER(void, call_rcu,
 RUST_FN_HELPER(struct urcu_gp_poll_state, start_poll_synchronize_rcu, (void), ())
 RUST_FN_HELPER(bool, poll_state_synchronize_rcu,
 	       (struct urcu_gp_poll_state state), (state))
-
-#ifdef __BINDGEN__
-/*
- * Macros with casts, which bindgen doesn't evaluate: as consts, which it
- * binds, by the names codegen.h's have in-kernel - build.rs strips the
- * prefix. BLK_OPEN_BUFFERED is the shim's own.
- */
-const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_READ	= BLK_OPEN_READ;
-const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_WRITE	= BLK_OPEN_WRITE;
-const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_EXCL	= BLK_OPEN_EXCL;
-const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_BUFFERED	= BLK_OPEN_BUFFERED;
-const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_CREAT	= BLK_OPEN_CREAT;
-const blk_opf_t RUST_CONST_HELPER_REQ_SYNC		= REQ_SYNC;
-const blk_opf_t RUST_CONST_HELPER_REQ_META		= REQ_META;
-const blk_opf_t RUST_CONST_HELPER_REQ_IDLE		= REQ_IDLE;
-const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
-const blk_opf_t RUST_CONST_HELPER_REQ_PREFLUSH		= REQ_PREFLUSH;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_NOTSUPP		= BLK_STS_NOTSUPP;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_TIMEOUT		= BLK_STS_TIMEOUT;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_NOSPC		= BLK_STS_NOSPC;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_TRANSPORT		= BLK_STS_TRANSPORT;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_TARGET		= BLK_STS_TARGET;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_RESV_CONFLICT	= BLK_STS_RESV_CONFLICT;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_MEDIUM		= BLK_STS_MEDIUM;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_PROTECTION		= BLK_STS_PROTECTION;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_RESOURCE		= BLK_STS_RESOURCE;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_IOERR		= BLK_STS_IOERR;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_DM_REQUEUE		= BLK_STS_DM_REQUEUE;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_AGAIN		= BLK_STS_AGAIN;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_DEV_RESOURCE	= BLK_STS_DEV_RESOURCE;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_ZONE_OPEN_RESOURCE	= BLK_STS_ZONE_OPEN_RESOURCE;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_ZONE_ACTIVE_RESOURCE = BLK_STS_ZONE_ACTIVE_RESOURCE;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_OFFLINE		= BLK_STS_OFFLINE;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_DURATION_LIMIT	= BLK_STS_DURATION_LIMIT;
-const blk_status_t RUST_CONST_HELPER_BLK_STS_INVAL		= BLK_STS_INVAL;
-#endif

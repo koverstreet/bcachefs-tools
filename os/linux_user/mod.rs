@@ -3,6 +3,7 @@
 pub mod alloc;
 pub mod bio;
 pub mod blkdev;
+pub mod c;
 pub mod crc;
 #[cfg(CONFIG_DEBUG_FS)]
 pub mod debugfs;

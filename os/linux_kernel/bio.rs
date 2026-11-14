@@ -13,6 +13,18 @@ pub unsafe fn endio(bio: *mut c::bio) {
 }
 
 /// # Safety
+/// @bio is a bio.
+pub unsafe fn inc_remaining(bio: *mut c::bio) {
+    unsafe { c::bio_inc_remaining(bio) }
+}
+
+/// # Safety
+/// @bio is a bio, not used after.
+pub unsafe fn uninit(bio: *mut c::bio) {
+    unsafe { c::bio_uninit(bio) }
+}
+
+/// # Safety
 /// @bio is a bio's memory, not in flight; @table has room for @max_vecs.
 pub unsafe fn init(bio: *mut c::bio, bdev: *mut crate::os::blkdev::BlockDevice, table: *mut c::bio_vec,
                    max_vecs: u16, opf: u32) {

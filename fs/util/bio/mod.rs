@@ -187,7 +187,7 @@ impl Bio {
     /// # Safety
     /// Not used after.
     pub unsafe fn uninit(self: Pin<&mut Self>) {
-        unsafe { c::bio_uninit(self.raw_mut()) }
+        unsafe { crate::os::bio::uninit(self.raw_mut()) }
     }
 
     pub fn range(&self) -> BioRange<'_> {

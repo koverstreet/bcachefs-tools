@@ -7,12 +7,8 @@
 
 #define MAX_LFS_FILESIZE 	((loff_t)LLONG_MAX)
 
-#define BIO_MAX_VECS	256U
-
 typedef unsigned fmode_t;
-typedef __u32 __bitwise blk_opf_t;
 
-struct bio;
 struct user_namespace;
 
 #define MINORBITS	20
@@ -36,9 +32,6 @@ static inline struct inode *file_inode(const struct file *f)
 
 #ifndef SECTOR_SHIFT
 #define SECTOR_SHIFT 9
-#endif
-#ifndef SECTOR_SIZE
-#define SECTOR_SIZE (1 << SECTOR_SHIFT)
 #endif
 
 #define PAGE_SECTORS_SHIFT	(PAGE_SHIFT - SECTOR_SHIFT)
@@ -117,19 +110,6 @@ static inline int register_chrdev(unsigned int major, const char *name,
 
 static inline void unregister_chrdev(unsigned int major, const char *name)
 {
-}
-
-static inline bool op_is_write(unsigned int op)
-{
-	return op == REQ_OP_READ ? false : true;
-}
-
-/*
- * return data direction, READ or WRITE
- */
-static inline int bio_data_dir(struct bio *bio)
-{
-	return op_is_write(bio_op(bio)) ? WRITE : READ;
 }
 
 static inline bool dir_emit(struct dir_context *ctx,

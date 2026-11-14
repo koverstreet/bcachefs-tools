@@ -93,10 +93,7 @@ fn main() {
         .default_enum_style(bindgen::EnumVariation::Rust {
             non_exhaustive: true,
         })
-        // As the kernel's bindings have it - req_op_REQ_OP_READ, a c_uint -
-        // so Rust names it the same in both builds.
-        .constified_enum("req_op")
-        // And a zstd error a u32, as in-kernel: a code from a newer libzstd
+        // A zstd error a u32, as in-kernel: a code from a newer libzstd
         // than these bindings would be no value of a Rust enum.
         .constified_enum("ZSTD_ErrorCode")
         // closure_state_CLOSURE_RUNNING, as in-kernel
