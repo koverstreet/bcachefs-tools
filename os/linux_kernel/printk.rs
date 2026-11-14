@@ -17,3 +17,9 @@ pub fn printk_line(prefix: &[u8], line: &[u8]) {
     let (p, l) = (prefix.len() as c_int, line.len() as c_int);
     unsafe { c::_printk(c"%.*s%.*s\n".as_ptr().cast(), p, prefix.as_ptr(), l, line.as_ptr()) };
 }
+
+/// The kernel's WARNING at @file:@line: shim.c's, not the kernel crate's
+/// warn_on!().
+pub fn warn_at(file: &CStr, line: u32) {
+    unsafe { c::bch2_rust_warn(file.as_ptr().cast(), line) }
+}

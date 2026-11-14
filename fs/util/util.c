@@ -88,15 +88,6 @@ void rust_kfree_rcu_mightsleep(void *p)
 	kfree_rcu_mightsleep(p);
 }
 
-/*
- * For Rust, what it can't call itself: macros, and in places which of a
- * macro or a function differs between the kernel and userspace.
- */
-void bch2_cond_resched(void)
-{
-	cond_resched();
-}
-
 /* For util/sleep.rs: set_current_state() is a macro */
 void bch2_set_current_state(unsigned int state)
 {
@@ -106,21 +97,4 @@ void bch2_set_current_state(unsigned int state)
 void bch2_set_current_state_running(void)
 {
 	__set_current_state(TASK_RUNNING);
-}
-
-/* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
-bool bch2_capable(int cap)
-{
-	return capable(cap);
-}
-
-/*
- * For Rust's warn_on!() in the kernel build: the kernel's own warn_on!() pulls
- * the arch's WARN asm from a file generated in the kernel's build tree
- * (rust/kernel/generated_arch_warn_asm.rs), which distro headers packages
- * don't ship, so a DKMS build against them fails:
- */
-void bch2_rust_warn(const char *file, unsigned line)
-{
-	WARN(1, "WARNING at %s:%u\n", file, line);
 }

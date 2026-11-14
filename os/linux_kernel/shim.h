@@ -76,4 +76,8 @@ struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct d
 					void *data, const struct file_operations *fops);
 unsigned bch2_nr_cpu_ids(void);
 
+void bch2_rust_warn(const char *file, unsigned line);
+void bch2_cond_resched(void);
+bool bch2_capable(int cap);
+
 #endif /* _BCACHEFS_OS_LINUX_KERNEL_SHIM_H */

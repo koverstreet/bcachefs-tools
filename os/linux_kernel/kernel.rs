@@ -31,6 +31,15 @@ pub fn dump_stack() {
     unsafe { c::dump_stack() }
 }
 
+pub fn cond_resched() {
+    unsafe { c::bch2_cond_resched() }
+}
+
+/// Whether the current task has @cap: as capable().
+pub fn capable(cap: Capability) -> bool {
+    unsafe { c::bch2_capable(cap as i32) }
+}
+
 /// Whether this task has been sent a fatal signal: as
 /// fatal_signal_pending(current).
 pub fn fatal_signal_pending() -> bool {

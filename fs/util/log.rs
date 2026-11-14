@@ -45,7 +45,6 @@ pub enum KernLoglevel {
     LOGLEVEL_debug = 7,
 }
 
-pub use crate::c::bch2_rust_warn;
 
 /// A printk loglevel: KERN_SOH followed by the level, as C's KERN_* strings.
 #[derive(Clone, Copy)]
@@ -487,26 +486,14 @@ macro_rules! bch_verbose {
     };
 }
 
-/// As C's WARN_ON(): the kernel's warning in-kernel - through C, not the
-/// kernel crate's warn_on!(), see bch2_rust_warn() - and what the userspace
-/// shim's WARN_ON() prints otherwise. Evaluates to @cond.
+/// As C's WARN_ON(): the port's warning, at the call site. Evaluates to
+/// @cond.
 #[macro_export]
 macro_rules! warn_on {
     ($cond:expr) => {{
         let cond: bool = $cond;
-        #[cfg(kernel)]
         if cond {
-            // SAFETY: a NUL-terminated string literal.
-            unsafe {
-                $crate::util::log::bch2_rust_warn(
-                    concat!(file!(), "\0").as_ptr().cast(),
-                    line!(),
-                )
-            };
-        }
-        #[cfg(not(kernel))]
-        if cond {
-            std::eprintln!("WARNING at {}:{}", file!(), line!());
+            $crate::os::printk::warn_at(const { $crate::util::ffi::c_str(concat!(file!(), "\0")) }, line!());
         }
         cond
     }};
