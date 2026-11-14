@@ -263,7 +263,7 @@ impl Fs {
                         continue;
                     }
 
-                    if keys.push_gfp(ck.key, flags::GFP_NOWAIT | flags::__GFP_NOWARN).is_err() {
+                    if keys.push_gfp(ck.key, flags::NOWAIT | flags::NOWARN).is_err() {
                         full = true;
                         break;
                     }

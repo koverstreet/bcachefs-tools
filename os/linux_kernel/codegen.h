@@ -115,18 +115,20 @@ const blk_status_t RUST_CONST_HELPER_BLK_STS_OFFLINE		= BLK_STS_OFFLINE;
 const blk_status_t RUST_CONST_HELPER_BLK_STS_DURATION_LIMIT	= BLK_STS_DURATION_LIMIT;
 const blk_status_t RUST_CONST_HELPER_BLK_STS_INVAL		= BLK_STS_INVAL;
 
-/* data/read.rs's and journal/write.rs's allocations: the kernel crate binds none */
-const gfp_t RUST_CONST_HELPER_GFP_NOIO			= GFP_NOIO;
-const gfp_t RUST_CONST_HELPER___GFP_SKIP_ZERO		= __GFP_SKIP_ZERO;
-const gfp_t RUST_CONST_HELPER___GFP_NORETRY		= __GFP_NORETRY;
-/* util/mempool.rs's first try, mempool_alloc()'s */
+/* os::alloc::Flags' bits, which Flags::raw() maps: the kernel crate binds none */
 const gfp_t RUST_CONST_HELPER___GFP_DIRECT_RECLAIM	= __GFP_DIRECT_RECLAIM;
+const gfp_t RUST_CONST_HELPER___GFP_KSWAPD_RECLAIM	= __GFP_KSWAPD_RECLAIM;
 const gfp_t RUST_CONST_HELPER___GFP_IO			= __GFP_IO;
+const gfp_t RUST_CONST_HELPER___GFP_FS			= __GFP_FS;
+const gfp_t RUST_CONST_HELPER___GFP_HIGH		= __GFP_HIGH;
+const gfp_t RUST_CONST_HELPER___GFP_NORETRY		= __GFP_NORETRY;
 const gfp_t RUST_CONST_HELPER___GFP_NOMEMALLOC		= __GFP_NOMEMALLOC;
-/* btree/cache/'s node buffers */
 const gfp_t RUST_CONST_HELPER___GFP_ACCOUNT		= __GFP_ACCOUNT;
-const gfp_t RUST_CONST_HELPER___GFP_RECLAIM		= __GFP_RECLAIM;
 const gfp_t RUST_CONST_HELPER___GFP_RECLAIMABLE	= __GFP_RECLAIMABLE;
+const gfp_t RUST_CONST_HELPER___GFP_SKIP_ZERO		= __GFP_SKIP_ZERO;
+/* what takes a C gfp_t still: GFP_NOIO, and btree/cache/'s __GFP_RECLAIM test */
+const gfp_t RUST_CONST_HELPER_GFP_NOIO			= GFP_NOIO;
+const gfp_t RUST_CONST_HELPER___GFP_RECLAIM		= __GFP_RECLAIM;
 
 /* a notifier's answer, as reconcile's power supply notifier gives it */
 const int RUST_CONST_HELPER_NOTIFY_OK			= NOTIFY_OK;

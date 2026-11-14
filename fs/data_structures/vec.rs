@@ -79,7 +79,7 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
     /// Room for @additional more: if there isn't, reallocated at least twice
     /// the size.
     pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
-        self.reserve_gfp(additional, flags::GFP_KERNEL)
+        self.reserve_gfp(additional, flags::WAIT)
     }
 
     fn reserve_gfp(&mut self, additional: usize, gfp: Flags) -> Result<(), AllocError> {
@@ -120,7 +120,7 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
     }
 
     pub fn push(&mut self, v: T) -> Result<(), AllocError> {
-        self.push_gfp(v, flags::GFP_KERNEL)
+        self.push_gfp(v, flags::WAIT)
     }
 
     /// push(), with flags of its own: what may run in interrupt context.
@@ -283,7 +283,7 @@ impl<T, L: LenUint> Vec<T, KVmalloc, L> {
     pub fn push_nofail(&mut self, v: T) {
         assert_may_reclaim();
         self.grow(1, |p, layout, old| Ok(unsafe {
-            KVmalloc.realloc(p, layout, old, flags::GFP_KERNEL).map(NonNull::cast)
+            KVmalloc.realloc(p, layout, old, flags::WAIT).map(NonNull::cast)
                 .unwrap_or_else(|_| kvrealloc_nofail_fallback(p, old.size(), layout.size()))
         })).expect("a vector grown past its length type");
         unsafe { self.push_unchecked(v) };

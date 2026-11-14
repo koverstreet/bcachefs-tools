@@ -82,7 +82,7 @@ impl<H: DstHead, T> DstArray<H, T> {
     /// One with @head, whose nr() it's sized by, and its elements all zero.
     /// An error past INT_MAX bytes, which kvmalloc() won't do.
     pub fn alloc(head: H) -> Result<NonNull<H>, AllocError> {
-        Self::alloc_mode(head, AllocMode::Gfp(flags::GFP_KERNEL))
+        Self::alloc_mode(head, AllocMode::Gfp(flags::WAIT))
     }
 
     /// alloc(), for what mustn't fail to allocate: past INT_MAX bytes is a

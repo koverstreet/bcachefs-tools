@@ -4,32 +4,14 @@
 //! std's allocator, which takes no flags and no memalloc scope. What C's
 //! kfree() frees - of no size - is malloc()'s.
 
+#[path = "../alloc.rs"]
+mod common;
+pub use common::*;
+
 pub use std::sync::Arc;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct AllocError;
-
-/// Taken where the kernel's are, and ignored: userspace has one way to
-/// allocate.
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct Flags(u32);
-
-impl core::ops::BitOr for Flags {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self {
-        Flags(self.0 | rhs.0)
-    }
-}
-
-pub mod flags {
-    use super::Flags;
-
-    pub const GFP_KERNEL: Flags = Flags(0);
-    pub const GFP_NOWAIT: Flags = Flags(1);
-    pub const GFP_ATOMIC: Flags = Flags(1);
-    pub const __GFP_NOWARN: Flags = Flags(2);
-}
 
 use crate::c;
 use crate::util::alloc::{kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc};
@@ -60,7 +42,7 @@ macro_rules! allocs {
             }
 
             fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                self.alloc_zeroed_gfp(layout, flags::GFP_KERNEL)
+                self.alloc_zeroed_gfp(layout, flags::WAIT)
             }
 
             unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
@@ -95,12 +77,7 @@ macro_rules! allocs {
 
 allocs!(Kmalloc, KVmalloc);
 
-/// @flags: there's no memalloc scope to apply.
-pub fn current_gfp_context(flags: Flags) -> Flags {
-    flags
-}
-
-/// current_gfp_context(), for what takes a C gfp_t.
+/// @gfp: there's no memalloc scope to apply.
 pub fn current_gfp_context_raw(gfp: c::gfp_t) -> c::gfp_t {
     gfp
 }
@@ -242,7 +219,7 @@ pub fn kvzalloc_gfp(size: usize, _gfp: c::gfp_t) -> Result<NonNull<u8>, AllocErr
 pub unsafe fn kvmalloc_realloc_gfp(p: Option<NonNull<u8>>, layout: Layout, old: Layout, _gfp: c::gfp_t)
     -> Result<NonNull<u8>, AllocError>
 {
-    unsafe { KVmalloc.realloc(p, layout, old, flags::GFP_KERNEL) }.map(NonNull::cast)
+    unsafe { KVmalloc.realloc(p, layout, old, flags::WAIT) }.map(NonNull::cast)
 }
 
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,

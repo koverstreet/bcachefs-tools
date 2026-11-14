@@ -110,7 +110,7 @@ impl SpareHead {
                 Ok::<(), AllocError>(())
             })
         };
-        let p = alloc_at::<SpareHead, Kmalloc, AllocError>(init, AllocMode::Gfp(flags::__GFP_NOWARN)).ok()?;
+        let p = alloc_at::<SpareHead, Kmalloc, AllocError>(init, AllocMode::Gfp(flags::NOWARN)).ok()?;
         Some(unsafe { KBox::from_raw(p.as_ptr()) })
     }
 }
@@ -342,7 +342,7 @@ impl PcpuState {
         if let Some(i) = self.objs.iter().rposition(|o| o.seq == seq) {
             return Some(&mut self.objs[i]);
         }
-        self.objs.push_gfp(Seq::new(seq), flags::GFP_ATOMIC).ok()?;
+        self.objs.push_gfp(Seq::new(seq), flags::ATOMIC).ok()?;
         self.objs.last_mut()
     }
 }

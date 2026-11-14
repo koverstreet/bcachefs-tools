@@ -62,7 +62,7 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     where
         A: AllocGfp,
     {
-        Self::new_mode(init, AllocMode::Gfp(flags::GFP_KERNEL))
+        Self::new_mode(init, AllocMode::Gfp(flags::WAIT))
     }
 
     /// new(), for what mustn't fail to allocate: failing only with @init's
