@@ -179,6 +179,11 @@ pub fn kmalloc(size: usize) -> Result<NonNull<u8>, AllocError> {
         .ok_or(AllocError)
 }
 
+/// kzalloc(), with @gfp. kfree_unsized() takes it back.
+pub fn kzalloc_gfp(size: usize, gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {
+    NonNull::new(kmalloc_noprof(size, gfp | c::__GFP_ZERO).cast()).ok_or(AllocError)
+}
+
 /// kvzalloc(), with @gfp, which takes nothing here. kvfree_sized() takes it
 /// back.
 pub fn kvzalloc_gfp(size: usize, _gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {

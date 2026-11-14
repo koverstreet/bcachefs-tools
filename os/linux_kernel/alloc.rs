@@ -214,6 +214,15 @@ pub fn kmalloc(size: usize) -> Result<NonNull<u8>, AllocError> {
     Ok(<Kmalloc as Allocator>::alloc(layout, flags::GFP_KERNEL, NumaNode::NO_NODE)?.cast())
 }
 
+/// kzalloc(), with @gfp. kfree_unsized() takes it back.
+pub fn kzalloc_gfp(size: usize, gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {
+    use kernel::bindings::{krealloc_node_align, NUMA_NO_NODE};
+
+    let gfp = current_gfp_context_raw(gfp | c::__GFP_ZERO);
+    NonNull::new(unsafe { krealloc_node_align(core::ptr::null(), size, 1, gfp, NUMA_NO_NODE) }.cast())
+        .ok_or(AllocError)
+}
+
 /// kvzalloc(), with @gfp: for the rare allocation that needs a flag Flags
 /// doesn't name - __GFP_NORETRY. kvfree_sized() takes it back.
 pub fn kvzalloc_gfp(size: usize, gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {

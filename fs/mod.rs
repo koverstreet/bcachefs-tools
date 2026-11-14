@@ -308,7 +308,7 @@ pub mod c {
     // The kernel's types and functions (bio, __u64, locks, …). Userspace
     // builds take them from bcachefs-shim; the in-kernel build (`--cfg
     // kernel`) from the kernel crate's raw bindings, and what those don't
-    // cover - the CRCs, genradix, the vendored closures - from codegen.rs's.
+    // cover - the CRCs, the vendored closures - from codegen.rs's.
     #[cfg(not(kernel))]
     pub use bcachefs_shim::c::*;
     // and what the shim's headers had, which the userspace port defines now

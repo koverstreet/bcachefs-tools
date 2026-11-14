@@ -17,7 +17,6 @@ use std::process::Command;
 const KERNEL_HEADERS: &[&str] = &[
     "linux/crc32.h",			// crc32c(), a string hash
     "linux/crc64.h",			// crc64_be(), a string hash
-    "linux/generic-radix-tree.h",	// GenRadix<T>'s __genradix
     "linux/xattr.h",			// xattr_handler, which fs.h only declares
     "linux/posix_acl_xattr.h",		// nop_posix_acl_*, xattr.rs's ACL handlers
     "linux/posix_acl.h",		// struct posix_acl, which fs.h only declares: fs/acl.rs's PosixAcl
@@ -74,7 +73,6 @@ const UNBLOCKLISTED: &[&str] = &[
     "uapi/",
     "linux/crc32.h",
     "linux/crc64.h",
-    "linux/generic-radix-tree.h",
     "linux/xattr.h",
     "linux/posix_acl_xattr.h",
     "linux/posix_acl.h",
@@ -153,7 +151,6 @@ const UNBLOCKLISTED: &[&str] = &[
 const ALLOWLIST_FUNCTION: &[&str] = &[
     "crc32c", "crc64_be", "sha256", "anon_inode_getfile",
     "mnt_want_write_file", "mnt_drop_write_file",
-    "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_iter_peek_prev", "__genradix_free",
     "closure_get", "closure_get_not_zero", "closure_put", "closure_init", "closure_init_stack", "closure_sync", "closure_call",
     "closure_init_stack_release", "bch2_closure_return_sync",
     "closure_sync_timeout",
@@ -268,7 +265,6 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_.*", "bch2_.*",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
-                                  "__genradix", "genradix_iter",
                                   "xattr_handler", "kstatfs", "export_operations", "fid_type",
                                   "xxh64_state", "chacha_state", "poly1305_desc_ctx",
                                   // the kernel crate's fs_context and fs_parameter are opaque
@@ -299,7 +295,7 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
 /// fid has a member named gen, a keyword in our edition that bindgen before
 /// 0.71 doesn't escape.
 const OPAQUE_TYPE: &[&str] = &["fid"];
-const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
+const ALLOWLIST_VAR: &[&str] = &["nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
                                  "RUST_CONST_HELPER_.*", "key_type_user", "NUMA_NO_NODE",
                                  "PERCPU_REF_INIT_DEAD", "TRACE_EVENT_FL_TRACEPOINT", "FILTER_OTHER",
