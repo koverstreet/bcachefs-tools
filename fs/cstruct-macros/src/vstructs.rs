@@ -2,9 +2,11 @@
 //! What util/vstructs.rs's traits need of a type, from its
 //! definition: #[derive(Plain)] - and #[bitfield], every one of which is -
 //! #[derive(FlexArray)], from #[counted_by(FIELD)], #[derive(View)], its
-//! fields' projections on a View of it, and the families of definitions,
-//! one per state: #[unsized_vstruct], an unsized vstruct's; #[grown], a type
-//! that grew between format versions.
+//! fields' projections on a View of it, and the families, a type's X<S> in
+//! each state: #[unsized_vstruct], an unsized vstruct's, and #[counted], a
+//! header and the array it counts - X<S> its own definition in every state;
+//! #[whole] and #[grown], a sized type's, which in place is a definition of
+//! its own.
 //!
 //! Plain is a promise: every bit pattern of the type's bytes is a value of
 //! it, and every byte is a field's. These impls check it at compile time,
@@ -121,7 +123,7 @@ pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
     })
 }
 
-// ---- Families: a type's definitions, one per state (util/vstructs.rs) ----
+// ---- Families: a type in each state, X<S> (util/vstructs.rs' Family) ----
 
 /// A family attribute's arguments: `#[counted(PATH, tail = ..)]`,
 /// `#[unsized_vstruct(tail = ..)]`, `#[grown(from = FIELD)]`; `bkey`, for a
@@ -255,8 +257,9 @@ struct Shape<'a> {
     tail_at: Option<TokenStream>,
 }
 
-/// A state's definition, @ty, laid out as @shape: a DST - its fields inline,
-/// those that hold a count private (inline_field()), then its tail.
+/// A state's definition, @ty - or with @generic, @ty<S>, an unsized type's in
+/// every state, laid out alike - as @shape: a DST, its fields inline, those
+/// that hold a count private (inline_field()), then its tail.
 ///
 /// Its fields are its head's, at the head's offsets - asserted - so it derefs
 /// to the head: reads, and the head's methods, written once there. No
@@ -269,8 +272,13 @@ struct Shape<'a> {
 /// SelfSized, and its bytes, by its reference's length; and an arm's,
 /// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
 /// @methods, more of them.
-fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenStream {
+fn dst(ty: &Ident, generic: bool, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenStream {
     let vs = vs();
+    let (decl, params, args, state) = match generic {
+        true => (quote!(<S: #vs::State = #vs::Validated>), quote!(<S: #vs::State>), quote!(<S>),
+                 quote!(_state: ::core::marker::PhantomData<S>,)),
+        false => Default::default(),
+    };
     let Shape { repr, fields, private, head, deref, tail, elem, tail_at } = shape;
     let tail_at = tail_at.clone().unwrap_or_else(|| quote!(::core::mem::size_of::<#head>()));
     let plain_fields = fields.iter().map(|f| {
@@ -295,12 +303,13 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
         #[doc = #doc]
         #repr
         #[allow(non_camel_case_types)]
-        pub struct #ty {
+        pub struct #ty #decl {
+            #state
             #(#inline)*
             pub #tail: [#elem],
         }
 
-        impl ::core::ops::Deref for #ty {
+        impl #params ::core::ops::Deref for #ty #args {
             type Target = #deref;
             #[inline]
             fn deref(&self) -> &#deref {
@@ -316,7 +325,7 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
         // SAFETY: its head's fields, each Plain, then its tail at TAIL - as the
         // asserts below check - Plain; from_raw() makes the tail as long as
         // @bytes past TAIL
-        unsafe impl #vs::Unsized for #ty {
+        unsafe impl #params #vs::Unsized for #ty #args {
             type Head = #head;
             type Elem = #elem;
             const TAIL: usize = #tail_at;
@@ -344,7 +353,7 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
             assert!(<#ty as #vs::Unsized>::TAIL <= ::core::mem::size_of::<#head>());
         };
 
-        impl #vs::SelfSized for #ty {
+        impl #params #vs::SelfSized for #ty #args {
             #[inline]
             fn bytes(&self) -> usize {
                 ::core::mem::size_of_val(self)
@@ -352,7 +361,7 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
         }
 
         // as a tagged union's arm, over the bytes its storage says are its
-        impl #vs::ArmRef for #ty {
+        impl #params #vs::ArmRef for #ty #args {
             const MIN_LEN: usize = ::core::mem::size_of::<<Self as #vs::Unsized>::Head>();
 
             fn arm_ref(b: &[u8]) -> Option<&Self> {
@@ -368,7 +377,7 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
             }
         }
 
-        impl #ty {
+        impl #params #ty #args {
             /// Its bytes, every one.
             pub fn as_bytes(&self) -> &[u8] {
                 #vs::bytes_of(self)
@@ -388,12 +397,12 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
 /// definitions. Every family has @name_unvalidated and @name_validated: a
 /// plain alias where a state shares another's definition, so a container's
 /// ArmOf impls can name each state's - concrete types, not projections.
-fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident) -> TokenStream {
+fn family(name: &Ident, unvalidated: &TokenStream, validated: &TokenStream, whole: &TokenStream) -> TokenStream {
     let vs = vs();
     let fam = crate::tokens::derived(name, "family");
     let aliases = [("unvalidated", unvalidated), ("validated", validated)].into_iter()
         .map(|(st, def)| (crate::tokens::derived(name, st), def))
-        .filter(|(alias, def)| alias != *def)
+        .filter(|(alias, def)| alias.to_string() != def.to_string())
         .map(|(alias, def)| quote! {
             #[allow(non_camel_case_types)]
             pub type #alias = #def;
@@ -414,76 +423,67 @@ fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident) -
 }
 
 /// A #[members] field's members on each of @defs too - a family's definitions
-/// in place, with its fields inline: their Deref to the struct as written
-/// can't reach its setters.
-fn members_on(name: &Ident, fields: &[FieldDef], defs: &[&Ident]) -> Result<TokenStream, String> {
+/// in place, with its fields inline, each `[impl generics] type`: their Deref
+/// to the struct as written can't reach its setters.
+fn members_on(name: &Ident, fields: &[FieldDef], defs: &[TokenStream]) -> Result<TokenStream, String> {
     let mut out = TokenStream::new();
     for f in fields.iter().filter(|f| f.bitfield) {
         if let Some(fwd) = crate::bitfield::members_forwarder(name, f)? {
             let field = &f.ident;
-            out.extend(defs.iter().map(|d| quote!(#fwd!([] #d, #field);)));
+            out.extend(defs.iter().map(|d| quote!(#fwd!(#d, #field);)));
         }
     }
     Ok(out)
 }
 
 /// The family of a type whose count is its own - an unsized vstruct's, a
-/// #[counted] type's: both states laid out as @shape - Unvalidated, bytes
-/// from outside, its count checked against them; Validated, its count
-/// trusted - validate's - and Validated its Whole, the header never having
-/// grown.
+/// #[counted] type's: its states are laid out alike, as @shape, so X<S> is
+/// its definition in each - Unvalidated, bytes from outside, its count
+/// checked against them; Validated, its count trusted, validate's; and
+/// Validated its Whole, the header never having grown.
 fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, String> {
     let vs = vs();
-    let state = |st: &str, what: &str| -> TokenStream {
-        let ty = crate::tokens::derived(name, &st.to_lowercase());
-        let doc = format!(" {name}<{st}>: {what}. Its fields - those that hold a count\n \
-                           private - then its tail, as long as its count says. It derefs\n \
-                           to its head, Head<{name}>, to read.");
-        let mut out = dst(&ty, &doc, shape, TokenStream::new());
-        out.extend(quote! {
-            // a sized tagged union's arm: as many bytes as its count says
-            impl #vs::ArmAt for #ty {
-                fn arm_at(b: &[u8]) -> Result<&Self, #vs::VStructError> {
-                    #vs::from_bytes::<Self>(b)
-                }
+    let doc = format!(" {name}, in state S - Validated unless named: its fields - those that\n \
+                       hold a count private - then its tail, as long as its count says, so\n \
+                       a reference to one reaches every byte of it and none past. It\n \
+                       derefs to its head, Head<{name}>, to read. Unvalidated, it's bytes\n \
+                       from outside - off a device, from the kernel - its count checked\n \
+                       against them when it's made.");
+    let mut out = dst(name, true, &doc, shape, TokenStream::new());
+    out.extend(quote! {
+        crate::vstruct_family!(@in_state #name);
+
+        // a sized tagged union's arm: as many bytes as its count says
+        impl<S: #vs::State> #vs::ArmAt for #name<S> {
+            fn arm_at(b: &[u8]) -> Result<&Self, #vs::VStructError> {
+                #vs::from_bytes::<Self>(b)
             }
-        });
-        out
-    };
-    let (unvalidated, validated) = (crate::tokens::derived(name, "unvalidated"), crate::tokens::derived(name, "validated"));
-    let unsized_states = [("Unvalidated", unvalidated.clone()), ("Validated", validated.clone()),
-                          ("Whole", validated.clone())];
-    let doc = format!(" {name}, in state S - Validated unless named: a reference to one\n \
-                       reaches every byte of it and none past. Its head is\n \
-                       Head<{name}>.");
-    let mut out = state("Unvalidated", "bytes from outside - off a device, from the kernel - its count \
-                                        checked against them when it's made");
-    out.extend(state("Validated", "what's been read and validated, its counts trusted"));
-    out.extend(members_on(name, shape.fields, &[&unvalidated, &validated])?);
+        }
+    });
+    let (unvalidated, validated) = (quote!(#name<#vs::Unvalidated>), quote!(#name<#vs::Validated>));
+    out.extend(members_on(name, shape.fields, &[quote!([<S: #vs::State>] #name<S>)])?);
     out.extend(family(name, &unvalidated, &validated, &validated));
-    out.extend(generic_type(name,
-        &Generic { default: "Validated", unsized_states: &unsized_states, arm_of: None,
-                   whole: None, written: Some(&shape.head), typestate: false },
-        &doc));
+    for st in ["Unvalidated", "Validated"] {
+        let (st, head) = (format_ident!("{st}"), &shape.head);
+        out.extend(quote!(crate::vstruct_family!(@made #name, #st, #head);));
+    }
     Ok(out)
 }
 
-/// #[unsized_vstruct]: the family of an unsized vstruct's definitions, one
-/// per state (util/vstructs.rs' Family), from the struct as written.
+/// #[unsized_vstruct]: an unsized vstruct's family (util/vstructs.rs'
+/// Family), from the struct as written.
 ///
-/// The item is the definition, renamed X_head, with #[type_name(X)]: Head<X>
-/// - X<S> is the family's type in state S,
-/// Validated unless named (generic_type()). Each state's definition,
-/// X_unvalidated and X_validated, is Rust's alone: a DST, the header and
-/// then its tail, as long as its count says - which derefs to the header,
-/// where its fields and methods are, written once. Its header never grew:
-/// Validated is whole.
+/// The item is the header, renamed X_head, with #[type_name(X)]: Head<X>.
+/// X<S> is the type in state S, Validated unless named: a DST, the header
+/// and then its tail, as long as its count says - which derefs to the
+/// header, where its fields and methods are, written once. Its header never
+/// grew: Validated is whole.
 ///
-/// The tail is the item's trailing flexible array, `NAME: [E; 0]` - the
-/// states' is `NAME: [E]` - or, where the header doesn't end in one, what
-/// the attribute says: `tail = [E]`, the states' `_tail`, the raw rest - a
-/// superblock field's, past its header; a btree node's, its bset's keys - or
-/// `tail = NAME: [E]`, an array the states call NAME.
+/// The tail is the item's trailing flexible array, `NAME: [E; 0]` - X's is
+/// `NAME: [E]` - or, where the header doesn't end in one, what the attribute
+/// says: `tail = [E]`, X's `_tail`, the raw rest - a superblock field's, past
+/// its header; a btree node's, its bset's keys - or `tail = NAME: [E]`, an
+/// array X calls NAME.
 pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item)?;
     let name = &def.ident;
@@ -695,8 +695,6 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     // floor and the bytes there are; else all of its fields, then the bytes
     // past them
     let ty = crate::tokens::derived(name, "validated");
-    // in place, the states but Whole: a DST
-    let states = [("Validated", ty.clone()), ("Unvalidated", ty.clone())];
     let derives = derive_names(def);
     // X is generated: a derive generic_type() doesn't forward would be
     // X_whole's alone, out of X's reach. Ours of the struct as written are
@@ -723,18 +721,16 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
             grown_in_place(name, &fl, &ty, &written, floor, later)?
         }
     };
-    out.extend(dst(&ty, &doc, &shape, methods));
+    out.extend(dst(&ty, false, &doc, &shape, methods));
     // a grown type's in place definition derefs to the floor: a floor
     // #[members] field's getters there, its setters on the definition
-    let defs = [&fl, &ty];
+    let defs = [quote!([] #fl), quote!([] #ty)];
     out.extend(members_on(name, shape.fields, if grew.is_some() { &defs } else { &defs[1..] })?);
     // the cast checks its head - all of the struct, or a grown type's floor:
     // an unvalidated one is as good
-    out.extend(family(name, &ty, &ty, &written));
+    out.extend(family(name, &quote!(#ty), &quote!(#ty), &quote!(#written)));
     out.extend(whole_arm_ref(&written, is_plain));
-    let generic = Generic { default: "Whole", unsized_states: &states, arm_of: Some(&ty),
-                            whole: Some((&written, &derives)), written: None, typestate: grew.is_some() };
-    out.extend(generic_type(name, &generic, &generic_doc));
+    out.extend(generic_type(name, &ty, &written, &derives, grew.is_some(), &generic_doc));
     if grew.is_some() {
         // all of it is a value in place, every field there: X's methods, on
         // X<Validated>, are the struct's too
@@ -935,63 +931,23 @@ fn whole_arm_ref(whole: &Ident, plain: bool) -> TokenStream {
 /// The derives generic_type() gives X<Whole> as the struct has them.
 const WHOLE_DERIVES: &[&str] = &["Clone", "Copy", "Default", "Plain", "TypeInfo"];
 
-/// What a family's X<S> is made from: which states' definitions are DSTs,
-/// what it's an arm of, and what it's made by.
-struct Generic<'a> {
-    /// The state X alone names: Whole for a sized type, the struct;
-    /// Validated for an unsized one, whose Whole is its Validated.
-    default: &'a str,
-    /// The states whose definition is a DST, and each one's: these have
-    /// Unsized and SelfSized as it does.
-    unsized_states: &'a [(&'a str, Ident)],
-    /// Whose ArmOf it has: a sized type's value in place, in every state -
-    /// the struct, X<Whole>, is an arm wherever its value in place is - or,
-    /// None, its definition in each state's: an unsized type's, as a
-    /// container in that state has it.
-    arm_of: Option<&'a Ident>,
-    /// The sized struct, if Whole is one, and what it derives: X<Whole> has
-    /// the value traits among them that it has.
-    whole: Option<(&'a Ident, &'a [Ident])>,
-    /// The definition as written, if X is made from a pointer to its header
-    /// or from bytes - an unsized type, whose count is its own:
-    /// from_head_ptr() and from_bytes() on X<S>.
-    written: Option<&'a Ident>,
-    /// Whether Unvalidated is a typestate over Validated, X<Unvalidated>
-    /// dereffing to X<Validated> - where X's methods are - not to their
-    /// definition: a #[grown] type's, which is one for both, and whose length
-    /// validate checks before anything reads it.
-    typestate: bool,
-}
-
-/// @name<S>, documented @doc: a generic struct over its family's definition
-/// in state S, as @g says. #[repr(transparent)], so a reference to one is a
-/// reference to the other, and impls attach to @name<S> for the state
-/// they're for. What generic code goes by - ArmOf, ArmRef, Unsized - it has
-/// as its definition does.
-fn generic_type(name: &Ident, g: &Generic<'_>, doc: &str) -> TokenStream {
+/// A sized type's @name<S>, documented @doc: Whole unless named, the struct
+/// @whole, with the value traits among @derives; in place, Validated or
+/// Unvalidated, its DST @inplace - and if @typestate, Unvalidated a typestate
+/// over Validated (vstruct_family!).
+fn generic_type(name: &Ident, inplace: &Ident, whole: &Ident, derives: &[Ident], typestate: bool,
+                doc: &str) -> TokenStream {
     let fam = crate::tokens::derived(name, "family");
-    let default = format_ident!("{}", g.default);
-    let typestate = g.typestate.then(|| quote!(typestate));
-    let arm_of = g.arm_of.map(|def| quote!(, sized #def));
-    let mut out = quote! {
-        crate::vstruct_family!(@type #name, #fam, #default, #doc);
+    let typestate = typestate.then(|| quote!(typestate));
+    let derives = derives.iter().filter(|d| WHOLE_DERIVES.iter().any(|w| d == w));
+    quote! {
+        crate::vstruct_family!(@type #name, #fam, #doc);
         crate::vstruct_family!(@deref #typestate #name, #fam);
-        crate::vstruct_family!(@arm #name, #fam #arm_of);
-    };
-    for (st, def) in g.unsized_states {
-        let st_ty = format_ident!("{st}");
-        out.extend(quote!(crate::vstruct_family!(@unsized #name, #st_ty, #def);));
-        // made in the state the caller names: Whole, an unsized type's
-        // Validated, is never one made
-        if let Some(head) = g.written.filter(|_| *st != "Whole") {
-            out.extend(quote!(crate::vstruct_family!(@made #name, #st_ty, #head);));
-        }
+        crate::vstruct_family!(@arm #name, #fam, #inplace);
+        crate::vstruct_family!(@unsized #name, Validated, #inplace);
+        crate::vstruct_family!(@unsized #name, Unvalidated, #inplace);
+        crate::vstruct_family!(@whole #name, #whole #(, #derives)*);
     }
-    if let Some((whole, derives)) = g.whole {
-        let derives = derives.iter().filter(|d| WHOLE_DERIVES.iter().any(|w| d == w));
-        out.extend(quote!(crate::vstruct_family!(@whole #name, #whole #(, #derives)*);));
-    }
-    out
 }
 
 /// @item, a struct, as @to - with #[type_name], its own name, before its

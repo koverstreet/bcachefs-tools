@@ -654,14 +654,20 @@ pub struct Unvalidated;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Validated;
 
-/// A type's definitions, one per state: states that differ in structure are
-/// different types, so each is its own definition - written by macro,
-/// #[unsized_vstruct], #[counted], #[grown], #[whole] - and X<S> is a
-/// generic struct over the one for S:
+/// A type's definitions, one per state - written by macro, #[unsized_vstruct],
+/// #[counted], #[grown], #[whole] - and X<S>, the type in state S.
 ///
-///   pub struct jset<S: State = Validated> {
+/// An unsized type's states are laid out alike - its header, then its tail -
+/// so X<S> is its definition in each: one DST, generic over S, which says only
+/// what's been checked of it.
+///
+/// A sized type's differ in structure - Whole is the struct, every field
+/// there; in place, a DST as long as the value - so each is its own
+/// definition, and X<S> is a generic struct over the one for S:
+///
+///   pub struct AllocV4<S: State = Whole> {
 ///       _state:   PhantomData<S>,
-///       pub repr: <S as State>::Of<jset_family>,
+///       pub repr: <S as State>::Of<AllocV4Family>,
 ///   }
 ///
 /// #[repr(transparent)], and its last field the definition, a DST or not: a
@@ -670,8 +676,8 @@ pub struct Validated;
 /// is E0118 if inherent, and breaks other crates' impls of the same trait
 /// (E0119) - so impls attach to X<Validated>, X<Whole>, as to any type, and
 /// X is what code names in every state. It derefs to the definition; the
-/// definitions, named - X_head, X_unvalidated, X_validated, X_whole -
-/// are what the macros build it from.
+/// definitions, named - X_validated, X_whole - are what the macros build it
+/// from.
 ///
 /// Every definition is made from its bytes the same way, ArmRef, and none
 /// borrows: so a container in state S can name a member as <S as
@@ -748,19 +754,23 @@ pub trait InState {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! vstruct_family {
-    // X<S>: #[repr(transparent)] over its definition in S, so a reference to
-    // one is a reference to the other, and impls attach to X<S> for the state
-    // they're for
-    (@type $name:ident, $fam:ident, $default:ident, $doc:literal) => {
+    // A sized type's X<S>: #[repr(transparent)] over its definition in S, so
+    // a reference to one is a reference to the other, and impls attach to
+    // X<S> for the state they're for
+    (@type $name:ident, $fam:ident, $doc:literal) => {
         #[doc = $doc]
         #[repr(transparent)]
         #[allow(non_camel_case_types)]
-        pub struct $name<S: $crate::util::vstructs::State = $crate::util::vstructs::$default> {
+        pub struct $name<S: $crate::util::vstructs::State = $crate::util::vstructs::Whole> {
             _state:   ::core::marker::PhantomData<S>,
             /// Its definition in state S - for offset_of!(), repr.field.
             pub repr: <S as $crate::util::vstructs::State>::Of<$fam>,
         }
 
+        $crate::vstruct_family!(@in_state $name);
+    };
+
+    (@in_state $name:ident) => {
         impl<S: $crate::util::vstructs::State> $crate::util::vstructs::InState for $name<S> {
             type In<T: $crate::util::vstructs::State> = $name<T>;
             type State = S;
@@ -812,16 +822,9 @@ macro_rules! vstruct_family {
         }
     };)* };
 
-    // An arm of what its definition in S is an arm of, the same tag; or of
-    // what @arm_of, a sized type's value in place, is in every state - the
-    // struct, X<Whole>, is an arm wherever its value in place is
-    (@arm $name:ident, $fam:ident) => {
-        $crate::vstruct_family!(@arm $name, $fam, <S as $crate::util::vstructs::State>::Of<$fam>);
-    };
-    (@arm $name:ident, $fam:ident, sized $arm_of:ident) => {
-        $crate::vstruct_family!(@arm $name, $fam, $arm_of);
-    };
-    (@arm $name:ident, $fam:ident, $arm_of:ty) => { const _: () = {
+    // An arm of what @arm_of, its value in place, is an arm of, in every
+    // state - the struct, X<Whole>, is an arm wherever its value in place is
+    (@arm $name:ident, $fam:ident, $arm_of:ident) => { const _: () = {
         use $crate::types::ArmOf;
         use $crate::util::vstructs::{ArmAt, ArmRef, State, VStructError};
 

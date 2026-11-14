@@ -31,9 +31,9 @@
 //!   #[derive(View)]      a projection for each field on a View of the type:
 //!                        its fields read as zero past a short value's end
 //!                        (vstructs.rs)
-//!   #[unsized_vstruct]   on a struct ending in a flexible array: a family
-//!                        of definitions, one per state, and X<S> picking
-//!                        one (vstructs.rs)
+//!   #[unsized_vstruct]   on a struct ending in a flexible array, its header:
+//!                        X<S>, the header and its tail, in state S
+//!                        (vstructs.rs)
 //!   #[grown(from = F)]   on the struct of a type that grew: its family - the
 //!                        whole struct, and the floor and the bytes there
 //!                        are (vstructs.rs)
@@ -323,10 +323,8 @@ pub fn counters(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
 
 /// `#[unsized_vstruct]`, on the definition of a struct ending in a flexible
 /// array - or `#[unsized_vstruct(tail = [E])]`, `tail = NAME: [E]`, saying
-/// what follows its header: the family of its definitions, one per state -
-/// the one written, renamed X_head, and each state's, a DST of the header
-/// and its tail -
-/// and X<S>, a generic struct over the one for S. See vstructs.rs.
+/// what follows its header: the one written, renamed X_head, and X<S>, a DST
+/// of the header and its tail, generic over its state. See vstructs.rs.
 #[proc_macro_attribute]
 pub fn unsized_vstruct(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[unsized_vstruct]", || vstructs::unsized_vstruct(attr.into(), item.into()))

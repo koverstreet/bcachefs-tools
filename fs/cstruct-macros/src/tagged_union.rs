@@ -703,7 +703,7 @@ impl Gen<'_> {
         let impls = states.iter().map(|(st, s)| {
             let st = format_ident!("{st}");
             let det = quote!(<#determinant as crate::types::Determinant<#s>>);
-            let tag_of_self = self.wrap_tag(quote!(#det::get(&self.repr)));
+            let tag_of_self = self.wrap_tag(quote!(#det::get(self)));
             let selects = arms.iter().map(|a| {
                 let (arm, ty, v) = (&a.name, &a.ty, &a.value);
                 quote! {
@@ -725,7 +725,7 @@ impl Gen<'_> {
                     /// ours, or the bytes are fewer than any valid one's. One shorter
                     /// than its type is an older version, its missing fields zero.
                     #vis fn typed(&self) -> Result<#en_ref<'_, #vs::#st>, #tag_enum> {
-                        let t: #tag_ty = #det::get(&self.repr);
+                        let t: #tag_ty = #det::get(self);
                         #(#selects)*
                         Err(#t_tag)
                     }
@@ -735,7 +735,7 @@ impl Gen<'_> {
                     where
                         A: crate::types::ArmOf<Self, Tag = #tag_ty> + #vs::ArmRef + ?Sized,
                     {
-                        if #det::get(&self.repr) != A::TAG {
+                        if #det::get(self) != A::TAG {
                             return None;
                         }
                         A::arm_ref(self.as_bytes())
@@ -746,7 +746,7 @@ impl Gen<'_> {
                     where
                         A: crate::types::ArmOf<Self, Tag = #tag_ty> + #vs::ArmRef + ?Sized,
                     {
-                        if #det::get(&self.repr) != A::TAG {
+                        if #det::get(self) != A::TAG {
                             return None;
                         }
                         A::arm_mut(self.as_bytes_mut())
