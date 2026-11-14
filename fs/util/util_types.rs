@@ -52,8 +52,3 @@ pub struct memalloc_flags {
     pub flags: c_uint,
 }
 
-pub use crate::c::{
-    rust_kzalloc_nofail, rust_kvzalloc_nofail, rust_kfree, rust_kvfree,
-    rust_kvfree_rcu, rust_bio_pages_alloc, rust_bio_pages_free,
-    rust_kfree_rcu_mightsleep,
-};

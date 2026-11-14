@@ -70,11 +70,11 @@ pub struct BouncePages;
 
 unsafe impl Elements for BouncePages {
     fn element_alloc(layout: Layout, gfp: c::gfp_t) -> Option<NonNull<u8>> {
-        NonNull::new(unsafe { c::rust_bio_pages_alloc(layout.size(), gfp | c::__GFP_SKIP_ZERO) }.cast())
+        NonNull::new(crate::util::alloc::bio_pages_alloc(layout.size(), gfp | c::__GFP_SKIP_ZERO).cast())
     }
 
     unsafe fn element_free(p: NonNull<u8>, layout: Layout) {
-        unsafe { c::rust_bio_pages_free(p.as_ptr().cast(), layout.size()) }
+        unsafe { crate::util::alloc::bio_pages_free(p.as_ptr().cast(), layout.size()) }
     }
 }
 
@@ -90,7 +90,7 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) -> Res
         assert!(b % bs == 0, "a bio's pages {b} bytes, not a multiple of its {bs} byte blocks");
 
         // SAFETY: no pointers in
-        let p = NonNull::new(unsafe { c::rust_bio_pages_alloc(b, current_gfp_context_raw(gfp)) }).ok_or(AllocError)?;
+        let p = NonNull::new(crate::util::alloc::bio_pages_alloc(b, current_gfp_context_raw(gfp))).ok_or(AllocError)?;
         // SAFETY: a fresh allocation of @b bytes, the bio's now
         unsafe { crate::os::bio::add_virt_nofail(bio, p.as_ptr(), b as u32) };
     }
@@ -144,7 +144,7 @@ unsafe fn free(pool: Option<&BouncePool>, bio: &mut c::bio) {
             let p = page_address(NonNull::new(bv.bv_page).expect("a bvec's page")).add(bv.bv_offset as usize);
             match pool {
                 Some(pool) if bv.bv_len as usize == POOL_LEN => pool.pool.free_raw(p),
-                _ => c::rust_bio_pages_free(p.as_ptr().cast(), bv.bv_len as usize),
+                _ => crate::util::alloc::bio_pages_free(p.as_ptr().cast(), bv.bv_len as usize),
             }
         }
     }

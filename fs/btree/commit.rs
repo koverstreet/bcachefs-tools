@@ -218,7 +218,7 @@ impl BtreeTrans<'_> {
                     };
 
                     if let Err(err) = self.relock_from(paths).and_then(|()| self.lock_updates_write(t, paths)) {
-                        unsafe { c::rust_kfree(new_k.as_ptr().cast()) };
+                        unsafe { crate::util::alloc::kfree_unsized(new_k.as_ptr().cast()) };
                         return Err(err);
                     }
                     new_k
@@ -229,7 +229,7 @@ impl BtreeTrans<'_> {
             unsafe {
                 let old_k = (*ck).k;
                 ptr::copy_nonoverlapping(old_k.cast::<u64>(), new_k.cast::<u64>(), (*ck).u64s.into());
-                c::rust_kfree(old_k.cast());
+                crate::util::alloc::kfree_unsized(old_k.cast());
 
                 for i in paths.paths_and_updates().updates.iter_mut() {
                     if ptr::eq(i.old_v, &raw const (*old_k).v) {

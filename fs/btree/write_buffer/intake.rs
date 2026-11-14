@@ -184,7 +184,7 @@ impl<'a> Intake<'a> {
          * callers hold j->buf_lock, a mutex_noio, across the whole bracket:
          */
         #[cfg(kernel)]
-        ebug_assert!(crate::locking::memalloc_flags() & crate::locking::PF_MEMALLOC_NOIO != 0,
+        ebug_assert!(crate::os::sched::memalloc_flags() & crate::locking::PF_MEMALLOC_NOIO != 0,
                      "write buffer intake outside a NOIO scope");
 
         Intake {

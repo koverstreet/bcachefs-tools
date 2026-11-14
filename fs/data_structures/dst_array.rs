@@ -30,13 +30,13 @@ trait ArrayFreeing {
 
 impl<T> ArrayFreeing for T {
     default fn prefix() -> usize { size_of::<c::rcu_head>().next_multiple_of(8) }
-    default unsafe fn free(base: *mut u8) { unsafe { c::rust_kvfree_rcu(base.cast(), base.cast()) } }
+    default unsafe fn free(base: *mut u8) { unsafe { crate::util::alloc::kvfree_rcu_head(base.cast(), base.cast()) } }
     default fn assert_rcu_freed() {}
 }
 
 impl<T: FreeAnytime> ArrayFreeing for T {
     fn prefix() -> usize { 0 }
-    unsafe fn free(base: *mut u8) { unsafe { c::rust_kvfree(base.cast()) } }
+    unsafe fn free(base: *mut u8) { unsafe { crate::util::alloc::kvfree_unsized(base.cast()) } }
     fn assert_rcu_freed() { let () = NotRcuFreed::<T>::ERR; }
 }
 

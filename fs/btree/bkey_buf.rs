@@ -9,7 +9,7 @@
 //!
 //! As in C, copying a key in can't fail: the heap buffer is allocated
 //! __GFP_NOFAIL - kbox_zeroed_nofail(), and C's bkey_buf's by
-//! rust_kzalloc_nofail(), which C's kfree() takes back. Zeroed, so the whole
+//! kzalloc_nofail(), which kfree_unsized() takes back. Zeroed, so the whole
 //! buffer is initialized memory.
 
 #![allow(non_camel_case_types)]
@@ -177,7 +177,7 @@ impl c::bkey_buf {
     pub fn exit(&mut self) {
         if !self.k.is_null() && self.k != self.onstack_ptr() {
             // SAFETY: reassemble()'s
-            unsafe { c::rust_kfree(self.k.cast()) };
+            unsafe { crate::util::alloc::kfree_unsized(self.k.cast()) };
         }
         self.k = core::ptr::null_mut();
     }
@@ -190,7 +190,7 @@ impl c::bkey_buf {
     pub fn exit_rcu(&mut self) {
         if !self.k.is_null() && self.k != self.onstack_ptr() {
             // SAFETY: reassemble()'s, kmalloc()'d
-            unsafe { c::rust_kfree_rcu_mightsleep(self.k.cast()) };
+            unsafe { crate::util::alloc::kfree_rcu_mightsleep(self.k.cast()) };
         }
     }
 }

@@ -199,8 +199,8 @@ unsafe impl<T: HasRcuHead> HasRcuHead for core::mem::MaybeUninit<T> {
 pub use cstruct_macros::RcuHead;
 
 /// What holds without owning, or owns as its T says: borrows and pointers,
-/// which free nothing; the kernel's Box and Vec, as their T would; an ARef,
-/// whose last put frees T as T says.
+/// which free nothing; an ARef, whose last put frees T as T says. The
+/// kernel's Box and Vec, as their T would, are os::alloc's.
 macro_rules! held_pointers {
     ($($trait:ident),*) => {$(
         unsafe impl<T: ?Sized> $trait for &T {}
@@ -208,10 +208,6 @@ macro_rules! held_pointers {
         unsafe impl<T: ?Sized> $trait for *const T {}
         unsafe impl<T: ?Sized> $trait for *mut T {}
         unsafe impl<T: ?Sized> $trait for NonNull<T> {}
-        #[cfg(kernel)]
-        unsafe impl<T: ?Sized + $trait, A: kernel::alloc::Allocator> $trait for kernel::alloc::Box<T, A> {}
-        #[cfg(kernel)]
-        unsafe impl<T: $trait, A: kernel::alloc::Allocator> $trait for kernel::alloc::kvec::Vec<T, A> {}
         unsafe impl<T: AlwaysRefCounted> $trait for ARef<T> {}
     )*};
 }
@@ -392,7 +388,7 @@ impl<P: RcuPointer> RcuPtrWriter<P> {
 /// only by readers under the RCU read lock - none of them reading its first
 /// bytes.
 pub unsafe fn kvfree_rcu<T>(p: *mut T) {
-    unsafe { c::rust_kvfree_rcu(p.cast(), p.cast()) };
+    unsafe { crate::util::alloc::kvfree_rcu_head(p.cast(), p.cast()) };
 }
 
 /// rcu_assign_pointer(), into a pointer of C's that other threads
@@ -477,7 +473,7 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
     pub unsafe fn free(&self) {
         let p = self.p.swap(core::ptr::null_mut(), Ordering::Relaxed);
         if !p.is_null() {
-            unsafe { c::rust_kvfree(p.cast()) };
+            unsafe { crate::util::alloc::kvfree_unsized(p.cast()) };
         }
     }
 }
@@ -487,7 +483,7 @@ impl<T: ?Sized + RcuPointee> Drop for RcuBuf<T> {
     fn drop(&mut self) {
         let p = *self.p.get_mut();
         if !p.is_null() {
-            unsafe { c::rust_kvfree(p.cast()) };
+            unsafe { crate::util::alloc::kvfree_unsized(p.cast()) };
         }
     }
 }
@@ -630,7 +626,7 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     /// # Safety
     /// @p is alloc()'s, and nothing - no reader either - reaches it any more.
     pub unsafe fn free_now(p: NonNull<RcuArrayHead<H>>) {
-        unsafe { c::rust_kvfree(p.as_ptr().cast()) }
+        unsafe { crate::util::alloc::kvfree_unsized(p.as_ptr().cast()) }
     }
 
     /// # Safety

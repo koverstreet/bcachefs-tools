@@ -582,7 +582,7 @@ impl Printbuf {
      */
     fn exit(&mut self) {
         if self.heap_allocated() {
-            unsafe { c::rust_kvfree(self.buf.cast()) };
+            unsafe { crate::util::alloc::kvfree_unsized(self.buf.cast()) };
             // not *self =: that would drop what's freed
             unsafe { core::ptr::write(self, Printbuf::new()) };
         }

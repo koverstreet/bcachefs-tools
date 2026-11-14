@@ -24,7 +24,7 @@
 //! and whatever it's sleeping in, the wake has it recheck. C's daemons kept the
 //! count themselves, next to an RCU pointer to the thread to wake.
 //!
-//! Over the kernel's API, through util.c's wrappers of its macros.
+//! Over the kernel's API, through shim.c's wrappers of its macros.
 
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};

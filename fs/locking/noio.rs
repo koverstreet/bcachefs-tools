@@ -44,12 +44,6 @@ fn current_flags() -> Option<&'static mut c_uint> {
     unsafe { t.as_mut() }.map(|t| &mut t.flags)
 }
 
-/// current->flags: the scopes the task is in.
-#[cfg(kernel)]
-pub(crate) fn memalloc_flags() -> u32 {
-    current_flags().map_or(0, |f| *f)
-}
-
 /// Set @flags in current->flags: those of them that were, for
 /// memalloc_flags_restore().
 pub(crate) fn memalloc_flags_save(flags: u32) -> u32 {
