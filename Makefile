@@ -546,32 +546,6 @@ cargo-update-msrv:
 	cargo +nightly generate-lockfile -Zmsrv-policy
 	cargo +nightly generate-lockfile --manifest-path fs/Cargo.toml -Zmsrv-policy
 
-# Refresh the small set of kernel files we vendor verbatim (not bcachefs
-# source — that lives in fs/ and is developed in-tree now). See
-# doc/vendored-kernel-files.md for the why and the list.
-.PHONY: update-vendored-kernel-sources
-update-vendored-kernel-sources:
-	cp $(LINUX_DIR)/include/linux/xxhash.h include/linux/
-	git add include/linux/xxhash.h
-	cp $(LINUX_DIR)/lib/xxhash.c linux/
-	git add linux/xxhash.c
-	cp $(LINUX_DIR)/include/linux/list_nulls.h include/linux/
-	git add include/linux/list_nulls.h
-	cp $(LINUX_DIR)/include/linux/poison.h include/linux/
-	git add include/linux/poison.h
-	cp $(LINUX_DIR)/include/linux/generic-radix-tree.h include/linux/
-	git add include/linux/generic-radix-tree.h
-	cp $(LINUX_DIR)/lib/generic-radix-tree.c linux/
-	git add linux/generic-radix-tree.c
-	cp $(LINUX_DIR)/include/linux/kmemleak.h include/linux/
-	git add include/linux/kmemleak.h
-	cp $(LINUX_DIR)/scripts/Makefile.compiler ./
-	git add Makefile.compiler
-
-.PHONY: update-commit-vendored-kernel-sources
-update-commit-vendored-kernel-sources: update-vendored-kernel-sources
-	git commit -m "Update vendored kernel sources to $(shell git -C $(LINUX_DIR) show --oneline --no-patch)"
-
 SRCTARXZ = bcachefs-tools-$(VERSION).tar.xz
 SRCDIR=bcachefs-tools-$(VERSION)
 
