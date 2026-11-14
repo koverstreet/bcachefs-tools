@@ -28,10 +28,7 @@ const REQUIRED_UPGRADE_BELOW: MetadataVersion = MetadataVersion::btree_node_acco
 fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) -> bool {
     let latest_version = c::MetadataVersion::CURRENT;
     let latest_compatible = latest_version.min(fs.sb.version.get().latest_compatible());
-    let old_version = match fs.sb.version_upgrade_complete.get() {
-        MetadataVersion(0) => fs.sb.version.get(),
-        v => v,
-    };
+    let old_version = fs.sb.version_upgrade_complete.get();
     let upgrade = Upgrade(fs.opts().version_upgrade.get().into());
     let incompat = upgrade == Upgrade::incompatible;
     let mut ret = false;

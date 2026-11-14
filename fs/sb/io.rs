@@ -1133,7 +1133,9 @@ impl bch_sb_handle {
         self.io.realloc(&self.dev, u64s)
     }
 
-    /// The defaults an older version left unset, filled in
+    /// The defaults an older version left unset, filled in - before the
+    /// filesystem's copy is made, which has no defaults of its own: an unset
+    /// version_upgrade_complete would read as 0 there.
     pub fn set_compat_defaults(&mut self) -> Result<(), BchError> {
         let s = self.sb_mut();
         let version = s.version.get();

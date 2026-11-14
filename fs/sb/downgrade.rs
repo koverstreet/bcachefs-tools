@@ -288,10 +288,7 @@ impl Fs {
     pub fn sb_set_upgrade_extra(&self) {
         let mut sb = self.sb_lock();
         let new = self.sb.version.get();
-        let old = match self.sb.version_upgrade_complete.get() {
-            MetadataVersion(0) => new,
-            v => v,
-        };
+        let old = self.sb.version_upgrade_complete.get();
         if !UPGRADE_STRIPES.iter().any(|i| old < i.version && i.version <= new) || !self.have_stripes() {
             return;
         }
