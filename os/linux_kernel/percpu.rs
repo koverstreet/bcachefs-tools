@@ -100,6 +100,9 @@ use crate::util::alloc::{current_gfp_context_raw, AllocError};
 use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
+/// Whether a six lock asked for per-CPU reader counts gets them.
+pub const SIX_PERCPU_READERS: bool = true;
+
 pub use crate::c::{
     free_percpu, bch2_this_cpu_add_u32, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u32, bch2_this_cpu_cmpxchg_u64,
     bch2_this_cpu_ptr, bch2_per_cpu_ptr, bch2_cpu_possible_next,

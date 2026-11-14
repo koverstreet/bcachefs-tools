@@ -80,6 +80,9 @@ use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
+/// Don't assume that we have real percpu variables available in userspace.
+pub const SIX_PERCPU_READERS: bool = false;
+
 /// Nothing moves a thread between CPUs here: each thread is its own.
 pub fn migrate_disable() {}
 
