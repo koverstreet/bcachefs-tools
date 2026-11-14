@@ -2,7 +2,7 @@
 
 //! Debug parameters, debug_params!(): each a static key, C's bch2_<name>,
 //! and a function, true while it's on - a static branch, as C's
-//! static_branch_unlikely(&bch2_<name>) (util/jump_label.rs). Every key is a
+//! static_branch_unlikely(&bch2_<name>) (os::jump_label). Every key is a
 //! module parameter, the debug-only ones only with CONFIG_BCACHEFS_DEBUG.
 
 use crate::c;

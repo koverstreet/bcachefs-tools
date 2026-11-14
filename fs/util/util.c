@@ -12,21 +12,9 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/sched/debug.h>
-#include <linux/static_key.h>
 #include <linux/version.h>
 
 #include "util.h"
-
-/*
- * static_branch_unlikely(), for Rust where it has no asm of its own
- * (util/jump_label.rs): out of line, @key isn't a constant the asm can name -
- * the key's count, as static_branch_unlikely() reads it without
- * CONFIG_JUMP_LABEL.
- */
-bool bch2_static_branch_unlikely(struct static_key_false *key)
-{
-	return static_key_enabled(&key->key);
-}
 
 /*
  * For Rust: the kernel's Rust allocator API has no __GFP_NOFAIL. Out of line,

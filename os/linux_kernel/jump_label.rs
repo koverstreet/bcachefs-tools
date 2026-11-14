@@ -7,20 +7,20 @@
 //! ships nothing of rust/, Ubuntu has it in a package of its own, nixpkgs
 //! doesn't have it at all.
 //!
-//! As util/percpu.rs: on x86_64 and arm64, with CONFIG_JUMP_LABEL, it's
+//! As percpu.rs: on x86_64 and arm64, with CONFIG_JUMP_LABEL, it's
 //! inline, as C's is - the asm is the kernel's own, ARCH_STATIC_BRANCH_ASM()
 //! from the headers of the kernel being built against (jump_label_asm.rs.S,
 //! preprocessed by Makefile.rust): a NOP the kernel patches into a jump to the
-//! label when the key is enabled. Elsewhere, and in userspace - where a key
-//! is a plain int - it's C's static_branch_unlikely(), out of line.
+//! label when the key is enabled. Elsewhere it's C's static_branch_unlikely(),
+//! out of line.
 
 // C's static_branch_unlikely(), out of line, where Rust has no asm of its own.
 pub use crate::c::bch2_static_branch_unlikely;
 
-#[cfg(all(kernel, CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64")))]
 include!(concat!(env!("OUT_DIR"), "/jump_label_asm.rs"));
 
-#[cfg(all(kernel, CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub(crate) use static_branch_asm;
 
 /// Whether the static key at field @field of @key, a static laid out as a
@@ -34,10 +34,10 @@ pub(crate) use static_branch_asm;
 #[macro_export]
 macro_rules! static_branch_unlikely {
     ($key:path, $keytyp:ty, $field:ident) => {{
-        #[cfg(all(kernel, CONFIG_JUMP_LABEL, target_arch = "x86_64"))]
+        #[cfg(all(CONFIG_JUMP_LABEL, target_arch = "x86_64"))]
         let enabled = 'enabled: {
             ::core::arch::asm!(
-                $crate::util::jump_label::static_branch_asm!(),
+                $crate::os::jump_label::static_branch_asm!(),
                 l_yes = label { break 'enabled true; },
                 symb = sym $key,
                 off = const ::core::mem::offset_of!($keytyp, $field),
@@ -47,10 +47,10 @@ macro_rules! static_branch_unlikely {
             false
         };
 
-        #[cfg(all(kernel, CONFIG_JUMP_LABEL, target_arch = "aarch64"))]
+        #[cfg(all(CONFIG_JUMP_LABEL, target_arch = "aarch64"))]
         let enabled = 'enabled: {
             ::core::arch::asm!(
-                $crate::util::jump_label::static_branch_asm!(),
+                $crate::os::jump_label::static_branch_asm!(),
                 l_yes = label { break 'enabled true; },
                 symb = sym $key,
                 off = const ::core::mem::offset_of!($keytyp, $field),
@@ -59,8 +59,8 @@ macro_rules! static_branch_unlikely {
             false
         };
 
-        #[cfg(not(all(kernel, CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64"))))]
-        let enabled = $crate::util::jump_label::bch2_static_branch_unlikely(
+        #[cfg(not(all(CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64"))))]
+        let enabled = $crate::os::jump_label::bch2_static_branch_unlikely(
             ::core::ptr::addr_of!($key).cast::<u8>().cast_mut()
                 .add(::core::mem::offset_of!($keytyp, $field)).cast());
 
