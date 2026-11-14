@@ -34,7 +34,6 @@ use crate::fs::Fs;
 use crate::journal::pins::Pin;
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags};
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, KVVec};
-use crate::util::closure::closure_wake_up;
 use crate::util::place::{container_of, Contained};
 use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
@@ -424,11 +423,11 @@ fn flush_seq(trans: &BtreeTrans<'_>, max_seq: u64, did_work: &mut bool, caller: 
     loop {
         let fetch_from_journal_err = intake::fetch_wb_keys_from_journal(fs, max_seq);
 
-        trans.wait_event(&fs.btree.write_buffer_flush_wait, || {
-            !any_wb_pin_le(fs, max_seq, did_work, caller) || {
+        trans.wait_until(&fs.btree.write_buffer_flush_wait, || {
+            (!any_wb_pin_le(fs, max_seq, did_work, caller) || {
                 ret = fs.journal.error();
                 ret.is_err()
-            }
+            }).then_some(())
         });
 
         if ret.is_err() || fetch_from_journal_err.is_ok() {
@@ -556,7 +555,7 @@ fn flush_work_fn(wb: &c::bch_fs_btree_write_buffer) {
         }
     }
 
-    closure_wake_up(&fs.btree.write_buffer_flush_wait);
+    fs.btree.write_buffer_flush_wait.wake();
 }
 
 impl RawWork for c::bch_fs_btree_write_buffer {

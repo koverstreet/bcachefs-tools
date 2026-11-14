@@ -552,8 +552,8 @@ impl c::journal {
         while !Kthread::should_stop() {
             self.error()?;
 
-            closure_wait_event(&bc.nr_in_flight_wait,
-                || bc.nr_in_flight_inner.load(Relaxed) < BTREE_WRITE_IO_LIMIT as isize);
+            let Ok(()) = bc.nr_in_flight_wait.wait_until(Sleep::UNINTERRUPTIBLE,
+                || (bc.nr_in_flight_inner.load(Relaxed) < BTREE_WRITE_IO_LIMIT as isize).then_some(()));
 
             let seq_to_flush = self.seq_to_flush();
 

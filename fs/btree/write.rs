@@ -281,7 +281,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let bc = &fs.btree.cache;
     bc.nr_in_flight_inner.fetch_sub(1, Relaxed);
     bc.update_throttle();
-    crate::util::closure::closure_wake_up(&bc.nr_in_flight_wait);
+    bc.nr_in_flight_wait.wake();
 
     b.flags.set_write_in_flight_inner(false);
     fence(SeqCst);

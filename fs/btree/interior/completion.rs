@@ -27,7 +27,6 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fs_fatal_error;
 use crate::types::Le64;
-use crate::util::closure::closure_wake_up;
 use crate::util::vstructs::SelfSized;
 use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
             UPDATE_NODES_MAX};
@@ -149,7 +148,7 @@ impl InteriorUpdate<'_> {
                  * for flush_held_btree_writes() waiting on updates to flush or
                  * nodes to be writeable:
                  */
-                closure_wake_up(&fs.btree.interior_updates.wait);
+                fs.btree.interior_updates.wait.wake();
             }
         }
 

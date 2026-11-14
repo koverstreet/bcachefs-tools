@@ -328,7 +328,7 @@ pub struct bch_fs_btree_cache {
     #[init(AtomicIsize::new(0))]
     pub nr_in_flight: AtomicIsize,
     pub nr_in_flight_inner: AtomicIsize,
-    pub nr_in_flight_wait: cs::closure_waitlist,
+    pub nr_in_flight_wait: crate::util::futex::EventCount,
     pub __should_throttle_align: CacheAligned,
     pub should_throttle: AtomicBool,
 
@@ -1087,7 +1087,7 @@ pub struct bch_fs_btree {
      * their target seq. Waked from the flush worker after drain and from
      * journal_keys_to_write_buffer_end after pin drops.
      */
-    pub write_buffer_flush_wait: cs::closure_waitlist,
+    pub write_buffer_flush_wait: crate::util::futex::EventCount,
     #[pin]
     #[init(cs::bch_fs_btree_trans::init())]
     pub trans: cs::bch_fs_btree_trans,

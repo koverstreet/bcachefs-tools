@@ -12,7 +12,6 @@ use crate::fs::Fs;
 use crate::locking::six::{six_lock_counts, six_lock_wakeup_all};
 use crate::locking::Guard as _;
 use crate::prt;
-use crate::util::closure::closure_wake_up;
 use crate::util::hash::GoldenRatio;
 use crate::os::kernel::is_vmalloc_addr;
 use crate::util::log::LogMsg;
@@ -215,7 +214,7 @@ impl Fs {
         }
 
         bc.update_throttle();
-        closure_wake_up(&bc.nr_in_flight_wait);
+        bc.nr_in_flight_wait.wake();
 
         b.set_cache_state(lists, new);
         ret

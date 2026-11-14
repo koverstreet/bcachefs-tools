@@ -36,7 +36,8 @@ use crate::util::Printbuf;
 use crate::util::alloc::{AllocBox, KVVec, Kmalloc};
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_symbol;
-use crate::util::closure::{closure_wait_event, closure_wake_up};
+use crate::util::futex::EventCount;
+use crate::util::sleep::Sleep;
 use crate::os::kernel::local_clock;
 use crate::util::place::{Contained, Placed};
 use crate::util::time_stats::TimeStats;
@@ -162,7 +163,7 @@ pub struct bch_fs_btree_interior_updates {
     #[pin]
     #[init(new_lock!((), (), "&c->btree.interior_updates.commit_lock"))]
     pub(crate) commit_lock: Placed<Locked<c::mutex>, CommitLockAt>,
-    pub wait: c::closure_waitlist,
+    pub wait: EventCount,
 
     #[late(Workqueue::new(c"btree_update", WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 8), ENOMEM_btree_interior_update_worker_init)]
     pub worker: Late<Workqueue>,
@@ -905,7 +906,7 @@ unsafe fn update_free(update: NonNull<BtreeUpdate>, trans: &BtreeTrans<'_>, path
      * Have to do the wakeup with btree_interior_update_lock still held,
      * since being on btree_interior_update_list is our ref on @c:
      */
-    closure_wake_up(&updates.wait);
+    updates.wait.wake();
     drop(g);
 }
 
@@ -919,7 +920,8 @@ impl Fs {
     pub fn btree_interior_updates_flush(&self) -> bool {
         let ret = self.btree_interior_updates_pending();
         if ret {
-            closure_wait_event(&self.btree.interior_updates.wait, || !self.btree_interior_updates_pending());
+            let Ok(()) = self.btree.interior_updates.wait.wait_until(Sleep::UNINTERRUPTIBLE,
+                || (!self.btree_interior_updates_pending()).then_some(()));
         }
         ret
     }

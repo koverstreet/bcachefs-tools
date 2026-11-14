@@ -978,9 +978,9 @@ impl BtreeTrans<'_> {
         let bc = &self.fs().btree.cache;
 
         t.drop_locks_do(|| {
-            self.wait_event(&bc.nr_in_flight_wait, || {
-                bc.nr_in_flight_inner.load(Relaxed) < (BTREE_WRITE_IO_LIMIT * 3 / 4) as isize &&
-                    !bc.should_throttle.load(Relaxed)
+            self.wait_until(&bc.nr_in_flight_wait, || {
+                (bc.nr_in_flight_inner.load(Relaxed) < (BTREE_WRITE_IO_LIMIT * 3 / 4) as isize &&
+                    !bc.should_throttle.load(Relaxed)).then_some(())
             });
             Ok(())
         })

@@ -14,7 +14,6 @@ use crate::format::{jset_entry, BkeyType, Btree};
 use crate::fs::Fs;
 use crate::prt;
 use crate::util::alloc::AllocError;
-use crate::util::closure::closure_wake_up;
 use crate::util::vstructs::Unvalidated;
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
@@ -463,7 +462,7 @@ impl Drop for Intake<'_> {
          * advanced by move_keys_from_inc_to_flushing inside bch_wb_acquire) —
          * wake any sync flushers blocked on a target seq.
          */
-        closure_wake_up(&self.fs.btree.write_buffer_flush_wait);
+        self.fs.btree.write_buffer_flush_wait.wake();
     }
 }
 
