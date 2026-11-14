@@ -8,7 +8,6 @@ pub mod debugfs;
 // The kernel's, cfg(not(kernel)) inside, until userspace has its own
 #[path = "../linux_kernel/file.rs"]
 pub mod file;
-#[path = "../linux_kernel/kernel.rs"]
 pub mod kernel;
 pub mod kobject;
 pub mod kthread;
