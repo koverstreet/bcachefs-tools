@@ -743,6 +743,287 @@ pub trait InState {
     type State: State;
 }
 
+/// A family's X<S>, a piece at a time - the family macros' (cstruct-macros'
+/// vstructs.rs), which say which pieces a family has.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! vstruct_family {
+    // X<S>: #[repr(transparent)] over its definition in S, so a reference to
+    // one is a reference to the other, and impls attach to X<S> for the state
+    // they're for
+    (@type $name:ident, $fam:ident, $default:ident, $doc:literal) => {
+        #[doc = $doc]
+        #[repr(transparent)]
+        #[allow(non_camel_case_types)]
+        pub struct $name<S: $crate::util::vstructs::State = $crate::util::vstructs::$default> {
+            _state:   ::core::marker::PhantomData<S>,
+            /// Its definition in state S - for offset_of!(), repr.field.
+            pub repr: <S as $crate::util::vstructs::State>::Of<$fam>,
+        }
+
+        impl<S: $crate::util::vstructs::State> $crate::util::vstructs::InState for $name<S> {
+            type In<T: $crate::util::vstructs::State> = $name<T>;
+            type State = S;
+        }
+    };
+
+    // To its definition in each state - or, a typestate, Unvalidated to
+    // X<Validated>, where X's methods are, not to their definition: a #[grown]
+    // type's, which is one for both, and whose length validate checks before
+    // anything reads it
+    (@deref $name:ident, $fam:ident) => {
+        $crate::vstruct_family!(@deref_to_def $name, $fam, Whole, Validated, Unvalidated);
+    };
+    (@deref typestate $name:ident, $fam:ident) => { const _: () = {
+        use $crate::util::vstructs::{Unvalidated, Validated};
+
+        $crate::vstruct_family!(@deref_to_def $name, $fam, Whole, Validated);
+
+        impl ::core::ops::Deref for $name<Unvalidated> {
+            type Target = $name<Validated>;
+            #[inline]
+            fn deref(&self) -> &Self::Target {
+                // SAFETY: #[repr(transparent)], both, over the one definition
+                unsafe { &*(self as *const Self as *const Self::Target) }
+            }
+        }
+
+        impl ::core::ops::DerefMut for $name<Unvalidated> {
+            #[inline]
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                // SAFETY: as deref()'s
+                unsafe { &mut *(self as *mut Self as *mut Self::Target) }
+            }
+        }
+    }; };
+
+    (@deref_to_def $name:ident, $fam:ident, $($st:ident),*) => { $(const _: () = {
+        use $crate::util::vstructs::{$st, State};
+
+        impl ::core::ops::Deref for $name<$st> {
+            type Target = <$st as State>::Of<$fam>;
+            #[inline]
+            fn deref(&self) -> &Self::Target { &self.repr }
+        }
+
+        impl ::core::ops::DerefMut for $name<$st> {
+            #[inline]
+            fn deref_mut(&mut self) -> &mut Self::Target { &mut self.repr }
+        }
+    };)* };
+
+    // An arm of what its definition in S is an arm of, the same tag; or of
+    // what @arm_of, a sized type's value in place, is in every state - the
+    // struct, X<Whole>, is an arm wherever its value in place is
+    (@arm $name:ident, $fam:ident) => {
+        $crate::vstruct_family!(@arm $name, $fam, <S as $crate::util::vstructs::State>::Of<$fam>);
+    };
+    (@arm $name:ident, $fam:ident, sized $arm_of:ident) => {
+        $crate::vstruct_family!(@arm $name, $fam, $arm_of);
+    };
+    (@arm $name:ident, $fam:ident, $arm_of:ty) => { const _: () = {
+        use $crate::types::ArmOf;
+        use $crate::util::vstructs::{ArmAt, ArmRef, State, VStructError};
+
+        impl<U: ?Sized, S: State> ArmOf<U> for $name<S>
+        where
+            $arm_of: ArmOf<U>,
+        {
+            type Tag = <$arm_of as ArmOf<U>>::Tag;
+            const TAG: Self::Tag = <$arm_of as ArmOf<U>>::TAG;
+        }
+
+        // In every state, as its definition in that state is had: the pointer
+        // cast keeps the definition's metadata, its last field being it
+        impl<S: State> ArmRef for $name<S> {
+            const MIN_LEN: usize = <<S as State>::Of<$fam> as ArmRef>::MIN_LEN;
+
+            fn arm_ref(b: &[u8]) -> Option<&Self> {
+                // SAFETY: #[repr(transparent)] over its definition in S
+                <<S as State>::Of<$fam> as ArmRef>::arm_ref(b)
+                    .map(|d| unsafe { &*(d as *const <S as State>::Of<$fam> as *const Self) })
+            }
+
+            fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {
+                // SAFETY: as arm_ref()'s
+                <<S as State>::Of<$fam> as ArmRef>::arm_mut(b)
+                    .map(|d| unsafe { &mut *(d as *mut <S as State>::Of<$fam> as *mut Self) })
+            }
+
+            fn whole_len(len: usize) -> Option<usize> {
+                <<S as State>::Of<$fam> as ArmRef>::whole_len(len)
+            }
+        }
+
+        impl<S: State> ArmAt for $name<S>
+        where
+            <S as State>::Of<$fam>: ArmAt,
+        {
+            fn arm_at(b: &[u8]) -> Result<&Self, VStructError> {
+                // SAFETY: as arm_ref()'s
+                <<S as State>::Of<$fam> as ArmAt>::arm_at(b)
+                    .map(|d| unsafe { &*(d as *const <S as State>::Of<$fam> as *const Self) })
+            }
+        }
+    }; };
+
+    // In state @st, a DST as its definition there, @def, is
+    (@unsized $name:ident, $st:ident, $def:ident) => { const _: () = {
+        use $crate::util::vstructs::{$st, SelfSized, Unsized};
+
+        // SAFETY: #[repr(transparent)] over its definition, whose Unsized it is
+        unsafe impl Unsized for $name<$st> {
+            type Head = <$def as Unsized>::Head;
+            type Elem = <$def as Unsized>::Elem;
+            const TAIL: usize = <$def as Unsized>::TAIL;
+            #[inline]
+            fn from_raw(p: *const u8, bytes: usize) -> *const Self {
+                <$def as Unsized>::from_raw(p, bytes) as *const Self
+            }
+            #[inline]
+            fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {
+                <$def as Unsized>::from_raw_mut(p, bytes) as *mut Self
+            }
+        }
+
+        impl SelfSized for $name<$st> {
+            #[inline]
+            fn bytes(&self) -> usize {
+                ::core::mem::size_of_val(self)
+            }
+        }
+    }; };
+
+    // Made, in the state the caller names, from a pointer to its header, @head
+    // - an unsized type's, whose count is its own
+    (@made $name:ident, $st:ident, $head:ident) => { const _: () = {
+        use $crate::util::vstructs::*;
+
+        // every family's way in, whether or not this one's used
+        #[allow(dead_code)]
+        impl $name<$st> {
+            /// It at @p, a pointer to its header, as long as its count says:
+            /// not widened from a reference to the header, which reaches only
+            /// that. In the state the caller names - X::<Validated>, for what's
+            /// been read and validated - never one inferred.
+            ///
+            /// # Safety
+            /// @p points to one whose count is right, and what its state says
+            /// of its entries' is true - for Validated, that they were checked;
+            /// and those bytes stay valid, and unwritten, for 'a.
+            pub unsafe fn from_head_ptr<'a>(p: *const $head) -> &'a Self {
+                // SAFETY: the caller's
+                unsafe { from_head_ptr::<Self>(p) }
+            }
+
+            /// from_head_ptr(), mutably.
+            ///
+            /// # Safety
+            /// As from_head_ptr()'s, and nothing else touches those bytes for 'a.
+            pub unsafe fn from_head_ptr_mut<'a>(p: *mut $head) -> &'a mut Self {
+                // SAFETY: the caller's
+                unsafe { from_head_ptr_mut::<Self>(p) }
+            }
+
+            $crate::vstruct_family!(@made_in $name, $st);
+        }
+    }; };
+
+    (@made_in $name:ident, Unvalidated) => {
+        /// It at the start of @bytes - off a device, from the kernel - as
+        /// many as its count says: an error if they don't hold its header,
+        /// aligned, or that many.
+        pub fn from_bytes(bytes: &[u8]) -> Result<&Self, VStructError> {
+            from_bytes::<Self>(bytes)
+        }
+
+        /// from_bytes(), mutably.
+        pub fn from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, VStructError> {
+            from_bytes_mut::<Self>(bytes)
+        }
+
+        /// It, Validated - the unsafe way up: both states are laid out
+        /// alike, so it's the same bytes, at the same length.
+        ///
+        /// # Safety
+        /// What Validated says of it is true: validate passed.
+        pub unsafe fn assume_validated(&self) -> &$name<Validated> {
+            let p = <$name<Validated> as Unsized>::from_raw((self as *const Self).cast(), size_of_val(self));
+            // SAFETY: its bytes, as long as they are; the caller's, that
+            // they're Validated
+            unsafe { &*p }
+        }
+
+        /// assume_validated(), mutably.
+        ///
+        /// # Safety
+        /// As assume_validated()'s.
+        pub unsafe fn assume_validated_mut(&mut self) -> &mut $name<Validated> {
+            let p = <$name<Validated> as Unsized>::from_raw_mut((self as *mut Self).cast(), size_of_val(self));
+            // SAFETY: as assume_validated()'s
+            unsafe { &mut *p }
+        }
+    };
+
+    (@made_in $name:ident, Validated) => {
+        /// It, Unvalidated - the safe way down: both states are laid out
+        /// alike, and an Unvalidated one trusts nothing - for what reads
+        /// one that may not be valid, a printer.
+        pub fn as_unvalidated(&self) -> &$name<Unvalidated> {
+            let p = <$name<Unvalidated> as Unsized>::from_raw((self as *const Self).cast(), size_of_val(self));
+            // SAFETY: its bytes, as long as they are
+            unsafe { &*p }
+        }
+    };
+
+    // X<Whole>, a sized type's: the struct @whole, with the value traits it
+    // derives that are X<Whole>'s too
+    (@whole $name:ident, $whole:ident $(, $derive:ident)*) => { const _: () = {
+        use $crate::util::vstructs::*;
+
+        // SAFETY: a reference from it claims size_of::<Self>() of @bytes, the
+        // first: the struct, every field Plain
+        unsafe impl Unsized for $name<Whole> {
+            type Head = $whole;
+            type Elem = u8;
+            const TAIL: usize = size_of::<Self>();
+            #[inline]
+            fn from_raw(p: *const u8, _bytes: usize) -> *const Self { p.cast() }
+            #[inline]
+            fn from_raw_mut(p: *mut u8, _bytes: usize) -> *mut Self { p.cast() }
+        }
+
+        $($crate::vstruct_family!(@whole_derive $derive, $name, $whole);)*
+    }; };
+
+    (@whole_derive Clone, $name:ident, $whole:ident) => {
+        impl Clone for $name<Whole> {
+            fn clone(&self) -> Self {
+                $name { _state: ::core::marker::PhantomData, repr: self.repr.clone() }
+            }
+        }
+    };
+    (@whole_derive Copy, $name:ident, $whole:ident) => {
+        impl Copy for $name<Whole> {}
+    };
+    (@whole_derive Default, $name:ident, $whole:ident) => {
+        impl Default for $name<Whole> {
+            fn default() -> Self {
+                $name { _state: ::core::marker::PhantomData, repr: Default::default() }
+            }
+        }
+    };
+    (@whole_derive Plain, $name:ident, $whole:ident) => {
+        // SAFETY: #[repr(transparent)] over the struct, which is Plain
+        unsafe impl Plain for $name<Whole> {}
+    };
+    (@whole_derive TypeInfo, $name:ident, $whole:ident) => {
+        impl $crate::typeinfo::TypeInfo for $name<Whole> {
+            const INFO: &'static $crate::typeinfo::StructInfo = <$whole as $crate::typeinfo::TypeInfo>::INFO;
+        }
+    };
+}
+
 /// What's the same bytes in every state - a thin entry - so it's in another
 /// by a cast: restate().
 ///
