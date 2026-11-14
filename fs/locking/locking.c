@@ -16,7 +16,6 @@
 
 #include <linux/irqflags.h>
 #include <linux/local_lock.h>
-#include <linux/lockdep.h>
 #include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/rwsem.h>
@@ -27,14 +26,6 @@
 
 #include "locking/shim.h"
 
-/* btree/locking.rs: btree node locks, which lockdep doesn't track */
-
-/* a lock whose state is Rust's - six - by its map: the macro wants the lock */
-void rust_lockdep_set_notrack_class(struct lockdep_map *map)
-{
-	lockdep_set_notrack_class((struct { struct lockdep_map dep_map; } *) map);
-}
-
 /* raw.rs: struct mutex */
 
 void rust_mutex_init(struct mutex *lock, const char *name, void *key)
@@ -44,11 +35,6 @@ void rust_mutex_init(struct mutex *lock, const char *name, void *key)
 #else
 	mutex_init(lock);
 #endif
-}
-
-void rust_mutex_assert_held(struct mutex *lock)
-{
-	lockdep_assert_held(lock);
 }
 
 /* raw.rs: spinlock_t, as the kernel's Rust helper initializes it */
@@ -87,11 +73,6 @@ void rust_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
 	spin_unlock_irqrestore(lock, flags);
 }
 
-void rust_spin_lock_assert_held(spinlock_t *lock)
-{
-	lockdep_assert_held(lock);
-}
-
 /* raw.rs: raw_spinlock_t */
 
 void rust_raw_spin_lock_init(raw_spinlock_t *lock, const char *name, void *key)
@@ -113,44 +94,7 @@ void rust_raw_spin_unlock(raw_spinlock_t *lock)
 	raw_spin_unlock(lock);
 }
 
-void rust_raw_spin_lock_assert_held(raw_spinlock_t *lock)
-{
-	lockdep_assert_held(lock);
-}
-
-/* raw.rs: lockdep and the contention tracepoints, for a lock whose state is ours */
-
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-void rust_lockdep_init_map(void *map, const char *name, void *key)
-{
-	lockdep_init_map(map, name, key, 0);
-}
-
-void rust_lock_acquire(void *map, int trylock, int read, unsigned long ip)
-{
-	lock_acquire(map, 0, trylock, read, 1, NULL, ip);
-}
-
-void rust_lock_release(void *map, unsigned long ip)
-{
-	lock_release(map, ip);
-}
-
-void rust_lock_contended(void *map, unsigned long ip)
-{
-	lock_contended(map, ip);
-}
-
-void rust_lock_acquired(void *map, unsigned long ip)
-{
-	lock_acquired(map, ip);
-}
-
-void rust_debug_check_no_locks_freed(const void *p, unsigned long len)
-{
-	debug_check_no_locks_freed(p, len);
-}
-#endif
+/* raw.rs: the contention tracepoints, for a lock whose state is ours */
 
 void rust_trace_contention_begin(const void *lock, unsigned int flags)
 {
@@ -211,16 +155,6 @@ void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key)
 #endif
 }
 
-void rust_rwsem_assert_held(struct rw_semaphore *sem)
-{
-	lockdep_assert_held(sem);
-}
-
-void rust_rwsem_assert_held_write(struct rw_semaphore *sem)
-{
-	lockdep_assert_held_write(sem);
-}
-
 /* raw.rs: percpu_rw_semaphore */
 
 int rust_percpu_init_rwsem(struct percpu_rw_semaphore *sem, const char *name, void *key)
@@ -255,14 +189,4 @@ void rust_percpu_down_write(struct percpu_rw_semaphore *sem)
 void rust_percpu_up_write(struct percpu_rw_semaphore *sem)
 {
 	percpu_up_write(sem);
-}
-
-void rust_percpu_rwsem_assert_held(struct percpu_rw_semaphore *sem)
-{
-	percpu_rwsem_assert_held(sem);
-}
-
-void rust_percpu_rwsem_assert_held_write(struct percpu_rw_semaphore *sem)
-{
-	lockdep_assert_held_write(sem);
 }

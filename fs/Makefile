@@ -59,7 +59,8 @@ bcachefs-y		:=			\
 	util/rcu.o				\
 	util/util.o				\
 	vendor/bio_iov_iter.o			\
-	vendor/closure.o
+	vendor/closure.o			\
+	../os/linux_kernel/shim.o
 
 ifdef KBUILD_EXTMOD
 ifneq ($(wildcard $(src)/module-version.c),)

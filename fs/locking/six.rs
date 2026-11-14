@@ -2,8 +2,6 @@
 
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
-#[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-use super::raw::rust_debug_check_no_locks_freed;
 use super::lockdep::{trace_contention_begin, trace_contention_end};
 use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock, Shared, SharedGuard, SixIntent,
             SixWriteIntent};
@@ -1505,8 +1503,7 @@ pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: 
     unsafe {
         (*lock).state.store(0, Relaxed);
         let Ok(()) = init_at(wait_lock, &raw mut (*lock).wait_lock);
-        #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-        rust_debug_check_no_locks_freed(lock.cast(), size_of::<six_lock>() as c_ulong);
+        crate::os::lockdep::debug_check_no_locks_freed(lock.cast(), size_of::<six_lock>());
         LockdepMap::init(&raw mut (*lock).dep_map, name, key);
 
         /*

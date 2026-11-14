@@ -44,7 +44,8 @@ pub mod six;
 
 pub use crate::new_lock;
 pub use bytelock::ByteLock;
-pub use lockdep::{Lockdep, LockdepMap};
+pub use lockdep::Lockdep;
+pub use crate::os::lockdep::LockdepMap;
 pub use raw::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock_t};
 // for util/percpu.rs's LocalLockGuard and IrqGuard
 pub(crate) use raw::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
@@ -57,7 +58,6 @@ pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_N
                       PF_MEMALLOC_NOWARN};
 #[cfg(kernel)]
 pub(crate) use noio::memalloc_flags;
-pub(crate) use raw::rust_lockdep_set_notrack_class;
 pub use seqlock::SeqLock;
 pub use spinlock::SpinLock;
 pub use seqmutex::SeqMutexSeq;

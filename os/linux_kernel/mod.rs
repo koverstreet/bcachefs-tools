@@ -13,6 +13,7 @@ pub mod iov_iter;
 pub mod kernel;
 pub mod kobject;
 pub mod kthread;
+pub mod lockdep;
 pub mod ops;
 pub mod percpu;
 pub mod printk;

@@ -6,7 +6,7 @@
 //! read section with a GFP_NOWAIT allocation under it, where RT forbids
 //! allocating under a raw_spinlock_t.
 
-use super::raw::{rust_spin_lock_assert_held, rust_spin_lock_init};
+use super::raw::rust_spin_lock_init;
 #[cfg(not(kernel))]
 use super::raw::{rust_raw_spin_lock, rust_raw_spin_unlock};
 use super::{MemallocFlags, RawLock, RawLockBase, RawMovableLock};
@@ -53,6 +53,6 @@ unsafe impl RawLock for SpinLock {
     }
 
     unsafe fn assert_held(&self) {
-        unsafe { rust_spin_lock_assert_held(self.0.as_ptr().cast()) }
+        crate::os::lockdep::spin_lock_assert_held(&self.0)
     }
 }

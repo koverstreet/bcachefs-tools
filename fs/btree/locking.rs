@@ -17,8 +17,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::{__six_lock_init, six_lock_counts, six_trylock_ip, SixHold};
-use crate::locking::{memalloc_flags_restore, memalloc_flags_save, rust_lockdep_set_notrack_class, AsLocked, Exclusive,
-                     ExclusiveGuard, Locked, RawTimedLock, PF_MEMALLOC_NOIO};
+use crate::locking::{memalloc_flags_restore, memalloc_flags_save, AsLocked, Exclusive, ExclusiveGuard, Locked, RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::util::place::Placed;
 use crate::prt;
 use crate::debug::trace::{events, TraceEvent};
@@ -1349,7 +1348,7 @@ pub unsafe fn bch2_btree_lock_init(b: *mut c::btree_bkey_cached_common, flags: c
     let lock = unsafe { &raw mut (*b).lock };
     unsafe {
         __six_lock_init(lock.cast(), c"b->c.lock".as_ptr().cast(), crate::new_lock!(@key), flags, gfp);
-        rust_lockdep_set_notrack_class((&raw mut (*lock.cast::<c::six_lock>()).dep_map).cast());
+        (*lock.cast::<c::six_lock>()).dep_map.set_notrack_class();
     }
 }
 

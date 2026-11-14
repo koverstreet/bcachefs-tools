@@ -12,6 +12,7 @@ pub mod file;
 pub mod kernel;
 pub mod kobject;
 pub mod kthread;
+pub mod lockdep;
 pub mod percpu;
 pub mod printk;
 pub mod sched;

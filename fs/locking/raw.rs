@@ -10,8 +10,8 @@
 //! them as written - and Locked::from_c() borrows one soundly.
 //!
 //! What C has as a macro or a static inline in one build or the other -
-//! initializing in a lockdep class, lockdep's asserts, spin_lock_irqsave() -
-//! Rust calls through locking.c's rust_* functions.
+//! initializing in a lockdep class, spin_lock_irqsave() - Rust calls through
+//! locking.c's rust_* functions.
 
 #![allow(non_camel_case_types)]
 
@@ -47,27 +47,18 @@ unsafe impl ::pin_init::Zeroable for rw_semaphore {}
 unsafe impl ::pin_init::Zeroable for percpu_rw_semaphore {}
 
 pub use crate::c::{
-    rust_lockdep_set_notrack_class, rust_mutex_init, rust_mutex_assert_held,
+    rust_mutex_init,
     rust_spin_lock_init, rust_spin_lock_irqsave, rust_spin_lock_irqsave_nested,
-    rust_spin_unlock_irqrestore, rust_spin_lock_assert_held,
-    rust_raw_spin_lock_init, rust_raw_spin_lock, rust_raw_spin_unlock, rust_raw_spin_lock_assert_held,
+    rust_spin_unlock_irqrestore,
+    rust_raw_spin_lock_init, rust_raw_spin_lock, rust_raw_spin_unlock,
     rust_trace_contention_begin, rust_trace_contention_end,
     rust_local_lock_init, rust_local_lock_irqsave, rust_local_unlock_irqrestore,
     rust_local_irq_save, rust_local_irq_restore,
-    rust_init_rwsem, rust_rwsem_assert_held, rust_rwsem_assert_held_write,
+    rust_init_rwsem,
     rust_percpu_init_rwsem, rust_percpu_free_rwsem, rust_percpu_down_read, rust_percpu_up_read,
     rust_percpu_down_write, rust_percpu_up_write,
-    rust_percpu_rwsem_assert_held, rust_percpu_rwsem_assert_held_write,
 };
-
-// lockdep, and the contention tracepoints, for a lock whose state is ours
-// - six - so no C lock tells them: as C's lock_acquire() and the rest. A
-// @map is a struct lockdep_map, which userspace hasn't
-#[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-pub use crate::c::{
-    rust_lockdep_init_map, rust_lock_acquire, rust_lock_release, rust_lock_contended,
-    rust_lock_acquired, rust_debug_check_no_locks_freed,
-};
+use crate::os::lockdep;
 
 // ── struct mutex ─────────────────────────────────────────────────────────
 
@@ -107,7 +98,7 @@ unsafe impl RawLock for c::mutex {
     }
 
     unsafe fn assert_held(&self) {
-        unsafe { rust_mutex_assert_held(self.as_ptr().cast()) }
+        lockdep::mutex_assert_held(self)
     }
 }
 
@@ -160,7 +151,7 @@ unsafe impl RawLock for c::spinlock_t {
     }
 
     unsafe fn assert_held(&self) {
-        unsafe { rust_spin_lock_assert_held(self.as_ptr().cast()) }
+        lockdep::spin_lock_assert_held(self)
     }
 }
 
@@ -198,7 +189,7 @@ unsafe impl RawLock for c::raw_spinlock_t {
     }
 
     unsafe fn assert_held(&self) {
-        unsafe { rust_raw_spin_lock_assert_held(self.0.as_ptr().cast()) }
+        lockdep::raw_spin_lock_assert_held(self)
     }
 }
 
@@ -224,7 +215,7 @@ unsafe impl RawLock for c::rw_semaphore {
     }
 
     unsafe fn assert_held(&self) {
-        unsafe { rust_rwsem_assert_held_write(self.as_ptr().cast()) }
+        lockdep::rwsem_assert_held_write(self)
     }
 }
 
@@ -246,7 +237,7 @@ unsafe impl RawTryReadLock for c::rw_semaphore {
 
 unsafe impl RawRwLock for c::rw_semaphore {
     unsafe fn assert_held_any(&self) {
-        unsafe { rust_rwsem_assert_held(self.as_ptr().cast()) }
+        lockdep::rwsem_assert_held(self)
     }
 }
 
@@ -276,7 +267,7 @@ unsafe impl RawLock for c::percpu_rw_semaphore {
     }
 
     unsafe fn assert_held(&self) {
-        unsafe { rust_percpu_rwsem_assert_held_write(self.as_ptr().cast()) }
+        lockdep::percpu_rwsem_assert_held_write(self)
     }
 }
 
@@ -292,6 +283,6 @@ unsafe impl RawReadLock for c::percpu_rw_semaphore {
 
 unsafe impl RawRwLock for c::percpu_rw_semaphore {
     unsafe fn assert_held_any(&self) {
-        unsafe { rust_percpu_rwsem_assert_held(self.as_ptr().cast()) }
+        lockdep::percpu_rwsem_assert_held(self)
     }
 }

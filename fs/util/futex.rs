@@ -83,10 +83,7 @@ fn bucket(addr: usize) -> &'static Bucket {
 
 /// Before anything can wait: at module init, in both builds.
 pub fn bch2_futex_init() {
-    #[cfg(kernel)]
-    let key = ::kernel::static_lock_class!().as_ptr().cast();
-    #[cfg(not(kernel))]
-    let key = ptr::null_mut();
+    let key = crate::lock_class_key!();
 
     for b in &TABLE.0 {
         // SAFETY: zeroed, and nothing can take it until we return; static

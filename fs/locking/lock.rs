@@ -989,13 +989,9 @@ impl<G, P, L> crate::typeinfo::TypeInfo for LockedBy<G, P, L> {
 /// Locked::new_init().
 #[macro_export]
 macro_rules! new_lock {
-    (@key) => {{
-        #[cfg(kernel)]
-        let key = ::kernel::static_lock_class!().as_ptr().cast();
-        #[cfg(not(kernel))]
-        let key = ::core::ptr::null_mut();
-        key
-    }};
+    (@key) => {
+        $crate::lock_class_key!()
+    };
     (@init $g:expr, $p:expr, $name:expr) => {{
         let key = $crate::new_lock!(@key);
         let g = $g;
