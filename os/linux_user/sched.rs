@@ -70,6 +70,18 @@ pub fn memalloc_flags_for_gfp(_gfp: c::gfp_t) -> u32 {
     0
 }
 
+/// This task's state, @state, ordered before what it then checks: as
+/// set_current_state()'s smp_store_mb().
+pub fn set_current_state(state: c_uint) {
+    self::state(current()).store(state, Relaxed);
+    fence(SeqCst);
+}
+
+/// This task running again: __set_current_state(TASK_RUNNING).
+pub fn set_current_state_running() {
+    self::state(current()).store(TASK_RUNNING, Relaxed);
+}
+
 /// Nothing here can't sleep.
 #[inline(always)]
 pub fn might_sleep() {}

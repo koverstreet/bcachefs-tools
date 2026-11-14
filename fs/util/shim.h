@@ -21,8 +21,6 @@ void *rust_bio_pages_alloc(size_t size, gfp_t gfp);
 void rust_bio_pages_free(void *p, size_t size);
 void rust_kfree_rcu_mightsleep(void *p);
 
-void bch2_set_current_state(unsigned int state);
-void bch2_set_current_state_running(void);
 
 /* rcu.c's: init_srcu_struct() is a macro under lockdep */
 int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key);
