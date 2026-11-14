@@ -303,7 +303,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
             // gc already counted the bucket as journal when it marked it:
             // move it over, as marking does
             t.gc_bucket_mod(&ca, g, UpdateTriggerFlags::GC, |a| {
-                a.data_type      = data_type.0 as u8;
+                a.data_type.set(data_type);
                 a.stripe_sectors = 0;
                 a.dirty_sectors  = 0;
                 a.cached_sectors = 0;
@@ -328,7 +328,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
         // Left to check_extents_to_backpointers() to resolve; counted as
         // `multiple` meanwhile, as the alloc key gc writes will say
         t.gc_bucket_mod(&ca, g, UpdateTriggerFlags::GC, |a| {
-            a.data_type = DataType::multiple.0 as u8;
+            a.data_type.set(DataType::multiple);
             Ok(())
         })?;
     }

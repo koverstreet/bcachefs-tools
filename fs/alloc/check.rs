@@ -215,7 +215,7 @@ fn check_alloc_key<'t>(
 
     let mut a = t.alloc_to_v4_mut(alloc_k)?;
 
-    if DataType(a.v().data_type.into()) == DataType::need_discard {
+    if a.v().data_type() == DataType::need_discard {
         iters.discard.set_pos(NeedDiscardPos::new(bucket, a.v()).to_bpos());
         let (discard_iter, k) = iters.discard.peek_slot_shared(t)?;
         let missing = k.k.key_type() != BkeyType::set;
@@ -233,7 +233,7 @@ fn check_alloc_key<'t>(
     iters.freespace.set_pos(FreespacePos::new(bucket, a.v()).to_bpos());
     let (freespace_iter, k) = iters.freespace.peek_slot_shared(t)?;
 
-    let is_free = DataType(a.v().data_type.into()) == DataType::free;
+    let is_free = a.v().data_type() == DataType::free;
     if (k.k.type_ != 0) != is_free {
         if !need_discard_or_freespace_err(t, alloc_k, !is_free, false, true)? {
             return Ok(());
@@ -444,7 +444,7 @@ fn check_discard_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, last_flushe
     let alloc_k = alloc_iter.peek_slot(t)?.expect("a slot always has a key");
     let a = alloc_to_v4(alloc_k);
 
-    if DataType(a.data_type.into()) != DataType::need_discard ||
+    if a.data_type() != DataType::need_discard ||
        a.journal_seq_empty != p.journal_seq_empty {
         last_flushed.maybe_flush(t, alloc_k)?;
 
@@ -513,7 +513,7 @@ pub(crate) fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
 
         let a = alloc_to_v4(alloc_k);
         let want = FreespacePos::new(pos.bucket, &a);
-        if DataType(a.data_type.into()) != DataType::free || pos != want {
+        if a.data_type() != DataType::free || pos != want {
             return bad(fsck_err_flags!(t, POS_MIN, flags, id::need_discard_freespace_key_bad,
                                        "{}\nincorrectly set at {}:{}:{}:0 (genbits {} should be {})",
                                        alloc_k.to_text(fs), iter.btree(), { iter.pos().inode },
@@ -698,7 +698,7 @@ fn check_alloc_to_lru_ref<'t>(
         }
     }
 
-    if DataType(a.data_type.into()) == DataType::cached {
+    if a.data_type() == DataType::cached {
         if fsck_err_on!(t, a.io_time[READ] == 0, id::alloc_key_cached_but_read_time_zero,
                         "cached bucket with read_time 0\n{}", alloc_k.to_text(fs))? {
             let mut a_mut = t.alloc_to_v4_mut(alloc_k)?;

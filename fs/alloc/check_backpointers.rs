@@ -414,7 +414,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     // the bucket - from 1.40, when each stripe has its own. A parity bucket's
     // only backpointers are the stripes', so its sector counts aren't checked
     // at all.
-    let data_type = DataType(a.data_type.into());
+    let data_type = a.data_type();
     let count_stripes = fs.version() >= MetadataVersion::inline_data_csum;
     let check_sectors = data_type != DataType::parity;
 
@@ -485,7 +485,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         let mut msg = LogMsg::new(fs);
         prt!(&mut msg, "more backpointers than the bucket accounts for, but found no bad backpointers\n\
                         bucket {}:{} data type ", { p.inode }, { p.offset });
-        DataType(a.data_type.into()).to_text(&mut msg);
+        a.data_type().to_text(&mut msg);
         prt!(&mut msg, ", counters\n");
         if sectors.dirty > have.dirty {
             prt!(&mut msg, "dirty: {} > {}\n", sectors.dirty, have.dirty);
@@ -519,7 +519,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     // Pre upgrade, we expect all the buckets to be wrong, a write buffer
     // flush is pointless:
     if !before_bucket_gen {
-        if DataType(a.data_type.into()) == DataType::btree {
+        if a.data_type() == DataType::btree {
             t.unlock_long();
             fs.btree_interior_updates_flush();
         }
@@ -695,7 +695,7 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &Dev, bucket: u64) -> 
     let mut iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::empty());
     let a = alloc_to_v4(iter.peek_slot(t)?.expect("a slot always has a key"));
 
-    if DataType(a.data_type.into()) != DataType::multiple {
+    if a.data_type() != DataType::multiple {
         return Ok(());
     }
 
@@ -719,13 +719,13 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &Dev, bucket: u64) -> 
 
     let mut new = t.start_alloc_update(bucket, UpdateTriggerFlags::empty())?;
     let a = new.v_mut();
-    a.data_type = DataType::free.0 as u8;
+    a.data_type.set(DataType::free);
     a.set_data_type(data_type);
 
     let mut msg = LogMsg::new(fs);
     prt!(&mut msg, "bucket {}:{}: double allocation resolved, data type multiple -> ",
          { bucket.inode }, { bucket.offset });
-    DataType(a.data_type.into()).to_text(&mut msg);
+    a.data_type().to_text(&mut msg);
     Ok(())
 }
 

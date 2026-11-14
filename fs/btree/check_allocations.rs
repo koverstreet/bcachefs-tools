@@ -230,7 +230,7 @@ fn alloc_write_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, ca: &Dev, k: 
          * we don't run it twice:
          */
         let mut m = g.lock.lock();
-        m.set_data_type(gc.data_type);
+        m.set_data_type(gc.data_type());
         m.dirty_sectors = gc.dirty_sectors;
     }
 

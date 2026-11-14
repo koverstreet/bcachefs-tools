@@ -649,7 +649,7 @@ pub fn alloc_to_v4(k: BkeySC<'_>) -> c::AllocV4 {
         a.set_need_discard(u.need_discard);
         a.generation           = u.generation;
         a.oldest_gen           = u.oldest_gen;
-        a.data_type            = u.data_type;
+        a.data_type.set(DataType(u.data_type.into()));
         a.dirty_sectors        = u.dirty_sectors;
         a.cached_sectors       = u.cached_sectors;
         a.io_time              = [u.read_time, u.write_time];
@@ -742,8 +742,8 @@ fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       a.nr_backpointers())?;
 
     let data_type = a.alloc_data_type(a.data_type());
-    bkey_fsck_err_on!(v, data_type.0 != u32::from(a.data_type), id::alloc_key_data_type_bad,
-                      "invalid data type (got {} should be {})", a.data_type, data_type.0)?;
+    bkey_fsck_err_on!(v, data_type != a.data_type(), id::alloc_key_data_type_bad,
+                      "invalid data type (got {} should be {})", a.data_type().0, data_type.0)?;
 
     for (rw, name) in [(READ, "read"), (WRITE, "write")] {
         bkey_fsck_err_on!(v, a.io_time[rw] > c::LRU_TIME_MAX, id::alloc_key_io_time_bad,
@@ -875,7 +875,7 @@ fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>, a: &c::A
 
 impl c::AllocV4 {
     pub(crate) fn data_type(&self) -> DataType {
-        DataType(self.data_type.into())
+        self.data_type.get()
     }
 
     /// bch2_bucket_sectors_dirty(): u32s added as C's, wrapping.
@@ -922,7 +922,7 @@ impl c::AllocV4 {
     /// fraction of 1 << 31, for movable data with room it isn't using:
     /// alloc_lru_idx_fragmentation().
     pub fn lru_idx_fragmentation(&self, ca: &Dev) -> u64 {
-        if self.data_type >= c::DataType::NR as u8 ||
+        if self.data_type().0 >= c::DataType::NR ||
            !self.data_type().is_movable() ||
            self.sectors_fragmented(ca) == 0 {
             return 0;
@@ -972,7 +972,8 @@ impl c::AllocV4 {
     }
 
     pub fn set_data_type(&mut self, t: DataType) {
-        self.data_type = self.alloc_data_type(t).0 as u8;
+        let t = self.alloc_data_type(t);
+        self.data_type.set(t);
     }
 }
 
@@ -1473,7 +1474,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         // way - the WARN below catches one that does
         if ceased(nonempty, &old_a, new_a) &&
            old_a.data_type() != DataType::sb && old_a.data_type() != DataType::journal {
-            new_a.data_type = DataType::need_discard.0 as u8;
+            new_a.data_type.set(DataType::need_discard);
         }
 
         if became(nonempty, &old_a, new_a) {
@@ -1534,7 +1535,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
                 u8::from(new_a.need_discard()), new_a.journal_seq_nonempty, new_a.journal_seq_empty,
                 as_sc(&new_key(new_a)).to_text(fs))?;
             if new_a.need_discard() {
-                new_a.data_type = DataType::need_discard.0 as u8;
+                new_a.data_type.set(DataType::need_discard);
             } else {
                 new_a.journal_seq_nonempty = 0;
                 new_a.journal_seq_empty = 0;

@@ -79,7 +79,7 @@ nest! {
         #>[bitfield(u8)]
         pub bits: pub struct bucket_bits {
             gen_valid: u1,
-            data_type: u7,
+            #[bits(7)] data_type: c::DataType,
         },
         pub generation: u8,
         pub __pad: u8,
@@ -314,7 +314,7 @@ impl c::BucketData {
     /// Into @a, the rest of @a as it was: __bucket_m_to_alloc().
     pub fn to_alloc(self, a: &mut c::AllocV4) {
         a.generation     = self.generation;
-        a.data_type      = self.data_type();
+        a.data_type.set(self.data_type());
         a.stripe_sectors = self.stripe_sectors;
         a.dirty_sectors  = self.dirty_sectors;
         a.cached_sectors = self.cached_sectors;
@@ -330,7 +330,7 @@ impl c::BucketData {
     /// From @a: alloc_to_bucket().
     pub fn set_alloc(&mut self, a: &c::AllocV4) {
         self.generation     = a.generation;
-        self.set_data_type(a.data_type);
+        self.set_data_type(a.data_type());
         self.stripe_sectors = a.stripe_sectors;
         self.dirty_sectors  = a.dirty_sectors;
         self.cached_sectors = a.cached_sectors;
@@ -349,13 +349,13 @@ impl TransAttempt<'_, '_> {
     #[allow(clippy::too_many_arguments)]
     pub fn bucket_ref_update(&self, ca: &Dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
                              sectors: i64, ptr_data_type: DataType, b_gen: u8,
-                             bucket_data_type: &mut u8, bucket_sectors: &mut u32) -> Result<(), BchError> {
+                             bucket_data_type: &mut DataType, bucket_sectors: &mut u32) -> Result<(), BchError> {
         assert!(sectors != 0);
 
         // as C's: a negative @sectors past the count wraps, and is past U32_MAX
         let new = u64::from(*bucket_sectors).wrapping_add(sectors as u64);
         if b_gen != ptr.generation() ||
-           DataType(u32::from(*bucket_data_type)).mismatches(ptr_data_type) ||
+           bucket_data_type.mismatches(ptr_data_type) ||
            new > u64::from(u32::MAX) {
             return self.bucket_ref_update_slowpath(ca, k, ptr, sectors, ptr_data_type, b_gen,
                                                    bucket_data_type, bucket_sectors);
@@ -370,12 +370,12 @@ impl TransAttempt<'_, '_> {
     #[allow(clippy::too_many_arguments)]
     fn bucket_ref_update_slowpath(&self, ca: &Dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
                                   sectors: i64, ptr_data_type: DataType, b_gen: u8,
-                                  bucket_data_type: &mut u8, bucket_sectors: &mut u32) -> Result<(), BchError> {
+                                  bucket_data_type: &mut DataType, bucket_sectors: &mut u32) -> Result<(), BchError> {
         let fs = self.fs();
         let (dev, b, ptr_gen) = (ptr.dev(), ca.ptr_bucket(ptr), ptr.generation());
         let inserting = sectors > 0;
         // the bucket's type, or the pointer's if it hasn't one
-        let type_str = |t: u8| data_type_str(if t != 0 { DataType(t.into()) } else { ptr_data_type });
+        let type_str = |t: DataType| data_type_str(if t != DataType::free { t } else { ptr_data_type });
 
         assert!(sectors != 0);
 
@@ -409,11 +409,11 @@ impl TransAttempt<'_, '_> {
                 type_str(*bucket_data_type)));
         }
 
-        if DataType(u32::from(*bucket_data_type)).mismatches(ptr_data_type) {
+        if bucket_data_type.mismatches(ptr_data_type) {
             self.bucket_ref_update_err(k, false, id::ptr_bucket_data_type_mismatch, message!(
                 "bucket {dev}:{b} gen {b_gen} different types of data in same bucket: {}, {}",
-                data_type_str(DataType(u32::from(*bucket_data_type))), data_type_str(ptr_data_type)))?;
-            *bucket_data_type = DataType::multiple.0 as u8;
+                data_type_str(*bucket_data_type), data_type_str(ptr_data_type)))?;
+            *bucket_data_type = DataType::multiple;
         }
 
         let new = u64::from(*bucket_sectors).wrapping_add(sectors as u64);
@@ -469,13 +469,13 @@ fn mark_pointer(t: &TransAttempt<'_, '_>, ca: &Dev, k: BkeySC<'_>, p: &c::extent
                 sectors: i64, ptr_data_type: DataType, a: &mut c::AllocV4, insert: bool)
     -> Result<(), BchError>
 {
-    let (generation, mut bucket_data_type) = (a.generation, a.data_type);
+    let (generation, mut bucket_data_type) = (a.generation, a.data_type());
     let dst = if p.has_ec                { &mut a.stripe_sectors }
               else if p.ptr.cached() == 0 { &mut a.dirty_sectors }
               else                         { &mut a.cached_sectors };
     let ret = t.bucket_ref_update(ca, k, &p.ptr, sectors, ptr_data_type, generation, &mut bucket_data_type, dst);
     // as C's, even on error: a mismatch it let through is BCH_DATA_multiple
-    a.data_type = bucket_data_type;
+    a.data_type.set(bucket_data_type);
     ret?;
 
     if insert {
@@ -829,11 +829,11 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64,
     let k = iter.peek_slot(t)?.expect("peek_slot() has a key at every position");
     let mut a = t.alloc_to_v4_mut(k)?;
 
-    let cur = a.v().data_type;
-    if cur != 0 && data_type.0 != 0 && u32::from(cur) != data_type.0 {
+    let cur = a.v().data_type();
+    if cur != DataType::free && data_type != DataType::free && cur != data_type {
         let mut msg = LogMsg::new(fs);
         prt!(&mut msg, "bucket {}:{b} gen {} different types of data in same bucket: {}, {}\nwhile marking {}\n",
-             ca.dev_idx, a.v().generation, data_type_str(DataType(cur.into())),
+             ca.dev_idx, a.v().generation, data_type_str(cur),
              data_type_str(data_type), data_type_str(data_type));
         count_fsck_err(fs, id::bucket_metadata_type_mismatch, &mut msg);
         passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
@@ -841,8 +841,8 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64,
         return fs.throw(Errcode::BCH_ERR_metadata_bucket_inconsistency);
     }
 
-    if u32::from(cur) != data_type.0 || a.v().dirty_sectors != sectors {
-        a.v_mut().data_type     = data_type.0 as u8;
+    if cur != data_type || a.v().dirty_sectors != sectors {
+        a.v_mut().data_type.set(data_type);
         a.v_mut().dirty_sectors = sectors;
         t.update(&iter, &a, UpdateTriggerFlags::empty())?;
     }
@@ -861,8 +861,8 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64, data_type
     };
 
     t.gc_bucket_mod(ca, g, flags, |a| {
-        let cur = DataType(a.data_type.into());
-        if a.data_type != 0 && cur != data_type {
+        let cur = a.data_type();
+        if cur != DataType::free && cur != data_type {
             fs_inconsistent(fs, message!("different types of data in same bucket: {}, {}",
                                          data_type_str(cur), data_type_str(data_type)));
             return fs.throw(Errcode::BCH_ERR_metadata_bucket_inconsistency);
@@ -870,12 +870,12 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64, data_type
         if u64::from(a.dirty_sectors) + u64::from(sectors) > u64::from(ca.mi.get().bucket_size) {
             fs_inconsistent(fs, message!(
                 "bucket {}:{b} gen {} data type {} sector count overflow: {} + {sectors} > bucket size",
-                ca.dev_idx, a.generation, data_type_str(if a.data_type != 0 { cur } else { data_type }),
+                ca.dev_idx, a.generation, data_type_str(if cur != DataType::free { cur } else { data_type }),
                 a.dirty_sectors));
             return fs.throw(Errcode::BCH_ERR_metadata_bucket_inconsistency);
         }
 
-        a.data_type      = data_type.0 as u8;
+        a.data_type.set(data_type);
         a.dirty_sectors += sectors;
         Ok(())
     })

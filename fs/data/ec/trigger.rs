@@ -210,11 +210,11 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &Dev, s: StripeK<'_>, 
     let sectors = if parity { i64::from(v.sectors.get()) } else { 0 };
     if sectors != 0 {
         let sectors = if deleting { -sectors } else { sectors };
-        let (generation, mut bucket_data_type) = (a.generation, a.data_type);
+        let (generation, mut bucket_data_type) = (a.generation, a.data_type());
         let ret = t.bucket_ref_update(ca, s.untyped(), ptr, sectors, data_type, generation, &mut bucket_data_type,
                                       &mut a.dirty_sectors);
         // as C's, even on error
-        a.data_type = bucket_data_type;
+        a.data_type.set(bucket_data_type);
         ret?;
     }
 

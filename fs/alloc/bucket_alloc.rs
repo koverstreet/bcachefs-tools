@@ -257,7 +257,7 @@ impl TransAttempt<'_, '_> {
 
         loop {
             let Some(k) = iter.peek_slot(self)? else { return Ok(None) };
-            let (p, free) = (k.k.p, alloc_to_v4(k).data_type == DataType::free.0 as u8);
+            let (p, free) = (k.k.p, alloc_to_v4(k).data_type() == DataType::free);
             let b = p.offset;
             *alloc_cursor = b;
 
@@ -282,7 +282,7 @@ impl TransAttempt<'_, '_> {
                     BtreeIterFlags::CACHED | BtreeIterFlags::NOPRESERVE | BtreeIterFlags::COMMITTED);
                 let a = alloc_to_v4(citer.peek_slot(self)?.expect("a key or a hole, at a bucket"));
 
-                if a.data_type == DataType::free.0 as u8 {
+                if a.data_type() == DataType::free {
                     req.counters.buckets_seen += 1;
 
                     if fs.may_alloc_bucket(req, p) && fs.may_alloc_bucket_journal_seq(req, a.journal_seq_empty) {

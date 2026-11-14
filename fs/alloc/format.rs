@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default, Le64};
+use crate::types::{c_default, Le8, Le64};
 use cstruct_macros::{bitfield, xmacro, grown, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View,
                      SizedVal};
 
@@ -108,7 +108,7 @@ pub struct AllocV4 {
     pub flags: AllocV4Flags,
     pub generation: u8,
     pub oldest_gen: u8,
-    pub data_type: u8,
+    pub data_type: Le8<c::DataType>,
     pub stripe_redundancy_obsolete: u8,
     pub dirty_sectors: u32,
     pub cached_sectors: u32,

@@ -407,7 +407,7 @@ impl<'a> Worker<'a> {
         let mut iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::CACHED);
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
         let a = t.alloc_to_v4_mut(k)?;
-        let (seq_empty, data_type) = (a.v().journal_seq_empty, a.v().data_type);
+        let (seq_empty, data_type) = (a.v().journal_seq_empty, a.v().data_type());
         let (flushed, rewind_ondisk) = (fs.journal.lock.flushed_seq_ondisk.get(), fs.journal.lock.rewind_seq_ondisk.get());
 
         // Why not yet, if not: the count it goes in
@@ -419,7 +419,7 @@ impl<'a> Worker<'a> {
             Some(|s| &mut s.need_journal_commit)
         } else if seq_empty >= rewind_ondisk {
             Some(|s| &mut s.need_rewind_advance)
-        } else if data_type != DataType::need_discard.0 as u8 {
+        } else if data_type != DataType::need_discard {
             // an expected race: the write buffer
             Some(|s| &mut s.bad_data_type)
         } else if fs.bucket_is_open_safe(bucket.inode as u32, bucket.offset) {
@@ -466,7 +466,7 @@ impl<'a> Worker<'a> {
     {
         let fs = t.fs();
 
-        if a.v().data_type != DataType::need_discard.0 as u8 {
+        if a.v().data_type() != DataType::need_discard {
             let mut msg = LogMsg::new(fs);
             prt!(msg, "Discarded bucket that is no longer BCH_DATA_need_discard!\n{}", a.as_sc().to_text(fs));
             fs.emergency_read_only(&mut msg);
@@ -901,7 +901,7 @@ fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &Dev, lru_k: BkeySC<'_>,
 
     // lru_idx_read() is nonzero only for a cached bucket, and an lru entry's
     // validate refuses one at time 0
-    assert_eq!(a.data_type, DataType::cached.0 as u8, "a read lru entry for a bucket not cached");
+    assert_eq!(a.data_type(), DataType::cached, "a read lru entry for a bucket not cached");
     assert_eq!({ a.dirty_sectors }, 0, "a read lru entry for a bucket with dirty data");
 
     if a.cached_sectors == 0 {
