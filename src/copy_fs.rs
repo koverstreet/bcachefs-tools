@@ -789,7 +789,7 @@ unsafe extern "C" fn readdir_actor(
     _pos: i64,
     inum: u64,
     dtype: u32,
-) -> i32 {
+) -> bool {
     let (entries, name_slice) = unsafe {
         let rctx = &mut *(ctx as *mut ReadDirCtx);
         (
@@ -799,7 +799,7 @@ unsafe extern "C" fn readdir_actor(
     };
     let cname = CString::new(name_slice).unwrap_or_else(|_| CString::new("?").unwrap());
     entries.push(DirEntry { inum, dtype: dtype as u8, name: cname });
-    0
+    true
 }
 
 fn simple_readdir(

@@ -173,7 +173,7 @@ struct FuseDirContext<'r> {
 
 unsafe extern "C" fn fuse_filldir(ctx: *mut c::dir_context, name: *const std::ffi::c_char,
                                   name_len: std::ffi::c_int, pos: bcachefs_kernel::c::loff_t, ino: u64,
-                                  dtype: std::ffi::c_uint) -> std::ffi::c_int {
+                                  dtype: std::ffi::c_uint) -> bool {
     let ctx = unsafe { &mut *ctx.cast::<FuseDirContext<'_>>() };
     let name = OsStr::from_bytes(unsafe { std::slice::from_raw_parts(name.cast(), name_len as usize) });
     // A fuse dirent's offset field is the cookie to resume the listing
@@ -182,7 +182,7 @@ unsafe extern "C" fn fuse_filldir(ctx: *mut c::dir_context, name: *const std::ff
     // full reply buffer, ctx->pos never advances past this entry and the
     // next readdir re-reads it.
     let full = ctx.reply.add(INodeNo(ino), pos as u64 + 1, dtype_to_filetype(dtype), name);
-    if full { -1 } else { 0 }
+    !full
 }
 
 fn dtype_to_filetype(dtype: u32) -> FileType {

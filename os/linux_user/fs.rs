@@ -64,7 +64,7 @@ pub struct file_operations {
  * This allows the kernel to read directories into kernel space or
  * to have different dirent layouts depending on the binary type.
  */
-pub type filldir_t = Option<unsafe extern "C" fn(*mut dir_context, *const c_char, c_int, loff_t, u64, c_uint) -> c_int>;
+pub type filldir_t = Option<unsafe extern "C" fn(*mut dir_context, *const c_char, c_int, loff_t, u64, c_uint) -> bool>;
 
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, ::pin_init::MaybeZeroable)]

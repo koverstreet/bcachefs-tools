@@ -539,9 +539,6 @@ impl<'c> DirContext<'c> {
             let actor = (*ctx).actor.expect("a dir_context's actor");
             actor(ctx, name.as_ptr().cast(), name.len() as c_int, (*ctx).pos as _, target.inum, d_type)
         };
-        // the userspace shim's actor returns 0 to continue, the kernel's true
-        #[cfg(not(kernel))]
-        let emitted = emitted == 0;
 
         if emitted {
             unsafe { (*ctx).pos = (offset + 1) as _ };
