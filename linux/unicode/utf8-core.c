@@ -1,5 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#include <linux/err.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -161,7 +160,7 @@ struct unicode_map *utf8_load(unsigned int version)
 
 	um = calloc(1, sizeof(struct unicode_map));
 	if (!um)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 	um->version = version;
 
 	um->tables = &utf8_data_table;
@@ -182,7 +181,7 @@ struct unicode_map *utf8_load(unsigned int version)
 
 out_free_um:
 	free(um);
-	return ERR_PTR(-EINVAL);
+	return NULL;
 }
 EXPORT_SYMBOL(utf8_load);
 
