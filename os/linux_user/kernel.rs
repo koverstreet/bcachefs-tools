@@ -20,6 +20,11 @@ pub fn dump_stack() {
     crate::util::backtrace::dump_stack()
 }
 
+/// Nothing signals a thread here.
+pub fn fatal_signal_pending() -> bool {
+    false
+}
+
 /// The jiffies count: C's macro computed it from sched_clock(), which is
 /// local_clock() here.
 pub fn jiffies() -> core::ffi::c_ulong {

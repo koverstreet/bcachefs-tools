@@ -12,7 +12,9 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/sched/debug.h>
+#ifdef __KERNEL__
 #include <linux/sched/signal.h>
+#endif
 #include <linux/static_key.h>
 #include <linux/version.h>
 
@@ -181,12 +183,12 @@ void bch2_cond_resched(void)
 	cond_resched();
 }
 
+#ifdef __KERNEL__
 bool bch2_fatal_signal_pending(void)
 {
 	return fatal_signal_pending(current);
 }
 
-#ifdef __KERNEL__
 unsigned bch2_num_online_cpus(void)
 {
 	return num_online_cpus();
@@ -241,10 +243,12 @@ void bch2_set_current_state_running(void)
 	__set_current_state(TASK_RUNNING);
 }
 
+#ifdef __KERNEL__
 bool bch2_signal_pending_state(unsigned int state)
 {
 	return signal_pending_state(state, current);
 }
+#endif
 
 bool bch2_need_resched(void)
 {

@@ -31,6 +31,12 @@ pub fn dump_stack() {
     unsafe { c::dump_stack() }
 }
 
+/// Whether this task has been sent a fatal signal: as
+/// fatal_signal_pending(current).
+pub fn fatal_signal_pending() -> bool {
+    unsafe { c::bch2_fatal_signal_pending() }
+}
+
 /// The jiffies count: a variable the timer interrupt writes, read as
 /// READ_ONCE() would.
 pub fn jiffies() -> core::ffi::c_ulong {

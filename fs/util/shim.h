@@ -47,9 +47,9 @@ void rust_bio_pages_free(void *p, size_t size);
 void rust_kfree_rcu_mightsleep(void *p);
 
 void bch2_cond_resched(void);
-bool bch2_fatal_signal_pending(void);
 unsigned bch2_num_online_cpus(void);
 #ifdef __KERNEL__
+bool bch2_fatal_signal_pending(void);
 bool bch2_bdev_rot(struct block_device *bdev);
 #endif
 #ifdef __KERNEL__
@@ -61,7 +61,9 @@ bool bch2_kthread_should_stop(void);
 struct task_struct *bch2_current(void);
 void bch2_set_current_state(unsigned int state);
 void bch2_set_current_state_running(void);
+#ifdef __KERNEL__
 bool bch2_signal_pending_state(unsigned int state);
+#endif
 bool bch2_need_resched(void);
 #ifdef CONFIG_SMP
 bool bch2_owner_on_cpu(struct task_struct *owner);

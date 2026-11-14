@@ -208,12 +208,6 @@ pub const fn jiffies_to_msecs(j: core::ffi::c_ulong) -> core::ffi::c_uint {
     }
 }
 
-/// Whether this task has been sent a fatal signal: as
-/// fatal_signal_pending(current).
-pub fn fatal_signal_pending() -> bool {
-    unsafe { c::bch2_fatal_signal_pending() }
-}
-
 /// Wall-clock time, in seconds: ktime_get_real_seconds().
 pub fn ktime_get_real_seconds() -> i64 {
     unsafe { c::ktime_get_real_seconds() as i64 }
