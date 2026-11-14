@@ -185,8 +185,7 @@ impl<A: Elements> Mempool<A> {
                 continue;
             }
 
-            /* Userspace can always wait */
-            if cfg!(kernel) && !gfp.contains(flags::DIRECT_RECLAIM) {
+            if !gfp.contains(flags::DIRECT_RECLAIM) {
                 return Err(AllocError);
             }
 
