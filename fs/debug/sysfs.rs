@@ -586,10 +586,10 @@ fn compression_stats_to_text(c: &Fs, out: &mut Printbuf) {
     out.tabstops(&[12, 16, 16, 24]);
     write!(out, "type\tcompressed\runcompressed\raverage extent size\r\n");
 
-    for i in 1..c::CompressionType::NR {
-        let v = accounting::read(c, accounting::Compression { type_: i as u8 });
+    for t in (1..c::CompressionType::NR).map(CompressionType) {
+        let v = accounting::read(c, accounting::Compression { type_: t.into() });
 
-        prt!(out, "{}\t{}\r{}\r{}\r\n", CompressionType(i),
+        prt!(out, "{}\t{}\r{}\r{}\r\n", t,
              HumanReadable(v.compressed << 9),
              HumanReadable(v.uncompressed << 9),
              HumanReadable((v.uncompressed << 9).checked_div(v.nr_extents).unwrap_or(0)));

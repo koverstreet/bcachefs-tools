@@ -1592,7 +1592,7 @@ impl Dev {
         let fs = self.fs();
 
         trans_commit_do(fs, None, CommitFlags::empty(), |t| {
-            accounting::add(t, accounting::DevDataType { dev: self.dev_idx, data_type: DataType::free.0 as u8 },
+            accounting::add(t, accounting::DevDataType { dev: self.dev_idx, data_type: DataType::free.into() },
                             accounting::DevDataTypeCounters {
                                 buckets: new_nbuckets.wrapping_sub(old_nbuckets) as i64, sectors: 0, fragmented: 0,
                             }, false)

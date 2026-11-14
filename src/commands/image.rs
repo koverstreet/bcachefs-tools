@@ -265,9 +265,8 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
 
     // Compression stats
     let mut compression_header = false;
-    let comp_nr = CompressionType::NR;
-    for i in 1..comp_nr {
-        let v = accounting::read(fs, accounting::Compression { type_: i as u8 });
+    for t in (1..CompressionType::NR).map(CompressionType) {
+        let v = accounting::read(fs, accounting::Compression { type_: t.into() });
 
         if v.nr_extents == 0 {
             continue;
@@ -279,9 +278,9 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
         }
         compression_header = true;
 
-        write!(&mut buf, "{}\t{}\r", CompressionType(i), HumanReadable(v.compressed << 9));
+        write!(&mut buf, "{}\t{}\r", t, HumanReadable(v.compressed << 9));
 
-        if i == u32::from(CompressionType::incompressible) {
+        if t == CompressionType::incompressible {
             buf.newline();
             continue;
         }

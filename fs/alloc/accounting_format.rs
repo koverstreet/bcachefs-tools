@@ -6,6 +6,7 @@ use crate::cstructs::c;
 use crate::util::vstructs::Head;
 use cstruct_macros::{bch_enum, counters, tagged_union, whole, MaybeZeroable, Plain, TypeInfo};
 use crate::format::Bpos;
+use crate::types::Le8;
 
 /*
  * Disk accounting - KEY_TYPE_accounting - on disk format:
@@ -139,7 +140,7 @@ tagged_union! {
             #[counters(buckets, sectors, fragmented)]
             pub struct DevDataType {
                 pub dev: u8,
-                pub data_type: u8,
+                pub data_type: Le8<c::DataType>,
             }
         ) = 3,
 
@@ -157,7 +158,7 @@ tagged_union! {
             #[repr(C)]
             #[counters(nr_extents, uncompressed, compressed)]
             pub struct Compression {
-                pub type_: u8,
+                pub type_: Le8<c::CompressionType>,
             }
         ) = 4,
 

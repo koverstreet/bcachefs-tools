@@ -118,7 +118,7 @@ impl DevDataType {
     /// Its data type, if this version knows it: a newer version's are kept
     /// in the table, but not in a device's usage, which has no slot for them.
     pub fn known_data_type(&self) -> Option<DataType> {
-        let t = DataType(self.data_type.into());
+        let t = self.data_type.get();
         (t.0 < DataType::NR).then_some(t)
     }
 }
@@ -226,8 +226,8 @@ pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<
         Err(_) => {}
         Ok(A::persistent_reserved(a)) => write!(out, "replicas={}", a.nr_replicas),
         Ok(A::replicas(r)) => SbEntry::from(r).to_text(out),
-        Ok(A::dev_data_type(a)) => write!(out, "dev={} data_type={}", a.dev, DataType(a.data_type.into())),
-        Ok(A::compression(a)) => write!(out, "{}", CompressionType(a.type_.into())),
+        Ok(A::dev_data_type(a)) => write!(out, "dev={} data_type={}", a.dev, a.data_type.get()),
+        Ok(A::compression(a)) => write!(out, "{}", a.type_.get()),
         Ok(A::snapshot(a)) => {
             let (id, btree) = (a.id, format::Btree(a.btree));
             write!(out, "id={id} btree={btree}");
@@ -451,8 +451,8 @@ impl Fs {
     /// Device @ca's usage accounting, deleted: as it's removed.
     pub fn dev_usage_remove(&self, ca: &Dev) -> Result<(), BchError> {
         let trans = btree_trans!(self);
-        let at = |data_type| DiskAccountingPos::from_arm(DevDataType { dev: ca.dev_idx, data_type }).to_bpos();
-        let (start, end) = (at(0), at(u8::MAX));
+        let at = |t: DataType| DiskAccountingPos::from_arm(DevDataType { dev: ca.dev_idx, data_type: t.into() }).to_bpos();
+        let (start, end) = (at(DataType::free), at(DataType(u8::MAX.into())));
 
         trans.write_buffer_flush_sync()?;
         commit_do(&trans, None, CommitFlags::empty(), |t| {
@@ -484,7 +484,7 @@ pub fn dev_usage_init(ca: &Dev, gc: bool) -> Result<(), BchError> {
          * sees the non-gc counters, so the gc path keeps the plain
          * delta-add (cur stays zero).
          */
-        let arm = DevDataType { dev: ca.dev_idx, data_type: DataType::free.0 as u8 };
+        let arm = DevDataType { dev: ca.dev_idx, data_type: DataType::free.into() };
         let cur = if gc { DevDataTypeCounters::default() } else { read(fs, arm) };
         let mi = ca.mi.get();
         let nbuckets = mi.nbuckets.wrapping_sub(mi.first_bucket.into());

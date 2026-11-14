@@ -650,7 +650,7 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
         if !insert {
             v = v.map(i64::wrapping_neg);
         }
-        accounting::add(t, accounting::Compression { type_: type_.0 as u8 }, v, gc)
+        accounting::add(t, accounting::Compression { type_: type_.into() }, v, gc)
     };
     let one_extent = accounting::CompressionCounters { nr_extents: 1, ..Default::default() };
     let mut compression_type = CompressionType::none;

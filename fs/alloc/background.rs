@@ -1362,7 +1362,7 @@ fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, generation: u8) -> 
 
 fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &Dev, data_type: DataType,
                                 d: accounting::DevDataTypeCounters<i64>, gc: bool) -> Result<(), BchError> {
-    accounting::add(t, accounting::DevDataType { dev: ca.dev_idx, data_type: data_type.0 as u8 }, d, gc)
+    accounting::add(t, accounting::DevDataType { dev: ca.dev_idx, data_type: data_type.into() }, d, gc)
 }
 
 impl TransAttempt<'_, '_> {

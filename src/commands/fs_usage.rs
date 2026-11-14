@@ -4,7 +4,7 @@ use bch_bindgen::c;
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
-use crate::wrappers::accounting::{AccountingEntry, CompressionType, DiskAccountingType, ReconcileType};
+use crate::wrappers::accounting::{AccountingEntry, DiskAccountingType, ReconcileType};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::format::{DataType, MemberState, MetadataVersion};
 use bcachefs_kernel::util::vstructs::ArmError;
@@ -222,7 +222,7 @@ fn fs_usage_v1_to_text(
 
                 for entry in &compr {
                     if let Ok(Acct::compression(r)) = entry.pos.get() {
-                        CompressionType(r.type_.into()).to_text(sub);
+                        r.type_.get().to_text(sub);
                         write!(sub, "\t");
 
                         let nr_extents = entry.counter(0);
