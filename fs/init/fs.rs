@@ -587,7 +587,7 @@ impl Fs {
 
         let mut mount_opts = Printbuf::new();
         crate::opts::opts_to_text(&mut mount_opts, &opts.load(), Some(self), Some(self.sb_lock().sb().as_unvalidated()),
-                                  None, c::OptFlags::OPT_MOUNT.bits(), 0, c::OPT_SHOW_MOUNT_STYLE);
+                                  None, c::OptFlags::mount.bits(), 0, c::OPT_SHOW_MOUNT_STYLE);
         if !mount_opts.as_bytes().is_empty() {
             prt!(out, "with options: ");
             out.write_bytes(mount_opts.as_bytes());

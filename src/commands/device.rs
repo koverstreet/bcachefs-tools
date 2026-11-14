@@ -25,7 +25,7 @@ use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
 
 fn device_add_opt_flags() -> u32 {
-    c::OptFlags::OPT_FORMAT.bits() | c::OptFlags::OPT_DEVICE.bits()
+    c::OptFlags::format.bits() | c::OptFlags::device.bits()
 }
 
 fn device_add_cmd() -> Command {

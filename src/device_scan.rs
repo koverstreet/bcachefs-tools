@@ -379,7 +379,7 @@ fn have_every_device(sbs: &[(PathBuf, bch_sb_handle)]) -> bool {
 
 /// How long to keep waiting.
 ///
-/// -o missing_dev_timeout wins: the option is OPT_MOUNT, so someone who passes
+/// -o missing_dev_timeout wins: the option is a mount option, so someone who passes
 /// it means this mount, not this filesystem. Otherwise the filesystem's own
 /// value, if we've found enough of one to read it. Zero on disk means "unset",
 /// since every filesystem written before the option existed reads back zero, so

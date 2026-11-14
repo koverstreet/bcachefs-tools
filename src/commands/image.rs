@@ -649,11 +649,11 @@ fn image_update_inner(
 
 fn image_create_usage() {
     let fs_opts = opts_usage_str(
-        c::OptFlags::OPT_FORMAT.bits() | c::OptFlags::OPT_FS.bits(),
-        c::OptFlags::OPT_DEVICE.bits(),
+        c::OptFlags::format.bits() | c::OptFlags::fs.bits(),
+        c::OptFlags::device.bits(),
     );
     let dev_opts = opts_usage_str(
-        c::OptFlags::OPT_DEVICE.bits(),
+        c::OptFlags::device.bits(),
         0,
     );
 
@@ -691,9 +691,9 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 }
 
 fn cmd_image_create(argv: Vec<String>) -> Result<()> {
-    let opt_flags = c::OptFlags::OPT_FORMAT.bits()
-        | c::OptFlags::OPT_FS.bits()
-        | c::OptFlags::OPT_DEVICE.bits();
+    let opt_flags = c::OptFlags::format.bits()
+        | c::OptFlags::fs.bits()
+        | c::OptFlags::device.bits();
 
     let mut source: Option<String> = None;
     let mut keep_alloc = false;
@@ -750,9 +750,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                     match parse_opt_val(opt, &val_str)? {
                         None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => {
-                            if opt.flags.bits() & c::OptFlags::OPT_DEVICE.bits() != 0 {
+                            if opt.flags.bits() & c::OptFlags::device.bits() != 0 {
                                 dev_opts.set(opt_id, v);
-                            } else if opt.flags.bits() & c::OptFlags::OPT_FS.bits() != 0 {
+                            } else if opt.flags.bits() & c::OptFlags::fs.bits() != 0 {
                                 fs_opts.set(opt_id, v);
                             }
                         }

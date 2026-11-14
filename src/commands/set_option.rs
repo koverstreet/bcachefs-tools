@@ -12,7 +12,7 @@ use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs;
 
 fn opt_flags() -> u32 {
-    c::OptFlags::OPT_FS.bits() | c::OptFlags::OPT_DEVICE.bits()
+    c::OptFlags::fs.bits() | c::OptFlags::device.bits()
 }
 
 fn set_option_cmd() -> Command {
@@ -92,21 +92,21 @@ fn set_option_online(
         }
 
         // The online path can only write sysfs, and the kernel creates an
-        // option's attribute 0444 unless it is OPT_RUNTIME (fs/opts.c:
-        // `.attr.mode = (_flags) & OPT_RUNTIME ? 0644 : 0444`). So a
+        // option's attribute 0444 unless it is a runtime option (OPT_FILES,
+        // fs/debug/sysfs.rs). So a
         // non-runtime option has a file that cannot be opened for writing,
-        // and testing OPT_FS|OPT_DEVICE above lets it through to fail.
+        // and testing fs|device above lets it through to fail.
         // Many such options *can* be set with the filesystem unmounted, so
         // say that rather than just refusing.
-        if flags & c::OptFlags::OPT_RUNTIME.bits() == 0 {
+        if flags & c::OptFlags::runtime.bits() == 0 {
             eprintln!("{name} cannot be set while the filesystem is mounted \
                        (unmount and set it offline)");
             failed.insert(name.as_str());
             continue;
         }
 
-        let is_fs_opt = flags & c::OptFlags::OPT_FS.bits() != 0;
-        let is_device_opt = flags & c::OptFlags::OPT_DEVICE.bits() != 0;
+        let is_fs_opt = flags & c::OptFlags::fs.bits() != 0;
+        let is_device_opt = flags & c::OptFlags::device.bits() != 0;
 
         if is_fs_opt && !is_device_opt {
             if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value) {
@@ -188,7 +188,7 @@ fn set_option_offline(
             continue;
         };
 
-        if flags & c::OptFlags::OPT_FS.bits() != 0 {
+        if flags & c::OptFlags::fs.bits() != 0 {
             if let Err(e) = fs.opt_hook_pre_set(None, opt_id, val) {
                 eprintln!("Error setting {name}: {e}");
                 failed.insert(name.as_str());
@@ -202,7 +202,7 @@ fn set_option_offline(
             modified = true;
         }
 
-        if flags & c::OptFlags::OPT_DEVICE.bits() != 0 {
+        if flags & c::OptFlags::device.bits() != 0 {
             let indices: Vec<u32> = if !dev_idxs.is_empty() {
                 dev_idxs.to_vec()
             } else {

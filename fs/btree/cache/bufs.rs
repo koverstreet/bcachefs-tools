@@ -250,7 +250,7 @@ fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: c::gfp_t) -> Option<No
         init_list_head((&raw mut (*p).write_blocked).cast());
         (*p).byte_order = fs.opts.btree_node_size.get().ilog2() as u8;
         let flags = if pcpu_read_locks {
-            c::SixLockInitFlags::SIX_LOCK_INIT_PCPU
+            c::SixLockInitFlags::pcpu
         } else {
             c::SixLockInitFlags::empty()
         };

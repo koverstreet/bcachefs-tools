@@ -566,7 +566,7 @@ impl BtreeTrans<'_> {
         let res = t.disk_res().expect("extra_disk_res charged with no disk reservation");
         res.add_physical(self.extra_disk_res.get(), self.extra_disk_res_replicas.get().into(),
                          if has(flags, CommitFlags::NO_ENOSPC) {
-                             c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL
+                             c::ReservationFlags::nofail
                          } else {
                              c::ReservationFlags::empty()
                          })

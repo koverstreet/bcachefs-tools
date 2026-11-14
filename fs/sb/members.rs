@@ -909,7 +909,7 @@ crate::fs_delayed_work! {
         if want_schedule {
             // Ignored, as C ignored it
             let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::btree_bitmap_gc,
-                                         c::RunRecoveryPassFlags::RUN_RECOVERY_PASS_ratelimit);
+                                         c::RunRecoveryPassFlags::ratelimit);
         }
 
         fs.maybe_schedule_btree_bitmap_gc.queue(Queue::system_long(), nsecs_to_jiffies(24 * 60 * 60 * NSEC_PER_SEC));

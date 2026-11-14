@@ -822,20 +822,20 @@ impl c::journal {
             return false;
         }
 
-        if flags.contains(Cycle::JOURNAL_CYCLE_must_open) {
+        if flags.contains(Cycle::must_open) {
             return true;
         }
 
-        if !flags.contains(Cycle::JOURNAL_CYCLE_must_close) && !self.cur_buf(g).must_flush() {
+        if !flags.contains(Cycle::must_close) && !self.cur_buf(g).must_flush() {
             return false;
         }
 
-        flags.contains(Cycle::JOURNAL_CYCLE_force_close) || g.in_flight.len() <= 1
+        flags.contains(Cycle::force_close) || g.in_flight.len() <= 1
     }
 
     fn should_open(&self, flags: c::JournalCycleFlags) -> bool {
         !self.reservations().is_open() &&
-            (flags.contains(Cycle::JOURNAL_CYCLE_must_open) || closure_has_waiters(&self.flush_wait))
+            (flags.contains(Cycle::must_open) || closure_has_waiters(&self.flush_wait))
     }
 
     /*
@@ -848,10 +848,10 @@ impl c::journal {
      *   - open:  the just-opened entry must flush immediately (must_flush)
      * Folding both tails into a loop here makes the state machine explicit.
      *
-     * @flags: JOURNAL_CYCLE_must_close closes the current entry, once older writes
+     * @flags: must_close closes the current entry, once older writes
      *         have drained, even if no flush waiter currently requires it;
-     *         JOURNAL_CYCLE_force_close skips the older-write throttle for callers
-     *         that must close immediately; JOURNAL_CYCLE_must_open opens a fresh
+     *         force_close skips the older-write throttle for callers
+     *         that must close immediately; must_open opens a fresh
      *         entry for a following reservation.
      *
      * Returns: error from open if open was attempted and failed, else 0.
@@ -867,7 +867,7 @@ impl c::journal {
                 self.entry_close(g, Close::Closed(pins));
             }
 
-            flags.remove(Cycle::JOURNAL_CYCLE_must_close | Cycle::JOURNAL_CYCLE_force_close);
+            flags.remove(Cycle::must_close | Cycle::force_close);
 
             if !self.should_open(flags) {
                 return Ok(());
@@ -875,7 +875,7 @@ impl c::journal {
 
             self.entry_open(pins, g)?;
 
-            flags.remove(Cycle::JOURNAL_CYCLE_must_open);
+            flags.remove(Cycle::must_open);
         }
     }
 
@@ -912,7 +912,7 @@ impl c::journal {
         let ret = self.lock.seq.load(Relaxed) as u64 == self.lock.seq_ondisk.get();
 
         if !ret {
-            let _ = self.cycle_locked(&pins, &mut g, Cycle::JOURNAL_CYCLE_must_close);
+            let _ = self.cycle_locked(&pins, &mut g, Cycle::must_close);
         }
         ret
     }
@@ -946,7 +946,7 @@ impl c::journal {
         }) && !closure_has_waiters(&self.flush_wait);
 
         if !ret {
-            let _ = self.cycle_locked(&pins, &mut g, Cycle::JOURNAL_CYCLE_must_close);
+            let _ = self.cycle_locked(&pins, &mut g, Cycle::must_close);
         }
         ret
     }
@@ -1051,7 +1051,7 @@ impl c::journal {
                 }
             }
 
-            if let Err(e) = self.cycle_locked(&pins, &mut g, Cycle::JOURNAL_CYCLE_must_open) {
+            if let Err(e) = self.cycle_locked(&pins, &mut g, Cycle::must_open) {
                 break Err(e);
             }
         };
@@ -1188,7 +1188,7 @@ impl c::journal {
             /*
              * Not enough room in current journal entry, have to flush it:
              */
-            let _ = self.cycle_locked(&pins, &mut g, Cycle::JOURNAL_CYCLE_must_close | Cycle::JOURNAL_CYCLE_force_close);
+            let _ = self.cycle_locked(&pins, &mut g, Cycle::must_close | Cycle::force_close);
         } else {
             let seq = self.fs().journal_cur_seq();
             g.seq_to_buf_mut(seq).expect("the open journal entry is in flight").u64s_reserved += d as u32;

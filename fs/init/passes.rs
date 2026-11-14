@@ -32,14 +32,14 @@ use crate::format::{Btree, SbFeature};
 #[bch_enum(flags)]
 #[repr(u32)]
 pub enum RunRecoveryPassFlags {
-    RUN_RECOVERY_PASS_ratelimit = 1 << 0,
+    ratelimit = 1 << 0,
     /*
      * Schedule in memory only, without taking sb_lock, so it's safe from
      * contexts that hold btree locks (e.g. triggers): the schedule touches
      * only in-memory recovery state and never writes the superblock. The
      * need is re-derivable, so persistence isn't required.
      */
-    RUN_RECOVERY_PASS_ephemeral = 1 << 1,
+    ephemeral = 1 << 1,
     /*
      * Don't schedule if the pass already completed successfully this
      * instance: for callers that schedule cleanup passes on encountering
@@ -47,7 +47,7 @@ pub enum RunRecoveryPassFlags {
      * still here, rescheduling can't help - it just re-arms the pass in the
      * superblock on every encounter, forcing fsck on every subsequent mount.
      */
-    RUN_RECOVERY_PASS_skip_if_complete = 1 << 2,
+    skip_if_complete = 1 << 2,
 }
 
 /// What the runner keeps under its lock - taken with interrupts off, as
@@ -566,18 +566,18 @@ fn is_persistent(pass: Pass) -> bool {
     pass != Pass::scan_for_btree_nodes
 }
 
-/// Whether scheduling @pass would do anything. With RUN_RECOVERY_PASS_ratelimit
+/// Whether scheduling @pass would do anything. With ratelimit
 /// in @flags, the superblock - @sb, under sb_lock - decides whether it's to be
 /// ratelimited, and if not it's taken out of @flags.
 fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Option<&c::bch_sb>) -> bool {
-    if flags.contains(Flags::RUN_RECOVERY_PASS_skip_if_complete) &&
+    if flags.contains(Flags::skip_if_complete) &&
        fs.recovery.runner.passes_complete.get() & bit(pass) != 0 {
         return false;
     }
 
-    if flags.contains(Flags::RUN_RECOVERY_PASS_ratelimit) &&
+    if flags.contains(Flags::ratelimit) &&
        !want_ratelimit_locked(sb.expect("sb_lock, to ratelimit"), pass, SELF_HEAL_RATELIMIT) {
-        flags.remove(Flags::RUN_RECOVERY_PASS_ratelimit);
+        flags.remove(Flags::ratelimit);
     }
 
     /*
@@ -607,7 +607,7 @@ fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Optio
         return true;
     }
 
-    if !flags.contains(Flags::RUN_RECOVERY_PASS_ratelimit) && r.passes_ratelimiting & bit(pass) != 0 {
+    if !flags.contains(Flags::ratelimit) && r.passes_ratelimiting & bit(pass) != 0 {
         return true;
     }
 
@@ -622,7 +622,7 @@ fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Optio
 pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w: Option<&mut SbWrite<'_>>)
     -> Result<(), BchError>
 {
-    debug_assert_eq!(w.is_none(), flags.contains(Flags::RUN_RECOVERY_PASS_ephemeral));
+    debug_assert_eq!(w.is_none(), flags.contains(Flags::ephemeral));
 
     let opts = fs.opts();
     if opts.norecovery.get() != 0 || opts.recovery_passes_exclude.get() & bit(pass) != 0 {
@@ -640,9 +640,9 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
     out.set_suppressed(false);
 
     let running = fs.flags.get(c::FsFlag::running_recovery_passes);
-    let ratelimit = flags.contains(Flags::RUN_RECOVERY_PASS_ratelimit);
+    let ratelimit = flags.contains(Flags::ratelimit);
 
-    if flags.contains(Flags::RUN_RECOVERY_PASS_ephemeral) || !is_persistent(pass) {
+    if flags.contains(Flags::ephemeral) || !is_persistent(pass) {
         *r.published().scheduled_passes_ephemeral.place() |= bit(pass);
     } else {
         let w = w.expect("not ephemeral: an sb_write");
@@ -707,7 +707,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
      * ran, the scheduled_passes_ephemeral backstop reruns it via the async
      * runner instead.
      */
-    if running && !ratelimit && run_now && !(rewind && flags.contains(Flags::RUN_RECOVERY_PASS_ephemeral)) {
+    if running && !ratelimit && run_now && !(rewind && flags.contains(Flags::ephemeral)) {
         write!(out, "running recovery pass {} ({}), currently at {} ({}){}\n",
                pass.name(), pass as u32, rec.current_pass.get().name(), rec.current_pass.get() as u32,
                if rewind { " - rewinding" } else { "" });
@@ -747,8 +747,8 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
 /// Schedule recovery pass @pass, saying so to @out. An error - a restart of
 /// recovery - only if it has to go back to an earlier pass.
 pub fn run_explicit(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags) -> Result<(), BchError> {
-    // with RUN_RECOVERY_PASS_ratelimit, needs_set() needs sb_lock
-    if !flags.contains(Flags::RUN_RECOVERY_PASS_ratelimit) &&
+    // with ratelimit, needs_set() needs sb_lock
+    if !flags.contains(Flags::ratelimit) &&
        !needs_set(fs, &lock(fs), pass, &mut flags, None) {
         return Ok(());
     }
@@ -759,7 +759,7 @@ pub fn run_explicit(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags) -
      * unavailable to them - and with no sb_lock there's no permission to
      * persist:
      */
-    if flags.contains(Flags::RUN_RECOVERY_PASS_ephemeral) {
+    if flags.contains(Flags::ephemeral) {
         return run_explicit_sb(fs, out, pass, flags, None);
     }
 

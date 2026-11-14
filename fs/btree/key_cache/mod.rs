@@ -355,7 +355,7 @@ impl BtreeTrans<'_> {
         if let Some(ck) = ck {
             let ck = ck.into_raw();
             let flags = if pcpu_readers {
-                c::SixLockInitFlags::SIX_LOCK_INIT_PCPU
+                c::SixLockInitFlags::pcpu
             } else {
                 c::SixLockInitFlags::empty()
             };

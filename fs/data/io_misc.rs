@@ -70,7 +70,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
     // cut to what's reserved, rounded down to a block.
     let new_replicas = u32::from(opts.data_replicas).saturating_sub(nr_overwritable.into());
     let res = DiskReservation::new(fs);
-    let _ = res.add(sectors, new_replicas, c::ReservationFlags::BCH_DISK_RESERVATION_PARTIAL);
+    let _ = res.add(sectors, new_replicas, c::ReservationFlags::partial);
     if res.sectors() == 0 && new_replicas != 0 {
         return Err(fs.err(Errcode::BCH_ERR_ENOSPC_disk_reservation));
     }
@@ -495,7 +495,7 @@ fn __resume_finsert(
                     /* Splitting compressed extent? */
                     if snapshot == k_snapshot {
                         let _ = disk_res.add(copy.k().size as u64, nr_replicas,
-                                             c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL);
+                                             c::ReservationFlags::nofail);
                     }
                 }
 

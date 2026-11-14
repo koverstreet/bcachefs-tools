@@ -597,7 +597,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
         // otherwise it schedules the async runner.
         let mut buf = Printbuf::new();
         let _ = passes::run_explicit(fs, &mut buf, RecoveryPass::delete_dead_snapshots,
-                                     c::RunRecoveryPassFlags::RUN_RECOVERY_PASS_ephemeral);
+                                     c::RunRecoveryPassFlags::ephemeral);
     }
     Ok(())
 }

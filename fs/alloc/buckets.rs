@@ -45,8 +45,8 @@ use crate::format::{Bpos, Btree, CompressionType, DataType, BkeyType};
 #[bch_enum(flags)]
 #[repr(u32)]
 pub enum ReservationFlags {
-    BCH_DISK_RESERVATION_NOFAIL = 1 << 0,
-    BCH_DISK_RESERVATION_PARTIAL = 1 << 1,
+    nofail = 1 << 0,
+    partial = 1 << 1,
 }
 
 #[repr(C)]

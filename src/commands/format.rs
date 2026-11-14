@@ -58,11 +58,11 @@ pub(crate) fn version_parse(s: &str) -> Result<MetadataVersion> {
 
 fn format_usage() {
     let fs_opts = opts_usage_str(
-        c::OptFlags::OPT_FORMAT.bits() | c::OptFlags::OPT_FS.bits(),
-        c::OptFlags::OPT_DEVICE.bits(),
+        c::OptFlags::format.bits() | c::OptFlags::fs.bits(),
+        c::OptFlags::device.bits(),
     );
     let dev_opts = opts_usage_str(
-        c::OptFlags::OPT_DEVICE.bits(),
+        c::OptFlags::device.bits(),
         0,
     );
 
@@ -221,9 +221,9 @@ fn warn_same_parent_disk_replicas(cfg: &FormatConfig, devices: &[DevOpts]) {
 }
 
 fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
-    let opt_flags = c::OptFlags::OPT_FORMAT.bits()
-        | c::OptFlags::OPT_FS.bits()
-        | c::OptFlags::OPT_DEVICE.bits();
+    let opt_flags = c::OptFlags::format.bits()
+        | c::OptFlags::fs.bits()
+        | c::OptFlags::device.bits();
 
     let mut devices: Vec<DevConfig> = Vec::new();
     let mut force = false;
@@ -311,7 +311,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             // Value needs a superblock to resolve against
                             // (labels, targets); device option values are
                             // per device, fs option values resolve once:
-                            if opt.flags.bits() & c::OptFlags::OPT_DEVICE.bits() != 0 {
+                            if opt.flags.bits() & c::OptFlags::device.bits() != 0 {
                                 push_dev_opt_str!(opt_id, val_str);
                             } else {
                                 deferred_opts.push((opt_id, val_str));
@@ -327,10 +327,10 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             // the string silently:
                             if matches!(opt.ty, bcachefs_kernel::opts::OptType::StrMember { .. }) {
                                 push_dev_opt_str!(opt_id, val_str);
-                            } else if opt.flags.bits() & c::OptFlags::OPT_DEVICE.bits() != 0 {
+                            } else if opt.flags.bits() & c::OptFlags::device.bits() != 0 {
                                 cur_dev_opts.set(opt_id, v);
                                 unconsumed_dev_option = true;
-                            } else if opt.flags.bits() & c::OptFlags::OPT_FS.bits() != 0 {
+                            } else if opt.flags.bits() & c::OptFlags::fs.bits() != 0 {
                                 fs_opts.set(opt_id, v);
                             }
                         }

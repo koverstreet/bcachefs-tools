@@ -6,7 +6,7 @@
 //! A counter is one of BCH_PERSISTENT_COUNTERS() (counters_format.rs), in the
 //! filesystem's counters.now[], per CPU, with the tracepoint of the same name
 //! every counter has (debug/trace.rs). Its type, events::<name>, carries what
-//! it counts - occurrences (TYPE_COUNTER) or sectors (TYPE_SECTORS) - so
+//! it counts - occurrences or sectors - so
 //! event_inc() takes the one and event_add() the other, as C's
 //! counter_typecheck() checks.
 //!
@@ -45,10 +45,10 @@ c_default!(bch_fs_counters);
 /// What an event's counter counts.
 pub trait Kind {}
 
-/// Occurrences: TYPE_COUNTER, counted with event_inc().
+/// Occurrences, counted with event_inc().
 pub enum Count {}
 
-/// An amount in sectors: TYPE_SECTORS, added with event_add().
+/// An amount in sectors, added with event_add().
 pub enum Sectors {}
 
 impl Kind for Count {}
@@ -63,8 +63,8 @@ pub trait Event: TraceEvent {
 }
 
 macro_rules! event_kind {
-    (TYPE_COUNTER) => { Count };
-    (TYPE_SECTORS) => { Sectors };
+    (counter) => { Count };
+    (sectors) => { Sectors };
 }
 
 macro_rules! counter_events {
@@ -88,7 +88,7 @@ pub struct CounterInfo {
 
 // From PersistentCounter_arms!(): (name, index, [stable id], [type]).
 macro_rules! counter_is_sectors {
-    (TYPE_SECTORS) => { true };
+    (sectors) => { true };
     ($other:tt) => { false };
 }
 macro_rules! counter_table {

@@ -117,7 +117,7 @@ impl<'t> InteriorUpdate<'t> {
         let watermark = commit.get_watermark();
         let flags = commit.to_c();
         let disk_res_flags = if flags.contains(c::TransCommitFlags::no_enospc) {
-            c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL
+            c::ReservationFlags::nofail
         } else {
             c::ReservationFlags::empty()
         };

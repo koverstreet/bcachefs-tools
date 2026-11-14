@@ -89,7 +89,7 @@ pub struct bkey_durability {
      * Copies this key occupies, for disk space accounting.
      *
      * Deliberately not weighted by mi.durability, unlike the counts above:
-     * durability is OPT_RUNTIME, and accounting is persistent, so a
+     * durability is a runtime option, and accounting is persistent, so a
      * durability change would retroactively invalidate space already
      * accounted for. This has to be a function of what is physically on
      * disk.

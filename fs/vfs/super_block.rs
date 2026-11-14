@@ -166,7 +166,7 @@ impl SuperOps for Fs {
         let mut out = Printbuf::new();
         // No superblock: with the filesystem, every option's to_text reads it
         crate::opts::opts_to_text(&mut out, &self.opts().load(), Some(self), None, Some(&c::bch_opts_mask::load(&self.mount_opts)),
-                                  c::OptFlags::OPT_MOUNT.bits(), c::OptFlags::OPT_HIDDEN.bits(),
+                                  c::OptFlags::mount.bits(), c::OptFlags::hidden.bits(),
                                   c::OPT_SHOW_MOUNT_STYLE);
         if out.allocation_failure() {
             return Err(BchError::from(c::ENOMEM));

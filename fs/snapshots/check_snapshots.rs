@@ -1311,7 +1311,7 @@ pub(crate) fn check_key_has_snapshot<'a>(
     for pass in [RecoveryPass::check_inodes, RecoveryPass::check_extents,
                  RecoveryPass::check_dirents, RecoveryPass::check_xattrs] {
         keep(passes::run_explicit(fs, &mut buf, pass,
-                                  c::RunRecoveryPassFlags::RUN_RECOVERY_PASS_skip_if_complete));
+                                  c::RunRecoveryPassFlags::skip_if_complete));
     }
 
     // A key in a deleted snapshot means it has data, and check_snapshot()

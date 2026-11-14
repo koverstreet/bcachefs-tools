@@ -73,7 +73,7 @@ impl Folio {
             s.reserved_degraded
         };
 
-        let nofail = ReservationFlags::BCH_DISK_RESERVATION_NOFAIL;
+        let nofail = ReservationFlags::nofail;
         let disk_res = DiskReservation::new(fs);
         disk_res.add(sectors as u64, nr_replicas, if degraded { ReservationFlags::empty() } else { nofail })
             .or_else(|_| disk_res.add(sectors as u64, nr_replicas, nofail))?;
@@ -149,8 +149,8 @@ impl<'i> FolioReservation<'i> {
         if short {
             disk_res.add(sectors.len() as u64, nr_replicas, match mode {
                 Reserve::Whole   => ReservationFlags::empty(),
-                Reserve::Partial => ReservationFlags::BCH_DISK_RESERVATION_PARTIAL,
-                Reserve::Nofail  => ReservationFlags::BCH_DISK_RESERVATION_NOFAIL,
+                Reserve::Partial => ReservationFlags::partial,
+                Reserve::Nofail  => ReservationFlags::nofail,
             })?;
 
             let got = (disk_res.sectors.get() / u64::from(disk_res.nr_replicas.get())) as usize;

@@ -277,8 +277,8 @@ fn opts_table() -> String {
     use c::OptFlags as f;
     use std::fmt::Write;
 
-    let scopes = [(f::OPT_FS, "fs"), (f::OPT_FORMAT, "format"), (f::OPT_MOUNT, "mount"),
-                  (f::OPT_RUNTIME, "runtime"), (f::OPT_DEVICE, "device"), (f::OPT_INODE, "inode")];
+    let scopes = [(f::fs, "fs"), (f::format, "format"), (f::mount, "mount"),
+                  (f::runtime, "runtime"), (f::device, "device"), (f::inode, "inode")];
 
     let mut out = String::new();
     out.push_str("% Generated from the options table by bcachefs _doc_gen - do not edit\n\n");
@@ -286,7 +286,7 @@ fn opts_table() -> String {
 
     for opt in &OPTS {
         let scope: Vec<_> = scopes.iter().filter(|(s, _)| opt.has(*s)).map(|(_, n)| *n).collect();
-        if scope.is_empty() || opt.has(f::OPT_HIDDEN) || opt.has(f::OPT_NODOC) {
+        if scope.is_empty() || opt.has(f::hidden) || opt.has(f::nodoc) {
             continue;
         }
 

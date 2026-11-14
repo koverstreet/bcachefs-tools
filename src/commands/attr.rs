@@ -98,7 +98,7 @@ fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Resul
                 .with_context(|| format!("reading directory {}", path.display()))?
                 .next().is_some();
 
-        for name in opts::bch_option_names(c::OptFlags::OPT_INODE.bits()) {
+        for name in opts::bch_option_names(c::OptFlags::inode.bits()) {
             // These change how a directory's names hash: the kernel refuses
             // to change them on a nonempty directory, and casefold is
             // directory-only
@@ -164,7 +164,7 @@ setting a new compression algorithm will cause existing data to be \
 rewritten with the new algorithm. Use --option=- to remove a specific \
 option, or --remove-all to clear all per-file options.")
         .after_help("To remove a specific option, use: --option=-")
-        .args(opts::bch_option_args(c::OptFlags::OPT_INODE.bits(), true))
+        .args(opts::bch_option_args(c::OptFlags::inode.bits(), true))
         .arg(Arg::new("remove-all")
             .long("remove-all")
             .action(ArgAction::SetTrue)
@@ -178,7 +178,7 @@ fn cmd_setattr(argv: Vec<String>) -> Result<()> {
     let matches = setattr_cmd().get_matches_from(argv);
 
     let remove_all = matches.get_flag("remove-all");
-    let opts = opts::bch_options_from_matches(&matches, c::OptFlags::OPT_INODE.bits());
+    let opts = opts::bch_options_from_matches(&matches, c::OptFlags::inode.bits());
     let mut failed = 0;
     for path in matches.get_many::<String>("files").unwrap() {
         failed += do_setattr(Path::new(path), &opts, remove_all)?;
@@ -218,7 +218,7 @@ fn cmd_getattr(argv: Vec<String>) -> Result<()> {
     let all = matches.get_flag("all");
     let prefix = if effective { "bcachefs_effective" } else { "bcachefs" };
     let files: Vec<&String> = matches.get_many("files").unwrap().collect();
-    let names = opts::bch_option_names(c::OptFlags::OPT_INODE.bits());
+    let names = opts::bch_option_names(c::OptFlags::inode.bits());
     let multi_file = files.len() > 1;
 
     for file in files {

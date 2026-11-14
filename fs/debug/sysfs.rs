@@ -334,7 +334,7 @@ static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&crate::cstr_n
     let mut modes = [0o444; opts::NR];
     let mut i = 0;
     while i < opts::NR {
-        if c::bch_opts::TABLE[i].flags.bits() & c::OptFlags::OPT_RUNTIME.bits() != 0 {
+        if c::bch_opts::TABLE[i].flags.bits() & c::OptFlags::runtime.bits() != 0 {
             modes[i] = 0o644;
         }
         i += 1;
@@ -365,13 +365,13 @@ fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::OptId, out: &mut Printbuf)
             return Ok(());
         }
         Some(ca) => {
-            if !(opt.has(c::OptFlags::OPT_DEVICE) && opt.member_field().is_some()) {
+            if !(opt.has(c::OptFlags::device) && opt.member_field().is_some()) {
                 return c.throw(Errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
             }
             opts::opt_from_sb(sb.sb().as_unvalidated(), id, Some(ca.dev_idx.into()))
         }
         None => {
-            if !opt.has(c::OptFlags::OPT_FS) {
+            if !opt.has(c::OptFlags::fs) {
                 return c.throw(Errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
             }
             c.opts.get(id)
@@ -407,13 +407,13 @@ fn opt_store(c: &Fs, ca: Option<&Dev>, id: c::OptId, s: &str) -> Result<(), BchE
 /// - but none that's hidden.
 const fn opts_with_files(fs: bool) -> [bool; opts::NR] {
     let (hidden, fs_opt, dev_opt) =
-        (c::OptFlags::OPT_HIDDEN.bits(), c::OptFlags::OPT_FS.bits(), c::OptFlags::OPT_DEVICE.bits());
+        (c::OptFlags::hidden.bits(), c::OptFlags::fs.bits(), c::OptFlags::device.bits());
     let mut which = [false; opts::NR];
     let mut i = 0;
     while i < opts::NR {
         let flags = c::bch_opts::TABLE[i].flags.bits();
         /*
-         * For options that are both OPT_FS and OPT_DEVICE (currently only
+         * For options that are both fs and device (currently only
          * @discard), expose only the per-device sysfs entry: the FS-level
          * entry would alias to c->opts but member-backed options have no
          * FS-wide superblock field, so writes via the FS path are silent

@@ -289,7 +289,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
     if s.disk_sectors_delta > res.sectors() as i64 {
         res.add_physical((s.disk_sectors_delta - res.sectors() as i64) as u64, s.new_nr_replicas,
                          if s.usage_increasing { c::ReservationFlags::empty() }
-                         else { c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL })?;
+                         else { c::ReservationFlags::nofail })?;
     }
 
     t.log_str(u.opts.type_.name().as_bytes())?;

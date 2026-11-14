@@ -5,7 +5,7 @@
 //!
 //! Terms:
 //! - An option, Opt: what its field's #[opt] says of one - its type and
-//!   bounds, when it may be set (flags, OPT_*), where the superblock keeps
+//!   bounds, when it may be set (flags, OptFlags), where the superblock keeps
 //!   it, if it does. OPTS is indexed by OptId.
 //! - A value is a u64, whatever the option's type: a bool's 0 or 1, a string
 //!   option's index into its choices, a bitfield's bits.
@@ -17,8 +17,8 @@
 //! - Where the superblock keeps an option: a bitfield of the superblock
 //!   itself, of its ext section, or of a member - its #[opt] names the
 //!   field's getter, and OptHost finds the struct it's on in a superblock.
-//!   The field may hold the value scaled: OPT_SB_FIELD_SECTORS (>> 9),
-//!   _ILOG2, _ONE_BIAS (0 is unset).
+//!   The field may hold the value scaled: sb_field_sectors (>> 9),
+//!   _ilog2, _one_bias (0 is unset).
 //!
 //! Changing an option on a running filesystem is an OptChange, and the
 //! hooks either side of the change: opts/change.rs.
@@ -65,20 +65,20 @@ use cstruct_macros::{MaybeZeroable, bch_enum, Options, TypeInfo};
 #[bch_enum(flags)]
 #[repr(u32)]
 pub enum OptFlags {
-    OPT_FS = 1 << 0,                /* Filesystem option */
-    OPT_DEVICE = 1 << 1,            /* Device option */
-    OPT_INODE = 1 << 2,             /* Inode option */
-    OPT_FORMAT = 1 << 3,            /* May be specified at format time */
-    OPT_MOUNT = 1 << 4,             /* May be specified at mount time */
-    OPT_RUNTIME = 1 << 5,           /* May be specified at runtime */
-    OPT_HUMAN_READABLE = 1 << 6,
-    OPT_MUST_BE_POW_2 = 1 << 7,     /* Must be power of 2 */
-    OPT_SB_FIELD_SECTORS = 1 << 8,  /* Superblock field is >> 9 of actual value */
-    OPT_SB_FIELD_ILOG2 = 1 << 9,    /* Superblock field is ilog2 of actual value */
-    OPT_SB_FIELD_ONE_BIAS = 1 << 10, /* 0 means default value */
-    OPT_HIDDEN = 1 << 11,
-    OPT_MOUNT_OLD = 1 << 12,        /* May not be specified at mount time, but don't fail the mount */
-    OPT_NODOC = 1 << 13,            /* Omit from generated documentation */
+    fs = 1 << 0,                /* Filesystem option */
+    device = 1 << 1,            /* Device option */
+    inode = 1 << 2,             /* Inode option */
+    format = 1 << 3,            /* May be specified at format time */
+    mount = 1 << 4,             /* May be specified at mount time */
+    runtime = 1 << 5,           /* May be specified at runtime */
+    human_readable = 1 << 6,
+    must_be_pow_2 = 1 << 7,     /* Must be power of 2 */
+    sb_field_sectors = 1 << 8,  /* Superblock field is >> 9 of actual value */
+    sb_field_ilog2 = 1 << 9,    /* Superblock field is ilog2 of actual value */
+    sb_field_one_bias = 1 << 10, /* 0 means default value */
+    hidden = 1 << 11,
+    mount_old = 1 << 12,        /* May not be specified at mount time, but don't fail the mount */
+    nodoc = 1 << 13,            /* Omit from generated documentation */
 }
 
 /* the ratelimit_errors option's default: on in the kernel */
@@ -768,7 +768,7 @@ pub struct Opt {
     pub help:  Option<&'static str>,
 }
 
-/// An option's superblock field, as stored - before the OPT_SB_FIELD_*
+/// An option's superblock field, as stored - before the sb_field_*
 /// scaling.
 pub trait SbOpt: Sync {
     /// A member's: a device option's.
@@ -921,13 +921,13 @@ impl Opt {
     /// Its value from its superblock field's: the field may hold it scaled.
     pub fn from_sb_field(&self, v: u64) -> u64 {
         let mut v = v;
-        if self.has(c::OptFlags::OPT_SB_FIELD_ONE_BIAS) {
+        if self.has(c::OptFlags::sb_field_one_bias) {
             v = v.wrapping_sub(1);
         }
-        if self.has(c::OptFlags::OPT_SB_FIELD_ILOG2) {
+        if self.has(c::OptFlags::sb_field_ilog2) {
             v = 1u64.checked_shl(v as u32).unwrap_or(0);
         }
-        if self.has(c::OptFlags::OPT_SB_FIELD_SECTORS) {
+        if self.has(c::OptFlags::sb_field_sectors) {
             v <<= 9;
         }
         v
@@ -936,13 +936,13 @@ impl Opt {
     /// Its superblock field's value for @v: from_sb_field()'s inverse.
     pub fn to_sb_field(&self, v: u64) -> u64 {
         let mut v = v;
-        if self.has(c::OptFlags::OPT_SB_FIELD_SECTORS) {
+        if self.has(c::OptFlags::sb_field_sectors) {
             v >>= 9;
         }
-        if self.has(c::OptFlags::OPT_SB_FIELD_ILOG2) {
+        if self.has(c::OptFlags::sb_field_ilog2) {
             v = v.checked_ilog2().unwrap_or(0).into();
         }
-        if self.has(c::OptFlags::OPT_SB_FIELD_ONE_BIAS) {
+        if self.has(c::OptFlags::sb_field_one_bias) {
             v = v.wrapping_add(1);
         }
         v
@@ -1023,10 +1023,10 @@ pub fn opt_validate(opt: &Opt, v: u64, mut err: Option<&mut Printbuf>) -> Result
     if opt.max != 0 && v > opt.max {
         fail!(Errcode::BCH_ERR_ERANGE_option_too_big, "too big (max {})", opt.max);
     }
-    if opt.has(c::OptFlags::OPT_SB_FIELD_SECTORS) && v & 511 != 0 {
+    if opt.has(c::OptFlags::sb_field_sectors) && v & 511 != 0 {
         fail!(Errcode::BCH_ERR_opt_parse_error, "not a multiple of 512");
     }
-    if opt.has(c::OptFlags::OPT_MUST_BE_POW_2) && !v.is_power_of_two() {
+    if opt.has(c::OptFlags::must_be_pow_2) && !v.is_power_of_two() {
         fail!(Errcode::BCH_ERR_opt_parse_error, "must be a power of two");
     }
     match opt.ty {
@@ -1090,7 +1090,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
             }
             let v = core::str::from_utf8(val)
                 .map_err(|_| BchError::from(c::EINVAL))
-                .and_then(|s| if opt.has(c::OptFlags::OPT_HUMAN_READABLE) {
+                .and_then(|s| if opt.has(c::OptFlags::human_readable) {
                     parse_human_u64(s)
                 } else {
                     parse_int(s)
@@ -1168,7 +1168,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
     }
     let val = val.map(|v| opt_val_synonym(name_str.unwrap_or_default(), v));
 
-    if !opt.has(c::OptFlags::OPT_MOUNT | c::OptFlags::OPT_MOUNT_OLD) {
+    if !opt.has(c::OptFlags::mount | c::OptFlags::mount_old) {
         return Err(Errcode::BCH_ERR_option_name.into());
     }
 
@@ -1192,7 +1192,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
         r => r?,
     };
 
-    if opt.has(c::OptFlags::OPT_MOUNT_OLD) {
+    if opt.has(c::OptFlags::mount_old) {
         log_no_fs(LogLevel::ERR, crate::message!(
             "option {} may no longer be specified at mount time; set via sysfs opts dir", opt.name));
         return Ok(());
@@ -1270,7 +1270,7 @@ pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&c::bch_sb<Un
     }
 
     match opt.ty {
-        OptType::Bool | OptType::Uint if opt.has(c::OptFlags::OPT_HUMAN_READABLE) => prt!(out, "{}", HumanReadable(v)),
+        OptType::Bool | OptType::Uint if opt.has(c::OptFlags::human_readable) => prt!(out, "{}", HumanReadable(v)),
         OptType::Bool | OptType::Uint => write!(out, "{}", v as i64),
         OptType::Str(choices) => match choices.get(v as usize) {
             Some(_) if v < opt.min || v > opt.max => write!(out, "(invalid option {})", v as i64),
@@ -1395,11 +1395,11 @@ pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, v
     let v = opt.to_sb_field(v);
     let mut changed = false;
 
-    if let (true, None, Some(f)) = (opt.has(c::OptFlags::OPT_FS), dev, opt.fs_field()) {
+    if let (true, None, Some(f)) = (opt.has(c::OptFlags::fs), dev, opt.fs_field()) {
         changed = f.set(sb, 0, v)?.unwrap_or(false);
     }
 
-    if let (true, Some(dev), Some(f)) = (opt.has(c::OptFlags::OPT_DEVICE), dev, opt.member_field()) {
+    if let (true, Some(dev), Some(f)) = (opt.has(c::OptFlags::device), dev, opt.member_field()) {
         let Some(c) = f.set(sb, dev, v)? else {
             warn_no_member(opt, dev);
             return Ok(false);
@@ -1413,7 +1413,7 @@ pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, v
         }
     }
 
-    if let (OptType::StrMember { get_mut, .. }, true, Some(dev)) = (&opt.ty, opt.has(c::OptFlags::OPT_DEVICE), dev) {
+    if let (OptType::StrMember { get_mut, .. }, true, Some(dev)) = (&opt.ty, opt.has(c::OptFlags::device), dev) {
         let m = members::sb_member(sb.sb(), dev).filter(|m| m.alive()).and_then(|_| sb.member_mut(dev));
         let Some(m) = m else {
             warn_no_member(opt, dev);

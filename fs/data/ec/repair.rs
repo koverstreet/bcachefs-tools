@@ -720,7 +720,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
 
     if !narrowing {
         // NOFAIL: it doesn't fail
-        let _ = i.reserve_parity(ns.fs_ref(), c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL);
+        let _ = i.reserve_parity(ns.fs_ref(), c::ReservationFlags::nofail);
     }
 
     // As ec_old_stripe_read(), for an old stripe the caller has already read,

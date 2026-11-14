@@ -17,7 +17,7 @@ fn leak(s: String) -> &'static str {
 fn for_each_opt(flag_filter: u32, mut f: impl FnMut(&'static str, &'static Opt)) {
     for opt in &bcachefs_kernel::opts::OPTS {
         if opt.flags.bits() & flag_filter == 0 { continue }
-        if opt.flags.bits() & c::OptFlags::OPT_HIDDEN.bits() != 0 { continue }
+        if opt.flags.bits() & c::OptFlags::hidden.bits() != 0 { continue }
         f(opt.name, opt);
     }
 }

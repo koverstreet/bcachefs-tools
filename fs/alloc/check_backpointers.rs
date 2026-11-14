@@ -572,7 +572,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
          { ca.mi.get().nbuckets });
 
     let flags = if nr < allowed {
-        c::RunRecoveryPassFlags::RUN_RECOVERY_PASS_ratelimit
+        c::RunRecoveryPassFlags::ratelimit
     } else {
         c::RunRecoveryPassFlags::from_bits_retain(0)
     };

@@ -700,7 +700,7 @@ impl c::journal {
         }
 
         if seq_to_flush >= self.fs().journal_cur_seq() {
-            self.cycle(c::JournalCycleFlags::JOURNAL_CYCLE_must_close);
+            self.cycle(c::JournalCycleFlags::must_close);
         }
 
         /*

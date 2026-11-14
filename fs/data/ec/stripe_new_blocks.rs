@@ -476,7 +476,7 @@ pub(crate) fn stripe_alloc_or_reuse(t: &TransAttempt<'_, '_>, req: &mut c::alloc
 
     if s.res.as_ref().is_none_or(|r| r.sectors() == 0) {
         // NOFAIL: it doesn't fail
-        let _ = s.reserve_parity(stripe_fs, c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL);
+        let _ = s.reserve_parity(stripe_fs, c::ReservationFlags::nofail);
     }
 
     t.allocate_dropping_locks(|| {

@@ -1518,6 +1518,6 @@ pub(crate) fn check_snapshot_needs_deletion(t: &TransAttempt<'_, '_>, k: BkeySC<
         // best-effort: ignore the return.
         let mut buf = Printbuf::new();
         let _ = passes::run_explicit(t.fs(), &mut buf, RecoveryPass::delete_dead_snapshots,
-                                     c::RunRecoveryPassFlags::RUN_RECOVERY_PASS_ephemeral);
+                                     c::RunRecoveryPassFlags::ephemeral);
     }
 }

@@ -12,7 +12,7 @@
 //! The type first: `bool`, `uint(min, max)`, `str(Enum)`, `str_nolimit(Enum)`,
 //! `bitfield(Enum[, allowed])`, `with(OPT_FN)`, `str_member(member_field)` -
 //! a string or bitfield option's choices are its enum's Names. Then, each
-//! optional: `flags`, the OPT_* when it may be set, lowercase; `sb`, its
+//! optional: `flags`, its OptFlags; `sb`, its
 //! superblock field - `struct.field`, a little-endian integer, or by its
 //! getter, `struct::getter`, its setter set_getter, or `struct::getter /
 //! setter`; `default`; `hint`.
@@ -151,7 +151,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
     let flags = match a.flags.is_empty() {
         true => quote!(0),
         false => {
-            let f = a.flags.iter().map(|f| format_ident!("OPT_{}", f.to_string().to_uppercase()));
+            let f = &a.flags;
             quote!(#(c::OptFlags::#f.bits())|*)
         }
     };

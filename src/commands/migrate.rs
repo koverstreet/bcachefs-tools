@@ -277,7 +277,7 @@ fn reserve_extents(file: &fs::File, block_size: u32, size: u64) -> Result<Vec<CR
 /// Find space within the reserved extents for the superblock.
 ///
 /// @bucket_bytes is the bucket_size option, which is in bytes - only the
-/// superblock member field it maps to is in sectors (OPT_SB_FIELD_SECTORS).
+/// superblock member field it maps to is in sectors (sb_field_sectors).
 /// @sb_size is in sectors.
 fn find_superblock_space(extents: &[CRange], sb_size: u32, bucket_bytes: u32) -> Result<(u64, u64)> {
     let bucket_bytes = bucket_bytes as u64;
@@ -609,7 +609,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 // ---- Public command entry points ----
 
 fn cmd_migrate(argv: Vec<String>) -> Result<()> {
-    let opt_flags = c::OptFlags::OPT_FORMAT.bits();
+    let opt_flags = c::OptFlags::format.bits();
 
     let mut fs_path: Option<String> = None;
     let mut encrypted = false;

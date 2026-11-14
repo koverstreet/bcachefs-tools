@@ -233,7 +233,7 @@ impl<'t> TransAttempt<'_, 't> {
              * space that was never taken.
              *
              * nr_replicas, not total: this is space accounting, and it must
-             * not depend on mi.durability. Durability is OPT_RUNTIME while
+             * not depend on mi.durability. Durability is a runtime option while
              * accounting is persistent, so weighting by it would let a
              * device setting change retroactively invalidate space already
              * accounted for.
@@ -399,7 +399,7 @@ impl<'t> TransAttempt<'_, 't> {
         if s.disk_sectors_delta > disk_res.sectors() as i64 {
             disk_res.add_physical((s.disk_sectors_delta - disk_res.sectors() as i64) as u64, s.new_nr_replicas,
                                   if !check_enospc || !s.usage_increasing {
-                                      c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL
+                                      c::ReservationFlags::nofail
                                   } else {
                                       c::ReservationFlags::empty()
                                   })?;

@@ -16,9 +16,9 @@ use cstruct_macros::bch_enum;
 #[bch_enum(flags)]
 #[repr(u32)]
 pub enum JournalCycleFlags {
-    JOURNAL_CYCLE_must_close = 1 << 0,
-    JOURNAL_CYCLE_must_open = 1 << 1,
-    JOURNAL_CYCLE_force_close = 1 << 2,
+    must_close = 1 << 0,
+    must_open = 1 << 1,
+    force_close = 1 << 2,
 }
 
 /* First bits for BCH_WATERMARK: */

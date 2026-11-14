@@ -652,7 +652,7 @@ impl Fs {
 
         write!(out, "{} at {nr_replicas} replicas: {} available at {nr_replicas} or more",
                sz(sectors), sz(at_or_above(&avail, slot)));
-        if flags.contains(c::ReservationFlags::BCH_DISK_RESERVATION_PARTIAL) {
+        if flags.contains(c::ReservationFlags::partial) {
             write!(out, ", partial");
         }
         write!(out, "\n");
@@ -800,11 +800,11 @@ impl Fs {
 
         // anything placeable at more replicas than we need will do
         let have: u64 = avail[slot..].iter().sum();
-        if have != 0 && flags.contains(F::BCH_DISK_RESERVATION_PARTIAL) {
+        if have != 0 && flags.contains(F::partial) {
             sectors = sectors.min(have);
         }
 
-        let ok = sectors <= have || flags.contains(F::BCH_DISK_RESERVATION_NOFAIL);
+        let ok = sectors <= have || flags.contains(F::nofail);
         if ok {
             // least capable space first - see DevFreeDist::partition()
             take_from(&mut avail[slot..], sectors);

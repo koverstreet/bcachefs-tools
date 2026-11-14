@@ -106,8 +106,8 @@ pub fn bcachefs_kernel_version() -> Option<MetadataVersion> {
 /// Write a string value to a sysfs attribute file relative to a directory fd.
 ///
 /// Both failures are returned rather than discarded: a non-runtime option's
-/// attribute is created 0444 (`fs/opts.c`: `.attr.mode = (_flags) & OPT_RUNTIME
-/// ? 0644 : 0444`), so opening it O_WRONLY fails with EACCES, and a caller that
+/// attribute is created 0444 (OPT_FILES, fs/debug/sysfs.rs), so opening it
+/// O_WRONLY fails with EACCES, and a caller that
 /// ignored that reported success while changing nothing.
 pub fn sysfs_write_str(
     sysfs_fd: BorrowedFd<'_>,

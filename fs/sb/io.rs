@@ -177,7 +177,7 @@ use crate::format::{Btree, DataType, Nonce, MetadataVersion, SbFeature};
 #[bch_enum(flags)]
 #[repr(u32)]
 pub enum SbWriteFlags {
-    BCH_SB_WRITE_bringup = 1 << 0,
+    bringup = 1 << 0,
 }
 
 /*
@@ -870,7 +870,7 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
             let v = crate::opts::opt_from_sb(sb, opt.id, None);
             write!(out, "{}:\t", opt.name);
             crate::opts::opt_to_text(&mut out, None, Some(sb), opt, v,
-                                     c::OptFlags::OPT_HUMAN_READABLE.bits() | c::OPT_SHOW_FULL_LIST);
+                                     c::OptFlags::human_readable.bits() | c::OPT_SHOW_FULL_LIST);
             out.newline();
         }
     }
@@ -1615,7 +1615,7 @@ impl<'a> SbWrite<'a> {
     }
 
     pub fn bringup(&mut self) {
-        self.flags |= c::SbWriteFlags::BCH_SB_WRITE_bringup;
+        self.flags |= c::SbWriteFlags::bringup;
     }
 
     /// @was_new from a test-and-set: the superblock changed if it was, and
@@ -2290,7 +2290,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     // those decisions:
     if !fs.flags.get(f::start_begun) &&
        fs.opts().will_not_start.get() == 0 &&
-       !flags.contains(c::SbWriteFlags::BCH_SB_WRITE_bringup) {
+       !flags.contains(c::SbWriteFlags::bringup) {
         return fs.throw(Errcode::BCH_ERR_erofs_sb_write_before_start);
     }
 

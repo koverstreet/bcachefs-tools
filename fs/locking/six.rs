@@ -119,7 +119,7 @@ pub struct six_lock {
 #[bch_enum(flags)]
 #[repr(u32)]
 pub enum SixLockInitFlags {
-    SIX_LOCK_INIT_PCPU = 1 << 0,
+    pcpu = 1 << 0,
 }
 
 #[repr(C)]
@@ -1497,7 +1497,7 @@ pub unsafe fn six_lock_exit(lock: *mut c::six_lock) {
 /// # Safety
 /// Nothing holds or reaches @lock until this returns. What init doesn't set
 /// keeps what it was - zeroes, or six_lock_exit()'s: seq, and readers but
-/// with SIX_LOCK_INIT_PCPU.
+/// with SixLockInitFlags::pcpu.
 pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: *mut c_void,
                               flags: c::SixLockInitFlags, gfp: c::gfp_t) {
     let wait_lock = crate::new_lock!(six_lock_waiters { next_free_hint: 0, list: ManuallyDrop::new(WaitList::new_zeroed()) },
@@ -1514,7 +1514,7 @@ pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: 
          * userspace:
          */
         #[cfg(kernel)]
-        if flags.contains(SixLockInitFlags::SIX_LOCK_INIT_PCPU) {
+        if flags.contains(SixLockInitFlags::pcpu) {
             /*
              * We don't return an error here on memory allocation failure
              * since percpu is an optimization, and locks will work with the

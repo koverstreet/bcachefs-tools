@@ -132,6 +132,6 @@ impl Fs {
     /// gc_gens, scheduled to run in the background.
     pub fn gc_gens_async(&self) {
         let _ = passes::run_explicit(self, &mut Printbuf::new(), RecoveryPass::gc_gens,
-                                     c::RunRecoveryPassFlags::RUN_RECOVERY_PASS_ephemeral);
+                                     c::RunRecoveryPassFlags::ephemeral);
     }
 }

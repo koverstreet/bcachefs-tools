@@ -477,7 +477,7 @@ fn link_data(
             .expect("room for a pointer");
 
         let res = DiskReservation::new(fs);
-        res.add(sectors, 1, c::ReservationFlags::BCH_DISK_RESERVATION_NOFAIL)?;
+        res.add(sectors, 1, c::ReservationFlags::nofail)?;
 
         btree::iter::trans_commit_do(fs, Some(&res), CommitFlags::empty(), |t| {
             let mut new = t.bkey_reassemble_room(k.key().into(), c::BKEY_EXTENT_U64s_MAX * size_of::<u64>())?;
