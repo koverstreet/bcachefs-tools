@@ -35,7 +35,7 @@ use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{atomic_bitfield, bitfield, bch_enum, placed, MaybeZeroable, Init, Late, TypeInfo, list_enum, BitfieldMembers};
+use cstruct_macros::{atomic_bitfield, bitfield, bch_enum, placed, MaybeZeroable, Init, Late, TypeInfo, BitfieldMembers};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -1122,13 +1122,10 @@ fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool<Kmalloc>, BchError
 }
 
 /* Btree ID properties: */
-list_enum! {
-    #[open]
-    #[nr]
-    pub enum BtreeNodeType: u32 {
-        btree,
-        Btree_arms(kwd, val, ..) => kwd = (val as u32) + 1,
-    }
+#[bch_enum(open)]
+#[repr(u32)]
+pub enum BtreeNodeType {
+    btree,
 }
 
 impl BtreeNodeType {
