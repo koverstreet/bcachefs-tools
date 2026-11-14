@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0
-//
-// Parsing the items the macros (fs/cstruct-macros) take, which include!()
-// this file - so it's plain `//` comments - and build on syn: the kernel
-// build's, os/linux_kernel/vendor, with a bare rustc.
-//
-// The items:
-//
-//   The derives' struct / union, named fields.
-//
-//   #[type_name(NAME)] on the struct: its name to TypeInfo, where the item's
-//   differs - a family's definition, X_head, whose name the family's type
-//   X<S> has (util/vstructs.rs).
-//
-//   xmacro! { NAME { (args), (args), ... } }: an x-macro list - a
-//   macro, NAME!(cb), that hands the whole list to cb!.
-//
-//   ioctl! { NAME = _IOW(type, nr, ARG), ... }: ioctl numbers - a marker
-//   type binding the opcode to ARG, the opcode computed from the target's own
-//   _IOC constants (fs/util/ioctl.rs).
+//! Parsing the items the macros take, on syn: the kernel build's,
+//! os/linux_kernel/vendor, with a bare rustc.
+//!
+//! The items:
+//!
+//!   The derives' struct / union, named fields.
+//!
+//!   #[type_name(NAME)] on the struct: its name to TypeInfo, where the item's
+//!   differs - a family's definition, X_head, whose name the family's type
+//!   X<S> has (util/vstructs.rs).
+//!
+//!   xmacro! { NAME { (args), (args), ... } }: an x-macro list - a
+//!   macro, NAME!(cb), that hands the whole list to cb!.
+//!
+//!   ioctl! { NAME = _IOW(type, nr, ARG), ... }: ioctl numbers - a marker
+//!   type binding the opcode to ARG, the opcode computed from the target's own
+//!   _IOC constants (fs/util/ioctl.rs).
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum StructKind {

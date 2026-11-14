@@ -38,7 +38,7 @@
 //! written: the definition keeps its tokens' spans.
 //!
 //! `#[tag_enum(NAME: REPR[, nr])]`:
-//! the tag's enum, an open #[bch_enum] of the arms (enum_decl.rs). NAME_arms!
+//! the tag's enum, an open #[bch_enum] of the arms (bch_enum.rs). NAME_arms!
 //! is the arms as a list, (name, value, Type), for what's made from each.
 //!
 //! A type whose bytes come from outside - off a device, from the kernel -
@@ -143,7 +143,7 @@ use syn::parse::ParseStream;
 use syn::{parse_quote, Token};
 
 use crate::cstruct::{EnumDef, EnumKind};
-use crate::enum_decl::{self, arm_path};
+use crate::bch_enum::{self, arm_path};
 
 /// A tagged_union!'s declaration, as generate() takes it.
 ///
@@ -286,7 +286,7 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
                 i.parse::<Token![:]>()?;
                 Ok((field, i.parse()?))
             }).map_err(|_| err("#[tag(FIELD: TYPE)]"))?),
-            "tag_enum" => tag_enum = Some(enum_decl::tag_enum(a.parse_args().map_err(bad)?)
+            "tag_enum" => tag_enum = Some(bch_enum::tag_enum(a.parse_args().map_err(bad)?)
                 .map_err(|m| err(&format!("#[tag_enum(..)]: {m}")))?),
             "storage" => storage = Some(a.parse_args().map_err(bad)?),
             "pad"     => pad = Some(a.parse_args().map_err(bad)?),
@@ -305,12 +305,12 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
     let (tag_field, tag_ty) = tag.ok_or_else(|| err("no #[tag(..)]"))?;
 
     let (body, defs) = arm_defs(body);
-    let arms = enum_decl::arms(body, &Vec::new(), true).map_err(|m| err(&m))?;
+    let arms = bch_enum::arms(body, &Vec::new(), true).map_err(|m| err(&m))?;
     let mut out = TokenStream::new();
     if let Some(e) = &tag_enum {
-        out.extend(enum_decl::generate(e, &arms, &Vec::new()));
+        out.extend(bch_enum::generate(e, &arms, &Vec::new()));
     }
-    out.extend(enum_decl::entries(&name, &arms));
+    out.extend(bch_enum::entries(&name, &arms));
 
     if tag_enum.as_ref().is_some_and(|e| e.kind == EnumKind::Closed) {
         return Err(err("#[tag_enum(..)]: an open enum - a tag from outside may be one it doesn't know"));
@@ -383,7 +383,7 @@ fn derived_type(ty: &syn::Type, part: &str) -> syn::Type {
     let mut ty = ty.clone();
     if let syn::Type::Path(p) = &mut ty {
         let last = p.path.segments.last_mut().expect("a path has a segment");
-        last.ident = crate::derived(&last.ident, part);
+        last.ident = crate::tokens::derived(&last.ident, part);
     }
     ty
 }
@@ -425,7 +425,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     let vs = quote!(crate::util::vstructs);
     // The storage: the type the views are of
     // A sized one's is its own, NAME_storage: NAME is its state's
-    let own_storage = crate::derived(name, "storage");
+    let own_storage = crate::tokens::derived(name, "storage");
     let s_ty: syn::Type = tu.storage.clone().unwrap_or_else(|| parse_quote!(#own_storage));
     let s_size = quote!(::core::mem::size_of::<#s_ty>());
 
@@ -462,7 +462,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     } else {
         vec![("", s_ty.clone())]
     };
-    let determinant = crate::derived(name, "tag");
+    let determinant = crate::tokens::derived(name, "tag");
     let (storage, payload_offset) = if tu.storage.is_some() {
         // another's storage, a union: its tag is its own field, by value, as
         // a packed struct's must be
@@ -487,7 +487,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             #(#impls)*
         }, quote!(0))
     } else {
-        let (arms_union, tagged) = (crate::derived(name, "arms"), crate::derived(name, "tagged"));
+        let (arms_union, tagged) = (crate::tokens::derived(name, "arms"), crate::tokens::derived(name, "tagged"));
         let doc = format!(" {name}'s tag: its field.");
         (quote! {
             #[doc(hidden)]

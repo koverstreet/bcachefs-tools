@@ -157,7 +157,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
     };
     // the head: what either state of a superblock has its fields on
     let head = |host: &Ident| match host == "bch_sb" {
-        true => crate::derived(host, "head"),
+        true => crate::tokens::derived(host, "head"),
         false => host.clone(),
     };
     let sb = match &a.sb {

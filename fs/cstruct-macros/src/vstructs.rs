@@ -374,9 +374,9 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
 /// ArmOf impls can name each state's - concrete types, not projections.
 fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident) -> TokenStream {
     let vs = vs();
-    let fam = crate::derived(name, "family");
+    let fam = crate::tokens::derived(name, "family");
     let aliases = [("unvalidated", unvalidated), ("validated", validated)].into_iter()
-        .map(|(st, def)| (crate::derived(name, st), def))
+        .map(|(st, def)| (crate::tokens::derived(name, st), def))
         .filter(|(alias, def)| alias != *def)
         .map(|(alias, def)| quote! {
             #[allow(non_camel_case_types)]
@@ -404,7 +404,7 @@ fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident) -
 fn members_on(name: &Ident, fields: &[FieldDef], defs: &[&Ident]) -> Result<TokenStream, String> {
     let mut out = TokenStream::new();
     for f in fields.iter().filter(|f| f.bitfield) {
-        if let Some(fwd) = crate::members_forwarder(name, f)? {
+        if let Some(fwd) = crate::bitfield::members_forwarder(name, f)? {
             let field = &f.ident;
             out.extend(defs.iter().map(|d| quote!(#fwd!([] #d, #field);)));
         }
@@ -420,7 +420,7 @@ fn members_on(name: &Ident, fields: &[FieldDef], defs: &[&Ident]) -> Result<Toke
 fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, String> {
     let vs = vs();
     let state = |st: &str, what: &str| -> TokenStream {
-        let ty = crate::derived(name, &st.to_lowercase());
+        let ty = crate::tokens::derived(name, &st.to_lowercase());
         let doc = format!(" {name}<{st}>: {what}. Its fields - those that hold a count\n \
                            private - then its tail, as long as its count says. It derefs\n \
                            to its head, Head<{name}>, to read.");
@@ -435,7 +435,7 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
         });
         out
     };
-    let (unvalidated, validated) = (crate::derived(name, "unvalidated"), crate::derived(name, "validated"));
+    let (unvalidated, validated) = (crate::tokens::derived(name, "unvalidated"), crate::tokens::derived(name, "validated"));
     let unsized_states = [("Unvalidated", unvalidated.clone()), ("Validated", validated.clone()),
                           ("Whole", validated.clone())];
     let doc = format!(" {name}, in state S - Validated unless named: a reference to one\n \
@@ -483,7 +483,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
         },
         Some((tail, elem)) => (tail.unwrap_or_else(|| format_ident!("_tail")), elem),
     };
-    let written = crate::derived(name, "head");
+    let written = crate::tokens::derived(name, "head");
     let last = &last.ident;
     // its fields, inline in each state's definition - but its flexible array,
     // where that's the tail
@@ -528,7 +528,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     let vs = vs();
     let def = parse_cstruct(&item)?;
     let name = &def.ident;
-    let written = crate::derived(name, "head");
+    let written = crate::tokens::derived(name, "head");
 
     let args = family_args(attr, &["count", "tail"]).map_err(|e| format!("{name}: {e}"))?;
     let count = args.count.unwrap_or_else(|| vec![format_ident!("nr_entries")]);
@@ -694,11 +694,11 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
         },
     };
     // The struct as written, renamed X_whole: X<Whole>'s representation
-    let written = crate::derived(name, "whole");
+    let written = crate::tokens::derived(name, "whole");
     // A value in place, as long as what holds it says: for a grown type the
     // floor and the bytes there are, below; else all of its fields, then
     // the bytes past them
-    let all = crate::derived(name, "validated");
+    let all = crate::tokens::derived(name, "validated");
     // in place, the states but Whole: a DST
     let states = [("Validated", all.clone()), ("Unvalidated", all.clone())];
     let derives = derive_names(def);
@@ -751,8 +751,8 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     }
     let (floor, later) = def.fields.split_at(at);
 
-    let fl = crate::derived(name, "floor");
-    let ty = crate::derived(name, "validated");
+    let fl = crate::tokens::derived(name, "floor");
+    let ty = crate::tokens::derived(name, "validated");
 
     let floor_fields = floor.iter().map(|f| {
         let (field, fty) = (&f.ident, &f.ty);
@@ -961,7 +961,7 @@ struct Generic<'a> {
 /// as its definition does.
 fn generic_type(name: &Ident, g: &Generic<'_>, doc: &str) -> TokenStream {
     let vs = vs();
-    let fam = crate::derived(name, "family");
+    let fam = crate::tokens::derived(name, "family");
     let default = format_ident!("{}", g.default);
     let mut out = quote! {
         #[doc = #doc]
