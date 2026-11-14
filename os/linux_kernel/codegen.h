@@ -6,7 +6,7 @@
  * Kernel APIs the Rust calls that bindgen can't bind - macros, or macros in
  * some kernels - as static inlines, which codegen.rs binds and wraps
  * (extern.c). Kernel headers only, as codegen binds nothing of bcachefs's -
- * but util/pf_memalloc.h, which only picks kernel bits.
+ * but pf_memalloc.h, which only picks kernel bits.
  */
 
 #include <linux/alloc_tag.h>
@@ -47,7 +47,7 @@
 #include <asm/ioctl.h>
 #include <keys/user-type.h>
 
-#include "util/pf_memalloc.h"
+#include "pf_memalloc.h"
 
 #ifdef __BINDGEN__
 /*
@@ -180,7 +180,7 @@ const size_t RUST_CONST_HELPER_LZ4_MEM_COMPRESS		= LZ4_MEM_COMPRESS;
 /* jiffies a second, os/linux_kernel/kernel.rs's */
 const unsigned long RUST_CONST_HELPER_HZ		= HZ;
 
-/* locking/noio.rs's: the holes util/pf_memalloc.h picked, as C has them */
+/* locking/noio.rs's: the holes pf_memalloc.h picked, as C has them */
 const unsigned int RUST_CONST_HELPER_PF_MEMALLOC_NORECLAIM	= PF_MEMALLOC_NORECLAIM;
 const unsigned int RUST_CONST_HELPER_PF_MEMALLOC_NOWARN	= PF_MEMALLOC_NOWARN;
 #endif

@@ -150,7 +150,7 @@ quiet_cmd_bch_codegen = CODEGEN $(obj)/rust
 $(obj)/rust/bindings.rs: $(obj)/codegen $(src)/vendor/closure.h $(src)/../os/linux_kernel/codegen.h \
 			 $(src)/../os/linux_kernel/bio_iov_iter.h $(src)/locking/shim.h $(src)/util/shim.h \
 			 $(src)/../os/linux_kernel/shim.h \
-			 $(src)/util/pf_memalloc.h FORCE
+			 $(src)/../os/linux_kernel/pf_memalloc.h FORCE
 	$(call if_changed,bch_codegen)
 
 # extern.c, from the same run: bindgen's wrappers have no prototypes, and its
