@@ -8,18 +8,8 @@
 #include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/rwsem.h>
-#include <linux/spinlock.h>
 
 void rust_mutex_init(struct mutex *lock, const char *name, void *key);
-
-void rust_spin_lock_init(spinlock_t *lock, const char *name, void *key);
-unsigned long rust_spin_lock_irqsave(spinlock_t *lock);
-unsigned long rust_spin_lock_irqsave_nested(spinlock_t *lock, unsigned subclass);
-void rust_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags);
-
-void rust_raw_spin_lock_init(raw_spinlock_t *lock, const char *name, void *key);
-void rust_raw_spin_lock(raw_spinlock_t *lock);
-void rust_raw_spin_unlock(raw_spinlock_t *lock);
 
 void rust_trace_contention_begin(const void *lock, unsigned int flags);
 void rust_trace_contention_end(const void *lock, int ret);

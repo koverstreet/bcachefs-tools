@@ -2,7 +2,7 @@
 
 //! Lockdep, for userspace: there's none, so every hook does nothing.
 
-use crate::locking::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock_t};
+use crate::locking::{mutex, percpu_rw_semaphore, rw_semaphore};
 use crate::util::ffi::c_char;
 use core::ffi::{c_ulong, c_void};
 
@@ -30,8 +30,6 @@ impl LockdepMap {
 pub fn debug_check_no_locks_freed(_p: *const c_void, _len: usize) {}
 
 pub fn mutex_assert_held(_: &mutex) {}
-pub fn spin_lock_assert_held(_: &spinlock_t) {}
-pub fn raw_spin_lock_assert_held(_: &raw_spinlock_t) {}
 pub fn rwsem_assert_held(_: &rw_semaphore) {}
 pub fn rwsem_assert_held_write(_: &rw_semaphore) {}
 pub fn percpu_rwsem_assert_held(_: &percpu_rw_semaphore) {}

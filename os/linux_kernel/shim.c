@@ -91,3 +91,60 @@ void rust_debug_check_no_locks_freed(const void *p, unsigned long len)
 	debug_check_no_locks_freed(p, len);
 }
 #endif
+
+/* os/linux_kernel/spinlock.rs: spinlock_t, as the kernel's Rust helper initializes it */
+
+void rust_spin_lock_init(spinlock_t *lock, const char *name, void *key)
+{
+#ifdef CONFIG_DEBUG_SPINLOCK
+# ifdef CONFIG_PREEMPT_RT
+	__spin_lock_init(lock, name, key, false);
+# else
+	__raw_spin_lock_init(spinlock_check(lock), name, key, LD_WAIT_CONFIG);
+# endif
+#else
+	spin_lock_init(lock);
+#endif
+}
+
+unsigned long rust_spin_lock_irqsave(spinlock_t *lock)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(lock, flags);
+	return flags;
+}
+
+unsigned long rust_spin_lock_irqsave_nested(spinlock_t *lock, unsigned subclass)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave_nested(lock, flags, subclass);
+	return flags;
+}
+
+void rust_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
+{
+	spin_unlock_irqrestore(lock, flags);
+}
+
+/* os/linux_kernel/spinlock.rs: raw_spinlock_t */
+
+void rust_raw_spin_lock_init(raw_spinlock_t *lock, const char *name, void *key)
+{
+#ifdef CONFIG_DEBUG_SPINLOCK
+	__raw_spin_lock_init(lock, name, key, LD_WAIT_SPIN);
+#else
+	raw_spin_lock_init(lock);
+#endif
+}
+
+void rust_raw_spin_lock(raw_spinlock_t *lock)
+{
+	raw_spin_lock(lock);
+}
+
+void rust_raw_spin_unlock(raw_spinlock_t *lock)
+{
+	raw_spin_unlock(lock);
+}

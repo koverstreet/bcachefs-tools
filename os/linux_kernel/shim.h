@@ -28,4 +28,13 @@ void rust_lock_acquired(void *map, unsigned long ip);
 void rust_debug_check_no_locks_freed(const void *p, unsigned long len);
 #endif
 
+void rust_spin_lock_init(spinlock_t *lock, const char *name, void *key);
+unsigned long rust_spin_lock_irqsave(spinlock_t *lock);
+unsigned long rust_spin_lock_irqsave_nested(spinlock_t *lock, unsigned subclass);
+void rust_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags);
+
+void rust_raw_spin_lock_init(raw_spinlock_t *lock, const char *name, void *key);
+void rust_raw_spin_lock(raw_spinlock_t *lock);
+void rust_raw_spin_unlock(raw_spinlock_t *lock);
+
 #endif /* _BCACHEFS_OS_LINUX_KERNEL_SHIM_H */

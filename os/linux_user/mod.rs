@@ -17,6 +17,7 @@ pub mod percpu;
 pub mod printk;
 pub mod sched;
 pub mod shrinker;
+pub mod spinlock;
 pub mod stacktrace;
 pub mod sysfs;
 pub mod workqueue;

@@ -13,7 +13,6 @@
 
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/spinlock.h>
 #include <uapi/linux/xattr.h>
 
 #ifndef XATTR_CREATE

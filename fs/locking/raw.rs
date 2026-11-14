@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! C's locks, as RawLocks: struct mutex, spinlock_t (taken irqsave),
-//! raw_spinlock_t, rw_semaphore and percpu_rw_semaphore - in both builds, the
-//! shim's pthread-backed ones in userspace.
+//! C's locks, as RawLocks: struct mutex, rw_semaphore and
+//! percpu_rw_semaphore - in both builds, the shim's pthread-backed ones in
+//! userspace. The spinlocks are the ports' (os::spinlock).
 //!
 //! Each is C's struct in an Opaque - an UnsafeCell, so it's written through
 //! a shared reference: by whoever takes it, Rust or C. c::mutex and the rest
@@ -10,19 +10,19 @@
 //! them as written - and Locked::from_c() borrows one soundly.
 //!
 //! What C has as a macro or a static inline in one build or the other -
-//! initializing in a lockdep class, spin_lock_irqsave() - Rust calls through
-//! locking.c's rust_* functions.
+//! initializing in a lockdep class - Rust calls through locking.c's rust_*
+//! functions.
 
 #![allow(non_camel_case_types)]
 
-use super::{RawLock, RawLockBase, RawMovableLock};
+use super::{RawLock, RawLockBase};
 use super::{RawReadLock, RawRwLock, RawTryReadLock};
-use super::{MemallocFlags, RawNestedLock, RawTryLock};
+use super::{RawNestedLock, RawTryLock};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::Opaque;
 use core::convert::Infallible;
-use core::ffi::{c_ulong, c_void, CStr};
+use core::ffi::{c_void, CStr};
 
 #[cfg(kernel)]
 use kernel::bindings as b;
@@ -30,27 +30,16 @@ use kernel::bindings as b;
 use bcachefs_shim::c as b;
 
 pub type mutex = Opaque<b::mutex>;
-pub type spinlock_t = Opaque<b::spinlock_t>;
 pub type rw_semaphore = Opaque<b::rw_semaphore>;
 pub type percpu_rw_semaphore = Opaque<b::percpu_rw_semaphore>;
 
-/// A struct, where the others are Opaques: the userspace shim's spinlock_t is
-/// a typedef of raw_spinlock_t, so an Opaque of one is the other's type.
-#[repr(transparent)]
-pub struct raw_spinlock_t(Opaque<b::raw_spinlock_t>);
-
 // Zeroed as the structs holding them start; a lock only once their init runs
 unsafe impl ::pin_init::Zeroable for mutex {}
-unsafe impl ::pin_init::Zeroable for spinlock_t {}
-unsafe impl ::pin_init::Zeroable for raw_spinlock_t {}
 unsafe impl ::pin_init::Zeroable for rw_semaphore {}
 unsafe impl ::pin_init::Zeroable for percpu_rw_semaphore {}
 
 pub use crate::c::{
     rust_mutex_init,
-    rust_spin_lock_init, rust_spin_lock_irqsave, rust_spin_lock_irqsave_nested,
-    rust_spin_unlock_irqrestore,
-    rust_raw_spin_lock_init, rust_raw_spin_lock, rust_raw_spin_unlock,
     rust_trace_contention_begin, rust_trace_contention_end,
     rust_local_lock_init, rust_local_lock_irqsave, rust_local_unlock_irqrestore,
     rust_local_irq_save, rust_local_irq_restore,
@@ -118,78 +107,6 @@ unsafe impl RawNestedLock for c::mutex {
     #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
     unsafe fn lock_nested(&self, _subclass: u32) {
         unsafe { self.lock() }
-    }
-}
-
-// ── spinlock_t, taken irqsave ────────────────────────────────────────────
-
-// Taken with interrupts off - spin_lock_irqsave() - for what interrupt
-// context takes too, an endio; held, it mustn't sleep. The kernel crate's
-// SpinLock leaves interrupts on. In userspace, where there are no
-// interrupts, it's the shim's spinlock, a pthread mutex.
-unsafe impl RawLockBase for c::spinlock_t {
-    type GuardState = (c_ulong, MemallocFlags);
-    type InitError = Infallible;
-
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { rust_spin_lock_init(l.cast(), name.as_ptr().cast(), key) };
-        Ok(())
-    }
-}
-
-// unlocked, nothing points at one: userspace's is a futex word for that
-unsafe impl RawMovableLock for c::spinlock_t {}
-
-unsafe impl RawLock for c::spinlock_t {
-    unsafe fn lock(&self) -> (c_ulong, MemallocFlags) {
-        let flags = unsafe { rust_spin_lock_irqsave(self.as_ptr().cast()) };
-        (flags, MemallocFlags::noreclaim())
-    }
-
-    unsafe fn unlock(&self, (flags, _noreclaim): (c_ulong, MemallocFlags)) {
-        unsafe { rust_spin_unlock_irqrestore(self.as_ptr().cast(), flags) }
-    }
-
-    unsafe fn assert_held(&self) {
-        lockdep::spin_lock_assert_held(self)
-    }
-}
-
-unsafe impl RawNestedLock for c::spinlock_t {
-    unsafe fn lock_nested(&self, subclass: u32) -> (c_ulong, MemallocFlags) {
-        let flags = unsafe { rust_spin_lock_irqsave_nested(self.as_ptr().cast(), subclass) };
-        (flags, MemallocFlags::noreclaim())
-    }
-}
-
-// ── raw_spinlock_t ───────────────────────────────────────────────────────
-
-// Taken with interrupts as they are, for what no interrupt takes - a lock's
-// wait list. A spinning lock on PREEMPT_RT too, where spinlock_t sleeps.
-unsafe impl RawLockBase for c::raw_spinlock_t {
-    type GuardState = MemallocFlags;
-    type InitError = Infallible;
-
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { rust_raw_spin_lock_init(l.cast(), name.as_ptr().cast(), key) };
-        Ok(())
-    }
-}
-
-unsafe impl RawMovableLock for c::raw_spinlock_t {}
-
-unsafe impl RawLock for c::raw_spinlock_t {
-    unsafe fn lock(&self) -> MemallocFlags {
-        unsafe { rust_raw_spin_lock(self.0.as_ptr().cast()) };
-        MemallocFlags::noreclaim()
-    }
-
-    unsafe fn unlock(&self, _noreclaim: MemallocFlags) {
-        unsafe { rust_raw_spin_unlock(self.0.as_ptr().cast()) }
-    }
-
-    unsafe fn assert_held(&self) {
-        lockdep::raw_spin_lock_assert_held(self)
     }
 }
 
