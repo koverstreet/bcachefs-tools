@@ -17,7 +17,7 @@ use crate::errcode::BchError;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::os::kernel::HZ;
-use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, KVec, KVmalloc, Kmalloc};
+use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, KVec, KVmalloc, Kmalloc};
 use crate::util::futex::EventCount;
 use crate::util::late::LateInit;
 use crate::util::projections::Volatile;
@@ -70,22 +70,15 @@ pub unsafe trait Elements {
 }
 
 macro_rules! elements {
-    ($($a:ident => $realloc:ident);*) => {$(
+    ($($a:ident),*) => {$(
         unsafe impl Elements for $a {
             fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
-                #[cfg(kernel)]
-                {
-                    use kernel::bindings::{$realloc, NUMA_NO_NODE};
-
-                    NonNull::new(unsafe {
-                        $realloc(core::ptr::null(), layout.size(), layout.align() as _, gfp.raw(), NUMA_NO_NODE)
-                    }.cast())
-                }
-                #[cfg(not(kernel))]
-                {
-                    let p = if gfp.contains(flags::ZERO) { $a.alloc_zeroed(layout) } else { $a.alloc(layout) };
-                    p.ok().map(NonNull::cast)
-                }
+                let p = if gfp.contains(flags::ZERO) {
+                    $a.alloc_zeroed_gfp(layout, gfp)
+                } else {
+                    unsafe { $a.realloc(None, layout, layout, gfp) }
+                };
+                p.ok().map(NonNull::cast)
             }
 
             unsafe fn element_free(p: NonNull<u8>, layout: Layout) {
@@ -95,8 +88,7 @@ macro_rules! elements {
     )*};
 }
 
-elements!(Kmalloc  => krealloc_node_align;
-          KVmalloc => kvrealloc_node_align);
+elements!(Kmalloc, KVmalloc);
 
 /// What's asked of the allocator for an element, as the task's memalloc scope
 /// says: the pool is the reserve, so no emergency reserves, no looping in the
