@@ -12,6 +12,18 @@ pub fn is_vmalloc_addr<T>(_p: *const T) -> bool {
     false
 }
 
+/// @buf filled from the OS's CSPRNG. It can't fail - getrandom(2) blocks
+/// until the pool is seeded - but for a broken system.
+pub fn random_bytes(buf: &mut [u8]) {
+    if let Err(e) = getrandom::fill(buf) {
+        panic!("getrandom() of {} bytes: {e}", buf.len());
+    }
+}
+
+pub fn random_u64() -> u64 {
+    getrandom::u64().unwrap_or_else(|e| panic!("getrandom() of a u64: {e}"))
+}
+
 pub fn msleep(ms: u32) {
     std::thread::sleep(core::time::Duration::from_millis(ms.into()))
 }

@@ -156,6 +156,7 @@ dependencies = [
  "bitfield-struct",
  "bitflags 2.11.1",
  "crc32c",
+ "getrandom",
  "io-uring",
  "libc",
  "linux-raw-sys",

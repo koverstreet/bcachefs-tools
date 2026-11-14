@@ -785,8 +785,7 @@ pub fn enable_encryption(fs: &Fs, keyed: bool) -> Result<(), BchError> {
     }
 
     let mut key = c::bch_key::default();
-    // SAFETY: the key's bytes
-    unsafe { c::get_random_bytes((&raw mut key).cast(), size_of_val(&key) as _) };
+    crate::os::kernel::random_bytes(crate::util::vstructs::plain_bytes_mut(&mut key));
 
     let mut sb_key = c::bch_encrypted_key::new_unencrypted(key.clone());
     if keyed {

@@ -318,7 +318,7 @@ pub fn format(
             .unwrap_or_else(|| die("failed to create crypt field"));
 
         let mut key = c::bch_key::default();
-        unsafe { c::get_random_bytes((&raw mut key).cast(), size_of_val(&key) as _) };
+        bcachefs_kernel::os::kernel::random_bytes(bcachefs_kernel::util::vstructs::plain_bytes_mut(&mut key));
         let mut sb_key = c::bch_encrypted_key::new_unencrypted(key);
 
         if let Some(passphrase) = opts.passphrase {

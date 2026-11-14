@@ -19,6 +19,14 @@ pub fn nr_cpu_ids() -> u32 {
     unsafe { c::bch2_nr_cpu_ids() }
 }
 
+pub fn random_bytes(buf: &mut [u8]) {
+    unsafe { c::get_random_bytes(buf.as_mut_ptr().cast(), buf.len() as _) }
+}
+
+pub fn random_u64() -> u64 {
+    unsafe { c::get_random_u64() }
+}
+
 pub fn is_vmalloc_addr<T>(p: *const T) -> bool {
     unsafe { c::is_vmalloc_addr(p.cast()) }
 }

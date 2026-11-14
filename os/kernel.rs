@@ -5,7 +5,7 @@
 
 use crate::c;
 
-use super::{cond_resched, PAGE_SIZE};
+use super::{cond_resched, random_u64, PAGE_SIZE};
 
 /// C's READ and WRITE, as indices: io_ref[], io_clock[]...
 pub const READ:  usize = 0;
@@ -65,10 +65,6 @@ pub fn prefetch<T>(p: *const T) {
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     let _ = p;
-}
-
-pub fn random_u64() -> u64 {
-    unsafe { c::get_random_u64() }
 }
 
 /// __get_random_u32_below()'s algorithm, widened: the high half of
