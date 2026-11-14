@@ -160,7 +160,6 @@ fn main() {
         // structs they make every extern fn that transitively embeds one trip
         // improper_ctypes. opaque_type gives them a blob field so they're
         // FFI-safe, without us inventing a layout.
-        .opaque_type("srcu_struct")
         .opaque_type("lock_class_key")
         .opaque_type("lockdep_map")
         .opaque_type("bch_ioctl_data_event")

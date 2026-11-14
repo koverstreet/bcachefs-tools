@@ -18,7 +18,6 @@
 #include "include/linux/rcupdate.h"
 #include "include/linux/sched.h"
 #include "include/linux/seqlock.h"
-#include "include/linux/srcu.h"
 #include "include/linux/string.h"
 #include "include/linux/uuid.h"
 #include "include/linux/unicode.h"

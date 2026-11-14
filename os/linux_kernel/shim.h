@@ -10,6 +10,7 @@
 #include <linux/percpu-rwsem.h>
 #include <linux/rwsem.h>
 #include <linux/spinlock.h>
+#include <linux/srcu.h>
 #include <linux/workqueue.h>
 
 struct lockdep_map;
@@ -76,6 +77,8 @@ struct task_struct *bch2_current(void);
 bool bch2_signal_pending_state(unsigned int state);
 void bch2_set_current_state(unsigned int state);
 void bch2_set_current_state_running(void);
+
+int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key);
 bool bch2_need_resched(void);
 #ifdef CONFIG_SMP
 bool bch2_owner_on_cpu(struct task_struct *owner);

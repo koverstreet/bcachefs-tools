@@ -264,7 +264,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "perf_trace_buf_alloc", "perf_trace_run_bpf_submit", "bpf_prog_array_valid", "bpf_trace_run2",
     "rust_srcu_read_lock_fast_notrace", "rust_srcu_read_unlock_fast_notrace",
     "rust_preempt_disable_notrace", "rust_preempt_enable_notrace", "rust_perf_fetch_caller_regs",
-    // the C shims: locking.c, rcu.c, util.c, os/linux_kernel's shim.c and bio_iov_iter.c
+    // the C shims: locking.c, util.c, os/linux_kernel's shim.c and bio_iov_iter.c
     "rust_.*", "bch2_.*",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",

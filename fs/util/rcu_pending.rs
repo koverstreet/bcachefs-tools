@@ -25,13 +25,7 @@ use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
 use crate::util::rcu::{Flavor, GpCookie};
 use crate::os::workqueue::{flush_work, Queue};
 
-#[cfg(kernel)]
-const ACTIVE: usize = kernel::bindings::NUM_ACTIVE_RCU_POLL_OLDSTATE as usize;
-// the lists are RCU's or SRCU's: as many as either has pending at once
-#[cfg(kernel)]
-const _: () = assert!(ACTIVE >= kernel::bindings::NUM_ACTIVE_SRCU_POLL_OLDSTATE as usize);
-#[cfg(not(kernel))]
-const ACTIVE: usize = c::NUM_ACTIVE_RCU_POLL_OLDSTATE as usize;
+const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
 
 const NODE_SIZE: usize = c::GENRADIX_NODE_SIZE as usize;
 
