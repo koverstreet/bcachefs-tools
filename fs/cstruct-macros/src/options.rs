@@ -406,7 +406,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let (names, tys): (Vec<_>, Vec<_>) = opts.iter().map(|f| (f.name, f.ty)).unzip();
     let nr = Literal::usize_unsuffixed(opts.len());
     let pub_doc = [format!(" {name}, read an option at a time while its lock's holder writes it,"),
-                   format!(" through PublishedOptsWriter. Laid out as {name} is: to C, one.")];
+                   format!(" through PublishedOptsWriter. Laid out as {name} is.")];
 
     Ok(quote! {
         #[cstruct_macros::bch_enum(open)]
