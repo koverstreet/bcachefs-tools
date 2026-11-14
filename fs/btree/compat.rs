@@ -45,12 +45,11 @@ unsafe fn bkey_swab_key(f: Option<&c::bkey_format>, k: *mut c::bkey_packed) {
 /// # Safety
 /// @k is a key in @f's node, as long as its u64s says - not yet validated:
 /// too short to be a key, it's left for validate.
-pub unsafe fn __bch2_bkey_compat(fs: Option<&Fs>, _level: c_uint, btree: Btree, version: c_uint,
+pub unsafe fn __bch2_bkey_compat(fs: Option<&Fs>, _level: c_uint, btree: Btree, version: MetadataVersion,
                                  big_endian: c_uint, write: c_int, f: Option<&c::bkey_format>,
                                  k: *mut c::bkey_packed) {
 
     let (big_endian, write) = (big_endian != 0, write != 0);
-    let version = MetadataVersion(version);
     let packed = |k: *mut c::bkey_packed| unsafe { (*BkeyP::from_raw(k)).is_packed() };
     // a journal key's has none: it's never packed
     let fmt = || f.expect("a packed key, with no format");

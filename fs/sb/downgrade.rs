@@ -49,9 +49,9 @@ fn entries_read(f: &c::bch_sb_field_downgrade<Unvalidated>)
 impl SbFieldOps for Section {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_downgrade<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
-        let sb_major = c::BCH_VERSION_MAJOR(sb.version.get().into());
+        let sb_major = sb.version.get().major();
         for e in entries_read(f) {
-            let major = c::BCH_VERSION_MAJOR(e.version.get().into());
+            let major = e.version.get().major();
             sb_err_on!(err, major != sb_major, BCH_ERR_invalid_sb_downgrade,
                        "downgrade entry with mismatched major version ({major} != {sb_major})")?;
         }
@@ -65,7 +65,7 @@ impl SbFieldOps for Section {
         }
 
         for e in entries_read(f) {
-            prt!(out, "version:\t{}\n", MetadataVersion(e.version.get().into()));
+            prt!(out, "version:\t{}\n", e.version.get());
 
             write!(out, "recovery passes:\t");
             passes::prt_stable(out, e.recovery_passes[0].get());
@@ -89,8 +89,8 @@ impl SbFieldOps for Section {
             return Ok(());
         }
 
-        let Ok(table) = downgrade_entries(c::BCH_VERSION_MAJOR(sb.sb().version.get().into()),
-                                          fs.sb.version_incompat.get().into(), fs.have_stripes()) else {
+        let Ok(table) = downgrade_entries(sb.sb().version.get().major(), fs.sb.version_incompat.get(),
+                                          fs.have_stripes()) else {
             return Ok(());
         };
 
@@ -255,9 +255,9 @@ pub(crate) fn ext(sb: &mut c::bch_sb_buf) -> &mut c::bch_sb_field_ext<Validated>
 
 /// Upgrading from @old to @new: what each version past @old, up to @new,
 /// needs, into the ext section's recovery_passes_required and errors_silent.
-fn set_upgrade(sb: &mut c::bch_sb_buf, table: &[UpDown], old: u32, new: u32) {
+fn set_upgrade(sb: &mut c::bch_sb_buf, table: &[UpDown], old: MetadataVersion, new: MetadataVersion) {
     let ext = ext(sb);
-    for i in table.iter().filter(|i| old < i.version.0 && i.version.0 <= new) {
+    for i in table.iter().filter(|i| old < i.version && i.version <= new) {
         let fsck = if i.all_fsck { passes::fsck_passes() } else { 0 };
         let passes = passes::passes_to_stable(i.passes | fsck);
         ext.recovery_passes_required[0] |= passes;
@@ -268,12 +268,12 @@ fn set_upgrade(sb: &mut c::bch_sb_buf, table: &[UpDown], old: u32, new: u32) {
 }
 
 /// set_upgrade(), by the table for upgrades.
-pub(crate) fn sb_set_upgrade(sb: &mut c::bch_sb_buf, old: u32, new: u32) {
+pub(crate) fn sb_set_upgrade(sb: &mut c::bch_sb_buf, old: MetadataVersion, new: MetadataVersion) {
     set_upgrade(sb, UPGRADE, old, new)
 }
 
 /// set_upgrade(), by the table for allowing incompatible features.
-pub(crate) fn set_upgrade_incompat(sb: &mut c::bch_sb_buf, old: u32, new: u32) {
+pub(crate) fn set_upgrade_incompat(sb: &mut c::bch_sb_buf, old: MetadataVersion, new: MetadataVersion) {
     set_upgrade(sb, UPGRADE_INCOMPAT, old, new)
 }
 
@@ -287,12 +287,12 @@ impl Fs {
     /// What an upgrade needs on a filesystem with stripes: UPGRADE_STRIPES'.
     pub fn sb_set_upgrade_extra(&self) {
         let mut sb = self.sb_lock();
-        let new = u32::from(self.sb.version.get());
+        let new = self.sb.version.get();
         let old = match self.sb.version_upgrade_complete.get() {
-            0 => new,
-            v => u32::from(v),
+            MetadataVersion(0) => new,
+            v => v,
         };
-        if !UPGRADE_STRIPES.iter().any(|i| old < i.version.0 && i.version.0 <= new) || !self.have_stripes() {
+        if !UPGRADE_STRIPES.iter().any(|i| old < i.version && i.version <= new) || !self.have_stripes() {
             return;
         }
 
@@ -311,7 +311,7 @@ pub(crate) fn sb_set_downgrade(sb: &mut SbLockGuard<'_>, new_minor: u32, old_min
     let mut passes = [0; 2];
     let mut silent = [Le64::new(0); 8];
     for e in entries(d) {
-        let minor = c::BCH_VERSION_MINOR(e.version.get().into()) as u32;
+        let minor = e.version.get().minor();
         if !(new_minor < minor && minor <= old_minor) {
             continue;
         }
@@ -355,11 +355,10 @@ const _: () = {
 /// The downgrade section's entries, from the downgrade table: for each
 /// version of @major from @version_incompat on, what downgrading past it
 /// needs - those that need nothing left out.
-fn downgrade_entries(major: u64, version_incompat: u32, have_stripes: bool) -> Result<KVVec<u8>, AllocError> {
+fn downgrade_entries(major: u32, version_incompat: MetadataVersion, have_stripes: bool)
+        -> Result<KVVec<u8>, AllocError> {
     let mut table = KVVec::<u8>::new();
-    for src in DOWNGRADE.iter().filter(|s| {
-        c::BCH_VERSION_MAJOR(s.version.0.into()) == major && s.version.0 >= version_incompat
-    }) {
+    for src in DOWNGRADE.iter().filter(|s| s.version.major() == major && s.version >= version_incompat) {
         let stripes = DOWNGRADE_STRIPES.iter().find(|s| have_stripes && s.version == src.version);
         let passes = passes::passes_to_stable(src.passes | stripes.map_or(0, |s| s.passes));
         let errors = src.errors.iter().chain(stripes.into_iter().flat_map(|s| s.errors));

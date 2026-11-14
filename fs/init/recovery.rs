@@ -966,8 +966,8 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         let complete = |p: Pass| passes_complete & passes::bit(p) != 0;
 
         let version = w.sb().version.get();
-        if w.sb().version_upgrade_complete() != version.into() {
-            w.sb_mut().set_version_upgrade_complete(version.into());
+        if w.sb().version_upgrade_complete() != version {
+            w.sb_mut().set_version_upgrade_complete(version);
             w.dirty();
         }
 
@@ -1071,7 +1071,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
         if u32::from(fs.opts.version_upgrade.get()) != c::VersionUpgradeOpt::none.0 {
             let current = c::bcachefs_metadata_version_current;
             sb_upgrade(fs, &mut sb, current, false);
-            sb.sb_mut().set_version_upgrade_complete(current as u16);
+            sb.sb_mut().set_version_upgrade_complete(current);
             fs.write_super(&mut sb);
         }
 

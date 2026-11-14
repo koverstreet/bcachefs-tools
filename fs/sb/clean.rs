@@ -27,7 +27,7 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unvalidate
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 use crate::sb::io::SbResize;
-use crate::format::{Btree, SbFeature};
+use crate::format::{Btree, MetadataVersion, SbFeature};
 use crate::fs::btree_id_is_alloc;
 
 type Section = c::bch_sb_field_clean;
@@ -63,7 +63,7 @@ impl SbFieldOps for Section {
 /// filesystem, as a superblock section's validate can't: of a superblock of
 /// @version, @big_endian; @write for one about to be written. In place, as C
 /// may fix an entry up as it validates it.
-fn validate_late(fs: &Fs, version: u16, big_endian: bool, f: &mut Section, write: bool)
+fn validate_late(fs: &Fs, version: MetadataVersion, big_endian: bool, f: &mut Section, write: bool)
     -> Result<(), BchError>
 {
     let mut from = c::bkey_validate_context::default();
@@ -74,7 +74,7 @@ fn validate_late(fs: &Fs, version: u16, big_endian: bool, f: &mut Section, write
         // whole: sb_field_validate() has repaired or refused a section with
         // one overrunning its end
         let e = e.map_err(|_| BchError::from(Errcode::BCH_ERR_invalid_sb_clean))?;
-        journal_entry_validate(fs, bytes_of_mut(e), version.into(), big_endian, from)?;
+        journal_entry_validate(fs, bytes_of_mut(e), version, big_endian, from)?;
     }
     Ok(())
 }

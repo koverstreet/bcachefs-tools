@@ -1076,7 +1076,7 @@ impl Fs {
             write!(out, "Reconcile disabled{}: needs incompatible feature ", if data_ok { " for metadata" } else { "" });
             need.to_text(out);
             write!(out, ", allowed up to ");
-            MetadataVersion(self.sb.version_incompat_allowed.get().into()).to_text(out);
+            self.sb.version_incompat_allowed.get().to_text(out);
             write!(out, "\n  set version_upgrade=incompatible to enable\n\n");
         }
 

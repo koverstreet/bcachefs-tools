@@ -1021,12 +1021,6 @@ pub struct bch_sb_field_ext_flags0 {
 // nodes, journal entries
 
 #[allow(non_snake_case)]
-pub const fn BCH_VERSION_MAJOR(v: u64) -> u64 { v >> 10 }
-
-#[allow(non_snake_case)]
-pub const fn BCH_VERSION_MINOR(v: u64) -> u64 { v & !(!0 << 10) }
-
-#[allow(non_snake_case)]
 pub const fn BCH_VERSION(major: u64, minor: u64) -> u64 { (major << 10) | minor }
 
 #[bch_enum(open)]
@@ -1176,10 +1170,10 @@ pub enum MetadataVersion {
 
 /* The oldest version this one reads */
 #[allow(non_upper_case_globals)]
-pub const bcachefs_metadata_version_min: u32 = c::MetadataVersion::btree_ptr_sectors_written.0;
+pub const bcachefs_metadata_version_min: c::MetadataVersion = c::MetadataVersion::btree_ptr_sectors_written;
 
 #[allow(non_upper_case_globals)]
-pub const bcachefs_metadata_version_current: u32 = c::MetadataVersion::NR as u32 - 1;
+pub const bcachefs_metadata_version_current: c::MetadataVersion = c::MetadataVersion(c::MetadataVersion::NR - 1);
 
 pub const BCH_SB_SECTOR: u32 = 8;
 
@@ -1224,8 +1218,8 @@ pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb {
     pub csum: c::bch_csum,
-    pub version: Le16,
-    pub version_min: Le16,
+    pub version: Le16<MetadataVersion>,
+    pub version_min: Le16<MetadataVersion>,
     pub pad: [Le16; 2],
     pub magic: c::__uuid_t,
     pub uuid: c::__uuid_t,
@@ -1389,10 +1383,10 @@ impl bch_sb__head {
 
 #[bitfield(Le64)]
 pub struct bch_sb_flags5 {
-    version_upgrade_complete:               u16,
+    #[bits(16)] version_upgrade_complete:   MetadataVersion,
     allocator_stuck_timeout:                u16,
-    version_incompat:                       u16,
-    version_incompat_allowed:               u16,
+    #[bits(16)] version_incompat:           MetadataVersion,
+    #[bits(16)] version_incompat_allowed:   MetadataVersion,
 }
 
 #[bitfield(Le64)]
@@ -1865,7 +1859,7 @@ pub struct jset {
 
     pub magic: Le64,
     pub seq: Le64,
-    pub version: Le32,
+    pub version: Le32<MetadataVersion>,
     #[members]
     pub flags: jset_flags,
 
@@ -1942,7 +1936,7 @@ pub struct bset {
 
     #[members]
     pub flags: bset_flags,
-    pub version: Le16,
+    pub version: Le16<MetadataVersion>,
     u64s: Le16, /* count of d[] in u64s */
 
     pub start: [c::bkey_packed; 0],

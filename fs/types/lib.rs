@@ -18,19 +18,27 @@ pub const fn field_size<S, F>(_f: fn(*const S) -> *const F) -> u64 {
 /// field of one is placed, and aligns its struct, as no C __le field is.
 /// The same new(), get(), set(), From conversions and comparison with the
 /// integer.
+///
+/// Or what the field holds, stored as the integer: Le16<MetadataVersion>'s
+/// get() is a MetadataVersion.
 macro_rules! le_int {
     ($($name:ident: $t:ty),*) => { $(
         #[repr(transparent)]
         #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
-        pub struct $name($t);
+        pub struct $name<T = $t>($t, core::marker::PhantomData<T>);
+
+        impl LeValue<$t> for $t {
+            fn from_int(v: $t) -> Self { v }
+            fn into_int(self) -> $t { self }
+        }
 
         // SAFETY: the integer, and nothing else
-        unsafe impl crate::util::vstructs::Plain for $name {}
+        unsafe impl<T> crate::util::vstructs::Plain for $name<T> {}
 
         // SAFETY: the integer, and zero is one
-        unsafe impl ::pin_init::Zeroable for $name {}
+        unsafe impl<T> ::pin_init::Zeroable for $name<T> {}
 
-        crate::one_word!($name);
+        unsafe impl<T: Copy> crate::util::projections::TearSafe for $name<T> {}
 
         impl crate::util::vstructs::Native for $name {
             type Native = $t;
@@ -39,13 +47,22 @@ macro_rules! le_int {
         }
 
         impl $name {
-            pub const fn new(v: $t) -> Self { Self(v.to_le()) }
-            pub const fn get(self) -> $t { <$t>::from_le(self.0) }
-            pub fn set(&mut self, v: $t) { self.0 = v.to_le() }
+            pub const fn new(v: $t) -> Self { Self(v.to_le(), core::marker::PhantomData) }
         }
 
-        impl From<$t> for $name {
-            fn from(v: $t) -> Self { Self::new(v) }
+        impl<T> $name<T> {
+            /// The integer it's stored as, whatever it holds - const, as
+            /// get() can't be.
+            pub const fn to_int(self) -> $t { <$t>::from_le(self.0) }
+        }
+
+        impl<T: LeValue<$t>> $name<T> {
+            pub fn get(self) -> T { T::from_int(self.to_int()) }
+            pub fn set(&mut self, v: T) { self.0 = v.into_int().to_le() }
+        }
+
+        impl<T: LeValue<$t>> From<T> for $name<T> {
+            fn from(v: T) -> Self { Self(v.into_int().to_le(), core::marker::PhantomData) }
         }
 
         /// Bits set: OR is the same in either byte order.
@@ -62,11 +79,11 @@ macro_rules! le_int {
             fn from(v: $name) -> Self { v.get() }
         }
 
-        impl PartialEq<$t> for $name {
-            fn eq(&self, v: &$t) -> bool { self.get() == *v }
+        impl<T: LeValue<$t> + PartialEq> PartialEq<T> for $name<T> {
+            fn eq(&self, v: &T) -> bool { self.get() == *v }
         }
 
-        impl core::fmt::Debug for $name {
+        impl<T: LeValue<$t> + core::fmt::Debug> core::fmt::Debug for $name<T> {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 self.get().fmt(f)
             }
@@ -85,6 +102,13 @@ macro_rules! le_int {
     )* };
 }
 le_int!(Le16: u16, Le32: u32, Le64: u64);
+
+/// What an LeN field holds, stored as @I: its integer, or a type made from
+/// one.
+pub trait LeValue<I>: Copy {
+    fn from_int(v: I) -> Self;
+    fn into_int(self) -> I;
+}
 
 // ---- C's containers ------------------------------------------------------
 //

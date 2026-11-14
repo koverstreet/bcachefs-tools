@@ -1672,7 +1672,7 @@ mod tests {
             assert_eq!(plain_bytes(&m)[..BCH_MEMBER_V1_BYTES], plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
         }
 
-        sb.sb_mut().set_version_incompat(MetadataVersion::extent_flags.0 as u16 + 1);
+        sb.sb_mut().set_version_incompat(MetadataVersion(MetadataVersion::extent_flags.0 + 1));
         sb.members_cpy_v2_v1().unwrap();
         assert!(sb.field::<c::bch_sb_field_members_v1>().is_none());
     }

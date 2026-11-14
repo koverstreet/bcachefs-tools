@@ -215,13 +215,13 @@ pub fn format(
         die("insufficient memory");
     }
 
-    sb.sb_mut().version = (opts.version as u16).into();
-    sb.sb_mut().version_min = (opts.version as u16).into();
+    sb.sb_mut().version.set(MetadataVersion(opts.version));
+    sb.sb_mut().version_min.set(MetadataVersion(opts.version));
     sb.sb_mut().magic.b = BCHFS_MAGIC;
     sb.sb_mut().user_uuid.b = opts.uuid.unwrap_or_else(|| *uuid::Uuid::new_v4().as_bytes());
     sb.sb_mut().nr_devices = dev_slice.len() as u8;
 
-    sb.sb_mut().set_version_incompat_allowed(opts.version as u16);
+    sb.sb_mut().set_version_incompat_allowed(MetadataVersion(opts.version));
     // These are no longer options, only for compatibility with old versions
     sb.sb_mut().set_meta_replicas_req(1);
     sb.sb_mut().set_data_replicas_req(1);

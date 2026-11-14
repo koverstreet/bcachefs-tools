@@ -18,7 +18,7 @@ use crate::wrappers::sysfs;
 use bch_bindgen::c::bch_sb;
 use bcachefs_kernel::util::vstructs::{read_past, Head};
 use bcachefs_kernel::errcode::BchError;
-use bcachefs_kernel::format::DataType;
+use bcachefs_kernel::format::{DataType, MetadataVersion};
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
 
@@ -476,7 +476,7 @@ impl BcachefsHandle {
     }
 
     /// Read the on-disk metadata version from the filesystem superblock.
-    pub(crate) fn sb_version(&self) -> Result<u16, Errno> {
+    pub(crate) fn sb_version(&self) -> Result<MetadataVersion, Errno> {
         let buf = self.read_super()?;
         if buf.len() < mem::size_of::<Head<bch_sb>>() {
             return Err(Errno(libc::EIO));

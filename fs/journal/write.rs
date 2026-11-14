@@ -994,7 +994,7 @@ fn write_checksum(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError
     let mut validate_before_checksum = false;
 
     h.magic.set(fs.jset_magic());
-    h.version.set(fs.sb.version.get().into());
+    h.version.set(fs.sb.version.get());
 
     h.set_big_endian(cfg!(target_endian = "big"));
     h.set_csum_type(csum_type);

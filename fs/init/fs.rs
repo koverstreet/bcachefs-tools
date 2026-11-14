@@ -27,7 +27,7 @@ use crate::journal::seq_blacklist::blacklist_table_initialize;
 use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwsemNoio, Shared, SharedGuard};
 use crate::{bch_verbose, prt};
 use crate::sb::counters::counters_init;
-use crate::sb::io::{read_super, sb_to_fs, version, Holder};
+use crate::sb::io::{read_super, sb_to_fs, Holder};
 use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevPieces, SbMembersMut};
 use crate::sb::version::prep_for_start;
 use crate::util::names;
@@ -178,12 +178,12 @@ impl Fs {
     }
 
     pub fn version(&self) -> MetadataVersion {
-        MetadataVersion(self.sb.version.get() as u32)
+        self.sb.version.get()
     }
 
     /// Below version() while an upgrade's migrations are still running
     pub fn version_upgrade_complete(&self) -> MetadataVersion {
-        MetadataVersion(self.sb.version_upgrade_complete.get() as u32)
+        self.sb.version_upgrade_complete.get()
     }
 
     /// Topology repair dropped nodes from btree @id
@@ -303,7 +303,7 @@ impl Fs {
     pub fn request_incompat_feature(&self, version: MetadataVersion)
         -> Result<(), BchError>
     {
-        if version.0 <= self.sb.version_incompat.get().into() {
+        if version <= self.sb.version_incompat.get() {
             return Ok(());
         }
         self.set_version_incompat(version)
@@ -580,7 +580,7 @@ impl Fs {
             self.flags.set(Flag::may_upgrade_downgrade, true);
         }
 
-        prt!(out, "starting version {}\n", version(self.sb.version.get()));
+        prt!(out, "starting version {}\n", self.sb.version.get());
 
         let mut mount_opts = Printbuf::new();
         crate::opts::opts_to_text(&mut mount_opts, &opts.load(), Some(self), Some(self.sb_lock().sb().as_unvalidated()),
@@ -592,7 +592,7 @@ impl Fs {
         }
 
         if self.sb.version_incompat_allowed.get() != self.sb.version.get() {
-            prt!(out, "allowing incompatible features up to {}\n", version(self.sb.version_incompat_allowed.get()));
+            prt!(out, "allowing incompatible features up to {}\n", self.sb.version_incompat_allowed.get());
         }
 
         if opts.verbose.get() != 0 {

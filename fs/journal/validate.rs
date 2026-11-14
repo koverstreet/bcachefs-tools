@@ -6,7 +6,7 @@ use core::mem::{offset_of, size_of};
 use crate::alloc::replicas::SbEntry;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{Btree, DataType};
+use crate::format::{Btree, DataType, MetadataVersion};
 use crate::fs::{Dev, Fs};
 use crate::btree::bkey::{BkeySC, ValidateFlags};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
@@ -39,9 +39,8 @@ struct EntryPos {
     offset: usize,
 }
 
-fn err_msg(out: &mut Printbuf, version: u32, jset: Option<JsetPos>, entry: Option<EntryPos>) {
-    prt!(out, "invalid journal entry, version=");
-    crate::sb::io::version(version).to_text(out);
+fn err_msg(out: &mut Printbuf, version: MetadataVersion, jset: Option<JsetPos>, entry: Option<EntryPos>) {
+    prt!(out, "invalid journal entry, version={version}");
 
     if let Some(e) = entry {
         prt!(out, " type=");
@@ -67,7 +66,7 @@ fn err_msg(out: &mut Printbuf, version: u32, jset: Option<JsetPos>, entry: Optio
 #[derive(Clone, Copy)]
 struct Ctx<'a> {
     fs:         &'a Fs,
-    version:    u32,
+    version:    MetadataVersion,
     big_endian: bool,
     jset:       Option<JsetPos>,
     entry:      Option<EntryPos>,
@@ -165,7 +164,7 @@ enum Key {
 }
 
 fn bkey_compat(ctx: &Ctx<'_>, k: &mut [u8]) {
-    if ctx.version < c::bcachefs_metadata_version_current as u32 ||
+    if ctx.version < c::bcachefs_metadata_version_current ||
        ctx.big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         unsafe {
@@ -525,7 +524,7 @@ fn entry_validate_typed(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
 /// Entry @e - its bytes as read, as long as its u64s says - checked, and
 /// repaired in place: one not in a jset, the superblock's clean section's or a
 /// transaction's.
-pub(crate) fn journal_entry_validate(fs: &Fs, e: &mut [u8], version: u32, big_endian: bool,
+pub(crate) fn journal_entry_validate(fs: &Fs, e: &mut [u8], version: MetadataVersion, big_endian: bool,
                                      from: c::bkey_validate_context) -> Result<(), BchError>
 {
     let ctx = Ctx { fs, version, big_endian, jset: None, entry: Some(EntryPos { type_: head(e).type_, offset: 0 }), from };
@@ -601,10 +600,9 @@ pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64
     let ctx = Ctx::jset(fs, h, flags);
     let name = dev_or_fs_name(fs, ca);
 
-    if journal_entry_err_on!(ctx, !crate::sb::io::version_compatible(version as u16), jset_unsupported_version,
+    if journal_entry_err_on!(ctx, !version.compatible(), jset_unsupported_version,
                              "{} sector {} seq {}: incompatible journal entry version {}.{}",
-                             name, sector, seq,
-                             c::BCH_VERSION_MAJOR(version.into()), c::BCH_VERSION_MINOR(version.into())) {
+                             name, sector, seq, version.major(), version.minor()) {
         /* don't try to continue: */
         return fs.throw(Errcode::BCH_ERR_EINVAL_journal_entry_version_incompatible);
     }
@@ -648,10 +646,9 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<c::jse
     let ctx = Ctx::jset(fs, h, ValidateFlags::empty());
     let name = dev_or_fs_name(fs, ca);
 
-    if journal_entry_err_on!(ctx, !crate::sb::io::version_compatible(version as u16), jset_unsupported_version,
+    if journal_entry_err_on!(ctx, !version.compatible(), jset_unsupported_version,
                              "{} sector {} seq {}: unknown journal entry version {}.{}",
-                             name, sector, seq,
-                             c::BCH_VERSION_MAJOR(version.into()), c::BCH_VERSION_MINOR(version.into())) {
+                             name, sector, seq, version.major(), version.minor()) {
         /* don't try to continue: */
         return fs.throw(Errcode::BCH_ERR_EINVAL_journal_validate_version_incompatible);
     }

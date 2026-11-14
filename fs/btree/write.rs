@@ -548,7 +548,7 @@ impl BsetWrite {
         assert!(i.big_endian() == cfg!(target_endian = "big"));
         assert!(i.seq == contents.data().keys.seq);
 
-        i.version = Le16::new(fs.sb.version.get());
+        i.version.set(fs.sb.version.get());
         i.set_offset(b.written.get());
         i.set_csum_type(fs.meta_checksum_type());
 
@@ -573,7 +573,7 @@ impl BsetWrite {
 
         /* bch2_validate_bset will be modifying: */
         let validate_before_checksum = i.csum_type().is_encryption() ||
-            (i.version.get() as u32) < c::bcachefs_metadata_version_current;
+            i.version.get() < c::bcachefs_metadata_version_current;
 
         /* if we're going to be encrypting, check metadata validity first: */
         if validate_before_checksum {

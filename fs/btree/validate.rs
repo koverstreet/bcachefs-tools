@@ -7,11 +7,10 @@ use crate::btree::{compat::__bch2_bkey_compat, node::{BtreeNode, NodeContents}, 
 use crate::c::{self, Errcode as e};
 use crate::data::ptrs::BkeyVRead;
 use crate::errcode::BchError;
-use crate::format::{BkeyType, Btree};
+use crate::format::{BkeyType, Btree, MetadataVersion};
 use crate::fs::{Dev, Fs};
 use crate::init::{error::{id, BkeyValidate}, passes::RecoveryPass};
-use crate::sb::{errors::{FsckFlags, SbErrorId}, io::version_compatible};
-use crate::types::Le16;
+use crate::sb::errors::{FsckFlags, SbErrorId};
 use crate::util::vstructs::{Head, Unvalidated, VStructError};
 use crate::util::{log::LogMsg, Printbuf, ToText};
 use crate::{bkey_fsck_err_on, prt};
@@ -238,13 +237,11 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
     let i = n.bset_mut();
     let version = i.version.get();
 
-    btree_err_on!(v, !version_compatible(version),
+    btree_err_on!(v, !version.compatible(),
                   FsckFlags::empty(),
                   ErrAt::bset(i),
                   id::btree_node_unsupported_version,
-                  "unsupported bset version {}.{}",
-                  c::BCH_VERSION_MAJOR(version.into()),
-                  c::BCH_VERSION_MINOR(version.into()))?;
+                  "unsupported bset version {}.{}", version.major(), version.minor())?;
 
     if fs.recovery.runner.current_pass.get() != RecoveryPass::scan_for_btree_nodes &&
        btree_err_on!(v, version < fs.sb.version_min.get(),
@@ -253,25 +250,24 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
                      id::btree_node_bset_older_than_sb_min,
                      "bset version {} older than superblock version_min {}",
                      version, fs.sb.version_min.get())? {
-        if version_compatible(version) {
+        if version.compatible() {
             let mut sb = fs.sb_lock();
-            sb.sb_mut().version_min = Le16::new(version);
+            sb.sb_mut().version_min.set(version);
             fs.write_super(&mut sb);
         } else {
             /* We have no idea what's going on: */
-            i.version = Le16::new(fs.sb.version.get());
+            i.version.set(fs.sb.version.get());
         }
     }
 
-    if btree_err_on!(v, c::BCH_VERSION_MAJOR(version.into()) >
-                        c::BCH_VERSION_MAJOR(fs.sb.version.get().into()),
+    if btree_err_on!(v, version.major() > fs.sb.version.get().major(),
                      FsckFlags::CAN_FIX,
                      ErrAt::bset(i),
                      id::btree_node_bset_newer_than_sb,
                      "bset version {} newer than superblock version {}",
                      version, fs.sb.version.get())? {
         let mut sb = fs.sb_lock();
-        sb.sb_mut().version = Le16::new(version);
+        sb.sb_mut().version.set(version);
         fs.write_super(&mut sb);
     }
 
@@ -423,14 +419,15 @@ fn btree_node_read_bkey_cmp(contents: &NodeContents, l: &BkeyP, r: &BkeyP) -> Or
         .then((deleted(r) - deleted(l)).cmp(&0))
 }
 
-fn bkey_compat(v: &NodeValidate<'_>, version: u16, big_endian: bool, k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
+fn bkey_compat(v: &NodeValidate<'_>, version: MetadataVersion, big_endian: bool,
+               k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
     let b = v.b;
 
-    if version < c::bcachefs_metadata_version_current as u16 ||
+    if version < c::bcachefs_metadata_version_current ||
        big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         unsafe {
-            __bch2_bkey_compat(Some(v.fs), b.c.level.into(), Btree(b.c.btree_id.into()), version.into(),
+            __bch2_bkey_compat(Some(v.fs), b.c.level.into(), Btree(b.c.btree_id.into()), version,
                                big_endian.into(), v.writing().into(), Some(&b.contents().format),
                                k.as_ffi_mut())
         }
@@ -440,7 +437,7 @@ fn bkey_compat(v: &NodeValidate<'_>, version: u16, big_endian: bool, k: &mut Bke
 struct BsetKeys<'a> {
     contents:      &'a NodeContents,
     keys_at:       usize,
-    version:       u16,
+    version:       MetadataVersion,
     big_endian:    bool,
     updated_range: bool,
     from:          c::bkey_validate_context,

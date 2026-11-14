@@ -150,7 +150,7 @@ use crate::util::projections::{AtomicWord, Volatile, VolatileWriter, PublishedOn
 use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
-use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
+use crate::types::{bits_to_longs, ArmOf, Le32, Le64, LeValue};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
@@ -190,11 +190,11 @@ pub struct bch_sb_cpu {
     pub uuid: [Volatile<u8>; 16],
     pub user_uuid: [Volatile<u8>; 16],
 
-    pub version: Volatile<u16>,
-    pub version_incompat: Volatile<u16>,
-    pub version_incompat_allowed: Volatile<u16>,
-    pub version_min: Volatile<u16>,
-    pub version_upgrade_complete: Volatile<u16>,
+    pub version: Volatile<MetadataVersion>,
+    pub version_incompat: Volatile<MetadataVersion>,
+    pub version_incompat_allowed: Volatile<MetadataVersion>,
+    pub version_min: Volatile<MetadataVersion>,
+    pub version_upgrade_complete: Volatile<MetadataVersion>,
 
     pub nr_devices: Volatile<u8>,
     pub clean: Volatile<u8>,
@@ -492,31 +492,18 @@ fn validate_layout(layout: &c::bch_sb_layout, out: &mut Printbuf) -> Result<(), 
     Ok(())
 }
 
-/// Whether this version reads @version: its major, and no older than the
-/// oldest it knows - bch2_version_compatible().
-pub(crate) fn version_compatible(version: u16) -> bool {
-    let current = c::bcachefs_metadata_version_current as u64;
-    c::BCH_VERSION_MAJOR(version.into()) <= c::BCH_VERSION_MAJOR(current) &&
-        u32::from(version) >= c::bcachefs_metadata_version_min as u32
-}
-
-pub(crate) fn version(v: impl Into<u32>) -> MetadataVersion {
-    MetadataVersion(v.into())
-}
-
 fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> {
     let (v, v_min) = (sb.version.get(), sb.version_min.get());
-    let (min, current) = (version(c::bcachefs_metadata_version_min as u32),
-                          version(c::bcachefs_metadata_version_current as u32));
+    let (min, current) = (c::bcachefs_metadata_version_min, c::bcachefs_metadata_version_current);
 
     for (what, v) in [("version", v), ("version_min", v_min)] {
-        sb_err_on!(out, !version_compatible(v), BCH_ERR_invalid_sb_version,
-                   "Unsupported superblock {what} {} (min {min}, max {current}){}", version(v),
-                   if v < min.0 as u16 { "; upgrade it with an older bcachefs-tools' fsck" } else { "" })?;
+        sb_err_on!(out, !v.compatible(), BCH_ERR_invalid_sb_version,
+                   "Unsupported superblock {what} {v} (min {min}, max {current}){}",
+                   if v < min { "; upgrade it with an older bcachefs-tools' fsck" } else { "" })?;
     }
 
     sb_err_on!(out, v_min > v, BCH_ERR_invalid_sb_version,
-               "Bad minimum version {}, greater than version field {}", version(v_min), version(v))?;
+               "Bad minimum version {v_min}, greater than version field {v}")?;
     Ok(())
 }
 
@@ -545,11 +532,10 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
                    "Filesystem has incompatible feature bit {incompat_bit}, highest supported {} ({})",
                    SbFeature(c::SbFeature::NR - 1), c::SbFeature::NR - 1)?;
 
-        let current = c::bcachefs_metadata_version_current as u64;
-        sb_err_on!(out, c::BCH_VERSION_MAJOR(sb.version.get().into()) > c::BCH_VERSION_MAJOR(current) ||
-                        u64::from(sb.version_incompat()) > current, BCH_ERR_invalid_sb_features,
-                   "Filesystem has incompatible version {}, current version {}",
-                   version(sb.version.get()), version(current as u32))?;
+        let current = c::bcachefs_metadata_version_current;
+        sb_err_on!(out, sb.version.get().major() > current.major() ||
+                        sb.version_incompat() > current, BCH_ERR_invalid_sb_features,
+                   "Filesystem has incompatible version {}, current version {current}", sb.version.get())?;
     }
 
     sb_err_on!(out, sb.user_uuid.b == [0; 16], BCH_ERR_invalid_sb_uuid, "Bad user UUID (got zeroes)")?;
@@ -567,14 +553,14 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
                "Invalid time precision: {precision} (min 1, max {NSEC_PER_SEC})")?;
 
     // old versions didn't know to downgrade this field
-    if sb.version_incompat_allowed() > sb.version.get().into() {
-        let v = sb.version.get().into();
+    if sb.version_incompat_allowed() > sb.version.get() {
+        let v = sb.version.get();
         sb.set_version_incompat_allowed(v);
     }
 
     if sb.version_incompat() > sb.version_incompat_allowed() {
         prt!(out, "Invalid version_incompat {} > incompat_allowed {}",
-             version(sb.version_incompat() as u32), version(sb.version_incompat_allowed() as u32));
+             sb.version_incompat(), sb.version_incompat_allowed());
         if write {
             return Err(Errcode::BCH_ERR_invalid_sb_version.into());
         }
@@ -661,7 +647,38 @@ pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &c::bch_opts, read_offset: u6
 /// The versions this one knows, oldest first, and their names.
 const VERSIONS: &[(&str, u64)] = <MetadataVersion as crate::util::names::Names>::ENTRIES;
 
+/// Every version is 16 bits: the superblock's and a bset's are __le16, a
+/// jset's __le32.
+impl LeValue<u16> for MetadataVersion {
+    fn from_int(v: u16) -> Self { Self(v.into()) }
+    fn into_int(self) -> u16 { self.0 as u16 }
+}
+
+impl LeValue<u32> for MetadataVersion {
+    fn from_int(v: u32) -> Self { Self(v) }
+    fn into_int(self) -> u32 { self.0 }
+}
+
 impl MetadataVersion {
+    pub const fn new(major: u32, minor: u32) -> Self {
+        Self(c::BCH_VERSION(major as u64, minor as u64) as u32)
+    }
+
+    pub const fn major(self) -> u32 {
+        self.0 >> 10
+    }
+
+    pub const fn minor(self) -> u32 {
+        self.0 & !(!0 << 10)
+    }
+
+    /// Whether this version reads it: its major, and no older than the
+    /// oldest it knows - bch2_version_compatible().
+    pub fn compatible(self) -> bool {
+        self.major() <= c::bcachefs_metadata_version_current.major() &&
+            self >= c::bcachefs_metadata_version_min
+    }
+
     /// Its name, if it's a version this one knows.
     pub fn name(self) -> Option<&'static str> {
         crate::util::names::name_of(VERSIONS, self.0.into())
@@ -670,20 +687,17 @@ impl MetadataVersion {
     /// The newest version this one knows of the same major - itself at
     /// major 0: bch2_latest_compatible_version().
     pub fn latest_compatible(self) -> Self {
-        let major = |v: u32| c::BCH_VERSION_MAJOR(v.into());
-        if major(self.0) == 0 {
+        if self.major() == 0 {
             return self;
         }
-        Self(VERSIONS.iter().map(|&(_, v)| v as u32).filter(|&v| major(v) == major(self.0)).fold(self.0, u32::max))
+        VERSIONS.iter().map(|&(_, v)| Self(v as u32)).filter(|v| v.major() == self.major()).fold(self, Self::max)
     }
 }
 
 /// The version's name and number.
 impl ToText for MetadataVersion {
     fn to_text(&self, out: &mut Printbuf) {
-        let v = u64::from(self.0);
-        prt!(out, "{} ({}.{})", self.name().unwrap_or("(unknown version)"),
-             c::BCH_VERSION_MAJOR(v), c::BCH_VERSION_MINOR(v));
+        prt!(out, "{} ({}.{})", self.name().unwrap_or("(unknown version)"), self.major(), self.minor());
     }
 }
 crate::display_via_to_text!(MetadataVersion);
@@ -692,9 +706,9 @@ impl Fs {
     /// Whether features of @version may be used, without asking:
     /// bch2_incompat_feature_allowed().
     pub(crate) fn incompat_feature_allowed(&self, version: MetadataVersion) -> bool {
-        version.0 <= self.sb.version_incompat.get().into() ||
+        version <= self.sb.version_incompat.get() ||
             (self.feature(SbFeature::incompat_version_field) &&
-             version.0 <= self.sb.version_incompat_allowed.get().into())
+             version <= self.sb.version_incompat_allowed.get())
     }
 
     /// Make the filesystem incompatible with versions before @version, if
@@ -703,22 +717,20 @@ impl Fs {
     pub fn set_version_incompat(&self, version: MetadataVersion) -> Result<(), BchError> {
         if self.incompat_feature_allowed(version) {
             let mut sb = self.sb_lock();
-            if version.0 > self.sb.version_incompat.get().into() {
-                let s = sb.sb_mut();
-                let max = s.version_incompat().max(version.0 as u16);
-                s.set_version_incompat(max);
+            if version > self.sb.version_incompat.get() {
+                sb.sb_mut().update_version_incompat(|v| v.max(version));
                 self.write_super(&mut sb);
             }
             return Ok(());
         }
 
         // a bit per minor: one major
-        const _: () = assert!(c::BCH_VERSION_MAJOR(c::bcachefs_metadata_version_current as u64) == 1);
-        let minor = c::BCH_VERSION_MINOR(version.0.into()) as usize;
+        const _: () = assert!(c::bcachefs_metadata_version_current.major() == 1);
+        let minor = version.minor() as usize;
         let requested = &self.incompat_versions_requested;
         if !requested.test(minor) && !requested.test_and_set(minor) {
             crate::bch_notice!(self, "requested incompat feature {} currently not enabled, allowed up to {}\n  set version_upgrade=incompatible to enable",
-                               version, self::version(self.sb.version_incompat_allowed.get()));
+                               version, self.sb.version_incompat_allowed.get());
         }
 
         self.throw(Errcode::BCH_ERR_may_not_use_incompat_feature)
@@ -744,15 +756,13 @@ impl Fs {
             return;
         }
 
-        crate::bch_notice!(self, "Now allowing incompatible features up to {}, previously allowed up to {}\n",
-                           version(v), version(allowed));
+        crate::bch_notice!(self, "Now allowing incompatible features up to {v}, previously allowed up to {allowed}\n");
 
         let s = sb.sb_mut();
         s.features[0] |= c::BCH_SB_FEATURES_ALL;
-        let max = s.version_incompat_allowed().max(v.into());
-        s.set_version_incompat_allowed(max);
+        s.update_version_incompat_allowed(|a| a.max(v));
 
-        crate::sb::downgrade::set_upgrade_incompat(&mut sb, allowed.into(), v.into());
+        crate::sb::downgrade::set_upgrade_incompat(&mut sb, allowed, v);
         self.write_super(&mut sb);
 
         crate::init::passes::run_async(self);
@@ -770,39 +780,38 @@ pub(crate) fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool
     let current = c::bcachefs_metadata_version_current;
     let s = sb.sb_mut();
 
-    if u32::from(s.version_upgrade_complete()) > current {
-        s.set_version_upgrade_complete(current as u16);
+    if s.version_upgrade_complete() > current {
+        s.set_version_upgrade_complete(current);
     }
-    if u32::from(s.version_incompat_allowed()) > current {
-        s.set_version_incompat_allowed(current as u16);
+    if s.version_incompat_allowed() > current {
+        s.set_version_incompat_allowed(current);
     }
-    if u32::from(fs.sb.version.get()) > current {
-        s.version = Le16::new(current as u16);
+    if fs.sb.version.get() > current {
+        s.version.set(current);
     }
-    if u32::from(fs.sb.version_min.get()) > current {
-        s.version_min = Le16::new(current as u16);
+    if fs.sb.version_min.get() > current {
+        s.version_min.set(current);
     }
     s.compat[0] = Le64::new(s.compat[0].get() & ((1 << c::SbCompat::NR) - 1));
 
-    current < fs.sb.version.get().into()
+    current < fs.sb.version.get()
 }
 
 /// The superblock at @new, and allowing incompatible features up to it if
 /// @incompat; a new major empties the downgrade section, which is for
 /// downgrades within one - empties, not deletes: a write calls the from_cpu()
 /// of each section there is.
-pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: u32, incompat: bool) {
-    if c::BCH_VERSION_MAJOR(new.into()) > c::BCH_VERSION_MAJOR(sb.sb().version.get().into()) {
+pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: MetadataVersion, incompat: bool) {
+    if new.major() > sb.sb().version.get().major() {
         let empty = <c::bch_sb_field_downgrade as ArmRef>::MIN_LEN.div_ceil(size_of::<u64>());
         fs.sb_resize(sb).field_resize::<c::bch_sb_field_downgrade>(empty as u32);
     }
 
     let s = sb.sb_mut();
-    s.version = Le16::new(new as u16);
+    s.version.set(new);
     if incompat {
         s.features[0] |= c::BCH_SB_FEATURES_ALL;
-        let max = s.version_incompat_allowed().max(new as u16);
-        s.set_version_incompat_allowed(max);
+        s.update_version_incompat_allowed(|a| a.max(new));
     }
 }
 
@@ -839,12 +848,12 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
     }
     out.newline();
 
-    for (what, v) in [("Version", u32::from(sb.version.get())),
-                      ("Incompatible features allowed", sb.version_incompat_allowed() as u32),
-                      ("Incompatible features in use", sb.version_incompat() as u32),
-                      ("Version upgrade complete", sb.version_upgrade_complete() as u32),
-                      ("Oldest version on disk", u32::from(sb.version_min.get()))] {
-        prt!(out, "{what}:\t{}\n", version(v));
+    for (what, v) in [("Version", sb.version.get()),
+                      ("Incompatible features allowed", sb.version_incompat_allowed()),
+                      ("Incompatible features in use", sb.version_incompat()),
+                      ("Version upgrade complete", sb.version_upgrade_complete()),
+                      ("Oldest version on disk", sb.version_min.get())] {
+        prt!(out, "{what}:\t{v}\n");
     }
 
     match sb.time_base_lo.get() {
@@ -1139,7 +1148,7 @@ impl bch_sb_handle {
     /// The defaults an older version left unset, filled in
     pub fn set_compat_defaults(&mut self) -> Result<(), BchError> {
         let s = self.sb_mut();
-        let version = u32::from(s.version.get());
+        let version = s.version.get();
 
         /* Compat: */
         if s.journal_flush_delay() == 0 {
@@ -1148,19 +1157,19 @@ impl bch_sb_handle {
         if s.journal_reclaim_delay() == 0 {
             s.set_journal_reclaim_delay(1000);
         }
-        if s.version_upgrade_complete() == 0 {
-            s.set_version_upgrade_complete(version as u16);
+        if s.version_upgrade_complete().0 == 0 {
+            s.set_version_upgrade_complete(version);
         }
-        if version <= MetadataVersion::disk_accounting_v2.0 && s.allocator_stuck_timeout() == 0 {
+        if version <= MetadataVersion::disk_accounting_v2 && s.allocator_stuck_timeout() == 0 {
             s.set_allocator_stuck_timeout(30);
         }
-        if version <= MetadataVersion::disk_accounting_v2.0 {
+        if version <= MetadataVersion::disk_accounting_v2 {
             s.set_promote_whole_extents(true);
         }
         if s.write_error_timeout() == 0 {
             s.set_write_error_timeout(30);
         }
-        if version <= MetadataVersion::extent_flags.0 && s.csum_err_retry_nr() == 0 {
+        if version <= MetadataVersion::extent_flags && s.csum_err_retry_nr() == 0 {
             s.set_csum_err_retry_nr(3);
         }
 
@@ -1177,7 +1186,7 @@ impl bch_sb_handle {
         if ext.btree_cache_shrinker_seeks() == 0 {
             ext.set_btree_cache_shrinker_seeks(4);
         }
-        if version <= MetadataVersion::erasure_coding.0 && ext.discard_buffer() == 0 {
+        if version <= MetadataVersion::erasure_coding && ext.discard_buffer() == 0 {
             ext.set_discard_buffer(4);
         }
         Ok(())
@@ -2339,11 +2348,10 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
         return fs.throw(Errcode::BCH_ERR_erofs_sb_never_started);
     }
 
-    let version = u32::from(sb.sb().version.get());
+    let version = sb.sb().version.get();
     if version > c::bcachefs_metadata_version_current {
         crate::fs_fatal_error!(fs, ": attempting to write superblock that wasn't version downgraded ({} > {})",
-                               MetadataVersion(version),
-                               MetadataVersion(c::bcachefs_metadata_version_current));
+                               version, c::bcachefs_metadata_version_current);
         return fs.throw(Errcode::BCH_ERR_sb_not_downgraded);
     }
 

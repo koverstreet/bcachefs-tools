@@ -14,7 +14,7 @@ use crate::init::passes::{passes_from_stable, passes_to_stable, prt_stable};
 use crate::prt;
 use crate::sb::downgrade::{ext, sb_set_downgrade, sb_set_upgrade};
 use crate::sb::errors::SbErrorId;
-use crate::sb::io::{check_version_downgrade, sb_upgrade, version};
+use crate::sb::io::{check_version_downgrade, sb_upgrade};
 use crate::types::Le64;
 use crate::data_structures::bitmap::LeBitmap;
 use crate::os::kernel::ktime_get_real_seconds;
@@ -23,16 +23,15 @@ use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 
 /// Older than this, an upgrade isn't optional
-const REQUIRED_UPGRADE_BELOW: u32 =
-    MetadataVersion::btree_node_accounting.0;
+const REQUIRED_UPGRADE_BELOW: MetadataVersion = MetadataVersion::btree_node_accounting;
 
 fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) -> bool {
     let latest_version = c::bcachefs_metadata_version_current;
-    let latest_compatible = latest_version.min(version(fs.sb.version.get()).latest_compatible().0);
-    let old_version = u32::from(match fs.sb.version_upgrade_complete.get() {
-        0 => fs.sb.version.get(),
+    let latest_compatible = latest_version.min(fs.sb.version.get().latest_compatible());
+    let old_version = match fs.sb.version_upgrade_complete.get() {
+        MetadataVersion(0) => fs.sb.version.get(),
         v => v,
-    });
+    };
     let upgrade = Upgrade(fs.opts().version_upgrade.get().into());
     let incompat = upgrade == Upgrade::incompatible;
     let mut ret = false;
@@ -48,7 +47,7 @@ fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) 
             Upgrade::compatible   => latest_compatible,
             Upgrade::incompatible => latest_version,
             Upgrade::none         => old_version.min(latest_version),
-            _                     => 0,
+            _                     => MetadataVersion(0),
         }
     };
 
@@ -57,15 +56,13 @@ fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) 
             prt!(out, "Version upgrade required:\n");
         }
 
-        if old_version != u32::from(fs.sb.version.get()) {
+        if old_version != fs.sb.version.get() {
             prt!(out, "Version upgrade from {} to {} incomplete\n",
-                 version(fs.sb.version_upgrade_complete.get()), version(fs.sb.version.get()));
+                 fs.sb.version_upgrade_complete.get(), fs.sb.version.get());
         }
 
-        let major = |v: u32| c::BCH_VERSION_MAJOR(v.into());
-        prt!(out, "Doing {} version upgrade from {} to {}\n",
-             if major(old_version) != major(new_version) { "incompatible" } else { "compatible" },
-             version(old_version), version(new_version));
+        prt!(out, "Doing {} version upgrade from {old_version} to {new_version}\n",
+             if old_version.major() != new_version.major() { "incompatible" } else { "compatible" });
 
         let passes = ext(sb).recovery_passes_required[0].get();
         sb_set_upgrade(sb, old_version, new_version);
@@ -80,9 +77,9 @@ fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) 
         ret = true;
     }
 
-    if new_version > u32::from(fs.sb.version_incompat_allowed.get()) && incompat {
-        prt!(out, "Now allowing incompatible features up to {}, previously allowed up to {}\n",
-             version(new_version), version(fs.sb.version_incompat_allowed.get()));
+    if new_version > fs.sb.version_incompat_allowed.get() && incompat {
+        prt!(out, "Now allowing incompatible features up to {new_version}, previously allowed up to {}\n",
+             fs.sb.version_incompat_allowed.get());
 
         ret = true;
     }
@@ -136,9 +133,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
             prt!(out, "Version downgrade required");
 
             let passes = ext(&mut sb).recovery_passes_required[0].get();
-            let minor = |v: u32| c::BCH_VERSION_MINOR(v.into()) as u32;
-            sb_set_downgrade(&mut sb, minor(c::bcachefs_metadata_version_current),
-                             minor(fs.sb.version.get().into()));
+            sb_set_downgrade(&mut sb, c::bcachefs_metadata_version_current.minor(), fs.sb.version.get().minor());
             let passes = ext(&mut sb).recovery_passes_required[0].get() & !passes;
             if passes != 0 {
                 prt!(out, ", running recovery passes: ");
@@ -154,8 +149,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
     let recovery_passes = fs.opts().recovery_passes.get() | required;
     fs.opts_writer(&mut sb).recovery_passes.set(recovery_passes);
 
-    if u32::from(fs.sb.version_upgrade_complete.get()) <
-       MetadataVersion::autofix_errors.0 {
+    if fs.sb.version_upgrade_complete.get() < MetadataVersion::autofix_errors {
         sb.sb_mut().set_error_action(c::ErrorAction::fix_safe);
     }
 

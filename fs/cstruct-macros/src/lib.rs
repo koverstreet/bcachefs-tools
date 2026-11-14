@@ -672,7 +672,7 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
     };
     // LeN: the uN, little-endian - as on disk
     if let Some(bits) = storage.to_string().strip_prefix("Le") {
-        repr(quote!(crate::types::#storage), "new", "get");
+        repr(quote!(crate::types::#storage), "new", "to_int");
         storage = format_ident!("u{bits}");
     }
     match align {

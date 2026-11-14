@@ -537,7 +537,7 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
     // Reconcile drives evacuation — check the filesystem has been upgraded
     let sb_ver = handle.sb_version()
         .context("reading filesystem superblock")?;
-    if (sb_ver as u64) < u32::from(MetadataVersion::reconcile) as u64 {
+    if sb_ver < MetadataVersion::reconcile {
         return Err(anyhow!(
             "Filesystem has not been upgraded to the reconcile version.\n\
              Device evacuation requires reconcile. Remount with:\n  \
