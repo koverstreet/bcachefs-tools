@@ -8,10 +8,16 @@
  * init macros give theirs: Rust passes its own, @key.
  */
 
+#include <linux/blkdev.h>
 #include <linux/mutex.h>
+#include <linux/percpu.h>
 #include <linux/percpu-rwsem.h>
+#include <linux/preempt.h>
 #include <linux/rwsem.h>
+#include <linux/sched/signal.h>
 #include <linux/spinlock.h>
+#include <linux/version.h>
+#include <linux/workqueue.h>
 
 #include "shim.h"
 
@@ -161,4 +167,191 @@ void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key)
 void rust_mutex_init(struct mutex *lock, const char *name, void *key)
 {
 	__mutex_init(lock, name, key);
+}
+
+/*
+ * 7.1 introduced bdev_rot() and removed bdev_nonrot(). Shim bdev_rot for
+ * older kernels so call sites can always use bdev_rot.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7,0,0)
+static inline bool bdev_rot(struct block_device *bdev)
+{
+	return !bdev_nonrot(bdev);
+}
+#endif
+
+/*
+ * this_cpu_add() and _cmpxchg(), for Rust where it has no asm of its own
+ * (util/percpu.rs). @pcp is a _t __percpu *: the prototype Rust generates
+ * can't say so, and on x86 __percpu can be an address space of its own.
+ */
+#define BCH2_THIS_CPU_OPS(_t)							\
+void bch2_this_cpu_add_##_t(_t *pcp, _t val)					\
+{										\
+	this_cpu_add(*(_t __percpu *) (unsigned long) pcp, val);		\
+}										\
+										\
+_t bch2_this_cpu_cmpxchg_##_t(_t *pcp, _t old, _t new)				\
+{										\
+	return this_cpu_cmpxchg(*(_t __percpu *) (unsigned long) pcp, old, new);\
+}
+
+BCH2_THIS_CPU_OPS(u32)
+BCH2_THIS_CPU_OPS(u64)
+#undef BCH2_THIS_CPU_OPS
+
+/* ...per_cpu_ptr(), and the possible CPUs: the one after @cpu, -1 at the end */
+void *bch2_per_cpu_ptr(void *pcp, unsigned cpu)
+{
+	return per_cpu_ptr((void __percpu *) (unsigned long) pcp, cpu);
+}
+
+int bch2_cpu_possible_next(int cpu)
+{
+	cpu = cpumask_next(cpu, cpu_possible_mask);
+	return cpu < nr_cpu_ids ? cpu : -1;
+}
+
+/* ...this CPU's copy */
+void *bch2_this_cpu_ptr(void *pcp)
+{
+	return this_cpu_ptr((void __percpu *) (unsigned long) pcp);
+}
+
+/* ...this CPU's: preemption and migration, and its id */
+void bch2_preempt_disable(void)
+{
+	preempt_disable();
+}
+
+void bch2_preempt_enable(void)
+{
+	preempt_enable();
+}
+
+unsigned bch2_raw_smp_processor_id(void)
+{
+	return raw_smp_processor_id();
+}
+
+void bch2_migrate_disable(void)
+{
+	migrate_disable();
+}
+
+void bch2_migrate_enable(void)
+{
+	migrate_enable();
+}
+
+/* ...and a task's: its pid, and the CPU it's to be woken on */
+int bch2_task_pid(struct task_struct *task)
+{
+	return task->pid;
+}
+
+/*
+ * Compiled out under CONFIG_SCHED_ALT (BMQ/PDS): those schedulers don't have
+ * select_task_rq_fair() and drop task_struct.wake_cpu.
+ */
+void bch2_set_current_wake_cpu(int cpu)
+{
+#ifndef CONFIG_SCHED_ALT
+	WRITE_ONCE(current->wake_cpu, cpu);
+#endif
+}
+
+bool bch2_fatal_signal_pending(void)
+{
+	return fatal_signal_pending(current);
+}
+
+unsigned bch2_num_online_cpus(void)
+{
+	return num_online_cpus();
+}
+
+/* bdev_rot() is the shim's above, before 7.0 */
+bool bch2_bdev_rot(struct block_device *bdev)
+{
+	return bdev_rot(bdev);
+}
+
+/* For os/linux_kernel/workqueue.rs: alloc_workqueue() is a macro, its name a format */
+struct workqueue_struct *bch2_alloc_workqueue(const char *name, unsigned flags, int max_active)
+{
+	return alloc_workqueue("%s", flags, max_active, name);
+}
+
+#include <linux/kthread.h>
+
+/* For os/linux_kernel/kthread.rs: kthread_create() is a macro */
+struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name)
+{
+	return kthread_create(fn, data, "%s", name);
+}
+
+bool bch2_kthread_should_stop(void)
+{
+	return (current->flags & PF_KTHREAD) && kthread_should_stop();
+}
+
+/*
+ * os/linux_kernel/sched.rs: current, signal_pending_state() and need_resched()
+ * are macros, or inlines over current
+ */
+struct task_struct *bch2_current(void)
+{
+	return current;
+}
+
+bool bch2_signal_pending_state(unsigned int state)
+{
+	return signal_pending_state(state, current);
+}
+
+bool bch2_need_resched(void)
+{
+	return need_resched();
+}
+
+#ifdef CONFIG_SMP
+#include <linux/sched/rt.h>
+
+/*
+ * For locking/six.rs's optimistic spin: inlines over current and its owner -
+ * sched.h's, which codegen can't unblocklist: its structs don't bind
+ */
+bool bch2_owner_on_cpu(struct task_struct *owner)
+{
+	return owner_on_cpu(owner);
+}
+
+bool bch2_rt_or_dl_task_current(void)
+{
+	return rt_or_dl_task(current);
+}
+#endif
+
+/* For os/linux_kernel/workqueue.rs: set_worker_desc() takes a format */
+void bch2_set_worker_desc(const char *desc)
+{
+	set_worker_desc("%s", desc);
+}
+
+#include <linux/debugfs.h>
+
+/* For os/linux_kernel/debugfs.rs: debugfs_create_file() is a _Generic() over its fops' type */
+struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct dentry *parent,
+					void *data, const struct file_operations *fops)
+{
+	return debugfs_create_file(name, mode, parent, data, fops);
+}
+
+#include <linux/cpumask.h>
+
+/* nr_cpu_ids is a variable - or a macro, without SMP */
+unsigned bch2_nr_cpu_ids(void)
+{
+	return nr_cpu_ids;
 }
