@@ -53,13 +53,8 @@ pub struct memalloc_flags {
 }
 
 pub use crate::c::{
-    bch2_debugfs_create_file, rust_kzalloc_nofail, rust_kvzalloc_nofail, rust_kfree, rust_kvfree,
+    rust_kzalloc_nofail, rust_kvzalloc_nofail, rust_kfree, rust_kvfree,
     rust_kvfree_rcu, rust_bio_pages_alloc, rust_bio_pages_free,
-    rust_kfree_rcu_mightsleep, bch2_cond_resched, bch2_num_online_cpus,
-    bch2_current, bch2_set_current_state, bch2_set_current_state_running,
-    bch2_need_resched, bch2_capable,
+    rust_kfree_rcu_mightsleep, bch2_cond_resched,
+    bch2_set_current_state, bch2_set_current_state_running, bch2_capable,
 };
-#[cfg(CONFIG_SMP)]
-pub use crate::c::{bch2_owner_on_cpu, bch2_rt_or_dl_task_current};
-#[cfg(__KERNEL__)]
-pub use crate::c::bch2_nr_cpu_ids;

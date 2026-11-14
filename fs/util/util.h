@@ -38,17 +38,6 @@
 
 #include "util/shim.h"
 
-/*
- * 7.1 introduced bdev_rot() and removed bdev_nonrot(). Shim bdev_rot for
- * older kernels so call sites can always use bdev_rot.
- */
-#if defined(__KERNEL__) && LINUX_VERSION_CODE < KERNEL_VERSION(7,0,0)
-static inline bool bdev_rot(struct block_device *bdev)
-{
-	return !bdev_nonrot(bdev);
-}
-#endif
-
 #define try(_do)							\
 do {									\
 	typeof(_do) _ret = (_do);					\
