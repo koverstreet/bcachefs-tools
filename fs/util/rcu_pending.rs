@@ -16,7 +16,7 @@ use crate::c;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::types::GenRadix;
-use crate::util::alloc::{flags, init_at, kbox_zeroed_nofail, AllocError, AllocMode, KBox, KVBox, KVVec};
+use crate::util::alloc::{flags, init_at, kbox_zeroed_nofail, AllocError, KBox, KVBox, KVVec};
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::{NewNode, NODE_SIZE};
 use crate::util::alloc::{KVmalloc, Kmalloc};
@@ -110,7 +110,7 @@ impl SpareHead {
                 Ok::<(), AllocError>(())
             })
         };
-        let p = alloc_at::<SpareHead, Kmalloc, AllocError>(init, AllocMode::Gfp(flags::NOWARN)).ok()?;
+        let p = alloc_at::<SpareHead, Kmalloc, AllocError>(init, flags::NOWARN).ok()?;
         Some(unsafe { KBox::from_raw(p.as_ptr()) })
     }
 }

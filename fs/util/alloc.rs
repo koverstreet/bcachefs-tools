@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Fallible allocation for code shared by both builds: in-kernel, the
-//! kernel's kernel::alloc over allocators of ours, which apply the task's
-//! memalloc scope; bcachefs-shim's copy of the same API in userspace. An
-//! allocation failure is an AllocError to handle, never an abort.
+//! Fallible allocation for code shared by both builds: allocators of ours,
+//! with os::alloc's Flags - the kernel's C allocators in-kernel, with the
+//! task's memalloc scope applied; std's in userspace. An allocation failure is
+//! an AllocError to handle, never an abort - unless it's NOFAIL.
 
 pub use crate::os::alloc::*;
 
@@ -17,8 +17,8 @@ use crate::util::rcu::FreeAnytime;
 //
 // The kernel's, with the flags the task's memalloc scope says - so KVVec,
 // KBox and everything built on them honour NORECLAIM and NOWARN, which the
-// page allocator doesn't know. In userspace, std's allocator takes no flags.
-// Each port's Alloc impls are its own (os::alloc).
+// page allocator doesn't know. In userspace, std's allocator, which takes no
+// flags but NOFAIL. Each port's Alloc impls are its own (os::alloc).
 
 #[derive(Clone, Copy)]
 pub struct Kmalloc;
@@ -28,17 +28,9 @@ pub struct KVmalloc;
 #[derive(Clone, Copy)]
 pub struct Vmalloc;
 
-/// How an allocation may fail: as @Flags let it - or, for what mustn't, not
-/// at all: a plain GFP_KERNEL allocation first, then __GFP_NOFAIL.
-#[derive(Clone, Copy)]
-pub enum AllocMode {
-    Gfp(Flags),
-    Nofail,
-}
-
 /// An allocator, as both builds have it: in-kernel, ours above, and in
-/// userspace, std's. GFP_KERNEL, as the task's memalloc scope says - NOIO,
-/// NOFS, or NORECLAIM, where what would wait fails instead.
+/// userspace, std's. WAIT, as the task's memalloc scope says - NOIO, NOFS,
+/// or NORECLAIM, where what would wait fails instead.
 ///
 /// What alloc() gives is at least @layout's bytes, as many as it says: free()
 /// is told the size it gave. As Rust's Allocator: alloc() gives them as they
@@ -64,7 +56,7 @@ pub unsafe trait Alloc {
 }
 
 /// kmalloc() and kvmalloc(), for what knows its context better than its
-/// scope does: GFP_ATOMIC, GFP_NOWAIT.
+/// scope does - ATOMIC, NOWAIT - or mustn't fail: NOFAIL.
 ///
 /// # Safety
 /// As Alloc's; realloc() gives the new layout's bytes, what was there kept up
@@ -79,23 +71,6 @@ pub unsafe trait AllocGfp: Alloc {
     /// @p is this allocator's, of @old.
     unsafe fn realloc(&self, p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
         -> Result<NonNull<[u8]>, AllocError>;
-
-    /// alloc_zeroed(), __GFP_NOFAIL: through C's kzalloc() and kvzalloc(), as
-    /// the kernel's Rust has no __GFP_NOFAIL - aligned as kmalloc() aligns, to
-    /// 8. Userspace's allocator aborts rather than fail.
-    fn alloc_zeroed_nofail(&self, layout: Layout) -> NonNull<[u8]>;
-
-    fn alloc_zeroed_mode(&self, layout: Layout, mode: AllocMode) -> Result<NonNull<[u8]>, AllocError> {
-        match mode {
-            AllocMode::Gfp(gfp) => self.alloc_zeroed_gfp(layout, gfp),
-            AllocMode::Nofail => {
-                // checked whether the fallback's needed or not: a misaligned
-                // caller would otherwise find out only under memory pressure
-                assert!(layout.align() <= 8, "a __GFP_NOFAIL allocation aligned past kmalloc()'s");
-                Ok(self.alloc_zeroed(layout).unwrap_or_else(|_| self.alloc_zeroed_nofail(layout)))
-            }
-        }
-    }
 }
 
 /// The allocator of what keeps none - Vec, MaybeRcuAlloc: zero-sized, made
@@ -242,7 +217,7 @@ pub unsafe fn free_pinned<T>(p: *mut T) {
 pub fn kbox_pin_init<T: FreeAnytime, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
     -> Result<core::pin::Pin<KBox<T>>, E>
 {
-    let p = crate::util::maybe_rcu_alloc::alloc_at::<T, Kmalloc, E>(init, AllocMode::Gfp(flags::WAIT))?;
+    let p = crate::util::maybe_rcu_alloc::alloc_at::<T, Kmalloc, E>(init, flags::WAIT)?;
     Ok(unsafe { core::pin::Pin::new_unchecked(KBox::from_raw(p.as_ptr())) })
 }
 

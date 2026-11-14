@@ -503,20 +503,7 @@ int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key)
 #endif
 }
 
-/*
- * os/linux_kernel/alloc.rs: the kernel's Rust allocator API has no
- * __GFP_NOFAIL, and no kfree() of a size it doesn't know
- */
-void *rust_kzalloc_nofail(size_t size)
-{
-	return kzalloc(size, GFP_KERNEL|__GFP_NOFAIL);
-}
-
-void *rust_kvzalloc_nofail(size_t size)
-{
-	return kvzalloc(size, GFP_KERNEL|__GFP_NOFAIL);
-}
-
+/* os/linux_kernel/alloc.rs: the kernel's Rust has no kfree() of a size it doesn't know */
 void rust_kfree(const void *p)
 {
 	kfree(p);

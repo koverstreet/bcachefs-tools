@@ -94,6 +94,9 @@ pub mod flags {
     /// Not zeroed where the allocator would zero it anyway, for memory
     /// tagging: it's about to be overwritten.
     pub const SKIP_ZERO:          Flags = Flags(1 << 11);
+    /// Never fails: waits for memory as long as it takes - so never where
+    /// reclaim can't run.
+    pub const NOFAIL:             Flags = Flags(1 << 12);
 
     /// Either reclaim.
     pub const RECLAIM: Flags = Flags(DIRECT_RECLAIM.0 | BACKGROUND_RECLAIM.0);

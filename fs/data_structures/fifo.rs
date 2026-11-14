@@ -19,7 +19,7 @@
 //! has none again (free_fifo() NULLs it), so dropping it frees nothing.
 
 use crate::types::Fifo;
-use crate::util::alloc::{assert_may_reclaim, kvfree_sized, kvrealloc, kvrealloc_nofail_fallback, AllocError};
+use crate::util::alloc::{flags, kvfree_sized, kvrealloc, AllocError, Flags};
 use core::mem::{needs_drop, size_of, MaybeUninit};
 use core::ptr::NonNull;
 use num_traits::{AsPrimitive, ConstZero, PrimInt, Unsigned, WrappingAdd, WrappingSub};
@@ -232,21 +232,15 @@ impl<T, I: FifoIdx> Fifo<T, I> {
     /// Room for @more entries past those there, the buffer grown if it must
     /// be - to a power of two, every index kept.
     pub fn reserve(&mut self, more: usize) -> Result<(), AllocError> {
-        self.grow(more, kvrealloc)
+        self.reserve_gfp(more, flags::WAIT)
     }
 
-    /// reserve(), for what mustn't fail to allocate: __GFP_NOFAIL, if a plain
-    /// allocation fails.
+    /// reserve(), for what mustn't fail to allocate.
     pub fn reserve_nofail(&mut self, more: usize) {
-        assert_may_reclaim();
-        self.grow(more, |p, old, new| Ok(kvrealloc(p, old, new)
-            .unwrap_or_else(|_| unsafe { kvrealloc_nofail_fallback(NonNull::new(p), old, new) })))
-            .expect("a fifo grown past its index type");
+        self.reserve_gfp(more, flags::WAIT | flags::NOFAIL).expect("a fifo grown past its index type");
     }
 
-    fn grow(&mut self, more: usize, kvrealloc: impl FnOnce(*mut u8, usize, usize) -> Result<NonNull<u8>, AllocError>)
-        -> Result<(), AllocError>
-    {
+    fn reserve_gfp(&mut self, more: usize, gfp: Flags) -> Result<(), AllocError> {
         const { assert!(size_of::<T>() != 0, "a fifo of zero sized entries") };
 
         let want = self.len().checked_add(more).ok_or(AllocError)?;
@@ -259,7 +253,7 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         // size, the largest index field, holds the whole buffer
         let size: I = num_traits::cast(new).ok_or(AllocError)?;
 
-        let p = kvrealloc(self.data.cast(), old * size_of::<T>(), new * size_of::<T>())?
+        let p = kvrealloc(self.data.cast(), old * size_of::<T>(), new * size_of::<T>(), gfp)?
             .cast::<T>().as_ptr();
         if old != 0 {
             for k in 1..new / old {

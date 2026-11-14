@@ -18,20 +18,20 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::{Acquire, Relaxed, Rele
 use pin_init::{pin_init_from_closure, PinInit};
 
 use crate::c;
-use crate::util::alloc::{flags, init_at, stateless, Alloc, AllocError, AllocGfp, AllocMode, KVmalloc};
+use crate::util::alloc::{flags, init_at, stateless, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
                        RcuHead, RcuWorkHead};
 use crate::util::sleep::Sleep;
 use crate::os::workqueue::{Queue, Workqueue, WqFlags};
 
-pub(crate) fn alloc_at<T, A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, mode: AllocMode)
+pub(crate) fn alloc_at<T, A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags)
     -> Result<NonNull<T>, E>
 {
     const { assert!(size_of::<T>() != 0, "an allocation of a zero sized type") };
 
     let layout = Layout::new::<T>();
-    let p = stateless::<A>().alloc_zeroed_mode(layout, mode)?.cast::<T>();
+    let p = stateless::<A>().alloc_zeroed_gfp(layout, gfp)?.cast::<T>();
     match unsafe { init_at(init, p.as_ptr()) } {
         Ok(()) => Ok(p),
         Err(e) => {
@@ -62,7 +62,7 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     where
         A: AllocGfp,
     {
-        Self::new_mode(init, AllocMode::Gfp(flags::WAIT))
+        Self::new_gfp(init, flags::WAIT)
     }
 
     /// new(), for what mustn't fail to allocate: failing only with @init's
@@ -71,14 +71,14 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     where
         A: AllocGfp,
     {
-        Self::new_mode(init, AllocMode::Nofail)
+        Self::new_gfp(init, flags::WAIT | flags::NOFAIL)
     }
 
-    fn new_mode<E: From<AllocError>>(init: impl PinInit<T, E>, mode: AllocMode) -> Result<Self, E>
+    fn new_gfp<E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<Self, E>
     where
         A: AllocGfp,
     {
-        Ok(Self { p: <T as RcuFreeing>::alloc::<A, E>(init, mode)?, _p: PhantomData })
+        Ok(Self { p: <T as RcuFreeing>::alloc::<A, E>(init, gfp)?, _p: PhantomData })
     }
 
     pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
@@ -152,7 +152,7 @@ impl<T, A: Alloc> Drop for MaybeRcuAlloc<T, A> {
 /// The head a free uses: T's own, or a Headed<T, H>'s, which is then the
 /// allocation.
 trait RcuHeadAt<H: HeadKind>: Sized {
-    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<Self, E>, mode: AllocMode) -> Result<NonNull<Self>, E>;
+    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<Self, E>, gfp: Flags) -> Result<NonNull<Self>, E>;
 
     /// # Safety
     /// @p is alloc()'s.
@@ -184,9 +184,9 @@ struct Headed<T, H> {
 }
 
 impl<T, H: HeadKind> RcuHeadAt<H> for T {
-    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, mode: AllocMode) -> Result<NonNull<T>, E> {
+    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
         let init = unsafe { pin_init_from_closure(move |slot: *mut Headed<T, H>| init_at(init, &raw mut (*slot).value)) };
-        let p = alloc_at::<Headed<T, H>, A, E>(init, mode)?;
+        let p = alloc_at::<Headed<T, H>, A, E>(init, gfp)?;
         Ok(unsafe { NonNull::new_unchecked(&raw mut (*p.as_ptr()).value) })
     }
 
@@ -213,9 +213,9 @@ impl<T, H: HeadKind> RcuHeadAt<H> for T {
 }
 
 impl<T: HasRcuHead, H: HeadKind> RcuHeadAt<H> for T {
-    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, mode: AllocMode) -> Result<NonNull<T>, E> {
+    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
         const { assert!(!H::WORK || T::WORK, "an RcuDropWorkMember's head is an RcuWorkHead, with room for the work") };
-        alloc_at::<T, A, E>(init, mode)
+        alloc_at::<T, A, E>(init, gfp)
     }
 
     unsafe fn head(p: NonNull<T>) -> *mut H {
@@ -246,7 +246,7 @@ pub(crate) trait RcuFreeing: Sized {
     /// it: what an owning RcuPtr publishes is read whole.
     fn assert_rcu_freed();
 
-    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<Self, E>, mode: AllocMode) -> Result<NonNull<Self>, E>;
+    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<Self, E>, gfp: Flags) -> Result<NonNull<Self>, E>;
 
     /// # Safety
     /// @p is alloc::<A>()'s, and nothing but RCU readers uses it after.
@@ -263,8 +263,8 @@ pub(crate) trait RcuFreeing: Sized {
 impl<T> RcuFreeing for T {
     default fn assert_rcu_freed() {}
 
-    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, mode: AllocMode) -> Result<NonNull<T>, E> {
-        <T as RcuHeadAt<RcuWorkHead>>::alloc::<A, E>(init, mode)
+    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+        <T as RcuHeadAt<RcuWorkHead>>::alloc::<A, E>(init, gfp)
     }
 
     default unsafe fn free<A: Alloc>(p: NonNull<T>) {
@@ -281,8 +281,8 @@ impl<T> RcuFreeing for T {
 impl<T: DropAtomic> RcuFreeing for T {
     default fn assert_rcu_freed() {}
 
-    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, mode: AllocMode) -> Result<NonNull<T>, E> {
-        <T as RcuHeadAt<RcuHead>>::alloc::<A, E>(init, mode)
+    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+        <T as RcuHeadAt<RcuHead>>::alloc::<A, E>(init, gfp)
     }
 
     default unsafe fn free<A: Alloc>(p: NonNull<T>) {
@@ -300,8 +300,8 @@ impl<T: DropAtomic + DropAnytime> RcuFreeing for T {
         let () = NotRcuFreed::<T>::ERR;
     }
 
-    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, mode: AllocMode) -> Result<NonNull<T>, E> {
-        <T as RcuHeadAt<RcuHead>>::alloc::<A, E>(init, mode)
+    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+        <T as RcuHeadAt<RcuHead>>::alloc::<A, E>(init, gfp)
     }
 
     /// No detach: its drop takes it out of readers' way.
@@ -321,8 +321,8 @@ impl<T: DropAtomic + DropAnytime> RcuFreeing for T {
 }
 
 impl<T: DropAtomic + DropAnytime + FreeAnytime> RcuFreeing for T {
-    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, mode: AllocMode) -> Result<NonNull<T>, E> {
-        alloc_at::<T, A, E>(init, mode)
+    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+        alloc_at::<T, A, E>(init, gfp)
     }
 
     unsafe fn free<A: Alloc>(p: NonNull<T>) {

@@ -5,8 +5,7 @@
 //! allocates. KVec and KVVec are it: the same in both builds.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::util::alloc::{assert_may_reclaim, flags, kvrealloc_nofail_fallback, stateless,
-                         AllocError, AllocGfp, Flags, KVmalloc};
+use crate::util::alloc::{flags, stateless, AllocError, AllocGfp, Flags};
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop, MaybeUninit};
@@ -128,6 +127,11 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
         self.reserve_gfp(1, gfp)?;
         unsafe { self.push_unchecked(v) };
         Ok(())
+    }
+
+    /// push(), for what mustn't fail to allocate.
+    pub fn push_nofail(&mut self, v: T) {
+        self.push_gfp(v, flags::WAIT | flags::NOFAIL).expect("a vector grown past its length type")
     }
 
     pub fn push_within_capacity(&mut self, v: T) -> Result<(), PushError<T>> {
@@ -267,19 +271,6 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
     pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
         let mut v = ManuallyDrop::new(self);
         (v.as_mut_ptr(), v.len(), v.capacity())
-    }
-}
-
-impl<T, L: LenUint> Vec<T, KVmalloc, L> {
-    /// push(), for what mustn't fail to allocate: __GFP_NOFAIL, if a plain
-    /// allocation fails.
-    pub fn push_nofail(&mut self, v: T) {
-        assert_may_reclaim();
-        self.grow(1, |p, layout, old| Ok(unsafe {
-            KVmalloc.realloc(p, layout, old, flags::WAIT).map(NonNull::cast)
-                .unwrap_or_else(|_| kvrealloc_nofail_fallback(p, old.size(), layout.size()))
-        })).expect("a vector grown past its length type");
-        unsafe { self.push_unchecked(v) };
     }
 }
 

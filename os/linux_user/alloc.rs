@@ -58,25 +58,19 @@ macro_rules! allocs {
         }
 
         unsafe impl AllocGfp for $a {
-            fn alloc_zeroed_nofail(&self, layout: Layout) -> NonNull<[u8]> {
-                let p = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
-                    .unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
-                NonNull::slice_from_raw_parts(p, layout.size())
-            }
-
-            fn alloc_zeroed_gfp(&self, layout: Layout, _gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
-                let p = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).ok_or(AllocError)?;
+            fn alloc_zeroed_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
+                let p = allocated(unsafe { std::alloc::alloc_zeroed(layout) }, layout, gfp)?;
                 Ok(NonNull::slice_from_raw_parts(p, layout.size()))
             }
 
-            unsafe fn realloc(&self, p: Option<NonNull<u8>>, layout: Layout, old: Layout, _gfp: Flags)
+            unsafe fn realloc(&self, p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
                 -> Result<NonNull<[u8]>, AllocError>
             {
                 let p = match p {
                     Some(p) => unsafe { std::alloc::realloc(p.as_ptr(), old, layout.size()) },
                     None    => unsafe { std::alloc::alloc(layout) },
                 };
-                Ok(NonNull::slice_from_raw_parts(NonNull::new(p).ok_or(AllocError)?, layout.size()))
+                Ok(NonNull::slice_from_raw_parts(allocated(p, layout, gfp)?, layout.size()))
             }
         }
     )*};
@@ -84,13 +78,20 @@ macro_rules! allocs {
 
 allocs!(Kmalloc, KVmalloc, Vmalloc);
 
+/// What an allocation of @layout gave: null is an AllocError - or for NOFAIL,
+/// std's allocation failure, which aborts.
+fn allocated(p: *mut u8, layout: Layout, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
+    match NonNull::new(p) {
+        Some(p) => Ok(p),
+        None if gfp.contains(flags::NOFAIL) => std::alloc::handle_alloc_error(layout),
+        None => Err(AllocError),
+    }
+}
+
 /// @gfp: there's no memalloc scope to apply.
 pub fn current_gfp_context(gfp: Flags) -> Flags {
     gfp
 }
-
-/// Nothing to check: no allocation here is in a scope that stops it reclaiming.
-pub fn assert_may_reclaim() {}
 
 /// The last ref's put frees it at once: what RCU readers may reach, which
 /// isn't FreeAnytime, can't be in one.
@@ -105,7 +106,7 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
 
 /// kmalloc(), as the shim's slab.h had it: aligned to the largest power of two
 /// in @size, up to a page; tried ten times, the shrinkers run between; zeroed
-/// with __GFP_ZERO. Null if it can't. free() takes it back.
+/// with ZERO. Null if it can't - or for NOFAIL, an abort. free() takes it back.
 fn kmalloc_noprof(size: usize, gfp: Flags) -> *mut c_void {
     for _ in 0..10 {
         let p = if size != 0 {
@@ -128,19 +129,21 @@ fn kmalloc_noprof(size: usize, gfp: Flags) -> *mut c_void {
 
         super::shrinker::run_shrinkers(gfp, true);
     }
+    if gfp.contains(flags::NOFAIL) {
+        std::alloc::handle_alloc_error(Layout::from_size_align(size, 1).expect("an allocation's"));
+    }
     core::ptr::null_mut()
 }
 
-/// @size bytes kzalloc()'d, __GFP_NOFAIL - which the shim's kmalloc() can't
-/// keep, ten tries in. For kfree_unsized().
+/// @size bytes kzalloc()'d, NOFAIL: never null. kfree_unsized() takes it back.
 pub fn kzalloc_nofail(size: usize) -> *mut c_void {
-    kmalloc_noprof(size, flags::WAIT | flags::ZERO)
+    kmalloc_noprof(size, flags::WAIT | flags::ZERO | flags::NOFAIL)
 }
 
-/// @size bytes kvzalloc()'d, __GFP_NOFAIL: kzalloc_nofail()'s, here. For
-/// kvfree_unsized(), or kvfree_rcu_head().
+/// @size bytes kvzalloc()'d, NOFAIL: kzalloc_nofail()'s, here. kvfree_unsized()
+/// takes it back, or kvfree_rcu_head().
 pub fn kvzalloc_nofail(size: usize) -> NonNull<u8> {
-    NonNull::new(kzalloc_nofail(size).cast()).expect("__GFP_NOFAIL allocation returned NULL")
+    NonNull::new(kzalloc_nofail(size).cast()).expect("a NOFAIL allocation failed")
 }
 
 /// A zeroed KBox that can't fail to allocate: std's allocator aborts rather
@@ -236,28 +239,20 @@ pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<NonNull<u8
 }
 
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
-/// what was there kept: kvrealloc(). Aligned as kmalloc() aligns @new;
-/// kvfree_sized() takes it back.
-pub fn kvrealloc(p: *mut u8, old: usize, new: usize) -> Result<NonNull<u8>, AllocError> {
+/// what was there kept: kvrealloc(), with @gfp. Aligned as kmalloc() aligns
+/// @new; kvfree_sized() takes it back.
+pub fn kvrealloc(p: *mut u8, old: usize, new: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
     // A new allocation and a copy: realloc() keeps the old one's alignment
     // SAFETY: @p is std::alloc's, of @old bytes, or null
     unsafe {
-        let q = NonNull::new(std::alloc::alloc(kv_layout(new)?)).ok_or(AllocError)?;
+        let layout = kv_layout(new)?;
+        let q = allocated(std::alloc::alloc(layout), layout, gfp)?;
         if let Some(p) = NonNull::new(p) {
             q.as_ptr().copy_from_nonoverlapping(p.as_ptr(), old.min(new));
             std::alloc::dealloc(p.as_ptr(), kv_layout(old)?);
         }
         Ok(q)
     }
-}
-
-/// What a kvmalloc() reallocation that mustn't fail falls back to, a plain
-/// one having failed: std's allocator aborts rather than fail.
-///
-/// # Safety
-/// @p is kvmalloc()'d, of @old bytes, and nothing uses it after.
-pub unsafe fn kvrealloc_nofail_fallback(_p: Option<NonNull<u8>>, _old: usize, new: usize) -> NonNull<u8> {
-    std::alloc::handle_alloc_error(kv_layout(new).expect("an allocation's"))
 }
 
 /// # Safety

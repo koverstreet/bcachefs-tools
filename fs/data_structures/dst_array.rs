@@ -14,7 +14,7 @@
 //! kvfree_rcu() of an rcu_head before the header.
 
 use crate::c;
-use crate::util::alloc::{flags, AllocError, AllocGfp, AllocMode, KVmalloc};
+use crate::util::alloc::{flags, AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
 use crate::util::rcu::FreeAnytime;
 use core::marker::PhantomData;
@@ -82,16 +82,16 @@ impl<H: DstHead, T> DstArray<H, T> {
     /// One with @head, whose nr() it's sized by, and its elements all zero.
     /// An error past INT_MAX bytes, which kvmalloc() won't do.
     pub fn alloc(head: H) -> Result<NonNull<H>, AllocError> {
-        Self::alloc_mode(head, AllocMode::Gfp(flags::WAIT))
+        Self::alloc_gfp(head, flags::WAIT)
     }
 
     /// alloc(), for what mustn't fail to allocate: past INT_MAX bytes is a
     /// bug.
     pub fn alloc_nofail(head: H) -> NonNull<H> {
-        Self::alloc_mode(head, AllocMode::Nofail).expect("a DstArray past INT_MAX bytes")
+        Self::alloc_gfp(head, flags::WAIT | flags::NOFAIL).expect("a DstArray past INT_MAX bytes")
     }
 
-    fn alloc_mode(head: H, mode: AllocMode) -> Result<NonNull<H>, AllocError> {
+    fn alloc_gfp(head: H, gfp: Flags) -> Result<NonNull<H>, AllocError> {
         const { assert!(size_of::<T>() != 0, "a DstArray of a zero sized type") };
         const { assert!(align_of::<H>() <= 8 && align_of::<T>() <= 8, "kvzalloc() aligns to 8") };
 
@@ -102,7 +102,7 @@ impl<H: DstHead, T> DstArray<H, T> {
             .ok_or(AllocError)?;
         let layout = Layout::from_size_align(bytes, 8).map_err(|_| AllocError)?;
 
-        let p = unsafe { KVmalloc.alloc_zeroed_mode(layout, mode)?.byte_add(prefix) }.cast::<H>();
+        let p = unsafe { KVmalloc.alloc_zeroed_gfp(layout, gfp)?.byte_add(prefix) }.cast::<H>();
         unsafe { p.write(head) };
         Ok(p)
     }
