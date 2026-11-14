@@ -191,8 +191,4 @@ static inline void ktime_get_coarse_real_ts64(struct timespec64 *ts)
 
 #define sched_annotate_sleep()	do {} while (0)
 
-unsigned int stack_trace_save_tsk(struct task_struct *task,
-				  unsigned long *store, unsigned int size,
-				  unsigned int skipnr);
-
 #endif /* __TOOLS_LINUX_SCHED_H */

@@ -14,6 +14,7 @@ pub mod percpu;
 pub mod printk;
 pub mod sched;
 pub mod shrinker;
+pub mod stacktrace;
 pub mod sysfs;
 pub mod workqueue;
 #[path = "../linux_kernel/ops.rs"]

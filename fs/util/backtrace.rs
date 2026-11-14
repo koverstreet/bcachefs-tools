@@ -25,12 +25,7 @@ use crate::util::alloc::{AllocError, KVVec};
 use crate::util::demangle::prt_demangled;
 use crate::os::sched;
 use crate::util::Printbuf;
-use core::ffi::{c_uint, c_ulong};
-
-// bch2_symbolize(): @addr's symbol, "name+0xoff", and " file:line" if libdw
-// knows it, into @out - linux/stacktrace.c, the userspace shim's %pB.
-#[cfg(not(kernel))]
-pub use crate::c::bch2_symbolize;
+use core::ffi::c_ulong;
 
 /// @sym, a symbol "name..." as the symbolizer printed it, to @out: the name
 /// demangled - a Rust name, mangled; anything else as it is.
@@ -110,11 +105,7 @@ pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
 /// @addr's symbol, demangled, to @out.
 #[cfg(not(kernel))]
 pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
-    let mut sym = [0u8; 4096];
-
-    unsafe { bch2_symbolize(sym.as_mut_ptr().cast(), sym.len(), addr) };
-    let sym = core::ffi::CStr::from_bytes_until_nul(&sym).map_or("", |s| s.to_str().unwrap_or(""));
-    prt_symbol_demangled(out, sym);
+    prt_symbol_demangled(out, &crate::os::stacktrace::symbolize(addr));
 }
 
 /// @stack, a frame a line, as the kernel prints them: "[<0>] " and the
@@ -139,7 +130,7 @@ pub fn save_backtrace(stack: &mut KVVec<c_ulong>, task: *mut c::task_struct, ski
         loop {
             let size = stack.capacity();
             stack.clear();
-            let nr = unsafe { c::stack_trace_save_tsk(task, stack.as_mut_ptr().cast(), size as c_uint, skipnr) } as usize;
+            let nr = unsafe { crate::os::stacktrace::save_tsk(task, stack.as_mut_ptr(), size, skipnr) };
             unsafe { stack.inc_len(nr) };
             if nr < size {
                 return Ok(());

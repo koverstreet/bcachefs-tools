@@ -16,6 +16,8 @@ mod util;
 mod wrappers;
 pub mod http;
 #[cfg(test)]
+mod backtrace_test;
+#[cfg(test)]
 mod percpu_test;
 #[cfg(test)]
 mod workqueue_test;

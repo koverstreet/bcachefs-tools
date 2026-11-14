@@ -17,6 +17,7 @@ pub mod printk;
 pub mod sched;
 pub mod seq_file;
 pub mod shrinker;
+pub mod stacktrace;
 pub mod super_block;
 pub mod sysfs;
 pub mod thread_with_file;

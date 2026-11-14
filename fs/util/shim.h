@@ -83,9 +83,4 @@ void bch2_rust_warn(const char *file, unsigned line);
 /* rcu.c's: init_srcu_struct() is a macro under lockdep */
 int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key);
 
-#ifndef __KERNEL__
-/* the userspace shim's: linux/stacktrace.c's */
-void bch2_symbolize(char *out, size_t size, unsigned long addr);
-#endif
-
 #endif /* _BCACHEFS_UTIL_SHIM_H */
