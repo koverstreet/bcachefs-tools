@@ -24,6 +24,9 @@ use crate::util::rcu::FreeAnytime;
 pub struct Kmalloc;
 #[derive(Clone, Copy)]
 pub struct KVmalloc;
+/// vmalloc(): pages one at a time, mapped - no high-order allocation, to wait on compaction.
+#[derive(Clone, Copy)]
+pub struct Vmalloc;
 
 /// How an allocation may fail: as @Flags let it - or, for what mustn't, not
 /// at all: a plain GFP_KERNEL allocation first, then __GFP_NOFAIL.

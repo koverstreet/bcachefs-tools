@@ -13,7 +13,7 @@ pub use kernel::alloc::AllocError;
 pub use kernel::sync::Arc;
 
 use crate::c;
-use crate::util::alloc::{kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc};
+use crate::util::alloc::{kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::rcu::{DropAnytime, DropAtomic, FreeAnytime, NothingToDetach};
 use core::alloc::Layout;
 use core::ffi::c_void;
@@ -81,10 +81,10 @@ macro_rules! allocators {
     )*};
 }
 
-allocators!(Kmalloc, KVmalloc);
+allocators!(Kmalloc, Vmalloc, KVmalloc);
 
 macro_rules! allocs {
-    ($($a:ident => $nofail:expr, $kv:expr),*) => {$(
+    ($($a:ident => $nofail:expr, $realloc:ident, $free:ident),*) => {$(
         unsafe impl Alloc for $a {
             const KVFREE: bool = true;
 
@@ -97,7 +97,7 @@ macro_rules! allocs {
             }
 
             unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
-                unsafe { <$a as Allocator>::free(p, layout) };
+                unsafe { <$free as Allocator>::free(p, layout) };
             }
         }
 
@@ -108,43 +108,31 @@ macro_rules! allocs {
             }
 
             fn alloc_zeroed_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
-                unsafe { gfp_realloc($kv, None, layout, gfp | flags::ZERO) }
+                unsafe { self.realloc(None, layout, layout, gfp | flags::ZERO) }
             }
 
+            /// C's krealloc(), vrealloc() or kvrealloc(), with @gfp - which
+            /// may say what the kernel's Rust has no Flags for - as the task's
+            /// memalloc scope says.
             unsafe fn realloc(&self, p: Option<NonNull<u8>>, layout: Layout, _old: Layout, gfp: Flags)
                 -> Result<NonNull<[u8]>, AllocError>
             {
-                unsafe { gfp_realloc($kv, p, layout, gfp) }
+                use kernel::bindings::{$realloc, NUMA_NO_NODE};
+
+                let p = p.map_or(core::ptr::null(), |p| p.as_ptr().cast_const().cast());
+                let gfp = current_gfp_context(gfp).raw();
+                let q = unsafe { $realloc(p, layout.size(), layout.align() as _, gfp, NUMA_NO_NODE) };
+                Ok(NonNull::slice_from_raw_parts(NonNull::new(q.cast::<u8>()).ok_or(AllocError)?, layout.size()))
             }
         }
     )*};
 }
 
-allocs!(Kmalloc  => |n| kzalloc_nofail(n), false,
-        KVmalloc => |n| kvzalloc_nofail(n).as_ptr(), true);
-
-/// What AllocGfp does with @gfp, which may say what the kernel's Rust has no
-/// Flags for: C's krealloc() - or kvrealloc(), if @kv - of @p to @layout, the
-/// task's memalloc scope applied.
-///
-/// # Safety
-/// @p is null, or the same allocator's, and not used after unless this fails.
-unsafe fn gfp_realloc(kv: bool, p: Option<NonNull<u8>>, layout: Layout, gfp: Flags)
-    -> Result<NonNull<[u8]>, AllocError>
-{
-    use kernel::bindings::{krealloc_node_align, kvrealloc_node_align, NUMA_NO_NODE};
-
-    let p = p.map_or(core::ptr::null(), |p| p.as_ptr().cast_const().cast());
-    let gfp = current_gfp_context(gfp).raw();
-    let q = unsafe {
-        if kv {
-            kvrealloc_node_align(p, layout.size(), layout.align() as _, gfp, NUMA_NO_NODE)
-        } else {
-            krealloc_node_align(p, layout.size(), layout.align() as _, gfp, NUMA_NO_NODE)
-        }
-    };
-    Ok(NonNull::slice_from_raw_parts(NonNull::new(q.cast::<u8>()).ok_or(AllocError)?, layout.size()))
-}
+// Vmalloc frees as KVmalloc: kvfree() takes its __GFP_NOFAIL allocation, kvzalloc_nofail()'s,
+// which may be kmalloc()'s
+allocs!(Kmalloc  => |n| kzalloc_nofail(n),          krealloc_node_align,  Kmalloc,
+        Vmalloc  => |n| kvzalloc_nofail(n).as_ptr(), vrealloc_node_align,  KVmalloc,
+        KVmalloc => |n| kvzalloc_nofail(n).as_ptr(), kvrealloc_node_align, KVmalloc);
 
 // The kernel's Box and Vec free as their T would.
 macro_rules! held_pointers {

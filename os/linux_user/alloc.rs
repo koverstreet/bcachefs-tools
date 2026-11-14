@@ -14,7 +14,7 @@ pub use std::sync::Arc;
 pub struct AllocError;
 
 use crate::c;
-use crate::util::alloc::{kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc};
+use crate::util::alloc::{kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::rcu::FreeAnytime;
 use core::alloc::Layout;
 use core::ffi::c_void;
@@ -82,7 +82,7 @@ macro_rules! allocs {
     )*};
 }
 
-allocs!(Kmalloc, KVmalloc);
+allocs!(Kmalloc, KVmalloc, Vmalloc);
 
 /// @gfp: there's no memalloc scope to apply.
 pub fn current_gfp_context(gfp: Flags) -> Flags {

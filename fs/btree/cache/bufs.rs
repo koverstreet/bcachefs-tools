@@ -9,7 +9,7 @@ use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{flags, Flags, kfree, AllocGfp, KVmalloc, Kmalloc};
+use crate::util::alloc::{flags, Flags, kfree, kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::mempool::Elements;
 use crate::os::kernel::is_vmalloc_addr;
 use core::alloc::Layout;
@@ -106,7 +106,7 @@ impl Drop for Bounce<'_> {
         if self.mempool {
             unsafe { self.fs.btree.bounce_pool.free_raw(self.p.cast()) }
         } else {
-            unsafe { crate::util::alloc::kvfree_unsized(self.p.as_ptr().cast()) }
+            unsafe { free_raw(self.p.as_ptr().cast(), self.bytes) }
         }
     }
 }
@@ -125,25 +125,28 @@ enum Mem {
     Kvmalloc,
 }
 
-/// @bytes of @mem, not zeroed, with @gfp: kvfree()'s to take back.
-/// Userspace's is one allocator, aligned as kmalloc() aligns.
+/// @bytes of @mem, not zeroed, with @gfp: free_raw()'s to take back.
 fn alloc_raw(mem: Mem, bytes: usize, gfp: Flags) -> *mut c_void {
-    #[cfg(kernel)]
-    unsafe {
-        use kernel::bindings::{krealloc_node_align, kvrealloc_node_align, NUMA_NO_NODE};
-
-        let gfp = crate::util::alloc::current_gfp_context(gfp).raw();
+    let Ok(layout) = kv_layout(bytes) else { return core::ptr::null_mut() };
+    let p = unsafe {
         match mem {
-            Mem::Kmalloc  => krealloc_node_align(core::ptr::null(), bytes, 1, gfp, NUMA_NO_NODE).cast(),
-            Mem::Vmalloc  => c::__vmalloc_noprof(bytes as _, gfp).cast(),
-            Mem::Kvmalloc => kvrealloc_node_align(core::ptr::null(), bytes, 1, gfp, NUMA_NO_NODE).cast(),
+            Mem::Kmalloc  => Kmalloc.realloc(None, layout, layout, gfp),
+            Mem::Vmalloc  => Vmalloc.realloc(None, layout, layout, gfp),
+            Mem::Kvmalloc => KVmalloc.realloc(None, layout, layout, gfp),
         }
-    }
-    #[cfg(not(kernel))]
-    {
-        let _ = (mem, gfp);
-        crate::util::alloc::kvrealloc(core::ptr::null_mut(), 0, bytes)
-            .map_or(core::ptr::null_mut(), |p| p.as_ptr().cast())
+    };
+    p.map_or(core::ptr::null_mut(), |p| p.as_ptr().cast())
+}
+
+/// alloc_raw()'s @p, of @bytes - whichever Mem it was, and swapped between
+/// a node and a bounce buffer of its size as it may have been: KVmalloc's
+/// free takes them all.
+///
+/// # Safety
+/// @p is alloc_raw()'s, of @bytes, or null, and nothing uses it after.
+unsafe fn free_raw(p: *mut c_void, bytes: usize) {
+    if let Some(p) = NonNull::new(p) {
+        unsafe { KVmalloc.free(p.cast(), kv_layout(bytes).expect("its allocation's layout")) }
     }
 }
 
@@ -173,6 +176,15 @@ impl NodeBufs {
         }
     }
 
+    /// BtreeNode::buf_bytes() and aux_data_bytes(), of the node these are for
+    fn data_bytes(&self) -> usize {
+        1 << self.byte_order
+    }
+
+    fn aux_data_bytes(&self) -> usize {
+        self.data_bytes() / BSET_CACHELINE * size_of::<u64>()
+    }
+
     /// Its data and aux_data, those it doesn't have yet, with @gfp: data
     /// avoiding compaction if @avoid_compaction.
     pub fn alloc(&mut self, fs: &Fs, gfp: Flags, avoid_compaction: bool) -> Result<(), BchError> {
@@ -184,7 +196,7 @@ impl NodeBufs {
         let gfp = gfp | flags::ACCOUNT;
 
         if self.data.is_null() {
-            let bytes = 1usize << self.byte_order;
+            let bytes = self.data_bytes();
 
             if avoid_compaction && mm_avoid_compaction.get() {
                 /*
@@ -213,8 +225,7 @@ impl NodeBufs {
         }
 
         if self.aux_data.is_null() {
-            let bytes = ((1usize << self.byte_order) / BSET_CACHELINE) * size_of::<u64>();
-            self.aux_data = alloc_raw(Mem::Kvmalloc, bytes, gfp);
+            self.aux_data = alloc_raw(Mem::Kvmalloc, self.aux_data_bytes(), gfp);
             if self.aux_data.is_null() {
                 return fs.throw(Errcode::ENOMEM_btree_node_mem_alloc);
             }
@@ -225,8 +236,8 @@ impl NodeBufs {
 
     pub fn free(&mut self) {
         unsafe {
-            crate::util::alloc::kvfree_unsized(self.data);
-            crate::util::alloc::kvfree_unsized(self.aux_data);
+            free_raw(self.data, self.data_bytes());
+            free_raw(self.aux_data, self.aux_data_bytes());
         }
         self.data = core::ptr::null_mut();
         self.aux_data = core::ptr::null_mut();
