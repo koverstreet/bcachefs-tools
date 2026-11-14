@@ -200,7 +200,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
 /// Whether @scan is requested - remembered in @cache once it is: a set
 /// cookie stays set while a walk runs, an unset one can be set any time.
 /// check_reconcile_scan_cookie().
-fn scan_cookie_set(t: &TransAttempt<'_, '_>, scan: c::reconcile_scan, cache: Option<&mut bool>)
+fn scan_cookie_set(t: &TransAttempt<'_, '_>, scan: c::ReconcileScan, cache: Option<&mut bool>)
     -> Result<bool, BchError>
 {
     if cache.as_deref() == Some(&true) {
@@ -225,7 +225,7 @@ fn dev_scan_cookie_set(t: &TransAttempt<'_, '_>, k: &impl BkeyVPtrs, cache: Opti
         return Ok(true);
     }
     for dev in devs() {
-        if scan_cookie_set(t, c::reconcile_scan::from_arm::<c::reconcile_scan_device>(dev), None)? {
+        if scan_cookie_set(t, c::ReconcileScan::device(dev), None)? {
             if let Some(m) = cache {
                 m.d.set(dev as usize);
             }
@@ -285,11 +285,11 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
 
     // btree node pointers follow the metadata options, so theirs is the
     // metadata cookie
-    if scan_cookie_set(t, c::reconcile_scan::fs(), fs_cookie)? ||
+    if scan_cookie_set(t, c::ReconcileScan::fs, fs_cookie)? ||
         if k.k().is_btree_ptr() {
-            scan_cookie_set(t, c::reconcile_scan::from_arm(c::reconcile_scan_metadata {}), None)?
+            scan_cookie_set(t, c::ReconcileScan::metadata, None)?
         } else {
-            scan_cookie_set(t, c::reconcile_scan::from_arm::<c::reconcile_scan_inum>(k.k().p.inode), inum_cookie)?
+            scan_cookie_set(t, c::ReconcileScan::inum(k.k().p.inode), inum_cookie)?
         } {
         return Ok(());
     }

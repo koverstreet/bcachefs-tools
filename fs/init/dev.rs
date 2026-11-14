@@ -240,7 +240,7 @@ use crate::util::rcu::read_lock;
 use crate::util::vstructs::Head;
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err_fn, prt};
-use core::ffi::{c_uint, CStr};
+use core::ffi::CStr;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use pin_init::pinned_drop;
@@ -924,9 +924,9 @@ impl StateLockWrite<'_> {
         let do_reconcile_scan = new_state == MemberState::rw || new_state == MemberState::evacuating;
 
         let s = if new_state == MemberState::rw {
-            c::reconcile_scan::from_arm(c::reconcile_scan_pending {})
+            c::ReconcileScan::pending
         } else {
-            c::reconcile_scan::from_arm(c_uint::from(ca.dev_idx))
+            c::ReconcileScan::device(u32::from(ca.dev_idx))
         };
 
         /* empty stripes hold their buckets until deleted: */
@@ -977,7 +977,7 @@ impl StateLockWrite<'_> {
          * still need the scan to converge.
          */
         if new_state == MemberState::rw || was_rw {
-            fs.request_scan(c::reconcile_scan::from_arm(c::reconcile_scan_stripes {}), false)?;
+            fs.request_scan(c::ReconcileScan::stripes, false)?;
         }
 
         if do_reconcile_scan {
@@ -1258,7 +1258,7 @@ impl Fs {
 
         let ca = dev_alloc(self, &dev_mi).ok_or(BchError::from(c::ENOMEM))?;
         let started = self.flags.get(c::FsFlag::started);
-        let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
+        let s = c::ReconcileScan::pending;
 
         bch_err_fn!(self, (|| -> Result<(), BchError> {
             let state = self.state_lock_write();
@@ -1458,7 +1458,7 @@ impl Fs {
          * that right we need to at least note somewhere /which/ targets have
          * extents on the pending list:
          */
-        self.request_scan(c::reconcile_scan::from_arm(c::reconcile_scan_pending {}), true)
+        self.request_scan(c::ReconcileScan::pending, true)
     }
 
     pub fn dev_offline(&self, ca: &Dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
@@ -1494,7 +1494,7 @@ impl Fs {
         }
 
         let wakeup_reconcile_pending = nbuckets > old_nbuckets;
-        let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
+        let s = c::ReconcileScan::pending;
         if wakeup_reconcile_pending {
             self.request_scan(s, false)?;
         }

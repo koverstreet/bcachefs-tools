@@ -498,7 +498,7 @@ fn check_stripe_can_widen(trans: &TransGuard<'_>) -> Result<(), BchError> {
 
     let mut cache = WidenCache::new();
     let scan_pending = lockrestart_do(trans, |t| {
-        t.scan_requested(c::reconcile_scan::from_arm(c::reconcile_scan_stripes {}))
+        t.scan_requested(c::ReconcileScan::stripes)
     })?;
 
     let mut iter = BtreeIter::new(trans, Btree::stripes, POS_MIN, BtreeIterFlags::PREFETCH);

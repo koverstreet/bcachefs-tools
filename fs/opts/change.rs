@@ -30,7 +30,7 @@ impl Fs {
 fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bool)
     -> Result<(), BchError>
 {
-    use c::reconcile_scan as scan;
+    use c::ReconcileScan as scan;
 
     if !fs.flags.get(c::FsFlag::started) {
         return Ok(());
@@ -49,21 +49,21 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bo
         OptId::Opt_data_replicas |
         OptId::Opt_erasure_code |
         OptId::Opt_nocow => bracket(if inum == 0 {
-            scan::fs()
+            scan::fs
         } else {
-            scan::from_arm::<c::reconcile_scan_inum>(inum)
+            scan::inum(inum)
         })?,
         OptId::Opt_metadata_target |
         OptId::Opt_metadata_checksum |
-        OptId::Opt_metadata_replicas => bracket(scan::from_arm(c::reconcile_scan_metadata {}))?,
+        OptId::Opt_metadata_replicas => bracket(scan::metadata)?,
         OptId::Opt_durability => {
             if !post && v > ca.expect("a device option").mi.get().durability.into() {
-                fs.request_scan(scan::from_arm(c::reconcile_scan_pending {}), false)?;
+                fs.request_scan(scan::pending, false)?;
             }
-            bracket(scan::from_arm::<c::reconcile_scan_device>(dev()))?;
+            bracket(scan::device(dev()))?;
         }
         // The cap is in stripe.can_widen: existing stripes converge to it
-        OptId::Opt_ec_max_data_blocks => bracket(scan::from_arm(c::reconcile_scan_stripes {}))?,
+        OptId::Opt_ec_max_data_blocks => bracket(scan::stripes)?,
         OptId::Opt_label | OptId::Opt_failure_domain => {
             // The in-memory label tree before the scan wakes: reconcile reads
             // the groups' devs masks. An error (ENOMEM) leaves it stale until
@@ -75,9 +75,9 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bo
             // Only the label is in targets: a failure domain only spreads
             // future allocations
             if id == OptId::Opt_label {
-                bracket(scan::from_arm(c::reconcile_scan_pending {}))?;
+                bracket(scan::pending)?;
                 // Data on the device may now be outside its target
-                bracket(scan::from_arm::<c::reconcile_scan_device>(dev()))?;
+                bracket(scan::device(dev()))?;
             }
         }
         _ => {}

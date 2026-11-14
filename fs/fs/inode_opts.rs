@@ -632,7 +632,7 @@ impl crate::btree::bkey::BkeyOps for c::LoggedOpInodeOptPropagate {
 /// A reconcile scan of @inum's data, for options it may have that its data
 /// doesn't.
 fn needs_scan(t: &TransAttempt<'_, '_>, inum: u64) -> Result<(), BchError> {
-    t.request_scan(c::reconcile_scan::from_arm::<c::reconcile_scan_inum>(inum))
+    t.request_scan(c::ReconcileScan::inum(inum))
 }
 
 /// Climb from the op's cursor to the root, a commit per level: as

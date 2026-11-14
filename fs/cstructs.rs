@@ -135,7 +135,7 @@ pub mod c {
     pub use super::data_reconcile_format::*;
     pub use crate::data::reconcile::trigger::{ per_snapshot_io_opts, SetNeedsReconcileCtx, snapshot_io_opts_entry};
     pub use super::data_reconcile_types::*;
-    pub use crate::data::reconcile::work::{ ReconcileScan, ReconcileScanRef, reconcile_scan, reconcile_scan__ffi, reconcile_scan_device, reconcile_scan_fs, reconcile_scan_inum, reconcile_scan_metadata, reconcile_scan_pending, reconcile_scan_stripes, ReconcileScanType};
+    pub use crate::data::reconcile::work::ReconcileScan;
     pub use super::data_reflink_format::*;
     pub use crate::data::update::{ DataUpdateType, data_update, data_update_key, data_update_opts, data_update_opts_bits};
     pub(crate) use crate::data::update::{__data_update_opts_bits_forward};

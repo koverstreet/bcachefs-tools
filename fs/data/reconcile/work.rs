@@ -88,36 +88,21 @@ use crate::{bch_err, log_msg_ratelimited, warn_once, SPOS_MAX};
 use c::Errcode as err;
 use c::ReconcileWorkId as w;
 use core::cell::Cell;
-use core::ffi::c_uint;
 use core::ops::ControlFlow;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{MaybeZeroable, TypeInfo, tagged_union};
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
+/// A scan reconcile's asked for - of what, and for a device's or an
+/// inode's, which.
 #[allow(non_camel_case_types)]
-pub type reconcile_scan_device = c_uint;
-
-#[allow(non_camel_case_types)]
-pub type reconcile_scan_inum = u64;
-
-tagged_union! {
-    #[derive(Clone, Copy, MaybeZeroable)]*
-    /// A scan reconcile's asked for - of what, and for a device's or an
-    /// inode's, which.
-    #[derive(TypeInfo)]
-    #[tag(type_)]
-    #[tag_enum(closed, ReconcileScanType: u32, prefix = RECONCILE_SCAN_)]
-    #[pad([u64; 2])]
-    #[size(pad)]
-    #[plain]
-    pub enum reconcile_scan {
-        fs(#[repr(C)] pub struct reconcile_scan_fs {}),
-        metadata(#[repr(C)] pub struct reconcile_scan_metadata {}),
-        pending(#[repr(C)] pub struct reconcile_scan_pending {}),
-        stripes(#[repr(C)] pub struct reconcile_scan_stripes {}),
-        device(reconcile_scan_device),
-        inum(reconcile_scan_inum),
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconcileScan {
+    fs,
+    metadata,
+    pending,
+    stripes,
+    device(u32),
+    inum(u64),
 }
 
 impl Fs {
@@ -742,7 +727,7 @@ impl<'f> Reconciler<'f, '_> {
 
     /// The scan phase's entry: a requested scan, done.
     fn scan_step(&self, p: &mut Pass<'_, 'f>, cookie: ScanCookie) -> Result<(), BchError> {
-        if matches!(cookie.scan.get(), Ok(c::ReconcileScanRef::pending(_))) {
+        if cookie.scan == c::ReconcileScan::pending {
             p.pending = Some(cookie);
             // what retries pending work - a device added, resized, its state
             // or label changed
@@ -1016,7 +1001,7 @@ impl Fs {
     /// Have reconcile scan for pending work, and kick it: as
     /// bch2_reconcile_pending_wakeup().
     pub fn reconcile_pending_wakeup(&self) -> Result<(), BchError> {
-        self.request_scan(c::reconcile_scan::from_arm(c::reconcile_scan_pending {}), true)
+        self.request_scan(c::ReconcileScan::pending, true)
     }
 
     /// Start the thread, unless it's running: bch2_reconcile_start().
@@ -1091,9 +1076,9 @@ impl Fs {
             Status::Running { phase: None, .. } => write!(out, "between phases\n"),
             Status::Running { phase: Some(phase), pos } if phase.kind == PhaseKind::Scan => {
                 write!(out, "scanning: ");
-                let scan = c::reconcile_scan::from_cookie(pos.offset).unwrap_or_else(c::reconcile_scan::fs);
+                let scan = c::ReconcileScan::from_cookie(pos.offset).unwrap_or(c::ReconcileScan::fs);
                 scan.to_text(out, self);
-                if matches!(scan.get(), Ok(c::ReconcileScanRef::fs(_) | c::ReconcileScanRef::metadata(_))) {
+                if matches!(scan, c::ReconcileScan::fs | c::ReconcileScan::metadata) {
                     write!(out, " ");
                     self.reconcile.progress.to_text(out);
                 }
