@@ -4,7 +4,6 @@
 mod common;
 pub use common::*;
 
-/// The shim's, include/linux/page.h
 pub const PAGE_SIZE: usize = 4096;
 
 /// Userspace has no vmalloc: its is_vmalloc_addr() was a macro, 0.
@@ -22,6 +21,29 @@ pub fn random_bytes(buf: &mut [u8]) {
 
 pub fn random_u64() -> u64 {
     getrandom::u64().unwrap_or_else(|e| panic!("getrandom() of a u64: {e}"))
+}
+
+pub(super) fn sysinfo() -> libc::sysinfo {
+    let mut info = core::mem::MaybeUninit::uninit();
+    let ret = unsafe { libc::sysinfo(info.as_mut_ptr()) };
+    assert_eq!(ret, 0, "sysinfo(): {}", std::io::Error::last_os_error());
+    unsafe { info.assume_init() }
+}
+
+pub fn totalram_bytes() -> usize {
+    let info = sysinfo();
+    info.totalram as usize * info.mem_unit as usize
+}
+
+/// Free memory: sysinfo() has no MemAvailable.
+pub fn mem_available_bytes() -> usize {
+    let info = sysinfo();
+    info.freeram as usize * info.mem_unit as usize
+}
+
+/// No allocation profiling here.
+pub fn mem_alloc_profiling_enabled() -> bool {
+    false
 }
 
 pub fn msleep(ms: u32) {

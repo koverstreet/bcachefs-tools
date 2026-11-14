@@ -19,6 +19,18 @@ pub fn nr_cpu_ids() -> u32 {
     unsafe { c::bch2_nr_cpu_ids() }
 }
 
+pub fn totalram_bytes() -> usize {
+    unsafe { c::totalram_pages() as usize * PAGE_SIZE }
+}
+
+pub fn mem_available_bytes() -> usize {
+    unsafe { c::si_mem_available() as usize * PAGE_SIZE }
+}
+
+pub fn mem_alloc_profiling_enabled() -> bool {
+    unsafe { c::mem_alloc_profiling_enabled() }
+}
+
 pub fn random_bytes(buf: &mut [u8]) {
     unsafe { c::get_random_bytes(buf.as_mut_ptr().cast(), buf.len() as _) }
 }

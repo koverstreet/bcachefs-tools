@@ -19,6 +19,10 @@ use kernel::alloc::{Allocator, NumaNode};
 pub type KBox<T> = kernel::alloc::Box<T, Kmalloc>;
 pub type KVBox<T> = kernel::alloc::Box<T, KVmalloc>;
 
+impl Kmalloc {
+    pub const MAX_SIZE: usize = super::kernel::PAGE_SIZE << c::MAX_PAGE_ORDER;
+}
+
 // The kernel's, with the flags the task's memalloc scope says - so KVVec,
 // KBox and everything built on them honour NORECLAIM and NOWARN, which the
 // page allocator doesn't know.

@@ -17,7 +17,7 @@ use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
 use crate::prt;
-use crate::os::kernel::{cond_resched, local_clock, unlikely, PAGE_SIZE};
+use crate::os::kernel::{cond_resched, local_clock, unlikely};
 use crate::util::log::LogMsg;
 use crate::os::sched::current;
 use crate::util::time_stats::TimeStats;
@@ -61,16 +61,15 @@ impl Fs {
     }
 
     fn system_memory_usage_high(&self) -> bool {
-        let avail = unsafe { c::si_mem_available() } as usize;
-        let total = unsafe { c::totalram_pages() } as usize;
+        let avail = crate::os::kernel::mem_available_bytes();
+        let total = crate::os::kernel::totalram_bytes();
         if avail >= total >> 2 {
             return false;
         }
 
         let bc = &self.btree.cache;
-        let pinned_pages = (bc.lock.nr_live() + bc.lock.nr_freeable.get()) * self.opts.btree_node_size.get() as usize
-            / PAGE_SIZE;
-        pinned_pages > (total - avail) >> 2
+        let pinned = (bc.lock.nr_live() + bc.lock.nr_freeable.get()) * self.opts.btree_node_size.get() as usize;
+        pinned > (total - avail) >> 2
     }
 }
 

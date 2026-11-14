@@ -133,10 +133,6 @@ pub unsafe fn copy_u64s_small(dst: *mut u64, src: *const u64, n: usize) {
     }
 }
 
-pub fn mem_alloc_profiling_enabled() -> bool {
-    unsafe { c::mem_alloc_profiling_enabled() }
-}
-
 /// For a slice big enough that sorting it would hog the CPU: it yields from
 /// the comparisons, the one call of ours the sort makes.
 pub fn sort_nonatomic<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> core::cmp::Ordering) {
@@ -148,11 +144,6 @@ pub fn sort_nonatomic<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> core::cmp::
         }
         cmp(a, b)
     })
-}
-
-/// The system's memory, in bytes: totalram_pages() of them.
-pub fn totalram_bytes() -> usize {
-    unsafe { c::totalram_pages() as usize * PAGE_SIZE }
 }
 
 /// Jiffies a second.

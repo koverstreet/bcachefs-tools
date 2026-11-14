@@ -43,6 +43,12 @@ pub type KBox<T> = std::boxed::Box<T>;
 /// And a KVBox.
 pub type KVBox<T> = std::boxed::Box<T>;
 
+impl Kmalloc {
+    /// The kernel's, PAGE_SIZE << MAX_PAGE_ORDER: what's too big for a
+    /// kmalloc() there is here.
+    pub const MAX_SIZE: usize = super::kernel::PAGE_SIZE << 10;
+}
+
 macro_rules! allocs {
     ($($a:ident),*) => {$(
         unsafe impl Alloc for $a {

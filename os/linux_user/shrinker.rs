@@ -12,9 +12,8 @@
 //! allocation fails - run_shrinkers(), slab.h's C allocators' - and once a second by the
 //! shrinkers thread, when free memory's short.
 
-use core::ffi::{c_int, c_ulong, c_void, CStr};
+use core::ffi::{c_int, c_void, CStr};
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, Ordering::{AcqRel, Acquire, Relaxed}};
 use std::sync::{Mutex, MutexGuard};
@@ -119,23 +118,12 @@ unsafe fn scan<T: Shrink>(owner: *const (), nr: usize) -> Option<usize> {
 
 // ── Reclaim ────────────────────────────────────────────────────────────────
 
-#[unsafe(no_mangle)]
-pub static mut _totalram_pages: c_ulong = 0;
-
 fn run_shrinkers_allocation_failed() {
     for &s in &lock().0 {
         unsafe {
             let have = ((*s).count)((*s).owner);
             ((*s).scan)((*s).owner, have / 8);
         }
-    }
-}
-
-fn si_meminfo() -> c::sysinfo {
-    let mut info = MaybeUninit::uninit();
-    unsafe {
-        c::si_meminfo(info.as_mut_ptr());
-        info.assume_init()
     }
 }
 
@@ -155,7 +143,7 @@ pub extern "C" fn run_shrinkers(gfp_mask: c::gfp_t, allocation_failed: bool) {
         return;
     }
 
-    let info = si_meminfo();
+    let info = super::kernel::sysinfo();
 
     /* Aim for 6% of physical RAM free without anything in swap */
     let want_shrink = (info.totalram >> 4) as i64 - info.freeram as i64
@@ -187,9 +175,6 @@ pub fn linux_shrinkers_init() {
     linux_thread_init();
 
     super::blkdev::init();
-
-    let info = si_meminfo();
-    unsafe { _totalram_pages = info.totalram / PAGE_SIZE as c_ulong };
 
     let task = unsafe { kthread_create_name(Some(shrinker_thread), null_mut(), c"shrinkers".as_ptr()) };
     assert!(!(-4095..0).contains(&(task as isize)), "error creating the shrinkers thread");

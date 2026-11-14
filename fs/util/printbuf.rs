@@ -5,8 +5,7 @@ use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::{krealloc, kvrealloc_unsized, KVVec};
-use crate::os::kernel::PAGE_SIZE;
+use crate::util::alloc::{krealloc, kvrealloc_unsized, Kmalloc, KVVec};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
 use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
@@ -393,7 +392,7 @@ impl Printbuf {
         let new_size = (self.size as usize + extra + 1).next_power_of_two();
 
         /* Sanity check... */
-        let max = if self.may_vmalloc() { i32::MAX as usize } else { PAGE_SIZE << c::MAX_PAGE_ORDER };
+        let max = if self.may_vmalloc() { i32::MAX as usize } else { Kmalloc::MAX_SIZE };
 
         /*
          * Note: output buffer must be freeable with kfree(), it's not required
