@@ -303,7 +303,7 @@ unsafe impl<P: RcuPointer> ::pin_init::Zeroable for RcuPtr<P> {}
 
 impl<P: RcuPointer> RcuPtr<P> {
     pub fn read<'a>(&'a self, _g: &'a ReadGuard) -> Option<&'a P::Target> {
-        unsafe { self.p.load(Ordering::Acquire).as_ref() }
+        unsafe { rcu_dereference(&self.p).as_ref() }
     }
 
     /// For C: its holder's lock, or a ref, keeps what it points to alive -
@@ -400,6 +400,15 @@ pub fn rcu_assign_pointer<T>(slot: &core::cell::Cell<*mut T>, p: *mut T) {
     unsafe { AtomicPtr::from_ptr(slot.as_ptr()) }.store(p, Ordering::Release);
 }
 
+/// rcu_dereference(): what's read through the pointer is ordered after the
+/// load by its address dependency, on everything but Alpha - so a plain load,
+/// as C's READ_ONCE() is. Rust's model has no consume ordering; Acquire would
+/// say it formally, at an LDAR per load on arm64.
+#[inline]
+pub fn rcu_dereference<T>(p: &AtomicPtr<T>) -> *mut T {
+    p.load(Ordering::Relaxed)
+}
+
 /// A buffer starting with an rcu_head, which a thin pointer - C's - reaches
 /// all of: sized, or a DST whose head records its length.
 ///
@@ -428,7 +437,7 @@ unsafe impl<T: ?Sized + RcuPointee> ::pin_init::Zeroable for RcuBuf<T> {}
 
 impl<T: ?Sized + RcuPointee> RcuBuf<T> {
     pub fn read<'a>(&'a self, _g: &'a ReadGuard) -> Option<&'a T> {
-        let p = self.p.load(Ordering::Acquire);
+        let p = rcu_dereference(&self.p);
         (!p.is_null()).then(|| unsafe { &*T::from_thin(p) })
     }
 
