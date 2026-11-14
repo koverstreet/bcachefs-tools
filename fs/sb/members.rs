@@ -458,10 +458,10 @@ impl SbFieldOps for c::bch_sb_field_members_v2 {
     }
 }
 
-pub(crate) fn data_types_to_text(out: &mut Printbuf, types: u64) {
+pub(crate) fn data_types_to_text(out: &mut Printbuf, types: DataTypes) {
     match types {
-        t if t != 0 => crate::util::names::prt_set::<DataType>(out, t),
-        _           => write!(out, "(none)"),
+        t if !t.is_empty() => t.to_text(out),
+        _                  => write!(out, "(none)"),
     }
 }
 
@@ -484,7 +484,7 @@ fn failure_domain_to_text(out: &mut Printbuf, m: &c::bch_member) {
 
 fn has_data_to_text<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, idx: u32) {
     write!(out, "Has data:\t");
-    data_types_to_text(out, sb.dev_has_data(idx).into());
+    data_types_to_text(out, sb.dev_has_data(idx));
     out.newline();
 }
 
@@ -516,7 +516,7 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
 
     write!(out, "State:\t{}\n", m.state());
     write!(out, "Data allowed:\t");
-    data_types_to_text(out, m.data_allowed().into());
+    data_types_to_text(out, m.data_allowed());
     out.newline();
     has_data_to_text(out, sb, idx);
     write!(out, "Rotational:\t{}\n", m.rotational() as u8);
@@ -1514,9 +1514,8 @@ impl Dev {
         self.cur_latency[rw].load(Ordering::Relaxed)
     }
 
-    /// The data types with data on it, by the superblock's replicas: a mask
-    /// of DataTypes.
-    pub fn has_data(&self) -> u32 {
+    /// The data types with data on it, by the superblock's replicas.
+    pub fn has_data(&self) -> DataTypes {
         self.fs().sb_lock().sb().dev_has_data(self.dev_idx.into())
     }
 

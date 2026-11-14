@@ -234,7 +234,6 @@ use crate::os::file::read_file;
 use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
 use crate::util::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_dev, log_no_fs, LogLevel};
-use crate::util::names;
 use crate::util::percpu::PerCpu;
 use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
 use crate::util::rcu::read_lock;
@@ -1097,8 +1096,8 @@ impl StateLockWrite<'_> {
              */
 
             let data = ca.has_data();
-            if data != 0 {
-                prt!(err, "Remove failed, still has data ({})\n", names::set::<DataType>(data.into()));
+            if !data.is_empty() {
+                prt!(err, "Remove failed, still has data ({data})\n");
                 return Err(BchError::from(c::EBUSY));
             }
 

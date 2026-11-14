@@ -4,7 +4,6 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le64};
-use core::ffi::c_ulong;
 use cstruct_macros::{bitfield, xmacro, grown, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View,
                      SizedVal};
 
@@ -151,8 +150,7 @@ impl BucketGens {
     pub const MASK: u64 = Self::NR as u64 - 1;
 }
 
-pub const DATA_TYPES_MOVABLE: c_ulong =
-    (1 << c::DataType::btree.0) |
-    (1 << c::DataType::user.0) |
-    (1 << c::DataType::stripe.0) |
-    (1 << c::DataType::multiple.0);
+pub const DATA_TYPES_MOVABLE: c::DataTypes = c::DataTypes::btree
+    .union(c::DataTypes::user)
+    .union(c::DataTypes::stripe)
+    .union(c::DataTypes::multiple);

@@ -1018,7 +1018,7 @@ impl Fs {
             write!(out, " (offline)");
         }
         write!(out, "\nData allowed:\t");
-        data_types_to_text(out, ca.mi.get().data_allowed.bits().into());
+        data_types_to_text(out, ca.mi.get().data_allowed);
         write!(out, "\n");
         ca.alloc_debug_to_text(&mut out.indent(2));
         write!(out, "\n");

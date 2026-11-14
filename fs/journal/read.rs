@@ -1285,7 +1285,7 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
     let devs = journal_devs(fs, |ca| {
         fs.opts.read_entire_journal.get() != 0 ||
             fs.opts.fsck.get() != 0 ||
-            ca.has_data() & (1 << c::DataType::journal.0) != 0
+            ca.has_data().contains(c::DataTypes::journal)
     }, true)?;
     read_devices(fs, &read, devs, false)?;
 

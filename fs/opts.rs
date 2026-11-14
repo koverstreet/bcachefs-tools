@@ -597,10 +597,10 @@ pub struct bch_opts {
     pub durability: u8,
 
     /// Allowed data types for this device: journal, btree, and/or user
-    #[opt(bitfield(DataType, 1 << DataType::journal.0 | 1 << DataType::btree.0 | 1 << DataType::user.0),
+    #[opt(bitfield(DataType, c::DataTypes_bits::journal | c::DataTypes_bits::btree | c::DataTypes_bits::user),
           flags = device | format,
           sb = bch_member::data_allowed,
-          default = 1 << DataType::journal.0 | 1 << DataType::btree.0 | 1 << DataType::user.0,
+          default = c::DataTypes_bits::journal | c::DataTypes_bits::btree | c::DataTypes_bits::user,
           hint = "types")]
     pub data_allowed: u8,
 

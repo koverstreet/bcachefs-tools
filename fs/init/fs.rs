@@ -1086,7 +1086,7 @@ impl Fs {
             for ca in self.members() {
                 if !ca.is_online() &&
                    (ca.mi.get().state != MemberState::evacuating ||
-                    ca.has_data() != 0) {
+                    !ca.has_data().is_empty()) {
                     prt!(err, "Cannot mount without device {}\n", ca.dev_idx);
                     err.indent_add(2);
                     dev_to_text_short(err, self.sb_lock().sb(), ca.dev_idx.into());
@@ -1125,7 +1125,7 @@ impl Fs {
     pub fn missing_devs_to_text(&self, out: &mut Printbuf) {
         prt!(out, "Missing devices\n");
         for ca in self.members() {
-            if !ca.is_online() && ca.has_data() != 0 {
+            if !ca.is_online() && !ca.has_data().is_empty() {
                 prt!(out, "Device {}\n", ca.dev_idx);
                 out.indent_add(2);
                 dev_to_text_short(out, self.sb_lock().sb(), ca.dev_idx.into());

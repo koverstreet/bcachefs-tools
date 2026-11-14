@@ -579,7 +579,7 @@ impl DataType {
 
     /// Whether copygc moves data of this type.
     pub fn is_movable(self) -> bool {
-        c::DATA_TYPES_MOVABLE & (1 << self.0) != 0
+        c::DATA_TYPES_MOVABLE.contains(self.into())
     }
 }
 

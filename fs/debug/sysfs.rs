@@ -485,7 +485,7 @@ const DEV: &[Attr<Dev>] = &[
     Attr::ro(c"nbuckets",               |ca, out| writeln!(out, "{}", ca.mi.get().nbuckets)),
 
     Attr::ro(c"has_data",               |ca, out| {
-        crate::util::names::prt_set::<DataType>(out, ca.has_data() as u64);
+        ca.has_data().to_text(out);
         out.newline();
     }),
     Attr::ro(c"io_done",                io_done_to_text),

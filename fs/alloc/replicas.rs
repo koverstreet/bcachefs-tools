@@ -22,7 +22,7 @@ use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, MetadataVersion};
+use crate::format::{DataType, DataTypes, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
 use crate::sb::members::member_exists;
@@ -324,11 +324,11 @@ impl<S: SbState> c::bch_sb<S> {
         sb_entries(self).any(|e| u32::from(e.data_type) == DataType::journal.0)
     }
 
-    /// The data types with data on @dev: a mask, by DataType.
-    pub fn dev_has_data(&self, dev: u32) -> u32 {
+    /// The data types with data on @dev.
+    pub fn dev_has_data(&self, dev: u32) -> DataTypes {
         sb_entries(self)
             .filter(|e| e.data_type < 32 && e.devs.iter().any(|&d| u32::from(d) == dev))
-            .fold(0, |m, e| m | 1 << e.data_type)
+            .fold(DataTypes::empty(), |m, e| m | DataType(e.data_type.into()).into())
     }
 }
 
