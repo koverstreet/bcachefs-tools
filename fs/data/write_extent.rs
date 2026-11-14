@@ -12,7 +12,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::util::bio::{bio_put, pages, Bio};
-use crate::os::kernel::{unlikely, PAGE_SECTORS, PAGE_SIZE, READ, WRITE};
+use crate::os::kernel::{unlikely, PAGE_SIZE, READ, WRITE};
 use c::WriteFlags as w;
 use core::ffi::c_void;
 use crate::format::{Bversion, BkeyType};
@@ -148,7 +148,7 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
 
     /* bio must own its pages: */
     assert!(op.wbio.bio.bi_vcnt != 0, "decoding an extent in a bio that doesn't own its pages");
-    assert!(u64::from(crc.live_size).div_ceil(PAGE_SECTORS) <= u64::from(op.wbio.bio.bi_max_vecs),
+    assert!((crc.live_size as usize) << 9 <= pages::bytes(&op.wbio.bio),
             "decoding an extent bigger than its bio");
     assert!(op.wbio.bio.bi_iter.bi_size == crc.compressed_size << 9, "decoding a bio that isn't its extent");
 
