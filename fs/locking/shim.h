@@ -5,10 +5,7 @@
 /* locking.c's: the C locks' macros and inlines, for Rust (locking/raw.rs) */
 
 #include <linux/local_lock.h>
-#include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
-
-void rust_mutex_init(struct mutex *lock, const char *name, void *key);
 
 void rust_trace_contention_begin(const void *lock, unsigned int flags);
 void rust_trace_contention_end(const void *lock, int ret);
