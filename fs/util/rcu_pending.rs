@@ -18,7 +18,7 @@ use crate::new_lock;
 use crate::types::GenRadix;
 use crate::util::alloc::{flags, init_at, kbox_zeroed_nofail, AllocError, AllocMode, KBox, KVBox, KVVec};
 use crate::util::ffi::Opaque;
-use crate::data_structures::genradix::NewNode;
+use crate::data_structures::genradix::{NewNode, NODE_SIZE};
 use crate::util::alloc::{KVmalloc, Kmalloc};
 use crate::util::maybe_rcu_alloc::{alloc_at, Retired};
 use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
@@ -26,8 +26,6 @@ use crate::util::rcu::{Flavor, GpCookie};
 use crate::os::workqueue::{flush_work, Queue};
 
 const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
-
-const NODE_SIZE: usize = c::GENRADIX_NODE_SIZE as usize;
 
 /// An item, given up: its rcu_head, if it has one - what the lists thread
 /// through - or else its pointer.

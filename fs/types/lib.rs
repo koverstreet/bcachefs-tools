@@ -170,19 +170,16 @@ impl<T> core::ops::Deref for CStatic<T> {
     }
 }
 
-/// GENRADIX(T) - linux/generic-radix-tree.h. C's type[0] is __aligned(1):
-/// the element type only, not its alignment.
+/// GENRADIX(T) - data_structures/genradix.rs: the element type only, not its
+/// alignment.
 #[repr(C)]
-#[derive(Clone, Copy)]
 pub struct GenRadix<T> {
-    pub tree:  crate::c::__genradix,
+    pub tree:  crate::data_structures::genradix::Tree,
     pub _type: core::marker::PhantomData<T>,
 }
 
 // SAFETY: zeroed is empty - genradix_init() is a memset
 unsafe impl<T> ::pin_init::Zeroable for GenRadix<T> {}
-
-unsafe impl<T: Send> Send for GenRadix<T> {}
 
 // Opaque to TypeInfo, as bindgen's were: size only.
 macro_rules! typeinfo_opaque {
