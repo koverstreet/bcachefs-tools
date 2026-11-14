@@ -10,23 +10,13 @@
 //! kernel-internal structs - are Opaque rather than an error, so deriving it
 //! on a large in-memory struct is harmless. Unions get their size and no
 //! fields, as do the enums and bitfields the other macros here give TypeInfo.
-//! A field whose type is one of derives_type_info()'s names is described by
-//! reference to that type's own INFO, so that type must have TypeInfo too, or
-//! the `<T as TypeInfo>` bound fails to resolve (a loud, actionable error).
+//! A field of a type with TypeInfo is described by that type's own INFO
+//! (typeinfo::KindOf), one of a type without it as Opaque.
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use crate::cstruct::{field_type, flex_elem, generic_arg, parse_cstruct, StructKind, FieldType, IntType};
-
-/// The type names a field kind may reference as `<T as TypeInfo>::INFO`:
-/// each must have TypeInfo itself, by the name the field's type is written
-/// with.
-fn derives_type_info(name: &str) -> bool {
-    name.starts_with("bch_") ||
-        matches!(name, "Bpos" | "bkey" | "Bversion" |
-                       "Rbio" | "ReadErrReport")
-}
 
 /// By its type's name: a family's definition, X__head, is X.
 pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
@@ -113,9 +103,11 @@ fn kind(ty: &syn::Type, last: bool) -> TokenStream {
                 }
             }
         }
-        FieldType::Named { name, .. } if derives_type_info(&name) =>
-            quote!(crate::typeinfo::FieldKind::Struct(<#ty as crate::typeinfo::TypeInfo>::INFO)),
-        FieldType::Named { .. } | FieldType::Opaque => quote!(crate::typeinfo::FieldKind::Opaque),
+        FieldType::Named { .. } => quote!({
+            use crate::typeinfo::OpaqueKind as _;
+            crate::typeinfo::KindOf::<#ty>::KIND
+        }),
+        FieldType::Opaque => quote!(crate::typeinfo::FieldKind::Opaque),
     }
 }
 

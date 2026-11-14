@@ -125,6 +125,22 @@ pub trait TypeInfo {
     const INFO: &'static StructInfo;
 }
 
+/// The kind of a field of type T: a Struct of T's INFO if T has TypeInfo,
+/// else Opaque - `KindOf::<T>::KIND`, with OpaqueKind in scope.
+pub struct KindOf<T>(core::marker::PhantomData<T>);
+
+impl<T: TypeInfo> KindOf<T> {
+    pub const KIND: FieldKind = FieldKind::Struct(T::INFO);
+}
+
+/// KindOf's KIND for a T without TypeInfo: the inherent one is resolved
+/// first, where its bound holds.
+pub trait OpaqueKind {
+    const KIND: FieldKind = FieldKind::Opaque;
+}
+
+impl<T> OpaqueKind for KindOf<T> {}
+
 // ---------------------------------------------------------------------------
 // Path resolution: "children[1]", "btime.hi", ...
 
@@ -532,6 +548,26 @@ fn fields_to_text(
                 bitfield_to_text(out, w, buf, offset)?;
                 writeln!(out)?;
             }
+            // an enum's or a union's TypeInfo has no fields: its bytes, then
+            FieldKind::Opaque | FieldKind::Struct(StructInfo { fields: [], .. }) => {
+                let end = info
+                    .fields
+                    .iter()
+                    .map(|g| g.offset)
+                    .filter(|&o| o > f.offset)
+                    .min()
+                    .unwrap_or(info.size)
+                    + base;
+                let end = end.min(buf.len());
+                if offset >= end {
+                    writeln!(out, "(opaque, beyond end of value)")?;
+                } else {
+                    for b in &buf[offset..end] {
+                        write!(out, "{b:02x}")?;
+                    }
+                    writeln!(out)?;
+                }
+            }
             FieldKind::Struct(inner) => {
                 writeln!(out)?;
                 fields_to_text(out, inner, buf, offset, indent + 2)?;
@@ -564,25 +600,6 @@ fn fields_to_text(
                 Ok(v) => writeln!(out, "{v}")?,
                 Err(_) => writeln!(out, "(beyond end of value)")?,
             },
-            FieldKind::Opaque => {
-                let end = info
-                    .fields
-                    .iter()
-                    .map(|g| g.offset)
-                    .filter(|&o| o > f.offset)
-                    .min()
-                    .unwrap_or(info.size)
-                    + base;
-                let end = end.min(buf.len());
-                if offset >= end {
-                    writeln!(out, "(opaque, beyond end of value)")?;
-                } else {
-                    for b in &buf[offset..end] {
-                        write!(out, "{b:02x}")?;
-                    }
-                    writeln!(out)?;
-                }
-            }
         }
     }
     Ok(())

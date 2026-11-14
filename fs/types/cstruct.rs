@@ -359,11 +359,6 @@ pub(crate) fn parse_variant(v: proc_macro2::TokenStream)
     Ok((EnumVariant { name: v.ident, value, label, docs }, others, ty))
 }
 
-/// @i as the tokenizer has an identifier: a raw one without its r#.
-fn ident(i: &syn::Ident) -> String {
-    i.to_string().trim_start_matches("r#").to_string()
-}
-
 /// @ty's generic arguments, if it's @name<..> by any path.
 fn generic_args<'a>(ty: &'a syn::Type, name: &str) -> Option<Vec<&'a syn::GenericArgument>> {
     let syn::Type::Path(p) = ty else { return None };
@@ -377,19 +372,15 @@ fn generic_args<'a>(ty: &'a syn::Type, name: &str) -> Option<Vec<&'a syn::Generi
     }
 }
 
-/// @ty's path's names, if it's a plain path - no generics but lifetimes, which
-/// don't change what it is.
-fn path_names(ty: &syn::Type) -> Option<Vec<String>> {
+/// Whether @ty is a plain path - no generics but lifetimes, which don't
+/// change what it is.
+fn is_plain_path(ty: &syn::Type) -> bool {
     let lifetimes_only = |a: &syn::PathArguments| match a {
         syn::PathArguments::None => true,
         syn::PathArguments::AngleBracketed(a) => a.args.iter().all(|a| matches!(a, syn::GenericArgument::Lifetime(_))),
         syn::PathArguments::Parenthesized(_) => false,
     };
-    match ty {
-        syn::Type::Path(p) if p.qself.is_none() && p.path.segments.iter().all(|s| lifetimes_only(&s.arguments)) =>
-            Some(p.path.segments.iter().map(|s| ident(&s.ident)).collect()),
-        _ => None,
-    }
+    matches!(ty, syn::Type::Path(p) if p.qself.is_none() && p.path.segments.iter().all(|s| lifetimes_only(&s.arguments)))
 }
 
 // ---- field types --------------------------------------------------------------
@@ -458,18 +449,18 @@ pub(crate) enum FieldType<'a> {
     Array { elem: &'a syn::Type, n: &'a syn::Expr },
     /// A pointer, reference, function or generic: nothing to describe
     Opaque,
-    /// Anything else: the integer it is, if it's one, and the last segment
-    /// of its path.
-    Named { int: Option<IntType>, name: String },
+    /// Anything else: the integer it is, if it's one.
+    Named { int: Option<IntType> },
 }
 
 /// What @ty is, for #[derive(TypeInfo)].
 pub(crate) fn field_type(ty: &syn::Type) -> FieldType<'_> {
     match ty {
         syn::Type::Array(a) => FieldType::Array { elem: &a.elem, n: &a.len },
-        t => match (int_type(t), path_names(t)) {
-            (None, None) => FieldType::Opaque,
-            (int, p) => FieldType::Named { int, name: p.and_then(|p| p.last().cloned()).unwrap_or_default() },
+        t => match int_type(t) {
+            Some(int) => FieldType::Named { int: Some(int) },
+            None if is_plain_path(t) => FieldType::Named { int: None },
+            None => FieldType::Opaque,
         },
     }
 }
