@@ -139,13 +139,6 @@ pub struct InodeQuota {
     pub ei_quota_reserved: u64,
 }
 
-#[bch_enum(flags)]
-#[repr(u32)]
-pub enum InodeLockOp {
-    INODE_PAGECACHE_BLOCK = 1 << 0,
-    INODE_UPDATE_LOCK = 1 << 1,
-}
-
 /* returns 0 if we want to do the update, or error is passed up */
 #[cfg(not(NO_BCACHEFS_FS))]
 #[allow(non_camel_case_types)]
