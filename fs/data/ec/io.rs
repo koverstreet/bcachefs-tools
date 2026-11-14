@@ -18,9 +18,9 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::sb::members::{DevIoRef, IoRefIdx};
-use crate::util::bio::{Bio, BioOwner, Gathered};
+use crate::util::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, BioOwner, Gathered};
 use crate::util::gather::{Fold, Gather};
-use crate::os::kernel::{local_clock, PAGE_SIZE, WRITE};
+use crate::os::kernel::{local_clock, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::task::{waiter, Resume, Waiter};
 use crate::util::vstructs::Validated;
@@ -221,14 +221,16 @@ where
         let write = R::RW == WRITE;
         let opf = if write { c::req_op_REQ_OP_WRITE } else { c::req_op_REQ_OP_READ };
         let bytes = (sectors as usize) << 9;
-        let nr_vecs = (c::BIO_MAX_VECS as usize).min(bytes.div_ceil(PAGE_SIZE));
         let start = ((sector_offset - this.buf.offset) as usize) << 9;
         let base = this.buf.block_mut(idx)[start..start + bytes].as_mut_ptr();
         let set = &fs.ec.block_bioset;
 
         let mut offset = 0;
         while offset < bytes {
-            let b = (bytes - offset).min(nr_vecs * PAGE_SIZE);
+            // @start is a block's, not a page's: where each bio starts in its
+            // page says how much it maps
+            let b = buf_bio_bytes(base.wrapping_add(offset), bytes - offset);
+            let nr_vecs = buf_nr_bvecs(base.wrapping_add(offset), b);
             let dev = Some(ca.clone().into());
             let mut bio = set.alloc::<BchError, _>(ca.disk_sb.bdev, nr_vecs as u16, opf, |at| pin_init!(EcBio {
                 ca: dev,

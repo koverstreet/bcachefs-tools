@@ -125,6 +125,17 @@ pub fn buf_nr_bvecs(p: *const u8, len: usize) -> usize {
     1
 }
 
+/// How much of @len bytes at @p one bio maps, in at most BIO_MAX_VECS bvecs:
+/// all of them, but vmalloc memory spanning more pages - where @p is in its
+/// first page says how many fit.
+pub fn buf_bio_bytes(p: *const u8, len: usize) -> usize {
+    use crate::os::kernel::{is_vmalloc_addr, PAGE_SIZE};
+    if is_vmalloc_addr(p) {
+        return len.min(c::BIO_MAX_VECS as usize * PAGE_SIZE - (p as usize & (PAGE_SIZE - 1)));
+    }
+    len
+}
+
 #[pin_data]
 #[repr(C)]
 #[derive(Init)]

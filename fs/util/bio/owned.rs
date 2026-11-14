@@ -37,7 +37,6 @@ use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{Exclusive, TaskSlot, Waiter};
 use crate::c;
 use crate::errcode::BchError;
-use crate::os::kernel::PAGE_SIZE;
 use crate::util::alloc::{init_at, kfree, kzalloc, Alloc, Kmalloc};
 use crate::util::mempool::Mempool;
 
@@ -272,19 +271,10 @@ impl BioPool {
     pub unsafe fn map_and_chain(&self, bdev: *mut crate::os::blkdev::BlockDevice, mut base: *mut u8, mut size: usize,
                                 mut sector: u64, mut opf: u32, gfp: c::gfp_t) -> *mut c::bio {
         let mut tail: *mut c::bio = core::ptr::null_mut();
-        let mut nr_bvecs = super::buf_nr_bvecs(base, size);
-        let max_vecs = c::BIO_MAX_VECS as usize;
 
         while size != 0 {
-            let (mut chunk_size, mut chunk_bvecs) = (size, nr_bvecs);
-
-            if chunk_bvecs > max_vecs {
-                let offset = base.addr() & (PAGE_SIZE - 1);
-
-                chunk_size = max_vecs * PAGE_SIZE - offset;
-                chunk_bvecs = max_vecs;
-                assert!(chunk_size <= size);
-            }
+            let chunk_size = super::buf_bio_bytes(base, size);
+            let chunk_bvecs = super::buf_nr_bvecs(base, chunk_size);
 
             let bio = self.alloc_raw(bdev, chunk_bvecs as u16, opf, gfp);
             opf &= !c::REQ_PREFLUSH; /* only on the first bio */
@@ -308,7 +298,6 @@ impl BioPool {
             base       = base.wrapping_add(chunk_size);
             sector    += (chunk_size >> 9) as u64;
             size      -= chunk_size;
-            nr_bvecs  -= chunk_bvecs;
         }
 
         tail
