@@ -36,7 +36,7 @@ use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{atomic_bitfield, bitfield, bch_enum, placed, MaybeZeroable, Init, Late, TypeInfo, BitfieldMembers};
+use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Init, Late, TypeInfo, BitfieldMembers};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -938,31 +938,31 @@ pub const BTREE_WRITE_TYPE_MASK: c_ulong =
     (cs::BtreeWriteType::NR as c_ulong).next_power_of_two() - 1;
 pub const BTREE_WRITE_TYPE_BITS: u32 = (cs::BtreeWriteType::NR as u32).next_power_of_two().ilog2();
 
-atomic_bitfield! {
-    /// struct btree's flags: the pending write's type, then the node's state.
-    pub struct BtreeNodeFlags: u32 {
-        #[bits(3)] write_type: BtreeWriteType,
-        read_in_flight: bool,
-        read_error: bool,
-        dirty: bool,
-        need_write: bool,
-        write_blocked: bool,
-        will_make_reachable: bool,
-        noevict: bool,
-        write_idx: bool,
-        accessed: bool,
-        write_in_flight: bool,
-        write_in_flight_inner: bool,
-        just_written: bool,
-        dying: bool,
-        fake: bool,
-        need_rewrite: bool,
-        need_rewrite_error: bool,
-        need_rewrite_ptr_written_zero: bool,
-        never_write: bool,
-        pinned: bool,
-        permanent: bool,
-    }
+/// A btree node's flags: the pending write's type, then the node's state.
+#[bitfield(u32, atomic)]
+pub struct BtreeNodeFlags {
+    #[bits(3)] write_type: BtreeWriteType,
+    read_in_flight: bool,
+    read_error: bool,
+    dirty: bool,
+    need_write: bool,
+    write_blocked: bool,
+    will_make_reachable: bool,
+    noevict: bool,
+    write_idx: bool,
+    accessed: bool,
+    write_in_flight: bool,
+    write_in_flight_inner: bool,
+    just_written: bool,
+    dying: bool,
+    fake: bool,
+    need_rewrite: bool,
+    need_rewrite_error: bool,
+    need_rewrite_ptr_written_zero: bool,
+    never_write: bool,
+    pinned: bool,
+    permanent: bool,
+    __: u9,
 }
 
 const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&

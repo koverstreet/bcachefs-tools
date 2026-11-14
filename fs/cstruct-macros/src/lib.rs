@@ -11,7 +11,8 @@
 //!   #[derive(FlexArray)] #[counted_by] on a trailing [T; 0]: its FlexArray
 //!                        (vstructs.rs)
 //!   #[bitfield(uN)]      bitfield_struct::bitfield, and forwarders for the
-//!                        struct that holds one in a #[members] field
+//!                        struct that holds one in a #[members] field; with
+//!                        `atomic`, an atomic word of it (bitfield_atomic.rs)
 //!   xmacro! { .. }       an x-macro list: NAME!(cb), handing cb! the whole
 //!                        list
 //!   xmacro_select!       NAME!(xmacro_select [TOKEN => cb]): cb! handed
@@ -21,8 +22,6 @@
 //!                        and argument type
 //!   #[bch_enum(..)]      an enum, open, closed or flags: the type that is,
 //!                        and its values
-//!   atomic_bitfield! { .. }
-//!                        a bitfield's value, and an atomic word of it
 //!   tagged_union! { .. } a tagged union with a stable representation: its
 //!                        storage, the tag a Determinant of it, declared as
 //!                        an enum, the arms its variants (tagged_union.rs)
@@ -62,7 +61,7 @@ use cstruct::{generic_arg, int_of, parse_cstruct, parse_ioctl, parse_xmacro, spl
               EnumKind, EnumVariant, XEntry};
 
 mod args_stored_once;
-mod atomic_bitfield;
+mod bitfield_atomic;
 mod in_place;
 mod detach;
 mod rcu_head;
@@ -327,7 +326,8 @@ pub(crate) fn is_core_atomic(ty: &syn::Type) -> bool {
 ///
 /// Storage LeN is a uN, little-endian - an on-disk word: #[bitfield(Le64)].
 /// `align = 8` aligns it to 8, which a u64 bitfield needs said on i386
-/// (Align8U64).
+/// (Align8U64). `atomic`, on a uN: AtomicNAME too, a word of it that's
+/// atomic - see bitfield_atomic.rs.
 #[proc_macro_attribute]
 pub fn bitfield(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[bitfield]", || bitfield_expand(attr.into(), item.into()))
@@ -566,6 +566,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     }
     let shape = quote!(Bitfield(crate::typeinfo::Endian::#endian));
     let (info, plain) = (typeinfo::info(name, name, shape, &member_info), vstructs::plain(name, &[held]));
+    let atomic = args.atomic.then(|| bitfield_atomic::atomic(&item, storage));
     // The struct as tokens, not text: an error in a member points at it
     Ok(quote! {
         #out
@@ -573,6 +574,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         #item
         #info
         #plain
+        #atomic
         // SAFETY: Plain - its integer, any bytes of which are one
         unsafe impl ::pin_init::Zeroable for #name {}
     })
@@ -631,6 +633,8 @@ struct BitfieldArgs {
     storage: Ident,
     /// The rest of bitfield-struct's - with the repr our shorthands say
     rest:    Vec<TokenStream>,
+    /// `atomic`: AtomicNAME too (bitfield_atomic.rs)
+    atomic:  bool,
 }
 
 /// `KEY = VALUE`: KEY, and VALUE.
@@ -654,6 +658,10 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
         Some((k, v)) if k == "align" => { align = Some(v); false }
         _ => true,
     });
+    let atomic = rest.iter().position(|a| a.to_string() == "atomic").map(|i| rest.remove(i)).is_some();
+    if atomic && (storage.to_string().starts_with("Le") || align.is_some()) {
+        return Err("atomic is of a uN, a native word: not LeN, nor aligned".into());
+    }
     let mut repr = |ty: TokenStream, from: &str, into: &str| {
         let (from, into) = (format_ident!("{from}"), format_ident!("{into}"));
         rest.extend([quote!(repr = #ty), quote!(from = #ty::#from), quote!(into = #ty::#into)]);
@@ -669,7 +677,7 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
             repr(quote!(crate::types::Align8U64), "from_u64", "to_u64"),
         Some(n) => return Err(format!("align = {n}: there's only align = 8, on u64 storage")),
     }
-    Ok(BitfieldArgs { storage, rest })
+    Ok(BitfieldArgs { storage, rest, atomic })
 }
 
 /// A #[bitfield] struct, for bitfield-struct: its members canonical, and
@@ -937,14 +945,6 @@ fn xmacro_template(template: TokenStream, params: &[Ident]) -> TokenStream {
         k += 1;
     }
     out
-}
-
-/// `atomic_bitfield! { pub struct NAME: uN { fields } }`: a
-/// bitfield's value, NAME, and AtomicNAME, a word of it that's atomic - see
-/// atomic_bitfield.rs.
-#[proc_macro]
-pub fn atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand_syn("atomic_bitfield!", || atomic_bitfield::atomic_bitfield(input.into()))
 }
 
 /// `#[bch_enum(closed|open|flags)]` on `#[repr(uN)] pub enum NAME { .. }`:
