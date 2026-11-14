@@ -213,6 +213,22 @@ impl<V: ?Sized> BkeyI<V> {
         (self as *mut Self).cast()
     }
 
+    /// The same key, its value a W.
+    ///
+    /// # Safety
+    /// Its value is a W, as cast_unsized()'s.
+    pub(crate) unsafe fn cast<W: ?Sized + Unsized>(&self) -> &BkeyI<W> {
+        unsafe { &*cast_unsized(self.as_ffi()) }
+    }
+
+    /// cast(), to edit.
+    ///
+    /// # Safety
+    /// As cast()'s.
+    pub(crate) unsafe fn cast_mut<W: ?Sized + Unsized>(&mut self) -> &mut BkeyI<W> {
+        unsafe { &mut *cast_unsized_mut(self.as_ffi_mut()) }
+    }
+
     pub fn v(&self) -> &V {
         &self.v
     }
@@ -277,13 +293,13 @@ impl<'a, V: ?Sized + BkeyVal> From<&'a mut BkeyI<V>> for BkeyS<'a, V> {
 /// implies Validated: an unvalidated one converts by From, to one of its own.
 impl<V: ?Sized + ValidatedVal> AsRef<BkeyI> for BkeyI<V> {
     fn as_ref(&self) -> &BkeyI {
-        unsafe { &*cast_unsized(self.as_ffi()) }
+        unsafe { self.cast() }
     }
 }
 
 impl<V: ?Sized + ValidatedVal> AsMut<BkeyI> for BkeyI<V> {
     fn as_mut(&mut self) -> &mut BkeyI {
-        unsafe { &mut *cast_unsized_mut(self.as_ffi_mut()) }
+        unsafe { self.cast_mut() }
     }
 }
 
@@ -397,7 +413,7 @@ impl<'a, V: ?Sized + BkeyVal> BkeyV for &'a BkeyI<V> {
     }
 
     unsafe fn arm_unchecked<K: BkeyFamily + ?Sized>(self) -> &'a BkeyI<Narrowed<K, V>> {
-        &*cast_unsized(self.as_ffi())
+        unsafe { self.cast() }
     }
 }
 
@@ -410,7 +426,7 @@ impl<'a, V: ?Sized + BkeyVal> BkeyV for &'a mut BkeyI<V> {
     }
 
     unsafe fn arm_unchecked<K: BkeyFamily + ?Sized>(self) -> &'a mut BkeyI<Narrowed<K, V>> {
-        &mut *cast_unsized_mut(self.as_ffi_mut())
+        unsafe { self.cast_mut() }
     }
 }
 
@@ -850,9 +866,8 @@ macro_rules! bkey_family_conv {
         bkey_family_conv!(@forms $f;
             ['a]      [BkeySC<'a,]               => [BkeySC<'a,]:   |k| k.cast();
             ['a]      [BkeyS<'a,]                => [BkeyS<'a,]:    |k| k.cast();
-            ['a]      [&'a BkeyI<]               => [&'a BkeyI<]:   |k| &*cast_unsized(k.as_ffi());
-            ['a]      [&'a mut BkeyI<]           => [&'a mut BkeyI<]:
-                |k| &mut *cast_unsized_mut(k.as_ffi_mut());
+            ['a]      [&'a BkeyI<]               => [&'a BkeyI<]:   |k| k.cast();
+            ['a]      [&'a mut BkeyI<]           => [&'a mut BkeyI<]: |k| k.cast_mut();
             ['a]      [&'a BkeyP<]               => [&'a BkeyP<]:   |k| k.cast();
             ['a]      [&'a mut BkeyP<]           => [&'a mut BkeyP<]: |k| k.cast_mut();
             ['a]      [&'a BkeyI<]               => [&'a BkeyP<]:   |k| <&BkeyP<V>>::from(k).cast();
