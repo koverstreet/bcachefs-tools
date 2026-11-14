@@ -6,7 +6,9 @@
 
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
-use bcachefs_shim::c::{atomic_t, bio_vec, bvec_iter};
+use bcachefs_shim::c::atomic_t;
+
+pub use super::bio::{bio_vec, bvec_iter};
 use core::ffi::c_void;
 
 use super::blkdev::BlockDevice;

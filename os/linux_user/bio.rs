@@ -9,6 +9,33 @@ use core::ffi::c_void;
 use core::mem::offset_of;
 use core::sync::atomic::{AtomicI32, Ordering::{AcqRel, SeqCst}};
 
+/*
+ * As the kernel's, so Rust reads one the same in both builds. A page is its
+ * address here, so a bio_vec of contiguous memory may span many of them.
+ */
+#[repr(C)]
+#[derive(Debug, Copy, Clone, ::pin_init::MaybeZeroable)]
+pub struct bio_vec {
+    pub bv_page:   *mut c::page,
+    pub bv_len:    u32,
+    pub bv_offset: u32,
+}
+
+impl Default for bio_vec {
+    fn default() -> Self {
+        ::pin_init::Zeroable::zeroed()
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, ::pin_init::MaybeZeroable)]
+pub struct bvec_iter {
+    pub bi_sector:    u64,	/* device address in 512 byte sectors */
+    pub bi_size:      u32,	/* residual I/O count */
+    pub bi_idx:       u32,	/* current index into bvl_vec */
+    pub bi_bvec_done: u32,	/* number of bytes completed in current bvec */
+}
+
 unsafe fn flagged(bio: *const c::bio, bit: u32) -> bool {
     unsafe { (*bio).bi_flags & (1 << bit) != 0 }
 }
