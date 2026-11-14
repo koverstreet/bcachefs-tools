@@ -280,7 +280,7 @@ pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
             ExtentEntry::stripe_ptr(ec) => write!(out, "idx {} block {}", ec.idx(), ec.block()),
             ExtentEntry::rebalance_v1(r) => extent_rebalance_v1_to_text(out, Some(fs), r),
             ExtentEntry::reconcile(r) => extent_reconcile_to_text(out, Some(fs), r),
-            ExtentEntry::flags(f) => crate::util::names::prt_set::<c::ExtentFlag>(out, f.flags()),
+            ExtentEntry::flags(f) => f.flags().to_text(out),
             ExtentEntry::reconcile_bp(r) => write!(out, "idx {}", r.idx()),
             ExtentEntry::Unknown { bytes, .. } | ExtentEntry::Invalid { bytes, .. } |
             ExtentEntry::PastEnd { bytes, .. } => {

@@ -236,6 +236,7 @@ pub struct bch_extent_stripe_ptr {
 
 #[bch_enum(open)]
 #[prefix(BCH_EXTENT_FLAG_)]
+#[mask(ExtentFlags: u64, prefix = BCH_EXTENT_FLAG_MASK_)]
 #[repr(u32)]
 pub enum ExtentFlag {
     poisoned = 0,
@@ -245,7 +246,7 @@ pub enum ExtentFlag {
 pub struct bch_extent_flags {
     #[bits(default = 1 << ExtentEntryType::flags.0)]
     pub(self) type_: u7,
-    flags: u57,
+    #[bits(57, from = ExtentFlags::from_bits_retain)] flags: ExtentFlags,
 }
 
 /// An extent entry, as Rust names it: opaque, behind a pointer or as a

@@ -17,7 +17,7 @@ use crate::btree::bkey::{self, BkeySC};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree_trans;
 use crate::c;
-use crate::data::ptrs::{BkeyVPtrs, PtrsMut, EXTENT_POISONED};
+use crate::data::ptrs::{BkeyVPtrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::dirent::{self, Dirent};
 use crate::errcode::{Errcode, BchError};
@@ -695,7 +695,7 @@ fn unpoison_extent(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>
     let fs = t.fs();
     let Some(k) = k.arm::<PtrsMut>() else { return Ok(()) };
     let flags = k.extent_flags(fs);
-    if flags & EXTENT_POISONED == 0 {
+    if !flags.contains(c::ExtentFlags::poisoned) {
         return Ok(());
     }
     fs.request_incompat_feature(MetadataVersion::extent_flags)?;
@@ -703,7 +703,7 @@ fn unpoison_extent(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>
     // room for a flags entry, if it has none
     let room = (usize::from(k.k.u64s) + size_of::<c::bch_extent_flags>() / size_of::<u64>()) * size_of::<u64>();
     let mut n = t.bkey_reassemble_room(k, room)?;
-    n.extent_flags_set(fs, flags & !EXTENT_POISONED).expect("room for a flags entry: reassembled with it");
+    n.extent_flags_set(fs, flags - c::ExtentFlags::poisoned).expect("room for a flags entry: reassembled with it");
     t.update(iter, &n, UpdateTriggerFlags::empty())
 }
 

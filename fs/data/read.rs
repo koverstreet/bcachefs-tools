@@ -69,8 +69,7 @@ use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, Btree
 use crate::{bch_err, btree_trans, c, fs_inconsistent, log_msg_ratelimited, prt};
 use crate::data::{compress::bio_uncompress, ec, inline_data::{self, CsumMismatch, InlineDataRef},
                   promote::{promote_alloc, Promoted}, update::read_err_benign, update_task::AwaitingRead};
-use crate::data::ptrs::{crc_is_compressed, extent_nonce, BkeyVPtrs, BkeyVRead, Ptrs, PtrsMut,
-                        EXTENT_POISONED};
+use crate::data::ptrs::{crc_is_compressed, extent_nonce, BkeyVPtrs, BkeyVRead, Ptrs, PtrsMut};
 use crate::data::reflink::{lookup_indirect_extent, Indirect};
 use crate::errcode::{Errcode as err, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Dev, Fs};
@@ -1039,8 +1038,8 @@ fn maybe_poison_extent(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, fla
         return Ok(());
     }
 
-    let extent_flags = e.k.arm::<Ptrs>().map_or(0, |k| k.extent_flags(fs));
-    if extent_flags & EXTENT_POISONED != 0 {
+    let extent_flags = e.k.arm::<Ptrs>().map_or(c::ExtentFlags::empty(), |k| k.extent_flags(fs));
+    if extent_flags.contains(c::ExtentFlags::poisoned) {
         return Ok(());
     }
 
@@ -1055,7 +1054,7 @@ fn maybe_poison_extent(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, fla
     let mut new = t.bkey_reassemble_room(k, usize::from(k.k.u64s) * size_of::<u64>() +
                                              size_of::<c::bch_extent_flags>())?;
     new.reborrow().arm::<PtrsMut>().expect("poisoning an extent whose entries can't be edited")
-        .extent_flags_set(fs, extent_flags | EXTENT_POISONED).expect("room for an extent flags entry: made for it");
+        .extent_flags_set(fs, extent_flags | c::ExtentFlags::poisoned).expect("room for an extent flags entry: made for it");
     t.update(&iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(Some(&DiskReservation::new(fs)), CommitFlags::empty())?;
 
