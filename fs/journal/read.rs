@@ -24,9 +24,9 @@ use crate::journal::buckets::JournalRing;
 use crate::locking::{Guard as _, Locked, Mut, Ref};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
-use crate::util::alloc::{init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, KVVec};
-use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioOwner};
-use crate::os::kernel::{local_clock, PAGE_SIZE};
+use crate::util::alloc::{init_at, kvzalloc, AllocError, KVVec};
+use crate::util::bio::{io_buf, Bio, BioBox, BioBuffersMapped, BioOwner, IoBuf};
+use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated, Validated, VStruct};
@@ -748,17 +748,13 @@ struct DevReader<'a> {
     fs:   &'a Fs,
     ca:   &'a Dev,
     ring: &'a mut JournalRing,
-    /* its buffer page aligned: userspace reads into it O_DIRECT */
-    bio:  BioBox<Bio, BioBuffersMapped<ABox<[u8], ConstAlign<PAGE_SIZE>>>>,
+    bio:  BioBox<Bio, BioBuffersMapped<IoBuf>>,
 }
 
 impl<'a> DevReader<'a> {
     fn new(fs: &'a Fs, ca: &'a Dev, ring: &'a mut JournalRing) -> Result<Self, BchError> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
-        let mut buf = AVec::<u8, ConstAlign<PAGE_SIZE>>::new(PAGE_SIZE);
-        buf.try_reserve_exact(bytes).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
-        unsafe { buf.set_len(bytes) };
-        let mut buf = buf.into_boxed_slice();
+        let mut buf = io_buf(bytes).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
         buf.fill(0);
         let bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
             ca.disk_sb.bdev, c::req_op_REQ_OP_READ, buf, |b| b.init())?;

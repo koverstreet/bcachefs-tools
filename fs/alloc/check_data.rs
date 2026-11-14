@@ -39,9 +39,7 @@ use crate::init::damage;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
-use crate::util::alloc::{AVec, ConstAlign};
-use crate::os::kernel::PAGE_SIZE;
-use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioOwner};
+use crate::util::bio::{io_buf, Bio, BioBox, BioBuffersMapped, BioOwner};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
@@ -149,11 +147,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     } else {
         (p.crc.compressed_size as usize) << 9
     };
-    /* page aligned: userspace reads into it O_DIRECT */
-    let mut buf = AVec::<u8, ConstAlign<PAGE_SIZE>>::new(PAGE_SIZE);
-    buf.try_reserve_exact(bytes).map_err(|_| BchError::from(c::ENOMEM))?;
-    unsafe { buf.set_len(bytes) };
-    let mut buf = buf.into_boxed_slice();
+    let mut buf = io_buf(bytes).map_err(|_| BchError::from(c::ENOMEM))?;
     buf.fill(0);
 
     let mut bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(

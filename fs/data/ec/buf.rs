@@ -23,10 +23,10 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::errors::SbErrorId;
 use crate::util::{raid, Printbuf};
-use crate::util::alloc::{kbox_pin_init, ABox, AVec, AllocError, ConstAlign, KBox};
+use crate::util::alloc::{kbox_pin_init, KBox};
+use crate::util::bio::{io_buf, IoBuf};
 use crate::util::backref::BackRef;
 use crate::util::closure::{closure_wait, closure_wake_up};
-use crate::os::kernel::PAGE_SIZE;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::ratelimit::Ratelimit;
 use crate::util::sleep::Sleep;
@@ -137,24 +137,11 @@ pub struct StripeBuf {
     pub(crate) size:   u32,
     pub(crate) err:    [[Option<BchError>; MAX_BLOCKS]; 2],
     /// Each block's buffer, of @bytes
-    pub(crate) data:   [Option<BlockBuf>; MAX_BLOCKS],
+    pub(crate) data:   [Option<IoBuf>; MAX_BLOCKS],
     /// Stale when we read the stripe key: an alloc inconsistency
     pub(crate) stale:  c::StripeBlockMask,
     pub(crate) csum_good: [c::bch_csum; MAX_BLOCKS],
     pub(crate) csum_bad:  [c::bch_csum; MAX_BLOCKS],
-}
-
-/// A block's buffer: page aligned, for its IO.
-pub(crate) type BlockBuf = ABox<[u8], ConstAlign<PAGE_SIZE>>;
-
-/// A block's buffer of @bytes, not zeroed.
-fn block_buf(bytes: usize) -> Result<BlockBuf, AllocError> {
-    let mut v = AVec::<u8, ConstAlign<PAGE_SIZE>>::new(PAGE_SIZE);
-    v.try_reserve_exact(bytes).map_err(|_| AllocError)?;
-    // SAFETY: within its capacity. Its bytes are as kvmalloc() left them,
-    // as C's buffers were: read into, or written, before they're read
-    unsafe { v.set_len(bytes) };
-    Ok(v.into_boxed_slice())
 }
 
 impl StripeBuf {
@@ -200,7 +187,7 @@ impl StripeBuf {
             // got
             buf.blocks = blocks;
             for i in blocks_in(blocks) {
-                match block_buf(bytes) {
+                match io_buf(bytes) {
                     Ok(b) => buf.data[i] = Some(b),
                     Err(_) => return fs.throw(Errcode::ENOMEM_stripe_buf),
                 }
