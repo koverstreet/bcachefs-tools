@@ -42,7 +42,7 @@ use crate::util::task::{spawn_static, waiter, Resumable, Resume};
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
                             Plain, SelfSized, Unsized, Unvalidated};
 use crate::os::workqueue::{run_raw, RawWork};
-use crate::util::{alloc::init_at, backref::BackRef, closure::StackClosure, printbuf::Msg, refcount::TryRefcount};
+use crate::util::{alloc::init_at, backref::BackRef, printbuf::Msg, refcount::TryRefcount};
 use crate::util::{time_stats::TimeStats, Printbuf, ToText};
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
 use core::ffi::c_uint;
@@ -50,7 +50,6 @@ use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
-use pin_init::stack_pin_init;
 
 #[repr(C)]
 pub struct BtreeReadBio {
@@ -998,14 +997,7 @@ impl Fs {
     pub fn btree_root_read(&self, id: Btree, k: &BkeyI, level: u32) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
 
-        stack_pin_init!(let cl = StackClosure::new());
-        loop {
-            let ret = trans.btree_cache_cannibalize_lock(NonNull::new(cl.as_ptr()));
-            cl.sync();
-            if ret.is_ok() {
-                break;
-            }
-        }
+        trans.btree_cache_cannibalize_lock();
 
         let b = trans.btree_node_mem_alloc(&mut trans.paths(), level != 0);
         trans.btree_cache_cannibalize_unlock();

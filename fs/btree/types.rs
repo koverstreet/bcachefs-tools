@@ -352,8 +352,8 @@ pub struct bch_fs_btree_cache {
     #[init(core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))]
     pub alloc_lock: core::sync::atomic::AtomicPtr<cs::task_struct>,
     #[pin]
-    #[init(::pin_init::init_zeroed())]
-    pub alloc_wait: cs::closure_waitlist,
+    #[init(crate::util::futex::EventCount::new())]
+    pub alloc_wait: crate::util::futex::EventCount,
 }
 
 /* Iterator, update, and trigger flags: */

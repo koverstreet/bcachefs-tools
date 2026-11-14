@@ -6,7 +6,7 @@
 //! it takes from it, set up; and the nodes it frees, freed in memory.
 
 use core::mem::size_of;
-use core::ptr::{self, NonNull};
+use core::ptr;
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut};
@@ -30,6 +30,7 @@ use crate::prt;
 use crate::util::closure::StackClosure;
 use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
+use crate::util::sleep::Sleep;
 use pin_init::stack_pin_init;
 use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, BTREE_RESERVE_MAX};
 
@@ -149,7 +150,12 @@ impl<'t> InteriorUpdate<'t> {
                 req.cl = Some(cl.as_opaque());
 
                 let ret = loop {
+                    let seen = fs.btree.cache.alloc_wait.snapshot();
                     match self.reserve_get(paths, nr_nodes, &mut req) {
+                        Err(e) if e.matches(Errcode::btree_cache_cannibalize_lock_blocked) => {
+                            trans.unlock_from(paths, crate::ret_ip!());
+                            let Ok(()) = fs.btree.cache.alloc_wait.wait(seen, Sleep::UNINTERRUPTIBLE);
+                        }
                         Err(e) if e.matches(Errcode::operation_blocked) => {
                             if let Err(e) = paths.lend(|| t.wait_on_allocator(&mut req, e, cl.as_opaque())) {
                                 break Err(e);
@@ -194,7 +200,7 @@ impl<'t> InteriorUpdate<'t> {
          * Protects reaping from the btree node cache and using the btree node
          * open bucket reserve:
          */
-        trans.btree_cache_cannibalize_lock(req.cl.map(|cl| NonNull::from(cl).cast()))?;
+        trans.btree_cache_cannibalize_trylock(req.cl.is_some())?;
 
         let ret = (|| {
             for (interior, &nr) in nr_nodes.iter().enumerate() {

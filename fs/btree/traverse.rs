@@ -25,11 +25,9 @@ use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
 use crate::prt;
 use crate::util::backtrace::prt_task_backtrace;
-use crate::util::closure::StackClosure;
 use crate::os::kernel::race_fault;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
-use pin_init::stack_pin_init;
 
 // ── A level: its node, and its node iterator ────────────────────────────────
 
@@ -576,14 +574,7 @@ impl BtreeTrans<'_> {
             self.mark_locked(false);
 
             if self.memory_allocation_failure() {
-                stack_pin_init!(let cl = StackClosure::new());
-                loop {
-                    let ret = self.btree_cache_cannibalize_lock(NonNull::new(cl.as_ptr()));
-                    cl.sync();
-                    if ret.is_ok() {
-                        break;
-                    }
-                }
+                self.btree_cache_cannibalize_lock();
             }
 
             /*

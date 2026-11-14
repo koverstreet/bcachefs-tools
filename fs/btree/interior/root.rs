@@ -5,7 +5,7 @@
 //! to the in-memory roots; and the reserve cache, as text.
 
 use core::ffi::c_ulong;
-use core::ptr::{self, NonNull};
+use core::ptr;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::sort::build_aux_trees;
@@ -22,9 +22,7 @@ use crate::prt;
 use crate::util::Printbuf;
 use crate::util::printbuf::ToText;
 use crate::util::vstructs::Unvalidated;
-use crate::util::closure::StackClosure;
 use crate::{POS_MIN, SPOS_MAX};
-use pin_init::stack_pin_init;
 use super::{reserve, InteriorUpdate, NewNode};
 
 fn root_pack(b: &BtreeNode) -> c_ulong {
@@ -133,14 +131,7 @@ impl Fs {
 pub(crate) fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Result<(), BchError> {
     let fs = trans.fs();
 
-    stack_pin_init!(let cl = StackClosure::new());
-    loop {
-        let ret = trans.btree_cache_cannibalize_lock(NonNull::new(cl.as_ptr()));
-        cl.sync();
-        if ret.is_ok() {
-            break;
-        }
-    }
+    trans.btree_cache_cannibalize_lock();
 
     let b = trans.btree_node_mem_alloc(&mut trans.paths(), false);
     trans.btree_cache_cannibalize_unlock();

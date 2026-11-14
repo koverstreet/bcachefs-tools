@@ -113,7 +113,6 @@ use crate::c;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::prt;
-use crate::util::closure::{closure_wait, closure_wake_up};
 use crate::os::sched::current;
 use crate::fs::Fs;
 use crate::util::vstructs::Head;
@@ -277,19 +276,41 @@ impl Fs {
  * the btree, we need to release this lock if we have it held.
  */
 impl BtreeTrans<'_> {
-    /// The cannibalize lock, this task's - or, given @cl, @cl waiting for it:
-    /// btree_cache_cannibalize_lock_blocked. Without @cl,
-    /// ENOMEM_btree_cache_cannibalize_lock.
-    pub fn btree_cache_cannibalize_lock(&self, cl: Option<NonNull<c::closure>>) -> Result<(), BchError> {
+    /// The cannibalize lock, this thread's - or, held by another,
+    /// btree_cache_cannibalize_lock_blocked if @blocking: the caller drops its
+    /// btree locks, then waits on alloc_wait from a snapshot taken before
+    /// this. Not @blocking, ENOMEM_btree_cache_cannibalize_lock.
+    pub fn btree_cache_cannibalize_trylock(&self, blocking: bool) -> Result<(), BchError> {
         let fs = self.fs();
-        let ret = cannibalize_lock(fs, cl);
-        if ret.is_ok() {
-            self.set_btree_cache_cannibalize_locked(true);
-            fs.event_inc_trace(events::btree_cache_cannibalize_lock, |out| prt!(out, "{}", self.fn_name()));
-        } else {
-            fs.event_inc_trace(events::btree_cache_cannibalize_lock_fail, |out| prt!(out, "{}", self.fn_name()));
+        let me = current();
+
+        match fs.btree.cache.alloc_lock.compare_exchange(core::ptr::null_mut(), me, SeqCst, Relaxed) {
+            Err(old) if old != me => {
+                fs.event_inc_trace(events::btree_cache_cannibalize_lock_fail, |out| prt!(out, "{}", self.fn_name()));
+                fs.throw(if blocking {
+                    Errcode::btree_cache_cannibalize_lock_blocked
+                } else {
+                    Errcode::ENOMEM_btree_cache_cannibalize_lock
+                })
+            }
+            _ => {
+                self.set_btree_cache_cannibalize_locked(true);
+                fs.event_inc_trace(events::btree_cache_cannibalize_lock, |out| prt!(out, "{}", self.fn_name()));
+                Ok(())
+            }
         }
-        ret
+    }
+
+    /// The cannibalize lock, waited for: with no btree locks held.
+    pub fn btree_cache_cannibalize_lock(&self) {
+        let wait = &self.fs().btree.cache.alloc_wait;
+        loop {
+            let seen = wait.snapshot();
+            if self.btree_cache_cannibalize_trylock(true).is_ok() {
+                return;
+            }
+            let Ok(()) = wait.wait(seen, Sleep::UNINTERRUPTIBLE);
+        }
     }
 
     pub fn btree_cache_cannibalize_unlock(&self) {
@@ -298,39 +319,12 @@ impl BtreeTrans<'_> {
 
         if bc.alloc_lock.load(Relaxed) == current() {
             fs.event_inc_trace(events::btree_cache_cannibalize_unlock, |out| prt!(out, "{}", self.fn_name()));
+            // before the wake: a waiter whose snapshot sees it sees the lock free
             bc.alloc_lock.store(core::ptr::null_mut(), Release);
-            closure_wake_up(&bc.alloc_wait);
+            bc.alloc_wait.wake();
         }
         self.set_btree_cache_cannibalize_locked(false);
     }
-}
-
-fn cannibalize_lock(fs: &Fs, cl: Option<NonNull<c::closure>>) -> Result<(), BchError> {
-    let bc = &fs.btree.cache;
-    let me = current();
-    let take = || match bc.alloc_lock.compare_exchange(core::ptr::null_mut(), me, SeqCst, Relaxed) {
-        Ok(_) => true,
-        Err(old) => old == me,
-    };
-
-    if take() {
-        return Ok(());
-    }
-
-    let Some(cl) = cl else {
-        return fs.throw(Errcode::ENOMEM_btree_cache_cannibalize_lock);
-    };
-
-    unsafe { closure_wait(&bc.alloc_wait, cl) };
-
-    /* Try again, after adding ourselves to waitlist */
-    if take() {
-        /* We raced */
-        closure_wake_up(&bc.alloc_wait);
-        return Ok(());
-    }
-
-    fs.throw(Errcode::btree_cache_cannibalize_lock_blocked)
 }
 
 // ── The shrinkers ────────────────────────────────────────────────────────
