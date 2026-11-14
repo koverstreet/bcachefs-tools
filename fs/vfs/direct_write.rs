@@ -139,7 +139,7 @@ unsafe fn dio_write_done(dio: *mut Dio) -> isize {
     let req = d.req;
     let sync = d.bits.sync() != 0;
 
-    unsafe { c::rust_kfree(d.iov.cast()) };
+    unsafe { crate::util::alloc::kfree_unsized(d.iov.cast()) };
 
     let mut ret = if d.op.error != 0 { isize::from(d.op.error) } else { (d.written << 9) as isize };
     let (write_ref, started) = (d.write_ref.take(), d.started.take());

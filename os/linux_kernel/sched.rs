@@ -32,6 +32,11 @@ pub fn need_resched() -> bool {
     unsafe { c::bch2_need_resched() }
 }
 
+/// current->flags: the memalloc scopes the task is in.
+pub fn memalloc_flags() -> u32 {
+    unsafe { (*current()).flags }
+}
+
 /// The memalloc scope @gfp says, in the flags we use: NORECLAIM without
 /// direct reclaim, else NOIO without __GFP_IO; NOWARN. The rest of @gfp has
 /// no scope, and goes.

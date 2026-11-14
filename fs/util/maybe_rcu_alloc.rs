@@ -207,7 +207,7 @@ impl<T, H: HeadKind> RcuHeadAt<H> for T {
     default unsafe fn kvfree_rcu_mem(p: NonNull<T>) {
         unsafe {
             let h = <T as RcuHeadAt<H>>::head(p);
-            c::rust_kvfree_rcu(h.cast(), h.cast());
+            crate::util::alloc::kvfree_rcu_head(h.cast(), h.cast());
         }
     }
 }
@@ -234,7 +234,7 @@ impl<T: HasRcuHead, H: HeadKind> RcuHeadAt<H> for T {
     unsafe fn kvfree_rcu_mem(p: NonNull<T>) {
         // tiny RCU passes the head's offset as its callback
         const { assert!(T::HEAD < 4096, "kvfree_rcu() of a head more than a page into its object") };
-        unsafe { c::rust_kvfree_rcu(p.as_ptr().cast(), <T as RcuHeadAt<H>>::head(p).cast()) }
+        unsafe { crate::util::alloc::kvfree_rcu_head(p.as_ptr().cast(), <T as RcuHeadAt<H>>::head(p).cast()) }
     }
 }
 

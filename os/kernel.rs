@@ -87,9 +87,8 @@ pub fn random_u64_below(ceil: u64) -> u64 {
     (m >> 64) as u64
 }
 
-// local_clock() is a static inline and cond_resched() a macro, so neither has
-// a symbol for Rust: util.c wraps both, as bch2_*, for the kernel and
-// userspace builds alike.
+// local_clock() is a static inline, with no symbol for Rust: the bindings'
+// wrapper of it, in both builds.
 pub fn local_clock() -> u64 {
     unsafe { c::local_clock() }
 }

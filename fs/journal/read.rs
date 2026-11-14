@@ -198,7 +198,7 @@ impl Drop for Replay {
     fn drop(&mut self) {
         unsafe {
             core::ptr::drop_in_place(&raw mut (*self.0.as_ptr()).ptrs);
-            c::rust_kvfree(self.0.as_ptr().cast());
+            crate::util::alloc::kvfree_unsized(self.0.as_ptr().cast());
         }
     }
 }

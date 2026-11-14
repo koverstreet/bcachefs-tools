@@ -470,7 +470,7 @@ impl BtreeTrans<'_> {
     fn table_retire(&self, allocated: *mut c_ulong) {
         if allocated != self._paths_allocated.as_ptr().cast() {
             // kfree_rcu_mightsleep() is kvfree_rcu_mightsleep()
-            unsafe { c::rust_kfree_rcu_mightsleep(allocated.cast()) };
+            unsafe { crate::util::alloc::kfree_rcu_mightsleep(allocated.cast()) };
         }
     }
 }

@@ -58,7 +58,5 @@ pub(crate) use lock::{Alone, Guard, HoldsRef, Mut, Ref};
 pub use noio::{mutex_noio, percpu_rwsem_noio, Memalloc, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
 pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                       PF_MEMALLOC_NOWARN};
-#[cfg(kernel)]
-pub(crate) use noio::memalloc_flags;
 pub use seqlock::SeqLock;
 pub use seqmutex::SeqMutexSeq;

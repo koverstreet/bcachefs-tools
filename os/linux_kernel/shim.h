@@ -6,6 +6,7 @@
 
 #include <linux/blkdev.h>
 #include <linux/debugfs.h>
+#include <linux/gfp.h>
 #include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/rwsem.h>
@@ -79,6 +80,15 @@ void bch2_set_current_state(unsigned int state);
 void bch2_set_current_state_running(void);
 
 int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key);
+
+void *rust_kzalloc_nofail(size_t size);
+void *rust_kvzalloc_nofail(size_t size);
+void rust_kfree(const void *p);
+void rust_kvfree(void *p);
+void rust_kvfree_rcu(void *p, struct rcu_head *head);
+void rust_kfree_rcu_mightsleep(void *p);
+void *rust_bio_pages_alloc(size_t size, gfp_t gfp);
+void rust_bio_pages_free(void *p, size_t size);
 bool bch2_need_resched(void);
 #ifdef CONFIG_SMP
 bool bch2_owner_on_cpu(struct task_struct *owner);

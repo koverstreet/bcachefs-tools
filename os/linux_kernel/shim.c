@@ -9,13 +9,16 @@
  */
 
 #include <linux/blkdev.h>
+#include <linux/gfp.h>
 #include <linux/jump_label.h>
 #include <linux/mutex.h>
 #include <linux/percpu.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/preempt.h>
+#include <linux/rcupdate.h>
 #include <linux/rwsem.h>
 #include <linux/sched/signal.h>
+#include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/srcu.h>
 #include <linux/version.h>
@@ -443,4 +446,54 @@ int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key)
 #else
 	return init_srcu_struct(ssp);
 #endif
+}
+
+/*
+ * os/linux_kernel/alloc.rs: the kernel's Rust allocator API has no
+ * __GFP_NOFAIL, and no kfree() of a size it doesn't know
+ */
+void *rust_kzalloc_nofail(size_t size)
+{
+	return kzalloc(size, GFP_KERNEL|__GFP_NOFAIL);
+}
+
+void *rust_kvzalloc_nofail(size_t size)
+{
+	return kvzalloc(size, GFP_KERNEL|__GFP_NOFAIL);
+}
+
+void rust_kfree(const void *p)
+{
+	kfree(p);
+}
+
+void rust_kvfree(void *p)
+{
+	kvfree(p);
+}
+
+/*
+ * kvfree_rcu(p, field), for a head the macro can't name: anywhere in @p. As a
+ * void *, as the macro casts it: newer kernels take a struct kvfree_rcu_head,
+ * no bigger than an rcu_head.
+ */
+void rust_kvfree_rcu(void *p, struct rcu_head *head)
+{
+	kvfree_call_rcu((void *) head, p);
+}
+
+void rust_kfree_rcu_mightsleep(void *p)
+{
+	kfree_rcu_mightsleep(p);
+}
+
+/* ...and __get_free_pages() is a macro: page aligned, as we don't know the device's dma alignment */
+void *rust_bio_pages_alloc(size_t size, gfp_t gfp)
+{
+	return (void *) __get_free_pages(gfp, get_order(size));
+}
+
+void rust_bio_pages_free(void *p, size_t size)
+{
+	free_pages((unsigned long) p, get_order(size));
 }

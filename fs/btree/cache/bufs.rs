@@ -106,7 +106,7 @@ impl Drop for Bounce<'_> {
         if self.mempool {
             unsafe { self.fs.btree.bounce_pool.free_raw(self.p.cast()) }
         } else {
-            unsafe { c::rust_kvfree(self.p.as_ptr().cast()) }
+            unsafe { crate::util::alloc::kvfree_unsized(self.p.as_ptr().cast()) }
         }
     }
 }
@@ -225,8 +225,8 @@ impl NodeBufs {
 
     pub fn free(&mut self) {
         unsafe {
-            c::rust_kvfree(self.data);
-            c::rust_kvfree(self.aux_data);
+            crate::util::alloc::kvfree_unsized(self.data);
+            crate::util::alloc::kvfree_unsized(self.aux_data);
         }
         self.data = core::ptr::null_mut();
         self.aux_data = core::ptr::null_mut();

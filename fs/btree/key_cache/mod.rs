@@ -259,7 +259,7 @@ impl NewKey {
 
 impl Drop for NewKey {
     fn drop(&mut self) {
-        unsafe { c::rust_kfree(self.k.as_ptr().cast()) }
+        unsafe { crate::util::alloc::kfree_unsized(self.k.as_ptr().cast()) }
     }
 }
 
@@ -270,12 +270,12 @@ impl Drop for NewKey {
 impl c::bkey_cached {
     fn set_key_buf(&mut self, k: NewKey) {
         let k = ManuallyDrop::new(k);
-        unsafe { c::rust_kfree(self.k.cast()) };
+        unsafe { crate::util::alloc::kfree_unsized(self.k.cast()) };
         (self.k, self.u64s) = (k.k.as_ptr().cast(), k.u64s);
     }
 
     fn free_key_buf(&mut self) {
-        unsafe { c::rust_kfree(self.k.cast()) };
+        unsafe { crate::util::alloc::kfree_unsized(self.k.cast()) };
         (self.k, self.u64s) = (ptr::null_mut(), 0);
     }
 

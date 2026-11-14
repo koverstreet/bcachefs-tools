@@ -252,7 +252,7 @@ impl Drop for c::journal_key {
     fn drop(&mut self) {
         if self.allocated() {
             // SAFETY: new_allocated()'s, kmalloc()'d: its own
-            unsafe { c::rust_kfree(self.src.allocated_k.cast()) };
+            unsafe { crate::util::alloc::kfree_unsized(self.src.allocated_k.cast()) };
         }
     }
 }

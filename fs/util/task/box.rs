@@ -299,7 +299,7 @@ unsafe fn free_slot<H, F: Future<Output = ()>, A: Alloc + Copy>(home: NonNull<H>
         if A::KVFREE {
             // tiny RCU passes the head's offset as its callback
             const { assert!(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD < 4096) };
-            return c::rust_kvfree_rcu(w.as_ptr().cast(), head.cast());
+            return crate::util::alloc::kvfree_rcu_head(w.as_ptr().cast(), head.cast());
         }
         Flavor::RCU.call(head, free_mem::<H, F, A>);
     }
