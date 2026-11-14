@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Rate limiting: not more than BURST events in every INTERVAL - lib/ratelimit.c's
-//! ___ratelimit(), at its defaults, the only ones bcachefs uses.
+//! Rate limiting: not more than BURST events in every interval - lib/ratelimit.c's
+//! ___ratelimit(), at its defaults, the only ones bcachefs uses - but backing
+//! off: while events keep being suppressed, each interval is twice the last,
+//! up to INTERVAL_MAX, so a flood that doesn't stop doesn't fill the log at a
+//! steady BURST per INTERVAL. One quiet interval and it's INTERVAL again.
 
 use crate::os::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_no_fs, LogLevel};
@@ -9,6 +12,7 @@ use core::ffi::{c_ulong, CStr};
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
 
 const INTERVAL: c_ulong = 5 * HZ;
+const INTERVAL_MAX: c_ulong = 5 * 60 * HZ;
 const BURST: i32 = 10;
 
 pub struct Ratelimit {
@@ -17,6 +21,7 @@ pub struct Ratelimit {
     initialized: AtomicBool,
     /// In jiffies, under @lock
     begin:       AtomicUsize,
+    interval:    AtomicUsize,
     n_left:      AtomicI32,
     missed:      AtomicI32,
 }
@@ -33,6 +38,7 @@ impl Ratelimit {
             lock:        AtomicBool::new(false),
             initialized: AtomicBool::new(false),
             begin:       AtomicUsize::new(0),
+            interval:    AtomicUsize::new(INTERVAL as usize),
             n_left:      AtomicI32::new(0),
             missed:      AtomicI32::new(0),
         }
@@ -70,15 +76,24 @@ impl Ratelimit {
                 self.n_left.store(BURST, Relaxed);
             }
 
-            if time_after(jiffies(), (self.begin.load(Relaxed) as c_ulong).wrapping_add(INTERVAL)) {
+            let now = jiffies();
+            let begin = self.begin.load(Relaxed) as c_ulong;
+            let interval = self.interval.load(Relaxed) as c_ulong;
+            if time_after(now, begin.wrapping_add(interval)) {
                 /*
                  * Reset rs_n_left ASAP to reduce false positives
                  * in parallel calls, see above.
                  */
                 self.n_left.store(BURST, Relaxed);
-                self.begin.store(jiffies() as usize, Relaxed);
+                self.begin.store(now as usize, Relaxed);
 
                 let m = self.missed.swap(0, Relaxed);
+                // still flooding: events suppressed, and this one within an
+                // interval of the last's end
+                let flooding = m != 0 && !time_after(now, begin.wrapping_add(2 * interval));
+                let next = if flooding { (2 * interval).min(INTERVAL_MAX) } else { INTERVAL };
+                self.interval.store(next as usize, Relaxed);
+
                 if m != 0 {
                     log_no_fs(LogLevel::WARN,
                               crate::message!("{}: {m} callbacks suppressed", func.to_str().unwrap_or("?")));
@@ -104,6 +119,7 @@ impl Ratelimit {
         }
         self.initialized.store(false, Relaxed);
         self.begin.store(0, Relaxed);
+        self.interval.store(INTERVAL as usize, Relaxed);
         self.n_left.store(0, Relaxed);
         self.missed.store(0, Relaxed);
         self.unlock();
