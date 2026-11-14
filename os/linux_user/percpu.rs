@@ -66,7 +66,7 @@
 //! cmpxchg loop over them, as x86's C is.
 
 use core::cell::Cell;
-use core::ffi::{c_uint, c_ulong, c_void};
+use core::ffi::{c_uint, c_void};
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::{self, NonNull};
@@ -74,8 +74,7 @@ use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::c;
-use crate::locking::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
-                     rust_local_unlock_irqrestore, MemallocFlags};
+use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
@@ -500,29 +499,20 @@ impl CpuGuard {
 
 /// This CPU's interrupts off while it lives, as local_irq_save(), and a
 /// NORECLAIM scope: for a slot interrupt handlers change too - a read bio's
-/// completion - which a CpuGuard's ThisCpu would race. Not Send or Sync: it's
-/// this CPU's.
+/// completion - which a CpuGuard's ThisCpu would race. There are no
+/// interrupts here. Not Send or Sync: it's this CPU's.
 pub struct IrqGuard {
-    flags:      c_ulong,
     _noreclaim: MemallocFlags,
     _p:         PhantomData<*const ()>,
 }
 
-// SAFETY: interrupts off, so no preemption either
+// SAFETY: a thread is its own CPU here
 unsafe impl Pinned for IrqGuard {}
 
 impl IrqGuard {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        let flags = unsafe { rust_local_irq_save() };
-        IrqGuard { flags, _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
-    }
-}
-
-impl Drop for IrqGuard {
-    fn drop(&mut self) {
-        // SAFETY: what new() saved, on this CPU
-        unsafe { rust_local_irq_restore(self.flags) }
+        IrqGuard { _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
     }
 }
 
@@ -532,22 +522,12 @@ impl Drop for IrqGuard {
 /// lock with migration off, so what it guards may take sleeping locks. A
 /// ThisCpu under it is whole only for what the lock guards.
 pub struct LocalLockGuard<'a> {
-    pcp:        *mut c::local_lock_t,
-    flags:      c_ulong,
     _noreclaim: MemallocFlags,
     _p:         PhantomData<(&'a c::local_lock_t, *const ())>,
 }
 
-// SAFETY: migration's off while it's held - by the lock on RT, interrupts
-// off elsewhere
+// SAFETY: a thread is its own CPU here, and its other takers are this thread
 unsafe impl Pinned for LocalLockGuard<'_> {}
-
-impl Drop for LocalLockGuard<'_> {
-    fn drop(&mut self) {
-        // SAFETY: this CPU's, which it took
-        unsafe { rust_local_unlock_irqrestore(self.pcp, self.flags) }
-    }
-}
 
 // ── PerCpu, and its copies ───────────────────────────────────────────────
 
@@ -748,20 +728,13 @@ impl<'a, T> PerCpuRef<'a, T> {
 unsafe impl ::pin_init::Zeroable for Opaque<c::local_lock_t> {}
 
 impl<'a> PerCpuRef<'a, Opaque<c::local_lock_t>> {
-    /// Each CPU's initialized: local_lock_init(), before any takes it.
-    pub fn init(self) {
-        for cpu in self.cpus() {
-            // SAFETY: a CPU's copy, which no one takes till it's initialized
-            unsafe { rust_local_lock_init(cpu.0.cast_mut().cast()) }
-        }
-    }
+    /// Each CPU's initialized: local_lock_init(), before any takes it -
+    /// nothing to it here.
+    pub fn init(self) {}
 
     /// This CPU's, taken: local_lock_irqsave().
     pub fn lock_irqsave(self) -> LocalLockGuard<'a> {
-        let pcp = self.0.cast::<c::local_lock_t>();
-        // SAFETY: live for 'a, and initialized
-        let flags = unsafe { rust_local_lock_irqsave(pcp) };
-        LocalLockGuard { pcp, flags, _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
+        LocalLockGuard { _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
     }
 }
 

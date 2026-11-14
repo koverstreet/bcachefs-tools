@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
-use super::lockdep::{trace_contention_begin, trace_contention_end};
+use crate::os::lockdep::{trace_contention_begin, trace_contention_end};
 use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock, Shared, SharedGuard, SixIntent,
             SixWriteIntent};
 use crate::cstructs::c;

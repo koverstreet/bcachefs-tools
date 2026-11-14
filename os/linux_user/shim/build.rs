@@ -45,7 +45,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", wrapper.display());
     // what it includes of fs/: the vendored C and the shims' headers
-    for h in ["vendor/closure.h", "locking/shim.h"] {
+    for h in ["vendor/closure.h"] {
         println!("cargo:rerun-if-changed={}", fs_dir.join(h).display());
     }
     println!("cargo:rerun-if-changed=../../../clang_target.rs");
@@ -124,8 +124,6 @@ fn main() {
         // The vendored C fs/ uses - closures - is the shim's too: not
         // bcachefs's, so not the fs crate's to define.
         .allowlist_file(format!("{}/vendor/closure.h", fs_dir.display()))
-        // fs/'s C shims, over what's a macro or differs from the kernel
-        .allowlist_file(format!("{}/locking/shim.h", fs_dir.display()))
         .allowlist_function("snprintf")
         // The raid library: userspace's stand-in for the kernel's raid6 and
         // xor, as fs/util/raid.rs uses it.

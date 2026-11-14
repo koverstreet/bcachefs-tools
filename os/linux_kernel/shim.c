@@ -10,19 +10,23 @@
 
 #include <linux/blkdev.h>
 #include <linux/gfp.h>
+#include <linux/irqflags.h>
 #include <linux/jump_label.h>
+#include <linux/local_lock.h>
 #include <linux/mutex.h>
 #include <linux/percpu.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/preempt.h>
 #include <linux/rcupdate.h>
 #include <linux/rwsem.h>
+#include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/srcu.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
+#include <trace/events/lock.h>
 
 #include "shim.h"
 
@@ -172,6 +176,57 @@ void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key)
 void rust_mutex_init(struct mutex *lock, const char *name, void *key)
 {
 	__mutex_init(lock, name, key);
+}
+
+/* os/linux_kernel/lockdep.rs: the contention tracepoints, for a lock whose state is ours */
+
+void rust_trace_contention_begin(const void *lock, unsigned int flags)
+{
+	trace_contention_begin((void *) lock, flags);
+}
+
+void rust_trace_contention_end(const void *lock, int ret)
+{
+	trace_contention_end((void *) lock, ret);
+}
+
+/*
+ * os/linux_kernel/percpu.rs: local_lock_t - one cpu's copy initialized, and
+ * this cpu's taken irqsave, by its percpu pointer, as the percpu helpers
+ * below take theirs
+ */
+
+void rust_local_lock_init(local_lock_t *lock)
+{
+	local_lock_init(lock);
+}
+
+unsigned long rust_local_lock_irqsave(local_lock_t *pcp)
+{
+	unsigned long flags;
+
+	local_lock_irqsave((local_lock_t __percpu *) (unsigned long) pcp, flags);
+	return flags;
+}
+
+void rust_local_unlock_irqrestore(local_lock_t *pcp, unsigned long flags)
+{
+	local_unlock_irqrestore((local_lock_t __percpu *) (unsigned long) pcp, flags);
+}
+
+/* os/linux_kernel/percpu.rs: IrqGuard - this cpu's interrupts off, for what they change too */
+
+unsigned long rust_local_irq_save(void)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	return flags;
+}
+
+void rust_local_irq_restore(unsigned long flags)
+{
+	local_irq_restore(flags);
 }
 
 /*

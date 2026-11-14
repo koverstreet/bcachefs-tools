@@ -8,7 +8,6 @@
 #include "include/linux/kernel.h"
 #include "include/linux/llist.h"
 #include "include/linux/lz4.h"
-#include "include/linux/local_lock.h"
 #include "include/linux/mm.h"
 #include "include/linux/percpu-refcount.h"
 #include "include/linux/posix_acl.h"
@@ -28,7 +27,6 @@
 #include "include/crypto/chacha.h"
 #include "include/crypto/poly1305.h"
 #include "fs/vendor/closure.h"
-#include "fs/locking/shim.h"
 #include "raid/raid.h"		/* raid_gen(), raid_rec(): the kernel's raid6/xor, in userspace */
 
 #include <errno.h>

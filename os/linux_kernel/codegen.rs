@@ -64,7 +64,7 @@ const KERNEL_HEADERS: &[&str] = &[
 
 /// Headers bound by path from fs/ - which the clang args have as an -I:
 /// vendored library code, and codegen.h's wrappers of kernel macros.
-const VENDORED_HEADERS: &[&str] = &["vendor/closure.h", "locking/shim.h",
+const VENDORED_HEADERS: &[&str] = &["vendor/closure.h",
                                     "../os/linux_kernel/bio_iov_iter.h", "../os/linux_kernel/codegen.h",
                                     "../os/linux_kernel/shim.h"];
 
@@ -264,7 +264,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "perf_trace_buf_alloc", "perf_trace_run_bpf_submit", "bpf_prog_array_valid", "bpf_trace_run2",
     "rust_srcu_read_lock_fast_notrace", "rust_srcu_read_unlock_fast_notrace",
     "rust_preempt_disable_notrace", "rust_preempt_enable_notrace", "rust_perf_fetch_caller_regs",
-    // the C shims: locking.c, os/linux_kernel's shim.c and bio_iov_iter.c
+    // the C shims: os/linux_kernel's shim.c and bio_iov_iter.c
     "rust_.*", "bch2_.*",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
