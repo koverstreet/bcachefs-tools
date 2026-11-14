@@ -324,7 +324,7 @@ fn normalized_bpos(pos: &DiskAccountingPos) -> Bpos {
             let devs = &mut devs[..r.devs.len()];
             devs.copy_from_slice(&r.devs);
             devs.sort_unstable();
-            replicas_acct(DataType(r.data_type.into()), r.nr_required, devs).to_bpos()
+            replicas_acct(r.data_type.get(), r.nr_required, devs).to_bpos()
         }
         _ => pos.to_bpos(),
     }

@@ -730,7 +730,7 @@ impl<'a> PinsRead<'a> {
 
         let mut devs = l.devs.get();
         devs.devs[..devs.nr as usize].sort_unstable();
-        SbEntry { data_type: DataType::journal.0 as u8, nr_required: Some(1), devs: devs.as_slice() }.to_text(out);
+        SbEntry { data_type: DataType::journal, nr_required: Some(1), devs: devs.as_slice() }.to_text(out);
         out.newline();
 
         for (name, lists) in [("unflushed", &g.unflushed[..]), ("flushed", core::slice::from_ref(&g.flushed))] {

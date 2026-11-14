@@ -101,7 +101,7 @@ fn accounting_replicas_entries(acct: &[&AccountingEntry]) -> Result<Vec<Entry>> 
 
         // Cached data has no durability to lose; nr_required == 0 extents
         // are backed by stripes, accounted via the stripe entries:
-        if sectors == 0 || DataType(r.data_type.into()) == DataType::cached || nr_required == 0 {
+        if sectors == 0 || r.data_type == DataType::cached || nr_required == 0 {
             continue;
         }
 

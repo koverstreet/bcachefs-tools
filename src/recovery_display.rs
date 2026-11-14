@@ -153,7 +153,7 @@ impl<'a> RecoveryDisplay<'a> {
             .context("BCH_IOCTL_FS_USAGE reply")?;
 
         Ok(replicas.iter()
-            .filter(|u| u.r.data_type as u32 != u32::from(DataType::cached))
+            .filter(|u| u.r.data_type != DataType::cached)
             .map(|u| replicas_spare_redundancy(u.r.nr_devs, u.r.nr_required, &u.devs, &self.devs))
             .min())
     }

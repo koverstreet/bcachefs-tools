@@ -197,7 +197,7 @@ fn fs_usage_v1_to_text(
                         let dev_list = &r.devs;
                         let dur = replicas_durability(r.nr_devs, r.nr_required, dev_list, devs);
 
-                        DataType(r.data_type.into()).to_text(sub);
+                        r.data_type.get().to_text(sub);
                         write!(sub, ":\t{}/{}\t{}\t[", r.nr_required, r.nr_devs, dur.durability);
 
                         prt_dev_list(sub, dev_list, devs);
@@ -455,7 +455,7 @@ fn replicas_summary_to_text(
                 reserved += entry.counter(0);
             }
             Ok(Acct::replicas(r)) => {
-                if DataType(r.data_type.into()) == DataType::cached {
+                if r.data_type == DataType::cached {
                     cached += entry.counter(0);
                     continue;
                 }

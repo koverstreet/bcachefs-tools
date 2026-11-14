@@ -251,7 +251,7 @@ pub fn maybe_kill(fs: &Fs, p: Bpos) {
     let pos = DiskAccountingPos::from_bpos(p);
     let Some(e) = replicas_entry(&pos) else { return };
 
-    if u32::from(e.data_type) > DataType::btree.0 &&
+    if e.data_type.get() > DataType::btree &&
        fs.request_incompat_feature(MetadataVersion::no_sb_user_data_replicas).is_ok() {
         return;
     }
@@ -751,7 +751,7 @@ crate::recovery_pass!(accounting_read => read);
 /// Whether accounting is kept for @e - or it's an entry no accounting
 /// position here holds, a newer version's, and not ours to drop.
 pub(crate) fn has_replicas(fs: &Fs, mark: &impl MarkHeld, e: &c::bch_replicas_entry_v1) -> bool {
-    let Some(pos) = try_replicas_acct(DataType(e.data_type.into()), e.nr_required, &e.devs) else { return true };
+    let Some(pos) = try_replicas_acct(e.data_type.get(), e.nr_required, &e.devs) else { return true };
     fs.accounting_mem(mark).find(pos.to_bpos()).is_some()
 }
 
@@ -768,7 +768,7 @@ pub(crate) fn usage_of<R>(fs: &Fs, pos: &DiskAccountingPos<Unvalidated>, d: &[u6
         Ok(A::persistent_reserved(r)) => usage.reserved =
             u64::from(r.nr_replicas).wrapping_mul(accounting::PersistentReservedCounters::from_slice(d).sectors),
         Ok(A::replicas(r)) =>
-            usage.add_data_type(DataType(r.data_type.into()), accounting::ReplicasCounters::from_slice(d).sectors),
+            usage.add_data_type(r.data_type.get(), accounting::ReplicasCounters::from_slice(d).sectors),
         Ok(A::dev_data_type(r)) => {
             let rcu = rcu::read_lock();
             if let (Some(ca), Some(t)) = (fs.dev_rcu(r.dev.into(), &rcu), r.known_data_type()) {

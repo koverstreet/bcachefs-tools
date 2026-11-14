@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::types::Le8;
 use crate::util::vstructs::{vstruct, Head};
 use cstruct_macros::{counted, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 
@@ -10,7 +11,7 @@ use cstruct_macros::{counted, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_replicas_entry_v0 {
-    pub data_type: u8,
+    pub data_type: Le8<c::DataType>,
     pub nr_devs: u8,
     pub devs: [u8; 0],
 }
@@ -28,7 +29,7 @@ vstruct!(unsized bch_sb_field_replicas_v0, field.u64s, start = 0);
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_replicas_entry_v1 {
-    pub data_type: u8,
+    pub data_type: Le8<c::DataType>,
     pub nr_devs: u8,
     pub nr_required: u8,
     /* No __counted_by in C: bch_replicas_cpu entries are all the size of the biggest entry */

@@ -86,32 +86,32 @@ fn prt_spaced<T>(out: &mut Printbuf, items: impl IntoIterator<Item = T>, mut f: 
 /// no nr_required - it's 1.
 #[derive(Clone, Copy)]
 pub struct SbEntry<'a> {
-    pub data_type:   u8,
+    pub data_type:   DataType,
     pub nr_required: Option<u8>,
     pub devs:        &'a [u8],
 }
 
 impl<'a> From<&'a Entry> for SbEntry<'a> {
     fn from(e: &'a Entry) -> Self {
-        SbEntry { data_type: e.data_type, nr_required: Some(e.nr_required), devs: &e.devs }
+        SbEntry { data_type: e.data_type.get(), nr_required: Some(e.nr_required), devs: &e.devs }
     }
 }
 
 impl<'a> From<&'a c::bch_replicas_entry_v1<Unvalidated>> for SbEntry<'a> {
     fn from(e: &'a c::bch_replicas_entry_v1<Unvalidated>) -> Self {
-        SbEntry { data_type: e.data_type, nr_required: Some(e.nr_required), devs: &e.devs }
+        SbEntry { data_type: e.data_type.get(), nr_required: Some(e.nr_required), devs: &e.devs }
     }
 }
 
 impl<'a> From<&'a c::bch_replicas_entry_v0<Unvalidated>> for SbEntry<'a> {
     fn from(e: &'a c::bch_replicas_entry_v0<Unvalidated>) -> Self {
-        SbEntry { data_type: e.data_type, nr_required: None, devs: &e.devs }
+        SbEntry { data_type: e.data_type.get(), nr_required: None, devs: &e.devs }
     }
 }
 
 impl SbEntry<'_> {
     pub(crate) fn to_text(&self, out: &mut Printbuf) {
-        DataType(self.data_type.into()).to_text(out);
+        self.data_type.to_text(out);
         match self.nr_required {
             Some(r) => write!(out, ": {r}/{} [", self.devs.len()),
             None    => write!(out, ": {} [", self.devs.len()),
@@ -228,7 +228,7 @@ pub(crate) fn try_replicas_acct(data_type: DataType, nr_required: u8, devs: &[u8
     -> Option<DiskAccountingPos>
 {
     let mut e = Head::<c::bch_replicas_entry_v1>::default();
-    e.data_type   = data_type.0 as u8;
+    e.data_type.set(data_type);
     e.nr_devs     = devs.len() as u8;
     e.nr_required = nr_required;
     DiskAccountingPos::from_arm_tailed(e, devs).ok()
@@ -327,8 +327,8 @@ impl<S: SbState> c::bch_sb<S> {
     /// The data types with data on @dev.
     pub fn dev_has_data(&self, dev: u32) -> DataTypes {
         sb_entries(self)
-            .filter(|e| e.data_type < 32 && e.devs.iter().any(|&d| u32::from(d) == dev))
-            .fold(DataTypes::empty(), |m, e| m | DataType(e.data_type.into()).into())
+            .filter(|e| e.data_type.0 < 32 && e.devs.iter().any(|&d| u32::from(d) == dev))
+            .fold(DataTypes::empty(), |m, e| m | e.data_type.into())
     }
 }
 
@@ -342,7 +342,7 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32,
 {
     type D = DataType;
 
-    if u32::from(e.data_type) == D::cached.0 {
+    if e.data_type == D::cached {
         return true;
     }
 
@@ -355,7 +355,7 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32,
         return true;
     }
 
-    let metadata = u32::from(e.data_type) < D::user.0;
+    let metadata = e.data_type.get() < D::user;
     let mut dflags = 0;
     if online < usize::from(e.nr_required) {
         dflags |= if metadata { c::BCH_FORCE_IF_METADATA_LOST } else { c::BCH_FORCE_IF_DATA_LOST };
@@ -491,7 +491,7 @@ impl ReplicasCpu {
 
     /// The entries @walk yields that @keep keeps, each one's devices sorted -
     /// the table not.
-    fn from_entries<'a, I: Iterator<Item = SbEntry<'a>>>(walk: impl Fn() -> I, keep: impl Fn(u8) -> bool)
+    fn from_entries<'a, I: Iterator<Item = SbEntry<'a>>>(walk: impl Fn() -> I, keep: impl Fn(DataType) -> bool)
         -> Result<Self, AllocError>
     {
         let kept = || walk().filter(|e| keep(e.data_type));
@@ -499,7 +499,7 @@ impl ReplicasCpu {
 
         for (i, e) in kept().enumerate() {
             let s = r.entries.slot_mut(i);
-            s[..DEVS].copy_from_slice(&[e.data_type, e.devs.len() as u8, e.nr_required.unwrap_or(1)]);
+            s[..DEVS].copy_from_slice(&[e.data_type.0 as u8, e.devs.len() as u8, e.nr_required.unwrap_or(1)]);
             let devs = &mut s[DEVS..DEVS + e.devs.len()];
             devs.copy_from_slice(e.devs);
             devs.sort_unstable();
@@ -713,7 +713,7 @@ impl SbFieldOps for c::bch_sb_field_replicas {
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
-        entries_end::<Entry>(b, SECTION_HEAD, |e| e.data_type != 0)
+        entries_end::<Entry>(b, SECTION_HEAD, |e| e.data_type != DataType::free)
     }
 }
 
@@ -729,7 +729,7 @@ impl SbFieldOps for c::bch_sb_field_replicas_v0 {
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
-        entries_end::<c::bch_replicas_entry_v0<Validated>>(b, SECTION_HEAD, |e| e.data_type != 0)
+        entries_end::<c::bch_replicas_entry_v0<Validated>>(b, SECTION_HEAD, |e| e.data_type != DataType::free)
     }
 }
 
@@ -747,15 +747,15 @@ impl Fs {
 
     /// Whether entries of @data_type have no place in the superblock: user
     /// data's don't, past no_sb_user_data_replicas.
-    fn replicas_obsolete(&self, data_type: u8) -> bool {
-        u32::from(data_type) > DataType::btree.0 &&
-            u32::from(self.sb.version_incompat.get()) >= MetadataVersion::no_sb_user_data_replicas.0
+    fn replicas_obsolete(&self, data_type: DataType) -> bool {
+        data_type > DataType::btree &&
+            self.sb.version_incompat.get() >= MetadataVersion::no_sb_user_data_replicas
     }
 
     /// Whether @e is marked in the superblock - or needn't be: obsolete, or
     /// of no devices.
     pub fn replicas_marked(&self, e: &Entry) -> bool {
-        self.replicas_obsolete(e.data_type) || e.devs.is_empty() || self.replicas.read().find(e).is_some()
+        self.replicas_obsolete(e.data_type.get()) || e.devs.is_empty() || self.replicas.read().find(e).is_some()
     }
 
     /// @e added, if it isn't there, and written to the superblock - and
@@ -796,8 +796,8 @@ impl Fs {
         if e.devs.is_empty() {
             return false;
         }
-        assert_eq!(u32::from(e.data_type), DataType::journal.0,
-                   "a ref on replicas entry of data type {}", e.data_type);
+        assert_eq!(e.data_type.get(), DataType::journal,
+                   "a ref on replicas entry of data type {}", e.data_type.get());
         verify_entry(e);
         true
     }
@@ -860,7 +860,7 @@ impl Fs {
         let mut sb = self.sb_lock();
         let dirty = {
             let mut r = self.replicas.write();
-            let changed = r.retain(|e, refs| u32::from(e.data_type) != DataType::journal.0 ||
+            let changed = r.retain(|e, refs| e.data_type != DataType::journal ||
                                              refs.load(Ordering::Relaxed) != 0);
             if changed {
                 r.write_sb(self, &mut sb)?;
@@ -883,7 +883,7 @@ impl Fs {
             let mark = self.mark_lock().write();
             let mut r = self.replicas.write();
 
-            let new = r.filtered(|e| u32::from(e.data_type) == DataType::journal.0 ||
+            let new = r.filtered(|e| e.data_type == DataType::journal ||
                     accounting_mem::has_replicas(self, &mark, e))
                 .map_err(|_| {
                     crate::bch_err!(self, "error allocating c->replicas_gc");
@@ -900,7 +900,7 @@ impl Fs {
     /// can_read_with_devs().
     pub fn can_read_fs_with_devs(&self, devs: &c::bch_devs_mask, flags: u32, mut err: Option<&mut Printbuf>) -> bool {
         self.replicas.read().entries()
-            .filter(|e| !self.replicas_obsolete(e.data_type))
+            .filter(|e| !self.replicas_obsolete(e.data_type.get()))
             .all(|e| can_read_with_devs(e, devs, flags, err.as_deref_mut()))
     }
 }
