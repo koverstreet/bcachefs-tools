@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The kernel's allocation, for util/alloc.rs: Kmalloc, Vmalloc and KVmalloc
-//! are C's krealloc(), vrealloc() and kvrealloc(), with our Flags as the
-//! task's memalloc scope says - and the kernel's Rust Allocator, for its Box
-//! and Arc, the same. What the kernel's Rust doesn't have - a kfree() of no
-//! size - is through shim.c.
+//! are core's Allocator over C's krealloc(), vrealloc() and kvrealloc(), with
+//! our Flags as the task's memalloc scope says - and the kernel's Rust
+//! Allocator, for its Box and Arc, the same. What the kernel's Rust doesn't
+//! have - a kfree() of no size - is through shim.c.
 
 #[path = "../alloc.rs"]
 mod common;
 pub use common::*;
 
-pub use kernel::alloc::AllocError;
 pub use kernel::sync::Arc;
 
 use crate::c;
-use crate::util::alloc::{kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc, Vmalloc};
+use crate::util::alloc::{kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::rcu::{DropAnytime, DropAtomic, FreeAnytime, NothingToDetach};
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use kernel::alloc::{Allocator, NumaNode};
+use kernel::alloc::NumaNode;
 
 pub type KBox<T> = kernel::alloc::Box<T, Kmalloc>;
 pub type KVBox<T> = kernel::alloc::Box<T, KVmalloc>;
@@ -64,20 +63,21 @@ impl Flags {
 // know.
 macro_rules! allocators {
     ($($a:ident),*) => {$(
-        unsafe impl Allocator for $a {
-            const MIN_ALIGN: usize = <kernel::alloc::allocator::$a as Allocator>::MIN_ALIGN;
+        unsafe impl kernel::alloc::Allocator for $a {
+            const MIN_ALIGN: usize = <kernel::alloc::allocator::$a as kernel::alloc::Allocator>::MIN_ALIGN;
 
             unsafe fn realloc(ptr: Option<NonNull<u8>>, layout: Layout, old_layout: Layout,
-                              flags: kernel::alloc::Flags, nid: NumaNode) -> Result<NonNull<[u8]>, AllocError>
+                              flags: kernel::alloc::Flags, nid: NumaNode)
+                -> Result<NonNull<[u8]>, kernel::alloc::AllocError>
             {
                 unsafe {
-                    <kernel::alloc::allocator::$a as Allocator>::realloc(
+                    <kernel::alloc::allocator::$a as kernel::alloc::Allocator>::realloc(
                         ptr, layout, old_layout, kernel_gfp_context(flags), nid)
                 }
             }
 
             unsafe fn free(ptr: NonNull<u8>, layout: Layout) {
-                unsafe { <kernel::alloc::allocator::$a as Allocator>::free(ptr, layout) }
+                unsafe { <kernel::alloc::allocator::$a as kernel::alloc::Allocator>::free(ptr, layout) }
             }
         }
     )*};
@@ -87,31 +87,58 @@ allocators!(Kmalloc, Vmalloc, KVmalloc);
 
 macro_rules! allocs {
     ($($a:ident => $realloc:ident, $layout:expr),*) => {$(
-        unsafe impl Alloc for $a {
-            const KVFREE: bool = true;
-
-            fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                unsafe { self.realloc(None, layout, layout, flags::WAIT) }
+        unsafe impl Allocator for $a {
+            fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                self.allocate_gfp(layout, flags::WAIT)
             }
 
-            fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                self.alloc_zeroed_gfp(layout, flags::WAIT)
+            fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                self.allocate_zeroed_gfp(layout, flags::WAIT)
             }
 
-            unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
-                unsafe { <$a as Allocator>::free(p, layout) };
+            unsafe fn deallocate(&self, p: NonNull<u8>, layout: Layout) {
+                unsafe { <$a as kernel::alloc::Allocator>::free(p, layout) };
+            }
+
+            unsafe fn grow(&self, p: NonNull<u8>, old: Layout, new: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                unsafe { $a::c_realloc(Some(p), new, old, flags::WAIT) }
+            }
+
+            unsafe fn grow_zeroed(&self, p: NonNull<u8>, old: Layout, new: Layout)
+                -> Result<NonNull<[u8]>, AllocError>
+            {
+                unsafe { $a::c_realloc(Some(p), new, old, flags::WAIT | flags::ZERO) }
+            }
+
+            unsafe fn shrink(&self, p: NonNull<u8>, old: Layout, new: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                unsafe { $a::c_realloc(Some(p), new, old, flags::WAIT) }
             }
         }
 
+        unsafe impl Alloc for $a {
+            const KVFREE: bool = true;
+        }
+
         unsafe impl AllocGfp for $a {
-            fn alloc_zeroed_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
-                unsafe { self.realloc(None, layout, layout, gfp | flags::ZERO) }
+            fn allocate_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
+                unsafe { $a::c_realloc(None, layout, layout, gfp) }
             }
 
-            /// C's krealloc(), vrealloc() or kvrealloc(), as the kernel's
-            /// Rust allocator calls them, with @gfp as the task's memalloc
-            /// scope says.
-            unsafe fn realloc(&self, p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
+            unsafe fn grow_gfp(&self, p: NonNull<u8>, old: Layout, new: Layout, gfp: Flags)
+                -> Result<NonNull<[u8]>, AllocError>
+            {
+                unsafe { $a::c_realloc(Some(p), new, old, gfp) }
+            }
+        }
+
+        impl $a {
+            /// C's krealloc(), vrealloc() or kvrealloc(), as the kernel's Rust
+            /// allocator calls them, with @gfp as the task's memalloc scope
+            /// says: @p - none for a new allocation - as @layout.
+            ///
+            /// # Safety
+            /// @p is this allocator's, of @old.
+            unsafe fn c_realloc(p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
                 -> Result<NonNull<[u8]>, AllocError>
             {
                 use kernel::bindings::{$realloc, NUMA_NO_NODE};
@@ -137,11 +164,18 @@ allocs!(Kmalloc  => krealloc_node_align,  |l: Layout| l.pad_to_align(),
         Vmalloc  => vrealloc_node_align,  |l: Layout| l,
         KVmalloc => kvrealloc_node_align, |l: Layout| l.pad_to_align());
 
+// The kernel's Rust Box and Arc fail with an AllocError of their own.
+impl From<kernel::alloc::AllocError> for crate::errcode::BchError {
+    fn from(_: kernel::alloc::AllocError) -> Self {
+        AllocError.into()
+    }
+}
+
 // The kernel's Box and Vec free as their T would.
 macro_rules! held_pointers {
     ($($trait:ident),*) => {$(
-        unsafe impl<T: ?Sized + $trait, A: Allocator> $trait for kernel::alloc::Box<T, A> {}
-        unsafe impl<T: $trait, A: Allocator> $trait for kernel::alloc::kvec::Vec<T, A> {}
+        unsafe impl<T: ?Sized + $trait, A: kernel::alloc::Allocator> $trait for kernel::alloc::Box<T, A> {}
+        unsafe impl<T: $trait, A: kernel::alloc::Allocator> $trait for kernel::alloc::kvec::Vec<T, A> {}
     )*};
 }
 
@@ -193,7 +227,7 @@ fn kernel_gfp_context(f: kernel::alloc::Flags) -> kernel::alloc::Flags {
 /// The last ref's put frees it at once: what RCU readers may reach, which
 /// isn't FreeAnytime, can't be in one.
 pub fn arc_new<T: Send + Sync + FreeAnytime>(v: T) -> Result<Arc<T>, AllocError> {
-    Arc::new(v, kernel_gfp_context(kernel::alloc::flags::GFP_KERNEL))
+    Arc::new(v, kernel_gfp_context(kernel::alloc::flags::GFP_KERNEL)).map_err(|_| AllocError)
 }
 
 /// @b's value, out of its box: the kernel's Box has into_inner().
@@ -215,7 +249,7 @@ pub fn kvzalloc_nofail(size: usize) -> NonNull<u8> {
 /// A zeroed KBox that can't fail to allocate: Kmalloc's, NOFAIL - which the
 /// kernel's Rust Box can't ask for.
 pub fn kbox_zeroed_nofail<T: ::pin_init::Zeroable + FreeAnytime>() -> KBox<T> {
-    let p = Kmalloc.alloc_zeroed_gfp(Layout::new::<T>(), flags::WAIT | flags::NOFAIL)
+    let p = Kmalloc.allocate_zeroed_gfp(Layout::new::<T>(), flags::WAIT | flags::NOFAIL)
         .expect("a NOFAIL allocation failed");
     unsafe { KBox::from_raw(p.as_ptr().cast::<T>()) }
 }
@@ -224,14 +258,14 @@ pub fn kbox_zeroed_nofail<T: ::pin_init::Zeroable + FreeAnytime>() -> KBox<T> {
 /// unsized type it can't make itself - a struct ending in a slice - by
 /// KBox::from_raw(). Or kfree(), if it's never made.
 pub fn kzalloc(layout: Layout) -> Result<NonNull<u8>, AllocError> {
-    Ok(Kmalloc.alloc_zeroed(layout)?.cast())
+    Ok(Kmalloc.allocate_zeroed(layout)?.cast())
 }
 
 /// # Safety
 /// @p is kzalloc()'s, of @layout, and nothing uses it after.
 pub unsafe fn kfree(p: NonNull<u8>, layout: Layout) {
     // SAFETY: the caller's
-    unsafe { <Kmalloc as Allocator>::free(p, layout) };
+    unsafe { Kmalloc.deallocate(p, layout) };
 }
 
 /// @p - kmalloc()'d, or null - as @new bytes, what was there kept: krealloc(),
@@ -264,18 +298,18 @@ pub unsafe fn kvrealloc_unsized(p: *mut u8, new: usize) -> Result<NonNull<u8>, A
 /// keeps - C's kfree(), or kfree_unsized(), takes it back.
 pub fn kmalloc(size: usize) -> Result<NonNull<u8>, AllocError> {
     let layout = Layout::from_size_align(size, 1).map_err(|_| AllocError)?;
-    Ok(Kmalloc.alloc(layout)?.cast())
+    Ok(Kmalloc.allocate(layout)?.cast())
 }
 
 /// kzalloc(), with @gfp. kfree_unsized() takes it back.
 pub fn kzalloc_gfp(size: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
     let layout = Layout::from_size_align(size, 1).map_err(|_| AllocError)?;
-    Ok(Kmalloc.alloc_zeroed_gfp(layout, gfp)?.cast())
+    Ok(Kmalloc.allocate_zeroed_gfp(layout, gfp)?.cast())
 }
 
 /// kvzalloc(), with @gfp. kvfree_sized() takes it back.
 pub fn kvzalloc_gfp(size: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
-    Ok(KVmalloc.alloc_zeroed_gfp(kv_layout(size)?, gfp)?.cast())
+    Ok(KVmalloc.allocate_zeroed_gfp(kv_layout(size)?, gfp)?.cast())
 }
 
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
@@ -283,7 +317,7 @@ pub fn kvzalloc_gfp(size: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> 
 /// Aligned as kmalloc() aligns @new. kvfree_sized() takes it back.
 pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<NonNull<u8>, AllocError> {
     // SAFETY: @p is KVmalloc's, of @old bytes, or null
-    Ok(unsafe { KVmalloc.realloc(NonNull::new(p), kv_layout(new)?, kv_layout(old)?, flags::WAIT | flags::ZERO) }?.cast())
+    Ok(unsafe { KVmalloc::c_realloc(NonNull::new(p), kv_layout(new)?, kv_layout(old)?, flags::WAIT | flags::ZERO) }?.cast())
 }
 
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
@@ -291,7 +325,7 @@ pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<NonNull<u8
 /// @new; kvfree_sized() takes it back.
 pub fn kvrealloc(p: *mut u8, old: usize, new: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
     // SAFETY: @p is KVmalloc's, of @old bytes, or null
-    Ok(unsafe { KVmalloc.realloc(NonNull::new(p), kv_layout(new)?, kv_layout(old)?, gfp) }?.cast())
+    Ok(unsafe { KVmalloc::c_realloc(NonNull::new(p), kv_layout(new)?, kv_layout(old)?, gfp) }?.cast())
 }
 
 /// # Safety
@@ -300,7 +334,7 @@ pub fn kvrealloc(p: *mut u8, old: usize, new: usize, gfp: Flags) -> Result<NonNu
 pub unsafe fn kvfree_sized(p: NonNull<u8>, size: usize) {
     let layout = kv_layout(size).expect("its allocation's");
     // SAFETY: the caller's
-    unsafe { <KVmalloc as Allocator>::free(p, layout) };
+    unsafe { KVmalloc.deallocate(p, layout) };
 }
 
 /// C's kfree(): @p, kmalloc()'d, of no size the caller knows - or null.
@@ -362,8 +396,7 @@ mod abox {
     use core::alloc::Layout;
     use core::marker::PhantomData;
     use core::ptr::NonNull;
-    use crate::util::alloc::{flags, AllocGfp, KVmalloc};
-    use kernel::alloc::Allocator;
+    use crate::util::alloc::{flags, Allocator, KVmalloc};
 
     /// An alignment, as aligned-vec's: here only the compile-time one.
     pub trait Alignment {
@@ -411,7 +444,7 @@ mod abox {
             let cap = self.len.checked_add(additional).ok_or(AllocError)?;
             let old = (self.cap != 0).then_some(self.p.cast());
             // SAFETY: @old is KVmalloc's, of its layout, or none
-            let p = unsafe { KVmalloc.realloc(old, layout::<T, A>(cap)?, layout::<T, A>(self.cap)?, flags::WAIT) }?;
+            let p = unsafe { KVmalloc::c_realloc(old, layout::<T, A>(cap)?, layout::<T, A>(self.cap)?, flags::WAIT) }?;
             self.p = p.cast();
             self.cap = cap;
             Ok(())
@@ -438,7 +471,7 @@ mod abox {
             unsafe {
                 core::ptr::slice_from_raw_parts_mut(self.p.as_ptr(), self.len).drop_in_place();
                 if self.cap != 0 {
-                    <KVmalloc as Allocator>::free(self.p.cast(), layout::<T, A>(self.cap).expect("its allocation's"));
+                    KVmalloc.deallocate(self.p.cast(), layout::<T, A>(self.cap).expect("its allocation's"));
                 }
             }
         }
@@ -476,7 +509,7 @@ mod abox {
                 let layout = Layout::for_value(self.p.as_ref()).align_to(A::ALIGN).expect("its allocation's");
                 self.p.as_ptr().drop_in_place();
                 if layout.size() != 0 {
-                    <KVmalloc as Allocator>::free(self.p.cast(), layout);
+                    KVmalloc.deallocate(self.p.cast(), layout);
                 }
             }
         }

@@ -31,11 +31,11 @@ pub(crate) fn alloc_at<T, A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T
     const { assert!(size_of::<T>() != 0, "an allocation of a zero sized type") };
 
     let layout = Layout::new::<T>();
-    let p = stateless::<A>().alloc_zeroed_gfp(layout, gfp)?.cast::<T>();
+    let p = stateless::<A>().allocate_zeroed_gfp(layout, gfp)?.cast::<T>();
     match unsafe { init_at(init, p.as_ptr()) } {
         Ok(()) => Ok(p),
         Err(e) => {
-            unsafe { stateless::<A>().free(p.cast(), layout) };
+            unsafe { stateless::<A>().deallocate(p.cast(), layout) };
             Err(e)
         }
     }
@@ -200,7 +200,7 @@ impl<T, H: HeadKind> RcuHeadAt<H> for T {
 
     default unsafe fn free_mem<A: Alloc>(p: NonNull<T>) {
         let head = unsafe { NonNull::new_unchecked(<T as RcuHeadAt<H>>::head(p).cast()) };
-        unsafe { stateless::<A>().free(head, Layout::new::<Headed<T, H>>()) }
+        unsafe { stateless::<A>().deallocate(head, Layout::new::<Headed<T, H>>()) }
     }
 
     #[cfg(kernel)]
@@ -227,7 +227,7 @@ impl<T: HasRcuHead, H: HeadKind> RcuHeadAt<H> for T {
     }
 
     unsafe fn free_mem<A: Alloc>(p: NonNull<T>) {
-        unsafe { stateless::<A>().free(p.cast(), Layout::new::<T>()) }
+        unsafe { stateless::<A>().deallocate(p.cast(), Layout::new::<T>()) }
     }
 
     #[cfg(kernel)]
@@ -328,7 +328,7 @@ impl<T: DropAtomic + DropAnytime + FreeAnytime> RcuFreeing for T {
     unsafe fn free<A: Alloc>(p: NonNull<T>) {
         unsafe {
             core::ptr::drop_in_place(p.as_ptr());
-            stateless::<A>().free(p.cast(), Layout::new::<T>());
+            stateless::<A>().deallocate(p.cast(), Layout::new::<T>());
         }
     }
 

@@ -6,6 +6,7 @@
 //! an AllocError to handle, never an abort - unless it's NOFAIL.
 
 pub use crate::os::alloc::*;
+pub use core::alloc::{AllocError, Allocator};
 
 use core::alloc::Layout;
 use core::ptr::NonNull;
@@ -15,10 +16,10 @@ use crate::util::rcu::FreeAnytime;
 
 // ── Allocators ───────────────────────────────────────────────────────────
 //
-// The kernel's, with the flags the task's memalloc scope says - so KVVec,
-// KBox and everything built on them honour NORECLAIM and NOWARN, which the
-// page allocator doesn't know. In userspace, std's allocator, which takes no
-// flags but NOFAIL. Each port's Alloc impls are its own (os::alloc).
+// core's Allocator: in-kernel, the kernel's C allocators with the flags the
+// task's memalloc scope says - so KVVec, KBox and everything built on them
+// honour NORECLAIM and NOWARN, which the page allocator doesn't know. In
+// userspace, std's allocator. Each port's impls are its own (os::alloc).
 
 #[derive(Clone, Copy)]
 pub struct Kmalloc;
@@ -28,48 +29,36 @@ pub struct KVmalloc;
 #[derive(Clone, Copy)]
 pub struct Vmalloc;
 
-/// An allocator, as both builds have it: in-kernel, ours above, and in
-/// userspace, std's. WAIT, as the task's memalloc scope says - NOIO, NOFS,
-/// or NORECLAIM, where what would wait fails instead.
-///
-/// What alloc() gives is at least @layout's bytes, as many as it says: free()
-/// is told the size it gave. As Rust's Allocator: alloc() gives them as they
-/// are, alloc_zeroed() zeroed.
+/// An Allocator of ours, which says whether kvfree() frees what it gives.
 ///
 /// # Safety
-/// alloc() gives @layout's bytes or more, aligned to it - alloc_zeroed()
-/// zeroed; free() frees them - and in-kernel kvfree() too, if KVFREE - from
-/// any context. A zero-sized one has no state: stateless() makes it from
-/// nothing.
-pub unsafe trait Alloc {
+/// If KVFREE, kvfree() - in-kernel - frees what it gives, from any context. A
+/// zero-sized one has no state: stateless() makes it from nothing.
+pub unsafe trait Alloc: Allocator {
     /// Its memory is kvfree()'s to free: so kvfree_rcu()'s, a grace period on.
     const KVFREE: bool = false;
-
-    fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
-
-    fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
-
-    /// # Safety
-    /// @p is alloc()'s, or realloc()'s, @layout's size what it gave, and
-    /// nothing uses it after.
-    unsafe fn free(&self, p: NonNull<u8>, layout: Layout);
 }
 
-/// kmalloc() and kvmalloc(), for what knows its context better than its
-/// scope does - ATOMIC, NOWAIT - or mustn't fail: NOFAIL.
+/// An allocator by reference: what keeps one keeps &A - a pool's.
+unsafe impl<A: Alloc + ?Sized> Alloc for &A {
+    const KVFREE: bool = A::KVFREE;
+}
+
+/// Allocator's allocate() and grow(), with flags: for what knows its context
+/// better than its scope does - ATOMIC, NOWAIT - or mustn't fail: NOFAIL.
 ///
 /// # Safety
-/// As Alloc's; realloc() gives the new layout's bytes, what was there kept up
-/// to the smaller of the two.
+/// As Allocator's.
 pub unsafe trait AllocGfp: Alloc {
-    fn alloc_zeroed_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError>;
+    fn allocate_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError>;
 
-    /// @p - None for a new allocation - as @layout, not zeroed: @p freed if
-    /// it moves, and kept if this fails.
-    ///
+    fn allocate_zeroed_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
+        self.allocate_gfp(layout, gfp | flags::ZERO)
+    }
+
     /// # Safety
-    /// @p is this allocator's, of @old.
-    unsafe fn realloc(&self, p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
+    /// As Allocator::grow()'s.
+    unsafe fn grow_gfp(&self, p: NonNull<u8>, old: Layout, new: Layout, gfp: Flags)
         -> Result<NonNull<[u8]>, AllocError>;
 }
 
@@ -78,23 +67,6 @@ pub unsafe trait AllocGfp: Alloc {
 pub fn stateless<A: Alloc>() -> A {
     const { assert!(size_of::<A>() == 0, "an allocator with state, where nothing keeps it") };
     unsafe { NonNull::<A>::dangling().read() }
-}
-
-/// An allocator by reference: what keeps one keeps &A - a pool's.
-unsafe impl<A: Alloc + ?Sized> Alloc for &A {
-    const KVFREE: bool = A::KVFREE;
-
-    fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        (**self).alloc(layout)
-    }
-
-    fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        (**self).alloc_zeroed(layout)
-    }
-
-    unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
-        unsafe { (**self).free(p, layout) }
-    }
 }
 
 /// A @T in what @A gave, A kept with it: dropped, and given back to A by the
@@ -111,7 +83,7 @@ unsafe impl<T: ?Sized + Sync, A: Alloc + Sync> Sync for AllocBox<T, A> {}
 
 impl<T, A: Alloc> AllocBox<T, A> {
     pub fn new<E: From<AllocError>>(alloc: A, init: impl ::pin_init::Init<T, E>) -> Result<Self, E> {
-        let mem = alloc.alloc(Layout::new::<T>())?;
+        let mem = alloc.allocate(Layout::new::<T>())?;
         unsafe { Self::init(alloc, mem, init) }
     }
 
@@ -119,7 +91,7 @@ impl<T, A: Alloc> AllocBox<T, A> {
     /// @mem is @alloc's, for a T.
     unsafe fn init<E>(alloc: A, mem: NonNull<[u8]>, init: impl ::pin_init::Init<T, E>) -> Result<Self, E> {
         if let Err(e) = unsafe { init_at(init, mem.cast::<T>().as_ptr()) } {
-            unsafe { alloc.free(mem.cast(), Layout::from_size_align_unchecked(mem.len(), align_of::<T>())) };
+            unsafe { alloc.deallocate(mem.cast(), Layout::from_size_align_unchecked(mem.len(), align_of::<T>())) };
             return Err(e);
         }
         Ok(AllocBox { ptr: mem.cast(), given: mem.len(), alloc })
@@ -129,7 +101,7 @@ impl<T, A: Alloc> AllocBox<T, A> {
 impl<U: ::pin_init::Zeroable, A: Alloc> AllocBox<[U], A> {
     /// @len Us, zeroed: what a U may be.
     pub fn new_zeroed_slice(alloc: A, len: usize) -> Result<Self, AllocError> {
-        let mem = alloc.alloc_zeroed(Layout::array::<U>(len).map_err(|_| AllocError)?)?;
+        let mem = alloc.allocate_zeroed(Layout::array::<U>(len).map_err(|_| AllocError)?)?;
         Ok(AllocBox { ptr: NonNull::slice_from_raw_parts(mem.cast(), len), given: mem.len(), alloc })
     }
 }
@@ -137,7 +109,7 @@ impl<U: ::pin_init::Zeroable, A: Alloc> AllocBox<[U], A> {
 impl<U, A: Alloc> AllocBox<[core::mem::MaybeUninit<U>], A> {
     /// @len Us, as yet anything.
     pub fn new_uninit_slice(alloc: A, len: usize) -> Result<Self, AllocError> {
-        let mem = alloc.alloc(Layout::array::<U>(len).map_err(|_| AllocError)?)?;
+        let mem = alloc.allocate(Layout::array::<U>(len).map_err(|_| AllocError)?)?;
         Ok(AllocBox { ptr: NonNull::slice_from_raw_parts(mem.cast(), len), given: mem.len(), alloc })
     }
 }
@@ -167,7 +139,7 @@ impl<T: ?Sized, A: Alloc> Drop for AllocBox<T, A> {
         unsafe {
             let align = align_of_val(self.ptr.as_ref());
             core::ptr::drop_in_place(self.ptr.as_ptr());
-            self.alloc.free(self.ptr.cast(), Layout::from_size_align_unchecked(self.given, align));
+            self.alloc.deallocate(self.ptr.cast(), Layout::from_size_align_unchecked(self.given, align));
         }
     }
 }

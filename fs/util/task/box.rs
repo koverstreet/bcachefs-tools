@@ -227,13 +227,13 @@ where
     BchError: From<E>,
 {
     let (layout, at) = box_layout::<H, F, A>(tail);
-    let mem = alloc.alloc(layout)?;
+    let mem = alloc.allocate(layout)?;
     let w = mem.cast::<WithTask<'q, H, F, A>>().as_ptr();
     unsafe {
         (&raw mut (*w).alloc).write(alloc);
         (&raw mut (*w).given).write(mem.len());
         if let Err(e) = init_at(home(mem.cast::<u8>().add(at)), &raw mut (*w).home) {
-            alloc.free(mem.cast(), Layout::from_size_align_unchecked(mem.len(), layout.align()));
+            alloc.deallocate(mem.cast(), Layout::from_size_align_unchecked(mem.len(), layout.align()));
             return Err(e.into());
         }
         Ok(NonNull::new_unchecked(&raw mut (*w).home))
@@ -309,8 +309,8 @@ unsafe extern "C" fn free_mem<H, F: Future<Output = ()>, A: Alloc + Copy>(head: 
     unsafe {
         let w = head.byte_sub(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).cast::<WithTask<'_, H, F, A>>();
         let (alloc, given) = ((*w).alloc, (*w).given);
-        alloc.free(NonNull::new_unchecked(w).cast(),
-                   Layout::from_size_align_unchecked(given, align_of::<WithTask<'_, H, F, A>>()));
+        alloc.deallocate(NonNull::new_unchecked(w).cast(),
+                         Layout::from_size_align_unchecked(given, align_of::<WithTask<'_, H, F, A>>()));
     }
 }
 

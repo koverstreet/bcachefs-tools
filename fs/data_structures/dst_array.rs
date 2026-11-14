@@ -102,7 +102,7 @@ impl<H: DstHead, T> DstArray<H, T> {
             .ok_or(AllocError)?;
         let layout = Layout::from_size_align(bytes, 8).map_err(|_| AllocError)?;
 
-        let p = unsafe { KVmalloc.alloc_zeroed_gfp(layout, gfp)?.byte_add(prefix) }.cast::<H>();
+        let p = unsafe { KVmalloc.allocate_zeroed_gfp(layout, gfp)?.byte_add(prefix) }.cast::<H>();
         unsafe { p.write(head) };
         Ok(p)
     }

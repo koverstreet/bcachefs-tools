@@ -9,7 +9,7 @@ use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{flags, Flags, kfree, kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc, Vmalloc};
+use crate::util::alloc::{flags, Flags, kfree, kv_layout, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::mempool::Elements;
 use crate::os::kernel::is_vmalloc_addr;
 use core::alloc::Layout;
@@ -128,12 +128,10 @@ enum Mem {
 /// @bytes of @mem, not zeroed, with @gfp: free_raw()'s to take back.
 fn alloc_raw(mem: Mem, bytes: usize, gfp: Flags) -> *mut c_void {
     let Ok(layout) = kv_layout(bytes) else { return core::ptr::null_mut() };
-    let p = unsafe {
-        match mem {
-            Mem::Kmalloc  => Kmalloc.realloc(None, layout, layout, gfp),
-            Mem::Vmalloc  => Vmalloc.realloc(None, layout, layout, gfp),
-            Mem::Kvmalloc => KVmalloc.realloc(None, layout, layout, gfp),
-        }
+    let p = match mem {
+        Mem::Kmalloc  => Kmalloc.allocate_gfp(layout, gfp),
+        Mem::Vmalloc  => Vmalloc.allocate_gfp(layout, gfp),
+        Mem::Kvmalloc => KVmalloc.allocate_gfp(layout, gfp),
     };
     p.map_or(core::ptr::null_mut(), |p| p.as_ptr().cast())
 }
@@ -146,7 +144,7 @@ fn alloc_raw(mem: Mem, bytes: usize, gfp: Flags) -> *mut c_void {
 /// @p is alloc_raw()'s, of @bytes, or null, and nothing uses it after.
 unsafe fn free_raw(p: *mut c_void, bytes: usize) {
     if let Some(p) = NonNull::new(p) {
-        unsafe { KVmalloc.free(p.cast(), kv_layout(bytes).expect("its allocation's layout")) }
+        unsafe { KVmalloc.deallocate(p.cast(), kv_layout(bytes).expect("its allocation's layout")) }
     }
 }
 
@@ -247,7 +245,7 @@ impl NodeBufs {
 /// A struct btree: its lock initialized and nothing else, with @gfp. Freed by
 /// node_struct_free().
 fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<NonNull<BtreeNode>> {
-    let b = Kmalloc.alloc_zeroed_gfp(Layout::new::<BtreeNode>(), gfp).ok()?.cast::<BtreeNode>();
+    let b = Kmalloc.allocate_zeroed_gfp(Layout::new::<BtreeNode>(), gfp).ok()?.cast::<BtreeNode>();
 
     unsafe {
         let p = b.as_ptr();

@@ -78,18 +78,27 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
     /// Room for @additional more: if there isn't, reallocated at least twice
     /// the size.
     pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
-        self.reserve_gfp(additional, flags::WAIT)
+        let a = stateless::<A>();
+        // SAFETY: @p is A's, of @old
+        self.grow(additional, |p, new, old| match p {
+            None    => a.allocate(new),
+            Some(p) => unsafe { a.grow(p, old, new) },
+        })
     }
 
     pub fn reserve_gfp(&mut self, additional: usize, gfp: Flags) -> Result<(), AllocError> {
+        let a = stateless::<A>();
         // SAFETY: @p is A's, of @old
-        self.grow(additional, |p, layout, old| unsafe { stateless::<A>().realloc(p, layout, old, gfp) }.map(NonNull::cast))
+        self.grow(additional, |p, new, old| match p {
+            None    => a.allocate_gfp(new, gfp),
+            Some(p) => unsafe { a.grow_gfp(p, old, new, gfp) },
+        })
     }
 
-    /// Room for @additional more, reallocated by @realloc - A's, as
-    /// Alloc::realloc() is - if there isn't.
+    /// Room for @additional more, from @realloc - A's allocate() or grow(),
+    /// of the old allocation, if any - if there isn't.
     fn grow(&mut self, additional: usize,
-            realloc: impl FnOnce(Option<NonNull<u8>>, Layout, Layout) -> Result<NonNull<u8>, AllocError>)
+            realloc: impl FnOnce(Option<NonNull<u8>>, Layout, Layout) -> Result<NonNull<[u8]>, AllocError>)
         -> Result<(), AllocError>
     {
         let (len, cap) = (self.len(), self.capacity());
@@ -119,7 +128,9 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
     }
 
     pub fn push(&mut self, v: T) -> Result<(), AllocError> {
-        self.push_gfp(v, flags::WAIT)
+        self.reserve(1)?;
+        unsafe { self.push_unchecked(v) };
+        Ok(())
     }
 
     /// push(), with flags of its own: what may run in interrupt context.
@@ -279,7 +290,7 @@ impl<T, A: AllocGfp, L: LenUint> Drop for Vec<T, A, L> {
         self.clear();
         if let Some(p) = self.data {
             let layout = Self::layout(self.capacity()).expect("its own layout");
-            unsafe { stateless::<A>().free(p.cast(), layout) };
+            unsafe { stateless::<A>().deallocate(p.cast(), layout) };
         }
     }
 }

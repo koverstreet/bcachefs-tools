@@ -37,7 +37,7 @@ use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{Exclusive, TaskSlot, Waiter};
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::{flags, Flags, init_at, kfree, kzalloc, Alloc, Kmalloc};
+use crate::util::alloc::{flags, Flags, init_at, kfree, kzalloc, Alloc, Allocator, Kmalloc};
 use crate::util::mempool::Mempool;
 
 pub struct BioInPlace(*mut c::bio);
@@ -338,7 +338,7 @@ pub unsafe fn bio_put(bio: *mut c::bio) {
         let set = (*bio).bi_pool.cast::<BioPool>().as_ref().expect("bio_put() of a bio no BioSet made");
         let (layout, _) = bio_layout(set.front_pad, (*bio).bi_max_vecs);
         crate::os::bio::uninit(bio);
-        set.pool.free(NonNull::new_unchecked(bio.byte_sub(set.front_pad)).cast(), layout);
+        set.pool.deallocate(NonNull::new_unchecked(bio.byte_sub(set.front_pad)).cast(), layout);
     }
 }
 

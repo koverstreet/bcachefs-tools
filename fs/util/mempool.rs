@@ -17,7 +17,7 @@ use crate::errcode::BchError;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::os::kernel::HZ;
-use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, KVec, KVmalloc, Kmalloc};
+use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVec, KVmalloc, Kmalloc};
 use crate::util::futex::EventCount;
 use crate::util::late::LateInit;
 use crate::util::projections::Volatile;
@@ -73,16 +73,11 @@ macro_rules! elements {
     ($($a:ident),*) => {$(
         unsafe impl Elements for $a {
             fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
-                let p = if gfp.contains(flags::ZERO) {
-                    $a.alloc_zeroed_gfp(layout, gfp)
-                } else {
-                    unsafe { $a.realloc(None, layout, layout, gfp) }
-                };
-                p.ok().map(NonNull::cast)
+                $a.allocate_gfp(layout, gfp).ok().map(NonNull::cast)
             }
 
             unsafe fn element_free(p: NonNull<u8>, layout: Layout) {
-                unsafe { $a.free(p, layout) }
+                unsafe { $a.deallocate(p, layout) }
             }
         }
     )*};
@@ -277,16 +272,16 @@ impl<A: Elements> Mempool<A> {
     }
 }
 
-unsafe impl<A: Elements> Alloc for Mempool<A> {
-    fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+unsafe impl<A: Elements> Allocator for Mempool<A> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.alloc_or_element(layout, false, flags::WAIT)
     }
 
-    fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+    fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.alloc_or_element(layout, true, flags::WAIT)
     }
 
-    unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
+    unsafe fn deallocate(&self, p: NonNull<u8>, layout: Layout) {
         if layout.size() == self.element_size() {
             unsafe { self.free_raw(p) }
         } else {
@@ -294,6 +289,8 @@ unsafe impl<A: Elements> Alloc for Mempool<A> {
         }
     }
 }
+
+unsafe impl<A: Elements> Alloc for Mempool<A> {}
 
 impl<A: Elements> Mempool<A> {
     /// A pool in a static - which never drops - made in place at module init.

@@ -39,11 +39,12 @@
 // local_waker's, too. And #[in_place]'s futures: what holds a task in place,
 // or a pool sized for a task's box, says its future's type. And util/task's
 // TaskBox names the future an async closure makes from its home
-// (async_fn_traits, in the trait's unboxed_closures form). Unstable, as the
-// kernel's own features are: the kernel build has RUSTC_BOOTSTRAP=1, and so
-// does ours (.cargo/config.toml).
+// (async_fn_traits, in the trait's unboxed_closures form). And util/alloc's
+// allocators are core's Allocator (allocator_api). Unstable, as the kernel's
+// own features are: the kernel build has RUSTC_BOOTSTRAP=1, and so does ours
+// (.cargo/config.toml).
 #![feature(auto_traits, negative_impls, min_specialization, rustc_attrs, context_ext, local_waker,
-           type_alias_impl_trait, async_fn_traits, unboxed_closures)]
+           type_alias_impl_trait, async_fn_traits, unboxed_closures, allocator_api)]
 #![allow(internal_features)]
 // A type's record says which type each name it writes is: type_name(), const.
 // ret_ip!(), C's _RET_IP_ - see os/linux_kernel/kernel.rs.

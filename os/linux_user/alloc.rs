@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Allocation, for userspace, for util/alloc.rs: the kernel::alloc API, over
-//! std's allocator, which takes no flags and no memalloc scope. What C's
-//! kfree() frees - of no size - is malloc()'s.
+//! Allocation, for userspace, for util/alloc.rs: Kmalloc, Vmalloc and KVmalloc
+//! over std's allocator, which takes no flags and no memalloc scope. What's
+//! of no size - kfree_unsized()'s - is malloc()'s.
 
 #[path = "../alloc.rs"]
 mod common;
@@ -10,11 +10,8 @@ pub use common::*;
 
 pub use std::sync::Arc;
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct AllocError;
-
 use crate::c;
-use crate::util::alloc::{kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc, Vmalloc};
+use crate::util::alloc::{kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::rcu::FreeAnytime;
 use core::alloc::Layout;
 use core::ffi::c_void;
@@ -40,43 +37,72 @@ impl Flags {
 
 macro_rules! allocs {
     ($($a:ident),*) => {$(
-        unsafe impl Alloc for $a {
-            const KVFREE: bool = true;
-
-            fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                let p = NonNull::new(unsafe { std::alloc::alloc(layout) }).ok_or(AllocError)?;
-                Ok(NonNull::slice_from_raw_parts(p, layout.size()))
+        unsafe impl Allocator for $a {
+            fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                self.allocate_gfp(layout, flags::WAIT)
             }
 
-            fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                self.alloc_zeroed_gfp(layout, flags::WAIT)
+            fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                self.allocate_zeroed_gfp(layout, flags::WAIT)
             }
 
-            unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
-                unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
+            unsafe fn deallocate(&self, p: NonNull<u8>, layout: Layout) {
+                if layout.size() != 0 {
+                    unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
+                }
+            }
+
+            unsafe fn grow(&self, p: NonNull<u8>, old: Layout, new: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                unsafe { self.grow_gfp(p, old, new, flags::WAIT) }
             }
         }
 
-        unsafe impl AllocGfp for $a {
-            fn alloc_zeroed_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
-                let p = allocated(unsafe { std::alloc::alloc_zeroed(layout) }, layout, gfp)?;
-                Ok(NonNull::slice_from_raw_parts(p, layout.size()))
-            }
+        unsafe impl Alloc for $a {
+            const KVFREE: bool = true;
+        }
 
-            unsafe fn realloc(&self, p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
-                -> Result<NonNull<[u8]>, AllocError>
-            {
-                let p = match p {
-                    Some(p) => unsafe { std::alloc::realloc(p.as_ptr(), old, layout.size()) },
-                    None    => unsafe { std::alloc::alloc(layout) },
+        unsafe impl AllocGfp for $a {
+            fn allocate_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
+                if layout.size() == 0 {
+                    return Ok(dangling(layout));
+                }
+                let p = if gfp.contains(flags::ZERO) {
+                    unsafe { std::alloc::alloc_zeroed(layout) }
+                } else {
+                    unsafe { std::alloc::alloc(layout) }
                 };
                 Ok(NonNull::slice_from_raw_parts(allocated(p, layout, gfp)?, layout.size()))
+            }
+
+            unsafe fn grow_gfp(&self, p: NonNull<u8>, old: Layout, new: Layout, gfp: Flags)
+                -> Result<NonNull<[u8]>, AllocError>
+            {
+                // realloc() keeps the old alignment, and wants a block to keep
+                if old.size() == 0 || old.align() != new.align() {
+                    let q = self.allocate_gfp(new, gfp)?;
+                    unsafe {
+                        q.cast::<u8>().copy_from_nonoverlapping(p, old.size());
+                        self.deallocate(p, old);
+                    }
+                    return Ok(q);
+                }
+                let q = allocated(unsafe { std::alloc::realloc(p.as_ptr(), old, new.size()) }, new, gfp)?;
+                if gfp.contains(flags::ZERO) {
+                    unsafe { q.add(old.size()).write_bytes(0, new.size() - old.size()) };
+                }
+                Ok(NonNull::slice_from_raw_parts(q, new.size()))
             }
         }
     )*};
 }
 
 allocs!(Kmalloc, KVmalloc, Vmalloc);
+
+/// A zero-sized allocation: none, aligned.
+fn dangling(layout: Layout) -> NonNull<[u8]> {
+    let p = NonNull::new(core::ptr::without_provenance_mut(layout.align())).expect("an alignment is nonzero");
+    NonNull::slice_from_raw_parts(p, 0)
+}
 
 /// What an allocation of @layout gave: null is an AllocError - or for NOFAIL,
 /// std's allocation failure, which aborts.
