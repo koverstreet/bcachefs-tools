@@ -66,7 +66,7 @@ pub struct BtreeReadBio {
 }
 crate::has_bio!(BtreeReadBio, bio);
 
-impl c::bset__head {
+impl c::bset_head {
     /// The nonce of this bset, at byte @offset of its btree node: the offset,
     /// the bset's seq, and the low half of its journal seq, in the btree
     /// domain.

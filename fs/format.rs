@@ -1250,13 +1250,13 @@ pub struct bch_sb {
 }
 vstruct!(unsized bch_sb, u64s);
 vstruct_container!(bch_sb, bch_sb_field);
-c_default!(bch_sb__head);
+c_default!(bch_sb_head);
 
 impl bch_sb<Unvalidated> {
     /// Its count less @u64s, for a section shrunk in place, the sections after
     /// it moved down: sb/io.rs's, as validate repairs one.
     pub(crate) fn sub_u64s(&mut self, u64s: u32) {
-        let h = cast_plain_mut::<bch_sb__head>(bytes_of_mut(self)).expect("a superblock's head");
+        let h = cast_plain_mut::<bch_sb_head>(bytes_of_mut(self)).expect("a superblock's head");
         h.u64s = Le32::new(h.u64s.get() - u64s);
     }
 }
@@ -1356,7 +1356,7 @@ pub struct bch_sb_flags4 {
 }
 
 /// The compression options, each in two fields: _HI is the bits it grew.
-impl bch_sb__head {
+impl bch_sb_head {
     pub fn compression_type(&self) -> u8 {
         self.compression_type_lo() | self.compression_type_hi() << 4
     }
@@ -1863,7 +1863,7 @@ pub struct jset {
 vstruct!(unsized jset, u64s);
 vstruct_container!(jset, jset_entry);
 
-impl jset__head {
+impl jset_head {
     /// By what holds it, which has room for its entries.
     pub fn set_u64s(&mut self, u64s: usize) {
         self.u64s.set(u64s as u32);
@@ -1929,7 +1929,7 @@ pub struct bset {
 vstruct!(unsized bset, u64s);
 vstruct_container!(bset, thin BkeyPHeader);
 
-impl bset__head {
+impl bset_head {
     /// By what holds it, which has room for its keys.
     pub fn set_u64s(&mut self, u64s: usize) {
         self.u64s.set(u64s as u16);
@@ -2014,7 +2014,7 @@ pub struct btree_node {
     pub keys: Head<c::bset>,
 }
 vstruct!(unsized btree_node, keys.u64s);
-c_default!(btree_node__head);
+c_default!(btree_node_head);
 
 #[bitfield(Le64)]
 pub struct btree_node_flags {
@@ -2028,7 +2028,7 @@ pub struct btree_node_flags {
 }
 
 /// The btree id, in two fields: id_hi is the bits it grew.
-impl btree_node__head {
+impl btree_node_head {
     pub fn btree_id(&self) -> Btree {
         Btree(u32::from(self.id_lo()) | u32::from(self.id_hi()) << 4)
     }
@@ -2049,4 +2049,4 @@ pub struct btree_node_entry {
     pub keys: Head<c::bset>,
 }
 vstruct!(unsized btree_node_entry, keys.u64s);
-c_default!(btree_node_entry__head);
+c_default!(btree_node_entry_head);

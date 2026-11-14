@@ -48,10 +48,10 @@ impl SbFieldOps for Section {
 
         prt_btrees(out, "Btrees with missing data", e.btrees_lost_data());
 
-        if has(e, offset_of!(c::bch_sb_field_ext__whole, btrees_lost_data_ever)) {
+        if has(e, offset_of!(c::bch_sb_field_ext_whole, btrees_lost_data_ever)) {
             prt_btrees(out, "Btrees that have ever lost data", e.btrees_lost_data_ever());
         }
-        if has(e, offset_of!(c::bch_sb_field_ext__whole, btrees_clean)) {
+        if has(e, offset_of!(c::bch_sb_field_ext_whole, btrees_clean)) {
             prt_btrees(out, "Btrees validated clean", e.btrees_clean());
         }
     }

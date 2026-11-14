@@ -765,8 +765,8 @@ mod tests {
     /// members bits of it - as tests set an inode's bi_flags, a number.
     #[test]
     fn bitfield_word() {
-        let info = <c::bch_sb__head as TypeInfo>::INFO;
-        let mut buf = [0u8; core::mem::size_of::<c::bch_sb__head>()];
+        let info = <c::bch_sb_head as TypeInfo>::INFO;
+        let mut buf = [0u8; core::mem::size_of::<c::bch_sb_head>()];
         let field = |path| resolve_with_bits(info, path).unwrap();
         let (word, clean, csum_type) = (field("flags0"), field("clean"), field("csum_type"));
 

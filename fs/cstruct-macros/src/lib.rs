@@ -107,6 +107,18 @@ fn expand_syn(what: &str, f: impl FnOnce() -> syn::Result<TokenStream>) -> proc_
     f().unwrap_or_else(|e| syn::Error::new(e.span(), format!("{what}: {e}")).into_compile_error()).into()
 }
 
+/// The name of @name's generated @part - its head, its storage - cased as
+/// @name is: bch_sb_head, DiskAccountingPosStorage.
+pub(crate) fn derived(name: &Ident, part: &str) -> Ident {
+    match name.to_string().contains(|c: char| c.is_ascii_uppercase()) {
+        true => {
+            let (first, rest) = part.split_at(1);
+            format_ident!("{name}{}{rest}", first.to_ascii_uppercase())
+        }
+        false => format_ident!("{name}_{part}"),
+    }
+}
+
 /// bch_opts' options, a field each: options.rs.
 #[proc_macro_derive(Options, attributes(opt))]
 pub fn derive_options(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -137,7 +149,7 @@ pub fn derive_flex_array(input: proc_macro::TokenStream) -> proc_macro::TokenStr
 }
 
 /// `#[type_name(NAME)]`, before the derives, on a struct whose name isn't
-/// the type's: a family's definition, X__head, whose type is X<S>
+/// the type's: a family's definition, X_head, whose type is X<S>
 /// (vstructs.rs), or a tagged union's storage. The derives get it as
 /// #[type_name_of(NAME)] - after the item's other attributes, as a derive's
 /// helper comes after the derive - and TypeInfo names it so.
@@ -398,7 +410,7 @@ pub fn counters(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
 /// `#[unsized_vstruct]`, on the definition of a struct ending in a flexible
 /// array - or `#[unsized_vstruct(tail = [E])]`, `tail = NAME: [E]`, saying
 /// what follows its header: the family of its definitions, one per state -
-/// the one written, renamed X__head, and each state's, a DST of the header
+/// the one written, renamed X_head, and each state's, a DST of the header
 /// and its tail -
 /// and X<S>, a generic struct over the one for S. See vstructs.rs.
 #[proc_macro_attribute]

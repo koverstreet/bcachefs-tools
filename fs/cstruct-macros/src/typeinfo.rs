@@ -18,7 +18,7 @@ use quote::{format_ident, quote};
 
 use crate::cstruct::{field_type, flex_elem, generic_arg, parse_cstruct, StructKind, FieldType, IntType};
 
-/// By its type's name: a family's definition, X__head, is X.
+/// By its type's name: a family's definition, X_head, is X.
 pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input)?;
     let inst = &def.ident;

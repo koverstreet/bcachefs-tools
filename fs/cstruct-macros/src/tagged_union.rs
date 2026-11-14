@@ -66,7 +66,7 @@
 //!
 //! Generated, for the first declaration:
 //!
-//!  - `union DiskAccountingPos__ffi`: the storage, what C and disk see -
+//!  - `union DiskAccountingPosStorage`: the storage, what C and disk see -
 //!    named DiskAccountingPos to TypeInfo; Plain, its pad being
 //!    every byte of it;
 //!  - `DiskAccountingPos<S>`, the storage in a state, Validated unless
@@ -377,13 +377,13 @@ fn camel(name: &str) -> String {
         .collect()
 }
 
-/// Path type @ty, its last segment's name suffixed: a state's definition,
-/// X__validated.
-fn suffixed(ty: &syn::Type, suffix: &str) -> syn::Type {
+/// Path type @ty, its last segment's name its generated @part: a state's
+/// definition, X_validated.
+fn derived_type(ty: &syn::Type, part: &str) -> syn::Type {
     let mut ty = ty.clone();
     if let syn::Type::Path(p) = &mut ty {
         let last = p.path.segments.last_mut().expect("a path has a segment");
-        last.ident = format_ident!("{}{suffix}", last.ident);
+        last.ident = crate::derived(&last.ident, part);
     }
     ty
 }
@@ -425,7 +425,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     let vs = quote!(crate::util::vstructs);
     // The storage: the type the views are of
     // A sized storage's is C's struct, {name}__ffi: {name} is its state's
-    let ffi = format_ident!("{name}__ffi");
+    let ffi = crate::derived(name, "storage");
     let s_ty: syn::Type = tu.storage.clone().unwrap_or_else(|| parse_quote!(#ffi));
     let s_size = quote!(::core::mem::size_of::<#s_ty>());
 
@@ -457,12 +457,12 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     }
     let states: Vec<(&str, syn::Type)> = if tu.size == Size::Header {
         ["Unvalidated", "Validated"].iter()
-            .map(|st| (*st, suffixed(&s_ty, &format!("__{}", st.to_lowercase()))))
+            .map(|st| (*st, derived_type(&s_ty, &st.to_lowercase())))
             .collect()
     } else {
         vec![("", s_ty.clone())]
     };
-    let determinant = format_ident!("{name}__tag");
+    let determinant = crate::derived(name, "tag");
     let (storage, payload_offset) = if tu.storage.is_some() {
         // another's storage, a union: its tag is its own field, by value, as
         // a packed struct's must be
@@ -487,7 +487,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             #(#impls)*
         }, quote!(0))
     } else {
-        let (arms_union, tagged) = (format_ident!("{name}__arms"), format_ident!("{name}__tagged"));
+        let (arms_union, tagged) = (crate::derived(name, "arms"), crate::derived(name, "tagged"));
         let doc = format!(" {name}'s tag: its field.");
         (quote! {
             #[doc(hidden)]
@@ -807,9 +807,9 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
         // Unvalidated storage is Unvalidated
         let mut arms_of_by_state = TokenStream::new();
         for (st, _) in &states {
-            let (lower, st) = (format!("__{}", st.to_lowercase()), format_ident!("{st}"));
+            let (lower, st) = (st.to_lowercase(), format_ident!("{st}"));
             for a in arms {
-                let (arm_def, v) = (suffixed(&a.ty, &lower), &a.value);
+                let (arm_def, v) = (derived_type(&a.ty, &lower), &a.value);
                 arms_of_by_state.extend(quote! {
                     impl #arm_of<#s_ty<#vs::#st>> for #arm_def {
                         type Tag = #tag_ty;

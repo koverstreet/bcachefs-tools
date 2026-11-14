@@ -26,7 +26,7 @@ fn vs() -> TokenStream {
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
 /// arm's end are no field's. An unsized vstruct's states aren't: they're its
-/// C definition's - #[unsized_vstruct]'s X__head - and then its tail's
+/// C definition's - #[unsized_vstruct]'s X_head - and then its tail's
 /// elements, Plain too, as the attribute checks.
 pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input)?;
@@ -231,7 +231,7 @@ struct Shape<'a> {
     /// After the fields: @tail, a slice of @elem.
     tail:    Ident,
     elem:    syn::Type,
-    /// The definition as written, renamed: X__head or X__whole.
+    /// The definition as written, renamed: X_head or X_whole.
     ffi:     Ident,
     /// Where the tail starts, if not where the head ends: inside it, the
     /// head being C's struct rounded up into the tail's first bytes - a key
@@ -368,15 +368,15 @@ fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenS
     }
 }
 
-/// @name's family, @name__family - its Unvalidated, Validated and Whole
-/// definitions. Every family has @name__unvalidated and @name__validated: a
+/// @name's family, @name_family - its Unvalidated, Validated and Whole
+/// definitions. Every family has @name_unvalidated and @name_validated: a
 /// plain alias where a state shares another's definition, so a container's
 /// ArmOf impls can name each state's - concrete types, not projections.
 fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident) -> TokenStream {
     let vs = vs();
-    let fam = format_ident!("{name}__family");
+    let fam = crate::derived(name, "family");
     let aliases = [("unvalidated", unvalidated), ("validated", validated)].into_iter()
-        .map(|(st, def)| (format_ident!("{name}__{st}"), def))
+        .map(|(st, def)| (crate::derived(name, st), def))
         .filter(|(alias, def)| alias != *def)
         .map(|(alias, def)| quote! {
             #[allow(non_camel_case_types)]
@@ -419,7 +419,7 @@ fn members_on(name: &Ident, fields: &[FieldDef], defs: &[&Ident]) -> Result<Toke
 fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, String> {
     let vs = vs();
     let state = |st: &str, what: &str| -> TokenStream {
-        let ty = format_ident!("{name}__{}", st.to_lowercase());
+        let ty = crate::derived(name, &st.to_lowercase());
         let doc = format!(" {name}<{st}>: {what}. C's fields - those that hold a count\n \
                            private - then its tail, as long as its count says. It derefs\n \
                            to C's struct {name}, Head<{name}>, to read.");
@@ -434,7 +434,7 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
         });
         out
     };
-    let (unvalidated, validated) = (format_ident!("{name}__unvalidated"), format_ident!("{name}__validated"));
+    let (unvalidated, validated) = (crate::derived(name, "unvalidated"), crate::derived(name, "validated"));
     let unsized_states = [("Unvalidated", unvalidated.clone()), ("Validated", validated.clone()),
                           ("Whole", validated.clone())];
     let doc = format!(" {name}, in state S - Validated unless named: a reference to one\n \
@@ -455,10 +455,10 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
 /// #[unsized_vstruct]: the family of an unsized vstruct's definitions, one
 /// per state (util/vstructs.rs' Family), from C's struct as written.
 ///
-/// The item is the definition, renamed X__head, with #[type_name(X)]: Head<X>
+/// The item is the definition, renamed X_head, with #[type_name(X)]: Head<X>
 /// - X<S> is the family's type in state S,
 /// Validated unless named (generic_type()). Each state's definition,
-/// X__unvalidated and X__validated, is Rust's alone: a DST, the header and
+/// X_unvalidated and X_validated, is Rust's alone: a DST, the header and
 /// then its tail, as long as its count says - which derefs to the header,
 /// where its fields and methods are, written once. Its header never grew:
 /// Validated is whole.
@@ -482,7 +482,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
         },
         Some((tail, elem)) => (tail.unwrap_or_else(|| format_ident!("_tail")), elem),
     };
-    let ffi = format_ident!("{name}__head");
+    let ffi = crate::derived(name, "head");
     let last = &last.ident;
     // C's fields, inline in each state's definition - but its flexible array,
     // where that's the tail
@@ -526,7 +526,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     let vs = vs();
     let def = parse_cstruct(&item)?;
     let name = &def.ident;
-    let ffi = format_ident!("{name}__head");
+    let ffi = crate::derived(name, "head");
 
     let args = family_args(attr, &["count", "tail"]).map_err(|e| format!("{name}: {e}"))?;
     let count = args.count.unwrap_or_else(|| vec![format_ident!("nr_entries")]);
@@ -577,8 +577,8 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 /// value may lack, written by a version from before it.
 ///
 /// X<S> is a generic struct over its definition in state S. X<Whole> - X -
-/// is the whole struct, every field a field: the item, renamed X__whole with
-/// #[type_name(X)]. X__floor is the fields before FIELD, every valid
+/// is the whole struct, every field a field: the item, renamed X_whole with
+/// #[type_name(X)]. X_floor is the fields before FIELD, every valid
 /// value's. X<Validated> - Unvalidated too, as the cast checks the floor - is
 /// a value in place, a DST: the floor's fields, then the bytes there are, at
 /// exactly the value's length; it derefs to the floor, to read. A field from
@@ -604,7 +604,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// version since: a superblock section or journal entry of fixed fields.
 ///
 /// X<S> is a generic struct over its definition in state S. X<Whole> - X -
-/// is the struct: the item, renamed X__whole with #[type_name(X)].
+/// is the struct: the item, renamed X_whole with #[type_name(X)].
 /// X<Validated> and X<Unvalidated> are a value in place, a DST: X's fields,
 /// those that hold a count private, then the bytes past them there are, at
 /// exactly the value's length; it derefs to X, to read, and X's methods.
@@ -658,8 +658,8 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// @grew, the first field an older version's value may lack and its index,
 /// if it grew.
 ///
-/// Both have a definition of all of it, every field inline: X__whole, if it
-/// grew - its Whole; else X__validated, its every state.
+/// Both have a definition of all of it, every field inline: X_whole, if it
+/// grew - its Whole; else X_validated, its every state.
 fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)>,
                 tail: Option<(Ident, syn::Type)>, bkey: bool)
     -> Result<TokenStream, String>
@@ -691,19 +691,19 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
             }
         },
     };
-    // The struct as written, renamed X__whole: X<Whole>'s representation,
+    // The struct as written, renamed X_whole: X<Whole>'s representation,
     // and C's struct X
-    let ffi = format_ident!("{name}__whole");
+    let ffi = crate::derived(name, "whole");
     // A value in place, as long as what holds it says: for a grown type the
     // floor and the bytes there are, below; else all of its fields, then
     // the bytes past them
-    let all = format_ident!("{name}__validated");
+    let all = crate::derived(name, "validated");
     // in place, the states but Whole: a DST
     let states = [("Validated", all.clone()), ("Unvalidated", all.clone())];
     let derives = derive_names(def);
     // X is generated: a derive generic_type() doesn't forward would be
-    // X__whole's alone, out of X's reach. Ours of the struct as written are
-    // X__whole's, and are what C's struct is
+    // X_whole's alone, out of X's reach. Ours of the struct as written are
+    // X_whole's, and are what C's struct is
     let of_whole = ["MaybeZeroable", "BitfieldMembers", "FlexArray"];
     if let Some(d) = derives.iter()
         .find(|d| !of_whole.iter().chain(WHOLE_DERIVES).any(|w| d == w)) {
@@ -750,8 +750,8 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     }
     let (floor, later) = def.fields.split_at(at);
 
-    let fl = format_ident!("{name}__floor");
-    let ty = format_ident!("{name}__validated");
+    let fl = crate::derived(name, "floor");
+    let ty = crate::derived(name, "validated");
 
     let floor_fields = floor.iter().map(|f| {
         let (field, fty) = (&f.ident, &f.ty);
@@ -784,7 +784,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     let methods = quote! {
         /// All of it, if it's all there - every field a field.
         pub fn whole(&self) -> Option<&#name> {
-            // SAFETY: X is #[repr(transparent)] over X__whole
+            // SAFETY: X is #[repr(transparent)] over X_whole
             #vs::cast_plain::<#ffi>(self.as_bytes())
                 .map(|w| unsafe { &*(w as *const #ffi as *const #name) })
         }
@@ -960,7 +960,7 @@ struct Generic<'a> {
 /// as its definition does.
 fn generic_type(name: &Ident, g: &Generic<'_>, doc: &str) -> TokenStream {
     let vs = vs();
-    let fam = format_ident!("{name}__family");
+    let fam = crate::derived(name, "family");
     let default = format_ident!("{}", g.default);
     let mut out = quote! {
         #[doc = #doc]

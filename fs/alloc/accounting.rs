@@ -150,7 +150,7 @@ const TYPE_NR_COUNTERS: [usize; TYPE_NR] = DiskAccountingPos_arms!(type_nr_count
 pub const MAX_COUNTERS: usize = BCH_ACCOUNTING_MAX_COUNTERS as usize;
 pub type Counters = [u64; MAX_COUNTERS];
 
-pub trait KeyType: ArmOf<DiskAccountingPos__ffi, Tag = u8> + Copy {
+pub trait KeyType: ArmOf<DiskAccountingPosStorage, Tag = u8> + Copy {
     type Delta: CounterSet<i64>;
     type Read:  CounterSet<u64>;
 }

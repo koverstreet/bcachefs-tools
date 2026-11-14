@@ -214,30 +214,30 @@ pub(crate) use floored_by_self;
 /// field's does.
 ///
 /// vstruct!(unsized T, u64s), for an unsized vstruct, #[unsized_vstruct]'s
-/// family: the count is its header's, T__head's - and each state's length is
+/// family: the count is its header's, T_head's - and each state's length is
 /// its reference's, size_of_val(). Its count reads as u64s(), on the header,
 /// which each state derefs to; it's no field to set but the container's,
 /// which has the room for it - VStruct, on the header, builds one.
 macro_rules! vstruct {
     (unsized $t:ident, $count:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@impl [<$t __head>],
-            ::core::mem::size_of::<[<$t __head>]>(), $count);
+        $crate::util::vstructs::vstruct!(@impl [<$t _head>],
+            ::core::mem::size_of::<[<$t _head>]>(), $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
     } };
     // counted past the header it embeds - a btree node's bset, its keys; a
     // journal entry subtype's entry: the count is that header's, read as it
     (unsized $t:ident, $hdr:ident . $count:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!([<$t __head>], $hdr.$count);
+        $crate::util::vstructs::vstruct!([<$t _head>], $hdr.$count);
         $crate::util::vstructs::vstruct!(@u64s $t);
     } };
     // counted by the header it embeds first, from its start - a superblock
     // section's, by its field's u64s: start = 0
     (unsized $t:ident, $hdr:ident . $count:ident, start = $start:expr) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@impl [<$t __head>], $start, $hdr.$count);
+        $crate::util::vstructs::vstruct!(@impl [<$t _head>], $start, $hdr.$count);
         $crate::util::vstructs::vstruct!(@u64s $t);
     } };
     (unsized $t:ident, $count:ident, start = $start:expr) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@impl [<$t __head>], $start, $count);
+        $crate::util::vstructs::vstruct!(@impl [<$t _head>], $start, $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
     } };
     // its length - a count of u64s from a u64 aligned start, as @impl
@@ -245,13 +245,13 @@ macro_rules! vstruct {
     // more than 8: so a reference to one, as long as size_of_val(), claims
     // none past it, whatever its tail holds
     (@u64s $t:ident) => { $crate::paste! {
-        const _: () = assert!(::core::mem::align_of::<[<$t __head>]>() <= 8,
+        const _: () = assert!(::core::mem::align_of::<[<$t _head>]>() <= 8,
             concat!(stringify!($t), ": counted in u64s, so aligned to no more than 8"));
     } };
     (@unsized $t:ident, $count:ident) => { $crate::paste! {
         $crate::util::vstructs::vstruct!(@u64s $t);
 
-        impl [<$t __head>] {
+        impl [<$t _head>] {
             /// Its count, as a usize - to read: it changes only through what
             /// holds the value, which has room for it to grow.
             pub fn $count(&self) -> usize {
@@ -351,13 +351,13 @@ macro_rules! vstruct_container {
         $crate::util::vstructs::vstruct_container!(@start $t);
     } };
     (@start $t:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Unvalidated>, [<$t __head>]);
-        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Validated>, [<$t __head>]);
+        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Unvalidated>, [<$t _head>]);
+        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Validated>, [<$t _head>]);
 
         impl $t<$crate::util::vstructs::Unvalidated> {
             /// start_bytes(), mutably: for entries_mut().
             fn start_bytes_mut(&mut self) -> &mut [u8] {
-                &mut self.as_bytes_mut()[::core::mem::offset_of!([<$t __head>], start)..]
+                &mut self.as_bytes_mut()[::core::mem::offset_of!([<$t _head>], start)..]
             }
         }
     } };
@@ -662,7 +662,7 @@ pub struct Validated;
 ///
 ///   pub struct jset<S: State = Validated> {
 ///       _state:   PhantomData<S>,
-///       pub repr: <S as State>::Of<jset__family>,
+///       pub repr: <S as State>::Of<jset_family>,
 ///   }
 ///
 /// #[repr(transparent)], and its last field the definition, a DST or not: a
@@ -671,7 +671,7 @@ pub struct Validated;
 /// is E0118 if inherent, and breaks other crates' impls of the same trait
 /// (E0119) - so impls attach to X<Validated>, X<Whole>, as to any type, and
 /// X is what code names in every state. It derefs to the definition; the
-/// definitions, named - X__head, X__unvalidated, X__validated, X__whole -
+/// definitions, named - X_head, X_unvalidated, X_validated, X_whole -
 /// are what the macros build it from.
 ///
 /// Every definition is made from its bytes the same way, ArmRef, and none

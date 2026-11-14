@@ -886,7 +886,7 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
         field_to_text(out, fs, sb, f);
     }
 }
-impl PartialEq for c::bch_sb__head {
+impl PartialEq for c::bch_sb_head {
     fn eq(&self, other: &Self) -> bool {
         self.magic.b == other.magic.b
             && self.user_uuid.b == other.user_uuid.b
@@ -917,7 +917,7 @@ impl c::bch_sb {
 }
 
 /// Its header's: every state's, which each derefs to.
-impl c::bch_sb__head {
+impl c::bch_sb_head {
     pub fn uuid(&self) -> uuid::Uuid {
         uuid::Uuid::from_bytes(self.user_uuid.b)
     }
@@ -1648,14 +1648,14 @@ impl<'a> SbWrite<'a> {
 
     /// The ext section, all of it: mount grows it to its full size, so a
     /// mounted filesystem's has every field.
-    pub fn ext_mut(&mut self) -> &mut c::bch_sb_field_ext__whole {
+    pub fn ext_mut(&mut self) -> &mut c::bch_sb_field_ext_whole {
         self.field_mut::<c::bch_sb_field_ext<Validated>>().and_then(|e| e.whole_mut())
             .expect("a whole ext section: mount grows it to its full size")
     }
 
     /// Btree @btree flagged in an ext section bitmap, recorded: whether it
     /// wasn't already.
-    fn set_ext_btree(&mut self, bitmap: impl FnOnce(&mut c::bch_sb_field_ext__whole) -> &mut Le64,
+    fn set_ext_btree(&mut self, bitmap: impl FnOnce(&mut c::bch_sb_field_ext_whole) -> &mut Le64,
                      btree: Btree) -> bool {
         let bitmap = bitmap(self.ext_mut());
         let (v, bit) = (bitmap.get(), 1u64 << btree.0);

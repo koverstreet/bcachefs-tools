@@ -9,7 +9,7 @@
 //   The derives' struct / union, named fields.
 //
 //   #[type_name(NAME)] on the struct: its name to TypeInfo, where the item's
-//   differs - a family's definition, X__head, whose name the family's type
+//   differs - a family's definition, X_head, whose name the family's type
 //   X<S> has (util/vstructs.rs).
 //
 //   xmacro! { NAME { (args), (args), ... } }: an x-macro list - a
@@ -30,7 +30,7 @@ pub(crate) struct StructDef {
     /// The item's name.
     pub(crate) ident:     syn::Ident,
     /// #[type_name(NAME)]: the type's name, where the item's differs - a
-    /// family's definition, X__head, whose name the family's type X<S> has
+    /// family's definition, X_head, whose name the family's type X<S> has
     /// (util/vstructs.rs).
     pub(crate) type_name: Option<syn::Ident>,
     pub(crate) attrs:     Vec<syn::Attribute>,

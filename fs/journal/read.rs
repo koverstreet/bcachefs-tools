@@ -43,7 +43,7 @@ pub use crate::c::JsetEntryType;
 
 // ---- jset helpers ----
 
-impl c::jset__head {
+impl c::jset_head {
     /// The nonce of this journal entry: its seq, in the journal domain.
     pub fn nonce(&self) -> Nonce {
         let seq = self.seq.get();

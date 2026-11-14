@@ -790,7 +790,7 @@ pub trait OptHost: 'static {
     fn with_mut<R>(sb: &mut c::bch_sb_buf, dev: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R>;
 }
 
-impl OptHost for c::bch_sb__head {
+impl OptHost for c::bch_sb_head {
     const MEMBER: bool = false;
 
     fn with<R>(sb: &c::bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
