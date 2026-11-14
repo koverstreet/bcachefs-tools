@@ -233,8 +233,8 @@ bitflags! {
         const TRANSACTIONAL            = c::BtreeIterUpdateTriggerFlags::transactional.bits();
         const ATOMIC                   = c::BtreeIterUpdateTriggerFlags::atomic.bits();
         const GC                       = c::BtreeIterUpdateTriggerFlags::gc.bits();
-        const INSERT                   = c::BtreeIterUpdateTriggerFlags::BTREE_TRIGGER_insert.bits();
-        const OVERWRITE                = c::BtreeIterUpdateTriggerFlags::overwrite.bits();
+        const INSERT                   = c::BtreeIterUpdateTriggerFlags::inserting.bits();
+        const OVERWRITE                = c::BtreeIterUpdateTriggerFlags::overwriting.bits();
         const IS_DISCARD               = c::BtreeIterUpdateTriggerFlags::is_discard.bits();
         const SET_NEEDS_RECONCILE_DONE = c::BtreeIterUpdateTriggerFlags::set_needs_reconcile_done.bits();
     }

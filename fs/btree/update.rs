@@ -980,7 +980,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
      * pointer captured earlier.
      *
      * Mem-trigger phase forbids growth: the journal layout is already committed
-     * to. Overwrite-only callers (no BTREE_TRIGGER_insert) have no business
+     * to. Overwrite-only callers (not inserting) have no business
      * mutating @new (it's the deleted-dummy stub).
      */
     pub(crate) fn update_grow(&self, btree: Btree, level: u32, pos: Bpos, needed_u64s: u32)

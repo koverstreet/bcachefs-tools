@@ -358,7 +358,6 @@ pub struct bch_fs_btree_cache {
 /* Iterator, update, and trigger flags: */
 
 #[bch_enum(closed)]
-#[prefix(BTREE_ITER_FLAG_BIT_)]
 #[mask(BtreeIterUpdateTriggerFlags: u32)]
 #[repr(u32)]
 pub enum BtreeIterFlagBit {
@@ -389,17 +388,17 @@ pub enum BtreeIterFlagBit {
     overwrite_triggered,
 
     /*
-     * BTREE_TRIGGER_norun - don't run triggers at all
+     * norun - don't run triggers at all
      *
-     * BTREE_TRIGGER_transactional - we're running transactional triggers as part of
+     * transactional - we're running transactional triggers as part of
      * a transaction commit: triggers may generate new updates
      *
-     * BTREE_TRIGGER_atomic - we're running atomic triggers during a transaction
+     * atomic - we're running atomic triggers during a transaction
      * commit: we have our journal reservation, we're holding btree node write
      * locks, and we know the transaction is going to commit (returning an error
      * here is a fatal error, causing us to go emergency read-only)
      *
-     * BTREE_TRIGGER_gc - we're in gc/fsck: running triggers to recalculate e.g. disk usage
+     * gc - we're in gc/fsck: running triggers to recalculate e.g. disk usage
      *
      * transactional, atomic and gc are the phase a trigger runs in, and every
      * caller passes exactly one - commit's three passes, gc's check, interior
@@ -408,17 +407,15 @@ pub enum BtreeIterFlagBit {
      * XXX: a bitmask can't say "exactly one"; the phase wants to be in the
      * trigger's type, dependent typing over the flags.
      *
-     * BTREE_TRIGGER_insert - @new is entering the btree
-     * BTREE_TRIGGER_overwrite - @old is leaving the btree
+     * inserting - @new is entering the btree
+     * overwriting - @old is leaving the btree
      */
-    #[mask_prefix(BTREE_TRIGGER_)]
     norun,
     transactional,
     atomic,
     gc,
-    /* written with its prefix: bitflags' insert() is the mask's */
-    BTREE_ITER_FLAG_BIT_insert,
-    overwrite,
+    inserting,
+    overwriting,
     is_discard,
     set_needs_reconcile_done,
 }
