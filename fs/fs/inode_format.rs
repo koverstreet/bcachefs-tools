@@ -152,8 +152,7 @@ pub enum InodeOptId {
 
 /* bits 20+ reserved for packed fields below: */
 #[bch_enum(open)]
-#[prefix(__BCH_INODE_)]
-#[mask(InodeFlags: u32, prefix = BCH_INODE_)]
+#[mask(InodeFlags: u32)]
 /*
  * BCH_INODE_unlinked means we definitively know that there isn't, and
  * shouldn't be, a dirent pointing to this inode: it is (or is about to
@@ -205,7 +204,7 @@ pub enum InodeFlagBit {
     backptr_untrusted = 8,
     has_child_snapshot = 9,
     has_case_insensitive = 10,
-    __BCH_INODE_31bit_dirent_offset = 11,
+    dirent_offset_31bit = 11,
     has_inode_opts = 12,
     has_access_acl = 13,
     has_default_acl = 14,

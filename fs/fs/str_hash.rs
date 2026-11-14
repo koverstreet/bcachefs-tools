@@ -394,7 +394,7 @@ pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bc
     let mut info = c::bch_hash_info {
         inum_snapshot: inode.bi_snapshot,
         type_:         inode.str_hash(),
-        is_31bit:      inode.flag(c::InodeFlags::BCH_INODE_31bit_dirent_offset),
+        is_31bit:      inode.flag(c::InodeFlags::dirent_offset_31bit),
         cf_encoding:   inode::cf_encoding(fs, inode),
         siphash_key:   c::SIPHASH_KEY { k0: inode.bi_hash_seed, ..Default::default() },
     };
