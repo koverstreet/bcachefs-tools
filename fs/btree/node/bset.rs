@@ -692,7 +692,7 @@ impl NodeContents {
     pub(super) fn bkey_iter_cmp(&self, l: &BkeyP, r: &BkeyP) -> Ordering {
         self.cmp_packed(l, r)
             .then_with(|| r.key_type().is_deleted().cmp(&l.key_type().is_deleted()))
-            .then_with(|| l.as_ffi().cmp(&r.as_ffi()))
+            .then_with(|| l.as_slice().as_ptr().cmp(&r.as_slice().as_ptr()))
     }
 }
 

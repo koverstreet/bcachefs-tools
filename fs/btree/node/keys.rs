@@ -211,7 +211,7 @@ impl<'a> Keys<'a> {
     }
 
     pub fn key_offset(&self, k: &BkeyP) -> u16 {
-        self.offset_of(k.as_ffi())
+        self.offset_of(k.as_slice().as_ptr())
     }
 
     /// Of a pointer C has into the buffer.
