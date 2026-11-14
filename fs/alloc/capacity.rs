@@ -905,8 +905,6 @@ impl<'f> DiskReservation<'f> {
             return Ok(());
         }
 
-        // userspace always takes the slowpath, as C's does
-        #[cfg(kernel)]
         if self.add_cached(sectors) {
             return Ok(());
         }
@@ -914,7 +912,6 @@ impl<'f> DiskReservation<'f> {
     }
 
     /// @sectors from this CPU's cache for its slot, if it has that many.
-    #[cfg(kernel)]
     fn add_cached(&self, sectors: u64) -> bool {
         let nr_replicas = self.nr_replicas.get();
         let cache = percpu_field!(self.c.capacity.pcpu.get(), sectors_available).at(disk_res_slot(nr_replicas)).word();

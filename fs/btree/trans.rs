@@ -31,9 +31,7 @@ use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64};
 #[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
 use crate::util::log::LogMsg;
 use crate::util::log::{log_no_fs, LogLevel};
-#[cfg(kernel)]
-use crate::os::percpu::CpuGuard;
-use crate::os::percpu::Counters;
+use crate::os::percpu::{Counters, CpuGuard};
 use crate::util::rcu;
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::os::sched;
@@ -412,20 +410,19 @@ impl Fs {
 // ── Getting and putting ─────────────────────────────────────────────────────
 
 fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
-    #[cfg(kernel)]
-    {
+    let cached = {
         let cpu = CpuGuard::new();
         let slot = crate::percpu_field!(c.btree.trans.bufs.this_cpu(&cpu), trans);
         let trans = slot.get();
         slot.set(ptr::null_mut());
-        drop(cpu);
+        trans
+    };
 
-        if let Some(trans) = NonNull::new(trans) {
-            /* not ->c: it stays on the list, where walkers read it */
-            let start = offset_of!(BtreeTrans<'_>, paths_allocated);
-            unsafe { trans.cast::<u8>().add(start).write_bytes(0, offset_of!(BtreeTrans<'_>, list) - start) };
-            return trans.cast();
-        }
+    if let Some(trans) = NonNull::new(cached) {
+        /* not ->c: it stays on the list, where walkers read it */
+        let start = offset_of!(BtreeTrans<'_>, paths_allocated);
+        unsafe { trans.cast::<u8>().add(start).write_bytes(0, offset_of!(BtreeTrans<'_>, list) - start) };
+        return trans.cast();
     }
 
     let trans = {
@@ -641,8 +638,6 @@ impl Drop for TransGuard<'_> {
 
         let trans = self.trans.as_ptr();
 
-        /* Userspace doesn't have a real percpu implementation: */
-        #[cfg(kernel)]
         let trans = {
             let cpu = CpuGuard::new();
             let slot = crate::percpu_field!(c.btree.trans.bufs.this_cpu(&cpu), trans);
