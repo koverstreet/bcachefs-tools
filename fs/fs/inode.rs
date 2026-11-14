@@ -1763,7 +1763,7 @@ pub fn set_casefold(
     fs.check_set_feature(SbFeature::casefolding);
 
     inode.bi_casefold = v.wrapping_add(1) as _; // stored +1, 0 for unset
-    inode.bi_fields_set |= 1 << c::InodeOptId::casefold.0;
+    crate::inode_opts::InodeOpt::of(c::InodeOptId::casefold).set_own(inode, true);
 
     namei::maybe_propagate_has_case_insensitive(t, inum, inode)
 }

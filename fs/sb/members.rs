@@ -1137,22 +1137,23 @@ impl Fs {
         self.walk(|ca| Some(ca.get_ref()))
     }
 
-    /// The devices in a state in @states (a mask of 1 << state), an io ref on
-    /// each, put when it's dropped: __for_each_online_member().
-    pub fn io_members<R: IoRefIdx>(&self, states: u32) -> impl Iterator<Item = DevIoRef<R>> + '_ {
+    /// The devices in a state @state_ok takes, an io ref on each, put when
+    /// it's dropped: __for_each_online_member().
+    pub fn io_members<R: IoRefIdx>(&self, state_ok: impl Fn(MemberState) -> bool + 'static)
+                                   -> impl Iterator<Item = DevIoRef<R>> + '_ {
         self.walk(move |ca| {
-            (states & 1 << ca.mi.get().state.0 != 0).then(|| self.io_ref_tryget(ca)).flatten()
+            state_ok(ca.mi.get().state).then(|| self.io_ref_tryget(ca)).flatten()
         })
     }
 
     /// Every online device, an io ref for reading on each: for_each_online_member().
     pub fn online_members(&self) -> impl Iterator<Item = DevIoRef<c::DevReadRefKind>> + '_ {
-        self.io_members(!0)
+        self.io_members(|_| true)
     }
 
     /// The rw devices, an io ref for writing on each: for_each_rw_member().
     pub fn rw_members(&self) -> impl Iterator<Item = DevIoRef<c::DevWriteRefKind>> + '_ {
-        self.io_members(1 << MemberState::rw.0)
+        self.io_members(|s| s == MemberState::rw)
     }
 
 }
