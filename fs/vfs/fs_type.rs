@@ -187,6 +187,12 @@ impl Bcachefs {
         let p = fc.ctx();
         let fs = Self::open_opts(p, claimed, opts)?;
 
+        #[cfg(not(CONFIG_TRANSPARENT_HUGEPAGE))]
+        if fs.opts().block_size.get() as usize > crate::os::kernel::PAGE_SIZE {
+            fc.errorfc(format_args!("cannot mount bs > ps filesystem without CONFIG_TRANSPARENT_HUGEPAGE"));
+            return Err(Errcode::EINVAL_block_size_needs_thp.into());
+        }
+
         // The status channel is scoped to recovery: c->stdio mustn't outlive
         // the reference free drops on the file it points into, and the
         // channel's filesystem mustn't outlive @fs, which an error tears down.

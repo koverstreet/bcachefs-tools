@@ -1377,12 +1377,6 @@ pub fn fs_opts(sb: &c::bch_sb<Unvalidated>, opts: &c::bch_opts, out: &mut Printb
     let mut fs_opts = DEFAULTS;
     opts_from_sb(&mut fs_opts, sb);
     fs_opts.apply(opts);
-
-    #[cfg(all(kernel, not(CONFIG_TRANSPARENT_HUGEPAGE)))]
-    if fs_opts.block_size as usize > crate::os::kernel::PAGE_SIZE {
-        prt!(out, "cannot mount bs > ps filesystem without CONFIG_TRANSPARENT_HUGEPAGE\n");
-        return Err(Errcode::EINVAL_block_size_needs_thp.into());
-    }
     Ok(fs_opts)
 }
 
