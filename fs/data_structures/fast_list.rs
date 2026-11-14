@@ -29,7 +29,7 @@ use crate::util::alloc::AllocError;
 use crate::os::percpu::{free_percpu, IrqGuard, PerCpu, PerCpuRef};
 use crate::util::rcu::ReadGuard;
 use crate::data_structures::array_vec::ArrayVec;
-use core::ffi::{c_uint, c_void};
+use core::ffi::c_void;
 use core::iter;
 use core::mem::ManuallyDrop;
 use core::ptr::{null_mut, NonNull};
@@ -37,8 +37,8 @@ use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::MaybeZeroable;
 use crate::types::{c_default, c_opaque};
-use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::SharedGenRadix;
+use crate::data_structures::ida::Ida;
 
 // A CPU's cache of free slots: fast_list.rs's Cache - C only holds the pointer
 c_opaque!(fast_list_pcpu);
@@ -48,15 +48,11 @@ c_opaque!(fast_list_pcpu);
 pub struct fast_list {
     /* the items, by slot: allocated by any CPU at once */
     pub items: SharedGenRadix<Item>,
-    pub slots_allocated: Opaque<c::ida>,
+    pub slots_allocated: Ida,
     /* set by init() and exit(), which take the list shared, as C's pointer is */
     pub buffer: AtomicPtr<c::fast_list_pcpu>,
 }
 c_default!(fast_list);
-
-// SAFETY: zeroed is a valid uninitialized ida, as in C's kzalloc()'d struct;
-// fast_list_init() initializes it
-unsafe impl ::pin_init::Zeroable for Opaque<c::ida> {}
 
 /// A slot's item, C's void *: other CPUs change it as it's read.
 #[repr(transparent)]
@@ -77,10 +73,6 @@ struct Cache(ArrayVec<u32, 31>);
 unsafe impl ::pin_init::Zeroable for Cache {}
 
 impl c::fast_list {
-    fn ida(&self) -> *mut c::ida {
-        self.slots_allocated.as_ptr()
-    }
-
     /// @f on this CPU's cache, interrupts off.
     fn with_cache<R>(&self, f: impl FnOnce(&mut ArrayVec<u32, 31>) -> R) -> R {
         let irq = IrqGuard::new();
@@ -93,8 +85,7 @@ impl c::fast_list {
 
     fn free_slots(&self, idxs: impl IntoIterator<Item = u32>) {
         for idx in idxs {
-            // SAFETY: init()'s ida, and slots it handed out
-            unsafe { c::ida_free(self.ida(), idx) };
+            self.slots_allocated.free(idx);
         }
     }
 
@@ -118,10 +109,7 @@ impl c::fast_list {
 
     /// A new slot from the IDA, its radix node allocated.
     fn alloc_idx(&self) -> Option<u32> {
-        // SAFETY: init()'s ida
-        let gfp = crate::util::alloc::current_gfp_context_raw(c::GFP_KERNEL);
-        let idx = unsafe { c::ida_alloc_range(self.ida(), 1, i32::MAX as c_uint, gfp) };
-        let idx = u32::try_from(idx).ok()?;
+        let idx = self.slots_allocated.alloc_range(1, i32::MAX as u32).ok()?;
         if self.items.prealloc(idx as usize).is_err() {
             self.free_slots([idx]);
             return None;
@@ -188,7 +176,7 @@ impl c::fast_list {
     /// # Safety
     /// Nothing else is using it: it's zeroed, or exit()ed.
     pub unsafe fn init(&self) -> Result<(), AllocError> {
-        unsafe { c::ida_init(self.ida()) };
+        unsafe { self.slots_allocated.init_zeroed() };
         self.buffer.store(PerCpu::<Cache>::alloc()?.into_raw().cast(), Relaxed);
         Ok(())
     }
@@ -208,12 +196,10 @@ impl c::fast_list {
         }
 
         // a slot still allocated is an item still on the list
-        crate::warn_on!(unsafe { c::ida_find_first(self.ida()) } >= 0);
+        crate::warn_on!(self.slots_allocated.find_first().is_some());
 
-        unsafe {
-            c::ida_destroy(self.ida());
-            self.items.free();
-        }
+        self.slots_allocated.destroy();
+        unsafe { self.items.free() };
     }
 }
 
