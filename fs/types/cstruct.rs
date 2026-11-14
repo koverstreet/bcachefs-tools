@@ -114,27 +114,6 @@ pub(crate) enum EnumKind {
     Flags,
 }
 
-impl EnumKind {
-    /// The attribute that says it: #[closed], #[open], #[flags].
-    pub(crate) fn attr(self) -> &'static str {
-        match self {
-            EnumKind::Closed => "closed",
-            EnumKind::Open   => "open",
-            EnumKind::Flags  => "flags",
-        }
-    }
-}
-
-/// Items from an x-macro list: `LIST(params) => template`. Each entry's
-/// arguments are bound to the params - `..` the rest - and `concat(A, b)` in the
-/// template is pasted into one identifier.
-#[derive(Debug, Clone)]
-pub(crate) struct FromList {
-    pub(crate) list:     syn::Ident,
-    pub(crate) params:   Vec<syn::Ident>,
-    pub(crate) template: proc_macro2::TokenStream,
-}
-
 /// An enum, and what its values can be.
 #[derive(Debug, Clone)]
 pub(crate) struct EnumDef {
@@ -145,10 +124,6 @@ pub(crate) struct EnumDef {
     /// The integer type: u32, i32, u64.
     pub(crate) repr:     syn::Ident,
     pub(crate) variants: Vec<EnumVariant>,
-    /// `LIST(params) => VARIANT [= value]`: variants from lists, each in
-    /// place before the written one at its index - expand_enum_list() makes
-    /// them, a list at a time.
-    pub(crate) from:     Vec<(usize, FromList)>,
     /// #[own_to_text]: it prints as more than its name - an open or flags
     /// enum #[bch_enum] otherwise gives ToText.
     pub(crate) own_to_text: bool,
@@ -173,9 +148,7 @@ impl EnumDef {
 
 /// An enum's variant. Its value, or none for the one after the last; the
 /// generator replaces them with what they evaluate to. Its label is what it
-/// prints as, `#[label("..")]`: a list's variant's is the argument its
-/// template pastes into the name - `stripe`, of `concat(BCH_WATERMARK_, name)` - as
-/// C's string tables have it; none, its name.
+/// prints as, `#[label("..")]`; none, its name.
 #[derive(Debug, Clone)]
 pub(crate) struct EnumVariant {
     pub(crate) name:   syn::Ident,
@@ -358,7 +331,7 @@ pub(crate) fn parse_enum_head(input: syn::parse::ParseStream<'_>)
     }
     let body;
     syn::braced!(body in input);
-    let def = EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
+    let def = EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(),
                          own_to_text, prefix, nr };
     Ok((def, others, body.parse()?))
 }
@@ -395,199 +368,9 @@ pub(crate) fn parse_variant(v: proc_macro2::TokenStream)
     Ok((EnumVariant { name: v.ident, value, label, docs }, others, ty))
 }
 
-/// list_enum!'s body: its head, then { A = expr, B, ... },
-/// or `LIST(params) => template` for each of a list's entries.
-pub(crate) fn parse_list_enum(input: proc_macro2::TokenStream) -> Result<EnumDef, String> {
-    syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
-        let (mut e, _, body) = parse_enum_head(input)?;
-        for v in split_commas(body) {
-            match parse_from_list(&v)? {
-                Some(f) => e.from.push((e.variants.len(), f)),
-                None => e.variants.push(parse_variant(v)?.0),
-            }
-        }
-        Ok(e)
-    }, input).map_err(|e| format!("expected #[open|closed|flags] pub enum NAME: REPR {{ ... }} - {e}"))
-}
-
 /// @i as the tokenizer has an identifier: a raw one without its r#.
 fn ident(i: &syn::Ident) -> String {
     i.to_string().trim_start_matches("r#").to_string()
-}
-
-/// `LIST(params) => template` at @item - a list_enum! variant - if it is one:
-/// params, each bound to an entry's argument in turn, ending at `..`.
-fn parse_from_list(item: &proc_macro2::TokenStream) -> syn::Result<Option<FromList>> {
-    use proc_macro2::{Delimiter, TokenTree};
-    let t: Vec<TokenTree> = item.clone().into_iter().collect();
-    let [TokenTree::Ident(list), TokenTree::Group(group), TokenTree::Punct(eq), TokenTree::Punct(gt), template @ ..]
-        = t.as_slice() else { return Ok(None) };
-    if group.delimiter() != Delimiter::Parenthesis || eq.as_char() != '=' || gt.as_char() != '>' || template.is_empty() {
-        return Ok(None);
-    }
-    let mut params = Vec::new();
-    for p in split_commas(group.stream()) {
-        match p.into_iter().collect::<Vec<_>>().as_slice() {
-            [TokenTree::Ident(i)] => params.push(i.clone()),
-            [TokenTree::Punct(a), TokenTree::Punct(b)] if a.as_char() == '.' && b.as_char() == '.' => break,
-            _ => return Err(syn::Error::new(group.span(), format!("{list}(params): each a name, or .. for the rest"))),
-        }
-    }
-    Ok(Some(FromList { list: list.clone(), params, template: template.iter().cloned().collect() }))
-}
-
-/// What @f's template makes of one entry of its list, @entry: its parameters
-/// substituted, then its camel(n)s and concat(A, b, ..)s pasted.
-fn from_list_entry(f: &FromList, entry: &proc_macro2::TokenStream) -> Result<Vec<proc_macro2::TokenTree>, String> {
-    use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
-    let list = &f.list;
-    let args = split_commas(entry.clone());
-    let mut bound: Vec<(&Ident, &TokenStream)> = Vec::new();
-    for (n, p) in f.params.iter().enumerate() {
-        let arg = args.get(n).ok_or_else(|| format!("{list}: entry ({entry}) has no {p}"))?;
-        bound.push((p, arg));
-    }
-
-    fn subst(ts: TokenStream, bound: &[(&Ident, &TokenStream)]) -> TokenStream {
-        ts.into_iter().flat_map(|t| match t {
-            TokenTree::Ident(i) => match bound.iter().find(|(p, _)| i == **p) {
-                Some((_, arg)) => (*arg).clone(),
-                None => TokenStream::from(TokenTree::Ident(i)),
-            },
-            TokenTree::Group(g) => TokenStream::from(TokenTree::Group(Group::new(g.delimiter(), subst(g.stream(), bound)))),
-            t => TokenStream::from(t),
-        }).collect()
-    }
-
-    let bad = || format!("{list}: concat() in the template pastes identifiers and literals only");
-    let name = |s: String| match s.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') &&
-                                 s.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        true => Ok(TokenTree::Ident(Ident::new(&s, Span::call_site()))),
-        false => Err(format!("{list}: pastes {s}, not an identifier")),
-    };
-    fn paste(ts: TokenStream, name: &dyn Fn(String) -> Result<TokenTree, String>, bad: &dyn Fn() -> String)
-        -> Result<Vec<TokenTree>, String>
-    {
-        let t: Vec<TokenTree> = ts.into_iter().collect();
-        let mut out = Vec::new();
-        let mut k = 0;
-        while k < t.len() {
-            match (&t[k], t.get(k + 1)) {
-                (TokenTree::Ident(c), Some(TokenTree::Group(g)))
-                    if g.delimiter() == Delimiter::Parenthesis && (c == "camel" || c == "concat") =>
-                {
-                    let parts = split_commas(g.stream()).into_iter().map(|p| {
-                        match p.into_iter().collect::<Vec<_>>().as_slice() {
-                            [TokenTree::Ident(i)] => Ok(i.to_string()),
-                            [TokenTree::Literal(l)] => Ok(l.to_string()),
-                            _ => Err(bad()),
-                        }
-                    }).collect::<Result<Vec<_>, _>>()?;
-                    out.push(match (c == "camel", parts.as_slice()) {
-                        (true, [n]) => name(n.split('_').map(|w| w[..1].to_uppercase() + &w[1..]).collect())?,
-                        (true, _) => return Err(bad()),
-                        (false, _) => name(parts.concat())?,
-                    });
-                    k += 2;
-                }
-                (TokenTree::Group(g), _) => {
-                    let mut inner = Group::new(g.delimiter(), paste(g.stream(), name, bad)?.into_iter().collect());
-                    inner.set_span(g.span());
-                    out.push(TokenTree::Group(inner));
-                    k += 1;
-                }
-                (t, _) => {
-                    out.push(t.clone());
-                    k += 1;
-                }
-            }
-        }
-        Ok(out)
-    }
-    paste(subst(f.template.clone(), &bound), &name, &bad)
-}
-
-/// list_enum! @e's variants from its first list, @entries each one entry's
-/// arguments, in their place: each `NAME [= value]`, a value cast to the
-/// enum's integer type, as a list's can be any integer type.
-pub(crate) fn expand_enum_list(e: &mut EnumDef, entries: &[proc_macro2::TokenStream]) -> Result<(), String> {
-    use proc_macro2::{Ident, TokenStream, TokenTree};
-    if e.from.is_empty() {
-        return Ok(());
-    }
-    let (at, f) = e.from.remove(0);
-    let (list, repr) = (&f.list, &e.repr);
-
-    // the parameter the template pastes into the name: its argument, the label
-    fn idents(ts: TokenStream, out: &mut Vec<Ident>) {
-        for t in ts {
-            match t {
-                TokenTree::Ident(i) => out.push(i),
-                TokenTree::Group(g) => idents(g.stream(), out),
-                _ => {}
-            }
-        }
-    }
-    let before_eq: TokenStream = f.template.clone().into_iter()
-        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == '='))
-        .collect();
-    let mut name_idents = Vec::new();
-    idents(before_eq, &mut name_idents);
-    let label_param = name_idents.iter().find_map(|s| f.params.iter().position(|p| p == s));
-
-    let mut variants = Vec::new();
-    for entry in entries {
-        let toks = from_list_entry(&f, entry)?;
-        let (name, value) = match &toks[..] {
-            [TokenTree::Ident(name)] => (name.clone(), None),
-            [TokenTree::Ident(name), TokenTree::Punct(eq), v @ ..] if eq.as_char() == '=' && !v.is_empty() => {
-                let v: TokenStream = v.iter().cloned().collect();
-                let value = syn::parse2(quote::quote!((#v) as #repr))
-                    .map_err(|err| format!("{list}: {name} = {v}: {err}"))?;
-                (name.clone(), Some(value))
-            }
-            _ => return Err(format!("{list}: the template gives {} - not NAME [= value]",
-                                    toks.into_iter().collect::<TokenStream>())),
-        };
-        let label = label_param.and_then(|n| split_commas(entry.clone()).into_iter().nth(n))
-            .and_then(|a| match a.into_iter().collect::<Vec<_>>().as_slice() {
-                [TokenTree::Ident(l)] => Some(ident(l)),
-                _ => None,
-            });
-        variants.push(EnumVariant { name, value, label, docs: Vec::new() });
-    }
-    let n = variants.len();
-    e.variants.splice(at..at, variants);
-    for (later, _) in &mut e.from {
-        *later += n;
-    }
-    Ok(())
-}
-
-/// list_enum! @e, for its next list's callback: its variants, and the lists
-/// not yet expanded in their place.
-pub(crate) fn enum_tokens(e: &EnumDef) -> proc_macro2::TokenStream {
-    use quote::{format_ident, quote};
-    let kind = format_ident!("{}", e.kind.attr());
-    let own_to_text = e.own_to_text.then(|| quote!(#[own_to_text]));
-    let prefix = e.prefix.as_ref().map(|p| format_ident!("{p}")).map(|p| quote!(#[prefix(#p)]));
-    let nr = e.nr.then(|| quote!(#[nr]));
-    let (name, repr) = (&e.name, &e.repr);
-    let lists = |i: usize| -> proc_macro2::TokenStream {
-        e.from.iter().filter(|(at, _)| *at == i).map(|(_, f)| {
-            let (list, params, template) = (&f.list, &f.params, &f.template);
-            quote!(#list(#(#params,)* ..) => #template,)
-        }).collect()
-    };
-    let mut body = proc_macro2::TokenStream::new();
-    for (i, v) in e.variants.iter().enumerate() {
-        body.extend(lists(i));
-        let (docs, name, value) = (&v.docs, &v.name, v.value.as_ref().map(|x| quote!(= #x)));
-        let label = v.label.as_ref().map(|l| quote!(#[label(#l)]));
-        body.extend(quote!(#(#[doc = #docs])* #label #name #value,));
-    }
-    body.extend(lists(e.variants.len()));
-    quote!(#[#kind] #own_to_text #prefix #nr pub enum #name: #repr { #body })
 }
 
 /// @ty's generic arguments, if it's @name<..> by any path.

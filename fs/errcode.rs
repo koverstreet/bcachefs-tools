@@ -27,7 +27,7 @@ use core::iter;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 use crate::types::c_default;
-use cstruct_macros::{MaybeZeroable, xmacro, TypeInfo, list_enum};
+use cstruct_macros::{bch_enum, MaybeZeroable, xmacro, TypeInfo};
 
 xmacro! {
     BLK_ERRS {
@@ -686,15 +686,20 @@ macro_rules! __bch_errcode_max_0 {
 BCH_ERRCODES!(__bch_errcode_max_0 []);
 c_default!(bch_errcode_max);
 
-list_enum! {
-    #[open]
-    pub enum Errcode: u32 {
-        BCH_ERR_START = 2048,
-        BCH_ERRCODES(class, err, nr) => concat(BCH_ERR_, err) = Errcode::BCH_ERR_START.0 + (nr as u32),
-        BCH_ERR_MAX = Errcode::BCH_ERR_START.0
-        + (core::mem::size_of::<c::bch_errcode_max>() as u32),
-    }
+macro_rules! errcode_enum {
+    ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! {
+        #[bch_enum(open)]
+        #[prefix(BCH_ERR_)]
+        #[repr(u32)]
+        pub enum Errcode {
+            BCH_ERR_START = 2048,
+            $([<BCH_ERR_ $err>] = Errcode::BCH_ERR_START.0 + ($nr as u32),)*
+            BCH_ERR_MAX = Errcode::BCH_ERR_START.0
+            + (core::mem::size_of::<c::bch_errcode_max>() as u32),
+        }
+    } };
 }
+BCH_ERRCODES!(errcode_enum);
 
 // The status's, beside the errcode of the same name
 pub mod status {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-//! An enum's declaration, #[bch_enum]'s or list_enum!'s: each variant
+//! An enum's declaration, #[bch_enum]'s: each variant
 //! with its doc, its columns and its value - and a key type's, its value's
 //! type, `deleted(c::Deleted)`:
 //!
@@ -189,7 +189,7 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
             Some("doc")         => e.docs.extend(doc_of(&a)),
             _ => {
                 let path = a.path();
-                return Err(err(format!("#[{}]: not one of list_enum!'s", quote!(#path))));
+                return Err(err(format!("#[{}]: not one of #[bch_enum]'s", quote!(#path))));
             }
         }
     }
@@ -238,7 +238,7 @@ pub(crate) fn tag_enum(args: TokenStream) -> Result<EnumDef, String> {
     let Some((name, repr)) = name else {
         return Err("an enum needs NAME: REPR".into());
     };
-    Ok(EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
+    Ok(EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(),
                   own_to_text: false, prefix, nr })
 }
 

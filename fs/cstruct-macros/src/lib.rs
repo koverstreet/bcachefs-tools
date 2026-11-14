@@ -21,7 +21,6 @@
 //!                        and argument type
 //!   #[bch_enum(..)]      an enum, open, closed or flags: the type that is,
 //!                        and its values
-//!   list_enum! { .. }    a #[bch_enum] with variants from lists
 //!   atomic_bitfield! { .. }
 //!                        a bitfield's value, and an atomic word of it
 //!   tagged_union! { .. } a tagged union with a stable representation: C's
@@ -59,8 +58,8 @@ use quote::{format_ident, quote, ToTokens};
 mod cstruct {
     include!("../../types/cstruct.rs");
 }
-use cstruct::{enum_tokens, expand_enum_list, generic_arg, int_of, parse_cstruct, parse_ioctl,
-              parse_list_enum, parse_xmacro, split_commas, EnumDef, EnumKind, EnumVariant, XEntry};
+use cstruct::{generic_arg, int_of, parse_cstruct, parse_ioctl, parse_xmacro, split_commas, EnumDef,
+              EnumKind, EnumVariant, XEntry};
 
 mod args_stored_once;
 mod atomic_bitfield;
@@ -106,29 +105,6 @@ fn expand(what: &str, f: impl FnOnce() -> Result<TokenStream, String>) -> proc_m
 /// expand() of a macro on syn: its error at the tokens it's about.
 fn expand_syn(what: &str, f: impl FnOnce() -> syn::Result<TokenStream>) -> proc_macro::TokenStream {
     f().unwrap_or_else(|e| syn::Error::new(e.span(), format!("{what}: {e}")).into_compile_error()).into()
-}
-
-/// list_enum! @decl through @list - LIST!(__list_enum [decl]) - which calls
-/// __list_enum back with its entries: { [decl] (entry), (entry), ... }.
-fn through_list(list: &Ident, decl: TokenStream) -> TokenStream {
-    quote!(crate::cstructs::c::#list!(cstruct_macros::__list_enum [#decl]);)
-}
-
-/// What a list hands through_list()'s callback - { [decl] (entry), (entry),
-/// ... }: the declaration, and each entry's arguments.
-fn list_callback(input: TokenStream) -> Result<(TokenStream, Vec<TokenStream>), String> {
-    let mut trees = input.into_iter();
-    let decl = match trees.next() {
-        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => g.stream(),
-        _ => return Err("expected [declaration] then the list's entries".into()),
-    };
-    let entries = trees
-        .filter_map(|t| match t {
-            TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => Some(g.stream()),
-            _ => None,
-        })
-        .collect();
-    Ok((decl, entries))
 }
 
 /// bch_opts' options, a field each: options.rs.
@@ -778,8 +754,7 @@ fn bilge_width(t: &Ident) -> Option<(u32, Ident)> {
 
 /// An x-macro list: xmacro! { NAME { (args), ... } }: a macro,
 /// NAME!(cb), which expands to cb! { (args), ... } - and NAME!(cb [..]),
-/// to cb! { [..] (args), ... }: a list_enum! built from lists passes on the
-/// variants so far. cb may be a path.
+/// to cb! { [..] (args), ... }, for a cb that accumulates. cb may be a path.
 ///
 /// An entry can be another list, SUB(), or another list's entries mapped,
 /// SUB((params) => (args)). Then NAME!(cb) is a chain of macros, one per
@@ -952,33 +927,6 @@ fn xmacro_template(template: TokenStream, params: &[Ident]) -> TokenStream {
     out
 }
 
-/// An enum some of whose variants are built from lists - `LIST(params) =>
-/// template`, a variant for each entry - which an enum declaration can't
-/// say: #[bch_enum]'s, written as
-///
-///   list_enum! { #[open] pub enum NAME: REPR { .., LIST(params) => template, .. } }
-#[proc_macro]
-pub fn list_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("list_enum!", || {
-        let input = TokenStream::from(input);
-        if !from_lists(&input) {
-            return enum_decl::declaration(input);
-        }
-        let e = parse_list_enum(input.clone())?;
-        Ok(match e.from.first() {
-            Some((_, f)) => through_list(&f.list, input),
-            None => enum_gen(&e),
-        })
-    })
-}
-
-/// Whether list_enum! @input has variants from a list: `LIST(params) => ..`.
-fn from_lists(input: &TokenStream) -> bool {
-    let Some(TokenTree::Group(body)) = input.clone().into_iter().last() else { return false };
-    comma_list(body.stream()).iter().any(|v| v.windows(2).any(|w| matches!(w,
-        [TokenTree::Punct(eq), TokenTree::Punct(gt)] if eq.as_char() == '=' && eq.spacing() == Spacing::Joint && gt.as_char() == '>')))
-}
-
 /// `atomic_bitfield! { pub struct NAME: uN { fields } }`: a
 /// bitfield's value, NAME, and AtomicNAME, a word of it that's atomic - see
 /// atomic_bitfield.rs.
@@ -1037,23 +985,6 @@ pub fn bch_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
         let repr = repr.ok_or_else(|| format!("{}: #[repr(uN)]: its integer type", item.ident))?;
         let (vis, name, variants) = (&item.vis, &item.ident, &item.variants);
         enum_decl::declaration(quote!(#[#kind] #(#attrs)* #vis enum #name: #repr { #variants }))
-    })
-}
-
-/// list_enum!'s list's callback: { [decl] (entry), (entry), ... } - the enum
-/// with its first list's variants in their place: through the next list, if
-/// it has another, or generated.
-#[doc(hidden)]
-#[proc_macro]
-pub fn __list_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("list_enum!", || {
-        let (decl, entries) = list_callback(input.into())?;
-        let mut e = parse_list_enum(decl)?;
-        expand_enum_list(&mut e, &entries).map_err(|err| format!("{}: {err}", e.name))?;
-        Ok(match e.from.first() {
-            Some((_, f)) => through_list(&f.list, enum_tokens(&e)),
-            None => enum_gen(&e),
-        })
     })
 }
 
