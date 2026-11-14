@@ -211,12 +211,15 @@ impl BtreeTrans<'_> {
 
             'err: {
                 let mut bufs = NodeBufs::new(fs);
-                if bufs.alloc(fs, flags::NOWAIT, true).is_err() {
+                let buf_start = local_clock();
+                let got = bufs.alloc(fs, flags::NOWAIT, true).is_ok() || {
                     self.unlock_from(paths, crate::ret_ip!());
-                    if bufs.alloc(fs, flags::WAIT | flags::NOWARN, true).is_err() {
-                        bufs.free();
-                        break 'err;
-                    }
+                    bufs.alloc(fs, flags::WAIT | flags::NOWARN, true).is_ok()
+                };
+                fs.times[c::TimeStat::btree_node_buf_alloc as usize].update(buf_start);
+                if !got {
+                    bufs.free();
+                    break 'err;
                 }
 
                 let freed = fs.btree_node_grab(|l| if pcpu_read_locks { &mut l.freed_pcpu } else { &mut l.freed_nonpcpu },
@@ -256,6 +259,7 @@ impl BtreeTrans<'_> {
                 break 'got_mem got;
             }
 
+            fs.times[c::TimeStat::btree_node_mem_alloc as usize].update(start_time);
             return Err(Errcode::ENOMEM_btree_node_mem_alloc.into());
         };
 

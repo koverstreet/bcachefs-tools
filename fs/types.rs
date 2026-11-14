@@ -35,6 +35,9 @@ use crate::format::{Bpos, Btree};
 pub enum TimeStat {
     /// Allocate memory in the btree node cache for a new btree node
     btree_node_mem_alloc,
+    /// Of that, asking mm for a new node's buffers: both attempts, whether
+    /// they succeed or not
+    btree_node_buf_alloc,
     /// Split a full btree node into two new nodes
     btree_node_split,
     /// Compact a full btree node on disk
