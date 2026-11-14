@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 //! atomic_bitfield!{}: a bitfield's value, and a word of it that's atomic -
-//! one-bit fields set and cleared by one atomic op, as C's set_bit(), and
-//! anything else - a wider field, several fields at once - by cmpxchg over
-//! the value.
+//! one-bit fields set and cleared by one atomic op, and anything else - a
+//! wider field, several fields at once - by cmpxchg over the value.
 //!
 //!   atomic_bitfield! {
-//!       pub struct BtreeNodeFlags: u32 in usize {
+//!       pub struct BtreeNodeFlags: u32 {
 //!           #[bits(3)] write_type: BtreeWriteType,
 //!           read_in_flight: bool,
 //!           ...
@@ -13,8 +12,7 @@
 //!   }
 //!
 //! BtreeNodeFlags is the value: bitfield-struct's, over the u32, padded to
-//! it. AtomicBtreeNodeFlags is the word: an AtomicUsize - `in usize`, for
-//! C's unsigned long; without it, the value's own integer.
+//! it. AtomicBtreeNodeFlags is the word: an AtomicU32, the value's own integer.
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, ToTokens};
@@ -27,7 +25,6 @@ struct Decl {
     vis:    Visibility,
     name:   Ident,
     bits:   Ident,
-    word:   Option<Ident>,
     fields: Vec<Field>,
 }
 
@@ -54,16 +51,10 @@ impl Parse for Decl {
         let name = input.parse()?;
         input.parse::<Token![:]>()?;
         let bits = input.parse()?;
-        let word = if input.peek(Token![in]) {
-            input.parse::<Token![in]>()?;
-            Some(input.parse()?)
-        } else {
-            None
-        };
         let body;
         braced!(body in input);
         let fields = Punctuated::<Field, Token![,]>::parse_terminated(&body)?.into_iter().collect();
-        Ok(Decl { attrs, vis, name, bits, word, fields })
+        Ok(Decl { attrs, vis, name, bits, fields })
     }
 }
 
@@ -95,7 +86,7 @@ fn is_bool(f: &Field) -> bool {
 }
 
 fn generate(d: &Decl) -> syn::Result<TokenStream> {
-    let Decl { attrs, vis, name, bits, word, fields } = d;
+    let Decl { attrs, vis, name, bits, fields } = d;
     let size = int_bits(&bits.to_string()).ok_or_else(|| syn::Error::new(bits.span(), "the value's integer: u8, u16, u32 or u64"))?;
     let used: usize = fields.iter().map(|f| width(f)).sum::<syn::Result<_>>()?;
     if used > size {
@@ -110,9 +101,8 @@ fn generate(d: &Decl) -> syn::Result<TokenStream> {
     let value_fields = fields.iter().map(|Field { attrs, name, ty }| quote!(#(#attrs)* #vis #name: #ty));
 
     let atomic = format_ident!("Atomic{name}");
-    let word = word.as_ref().unwrap_or(bits);
     let atomic_word = format_ident!("Atomic{}", {
-        let w = word.to_string();
+        let w = bits.to_string();
         let mut c = w.chars();
         c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
     });
@@ -121,7 +111,7 @@ fn generate(d: &Decl) -> syn::Result<TokenStream> {
     let (relaxed, seqcst) = (quote!(#ordering::Relaxed), quote!(#ordering::SeqCst));
     let mask = |m: &Ident| {
         let offset = format_ident!("{}_OFFSET", m.to_string().to_uppercase());
-        quote!(((1 as #word) << #name::#offset))
+        quote!(((1 as #bits) << #name::#offset))
     };
 
     let accessors = fields.iter().map(|f| {
@@ -183,17 +173,17 @@ fn generate(d: &Decl) -> syn::Result<TokenStream> {
             }
         }
     });
-    let waits = matches!(word.to_string().as_str(), "u8" | "u32" | "usize").then(|| quote! {
+    let waits = matches!(bits.to_string().as_str(), "u8" | "u32").then(|| quote! {
         /// Sleep until @cond of the value holds; woken by wake().
         #vis fn wait_until<E: crate::util::sleep::SleepEnd>(&self, how: crate::util::sleep::Sleep<E>,
                                                            mut cond: impl FnMut(#name) -> bool) -> Result<(), E> {
-            crate::locking::bitlock::wait_until(&self.0, how, |w| cond(#name::from_bits(w as #bits)))
+            crate::locking::bitlock::wait_until(&self.0, how, |w| cond(#name::from_bits(w)))
         }
 
         /// wait_until(), given up after @timeout jiffies: whether @cond held.
         #vis fn wait_until_timeout(&self, how: crate::util::sleep::Sleep, timeout: ::core::ffi::c_ulong,
                                    mut cond: impl FnMut(#name) -> bool) -> bool {
-            crate::locking::bitlock::wait_until_timeout(&self.0, how, timeout, |w| cond(#name::from_bits(w as #bits)))
+            crate::locking::bitlock::wait_until_timeout(&self.0, how, timeout, |w| cond(#name::from_bits(w)))
         }
 
         /// Wake wait_until()'s waiters, after the change they wait for.
@@ -235,31 +225,31 @@ fn generate(d: &Decl) -> syn::Result<TokenStream> {
 
         impl #atomic {
             #vis const fn new(v: #name) -> Self {
-                Self(::core::sync::atomic::#atomic_word::new(v.into_bits() as #word))
+                Self(::core::sync::atomic::#atomic_word::new(v.into_bits()))
             }
 
             #vis fn load(&self) -> #name {
-                #name::from_bits(self.0.load(#relaxed) as #bits)
+                #name::from_bits(self.0.load(#relaxed))
             }
 
             #vis fn store(&self, v: #name) {
-                self.0.store(v.into_bits() as #word, #relaxed)
+                self.0.store(v.into_bits(), #relaxed)
             }
 
             #vis fn compare_exchange(&self, current: #name, new: #name, success: #ordering, failure: #ordering)
                 -> Result<#name, #name>
             {
-                self.0.compare_exchange(current.into_bits() as #word, new.into_bits() as #word, success, failure)
-                    .map(|w| #name::from_bits(w as #bits))
-                    .map_err(|w| #name::from_bits(w as #bits))
+                self.0.compare_exchange(current.into_bits(), new.into_bits(), success, failure)
+                    .map(#name::from_bits)
+                    .map_err(#name::from_bits)
             }
 
             #vis fn fetch_update(&self, set: #ordering, fetch: #ordering, mut f: impl FnMut(#name) -> Option<#name>)
                 -> Result<#name, #name>
             {
-                self.0.fetch_update(set, fetch, |w| f(#name::from_bits(w as #bits)).map(|v| v.into_bits() as #word))
-                    .map(|w| #name::from_bits(w as #bits))
-                    .map_err(|w| #name::from_bits(w as #bits))
+                self.0.fetch_update(set, fetch, |w| f(#name::from_bits(w)).map(#name::into_bits))
+                    .map(#name::from_bits)
+                    .map_err(#name::from_bits)
             }
 
             #(#accessors)*

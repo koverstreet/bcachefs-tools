@@ -979,7 +979,7 @@ fn from_lists(input: &TokenStream) -> bool {
         [TokenTree::Punct(eq), TokenTree::Punct(gt)] if eq.as_char() == '=' && eq.spacing() == Spacing::Joint && gt.as_char() == '>')))
 }
 
-/// `atomic_bitfield! { pub struct NAME: uN [in uM] { fields } }`: a
+/// `atomic_bitfield! { pub struct NAME: uN { fields } }`: a
 /// bitfield's value, NAME, and AtomicNAME, a word of it that's atomic - see
 /// atomic_bitfield.rs.
 #[proc_macro]

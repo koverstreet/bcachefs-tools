@@ -3,8 +3,8 @@
 //! util/printbuf.rs's, here because this is the crate our macros live in.
 //!
 //! A variant prints as its own name, or as `#[label("..")]` names it: list_enum!
-//! labels the variants a list makes with the name the list gives each, as
-//! C's string tables have them. It makes
+//! labels the variants a list makes with the name the list gives each. It
+//! makes
 //!
 //! ```text
 //! pub const fn name(&self) -> &'static str

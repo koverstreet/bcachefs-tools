@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
-//! `#[derive(Init)]`: `T::init()`, a pin-init initializer for a struct C
-//! shares, for Rust to allocate it with.
+//! `#[derive(Init)]`: `T::init()`, a pin-init initializer for a struct.
 //!
-//! Every field is zeroed - as kvzalloc() left the struct, for C's own init to
-//! fill in after - but a field with `#[init(EXPR)]`, which is initialized from
-//! EXPR: a Rust type's real initializer, or a struct's own init(). So a C
-//! field costs nothing here, now or as it stays C.
+//! Every field is zeroed but a field with `#[init(EXPR)]`, which is
+//! initialized from EXPR: a type's real initializer, or a struct's own
+//! init().
 //!
 //! An initializer may fail - a percpu rwsem allocates - with a BchError, or
 //! an error that converts to one; the infallible ones convert from
@@ -14,15 +12,13 @@
 //!
 //! Forgetting one is a compile error, not a zeroed lock: a field without
 //! `#[init]` is zeroed - by place.rs's field_init(), unless a placed type
-//! lives there - which only a Zeroable type
-//! takes - C's are, a Rust type with invariants, or a struct holding one,
-//! isn't. core's atomics are zeroed as values: they're as Zeroable as their
-//! integers, but pin_init has no impl for them, and the orphan rule allows
-//! none here.
+//! lives there - which only a Zeroable type takes: plain data is, a type
+//! with invariants, or a struct holding one, isn't. core's atomics are
+//! zeroed as values: they're as Zeroable as their integers, but pin_init has
+//! no impl for them, and the orphan rule allows none here.
 //!
-//! The struct is dropped whole, after C's teardown: so a C type's Rust Drop
-//! must do nothing to what C's teardown left - printbuf's does, as
-//! printbuf_exit() leaves a printbuf empty.
+//! The struct is dropped whole, after its teardown: so a field's Drop must
+//! do nothing to what the teardown already put away.
 //!
 //! The struct needs `#[pin_data]` too, ahead of the derives - pin_init!()
 //! needs its projections - and `#[pin]` on a field whose initializer is a

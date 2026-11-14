@@ -112,12 +112,6 @@ pub trait LeValue<I>: Copy {
     fn into_int(self) -> I;
 }
 
-// ---- C's containers ------------------------------------------------------
-//
-// Laid out as the C macros make them; C is the code that uses them, Rust only
-// holds them, so they're opaque. A field of one is declared in C with its
-// macro - the generator's container_c().
-
 /// How a tagged_union! says which arm it holds: stabby's IDeterminant
 /// (docs.rs/stabby), n-way, over a layout that's given rather than chosen.
 ///

@@ -942,7 +942,7 @@ pub const BTREE_WRITE_TYPE_BITS: u32 = (cs::BtreeWriteType::NR as u32).next_powe
 
 atomic_bitfield! {
     /// struct btree's flags: the pending write's type, then the node's state.
-    pub struct BtreeNodeFlags: u32 in usize {
+    pub struct BtreeNodeFlags: u32 {
         #[bits(3)] write_type: BtreeWriteType,
         read_in_flight: bool,
         read_error: bool,
