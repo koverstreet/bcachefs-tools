@@ -21,7 +21,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use core::ffi::{c_int, CStr};
+use core::ffi::c_int;
 use core::fmt;
 use core::iter;
 use core::ptr::NonNull;
@@ -758,15 +758,7 @@ fn errcode(err: u32) -> Option<(&'static str, u32)> {
 }
 
 fn errname(err: u32) -> Option<&'static str> {
-    #[cfg(kernel)]
-    let p = unsafe { c::errname(err as c_int) };
-    #[cfg(not(kernel))]
-    let p = {
-        unsafe extern "C" { fn strerror(err: c_int) -> *const core::ffi::c_char; }
-        unsafe { strerror(err as c_int) }
-    };
-    // SAFETY: a static string, or NULL
-    (!p.is_null()).then(|| unsafe { CStr::from_ptr(p.cast()) }).and_then(|s| s.to_str().ok())
+    crate::os::kernel::errname(err as c_int)?.to_str().ok()
 }
 
 /// A bcachefs error code or errno, positive: errnos below Errcode::START (2048),

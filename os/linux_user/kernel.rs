@@ -13,6 +13,12 @@ pub fn is_vmalloc_addr<T>(_p: *const T) -> bool {
     false
 }
 
+/// Errno @err's description, strerror()'s: libc names none.
+pub fn errname(err: core::ffi::c_int) -> Option<&'static core::ffi::CStr> {
+    let p = unsafe { libc::strerror(err) };
+    (!p.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr(p) })
+}
+
 /// @buf filled from the OS's CSPRNG. It can't fail - getrandom(2) blocks
 /// until the pool is seeded - but for a broken system.
 pub fn random_bytes(buf: &mut [u8]) {

@@ -49,6 +49,12 @@ pub fn is_vmalloc_addr<T>(p: *const T) -> bool {
     unsafe { c::is_vmalloc_addr(p.cast()) }
 }
 
+/// Errno @err's name: "ENOENT".
+pub fn errname(err: core::ffi::c_int) -> Option<&'static core::ffi::CStr> {
+    let p = unsafe { c::errname(err) };
+    (!p.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr(p.cast()) })
+}
+
 pub fn msleep(ms: u32) {
     unsafe { c::msleep(ms) }
 }
