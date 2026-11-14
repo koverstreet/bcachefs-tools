@@ -254,7 +254,7 @@ fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_p
     }
 
     // prefer extents with checksums
-    let (c1, c2) = (p1.crc.csum_type != 0, p2.crc.csum_type != 0);
+    let (c1, c2) = (p1.crc.csum_type != c::CsumType::none, p2.crc.csum_type != c::CsumType::none);
     if unlikely(c1 != c2) {
         return c1;
     }

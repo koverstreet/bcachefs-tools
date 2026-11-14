@@ -773,11 +773,11 @@ fn retry_state(mut f: Fragment<'_>, ret: Result<(), BchError>) -> RetryState<'_>
 
 fn resume_target(f: &Fragment<'_>) -> Resume<'static> {
     let crc = &f.plan.pick.crc;
-    let csum_type = c::CsumType(crc.csum_type.into());
+    let csum_type = crc.csum_type.get();
     if f.plan.narrow_crcs || matches!(f.kind, Kind::Promote(..)) ||
               crc_is_compressed(crc) || csum_type.is_encryption() {
         Resume::queue(Queue::system_dfl())
-    } else if crc.csum_type != 0 {
+    } else if crc.csum_type != c::CsumType::none {
         Resume::queue(Queue::system_highpri())
     } else {
         Resume::INLINE
@@ -785,7 +785,7 @@ fn resume_target(f: &Fragment<'_>) -> Resume<'static> {
 }
 
 fn can_narrow_crc(n: &c::bch_extent_crc_unpacked) -> bool {
-    n.csum_type != 0 && n.live_size < n.uncompressed_size && !crc_is_compressed(n)
+    n.csum_type != c::CsumType::none && n.live_size < n.uncompressed_size && !crc_is_compressed(n)
 }
 
 /// @read's read of @sectors of @k, at @read_pos, traced as @e.
@@ -916,13 +916,13 @@ pub(crate) fn stale(fs: &Fs, flags: F) -> BchError {
 
 fn narrow_crcs_from_read(fs: &Fs, rbio: &Rbio, p: &Plan<'_>) {
     let crc = p.pick.crc;
-    if crc.csum_type == 0 || crc_is_compressed(&crc) {
+    if crc.csum_type == c::CsumType::none || crc_is_compressed(&crc) {
         return;
     }
 
     let mut new = c::bch_extent_crc_unpacked::default();
     if fs.rechecksum_bio(rbio.bio(), p.version, crc, None, Some(&mut new), crc.offset.into(), crc.live_size,
-                         crc.csum_type.into()).is_err() {
+                         crc.csum_type.get()).is_err() {
         bch_err!(fs, "error verifying existing checksum while narrowing checksum (memory corruption?)");
         return;
     }
@@ -1102,7 +1102,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
         Err(ret) => return Err(read_extent_pick_err(t, orig, e, flags, ret, failed)),
     };
 
-    let csum_type = c::CsumType(pick.crc.csum_type.into());
+    let csum_type = pick.crc.csum_type.get();
     if csum_type.is_encryption() && fs.encryption_key().is_none() {
         let mut m = log_msg_ratelimited!(fs);
         read_err_msg_in_attempt(t, &mut m, orig, read_pos)?;
@@ -1145,7 +1145,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
     }
 
     if orig.decodes() && (crc_is_compressed(&pick.crc) ||
-                  (pick.crc.csum_type != 0 &&
+                  (pick.crc.csum_type != c::CsumType::none &&
                    ((range.len() >> 9) != pick.crc.uncompressed_size ||
                     (csum_type.is_encryption() && flags.contains(F::user_mapped)) ||
                     flags.contains(F::must_bounce)))) {
@@ -1224,7 +1224,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
         // returning data to userspace that didn't pass the checksum check, so
         // userspace can get back mangled data to attempt its own recovery:
         let mut gfp = c::GFP_NOIO;
-        if pick.crc.csum_type != 0 && !have_failures {
+        if pick.crc.csum_type != c::CsumType::none && !have_failures {
             gfp |= c::__GFP_SKIP_ZERO;
         }
         How::Bounce((pick.crc.compressed_size << 9) as usize, gfp)
@@ -1533,7 +1533,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
     let dst = p.range;
     let mut crc = p.pick.crc;
     let mut nonce = extent_nonce(p.version, &crc);
-    let csum_type = c::CsumType(crc.csum_type.into());
+    let csum_type = crc.csum_type.get();
 
     let csum = fs.checksum_range(csum_type, nonce, src);
     let csum_good = csum == p.pick.crc.csum || no_data_io;
@@ -1559,7 +1559,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
     }
 
     let decrypt = |src: BioRange<'_>, crc: &c::bch_extent_crc_unpacked, nonce: Nonce| -> Result<(), BchError> {
-        if c::CsumType(crc.csum_type.into()).is_encryption() {
+        if crc.csum_type.get().is_encryption() {
             fs.encrypt_range(nonce, src).map_err(|_| fs.err(err::BCH_ERR_data_read_decrypt_err))
         } else {
             Ok(())

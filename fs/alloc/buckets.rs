@@ -40,7 +40,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, TypeInfo, bch_enum, BitfieldMembers};
 use core::cell::Cell;
 use nestify::nest;
-use crate::format::{Bpos, Btree, DataType, BkeyType};
+use crate::format::{Bpos, Btree, CompressionType, DataType, BkeyType};
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -646,14 +646,14 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
     let mut nr_required = 1;
 
     // for each run of pointers of one compression type
-    let compression_add = |type_: u8, mut v: accounting::CompressionCounters<i64>| {
+    let compression_add = |type_: CompressionType, mut v: accounting::CompressionCounters<i64>| {
         if !insert {
             v = v.map(i64::wrapping_neg);
         }
-        accounting::add(t, accounting::Compression { type_ }, v, gc)
+        accounting::add(t, accounting::Compression { type_: type_.0 as u8 }, v, gc)
     };
     let one_extent = accounting::CompressionCounters { nr_extents: 1, ..Default::default() };
-    let mut compression_type = 0;
+    let mut compression_type = CompressionType::none;
     let mut compression = one_extent;
 
     for d in k.ptrs_decoded(fs) {
@@ -678,12 +678,12 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
             nr_required = 0;
         }
 
-        if compression_type != 0 && compression_type != p.crc.compression_type {
+        if compression_type != CompressionType::none && p.crc.compression_type != compression_type {
             compression_add(compression_type, compression)?;
             compression = one_extent;
         }
-        compression_type = p.crc.compression_type;
-        if compression_type != 0 {
+        compression_type = p.crc.compression_type.get();
+        if compression_type != CompressionType::none {
             compression.uncompressed += i64::from(p.crc.uncompressed_size);
             compression.compressed += i64::from(p.crc.compressed_size);
         }
@@ -701,7 +701,7 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
         }, gc)?;
     }
 
-    if compression_type != 0 {
+    if compression_type != CompressionType::none {
         compression_add(compression_type, compression)?;
     }
 

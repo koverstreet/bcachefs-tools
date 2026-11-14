@@ -88,7 +88,7 @@ impl Mapping {
                 if d.p.ptr.unwritten() != 0 {
                     flags |= c::FIEMAP_EXTENT_UNWRITTEN;
                 }
-                if d.p.crc.compression_type != 0 {
+                if d.p.crc.compression_type != c::CompressionType::none {
                     flags |= c::FIEMAP_EXTENT_ENCODED;
                 } else {
                     offset += u64::from(d.p.crc.offset);

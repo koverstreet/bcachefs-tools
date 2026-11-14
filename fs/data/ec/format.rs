@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::Le16;
+use crate::types::{Le8, Le16};
 use cstruct_macros::{bitfield, whole, MaybeZeroable, Plain, TypeInfo, BitfieldMembers};
 use nestify::nest;
 
@@ -30,7 +30,7 @@ nest! {
         pub nr_redundant: u8,
 
         pub csum_granularity_bits: u8,
-        pub csum_type: u8,
+        pub csum_type: Le8<c::CsumType>,
 
         /*
          * XXX: targets should be 16 bits - fix this if we ever do a stripe_v2

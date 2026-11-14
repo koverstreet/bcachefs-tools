@@ -70,7 +70,7 @@ fn extent_good_in_buf(fs: &Fs, k: BkeySC<'_>, s: BkeySC<'_, c::Stripe<Validated>
 
     let p = d.p;
     let offset = p.ptr.offset() - sp.offset();
-    if p.crc.csum_type == 0 ||
+    if p.crc.csum_type == c::CsumType::none ||
        offset < b.offset.into() ||
        offset + u64::from(p.crc.compressed_size) > u64::from(b.offset + b.size) {
         return false;
@@ -79,7 +79,7 @@ fn extent_good_in_buf(fs: &Fs, k: BkeySC<'_>, s: BkeySC<'_, c::Stripe<Validated>
     // within the block's buffer, as above
     let start = ((offset - u64::from(b.offset)) << 9) as usize;
     let extent = &b.block(block as usize)[start..start + ((p.crc.compressed_size as usize) << 9)];
-    fs.checksum(c::CsumType(p.crc.csum_type.into()), extent_nonce(k.k.bversion, &p.crc), extent) == p.crc.csum
+    fs.checksum(p.crc.csum_type.get(), extent_nonce(k.k.bversion, &p.crc), extent) == p.crc.csum
 }
 
 /// Damage recorded against every extent in @blocks of stripe @s - found by
@@ -570,7 +570,7 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, trans: &TransGuard<'_>, ca: 
     let n = if ret.is_ok() { &stats.sectors_error_corrected } else { &stats.sectors_error_uncorrected };
     n.fetch_add(r.bad_sectors as i64, Relaxed);
 
-    let ty = c::CsumType(s.v().csum_type.into());
+    let ty = s.v().csum_type.get();
     let mut msg = log_msg_ratelimited!(fs);
     write!(msg, "scrub: stripe block {block} on {}: {} sectors don't match the stripe's checksums, expected ",
            ca, r.bad_sectors);

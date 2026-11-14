@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{Le16, Le32, Le64};
+use crate::types::{Le8, Le16, Le32, Le64};
 use cstruct_macros::{bitfield, bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 use nestify::nest;
 use crate::format::Bpos;
@@ -155,8 +155,8 @@ pub struct bch_extent_crc32 {
     uncompressed_size_raw: u7,
     offset:                u7,
     unused_raw:            u1,
-    csum_type:             u4,
-    compression_type:      u4,
+    #[bits(4)] csum_type:  c::CsumType,
+    #[bits(4)] compression_type: c::CompressionType,
     csum:                  u32,
 }
 
@@ -176,8 +176,8 @@ nest! {
             uncompressed_size_raw: u9,
             offset:                u9,
             nonce:                 u10,
-            csum_type:             u4,
-            compression_type:      u4,
+            #[bits(4)] csum_type:  c::CsumType,
+            #[bits(4)] compression_type: c::CompressionType,
             csum_hi:               u16,
         },
         pub csum_lo: u64,
@@ -200,8 +200,8 @@ nest! {
             uncompressed_size_raw: u13,
             offset:                u13,
             nonce:                 u13,
-            csum_type:             u4,
-            compression_type:      u4,
+            #[bits(4)] csum_type:  c::CsumType,
+            #[bits(4)] compression_type: c::CompressionType,
         },
         pub csum: c::bch_csum,
     }
@@ -375,7 +375,7 @@ pub struct InlineData {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InlineDataCsum {
-    pub csum_type: u8,
+    pub csum_type: Le8<c::CsumType>,
     pub flags: u8,
     pub pad: [u8; 2],
     pub offset: Le32,

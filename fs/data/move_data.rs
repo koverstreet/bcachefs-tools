@@ -546,7 +546,7 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(),
         if k.k.key_type() != BkeyType::btree_ptr_v2 {
             if let Some(kp) = k.arm::<Ptrs>() {
                 if let Some(d) = kp.ptrs_decoded(t.fs()).find(|d| u32::from(d.p.ptr.dev()) == dev) {
-                    if d.p.crc.csum_type == 0 {
+                    if d.p.crc.csum_type == c::CsumType::none {
                         return Ok(false);
                     }
                 }

@@ -22,7 +22,7 @@ use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
-use crate::types::c_default;
+use crate::types::{c_default, Le8};
 use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits};
 
 #[repr(C, align(8))]
@@ -119,8 +119,8 @@ pub struct bch_extent_crc_unpacked {
     pub uncompressed_size: u32,
     pub live_size: u32,
 
-    pub csum_type: u8,
-    pub compression_type: u8,
+    pub csum_type: Le8<c::CsumType>,
+    pub compression_type: Le8<c::CompressionType>,
 
     pub offset: u16,
 
@@ -495,10 +495,10 @@ fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &c::extent_ptr_decoded, r: &c::ex
             lc.csum_type == rc.csum_type &&
             lc.nonce == rc.nonce &&
             !crc_is_compressed(lc) &&
-            c::CsumType(lc.csum_type.into()).mergeable() &&
+            lc.csum_type.get().mergeable() &&
             u32::from(lc.offset) + lc.live_size == lc.compressed_size &&
             rc.offset == 0 &&
-            (lc.csum_type == 0 ||
+            (lc.csum_type == c::CsumType::none ||
              lc.uncompressed_size + rc.uncompressed_size <= fs.opts().encoded_extent_max.get() >> 9),
     }
 }
@@ -570,7 +570,7 @@ pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
                 // The csum type is mergeable, as merge() panics if it isn't:
                 // ptrs_mergeable() checked it, with the pointer after this
                 // entry - validate has one after every crc entry
-                cl.csum = c::CsumType(cl.csum_type.into())
+                cl.csum = cl.csum_type.get()
                     .merge(cl.csum, cr.csum, (cr.uncompressed_size << 9) as usize);
                 cl.uncompressed_size += cr.uncompressed_size;
                 cl.compressed_size += cr.compressed_size;

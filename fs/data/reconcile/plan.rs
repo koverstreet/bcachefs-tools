@@ -123,8 +123,8 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     if !c::bch_compression_opt::valid(rb.background_compression()) {
         rb.set_background_compression(opts.background_compression);
     }
-    let csum_type = fs.data_checksum_type_rb(&rb).0 as u8;
-    let compression_type = c::bch_compression_opt::to_type(rb.background_compression(), fs).0 as u8;
+    let csum_type = fs.data_checksum_type_rb(&rb);
+    let compression_type = c::bch_compression_opt::to_type(rb.background_compression(), fs);
 
     // Before the parking below, which doesn't need them: they're only read
     let (kill, kill_ec) = brand(kp, |kb| -> Result<_, BchError> {

@@ -396,7 +396,7 @@ fn z_stream(src: *const u8, src_len: usize, dst: *mut u8, dst_len: usize,
 pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
     -> Result<(), BchError>
 {
-    let t = CompressionType(crc.compression_type.into());
+    let t = crc.compression_type.get();
     let opt = type_to_opt(t);
 
     /*
@@ -716,7 +716,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
     let crc = c::bch_extent_crc_unpacked {
         compressed_size:   (dst.len() >> 9) as u32,
         uncompressed_size: (src_len >> 9) as u32,
-        compression_type:  t.0 as u8,
+        compression_type:  t.into(),
         ..Default::default()
     };
     let check = bounce_alloc(fs, src_len, WRITE);
@@ -745,7 +745,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
 #[inline(never)]
 pub(crate) unsafe fn bio_compress(fs: &Fs, dst: *mut c::bio, dst_len: &mut usize,
                                   src: *mut c::bio, src_len: &mut usize, compression_opt: c_uint,
-                                  write_pos: Bpos, bounce_source: bool) -> c_uint {
+                                  write_pos: Bpos, bounce_source: bool) -> CompressionType {
     // SAFETY: the caller's - their sizes ours to clamp, and put back
     let (dst_size, src_size) = unsafe { ((*dst).bi_iter.bi_size, (*src).bi_iter.bi_size) };
     // Don't consume more than encoded_extent_max from @src, or make more than it:
@@ -778,7 +778,7 @@ pub(crate) unsafe fn bio_compress(fs: &Fs, dst: *mut c::bio, dst_len: &mut usize
 
     // SAFETY: as above, the references gone
     unsafe { ((*dst).bi_iter.bi_size, (*src).bi_iter.bi_size) = (dst_size, src_size) };
-    t.0
+    t
 }
 
 // ── Setup ────────────────────────────────────────────────────────────────

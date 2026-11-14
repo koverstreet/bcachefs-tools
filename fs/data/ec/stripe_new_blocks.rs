@@ -380,7 +380,7 @@ pub(crate) fn new_stripe_key(fs: &Fs, key: &mut StripeKey, algorithm: u8, nr_dat
     v.nr_blocks = nr_data + nr_parity;
     v.nr_redundant = nr_parity;
     v.csum_granularity_bits = (fs.opts().encoded_extent_max.get() >> 9).ilog2() as u8;
-    v.csum_type = c::CsumType::crc32c.0 as u8;
+    v.csum_type.set(c::CsumType::crc32c);
     v.disk_label = disk_label;
     let can_widen = v.want_can_widen(fs.ec_rw_member_devs_nr(disk_label, sectors),
                                      fs.opts().ec_max_data_blocks.get().into());

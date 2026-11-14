@@ -435,8 +435,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     /// Whether it has data that didn't compress - a crc of compression type
     /// incompressible: bch2_bkey_is_incompressible().
     fn is_incompressible(&self, fs: &Fs) -> bool {
-        let incompressible = CompressionType::incompressible.0 as u8;
-        self.crcs(fs).any(|crc| crc.compression_type == incompressible)
+        self.crcs(fs).any(|crc| crc.compression_type == CompressionType::incompressible)
     }
 
     /// If @src has data that didn't compress, so does this, copied from it:
@@ -453,7 +452,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
             return;
         }
 
-        let (none, incompressible) = (CompressionType::none.0 as u8, CompressionType::incompressible.0 as u8);
+        let (none, incompressible) = (CompressionType::none, CompressionType::incompressible);
         for e in self.extent_entries_mut(fs) {
             match e {
                 ExtentEntryMut::crc32(e) if e.compression_type() == none => e.set_compression_type(incompressible),
@@ -855,14 +854,14 @@ pub(crate) fn crc_unpack(k: &c::bkey, entry: ExtentEntry<'_>) -> Option<c::bch_e
         Le64::new(u64::from_le_bytes(w))
     }
 
-    let unpacked = |csum_type: u8, compression_type: u8, compressed_raw: u16,
+    let unpacked = |csum_type: c::CsumType, compression_type: CompressionType, compressed_raw: u16,
                     uncompressed_raw: u16, offset: u16, nonce: u16, csum| {
         c::bch_extent_crc_unpacked {
             compressed_size:   u32::from(compressed_raw) + 1,
             uncompressed_size: u32::from(uncompressed_raw) + 1,
             live_size:         k.size,
-            csum_type,
-            compression_type,
+            csum_type:         csum_type.into(),
+            compression_type:  compression_type.into(),
             offset,
             nonce,
             csum,
@@ -899,7 +898,7 @@ fn crc_size_raw<T: TryFrom<u32>>(size: u32) -> Option<T> {
 
 /// @crc's checksum type's size in bytes, if it's one this version knows.
 fn crc_csum_bytes(crc: &c::bch_extent_crc_unpacked) -> Option<u32> {
-    c::CsumType(u32::from(crc.csum_type)).bytes()
+    crc.csum_type.get().bytes()
 }
 
 /// The checksum's bytes, lo's then hi's - where a packed entry's come from.
@@ -943,8 +942,8 @@ impl c::bch_extent_crc32 {
             .with_compressed_size_raw_checked(crc_size_raw(crc.compressed_size)?).ok()?
             .with_uncompressed_size_raw_checked(crc_size_raw(crc.uncompressed_size)?).ok()?
             .with_offset_checked(crc.offset.try_into().ok()?).ok()?
-            .with_csum_type_checked(crc.csum_type).ok()?
-            .with_compression_type_checked(crc.compression_type).ok()?
+            .with_csum_type_checked(crc.csum_type.get()).ok()?
+            .with_compression_type_checked(crc.compression_type.get()).ok()?
             .with_csum_checked(u32::from_ne_bytes([csum[0], csum[1], csum[2], csum[3]])).ok()
     }
 }
@@ -963,8 +962,8 @@ impl c::bch_extent_crc64 {
                 .with_uncompressed_size_raw_checked(crc_size_raw(crc.uncompressed_size)?).ok()?
                 .with_offset_checked(crc.offset).ok()?
                 .with_nonce_checked(crc.nonce).ok()?
-                .with_csum_type_checked(crc.csum_type).ok()?
-                .with_compression_type_checked(crc.compression_type).ok()?
+                .with_csum_type_checked(crc.csum_type.get()).ok()?
+                .with_compression_type_checked(crc.compression_type.get()).ok()?
                 .with_csum_hi_checked(u16::from_ne_bytes([csum[8], csum[9]])).ok()?,
             csum_lo: u64::from_ne_bytes(csum[..8].try_into().unwrap()),
         })
@@ -983,8 +982,8 @@ impl c::bch_extent_crc128 {
                 .with_uncompressed_size_raw_checked(crc_size_raw(crc.uncompressed_size)?).ok()?
                 .with_offset_checked(crc.offset).ok()?
                 .with_nonce_checked(crc.nonce).ok()?
-                .with_csum_type_checked(crc.csum_type).ok()?
-                .with_compression_type_checked(crc.compression_type).ok()?,
+                .with_csum_type_checked(crc.csum_type.get()).ok()?
+                .with_compression_type_checked(crc.compression_type.get()).ok()?,
             csum: crc.csum,
         })
     }
@@ -1007,13 +1006,13 @@ impl ExtentEntryMut<'_> {
 
 /// Whether @crc's data is compressed - incompressible isn't: crc_is_compressed().
 pub fn crc_is_compressed(crc: &c::bch_extent_crc_unpacked) -> bool {
-    crc.compression_type as u32 != CompressionType::none.0 &&
-        crc.compression_type as u32 != CompressionType::incompressible.0
+    crc.compression_type != CompressionType::none &&
+        crc.compression_type != CompressionType::incompressible
 }
 
 /// The nonce of @crc's data, in an extent of version @version: extent_nonce().
 pub fn extent_nonce(version: Bversion, crc: &c::bch_extent_crc_unpacked) -> Nonce {
-    let compression_type = if crc_is_compressed(crc) { u32::from(crc.compression_type) } else { 0 };
+    let compression_type = if crc_is_compressed(crc) { crc.compression_type.get().0 } else { 0 };
     let size = if compression_type != 0 { crc.uncompressed_size } else { 0 };
     let (lo, hi) = (version.lo, version.hi);
     let nonce = Nonce {
@@ -1031,7 +1030,7 @@ pub fn extent_nonce(version: Bversion, crc: &c::bch_extent_crc_unpacked) -> Nonc
 /// Whether @crc's data is checksummed or compressed - read back whole, so
 /// bounded by encoded_extent_max.
 pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
-    crc.csum_type as u32 != c::CsumType::none.0 || crc_is_compressed(crc)
+    crc.csum_type != c::CsumType::none || crc_is_compressed(crc)
 }
 
 /// Drop @k's stale cached pointers, if it has any, as an update through @iter:
@@ -1195,8 +1194,8 @@ mod tests {
             compressed_size:   size,
             uncompressed_size: size,
             live_size:         size - u32::from(offset),
-            csum_type:         csum_type.0 as u8,
-            compression_type:  0,
+            csum_type:         csum_type.into(),
+            compression_type:  CompressionType::none.into(),
             offset,
             nonce,
             csum: c::bch_csum { lo: Le64::new(u64::from_le_bytes(b[..8].try_into().unwrap())),
@@ -1256,13 +1255,13 @@ mod tests {
                    [24, 0x5566_7788, 0x1122_3344, 0x1000_009a]);
 
         // incompressible counts as not compressed
-        crc.compression_type = 5;
+        crc.compression_type.set(CompressionType::incompressible);
         assert_eq!(words(extent_nonce(version, &crc)),
                    [24, 0x5566_7788, 0x1122_3344, 0x1000_009a]);
 
         // lz4 (3), 256 sectors uncompressed: the size at bit 22, the type at
         // bit 24 of the last word, under the extent domain at 28
-        crc.compression_type = 3;
+        crc.compression_type.set(CompressionType::lz4);
         crc.uncompressed_size = 256;
         assert_eq!(words(extent_nonce(version, &crc)),
                    [(256 << 22) + 24, 0x5566_7788, 0x1122_3344, 0x1300_009a]);

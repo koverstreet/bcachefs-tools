@@ -308,13 +308,13 @@ pub(crate) fn block_checksum(s: BkeySC<'_, c::Stripe<Validated>>, b: &StripeBuf,
 
     let start = ((offset - b.offset) << 9) as usize;
     let granule = &b.block(block as usize)[start..start + ((len << 9) as usize)];
-    c::CsumType(sh.csum_type.into()).checksum_unkeyed(granule)
+    sh.csum_type.checksum_unkeyed(granule)
 }
 
 /// Every block's checksums, into @key, from a buffer of the whole stripe.
 pub fn generate_checksums(key: &mut StripeKey, buf: &StripeBuf) {
     let sh = buf.shape(key.stripe());
-    if sh.csum_type == 0 {
+    if sh.csum_type == c::CsumType::none {
         return;
     }
 
@@ -334,7 +334,7 @@ pub fn generate_checksums(key: &mut StripeKey, buf: &StripeBuf) {
 /// device's.
 fn validate_checksums(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, data_only: bool, e: usize) {
     let sh = buf.shape(s);
-    if sh.csum_type == 0 {
+    if sh.csum_type == c::CsumType::none {
         return;
     }
 
@@ -383,7 +383,7 @@ pub fn blocks_good(s: BkeySC<'_, c::Stripe<Validated>>, buf: &StripeBuf, mask: u
 
     (0..u32::from(v.nr_blocks)).filter(|i| mask & 1 << i != 0).all(|i| {
         buf.err[PRE][i as usize].is_none() &&
-            (v.csum_type == 0 ||
+            (v.csum_type == c::CsumType::none ||
              (start..end).step_by(granularity as usize).all(|offset| {
                  csums.get(i, offset >> v.csum_granularity_bits) == block_checksum(s, buf, i, offset)
              }))
@@ -474,7 +474,7 @@ fn errs_to_text_one(out: &mut Printbuf, fs: &Fs, s: BkeySC<'_, c::Stripe<Validat
         write!(out, "block {i} {name}: {error}");
 
         if error == Errcode::BCH_ERR_stripe_read_csum_err.into() {
-            let ty = c::CsumType(v.csum_type.into());
+            let ty = v.csum_type.get();
             write!(out, " expected ");
             buf.csum_good[i].to_text(out, ty);
             write!(out, " got ");

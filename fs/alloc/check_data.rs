@@ -136,7 +136,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
         .expect("a pointer to the device whose replica it is");
     let is_btree_ptr = k.k.is_btree_ptr();
 
-    if !is_btree_ptr && p.crc.csum_type == 0 {
+    if !is_btree_ptr && p.crc.csum_type == c::CsumType::none {
         return Ok(false);
     }
 
@@ -166,7 +166,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     let good = if is_btree_ptr {
         node_replica_good(fs, k.into(), buf, &mut why)
     } else {
-        let ty = c::CsumType(p.crc.csum_type.into());
+        let ty = p.crc.csum_type.get();
         let csum = fs.checksum(ty, extent_nonce(k.k.bversion, &p.crc), &buf[..bytes]);
         if csum != p.crc.csum {
             csum_err_msg(&mut why, ty, p.crc.csum, csum);

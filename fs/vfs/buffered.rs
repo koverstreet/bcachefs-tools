@@ -155,7 +155,8 @@ impl ReadHooks for PagecacheRead {
         let Some(folios) = self.folios else { return Ok(()) };
         let folios = unsafe { &mut *folios.as_ptr() };
         let get_more = k.arm::<Ptrs>()
-            .is_some_and(|kp| kp.crcs(read.fs()).any(|crc| crc.csum_type != 0 || crc.compression_type != 0));
+            .is_some_and(|kp| kp.crcs(read.fs()).any(|crc| crc.csum_type != c::CsumType::none ||
+                                                         crc.compression_type != c::CompressionType::none));
         let mut bio = read.bio.lend();
 
         loop {

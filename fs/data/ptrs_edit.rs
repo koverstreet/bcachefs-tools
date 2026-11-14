@@ -246,7 +246,7 @@ pub(crate) fn crc_entry(crc: &c::bch_extent_crc_unpacked, min: c::ExtentEntryTyp
         words(plain_bytes(&e))
     } else {
         let e = c::bch_extent_crc128::pack(crc)
-            .unwrap_or_else(|| panic!("a crc no entry holds: csum type {}", crc.csum_type));
+            .unwrap_or_else(|| panic!("a crc no entry holds: csum type {}", crc.csum_type.get()));
         words(plain_bytes(&e))
     }
 }

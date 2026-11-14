@@ -103,7 +103,7 @@ nest! {
 
         #[members]
         #[init(bch_write_op_bits::new()
-               .with_csum_type(fs.data_checksum_type(&opts).0 as u8)
+               .with_csum_type(fs.data_checksum_type(&opts))
                .with_compression_opt(opts.compression)
                .with_watermark(c::Watermark::normal as u8))]
         #>[bitfield(u32, repr = NeBytes<3>, from = NeBytes::<3>::from_u32, into = NeBytes::<3>::to_u32)]
@@ -118,7 +118,7 @@ nest! {
              * Read these, not @opts, when deciding what to produce.
              */
             compression_opt: u8,
-            csum_type:       u4,
+            #[bits(4)] csum_type: c::CsumType,
 
             /*
              * Replicas this write will place - not @res.nr_replicas, which is what

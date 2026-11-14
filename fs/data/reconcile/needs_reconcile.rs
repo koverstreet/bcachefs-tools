@@ -85,7 +85,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
             let p = &d.p;
             let dev = u32::from(p.ptr.dev());
 
-            incompressible |= p.crc.compression_type == CompressionType::incompressible.0 as u8;
+            incompressible |= p.crc.compression_type == CompressionType::incompressible;
             unwritten      |= p.ptr.unwritten() != 0;
 
             // A stripe block counts for nothing on a device of durability 0 -
@@ -99,10 +99,10 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
             };
 
             if !poisoned && !btree && p.ptr.cached() == 0 {
-                if p.crc.csum_type != csum_type.0 as u8 {
+                if p.crc.csum_type != csum_type {
                     need(&mut r, o::data_checksum);
                 }
-                if p.crc.compression_type != compression_type.0 as u8 {
+                if p.crc.compression_type != compression_type {
                     need(&mut r, o::background_compression);
                 }
             }

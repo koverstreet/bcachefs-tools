@@ -122,12 +122,11 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
             }
             ExtentEntry::crc32(_) | ExtentEntry::crc64(_) | ExtentEntry::crc128(_) => {
                 let crc = crc_unpack(k.k, e).expect("a crc");
-                let csum_type = c::CsumType(crc.csum_type.into());
+                let csum_type = crc.csum_type.get();
 
                 bkey_fsck_err_on!(v, !csum_type.valid(fs), id::ptr_crc_csum_type_unknown,
                                   "invalid checksum type")?;
-                bkey_fsck_err_on!(v, u32::from(crc.compression_type) >=
-                                     CompressionType::NR,
+                bkey_fsck_err_on!(v, crc.compression_type.get().0 >= CompressionType::NR,
                                   id::ptr_crc_compression_type_unknown, "invalid compression type")?;
 
                 bkey_fsck_err_on!(v, u32::from(crc.offset).wrapping_add(crc.live_size) > crc.uncompressed_size,
@@ -235,9 +234,9 @@ fn csum_word_raw(w: Le64) -> u64 {
 fn crc_unpacked_to_text(out: &mut Printbuf, crc: &c::bch_extent_crc_unpacked) {
     write!(out, "c_size {} size {} offset {} nonce {} csum {} {:x}:{:x}  compress ",
            crc.compressed_size, crc.uncompressed_size, crc.offset, crc.nonce,
-           c::CsumType(crc.csum_type.into()),
+           crc.csum_type.get(),
            csum_word_raw(crc.csum.hi), csum_word_raw(crc.csum.lo));
-    CompressionType(crc.compression_type.into()).to_text(out);
+    crc.compression_type.get().to_text(out);
 }
 
 /// A key with pointers' entries, a line each: bch2_bkey_ptrs_to_text(). It

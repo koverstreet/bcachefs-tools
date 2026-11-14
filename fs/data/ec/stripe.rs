@@ -55,7 +55,7 @@ impl c::Stripe {
 
     /// A checksum type this version doesn't know is an error, not a guess.
     pub fn csum_type_check(&self, fs: &Fs) -> Result<(), BchError> {
-        if u32::from(self.csum_type) >= c::CsumType::NR {
+        if self.csum_type.get().0 >= c::CsumType::NR {
             return fs.throw(Errcode::BCH_ERR_stripe_unknown_csum_type);
         }
         Ok(())
@@ -77,7 +77,7 @@ impl c::Stripe {
     /// A checksum's size - None for a type this version doesn't know:
     /// stripe_csum_bytes().
     fn csum_bytes(&self) -> Option<u32> {
-        c::CsumType(self.csum_type.into()).bytes()
+        self.csum_type.get().bytes()
     }
 
     fn ptrs_bytes(&self) -> usize {
@@ -284,7 +284,7 @@ impl BkeyOps for c::Stripe {
 
         // nr_redundant past nr_blocks is damage, printed as is
         write!(out, "algo {} sectors {} blocks {}:{} csum {} gran ",
-               s.algorithm(), s.sectors.get(), s.nr_data(), s.nr_redundant, c::CsumType(s.csum_type.into()));
+               s.algorithm(), s.sectors.get(), s.nr_data(), s.nr_redundant, s.csum_type.get());
         match 1u64.checked_shl(s.csum_granularity_bits.into()) {
             Some(gran) => write!(out, "{gran}"),
             None => write!(out, "(invalid shift {})", s.csum_granularity_bits),
@@ -452,7 +452,7 @@ pub(crate) struct Shape {
     /// unsigned, as C's - nr_redundant past nr_blocks is damage
     pub(crate) nr_data:               u32,
     pub(crate) sectors:               u32,
-    pub(crate) csum_type:             u8,
+    pub(crate) csum_type:             c::CsumType,
     pub(crate) csum_granularity_bits: u8,
     pub(crate) csums_per_device:      u32,
 }
@@ -464,7 +464,7 @@ pub(crate) fn shape(s: BkeySC<'_, c::Stripe<Validated>>) -> Shape {
         nr_redundant:          v.nr_redundant.into(),
         nr_data:               v.nr_data(),
         sectors:               v.sectors.get().into(),
-        csum_type:             v.csum_type,
+        csum_type:             v.csum_type.get(),
         csum_granularity_bits: v.csum_granularity_bits,
         csums_per_device:      v.csums_per_device(),
     }

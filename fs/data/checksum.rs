@@ -460,10 +460,10 @@ impl Fs {
     pub fn rechecksum_bio(&self, bio: &Bio, version: Bversion, crc_old: c::bch_extent_crc_unpacked,
                           crc_a: Option<&mut c::bch_extent_crc_unpacked>,
                           crc_b: Option<&mut c::bch_extent_crc_unpacked>,
-                          len_a: u32, len_b: u32, new_csum_type: u32) -> Result<(), BchError> {
+                          len_a: u32, len_b: u32, new_csum_type: c::CsumType) -> Result<(), BchError> {
         use crate::data::ptrs::{crc_is_compressed, extent_nonce};
         let fs = self;
-        let (old_ty, new_ty) = (c::CsumType(crc_old.csum_type.into()), c::CsumType(new_csum_type));
+        let (old_ty, new_ty) = (crc_old.csum_type.get(), new_csum_type);
         let sectors = bio.raw().bi_iter.bi_size >> 9;
 
         assert!(len_a + len_b <= sectors, "rechecksumming {len_a} + {len_b} sectors of a bio of {sectors}");
@@ -508,7 +508,7 @@ impl Fs {
         for (crc, len, csum) in splits {
             if let Some(crc) = crc {
                 *crc = c::bch_extent_crc_unpacked {
-                    csum_type:          new_csum_type as u8,
+                    csum_type:          new_ty.into(),
                     compression_type:   crc_old.compression_type,
                     compressed_size:    len,
                     uncompressed_size:  len,

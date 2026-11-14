@@ -320,7 +320,7 @@ impl c::data_update_opts {
     fn checksummed_and_non_checksummed_handling(&mut self, fs: &Fs, k: BkeySC<'_>) {
         let Some(kp) = k.arm::<Ptrs>() else { return };
 
-        let paranoia = self.bits.checksum_paranoia() || kp.ptrs_decoded(fs).any(|d| d.p.crc.csum_type == 0);
+        let paranoia = self.bits.checksum_paranoia() || kp.ptrs_decoded(fs).any(|d| d.p.crc.csum_type == c::CsumType::none);
         self.bits.set_checksum_paranoia(paranoia);
         if !paranoia {
             return;
@@ -636,15 +636,15 @@ impl c::data_update {
                 // An encrypted extent must stay encrypted - but only its class
                 // is forced, not its exact type: reconcile must be able to
                 // change the MAC width, or a wide_macs change livelocks it
-                let csum = c::CsumType(p.crc.csum_type.into());
+                let csum = p.crc.csum_type.get();
                 if csum.is_encryption() {
                     self.op.nonce = (u32::from(p.crc.nonce) + u32::from(p.crc.offset)) as u16;
-                    if !c::CsumType(self.op.bits.csum_type().into()).is_encryption() {
-                        self.op.bits.set_csum_type(p.crc.csum_type);
+                    if !self.op.bits.csum_type().is_encryption() {
+                        self.op.bits.set_csum_type(csum);
                     }
                 }
 
-                if u32::from(p.crc.compression_type) == CompressionType::incompressible.0 {
+                if p.crc.compression_type == CompressionType::incompressible {
                     self.op.bits.set_incompressible(1);
                 }
 
@@ -844,7 +844,7 @@ impl c::data_update {
                 // what was read is at the buffer's start, whatever the bio's
                 // iter was left at
                 let data = self.rbio.bio().range().take(crc.compressed_size << 9);
-                crc.csum = fs.checksum_range(c::CsumType(crc.csum_type.into()), nonce, data);
+                crc.csum = fs.checksum_range(crc.csum_type.get(), nonce, data);
                 ret = Ok(());
             }
         }

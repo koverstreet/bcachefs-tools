@@ -301,7 +301,7 @@ pub struct Scrubbed {
 pub fn scrub_block(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -> Result<Scrubbed, BchError> {
     let sh = shape(s);
     let mut ret = Scrubbed { bad_sectors: 0, want: Default::default(), got: Default::default() };
-    if sh.csum_type == 0 {
+    if sh.csum_type == c::CsumType::none {
         return Ok(ret);
     }
     let granularity = 1u32 << sh.csum_granularity_bits;
