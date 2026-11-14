@@ -207,6 +207,17 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError
     NonNull::new(unsafe { krealloc_node_align(p.cast(), new, 1, gfp, NUMA_NO_NODE) }.cast()).ok_or(AllocError)
 }
 
+/// krealloc()'s, kvmalloc()'d: what C's kvfree() takes back.
+///
+/// # Safety
+/// @p is null, or kvmalloc()'s and not used after unless this fails.
+pub unsafe fn kvrealloc_unsized(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
+    use kernel::bindings::{kvrealloc_node_align, GFP_KERNEL, NUMA_NO_NODE};
+
+    let gfp = current_gfp_context_raw(GFP_KERNEL);
+    NonNull::new(unsafe { kvrealloc_node_align(p.cast(), new, 1, gfp, NUMA_NO_NODE) }.cast()).ok_or(AllocError)
+}
+
 /// @size bytes kmalloc()'d, uninitialized: for a buffer of no size anyone
 /// keeps - C's kfree(), or kfree_unsized(), takes it back.
 pub fn kmalloc(size: usize) -> Result<NonNull<u8>, AllocError> {

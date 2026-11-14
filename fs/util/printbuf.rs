@@ -5,7 +5,7 @@ use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::{krealloc, kvrealloc_unsized, KVVec};
 use crate::os::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
@@ -814,28 +814,14 @@ impl Printbuf {
     }
 }
 
-/// krealloc(), or kvrealloc() if @vmalloc, as the task's memalloc scope says:
-/// what C's kfree() or kvfree() takes back. Userspace's are both krealloc().
+/// krealloc(), or kvrealloc() if @vmalloc: what C's kfree() or kvfree() takes
+/// back.
 ///
 /// # Safety
 /// @p is null, or this's, and not used after unless this fails.
 unsafe fn realloc(p: *mut c_char, size: usize, vmalloc: bool) -> *mut c_char {
-    #[cfg(kernel)]
-    unsafe {
-        use kernel::bindings::{krealloc_node_align, kvrealloc_node_align, GFP_KERNEL, NUMA_NO_NODE};
-
-        let gfp = crate::util::alloc::current_gfp_context_raw(GFP_KERNEL);
-        if vmalloc {
-            kvrealloc_node_align(p.cast(), size, 1, gfp, NUMA_NO_NODE).cast()
-        } else {
-            krealloc_node_align(p.cast(), size, 1, gfp, NUMA_NO_NODE).cast()
-        }
-    }
-    #[cfg(not(kernel))]
-    {
-        let _ = vmalloc;
-        unsafe { bcachefs_shim::alloc::krealloc(p.cast(), size, c::GFP_KERNEL) }.cast()
-    }
+    let q = unsafe { if vmalloc { kvrealloc_unsized(p.cast(), size) } else { krealloc(p.cast(), size) } };
+    q.map_or(core::ptr::null_mut(), |q| q.as_ptr().cast())
 }
 
 /// @bdev's name: os::blkdev::prt_name()'s. NULL is "(null)", as %pg prints

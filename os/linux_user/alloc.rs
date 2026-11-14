@@ -1,11 +1,35 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Allocation, for userspace, for util/alloc.rs: bcachefs-shim's copy of the
-//! kernel::alloc API, over std's allocator, which takes no flags and no
-//! memalloc scope. What C's kfree() frees - of no size - is malloc()'s.
+//! Allocation, for userspace, for util/alloc.rs: the kernel::alloc API, over
+//! std's allocator, which takes no flags and no memalloc scope. What C's
+//! kfree() frees - of no size - is malloc()'s.
 
-pub use bcachefs_shim::alloc::{flags, AllocError, Flags};
 pub use std::sync::Arc;
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct AllocError;
+
+/// Taken where the kernel's are, and ignored: userspace has one way to
+/// allocate.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct Flags(u32);
+
+impl core::ops::BitOr for Flags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        Flags(self.0 | rhs.0)
+    }
+}
+
+pub mod flags {
+    use super::Flags;
+
+    pub const GFP_KERNEL: Flags = Flags(0);
+    pub const GFP_NOWAIT: Flags = Flags(1);
+    pub const GFP_ATOMIC: Flags = Flags(1);
+    pub const __GFP_NOWARN: Flags = Flags(2);
+}
 
 use crate::c;
 use crate::util::alloc::{kv_layout, Alloc, AllocGfp, KVmalloc, Kmalloc};
@@ -162,21 +186,36 @@ pub unsafe fn kfree(p: NonNull<u8>, layout: Layout) {
 
 /// @p - kmalloc()'d, or null - as @new bytes, what was there kept: krealloc(),
 /// for a buffer C owns and kfree()s. Of no size the caller knows, as C's
-/// aren't.
+/// aren't. Tried ten times, the shrinkers run between.
 ///
 /// # Safety
 /// @p is null, or kmalloc()'s and not used after unless this fails.
 pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
-    // SAFETY: the caller's
-    NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(p, new, c::GFP_KERNEL) }).ok_or(AllocError)
+    for _ in 0..10 {
+        // not 0: realloc() would free @p
+        if let Some(q) = NonNull::new(unsafe { libc::realloc(p.cast(), new.max(1)) }) {
+            return Ok(q.cast());
+        }
+
+        super::shrinker::run_shrinkers(c::GFP_KERNEL, true);
+    }
+    Err(AllocError)
+}
+
+/// krealloc()'s, kvmalloc()'d - which of no size is malloc()'s here, as
+/// kvfree_unsized() takes it back.
+///
+/// # Safety
+/// As krealloc()'s.
+pub unsafe fn kvrealloc_unsized(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
+    unsafe { krealloc(p, new) }
 }
 
 /// @size bytes kmalloc()'d, uninitialized: for a buffer of no size anyone
 /// keeps - kfree_unsized() takes it back.
 pub fn kmalloc(size: usize) -> Result<NonNull<u8>, AllocError> {
     // SAFETY: a new allocation
-    NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(core::ptr::null_mut(), size, c::GFP_KERNEL) })
-        .ok_or(AllocError)
+    unsafe { krealloc(core::ptr::null_mut(), size) }
 }
 
 /// kzalloc(), with @gfp. kfree_unsized() takes it back.

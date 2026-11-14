@@ -8,7 +8,6 @@
 //! lists — from here. In a real kernel build those come from the kernel
 //! itself, and this crate is swapped out behind a cfg.
 
-pub mod alloc;
 mod compress;
 pub mod sync;
 
