@@ -94,30 +94,9 @@ impl MemallocFlags {
         Self::new(PF_MEMALLOC_NOWARN)
     }
 
-    /// The scope a C caller's @gfp says, for Rust that takes none, in the
-    /// flags we use: NORECLAIM without direct reclaim, else NOIO without
-    /// __GFP_IO; NOWARN. The rest of @gfp has no scope, and goes.
-    /// In userspace, whose allocators take no scope, none.
+    /// The scope a C caller's @gfp says, for Rust that takes none.
     pub fn for_gfp(gfp: crate::c::gfp_t) -> Self {
-        #[cfg(kernel)]
-        let flags = {
-            use crate::c::{GFP_KERNEL, GFP_NOIO, GFP_NOWAIT, __GFP_NOWARN};
-
-            // __GFP_DIRECT_RECLAIM and __GFP_IO, which bindgen doesn't name
-            let mut flags = 0;
-            if gfp & (GFP_NOIO & !GFP_NOWAIT) == 0 {
-                flags |= PF_MEMALLOC_NORECLAIM;
-            } else if gfp & (GFP_KERNEL & !GFP_NOIO) == 0 {
-                flags |= PF_MEMALLOC_NOIO;
-            }
-            if gfp & __GFP_NOWARN != 0 {
-                flags |= PF_MEMALLOC_NOWARN;
-            }
-            flags
-        };
-        #[cfg(not(kernel))]
-        let flags = { let _ = gfp; 0 };
-        Self::new(flags)
+        Self::new(sched::memalloc_flags_for_gfp(gfp))
     }
 }
 

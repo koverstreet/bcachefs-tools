@@ -32,6 +32,26 @@ pub fn need_resched() -> bool {
     unsafe { c::bch2_need_resched() }
 }
 
+/// The memalloc scope @gfp says, in the flags we use: NORECLAIM without
+/// direct reclaim, else NOIO without __GFP_IO; NOWARN. The rest of @gfp has
+/// no scope, and goes.
+pub fn memalloc_flags_for_gfp(gfp: c::gfp_t) -> u32 {
+    use crate::c::{GFP_KERNEL, GFP_NOIO, GFP_NOWAIT, __GFP_NOWARN};
+    use crate::locking::{PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
+
+    // __GFP_DIRECT_RECLAIM and __GFP_IO, which bindgen doesn't name
+    let mut flags = 0;
+    if gfp & (GFP_NOIO & !GFP_NOWAIT) == 0 {
+        flags |= PF_MEMALLOC_NORECLAIM;
+    } else if gfp & (GFP_KERNEL & !GFP_NOIO) == 0 {
+        flags |= PF_MEMALLOC_NOIO;
+    }
+    if gfp & __GFP_NOWARN != 0 {
+        flags |= PF_MEMALLOC_NOWARN;
+    }
+    flags
+}
+
 /// Caught taken where it can't sleep, as C's might_sleep(): at the caller.
 #[track_caller]
 #[inline]

@@ -65,6 +65,11 @@ pub fn need_resched() -> bool {
     false
 }
 
+/// None: userspace's allocators take no scope.
+pub fn memalloc_flags_for_gfp(_gfp: c::gfp_t) -> u32 {
+    0
+}
+
 /// Nothing here can't sleep.
 #[inline(always)]
 pub fn might_sleep() {}
