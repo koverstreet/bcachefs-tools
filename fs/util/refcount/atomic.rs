@@ -60,10 +60,26 @@ impl<T> AtomicRef<T> {
     #[cold]
     #[inline(never)]
     fn release(&self) {
+        self.drop_value();
+        futex_wake(core::ptr::from_ref(&self.count).cast(), usize::MAX);
+    }
+
+    /// By the last ref: RELEASED is its last write.
+    fn drop_value(&self) {
         fence(Acquire);
         unsafe { ManuallyDrop::drop(&mut *self.value.get()) };
         self.count.store(STOPPED | RELEASED, Release);
-        futex_wake(core::ptr::from_ref(&self.count).cast(), usize::MAX);
+    }
+}
+
+impl AtomicRef<()> {
+    /// Its owner's ref again, on one stopped and waited out: memory that's
+    /// reused, a BtreeTrans's. Until then, tryget() fails, as it does once
+    /// it's stopped.
+    pub fn restart(&self) {
+        ebug_assert!(self.count.load(Relaxed) == STOPPED | RELEASED,
+                     "AtomicRef restarted while live: count {:#x}", self.count.load(Relaxed));
+        self.count.store(1, Release);
     }
 }
 
@@ -108,10 +124,14 @@ unsafe impl<T> TryRefcount for AtomicRef<T> {
 }
 
 impl<T> WaitableRef for AtomicRef<T> {
+    /// With no refs but the owner's, released here, unwoken: the one waiter is
+    /// the owner, which waits on the thread that stopped it. So a teardown
+    /// with nothing outstanding - a BtreeTrans's, every exit - is a cmpxchg
+    /// and a store.
     fn stop(&self) {
         if self.count.fetch_update(Release, Relaxed, |r| (r & STOPPED == 0).then_some((r - 1) | STOPPED))
                == Ok(1) {
-            self.release();
+            self.drop_value();
         }
     }
 
