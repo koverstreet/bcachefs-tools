@@ -6,7 +6,7 @@
 use crate::c;
 use crate::os::kernel::{jiffies, HZ, NSEC_PER_SEC};
 use core::cell::Cell;
-use core::ffi::{c_int, c_long, c_ulong, c_void};
+use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
 use core::ptr::null_mut;
 use core::sync::atomic::{fence, AtomicU32, Ordering::{Acquire, Relaxed, SeqCst}};
 use rustix::thread::futex;
@@ -73,6 +73,11 @@ pub unsafe fn task_pid(task: *mut c::task_struct) -> c_int {
 
 /// Nothing to tell a scheduler here.
 pub fn set_current_wake_cpu(_cpu: c_int) {}
+
+/// Nothing signals a thread here.
+pub fn signal_pending_state(_state: c_uint) -> bool {
+    false
+}
 
 /// A kthread's: its own task_struct, before anything asks for one.
 pub(crate) fn set_current(p: *mut c::task_struct) {

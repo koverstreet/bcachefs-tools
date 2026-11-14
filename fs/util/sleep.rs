@@ -112,7 +112,7 @@ pub fn sleep_until<T, E: SleepEnd>(how: Sleep<E>, mut cond: impl FnMut() -> Opti
         if left == 0 {
             break Err(E::early(SleepError::Timeout));
         }
-        if unsafe { c::bch2_signal_pending_state(how.state) } {
+        if crate::os::sched::signal_pending_state(how.state) {
             break Err(E::early(SleepError::Signal));
         }
         // SAFETY: in a sleeping state we set; a timeout of FOREVER is

@@ -43,6 +43,12 @@ pub fn set_current_wake_cpu(cpu: core::ffi::c_int) {
     unsafe { c::bch2_set_current_wake_cpu(cpu) }
 }
 
+/// Whether a signal @state's sleep wakes for is pending: as
+/// signal_pending_state(state, current).
+pub fn signal_pending_state(state: core::ffi::c_uint) -> bool {
+    unsafe { c::bch2_signal_pending_state(state) }
+}
+
 /// Whether @task is running on a CPU: @task is any task's, read under RCU,
 /// which a task's freeing waits for.
 #[cfg(CONFIG_SMP)]
