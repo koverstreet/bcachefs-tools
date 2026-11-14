@@ -16,24 +16,12 @@
 
 #include <linux/irqflags.h>
 #include <linux/local_lock.h>
-#include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/sched/mm.h>
 
 #include <trace/events/lock.h>
 
 #include "locking/shim.h"
-
-/* raw.rs: struct mutex */
-
-void rust_mutex_init(struct mutex *lock, const char *name, void *key)
-{
-#ifdef __KERNEL__
-	__mutex_init(lock, name, key);
-#else
-	mutex_init(lock);
-#endif
-}
 
 /* raw.rs: the contention tracepoints, for a lock whose state is ours */
 

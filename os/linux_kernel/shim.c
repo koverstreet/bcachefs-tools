@@ -155,3 +155,10 @@ void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key)
 {
 	__init_rwsem(sem, name, key);
 }
+
+/* os/linux_kernel/mutex.rs: struct mutex */
+
+void rust_mutex_init(struct mutex *lock, const char *name, void *key)
+{
+	__mutex_init(lock, name, key);
+}

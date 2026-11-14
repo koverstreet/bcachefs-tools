@@ -14,6 +14,7 @@ pub mod kernel;
 pub mod kobject;
 pub mod kthread;
 pub mod lockdep;
+pub mod mutex;
 pub mod ops;
 pub mod percpu;
 pub mod printk;

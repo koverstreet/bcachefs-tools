@@ -243,7 +243,7 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
     /// Where the G is in a Locked: for C's container_of() from it.
     pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
 
-    pub(super) fn raw(&self) -> &R {
+    pub(crate) fn raw(&self) -> &R {
         &self.raw
     }
 }
