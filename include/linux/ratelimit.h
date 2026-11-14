@@ -87,18 +87,6 @@ static inline void ratelimit_state_reset_interval(struct ratelimit_state *rs, in
 	raw_spin_unlock_irqrestore(&rs->lock, flags);
 }
 
-static inline void ratelimit_state_exit(struct ratelimit_state *rs)
-{
-	int m;
-
-	if (!(rs->flags & RATELIMIT_MSG_ON_RELEASE))
-		return;
-
-	m = ratelimit_state_reset_miss(rs);
-	if (m)
-		pr_warn("%s: %d output lines suppressed due to ratelimiting\n", current->comm, m);
-}
-
 static inline void
 ratelimit_set_flags(struct ratelimit_state *rs, unsigned long flags)
 {

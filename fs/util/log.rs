@@ -20,7 +20,7 @@ use crate::locking::{rust_raw_spin_lock, rust_raw_spin_unlock};
 use crate::types::c_default;
 use crate::util::{Printbuf, ToText};
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, CStr};
+use core::ffi::CStr;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
@@ -47,7 +47,7 @@ pub enum KernLoglevel {
     LOGLEVEL_debug = 7,
 }
 
-pub use crate::c::{bch2_ratelimit_state_init, ___ratelimit, bch2_rust_warn};
+pub use crate::c::bch2_rust_warn;
 
 /// A printk loglevel: KERN_SOH followed by the level, as C's KERN_* strings.
 #[derive(Clone, Copy)]
@@ -115,11 +115,7 @@ fn printk(level: LogLevel, msg: &dyn ToText) {
 /// @buf, which starts with its KERN_SOH and level, to the log as data: a '%'
 /// in it is text.
 fn printk_buf(buf: &Printbuf) {
-    let s = buf.as_c_str();
-    #[cfg(kernel)]
-    unsafe { c::_printk(c"%s".as_ptr().cast(), s.as_ptr()) };
-    #[cfg(not(kernel))]
-    unsafe { c::printk(c"%s".as_ptr().cast(), s.as_ptr()) };
+    crate::os::printk::printk(buf.as_c_str())
 }
 
 /// log(), without the newline: a line for log_cont() to finish - C's
@@ -299,13 +295,7 @@ pub fn print_lines(prefix: &[u8], lines: &[u8]) {
 
     let mut rest = lines;
     while let Some(n) = lines_under(rest, PRINTK_LIMIT) {
-        let fmt = c"%.*s%.*s\n".as_ptr().cast();
-        let (p, l) = (prefix.len() as c_int, n as c_int);
-        // SAFETY: a format, and the lengths and bytes it takes
-        #[cfg(kernel)]
-        unsafe { c::_printk(fmt, p, prefix.as_ptr(), l, rest.as_ptr()) };
-        #[cfg(not(kernel))]
-        unsafe { c::printk(fmt, p, prefix.as_ptr(), l, rest.as_ptr()) };
+        crate::os::printk::printk_line(prefix, &rest[..n]);
 
         if n == rest.len() {
             break;
@@ -381,8 +371,7 @@ impl Fs {
     /// Whether to drop a message from @func, by @rs: only with the
     /// ratelimit_errors option.
     pub fn ratelimit_suppress(&self, rs: &c::ratelimit_state, func: &CStr) -> bool {
-        self.opts.ratelimit_errors.get() != 0 &&
-            unsafe { ___ratelimit(core::ptr::from_ref(rs).cast_mut(), func.as_ptr().cast()) } == 0
+        self.opts.ratelimit_errors.get() != 0 && !crate::os::printk::ratelimit(rs, func)
     }
 }
 
@@ -390,7 +379,7 @@ impl Fs {
 pub fn ratelimit_state_init() -> impl ::pin_init::PinInit<c::ratelimit_state> {
     unsafe {
         ::pin_init::pin_init_from_closure(|slot: *mut c::ratelimit_state| {
-            bch2_ratelimit_state_init(slot);
+            crate::os::printk::ratelimit_state_init(slot);
             Ok(())
         })
     }
@@ -448,7 +437,7 @@ impl Ratelimit {
             if self.claim.swap(true, Ordering::AcqRel) {
                 return false;
             }
-            unsafe { bch2_ratelimit_state_init(state) };
+            unsafe { crate::os::printk::ratelimit_state_init(state) };
             self.ready.store(true, Ordering::Release);
         }
 

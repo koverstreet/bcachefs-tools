@@ -304,6 +304,7 @@ unsigned bch2_nr_cpu_ids(void)
 }
 #endif
 
+#ifdef __KERNEL__
 /*
  * For Rust's ratelimited log macros, which keep a ratelimit_state per call
  * site as bch2_ratelimit() does, but have to initialize it at runtime:
@@ -312,6 +313,7 @@ void bch2_ratelimit_state_init(struct ratelimit_state *rs)
 {
 	ratelimit_default_init(rs);
 }
+#endif
 
 /*
  * For Rust's warn_on!() in the kernel build: the kernel's own warn_on!() pulls

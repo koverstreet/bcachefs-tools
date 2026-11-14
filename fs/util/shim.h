@@ -75,7 +75,9 @@ struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct d
 unsigned bch2_nr_cpu_ids(void);
 #endif
 
+#ifdef __KERNEL__
 void bch2_ratelimit_state_init(struct ratelimit_state *rs);
+#endif
 void bch2_rust_warn(const char *file, unsigned line);
 
 /* rcu.c's: init_srcu_struct() is a macro under lockdep */

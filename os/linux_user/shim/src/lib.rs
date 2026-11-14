@@ -41,19 +41,11 @@ pub mod c {
 }
 
 pub mod print {
-    use crate::c;
-    use std::ffi::CString;
     use std::fmt;
 
     // Userspace's printk drops the loglevel: every one goes to stderr
     pub fn printk(args: fmt::Arguments<'_>) {
-        let Ok(msg) = CString::new(args.to_string()) else {
-            return;
-        };
-
-        unsafe {
-            c::printk(c"%s".as_ptr(), msg.as_ptr());
-        }
+        eprint!("{args}");
     }
 }
 
