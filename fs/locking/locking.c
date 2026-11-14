@@ -16,7 +16,6 @@
 
 #include <linux/irqflags.h>
 #include <linux/local_lock.h>
-#include <linux/percpu-rwsem.h>
 #include <linux/sched/mm.h>
 
 #include <trace/events/lock.h>
@@ -71,40 +70,4 @@ unsigned long rust_local_irq_save(void)
 void rust_local_irq_restore(unsigned long flags)
 {
 	local_irq_restore(flags);
-}
-
-/* raw.rs: percpu_rw_semaphore */
-
-int rust_percpu_init_rwsem(struct percpu_rw_semaphore *sem, const char *name, void *key)
-{
-#ifdef __KERNEL__
-	return __percpu_init_rwsem(sem, name, key);
-#else
-	return percpu_init_rwsem(sem);
-#endif
-}
-
-void rust_percpu_free_rwsem(struct percpu_rw_semaphore *sem)
-{
-	percpu_free_rwsem(sem);
-}
-
-void rust_percpu_down_read(struct percpu_rw_semaphore *sem)
-{
-	percpu_down_read(sem);
-}
-
-void rust_percpu_up_read(struct percpu_rw_semaphore *sem)
-{
-	percpu_up_read(sem);
-}
-
-void rust_percpu_down_write(struct percpu_rw_semaphore *sem)
-{
-	percpu_down_write(sem);
-}
-
-void rust_percpu_up_write(struct percpu_rw_semaphore *sem)
-{
-	percpu_up_write(sem);
 }

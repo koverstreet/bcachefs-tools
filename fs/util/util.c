@@ -18,7 +18,7 @@
 
 /*
  * For Rust: the kernel's Rust allocator API has no __GFP_NOFAIL. Out of line,
- * as locking/locking.c's shims are, for the same reason.
+ * as os/linux_kernel/shim.c's are, for the same reason.
  */
 void *rust_kzalloc_nofail(size_t size)
 {

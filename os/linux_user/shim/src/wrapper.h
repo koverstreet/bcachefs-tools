@@ -12,7 +12,6 @@
 #include "include/linux/local_lock.h"
 #include "include/linux/mm.h"
 #include "include/linux/percpu-refcount.h"
-#include "include/linux/percpu-rwsem.h"
 #include "include/linux/posix_acl.h"
 #include "include/linux/random.h"
 #include "include/linux/refcount.h"

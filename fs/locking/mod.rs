@@ -45,7 +45,7 @@ pub use crate::new_lock;
 pub use bytelock::ByteLock;
 pub use lockdep::Lockdep;
 pub use crate::os::lockdep::LockdepMap;
-pub use raw::percpu_rw_semaphore;
+pub use crate::os::percpu_rwsem::percpu_rw_semaphore;
 pub use crate::os::spinlock::{raw_spinlock_t, spinlock_t, SpinLock};
 pub use crate::os::rwsem::rw_semaphore;
 pub use crate::os::mutex::mutex;

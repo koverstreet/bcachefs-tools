@@ -15,6 +15,7 @@ pub mod kthread;
 pub mod lockdep;
 pub mod mutex;
 pub mod percpu;
+pub mod percpu_rwsem;
 pub mod printk;
 pub mod rwsem;
 pub mod sched;
