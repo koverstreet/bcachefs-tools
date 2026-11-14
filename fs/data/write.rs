@@ -781,12 +781,12 @@ impl c::bch_write_op {
 
     /// A move's op is its data update's.
     fn update(&self) -> &c::data_update {
-        assert!(self.has(w::BCH_WRITE_move), "a write op that isn't a data update's");
+        assert!(self.has(w::update), "a write op that isn't a data update's");
         unsafe { &*core::ptr::from_ref(self).byte_sub(core::mem::offset_of!(c::data_update, op)).cast() }
     }
 
     fn update_mut(&mut self) -> &mut c::data_update {
-        assert!(self.has(w::BCH_WRITE_move), "a write op that isn't a data update's");
+        assert!(self.has(w::update), "a write op that isn't a data update's");
         unsafe { &mut *core::ptr::from_mut(self).byte_sub(core::mem::offset_of!(c::data_update, op)).cast() }
     }
 }
@@ -1119,7 +1119,7 @@ fn __write_index(op: &mut Op) {
         if !op.insert_keys.is_empty() {
             let sectors_start = keylist_sectors(&op.insert_keys);
 
-            let ret = if !op.has(w::BCH_WRITE_move) {
+            let ret = if !op.has(w::update) {
                 write_index_default(op)
             } else {
                 let trans = btree_trans!(fs);
@@ -1197,7 +1197,7 @@ extern "C" fn write_index(mut op: Running<Op>) {
     let wp = op.wp.expect("an index update queued on no write point");
     let wq = index_update_wq(&op);
 
-    if op.has(w::submitted) && op.has(w::BCH_WRITE_move) {
+    if op.has(w::submitted) && op.has(w::update) {
         let fs = op.fs();
         unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, &mut op.wbio.bio) };
     }
@@ -1422,7 +1422,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
                     op.set_error(e);
 
                     /* Extra info on errors from the allocator: */
-                    if !op.has(w::BCH_WRITE_move) {
+                    if !op.has(w::update) {
                         write_op_error(&op, op.pos.offset, format_args!("__bch2_write(): {e}"));
                     }
                     break;
@@ -1438,7 +1438,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
             bio.bi_private = op.closure().into_ref().as_ptr().cast();
             bio.bi_opf    |= c::req_op_REQ_OP_WRITE;
 
-            if op.has(w::BCH_WRITE_move) {
+            if op.has(w::update) {
                 bio.bi_opf |= c::REQ_SYNC | c::REQ_IDLE;
             }
 
@@ -1448,7 +1448,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
              * regresses background-move throughput, and the journal flushes
              * every device on commit regardless, so durability is unchanged.
              */
-            if op.has(w::BCH_WRITE_move) && fs.opts().move_writes_fua.get() != 0 {
+            if op.has(w::update) && fs.opts().move_writes_fua.get() != 0 {
                 bio.bi_opf |= c::REQ_FUA;
             }
 
@@ -1553,7 +1553,7 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
     let fs = op.fs();
     let sectors = u64::from(op.wbio.bio.bi_iter.bi_size >> 9);
 
-    if !op.has(w::BCH_WRITE_move) {
+    if !op.has(w::update) {
         fs.event_add_trace(events::data_write, sectors, |out| data_write_trace(out, &op));
     } else {
         fs.event_add_trace(events::data_update_write, sectors, |out| data_write_trace(out, &op));
@@ -1586,7 +1586,7 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
             return Err(fs.err(Errcode::BCH_ERR_erofs_no_writes));
         }
 
-        if !op.has(w::BCH_WRITE_move) {
+        if !op.has(w::update) {
             op.write_ref = Some(fs.writes.tryget_live().ok_or_else(|| fs.err(Errcode::BCH_ERR_erofs_no_writes))?);
         }
         Ok(())
@@ -1651,7 +1651,7 @@ pub fn __write_op_to_text(out: &mut Printbuf, op: &Op) {
 pub fn write_op_to_text(out: &mut Printbuf, op: &Op) {
     __write_op_to_text(out, op);
 
-    if op.has(w::BCH_WRITE_move) {
+    if op.has(w::update) {
         let fs = op.fs();
         let mut out = out.indent(2);
         prt!(out, "update:\n");

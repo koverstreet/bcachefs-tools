@@ -306,7 +306,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
 pub(crate) fn nocow_write(mut op: Running<Op>) -> Result<(), Running<Op>> {
     let fs = op.fs();
 
-    if op.has(w::BCH_WRITE_move) {
+    if op.has(w::update) {
         return Err(op);
     }
 

@@ -561,7 +561,7 @@ impl c::data_update {
         self.op.write_point = wp;
         use c::WriteFlags as w;
         self.op.set(w::pages_stable | w::pages_owned | w::data_encoded |
-                    w::BCH_WRITE_move | data_opts.write_flags);
+                    w::update | data_opts.write_flags);
         self.op.bits.set_compression_opt(io_opts.background_compression);
         let watermark = (data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK)
             .max(c::Watermark::normal as u32);

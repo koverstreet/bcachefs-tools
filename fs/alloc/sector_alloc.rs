@@ -199,7 +199,7 @@ impl<'f> TransAttempt<'_, 'f> {
         // a target with durability 0 devices: a cached copy on one too - not
         // for moves, which move only the data there is, nor for writes of
         // cached data, which are on the cache devices already
-        if !req.flags.intersects(w::BCH_WRITE_move | w::cached) &&
+        if !req.flags.intersects(w::update | w::cached) &&
            req.data_type == DataType::user {
             // from the target asked for: devs_may_alloc's been narrowed by
             // each copy, and may have been widened

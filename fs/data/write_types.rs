@@ -13,8 +13,7 @@ use pin_init::pin_data;
 use crate::format::{Bpos, Bversion};
 
 #[bch_enum(closed)]
-#[prefix(__BCH_WRITE_)]
-#[mask(WriteFlags: u32, prefix = BCH_WRITE_)]
+#[mask(WriteFlags: u32)]
 #[repr(u32)]
 pub enum WriteFlagBit {
     alloc_nowait,
@@ -28,7 +27,7 @@ pub enum WriteFlagBit {
     check_enospc,
     sync,
     flush,
-    __BCH_WRITE_move,
+    update,
     replicas_best_effort,
     in_worker,
     submitted,
