@@ -20,6 +20,14 @@ pub fn dump_stack() {
     crate::util::backtrace::dump_stack()
 }
 
+/// Nothing to yield to that the scheduler wouldn't run anyway.
+pub fn cond_resched() {}
+
+/// Always, in userspace.
+pub fn capable(_cap: Capability) -> bool {
+    true
+}
+
 /// Nothing signals a thread here.
 pub fn fatal_signal_pending() -> bool {
     false

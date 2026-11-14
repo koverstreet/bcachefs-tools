@@ -32,3 +32,8 @@ pub fn printk_line(prefix: &[u8], line: &[u8]) {
     let msg = [prefix, line, b"\n"].concat();
     let _ = std::io::stderr().write_all(skip_loglevel(&msg));
 }
+
+/// A WARNING at @file:@line, as the userspace shim's WARN_ON() printed it.
+pub fn warn_at(file: &CStr, line: u32) {
+    eprintln!("WARNING at {}:{}", file.to_string_lossy(), line);
+}

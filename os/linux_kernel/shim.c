@@ -355,3 +355,26 @@ unsigned bch2_nr_cpu_ids(void)
 {
 	return nr_cpu_ids;
 }
+
+/*
+ * For os/linux_kernel/printk.rs's warn_at(), warn_on!()'s: the kernel's own
+ * warn_on!() pulls the arch's WARN asm from a file generated in the kernel's
+ * build tree (rust/kernel/generated_arch_warn_asm.rs), which distro headers
+ * packages don't ship, so a DKMS build against them fails:
+ */
+void bch2_rust_warn(const char *file, unsigned line)
+{
+	WARN(1, "WARNING at %s:%u\n", file, line);
+}
+
+/* os/linux_kernel/kernel.rs: cond_resched() is a macro, or an inline over current */
+void bch2_cond_resched(void)
+{
+	cond_resched();
+}
+
+/* ...and capable(), a function: whether the current task has @cap */
+bool bch2_capable(int cap)
+{
+	return capable(cap);
+}

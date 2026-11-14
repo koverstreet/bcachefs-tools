@@ -5,7 +5,7 @@
 
 use crate::c;
 
-use super::PAGE_SIZE;
+use super::{cond_resched, PAGE_SIZE};
 
 /// C's READ and WRITE, as indices: io_ref[], io_clock[]...
 pub const READ:  usize = 0;
@@ -92,10 +92,6 @@ pub fn random_u64_below(ceil: u64) -> u64 {
 // userspace builds alike.
 pub fn local_clock() -> u64 {
     unsafe { c::local_clock() }
-}
-
-pub fn cond_resched() {
-    unsafe { c::bch2_cond_resched() }
 }
 
 /// C's _RET_IP_: the return address of the function it's expanded in, after
@@ -239,9 +235,4 @@ pub fn ktime_get_coarse_real_ts64() -> c::timespec64 {
 pub enum Capability {
     Fowner = 3,
     SysAdmin = 21,
-}
-
-/// Whether the current task has @cap: as capable(). Always, in userspace.
-pub fn capable(cap: Capability) -> bool {
-    unsafe { c::bch2_capable(cap as i32) }
 }
