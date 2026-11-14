@@ -1624,7 +1624,7 @@ mod unsized_tests {
         let c = unsafe { tcont::<Validated>::from_ffi(buf.as_ptr().cast()) };
         assert_eq!(c.as_bytes().len(), 56);
         assert_eq!(c.entries().map(|e| e.ty).collect::<Vec<_>>(), [1, 2, 3]);
-        assert_eq!(c.as_ffi().cast::<u64>(), buf.as_ptr());
+        assert_eq!(c.as_bytes().as_ptr(), buf.as_ptr().cast::<u8>());
         let e = c.entries().nth(1).unwrap();
         assert_eq!((e.u64s(), e._data.len()), (3, 2));
     }

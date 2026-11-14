@@ -231,7 +231,7 @@ struct Shape<'a> {
     /// After the fields: @tail, a slice of @elem.
     tail:    Ident,
     elem:    syn::Type,
-    /// C's struct: what as_ffi() points at.
+    /// The definition as written, renamed: X__head or X__whole.
     ffi:     Ident,
     /// Where the tail starts, if not where the head ends: inside it, the
     /// head being C's struct rounded up into the tail's first bytes - a key
@@ -397,23 +397,6 @@ fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident) -
     }
 }
 
-/// The methods of a state's definition, of a family whose count is its own -
-/// an unsized vstruct's, a counted type's: handed back to C, @ffi. What
-/// makes one is X<S>'s (generic_type()).
-fn state_methods(ffi: &Ident) -> TokenStream {
-    quote! {
-        /// For C: a pointer that reaches all of it.
-        pub fn as_ffi(&self) -> *const #ffi {
-            (self as *const Self).cast()
-        }
-
-        /// For C, to edit: a pointer that reaches all of it.
-        pub fn as_ffi_mut(&mut self) -> *mut #ffi {
-            (self as *mut Self).cast()
-        }
-    }
-}
-
 /// A #[members] field's members on each of @defs too - a family's definitions
 /// in place, with C's fields inline: their Deref to C's struct can't reach
 /// its setters.
@@ -440,7 +423,7 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
         let doc = format!(" {name}<{st}>: {what}. C's fields - those that hold a count\n \
                            private - then its tail, as long as its count says. It derefs\n \
                            to C's struct {name}, Head<{name}>, to read.");
-        let mut out = dst(&ty, &doc, shape, state_methods(&shape.ffi));
+        let mut out = dst(&ty, &doc, shape, TokenStream::new());
         out.extend(quote! {
             // a sized tagged union's arm: as many bytes as its count says
             impl #vs::ArmAt for #ty {
@@ -676,8 +659,7 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// if it grew.
 ///
 /// Both have a definition of all of it, every field inline: X__whole, if it
-/// grew - its Whole; else X__validated, its every state. Only that one is
-/// handed to C, as_ffi(): it's the one sure to hold all of C's struct.
+/// grew - its Whole; else X__validated, its every state.
 fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)>,
                 tail: Option<(Ident, syn::Type)>, bkey: bool)
     -> Result<TokenStream, String>
@@ -754,17 +736,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
                                    Validated or Unvalidated, a value in place - all its fields, then\n \
                                    the bytes past them a version since wrote, at the value's length.");
         let mut out = rename_struct(item, def, &ffi)?;
-        out.extend(dst(&all, &doc, &shape, quote! {
-            /// For C: a pointer to all of it.
-            pub fn as_ffi(&self) -> *const #ffi {
-                (self as *const Self).cast()
-            }
-
-            /// For C, to edit: a pointer to all of it.
-            pub fn as_ffi_mut(&mut self) -> *mut #ffi {
-                (self as *mut Self).cast()
-            }
-        }));
+        out.extend(dst(&all, &doc, &shape, TokenStream::new()));
         out.extend(members_on(name, fields, &[&all])?);
         out.extend(family(name, &all, &all, &ffi));
         out.extend(whole_arm_ref(&ffi, is_plain));

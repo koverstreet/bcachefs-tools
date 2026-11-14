@@ -97,7 +97,7 @@
 //!    short payload undefined. `from_arm_tailed()` writes an arm's flexible
 //!    array too.
 //!  - crate::types::ArmOf for each arm's type, which from_arm() goes by;
-//!  - `type_()`, the tag, known or not; `as_bytes()`, `as_ffi()`.
+//!  - `type_()`, the tag, known or not; `as_bytes()`.
 //!
 //! The storage's bytes are always all written: they come from C or disk, from
 //! from_bytes(), or from new(), which starts from zeroes - so get() and
@@ -1026,16 +1026,6 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                 // SAFETY: plain data, every byte of it written: it came from C or disk,
                 // from_bytes() or new(), which starts from zeroes
                 unsafe { &*(self as *const Self).cast::<[u8; #s_size]>() }
-            }
-
-            /// For C.
-            #vis fn as_ffi(&self) -> *const #s_ty {
-                &self.0
-            }
-
-            /// For C, to edit.
-            #vis fn as_ffi_mut(&mut self) -> *mut #s_ty {
-                &mut self.0
             }
         }
 
