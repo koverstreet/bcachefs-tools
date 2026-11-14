@@ -33,10 +33,6 @@ pub mod c {
     unsafe impl<Storage> ::pin_init::Zeroable for __BindgenBitfieldUnit<Storage>
         where Storage: ::pin_init::Zeroable {}
 
-    // The kernel's name: userspace's crc32c() is bch_crc32c(), so as not to
-    // clash with libblkid's in a static build (include/linux/crc32c.h).
-    pub use bch_crc32c as crc32c;
-
     pub use crate::compress::*;
 }
 

@@ -54,6 +54,8 @@ libc     = "0.2.69"
 io-uring = "0.7"
 # Userspace only: os/linux_user/stacktrace.rs's unwinding and symbols.
 backtrace = "0.3"
+# Userspace only: os/linux_user/crc.rs's crc32c(), in hardware on x86 and arm64.
+crc32c   = "0.6"
 owo-colors = "4"
 log      = { version = "0.4", features = ["std"] }
 zeroize  = { version = "1", optional = true, features = ["std", "zeroize_derive"] }

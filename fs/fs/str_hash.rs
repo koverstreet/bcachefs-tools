@@ -16,7 +16,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
 use crate::snapshots::{snapshot, subvolume};
-use crate::data::checksum::crc64_be;
+use crate::os::crc::{crc32c, crc64_be};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::os_str::OsStrExt;
 use crate::util::siphash::SipHash24;
@@ -24,7 +24,6 @@ use crate::util::Printbuf;
 use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
 use bitflags::bitflags;
-use core::ffi::c_void;
 use cstruct_macros::{MaybeZeroable, TypeInfo};
 use crate::types::c_default;
 use crate::format::{Bpos, Btree, BkeyType, SbFeature};
@@ -117,10 +116,6 @@ impl StrHash {
             Self::SipHash(h) => h.end() >> 1,
         }
     }
-}
-
-fn crc32c(crc: u32, data: &[u8]) -> u32 {
-    unsafe { c::crc32c(crc, data.as_ptr() as *const c_void, data.len() as _) }
 }
 
 /// @parts, one after another, hashed under @info. With @maybe_31bit, the hash

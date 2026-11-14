@@ -2,7 +2,6 @@
 
 #include "include/linux/bio.h"
 #include "include/linux/blkdev.h"
-#include "include/linux/crc32c.h"
 #include "include/linux/delay.h"
 #include "include/linux/device.h"
 #include "include/linux/generic-radix-tree.h"

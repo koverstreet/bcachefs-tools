@@ -2,6 +2,7 @@
 
 pub mod bio;
 pub mod blkdev;
+pub mod crc;
 #[cfg(CONFIG_DEBUG_FS)]
 pub mod debugfs;
 // The kernel's, cfg(not(kernel)) inside, until userspace has its own

@@ -38,6 +38,7 @@ use crate::util::bio::{Bio, BioRange};
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use crate::format::{Bversion, Nonce};
+use crate::os::crc::{crc32c, crc64_be};
 
 // ── Nonces ───────────────────────────────────────────────────────────────
 
@@ -68,33 +69,6 @@ impl core::ops::Add<u32> for Nonce {
 /// crypto/poly1305.h's, in bytes.
 const POLY1305_KEY_SIZE: usize = 32;
 const POLY1305_DIGEST_SIZE: usize = 16;
-
-/// The kernel's crc64_be(): ECMA-182, most significant bit first, @crc the
-/// value so far.
-#[cfg(kernel)]
-pub(crate) fn crc64_be(crc: u64, data: &[u8]) -> u64 {
-    unsafe { c::crc64_be(crc, data.as_ptr().cast(), data.len()) }
-}
-
-#[cfg(not(kernel))]
-pub(crate) fn crc64_be(crc: u64, data: &[u8]) -> u64 {
-    const TABLE: [u64; 256] = {
-        let mut t = [0u64; 256];
-        let mut i = 0;
-        while i < 256 {
-            let mut crc = (i as u64) << 56;
-            let mut bit = 0;
-            while bit < 8 {
-                crc = if crc >> 63 != 0 { (crc << 1) ^ 0x42f0_e1eb_a9ea_3693 } else { crc << 1 };
-                bit += 1;
-            }
-            t[i] = crc;
-            i += 1;
-        }
-        t
-    };
-    data.iter().fold(crc, |crc, &b| TABLE[((crc >> 56) as u8 ^ b) as usize] ^ (crc << 8))
-}
 
 /// A checksum being computed, over its data's pieces in order: C's
 /// bch2_checksum_state, and Poly1305's alongside. A crc is its seed so far
@@ -163,7 +137,7 @@ impl Csum {
         unsafe {
             match self {
                 Csum::None(_) => {}
-                Csum::Crc32c { seed, .. } => *seed = c::crc32c(*seed as u32, p.cast(), len).into(),
+                Csum::Crc32c { seed, .. } => *seed = crc32c(*seed as u32, core::slice::from_raw_parts(p, len)).into(),
                 Csum::Crc64 { seed, .. } => *seed = crc64_be(*seed, core::slice::from_raw_parts(p, len)),
                 Csum::Xxhash(s) => { c::xxh64_update(s, p.cast(), len); }
                 Csum::Poly1305(ctx, _) => c::poly1305_update(ctx, p, len as _),
@@ -833,13 +807,4 @@ pub fn enable_encryption(fs: &Fs, keyed: bool) -> Result<(), BchError> {
     assert!(sb.published().encryption_key.set(key), "a key, on a filesystem with no crypt section");
     fs.write_super(&mut sb);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    // CRC-64/ECMA-182's check value: what lib/crc64's crc64_be() gives
-    #[test]
-    fn crc64_be() {
-        assert_eq!(super::crc64_be(0, b"123456789"), 0x6c40_df5f_0b49_7347);
-    }
 }
