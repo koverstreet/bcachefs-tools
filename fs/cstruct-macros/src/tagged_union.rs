@@ -387,16 +387,17 @@ fn derived_type(ty: &syn::Type, part: &str) -> syn::Type {
     }
     ty
 }
+/// Whether @ty is @def, a type the block defines.
+fn is_def(ty: &syn::Type, def: &Ident) -> bool {
+    matches!(ty, syn::Type::Path(p) if p.qself.is_none() && p.path.is_ident(def))
+}
 
 fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
-    let arms = &tu.arms;
-    let name = &tu.name;
+    let (arms, name) = (&tu.arms, &tu.name);
     if arms.is_empty() {
         return Err(format!("{name}: no arms"));
     }
-    // whether @ty is @def, a type the block defines
-    let is = |ty: &syn::Type, def: &Ident| matches!(ty, syn::Type::Path(p) if p.qself.is_none() && p.path.is_ident(def));
-    if let Some(def) = tu.defs.iter().find(|def| !arms.iter().any(|a| is(&a.ty, def))) {
+    if let Some(def) = tu.defs.iter().find(|def| !arms.iter().any(|a| is_def(&a.ty, def))) {
         return Err(format!("{name}: {def} is defined here but isn't an arm's type"));
     }
     // The arm types defined in the block: nestify::nest!, given the
@@ -404,71 +405,88 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     // as the tokens they were written as.
     let arm_attrs = &d.arm_attrs;
     let defs: TokenStream = d.defs.iter().map(|def| quote!(::nestify::nest! { #arm_attrs #def })).collect();
-    let (attrs, vis) = (&d.attrs, &d.vis);
     let en = format_ident!("{}", camel(&name.to_string()));
-    // the arms by value: named for the union, but where that's the storage's
-    // own name - DiskAccountingPos - its Arm
-    let ev = if en == *name { format_ident!("{en}Arm") } else { en.clone() };
-    let en_ref = format_ident!("{en}Ref");
-    let (tag, tag_ty) = (&tu.tag_field, &tu.tag_ty);
-    // The tag as handed out: its enum, a newtype over an integer the tag
-    // widens to - or with none, the tag as it is
-    let tag_enum = tu.tag_enum.as_ref().unwrap_or(tag_ty);
-    let wrap_tag = |x: TokenStream| match &tu.tag_enum {
-        Some(e) => quote!(#e(#x as _)),
-        None => x,
+    let g = Gen {
+        tu,
+        vis:         &d.vis,
+        en_ref:      format_ident!("{en}Ref"),
+        en,
+        // The tag as handed out: its enum, a newtype over an integer the tag
+        // widens to - or with none, the tag as it is
+        tag_enum:    tu.tag_enum.as_ref().unwrap_or(&tu.tag_ty),
+        // The storage: the type the views are of. A sized one's is its own,
+        // NAME_storage: NAME is its state's
+        s_ty:        tu.storage.clone().unwrap_or_else(|| {
+            let own = crate::tokens::derived(name, "storage");
+            parse_quote!(#own)
+        }),
+        determinant: crate::tokens::derived(name, "tag"),
     };
-    let t_tag = wrap_tag(quote!(t));
-    let as_tag = |v: &syn::Expr| quote!((#v) as #tag_ty);
-    let det_trait = quote!(crate::types::Determinant);
-    let arm_of = quote!(crate::types::ArmOf);
-    let vs = quote!(crate::util::vstructs);
-    // The storage: the type the views are of
-    // A sized one's is its own, NAME_storage: NAME is its state's
-    let own_storage = crate::tokens::derived(name, "storage");
-    let s_ty: syn::Type = tu.storage.clone().unwrap_or_else(|| parse_quote!(#own_storage));
-    let s_size = quote!(::core::mem::size_of::<#s_ty>());
+    let body = match tu.size {
+        Size::Pad    => g.pad(&d.attrs),
+        Size::Header => g.header()?,
+        Size::Arm    => g.arm(),
+    };
+    Ok(quote!(#defs #body))
+}
 
-    // The storage: the tag then the arms' union (with types of their own,
-    // Rust having no anonymous struct or union), overlaid with the pad. Or
-    // none, the storage being another's - an unsized union's.
-    let arm_fields = arms.iter().map(|a| {
-        let (arm, ty) = (&a.name, &a.ty);
-        quote!(#vis #arm: #ty,)
-    });
-    let pad_field = tu.pad.as_ref().map(|p| quote!(#vis _pad: #p,));
-    let storage_attrs = quote!(#[allow(non_camel_case_types)] #[repr(C)] #[derive(Clone, Copy)]);
-    // `packed`, a packed layout - the arms' union and the tag's struct
-    let packed_attrs = if tu.packed {
-        quote!(#[allow(non_camel_case_types)] #[repr(C, packed)] #[derive(Clone, Copy)])
-    } else {
-        storage_attrs.clone()
-    };
-    // An unsized vstruct's storage is a family: each state its own
-    // definition, named - what its tag is read from. Each arm is a family's
-    // too, named in the storage's state.
-    if tu.size == Size::Header {
-        let not_path = std::iter::once(&s_ty).chain(arms.iter().map(|a| &a.ty))
-            .find(|t| !matches!(t, syn::Type::Path(_)));
-        if let Some(t) = not_path {
-            return Err(format!("{name}: {}: #[size(header)]'s storage and arms are each a family's \
-                                type, named", quote!(#t)));
+/// What the three sizes' generation shares: the union's names, its tag, and
+/// its storage.
+struct Gen<'a> {
+    tu:          &'a TaggedUnion,
+    vis:         &'a syn::Visibility,
+    /// The union's name in CamelCase: its arms' enum by value, and by
+    /// reference, en_ref
+    en:          Ident,
+    en_ref:      Ident,
+    tag_enum:    &'a syn::Type,
+    s_ty:        syn::Type,
+    determinant: Ident,
+}
+
+impl Gen<'_> {
+    fn vs() -> TokenStream {
+        quote!(crate::util::vstructs)
+    }
+
+    /// The tag, @x, as handed out.
+    fn wrap_tag(&self, x: TokenStream) -> TokenStream {
+        match &self.tu.tag_enum {
+            Some(e) => quote!(#e(#x as _)),
+            None => x,
         }
     }
-    let states: Vec<(&str, syn::Type)> = if tu.size == Size::Header {
-        ["Unvalidated", "Validated"].iter()
-            .map(|st| (*st, derived_type(&s_ty, &st.to_lowercase())))
-            .collect()
-    } else {
-        vec![("", s_ty.clone())]
-    };
-    let determinant = crate::tokens::derived(name, "tag");
-    let (storage, payload_offset) = if tu.storage.is_some() {
-        // another's storage, a union: its tag is its own field, by value, as
-        // a packed struct's must be
+
+    fn t_tag(&self) -> TokenStream {
+        self.wrap_tag(quote!(t))
+    }
+
+    fn as_tag(&self, v: &syn::Expr) -> TokenStream {
+        let tag_ty = &self.tu.tag_ty;
+        quote!((#v) as #tag_ty)
+    }
+
+    /// The determinant over the storage.
+    fn det(&self) -> TokenStream {
+        let (determinant, s_ty) = (&self.determinant, &self.s_ty);
+        quote!(<#determinant as crate::types::Determinant<#s_ty>>)
+    }
+
+    fn by_value(&self) -> Vec<TokenStream> {
+        self.tu.arms.iter().map(|a| {
+            let (arm, ty) = (&a.name, &a.ty);
+            quote!(#arm(#ty),)
+        }).collect()
+    }
+
+    /// The determinant of another's storage, in each of @states: its tag is
+    /// its own field, read by value, as a packed struct's must be.
+    fn given_storage(&self, states: &[(&str, syn::Type)]) -> TokenStream {
+        let (name, vis, determinant) = (&self.tu.name, self.vis, &self.determinant);
+        let (tag, tag_ty) = (&self.tu.tag_field, &self.tu.tag_ty);
         let doc = format!(" {name}'s tag: the storage's {tag}.");
         let impls = states.iter().map(|(_, s)| quote! {
-            impl #det_trait<#s> for #determinant {
+            impl crate::types::Determinant<#s> for #determinant {
                 type Tag = #tag_ty;
                 fn get(u: &#s) -> #tag_ty {
                     <#tag_ty>::from({ u.#tag })
@@ -478,178 +496,29 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                 }
             }
         });
-        (quote! {
+        quote! {
             #[doc = #doc]
             #[doc(hidden)]
             #[allow(non_camel_case_types)]
             #vis struct #determinant;
 
             #(#impls)*
-        }, quote!(0))
-    } else {
-        let (arms_union, tagged) = (crate::tokens::derived(name, "arms"), crate::tokens::derived(name, "tagged"));
-        let doc = format!(" {name}'s tag: its field.");
-        (quote! {
-            #[doc(hidden)]
-            #packed_attrs
-            #vis union #arms_union {
-                #(#arm_fields)*
-            }
-
-            #[doc(hidden)]
-            #packed_attrs
-            #vis struct #tagged {
-                #vis #tag: #tag_ty,
-                #vis u: #arms_union,
-            }
-
-            #[::cstruct_macros::type_name(#name)]
-            #(#attrs)*
-            #storage_attrs
-            #vis union #own_storage {
-                #vis t: #tagged,
-                #pad_field
-            }
-
-            #[doc = #doc]
-            #[doc(hidden)]
-            #[allow(non_camel_case_types)]
-            #vis struct #determinant;
-
-            impl #det_trait<#own_storage> for #determinant {
-                type Tag = #tag_ty;
-                fn get(u: &#own_storage) -> #tag_ty {
-                    // SAFETY: the tag is plain data, the struct's first field
-                    unsafe { u.t.#tag }
-                }
-                fn set(u: &mut #own_storage, tag: #tag_ty) {
-                    #[allow(unused_unsafe)]
-                    // SAFETY: a write of plain data
-                    unsafe { u.t.#tag = tag }
-                }
-            }
-        }, quote!(::core::mem::offset_of!(#tagged, u)))
-    };
-    let det = quote!(<#determinant as #det_trait<#s_ty>>);
-
-    let by_value = arms.iter().map(|a| {
-        let (arm, ty) = (&a.name, &a.ty);
-        quote!(#arm(#ty),)
-    });
-    // An arm type this declares is plain data: a reference to it, whatever
-    // the storage's state. Another's is a #[counted] family's head - a
-    // replicas entry's - the family's type in the
-    // storage's state, as long as its own header says (CountedHead, ArmAt).
-    let declared = |a: &TaggedArm| tu.defs.iter().any(|def| is(&a.ty, def));
-    let stated = arms.iter().any(|a| !declared(a));
-    let st_param = stated.then(|| quote!(, St: #vs::State = #vs::Validated));
-    let st_arg = |st: &str| {
-        let st = format_ident!("{st}");
-        stated.then(|| quote!(, #vs::#st))
-    };
-    let by_ref = arms.iter().map(|a| {
-        let (arm, ty) = (&a.name, &a.ty);
-        if declared(a) {
-            quote!(#arm(&'a #ty),)
-        } else {
-            quote!(#arm(&'a <#ty as #vs::CountedHead>::Of<St>),)
         }
-    });
-    let lens = arms.iter().map(|a| {
-        let arm = &a.name;
-        quote!(#en_ref::#arm(a) => ::core::mem::size_of_val(a),)
-    });
-    let (st_impl, st_use) = if stated { (quote!(, St: #vs::State), quote!(, St)) } else { (quote!(), quote!()) };
-    // get()'s arms, in state @st: @bad, what an arm whose header says it's
-    // longer than the storage holds is
-    let gets = |st: &str, bad: TokenStream| -> TokenStream {
-        let st = format_ident!("{st}");
-        arms.iter()
-            .map(|a| {
-                let (arm, ty, v) = (&a.name, &a.ty, as_tag(&a.value));
-                let got = if declared(a) {
-                    quote! {
-                        // SAFETY: an arm this declares is plain data, in the storage
-                        // and aligned there: asserted below
-                        unsafe { &*b.as_ptr().cast::<#ty>() }
-                    }
-                } else {
-                    quote! {
-                        match <<#ty as #vs::CountedHead>::Of<#vs::#st> as #vs::ArmAt>::arm_at(b) {
-                            Ok(arm) => arm,
-                            Err(err) => #bad,
-                        }
-                    }
-                };
-                quote! {
-                    if t == #v {
-                        return Ok(#en_ref::#arm(#got));
-                    }
-                }
-            })
-            .collect()
-    };
-    let news = arms.iter().map(|a| {
-        let arm = &a.name;
-        quote!(#ev::#arm(x) => Self::from_arm(x),)
-    });
-    // An arm that's the storage itself - an ACL's short entry - isn't a type
-    // of its own to go by
-    let arms_of = arms.iter()
-        .filter(|a| a.ty != s_ty)
-        .map(|a| {
-            let (ty, v) = (&a.ty, as_tag(&a.value));
-            quote! {
-                impl #arm_of<#s_ty> for #ty {
-                    type Tag = #tag_ty;
-                    const TAG: #tag_ty = #v;
-                }
-            }
-        });
-    // Where get() finds an arm: in the storage, aligned for it
-    let arm_asserts = arms.iter().map(|a| {
-        let (arm, ty) = (&a.name, &a.ty);
-        let fits = format!("tagged_union! {name}: arm {arm} doesn't fit in the storage");
-        let aligned = format!("tagged_union! {name}: arm {arm} isn't aligned in the storage");
-        quote! {
-            const _: () = assert!(#payload_offset + ::core::mem::size_of::<#ty>() <= #s_size, #fits);
-            const _: () = assert!((#payload_offset) % ::core::mem::align_of::<#ty>() == 0 &&
-                                  ::core::mem::align_of::<#s_ty>() >= ::core::mem::align_of::<#ty>(),
-                                  #aligned);
-        }
-    });
-    // packed: an arm aligned more than 1 would be an unaligned reference -
-    // say so by name, not as rustc's E0793 at the list
-    let packed_asserts = arms.iter()
-        .filter(|_| tu.packed)
-        .map(|a| {
-            let (arm, ty) = (&a.name, &a.ty);
-            let msg = format!("tagged_union! {name}: arm {arm} is aligned more than 1, so in a packed \
-                               union get() can't hand out a reference to it - pack the arm");
-            quote!(const _: () = assert!(::core::mem::align_of::<#ty>() == 1, #msg);)
-        });
-    // Plain, as a family's head is: its pad is every byte of it, and
-    // Plain, and the arms are plain data.
-    let pad_assert = tu.pad.as_ref().map(|p| {
-        let msg = format!("tagged_union! {name}: bigger than its pad");
-        quote! {
-            const _: () = assert!(#s_size == ::core::mem::size_of::<#p>(), #msg);
-            // SAFETY: its pad is every byte of it - asserted above - and Plain,
-            // and its arms are plain data, any bytes one
-            unsafe impl #vs::Plain for #s_ty {}
-            const _: () = #vs::assert_plain::<#p>();
-        }
-    });
+    }
 
-    if tu.size == Size::Arm {
-        // Each value as long as the arm its tag selects - the variant, by
-        // value - read off bytes and written back to them: ArmSized, and
-        // ArmWalk over a run of them. The tag is the head's, so every arm
-        // starts with the head, its tag where the head has it; and every arm
-        // is plain data, read and written by copying, at any alignment.
-        // No ArmOf: arms may share a type, the variant saying which.
-        let head = &s_ty;
-        let tag_of_raw = wrap_tag(quote!(self.tag_raw()));
+    /// #[size(arm)]: each value as long as the arm its tag selects - the
+    /// variant, by value - read off bytes and written back to them:
+    /// ArmSized, and ArmWalk over a run of them. The tag is the head's, so
+    /// every arm starts with the head, its tag where the head has it; and
+    /// every arm is plain data, read and written by copying, at any
+    /// alignment. No ArmOf: arms may share a type, the variant saying which.
+    fn arm(&self) -> TokenStream {
+        let (tu, vs, vis, en, tag_enum) = (self.tu, Self::vs(), self.vis, &self.en, self.tag_enum);
+        let (arms, name, tag, tag_ty) = (&tu.arms, &tu.name, &tu.tag_field, &tu.tag_ty);
+        let (head, det, t_tag) = (&self.s_ty, self.det(), self.t_tag());
+        let storage = self.given_storage(&[("", head.clone())]);
+        let by_value = self.by_value();
+        let tag_of_raw = self.wrap_tag(quote!(self.tag_raw()));
         let reads = arms.iter().map(|a| {
             let (arm, ty, value) = (&a.name, &a.ty, &a.value);
             quote! {
@@ -701,8 +570,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
         let doc = format!(" One of {name}'s arms, by value, as long as it is - the variant is\n \
                            the tag: what read() gives, and write() writes, its arm's own\n \
                            {tag} with it.");
-        return Ok(quote! {
-            #defs
+        quote! {
             #storage
             const _: () = #vs::assert_plain::<#head>();
             const _: () = assert!(::core::mem::align_of::<#head>() == 1, #head_aligned);
@@ -785,19 +653,33 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                     }
                 }
             }
-        });
+        }
     }
 
-    if tu.size == Size::Header {
-        // An unsized vstruct, its arms running past its header as far as its
-        // count says - each reference to one has them: typed() and arm(), on
-        // each state's definition of the storage. An arm there may be an
-        // older, shorter version of its type: as its ArmRef has it, over the
-        // storage's bytes.
-        //
-        // Every arm has a family - #[unsized_vstruct], #[grown], #[whole] -
-        // so each is named in the storage's state: a member of an Unvalidated
-        // one is Unvalidated, all the way down.
+    /// #[size(header)]: an unsized vstruct, its arms running past its header
+    /// as far as its count says - each reference to one has them: typed() and
+    /// arm(), on each state's definition of the storage. An arm there may be
+    /// an older, shorter version of its type: as its ArmRef has it, over the
+    /// storage's bytes.
+    ///
+    /// Its storage is a family: each state its own definition, named - what
+    /// its tag is read from. Every arm has a family too - #[unsized_vstruct],
+    /// #[grown], #[whole] - so each is named in the storage's state: a member
+    /// of an Unvalidated one is Unvalidated, all the way down.
+    fn header(&self) -> Result<TokenStream, String> {
+        let (tu, vs, vis, s_ty, tag_enum) = (self.tu, Self::vs(), self.vis, &self.s_ty, self.tag_enum);
+        let (arms, name, tag, tag_ty) = (&tu.arms, &tu.name, &tu.tag_field, &tu.tag_ty);
+        let (en_ref, determinant, t_tag) = (&self.en_ref, &self.determinant, self.t_tag());
+        let not_path = std::iter::once(s_ty).chain(arms.iter().map(|a| &a.ty))
+            .find(|t| !matches!(t, syn::Type::Path(_)));
+        if let Some(t) = not_path {
+            return Err(format!("{name}: {}: #[size(header)]'s storage and arms are each a family's \
+                                type, named", quote!(#t)));
+        }
+        let states: Vec<(&str, syn::Type)> = ["Unvalidated", "Validated"].iter()
+            .map(|st| (*st, derived_type(s_ty, &st.to_lowercase())))
+            .collect();
+        let storage = self.given_storage(&states);
         let by_ref = arms.iter().map(|a| {
             let (arm, ty) = (&a.name, &a.ty);
             quote!(#arm(&'a #ty<St>),)
@@ -811,7 +693,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             for a in arms {
                 let (arm_def, v) = (derived_type(&a.ty, &lower), &a.value);
                 arms_of_by_state.extend(quote! {
-                    impl #arm_of<#s_ty<#vs::#st>> for #arm_def {
+                    impl crate::types::ArmOf<#s_ty<#vs::#st>> for #arm_def {
                         type Tag = #tag_ty;
                         const TAG: #tag_ty = (#v) as #tag_ty;
                     }
@@ -820,8 +702,8 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
         }
         let impls = states.iter().map(|(st, s)| {
             let st = format_ident!("{st}");
-            let det = quote!(<#determinant as #det_trait<#s>>);
-            let tag_of_self = wrap_tag(quote!(#det::get(&self.repr)));
+            let det = quote!(<#determinant as crate::types::Determinant<#s>>);
+            let tag_of_self = self.wrap_tag(quote!(#det::get(&self.repr)));
             let selects = arms.iter().map(|a| {
                 let (arm, ty, v) = (&a.name, &a.ty, &a.value);
                 quote! {
@@ -851,7 +733,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                     /// The arm, if the tag is @A's: typed(), for one arm.
                     #vis fn arm<A>(&self) -> Option<&A>
                     where
-                        A: #arm_of<Self, Tag = #tag_ty> + #vs::ArmRef + ?Sized,
+                        A: crate::types::ArmOf<Self, Tag = #tag_ty> + #vs::ArmRef + ?Sized,
                     {
                         if #det::get(&self.repr) != A::TAG {
                             return None;
@@ -862,7 +744,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                     /// arm(), to edit: as its ArmRef has it.
                     #vis fn arm_mut<A>(&mut self) -> Option<&mut A>
                     where
-                        A: #arm_of<Self, Tag = #tag_ty> + #vs::ArmRef + ?Sized,
+                        A: crate::types::ArmOf<Self, Tag = #tag_ty> + #vs::ArmRef + ?Sized,
                     {
                         if #det::get(&self.repr) != A::TAG {
                             return None;
@@ -884,8 +766,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
         let doc = format!(" One of {name}'s arms, with the bytes its header says are its - as\n \
                            many as there are, for one written before its type grew: what\n \
                            {name}'s typed() gives.");
-        return Ok(quote! {
-            #defs
+        Ok(quote! {
             #storage
 
             #[allow(unused_macros)]
@@ -918,189 +799,363 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
 
             #(#impls)*
             #arms_of_by_state
-        });
+        })
     }
 
-    let tag_of_storage = wrap_tag(quote!(#det::get(&self.0)));
-    let ref_doc = if stated {
-        format!(" One of {name}'s arms, by reference, in its state: what {name}::get()\n \
-                 gives - an arm that's another's type as long as its own header says.")
-    } else {
-        format!(" One of {name}'s arms, by reference: what {name}::get() gives.")
-    };
-    // Bytes from outside
-    let unvalidated_impl = {
-        let unvalidated = st_arg("Unvalidated");
-        let gets = gets("Unvalidated", quote!(return Err(#vs::ArmError::Bad { tag: #t_tag, err })));
-        quote! {
-            impl #name<#vs::Unvalidated> {
-                /// From its bytes, as on disk.
-                #vis fn from_bytes(b: &[u8; #s_size]) -> Self {
-                    // SAFETY: the storage is plain data: any bytes are a valid one
-                    Self(unsafe { b.as_ptr().cast::<#s_ty>().read_unaligned() }, ::core::marker::PhantomData)
-                }
+    /// #[size(pad)]: its own storage, a struct of the tag then a union of the
+    /// arms - with types of their own, Rust having no anonymous struct or
+    /// union - overlaid with the pad; NAME<S> over it, the storage in a
+    /// state; and from an arm, or from bytes.
+    fn pad(&self, attrs: &[syn::Attribute]) -> TokenStream {
+        let (tu, vs, vis, s_ty, tag_enum) = (self.tu, Self::vs(), self.vis, &self.s_ty, self.tag_enum);
+        let (arms, name, tag, tag_ty) = (&tu.arms, &tu.name, &tu.tag_field, &tu.tag_ty);
+        let (en, en_ref, determinant) = (&self.en, &self.en_ref, &self.determinant);
+        let (det, t_tag) = (self.det(), self.t_tag());
+        // the arms by value: named for the union, but where that's the storage's
+        // own name - DiskAccountingPos - its Arm
+        let ev = if en == name { format_ident!("{en}Arm") } else { en.clone() };
+        let own_storage = crate::tokens::derived(name, "storage");
+        let s_size = quote!(::core::mem::size_of::<#s_ty>());
 
-                /// The arm the tag selects: Err if the tag isn't one of ours, or the
-                /// arm's header says it's longer than the storage holds.
-                #vis fn get(&self) -> Result<#en_ref<'_ #unvalidated>, #vs::ArmError<#tag_enum>> {
-                    let t: #tag_ty = #det::get(&self.0);
-                    let b = &self.as_bytes()[#payload_offset..];
-                    #gets
-                    Err(#vs::ArmError::Unknown(#t_tag))
-                }
+        let arm_fields = arms.iter().map(|a| {
+            let (arm, ty) = (&a.name, &a.ty);
+            quote!(#vis #arm: #ty,)
+        });
+        let pad_field = tu.pad.as_ref().map(|p| quote!(#vis _pad: #p,));
+        let storage_attrs = quote!(#[allow(non_camel_case_types)] #[repr(C)] #[derive(Clone, Copy)]);
+        // `packed`, a packed layout - the arms' union and the tag's struct
+        let packed_attrs = if tu.packed {
+            quote!(#[allow(non_camel_case_types)] #[repr(C, packed)] #[derive(Clone, Copy)])
+        } else {
+            storage_attrs.clone()
+        };
+        let (arms_union, tagged) = (crate::tokens::derived(name, "arms"), crate::tokens::derived(name, "tagged"));
+        let storage_doc = format!(" {name}'s tag: its field.");
+        let payload_offset = quote!(::core::mem::offset_of!(#tagged, u));
 
-                /// Validated, if its arm fits in the storage: get()'s check, kept. A
-                /// tag this version doesn't know passes - a Validated get() says so.
-                #vis fn validate(self) -> Result<#name, #vs::ArmError<#tag_enum>> {
-                    self.validated().copied()
+        let by_value = self.by_value();
+        // An arm type this declares is plain data: a reference to it, whatever
+        // the storage's state. Another's is a #[counted] family's head - a
+        // replicas entry's - the family's type in the
+        // storage's state, as long as its own header says (CountedHead, ArmAt).
+        let declared = |a: &TaggedArm| tu.defs.iter().any(|def| is_def(&a.ty, def));
+        let stated = arms.iter().any(|a| !declared(a));
+        let st_param = stated.then(|| quote!(, St: #vs::State = #vs::Validated));
+        let st_arg = |st: &str| {
+            let st = format_ident!("{st}");
+            stated.then(|| quote!(, #vs::#st))
+        };
+        let by_ref = arms.iter().map(|a| {
+            let (arm, ty) = (&a.name, &a.ty);
+            if declared(a) {
+                quote!(#arm(&'a #ty),)
+            } else {
+                quote!(#arm(&'a <#ty as #vs::CountedHead>::Of<St>),)
+            }
+        });
+        let lens = arms.iter().map(|a| {
+            let arm = &a.name;
+            quote!(#en_ref::#arm(a) => ::core::mem::size_of_val(a),)
+        });
+        let (st_impl, st_use) = if stated { (quote!(, St: #vs::State), quote!(, St)) } else { (quote!(), quote!()) };
+        // get()'s arms, in state @st: @bad, what an arm whose header says it's
+        // longer than the storage holds is
+        let gets = |st: &str, bad: TokenStream| -> TokenStream {
+            let st = format_ident!("{st}");
+            arms.iter()
+                .map(|a| {
+                    let (arm, ty, v) = (&a.name, &a.ty, self.as_tag(&a.value));
+                    let got = if declared(a) {
+                        quote! {
+                            // SAFETY: an arm this declares is plain data, in the storage
+                            // and aligned there: asserted below
+                            unsafe { &*b.as_ptr().cast::<#ty>() }
+                        }
+                    } else {
+                        quote! {
+                            match <<#ty as #vs::CountedHead>::Of<#vs::#st> as #vs::ArmAt>::arm_at(b) {
+                                Ok(arm) => arm,
+                                Err(err) => #bad,
+                            }
+                        }
+                    };
+                    quote! {
+                        if t == #v {
+                            return Ok(#en_ref::#arm(#got));
+                        }
+                    }
+                })
+                .collect()
+        };
+        let news = arms.iter().map(|a| {
+            let arm = &a.name;
+            quote!(#ev::#arm(x) => Self::from_arm(x),)
+        });
+        // An arm that's the storage itself - an ACL's short entry - isn't a type
+        // of its own to go by
+        let arms_of = arms.iter()
+            .filter(|a| a.ty != *s_ty)
+            .map(|a| {
+                let (ty, v) = (&a.ty, self.as_tag(&a.value));
+                quote! {
+                    impl crate::types::ArmOf<#s_ty> for #ty {
+                        type Tag = #tag_ty;
+                        const TAG: #tag_ty = #v;
+                    }
                 }
+            });
+        // Where get() finds an arm: in the storage, aligned for it
+        let arm_asserts = arms.iter().map(|a| {
+            let (arm, ty) = (&a.name, &a.ty);
+            let fits = format!("tagged_union! {name}: arm {arm} doesn't fit in the storage");
+            let aligned = format!("tagged_union! {name}: arm {arm} isn't aligned in the storage");
+            quote! {
+                const _: () = assert!(#payload_offset + ::core::mem::size_of::<#ty>() <= #s_size, #fits);
+                const _: () = assert!((#payload_offset) % ::core::mem::align_of::<#ty>() == 0 &&
+                                      ::core::mem::align_of::<#s_ty>() >= ::core::mem::align_of::<#ty>(),
+                                      #aligned);
+            }
+        });
+        // packed: an arm aligned more than 1 would be an unaligned reference -
+        // say so by name, not as rustc's E0793 at the list
+        let packed_asserts = arms.iter()
+            .filter(|_| tu.packed)
+            .map(|a| {
+                let (arm, ty) = (&a.name, &a.ty);
+                let msg = format!("tagged_union! {name}: arm {arm} is aligned more than 1, so in a packed \
+                                   union get() can't hand out a reference to it - pack the arm");
+                quote!(const _: () = assert!(::core::mem::align_of::<#ty>() == 1, #msg);)
+            });
+        // Plain, as a family's head is: its pad is every byte of it, and
+        // Plain, and the arms are plain data.
+        let pad_assert = tu.pad.as_ref().map(|p| {
+            let msg = format!("tagged_union! {name}: bigger than its pad");
+            quote! {
+                const _: () = assert!(#s_size == ::core::mem::size_of::<#p>(), #msg);
+                // SAFETY: its pad is every byte of it - asserted above - and Plain,
+                // and its arms are plain data, any bytes one
+                unsafe impl #vs::Plain for #s_ty {}
+                const _: () = #vs::assert_plain::<#p>();
+            }
+        });
 
-                /// validate(), by reference: the same bytes, Validated.
-                #vis fn validated(&self) -> Result<&#name, #vs::ArmError<#tag_enum>> {
-                    match self.get() {
-                        Err(e @ (#vs::ArmError::Bad { .. } | #vs::ArmError::Short(_))) => Err(e),
-                        _ => Ok(unsafe { &*::core::ptr::from_ref(self).cast::<#name>() }),
+        let tag_of_storage = self.wrap_tag(quote!(#det::get(&self.0)));
+        let ref_doc = if stated {
+            format!(" One of {name}'s arms, by reference, in its state: what {name}::get()\n \
+                     gives - an arm that's another's type as long as its own header says.")
+        } else {
+            format!(" One of {name}'s arms, by reference: what {name}::get() gives.")
+        };
+        // Bytes from outside
+        let unvalidated_impl = {
+            let unvalidated = st_arg("Unvalidated");
+            let gets = gets("Unvalidated", quote!(return Err(#vs::ArmError::Bad { tag: #t_tag, err })));
+            quote! {
+                impl #name<#vs::Unvalidated> {
+                    /// From its bytes, as on disk.
+                    #vis fn from_bytes(b: &[u8; #s_size]) -> Self {
+                        // SAFETY: the storage is plain data: any bytes are a valid one
+                        Self(unsafe { b.as_ptr().cast::<#s_ty>().read_unaligned() }, ::core::marker::PhantomData)
+                    }
+
+                    /// The arm the tag selects: Err if the tag isn't one of ours, or the
+                    /// arm's header says it's longer than the storage holds.
+                    #vis fn get(&self) -> Result<#en_ref<'_ #unvalidated>, #vs::ArmError<#tag_enum>> {
+                        let t: #tag_ty = #det::get(&self.0);
+                        let b = &self.as_bytes()[#payload_offset..];
+                        #gets
+                        Err(#vs::ArmError::Unknown(#t_tag))
+                    }
+
+                    /// Validated, if its arm fits in the storage: get()'s check, kept. A
+                    /// tag this version doesn't know passes - a Validated get() says so.
+                    #vis fn validate(self) -> Result<#name, #vs::ArmError<#tag_enum>> {
+                        self.validated().copied()
+                    }
+
+                    /// validate(), by reference: the same bytes, Validated.
+                    #vis fn validated(&self) -> Result<&#name, #vs::ArmError<#tag_enum>> {
+                        match self.get() {
+                            Err(e @ (#vs::ArmError::Bad { .. } | #vs::ArmError::Short(_))) => Err(e),
+                            _ => Ok(unsafe { &*::core::ptr::from_ref(self).cast::<#name>() }),
+                        }
                     }
                 }
             }
-        }
-    };
-    let validated = st_arg("Validated");
-    let doesnt_fit = format!("{name}<Validated>: {{err}} - an arm that doesn't fit, in one validate passed \
-                              or made from an arm");
-    let gets_validated = gets("Validated", quote!(panic!(#doesnt_fit)));
-    let state_doc = format!(" {name}, in state S - Validated unless named: over its storage, {own_storage}.\n \
-                             Unvalidated, bytes from outside - from the kernel, off a device - each\n \
-                             arm checked against the storage as get() hands it out; Validated,\n \
-                             what validate passed, or what's made here from an arm.");
-    let value_doc = format!(" One of {name}'s arms, by value: what {name}::new() takes.");
-    let len_doc = format!(" The bytes it takes, from {name}::ARMS_AT - a tailed arm's, as\n \
-                           many as its header says.");
-    Ok(quote! {
-        #defs
-        #storage
-
-        #[doc = #state_doc]
-        #[allow(non_camel_case_types)]
-        #[repr(transparent)]
-        #vis struct #name<S = #vs::Validated>(#s_ty, ::core::marker::PhantomData<S>);
-
-        impl<S> Clone for #name<S> {
-            fn clone(&self) -> Self {
-                *self
+        };
+        let validated = st_arg("Validated");
+        let doesnt_fit = format!("{name}<Validated>: {{err}} - an arm that doesn't fit, in one validate passed \
+                                  or made from an arm");
+        let gets_validated = gets("Validated", quote!(panic!(#doesnt_fit)));
+        let state_doc = format!(" {name}, in state S - Validated unless named: over its storage, {own_storage}.\n \
+                                 Unvalidated, bytes from outside - from the kernel, off a device - each\n \
+                                 arm checked against the storage as get() hands it out; Validated,\n \
+                                 what validate passed, or what's made here from an arm.");
+        let value_doc = format!(" One of {name}'s arms, by value: what {name}::new() takes.");
+        let len_doc = format!(" The bytes it takes, from {name}::ARMS_AT - a tailed arm's, as\n \
+                               many as its header says.");
+        quote! {
+            #[doc(hidden)]
+            #packed_attrs
+            #vis union #arms_union {
+                #(#arm_fields)*
             }
-        }
 
-        impl<S> Copy for #name<S> {}
+            #[doc(hidden)]
+            #packed_attrs
+            #vis struct #tagged {
+                #vis #tag: #tag_ty,
+                #vis u: #arms_union,
+            }
 
-        #[doc = #value_doc]
-        #[allow(non_camel_case_types)]
-        #vis enum #ev {
-            #(#by_value)*
-        }
+            #[::cstruct_macros::type_name(#name)]
+            #(#attrs)*
+            #storage_attrs
+            #vis union #own_storage {
+                #vis t: #tagged,
+                #pad_field
+            }
 
-        #[doc = #ref_doc]
-        #[allow(non_camel_case_types)]
-        #[derive(Clone, Copy)]
-        #vis enum #en_ref<'a #st_param> {
-            #(#by_ref)*
-        }
+            #[doc = #storage_doc]
+            #[doc(hidden)]
+            #[allow(non_camel_case_types)]
+            #vis struct #determinant;
 
-        impl<'a #st_impl> #en_ref<'a #st_use> {
-            #[doc = #len_doc]
-            #vis fn len(&self) -> usize {
-                match *self {
-                    #(#lens)*
+            impl crate::types::Determinant<#own_storage> for #determinant {
+                type Tag = #tag_ty;
+                fn get(u: &#own_storage) -> #tag_ty {
+                    // SAFETY: the tag is plain data, the struct's first field
+                    unsafe { u.t.#tag }
                 }
-            }
-        }
-
-        impl<S> #name<S> {
-            /// The tag, whether this version knows it or not.
-            #vis fn #tag(&self) -> #tag_enum {
-                #tag_of_storage
-            }
-
-            /// Its bytes, as on disk.
-            #vis fn as_bytes(&self) -> &[u8; #s_size] {
-                // SAFETY: plain data, every byte of it written: it came from
-                // from_bytes() or new(), which starts from zeroes
-                unsafe { &*(self as *const Self).cast::<[u8; #s_size]>() }
-            }
-        }
-
-        #unvalidated_impl
-
-        impl #name<#vs::Validated> {
-            /// Where its arms start, in any state: after the tag.
-            #vis const ARMS_AT: usize = #payload_offset;
-
-            /// The arm the tag selects - Err(the tag) if it isn't one of ours.
-            /// Validated, every arm fits in the storage.
-            #vis fn get(&self) -> Result<#en_ref<'_ #validated>, #tag_enum> {
-                let t: #tag_ty = #det::get(&self.0);
-                let b = &self.as_bytes()[#payload_offset..];
-                #gets_validated
-                Err(#t_tag)
-            }
-
-            /// From an arm: new(), by the arm's type.
-            #vis fn from_arm<A: #arm_of<#s_ty, Tag = #tag_ty>>(arm: A) -> Self {
-                let mut s = Self::with_payload(arm);
-                #det::set(&mut s, A::TAG);
-                Self(s, ::core::marker::PhantomData)
-            }
-
-            /// From an arm ending in a flexible array, and that array - as many
-            /// elements as the arm's header says: an error if the storage can't
-            /// hold them.
-            #vis fn from_arm_tailed<A>(arm: A, tail: &[A::Elem]) -> Result<Self, #vs::VStructError>
-            where A: #arm_of<#s_ty, Tag = #tag_ty> + #vs::FlexArray
-            {
-                assert_eq!(arm.nr(), tail.len(), "{}: its header's count, and the elements given",
-                           ::core::any::type_name::<A>());
-                let at = #payload_offset + A::TAIL;
-                let len = ::core::mem::size_of_val(tail);
-                if at + len > #s_size {
-                    return Err(#vs::VStructError::Overrun { ty: ::core::any::type_name::<A>(),
-                                                            want: A::TAIL + len,
-                                                            have: #s_size - #payload_offset });
-                }
-                let mut s = Self::with_payload(arm);
-                // SAFETY: in bounds, as checked above, and the elements are plain data
-                unsafe {
-                    ::core::ptr::copy_nonoverlapping(tail.as_ptr().cast::<u8>(),
-                        (&mut s as *mut #s_ty).cast::<u8>().add(at), len);
-                }
-                #det::set(&mut s, A::TAG);
-                Ok(Self(s, ::core::marker::PhantomData))
-            }
-
-            /// From an arm: its payload into zeroed storage, then the determinant marks
-            /// it - stabby's order, so a tag that's bits of the payload is written last.
-            #vis fn new(v: #ev) -> Self {
-                match v {
-                    #(#news)*
+                fn set(u: &mut #own_storage, tag: #tag_ty) {
+                    #[allow(unused_unsafe)]
+                    // SAFETY: a write of plain data
+                    unsafe { u.t.#tag = tag }
                 }
             }
 
-            /// Zeroed storage holding @arm's payload, not yet marked as holding it.
-            fn with_payload<A: #arm_of<#s_ty>>(arm: A) -> #s_ty {
-                // SAFETY: zeroes are a valid one: plain data
-                let mut s: #s_ty = unsafe { ::core::mem::zeroed() };
-                // SAFETY: only arms are ArmOf, and each is plain data, in bounds - asserted
-                // below
-                unsafe {
-                    (&mut s as *mut #s_ty).cast::<u8>().add(#payload_offset).cast::<A>()
-                        .write_unaligned(arm);
-                }
-                s
-            }
-        }
+            #[doc = #state_doc]
+            #[allow(non_camel_case_types)]
+            #[repr(transparent)]
+            #vis struct #name<S = #vs::Validated>(#s_ty, ::core::marker::PhantomData<S>);
 
-        #(#arms_of)*
-        #pad_assert
-        #(#arm_asserts)*
-        #(#packed_asserts)*
-    })
+            impl<S> Clone for #name<S> {
+                fn clone(&self) -> Self {
+                    *self
+                }
+            }
+
+            impl<S> Copy for #name<S> {}
+
+            #[doc = #value_doc]
+            #[allow(non_camel_case_types)]
+            #vis enum #ev {
+                #(#by_value)*
+            }
+
+            #[doc = #ref_doc]
+            #[allow(non_camel_case_types)]
+            #[derive(Clone, Copy)]
+            #vis enum #en_ref<'a #st_param> {
+                #(#by_ref)*
+            }
+
+            impl<'a #st_impl> #en_ref<'a #st_use> {
+                #[doc = #len_doc]
+                #vis fn len(&self) -> usize {
+                    match *self {
+                        #(#lens)*
+                    }
+                }
+            }
+
+            impl<S> #name<S> {
+                /// The tag, whether this version knows it or not.
+                #vis fn #tag(&self) -> #tag_enum {
+                    #tag_of_storage
+                }
+
+                /// Its bytes, as on disk.
+                #vis fn as_bytes(&self) -> &[u8; #s_size] {
+                    // SAFETY: plain data, every byte of it written: it came from
+                    // from_bytes() or new(), which starts from zeroes
+                    unsafe { &*(self as *const Self).cast::<[u8; #s_size]>() }
+                }
+            }
+
+            #unvalidated_impl
+
+            impl #name<#vs::Validated> {
+                /// Where its arms start, in any state: after the tag.
+                #vis const ARMS_AT: usize = #payload_offset;
+
+                /// The arm the tag selects - Err(the tag) if it isn't one of ours.
+                /// Validated, every arm fits in the storage.
+                #vis fn get(&self) -> Result<#en_ref<'_ #validated>, #tag_enum> {
+                    let t: #tag_ty = #det::get(&self.0);
+                    let b = &self.as_bytes()[#payload_offset..];
+                    #gets_validated
+                    Err(#t_tag)
+                }
+
+                /// From an arm: new(), by the arm's type.
+                #vis fn from_arm<A: crate::types::ArmOf<#s_ty, Tag = #tag_ty>>(arm: A) -> Self {
+                    let mut s = Self::with_payload(arm);
+                    #det::set(&mut s, A::TAG);
+                    Self(s, ::core::marker::PhantomData)
+                }
+
+                /// From an arm ending in a flexible array, and that array - as many
+                /// elements as the arm's header says: an error if the storage can't
+                /// hold them.
+                #vis fn from_arm_tailed<A>(arm: A, tail: &[A::Elem]) -> Result<Self, #vs::VStructError>
+                where A: crate::types::ArmOf<#s_ty, Tag = #tag_ty> + #vs::FlexArray
+                {
+                    assert_eq!(arm.nr(), tail.len(), "{}: its header's count, and the elements given",
+                               ::core::any::type_name::<A>());
+                    let at = #payload_offset + A::TAIL;
+                    let len = ::core::mem::size_of_val(tail);
+                    if at + len > #s_size {
+                        return Err(#vs::VStructError::Overrun { ty: ::core::any::type_name::<A>(),
+                                                                want: A::TAIL + len,
+                                                                have: #s_size - #payload_offset });
+                    }
+                    let mut s = Self::with_payload(arm);
+                    // SAFETY: in bounds, as checked above, and the elements are plain data
+                    unsafe {
+                        ::core::ptr::copy_nonoverlapping(tail.as_ptr().cast::<u8>(),
+                            (&mut s as *mut #s_ty).cast::<u8>().add(at), len);
+                    }
+                    #det::set(&mut s, A::TAG);
+                    Ok(Self(s, ::core::marker::PhantomData))
+                }
+
+                /// From an arm: its payload into zeroed storage, then the determinant marks
+                /// it - stabby's order, so a tag that's bits of the payload is written last.
+                #vis fn new(v: #ev) -> Self {
+                    match v {
+                        #(#news)*
+                    }
+                }
+
+                /// Zeroed storage holding @arm's payload, not yet marked as holding it.
+                fn with_payload<A: crate::types::ArmOf<#s_ty>>(arm: A) -> #s_ty {
+                    // SAFETY: zeroes are a valid one: plain data
+                    let mut s: #s_ty = unsafe { ::core::mem::zeroed() };
+                    // SAFETY: only arms are ArmOf, and each is plain data, in bounds - asserted
+                    // below
+                    unsafe {
+                        (&mut s as *mut #s_ty).cast::<u8>().add(#payload_offset).cast::<A>()
+                            .write_unaligned(arm);
+                    }
+                    s
+                }
+            }
+
+            #(#arms_of)*
+            #pad_assert
+            #(#arm_asserts)*
+            #(#packed_asserts)*
+        }
+    }
 }
