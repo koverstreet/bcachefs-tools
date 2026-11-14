@@ -478,8 +478,8 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
 
         if v.children()[0] != 0 ||
            (subvol.state().get() != c::SubvolumeState::deleted.0 &&
-            fs.version_upgrade_complete().0 >=
-            MetadataVersion::per_dev_fragmentation_lru.0) {
+            fs.version_upgrade_complete() >=
+            MetadataVersion::per_dev_fragmentation_lru) {
             let mut msg = LogMsg::new(fs);
             let _ = writeln!(msg, "deleting node with bad subvolume pointer:");
             prt!(&mut msg, "{}", (&s).to_text(fs));

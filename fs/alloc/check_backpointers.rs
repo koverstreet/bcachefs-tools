@@ -424,8 +424,8 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
 
     let Some(ca) = fs.dev_bucket_tryget_noerror(alloc_k.k.p) else { return Ok(false) };
     let bp_range = BackpointerPos::bucket_range(&ca, alloc_k.k.p);
-    let before_bucket_gen = fs.version_upgrade_complete().0 <
-        MetadataVersion::backpointer_bucket_gen.0;
+    let before_bucket_gen = fs.version_upgrade_complete() <
+        MetadataVersion::backpointer_bucket_gen;
 
     let mut sectors = BucketSectors::default();
     let mut nr_stripe_bps = 0u32;

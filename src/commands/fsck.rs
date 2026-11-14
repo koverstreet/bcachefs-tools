@@ -9,7 +9,7 @@ use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::format::MetadataVersion;
+use bcachefs_kernel::format::bcachefs_metadata_version_current;
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
@@ -92,12 +92,11 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
 }
 
 fn should_use_kernel_fsck(devs: &[String]) -> bool {
-    let kernel_version = sysfs::bcachefs_kernel_version();
-    if kernel_version == 0 {
+    let Some(kernel_version) = sysfs::bcachefs_kernel_version() else {
         return false;
-    }
+    };
 
-    let current = MetadataVersion::NR as u64 - 1;
+    let current = bcachefs_metadata_version_current;
     if kernel_version == current {
         return false;
     }
@@ -114,15 +113,14 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
         Err(_) => return false,
     };
 
-    let sb_version = u64::from(fs.sb_lock().sb().version.get().0);
+    let sb_version = fs.sb_lock().sb().version.get();
 
     let ret = (current < kernel_version && kernel_version <= sb_version) ||
               (sb_version <= kernel_version && kernel_version < current);
 
     if ret {
-        let v = |v| MetadataVersion(v as u32);
-        println!("fsck binary is version {} but filesystem is {} and kernel is {}, using kernel fsck",
-                 v(current), v(sb_version), v(kernel_version));
+        println!("fsck binary is version {current} but filesystem is {sb_version} and kernel is {kernel_version}, \
+                  using kernel fsck");
     }
 
     ret

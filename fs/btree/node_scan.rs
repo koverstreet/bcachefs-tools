@@ -295,8 +295,8 @@ impl<'f> DevScan<'f> {
         let mut last_print = jiffies();
 
         let mi = ca.mi.get();
-        let bitmap_on = fs.version_upgrade_complete().0 >=
-            MetadataVersion::mi_btree_bitmap.0;
+        let bitmap_on = fs.version_upgrade_complete() >=
+            MetadataVersion::mi_btree_bitmap;
         let buckets = || (u64::from(mi.first_bucket)..mi.nbuckets).filter(|&bucket| {
             !bitmap_on || ca.btree_bitmap_marked_sectors_any(ca.bucket_to_sector(bucket), mi.bucket_size.into())
         });

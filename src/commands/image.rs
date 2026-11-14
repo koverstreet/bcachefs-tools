@@ -7,7 +7,6 @@ use bcachefs_kernel::fs::Dev;
 use std::ffi::CString;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
-use std::process;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
@@ -27,17 +26,16 @@ use bcachefs_kernel::{POS_MIN, SPOS_MAX, pos};
 use clap::Parser;
 
 use crate::commands::format::{
-    take_opt_value, take_short_value, metadata_version_current, version_parse,
+    take_opt_value, take_short_value, version_parse,
 };
-use crate::commands::format_util::{DevOpts, FormatOpts};
+use crate::commands::format_util::{kernel_format_version, DevOpts, FormatOpts};
 use crate::wrappers::bdev;
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
-use crate::wrappers::sysfs;
 use bcachefs_kernel::sb::io::SbResize;
-use bcachefs_kernel::format::{Btree, CompressionType, DataType, DataTypes, BkeyType, SbFeature};
+use bcachefs_kernel::format::{Btree, CompressionType, DataType, DataTypes, BkeyType, MetadataVersion, SbFeature};
 
 const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
@@ -706,7 +704,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     let mut passphrase_file: Option<String> = None;
     let mut fs_label: Option<String> = None;
     let mut uuid_bytes: Option<[u8; 16]> = None;
-    let mut format_version: Option<u32> = None;
+    let mut format_version: Option<MetadataVersion> = None;
     let mut superblock_size: u32 = SUPERBLOCK_SIZE_DEFAULT;
     let mut verbosity: u32 = 1;
 
@@ -886,23 +884,8 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
         None
     };
 
-    // Determine format version
-    let _ = process::Command::new("modprobe")
-        .arg("bcachefs")
-        .stdout(process::Stdio::null())
-        .stderr(process::Stdio::null())
-        .status();
-
-    let kernel_version = sysfs::bcachefs_kernel_version() as u32;
-    let current_version = metadata_version_current();
-
-    let version = format_version.unwrap_or_else(|| {
-        if kernel_version > 0 {
-            current_version.min(kernel_version)
-        } else {
-            current_version
-        }
-    });
+    let kernel_version = kernel_format_version();
+    let version = format_version.unwrap_or(kernel_version);
 
     let dev_label_cstr = dev_label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
     let path_cstr = CString::new(image_path.as_str())?;

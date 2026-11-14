@@ -1136,8 +1136,8 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
     let mut ca = None;
 
-    let ver = fs.version_upgrade_complete().0;
-    if ver >= MetadataVersion::bucket_gens.0 {
+    let ver = fs.version_upgrade_complete();
+    if ver >= MetadataVersion::bucket_gens {
         let mut iter = BtreeIter::new(&trans, Btree::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |_, _, k| {
             let Some(g) = k.arm::<c::BucketGens>() else { return Ok(LoopFlow::Continue) };

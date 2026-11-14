@@ -126,8 +126,7 @@ fn fs_usage_v1_to_text(
         accounting_types |= DiskAccountingType::btree.bit();
     }
     if has(Field::RebalanceWork) {
-        let version_reconcile = u32::from(MetadataVersion::reconcile) as u64;
-        if bcachefs_kernel_version() < version_reconcile {
+        if bcachefs_kernel_version().is_none_or(|v| v < MetadataVersion::reconcile) {
             accounting_types |= DiskAccountingType::rebalance_work.bit();
         } else {
             accounting_types |= DiskAccountingType::reconcile_work.bit();

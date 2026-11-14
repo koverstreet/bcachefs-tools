@@ -523,11 +523,10 @@ pub struct EvacuateCli {
 
 fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
 
-    if bcachefs_kernel_version() < u32::from(MetadataVersion::reconcile) as u64 {
+    if bcachefs_kernel_version().is_none_or(|v| v < MetadataVersion::reconcile) {
         return Err(anyhow!(
-            "Kernel too old for Rust evacuate path; \
-             need bcachefs metadata version >= {} (reconcile)",
-            u32::from(MetadataVersion::reconcile) as u64
+            "Kernel too old for Rust evacuate path; need bcachefs metadata version >= {}",
+            MetadataVersion::reconcile
         ));
     }
 

@@ -29,24 +29,19 @@ use bch_bindgen::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::SbFieldType;
 
-use crate::commands::format_util::{DevOpts, FormatOpts};
+use crate::commands::format_util::{kernel_format_version, DevOpts, FormatOpts};
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
-use bcachefs_kernel::format::MetadataVersion;
+use bcachefs_kernel::format::{bcachefs_metadata_version_current, MetadataVersion};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
-use crate::wrappers::sysfs;
 
 const BCH_REPLICAS_MAX: u32 = 4;
 
-pub(crate) fn metadata_version_current() -> u32 {
-    MetadataVersion::NR - 1
-}
-
 /// Parse a version string "major.minor" or just "minor" (major defaults to 0).
-pub(crate) fn version_parse(s: &str) -> Result<u32> {
+pub(crate) fn version_parse(s: &str) -> Result<MetadataVersion> {
     let (major, minor) = match s.split_once('.') {
         Some((maj, min)) => {
             let major: u32 = maj.parse().map_err(|_| anyhow!("invalid version {}", s))?;
@@ -58,12 +53,7 @@ pub(crate) fn version_parse(s: &str) -> Result<u32> {
             (0, minor)
         }
     };
-    Ok((major << 10) | minor)
-}
-
-/// Render a metadata version as "major.minor" — the inverse of version_parse().
-pub(crate) fn version_to_string(v: u32) -> String {
-    format!("{}.{}", v >> 10, v & ((1 << 10) - 1))
+    Ok(MetadataVersion::new(major, minor))
 }
 
 fn format_usage() {
@@ -163,7 +153,7 @@ struct FormatConfig {
     source:          Option<String>,
     fs_label:        Option<String>,
     uuid_bytes:      Option<[u8; 16]>,
-    format_version:  Option<u32>,
+    format_version:  Option<MetadataVersion>,
     superblock_size: u32,
     fs_opts:         c::bch_opts,
     deferred_opts:   Vec<(c::OptId, String)>,
@@ -245,7 +235,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     let mut source: Option<String> = None;
     let mut fs_label: Option<String> = None;
     let mut uuid_bytes: Option<[u8; 16]> = None;
-    let mut format_version: Option<u32> = None;
+    let mut format_version: Option<MetadataVersion> = None;
     let mut superblock_size: u32 = SUPERBLOCK_SIZE_DEFAULT;
 
     // Per-device accumulator
@@ -506,23 +496,9 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         None
     };
 
-    // Determine format version (modprobe first to read kernel version)
-    let _ = process::Command::new("modprobe")
-        .arg("bcachefs")
-        .stdout(process::Stdio::null())
-        .stderr(process::Stdio::null())
-        .status();
-
-    let kernel_version = sysfs::bcachefs_kernel_version() as u32;
-    let current_version = metadata_version_current();
-
-    let version = cfg.format_version.unwrap_or_else(|| {
-        if kernel_version > 0 {
-            current_version.min(kernel_version)
-        } else {
-            current_version
-        }
-    });
+    let kernel_version = kernel_format_version();
+    let current_version = bcachefs_metadata_version_current;
+    let version = cfg.format_version.unwrap_or(kernel_version);
 
     if cfg.source.is_none() {
         if std::env::var_os("BCACHEFS_KERNEL_ONLY").is_some() {
@@ -538,8 +514,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
             println!("formatting at version {} to match the running kernel \
                       (these tools support {}); the filesystem will be \
                       initialized when it is first mounted",
-                     version_to_string(version),
-                     version_to_string(current_version));
+                     version, current_version);
             cfg.initialize = false;
         }
     }

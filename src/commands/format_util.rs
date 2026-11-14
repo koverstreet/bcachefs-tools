@@ -11,7 +11,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::alloc::disk_groups::Target;
 
 use crate::wrappers::super_io::{die, SUPERBLOCK_SIZE_DEFAULT};
-use bcachefs_kernel::format::{MetadataVersion, SbFeature};
+use bcachefs_kernel::format::{bcachefs_metadata_version_current, MetadataVersion, SbFeature};
 use bcachefs_kernel::sb::io::BCHFS_MAGIC;
 use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::sb::io::SbResize;
@@ -27,7 +27,7 @@ pub struct FormatOpts<'a> {
     pub label:           Option<&'a str>,
     /// None: a new one.
     pub uuid:            Option<[u8; 16]>,
-    pub version:         u32,
+    pub version:         MetadataVersion,
     pub superblock_size: u32,
     pub encrypted:       bool,
     /// Encrypted without one, the key's stored as it is.
@@ -215,21 +215,19 @@ pub fn format(
         die("insufficient memory");
     }
 
-    sb.sb_mut().version.set(MetadataVersion(opts.version));
-    sb.sb_mut().version_min.set(MetadataVersion(opts.version));
+    sb.sb_mut().version.set(opts.version);
+    sb.sb_mut().version_min.set(opts.version);
     sb.sb_mut().magic.b = BCHFS_MAGIC;
     sb.sb_mut().user_uuid.b = opts.uuid.unwrap_or_else(|| *uuid::Uuid::new_v4().as_bytes());
     sb.sb_mut().nr_devices = dev_slice.len() as u8;
 
-    sb.sb_mut().set_version_incompat_allowed(MetadataVersion(opts.version));
+    sb.sb_mut().set_version_incompat_allowed(opts.version);
     // These are no longer options, only for compatibility with old versions
     sb.sb_mut().set_meta_replicas_req(1);
     sb.sb_mut().set_data_replicas_req(1);
     sb.sb_mut().set_extent_bp_shift(16);
 
-    let version_threshold =
-        u32::from(MetadataVersion::disk_accounting_big_endian);
-    if opts.version > version_threshold {
+    if opts.version > MetadataVersion::disk_accounting_big_endian {
         let f = &mut sb.sb_mut().features[0];
         f.set(f.get() | BCH_SB_FEATURES_ALL);
     }
@@ -435,8 +433,8 @@ pub fn format_for_device_add(
     0
 }
 
-/// The newest version the running kernel mounts, and the default superblock.
-pub(crate) fn format_opts_default() -> FormatOpts<'static> {
+/// The newest version the running kernel mounts: ours, if there's no module.
+pub(crate) fn kernel_format_version() -> MetadataVersion {
     // Try to load bcachefs module to detect kernel version
     let _ = std::process::Command::new("modprobe")
         .arg("bcachefs")
@@ -444,18 +442,14 @@ pub(crate) fn format_opts_default() -> FormatOpts<'static> {
         .stderr(std::process::Stdio::null())
         .status();
 
-    let kernel_version = crate::wrappers::sysfs::bcachefs_kernel_version() as u32;
-    let current =
-        MetadataVersion::NR - 1;
+    let current = bcachefs_metadata_version_current;
+    crate::wrappers::sysfs::bcachefs_kernel_version().map_or(current, |k| current.min(k))
+}
 
-    let version = if kernel_version > 0 {
-        current.min(kernel_version)
-    } else {
-        current
-    };
-
+/// The newest version the running kernel mounts, and the default superblock.
+pub(crate) fn format_opts_default() -> FormatOpts<'static> {
     FormatOpts {
-        version,
+        version: kernel_format_version(),
         superblock_size: SUPERBLOCK_SIZE_DEFAULT,
         ..Default::default()
     }

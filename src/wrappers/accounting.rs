@@ -108,9 +108,7 @@ const MAX_REPLY: usize = 1 << 30;
 /// an accounting key - the kernel and us disagreeing about the reply.
 fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>> {
     // Kernels before disk_accounting_big_endian wrote the pos byte swapped
-    let kernel_version = bcachefs_kernel_version();
-    let need_swab = kernel_version > 0
-        && kernel_version < u32::from(MetadataVersion::disk_accounting_big_endian) as u64;
+    let need_swab = bcachefs_kernel_version().is_some_and(|v| v < MetadataVersion::disk_accounting_big_endian);
 
     VstructRefEntries::<c::bkey_i>::new(data)
         .map(|k| {

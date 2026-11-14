@@ -238,8 +238,8 @@ pub(crate) fn dev_remove_lrus(fs: &Fs, ca: &Dev) -> Result<(), BchError> {
 /// Whether the upgrade to the per-device fragmentation lrus is done: before
 /// it, entries can be in the old fs-wide one.
 pub(crate) fn per_dev_fragmentation_lru(fs: &Fs) -> bool {
-    fs.version_upgrade_complete().0 >=
-        MetadataVersion::per_dev_fragmentation_lru.0
+    fs.version_upgrade_complete() >=
+        MetadataVersion::per_dev_fragmentation_lru
 }
 
 // ── fsck ─────────────────────────────────────────────────────────────────

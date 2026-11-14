@@ -803,8 +803,8 @@ impl c::bch_fs_snapshots {
     /// only sectors count.
     pub fn accounting(&self, id: u32) -> SnapshotAccounting {
         let fs = self.fs();
-        let trust_keys = fs.version_upgrade_complete().0 >=
-            MetadataVersion::per_dev_fragmentation_lru.0;
+        let trust_keys = fs.version_upgrade_complete() >=
+            MetadataVersion::per_dev_fragmentation_lru;
 
         let mut btrees = crate::btrees_in(crate::BTREE_HAS_SNAPSHOTS_MASK);
         SnapshotAccounting(core::array::from_fn(|_| {
