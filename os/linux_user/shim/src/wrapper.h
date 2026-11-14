@@ -15,7 +15,6 @@
 #include "include/linux/sched.h"
 #include "include/linux/seqlock.h"
 #include "include/linux/string.h"
-#include "include/linux/uuid.h"
 #include "include/linux/unicode.h"
 #include "include/linux/xxhash.h"
 #include "include/linux/xattr.h"

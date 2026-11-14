@@ -175,7 +175,7 @@ fn accounting_read_done(fs: &Fs) -> bool {
 }
 
 fn query_uuid(fs: &Fs) -> Result<c::bch_ioctl_query_uuid, BchError> {
-    Ok(c::bch_ioctl_query_uuid { uuid: c::uuid_t { b: fs.sb.user_uuid.each_ref().map(|b| b.get()) } })
+    Ok(c::bch_ioctl_query_uuid { uuid: c::__uuid_t { b: fs.sb.user_uuid.each_ref().map(|b| b.get()) } })
 }
 
 fn fs_usage(fs: &Fs, user: UserArg<c::bch_ioctl_fs_usage>) -> Result<(), BchError> {

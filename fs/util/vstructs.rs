@@ -54,8 +54,6 @@ use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 
-use crate::c;
-
 /// Plain data: any bytes are a valid value, and every byte of one is part of
 /// a field - so a value can be read from bytes, and its bytes read back.
 ///
@@ -76,11 +74,6 @@ macro_rules! plain_byteorder {
     ($($t:ident),*) => { $(unsafe impl<O: zerocopy::byteorder::ByteOrder> Plain for zerocopy::byteorder::$t<O> {})* };
 }
 plain_byteorder!(U16, U32, U64, U128, I16, I32, I64, I128);
-
-// SAFETY: 16 bytes - the shim's own type, the kernel's uuid_t - sized here to
-// check there's nothing else
-unsafe impl Plain for c::__uuid_t {}
-const _: () = assert!(size_of::<c::__uuid_t>() == 16);
 
 /// Nothing, at compile time, if @T is Plain: what #[derive(Plain)] and
 /// #[bitfield] check a type's fields with (cstruct-macros' vstructs.rs).
@@ -104,7 +97,7 @@ macro_rules! native_self {
         fn from_native(n: Self) -> Self { n }
     })* };
 }
-native_self!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, c::__uuid_t);
+native_self!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128);
 
 impl<T: Native, const N: usize> Native for [T; N] {
     type Native = [T::Native; N];
@@ -1827,6 +1820,7 @@ impl<T: core::fmt::Debug> std::error::Error for ArmWalkError<T> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::c;
     use crate::types::{Le32, Le64};
     use crate::util::projections::{View, ViewMut};
     use cstruct_macros::{Plain, View};

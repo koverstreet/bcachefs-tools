@@ -84,9 +84,12 @@ pub use accounting::{DataType, DataTypes};
 #[path = "sb/members_format.rs"] pub mod members;
 pub use members::{MemberInitialized, MemberState};
 
-#[cfg(__KERNEL__)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, MaybeZeroable, Plain)]
 #[allow(non_camel_case_types)]
-pub type __uuid_t = c::uuid_t;
+pub struct __uuid_t {
+    pub b: [u8; 16],
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
