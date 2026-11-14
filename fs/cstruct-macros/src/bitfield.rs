@@ -5,7 +5,7 @@
 use proc_macro2::{Ident, Literal, TokenStream, TokenTree};
 use quote::{format_ident, quote, ToTokens};
 
-use crate::cstruct::{self, generic_arg, parse_cstruct};
+use crate::cstruct::{self, generic_arg, int_bits, parse_cstruct};
 use crate::tokens::{at, comma_list, key_value, respan};
 use crate::{bitfield_atomic, typeinfo, vstructs};
 
@@ -34,8 +34,7 @@ pub(crate) fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<To
         #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) { self.#set(f(self.#m())) }
     });
     // An integer member's NAME_MAX, the largest value it holds
-    let is_int = |ty: &syn::Type| matches!(ty, syn::Type::Path(p)
-        if p.path.get_ident().is_some_and(|i| matches!(i.to_string().as_str(), "u8" | "u16" | "u32" | "u64")));
+    let is_int = |ty: &syn::Type| int_bits(&ty.to_token_stream().to_string()).is_some();
     let max = item.fields.iter()
         .filter(|f| !f.ident.as_ref().expect("named members").to_string().starts_with('_') && is_int(&f.ty))
         .map(|f| {
@@ -96,13 +95,7 @@ pub(crate) fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<To
     // TypeInfo: each member but padding, as its bits of the word - the
     // storage integer, in its repr's byte order. A u128's aren't: kvdb's
     // integers are up to 8 bytes
-    let bytes = match storage.to_string().as_str() {
-        "u8" => Some(1u8),
-        "u16" => Some(2),
-        "u32" => Some(4),
-        "u64" => Some(8),
-        _ => None,
-    };
+    let bytes = int_bits(&storage.to_string()).map(|b| (b / 8) as u8);
     let little = syn::parse2::<syn::Type>(held.clone()).ok()
         .and_then(|t| match t {
             syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),

@@ -16,6 +16,8 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote, ToTokens};
 
+use crate::cstruct::int_bits;
+
 /// The atomic word of #[bitfield] @item, stored as @storage, a uN - its
 /// members as #[bitfield] has made them - and the value's ToText.
 pub(crate) fn atomic(item: &syn::ItemStruct, storage: &Ident) -> TokenStream {
@@ -63,7 +65,7 @@ pub(crate) fn atomic(item: &syn::ItemStruct, storage: &Ident) -> TokenStream {
         let label = m.to_string();
         match ty_name(ty).as_str() {
             "bool" => quote! { if self.#m() { sep(out); crate::prt!(out, #label); } },
-            "u8" | "u16" | "u32" | "u64" => quote! { sep(out); crate::prt!(out, "{}={}", #label, self.#m()); },
+            t if int_bits(t).is_some() => quote! { sep(out); crate::prt!(out, "{}={}", #label, self.#m()); },
             _ => quote! { sep(out); crate::prt!(out, "{}=", #label); crate::util::ToText::to_text(&self.#m(), out); },
         }
     });

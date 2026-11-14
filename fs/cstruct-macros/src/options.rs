@@ -42,8 +42,9 @@ use proc_macro2::{Literal, TokenStream};
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{parenthesized, token, Data, DataStruct, DeriveInput, Error, Expr, ExprLit, Fields, Ident, Lit, LitStr,
-          Meta, Token, Type};
+use syn::{parenthesized, token, Data, DataStruct, DeriveInput, Error, Expr, Fields, Ident, Token, Type};
+
+use crate::cstruct::doc_of;
 
 /// An #[opt(...)]: its type, `kind(args)`, then its `key = value`s.
 struct OptAttr {
@@ -148,13 +149,8 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         (kind, _) => return Err(Error::new_spanned(&a.kind, format!("{name}: #[opt]: {kind}: not an option type"))),
     };
 
-    let flags = match a.flags.is_empty() {
-        true => quote!(0),
-        false => {
-            let f = &a.flags;
-            quote!(#(c::OptFlags::#f.bits())|*)
-        }
-    };
+    let flags = &a.flags;
+    let flags = quote!(0 #(| c::OptFlags::#flags.bits())*);
     // the head: what either state of a superblock has its fields on
     let head = |host: &Ident| match host == "bch_sb" {
         true => crate::tokens::derived(host, "head"),
@@ -197,12 +193,11 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         }
     };
 
-    let id = f.name;
-    let name = name.to_string();
+    let label = name.to_string();
     Ok(quote! {
         #o::Opt {
-            id:    OptId::#id,
-            name:  #name,
+            id:    OptId::#name,
+            name:  #label,
             flags: c::OptFlags::from_bits_retain(#flags),
             ty:    #ty,
             min:   #min,
@@ -214,58 +209,25 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
     })
 }
 
-enum Accessor {
-    Bool,
-    /// A string option's choices' enum, through #[bch_enum]'s from_bits() and
-    /// into_bits(): a closed enum's from_bits() panics on a value that isn't
-    /// one, and a string option's value is an index into its choices - so
-    /// one, unless something set it around the parser.
-    Enum(Expr),
-    Field,
-}
-
-/// What an option's accessors take and give: a bool option's a bool, a
-/// string option's its enum, the rest the field's own type.
-fn accessor_type(a: &OptAttr) -> Accessor {
-    match (a.kind.to_string().as_str(), a.args.as_slice()) {
-        ("bool", []) => Accessor::Bool,
-        ("str" | "str_nolimit", [e]) => Accessor::Enum(e.clone()),
-        _ => Accessor::Field,
-    }
-}
-
 type Conv = Box<dyn Fn(TokenStream) -> TokenStream>;
 
-/// What option @f's accessors take and give; that from the field's value, an
-/// expression; and the field's value from one of it, `v`.
+/// What option @f's accessors take and give - a bool option's a bool, a
+/// string option's its enum, the rest the field's own type; that from the
+/// field's value, an expression; and the field's value from one of it, `v`.
 fn accessor(f: &Opt<'_>) -> (TokenStream, Conv, TokenStream) {
     let ty = f.ty;
-    match accessor_type(&f.attr) {
-        Accessor::Bool    => (quote!(bool), Box::new(|x| quote!(#x != 0)), quote!(v as #ty)),
-        Accessor::Enum(e) => (quote!(c::#e), Box::new(move |x| quote!(c::#e::from_bits(#x as _))),
-                              quote!(v.into_bits() as #ty)),
-        Accessor::Field   => (quote!(#ty), Box::new(|x| x), quote!(v)),
+    match (f.attr.kind.to_string().as_str(), f.attr.args.as_slice()) {
+        ("bool", []) => (quote!(bool), Box::new(|x| quote!(#x != 0)), quote!(v as #ty)),
+        // through #[bch_enum]'s from_bits() and into_bits(): a closed enum's
+        // from_bits() panics on a value that isn't one, and a string option's
+        // value is an index into its choices - so one, unless something set
+        // it around the parser
+        ("str" | "str_nolimit", [e]) => {
+            let e = e.clone();
+            (quote!(c::#e), Box::new(move |x| quote!(c::#e::from_bits(#x as _))), quote!(v.into_bits() as #ty))
+        }
+        _ => (quote!(#ty), Box::new(|x| x), quote!(v)),
     }
-}
-
-/// The option's default, from its #[opt]: 0 without one.
-fn default(f: &Opt<'_>) -> TokenStream {
-    let ty = f.ty;
-    match &f.attr.default {
-        Some(d) => quote!((#d) as #ty),
-        None => quote!(0),
-    }
-}
-
-/// A field's doc comment, a line per attribute.
-fn doc_lines(f: &syn::Field) -> Vec<String> {
-    f.attrs.iter().filter_map(|a| match &a.meta {
-        Meta::NameValue(nv) if nv.path.is_ident("doc") => match &nv.value {
-            Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => Some(s.value()),
-            _ => None,
-        },
-        _ => None,
-    }).collect()
 }
 
 pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
@@ -278,15 +240,15 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         let Some(a) = f.attrs.iter().rev().find(|a| a.path().is_ident("opt")) else { continue };
         let ident = f.ident.as_ref().expect("named fields");
         let attr = a.parse_args().map_err(|e| Error::new(e.span(), format!("{ident}: #[opt]: {e}")))?;
-        opts.push(Opt { name: ident, ty: &f.ty, attr, doc: doc_lines(f) });
+        opts.push(Opt { name: ident, ty: &f.ty, attr, doc: f.attrs.iter().filter_map(doc_of).collect() });
     }
 
-    let labels = opts.iter().map(|f| LitStr::new(&f.name.to_string(), f.name.span()));
     let ids = opts.iter().map(|f| f.name);
     let table = opts.iter().map(option).collect::<syn::Result<Vec<_>>>()?;
-    let defaults = opts.iter().map(|f| {
-        let (n, d) = (f.name, default(f));
-        quote!(opts.#n = #d;)
+    // DEFAULTS starts zeroed: an option without a default is 0
+    let defaults = opts.iter().filter_map(|f| {
+        let (n, ty, d) = (f.name, f.ty, f.attr.default.as_ref()?);
+        Some(quote!(opts.#n = (#d) as #ty;))
     });
 
     // What reads and writes a value of each option, generic over how a
@@ -413,7 +375,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         #[nr]
         #[repr(u32)]
         pub enum OptId {
-            #(#[label(#labels)] #ids,)*
+            #(#ids,)*
         }
 
         const _: () = assert!(#nr <= BCH_OPTS_MAX as usize, "more options than BCH_OPTS_MAX");
