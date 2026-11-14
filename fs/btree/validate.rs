@@ -3,7 +3,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_header_validate, bkey_val_validate, AllTypes, BkeyI, BkeyP, BkeySC, FamilyVal,
                          ValidateFlags, BKEY_U64S};
-use crate::btree::{compat::__bch2_bkey_compat, node::{BtreeNode, NodeContents}, read::BsetHolder};
+use crate::btree::{compat, node::{BtreeNode, NodeContents}, read::BsetHolder};
 use crate::c::{self, Errcode as e};
 use crate::data::ptrs::BkeyVRead;
 use crate::errcode::BchError;
@@ -427,9 +427,8 @@ fn bkey_compat(v: &NodeValidate<'_>, version: MetadataVersion, big_endian: bool,
        big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         unsafe {
-            __bch2_bkey_compat(Some(v.fs), b.c.level.into(), Btree(b.c.btree_id.into()), version,
-                               big_endian.into(), v.writing().into(), Some(&b.contents().format),
-                               k.as_ffi_mut())
+            compat::bkey_compat(Some(v.fs), Btree(b.c.btree_id.into()), version, big_endian, v.writing(),
+                                Some(&b.contents().format), k)
         }
     }
 }

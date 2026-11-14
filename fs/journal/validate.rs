@@ -8,13 +8,13 @@ use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Btree, DataType, MetadataVersion};
 use crate::fs::{Dev, Fs};
-use crate::btree::bkey::{BkeySC, ValidateFlags};
+use crate::btree::bkey::{BkeyP, BkeySC, ValidateFlags};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::SbErrorId;
 use crate::util::log::LogMsg;
-use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, ArmRef, Head, SelfSized,
-                            Unvalidated, VStruct};
+use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef, Head,
+                            SelfSized, Unvalidated, VStruct};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
 
@@ -167,10 +167,11 @@ fn bkey_compat(ctx: &Ctx<'_>, k: &mut [u8]) {
     if ctx.version < c::MetadataVersion::CURRENT ||
        ctx.big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
+        let k = cast_plain_slice_mut(k).and_then(BkeyP::from_slice_mut)
+            .expect("a journal key: whole u64s, its u64s checked");
         unsafe {
-            crate::btree::compat::__bch2_bkey_compat(Some(ctx.fs), ctx.from.level.into(), ctx.from.btree, ctx.version,
-                                                     ctx.big_endian.into(), ctx.write().into(), None,
-                                                     k.as_mut_ptr().cast());
+            crate::btree::compat::bkey_compat(Some(ctx.fs), ctx.from.btree, ctx.version, ctx.big_endian,
+                                              ctx.write(), None, k);
         }
     }
 }

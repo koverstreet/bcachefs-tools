@@ -5,18 +5,18 @@
 //! back on write.
 //!
 //! Each transform is its own inverse, or paired with its inverse by @write,
-//! so read then write is the identity. The rest of the compat code -
-//! compat_btree_node() - is C's.
+//! so read then write is the identity. A node's header's is
+//! compat_btree_node(), btree/validate.rs.
 //!
 //! Every transform is of metadata not yet validated: the key-level entry
 //! points, ->swab and ->compat, should take Unvalidated keys. XXX: they don't
 //! yet - Rust has no unvalidated keys to give them.
 
-use crate::btree::bkey::{BkeyP, BkeyS};
+use crate::btree::bkey::{AllTypes, BkeyP, BkeyS, FamilyVal};
 use crate::c;
 use crate::fs::Fs;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
-use core::ffi::{c_int, c_uint};
+use crate::util::vstructs::Unvalidated;
 
 impl Bpos {
     /// Byte-swapped, as written by a machine of the other endianness: every
@@ -38,18 +38,17 @@ unsafe fn bkey_swab_key(f: Option<&c::bkey_format>, k: *mut c::bkey_packed) {
     crate::util::vstructs::plain_bytes_mut(words)[core::mem::offset_of!(c::bkey_packed, key_start)..].reverse();
 }
 
-/// __bch2_bkey_compat(): @k, in a node at @level of @btree that @version on
-/// a machine @big_endian or not wrote, made this version's and this
-/// machine's to read, or back to write: each step in reverse to write.
+/// @k, in a node of @btree that @version on a machine @big_endian or not
+/// wrote, made this version's and this machine's to read, or back to
+/// @write: each step in reverse to write.
 ///
 /// # Safety
-/// @k is a key in @f's node, as long as its u64s says - not yet validated:
-/// too short to be a key, it's left for validate.
-pub unsafe fn __bch2_bkey_compat(fs: Option<&Fs>, _level: c_uint, btree: Btree, version: MetadataVersion,
-                                 big_endian: c_uint, write: c_int, f: Option<&c::bkey_format>,
-                                 k: *mut c::bkey_packed) {
-
-    let (big_endian, write) = (big_endian != 0, write != 0);
+/// @k is a key in @f's node - None for a journal key's, never packed - not
+/// yet validated: too short to be a key, it's left for validate.
+pub unsafe fn bkey_compat(fs: Option<&Fs>, btree: Btree, version: MetadataVersion, big_endian: bool,
+                          write: bool, f: Option<&c::bkey_format>,
+                          k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
+    let k = core::ptr::from_mut(k).cast::<c::bkey_packed>();
     let packed = |k: *mut c::bkey_packed| unsafe { (*BkeyP::from_raw(k)).is_packed() };
     // a journal key's has none: it's never packed
     let fmt = || f.expect("a packed key, with no format");
