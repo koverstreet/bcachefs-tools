@@ -69,17 +69,22 @@ use core::mem::size_of;
 
 /// Why a key's parked, for the trace.
 #[derive(Clone, Copy)]
-pub enum ParkReason {
+pub enum ParkReason<'a> {
     /// No stripe of @redundancy can form in @target now.
     NoStripe { target: u32, redundancy: u32 },
     /// data_replicas can't be matched: the devices' durabilities don't sum
     /// to it, or a drop would cost online durability.
     Replicas(u32),
+    /// Its move, with @opts and @data_opts, failed to start with @err, which
+    /// move_err_parks(): the trace says why, as can_do_data_update() does.
+    MoveFailed { err: BchError, opts: &'a c::bch_inode_opts, data_opts: &'a c::data_update_opts },
+    /// Its data update, with @opts and @data_opts, ran and failed with @err.
+    UpdateFailed { err: BchError, opts: &'a c::bch_inode_opts, data_opts: &'a c::data_update_opts },
 }
 
 pub enum Plan {
     Move(c::data_update_opts),
-    Park(ParkReason),
+    Park(ParkReason<'static>),
     Nothing,
 }
 
@@ -292,49 +297,49 @@ pub fn pending_sectors(fs: &Fs, k: BkeySC<'_>) -> u64 {
     if k.k.is_btree_ptr() { fs.btree_sectors().into() } else { k.k.size.into() }
 }
 
-/// Park @k, at @iter at @level, for @why: marked pending, and traced.
-pub fn park(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>, why: ParkReason)
+/// Park @k, at @iter at @level, for @why: traced, and marked pending. A
+/// restart the trace takes - can_do_data_update() can, getting a stripe head -
+/// is returned before it's marked.
+pub fn park(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>, why: ParkReason<'_>)
     -> Result<(), BchError>
 {
     let fs = t.fs();
+    let mut restart = None;
     fs.event_add_trace(events::reconcile_set_pending, pending_sectors(fs, k), |out| match why {
         ParkReason::NoStripe { target, redundancy } => {
             write!(out, "can't form ec stripe\n{}\n", k.to_text(fs));
             fs.can_form_ec_stripe(target, redundancy, Some(out));
         }
         ParkReason::Replicas(want) => write!(out, "can't match data_replicas={want}\n{}", k.to_text(fs)),
+        ParkReason::MoveFailed { err, opts, data_opts } => {
+            write!(out, "{err}\n{}\n", k.to_text(fs));
+            fs.data_update_opts_to_text(out, opts, data_opts);
+            write!(out, "\n");
+            restart = t.can_do_data_update(opts, data_opts, k, Some(out)).err().filter(is_restart);
+        }
+        ParkReason::UpdateFailed { err, opts, data_opts } => {
+            write!(out, "{err}\n{}\n", k.to_text(fs));
+            fs.data_update_opts_to_text(out, opts, data_opts);
+        }
     });
+    if let Some(restart) = restart {
+        return Err(restart);
+    }
     pending_mod(t, iter, level, k, true)
 }
 
-/// Whether move error @e parks @k rather than failing it: no devices to
-/// write to, too few, no space - the configuration has to change first.
-/// Traced, with why the update can't be done; Err(@e) if it doesn't park.
-/// Not a transient EC allocation failure: ENOSPC-class, as allocation
-/// failures are, but it says "not right now", and nothing retries the
-/// pending list. check_reconcile_pending_err().
-pub fn parks_on(t: &TransAttempt<'_, '_>, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
-                k: BkeySC<'_>, e: BchError) -> Result<(), BchError> {
+/// Whether move error @e parks the key rather than failing it: no devices to
+/// write to, too few, no space - the configuration has to change first. Not a
+/// transient EC allocation failure: ENOSPC-class, as allocation failures are,
+/// but it says "not right now", and nothing retries the pending list.
+/// check_reconcile_pending_err().
+pub fn move_err_parks(e: BchError) -> bool {
     use c::Errcode as err;
-    let fs = t.fs();
 
-    if e.matches(err::ec_alloc_failed_transient) ||
-        !(e.matches(err::data_update_fail_no_rw_devs) ||
-          e.matches(err::insufficient_devices) ||
-          e.matches(c::ENOSPC)) {
-        return Err(e);
-    }
-
-    // Why, as can_do_data_update() tells the trace - which can restart
-    // the attempt, getting a stripe head: that's then ours to return
-    let mut restart = None;
-    fs.event_add_trace(events::reconcile_set_pending, pending_sectors(fs, k), |out| {
-        write!(out, "{e}\n{}\n", k.to_text(fs));
-        fs.data_update_opts_to_text(out, opts, data_opts);
-        write!(out, "\n");
-        restart = t.can_do_data_update(opts, data_opts, k, Some(out)).err().filter(is_restart);
-    });
-    restart.map_or(Ok(()), Err)
+    !e.matches(err::ec_alloc_failed_transient) &&
+        (e.matches(err::data_update_fail_no_rw_devs) ||
+         e.matches(err::insufficient_devices) ||
+         e.matches(c::ENOSPC))
 }
 
 /// @k's reconcile entry marked pending, if @set, or not - committed, @k at

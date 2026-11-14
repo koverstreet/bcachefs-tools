@@ -39,7 +39,7 @@ use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, B
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::update::ptr_bits_to_text;
 use crate::data::ptrs::{brand, extents_match, BkeyVPtrs, Branded, PtrMask, Ptrs, PtrsMut};
-use crate::data::reconcile::plan::pending_mod;
+use crate::data::reconcile::plan::{park, ParkReason};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
@@ -453,29 +453,34 @@ pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -
     })
 }
 
-/// EC allocation failed - the write never happened, but the extent still
-/// needs erasure coding. Mark it pending so reconcile retries from the pending
-/// list instead of the main scan.
-pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
+/// @u's extent parked for @why, so reconcile retries it from the pending list
+/// instead of the main scan: whether it was - not if it was rewritten or
+/// deleted while the update was in flight.
+fn park_update(u: &c::data_update, why: ParkReason<'_>) -> Result<bool, BchError> {
     let fs = u.op.fs();
     let trans = crate::btree_trans!(fs);
     let old = BkeySC::from(u.k.key());
     let mut parked = false;
 
-    let ret = bch_err_fn!(fs, for_each_old_slot(&trans, u, None, |t, iter, k| {
+    bch_err_fn!(fs, for_each_old_slot(&trans, u, None, |t, iter, k| {
         if !extents_match(fs, k, old) {
             return Ok(());
         }
 
-        fs.event_add_trace(events::reconcile_set_pending, k.k.size.into(), |out| {
-            write!(out, "{}\n{}\n", BchError::from_raw(-i32::from(u.op.error)), k.to_text(fs));
-            fs.data_update_opts_to_text(out, &u.op.opts, &u.opts);
-        });
-
-        pending_mod(t, iter, 0, k, true)?;
+        park(t, iter, 0, k, why)?;
         parked = true;
         Ok(())
-    }));
+    }))?;
+    Ok(parked)
+}
+
+/// EC allocation failed - the write never happened, but the extent still
+/// needs erasure coding. Mark it pending so reconcile retries from the pending
+/// list instead of the main scan.
+pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
+    let fs = u.op.fs();
+    let err = BchError::from_raw(-i32::from(u.op.error));
+    let parked = park_update(u, ParkReason::UpdateFailed { err, opts: &u.op.opts, data_opts: &u.opts });
 
     /*
      * Nothing matched: the extent we were reconciling was rewritten or
@@ -483,7 +488,7 @@ pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
      * Distinct error code so the update's exit() still traces it -
      * ec_alloc_failed itself is suppressed there because it parks.
      */
-    if ret.is_ok() && !parked {
+    if let Ok(false) = parked {
         u.op.error = -fs.err(Errcode::ec_alloc_failed_pending_race).raw() as i16;
     }
 }

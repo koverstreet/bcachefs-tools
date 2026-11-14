@@ -66,7 +66,7 @@ use crate::data::ec::repair::{stripe_repair, StripeRepair};
 use crate::data::moving::{key_sectors, IoMark, MoveStats, MovingCtxt};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
-use crate::data::reconcile::plan::{park, parks_on, pending_mod, plan, Plan};
+use crate::data::reconcile::plan::{move_err_parks, park, pending_mod, plan, ParkReason, Plan};
 use crate::data::reconcile::scan::ScanCookie;
 use crate::data::reconcile::trigger::{rb_work_to_data_pos, reconcile_bp_get_key};
 use crate::errcode::BchError;
@@ -517,7 +517,11 @@ impl<'a, 'f> Walker<'a, 'f> {
             match t.can_do_data_update(&opts, &d, k, None) {
                 Ok(()) => {}
                 // still can't: it stays parked
-                Err(e) => return parks_on(t, &opts, &d, k, e).map(|()| None),
+                Err(e) if move_err_parks(e) => {
+                    let why = ParkReason::MoveFailed { err: e, opts: &opts, data_opts: &d };
+                    return park(t, iter, level, k, why).map(|()| None);
+                }
+                Err(e) => return Err(e),
             }
 
             // The pending list is in logical inode:offset order, but data on
@@ -536,21 +540,20 @@ impl<'a, 'f> Walker<'a, 'f> {
         match ret {
             Ok(()) => {}
             Err(e) if is_restart(&e) || e.matches(err::data_update_fail_need_copygc) => return Err(e),
-            Err(e) => match parks_on(t, &opts, &d, k, e) {
-                Ok(()) => pending_mod(t, iter, level, k, true)?,
-                Err(e) if is_restart(&e) => return Err(e),
-                Err(e) => {
-                    warn_once!(!(e.matches(c::EROFS) ||
-                                 e.matches(c::ENOMEM) ||
-                                 e.matches(err::snapshot) ||
-                                 e.matches(err::data_update_fail_no_snapshot) ||
-                                 e.matches(err::data_update_fail_in_flight) ||
-                                 e.matches(err::freelist_empty) ||
-                                 e.matches(err::open_buckets_empty)),
-                               fs, "unhandled error from move_extent: {e}");
-                    // skip it, and go on
-                }
-            },
+            Err(e) if move_err_parks(e) => {
+                park(t, iter, level, k, ParkReason::MoveFailed { err: e, opts: &opts, data_opts: &d })?;
+            }
+            Err(e) => {
+                warn_once!(!(e.matches(c::EROFS) ||
+                             e.matches(c::ENOMEM) ||
+                             e.matches(err::snapshot) ||
+                             e.matches(err::data_update_fail_no_snapshot) ||
+                             e.matches(err::data_update_fail_in_flight) ||
+                             e.matches(err::freelist_empty) ||
+                             e.matches(err::open_buckets_empty)),
+                           fs, "unhandled error from move_extent: {e}");
+                // skip it, and go on
+            }
         }
         Ok(Some((opts, d)))
     }
