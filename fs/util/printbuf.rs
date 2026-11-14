@@ -491,27 +491,15 @@ impl Printbuf {
         }
     }
 
-    /// As comma-separated names.
-    ///
-    /// # Safety
-    /// `list` must be a valid null-terminated array of C string pointers.
-    pub unsafe fn prt_bitflags(&mut self, list: *const *const c_char, flags: u64) {
-        self.set_names(unsafe { c_strs(list) }.map(CStr::to_bytes), |i| i < 64 && flags & 1 << i != 0);
-    }
-
     /// The names of the bits set in @flags, comma separated - a bit past the
     /// end of @names has none, and isn't printed.
     pub fn bitflags(&mut self, names: &[&str], flags: u64) {
-        self.set_names(names.iter().map(|s| s.as_bytes()), |i| i < 64 && flags & 1 << i != 0);
-    }
-
-    /// The @names whose bit is @set, comma separated.
-    fn set_names<'a>(&mut self, names: impl Iterator<Item = &'a [u8]>, set: impl Fn(usize) -> bool) {
-        for (n, (_, name)) in names.enumerate().filter(|&(i, _)| set(i)).enumerate() {
+        let set = names.iter().enumerate().filter(|&(i, _)| i < 64 && flags & 1 << i != 0);
+        for (n, (_, name)) in set.enumerate() {
             if n != 0 {
                 self.write_bytes(b",");
             }
-            self.write_bytes_indented(name);
+            self.write_bytes_indented(name.as_bytes());
         }
     }
 
@@ -848,16 +836,6 @@ unsafe fn realloc(p: *mut c_char, size: usize, vmalloc: bool) -> *mut c_char {
         let _ = vmalloc;
         unsafe { bcachefs_shim::alloc::krealloc(p.cast(), size, c::GFP_KERNEL) }.cast()
     }
-}
-
-/// The strings of a NULL-terminated C list: a name table's.
-///
-/// # Safety
-/// @list is one, its strings live as long as 'a.
-unsafe fn c_strs<'a>(list: *const *const c_char) -> impl Iterator<Item = &'a CStr> {
-    (0..).map(move |i| unsafe { *list.add(i) })
-        .take_while(|p| !p.is_null())
-        .map(|p| unsafe { CStr::from_ptr(p.cast()) })
 }
 
 /// @bdev's name: as the kernel's %pg prints it, its disk's and partition's;

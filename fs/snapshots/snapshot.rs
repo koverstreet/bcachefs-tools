@@ -1099,7 +1099,7 @@ impl fmt::Display for c::Snapshot {
     }
 }
 
-/// The obsolete flag bits by name, comma separated: prt_bitflags()'s.
+/// The obsolete flag bits by name, comma separated.
 struct ObsoleteFlags(u32);
 
 impl fmt::Display for ObsoleteFlags {

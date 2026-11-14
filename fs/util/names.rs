@@ -15,7 +15,6 @@
 use core::ffi::CStr;
 use core::marker::PhantomData;
 
-use crate::util::ffi::c_char;
 use crate::util::{Join, Printbuf, ToText};
 
 pub trait Names {
@@ -113,25 +112,7 @@ impl<T: Names> ToText for Set<T> {
     }
 }
 
-// ── C's string tables ────────────────────────────────────────────────────
-
-/// The length of @T's C table: its values, and the NULL after.
-pub const fn c_table_len<T: Names>() -> usize {
-    table_len(T::ENTRIES) + 1
-}
-
-/// @T's names as C's string tables have them - by value, each NUL
-/// terminated, NULL for a value none has, and NULL after the last - for a
-/// static of [*const c_char; c_table_len::<T>()]. Built at compile time: the
-/// names, NUL terminated, in a static of their own, and the table into it.
-#[macro_export]
-macro_rules! c_names_table {
-    ($t:ty) => {{
-        const E: &[(&str, u64)] = <$t as $crate::util::names::Names>::ENTRIES;
-        static BUF: [u8; $crate::util::names::nul_len(E)] = $crate::util::names::nul_names(E);
-        $crate::util::names::c_table(&BUF, E)
-    }};
-}
+// ── As C strings ─────────────────────────────────────────────────────────
 
 /// The length of @entries' names, each NUL terminated.
 pub const fn nul_len(entries: &[(&str, u64)]) -> usize {
@@ -161,22 +142,9 @@ pub const fn nul_names<const B: usize>(entries: &[(&str, u64)]) -> [u8; B] {
     buf
 }
 
-/// C's table of @entries' names, nul_names()'s @buf: by value, NULL for a
-/// value none has, and NULL after the last.
-pub const fn c_table<const N: usize>(buf: &'static [u8], entries: &[(&str, u64)]) -> [*const c_char; N] {
-    let mut t = [core::ptr::null(); N];
-    let (mut i, mut at) = (0, 0);
-    while i < entries.len() {
-        t[entries[i].1 as usize] = buf.as_ptr().wrapping_add(at).cast();
-        at += entries[i].0.len() + 1;
-        i += 1;
-    }
-    t
-}
-
 /// @T's names as C strings, by value - "" for a value none has: for what
-/// wants &CStr, sysfs's file names. Built at compile time, as
-/// c_names_table!'s.
+/// wants &CStr, sysfs's file names. Built at compile time: the names, NUL
+/// terminated, in a static of their own, and the table into it.
 #[macro_export]
 macro_rules! cstr_names {
     ($t:ty) => {{

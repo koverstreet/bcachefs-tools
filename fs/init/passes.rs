@@ -160,10 +160,9 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::locking::ExclusiveGuard;
 use crate::sb::io::{SbFieldOps, SbWrite};
 use crate::snapshots::subvolume;
-use crate::types::{CStatic, Le32, Le64};
+use crate::types::{Le32, Le64};
 use crate::data_structures::bitmap::LeBitmap;
 use crate::util::names;
-use crate::util::ffi::c_char;
 use crate::os::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
 use crate::util::kthread::Kthread;
 use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
@@ -215,10 +214,6 @@ const TO_STABLE: [u8; NR] = {
     }
     t
 };
-
-/// The names, as a NULL-terminated table: for prt_bitflags().
-pub static RECOVERY_PASS_NAMES: CStatic<[*const c_char; names::c_table_len::<Pass>()]> =
-    unsafe { CStatic::new(crate::c_names_table!(Pass)) };
 
 // a mask of passes is a u64
 const _: () = assert!(NR <= 64);
