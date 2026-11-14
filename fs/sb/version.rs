@@ -47,7 +47,7 @@ fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) 
             Upgrade::compatible   => latest_compatible,
             Upgrade::incompatible => latest_version,
             Upgrade::none         => old_version.min(latest_version),
-            _                     => MetadataVersion(0),
+            _                     => old_version,
         }
     };
 
