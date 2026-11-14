@@ -7,6 +7,7 @@ mod common;
 pub use common::*;
 
 pub const PAGE_SIZE: usize = kernel::page::PAGE_SIZE;
+pub const MAX_FILE_SIZE: u64 = c::MAX_LFS_FILESIZE as u64;
 
 /// The @i'th CPU of a spread across the online CPUs, NUMA-local ones first:
 /// as cpumask_local_spread(i, NUMA_NO_NODE).
@@ -29,6 +30,11 @@ pub fn mem_available_bytes() -> usize {
 
 pub fn mem_alloc_profiling_enabled() -> bool {
     unsafe { c::mem_alloc_profiling_enabled() }
+}
+
+/// @bytes freed, for reclaim to count as its own.
+pub fn account_reclaimed(bytes: usize) {
+    unsafe { c::mm_account_reclaimed_pages((bytes / PAGE_SIZE) as _) }
 }
 
 pub fn random_bytes(buf: &mut [u8]) {

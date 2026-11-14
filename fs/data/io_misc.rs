@@ -29,19 +29,12 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
 use crate::util::closure::StackClosure;
-use crate::os::kernel::WRITE;
+use crate::os::kernel::{MAX_FILE_SIZE, WRITE};
 use crate::util::log::should_print_err;
 use crate::util::{max_of, Printbuf};
 use crate::{bch_err_fn, bch_err_ratelimited, inode, logged_ops};
 use pin_init::stack_pin_init;
 use crate::format::{Bpos, Btree, MetadataVersion, SbFeature};
-
-/// MAX_LFS_FILESIZE: as far as the page cache indexes - a 32 bit kernel's
-/// ULONG_MAX pages, else LLONG_MAX.
-#[cfg(all(kernel, target_pointer_width = "32"))]
-const MAX_LFS_FILESIZE: u64 = (usize::MAX as u64) << kernel::page::PAGE_SHIFT;
-#[cfg(not(all(kernel, target_pointer_width = "32")))]
-const MAX_LFS_FILESIZE: u64 = i64::MAX as u64;
 
 // ── fallocate ────────────────────────────────────────────────────────────
 
@@ -320,7 +313,7 @@ fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, offset: u64, le
                                     warn.then_some(c"adjust_i_size"))?;
 
     if len > 0 {
-        if MAX_LFS_FILESIZE.wrapping_sub(inode_u.bi_size) < len as u64 {
+        if MAX_FILE_SIZE.wrapping_sub(inode_u.bi_size) < len as u64 {
             return Err(c::EFBIG.into());
         }
 

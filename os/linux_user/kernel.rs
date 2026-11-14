@@ -5,6 +5,8 @@ mod common;
 pub use common::*;
 
 pub const PAGE_SIZE: usize = 4096;
+/// A file offset is an i64.
+pub const MAX_FILE_SIZE: u64 = i64::MAX as u64;
 
 /// Userspace has no vmalloc: its is_vmalloc_addr() was a macro, 0.
 pub fn is_vmalloc_addr<T>(_p: *const T) -> bool {
@@ -45,6 +47,9 @@ pub fn mem_available_bytes() -> usize {
 pub fn mem_alloc_profiling_enabled() -> bool {
     false
 }
+
+/// Nothing here counts it.
+pub fn account_reclaimed(_bytes: usize) {}
 
 pub fn msleep(ms: u32) {
     std::thread::sleep(core::time::Duration::from_millis(ms.into()))

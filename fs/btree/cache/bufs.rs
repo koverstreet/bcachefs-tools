@@ -353,13 +353,10 @@ pub unsafe fn node_data_free(b: NonNull<BtreeNode>) {
      * kmalloc_large() path, so we're working around a slub bug by doing
      * this here:
      */
-    #[cfg(kernel)]
     unsafe {
-        use crate::os::kernel::PAGE_SIZE;
-
-        c::mm_account_reclaimed_pages(((*p).buf_bytes() / PAGE_SIZE) as _);
+        crate::os::kernel::account_reclaimed((*p).buf_bytes());
         if !bufs.aux_data.is_null() {
-            c::mm_account_reclaimed_pages(((*p).aux_data_bytes() / PAGE_SIZE) as _);
+            crate::os::kernel::account_reclaimed((*p).aux_data_bytes());
         }
     }
 

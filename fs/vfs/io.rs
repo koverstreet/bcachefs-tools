@@ -24,7 +24,8 @@ use crate::snapshots::subvolume;
 use crate::util::bio::{Bio, Gathered};
 use crate::os::file::File;
 use crate::util::gather::Gather;
-use crate::os::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, PAGE_BYTES, PAGE_SECTORS, PAGE_SECTORS_SHIFT};
+use crate::os::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, MAX_FILE_SIZE, PAGE_BYTES, PAGE_SECTORS,
+                        PAGE_SECTORS_SHIFT};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::util::rcu::read_lock;
@@ -159,7 +160,6 @@ pub(super) fn fsync(inode: &InodeInfo, file: &File, start: c::loff_t, end: c::lo
 
 /* truncate: */
 
-const MAX_LFS_FILESIZE: u64 = c::MAX_LFS_FILESIZE as u64;
 
 fn range_has_data(fs: &Fs, subvol: u32, start: Bpos, end: Bpos) -> Result<bool, BchError> {
     let trans = crate::btree_trans!(fs);
@@ -464,7 +464,7 @@ impl InodeInfo {
         }
 
         if insert {
-            if MAX_LFS_FILESIZE - v.size() < len {
+            if MAX_FILE_SIZE - v.size() < len {
                 return Err(c::EFBIG.into());
             }
 
@@ -673,7 +673,7 @@ pub(super) fn fallocate(inode: &InodeInfo, file: &File, mode: c_int, offset: i64
 
 fn seek_data(inode: &InodeInfo, file: &File, offset: u64) -> Result<u64, BchError> {
     let inum = inode.inum();
-    let mut next_data = MAX_LFS_FILESIZE;
+    let mut next_data = MAX_FILE_SIZE;
 
     let isize = inode.vfs().size();
     if offset >= isize {
@@ -702,12 +702,12 @@ fn seek_data(inode: &InodeInfo, file: &File, offset: u64) -> Result<u64, BchErro
         return Err(c::ENXIO.into());
     }
 
-    file.setpos(next_data, MAX_LFS_FILESIZE)
+    file.setpos(next_data, MAX_FILE_SIZE)
 }
 
 fn seek_hole(inode: &InodeInfo, file: &File, mut offset: u64) -> Result<u64, BchError> {
     let inum = inode.inum();
-    let mut next_hole = MAX_LFS_FILESIZE;
+    let mut next_hole = MAX_FILE_SIZE;
 
     let isize = inode.vfs().size();
     if offset >= isize {
@@ -721,7 +721,7 @@ fn seek_hole(inode: &InodeInfo, file: &File, mut offset: u64) -> Result<u64, Bch
                                                   inum.subvol as u32, flags, |t, _, k| {
         if !k.k.extent_is_data() {
             let start_offset = offset.max(k.k.start_offset() << 9);
-            let end_offset = MAX_LFS_FILESIZE;
+            let end_offset = MAX_FILE_SIZE;
 
             /*
              * Found a hole in the btree, now make sure it's
@@ -741,7 +741,7 @@ fn seek_hole(inode: &InodeInfo, file: &File, mut offset: u64) -> Result<u64, Bch
         Ok(ControlFlow::Continue(()))
     })?;
 
-    file.setpos(next_hole.min(isize), MAX_LFS_FILESIZE)
+    file.setpos(next_hole.min(isize), MAX_FILE_SIZE)
 }
 
 pub(super) fn llseek(inode: &InodeInfo, file: &File, offset: i64, whence: c_int) -> Result<u64, BchError> {
