@@ -162,7 +162,6 @@ fn main() {
         .opaque_type("device")
         .opaque_type("class")
         .opaque_type("blk_plug")
-        .opaque_type("idr")
         .generate_inline_functions(true)
         .wrap_static_fns(true)
         .wrap_static_fns_path(out_dir.join("extern.c"))

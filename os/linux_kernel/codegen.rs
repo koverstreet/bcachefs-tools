@@ -48,7 +48,6 @@ const KERNEL_HEADERS: &[&str] = &[
     "crypto/poly1305.h",		// and MACs
     "linux/fs_context.h",		// struct fs_context, logfc(): os/linux_kernel/fs_context.rs's - the kernel crate's is opaque
     "linux/percpu-refcount.h",		// percpu_ref_get(), _put(): a DevRef's ca->ref, static inlines
-    "linux/idr.h",			// ida_init(), ida_find_first(): fast_list.rs's slots - static inlines
     "linux/console.h",			// console_trylock(): util/log.rs holds the console across a message
     "linux/bio.h",			// bio_set_dev(), util/bio.rs's; bio_iov_vecs_to_alloc(),
 					// os/linux_kernel/iov_iter.rs's; bio_release_pages(),
@@ -109,7 +108,6 @@ const UNBLOCKLISTED: &[&str] = &[
     "crypto/poly1305.h",
     "linux/percpu-refcount.h",
     "linux/fs_context.h",
-    "linux/idr.h",
     "linux/console.h",
     "linux/bio.h",
     "linux/task_io_accounting_ops.h",
@@ -231,8 +229,6 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // static inlines: util/refcount/percpu.rs's PercpuRef
     "percpu_ref_get", "percpu_ref_put", "percpu_ref_tryget", "percpu_ref_tryget_live", "percpu_ref_kill",
     "percpu_ref_reinit", "percpu_ref_is_zero",
-    // data_structures/fast_list.rs: static inlines; the rest of the ida the kernel crate binds
-    "ida_init", "ida_find_first",
     // util/log.rs: a long message printk()ed in pieces, the console held across them
     "console_trylock", "console_unlock",
     // util/rcu.rs's Srcu: static inlines, and synchronize_srcu_expedited() is with TINY_SRCU

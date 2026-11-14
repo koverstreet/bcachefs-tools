@@ -12,6 +12,7 @@ pub mod fixed_fifo;
 pub mod gap_buffer;
 pub mod genradix;
 pub mod heap;
+pub mod ida;
 pub mod inline_vec;
 pub mod list;
 pub mod ref_cell;
