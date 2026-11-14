@@ -311,6 +311,9 @@ pub mod c {
     // cover - the CRCs, genradix, the vendored closures - from codegen.rs's.
     #[cfg(not(kernel))]
     pub use bcachefs_shim::c::*;
+    // and what the shim's headers had, which the userspace port defines now
+    #[cfg(not(kernel))]
+    pub use crate::os::c::*;
     #[cfg(kernel)]
     pub use kernel::bindings::*;
     #[cfg(kernel)]

@@ -981,7 +981,7 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
             n.wbio.bits.set_bounce(0);
             n.wbio.bits.set_put_bio(1);
             n.bio.bi_opf        = wbio.bio.bi_opf;
-            unsafe { c::bio_inc_remaining(&raw mut wbio.bio) };
+            unsafe { crate::os::bio::inc_remaining(&raw mut wbio.bio) };
             n
         } else {
             wbio.wbio.bits.set_split(0);

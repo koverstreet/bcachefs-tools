@@ -7,7 +7,7 @@ use crate::c;
 use crate::os::kernel::PAGE_SIZE;
 use core::ffi::c_void;
 use core::mem::offset_of;
-use core::sync::atomic::{AtomicI32, Ordering::AcqRel};
+use core::sync::atomic::{AtomicI32, Ordering::{AcqRel, SeqCst}};
 
 unsafe fn flagged(bio: *const c::bio, bit: u32) -> bool {
     unsafe { (*bio).bi_flags & (1 << bit) != 0 }
@@ -64,13 +64,33 @@ pub unsafe fn endio(bio: *mut c::bio) {
     }
 }
 
+/*
+ * Increment chain count for the bio. Make sure the CHAIN flag update
+ * is visible before the raised count.
+ */
+///
+/// # Safety
+/// @bio is a bio.
+pub unsafe fn inc_remaining(bio: *mut c::bio) {
+    unsafe {
+        (*bio).bi_flags |= 1 << c::BIO_CHAIN;
+        AtomicI32::from_ptr(&raw mut (*bio).__bi_remaining.counter).fetch_add(1, SeqCst);
+    }
+}
+
+/// Nothing to release here: no integrity, crypt or cgroup state.
+///
+/// # Safety
+/// @bio is a bio, not used after.
+pub unsafe fn uninit(_bio: *mut c::bio) {}
+
 /// # Safety
 /// @bio is a bio's memory, not in flight; @table has room for @max_vecs.
 pub unsafe fn init(bio: *mut c::bio, bdev: *mut crate::os::blkdev::BlockDevice, table: *mut c::bio_vec,
                    max_vecs: u16, opf: u32) {
     unsafe {
         bio.write_bytes(0, 1);
-        (*bio).bi_bdev = bdev.cast();
+        (*bio).bi_bdev = bdev;
         (*bio).bi_opf  = opf;
         (*bio).__bi_remaining.counter = 1;
         (*bio).__bi_cnt.counter = 1;
@@ -87,7 +107,7 @@ pub unsafe fn reset(bio: *mut c::bio, bdev: *mut crate::os::blkdev::BlockDevice,
         let flags = (*bio).bi_flags & (!0 << c::BIO_RESET_BITS);
 
         bio.cast::<u8>().write_bytes(0, offset_of!(c::bio, bi_max_vecs));
-        (*bio).bi_bdev  = bdev.cast();
+        (*bio).bi_bdev  = bdev;
         (*bio).bi_opf   = opf;
         (*bio).bi_flags = flags;
         (*bio).__bi_remaining.counter = 1;
