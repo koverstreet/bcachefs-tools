@@ -951,8 +951,8 @@ pub fn atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStrea
 /// ever holds one of its values, as its type says; from_bits() of anything
 /// else is memory corruption, and panics.
 ///
-/// A variant prints and parses as its name, or its #[label("..")] - past
-/// `#[prefix(P)]`, for names written with it. `#[nr]`: Self::NR, past the
+/// A variant prints and parses as its name, or its #[label("..")].
+/// `#[nr]`: Self::NR, past the
 /// largest value - a number, not one of its values. `#[own_to_text]`: it
 /// prints as more than its name, by its own ToText.
 ///
@@ -960,7 +960,7 @@ pub fn atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStrea
 /// enum_decl.rs - each made a const fn of the enum:
 ///
 ///   #[bch_enum(open)]
-///   #[prefix(BTREE_ID_)] #[nr]
+///   #[nr]
 ///   #[arm_columns(flags: BtreeFlags, holds: set(BkeyType))]
 ///   #[repr(u32)]
 ///   pub enum Btree {

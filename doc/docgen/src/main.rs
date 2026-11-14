@@ -29,7 +29,8 @@ const ENUM_DECL_ATTRS: [&str; 2] = ["flags", "when"];
 /// it, as a C list's entries: name, value as written, the arm's doc comment as
 /// a C string, its ENUM_DECL_ATTRS, and the date its doc starts with, `/// 2018-11:
 /// ..` - a version's. An arm is `/// doc #[..]* name[(Type)] [= value]`, a
-/// value not written the last's plus one.
+/// value not written the last's plus one, named as its #[label("..")] if it
+/// has one.
 fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
     // a declaration starts its line: one in a doc comment is an example
     let starts_line = |&(i, _): &(usize, &str)|
@@ -42,15 +43,13 @@ fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
     if source[start..decl].contains("\n}\n") {
         return None;
     }
-    // an arm written with its #[prefix] - its C name - is named past it
-    let prefix = source[start..decl].split_once("#[prefix(")
-        .and_then(|(_, r)| r.split_once(")]")).map(|(p, _)| p.trim().to_string());
     let mut rest = &source[decl..];
     rest = &rest[rest.find('{')? + 1..];
 
     let mut entries = Vec::new();
     let mut doc: Vec<&str> = Vec::new();
     let mut attrs = [const { String::new() }; ENUM_DECL_ATTRS.len()];
+    let mut label = None;
     let mut next = Some(0u64);
     loop {
         rest = rest.trim_start();
@@ -70,16 +69,15 @@ fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
                     attrs[i] = a.trim_end_matches(")]").split_whitespace().collect::<Vec<_>>().join(" ");
                 }
             }
+            if let Some(l) = attr.strip_prefix("[label(\"").and_then(|l| l.strip_suffix("\")]")) {
+                label = Some(l.to_string());
+            }
             rest = after;
         } else if rest.starts_with('}') {
             return Some(entries);
         } else {
             let name_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
-            let arm = rest[..name_end].to_string();
-            let arm = match prefix.as_deref().and_then(|p| arm.strip_prefix(p)) {
-                Some(past) => past.to_string(),
-                None => arm,
-            };
+            let arm = label.take().unwrap_or_else(|| rest[..name_end].to_string());
             rest = rest[name_end..].trim_start();
             if rest.starts_with('(') {
                 rest = skip_group(rest)?;

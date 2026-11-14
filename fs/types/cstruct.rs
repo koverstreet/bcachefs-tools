@@ -127,22 +127,15 @@ pub(crate) struct EnumDef {
     /// #[own_to_text]: it prints as more than its name - an open or flags
     /// enum #[bch_enum] otherwise gives ToText.
     pub(crate) own_to_text: bool,
-    /// #[prefix(P)]: what C's names for its variants start with, Rust's
-    /// without it.
-    pub(crate) prefix:   Option<String>,
     /// #[nr]: NR, past the largest value - a number, not one of its values.
     pub(crate) nr:       bool,
 }
 
 impl EnumDef {
-    /// What @v prints as: its #[label], or its name - past its #[prefix], if
-    /// it has one. Not a flag's, whose names would be its bits'.
+    /// What @v prints as: its #[label], or its name. Not a flag's, whose
+    /// names would be its bits'.
     pub(crate) fn label(&self, v: &EnumVariant) -> Option<String> {
-        v.label.clone().or_else(|| {
-            (self.kind != EnumKind::Flags).then_some(())?;
-            let (p, name) = (self.prefix.as_deref().unwrap_or_default(), v.name.to_string());
-            Some(name.strip_prefix(p).unwrap_or(&name).to_string())
-        })
+        v.label.clone().or_else(|| (self.kind != EnumKind::Flags).then(|| v.name.to_string()))
     }
 }
 
@@ -306,16 +299,14 @@ pub(crate) fn parse_ioctl(input: proc_macro2::TokenStream) -> Result<IoctlList, 
 pub(crate) fn parse_enum_head(input: syn::parse::ParseStream<'_>)
         -> syn::Result<(EnumDef, Vec<syn::Attribute>, proc_macro2::TokenStream)> {
     let mut kind = None;
-    let (mut own_to_text, mut prefix, mut nr) = (false, None, false);
+    let (mut own_to_text, mut nr) = (false, false);
     let mut others = Vec::new();
     for a in input.call(syn::Attribute::parse_outer)? {
-        let id = |a: &syn::Attribute| a.parse_args::<syn::Ident>().map(|n| ident(&n));
         match a.path().get_ident().map(|i| i.to_string()).as_deref() {
             Some("open")        => kind = Some(EnumKind::Open),
             Some("closed")      => kind = Some(EnumKind::Closed),
             Some("flags")       => kind = Some(EnumKind::Flags),
             Some("own_to_text") => own_to_text = true,
-            Some("prefix")      => prefix = Some(id(&a)?),
             Some("nr")          => nr = true,
             _ => others.push(a),
         }
@@ -332,7 +323,7 @@ pub(crate) fn parse_enum_head(input: syn::parse::ParseStream<'_>)
     let body;
     syn::braced!(body in input);
     let def = EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(),
-                         own_to_text, prefix, nr };
+                         own_to_text, nr };
     Ok((def, others, body.parse()?))
 }
 

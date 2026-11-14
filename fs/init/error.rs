@@ -532,7 +532,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
 
         let ret = 'print: {
             let ret = if flags.contains(FsckFlags::AUTOFIX) &&
-                         (errors == a::BCH_ON_ERROR_continue || errors == a::fix_safe) {
+                         (errors == a::continue_ || errors == a::fix_safe) {
                 break 'print if flags.contains(FsckFlags::CAN_FIX) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
@@ -542,7 +542,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     fs.err(e::fsck_ignore)
                 };
             } else if !fs.flags.get(fl::in_fsck) {
-                if errors != a::BCH_ON_ERROR_continue || !flags.intersects(FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE) {
+                if errors != a::continue_ || !flags.intersects(FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE) {
                     if flags.contains(FsckFlags::AUTOFIX) {
                         write!(out, ", shutting down\n\
                                      error is autofix, but errors={} prevents self-healing\n\
@@ -921,7 +921,7 @@ impl Fs {
 
         self.flags.set(c::FsFlag::error, true);
         match self.opts.errors() {
-            a::BCH_ON_ERROR_continue => false,
+            a::continue_ => false,
             a::fix_safe | a::ro => {
                 self.emergency_read_only(out);
                 true

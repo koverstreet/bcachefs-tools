@@ -653,7 +653,7 @@ fn cmd_dump(cli: DumpCli) -> Result<()> {
     opts.set_nochanges(true);
     opts.set_norecovery(true);
     opts.set_degraded(c::DegradedAction::very);
-    opts.set_errors(c::ErrorAction::BCH_ON_ERROR_continue);
+    opts.set_errors(c::ErrorAction::continue_);
     opts.set_fix_errors(c::FsckErrOpt::no as u8);
 
     if cli.noexcl {

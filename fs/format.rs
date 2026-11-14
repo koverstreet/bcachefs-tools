@@ -1019,7 +1019,6 @@ pub const fn BCH_VERSION(major: u64, minor: u64) -> u64 { (major << 10) | minor 
 
 #[bch_enum(open)]
 #[own_to_text]
-#[prefix(bcachefs_metadata_version_)]
 #[nr]
 #[repr(u32)]
 pub enum MetadataVersion {
@@ -1132,7 +1131,7 @@ pub enum MetadataVersion {
     /// deletion
     extent_snapshot_whiteouts = BCH_VERSION(1, 29),
     /// 2025-08: Extended directory entry offset to 31 bits
-    bcachefs_metadata_version_31bit_dirent_offset = BCH_VERSION(1, 30),
+    #[label("31bit_dirent_offset")] dirent_offset_31bit = BCH_VERSION(1, 30),
     /// 2025-09: Per-btree-node space accounting
     btree_node_accounting = BCH_VERSION(1, 31),
     /// 2025-11: Superblock field for extent type size limits
@@ -1491,13 +1490,12 @@ pub const BCH_REPLICAS_MAX: u32 = 4;
 pub const BCH_BKEY_PTRS_MAX: u32 = 16;
 
 #[bch_enum(open)]
-#[prefix(BCH_ON_ERROR_)]
 #[nr]
 #[repr(u32)]
 pub enum ErrorAction {
     /// Log the error but continue normal operation without attempting
     /// repair
-    BCH_ON_ERROR_continue = 0,
+    #[label("continue")] continue_ = 0,
     /// Automatically repair errors that are safe to fix without user
     /// confirmation. Unsafe errors cause emergency read-only with a
     /// message to run fsck.

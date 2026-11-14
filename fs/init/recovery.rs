@@ -791,7 +791,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
             w.fix_errors.set(c::FsckErrOpt::no as u8);
         }
         if u32::from(w.errors.get()) == c::ErrorAction::fix_safe.0 {
-            w.errors.set(c::ErrorAction::BCH_ON_ERROR_continue.0 as u8);
+            w.errors.set(c::ErrorAction::continue_.0 as u8);
         }
     }
 

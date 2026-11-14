@@ -1475,7 +1475,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     // against: commit-only validation (invalid state codewords, subvolume ->
     // interior node references) stays off in this instance.
     fs_opts.set_no_commit_validate(true);
-    fs_opts.set_errors(c::ErrorAction::BCH_ON_ERROR_continue);
+    fs_opts.set_errors(c::ErrorAction::continue_);
     if cli.verbose > 0 {
         fs_opts.set_verbose(true);
     }

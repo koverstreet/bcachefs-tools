@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! fsck: the fix_reflink_p recovery pass - an upgrade fixup. On a filesystem
-//! older than bcachefs_metadata_version_reflink_p_fix, zero front_pad and
+//! older than MetadataVersion::reflink_p_fix, zero front_pad and
 //! back_pad on every reflink pointer, without running triggers.
 
 use crate::btree::bkey::prelude::*;

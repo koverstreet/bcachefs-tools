@@ -220,7 +220,7 @@ pub(crate) fn tag_enum(args: TokenStream) -> Result<EnumDef, String> {
         return Err("an enum needs NAME: REPR".into());
     };
     Ok(EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(),
-                  own_to_text: false, prefix: None, nr })
+                  own_to_text: false, nr })
 }
 
 /// Enum @e of @arms, each valued by its expression.

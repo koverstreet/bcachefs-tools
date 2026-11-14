@@ -2426,7 +2426,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
             crate::util::printbuf::prt_bdevname(&mut msg, Some(ca.disk_sb.bdev()));
             if read < expected {
                 prt!(msg, ": Superblock write was silently dropped! (seq {read} expected {expected})");
-                if matches!(fs.opts().errors(), c::ErrorAction::BCH_ON_ERROR_continue |
+                if matches!(fs.opts().errors(), c::ErrorAction::continue_ |
                                                 c::ErrorAction::fix_safe) {
                     continue;
                 }

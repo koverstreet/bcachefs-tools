@@ -243,7 +243,7 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
     fs_opts.set_read_only(true);
     fs_opts.set_norecovery(true);
     fs_opts.set_degraded(DegradedAction::very);
-    fs_opts.set_errors(c::ErrorAction::BCH_ON_ERROR_continue);
+    fs_opts.set_errors(c::ErrorAction::continue_);
 
     if opt.fsck {
         fs_opts.set_fix_errors(c::FsckErrOpt::yes as u8);

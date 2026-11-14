@@ -609,7 +609,7 @@ mod vfs {
 
         if opt.id() == c::InodeOptId::inodes_32bit &&
            fs.request_incompat_feature(
-               MetadataVersion::bcachefs_metadata_version_31bit_dirent_offset).is_ok() {
+               MetadataVersion::dirent_offset_31bit).is_ok() {
             // Make sure the dir is empty, as otherwise we'd need to
             // rehash everything and update the dirent keys.
             crate::dirent::empty_dir_trans(t, inum)?;
