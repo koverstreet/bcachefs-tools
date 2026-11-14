@@ -277,7 +277,7 @@ fn check_state<'a, 't>(
             fsck_err_report!(fs, id::snapshot_state_bad,
                              "snapshot has invalid state {raw:#x} (nearest codeword {nearest} is {dist} bits away, node unreferenced):\n{}",
                              n.to_text(fs));
-            return Err(fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented));
+            return Err(fs.err(Errcode::fsck_repair_unimplemented));
         };
 
         if let Some(state) = fix {
@@ -514,7 +514,7 @@ fn edge_repair_commit(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     let fs = t.fs();
     t.commit(None, CommitFlags::NO_ENOSPC)?;
     fs.snapshots.set_need_table_rebuild();
-    Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
+    Err(t.restart(Errcode::transaction_restart_nested))
 }
 
 /// Put a node the accounting says is alive, @u, back into the tree. With two
@@ -581,7 +581,7 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
     let fs = t.fs();
 
     let Some(parent) = lookup_node(t, parent_id)? else {
-        return Err(fs.err(Errcode::BCH_ERR_EINVAL_snapshot_edge_to_missing_node));
+        return Err(fs.err(Errcode::EINVAL_snapshot_edge_to_missing_node));
     };
 
     let mut n = t.bkey_alloc_typed::<c::Snapshot>()?;
@@ -786,9 +786,9 @@ fn edge_repair(
              EdgeNodes::new(fs, n, other.as_ref(), None));
 
     Err(fs.err(match (&other, role) {
-        (None, _)          => Errcode::BCH_ERR_EINVAL_snapshot_edge_to_missing_node,
-        (_, Role::Child)   => Errcode::BCH_ERR_EINVAL_snapshot_parent_missing_child_ptr,
-        (_, Role::Parent)  => Errcode::BCH_ERR_EINVAL_snapshot_child_bad_parent,
+        (None, _)          => Errcode::EINVAL_snapshot_edge_to_missing_node,
+        (_, Role::Child)   => Errcode::EINVAL_snapshot_parent_missing_child_ptr,
+        (_, Role::Parent)  => Errcode::EINVAL_snapshot_child_bad_parent,
     }))
 }
 
@@ -954,7 +954,7 @@ fn check_to_subvol<'a, 't>(
             match check::reconstruct_subvol_root(t, id, subvol_id, None) {
                 Ok(root) => return check::reconstruct_subvol(t, id, subvol_id, root),
                 // couldn't find a root inode for it - fall through and report
-                Err(e) if e.matches(Errcode::BCH_ERR_fsck_repair_unimplemented) => {}
+                Err(e) if e.matches(Errcode::fsck_repair_unimplemented) => {}
                 Err(e) => return Err(e),
             }
         }
@@ -1010,7 +1010,7 @@ fn check_to_subvol<'a, 't>(
     if fsck_err_on!(t, n.v().subvol() != 0 && !should_have_subvol, id::snapshot_should_not_have_subvol,
                     "snapshot should not point to subvol:\n{}", n.to_text(fs))? {
         if n.v().children()[0] != 0 {
-            return Err(fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented));
+            return Err(fs.err(Errcode::fsck_repair_unimplemented));
         }
 
         // XXX: DANGEROUS
@@ -1203,7 +1203,7 @@ fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(
                     "snapshot node {id} from tree {} missing, recreate?", Join(" ", tree.iter()))? {
         if tree.len() > 1 {
             bch_err!(fs, "cannot reconstruct snapshot trees with multiple nodes");
-            return Err(fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented));
+            return Err(fs.err(Errcode::fsck_repair_unimplemented));
         }
 
         return recreate_node(t, id);

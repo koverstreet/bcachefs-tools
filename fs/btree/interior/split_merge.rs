@@ -710,7 +710,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
                 prt!(out, "l={} written {}/{} u64s remaining {}", level, b.written.get(),
                      fs.btree_sectors() / fs.block_sectors(), b.keys_u64s_remaining(b.contents()));
             });
-            Err(trans.restart(Errcode::BCH_ERR_transaction_restart_split_race))
+            Err(trans.restart(Errcode::transaction_restart_split_race))
         } else {
             btree_split(update, paths, path, b.held(), true)
         };
@@ -956,7 +956,7 @@ fn merge_sibling<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: Path
                      level: usize) -> Result<Option<(Option<Node<'n>>, u16)>, BchError> {
     let trans = t.trans();
     match trans.path_traverse(t, paths, path, BtreeIterFlags::NOFILL) {
-        Err(e) if e.matches(Errcode::BCH_ERR_no_btree_node_nofill) => {
+        Err(e) if e.matches(Errcode::no_btree_node_nofill) => {
             /*
              * Nofill failure dropped all of the path's locks, but left
              * l[level + 1].b pointing at the parent. Relock the parent
@@ -971,7 +971,7 @@ fn merge_sibling<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: Path
              * we've copied the sibling's btree_ptr off the parent.
              */
             if !trans.node_relock(paths, path, level + 1) {
-                return Err(trans.restart(Errcode::BCH_ERR_transaction_restart_lock_node_reused));
+                return Err(trans.restart(Errcode::transaction_restart_lock_node_reused));
             }
 
             let sib_parent = paths.held_btree_node(path, level + 1).expect("a sibling's parent, relocked");
@@ -1138,7 +1138,7 @@ pub(crate) fn merge(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathI
     trans.verify_locks(paths);
 
     let ret = match ret {
-        Err(e) if e.matches(Errcode::BCH_ERR_journal_reclaim_would_deadlock) => Ok(()),
+        Err(e) if e.matches(Errcode::journal_reclaim_would_deadlock) => Ok(()),
         ret => ret.map(|_| ()),
     };
     let ret = ret.and_then(|()| trans.relock_from(paths));

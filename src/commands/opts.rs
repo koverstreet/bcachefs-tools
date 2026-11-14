@@ -213,7 +213,7 @@ pub(crate) fn parse_opt_val(
     let mut err = Printbuf::new();
     match bcachefs_kernel::opts::opt_parse(None, opt, Some(val_str.as_bytes()), Some(&mut err)) {
         Ok(v) => Ok(Some(v)),
-        Err(e) if e == Errcode::BCH_ERR_option_needs_open_fs.into() => Ok(None),
+        Err(e) if e == Errcode::option_needs_open_fs.into() => Ok(None),
         Err(_) => {
             let msg = err.as_str();
             if msg.is_empty() {

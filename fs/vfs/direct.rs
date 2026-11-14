@@ -199,7 +199,7 @@ fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Optio
 
     /* bios must be 512 byte aligned: */
     if (offset | iter.count() as u64) & (c::SECTOR_SIZE as u64 - 1) != 0 {
-        return Err(fs.err(Errcode::BCH_ERR_EINVAL_unaligned_io));
+        return Err(fs.err(Errcode::EINVAL_unaligned_io));
     }
 
     let count = iter.count() as u64;

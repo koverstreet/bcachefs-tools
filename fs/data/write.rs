@@ -1057,7 +1057,7 @@ fn write_drop_io_error_ptrs(op: &mut Op) -> Result<(), BchError> {
             }
 
             if BkeySC::from(&*k).durability_safe(fs).nr_ptrs == 0 {
-                return Err(fs.err(Errcode::BCH_ERR_data_write_io));
+                return Err(fs.err(Errcode::data_write_io));
             }
         }
         Ok(())
@@ -1367,14 +1367,14 @@ pub(crate) fn __write(mut op: Running<Op>) {
                 wp = req.wp;
 
                 match ret {
-                    Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) && wait_on_allocator_sync => {
+                    Err(e) if e.matches(Errcode::operation_blocked) && wait_on_allocator_sync => {
                         let ret = t.wait_on_allocator(&mut req, e, &op.closure());
                         // it borrows the op, which the index update writes
                         drop(req);
                         __write_index(&mut op);
                         op.failed.reset_devs();
                         ret?;
-                        Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
+                        Err(t.restart(Errcode::transaction_restart_nested))
                     }
                     r => r,
                 }
@@ -1383,7 +1383,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
 
             let ret = match ret {
                 Err(_) if io_in_flight => break,
-                Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => break,
+                Err(e) if e.matches(Errcode::operation_blocked) => break,
                 r => r,
             };
 
@@ -1403,7 +1403,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
                  * and retrying on that would never end. Giving up means the write
                  * fails, which is what happened before any of this.
                  */
-                if unlikely(ret.as_ref().is_err_and(|e| e.matches(Errcode::BCH_ERR_data_write_need_fresh_buckets))) &&
+                if unlikely(ret.as_ref().is_err_and(|e| e.matches(Errcode::data_write_need_fresh_buckets))) &&
                    !retried_for_encoded {
                     retried_for_encoded = true;
                     l.retire_short(op.crc.compressed_size);
@@ -1579,15 +1579,15 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
         if unlikely(op.wbio.bio.bi_iter.bi_size & (fs.opts().block_size.get() as u32 - 1) != 0) {
             write_op_error(&op, op.pos.offset, format_args!("misaligned write"));
             crate::warn_on!(true);
-            return Err(fs.err(Errcode::BCH_ERR_data_write_misaligned));
+            return Err(fs.err(Errcode::data_write_misaligned));
         }
 
         if fs.opts().nochanges.get() != 0 {
-            return Err(fs.err(Errcode::BCH_ERR_erofs_no_writes));
+            return Err(fs.err(Errcode::erofs_no_writes));
         }
 
         if !op.has(w::update) {
-            op.write_ref = Some(fs.writes.tryget_live().ok_or_else(|| fs.err(Errcode::BCH_ERR_erofs_no_writes))?);
+            op.write_ref = Some(fs.writes.tryget_live().ok_or_else(|| fs.err(Errcode::erofs_no_writes))?);
         }
         Ok(())
     })();

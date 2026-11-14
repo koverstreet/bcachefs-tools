@@ -164,7 +164,7 @@ fn double_allocation_dropped(t: &TransAttempt<'_, '_>, winner: BkeySC<'_>,
     bucket_backpointer_mod(t, (&winner_k).into(), &mut winner_bp, true)?;
     t.commit(None, CommitFlags::NO_ENOSPC)?;
 
-    Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
+    Err(t.restart(Errcode::transaction_restart_nested))
 }
 
 /// One of two extents sharing physical space, and its logical range in the overlap.
@@ -225,7 +225,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
 
     let mut other_extent_iter = BtreeIter::uninit();
     let other_extent = match get_key(t, other_bp, &mut other_extent_iter, BtreeIterFlags::empty(), None, false) {
-        Err(e) if e.matches(Errcode::BCH_ERR_backpointer_to_overwritten_btree_node) =>
+        Err(e) if e.matches(Errcode::backpointer_to_overwritten_btree_node) =>
             return bp_missing(t, extent.into(), bp, other_bp.into()),
         Err(e)      => return Err(e),
         Ok(None)    => return bp_missing(t, extent.into(), bp, other_bp.into()),
@@ -303,7 +303,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
                 prt!(&mut msg, "duplicate compressed extents pointing to overlapping space on dev {dev}, \
                                 not the same data - can't share them\n{}\n{}",
                      extent.to_text(fs), other_extent.to_text(fs));
-                return fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented);
+                return fs.throw(Errcode::fsck_repair_unimplemented);
             }
             (extent.k.start_offset(), other_extent.k.start_offset(), u64::from(extent.k.size))
         } else {
@@ -333,7 +333,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
     let mut msg = LogMsg::new(fs);
     prt!(&mut msg, "duplicate extents pointing to same space on dev {}\n{}\n{}",
          { bp.k.p.inode }, extent.to_text(fs), other_extent.to_text(fs));
-    fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented)
+    fs.throw(Errcode::fsck_repair_unimplemented)
 }
 
 /// Repairs as check_extents_to_backpointers does: makes a missing one, resolves
@@ -444,7 +444,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
             if nr_deletes > 256 {
                 t.commit(None, CommitFlags::NO_ENOSPC)?;
                 t.trans().write_buffer_flush_sync()?;
-                return Err(t.restart(Errcode::BCH_ERR_transaction_restart_write_buffer_flush));
+                return Err(t.restart(Errcode::transaction_restart_write_buffer_flush));
             }
 
             need_commit = true;
@@ -648,7 +648,7 @@ fn check_btree_root_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToB
     let b = iter.peek_node(t)?.expect("a btree's root node");
 
     if !fs.btree_id_root(b.c.btree_id.into()).is_some_and(|root| core::ptr::eq(root, b.node())) {
-        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_lock_root_race));
+        return Err(t.restart(Errcode::transaction_restart_lock_root_race));
     }
 
     let level = u32::from(b.c.level);
@@ -906,7 +906,7 @@ fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<c::bbp
 
     let mut iter = BtreeIter::uninit();
     match get_key(t, bp, &mut iter, BtreeIterFlags::empty(), Some(last_flushed), true) {
-        Err(e) if e.matches(Errcode::BCH_ERR_backpointer_to_overwritten_btree_node) => Ok(()),
+        Err(e) if e.matches(Errcode::backpointer_to_overwritten_btree_node) => Ok(()),
         r => r.map(|_| ()),
     }
 }
@@ -993,7 +993,7 @@ impl c::bucket_bitmap {
 
         if w.buckets.with(|words| words.is_empty()) {
             w.buckets.rebuild(bits_to_longs(ca.mi.get().nbuckets as usize), |_| ())
-                .or_else(|_| ca.fs().throw(Errcode::BCH_ERR_ENOMEM_backpointer_mismatches_bitmap))?;
+                .or_else(|_| ca.fs().throw(Errcode::ENOMEM_backpointer_mismatches_bitmap))?;
         }
 
         if !w.buckets.with(|words| AtomicBitmap::from_words(words).test_and_set(b as usize)) {
@@ -1018,7 +1018,7 @@ impl c::bucket_bitmap {
                 }
             })
         })
-        .or_else(|_| ca.fs().throw(Errcode::BCH_ERR_ENOMEM_backpointer_mismatches_bitmap))
+        .or_else(|_| ca.fs().throw(Errcode::ENOMEM_backpointer_mismatches_bitmap))
     }
 
     /// The words are freed after a grace period.

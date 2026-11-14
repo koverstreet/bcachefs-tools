@@ -151,7 +151,7 @@ const INTERNAL: &[Attr<Fs>] = &[
         // Deletion stopping because it was told to isn't the write failing -
         // and cancelled's errno is EINTR, which a write must not return:
         match crate::snapshots::delete::delete_dead_snapshots_forced(c) {
-            Err(e) if e.matches(Errcode::BCH_ERR_cancelled) => Ok(()),
+            Err(e) if e.matches(Errcode::cancelled) => Ok(()),
             ret => ret,
         }
     })),
@@ -358,7 +358,7 @@ fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::OptId, out: &mut Printbuf)
         Some(ca) if matches!(opt.ty, OptType::StrMember { .. }) => {
             // The value lives in the member, not a u64 - render it here:
             let Some(m) = members::sb_member(sb.sb(), ca.dev_idx as u32) else {
-                return c.throw(Errcode::BCH_ERR_ENOENT_dev_idx_not_found);
+                return c.throw(Errcode::ENOENT_dev_idx_not_found);
             };
             out.write_bytes(opt.member_str(&m));
             out.write_bytes(b"\n");
@@ -366,13 +366,13 @@ fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::OptId, out: &mut Printbuf)
         }
         Some(ca) => {
             if !(opt.has(c::OptFlags::device) && opt.member_field().is_some()) {
-                return c.throw(Errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
+                return c.throw(Errcode::EINVAL_sysfs_opt_not_found);
             }
             opts::opt_from_sb(sb.sb().as_unvalidated(), id, Some(ca.dev_idx.into()))
         }
         None => {
             if !opt.has(c::OptFlags::fs) {
-                return c.throw(Errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
+                return c.throw(Errcode::EINVAL_sysfs_opt_not_found);
             }
             c.opts.get(id)
         }

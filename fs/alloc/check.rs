@@ -185,7 +185,7 @@ pub(crate) fn need_discard_or_freespace_err(
 
     match fsck_err_flags!(t, POS_MIN, flags, err, "bucket incorrectly {}set in {} btree\n{}",
                           if set { "" } else { "un" }, btree, alloc_k.to_text(t.fs())) {
-        Err(e) if e.matches(Errcode::BCH_ERR_fsck_errors_not_fixed) => Ok(false),
+        Err(e) if e.matches(Errcode::fsck_errors_not_fixed) => Ok(false),
         r => r,
     }
 }
@@ -495,7 +495,7 @@ pub(crate) fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
     let bad = |fix: bool| Err(if fix {
         delete_freespace_key(t, iter, who)
     } else {
-        fs.err(Errcode::BCH_ERR_bucket_not_allocatable)
+        fs.err(Errcode::bucket_not_allocatable)
     });
 
     let mut alloc_iter = BtreeIter::new(t, Btree::alloc, pos.bucket, match who {
@@ -537,11 +537,11 @@ fn delete_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: Fre
         let _ = fs.spawn_write(move |fs| async move {
             let _ = crate::bch_err_fn!(&*fs, recheck_freespace_key(&fs, pos));
         });
-        return fs.err(Errcode::BCH_ERR_bucket_not_allocatable);
+        return fs.err(Errcode::bucket_not_allocatable);
     }
 
     match t.bit_mod_iter(iter, false).and_then(|()| t.commit(None, CommitFlags::NO_ENOSPC)) {
-        Ok(()) => t.restart(Errcode::BCH_ERR_transaction_restart_commit),
+        Ok(()) => t.restart(Errcode::transaction_restart_commit),
         Err(e) => e,
     }
 }
@@ -552,7 +552,7 @@ fn repair_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: Fre
     -> Result<(), BchError>
 {
     match check_freespace_key(t, iter, who) {
-        Err(e) if e.matches(Errcode::BCH_ERR_bucket_not_allocatable) => Ok(()),
+        Err(e) if e.matches(Errcode::bucket_not_allocatable) => Ok(()),
         r => r.map(|_| ()),
     }
 }

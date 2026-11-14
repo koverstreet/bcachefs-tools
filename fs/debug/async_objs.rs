@@ -139,7 +139,7 @@ pub fn async_obj_init(fs: &Fs) -> Result<(), BchError> {
     for l in &fs.async_objs {
         // SAFETY: filesystem init, before anything is listed
         if unsafe { l.list.init() }.is_err() {
-            return fs.throw(c::Errcode::BCH_ERR_ENOMEM_async_obj_init);
+            return fs.throw(c::Errcode::ENOMEM_async_obj_init);
         }
     }
     Ok(())

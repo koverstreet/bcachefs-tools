@@ -52,7 +52,7 @@ impl SbFieldOps for Section {
         let sb_major = sb.version.get().major();
         for e in entries_read(f) {
             let major = e.version.get().major();
-            sb_err_on!(err, major != sb_major, BCH_ERR_invalid_sb_downgrade,
+            sb_err_on!(err, major != sb_major, invalid_sb_downgrade,
                        "downgrade entry with mismatched major version ({major} != {sb_major})")?;
         }
         Ok(())
@@ -107,7 +107,7 @@ impl SbFieldOps for Section {
 
         let mut sb = fs.sb_resize(sb);
         let Some(d) = sb.field_resize::<Section>((bytes / size_of::<u64>()) as u32) else {
-            let _ = fs.err(Errcode::BCH_ERR_ENOSPC_sb_downgrade);
+            let _ = fs.err(Errcode::ENOSPC_sb_downgrade);
             return Ok(());
         };
         let d = &mut bytes_of_mut(d)[SECTION_HEAD..];

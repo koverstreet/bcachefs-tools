@@ -307,7 +307,7 @@ fn flush_sorted_range(
         let mut accounting_accumulated = false;
         let r = loop {
             if race_fault() {
-                break fs.throw(Errcode::BCH_ERR_journal_reclaim_would_deadlock);
+                break fs.throw(Errcode::journal_reclaim_would_deadlock);
             }
 
             let r = flush_one(&t, wb, &mut iter, &mut k, &mut write_locked,
@@ -323,7 +323,7 @@ fn flush_sorted_range(
 
         match r {
             Ok(()) => k.set_seq(0),
-            Err(e) if e == Errcode::BCH_ERR_journal_reclaim_would_deadlock.into() => cnt.slowpath += 1,
+            Err(e) if e == Errcode::journal_reclaim_would_deadlock.into() => cnt.slowpath += 1,
             Err(e) => {
                 ret = Err(e);
                 break;

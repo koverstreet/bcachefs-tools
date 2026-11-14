@@ -318,9 +318,9 @@ pub fn parks_on(t: &TransAttempt<'_, '_>, opts: &c::bch_inode_opts, data_opts: &
     use c::Errcode as err;
     let fs = t.fs();
 
-    if e.matches(err::BCH_ERR_ec_alloc_failed_transient) ||
-        !(e.matches(err::BCH_ERR_data_update_fail_no_rw_devs) ||
-          e.matches(err::BCH_ERR_insufficient_devices) ||
+    if e.matches(err::ec_alloc_failed_transient) ||
+        !(e.matches(err::data_update_fail_no_rw_devs) ||
+          e.matches(err::insufficient_devices) ||
           e.matches(c::ENOSPC)) {
         return Err(e);
     }

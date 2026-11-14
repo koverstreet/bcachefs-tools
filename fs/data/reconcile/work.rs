@@ -539,18 +539,18 @@ impl<'a, 'f> Walker<'a, 'f> {
         }
         match ret {
             Ok(()) => {}
-            Err(e) if is_restart(&e) || e.matches(err::BCH_ERR_data_update_fail_need_copygc) => return Err(e),
+            Err(e) if is_restart(&e) || e.matches(err::data_update_fail_need_copygc) => return Err(e),
             Err(e) => match parks_on(t, &opts, &d, k, e) {
                 Ok(()) => pending_mod(t, iter, level, k, true)?,
                 Err(e) if is_restart(&e) => return Err(e),
                 Err(e) => {
                     warn_once!(!(e.matches(c::EROFS) ||
                                  e.matches(c::ENOMEM) ||
-                                 e.matches(err::BCH_ERR_snapshot) ||
-                                 e.matches(err::BCH_ERR_data_update_fail_no_snapshot) ||
-                                 e.matches(err::BCH_ERR_data_update_fail_in_flight) ||
-                                 e.matches(err::BCH_ERR_freelist_empty) ||
-                                 e.matches(err::BCH_ERR_open_buckets_empty)),
+                                 e.matches(err::snapshot) ||
+                                 e.matches(err::data_update_fail_no_snapshot) ||
+                                 e.matches(err::data_update_fail_in_flight) ||
+                                 e.matches(err::freelist_empty) ||
+                                 e.matches(err::open_buckets_empty)),
                                fs, "unhandled error from move_extent: {e}");
                     // skip it, and go on
                 }
@@ -782,7 +782,7 @@ impl<'f> Reconciler<'f, '_> {
             };
 
             match ret {
-                Err(e) if e.matches(err::BCH_ERR_data_update_fail_need_copygc) => {
+                Err(e) if e.matches(err::data_update_fail_need_copygc) => {
                     trans.unlock_long();
                     fs.copygc_wakeup();
                     p.copygc_runs = fs.copygc_wait_run(p.copygc_runs);
@@ -790,7 +790,7 @@ impl<'f> Reconciler<'f, '_> {
                 }
                 Err(e) if is_restart(&e) => continue,
                 // the pass looks again, and waits
-                Err(e) if e.matches(err::BCH_ERR_reconcile_scan_stop) => return Ok(()),
+                Err(e) if e.matches(err::reconcile_scan_stop) => return Ok(()),
                 Err(e) => return Err(e),
                 Ok(()) => {}
             }

@@ -56,7 +56,7 @@ impl c::Stripe {
     /// A checksum type this version doesn't know is an error, not a guess.
     pub fn csum_type_check(&self, fs: &Fs) -> Result<(), BchError> {
         if self.csum_type.get().0 >= c::CsumType::NR {
-            return fs.throw(Errcode::BCH_ERR_stripe_unknown_csum_type);
+            return fs.throw(Errcode::stripe_unknown_csum_type);
         }
         Ok(())
     }

@@ -148,7 +148,7 @@ impl BtreeTrans<'_> {
         for idx in self.path_idxs() {
             for l in 0..c::BTREE_MAX_DEPTH as usize {
                 if paths[idx].l[l].b.is(&b.c) && !paths[idx].locked(l) {
-                    paths[idx].l[l].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_drop.into());
+                    paths[idx].l[l].b = NodePtr::err(Errcode::no_btree_node_drop.into());
                 }
             }
         }

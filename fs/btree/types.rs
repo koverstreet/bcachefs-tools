@@ -1283,7 +1283,7 @@ impl FromStr for Btree {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         <Btree as crate::util::names::Names>::ENTRIES.iter().find(|&&(n, _)| n == s)
             .and_then(|&(_, v)| Btree::from_raw(v as u32))
-            .ok_or(Errcode::BCH_ERR_EINVAL_parse_btree_id.into())
+            .ok_or(Errcode::EINVAL_parse_btree_id.into())
     }
 }
 
@@ -1294,6 +1294,6 @@ impl FromStr for BkeyType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         crate::util::names::value_of(<Self as crate::util::names::Names>::ENTRIES, s)
             .map(|v| BkeyType(v as u32))
-            .ok_or_else(|| Errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
+            .ok_or_else(|| Errcode::EINVAL_parse_bkey_type.into())
     }
 }

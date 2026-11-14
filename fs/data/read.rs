@@ -578,7 +578,7 @@ impl<'a, P: WalkPos> Walk<'a, P> {
                 Continue(())
             }
             Err(e) => {
-                if e == err::BCH_ERR_data_read_retry_csum_err_maybe_userspace.into() {
+                if e == err::data_read_retry_csum_err_maybe_userspace.into() {
                     self.flags |= F::must_bounce;
                 }
                 if !should_retry(e) {
@@ -622,7 +622,7 @@ fn locate<'a>(t: &TransAttempt<'a, '_>, at: Locate<'a>, range: BioRange<'_>) -> 
     };
     let mut it = BtreeIter::new(t, btree, key.k.start_pos(), BtreeIterFlags::empty());
     if !it.peek_slot(t)?.expect("peek_slot() returns a key").and_val_eq(key) {
-        return Err(t.fs().err(err::BCH_ERR_data_read_key_overwritten));
+        return Err(t.fs().err(err::data_read_key_overwritten));
     }
     Ok(Extent { read_pos: key.k.start_pos(), btree, k: key, offset: 0, sectors: range.len() >> 9 })
 }
@@ -639,7 +639,7 @@ fn extent_of<'a>(t: &TransAttempt<'a, '_>, read_pos: Bpos, k: BkeySC<'_>) -> Res
             let mut it2 = BtreeIter::uninit();
             let ik = lookup_indirect_extent(t, &mut it2, &mut offset, p, true, BtreeIterFlags::empty())?;
             if ik.k.key_type().is_deleted() {
-                return Err(t.fs().err(err::BCH_ERR_missing_indirect_extent));
+                return Err(t.fs().err(err::missing_indirect_extent));
             }
             (BkeySC::from(t.bkey_reassemble(ik)?), Btree::reflink)
         }
@@ -678,13 +678,13 @@ fn read_err_msg_in_attempt(t: &TransAttempt<'_, '_>, out: &mut Printbuf, read: &
 }
 
 fn is_csum_err(e: BchError) -> bool {
-    e.matches(err::BCH_ERR_data_read_csum_err) ||
-        e.matches(err::BCH_ERR_data_read_retry_csum_err) ||
-        e.matches(err::BCH_ERR_data_read_retry_csum_err_maybe_userspace)
+    e.matches(err::data_read_csum_err) ||
+        e.matches(err::data_read_retry_csum_err) ||
+        e.matches(err::data_read_retry_csum_err_maybe_userspace)
 }
 
 pub fn data_read_sb_err(e: BchError) -> SbErrorId {
-    if e.matches(err::BCH_ERR_decompress) {
+    if e.matches(err::decompress) {
         bch2_decompress_sb_err(e.raw())
     } else if is_csum_err(e) {
         id::data_read_csum_err
@@ -751,9 +751,9 @@ fn retry_report(read: &Rbio, read_pos: Bpos, k: BkeySC<'_>,
 }
 
 fn should_retry(e: BchError) -> bool {
-    e.matches(err::BCH_ERR_transaction_restart) ||
-        e.matches(err::BCH_ERR_data_read_retry) ||
-        e.matches(err::BCH_ERR_blockdev_io_error)
+    e.matches(err::transaction_restart) ||
+        e.matches(err::data_read_retry) ||
+        e.matches(err::blockdev_io_error)
 }
 
 fn retry_state(mut f: Fragment<'_>, ret: Result<(), BchError>) -> RetryState<'_> {
@@ -821,7 +821,7 @@ fn read_inline(t: &TransAttempt<'_, '_>, read: &Rbio, mut r: BioRange<'_>, e: Ex
 
     let d = InlineDataRef::of(e.k).expect("inline data");
     if d.poisoned() && !flags.contains(F::no_poison_check) {
-        return Err(fs.err(err::BCH_ERR_extent_poisoned));
+        return Err(fs.err(err::extent_poisoned));
     }
     if let Err(mismatch) = d.verify() {
         return Err(read_inline_csum_err(t, read, e, in_retry, mismatch));
@@ -847,7 +847,7 @@ fn read_inline(t: &TransAttempt<'_, '_>, read: &Rbio, mut r: BioRange<'_>, e: Ex
 fn read_inline_csum_err(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, in_retry: bool,
                         mismatch: CsumMismatch) -> BchError {
     let fs = t.fs();
-    let ret = fs.err(err::BCH_ERR_data_read_csum_err);
+    let ret = fs.err(err::data_read_csum_err);
 
     // first: its lookup can restart, and what follows mustn't be done twice
     let msg = if in_retry {
@@ -876,7 +876,7 @@ fn read_inline_csum_err(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, in
 fn read_extent_pick_err(t: &TransAttempt<'_, '_>, orig: &Rbio, e: Extent<'_>, flags: F, ret: BchError,
                         failed: Option<&mut FailureState>) -> BchError {
     let fs = t.fs();
-    let csum_err = ret == err::BCH_ERR_data_read_csum_err.into();
+    let csum_err = ret == err::data_read_csum_err.into();
     match failed {
         Some(failed) if csum_err => maybe_poison_extent(t, orig, e, flags, failed).err().unwrap_or(ret),
         Some(_) => ret,
@@ -908,9 +908,9 @@ crate::module_param! {
 
 pub(crate) fn stale(fs: &Fs, flags: F) -> BchError {
     fs.err(if flags.contains(F::retry_if_stale) {
-        err::BCH_ERR_data_read_ptr_stale_retry
+        err::data_read_ptr_stale_retry
     } else {
-        err::BCH_ERR_data_read_ptr_stale_race
+        err::data_read_ptr_stale_race
     })
 }
 
@@ -945,7 +945,7 @@ fn narrow_crcs_from_read(fs: &Fs, rbio: &Rbio, p: &Plan<'_>) {
 fn narrow_crcs_update(t: &TransAttempt<'_, '_>, p: &Plan<'_>, new: c::bch_extent_crc_unpacked) -> Result<(), BchError> {
     let fs = t.fs();
     let crc = p.pick.crc;
-    let fail = || fs.err(err::BCH_ERR_rbio_narrow_crcs_fail);
+    let fail = || fs.err(err::rbio_narrow_crcs_fail);
 
     let mut iter = BtreeIter::new(t, p.data_btree, p.data_pos, BtreeIterFlags::INTENT);
     let Some(k) = iter.peek_slot(t)? else { return Err(fail()) };
@@ -971,7 +971,7 @@ fn narrow_crcs_update(t: &TransAttempt<'_, '_>, p: &Plan<'_>, new: c::bch_extent
 }
 
 fn mark_failure(pick: &c::extent_ptr_decoded, failed: &mut c::bch_io_failures, e: BchError) -> BchError {
-    if e.matches(err::BCH_ERR_data_read_retry_avoid) || e.matches(err::BCH_ERR_blockdev_io_error) {
+    if e.matches(err::data_read_retry_avoid) || e.matches(err::blockdev_io_error) {
         failed.mark(pick, e);
     }
     e
@@ -985,7 +985,7 @@ fn ptrs_io_error(fs: &Fs, k: BkeySC<'_>, failed: &c::bch_io_failures) -> u16 {
 }
 
 fn failed_bio_to_text(failed: &mut c::bch_io_failures, bio: &Bio, e: BchError) {
-    if e == err::BCH_ERR_BLK_STS_INVAL.into() {
+    if e == err::BLK_STS_INVAL.into() {
         let msg = &mut failed.ec_msg;
         write!(msg, "Failing bio, after block layer completion:\n");
         bio.to_text(&mut msg.indent(2));
@@ -1084,7 +1084,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
 
     if k.arm::<Ptrs>().is_some_and(|kp| kp.poisoned(fs)) && !orig.is_update() {
         if !flags.contains(F::no_poison_check) {
-            return Err(fs.err(err::BCH_ERR_extent_poisoned));
+            return Err(fs.err(err::extent_poisoned));
         }
         orig.report(BCH_READ_ERR_checksum, |_| {});
     }
@@ -1095,7 +1095,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
             trace_read(orig, events::data_read_hole, (range.len() >> 9).into(), k, read_pos, flags);
             range.zero();
             if orig.is_update() {
-                return Err(fs.err(err::BCH_ERR_data_read_key_overwritten));
+                return Err(fs.err(err::data_read_key_overwritten));
             }
             return Ok(None);
         }
@@ -1107,7 +1107,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
         let mut m = log_msg_ratelimited!(fs);
         read_err_msg_in_attempt(t, &mut m, orig, read_pos)?;
         write!(m, "attempting to read encrypted data without encryption key\n  {}", k.to_text(fs));
-        return Err(fs.err(err::BCH_ERR_data_read_no_encryption_key));
+        return Err(fs.err(err::data_read_no_encryption_key));
     }
 
     let ca: Option<DevIoRef<c::DevReadRefKind>> =
@@ -1120,7 +1120,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
     if let (Some(f), Some(ca)) = (failed.as_deref_mut(), &ca) {
         if pick.ptr.cached() == 0 && ca.dev_ptr_stale(&pick.ptr, &read_lock()) {
             stale_dirty_pointer(trans, ca, k, pick.ptr);
-            return Err(mark_failure(&pick, &mut f.io, fs.err(err::BCH_ERR_data_read_ptr_stale_dirty)));
+            return Err(mark_failure(&pick, &mut f.io, fs.err(err::data_read_ptr_stale_dirty)));
         }
     }
 
@@ -1138,7 +1138,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
         //
         // If it's smaller, we raced with a merge during a retry:
         if pick.crc.uncompressed_size << 9 > range.len() {
-            return Err(fs.err(err::BCH_ERR_data_read_buffer_too_small));
+            return Err(fs.err(err::data_read_buffer_too_small));
         }
         range = range.take(pick.crc.compressed_size << 9);
         read_full = true;
@@ -1424,7 +1424,7 @@ mod boxed {
             let _noio = MemallocFlags::noio();
             join.spawn(Queue::system_dfl(),
                        move || ec::io::read_extent(fs, p.data_btree, p.data_pos, bio, &p.pick, p.flags, msg), waiter)
-        }.map_err(|_| fs.err(err::BCH_ERR_ENOMEM_ec_read_extent))?;
+        }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
         wait.resume_on(Resume::SPAWNED).await.expect("a joined task's output, handed back")
     }
 
@@ -1440,7 +1440,7 @@ mod boxed {
 use boxed::{ec_read, retry_owned, RetryOwnedFut};
 
 fn device_read_start(f: &mut Fragment<'_>, fs: &Fs) -> Result<u64, BchError> {
-    let Some(ca) = f.ca.as_deref() else { return Err(fs.err(err::BCH_ERR_data_read_retry_device_offline)) };
+    let Some(ca) = f.ca.as_deref() else { return Err(fs.err(err::data_read_retry_device_offline)) };
     let bdev = ca.disk_sb.bdev;
     ca.io_done_add(READ, DataType::user, (f.bio().raw().bi_iter.bi_size >> 9).into());
     f.bio_mut().set_dev(bdev);
@@ -1473,7 +1473,7 @@ async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'static>,
         let mut ec = {
             let _noio = MemallocFlags::noio();
             AllocBox::new(Kmalloc, init)
-        }.map_err(|_| fs.err(err::BCH_ERR_ENOMEM_ec_read_extent))?;
+        }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
         // the box's contents never move: only the box does
         unsafe { Pin::new_unchecked(&mut *ec) }.await?;
     } else {
@@ -1543,7 +1543,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
     // retry the read, bouncing it this time:
     if !csum_good && !bounced && p.flags.contains(F::user_mapped) {
         p.flags |= F::must_bounce;
-        return Err(fs.err(err::BCH_ERR_data_read_retry_csum_err_maybe_userspace));
+        return Err(fs.err(err::data_read_retry_csum_err_maybe_userspace));
     }
 
     if let Some(ca) = ca {
@@ -1560,7 +1560,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
 
     let decrypt = |src: BioRange<'_>, crc: &c::bch_extent_crc_unpacked, nonce: Nonce| -> Result<(), BchError> {
         if crc.csum_type.get().is_encryption() {
-            fs.encrypt_range(nonce, src).map_err(|_| fs.err(err::BCH_ERR_data_read_decrypt_err))
+            fs.encrypt_range(nonce, src).map_err(|_| fs.err(err::data_read_decrypt_err))
         } else {
             Ok(())
         }
@@ -1614,7 +1614,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
     }
 
     if !csum_good {
-        return Err(fs.err(err::BCH_ERR_data_read_retry_csum_err));
+        return Err(fs.err(err::data_read_retry_csum_err));
     }
 
     // Re encrypt data we decrypted, so it's consistent with its crc:
@@ -1968,13 +1968,13 @@ fn read_walk<'r, H: ReadHooks>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, h
             match started {
                 Ok(()) => {}
                 // the extent's error is the read's, and the walk goes on
-                Err(e) if !e.matches(err::BCH_ERR_transaction_restart) => orig.set_ret(Err(e)),
+                Err(e) if !e.matches(err::transaction_restart) => orig.set_ret(Err(e)),
                 Err(e) => return Err(e),
             }
             Ok(step)
         });
         match step {
-            Err(e) if e.matches(err::BCH_ERR_transaction_restart) => {
+            Err(e) if e.matches(err::transaction_restart) => {
                 if !hooks.give_up(orig) {
                     return Err(e);
                 }
@@ -1989,7 +1989,7 @@ fn read_walk<'r, H: ReadHooks>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, h
     });
 
     if let Err(e) = ret {
-        if !e.matches(err::BCH_ERR_extent_poisoned) {
+        if !e.matches(err::extent_poisoned) {
             let mut m = log_msg_ratelimited!(fs);
             read_err_msg(&trans, &mut m, orig, pos(inum.inum, walk.range().pos().bi_sector));
             write!(m, "data read error: {e}");

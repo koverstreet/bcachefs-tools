@@ -54,7 +54,7 @@ fn gc_mark_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, iter: &BtreeI
     if t.has_updates() {
         let res = DiskReservation::new(fs);
         t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
-        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_commit));
+        return Err(t.restart(Errcode::transaction_restart_commit));
     }
 
     if btree == Btree::reflink && level == 0 {
@@ -76,7 +76,7 @@ fn gc_btree_root(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(), BchError>
     let mut iter = BtreeNodeIter::new(t, btree, POS_MIN, 0, level.into(), BtreeIterFlags::empty());
 
     if !iter.peek(t)?.is_some_and(|b| fs.btree_id_root(btree.0).is_some_and(|r| ptr::eq(r, &*b))) {
-        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_lock_root_race));
+        return Err(t.restart(Errcode::transaction_restart_lock_root_race));
     }
     let b = t.trans().paths().held_btree_node(iter.iter().path, level.into()).expect("the node it peeked");
 
@@ -307,7 +307,7 @@ fn gc_alloc_done(fs: &Fs) -> Result<(), BchError> {
 fn gc_alloc_start(fs: &Fs) -> Result<(), BchError> {
     for ca in fs.members() {
         if ca.buckets_gc.prealloc_n(ca.mi.get().nbuckets as usize).is_err() {
-            return fs.throw(Errcode::BCH_ERR_ENOMEM_gc_alloc_start);
+            return fs.throw(Errcode::ENOMEM_gc_alloc_start);
         }
     }
 

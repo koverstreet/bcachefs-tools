@@ -204,7 +204,7 @@ impl c::bch_fs_btree_key_cache {
      */
     fn bkey_cached_keys_add(&self, ck: &mut LockedEntry<'_>) -> Result<(), BchError> {
         ck.keys_idx = self.keys.add(ck.ck.cast())
-            .map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_btree_key_cache_create))?;
+            .map_err(|_| BchError::from(Errcode::ENOMEM_btree_key_cache_create))?;
         Ok(())
     }
 
@@ -345,7 +345,7 @@ impl BtreeTrans<'_> {
         }
 
         let ck = match t.allocate_dropping_locks_in(paths, || {
-            NewEntry::alloc(key_u64s).ok_or(BchError::from(Errcode::BCH_ERR_ENOMEM_btree_key_cache_create))
+            NewEntry::alloc(key_u64s).ok_or(BchError::from(Errcode::ENOMEM_btree_key_cache_create))
         }) {
             Ok(ck) => Some(ck),
             Err(e) if e.matches(c::ENOMEM) => None,
@@ -547,14 +547,14 @@ impl c::bch_fs_btree_key_cache {
         for i in 0..2 {
             let slot = unsafe { self.pending.get().cast::<Pending>().add(i) };
             if unsafe { init_at(RcuPending::new(srcu, Free {}), slot) }.is_err() {
-                return fs.throw(Errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
+                return fs.throw(Errcode::ENOMEM_fs_btree_cache_init);
             }
         }
 
         let mut name = Printbuf::new();
         prt!(&mut name, "{}-btree_key_cache", fs.name().to_str().unwrap_or("?"));
         Shrinker::register(&self.shrinker, name.as_c_str(), 1, 0)
-            .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_fs_btree_cache_init))
+            .map_err(|_| fs.err(Errcode::ENOMEM_fs_btree_cache_init))
     }
 }
 

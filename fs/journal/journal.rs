@@ -600,7 +600,7 @@ impl c::journal {
         }
 
         if self.lock.blocked.get() != 0 {
-            return fs.throw(Errcode::BCH_ERR_journal_blocked);
+            return fs.throw(Errcode::journal_blocked);
         }
 
         let cur_entry_error = self.lock.cur_entry_error.get();
@@ -611,7 +611,7 @@ impl c::journal {
         self.error()?;
 
         if self.pin_range().used() >= self.pin_range().pin_size.get() {
-            return fs.throw(Errcode::BCH_ERR_journal_pin_full);
+            return fs.throw(Errcode::journal_pin_full);
         }
 
         /*
@@ -640,13 +640,13 @@ impl c::journal {
          * live entry.
          */
         if g.in_flight.free() < 2 {
-            return fs.throw(Errcode::BCH_ERR_journal_max_in_flight);
+            return fs.throw(Errcode::journal_max_in_flight);
         }
 
         let cur_seq = fs.journal_cur_seq();
 
         if self.reservations().count(state_idx(cur_seq + 1)) != 0 {
-            return fs.throw(Errcode::BCH_ERR_journal_max_open);
+            return fs.throw(Errcode::journal_max_open);
         }
 
         if unlikely(cur_seq >= c::JOURNAL_SEQ_MAX) {
@@ -654,7 +654,7 @@ impl c::journal {
             let mut msg = LogMsg::new(fs);
             prt!(&mut *msg, "cannot start: journal seq overflow\n");
             fs.emergency_read_only_locked(&mut msg, g);
-            return fs.throw(Errcode::BCH_ERR_journal_shutdown);
+            return fs.throw(Errcode::journal_shutdown);
         }
 
         if unlikely(fs.journal_seq_is_blacklisted(cur_seq + 1, false)) {
@@ -662,11 +662,11 @@ impl c::journal {
             let mut msg = LogMsg::new(fs);
             prt!(&mut *msg, "attempting to open blacklisted journal seq {}\n", cur_seq + 1);
             fs.emergency_read_only_locked(&mut msg, g);
-            return fs.throw(Errcode::BCH_ERR_journal_shutdown);
+            return fs.throw(Errcode::journal_shutdown);
         }
 
         if g.free_buf.as_ptr().is_null() {
-            return fs.throw(Errcode::BCH_ERR_journal_buf_enomem);
+            return fs.throw(Errcode::journal_buf_enomem);
         }
 
         assert!(g.cur_entry_sectors != 0, "opening a journal entry with no room for one on disk");
@@ -677,7 +677,7 @@ impl c::journal {
             .clamp(0, i64::from(c::JOURNAL_ENTRY_CLOSED_VAL) - 1);
 
         if u64s <= g.early_journal_entries.len() as i64 {
-            return fs.throw(Errcode::BCH_ERR_journal_full);
+            return fs.throw(Errcode::journal_full);
         }
 
         let was_empty = self.pin_range().used() == 0;
@@ -1019,11 +1019,11 @@ impl c::journal {
             self.error()?;
 
             if self.lock.blocked.get() != 0 {
-                return fs.throw(Errcode::BCH_ERR_journal_blocked);
+                return fs.throw(Errcode::journal_blocked);
             }
 
             if (flags & c::BCH_WATERMARK_MASK) < self.lock.hot.watermark.get() {
-                break fs.throw(Errcode::BCH_ERR_journal_full);
+                break fs.throw(Errcode::journal_full);
             }
 
             let pins = self.pins();
@@ -1065,22 +1065,22 @@ impl c::journal {
         };
 
         if self.error_check_stuck(err, flags) {
-            err = fs.err(Errcode::BCH_ERR_journal_stuck);
+            err = fs.err(Errcode::journal_stuck);
         }
 
-        let blocked = [(Errcode::BCH_ERR_journal_blocked,       Time::blocked_journal_blocked),
-                       (Errcode::BCH_ERR_journal_max_in_flight, Time::blocked_journal_max_in_flight),
-                       (Errcode::BCH_ERR_journal_max_open,      Time::blocked_journal_max_open),
-                       (Errcode::BCH_ERR_journal_full,          Time::blocked_journal_full),
-                       (Errcode::BCH_ERR_journal_pin_full,      Time::blocked_journal_pin_full),
-                       (Errcode::BCH_ERR_journal_buf_enomem,    Time::blocked_journal_buf_enomem),
-                       (Errcode::BCH_ERR_journal_stuck,         Time::blocked_journal_stuck)]
+        let blocked = [(Errcode::journal_blocked,       Time::blocked_journal_blocked),
+                       (Errcode::journal_max_in_flight, Time::blocked_journal_max_in_flight),
+                       (Errcode::journal_max_open,      Time::blocked_journal_max_open),
+                       (Errcode::journal_full,          Time::blocked_journal_full),
+                       (Errcode::journal_pin_full,      Time::blocked_journal_pin_full),
+                       (Errcode::journal_buf_enomem,    Time::blocked_journal_buf_enomem),
+                       (Errcode::journal_stuck,         Time::blocked_journal_stuck)]
             .into_iter().find(|&(e, _)| err == e.into());
         if let Some((_, t)) = blocked {
             fs.times[t as usize].track_event_change(true);
         }
 
-        if err.matches(Errcode::BCH_ERR_operation_blocked) {
+        if err.matches(Errcode::operation_blocked) {
             fs.event_inc_trace(events::journal_res_get_blocked, |out| {
                 prt!(out, "{}\n", err.msg());
                 out.make_room(4096);
@@ -1095,7 +1095,7 @@ impl c::journal {
          * Journal is full - can't rely on reclaim from work item due to
          * freezing:
          */
-        if (err == Errcode::BCH_ERR_journal_full.into() || err == Errcode::BCH_ERR_journal_pin_full.into()) &&
+        if (err == Errcode::journal_full.into() || err == Errcode::journal_pin_full.into()) &&
             flags & c::JOURNAL_RES_GET_NONBLOCK == 0 &&
             (self.flags.get(Journal::low_on_space) || self.flags.get(Journal::low_on_pin)) {
             if let Some(mut reclaim) = self.reclaim_lock.try_lock() {
@@ -1139,7 +1139,7 @@ impl c::journal {
         let ret = Cell::new(Ok(()));
         let mut got = || {
             ret.set(self.__res_get(res, flags));
-            !ret.get().is_err_and(|e| e.matches(Errcode::BCH_ERR_operation_blocked))
+            !ret.get().is_err_and(|e| e.matches(Errcode::operation_blocked))
         };
         let mut wait = |timeout| wait_on(&self.async_wait, &mut got, timeout);
 
@@ -1293,7 +1293,7 @@ impl c::journal {
          * waiting forever; fsync gets the error and unblocks.
          */
         if self.lock.err_seq.get() != 0 && seq > self.lock.flushed_seq_ondisk.get() {
-            return fs.throw(Errcode::BCH_ERR_journal_flush_err);
+            return fs.throw(Errcode::journal_flush_err);
         }
 
         /* if seq was written, but not flushed - flush a newer one instead */
@@ -1354,7 +1354,7 @@ impl c::journal {
         }
 
         if self.lock.err_seq.get() != 0 && seq > self.lock.flushed_seq_ondisk.get() {
-            fs.throw(Errcode::BCH_ERR_journal_flush_err)
+            fs.throw(Errcode::journal_flush_err)
         } else {
             Ok(())
         }
@@ -1449,7 +1449,7 @@ impl c::journal {
         let fs = self.fs();
 
         let Some(_write) = fs.writes.tryget_live() else {
-            return fs.throw(Errcode::BCH_ERR_erofs_no_writes);
+            return fs.throw(Errcode::erofs_no_writes);
         };
 
         self.__meta()

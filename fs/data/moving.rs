@@ -375,10 +375,10 @@ impl<'a> Moving<'a> {
         }
 
         if Kthread::should_stop() {
-            return fs.throw(Errcode::BCH_ERR_kthread_cancelled);
+            return fs.throw(Errcode::kthread_cancelled);
         }
         if fs.flags.get(c::FsFlag::going_ro) {
-            return fs.throw(Errcode::BCH_ERR_erofs_no_writes);
+            return fs.throw(Errcode::erofs_no_writes);
         }
         if Kthread::freezing() {
             self.trans().unlock_long();

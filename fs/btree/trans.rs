@@ -754,7 +754,7 @@ impl BtreeTrans<'_> {
         #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
         if crate::os::kernel::ktime_get_ns() & !(!0u64 << (10 + self.restart_count_this_trans.get()).min(63)) == 0 {
             self.fs().event_inc_trace(events::trans_restart_injected, |out| prt!(out, "{}", self.fn_name()));
-            return Err(self.restart_ip(Errcode::BCH_ERR_transaction_restart_fault_inject, ip));
+            return Err(self.restart_ip(Errcode::transaction_restart_fault_inject, ip));
         }
         #[cfg(not(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS))]
         let _ = ip;
@@ -815,14 +815,14 @@ impl BtreeTrans<'_> {
 
         if self.mem_with(|m| m.used_mempool) || new_bytes > c::BTREE_TRANS_MEM_MAX {
             ebug_assert!(old_bytes < new_bytes as usize);
-            return Errcode::BCH_ERR_ENOMEM_trans_kmalloc.into();
+            return Errcode::ENOMEM_trans_kmalloc.into();
         }
 
         self.mem_with(|m| m.realloc_bytes_required = new_bytes);
         c.event_inc_trace(events::trans_restart_mem_realloced, |out| {
             prt!(out, "{}\nbytes {}\n", self.fn_name(), new_bytes);
         });
-        self.restart_ip(Errcode::BCH_ERR_transaction_restart_mem_realloced, ret_ip)
+        self.restart_ip(Errcode::transaction_restart_mem_realloced, ret_ip)
     }
 
     /**
@@ -831,7 +831,7 @@ impl BtreeTrans<'_> {
      * Returns:	current restart counter, to be used with trans_was_restarted()
      *
      * While iterating over nodes or updating nodes a attempt to lock a btree node
-     * may return BCH_ERR_transaction_restart when the trylock fails. When this
+     * may return transaction_restart when the trylock fails. When this
      * occurs bch2_trans_begin() should be called and the transaction retried.
      */
     fn begin_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) -> u32 {
@@ -873,7 +873,7 @@ impl BtreeTrans<'_> {
             self.set_journal_replay_not_finished(false);
         }
 
-        if self.restarted() == Errcode::BCH_ERR_transaction_restart_mem_realloced {
+        if self.restarted() == Errcode::transaction_restart_mem_realloced {
             self.mem_realloc(paths);
         }
 
@@ -1030,7 +1030,7 @@ impl BtreeTrans<'_> {
     /// restart_ip(), less the backtrace: for a transaction this thread may not
     /// be running, whose restart this thread's backtrace wouldn't explain.
     pub(crate) fn restart_foreign_task(&self, err: Errcode, ip: c_ulong) -> BchError {
-        assert!(BchError::from(err).matches(Errcode::BCH_ERR_transaction_restart));
+        assert!(BchError::from(err).matches(Errcode::transaction_restart));
 
         self.set_restarted(err);
         self.last_restarted_ip.set(ip);

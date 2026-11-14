@@ -678,7 +678,7 @@ mod vfs {
         {
             let mut sb = fs.sb_lock();
             if sb_get_or_create_quota(&mut fs.sb_resize(&mut sb)).is_none() {
-                return fs.throw(Errcode::BCH_ERR_ENOSPC_sb_quota);
+                return fs.throw(Errcode::ENOSPC_sb_quota);
             }
 
             sb_quota_read(fs, &sb);
@@ -740,23 +740,23 @@ mod vfs {
 
         /* Accounting must be enabled at mount time: */
         if uflags & (c::FS_QUOTA_UDQ_ACCT | c::FS_QUOTA_GDQ_ACCT | c::FS_QUOTA_PDQ_ACCT) != 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_enable_acct);
+            return fs.throw(Errcode::EINVAL_quota_enable_acct);
         }
 
         /* Can't enable enforcement without accounting: */
         if uflags & c::FS_QUOTA_UDQ_ENFD != 0 && fs.opts.usrquota.get() == 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_enable_usrquota);
+            return fs.throw(Errcode::EINVAL_quota_enable_usrquota);
         }
         if uflags & c::FS_QUOTA_GDQ_ENFD != 0 && fs.opts.grpquota.get() == 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_enable_grpquota);
+            return fs.throw(Errcode::EINVAL_quota_enable_grpquota);
         }
         if uflags & c::FS_QUOTA_PDQ_ENFD != 0 && fs.opts.prjquota.get() == 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_enable_prjquota);
+            return fs.throw(Errcode::EINVAL_quota_enable_prjquota);
         }
 
         let mut sb = fs.sb_lock();
         if sb_get_or_create_quota(&mut fs.sb_resize(&mut sb)).is_none() {
-            return bch_err_fn!(fs, fs.throw(Errcode::BCH_ERR_ENOSPC_sb_quota));
+            return bch_err_fn!(fs, fs.throw(Errcode::ENOSPC_sb_quota));
         }
 
         set_sb_quotas(&mut sb, uflags, true);
@@ -790,11 +790,11 @@ mod vfs {
 
         let types = [
             (c::FS_USER_QUOTA,  fs.opts.usrquota.get(), c::QuotaType::QTYP_USR,
-             Errcode::BCH_ERR_EINVAL_quota_remove_usrquota),
+             Errcode::EINVAL_quota_remove_usrquota),
             (c::FS_GROUP_QUOTA, fs.opts.grpquota.get(), c::QuotaType::QTYP_GRP,
-             Errcode::BCH_ERR_EINVAL_quota_remove_grpquota),
+             Errcode::EINVAL_quota_remove_grpquota),
             (c::FS_PROJ_QUOTA,  fs.opts.prjquota.get(), c::QuotaType::QTYP_PRJ,
-             Errcode::BCH_ERR_EINVAL_quota_remove_prjquota),
+             Errcode::EINVAL_quota_remove_prjquota),
         ];
 
         for (flag, enabled, qtype, err) in types {
@@ -857,7 +857,7 @@ mod vfs {
 
         let ty = ty as usize;
         if ty >= QTYP_NR {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_set_info_bad_type);
+            return fs.throw(Errcode::EINVAL_quota_set_info_bad_type);
         }
 
         if (1 << ty) & enabled_qtypes(fs) == 0 {
@@ -866,13 +866,13 @@ mod vfs {
 
         let mask = info.i_fieldmask as u32;
         if mask & !(c::QC_SPC_TIMER | c::QC_INO_TIMER | c::QC_SPC_WARNS | c::QC_INO_WARNS) != 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_quota_set_info_bad_field);
+            return fs.throw(Errcode::EINVAL_quota_set_info_bad_field);
         }
 
         let mut sb = fs.sb_lock();
         let mut disk_sb = fs.sb_resize(&mut sb);
         let Some(sb_quota) = sb_get_or_create_quota(&mut disk_sb) else {
-            return bch_err_fn!(fs, fs.throw(Errcode::BCH_ERR_ENOSPC_sb_quota));
+            return bch_err_fn!(fs, fs.throw(Errcode::ENOSPC_sb_quota));
         };
 
         let q = &mut sb_quota.q[ty];

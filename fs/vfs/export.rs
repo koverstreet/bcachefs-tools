@@ -143,7 +143,7 @@ impl ExportOps for Fs {
     fn get_name(&self, parent: Dentry<'_>, name: &mut NameBuf, child: Dentry<'_>) -> Result<(), BchError> {
         let dir = parent.inode();
         if !dir.vfs().is_dir() {
-            return self.throw(Errcode::BCH_ERR_EINVAL_get_name_not_dir);
+            return self.throw(Errcode::EINVAL_get_name_not_dir);
         }
 
         let (dir_inum, inum) = (dir.inum(), child.inode().inum());
@@ -157,7 +157,7 @@ impl ExportOps for Fs {
                                               BtreeIterFlags::empty());
                 iter.set_snapshot(snapshot);
 
-                let doesnt_match = || self.err(Errcode::BCH_ERR_ENOENT_dirent_doesnt_match_inode);
+                let doesnt_match = || self.err(Errcode::ENOENT_dirent_doesnt_match_inode);
                 let d = iter.peek_slot(t)?.and_then(Dirent::new).ok_or_else(doesnt_match)?;
                 let target = dirent::read_target(t, dir_inum, d)?.ok_or_else(doesnt_match)?;
                 if subvol_inum_eq(target, inum) {

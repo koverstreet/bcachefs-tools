@@ -530,7 +530,7 @@ fn peek_slot<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>)
 {
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
     let Some(k) = k.arm::<Inodes>() else {
-        return Err(t.fs().err(Errcode::BCH_ERR_ENOENT_inode));
+        return Err(t.fs().err(Errcode::ENOENT_inode));
     };
     Ok(unpack(t.fs(), k))
 }
@@ -677,7 +677,7 @@ pub fn find_oldest_snapshot(
             ControlFlow::Continue(())
         }))?;
 
-    root.ok_or_else(|| fs.err(Errcode::BCH_ERR_ENOENT_inode))
+    root.ok_or_else(|| fs.err(Errcode::ENOENT_inode))
 }
 
 /// Any surviving version of @inum, in any snapshot - ancestor, descendant or
@@ -705,7 +705,7 @@ pub fn find_any_snapshot(t: &TransAttempt<'_, '_>, inum: u64)
         } else {
             ControlFlow::Continue(())
         }))?
-        .ok_or_else(|| fs.err(Errcode::BCH_ERR_ENOENT_inode))
+        .ok_or_else(|| fs.err(Errcode::ENOENT_inode))
 }
 
 /// @inode packed, in transaction memory - at no snapshot, which is for the
@@ -1082,7 +1082,7 @@ pub fn create<'a>(
         }
 
         if start == min {
-            return Err(fs.err(Errcode::BCH_ERR_ENOSPC_inode_create));
+            return Err(fs.err(Errcode::ENOSPC_inode_create));
         }
 
         // Retry from start
@@ -1304,7 +1304,7 @@ fn may_delete_deleted_inode(
         return delete();
     }
     let Some(k) = k else {
-        return Err(fs.err(Errcode::BCH_ERR_ENOENT_inode));
+        return Err(fs.err(Errcode::ENOENT_inode));
     };
 
     *inode = unpack(fs, k);
@@ -1319,7 +1319,7 @@ fn may_delete_deleted_inode(
         if from_deleted_inodes {
             return delete();
         }
-        return Err(fs.err(Errcode::BCH_ERR_inode_is_subvolume_root));
+        return Err(fs.err(Errcode::inode_is_subvolume_root));
     }
 
     if inode.is_dir() {
@@ -1334,7 +1334,7 @@ fn may_delete_deleted_inode(
     }
 
     let not_unlinked = (!inode.flag(c::InodeFlags::unlinked))
-        .then(|| fs.err(Errcode::BCH_ERR_inode_not_unlinked));
+        .then(|| fs.err(Errcode::inode_not_unlinked));
     if fsck_err_on!(t, from_deleted_inodes && not_unlinked.is_some(), id::deleted_inode_not_unlinked,
                     "non-deleted inode {}:{} in deleted_inodes btree", { p.offset }, { p.snapshot })? {
         return delete();
@@ -1344,7 +1344,7 @@ fn may_delete_deleted_inode(
     }
 
     let has_child = inode.flag(c::InodeFlags::has_child_snapshot)
-        .then(|| fs.err(Errcode::BCH_ERR_inode_has_child_snapshot));
+        .then(|| fs.err(Errcode::inode_has_child_snapshot));
     if fsck_err_on!(t, from_deleted_inodes && has_child.is_some(),
                     id::deleted_inode_has_child_snapshots,
                     "inode with child snapshots {}:{} in deleted_inodes btree",
@@ -1364,7 +1364,7 @@ fn may_delete_deleted_inode(
 
         if !from_deleted_inodes {
             t.commit(None, CommitFlags::NO_ENOSPC)?;
-            return Err(fs.err(Errcode::BCH_ERR_inode_has_child_snapshot));
+            return Err(fs.err(Errcode::inode_has_child_snapshot));
         }
 
         return delete();
@@ -1430,7 +1430,7 @@ fn rm_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<u32, BchEr
 
     if !is_inode {
         fs_inconsistent!(fs, "inode {}:{} not found when deleting", inum.inum, snapshot);
-        return Err(fs.err(Errcode::BCH_ERR_ENOENT_inode));
+        return Err(fs.err(Errcode::ENOENT_inode));
     }
 
     t.delete_at(&iter, UpdateTriggerFlags::empty())?;
@@ -1753,7 +1753,7 @@ pub fn set_casefold(
 
     // Not supported on individual files.
     if !inode.is_dir() {
-        return Err(fs.err(Errcode::BCH_ERR_casefold_opt_is_dir_only));
+        return Err(fs.err(Errcode::casefold_opt_is_dir_only));
     }
 
     dirent::empty_dir_trans(t, inum)?;
@@ -1903,7 +1903,7 @@ pub fn nlink_inc(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked)
         inode.set_flag(c::InodeFlags::unlinked, false);
     } else {
         if inode.bi_nlink == BCH_LINK_MAX - inode.nlink_bias() {
-            return Err(BchError::from(Errcode::BCH_ERR_too_many_links));
+            return Err(BchError::from(Errcode::too_many_links));
         }
         nlink_add(t, inode, 1)?;
     }

@@ -167,7 +167,7 @@ pub unsafe fn btree_evicted_size_init(c: *mut Fs) -> Result<(), BchError> {
     let nr = 1usize << bits;
 
     let Ok(entries) = kvzalloc(nr * size_of::<u64>()) else {
-        return fs.throw(Errcode::BCH_ERR_ENOMEM_fs_other_alloc);
+        return fs.throw(Errcode::ENOMEM_fs_other_alloc);
     };
     unsafe {
         let e = &raw mut (*c).btree.evicted_size;
@@ -318,7 +318,7 @@ fn cannibalize_lock(fs: &Fs, cl: Option<NonNull<c::closure>>) -> Result<(), BchE
     }
 
     let Some(cl) = cl else {
-        return fs.throw(Errcode::BCH_ERR_ENOMEM_btree_cache_cannibalize_lock);
+        return fs.throw(Errcode::ENOMEM_btree_cache_cannibalize_lock);
     };
 
     unsafe { closure_wait(&bc.alloc_wait, cl) };
@@ -330,7 +330,7 @@ fn cannibalize_lock(fs: &Fs, cl: Option<NonNull<c::closure>>) -> Result<(), BchE
         return Ok(());
     }
 
-    fs.throw(Errcode::BCH_ERR_btree_cache_cannibalize_lock_blocked)
+    fs.throw(Errcode::btree_cache_cannibalize_lock_blocked)
 }
 
 // ── The shrinkers ────────────────────────────────────────────────────────
@@ -366,7 +366,7 @@ impl c::bch_fs_btree_cache {
             let mut name = Printbuf::new();
             prt!(&mut name, "{}-{list}", fs.name().to_str().unwrap_or("?"));
             Shrinker::register(s, name.as_c_str(), seeks * mult, 0)
-                .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_fs_btree_cache_init))?;
+                .map_err(|_| fs.err(Errcode::ENOMEM_fs_btree_cache_init))?;
         }
         Ok(())
     }

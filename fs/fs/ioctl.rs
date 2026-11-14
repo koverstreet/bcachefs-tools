@@ -389,7 +389,7 @@ where
     type Q = c::bch_ioctl_subvol_readdir;
     let arg = user.read()?;
     if arg.pad != 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_subvol_readdir_pad);
+        return fs.throw(Errcode::EINVAL_subvol_readdir_pad);
     }
 
     let mut out = Entries::new(arg.buf, arg.buf_size);
@@ -445,7 +445,7 @@ where
 pub fn subvolume_to_path(fs: &Fs, user: UserArg<c::bch_ioctl_subvol_to_path>) -> Result<(), BchError> {
     let arg = user.read()?;
     if arg.buf_size == 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_subvol_to_path_no_buf);
+        return fs.throw(Errcode::EINVAL_subvol_to_path_no_buf);
     }
 
     let mut path = Printbuf::new();
@@ -490,7 +490,7 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
                  nodes: impl Fn(u32) -> UserSlice,
                  put: impl FnOnce(&SnapshotTreeReply) -> Result<(), BchError>) -> Result<(), BchError> {
     if tree_id != 0 && !capable(Capability::SysAdmin) {
-        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::EPERM_non_admin);
     }
 
     let (tree_id, tree) = {
@@ -561,7 +561,7 @@ pub fn snapshot_tree_v1(fs: &Fs, subvol: u32, user: UserArg<c::bch_ioctl_snapsho
 
     let arg = user.read()?;
     if arg.pad != 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_snapshot_tree_query_pad);
+        return fs.throw(Errcode::EINVAL_snapshot_tree_query_pad);
     }
 
     snapshot_tree(fs, subvol, arg.tree_id, arg.nr, NODE,
@@ -587,7 +587,7 @@ pub fn snapshot_tree_v2(fs: &Fs, subvol: u32, user: UserArg<c::bch_ioctl_snapsho
     // a caller that doesn't say its node size can't be given nodes: we'd
     // have to guess its stride
     if arg.node_size == 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_snapshot_tree_query_pad);
+        return fs.throw(Errcode::EINVAL_snapshot_tree_query_pad);
     }
     let node_size = (arg.node_size as usize).min(NODE);
     user.write_at(offset_of!(Q, node_size), &(NODE as u32))?;
@@ -629,7 +629,7 @@ fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &c::bch_inode_o
     iter.for_each_max_commit(trans, bkey::SPOS_MAX, flags, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {
         res.put();
         if k.k.start_pos() >= bkey::pos(0, range.end) {
-            return Err(Errcode::BCH_ERR_fc_break.into());
+            return Err(Errcode::fc_break.into());
         }
         update_reconcile_opts(t, None, opts, iter, 0, k,
                               c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change)
@@ -640,7 +640,7 @@ fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &c::bch_inode_o
 /// @inum's reflink_ps, an admin's to do, and propagate their options.
 pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     if !capable(Capability::SysAdmin) {
-        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::EPERM_non_admin);
     }
     fs.request_incompat_feature(MetadataVersion::reflink_p_may_update_opts)?;
 
@@ -681,7 +681,7 @@ pub fn reflink_p_propagate_opts(fs: &Fs, inum: c::subvol_inum) -> Result<(), Bch
             return if capable(Capability::SysAdmin) {
                 Ok(())
             } else {
-                fs.throw(Errcode::BCH_ERR_reflink_p_may_update_options_unset)
+                fs.throw(Errcode::reflink_p_may_update_options_unset)
             };
         }
 
@@ -736,7 +736,7 @@ pub fn unpoison(fs: &Fs, inum: c::subvol_inum, owner: impl FnOnce() -> bool, arg
         return Ok(());
     }
     if !owner() {
-        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin_or_owner);
+        return fs.throw(Errcode::EPERM_non_admin_or_owner);
     }
 
     let start = bkey::pos(inum.inum, arg.offset >> 9);

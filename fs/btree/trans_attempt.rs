@@ -178,7 +178,7 @@ impl Drop for TransMayDropUpdates<'_, '_> {
 /// Whether @e is a transaction restart: the attempt is over, and the loop
 /// it's in begins again.
 pub fn is_restart(e: &BchError) -> bool {
-    e.matches(Errcode::BCH_ERR_transaction_restart)
+    e.matches(Errcode::transaction_restart)
 }
 
 pub fn lockrestart_do<'t, T, F>(trans: &BtreeTrans<'t>, mut f: F) -> Result<T, BchError>
@@ -461,7 +461,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if let Err(e) = f(&self.lend_owner()) {
             return e;
         }
-        self.trans.begin().restart(Errcode::BCH_ERR_transaction_restart_nested)
+        self.trans.begin().restart(Errcode::transaction_restart_nested)
     }
 
     /// End this attempt for @f, work that runs loops of its own, lending it the
@@ -479,7 +479,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if let Err(e) = f(&self.lend_owner()) {
             return e;
         }
-        self.trans.begin().restart(Errcode::BCH_ERR_transaction_restart_nested)
+        self.trans.begin().restart(Errcode::transaction_restart_nested)
     }
 
     /// Commit only once the transaction's memory is getting full: for a key
@@ -534,7 +534,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     #[inline(always)]
     pub fn relock_or_nested(&self) -> Result<(), BchError> {
         if self.trans.restart_count() != self.restart_count.get() {
-            return Err(BchError::from(Errcode::BCH_ERR_transaction_restart_nested));
+            return Err(BchError::from(Errcode::transaction_restart_nested));
         }
         self.relock()
     }
@@ -543,7 +543,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub(in crate::btree) fn relock_or_nested_in(&self, paths: &mut Paths<'_>) -> Result<(), BchError> {
         assert!(self.live.get(), "relock of an attempt that ended");
         if self.trans.restart_count() != self.restart_count.get() {
-            return Err(BchError::from(Errcode::BCH_ERR_transaction_restart_nested));
+            return Err(BchError::from(Errcode::transaction_restart_nested));
         }
         self.trans.relock_from(paths)
     }
@@ -636,7 +636,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
                     if trans.restart_count.get() != orig_restart_count {
                         return Err(BchError::from_raw(
-                            Errcode::BCH_ERR_transaction_restart_nested.0 as i32));
+                            Errcode::transaction_restart_nested.0 as i32));
                     }
                     return Ok(v);
                 }
@@ -913,7 +913,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let mut iter = BtreeNodeIter::new(self, btree, key.k().p, level + 1, level, BtreeIterFlags::INTENT);
         if iter.peek(self)?.is_none() {
-            return Err(fs.err(Errcode::BCH_ERR_no_btree_node_shallow));
+            return Err(fs.err(Errcode::no_btree_node_shallow));
         }
 
         let idx = iter.raw.path;
@@ -925,7 +925,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         if usize::from(key.k().u64s) > b.keys_u64s_remaining(b.contents()) {
             trans.node_unlock_write(&mut paths, idx, lvl);
-            return Err(fs.err(Errcode::BCH_ERR_btree_insert_btree_node_full));
+            return Err(fs.err(Errcode::btree_insert_btree_node_full));
         }
 
         let mut node_iter = KeyIter::default();
@@ -950,7 +950,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let mut iter = BtreeNodeIter::new(self, btree, pos, level + 1, level, BtreeIterFlags::INTENT);
         if iter.peek(self)?.is_none() {
-            return Err(self.fs().err(Errcode::BCH_ERR_no_btree_node_shallow));
+            return Err(self.fs().err(Errcode::no_btree_node_shallow));
         }
 
         let idx = iter.raw.path;

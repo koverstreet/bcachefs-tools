@@ -580,8 +580,8 @@ impl Fs {
         if unlikely(u32::from(a.freelist_lock.open_buckets_nr_free.get()) <= open_buckets_reserved(req.watermark)) {
             times(c::TimeStat::blocked_allocate_open_bucket).track_event_change(true);
             return Err(self.err(match req.closure_wait(&a.open_buckets_wait) {
-                true  => Errcode::BCH_ERR_open_bucket_alloc_blocked,
-                false => Errcode::BCH_ERR_open_buckets_empty,
+                true  => Errcode::open_bucket_alloc_blocked,
+                false => Errcode::open_buckets_empty,
             }));
         }
 
@@ -800,7 +800,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
         let fs = self.fs();
         if fs.flags.get(c::FsFlag::emergency_ro) {
-            return fs.throw(crate::c::Errcode::BCH_ERR_emergency_ro);
+            return fs.throw(crate::c::Errcode::emergency_ro);
         }
         Ok(())
     }
@@ -1040,7 +1040,7 @@ impl Fs {
         self.alloc_request_to_text(&mut out.indent(2), req);
         write!(out, "\n");
 
-        if err.matches(Errcode::BCH_ERR_bucket_alloc_blocked) {
+        if err.matches(Errcode::bucket_alloc_blocked) {
             write!(out, "Allocator debug:\n");
             self.alloc_debug_to_text(&mut out.indent(2));
             write!(out, "\n");
@@ -1079,7 +1079,7 @@ impl Fs {
             write!(out, "\n");
         }
 
-        if err.matches(Errcode::BCH_ERR_open_bucket_alloc_blocked) {
+        if err.matches(Errcode::open_bucket_alloc_blocked) {
             self.fs_open_buckets_to_text(out);
         }
 
@@ -1101,7 +1101,7 @@ impl TransAttempt<'_, '_> {
     /// first.
     fn sleep_on_allocator(&self, req: &mut c::alloc_request, err: BchError, cl: &Opaque<c::closure>) {
         let fs = self.fs();
-        let blocked = err.matches(Errcode::BCH_ERR_bucket_alloc_blocked);
+        let blocked = err.matches(Errcode::bucket_alloc_blocked);
         let until = jiffies().wrapping_add(c_ulong::from(fs.opts.allocator_stuck_timeout.get()) * HZ);
 
         self.unlock();
@@ -1313,7 +1313,7 @@ impl c::open_buckets {
             let err = if f.errcode != 0 {
                 BchError::from_raw(f.errcode.into())
             } else {
-                Errcode::BCH_ERR_data_write_io.into()
+                Errcode::data_write_io.into()
             };
             self.iter(fs).filter(|ob| u32::from(ob.id().dev()) == u32::from(f.dev))
                 .filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));

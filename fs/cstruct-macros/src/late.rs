@@ -2,7 +2,7 @@
 //! `#[derive(Late)]`: what a struct makes when the filesystem goes read-write,
 //! declared on its fields - `#[late(EXPR)]` on a `Late<T>`, made by EXPR, a
 //! PinInit<T, BchError>, or `#[late(EXPR, ERRCODE)]`, its failure
-//! BCH_ERR_ERRCODE; a bare `#[late]` on a struct with its own - as
+//! Errcode::ERRCODE; a bare `#[late]` on a struct with its own - as
 //! `init_late()`, which makes them under the state lock, and `exit_late()`,
 //! which unmakes them where the struct's teardown wants them gone: a
 //! workqueue's destroy is its flush.

@@ -494,10 +494,10 @@ pub fn will_run(fs: &Fs, pass: Pass) -> bool {
 /// the kthread running it told to.
 pub fn cancelled(fs: &Fs) -> Result<(), BchError> {
     if fs.flags.get(c::FsFlag::going_ro) {
-        return fs.throw(Errcode::BCH_ERR_erofs_recovery_cancelled);
+        return fs.throw(Errcode::erofs_recovery_cancelled);
     }
     if Kthread::should_stop() {
-        return fs.throw(Errcode::BCH_ERR_recovery_cancelled);
+        return fs.throw(Errcode::recovery_cancelled);
     }
     Ok(())
 }
@@ -666,7 +666,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
     if pass < Pass::set_may_go_rw &&
        fs.flags.get(c::FsFlag::may_go_rw) {
         write!(out, "need recovery pass {} ({}), but already rw\n", pass.name(), pass as u32);
-        return fs.throw(Errcode::BCH_ERR_cannot_rewind_recovery);
+        return fs.throw(Errcode::cannot_rewind_recovery);
     }
 
     if ratelimit {
@@ -730,7 +730,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
                 bch_info!(fs, "recovery: rewinding to {} ({}), currently running {} ({})",
                           pass.name(), pass as u32, current.name(), current as u32);
             }
-            return fs.throw(Errcode::BCH_ERR_restart_recovery);
+            return fs.throw(Errcode::restart_recovery);
         }
     } else {
         write!(out, "scheduling recovery pass {} ({}){}\n", pass.name(), pass as u32,
@@ -786,7 +786,7 @@ pub fn require(fs: &Fs, out: &mut Printbuf, pass: Pass) -> Result<(), BchError> 
      * loop sees restart_recovery with rewound_to unset and fails.
      */
     run_explicit_sb(fs, out, pass, Flags::empty(), Some(&mut w))?;
-    fs.throw(Errcode::BCH_ERR_recovery_pass_will_run)
+    fs.throw(Errcode::recovery_pass_will_run)
 }
 
 // ── Running ──────────────────────────────────────────────────────────────────
@@ -819,7 +819,7 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
     let ret = RUN[pass as usize](fs);
 
     if let Err(e) = &ret {
-        if !e.matches(Errcode::BCH_ERR_restart_recovery) {
+        if !e.matches(Errcode::restart_recovery) {
             let end_time = ktime_get_real_seconds();
             let runtime = (end_time - start_time).max(0);
 

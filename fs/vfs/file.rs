@@ -221,7 +221,7 @@ impl FileData for InodeFile {
 fn mmap_check(fs: &Fs, flags: c_ulong) -> Result<(), BchError> {
     let shared_writable = c::VM_SHARED | c::VM_WRITE;
     if flags & shared_writable == shared_writable && fs.flags.get(c::FsFlag::emergency_ro) {
-        return fs.throw(Errcode::BCH_ERR_mmap_emergency_ro);
+        return fs.throw(Errcode::mmap_emergency_ro);
     }
     Ok(())
 }

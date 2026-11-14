@@ -93,7 +93,7 @@ impl FromStr for c::bbpos {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let err = || BchError::from(Errcode::BCH_ERR_EINVAL_parse_bbpos);
+        let err = || BchError::from(Errcode::EINVAL_parse_bbpos);
 
         let (btree_s, pos_s) = s.split_once(':').ok_or_else(err)?;
 

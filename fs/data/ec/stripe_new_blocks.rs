@@ -300,9 +300,9 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
     let mut ret = dev_stripe.lock.lock_trans(t).and_then(|mut g| alloc_buckets(t, req, g.protected(), s));
 
     // as C's: the errors themselves, not their classes
-    let blocked = BchError::from(Errcode::BCH_ERR_bucket_alloc_blocked);
+    let blocked = BchError::from(Errcode::bucket_alloc_blocked);
     let full = ret.err()
-        .filter(|&e| may_shrink && (e == blocked || e == BchError::from(Errcode::BCH_ERR_freelist_empty)))
+        .filter(|&e| may_shrink && (e == blocked || e == BchError::from(Errcode::freelist_empty)))
         .filter(|_| will_not_allocate(fs, req, s));
     if let Some(err) = full {
         let moving = s.blocks.iter().filter(|b| b.moving()).count();
@@ -318,7 +318,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
             if err == blocked {
                 fs.alloc_waiters_unpark();
             }
-            ret = fs.throw(Errcode::BCH_ERR_stripe_insufficient_devices);
+            ret = fs.throw(Errcode::stripe_insufficient_devices);
         }
     }
 
@@ -409,7 +409,7 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
 
     /* OpenStripe::tryget()'s insert, under the walk's locks, can't grow the table: */
     t.allocate_dropping_locks(|| {
-        fs.ec.stripes_open.make_room().map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_stripe_open))
+        fs.ec.stripes_open.make_room().map_err(|_| BchError::from(Errcode::ENOMEM_stripe_open))
     })?;
 
     let mut iter = BtreeIter::new(t, Btree::stripes, start, BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
@@ -418,7 +418,7 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
 
         if bkey_gt(k.k.p, pos(0, u32::MAX.into())) {
             if start == min_pos {
-                return fs.throw(Errcode::BCH_ERR_ENOSPC_stripe_create);
+                return fs.throw(Errcode::ENOSPC_stripe_create);
             }
             start = min_pos;
             return Ok(LoopFlow::ContinueFrom(min_pos));
@@ -480,7 +480,7 @@ pub(crate) fn stripe_alloc_or_reuse(t: &TransAttempt<'_, '_>, req: &mut c::alloc
     }
 
     t.allocate_dropping_locks(|| {
-        t.fs().ec.stripes_new_buckets.make_room().map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_stripe_new_bucket))
+        t.fs().ec.stripes_new_buckets.make_room().map_err(|_| BchError::from(Errcode::ENOMEM_stripe_new_bucket))
     })?;
     s.buckets_add(t.fs())?;
     s.allocated = true;

@@ -22,7 +22,7 @@ use crate::util::Printbuf;
 use crate::{bch_err, btree_trans};
 
 fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
-    let enomem = |_| fs.err(Errcode::BCH_ERR_ENOMEM_gc_gens);
+    let enomem = |_| fs.err(Errcode::ENOMEM_gc_gens);
 
     let mut oldest_gens: KVVec<(DevRef, KVVec<u8>)> = KVVec::new();
     for ca in fs.members() {

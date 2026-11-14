@@ -380,7 +380,7 @@ pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
 
         let (ki_pos, count) = (k.pos(), it.count() as u64);
         if unlikely((ki_pos | count) & (fs.block_bytes() - 1) != 0) {
-            break 'out fs.err(Errcode::BCH_ERR_EINVAL_unaligned_io).class() as isize;
+            break 'out fs.err(Errcode::EINVAL_unaligned_io).class() as isize;
         }
 
         let started = inode.dio_start();

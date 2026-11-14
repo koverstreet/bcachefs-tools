@@ -335,7 +335,7 @@ impl c::journal_device {
 }
 
 fn enomem(fs: &Fs) -> impl Fn(crate::util::alloc::AllocError) -> BchError + '_ {
-    |_| fs.err(Errcode::BCH_ERR_ENOMEM_set_nr_journal_buckets)
+    |_| fs.err(Errcode::ENOMEM_set_nr_journal_buckets)
 }
 
 /* journal_v2's runs, or v1's buckets if there's no v2 */
@@ -350,7 +350,7 @@ fn sb_buckets(sb: &c::bch_sb) -> impl Iterator<Item = u64> + '_ {
 /// @ca's buckets, from its superblock @sb: at device online.
 pub fn load(ca: &Dev, sb: &c::bch_sb) -> Result<(), BchError> {
     let fs = ca.fs();
-    let enomem = |_| fs.err(Errcode::BCH_ERR_ENOMEM_dev_journal_init);
+    let enomem = |_| fs.err(Errcode::ENOMEM_dev_journal_init);
     let mut buckets = KVVec::from_elem(0, sb_buckets(sb).count()).map_err(enomem)?;
     for (dst, b) in buckets.iter_mut().zip(sb_buckets(sb)) {
         *dst = b;
@@ -462,9 +462,9 @@ fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::Watermark, cl: &StackCl
                                               first.then(|| cl.as_opaque()))?;
                 req.data_type = DataType::journal;
                 match t.bucket_alloc(&mut req, ca) {
-                    Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => {
+                    Err(e) if e.matches(Errcode::operation_blocked) => {
                         t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
-                        Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
+                        Err(t.restart(Errcode::transaction_restart_nested))
                     }
                     ob => ob,
                 }
@@ -549,7 +549,7 @@ pub fn set_nr_journal_buckets(fs: &Fs, ca: &Dev, nr: u32) -> Result<(), BchError
     let _state = fs.state_lock_write();
 
     if ca.removing.get() {
-        return fs.throw(Errcode::BCH_ERR_device_has_been_removed);
+        return fs.throw(Errcode::device_has_been_removed);
     }
 
     bch_err_fn!(fs, set_nr_loop(fs, ca, nr, false))
@@ -564,7 +564,7 @@ pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
 
     if fs.feature(SbFeature::small_image) {
         bch_err!(fs, "cannot allocate journal, filesystem is an unresized image file");
-        return fs.throw(Errcode::BCH_ERR_erofs_filesystem_full);
+        return fs.throw(Errcode::erofs_filesystem_full);
     }
 
     /* 1/128th of the device by default: */
@@ -589,12 +589,12 @@ crate::recovery_pass!(fs_journal_alloc => |fs: &Fs| fs.online_members()
 /// move under us, and sectors_free - the write path's - is ours to set.
 pub fn retire(fs: &Fs, ca: &Dev, bucket: u64) -> Result<(), BchError> {
     if fs.flags.get(c::FsFlag::may_go_rw) {
-        return Err(fs.err(Errcode::BCH_ERR_EBUSY_journal_bucket_retire_rw));
+        return Err(fs.err(Errcode::EBUSY_journal_bucket_retire_rw));
     }
 
     splice(fs, &mut fs.sb_lock(), ca, 1, &[], |ring| {
         let i = ring.buckets().iter().position(|&b| b == bucket)
-            .ok_or_else(|| fs.err(Errcode::BCH_ERR_EINVAL_journal_bucket_not_found))? as u32;
+            .ok_or_else(|| fs.err(Errcode::EINVAL_journal_bucket_not_found))? as u32;
         if !ring.needed(i) {
             return Ok(Some(i as usize));
         }
@@ -602,7 +602,7 @@ pub fn retire(fs: &Fs, ca: &Dev, bucket: u64) -> Result<(), BchError> {
         if i == ring.idx(CUR) {
             /* Being written: closed, so the first write moves on - if there's a bucket to move to */
             if ring.free(DIRTY_ONDISK) == 0 {
-                return Err(fs.err(Errcode::BCH_ERR_EBUSY_journal_bucket_retire_no_space));
+                return Err(fs.err(Errcode::EBUSY_journal_bucket_retire_no_space));
             }
             ca.journal.sectors_free.set(0);
         }

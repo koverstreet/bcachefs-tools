@@ -377,7 +377,7 @@ fn mod_gc(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[u64]) -> Resul
             accounting_mem::mem_add(fs, a, true, &mut mark)
         };
         match r {
-            Err(e) if e.matches(Errcode::BCH_ERR_btree_insert_need_mark_replicas) =>
+            Err(e) if e.matches(Errcode::btree_insert_need_mark_replicas) =>
                 t.drop_locks_do(|| update_sb_one(fs, p))?,
             r => return r.map(|_| ()),
         }

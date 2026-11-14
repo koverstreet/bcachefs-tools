@@ -783,7 +783,7 @@ pub fn check_propagated(t: &TransAttempt<'_, '_>, inode: &c::bch_inode_unpacked)
      */
     if repaired {
         t.commit(None, CommitFlags::NO_ENOSPC)?;
-        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested));
+        return Err(t.restart(Errcode::transaction_restart_nested));
     }
 
     Ok(())

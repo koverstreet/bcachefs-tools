@@ -1,20 +1,20 @@
 //! bcachefs error codes.
 //!
 //! The errcodes extend the errnos: BCH_ERRCODES() numbers bcachefs's own from
-//! BCH_ERR_START (2048) up, each with a parent - an errno, another errcode, or
+//! Errcode::START (2048) up, each with a parent - an errno, another errcode, or
 //! none. A code is thus a chain: ENOENT_inode -> ENOENT, and
 //! transaction_restart_relock -> transaction_restart. matches(class) asks
 //! whether @class is on the chain, errno() is its root: what the VFS and
 //! userspace see.
 //!
 //! ERRCODES, generated from BCH_ERRCODES(), holds each errcode's name and
-//! parent. Parents are written as an errno or BCH_ERR_<name>, and `class`
+//! parent. Parents are written as an errno or an errcode, and `class`
 //! resolves both to numbers - the errnos from the kernel's bindings, or
 //! linux-raw-sys's in userspace. An errno's name is errname()'s, strerror()'s
 //! in userspace.
 //!
 //! A number with no entry has no parent and stands for itself. That includes
-//! codes past BCH_ERR_MAX: the tools and the DKMS module are versioned
+//! codes past Errcode::MAX: the tools and the DKMS module are versioned
 //! separately, and mount.bcachefs acts on the errcode a syscall returned, so a
 //! newer module can return one this build doesn't know.
 
@@ -87,17 +87,17 @@ xmacro! {
 xmacro! {
     BCH_ERRCODES {
         (EIO, blockdev_io_error, 0),
-        BLK_ERRS((n, nr) => (BCH_ERR_blockdev_io_error, concat(BLK_STS_, n), nr)),
-        (BCH_ERR_blockdev_io_error, BLK_STS_UNKNOWN, 20),
+        BLK_ERRS((n, nr) => (blockdev_io_error, concat(BLK_STS_, n), nr)),
+        (blockdev_io_error, BLK_STS_UNKNOWN, 20),
         (ERANGE, ERANGE_option_too_small, 21),
         (ERANGE, ERANGE_option_too_big, 22),
         (ERANGE, projid_too_big, 23),
         (EINVAL, injected, 24),
-        (BCH_ERR_injected, injected_fs_start, 25),
+        (injected, injected_fs_start, 25),
         (EINVAL, mount_option, 26),
-        (BCH_ERR_mount_option, option_name, 27),
-        (BCH_ERR_mount_option, option_value, 28),
-        (BCH_ERR_mount_option, option_not_bool, 29),
+        (mount_option, option_name, 27),
+        (mount_option, option_value, 28),
+        (mount_option, option_not_bool, 29),
         (ENOMEM, ENOMEM_stripe_buf, 30),
         (ENOMEM, ENOMEM_replicas_table, 31),
         (ENOMEM, ENOMEM_cpu_replicas, 32),
@@ -225,82 +225,82 @@ xmacro! {
         (EAGAIN, stripe_insufficient_devices, 158),
         (EAGAIN, max_discards_in_flight, 159),
         (ENOSPC, ec_alloc_failed, 160),
-        (BCH_ERR_freelist_empty, no_buckets_found, 161),
-        (BCH_ERR_freelist_empty, bucket_alloc_no_progress, 162),
+        (freelist_empty, no_buckets_found, 161),
+        (freelist_empty, bucket_alloc_no_progress, 162),
         (0, transaction_restart, 163),
-        (BCH_ERR_transaction_restart, transaction_restart_fault_inject, 164),
-        (BCH_ERR_transaction_restart, transaction_restart_relock, 165),
-        (BCH_ERR_transaction_restart, transaction_restart_relock_path, 166),
-        (BCH_ERR_transaction_restart, transaction_restart_relock_path_intent, 167),
-        (BCH_ERR_transaction_restart, transaction_restart_too_many_iters, 168),
-        (BCH_ERR_transaction_restart, transaction_restart_lock_node_reused, 169),
-        (BCH_ERR_transaction_restart, transaction_restart_fill_relock, 170),
-        (BCH_ERR_transaction_restart, transaction_restart_fill_mem_alloc_fail, 171),
-        (BCH_ERR_transaction_restart, transaction_restart_lock_waitlist_alloc, 172),
-        (BCH_ERR_transaction_restart, transaction_restart_mem_realloced, 173),
-        (BCH_ERR_transaction_restart, transaction_restart_in_traverse_all, 174),
-        (BCH_ERR_transaction_restart, transaction_restart_would_deadlock, 175),
-        (BCH_ERR_transaction_restart, transaction_restart_would_deadlock_write, 176),
-        (BCH_ERR_transaction_restart, transaction_restart_deadlock_recursion_limit, 177),
-        (BCH_ERR_transaction_restart, transaction_restart_deadlock_waitlist_alloc, 178),
-        (BCH_ERR_transaction_restart, transaction_restart_upgrade, 179),
-        (BCH_ERR_transaction_restart, transaction_restart_key_cache_fill, 180),
-        (BCH_ERR_transaction_restart, transaction_restart_key_cache_raced, 181),
-        (BCH_ERR_transaction_restart, transaction_restart_lock_root_race, 182),
-        (BCH_ERR_transaction_restart, transaction_restart_split_race, 183),
-        (BCH_ERR_transaction_restart, transaction_restart_split_with_interior_updates, 184),
-        (BCH_ERR_transaction_restart, transaction_restart_write_buffer_flush, 185),
-        (BCH_ERR_transaction_restart, transaction_restart_nested, 186),
-        (BCH_ERR_transaction_restart, transaction_restart_commit, 187),
-        (BCH_ERR_transaction_restart, transaction_restart_journal_overwrites_changed, 188),
+        (transaction_restart, transaction_restart_fault_inject, 164),
+        (transaction_restart, transaction_restart_relock, 165),
+        (transaction_restart, transaction_restart_relock_path, 166),
+        (transaction_restart, transaction_restart_relock_path_intent, 167),
+        (transaction_restart, transaction_restart_too_many_iters, 168),
+        (transaction_restart, transaction_restart_lock_node_reused, 169),
+        (transaction_restart, transaction_restart_fill_relock, 170),
+        (transaction_restart, transaction_restart_fill_mem_alloc_fail, 171),
+        (transaction_restart, transaction_restart_lock_waitlist_alloc, 172),
+        (transaction_restart, transaction_restart_mem_realloced, 173),
+        (transaction_restart, transaction_restart_in_traverse_all, 174),
+        (transaction_restart, transaction_restart_would_deadlock, 175),
+        (transaction_restart, transaction_restart_would_deadlock_write, 176),
+        (transaction_restart, transaction_restart_deadlock_recursion_limit, 177),
+        (transaction_restart, transaction_restart_deadlock_waitlist_alloc, 178),
+        (transaction_restart, transaction_restart_upgrade, 179),
+        (transaction_restart, transaction_restart_key_cache_fill, 180),
+        (transaction_restart, transaction_restart_key_cache_raced, 181),
+        (transaction_restart, transaction_restart_lock_root_race, 182),
+        (transaction_restart, transaction_restart_split_race, 183),
+        (transaction_restart, transaction_restart_split_with_interior_updates, 184),
+        (transaction_restart, transaction_restart_write_buffer_flush, 185),
+        (transaction_restart, transaction_restart_nested, 186),
+        (transaction_restart, transaction_restart_commit, 187),
+        (transaction_restart, transaction_restart_journal_overwrites_changed, 188),
         (0, no_btree_node, 189),
-        (BCH_ERR_no_btree_node, no_btree_node_relock, 190),
-        (BCH_ERR_no_btree_node, no_btree_node_upgrade, 191),
-        (BCH_ERR_no_btree_node, no_btree_node_drop, 192),
-        (BCH_ERR_no_btree_node, no_btree_node_lock_root, 193),
-        (BCH_ERR_no_btree_node, no_btree_node_up, 194),
-        (BCH_ERR_no_btree_node, no_btree_node_down, 195),
-        (BCH_ERR_no_btree_node, no_btree_node_init, 196),
-        (BCH_ERR_no_btree_node, no_btree_node_cached, 197),
-        (BCH_ERR_no_btree_node, no_btree_node_srcu_reset, 198),
-        (BCH_ERR_no_btree_node, no_btree_node_nofill, 199),
-        (BCH_ERR_no_btree_node, no_btree_node_reused, 200),
-        (BCH_ERR_no_btree_node, no_btree_node_stale_paths, 201),
+        (no_btree_node, no_btree_node_relock, 190),
+        (no_btree_node, no_btree_node_upgrade, 191),
+        (no_btree_node, no_btree_node_drop, 192),
+        (no_btree_node, no_btree_node_lock_root, 193),
+        (no_btree_node, no_btree_node_up, 194),
+        (no_btree_node, no_btree_node_down, 195),
+        (no_btree_node, no_btree_node_init, 196),
+        (no_btree_node, no_btree_node_cached, 197),
+        (no_btree_node, no_btree_node_srcu_reset, 198),
+        (no_btree_node, no_btree_node_nofill, 199),
+        (no_btree_node, no_btree_node_reused, 200),
+        (no_btree_node, no_btree_node_stale_paths, 201),
         (0, btree_insert_fail, 202),
-        (BCH_ERR_btree_insert_fail, btree_insert_btree_node_full, 203),
-        (BCH_ERR_btree_insert_fail, btree_insert_need_mark_replicas, 204),
-        (BCH_ERR_btree_insert_fail, btree_insert_need_journal_res, 205),
-        (BCH_ERR_btree_insert_fail, btree_insert_need_journal_reclaim, 206),
+        (btree_insert_fail, btree_insert_btree_node_full, 203),
+        (btree_insert_fail, btree_insert_need_mark_replicas, 204),
+        (btree_insert_fail, btree_insert_need_journal_res, 205),
+        (btree_insert_fail, btree_insert_need_journal_reclaim, 206),
         (0, backpointer_to_overwritten_btree_node, 207),
         (0, journal_reclaim_would_deadlock, 208),
         (0, journal_rewind_no_overwrites, 209),
         (EROFS, fsck, 210),
-        (BCH_ERR_fsck, fsck_ask, 211),
-        (BCH_ERR_fsck, fsck_fix, 212),
-        (BCH_ERR_fsck, fsck_delete_bkey, 213),
-        (BCH_ERR_fsck, fsck_ignore, 214),
-        (BCH_ERR_fsck, fsck_errors_not_fixed, 215),
-        (BCH_ERR_fsck, fsck_repair_unimplemented, 216),
-        (BCH_ERR_fsck, fsck_repair_impossible, 217),
+        (fsck, fsck_ask, 211),
+        (fsck, fsck_fix, 212),
+        (fsck, fsck_delete_bkey, 213),
+        (fsck, fsck_ignore, 214),
+        (fsck, fsck_errors_not_fixed, 215),
+        (fsck, fsck_repair_unimplemented, 216),
+        (fsck, fsck_repair_impossible, 217),
         (EINVAL, recovery_will_run, 218),
-        (BCH_ERR_recovery_will_run, restart_recovery, 219),
-        (BCH_ERR_recovery_will_run, cannot_rewind_recovery, 220),
-        (BCH_ERR_recovery_will_run, recovery_pass_will_run, 221),
+        (recovery_will_run, restart_recovery, 219),
+        (recovery_will_run, cannot_rewind_recovery, 220),
+        (recovery_will_run, recovery_pass_will_run, 221),
         (0, bkey_was_deleted, 222),
         (0, bucket_not_moveable, 223),
-        (BCH_ERR_bucket_not_moveable, bucket_not_moveable_dev_not_rw, 224),
-        (BCH_ERR_bucket_not_moveable, bucket_not_moveable_bucket_open, 225),
-        (BCH_ERR_bucket_not_moveable, bucket_not_moveable_bp_mismatch, 226),
-        (BCH_ERR_bucket_not_moveable, bucket_not_moveable_lru_race, 227),
+        (bucket_not_moveable, bucket_not_moveable_dev_not_rw, 224),
+        (bucket_not_moveable, bucket_not_moveable_bucket_open, 225),
+        (bucket_not_moveable, bucket_not_moveable_bp_mismatch, 226),
+        (bucket_not_moveable, bucket_not_moveable_lru_race, 227),
         (0, data_update_done, 228),
-        (BCH_ERR_data_update_done, data_update_done_unwritten, 229),
-        (BCH_ERR_data_update_done, data_update_done_no_writes_needed, 230),
+        (data_update_done, data_update_done_unwritten, 229),
+        (data_update_done, data_update_done_no_writes_needed, 230),
         (0, data_update_fail, 231),
-        (BCH_ERR_data_update_fail, data_update_fail_would_block, 232),
-        (BCH_ERR_data_update_fail, data_update_fail_in_flight, 233),
-        (BCH_ERR_data_update_fail, data_update_fail_no_snapshot, 234),
-        (BCH_ERR_data_update_fail, data_update_fail_no_rw_devs, 235),
-        (BCH_ERR_data_update_fail, data_update_fail_need_copygc, 236),
+        (data_update_fail, data_update_fail_would_block, 232),
+        (data_update_fail, data_update_fail_in_flight, 233),
+        (data_update_fail, data_update_fail_no_snapshot, 234),
+        (data_update_fail, data_update_fail_no_rw_devs, 235),
+        (data_update_fail, data_update_fail_need_copygc, 236),
         (EPERM, reflink_p_may_update_options_unset, 237),
         (EPERM, EPERM_non_admin, 238),
         (EPERM, EPERM_non_admin_or_owner, 239),
@@ -468,63 +468,63 @@ xmacro! {
         (EROFS, emergency_ro, 407),
         (ESHUTDOWN, btree_not_started, 408),
         (0, operation_blocked, 409),
-        (BCH_ERR_operation_blocked, btree_cache_cannibalize_lock_blocked, 410),
-        (BCH_ERR_operation_blocked, journal_res_blocked, 411),
-        (BCH_ERR_operation_blocked, bucket_alloc_blocked, 412),
-        (BCH_ERR_operation_blocked, open_bucket_alloc_blocked, 413),
-        (BCH_ERR_operation_blocked, stripe_alloc_blocked, 414),
-        (BCH_ERR_operation_blocked, stripe_buf_mem_blocked, 415),
+        (operation_blocked, btree_cache_cannibalize_lock_blocked, 410),
+        (operation_blocked, journal_res_blocked, 411),
+        (operation_blocked, bucket_alloc_blocked, 412),
+        (operation_blocked, open_bucket_alloc_blocked, 413),
+        (operation_blocked, stripe_alloc_blocked, 414),
+        (operation_blocked, stripe_buf_mem_blocked, 415),
         (EAGAIN, stripe_buf_mem_limit, 416),
-        (BCH_ERR_journal_res_blocked, journal_blocked, 417),
-        (BCH_ERR_journal_res_blocked, journal_max_in_flight, 418),
-        (BCH_ERR_journal_res_blocked, journal_max_open, 419),
-        (BCH_ERR_journal_res_blocked, journal_full, 420),
-        (BCH_ERR_journal_res_blocked, journal_pin_full, 421),
-        (BCH_ERR_journal_res_blocked, journal_buf_enomem, 422),
-        (BCH_ERR_journal_res_blocked, journal_stuck, 423),
-        (BCH_ERR_journal_res_blocked, journal_retry_open, 424),
-        (BCH_ERR_invalid, invalid_sb, 425),
-        (BCH_ERR_invalid_sb, invalid_sb_magic, 426),
-        (BCH_ERR_invalid_sb, invalid_sb_version, 427),
-        (BCH_ERR_invalid_sb, invalid_sb_features, 428),
-        (BCH_ERR_invalid_sb, invalid_sb_too_big, 429),
-        (BCH_ERR_invalid_sb, invalid_sb_csum_type, 430),
-        (BCH_ERR_invalid_sb, invalid_sb_csum, 431),
-        (BCH_ERR_invalid_sb, invalid_sb_block_size, 432),
-        (BCH_ERR_invalid_sb, invalid_sb_uuid, 433),
-        (BCH_ERR_invalid_sb, invalid_sb_offset, 434),
-        (BCH_ERR_invalid_sb, invalid_sb_too_many_members, 435),
-        (BCH_ERR_invalid_sb, invalid_sb_dev_idx, 436),
-        (BCH_ERR_invalid_sb, invalid_sb_time_precision, 437),
-        (BCH_ERR_invalid_sb, invalid_sb_field_size, 438),
-        (BCH_ERR_invalid_sb, invalid_sb_layout, 439),
-        (BCH_ERR_invalid_sb_layout, invalid_sb_layout_type, 440),
-        (BCH_ERR_invalid_sb_layout, invalid_sb_layout_nr_superblocks, 441),
-        (BCH_ERR_invalid_sb_layout, invalid_sb_layout_superblocks_overlap, 442),
-        (BCH_ERR_invalid_sb_layout, invalid_sb_layout_sb_max_size_bits, 443),
-        (BCH_ERR_invalid_sb, invalid_sb_members_missing, 444),
-        (BCH_ERR_invalid_sb, invalid_sb_members, 445),
-        (BCH_ERR_invalid_sb, invalid_sb_disk_groups, 446),
-        (BCH_ERR_invalid_sb, invalid_sb_replicas, 447),
-        (BCH_ERR_invalid_sb, invalid_replicas_entry, 448),
-        (BCH_ERR_invalid_sb, invalid_sb_journal, 449),
-        (BCH_ERR_invalid_sb, invalid_sb_journal_seq_blacklist, 450),
-        (BCH_ERR_invalid_sb, invalid_sb_crypt, 451),
-        (BCH_ERR_invalid_sb, invalid_sb_clean, 452),
-        (BCH_ERR_invalid_sb, invalid_sb_quota, 453),
-        (BCH_ERR_invalid_sb, invalid_sb_errors, 454),
-        (BCH_ERR_invalid_sb, invalid_sb_opt_compression, 455),
-        (BCH_ERR_invalid_sb, invalid_sb_ext, 456),
-        (BCH_ERR_invalid_sb, invalid_sb_downgrade, 457),
-        (BCH_ERR_invalid_sb, invalid_sb_extent_type_u64s, 458),
-        (BCH_ERR_invalid, invalid_bkey, 459),
-        (BCH_ERR_operation_blocked, nocow_lock_blocked, 460),
+        (journal_res_blocked, journal_blocked, 417),
+        (journal_res_blocked, journal_max_in_flight, 418),
+        (journal_res_blocked, journal_max_open, 419),
+        (journal_res_blocked, journal_full, 420),
+        (journal_res_blocked, journal_pin_full, 421),
+        (journal_res_blocked, journal_buf_enomem, 422),
+        (journal_res_blocked, journal_stuck, 423),
+        (journal_res_blocked, journal_retry_open, 424),
+        (invalid, invalid_sb, 425),
+        (invalid_sb, invalid_sb_magic, 426),
+        (invalid_sb, invalid_sb_version, 427),
+        (invalid_sb, invalid_sb_features, 428),
+        (invalid_sb, invalid_sb_too_big, 429),
+        (invalid_sb, invalid_sb_csum_type, 430),
+        (invalid_sb, invalid_sb_csum, 431),
+        (invalid_sb, invalid_sb_block_size, 432),
+        (invalid_sb, invalid_sb_uuid, 433),
+        (invalid_sb, invalid_sb_offset, 434),
+        (invalid_sb, invalid_sb_too_many_members, 435),
+        (invalid_sb, invalid_sb_dev_idx, 436),
+        (invalid_sb, invalid_sb_time_precision, 437),
+        (invalid_sb, invalid_sb_field_size, 438),
+        (invalid_sb, invalid_sb_layout, 439),
+        (invalid_sb_layout, invalid_sb_layout_type, 440),
+        (invalid_sb_layout, invalid_sb_layout_nr_superblocks, 441),
+        (invalid_sb_layout, invalid_sb_layout_superblocks_overlap, 442),
+        (invalid_sb_layout, invalid_sb_layout_sb_max_size_bits, 443),
+        (invalid_sb, invalid_sb_members_missing, 444),
+        (invalid_sb, invalid_sb_members, 445),
+        (invalid_sb, invalid_sb_disk_groups, 446),
+        (invalid_sb, invalid_sb_replicas, 447),
+        (invalid_sb, invalid_replicas_entry, 448),
+        (invalid_sb, invalid_sb_journal, 449),
+        (invalid_sb, invalid_sb_journal_seq_blacklist, 450),
+        (invalid_sb, invalid_sb_crypt, 451),
+        (invalid_sb, invalid_sb_clean, 452),
+        (invalid_sb, invalid_sb_quota, 453),
+        (invalid_sb, invalid_sb_errors, 454),
+        (invalid_sb, invalid_sb_opt_compression, 455),
+        (invalid_sb, invalid_sb_ext, 456),
+        (invalid_sb, invalid_sb_downgrade, 457),
+        (invalid_sb, invalid_sb_extent_type_u64s, 458),
+        (invalid, invalid_bkey, 459),
+        (operation_blocked, nocow_lock_blocked, 460),
         (EROFS, journal_shutdown, 461),
         (EIO, journal_flush_err, 462),
         (EIO, journal_write_err, 463),
         (EIO, btree_node_read_err, 464),
         (EIO, btree_node_validate_err, 465),
-        (BCH_ERR_btree_node_read_err, btree_node_read_err_cached, 466),
+        (btree_node_read_err, btree_node_read_err_cached, 466),
         (EIO, sb_not_downgraded, 467),
         (EIO, btree_node_write_all_failed, 468),
         (EIO, btree_node_read_error, 469),
@@ -537,13 +537,13 @@ xmacro! {
         (EIO, metadata_bucket_inconsistency, 476),
         (EIO, mark_stripe, 477),
         (EIO, stripe_read, 478),
-        (BCH_ERR_stripe_read, stripe_read_device_offline, 479),
-        (BCH_ERR_stripe_read, stripe_read_ptr_stale, 480),
-        (BCH_ERR_stripe_read, stripe_read_csum_err, 481),
-        (BCH_ERR_stripe_read, stripe_reconstruct, 482),
-        (BCH_ERR_stripe_read, stripe_reconstruct_enomem, 483),
-        (BCH_ERR_stripe_read, stripe_reconstruct_insufficient_blocks, 484),
-        (BCH_ERR_stripe_read, stripe_reconstruct_stale_race, 485),
+        (stripe_read, stripe_read_device_offline, 479),
+        (stripe_read, stripe_read_ptr_stale, 480),
+        (stripe_read, stripe_read_csum_err, 481),
+        (stripe_read, stripe_reconstruct, 482),
+        (stripe_read, stripe_reconstruct_enomem, 483),
+        (stripe_read, stripe_reconstruct_insufficient_blocks, 484),
+        (stripe_read, stripe_reconstruct_stale_race, 485),
         (EIO, key_type_error, 486),
         (EIO, extent_poisoned, 487),
         (EIO, missing_indirect_extent, 488),
@@ -557,71 +557,71 @@ xmacro! {
         (EIO, ec_block_read, 496),
         (EIO, ec_block_write, 497),
         (EIO, recompute_checksum, 498),
-        (BCH_ERR_data_read_retry_avoid,decompress, 499),
-        (BCH_ERR_decompress, decompress_exceeded_max_encoded_extent, 500),
-        (BCH_ERR_decompress, decompress_lz4_old, 501),
-        (BCH_ERR_decompress, decompress_lz4, 502),
-        (BCH_ERR_decompress, decompress_gzip, 503),
-        (BCH_ERR_decompress, decompress_gzip_size_mismatch, 504),
-        (BCH_ERR_decompress, decompress_zstd_src_len_bad, 505),
-        (BCH_ERR_decompress, decompress_zstd_size_mismatch, 506),
-        (BCH_ERR_decompress, zstd_error, 507),
-        ZSTD_ERRS((n, nr) => (BCH_ERR_zstd_error, concat(ZSTD_error_, n), nr)),
-        (BCH_ERR_zstd_error, ZSTD_error_unknown, 534),
+        (data_read_retry_avoid,decompress, 499),
+        (decompress, decompress_exceeded_max_encoded_extent, 500),
+        (decompress, decompress_lz4_old, 501),
+        (decompress, decompress_lz4, 502),
+        (decompress, decompress_gzip, 503),
+        (decompress, decompress_gzip_size_mismatch, 504),
+        (decompress, decompress_zstd_src_len_bad, 505),
+        (decompress, decompress_zstd_size_mismatch, 506),
+        (decompress, zstd_error, 507),
+        ZSTD_ERRS((n, nr) => (zstd_error, concat(ZSTD_error_, n), nr)),
+        (zstd_error, ZSTD_error_unknown, 534),
         (EIO, data_write, 535),
-        (BCH_ERR_data_write, data_write_io, 536),
-        (BCH_ERR_data_write, data_write_csum, 537),
-        (BCH_ERR_data_write, data_write_invalid_ptr, 538),
-        (BCH_ERR_data_write, data_write_misaligned, 539),
-        (BCH_ERR_data_write, data_write_need_fresh_buckets, 540),
+        (data_write, data_write_io, 536),
+        (data_write, data_write_csum, 537),
+        (data_write, data_write_invalid_ptr, 538),
+        (data_write, data_write_misaligned, 539),
+        (data_write, data_write_need_fresh_buckets, 540),
         (EIO, data_read, 541),
-        (BCH_ERR_data_read, no_device_to_read_from, 542),
-        (BCH_ERR_data_read, no_devices_valid, 543),
-        (BCH_ERR_data_read, data_read_io_err, 544),
-        (BCH_ERR_data_read, data_read_csum_err, 545),
-        (BCH_ERR_data_read, data_read_retry, 546),
-        (BCH_ERR_data_read_retry, data_read_retry_avoid, 547),
-        (BCH_ERR_data_read_retry_avoid,data_read_retry_device_offline, 548),
-        (BCH_ERR_data_read_retry_avoid,data_read_retry_io_err, 549),
-        (BCH_ERR_data_read_retry_avoid,data_read_retry_ec_reconstruct_err, 550),
-        (BCH_ERR_data_read_retry_avoid,data_read_retry_csum_err, 551),
-        (BCH_ERR_data_read_retry, data_read_retry_csum_err_maybe_userspace, 552),
-        (BCH_ERR_data_read_retry_avoid,data_read_decompress_err, 553),
-        (BCH_ERR_data_read_retry_avoid,data_read_decrypt_err, 554),
-        (BCH_ERR_data_read, data_read_ptr_stale_race, 555),
-        (BCH_ERR_data_read_retry, data_read_ptr_stale_retry, 556),
-        (BCH_ERR_data_read_retry_avoid,data_read_ptr_stale_dirty, 557),
-        (BCH_ERR_data_read, data_read_no_encryption_key, 558),
-        (BCH_ERR_data_read, data_read_buffer_too_small, 559),
-        (BCH_ERR_data_read, data_read_key_overwritten, 560),
+        (data_read, no_device_to_read_from, 542),
+        (data_read, no_devices_valid, 543),
+        (data_read, data_read_io_err, 544),
+        (data_read, data_read_csum_err, 545),
+        (data_read, data_read_retry, 546),
+        (data_read_retry, data_read_retry_avoid, 547),
+        (data_read_retry_avoid,data_read_retry_device_offline, 548),
+        (data_read_retry_avoid,data_read_retry_io_err, 549),
+        (data_read_retry_avoid,data_read_retry_ec_reconstruct_err, 550),
+        (data_read_retry_avoid,data_read_retry_csum_err, 551),
+        (data_read_retry, data_read_retry_csum_err_maybe_userspace, 552),
+        (data_read_retry_avoid,data_read_decompress_err, 553),
+        (data_read_retry_avoid,data_read_decrypt_err, 554),
+        (data_read, data_read_ptr_stale_race, 555),
+        (data_read_retry, data_read_ptr_stale_retry, 556),
+        (data_read_retry_avoid,data_read_ptr_stale_dirty, 557),
+        (data_read, data_read_no_encryption_key, 558),
+        (data_read, data_read_buffer_too_small, 559),
+        (data_read, data_read_key_overwritten, 560),
         (0, rbio_narrow_crcs_fail, 561),
         (0, nopromote, 562),
-        (BCH_ERR_nopromote, nopromote_no_rewrites, 563),
-        (BCH_ERR_nopromote, nopromote_already_promoted, 564),
-        (BCH_ERR_nopromote, nopromote_unwritten, 565),
-        (BCH_ERR_nopromote, nopromote_congested, 566),
-        (BCH_ERR_nopromote, nopromote_ratelimited, 567),
-        (BCH_ERR_nopromote, nopromote_no_writes, 568),
-        (BCH_ERR_nopromote, nopromote_enomem, 569),
+        (nopromote, nopromote_no_rewrites, 563),
+        (nopromote, nopromote_already_promoted, 564),
+        (nopromote, nopromote_unwritten, 565),
+        (nopromote, nopromote_congested, 566),
+        (nopromote, nopromote_ratelimited, 567),
+        (nopromote, nopromote_no_writes, 568),
+        (nopromote, nopromote_enomem, 569),
         (0, snapshot, 570),
-        (BCH_ERR_snapshot, invalid_snapshot_node, 571),
-        (BCH_ERR_snapshot, snapshot_multiple_descendents, 572),
-        (BCH_ERR_snapshot, snapshot_lostfound_unreachable, 573),
+        (snapshot, invalid_snapshot_node, 571),
+        (snapshot, snapshot_multiple_descendents, 572),
+        (snapshot, snapshot_lostfound_unreachable, 573),
         (0, option_needs_open_fs, 574),
         (0, remove_disk_accounting_entry, 575),
         (0, nocow_trylock_fail, 576),
-        (BCH_ERR_nocow_trylock_fail, nocow_trylock_contended, 577),
-        (BCH_ERR_nocow_trylock_fail, nocow_trylock_bucket_full, 578),
+        (nocow_trylock_fail, nocow_trylock_contended, 577),
+        (nocow_trylock_fail, nocow_trylock_bucket_full, 578),
         (EINTR, cancelled, 579),
-        (BCH_ERR_cancelled, recovery_cancelled, 580),
-        (BCH_ERR_cancelled, kthread_cancelled, 581),
-        (BCH_ERR_cancelled, snapshot_delete_cancelled, 582),
+        (cancelled, recovery_cancelled, 580),
+        (cancelled, kthread_cancelled, 581),
+        (cancelled, snapshot_delete_cancelled, 582),
         (0, shutdown_with_errors, 583),
-        (BCH_ERR_shutdown_with_errors, shutdown_with_errors_fixed, 584),
-        (BCH_ERR_shutdown_with_errors, shutdown_with_errors_unfixed, 585),
-        (BCH_ERR_shutdown_with_errors, shutdown_with_emergency_ro, 586),
-        (BCH_ERR_insufficient_devices_to_start, insufficient_devices_data_intact, 587),
-        (BCH_ERR_insufficient_devices_to_start, insufficient_devices_data_lost, 588),
+        (shutdown_with_errors, shutdown_with_errors_fixed, 584),
+        (shutdown_with_errors, shutdown_with_errors_unfixed, 585),
+        (shutdown_with_errors, shutdown_with_emergency_ro, 586),
+        (insufficient_devices_to_start, insufficient_devices_data_intact, 587),
+        (insufficient_devices_to_start, insufficient_devices_data_lost, 588),
         (EIO, injected_logged_op_fail, 589),
         (EINVAL, EINVAL_crypt_no_kdf_params, 590),
         (EIO, crypt_kdf_failed, 591),
@@ -632,16 +632,16 @@ xmacro! {
         (0, fc_continue, 600),
         (0, fc_break, 601),
         (0, cached_ptr_stale, 602),
-        (BCH_ERR_no_btree_node, no_btree_node_shallow, 603),
+        (no_btree_node, no_btree_node_shallow, 603),
         (0, bucket_not_allocatable, 604),
         (ENOSPC, ec_alloc_failed_pending_race, 605),
-        (BCH_ERR_ec_alloc_failed, ec_alloc_failed_no_redundancy, 606),
-        (BCH_ERR_ec_alloc_failed, ec_alloc_failed_insufficient_devs, 607),
-        (BCH_ERR_ec_alloc_failed, ec_alloc_failed_disk_label_too_big, 608),
-        (BCH_ERR_ec_alloc_failed, ec_alloc_failed_transient, 612),
-        (BCH_ERR_ec_alloc_failed_transient, ec_alloc_failed_stripe_alloc, 609),
-        (BCH_ERR_ec_alloc_failed_transient, ec_alloc_failed_no_usable_block, 610),
-        (BCH_ERR_ec_alloc_failed_transient, ec_alloc_failed_no_ec_bucket, 611),
+        (ec_alloc_failed, ec_alloc_failed_no_redundancy, 606),
+        (ec_alloc_failed, ec_alloc_failed_insufficient_devs, 607),
+        (ec_alloc_failed, ec_alloc_failed_disk_label_too_big, 608),
+        (ec_alloc_failed, ec_alloc_failed_transient, 612),
+        (ec_alloc_failed_transient, ec_alloc_failed_stripe_alloc, 609),
+        (ec_alloc_failed_transient, ec_alloc_failed_no_usable_block, 610),
+        (ec_alloc_failed_transient, ec_alloc_failed_no_ec_bucket, 611),
         (EIO, mmap_emergency_ro, 613),
         (EINVAL, EINVAL_test_stripe_already_open, 614),
         (EINVAL, EINVAL_test_stripe_open_relock_not_invalidated, 615),
@@ -652,12 +652,12 @@ xmacro! {
         (EROFS, erofs_sb_never_started, 621),
         (ESHUTDOWN, ioctl_fs_stopping, 622),
         (ENOMEM, ENOMEM_reconcile_stripes_pending, 623),
-        (BCH_ERR_btree_node_validate_err, btree_node_validate_err_keys_lost, 624),
+        (btree_node_validate_err, btree_node_validate_err_keys_lost, 624),
         (ENOMEM, ENOMEM_backpointer_scan, 626),
-        (BCH_ERR_transaction_restart, transaction_restart_backpointer_scan_grow, 627),
+        (transaction_restart, transaction_restart_backpointer_scan_grow, 627),
         (ENOMEM, ENOMEM_stripe_open, 628),
         (ENOMEM, ENOMEM_stripe_new_bucket, 629),
-        (BCH_ERR_btree_node_validate_err, btree_node_validate_err_csum, 630),
+        (btree_node_validate_err, btree_node_validate_err_csum, 630),
         (EBUSY, EBUSY_journal_bucket_retire_rw, 631),
         (EBUSY, EBUSY_journal_bucket_retire_no_space, 632),
         (ENOMEM, ENOMEM_inode_cache_insert, 633),
@@ -667,37 +667,36 @@ xmacro! {
 }
 
 /*
- * BCH_ERR_MAX is one past the highest errcode number, wherever that entry sits
+ * Errcode::MAX is one past the highest errcode number, wherever that entry sits
  * in BCH_ERRCODES(): a union is the size of its largest member, and a char[nr
  * + 1] has no padding, so this one is the largest nr, plus one. Never declared
  * as an object, only measured.
  */
 macro_rules! __bch_errcode_max_0 {
-    ([$($acc:tt)*] $(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! {
+    ([$($acc:tt)*] $(($class:tt, $err:tt, $nr:tt)),* $(,)?) => {
         #[allow(non_snake_case)]
         #[repr(C)]
         #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
         pub union bch_errcode_max {
             $($acc)*
-            $(pub [<BCH_ERR_ $err>]: [crate::util::ffi::c_char; (($nr) + 1) as usize],)*
+            $(pub $err: [crate::util::ffi::c_char; (($nr) + 1) as usize],)*
         }
-    } };
+    };
 }
 BCH_ERRCODES!(__bch_errcode_max_0 []);
 c_default!(bch_errcode_max);
 
 macro_rules! errcode_enum {
-    ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! {
+    ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => {
         #[bch_enum(open)]
-        #[prefix(BCH_ERR_)]
         #[repr(u32)]
         pub enum Errcode {
-            BCH_ERR_START = 2048,
-            $([<BCH_ERR_ $err>] = Errcode::BCH_ERR_START.0 + ($nr as u32),)*
-            BCH_ERR_MAX = Errcode::BCH_ERR_START.0
+            START = 2048,
+            $($err = Errcode::START.0 + ($nr as u32),)*
+            MAX = Errcode::START.0
             + (core::mem::size_of::<c::bch_errcode_max>() as u32),
         }
-    } };
+    };
 }
 BCH_ERRCODES!(errcode_enum);
 
@@ -712,8 +711,8 @@ pub fn blk_status_to_bch_err(err: u8) -> c::Errcode {
         ($(($n:ident, $nr:tt)),* $(,)?) => { ::paste::paste! {
             match err {
                 0 => Errcode(0),
-                $(c::[<BLK_STS_ $n>] => Errcode::[<BCH_ERR_BLK_STS_ $n>],)*
-                _ => Errcode::BCH_ERR_BLK_STS_UNKNOWN,
+                $(c::[<BLK_STS_ $n>] => Errcode::[<BLK_STS_ $n>],)*
+                _ => Errcode::BLK_STS_UNKNOWN,
             }
         } };
     }
@@ -721,17 +720,17 @@ pub fn blk_status_to_bch_err(err: u8) -> c::Errcode {
 }
 
 // Each errcode by its BCH_ERRCODES() name: transaction_restart for
-// Errcode::BCH_ERR_transaction_restart.
+// Errcode::transaction_restart.
 macro_rules! errcode_names {
-    ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! { $(
+    ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { $(
         #[allow(non_upper_case_globals)]
-        pub const $err: Errcode = Errcode::[<BCH_ERR_ $err>];
-    )* } };
+        pub const $err: Errcode = Errcode::$err;
+    )* };
 }
 c::BCH_ERRCODES!(errcode_names);
 
-const START: u32 = Errcode::BCH_ERR_START.0;
-const N: usize = (Errcode::BCH_ERR_MAX.0 - START) as usize;
+const START: u32 = Errcode::START.0;
+const N: usize = (Errcode::MAX.0 - START) as usize;
 
 #[allow(dead_code, non_upper_case_globals)]
 mod class {
@@ -741,9 +740,9 @@ mod class {
     pub(super) use linux_raw_sys::errno::*;
 
     macro_rules! codes {
-        ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! { $(
-            pub(super) const [<BCH_ERR_ $err>]: u32 = super::Errcode::[<BCH_ERR_ $err>].0;
-        )* } };
+        ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { $(
+            pub(super) const $err: u32 = super::Errcode::$err.0;
+        )* };
     }
     crate::c::BCH_ERRCODES!(codes);
 }
@@ -780,7 +779,7 @@ fn errname(err: u32) -> Option<&'static str> {
     (!p.is_null()).then(|| unsafe { CStr::from_ptr(p.cast()) }).and_then(|s| s.to_str().ok())
 }
 
-/// A bcachefs error code or errno, positive: errnos below BCH_ERR_START (2048),
+/// A bcachefs error code or errno, positive: errnos below Errcode::START (2048),
 /// bcachefs's own above. Unlike Errcode, a raw errno never makes an invalid
 /// discriminant.
 ///
@@ -872,7 +871,7 @@ impl fmt::Debug for BchError {
 impl core::error::Error for BchError {}
 
 /// A failed syscall, typed. bcachefs's errcodes reach userspace intact -
-/// BCH_ERR_START plus a pinned number, below MAX_ERRNO - so an io::Error off a
+/// Errcode::START plus a pinned number, below MAX_ERRNO - so an io::Error off a
 /// bcachefs syscall is worth converting: bch2_fs_get_tree() deliberately
 /// doesn't bch2_err_class(). No errno behind it, and it wasn't a syscall: EIO,
 /// which nothing matches by accident.

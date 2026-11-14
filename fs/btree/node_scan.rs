@@ -376,7 +376,7 @@ fn scan_for_btree_nodes(fs: &Fs) -> Result<(), BchError> {
 
     if nodes.is_empty() {
         bch_err!(fs, "bch2_scan_for_btree_nodes: no btree nodes found");
-        return fs.throw(Errcode::BCH_ERR_EINVAL_node_scan_no_nodes);
+        return fs.throw(Errcode::EINVAL_node_scan_no_nodes);
     }
 
     dump_nodes(fs, "nodes found", &nodes);

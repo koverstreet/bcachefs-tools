@@ -72,7 +72,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
     let res = DiskReservation::new(fs);
     let _ = res.add(sectors, new_replicas, c::ReservationFlags::partial);
     if res.sectors() == 0 && new_replicas != 0 {
-        return Err(fs.err(Errcode::BCH_ERR_ENOSPC_disk_reservation));
+        return Err(fs.err(Errcode::ENOSPC_disk_reservation));
     }
     // write_degraded may have reserved fewer copies than asked for
     let shortfall = new_replicas - res.nr_replicas.get();
@@ -80,7 +80,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
     if new_replicas != 0 {
         sectors = (res.sectors() / u64::from(res.nr_replicas.get())) >> fs.block_bits() << fs.block_bits();
         if sectors == 0 {
-            return Err(fs.err(Errcode::BCH_ERR_ENOSPC_disk_reservation));
+            return Err(fs.err(Errcode::ENOSPC_disk_reservation));
         }
     }
 
@@ -103,9 +103,9 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
                                       c::WriteFlags::empty(), Some(cl.as_opaque()))?;
         let wp = match t.alloc_sectors(&mut req, write_point) {
             Ok(wp) => wp,
-            Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => {
+            Err(e) if e.matches(Errcode::operation_blocked) => {
                 t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
-                return Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested));
+                return Err(t.restart(Errcode::transaction_restart_nested));
             }
             Err(e) => return Err(e),
         };
@@ -325,7 +325,7 @@ fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, offset: u64, le
         }
 
         if offset >= inode_u.bi_size {
-            return t.fs().throw(Errcode::BCH_ERR_EINVAL_finsert_offset_past_eof);
+            return t.fs().throw(Errcode::EINVAL_finsert_offset_past_eof);
         }
     }
 

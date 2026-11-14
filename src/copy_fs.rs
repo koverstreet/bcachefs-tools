@@ -186,7 +186,7 @@ fn create_or_update_link(
     let os_name = OsStr::from_bytes(name.to_bytes());
 
     match dirent::lookup(fs, dir_inum, &dir_hash, os_name) {
-        Err(e) if e.matches(Errcode::BCH_ERR_ENOENT_str_hash_lookup) => {
+        Err(e) if e.matches(Errcode::ENOENT_str_hash_lookup) => {
             // Fall through to create
         }
         Err(e) => return Err(e),

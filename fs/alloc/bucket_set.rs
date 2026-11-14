@@ -198,8 +198,8 @@ impl TransAttempt<'_, '_> {
                         break;
                     }
                     Err(e) if is_restart(&e) ||
-                              e.matches(Errcode::BCH_ERR_operation_blocked) ||
-                              e.matches(Errcode::BCH_ERR_open_buckets_empty) => return Err(e),
+                              e.matches(Errcode::operation_blocked) ||
+                              e.matches(Errcode::open_buckets_empty) => return Err(e),
                     Err(e) => ret = Err(e),
                 }
             }
@@ -211,7 +211,7 @@ impl TransAttempt<'_, '_> {
         }
 
         ret?;
-        let e = fs.err(Errcode::BCH_ERR_insufficient_devices);
+        let e = fs.err(Errcode::insufficient_devices);
         req.trace_add(c::BCH_SB_MEMBER_INVALID as u8, Some(e), 0, 0, false);
         Err(e)
     }

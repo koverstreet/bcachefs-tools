@@ -143,14 +143,14 @@ impl<'t> InteriorUpdate<'t> {
                 if e.matches(c::EAGAIN) &&
                    flags.contains(c::TransCommitFlags::journal_reclaim) &&
                    (watermark as u32) < wm::reclaim as u32 {
-                    return fs.throw(Errcode::BCH_ERR_journal_reclaim_would_deadlock);
+                    return fs.throw(Errcode::journal_reclaim_would_deadlock);
                 }
 
                 req.cl = Some(cl.as_opaque());
 
                 let ret = loop {
                     match self.reserve_get(paths, nr_nodes, &mut req) {
-                        Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => {
+                        Err(e) if e.matches(Errcode::operation_blocked) => {
                             if let Err(e) = paths.lend(|| t.wait_on_allocator(&mut req, e, cl.as_opaque())) {
                                 break Err(e);
                             }

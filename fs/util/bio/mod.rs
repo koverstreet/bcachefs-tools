@@ -369,7 +369,7 @@ impl Bio {
         bio.bi_iter.bi_size = 0;
     }
 
-    /// Its completed IO's result: a BCH_ERR_BLK_STS_* errcode on failure.
+    /// Its completed IO's result: a BLK_STS_* errcode on failure.
     pub fn status(&self) -> Result<(), BchError> {
         match self.bio.bi_status {
             0  => Ok(()),

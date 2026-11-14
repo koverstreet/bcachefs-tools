@@ -1017,7 +1017,7 @@ impl BtreeTrans<'_> {
 
         if paths[idx].cached() {
             self.node_unlock(paths, idx, 0);
-            paths[idx].l[0].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_up.into());
+            paths[idx].l[0].b = NodePtr::err(Errcode::no_btree_node_up.into());
         } else {
             let level = self.path_up_until_good_node(paths, idx, cmp);
 
@@ -1107,7 +1107,7 @@ impl BtreeTrans<'_> {
             path.bits.set_locks_want(locks_want as u8);
             path.nodes_locked = 0;
             for l in &mut path.l {
-                l.b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_init.into());
+                l.b = NodePtr::err(Errcode::no_btree_node_init.into());
             }
             #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
             {
@@ -1761,7 +1761,7 @@ impl<'p, T: PathNode> UnlockedNode<'p, T> {
 /// What every level of a path table the transaction has reallocated away from
 /// holds, in debug builds: for a path pointer kept across the realloc.
 pub(crate) fn btree_path_poison<T>() -> NodePtr<T> {
-    NodePtr::err(BchError::from(Errcode::BCH_ERR_no_btree_node_stale_paths))
+    NodePtr::err(BchError::from(Errcode::no_btree_node_stale_paths))
 }
 
 impl BtreeNodeLockedType {

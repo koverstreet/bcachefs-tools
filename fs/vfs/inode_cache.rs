@@ -130,7 +130,7 @@ impl InodeCache {
                     Some(old) => break Some(old),
                     None => continue,
                 },
-                Err(_) => break Some(Err(inode.fs().err(Errcode::BCH_ERR_ENOMEM_inode_cache_insert))),
+                Err(_) => break Some(Err(inode.fs().err(Errcode::ENOMEM_inode_cache_insert))),
             }
         };
         if let Some(ret) = lost {
@@ -165,7 +165,7 @@ impl InodeCache {
     fn add_holder(&self, fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
         let _noio = MemallocFlags::noio();
         let (i, subvol) = holder(inum);
-        self.by_inum.add(i, subvol).map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_inode_cache_insert))
+        self.by_inum.add(i, subvol).map_err(|_| fs.err(Errcode::ENOMEM_inode_cache_insert))
     }
 
     fn remove_holder(&self, inum: c::subvol_inum) {

@@ -73,7 +73,7 @@ fn store(out: &mut [u8], w: u64) {
 }
 
 fn decode_error() -> BchError {
-    BchError::from(Errcode::BCH_ERR_varint_decode_error)
+    BchError::from(Errcode::varint_decode_error)
 }
 
 /// Encode @v at the start of @out: how many bytes it took. Panics if @out is

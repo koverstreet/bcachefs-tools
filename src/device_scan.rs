@@ -242,7 +242,7 @@ pub fn filter_current_sbs(
 			// warn! per line stamps file:line on every one of them -
 			// including the blanks.
 			warn!("{}", crate::splitbrain::report(&sbs, &divergent).trim_end());
-			return Err(c::Errcode::BCH_ERR_device_splitbrain.into());
+			return Err(c::Errcode::device_splitbrain.into());
 		}
 	}
 

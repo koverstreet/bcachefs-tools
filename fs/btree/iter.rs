@@ -259,7 +259,7 @@ bitflags! {
 fn bkey_arm<'k, K: BkeyFamily + ?Sized>(fs: &Fs, k: BkeySC<'k>) -> Result<BkeySC<'k, K::Validated>, BchError> {
     match k.arm::<K>() {
         Some(k) => Ok(k),
-        None    => fs.throw(Errcode::BCH_ERR_ENOENT_bkey_type_mismatch),
+        None    => fs.throw(Errcode::ENOENT_bkey_type_mismatch),
     }
 }
 
@@ -2345,7 +2345,7 @@ impl<'t> BtreeNodeIter<'t> {
         if !ptr::eq(at.cast_const().cast(), b) {
             /* node has been freed: */
             assert!(b.flags.dying(), "a node no longer where its key is, and not dying");
-            return Err(t.fs().err(Errcode::BCH_ERR_btree_node_dying));
+            return Err(t.fs().err(Errcode::btree_node_dying));
         }
 
         assert!(b.hash_val() != 0, "a node in the btree, not hashed");

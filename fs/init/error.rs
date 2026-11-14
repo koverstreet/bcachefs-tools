@@ -160,9 +160,9 @@ fn __fsck_err(
     let (fs, trans) = ctx.fsck_err_ctx();
     let e = fsck_err_verdict(fs, trans, pos, flags, err, msg);
 
-    if e.matches(Errcode::BCH_ERR_fsck_fix) {
+    if e.matches(Errcode::fsck_fix) {
         Ok(true)
-    } else if e.matches(Errcode::BCH_ERR_fsck_ignore) {
+    } else if e.matches(Errcode::fsck_ignore) {
         Ok(false)
     } else {
         Err(e)
@@ -286,8 +286,8 @@ pub fn bkey_fsck_err(
 ) -> BchError {
     let e = bkey_fsck_err_verdict(v.fs, v.k, v.from, err, msg);
 
-    if e.matches(Errcode::BCH_ERR_fsck_fix) || e.matches(Errcode::BCH_ERR_fsck_ignore) {
-        v.fs.err(Errcode::BCH_ERR_fsck_delete_bkey)
+    if e.matches(Errcode::fsck_fix) || e.matches(Errcode::fsck_ignore) {
+        v.fs.err(Errcode::fsck_delete_bkey)
     } else {
         e
     }
@@ -492,7 +492,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
 
     if flags.contains(FsckFlags::ERR_SILENT) || error_silent(fs, err) {
         fs.flags.set(fl::errors_fixed_silent, true);
-        return fs.err(if flags.contains(FsckFlags::CAN_FIX) { e::BCH_ERR_fsck_fix } else { e::BCH_ERR_fsck_ignore });
+        return fs.err(if flags.contains(FsckFlags::CAN_FIX) { e::fsck_fix } else { e::fsck_ignore });
     }
 
     let mut buf = Printbuf::new();
@@ -536,10 +536,10 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                 break 'print if flags.contains(FsckFlags::CAN_FIX) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
-                    fs.err(e::BCH_ERR_fsck_fix)
+                    fs.err(e::fsck_fix)
                 } else {
                     write!(out, ", continuing");
-                    fs.err(e::BCH_ERR_fsck_ignore)
+                    fs.err(e::fsck_ignore)
                 };
             } else if !fs.flags.get(fl::in_fsck) {
                 if errors != a::BCH_ON_ERROR_continue || !flags.intersects(FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE) {
@@ -559,18 +559,18 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     }
                     inconsistent = true;
                     cnt.print = true;
-                    fs.err(e::BCH_ERR_fsck_errors_not_fixed)
+                    fs.err(e::fsck_errors_not_fixed)
                 } else if flags.contains(FsckFlags::CAN_FIX) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
-                    fs.err(e::BCH_ERR_fsck_fix)
+                    fs.err(e::fsck_fix)
                 } else {
                     write!(out, ", continuing");
-                    fs.err(e::BCH_ERR_fsck_ignore)
+                    fs.err(e::fsck_ignore)
                 }
             } else if fix_errors == c::FsckErrOpt::exit {
                 write!(out, ", exiting");
-                fs.err(e::BCH_ERR_fsck_errors_not_fixed)
+                fs.err(e::fsck_errors_not_fixed)
             } else if flags.contains(FsckFlags::CAN_FIX) {
                 let fix = s.as_ref().and_then(|s| s.fix).unwrap_or(fix_errors);
 
@@ -590,37 +590,37 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                         }
                     }
                     fs.err(if matches!(answer, Answer::Yes | Answer::AllYes) {
-                        e::BCH_ERR_fsck_fix
+                        e::fsck_fix
                     } else {
-                        e::BCH_ERR_fsck_ignore
+                        e::fsck_ignore
                     })
                 } else if fix == c::FsckErrOpt::yes ||
                           (fs.opts.nochanges.get() != 0 && !flags.contains(FsckFlags::CAN_IGNORE)) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
-                    fs.err(e::BCH_ERR_fsck_fix)
+                    fs.err(e::fsck_fix)
                 } else {
                     write!(out, ", not ");
                     prt_actioning(&mut out, action);
-                    fs.err(e::BCH_ERR_fsck_ignore)
+                    fs.err(e::fsck_ignore)
                 }
             } else if flags.contains(FsckFlags::CAN_IGNORE) {
                 write!(out, ", continuing");
-                fs.err(e::BCH_ERR_fsck_ignore)
+                fs.err(e::fsck_ignore)
             } else {
                 write!(out, " (repair unimplemented)");
-                fs.err(e::BCH_ERR_fsck_repair_unimplemented)
+                fs.err(e::fsck_repair_unimplemented)
             };
 
-            let ret = if ret.matches(e::BCH_ERR_fsck_ignore) &&
+            let ret = if ret.matches(e::fsck_ignore) &&
                          (fix_errors == c::FsckErrOpt::exit || !flags.contains(FsckFlags::CAN_IGNORE)) {
-                fs.err(e::BCH_ERR_fsck_errors_not_fixed)
+                fs.err(e::fsck_errors_not_fixed)
             } else {
                 ret
             };
 
             if fs.flags.get(fl::in_fsck) &&
-               !ret.matches(e::BCH_ERR_fsck_fix) && !ret.matches(e::BCH_ERR_fsck_ignore) {
+               !ret.matches(e::fsck_fix) && !ret.matches(e::fsck_ignore) {
                 exiting = true;
                 cnt.print = true;
             }
@@ -669,7 +669,7 @@ fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: 
     drop(st);
 
     if let Some(t) = trans {
-        if !flags.contains(FsckFlags::ERR_NO_LOG) && ret == BchError::from(e::BCH_ERR_fsck_fix) {
+        if !flags.contains(FsckFlags::ERR_NO_LOG) && ret == BchError::from(e::fsck_fix) {
             let mut name = Printbuf::new();
             err.to_text(&mut name);
             if let Err(r) = t.log_str(name.as_bytes()) {
@@ -680,8 +680,8 @@ fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: 
 
     // Whether the filesystem has errors still isn't tracked, for
     // log_fsck_err()s: that'd take knowing which pass corrects each
-    if ret.matches(e::BCH_ERR_transaction_restart) {
-    } else if ret.matches(e::BCH_ERR_fsck_fix) {
+    if ret.matches(e::transaction_restart) {
+    } else if ret.matches(e::fsck_fix) {
         fs.flags.set(fl::errors_fixed, true);
     } else {
         fs.flags.set(fl::errors_not_fixed, true);
@@ -697,13 +697,13 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
                              msg: &dyn ToText) -> BchError {
     let vflags = from.bits.flags();
     if vflags.contains(ValidateFlags::silent) {
-        return fs.err(Errcode::BCH_ERR_fsck_delete_bkey);
+        return fs.err(Errcode::fsck_delete_bkey);
     }
 
     let mut flags = FsckFlags::empty();
     if !vflags.intersects(ValidateFlags::write | ValidateFlags::commit) {
         if error_silent(fs, err) {
-            return fs.err(Errcode::BCH_ERR_fsck_delete_bkey);
+            return fs.err(Errcode::fsck_delete_bkey);
         }
         flags |= FsckFlags::AUTOFIX | FsckFlags::CAN_FIX;
     }
@@ -823,7 +823,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
         }
         iter.advance();
     }
-    ret.and_then(|()| Err(t.fs().err(Errcode::BCH_ERR_ENOENT_inode)))
+    ret.and_then(|()| Err(t.fs().err(Errcode::ENOENT_inode)))
 }
 
 /// One damaged path, and what happened to it.
@@ -948,7 +948,7 @@ impl Fs {
                 c::RunRecoveryPassFlags::from_bits_retain(0)) {
             return e;
         }
-        self.err(Errcode::BCH_ERR_btree_need_topology_repair)
+        self.err(Errcode::btree_need_topology_repair)
     }
 }
 

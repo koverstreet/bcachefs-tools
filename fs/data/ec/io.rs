@@ -142,7 +142,7 @@ fn block_done<R: IoRefIdx>(ca: DevIoRef<R>, ptr: &c::bch_extent_ptr, submit_time
     match status {
         Err(e) => Some(e),
         Ok(()) if ca.dev_ptr_stale(ptr, &read_lock()) =>
-            Some(ca.fs().err(Errcode::BCH_ERR_stripe_read_ptr_stale)),
+            Some(ca.fs().err(Errcode::stripe_read_ptr_stale)),
         Ok(()) => None,
     }
 }
@@ -209,11 +209,11 @@ where
                         else { DataType::parity };
 
         let Some(ca) = fs.dev_get_ioref::<R>(ptr.dev().into()) else {
-            this.buf.err[PRE][idx] = Some(fs.err(Errcode::BCH_ERR_stripe_read_device_offline));
+            this.buf.err[PRE][idx] = Some(fs.err(Errcode::stripe_read_device_offline));
             return;
         };
         if ca.dev_ptr_stale(&ptr, &read_lock()) {
-            this.buf.err[PRE][idx] = Some(fs.err(Errcode::BCH_ERR_stripe_read_ptr_stale));
+            this.buf.err[PRE][idx] = Some(fs.err(Errcode::stripe_read_ptr_stale));
             return;
         }
         ca.io_done_add(R::RW, data_type, sectors.into());
@@ -315,7 +315,7 @@ pub fn scrub_block(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -
             return Err(e);
         }
 
-        let want = s.v().csums().ok_or_else(|| fs.err(Errcode::BCH_ERR_stripe_unknown_csum_type))?
+        let want = s.v().csums().ok_or_else(|| fs.err(Errcode::stripe_unknown_csum_type))?
             .get(block as u32, offset >> sh.csum_granularity_bits);
         let got = block_checksum(s, &buf, block as u32, offset);
         if want != got {
@@ -406,14 +406,14 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
         Ok(None) => return Err(crate::data::read::stale(fs, flags)),
         _ => {
             prt!(msg, "error looking up stripe\n");
-            return fs.throw(Errcode::BCH_ERR_stripe_reconstruct);
+            return fs.throw(Errcode::stripe_reconstruct);
         }
     }
 
     let s = BkeySC::from(&key).arm::<c::Stripe>().expect("a stripe, as looked up");
     if !ptr_matches_stripe(s, pick) {
         prt!(msg, "pointer doesn't match stripe\n{}\n", s.to_text(fs));
-        return fs.throw(Errcode::BCH_ERR_stripe_reconstruct);
+        return fs.throw(Errcode::stripe_reconstruct);
     }
 
     let block = usize::from(pick.ec.block());
@@ -421,7 +421,7 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
     let offset = (iter.bi_sector - s.v().block_ptrs()[block].offset()) as u32;
     if offset + sectors > u32::from(s.v().sectors.get()) {
         prt!(msg, "read is bigger than stripe\n{}\n", s.to_text(fs));
-        return fs.throw(Errcode::BCH_ERR_stripe_reconstruct);
+        return fs.throw(Errcode::stripe_reconstruct);
     }
 
     if stale != c::StripeBlockMask::default() {
@@ -434,7 +434,7 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
 
     let Ok(mut buf) = StripeBuf::new(fs, s, EC_BLOCKS_ALL, offset, sectors, MemWait::Never) else {
         prt!(msg, "error allocating stripe data buffers\n{}\n", s.to_text(fs));
-        return fs.throw(Errcode::BCH_ERR_stripe_reconstruct_enomem);
+        return fs.throw(Errcode::stripe_reconstruct_enomem);
     };
     buf.stale = stale;
     Ok((key, buf, block))
@@ -450,7 +450,7 @@ fn reconstruct_finish(fs: &Fs, key: &BkeyBuf, buf: &mut StripeBuf, block: usize,
     // A block went stale under us: the stripe was deleted or replaced, so
     // the extent has changed. Retry, as a direct read of a stale pointer is.
     let ret = validate(fs, s, buf, false, EC_BLOCKS_ALL);
-    if ret.is_err_and(|e| e == BchError::from(Errcode::BCH_ERR_stripe_reconstruct_stale_race)) {
+    if ret.is_err_and(|e| e == BchError::from(Errcode::stripe_reconstruct_stale_race)) {
         return Err(crate::data::read::stale(fs, flags));
     }
 

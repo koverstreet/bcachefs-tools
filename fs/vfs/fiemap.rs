@@ -170,7 +170,7 @@ fn next_mapping(t: &TransAttempt<'_, '_>, inode: &InodeInfo, start: u64, end: u6
     let indirect = lookup_indirect_extent(t, &mut indirect_iter, &mut offset_into_extent, p, true,
                                           BtreeIterFlags::empty())?;
     if indirect.k.key_type().is_deleted() {
-        return fs.throw(Errcode::BCH_ERR_missing_indirect_extent);
+        return fs.throw(Errcode::missing_indirect_extent);
     }
 
     let mut buf = BkeyBuf::from_key(indirect);
@@ -192,7 +192,7 @@ pub(crate) fn fiemap(inode: &InodeInfo, info: &mut c::fiemap_extent_info, start:
     ret_to_result_void(unsafe { c::fiemap_prep(inode.vfs().as_ptr(), info, start, &mut len, 0) })?;
 
     let Some(end) = start.checked_add(len) else {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_fiemap_overflow);
+        return fs.throw(Errcode::EINVAL_fiemap_overflow);
     };
     let (mut start, end) = (start >> 9, end >> 9);
 

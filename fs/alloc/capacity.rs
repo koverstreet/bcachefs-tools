@@ -817,13 +817,13 @@ impl Fs {
 
             // after a shutdown nothing is writable: that's not out of space
             if self.flags.get(c::FsFlag::emergency_ro) {
-                return Err(self.err(Errcode::BCH_ERR_emergency_ro));
+                return Err(self.err(Errcode::emergency_ro));
             }
 
             self.event_inc_trace(events::disk_reservation_enospc, |out| {
                 self.disk_reservation_enospc_to_text(out, &free, sectors, nr_replicas, flags)
             });
-            return Err(self.err(Errcode::BCH_ERR_ENOSPC_disk_reservation));
+            return Err(self.err(Errcode::ENOSPC_disk_reservation));
         }
 
         self.online_reserved_at(nr_replicas).add(sectors);

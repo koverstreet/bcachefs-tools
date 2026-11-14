@@ -665,7 +665,7 @@ unsafe fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: *mut 
 
     if !fs.flags.get(f::btree_running) {
         return not_rw.get_mut_of(&jk.pre_sort).push(n)
-            .map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert));
+            .map_err(|_| fs.err(e::ENOMEM_journal_key_insert));
     }
 
     // SAFETY: the caller's
@@ -690,7 +690,7 @@ unsafe fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: *mut 
     if keys.reserve().is_err() {
         bch_err!(fs, "bch2_journal_key_insert_take: error allocating new key array (size {})",
                  keys.size.max(8) * 2);
-        return fs.throw(e::BCH_ERR_ENOMEM_journal_key_insert);
+        return fs.throw(e::ENOMEM_journal_key_insert);
     }
     keys.insert(idx, n);
     jk.seq.fetch_add(1, Relaxed);
@@ -700,7 +700,7 @@ unsafe fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: *mut 
 /// insert_take() of a copy of @k.
 pub(crate) fn insert(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
     let bytes = k.k.bytes();
-    let n = crate::util::alloc::kmalloc(bytes).map_err(|_| not_rw.fs.err(e::BCH_ERR_ENOMEM_journal_key_insert))?;
+    let n = crate::util::alloc::kmalloc(bytes).map_err(|_| not_rw.fs.err(e::ENOMEM_journal_key_insert))?;
     // SAFETY: @bytes of key, into as many of ours; then ours to hand over
     unsafe {
         ptr::copy_nonoverlapping(k.as_ffi().cast::<u8>(), n.as_ptr(), bytes);
@@ -995,7 +995,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
 
         if seq_rewound && !j.has_overwrites() {
             bch_err!(fs, "cannot rewind journal seq {seq}: no overwrite entries (journal_transaction_names was off)");
-            return fs.throw(e::BCH_ERR_journal_rewind_no_overwrites);
+            return fs.throw(e::journal_rewind_no_overwrites);
         }
 
         for entry in j.entries() {
@@ -1037,7 +1037,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
                     if keys.len() * 8 > keys.size * 7 {
                         bch_err!(fs, "Too many journal keys for slowpath; have {} compacted, buf size {}, \
                                       processed {nr_read} keys at seq {seq}", keys.len(), keys.size);
-                        return fs.throw(e::BCH_ERR_ENOMEM_journal_keys_sort);
+                        return fs.throw(e::ENOMEM_journal_keys_sort);
                     }
                 }
                 keys.insert(keys.len(), n);
@@ -1051,7 +1051,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
      * device add: the main array's now
      */
     while !pre_sort.is_empty() {
-        keys.reserve().map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_keys_sort))?;
+        keys.reserve().map_err(|_| fs.err(e::ENOMEM_journal_keys_sort))?;
         keys.insert(keys.len(), pre_sort.pop().expect("not empty"));
     }
 

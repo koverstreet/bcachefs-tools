@@ -12,7 +12,7 @@
 //! which reads as "you are missing a disk".
 //!
 //! dev_in_fs() (fs/init/dev.rs) decides what diverged; this only decides
-//! what to say. Only BCH_ERR_device_splitbrain means divergence - the other
+//! what to say. Only device_splitbrain means divergence - the other
 //! returns are different problems, left to the kernel to report. Its own
 //! account reaches stderr first, ending in "Not using <dev>", which describes
 //! what filter_dead() would do rather than what we do.
@@ -75,7 +75,7 @@ pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Diverge
 
         let ret = dev_in_fs(best_handle.sb(), Some(best_handle.dev.bdev()), handle, opts);
 
-        if ret.is_err_and(|e| e.matches(c::Errcode::BCH_ERR_device_splitbrain)) {
+        if ret.is_err_and(|e| e.matches(c::Errcode::device_splitbrain)) {
             let sb = handle.sb();
             out.push(Divergent {
                 path: path.clone(),

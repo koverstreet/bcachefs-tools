@@ -55,7 +55,7 @@ fn dirent_points_to_inode(
     }
 
     bch_warn!(fs, "{}", namei::dirent_inode_mismatch(fs, k, inode));
-    fs.throw(Errcode::BCH_ERR_ENOENT_dirent_doesnt_match_inode)
+    fs.throw(Errcode::ENOENT_dirent_doesnt_match_inode)
 }
 
 fn remove_backpointer(
@@ -192,7 +192,7 @@ fn bi_depth_renumber_one(
                                   BtreeIterFlags::empty());
 
     let Some(k) = iter.peek_slot(t)?.and_then(|k| k.arm::<Inodes>()) else {
-        return Err(Errcode::BCH_ERR_ENOENT_inode.into());
+        return Err(Errcode::ENOENT_inode.into());
     };
 
     let mut inode = inode::unpack(fs, k);
@@ -280,7 +280,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_, Inodes>) -> Res
         // Should have been caught in dirents pass
         let parent_inode = bch_err_msg!(fs, match inode_iter.peek_slot(t) {
             Ok(k) => k.and_then(|k| k.arm::<Inodes>()).map(|k| inode::unpack(fs, k))
-                .ok_or(Errcode::BCH_ERR_ENOENT_inode.into()),
+                .ok_or(Errcode::ENOENT_inode.into()),
             Err(e) => Err(e),
         }, "error looking up parent directory")?;
 

@@ -380,11 +380,11 @@ fn may_add(fs: &Fs, sb: &c::bch_sb) -> Result<(), BchError> {
     let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_default();
 
     if u64::from(sb.block_size.get()) != fs.block_bytes() >> 9 {
-        return fs.throw(Errcode::BCH_ERR_mismatched_block_size);
+        return fs.throw(Errcode::mismatched_block_size);
     }
 
     if m.bucket_size.get() < fs.sb_lock().sb().btree_node_size() {
-        return fs.throw(Errcode::BCH_ERR_bucket_size_too_small);
+        return fs.throw(Errcode::bucket_size_too_small);
     }
 
     Ok(())
@@ -643,7 +643,7 @@ impl Fs {
     pub fn dev_alloc(&self, dev_idx: u32) -> Result<(), BchError> {
         let member = sb_member(self.sb_lock().sb(), dev_idx).unwrap_or_default();
 
-        let ca = dev_alloc(self, &member).ok_or_else(|| self.err(Errcode::BCH_ERR_ENOMEM_dev_alloc))?;
+        let ca = dev_alloc(self, &member).ok_or_else(|| self.err(Errcode::ENOMEM_dev_alloc))?;
 
         ca.attach(&self.state_lock_write(), dev_idx);
         Ok(())
@@ -700,13 +700,13 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_
         return Ok(());
     }
     if fs.uuid.b != dev.uuid.b {
-        return Err(Errcode::BCH_ERR_device_not_a_member_of_filesystem.into());
+        return Err(Errcode::device_not_a_member_of_filesystem.into());
     }
     if !member_exists(fs, dev.dev_idx.into()) {
-        return Err(Errcode::BCH_ERR_device_has_been_removed.into());
+        return Err(Errcode::device_has_been_removed.into());
     }
     if fs.block_size != dev.block_size {
-        return Err(Errcode::BCH_ERR_mismatched_block_size.into());
+        return Err(Errcode::mismatched_block_size.into());
     }
 
     let member_seq = MetadataVersion::member_seq.0;
@@ -730,7 +730,7 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_
             prt_bdevname(out, dev_bdev);
             prt!(out, " {}\nNot using older sb", DateTime(dev.write_time.get() as i64));
         }));
-        return Err(Errcode::BCH_ERR_device_splitbrain.into());
+        return Err(Errcode::device_splitbrain.into());
     }
 
     if seq_from_fs != 0 && seq_from_fs < dev.seq.get() {
@@ -748,7 +748,7 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_
             prt!(out, " has {}\nNot using ", dev.seq.get());
             prt_bdevname(out, dev_bdev);
         }));
-        return Err(Errcode::BCH_ERR_device_splitbrain.into());
+        return Err(Errcode::device_splitbrain.into());
     }
     Ok(())
 }
@@ -762,14 +762,14 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
     if ca.is_online() {
         prt!(err, "Cannot attach {}: already have device {} online in slot {}\n",
              sb.dev.name().to_str().unwrap_or("?"), ca, sb.sb().dev_idx);
-        return fs.throw(Errcode::BCH_ERR_device_already_online);
+        return fs.throw(Errcode::device_already_online);
     }
 
     let capacity = sb.dev.capacity();
     if capacity < u64::from(mi.bucket_size) * mi.nbuckets {
         prt!(err, "Cannot online {}: device too small (capacity {} filesystem size {} nbuckets {})\n",
              sb.dev.name().to_str().unwrap_or("?"), capacity, u64::from(mi.bucket_size) * mi.nbuckets, mi.nbuckets);
-        return fs.throw(Errcode::BCH_ERR_device_size_too_small);
+        return fs.throw(Errcode::device_size_too_small);
     }
 
     assert!(ca.io_ref[READ].is_zero(), "attaching device {ca} with read refs");
@@ -942,7 +942,7 @@ impl StateLockWrite<'_> {
         }
 
         if !self.dev_state_allowed(ca, new_state, flags, err) {
-            return fs.throw(Errcode::BCH_ERR_device_state_not_allowed);
+            return fs.throw(Errcode::device_state_not_allowed);
         }
 
         if new_state != MemberState::rw {
@@ -1001,7 +1001,7 @@ impl StateLockWrite<'_> {
             !can_write_with_devs(fs, &new_rw_devs, c::WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
                                  flags, err)) {
             prt!(err, "Cannot offline required disk\n");
-            return fs.throw(Errcode::BCH_ERR_device_state_not_allowed);
+            return fs.throw(Errcode::device_state_not_allowed);
         }
 
         Ok(())
@@ -1152,7 +1152,7 @@ impl Fs {
         let state = self.state_lock_write();
 
         if ca.removing() {
-            return self.throw(Errcode::BCH_ERR_device_has_been_removed);
+            return self.throw(Errcode::device_has_been_removed);
         }
 
         state.dev_set_state(ca, new_state, flags, err)
@@ -1378,7 +1378,7 @@ impl Fs {
          */
         if self.flags.get(c::FsFlag::stopping) {
             prt!(err, "filesystem is shutting down\n");
-            return self.throw(Errcode::BCH_ERR_ioctl_fs_stopping);
+            return self.throw(Errcode::ioctl_fs_stopping);
         }
 
         let mut sb = read_super(path, &mut opts, Some(self.holder()))
@@ -1465,7 +1465,7 @@ impl Fs {
         let state = self.state_lock_write();
 
         if ca.removing() {
-            return self.throw(Errcode::BCH_ERR_device_has_been_removed);
+            return self.throw(Errcode::device_has_been_removed);
         }
 
         if !ca.is_online() {
@@ -1483,14 +1483,14 @@ impl Fs {
         let state = self.state_lock_write();
 
         if ca.removing() {
-            return self.throw(Errcode::BCH_ERR_device_has_been_removed);
+            return self.throw(Errcode::device_has_been_removed);
         }
 
         let old_nbuckets = ca.mi.get().nbuckets;
 
         if nbuckets < old_nbuckets {
             prt!(err, "Cannot shrink yet\n");
-            return self.throw(Errcode::BCH_ERR_EINVAL_dev_resize_shrink);
+            return self.throw(Errcode::EINVAL_dev_resize_shrink);
         }
 
         let wakeup_reconcile_pending = nbuckets > old_nbuckets;
@@ -1501,7 +1501,7 @@ impl Fs {
 
         if nbuckets > u64::from(c::BCH_MEMBER_NBUCKETS_MAX) {
             prt!(err, "New device size too big ({} greater than max {})\n", nbuckets, c::BCH_MEMBER_NBUCKETS_MAX);
-            return self.throw(Errcode::BCH_ERR_device_size_too_big);
+            return self.throw(Errcode::device_size_too_big);
         }
 
         let bucket_size = u64::from(ca.mi.get().bucket_size);
@@ -1509,7 +1509,7 @@ impl Fs {
             let capacity = ca.disk_sb.capacity();
             if capacity < bucket_size * nbuckets {
                 prt!(err, "New size {} larger than device size {}\n", bucket_size * nbuckets, capacity);
-                return self.throw(Errcode::BCH_ERR_device_size_too_small);
+                return self.throw(Errcode::device_size_too_small);
             }
         }
 
@@ -1563,7 +1563,7 @@ impl Fs {
 
         self.members()
             .find(|ca| ca.name().to_bytes() == name)
-            .ok_or(Errcode::BCH_ERR_ENOENT_dev_not_found.into())
+            .ok_or(Errcode::ENOENT_dev_not_found.into())
     }
 
     /// @devs by name, space separated; one there isn't, by its number.

@@ -401,19 +401,19 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let Ok(ca) = fs.dev_bucket_tryget(bucket) else { return Ok(None) };
 
         if !ca.is_rw() || !ca.is_online() {
-            let _ = fs.err(Errcode::BCH_ERR_bucket_not_moveable_dev_not_rw);
+            let _ = fs.err(Errcode::bucket_not_moveable_dev_not_rw);
             return Ok(None);
         }
 
         /* Bucket still being written? */
         if fs.bucket_is_open(bucket.inode as u32, bucket.offset) {
-            let _ = fs.err(Errcode::BCH_ERR_bucket_not_moveable_bucket_open);
+            let _ = fs.err(Errcode::bucket_not_moveable_bucket_open);
             return Ok(None);
         }
 
         /* We won't be able to evacuate it if there's missing backpointers */
         if ca.bucket_backpointer_mismatch.test(bucket.offset) {
-            let _ = fs.err(Errcode::BCH_ERR_bucket_not_moveable_bp_mismatch);
+            let _ = fs.err(Errcode::bucket_not_moveable_bp_mismatch);
             return Ok(None);
         }
 
@@ -423,7 +423,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let lru_idx = a.lru_idx_fragmentation(&ca);
 
         if lru_idx == 0 || lru_idx > time {
-            let _ = fs.err(Errcode::BCH_ERR_bucket_not_moveable_lru_race);
+            let _ = fs.err(Errcode::bucket_not_moveable_lru_race);
             return Ok(None);
         }
         Ok(Some(a.generation.into()))
@@ -680,7 +680,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
             /* no entries in LRU btree found, or got to end: */
             Err(e) if e.matches(c::ENOENT) => Ok(()),
             /* we're being stopped - normal, not something to report: */
-            Err(e) if e.matches(Errcode::BCH_ERR_kthread_cancelled) => Ok(()),
+            Err(e) if e.matches(Errcode::kthread_cancelled) => Ok(()),
             r => r,
         };
         let ret = match ret {

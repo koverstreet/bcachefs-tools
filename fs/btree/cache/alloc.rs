@@ -256,7 +256,7 @@ impl BtreeTrans<'_> {
                 break 'got_mem got;
             }
 
-            return Err(Errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc.into());
+            return Err(Errcode::ENOMEM_btree_node_mem_alloc.into());
         };
 
         assert!(!BtreeNodeList::linked(b), "a node allocated off a list");
@@ -340,7 +340,7 @@ impl BtreeTrans<'_> {
                     prt!(out, "{}\n", self.fn_name());
                     bch2_btree_path_to_text(out, self, p, &paths[p]);
                 });
-                return Err(self.restart(Errcode::BCH_ERR_transaction_restart_fill_mem_alloc_fail));
+                return Err(self.restart(Errcode::transaction_restart_fill_mem_alloc_fail));
             }
             r => r?,
         };

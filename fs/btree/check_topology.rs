@@ -621,7 +621,7 @@ fn drop_root(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, k: &BkeyI) ->
 
     trans.node_unlock_write(&mut paths, idx, level);
     trans.node_unlock(&mut paths, idx, level);
-    paths[idx].l[level].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_drop.into());
+    paths[idx].l[level].b = NodePtr::err(Errcode::no_btree_node_drop.into());
     trans.node_forget(&mut paths, b.node());
     Ok(())
 }

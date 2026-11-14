@@ -42,7 +42,7 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
     fn validate(_sb: &c::bch_sb<Unvalidated>, e: &c::bch_sb_field_extent_type_u64s<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         for (ty, (&theirs, ours)) in sizes(&e.d).iter().zip(ours()).enumerate() {
-            sb_err_on!(err, theirs != ours, BCH_ERR_invalid_sb_extent_type_u64s,
+            sb_err_on!(err, theirs != ours, invalid_sb_extent_type_u64s,
                        "extent_type_u64s for {} does not match in-mem ({theirs} != {ours})",
                        extent_entry_type_name(ty as u32).unwrap())?;
         }
@@ -79,7 +79,7 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
         let e = sb.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);
         let Some(e) = e else {
             crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
-            return fs.throw(Errcode::BCH_ERR_ENOSPC_sb_extent_type_u64s);
+            return fs.throw(Errcode::ENOSPC_sb_extent_type_u64s);
         };
 
         for (d, s) in e.d.iter_mut().zip(ours()) {

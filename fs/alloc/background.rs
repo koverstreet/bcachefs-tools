@@ -1403,7 +1403,7 @@ impl TransAttempt<'_, '_> {
 #[cold]
 fn inval_bucket_key(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     crate::fs_inconsistent!(fs, "reference to invalid bucket\n{}", k.to_text(fs));
-    fs.throw(Errcode::BCH_ERR_trigger_alloc)
+    fs.throw(Errcode::trigger_alloc)
 }
 
 /// stripe_refcount counts the bucket_to_stripe entries for the bucket. Gone
@@ -1443,7 +1443,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         return Ok(());
     }
 
-    let ca = fs.dev_bucket_tryget(p).map_err(|_| fs.err(Errcode::BCH_ERR_trigger_alloc))?;
+    let ca = fs.dev_bucket_tryget(p).map_err(|_| fs.err(Errcode::trigger_alloc))?;
 
     let old_a = alloc_to_v4(op.old);
     // A copy, for gc, which only reads it - its keys are the btree's, of any
@@ -1460,7 +1460,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
                 prt!(msg, "alloc trigger in {}: key isn't all of a current alloc_v4 - not from alloc_to_v4_mut()\n{}",
                      t.fn_name(), BkeySC::from(&op.new).to_text(fs));
                 fs.emergency_read_only(&mut msg);
-                return fs.throw(Errcode::BCH_ERR_emergency_ro);
+                return fs.throw(Errcode::emergency_ro);
             }
         }
     };

@@ -130,7 +130,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
 
     if bp.v().level != 0 {
         fs_inconsistent!(fs, "found btree node in erasure coded bucket:\n{}", bp.untyped().to_text(fs));
-        return fs.throw(Errcode::BCH_ERR_erasure_coding_found_btree_node);
+        return fs.throw(Errcode::erasure_coding_found_btree_node);
     }
 
     let Some((iter, k)) = ext else {
@@ -287,7 +287,7 @@ pub(crate) fn stripe_update_extents<'k>(trans: &BtreeTrans<'_>, old: BkeySC<'k, 
     let carried = carried_blocks(old_block_map, old, new).or_else(|why| {
         bch_err!(fs, "stripe update: block map {old_block_map:?}: {why}\nold: {}\nnew: {}",
                  old.untyped().to_text(fs), new.untyped().to_text(fs));
-        fs.throw(Errcode::BCH_ERR_erasure_coding_stripe_update_err)
+        fs.throw(Errcode::erasure_coding_stripe_update_err)
     })?;
 
     trans.write_buffer_flush_sync()?;

@@ -77,7 +77,7 @@ impl<'f> OpenStripe<'f> {
         };
         match opened {
             Ok(opened) => Ok(opened.is_ok().then(|| OpenStripe { fs, idx })),
-            Err(AllocError) => fs.throw(Errcode::BCH_ERR_ENOMEM_stripe_open),
+            Err(AllocError) => fs.throw(Errcode::ENOMEM_stripe_open),
         }
     }
 

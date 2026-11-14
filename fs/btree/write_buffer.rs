@@ -498,7 +498,7 @@ impl BtreeTrans<'_> {
         }
 
         let Some(_write) = fs.writes.tryget_live() else {
-            return fs.throw(Errcode::BCH_ERR_erofs_no_writes);
+            return fs.throw(Errcode::erofs_no_writes);
         };
 
         self.write_buffer_flush_nocheck_rw()
@@ -675,7 +675,7 @@ impl WbFlush<'_> {
 
             /* can we avoid the unconditional restart? */
             fs.event_inc_trace(events::trans_restart_write_buffer_flush, |out| prt!(out, "{}", trans.fn_name()));
-            return Err(t.restart(Errcode::BCH_ERR_transaction_restart_write_buffer_flush));
+            return Err(t.restart(Errcode::transaction_restart_write_buffer_flush));
         }
 
         f.seen_error = true;

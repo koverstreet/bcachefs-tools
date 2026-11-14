@@ -164,7 +164,7 @@ impl<'i> FolioReservation<'i> {
                 reserved = reserved_offset.clamp(offset, offset + len) - offset;
 
                 if reserved == 0 {
-                    return fs.throw(Errcode::BCH_ERR_ENOSPC_disk_reservation);
+                    return fs.throw(Errcode::ENOSPC_disk_reservation);
                 }
 
                 sectors.end = blocks_out(fs, offset, reserved).end;

@@ -121,8 +121,8 @@ impl Fs {
             b.set_hash_val(lists, node_key_hash_val(&unsafe { b.contents() }.key));
             ret = match bc.table.insert_new(unsafe { Entry::new(NonNull::from(b)) }) {
                 Ok(Ok(()))  => Ok(()),
-                Ok(Err(_))  => Err(Errcode::BCH_ERR_EEXIST_btree_node_cache_insert.into()),
-                Err(_)      => Err(Errcode::BCH_ERR_ENOMEM_btree_node_cache_insert.into()),
+                Ok(Err(_))  => Err(Errcode::EEXIST_btree_node_cache_insert.into()),
+                Err(_)      => Err(Errcode::ENOMEM_btree_node_cache_insert.into()),
             };
             if ret.is_err() {
                 b.set_hash_val(lists, 0);

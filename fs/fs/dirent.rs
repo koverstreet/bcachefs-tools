@@ -356,7 +356,7 @@ pub fn casefold<'a>(
     _info: &c::bch_hash_info,
     _name: &OsStr,
 ) -> Result<&'a OsStr, BchError> {
-    Err(t.fs().err(Errcode::BCH_ERR_no_casefolding_without_utf8))
+    Err(t.fs().err(Errcode::no_casefolding_without_utf8))
 }
 
 /// The name @name is hashed and looked up by in a directory with @info -
@@ -478,7 +478,7 @@ pub fn empty_dir_snapshot(
         let Some(d) = Dirent::new(k) else { return Ok(()) };
         match d.target() {
             DirentTarget::Subvol { parent, .. } if parent != subvol => Ok(()),
-            _ => Err(t.fs().err(Errcode::BCH_ERR_ENOTEMPTY_dir_not_empty)),
+            _ => Err(t.fs().err(Errcode::ENOTEMPTY_dir_not_empty)),
         }
     })
 }
@@ -574,7 +574,7 @@ pub fn readdir(
 
         let mut need_second_pass = false;
         match str_hash::check_key::<Dirents>(t, None, hash_info, k, &mut need_second_pass) {
-            Err(e) if e.matches(Errcode::BCH_ERR_str_hash_key_repaired) =>
+            Err(e) if e.matches(Errcode::str_hash_key_repaired) =>
                 return Ok(ControlFlow::Continue(())),
             r => r?,
         }
@@ -790,7 +790,7 @@ fn lookup_first_inode(t: &TransAttempt<'_, '_>, inum: u64)
         } else {
             ControlFlow::Continue(())
         }))
-        .and_then(|found| found.ok_or_else(|| fs.err(Errcode::BCH_ERR_ENOENT_inode)));
+        .and_then(|found| found.ok_or_else(|| fs.err(Errcode::ENOENT_inode)));
 
     crate::bch_err_msg!(fs, ret, "fetching inode {inum}")
 }

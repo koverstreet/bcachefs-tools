@@ -316,7 +316,7 @@ impl c::journal {
             }
 
             g.cur_entry_sectors = 0;
-            g.published().cur_entry_error.set(-fs.err(Errcode::BCH_ERR_insufficient_journal_devices).raw());
+            g.published().cur_entry_error.set(-fs.err(Errcode::insufficient_journal_devices).raw());
             return;
         }
 
@@ -343,7 +343,7 @@ impl c::journal {
         let cur_entry_error = if g.cur_entry_sectors != 0 {
             0
         } else {
-            -fs.err(Errcode::BCH_ERR_journal_full).raw()
+            -fs.err(Errcode::journal_full).raw()
         };
         g.published().cur_entry_error.set(cur_entry_error);
 

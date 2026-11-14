@@ -324,7 +324,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
                    old_durability.total, new_durability.total, opts.data_replicas);
             key_to_text(&mut msg, fs, u, k.as_sc(), new.as_sc(), insert.as_sc());
             fs.emergency_read_only(&mut msg);
-            return fs.throw(Errcode::BCH_ERR_emergency_ro);
+            return fs.throw(Errcode::emergency_ro);
         }
     }
 
@@ -484,6 +484,6 @@ pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
      * ec_alloc_failed itself is suppressed there because it parks.
      */
     if ret.is_ok() && !parked {
-        u.op.error = -fs.err(Errcode::BCH_ERR_ec_alloc_failed_pending_race).raw() as i16;
+        u.op.error = -fs.err(Errcode::ec_alloc_failed_pending_race).raw() as i16;
     }
 }

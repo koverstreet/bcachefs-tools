@@ -306,7 +306,7 @@ pub mod ioctl {
 
         let flags = u32::from(arg.flags);
         if flags & !c::BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0 || arg.pad != 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_query_counters_bad_flags);
+            return fs.throw(Errcode::EINVAL_ioctl_query_counters_bad_flags);
         }
         let mount = flags & c::BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0;
 

@@ -585,7 +585,7 @@ impl<'t> InteriorUpdate<'t> {
                               fs.journal.flags.get(c::JournalFlag::low_on_pin);
         if (watermark as u32) < wm::reclaim as u32 && journal_low() {
             if commit.to_c().contains(c::TransCommitFlags::journal_reclaim) {
-                return Err(BchError::from(Errcode::BCH_ERR_journal_reclaim_would_deadlock));
+                return Err(BchError::from(Errcode::journal_reclaim_would_deadlock));
             }
 
             /*
@@ -700,8 +700,8 @@ impl<'t> InteriorUpdate<'t> {
             if crate::util::log::should_print_err(&e) &&
                !e.matches(c::ENOSPC) &&
                !e.matches(c::EROFS) &&
-               e != BchError::from(Errcode::BCH_ERR_journal_reclaim_would_deadlock) &&
-               e != BchError::from(Errcode::BCH_ERR_journal_shutdown) {
+               e != BchError::from(Errcode::journal_reclaim_would_deadlock) &&
+               e != BchError::from(Errcode::journal_shutdown) {
                 crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());
             }
             return Err(e);

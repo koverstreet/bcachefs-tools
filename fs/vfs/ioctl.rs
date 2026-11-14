@@ -125,7 +125,7 @@ fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Res
         <c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS as Ioctl>::OPCODE =>
             no_arg::<c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, _>(|| {
                 if !MntIdmap::of(file).owner_or_capable(inode.vfs()) && !capable(Capability::SysAdmin) {
-                    return fs.throw(Errcode::BCH_ERR_EPERM_non_admin_or_owner);
+                    return fs.throw(Errcode::EPERM_non_admin_or_owner);
                 }
                 reflink_p_propagate_opts(fs, inode.inum())
             }),
@@ -230,11 +230,11 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
 
     if a.flags & !(SNAPSHOT | RO) != 0 {
         prt!(err, "invalid flags");
-        return fs.throw(E::BCH_ERR_EINVAL_subvol_create_bad_flags);
+        return fs.throw(E::EINVAL_subvol_create_bad_flags);
     }
     if a.flags & SNAPSHOT == 0 && (a.src_ptr != 0 || a.flags & RO != 0) {
         prt!(err, "invalid flags");
-        return fs.throw(E::BCH_ERR_EINVAL_subvol_create_flags_mismatch);
+        return fs.throw(E::EINVAL_subvol_create_flags_mismatch);
     }
 
     let mut create_flags = c::BCH_CREATE_SUBVOL;
@@ -268,10 +268,10 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
         (Dentry::borrow_raw(dst.dentry), InodeInfo::from_inode((*dst.path.dentry).d_inode))
     };
     if dentry.inode_opt().is_some() {
-        return fs.throw(E::BCH_ERR_EEXIST_subvolume_create);
+        return fs.throw(E::EEXIST_subvolume_create);
     }
     if dir.vfs().flag(c::S_DEAD) {
-        return fs.throw(E::BCH_ERR_ENOENT_directory_dead);
+        return fs.throw(E::ENOENT_directory_dead);
     }
 
     // SAFETY: a mounted superblock's
@@ -318,7 +318,7 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMs
 {
     let ret = (|| {
         if a.flags != 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_subvol_destroy_bad_flags);
+            return fs.throw(Errcode::EINVAL_subvol_destroy_bad_flags);
         }
 
         let r = Removing::start(a.dirfd as c_int, a.dst_ptr)?;
@@ -358,7 +358,7 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
         return Err(c::EINVAL.into());
     }
     if !MntIdmap::of(file).owner_or_capable(inode.vfs()) {
-        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin_or_owner);
+        return fs.throw(Errcode::EPERM_non_admin_or_owner);
     }
 
     let pos = a.offset as c::loff_t;
@@ -401,14 +401,14 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
 
 fn set_label(fs: &Fs, file: &File, user: UserArg<[u8; FSLABEL_MAX]>) -> Result<(), BchError> {
     if !capable(Capability::SysAdmin) {
-        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::EPERM_non_admin);
     }
 
     let mut label = [0u8; LABEL_SIZE];
     user.bytes_at(0, LABEL_SIZE).reader().read_slice(&mut label)?;
     let Some(len) = label.iter().position(|&b| b == 0) else {
         bch_err!(fs, "unable to set label with more than {} bytes", LABEL_SIZE - 1);
-        return fs.throw(Errcode::BCH_ERR_EINVAL_setlabel_too_long);
+        return fs.throw(Errcode::EINVAL_setlabel_too_long);
     };
 
     let _write = WriteAccess::get(file)?;
@@ -421,7 +421,7 @@ fn set_label(fs: &Fs, file: &File, user: UserArg<[u8; FSLABEL_MAX]>) -> Result<(
 
 fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
     if !capable(Capability::SysAdmin) {
-        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::EPERM_non_admin);
     }
     let flags = user.read()?;
 
@@ -448,7 +448,7 @@ fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
             fs.emergency_read_only(&mut msg);
             Ok(())
         }
-        _ => fs.throw(Errcode::BCH_ERR_EINVAL_goingdown_bad_flags),
+        _ => fs.throw(Errcode::EINVAL_goingdown_bad_flags),
     }
 }
 

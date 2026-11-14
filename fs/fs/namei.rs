@@ -170,13 +170,13 @@ pub fn create_trans(
 
         // Not a subvolume root?
         if new_inode.bi_subvol as u64 != snapshot_src.subvol {
-            return Err(fs.err(Errcode::BCH_ERR_EINVAL_snapshot_not_subvol_root));
+            return Err(fs.err(Errcode::EINVAL_snapshot_not_subvol_root));
         }
 
         // If we're not root, we have to own the subvolume being snapshotted
         // - in that order: capable() records using the capability.
         if uid != 0 && !capable(Capability::Fowner) && new_inode.bi_uid != uid {
-            return Err(fs.err(Errcode::BCH_ERR_EPERM_non_admin_or_owner));
+            return Err(fs.err(Errcode::EPERM_non_admin_or_owner));
         }
 
         flags |= c::BCH_CREATE_SUBVOL;
@@ -377,7 +377,7 @@ pub fn unlink_trans(
     }
 
     if deleting_subvol && inode_u.bi_subvol == 0 {
-        return Err(fs.err(Errcode::BCH_ERR_ENOENT_not_subvol));
+        return Err(fs.err(Errcode::ENOENT_not_subvol));
     }
 
     // Recursive subvolume destroy not allowed (yet?)
@@ -707,7 +707,7 @@ fn first_inode_snapshot(t: &TransAttempt<'_, '_>, inum: u64) -> Result<u32, BchE
         } else {
             ControlFlow::Continue(())
         }))?
-        .ok_or_else(|| t.fs().err(Errcode::BCH_ERR_ENOENT_snapshot))
+        .ok_or_else(|| t.fs().err(Errcode::ENOENT_snapshot))
 }
 
 /// Walk up from inode @inum - in subvolume @subvol, or in @snapshot -
@@ -757,7 +757,7 @@ fn inum_to_path_up(
         }
 
         if inode.bi_dir == 0 && inode.bi_dir_offset == 0 {
-            ret = Err(fs.err(Errcode::BCH_ERR_ENOENT_inode_no_backpointer));
+            ret = Err(fs.err(Errcode::ENOENT_inode_no_backpointer));
             break;
         }
 
@@ -1238,7 +1238,7 @@ pub fn check_inode_has_case_insensitive(
 
     if repairing_parents {
         t.commit(None, CommitFlags::NO_ENOSPC)?;
-        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested));
+        return Err(t.restart(Errcode::transaction_restart_nested));
     }
 
     Ok(())

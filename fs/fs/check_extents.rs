@@ -216,7 +216,7 @@ fn overlapping_extents_found(
 
     let Some(k1) = k1.filter(|k1| k1.k.p == pos1) else {
         bch_err!(fs, "overlapping_extents_found: error finding first overlapping extent when repairing, got{buf}\nwanted\n  {pos1}\n{pos2}");
-        return Err(fs.err(Errcode::BCH_ERR_internal_fsck_err));
+        return Err(fs.err(Errcode::internal_fsck_err));
     };
 
     // iter2 starts at k1 too, and walks forward to pos2:
@@ -236,7 +236,7 @@ fn overlapping_extents_found(
 
     let Some(k2) = k2.filter(|k2| k2.k.p == pos2.p && k2.k.size == pos2.size) else {
         bch_err!(fs, "overlapping_extents_found: error finding second overlapping extent when repairing{buf}");
-        return Err(fs.err(Errcode::BCH_ERR_internal_fsck_err));
+        return Err(fs.err(Errcode::internal_fsck_err));
     };
 
     let k1_whiteout = k1.k.key_type() == BkeyType::extent_whiteout;
@@ -272,7 +272,7 @@ fn overlapping_extents_found(
         // We overwrote the second extent - restart check_extent() from the
         // top. (No need to say we fixed something: the retry's walk sees the
         // commit, and recounts.)
-        return Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested));
+        return Err(t.restart(Errcode::transaction_restart_nested));
     }
 
     Ok(true)

@@ -211,7 +211,7 @@ pub(crate) unsafe extern "C" fn bch2_btree_key_cache_journal_flush(j: *mut c::jo
         });
 
         if let Err(e) = &ret {
-            if !e.matches(Errcode::BCH_ERR_journal_reclaim_would_deadlock) && fs.journal.error().is_ok() {
+            if !e.matches(Errcode::journal_reclaim_would_deadlock) && fs.journal.error().is_ok() {
                 fs_fatal_error!(fs, "flushing key cache: {}", e.msg());
             }
         }
@@ -282,7 +282,7 @@ impl Fs {
                     btree_key_cache_flush_pos(t, *k, 0, CommitFlags::NO_JOURNAL_RES, false)
                 });
                 if let Err(e) = ret {
-                    if !e.matches(Errcode::BCH_ERR_journal_reclaim_would_deadlock) && self.journal.error().is_ok() {
+                    if !e.matches(Errcode::journal_reclaim_would_deadlock) && self.journal.error().is_ok() {
                         return crate::bch_err_fn!(self, Err(e));
                     }
                 }
@@ -397,7 +397,7 @@ pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Path
              */
             paths[i].bits.set_should_be_locked(false);
             trans.path_unlock(paths, i);
-            paths[i].l[0].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_drop.into());
+            paths[i].l[0].b = NodePtr::err(Errcode::no_btree_node_drop.into());
         }
     }
 

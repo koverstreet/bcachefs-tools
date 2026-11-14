@@ -213,7 +213,7 @@ fn check_unlinked_dir(
 
     match dirent::empty_dir_snapshot(t, pos.offset, 0, pos.snapshot) {
         Ok(()) => return Ok(false),
-        Err(e) if e.matches(Errcode::BCH_ERR_ENOTEMPTY_dir_not_empty) => {}
+        Err(e) if e.matches(Errcode::ENOTEMPTY_dir_not_empty) => {}
         Err(e) => return Err(e),
     }
 

@@ -79,7 +79,7 @@ impl FileattrSet {
         let file_type = bi.bi_mode as u32 & c::S_IFMT;
         let others_may = F::nodump | F::noatime;
         if file_type != c::S_IFREG && file_type != c::S_IFDIR && !others_may.contains(self.flags) {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_setattr_bad_file_type);
+            return fs.throw(Errcode::EINVAL_setattr_bad_file_type);
         }
 
         if let Some(casefold) = self.casefold.filter(|&cf| cf != bi.casefold(fs)) {
@@ -173,11 +173,11 @@ impl InodeInfo {
             s.mask = all;
             s.flags |= flags_from(&mut fa.fsx_xflags, |f| f.2);
             if fa.fsx_xflags != 0 {
-                return fs.throw(Errcode::BCH_ERR_unsupported_fsx_flag);
+                return fs.throw(Errcode::unsupported_fsx_flag);
             }
 
             if fa.fsx_projid >= u32::MAX {
-                return fs.throw(Errcode::BCH_ERR_projid_too_big);
+                return fs.throw(Errcode::projid_too_big);
             }
             let project = self.ei_inode.bi_project.get();
             if (project != 0 || fa.fsx_projid != 0) && project != fa.fsx_projid + 1 {
@@ -191,7 +191,7 @@ impl InodeInfo {
             fa.flags &= !c::FS_CASEFOLD_FL;
             s.flags |= flags_from(&mut fa.flags, |f| f.1);
             if fa.flags != 0 {
-                return fs.throw(Errcode::BCH_ERR_unsupported_fa_flag);
+                return fs.throw(Errcode::unsupported_fa_flag);
             }
         }
 

@@ -104,7 +104,7 @@ impl<'a> Ctx<'a> {
         } else {
             sb_error_count(self.fs, err);
             if fs_inconsistent(self.fs, &message!("corrupt metadata before write: {}\n", buf)) {
-                return self.fs.throw(Errcode::BCH_ERR_fsck_errors_not_fixed);
+                return self.fs.throw(Errcode::fsck_errors_not_fixed);
             }
         }
         Ok(())
@@ -604,7 +604,7 @@ pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64
                              "{} sector {} seq {}: incompatible journal entry version {}.{}",
                              name, sector, seq, version.major(), version.minor()) {
         /* don't try to continue: */
-        return fs.throw(Errcode::BCH_ERR_EINVAL_journal_entry_version_incompatible);
+        return fs.throw(Errcode::EINVAL_journal_entry_version_incompatible);
     }
 
     journal_entry_err_on!(ctx, !h.csum_type().valid(fs), jset_unknown_csum,
@@ -650,7 +650,7 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<c::jse
                              "{} sector {} seq {}: unknown journal entry version {}.{}",
                              name, sector, seq, version.major(), version.minor()) {
         /* don't try to continue: */
-        return fs.throw(Errcode::BCH_ERR_EINVAL_journal_validate_version_incompatible);
+        return fs.throw(Errcode::EINVAL_journal_validate_version_incompatible);
     }
 
     let bytes = h.bytes();

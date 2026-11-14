@@ -169,7 +169,7 @@ pub fn lookup_in_snapshot<'i, 'a, T: HashTable>(
         }))?;
 
     found.and_then(|k| visible_key::<T>(inum, k))
-        .ok_or_else(|| t.fs().err(Errcode::BCH_ERR_ENOENT_str_hash_lookup))
+        .ok_or_else(|| t.fs().err(Errcode::ENOENT_str_hash_lookup))
 }
 
 /// In subvolume and inode @inum: the key found, through @iter, or
@@ -204,7 +204,7 @@ pub fn hole<'a, T: HashTable>(
     match iter.find_max_norestart(t, pos(inum.inum, u64::MAX),
                                   |_, k| Ok(visible_key::<T>(inum, k).is_none()))? {
         Some(_) => Ok(()),
-        None    => Err(t.fs().err(Errcode::BCH_ERR_ENOSPC_str_hash_create)),
+        None    => Err(t.fs().err(Errcode::ENOSPC_str_hash_create)),
     }
 }
 
@@ -283,7 +283,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
         }))?;
 
     let Some(k) = found else {
-        return Err(fs.err(Errcode::BCH_ERR_ENOSPC_str_hash_create));
+        return Err(fs.err(Errcode::ENOSPC_str_hash_create));
     };
 
     if let Some(k) = visible_key::<T>(inum, k) {
@@ -292,7 +292,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
             return Ok(Some(unsafe { polonius_key(k) }));
         }
     } else if must_replace {
-        return Err(fs.err(Errcode::BCH_ERR_ENOENT_str_hash_set_must_replace));
+        return Err(fs.err(Errcode::ENOENT_str_hash_set_must_replace));
     } else if let Some(slot) = slot.as_mut() {
         core::mem::swap(iter, slot);
     }
@@ -316,7 +316,7 @@ pub fn set_in_snapshot<'t, T: HashTable>(
     let mut iter = BtreeIter::uninit();
     match set_or_get_in_snapshot::<T>(t, &mut iter, hash_info, inum, snapshot, insert,
                                       set_flags, update_flags)? {
-        Some(_) => Err(t.fs().err(Errcode::BCH_ERR_EEXIST_str_hash_set)),
+        Some(_) => Err(t.fs().err(Errcode::EEXIST_str_hash_set)),
         None    => Ok(()),
     }
 }
@@ -437,7 +437,7 @@ pub fn hash_info_init(
     inode: &c::bch_inode_unpacked,
 ) -> Result<c::bch_hash_info, BchError> {
     if inode.casefold(fs) && fs.cf_encoding.load(core::sync::atomic::Ordering::Relaxed).is_null() {
-        return fs.throw(Errcode::BCH_ERR_casefold_dir_but_disabled);
+        return fs.throw(Errcode::casefold_dir_but_disabled);
     }
     Ok(hash_info_init_unchecked(fs, inode))
 }
@@ -679,7 +679,7 @@ impl Repair<'_> {
             }
         }
         msg.set_suppressed(false);
-        Err(fs.err(Errcode::BCH_ERR_EEXIST_str_hash_set))
+        Err(fs.err(Errcode::EEXIST_str_hash_set))
     }
 
     /// @k and @dup, ahead of it in its probe sequence, have the same name:
@@ -803,7 +803,7 @@ impl Repair<'_> {
                              UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
         self.repair_key::<Dirents>(t, new.as_sc(), None)?;
-        Err(fs.err(Errcode::BCH_ERR_str_hash_key_repaired))
+        Err(fs.err(Errcode::str_hash_key_repaired))
     }
 
     /// The rest of check_key(), for a key not at the offset it hashes to:

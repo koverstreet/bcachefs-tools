@@ -532,11 +532,11 @@ mod vfs {
 
         let Some(opt) = name.to_str().ok().and_then(opts::opt_lookup)
             .filter(|opt| opt.id.inode_opt().is_some()) else {
-            return Err(fs.err(Errcode::BCH_ERR_EINVAL_xattr_get_bad_opt));
+            return Err(fs.err(Errcode::EINVAL_xattr_get_bad_opt));
         };
         let id = opt.id;
         let Some(inode_opt) = id.inode_opt() else {
-            return Err(fs.err(Errcode::BCH_ERR_EINVAL_xattr_get_not_inode_opt));
+            return Err(fs.err(Errcode::EINVAL_xattr_get_not_inode_opt));
         };
 
         if !inode_opts.defined(id) || !(all || inode_opt.is_own(inode)) {
@@ -630,11 +630,11 @@ mod vfs {
         let fs = v.fs();
 
         let Some(opt) = name.to_str().ok().and_then(opts::opt_lookup) else {
-            return Err(fs.err(Errcode::BCH_ERR_EINVAL_xattr_set_bad_opt));
+            return Err(fs.err(Errcode::EINVAL_xattr_set_bad_opt));
         };
         let opt_id = opt.id;
         let Some(inode_opt) = opt_id.inode_opt() else {
-            return Err(fs.err(Errcode::BCH_ERR_EINVAL_xattr_set_not_inode_opt));
+            return Err(fs.err(Errcode::EINVAL_xattr_set_not_inode_opt));
         };
 
         let defined = value.is_some();

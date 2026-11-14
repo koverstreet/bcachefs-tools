@@ -199,7 +199,7 @@ impl NodeBufs {
                 self.data = alloc_raw(Mem::Kvmalloc, bytes, gfp);
             }
             if self.data.is_null() {
-                return fs.throw(Errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc);
+                return fs.throw(Errcode::ENOMEM_btree_node_mem_alloc);
             }
         }
 
@@ -207,7 +207,7 @@ impl NodeBufs {
             let bytes = ((1usize << self.byte_order) / BSET_CACHELINE) * size_of::<u64>();
             self.aux_data = alloc_raw(Mem::Kvmalloc, bytes, gfp);
             if self.aux_data.is_null() {
-                return fs.throw(Errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc);
+                return fs.throw(Errcode::ENOMEM_btree_node_mem_alloc);
             }
         }
 

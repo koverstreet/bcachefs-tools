@@ -280,7 +280,7 @@ fn write_alloc(j: &c::journal, w: &mut c::journal_buf, replicas: &mut u32) -> Re
     if *replicas != 0 {
         Ok(())
     } else {
-        Err(fs.err(Errcode::BCH_ERR_insufficient_journal_devices))
+        Err(fs.err(Errcode::insufficient_journal_devices))
     }
 }
 
@@ -348,7 +348,7 @@ fn update_last_seq_ondisk(j: &c::journal, pins: &PinsRead<'_>, g: &mut JournalGu
 
             match refs.iter_mut().find(|(r, _)| *r == devs_r) {
                 Some((_, nr)) => *nr += 1,
-                None => refs.try_push((devs_r, 1)).map_err(|_| j.fs().err(Errcode::BCH_ERR_ENOMEM_journal_buf))?,
+                None => refs.try_push((devs_r, 1)).map_err(|_| j.fs().err(Errcode::ENOMEM_journal_buf))?,
             }
 
             pins.seq_set_devs(seq, &c::bch_devs_list::default());
@@ -454,7 +454,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
 
     if unlikely(write_failed || flush_failed || err.is_err()) {
         if w.devs_written.nr == 0 {
-            err = Err(fs.err(Errcode::BCH_ERR_journal_write_err));
+            err = Err(fs.err(Errcode::journal_write_err));
         }
 
         /*
@@ -979,7 +979,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
     if sectors > w.sectors {
         crate::fs_fatal_error!(fs, ": journal write overran available space, {} > {} (extra {u64s} reserved {}/{})",
                                w.jset().bytes(), w.sectors << 9, w.u64s_reserved, j.lock.entry_u64s_reserved.get());
-        return Err(fs.err(Errcode::BCH_ERR_EINVAL_journal_write_overran_available_space));
+        return Err(fs.err(Errcode::EINVAL_journal_write_overran_available_space));
     }
 
     Ok(())

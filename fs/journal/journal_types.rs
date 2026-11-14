@@ -45,7 +45,7 @@ impl c::journal {
     /// journal_shutdown if it's halted: bch2_journal_error().
     pub fn error(&self) -> Result<(), BchError> {
         if self.halted() {
-            Err(crate::errcode::Errcode::BCH_ERR_journal_shutdown.into())
+            Err(crate::errcode::Errcode::journal_shutdown.into())
         } else {
             Ok(())
         }

@@ -50,7 +50,7 @@ bitflags! {
 impl Fs {
     fn noreclaim(&self, lists: &mut BtreeCacheGuard<'_>, flags: ReclaimFlags, reason: NotFreed) -> BchError {
         lists.not_freed[reason as usize] += flags.contains(ReclaimFlags::SHRINKER) as u64;
-        self.err(Errcode::BCH_ERR_ENOMEM_btree_node_reclaim)
+        self.err(Errcode::ENOMEM_btree_node_reclaim)
     }
 
     fn reclaim_checks(&self, lists: &mut BtreeCacheGuard<'_>, b: &BtreeNode, flags: ReclaimFlags)

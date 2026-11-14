@@ -115,7 +115,7 @@ impl<'a> Moving<'a> {
         let fs = t.fs();
 
         if is_scrub(data_opts.type_) && !fs.dev_idx_is_online(data_opts.read_dev) {
-            return fs.throw(err::BCH_ERR_device_offline);
+            return fs.throw(err::device_offline);
         }
 
         let ret = if !k.k.is_btree_ptr() {
@@ -129,7 +129,7 @@ impl<'a> Moving<'a> {
             // checks nodes itself - scrub_journal.rs - so nothing should send
             // one here
             warn_once!(true, fs, "move_extent(): a btree node with scrub_no_repair");
-            fs.throw(err::BCH_ERR_invalid)
+            fs.throw(err::invalid)
         };
         t.restarts_handled();
 
@@ -137,7 +137,7 @@ impl<'a> Moving<'a> {
             // wait for some IO to finish, and retry
             Err(e) if e.matches(c::ENOMEM) => {
                 self.wait_for_io();
-                Err(t.restart(err::BCH_ERR_transaction_restart_nested))
+                Err(t.restart(err::transaction_restart_nested))
             }
             r => r,
         }
@@ -243,7 +243,7 @@ impl Moving<'_> {
             match mover.move_key(t, Some(&mut s), iter, level, k) {
                 Ok(()) => {}
                 // failure for this key: go on
-                Err(e) if e.matches(err::BCH_ERR_data_update_fail) => {}
+                Err(e) if e.matches(err::data_update_fail) => {}
                 // a topology error, a btree node read error
                 Err(e) if is_restart(&e) || e.matches(c::EROFS) || e.matches(c::EIO) => return Err(e),
                 Err(e) => {
@@ -366,9 +366,9 @@ impl PhysWalker<'_, '_> {
         match ret {
             Ok(()) => Ok(()),
             // failure for this key: go on
-            Err(e) if e.matches(err::BCH_ERR_data_update_fail) => Ok(()),
+            Err(e) if e.matches(err::data_update_fail) => Ok(()),
             Err(e) if e.matches(c::EAGAIN) || e.matches(c::EROFS) || e.matches(c::EIO) ||
-                      e.matches(err::BCH_ERR_device_offline) => Err(e),
+                      e.matches(err::device_offline) => Err(e),
             Err(e) => {
                 warn_once!(true, fs, "unhandled error from move_extent: {e}");
                 Ok(())

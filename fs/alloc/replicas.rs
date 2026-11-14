@@ -126,7 +126,7 @@ impl SbEntry<'_> {
         let invalid = |err: &mut Printbuf, msg: fmt::Arguments<'_>| {
             write!(err, "{msg} in entry ");
             self.to_text(err);
-            Err(Errcode::BCH_ERR_invalid_replicas_entry.into())
+            Err(Errcode::invalid_replicas_entry.into())
         };
 
         if self.devs.is_empty() {
@@ -624,7 +624,7 @@ impl ReplicasCpu {
 
     /// to_sb(), no room an error.
     fn write_sb(&self, fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        fs.ensure(self.to_sb(&mut fs.sb_resize(sb)), Errcode::BCH_ERR_ENOSPC_sb_replicas)
+        fs.ensure(self.to_sb(&mut fs.sb_resize(sb)), Errcode::ENOSPC_sb_replicas)
     }
 
     /// Validated as a section is, its entries against @sb's members: none
@@ -640,7 +640,7 @@ impl ReplicasCpu {
             if let Some(p) = prev.filter(|&p| self.entries.slot(p) == self.entries.slot(i)) {
                 write!(err, "duplicate replicas entry ");
                 self.entry(p).to_text(err);
-                return Err(Errcode::BCH_ERR_invalid_sb_replicas.into());
+                return Err(Errcode::invalid_sb_replicas.into());
             }
             prev = Some(i);
         }
@@ -680,7 +680,7 @@ fn verify_entry(_e: &Entry) {
 fn section_validate<'a, I: Iterator<Item = SbEntry<'a>>>(sb: &c::bch_sb<Unvalidated>, walk: impl Fn() -> I,
                                                          err: &mut Printbuf) -> Result<(), BchError> {
     ReplicasCpu::from_entries(walk, |_| true)
-        .map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_cpu_replicas))?
+        .map_err(|_| BchError::from(Errcode::ENOMEM_cpu_replicas))?
         .validate(sb, err)
 }
 
@@ -706,7 +706,7 @@ impl SbFieldOps for c::bch_sb_field_replicas {
         assert!(!fs.flags.get(c::FsFlag::started), "replicas table rebuilt with refs held");
 
         let mut new = ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))
-            .map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
+            .map_err(|_| BchError::from(Errcode::ENOMEM_cpu_replicas))?;
         new.sort();
         *fs.replicas.write() = new;
         Ok(())
@@ -770,7 +770,7 @@ impl Fs {
             let mut r = self.replicas.write();
             let mut dirty = false;
             if r.find(e).is_none() {
-                let new = r.with(e).map_err(|_| self.err(Errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
+                let new = r.with(e).map_err(|_| self.err(Errcode::ENOMEM_cpu_replicas))?;
                 new.write_sb(self, &mut sb)?;
                 *r = new;
                 dirty = true;
@@ -887,7 +887,7 @@ impl Fs {
                     accounting_mem::has_replicas(self, &mark, e))
                 .map_err(|_| {
                     crate::bch_err!(self, "error allocating c->replicas_gc");
-                    self.err(Errcode::BCH_ERR_ENOMEM_replicas_gc)
+                    self.err(Errcode::ENOMEM_replicas_gc)
                 })?;
             new.write_sb(self, &mut sb)?;
             *r = new;
@@ -1003,7 +1003,7 @@ mod tests {
         assert!(r.validate(sb.sb(), &mut err).is_ok());
 
         let mut r = r.with(entry(&e)).unwrap();
-        assert!(r.validate(sb.sb(), &mut err).unwrap_err().matches(Errcode::BCH_ERR_invalid_sb_replicas));
+        assert!(r.validate(sb.sb(), &mut err).unwrap_err().matches(Errcode::invalid_sb_replicas));
     }
 
     /// An entry cut short at a section's end - C's walk stopped there - is

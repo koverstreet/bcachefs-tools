@@ -170,7 +170,7 @@ impl BtreeTrans<'_> {
     #[inline(never)]
     fn journal_transaction_names_changed(&self, res: &mut c::journal_res) -> BchError {
         self.fs().journal.res_put(res);
-        self.restart(Errcode::BCH_ERR_transaction_restart_journal_overwrites_changed)
+        self.restart(Errcode::transaction_restart_journal_overwrites_changed)
     }
 
     #[inline(always)]
@@ -214,7 +214,7 @@ impl BtreeTrans<'_> {
 
                     let Ok(new_k) = kmalloc(bytes) else {
                         bch_err!(fs, "error allocating memory for key cache key, btree {btree} u64s {new_u64s}");
-                        return fs.throw(Errcode::BCH_ERR_ENOMEM_btree_key_cache_insert);
+                        return fs.throw(Errcode::ENOMEM_btree_key_cache_insert);
                     };
 
                     if let Err(err) = self.relock_from(paths).and_then(|()| self.lock_updates_write(t, paths)) {
@@ -247,7 +247,7 @@ impl BtreeTrans<'_> {
            fs.btree.key_cache.must_wait() &&
            fs.journal.flags.get(Journal::replay_done)
         {
-            return fs.throw(Errcode::BCH_ERR_btree_insert_need_journal_reclaim);
+            return fs.throw(Errcode::btree_insert_need_journal_reclaim);
         }
 
         Ok(())
@@ -332,7 +332,7 @@ impl BtreeTrans<'_> {
                 for_each_entry_key(i, |k| {
                     if journal_overlay::check_or_overwrite(jk, g, Btree(i.btree_id.into()), i.level.into(), k.k.p,
                                                            check) {
-                        Err(BchError::from(Errcode::BCH_ERR_transaction_restart_journal_overwrites_changed))
+                        Err(BchError::from(Errcode::transaction_restart_journal_overwrites_changed))
                     } else {
                         Ok(())
                     }
@@ -354,7 +354,7 @@ impl BtreeTrans<'_> {
            self.check_drop_overwrites_from_journal(t, paths, jk, &mut g, true) {
             drop(g);
             self.unlock_updates_write(paths);
-            return Err(self.restart(Errcode::BCH_ERR_transaction_restart_journal_overwrites_changed));
+            return Err(self.restart(Errcode::transaction_restart_journal_overwrites_changed));
         }
 
         Ok(g)
@@ -381,13 +381,13 @@ impl BtreeTrans<'_> {
     {
         let fs = self.fs();
 
-        if err.matches(Errcode::BCH_ERR_journal_res_blocked) {
+        if err.matches(Errcode::journal_res_blocked) {
             /*
              * XXX: this should probably be a separate BTREE_INSERT_NONBLOCK
              * flag
              */
             if has(flags, CommitFlags::JOURNAL_RECLAIM) && watermark(flags) < c::Watermark::reclaim as u32 {
-                return fs.throw(Errcode::BCH_ERR_journal_reclaim_would_deadlock);
+                return fs.throw(Errcode::journal_reclaim_would_deadlock);
             }
 
             return t.drop_locks_do_in(paths, |paths| {
@@ -395,13 +395,13 @@ impl BtreeTrans<'_> {
             });
         }
 
-        if err == Errcode::BCH_ERR_btree_insert_btree_node_full.into() {
+        if err == Errcode::btree_insert_btree_node_full.into() {
             let i = paths.updates()[i.expect("a full node is an update's")];
             let flags = if self.commit_has_extents(paths) { flags.watermark_hipri() } else { flags };
 
             let ret = split_leaf(t, paths, i.path, i.key().k.u64s.into(), flags);
             if ret.is_ok() && self.has_interior_updates() {
-                return Err(self.restart(Errcode::BCH_ERR_transaction_restart_split_with_interior_updates));
+                return Err(self.restart(Errcode::transaction_restart_split_with_interior_updates));
             }
 
             if ret.as_ref().is_err_and(is_restart) {
@@ -413,11 +413,11 @@ impl BtreeTrans<'_> {
             return ret;
         }
 
-        if err == Errcode::BCH_ERR_btree_insert_need_mark_replicas.into() {
+        if err == Errcode::btree_insert_need_mark_replicas.into() {
             return t.drop_locks_do_in(paths, |_| crate::accounting::update_sb(t));
         }
 
-        if err == Errcode::BCH_ERR_btree_insert_need_journal_reclaim.into() {
+        if err == Errcode::btree_insert_need_journal_reclaim.into() {
             self.unlock_from(paths, crate::ret_ip!());
 
             fs.event_inc_trace(events::trans_blocked_journal_reclaim, |out| {
@@ -510,7 +510,7 @@ impl BtreeTrans<'_> {
 
         /* we're actually shutting down */
         if fs.flags.get(c::FsFlag::may_go_rw) {
-            return fs.throw(Errcode::BCH_ERR_erofs_trans_commit);
+            return fs.throw(Errcode::erofs_trans_commit);
         }
 
         let mut not_rw = fs.not_rw();
@@ -550,7 +550,7 @@ impl BtreeTrans<'_> {
                 }
             };
 
-            if !ret.matches(Errcode::BCH_ERR_btree_insert_need_mark_replicas) {
+            if !ret.matches(Errcode::btree_insert_need_mark_replicas) {
                 return Err(ret);
             }
             t.drop_locks_do(|| crate::accounting::update_sb(t))?;
@@ -774,7 +774,7 @@ impl BtreeTrans<'_> {
                 if b.insert_fits(b.contents(), u64s) {
                     Ok(())
                 } else {
-                    fs.throw(Errcode::BCH_ERR_btree_insert_btree_node_full)
+                    fs.throw(Errcode::btree_insert_btree_node_full)
                 }
             } else {
                 /* Slack for varint::decode_fast(), which reads up to 7 bytes past the end: */
@@ -1150,7 +1150,7 @@ impl BtreeTrans<'_> {
          * loop retries a failing commit forever:
          */
         if lazy {
-            return Err(self.restart(Errcode::BCH_ERR_transaction_restart_commit));
+            return Err(self.restart(Errcode::transaction_restart_commit));
         }
         Ok(())
     }

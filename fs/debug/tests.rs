@@ -682,7 +682,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
         };
         let Some(opened) = opened else {
             kernel::pr_info!("stripe {} already open, can't test\n", idx);
-            return fs.throw(Errcode::BCH_ERR_EINVAL_test_stripe_already_open);
+            return fs.throw(Errcode::EINVAL_test_stripe_already_open);
         };
 
         let relocked = updater.relock_notrace();
@@ -691,7 +691,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
         if relocked.is_ok() {
             kernel::pr_info!("opening stripe {} didn't invalidate a queued update's relock\n",
                              idx);
-            return fs.throw(Errcode::BCH_ERR_EINVAL_test_stripe_open_relock_not_invalidated);
+            return fs.throw(Errcode::EINVAL_test_stripe_open_relock_not_invalidated);
         }
         // The relock failed, as it should: in restart, as above.
         drop(u_iter);
@@ -700,7 +700,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
     }
 
     kernel::pr_info!("no quiet window in 100 attempts: relock kept failing without an open\n");
-    fs.throw(Errcode::BCH_ERR_test_no_quiet_window)
+    fs.throw(Errcode::test_no_quiet_window)
 }
 
 fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
@@ -1057,11 +1057,11 @@ fn print_perf_result(
 /// sysfs's perf_test does.
 pub fn btree_perf_test(fs: &Fs, testname: &str, nr: u64, nr_threads: u32) -> Result<(), BchError> {
     if nr == 0 || nr_threads == 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_test_zero_nr_or_threads);
+        return fs.throw(Errcode::EINVAL_test_zero_nr_or_threads);
     }
 
     let Some((name, test)) = lookup_test(testname.as_bytes()) else {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_test_unknown_test);
+        return fs.throw(Errcode::EINVAL_test_unknown_test);
     };
 
     // A kthread each, as C's, all made before any starts - the scope starts

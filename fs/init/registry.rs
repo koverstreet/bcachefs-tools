@@ -261,7 +261,7 @@ pub fn register(fs: &Fs) -> Result<(), BchError> {
     let mut registry = REGISTRY.lock();
 
     if fs.sb.multi_device.get() && registry.open.iter().any(|f| fs_uuid(f) == fs_uuid(fs)) {
-        return fs.throw(Errcode::BCH_ERR_filesystem_uuid_already_open);
+        return fs.throw(Errcode::filesystem_uuid_already_open);
     }
     // SAFETY: exit() deregisters it before freeing it
     Ok(registry.open.push(unsafe { BackRef::new(fs) })?)

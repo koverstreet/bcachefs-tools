@@ -687,7 +687,7 @@ fn validate_vals(v: &mut NodeValidate<'_>) -> Result<(), BchError> {
             let u = k.disassemble(contents, &mut tmp);
 
             match btree_node_bkey_val_validate(fs, b, u, ValidateFlags::empty()) {
-                Err(err) if err == BchError::from(c::Errcode::BCH_ERR_fsck_delete_bkey) => true,
+                Err(err) if err == BchError::from(c::Errcode::fsck_delete_bkey) => true,
                 _ if crate::debug::params::inject_invalid_keys() && u.k.bversion == c::Bversion::MAX => true,
                 r => { r?; false }
             }
@@ -854,7 +854,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
 
         if !used {
             prt!(&mut buf, "retry success");
-        } else if used_err(c::Errcode::BCH_ERR_btree_node_validate_err_csum) {
+        } else if used_err(c::Errcode::btree_node_validate_err_csum) {
             prt!(&mut buf, "checksum error, no good replica: read as is, contents unverified");
         } else {
             prt!(&mut buf, "repair success");
@@ -869,7 +869,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         buf.newline();
 
         /* the replica we're using lost keys: the btree lost data */
-        if used && used_err(c::Errcode::BCH_ERR_btree_node_validate_err_keys_lost) {
+        if used && used_err(c::Errcode::btree_node_validate_err_keys_lost) {
             let _ = btree_lost_data(fs, &mut buf, btree);
         }
     } else {
@@ -1027,7 +1027,7 @@ impl Fs {
 
         let ret = if b.flags.read_error() {
             let _ = self.btree_node_transition_state(b, c::BtreeNodeCacheState::FREEABLE);
-            Err(self.err(c::Errcode::BCH_ERR_btree_node_read_error))
+            Err(self.err(c::Errcode::btree_node_read_error))
         } else {
             self.btree_set_root_for_read(b);
             Ok(())
@@ -1062,7 +1062,7 @@ impl<'f> ReplicaRead<'f> {
         let ptr_bit = dev_ptr_bit(fs, k, pick.ptr.dev().into());
 
         let ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into())
-            .ok_or_else(|| fs.err(c::Errcode::BCH_ERR_device_offline))?;
+            .ok_or_else(|| fs.err(c::Errcode::device_offline))?;
 
         let bytes = fs.opts.btree_node_size.get() as usize;
         let mut bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
@@ -1127,7 +1127,7 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
     }
 
     let fs = m.trans().fs();
-    let write = fs.writes.tryget_live().ok_or_else(|| fs.err(c::Errcode::BCH_ERR_erofs_no_writes))?;
+    let write = fs.writes.tryget_live().ok_or_else(|| fs.err(c::Errcode::erofs_no_writes))?;
     // the task holds it, and its write ref: going read-only waits for that
     let fs_ref = unsafe { BackRef::new(fs) };
     let fs = unsafe { fs_ref.get() };

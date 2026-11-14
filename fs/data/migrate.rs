@@ -65,7 +65,7 @@ use crate::format::{Btree, DataType, MemberState, ErrorKeyReason, BkeyType};
 /// yet, and has backpointers of its own for the next scan.
 fn unless_overwritten<T>(r: Result<Option<T>, BchError>) -> Result<Option<T>, BchError> {
     match r {
-        Err(e) if e.matches(Errcode::BCH_ERR_backpointer_to_overwritten_btree_node) => Ok(None),
+        Err(e) if e.matches(Errcode::backpointer_to_overwritten_btree_node) => Ok(None),
         r => r,
     }
 }
@@ -101,7 +101,7 @@ impl DevDrop<'_> {
         let durability = n.as_sc().durability(t)?.total;
         if (durability == 0 && self.flags & lost == 0) || (durability < replicas && self.flags & degraded == 0) {
             prt!(self.err, "cannot drop device without degrading/losing data\n  {}\n", k.to_text(fs));
-            return fs.throw(Errcode::BCH_ERR_remove_would_lose_data);
+            return fs.throw(Errcode::remove_would_lose_data);
         }
 
         if n.as_sc().can_read(fs) {
@@ -188,11 +188,11 @@ impl DevDrop<'_> {
 
         if nr_good < u32::from(v.nr_blocks) && self.flags & c::BCH_FORCE_IF_DATA_DEGRADED == 0 {
             prt!(self.err, "cannot drop device without degrading\n  {}\n", k.to_text(fs));
-            return fs.throw(Errcode::BCH_ERR_remove_would_lose_data);
+            return fs.throw(Errcode::remove_would_lose_data);
         }
         if nr_good < v.nr_data() && self.flags & c::BCH_FORCE_IF_DATA_LOST == 0 {
             prt!(self.err, "cannot drop device without losing data\n  {}\n", k.to_text(fs));
-            return fs.throw(Errcode::BCH_ERR_remove_would_lose_data);
+            return fs.throw(Errcode::remove_would_lose_data);
         }
 
         // More blocks gone than it can rebuild from: their extents have no
@@ -230,7 +230,7 @@ impl DevDrop<'_> {
         }
 
         let Some(counts) = v.blockcounts() else {
-            return fs.throw(Errcode::BCH_ERR_stripe_unknown_csum_type);
+            return fs.throw(Errcode::stripe_unknown_csum_type);
         };
         let sectors: i64 = counts.iter().map(|n| i64::from(n.get())).sum();
 
@@ -274,7 +274,7 @@ impl DevDrop<'_> {
 
     fn metadata(&mut self, fs: &Fs, progress: &Progress<'_>) -> Result<(), BchError> {
         if self.flags & c::BCH_FORCE_IF_METADATA_LOST != 0 {
-            return fs.throw(Errcode::BCH_ERR_remove_with_metadata_missing_unimplemented);
+            return fs.throw(Errcode::remove_with_metadata_missing_unimplemented);
         }
 
         let trans = crate::btree_trans!(fs);
@@ -385,7 +385,7 @@ pub(crate) fn dev_data_drop_by_backpointers(fs: &Fs, ca: &Dev, mut d: DevDrop<'_
             if nr_stalled >= MAX_STALLED {
                 prt!(d.err, "bch2_dev_data_drop_by_backpointers(): no progress after {nr_stalled} scans, \
                              {data_buckets} data buckets remain\n");
-                return fs.throw(Errcode::BCH_ERR_remove_by_backpointer_did_not_terminate);
+                return fs.throw(Errcode::remove_by_backpointer_did_not_terminate);
             }
         }
 
@@ -430,5 +430,5 @@ pub(crate) fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchE
     }
 
     prt!(d.err, "bch2_dev_remove_stripes(): stripes still open after {MAX_ITER} iterations\n");
-    fs.throw(Errcode::BCH_ERR_remove_stripes_did_not_terminate)
+    fs.throw(Errcode::remove_stripes_did_not_terminate)
 }

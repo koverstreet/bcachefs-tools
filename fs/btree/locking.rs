@@ -376,7 +376,7 @@ impl BtreeTrans<'_> {
         let ret = lock(&self.locking_wait, &mut || bch2_six_check_for_deadlock(self, b)).map_err(|e| {
             assert!(!lock_may_not_fail, "a lock that may not fail failed: {}", BchError::from_raw(e).msg());
             if e == -(c::ENOMEM as c_int) {
-                self.restart(Errcode::BCH_ERR_transaction_restart_lock_waitlist_alloc)
+                self.restart(Errcode::transaction_restart_lock_waitlist_alloc)
             } else {
                 BchError::from_raw(e)
             }
@@ -633,9 +633,9 @@ impl BtreeTrans<'_> {
          * the node that we failed to relock:
          */
         let err = if upgrade {
-            Errcode::BCH_ERR_no_btree_node_upgrade
+            Errcode::no_btree_node_upgrade
         } else {
-            Errcode::BCH_ERR_no_btree_node_relock
+            Errcode::no_btree_node_relock
         };
         for level in &mut paths[idx].l[..=l] {
             level.b = NodePtr::err(err.into());
@@ -760,7 +760,7 @@ impl BtreeTrans<'_> {
                 }),
                 None => self.fs().event_inc(events::trans_restart_relock_path),
             }
-            self.restart(Errcode::BCH_ERR_transaction_restart_relock_path)
+            self.restart(Errcode::transaction_restart_relock_path)
         });
 
         self.verify_locks(paths);
@@ -818,7 +818,7 @@ impl BtreeTrans<'_> {
 
         path.bits.set_locks_want(old_locks_want.max(new_locks_want) as u8);
 
-        let Err(f) = self.path_get_locks(paths, idx, true, Some(Errcode::BCH_ERR_transaction_restart_upgrade)) else {
+        let Err(f) = self.path_get_locks(paths, idx, true, Some(Errcode::transaction_restart_upgrade)) else {
             self.verify_locks(paths);
             return Ok(());
         };
@@ -889,7 +889,7 @@ impl BtreeTrans<'_> {
         });
 
         self.verify_locks(paths);
-        Err(Errcode::BCH_ERR_transaction_restart_upgrade.into())
+        Err(Errcode::transaction_restart_upgrade.into())
     }
 
     pub(crate) fn path_downgrade_to(&self, paths: &mut Paths<'_>, idx: PathIdx, new_locks_want: usize) {
@@ -986,7 +986,7 @@ impl BtreeTrans<'_> {
             }
 
             let old_path = tracing.then(|| PathSnapshot::of(&paths[i]));
-            if let Err(f) = self.path_get_locks(paths, i, false, Some(Errcode::BCH_ERR_transaction_restart_relock)) {
+            if let Err(f) = self.path_get_locks(paths, i, false, Some(Errcode::transaction_restart_relock)) {
                 if let Some(old_path) = old_path {
                     self.fs().event_inc_trace(events::trans_restart_relock, |out| {
                         prt!(out, "{} ", self.fn_name());
@@ -999,7 +999,7 @@ impl BtreeTrans<'_> {
                 }
                 self.unlock_paths(paths);
                 self.verify_locks(paths);
-                return Err(Errcode::BCH_ERR_transaction_restart_relock.into());
+                return Err(Errcode::transaction_restart_relock.into());
             }
         }
 
@@ -1078,7 +1078,7 @@ impl BtreeTrans<'_> {
         for i in self.path_idxs() {
             let path = &mut paths[i];
             if path.cached() && !path.locked(0) {
-                path.l[0].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_srcu_reset.into());
+                path.l[0].b = NodePtr::err(Errcode::no_btree_node_srcu_reset.into());
             }
         }
 

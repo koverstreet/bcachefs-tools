@@ -44,13 +44,13 @@ fn add_nlink(fs: &Fs, t: &mut KVVec<Nlink>, inum: u64, snapshot: u32) -> Result<
 
         if t.reserve(new_size - t.len()).is_err() {
             bch_err!(fs, "fsck: error allocating memory for nlink_table, size {}", new_size);
-            return fs.throw(Errcode::BCH_ERR_ENOMEM_fsck_add_nlink);
+            return fs.throw(Errcode::ENOMEM_fsck_add_nlink);
         }
     }
 
     // Can't fail: there's room.
     t.push(Nlink { inum, snapshot, count: 0 })
-        .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_fsck_add_nlink))
+        .map_err(|_| fs.err(Errcode::ENOMEM_fsck_add_nlink))
 }
 
 fn inc_link(

@@ -417,7 +417,7 @@ impl Fs {
     fn chacha20_key(&self) -> Result<&c::bch_key, BchError> {
         let Some(key) = self.encryption_key() else {
             crate::fs_inconsistent!(self, "attempting to encrypt without encryption key");
-            return self.throw(Errcode::BCH_ERR_no_encryption_key);
+            return self.throw(Errcode::no_encryption_key);
         };
         Ok(key)
     }
@@ -501,7 +501,7 @@ impl Fs {
                                  crc_old.csum.hi.get(), crc_old.csum.lo.get(), merged.hi.get(), merged.lo.get());
                 crate::warn_on!(true);
             }
-            return fs.throw(Errcode::BCH_ERR_recompute_checksum);
+            return fs.throw(Errcode::recompute_checksum);
         }
 
         let mut crc_nonce = u32::from(crc_old.nonce);
@@ -534,7 +534,7 @@ impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
     fn validate(_sb: &c::bch_sb<Unvalidated>, crypt: &c::bch_sb_field_crypt<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let kdf = crypt.kdf_type();
-        sb_err_on!(err, kdf != c::KdfType::scrypt, BCH_ERR_invalid_sb_crypt,
+        sb_err_on!(err, kdf != c::KdfType::scrypt, invalid_sb_crypt,
                    "bad kdf type {kdf}")?;
         Ok(())
     }
@@ -582,7 +582,7 @@ impl c::bch_sb_field_crypt {
         if n_log >= 64 || r_log >= 32 || p_log >= 32 {
             std::eprintln!("cannot derive a key from a passphrase: scrypt parameters out of range \
                             (N=2^{n_log}, r=2^{r_log}, p=2^{p_log})");
-            return Err(Errcode::BCH_ERR_crypt_kdf_failed.into());
+            return Err(Errcode::crypt_kdf_failed.into());
         }
         let r = 1u64 << r_log;
         let p = 1u64 << p_log;
@@ -593,7 +593,7 @@ impl c::bch_sb_field_crypt {
                  parameters (N=1, r={r}, p={p}; N must be at least 2). Its master key\n\
                  is stored unencrypted, and whatever is setting a passphrase did not\n\
                  initialize the KDF parameters first.");
-            return Err(Errcode::BCH_ERR_EINVAL_crypt_no_kdf_params.into());
+            return Err(Errcode::EINVAL_crypt_no_kdf_params.into());
         }
 
         let salt = b"bcache\0";
@@ -606,7 +606,7 @@ impl c::bch_sb_field_crypt {
         if ret != 0 {
             std::eprintln!("scrypt returned {ret} ({}) deriving a key with N={}, r={r}, p={p}",
                            std::io::Error::last_os_error(), 1u64 << n_log);
-            return Err(Errcode::BCH_ERR_crypt_kdf_failed.into());
+            return Err(Errcode::crypt_kdf_failed.into());
         }
         Ok(key)
     }
@@ -681,7 +681,7 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
             Ok(key) => key,
             Err(e) => {
                 eprintln!("error deriving key from passphrase: {e}");
-                return Some(Err(BchError::from(c::Errcode::BCH_ERR_crypt_kdf_failed)));
+                return Some(Err(BchError::from(c::Errcode::crypt_kdf_failed)));
             }
         };
         let mut sb_key = crypt.key.clone();
@@ -703,7 +703,7 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
         Err(e)                => format!("error reading passphrase: {e}"),
     };
     eprintln!("{why}");
-    Err(c::Errcode::BCH_ERR_no_encryption_key.into())
+    Err(c::Errcode::no_encryption_key.into())
 }
 
 /// The user's key, for @sb: from the keyring - or in userspace, failing
@@ -786,7 +786,7 @@ pub fn encryption_init(fs: &Fs, user_key: Option<&c::bch_key>) -> Result<(), Bch
 pub fn disable_encryption(fs: &Fs) -> Result<(), BchError> {
     let mut sb = fs.sb_lock();
     let Some(crypt) = sb.field::<c::bch_sb_field_crypt>() else {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_disable_encryption_no_crypt);
+        return fs.throw(Errcode::EINVAL_disable_encryption_no_crypt);
     };
     // XXX: as C had it - but a key that isn't encrypted is the one that has
     // nothing to do, so this looks inverted
@@ -824,7 +824,7 @@ pub fn enable_encryption(fs: &Fs, keyed: bool) -> Result<(), BchError> {
     let u64s = (size_of::<c::bch_sb_field_crypt>() / size_of::<u64>()) as u32;
     match fs.sb_resize(&mut sb).field_get_minsize::<c::bch_sb_field_crypt>(u64s) {
         Some(crypt) => crypt.key = sb_key,
-        None => return fs.throw(Errcode::BCH_ERR_ENOSPC_sb_crypt),
+        None => return fs.throw(Errcode::ENOSPC_sb_crypt),
     }
     sb.sb_mut().set_encryption_type(1);
 

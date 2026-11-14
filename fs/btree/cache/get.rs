@@ -88,7 +88,7 @@ impl BtreeTrans<'_> {
             prt!(out, "{}\n", self.fn_name());
             bch2_btree_path_to_text(out, self, idx, &paths[idx]);
         });
-        self.restart(Errcode::BCH_ERR_transaction_restart_lock_node_reused)
+        self.restart(Errcode::transaction_restart_lock_node_reused)
     }
 
     #[inline(never)]
@@ -134,7 +134,7 @@ impl BtreeTrans<'_> {
             let (b, mut held) = match fs.btree_cache_find(k) {
                 None => {
                     if unlikely(flags.contains(BtreeIterFlags::NOFILL)) {
-                        return Err(fs.err(Errcode::BCH_ERR_no_btree_node_nofill));
+                        return Err(fs.err(Errcode::no_btree_node_nofill));
                     }
 
                     /*
@@ -157,11 +157,11 @@ impl BtreeTrans<'_> {
                     self.locking_hash_val.set(hash_val);
                     self.locking_root_id.set(Btree(u32::MAX));
                     let held = match self.node_lock(paths, idx, &b.c, level, lock_type) {
-                        Err(e) if e.matches(Errcode::BCH_ERR_transaction_restart) => return Err(e),
+                        Err(e) if e.matches(Errcode::transaction_restart) => return Err(e),
                         r => r,
                     };
 
-                    if unlikely(held.as_ref().is_err_and(|e| *e == Errcode::BCH_ERR_no_btree_node_reused.into()) ||
+                    if unlikely(held.as_ref().is_err_and(|e| *e == Errcode::no_btree_node_reused.into()) ||
                                 b.hash_val() != hash_val ||
                                 b.c.level as usize != level ||
                                 race_fault()) {
@@ -215,7 +215,7 @@ impl BtreeTrans<'_> {
             }
 
             drop(held);
-            return Err(Errcode::BCH_ERR_btree_node_read_err_cached.into());
+            return Err(Errcode::btree_node_read_err_cached.into());
         }
 
         prefetch_aux(b);
@@ -280,7 +280,7 @@ impl BtreeTrans<'_> {
         self.locking_root_id.set(Btree(u32::MAX));
         let held = match self.node_lock(paths, idx, &b.c, level, lock_type) {
             Ok(held) => held,
-            Err(e) if e == Errcode::BCH_ERR_no_btree_node_reused.into() =>
+            Err(e) if e == Errcode::no_btree_node_reused.into() =>
                 return self.btree_node_get_slowpath(paths, idx, k, level, lock_type, flags),
             Err(e) => return Err(e),
         };
@@ -363,7 +363,7 @@ impl BtreeTrans<'_> {
 
         self.node_unlock_write(paths, idx, level);
         self.node_unlock(paths, idx, level);
-        paths[idx].l[level].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_drop.into());
+        paths[idx].l[level].b = NodePtr::err(Errcode::no_btree_node_drop.into());
         self.node_forget(paths, b);
         Ok(())
     }

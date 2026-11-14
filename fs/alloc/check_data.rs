@@ -71,7 +71,7 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: Btree, level: u32, 
             cached(node_iter.iter(), b.expect("the node a btree node pointer points to"))?;
             return Ok(true);
         }
-        Err(e) if e.matches(Errcode::BCH_ERR_no_btree_node_nofill) => {}
+        Err(e) if e.matches(Errcode::no_btree_node_nofill) => {}
         Err(e) => return Err(e),
     }
 
@@ -314,7 +314,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
 
         if !cached && data_type == DataType::btree && bucket_type == DataType::sb {
             bch_err!(fs, "btree and superblock in the same bucket - cannot repair");
-            return fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented);
+            return fs.throw(Errcode::fsck_repair_unimplemented);
         }
 
         // Data in a superblock bucket: every superblock write lands on it, so
@@ -521,5 +521,5 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
     }
 
     t.btree_node_update_key_at_pos_raw(btree, level, new)?;
-    Err(t.restart(Errcode::BCH_ERR_transaction_restart_commit))
+    Err(t.restart(Errcode::transaction_restart_commit))
 }

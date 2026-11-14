@@ -415,8 +415,8 @@ impl<'t> BtreeIter<'t> {
             let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
                 keys.begin(t, paths, self)?;
                 match self.key(t, paths, keys, &mut f) {
-                    Err(e) if e.matches(Errcode::BCH_ERR_fc_continue) => Ok(Some(Step::Next)),
-                    Err(e) if e.matches(Errcode::BCH_ERR_fc_break)    => Ok(Some(Step::Break(()))),
+                    Err(e) if e.matches(Errcode::fc_continue) => Ok(Some(Step::Next)),
+                    Err(e) if e.matches(Errcode::fc_break)    => Ok(Some(Step::Break(()))),
                     Ok(Some(step)) => {
                         // a spent attempt's step has nothing queued: what
                         // ignore_restarts() ran committed for itself

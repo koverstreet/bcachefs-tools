@@ -434,7 +434,7 @@ pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_sna
     }
 
     t.btree_node_edit_key(iter.btree(), level, iter.pos(), |n| n.set_needs_reconcile(t, s, opts, ctx, 0))?;
-    Err(t.restart(c::Errcode::BCH_ERR_transaction_restart_commit))
+    Err(t.restart(c::Errcode::transaction_restart_commit))
 }
 
 /// @k's reconcile state taken off - its reconcile entries, and the padding

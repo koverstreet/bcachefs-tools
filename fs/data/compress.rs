@@ -186,8 +186,8 @@ fn zstd_errcode(code: u32) -> e {
     macro_rules! map {
         ($(($n:ident, $nr:literal)),* $(,)?) => { ::paste::paste! {
             match code {
-                $(c::[<ZSTD_ErrorCode_ZSTD_error_ $n>] => e::[<BCH_ERR_ZSTD_error_ $n>],)*
-                _ => e::BCH_ERR_ZSTD_error_unknown,
+                $(c::[<ZSTD_ErrorCode_ZSTD_error_ $n>] => e::[<ZSTD_error_ $n>],)*
+                _ => e::ZSTD_error_unknown,
             }
         } };
     }
@@ -408,7 +408,7 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice
     if unlikely(!fs.compress.workspace[opt].is_made()) {
         if !fsck_err!(fs, id::compression_type_not_marked_in_sb,
                       "compression type {} set but not marked in superblock", t)? {
-            return fs.throw(e::BCH_ERR_compression_workspace_not_initialized);
+            return fs.throw(e::compression_workspace_not_initialized);
         }
         check_set_has_compressed_data(fs, opt as u8)?;
     }
@@ -432,8 +432,8 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice
             CompressionType::lz4_old | CompressionType::lz4 => {
                 let (s, d) = (src_len as c_int, dst_len as c_int);
                 if c::LZ4_decompress_safe_partial(src.cast(), dst.cast(), s, d, d) != d {
-                    return fs.throw(if t == CompressionType::lz4 { e::BCH_ERR_decompress_lz4 }
-                                    else { e::BCH_ERR_decompress_lz4_old });
+                    return fs.throw(if t == CompressionType::lz4 { e::decompress_lz4 }
+                                    else { e::decompress_lz4_old });
                 }
             }
             CompressionType::gzip => {
@@ -443,10 +443,10 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice
                 c::zlib_inflateEnd(&mut strm);
 
                 if ret != c::Z_STREAM_END as c_int {
-                    return fs.throw(e::BCH_ERR_decompress_gzip);
+                    return fs.throw(e::decompress_gzip);
                 }
                 if strm.avail_out != 0 {
-                    return fs.throw(e::BCH_ERR_decompress_gzip_size_mismatch);
+                    return fs.throw(e::decompress_gzip_size_mismatch);
                 }
             }
             CompressionType::zstd => {
@@ -455,7 +455,7 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice
                     _ => usize::MAX,
                 };
                 if real_src_len > src_len.saturating_sub(4) {
-                    return fs.throw(e::BCH_ERR_decompress_zstd_src_len_bad);
+                    return fs.throw(e::decompress_zstd_src_len_bad);
                 }
 
                 let ctx = c::zstd_init_dctx(ws, c::zstd_dctx_workspace_bound());
@@ -465,7 +465,7 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice
                         return fs.throw(zstd_errcode(c::zstd_get_error_code(ret)));
                     }
                     bch_err!(fs, "zstd decompress error: expected {dst_len} bytes, got {ret}");
-                    return fs.throw(e::BCH_ERR_decompress_zstd_size_mismatch);
+                    return fs.throw(e::decompress_zstd_size_mismatch);
                 }
             }
             _ => panic!("decompressing compression type {}", t.0),
@@ -505,7 +505,7 @@ pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: c::bch
     assert_eq!(src.len(), crc.compressed_size << 9, "decompressing a bio that isn't the compressed extent");
 
     if (crc.uncompressed_size.max(crc.compressed_size) as usize) << 9 > extent_max(fs) {
-        return decompress_err(fs, fs.throw(e::BCH_ERR_decompress_exceeded_max_encoded_extent));
+        return decompress_err(fs, fs.throw(e::decompress_exceeded_max_encoded_extent));
     }
 
     let dst_buf = if dst.len() as usize == dst_len {
@@ -829,13 +829,13 @@ fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: SbFeatures) -> Result<
 
     let pool = |p: &Late<Mempool<KVmalloc>, SbLock>, size, err: e| p.init(sb, || Mempool::kvmalloc(1, size)).map_err(|_| fs.err(err));
     let pools = &fs.compress;
-    pool(&pools.bounce[READ], extent_max(fs), e::BCH_ERR_ENOMEM_compression_bounce_read_init)?;
-    pool(&pools.bounce[WRITE], extent_max(fs), e::BCH_ERR_ENOMEM_compression_bounce_write_init)?;
+    pool(&pools.bounce[READ], extent_max(fs), e::ENOMEM_compression_bounce_read_init)?;
+    pool(&pools.bounce[WRITE], extent_max(fs), e::ENOMEM_compression_bounce_write_init)?;
 
     for (t, compress, decompress) in types.into_iter().filter(|&(t, ..)| has(t)) {
-        pool(&pools.workspace[t], compress, e::BCH_ERR_ENOMEM_compression_workspace_init)?;
+        pool(&pools.workspace[t], compress, e::ENOMEM_compression_workspace_init)?;
         if decompress != 0 {
-            pool(&pools.decompress[t], decompress, e::BCH_ERR_ENOMEM_compression_workspace_init)?;
+            pool(&pools.decompress[t], decompress, e::ENOMEM_compression_workspace_init)?;
         }
     }
     Ok(())
@@ -861,7 +861,7 @@ fn opt_parse(val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchE
         if let Some(err) = err {
             writeln!(err, "compression type required");
         }
-        return Err(e::BCH_ERR_EINVAL_opt_parse_str_required.into());
+        return Err(e::EINVAL_opt_parse_str_required.into());
     };
     let colon = s.iter().position(|&b| b == b':');
 
@@ -905,7 +905,7 @@ fn opt_validate(v: u64, err: Option<&mut Printbuf>) -> Result<(), BchError> {
         if let Some(err) = err {
             write!(err, "invalid compression opt {v}");
         }
-        return Err(e::BCH_ERR_invalid_sb_opt_compression.into());
+        return Err(e::invalid_sb_opt_compression.into());
     }
     Ok(())
 }

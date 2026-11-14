@@ -78,7 +78,7 @@ pub fn get_key(
     let mut ret = t.bkey_get_key::<c::Subvolume>(Btree::subvolumes, pos(0, subvol as u64),
                                                    BtreeIterFlags::CACHED);
     if matches!(&ret, Ok(k) if k.v.state_decoded() == Some(c::SubvolumeState::deleted)) {
-        ret = Err(fs.err(Errcode::BCH_ERR_ENOENT_subvolume_deleted));
+        ret = Err(fs.err(Errcode::ENOENT_subvolume_deleted));
     }
     if let Err(e) = &ret {
         if e.matches(c::ENOENT) && inconsistent_if_not_found {
@@ -152,7 +152,7 @@ pub fn require_no_children(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), 
                                   BtreeIterFlags::empty());
     match iter.peek(t)? {
         Some(k) if k.k.p.inode == subvol as u64 =>
-            Err(t.fs().err(Errcode::BCH_ERR_ENOTEMPTY_subvol_not_empty)),
+            Err(t.fs().err(Errcode::ENOTEMPTY_subvol_not_empty)),
         _ => Ok(()),
     }
 }
@@ -420,7 +420,7 @@ fn check_subvol<'a, 't>(
             fsck_err_report!(fs, id::subvol_state_bad,
                              "subvolume has invalid state {raw:#x} (nearest codeword {nearest} is {dist} bits away):\n{}",
                              s.to_text(fs));
-            return fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented);
+            return fs.throw(Errcode::fsck_repair_unimplemented);
         };
 
         if fix {
@@ -461,7 +461,7 @@ fn check_subvol<'a, 't>(
                 fsck_err_report!(fs, id::snapshot_subvol_backref_wrong,
                                  "snapshot {snapid} is claimed by subvolume {backref}, which it backrefs, and also by {id}:\n{}\n{}",
                                  s.to_text(fs), n.v());
-                return fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented);
+                return fs.throw(Errcode::fsck_repair_unimplemented);
             }
             Err(e) if !e.matches(c::ENOENT) => return Err(e),
             _ => {}
@@ -475,7 +475,7 @@ fn check_subvol<'a, 't>(
         fsck_err_report!(fs, id::subvol_snapshot_not_leaf,
                          "subvolume points to interior snapshot node:\n{}\n{}",
                          s.to_text(fs), n.v());
-        return fs.throw(Errcode::BCH_ERR_fsck_repair_unimplemented);
+        return fs.throw(Errcode::fsck_repair_unimplemented);
     }
 
     if s.v().state_decoded() == Some(c::SubvolumeState::unlinked) {
@@ -809,8 +809,8 @@ pub fn create(
     let mut dst_iter = BtreeIter::uninit();
     match t.bkey_get_empty_slot(&mut dst_iter, Btree::subvolumes, POS_MIN,
                                 pos(0, u32::MAX as u64)) {
-        Err(e) if e.matches(Errcode::BCH_ERR_ENOSPC_btree_slot) =>
-            return fs.throw(Errcode::BCH_ERR_ENOSPC_subvolume_create),
+        Err(e) if e.matches(Errcode::ENOSPC_btree_slot) =>
+            return fs.throw(Errcode::ENOSPC_subvolume_create),
         r => r?,
     }
     let new_id = dst_iter.pos().offset as u32;
@@ -903,7 +903,7 @@ fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
 
         let Some(k) = k.arm::<inode::Inodes>() else {
             bch_err!(fs, "root inode not found");
-            return fs.throw(Errcode::BCH_ERR_ENOENT_inode);
+            return fs.throw(Errcode::ENOENT_inode);
         };
 
         let mut inode = inode::unpack(fs, k);

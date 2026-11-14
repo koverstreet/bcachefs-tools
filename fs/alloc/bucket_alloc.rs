@@ -212,7 +212,7 @@ impl TransAttempt<'_, '_> {
         let iter = BtreeIter::new(self, Btree::freespace, pos(ca.dev_idx.into(), p),
                                   BtreeIterFlags::NOPRESERVE);
         let (generation, journal_seq_empty) = match check_freespace_key(self, &iter, FreespaceCheck::Allocator) {
-            Err(e) if e == Errcode::BCH_ERR_bucket_not_allocatable.into() => return Ok(None),
+            Err(e) if e == Errcode::bucket_not_allocatable.into() => return Ok(None),
             r => r?,
         };
 
@@ -506,15 +506,15 @@ impl TransAttempt<'_, '_> {
                     !req.flags.contains(c::WriteFlags::alloc_nowait) &&
                     !req.will_retry();
                 let err = if !may_block {
-                    Errcode::BCH_ERR_freelist_empty
+                    Errcode::freelist_empty
                 } else if fs.alloc_should_bail(ca, req) {
-                    Errcode::BCH_ERR_bucket_alloc_no_progress
+                    Errcode::bucket_alloc_no_progress
                 } else if !waiting {
                     req.closure_wait(&fs.allocator.freelist_wait);
                     waiting = true;
                     continue;
                 } else {
-                    Errcode::BCH_ERR_bucket_alloc_blocked
+                    Errcode::bucket_alloc_blocked
                 };
                 break (Err(fs.err(err)), wake_counter_snapshot, avail);
             }
@@ -523,7 +523,7 @@ impl TransAttempt<'_, '_> {
                 ca.alloc_wake();
             }
             let ob = self.bucket_alloc_from(ca, req, freespace)
-                .and_then(|ob| ob.ok_or_else(|| fs.err(Errcode::BCH_ERR_no_buckets_found)));
+                .and_then(|ob| ob.ok_or_else(|| fs.err(Errcode::no_buckets_found)));
             break (ob, wake_counter_snapshot, avail);
         };
 
@@ -538,11 +538,11 @@ impl TransAttempt<'_, '_> {
 
                 fs.event_inc_trace(events::bucket_alloc, |out| fs.bucket_alloc_to_text(out, ca, req, Ok(ob)));
             }
-            Err(e) if e.matches(Errcode::BCH_ERR_open_buckets_empty) ||
-                      e.matches(Errcode::BCH_ERR_open_bucket_alloc_blocked) => {
+            Err(e) if e.matches(Errcode::open_buckets_empty) ||
+                      e.matches(Errcode::open_bucket_alloc_blocked) => {
                 fs.event_inc_trace(events::open_bucket_alloc_fail, |out| fs.fs_open_buckets_to_text(out));
             }
-            Err(e) if !e.matches(Errcode::BCH_ERR_transaction_restart) && !req.will_retry() => {
+            Err(e) if !e.matches(Errcode::transaction_restart) && !req.will_retry() => {
                 fs.event_inc_trace(events::bucket_alloc_fail, |out| fs.bucket_alloc_to_text(out, ca, req, Err(*e)));
             }
             Err(_) => {}

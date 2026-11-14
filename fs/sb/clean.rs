@@ -73,7 +73,7 @@ fn validate_late(fs: &Fs, version: MetadataVersion, big_endian: bool, f: &mut Se
     for e in UnvalidatedEntriesMut::<c::jset_entry<Unvalidated>>::new(&mut bytes_of_mut(f)[SECTION_HEAD..]) {
         // whole: sb_field_validate() has repaired or refused a section with
         // one overrunning its end
-        let e = e.map_err(|_| BchError::from(Errcode::BCH_ERR_invalid_sb_clean))?;
+        let e = e.map_err(|_| BchError::from(Errcode::invalid_sb_clean))?;
         journal_entry_validate(fs, bytes_of_mut(e), version, big_endian, from)?;
     }
     Ok(())
@@ -102,12 +102,12 @@ impl Fs {
                 sb.sb_mut().set_clean(false);
                 sb.published().clean.set(0);
             }
-            return Err(Errcode::BCH_ERR_invalid_sb_clean.into());
+            return Err(Errcode::invalid_sb_clean.into());
         };
 
         let bytes = f.as_bytes();
         let mut copy = KVVec::from_elem(0u64, bytes.len() / size_of::<u64>())
-            .map_err(|_| BchError::from(Errcode::BCH_ERR_ENOMEM_read_superblock_clean))?;
+            .map_err(|_| BchError::from(Errcode::ENOMEM_read_superblock_clean))?;
         copy.as_mut_bytes().copy_from_slice(bytes);
 
         // SAFETY: a copy of a validated section, as long as its count says

@@ -21,7 +21,7 @@ use crate::util::alloc::KVVec;
 use crate::util::Printbuf;
 
 fn invalid() -> BchError {
-    Errcode::BCH_ERR_invalid_sb_journal.into()
+    Errcode::invalid_sb_journal.into()
 }
 
 /// @runs are on the device and don't overlap - so they total no more than
@@ -36,12 +36,12 @@ fn runs_validate<S: SbState>(sb: &c::bch_sb<S>, mut runs: KVVec<Range<u64>>, err
     };
     let m = sb_member(sb, S::head(sb).dev_idx.into()).unwrap_or_default();
 
-    sb_err_on!(err, first.start == 0, BCH_ERR_invalid_sb_journal, "journal bucket at sector 0")?;
+    sb_err_on!(err, first.start == 0, invalid_sb_journal, "journal bucket at sector 0")?;
 
-    sb_err_on!(err, first.start < m.first_bucket.get().into(), BCH_ERR_invalid_sb_journal,
+    sb_err_on!(err, first.start < m.first_bucket.get().into(), invalid_sb_journal,
                "journal bucket {} before first bucket {}", first.start, m.first_bucket.get())?;
 
-    sb_err_on!(err, last.end > m.nbuckets.get(), BCH_ERR_invalid_sb_journal,
+    sb_err_on!(err, last.end > m.nbuckets.get(), invalid_sb_journal,
                "journal bucket {} past end of device (nbuckets {})", last.end - 1, m.nbuckets.get())?;
 
     if let Some(w) = runs.windows(2).find(|w| w[0].end > w[1].start) {
@@ -119,7 +119,7 @@ pub(crate) fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets
     let runs = || buckets.chunk_by(|a, b| a + 1 == *b);
     let u64s = sb_field_u64s::<c::bch_sb_field_journal_v2>(runs().count());
     let Some(j) = dev_sb.field_resize::<c::bch_sb_field_journal_v2>(u64s) else {
-        return fs.throw(Errcode::BCH_ERR_ENOSPC_sb_journal);
+        return fs.throw(Errcode::ENOSPC_sb_journal);
     };
 
     for (d, run) in j.d.iter_mut().zip(runs()) {

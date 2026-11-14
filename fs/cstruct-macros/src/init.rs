@@ -51,7 +51,7 @@
 //! field, as a static in ReffedWork's generic code wouldn't be.
 
 use proc_macro2::{Literal, TokenStream, TokenTree};
-use quote::{format_ident, quote, ToTokens as _};
+use quote::{quote, ToTokens as _};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Data, DataStruct, DeriveInput, Error, FnArg, GenericArgument, Ident, PathArguments, Token,
           Type};
@@ -210,14 +210,14 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
 }
 
 /// #[ATTR(EXPR)] or #[ATTR(EXPR, ERRCODE)]'s initializer: EXPR, or EXPR
-/// failing with BCH_ERR_ERRCODE - by init_or(). #[late]'s too.
+/// failing with Errcode::ERRCODE - by init_or(). #[late]'s too.
 pub(crate) fn initializer(a: &Attribute, name: &Ident) -> syn::Result<TokenStream> {
     let toks: Vec<TokenTree> = a.parse_args::<TokenStream>()?.into_iter().collect();
     // ERRCODE is an ident after the last comma outside brackets - a comma in
     // EXPR's turbofish is followed by more than that
     let errcode = match toks.iter().rposition(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
         Some(i) if i > 0 && i + 2 == toks.len() => match &toks[i + 1] {
-            TokenTree::Ident(err) => Some((i, format_ident!("BCH_ERR_{err}"))),
+            TokenTree::Ident(err) => Some((i, err.clone())),
             _ => None,
         },
         _ => None,

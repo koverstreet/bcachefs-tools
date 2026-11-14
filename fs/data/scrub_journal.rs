@@ -190,7 +190,7 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
         }
         match ReplicaRead::new(fs, k, dev) {
             Ok(Some(r)) => reads.push(r),
-            Ok(None)    => ret = ret.and(fs.throw(c::Errcode::BCH_ERR_no_device_to_read_from)),
+            Ok(None)    => ret = ret.and(fs.throw(c::Errcode::no_device_to_read_from)),
             Err(e)      => ret = ret.and(Err(e)),
         }
     }

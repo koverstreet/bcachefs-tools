@@ -255,7 +255,7 @@ fn groups_reserve(sb: &mut (impl SbResize + ?Sized), n: usize) -> Result<(), Bch
 
     let u64s = sb_field_u64s::<c::bch_sb_field_disk_groups>(nr + n - free);
     let groups = sb.field_resize::<c::bch_sb_field_disk_groups>(u64s)
-        .ok_or(BchError::from(Errcode::BCH_ERR_ENOSPC_disk_label_add))?;
+        .ok_or(BchError::from(Errcode::ENOSPC_disk_label_add))?;
 
     for g in &mut groups.entries[nr..] {
         g.flags0.set_deleted(true);
@@ -474,7 +474,7 @@ fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], s
 pub(crate) fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &[u8]) -> Result<(), BchError> {
     let v = dev_label_resolve(&mut fs.sb_resize(sb), name)?;
     // more groups than a member's 8 bit group field can name
-    sb.fs_member_mut(dev).set_group(v.try_into().map_err(|_| BchError::from(Errcode::BCH_ERR_ENOSPC_disk_label_add))?);
+    sb.fs_member_mut(dev).set_group(v.try_into().map_err(|_| BchError::from(Errcode::ENOSPC_disk_label_add))?);
     c::bch_sb_field_disk_groups::to_cpu(fs, sb)
 }
 
@@ -565,14 +565,14 @@ fn opt_target_parse(fs: &Fs, val: &[u8], err: Option<&mut Printbuf>) -> Result<T
         err.write_bytes(val);
         writeln!(err);
     }
-    fs.throw(Errcode::BCH_ERR_EINVAL_opt_target_parse_not_found)
+    fs.throw(Errcode::EINVAL_opt_target_parse_not_found)
 }
 
 /// A target's, a label's value: none is EINVAL, and the filesystem's names
 /// are needed.
 fn opt_parse_args<'a>(fs: Option<&'a Fs>, val: Option<&'a [u8]>) -> Result<(&'a Fs, &'a [u8]), BchError> {
     let val = val.ok_or(BchError::from(c::EINVAL))?;
-    let fs = fs.ok_or(BchError::from(Errcode::BCH_ERR_option_needs_open_fs))?;
+    let fs = fs.ok_or(BchError::from(Errcode::option_needs_open_fs))?;
     Ok((fs, val))
 }
 
@@ -616,7 +616,7 @@ pub const LABEL_OPT: OptFn = OptFn {
 // ── The superblock section ───────────────────────────────────────────────
 
 fn invalid() -> Result<(), BchError> {
-    Err(Errcode::BCH_ERR_invalid_sb_disk_groups.into())
+    Err(Errcode::invalid_sb_disk_groups.into())
 }
 
 /// Parents are walked, so must be in range; a deleted parent is allowed.
@@ -645,11 +645,11 @@ fn disk_groups_validate<S: SbState>(sb: &c::bch_sb<S>, groups: &[c::bch_disk_gro
     let live = || groups.iter().enumerate().filter(|(_, g)| !g.deleted());
 
     for (i, g) in live() {
-        sb_err_on!(err, g.label().is_empty(), BCH_ERR_invalid_sb_disk_groups, "label {i} empty")?;
+        sb_err_on!(err, g.label().is_empty(), invalid_sb_disk_groups, "label {i} empty")?;
     }
 
     for (i, g) in live() {
-        sb_err_on!(err, g.parent() as usize > nr, BCH_ERR_invalid_sb_disk_groups,
+        sb_err_on!(err, g.parent() as usize > nr, invalid_sb_disk_groups,
                    "label {i} has invalid parent {} (have {nr})", g.parent() - 1)?;
     }
 
@@ -695,7 +695,7 @@ impl SbFieldOps for c::bch_sb_field_disk_groups {
         let src = &groups.entries;
 
         sb.writer::<crate::field!(disk_groups)>().rebuild(src.len(), |dst| groups_to_cpu(dst, src, sb.sb()))
-            .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_disk_groups_to_cpu))
+            .map_err(|_| fs.err(Errcode::ENOMEM_disk_groups_to_cpu))
     }
 }
 
@@ -748,7 +748,7 @@ mod tests {
     fn validate(sb: &c::bch_sb_handle, groups: &[c::bch_disk_group]) -> Result<(), String> {
         let mut err = Printbuf::new();
         disk_groups_validate(sb.sb(), groups, &mut err).map_err(|e| {
-            assert_eq!(e, Errcode::BCH_ERR_invalid_sb_disk_groups.into());
+            assert_eq!(e, Errcode::invalid_sb_disk_groups.into());
             err.as_str().to_owned()
         })
     }

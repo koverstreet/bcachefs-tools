@@ -96,7 +96,7 @@ impl bkey_format {
     pub fn validate(&self, err: &mut Printbuf) -> Result<(), BchError> {
         let mut bits = c::KEY_PACKED_BITS_START;
 
-        sb_err_on!(err, self.nr_fields as usize != NR_FIELDS, BCH_ERR_invalid,
+        sb_err_on!(err, self.nr_fields as usize != NR_FIELDS, invalid,
                    "incorrect number of fields: got {}, should be {NR_FIELDS}", self.nr_fields)?;
 
         /*
@@ -104,7 +104,7 @@ impl bkey_format {
          * unpacked format:
          */
         for f in FIELDS {
-            sb_err_on!(err, self.field_overflows(f), BCH_ERR_invalid,
+            sb_err_on!(err, self.field_overflows(f), invalid,
                        "field {} too large: {} + {} > {}", f as u32,
                        u64_bitmask(self.bits(f).min(64)), self.offset(f),
                        u64_bitmask(BKEY_FORMAT_CURRENT.bits(f)))?;
@@ -112,7 +112,7 @@ impl bkey_format {
             bits += self.bits(f);
         }
 
-        sb_err_on!(err, self.key_u64s as u32 != bits.div_ceil(64), BCH_ERR_invalid,
+        sb_err_on!(err, self.key_u64s as u32 != bits.div_ceil(64), invalid,
                    "incorrect key_u64s: got {}, should be {}", self.key_u64s, bits.div_ceil(64))
     }
 }

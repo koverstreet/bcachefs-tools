@@ -95,7 +95,7 @@ impl NodeValidate<'_> {
     fn degraded(&self) {
         self.b.flags.set_need_rewrite(true);
         self.b.flags.set_need_rewrite_error(true);
-        let _ = self.fs.err(e::BCH_ERR_fsck_fix);
+        let _ = self.fs.err(e::fsck_fix);
     }
 
     pub fn err(&mut self, flags: FsckFlags, at: ErrAt, err: SbErrorId, msg: &dyn ToText) -> Result<bool, BchError> {
@@ -103,10 +103,10 @@ impl NodeValidate<'_> {
 
         if fs.recovery.runner.current_pass.get() == RecoveryPass::scan_for_btree_nodes {
             return if flags.contains(FsckFlags::CAN_FIX) {
-                let _ = fs.err(e::BCH_ERR_fsck_fix);
+                let _ = fs.err(e::fsck_fix);
                 Ok(true)
             } else {
-                Err(fs.err(e::BCH_ERR_btree_node_validate_err))
+                Err(fs.err(e::btree_node_validate_err))
             };
         }
 
@@ -118,8 +118,8 @@ impl NodeValidate<'_> {
 
                 /* not over keys_lost, from earlier in this replica: */
                 if let Some(f) = failed.as_deref_mut() {
-                    if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::BCH_ERR_btree_node_validate_err)) {
-                        f.set_errcode(ca.dev_idx.into(), -fs.err(e::BCH_ERR_btree_node_validate_err).raw());
+                    if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::btree_node_validate_err)) {
+                        f.set_errcode(ca.dev_idx.into(), -fs.err(e::btree_node_validate_err).raw());
                     }
                 }
 
@@ -144,7 +144,7 @@ impl NodeValidate<'_> {
                     self.degraded();
                     Ok(true)
                 } else {
-                    Err(fs.err(e::BCH_ERR_btree_node_validate_err))
+                    Err(fs.err(e::btree_node_validate_err))
                 }
             }
             NodeIo::Write => Err(self.write_err(at, msg)),
@@ -160,7 +160,7 @@ impl NodeValidate<'_> {
 
         fs.emergency_read_only(&mut m);
 
-        fs.err(e::BCH_ERR_fsck_errors_not_fixed)
+        fs.err(e::fsck_errors_not_fixed)
     }
 
     /*
@@ -172,7 +172,7 @@ impl NodeValidate<'_> {
     pub fn keys_lost(&mut self) {
         let fs = self.fs;
         if let NodeIo::Read { ca, failed: Some(f), .. } = &mut self.io {
-            f.set_errcode(ca.dev_idx.into(), -fs.err(e::BCH_ERR_btree_node_validate_err_keys_lost).raw());
+            f.set_errcode(ca.dev_idx.into(), -fs.err(e::btree_node_validate_err_keys_lost).raw());
         }
     }
 
@@ -187,8 +187,8 @@ impl NodeValidate<'_> {
             ca.io_error(c::MemberErrorType::checksum);
 
             if let Some(f) = failed.as_deref_mut() {
-                if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::BCH_ERR_btree_node_validate_err_keys_lost)) {
-                    f.set_errcode(ca.dev_idx.into(), -fs.err(e::BCH_ERR_btree_node_validate_err_csum).raw());
+                if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::btree_node_validate_err_keys_lost)) {
+                    f.set_errcode(ca.dev_idx.into(), -fs.err(e::btree_node_validate_err_csum).raw());
                 }
             }
         }
@@ -488,7 +488,7 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<U
     let u = k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut tmp);
 
     match bset_key_validate(fs, b, u, ks.updated_range, &ks.from) {
-        Err(err) if err == BchError::from(e::BCH_ERR_fsck_delete_bkey) => return Ok(Key::Drop(u64s)),
+        Err(err) if err == BchError::from(e::fsck_delete_bkey) => return Ok(Key::Drop(u64s)),
         r => r?,
     }
 

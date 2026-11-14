@@ -334,7 +334,7 @@ fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, id
                   passes::bit(Pass::check_topology);
     if fs.recovery.runner.passes_complete.get() & scanned == 0 {
         bch_err!(fs, "have key in journal replay for btree depth that does not exist, confused\n{}", buf);
-        return fs.throw(Errcode::BCH_ERR_EINVAL_journal_replay_key_bad_btree_depth);
+        return fs.throw(Errcode::EINVAL_journal_replay_key_bad_btree_depth);
     }
 
     if !k.allocated() {
@@ -347,7 +347,7 @@ fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, id
     let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, 0, iter_flags);
     iter.iter().traverse(t)?;
     t.btree_increase_depth(iter.iter())?;
-    Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
+    Err(t.restart(Errcode::transaction_restart_nested))
 }
 
 fn journal_sort_seq_cmp(l: &c::journal_key, r: &c::journal_key) -> Ordering {
@@ -739,7 +739,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     if use_clean {
         let Some(c) = clean.as_deref() else {
             bch_err!(fs, "no superblock clean section found");
-            return fs.throw(Errcode::BCH_ERR_fsck_repair_impossible);
+            return fs.throw(Errcode::fsck_repair_impossible);
         };
 
         journal_start.cur_seq = c.journal_seq.get().wrapping_add(1);

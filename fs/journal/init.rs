@@ -96,7 +96,7 @@ impl c::journal {
 
         if cur_seq >= c::JOURNAL_SEQ_MAX {
             bch_err!(fs, "cannot start: journal seq overflow");
-            return fs.throw(Errcode::BCH_ERR_EINVAL_journal_seq_overflow);
+            return fs.throw(Errcode::EINVAL_journal_seq_overflow);
         }
 
         /* Clean filesystem? */
@@ -200,7 +200,7 @@ impl c::journal {
 
     pub fn init_rw(&self) -> Result<(), BchError> {
         let fs = self.fs();
-        let enomem = || fs.err(Errcode::BCH_ERR_ENOMEM_journal_buf);
+        let enomem = || fs.err(Errcode::ENOMEM_journal_buf);
         let size = c::JOURNAL_ENTRY_SIZE_MIN;
 
         let buf = c::JsetBuf::new(size, c::GFP_KERNEL).map_err(|_| enomem())?;
@@ -234,6 +234,6 @@ impl Dev {
          * allocations).
          */
         self.journal.bio_set.init(state, || BioSet::new(c::JOURNAL_STATE_BUF_NR, true))
-            .map_err(|_| self.fs().err(Errcode::BCH_ERR_ENOMEM_dev_journal_init))
+            .map_err(|_| self.fs().err(Errcode::ENOMEM_dev_journal_init))
     }
 }

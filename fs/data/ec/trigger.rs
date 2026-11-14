@@ -280,7 +280,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     let Some(ca) = fs.dev_bkey_tryget(s.untyped(), dev).unwrap_or(None) else {
         cold_path();
         if dev != c::BCH_SB_MEMBER_INVALID && !flags.contains(UpdateTriggerFlags::OVERWRITE) {
-            return fs.throw(Errcode::BCH_ERR_mark_stripe);
+            return fs.throw(Errcode::mark_stripe);
         }
         return Ok(());
     };
@@ -294,7 +294,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     if flags.contains(UpdateTriggerFlags::GC) {
         let Some(g) = ca.gc_bucket(bucket.offset) else {
             fs_inconsistent!(fs, "reference to invalid bucket on device {dev}\n{}", s.to_text(fs));
-            return fs.throw(Errcode::BCH_ERR_mark_stripe);
+            return fs.throw(Errcode::mark_stripe);
         };
         t.gc_bucket_mod(&ca, g, flags, |a| mark_stripe_bucket_alloc(t, &ca, s, i, deleting, bucket, a, flags))?;
     }
@@ -442,7 +442,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
         let new = new.expect("gc marks keys going in");
         let Ok(m) = fs.ec.gc_stripe_alloc(idx) else {
             bch_err!(fs, "error allocating memory for gc_stripes, idx {idx}");
-            return fs.throw(Errcode::BCH_ERR_ENOMEM_mark_stripe);
+            return fs.throw(Errcode::ENOMEM_mark_stripe);
         };
 
         let v = new.v();
@@ -491,7 +491,7 @@ pub fn ec_stripe_mem_alloc(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>) -> Re
 
     t.allocate_dropping_locks(|| {
         if fs.gc.phase() != c::GcPhase::not_running && fs.ec.gc_stripe_alloc(idx).is_err() {
-            return fs.throw(Errcode::BCH_ERR_ENOMEM_ec_stripe_mem_alloc);
+            return fs.throw(Errcode::ENOMEM_ec_stripe_mem_alloc);
         }
         Ok(())
     })

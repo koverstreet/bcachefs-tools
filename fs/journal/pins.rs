@@ -818,7 +818,7 @@ fn resize(j: &c::journal) -> Result<(), BchError> {
 
     let entries = new_entries(new_size.next_power_of_two() as usize);
     fs.event_inc_trace(events::journal_pin_resize, |out| prt!(out, "new size: {}", new_size));
-    let mut entries = entries.map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_pin_fifo))?;
+    let mut entries = entries.map_err(|_| fs.err(Errcode::ENOMEM_journal_pin_fifo))?;
 
     let mut g = j.pin_resize_lock.write();
 
@@ -900,7 +900,7 @@ pub(crate) fn start(j: &c::journal, last_seq: u64, cur_seq: u64) -> Result<(), B
     let entries = entries.map_err(|_| {
         bch_err!(fs, "error allocating journal pin fifo: {} dirty journal entries ({}-{}), {} bytes",
                  cur_seq - last_seq, last_seq, cur_seq, (size as usize).saturating_mul(size_of::<PinList>()));
-        fs.err(Errcode::BCH_ERR_ENOMEM_journal_pin_fifo)
+        fs.err(Errcode::ENOMEM_journal_pin_fifo)
     })?;
 
     for seq in last_seq..cur_seq {

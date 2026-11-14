@@ -149,7 +149,7 @@ async fn old_stripe_read(fs: &Fs, old: &StripeKey, buf: &mut StripeBuf, required
             // Reconstruct either couldn't run - too many failures, so
             // everything that failed to read is lost - or ran and left blocks
             // that still don't check out:
-            let e = if err == BchError::from(Errcode::BCH_ERR_stripe_reconstruct_insufficient_blocks) { PRE } else { POST };
+            let e = if err == BchError::from(Errcode::stripe_reconstruct_insufficient_blocks) { PRE } else { POST };
             return Err(OldStripeLost { err, blocks: buf.failed_mask(e) & required });
         }
     }
@@ -175,7 +175,7 @@ fn stripe_key_update(t: &TransAttempt<'_, '_>, k: BkeySC<'_, c::Stripe<Validated
     let old = iter.peek_slot(t)?.expect("a slot always has a key");
     if old.k.type_ != 0 {
         fs_inconsistent!(fs, "error creating stripe: got existing key\n{}", old.to_text(fs));
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ec_stripe_create_existing_key);
+        return fs.throw(Errcode::EINVAL_ec_stripe_create_existing_key);
     }
     t.update(&iter, &new, UpdateTriggerFlags::empty())
 }
@@ -270,7 +270,7 @@ async fn create_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(),
             continue;
         }
         let Some(ca) = fs.dev_get_ioref::<c::DevWriteRefKind>(ptr.dev().into()) else {
-            return fs.throw(Errcode::BCH_ERR_stripe_create_device_offline);
+            return fs.throw(Errcode::stripe_create_device_offline);
         };
         cas.push(ca);
     }
@@ -296,7 +296,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     // must not commit is a pointer copied while the device was healthy - a
     // reused stripe's - after the removal walk has passed it.
     if stripe_has_removing_dev(fs, w.new_stripe.stripe().v()) {
-        return fs.throw(Errcode::BCH_ERR_stripe_create_device_removing);
+        return fs.throw(Errcode::stripe_create_device_removing);
     }
 
     let (nr_data, nr_blocks) = {
@@ -337,7 +337,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
         // what we read, and an extent that checks out against it isn't lost
         // - a block fails on one bad granule. After a reconstruct they hold
         // its output instead, which says nothing about what's on disk.
-        let as_read = lost.err == BchError::from(Errcode::BCH_ERR_stripe_reconstruct_insufficient_blocks);
+        let as_read = lost.err == BchError::from(Errcode::stripe_reconstruct_insufficient_blocks);
         let trans = btree_trans!(fs);
         let r = reuse.as_ref().expect("a fold's old stripe");
         record_lost_blocks(&trans, r.stripe.stripe(), lost.blocks,
@@ -366,7 +366,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
 
     if io.as_mut().buf().failed_mask(PRE) != 0 {
         bch_err!(fs, "error creating stripe: error writing redundancy buckets");
-        return fs.throw(Errcode::BCH_ERR_ec_block_write);
+        return fs.throw(Errcode::ec_block_write);
     }
 
     let new = new_stripe.stripe();

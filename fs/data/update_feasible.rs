@@ -41,9 +41,9 @@ struct Available {
 
 fn no_room<T>(fs: &Fs, need_copygc: bool) -> Result<T, BchError> {
     fs.throw(if need_copygc {
-        Errcode::BCH_ERR_data_update_fail_need_copygc
+        Errcode::data_update_fail_need_copygc
     } else {
-        Errcode::BCH_ERR_data_update_fail_no_rw_devs
+        Errcode::data_update_fail_no_rw_devs
     })
 }
 

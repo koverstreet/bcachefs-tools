@@ -255,7 +255,7 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
             };
             match unsafe { BtreeNodeIter::at_node(t, b.as_ref()) } {
                 Ok(_)                                                                => *update_node_key = true,
-                Err(e) if e == BchError::from(Errcode::BCH_ERR_btree_node_dying) => strip_reconcile(fs, k.as_s()),
+                Err(e) if e == BchError::from(Errcode::btree_node_dying) => strip_reconcile(fs, k.as_s()),
                 Err(e)                                                               => return Err(e),
             }
         }

@@ -224,7 +224,7 @@ fn insert_locked(fs: &Fs, a: Delta<'_>, mark: &mut MarkWrite<'_>) -> Result<(), 
      * memory references it until this insert.
      */
     if replicas_entry(&pos).is_some_and(|e| !fs.replicas_marked(e)) {
-        return Err(fs.err(Errcode::BCH_ERR_btree_insert_need_mark_replicas));
+        return Err(fs.err(Errcode::btree_insert_need_mark_replicas));
     }
 
     let acc = fs.accounting_mem_mut(mark);
@@ -236,7 +236,7 @@ fn insert_locked(fs: &Fs, a: Delta<'_>, mark: &mut MarkWrite<'_>) -> Result<(), 
 
     Entry::new(a.p, pos.nr_counters(), acc.gc_running)
         .and_then(|e| acc.insert(e))
-        .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_disk_accounting))?;
+        .map_err(|_| fs.err(Errcode::ENOMEM_disk_accounting))?;
     let nr = acc.entries.len();
 
     fs.event_trace(events::accounting_mem_insert, |out| {
@@ -286,7 +286,7 @@ pub(crate) fn gc_accounting_start(fs: &Fs) -> Result<(), BchError> {
         acc.free_gc();
     }
     acc.gc_running = ret.is_ok();
-    ret.map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_disk_accounting))
+    ret.map_err(|_| fs.err(Errcode::ENOMEM_disk_accounting))
 }
 
 pub(crate) fn gc_accounting_done(fs: &Fs) -> Result<(), BchError> {
@@ -363,7 +363,7 @@ fn read_key(fs: &Fs, entries: &mut KVVec<Entry>, k: BkeySC<'_>) -> Result<(), Bc
         if !can_read_with_devs(r, &c::bch_devs_mask { d: fs.devs_online.load() }, flags, Some(&mut buf)) {
             fs.missing_devs_to_text(&mut buf);
             print_str(fs, LogLevel::ERR, &mut buf);
-            return Err(fs.err(Errcode::BCH_ERR_insufficient_devices_to_start));
+            return Err(fs.err(Errcode::insufficient_devices_to_start));
         }
     }
 
@@ -390,9 +390,9 @@ fn read_key(fs: &Fs, entries: &mut KVVec<Entry>, k: BkeySC<'_>) -> Result<(), Bc
     }
 
     let mut e = Entry::new(k.k.p, pos.nr_counters(), false)
-        .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_disk_accounting))?;
+        .map_err(|_| fs.err(Errcode::ENOMEM_disk_accounting))?;
     e.live.set(d);
-    entries.push(e).map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_disk_accounting))
+    entries.push(e).map_err(|_| fs.err(Errcode::ENOMEM_disk_accounting))
 }
 
 /// Journal key @i's newer deltas, the keys after it at its position, added
@@ -527,14 +527,14 @@ fn invalid_dev(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos<Unvalidated>, v
     let key = Msg(|out: &mut Printbuf| key_to_text(out, Some(fs), pos));
 
     if !fsck_err!(t, id::accounting_to_invalid_device, "accounting entry points to invalid device {dev}\n{key}")? {
-        return Err(fs.err(Errcode::BCH_ERR_remove_disk_accounting_entry));
+        return Err(fs.err(Errcode::remove_disk_accounting_entry));
     }
 
     let neg: [i64; MAX_COUNTERS] = core::array::from_fn(|i| v.get(i).map_or(0, |&v| (v as i64).wrapping_neg()));
     let pos = pos.validate().expect("the table's positions are its keys', validated");
     accounting::add_at(t, &pos, &neg[..v.len()], false)?;
     t.commit(None, CommitFlags::NO_ENOSPC)?;
-    Err(Errcode::BCH_ERR_remove_disk_accounting_entry.into())
+    Err(Errcode::remove_disk_accounting_entry.into())
 }
 
 fn validate_late(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos<Unvalidated>, v: &[u64])
@@ -626,7 +626,7 @@ fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
         }
 
         match lockrestart_do(trans, |t| validate_late(t, &DiskAccountingPos::from_bpos(p), &v[..nr])) {
-            Err(e) if e.matches(Errcode::BCH_ERR_remove_disk_accounting_entry) => {
+            Err(e) if e.matches(Errcode::remove_disk_accounting_entry) => {
                 let mut mark = fs.mark_lock().write();
                 let acc = fs.accounting_mem_mut(&mut mark);
                 let i = acc.find(p).expect("an entry, found above: none are dropped till below");

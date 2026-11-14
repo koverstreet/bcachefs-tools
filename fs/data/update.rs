@@ -144,8 +144,8 @@ pub struct data_update {
 /// The read failed only because the extent changed under it - the key was
 /// gone on retry, or the bucket's gen moved - so no data was lost.
 pub fn read_err_benign(e: BchError) -> bool {
-    e.matches(Errcode::BCH_ERR_data_read_key_overwritten) ||
-        e.matches(Errcode::BCH_ERR_data_read_ptr_stale_race)
+    e.matches(Errcode::data_read_key_overwritten) ||
+        e.matches(Errcode::data_read_ptr_stale_race)
 }
 
 /// Whether a failure is traced as a data_update_fail event. Routine failures
@@ -155,14 +155,14 @@ pub fn read_err_benign(e: BchError) -> bool {
 /// ec_alloc_failed_pending_race don't, and are traced.
 pub fn fail_should_trace(type_: Type, e: BchError) -> bool {
     let parks = matches!(type_, Type::reconcile | Type::promote) &&
-        e.matches(Errcode::BCH_ERR_data_update_fail_no_rw_devs);
+        e.matches(Errcode::data_update_fail_no_rw_devs);
 
-    !(e.matches(Errcode::BCH_ERR_data_update_fail_in_flight) ||
-      e.matches(Errcode::BCH_ERR_data_update_fail_need_copygc) ||
-      e.matches(Errcode::BCH_ERR_data_update_fail_would_block) ||
-      e.matches(Errcode::BCH_ERR_operation_blocked) ||
-      (e.matches(Errcode::BCH_ERR_ec_alloc_failed) &&
-       !e.matches(Errcode::BCH_ERR_ec_alloc_failed_transient)) ||
+    !(e.matches(Errcode::data_update_fail_in_flight) ||
+      e.matches(Errcode::data_update_fail_need_copygc) ||
+      e.matches(Errcode::data_update_fail_would_block) ||
+      e.matches(Errcode::operation_blocked) ||
+      (e.matches(Errcode::ec_alloc_failed) &&
+       !e.matches(Errcode::ec_alloc_failed_transient)) ||
       parks)
 }
 
@@ -210,7 +210,7 @@ impl Fs {
             }
         }
         self.event_inc(events::data_update_in_flight);
-        self.throw(Errcode::BCH_ERR_data_update_fail_in_flight)
+        self.throw(Errcode::data_update_fail_in_flight)
     }
 }
 
@@ -451,7 +451,7 @@ impl c::data_update {
         let size = u64::from(self.key().k.size);
         match ret_to_result_void(ret) {
             Ok(()) => fs.event_add_trace(events::data_update, size, |out| self.to_text(out)),
-            Err(e) if e.matches(Errcode::BCH_ERR_data_update_done) =>
+            Err(e) if e.matches(Errcode::data_update_done) =>
                 fs.event_add_trace(events::data_update_no_io, size, |out| {
                     self.to_text(out);
                     prt!(out, "\nret:\t{e}\n");
@@ -494,7 +494,7 @@ impl c::data_update {
                 });
                 let wp = match r {
                     Ok(wp) => wp,
-                    Err(e) if e.matches(Errcode::BCH_ERR_operation_blocked) => {
+                    Err(e) if e.matches(Errcode::operation_blocked) => {
                         trans.unlock();
                         cl.sync();
                         continue;
@@ -594,12 +594,12 @@ impl c::data_update {
                 Ok(false) => Ok(()),
                 // the key was deleted
                 Ok(true) => t.commit(Some(&self.op.res), CommitFlags::NO_ENOSPC)
-                    .and_then(|()| fs.throw(Errcode::BCH_ERR_data_update_fail_no_snapshot)),
+                    .and_then(|()| fs.throw(Errcode::data_update_fail_no_snapshot)),
                 Err(e) => Err(e),
             };
             // can't repair yet, waiting on other recovery passes
-            r.map_err(|e| if e.matches(Errcode::BCH_ERR_recovery_will_run) {
-                fs.err(Errcode::BCH_ERR_data_update_fail_no_snapshot)
+            r.map_err(|e| if e.matches(Errcode::recovery_will_run) {
+                fs.err(Errcode::data_update_fail_no_snapshot)
             } else {
                 e
             })?;
@@ -687,7 +687,7 @@ impl c::data_update {
                 if let Some(iter) = iter {
                     extent_drop_ptrs(t, iter, k, io_opts, &self.opts)?;
                 }
-                return fs.throw(Errcode::BCH_ERR_data_update_done_no_writes_needed);
+                return fs.throw(Errcode::data_update_done_no_writes_needed);
             }
 
             // Check that the write can allocate, rather than failing in
@@ -706,7 +706,7 @@ impl c::data_update {
             }
             held.in_flight = fs.data_update_in_flight_add(self, pos)?;
         } else if unwritten {
-            return fs.throw(Errcode::BCH_ERR_data_update_done_unwritten);
+            return fs.throw(Errcode::data_update_done_unwritten);
         }
 
         let k = BkeySC::from(self.k.key());
@@ -724,7 +724,7 @@ impl c::data_update {
                 None => {
                     let Some(moving) = self.moving() else {
                         // a promote mustn't block, or they'd pile up
-                        return fs.throw(Errcode::BCH_ERR_nocow_lock_blocked);
+                        return fs.throw(Errcode::nocow_lock_blocked);
                     };
                     // @t's transaction is the mover's own here. Wait for the
                     // locks, or until nothing we have in flight could release
@@ -743,7 +743,7 @@ impl c::data_update {
 
         if unwritten {
             t.ignore_restarts(|trans| self.update_unwritten_extent(trans))?;
-            return fs.throw(Errcode::BCH_ERR_data_update_done_unwritten);
+            return fs.throw(Errcode::data_update_done_unwritten);
         }
 
         t.unlock();
@@ -836,7 +836,7 @@ impl c::data_update {
 
         // A bitrotted extent gets a new checksum so it can be moved; its
         // poison bit keeps reads of it returning errors
-        if unlikely(ret == Err(Errcode::BCH_ERR_data_read_csum_err.into()) &&
+        if unlikely(ret == Err(Errcode::data_read_csum_err.into()) &&
                     self.key().arm::<Ptrs>().is_some_and(|k| k.poisoned(fs))) {
             if let Some(crc) = &mut crc {
                 let nonce = crate::data::ptrs::extent_nonce(self.key().k.bversion, crc);

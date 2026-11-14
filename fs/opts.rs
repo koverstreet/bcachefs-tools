@@ -856,7 +856,7 @@ impl<T: OptHost + ?Sized> SbOpt for Field<T> {
             let changed = v != (self.get)(t);
             (self.set)(t, v)
                 .map(|()| changed)
-                .map_err(|()| Errcode::BCH_ERR_ERANGE_option_too_big.into())
+                .map_err(|()| Errcode::ERANGE_option_too_big.into())
         }).transpose()
     }
 }
@@ -1018,16 +1018,16 @@ pub fn opt_validate(opt: &Opt, v: u64, mut err: Option<&mut Printbuf>) -> Result
     }
 
     if v < opt.min {
-        fail!(Errcode::BCH_ERR_ERANGE_option_too_small, "too small (min {})", opt.min);
+        fail!(Errcode::ERANGE_option_too_small, "too small (min {})", opt.min);
     }
     if opt.max != 0 && v > opt.max {
-        fail!(Errcode::BCH_ERR_ERANGE_option_too_big, "too big (max {})", opt.max);
+        fail!(Errcode::ERANGE_option_too_big, "too big (max {})", opt.max);
     }
     if opt.has(c::OptFlags::sb_field_sectors) && v & 511 != 0 {
-        fail!(Errcode::BCH_ERR_opt_parse_error, "not a multiple of 512");
+        fail!(Errcode::opt_parse_error, "not a multiple of 512");
     }
     if opt.has(c::OptFlags::must_be_pow_2) && !v.is_power_of_two() {
-        fail!(Errcode::BCH_ERR_opt_parse_error, "must be a power of two");
+        fail!(Errcode::opt_parse_error, "must be a power of two");
     }
     match opt.ty {
         OptType::Fn(OptFn { validate: Some(validate), .. }) => validate(v, err),
@@ -1079,14 +1079,14 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
         OptType::Bool => match val.unwrap_or(b"1") {
             b"1" | b"true" | b"yes" => 1,
             b"0" | b"false" | b"no" => 0,
-            _ => fail!(Errcode::BCH_ERR_option_not_bool, "must be bool"),
+            _ => fail!(Errcode::option_not_bool, "must be bool"),
         },
         OptType::Uint => {
             let Some(val) = val else {
-                fail!(Errcode::BCH_ERR_EINVAL_opt_parse_uint_required, "required value");
+                fail!(Errcode::EINVAL_opt_parse_uint_required, "required value");
             };
             if val.starts_with(b"-") {
-                fail!(Errcode::BCH_ERR_option_negative, "must be a non-negative number");
+                fail!(Errcode::option_negative, "must be a non-negative number");
             }
             let v = core::str::from_utf8(val)
                 .map_err(|_| BchError::from(c::EINVAL))
@@ -1102,7 +1102,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
         }
         OptType::Str(choices) => {
             let Some(val) = val else {
-                fail!(Errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
+                fail!(Errcode::EINVAL_opt_parse_str_required, "required value");
             };
             match choices.iter().position(|c| c.as_bytes() == val) {
                 Some(i) => i as u64,
@@ -1111,17 +1111,17 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
         }
         OptType::Bitfield { choices, allowed } => {
             let Some(val) = val else {
-                fail!(Errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
+                fail!(Errcode::EINVAL_opt_parse_str_required, "required value");
             };
             match read_flag_list(val, choices, allowed) {
                 Ok(v)    => v,
-                Err(bad) => fail!(Errcode::BCH_ERR_opt_parse_error, "invalid flag {}",
+                Err(bad) => fail!(Errcode::opt_parse_error, "invalid flag {}",
                                   core::str::from_utf8(bad).unwrap_or("(not UTF-8)")),
             }
         }
         OptType::StrMember { size, .. } => {
             let Some(val) = val else {
-                fail!(Errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
+                fail!(Errcode::EINVAL_opt_parse_str_required, "required value");
             };
             if val.len() > size {
                 fail!(c::ENAMETOOLONG, "too long (max {size} bytes)");
@@ -1131,7 +1131,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
         }
         OptType::Fn(f) => match (f.parse)(fs, val, err.as_deref_mut()) {
             Ok(v) => v,
-            Err(e) if e == Errcode::BCH_ERR_option_needs_open_fs.into() => return Err(e),
+            Err(e) if e == Errcode::option_needs_open_fs.into() => return Err(e),
             Err(e) => fail!(e, "parse error"),
         },
     };
@@ -1169,15 +1169,15 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
     let val = val.map(|v| opt_val_synonym(name_str.unwrap_or_default(), v));
 
     if !opt.has(c::OptFlags::mount | c::OptFlags::mount_old) {
-        return Err(Errcode::BCH_ERR_option_name.into());
+        return Err(Errcode::option_name.into());
     }
 
     if (opt.id == OptId::usrquota || opt.id == OptId::grpquota) && !cfg!(CONFIG_BCACHEFS_QUOTA) {
-        return Err(Errcode::BCH_ERR_option_name.into());
+        return Err(Errcode::option_name.into());
     }
 
     let v = match opt_parse(fs, opt, val, Some(err)) {
-        Err(e) if e == Errcode::BCH_ERR_option_needs_open_fs.into() => {
+        Err(e) if e == Errcode::option_needs_open_fs.into() => {
             if let Some(later) = parse_later {
                 later.write_bytes(name);
                 write!(later, "=");
@@ -1220,7 +1220,7 @@ pub fn parse_mount_opts_into(fs: Option<&Fs>, opts: &mut c::bch_opts, mut parse_
 
         let mut err = Printbuf::new();
         match parse_one_mount_opt(fs, Some(opts), parse_later.as_deref_mut(), name, val, &mut err) {
-            Err(e) if e == Errcode::BCH_ERR_option_name.into() && ignore_unknown => {}
+            Err(e) if e == Errcode::option_name.into() && ignore_unknown => {}
             Err(e) => {
                 log_no_fs(LogLevel::ERR, crate::message!("Error parsing option {}", err.as_str()));
                 return Err(e);
@@ -1381,7 +1381,7 @@ pub fn fs_opts(sb: &c::bch_sb<Unvalidated>, opts: &c::bch_opts, out: &mut Printb
     #[cfg(all(kernel, not(CONFIG_TRANSPARENT_HUGEPAGE)))]
     if fs_opts.block_size as usize > crate::os::kernel::PAGE_SIZE {
         prt!(out, "cannot mount bs > ps filesystem without CONFIG_TRANSPARENT_HUGEPAGE\n");
-        return Err(Errcode::BCH_ERR_EINVAL_block_size_needs_thp.into());
+        return Err(Errcode::EINVAL_block_size_needs_thp.into());
     }
     Ok(fs_opts)
 }

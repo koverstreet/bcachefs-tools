@@ -602,7 +602,7 @@ impl Internal {
                 Ok(Err(_)) => panic!("bucket {}:{} in two stripes being made", id.dev(), id.bucket()),
                 Err(AllocError) => {
                     self.buckets_del(fs);
-                    return fs.throw(Errcode::BCH_ERR_ENOMEM_stripe_new_bucket);
+                    return fs.throw(Errcode::ENOMEM_stripe_new_bucket);
                 }
             }
         }

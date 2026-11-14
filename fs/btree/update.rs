@@ -149,7 +149,7 @@ impl Fs {
         msg.to_text(&mut buf);
 
         if buf.allocation_failure() {
-            return Err(Errcode::BCH_ERR_ENOMEM_trans_log_msg.into());
+            return Err(Errcode::ENOMEM_trans_log_msg.into());
         }
 
         if !self.journal.flags.get(c::JournalFlag::running) {
@@ -175,7 +175,7 @@ impl Fs {
     ) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
         match trans.delete_range_flags(btree_id, start, end, iter_flags.bits() | update_flags.bits()) {
-            Err(e) if e.matches(Errcode::BCH_ERR_transaction_restart_nested) => Ok(()),
+            Err(e) if e.matches(Errcode::transaction_restart_nested) => Ok(()),
             r => r,
         }
     }
@@ -351,7 +351,7 @@ impl TransAttempt<'_, '_> {
     /// ENOMEM_trans_log_msg if building @msg ran out of memory.
     pub fn log_msg(&self, msg: &Printbuf) -> Result<(), BchError> {
         if msg.allocation_failure() {
-            return Err(Errcode::BCH_ERR_ENOMEM_trans_log_msg.into());
+            return Err(Errcode::ENOMEM_trans_log_msg.into());
         }
         self.log_str(msg.as_bytes())
     }
@@ -931,7 +931,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             if paths[iter.key_cache_path.get()].key_cached().expect("a traversed key cache path's entry").dirty() {
                 self.fs().event_inc_trace(events::trans_restart_key_cache_raced, |out| prt!(out, "{}", t.fn_name()));
-                return Err(self.restart(Errcode::BCH_ERR_transaction_restart_key_cache_raced));
+                return Err(self.restart(Errcode::transaction_restart_key_cache_raced));
             }
 
             t.path_set_should_be_locked(paths, iter.key_cache_path.get());
@@ -1086,7 +1086,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         assert!(k.k.key_type().is_deleted(), "an empty slot with a key in it");
 
         if bkey_gt(k.k.p, end) {
-            return Err(self.fs().err(Errcode::BCH_ERR_ENOSPC_btree_slot));
+            return Err(self.fs().err(Errcode::ENOSPC_btree_slot));
         }
 
         Ok(())
@@ -1245,12 +1245,12 @@ impl BtreeTrans<'_> {
             }
         };
 
-        if !ret.matches(Errcode::BCH_ERR_delete_range_done) {
+        if !ret.matches(Errcode::delete_range_done) {
             return Err(ret);
         }
 
         if restart_count != self.restart_count() {
-            return Err(BchError::from(Errcode::BCH_ERR_transaction_restart_nested));
+            return Err(BchError::from(Errcode::transaction_restart_nested));
         }
         Ok(())
     }
@@ -1260,7 +1260,7 @@ fn delete_range_one<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>, end:
     -> Result<(), BchError>
 {
     let Some((it, k)) = iter.peek_with(t, &mut t.trans().paths(), |i, t, p| i.peek_max_in(t, p, end))? else {
-        return Err(Errcode::BCH_ERR_delete_range_done.into());
+        return Err(Errcode::delete_range_done.into());
     };
 
     let res = DiskReservation::new(t.fs());

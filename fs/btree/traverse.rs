@@ -157,7 +157,7 @@ impl BtreeTrans<'_> {
 
     fn path_set_level_up(&self, paths: &mut Paths<'_>, idx: PathIdx, l: usize) {
         self.node_unlock(paths, idx, l);
-        paths[idx].l[l].b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_up.into());
+        paths[idx].l[l].b = NodePtr::err(Errcode::no_btree_node_up.into());
     }
 }
 
@@ -235,7 +235,7 @@ impl BtreeTrans<'_> {
             let (b, level) = root_unpack(packed);
             let Some(b) = b else {
                 if btree.0 >= fs.btree_id_nr_alive() || !fs.flags.get(c::FsFlag::btree_running) {
-                    return Err(fs.err(Errcode::BCH_ERR_btree_not_started));
+                    return Err(fs.err(Errcode::btree_not_started));
                 }
 
                 let err = fs.btree.cache.roots.error(btree.0);
@@ -247,7 +247,7 @@ impl BtreeTrans<'_> {
                 return Err(if err != 0 {
                     BchError::from_raw(err)
                 } else {
-                    fs.err(Errcode::BCH_ERR_btree_root_error_unset)
+                    fs.err(Errcode::btree_root_error_unset)
                 });
             };
             let b = unsafe { b.as_ref() };
@@ -266,7 +266,7 @@ impl BtreeTrans<'_> {
                 for l in depth_want..c::BTREE_MAX_DEPTH as usize {
                     path.l[l].b = NodePtr::null();
                 }
-                return Err(Errcode::BCH_ERR_no_btree_node_shallow.into());
+                return Err(Errcode::no_btree_node_shallow.into());
             }
 
             let lock_type = paths[idx].lock_want_six(level);
@@ -284,7 +284,7 @@ impl BtreeTrans<'_> {
 
                     let path = &mut paths[idx];
                     for l in path.l.iter_mut().take(level) {
-                        l.b = NodePtr::err(Errcode::BCH_ERR_no_btree_node_lock_root.into());
+                        l.b = NodePtr::err(Errcode::no_btree_node_lock_root.into());
                     }
                     for l in level + 1..c::BTREE_MAX_DEPTH as usize {
                         path.l[l].b = NodePtr::null();
@@ -296,7 +296,7 @@ impl BtreeTrans<'_> {
                     return Ok(());
                 }
                 Ok(hold) => drop(hold),
-                Err(e) if e == Errcode::BCH_ERR_no_btree_node_reused.into() => {}
+                Err(e) if e == Errcode::no_btree_node_reused.into() => {}
                 Err(e) => return Err(e),
             }
         }
@@ -505,7 +505,7 @@ impl BtreeTrans<'_> {
         /* an unread node, had under READ_ERRORS, has no keys to go down through */
         if flags.contains(BtreeIterFlags::READ_ERRORS) &&
            paths[idx].locked_btree_node(level).is_some_and(|b| b.flags.read_error()) {
-            return Err(fs.err(Errcode::BCH_ERR_btree_node_read_err_cached));
+            return Err(fs.err(Errcode::btree_node_read_err_cached));
         }
 
         if self.journal_replay_not_finished() {
@@ -549,7 +549,7 @@ impl BtreeTrans<'_> {
 
     pub(crate) fn path_traverse_all(&self, paths: &mut Paths<'_>) -> Result<(), BchError> {
         if self.in_traverse_all() {
-            return Err(self.restart(Errcode::BCH_ERR_transaction_restart_in_traverse_all));
+            return Err(self.restart(Errcode::transaction_restart_in_traverse_all));
         }
 
         /*
@@ -607,7 +607,7 @@ impl BtreeTrans<'_> {
                     paths.put_ll(idx, false);
 
                     match ret {
-                        Err(e) if e.matches(Errcode::BCH_ERR_transaction_restart) ||
+                        Err(e) if e.matches(Errcode::transaction_restart) ||
                                   e.matches(c::ENOMEM as i32) => continue 'retry_all,
                         Err(e) => break 'retry_all Err(e),
                         Ok(()) => {}
@@ -721,7 +721,7 @@ impl BtreeTrans<'_> {
     }
 
     fn path_traverse_done(&self, paths: &mut Paths<'_>, idx: PathIdx, ret: &Result<(), BchError>) {
-        ebug_assert!(ret.as_ref().is_err_and(|e| e.matches(Errcode::BCH_ERR_transaction_restart)) ==
+        ebug_assert!(ret.as_ref().is_err_and(|e| e.matches(Errcode::transaction_restart)) ==
                      (self.restarted().0 != 0));
         self.path_verify(paths, idx);
     }
@@ -752,7 +752,7 @@ impl BtreeTrans<'_> {
          * and re-traverse the path without a transaction restart:
          */
         if paths[idx].should_be_locked() {
-            return Some(Err(self.restart(Errcode::BCH_ERR_transaction_restart_relock_path)));
+            return Some(Err(self.restart(Errcode::transaction_restart_relock_path)));
         }
 
         None
@@ -786,7 +786,7 @@ impl BtreeTrans<'_> {
             };
 
             if let Err(e) = ret {
-                if e == Errcode::BCH_ERR_no_btree_node_shallow.into() {
+                if e == Errcode::no_btree_node_shallow.into() {
                     /*
                      * No nodes at this level - got to the end of
                      * the btree:

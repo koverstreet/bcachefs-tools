@@ -21,7 +21,7 @@
 //! A mount's errors are returned raw - errno(), the errcode negated - not as
 //! their errno class. mount.bcachefs has to tell them apart - whether to ask
 //! the user about a degraded mount, whether a refusal is worth escalating -
-//! and an errcode is BCH_ERR_START (2048) plus its number, far below
+//! and an errcode is Errcode::START (2048) plus its number, far below
 //! MAX_ERRNO, so it's still an error to anyone who doesn't know ours. So are
 //! reconfigure's, as C's were; a parameter's are classed.
 
@@ -458,7 +458,7 @@ impl FsType for Bcachefs {
         // to do and report success, read-only.
         if !rdonly && fs.flags.get(c::FsFlag::emergency_ro) {
             fc.errorfc(format_args!("cannot go read-write: filesystem is in emergency read-only"));
-            return fs.throw(Errcode::BCH_ERR_emergency_ro);
+            return fs.throw(Errcode::emergency_ro);
         }
 
         let want_ro = fc.ctx().opts.read_only;
@@ -482,7 +482,7 @@ impl FsType for Bcachefs {
                     // caller; the throw discards the errcode
                     crate::bch_err!(fs, "error going read-write: {}", e.msg());
                     fc.errorfc(format_args!("error going read-write: {}", e.msg()));
-                    return fs.throw(Errcode::BCH_ERR_EINVAL_reconfigure_read_write);
+                    return fs.throw(Errcode::EINVAL_reconfigure_read_write);
                 }
                 sb.set_rdonly(false);
             }

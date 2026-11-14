@@ -135,7 +135,7 @@ fn sb_member_find_slot(fs: &Fs, sb: &c::bch_sb) -> Result<u32, BchError> {
     if nr_deleted != 0 {
         crate::bch_err!(fs, "unable to allocate new member, but have {nr_deleted} deleted: run fsck");
     }
-    Err(Errcode::BCH_ERR_ENOSPC_sb_members.into())
+    Err(Errcode::ENOSPC_sb_members.into())
 }
 
 /// A member slot for a new device, members_v2 and nr_devices grown to hold
@@ -148,7 +148,7 @@ pub(crate) fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, 
     let u64s = (MEMBERS_V2_HEAD + stride * nr as usize).div_ceil(size_of::<u64>());
 
     fs.sb_resize(sb).field_resize::<c::bch_sb_field_members_v2>(u64s as u32)
-        .ok_or(BchError::from(Errcode::BCH_ERR_ENOSPC_sb_members))?;
+        .ok_or(BchError::from(Errcode::ENOSPC_sb_members))?;
     sb.sb_mut().nr_devices = nr as u8;
     Ok(dev)
 }
@@ -283,7 +283,7 @@ pub trait SbMembersMut: SbResize {
         let nr = u32::from(self.sb().nr_devices);
         let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * nr as usize).div_ceil(size_of::<u64>());
         self.field_resize::<c::bch_sb_field_members_v1>(u64s as u32)
-            .ok_or(BchError::from(Errcode::BCH_ERR_ENOSPC_sb_members))?;
+            .ok_or(BchError::from(Errcode::ENOSPC_sb_members))?;
 
         for i in 0..nr {
             let m = members_v2(self.sb()).and_then(|v2| v2.get(i)).expect("members_v2: every member");
@@ -334,33 +334,33 @@ fn nonstring(b: &[u8]) -> &[u8] {
 }
 
 fn invalid() -> Result<(), BchError> {
-    Err(Errcode::BCH_ERR_invalid_sb_members.into())
+    Err(Errcode::invalid_sb_members.into())
 }
 
 fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<Unvalidated>, i: u32) -> Result<(), BchError> {
     let nbuckets = m.nbuckets.get();
-    sb_err_on!(err, nbuckets > c::BCH_MEMBER_NBUCKETS_MAX.into(), BCH_ERR_invalid_sb_members,
+    sb_err_on!(err, nbuckets > c::BCH_MEMBER_NBUCKETS_MAX.into(), invalid_sb_members,
                "device {i}: too many buckets (got {nbuckets}, max {})", c::BCH_MEMBER_NBUCKETS_MAX)?;
 
     // wrapping, as C's: a first_bucket past nbuckets isn't caught here
     let usable = nbuckets.wrapping_sub(m.first_bucket.get().into());
-    sb_err_on!(err, usable < c::BCH_MIN_NR_NBUCKETS.into(), BCH_ERR_invalid_sb_members,
+    sb_err_on!(err, usable < c::BCH_MIN_NR_NBUCKETS.into(), invalid_sb_members,
                "device {i}: not enough buckets (got {usable}, min {})", c::BCH_MIN_NR_NBUCKETS)?;
 
     let (bucket_size, block_size) = (m.bucket_size.get(), sb.block_size.get());
-    sb_err_on!(err, bucket_size < block_size, BCH_ERR_invalid_sb_members,
+    sb_err_on!(err, bucket_size < block_size, invalid_sb_members,
                "device {i}: bucket size {bucket_size} smaller than block size {block_size}")?;
 
-    sb_err_on!(err, bucket_size < sb.btree_node_size(), BCH_ERR_invalid_sb_members,
+    sb_err_on!(err, bucket_size < sb.btree_node_size(), invalid_sb_members,
                "device {i}: bucket size {bucket_size} smaller than btree node size {}",
                sb.btree_node_size())?;
 
     sb_err_on!(err, u32::from(m.btree_bitmap_shift) >= c::BCH_MI_BTREE_BITMAP_SHIFT_MAX,
-               BCH_ERR_invalid_sb_members, "device {i}: invalid btree_bitmap_shift {}",
+               invalid_sb_members, "device {i}: invalid btree_bitmap_shift {}",
                m.btree_bitmap_shift)?;
 
     let no_alloc_info = sb.features.get().contains(SbFeatures::no_alloc_info);
-    sb_err_on!(err, m.freespace_initialized() && no_alloc_info, BCH_ERR_invalid_sb_members,
+    sb_err_on!(err, m.freespace_initialized() && no_alloc_info, invalid_sb_members,
                "device {i}: freespace initialized but fs has no alloc info")?;
     Ok(())
 }
@@ -1019,7 +1019,7 @@ impl Fs {
     /// dev_missing_atomic(), and the error for it.
     fn dev_missing(&self, dev: u32) -> BchError {
         self.dev_missing_atomic(dev);
-        self.err(Errcode::BCH_ERR_ENOENT_dev_not_found)
+        self.err(Errcode::ENOENT_dev_not_found)
     }
 
     /// Whether there's a device @dev: bch2_dev_exists().
@@ -1080,7 +1080,7 @@ impl Fs {
         let ca = self.dev_tryget(bucket.inode as u32)?;
         if !ca.bucket_valid(bucket.offset) {
             ca.bucket_missing(bucket.offset);
-            return Err(self.err(Errcode::BCH_ERR_ENOENT_dev_bucket_not_found));
+            return Err(self.err(Errcode::ENOENT_dev_bucket_not_found));
         }
         Ok(ca)
     }

@@ -55,12 +55,12 @@ impl SbFieldOps for Section {
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         for (i, e) in f.start.iter().enumerate() {
             let (start, end) = (e.start.get(), e.end.get());
-            sb_err_on!(err, start >= end, BCH_ERR_invalid_sb_journal_seq_blacklist,
+            sb_err_on!(err, start >= end, invalid_sb_journal_seq_blacklist,
                        "entry {i} start >= end ({start} >= {end})")?;
 
             if let Some(next) = f.start.get(i + 1).filter(|n| end > n.start.get()) {
                 write!(err, "entry {} out of order with next entry ({end} > {})", i + 1, next.start.get());
-                return Err(Errcode::BCH_ERR_invalid_sb_journal_seq_blacklist.into());
+                return Err(Errcode::invalid_sb_journal_seq_blacklist.into());
             }
         }
         Ok(())
@@ -91,7 +91,7 @@ impl SbFieldOps for Section {
                 }
                 Eytzinger0::sort_by(t, |l, r| l.start.cmp(&r.start));
             })
-        }.map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_blacklist_table_init))
+        }.map_err(|_| fs.err(Errcode::ENOMEM_blacklist_table_init))
     }
 }
 
@@ -204,7 +204,7 @@ impl Fs {
     pub fn journal_seq_blacklist_add(&self, start: u64, end: u64) -> Result<(), BchError> {
         let mut sb = self.sb_lock();
         if !section_add(&mut self.sb_resize(&mut sb), start, end) {
-            return self.throw(Errcode::BCH_ERR_ENOSPC_sb_journal_seq_blacklist);
+            return self.throw(Errcode::ENOSPC_sb_journal_seq_blacklist);
         }
         self.write_super_ret(&mut sb)?;
         Section::to_cpu(self, &mut sb)

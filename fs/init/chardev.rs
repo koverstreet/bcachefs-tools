@@ -88,7 +88,7 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
         <c::BCH_IOCTL_DEV_USAGE as Ioctl>::OPCODE => {
             // before the argument's read, as C had it
             if !accounting_read_done(fs) {
-                return fs.throw(E::BCH_ERR_EINVAL_ioctl_dev_usage_accounting_not_read);
+                return fs.throw(E::EINVAL_ioctl_dev_usage_accounting_not_read);
             }
             inout::<c::BCH_IOCTL_DEV_USAGE, _>(user, |a| dev_usage(fs, a))
         }
@@ -100,7 +100,7 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
             input::<c::BCH_IOCTL_DISK_GET_IDX, _>(user, |a| disk_get_idx(fs, a)),
 
         _ if !fs.flags.get(c::FsFlag::started) =>
-            fs.throw(E::BCH_ERR_EINVAL_ioctl_not_started),
+            fs.throw(E::EINVAL_ioctl_not_started),
 
         <c::BCH_IOCTL_DATA as Ioctl>::OPCODE =>
             input::<c::BCH_IOCTL_DATA, _>(user, |arg| data(fs, arg)),
@@ -110,35 +110,35 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
             vstruct::<c::BCH_IOCTL_QUERY_COUNTERS, _, _>(user, |arg| query_counters(fs, arg)),
 
         <c::BCH_IOCTL_DISK_ADD as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_ADD, _>(user, |a| disk_add(fs, a, ErrMsg::Log, E::BCH_ERR_EINVAL_ioctl_disk_add_bad_flags)),
+            input::<c::BCH_IOCTL_DISK_ADD, _>(user, |a| disk_add(fs, a, ErrMsg::Log, E::EINVAL_ioctl_disk_add_bad_flags)),
         <c::BCH_IOCTL_DISK_ADD_v2 as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_ADD_v2, _>(user, |a| { let (a, m) = a.split(); disk_add(fs, a, m, E::BCH_ERR_EINVAL_ioctl_disk_add_v2_bad_flags) }),
+            input::<c::BCH_IOCTL_DISK_ADD_v2, _>(user, |a| { let (a, m) = a.split(); disk_add(fs, a, m, E::EINVAL_ioctl_disk_add_v2_bad_flags) }),
         <c::BCH_IOCTL_DISK_REMOVE as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_REMOVE, _>(user, |a| disk_remove(fs, a, ErrMsg::Log, E::BCH_ERR_EINVAL_ioctl_disk_remove_bad_flags)),
+            input::<c::BCH_IOCTL_DISK_REMOVE, _>(user, |a| disk_remove(fs, a, ErrMsg::Log, E::EINVAL_ioctl_disk_remove_bad_flags)),
         <c::BCH_IOCTL_DISK_REMOVE_v2 as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_REMOVE_v2, _>(user, |a| { let (a, m) = a.split(); disk_remove(fs, a, m, E::BCH_ERR_EINVAL_ioctl_disk_remove_v2_bad_flags) }),
+            input::<c::BCH_IOCTL_DISK_REMOVE_v2, _>(user, |a| { let (a, m) = a.split(); disk_remove(fs, a, m, E::EINVAL_ioctl_disk_remove_v2_bad_flags) }),
         <c::BCH_IOCTL_DISK_ONLINE as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_ONLINE, _>(user, |a| disk_online(fs, a, ErrMsg::Log, E::BCH_ERR_EINVAL_ioctl_disk_online_bad_flags)),
+            input::<c::BCH_IOCTL_DISK_ONLINE, _>(user, |a| disk_online(fs, a, ErrMsg::Log, E::EINVAL_ioctl_disk_online_bad_flags)),
         <c::BCH_IOCTL_DISK_ONLINE_v2 as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_ONLINE_v2, _>(user, |a| { let (a, m) = a.split(); disk_online(fs, a, m, E::BCH_ERR_EINVAL_ioctl_disk_online_v2_bad_flags) }),
+            input::<c::BCH_IOCTL_DISK_ONLINE_v2, _>(user, |a| { let (a, m) = a.split(); disk_online(fs, a, m, E::EINVAL_ioctl_disk_online_v2_bad_flags) }),
         <c::BCH_IOCTL_DISK_OFFLINE as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_OFFLINE, _>(user, |a| disk_offline(fs, a, ErrMsg::Log, E::BCH_ERR_EINVAL_ioctl_disk_offline_bad_flags)),
+            input::<c::BCH_IOCTL_DISK_OFFLINE, _>(user, |a| disk_offline(fs, a, ErrMsg::Log, E::EINVAL_ioctl_disk_offline_bad_flags)),
         <c::BCH_IOCTL_DISK_OFFLINE_v2 as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_OFFLINE_v2, _>(user, |a| { let (a, m) = a.split(); disk_offline(fs, a, m, E::BCH_ERR_EINVAL_ioctl_disk_offline_v2_bad_flags) }),
+            input::<c::BCH_IOCTL_DISK_OFFLINE_v2, _>(user, |a| { let (a, m) = a.split(); disk_offline(fs, a, m, E::EINVAL_ioctl_disk_offline_v2_bad_flags) }),
         <c::BCH_IOCTL_DISK_SET_STATE as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_SET_STATE, _>(user, |a| disk_set_state(fs, a, ErrMsg::Log, E::BCH_ERR_EINVAL_ioctl_disk_set_state_bad_args)),
+            input::<c::BCH_IOCTL_DISK_SET_STATE, _>(user, |a| disk_set_state(fs, a, ErrMsg::Log, E::EINVAL_ioctl_disk_set_state_bad_args)),
         <c::BCH_IOCTL_DISK_SET_STATE_v2 as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_SET_STATE_v2, _>(user, |a| { let (a, m) = a.split(); disk_set_state(fs, a, m, E::BCH_ERR_EINVAL_ioctl_disk_set_state_v2_bad_args) }),
+            input::<c::BCH_IOCTL_DISK_SET_STATE_v2, _>(user, |a| { let (a, m) = a.split(); disk_set_state(fs, a, m, E::EINVAL_ioctl_disk_set_state_v2_bad_args) }),
         <c::BCH_IOCTL_DISK_RESIZE as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_RESIZE, _>(user, |a| disk_resize(fs, a, ErrMsg::Log, E::BCH_ERR_EINVAL_ioctl_disk_resize_bad_flags)),
+            input::<c::BCH_IOCTL_DISK_RESIZE, _>(user, |a| disk_resize(fs, a, ErrMsg::Log, E::EINVAL_ioctl_disk_resize_bad_flags)),
         <c::BCH_IOCTL_DISK_RESIZE_v2 as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_DISK_RESIZE_v2, _>(user, |a| { let (a, m) = a.split(); disk_resize(fs, a, m, E::BCH_ERR_EINVAL_ioctl_disk_resize_v2_bad_flags) }),
+            input::<c::BCH_IOCTL_DISK_RESIZE_v2, _>(user, |a| { let (a, m) = a.split(); disk_resize(fs, a, m, E::EINVAL_ioctl_disk_resize_v2_bad_flags) }),
         <c::BCH_IOCTL_DISK_RESIZE_JOURNAL as Ioctl>::OPCODE =>
             input::<c::BCH_IOCTL_DISK_RESIZE_JOURNAL, _>(user, |a| disk_resize_journal(fs, a, ErrMsg::Log,
-                E::BCH_ERR_EINVAL_ioctl_disk_resize_journal_bad_flags, E::BCH_ERR_EINVAL_ioctl_disk_resize_journal_too_big)),
+                E::EINVAL_ioctl_disk_resize_journal_bad_flags, E::EINVAL_ioctl_disk_resize_journal_too_big)),
         <c::BCH_IOCTL_DISK_RESIZE_JOURNAL_v2 as Ioctl>::OPCODE =>
             input::<c::BCH_IOCTL_DISK_RESIZE_JOURNAL_v2, _>(user, |a| { let (a, m) = a.split(); disk_resize_journal(fs, a, m,
-                E::BCH_ERR_EINVAL_ioctl_disk_resize_journal_v2_bad_flags, E::BCH_ERR_EINVAL_ioctl_disk_resize_journal_v2_too_big) }),
+                E::EINVAL_ioctl_disk_resize_journal_v2_bad_flags, E::EINVAL_ioctl_disk_resize_journal_v2_too_big) }),
 
         <c::BCH_IOCTL_QUERY_ACCOUNTING as Ioctl>::OPCODE =>
             arg::<c::BCH_IOCTL_QUERY_ACCOUNTING, _>(user, |a| query_accounting_v1(fs, a)),
@@ -180,7 +180,7 @@ fn query_uuid(fs: &Fs) -> Result<c::bch_ioctl_query_uuid, BchError> {
 
 fn fs_usage(fs: &Fs, user: UserArg<c::bch_ioctl_fs_usage>) -> Result<(), BchError> {
     if !accounting_read_done(fs) {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_fs_usage_accounting_not_read);
+        return fs.throw(Errcode::EINVAL_ioctl_fs_usage_accounting_not_read);
     }
     let entries_bytes = user.read()?.replica_entries_bytes;
 
@@ -211,7 +211,7 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
     use c::DiskAccountingType as T;
 
     if !accounting_read_done(fs) {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_query_accounting_not_read);
+        return fs.throw(Errcode::EINVAL_ioctl_query_accounting_not_read);
     }
 
     /*
@@ -225,7 +225,7 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
      */
     let privileged = 1 << T::inum.0 | 1 << T::snapshot.0;
     if arg.accounting_types_mask & privileged != 0 && !capable(Capability::SysAdmin) {
-        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::EPERM_non_admin);
     }
 
     /*
@@ -289,7 +289,7 @@ fn query_accounting_v2(fs: &Fs, user: UserArg<c::bch_ioctl_query_accounting_v2>)
 /* obsolete, didn't allow for new data types: */
 fn dev_usage(fs: &Fs, arg: &mut c::bch_ioctl_dev_usage) -> Result<(), BchError> {
     if arg.flags & !c::BCH_BY_INDEX != 0 || arg.pad[..3] != [0; 3] {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_dev_usage_bad_flags);
+        return fs.throw(Errcode::EINVAL_ioctl_dev_usage_bad_flags);
     }
     let ca = dev_lookup(fs, arg.dev, arg.flags)?;
     let src = ca.usage_full_read_fast();
@@ -307,11 +307,11 @@ fn dev_usage(fs: &Fs, arg: &mut c::bch_ioctl_dev_usage) -> Result<(), BchError> 
 
 fn dev_usage_v2(fs: &Fs, user: UserVstruct<c::bch_ioctl_dev_usage_v2>) -> Result<(), BchError> {
     if !accounting_read_done(fs) {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_dev_usage_v2_accounting_not_read);
+        return fs.throw(Errcode::EINVAL_ioctl_dev_usage_v2_accounting_not_read);
     }
     let mut arg = user.head()?;
     if arg.flags & !c::BCH_BY_INDEX != 0 || arg.pad[..3] != [0; 3] {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_dev_usage_v2_bad_flags);
+        return fs.throw(Errcode::EINVAL_ioctl_dev_usage_v2_bad_flags);
     }
     let ca = dev_lookup(fs, arg.dev, arg.flags)?;
     let src = ca.usage_full_read_fast();
@@ -336,7 +336,7 @@ fn dev_usage_v2(fs: &Fs, user: UserVstruct<c::bch_ioctl_dev_usage_v2>) -> Result
 fn read_super(fs: &Fs, arg: c::bch_ioctl_read_super) -> Result<(), BchError> {
     admin(fs)?;
     if arg.flags & !(c::BCH_BY_INDEX | c::BCH_READ_DEV) != 0 || arg.pad != 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_read_super_bad_flags);
+        return fs.throw(Errcode::EINVAL_ioctl_read_super_bad_flags);
     }
 
     let sb_lock = fs.sb_lock();
@@ -345,7 +345,7 @@ fn read_super(fs: &Fs, arg: c::bch_ioctl_read_super) -> Result<(), BchError> {
         ca = dev_lookup(fs, arg.dev, arg.flags)?;
         match fs.dev_sb(&sb_lock, &ca) {
             Some(sb) => sb,
-            None     => return fs.throw(Errcode::BCH_ERR_device_offline),
+            None     => return fs.throw(Errcode::device_offline),
         }
     } else {
         &**sb_lock
@@ -373,14 +373,14 @@ fn disk_get_idx(fs: &Fs, arg: c::bch_ioctl_disk_get_idx) -> Result<c_int, BchErr
     let dev = huge_decode_dev(arg.dev);
     admin(fs)?;
     if dev == 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_disk_get_idx_bad_dev);
+        return fs.throw(Errcode::EINVAL_ioctl_disk_get_idx_bad_dev);
     }
 
     let rcu = read_lock();
     let idx = fs.online_devs_rcu(&rcu).find(|ca| ca.dev == dev).map(|ca| ca.dev_idx);
     match idx {
         Some(idx) => Ok(idx.into()),
-        None      => fs.throw(Errcode::BCH_ERR_ENOENT_dev_idx_not_found),
+        None      => fs.throw(Errcode::ENOENT_dev_idx_not_found),
     }
 }
 
@@ -399,7 +399,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
     admin(fs)?;
 
     if arg.flags & !FLAGS.iter().fold(0, |m, (f, _)| m | f) != 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_query_btree_keys_bad_flags);
+        return fs.throw(Errcode::EINVAL_ioctl_query_btree_keys_bad_flags);
     }
     let mut flags = FLAGS.iter()
         .filter(|(f, _)| arg.flags & f != 0)
@@ -414,7 +414,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
     let valid = Btree::from_raw(arg.btree)
         .is_some_and(|btree| btree_iter_params_valid(btree, arg.level, arg.start, arg.end, flags));
     if !valid {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_query_btree_keys_bad_params);
+        return fs.throw(Errcode::EINVAL_ioctl_query_btree_keys_bad_params);
     }
 
     /* bound per-call kernel allocation; the caller loops anyways */
@@ -540,7 +540,7 @@ fn dev_lookup_outer(fs: &Fs, dev: u64, flags: u32) -> Result<DevOuterRef, BchErr
 }
 
 fn admin(fs: &Fs) -> Result<(), BchError> {
-    if capable(Capability::SysAdmin) { Ok(()) } else { fs.throw(Errcode::BCH_ERR_EPERM_non_admin) }
+    if capable(Capability::SysAdmin) { Ok(()) } else { fs.throw(Errcode::EPERM_non_admin) }
 }
 
 fn disk_add(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
@@ -681,7 +681,7 @@ fn data_job(job: &DataJob, _write_ref: WriteRef) {
     // SAFETY: the job's write ref keeps the filesystem
     let ret = crate::data::move_data::data_job(unsafe { job.fs.as_ref() }, stats, &job.arg);
 
-    if ret.err() == Some(Errcode::BCH_ERR_device_offline.into()) {
+    if ret.err() == Some(Errcode::device_offline.into()) {
         stats.ret.set(c::IoctlDataEventRet::BCH_IOCTL_DATA_EVENT_RET_device_offline);
     } else {
         stats.ret.set(c::IoctlDataEventRet::BCH_IOCTL_DATA_EVENT_RET_done);
@@ -723,7 +723,7 @@ impl FileOps for DataJob {
         e.payload.p = p;
 
         if buf.len() < size_of::<c::bch_ioctl_data_event>() {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_data_read_short_buf);
+            return fs.throw(Errcode::EINVAL_ioctl_data_read_short_buf);
         }
 
         // SAFETY: zero initialized, then set: every byte is initialized
@@ -742,11 +742,11 @@ fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
         .ok_or(BchError::from(c::EROFS))?;
 
     if !capable(Capability::SysAdmin) {
-        return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
+        return fs.throw(Errcode::EPERM_non_admin);
     }
 
     if u32::from(arg.op) >= c::DataOp::NR || arg.flags != 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_ioctl_data_bad_op);
+        return fs.throw(Errcode::EINVAL_ioctl_data_bad_op);
     }
 
     let job = ThreadWithFile::new(Ok(DataJob {
@@ -804,7 +804,7 @@ impl FileOps for Ctl {
         let fs = MINORS.lock().0.get(minor as usize).copied().flatten().map(|fs| {
             // SAFETY: live while it's in MINORS
             let fs = unsafe { fs.as_ref() };
-            fs.ro_ref.tryget().ok_or_else(|| fs.err(Errcode::BCH_ERR_ioctl_fs_stopping))
+            fs.ro_ref.tryget().ok_or_else(|| fs.err(Errcode::ioctl_fs_stopping))
         });
 
         ioctl_ret(match fs {
@@ -823,7 +823,7 @@ impl Fs {
                 Some(i) => { minors.0[i] = fs; i as u32 }
                 None if (minors.0.len() as u32) < MINOR_GLOBAL && minors.0.push(fs).is_ok() =>
                     minors.0.len() as u32 - 1,
-                None => return self.throw(Errcode::BCH_ERR_chardev_init_error),
+                None => return self.throw(Errcode::chardev_init_error),
             }
         };
         // SAFETY: ours, set up as the filesystem's opened
@@ -838,7 +838,7 @@ impl Fs {
                 unsafe { (*self.as_ptr()).chardev = dev.as_ptr() };
                 Ok(())
             }
-            Err(_) => self.throw(Errcode::BCH_ERR_chardev_init_error),
+            Err(_) => self.throw(Errcode::chardev_init_error),
         }
     }
 

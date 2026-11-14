@@ -265,7 +265,7 @@ impl c::bch_fs_discards {
         let rcu = read_lock();
         match fs.dev_rcu(bucket.inode as u32, &rcu) {
             Some(ca) if !ca.discard_slot_free(fastpath) =>
-                Err(NotAdded::Full(fs.err(Errcode::BCH_ERR_max_discards_in_flight))),
+                Err(NotAdded::Full(fs.err(Errcode::max_discards_in_flight))),
             _ => Ok(()),
         }
     }
@@ -323,7 +323,7 @@ impl Discard {
             return Err(NotAdded::Exists);
         }
         if !ca.discard_slot_get(fastpath) {
-            return Err(NotAdded::Full(fs.err(Errcode::BCH_ERR_max_discards_in_flight)));
+            return Err(NotAdded::Full(fs.err(Errcode::max_discards_in_flight)));
         }
         if claimed.push(dev_bucket).is_err() {
             ca.discard_slot_put();
@@ -470,7 +470,7 @@ impl<'a> Worker<'a> {
             let mut msg = LogMsg::new(fs);
             prt!(msg, "Discarded bucket that is no longer BCH_DATA_need_discard!\n{}", a.as_sc().to_text(fs));
             fs.emergency_read_only(&mut msg);
-            return fs.throw(Errcode::BCH_ERR_emergency_ro);
+            return fs.throw(Errcode::emergency_ro);
         }
 
         let orig = BkeyBuf::from_key(a.as_sc().untyped());
@@ -643,7 +643,7 @@ fn do_discards(fs: &Fs) {
             // room - unless the device is going, when it's left
             let full = match w.one_bucket(t, bucket, bucket_size) {
                 Ok(()) => false,
-                Err(e) if e.matches(Errcode::BCH_ERR_max_discards_in_flight) => true,
+                Err(e) if e.matches(Errcode::max_discards_in_flight) => true,
                 // restarts too: this bucket again
                 Err(e) => return Err(e),
             };
@@ -763,7 +763,7 @@ pub(crate) fn do_discards_fast(ca: &Dev) {
         let bucket = pos(ca.dev_idx.into(), bucket);
         ret = loop {
             match lockrestart_do(&trans, |t| w.one_bucket(t, bucket, ca.mi.get().bucket_size.into())) {
-                Err(e) if e.matches(Errcode::BCH_ERR_max_discards_in_flight) => ca.discard_slot_wait(&trans, true),
+                Err(e) if e.matches(Errcode::max_discards_in_flight) => ca.discard_slot_wait(&trans, true),
                 r => break r,
             }
         };

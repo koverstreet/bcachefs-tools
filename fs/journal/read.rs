@@ -141,7 +141,7 @@ unsafe impl pin_init::ZeroableOption for Replay {}
 impl Replay {
     fn new(fs: &Fs, j: &[u8], csum_good: bool) -> Result<Self, BchError> {
         let bytes = offset_of!(c::journal_replay, j) + j.len();
-        let p = kvzalloc(bytes).map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_entry_add))?
+        let p = kvzalloc(bytes).map_err(|_| fs.err(Errcode::ENOMEM_journal_entry_add))?
             .cast::<c::journal_replay>();
         unsafe {
             let Ok(()) = init_at(KVVec::new(), &raw mut (*p.as_ptr()).ptrs);
@@ -229,7 +229,7 @@ impl JournalEntries {
 
     fn slot(&mut self, fs: &Fs, seq: u64) -> Result<&mut Option<Replay>, BchError> {
         self.0.get_or_alloc(Self::idx(fs, seq))
-            .map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_entry_add))
+            .map_err(|_| fs.err(Errcode::ENOMEM_journal_entry_add))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Replay> {
@@ -463,7 +463,7 @@ impl ReadState<'_> {
             bch_err!(fs, "journal entry sequence numbers span too large a range: cannot replay, contact developers\n\
                           base {} last_seq currently {}, but have seq {}",
                      fs.journal_entries_base_seq.get(), self.last_seq, seq);
-            return fs.throw(Errcode::BCH_ERR_ENOMEM_journal_entry_add);
+            return fs.throw(Errcode::ENOMEM_journal_entry_add);
         }
 
         let keep_from = self.keep_from();
@@ -528,7 +528,7 @@ impl ReadState<'_> {
             prt!(&mut buf, " ");
             journal_ptr_to_text(&mut buf, fs, &entry_ptr);
 
-            dup.ptrs.push(entry_ptr).map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
+            dup.ptrs.push(entry_ptr).map_err(|_| fs.err(Errcode::ENOMEM_journal_entry_add))?;
 
             fsck_err_on!(fs, same_device, id::journal_entry_dup_same_device,
                          "duplicate journal entry on same device\n{}", buf)?;
@@ -547,7 +547,7 @@ impl ReadState<'_> {
             /* The first ptr should represent the jset we kept: */
             Some(dup) => i.ptrs.extend_from_slice(dup.ptrs()),
             None      => i.ptrs.push(entry_ptr),
-        }.map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
+        }.map_err(|_| fs.err(Errcode::ENOMEM_journal_entry_add))?;
 
         *slot = Some(i);
         Ok(())
@@ -756,7 +756,7 @@ impl<'a> DevReader<'a> {
     fn new(fs: &'a Fs, ca: &'a Dev, ring: &'a mut JournalRing) -> Result<Self, BchError> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
         let mut buf = AVec::<u8, ConstAlign<PAGE_SIZE>>::new(PAGE_SIZE);
-        buf.try_reserve_exact(bytes).map_err(|_| fs.err(Errcode::BCH_ERR_ENOMEM_journal_read_buf_realloc))?;
+        buf.try_reserve_exact(bytes).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
         unsafe { buf.set_len(bytes) };
         let mut buf = buf.into_boxed_slice();
         buf.fill(0);
@@ -1160,7 +1160,7 @@ pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
     for range in rewind_ranges.iter() {
         let Some(p) = entries.get(fs, range.to) else {
             bch_err!(fs, "journal rewind: flush entry at seq {} not found", range.to);
-            return fs.throw(Errcode::BCH_ERR_EINVAL_journal_rewind_before_discard);
+            return fs.throw(Errcode::EINVAL_journal_rewind_before_discard);
         };
 
         need_from = need_from.min(p.j.last_seq.get());
@@ -1319,7 +1319,7 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
             if rewind_seq != 0 && rewind < rewind_seq {
                 bch_err!(fs, "cannot rewind to {}: discards have invalidated journal entries before {}",
                          rewind, rewind_seq);
-                return fs.throw(Errcode::BCH_ERR_EINVAL_journal_rewind_before_discard);
+                return fs.throw(Errcode::EINVAL_journal_rewind_before_discard);
             }
             drop_before = drop_before.min(rewind);
             prt!(&mut buf, " (rewinding from {})", rewind);

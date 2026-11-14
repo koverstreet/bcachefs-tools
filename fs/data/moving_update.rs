@@ -87,8 +87,8 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     // parking work a retry would have done abandons it
     let err = c_int::from(u.op.error);
     if let Err(e) = crate::errcode::ret_to_result_void(err) {
-        if e.matches(Errcode::BCH_ERR_ec_alloc_failed) &&
-           !e.matches(Errcode::BCH_ERR_ec_alloc_failed_transient) {
+        if e.matches(Errcode::ec_alloc_failed) &&
+           !e.matches(Errcode::ec_alloc_failed_transient) {
             crate::data::update_index::ec_alloc_failed(&mut u);
         }
     }
@@ -104,16 +104,16 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     let btree = iter.btree();
 
     t.allocate_dropping_locks(|| moving.updates_reserve().map_err(|_| c::ENOMEM.into()))
-        .map_err(|e| if e.matches(c::ENOMEM) { t.fs().err(Errcode::BCH_ERR_ENOMEM_move_extent) } else { e })?;
+        .map_err(|e| if e.matches(c::ENOMEM) { t.fs().err(Errcode::ENOMEM_move_extent) } else { e })?;
 
     // SAFETY: flush_all() waits for every task before the context goes
     let task = unsafe {
-        update_task::spawn(t, Spawn::Run(moving.runq()), Errcode::BCH_ERR_ENOMEM_move_extent)
+        update_task::spawn(t, Spawn::Run(moving.runq()), Errcode::ENOMEM_move_extent)
     }?;
     // On error init() has cleaned up, and the task is dropped unstarted
     let mut u = match task.init(t, Some(iter), Some(moving), moving.write_point(), io_opts, *data_opts, btree, k) {
         Ok(u) => u,
-        Err(e) if e.matches(Errcode::BCH_ERR_data_update_done) => return Ok(()),
+        Err(e) if e.matches(Errcode::data_update_done) => return Ok(()),
         Err(e) => return Err(e),
     };
     u.rbio.bio.lend().bio_mut().set_ioprio(IOPRIO_IDLE);

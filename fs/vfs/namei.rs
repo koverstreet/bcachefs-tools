@@ -396,7 +396,7 @@ impl InodeOps for DirOps {
         };
 
         if flags & !(c::RENAME_NOREPLACE | c::RENAME_EXCHANGE | c::RENAME_WHITEOUT) != 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_rename_bad_flags);
+            return fs.throw(Errcode::EINVAL_rename_bad_flags);
         }
 
         if mode == BCH_RENAME_OVERWRITE {

@@ -120,7 +120,7 @@ fn nocow_write_convert_unwritten(op: &mut Op) {
 
 fn __nocow_write_done(op: &mut Op) {
     if unlikely(op.io_error != 0) {
-        op.set_error(op.fs().err(Errcode::BCH_ERR_data_write_io));
+        op.set_error(op.fs().err(Errcode::data_write_io));
     } else if unlikely(op.has(w::convert_unwritten)) {
         nocow_write_convert_unwritten(op);
     }
@@ -151,7 +151,7 @@ fn bkey_get_dev_iorefs(fs: &Fs, k: BkeySC<'_, Ptrs>, cas: &mut [Option<DevWriteR
 fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) -> Result<u64, BchError> {
     let mut iter = BtreeIter::new(t, Btree::inodes, inode_pos, BtreeIterFlags::CACHED);
     let Some(k) = iter.peek_slot(t)?.expect("a slot").arm::<inode::Inodes>() else {
-        return Err(t.fs().err(Errcode::BCH_ERR_ENOENT_inode));
+        return Err(t.fs().err(Errcode::ENOENT_inode));
     };
 
     Ok(match k.typed() {
@@ -241,10 +241,10 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
                     let ret = if stale.is_none() {
                         fs_inconsistent!(fs, "pointer to invalid bucket in nocow path on device {}\n  {}",
                                          ptr.dev(), k.to_text(fs));
-                        fs.err(Errcode::BCH_ERR_data_write_invalid_ptr)
+                        fs.err(Errcode::data_write_invalid_ptr)
                     } else {
                         /* We can retry this: */
-                        fs.err(Errcode::BCH_ERR_transaction_restart)
+                        fs.err(Errcode::transaction_restart)
                     };
 
                     bkey_unlock_cas(fs, k, devs, NocowKind::Update);

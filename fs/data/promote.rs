@@ -74,9 +74,9 @@ struct InFlight {
 
 impl InFlight {
     fn tryget(fs: &Fs) -> Result<Self, BchError> {
-        let write = fs.writes.tryget_live().ok_or_else(|| fs.err(Errcode::BCH_ERR_nopromote_no_writes))?;
+        let write = fs.writes.tryget_live().ok_or_else(|| fs.err(Errcode::nopromote_no_writes))?;
         if !fs.promote_limit_tryget() {
-            return fs.throw(Errcode::BCH_ERR_nopromote_ratelimited);
+            return fs.throw(Errcode::nopromote_ratelimited);
         }
         // SAFETY: the filesystem outlives the write ref, which going read-only
         // waits for
@@ -124,17 +124,17 @@ fn should_promote(fs: &Fs, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<()
 
     if k.arm::<Ptrs>().is_some_and(|k| k.has_target(fs, Target::decode(opts.promote_target.into()))) {
         fs.event_inc(events::data_read_nopromote_already_promoted);
-        return fs.throw(Errcode::BCH_ERR_nopromote_already_promoted);
+        return fs.throw(Errcode::nopromote_already_promoted);
     }
 
     if k.extent_is_unwritten(fs) {
         fs.event_inc(events::data_read_nopromote_unwritten);
-        return fs.throw(Errcode::BCH_ERR_nopromote_unwritten);
+        return fs.throw(Errcode::nopromote_unwritten);
     }
 
     if fs.target_congested(opts.promote_target) {
         fs.event_inc(events::data_read_nopromote_congested);
-        return fs.throw(Errcode::BCH_ERR_nopromote_congested);
+        return fs.throw(Errcode::nopromote_congested);
     }
 
     Ok(())
@@ -167,7 +167,7 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
             }
 
             if update_opts.ptrs_kill == 0 {
-                return fs.throw(Errcode::BCH_ERR_nopromote_no_rewrites);
+                return fs.throw(Errcode::nopromote_no_rewrites);
             }
         }
         _ => {
@@ -184,7 +184,7 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     // SAFETY: the task borrows nothing, and promote_wq is drained before the
     // filesystem is freed
     let task = unsafe {
-        update_task::spawn(t, Spawn::Queue(orig.fs().promote_wq()), Errcode::BCH_ERR_nopromote_enomem)
+        update_task::spawn(t, Spawn::Queue(orig.fs().promote_wq()), Errcode::nopromote_enomem)
     }?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
     // box is dropped

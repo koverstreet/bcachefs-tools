@@ -199,7 +199,7 @@ pub fn inject_fail(fs: &Fs, ty: BkeyType) -> Result<(), BchError> {
 
     if knob.load(Ordering::Relaxed) == ty.0 &&
        knob.compare_exchange(ty.0, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-        return fs.throw(Errcode::BCH_ERR_injected_logged_op_fail);
+        return fs.throw(Errcode::injected_logged_op_fail);
     }
     Ok(())
 }
@@ -238,7 +238,7 @@ pub fn finish(
     op_ret: Result<(), BchError>,
     flags:  CommitOpts,
 ) -> Result<(), BchError> {
-    if op_ret.as_ref().is_err_and(|e| e.matches(Errcode::BCH_ERR_injected_logged_op_fail)) {
+    if op_ret.as_ref().is_err_and(|e| e.matches(Errcode::injected_logged_op_fail)) {
         return op_ret;
     }
 

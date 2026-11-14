@@ -144,13 +144,13 @@ impl From<&c::bch_sb_error_entry_cpu> for c::bch_sb_field_error_entry_v2 {
 
 fn validate<E: ErrorEntry>(entries: &[E], err: &mut Printbuf) -> Result<(), BchError> {
     for (i, e) in entries.iter().enumerate() {
-        sb_err_on!(err, e.nr() == 0, BCH_ERR_invalid_sb_errors, "entry with count 0 (id {})", e.id())?;
+        sb_err_on!(err, e.nr() == 0, invalid_sb_errors, "entry with count 0 (id {})", e.id())?;
 
         // never for v1, whose first is its last
-        sb_err_on!(err, e.first() > e.last(), BCH_ERR_invalid_sb_errors,
+        sb_err_on!(err, e.first() > e.last(), invalid_sb_errors,
                    "entry with first occurrence after last (id {})", e.id())?;
 
-        sb_err_on!(err, entries.get(i + 1).is_some_and(|n| e.id() >= n.id()), BCH_ERR_invalid_sb_errors,
+        sb_err_on!(err, entries.get(i + 1).is_some_and(|n| e.id() >= n.id()), invalid_sb_errors,
                    "entries out of order")?;
     }
     Ok(())
@@ -275,26 +275,26 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
  * counts as blk_sts_unknown; to promote one, add it here and add a
  * numbered entry in errors_format.rs - the build breaks if you forget.
  */
-/// @err a BCH_ERR_BLK_STS_* errcode, as blk_status_to_bch_err() throws: its
+/// @err a BLK_STS_* errcode, as blk_status_to_bch_err() throws: its
 /// status's error.
 pub fn blk_sts_sb_err(err: c_int) -> SbErrorId {
     match Errcode(err.unsigned_abs()) {
-        Errcode::BCH_ERR_BLK_STS_NOTSUPP => SbErrorId::blk_sts_notsupp,
-        Errcode::BCH_ERR_BLK_STS_TIMEOUT => SbErrorId::blk_sts_timeout,
-        Errcode::BCH_ERR_BLK_STS_NOSPC => SbErrorId::blk_sts_nospc,
-        Errcode::BCH_ERR_BLK_STS_TRANSPORT => SbErrorId::blk_sts_transport,
-        Errcode::BCH_ERR_BLK_STS_TARGET => SbErrorId::blk_sts_target,
-        Errcode::BCH_ERR_BLK_STS_RESV_CONFLICT => SbErrorId::blk_sts_resv_conflict,
-        Errcode::BCH_ERR_BLK_STS_MEDIUM => SbErrorId::blk_sts_medium,
-        Errcode::BCH_ERR_BLK_STS_PROTECTION => SbErrorId::blk_sts_protection,
-        Errcode::BCH_ERR_BLK_STS_RESOURCE => SbErrorId::blk_sts_resource,
-        Errcode::BCH_ERR_BLK_STS_IOERR => SbErrorId::blk_sts_ioerr,
-        Errcode::BCH_ERR_BLK_STS_AGAIN => SbErrorId::blk_sts_again,
-        Errcode::BCH_ERR_BLK_STS_DEV_RESOURCE => SbErrorId::blk_sts_dev_resource,
-        Errcode::BCH_ERR_BLK_STS_OFFLINE => SbErrorId::blk_sts_offline,
-        Errcode::BCH_ERR_BLK_STS_DURATION_LIMIT => SbErrorId::blk_sts_duration_limit,
-        Errcode::BCH_ERR_BLK_STS_INVAL => SbErrorId::blk_sts_inval,
-        Errcode::BCH_ERR_BLK_STS_REMOVED => SbErrorId::blk_sts_removed,
+        Errcode::BLK_STS_NOTSUPP => SbErrorId::blk_sts_notsupp,
+        Errcode::BLK_STS_TIMEOUT => SbErrorId::blk_sts_timeout,
+        Errcode::BLK_STS_NOSPC => SbErrorId::blk_sts_nospc,
+        Errcode::BLK_STS_TRANSPORT => SbErrorId::blk_sts_transport,
+        Errcode::BLK_STS_TARGET => SbErrorId::blk_sts_target,
+        Errcode::BLK_STS_RESV_CONFLICT => SbErrorId::blk_sts_resv_conflict,
+        Errcode::BLK_STS_MEDIUM => SbErrorId::blk_sts_medium,
+        Errcode::BLK_STS_PROTECTION => SbErrorId::blk_sts_protection,
+        Errcode::BLK_STS_RESOURCE => SbErrorId::blk_sts_resource,
+        Errcode::BLK_STS_IOERR => SbErrorId::blk_sts_ioerr,
+        Errcode::BLK_STS_AGAIN => SbErrorId::blk_sts_again,
+        Errcode::BLK_STS_DEV_RESOURCE => SbErrorId::blk_sts_dev_resource,
+        Errcode::BLK_STS_OFFLINE => SbErrorId::blk_sts_offline,
+        Errcode::BLK_STS_DURATION_LIMIT => SbErrorId::blk_sts_duration_limit,
+        Errcode::BLK_STS_INVAL => SbErrorId::blk_sts_inval,
+        Errcode::BLK_STS_REMOVED => SbErrorId::blk_sts_removed,
         _ => SbErrorId::blk_sts_unknown,
     }
 }
@@ -320,24 +320,24 @@ pub fn blk_sts_sb_err(err: c_int) -> SbErrorId {
  * errors_format.rs, and an ErrorKeyReason - the build breaks if
  * you forget.
  */
-/// @err a BCH_ERR_decompress errcode, as buf_uncompress() throws: what it's
+/// @err a decompress errcode, as buf_uncompress() throws: what it's
 /// counted as.
 pub fn bch2_decompress_sb_err(err: c_int) -> SbErrorId {
     match Errcode(err.unsigned_abs()) {
-        Errcode::BCH_ERR_decompress_exceeded_max_encoded_extent => SbErrorId::data_decompress_err_exceeded_max_encoded_extent,
-        Errcode::BCH_ERR_decompress_lz4_old => SbErrorId::data_decompress_err_lz4_old,
-        Errcode::BCH_ERR_decompress_lz4 => SbErrorId::data_decompress_err_lz4,
-        Errcode::BCH_ERR_decompress_gzip => SbErrorId::data_decompress_err_gzip,
-        Errcode::BCH_ERR_decompress_gzip_size_mismatch => SbErrorId::data_decompress_err_gzip_size_mismatch,
-        Errcode::BCH_ERR_decompress_zstd_src_len_bad => SbErrorId::data_decompress_err_zstd_src_len_bad,
-        Errcode::BCH_ERR_decompress_zstd_size_mismatch => SbErrorId::data_decompress_err_zstd_size_mismatch,
-        Errcode::BCH_ERR_ZSTD_error_corruption_detected => SbErrorId::data_decompress_err_zstd_corruption_detected,
-        Errcode::BCH_ERR_ZSTD_error_checksum_wrong => SbErrorId::data_decompress_err_zstd_checksum_wrong,
-        Errcode::BCH_ERR_ZSTD_error_prefix_unknown => SbErrorId::data_decompress_err_zstd_prefix_unknown,
-        Errcode::BCH_ERR_ZSTD_error_srcSize_wrong => SbErrorId::data_decompress_err_zstd_src_size_wrong,
-        Errcode::BCH_ERR_ZSTD_error_dstSize_tooSmall => SbErrorId::data_decompress_err_zstd_dst_size_too_small,
-        Errcode::BCH_ERR_ZSTD_error_memory_allocation => SbErrorId::data_decompress_err_zstd_memory_allocation,
-        code if BchError::from(code).matches(Errcode::BCH_ERR_zstd_error) =>
+        Errcode::decompress_exceeded_max_encoded_extent => SbErrorId::data_decompress_err_exceeded_max_encoded_extent,
+        Errcode::decompress_lz4_old => SbErrorId::data_decompress_err_lz4_old,
+        Errcode::decompress_lz4 => SbErrorId::data_decompress_err_lz4,
+        Errcode::decompress_gzip => SbErrorId::data_decompress_err_gzip,
+        Errcode::decompress_gzip_size_mismatch => SbErrorId::data_decompress_err_gzip_size_mismatch,
+        Errcode::decompress_zstd_src_len_bad => SbErrorId::data_decompress_err_zstd_src_len_bad,
+        Errcode::decompress_zstd_size_mismatch => SbErrorId::data_decompress_err_zstd_size_mismatch,
+        Errcode::ZSTD_error_corruption_detected => SbErrorId::data_decompress_err_zstd_corruption_detected,
+        Errcode::ZSTD_error_checksum_wrong => SbErrorId::data_decompress_err_zstd_checksum_wrong,
+        Errcode::ZSTD_error_prefix_unknown => SbErrorId::data_decompress_err_zstd_prefix_unknown,
+        Errcode::ZSTD_error_srcSize_wrong => SbErrorId::data_decompress_err_zstd_src_size_wrong,
+        Errcode::ZSTD_error_dstSize_tooSmall => SbErrorId::data_decompress_err_zstd_dst_size_too_small,
+        Errcode::ZSTD_error_memory_allocation => SbErrorId::data_decompress_err_zstd_memory_allocation,
+        code if BchError::from(code).matches(Errcode::zstd_error) =>
             SbErrorId::data_decompress_err_zstd_unknown,
         _ => SbErrorId::data_decompress_err_unknown,
     }

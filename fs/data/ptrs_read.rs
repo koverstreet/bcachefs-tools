@@ -119,7 +119,7 @@ impl<const N: usize> IoFailures<N> {
     /// bch2_mark_io_failure().
     pub fn mark(&mut self, p: &c::extent_ptr_decoded, err: BchError) {
         assert!(err.raw() != 0, "marking an io failure that isn't one");
-        assert!(!err.matches(Errcode::BCH_ERR_transaction_restart),
+        assert!(!err.matches(Errcode::transaction_restart),
                 "marking a transaction restart as an io failure");
 
         let f = self.dev_mut(p.ptr.dev().into());
@@ -127,7 +127,7 @@ impl<const N: usize> IoFailures<N> {
 
         if p.do_ec_reconstruct {
             f.ec_errcode = code;
-        } else if err.raw() == Errcode::BCH_ERR_data_read_retry_csum_err.0 as i32 {
+        } else if err.raw() == Errcode::data_read_retry_csum_err.0 as i32 {
             f.csum_nr = f.csum_nr.saturating_add(1);
         } else {
             f.errcode = code;
@@ -145,7 +145,7 @@ impl<const N: usize> IoFailures<N> {
                 errors |= BCH_READ_ERR_ec_reconstruct;
             }
             if f.errcode != 0 {
-                errors |= if BchError::from_raw(-i32::from(f.errcode)).matches(Errcode::BCH_ERR_decompress) {
+                errors |= if BchError::from_raw(-i32::from(f.errcode)).matches(Errcode::decompress) {
                     BCH_READ_ERR_decompression
                 } else {
                     BCH_READ_ERR_io
@@ -158,7 +158,7 @@ impl<const N: usize> IoFailures<N> {
     /// Count, by status, each failure that came back from the block layer.
     pub fn count_blk_errors(&self, fs: &Fs) {
         let count = |code: i16| {
-            if code != 0 && BchError::from_raw(-i32::from(code)).matches(Errcode::BCH_ERR_blockdev_io_error) {
+            if code != 0 && BchError::from_raw(-i32::from(code)).matches(Errcode::blockdev_io_error) {
                 fs.sb_error_count(blk_sts_sb_err(code.into()));
             }
         };
@@ -174,7 +174,7 @@ impl<const N: usize> IoFailures<N> {
     pub fn all_dev_removed(&self) -> bool {
         self.devs().iter().all(|f| {
             f.csum_nr == 0 && f.ec_errcode == 0 &&
-                BchError::from_raw(-i32::from(f.errcode)).matches(Errcode::BCH_ERR_BLK_STS_REMOVED)
+                BchError::from_raw(-i32::from(f.errcode)).matches(Errcode::BLK_STS_REMOVED)
         })
     }
 
@@ -292,7 +292,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
         let key = self.as_sc();
 
         if key.k.key_type() == BkeyType::error {
-            return fs.throw(e::BCH_ERR_key_type_error);
+            return fs.throw(e::key_type_error);
         }
 
         let (mut have_csum_errors, mut have_io_errors, mut have_missing_devs) = (false, false, false);
@@ -379,16 +379,16 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
             return Ok(None);
         }
         if have_missing_devs || !have_dirty_ptrs {
-            return fs.throw(e::BCH_ERR_no_device_to_read_from);
+            return fs.throw(e::no_device_to_read_from);
         }
         if have_csum_errors {
-            return fs.throw(e::BCH_ERR_data_read_csum_err);
+            return fs.throw(e::data_read_csum_err);
         }
         if have_io_errors {
-            return fs.throw(e::BCH_ERR_data_read_io_err);
+            return fs.throw(e::data_read_io_err);
         }
         // pointers - validate makes sure of that - none to a device that's valid
-        fs.throw(e::BCH_ERR_no_devices_valid)
+        fs.throw(e::no_devices_valid)
     }
 }
 

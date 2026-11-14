@@ -398,7 +398,7 @@ fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Back
         backpointer_del(t, v.bp_btree(), bp.k.p)?;
 
         // Normally, on transaction commit from inside a transaction, we'll
-        // return -BCH_ERR_transaction_restart_nested, since a transaction
+        // return -transaction_restart_nested, since a transaction
         // commit invalidates pointers given out by peek().
         //
         // However, since we're updating a write buffer btree, if we return a
@@ -443,7 +443,7 @@ fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
     }
 
     if b.will_make_reachable() {
-        return fs.throw(Errcode::BCH_ERR_backpointer_to_overwritten_btree_node);
+        return fs.throw(Errcode::backpointer_to_overwritten_btree_node);
     }
 
     backpointer_target_not_found(t, bp, node_k, last_flushed, commit)?;
@@ -483,7 +483,7 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
 
     match get_node(t, bp, iter, last_flushed, commit) {
         Ok(b) => Ok(b.map(|b| BkeySC::from(b.contents().key_i()))),
-        Err(e) if e.matches(Errcode::BCH_ERR_backpointer_to_overwritten_btree_node) => Ok(None),
+        Err(e) if e.matches(Errcode::backpointer_to_overwritten_btree_node) => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -586,10 +586,10 @@ impl BpScanIter<'_> {
                     self.batch.reserve(more).is_ok()
                 };
                 if grew {
-                    return Err(t.restart(Errcode::BCH_ERR_transaction_restart_backpointer_scan_grow));
+                    return Err(t.restart(Errcode::transaction_restart_backpointer_scan_grow));
                 }
                 if self.batch.is_empty() {
-                    return t.fs().throw(Errcode::BCH_ERR_ENOMEM_backpointer_scan);
+                    return t.fs().throw(Errcode::ENOMEM_backpointer_scan);
                 }
                 return Ok(ControlFlow::Break(()));
             }

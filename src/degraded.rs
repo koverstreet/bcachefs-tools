@@ -372,7 +372,7 @@ mod tests {
             // errcode parent-chain walk BUG_ON()s rather than bounds-checking,
             // so what's being asserted here is as much "doesn't abort" as
             // "doesn't match".
-            BchError::from_raw(c::Errcode::BCH_ERR_MAX.0 as i32 + 1),
+            BchError::from_raw(c::Errcode::MAX.0 as i32 + 1),
         ] {
             assert_eq!(Situation::of(&e), None, "{e:?}");
         }

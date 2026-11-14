@@ -107,7 +107,7 @@ unsafe fn node_flush(j: *mut c::journal, pin: *mut Pin, idx: usize, seq: u64) ->
     });
 
     match ret {
-        Err(e) if e.matches(Errcode::BCH_ERR_no_btree_node_reused) => 0,
+        Err(e) if e.matches(Errcode::no_btree_node_reused) => 0,
         r => ret_to_c(r),
     }
 }

@@ -501,7 +501,7 @@ pub struct Fs {
     /* Counts outstanding writes, for clean transition to read-only */
     #[init(crate::util::alloc::init_or(
         crate::util::refcount::PercpuRef::new_dead::<crate::init::rw::WritesDisabled>(),
-        c::Errcode::BCH_ERR_ENOMEM_fs_other_alloc))]
+        c::Errcode::ENOMEM_fs_other_alloc))]
     #[pin]
     pub writes: crate::util::refcount::PercpuRef,
 

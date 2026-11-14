@@ -308,7 +308,7 @@ impl InodeWalker {
 
         // walk() invalidates on the restart: the retry refetches the versions,
         // the one just written included
-        Err(t.restart(Errcode::BCH_ERR_transaction_restart_nested))
+        Err(t.restart(Errcode::transaction_restart_nested))
     }
 
     /// @k, in @iter's btree, has to belong to an inode of the matching type:
@@ -360,7 +360,7 @@ impl InodeWalker {
         let nr_keys = count_inode_keys(t, inode_pos, btree, Some(&mut buf))?;
         if nr_keys == 0 {
             bch_err!(fs, "check_key_has_inode: error finding live keys in inode");
-            return Err(fs.err(Errcode::BCH_ERR_shutdown_with_errors_unfixed));
+            return Err(fs.err(Errcode::shutdown_with_errors_unfixed));
         }
 
         if nr_keys >= COUNT_INODE_KEYS_MAX {
@@ -393,7 +393,7 @@ impl InodeWalker {
                 let Some(g) = good_ancestor else {
                     reconstruct_inode(t, btree, k.k.p.snapshot, k.k.p.inode, None)?;
                     t.commit(None, CommitFlags::NO_ENOSPC)?;
-                    return Err(t.restart(Errcode::BCH_ERR_transaction_restart_commit));
+                    return Err(t.restart(Errcode::transaction_restart_commit));
                 };
 
                 // A good ancestor is visible from @k, so the walk resolved @k
@@ -581,7 +581,7 @@ fn delete_stray_key<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeIter<'t>) -> Resul
     let res = DiskReservation::new(t.fs());
     t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
-    Err(t.restart(Errcode::BCH_ERR_transaction_restart_commit))
+    Err(t.restart(Errcode::transaction_restart_commit))
 }
 
 /// Where @inum's last extent, as @snapshot sees it, ends, in bytes: the
@@ -658,7 +658,7 @@ pub fn reconstruct_subvol_root(
 
     if !fs.snapshots.is_leaf(snapshot)? {
         bch_err!(fs, "need to reconstruct subvol {subvol}, but snapshot {snapshot} is an interior node");
-        return Err(fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented));
+        return Err(fs.err(Errcode::fsck_repair_unimplemented));
     }
 
     if let Some(inum) = inum {
@@ -679,7 +679,7 @@ pub fn reconstruct_subvol_root(
 
     root.ok_or_else(|| {
         bch_err!(fs, "no root inode found for subvol {subvol}, can't reconstruct");
-        fs.err(Errcode::BCH_ERR_fsck_repair_unimplemented)
+        fs.err(Errcode::fsck_repair_unimplemented)
     })
 }
 
@@ -894,7 +894,7 @@ pub mod ioctl {
         let arg = user.head()?;
 
         if arg.flags != 0 {
-            return Err(Errcode::BCH_ERR_EINVAL_fsck_offline_bad_flags.into());
+            return Err(Errcode::EINVAL_fsck_offline_bad_flags.into());
         }
 
         if !capable(Capability::SysAdmin) {
@@ -969,11 +969,11 @@ pub mod ioctl {
 
     pub fn fsck_online(fs: &Fs, arg: c::bch_ioctl_fsck_online) -> Result<c_int, BchError> {
         if arg.flags != 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_fsck_online_bad_flags);
+            return fs.throw(Errcode::EINVAL_fsck_online_bad_flags);
         }
 
         if !capable(Capability::SysAdmin) {
-            return fs.throw(Errcode::BCH_ERR_EPERM_non_admin);
+            return fs.throw(Errcode::EPERM_non_admin);
         }
 
         let opts = user_opts(arg.opts)?;
@@ -999,7 +999,7 @@ pub mod ioctl {
                 crate::util::names::prt_set::<RecoveryPass>(&mut buf, passes & !online);
                 prt!(&mut buf, " online\n");
                 let _ = stdio.write(false, buf.as_bytes());
-                return -fs.err(Errcode::BCH_ERR_EINVAL_fsck_online_bad_passes).raw();
+                return -fs.err(Errcode::EINVAL_fsck_online_bad_passes).raw();
             }
         }
 

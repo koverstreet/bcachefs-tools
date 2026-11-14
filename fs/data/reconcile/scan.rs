@@ -268,7 +268,7 @@ const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
 
 fn stop(fs: &Fs) -> Result<(), BchError> {
     if Kthread::should_stop() || !fs.reconcile_enabled() {
-        return Err(c::Errcode::BCH_ERR_reconcile_scan_stop.into());
+        return Err(c::Errcode::reconcile_scan_stop.into());
     }
     Ok(())
 }
@@ -369,7 +369,7 @@ fn scan_indirect(trans: &TransGuard<'_>, scan: &c::ReconcileScan, res: &DiskRese
                                   BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS);
     iter.for_each_commit(trans, Some(res), NO_ENOSPC, |t, iter, k| {
         if k.k.start_pos() >= pos(0, refs.end) {
-            return Err(c::Errcode::BCH_ERR_fc_break.into());
+            return Err(c::Errcode::fc_break.into());
         }
         res.put();
         update_opts(t, Some(&mut **s), opts, iter, 0, k, scan)

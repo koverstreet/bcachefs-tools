@@ -164,7 +164,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut commit_lock = trans.mutex_lock(&mut trans.paths(), &fs.btree.interior_updates.commit_lock)?;
 
         let Some(update) = b.will_make_reachable.update() else {
-            return Err(trans.restart(Errcode::BCH_ERR_transaction_restart_nested));
+            return Err(trans.restart(Errcode::transaction_restart_nested));
         };
 
         /*

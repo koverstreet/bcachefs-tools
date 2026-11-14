@@ -160,7 +160,7 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
         write_op_error(op, op.pos.offset, format_args!("extent too big to decompress ({} > {})",
                                                        crc.uncompressed_size << 9,
                                                        fs.opts().encoded_extent_max.get()));
-        return decompress_err(fs, Err(fs.err(Errcode::BCH_ERR_decompress_exceeded_max_encoded_extent)));
+        return decompress_err(fs, Err(fs.err(Errcode::decompress_exceeded_max_encoded_extent)));
     }
 
     let dst_buf = bounce_alloc(fs, dst_len, WRITE);
@@ -221,7 +221,7 @@ fn csum_err(op: &Op, csum: c::bch_csum) -> BchError {
         "error verifying existing checksum while moving existing data (memory corruption?)\n  \
          expected {:0x}:{:0x} got {:0x}:{:0x} type {}",
         op.crc.csum.hi.get(), op.crc.csum.lo.get(), csum.hi.get(), csum.lo.get(), ty_name));
-    fs.err(Errcode::BCH_ERR_data_write_csum)
+    fs.err(Errcode::data_write_csum)
 }
 
 #[inline(never)]
@@ -279,7 +279,7 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
             }
         }
 
-        return Err(fs.err(Errcode::BCH_ERR_write_encoded_as_is));
+        return Err(fs.err(Errcode::write_encoded_as_is));
     }
 
     /*
@@ -302,7 +302,7 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
          * the extent as we found it is still on the table:
          */
         if let Err(e) = write_op_decode(op) {
-            if !e.matches(Errcode::BCH_ERR_decompress) {
+            if !e.matches(Errcode::decompress) {
                 return Err(e);
             }
 
@@ -320,10 +320,10 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
              * never pays the fragmentation for it.
              */
             if op.crc.compressed_size > wp.sectors_free() {
-                return Err(fs.err(Errcode::BCH_ERR_data_write_need_fresh_buckets));
+                return Err(fs.err(Errcode::data_write_need_fresh_buckets));
             }
 
-            return Err(fs.err(Errcode::BCH_ERR_write_encoded_as_is));
+            return Err(fs.err(Errcode::write_encoded_as_is));
         }
     }
 
@@ -395,7 +395,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
 
     if unlikely(op.has(w::data_encoded)) {
         match write_prep_encoded_data(op, wp) {
-            Err(e) if e.matches(Errcode::BCH_ERR_write_encoded_as_is) => {
+            Err(e) if e.matches(Errcode::write_encoded_as_is) => {
                 if !ec_buf.is_null() {
                     dst = write_bio_alloc(fs, wp, src, ec_buf);
                     bio_copy_data(dst, src);

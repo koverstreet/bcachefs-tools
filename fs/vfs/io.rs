@@ -460,7 +460,7 @@ impl InodeInfo {
         let v = self.vfs();
 
         if (offset | len) & (fs.block_bytes() - 1) != 0 {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_fcollapse_finsert_unaligned);
+            return fs.throw(Errcode::EINVAL_fcollapse_finsert_unaligned);
         }
 
         if insert {
@@ -469,10 +469,10 @@ impl InodeInfo {
             }
 
             if offset >= v.size() {
-                return fs.throw(Errcode::BCH_ERR_EINVAL_finsert_past_eof);
+                return fs.throw(Errcode::EINVAL_finsert_past_eof);
             }
         } else if offset + len >= v.size() {
-            return fs.throw(Errcode::BCH_ERR_EINVAL_fcollapse_past_eof);
+            return fs.throw(Errcode::EINVAL_fcollapse_past_eof);
         }
 
         v.mapping().write_invalidate_range(offset, u64::MAX)?;
@@ -662,7 +662,7 @@ pub(super) fn fallocate(inode: &InodeInfo, file: &File, mode: c_int, offset: i64
     } else if mode == c::FALLOC_FL_COLLAPSE_RANGE {
         inode.fcollapse_finsert(offset, len, false)
     } else {
-        fs.throw(Errcode::BCH_ERR_unsupported_fallocate_mode)
+        fs.throw(Errcode::unsupported_fallocate_mode)
     };
 
     inode.clear_reserved();
@@ -788,15 +788,15 @@ pub(super) fn remap_file_range(src: &InodeInfo, file_src: &File, pos_src: i64, f
     let (pos_src, pos_dst, mut len) = (pos_src as u64, pos_dst as u64, len as u64);
 
     if remap_flags & !(c::REMAP_FILE_DEDUP | c::REMAP_FILE_ADVISORY) != 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_remap_bad_flags);
+        return fs.throw(Errcode::EINVAL_remap_bad_flags);
     }
 
     if pos_src & (block_bytes - 1) != 0 || pos_dst & (block_bytes - 1) != 0 {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_remap_unaligned);
+        return fs.throw(Errcode::EINVAL_remap_unaligned);
     }
 
     if core::ptr::eq(src, dst) && pos_src.abs_diff(pos_dst) < len {
-        return fs.throw(Errcode::BCH_ERR_EINVAL_remap_overlapping);
+        return fs.throw(Errcode::EINVAL_remap_overlapping);
     }
 
     /*

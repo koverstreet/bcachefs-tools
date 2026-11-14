@@ -71,7 +71,7 @@ impl Fs {
 
         for _ in 0..bc.lock.nr_reserve.get() {
             let Some(b) = node_mem_alloc(self) else {
-                return self.throw(Errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
+                return self.throw(Errcode::ENOMEM_fs_btree_cache_init);
             };
             let b = unsafe { cached_node(self, b.as_ptr()) };
             let held = new_node_lock(b);

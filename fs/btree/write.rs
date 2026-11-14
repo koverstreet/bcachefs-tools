@@ -120,7 +120,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNod
     let fs = t.fs();
 
     let mut iter = match unsafe { BtreeNodeIter::at_node(t, b) } {
-        Err(e) if e == BchError::from(c::Errcode::BCH_ERR_btree_node_dying) => return Ok(()),
+        Err(e) if e == BchError::from(c::Errcode::btree_node_dying) => return Ok(()),
         r => r?,
     };
     let node = iter.iter().node_at_iter_level(t).expect("the node the iterator was got for, at its level");
@@ -135,7 +135,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNod
         .drop_ptrs_noerror(fs, |p| wbio.failed.dev(p.p.ptr.dev().into()).is_some());
 
     if n.as_sc().durability_safe(fs).nr_ptrs == 0 {
-        return Err(fs.err(c::Errcode::BCH_ERR_btree_node_write_all_failed));
+        return Err(fs.err(c::Errcode::btree_node_write_all_failed));
     }
 
     if !wbio.failed.is_empty() {

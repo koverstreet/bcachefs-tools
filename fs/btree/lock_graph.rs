@@ -386,7 +386,7 @@ impl LockGraph {
 
         if i == 0 {
             self.trace_would_deadlock(trans);
-            Err(Cycle::Restart(trans.restart_foreign_task(Errcode::BCH_ERR_transaction_restart_would_deadlock)))
+            Err(Cycle::Restart(trans.restart_foreign_task(Errcode::transaction_restart_would_deadlock)))
         } else {
             trans.set_must_abort();
             trans.wake_up();
@@ -499,7 +499,7 @@ impl LockGraph {
             write!(out, "{}", trans.fn_name());
         });
 
-        Cycle::Restart(trans.own().restart(Errcode::BCH_ERR_transaction_restart_deadlock_waitlist_alloc))
+        Cycle::Restart(trans.own().restart(Errcode::transaction_restart_deadlock_waitlist_alloc))
     }
 
     fn scan_held_locks(&mut self, rcu: &ReadGuard, cycle: bool) -> Result<Step, Cycle> {
@@ -646,7 +646,7 @@ pub(crate) fn check_for_deadlock(trans: *mut BtreeTrans<'_>, mut cycle: Option<&
         }
 
         g.trace_would_deadlock(trans);
-        return Err(Cycle::Restart(trans.own().restart(Errcode::BCH_ERR_transaction_restart_would_deadlock)));
+        return Err(Cycle::Restart(trans.own().restart(Errcode::transaction_restart_would_deadlock)));
     }
 
     g.down(trans);
@@ -744,7 +744,7 @@ pub(crate) fn bch2_six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &c::btree_b
      */
     if let Some(b) = BtreeNode::from_common(b) {
         if node_reuse_race(trans, b) {
-            return -trans.fs().err(Errcode::BCH_ERR_no_btree_node_reused).raw();
+            return -trans.fs().err(Errcode::no_btree_node_reused).raw();
         }
     }
 

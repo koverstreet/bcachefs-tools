@@ -373,13 +373,13 @@ impl<'g> Table<'g> {
     /// See bch_fs_snapshots::live_descendent().
     fn live_descendent(&self, mut id: u32) -> Result<Option<u32>, Errcode> {
         loop {
-            let s = self.entry(id).ok_or(Errcode::BCH_ERR_invalid_snapshot_node)?;
+            let s = self.entry(id).ok_or(Errcode::invalid_snapshot_node)?;
             if s.state() == c::SnapshotIdState::SNAPSHOT_ID_live {
                 return Ok(Some(id));
             }
             // deleted nodes are single-child
             match s.children() {
-                [_, c1] if c1 != 0 => return Err(Errcode::BCH_ERR_snapshot_multiple_descendents),
+                [_, c1] if c1 != 0 => return Err(Errcode::snapshot_multiple_descendents),
                 [0, _]             => return Ok(None),
                 [c0, _]            => id = c0,
             }
@@ -521,7 +521,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     let mut w = fs.snapshots.table_write();
 
     if w.make_room(id).is_err() {
-        return fs.throw(Errcode::BCH_ERR_ENOMEM_mark_snapshot);
+        return fs.throw(Errcode::ENOMEM_mark_snapshot);
     }
 
     let table = w.table();
@@ -657,7 +657,7 @@ impl c::bch_fs_snapshots {
     pub fn is_leaf(&self, id: u32) -> Result<bool, BchError> {
         match self.with_table(|t| t.entry(id).map(|s| s.children()[0])) {
             Some(child) => Ok(child == 0),
-            None        => self.fs().throw(Errcode::BCH_ERR_invalid_snapshot_node),
+            None        => self.fs().throw(Errcode::invalid_snapshot_node),
         }
     }
 
@@ -758,7 +758,7 @@ impl c::bch_fs_snapshots {
     /// For node @id, about to be created.
     pub fn table_make_room(&self, id: u32) -> Result<(), BchError> {
         self.table_write().make_room(id)
-            .map_err(|_| self.fs().err(Errcode::BCH_ERR_ENOMEM_mark_snapshot))
+            .map_err(|_| self.fs().err(Errcode::ENOMEM_mark_snapshot))
     }
 
     pub(crate) fn table_write(&self) -> TableWrite<'_> {
@@ -1249,7 +1249,7 @@ pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree,
     t.bkey_get_val::<c::SnapshotTree>(Btree::snapshot_trees, pos(0, id as u64),
                                       BtreeIterFlags::empty())
         .map_err(|e| if e.matches(c::ENOENT) {
-            t.fs().err(Errcode::BCH_ERR_ENOENT_snapshot_tree)
+            t.fs().err(Errcode::ENOENT_snapshot_tree)
         } else {
             e
         })
@@ -1262,8 +1262,8 @@ pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
     let mut iter = BtreeIter::uninit();
     match t.bkey_get_empty_slot(&mut iter, Btree::snapshot_trees, POS_MIN,
                                 pos(0, u32::MAX as u64)) {
-        Err(e) if e.matches(Errcode::BCH_ERR_ENOSPC_btree_slot) =>
-            return t.fs().throw(Errcode::BCH_ERR_ENOSPC_snapshot_tree),
+        Err(e) if e.matches(Errcode::ENOSPC_btree_slot) =>
+            return t.fs().throw(Errcode::ENOSPC_snapshot_tree),
         r => r?,
     }
 
@@ -1295,7 +1295,7 @@ fn create_snapids(
     for (new_id, &subvol) in new_snapids.iter_mut().zip(subvols) {
         let p = match iter.prev_slot(t)? {
             Some(k) if k.k.p.offset != 0 => k.k.p,
-            _ => return fs.throw(Errcode::BCH_ERR_ENOSPC_snapshot_create),
+            _ => return fs.throw(Errcode::ENOSPC_snapshot_create),
         };
 
         let mut n = t.bkey_alloc_typed::<c::Snapshot>()?;
@@ -1345,7 +1345,7 @@ fn node_create_children(
 
     if n_parent.v().children() != [0, 0] {
         bch_err!(fs, "Trying to add child snapshot nodes to parent that already has children");
-        return fs.throw(Errcode::BCH_ERR_EINVAL_snapshot_parent_already_has_children);
+        return fs.throw(Errcode::EINVAL_snapshot_parent_already_has_children);
     }
 
     create_snapids(t, parent, n_parent.v().tree(), new_snapids, subvols)?;
@@ -1377,7 +1377,7 @@ pub fn node_create(t: &TransAttempt<'_, '_>, parent: u32, new_snapids: &mut [u32
     -> Result<(), BchError>
 {
     if new_snapids.len() != subvols.len() {
-        return t.fs().throw(Errcode::BCH_ERR_invalid_snapshot_node);
+        return t.fs().throw(Errcode::invalid_snapshot_node);
     }
     assert_eq!(parent == 0, new_snapids.len() == 1);
     assert_eq!(parent != 0, new_snapids.len() == 2);

@@ -225,7 +225,7 @@ mod vfs {
             t.allocate_dropping_locks(|| {
                 let gfp = crate::util::alloc::current_gfp_context_raw(c::GFP_KERNEL);
                 NonNull::new(unsafe { c::posix_acl_alloc(nr, gfp) }).map(PosixAcl)
-                    .ok_or(BchError::from(Errcode::BCH_ERR_ENOMEM_acl))
+                    .ok_or(BchError::from(Errcode::ENOMEM_acl))
             })
         }
 
