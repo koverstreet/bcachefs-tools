@@ -37,7 +37,7 @@ use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{Exclusive, TaskSlot, Waiter};
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::{flags, Flags, init_at, kfree, kzalloc, Alloc, Allocator, Kmalloc};
+use crate::util::alloc::{Flags, init_at, kfree, kzalloc, Alloc, Allocator, Kmalloc};
 use crate::util::mempool::Mempool;
 
 pub struct BioInPlace(*mut c::bio);
@@ -403,7 +403,7 @@ impl<T: HasBio> BioSet<T> {
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        let bio = self.alloc_raw(bdev, B::nr_vecs(&src), opf, flags::WAIT);
+        let bio = self.alloc_raw(bdev, B::nr_vecs(&src), opf, Flags::empty());
         let mut b = Self::init_new(bio, init)?;
         let buffers = B::fill(b.bio_mut(), src)?;
         let t = core::mem::ManuallyDrop::new(b).t;

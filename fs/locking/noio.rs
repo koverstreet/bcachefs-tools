@@ -89,14 +89,14 @@ impl MemallocFlags {
         Self::new(PF_MEMALLOC_NOWARN)
     }
 
-    /// The scope a C caller's @gfp says, for Rust that takes none: NORECLAIM
-    /// without direct reclaim, else NOIO without __GFP_IO or __GFP_FS; NOWARN.
-    /// The rest of @gfp has no scope, and goes.
+    /// The scope a caller's @gfp says, for Rust that takes none: NORECLAIM for
+    /// NOWAIT or ATOMIC, else NOIO for NOIO; NOWARN. The rest of @gfp has no
+    /// scope, and goes.
     pub fn for_gfp(gfp: Flags) -> Self {
         let mut pf = 0;
-        if !gfp.contains(flags::DIRECT_RECLAIM) {
+        if gfp.intersects(flags::NOWAIT | flags::ATOMIC) {
             pf |= PF_MEMALLOC_NORECLAIM;
-        } else if !gfp.intersects(flags::IO | flags::FS) {
+        } else if gfp.contains(flags::NOIO) {
             pf |= PF_MEMALLOC_NOIO;
         }
         if gfp.contains(flags::NOWARN) {

@@ -97,7 +97,7 @@ use crate::c;
 use crate::c::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
               rust_local_unlock_irqrestore};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{current_gfp_context, flags, AllocError, Flags};
+use crate::util::alloc::{current_gfp, current_gfp_context_raw, AllocError, Flags};
 use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
@@ -386,7 +386,7 @@ impl<T> Copy for PerCpuRef<'_, T> {}
 impl<T: ::pin_init::Zeroable> PerCpu<T> {
     /// Every possible CPU's copy, zeroed: alloc_percpu().
     pub fn alloc() -> Result<Self, AllocError> {
-        Self::alloc_gfp(flags::WAIT)
+        Self::alloc_gfp(Flags::empty())
     }
 
     /// alloc(), allocating with @gfp: alloc_percpu_gfp().
@@ -394,7 +394,7 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
         // In the kernel, __alloc_percpu_gfp() is a macro - alloc_hooks() over
         // pcpu_alloc_noprof() - which kernel Rust calls directly, as its
         // allocator does krealloc_noprof()
-        let gfp = current_gfp_context(gfp).raw();
+        let gfp = current_gfp_context_raw(gfp.raw());
         let p = unsafe { c::pcpu_alloc_noprof(size_of::<T>(), align_of::<T>(), false, gfp) };
         if p.is_null() { Err(AllocError) } else { Ok(PerCpu(p.cast())) }
     }
@@ -440,7 +440,7 @@ pub struct PerCpuU64s {
 impl PerCpuU64s {
     pub fn new(n: usize) -> Result<Self, AllocError> {
         let size = n * size_of::<u64>();
-        let gfp = current_gfp_context(flags::WAIT).raw();
+        let gfp = current_gfp();
         let p = unsafe { c::pcpu_alloc_noprof(size, align_of::<u64>(), false, gfp) };
         Ok(Self { p: NonNull::new(p.cast()).ok_or(AllocError)?, n })
     }

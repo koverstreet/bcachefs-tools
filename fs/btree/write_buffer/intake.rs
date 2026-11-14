@@ -13,7 +13,7 @@ use crate::errcode::BchError;
 use crate::format::{jset_entry, BkeyType, Btree};
 use crate::fs::Fs;
 use crate::prt;
-use crate::util::alloc::{flags, Flags, AllocError};
+use crate::util::alloc::{Flags, AllocError};
 use crate::util::vstructs::Unvalidated;
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
@@ -296,7 +296,7 @@ impl<'a> Intake<'a> {
              * the write buffer locks under j->buf_lock. Growing inc has no
              * fallback; that one has to be allowed to wait.
              */
-            let gfp = if b.flushing.is_some() { WB_RESIZE_GFP } else { flags::WAIT };
+            let gfp = if b.flushing.is_some() { WB_RESIZE_GFP } else { Flags::empty() };
 
             #[cfg(CONFIG_BCACHEFS_TESTS)]
             let force_alloc_failure =

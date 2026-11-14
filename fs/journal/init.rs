@@ -5,7 +5,7 @@
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::alloc::replicas::DevlistEntry;
-use crate::util::alloc::flags;
+use crate::util::alloc::Flags;
 use crate::btree::bkey::prelude::*;
 use crate::c;
 use crate::c::JournalFlag as Journal;
@@ -204,7 +204,7 @@ impl c::journal {
         let enomem = || fs.err(Errcode::ENOMEM_journal_buf);
         let size = c::JOURNAL_ENTRY_SIZE_MIN;
 
-        let buf = c::JsetBuf::new(size, flags::WAIT).map_err(|_| enomem())?;
+        let buf = c::JsetBuf::new(size, Flags::empty()).map_err(|_| enomem())?;
 
         /* the old one freed outside the lock: kvfree can sleep */
         let old = {

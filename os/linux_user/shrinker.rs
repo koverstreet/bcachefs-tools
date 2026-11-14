@@ -22,7 +22,7 @@ use super::kthread::{kthread_create_name, kthread_should_stop};
 use super::sched::{linux_thread_init, schedule_timeout, wake_up_process};
 use crate::c;
 use crate::os::kernel::{HZ, PAGE_SIZE};
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{flags, AllocError, Flags};
 use crate::util::place::{Contained, PlacedDrop};
 
 pub(crate) trait Shrink: Contained + PlacedDrop + Sync {
@@ -128,8 +128,8 @@ fn run_shrinkers_allocation_failed() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn run_shrinkers(gfp: crate::util::alloc::Flags, allocation_failed: bool) {
-    if !gfp.contains(crate::util::alloc::flags::WAIT) {
+pub extern "C" fn run_shrinkers(gfp: Flags, allocation_failed: bool) {
+    if gfp.intersects(flags::NOWAIT | flags::ATOMIC | flags::NOIO) {
         return;
     }
 
@@ -165,7 +165,7 @@ unsafe extern "C" fn shrinker_thread(_arg: *mut c_void) -> c_int {
         if kthread_should_stop() {
             break;
         }
-        run_shrinkers(crate::util::alloc::flags::WAIT, false);
+        run_shrinkers(Flags::empty(), false);
     }
     0
 }

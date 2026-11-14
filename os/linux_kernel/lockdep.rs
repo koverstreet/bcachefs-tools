@@ -93,7 +93,7 @@ pub fn reclaim_lock_order(take: impl FnOnce()) {
             fn fs_reclaim_release(gfp_mask: c::gfp_t);
         }
 
-        let gfp = crate::util::alloc::flags::WAIT.raw();
+        let gfp = c::GFP_KERNEL;
         unsafe { fs_reclaim_acquire(gfp) };
         take();
         unsafe { fs_reclaim_release(gfp) };

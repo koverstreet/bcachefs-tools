@@ -189,7 +189,7 @@ pub unsafe fn free_pinned<T>(p: *mut T) {
 pub fn kbox_pin_init<T: FreeAnytime, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
     -> Result<core::pin::Pin<KBox<T>>, E>
 {
-    let p = crate::util::maybe_rcu_alloc::alloc_at::<T, Kmalloc, E>(init, flags::WAIT)?;
+    let p = crate::util::maybe_rcu_alloc::alloc_at::<T, Kmalloc, E>(init, Flags::empty())?;
     Ok(unsafe { core::pin::Pin::new_unchecked(KBox::from_raw(p.as_ptr())) })
 }
 

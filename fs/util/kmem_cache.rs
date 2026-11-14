@@ -63,7 +63,9 @@ impl<T> KmemCache<T> {
     /// A @T's memory, zeroed.
     pub fn zalloc(&self, gfp: Flags) -> Option<NonNull<T>> {
         #[cfg(kernel)]
-        return NonNull::new(unsafe { c::kmem_cache_alloc_noprof(self.as_ptr(), (gfp | flags::ZERO).raw()) }.cast());
+        return NonNull::new(unsafe {
+            c::kmem_cache_alloc_noprof(self.as_ptr(), crate::util::alloc::current_gfp_context_raw((gfp | flags::ZERO).raw()))
+        }.cast());
         #[cfg(not(kernel))]
         {
             let _ = gfp;
@@ -75,7 +77,9 @@ impl<T> KmemCache<T> {
     /// LRU, for alloc_inode_sb().
     #[cfg(kernel)]
     pub fn alloc_lru(&self, lru: *mut c::list_lru, gfp: Flags) -> Option<NonNull<T>> {
-        NonNull::new(unsafe { c::kmem_cache_alloc_lru_noprof(self.as_ptr(), lru, gfp.raw()) }.cast())
+        NonNull::new(unsafe {
+            c::kmem_cache_alloc_lru_noprof(self.as_ptr(), lru, crate::util::alloc::current_gfp_context_raw(gfp.raw()))
+        }.cast())
     }
 
     /// # Safety

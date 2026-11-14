@@ -62,7 +62,7 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     where
         A: AllocGfp,
     {
-        Self::new_gfp(init, flags::WAIT)
+        Self::new_gfp(init, Flags::empty())
     }
 
     /// new(), for what mustn't fail to allocate: failing only with @init's
@@ -71,7 +71,7 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     where
         A: AllocGfp,
     {
-        Self::new_gfp(init, flags::WAIT | flags::NOFAIL)
+        Self::new_gfp(init, flags::NOFAIL)
     }
 
     fn new_gfp<E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<Self, E>

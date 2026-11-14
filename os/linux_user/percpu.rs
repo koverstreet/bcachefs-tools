@@ -552,7 +552,7 @@ impl<T> Copy for PerCpuRef<'_, T> {}
 impl<T: ::pin_init::Zeroable> PerCpu<T> {
     /// Every possible CPU's copy, zeroed: alloc_percpu().
     pub fn alloc() -> Result<Self, AllocError> {
-        Self::alloc_gfp(crate::util::alloc::flags::WAIT)
+        Self::alloc_gfp(crate::util::alloc::Flags::empty())
     }
 
     /// alloc(), allocating with @gfp: alloc_percpu_gfp().

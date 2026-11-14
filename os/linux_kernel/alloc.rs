@@ -27,26 +27,33 @@ impl Kmalloc {
     pub const MAX_SIZE: usize = super::kernel::PAGE_SIZE << c::MAX_PAGE_ORDER;
 }
 
+/// What a plain allocation may do that NOWAIT, ATOMIC and NOIO take away.
+const GFP_DIRECT: c::gfp_t = c::__GFP_DIRECT_RECLAIM | c::__GFP_IO | c::__GFP_FS;
+
 impl Flags {
-    /// The kernel's gfp_t of them.
+    /// The kernel's gfp_t of them: GFP_KERNEL, GFP_NOWAIT, GFP_ATOMIC or
+    /// GFP_NOIO, and the modifiers.
     pub const fn raw(self) -> c::gfp_t {
-        const GFP: [(Flags, c::gfp_t); 13] = [
-            (flags::DIRECT_RECLAIM,     c::__GFP_DIRECT_RECLAIM),
-            (flags::BACKGROUND_RECLAIM, c::__GFP_KSWAPD_RECLAIM),
-            (flags::IO,                 c::__GFP_IO),
-            (flags::FS,                 c::__GFP_FS),
-            (flags::HIGH_PRIORITY,      c::__GFP_HIGH),
-            (flags::ZERO,               c::__GFP_ZERO),
-            (flags::NOWARN,             c::__GFP_NOWARN),
-            (flags::NORETRY,            c::__GFP_NORETRY),
-            (flags::NO_RESERVES,        c::__GFP_NOMEMALLOC),
-            (flags::ACCOUNT,            c::__GFP_ACCOUNT),
-            (flags::RECLAIMABLE,        c::__GFP_RECLAIMABLE),
-            (flags::SKIP_ZERO,          c::__GFP_SKIP_ZERO),
-            (flags::NOFAIL,             c::__GFP_NOFAIL),
+        const GFP: [(Flags, c::gfp_t); 8] = [
+            (flags::ZERO,        c::__GFP_ZERO),
+            (flags::NOWARN,      c::__GFP_NOWARN),
+            (flags::NORETRY,     c::__GFP_NORETRY),
+            (flags::NO_RESERVES, c::__GFP_NOMEMALLOC),
+            (flags::ACCOUNT,     c::__GFP_ACCOUNT),
+            (flags::RECLAIMABLE, c::__GFP_RECLAIMABLE),
+            (flags::SKIP_ZERO,   c::__GFP_SKIP_ZERO),
+            (flags::NOFAIL,      c::__GFP_NOFAIL),
         ];
 
-        let mut gfp = 0;
+        let mut gfp = if self.contains(flags::ATOMIC) {
+            c::GFP_KERNEL & !GFP_DIRECT | c::__GFP_HIGH
+        } else if self.contains(flags::NOWAIT) {
+            c::GFP_KERNEL & !GFP_DIRECT | c::__GFP_NOWARN
+        } else if self.contains(flags::NOIO) {
+            c::GFP_KERNEL & !(c::__GFP_IO | c::__GFP_FS)
+        } else {
+            c::GFP_KERNEL
+        };
         let mut i = 0;
         while i < GFP.len() {
             if self.contains(GFP[i].0) {
@@ -89,11 +96,11 @@ macro_rules! allocs {
     ($($a:ident => $realloc:ident, $layout:expr),*) => {$(
         unsafe impl Allocator for $a {
             fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                self.allocate_gfp(layout, flags::WAIT)
+                self.allocate_gfp(layout, Flags::empty())
             }
 
             fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                self.allocate_zeroed_gfp(layout, flags::WAIT)
+                self.allocate_zeroed_gfp(layout, Flags::empty())
             }
 
             unsafe fn deallocate(&self, p: NonNull<u8>, layout: Layout) {
@@ -101,17 +108,17 @@ macro_rules! allocs {
             }
 
             unsafe fn grow(&self, p: NonNull<u8>, old: Layout, new: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                unsafe { $a::c_realloc(Some(p), new, old, flags::WAIT) }
+                unsafe { $a::c_realloc(Some(p), new, old, Flags::empty()) }
             }
 
             unsafe fn grow_zeroed(&self, p: NonNull<u8>, old: Layout, new: Layout)
                 -> Result<NonNull<[u8]>, AllocError>
             {
-                unsafe { $a::c_realloc(Some(p), new, old, flags::WAIT | flags::ZERO) }
+                unsafe { $a::c_realloc(Some(p), new, old, flags::ZERO) }
             }
 
             unsafe fn shrink(&self, p: NonNull<u8>, old: Layout, new: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                unsafe { $a::c_realloc(Some(p), new, old, flags::WAIT) }
+                unsafe { $a::c_realloc(Some(p), new, old, Flags::empty()) }
             }
         }
 
@@ -146,7 +153,9 @@ macro_rules! allocs {
                 let layout: Layout = $layout(layout);
                 // a zero-sized allocation is dangling: nothing for C to free
                 let p = p.filter(|_| old.size() != 0).map_or(core::ptr::null(), |p| p.as_ptr().cast_const().cast());
-                let gfp = current_gfp_context(gfp).raw();
+                ebug_assert!(!gfp.contains(flags::NOFAIL) || !memalloc_scope().0,
+                             "a NOFAIL allocation, in a NORECLAIM scope");
+                let gfp = current_gfp_context_raw(gfp.raw());
                 let q = unsafe { $realloc(p, layout.size(), layout.align() as _, gfp, NUMA_NO_NODE) };
                 let q = if layout.size() == 0 {
                     core::ptr::without_provenance_mut(layout.align())
@@ -185,32 +194,34 @@ held_pointers!(FreeAnytime, DropAnytime, DropAtomic, NothingToDetach);
 /// it adds - the scopes the page allocator doesn't apply itself, as it does
 /// NOIO and NOFS: NORECLAIM takes direct reclaim, and the IO and FS that mean
 /// nothing without it; NOWARN adds NOWARN.
-fn memalloc_scope() -> (Flags, Flags) {
+fn memalloc_scope() -> (bool, bool) {
     use crate::locking::{PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 
     let pf = crate::os::sched::memalloc_flags();
-    let take = if pf & PF_MEMALLOC_NORECLAIM != 0 {
-        flags::DIRECT_RECLAIM | flags::IO | flags::FS
-    } else {
-        Flags::empty()
-    };
-    let add = if pf & PF_MEMALLOC_NOWARN != 0 { flags::NOWARN } else { Flags::empty() };
-    (take, add)
+    (pf & PF_MEMALLOC_NORECLAIM != 0, pf & PF_MEMALLOC_NOWARN != 0)
 }
 
-/// @gfp as the task's memalloc scope says.
+/// @gfp as the task's memalloc scope says: NORECLAIM makes it NOWAIT, if it
+/// isn't ATOMIC; NOWARN adds NOWARN.
 pub fn current_gfp_context(gfp: Flags) -> Flags {
-    let (take, add) = memalloc_scope();
-    ebug_assert!(!gfp.contains(flags::NOFAIL) || take == Flags::empty(),
-                 "a NOFAIL allocation, in a NORECLAIM scope");
-    gfp & !take | add
+    let (noreclaim, nowarn) = memalloc_scope();
+    let gfp = if noreclaim && !gfp.contains(flags::ATOMIC) { gfp | flags::NOWAIT } else { gfp };
+    if nowarn { gfp | flags::NOWARN } else { gfp }
 }
 
 /// current_gfp_context(), for a gfp_t of the kernel's own - a mapping's, which
-/// the VFS hands us.
+/// the VFS hands us, or ours: NORECLAIM takes direct reclaim, and the IO and
+/// FS that mean nothing without it.
 pub fn current_gfp_context_raw(gfp: c::gfp_t) -> c::gfp_t {
-    let (take, add) = memalloc_scope();
-    gfp & !take.raw() | add.raw()
+    let (noreclaim, nowarn) = memalloc_scope();
+    let gfp = if noreclaim { gfp & !GFP_DIRECT } else { gfp };
+    if nowarn { gfp | c::__GFP_NOWARN } else { gfp }
+}
+
+/// A plain allocation's gfp_t, as the task's memalloc scope says: for C that
+/// takes one.
+pub fn current_gfp() -> c::gfp_t {
+    current_gfp_context_raw(c::GFP_KERNEL)
 }
 
 /// current_gfp_context(), for the kernel's Rust Flags - its Box's and Arc's -
@@ -219,9 +230,9 @@ pub fn current_gfp_context_raw(gfp: c::gfp_t) -> c::gfp_t {
 fn kernel_gfp_context(f: kernel::alloc::Flags) -> kernel::alloc::Flags {
     use kernel::alloc::flags::{GFP_KERNEL, GFP_NOWAIT, __GFP_NOWARN};
 
-    let (take, add) = memalloc_scope();
-    let f = if take != Flags::empty() { f & !(GFP_KERNEL & !GFP_NOWAIT) } else { f };
-    if add != Flags::empty() { f | __GFP_NOWARN } else { f }
+    let (noreclaim, nowarn) = memalloc_scope();
+    let f = if noreclaim { f & !(GFP_KERNEL & !GFP_NOWAIT) } else { f };
+    if nowarn { f | __GFP_NOWARN } else { f }
 }
 
 /// The last ref's put frees it at once: what RCU readers may reach, which
@@ -237,19 +248,19 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
 
 /// @size bytes kzalloc()'d, NOFAIL: never null. kfree_unsized() takes it back.
 pub fn kzalloc_nofail(size: usize) -> *mut c_void {
-    kzalloc_gfp(size, flags::WAIT | flags::NOFAIL).expect("a NOFAIL allocation failed").as_ptr().cast()
+    kzalloc_gfp(size, flags::NOFAIL).expect("a NOFAIL allocation failed").as_ptr().cast()
 }
 
 /// @size bytes kvzalloc()'d, NOFAIL. kvfree_unsized() takes it back, or
 /// kvfree_rcu_head().
 pub fn kvzalloc_nofail(size: usize) -> NonNull<u8> {
-    kvzalloc_gfp(size, flags::WAIT | flags::NOFAIL).expect("a NOFAIL allocation failed")
+    kvzalloc_gfp(size, flags::NOFAIL).expect("a NOFAIL allocation failed")
 }
 
 /// A zeroed KBox that can't fail to allocate: Kmalloc's, NOFAIL - which the
 /// kernel's Rust Box can't ask for.
 pub fn kbox_zeroed_nofail<T: ::pin_init::Zeroable + FreeAnytime>() -> KBox<T> {
-    let p = Kmalloc.allocate_zeroed_gfp(Layout::new::<T>(), flags::WAIT | flags::NOFAIL)
+    let p = Kmalloc.allocate_zeroed_gfp(Layout::new::<T>(), flags::NOFAIL)
         .expect("a NOFAIL allocation failed");
     unsafe { KBox::from_raw(p.as_ptr().cast::<T>()) }
 }
@@ -279,7 +290,7 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError
     use kernel::bindings::{krealloc_node_align, NUMA_NO_NODE};
 
     // SAFETY: the caller's
-    let gfp = current_gfp_context(flags::WAIT).raw();
+    let gfp = current_gfp();
     NonNull::new(unsafe { krealloc_node_align(p.cast(), new, 1, gfp, NUMA_NO_NODE) }.cast()).ok_or(AllocError)
 }
 
@@ -290,7 +301,7 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError
 pub unsafe fn kvrealloc_unsized(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
     use kernel::bindings::{kvrealloc_node_align, NUMA_NO_NODE};
 
-    let gfp = current_gfp_context(flags::WAIT).raw();
+    let gfp = current_gfp();
     NonNull::new(unsafe { kvrealloc_node_align(p.cast(), new, 1, gfp, NUMA_NO_NODE) }.cast()).ok_or(AllocError)
 }
 
@@ -317,7 +328,7 @@ pub fn kvzalloc_gfp(size: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> 
 /// Aligned as kmalloc() aligns @new. kvfree_sized() takes it back.
 pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<NonNull<u8>, AllocError> {
     // SAFETY: @p is KVmalloc's, of @old bytes, or null
-    Ok(unsafe { KVmalloc::c_realloc(NonNull::new(p), kv_layout(new)?, kv_layout(old)?, flags::WAIT | flags::ZERO) }?.cast())
+    Ok(unsafe { KVmalloc::c_realloc(NonNull::new(p), kv_layout(new)?, kv_layout(old)?, flags::ZERO) }?.cast())
 }
 
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
@@ -396,7 +407,7 @@ mod abox {
     use core::alloc::Layout;
     use core::marker::PhantomData;
     use core::ptr::NonNull;
-    use crate::util::alloc::{flags, Allocator, KVmalloc};
+    use crate::util::alloc::{Allocator, Flags, KVmalloc};
 
     /// An alignment, as aligned-vec's: here only the compile-time one.
     pub trait Alignment {
@@ -444,7 +455,7 @@ mod abox {
             let cap = self.len.checked_add(additional).ok_or(AllocError)?;
             let old = (self.cap != 0).then_some(self.p.cast());
             // SAFETY: @old is KVmalloc's, of its layout, or none
-            let p = unsafe { KVmalloc::c_realloc(old, layout::<T, A>(cap)?, layout::<T, A>(self.cap)?, flags::WAIT) }?;
+            let p = unsafe { KVmalloc::c_realloc(old, layout::<T, A>(cap)?, layout::<T, A>(self.cap)?, Flags::empty()) }?;
             self.p = p.cast();
             self.cap = cap;
             Ok(())

@@ -394,7 +394,7 @@ pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
             core::ptr::null_mut(),
             unsafe { c::bio_iov_vecs_to_alloc(it.as_ptr(), c::BIO_MAX_VECS as i32) } as u16,
             c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE,
-            crate::util::alloc::flags::WAIT);
+            crate::util::alloc::Flags::empty());
         let dio = unsafe { crate::util::bio::of_bio::<Dio>(bio) };
         let d = unsafe { &mut *dio };
         d.req           = k.as_ptr();

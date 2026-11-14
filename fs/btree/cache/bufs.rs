@@ -120,7 +120,6 @@ crate::module_param! {
 
 #[derive(Clone, Copy)]
 enum Mem {
-    Kmalloc,
     Vmalloc,
     Kvmalloc,
 }
@@ -129,7 +128,6 @@ enum Mem {
 fn alloc_raw(mem: Mem, bytes: usize, gfp: Flags) -> *mut c_void {
     let Ok(layout) = kv_layout(bytes) else { return core::ptr::null_mut() };
     let p = match mem {
-        Mem::Kmalloc  => Kmalloc.allocate_gfp(layout, gfp),
         Mem::Vmalloc  => Vmalloc.allocate_gfp(layout, gfp),
         Mem::Kvmalloc => KVmalloc.allocate_gfp(layout, gfp),
     };
@@ -206,8 +204,7 @@ impl NodeBufs {
                  * page allocation if we're GFP_NOWAIT, otherwise straight to
                  * vmalloc.
                  */
-                let mem = if gfp.intersects(flags::RECLAIM) { Mem::Vmalloc } else { Mem::Kmalloc };
-                self.data = alloc_raw(mem, bytes, gfp);
+                self.data = alloc_raw(Mem::Vmalloc, bytes, gfp);
             }
             /*
              * mm is cursed: vmalloc can fail for no sane reason, even on 64
@@ -301,7 +298,7 @@ fn node_with_bufs(fs: &Fs, struct_alloc: fn(&Fs, bool, Flags) -> Option<NonNull<
     -> Option<NonNull<BtreeNode>>
 {
     let mut bufs = NodeBufs::new(fs);
-    let b = bufs.alloc(fs, flags::WAIT, false).ok().and_then(|()| struct_alloc(fs, false, flags::WAIT));
+    let b = bufs.alloc(fs, Flags::empty(), false).ok().and_then(|()| struct_alloc(fs, false, Flags::empty()));
     let Some(b) = b else {
         bufs.free();
         return None;

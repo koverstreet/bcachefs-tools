@@ -232,12 +232,12 @@ impl<T, I: FifoIdx> Fifo<T, I> {
     /// Room for @more entries past those there, the buffer grown if it must
     /// be - to a power of two, every index kept.
     pub fn reserve(&mut self, more: usize) -> Result<(), AllocError> {
-        self.reserve_gfp(more, flags::WAIT)
+        self.reserve_gfp(more, Flags::empty())
     }
 
     /// reserve(), for what mustn't fail to allocate.
     pub fn reserve_nofail(&mut self, more: usize) {
-        self.reserve_gfp(more, flags::WAIT | flags::NOFAIL).expect("a fifo grown past its index type");
+        self.reserve_gfp(more, flags::NOFAIL).expect("a fifo grown past its index type");
     }
 
     fn reserve_gfp(&mut self, more: usize, gfp: Flags) -> Result<(), AllocError> {

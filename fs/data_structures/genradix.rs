@@ -28,7 +28,7 @@
 //! drop.
 
 use crate::types::GenRadix;
-use crate::util::alloc::{flags, Flags, current_gfp_context, kfree_unsized, kzalloc_gfp, kzalloc_nofail, AllocError};
+use crate::util::alloc::{Flags, current_gfp_context, kfree_unsized, kzalloc_gfp, kzalloc_nofail, AllocError};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -390,7 +390,7 @@ impl<T: Zeroable> GenRadix<T> {
     #[inline]
     pub fn get_or_alloc(&mut self, idx: usize) -> Result<&mut T, AllocError> {
         let offset = Self::offset(idx).ok_or(AllocError)?;
-        let gfp = current_gfp_context(flags::WAIT);
+        let gfp = Flags::empty();
         let p = self.tree.ptr_alloc(offset, None, gfp);
         // SAFETY: as get_mut()'s
         NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
@@ -459,7 +459,7 @@ impl NewNode {
         let n = if nofail {
             kzalloc_nofail(NODE_SIZE).cast()
         } else {
-            Node::alloc(current_gfp_context(flags::WAIT))
+            Node::alloc(Flags::empty())
         };
         if n.is_null() {
             return Err(AllocError);
@@ -515,7 +515,7 @@ impl<T: Zeroable> SharedGenRadix<T> {
     #[inline]
     pub fn prealloc(&self, idx: usize) -> Result<(), AllocError> {
         let offset = GenRadix::<T>::offset(idx).ok_or(AllocError)?;
-        let gfp = current_gfp_context(flags::WAIT);
+        let gfp = Flags::empty();
         let p = self.tree().ptr_alloc(offset, None, gfp);
         if p.is_null() { Err(AllocError) } else { Ok(()) }
     }

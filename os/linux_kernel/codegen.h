@@ -117,7 +117,6 @@ const blk_status_t RUST_CONST_HELPER_BLK_STS_INVAL		= BLK_STS_INVAL;
 
 /* os::alloc::Flags' bits, which Flags::raw() maps: the kernel crate binds none */
 const gfp_t RUST_CONST_HELPER___GFP_DIRECT_RECLAIM	= __GFP_DIRECT_RECLAIM;
-const gfp_t RUST_CONST_HELPER___GFP_KSWAPD_RECLAIM	= __GFP_KSWAPD_RECLAIM;
 const gfp_t RUST_CONST_HELPER___GFP_IO			= __GFP_IO;
 const gfp_t RUST_CONST_HELPER___GFP_FS			= __GFP_FS;
 const gfp_t RUST_CONST_HELPER___GFP_HIGH		= __GFP_HIGH;

@@ -15,7 +15,6 @@ use core::sync::atomic::{AtomicU32, Ordering::{Acquire, Relaxed, Release}};
 
 use super::{Refcount, TryRefcount, WaitableRef};
 use crate::c;
-use crate::util::alloc::flags;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::sleep::Sleep;
@@ -74,7 +73,7 @@ impl PercpuRef {
                 (&raw mut (*slot)._pin).write(PhantomData);
                 ret_to_result_void(c::percpu_ref_init(UnsafeCell::raw_get(&raw const (*slot).r),
                                                       Some(release::<F>), flags,
-                                                      crate::util::alloc::current_gfp_context(flags::WAIT).raw()))
+                                                      crate::util::alloc::current_gfp()))
             })
         }
     }

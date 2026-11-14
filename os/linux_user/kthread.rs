@@ -399,7 +399,7 @@ pub(crate) unsafe fn kthread_create_name(thread_fn: Option<unsafe extern "C" fn(
             Err(e) => ret = e.raw_os_error().unwrap_or(c::ENOMEM as i32),
         }
 
-        super::shrinker::run_shrinkers(crate::util::alloc::flags::WAIT, true);
+        super::shrinker::run_shrinkers(crate::util::alloc::Flags::empty(), true);
     }
     (-(ret as isize)) as *mut c::task_struct
 }

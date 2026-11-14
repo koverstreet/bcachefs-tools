@@ -3,7 +3,7 @@
 use super::reclaim::ReclaimFlags;
 use super::{cache_node_struct_alloc, cached_node, new_node_lock, NodeBufs};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
-use crate::util::alloc::flags;
+use crate::util::alloc::{flags, Flags};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{bch2_btree_path_to_text, PathIdx, Paths};
@@ -214,7 +214,7 @@ impl BtreeTrans<'_> {
                 let buf_start = local_clock();
                 let got = bufs.alloc(fs, flags::NOWAIT, true).is_ok() || {
                     self.unlock_from(paths, crate::ret_ip!());
-                    bufs.alloc(fs, flags::WAIT | flags::NOWARN, true).is_ok()
+                    bufs.alloc(fs, flags::NOWARN, true).is_ok()
                 };
                 fs.times[c::TimeStat::btree_node_buf_alloc as usize].update(buf_start);
                 if !got {
@@ -231,7 +231,7 @@ impl BtreeTrans<'_> {
                             Some(b) => b,
                             None => {
                                 self.unlock_from(paths, crate::ret_ip!());
-                                match cache_node_struct_alloc(fs, pcpu_read_locks, flags::WAIT) {
+                                match cache_node_struct_alloc(fs, pcpu_read_locks, Flags::empty()) {
                                     Some(b) => b,
                                     None => {
                                         bufs.free();

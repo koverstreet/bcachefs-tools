@@ -244,7 +244,7 @@ pub struct bch_fs_btree_write_buffer {
  * journal write completions. __GFP_NORETRY buys the failure immediately
  * instead of waiting for reclaim that a speculative resize doesn't merit.
  */
-const WB_RESIZE_GFP: Flags = flags::WAIT.union(flags::NORETRY).union(flags::NOWARN);
+const WB_RESIZE_GFP: Flags = flags::NORETRY.union(flags::NOWARN);
 
 /// Room for @new_size in all, rounded up to a power of two.
 fn resize_gfp<T>(v: &mut KVVec<T>, new_size: usize, gfp: Flags) -> Result<(), AllocError> {
@@ -809,9 +809,9 @@ impl Fs {
             let mut inc = wb.inc.lock();
             let (inc, inc_live) = inc.parts();
 
-            let ret = inc.keys.resize(inc_live, initial_size, flags::WAIT)
-                .and_then(|()| f.keys.resize(&f_live.keys, initial_size, flags::WAIT))
-                .and_then(|()| resize_gfp(&mut f.sorted, initial_size, flags::WAIT));
+            let ret = inc.keys.resize(inc_live, initial_size, Flags::empty())
+                .and_then(|()| f.keys.resize(&f_live.keys, initial_size, Flags::empty()))
+                .and_then(|()| resize_gfp(&mut f.sorted, initial_size, Flags::empty()));
             f_live.sorted.set(f.sorted.len(), f.sorted.capacity());
             ret.map_err(BchError::from)?;
         }

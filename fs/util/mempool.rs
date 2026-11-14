@@ -92,15 +92,15 @@ fn element_gfp(gfp: Flags) -> Flags {
     current_gfp_context(gfp) | flags::NO_RESERVES | flags::NORETRY | flags::NOWARN
 }
 
-/// ...and before the reserve, no reclaim or IO either.
+/// ...and before the reserve, no waiting either.
 fn first_try(gfp: Flags) -> Flags {
-    gfp & !(flags::DIRECT_RECLAIM | flags::IO)
+    gfp | flags::NOWAIT
 }
 
 /// The reserve: @min_nr elements, or none, if one can't be had.
 fn fill<A: Elements>(min_nr: usize, layout: Layout) -> Result<KVec<Element>, AllocError> {
     let mut reserve = KVec::with_capacity(min_nr)?;
-    let gfp = current_gfp_context(flags::WAIT);
+    let gfp = Flags::empty();
 
     for _ in 0..min_nr {
         let Some(p) = A::element_alloc(layout, gfp) else {
@@ -142,7 +142,7 @@ impl<A: Elements> Mempool<A> {
 
     /// An element, for C to hold: free_raw() takes it back.
     pub fn alloc_raw(&self) -> Result<NonNull<u8>, AllocError> {
-        self.alloc_raw_gfp(flags::WAIT)
+        self.alloc_raw_gfp(Flags::empty())
     }
 
     /// alloc_raw(), allocating with @gfp - as the task's memalloc scope
@@ -180,7 +180,7 @@ impl<A: Elements> Mempool<A> {
                 continue;
             }
 
-            if !gfp.contains(flags::DIRECT_RECLAIM) {
+            if gfp.intersects(flags::NOWAIT | flags::ATOMIC) {
                 return Err(AllocError);
             }
 
@@ -274,11 +274,11 @@ impl<A: Elements> Mempool<A> {
 
 unsafe impl<A: Elements> Allocator for Mempool<A> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.alloc_or_element(layout, false, flags::WAIT)
+        self.alloc_or_element(layout, false, Flags::empty())
     }
 
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.alloc_or_element(layout, true, flags::WAIT)
+        self.alloc_or_element(layout, true, Flags::empty())
     }
 
     unsafe fn deallocate(&self, p: NonNull<u8>, layout: Layout) {

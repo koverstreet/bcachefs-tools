@@ -110,7 +110,7 @@ impl SpareHead {
                 Ok::<(), AllocError>(())
             })
         };
-        let p = alloc_at::<SpareHead, Kmalloc, AllocError>(init, flags::NOWARN).ok()?;
+        let p = alloc_at::<SpareHead, Kmalloc, AllocError>(init, flags::NOWAIT).ok()?;
         Some(unsafe { KBox::from_raw(p.as_ptr()) })
     }
 }

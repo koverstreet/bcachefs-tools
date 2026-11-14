@@ -28,22 +28,15 @@ impl Kmalloc {
     pub const MAX_SIZE: usize = super::kernel::PAGE_SIZE << 10;
 }
 
-impl Flags {
-    /// None: the shim's C - percpu_ref_init() - takes a gfp_t and ignores it.
-    pub const fn raw(self) -> c::gfp_t {
-        0
-    }
-}
-
 macro_rules! allocs {
     ($($a:ident),*) => {$(
         unsafe impl Allocator for $a {
             fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                self.allocate_gfp(layout, flags::WAIT)
+                self.allocate_gfp(layout, Flags::empty())
             }
 
             fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                self.allocate_zeroed_gfp(layout, flags::WAIT)
+                self.allocate_zeroed_gfp(layout, Flags::empty())
             }
 
             unsafe fn deallocate(&self, p: NonNull<u8>, layout: Layout) {
@@ -53,7 +46,7 @@ macro_rules! allocs {
             }
 
             unsafe fn grow(&self, p: NonNull<u8>, old: Layout, new: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                unsafe { self.grow_gfp(p, old, new, flags::WAIT) }
+                unsafe { self.grow_gfp(p, old, new, Flags::empty()) }
             }
         }
 
@@ -119,6 +112,12 @@ pub fn current_gfp_context(gfp: Flags) -> Flags {
     gfp
 }
 
+/// A plain allocation's gfp_t, for C that takes one: none - the shim's C,
+/// percpu_ref_init(), takes one and ignores it.
+pub fn current_gfp() -> c::gfp_t {
+    0
+}
+
 /// The last ref's put frees it at once: what RCU readers may reach, which
 /// isn't FreeAnytime, can't be in one.
 pub fn arc_new<T: Send + Sync + FreeAnytime>(v: T) -> Result<Arc<T>, AllocError> {
@@ -163,7 +162,7 @@ fn kmalloc_noprof(size: usize, gfp: Flags) -> *mut c_void {
 
 /// @size bytes kzalloc()'d, NOFAIL: never null. kfree_unsized() takes it back.
 pub fn kzalloc_nofail(size: usize) -> *mut c_void {
-    kmalloc_noprof(size, flags::WAIT | flags::ZERO | flags::NOFAIL)
+    kmalloc_noprof(size, flags::ZERO | flags::NOFAIL)
 }
 
 /// @size bytes kvzalloc()'d, NOFAIL: kzalloc_nofail()'s, here. kvfree_unsized()
@@ -216,7 +215,7 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError
             return Ok(q.cast());
         }
 
-        super::shrinker::run_shrinkers(flags::WAIT, true);
+        super::shrinker::run_shrinkers(Flags::empty(), true);
     }
     Err(AllocError)
 }

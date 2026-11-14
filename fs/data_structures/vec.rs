@@ -142,7 +142,7 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
 
     /// push(), for what mustn't fail to allocate.
     pub fn push_nofail(&mut self, v: T) {
-        self.push_gfp(v, flags::WAIT | flags::NOFAIL).expect("a vector grown past its length type")
+        self.push_gfp(v, flags::NOFAIL).expect("a vector grown past its length type")
     }
 
     pub fn push_within_capacity(&mut self, v: T) -> Result<(), PushError<T>> {

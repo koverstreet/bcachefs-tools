@@ -28,7 +28,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
 use crate::prt;
-use crate::util::alloc::{flags, current_gfp_context, init_at, krealloc};
+use crate::util::alloc::{flags, init_at, krealloc, Flags};
 use crate::util::hash::GoldenRatio;
 use crate::os::kernel::local_clock;
 use crate::util::kmem_cache::KmemCache;
@@ -291,7 +291,7 @@ struct NewEntry(NonNull<c::bkey_cached>);
 
 impl NewEntry {
     fn alloc(key_u64s: usize) -> Option<Self> {
-        let gfp = current_gfp_context(flags::WAIT) | flags::ACCOUNT | flags::RECLAIMABLE;
+        let gfp = flags::ACCOUNT | flags::RECLAIMABLE;
 
         let mut ck = NewEntry(KEY_CACHE.zalloc(gfp)?);
         unsafe { ck.0.as_mut() }.set_key_buf(NewKey::alloc(key_u64s)?);
@@ -360,7 +360,7 @@ impl BtreeTrans<'_> {
                 c::SixLockInitFlags::empty()
             };
             unsafe {
-                bch2_btree_lock_init(&raw mut (*ck.as_ptr()).c, flags, flags::WAIT);
+                bch2_btree_lock_init(&raw mut (*ck.as_ptr()).c, flags, Flags::empty());
                 (*ck.as_ptr()).c.cached = true;
             }
             let ck = unsafe { cached(self, ck.as_ptr()) };
