@@ -401,3 +401,35 @@ void bch2_set_current_state_running(void)
 {
 	__set_current_state(TASK_RUNNING);
 }
+
+/* os/linux_kernel/percpu_rwsem.rs: percpu_rw_semaphore */
+
+int rust_percpu_init_rwsem(struct percpu_rw_semaphore *sem, const char *name, void *key)
+{
+	return __percpu_init_rwsem(sem, name, key);
+}
+
+void rust_percpu_free_rwsem(struct percpu_rw_semaphore *sem)
+{
+	percpu_free_rwsem(sem);
+}
+
+void rust_percpu_down_read(struct percpu_rw_semaphore *sem)
+{
+	percpu_down_read(sem);
+}
+
+void rust_percpu_up_read(struct percpu_rw_semaphore *sem)
+{
+	percpu_up_read(sem);
+}
+
+void rust_percpu_down_write(struct percpu_rw_semaphore *sem)
+{
+	percpu_down_write(sem);
+}
+
+void rust_percpu_up_write(struct percpu_rw_semaphore *sem)
+{
+	percpu_up_write(sem);
+}

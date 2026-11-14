@@ -44,6 +44,13 @@ void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key);
 
 void rust_mutex_init(struct mutex *lock, const char *name, void *key);
 
+int rust_percpu_init_rwsem(struct percpu_rw_semaphore *sem, const char *name, void *key);
+void rust_percpu_free_rwsem(struct percpu_rw_semaphore *sem);
+void rust_percpu_down_read(struct percpu_rw_semaphore *sem);
+void rust_percpu_up_read(struct percpu_rw_semaphore *sem);
+void rust_percpu_down_write(struct percpu_rw_semaphore *sem);
+void rust_percpu_up_write(struct percpu_rw_semaphore *sem);
+
 void bch2_this_cpu_add_u32(u32 *pcp, u32 val);
 void bch2_this_cpu_add_u64(u64 *pcp, u64 val);
 u32 bch2_this_cpu_cmpxchg_u32(u32 *pcp, u32 old, u32 new);
