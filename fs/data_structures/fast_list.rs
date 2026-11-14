@@ -187,13 +187,17 @@ impl c::fast_list {
     /// Nothing is using it, or will after - but init() again.
     pub unsafe fn exit(&self) {
         let buffer = self.buffer.swap(null_mut(), Relaxed);
-        if !buffer.is_null() {
-            // SAFETY: init()'s, and no CPU's using it
-            for lp in unsafe { PerCpuRef::<Cache>::from_raw(buffer.cast()) }.cpus() {
-                self.free_slots(unsafe { lp.as_mut() }.0.drain(..));
-            }
-            unsafe { free_percpu(buffer.cast()) };
+        // never init()ed - its ida's lock not even initialized - or init()
+        // failed: no slot was handed out
+        if buffer.is_null() {
+            return;
         }
+
+        // SAFETY: init()'s, and no CPU's using it
+        for lp in unsafe { PerCpuRef::<Cache>::from_raw(buffer.cast()) }.cpus() {
+            self.free_slots(unsafe { lp.as_mut() }.0.drain(..));
+        }
+        unsafe { free_percpu(buffer.cast()) };
 
         // a slot still allocated is an item still on the list
         crate::warn_on!(self.slots_allocated.find_first().is_some());
