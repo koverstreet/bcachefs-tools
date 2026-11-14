@@ -991,7 +991,7 @@ pub mod ioctl {
         let online = passes_match(PassFlags::ONLINE);
         let mut passes = passes_match(PassFlags::FSCK) & online;
 
-        if opts.defined(c::OptId::Opt_recovery_passes) {
+        if opts.defined(c::OptId::recovery_passes) {
             passes = opts.recovery_passes;
 
             if passes & online != passes {
@@ -1013,7 +1013,7 @@ pub mod ioctl {
             {
                 let mut sb = fs.sb_lock();
                 let w = fs.opts_writer(&mut sb);
-                w.fix_errors.set(if opts.defined(c::OptId::Opt_fix_errors) {
+                w.fix_errors.set(if opts.defined(c::OptId::fix_errors) {
                     opts.fix_errors
                 } else {
                     c::FsckErrOpt::ask as u8

@@ -322,7 +322,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             // placeholder 0 - the parse is validation only, the
                             // value is the string itself, applied to the
                             // bch_member at superblock write time (the
-                            // Opt_failure_domain arm in format_util.rs).
+                            // OptId::failure_domain arm in format_util.rs).
                             // Routing the placeholder into bch_opts would drop
                             // the string silently:
                             if matches!(opt.ty, bcachefs_kernel::opts::OptType::StrMember { .. }) {
@@ -406,7 +406,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                 }
                 b'l' => {
                     let val = take_short_value(arg, &argv, &mut i, 'l')?;
-                    push_dev_opt_str!(c::OptId::Opt_label, val);
+                    push_dev_opt_str!(c::OptId::label, val);
                 }
                 b'U' => {
                     let val = take_short_value(arg, &argv, &mut i, 'U')?;
@@ -564,7 +564,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     // (cpu-scaled, fs-size-capped, clamped to [0, 8]) is shard_bits_default(),
     // which superblock validate's rewrite of legacy bits=0 filesystems uses
     // too, so the two can't diverge.
-    if !cfg.fs_opts.defined(c::OptId::Opt_shard_inode_numbers_bits) {
+    if !cfg.fs_opts.defined(c::OptId::shard_inode_numbers_bits) {
         let nr_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1) as u32;

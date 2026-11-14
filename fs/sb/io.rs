@@ -1474,7 +1474,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
 
     sb.sb_realloc(0)?;
 
-    let (sb_offset, primary_bad) = if opts.defined(c::OptId::Opt_sb) {
+    let (sb_offset, primary_bad) = if opts.defined(c::OptId::sb) {
         // a superblock asked for, for recovery or debugging: that one, no
         // scan or fallback
         let offset = opts.sb();

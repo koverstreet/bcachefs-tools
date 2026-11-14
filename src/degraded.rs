@@ -44,7 +44,7 @@ fn sb_opts(sb: &bch_sb_handle) -> bch_opts {
 /// What the filesystem says to do about a missing device, unless the caller
 /// said otherwise on the command line.
 fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> c::DegradedAction {
-    if cli_opts.defined(c::OptId::Opt_degraded) {
+    if cli_opts.defined(c::OptId::degraded) {
         return cli_opts.degraded();
     }
 

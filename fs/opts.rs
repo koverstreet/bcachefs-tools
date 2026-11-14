@@ -1172,7 +1172,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
         return Err(Errcode::BCH_ERR_option_name.into());
     }
 
-    if (opt.id == OptId::Opt_usrquota || opt.id == OptId::Opt_grpquota) && !cfg!(CONFIG_BCACHEFS_QUOTA) {
+    if (opt.id == OptId::usrquota || opt.id == OptId::grpquota) && !cfg!(CONFIG_BCACHEFS_QUOTA) {
         return Err(Errcode::BCH_ERR_option_name.into());
     }
 
@@ -1406,7 +1406,7 @@ pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, v
         };
         changed = c;
 
-        if opt.id == OptId::Opt_rotational {
+        if opt.id == OptId::rotational {
             let m = sb.member_mut(dev).expect("set above");
             changed |= !m.rotational_set();
             m.set_rotational_set(true);

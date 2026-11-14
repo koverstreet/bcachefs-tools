@@ -169,7 +169,7 @@ impl Bcachefs {
     fn open_opts(p: &MountParams, claimed: Claimed, opts: &mut c::bch_opts) -> Result<OpenFs, BchError> {
         let fs = claimed.open(opts, p.user_key.as_ref().map(|k| &k.0))?;
 
-        if opts.defined(OptId::Opt_discard) {
+        if opts.defined(OptId::discard) {
             fs.flags.set(c::FsFlag::discard_mount_opt_set, true);
         }
         set_mount_opts(&fs, opts);
@@ -491,7 +491,7 @@ impl FsType for Bcachefs {
         }
 
         let opts = &fc.ctx().opts;
-        if opts.defined(OptId::Opt_errors) {
+        if opts.defined(OptId::errors) {
             fs.opts_writer(&mut fs.sb_lock()).errors.set(opts.errors);
         }
         Ok(())

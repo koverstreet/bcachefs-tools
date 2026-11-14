@@ -63,7 +63,7 @@ struct Desc {
 macro_rules! descs {
     ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { [$(Desc {
         name: c_str(concat!(stringify!($name), "\0")),
-        opt:  c::OptId::[<Opt_ $name>],
+        opt:  c::OptId::$name,
         get:  |inode| inode.[<bi_ $name>] as u64,
         set:  |inode, v| inode.[<bi_ $name>] = v as _,
     }),*] } };
@@ -242,9 +242,9 @@ pub fn get_fs(fs: &Fs, metadata: bool) -> c::bch_inode_opts {
 #[cold]
 pub fn opts_to_text(out: &mut Printbuf, fs: &Fs, opts: &c::bch_inode_opts) {
     macro_rules! values {
-        ($(($name:ident, $($rest:tt)*)),* $(,)?) => { crate::paste! {
-            [$((c::OptId::[<Opt_ $name>], opts.$name as u64)),*]
-        } };
+        ($(($name:ident, $($rest:tt)*)),* $(,)?) => {
+            [$((c::OptId::$name, opts.$name as u64)),*]
+        };
     }
     for (i, (id, v)) in c::InodeOptId_arms!(values).into_iter().enumerate() {
         if i != 0 {

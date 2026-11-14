@@ -40,31 +40,31 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bo
     let dev = || u32::from(ca.expect("a device option").dev_idx);
 
     match id {
-        OptId::Opt_foreground_target |
-        OptId::Opt_background_target |
-        OptId::Opt_promote_target |
-        OptId::Opt_compression |
-        OptId::Opt_background_compression |
-        OptId::Opt_data_checksum |
-        OptId::Opt_data_replicas |
-        OptId::Opt_erasure_code |
-        OptId::Opt_nocow => bracket(if inum == 0 {
+        OptId::foreground_target |
+        OptId::background_target |
+        OptId::promote_target |
+        OptId::compression |
+        OptId::background_compression |
+        OptId::data_checksum |
+        OptId::data_replicas |
+        OptId::erasure_code |
+        OptId::nocow => bracket(if inum == 0 {
             scan::fs
         } else {
             scan::inum(inum)
         })?,
-        OptId::Opt_metadata_target |
-        OptId::Opt_metadata_checksum |
-        OptId::Opt_metadata_replicas => bracket(scan::metadata)?,
-        OptId::Opt_durability => {
+        OptId::metadata_target |
+        OptId::metadata_checksum |
+        OptId::metadata_replicas => bracket(scan::metadata)?,
+        OptId::durability => {
             if !post && v > ca.expect("a device option").mi.get().durability.into() {
                 fs.request_scan(scan::pending, false)?;
             }
             bracket(scan::device(dev()))?;
         }
         // The cap is in stripe.can_widen: existing stripes converge to it
-        OptId::Opt_ec_max_data_blocks => bracket(scan::stripes)?,
-        OptId::Opt_label | OptId::Opt_failure_domain => {
+        OptId::ec_max_data_blocks => bracket(scan::stripes)?,
+        OptId::label | OptId::failure_domain => {
             // The in-memory label tree before the scan wakes: reconcile reads
             // the groups' devs masks. An error (ENOMEM) leaves it stale until
             // the next superblock swap
@@ -74,7 +74,7 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bo
 
             // Only the label is in targets: a failure domain only spreads
             // future allocations
-            if id == OptId::Opt_label {
+            if id == OptId::label {
                 bracket(scan::pending)?;
                 // Data on the device may now be outside its target
                 bracket(scan::device(dev()))?;
@@ -92,20 +92,20 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, cha
     -> Result<(), BchError>
 {
     match id {
-        OptId::Opt_state => {
+        OptId::state => {
             if let Some(ca) = ca {
                 return fs.dev_set_state(ca, MemberState(v as u8), c::BCH_FORCE_IF_DEGRADED, None);
             }
         }
-        OptId::Opt_compression | OptId::Opt_background_compression => {
+        OptId::compression | OptId::background_compression => {
             compress::check_set_has_compressed_data(fs, v as u8)?;
         }
-        OptId::Opt_erasure_code => {
+        OptId::erasure_code => {
             if v != 0 {
                 fs.check_set_feature(SbFeature::ec);
             }
         }
-        OptId::Opt_rotational => {
+        OptId::rotational => {
             // Offline: there's no post hook, and nothing to race with
             if let Some(ca) = ca {
                 if change && v != u64::from(ca.mi.get().rotational) && !fs.flags.get(c::FsFlag::started) {
@@ -113,7 +113,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, cha
                 }
             }
         }
-        OptId::Opt_casefold_disabled => {
+        OptId::casefold_disabled => {
             if v != 0 && fs.feature(SbFeature::casefolding) {
                 crate::bch_err!(fs, "cannot mount with casefolding disabled: casefolding already in use");
                 return fs.throw(Errcode::BCH_ERR_casefolding_in_use);
@@ -157,9 +157,9 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
     let _ = opt_hook_io(fs, ca, inum, id, v, true);
 
     match id {
-        OptId::Opt_reconcile_enabled | OptId::Opt_read_only => fs.reconcile_wakeup(),
-        OptId::Opt_copygc_enabled => fs.copygc_wakeup(),
-        OptId::Opt_discard => {
+        OptId::reconcile_enabled | OptId::read_only => fs.reconcile_wakeup(),
+        OptId::copygc_enabled => fs.copygc_wakeup(),
+        OptId::discard => {
             if ca.is_none() {
                 let mut sb = fs.sb_lock();
                 for ca in fs.members() {
@@ -168,7 +168,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
                 fs.write_super(&mut sb);
             }
         }
-        OptId::Opt_durability => {
+        OptId::durability => {
             let state = fs.state_lock_read();
             if let Some(ca) = ca {
                 if fs.flags.get(c::FsFlag::rw) && ca.is_online() &&
@@ -180,20 +180,20 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
         }
         // XXX: in the future we'll likely want to do compatible upgrades at
         // runtime as well, but right now there's nothing that does that
-        OptId::Opt_version_upgrade => {
+        OptId::version_upgrade => {
             if v == c::VersionUpgradeOpt::incompatible.0.into() {
                 fs.upgrade_incompat();
             }
         }
         // Online: the new value has to be live before the pass runs
-        OptId::Opt_rotational => {
+        OptId::rotational => {
             if let Some(ca) = ca {
                 if fs.flags.get(c::FsFlag::started) {
                     crate::data::reconcile::check::rotational_changed(fs, ca);
                 }
             }
         }
-        OptId::Opt_btree_cache_shrinker_seeks => {
+        OptId::btree_cache_shrinker_seeks => {
             fs.btree.cache.set_shrinker_seeks(v as _);
         }
         _ => {}

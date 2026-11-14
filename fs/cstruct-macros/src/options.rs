@@ -17,7 +17,7 @@
 //! getter, `struct::getter`, its setter set_getter, or `struct::getter /
 //! setter`; `default`; `hint`.
 //!
-//! It makes, from the fields in order - each one's id, Opt_name:
+//! It makes, from the fields in order - each one's id, OptId::name:
 //!
 //! ```text
 //! OptId               the ids, and NR - a #[bch_enum(open)]
@@ -113,12 +113,6 @@ struct Opt<'a> {
     doc:  Vec<String>,
 }
 
-impl Opt<'_> {
-    fn id(&self) -> Ident {
-        format_ident!("Opt_{}", self.name)
-    }
-}
-
 /// An option's Opt, and what its set and get are.
 fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
     let name = f.name;
@@ -203,7 +197,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         }
     };
 
-    let id = f.id();
+    let id = f.name;
     let name = name.to_string();
     Ok(quote! {
         #o::Opt {
@@ -288,7 +282,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     }
 
     let labels = opts.iter().map(|f| LitStr::new(&f.name.to_string(), f.name.span()));
-    let ids: Vec<Ident> = opts.iter().map(Opt::id).collect();
+    let ids = opts.iter().map(|f| f.name);
     let table = opts.iter().map(option).collect::<syn::Result<Vec<_>>>()?;
     let defaults = opts.iter().map(|f| {
         let (n, d) = (f.name, default(f));
@@ -310,18 +304,18 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
 
     let readers = |p: &Place<'_>| -> TokenStream {
         let get = opts.iter().map(|f| {
-            let (id, v) = (f.id(), (p.load)(f.name));
-            quote!(OptId::#id => #v as u64,)
+            let (n, v) = (f.name, (p.load)(f.name));
+            quote!(OptId::#n => #v as u64,)
         });
         let accessors = opts.iter().map(|f| {
             let (ty, conv, _) = accessor(f);
-            let (n, id) = (f.name, f.id());
+            let n = f.name;
             let or_default = format_ident!("{n}_or_default");
             let (value, dflt) = (conv((p.load)(n)), conv(quote!(#name::DEFAULTS.#n)));
             quote! {
                 pub fn #n(&self) -> #ty { #value }
                 pub fn #or_default(&self) -> #ty {
-                    if self.defined(OptId::#id) { self.#n() } else { #dflt }
+                    if self.defined(OptId::#n) { self.#n() } else { #dflt }
                 }
             }
         });
@@ -346,15 +340,15 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let writers = |p: &Place<'_>| -> TokenStream {
         let recv = &p.recv;
         let set = opts.iter().map(|f| {
-            let (id, ty) = (f.id(), f.ty);
-            let s = (p.store)(f.name, quote!(v as #ty));
-            quote!(OptId::#id => #s,)
+            let (n, ty) = (f.name, f.ty);
+            let s = (p.store)(n, quote!(v as #ty));
+            quote!(OptId::#n => #s,)
         });
         let apply = opts.iter().map(|f| {
-            let (n, id) = (f.name, f.id());
-            let (s, d) = ((p.store)(n, quote!(src.#n)), (p.define)(quote!(OptId::#id)));
+            let n = f.name;
+            let (s, d) = ((p.store)(n, quote!(src.#n)), (p.define)(quote!(OptId::#n)));
             quote! {
-                if src.defined.test(OptId::#id) {
+                if src.defined.test(OptId::#n) {
                     #s;
                     #d;
                 }
@@ -362,9 +356,9 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         });
         let setters = opts.iter().map(|f| {
             let (ty, _, back) = accessor(f);
-            let (n, id) = (f.name, f.id());
+            let n = f.name;
             let set_n = format_ident!("set_{n}");
-            let (s, d) = ((p.store)(n, back), (p.define)(quote!(OptId::#id)));
+            let (s, d) = ((p.store)(n, back), (p.define)(quote!(OptId::#n)));
             quote! {
                 pub fn #set_n(#recv, v: #ty) {
                     #s;

@@ -903,7 +903,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     d.fs_size = dev_fs_size;
     d.opts = dev_opts;
     if let Some(l) = dev_label_cstr {
-        d.opt_strs.push((c::OptId::Opt_label, l));
+        d.opt_strs.push((c::OptId::label, l));
     }
 
     image_create_inner(
