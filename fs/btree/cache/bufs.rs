@@ -9,7 +9,7 @@ use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{flags, Flags, kfree, KVmalloc};
+use crate::util::alloc::{flags, Flags, kfree, AllocGfp, KVmalloc, Kmalloc};
 use crate::util::mempool::Elements;
 use crate::os::kernel::is_vmalloc_addr;
 use core::alloc::Layout;
@@ -236,20 +236,7 @@ impl NodeBufs {
 /// A struct btree: its lock initialized and nothing else, with @gfp. Freed by
 /// node_struct_free().
 fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<NonNull<BtreeNode>> {
-    let layout = Layout::new::<BtreeNode>();
-    #[cfg(kernel)]
-    let p = unsafe {
-        use kernel::bindings::{krealloc_node_align, NUMA_NO_NODE};
-
-        krealloc_node_align(core::ptr::null(), layout.size(), layout.align(),
-                            crate::util::alloc::current_gfp_context(gfp | flags::ZERO).raw(), NUMA_NO_NODE)
-    };
-    #[cfg(not(kernel))]
-    let p = {
-        let _ = gfp;
-        unsafe { std::alloc::alloc_zeroed(layout) }
-    };
-    let b = NonNull::new(p.cast::<BtreeNode>())?;
+    let b = Kmalloc.alloc_zeroed_gfp(Layout::new::<BtreeNode>(), gfp).ok()?.cast::<BtreeNode>();
 
     unsafe {
         let p = b.as_ptr();
