@@ -3,7 +3,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
-#include <linux/slab.h>
+#include <stdlib.h>
 //#include <linux/parser.h>
 #include <linux/errno.h>
 //#include <linux/stringhash.h>
@@ -159,7 +159,7 @@ struct unicode_map *utf8_load(unsigned int version)
 {
 	struct unicode_map *um;
 
-	um = kzalloc(sizeof(struct unicode_map), GFP_KERNEL);
+	um = calloc(1, sizeof(struct unicode_map));
 	if (!um)
 		return ERR_PTR(-ENOMEM);
 	um->version = version;
@@ -181,15 +181,14 @@ struct unicode_map *utf8_load(unsigned int version)
 	return um;
 
 out_free_um:
-	kfree(um);
+	free(um);
 	return ERR_PTR(-EINVAL);
 }
 EXPORT_SYMBOL(utf8_load);
 
 void utf8_unload(struct unicode_map *um)
 {
-	if (um)
-		kfree(um);
+	free(um);
 }
 EXPORT_SYMBOL(utf8_unload);
 
