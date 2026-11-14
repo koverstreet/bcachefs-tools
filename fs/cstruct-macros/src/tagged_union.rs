@@ -41,11 +41,11 @@
 //! the tag's enum, an open #[bch_enum] of the arms (enum_decl.rs). NAME_arms!
 //! is the arms as a list, (name, value, Type), for what's made from each.
 //!
-//! A type whose bytes come from outside - disk, or C - with a tag that says
-//! which of its arms it holds, and that may be one this version doesn't know.
-//! The layout is given, not chosen: the storage is the C, plain #[repr(C)]
-//! data - without #[storage], a struct of the tag, then a union of the arms,
-//! overlaid with the pad.
+//! A type whose bytes come from outside - off a device, from the kernel -
+//! with a tag that says which of its arms it holds, and that may be one this
+//! version doesn't know. The layout is given, not chosen: the storage is
+//! plain #[repr(C)] data - without #[storage], a struct of the tag, then a
+//! union of the arms, overlaid with the pad.
 //!
 //! `#[size(..)]` says what its size is a function of, and what's generated
 //! follows from that: nothing, a constant - `size(pad)`, a struct, every
@@ -66,7 +66,7 @@
 //!
 //! Generated, for the first declaration:
 //!
-//!  - `union DiskAccountingPosStorage`: the storage, what C and disk see -
+//!  - `union DiskAccountingPosStorage`: the storage, as on disk -
 //!    named DiskAccountingPos to TypeInfo; Plain, its pad being
 //!    every byte of it;
 //!  - `DiskAccountingPos<S>`, the storage in a state, Validated unless
@@ -99,7 +99,7 @@
 //!  - crate::types::ArmOf for each arm's type, which from_arm() goes by;
 //!  - `type_()`, the tag, known or not; `as_bytes()`.
 //!
-//! The storage's bytes are always all written: they come from C or disk, from
+//! The storage's bytes are always all written: they come from outside, by
 //! from_bytes(), or from new(), which starts from zeroes - so get() and
 //! as_bytes() can read any of them. A literal of the storage could leave
 //! some unwritten, as could an arm with padding; nothing makes either.
@@ -107,7 +107,7 @@
 //! Or, `#[storage(STORAGE)] #[size(header)]`, the storage is another's: a
 //! header its arms embed and run past, as far as its count says - a journal
 //! entry's, a superblock field's: an unsized vstruct (util/vstructs.rs), each
-//! reference to which has its arm's bytes, and its own C. Then what's
+//! reference to which has its arm's bytes. Then what's
 //! generated is the Ref enum, ArmOf, and on the storage in each state -
 //! X<Unvalidated>, X<Validated> - typed(): the arm its tag selects, over its
 //! bytes, in the storage's state - every arm type has a family
@@ -132,8 +132,8 @@
 //! the tag isn't ours or the bytes are fewer than its arm
 //! (crate::util::vstructs::ArmSized); bytes(), its arm's size; head(), the
 //! fields every arm shares; name(), its arm's; write(), its arm's bytes then
-//! its tag; walk(), over a run of them (ArmWalk). No C: HEAD and the arms
-//! have their own.
+//! its tag; walk(), over a run of them (ArmWalk). No storage is made: HEAD
+//! and the arms have their own definitions.
 //!
 //! The declaration is parsed into a TaggedUnion, which generate() takes.
 
@@ -147,7 +147,7 @@ use crate::enum_decl::{self, arm_path};
 
 /// A tagged_union!'s declaration, as generate() takes it.
 ///
-/// The storage is what C has: the tag, then a union of the arms, overlaid
+/// The storage is its own: the tag, then a union of the arms, overlaid
 /// with the pad - or another's, #[storage]. @size says what its size is a
 /// function of: nothing, a constant, the pad's; the header's count - the
 /// storage another's, a header its arms embed and run past, and what's
@@ -195,7 +195,7 @@ enum Size {
     Header,
     /// Its tag: the arm the tag selects, whose size it is - a union, its
     /// storage the head every arm starts with, the tag in it; a value read
-    /// off bytes and written back to them, no C of its own (ArmSized).
+    /// off bytes and written back to them, no storage of its own (ArmSized).
     Arm,
 }
 
@@ -407,7 +407,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     let (attrs, vis) = (&d.attrs, &d.vis);
     let en = format_ident!("{}", camel(&name.to_string()));
     // the arms by value: named for the union, but where that's the storage's
-    // own name - DiskAccountingPos, C's disk_accounting_pos - its Arm
+    // own name - DiskAccountingPos - its Arm
     let ev = if en == *name { format_ident!("{en}Arm") } else { en.clone() };
     let en_ref = format_ident!("{en}Ref");
     let (tag, tag_ty) = (&tu.tag_field, &tu.tag_ty);
@@ -424,13 +424,13 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     let arm_of = quote!(crate::types::ArmOf);
     let vs = quote!(crate::util::vstructs);
     // The storage: the type the views are of
-    // A sized storage's is C's struct, {name}__ffi: {name} is its state's
-    let ffi = crate::derived(name, "storage");
-    let s_ty: syn::Type = tu.storage.clone().unwrap_or_else(|| parse_quote!(#ffi));
+    // A sized one's is its own, NAME_storage: NAME is its state's
+    let own_storage = crate::derived(name, "storage");
+    let s_ty: syn::Type = tu.storage.clone().unwrap_or_else(|| parse_quote!(#own_storage));
     let s_size = quote!(::core::mem::size_of::<#s_ty>());
 
-    // The storage, as C has it: the tag then the arms' union (with types of
-    // their own, C's anonymous struct and union), overlaid with the pad. Or
+    // The storage: the tag then the arms' union (with types of their own,
+    // Rust having no anonymous struct or union), overlaid with the pad. Or
     // none, the storage being another's - an unsized union's.
     let arm_fields = arms.iter().map(|a| {
         let (arm, ty) = (&a.name, &a.ty);
@@ -438,7 +438,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     });
     let pad_field = tu.pad.as_ref().map(|p| quote!(#vis _pad: #p,));
     let storage_attrs = quote!(#[allow(non_camel_case_types)] #[repr(C)] #[derive(Clone, Copy)]);
-    // `packed`: where C has __packed - the arms' union and the tag's struct
+    // `packed`, a packed layout - the arms' union and the tag's struct
     let packed_attrs = if tu.packed {
         quote!(#[allow(non_camel_case_types)] #[repr(C, packed)] #[derive(Clone, Copy)])
     } else {
@@ -506,7 +506,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             #[::cstruct_macros::type_name(#name)]
             #(#attrs)*
             #storage_attrs
-            #vis union #ffi {
+            #vis union #own_storage {
                 #vis t: #tagged,
                 #pad_field
             }
@@ -516,13 +516,13 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             #[allow(non_camel_case_types)]
             #vis struct #determinant;
 
-            impl #det_trait<#ffi> for #determinant {
+            impl #det_trait<#own_storage> for #determinant {
                 type Tag = #tag_ty;
-                fn get(u: &#ffi) -> #tag_ty {
+                fn get(u: &#own_storage) -> #tag_ty {
                     // SAFETY: the tag is plain data, the struct's first field
                     unsafe { u.t.#tag }
                 }
-                fn set(u: &mut #ffi, tag: #tag_ty) {
+                fn set(u: &mut #own_storage, tag: #tag_ty) {
                     #[allow(unused_unsafe)]
                     // SAFETY: a write of plain data
                     unsafe { u.t.#tag = tag }
@@ -538,7 +538,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     });
     // An arm type this declares is plain data: a reference to it, whatever
     // the storage's state. Another's is a #[counted] family's head - a
-    // replicas entry's, as C's union holds it - the family's type in the
+    // replicas entry's - the family's type in the
     // storage's state, as long as its own header says (CountedHead, ArmAt).
     let declared = |a: &TaggedArm| tu.defs.iter().any(|def| is(&a.ty, def));
     let stated = arms.iter().any(|a| !declared(a));
@@ -628,7 +628,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                                union get() can't hand out a reference to it - pack the arm");
             quote!(const _: () = assert!(::core::mem::align_of::<#ty>() == 1, #msg);)
         });
-    // Plain - C's struct of a family is: its pad is every byte of it, and
+    // Plain, as a family's head is: its pad is every byte of it, and
     // Plain, and the arms are plain data.
     let pad_assert = tu.pad.as_ref().map(|p| {
         let msg = format!("tagged_union! {name}: bigger than its pad");
@@ -934,7 +934,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
         let gets = gets("Unvalidated", quote!(return Err(#vs::ArmError::Bad { tag: #t_tag, err })));
         quote! {
             impl #name<#vs::Unvalidated> {
-                /// From its bytes, as C and disk have them.
+                /// From its bytes, as on disk.
                 #vis fn from_bytes(b: &[u8; #s_size]) -> Self {
                     // SAFETY: the storage is plain data: any bytes are a valid one
                     Self(unsafe { b.as_ptr().cast::<#s_ty>().read_unaligned() }, ::core::marker::PhantomData)
@@ -969,7 +969,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     let doesnt_fit = format!("{name}<Validated>: {{err}} - an arm that doesn't fit, in one validate passed \
                               or made from an arm");
     let gets_validated = gets("Validated", quote!(panic!(#doesnt_fit)));
-    let state_doc = format!(" {name}, in state S - Validated unless named: over C's struct, {ffi}.\n \
+    let state_doc = format!(" {name}, in state S - Validated unless named: over its storage, {own_storage}.\n \
                              Unvalidated, bytes from outside - from the kernel, off a device - each\n \
                              arm checked against the storage as get() hands it out; Validated,\n \
                              what validate passed, or what's made here from an arm.");
@@ -1021,9 +1021,9 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                 #tag_of_storage
             }
 
-            /// Its bytes, as C and disk have them.
+            /// Its bytes, as on disk.
             #vis fn as_bytes(&self) -> &[u8; #s_size] {
-                // SAFETY: plain data, every byte of it written: it came from C or disk,
+                // SAFETY: plain data, every byte of it written: it came from
                 // from_bytes() or new(), which starts from zeroes
                 unsafe { &*(self as *const Self).cast::<[u8; #s_size]>() }
             }

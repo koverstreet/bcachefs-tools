@@ -7,9 +7,9 @@
 //! the count, having validated it where the bytes came in.
 //!
 //! Here the bound travels with the reference. A reference claims its bytes,
-//! so one is made at the value's own size, from a buffer or from C's pointer:
-//! never by widening a &T, which reaches only the T, and never from fewer
-//! bytes than the header.
+//! so one is made at the value's own size, from a buffer or from a pointer
+//! to its header: never by widening a &T, which reaches only the T, and never
+//! from fewer bytes than the header.
 //!
 //! What a variable-size type can be, most general first:
 //!  - SelfSized: its own bytes say how big it is. A #[counted_by] array's
@@ -46,10 +46,9 @@
 //!
 //! What's trusted: Plain, that any bytes are a valid value - which
 //! #[derive(Plain)] checks at compile time, and zerocopy's FromBytes for the
-//! types we define - and, for a reference from C's pointer, the count
-//! SelfSized::bytes() reads, which vstruct!() and #[counted_by] generate from
-//! the field the struct declares.
-//! #[counted_by] generate from the field the struct declares as its count.
+//! types we define - and, for a reference from a pointer to its header, the
+//! count SelfSized::bytes() reads, which vstruct!() and #[counted_by] generate
+//! from the field the struct declares.
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val, MaybeUninit};
@@ -549,8 +548,8 @@ impl<'a, T: Plain + SelfSized> VstructMut<'a, T> {
 }
 
 impl<T, S: State> VstructMut<'_, T, S> {
-    /// A pointer to it that reaches all its bytes, for C: one from the &T
-    /// reaches only the header.
+    /// A pointer to it that reaches all its bytes: one from the &T reaches
+    /// only the header.
     pub fn as_mut_ptr(&mut self) -> *mut T {
         self.bytes.as_mut_ptr().cast()
     }
@@ -779,9 +778,9 @@ pub trait CountedHead: FlexArray + Plain {
 }
 
 /// Unsized type T's head, by T's name: for an unsized vstruct or a
-/// #[counted] type, C's struct - the header, its tail C's zero-length
-/// flexible array. What Rust names wherever it meets C - an extern's
-/// parameters, a pointer field - and a struct that embeds one.
+/// #[counted] type, the struct as written - the header, its tail a
+/// zero-length flexible array. What a pointer to one, and a struct that
+/// embeds one, names.
 pub type Head<T> = <T as Unsized>::Head;
 
 /// A DST of ours, in a state: a sized head's fields, inline, then its tail -
@@ -789,14 +788,14 @@ pub type Head<T> = <T as Unsized>::Head;
 /// reaches every byte of the value and none past it. It derefs to its head,
 /// to read; never mutably, so no count - the head's, or an embedded
 /// header's - can be rewritten from outside what holds the value, and its
-/// fields that hold one are private. An unsized vstruct's head is C's
-/// struct, its header, whose count says how long the value is
+/// fields that hold one are private. An unsized vstruct's head is the
+/// struct as written, its header, whose count says how long the value is
 /// (#[unsized_vstruct]); a grown type's is its floor, the value as long as
 /// what holds it says (#[grown]).
 ///
-/// A key value's, whose header is C's struct rounded up into its tail's
-/// first bytes - bch_inode's fields end at 14, its size is 16 - has its tail
-/// from where it starts, TAIL, inside its head (#[whole(tail = ..)]).
+/// A key value's, whose header is the struct as written, rounded up into its
+/// tail's first bytes - bch_inode's fields end at 14, its size is 16 - has its
+/// tail from where it starts, TAIL, inside its head (#[whole(tail = ..)]).
 ///
 /// # Safety
 /// Self is Head's fields, every bit pattern of each valid, then its tail at
@@ -1342,7 +1341,7 @@ mod tests {
         buf
     }
 
-    /// A validated jset - as C's pointer has one - is as long as its count
+    /// A validated jset - as from_head_ptr() makes one - is as long as its count
     /// says, and so is each of its entries.
     #[test]
     fn entries_walk_variable_size_entries() {

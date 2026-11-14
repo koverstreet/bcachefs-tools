@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-//! What util/vstructs.rs's traits need of a type C shares, from its
+//! What util/vstructs.rs's traits need of a type, from its
 //! definition: #[derive(Plain)] - and #[bitfield], every one of which is -
 //! #[derive(FlexArray)], from #[counted_by(FIELD)], #[derive(View)], its
 //! fields' projections on a View of it, and the families of definitions,
@@ -26,7 +26,7 @@ fn vs() -> TokenStream {
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
 /// arm's end are no field's. An unsized vstruct's states aren't: they're its
-/// C definition's - #[unsized_vstruct]'s X_head - and then its tail's
+/// definition's as written - #[unsized_vstruct]'s X_head - and then its tail's
 /// elements, Plain too, as the attribute checks.
 pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input)?;
@@ -85,7 +85,7 @@ const VIEW_METHODS: &[&str] = &["new", "get", "set", "whole", "whole_mut", "proj
 
 /// #[derive(View)], on a Plain struct: a projection for each field, on View
 /// and ViewMut - `v.field()`, a View of the field, until field projections
-/// make it `v.field`. Not for fields named `_..`, padding and C's internals,
+/// make it `v.field`. Not for fields named `_..`, padding and internals,
 /// or a trailing `[T; 0]`: a flexible array is View::as_bytes()'s.
 pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input)?;
@@ -192,11 +192,11 @@ fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> 
     Ok(args)
 }
 
-/// A field of C's struct as a state's definition has it, inline: pub only
-/// where C's is pub and holds no count - not the count, written private or
-/// pub(crate), nor an embedded header, Head<..> or an array of them, whose
-/// own count it is, nor one of @private, which the family names: a counted
-/// type's count. Those read through the definition's Deref to its head, and
+/// A field of the struct as written, as a state's definition has it, inline:
+/// pub only where it's pub and holds no count - not the count, written
+/// private or pub(crate), nor an embedded header, Head<..> or an array of
+/// them, whose own count it is, nor one of @private, which the family names:
+/// a counted type's count. Those read through the definition's Deref to its head, and
 /// can't be written: a count changes only through what holds the value.
 fn inline_field(f: &FieldDef, private: &[Ident]) -> TokenStream {
     let public = matches!(f.vis, syn::Visibility::Public(_));
@@ -219,11 +219,11 @@ fn repr_attrs(def: &StructDef) -> TokenStream {
 struct Shape<'a> {
     /// The item's #[repr]s, as written.
     repr:    TokenStream,
-    /// C's fields it has inline, at @head's offsets.
+    /// The fields it has inline, at @head's offsets.
     fields:  &'a [FieldDef],
     /// Those the family makes private: a counted type's count.
     private: Vec<Ident>,
-    /// What precedes the tail: C's struct, or a grown type's floor.
+    /// What precedes the tail: the struct as written, or a grown type's floor.
     head:    Ident,
     /// What it derefs to, #[repr(transparent)] over @head if not @head
     /// itself: a #[whole] type's X<Whole>, where X's methods are.
@@ -232,10 +232,10 @@ struct Shape<'a> {
     tail:    Ident,
     elem:    syn::Type,
     /// The definition as written, renamed: X_head or X_whole.
-    ffi:     Ident,
+    written:     Ident,
     /// Where the tail starts, if not where the head ends: inside it, the
-    /// head being C's struct rounded up into the tail's first bytes - a key
-    /// value's (#[whole(tail = ..)]).
+    /// head being the struct as written, rounded up into the tail's first
+    /// bytes - a key value's (#[whole(tail = ..)]).
     tail_at: Option<TokenStream>,
 }
 
@@ -255,7 +255,7 @@ struct Shape<'a> {
 /// @methods, more of them.
 fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenStream {
     let vs = vs();
-    let Shape { repr, fields, private, head, deref, tail, elem, ffi: _, tail_at } = shape;
+    let Shape { repr, fields, private, head, deref, tail, elem, written: _, tail_at } = shape;
     let tail_at = tail_at.clone().unwrap_or_else(|| quote!(::core::mem::size_of::<#head>()));
     let plain_fields = fields.iter().map(|f| {
         let ty = &f.ty;
@@ -398,7 +398,8 @@ fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident) -
 }
 
 /// A #[members] field's members on each of @defs too - a family's definitions
-/// in place, with C's fields inline: their Deref to C's struct can't reach
+/// in place, with its fields inline: their Deref to the struct as written
+/// can't reach
 /// its setters.
 fn members_on(name: &Ident, fields: &[FieldDef], defs: &[&Ident]) -> Result<TokenStream, String> {
     let mut out = TokenStream::new();
@@ -414,15 +415,15 @@ fn members_on(name: &Ident, fields: &[FieldDef], defs: &[&Ident]) -> Result<Toke
 /// The family of a type whose count is its own - an unsized vstruct's, a
 /// #[counted] type's: both states laid out as @shape - Unvalidated, bytes
 /// from outside, its count checked against them; Validated, its count
-/// trusted as C trusts it - and Validated its Whole, the header never having
+/// trusted - validate's - and Validated its Whole, the header never having
 /// grown.
 fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, String> {
     let vs = vs();
     let state = |st: &str, what: &str| -> TokenStream {
         let ty = crate::derived(name, &st.to_lowercase());
-        let doc = format!(" {name}<{st}>: {what}. C's fields - those that hold a count\n \
+        let doc = format!(" {name}<{st}>: {what}. Its fields - those that hold a count\n \
                            private - then its tail, as long as its count says. It derefs\n \
-                           to C's struct {name}, Head<{name}>, to read.");
+                           to its head, Head<{name}>, to read.");
         let mut out = dst(&ty, &doc, shape, TokenStream::new());
         out.extend(quote! {
             // a sized tagged union's arm: as many bytes as its count says
@@ -438,22 +439,22 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
     let unsized_states = [("Unvalidated", unvalidated.clone()), ("Validated", validated.clone()),
                           ("Whole", validated.clone())];
     let doc = format!(" {name}, in state S - Validated unless named: a reference to one\n \
-                       reaches every byte of it and none past. C's struct {name} is\n \
+                       reaches every byte of it and none past. Its head is\n \
                        Head<{name}>.");
     let mut out = state("Unvalidated", "bytes from outside - off a device, from the kernel - its count \
                                         checked against them when it's made");
-    out.extend(state("Validated", "what C read and validated, its counts trusted as C trusts them"));
+    out.extend(state("Validated", "what's been read and validated, its counts trusted"));
     out.extend(members_on(name, shape.fields, &[&unvalidated, &validated])?);
     out.extend(family(name, &unvalidated, &validated, &validated));
     out.extend(generic_type(name,
         &Generic { default: "Validated", unsized_states: &unsized_states, arm_of: None,
-                   whole: None, ffi: Some(&shape.ffi), typestate: false },
+                   whole: None, written: Some(&shape.written), typestate: false },
         &doc));
     Ok(out)
 }
 
 /// #[unsized_vstruct]: the family of an unsized vstruct's definitions, one
-/// per state (util/vstructs.rs' Family), from C's struct as written.
+/// per state (util/vstructs.rs' Family), from the struct as written.
 ///
 /// The item is the definition, renamed X_head, with #[type_name(X)]: Head<X>
 /// - X<S> is the family's type in state S,
@@ -482,23 +483,24 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
         },
         Some((tail, elem)) => (tail.unwrap_or_else(|| format_ident!("_tail")), elem),
     };
-    let ffi = crate::derived(name, "head");
+    let written = crate::derived(name, "head");
     let last = &last.ident;
-    // C's fields, inline in each state's definition - but its flexible array,
+    // its fields, inline in each state's definition - but its flexible array,
     // where that's the tail
     let fields = if tail == *last { &def.fields[..def.fields.len() - 1] } else { &def.fields[..] };
-    let shape = Shape { repr: repr_attrs(&def), fields, private: Vec::new(), head: ffi.clone(),
-                        deref: ffi.clone(), tail, elem, ffi: ffi.clone(), tail_at: None };
+    let shape = Shape { repr: repr_attrs(&def), fields, private: Vec::new(), head: written.clone(),
+                        deref: written.clone(), tail, elem, written: written.clone(), tail_at: None };
 
-    let mut out = rename_struct(item, &def, &ffi)?;
+    let mut out = rename_struct(item, &def, &written)?;
     let msg = format!("{name}: its tail starts where its header ends");
     out.extend(quote! {
         const _: () = {
-            // C's struct ends at its last field - its flexible array, or an
-            // embedded vstruct's header, which ends where that one's tail starts
-            assert!(::core::mem::offset_of!(#ffi, #last) + crate::types::field_size(
-                        |p: *const #ffi| unsafe { ::core::ptr::addr_of!((*p).#last) }) as usize
-                    == ::core::mem::size_of::<#ffi>(),
+            // the struct as written ends at its last field - its flexible
+            // array, or an embedded vstruct's header, which ends where that
+            // one's tail starts
+            assert!(::core::mem::offset_of!(#written, #last) + crate::types::field_size(
+                        |p: *const #written| unsafe { ::core::ptr::addr_of!((*p).#last) }) as usize
+                    == ::core::mem::size_of::<#written>(),
                     #msg);
         };
     });
@@ -514,19 +516,19 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
 /// PATH is the count, as vstruct!'s is - a field, or a field of one it
 /// embeds (r.nr_devs) - and nr_entries if not named, the convention. Its
 /// first field holds the count, so that's private in each state's
-/// definition; C's struct keeps it as written, so a header can still be
+/// definition; the head keeps it as written, so a header can still be
 /// built standalone. The array is the item's trailing [E; 0], or what the
 /// attribute says - as #[unsized_vstruct]'s, `tail = [E]`, the states'
 /// `_tail`, or `tail = NAME: [E]`, a field of a field the states call NAME.
 ///
-/// C's struct gets FlexArray from the count - its size, TAIL and the
+/// The head gets FlexArray from the count - its size, TAIL and the
 /// elements past it - and CountedHead, the way to its Unvalidated definition
 /// from what holds its bytes.
 pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let vs = vs();
     let def = parse_cstruct(&item)?;
     let name = &def.ident;
-    let ffi = crate::derived(name, "head");
+    let written = crate::derived(name, "head");
 
     let args = family_args(attr, &["count", "tail"]).map_err(|e| format!("{name}: {e}"))?;
     let count = args.count.unwrap_or_else(|| vec![format_ident!("nr_entries")]);
@@ -537,11 +539,11 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
                             name its count, #[counted(FIELD)] or #[counted(FIELD.COUNT)]"));
     }
 
-    // the array: a trailing [E; 0], or a field of a field - after C's struct,
+    // the array: a trailing [E; 0], or a field of a field - after the head,
     // where dst() asserts its tail starts
     let (tail, elem, fields, tail_at) = match args.tail {
         Some((tail, elem)) => (tail.unwrap_or_else(|| format_ident!("_tail")), elem, &def.fields[..],
-                               quote!(::core::mem::size_of::<#ffi>())),
+                               quote!(::core::mem::size_of::<#written>())),
         None => {
             let last = def.fields.last().ok_or_else(|| format!("{name}: a counted type has fields"))?;
             let Some(elem) = flex_elem(&last.ty) else {
@@ -550,30 +552,30 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
             };
             let field = &last.ident;
             (field.clone(), elem.clone(), &def.fields[..def.fields.len() - 1],
-             quote!(::core::mem::offset_of!(#ffi, #field)))
+             quote!(::core::mem::offset_of!(#written, #field)))
         }
     };
-    let shape = Shape { repr: repr_attrs(&def), fields, private: vec![count_field.clone()], head: ffi.clone(),
-                        deref: ffi.clone(), tail, elem: elem.clone(), ffi: ffi.clone(), tail_at: None };
+    let shape = Shape { repr: repr_attrs(&def), fields, private: vec![count_field.clone()], head: written.clone(),
+                        deref: written.clone(), tail, elem: elem.clone(), written: written.clone(), tail_at: None };
 
-    let mut out = rename_struct(item, &def, &ffi)?;
+    let mut out = rename_struct(item, &def, &written)?;
     let msg = format!("{name}: its elements aren't a whole number of its alignment");
-    out.extend(flex_impl(&ffi, &tail_at, &elem, &count));
+    out.extend(flex_impl(&written, &tail_at, &elem, &count));
     out.extend(quote! {
-        impl #vs::CountedHead for #ffi {
+        impl #vs::CountedHead for #written {
             type Of<S: #vs::State> = #name<S>;
         }
 
         // a reference as long as its count says is a whole number of its
         // alignment only if its elements are: else it claims bytes past it
-        const _: () = assert!(::core::mem::size_of::<#elem>() % ::core::mem::align_of::<#ffi>() == 0, #msg);
+        const _: () = assert!(::core::mem::size_of::<#elem>() % ::core::mem::align_of::<#written>() == 0, #msg);
     });
     out.extend(own_count_family(name, &shape)?);
     Ok(out)
 }
 
 /// #[grown(from = FIELD)]: the family of a type that grew between format
-/// versions, from C's struct as written - FIELD the first field a valid
+/// versions, from the struct as written - FIELD the first field a valid
 /// value may lack, written by a version from before it.
 ///
 /// X<S> is a generic struct over its definition in state S. X<Whole> - X -
@@ -600,7 +602,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 }
 
 /// #[whole]: the family of a type every valid value of which has all of it -
-/// C's validate rejects one shorter - though it may be longer, written by a
+/// validate rejects one shorter - though it may be longer, written by a
 /// version since: a superblock section or journal entry of fixed fields.
 ///
 /// X<S> is a generic struct over its definition in state S. X<Whole> - X -
@@ -609,13 +611,13 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// those that hold a count private, then the bytes past them there are, at
 /// exactly the value's length; it derefs to X, to read, and X's methods.
 ///
-/// Or `#[whole(tail = NAME: [E])]`: C's struct ends in NAME: [E; 0] - and
-/// perhaps other zero-length arrays, C's other names for where it starts - a
+/// Or `#[whole(tail = NAME: [E])]`: the struct ends in NAME: [E; 0] - and
+/// perhaps other zero-length arrays, other names for where it starts - a
 /// header and the array after it: a key value, its length the key's. The
-/// tail is NAME, from where C has it: inside C's struct, if align rounds the
-/// struct up into the array's first bytes - bch_inode's fields end at 14, its
-/// size is 16 - which the deref to C's struct reaches, a value being no
-/// shorter than that.
+/// tail is NAME, from where the struct has it: inside the struct, if align
+/// rounds the struct up into the array's first bytes - bch_inode's fields end
+/// at 14, its size is 16 - which the deref to the struct reaches, a value
+/// being no shorter than that.
 ///
 /// Or `tail = NAME: [u8]`, over any zero-length array: the bytes from where
 /// it starts, for a tail that's more than that array - bch_stripe's
@@ -626,7 +628,7 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
     let args = family_args(attr, &["tail", "bkey"]).map_err(|e| format!("{name}: {e}"))?;
     let tail = match args.tail {
         None => None,
-        Some((None, _)) => return Err(format!("{name}: #[whole(tail = NAME: [E])] - the tail is C's last \
+        Some((None, _)) => return Err(format!("{name}: #[whole(tail = NAME: [E])] - the tail is the struct's last \
                                                field, NAME: [E; 0], named")),
         Some((Some(tail), elem)) => {
             let at = def.fields.iter().position(|f| f.ident == tail)
@@ -641,11 +643,11 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
                                         isn't [{elem}; 0]"));
                 }
             }
-            // after it, only C's other names for where it starts
+            // after it, only other names for where it starts
             for f in &def.fields[at + 1..] {
                 if flex_elem(&f.ty).is_none() {
                     return Err(format!("{name}.{}: after the tail, {tail}, a field that isn't a \
-                                        zero-length array - C's other name for its start", f.ident));
+                                        zero-length array - another name for its start", f.ident));
                 }
             }
             Some((tail, elem))
@@ -654,7 +656,7 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
     sized_family(&def, item, None, tail, args.bkey)
 }
 
-/// #[grown] and #[whole]: the family of sized C struct @def, written @item -
+/// #[grown] and #[whole]: the family of sized struct @def, written @item -
 /// @grew, the first field an older version's value may lack and its index,
 /// if it grew.
 ///
@@ -691,9 +693,8 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
             }
         },
     };
-    // The struct as written, renamed X_whole: X<Whole>'s representation,
-    // and C's struct X
-    let ffi = crate::derived(name, "whole");
+    // The struct as written, renamed X_whole: X<Whole>'s representation
+    let written = crate::derived(name, "whole");
     // A value in place, as long as what holds it says: for a grown type the
     // floor and the bytes there are, below; else all of its fields, then
     // the bytes past them
@@ -703,7 +704,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     let derives = derive_names(def);
     // X is generated: a derive generic_type() doesn't forward would be
     // X_whole's alone, out of X's reach. Ours of the struct as written are
-    // X_whole's, and are what C's struct is
+    // X_whole's
     let of_whole = ["MaybeZeroable", "BitfieldMembers", "FlexArray"];
     if let Some(d) = derives.iter()
         .find(|d| !of_whole.iter().chain(WHOLE_DERIVES).any(|w| d == w)) {
@@ -711,11 +712,11 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
                             only the derives generic_type() forwards to it: {}", WHOLE_DERIVES.join(", ")));
     }
     let is_plain = derives.iter().any(|d| d == "Plain");
-    // the tail, C's last field - or the bytes past C's fields
+    // the tail, the struct's last field - or the bytes past its fields
     let (fields, tail_name, elem, tail_at) = match &tail {
         Some((t, e)) => {
             let at = def.fields.iter().position(|f| f.ident == *t).unwrap_or(def.fields.len());
-            (&def.fields[..at], t.clone(), e.clone(), Some(quote!(::core::mem::offset_of!(#ffi, #t))))
+            (&def.fields[..at], t.clone(), e.clone(), Some(quote!(::core::mem::offset_of!(#written, #t))))
         }
         None => (&def.fields[..], format_ident!("_rest"), parse_quote!(u8), None),
     };
@@ -724,23 +725,23 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
         // bytes past them, in every state but Whole, the struct itself
         let doc = match &tail {
             Some((t, _)) => format!(" {name} in place: its fields - those that hold a count private -\n \
-                                     then {t}, from where C has it, as long as the value is. It\n \
+                                     then {t}, from where the struct has it, as long as the value is. It\n \
                                      derefs to the struct, to read."),
             None => format!(" {name} in place: its fields - those that hold a count private - then\n \
                              the bytes past them there are, written by a version since, at\n \
                              exactly the value's length. It derefs to the struct, to read."),
         };
-        let shape = Shape { repr: repr_attrs(def), fields, private: Vec::new(), head: ffi.clone(),
-                            deref: name.clone(), tail: tail_name, elem, ffi: ffi.clone(), tail_at };
+        let shape = Shape { repr: repr_attrs(def), fields, private: Vec::new(), head: written.clone(),
+                            deref: name.clone(), tail: tail_name, elem, written: written.clone(), tail_at };
         let generic_doc = format!(" {name}, in state S - Whole unless named: the struct, every field a field.\n \
                                    Validated or Unvalidated, a value in place - all its fields, then\n \
                                    the bytes past them a version since wrote, at the value's length.");
-        let mut out = rename_struct(item, def, &ffi)?;
+        let mut out = rename_struct(item, def, &written)?;
         out.extend(dst(&all, &doc, &shape, TokenStream::new()));
         out.extend(members_on(name, fields, &[&all])?);
-        out.extend(family(name, &all, &all, &ffi));
-        out.extend(whole_arm_ref(&ffi, is_plain));
-        out.extend(generic_type(name, &sized_generic(&all, &ffi, &derives, &states, false), &generic_doc));
+        out.extend(family(name, &all, &all, &written));
+        out.extend(whole_arm_ref(&written, is_plain));
+        out.extend(generic_type(name, &sized_generic(&all, &written, &derives, &states, false), &generic_doc));
         out.extend(bkey_impls);
         return Ok(out);
     };
@@ -760,7 +761,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     let floor_tys: Vec<&syn::Type> = floor.iter().map(|f| &f.ty).collect();
     let floor_offsets = floor.iter().map(|f| {
         let field = &f.ident;
-        quote!(assert!(::core::mem::offset_of!(#fl, #field) == ::core::mem::offset_of!(#ffi, #field));)
+        quote!(assert!(::core::mem::offset_of!(#fl, #field) == ::core::mem::offset_of!(#written, #field));)
     });
 
     const METHODS: &[&str] = &["whole", "whole_mut", "as_bytes", "as_bytes_mut"];
@@ -776,7 +777,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
             #[doc = #doc]
             pub fn #field(&self) -> #fty {
                 #vs::read_past::<#fty>(&self._rest,
-                    ::core::mem::offset_of!(#ffi, #field) - ::core::mem::size_of::<#fl>())
+                    ::core::mem::offset_of!(#written, #field) - ::core::mem::size_of::<#fl>())
             }
         });
     }
@@ -785,15 +786,15 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
         /// All of it, if it's all there - every field a field.
         pub fn whole(&self) -> Option<&#name> {
             // SAFETY: X is #[repr(transparent)] over X_whole
-            #vs::cast_plain::<#ffi>(self.as_bytes())
-                .map(|w| unsafe { &*(w as *const #ffi as *const #name) })
+            #vs::cast_plain::<#written>(self.as_bytes())
+                .map(|w| unsafe { &*(w as *const #written as *const #name) })
         }
 
         /// whole(), to edit.
         pub fn whole_mut(&mut self) -> Option<&mut #name> {
             // SAFETY: as whole()'s
-            #vs::cast_plain_mut::<#ffi>(self.as_bytes_mut())
-                .map(|w| unsafe { &mut *(w as *mut #ffi as *mut #name) })
+            #vs::cast_plain_mut::<#written>(self.as_bytes_mut())
+                .map(|w| unsafe { &mut *(w as *mut #written as *mut #name) })
         }
 
         #getters
@@ -812,10 +813,10 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
                                it had its floor: the floor's fields, then the bytes there are; a\n \
                                field it gained later is a getter, zero where the value ends.");
     let shape = Shape { repr: quote!(#[repr(C)]), fields: floor, private: Vec::new(), head: fl.clone(),
-                        deref: fl.clone(), tail: format_ident!("_rest"), elem: parse_quote!(u8), ffi: ffi.clone(),
+                        deref: fl.clone(), tail: format_ident!("_rest"), elem: parse_quote!(u8), written: written.clone(),
                         tail_at: None };
 
-    let mut out = rename_struct(item, def, &ffi)?;
+    let mut out = rename_struct(item, def, &written)?;
     out.extend(quote! {
         #[doc = #floor_doc]
         #[repr(C)]
@@ -829,7 +830,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     out.extend(quote! {
         const _: () = {
             #(#floor_offsets)*
-            assert!(::core::mem::size_of::<#fl>() == ::core::mem::offset_of!(#ffi, #from), #floor_msg);
+            assert!(::core::mem::size_of::<#fl>() == ::core::mem::offset_of!(#written, #from), #floor_msg);
         };
     });
     out.extend(dst(&ty, &dst_doc, &shape, methods));
@@ -837,13 +838,13 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     // field's getters there, its setters on the definition
     out.extend(members_on(name, floor, &[&fl, &ty])?);
     // the cast checks the floor: an unvalidated one is as good
-    out.extend(family(name, &ty, &ty, &ffi));
-    out.extend(whole_arm_ref(&ffi, is_plain));
-    out.extend(generic_type(name, &sized_generic(&ty, &ffi, &derives, &states, true), &generic_doc));
+    out.extend(family(name, &ty, &ty, &written));
+    out.extend(whole_arm_ref(&written, is_plain));
+    out.extend(generic_type(name, &sized_generic(&ty, &written, &derives, &states, true), &generic_doc));
     // all of it is a value in place, every field there: X's methods, on
     // X<Validated>, are the struct's too
     out.extend(quote! {
-        impl ::core::ops::Deref for #ffi {
+        impl ::core::ops::Deref for #written {
             type Target = #name<#vs::Validated>;
             #[inline]
             fn deref(&self) -> &Self::Target {
@@ -854,7 +855,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
             }
         }
 
-        impl ::core::ops::DerefMut for #ffi {
+        impl ::core::ops::DerefMut for #written {
             #[inline]
             fn deref_mut(&mut self) -> &mut Self::Target {
                 // SAFETY: as deref()'s
@@ -873,7 +874,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
 fn sized_generic<'a>(inplace: &'a Ident, whole: &'a Ident, derives: &'a [Ident],
                      unsized_states: &'a [(&'a str, Ident)], typestate: bool) -> Generic<'a> {
     Generic { default: "Whole", unsized_states, arm_of: Some(inplace), whole: Some((whole, derives)),
-              ffi: None, typestate }
+              written: None, typestate }
 }
 
 /// The traits @def derives.
@@ -945,7 +946,7 @@ struct Generic<'a> {
     /// The definition as written, if X is made from a pointer to its header
     /// or from bytes - an unsized type, whose count is its own:
     /// from_head_ptr() and from_bytes() on X<S>.
-    ffi: Option<&'a Ident>,
+    written: Option<&'a Ident>,
     /// Whether Unvalidated is a typestate over Validated, X<Unvalidated>
     /// dereffing to X<Validated> - where X's methods are - not to their
     /// definition: a #[grown] type's, which is one for both, and whose length
@@ -1094,7 +1095,7 @@ fn generic_type(name: &Ident, g: &Generic<'_>, doc: &str) -> TokenStream {
 
         // made in the state the caller names: Whole, an unsized type's
         // Validated, is never one made
-        let Some(ffi) = g.ffi.filter(|_| *st != "Whole") else { continue };
+        let Some(written) = g.written.filter(|_| *st != "Whole") else { continue };
         let from_bytes = match *st {
             "Unvalidated" => {
                 let doc = format!(" The {name} at the start of @bytes - off a device, from the\n \
@@ -1160,7 +1161,7 @@ fn generic_type(name: &Ident, g: &Generic<'_>, doc: &str) -> TokenStream {
         out.extend(quote! {
             impl #name<#vs::#st_ty> {
                 #[doc = #from_head_ptr_doc]
-                pub unsafe fn from_head_ptr<'a>(p: *const #ffi) -> &'a Self {
+                pub unsafe fn from_head_ptr<'a>(p: *const #written) -> &'a Self {
                     // SAFETY: the caller's
                     unsafe { #vs::from_head_ptr::<Self>(p) }
                 }
@@ -1169,7 +1170,7 @@ fn generic_type(name: &Ident, g: &Generic<'_>, doc: &str) -> TokenStream {
                 ///
                 /// # Safety
                 /// As from_head_ptr()'s, and nothing else touches those bytes for 'a.
-                pub unsafe fn from_head_ptr_mut<'a>(p: *mut #ffi) -> &'a mut Self {
+                pub unsafe fn from_head_ptr_mut<'a>(p: *mut #written) -> &'a mut Self {
                     // SAFETY: the caller's
                     unsafe { #vs::from_head_ptr_mut::<Self>(p) }
                 }
