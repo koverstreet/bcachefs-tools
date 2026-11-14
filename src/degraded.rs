@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Reply, Watch, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 
 use anyhow::Result;
-use bcachefs_kernel::errcode::{self, BchError};
+use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::c;
 use c::bch_opts;
 use c::bch_sb_handle;
@@ -69,9 +69,9 @@ enum Situation {
 
 impl Situation {
     fn of(err: &BchError) -> Option<Situation> {
-        if err.matches(errcode::insufficient_devices_data_intact) {
+        if err.matches(Errcode::insufficient_devices_data_intact) {
             Some(Situation::DataIntact)
-        } else if err.matches(errcode::insufficient_devices_data_lost) {
+        } else if err.matches(Errcode::insufficient_devices_data_lost) {
             Some(Situation::DataLost)
         } else {
             None
@@ -352,8 +352,8 @@ mod tests {
     /// that, before anything touches a terminal.
     #[test]
     fn only_the_two_refusals_we_know_about_are_ours_to_ask_about() {
-        let lost   = BchError::from(errcode::insufficient_devices_data_lost);
-        let intact = BchError::from(errcode::insufficient_devices_data_intact);
+        let lost   = BchError::from(Errcode::insufficient_devices_data_lost);
+        let intact = BchError::from(Errcode::insufficient_devices_data_intact);
 
         assert_eq!(Situation::of(&lost),   Some(Situation::DataLost));
         assert_eq!(Situation::of(&intact), Some(Situation::DataIntact));
@@ -361,8 +361,8 @@ mod tests {
         for e in [
             // The parent, which a kernel that hasn't got the split still
             // throws: we cannot tell which situation it is, so we don't ask.
-            BchError::from(errcode::insufficient_devices_to_start),
-            BchError::from(errcode::EINVAL_opt_parse_str_required),
+            BchError::from(Errcode::insufficient_devices_to_start),
+            BchError::from(Errcode::EINVAL_opt_parse_str_required),
             // A flattened errno, which is what the mount(2) fallback gives us:
             // the same EINVAL a typo'd option produces.
             BchError::from(libc::EINVAL),

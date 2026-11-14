@@ -10,11 +10,7 @@ use crate::btree::iter::{
 };
 use crate::data::ec::open::OpenStripe;
 use crate::data::ptrs::{ExtentEntry, ExtentEntryMut, Ptrs};
-use crate::errcode::{
-    Errcode,
-    BchError,
-    ENOENT_bkey_type_mismatch,
-};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::{local_clock, random_u64_below};
 use crate::util::par::{self, Backend};
@@ -485,8 +481,8 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
 
     let ret = commit_do(&trans, Some(&res), CommitFlags::empty(), |t| {
         let fs = t.fs();
-        let k = fs.require(iter.peek_max(t, pos(inum, u64::MAX))?, ENOENT_bkey_type_mismatch)?;
-        fs.ensure(k.k.key_type() == BkeyType::extent, ENOENT_bkey_type_mismatch)?;
+        let k = fs.require(iter.peek_max(t, pos(inum, u64::MAX))?, Errcode::ENOENT_bkey_type_mismatch)?;
+        fs.ensure(k.k.key_type() == BkeyType::extent, Errcode::ENOENT_bkey_type_mismatch)?;
 
         let mut dup = t.bkey_make_mut_noupdate(k)?;
         let src_end = dup.k().p.offset;
@@ -518,8 +514,8 @@ fn test_btree_ptr_stale_dirty_key(
     iter.traverse(t)?;
     let fs = t.fs();
 
-    let b = fs.require(iter.node_at_iter_level(t), ENOENT_bkey_type_mismatch)?;
-    fs.ensure(b.level() == 0, ENOENT_bkey_type_mismatch)?;
+    let b = fs.require(iter.node_at_iter_level(t), Errcode::ENOENT_bkey_type_mismatch)?;
+    fs.ensure(b.level() == 0, Errcode::ENOENT_bkey_type_mismatch)?;
 
     let mut update = t.bkey_make_mut_noupdate(b.key_sc())?;
 
@@ -544,7 +540,7 @@ fn test_btree_ptr_stale_dirty_key(
         );
     }
 
-    fs.throw(ENOENT_bkey_type_mismatch)?
+    fs.throw(Errcode::ENOENT_bkey_type_mismatch)?
 }
 
 fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
@@ -560,8 +556,8 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
         );
 
         let fs = t.fs();
-        let k = fs.require(iter.peek_max_type(t, SPOS_MAX, BtreeIterFlags::empty())?, ENOENT_bkey_type_mismatch)?;
-        fs.ensure(k.k.is_btree_ptr(), ENOENT_bkey_type_mismatch)?;
+        let k = fs.require(iter.peek_max_type(t, SPOS_MAX, BtreeIterFlags::empty())?, Errcode::ENOENT_bkey_type_mismatch)?;
+        fs.ensure(k.k.is_btree_ptr(), Errcode::ENOENT_bkey_type_mismatch)?;
 
         test_btree_ptr_stale_dirty_key(t, k)
     })
@@ -620,7 +616,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
 
         match outcome {
             Some(true) => return Ok(()),
-            Some(false) => return fs.throw(ENOENT_bkey_type_mismatch),
+            Some(false) => return fs.throw(Errcode::ENOENT_bkey_type_mismatch),
             None => { iter.advance(); }
         }
     }
@@ -652,7 +648,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
 
         let idx = lockrestart_do(&updater, |t| {
             let fs = t.fs();
-            let k = fs.require(u_iter.peek_max(t, SPOS_MAX)?, ENOENT_bkey_type_mismatch)?;
+            let k = fs.require(u_iter.peek_max(t, SPOS_MAX)?, Errcode::ENOENT_bkey_type_mismatch)?;
             let idx = k.k.p.offset;
 
             let u = t.bkey_make_mut_noupdate(k)?;
@@ -676,7 +672,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
 
             lockrestart_do(&opener, |t| {
                 let fs = t.fs();
-                fs.require(o_iter.peek_max(t, pos(0, idx))?, ENOENT_bkey_type_mismatch)?;
+                fs.require(o_iter.peek_max(t, pos(0, idx))?, Errcode::ENOENT_bkey_type_mismatch)?;
                 OpenStripe::tryget_existing(t, &o_iter)
             })?
         };

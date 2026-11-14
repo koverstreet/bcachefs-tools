@@ -719,16 +719,6 @@ pub fn blk_status_to_bch_err(err: u8) -> c::Errcode {
     c::BLK_ERRS!(statuses)
 }
 
-// Each errcode by its BCH_ERRCODES() name: transaction_restart for
-// Errcode::transaction_restart.
-macro_rules! errcode_names {
-    ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { $(
-        #[allow(non_upper_case_globals)]
-        pub const $err: Errcode = Errcode::$err;
-    )* };
-}
-c::BCH_ERRCODES!(errcode_names);
-
 const START: u32 = Errcode::START.0;
 const N: usize = (Errcode::MAX.0 - START) as usize;
 
