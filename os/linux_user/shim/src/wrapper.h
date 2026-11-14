@@ -5,7 +5,6 @@
 #include "include/linux/delay.h"
 #include "include/linux/device.h"
 #include "include/linux/generic-radix-tree.h"
-#include "include/linux/hash.h"
 #include "include/linux/idr.h"
 #include "include/linux/kernel.h"
 #include "include/linux/llist.h"

@@ -25,7 +25,6 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/quota.h",			// make_kqid(), quota_send_warning(): quota.rs's
     "crypto/sha2.h",			// sha256(), siphash_old's string hash key
     "linux/anon_inodes.h",		// anon_inode_getfile(), util/file's NewFile
-    "linux/hash.h",			// GOLDEN_RATIO_64, util/hash.rs's hash_64()
     "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit;
 					// si_mem_available(), the node cache's memory pressure
     "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
@@ -82,7 +81,6 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/quota.h",
     "crypto/sha2.h",
     "linux/anon_inodes.h",
-    "linux/hash.h",
     "linux/mm.h",
     "linux/fs.h",
     "linux/fs/super.h",			// sb_start_pagefault(), from 7.1
@@ -302,7 +300,7 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
 const OPAQUE_TYPE: &[&str] = &["fid"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
-                                 "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*", "key_type_user", "NUMA_NO_NODE",
+                                 "RUST_CONST_HELPER_.*", "key_type_user", "NUMA_NO_NODE",
                                  "PERCPU_REF_INIT_DEAD", "TRACE_EVENT_FL_TRACEPOINT", "FILTER_OTHER",
                                  // before 7.1/7.2, as above
                                  "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS",

@@ -8,12 +8,14 @@
 //! Cheap - a multiply a word - and well spread for keys counting up, but
 //! keyed only by xors: for tables whose keys an attacker doesn't choose.
 
-use crate::c;
 use core::hash::{BuildHasher, Hash, Hasher};
+
+/// linux/hash.h's: 2^64 over the golden ratio, made odd.
+const GOLDEN_RATIO_64: u64 = 0x61C8_8646_80B5_83EB;
 
 /// The top @bits of @v times the golden ratio. Zero @bits: all of it.
 pub fn hash_64(v: u64, bits: u32) -> u64 {
-    v.wrapping_mul(c::GOLDEN_RATIO_64).wrapping_shr(64 - bits)
+    v.wrapping_mul(GOLDEN_RATIO_64).wrapping_shr(64 - bits)
 }
 
 /// A key's words folded into one, by hash_64()'s multiply: a u64 key's is
@@ -40,7 +42,7 @@ impl Hasher for Fold {
     }
 
     fn write_u64(&mut self, w: u64) {
-        self.0 = self.0.wrapping_mul(c::GOLDEN_RATIO_64) ^ w;
+        self.0 = self.0.wrapping_mul(GOLDEN_RATIO_64) ^ w;
     }
 
     fn finish(&self) -> u64 {
@@ -79,6 +81,6 @@ impl Hasher for GoldenRatioHasher {
     }
 
     fn finish(&self) -> u64 {
-        (self.0.finish() ^ self.1).wrapping_mul(c::GOLDEN_RATIO_64)
+        (self.0.finish() ^ self.1).wrapping_mul(GOLDEN_RATIO_64)
     }
 }
