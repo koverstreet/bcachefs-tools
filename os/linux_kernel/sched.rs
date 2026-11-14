@@ -32,6 +32,13 @@ pub fn need_resched() -> bool {
     unsafe { c::bch2_need_resched() }
 }
 
+/// Caught taken where it can't sleep, as C's might_sleep(): at the caller.
+#[track_caller]
+#[inline]
+pub fn might_sleep() {
+    ::kernel::task::might_sleep()
+}
+
 /// # Safety
 /// @task is a task, live.
 pub unsafe fn task_pid(task: *mut c::task_struct) -> core::ffi::c_int {

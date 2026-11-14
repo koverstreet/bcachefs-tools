@@ -58,8 +58,7 @@ impl ByteLock {
     fn take(&self) {
         // as C's wait_on_bit_lock(): caught taken where it can't sleep, even
         // when it wouldn't
-        #[cfg(kernel)]
-        ::kernel::task::might_sleep();
+        crate::os::sched::might_sleep();
 
         if !self.try_take() {
             self.take_contended();
@@ -126,8 +125,7 @@ unsafe impl RawTryLock for ByteLock {
 
 unsafe impl RawTimedLock for ByteLock {
     unsafe fn try_lock_timeout(&self, timeout: c_ulong) -> Option<()> {
-        #[cfg(kernel)]
-        ::kernel::task::might_sleep();
+        crate::os::sched::might_sleep();
 
         (self.try_take() || self.take_contended_until(jiffies().wrapping_add(timeout))).then_some(())
     }

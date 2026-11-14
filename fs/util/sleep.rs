@@ -99,8 +99,7 @@ impl SleepEnd for Infallible {
 
 /// Sleep, as @how says, until @cond returns Some - which it may at once.
 pub fn sleep_until<T, E: SleepEnd>(how: Sleep<E>, mut cond: impl FnMut() -> Option<T>) -> Result<T, E> {
-    #[cfg(kernel)]
-    ::kernel::task::might_sleep();
+    crate::os::sched::might_sleep();
 
     let mut left = how.timeout;
     let ret = loop {
