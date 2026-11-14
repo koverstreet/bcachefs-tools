@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types C shares, one module per header: foo/bar.rs is the source
-//! of foo/bar.h's types, whose C is generated from it - see types/lib.rs.
-//! btree/types.rs, btree/node/, fs/dirent_format.rs and format.rs's are
-//! modules of their own already.
+//! The data types, a module per file - foo/bar.rs is foo_bar - and c, all
+//! of them in one namespace. btree/types.rs, btree/node/, fs/dirent_format.rs
+//! and format.rs's are modules of their own already.
 
 #[path = "alloc/disk_groups_format.rs"] pub mod alloc_disk_groups_format;
 #[path = "alloc/format.rs"] pub mod alloc_format;

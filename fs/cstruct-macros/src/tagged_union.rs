@@ -97,8 +97,7 @@
 //!    short payload undefined. `from_arm_tailed()` writes an arm's flexible
 //!    array too.
 //!  - crate::types::ArmOf for each arm's type, which from_arm() goes by;
-//!  - `type_()`, the tag, known or not; `as_bytes()`, `as_ffi()`;
-//!  - C: the same storage, its offsets asserted against the Rust's.
+//!  - `type_()`, the tag, known or not; `as_bytes()`, `as_ffi()`.
 //!
 //! The storage's bytes are always all written: they come from C or disk, from
 //! from_bytes(), or from new(), which starts from zeroes - so get() and
