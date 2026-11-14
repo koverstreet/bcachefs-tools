@@ -1506,12 +1506,7 @@ pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: 
         crate::os::lockdep::debug_check_no_locks_freed(lock.cast(), size_of::<six_lock>());
         LockdepMap::init(&raw mut (*lock).dep_map, name, key);
 
-        /*
-         * Don't assume that we have real percpu variables available in
-         * userspace:
-         */
-        #[cfg(kernel)]
-        if flags.contains(SixLockInitFlags::pcpu) {
+        if crate::os::percpu::SIX_PERCPU_READERS && flags.contains(SixLockInitFlags::pcpu) {
             /*
              * We don't return an error here on memory allocation failure
              * since percpu is an optimization, and locks will work with the
@@ -1521,7 +1516,5 @@ pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: 
              */
             (*lock).readers = PerCpu::alloc_gfp(gfp).unwrap_or_else(|_| pin_init::Zeroable::zeroed());
         }
-        #[cfg(not(kernel))]
-        let _ = (flags, gfp);
     }
 }
