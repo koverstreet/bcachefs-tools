@@ -477,7 +477,7 @@ impl<'i> UpdateLock<'i> {
     /// Move the inode to project @projid, quota and all.
     pub fn set_projid(&self, projid: u32) -> Result<(), BchError> {
         let mut qid = self.inode.ei_quota.lock().ei_qid;
-        qid.q[c::QuotaType::QTYP_PRJ.0 as usize] = projid;
+        qid.q[c::QuotaType::QTYP_PRJ] = projid;
 
         self.quota_transfer(qid, 1 << c::QuotaType::QTYP_PRJ.0, QuotaAcctMode::PREALLOC)
     }
@@ -490,7 +490,7 @@ impl<'i> UpdateLock<'i> {
         if project.is_own(&bi) || project.get(&dir_bi) == project.get(&bi) {
             return Ok(());
         }
-        self.set_projid(dir.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ.0 as usize])
+        self.set_projid(dir.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ])
     }
 
     /// Change the inode with @set, in a transaction of its own that's

@@ -157,7 +157,7 @@ impl InodeInfo {
         if bi.casefold(self.fs()) {
             fa.flags |= c::FS_CASEFOLD_FL;
         }
-        fa.fsx_projid = self.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ.0 as usize];
+        fa.fsx_projid = self.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ];
     }
 
     /// @dentry is this inode's.
@@ -274,10 +274,10 @@ impl InodeInfo {
         let old_qid = self.ei_quota.lock().ei_qid;
         let mut qid = old_qid;
         if let Some(uid) = uid {
-            qid.q[c::QuotaType::QTYP_USR.0 as usize] = uid;
+            qid.q[c::QuotaType::QTYP_USR] = uid;
         }
         if let Some(gid) = kgid {
-            qid.q[c::QuotaType::QTYP_GRP.0 as usize] = v.gid_of(gid);
+            qid.q[c::QuotaType::QTYP_GRP] = v.gid_of(gid);
         }
 
         lock.quota_transfer(qid, !0, QuotaAcctMode::PREALLOC)?;

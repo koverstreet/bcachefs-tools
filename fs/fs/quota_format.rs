@@ -9,20 +9,20 @@ use cstruct_macros::{bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 /* KEY_TYPE_quota: */
 #[bch_enum(open)]
+#[nr]
 #[repr(u32)]
 pub enum QuotaType {
     QTYP_USR = 0,
     QTYP_GRP = 1,
     QTYP_PRJ = 2,
-    QTYP_NR = 3,
 }
 
 #[bch_enum(open)]
+#[nr]
 #[repr(u32)]
 pub enum QuotaCounter {
     Q_SPC = 0,
     Q_INO = 1,
-    Q_COUNTERS = 2,
 }
 
 #[repr(C)]
@@ -36,7 +36,7 @@ pub struct bch_quota_counter {
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Quota {
     pub v: c::bch_val,
-    pub c: [c::bch_quota_counter; c::QuotaCounter::Q_COUNTERS.0 as usize],
+    pub c: [c::bch_quota_counter; c::QuotaCounter::NR as usize],
 }
 
 /* BCH_SB_FIELD_quota: */
@@ -51,7 +51,7 @@ pub struct bch_sb_quota_counter {
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_quota_type {
     pub flags: Le64,
-    pub c: [c::bch_sb_quota_counter; c::QuotaCounter::Q_COUNTERS.0 as usize],
+    pub c: [c::bch_sb_quota_counter; c::QuotaCounter::NR as usize],
 }
 
 #[whole]
@@ -59,6 +59,6 @@ pub struct bch_sb_quota_type {
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_quota {
     pub field: Head<c::bch_sb_field>,
-    pub q: [c::bch_sb_quota_type; c::QuotaType::QTYP_NR.0 as usize],
+    pub q: [c::bch_sb_quota_type; c::QuotaType::NR as usize],
 }
 vstruct!(bch_sb_field_quota, field.u64s, start = 0);
