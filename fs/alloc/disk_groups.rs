@@ -305,7 +305,7 @@ impl Fs {
     /// The devices that take @data_type writes now, in @target - all of them
     /// if @target names no devices.
     pub fn target_rw_devs(&self, data_type: DataType, target: Target) -> c::bch_devs_mask {
-        let mut devs = c::bch_devs_mask { d: self.allocator.rw_devs[data_type.0 as usize].load() };
+        let mut devs = c::bch_devs_mask { d: self.allocator.rw_devs[data_type].load() };
         let rcu = read_lock();
         if let Some(t) = self.target_to_mask(target, &rcu) {
             devs.d.and(&t.d);
@@ -338,7 +338,7 @@ impl Fs {
         {
             let now = crate::os::kernel::local_clock();
             let rcu = read_lock();
-            let rw = c::bch_devs_mask { d: self.allocator.rw_devs[DataType::user.0 as usize].load() };
+            let rw = c::bch_devs_mask { d: self.allocator.rw_devs[DataType::user].load() };
             let devs = self.target_to_mask(Target::decode(target.into()), &rcu).unwrap_or(&rw);
 
             let (mut nr, mut total) = (0u64, 0u64);

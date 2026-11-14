@@ -265,7 +265,7 @@ pub(crate) fn dev_wait_amount(ca: &Dev, mark: &impl MarkHeld) -> (i64, bool) {
     let leaving = (leaving as i64).max(0);
 
     let bucket_size = u64::from(ca.mi.get().bucket_size);
-    let free = usage.buckets[DataType::free.0 as usize]
+    let free = usage.buckets[DataType::free]
         .wrapping_mul(bucket_size).wrapping_add(leaving as u64) as i64;
     let capacity = ca.mi.get().nbuckets.wrapping_mul(bucket_size) as i64;
 

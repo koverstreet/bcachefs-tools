@@ -104,7 +104,7 @@ impl<S> DiskAccountingPos<S> {
     }
 
     pub fn nr_counters(&self) -> usize {
-        TYPE_NR_COUNTERS[self.type_().0 as usize]
+        TYPE_NR_COUNTERS[self.type_()]
     }
 
     pub(crate) fn next_type_start(&self) -> Bpos {

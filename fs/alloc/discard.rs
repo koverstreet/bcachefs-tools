@@ -551,7 +551,7 @@ fn calculate_discard_sectors_to_release(trans: &TransGuard<'_>, s: &DiscardState
         for ca in fs.rw_devs_rcu(&rcu) {
             let u = ca.usage_read_fast();
             let sectors = u64::from(ca.mi.get().bucket_size);
-            let buckets = |t: DataType| u.buckets[t.0 as usize];
+            let buckets = |t: DataType| u.buckets[t];
 
             let pending  = sectors * buckets(DataType::need_discard);
             let free     = sectors * buckets(DataType::free);
@@ -733,9 +733,9 @@ impl Fs {
     pub fn do_discards_going_ro(&self) {
         let must = self.rw_devs_rcu(&read_lock()).any(|ca| {
             let u = ca.usage_read_fast();
-            u.buckets[DataType::free.0 as usize] <
+            u.buckets[DataType::free] <
                 ca.buckets_reserved(c::Watermark::stripe) * 4 &&
-            u.buckets[DataType::need_discard.0 as usize] != 0
+            u.buckets[DataType::need_discard] != 0
         });
         if must {
             do_discards(self);
@@ -815,8 +815,8 @@ impl Dev {
         let reserved = self.reserved_sectors.get().div_ceil(self.mi.get().bucket_size.into())
             .max(self.buckets_reserved(c::Watermark::stripe));
         let want_free = reserved + (self.mi.get().nbuckets >> 5);
-        let free = u.buckets[DataType::free.0 as usize];
-        let cached = u.buckets[DataType::cached.0 as usize] as i64;
+        let free = u.buckets[DataType::free];
+        let cached = u.buckets[DataType::cached] as i64;
         (want_free as i64 - free as i64).clamp(0, cached) as u64
     }
 }

@@ -2670,7 +2670,7 @@ impl Fs {
         let mut total = 0u64;
 
         for ca in self.online_members() {
-            let sectors = ca.usage_full_read_fast().d[DataType::btree.0 as usize].sectors;
+            let sectors = ca.usage_full_read_fast().d[DataType::btree].sectors;
             if m.push((ca.dev_idx, sectors)).is_err() {
                 return self.write_super_flags(sb, c::SbWriteFlags::empty());
             }

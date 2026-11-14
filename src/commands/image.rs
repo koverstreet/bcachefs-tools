@@ -208,7 +208,7 @@ fn print_data_type_usage(
     usage: &c::bch_dev_usage_full,
     data_type: DataType,
 ) {
-    let d = &usage.d[data_type.0 as usize];
+    let d = &usage.d[data_type];
     if d.buckets != 0 {
         data_type.to_text(out);
         prt_sectors(out, ca.bucket_to_sector(d.buckets));

@@ -97,7 +97,7 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: 
     // wrongly exclude their devices' domains
     req.devs_chosen = c::bch_devs_mask::default();
     // as the sector allocator, which we bypass, would
-    req.devs_may_alloc.d.and(&fs.allocator.rw_devs[DataType::user.0 as usize].load());
+    req.devs_may_alloc.d.and(&fs.allocator.rw_devs[DataType::user].load());
 
     let (mut have_data, mut have_parity) = (0, 0);
     for i in (0..nr_blocks).filter(|&i| s.blocks[i].gotten()) {

@@ -1091,7 +1091,7 @@ impl Dev {
     /// allocator's, read unlocked, as C does.
     pub fn free_buckets_at(&self, usage: &c::bch_dev_usage, watermark: c::Watermark) -> u64 {
         let open = self.nr_open_buckets.get();
-        let free = usage.buckets[DataType::free.0 as usize];
+        let free = usage.buckets[DataType::free];
         // as C's: u64s, then max_t(s64, 0, ..)
         (free.wrapping_sub(open.into()).wrapping_sub(self.buckets_reserved(watermark)) as i64).max(0) as u64
     }

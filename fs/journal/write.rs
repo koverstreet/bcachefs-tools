@@ -1033,7 +1033,7 @@ fn write_checksum(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError
 extern "C" fn journal_write(mut w: Running<c::journal_buf>) {
     let j = w.journal();
     let fs = j.fs();
-    let nr_rw_members = fs.allocator.rw_devs[DataType::free.0 as usize].weight();
+    let nr_rw_members = fs.allocator.rw_devs[DataType::free].weight();
 
     assert!(w.bits.write_started(), "journal write of seq {} not started", w.seq());
     assert!(!w.bits.write_allocated(), "journal write of seq {} already allocated", w.seq());

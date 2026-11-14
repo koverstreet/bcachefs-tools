@@ -896,7 +896,7 @@ crate::fs_delayed_work! {
         let mut want_schedule = false;
         for ca in fs.members() {
             let u = ca.usage_read_fast();
-            let btree_sectors = ca.bucket_to_sector(u.buckets[DataType::btree.0 as usize]);
+            let btree_sectors = ca.bucket_to_sector(u.buckets[DataType::btree]);
             let bitmap_sectors = u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << ca.mi.get().btree_bitmap_shift;
 
             if btree_sectors * 4 < bitmap_sectors {
@@ -1013,7 +1013,7 @@ impl Fs {
 
     /// The devices the allocator writes @data_type to.
     pub fn rw_devs_for_rcu<'g>(&'g self, data_type: DataType, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g Dev> {
-        self.devs_rcu_in(self.allocator.rw_devs[data_type.0 as usize].iter(), rcu)
+        self.devs_rcu_in(self.allocator.rw_devs[data_type].iter(), rcu)
     }
 
     /// dev_missing_atomic(), and the error for it.
@@ -1554,7 +1554,7 @@ impl Dev {
 
     /// Whether the allocator writes to it: bch2_dev_is_rw().
     pub fn is_rw(&self) -> bool {
-        self.fs.allocator.rw_devs[DataType::free.0 as usize].test(self.dev_idx.into())
+        self.fs.allocator.rw_devs[DataType::free].test(self.dev_idx.into())
     }
 
     /// What a new copy written to it would be worth - nothing unless it's rw:

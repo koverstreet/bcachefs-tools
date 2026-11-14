@@ -1011,7 +1011,7 @@ impl Dev {
     /// An IO error of type @ty: counted, and a write's starting the write
     /// error clock, which io_error_work() reads.
     pub fn io_error(&self, ty: c::MemberErrorType) {
-        self.errors[ty.0 as usize].fetch_add(1, Relaxed);
+        self.errors[ty].fetch_add(1, Relaxed);
 
         if ty == c::MemberErrorType::write && self.write_errors_start.load(Relaxed) == 0 {
             self.write_errors_start.store(jiffies() as usize, Relaxed);

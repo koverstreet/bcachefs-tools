@@ -329,7 +329,7 @@ impl DevPlaceable {
         }
 
         let f = ca.usage_full_read_fast();
-        let buckets = |t: DataType| f.d[t.0 as usize].buckets;
+        let buckets = |t: DataType| f.d[t].buckets;
         let bucket_size = u64::from(ca.mi.get().bucket_size);
 
         // Not the allocator's free or available buckets: those take out open

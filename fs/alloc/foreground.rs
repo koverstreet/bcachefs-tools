@@ -1063,8 +1063,8 @@ impl Fs {
                 for ca in self.devs_rcu(&rcu) {
                     let u = ca.usage_read_fast();
                     let sectors = u64::from(ca.mi.get().bucket_size);
-                    need_discard += sectors * u.buckets[DataType::need_discard.0 as usize];
-                    free         += sectors * u.buckets[DataType::free.0 as usize];
+                    need_discard += sectors * u.buckets[DataType::need_discard];
+                    free         += sectors * u.buckets[DataType::free];
                     reserve      += sectors * ca.buckets_reserved(c::Watermark::stripe);
                 }
             }

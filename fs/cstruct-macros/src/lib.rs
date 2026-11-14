@@ -1229,6 +1229,18 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
     if let Some(nr) = &nr {
         out.extend(quote!(impl #name { pub const NR: #repr = #nr; }));
     }
+    // An array of a value per variant is indexed by it
+    if e.kind == EnumKind::Open && nr.is_some() {
+        out.extend(quote! {
+            impl<T> core::ops::Index<#name> for [T; #name::NR as usize] {
+                type Output = T;
+                fn index(&self, i: #name) -> &T { &self[i.0 as usize] }
+            }
+            impl<T> core::ops::IndexMut<#name> for [T; #name::NR as usize] {
+                fn index_mut(&mut self, i: #name) -> &mut T { &mut self[i.0 as usize] }
+            }
+        });
+    }
 
     out.extend(names_gen(e, name));
     out.extend(typeinfo::info(name, name, quote!(Enum), &[]));

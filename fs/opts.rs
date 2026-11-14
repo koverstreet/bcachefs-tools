@@ -882,7 +882,7 @@ pub(crate) const FIX_ERRORS: OptFn = OptFn {
 
 impl OptId {
     pub fn opt(self) -> &'static Opt {
-        &OPTS[self.0 as usize]
+        &OPTS[self]
     }
 
     pub fn inode_opt(self) -> Option<InodeOpt> {
