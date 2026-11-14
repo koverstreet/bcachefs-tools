@@ -304,7 +304,6 @@ impl<'t> InteriorUpdate<'t> {
 
         let contents = unsafe { n.contents_mut() };
         n.keys_mut(contents).bset_init_first();
-        contents.version_ondisk = fs.sb.version.get();
 
         contents.nr = Default::default();
         let data = contents.data_mut();

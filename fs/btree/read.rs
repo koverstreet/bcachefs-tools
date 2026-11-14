@@ -418,7 +418,6 @@ fn node_read_done(v: &mut NodeValidate<'_>) -> Result<(), BchError> {
     let (fs, b) = (v.fs, v.b);
     let p = NodePtr::new(fs, unsafe { b.contents() }.key_i().into());
 
-    unsafe { b.contents_mut() }.version_ondisk = u16::MAX;
     /* We might get called multiple times on read retry: */
     b.written.set(0);
 
@@ -571,9 +570,6 @@ fn read_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, p: &NodePtr, buf:
         n = H::of_mut(bytes);
         v.keys_lost();
     }
-
-    let contents = unsafe { b.contents_mut() };
-    contents.version_ondisk = contents.version_ondisk.min(n.bset().version.get());
 
     validate_bset(v, n, written as u32)?;
 

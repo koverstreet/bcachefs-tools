@@ -164,7 +164,6 @@ pub struct NodeContents {
 
     pub nsets: u8,
     pub nr_key_bits: u8,
-    pub version_ondisk: u16,
 
     pub format: cs::bkey_format,
 
