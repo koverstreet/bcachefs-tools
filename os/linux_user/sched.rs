@@ -65,6 +65,10 @@ pub fn need_resched() -> bool {
     false
 }
 
+/// Nothing here can't sleep.
+#[inline(always)]
+pub fn might_sleep() {}
+
 /// # Safety
 /// @task is a task, live.
 pub unsafe fn task_pid(task: *mut c::task_struct) -> c_int {
