@@ -9,6 +9,7 @@
  */
 
 #include <linux/blkdev.h>
+#include <linux/jump_label.h>
 #include <linux/mutex.h>
 #include <linux/percpu.h>
 #include <linux/percpu-rwsem.h>
@@ -377,4 +378,15 @@ void bch2_cond_resched(void)
 bool bch2_capable(int cap)
 {
 	return capable(cap);
+}
+
+/*
+ * static_branch_unlikely(), for Rust where it has no asm of its own
+ * (jump_label.rs): out of line, @key isn't a constant the asm can name -
+ * the key's count, as static_branch_unlikely() reads it without
+ * CONFIG_JUMP_LABEL.
+ */
+bool bch2_static_branch_unlikely(struct static_key_false *key)
+{
+	return static_key_enabled(&key->key);
 }

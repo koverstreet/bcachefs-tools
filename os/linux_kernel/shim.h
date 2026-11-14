@@ -80,4 +80,7 @@ void bch2_rust_warn(const char *file, unsigned line);
 void bch2_cond_resched(void);
 bool bch2_capable(int cap);
 
+struct static_key_false;
+bool bch2_static_branch_unlikely(struct static_key_false *key);
+
 #endif /* _BCACHEFS_OS_LINUX_KERNEL_SHIM_H */

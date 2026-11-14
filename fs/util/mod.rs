@@ -10,7 +10,6 @@ pub mod futex;
 pub mod gather;
 pub mod hash;
 pub mod ioctl;
-pub mod jump_label;
 pub mod kmem_cache;
 pub mod late;
 pub mod log;

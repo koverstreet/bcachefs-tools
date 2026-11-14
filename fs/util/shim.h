@@ -7,14 +7,10 @@
 #include <linux/types.h>
 #include <linux/workqueue.h>
 
-struct static_key_false;
-
 /*
  * util.c's: the kernel's macros and inlines, and what differs between the
  * kernel and userspace, for Rust
  */
-
-bool bch2_static_branch_unlikely(struct static_key_false *key);
 
 void *rust_kzalloc_nofail(size_t size);
 void *rust_kvzalloc_nofail(size_t size);

@@ -7,7 +7,7 @@
 //! with CONFIG_BCACHEFS_PATH_TRACEPOINTS, and is never on without it.
 //!
 //! A tracepoint is checked as C's trace_<name>_enabled() is, a static branch on
-//! its key - util/jump_label.rs's static_branch_unlikely!() - so a disabled one
+//! its key - os::jump_label's static_branch_unlikely!() - so a disabled one
 //! costs a NOP; its message is built only once it's on, out of line, as
 //! __event_trace() builds it, and handed to its probes. The tracepoints and
 //! their events are trace/tracepoints.rs's. Userspace has no tracepoints: none

@@ -352,7 +352,7 @@ $(obj)/rust/percpu_asm.rs: $(src)/../os/linux_kernel/percpu_asm.rs.S FORCE
 	$(Q)mkdir -p $(@D)
 	$(call if_changed_dep,bch_rscpp)
 
-$(obj)/rust/jump_label_asm.rs: $(src)/util/jump_label_asm.rs.S FORCE
+$(obj)/rust/jump_label_asm.rs: $(src)/../os/linux_kernel/jump_label_asm.rs.S FORCE
 	$(Q)mkdir -p $(@D)
 	$(call if_changed_dep,bch_rscpp)
 
