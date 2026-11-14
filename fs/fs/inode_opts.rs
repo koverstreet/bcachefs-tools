@@ -598,7 +598,7 @@ fn propagate_one(
          * finding work is the upgrade, not a bug.
          */
         let mut flags = FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE;
-        if t.fs().sb.compat.get() & (1 << c::SbCompat::inode_opts_propagated.0) == 0 {
+        if !t.fs().compat(c::SbCompat::inode_opts_propagated) {
             flags |= FsckFlags::ERR_SILENT;
         }
 

@@ -37,7 +37,7 @@ use c::FsFlag as Flag;
 use c::ProgressUnit as Units;
 use core::cmp::Ordering;
 use core::sync::atomic::Ordering::Relaxed;
-use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature};
+use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature, SbFeatures};
 use zerocopy::IntoBytes;
 
 type Pass = RecoveryPass;
@@ -206,12 +206,12 @@ fn reconstruct_alloc(fs: &Fs) {
         }
 
         let compat = &w.published().compat;
-        compat.set(compat.get() & !(1 << c::SbCompat::alloc_info.0));
+        compat.set(compat.get() - c::SbCompats::alloc_info);
 
         let opts = fs.opts_writer(&mut w);
         opts.recovery_passes.set(opts.recovery_passes.get() | passes::passes_from_stable(v));
 
-        w.sb_mut().features[0] &= !(1 << SbFeature::no_alloc_info.0);
+        w.sb_mut().features.update(|f| f - SbFeatures::no_alloc_info);
         w.dirty();
     }
 
@@ -699,8 +699,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                                 id::clean_but_journal_not_empty,
                                 "filesystem marked clean but journal not empty")? {
             let mut sb = fs.sb_lock();
-            let compat = fs.sb.compat.get() & !(1 << c::SbCompat::alloc_info.0);
-            sb.published().compat.set(compat);
+            sb.published().compat.set(fs.sb.compat.get() - c::SbCompats::alloc_info);
             sb.sb_mut().set_clean(false);
             sb.published().clean.set(0);
         }
@@ -1060,11 +1059,11 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
 
     {
         let mut sb = fs.sb_lock();
-        sb.sb_mut().compat[0] |= 1 << c::SbCompat::extents_above_btree_updates_done.0 |
-                                 1 << c::SbCompat::bformat_overflow_done.0 |
-                                 1 << c::SbCompat::no_stale_ptrs.0 |
-                                 1 << c::SbCompat::stripe_frag_accounting.0 |
-                                 1 << c::SbCompat::inode_opts_propagated.0;
+        sb.sb_mut().compat.update(|f| f | c::SbCompats::extents_above_btree_updates_done |
+                                          c::SbCompats::bformat_overflow_done |
+                                          c::SbCompats::no_stale_ptrs |
+                                          c::SbCompats::stripe_frag_accounting |
+                                          c::SbCompats::inode_opts_propagated);
 
         check_version_downgrade(fs, &mut sb);
 

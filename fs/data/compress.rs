@@ -58,7 +58,7 @@ use core::ptr::{self, NonNull};
 use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, TypeInfo, BitfieldMembers};
 use crate::types::c_default;
 use nestify::nest;
-use crate::format::{Bpos, CompressionType, SbFeature};
+use crate::format::{Bpos, CompressionType, SbFeatures};
 
 nest! {
     #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
@@ -167,14 +167,14 @@ fn type_to_opt(t: CompressionType) -> usize {
     }.0 as usize
 }
 
-/// Opt type @t's superblock feature. None's is lz4's, bit 0: compression=none
+/// Opt type @t's superblock feature. None's is lz4's: compression=none
 /// still gets lz4's pools at mount.
-fn opt_feature(t: usize) -> u64 {
+fn opt_feature(t: usize) -> SbFeatures {
     macro_rules! map {
         ((none, $n0:literal), $(($t:ident, $n:literal)),* $(,)?) => {
             match t {
-                $n0 => 1,
-                $($n => 1 << SbFeature::$t.0,)*
+                $n0 => SbFeatures::lz4,
+                $($n => SbFeatures::$t,)*
                 _ => panic!("compression opt type {t}"),
             }
         };
@@ -791,22 +791,22 @@ pub(crate) fn check_set_has_compressed_data(fs: &Fs, compression_opt: u8) -> Res
     }
 
     let f = opt_feature(t);
-    if fs.sb.features.get() & f == f {
+    if fs.sb.features.get().contains(f) {
         return Ok(());
     }
     let mut sb = fs.sb_lock();
-    if fs.sb.features.get() & f == f {
+    if fs.sb.features.get().contains(f) {
         return Ok(());
     }
 
     init_features(fs, &sb, fs.sb.features.get() | f)?;
-    sb.sb_mut().features[0] |= f;
+    sb.sb_mut().features.update(|x| x | f);
     fs.write_super(&mut sb);
     Ok(())
 }
 
 /// The pools @features' types need, set up if they aren't.
-fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: u64) -> Result<(), BchError> {
+fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: SbFeatures) -> Result<(), BchError> {
     // SAFETY: pure functions
     let (zstd, deflate, inflate, zstd_d) = unsafe {
         let params = c::zstd_get_params(c::zstd_max_clevel(), extent_max(fs) as u64);
@@ -821,7 +821,7 @@ fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: u64) -> Result<(), Bch
         (opts::gzip, deflate, inflate),
         (opts::zstd, zstd, zstd_d),
     ].map(|(t, w, d)| (t.0 as usize, w, d));
-    let has = |t| features & opt_feature(t) != 0;
+    let has = |t| features.contains(opt_feature(t));
 
     if !types.iter().any(|&(t, ..)| has(t)) {
         return Ok(());

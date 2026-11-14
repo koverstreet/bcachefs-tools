@@ -35,7 +35,7 @@ use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use bcachefs_kernel::sb::io::SbResize;
-use bcachefs_kernel::format::{Btree, CompressionType, DataType, DataTypes, BkeyType, MetadataVersion, SbFeature};
+use bcachefs_kernel::format::{Btree, CompressionType, DataType, DataTypes, BkeyType, MetadataVersion, SbFeatures};
 
 const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
@@ -367,8 +367,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     }
 
     // Set small_image feature
-    let f = &mut sb.sb_mut().features[0];
-    f.set(f.get() | (1u64 << SbFeature::small_image.0 as u64));
+    sb.sb_mut().features.update(|f| f | SbFeatures::small_image);
 
     // Resize members_v2 to contain only one device
     let member_bytes = sb.field::<c::bch_sb_field_members_v2>()

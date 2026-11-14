@@ -34,7 +34,7 @@
 use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use crate::btree::bkey::ValidateFlags;
-use crate::format::SbFeature;
+use crate::format::SbFeatures;
 use crate::sb_err_on;
 use crate::bch_verbose;
 use crate::c;
@@ -190,7 +190,7 @@ fn section_add(sb: &mut (impl SbResize + ?Sized), mut start: u64, mut end: u64) 
     f.start[i..].rotate_right(1);
     f.start[i] = c::journal_seq_blacklist_entry { start: Le64::new(start), end: Le64::new(end) };
 
-    sb.sb_mut().features[0] |= 1 << SbFeature::journal_seq_blacklist_v3.0;
+    sb.sb_mut().features.update(|f| f | SbFeatures::journal_seq_blacklist_v3);
     true
 }
 

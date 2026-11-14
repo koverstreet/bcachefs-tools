@@ -78,12 +78,6 @@ pub enum DataType {
     multiple = 11,
 }
 
-impl From<DataType> for DataTypes {
-    fn from(t: DataType) -> Self {
-        Self::from_bits_retain(1 << t.0)
-    }
-}
-
 pub type Replicas = Head<c::bch_replicas_entry_v1>;
 crate::accounting::acct_counters!(ReplicasCounters { sectors });
 

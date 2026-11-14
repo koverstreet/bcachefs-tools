@@ -212,8 +212,8 @@ pub struct bch_sb_cpu {
     pub time_base_hi: Volatile<u32>,
     pub time_units_per_sec: Volatile<c_uint>,
     pub nsec_per_time_unit: Volatile<c_uint>,
-    pub features: Volatile<u64>,
-    pub compat: Volatile<u64>,
+    pub features: Volatile<c::SbFeatures>,
+    pub compat: Volatile<c::SbCompats>,
     pub recovery_passes_required: Volatile<u64>,
     pub errors_silent: [Volatile<c_ulong>; bits_to_longs(c::SbErrorId::NR as usize)],
     pub btrees_lost_data: Volatile<u64>,
@@ -519,11 +519,11 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
     sb_compatible(sb, out)?;
 
     if opts.no_version_check == 0 {
-        let incompat = sb.features[0].get() & (!0u64 << c::SbFeature::NR);
-        let incompat_bit = if incompat != 0 {
-            incompat.trailing_zeros()
-        } else if sb.features[1].get() != 0 {
-            64 + sb.features[1].get().trailing_zeros()
+        let incompat = sb.features.get().difference(c::SbFeatures::all());
+        let incompat_bit = if !incompat.is_empty() {
+            incompat.bits().trailing_zeros()
+        } else if sb.features_hi.get() != 0 {
+            64 + sb.features_hi.get().trailing_zeros()
         } else {
             0
         };
@@ -729,7 +729,7 @@ impl Fs {
     pub(crate) fn set_feature(&self, feature: SbFeature) {
         let mut sb = self.sb_lock();
         if !self.feature(feature) {
-            sb.sb_mut().features[0] |= 1 << feature.0;
+            sb.sb_mut().features.update(|f| f | feature.into());
             self.write_super(&mut sb);
         }
     }
@@ -747,7 +747,7 @@ impl Fs {
         crate::bch_notice!(self, "Now allowing incompatible features up to {v}, previously allowed up to {allowed}\n");
 
         let s = sb.sb_mut();
-        s.features[0] |= c::BCH_SB_FEATURES_ALL;
+        s.features.update(|f| f | c::SbFeatures::ALL);
         s.update_version_incompat_allowed(|a| a.max(v));
 
         crate::sb::downgrade::set_upgrade_incompat(&mut sb, allowed, v);
@@ -780,7 +780,7 @@ pub(crate) fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool
     if fs.sb.version_min.get() > current {
         s.version_min.set(current);
     }
-    s.compat[0] = Le64::new(s.compat[0].get() & ((1 << c::SbCompat::NR) - 1));
+    s.compat.update(|f| f & c::SbCompats::all());
 
     current < fs.sb.version.get()
 }
@@ -798,7 +798,7 @@ pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: MetadataVersion
     let s = sb.sb_mut();
     s.version.set(new);
     if incompat {
-        s.features[0] |= c::BCH_SB_FEATURES_ALL;
+        s.features.update(|f| f | c::SbFeatures::ALL);
         s.update_version_incompat_allowed(|a| a.max(new));
     }
 }
@@ -860,8 +860,8 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
 
     let have = sb.entries().map_while(Result::ok).fold(0u64, |m, f| m | 1u64.checked_shl(f.type_.get()).unwrap_or(0));
     prt!(out, "Sections:\t{}\n", names::set::<c::SbFieldType>(have));
-    prt!(out, "Features:\t{}\n", names::set::<SbFeature>(sb.features[0].get()));
-    prt!(out, "Compat features:\t{}\n", names::set::<c::SbCompat>(sb.compat[0].get()));
+    prt!(out, "Features:\t{}\n", sb.features.get());
+    prt!(out, "Compat features:\t{}\n", sb.compat.get());
 
     prt!(out, "\nOptions:\n");
     {
@@ -1639,9 +1639,9 @@ impl<'a> SbWrite<'a> {
 
     /// Compat feature @compat set, recorded: whether it wasn't already.
     pub fn set_compat(&mut self, compat: c::SbCompat) -> bool {
-        let (v, bit) = (self.sb().compat[0].get(), 1u64 << compat.0);
-        self.sb_mut().compat[0] |= bit;
-        self.record(v & bit == 0)
+        let (v, bit) = (self.sb().compat.get(), c::SbCompats::from(compat));
+        self.sb_mut().compat.set(v | bit);
+        self.record(!v.contains(bit))
     }
 
     /// The ext section, all of it: mount grows it to its full size, so a
@@ -2775,8 +2775,8 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     cpu.time_base_lo.set(src.time_base_lo.get() / u64::from(nsec_per_time_unit));
     cpu.time_base_hi.set(src.time_base_hi.get());
 
-    cpu.features         .set(src.features[0].get());
-    cpu.compat           .set(src.compat[0].get());
+    cpu.features         .set(src.features.get());
+    cpu.compat           .set(src.compat.get());
     cpu.multi_device     .set(src.multi_device());
     cpu.dirents_sanitized.set(src.dirents_sanitized());
 
@@ -2831,7 +2831,9 @@ fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &bch_sb) -> Result<(), Bch
     d.flags5         = src.flags5;
     d.flags6         = src.flags6;
     d.features       = src.features;
+    d.features_hi    = src.features_hi;
     d.compat         = src.compat;
+    d.compat_hi      = src.compat_hi;
 
     for ty in (0..FIELD_NR as u32).map(c::SbFieldType) {
         if c::BCH_SINGLE_DEVICE_SB_FIELDS & (1 << ty.0) != 0 {

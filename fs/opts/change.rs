@@ -114,7 +114,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, cha
             }
         }
         OptId::Opt_casefold_disabled => {
-            if v != 0 && fs.sb.features.get() & 1 << SbFeature::casefolding.0 != 0 {
+            if v != 0 && fs.feature(SbFeature::casefolding) {
                 crate::bch_err!(fs, "cannot mount with casefolding disabled: casefolding already in use");
                 return fs.throw(Errcode::BCH_ERR_casefolding_in_use);
             }

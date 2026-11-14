@@ -27,7 +27,7 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unvalidate
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 use crate::sb::io::SbResize;
-use crate::format::{Btree, MetadataVersion, SbFeature};
+use crate::format::{Btree, MetadataVersion, SbFeatures};
 use crate::fs::btree_id_is_alloc;
 
 type Section = c::bch_sb_field_clean;
@@ -204,7 +204,7 @@ pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Resu
 pub(crate) fn fs_mark_dirty(sb: &mut SbLockGuard<'_>) {
     let sb = sb.sb_mut();
     sb.set_clean(false);
-    sb.features[0] |= c::BCH_SB_FEATURES_ALWAYS;
+    sb.features.update(|f| f | c::SbFeatures::ALWAYS);
 }
 
 /// Marked clean: the clean section written, so the next mount needn't read
@@ -219,8 +219,7 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     }
 
     let (version, big_endian) = (sb.sb().version.get(), sb.sb().big_endian());
-    sb.sb_mut().compat[0] |= 1 << c::SbCompat::alloc_info.0 |
-                             1 << c::SbCompat::alloc_metadata.0;
+    sb.sb_mut().compat.update(|f| f | c::SbCompats::alloc_info | c::SbCompats::alloc_metadata);
 
     let u64s = SECTION_HEAD / size_of::<u64>() + fs.journal.lock.entry_u64s_reserved.get() as usize;
     let Some(f) = sb.field_resize::<Section>(u64s as u32) else {
@@ -288,5 +287,5 @@ pub fn strip_alloc(fs: &Fs, guard: &mut SbLockGuard<'_>) {
         guard.fs_member_mut(ca.dev_idx.into()).set_freespace_initialized(false);
     }
 
-    guard.sb_mut().features[0] |= 1 << SbFeature::no_alloc_info.0;
+    guard.sb_mut().features.update(|f| f | SbFeatures::no_alloc_info);
 }

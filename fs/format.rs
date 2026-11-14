@@ -1244,8 +1244,11 @@ pub struct bch_sb {
     #[members] pub flags5: bch_sb_flags5,
     #[members] pub flags6: bch_sb_flags6,
     pub write_time: Le64,
-    pub features: [Le64; 2],
-    pub compat: [Le64; 2],
+    pub features: Le64<c::SbFeatures>,
+    /* features 64 on: there are none yet */
+    pub features_hi: Le64,
+    pub compat: Le64<c::SbCompats>,
+    pub compat_hi: Le64,
 
     pub layout: c::bch_sb_layout,
 
@@ -1414,24 +1417,25 @@ pub struct bch_sb_flags6 {
 pub const BCH_SB_EXTENT_BP_SHIFT_DEFAULT: u32 = 10;
 
 
-pub const BCH_SB_FEATURES_ALWAYS: u64 =
-    (1 << c::SbFeature::new_extent_overwrite.0) |
-    (1 << c::SbFeature::extents_above_btree_updates.0) |
-    (1 << c::SbFeature::btree_updates_journalled.0) |
-    (1 << c::SbFeature::alloc_v2.0) |
-    (1 << c::SbFeature::extents_across_btree_nodes.0);
+impl SbFeatures {
+    pub const ALWAYS: Self = Self::new_extent_overwrite
+        .union(Self::extents_above_btree_updates)
+        .union(Self::btree_updates_journalled)
+        .union(Self::alloc_v2)
+        .union(Self::extents_across_btree_nodes);
 
-pub const BCH_SB_FEATURES_ALL: u64 =
-    c::BCH_SB_FEATURES_ALWAYS |
-    (1 << c::SbFeature::new_siphash.0) |
-    (1 << c::SbFeature::btree_ptr_v2.0) |
-    (1 << c::SbFeature::new_varint.0) |
-    (1 << c::SbFeature::journal_no_flush.0) |
-    (1 << c::SbFeature::incompat_version_field.0);
+    pub const ALL: Self = Self::ALWAYS
+        .union(Self::new_siphash)
+        .union(Self::btree_ptr_v2)
+        .union(Self::new_varint)
+        .union(Self::journal_no_flush)
+        .union(Self::incompat_version_field);
+}
 
 #[bch_enum(open)]
 #[prefix(BCH_FEATURE_)]
 #[nr]
+#[mask(SbFeatures: u64, prefix = BCH_FEATURE_MASK_)]
 #[repr(u32)]
 pub enum SbFeature {
     lz4 = 0,
@@ -1468,6 +1472,7 @@ pub enum SbFeature {
 #[bch_enum(open)]
 #[prefix(BCH_COMPAT_)]
 #[nr]
+#[mask(SbCompats: u64, prefix = BCH_COMPAT_MASK_)]
 #[repr(u32)]
 pub enum SbCompat {
     alloc_info = 0,

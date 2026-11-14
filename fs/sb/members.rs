@@ -30,7 +30,7 @@ use core::sync::atomic::Ordering;
 use cstruct_macros::{MaybeZeroable, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
-use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeature};
+use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
@@ -359,7 +359,7 @@ fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<Unvalid
                BCH_ERR_invalid_sb_members, "device {i}: invalid btree_bitmap_shift {}",
                m.btree_bitmap_shift)?;
 
-    let no_alloc_info = sb.features[0].get() & (1 << SbFeature::no_alloc_info.0) != 0;
+    let no_alloc_info = sb.features.get().contains(SbFeatures::no_alloc_info);
     sb_err_on!(err, m.freespace_initialized() && no_alloc_info, BCH_ERR_invalid_sb_members,
                "device {i}: freespace initialized but fs has no alloc info")?;
     Ok(())

@@ -14,7 +14,6 @@ use crate::format::Btree;
 use crate::fs::Fs;
 use crate::init::passes::{self, RecoveryPass};
 use crate::sb::members::DevRef;
-use crate::types::Le64;
 use crate::util::alloc::KVVec;
 use crate::os::kernel::local_clock;
 use crate::util::rcu::read_lock;
@@ -86,11 +85,9 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
     fs.times[c::TimeStat::btree_gc as usize].update(start_time);
     fs.event_inc_trace(events::gc_gens_end, |_| {});
 
-    let no_stale_ptrs = 1 << c::SbCompat::no_stale_ptrs.0;
-    if fs.sb.compat.get() & no_stale_ptrs == 0 {
+    if !fs.compat(c::SbCompat::no_stale_ptrs) {
         let mut sb = fs.sb_lock();
-        let compat = &mut sb.sb_mut().compat[0];
-        *compat = Le64::new(compat.get() | no_stale_ptrs);
+        sb.sb_mut().compat.update(|f| f | c::SbCompats::no_stale_ptrs);
         fs.write_super(&mut sb);
     }
 

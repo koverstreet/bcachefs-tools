@@ -224,7 +224,7 @@ use crate::data::migrate::{dev_data_drop, dev_data_drop_by_backpointers, dev_rem
 use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, StateLockWrite};
-use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeature};
+use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
 use crate::locking::MemallocFlags;
 use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
@@ -1164,7 +1164,7 @@ impl Fs {
     pub fn dev_remove(&self, ca: DevOuterRef, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
         let ca_p = ca.as_ptr();
         let dev_idx = ca.dev_idx;
-        let fast_device_removal = self.sb.compat.get() & (1 << c::SbCompat::no_stale_ptrs.0) != 0 &&
+        let fast_device_removal = self.compat(c::SbCompat::no_stale_ptrs) &&
             self.request_incompat_feature(MetadataVersion::fast_device_removal).is_ok();
 
         let slot = {
@@ -1820,8 +1820,7 @@ impl Fs {
                 m.nbuckets = new_nbuckets.into();
                 m.set_resize_on_mount(false);
 
-                let s = sb.sb_mut();
-                s.features[0] = (s.features[0].get() & !(1 << SbFeature::small_image.0)).into();
+                sb.sb_mut().features.update(|f| f - SbFeatures::small_image);
                 self.write_super(&mut sb);
             }
 

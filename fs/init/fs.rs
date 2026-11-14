@@ -30,7 +30,6 @@ use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, Holder};
 use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevPieces, SbMembersMut};
 use crate::sb::version::prep_for_start;
-use crate::util::names;
 use crate::util::Printbuf;
 use crate::util::alloc::{Arc, KVVec};
 use crate::util::backref::BackRef;
@@ -310,7 +309,11 @@ impl Fs {
     }
 
     pub fn feature(&self, feature: SbFeature) -> bool {
-        self.sb.features.get() & (1u64 << feature.0) != 0
+        self.sb.features.get().contains(feature.into())
+    }
+
+    pub fn compat(&self, compat: c::SbCompat) -> bool {
+        self.sb.compat.get().contains(compat.into())
     }
 
     pub fn check_set_feature(&self, feature: SbFeature) {
@@ -596,7 +599,7 @@ impl Fs {
         }
 
         if opts.verbose.get() != 0 {
-            prt!(out, "features: {}\n", names::set::<SbFeature>(self.sb.features.get()));
+            prt!(out, "features: {}\n", self.sb.features.get());
         }
 
         if self.sb.multi_device.get() {

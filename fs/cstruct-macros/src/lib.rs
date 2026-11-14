@@ -1184,7 +1184,7 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
                 fn from(v: #name) -> u64 { v.0.into() }
             }
             impl TryFrom<u64> for #name {
-                type Error = core::num::TryFromIntError;
+                type Error = <#repr as TryFrom<u64>>::Error;
                 fn try_from(v: u64) -> Result<Self, Self::Error> { #repr::try_from(v).map(Self) }
             }
             // SAFETY: its integer, every value of which is one
@@ -1208,7 +1208,7 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
                 fn from(v: #name) -> u64 { v.bits().into() }
             }
             impl TryFrom<u64> for #name {
-                type Error = core::num::TryFromIntError;
+                type Error = <#repr as TryFrom<u64>>::Error;
                 fn try_from(v: u64) -> Result<Self, Self::Error> { #repr::try_from(v).map(Self::from_bits_retain) }
             }
             unsafe impl crate::util::vstructs::Plain for #name {}

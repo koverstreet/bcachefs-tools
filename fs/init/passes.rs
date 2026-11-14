@@ -884,7 +884,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
     let rec = &fs.recovery.runner;
     let mut r = lock(fs);
 
-    if fs.sb.features.get() & 1 << SbFeature::no_alloc_info.0 != 0 {
+    if fs.feature(SbFeature::no_alloc_info) {
         passes &= !passes_match(PassFlags::ALLOC);
     }
 

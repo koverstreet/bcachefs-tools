@@ -289,7 +289,16 @@ fn mask_of(m: &EnumDef, bits: &EnumDef, arms: &[Arm]) -> TokenStream {
         }).collect(),
         ..m.clone()
     };
-    enum_gen(&def)
+    let mut out = enum_gen(&def);
+    let (name, past) = (&m.name, format!("{bits_ty}: a value past {}'s bits", m.name));
+    out.extend(quote! {
+        impl From<#bits_ty> for #name {
+            fn from(v: #bits_ty) -> Self {
+                Self::from_bits_retain((1 as #repr).checked_shl(v.into_bits() as u32).expect(#past))
+            }
+        }
+    });
+    out
 }
 
 /// Enum @e of @arms, and a const fn of it per column.

@@ -26,7 +26,7 @@ use crate::init::passes;
 use crate::opts::data_type_str;
 use crate::locking::{ByteLock, Guard as _, Locked};
 use crate::sb::errors::SbErrorId;
-use crate::types::{bits_to_longs, Le64};
+use crate::types::bits_to_longs;
 use crate::os::kernel::unlikely;
 use crate::util::log::LogMsg;
 use crate::util::percpu::{Counters, PerCpu};
@@ -392,13 +392,11 @@ impl TransAttempt<'_, '_> {
         }
 
         if b_gen != ptr_gen && ptr.cached() != 0 {
-            let no_stale_ptrs = 1 << c::SbCompat::no_stale_ptrs.0;
-            if fsck_err_on!(self, fs.sb.compat.get() & no_stale_ptrs != 0,
+            if fsck_err_on!(self, fs.compat(c::SbCompat::no_stale_ptrs),
                             id::stale_ptr_with_no_stale_ptrs_feature,
                             "stale cached ptr, but have no_stale_ptrs feature\n{}", k.to_text(fs))? {
                 let mut sb = fs.sb_lock();
-                let compat = &mut sb.sb_mut().compat[0];
-                *compat = Le64::new(compat.get() & !no_stale_ptrs);
+                sb.sb_mut().compat.update(|f| f - c::SbCompats::no_stale_ptrs);
                 fs.write_super(&mut sb);
             }
             return Err(Errcode::BCH_ERR_cached_ptr_stale.into());
