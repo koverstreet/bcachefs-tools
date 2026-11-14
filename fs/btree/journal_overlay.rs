@@ -703,7 +703,7 @@ pub(crate) fn insert(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: &BkeyI
     let n = crate::util::alloc::kmalloc(bytes).map_err(|_| not_rw.fs.err(e::ENOMEM_journal_key_insert))?;
     // SAFETY: @bytes of key, into as many of ours; then ours to hand over
     unsafe {
-        ptr::copy_nonoverlapping(k.as_ffi().cast::<u8>(), n.as_ptr(), bytes);
+        ptr::copy_nonoverlapping(k.as_bytes().as_ptr(), n.as_ptr(), bytes);
         insert_take(not_rw, btree, level, n.as_ptr().cast())
     }
 }

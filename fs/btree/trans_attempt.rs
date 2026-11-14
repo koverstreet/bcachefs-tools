@@ -723,9 +723,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn bkey_copy(&self, k: &BkeyI) -> Result<TransBkey<'a, 't>, BchError> {
         let dst = self.bkey_alloc(k.k.u64s as u32)?;
+        let src = k.as_bytes();
         unsafe {
-            core::ptr::copy_nonoverlapping(k.as_ffi().cast::<u8>(), dst.as_ptr().cast::<u8>(),
-                                           size_of_val(k));
+            core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_ptr().cast::<u8>(), src.len());
         }
         Ok(dst)
     }

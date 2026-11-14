@@ -28,7 +28,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::{BkeyS, BkeySC};
+use crate::btree::bkey::{BkeyP, BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{NoRoom, TransBkey};
 use crate::c;
@@ -228,10 +228,7 @@ impl TransBkey<'_, '_> {
         }
 
         // The packed key, header first - within the buffer pack() sized for it:
-        let packed_u64s = unsafe {
-            core::slice::from_raw_parts(packed.as_ref().as_ffi().cast::<u64>(),
-                                        need_u64s)
-        };
+        let packed_u64s = <&BkeyP>::from(packed.as_ref()).as_slice();
         self.as_mut_u64s()[..need_u64s].copy_from_slice(packed_u64s);
         Ok(())
     }
