@@ -127,7 +127,7 @@ pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
 
 /// A family attribute's arguments: `#[counted(PATH, tail = ..)]`,
 /// `#[unsized_vstruct(tail = ..)]`, `#[grown(from = FIELD)]`; `bkey`, for a
-/// key's value.
+/// key's value; and a vstruct's `u64s = ..`, `start = ..`, `entries = ..`.
 #[derive(Default)]
 struct FamilyArgs {
     /// The one argument that isn't `key = value`: the count, a field or a
@@ -140,11 +140,18 @@ struct FamilyArgs {
     from: Option<Ident>,
     /// `bkey`: a key's value - its btree/bkey/types.rs impls too.
     bkey: bool,
+    /// `u64s = PATH[, start = EXPR]`: a vstruct's count of u64s, and where
+    /// they start if not past its header - vstruct!()'s.
+    u64s: Option<TokenStream>,
+    start: Option<TokenStream>,
+    /// `entries = [thin] E`: what its entries are - vstruct_container!()'s.
+    entries: Option<TokenStream>,
 }
 
 /// @attr, a family attribute's arguments: an error for one it doesn't take -
-/// @takes, of "count", "tail", "from" and "bkey" - or one not written as its
-/// kind is. The caller names the attribute and the struct.
+/// @takes, of "count", "tail", "from", "bkey", "u64s", "start" and "entries" -
+/// or one not written as its kind is. The caller names the attribute and the
+/// struct.
 fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> {
     let mut args = FamilyArgs::default();
     for part in split_commas(attr) {
@@ -173,6 +180,9 @@ fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> 
                         let from = syn::parse2(v).map_err(|_| format!("({part}): from = FIELD"))?;
                         ("from", args.from.replace(from).is_some())
                     }
+                    "u64s"    => ("u64s", args.u64s.replace(v).is_some()),
+                    "start"   => ("start", args.start.replace(v).is_some()),
+                    "entries" => ("entries", args.entries.replace(v).is_some()),
                     k => return Err(format!("no argument {k}")),
                 }
             }
@@ -192,6 +202,24 @@ fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> 
         }
     }
     Ok(args)
+}
+
+/// @name's vstruct!() and vstruct_container!(), from its attribute's `u64s =
+/// PATH[, start = EXPR]` and `entries = [thin] E`: an unsized type's, with
+/// @head, counted by its header.
+fn vstruct_of(name: &Ident, head: Option<&Ident>, args: &FamilyArgs) -> Result<TokenStream, String> {
+    let vs = vs();
+    if args.start.is_some() && args.u64s.is_none() {
+        return Err(format!("{name}: start = without u64s = - it's where the u64s count from"));
+    }
+    let counted = match head {
+        Some(head) => quote!(unsized #head),
+        None => quote!(#name),
+    };
+    let start = args.start.as_ref().map(|s| quote!(, start = #s));
+    let u64s = args.u64s.as_ref().map(|c| quote!(#vs::vstruct!(#counted, #c #start);));
+    let entries = args.entries.as_ref().map(|e| quote!(#vs::vstruct_container!(#name, #e);));
+    Ok(quote!(#u64s #entries))
 }
 
 /// A field of the struct as written, as a state's definition has it, inline:
@@ -484,13 +512,17 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
 /// says: `tail = [E]`, X's `_tail`, the raw rest - a superblock field's, past
 /// its header; a btree node's, its bset's keys - or `tail = NAME: [E]`, an
 /// array X calls NAME.
+///
+/// `u64s = PATH[, start = EXPR]` is its count, vstruct!()'s; `entries = [thin]
+/// E`, what its entries are, vstruct_container!()'s.
 pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item)?;
     let name = &def.ident;
     let last = def.fields.last().ok_or_else(|| format!("{name}: an unsized vstruct has fields"))?;
-    let args = family_args(attr, &["tail"]).map_err(|e| format!("{name}: {e}"))?;
-    let (tail, elem, fields) = own_tail(&def, args.tail, "unsized_vstruct")?;
+    let args = family_args(attr, &["tail", "u64s", "start", "entries"]).map_err(|e| format!("{name}: {e}"))?;
     let written = crate::tokens::derived(name, "head");
+    let vstruct = vstruct_of(name, Some(&written), &args)?;
+    let (tail, elem, fields) = own_tail(&def, args.tail, "unsized_vstruct")?;
     let last = &last.ident;
     let shape = Shape { repr: repr_attrs(&def), fields, private: Vec::new(), head: written.clone(),
                         deref: written.clone(), tail, elem, tail_at: None };
@@ -509,6 +541,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
         };
     });
     out.extend(own_count_family(name, &shape)?);
+    out.extend(vstruct);
     Ok(out)
 }
 
@@ -585,7 +618,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item)?;
     let name = def.name();
-    let args = family_args(attr, &["from", "bkey"]).map_err(|e| format!("{name}: {e}"))?;
+    let args = family_args(attr, &["from", "bkey", "u64s", "start"]).map_err(|e| format!("{name}: {e}"))?;
     let from = args.from.as_ref()
         .ok_or_else(|| format!("{name}: #[grown(from = FIELD)], FIELD the first field an older \
                                 version's value may lack"))?;
@@ -594,7 +627,9 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
     if at == 0 {
         return Err(format!("{name}: #[grown(from = {from})]: every valid value has at least one field"));
     }
-    sized_family(&def, item, Some((from, at)), None, args.bkey)
+    let mut out = sized_family(&def, item, Some((from, at)), None, args.bkey)?;
+    out.extend(vstruct_of(&def.ident, None, &args)?);
+    Ok(out)
 }
 
 /// #[whole]: the family of a type every valid value of which has all of it -
@@ -621,7 +656,8 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item)?;
     let name = def.name();
-    let args = family_args(attr, &["tail", "bkey"]).map_err(|e| format!("{name}: {e}"))?;
+    let args = family_args(attr, &["tail", "bkey", "u64s", "start"]).map_err(|e| format!("{name}: {e}"))?;
+    let vstruct = vstruct_of(&def.ident, None, &args)?;
     let tail = match args.tail {
         None => None,
         Some((None, _)) => return Err(format!("{name}: #[whole(tail = NAME: [E])] - the tail is the struct's last \
@@ -649,7 +685,9 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
             Some((tail, elem))
         }
     };
-    sized_family(&def, item, None, tail, args.bkey)
+    let mut out = sized_family(&def, item, None, tail, args.bkey)?;
+    out.extend(vstruct);
+    Ok(out)
 }
 
 /// #[grown] and #[whole]: the family of sized struct @def, written @item -

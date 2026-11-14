@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::Le16;
 use zerocopy::byteorder::little_endian as le;
-use crate::util::vstructs::{vstruct, Head};
+use crate::util::vstructs::Head;
 use cstruct_macros::{counted, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 
 /*
@@ -22,11 +22,10 @@ pub struct bch_sb_field_downgrade_entry {
     pub errors: [le::U16; 0],
 }
 
-#[unsized_vstruct(tail = [u64])]
+#[unsized_vstruct(tail = [u64], u64s = field.u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_downgrade {
     pub field: Head<c::bch_sb_field>,
     pub entries: [Head<c::bch_sb_field_downgrade_entry>; 0],
 }
-vstruct!(unsized bch_sb_field_downgrade, field.u64s, start = 0);

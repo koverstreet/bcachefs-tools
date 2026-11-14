@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{vstruct, Head};
+use crate::util::vstructs::Head;
 use cstruct_macros::{bitfield, bch_enum, unsized_vstruct, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
 
 /*
@@ -135,16 +135,15 @@ pub enum MemberInitialized {
     pre_journal_alloc = 4,
 }
 
-#[unsized_vstruct(tail = [u64])]
+#[unsized_vstruct(tail = [u64], u64s = field.u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_members_v1 {
     pub field: Head<c::bch_sb_field>,
     pub _members: [c::bch_member; 0], //Members are now variable size
 }
-vstruct!(unsized bch_sb_field_members_v1, field.u64s, start = 0);
 
-#[unsized_vstruct(tail = [u64])]
+#[unsized_vstruct(tail = [u64], u64s = field.u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_members_v2 {
@@ -153,4 +152,3 @@ pub struct bch_sb_field_members_v2 {
     pub pad: [u8; 6],
     pub _members: [c::bch_member; 0],
 }
-vstruct!(unsized bch_sb_field_members_v2, field.u64s, start = 0);

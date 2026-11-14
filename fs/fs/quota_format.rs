@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use crate::util::vstructs::{vstruct, Head};
+use crate::util::vstructs::Head;
 use cstruct_macros::{bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 /* KEY_TYPE_quota: */
@@ -54,11 +54,10 @@ pub struct bch_sb_quota_type {
     pub c: [c::bch_sb_quota_counter; c::QuotaCounter::NR as usize],
 }
 
-#[whole]
+#[whole(u64s = field.u64s, start = 0)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_quota {
     pub field: Head<c::bch_sb_field>,
     pub q: [c::bch_sb_quota_type; c::QuotaType::NR as usize],
 }
-vstruct!(bch_sb_field_quota, field.u64s, start = 0);

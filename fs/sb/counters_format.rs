@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
-use crate::util::vstructs::{vstruct, Head};
+use crate::util::vstructs::Head;
 use cstruct_macros::{bch_enum, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 
 #[bch_enum(flags)]
@@ -315,11 +315,10 @@ pub enum PersistentCounter {
     #[stable(93)] #[flags(counter)] error_throw,
 }
 
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = field.u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_counters {
     pub field: Head<c::bch_sb_field>,
     pub d: [Le64; 0],
 }
-vstruct!(unsized bch_sb_field_counters, field.u64s, start = 0);

@@ -74,7 +74,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by_self, from_bytes_mut, vstruct,
-                            vstruct_container, Head, FlexArray, Unvalidated, VStructError, VstructMut, VstructRef};
+                            Head, FlexArray, Unvalidated, VStructError, VstructMut, VstructRef};
 use crate::btree::bkey::BkeyPHeader;
 use core::mem::offset_of;
 use cstruct_macros::{bitfield, bch_enum, grown, tagged_union, unsized_vstruct, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
@@ -616,8 +616,9 @@ pub struct BackpointerFlags {
 /// alone, past the header - C has it as _data[] already.
 ///
 /// The count is the crate's, not private: the sections that embed this
-/// header are defined across the crate, and their vstruct!() reads it.
-#[unsized_vstruct(tail = [u64])]
+/// header are defined across the crate, and their `u64s = field.u64s` reads
+/// it.
+#[unsized_vstruct(tail = [u64], u64s = u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field {
@@ -625,7 +626,6 @@ pub struct bch_sb_field {
     pub(crate) u64s: Le32,
     pub type_: Le32,
 }
-vstruct!(unsized bch_sb_field, u64s, start = 0);
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -840,14 +840,13 @@ pub const BCH_SINGLE_DEVICE_SB_FIELDS: u32 =
 
 /* BCH_SB_FIELD_journal: */
 
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = field.u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal {
     pub field: Head<c::bch_sb_field>,
     pub buckets: [Le64; 0],
 }
-vstruct!(unsized bch_sb_field_journal, field.u64s, start = 0);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
@@ -856,7 +855,7 @@ pub struct bch_sb_field_journal_v2_entry {
     pub nr: Le64,
 }
 
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = field.u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_v2 {
@@ -864,7 +863,6 @@ pub struct bch_sb_field_journal_v2 {
 
     pub d: [c::bch_sb_field_journal_v2_entry; 0],
 }
-vstruct!(unsized bch_sb_field_journal_v2, field.u64s, start = 0);
 
 /* BCH_SB_FIELD_crypt: */
 
@@ -894,7 +892,7 @@ pub struct bch_encrypted_key {
  * just store the master key unencrypted in the superblock so we can access the
  * previously encrypted data.
  */
-#[whole]
+#[whole(u64s = field.u64s, start = 0)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb_field_crypt {
@@ -906,7 +904,6 @@ pub struct bch_sb_field_crypt {
     pub kdf_flags: bch_sb_field_crypt_kdf_flags,
     pub key: c::bch_encrypted_key,
 }
-vstruct!(bch_sb_field_crypt, field.u64s, start = 0);
 
 #[bitfield(Le64)]
 pub struct bch_sb_field_crypt_flags {
@@ -934,7 +931,7 @@ pub struct bch_sb_field_crypt_kdf_flags {
  * On clean shutdown, store btree roots and current journal sequence number in
  * the superblock:
  */
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = u64s, entries = thin c::bkey_i)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry {
@@ -947,10 +944,8 @@ pub struct jset_entry {
     pub start: [c::bkey_i; 0],
     pub _data: [u64; 0],
 }
-vstruct!(unsized jset_entry, u64s);
-vstruct_container!(jset_entry, thin c::bkey_i);
 
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = field.u64s, start = 0, entries = jset_entry)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_clean {
@@ -964,11 +959,9 @@ pub struct bch_sb_field_clean {
     pub start: [Head<c::jset_entry>; 0],
     pub _data: [u64; 0],
 }
-vstruct!(unsized bch_sb_field_clean, field.u64s, start = 0);
-vstruct_container!(bch_sb_field_clean, jset_entry);
 
 /* sections from before btrees_lost_data are 88 bytes: what validate accepts */
-#[grown(from = btrees_lost_data)]
+#[grown(from = btrees_lost_data, u64s = field.u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb_field_ext {
@@ -995,7 +988,6 @@ pub struct bch_sb_field_ext {
      */
     pub btrees_clean: Le64,
 }
-vstruct!(bch_sb_field_ext, field.u64s, start = 0);
 
 #[bitfield(Le64)]
 pub struct bch_sb_field_ext_flags0 {
@@ -1205,7 +1197,7 @@ pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
  *		  superblock is written
  * @features	- enabled incompatible features
  */
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = u64s, entries = bch_sb_field)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb {
@@ -1248,8 +1240,6 @@ pub struct bch_sb {
     pub start: [Head<c::bch_sb_field>; 0],
     pub _data: [Le64; 0],
 }
-vstruct!(unsized bch_sb, u64s);
-vstruct_container!(bch_sb, bch_sb_field);
 c_default!(bch_sb_head);
 
 impl bch_sb<Unvalidated> {
@@ -1667,7 +1657,7 @@ tagged_union! {
 /* The entries whose payload is keys: */
 macro_rules! jset_entry_keys {
     ($($name:ident),*) => { $(
-        #[unsized_vstruct]
+        #[unsized_vstruct(u64s = entry.u64s, entries = thin c::bkey_i)]
         #[repr(C)]
         #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
         pub struct $name {
@@ -1675,22 +1665,19 @@ macro_rules! jset_entry_keys {
             pub start: [c::bkey_i; 0],
             pub _data: [u64; 0],
         }
-        vstruct!(unsized $name, entry.u64s);
-        vstruct_container!($name, thin c::bkey_i);
     )* };
 }
 jset_entry_keys!(jset_entry_btree_keys, jset_entry_btree_root, jset_entry_overwrite,
                  jset_entry_write_buffer_keys, jset_entry_log_bkey);
 
 /* Legacy, no longer written: */
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = entry.u64s)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_prio_ptrs {
     pub entry: Head<c::jset_entry>,
     pub _data: [u64; 0],
 }
-vstruct!(unsized jset_entry_prio_ptrs, entry.u64s);
 
 /*
  * Journal sequence numbers can be blacklisted: bsets record the max sequence
@@ -1702,16 +1689,15 @@ vstruct!(unsized jset_entry_prio_ptrs, entry.u64s);
  * then record that we skipped it so that the next time we crash and recover we
  * don't think there was a missing journal entry.
  */
-#[whole]
+#[whole(u64s = repr.entry.u64s)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_blacklist {
     pub entry: Head<c::jset_entry>,
     pub seq: Le64,
 }
-vstruct!(jset_entry_blacklist, repr.entry.u64s);
 
-#[whole]
+#[whole(u64s = repr.entry.u64s)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_blacklist_v2 {
@@ -1719,7 +1705,6 @@ pub struct jset_entry_blacklist_v2 {
     pub start: Le64,
     pub end: Le64,
 }
-vstruct!(jset_entry_blacklist_v2, repr.entry.u64s);
 
 #[bch_enum(open)]
 #[nr]
@@ -1730,17 +1715,16 @@ pub enum FsUsageType {
     key_version = 2,
 }
 
-#[whole]
+#[whole(u64s = repr.entry.u64s)]
 #[repr(C, packed)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_usage {
     pub entry: Head<c::jset_entry>,
     pub v: Le64,
 }
-vstruct!(jset_entry_usage, repr.entry.u64s);
 
 /* r's devs[] are in the tail: the entry's size is its u64s, not r's nr_devs */
-#[unsized_vstruct(tail = [u8])]
+#[unsized_vstruct(tail = [u8], u64s = entry.u64s)]
 #[repr(C, packed)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_data_usage {
@@ -1748,9 +1732,8 @@ pub struct jset_entry_data_usage {
     pub v: Le64,
     pub r: Head<c::bch_replicas_entry_v1>,
 }
-vstruct!(unsized jset_entry_data_usage, entry.u64s);
 
-#[whole]
+#[whole(u64s = repr.entry.u64s)]
 #[repr(C, packed)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_clock {
@@ -1759,7 +1742,6 @@ pub struct jset_entry_clock {
     pub pad: [u8; 7],
     pub time: Le64,
 }
-vstruct!(jset_entry_clock, repr.entry.u64s);
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
@@ -1769,7 +1751,7 @@ pub struct jset_entry_dev_usage_type {
     pub fragmented: Le64,
 }
 
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = entry.u64s)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_dev_usage {
@@ -1782,40 +1764,36 @@ pub struct jset_entry_dev_usage {
 
     pub d: [c::jset_entry_dev_usage_type; 0],
 }
-vstruct!(unsized jset_entry_dev_usage, entry.u64s);
 
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = entry.u64s)]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_log {
     pub entry: Head<c::jset_entry>,
     pub d: [u8; 0],
 }
-vstruct!(unsized jset_entry_log, entry.u64s);
 
-#[whole]
+#[whole(u64s = repr.entry.u64s)]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_datetime {
     pub entry: Head<c::jset_entry>,
     pub seconds: Le64,
 }
-vstruct!(jset_entry_datetime, repr.entry.u64s);
 
-#[whole]
+#[whole(u64s = repr.entry.u64s)]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_rewind_limit {
     pub entry: Head<c::jset_entry>,
     pub seq: Le64,
 }
-vstruct!(jset_entry_rewind_limit, repr.entry.u64s);
 
 /*
  * Records a journal rewind in progress. Keys from journal entries
  * with seq in (to, from] use overwrite entries instead of btree_keys.
  */
-#[whole]
+#[whole(u64s = repr.entry.u64s)]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_rewind {
@@ -1823,7 +1801,6 @@ pub struct jset_entry_rewind {
     pub from: Le64,
     pub to: Le64,
 }
-vstruct!(jset_entry_rewind, repr.entry.u64s);
 
 /*
  * On disk format for a journal entry:
@@ -1835,7 +1812,7 @@ vstruct!(jset_entry_rewind, repr.entry.u64s);
  *
  * version is for on disk format changes.
  */
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = u64s, entries = jset_entry)]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct jset {
@@ -1860,8 +1837,6 @@ pub struct jset {
     pub start: [Head<c::jset_entry>; 0],
     pub _data: [u64; 0],
 }
-vstruct!(unsized jset, u64s);
-vstruct_container!(jset, jset_entry);
 
 impl jset_head {
     /// By what holds it, which has room for its entries.
@@ -1903,7 +1878,7 @@ pub const BTREE_MAX_DEPTH: u32 = 4;
  * On disk a btree node is a list/log of these; within each set the keys are
  * sorted
  */
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = u64s, entries = thin BkeyPHeader)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bset {
@@ -1926,8 +1901,6 @@ pub struct bset {
     pub start: [c::bkey_packed; 0],
     pub _data: [u64; 0],
 }
-vstruct!(unsized bset, u64s);
-vstruct_container!(bset, thin BkeyPHeader);
 
 impl bset_head {
     /// By what holds it, which has room for its keys.
@@ -1993,7 +1966,7 @@ pub struct bset_flags {
     offset:                 u16,
 }
 
-#[unsized_vstruct(tail = [u64])]
+#[unsized_vstruct(tail = [u64], u64s = keys.u64s)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct btree_node {
@@ -2013,7 +1986,6 @@ pub struct btree_node {
     /* C's vstruct macros find u64s and _data on the node itself: */
     pub keys: Head<c::bset>,
 }
-vstruct!(unsized btree_node, keys.u64s);
 c_default!(btree_node_head);
 
 #[bitfield(Le64)]
@@ -2039,7 +2011,7 @@ impl btree_node_head {
     }
 }
 
-#[unsized_vstruct(tail = [u64])]
+#[unsized_vstruct(tail = [u64], u64s = keys.u64s)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
 pub struct btree_node_entry {
@@ -2048,5 +2020,4 @@ pub struct btree_node_entry {
     /* C's vstruct macros find u64s and _data on the entry itself: */
     pub keys: Head<c::bset>,
 }
-vstruct!(unsized btree_node_entry, keys.u64s);
 c_default!(btree_node_entry_head);

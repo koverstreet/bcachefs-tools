@@ -212,52 +212,37 @@ pub(crate) use floored_by_self;
 /// `start = 0` where the count includes the header, as a superblock
 /// field's does.
 ///
-/// vstruct!(unsized T, u64s), for an unsized vstruct, #[unsized_vstruct]'s
-/// family: the count is its header's, T_head's - and each state's length is
-/// its reference's, size_of_val(). Its count reads as u64s(), on the header,
-/// which each state derefs to; it's no field to set but the container's,
-/// which has the room for it - VStruct, on the header, builds one.
+/// vstruct!(unsized T_head, ..), for an unsized vstruct - what
+/// #[unsized_vstruct(u64s = ..)] makes, as a family's other attributes make
+/// the sized form: the count is its header's, T_head's, as the sized form
+/// has it - and each state's length is its reference's, size_of_val(). A
+/// count of its own reads as u64s(), on the header, which each state derefs
+/// to; it's no field to set but the container's, which has the room for it -
+/// VStruct, on the header, builds one.
 macro_rules! vstruct {
-    (unsized $t:ident, $count:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@impl [<$t _head>],
-            ::core::mem::size_of::<[<$t _head>]>(), $count);
-        $crate::util::vstructs::vstruct!(@unsized $t, $count);
-    } };
-    // counted past the header it embeds - a btree node's bset, its keys; a
-    // journal entry subtype's entry: the count is that header's, read as it
-    (unsized $t:ident, $hdr:ident . $count:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!([<$t _head>], $hdr.$count);
-        $crate::util::vstructs::vstruct!(@u64s $t);
-    } };
-    // counted by the header it embeds first, from its start - a superblock
-    // section's, by its field's u64s: start = 0
-    (unsized $t:ident, $hdr:ident . $count:ident, start = $start:expr) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@impl [<$t _head>], $start, $hdr.$count);
-        $crate::util::vstructs::vstruct!(@u64s $t);
-    } };
-    (unsized $t:ident, $count:ident, start = $start:expr) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@impl [<$t _head>], $start, $count);
-        $crate::util::vstructs::vstruct!(@unsized $t, $count);
-    } };
-    // its length - a count of u64s from a u64 aligned start, as @impl
-    // asserts - is a whole number of its alignment, its head's, if that's no
-    // more than 8: so a reference to one, as long as size_of_val(), claims
-    // none past it, whatever its tail holds
-    (@u64s $t:ident) => { $crate::paste! {
-        const _: () = assert!(::core::mem::align_of::<[<$t _head>]>() <= 8,
-            concat!(stringify!($t), ": counted in u64s, so aligned to no more than 8"));
-    } };
-    (@unsized $t:ident, $count:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@u64s $t);
+    (unsized $head:ident, $($args:tt)*) => {
+        $crate::util::vstructs::vstruct!($head, $($args)*);
+        $crate::util::vstructs::vstruct!(@count $head, $($args)*);
 
-        impl [<$t _head>] {
+        // its length - a count of u64s from a u64 aligned start, as @impl
+        // asserts - is a whole number of its alignment, its head's, if that's
+        // no more than 8: so a reference to one, as long as size_of_val(),
+        // claims none past it, whatever its tail holds
+        const _: () = assert!(::core::mem::align_of::<$head>() <= 8,
+            concat!(stringify!($head), ": counted in u64s, so aligned to no more than 8"));
+    };
+    (@count $head:ident, $count:ident $(, start = $start:expr)?) => {
+        impl $head {
             /// Its count, as a usize - to read: it changes only through what
             /// holds the value, which has room for it to grow.
             pub fn $count(&self) -> usize {
                 $crate::util::vstructs::Count::count(&{ self.$count })
             }
         }
-    } };
+    };
+    // counted past the header it embeds - a btree node's bset, its keys; a
+    // journal entry subtype's entry: the count is that header's, read as it
+    (@count $head:ident, $($embedded:tt)*) => {};
     ($t:ty, $($count:ident).+, start = $start:expr) => {
         $crate::util::vstructs::vstruct!(@impl $t, $start, $($count).+);
     };
@@ -1887,7 +1872,7 @@ mod unsized_tests {
     use cstruct_macros::{unsized_vstruct, MaybeZeroable, Plain};
 
     /// A container of tents: 8 bytes of header, its u64s counting what follows.
-    #[unsized_vstruct]
+    #[unsized_vstruct(u64s = u64s, entries = tent)]
     #[repr(C)]
     #[derive(Default, MaybeZeroable, Plain)]
     pub struct tcont {
@@ -1896,11 +1881,9 @@ mod unsized_tests {
         pub start: [Head<tent>; 0],
         pub _data: [u64; 0],
     }
-    vstruct!(unsized tcont, u64s);
-    vstruct_container!(tcont, tent);
 
     /// An entry, its u64s counting itself, as a superblock field's does.
-    #[unsized_vstruct]
+    #[unsized_vstruct(u64s = u64s, start = 0)]
     #[repr(C)]
     #[derive(Default, MaybeZeroable, Plain)]
     pub struct tent {
@@ -1909,7 +1892,6 @@ mod unsized_tests {
         pub pad:   u32,
         pub _data: [u64; 0],
     }
-    vstruct!(unsized tent, u64s, start = 0);
 
     /// A tcont of entries @sizes long, in u64s, typed 1, 2, ...: and @extra
     /// u64s past it, all ones - what's next, not its.

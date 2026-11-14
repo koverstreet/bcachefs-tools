@@ -3,14 +3,13 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::util::vstructs::{vstruct, Head};
+use crate::util::vstructs::Head;
 use cstruct_macros::{unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 
-#[unsized_vstruct]
+#[unsized_vstruct(u64s = field.u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_extent_type_u64s {
     pub field: Head<c::bch_sb_field>,
     pub d: [u8; 0],
 }
-vstruct!(unsized bch_sb_field_extent_type_u64s, field.u64s, start = 0);
