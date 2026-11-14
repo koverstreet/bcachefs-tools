@@ -37,10 +37,9 @@
 //! arm type and what it nests, not for the storage. It's reported where it's
 //! written: the definition keeps its tokens' spans.
 //!
-//! `#[tag_enum([closed,] NAME: REPR[, prefix = P][, nr])]`:
-//! the tag's enum, a #[bch_enum] of the arms (enum_decl.rs) - open, or closed and
-//! the tag stored as it, `#[tag(FIELD)]`. NAME_arms! is the arms as a list,
-//! (name, value, Type), for what's made from each.
+//! `#[tag_enum(NAME: REPR[, prefix = P][, nr])]`:
+//! the tag's enum, an open #[bch_enum] of the arms (enum_decl.rs). NAME_arms!
+//! is the arms as a list, (name, value, Type), for what's made from each.
 //!
 //! A type whose bytes come from outside - disk, or C - with a tag that says
 //! which of its arms it holds, and that may be one this version doesn't know.
@@ -100,20 +99,6 @@
 //!  - crate::types::ArmOf for each arm's type, which from_arm() goes by;
 //!  - `type_()`, the tag, known or not; `as_bytes()`, `as_ffi()`;
 //!  - C: the same storage, its offsets asserted against the Rust's.
-//!
-//! A struct C hands over in memory - a request, not a record off disk - can
-//! say so, with either or both of:
-//!
-//!  - a closed #[tag_enum]: the tag's a closed C enum, the storage holds it
-//!    as one - C keeps its enum type, its switches their -Wswitch - and the
-//!    arms' values are its variants, compared as themselves. A value from
-//!    outside could hold one that isn't a variant, so there's no Unvalidated
-//!    view, no from_bytes(); and the storage isn't Plain. new() starts from
-//!    zeroes: a const asserts 0 is a variant.
-//!  - `#[plain]`: every arm is plain data, so an arm type not defined in the
-//!    block - a typedef of an integer, for C's `.device` where a struct
-//!    would make it `.device.dev` - is one of its own, not a #[counted]
-//!    family's head.
 //!
 //! The storage's bytes are always all written: they come from C or disk, from
 //! from_bytes(), or from new(), which starts from zeroes - so get() and
@@ -180,13 +165,6 @@ struct TaggedUnion {
     /// An open #[tag_enum]: the tag as handed out, a newtype over an integer
     /// the tag widens to - or none, the tag as it is.
     tag_enum:  Option<syn::Type>,
-    /// A closed #[tag_enum]: the tag is a C enum, stored as it, the arms'
-    /// values its variants. Only in memory: no bytes from outside, which
-    /// could hold a value that isn't one.
-    tag_is_enum: bool,
-    /// #[plain]: every arm is plain data - one not defined here a type of its
-    /// own's, not a #[counted] family's head.
-    plain:     bool,
     arms:      Vec<TaggedArm>,
     pad:       Option<syn::Type>,
     /// #[packed]: C's __packed - for a struct, the payload right after the
@@ -239,10 +217,6 @@ impl TaggedUnion {
                                 header as far as its count says - or #[storage(HEAD)] #[size(arm)] - \
                                 the head every arm starts with, each as long as its arm"));
         }
-        if (self.plain || self.tag_is_enum) && self.size != Size::Pad {
-            return Err(format!("tagged_union! {name}: #[plain] and a closed #[tag_enum] are for a \
-                                struct's own storage, #[size(pad)]"));
-        }
         if let (Some(_), Some(d)) = (&self.storage, self.defs.first()) {
             return Err(format!("tagged_union! {name}: {d} is defined here, but the storage is \
                                 another's - #[storage(..)] - and so are its arms' types"));
@@ -268,7 +242,7 @@ struct Decl {
 
 /// The attributes tagged_union! reads. The rest are the storage's - or with
 /// a `*` after, each arm type's the block defines.
-const OURS: &[&str] = &["tag", "tag_enum", "storage", "pad", "size", "packed", "plain"];
+const OURS: &[&str] = &["tag", "tag_enum", "storage", "pad", "size", "packed"];
 
 /// The union the declaration says, and what's generated from its arms besides
 /// it: the tag enum and NAME_arms!.
@@ -301,24 +275,18 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
     }, input).map_err(|e| format!("expected [#[..]] pub enum NAME {{ .. }}: {e}"))?;
     let err = |m: &str| format!("tagged_union! {name}: {m}");
 
-    let mut tag: Option<(Ident, Option<syn::Type>)> = None;
+    let mut tag: Option<(Ident, syn::Type)> = None;
     let mut tag_enum: Option<EnumDef> = None;
-    let (mut storage, mut pad, mut size, mut packed, mut plain) = (None, None, None, false, false);
+    let (mut storage, mut pad, mut size, mut packed) = (None, None, None, false);
     for a in &ours {
         let kind = a.path().get_ident().map(ToString::to_string).unwrap_or_default();
         let bad = |e: syn::Error| err(&format!("#[{kind}(..)]: {e}"));
         match kind.as_str() {
             "tag" => tag = Some(a.parse_args_with(|i: ParseStream<'_>| {
                 let field: Ident = i.parse()?;
-                let ty = match i.is_empty() {
-                    true => None,
-                    false => {
-                        i.parse::<Token![:]>()?;
-                        Some(i.parse()?)
-                    }
-                };
-                Ok((field, ty))
-            }).map_err(|_| err("#[tag(FIELD: TYPE)], or #[tag(FIELD)] for a closed tag enum"))?),
+                i.parse::<Token![:]>()?;
+                Ok((field, i.parse()?))
+            }).map_err(|_| err("#[tag(FIELD: TYPE)]"))?),
             "tag_enum" => tag_enum = Some(enum_decl::tag_enum(a.parse_args().map_err(bad)?)
                 .map_err(|m| err(&format!("#[tag_enum(..)]: {m}")))?),
             "storage" => storage = Some(a.parse_args().map_err(bad)?),
@@ -332,7 +300,6 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
                                                size(header); or of its tag, its arm's, size(arm)"))),
             }),
             "packed"  => packed = true,
-            "plain"   => plain = true,
             _ => unreachable!(),
         }
     }
@@ -346,37 +313,22 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
     }
     out.extend(enum_decl::entries(&name, &arms));
 
-    let closed = |e: &EnumDef| e.kind == EnumKind::Closed;
-    let c_path = |e: &EnumDef| -> syn::Type {
+    if tag_enum.as_ref().is_some_and(|e| e.kind == EnumKind::Closed) {
+        return Err(err("#[tag_enum(..)]: an open enum - a tag from outside may be one it doesn't know"));
+    }
+    let tag_enum_ty = tag_enum.as_ref().map(|e| -> syn::Type {
         let n = &e.name;
         parse_quote!(c::#n)
-    };
-    let (tag_ty, tag_enum_ty, tag_is_enum) = match (&tag_enum, tag_ty) {
-        (Some(e), None) if closed(e) => (c_path(e), None, true),
-        (Some(e), Some(ty)) if !closed(e) => (ty, Some(c_path(e)), false),
-        (None, Some(ty)) => (ty, None, false),
-        _ => return Err(err("#[tag(FIELD: TYPE)] with an open #[tag_enum], #[tag(FIELD)] with a closed one")),
-    };
+    });
 
-    let arm_value = |a: &enum_decl::Arm| -> syn::Expr {
-        match &tag_enum {
-            Some(e) if closed(e) => {
-                let (e, arm) = (&e.name, &a.name);
-                parse_quote!(c::#e::#arm)
-            }
-            _ => a.value.clone(),
-        }
-    };
     let tu = TaggedUnion {
         name: name.clone(),
         storage,
         tag_field,
         tag_ty,
         tag_enum: tag_enum_ty,
-        tag_is_enum,
-        plain,
         arms: arms.iter().map(|a| TaggedArm {
-            name: a.name.clone(), ty: a.ty.clone().expect("typed arms"), value: arm_value(a),
+            name: a.name.clone(), ty: a.ty.clone().expect("typed arms"), value: a.value.clone(),
         }).collect(),
         pad,
         packed,
@@ -468,8 +420,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
         None => x,
     };
     let t_tag = wrap_tag(quote!(t));
-    // A value as the tag: an enum tag's values are its variants, as they are
-    let as_tag = |v: &syn::Expr| if tu.tag_is_enum { quote!((#v)) } else { quote!((#v) as #tag_ty) };
+    let as_tag = |v: &syn::Expr| quote!((#v) as #tag_ty);
     let det_trait = quote!(crate::types::Determinant);
     let arm_of = quote!(crate::types::ArmOf);
     let vs = quote!(crate::util::vstructs);
@@ -587,11 +538,10 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
         quote!(#arm(#ty),)
     });
     // An arm type this declares is plain data: a reference to it, whatever
-    // the storage's state - and with `plain`, every arm's. Another's is a
-    // #[counted] family's head - a replicas entry's, as C's union holds it -
-    // the family's type in the storage's state, as long as its own header
-    // says (CountedHead, ArmAt).
-    let declared = |a: &TaggedArm| tu.plain || tu.defs.iter().any(|def| is(&a.ty, def));
+    // the storage's state. Another's is a #[counted] family's head - a
+    // replicas entry's, as C's union holds it - the family's type in the
+    // storage's state, as long as its own header says (CountedHead, ArmAt).
+    let declared = |a: &TaggedArm| tu.defs.iter().any(|def| is(&a.ty, def));
     let stated = arms.iter().any(|a| !declared(a));
     let st_param = stated.then(|| quote!(, St: #vs::State = #vs::Validated));
     let st_arg = |st: &str| {
@@ -680,26 +630,14 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
             quote!(const _: () = assert!(::core::mem::align_of::<#ty>() == 1, #msg);)
         });
     // Plain - C's struct of a family is: its pad is every byte of it, and
-    // Plain, and the arms are plain data. Not with an enum tag, which isn't
-    // any bytes: but new() starts from zeroes, so zero must be one of its
-    // variants - a const that isn't fails to evaluate.
+    // Plain, and the arms are plain data.
     let pad_assert = tu.pad.as_ref().map(|p| {
-        let plain = if tu.tag_is_enum {
-            quote! {
-                // SAFETY: 0 is one of its variants - or this, a const, fails to evaluate
-                const _: #tag_ty = unsafe { ::core::mem::zeroed() };
-            }
-        } else {
-            quote! {
-                // SAFETY: its pad is every byte of it - asserted above - and Plain,
-                // and its arms are plain data, any bytes one
-                unsafe impl #vs::Plain for #s_ty {}
-            }
-        };
         let msg = format!("tagged_union! {name}: bigger than its pad");
         quote! {
             const _: () = assert!(#s_size == ::core::mem::size_of::<#p>(), #msg);
-            #plain
+            // SAFETY: its pad is every byte of it - asserted above - and Plain,
+            // and its arms are plain data, any bytes one
+            unsafe impl #vs::Plain for #s_ty {}
             const _: () = #vs::assert_plain::<#p>();
         }
     });
@@ -991,9 +929,8 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
     } else {
         format!(" One of {name}'s arms, by reference: what {name}::get() gives.")
     };
-    // Bytes from outside: not with an enum tag, which they could hold a value
-    // of that isn't one of its variants
-    let unvalidated_impl = (!tu.tag_is_enum).then(|| {
+    // Bytes from outside
+    let unvalidated_impl = {
         let unvalidated = st_arg("Unvalidated");
         let gets = gets("Unvalidated", quote!(return Err(#vs::ArmError::Bad { tag: #t_tag, err })));
         quote! {
@@ -1028,7 +965,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
                 }
             }
         }
-    });
+    };
     let validated = st_arg("Validated");
     let doesnt_fit = format!("{name}<Validated>: {{err}} - an arm that doesn't fit, in one validate passed \
                               or made from an arm");
@@ -1160,8 +1097,7 @@ fn generate(d: &Decl, tu: &TaggedUnion) -> Result<TokenStream, String> {
 
             /// Zeroed storage holding @arm's payload, not yet marked as holding it.
             fn with_payload<A: #arm_of<#s_ty>>(arm: A) -> #s_ty {
-                // SAFETY: zeroes are a valid one: plain data, or its tag an enum
-                // with a zero variant - asserted below
+                // SAFETY: zeroes are a valid one: plain data
                 let mut s: #s_ty = unsafe { ::core::mem::zeroed() };
                 // SAFETY: only arms are ArmOf, and each is plain data, in bounds - asserted
                 // below
