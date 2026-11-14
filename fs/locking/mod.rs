@@ -51,9 +51,6 @@ pub(crate) use raw::{rust_local_irq_restore, rust_local_irq_save, rust_local_loc
                      rust_local_unlock_irqrestore};
 // for util/log.rs's ratelimit_reset(): the lock in C's ratelimit_state
 pub(crate) use raw::{rust_raw_spin_lock, rust_raw_spin_unlock};
-// for util/sleep.rs's waitqueue_init(): the shim's waitqueue lock
-#[cfg(not(kernel))]
-pub(crate) use raw::rust_spin_lock_init;
 pub use lock::{AsLocked, AsLockedBy, Exclusive, ExclusiveGuard, Locked, LockedBy, RawLock, RawLockBase, RawMovableLock, RawNestedLock, RawReadLock, RawRwLock, RawSixLock, RawTimedLock, RawTryLock, RawTryReadLock, Shared, SharedGuard,
               SixIntent, SixWrite, SixWriteIntent, Unlock};
 pub(crate) use lock::{Alone, Guard, HoldsRef, Mut, Ref};

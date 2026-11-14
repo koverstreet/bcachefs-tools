@@ -195,7 +195,7 @@ impl BioPool {
     /// bio_alloc_bioset(): a bio with room for @nr_vecs bvecs. Null past
     /// BIO_MAX_VECS, or where the pool can't wait - a NORECLAIM scope;
     /// otherwise it waits on the pool.
-    pub fn alloc_raw(&self, bdev: *mut c::block_device, nr_vecs: u16, opf: u32, gfp: c::gfp_t) -> *mut c::bio {
+    pub fn alloc_raw(&self, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32, gfp: c::gfp_t) -> *mut c::bio {
         let (layout, vecs) = bio_layout(self.front_pad, nr_vecs);
         let Ok(p) = self.pool.alloc_gfp(layout, gfp) else {
             return core::ptr::null_mut();
@@ -209,7 +209,7 @@ impl BioPool {
         let p = p.cast::<u8>();
         unsafe {
             let bio = p.add(self.front_pad).cast::<c::bio>().as_ptr();
-            c::bio_init(bio, bdev, p.add(vecs).cast().as_ptr(), nr_vecs, opf as _);
+            c::bio_init(bio, bdev.cast(), p.add(vecs).cast().as_ptr(), nr_vecs, opf as _);
             (*bio).bi_pool = core::ptr::from_ref(self).cast_mut().cast();
             bio
         }
@@ -269,7 +269,7 @@ impl BioPool {
      */
     /// # Safety
     /// [base, base+size) lives till the chain's IO is done.
-    pub unsafe fn map_and_chain(&self, bdev: *mut c::block_device, mut base: *mut u8, mut size: usize,
+    pub unsafe fn map_and_chain(&self, bdev: *mut crate::os::blkdev::BlockDevice, mut base: *mut u8, mut size: usize,
                                 mut sector: u64, mut opf: u32, gfp: c::gfp_t) -> *mut c::bio {
         let mut tail: *mut c::bio = core::ptr::null_mut();
         let mut nr_bvecs = super::buf_nr_bvecs(base, size);
@@ -300,7 +300,7 @@ impl BioPool {
                      * so the elevator can merge with adjacent writes.
                      */
                     chain(tail, bio);
-                    c::submit_bio(tail);
+                    crate::os::blkdev::submit_bio(tail);
                 }
             }
             tail = bio;
@@ -397,7 +397,7 @@ impl<T: HasBio> BioSet<T> {
     /// Which deadlocks, if what it waits for is a bio this task holds from
     /// the set, unsubmitted: one at a time, or a pool as big as how many are
     /// held at once.
-    pub fn alloc<E, I>(&self, bdev: *mut c::block_device, nr_vecs: u16, opf: u32,
+    pub fn alloc<E, I>(&self, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
                        init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T>, E>
     where
         I: PinInit<T, E>,
@@ -408,7 +408,7 @@ impl<T: HasBio> BioSet<T> {
 
     /// alloc(), with its bvecs filled from @src: B's, released as the box is
     /// dropped.
-    pub fn alloc_with<B: Buffers, E, I>(&self, bdev: *mut c::block_device, opf: u32, src: B::Src<'_>,
+    pub fn alloc_with<B: Buffers, E, I>(&self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32, src: B::Src<'_>,
                                         init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T, B>, E>
     where
         I: PinInit<T, E>,
@@ -483,7 +483,7 @@ impl<T: HasBio, B: Buffers + Default> BioBox<T, B> {
         unsafe {
             (*bio).bi_private = r.into_raw().cast_mut().cast();
             (*bio).bi_end_io = Some(gathered_endio::<T, B, F, Wt, W>);
-            c::submit_bio(bio);
+            crate::os::blkdev::submit_bio(bio);
         }
     }
 }
@@ -531,7 +531,7 @@ impl<T: HasBio, B: Buffers> BioBox<T, B> {
 impl<T: HasBio> BioBox<T> {
     /// As BioSet::alloc(), the bvecs inline. kzalloc(), not kvzalloc(): an
     /// endio may drop it, and kvfree() isn't safe in interrupt context.
-    pub fn new<E, I>(bdev: *mut c::block_device, nr_vecs: u16, opf: u32,
+    pub fn new<E, I>(bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
                      init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
     where
         I: PinInit<T, E>,
@@ -564,7 +564,7 @@ pub fn inline_vecs(nr_vecs: u16) -> Layout {
 ///
 /// # Safety
 /// @vecs is room for @nr_vecs bvecs, that lasts as long as the T.
-pub unsafe fn inline_bio<T: HasBio, E, I>(bdev: *mut c::block_device, vecs: NonNull<u8>, nr_vecs: u16, opf: u32,
+pub unsafe fn inline_bio<T: HasBio, E, I>(bdev: *mut crate::os::blkdev::BlockDevice, vecs: NonNull<u8>, nr_vecs: u16, opf: u32,
                                           init: impl FnOnce(BioInPlace) -> I) -> impl PinInit<T, E>
 where
     I: PinInit<T, E>,
@@ -572,7 +572,7 @@ where
     unsafe {
         ::pin_init::pin_init_from_closure(move |t: *mut T| {
             let bio = bio_of(t);
-            c::bio_init(bio, bdev, vecs.as_ptr().cast(), nr_vecs, opf as _);
+            c::bio_init(bio, bdev.cast(), vecs.as_ptr().cast(), nr_vecs, opf as _);
             init_at(init(BioInPlace(bio)), t).inspect_err(|_| c::bio_uninit(bio))
         })
     }
@@ -587,7 +587,7 @@ where
 {
     /// An Exclusive task's TaskSlot from @alloc, its home a T whose bio's
     /// @nr_vecs bvecs are inline, after the box: inline_bio()'s.
-    pub fn exclusive_bio_in<E, I>(alloc: A, bdev: *mut c::block_device, nr_vecs: u16, opf: u32,
+    pub fn exclusive_bio_in<E, I>(alloc: A, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
                                   init: impl FnOnce(BioInPlace) -> I) -> Result<Self, BchError>
     where
         I: PinInit<T, E>,
@@ -599,7 +599,7 @@ where
 
 impl<T: HasBio, B: Buffers> BioBox<T, B> {
     /// As BioSet::alloc_with(), the bvecs inline.
-    pub fn new_with<E, I>(bdev: *mut c::block_device, opf: u32, src: B::Src<'_>,
+    pub fn new_with<E, I>(bdev: *mut crate::os::blkdev::BlockDevice, opf: u32, src: B::Src<'_>,
                           init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
     where
         I: PinInit<T, E>,

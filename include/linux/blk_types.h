@@ -43,28 +43,8 @@ struct inode {
 	unsigned		i_state;
 };
 
-struct request_queue {
-	struct backing_dev_info *backing_dev_info;
-};
-
-struct gendisk {
-	struct backing_dev_info	*bdi;
-	struct backing_dev_info	__bdi;
-};
-
-struct block_device {
-	dev_t			bd_dev;
-	char			name[BDEVNAME_SIZE];
-	struct inode		*bd_inode;
-	struct inode		__bd_inode;
-	struct request_queue	queue;
-	void			*bd_holder;
-	struct gendisk *	bd_disk;
-	struct gendisk		__bd_disk;
-	int			bd_fd;
-
-	struct mutex		bd_holder_lock;
-};
+/* os/linux_user/blkdev.rs's BlockDevice */
+struct block_device;
 
 /*
  * Block error status values.  See block/blk-core:blk_errors for the details.

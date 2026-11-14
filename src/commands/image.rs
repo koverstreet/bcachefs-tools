@@ -337,7 +337,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     // Truncate image to used size
     let ca = fs.dev_get(0).expect("an image has device 0");
     let image_size = nbuckets * ca.bucket_bytes();
-    let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw((*ca.disk_sb.bdev).bd_fd) };
+    let fd = ca.disk_sb.bdev().fd();
     rustix::fs::ftruncate(fd, image_size)
         .map_err(|e| anyhow!("truncate error: {}", e))?;
 

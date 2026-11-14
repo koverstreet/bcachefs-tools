@@ -26,9 +26,7 @@
 //!
 //! The kthreads themselves are below: a std thread with the shim's
 //! task_struct, created stopped - in schedule() till woken - to run its
-//! function, then exit, which kthread_stop() joins. C's kthread_create(),
-//! kthread_stop() and kthread_should_stop() are them too, for the C still
-//! calling them.
+//! function, then exit, which kthread_stop() joins.
 
 use super::sched::{get_current, wake_up_process};
 use crate::c;
@@ -360,8 +358,7 @@ fn kthread_start_fn(p: Task) {
 
 /// kthread_create(), the name formatted: created stopped - wake_up_process()
 /// starts it. Its task_struct, or ERR_PTR(-errno).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kthread_create_name(thread_fn: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
+pub(crate) unsafe fn kthread_create_name(thread_fn: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
                                              thread_data: *mut c_void,
                                              name: *const c_char) -> *mut c::task_struct {
     let k = unsafe { calloc(1, size_of::<KthreadStruct>()) }.cast::<KthreadStruct>();
@@ -411,16 +408,14 @@ pub unsafe extern "C" fn kthread_create_name(thread_fn: Option<unsafe extern "C"
 
 /// Whether this kthread should return now: someone's called kthread_stop()
 /// on it, which waits for it to.
-#[unsafe(no_mangle)]
-pub extern "C" fn kthread_should_stop() -> bool {
+pub(crate) fn kthread_should_stop() -> bool {
     let p = get_current();
     kthread_flags(p).load(SeqCst) & (1 << KTHREAD_SHOULD_STOP) != 0
 }
 
 /// Set kthread_should_stop() for @p, wake it, and wait for it to exit. It
 /// may never have been woken: it runs its function, then exits.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kthread_stop(p: *mut c::task_struct) -> c_int {
+pub(crate) unsafe fn kthread_stop(p: *mut c::task_struct) -> c_int {
     unsafe {
         c::get_task_struct(p);
 

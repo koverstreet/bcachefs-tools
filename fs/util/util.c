@@ -8,7 +8,6 @@
 
 #include <linux/bio.h>
 #include <linux/blkdev.h>
-#include <linux/kthread.h>
 #include <linux/rcupdate.h>
 #include <linux/string.h>
 #include <linux/types.h>
@@ -194,11 +193,13 @@ unsigned bch2_num_online_cpus(void)
 }
 #endif
 
-/* bdev_rot() is util.h's, before 7.0 and in userspace */
+#ifdef __KERNEL__
+/* bdev_rot() is util.h's, before 7.0 */
 bool bch2_bdev_rot(struct block_device *bdev)
 {
 	return bdev_rot(bdev);
 }
+#endif
 
 #ifdef __KERNEL__
 /* For os/linux_kernel/workqueue.rs: alloc_workqueue() is a macro, its name a format */
@@ -207,7 +208,7 @@ struct workqueue_struct *bch2_alloc_workqueue(const char *name, unsigned flags, 
 	return alloc_workqueue("%s", flags, max_active, name);
 }
 
-#endif
+#include <linux/kthread.h>
 
 /* For os/linux_kernel/kthread.rs: kthread_create() is a macro */
 struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name)
@@ -219,6 +220,7 @@ bool bch2_kthread_should_stop(void)
 {
 	return (current->flags & PF_KTHREAD) && kthread_should_stop();
 }
+#endif
 
 /*
  * For util/sleep.rs: current, set_current_state() and

@@ -9,7 +9,6 @@
 #include "include/linux/hash.h"
 #include "include/linux/idr.h"
 #include "include/linux/kernel.h"
-#include "include/linux/kthread.h"
 #include "include/linux/llist.h"
 #include "include/linux/lz4.h"
 #include "include/linux/local_lock.h"
@@ -27,7 +26,6 @@
 #include "include/linux/string.h"
 #include "include/linux/uuid.h"
 #include "include/linux/unicode.h"
-#include "include/linux/wait_bit.h"
 #include "include/linux/xxhash.h"
 #include "include/linux/xattr.h"
 #include "include/linux/zlib.h"
@@ -77,6 +75,7 @@ const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_READ	= BLK_OPEN_READ;
 const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_WRITE	= BLK_OPEN_WRITE;
 const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_EXCL	= BLK_OPEN_EXCL;
 const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_BUFFERED	= BLK_OPEN_BUFFERED;
+const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_CREAT	= BLK_OPEN_CREAT;
 const blk_opf_t RUST_CONST_HELPER_REQ_SYNC		= REQ_SYNC;
 const blk_opf_t RUST_CONST_HELPER_REQ_META		= REQ_META;
 const blk_opf_t RUST_CONST_HELPER_REQ_IDLE		= REQ_IDLE;

@@ -110,6 +110,7 @@ fn main() {
         // crate can import them rather than redefine them.
         .allowlist_type("uid_t")
         .allowlist_type("gid_t")
+        .allowlist_type("dev_t")
         .allowlist_type("cds_.*")
         // wrapper.h's consts: codegen.h's, in-kernel
         .allowlist_var("RUST_CONST_HELPER_.*")

@@ -34,19 +34,6 @@ static inline struct inode *file_inode(const struct file *f)
 
 #define part_to_dev(part)	(part)
 
-void generic_make_request(struct bio *);
-int submit_bio_wait(struct bio *);
-
-static inline void submit_bio(struct bio *bio)
-{
-	generic_make_request(bio);
-}
-
-int blkdev_issue_discard(struct block_device *, sector_t, sector_t, gfp_t);
-int blkdev_issue_zeroout(struct block_device *, sector_t, sector_t, gfp_t, unsigned);
-
-#define bdev_get_queue(bdev)		(&((bdev)->queue))
-
 #ifndef SECTOR_SHIFT
 #define SECTOR_SHIFT 9
 #endif
@@ -67,26 +54,12 @@ struct blk_plug {
 static inline void blk_start_plug(struct blk_plug *plug) {}
 static inline void blk_finish_plug(struct blk_plug *plug) {}
 
-unsigned bdev_logical_block_size(struct block_device *bdev);
-bool bdev_nonrot(struct block_device *);
-sector_t get_capacity(struct gendisk *disk);
-
 struct blk_holder_ops {
         void (*mark_dead)(struct block_device *bdev, bool surprise);
 	void (*sync)(struct block_device *bdev);
 	int (*freeze)(struct block_device *bdev);
 	int (*thaw)(struct block_device *bdev);
 };
-
-static inline struct block_device *file_bdev(struct file *file)
-{
-	return container_of(file->f_inode, struct block_device, __bd_inode);
-}
-
-void bdev_fput(struct file *);
-struct file *bdev_file_open_by_path(const char *, blk_mode_t, void *,
-				    const struct blk_holder_ops *);
-int lookup_bdev(const char *path, dev_t *);
 
 struct super_block {
 	void			*s_fs_info;
@@ -147,12 +120,6 @@ static inline void unregister_chrdev(unsigned int major, const char *name)
 {
 }
 
-static inline const char *bdevname(struct block_device *bdev, char *buf)
-{
-	snprintf(buf, BDEVNAME_SIZE, "%s", bdev->name);
-	return buf;
-}
-
 static inline bool op_is_write(unsigned int op)
 {
 	return op == REQ_OP_READ ? false : true;
@@ -183,10 +150,6 @@ static inline bool dir_emit_dots(struct file *file, struct dir_context *ctx)
 int blk_status_to_errno(blk_status_t status);
 blk_status_t errno_to_blk_status(int errno);
 const char *blk_status_to_str(blk_status_t status);
-
-static inline void invalidate_bdev(struct block_device *bdev) {}
-
-void blkdev_init(void);
 
 #endif /* __TOOLS_LINUX_BLKDEV_H */
 

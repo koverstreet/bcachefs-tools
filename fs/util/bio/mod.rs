@@ -101,24 +101,6 @@ mod iter;
 mod owned;
 pub mod pages;
 
-/// @f with the block layer's plug held: the bios it submits held back to be
-/// merged, then issued together - blk_start_plug() and blk_finish_plug(). The
-/// plug's the task's, so it can't move while it's held.
-#[cfg(kernel)]
-pub fn plugged<R>(f: impl FnOnce() -> R) -> R {
-    let mut plug = core::mem::MaybeUninit::<c::blk_plug>::uninit();
-    unsafe { c::blk_start_plug(plug.as_mut_ptr()) };
-    let ret = f();
-    unsafe { c::blk_finish_plug(plug.as_mut_ptr()) };
-    ret
-}
-
-/* Userspace's block layer has no plug: */
-#[cfg(not(kernel))]
-pub fn plugged<R>(f: impl FnOnce() -> R) -> R {
-    f()
-}
-
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Segment, Segments, Walk};
@@ -291,12 +273,12 @@ impl Bio {
     /// with - and its position all of them again, from the table: after an IO
     /// bi_iter is the block layer's. Panics on a clone, whose bvecs aren't its
     /// own. BioOwner::reset(), which checks the buffers serve @opf.
-    pub(super) fn reset(mut self: Pin<&mut Self>, bdev: *mut c::block_device, opf: u32) {
+    pub(super) fn reset(mut self: Pin<&mut Self>, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
         let size = self.as_ref().range_all().len();
         let bio = self.as_mut().raw_mut();
         let vcnt = bio.bi_vcnt;
         // SAFETY: had by &mut, so not in flight
-        unsafe { c::bio_reset(bio, bdev, opf as _) };
+        unsafe { c::bio_reset(bio, bdev.cast(), opf as _) };
         bio.bi_vcnt = vcnt;
         bio.bi_iter.bi_size = size;
     }
@@ -327,11 +309,8 @@ impl Bio {
         r.take(8).copy_from(&random_u64().to_ne_bytes());
     }
 
-    pub fn set_dev(self: Pin<&mut Self>, bdev: *mut c::block_device) {
-        #[cfg(kernel)]
-        unsafe { c::bio_set_dev(self.raw_mut(), bdev) }
-        #[cfg(not(kernel))]
-        { self.raw_mut().bi_bdev = bdev }
+    pub fn set_dev(self: Pin<&mut Self>, bdev: *mut crate::os::blkdev::BlockDevice) {
+        crate::os::blkdev::bio_set_dev(self.raw_mut(), bdev)
     }
 
     /// # Safety
@@ -428,7 +407,7 @@ impl ToText for Bio {
         }
 
         write!(out, "bi_bdev:\t");
-        prt_bdevname(out, unsafe { b.bi_bdev.as_ref() });
+        prt_bdevname(out, unsafe { crate::os::blkdev::bio_bdev(b) });
         out.newline();
 
         write!(out, "bi_opf:\t{} ", request_op_str(self.op()));
@@ -539,7 +518,7 @@ pub unsafe trait BioOwner {
 
     /// For another IO, of @opf, to or from the same buffers: Bio::reset().
     /// Panics if they can't serve it - a buffer borrowed shared, for a read.
-    fn reset(&mut self, bdev: *mut c::block_device, opf: u32) {
+    fn reset(&mut self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
         assert!(Self::Buffers::allows_op(req_op(opf)), "resetting a bio for an op its buffers can't serve");
         self.bio_mut().reset(bdev, opf)
     }
@@ -568,7 +547,7 @@ pub unsafe trait BioOwner {
         unsafe {
             let c = Completion::init_at((&raw mut (*bio).bi_private).cast(), waiter);
             (*bio).bi_end_io = Some(done_endio::<W>);
-            c::submit_bio(bio);
+            crate::os::blkdev::submit_bio(bio);
             BioFuture { c, bio: &*bio.cast::<Bio>() }
         }
     }
@@ -638,7 +617,7 @@ impl<O: BioOwner, B> Remapped<'_, O, B> {
         bio.bi_end_io = Some(mapped_gathered_endio);
         // SAFETY: the owner's, built for this IO; the caller keeps it, and
         // the buffer, from being touched until it's done
-        unsafe { c::submit_bio(bio) };
+        unsafe { crate::os::blkdev::submit_bio(bio) };
     }
 }
 

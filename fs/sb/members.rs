@@ -1495,7 +1495,7 @@ impl Dev {
     pub(crate) fn identity(&self) -> c::bch_dev_identity {
         let mut id = c::bch_dev_identity::default();
         crate::init::dev::read_identity(self.disk_sb.bdev(), &mut id);
-        id.rotational = unsafe { c::bch2_bdev_rot(self.disk_sb.bdev) };
+        id.rotational = crate::os::blkdev::rotational(self.disk_sb.bdev());
         id
     }
 

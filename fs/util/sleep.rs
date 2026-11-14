@@ -18,7 +18,7 @@
 
 use crate::c;
 use core::convert::Infallible;
-use core::ffi::{c_long, c_uint, c_ulong, c_void, CStr};
+use core::ffi::{c_long, c_uint, c_ulong};
 use core::marker::PhantomData;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,51 +126,3 @@ pub fn sleep_until<T, E: SleepEnd>(how: Sleep<E>, mut cond: impl FnMut() -> Opti
     ret
 }
 
-/// A C waitqueue's initializer: init_waitqueue_head(), its lockdep class the
-/// call site's, named @name.
-#[macro_export]
-macro_rules! new_waitqueue {
-    ($name:literal $(,)?) => {{
-        #[cfg(kernel)]
-        let key = ::kernel::static_lock_class!().as_ptr().cast();
-        #[cfg(not(kernel))]
-        let key = ::core::ptr::null_mut();
-        let name = const { $crate::util::ffi::c_str(::core::concat!($name, "\0")) };
-        unsafe { $crate::util::sleep::waitqueue_init(name, key) }
-    }};
-}
-
-/// # Safety
-/// @key is a lock class key that lives forever - or null, in userspace.
-#[doc(hidden)]
-pub unsafe fn waitqueue_init(name: &'static CStr, key: *mut c_void)
-    -> impl ::pin_init::PinInit<c::wait_queue_head_t>
-{
-    unsafe {
-        ::pin_init::pin_init_from_closure(move |q: *mut c::wait_queue_head_t| {
-            #[cfg(kernel)]
-            c::__init_waitqueue_head(q, name.as_ptr().cast(), key.cast());
-            /* the shim's is an inline: its lock, and an empty list */
-            #[cfg(not(kernel))]
-            {
-                crate::locking::rust_spin_lock_init((&raw mut (*q).lock).cast(), name.as_ptr().cast(), key);
-                let l = &raw mut (*q).task_list;
-                (*l).next = l;
-                (*l).prev = l;
-            }
-            Ok(())
-        })
-    }
-}
-
-/// Wake C's sleepers on @wq - wait_event() and the like: wake_up(), a
-/// function in userspace's shim, a macro the kernel's bindings don't have.
-pub fn wake_up(wq: &c::wait_queue_head_t) {
-    let wq = core::ptr::from_ref(wq).cast_mut();
-    // SAFETY: a waitqueue is woken through a shared pointer, under its own
-    // lock
-    #[cfg(kernel)]
-    unsafe { c::__wake_up(wq, ::kernel::task::TASK_NORMAL, 1, core::ptr::null_mut()) };
-    #[cfg(not(kernel))]
-    unsafe { c::wake_up(wq) };
-}

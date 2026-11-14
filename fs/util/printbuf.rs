@@ -838,21 +838,12 @@ unsafe fn realloc(p: *mut c_char, size: usize, vmalloc: bool) -> *mut c_char {
     }
 }
 
-/// @bdev's name: as the kernel's %pg prints it, its disk's and partition's;
-/// in userspace, the device's path, its last component. NULL is "(null)", as
-/// %pg prints it: C names the filesystem's superblock's device, which has
-/// none.
-pub fn prt_bdevname(out: &mut Printbuf, bdev: Option<&c::block_device>) {
-    let Some(bdev) = bdev else {
-        out.write_bytes(b"(null)");
-        return;
-    };
-    #[cfg(kernel)]
-    out.prt_ptr(c"%pg", core::ptr::from_ref(bdev).cast());
-    #[cfg(not(kernel))]
-    {
-        let name = bdev.name.map(|c| c as u8);
-        out.write_bytes(CStr::from_bytes_until_nul(&name).map_or(&name[..], CStr::to_bytes));
+/// @bdev's name: os::blkdev::prt_name()'s. NULL is "(null)", as %pg prints
+/// it: C names the filesystem's superblock's device, which has none.
+pub fn prt_bdevname(out: &mut Printbuf, bdev: Option<&crate::os::blkdev::BlockDevice>) {
+    match bdev {
+        Some(bdev) => crate::os::blkdev::prt_name(out, bdev),
+        None       => out.write_bytes(b"(null)"),
     }
 }
 

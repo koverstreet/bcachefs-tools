@@ -271,6 +271,20 @@ impl Kobject {
         Ok(())
     }
 
+    /// A link in its directory, @name, to @target's: userspace's sysfs has no
+    /// links.
+    pub fn link(&self, _target: &Kobject, _name: &CStr) -> Result<(), BchError> {
+        Ok(())
+    }
+
+    /// link()'s @name, removed.
+    pub fn unlink(&self, _name: &CStr) {}
+
+    /// A KOBJ_CHANGE uevent: nothing in userspace listens for one.
+    pub fn uevent_change(&self, _env: &[&CStr]) -> Result<(), BchError> {
+        Ok(())
+    }
+
     /// Out of sysfs, if it's there.
     pub fn del(&self) {
         if !self.in_sysfs() {

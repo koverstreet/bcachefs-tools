@@ -23,8 +23,9 @@ use crate::journal::pins::PinsRead;
 use crate::locking::{ExclusiveGuard, MemallocFlags};
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
-use crate::os::kernel::{bdev_max_discard_sectors, blkdev_issue_discard, cond_resched, jiffies, jiffies_to_msecs,
-                          msecs_to_jiffies, time_after, time_in_range, totalram_bytes, HZ};
+use crate::os::blkdev;
+use crate::os::kernel::{cond_resched, jiffies, jiffies_to_msecs, msecs_to_jiffies, time_after, time_in_range,
+                        totalram_bytes, HZ};
 use crate::os::kthread::{Kthread, KthreadSelf};
 use crate::util::place::Contained;
 use crate::util::rcu::read_lock;
@@ -373,9 +374,9 @@ impl c::journal {
             let bdev = ca.disk_sb.bdev();
             if fs.opts().nochanges.get() == 0 &&
                 discard_opt_enabled(fs, &ca) &&
-                bdev_max_discard_sectors(bdev) != 0 {
-                let _ = blkdev_issue_discard(bdev, ca.bucket_to_sector(bucket),
-                                             ca.mi.get().bucket_size.into(), c::GFP_NOIO);
+                blkdev::max_discard_sectors(bdev) != 0 {
+                let _ = blkdev::issue_discard(bdev, ca.bucket_to_sector(bucket),
+                                              ca.mi.get().bucket_size.into(), c::GFP_NOIO);
             }
 
             let mut g = self.lock.lock();

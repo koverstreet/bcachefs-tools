@@ -1007,7 +1007,7 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
                 continue;
             }
 
-            unsafe { c::submit_bio(&raw mut n.bio) };
+            unsafe { crate::os::blkdev::submit_bio(&raw mut n.bio) };
         } else {
             n.bio.bi_status = c::BLK_STS_REMOVED;
             unsafe { c::bio_endio(&raw mut n.bio) };

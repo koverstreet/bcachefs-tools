@@ -72,7 +72,8 @@ use crate::util::time_stats::TimeStats;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::task::waiter;
-use crate::os::kernel::{bdev_max_discard_sectors, unlikely, READ};
+use crate::os::blkdev;
+use crate::os::kernel::{unlikely, READ};
 use crate::util::place::Contained;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
@@ -439,7 +440,7 @@ impl<'a> Worker<'a> {
         };
 
         if !discard_opt_enabled(fs, &ca) ||
-           bdev_max_discard_sectors(ca.disk_sb.bdev()) == 0 ||
+           blkdev::max_discard_sectors(ca.disk_sb.bdev()) == 0 ||
            fs.opts.nochanges.get() != 0 {
             return self.mark_free_key(t, &iter, a);
         }

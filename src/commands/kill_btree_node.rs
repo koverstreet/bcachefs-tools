@@ -43,6 +43,7 @@
 
 use bcachefs_kernel::btree::bkey::prelude::*;
 use std::ops::ControlFlow;
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
@@ -258,7 +259,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                 eprintln!("damaging btree node ({:?}) on dev {} {} l={}\n  {}",
                     cli.error, dev, kill.btree, kill.level, k.to_text(&fs));
 
-                let fd = unsafe { (*ca.disk_sb.bdev).bd_fd };
+                let fd = ca.disk_sb.bdev().fd().as_raw_fd();
                 let file = crate::wrappers::super_io::borrowed_file(fd);
                 let offset = ptr.offset() << 9;
 

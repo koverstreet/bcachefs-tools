@@ -50,13 +50,15 @@ void rust_kfree_rcu_mightsleep(void *p);
 void bch2_cond_resched(void);
 bool bch2_fatal_signal_pending(void);
 unsigned bch2_num_online_cpus(void);
+#ifdef __KERNEL__
 bool bch2_bdev_rot(struct block_device *bdev);
+#endif
 #ifdef __KERNEL__
 struct workqueue_struct *bch2_alloc_workqueue(const char *name, unsigned flags, int max_active);
 void bch2_set_worker_desc(const char *desc);
-#endif
 struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name);
 bool bch2_kthread_should_stop(void);
+#endif
 struct task_struct *bch2_current(void);
 void bch2_set_current_state(unsigned int state);
 void bch2_set_current_state_running(void);

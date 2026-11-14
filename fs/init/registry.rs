@@ -18,7 +18,7 @@ use core::ffi::CStr;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::errcode::{Errcode, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
 use crate::locking::Locked;
 use crate::sb::io::Holder;
@@ -61,8 +61,7 @@ pub enum Key<'a> {
 pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<KVVec<c::dev_t>, BchError> {
     let mut devs = KVVec::new();
     for path in paths {
-        let mut dev = 0;
-        ret_to_result_void(unsafe { c::lookup_bdev(path.as_ptr().cast(), &mut dev) }).inspect_err(|e| {
+        let dev = crate::os::blkdev::lookup(path).inspect_err(|e| {
             log_no_fs(LogLevel::ERR, crate::message!("cannot open with device {}: {}",
                                                      path.to_str().unwrap_or("?"), e.msg()));
         })?;

@@ -820,7 +820,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         match &rb.ca {
             Some(ca) => {
                 unsafe { Bio::from_raw_mut(&raw mut rb.bio) }.set_dev(ca.disk_sb.bdev);
-                unsafe { c::submit_bio_wait(&raw mut rb.bio) };
+                let _ = unsafe { crate::os::blkdev::submit_bio_wait(&raw mut rb.bio) };
                 ca.account_io_completion(c::MemberErrorType::read, rb.start_time, rb.bio.bi_status == 0);
             }
             None => rb.bio.bi_status = c::BLK_STS_REMOVED,
@@ -977,11 +977,11 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
         trans.set_srcu_io_submitted(true);
 
         if sync {
-            unsafe { c::submit_bio_wait(bio) };
+            let _ = unsafe { crate::os::blkdev::submit_bio_wait(bio) };
             ca.latency_acct(rb.start_time, READ);
             unsafe { read_work(NonNull::from(rb)) };
         } else {
-            unsafe { c::submit_bio(bio) };
+            unsafe { crate::os::blkdev::submit_bio(bio) };
         }
     } else {
         rb.bio.bi_status = c::BLK_STS_REMOVED;

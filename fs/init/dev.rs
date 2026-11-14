@@ -329,8 +329,8 @@ impl Default for bch_sb_io {
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_sb_bdev {
-    pub s_bdev_file: *mut c::file,
-    pub bdev: *mut c::block_device,
+    pub s_bdev_file: *mut crate::os::blkdev::BdevFile,
+    pub bdev: *mut crate::os::blkdev::BlockDevice,
     pub sb_name: *mut c_char,
     /// A ref, the handle's
     pub holder: *const crate::sb::io::Holder,
@@ -423,14 +423,11 @@ impl Dev {
          * code doesn't appear to provide a good method and block/holder.c is
          * susceptible as well:
          */
-        #[cfg(kernel)]
-        {
-            if self.kobj.in_sysfs() && !self.disk_sb.bdev.is_null() {
-                let b = self.disk_sb.kobj();
-                if b.in_sysfs() {
-                    b.unlink(c"bcachefs");
-                    self.kobj.unlink(c"block");
-                }
+        if self.kobj.in_sysfs() && !self.disk_sb.bdev.is_null() {
+            let b = self.disk_sb.kobj();
+            if b.in_sysfs() {
+                b.unlink(c"bcachefs");
+                self.kobj.unlink(c"block");
             }
         }
     }
@@ -450,14 +447,11 @@ impl Dev {
             self.kobj.add(Some(&fs.kobj), name.as_c_str())?;
         }
 
-        #[cfg(kernel)]
-        {
-            if !self.disk_sb.bdev.is_null() {
-                let block = self.disk_sb.kobj();
+        if !self.disk_sb.bdev.is_null() {
+            let block = self.disk_sb.kobj();
 
-                block.link(&self.kobj, c"bcachefs")?;
-                self.kobj.link(block, c"block")?;
-            }
+            block.link(&self.kobj, c"bcachefs")?;
+            self.kobj.link(block, c"block")?;
         }
 
         Ok(())
@@ -680,20 +674,21 @@ fn read_dev_sysfs_file(dev: c::dev_t, file: &str, ret: &mut [c_char]) -> bool {
     false
 }
 
-pub fn read_identity(bdev: &c::block_device, id: &mut c::bch_dev_identity) {
+pub fn read_identity(bdev: &crate::os::blkdev::BlockDevice, id: &mut c::bch_dev_identity) {
     let mut bdevname = Printbuf::new();
     prt_bdevname(&mut bdevname, Some(bdev));
     strscpy(&mut id.name, bdevname.as_bytes());
 
-    if !read_dev_sysfs_file(bdev.bd_dev, "device/model", &mut id.model) {
-        read_dev_sysfs_file(bdev.bd_dev, "loop/backing_file", &mut id.model);
+    let dev = crate::os::blkdev::dev(bdev);
+    if !read_dev_sysfs_file(dev, "device/model", &mut id.model) {
+        read_dev_sysfs_file(dev, "loop/backing_file", &mut id.model);
     }
-    read_dev_sysfs_file(bdev.bd_dev, "device/serial", &mut id.serial);
+    read_dev_sysfs_file(dev, "device/serial", &mut id.serial);
 }
 
 /// Whether @sb can be opened as a member of the filesystem whose superblock is
 /// @fs. A device that diverged from @fs - split brain - is reported.
-pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_sb_handle,
+pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice>, sb: &c::bch_sb_handle,
                  opts: &c::bch_opts) -> Result<(), BchError> {
     let dev = sb.io.buf.sb();
     if core::ptr::eq(fs, dev) {
@@ -789,7 +784,7 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
         ca.sb_layout.set(sb.sb().layout);
         *ca.sb_handle() = core::mem::take(sb);
 
-        (*ca_p).dev = (*ca.disk_sb.bdev).bd_dev;
+        (*ca_p).dev = crate::os::blkdev::dev(ca.disk_sb.bdev());
     }
 
     ca.io_ref[READ].start();
@@ -1347,15 +1342,12 @@ impl Fs {
              * We just changed the superblock UUID, invalidate cache and send a
              * uevent to update /dev/disk/by-uuid
              */
-            #[cfg(kernel)]
-            {
-                unsafe { c::invalidate_bdev(ca.disk_sb.bdev) };
+            crate::os::blkdev::invalidate(ca.disk_sb.bdev());
 
-                let mut uuid_str = Printbuf::new();
-                prt!(&mut uuid_str, "UUID={}", uuid::Uuid::from_bytes(self.sb.uuid.each_ref().map(|b| b.get())));
+            let mut uuid_str = Printbuf::new();
+            prt!(&mut uuid_str, "UUID={}", uuid::Uuid::from_bytes(self.sb.uuid.each_ref().map(|b| b.get())));
 
-                let _ = ca.disk_sb.kobj().uevent_change(&[c"CHANGE=uuid", uuid_str.as_c_str()]);
-            }
+            let _ = ca.disk_sb.kobj().uevent_change(&[c"CHANGE=uuid", uuid_str.as_c_str()]);
             Ok(())
         })())?;
 
@@ -1715,7 +1707,7 @@ pub(crate) static HOLDER_OPS: c::blk_holder_ops = c::blk_holder_ops {
 /// # Safety
 /// bd_holder_lock is held; this drops it
 #[cfg(kernel)]
-unsafe fn bdev_get_fs(bdev: *mut c::block_device) -> Option<RoRef> {
+unsafe fn bdev_get_fs(bdev: *mut crate::os::blkdev::BlockDevice) -> Option<RoRef> {
     let r = unsafe {
         let holder = (*bdev).bd_holder.cast::<Holder>();
         (*holder).fs.load(Acquire).as_ref().and_then(|fs: &Fs| fs.ro_ref.tryget())
@@ -1733,7 +1725,7 @@ unsafe fn bdev_get_fs(bdev: *mut c::block_device) -> Option<RoRef> {
 }
 
 #[cfg(kernel)]
-unsafe extern "C" fn bdev_mark_dead(bdev: *mut c::block_device, surprise: bool) {
+unsafe extern "C" fn bdev_mark_dead(bdev: *mut crate::os::blkdev::BlockDevice, surprise: bool) {
     let Some(r) = (unsafe { bdev_get_fs(bdev) }) else { return };
     let fs = r.container();
 
@@ -1771,7 +1763,7 @@ unsafe extern "C" fn bdev_mark_dead(bdev: *mut c::block_device, surprise: bool) 
 }
 
 #[cfg(kernel)]
-unsafe extern "C" fn bdev_sync(bdev: *mut c::block_device) {
+unsafe extern "C" fn bdev_sync(bdev: *mut crate::os::blkdev::BlockDevice) {
     let Some(r) = (unsafe { bdev_get_fs(bdev) }) else { return };
     let fs = r.container();
 

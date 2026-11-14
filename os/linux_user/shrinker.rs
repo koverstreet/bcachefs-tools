@@ -186,7 +186,7 @@ pub fn linux_shrinkers_init() {
     unsafe { c::rcu_init() };
     linux_thread_init();
 
-    unsafe { c::blkdev_init() };
+    super::blkdev::init();
 
     let info = si_meminfo();
     unsafe { _totalram_pages = info.totalram / PAGE_SIZE as c_ulong };

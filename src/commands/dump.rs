@@ -1,7 +1,7 @@
 use bcachefs_kernel::format::BkeyType;
 use bcachefs_kernel::fs::Dev;
 use bcachefs_kernel::btree::bkey::prelude::*;
-use std::os::fd::{AsFd, BorrowedFd};
+use std::os::fd::AsFd;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -536,7 +536,7 @@ fn write_dev_image(
     let outfile = open_opts.open(path)
         .map_err(|e| anyhow!("{}: {}", path, e))?;
 
-    let infd = unsafe { BorrowedFd::borrow_raw((*ca.disk_sb.bdev).bd_fd) };
+    let infd = ca.disk_sb.bdev().fd();
     let mut img = Qcow2Image::new(infd, outfile.as_fd(), block_size)?;
 
     img.write_ranges(&mut d.sb)?;

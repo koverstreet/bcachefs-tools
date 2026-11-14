@@ -139,7 +139,8 @@
 use crate::btree::bkey::ValidateFlags;
 use crate::fs::Dev;
 use crate::c;
-use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device};
+use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle};
+use crate::os::blkdev::BlockDevice;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::Guard as _;
@@ -1024,23 +1025,18 @@ impl bch_sb_buf {
 }
 
 impl c::bch_sb_bdev {
-    pub fn bdev(&self) -> &block_device {
+    pub fn bdev(&self) -> &BlockDevice {
         unsafe { &*self.bdev }
     }
 
-    /// The device's size, in 512 byte sectors: get_capacity() of its disk.
+    /// The device's size, in 512 byte sectors.
     pub fn capacity(&self) -> u64 {
-        // an open block device has a disk, and its disk a part0 - itself
-        #[cfg(kernel)]
-        return unsafe { (*(*self.bdev().bd_disk).part0).bd_nr_sectors as u64 };
-        #[cfg(not(kernel))]
-        return unsafe { c::get_capacity(self.bdev().bd_disk) as u64 };
+        crate::os::blkdev::capacity(self.bdev())
     }
 
     /// The device's sysfs directory's kobject.
-    #[cfg(kernel)]
     pub fn kobj(&self) -> &crate::os::kobject::Kobject {
-        unsafe { crate::os::kobject::Kobject::from_raw((&raw const self.bdev().bd_device.kobj).cast_mut()) }
+        crate::os::blkdev::kobj(self.bdev())
     }
 
     /// The path it was opened by
@@ -1055,9 +1051,9 @@ impl c::bch_sb_bdev {
         use core::alloc::Layout;
         use core::ptr::NonNull;
 
-        if !self.s_bdev_file.is_null() {
+        if let Some(file) = NonNull::new(self.s_bdev_file) {
             // SAFETY: the file the device was opened with
-            unsafe { c::bdev_fput(self.s_bdev_file) };
+            unsafe { crate::os::blkdev::close(file) };
         }
         // SAFETY: read_super_and_backups()'s kzalloc() and Arc ref, or null
         unsafe {
@@ -1080,7 +1076,7 @@ impl c::bch_sb_io {
     fn realloc(&mut self, dev: &c::bch_sb_bdev, u64s: u32) -> Result<(), BchError> {
         let mut bytes = size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>();
         if !dev.bdev.is_null() {
-            bytes = bytes.max(crate::os::kernel::bdev_logical_block_size(dev.bdev()) as usize);
+            bytes = bytes.max(crate::os::blkdev::logical_block_size(dev.bdev()) as usize);
         }
         let size = bytes.next_power_of_two();
 
@@ -1368,7 +1364,7 @@ fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
     sb.io.buf.sb_mut().csum = csum;
 
     let bytes = sb.io.buf.sb_bytes().len()
-        .next_multiple_of(crate::os::kernel::bdev_logical_block_size(sb.dev.bdev()) as usize);
+        .next_multiple_of(crate::os::blkdev::logical_block_size(sb.dev.bdev()) as usize);
     sb.io.write_fua(&sb.dev, sector, bytes)
 }
 
@@ -1438,8 +1434,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
         let ops = &raw const crate::init::dev::HOLDER_OPS;
         #[cfg(not(kernel))]
         let ops = core::ptr::null();
-        let f = unsafe { c::bdev_file_open_by_path(path.as_ptr().cast(), mode, holder.cast_mut().cast(), ops) };
-        crate::errcode::errptr_to_result(core::ptr::NonNull::new(f).expect("bdev_file_open_by_path(): an ERR_PTR, not NULL"))
+        crate::os::blkdev::open_by_path(path, mode, holder.cast(), ops)
     };
 
     let mut file = open(sb.dev.mode, sb.dev.holder);
@@ -1470,7 +1465,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
 
     sb.dev.s_bdev_file = file.as_ptr();
     // SAFETY: the file just opened
-    sb.dev.bdev = unsafe { c::file_bdev(file.as_ptr()) };
+    sb.dev.bdev = unsafe { crate::os::blkdev::file_bdev(file) };
 
     sb.sb_realloc(0)?;
 
@@ -1503,7 +1498,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
     };
 
     let block_bytes = u32::from(header(&mut sb).block_size.get()) << 9;
-    let dev_block = crate::os::kernel::bdev_logical_block_size(sb.dev.bdev());
+    let dev_block = crate::os::blkdev::logical_block_size(sb.dev.bdev());
     if block_bytes < dev_block && opts.direct_io_or_default() {
         if buffered_instead(opts) {
             return Err(c::EINTR.into());
@@ -2227,7 +2222,7 @@ impl DevSbMut<'_> {
         let csum = self.io.buf.sb().as_unvalidated().checksum();
         self.io.buf.sb_mut().csum = csum;
 
-        let block = crate::os::kernel::bdev_logical_block_size(self.ca.disk_sb.bdev()) as usize;
+        let block = crate::os::blkdev::logical_block_size(self.ca.disk_sb.bdev()) as usize;
         (sector, self.io.buf.sb_bytes().len().next_multiple_of(block))
     }
 }

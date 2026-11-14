@@ -20,8 +20,11 @@
 #ifndef __LINUX_BIO_H
 #define __LINUX_BIO_H
 
+#include <pthread.h>
+#include <linux/bitmap.h>
+#include <linux/list.h>
 #include <linux/slab.h>
-#include <linux/wait.h>
+#include <linux/spinlock.h>
 #include <linux/bug.h>
 #include <linux/err.h>
 

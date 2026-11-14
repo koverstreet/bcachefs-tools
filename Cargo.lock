@@ -124,6 +124,7 @@ dependencies = [
  "bcachefs-shim",
  "bitfield-struct",
  "bitflags 2.11.1",
+ "io-uring",
  "libc",
  "linux-raw-sys",
  "log",
@@ -653,6 +654,17 @@ dependencies = [
  "hermit-abi",
  "libc",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "io-uring"
+version = "0.7.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "878c26bc5e45fe089ce2ca25689260c152a87ce1d7de2ca86101efeea6973932"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]

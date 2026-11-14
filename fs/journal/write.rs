@@ -32,7 +32,8 @@ use crate::journal::pins::PinsRead;
 use crate::journal::validate::jset_validate;
 use crate::locking::MemallocFlags;
 use crate::sb::members::{DevIo, DevIoRef};
-use crate::util::bio::{bio_put, plugged};
+use crate::os::blkdev::plugged;
+use crate::util::bio::bio_put;
 use crate::util::closure::Running;
 use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies, time_after_eq, unlikely,
                           WRITE};
@@ -759,7 +760,7 @@ unsafe extern "C" fn write_preflush_endio(bio: *mut c::bio) {
 unsafe fn closure_bio_submit(bio: *mut c::bio, w: &c::journal_buf) {
     unsafe {
         c::closure_get(ptr::from_ref(&w.io).cast_mut());
-        c::submit_bio(bio);
+        crate::os::blkdev::submit_bio(bio);
     }
 }
 
