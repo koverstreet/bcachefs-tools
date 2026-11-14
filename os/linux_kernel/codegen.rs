@@ -62,10 +62,10 @@ const KERNEL_HEADERS: &[&str] = &[
 					// tracepoints' events, and what their probes call
 ];
 
-/// Headers under fs/ bound, by path - which the clang args have as an -I:
+/// Headers bound by path from fs/ - which the clang args have as an -I:
 /// vendored library code, and codegen.h's wrappers of kernel macros.
 const VENDORED_HEADERS: &[&str] = &["vendor/closure.h", "vendor/bio_iov_iter.h",
-                                    "locking/shim.h", "util/shim.h", "codegen.h"];
+                                    "locking/shim.h", "util/shim.h", "../os/linux_kernel/codegen.h"];
 
 /// Under the kernel include trees, what isn't blocklisted: uapi/ (see
 /// blocklist_dir()), and KERNEL_HEADERS.

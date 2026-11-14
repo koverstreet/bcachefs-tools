@@ -130,7 +130,7 @@ quiet_cmd_bch_codegen_host = HOSTRUSTC $@
       cmd_bch_codegen_host = $(HOSTRUSTC) --edition 2024 -O \
 	-Clinker-flavor=gcc -Clinker=$(HOSTCC) $< -o $@
 
-$(obj)/codegen: $(src)/codegen_main.rs $(src)/codegen.rs FORCE
+$(obj)/codegen: $(src)/../os/linux_kernel/codegen_main.rs $(src)/../os/linux_kernel/codegen.rs FORCE
 	$(call if_changed,bch_codegen_host)
 
 # The clang flags go after --, as separate words, exactly as the C compile gets
@@ -147,7 +147,7 @@ quiet_cmd_bch_codegen = CODEGEN $(obj)/rust
 # The headers under fs/ it binds are prerequisites: if_changed ignores FORCE,
 # so an edit to one wouldn't otherwise regenerate the bindings. (Kernel-header
 # edits ride in via a cflags or tool change, or a full rebuild.)
-$(obj)/rust/bindings.rs: $(obj)/codegen $(src)/vendor/closure.h $(src)/codegen.h \
+$(obj)/rust/bindings.rs: $(obj)/codegen $(src)/vendor/closure.h $(src)/../os/linux_kernel/codegen.h \
 			 $(src)/vendor/bio_iov_iter.h $(src)/locking/shim.h $(src)/util/shim.h \
 			 $(src)/util/pf_memalloc.h FORCE
 	$(call if_changed,bch_codegen)

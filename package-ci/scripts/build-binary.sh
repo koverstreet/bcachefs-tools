@@ -167,7 +167,7 @@ EOF
     fi
     rm -f "$SHIM"
 
-    # fs/codegen.rs shells out to the bindgen CLI (since the nix-bindgen-cli
+    # os/linux_kernel/codegen.rs shells out to the bindgen CLI (since the nix-bindgen-cli
     # switch); the build env must provide it on PATH. Pin to the bindgen library
     # version used in-tree (bch_bindgen/Cargo.toml) so codegen's flags match.
     # Installed into the cached image, so it's compiled once per distro×arch.
