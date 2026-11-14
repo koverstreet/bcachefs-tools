@@ -26,7 +26,6 @@ use super::types::TransMem;
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::util::backtrace::{prt_backtrace, save_backtrace};
 use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
-use crate::util::closure::ClosureRef;
 use crate::util::ffi::{c_char, Opaque};
 use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64};
 #[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
@@ -36,7 +35,7 @@ use crate::util::log::{log_no_fs, LogLevel};
 use crate::os::percpu::CpuGuard;
 use crate::os::percpu::Counters;
 use crate::util::rcu;
-use crate::util::refcount::{RefGuard, TryRefcount};
+use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::os::sched;
 use crate::util::time_stats::__bch2_time_stats_update;
 use crate::util::vstructs::{Unvalidated, UnvalidatedEntries, VstructRefEntries};
@@ -339,7 +338,7 @@ pub(crate) fn foreign_bits(trans: *const BtreeTrans<'_>) -> c::btree_trans_bits 
 /// A transaction off the list, kept live - its paths, its task - by the ref.
 pub struct ListedTrans {
     trans: *mut BtreeTrans<'static>,
-    _ref:  ClosureRef,
+    _ref:  RefGuard<AtomicRef<()>>,
 }
 
 impl ListedTrans {
@@ -437,6 +436,10 @@ fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
     unsafe {
         p.write_bytes(0, 1);
         (&raw mut (*p).c).write(c);
+        // stopped, as an exited one's is: on the list from here, it's got
+        // from walkers only once it's begun
+        (&raw mut (*p).ref_).write(AtomicRef::new(()));
+        (*p).ref_.stop();
     }
 
     c.with_trans_list(|list| {
@@ -558,7 +561,7 @@ impl<'f> TransGuard<'f> {
         t.locking_wait.trans_start_time.set(now);
         t.last_begin_time.set(now);
 
-        unsafe { c::closure_init_stack_release(t.ref_.as_ptr()) };
+        t.ref_.restart();
         trans
     }
 }
@@ -623,7 +626,8 @@ impl Drop for TransGuard<'_> {
          * trans->ref protects trans->locking_wait.task, btree_paths array; used
          * by cycle detector
          */
-        unsafe { c::bch2_closure_return_sync(t.ref_.as_ptr()) };
+        t.ref_.stop();
+        t.ref_.wait();
         t.locking_wait.task.store(ptr::null_mut(), Ordering::Relaxed);
 
         #[cfg(CONFIG_BCACHEFS_DEBUG)]

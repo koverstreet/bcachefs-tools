@@ -18,7 +18,7 @@ use crate::prt;
 use crate::debug::trace::events;
 use crate::util::alloc::AllocError;
 use crate::util::backtrace::prt_task_backtrace;
-use crate::util::closure::ClosureRef;
+use crate::util::refcount::RefGuard;
 use crate::data_structures::bitmap::AtomicBitmap;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::types::bits_to_longs;
@@ -87,7 +87,7 @@ impl Trans {
     }
 
     fn wake_up(self) {
-        if let Some(_r) = ClosureRef::tryget(unsafe { &(*self.0).ref_ }) {
+        if let Some(_r) = RefGuard::tryget(unsafe { &(*self.0).ref_ }) {
             unsafe { c::wake_up_process(self.task()) };
         }
     }

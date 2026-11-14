@@ -807,7 +807,7 @@ pub struct BtreeTrans<'f> {
     /* Entries before this are zeroed out on every bch2_trans_get() call */
 
     pub list: cs::list_head,
-    pub ref_: Opaque<cs::closure>,
+    pub ref_: crate::util::refcount::AtomicRef<()>,
     pub rcu: cs::rcu_head,
 
     /* the first path table: Paths borrows into it */
