@@ -9,17 +9,14 @@
 //!                          type's flags
 //!     NAME: set(ENUM)      a set of ENUM's values, a u64 a bit each - a
 //!                          btree's key types
-//!     NAME: enum([closed,] K: REPR[, prefix = P][, nr])
+//!     NAME: enum([closed,] K: REPR[, nr])
 //!                          an enum K of the same variants, valued by the
 //!                          column: its fn is K's variant - a recovery pass's
 //!                          stable id
 //!     NAME: value(T)       a T, any const expression - an inode option's
 //!                          width
-//!   #[mask(NAME: REPR[, prefix = P])]
-//!                        the #[flags] NAME of bit numbers, 1 << each value,
-//!                        named as their variants - one written with the
-//!                        enum's prefix, P and the rest; a variant's
-//!                        #[mask_prefix(P)] is P from that variant on
+//!   #[mask(NAME: REPR)]  the #[flags] NAME of bit numbers, 1 << each value,
+//!                        named as their variants
 //!   NAME_arms!(cb [pre]) cb! { [pre] (name, value, [Type], [column]..), .. }:
 //!                        the variants as a list's rows, for what expands
 //!                        them - a table, xmacro_select
@@ -47,8 +44,6 @@ pub(crate) struct Arm {
     pub ty:    Option<syn::Type>,
     pub value: syn::Expr,
     pub cols:  Vec<Cell>,
-    /// The #[mask]'s prefix from this arm on, `#[mask_prefix(P)]`
-    pub mask_prefix: Option<String>,
 }
 
 /// An #[arm_columns] column: a set of a #[bch_enum(flags)]'s flags, or of
@@ -124,13 +119,7 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
             return Err(format!("{name}: an arm is `name(Type) [= value]`"));
         }
         let mut cols: Vec<Option<Cell>> = vec![None; columns.len()];
-        let mut mask_prefix = None;
         for a in attrs {
-            if a.path().is_ident("mask_prefix") {
-                let p: Ident = a.parse_args().map_err(|e| format!("{name}: #[mask_prefix(P)]: {e}"))?;
-                mask_prefix = Some(p.to_string());
-                continue;
-            }
             let path = a.path();
             let i = columns.iter().position(|(c, _)| path.is_ident(c))
                 .ok_or_else(|| format!("{name}: #[{}]: not one of its #[arm_columns]", quote!(#path)))?;
@@ -166,7 +155,7 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
             (Column::Enum(_) | Column::Value(_), None) => Err(format!("{name}: no #[{c}(..)]")),
             (Column::Flags(_) | Column::Set(_), None) => Ok(Cell::Names(Vec::new())),
         }).collect::<Result<_, _>>()?;
-        arms.push(Arm { docs: v.docs, name, label: v.label, ty, value, cols, mask_prefix });
+        arms.push(Arm { docs: v.docs, name, label: v.label, ty, value, cols });
     }
     // the entries are one shape: every arm's (name, value, Type, ..), or every one's (name, value, ..)
     if arms.iter().any(|a| a.ty.is_some()) && arms.iter().any(|a| a.ty.is_none()) {
@@ -200,9 +189,6 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
         return Err(err("#[mask] is of bit numbers, not flags".into()));
     }
     let arms = arms(body, &columns, false).map_err(err)?;
-    if mask.is_none() && arms.iter().any(|a| a.mask_prefix.is_some()) {
-        return Err(err("#[mask_prefix] without a #[mask]".into()));
-    }
 
     let mut out = generate(&e, &arms, &columns);
     out.extend(entries(&name, &arms));
@@ -217,10 +203,9 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
     Ok(out)
 }
 
-/// `[closed,] NAME: REPR[, prefix = P][, nr]`: a tag enum's,
-/// or an enum column's.
+/// `[closed,] NAME: REPR[, nr]`: a tag enum's, or an enum column's.
 pub(crate) fn tag_enum(args: TokenStream) -> Result<EnumDef, String> {
-    let (mut kind, mut name, mut prefix, mut nr) = (EnumKind::Open, None, None, false);
+    let (mut kind, mut name, mut nr) = (EnumKind::Open, None, false);
     for part in comma_list(args) {
         match part.as_slice() {
             [TokenTree::Ident(c)] if c == "closed" => kind = EnumKind::Closed,
@@ -228,18 +213,14 @@ pub(crate) fn tag_enum(args: TokenStream) -> Result<EnumDef, String> {
             [TokenTree::Ident(c)] if c == "nr" => nr = true,
             [TokenTree::Ident(n), c, TokenTree::Ident(r)] if is_punct(Some(c), ':') =>
                 name = Some((n.clone(), r.clone())),
-            [TokenTree::Ident(k), eq, TokenTree::Ident(v)] if is_punct(Some(eq), '=') => match k.to_string().as_str() {
-                "prefix" => prefix = Some(v.to_string()),
-                _ => return Err(format!("{k} = ..: not prefix")),
-            },
-            _ => return Err("expected [closed,] NAME: REPR[, prefix = PREFIX][, nr]".into()),
+            _ => return Err("expected [closed,] NAME: REPR[, nr]".into()),
         }
     }
     let Some((name, repr)) = name else {
         return Err("an enum needs NAME: REPR".into());
     };
     Ok(EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(),
-                  own_to_text: false, prefix, nr })
+                  own_to_text: false, prefix: None, nr })
 }
 
 /// Enum @e of @arms, each valued by its expression.
@@ -262,29 +243,21 @@ fn enum_of<'a>(e: &EnumDef, arms: impl Iterator<Item = (&'a Arm, &'a syn::Expr)>
     enum_gen(&def)
 }
 
-/// #[mask(NAME: REPR[, prefix = P])]: flags @m of bit numbers @bits, a flag
-/// per arm, 1 << its value - named as the arm, or for an arm written with
-/// @bits' prefix, P - or the #[mask_prefix] last written on an arm up to it -
-/// and the rest. A flag prints as its arm's name, as a list's does.
+/// #[mask(NAME: REPR)]: flags @m of bit numbers @bits, a flag per arm, 1 <<
+/// its value, named and printed as the arm.
 fn mask_of(m: &EnumDef, bits: &EnumDef, arms: &[Arm]) -> TokenStream {
     let (repr, bits_ty) = (&m.repr, &bits.name);
-    let mut prefix = m.prefix.clone();
     let def = EnumDef {
         variants: arms.iter().map(|a| {
-            prefix = a.mask_prefix.clone().or(prefix.take());
-            let p = prefix.as_deref().unwrap_or_default();
-            // an arm written with its prefix, one not an identifier past it,
-            // is a flag written with the mask's
-            let (arm, written) = (&a.name, a.name.to_string());
-            let past = bits.prefix.as_deref().and_then(|b| written.strip_prefix(b));
+            let arm = &a.name;
             let bit = match bits.kind {
                 EnumKind::Closed => quote!((#bits_ty::#arm as u32)),
                 _ => quote!(#bits_ty::#arm.0),
             };
             EnumVariant {
-                name:   past.map_or_else(|| arm.clone(), |n| format_ident!("{p}{n}")),
+                name:   arm.clone(),
                 value:  Some(syn::parse_quote!((1 as #repr) << #bit)),
-                label:  Some(a.label.clone().unwrap_or_else(|| past.unwrap_or(&written).to_string())),
+                label:  Some(a.label.clone().unwrap_or_else(|| arm.to_string())),
                 docs:   a.docs.clone(),
             }
         }).collect(),

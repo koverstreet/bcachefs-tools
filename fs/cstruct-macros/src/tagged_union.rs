@@ -6,7 +6,7 @@
 //!   tagged_union! {
 //!       #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
 //!       #[tag(type_: u8)]
-//!       #[tag_enum(DiskAccountingType: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]
+//!       #[tag_enum(DiskAccountingType: u32, nr)]
 //!       #[pad(Bpos)]
 //!       #[size(pad)]
 //!       #[packed]
@@ -21,7 +21,7 @@
 //!   tagged_union! {
 //!       #[storage(c::jset_entry)]
 //!       #[tag(type_: u8)]
-//!       #[tag_enum(JsetEntryType: u32, prefix = BCH_JSET_ENTRY_, nr)]
+//!       #[tag_enum(JsetEntryType: u32, nr)]
 //!       #[size(header)]
 //!       pub enum jset_entry {
 //!           /// Btree key updates
@@ -37,7 +37,7 @@
 //! arm type and what it nests, not for the storage. It's reported where it's
 //! written: the definition keeps its tokens' spans.
 //!
-//! `#[tag_enum(NAME: REPR[, prefix = P][, nr])]`:
+//! `#[tag_enum(NAME: REPR[, nr])]`:
 //! the tag's enum, an open #[bch_enum] of the arms (enum_decl.rs). NAME_arms!
 //! is the arms as a list, (name, value, Type), for what's made from each.
 //!
