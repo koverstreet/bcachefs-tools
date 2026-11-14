@@ -144,6 +144,7 @@ use syn::{parse_quote, Token};
 
 use crate::cstruct::{EnumDef, EnumKind};
 use crate::bch_enum::{self, arm_path};
+use crate::tokens::vs;
 
 /// A tagged_union!'s declaration, as generate() takes it.
 ///
@@ -445,10 +446,6 @@ struct Gen<'a> {
 }
 
 impl Gen<'_> {
-    fn vs() -> TokenStream {
-        quote!(crate::util::vstructs)
-    }
-
     /// The tag, @x, as handed out.
     fn wrap_tag(&self, x: TokenStream) -> TokenStream {
         match &self.tu.tag_enum {
@@ -571,7 +568,7 @@ impl Gen<'_> {
     /// every arm is plain data, read and written by copying, at any
     /// alignment. No ArmOf: arms may share a type, the variant saying which.
     fn arm(&self) -> TokenStream {
-        let (tu, vs, vis, en, tag_enum) = (self.tu, Self::vs(), self.vis, &self.en, self.tag_enum);
+        let (tu, vs, vis, en, tag_enum) = (self.tu, vs(), self.vis, &self.en, self.tag_enum);
         let (arms, name, tag, tag_ty) = (&tu.arms, &tu.name, &tu.tag_field, &tu.tag_ty);
         let (head, det, t_tag, determinant) = (&self.s_ty, self.det(), self.t_tag(), &self.determinant);
         let each = |f: &dyn Fn(&TaggedArm) -> TokenStream| {
@@ -670,7 +667,7 @@ impl Gen<'_> {
     /// #[grown], #[whole] - so each is named in the storage's state: a member
     /// of an Unvalidated one is Unvalidated, all the way down.
     fn header(&self) -> Result<TokenStream, String> {
-        let (tu, vs, vis, s_ty, tag_enum) = (self.tu, Self::vs(), self.vis, &self.s_ty, self.tag_enum);
+        let (tu, vs, vis, s_ty, tag_enum) = (self.tu, vs(), self.vis, &self.s_ty, self.tag_enum);
         let (arms, name, tag_ty) = (&tu.arms, &tu.name, &tu.tag_ty);
         let (en_ref, determinant, t_tag) = (&self.en_ref, &self.determinant, self.t_tag());
         let not_path = std::iter::once(s_ty).chain(arms.iter().map(|a| &a.ty))
@@ -782,7 +779,7 @@ impl Gen<'_> {
     /// union - overlaid with the pad; NAME<S> over it, the storage in a
     /// state; and from an arm, or from bytes.
     fn pad(&self, attrs: &[syn::Attribute]) -> TokenStream {
-        let (tu, vs, vis, s_ty, tag_enum) = (self.tu, Self::vs(), self.vis, &self.s_ty, self.tag_enum);
+        let (tu, vs, vis, s_ty, tag_enum) = (self.tu, vs(), self.vis, &self.s_ty, self.tag_enum);
         let (arms, name, tag, tag_ty) = (&tu.arms, &tu.name, &tu.tag_field, &tu.tag_ty);
         let (en, en_ref, determinant) = (&self.en, &self.en_ref, &self.determinant);
         let (det, t_tag) = (self.det(), self.t_tag());

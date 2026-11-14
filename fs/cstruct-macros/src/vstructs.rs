@@ -21,10 +21,7 @@ use syn::punctuated::Punctuated;
 use syn::{parse_quote, Token};
 
 use crate::cstruct::{flex_elem, generic_arg, parse_cstruct, split_commas, FieldDef, StructKind, StructDef};
-
-fn vs() -> TokenStream {
-    quote!(crate::util::vstructs)
-}
+use crate::tokens::vs;
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
 /// arm's end are no field's. An unsized vstruct's states aren't: they're its
@@ -290,20 +287,14 @@ struct Shape<'a> {
 /// that hold a count private (inline_field()), then its tail.
 ///
 /// Its fields are its head's, at the head's offsets - asserted - so it derefs
-/// to the head: reads, and the head's methods, written once there. No
-/// DerefMut: a &mut to the head would let a count - its own, or an embedded
-/// header's - be rewritten, or the whole head assigned or swapped, from
-/// outside what holds the value. Its own fields that hold one are private,
-/// and it's unsized, so it can't be assigned or swapped whole either.
-///
-/// It's Unsized: from_raw() at the length's worth of elements past the head;
-/// SelfSized, and its bytes, by its reference's length; and an arm's,
-/// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
-/// @methods, more of them.
+/// to the head: reads, and the head's methods, written once there. Its own
+/// fields that hold a count are private, and it's unsized, so it can't be
+/// assigned or swapped whole. Its impls are vstruct_family!(dst ..)'s. @doc
+/// is its own; @methods, more of them.
 fn dst(ty: &Ident, generic: bool, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenStream {
     let vs = vs();
     let (decl, params, args, state) = match generic {
-        true => (quote!(<S: #vs::State = #vs::Validated>), quote!(<S: #vs::State>), quote!(<S>),
+        true => (quote!(<S: #vs::State = #vs::Validated>), quote!(S: #vs::State), quote!(<S>),
                  quote!(_state: ::core::marker::PhantomData<S>,)),
         false => Default::default(),
     };
@@ -337,40 +328,9 @@ fn dst(ty: &Ident, generic: bool, doc: &str, shape: &Shape<'_>, methods: TokenSt
             pub #tail: [#elem],
         }
 
-        impl #params ::core::ops::Deref for #ty #args {
-            type Target = #deref;
-            #[inline]
-            fn deref(&self) -> &#deref {
-                // SAFETY: its first bytes, as many as the head has, are the head's
-                // fields, at the head's offsets - asserted below, each Plain - and
-                // any of its tail they reach: it's no shorter than the head, as
-                // Unsized says; the target is the head, or #[repr(transparent)]
-                // over it
-                unsafe { &*(self as *const Self).cast::<#deref>() }
-            }
-        }
-
-        // SAFETY: its head's fields, each Plain, then its tail at TAIL - as the
-        // asserts below check - Plain; from_raw() makes the tail as long as
-        // @bytes past TAIL
-        unsafe impl #params #vs::Unsized for #ty #args {
-            type Head = #head;
-            type Elem = #elem;
-            const TAIL: usize = #tail_at;
-            #[inline]
-            fn from_raw(p: *const u8, bytes: usize) -> *const Self {
-                let n = (bytes - Self::TAIL) / ::core::mem::size_of::<#elem>();
-                ::core::ptr::slice_from_raw_parts(p.cast::<#elem>(), n) as *const Self
-            }
-            #[inline]
-            fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {
-                let n = (bytes - Self::TAIL) / ::core::mem::size_of::<#elem>();
-                ::core::ptr::slice_from_raw_parts_mut(p.cast::<#elem>(), n) as *mut Self
-            }
-        }
+        crate::vstruct_family!(dst [#params] #ty #args, #head, #deref, #elem, #tail_at);
 
         const _: () = {
-            #vs::assert_plain::<#elem>();
             #(#plain_fields)*
             #(#offsets)*
             // its tail starts at TAIL - where its head ends, or inside it:
@@ -378,46 +338,9 @@ fn dst(ty: &Ident, generic: bool, doc: &str, shape: &Shape<'_>, methods: TokenSt
             assert!((#tail_start).next_multiple_of(::core::mem::align_of::<#elem>())
                         == <#ty as #vs::Unsized>::TAIL,
                     #tail_msg);
-            assert!(<#ty as #vs::Unsized>::TAIL <= ::core::mem::size_of::<#head>());
         };
 
-        impl #params #vs::SelfSized for #ty #args {
-            #[inline]
-            fn bytes(&self) -> usize {
-                ::core::mem::size_of_val(self)
-            }
-        }
-
-        // as a tagged union's arm, over the bytes its storage says are its
-        impl #params #vs::ArmRef for #ty #args {
-            const MIN_LEN: usize = ::core::mem::size_of::<<Self as #vs::Unsized>::Head>();
-
-            fn arm_ref(b: &[u8]) -> Option<&Self> {
-                #vs::cast(b)
-            }
-
-            fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {
-                #vs::cast_mut(b)
-            }
-
-            fn whole_len(len: usize) -> Option<usize> {
-                #vs::whole_len::<Self>(len)
-            }
-        }
-
-        impl #params #ty #args {
-            /// Its bytes, every one.
-            pub fn as_bytes(&self) -> &[u8] {
-                #vs::bytes_of(self)
-            }
-
-            /// Its bytes, to edit: for its own walks - a count may be in them.
-            pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] {
-                #vs::bytes_of_mut(self)
-            }
-
-            #methods
-        }
+        #methods
     }
 }
 
@@ -478,23 +401,11 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
                        from outside - off a device, from the kernel - its count checked\n \
                        against them when it's made.");
     let mut out = dst(name, true, &doc, shape, TokenStream::new());
-    out.extend(quote! {
-        crate::vstruct_family!(@in_state #name);
-
-        // a sized tagged union's arm: as many bytes as its count says
-        impl<S: #vs::State> #vs::ArmAt for #name<S> {
-            fn arm_at(b: &[u8]) -> Result<&Self, #vs::VStructError> {
-                #vs::from_bytes::<Self>(b)
-            }
-        }
-    });
+    let head = &shape.head;
+    out.extend(quote!(crate::vstruct_family!(unsized #name, #head);));
     let (unvalidated, validated) = (quote!(#name<#vs::Unvalidated>), quote!(#name<#vs::Validated>));
     out.extend(members_on(name, shape.fields, &[quote!([<S: #vs::State>] #name<S>)])?);
     out.extend(family(name, &unvalidated, &validated, &validated));
-    for st in ["Unvalidated", "Validated"] {
-        let (st, head) = (format_ident!("{st}"), &shape.head);
-        out.extend(quote!(crate::vstruct_family!(@made #name, #st, #head);));
-    }
     Ok(out)
 }
 
@@ -734,14 +645,14 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     // past them
     let ty = crate::tokens::derived(name, "validated");
     let derives = derive_names(def);
-    // X is generated: a derive generic_type() doesn't forward would be
+    // X is generated: a derive vstruct_family! doesn't forward would be
     // X_whole's alone, out of X's reach. Ours of the struct as written are
     // X_whole's
     let of_whole = ["MaybeZeroable", "BitfieldMembers", "FlexArray"];
     if let Some(d) = derives.iter()
         .find(|d| !of_whole.iter().chain(WHOLE_DERIVES).any(|w| d == w)) {
         return Err(format!("{name}: #[derive({d})], but {name} - {name}<Whole> - is generated, and has \
-                            only the derives generic_type() forwards to it: {}", WHOLE_DERIVES.join(", ")));
+                            only the derives it forwards to X<Whole>: {}", WHOLE_DERIVES.join(", ")));
     }
     let is_plain = derives.iter().any(|d| d == "Plain");
     let fl = crate::tokens::derived(name, "floor");
@@ -774,7 +685,14 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
             const WRITABLE: bool = #is_plain;
         }
     });
-    out.extend(generic_type(name, &ty, &written, &derives, grew.is_some(), &generic_doc));
+    // X<S>: Whole, the struct, with the value traits it derives that are
+    // X<Whole>'s too; in place, the DST - a typestate if the type grew
+    let fam = crate::tokens::derived(name, "family");
+    let x_derives = derives.iter().filter(|d| WHOLE_DERIVES.iter().any(|w| d == w));
+    let typestate = grew.map(|_| quote!(, typestate));
+    out.extend(quote! {
+        crate::vstruct_family!(sized #name, #fam, #ty, #written, #generic_doc, [#(#x_derives),*] #typestate);
+    });
     if grew.is_some() {
         // all of it is a value in place, every field there: X's methods, on
         // X<Validated>, are the struct's too
@@ -895,21 +813,23 @@ fn grown_in_place<'a>(name: &Ident, fl: &Ident, ty: &Ident, written: &Ident, flo
     }
 
     let methods = quote! {
-        /// All of it, if it's all there - every field a field.
-        pub fn whole(&self) -> Option<&#name> {
-            // SAFETY: X is #[repr(transparent)] over X_whole
-            #vs::cast_plain::<#written>(self.as_bytes())
-                .map(|w| unsafe { &*(w as *const #written as *const #name) })
-        }
+        impl #ty {
+            /// All of it, if it's all there - every field a field.
+            pub fn whole(&self) -> Option<&#name> {
+                // SAFETY: X is #[repr(transparent)] over X_whole
+                #vs::cast_plain::<#written>(self.as_bytes())
+                    .map(|w| unsafe { &*(w as *const #written as *const #name) })
+            }
 
-        /// whole(), to edit.
-        pub fn whole_mut(&mut self) -> Option<&mut #name> {
-            // SAFETY: as whole()'s
-            #vs::cast_plain_mut::<#written>(self.as_bytes_mut())
-                .map(|w| unsafe { &mut *(w as *mut #written as *mut #name) })
-        }
+            /// whole(), to edit.
+            pub fn whole_mut(&mut self) -> Option<&mut #name> {
+                // SAFETY: as whole()'s
+                #vs::cast_plain_mut::<#written>(self.as_bytes_mut())
+                    .map(|w| unsafe { &mut *(w as *mut #written as *mut #name) })
+            }
 
-        #getters
+            #getters
+        }
     };
 
     let dst_doc = format!(" A {name} as it was written, by any version since it had its floor:\n \
@@ -936,26 +856,8 @@ fn derive_names(def: &StructDef) -> Vec<Ident> {
         .collect()
 }
 
-/// The derives generic_type() gives X<Whole> as the struct has them.
+/// The derives vstruct_family! gives X<Whole> as the struct has them.
 const WHOLE_DERIVES: &[&str] = &["Clone", "Copy", "Default", "Plain", "TypeInfo"];
-
-/// A sized type's @name<S>, documented @doc: Whole unless named, the struct
-/// @whole, with the value traits among @derives; in place, Validated or
-/// Unvalidated, its DST @inplace - and if @typestate, Unvalidated a typestate
-/// over Validated (vstruct_family!).
-fn generic_type(name: &Ident, inplace: &Ident, whole: &Ident, derives: &[Ident], typestate: bool,
-                doc: &str) -> TokenStream {
-    let fam = crate::tokens::derived(name, "family");
-    let typestate = typestate.then(|| quote!(typestate));
-    let derives = derives.iter().filter(|d| WHOLE_DERIVES.iter().any(|w| d == w));
-    quote! {
-        crate::vstruct_family!(@type #name, #fam, #doc);
-        crate::vstruct_family!(@deref #typestate #name, #fam);
-        crate::vstruct_family!(@arm #name, #fam, #inplace);
-        crate::vstruct_family!(@in_place #name, #inplace);
-        crate::vstruct_family!(@whole #name, #whole #(, #derives)*);
-    }
-}
 
 /// @item, a struct, as @to - with #[type_name], its own name, before its
 /// other attributes, so it expands before the derives among them.

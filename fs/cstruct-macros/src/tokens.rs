@@ -2,7 +2,12 @@
 //! Token helpers the macros share.
 
 use proc_macro2::{Group, Ident, Spacing, Span, TokenStream, TokenTree};
-use quote::format_ident;
+use quote::{format_ident, quote};
+
+/// util/vstructs.rs, where what the generated code uses is.
+pub(crate) fn vs() -> TokenStream {
+    quote!(crate::util::vstructs)
+}
 
 /// The name of @name's generated @part - its head, its storage - cased as
 /// @name is: bch_sb_head, DiskAccountingPosStorage.

@@ -744,11 +744,126 @@ pub trait InState {
     type State: State;
 }
 
-/// A family's X<S>, a piece at a time - the family macros' (cstruct-macros'
-/// vstructs.rs), which say which pieces a family has.
+/// What the family macros (cstruct-macros' vstructs.rs) make of a type,
+/// beyond what its fields say: a sized type's X<S>, an unsized type's, and
+/// each DST definition's impls.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! vstruct_family {
+    // A sized type's X<S>, over its definition in S: Whole, the struct
+    // @whole, with those of @derives that are X<Whole>'s too; in place,
+    // Validated or Unvalidated, its DST @inplace - a typestate, Unvalidated
+    // over Validated, if it's a #[grown] type's
+    (sized $name:ident, $fam:ident, $inplace:ident, $whole:ident, $doc:literal, [$($derive:ident),*]
+     $(, $typestate:ident)?) => {
+        $crate::vstruct_family!(@type $name, $fam, $doc);
+        $crate::vstruct_family!(@deref $($typestate)? $name, $fam);
+        $crate::vstruct_family!(@arm $name, $fam, $inplace);
+        $crate::vstruct_family!(@in_place $name, $inplace);
+        $crate::vstruct_family!(@whole $name, $whole $(, $derive)*);
+    };
+
+    // An unsized type's X<S>, its own definition in every state: a sized
+    // union's arm as long as its count says, and made from bytes, or a
+    // pointer to its header @head, in the state the caller names
+    (unsized $name:ident, $head:ident) => {
+        $crate::vstruct_family!(@in_state $name);
+
+        impl<S: $crate::util::vstructs::State> $crate::util::vstructs::ArmAt for $name<S> {
+            fn arm_at(b: &[u8]) -> Result<&Self, $crate::util::vstructs::VStructError> {
+                $crate::util::vstructs::from_bytes::<Self>(b)
+            }
+        }
+
+        $crate::vstruct_family!(@state $name, Unvalidated, $head);
+        $crate::vstruct_family!(@state $name, Validated, $head);
+    };
+
+    // A DST definition, $ty - with impl generics [$g] - its head @head's
+    // fields, then its tail of @elem from @tail_at: it derefs to @deref, to
+    // read, as long as its reference says.
+    //
+    // No DerefMut: a &mut to the head would let a count - its own, or an
+    // embedded header's - be rewritten, or the whole head assigned or
+    // swapped, from outside what holds the value.
+    (dst [$($g:tt)*] $ty:ty, $head:ty, $deref:ty, $elem:ty, $tail_at:expr) => { const _: () = {
+        use $crate::util::vstructs::*;
+
+        impl<$($g)*> ::core::ops::Deref for $ty {
+            type Target = $deref;
+            #[inline]
+            fn deref(&self) -> &$deref {
+                // SAFETY: its first bytes, as many as the head has, are the head's
+                // fields, at the head's offsets - asserted where it's defined, each
+                // Plain - and any of its tail they reach: it's no shorter than the
+                // head, as Unsized says; the target is the head, or
+                // #[repr(transparent)] over it
+                unsafe { &*(self as *const Self).cast::<$deref>() }
+            }
+        }
+
+        // SAFETY: its head's fields, each Plain, then its tail at TAIL - as
+        // asserted where it's defined - Plain; from_raw() makes the tail as
+        // long as @bytes past TAIL
+        unsafe impl<$($g)*> Unsized for $ty {
+            type Head = $head;
+            type Elem = $elem;
+            const TAIL: usize = $tail_at;
+            #[inline]
+            fn from_raw(p: *const u8, bytes: usize) -> *const Self {
+                let n = (bytes - Self::TAIL) / size_of::<$elem>();
+                ::core::ptr::slice_from_raw_parts(p.cast::<$elem>(), n) as *const Self
+            }
+            #[inline]
+            fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {
+                let n = (bytes - Self::TAIL) / size_of::<$elem>();
+                ::core::ptr::slice_from_raw_parts_mut(p.cast::<$elem>(), n) as *mut Self
+            }
+        }
+
+        const _: () = {
+            assert_plain::<$elem>();
+            assert!($tail_at <= size_of::<$head>());
+        };
+
+        impl<$($g)*> SelfSized for $ty {
+            #[inline]
+            fn bytes(&self) -> usize {
+                size_of_val(self)
+            }
+        }
+
+        // as a tagged union's arm, over the bytes its storage says are its
+        impl<$($g)*> ArmRef for $ty {
+            const MIN_LEN: usize = size_of::<$head>();
+
+            fn arm_ref(b: &[u8]) -> Option<&Self> {
+                cast(b)
+            }
+
+            fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {
+                cast_mut(b)
+            }
+
+            fn whole_len(len: usize) -> Option<usize> {
+                whole_len::<Self>(len)
+            }
+        }
+
+        impl<$($g)*> $ty {
+            /// Its bytes, every one.
+            pub fn as_bytes(&self) -> &[u8] {
+                bytes_of(self)
+            }
+
+            /// Its bytes, to edit: for its own walks - a count may be in them.
+            #[allow(dead_code)]
+            pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] {
+                bytes_of_mut(self)
+            }
+        }
+    }; };
+
     // A sized type's X<S>: #[repr(transparent)] over its definition in S, so
     // a reference to one is a reference to the other, and impls attach to
     // X<S> for the state they're for
@@ -901,9 +1016,9 @@ macro_rules! vstruct_family {
         }
     )* };
 
-    // Made, in the state the caller names, from a pointer to its header, @head
-    // - an unsized type's, whose count is its own
-    (@made $name:ident, $st:ident, $head:ident) => { const _: () = {
+    // An unsized type in state @st: made from a pointer to its header, @head,
+    // or bytes, or from the other state
+    (@state $name:ident, $st:ident, $head:ident) => { const _: () = {
         use $crate::util::vstructs::*;
 
         // every family's way in, whether or not this one's used
@@ -932,11 +1047,11 @@ macro_rules! vstruct_family {
                 unsafe { from_head_ptr_mut::<Self>(p) }
             }
 
-            $crate::vstruct_family!(@made_in $name, $st);
+            $crate::vstruct_family!(@state_only $name, $st);
         }
     }; };
 
-    (@made_in $name:ident, Unvalidated) => {
+    (@state_only $name:ident, Unvalidated) => {
         /// It at the start of @bytes - off a device, from the kernel - as
         /// many as its count says: an error if they don't hold its header,
         /// aligned, or that many.
@@ -972,7 +1087,7 @@ macro_rules! vstruct_family {
         }
     };
 
-    (@made_in $name:ident, Validated) => {
+    (@state_only $name:ident, Validated) => {
         /// It, Unvalidated - the safe way down: both states are laid out
         /// alike, and an Unvalidated one trusts nothing - for what reads
         /// one that may not be valid, a printer.
