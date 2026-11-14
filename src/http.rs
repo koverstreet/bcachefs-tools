@@ -84,9 +84,9 @@ static INIT_LOCK: Mutex<()> = Mutex::new(());
  * Idempotent within a process: only the first call per pid actually
  * starts the server.
  *
- * Called from linux/kobject.c's debugfs_create_file shim, so userspace
- * fses (mount, fsck, format, migrate, ...) all expose their debugfs
- * tree without needing to opt in.
+ * Called as a filesystem's debugfs files are made, through the hook main()
+ * sets (os::debugfs::START_HTTP), so userspace fses (mount, fsck, format,
+ * migrate, ...) all expose their debugfs tree without needing to opt in.
  *
  * Fork handling: process-local Once doesn't work — a child of a process
  * that already started the server would skip startup and have no http
@@ -109,8 +109,7 @@ static INIT_LOCK: Mutex<()> = Mutex::new(());
  * stale file exists rather than overwriting (so we never hijack an
  * in-use path).
  */
-#[unsafe(no_mangle)]
-pub extern "C" fn bch2_start_http_lazy() {
+pub fn start_lazy() {
     let my_pid = std::process::id();
     if STARTED_FOR_PID.load(Ordering::Acquire) == my_pid {
         return;

@@ -387,6 +387,8 @@ fn main() -> ExitCode {
     // disconnects block SIGPIPE locally instead (see http.rs).
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL); }
 
+    let _ = bcachefs_kernel::os::debugfs::START_HTTP.set(http::start_lazy);
+
     // glibc and Rust stdlib buffer stdout independently; when piped, both
     // switch to block buffering which can reorder or lose output.
     // Set both to line-buffered.

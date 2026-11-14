@@ -2343,7 +2343,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     // from a pthread_atfork child handler -- which also fired in the child of
     // every other fork, including the one that execs fusermount3, where
     // binding a socket and spawning threads is not allowed.
-    crate::http::bch2_start_http_lazy();
+    crate::http::start_lazy();
 
     // Daemon mode must not hold on to the caller's stdio, nor grow a fixed log
     // file under /tmp; foreground mode still leaves debug output visible.

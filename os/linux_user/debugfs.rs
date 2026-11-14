@@ -8,7 +8,7 @@ use core::ffi::CStr;
 use core::ptr::{self, NonNull};
 use std::ffi::CString;
 use std::io::Write;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::c;
 use crate::errcode::BchError;
@@ -96,11 +96,9 @@ impl Tree {
     }
 }
 
-unsafe extern "C" {
-    /// The tools' http server, started for the first filesystem's files; a
-    /// weak no-op where there's none (tools-util.c).
-    fn bch2_start_http_lazy();
-}
+/// The tools' http server, started for the first filesystem's files: set by
+/// the tools, unset where there's none.
+pub static START_HTTP: OnceLock<fn()> = OnceLock::new();
 
 fn create(name: &CStr, parent: Option<NonNull<Dentry>>, file: Option<Reader>) -> NonNull<Dentry> {
     /*
@@ -109,8 +107,8 @@ fn create(name: &CStr, parent: Option<NonNull<Dentry>>, file: Option<Reader>) ->
      * parent; per-fs debugfs creates always pass one. Without this guard
      * every command (--help, version, ...) would bind the unix socket.
      */
-    if parent.is_some() {
-        unsafe { bch2_start_http_lazy() };
+    if let (Some(_), Some(start)) = (parent, START_HTTP.get()) {
+        start();
     }
 
     let d = Box::leak(Box::new(Dentry {
