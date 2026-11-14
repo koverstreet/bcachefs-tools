@@ -19,6 +19,16 @@ use rustix::fs::{FileType, Mode, OFlags};
 use std::ffi::CString;
 use std::sync::{Mutex, OnceLock};
 
+/// A device number's minor's bits, as the kernel's dev_t has them.
+pub const MINORBITS: u32 = 20;
+
+/// The kernel's: what a block device's holder is called back with. Userspace
+/// has no holders to call.
+#[repr(C)]
+pub struct blk_holder_ops {
+    _unused: [u8; 0],
+}
+
 fn io_err(e: rustix::io::Errno) -> BchError {
     std::io::Error::from(e).into()
 }

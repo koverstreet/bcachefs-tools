@@ -1,6 +1,5 @@
 #include <urcu.h>
 
-#include "include/linux/blkdev.h"
 #include "include/linux/delay.h"
 #include "include/linux/kernel.h"
 #include "include/linux/llist.h"
@@ -15,7 +14,6 @@
 #include "include/linux/string.h"
 #include "include/linux/unicode.h"
 #include "include/linux/xxhash.h"
-#include "include/linux/xattr.h"
 #include "include/linux/zlib.h"
 #include "include/linux/zstd.h"
 #include "include/crypto/sha2.h"	/* after linux/: it isn't self-contained */

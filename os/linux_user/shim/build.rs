@@ -157,9 +157,6 @@ fn main() {
         .opaque_type("lock_class_key")
         .opaque_type("lockdep_map")
         .opaque_type("bch_ioctl_data_event")
-        // the shim's own stand-ins for kernel structs, empty in
-        // include/linux/: reached through bch_fs and bch_dev
-        .opaque_type("blk_plug")
         .generate_inline_functions(true)
         .wrap_static_fns(true)
         .wrap_static_fns_path(out_dir.join("extern.c"))

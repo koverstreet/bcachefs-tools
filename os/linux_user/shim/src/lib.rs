@@ -24,14 +24,6 @@ pub mod c {
     )]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-    // As the kernel's bindings have it - bindgen doesn't
-    // (rust-lang/rust-bindgen#3196) - so a struct with bitfields can be
-    // MaybeZeroable. Only this one: what's Zeroable here should be in-kernel.
-    //
-    // SAFETY: a newtype around its storage.
-    unsafe impl<Storage> ::pin_init::Zeroable for __BindgenBitfieldUnit<Storage>
-        where Storage: ::pin_init::Zeroable {}
-
     pub use crate::compress::*;
 }
 
