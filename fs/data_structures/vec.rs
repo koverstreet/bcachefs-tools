@@ -5,7 +5,7 @@
 //! allocates. KVec and KVVec are it: the same in both builds.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::util::alloc::{assert_may_reclaim, flags, kvmalloc_realloc_gfp, kvrealloc_nofail_fallback, stateless,
+use crate::util::alloc::{assert_may_reclaim, flags, kvrealloc_nofail_fallback, stateless,
                          AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
 use core::marker::PhantomData;
@@ -82,7 +82,7 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
         self.reserve_gfp(additional, flags::WAIT)
     }
 
-    fn reserve_gfp(&mut self, additional: usize, gfp: Flags) -> Result<(), AllocError> {
+    pub fn reserve_gfp(&mut self, additional: usize, gfp: Flags) -> Result<(), AllocError> {
         // SAFETY: @p is A's, of @old
         self.grow(additional, |p, layout, old| unsafe { stateless::<A>().realloc(p, layout, old, gfp) }.map(NonNull::cast))
     }
@@ -271,13 +271,6 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
 }
 
 impl<T, L: LenUint> Vec<T, KVmalloc, L> {
-    /// reserve(), with a C gfp_t: for what needs a flag Flags doesn't name -
-    /// __GFP_NORETRY.
-    pub fn reserve_raw_gfp(&mut self, additional: usize, gfp: crate::c::gfp_t) -> Result<(), AllocError> {
-        // SAFETY: @p is KVmalloc's, of @old
-        self.grow(additional, |p, layout, old| unsafe { kvmalloc_realloc_gfp(p, layout, old, gfp) })
-    }
-
     /// push(), for what mustn't fail to allocate: __GFP_NOFAIL, if a plain
     /// allocation fails.
     pub fn push_nofail(&mut self, v: T) {

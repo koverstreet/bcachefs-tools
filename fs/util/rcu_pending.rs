@@ -228,7 +228,7 @@ impl Seq {
     /// atomically - nor in @node.
     fn push(&mut self, raw: Raw, node: &mut NewNode) -> bool {
         if self.cursor.is_null() {
-            match self.objs.get_or_alloc_preallocated(self.nr, node, c::GFP_ATOMIC | c::__GFP_NOWARN) {
+            match self.objs.get_or_alloc_preallocated(self.nr, node, flags::ATOMIC | flags::NOWARN) {
                 Ok(slot) => self.cursor = ptr::from_mut(slot),
                 Err(_)   => return false,
             }

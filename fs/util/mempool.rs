@@ -17,7 +17,7 @@ use crate::errcode::BchError;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::os::kernel::HZ;
-use crate::util::alloc::{current_gfp_context_raw, kv_layout, Alloc, AllocError, KVec, KVmalloc, Kmalloc};
+use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, KVec, KVmalloc, Kmalloc};
 use crate::util::futex::EventCount;
 use crate::util::late::LateInit;
 use crate::util::projections::Volatile;
@@ -62,7 +62,7 @@ unsafe impl<A: Elements> LateInit for Mempool<A> {
 /// element_alloc() gives @layout's bytes - zeroed, with __GFP_ZERO - which
 /// element_free() takes back.
 pub unsafe trait Elements {
-    fn element_alloc(layout: Layout, gfp: c::gfp_t) -> Option<NonNull<u8>>;
+    fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>>;
 
     /// # Safety
     /// @p is element_alloc()'s, of @layout, and not used after.
@@ -72,18 +72,18 @@ pub unsafe trait Elements {
 macro_rules! elements {
     ($($a:ident => $realloc:ident);*) => {$(
         unsafe impl Elements for $a {
-            fn element_alloc(layout: Layout, gfp: c::gfp_t) -> Option<NonNull<u8>> {
+            fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
                 #[cfg(kernel)]
                 {
                     use kernel::bindings::{$realloc, NUMA_NO_NODE};
 
                     NonNull::new(unsafe {
-                        $realloc(core::ptr::null(), layout.size(), layout.align() as _, gfp, NUMA_NO_NODE)
+                        $realloc(core::ptr::null(), layout.size(), layout.align() as _, gfp.raw(), NUMA_NO_NODE)
                     }.cast())
                 }
                 #[cfg(not(kernel))]
                 {
-                    let p = if gfp & c::__GFP_ZERO != 0 { $a.alloc_zeroed(layout) } else { $a.alloc(layout) };
+                    let p = if gfp.contains(flags::ZERO) { $a.alloc_zeroed(layout) } else { $a.alloc(layout) };
                     p.ok().map(NonNull::cast)
                 }
             }
@@ -101,19 +101,19 @@ elements!(Kmalloc  => krealloc_node_align;
 /// What's asked of the allocator for an element, as the task's memalloc scope
 /// says: the pool is the reserve, so no emergency reserves, no looping in the
 /// page allocator, and failing is fine.
-fn element_gfp(gfp: c::gfp_t) -> c::gfp_t {
-    current_gfp_context_raw(gfp) | c::__GFP_NOMEMALLOC | c::__GFP_NORETRY | c::__GFP_NOWARN
+fn element_gfp(gfp: Flags) -> Flags {
+    current_gfp_context(gfp) | flags::NO_RESERVES | flags::NORETRY | flags::NOWARN
 }
 
 /// ...and before the reserve, no reclaim or IO either.
-fn first_try(gfp: c::gfp_t) -> c::gfp_t {
-    gfp & !(c::__GFP_DIRECT_RECLAIM | c::__GFP_IO)
+fn first_try(gfp: Flags) -> Flags {
+    gfp & !(flags::DIRECT_RECLAIM | flags::IO)
 }
 
 /// The reserve: @min_nr elements, or none, if one can't be had.
 fn fill<A: Elements>(min_nr: usize, layout: Layout) -> Result<KVec<Element>, AllocError> {
     let mut reserve = KVec::with_capacity(min_nr)?;
-    let gfp = current_gfp_context_raw(c::GFP_KERNEL);
+    let gfp = current_gfp_context(flags::WAIT);
 
     for _ in 0..min_nr {
         let Some(p) = A::element_alloc(layout, gfp) else {
@@ -155,12 +155,12 @@ impl<A: Elements> Mempool<A> {
 
     /// An element, for C to hold: free_raw() takes it back.
     pub fn alloc_raw(&self) -> Result<NonNull<u8>, AllocError> {
-        self.alloc_raw_gfp(c::GFP_KERNEL)
+        self.alloc_raw_gfp(flags::WAIT)
     }
 
     /// alloc_raw(), allocating with @gfp - as the task's memalloc scope
     /// says.
-    pub fn alloc_raw_gfp(&self, gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {
+    pub fn alloc_raw_gfp(&self, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
         let gfp = element_gfp(gfp);
         let layout = self.layout();
         let mut gfp_temp = first_try(gfp);
@@ -194,7 +194,7 @@ impl<A: Elements> Mempool<A> {
             }
 
             /* Userspace can always wait */
-            if cfg!(kernel) && gfp & c::__GFP_DIRECT_RECLAIM == 0 {
+            if cfg!(kernel) && !gfp.contains(flags::DIRECT_RECLAIM) {
                 return Err(AllocError);
             }
 
@@ -260,11 +260,11 @@ impl Mempool<KVmalloc> {
 impl<A: Elements> Mempool<A> {
     /// Alloc's alloc(), allocating with @gfp - as the task's memalloc scope
     /// says.
-    pub fn alloc_gfp(&self, layout: Layout, gfp: c::gfp_t) -> Result<NonNull<[u8]>, AllocError> {
+    pub fn alloc_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
         self.alloc_or_element(layout, false, gfp)
     }
 
-    fn alloc_or_element(&self, layout: Layout, zeroed: bool, gfp: c::gfp_t) -> Result<NonNull<[u8]>, AllocError> {
+    fn alloc_or_element(&self, layout: Layout, zeroed: bool, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
         let size = self.element_size();
         if layout.size() > size || layout.align() > 8 {
             return Err(AllocError);
@@ -272,7 +272,7 @@ impl<A: Elements> Mempool<A> {
 
         if layout.size() < size {
             let gfp = first_try(element_gfp(gfp));
-            let gfp = if zeroed { gfp | c::__GFP_ZERO } else { gfp };
+            let gfp = if zeroed { gfp | flags::ZERO } else { gfp };
             if let Some(p) = A::element_alloc(layout, gfp) {
                 return Ok(NonNull::slice_from_raw_parts(p, layout.size()));
             }
@@ -288,11 +288,11 @@ impl<A: Elements> Mempool<A> {
 
 unsafe impl<A: Elements> Alloc for Mempool<A> {
     fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.alloc_or_element(layout, false, c::GFP_KERNEL)
+        self.alloc_or_element(layout, false, flags::WAIT)
     }
 
     fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.alloc_or_element(layout, true, c::GFP_KERNEL)
+        self.alloc_or_element(layout, true, flags::WAIT)
     }
 
     unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {

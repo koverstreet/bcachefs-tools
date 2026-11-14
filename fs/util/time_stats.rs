@@ -27,6 +27,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
+use crate::util::alloc::flags;
 use crate::locking::{ExclusiveGuard, Locked};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::os::kernel::{local_clock, time_after64};
@@ -365,7 +366,7 @@ pub trait TimeStats {
             if s.buffer.load(Relaxed) == 0 &&
                g.freq_stats_weighted.median() < 32000 &&
                g.duration_stats.n > 1024 {
-                if let Ok(b) = PerCpu::<c::time_stat_buffer>::alloc_gfp(c::GFP_ATOMIC) {
+                if let Ok(b) = PerCpu::<c::time_stat_buffer>::alloc_gfp(flags::ATOMIC) {
                     percpu_field!(b.get(), lock).init();
                     s.buffer.store(b.into_raw() as usize, Release);
                 }

@@ -31,6 +31,13 @@ impl Kmalloc {
     pub const MAX_SIZE: usize = super::kernel::PAGE_SIZE << 10;
 }
 
+impl Flags {
+    /// None: the shim's C - percpu_ref_init() - takes a gfp_t and ignores it.
+    pub const fn raw(self) -> c::gfp_t {
+        0
+    }
+}
+
 macro_rules! allocs {
     ($($a:ident),*) => {$(
         unsafe impl Alloc for $a {
@@ -78,7 +85,7 @@ macro_rules! allocs {
 allocs!(Kmalloc, KVmalloc);
 
 /// @gfp: there's no memalloc scope to apply.
-pub fn current_gfp_context_raw(gfp: c::gfp_t) -> c::gfp_t {
+pub fn current_gfp_context(gfp: Flags) -> Flags {
     gfp
 }
 
@@ -99,7 +106,7 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
 /// kmalloc(), as the shim's slab.h had it: aligned to the largest power of two
 /// in @size, up to a page; tried ten times, the shrinkers run between; zeroed
 /// with __GFP_ZERO. Null if it can't. free() takes it back.
-fn kmalloc_noprof(size: usize, gfp: c::gfp_t) -> *mut c_void {
+fn kmalloc_noprof(size: usize, gfp: Flags) -> *mut c_void {
     for _ in 0..10 {
         let p = if size != 0 {
             let align = (1usize << size.ilog2()).min(super::kernel::PAGE_SIZE).max(size_of::<*mut c_void>());
@@ -113,7 +120,7 @@ fn kmalloc_noprof(size: usize, gfp: c::gfp_t) -> *mut c_void {
         };
 
         if !p.is_null() {
-            if gfp & c::__GFP_ZERO != 0 {
+            if gfp.contains(flags::ZERO) {
                 unsafe { p.cast::<u8>().write_bytes(0, size) };
             }
             return p;
@@ -127,7 +134,7 @@ fn kmalloc_noprof(size: usize, gfp: c::gfp_t) -> *mut c_void {
 /// @size bytes kzalloc()'d, __GFP_NOFAIL - which the shim's kmalloc() can't
 /// keep, ten tries in. For kfree_unsized().
 pub fn kzalloc_nofail(size: usize) -> *mut c_void {
-    kmalloc_noprof(size, c::GFP_KERNEL | c::__GFP_ZERO | c::__GFP_NOFAIL)
+    kmalloc_noprof(size, flags::WAIT | flags::ZERO)
 }
 
 /// @size bytes kvzalloc()'d, __GFP_NOFAIL: kzalloc_nofail()'s, here. For
@@ -180,7 +187,7 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError
             return Ok(q.cast());
         }
 
-        super::shrinker::run_shrinkers(c::GFP_KERNEL, true);
+        super::shrinker::run_shrinkers(flags::WAIT, true);
     }
     Err(AllocError)
 }
@@ -202,24 +209,14 @@ pub fn kmalloc(size: usize) -> Result<NonNull<u8>, AllocError> {
 }
 
 /// kzalloc(), with @gfp. kfree_unsized() takes it back.
-pub fn kzalloc_gfp(size: usize, gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {
-    NonNull::new(kmalloc_noprof(size, gfp | c::__GFP_ZERO).cast()).ok_or(AllocError)
+pub fn kzalloc_gfp(size: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
+    NonNull::new(kmalloc_noprof(size, gfp | flags::ZERO).cast()).ok_or(AllocError)
 }
 
 /// kvzalloc(), with @gfp, which takes nothing here. kvfree_sized() takes it
 /// back.
-pub fn kvzalloc_gfp(size: usize, _gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {
+pub fn kvzalloc_gfp(size: usize, _gfp: Flags) -> Result<NonNull<u8>, AllocError> {
     NonNull::new(unsafe { std::alloc::alloc_zeroed(kv_layout(size)?) }).ok_or(AllocError)
-}
-
-/// KVmalloc's realloc(), with @gfp, which takes nothing here.
-///
-/// # Safety
-/// As Alloc::realloc()'s.
-pub unsafe fn kvmalloc_realloc_gfp(p: Option<NonNull<u8>>, layout: Layout, old: Layout, _gfp: c::gfp_t)
-    -> Result<NonNull<u8>, AllocError>
-{
-    unsafe { KVmalloc.realloc(p, layout, old, flags::WAIT) }.map(NonNull::cast)
 }
 
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
@@ -306,7 +303,7 @@ pub unsafe fn kfree_rcu_mightsleep(p: *mut c_void) {
 }
 
 /// @size bytes, with @gfp, for a bio's data: kmalloc()'s, here.
-pub fn bio_pages_alloc(size: usize, gfp: c::gfp_t) -> *mut c_void {
+pub fn bio_pages_alloc(size: usize, gfp: Flags) -> *mut c_void {
     kmalloc_noprof(size, gfp)
 }
 

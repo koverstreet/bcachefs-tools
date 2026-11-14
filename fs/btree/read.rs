@@ -6,6 +6,7 @@
 //! checked.
 
 use crate::btree::bkey::prelude::*;
+use crate::util::alloc::flags;
 use crate::btree::bkey::{bkey_val_to_text, types_with, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN,
                          SPOS_MAX};
 use crate::btree::async_ops::AsyncBtreeOp;
@@ -943,7 +944,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
     let bio = fs.btree.bio.alloc_raw(ptr::null_mut(),
                                      buf_nr_bvecs(data, bytes) as _,
                                      c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META,
-                                     c::GFP_NOIO);
+                                     flags::NOIO);
     let rb = unsafe { of_bio::<BtreeReadBio>(bio) };
     unsafe {
         (&raw mut (*rb).fs).write(Fs::borrow_raw(fs.as_ptr()));

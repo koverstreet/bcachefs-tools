@@ -33,7 +33,7 @@ use crate::format::{Bpos, Btree, BtreeFlags};
 use crate::fs::Fs;
 use crate::journal::pins::Pin;
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags};
-use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, KVVec};
+use crate::util::alloc::{flags, Flags, alloc_pinned, free_pinned, AllocError, KVVec};
 use crate::util::place::{container_of, Contained};
 use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
@@ -244,14 +244,14 @@ pub struct bch_fs_btree_write_buffer {
  * journal write completions. __GFP_NORETRY buys the failure immediately
  * instead of waiting for reclaim that a speculative resize doesn't merit.
  */
-const WB_RESIZE_GFP: c::gfp_t = c::GFP_KERNEL | c::__GFP_NORETRY | c::__GFP_NOWARN;
+const WB_RESIZE_GFP: Flags = flags::WAIT.union(flags::NORETRY).union(flags::NOWARN);
 
 /// Room for @new_size in all, rounded up to a power of two.
-fn resize_gfp<T>(v: &mut KVVec<T>, new_size: usize, gfp: c::gfp_t) -> Result<(), AllocError> {
+fn resize_gfp<T>(v: &mut KVVec<T>, new_size: usize, gfp: Flags) -> Result<(), AllocError> {
     if new_size <= v.capacity() {
         return Ok(());
     }
-    v.reserve_raw_gfp(new_size.next_power_of_two() - v.len(), gfp)
+    v.reserve_gfp(new_size.next_power_of_two() - v.len(), gfp)
 }
 
 /// A write buffer's two key buffers, as its journal pins are named.
@@ -809,9 +809,9 @@ impl Fs {
             let mut inc = wb.inc.lock();
             let (inc, inc_live) = inc.parts();
 
-            let ret = inc.keys.resize(inc_live, initial_size, c::GFP_KERNEL)
-                .and_then(|()| f.keys.resize(&f_live.keys, initial_size, c::GFP_KERNEL))
-                .and_then(|()| resize_gfp(&mut f.sorted, initial_size, c::GFP_KERNEL));
+            let ret = inc.keys.resize(inc_live, initial_size, flags::WAIT)
+                .and_then(|()| f.keys.resize(&f_live.keys, initial_size, flags::WAIT))
+                .and_then(|()| resize_gfp(&mut f.sorted, initial_size, flags::WAIT));
             f_live.sorted.set(f.sorted.len(), f.sorted.capacity());
             ret.map_err(BchError::from)?;
         }

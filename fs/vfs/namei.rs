@@ -69,7 +69,7 @@ impl InodeInfo {
             (None, None)
         };
 
-        let mut inode = NewInode::new(fs, c::GFP_NOIO).ok_or(BchError::from(c::ENOMEM))?;
+        let mut inode = NewInode::new(fs, crate::util::alloc::flags::NOIO).ok_or(BchError::from(c::ENOMEM))?;
         // so that inserting it, which can't fail, rarely has to allocate
         fs.vfs.inode_cache.make_room();
 

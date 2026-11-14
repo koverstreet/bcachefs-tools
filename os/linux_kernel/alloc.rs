@@ -135,7 +135,7 @@ unsafe fn gfp_realloc(kv: bool, p: Option<NonNull<u8>>, layout: Layout, gfp: Fla
     use kernel::bindings::{krealloc_node_align, kvrealloc_node_align, NUMA_NO_NODE};
 
     let p = p.map_or(core::ptr::null(), |p| p.as_ptr().cast_const().cast());
-    let gfp = current_gfp_context_raw(gfp.raw());
+    let gfp = current_gfp_context(gfp).raw();
     let q = unsafe {
         if kv {
             kvrealloc_node_align(p, layout.size(), layout.align() as _, gfp, NUMA_NO_NODE)
@@ -177,14 +177,30 @@ fn kernel_gfp_context(flags: kernel::alloc::Flags) -> kernel::alloc::Flags {
     flags
 }
 
-/// The task's memalloc scope applied to a C gfp_t, as kernel_gfp_context() applies it.
+/// @gfp as the task's memalloc scope says, as kernel_gfp_context() has it.
+pub fn current_gfp_context(gfp: Flags) -> Flags {
+    use crate::locking::{PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
+
+    let pf = crate::os::sched::memalloc_flags();
+    let mut gfp = gfp;
+    if pf & PF_MEMALLOC_NORECLAIM != 0 {
+        gfp = gfp & !(flags::DIRECT_RECLAIM | flags::IO | flags::FS);
+    }
+    if pf & PF_MEMALLOC_NOWARN != 0 {
+        gfp |= flags::NOWARN;
+    }
+    gfp
+}
+
+/// current_gfp_context(), for a gfp_t of the kernel's own - a mapping's, which
+/// the VFS hands us.
 pub fn current_gfp_context_raw(gfp: c::gfp_t) -> c::gfp_t {
     use crate::locking::{PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 
     let pf = crate::os::sched::memalloc_flags();
     let mut gfp = gfp;
     if pf & PF_MEMALLOC_NORECLAIM != 0 {
-        gfp &= !(c::GFP_KERNEL & !c::GFP_NOWAIT);
+        gfp &= !(flags::DIRECT_RECLAIM | flags::IO | flags::FS).raw();
     }
     if pf & PF_MEMALLOC_NOWARN != 0 {
         gfp |= c::__GFP_NOWARN;
@@ -261,10 +277,10 @@ pub unsafe fn kfree(p: NonNull<u8>, layout: Layout) {
 /// @p is null, or kmalloc()'s and not used after unless this fails.
 pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
     // Kmalloc::realloc() wants the old allocation's layout, which nobody has
-    use kernel::bindings::{krealloc_node_align, GFP_KERNEL, NUMA_NO_NODE};
+    use kernel::bindings::{krealloc_node_align, NUMA_NO_NODE};
 
     // SAFETY: the caller's
-    let gfp = current_gfp_context_raw(GFP_KERNEL);
+    let gfp = current_gfp_context(flags::WAIT).raw();
     NonNull::new(unsafe { krealloc_node_align(p.cast(), new, 1, gfp, NUMA_NO_NODE) }.cast()).ok_or(AllocError)
 }
 
@@ -273,9 +289,9 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError
 /// # Safety
 /// @p is null, or kvmalloc()'s and not used after unless this fails.
 pub unsafe fn kvrealloc_unsized(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
-    use kernel::bindings::{kvrealloc_node_align, GFP_KERNEL, NUMA_NO_NODE};
+    use kernel::bindings::{kvrealloc_node_align, NUMA_NO_NODE};
 
-    let gfp = current_gfp_context_raw(GFP_KERNEL);
+    let gfp = current_gfp_context(flags::WAIT).raw();
     NonNull::new(unsafe { kvrealloc_node_align(p.cast(), new, 1, gfp, NUMA_NO_NODE) }.cast()).ok_or(AllocError)
 }
 
@@ -287,39 +303,22 @@ pub fn kmalloc(size: usize) -> Result<NonNull<u8>, AllocError> {
 }
 
 /// kzalloc(), with @gfp. kfree_unsized() takes it back.
-pub fn kzalloc_gfp(size: usize, gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {
+pub fn kzalloc_gfp(size: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
     use kernel::bindings::{krealloc_node_align, NUMA_NO_NODE};
 
-    let gfp = current_gfp_context_raw(gfp | c::__GFP_ZERO);
+    let gfp = current_gfp_context(gfp | flags::ZERO).raw();
     NonNull::new(unsafe { krealloc_node_align(core::ptr::null(), size, 1, gfp, NUMA_NO_NODE) }.cast())
         .ok_or(AllocError)
 }
 
-/// kvzalloc(), with @gfp: for the rare allocation that needs a flag Flags
-/// doesn't name - __GFP_NORETRY. kvfree_sized() takes it back.
-pub fn kvzalloc_gfp(size: usize, gfp: c::gfp_t) -> Result<NonNull<u8>, AllocError> {
+/// kvzalloc(), with @gfp. kvfree_sized() takes it back.
+pub fn kvzalloc_gfp(size: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
     use kernel::bindings::{kvrealloc_node_align, NUMA_NO_NODE};
 
     let layout = kv_layout(size)?;
-    let gfp = current_gfp_context_raw(gfp | c::__GFP_ZERO);
+    let gfp = current_gfp_context(gfp | flags::ZERO).raw();
     NonNull::new(unsafe {
         kvrealloc_node_align(core::ptr::null(), size, layout.align() as _, gfp, NUMA_NO_NODE)
-    }.cast()).ok_or(AllocError)
-}
-
-/// KVmalloc's realloc(), with @gfp: for what needs a flag Flags doesn't name -
-/// __GFP_NORETRY.
-///
-/// # Safety
-/// As Alloc::realloc()'s.
-pub unsafe fn kvmalloc_realloc_gfp(p: Option<NonNull<u8>>, layout: Layout, _old: Layout, gfp: c::gfp_t)
-    -> Result<NonNull<u8>, AllocError>
-{
-    use kernel::bindings::{kvrealloc_node_align, NUMA_NO_NODE};
-
-    let p = p.map_or(core::ptr::null(), |p| p.as_ptr().cast_const().cast());
-    NonNull::new(unsafe {
-        kvrealloc_node_align(p, layout.size(), layout.align() as _, current_gfp_context_raw(gfp), NUMA_NO_NODE)
     }.cast()).ok_or(AllocError)
 }
 
@@ -410,8 +409,8 @@ pub unsafe fn kfree_rcu_mightsleep(p: *mut c_void) {
 
 /// @size bytes of pages, with @gfp, for a bio's data: page aligned, as we
 /// don't know the device's DMA alignment.
-pub fn bio_pages_alloc(size: usize, gfp: c::gfp_t) -> *mut c_void {
-    unsafe { c::rust_bio_pages_alloc(size, gfp) }
+pub fn bio_pages_alloc(size: usize, gfp: Flags) -> *mut c_void {
+    unsafe { c::rust_bio_pages_alloc(size, gfp.raw()) }
 }
 
 /// # Safety

@@ -3,7 +3,7 @@
 use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::c;
 use crate::data::keylist;
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{Flags, AllocError, KVVec};
 use crate::os::kernel::prefetch;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
@@ -64,7 +64,7 @@ impl WbKeys {
         live.set(self.len(), self.capacity());
     }
 
-    pub(super) fn resize(&mut self, live: &KeysLiveWriter, new_size: usize, gfp: c::gfp_t)
+    pub(super) fn resize(&mut self, live: &KeysLiveWriter, new_size: usize, gfp: Flags)
         -> Result<(), AllocError>
     {
         let ret = super::resize_gfp(&mut self.0, new_size, gfp);

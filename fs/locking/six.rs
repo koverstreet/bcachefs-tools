@@ -11,7 +11,7 @@ use crate::data_structures::inline_vec::InlineVec;
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;
 use crate::types::c_default;
-use crate::util::alloc::init_at;
+use crate::util::alloc::{Flags, init_at};
 use crate::util::ffi::c_char;
 use crate::os::kernel::time_after64;
 use crate::os::percpu::{CpuGuard, PerCpu};
@@ -1220,7 +1220,7 @@ unsafe impl RawLockBase for c::six_lock {
     type InitError = Infallible;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { __six_lock_init(l, name.as_ptr().cast(), key, SixLockInitFlags::empty(), 0) };
+        unsafe { __six_lock_init(l, name.as_ptr().cast(), key, SixLockInitFlags::empty(), Flags::empty()) };
         Ok(())
     }
 
@@ -1497,7 +1497,7 @@ pub unsafe fn six_lock_exit(lock: *mut c::six_lock) {
 /// keeps what it was - zeroes, or six_lock_exit()'s: seq, and readers but
 /// with SixLockInitFlags::pcpu.
 pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: *mut c_void,
-                              flags: c::SixLockInitFlags, gfp: c::gfp_t) {
+                              flags: c::SixLockInitFlags, gfp: Flags) {
     let wait_lock = crate::new_lock!(six_lock_waiters { next_free_hint: 0, list: ManuallyDrop::new(WaitList::new_zeroed()) },
                                      "&lock->wait_lock");
     unsafe {

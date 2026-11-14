@@ -6,8 +6,9 @@
 //! Userspace has no slab caches: its @T's are plain allocations.
 
 use crate::c;
+use crate::util::alloc::Flags;
 #[cfg(kernel)]
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{flags, AllocError};
 #[cfg(kernel)]
 use core::ffi::CStr;
 use core::marker::PhantomData;
@@ -60,9 +61,9 @@ impl<T> KmemCache<T> {
     }
 
     /// A @T's memory, zeroed.
-    pub fn zalloc(&self, gfp: c::gfp_t) -> Option<NonNull<T>> {
+    pub fn zalloc(&self, gfp: Flags) -> Option<NonNull<T>> {
         #[cfg(kernel)]
-        return NonNull::new(unsafe { c::kmem_cache_alloc_noprof(self.as_ptr(), gfp | c::__GFP_ZERO) }.cast());
+        return NonNull::new(unsafe { c::kmem_cache_alloc_noprof(self.as_ptr(), (gfp | flags::ZERO).raw()) }.cast());
         #[cfg(not(kernel))]
         {
             let _ = gfp;
@@ -73,8 +74,8 @@ impl<T> KmemCache<T> {
     /// A @T's memory, uninitialized, charged to @lru - a superblock's inode
     /// LRU, for alloc_inode_sb().
     #[cfg(kernel)]
-    pub fn alloc_lru(&self, lru: *mut c::list_lru, gfp: c::gfp_t) -> Option<NonNull<T>> {
-        NonNull::new(unsafe { c::kmem_cache_alloc_lru_noprof(self.as_ptr(), lru, gfp) }.cast())
+    pub fn alloc_lru(&self, lru: *mut c::list_lru, gfp: Flags) -> Option<NonNull<T>> {
+        NonNull::new(unsafe { c::kmem_cache_alloc_lru_noprof(self.as_ptr(), lru, gfp.raw()) }.cast())
     }
 
     /// # Safety

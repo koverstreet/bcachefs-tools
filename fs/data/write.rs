@@ -710,6 +710,7 @@
  */
 
 use crate::btree::bkey::prelude::*;
+use crate::util::alloc::flags;
 use crate::btree::bkey::{bkey_ge, BkeyI, BkeyS, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
@@ -971,7 +972,7 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
         };
 
         let n: &mut c::bch_write_bio = if i + 1 != last {
-            let bio = unsafe { fs.replica_set.alloc_clone(&raw mut wbio.bio, c::GFP_NOIO) };
+            let bio = unsafe { fs.replica_set.alloc_clone(&raw mut wbio.bio, flags::NOIO) };
             let n = unsafe { to_wbio(bio) };
 
             n.bio.bi_end_io     = wbio.bio.bi_end_io;

@@ -37,7 +37,7 @@ use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{Exclusive, TaskSlot, Waiter};
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::{init_at, kfree, kzalloc, Alloc, Kmalloc};
+use crate::util::alloc::{flags, Flags, init_at, kfree, kzalloc, Alloc, Kmalloc};
 use crate::util::mempool::Mempool;
 
 pub struct BioInPlace(*mut c::bio);
@@ -194,7 +194,7 @@ impl BioPool {
     /// bio_alloc_bioset(): a bio with room for @nr_vecs bvecs. Null past
     /// BIO_MAX_VECS, or where the pool can't wait - a NORECLAIM scope;
     /// otherwise it waits on the pool.
-    pub fn alloc_raw(&self, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32, gfp: c::gfp_t) -> *mut c::bio {
+    pub fn alloc_raw(&self, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32, gfp: Flags) -> *mut c::bio {
         let (layout, vecs) = bio_layout(self.front_pad, nr_vecs);
         let Ok(p) = self.pool.alloc_gfp(layout, gfp) else {
             return core::ptr::null_mut();
@@ -219,7 +219,7 @@ impl BioPool {
     ///
     /// # Safety
     /// @src is live, and its bvecs outlive the clone.
-    pub unsafe fn alloc_clone(&self, src: *mut c::bio, gfp: c::gfp_t) -> *mut c::bio {
+    pub unsafe fn alloc_clone(&self, src: *mut c::bio, gfp: Flags) -> *mut c::bio {
         let bio = self.alloc_raw(core::ptr::null_mut(), 0, unsafe { (*src).bi_opf }, gfp);
         if !bio.is_null() {
             unsafe { super::buffers::clone_from(&mut *bio, &*src, (*src).bi_iter) };
@@ -232,7 +232,7 @@ impl BioPool {
     ///
     /// # Safety
     /// As alloc_clone()'s.
-    pub unsafe fn split(&self, bio: *mut c::bio, sectors: u32, gfp: c::gfp_t) -> *mut c::bio {
+    pub unsafe fn split(&self, bio: *mut c::bio, sectors: u32, gfp: Flags) -> *mut c::bio {
         let size = unsafe { (*bio).bi_iter.bi_size };
         assert!(sectors != 0 && sectors < size >> 9, "splitting {sectors} sectors off a {size} byte bio");
 
@@ -269,7 +269,7 @@ impl BioPool {
     /// # Safety
     /// [base, base+size) lives till the chain's IO is done.
     pub unsafe fn map_and_chain(&self, bdev: *mut crate::os::blkdev::BlockDevice, mut base: *mut u8, mut size: usize,
-                                mut sector: u64, mut opf: u32, gfp: c::gfp_t) -> *mut c::bio {
+                                mut sector: u64, mut opf: u32, gfp: Flags) -> *mut c::bio {
         let mut tail: *mut c::bio = core::ptr::null_mut();
 
         while size != 0 {
@@ -403,7 +403,7 @@ impl<T: HasBio> BioSet<T> {
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        let bio = self.alloc_raw(bdev, B::nr_vecs(&src), opf, c::GFP_KERNEL);
+        let bio = self.alloc_raw(bdev, B::nr_vecs(&src), opf, flags::WAIT);
         let mut b = Self::init_new(bio, init)?;
         let buffers = B::fill(b.bio_mut(), src)?;
         let t = core::mem::ManuallyDrop::new(b).t;

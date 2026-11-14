@@ -4,6 +4,7 @@
 //! with the bios and encoding that takes.
 
 use crate::alloc::sector_alloc::LockedWritePoint;
+use crate::util::alloc::flags;
 use crate::c;
 use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce};
 use crate::data::ptrs::{crc_is_compressed, extent_crc_append, extent_nonce};
@@ -75,7 +76,7 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: *mut c::bio, buf: *m
 
     let pages = (output_available + offset).div_ceil(PAGE_SIZE as u32);
 
-    let bio = fs.bio_write.alloc_raw(core::ptr::null_mut(), pages as _, 0, c::GFP_NOIO);
+    let bio = fs.bio_write.alloc_raw(core::ptr::null_mut(), pages as _, 0, flags::NOIO);
     let wbio = unsafe { wbio_init(bio) };
     wbio.wbio.bits.set_put_bio(1);
     /* copy WRITE_SYNC flag */
@@ -99,7 +100,7 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: *mut c::bio, buf: *m
      * overwritten with real data:
      */
     let _ = pages::alloc_pages(&mut wbio.bio, block_size, output_available as usize,
-                               c::GFP_NOIO | c::__GFP_SKIP_ZERO);
+                               flags::NOIO | flags::SKIP_ZERO);
 
     let required = output_available.min(fs.opts().encoded_extent_max.get());
 
@@ -578,7 +579,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
         assert!(total_output == total_input, "a split of a bio we didn't bounce, its output not its input");
 
         unsafe {
-            dst = fs.bio_write.split(src, total_input >> 9, c::GFP_NOIO);
+            dst = fs.bio_write.split(src, total_input >> 9, flags::NOIO);
             wbio_init(dst).wbio.bits.set_put_bio(1);
             /* copy WRITE_SYNC flag */
             (*dst).bi_opf = (*src).bi_opf;

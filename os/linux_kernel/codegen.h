@@ -126,9 +126,6 @@ const gfp_t RUST_CONST_HELPER___GFP_NOMEMALLOC		= __GFP_NOMEMALLOC;
 const gfp_t RUST_CONST_HELPER___GFP_ACCOUNT		= __GFP_ACCOUNT;
 const gfp_t RUST_CONST_HELPER___GFP_RECLAIMABLE	= __GFP_RECLAIMABLE;
 const gfp_t RUST_CONST_HELPER___GFP_SKIP_ZERO		= __GFP_SKIP_ZERO;
-/* what takes a C gfp_t still: GFP_NOIO, and btree/cache/'s __GFP_RECLAIM test */
-const gfp_t RUST_CONST_HELPER_GFP_NOIO			= GFP_NOIO;
-const gfp_t RUST_CONST_HELPER___GFP_RECLAIM		= __GFP_RECLAIM;
 
 /* a notifier's answer, as reconcile's power supply notifier gives it */
 const int RUST_CONST_HELPER_NOTIFY_OK			= NOTIFY_OK;

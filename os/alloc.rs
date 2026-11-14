@@ -9,13 +9,28 @@ use core::ops::{BitAnd, BitOr, BitOrAssign, Not};
 
 /// Flags to allocate memory with, from the [`flags`] module: combined with
 /// `|`, `&` and `!`.
+#[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct Flags(u32);
 
 impl Flags {
+    pub const fn empty() -> Self {
+        Flags(0)
+    }
+
+    /// @f set too: `|`, in a const.
+    pub const fn union(self, f: Flags) -> Self {
+        Flags(self.0 | f.0)
+    }
+
     /// Whether every flag in @f is set.
     pub const fn contains(self, f: Flags) -> bool {
         self.0 & f.0 == f.0
+    }
+
+    /// Whether any flag in @f is set.
+    pub const fn intersects(self, f: Flags) -> bool {
+        self.0 & f.0 != 0
     }
 }
 

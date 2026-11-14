@@ -16,7 +16,7 @@ use super::{buf_nr_bvecs, Bio, BioRange};
 use crate::c;
 use crate::errcode::BchError;
 use crate::os::kernel::PAGE_SIZE;
-use crate::util::alloc::{ABox, AVec, AllocError, ConstAlign};
+use crate::util::alloc::{Flags, ABox, AVec, AllocError, ConstAlign};
 
 /// # Safety
 /// fill() puts in the bvecs only what release() gives back - or, failing,
@@ -69,7 +69,7 @@ pub struct BioBuffersOwned<'p> {
 }
 
 unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
-    type Src<'s> = (&'p BouncePool, u32, usize, c::gfp_t);
+    type Src<'s> = (&'p BouncePool, u32, usize, Flags);
 
     fn nr_vecs(&(_, _, size, _): &Self::Src<'_>) -> u16 {
         pages::nr_vecs(size)
@@ -96,7 +96,7 @@ unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
 pub struct BioBuffersPages;
 
 unsafe impl Buffers for BioBuffersPages {
-    type Src<'s> = (u32, usize, c::gfp_t);
+    type Src<'s> = (u32, usize, Flags);
 
     fn nr_vecs(&(_, size, _): &Self::Src<'_>) -> u16 {
         pages::nr_vecs(size)

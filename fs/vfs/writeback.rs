@@ -170,7 +170,7 @@ fn writepage_do_io(w: &mut WritepageState) {
 fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeInfo,
                       sector: u64, nr_replicas: u32, res_nr_replicas: u32) {
     let bio = fs.vfs.writepage_bioset.alloc_raw(core::ptr::null_mut(), c::BIO_MAX_VECS as u16,
-                                                c::req_op_REQ_OP_WRITE, c::GFP_KERNEL);
+                                                c::req_op_REQ_OP_WRITE, crate::util::alloc::flags::WAIT);
     let io = unsafe { crate::util::bio::of_bio::<Io>(bio) };
     let i = unsafe { &mut *io };
 

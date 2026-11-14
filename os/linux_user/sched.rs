@@ -65,10 +65,6 @@ pub fn need_resched() -> bool {
     false
 }
 
-/// None: userspace's allocators take no scope.
-pub fn memalloc_flags_for_gfp(_gfp: c::gfp_t) -> u32 {
-    0
-}
 
 /// This task's state, @state, ordered before what it then checks: as
 /// set_current_state()'s smp_store_mb().

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::prelude::*;
+use crate::util::alloc::flags;
 use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags, BKEY_U64S};
 use crate::btree::cache::Bounce;
 use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
@@ -614,7 +615,7 @@ impl BsetWrite {
         let bio = fs.btree.bio.alloc_raw(ptr::null_mut(),
                                          buf_nr_bvecs(data, len) as _,
                                          c::req_op_REQ_OP_WRITE | c::REQ_META | c::REQ_SYNC | c::REQ_IDLE,
-                                         c::GFP_NOIO);
+                                         flags::NOIO);
         let wbio = unsafe { &mut *of_bio::<BtreeWriteBio>(bio) };
         unsafe { wbio_init(bio) };
         unsafe { (&raw mut wbio.bounce).write(bounce) };

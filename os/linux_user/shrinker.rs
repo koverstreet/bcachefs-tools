@@ -128,8 +128,8 @@ fn run_shrinkers_allocation_failed() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn run_shrinkers(gfp_mask: c::gfp_t, allocation_failed: bool) {
-    if gfp_mask & c::GFP_KERNEL == 0 {
+pub extern "C" fn run_shrinkers(gfp: crate::util::alloc::Flags, allocation_failed: bool) {
+    if !gfp.contains(crate::util::alloc::flags::WAIT) {
         return;
     }
 
@@ -165,7 +165,7 @@ unsafe extern "C" fn shrinker_thread(_arg: *mut c_void) -> c_int {
         if kthread_should_stop() {
             break;
         }
-        run_shrinkers(c::GFP_KERNEL, false);
+        run_shrinkers(crate::util::alloc::flags::WAIT, false);
     }
     0
 }

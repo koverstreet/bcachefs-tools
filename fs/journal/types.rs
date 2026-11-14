@@ -10,7 +10,7 @@ use crate::data::keylist::PaddedKey;
 use crate::data::ptrs::IoFailures;
 use crate::data::write::DevWriteRef;
 use crate::types::{CacheAligned, c_default};
-use crate::util::alloc::{kvfree_sized, kvzalloc_gfp, AllocError, KVVec};
+use crate::util::alloc::{Flags, kvfree_sized, kvzalloc_gfp, AllocError, KVVec};
 use crate::data_structures::fixed_fifo::FixedFifo;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
@@ -55,7 +55,7 @@ pub struct JsetBuf {
 unsafe impl ::pin_init::Zeroable for JsetBuf {}
 
 impl JsetBuf {
-    pub fn new(size: c_uint, gfp: c::gfp_t) -> Result<Self, AllocError> {
+    pub fn new(size: c_uint, gfp: Flags) -> Result<Self, AllocError> {
         Ok(JsetBuf { data: kvzalloc_gfp(size as usize, gfp)?.as_ptr().cast(), size })
     }
 

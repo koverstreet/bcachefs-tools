@@ -7,6 +7,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::util::alloc::Flags;
 use crate::btree::lock_graph::bch2_six_check_for_deadlock;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{btree_path_poison, BtreePath, NodePtr, PathIdx, PathNode, PathSnapshot, Paths};
@@ -1344,7 +1345,7 @@ fn srcu_hold_warn_thresh(fs: &Fs) -> c_ulong {
 /// # Safety
 /// @b's lock is uninitialized.
 pub unsafe fn bch2_btree_lock_init(b: *mut c::btree_bkey_cached_common, flags: c::SixLockInitFlags,
-                                   gfp: c::gfp_t) {
+                                   gfp: Flags) {
     let lock = unsafe { &raw mut (*b).lock };
     unsafe {
         __six_lock_init(lock.cast(), c"b->c.lock".as_ptr().cast(), crate::new_lock!(@key), flags, gfp);

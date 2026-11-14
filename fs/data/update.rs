@@ -35,7 +35,7 @@ use crate::data::nocow_locking::{self, NocowKind};
 use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::util::alloc::init_at;
+use crate::util::alloc::{flags, init_at};
 use crate::util::bio::{pages, BioInPlace, HasBio};
 use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
@@ -413,7 +413,7 @@ impl c::data_update {
                                  c::req_op_REQ_OP_READ);
             crate::os::bio::init(&mut self.op.wbio.bio, core::ptr::null_mut(), self.bvecs, nr_vecs as u16, 0);
         }
-        if pages::alloc_pages(&mut self.op.wbio.bio, block_size, buf_bytes as usize, c::GFP_KERNEL).is_err() {
+        if pages::alloc_pages(&mut self.op.wbio.bio, block_size, buf_bytes as usize, flags::WAIT).is_err() {
             self.bios_free();
             return Err(c::ENOMEM.into());
         }

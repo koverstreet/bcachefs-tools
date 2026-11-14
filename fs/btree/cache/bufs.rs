@@ -9,7 +9,7 @@ use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{kfree, KVmalloc};
+use crate::util::alloc::{flags, Flags, kfree, KVmalloc};
 use crate::util::mempool::Elements;
 use crate::os::kernel::is_vmalloc_addr;
 use core::alloc::Layout;
@@ -21,8 +21,8 @@ use core::ptr::NonNull;
 pub struct BounceBufs;
 
 unsafe impl Elements for BounceBufs {
-    fn element_alloc(layout: Layout, gfp: c::gfp_t) -> Option<NonNull<u8>> {
-        KVmalloc::element_alloc(layout, gfp | c::__GFP_ACCOUNT | c::__GFP_RECLAIMABLE)
+    fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
+        KVmalloc::element_alloc(layout, gfp | flags::ACCOUNT | flags::RECLAIMABLE)
     }
 
     unsafe fn element_free(p: NonNull<u8>, layout: Layout) {
@@ -46,7 +46,7 @@ impl<'f> Bounce<'f> {
                 "a {bytes} byte bounce buffer, past the {} byte node size", fs.opts.btree_node_size.get());
 
         let _noio = MemallocFlags::noio();
-        let gfp = c::GFP_NOWAIT | c::__GFP_ACCOUNT | c::__GFP_RECLAIMABLE;
+        let gfp = flags::NOWAIT | flags::ACCOUNT | flags::RECLAIMABLE;
         let (p, mempool) = match NonNull::new(alloc_raw(Mem::Kvmalloc, bytes, gfp)) {
             Some(p) => (p.cast(), false),
             None    => (fs.btree.bounce_pool.alloc_raw().expect("a bounce buffer outside NORECLAIM").cast(), true),
@@ -127,12 +127,12 @@ enum Mem {
 
 /// @bytes of @mem, not zeroed, with @gfp: kvfree()'s to take back.
 /// Userspace's is one allocator, aligned as kmalloc() aligns.
-fn alloc_raw(mem: Mem, bytes: usize, gfp: c::gfp_t) -> *mut c_void {
+fn alloc_raw(mem: Mem, bytes: usize, gfp: Flags) -> *mut c_void {
     #[cfg(kernel)]
     unsafe {
         use kernel::bindings::{krealloc_node_align, kvrealloc_node_align, NUMA_NO_NODE};
 
-        let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
+        let gfp = crate::util::alloc::current_gfp_context(gfp).raw();
         match mem {
             Mem::Kmalloc  => krealloc_node_align(core::ptr::null(), bytes, 1, gfp, NUMA_NO_NODE).cast(),
             Mem::Vmalloc  => c::__vmalloc_noprof(bytes as _, gfp).cast(),
@@ -175,13 +175,13 @@ impl NodeBufs {
 
     /// Its data and aux_data, those it doesn't have yet, with @gfp: data
     /// avoiding compaction if @avoid_compaction.
-    pub fn alloc(&mut self, fs: &Fs, gfp: c::gfp_t, avoid_compaction: bool) -> Result<(), BchError> {
+    pub fn alloc(&mut self, fs: &Fs, gfp: Flags, avoid_compaction: bool) -> Result<(), BchError> {
         /*
          * We probably ought to be using __GFP_RECLAIMABLE - but vmalloc barfs.
          *
          * Shrinkable memory accounting is fubar.
          */
-        let gfp = gfp | c::__GFP_ACCOUNT;
+        let gfp = gfp | flags::ACCOUNT;
 
         if self.data.is_null() {
             let bytes = 1usize << self.byte_order;
@@ -196,7 +196,7 @@ impl NodeBufs {
                  * page allocation if we're GFP_NOWAIT, otherwise straight to
                  * vmalloc.
                  */
-                let mem = if gfp & c::__GFP_RECLAIM != 0 { Mem::Vmalloc } else { Mem::Kmalloc };
+                let mem = if gfp.intersects(flags::RECLAIM) { Mem::Vmalloc } else { Mem::Kmalloc };
                 self.data = alloc_raw(mem, bytes, gfp);
             }
             /*
@@ -235,14 +235,14 @@ impl NodeBufs {
 
 /// A struct btree: its lock initialized and nothing else, with @gfp. Freed by
 /// node_struct_free().
-fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: c::gfp_t) -> Option<NonNull<BtreeNode>> {
+fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<NonNull<BtreeNode>> {
     let layout = Layout::new::<BtreeNode>();
     #[cfg(kernel)]
     let p = unsafe {
         use kernel::bindings::{krealloc_node_align, NUMA_NO_NODE};
 
         krealloc_node_align(core::ptr::null(), layout.size(), layout.align(),
-                            crate::util::alloc::current_gfp_context_raw(gfp | c::__GFP_ZERO), NUMA_NO_NODE)
+                            crate::util::alloc::current_gfp_context(gfp | flags::ZERO).raw(), NUMA_NO_NODE)
     };
     #[cfg(not(kernel))]
     let p = {
@@ -281,7 +281,7 @@ pub(super) unsafe fn cached_node<'f>(_fs: &'f Fs, b: *const BtreeNode) -> &'f Bt
 
 /// node_struct_alloc(), on bc->nodes, as every node the cache has is. Freed by
 /// node_mem_free().
-pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: c::gfp_t) -> Option<NonNull<BtreeNode>> {
+pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<NonNull<BtreeNode>> {
     let slot = {
         let _gfp = MemallocFlags::for_gfp(gfp);
         fs.btree.cache.nodes.get_slot().ok()?
@@ -301,11 +301,11 @@ pub(super) fn new_node_lock(b: &BtreeNode) -> SixHold<'_> {
 
 /// A node with its buffers, GFP_KERNEL - off the cache's lists, not hashed -
 /// from @struct_alloc.
-fn node_with_bufs(fs: &Fs, struct_alloc: fn(&Fs, bool, c::gfp_t) -> Option<NonNull<BtreeNode>>)
+fn node_with_bufs(fs: &Fs, struct_alloc: fn(&Fs, bool, Flags) -> Option<NonNull<BtreeNode>>)
     -> Option<NonNull<BtreeNode>>
 {
     let mut bufs = NodeBufs::new(fs);
-    let b = bufs.alloc(fs, c::GFP_KERNEL, false).ok().and_then(|()| struct_alloc(fs, false, c::GFP_KERNEL));
+    let b = bufs.alloc(fs, flags::WAIT, false).ok().and_then(|()| struct_alloc(fs, false, flags::WAIT));
     let Some(b) = b else {
         bufs.free();
         return None;

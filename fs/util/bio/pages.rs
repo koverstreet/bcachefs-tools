@@ -18,7 +18,7 @@ use crate::c;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::errcode::BchError;
-use crate::util::alloc::{current_gfp_context_raw, AllocError};
+use crate::util::alloc::{flags, Flags, current_gfp_context, AllocError};
 use crate::os::kernel::PAGE_SIZE;
 use crate::util::mempool::{Elements, Mempool};
 use pin_init::{pin_data, pin_init, PinInit};
@@ -69,8 +69,8 @@ impl BouncePool {
 pub struct BouncePages;
 
 unsafe impl Elements for BouncePages {
-    fn element_alloc(layout: Layout, gfp: c::gfp_t) -> Option<NonNull<u8>> {
-        NonNull::new(crate::util::alloc::bio_pages_alloc(layout.size(), gfp | c::__GFP_SKIP_ZERO).cast())
+    fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
+        NonNull::new(crate::util::alloc::bio_pages_alloc(layout.size(), gfp | flags::SKIP_ZERO).cast())
     }
 
     unsafe fn element_free(p: NonNull<u8>, layout: Layout) {
@@ -81,7 +81,7 @@ unsafe impl Elements for BouncePages {
 /// Allocates pages into @bio up to @size bytes, each allocation a multiple of
 /// @bs. On AllocError, what was allocated stays on the bio. The bio must have
 /// the bvecs for them.
-pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) -> Result<(), AllocError> {
+pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: Flags) -> Result<(), AllocError> {
     let bs = bs as usize;
     assert!(bs.is_power_of_two() && size % bs == 0, "allocating {size} bytes for a bio of {bs} byte blocks");
 
@@ -90,7 +90,7 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) -> Res
         assert!(b % bs == 0, "a bio's pages {b} bytes, not a multiple of its {bs} byte blocks");
 
         // SAFETY: no pointers in
-        let p = NonNull::new(crate::util::alloc::bio_pages_alloc(b, current_gfp_context_raw(gfp))).ok_or(AllocError)?;
+        let p = NonNull::new(crate::util::alloc::bio_pages_alloc(b, current_gfp_context(gfp))).ok_or(AllocError)?;
         // SAFETY: a fresh allocation of @b bytes, the bio's now
         unsafe { crate::os::bio::add_virt_nofail(bio, p.as_ptr(), b as u32) };
     }
@@ -100,7 +100,7 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) -> Res
 /// Allocates @size bytes into @bio with alloc_pages(), and the rest from
 /// @pool - failing as the pool does, what was allocated left on the bio. The
 /// bio must have the bvecs for them.
-pub fn alloc_pages_pool(pool: &BouncePool, bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t)
+pub fn alloc_pages_pool(pool: &BouncePool, bio: &mut c::bio, bs: u32, size: usize, gfp: Flags)
     -> Result<(), AllocError>
 {
     // short is fine: the pool has the rest

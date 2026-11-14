@@ -3,6 +3,7 @@
 //! The write path's in place writes, over extents that allow them: nocow.
 
 use crate::btree::bkey::prelude::*;
+use crate::util::alloc::flags;
 use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
@@ -262,7 +263,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
         let bio: *mut c::bio = if k.k.p.offset < op.pos.offset + sectors {
             unsafe {
                 let bio = fs.bio_write.split(&raw mut op.wbio.bio, (k.k.p.offset - op.pos.offset) as u32,
-                                             c::GFP_KERNEL);
+                                             flags::WAIT);
                 wbio_init(bio).wbio.bits.set_put_bio(1);
                 (*bio).bi_opf = op.wbio.bio.bi_opf;
                 bio

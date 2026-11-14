@@ -552,11 +552,11 @@ impl<T> Copy for PerCpuRef<'_, T> {}
 impl<T: ::pin_init::Zeroable> PerCpu<T> {
     /// Every possible CPU's copy, zeroed: alloc_percpu().
     pub fn alloc() -> Result<Self, AllocError> {
-        Self::alloc_gfp(c::GFP_KERNEL)
+        Self::alloc_gfp(crate::util::alloc::flags::WAIT)
     }
 
     /// alloc(), allocating with @gfp: alloc_percpu_gfp().
-    pub fn alloc_gfp(_gfp: c::gfp_t) -> Result<Self, AllocError> {
+    pub fn alloc_gfp(_gfp: crate::util::alloc::Flags) -> Result<Self, AllocError> {
         let p = alloc_percpu(size_of::<T>(), align_of::<T>());
         if p.is_null() { Err(AllocError) } else { Ok(PerCpu(p.cast())) }
     }

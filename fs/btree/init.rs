@@ -272,7 +272,7 @@
 
 use crate::btree::cache::{btree_evicted_size_exit, btree_evicted_size_init};
 #[cfg(all(kernel, CONFIG_LOCKDEP))]
-use crate::c;
+use crate::{c, util::alloc::flags};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::rcu::Flavor;
@@ -339,11 +339,11 @@ pub(crate) fn btree_init(fs: &Fs) -> Result<(), BchError> {
      */
     #[cfg(all(kernel, CONFIG_LOCKDEP))]
     {
-        unsafe { fs_reclaim_acquire(c::GFP_KERNEL) };
+        unsafe { fs_reclaim_acquire(flags::WAIT.raw()) };
         let trans = crate::btree_trans!(fs);
         trans.mark_locked(false);
         drop(trans);
-        unsafe { fs_reclaim_release(c::GFP_KERNEL) };
+        unsafe { fs_reclaim_release(flags::WAIT.raw()) };
     }
 
     fs.btree.key_cache.setup()

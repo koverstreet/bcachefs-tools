@@ -136,7 +136,7 @@ use crate::journal::pins::PinsRead;
 use crate::locking::{Guard as _, MemallocFlags};
 use crate::init::recovery::NotRw;
 use crate::journal::entries::EntryWriter;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::{flags, KVVec};
 use crate::util::backtrace::prt_current_backtrace;
 use crate::format::DataType;
 use crate::util::closure::{closure_fn_addr, closure_has_waiters, closure_wait, closure_wait_event,
@@ -523,7 +523,7 @@ impl c::journal {
             let _f = MemallocFlags::noreclaim();
 
             prt!(out, "entry size: {}\n", HumanReadable(buf.data.jset().bytes() as u64));
-            let _g = MemallocFlags::for_gfp(c::GFP_NOWAIT);
+            let _g = MemallocFlags::for_gfp(flags::NOWAIT);
             let _ = prt_current_backtrace(out, 1);
         });
 
@@ -964,7 +964,7 @@ impl c::journal {
         let buf_size = self.lock.buf_size_want.get();
 
         drop(g);
-        let buf = c::JsetBuf::new(buf_size, c::GFP_NOIO);
+        let buf = c::JsetBuf::new(buf_size, flags::NOIO);
         g = self.lock.lock();
 
         let Ok(mut buf) = buf else {

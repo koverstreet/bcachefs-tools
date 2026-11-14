@@ -3,6 +3,7 @@
 use super::reclaim::ReclaimFlags;
 use super::{cache_node_struct_alloc, cached_node, new_node_lock, NodeBufs};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
+use crate::util::alloc::flags;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{bch2_btree_path_to_text, PathIdx, Paths};
@@ -210,9 +211,9 @@ impl BtreeTrans<'_> {
 
             'err: {
                 let mut bufs = NodeBufs::new(fs);
-                if bufs.alloc(fs, c::GFP_NOWAIT, true).is_err() {
+                if bufs.alloc(fs, flags::NOWAIT, true).is_err() {
                     self.unlock_from(paths, crate::ret_ip!());
-                    if bufs.alloc(fs, c::GFP_KERNEL | c::__GFP_NOWARN, true).is_err() {
+                    if bufs.alloc(fs, flags::WAIT | flags::NOWARN, true).is_err() {
                         bufs.free();
                         break 'err;
                     }
@@ -223,11 +224,11 @@ impl BtreeTrans<'_> {
                 let (b, held) = match freed {
                     Some(got) => got,
                     None => {
-                        let b = match cache_node_struct_alloc(fs, pcpu_read_locks, c::GFP_NOWAIT) {
+                        let b = match cache_node_struct_alloc(fs, pcpu_read_locks, flags::NOWAIT) {
                             Some(b) => b,
                             None => {
                                 self.unlock_from(paths, crate::ret_ip!());
-                                match cache_node_struct_alloc(fs, pcpu_read_locks, c::GFP_KERNEL) {
+                                match cache_node_struct_alloc(fs, pcpu_read_locks, flags::WAIT) {
                                     Some(b) => b,
                                     None => {
                                         bufs.free();

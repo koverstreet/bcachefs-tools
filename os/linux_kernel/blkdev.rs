@@ -89,11 +89,11 @@ pub fn max_discard_sectors(bdev: &BlockDevice) -> u32 {
 
 /// Discard @nr_sectors from @sector on @bdev, and wait for it:
 /// blkdev_issue_discard().
-pub fn issue_discard(bdev: &BlockDevice, sector: u64, nr_sectors: u64, gfp: c::gfp_t)
+pub fn issue_discard(bdev: &BlockDevice, sector: u64, nr_sectors: u64, gfp: crate::util::alloc::Flags)
     -> Result<(), BchError>
 {
     ret_to_result_void(unsafe {
-        c::blkdev_issue_discard(core::ptr::from_ref(bdev).cast_mut(), sector as _, nr_sectors as _, gfp)
+        c::blkdev_issue_discard(core::ptr::from_ref(bdev).cast_mut(), sector as _, nr_sectors as _, gfp.raw())
     })
 }
 

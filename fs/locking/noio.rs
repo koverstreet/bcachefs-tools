@@ -29,6 +29,7 @@
 use super::{Exclusive, ExclusiveGuard, Locked, RawLock, RawLockBase, RawMovableLock, RawReadLock, RawRwLock, RawTryLock, Shared,
             SharedGuard};
 use crate::cstructs::c;
+use crate::util::alloc::{flags, Flags};
 use crate::types::c_default;
 use crate::os::sched;
 use core::ffi::{c_uint, c_void, CStr};
@@ -88,9 +89,20 @@ impl MemallocFlags {
         Self::new(PF_MEMALLOC_NOWARN)
     }
 
-    /// The scope a C caller's @gfp says, for Rust that takes none.
-    pub fn for_gfp(gfp: crate::c::gfp_t) -> Self {
-        Self::new(sched::memalloc_flags_for_gfp(gfp))
+    /// The scope a C caller's @gfp says, for Rust that takes none: NORECLAIM
+    /// without direct reclaim, else NOIO without __GFP_IO or __GFP_FS; NOWARN.
+    /// The rest of @gfp has no scope, and goes.
+    pub fn for_gfp(gfp: Flags) -> Self {
+        let mut pf = 0;
+        if !gfp.contains(flags::DIRECT_RECLAIM) {
+            pf |= PF_MEMALLOC_NORECLAIM;
+        } else if !gfp.intersects(flags::IO | flags::FS) {
+            pf |= PF_MEMALLOC_NOIO;
+        }
+        if gfp.contains(flags::NOWARN) {
+            pf |= PF_MEMALLOC_NOWARN;
+        }
+        Self::new(pf)
     }
 }
 

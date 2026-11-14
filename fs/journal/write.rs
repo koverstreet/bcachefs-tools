@@ -9,6 +9,7 @@ use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 
 use crate::alloc::disk_groups::Target;
+use crate::util::alloc::flags;
 use crate::alloc::replicas::DevlistEntry;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, ValidateFlags};
@@ -307,7 +308,7 @@ fn buf_realloc(j: &c::journal, buf: &mut c::journal_buf) {
      * as its first act, so sitting in reclaim for a bigger buffer stalls
      * journal write completions. Take the failure immediately instead.
      */
-    let Ok(mut new_buf) = c::JsetBuf::new(new_size, c::GFP_NOIO | c::__GFP_NORETRY | c::__GFP_NOWARN) else {
+    let Ok(mut new_buf) = c::JsetBuf::new(new_size, flags::NOIO | flags::NORETRY | flags::NOWARN) else {
         return;
     };
 
@@ -807,7 +808,7 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
              */
             let bio = unsafe {
                 ja.bio_set.map_and_chain(ca.disk_sb.bdev, w.data.as_ptr().cast(), (sectors << 9) as usize, *offset,
-                                         opf, c::GFP_NOIO)
+                                         opf, flags::NOIO)
             };
             let jbio = unsafe { jbio_of(bio) };
 
@@ -851,7 +852,7 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
             let bio = ja.bio_set.alloc_raw(ca.disk_sb.bdev, 0,
                                            c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META |
                                            c::REQ_PREFLUSH,
-                                           c::GFP_NOIO);
+                                           flags::NOIO);
             let jbio = unsafe { jbio_of(bio) };
 
             jbio.ca = ptr::from_ref::<Dev>(&ca).cast_mut();

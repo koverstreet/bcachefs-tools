@@ -13,7 +13,7 @@ use crate::errcode::BchError;
 use crate::format::{jset_entry, BkeyType, Btree};
 use crate::fs::Fs;
 use crate::prt;
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{flags, Flags, AllocError};
 use crate::util::vstructs::Unvalidated;
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
@@ -119,7 +119,7 @@ impl<'a> IntakeBtree<'a> {
     }
 
     /// Room for @u64s more, and for flushing, sorted refs to match.
-    fn grow(&mut self, u64s: usize, gfp: c::gfp_t) -> Result<(), AllocError> {
+    fn grow(&mut self, u64s: usize, gfp: Flags) -> Result<(), AllocError> {
         let (keys, live) = self.dst();
         keys.resize(live, keys.len() + u64s, gfp)?;
 
@@ -296,7 +296,7 @@ impl<'a> Intake<'a> {
              * the write buffer locks under j->buf_lock. Growing inc has no
              * fallback; that one has to be allowed to wait.
              */
-            let gfp = if b.flushing.is_some() { WB_RESIZE_GFP } else { c::GFP_KERNEL };
+            let gfp = if b.flushing.is_some() { WB_RESIZE_GFP } else { flags::WAIT };
 
             #[cfg(CONFIG_BCACHEFS_TESTS)]
             let force_alloc_failure =

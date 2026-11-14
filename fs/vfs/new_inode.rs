@@ -14,7 +14,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::new_lock;
-use crate::util::alloc::{init_at, AllocError};
+use crate::util::alloc::{flags, init_at, AllocError, Flags};
 use crate::util::kmem_cache::KmemCache;
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut};
@@ -37,7 +37,7 @@ impl NewInode {
     /// An inode with its locks, timer and place on the filesystem's list, and
     /// what inode_init_always() gives it - or none, if there's no memory as
     /// @gfp allows.
-    pub fn new(fs: &Fs, gfp: c::gfp_t) -> Option<Self> {
+    pub fn new(fs: &Fs, gfp: Flags) -> Option<Self> {
         let sb = fs.vfs_super().expect("an inode for a filesystem with no VFS superblock");
         let _gfp = MemallocFlags::for_gfp(gfp);
         // SAFETY: the superblock's own inode LRU
@@ -71,7 +71,7 @@ impl NewInode {
         let Ok(()) = unsafe { init_at(init, p.as_ptr()) };
 
         let mut inode = NewInode(p);
-        if inode.v.init_always(sb, gfp).is_err() {
+        if inode.v.init_always(sb, gfp.raw()).is_err() {
             // not yet a VFS inode: no reference to put
             // SAFETY: ours, and nothing of the VFS's in it
             unsafe { INODE_CACHE.free(ManuallyDrop::new(inode).0) };
@@ -85,10 +85,10 @@ impl NewInode {
     /// dropped, and a restart if they can't be had back.
     pub fn new_trans(t: &TransAttempt<'_, '_>) -> Result<Self, BchError> {
         let fs = t.fs();
-        if let Some(inode) = Self::new(fs, c::GFP_NOWAIT) {
+        if let Some(inode) = Self::new(fs, flags::NOWAIT) {
             return Ok(inode);
         }
-        t.drop_locks_do(|| Self::new(fs, c::GFP_NOIO).ok_or_else(|| AllocError.into()))
+        t.drop_locks_do(|| Self::new(fs, flags::NOIO).ok_or_else(|| AllocError.into()))
     }
 
     /// Made from @bi - inode @inum, in @subvol.

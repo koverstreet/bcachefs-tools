@@ -88,7 +88,7 @@ use crate::util::bio::{inline_vecs, reset_bvec_offset, Bio, BioBox, BioBuffersOw
                        BioInPlace, BioLend, BioOwner, BioRange, Buffers, HasBio, Lent};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
-use crate::util::alloc::{AllocBox, AllocError, Kmalloc};
+use crate::util::alloc::{flags, Flags, AllocBox, AllocError, Kmalloc};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
@@ -1223,9 +1223,9 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
         // If @failed is set, we might be in the extended read call that allows
         // returning data to userspace that didn't pass the checksum check, so
         // userspace can get back mangled data to attempt its own recovery:
-        let mut gfp = c::GFP_NOIO;
+        let mut gfp = flags::NOIO;
         if pick.crc.csum_type != c::CsumType::none && !have_failures {
-            gfp |= c::__GFP_SKIP_ZERO;
+            gfp |= flags::SKIP_ZERO;
         }
         How::Bounce((pick.crc.compressed_size << 9) as usize, gfp)
     } else if split {
@@ -1247,7 +1247,7 @@ enum How<'r> {
     Own,
     Clone,
     /// Pages of its own: the size, and how to allocate them
-    Bounce(usize, c::gfp_t),
+    Bounce(usize, Flags),
     Promote(Promoted<'r>),
 }
 

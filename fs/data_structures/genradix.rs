@@ -27,9 +27,8 @@
 //! SharedGenRadix, for one allocated from several threads at once, frees on
 //! drop.
 
-use crate::c;
 use crate::types::GenRadix;
-use crate::util::alloc::{current_gfp_context_raw, kfree_unsized, kzalloc_gfp, kzalloc_nofail, AllocError};
+use crate::util::alloc::{flags, Flags, current_gfp_context, kfree_unsized, kzalloc_gfp, kzalloc_nofail, AllocError};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -87,7 +86,7 @@ impl Node {
         unsafe { AtomicPtr::from_ptr(n.cast::<*mut Node>().add(i)) }
     }
 
-    fn alloc(gfp: c::gfp_t) -> *mut Node {
+    fn alloc(gfp: Flags) -> *mut Node {
         kzalloc_gfp(NODE_SIZE, gfp).map_or(ptr::null_mut(), |p| p.as_ptr().cast())
     }
 
@@ -142,7 +141,7 @@ impl Tree {
      * Returns pointer to the specified byte @offset within @radix, allocating it if
      * necessary - newly allocated slots are always zeroed out:
      */
-    fn ptr_alloc(&self, mut offset: usize, preallocated: Option<&mut NewNode>, gfp: c::gfp_t) -> *mut u8 {
+    fn ptr_alloc(&self, mut offset: usize, preallocated: Option<&mut NewNode>, gfp: Flags) -> *mut u8 {
         let mut v = rcu_dereference(&self.root);
         let mut new_node = preallocated.map_or(ptr::null_mut(), |p| core::mem::replace(&mut p.0, ptr::null_mut()));
         let mut n;
@@ -391,7 +390,7 @@ impl<T: Zeroable> GenRadix<T> {
     #[inline]
     pub fn get_or_alloc(&mut self, idx: usize) -> Result<&mut T, AllocError> {
         let offset = Self::offset(idx).ok_or(AllocError)?;
-        let gfp = current_gfp_context_raw(c::GFP_KERNEL);
+        let gfp = current_gfp_context(flags::WAIT);
         let p = self.tree.ptr_alloc(offset, None, gfp);
         // SAFETY: as get_mut()'s
         NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
@@ -401,11 +400,11 @@ impl<T: Zeroable> GenRadix<T> {
     /// does: as genradix_ptr_alloc_preallocated(), for a caller that
     /// allocates as it needs to outside a lock, and retries under it.
     #[inline]
-    pub fn get_or_alloc_preallocated(&mut self, idx: usize, node: &mut NewNode, gfp: c::gfp_t)
+    pub fn get_or_alloc_preallocated(&mut self, idx: usize, node: &mut NewNode, gfp: Flags)
         -> Result<&mut T, AllocError>
     {
         let offset = Self::offset(idx).ok_or(AllocError)?;
-        let gfp = current_gfp_context_raw(gfp);
+        let gfp = current_gfp_context(gfp);
         let p = self.tree.ptr_alloc(offset, Some(node), gfp);
         // SAFETY: as get_mut()'s
         NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
@@ -460,7 +459,7 @@ impl NewNode {
         let n = if nofail {
             kzalloc_nofail(NODE_SIZE).cast()
         } else {
-            Node::alloc(current_gfp_context_raw(c::GFP_KERNEL))
+            Node::alloc(current_gfp_context(flags::WAIT))
         };
         if n.is_null() {
             return Err(AllocError);
@@ -516,7 +515,7 @@ impl<T: Zeroable> SharedGenRadix<T> {
     #[inline]
     pub fn prealloc(&self, idx: usize) -> Result<(), AllocError> {
         let offset = GenRadix::<T>::offset(idx).ok_or(AllocError)?;
-        let gfp = current_gfp_context_raw(c::GFP_KERNEL);
+        let gfp = current_gfp_context(flags::WAIT);
         let p = self.tree().ptr_alloc(offset, None, gfp);
         if p.is_null() { Err(AllocError) } else { Ok(()) }
     }

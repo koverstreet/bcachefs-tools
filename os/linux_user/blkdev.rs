@@ -163,7 +163,7 @@ pub fn max_discard_sectors(_bdev: &BlockDevice) -> u32 {
 
 /// Discard @nr_sectors from @sector on @bdev, and wait for it: userspace
 /// discards nothing.
-pub fn issue_discard(_bdev: &BlockDevice, _sector: u64, _nr_sectors: u64, _gfp: c::gfp_t)
+pub fn issue_discard(_bdev: &BlockDevice, _sector: u64, _nr_sectors: u64, _gfp: crate::util::alloc::Flags)
     -> Result<(), BchError>
 {
     Ok(())

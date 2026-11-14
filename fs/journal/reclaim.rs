@@ -7,6 +7,7 @@ use core::ffi::c_int;
 use core::sync::atomic::Ordering::{Acquire, Relaxed};
 
 use crate::alloc::discard::discard_opt_enabled;
+use crate::util::alloc::flags;
 use crate::btree::cache::BTREE_WRITE_IO_LIMIT;
 use crate::c;
 use crate::c::JournalBucketStage::{JOURNAL_BUCKET_cur, JOURNAL_BUCKET_discard};
@@ -376,7 +377,7 @@ impl c::journal {
                 discard_opt_enabled(fs, &ca) &&
                 blkdev::max_discard_sectors(bdev) != 0 {
                 let _ = blkdev::issue_discard(bdev, ca.bucket_to_sector(bucket),
-                                              ca.mi.get().bucket_size.into(), c::GFP_NOIO);
+                                              ca.mi.get().bucket_size.into(), flags::NOIO);
             }
 
             let mut g = self.lock.lock();
