@@ -196,8 +196,9 @@ fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> 
 /// pub only where it's pub and holds no count - not the count, written
 /// private or pub(crate), nor an embedded header, Head<..> or an array of
 /// them, whose own count it is, nor one of @private, which the family names:
-/// a counted type's count. Those read through the definition's Deref to its head, and
-/// can't be written: a count changes only through what holds the value.
+/// a counted type's count. Those read through the definition's Deref to its
+/// head, and can't be written: a count changes only through what holds the
+/// value.
 fn inline_field(f: &FieldDef, private: &[Ident]) -> TokenStream {
     let public = matches!(f.vis, syn::Visibility::Public(_));
     let elem = match &f.ty {
@@ -207,6 +208,23 @@ fn inline_field(f: &FieldDef, private: &[Ident]) -> TokenStream {
     let vis = (public && generic_arg(elem, "Head").is_none() && !private.contains(&f.ident)).then(|| quote!(pub));
     let (field, ty) = (&f.ident, &f.ty);
     quote!(#vis #field: #ty,)
+}
+
+/// The tail of @def, the struct as written of a type whose count is its own,
+/// and the fields before it: its trailing [E; 0], or what #[@attr(tail = ..)]
+/// says - `[E]`, the states' `_tail`, or `NAME: [E]` - after all of them.
+fn own_tail<'a>(def: &'a StructDef, tail: Option<(Option<Ident>, syn::Type)>, attr: &str)
+    -> Result<(Ident, syn::Type, &'a [FieldDef]), String>
+{
+    let name = &def.ident;
+    if let Some((tail, elem)) = tail {
+        return Ok((tail.unwrap_or_else(|| format_ident!("_tail")), elem, &def.fields[..]));
+    }
+    let (last, fields) = def.fields.split_last().ok_or_else(|| format!("{name}: #[{attr}] is for a struct with fields"))?;
+    let elem = flex_elem(&last.ty).ok_or_else(|| format!("{name}: its last field, {}, isn't a flexible array, \
+                                                         [E; 0] - #[{attr}(tail = [E])] says what its tail is",
+                                                        last.ident))?;
+    Ok((last.ident.clone(), elem.clone(), fields))
 }
 
 /// The item's #[repr]s, as written.
@@ -231,8 +249,6 @@ struct Shape<'a> {
     /// After the fields: @tail, a slice of @elem.
     tail:    Ident,
     elem:    syn::Type,
-    /// The definition as written, renamed: X_head or X_whole.
-    written:     Ident,
     /// Where the tail starts, if not where the head ends: inside it, the
     /// head being the struct as written, rounded up into the tail's first
     /// bytes - a key value's (#[whole(tail = ..)]).
@@ -255,7 +271,7 @@ struct Shape<'a> {
 /// @methods, more of them.
 fn dst(ty: &Ident, doc: &str, shape: &Shape<'_>, methods: TokenStream) -> TokenStream {
     let vs = vs();
-    let Shape { repr, fields, private, head, deref, tail, elem, written: _, tail_at } = shape;
+    let Shape { repr, fields, private, head, deref, tail, elem, tail_at } = shape;
     let tail_at = tail_at.clone().unwrap_or_else(|| quote!(::core::mem::size_of::<#head>()));
     let plain_fields = fields.iter().map(|f| {
         let ty = &f.ty;
@@ -399,8 +415,7 @@ fn family(name: &Ident, unvalidated: &Ident, validated: &Ident, whole: &Ident) -
 
 /// A #[members] field's members on each of @defs too - a family's definitions
 /// in place, with its fields inline: their Deref to the struct as written
-/// can't reach
-/// its setters.
+/// can't reach its setters.
 fn members_on(name: &Ident, fields: &[FieldDef], defs: &[&Ident]) -> Result<TokenStream, String> {
     let mut out = TokenStream::new();
     for f in fields.iter().filter(|f| f.bitfield) {
@@ -448,7 +463,7 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
     out.extend(family(name, &unvalidated, &validated, &validated));
     out.extend(generic_type(name,
         &Generic { default: "Validated", unsized_states: &unsized_states, arm_of: None,
-                   whole: None, written: Some(&shape.written), typestate: false },
+                   whole: None, written: Some(&shape.head), typestate: false },
         &doc));
     Ok(out)
 }
@@ -474,22 +489,11 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     let name = &def.ident;
     let last = def.fields.last().ok_or_else(|| format!("{name}: an unsized vstruct has fields"))?;
     let args = family_args(attr, &["tail"]).map_err(|e| format!("{name}: {e}"))?;
-    let (tail, elem) = match args.tail {
-        None => match flex_elem(&last.ty) {
-            Some(elem) => (last.ident.clone(), elem.clone()),
-            None => return Err(format!("{name}: its last field, {}, isn't a flexible array, [E; 0] - \
-                                        #[unsized_vstruct(tail = [E])] says what its tail holds",
-                                       last.ident)),
-        },
-        Some((tail, elem)) => (tail.unwrap_or_else(|| format_ident!("_tail")), elem),
-    };
+    let (tail, elem, fields) = own_tail(&def, args.tail, "unsized_vstruct")?;
     let written = crate::tokens::derived(name, "head");
     let last = &last.ident;
-    // its fields, inline in each state's definition - but its flexible array,
-    // where that's the tail
-    let fields = if tail == *last { &def.fields[..def.fields.len() - 1] } else { &def.fields[..] };
     let shape = Shape { repr: repr_attrs(&def), fields, private: Vec::new(), head: written.clone(),
-                        deref: written.clone(), tail, elem, written: written.clone(), tail_at: None };
+                        deref: written.clone(), tail, elem, tail_at: None };
 
     let mut out = rename_struct(item, &def, &written)?;
     let msg = format!("{name}: its tail starts where its header ends");
@@ -541,22 +545,14 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 
     // the array: a trailing [E; 0], or a field of a field - after the head,
     // where dst() asserts its tail starts
-    let (tail, elem, fields, tail_at) = match args.tail {
-        Some((tail, elem)) => (tail.unwrap_or_else(|| format_ident!("_tail")), elem, &def.fields[..],
-                               quote!(::core::mem::size_of::<#written>())),
-        None => {
-            let last = def.fields.last().ok_or_else(|| format!("{name}: a counted type has fields"))?;
-            let Some(elem) = flex_elem(&last.ty) else {
-                return Err(format!("{name}: its last field, {}, isn't a flexible array, [E; 0] - \
-                                    #[counted(.., tail = [E])] says where its array is", last.ident));
-            };
-            let field = &last.ident;
-            (field.clone(), elem.clone(), &def.fields[..def.fields.len() - 1],
-             quote!(::core::mem::offset_of!(#written, #field)))
-        }
+    let named = args.tail.is_some();
+    let (tail, elem, fields) = own_tail(&def, args.tail, "counted")?;
+    let tail_at = match named {
+        true => quote!(::core::mem::size_of::<#written>()),
+        false => quote!(::core::mem::offset_of!(#written, #tail)),
     };
     let shape = Shape { repr: repr_attrs(&def), fields, private: vec![count_field.clone()], head: written.clone(),
-                        deref: written.clone(), tail, elem: elem.clone(), written: written.clone(), tail_at: None };
+                        deref: written.clone(), tail, elem: elem.clone(), tail_at: None };
 
     let mut out = rename_struct(item, &def, &written)?;
     let msg = format!("{name}: its elements aren't a whole number of its alignment");
@@ -696,11 +692,11 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     // The struct as written, renamed X_whole: X<Whole>'s representation
     let written = crate::tokens::derived(name, "whole");
     // A value in place, as long as what holds it says: for a grown type the
-    // floor and the bytes there are, below; else all of its fields, then
-    // the bytes past them
-    let all = crate::tokens::derived(name, "validated");
+    // floor and the bytes there are; else all of its fields, then the bytes
+    // past them
+    let ty = crate::tokens::derived(name, "validated");
     // in place, the states but Whole: a DST
-    let states = [("Validated", all.clone()), ("Unvalidated", all.clone())];
+    let states = [("Validated", ty.clone()), ("Unvalidated", ty.clone())];
     let derives = derive_names(def);
     // X is generated: a derive generic_type() doesn't forward would be
     // X_whole's alone, out of X's reach. Ours of the struct as written are
@@ -712,48 +708,95 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
                             only the derives generic_type() forwards to it: {}", WHOLE_DERIVES.join(", ")));
     }
     let is_plain = derives.iter().any(|d| d == "Plain");
-    // the tail, the struct's last field - or the bytes past its fields
-    let (fields, tail_name, elem, tail_at) = match &tail {
-        Some((t, e)) => {
-            let at = def.fields.iter().position(|f| f.ident == *t).unwrap_or(def.fields.len());
-            (&def.fields[..at], t.clone(), e.clone(), Some(quote!(::core::mem::offset_of!(#written, #t))))
-        }
-        None => (&def.fields[..], format_ident!("_rest"), parse_quote!(u8), None),
-    };
-    let Some((from, at)) = grew else {
-        // Every valid value has all of it: in place, all its fields and the
-        // bytes past them, in every state but Whole, the struct itself
-        let doc = match &tail {
-            Some((t, _)) => format!(" {name} in place: its fields - those that hold a count private -\n \
-                                     then {t}, from where the struct has it, as long as the value is. It\n \
-                                     derefs to the struct, to read."),
-            None => format!(" {name} in place: its fields - those that hold a count private - then\n \
-                             the bytes past them there are, written by a version since, at\n \
-                             exactly the value's length. It derefs to the struct, to read."),
-        };
-        let shape = Shape { repr: repr_attrs(def), fields, private: Vec::new(), head: written.clone(),
-                            deref: name.clone(), tail: tail_name, elem, written: written.clone(), tail_at };
-        let generic_doc = format!(" {name}, in state S - Whole unless named: the struct, every field a field.\n \
-                                   Validated or Unvalidated, a value in place - all its fields, then\n \
-                                   the bytes past them a version since wrote, at the value's length.");
-        let mut out = rename_struct(item, def, &written)?;
-        out.extend(dst(&all, &doc, &shape, TokenStream::new()));
-        out.extend(members_on(name, fields, &[&all])?);
-        out.extend(family(name, &all, &all, &written));
-        out.extend(whole_arm_ref(&written, is_plain));
-        out.extend(generic_type(name, &sized_generic(&all, &written, &derives, &states, false), &generic_doc));
-        out.extend(bkey_impls);
-        return Ok(out);
-    };
-    if !is_plain {
-        return Err(format!("{name}: #[grown] without Plain - the struct is a value in place, every \
-                            byte of it read, so it can't have padding"));
-    }
-    let (floor, later) = def.fields.split_at(at);
-
     let fl = crate::tokens::derived(name, "floor");
-    let ty = crate::tokens::derived(name, "validated");
 
+    let mut out = rename_struct(item, def, &written)?;
+    let (shape, methods, doc, generic_doc) = match grew {
+        None => whole_in_place(def, &written, tail),
+        Some((from, at)) => {
+            if !is_plain {
+                return Err(format!("{name}: #[grown] without Plain - the struct is a value in place, every \
+                                    byte of it read, so it can't have padding"));
+            }
+            let (floor, later) = def.fields.split_at(at);
+            out.extend(floor_struct(name, &fl, &written, floor, from));
+            grown_in_place(name, &fl, &ty, &written, floor, later)?
+        }
+    };
+    out.extend(dst(&ty, &doc, &shape, methods));
+    // a grown type's in place definition derefs to the floor: a floor
+    // #[members] field's getters there, its setters on the definition
+    let defs = [&fl, &ty];
+    out.extend(members_on(name, shape.fields, if grew.is_some() { &defs } else { &defs[1..] })?);
+    // the cast checks its head - all of the struct, or a grown type's floor:
+    // an unvalidated one is as good
+    out.extend(family(name, &ty, &ty, &written));
+    out.extend(whole_arm_ref(&written, is_plain));
+    let generic = Generic { default: "Whole", unsized_states: &states, arm_of: Some(&ty),
+                            whole: Some((&written, &derives)), written: None, typestate: grew.is_some() };
+    out.extend(generic_type(name, &generic, &generic_doc));
+    if grew.is_some() {
+        // all of it is a value in place, every field there: X's methods, on
+        // X<Validated>, are the struct's too
+        out.extend(quote! {
+            impl ::core::ops::Deref for #written {
+                type Target = #name<#vs::Validated>;
+                #[inline]
+                fn deref(&self) -> &Self::Target {
+                    // SAFETY: all of its bytes - Plain, each a field's - which a value in
+                    // place is as long as
+                    unsafe { &*<Self::Target as #vs::Unsized>::from_raw(
+                        (self as *const Self).cast(), ::core::mem::size_of::<Self>()) }
+                }
+            }
+
+            impl ::core::ops::DerefMut for #written {
+                #[inline]
+                fn deref_mut(&mut self) -> &mut Self::Target {
+                    // SAFETY: as deref()'s
+                    unsafe { &mut *<Self::Target as #vs::Unsized>::from_raw_mut(
+                        (self as *mut Self).cast(), ::core::mem::size_of::<Self>()) }
+                }
+            }
+        });
+    }
+    out.extend(bkey_impls);
+    Ok(out)
+}
+
+/// A #[whole] type's value in place: every valid value has all of it - its
+/// fields, then @tail, from where the struct has it, or the bytes past them.
+/// Its Shape, its methods, its doc and X<S>'s.
+fn whole_in_place<'a>(def: &'a StructDef, written: &Ident, tail: Option<(Ident, syn::Type)>)
+    -> (Shape<'a>, TokenStream, String, String)
+{
+    let name = &def.ident;
+    let (fields, tail_name, elem, tail_at, doc) = match tail {
+        Some((t, e)) => {
+            let at = def.fields.iter().position(|f| f.ident == t).unwrap_or(def.fields.len());
+            let doc = format!(" {name} in place: its fields - those that hold a count private -\n \
+                               then {t}, from where the struct has it, as long as the value is. It\n \
+                               derefs to the struct, to read.");
+            (&def.fields[..at], t.clone(), e, Some(quote!(::core::mem::offset_of!(#written, #t))), doc)
+        }
+        None => {
+            let doc = format!(" {name} in place: its fields - those that hold a count private - then\n \
+                               the bytes past them there are, written by a version since, at\n \
+                               exactly the value's length. It derefs to the struct, to read.");
+            (&def.fields[..], format_ident!("_rest"), parse_quote!(u8), None, doc)
+        }
+    };
+    let shape = Shape { repr: repr_attrs(def), fields, private: Vec::new(), head: written.clone(),
+                        deref: name.clone(), tail: tail_name, elem, tail_at };
+    let generic_doc = format!(" {name}, in state S - Whole unless named: the struct, every field a field.\n \
+                               Validated or Unvalidated, a value in place - all its fields, then\n \
+                               the bytes past them a version since wrote, at the value's length.");
+    (shape, TokenStream::new(), doc, generic_doc)
+}
+
+/// A #[grown] type's floor, @fl: @floor, the fields before @from, at
+/// @written's offsets.
+fn floor_struct(name: &Ident, fl: &Ident, written: &Ident, floor: &[FieldDef], from: &Ident) -> TokenStream {
     let floor_fields = floor.iter().map(|f| {
         let (field, fty) = (&f.ident, &f.ty);
         quote!(pub #field: #fty,)
@@ -763,7 +806,36 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
         let field = &f.ident;
         quote!(assert!(::core::mem::offset_of!(#fl, #field) == ::core::mem::offset_of!(#written, #field));)
     });
+    let floor_doc = format!(" {name}'s floor: the fields every valid one has - all it had before\n \
+                             it grew, from {from} on.");
+    let floor_msg = format!("{name}: its floor ends where {from} starts");
+    let mut out = quote! {
+        #[doc = #floor_doc]
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        #[allow(non_camel_case_types)]
+        pub struct #fl {
+            #(#floor_fields)*
+        }
+    };
+    out.extend(plain(fl, &floor_tys));
+    out.extend(quote! {
+        const _: () = {
+            #(#floor_offsets)*
+            assert!(::core::mem::size_of::<#fl>() == ::core::mem::offset_of!(#written, #from), #floor_msg);
+        };
+    });
+    out
+}
 
+/// A #[grown] type's value in place, @ty: @floor's fields, then the bytes
+/// there are - @later's fields getters, zero past the end. Its Shape, its
+/// methods, its doc and X<S>'s.
+fn grown_in_place<'a>(name: &Ident, fl: &Ident, ty: &Ident, written: &Ident, floor: &'a [FieldDef],
+                      later: &[FieldDef])
+    -> Result<(Shape<'a>, TokenStream, String, String), String>
+{
+    let vs = vs();
     const METHODS: &[&str] = &["whole", "whole_mut", "as_bytes", "as_bytes_mut"];
     let mut getters = TokenStream::new();
     for f in later {
@@ -800,9 +872,6 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
         #getters
     };
 
-    let floor_doc = format!(" {name}'s floor: the fields every valid one has - all it had before\n \
-                             it grew, from {from} on.");
-    let floor_msg = format!("{name}: its floor ends where {from} starts");
     let dst_doc = format!(" A {name} as it was written, by any version since it had its floor:\n \
                            the floor's fields, those that hold a count private, then the\n \
                            bytes there are, at exactly the value's length. It derefs to the\n \
@@ -813,68 +882,8 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
                                it had its floor: the floor's fields, then the bytes there are; a\n \
                                field it gained later is a getter, zero where the value ends.");
     let shape = Shape { repr: quote!(#[repr(C)]), fields: floor, private: Vec::new(), head: fl.clone(),
-                        deref: fl.clone(), tail: format_ident!("_rest"), elem: parse_quote!(u8), written: written.clone(),
-                        tail_at: None };
-
-    let mut out = rename_struct(item, def, &written)?;
-    out.extend(quote! {
-        #[doc = #floor_doc]
-        #[repr(C)]
-        #[derive(Clone, Copy)]
-        #[allow(non_camel_case_types)]
-        pub struct #fl {
-            #(#floor_fields)*
-        }
-    });
-    out.extend(plain(&fl, &floor_tys));
-    out.extend(quote! {
-        const _: () = {
-            #(#floor_offsets)*
-            assert!(::core::mem::size_of::<#fl>() == ::core::mem::offset_of!(#written, #from), #floor_msg);
-        };
-    });
-    out.extend(dst(&ty, &dst_doc, &shape, methods));
-    // the in place definition derefs to the floor: a floor #[members]
-    // field's getters there, its setters on the definition
-    out.extend(members_on(name, floor, &[&fl, &ty])?);
-    // the cast checks the floor: an unvalidated one is as good
-    out.extend(family(name, &ty, &ty, &written));
-    out.extend(whole_arm_ref(&written, is_plain));
-    out.extend(generic_type(name, &sized_generic(&ty, &written, &derives, &states, true), &generic_doc));
-    // all of it is a value in place, every field there: X's methods, on
-    // X<Validated>, are the struct's too
-    out.extend(quote! {
-        impl ::core::ops::Deref for #written {
-            type Target = #name<#vs::Validated>;
-            #[inline]
-            fn deref(&self) -> &Self::Target {
-                // SAFETY: all of its bytes - Plain, each a field's - which a value in
-                // place is as long as
-                unsafe { &*<Self::Target as #vs::Unsized>::from_raw(
-                    (self as *const Self).cast(), ::core::mem::size_of::<Self>()) }
-            }
-        }
-
-        impl ::core::ops::DerefMut for #written {
-            #[inline]
-            fn deref_mut(&mut self) -> &mut Self::Target {
-                // SAFETY: as deref()'s
-                unsafe { &mut *<Self::Target as #vs::Unsized>::from_raw_mut(
-                    (self as *mut Self).cast(), ::core::mem::size_of::<Self>()) }
-            }
-        }
-    });
-    out.extend(bkey_impls);
-    Ok(out)
-}
-
-/// A sized type's X<S>: Whole unless named, the struct @whole, with the value
-/// traits @derives names; in place, @inplace, an arm wherever that is - and
-/// if @typestate, Unvalidated a typestate over Validated.
-fn sized_generic<'a>(inplace: &'a Ident, whole: &'a Ident, derives: &'a [Ident],
-                     unsized_states: &'a [(&'a str, Ident)], typestate: bool) -> Generic<'a> {
-    Generic { default: "Whole", unsized_states, arm_of: Some(inplace), whole: Some((whole, derives)),
-              written: None, typestate }
+                        deref: fl.clone(), tail: format_ident!("_rest"), elem: parse_quote!(u8), tail_at: None };
+    Ok((shape, methods, dst_doc, generic_doc))
 }
 
 /// The traits @def derives.
