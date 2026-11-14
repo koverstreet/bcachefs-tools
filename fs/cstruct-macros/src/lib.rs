@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-//! The macros the types C once shared are written with - see fs/types/lib.rs.
+//! The macros our types are written with - see fs/types/lib.rs.
 //! Each parses its input with fs/types/cstruct.rs, so a mistake is a compile
 //! error at the item, and expands to its Rust side:
 //!
@@ -23,7 +23,7 @@
 //!                        and its values
 //!   atomic_bitfield! { .. }
 //!                        a bitfield's value, and an atomic word of it
-//!   tagged_union! { .. } a tagged union with a stable representation: C's
+//!   tagged_union! { .. } a tagged union with a stable representation: its
 //!                        storage, the tag a Determinant of it, declared as
 //!                        an enum, the arms its variants (tagged_union.rs)
 //!   #[derive(TypeInfo)]  runtime type information, for kvdb (typeinfo.rs)
@@ -32,10 +32,10 @@
 //!   #[derive(View)]      a projection for each field on a View of the type:
 //!                        its fields read as zero past a short value's end
 //!                        (vstructs.rs)
-//!   #[unsized_vstruct]   on C's struct ending in a flexible array: a family
+//!   #[unsized_vstruct]   on a struct ending in a flexible array: a family
 //!                        of definitions, one per state, and X<S> picking
 //!                        one (vstructs.rs)
-//!   #[grown(from = F)]   on C's struct of a type that grew: its family - the
+//!   #[grown(from = F)]   on the struct of a type that grew: its family - the
 //!                        whole struct, and the floor and the bytes there
 //!                        are (vstructs.rs)
 //!   __prt!(..)           message!()'s and prt!()'s format strings, written
@@ -152,8 +152,8 @@ pub fn type_name(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
     })
 }
 
-/// `#[derive(TypeInfo)]`: runtime type information for a struct or union C
-/// shares - see typeinfo.rs.
+/// `#[derive(TypeInfo)]`: runtime type information for a struct or union, for
+/// kvdb - see typeinfo.rs.
 #[proc_macro_derive(TypeInfo, attributes(type_name_of))]
 pub fn derive_type_info(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[derive(TypeInfo)]", || typeinfo::derive(input.into()))
@@ -258,8 +258,8 @@ pub(crate) fn members_forwarder(name: &Ident, f: &cstruct::FieldDef) -> Result<O
     Ok(Some(fwd))
 }
 
-/// Zeroable when every field is - as bindgen's C structs are, deriving
-/// pin_init::MaybeZeroable, and the same way: the for<'__dummy> makes each
+/// Zeroable when every field is - pin_init's #[derive(MaybeZeroable)], done
+/// the same way: the for<'__dummy> makes each
 /// bound a condition on the impl, not an error where it doesn't hold. So a
 /// struct holding a Rust type with invariants - a lock - isn't, and
 /// #[derive(Init)] can't zero it. core's atomics are, as their integers are,
@@ -309,7 +309,7 @@ pub(crate) fn is_core_atomic(ty: &syn::Type) -> bool {
 /// offset above is a u64; `name: bool` is one bit. A member of any other type -
 /// an enum - gives its width, #[bits(N)], as bitfield-struct has it; a uN or
 /// bool member's #[bits(..)] gives only its options, as #[bits(default = 1)]
-/// does. Members are pub, as C's are, unless written otherwise, and their
+/// does. Members are pub unless written otherwise, and their
 /// forwarders the same - pub(self), for one only its own module may set, has
 /// none.
 ///
@@ -395,10 +395,11 @@ pub fn counters(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
     })
 }
 
-/// `#[unsized_vstruct]`, on C's definition of a struct ending in a flexible
+/// `#[unsized_vstruct]`, on the definition of a struct ending in a flexible
 /// array - or `#[unsized_vstruct(tail = [E])]`, `tail = NAME: [E]`, saying
 /// what follows its header: the family of its definitions, one per state -
-/// C's, renamed X__head, and each state's, a DST of the header and its tail -
+/// the one written, renamed X__head, and each state's, a DST of the header
+/// and its tail -
 /// and X<S>, a generic struct over the one for S. See vstructs.rs.
 #[proc_macro_attribute]
 pub fn unsized_vstruct(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -415,7 +416,7 @@ pub fn grown(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
 }
 
 /// `#[counted]`, `#[counted(PATH)]`, `#[counted(PATH, tail = [E])]` or
-/// `tail = NAME: [E]`, on C's definition of a header and an array it counts
+/// `tail = NAME: [E]`, on the definition of a header and an array it counts
 /// in elements: its family, the count private in each state's definition -
 /// see vstructs.rs.
 #[proc_macro_attribute]
@@ -423,7 +424,7 @@ pub fn counted(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
     expand("#[counted]", || vstructs::counted(attr.into(), item.into()))
 }
 
-/// `#[whole]`, on C's definition of a type every valid value of which has
+/// `#[whole]`, on the definition of a type every valid value of which has
 /// all of it - a superblock section or journal entry of fixed fields: its
 /// family, every state all of it, at the value's length - see vstructs.rs.
 #[proc_macro_attribute]
@@ -455,8 +456,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     let update = members.iter().map(|(m, set, _, update, ty, vis)| quote! {
         #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) { self.#set(f(self.#m())) }
     });
-    // An integer member's NAME_MAX, the largest value it holds - as C's
-    // LE*_BITMASK() defines
+    // An integer member's NAME_MAX, the largest value it holds
     let is_int = |ty: &syn::Type| matches!(ty, syn::Type::Path(p)
         if p.path.get_ident().is_some_and(|i| matches!(i.to_string().as_str(), "u8" | "u16" | "u32" | "u64")));
     let max = item.fields.iter()
@@ -944,10 +944,10 @@ pub fn atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStrea
 ///           Volatile can hold
 ///   flags   a bitflags type
 ///
-/// Any of them can be a #[bitfield]'s member, as C's `enum btree_id
-/// btree_id:8`: it has the const into_bits() bitfield-struct converts with,
-/// and from_bits() - for flags, bitflags' from_bits() is the checked one, so
-/// a member names `from = T::from_bits_retain`. A closed enum's member only
+/// Any of them can be a #[bitfield]'s member, `#[bits(8)] btree_id: Btree`:
+/// it has the const into_bits() bitfield-struct converts with, and
+/// from_bits() - for flags, bitflags' from_bits() is the checked one, so a
+/// member names `from = T::from_bits_retain`. A closed enum's member only
 /// ever holds one of its values, as its type says; from_bits() of anything
 /// else is memory corruption, and panics.
 ///
@@ -1063,7 +1063,7 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
     }).collect::<Vec<_>>();
     out.extend(match e.kind {
         EnumKind::Closed => {
-            // what it prints as: its list's name for it, as C's string table has it
+            // what it prints as: its label
             let labels = e.variants.iter().map(|v| e.label(v).map(|l| quote!(#[label(#l)])));
             let msg = format!("{name}::from_bits(): not a {name}");
             // as bit numbers: a set of them takes a bit past the largest -

@@ -54,7 +54,7 @@ pub(crate) struct FieldDef {
     /// struct's too.
     pub(crate) bitfield: bool,
     /// #[counted_by(FIELD)], on a trailing `[T; 0]`: the field its length
-    /// is - C's __counted_by(), as the struct's FlexArray impl.
+    /// is, as the struct's FlexArray impl.
     pub(crate) counted_by: Option<syn::Ident>,
     /// #[placed_at]: the field #[placed] added, its place's At - which
     /// #[derive(Init)]'s init() takes. (cstruct-macros' place.rs.)
@@ -378,7 +378,7 @@ fn generic_args<'a>(ty: &'a syn::Type, name: &str) -> Option<Vec<&'a syn::Generi
 }
 
 /// @ty's path's names, if it's a plain path - no generics but lifetimes, which
-/// C doesn't see.
+/// don't change what it is.
 fn path_names(ty: &syn::Type) -> Option<Vec<String>> {
     let lifetimes_only = |a: &syn::PathArguments| match a {
         syn::PathArguments::None => true,
