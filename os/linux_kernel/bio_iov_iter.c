@@ -5,7 +5,7 @@
 #include <linux/uio.h>
 #include <linux/version.h>
 
-#include "vendor/bio_iov_iter.h"
+#include "bio_iov_iter.h"
 
 static inline bool bio_full(struct bio *bio, unsigned len)
 {

@@ -58,8 +58,8 @@ bcachefs-y		:=			\
 	locking/locking.o			\
 	util/rcu.o				\
 	util/util.o				\
-	vendor/bio_iov_iter.o			\
 	vendor/closure.o			\
+	../os/linux_kernel/bio_iov_iter.o	\
 	../os/linux_kernel/shim.o
 
 ifdef KBUILD_EXTMOD

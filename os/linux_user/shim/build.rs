@@ -45,7 +45,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", wrapper.display());
     // what it includes of fs/: the vendored C and the shims' headers
-    for h in ["vendor/closure.h", "vendor/bio_iov_iter.h", "locking/shim.h", "util/shim.h"] {
+    for h in ["vendor/closure.h", "locking/shim.h", "util/shim.h"] {
         println!("cargo:rerun-if-changed={}", fs_dir.join(h).display());
     }
     println!("cargo:rerun-if-changed=../../../clang_target.rs");
@@ -124,10 +124,9 @@ fn main() {
         // bindings have them in-kernel; add as needed:
         .allowlist_var("ENOENT|ENOMEM|EINVAL|ENAMETOOLONG|ERANGE|ENODATA|E2BIG|EACCES|EBUSY")
         .allowlist_var("ECHILD|EROFS|EXDEV|ENOTDIR|EIO|ENOTEMPTY|EFBIG|ENOSPC|EINTR|EPERM|EFAULT|ENOKEY|EAGAIN")
-        // The vendored C fs/ uses - closures, bio mapping - is the shim's
-        // too: not bcachefs's, so not the fs crate's to define.
+        // The vendored C fs/ uses - closures - is the shim's too: not
+        // bcachefs's, so not the fs crate's to define.
         .allowlist_file(format!("{}/vendor/closure.h", fs_dir.display()))
-        .allowlist_file(format!("{}/vendor/bio_iov_iter.h", fs_dir.display()))
         // fs/'s C shims, over what's a macro or differs from the kernel
         .allowlist_file(format!("{}/locking/shim.h", fs_dir.display()))
         .allowlist_file(format!("{}/util/shim.h", fs_dir.display()))
