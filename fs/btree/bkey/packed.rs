@@ -119,14 +119,6 @@ impl<'a> VstructMut<'a, BkeyPHeader> {
 }
 
 impl<V: ?Sized> BkeyP<V> {
-    pub fn as_ffi(&self) -> *const c::bkey_packed {
-        (self as *const Self).cast()
-    }
-
-    pub fn as_ffi_mut(&mut self) -> *mut c::bkey_packed {
-        (self as *mut Self).cast()
-    }
-
     pub fn as_slice(&self) -> &[u64] {
         &self.data
     }
@@ -140,11 +132,11 @@ impl<V: ?Sized> BkeyP<V> {
     }
 
     fn header(&self) -> &BkeyPHeader {
-        unsafe { &*self.as_ffi().cast::<BkeyPHeader>() }
+        unsafe { &*core::ptr::from_ref(self).cast::<BkeyPHeader>() }
     }
 
     fn header_mut(&mut self) -> &mut BkeyPHeader {
-        unsafe { &mut *self.as_ffi_mut().cast::<BkeyPHeader>() }
+        unsafe { &mut *core::ptr::from_mut(self).cast::<BkeyPHeader>() }
     }
 
     pub fn u64s(&self) -> usize {
@@ -231,7 +223,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
             assert!(self.is_bkey_i());
         }
-        unsafe { &*self.as_ffi().cast::<c::bkey>() }
+        unsafe { &*core::ptr::from_ref(self).cast::<c::bkey>() }
     }
 
     /// Just the key, not the value.
@@ -342,14 +334,14 @@ impl NodeContents {
 impl<'a, V: ?Sized> From<&'a BkeyI<V>> for &'a BkeyP<V> {
     fn from(k: &'a BkeyI<V>) -> Self {
         let u64s = k.k.u64s as usize;
-        unsafe { &*(core::ptr::slice_from_raw_parts(k.as_ffi().cast::<u64>(), u64s) as *const BkeyP<V>) }
+        unsafe { &*(core::ptr::slice_from_raw_parts(core::ptr::from_ref(k).cast::<u64>(), u64s) as *const BkeyP<V>) }
     }
 }
 
 impl<'a, V: ?Sized> From<&'a mut BkeyI<V>> for &'a mut BkeyP<V> {
     fn from(k: &'a mut BkeyI<V>) -> Self {
         let u64s = k.k.u64s as usize;
-        unsafe { &mut *(core::ptr::slice_from_raw_parts_mut(k.as_ffi_mut().cast::<u64>(), u64s) as *mut BkeyP<V>) }
+        unsafe { &mut *(core::ptr::slice_from_raw_parts_mut(core::ptr::from_mut(k).cast::<u64>(), u64s) as *mut BkeyP<V>) }
     }
 }
 
@@ -361,7 +353,7 @@ impl<'a, V: ?Sized + Unsized> TryFrom<&'a BkeyP<V>> for &'a BkeyI<V> {
         if !k.is_bkey_i() {
             return Err(k);
         }
-        Ok(unsafe { &*super::types::cast_unsized(k.as_ffi().cast()) })
+        Ok(unsafe { &*super::types::cast_unsized(core::ptr::from_ref(k).cast()) })
     }
 }
 
@@ -372,7 +364,7 @@ impl<'a, V: ?Sized + Unsized> TryFrom<&'a mut BkeyP<V>> for &'a mut BkeyI<V> {
         if !k.is_bkey_i() {
             return Err(k);
         }
-        Ok(unsafe { &mut *super::types::cast_unsized_mut(k.as_ffi_mut().cast()) })
+        Ok(unsafe { &mut *super::types::cast_unsized_mut(core::ptr::from_mut(k).cast()) })
     }
 }
 

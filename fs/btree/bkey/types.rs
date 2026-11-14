@@ -200,17 +200,9 @@ impl<'a, S: KeyState> crate::util::vstructs::VstructMut<'a, c::bkey_i, S> {
 }
 
 impl<V: ?Sized> BkeyI<V> {
-    pub fn as_ffi(&self) -> *const c::bkey_i {
-        (self as *const Self).cast()
-    }
-
     /// All of it, as its u64s say: header and value.
     pub fn as_bytes(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.as_ffi().cast::<u8>(), self.k.bytes()) }
-    }
-
-    pub fn as_ffi_mut(&mut self) -> *mut c::bkey_i {
-        (self as *mut Self).cast()
+        unsafe { core::slice::from_raw_parts(core::ptr::from_ref(self).cast::<u8>(), self.k.bytes()) }
     }
 
     /// The same key, its value a W.
@@ -218,7 +210,7 @@ impl<V: ?Sized> BkeyI<V> {
     /// # Safety
     /// Its value is a W, as cast_unsized()'s.
     pub(crate) unsafe fn cast<W: ?Sized + Unsized>(&self) -> &BkeyI<W> {
-        unsafe { &*cast_unsized(self.as_ffi()) }
+        unsafe { &*cast_unsized(core::ptr::from_ref(self).cast()) }
     }
 
     /// cast(), to edit.
@@ -226,7 +218,7 @@ impl<V: ?Sized> BkeyI<V> {
     /// # Safety
     /// As cast()'s.
     pub(crate) unsafe fn cast_mut<W: ?Sized + Unsized>(&mut self) -> &mut BkeyI<W> {
-        unsafe { &mut *cast_unsized_mut(self.as_ffi_mut()) }
+        unsafe { &mut *cast_unsized_mut(core::ptr::from_mut(self).cast()) }
     }
 
     pub fn v(&self) -> &V {

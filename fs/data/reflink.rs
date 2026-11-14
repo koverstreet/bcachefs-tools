@@ -844,7 +844,7 @@ unsafe fn __make_extent_indirect(
     orig.k.set_key_type(BkeyType::reflink_p);
     orig.k.set_val_bytes(size_of::<c::ReflinkP>());
     // SAFETY: the room the caller vouched for
-    let orig = unsafe { &mut *BkeyI::from_raw_mut(orig.as_ffi_mut()) };
+    let orig: &mut BkeyI = unsafe { orig.cast_mut() };
     (&mut *orig).val_bytes_mut().fill(0);
 
     let r_p = orig.arm::<c::ReflinkP>().expect("a reflink_p, as just made");
