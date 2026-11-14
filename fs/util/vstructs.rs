@@ -410,6 +410,16 @@ fn checked_bytes<T: Plain + SelfSized>(bytes: &[u8]) -> Result<usize, VStructErr
     Ok(len)
 }
 
+/// The plain T at the start of @b, by value, at any alignment: an error if
+/// @b is shorter than it.
+pub fn read_plain<T: Plain>(b: &[u8]) -> Result<T, VStructError> {
+    if b.len() < size_of::<T>() {
+        return Err(VStructError::Overrun { ty: core::any::type_name::<T>(), want: size_of::<T>(), have: b.len() });
+    }
+    // SAFETY: a T's bytes are there, and any bytes are one
+    Ok(unsafe { b.as_ptr().cast::<T>().read_unaligned() })
+}
+
 /// A thin entry - a T whose header says how long it is: a key - and its
 /// bytes, in state S: its container's, walked out of one, or Unvalidated,
 /// bytes from outside - off a device, from the kernel. Its header's count is
@@ -1527,6 +1537,53 @@ pub trait ArmAt: ArmRef {
     fn arm_at(b: &[u8]) -> Result<&Self, VStructError>;
 }
 
+/// A sized tagged union @U holding @arm, its arms @at bytes in: the payload
+/// into zeroed storage, then @D marks it - stabby's order, so a tag that's
+/// bits of the payload is the last thing written, not overwritten by it.
+/// Never a typed copy, which leaves the bytes past a short payload undefined.
+///
+/// # Safety
+/// @U is plain data, and @A one of its arms, plain data in bounds @at.
+pub unsafe fn from_arm<U, D, A>(arm: A, at: usize) -> U
+where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag>
+{
+    let mut u = unsafe { with_payload(arm, at) };
+    D::set(&mut u, A::TAG);
+    u
+}
+
+/// from_arm() of an arm ending in a flexible array, and that array - as many
+/// elements as the arm's header says: an error if @U can't hold them.
+///
+/// # Safety
+/// As from_arm()'s.
+pub unsafe fn from_arm_tailed<U, D, A>(arm: A, tail: &[A::Elem], at: usize) -> Result<U, VStructError>
+where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag> + FlexArray
+{
+    assert_eq!(arm.nr(), tail.len(), "{}: its header's count, and the elements given",
+               core::any::type_name::<A>());
+    let (tail_at, len) = (at + A::TAIL, size_of_val(tail));
+    if tail_at + len > size_of::<U>() {
+        return Err(VStructError::Overrun { ty: core::any::type_name::<A>(), want: A::TAIL + len,
+                                           have: size_of::<U>() - at });
+    }
+    let mut u: U = unsafe { with_payload(arm, at) };
+    // in bounds, as checked above, and the elements are plain data
+    unsafe { core::ptr::copy_nonoverlapping(tail.as_ptr().cast::<u8>(), (&raw mut u).cast::<u8>().add(tail_at), len) };
+    D::set(&mut u, A::TAG);
+    Ok(u)
+}
+
+/// Zeroed @U holding @arm's payload @at, not yet marked as holding it.
+///
+/// # Safety
+/// As from_arm()'s.
+unsafe fn with_payload<U, A>(arm: A, at: usize) -> U {
+    let mut u: U = unsafe { core::mem::zeroed() };
+    unsafe { (&raw mut u).cast::<u8>().add(at).cast::<A>().write_unaligned(arm) };
+    u
+}
+
 /// Why an Unvalidated tagged union has no arm to hand out: its tag, @T,
 /// isn't one this version knows, or the arm is longer than the bytes there
 /// are - its header says so, or for one as long as its arm (size: arm), its
@@ -1553,16 +1610,50 @@ impl<T: core::fmt::Debug> core::fmt::Display for ArmError<T> {
 impl<T: core::fmt::Debug> std::error::Error for ArmError<T> {}
 
 /// A tagged union read off bytes, each value as long as the arm its tag
-/// selects - tagged_union!'s `size: arm`: an ACL's entries.
+/// selects - tagged_union!'s `size: arm`: an ACL's entries. Every arm starts
+/// with Head, the tag in it.
 pub trait ArmSized: Sized {
     type Tag;
+    type Head: Plain + Copy;
+    /// The tag's, over the head.
+    type Det: crate::types::Determinant<Self::Head>;
 
     /// The value at the start of @b: an error if its tag isn't one of ours -
     /// how long it is, only its arm says - or @b is shorter than its arm.
     fn read(b: &[u8]) -> Result<Self, ArmError<Self::Tag>>;
 
+    /// Its arm's bytes, its tag among them as its arm has it.
+    fn arm_bytes(&self) -> &[u8];
+
+    /// Its tag, as the head holds it: its variant's.
+    fn tag_raw(&self) -> <Self::Det as crate::types::Determinant<Self::Head>>::Tag;
+
     /// How long it is: its arm's size.
-    fn bytes(&self) -> usize;
+    fn bytes(&self) -> usize {
+        self.arm_bytes().len()
+    }
+
+    /// Its head, which every arm starts with: the fields they share.
+    fn head(&self) -> Self::Head {
+        *cast_plain(self.arm_bytes()).expect("an arm starts with the head")
+    }
+
+    /// Write it at the start of @out - its arm's bytes, then its tag, last,
+    /// as a sized union's new() marks it - and give back the rest of @out.
+    /// Panics if @out is shorter than it: bytes() sizes @out.
+    fn write<'o>(&self, out: &'o mut [u8]) -> &'o mut [u8] {
+        let b = self.arm_bytes();
+        let (to, rest) = out.split_at_mut(b.len());
+        to.copy_from_slice(b);
+        <Self::Det as crate::types::Determinant<Self::Head>>::set(
+            cast_plain_mut(to).expect("an arm starts with the head"), self.tag_raw());
+        rest
+    }
+
+    /// The values @b holds, one after another.
+    fn walk(b: &[u8]) -> ArmWalk<'_, Self> {
+        ArmWalk::new(b)
+    }
 }
 
 /// The ArmSized values @b holds, one after another, each as long as its
