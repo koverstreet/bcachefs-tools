@@ -150,7 +150,7 @@ use crate::util::projections::{AtomicWord, Volatile, VolatileWriter, PublishedOn
 use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
-use crate::types::{bits_to_longs, ArmOf, Le32, Le64, LeValue};
+use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
@@ -646,18 +646,6 @@ pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &c::bch_opts, read_offset: u6
 
 /// The versions this one knows, oldest first, and their names.
 const VERSIONS: &[(&str, u64)] = <MetadataVersion as crate::util::names::Names>::ENTRIES;
-
-/// Every version is 16 bits: the superblock's and a bset's are __le16, a
-/// jset's __le32.
-impl LeValue<u16> for MetadataVersion {
-    fn from_int(v: u16) -> Self { Self(v.into()) }
-    fn into_int(self) -> u16 { self.0 as u16 }
-}
-
-impl LeValue<u32> for MetadataVersion {
-    fn from_int(v: u32) -> Self { Self(v) }
-    fn into_int(self) -> u32 { self.0 }
-}
 
 impl MetadataVersion {
     pub const fn new(major: u32, minor: u32) -> Self {

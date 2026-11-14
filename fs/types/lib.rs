@@ -20,7 +20,8 @@ pub const fn field_size<S, F>(_f: fn(*const S) -> *const F) -> u64 {
 /// integer.
 ///
 /// Or what the field holds, stored as the integer: Le16<MetadataVersion>'s
-/// get() is a MetadataVersion.
+/// get() is a MetadataVersion. Le8 is a byte that holds one - a u8 field of
+/// an enum that's a u32 elsewhere.
 macro_rules! le_int {
     ($($name:ident: $t:ty),*) => { $(
         #[repr(transparent)]
@@ -59,6 +60,7 @@ macro_rules! le_int {
         impl<T: LeValue<$t>> $name<T> {
             pub fn get(self) -> T { T::from_int(self.to_int()) }
             pub fn set(&mut self, v: T) { self.0 = v.into_int().to_le() }
+            pub fn update(&mut self, f: impl FnOnce(T) -> T) { self.set(f(self.get())) }
         }
 
         impl<T: LeValue<$t>> From<T> for $name<T> {
@@ -101,7 +103,7 @@ macro_rules! le_int {
         }
     )* };
 }
-le_int!(Le16: u16, Le32: u32, Le64: u64);
+le_int!(Le8: u8, Le16: u16, Le32: u32, Le64: u64);
 
 /// What an LeN field holds, stored as @I: its integer, or a type made from
 /// one.

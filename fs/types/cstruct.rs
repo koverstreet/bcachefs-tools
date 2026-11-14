@@ -631,11 +631,13 @@ pub(crate) struct IntType {
 }
 
 /// The integer type @ty is, if it's one TypeInfo reads as an integer: Rust's
-/// and C's integers, the endian ones - Le16..Le64, zerocopy's le:: and be:: -
-/// and the unsigned atomics.
+/// and C's integers, the endian ones - Le8..Le64, whatever value they hold,
+/// zerocopy's le:: and be:: - and the unsigned atomics.
 fn int_type(ty: &syn::Type) -> Option<IntType> {
     let syn::Type::Path(p) = ty else { return None };
-    if p.qself.is_some() || p.path.segments.iter().any(|s| !s.arguments.is_none()) {
+    let le = p.path.segments.last()
+        .is_some_and(|s| matches!(s.ident.to_string().as_str(), "Le8" | "Le16" | "Le32" | "Le64"));
+    if p.qself.is_some() || p.path.segments.iter().rev().skip(le as usize).any(|s| !s.arguments.is_none()) {
         return None;
     }
     let path: Vec<String> = p.path.segments.iter().map(|s| s.ident.to_string()).collect();
@@ -665,6 +667,7 @@ fn int_type(ty: &syn::Type) -> Option<IntType> {
         [.., "AtomicU32"]                       => int(Some(4), "Native", false),
         [.., "AtomicU64"]                       => int(Some(8), "Native", false),
         [.., "AtomicUsize" | "AtomicULong"]     => int(None,    "Native", false),
+        [.., "Le8"]                             => int(Some(1), "Little", false),
         [.., "Le16"] | ["le", "U16"]            => int(Some(2), "Little", false),
         [.., "Le32"] | ["le", "U32"]            => int(Some(4), "Little", false),
         [.., "Le64"] | ["le", "U64"]            => int(Some(8), "Little", false),
@@ -690,9 +693,9 @@ pub(crate) enum FieldType<'a> {
 pub(crate) fn field_type(ty: &syn::Type) -> FieldType<'_> {
     match ty {
         syn::Type::Array(a) => FieldType::Array { elem: &a.elem, n: &a.len },
-        t => match path_names(t) {
-            Some(p) => FieldType::Named { int: int_type(t), name: p.last().cloned().unwrap_or_default() },
-            None => FieldType::Opaque,
+        t => match (int_type(t), path_names(t)) {
+            (None, None) => FieldType::Opaque,
+            (int, p) => FieldType::Named { int, name: p.and_then(|p| p.last().cloned()).unwrap_or_default() },
         },
     }
 }

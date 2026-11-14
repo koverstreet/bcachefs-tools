@@ -1111,6 +1111,25 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
     let docs: Vec<_> = e.variants.iter().map(|v| { let d = &v.docs; quote!(#(#[doc = #d])*) }).collect();
     let discs = values.iter().map(|v| v.as_ref().map(|x| quote!(= #x)));
     let values = values.iter().map(|v| v.as_ref().expect("only a closed enum's goes unwritten"));
+    // An LeN field of an open enum is stored as its integer or a narrower
+    // one - a byte of a u32 enum - and one of flags as theirs
+    let uints = ["u8", "u16", "u32", "u64"];
+    let n = uints.iter().position(|u| repr == u).map_or(0, |i| i + 1);
+    let widths = if e.kind == EnumKind::Flags { &uints[n.saturating_sub(1)..n] } else { &uints[..n] };
+    let too_wide = format!("{name}: a value too wide for its field");
+    let le_values = widths.iter().map(|w| {
+        let w = format_ident!("{w}");
+        let (from, into) = match e.kind {
+            EnumKind::Flags => (quote!(Self::from_bits_retain(v)), quote!(self.bits())),
+            _ => (quote!(Self(v.into())), quote!(#w::try_from(self.0).expect(#too_wide))),
+        };
+        quote! {
+            impl crate::types::LeValue<#w> for #name {
+                fn from_int(v: #w) -> Self { #from }
+                fn into_int(self) -> #w { #into }
+            }
+        }
+    }).collect::<Vec<_>>();
     out.extend(match e.kind {
         EnumKind::Closed => {
             // what it prints as: its list's name for it, as C's string table has it
@@ -1171,6 +1190,7 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
             // SAFETY: its integer, every value of which is one
             unsafe impl crate::util::vstructs::Plain for #name {}
             crate::one_word!(#name);
+            #(#le_values)*
         },
         EnumKind::Flags => quote! {
             ::bitflags::bitflags! {
@@ -1192,6 +1212,8 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
                 fn try_from(v: u64) -> Result<Self, Self::Error> { #repr::try_from(v).map(Self::from_bits_retain) }
             }
             unsafe impl crate::util::vstructs::Plain for #name {}
+            crate::one_word!(#name);
+            #(#le_values)*
 
             // The flags as plain integers, for a type-level constant: one
             // that calls bitflags' const fns can cycle in rustc's
