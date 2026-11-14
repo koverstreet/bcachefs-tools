@@ -966,7 +966,6 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
         btree_roots_to_journal_entries(fs, ew, btree_roots_have).expect("root_journal_res's room");
 
         let mut d = c::jset_entry_datetime::default();
-        d.entry.type_ = c::JsetEntryType::datetime.0 as u8;
         d.seconds.set(ktime_get_real_seconds() as u64);
         ew.push_entry(d).expect("super_entries_journal_res's room");
 
@@ -1314,7 +1313,6 @@ impl c::journal {
             }
 
             let mut r = c::jset_entry_rewind_limit::default();
-            r.entry.type_ = c::JsetEntryType::rewind_limit.0 as u8;
             r.seq.set(self.lock.rewind_seq.get().min(seq + 1));
             Some(r)
         } else {

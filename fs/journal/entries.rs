@@ -7,7 +7,8 @@
 use core::mem::size_of;
 
 use crate::c;
-use crate::util::vstructs::{plain_bytes, Head, Plain, VStruct};
+use crate::types::ArmOf;
+use crate::util::vstructs::{cast_plain_mut, plain_bytes, Head, Plain, VStruct};
 use zerocopy::IntoBytes;
 
 /// No room left in the buffer for the entry.
@@ -101,12 +102,14 @@ impl<'a> EntryWriter<'a> {
         Ok(())
     }
 
-    /// @e, a whole entry of its type, its header's count set here:
+    /// @e, a whole entry of its type, its header's count and type set here:
     /// jset_entry_init(), filled in.
-    pub fn push_entry<E: VStruct + Plain>(&mut self, mut e: E) -> Result<(), NoRoom> {
+    pub fn push_entry<E: VStruct + Plain + ArmOf<c::jset_entry, Tag = u8>>(&mut self, mut e: E) -> Result<(), NoRoom> {
         const { assert!(size_of::<E>() % size_of::<u64>() == 0) };
         e.set_val_u64s(size_of::<E>() / size_of::<u64>() - HEADER_U64S);
-        self.reserve(size_of::<E>() / size_of::<u64>())?.as_mut_bytes().copy_from_slice(plain_bytes(&e));
+        let b = self.reserve(size_of::<E>() / size_of::<u64>())?.as_mut_bytes();
+        b.copy_from_slice(plain_bytes(&e));
+        cast_plain_mut::<Head<c::jset_entry>>(b).expect("an entry, u64 aligned").type_ = E::TAG;
         Ok(())
     }
 }

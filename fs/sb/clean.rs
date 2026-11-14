@@ -44,7 +44,7 @@ impl SbFieldOps for Section {
         write!(out, "journal_seq:    {}\n", f.journal_seq.get());
 
         for e in f.entries().map_while(Result::ok) {
-            if e.type_ == c::JsetEntryType::btree_keys.0 as u8 && e.u64s() == 0 {
+            if e.type_() == c::JsetEntryType::btree_keys && e.u64s() == 0 {
                 continue;
             }
             journal_entry_to_text(out, fs, e);
@@ -125,7 +125,7 @@ type Key<'a> = VstructRef<'a, c::bkey_i, Validated>;
 fn btree_root<'a>(mut entries: impl Iterator<Item = &'a c::jset_entry>, id: u32)
     -> Option<(u8, Option<Key<'a>>)>
 {
-    let e = entries.find(|e| e.type_ == c::JsetEntryType::btree_root.0 as u8 &&
+    let e = entries.find(|e| e.type_() == c::JsetEntryType::btree_root &&
                               u32::from(e.btree_id) == id)?;
     Some((e.level, e.entries().next()))
 }
@@ -185,14 +185,12 @@ pub(crate) const COMMON_BYTES: usize = size_of::<c::jset_entry_usage>() + 2 * si
 /// version, and both io clocks' times.
 pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {
     let mut u = c::jset_entry_usage::default();
-    u.entry.type_ = c::JsetEntryType::usage.0 as u8;
     u.entry.btree_id = c::FsUsageType::key_version.0 as u8;
     u.v = Le64::new(fs.key_version.load(Relaxed) as u64);
     w.push_entry(u)?;
 
     for (rw, clock) in fs.io_clock.iter().enumerate() {
         let mut e = c::jset_entry_clock::default();
-        e.entry.type_ = c::JsetEntryType::clock.0 as u8;
         e.rw = rw as u8;
         e.time = Le64::new(clock.now.load(Relaxed) as u64);
         w.push_entry(e)?;
@@ -264,7 +262,7 @@ pub fn strip_alloc(fs: &Fs, guard: &mut SbLockGuard<'_>) {
         while src < f.len() {
             let e = c::jset_entry::<Unvalidated>::from_bytes(&f[src..]).expect("an entry that fits");
             let len = size_of_val(e);
-            if !(e.type_ == c::JsetEntryType::btree_root.0 as u8 && btree_id_is_alloc(e.btree_id.into())) {
+            if !(e.type_() == c::JsetEntryType::btree_root && btree_id_is_alloc(e.btree_id.into())) {
                 f.copy_within(src..src + len, dst);
                 dst += len;
             }
