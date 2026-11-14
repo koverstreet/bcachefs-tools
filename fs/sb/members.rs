@@ -606,7 +606,7 @@ impl c::bch_member {
             failure_domain:         0,
             state:                  self.state(),
             discard:                self.discard(),
-            data_allowed:           DataTypes::from_bits_retain(self.data_allowed().into()),
+            data_allowed:           self.data_allowed(),
             // one-biased on disk: 0 is the default, 1
             durability:             self.durability().checked_sub(1).unwrap_or(1),
             freespace_initialized:  self.freespace_initialized(),

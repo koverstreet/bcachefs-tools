@@ -37,7 +37,7 @@ use crate::util::parse_human_size;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use crate::wrappers::sysfs;
 use bcachefs_kernel::sb::io::SbResize;
-use bcachefs_kernel::format::{Btree, CompressionType, DataType, BkeyType, SbFeature};
+use bcachefs_kernel::format::{Btree, CompressionType, DataType, DataTypes, BkeyType, SbFeature};
 
 const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
@@ -124,12 +124,8 @@ fn count_input_size(dir: &std::fs::File) -> u64 {
 fn set_data_allowed_for_image_update(fs: &Fs) {
     let mut sb = fs.sb_lock();
 
-    sb.fs_member_mut(0).set_data_allowed(DataType::user.bit() as u8);
-
-    sb.fs_member_mut(1).set_data_allowed(
-        (DataType::journal.bit()
-            | DataType::btree.bit()) as u8,
-    );
+    sb.fs_member_mut(0).set_data_allowed(DataTypes::user);
+    sb.fs_member_mut(1).set_data_allowed(DataTypes::journal | DataTypes::btree);
 
     // Not started yet: the start persists this. It needs the in-memory
     // member info updated now, for the allocator.
@@ -324,9 +320,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     // Allow btree data on primary device
     {
         let mut sb = fs.sb_lock();
-        let m = sb.fs_member_mut(0);
-        let allowed = m.data_allowed() | DataType::btree.bit() as u8;
-        m.set_data_allowed(allowed);
+        sb.fs_member_mut(0).update_data_allowed(|a| a | DataTypes::btree);
         fs.write_super(&mut sb);
     }
 
@@ -364,9 +358,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     }
 
     // Allow journal on primary device
-    let m = sb.fs_member_mut(0);
-    let allowed = m.data_allowed() | DataType::journal.bit() as u8;
-    m.set_data_allowed(allowed);
+    sb.fs_member_mut(0).update_data_allowed(|a| a | DataTypes::journal);
 
     // Set nbuckets
     sb.fs_member_mut(0).nbuckets = nbuckets.into();

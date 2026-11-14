@@ -1184,6 +1184,13 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
             impl #name {
                 pub const fn into_bits(self) -> #repr { self.bits() }
             }
+            impl From<#name> for u64 {
+                fn from(v: #name) -> u64 { v.bits().into() }
+            }
+            impl TryFrom<u64> for #name {
+                type Error = core::num::TryFromIntError;
+                fn try_from(v: u64) -> Result<Self, Self::Error> { #repr::try_from(v).map(Self::from_bits_retain) }
+            }
             unsafe impl crate::util::vstructs::Plain for #name {}
 
             // The flags as plain integers, for a type-level constant: one

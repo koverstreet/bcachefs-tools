@@ -102,7 +102,8 @@ pub struct bch_member_flags {
     /* 4-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
     __:                             u10,
     discard:                        bool,
-    data_allowed:                   u5,
+    #[bits(5, from = c::DataTypes::from_bits_retain)]
+    data_allowed:                   c::DataTypes,
     group:                          u8,
     durability:                     u2,
     freespace_initialized:          bool,
