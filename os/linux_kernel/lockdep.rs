@@ -82,6 +82,16 @@ pub fn debug_check_no_locks_freed(p: *const c_void, len: usize) {
     let _ = (p, len);
 }
 
+/// The contention tracepoints, for a lock whose state is ours: of @lock's
+/// address, which they print and never follow.
+pub fn trace_contention_begin<L>(lock: &L, flags: core::ffi::c_uint) {
+    unsafe { c::rust_trace_contention_begin(ptr::from_ref(lock).cast(), flags) }
+}
+
+pub fn trace_contention_end<L>(lock: &L, ret: core::ffi::c_int) {
+    unsafe { c::rust_trace_contention_end(ptr::from_ref(lock).cast(), ret) }
+}
+
 pub fn mutex_assert_held(l: &mutex) {
     unsafe { c::rust_mutex_assert_held(ptr::from_ref(l).cast_mut().cast()) }
 }

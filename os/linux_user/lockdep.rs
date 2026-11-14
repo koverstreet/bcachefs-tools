@@ -29,5 +29,8 @@ impl LockdepMap {
 
 pub fn debug_check_no_locks_freed(_p: *const c_void, _len: usize) {}
 
+pub fn trace_contention_begin<L>(_lock: &L, _flags: core::ffi::c_uint) {}
+pub fn trace_contention_end<L>(_lock: &L, _ret: core::ffi::c_int) {}
+
 pub fn percpu_rwsem_assert_held(_: &percpu_rw_semaphore) {}
 pub fn percpu_rwsem_assert_held_write(_: &percpu_rw_semaphore) {}

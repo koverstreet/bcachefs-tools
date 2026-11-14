@@ -7,6 +7,7 @@
 #include <linux/blkdev.h>
 #include <linux/debugfs.h>
 #include <linux/gfp.h>
+#include <linux/local_lock.h>
 #include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/rwsem.h>
@@ -52,6 +53,15 @@ void rust_percpu_down_read(struct percpu_rw_semaphore *sem);
 void rust_percpu_up_read(struct percpu_rw_semaphore *sem);
 void rust_percpu_down_write(struct percpu_rw_semaphore *sem);
 void rust_percpu_up_write(struct percpu_rw_semaphore *sem);
+
+void rust_trace_contention_begin(const void *lock, unsigned int flags);
+void rust_trace_contention_end(const void *lock, int ret);
+
+void rust_local_lock_init(local_lock_t *lock);
+unsigned long rust_local_lock_irqsave(local_lock_t *pcp);
+void rust_local_unlock_irqrestore(local_lock_t *pcp, unsigned long flags);
+unsigned long rust_local_irq_save(void);
+void rust_local_irq_restore(unsigned long flags);
 
 void bch2_this_cpu_add_u32(u32 *pcp, u32 val);
 void bch2_this_cpu_add_u64(u64 *pcp, u64 val);

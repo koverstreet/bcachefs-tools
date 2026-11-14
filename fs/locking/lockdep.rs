@@ -10,7 +10,7 @@
 
 use super::{RawLock, RawLockBase, RawMovableLock, RawTimedLock, RawTryLock};
 use crate::os::lockdep::LockdepMap;
-use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
+use core::ffi::{c_ulong, c_void, CStr};
 
 /// A LockdepMap's initializer, its class the call site's, named @name:
 /// lockdep_init_map().
@@ -99,14 +99,4 @@ unsafe impl<R: RawTimedLock> RawTimedLock for Lockdep<R> {
         }
         g
     }
-}
-
-/// The contention tracepoints, for a lock whose state is ours: of @lock's
-/// address, which they print and never follow.
-pub fn trace_contention_begin<L>(lock: &L, flags: c_uint) {
-    unsafe { super::raw::rust_trace_contention_begin(core::ptr::from_ref(lock).cast(), flags) }
-}
-
-pub fn trace_contention_end<L>(lock: &L, ret: c_int) {
-    unsafe { super::raw::rust_trace_contention_end(core::ptr::from_ref(lock).cast(), ret) }
 }

@@ -94,8 +94,9 @@ use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::locking::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
-                     rust_local_unlock_irqrestore, MemallocFlags};
+use crate::c::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
+              rust_local_unlock_irqrestore};
+use crate::locking::MemallocFlags;
 use crate::util::alloc::{current_gfp_context_raw, AllocError};
 use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};

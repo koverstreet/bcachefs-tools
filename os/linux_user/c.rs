@@ -113,3 +113,6 @@ pub const REQ_META:     blk_opf_t = 1 << 12;
 pub const REQ_IDLE:     blk_opf_t = 1 << 15;
 pub const REQ_FUA:      blk_opf_t = 1 << 17;
 pub const REQ_PREFLUSH: blk_opf_t = 1 << 18;
+
+/// local_lock_t: nothing to it here, where a thread is its own CPU
+pub struct local_lock_t;
