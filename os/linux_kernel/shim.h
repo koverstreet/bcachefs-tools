@@ -67,6 +67,8 @@ struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const cha
 bool bch2_kthread_should_stop(void);
 struct task_struct *bch2_current(void);
 bool bch2_signal_pending_state(unsigned int state);
+void bch2_set_current_state(unsigned int state);
+void bch2_set_current_state_running(void);
 bool bch2_need_resched(void);
 #ifdef CONFIG_SMP
 bool bch2_owner_on_cpu(struct task_struct *owner);

@@ -390,3 +390,14 @@ bool bch2_static_branch_unlikely(struct static_key_false *key)
 {
 	return static_key_enabled(&key->key);
 }
+
+/* os/linux_kernel/sched.rs: set_current_state() is a macro */
+void bch2_set_current_state(unsigned int state)
+{
+	set_current_state(state);
+}
+
+void bch2_set_current_state_running(void)
+{
+	__set_current_state(TASK_RUNNING);
+}

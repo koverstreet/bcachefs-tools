@@ -214,7 +214,7 @@ unsafe extern "C" fn worker_thread(arg: *mut c_void) -> c_int {
 
     let mut st = lock();
     loop {
-        unsafe { c::bch2_set_current_state(c::TASK_INTERRUPTIBLE) };
+        crate::os::sched::set_current_state(c::TASK_INTERRUPTIBLE);
 
         if kthread_should_stop() {
             assert!(unsafe { (*wq).pending_work.is_empty() }, "workqueue stopped with work pending");
@@ -227,7 +227,7 @@ unsafe extern "C" fn worker_thread(arg: *mut c_void) -> c_int {
             st = lock();
             continue;
         };
-        unsafe { c::bch2_set_current_state_running() };
+        crate::os::sched::set_current_state_running();
 
         let work = unsafe { (*wq).pending_work.remove(i) }.expect("found");
         assert!(work_pending(work));

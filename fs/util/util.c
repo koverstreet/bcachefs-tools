@@ -75,14 +75,3 @@ void rust_kfree_rcu_mightsleep(void *p)
 {
 	kfree_rcu_mightsleep(p);
 }
-
-/* For util/sleep.rs: set_current_state() is a macro */
-void bch2_set_current_state(unsigned int state)
-{
-	set_current_state(state);
-}
-
-void bch2_set_current_state_running(void)
-{
-	__set_current_state(TASK_RUNNING);
-}

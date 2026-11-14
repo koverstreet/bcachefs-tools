@@ -104,7 +104,7 @@ pub fn sleep_until<T, E: SleepEnd>(how: Sleep<E>, mut cond: impl FnMut() -> Opti
     let mut left = how.timeout;
     let ret = loop {
         // SAFETY: our own state; set before the check
-        unsafe { c::bch2_set_current_state(how.state) };
+        crate::os::sched::set_current_state(how.state);
         if let Some(v) = cond() {
             break Ok(v);
         }
@@ -121,7 +121,7 @@ pub fn sleep_until<T, E: SleepEnd>(how: Sleep<E>, mut cond: impl FnMut() -> Opti
             if how.io { c::io_schedule_timeout(left as _) } else { c::schedule_timeout(left as _) }
         } as c_long;
     };
-    unsafe { c::bch2_set_current_state_running() };
+    crate::os::sched::set_current_state_running();
     ret
 }
 

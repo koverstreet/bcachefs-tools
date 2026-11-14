@@ -171,7 +171,7 @@ pub extern "C" fn run_shrinkers(gfp_mask: c::gfp_t, allocation_failed: bool) {
 
 unsafe extern "C" fn shrinker_thread(_arg: *mut c_void) -> c_int {
     while !kthread_should_stop() {
-        unsafe { c::bch2_set_current_state(c::TASK_INTERRUPTIBLE) };
+        super::sched::set_current_state(c::TASK_INTERRUPTIBLE);
         schedule_timeout(HZ as _);
 
         if kthread_should_stop() {

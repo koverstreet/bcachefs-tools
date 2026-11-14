@@ -52,6 +52,17 @@ pub fn memalloc_flags_for_gfp(gfp: c::gfp_t) -> u32 {
     flags
 }
 
+/// This task's state, @state, ordered before what it then checks:
+/// set_current_state().
+pub fn set_current_state(state: core::ffi::c_uint) {
+    unsafe { c::bch2_set_current_state(state) }
+}
+
+/// This task running again: __set_current_state(TASK_RUNNING).
+pub fn set_current_state_running() {
+    unsafe { c::bch2_set_current_state_running() }
+}
+
 /// Caught taken where it can't sleep, as C's might_sleep(): at the caller.
 #[track_caller]
 #[inline]
