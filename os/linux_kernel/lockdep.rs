@@ -82,6 +82,26 @@ pub fn debug_check_no_locks_freed(p: *const c_void, len: usize) {
     let _ = (p, len);
 }
 
+/// @take - which takes locks - run as if in reclaim: so lockdep knows reclaim
+/// may wait on them, and complains of any held across an allocation that may
+/// reclaim. Without lockdep there's no one to tell: @take isn't run.
+pub fn reclaim_lock_order(take: impl FnOnce()) {
+    #[cfg(CONFIG_LOCKDEP)]
+    {
+        unsafe extern "C" {
+            fn fs_reclaim_acquire(gfp_mask: c::gfp_t);
+            fn fs_reclaim_release(gfp_mask: c::gfp_t);
+        }
+
+        let gfp = crate::util::alloc::flags::WAIT.raw();
+        unsafe { fs_reclaim_acquire(gfp) };
+        take();
+        unsafe { fs_reclaim_release(gfp) };
+    }
+    #[cfg(not(CONFIG_LOCKDEP))]
+    let _ = take;
+}
+
 /// The contention tracepoints, for a lock whose state is ours: of @lock's
 /// address, which they print and never follow.
 pub fn trace_contention_begin<L>(lock: &L, flags: core::ffi::c_uint) {

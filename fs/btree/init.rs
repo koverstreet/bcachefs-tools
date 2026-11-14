@@ -271,18 +271,10 @@
  */
 
 use crate::btree::cache::{btree_evicted_size_exit, btree_evicted_size_init};
-#[cfg(all(kernel, CONFIG_LOCKDEP))]
-use crate::{c, util::alloc::flags};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::rcu::Flavor;
 use core::ptr::NonNull;
-
-#[cfg(all(kernel, CONFIG_LOCKDEP))]
-unsafe extern "C" {
-    fn fs_reclaim_acquire(gfp_mask: c::gfp_t);
-    fn fs_reclaim_release(gfp_mask: c::gfp_t);
-}
 
 /// # Safety
 /// Nothing uses @c's transactions after.
@@ -337,14 +329,11 @@ pub(crate) fn btree_init(fs: &Fs) -> Result<(), BchError> {
      * static annotation (hackily done) for lock ordering of reclaim vs.
      * btree node locks:
      */
-    #[cfg(all(kernel, CONFIG_LOCKDEP))]
-    {
-        unsafe { fs_reclaim_acquire(flags::WAIT.raw()) };
+    crate::os::lockdep::reclaim_lock_order(|| {
         let trans = crate::btree_trans!(fs);
         trans.mark_locked(false);
         drop(trans);
-        unsafe { fs_reclaim_release(flags::WAIT.raw()) };
-    }
+    });
 
     fs.btree.key_cache.setup()
 }
