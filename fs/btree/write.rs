@@ -271,7 +271,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     if let Some(parent) = parent {
         unsafe {
             bio_put(bio);
-            c::bio_endio(&raw mut (*parent).bio);
+            crate::os::bio::endio(&raw mut (*parent).bio);
         }
         return;
     }

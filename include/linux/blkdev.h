@@ -147,9 +147,5 @@ static inline bool dir_emit_dots(struct file *file, struct dir_context *ctx)
 
 #define capable(cap)		true
 
-int blk_status_to_errno(blk_status_t status);
-blk_status_t errno_to_blk_status(int errno);
-const char *blk_status_to_str(blk_status_t status);
-
 #endif /* __TOOLS_LINUX_BLKDEV_H */
 

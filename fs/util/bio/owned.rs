@@ -209,7 +209,7 @@ impl BioPool {
         let p = p.cast::<u8>();
         unsafe {
             let bio = p.add(self.front_pad).cast::<c::bio>().as_ptr();
-            c::bio_init(bio, bdev.cast(), p.add(vecs).cast().as_ptr(), nr_vecs, opf as _);
+            crate::os::bio::init(bio, bdev, p.add(vecs).cast().as_ptr(), nr_vecs, opf);
             (*bio).bi_pool = core::ptr::from_ref(self).cast_mut().cast();
             bio
         }
@@ -241,7 +241,7 @@ impl BioPool {
         if !split.is_null() {
             unsafe {
                 (*split).bi_iter.bi_size = sectors << 9;
-                c::bio_advance(bio, sectors << 9);
+                Bio::from_raw_mut(bio).advance(sectors << 9);
             }
         }
         split
@@ -335,7 +335,7 @@ unsafe extern "C" fn chain_endio(bio: *mut c::bio) {
             (*parent).bi_status = (*bio).bi_status;
         }
         bio_put(bio);
-        c::bio_endio(parent);
+        crate::os::bio::endio(parent);
     }
 }
 
@@ -572,7 +572,7 @@ where
     unsafe {
         ::pin_init::pin_init_from_closure(move |t: *mut T| {
             let bio = bio_of(t);
-            c::bio_init(bio, bdev.cast(), vecs.as_ptr().cast(), nr_vecs, opf as _);
+            crate::os::bio::init(bio, bdev, vecs.as_ptr().cast(), nr_vecs, opf);
             init_at(init(BioInPlace(bio)), t).inspect_err(|_| c::bio_uninit(bio))
         })
     }

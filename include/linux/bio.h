@@ -182,31 +182,6 @@ static inline void bio_clear_flag(struct bio *bio, unsigned int bit)
 	bio->bi_flags &= ~(1U << bit);
 }
 
-void bio_add_virt_nofail(struct bio *, void *, unsigned);
-
-static inline bool bio_add_vmalloc(struct bio *bio, void *vaddr, unsigned len)
-{
-	bio_add_virt_nofail(bio, vaddr, len);
-	return true;
-}
-
-extern void bio_endio(struct bio *);
-
-extern void bio_advance(struct bio *, unsigned);
-
-extern void bio_reset(struct bio *, struct block_device *, unsigned);
-
-extern void bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
-			       struct bio *src, struct bvec_iter *src_iter);
-extern void bio_copy_data(struct bio *dst, struct bio *src);
-
-void zero_fill_bio_iter(struct bio *bio, struct bvec_iter iter);
-
-static inline void zero_fill_bio(struct bio *bio)
-{
-	zero_fill_bio_iter(bio, bio->bi_iter);
-}
-
 #define bio_set_dev(bio, bdev)			\
 do {						\
 	(bio)->bi_bdev = (bdev);		\

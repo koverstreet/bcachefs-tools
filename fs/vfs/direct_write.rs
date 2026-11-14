@@ -314,8 +314,8 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
             break Ok(());
         }
 
-        unsafe { c::bio_reset(d.bio_mut(), core::ptr::null_mut(),
-                              c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE) };
+        unsafe { crate::os::bio::reset(d.bio_mut(), core::ptr::null_mut(),
+                                       c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE) };
     };
 
     if let Err(e) = ret {
@@ -337,7 +337,7 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
 unsafe fn dio_write_continue(dio: *mut Dio) {
     let mm = unsafe { (*dio).mm };
 
-    unsafe { c::bio_reset((*dio).bio_mut(), core::ptr::null_mut(), c::req_op_REQ_OP_WRITE) };
+    unsafe { crate::os::bio::reset((*dio).bio_mut(), core::ptr::null_mut(), c::req_op_REQ_OP_WRITE) };
 
     let _mm = mm.map(|mm| unsafe { mm.use_in_kthread() });
     unsafe { dio_write_loop(dio) };

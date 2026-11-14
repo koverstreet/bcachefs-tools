@@ -278,7 +278,7 @@ unsafe fn complete(bio: *mut c::bio, ret: i32) {
         if if rw { ret != (*bio).bi_iter.bi_size as i32 } else { ret < 0 } {
             (*bio).bi_status = if ret == -(c::ENOSPC as i32) { c::BLK_STS_NOSPC } else { c::BLK_STS_IOERR };
         }
-        c::bio_endio(bio);
+        super::bio::endio(bio);
     }
 }
 
@@ -384,7 +384,7 @@ unsafe fn submit_sync(bio: *mut c::bio) {
     if let Err(e) = preflush {
         eprintln!("fsync error: {}", std::io::Error::from(e));
         b.bi_status = c::BLK_STS_IOERR;
-        unsafe { c::bio_endio(bio) };
+        unsafe { super::bio::endio(bio) };
         return;
     }
 
@@ -458,7 +458,44 @@ pub unsafe fn submit_bio_wait(bio: *mut c::bio) -> Result<(), BchError> {
     while done.snapshot() == seen {
         let _ = done.wait(seen, Sleep::UNINTERRUPTIBLE.io());
     }
-    ret_to_result_void(unsafe { c::blk_status_to_errno((*bio).bi_status) })
+    ret_to_result_void(status_to_errno(unsafe { (*bio).bi_status }))
+}
+
+fn status_to_errno(status: c::blk_status_t) -> i32 {
+    -match status {
+        0                               => 0,
+        c::BLK_STS_NOTSUPP              => libc::EOPNOTSUPP,
+        c::BLK_STS_TIMEOUT              => libc::ETIMEDOUT,
+        c::BLK_STS_NOSPC                => libc::ENOSPC,
+        c::BLK_STS_TRANSPORT            => libc::ENOLINK,
+        c::BLK_STS_TARGET               => libc::EREMOTEIO,
+        c::BLK_STS_RESV_CONFLICT        => libc::EBADE,
+        c::BLK_STS_MEDIUM               => libc::ENODATA,
+        c::BLK_STS_PROTECTION           => libc::EILSEQ,
+        c::BLK_STS_RESOURCE             => libc::ENOMEM,
+        c::BLK_STS_DEV_RESOURCE         => libc::EBUSY,
+        c::BLK_STS_AGAIN                => libc::EAGAIN,
+        c::BLK_STS_OFFLINE              => libc::ENODEV,
+
+        /* device mapper special case, should not leak out: */
+        c::BLK_STS_DM_REQUEUE           => libc::EREMCHG,
+
+        /* zone device specific errors */
+        c::BLK_STS_ZONE_OPEN_RESOURCE   => libc::ETOOMANYREFS,
+        c::BLK_STS_ZONE_ACTIVE_RESOURCE => libc::EOVERFLOW,
+
+        /* Command duration limit device-side timeout */
+        c::BLK_STS_DURATION_LIMIT       => libc::ETIME,
+
+        c::BLK_STS_INVAL                => libc::EINVAL,
+
+        /* everything else not covered above: */
+        c::BLK_STS_IOERR                => libc::EIO,
+        _ => {
+            crate::warn_on_once!(true);
+            libc::EIO
+        }
+    }
 }
 
 unsafe extern "C" fn submit_bio_wait_endio(bio: *mut c::bio) {

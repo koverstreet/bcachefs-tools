@@ -57,7 +57,7 @@ impl BouncePool {
 
         while (bio.bi_iter.bi_size as usize) < size {
             let p = self.pool.alloc_raw()?;
-            unsafe { c::bio_add_virt_nofail(bio, p.as_ptr().cast(), POOL_LEN as u32) };
+            unsafe { crate::os::bio::add_virt_nofail(bio, p.as_ptr().cast(), POOL_LEN as u32) };
         }
         bio.bi_iter.bi_size = bio.bi_iter.bi_size.min(size as u32);
         Ok(())
@@ -92,7 +92,7 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) -> Res
         // SAFETY: no pointers in
         let p = NonNull::new(unsafe { c::rust_bio_pages_alloc(b, current_gfp_context_raw(gfp)) }).ok_or(AllocError)?;
         // SAFETY: a fresh allocation of @b bytes, the bio's now
-        unsafe { c::bio_add_virt_nofail(bio, p.as_ptr(), b as u32) };
+        unsafe { crate::os::bio::add_virt_nofail(bio, p.as_ptr(), b as u32) };
     }
     Ok(())
 }

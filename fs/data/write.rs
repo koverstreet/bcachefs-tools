@@ -1003,14 +1003,14 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
             n.bio_mut().set_dev(ca.disk_sb.bdev);
 
             if ty != DataType::btree && unlikely(fs.opts().no_data_io.get() != 0) {
-                unsafe { c::bio_endio(&raw mut n.bio) };
+                unsafe { crate::os::bio::endio(&raw mut n.bio) };
                 continue;
             }
 
             unsafe { crate::os::blkdev::submit_bio(&raw mut n.bio) };
         } else {
             n.bio.bi_status = c::BLK_STS_REMOVED;
-            unsafe { c::bio_endio(&raw mut n.bio) };
+            unsafe { crate::os::bio::endio(&raw mut n.bio) };
         }
     }
 }
@@ -1302,7 +1302,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     }
 
     match parent {
-        Some(parent) => unsafe { c::bio_endio(&raw mut (*parent).bio) },
+        Some(parent) => unsafe { crate::os::bio::endio(&raw mut (*parent).bio) },
         None => drop(unsafe { ClosureRef::adopt(&*cl) }),
     }
 }

@@ -24,11 +24,7 @@ fn csum_differs(a: c::bch_csum, b: c::bch_csum) -> bool {
 }
 
 fn bio_advance(bio: *mut c::bio, bytes: u32) {
-    unsafe {
-        let mut r = Bio::from_raw(bio).range();
-        r.advance(bytes);
-        (*bio).bi_iter = r.pos();
-    }
+    unsafe { Bio::from_raw_mut(bio).advance(bytes) };
 }
 
 fn bio_copy_data(dst: *mut c::bio, src: *mut c::bio) {

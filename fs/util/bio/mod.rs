@@ -255,7 +255,7 @@ impl Bio {
         }
         assert!(bio.bi_vcnt < bio.bi_max_vecs, "mapping {len} bytes: the bio's bvecs are full");
         // SAFETY: the caller's, and a bvec free
-        unsafe { c::bio_add_virt_nofail(bio, buf.cast(), len) };
+        unsafe { crate::os::bio::add_virt_nofail(bio, buf.cast(), len) };
     }
 
     /// Panics if the bio's bvecs are full.
@@ -278,7 +278,7 @@ impl Bio {
         let bio = self.as_mut().raw_mut();
         let vcnt = bio.bi_vcnt;
         // SAFETY: had by &mut, so not in flight
-        unsafe { c::bio_reset(bio, bdev.cast(), opf as _) };
+        unsafe { crate::os::bio::reset(bio, bdev, opf) };
         bio.bi_vcnt = vcnt;
         bio.bi_iter.bi_size = size;
     }
@@ -287,6 +287,14 @@ impl Bio {
     pub fn set_range(self: Pin<&mut Self>, range: BioRange<'_>) {
         assert!(range.is_of(&self), "a bio set to another bio's range");
         self.raw_mut().bi_iter = range.pos();
+    }
+
+    /// Its position @bytes on. Panics past its end.
+    pub fn advance(self: Pin<&mut Self>, bytes: u32) {
+        let mut r = self.range();
+        r.advance(bytes);
+        let pos = r.pos();
+        self.raw_mut().bi_iter = pos;
     }
 
     /// Panics past its end.

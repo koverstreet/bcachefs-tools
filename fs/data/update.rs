@@ -409,9 +409,9 @@ impl c::data_update {
 
         // SAFETY: its bios, and the bvecs just made for them
         unsafe {
-            c::bio_init(self.rbio.bio.as_ptr(), core::ptr::null_mut(), self.bvecs, nr_vecs as u16,
-                        c::req_op_REQ_OP_READ as _);
-            c::bio_init(&mut self.op.wbio.bio, core::ptr::null_mut(), self.bvecs, nr_vecs as u16, 0);
+            crate::os::bio::init(self.rbio.bio.as_ptr(), core::ptr::null_mut(), self.bvecs, nr_vecs as u16,
+                                 c::req_op_REQ_OP_READ);
+            crate::os::bio::init(&mut self.op.wbio.bio, core::ptr::null_mut(), self.bvecs, nr_vecs as u16, 0);
         }
         if pages::alloc_pages(&mut self.op.wbio.bio, block_size, buf_bytes as usize, c::GFP_KERNEL).is_err() {
             self.bios_free();

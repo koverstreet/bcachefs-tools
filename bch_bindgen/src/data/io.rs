@@ -88,8 +88,8 @@ impl WriteOp {
         let p = state.as_mut_ptr();
         let mut state = unsafe {
             let bio = &raw mut (*p).op.wbio.bio;
-            bcachefs_kernel::c::bio_init(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(),
-                                         MAX_BVECS as u16, 0);
+            bcachefs_kernel::os::bio::init(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(),
+                                           MAX_BVECS as u16, 0);
             Bio::from_raw_mut(bio).map(data.as_ptr().cast_mut(), data.len());
             c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
             (&raw mut (*p).waker).write(UnsafeCell::new(None));

@@ -813,7 +813,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
 
         rb.ca = fs.dev_get_ioref(rb.pick.ptr.dev().into());
         rb.start_time = local_clock();
-        unsafe { c::bio_reset(&raw mut rb.bio, ptr::null_mut(), c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META) };
+        unsafe { crate::os::bio::reset(&raw mut rb.bio, ptr::null_mut(), c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META) };
         rb.bio.bi_iter.bi_sector = rb.pick.ptr.offset();
         rb.bio.bi_iter.bi_size = b.buf_bytes() as u32;
 

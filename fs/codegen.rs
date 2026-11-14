@@ -187,7 +187,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "totalram_pages", "si_mem_available", "set_freezable", "freezing", "try_to_freeze",
     "bio_set_dev", "bio_iov_vecs_to_alloc", "bio_release_pages",
     // util/bio/owned.rs
-    "bio_advance", "bio_inc_remaining",
+    "bio_inc_remaining",
     // vfs/direct_write.rs: static inlines, and the VFS's write checks
     "inode_dio_begin", "inode_dio_end", "iocb_is_dsync", "generic_write_checks", "generic_write_sync",
     "file_remove_privs",
