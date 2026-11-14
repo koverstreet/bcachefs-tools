@@ -196,9 +196,11 @@ unsafe extern "C" fn bpf_trace(data: *mut c_void, fs: *const c_char, s: *const c
 /// The event's output, trace_raw_output_fs_str(): TP_printk().
 unsafe extern "C" fn output(iter: *mut c::trace_iterator, _flags: c_int,
                             event: *mut c::trace_event) -> c::print_line_t {
+    // an int, and print_line_t an enum, whose type is the bindings': signed
+    // or unsigned, by kernel and bindgen
     let ret = unsafe { c::trace_raw_output_prep(iter, event) };
-    if ret != c::print_line_t_TRACE_TYPE_HANDLED {
-        return ret;
+    if ret != c::print_line_t_TRACE_TYPE_HANDLED as c_int {
+        return ret as c::print_line_t;
     }
     unsafe {
         let entry = (*iter).ent.cast::<Entry>();

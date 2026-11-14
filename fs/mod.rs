@@ -316,6 +316,13 @@ pub mod c {
     #[cfg(kernel)]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
+    // codegen.rs blocklists it: ours, whether kernel::bindings has it or not
+    #[cfg(kernel)]
+    #[repr(C)]
+    pub struct trace_array {
+        _unused: [u8; 0],
+    }
+
     // A union bindgen can't make a Rust union - a member isn't Copy: the
     // closure's, holding a work_struct - is a struct of these markers over
     // its storage. Zeroed storage is each member zeroed: Zeroable if they

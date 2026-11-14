@@ -291,7 +291,16 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
                                      "folio", "page", "mm_struct", "key", "key_type", "srcu_struct",
                                      "workqueue_struct", "work_struct", "delayed_work",
                                      // declared by numa.h's and mm.h's externs from 7.3
-                                     "attribute_group"];
+                                     "attribute_group",
+                                     // trace_iterator's and trace_event_file's: declared in a
+                                     // header bound here or in one blocklisted, as the kernel
+                                     // includes them - which, before 7.0, kernel::bindings
+                                     // doesn't bind. mod.rs's own, opaque
+                                     "trace_array"];
+/// Structs only ever had by pointer, their fields not bound: exportfs.h's
+/// fid has a member named gen, a keyword in our edition that bindgen before
+/// 0.71 doesn't escape.
+const OPAQUE_TYPE: &[&str] = &["fid"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*", "key_type_user", "NUMA_NO_NODE",
@@ -350,6 +359,7 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
     for x in ALLOWLIST_TYPE     { flag!("--allowlist-type", *x); }
     for x in ALLOWLIST_VAR      { flag!("--allowlist-var", *x); }
     for x in BLOCKLIST_TYPE     { flag!("--blocklist-type", *x); }
+    for x in OPAQUE_TYPE        { flag!("--opaque-type", *x); }
     for d in blocklist_dirs     { flag!("--blocklist-file", d.as_str()); }
 
     a.push("--".into());
