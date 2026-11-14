@@ -293,40 +293,6 @@ pub(crate) fn parse_ioctl(input: proc_macro2::TokenStream) -> Result<IoctlList, 
     Ok(IoctlList { entries })
 }
 
-/// An enum's head, `#[open|closed|flags] pub enum NAME: REPR`, with no
-/// variants yet; the attributes that aren't
-/// its, and its body.
-pub(crate) fn parse_enum_head(input: syn::parse::ParseStream<'_>)
-        -> syn::Result<(EnumDef, Vec<syn::Attribute>, proc_macro2::TokenStream)> {
-    let mut kind = None;
-    let (mut own_to_text, mut nr) = (false, false);
-    let mut others = Vec::new();
-    for a in input.call(syn::Attribute::parse_outer)? {
-        match a.path().get_ident().map(|i| i.to_string()).as_deref() {
-            Some("open")        => kind = Some(EnumKind::Open),
-            Some("closed")      => kind = Some(EnumKind::Closed),
-            Some("flags")       => kind = Some(EnumKind::Flags),
-            Some("own_to_text") => own_to_text = true,
-            Some("nr")          => nr = true,
-            _ => others.push(a),
-        }
-    }
-    input.parse::<syn::Visibility>()?;
-    input.parse::<syn::Token![enum]>()?;
-    let name: syn::Ident = input.parse()?;
-    let kind = kind.ok_or_else(|| input.error(format!("{name}: #[open], #[closed] or #[flags]")))?;
-    input.parse::<syn::Token![:]>()?;
-    let repr: syn::Ident = input.parse()?;
-    if int_bits(&repr.to_string()).is_none() {
-        return Err(input.error(format!("{name}: REPR is an integer type")));
-    }
-    let body;
-    syn::braced!(body in input);
-    let def = EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(),
-                         own_to_text, nr };
-    Ok((def, others, body.parse()?))
-}
-
 /// @a's text, if it's a doc comment's line.
 pub(crate) fn doc_of(a: &syn::Attribute) -> Option<String> {
     match &a.meta {

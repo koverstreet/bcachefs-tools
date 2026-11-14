@@ -28,11 +28,10 @@
 //! tagged_union!'s tag enum is one, its arms the union's.
 
 use proc_macro2::{Delimiter, Ident, Literal, TokenStream, TokenTree};
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, ToTokens};
 use syn::punctuated::Punctuated;
 
-use crate::cstruct::{doc_of, int_of, parse_enum_head, parse_variant, split_commas, EnumDef, EnumKind,
-                     EnumVariant};
+use crate::cstruct::{doc_of, int_bits, int_of, parse_variant, split_commas, EnumDef, EnumKind, EnumVariant};
 use crate::{enum_gen, comma_list};
 
 pub(crate) struct Arm {
@@ -164,31 +163,37 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
     Ok(arms)
 }
 
-/// An enum of a declaration: `[#[..]] pub enum NAME: REPR { arms }`.
-pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
-    let (mut e, attrs, body) = syn::parse::Parser::parse2(parse_enum_head, input).map_err(|e| e.to_string())?;
-    let name = e.name.clone();
+/// The #[bch_enum(@kind)] @item: `#[repr(uN)] pub enum NAME { arms }`.
+pub(crate) fn declaration(kind: EnumKind, item: syn::ItemEnum) -> Result<TokenStream, String> {
+    let name = item.ident.clone();
     let err = |m: String| format!("{name}: {m}");
+    let (mut repr, mut docs, mut own_to_text, mut nr) = (None, Vec::new(), false, false);
     let (mut columns, mut mask) = (Vec::new(), None);
-    for a in attrs {
+    for a in &item.attrs {
         let args = || a.parse_args::<TokenStream>().map_err(|e| err(e.to_string()));
         match a.path().get_ident().map(|i| i.to_string()).as_deref() {
+            Some("repr")        => repr = Some(a.parse_args::<Ident>().map_err(|e| err(e.to_string()))?),
+            Some("own_to_text") => own_to_text = true,
+            Some("nr")          => nr = true,
             Some("arm_columns") => columns = self::columns(args()?).map_err(err)?,
             Some("mask")        => mask = Some(EnumDef { kind: EnumKind::Flags, ..tag_enum(args()?).map_err(err)? }),
-            Some("doc")         => e.docs.extend(doc_of(&a)),
+            Some("doc")         => docs.extend(doc_of(a)),
             _ => {
                 let path = a.path();
                 return Err(err(format!("#[{}]: not one of #[bch_enum]'s", quote!(#path))));
             }
         }
     }
+    let repr = repr.filter(|r| int_bits(&r.to_string()).is_some())
+        .ok_or_else(|| err("#[repr(uN)]: its integer type".into()))?;
+    let e = EnumDef { kind, name: name.clone(), docs, repr, variants: Vec::new(), own_to_text, nr };
     if e.kind == EnumKind::Flags && !columns.is_empty() {
         return Err(err("#[arm_columns] are an enum's, not flags' - bits".into()));
     }
     if e.kind == EnumKind::Flags && mask.is_some() {
         return Err(err("#[mask] is of bit numbers, not flags".into()));
     }
-    let arms = arms(body, &columns, false).map_err(err)?;
+    let arms = arms(item.variants.to_token_stream(), &columns, false).map_err(err)?;
 
     let mut out = generate(&e, &arms, &columns);
     out.extend(entries(&name, &arms));
