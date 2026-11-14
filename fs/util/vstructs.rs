@@ -870,9 +870,9 @@ macro_rules! vstruct_family {
         }
     }; };
 
-    // In state @st, a DST as its definition there, @def, is
+    // In state @st, Unsized as its definition there, @def, is
     (@unsized $name:ident, $st:ident, $def:ident) => { const _: () = {
-        use $crate::util::vstructs::{$st, SelfSized, Unsized};
+        use $crate::util::vstructs::{$st, Unsized};
 
         // SAFETY: #[repr(transparent)] over its definition, whose Unsized it is
         unsafe impl Unsized for $name<$st> {
@@ -888,14 +888,23 @@ macro_rules! vstruct_family {
                 <$def as Unsized>::from_raw_mut(p, bytes) as *mut Self
             }
         }
+    }; };
 
-        impl SelfSized for $name<$st> {
+    // In place, Validated or Unvalidated: its DST, @def, as long as its
+    // reference says
+    (@in_place $name:ident, $def:ident) => {
+        $crate::vstruct_family!(@in_place $name, $def, Validated, Unvalidated);
+    };
+    (@in_place $name:ident, $def:ident, $($st:ident),*) => { $(
+        $crate::vstruct_family!(@unsized $name, $st, $def);
+
+        impl $crate::util::vstructs::SelfSized for $name<$crate::util::vstructs::$st> {
             #[inline]
             fn bytes(&self) -> usize {
                 ::core::mem::size_of_val(self)
             }
         }
-    }; };
+    )* };
 
     // Made, in the state the caller names, from a pointer to its header, @head
     // - an unsized type's, whose count is its own
@@ -984,18 +993,7 @@ macro_rules! vstruct_family {
     (@whole $name:ident, $whole:ident $(, $derive:ident)*) => { const _: () = {
         use $crate::util::vstructs::*;
 
-        // SAFETY: a reference from it claims size_of::<Self>() of @bytes, the
-        // first: the struct, every field Plain
-        unsafe impl Unsized for $name<Whole> {
-            type Head = $whole;
-            type Elem = u8;
-            const TAIL: usize = size_of::<Self>();
-            #[inline]
-            fn from_raw(p: *const u8, _bytes: usize) -> *const Self { p.cast() }
-            #[inline]
-            fn from_raw_mut(p: *mut u8, _bytes: usize) -> *mut Self { p.cast() }
-        }
-
+        $crate::vstruct_family!(@unsized $name, Whole, $whole);
         $($crate::vstruct_family!(@whole_derive $derive, $name, $whole);)*
     }; };
 
@@ -1485,6 +1483,53 @@ pub trait ArmRef {
     /// them.
     fn whole_len(len: usize) -> Option<usize> {
         Some(len)
+    }
+}
+
+/// A sized arm: all of it, aligned, at the start of the bytes its storage
+/// says are its - one longer than it, written by a version since, is still
+/// all of it. A key value that's in place whole (SizedVal), a #[whole] or
+/// #[grown] type's struct.
+///
+/// # Safety
+/// Any bytes are a Self where it's read: its fields are each Plain, and if
+/// it has padding, WRITABLE is false.
+pub unsafe trait SizedArm: Sized + 'static {
+    /// Whether it's edited in place: not if it has padding - a key value's
+    /// header, rounded up into its tail - which a write would put over the
+    /// tail.
+    const WRITABLE: bool = true;
+}
+
+impl<T: SizedArm> ArmRef for T {
+    const MIN_LEN: usize = size_of::<Self>();
+
+    fn arm_ref(b: &[u8]) -> Option<&Self> {
+        // SAFETY: SizedArm's: a T's bytes are there, aligned, any of them one
+        (b.len() >= size_of::<T>() && b.as_ptr() as usize % align_of::<T>() == 0)
+            .then(|| unsafe { &*b.as_ptr().cast() })
+    }
+
+    fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {
+        // SAFETY: as arm_ref()'s, and no padding to write over what follows
+        (T::WRITABLE && b.len() >= size_of::<T>() && b.as_ptr() as usize % align_of::<T>() == 0)
+            .then(|| unsafe { &mut *b.as_mut_ptr().cast() })
+    }
+}
+
+// SAFETY: a reference from it claims size_of::<T>() of @bytes, the first -
+// which a valid one has, being all of it - not all of them
+unsafe impl<T: SizedArm> Unsized for T {
+    type Head = T;
+    type Elem = u8;
+    const TAIL: usize = size_of::<T>();
+
+    fn from_raw(p: *const u8, _bytes: usize) -> *const Self {
+        p.cast()
+    }
+
+    fn from_raw_mut(p: *mut u8, _bytes: usize) -> *mut Self {
+        p.cast()
     }
 }
 

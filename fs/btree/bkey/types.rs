@@ -58,7 +58,8 @@ use crate::c;
 use crate::format::{BkeyType, BkeyTypeFlags, Bpos};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
-use crate::util::vstructs::{ArmRef, InState, State, Unsized, Unvalidated, UnvalidatedSized, Validated, Whole};
+use crate::util::vstructs::{ArmRef, InState, SizedArm, State, Unsized, Unvalidated, UnvalidatedSized, Validated,
+                            Whole};
 use core::marker::PhantomData;
 
 #[repr(C)]
@@ -560,39 +561,12 @@ unsafe impl<T> BkeyWhole for T
            + ValidatedVal
 {}
 
-// A value is at the u64 after its key's header, so it's aligned.
-impl<T: SizedVal> ArmRef for T {
-    const MIN_LEN: usize = size_of::<Self>();
-
-    fn arm_ref(b: &[u8]) -> Option<&Self> {
-        (b.len() >= size_of::<Self>() && b.as_ptr() as usize % align_of::<Self>() == 0)
-            .then(|| unsafe { &*b.as_ptr().cast() })
-    }
-
-    fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {
-        (b.len() >= size_of::<Self>() && b.as_ptr() as usize % align_of::<Self>() == 0)
-            .then(|| unsafe { &mut *b.as_mut_ptr().cast() })
-    }
-}
+// SAFETY: SizedVal's - any bytes are one. A value is at the u64 after its
+// key's header, so it's aligned.
+unsafe impl<T: SizedVal> SizedArm for T {}
 
 unsafe impl<T: SizedVal> Floored for T {
     type Min = Self;
-}
-
-// SAFETY: a reference from it claims size_of::<T>() of @bytes, the first -
-// which a valid value has, MIN_VAL_SIZE being all of it - not all of them
-unsafe impl<T: SizedVal> Unsized for T {
-    type Head = T;
-    type Elem = u8;
-    const TAIL: usize = size_of::<T>();
-
-    fn from_raw(p: *const u8, _bytes: usize) -> *const Self {
-        p.cast()
-    }
-
-    fn from_raw_mut(p: *mut u8, _bytes: usize) -> *mut Self {
-        p.cast()
-    }
 }
 
 // SAFETY: #[repr(transparent)] over T

@@ -729,7 +729,13 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     // the cast checks its head - all of the struct, or a grown type's floor:
     // an unvalidated one is as good
     out.extend(family(name, &quote!(#ty), &quote!(#ty), &quote!(#written)));
-    out.extend(whole_arm_ref(&written, is_plain));
+    out.extend(quote! {
+        // SAFETY: its fields are each Plain, as its value in place asserts; edited
+        // in place only if it's Plain - padding would be written over its tail
+        unsafe impl crate::util::vstructs::SizedArm for #written {
+            const WRITABLE: bool = #is_plain;
+        }
+    });
     out.extend(generic_type(name, &ty, &written, &derives, grew.is_some(), &generic_doc));
     if grew.is_some() {
         // all of it is a value in place, every field there: X's methods, on
@@ -892,42 +898,6 @@ fn derive_names(def: &StructDef) -> Vec<Ident> {
         .collect()
 }
 
-/// @whole, a sized struct, from the bytes its storage says are its: all of
-/// it, aligned - a value longer than it, written by a version since, is
-/// still all of it. To edit, only if it's Plain (@plain): one with padding -
-/// a key value's header, rounded up into its tail - would write its padding
-/// over the tail.
-fn whole_arm_ref(whole: &Ident, plain: bool) -> TokenStream {
-    let vs = vs();
-    let (get, get_mut) = if plain {
-        (quote!(#vs::cast_plain(b)), quote!(#vs::cast_plain_mut(b)))
-    } else {
-        (quote! {
-            // SAFETY: that many bytes, aligned, and its fields - each Plain, as its
-            // value in place asserts - any bytes are; its padding is never read
-            (b.len() >= ::core::mem::size_of::<Self>() &&
-             b.as_ptr() as usize % ::core::mem::align_of::<Self>() == 0)
-                .then(|| unsafe { &*b.as_ptr().cast::<Self>() })
-        }, quote! {
-            let _ = b;
-            None
-        })
-    };
-    quote! {
-        impl #vs::ArmRef for #whole {
-            const MIN_LEN: usize = ::core::mem::size_of::<Self>();
-
-            fn arm_ref(b: &[u8]) -> Option<&Self> {
-                #get
-            }
-
-            fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {
-                #get_mut
-            }
-        }
-    }
-}
-
 /// The derives generic_type() gives X<Whole> as the struct has them.
 const WHOLE_DERIVES: &[&str] = &["Clone", "Copy", "Default", "Plain", "TypeInfo"];
 
@@ -944,8 +914,7 @@ fn generic_type(name: &Ident, inplace: &Ident, whole: &Ident, derives: &[Ident],
         crate::vstruct_family!(@type #name, #fam, #doc);
         crate::vstruct_family!(@deref #typestate #name, #fam);
         crate::vstruct_family!(@arm #name, #fam, #inplace);
-        crate::vstruct_family!(@unsized #name, Validated, #inplace);
-        crate::vstruct_family!(@unsized #name, Unvalidated, #inplace);
+        crate::vstruct_family!(@in_place #name, #inplace);
         crate::vstruct_family!(@whole #name, #whole #(, #derives)*);
     }
 }
