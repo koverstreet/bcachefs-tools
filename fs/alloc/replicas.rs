@@ -16,7 +16,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::accounting::DiskAccountingPos;
+use crate::accounting::{CounterSet, DiskAccountingPos, ReplicasCounters};
 use crate::alloc::accounting_mem::{self, MarkWrite};
 use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
 use crate::c;
@@ -24,6 +24,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, DataTypes, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
+use crate::init::passes::RecoveryPass;
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
 use crate::sb::members::member_exists;
 use crate::os::kernel::{cold_path, likely};
@@ -895,11 +896,26 @@ impl Fs {
     }
 
     /// Whether the filesystem can be read with @devs: every entry, as
-    /// can_read_with_devs().
+    /// can_read_with_devs(). One that can't be is in @err with the sectors
+    /// accounted to it, once accounting's been read - before, at mount, there
+    /// are none to say: none, and it's a stale entry refusing.
     pub fn can_read_fs_with_devs(&self, devs: &c::bch_devs_mask, flags: u32, mut err: Option<&mut Printbuf>) -> bool {
+        let accounted = self.recovery.runner.pass_done.get() >= RecoveryPass::accounting_read;
+        // mark_lock, for the sectors: before the table's lock, the order above
+        let mark = (err.is_some() && accounted).then(|| self.mark_lock().read());
+
         self.replicas.read().entries()
             .filter(|e| !self.replicas_obsolete(e.data_type.get()))
-            .all(|e| can_read_with_devs(e, devs, flags, err.as_deref_mut()))
+            .all(|e| {
+                let ok = can_read_with_devs(e, devs, flags, err.as_deref_mut());
+                if let (false, Some(err), Some(mark)) = (ok, err.as_deref_mut(), &mark) {
+                    if let Some(pos) = try_replicas_acct(e.data_type.get(), e.nr_required, &e.devs) {
+                        let v = accounting_mem::mem_read_locked(self, mark, &pos);
+                        write!(err, "  with {} sectors accounted to it\n", ReplicasCounters::from_slice(&v).sectors);
+                    }
+                }
+                ok
+            })
     }
 }
 
