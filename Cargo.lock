@@ -163,6 +163,7 @@ dependencies = [
  "nestify",
  "num-traits",
  "owo-colors",
+ "parking_lot",
  "paste 1.0.15",
  "pin-init",
  "rustc-demangle",

@@ -148,3 +148,10 @@ void rust_raw_spin_unlock(raw_spinlock_t *lock)
 {
 	raw_spin_unlock(lock);
 }
+
+/* os/linux_kernel/rwsem.rs: rw_semaphore */
+
+void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key)
+{
+	__init_rwsem(sem, name, key);
+}

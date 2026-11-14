@@ -45,8 +45,9 @@ pub use crate::new_lock;
 pub use bytelock::ByteLock;
 pub use lockdep::Lockdep;
 pub use crate::os::lockdep::LockdepMap;
-pub use raw::{mutex, percpu_rw_semaphore, rw_semaphore};
+pub use raw::{mutex, percpu_rw_semaphore};
 pub use crate::os::spinlock::{raw_spinlock_t, spinlock_t, SpinLock};
+pub use crate::os::rwsem::rw_semaphore;
 // for util/percpu.rs's LocalLockGuard and IrqGuard
 pub(crate) use raw::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
                      rust_local_unlock_irqrestore};

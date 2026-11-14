@@ -6,7 +6,6 @@
 #include <linux/atomic.h>
 #include <linux/bug.h>
 #include <linux/jiffies.h>
-#include <linux/rwsem.h>
 #include <linux/time64.h>
 
 #define TASK_RUNNING		0
@@ -91,10 +90,6 @@ struct task_struct {
 	pid_t			pid;
 
 	struct bio_list		*bio_list;
-
-	struct signal_struct	{
-		struct rw_semaphore exec_update_lock;
-	}			*signal, _signal;
 
 	struct {
 		u64		sum_exec_runtime;

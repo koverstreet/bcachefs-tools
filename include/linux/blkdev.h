@@ -63,7 +63,6 @@ struct blk_holder_ops {
 
 struct super_block {
 	void			*s_fs_info;
-	struct rw_semaphore	s_umount;
 };
 
 static inline void evict_inodes(struct super_block *sb) {}

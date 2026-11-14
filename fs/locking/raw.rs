@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! C's locks, as RawLocks: struct mutex, rw_semaphore and
-//! percpu_rw_semaphore - in both builds, the shim's pthread-backed ones in
-//! userspace. The spinlocks are the ports' (os::spinlock).
+//! C's locks, as RawLocks: struct mutex and percpu_rw_semaphore - in both
+//! builds, the shim's pthread-backed ones in userspace. The spinlocks and
+//! rw_semaphore are the ports' (os::spinlock, os::rwsem).
 //!
 //! Each is C's struct in an Opaque - an UnsafeCell, so it's written through
 //! a shared reference: by whoever takes it, Rust or C. c::mutex and the rest
@@ -16,7 +16,7 @@
 #![allow(non_camel_case_types)]
 
 use super::{RawLock, RawLockBase};
-use super::{RawReadLock, RawRwLock, RawTryReadLock};
+use super::{RawReadLock, RawRwLock};
 use super::{RawNestedLock, RawTryLock};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
@@ -30,12 +30,10 @@ use kernel::bindings as b;
 use bcachefs_shim::c as b;
 
 pub type mutex = Opaque<b::mutex>;
-pub type rw_semaphore = Opaque<b::rw_semaphore>;
 pub type percpu_rw_semaphore = Opaque<b::percpu_rw_semaphore>;
 
 // Zeroed as the structs holding them start; a lock only once their init runs
 unsafe impl ::pin_init::Zeroable for mutex {}
-unsafe impl ::pin_init::Zeroable for rw_semaphore {}
 unsafe impl ::pin_init::Zeroable for percpu_rw_semaphore {}
 
 pub use crate::c::{
@@ -43,7 +41,6 @@ pub use crate::c::{
     rust_trace_contention_begin, rust_trace_contention_end,
     rust_local_lock_init, rust_local_lock_irqsave, rust_local_unlock_irqrestore,
     rust_local_irq_save, rust_local_irq_restore,
-    rust_init_rwsem,
     rust_percpu_init_rwsem, rust_percpu_free_rwsem, rust_percpu_down_read, rust_percpu_up_read,
     rust_percpu_down_write, rust_percpu_up_write,
 };
@@ -107,54 +104,6 @@ unsafe impl RawNestedLock for c::mutex {
     #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
     unsafe fn lock_nested(&self, _subclass: u32) {
         unsafe { self.lock() }
-    }
-}
-
-// ── rw_semaphore ─────────────────────────────────────────────────────────
-
-unsafe impl RawLockBase for c::rw_semaphore {
-    type GuardState = ();
-    type InitError = Infallible;
-
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { rust_init_rwsem(l.cast(), name.as_ptr().cast(), key) };
-        Ok(())
-    }
-}
-
-unsafe impl RawLock for c::rw_semaphore {
-    unsafe fn lock(&self) {
-        unsafe { c::down_write(self.as_ptr().cast()) }
-    }
-
-    unsafe fn unlock(&self, _: ()) {
-        unsafe { c::up_write(self.as_ptr().cast()) }
-    }
-
-    unsafe fn assert_held(&self) {
-        lockdep::rwsem_assert_held_write(self)
-    }
-}
-
-unsafe impl RawReadLock for c::rw_semaphore {
-    unsafe fn lock_read(&self) {
-        unsafe { c::down_read(self.as_ptr().cast()) }
-    }
-
-    unsafe fn unlock_read(&self, _: ()) {
-        unsafe { c::up_read(self.as_ptr().cast()) }
-    }
-}
-
-unsafe impl RawTryReadLock for c::rw_semaphore {
-    unsafe fn try_lock_read(&self) -> Option<()> {
-        (unsafe { c::down_read_trylock(self.as_ptr().cast()) } != 0).then_some(())
-    }
-}
-
-unsafe impl RawRwLock for c::rw_semaphore {
-    unsafe fn assert_held_any(&self) {
-        lockdep::rwsem_assert_held(self)
     }
 }
 

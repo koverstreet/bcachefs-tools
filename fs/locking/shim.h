@@ -7,7 +7,6 @@
 #include <linux/local_lock.h>
 #include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
-#include <linux/rwsem.h>
 
 void rust_mutex_init(struct mutex *lock, const char *name, void *key);
 
@@ -19,8 +18,6 @@ unsigned long rust_local_lock_irqsave(local_lock_t *pcp);
 void rust_local_unlock_irqrestore(local_lock_t *pcp, unsigned long flags);
 unsigned long rust_local_irq_save(void);
 void rust_local_irq_restore(unsigned long flags);
-
-void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key);
 
 int rust_percpu_init_rwsem(struct percpu_rw_semaphore *sem, const char *name, void *key);
 void rust_percpu_free_rwsem(struct percpu_rw_semaphore *sem);

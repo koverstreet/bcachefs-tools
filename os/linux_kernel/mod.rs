@@ -17,6 +17,7 @@ pub mod lockdep;
 pub mod ops;
 pub mod percpu;
 pub mod printk;
+pub mod rwsem;
 pub mod sched;
 pub mod seq_file;
 pub mod shrinker;

@@ -18,7 +18,6 @@
 #include <linux/local_lock.h>
 #include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
-#include <linux/rwsem.h>
 #include <linux/sched/mm.h>
 
 #include <trace/events/lock.h>
@@ -84,17 +83,6 @@ unsigned long rust_local_irq_save(void)
 void rust_local_irq_restore(unsigned long flags)
 {
 	local_irq_restore(flags);
-}
-
-/* raw.rs: rw_semaphore */
-
-void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key)
-{
-#ifdef __KERNEL__
-	__init_rwsem(sem, name, key);
-#else
-	init_rwsem(sem);
-#endif
 }
 
 /* raw.rs: percpu_rw_semaphore */

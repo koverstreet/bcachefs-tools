@@ -37,4 +37,6 @@ void rust_raw_spin_lock_init(raw_spinlock_t *lock, const char *name, void *key);
 void rust_raw_spin_lock(raw_spinlock_t *lock);
 void rust_raw_spin_unlock(raw_spinlock_t *lock);
 
+void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key);
+
 #endif /* _BCACHEFS_OS_LINUX_KERNEL_SHIM_H */

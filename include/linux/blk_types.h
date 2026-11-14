@@ -10,7 +10,6 @@
 #include <linux/types.h>
 #include <linux/bvec.h>
 #include <linux/mutex.h>
-#include <linux/rwsem.h>
 
 struct bio_set;
 struct bio;

@@ -381,9 +381,7 @@ pub(crate) unsafe fn kthread_create_name(thread_fn: Option<unsafe extern "C" fn(
         (*p).thread_fn    = thread_fn;
         (*p).thread_data  = thread_data;
         (*p).state        = c::TASK_UNINTERRUPTIBLE as c_int;
-        (*p).signal       = &raw mut (*p)._signal;
         (*p).usage.counter = 1;
-        c::init_rwsem(&raw mut (*p)._signal.exec_update_lock);
     }
 
     let mut ret = 0;

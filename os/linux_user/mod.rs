@@ -14,6 +14,7 @@ pub mod kthread;
 pub mod lockdep;
 pub mod percpu;
 pub mod printk;
+pub mod rwsem;
 pub mod sched;
 pub mod shrinker;
 pub mod spinlock;
