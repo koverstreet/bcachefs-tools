@@ -974,14 +974,14 @@ impl Fs {
 
 impl bch_sb_buf {
     pub fn sb(&self) -> &bch_sb {
-        // SAFETY: C read and validated it, and owns its buffer while we're
-        // borrowed - resize and realloc take &mut
-        unsafe { bch_sb::<Validated>::from_ffi(self.sb) }
+        // SAFETY: it was read and validated, and this owns its buffer while
+        // we're borrowed - resize and realloc take &mut
+        unsafe { bch_sb::<Validated>::from_head_ptr(self.sb) }
     }
 
     pub fn sb_mut(&mut self) -> &mut bch_sb {
         // SAFETY: as sb()'s
-        unsafe { bch_sb::<Validated>::from_ffi_mut(self.sb) }
+        unsafe { bch_sb::<Validated>::from_head_ptr_mut(self.sb) }
     }
 
     pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
@@ -1779,9 +1779,9 @@ unsafe fn field_at(sb: *mut Head<bch_sb>, off: usize) -> *mut Head<c::bch_sb_fie
 /// @sb is validated, and nothing else uses it for 'a.
 pub unsafe fn sb_field_get_raw_mut<'a, F: SbField + ?Sized>(sb: *mut Head<bch_sb>) -> Option<&'a mut F> {
     // SAFETY: the caller's
-    let off = field_offset(unsafe { bch_sb::<Validated>::from_ffi(sb) }, F::FIELD_TYPE)?;
+    let off = field_offset(unsafe { bch_sb::<Validated>::from_head_ptr(sb) }, F::FIELD_TYPE)?;
     // SAFETY: a section of it, borrowed as it is
-    unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(sb, off)) }.arm_mut::<F>()
+    unsafe { c::bch_sb_field::<Validated>::from_head_ptr_mut(field_at(sb, off)) }.arm_mut::<F>()
 }
 
 impl bch_sb_buf {
@@ -1854,7 +1854,7 @@ impl bch_sb_buf {
     /// The section at @off, as an F: whole_mut() if that's all of F.
     fn arm_mut_at<F: SbField + ?Sized>(&mut self, off: usize) -> Option<&mut F> {
         // SAFETY: a section of the handle's superblock, borrowed with it
-        unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(self.sb, off)) }.arm_mut::<F>()
+        unsafe { c::bch_sb_field::<Validated>::from_head_ptr_mut(field_at(self.sb, off)) }.arm_mut::<F>()
     }
 }
 
@@ -3012,7 +3012,7 @@ mod tests {
         unsafe {
             (*f).set_val_u64s(u64s);
             (*f).type_ = Le32::new(ty.0);
-            c::bch_sb_field::<Validated>::from_ffi(f)
+            c::bch_sb_field::<Validated>::from_head_ptr(f)
         }
     }
 

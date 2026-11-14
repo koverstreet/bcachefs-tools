@@ -14,7 +14,7 @@ use crate::util::alloc::{kvfree_sized, kvzalloc_gfp, AllocError, KVVec};
 use crate::data_structures::fixed_fifo::FixedFifo;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
-use crate::util::vstructs::{from_ffi, from_ffi_mut, Head, Unvalidated};
+use crate::util::vstructs::{from_head_ptr, from_head_ptr_mut, Head, Unvalidated};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
@@ -76,11 +76,11 @@ impl JsetBuf {
     }
 
     pub fn jset(&self) -> &c::jset<Unvalidated> {
-        unsafe { from_ffi(self.data) }
+        unsafe { from_head_ptr(self.data) }
     }
 
     pub fn jset_mut(&mut self) -> &mut c::jset<Unvalidated> {
-        unsafe { from_ffi_mut(self.data) }
+        unsafe { from_head_ptr_mut(self.data) }
     }
 
     /// The whole buffer, its jset and the room past it.

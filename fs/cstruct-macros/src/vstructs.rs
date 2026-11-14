@@ -942,8 +942,9 @@ struct Generic<'a> {
     /// The sized struct, if Whole is one, and what it derives: X<Whole> has
     /// the value traits among them that it has.
     whole: Option<(&'a Ident, &'a [Ident])>,
-    /// C's struct, if X is made from C's pointer or from bytes - an unsized
-    /// type, whose count is its own: from_ffi() and from_bytes() on X<S>.
+    /// The definition as written, if X is made from a pointer to its header
+    /// or from bytes - an unsized type, whose count is its own:
+    /// from_head_ptr() and from_bytes() on X<S>.
     ffi: Option<&'a Ident>,
     /// Whether Unvalidated is a typestate over Validated, X<Unvalidated>
     /// dereffing to X<Validated> - where X's methods are - not to their
@@ -1148,29 +1149,29 @@ fn generic_type(name: &Ident, g: &Generic<'_>, doc: &str) -> TokenStream {
             },
             _ => quote!(),
         };
-        let from_ffi_doc = format!(" The {name} C's pointer @p is to, as long as its count says: not\n \
-                                    widened from a reference to its header, which reaches only that.\n \
-                                    In the state the caller names - {name}::<Validated>, for what C\n \
-                                    read and validated - never one inferred.\n\n \
+        let from_head_ptr_doc = format!(" The {name} at @p, a pointer to its header, as long as its count\n \
+                                    says: not widened from a reference to the header, which reaches\n \
+                                    only that. In the state the caller names - {name}::<Validated>,\n \
+                                    for what's been read and validated - never one inferred.\n\n \
                                     # Safety\n \
                                     @p points to a {name} whose count is right, and what its state\n \
-                                    says of its entries' is true - for Validated, that C checked\n \
-                                    them; and those bytes stay valid, and unwritten, for 'a.");
+                                    says of its entries' is true - for Validated, that they were\n \
+                                    checked; and those bytes stay valid, and unwritten, for 'a.");
         out.extend(quote! {
             impl #name<#vs::#st_ty> {
-                #[doc = #from_ffi_doc]
-                pub unsafe fn from_ffi<'a>(p: *const #ffi) -> &'a Self {
+                #[doc = #from_head_ptr_doc]
+                pub unsafe fn from_head_ptr<'a>(p: *const #ffi) -> &'a Self {
                     // SAFETY: the caller's
-                    unsafe { #vs::from_ffi::<Self>(p) }
+                    unsafe { #vs::from_head_ptr::<Self>(p) }
                 }
 
-                /// from_ffi(), mutably.
+                /// from_head_ptr(), mutably.
                 ///
                 /// # Safety
-                /// As from_ffi()'s, and nothing else touches those bytes for 'a.
-                pub unsafe fn from_ffi_mut<'a>(p: *mut #ffi) -> &'a mut Self {
+                /// As from_head_ptr()'s, and nothing else touches those bytes for 'a.
+                pub unsafe fn from_head_ptr_mut<'a>(p: *mut #ffi) -> &'a mut Self {
                     // SAFETY: the caller's
-                    unsafe { #vs::from_ffi_mut::<Self>(p) }
+                    unsafe { #vs::from_head_ptr_mut::<Self>(p) }
                 }
 
                 #from_bytes

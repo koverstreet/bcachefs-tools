@@ -31,7 +31,7 @@ use crate::util::rcu::read_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::strided::StridedBuf;
-use crate::util::vstructs::{bytes_of, bytes_of_mut, from_ffi, Head, Unsized, Unvalidated,
+use crate::util::vstructs::{bytes_of, bytes_of_mut, from_head_ptr, Head, Unsized, Unvalidated,
                             Validated};
 use crate::util::{Printbuf, ToText};
 use core::fmt;
@@ -280,7 +280,7 @@ impl core::ops::Deref for DevlistEntry {
     type Target = Entry;
 
     fn deref(&self) -> &Entry {
-        unsafe { from_ffi(self.0.bytes.as_ptr().cast()) }
+        unsafe { from_head_ptr(self.0.bytes.as_ptr().cast()) }
     }
 }
 
@@ -469,7 +469,7 @@ impl ReplicasCpu {
     fn entry(&self, i: usize) -> &Entry {
         // SAFETY: a slot holds an entry, as long as its nr_devs says - the
         // stride is the biggest's - written there by from_entries() or with()
-        unsafe { from_ffi::<Entry>(self.entries.slot(i).as_ptr().cast()) }
+        unsafe { from_head_ptr::<Entry>(self.entries.slot(i).as_ptr().cast()) }
     }
 
     fn entries(&self) -> impl Iterator<Item = &Entry> {
@@ -946,7 +946,7 @@ mod tests {
 
     fn entry(b: &[u8]) -> &Entry {
         // SAFETY: an entry, as long as its nr_devs says
-        unsafe { from_ffi::<Entry>(b.as_ptr().cast()) }
+        unsafe { from_head_ptr::<Entry>(b.as_ptr().cast()) }
     }
 
     fn same(a: &ReplicasCpu, b: &ReplicasCpu) -> bool {

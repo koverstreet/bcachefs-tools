@@ -22,11 +22,11 @@
 //!    vstruct_container!()'s entries().
 //!
 //! An unsized vstruct is a Family of definitions, one per State, written by
-//! #[unsized_vstruct]; jset<S> picks one. Validated, the default, is what C
-//! read and validated (from_ffi()): its counts are trusted, as C trusts
-//! them. Unvalidated is bytes from outside - off a device, from the kernel
+//! #[unsized_vstruct]; jset<S> picks one. Validated, the default, is what's
+//! been read and validated (from_head_ptr()): its counts are trusted.
+//! Unvalidated is bytes from outside - off a device, from the kernel
 //! (from_bytes()): its count is checked against them, its entries' as
-//! they're walked. Each derefs to its header, C's struct, Head<T>. The count
+//! they're walked. Each derefs to its header, Head<T>. The count
 //! is private, read as u64s(): it changes only through what holds the value,
 //! which has the room for it to grow.
 //!
@@ -821,14 +821,15 @@ pub unsafe trait Unsized {
     fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self;
 }
 
-/// The T C's pointer @p is to, as long as its count says - not widened from
-/// a reference to its header, which reaches only that: T::from_ffi(). For a
-/// T whose head says how long it is, an unsized vstruct's.
+/// The T at @p, a pointer to its header, as long as its count says - not
+/// widened from a reference to the header, which reaches only that:
+/// T::from_head_ptr(). For a T whose head says how long it is, an unsized
+/// vstruct's.
 ///
 /// # Safety
 /// @p points to a T whose count is right for its state, and those bytes stay
 /// valid, and unwritten, for 'a.
-pub unsafe fn from_ffi<'a, T>(p: *const T::Head) -> &'a T
+pub unsafe fn from_head_ptr<'a, T>(p: *const T::Head) -> &'a T
 where
     T: Unsized + ?Sized,
     T::Head: Plain + SelfSized,
@@ -837,11 +838,11 @@ where
     unsafe { &*T::from_raw(p.cast(), (*p).bytes()) }
 }
 
-/// from_ffi(), mutably: T::from_ffi_mut().
+/// from_head_ptr(), mutably: T::from_head_ptr_mut().
 ///
 /// # Safety
-/// As from_ffi(), and nothing else touches those bytes for 'a.
-pub unsafe fn from_ffi_mut<'a, T>(p: *mut T::Head) -> &'a mut T
+/// As from_head_ptr(), and nothing else touches those bytes for 'a.
+pub unsafe fn from_head_ptr_mut<'a, T>(p: *mut T::Head) -> &'a mut T
 where
     T: Unsized + ?Sized,
     T::Head: Plain + SelfSized,
@@ -1347,7 +1348,7 @@ mod tests {
     fn entries_walk_variable_size_entries() {
         let buf = jset(3);
         // SAFETY: the buffer's, as long as its count says
-        let j = unsafe { c::jset::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let j = unsafe { c::jset::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         assert_eq!(j.as_bytes().len(), buf.len() * 8);
         let es: Vec<_> = j.entries().collect();
         assert_eq!(es.len(), 2);
@@ -1366,7 +1367,7 @@ mod tests {
         buf[1] = 77;                            // v
         buf[2] = 1 | 2 << 8 | 1 << 16 | 3 << 24 | 5 << 32; // r: data_type, nr_devs 2, nr_required, devs 3, 5
         // SAFETY: the buffer's, as long as its count says
-        let e = unsafe { c::jset_entry::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let e = unsafe { c::jset_entry::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         let Ok(c::JsetEntryRef::data_usage(u)) = e.typed() else { panic!("a data_usage entry") };
         assert_eq!((u.v.get(), u.as_bytes().len()), (77, 24));
         assert_eq!(&u._tail[..u.r.nr_devs as usize], [3, 5]);
@@ -1375,7 +1376,7 @@ mod tests {
         e.type_ = c::JsetEntryType::data_usage.0 as u8;
         put(&mut buf, 0, &e);
         // SAFETY: as above
-        let e = unsafe { c::jset_entry::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let e = unsafe { c::jset_entry::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         assert_eq!(e.as_bytes().len(), 16);
         assert!(e.typed().is_err());
     }
@@ -1385,7 +1386,7 @@ mod tests {
     fn entries_stop_at_an_overrun() {
         let buf = jset(4);
         // SAFETY: the buffer's, as long as its count says
-        let j = unsafe { c::jset::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let j = unsafe { c::jset::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         assert_eq!(j.entries().count(), 1);
     }
 
@@ -1429,12 +1430,12 @@ mod tests {
     fn entries_end_at_a_zero_length_entry() {
         let buf = sb(0);
         // SAFETY: the buffer's, as long as its count says
-        let sb = unsafe { c::bch_sb::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let sb = unsafe { c::bch_sb::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         assert_eq!(sb.entries().count(), 0);
 
         let buf = self::sb(1);
         // SAFETY: as above
-        let sb = unsafe { c::bch_sb::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let sb = unsafe { c::bch_sb::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         assert_eq!(sb.entries().count(), 1);
     }
 
@@ -1480,7 +1481,7 @@ mod tests {
         put(&mut buf, 0, &clean);
         put(&mut buf, hdr, &entry(1));
         // SAFETY: the buffer's, as long as its count says
-        let clean = unsafe { c::bch_sb_field_clean::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let clean = unsafe { c::bch_sb_field_clean::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         assert_eq!(clean.as_bytes().len(), buf.len() * 8);
         let es: Vec<_> = clean.entries().collect();
         assert_eq!(es.len(), 1);
@@ -1619,9 +1620,9 @@ mod unsized_tests {
             .unwrap();
         assert_eq!(e, [(1, 8), (2, 24), (3, 16)]);
 
-        // as C's pointer has it - validated, trusted
+        // from a pointer to its header - validated, trusted
         // SAFETY: the buffer's, as long as its count says
-        let c = unsafe { tcont::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let c = unsafe { tcont::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         assert_eq!(c.as_bytes().len(), 56);
         assert_eq!(c.entries().map(|e| e.ty).collect::<Vec<_>>(), [1, 2, 3]);
         assert_eq!(c.as_bytes().as_ptr(), buf.as_ptr().cast::<u8>());
@@ -1645,7 +1646,7 @@ mod unsized_tests {
         assert!(matches!(r.as_slice(), [Ok(_), Err(VStructError::Overrun { want: 40, have: 24, .. })]));
 
         // SAFETY: the buffer's, as long as its count says
-        let c = unsafe { tcont::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let c = unsafe { tcont::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         assert_eq!(c.entries().count(), 1);
     }
 

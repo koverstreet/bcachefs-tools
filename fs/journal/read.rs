@@ -98,7 +98,7 @@ impl c::journal_replay {
     /// for 'a.
     pub unsafe fn jset<'a>(p: *const Self) -> &'a c::jset {
         // SAFETY: the caller's
-        unsafe { c::jset::<Validated>::from_ffi(&raw const (*p).j) }
+        unsafe { c::jset::<Validated>::from_head_ptr(&raw const (*p).j) }
     }
 
     pub fn ignored(&self) -> bool {

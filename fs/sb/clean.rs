@@ -87,7 +87,7 @@ impl core::ops::Deref for CleanSection {
     type Target = Section;
 
     fn deref(&self) -> &Section {
-        unsafe { Section::from_ffi(self.0.as_ptr().cast()) }
+        unsafe { Section::from_head_ptr(self.0.as_ptr().cast()) }
     }
 }
 
@@ -111,7 +111,7 @@ impl Fs {
         copy.as_mut_bytes().copy_from_slice(bytes);
 
         // SAFETY: a copy of a validated section, as long as its count says
-        let clean = unsafe { Section::from_ffi_mut(copy.as_mut_ptr().cast()) };
+        let clean = unsafe { Section::from_head_ptr_mut(copy.as_mut_ptr().cast()) };
         validate_late(self, version, big_endian, clean, false)?;
 
         Ok(CleanSection(copy))
