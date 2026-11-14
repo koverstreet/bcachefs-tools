@@ -160,10 +160,9 @@ pub fn prt_current_backtrace(out: &mut Printbuf, skipnr: u32) -> Result<(), Allo
     prt_task_backtrace(out, sched::current(), skipnr)
 }
 
-/// The shim's dump_stack(), to stderr.
+/// dump_stack(), to stderr.
 #[cfg(not(kernel))]
-#[unsafe(no_mangle)]
-pub extern "C" fn dump_stack() {
+pub fn dump_stack() {
     use std::io::Write;
 
     let mut out = Printbuf::new();

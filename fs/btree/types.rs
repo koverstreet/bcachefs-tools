@@ -26,6 +26,7 @@ use crate::btree::node_scan::NodeScan;
 use crate::btree::path::BtreePath;
 use crate::new_lock;
 use crate::util::projections::Volatile;
+use crate::util::ratelimit::Ratelimit;
 use crate::util::vstructs::Validated;
 use crate::util::ffi::Opaque;
 use crate::os::percpu::PerCpu;
@@ -1033,12 +1034,10 @@ pub struct bch_fs_btree {
                           WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
            ENOMEM_fs_other_alloc)]
     pub read_complete_wq: Workqueue,
-    #[pin]
-    #[init(crate::util::log::ratelimit_state_init())]
-    pub read_errors_soft: cs::ratelimit_state,
-    #[pin]
-    #[init(crate::util::log::ratelimit_state_init())]
-    pub read_errors_hard: cs::ratelimit_state,
+    #[init(Ratelimit::new())]
+    pub read_errors_soft: Ratelimit,
+    #[init(Ratelimit::new())]
+    pub read_errors_hard: Ratelimit,
 
     #[late(Workqueue::new(c"bcachefs_btree_write_complete",
                           WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 1),

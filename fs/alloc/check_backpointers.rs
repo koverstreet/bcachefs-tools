@@ -50,7 +50,8 @@ use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::types::bits_to_longs;
 use crate::data_structures::bitmap::{AtomicBitmap, AtomicULong};
-use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg, Ratelimit};
+use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
+use crate::util::ratelimit::Ratelimit;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err, inode_fsck_err, prt};
@@ -581,7 +582,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
                                  RecoveryPass::check_extents_to_backpointers, flags);
 
     static RATELIMIT: Ratelimit = Ratelimit::new();
-    if !RATELIMIT.suppress(fs, c"bch2_check_bucket_backpointer_mismatch") {
+    if !fs.ratelimit_suppress(&RATELIMIT, c"bch2_check_bucket_backpointer_mismatch") {
         print_str(fs, LogLevel::ERR, &mut buf);
     }
     Ok(())

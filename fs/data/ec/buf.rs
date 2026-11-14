@@ -27,7 +27,8 @@ use crate::util::alloc::{kbox_pin_init, ABox, AVec, AllocError, ConstAlign, KBox
 use crate::util::backref::BackRef;
 use crate::util::closure::{closure_wait, closure_wake_up};
 use crate::os::kernel::PAGE_SIZE;
-use crate::util::log::{LogLevel, LogMsg, Ratelimit};
+use crate::util::log::{LogLevel, LogMsg};
+use crate::util::ratelimit::Ratelimit;
 use crate::util::sleep::Sleep;
 use crate::util::vstructs::Validated;
 use crate::{here, prt};
@@ -601,6 +602,6 @@ pub fn validate_msg(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut Stri
         Ok(()) if damage_matters => write!(msg, "successful reconstruct\n"),
         Ok(())               => {}
     }
-    msg.set_suppressed(ratelimit.suppress(fs, here!()));
+    msg.set_suppressed(fs.ratelimit_suppress(ratelimit, here!()));
     ret
 }

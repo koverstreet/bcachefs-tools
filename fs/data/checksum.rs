@@ -468,8 +468,8 @@ impl Fs {
         // in constant time, as C's bch2_crc_cmp() means to be
         let differ = ((merged.lo.get() ^ crc_old.csum.lo.get()) | (merged.hi.get() ^ crc_old.csum.hi.get())) != 0;
         if differ && fs.opts().no_data_io.get() == 0 {
-            static RATELIMIT: crate::util::log::Ratelimit = crate::util::log::Ratelimit::new();
-            if !RATELIMIT.suppress(fs, crate::here!()) {
+            static RATELIMIT: crate::util::ratelimit::Ratelimit = crate::util::ratelimit::Ratelimit::new();
+            if !fs.ratelimit_suppress(&RATELIMIT, crate::here!()) {
                 crate::bch_warn!(fs, "checksum error in bch2_rechecksum_bio() (memory corruption or bug?)\n  \
                                       expected {:x}:{:x} got {:x}:{:x} (old type {old_ty} new type {new_ty})",
                                  crc_old.csum.hi.get(), crc_old.csum.lo.get(), merged.hi.get(), merged.lo.get());

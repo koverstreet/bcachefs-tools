@@ -28,6 +28,7 @@ pub mod printbuf;
 pub mod projections;
 pub mod prompt;
 pub mod raid;
+pub mod ratelimit;
 pub mod rcu;
 pub mod rcu_pending;
 pub mod refcount;

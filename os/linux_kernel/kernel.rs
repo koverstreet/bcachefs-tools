@@ -187,7 +187,10 @@ pub fn msleep(ms: u32) {
 }
 
 pub fn dump_stack() {
+    #[cfg(kernel)]
     unsafe { c::dump_stack() }
+    #[cfg(not(kernel))]
+    crate::util::backtrace::dump_stack()
 }
 
 /// The system's memory, in bytes: totalram_pages() of them.

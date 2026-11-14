@@ -2518,8 +2518,8 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>, 
     // ratelimit it. A fatal failure goes emergency read-only below and always
     // prints.
     if !fatal {
-        static RATELIMIT: crate::util::log::Ratelimit = crate::util::log::Ratelimit::new();
-        msg.set_suppressed(RATELIMIT.suppress(fs, c"write_super_locked"));
+        static RATELIMIT: crate::util::ratelimit::Ratelimit = crate::util::ratelimit::Ratelimit::new();
+        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT, c"write_super_locked"));
     }
 
     prt!(msg, "Error writing superblock, wrote to {nr_wrote}/{nr_members} devices:\n");

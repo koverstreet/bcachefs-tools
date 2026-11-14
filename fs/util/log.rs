@@ -16,13 +16,11 @@ use crate::fs::Dev;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::locking::{rust_raw_spin_lock, rust_raw_spin_unlock};
 use crate::types::c_default;
+use crate::util::ratelimit::Ratelimit;
 use crate::util::{Printbuf, ToText};
-use core::cell::UnsafeCell;
 use core::ffi::CStr;
-use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::Ordering;
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
 
 #[repr(C)]
@@ -370,78 +368,8 @@ impl Drop for LogMsg<'_> {
 impl Fs {
     /// Whether to drop a message from @func, by @rs: only with the
     /// ratelimit_errors option.
-    pub fn ratelimit_suppress(&self, rs: &c::ratelimit_state, func: &CStr) -> bool {
-        self.opts.ratelimit_errors.get() != 0 && !crate::os::printk::ratelimit(rs, func)
-    }
-}
-
-/// A ratelimit_state as ratelimit_default_init() makes one.
-pub fn ratelimit_state_init() -> impl ::pin_init::PinInit<c::ratelimit_state> {
-    unsafe {
-        ::pin_init::pin_init_from_closure(|slot: *mut c::ratelimit_state| {
-            crate::os::printk::ratelimit_state_init(slot);
-            Ok(())
-        })
-    }
-}
-
-/// @rs started over, as if nothing had been printed.
-pub fn ratelimit_reset(rs: &c::ratelimit_state) {
-    let p = core::ptr::from_ref(rs).cast_mut();
-    unsafe {
-        rust_raw_spin_lock((&raw mut (*p).lock).cast());
-        (&raw mut (*p).rs_n_left).write(c::atomic_t { counter: 0 });
-        (&raw mut (*p).missed).write(c::atomic_t { counter: 0 });
-        (&raw mut (*p).flags).write(0);
-        (&raw mut (*p).begin).write(0);
-        rust_raw_spin_unlock((&raw mut (*p).lock).cast());
-    }
-}
-
-/// One call site's ratelimit state, for the _ratelimited log macros: as the
-/// static DEFINE_RATELIMIT_STATE() in C's bch2_ratelimit(). The state holds a
-/// spinlock that has to be initialized at runtime, so it's set up on first use.
-#[doc(hidden)]
-pub struct Ratelimit {
-    claim: AtomicBool,
-    ready: AtomicBool,
-    state: UnsafeCell<MaybeUninit<c::ratelimit_state>>,
-}
-
-// state is initialized once, by whoever claims it, before ready is published;
-// after that only ___ratelimit() touches it, under its lock.
-unsafe impl Sync for Ratelimit {}
-
-impl Default for Ratelimit {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Ratelimit {
-    pub const fn new() -> Self {
-        Ratelimit {
-            claim: AtomicBool::new(false),
-            ready: AtomicBool::new(false),
-            state: UnsafeCell::new(MaybeUninit::uninit()),
-        }
-    }
-
-    /// Whether to drop a message from @func: as bch2_ratelimit(), which only
-    /// ratelimits with the ratelimit_errors option. A message that races the
-    /// first one's setup of the state isn't ratelimited.
-    pub fn suppress(&self, fs: &Fs, func: &CStr) -> bool {
-        let state = unsafe { (*self.state.get()).as_mut_ptr() };
-
-        if !self.ready.load(Ordering::Acquire) {
-            if self.claim.swap(true, Ordering::AcqRel) {
-                return false;
-            }
-            unsafe { crate::os::printk::ratelimit_state_init(state) };
-            self.ready.store(true, Ordering::Release);
-        }
-
-        fs.ratelimit_suppress(unsafe { &*state }, func)
+    pub fn ratelimit_suppress(&self, rs: &Ratelimit, func: &CStr) -> bool {
+        self.opts.ratelimit_errors.get() != 0 && !rs.allow(func)
     }
 }
 
@@ -450,9 +378,9 @@ impl Ratelimit {
 #[macro_export]
 macro_rules! bch_log_ratelimited {
     ($fs:expr, $level:expr, $($arg:tt)*) => {{
-        static RATELIMIT: $crate::util::log::Ratelimit = $crate::util::log::Ratelimit::new();
+        static RATELIMIT: $crate::util::ratelimit::Ratelimit = $crate::util::ratelimit::Ratelimit::new();
         let fs: &$crate::fs::Fs = $fs;
-        if !RATELIMIT.suppress(fs, $crate::here!()) {
+        if !fs.ratelimit_suppress(&RATELIMIT, $crate::here!()) {
             $crate::util::log::log(fs, $level, $crate::message!($($arg)*));
         }
     }};
@@ -470,10 +398,11 @@ macro_rules! log_msg_ratelimited {
         $crate::log_msg_ratelimited!($fs, 0, 1)
     };
     ($fs:expr, $idx:expr, $n:expr) => {{
-        static RATELIMIT: [$crate::util::log::Ratelimit; $n] = [const { $crate::util::log::Ratelimit::new() }; $n];
+        static RATELIMIT: [$crate::util::ratelimit::Ratelimit; $n] =
+            [const { $crate::util::ratelimit::Ratelimit::new() }; $n];
         let fs: &$crate::fs::Fs = $fs;
         let mut msg = $crate::util::log::LogMsg::new(fs);
-        msg.set_suppressed(RATELIMIT[$idx].suppress(fs, $crate::here!()));
+        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT[$idx], $crate::here!()));
         msg
     }};
 }
@@ -488,9 +417,9 @@ macro_rules! bch_err_ratelimited {
 #[macro_export]
 macro_rules! bch_err_dev_ratelimited {
     ($ca:expr, $($arg:tt)*) => {{
-        static RATELIMIT: $crate::util::log::Ratelimit = $crate::util::log::Ratelimit::new();
+        static RATELIMIT: $crate::util::ratelimit::Ratelimit = $crate::util::ratelimit::Ratelimit::new();
         let ca: &$crate::fs::Dev = $ca;
-        if !RATELIMIT.suppress(ca.fs(), $crate::here!()) {
+        if !ca.fs().ratelimit_suppress(&RATELIMIT, $crate::here!()) {
             $crate::util::log::log_dev(ca, $crate::util::log::LogLevel::ERR, $crate::message!($($arg)*));
         }
     }};

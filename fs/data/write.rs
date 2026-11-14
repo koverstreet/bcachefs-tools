@@ -730,7 +730,8 @@ use crate::util::bio::{bio_put, of_bio, Bio};
 use crate::util::closure::{ClosureRef, HasClosure, Running};
 use crate::util::ffi::Opaque;
 use crate::os::kernel::{current_runtime, local_clock, unlikely, READ, WRITE};
-use crate::util::log::{LogMsg, Ratelimit};
+use crate::util::log::LogMsg;
+use crate::util::ratelimit::Ratelimit;
 use crate::util::refcount::TryRefcount;
 use crate::util::time_stats::TimeStats;
 use crate::os::workqueue::Queue;
@@ -1094,7 +1095,7 @@ fn __write_index(op: &mut Op) {
             } else {
                 /* Separate ratelimit_states for hard and soft errors */
                 static RATELIMIT: [Ratelimit; 2] = [const { Ratelimit::new() }; 2];
-                msg.set_suppressed(RATELIMIT[ret.is_err() as usize].suppress(fs, crate::here!()));
+                msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT[ret.is_err() as usize], crate::here!()));
             }
 
             let k = op.insert_keys.front().expect("an index update with no keys");

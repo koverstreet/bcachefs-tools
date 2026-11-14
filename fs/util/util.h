@@ -14,7 +14,6 @@
 #include <linux/llist.h>
 #include <linux/log2.h>
 #include <linux/random.h>
-#include <linux/ratelimit.h>
 #include <linux/slab.h>
 #include <linux/sort.h>
 #include <linux/version.h>

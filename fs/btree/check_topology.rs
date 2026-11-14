@@ -28,7 +28,7 @@ use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
 use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::FsckFlags;
-use crate::util::log::{ratelimit_reset, LogMsg};
+use crate::util::log::LogMsg;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_msg, bch_info, btree_trans, fsck_err_flags, mustfix_fsck_err,
@@ -660,8 +660,8 @@ fn check_topology(fs: &Fs) -> Result<(), BchError> {
      * post topology repair there should be no errored nodes; reset
      * ratelimiters so we see new unexpected errors
      */
-    ratelimit_reset(&fs.btree.read_errors_soft);
-    ratelimit_reset(&fs.btree.read_errors_hard);
+    fs.btree.read_errors_soft.reset();
+    fs.btree.read_errors_hard.reset();
 
     Ok(())
 }
