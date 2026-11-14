@@ -50,7 +50,6 @@ pub struct DevStripes {
  * stripe always drains.
  */
 #[bch_enum(closed)]
-#[prefix(EC_STRIPE_NEW_)]
 #[nr]
 #[repr(u32)]
 pub enum EcStripeNewState {

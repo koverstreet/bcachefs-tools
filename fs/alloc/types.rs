@@ -24,7 +24,6 @@ use nestify::nest;
 /// How deep into the reserves an allocation - or a commit, its flags word's low
 /// bits - may dip. Usually unset: 0, stripe, is normal for the ENOSPC gate.
 #[bch_enum(closed)]
-#[prefix(BCH_WATERMARK_)]
 #[nr]
 #[repr(u32)]
 pub enum Watermark {
@@ -258,7 +257,6 @@ pub struct dev_stripe_state {
 c_default!(dev_stripe_state);
 
 #[bch_enum(closed)]
-#[prefix(WRITE_POINT_)]
 #[nr]
 #[repr(u32)]
 pub enum WritePointStatus {

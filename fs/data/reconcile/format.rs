@@ -106,7 +106,6 @@ pub struct bch_extent_reconcile_bp {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_RECONCILE_)]
 /* subset of BCH_INODE_OPTS */
 #[repr(u32)]
 pub enum ReconcileOpt {
@@ -171,7 +170,6 @@ pub enum ReconcileType {
 }
 
 #[bch_enum(open)]
-#[prefix(RECONCILE_WORK_)]
 #[repr(u32)]
 pub enum ReconcileWorkId {
     none,

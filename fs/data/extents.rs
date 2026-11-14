@@ -149,8 +149,7 @@ pub struct bch_io_failures {
 }
 
 #[bch_enum(closed)]
-#[prefix(__BCH_READ_)]
-#[mask(ReadFlags: u32, prefix = BCH_READ_)]
+#[mask(ReadFlags: u32)]
 #[repr(u32)]
 pub enum ReadFlagBit {
     retry_if_stale,

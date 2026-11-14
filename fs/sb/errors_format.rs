@@ -10,7 +10,6 @@ use cstruct_macros::{bitfield, bch_enum, unsized_vstruct, MaybeZeroable, Plain, 
 use nestify::nest;
 
 #[bch_enum(flags)]
-#[prefix(FSCK_)]
 #[repr(u32)]
 pub enum FsckFlags {
     CAN_FIX = 1 << 0,
@@ -21,7 +20,6 @@ pub enum FsckFlags {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_FSCK_ERR_)]
 #[nr]
 #[arm_columns(flags: FsckFlags)]
 #[repr(u32)]

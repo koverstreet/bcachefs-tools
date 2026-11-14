@@ -15,9 +15,8 @@ pub enum CounterFlags {
 }
 
 #[bch_enum(closed)]
-#[prefix(BCH_COUNTER_)]
 #[nr]
-#[arm_columns(stable: enum(PersistentCounterStable: u32, prefix = BCH_COUNTER_STABLE_, nr),
+#[arm_columns(stable: enum(PersistentCounterStable: u32, nr),
               flags: CounterFlags)]
 #[repr(u32)]
 pub enum PersistentCounter {

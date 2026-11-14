@@ -58,7 +58,6 @@ use pin_init::pin_data;
  * btree requires a matching entry here.
  */
 #[bch_enum(closed)]
-#[prefix(BCH_WB_BTREE_)]
 #[nr]
 #[repr(u32)]
 pub enum WbBtree {
@@ -145,7 +144,6 @@ pub struct btree_write_buffered_key {
 }
 
 #[bch_enum(closed)]
-#[prefix(WB_FLUSH_)]
 #[nr]
 #[repr(u32)]
 pub enum WbFlushCaller {

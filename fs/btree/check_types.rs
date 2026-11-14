@@ -14,7 +14,6 @@ use nestify::nest;
 use crate::format::{Bpos, Btree};
 
 #[bch_enum(closed)]
-#[prefix(GC_PHASE_)]
 #[repr(u32)]
 pub enum GcPhase {
     not_running,

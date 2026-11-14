@@ -63,8 +63,7 @@ pub struct BtreeWriteBio {
 crate::has_bio!(BtreeWriteBio, wbio.bio);
 
 #[bch_enum(closed)]
-#[prefix(__BTREE_WRITE_)]
-#[mask(BtreeWriteFlags: u32, prefix = BTREE_WRITE_)]
+#[mask(BtreeWriteFlags: u32)]
 #[repr(u32)]
 pub enum BtreeWriteFlagBit {
     only_if_need = cs::BTREE_WRITE_TYPE_BITS,

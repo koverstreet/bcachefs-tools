@@ -325,7 +325,6 @@ impl FlexArray for bkey_i {
 }
 
 #[bch_enum(flags)]
-#[prefix(BKEY_TYPE_)]
 #[repr(u32)]
 pub enum BkeyTypeFlags {
     /*
@@ -361,7 +360,6 @@ pub enum BkeyTypeFlags {
 }
 
 #[bch_enum(open)]
-#[prefix(KEY_TYPE_)]
 #[nr]
 #[arm_columns(flags: BkeyTypeFlags)]
 #[repr(u32)]
@@ -522,7 +520,6 @@ pub struct Error {
  * decompress error id without a reason here breaks the build.
  */
 #[bch_enum(open)]
-#[prefix(KEY_TYPE_ERROR_)]
 #[repr(u32)]
 pub enum ErrorKeyReason {
     unknown = 0,
@@ -631,7 +628,6 @@ pub struct bch_sb_field {
 vstruct!(unsized bch_sb_field, u64s, start = 0);
 
 #[bch_enum(flags)]
-#[prefix(BTREE_IS_)]
 #[repr(u32)]
 pub enum BtreeFlags {
     extents = 1 << 0,
@@ -645,7 +641,6 @@ pub enum BtreeFlags {
 
 #[bch_enum(open)]
 #[own_to_text]
-#[prefix(BTREE_ID_)]
 #[nr]
 #[arm_columns(flags: BtreeFlags, holds: set(BkeyType))]
 #[repr(u32)]
@@ -786,7 +781,7 @@ crate::display_via_to_text!(Btree);
 tagged_union! {
     #[storage(c::bch_sb_field)]
     #[tag(type_: u32)]
-    #[tag_enum(SbFieldType: u32, prefix = BCH_SB_FIELD_, nr)]
+    #[tag_enum(SbFieldType: u32, nr)]
     #[size(header)]
     pub enum bch_sb_field {
         /// Journal bucket list for this device
@@ -920,7 +915,6 @@ pub struct bch_sb_field_crypt_flags {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_KDF_)]
 #[nr]
 #[repr(u32)]
 pub enum KdfType {
@@ -1433,9 +1427,8 @@ impl SbFeatures {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_FEATURE_)]
 #[nr]
-#[mask(SbFeatures: u64, prefix = BCH_FEATURE_MASK_)]
+#[mask(SbFeatures: u64)]
 #[repr(u32)]
 pub enum SbFeature {
     lz4 = 0,
@@ -1470,9 +1463,8 @@ pub enum SbFeature {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_COMPAT_)]
 #[nr]
-#[mask(SbCompats: u64, prefix = BCH_COMPAT_MASK_)]
+#[mask(SbCompats: u64)]
 #[repr(u32)]
 pub enum SbCompat {
     alloc_info = 0,
@@ -1487,7 +1479,6 @@ pub enum SbCompat {
 /* options: */
 
 #[bch_enum(open)]
-#[prefix(BCH_VERSION_UPGRADE_)]
 #[repr(u32)]
 pub enum VersionUpgradeOpt {
     compatible = 0,
@@ -1540,7 +1531,6 @@ pub enum DegradedAction {
  * dropping below the replica count they asked for.
  */
 #[bch_enum(open)]
-#[prefix(BCH_WRITE_DEGRADED_)]
 #[nr]
 #[repr(u32)]
 pub enum WriteDegradedAction {
@@ -1550,7 +1540,6 @@ pub enum WriteDegradedAction {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_STR_HASH_)]
 #[nr]
 #[repr(u32)]
 pub enum StrHashKind {
@@ -1561,7 +1550,6 @@ pub enum StrHashKind {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_STR_HASH_OPT_)]
 #[nr]
 #[repr(u32)]
 pub enum StrHashOpt {
@@ -1571,7 +1559,6 @@ pub enum StrHashOpt {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_CSUM_)]
 #[nr]
 #[repr(u32)]
 pub enum CsumType {
@@ -1586,7 +1573,6 @@ pub enum CsumType {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_CSUM_OPT_)]
 #[nr]
 #[repr(u32)]
 pub enum CsumOpt {
@@ -1597,7 +1583,6 @@ pub enum CsumOpt {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_COMPRESSION_TYPE_)]
 #[nr]
 #[repr(u32)]
 pub enum CompressionType {
@@ -1610,7 +1595,6 @@ pub enum CompressionType {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_COMPRESSION_OPT_)]
 #[nr]
 #[repr(u32)]
 pub enum CompressionOpt {
@@ -1621,7 +1605,6 @@ pub enum CompressionOpt {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_SCRUB_JOURNAL_)]
 #[nr]
 #[repr(u32)]
 pub enum ScrubJournalOpt {
@@ -1642,7 +1625,7 @@ pub const JSET_KEYS_U64s: usize = size_of::<Head<c::jset_entry>>() / size_of::<u
 tagged_union! {
     #[storage(c::jset_entry)]
     #[tag(type_: u8)]
-    #[tag_enum(JsetEntryType: u32, prefix = BCH_JSET_ENTRY_, nr)]
+    #[tag_enum(JsetEntryType: u32, nr)]
     #[size(header)]
     pub enum jset_entry {
         /// Btree key updates
@@ -1741,7 +1724,6 @@ pub struct jset_entry_blacklist_v2 {
 vstruct!(jset_entry_blacklist_v2, repr.entry.u64s);
 
 #[bch_enum(open)]
-#[prefix(BCH_FS_USAGE_)]
 #[nr]
 #[repr(u32)]
 pub enum FsUsageType {

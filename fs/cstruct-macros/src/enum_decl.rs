@@ -9,16 +9,17 @@
 //!                          type's flags
 //!     NAME: set(ENUM)      a set of ENUM's values, a u64 a bit each - a
 //!                          btree's key types
-//!     NAME: enum([closed,] K: REPR, prefix = P[, nr])
+//!     NAME: enum([closed,] K: REPR[, prefix = P][, nr])
 //!                          an enum K of the same variants, valued by the
 //!                          column: its fn is K's variant - a recovery pass's
 //!                          stable id
 //!     NAME: value(T)       a T, any const expression - an inode option's
 //!                          width
-//!   #[mask(NAME: REPR, prefix = P)]
-//!                        the #[flags] NAME of bit numbers, 1 << each value;
-//!                        a variant's #[mask_prefix(P)] is its prefix from
-//!                        that variant on
+//!   #[mask(NAME: REPR[, prefix = P])]
+//!                        the #[flags] NAME of bit numbers, 1 << each value,
+//!                        named as their variants - one written with the
+//!                        enum's prefix, P and the rest; a variant's
+//!                        #[mask_prefix(P)] is P from that variant on
 //!   NAME_arms!(cb [pre]) cb! { [pre] (name, value, [Type], [column]..), .. }:
 //!                        the variants as a list's rows, for what expands
 //!                        them - a table, xmacro_select
@@ -216,7 +217,7 @@ pub(crate) fn declaration(input: TokenStream) -> Result<TokenStream, String> {
     Ok(out)
 }
 
-/// `[closed,] NAME: REPR, prefix = P[, nr]`: a tag enum's,
+/// `[closed,] NAME: REPR[, prefix = P][, nr]`: a tag enum's,
 /// or an enum column's.
 pub(crate) fn tag_enum(args: TokenStream) -> Result<EnumDef, String> {
     let (mut kind, mut name, mut prefix, mut nr) = (EnumKind::Open, None, None, false);
@@ -231,14 +232,14 @@ pub(crate) fn tag_enum(args: TokenStream) -> Result<EnumDef, String> {
                 "prefix" => prefix = Some(v.to_string()),
                 _ => return Err(format!("{k} = ..: not prefix")),
             },
-            _ => return Err("expected [closed,] NAME: REPR, prefix = PREFIX[, nr]".into()),
+            _ => return Err("expected [closed,] NAME: REPR[, prefix = PREFIX][, nr]".into()),
         }
     }
-    let (Some((name, repr)), Some(prefix)) = (name, prefix) else {
-        return Err("an enum needs NAME: REPR and prefix = PREFIX".into());
+    let Some((name, repr)) = name else {
+        return Err("an enum needs NAME: REPR".into());
     };
     Ok(EnumDef { kind, name, docs: Vec::new(), repr, variants: Vec::new(), from: Vec::new(),
-                  own_to_text: false, prefix: Some(prefix), nr })
+                  own_to_text: false, prefix, nr })
 }
 
 /// Enum @e of @arms, each valued by its expression.
@@ -261,10 +262,10 @@ fn enum_of<'a>(e: &EnumDef, arms: impl Iterator<Item = (&'a Arm, &'a syn::Expr)>
     enum_gen(&def)
 }
 
-/// #[mask(NAME: REPR, prefix = P)]: flags @m of bit numbers
-/// @bits, a flag per arm, 1 << its value - named P and the arm's name, or the
-/// #[mask_prefix] last written on an arm up to it and the name. A flag prints
-/// as its arm's name, as a list's does.
+/// #[mask(NAME: REPR[, prefix = P])]: flags @m of bit numbers @bits, a flag
+/// per arm, 1 << its value - named as the arm, or for an arm written with
+/// @bits' prefix, P - or the #[mask_prefix] last written on an arm up to it -
+/// and the rest. A flag prints as its arm's name, as a list's does.
 fn mask_of(m: &EnumDef, bits: &EnumDef, arms: &[Arm]) -> TokenStream {
     let (repr, bits_ty) = (&m.repr, &bits.name);
     let mut prefix = m.prefix.clone();

@@ -34,7 +34,6 @@ pub struct Subvolume {
 }
 
 #[bch_enum(open)]
-#[prefix(SUBVOLUME_STATE_)]
 /*
  * Subvolume lifecycle state: same codeword scheme as Snapshot.state
  * (below), additionally >= 14 bit flips from every snapshot state so a value
@@ -84,7 +83,6 @@ pub struct Snapshot {
 }
 
 #[bch_enum(open)]
-#[prefix(SNAPSHOT_STATE_)]
 /*
  * WILL_DELETE: leaf node that's no longer referenced by a subvolume, still has
  * keys, will be deleted by delete_dead_snapshots

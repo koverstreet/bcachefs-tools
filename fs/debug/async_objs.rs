@@ -28,7 +28,6 @@ use cstruct_macros::{bch_enum, placed, MaybeZeroable, Init};
 use pin_init::pin_data;
 
 #[bch_enum(closed)]
-#[prefix(BCH_ASYNC_OBJ_LIST_)]
 #[nr]
 #[repr(u32)]
 pub enum AsyncObjKind {

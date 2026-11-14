@@ -37,7 +37,7 @@
 //! arm type and what it nests, not for the storage. It's reported where it's
 //! written: the definition keeps its tokens' spans.
 //!
-//! `#[tag_enum([closed,] NAME: REPR, prefix = P[, nr])]`:
+//! `#[tag_enum([closed,] NAME: REPR[, prefix = P][, nr])]`:
 //! the tag's enum, a #[bch_enum] of the arms (enum_decl.rs) - open, or closed and
 //! the tag stored as it, `#[tag(FIELD)]`. NAME_arms! is the arms as a list,
 //! (name, value, Type), for what's made from each.

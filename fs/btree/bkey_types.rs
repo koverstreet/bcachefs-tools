@@ -139,7 +139,6 @@ macro_rules! __bkey_typed {
 BkeyType_arms!(__bkey_typed);
 
 #[bch_enum(flags)]
-#[prefix(BCH_VALIDATE_)]
 #[repr(u32)]
 pub enum ValidateFlags {
     write = 1 << 0,
@@ -148,7 +147,6 @@ pub enum ValidateFlags {
 }
 
 #[bch_enum(closed)]
-#[prefix(BKEY_VALIDATE_)]
 #[repr(u32)]
 pub enum BkeyValidateFrom {
     unknown,

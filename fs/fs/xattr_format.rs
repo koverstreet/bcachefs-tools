@@ -8,7 +8,6 @@ use cstruct_macros::{bch_enum, whole, MaybeZeroable, TypeInfo};
 
 /* An xattr's type - its namespace; Xattr.x_type: */
 #[bch_enum(open)]
-#[prefix(KEY_TYPE_XATTR_INDEX_)]
 #[repr(u32)]
 pub enum XattrType {
     USER              = 0,

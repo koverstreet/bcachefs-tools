@@ -131,7 +131,6 @@ xmacro! {
 }
 
 #[bch_enum(open)]
-#[prefix(Inode_opt_)]
 #[nr]
 #[arm_columns(bits: value(u32))]
 /* subset of BCH_INODE_FIELDS */

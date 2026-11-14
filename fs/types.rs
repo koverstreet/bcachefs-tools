@@ -30,7 +30,6 @@ use pin_init::pin_data;
 use crate::format::{Bpos, Btree};
 
 #[bch_enum(closed)]
-#[prefix(BCH_TIME_)]
 #[nr]
 #[repr(u32)]
 pub enum TimeStat {
@@ -148,7 +147,6 @@ pub struct io_count {
 }
 
 #[bch_enum(closed)]
-#[prefix(BCH_DEV_READ_REF_)]
 #[nr]
 #[repr(u32)]
 pub enum DevReadRefKind {
@@ -168,7 +166,6 @@ pub enum DevReadRefKind {
 }
 
 #[bch_enum(closed)]
-#[prefix(BCH_DEV_WRITE_REF_)]
 #[nr]
 #[repr(u32)]
 pub enum DevWriteRefKind {
@@ -211,7 +208,6 @@ pub struct bucket_bitmap {
 }
 
 #[bch_enum(closed)]
-#[prefix(BCH_DEV_)]
 #[repr(u32)]
 pub enum DevFlag {
     /// a write completed that the device may still hold in its volatile
@@ -396,7 +392,6 @@ pub struct Dev {
  * topology error
  */
 #[bch_enum(closed)]
-#[prefix(BCH_FS_)]
 #[repr(u32)]
 pub enum FsFlag {
     new_fs,

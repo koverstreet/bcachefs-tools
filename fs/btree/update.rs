@@ -36,8 +36,7 @@ use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use zerocopy::IntoBytes;
 
 #[bch_enum(closed)]
-#[prefix(__BCH_TRANS_COMMIT_)]
-#[mask(TransCommitFlags: u32, prefix = BCH_TRANS_COMMIT_)]
+#[mask(TransCommitFlags: u32)]
 #[repr(u32)]
 pub enum TransCommitFlagBit {
     /* First bits for Watermark: */

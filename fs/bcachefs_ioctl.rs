@@ -324,7 +324,6 @@ pub struct bch_ioctl_disk_set_state_v2 {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_DATA_OP_)]
 #[nr]
 #[repr(u32)]
 pub enum DataOp {
@@ -919,7 +918,6 @@ pub struct bch_ioctl_snapshot_tree_query_v2 {
  * BCH_IOCTL_RECOVERY_STATUS reports it, and a string wouldn't survive the trip.
  */
 #[bch_enum(open)]
-#[prefix(BCH_PROGRESS_UNITS_)]
 #[repr(u32)]
 pub enum ProgressUnit {
     nodes = 0,

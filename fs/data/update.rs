@@ -60,7 +60,6 @@ use nestify::nest;
 use crate::format::{Bpos, Btree, CompressionType};
 
 #[bch_enum(closed)]
-#[prefix(BCH_DATA_UPDATE_)]
 #[repr(u32)]
 pub enum DataUpdateType {
     other,

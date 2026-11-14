@@ -60,9 +60,8 @@ pub struct Accounting {
 pub const BCH_ACCOUNTING_MAX_COUNTERS: u32 = 3;
 
 #[bch_enum(open)]
-#[prefix(BCH_DATA_)]
 #[nr]
-#[mask(DataTypes: u32, prefix = BCH_DATA_MASK_)]
+#[mask(DataTypes: u32)]
 #[repr(u32)]
 pub enum DataType {
     free = 0,
@@ -86,7 +85,7 @@ tagged_union! {
     #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
     #[derive(TypeInfo)]
     #[tag(type_: u8)]
-    #[tag_enum(DiskAccountingType: u32, prefix = BCH_DISK_ACCOUNTING_, nr)]
+    #[tag_enum(DiskAccountingType: u32, nr)]
     #[pad(Bpos)]
     #[size(pad)]
     #[packed]

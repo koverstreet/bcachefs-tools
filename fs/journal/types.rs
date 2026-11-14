@@ -327,7 +327,6 @@ pub enum JournalSpaceFrom {
 }
 
 #[bch_enum(closed)]
-#[prefix(JOURNAL_)]
 #[repr(u32)]
 pub enum JournalFlag {
     degraded,

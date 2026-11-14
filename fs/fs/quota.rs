@@ -39,7 +39,6 @@ pub struct bch_qid {
 }
 
 #[bch_enum(closed)]
-#[prefix(KEY_TYPE_QUOTA_)]
 #[repr(u32)]
 pub enum QuotaAcctMode {
     PREALLOC,

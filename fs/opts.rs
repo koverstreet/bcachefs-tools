@@ -92,7 +92,6 @@ pub const OPT_SHOW_FULL_LIST: u32 = 1 << 0;
 pub const OPT_SHOW_MOUNT_STYLE: u32 = 1 << 1;
 
 #[bch_enum(closed)]
-#[prefix(FSCK_FIX_)]
 #[repr(u32)]
 pub enum FsckErrOpt {
     exit = 0,

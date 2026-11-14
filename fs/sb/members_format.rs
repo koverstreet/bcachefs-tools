@@ -30,7 +30,6 @@ pub enum IopsMeasurement {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_MEMBER_ERROR_)]
 #[nr]
 #[repr(u32)]
 pub enum MemberErrorType {
@@ -116,7 +115,6 @@ pub struct bch_member_flags {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_MEMBER_STATE_)]
 #[nr]
 #[repr(u8)]
 pub enum MemberState {
@@ -127,7 +125,6 @@ pub enum MemberState {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_MEMBER_INITIALIZED_)]
 #[nr]
 #[repr(u8)]
 pub enum MemberInitialized {

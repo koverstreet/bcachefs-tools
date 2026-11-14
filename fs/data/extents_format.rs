@@ -131,7 +131,6 @@ use crate::format::Bpos;
  */
 
 #[bch_enum(open)]
-#[prefix(BCH_EXTENT_ENTRY_)]
 #[nr]
 #[repr(u32)]
 pub enum ExtentEntryType {
@@ -235,8 +234,7 @@ pub struct bch_extent_stripe_ptr {
 }
 
 #[bch_enum(open)]
-#[prefix(BCH_EXTENT_FLAG_)]
-#[mask(ExtentFlags: u64, prefix = BCH_EXTENT_FLAG_MASK_)]
+#[mask(ExtentFlags: u64)]
 #[repr(u32)]
 pub enum ExtentFlag {
     poisoned = 0,

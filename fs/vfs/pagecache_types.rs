@@ -12,7 +12,6 @@ use nestify::nest;
 use core::sync::atomic::AtomicI32;
 
 #[bch_enum(closed)]
-#[prefix(SECTOR_)]
 #[repr(u32)]
 pub enum FolioSectorState {
     unallocated,

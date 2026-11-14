@@ -67,7 +67,6 @@ pub struct btree_bkey_cached_common {
  * the bookkeeping each state implies.
  */
 #[bch_enum(closed)]
-#[prefix(BTREE_NODE_CACHE_)]
 #[repr(u32)]
 pub enum BtreeNodeCacheState {
     NONE,           /* off all lists; not in cache (kzalloc default) */
@@ -87,7 +86,6 @@ pub enum BtreeNodeSibling {
 /* Btree cache: */
 
 #[bch_enum(closed)]
-#[prefix(BCH_BTREE_CACHE_NOT_FREED_)]
 #[nr]
 #[repr(u32)]
 pub enum BtreeCacheNotFreedReason {
@@ -361,7 +359,7 @@ pub struct bch_fs_btree_cache {
 
 #[bch_enum(closed)]
 #[prefix(BTREE_ITER_FLAG_BIT_)]
-#[mask(BtreeIterUpdateTriggerFlags: u32, prefix = BTREE_ITER_)]
+#[mask(BtreeIterUpdateTriggerFlags: u32)]
 #[repr(u32)]
 pub enum BtreeIterFlagBit {
     slots,
@@ -385,7 +383,6 @@ pub enum BtreeIterFlagBit {
     trim,
     read_errors,
 
-    #[mask_prefix(BTREE_UPDATE_)]
     internal_snapshot_node,
     nojournal,
     key_cache_reclaim,
@@ -929,7 +926,6 @@ pub struct TransStatsJson {
 /* Btree node write types and flags: */
 
 #[bch_enum(closed)]
-#[prefix(BTREE_WRITE_)]
 #[nr]
 #[repr(u32)]
 pub enum BtreeWriteType {
@@ -975,7 +971,6 @@ const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
                       BtreeNodeFlags::WRITE_TYPE_BITS == cs::BTREE_WRITE_TYPE_BITS as usize);
 
 #[bch_enum(closed)]
-#[prefix(BTREE_NODE_REWRITE_)]
 #[repr(u32)]
 pub enum BtreeNodeRewriteReason {
     none,
@@ -1129,7 +1124,6 @@ fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool<Kmalloc>, BchError
 /* Btree ID properties: */
 list_enum! {
     #[open]
-    #[prefix(BKEY_TYPE_)]
     #[nr]
     pub enum BtreeNodeType: u32 {
         btree,
