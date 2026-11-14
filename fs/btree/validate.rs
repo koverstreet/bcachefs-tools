@@ -423,7 +423,7 @@ fn bkey_compat(v: &NodeValidate<'_>, version: MetadataVersion, big_endian: bool,
                k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
     let b = v.b;
 
-    if version < c::bcachefs_metadata_version_current ||
+    if version < c::MetadataVersion::CURRENT ||
        big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         unsafe {

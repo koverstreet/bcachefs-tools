@@ -28,7 +28,7 @@ crate::module_info!("file" = env!("RUST_MODFILE"));
 
 crate::module_param! {
     #[cfg(kernel)]
-    static version: u32 = c::bcachefs_metadata_version_current.0;
+    static version: u32 = c::MetadataVersion::CURRENT.0;
     perm = 0o444
 }
 

@@ -1069,7 +1069,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
         check_version_downgrade(fs, &mut sb);
 
         if u32::from(fs.opts.version_upgrade.get()) != c::VersionUpgradeOpt::none.0 {
-            let current = c::bcachefs_metadata_version_current;
+            let current = c::MetadataVersion::CURRENT;
             sb_upgrade(fs, &mut sb, current, false);
             sb.sb_mut().set_version_upgrade_complete(current);
             fs.write_super(&mut sb);

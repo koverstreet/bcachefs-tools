@@ -26,7 +26,7 @@ use crate::util::Printbuf;
 const REQUIRED_UPGRADE_BELOW: MetadataVersion = MetadataVersion::btree_node_accounting;
 
 fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) -> bool {
-    let latest_version = c::bcachefs_metadata_version_current;
+    let latest_version = c::MetadataVersion::CURRENT;
     let latest_compatible = latest_version.min(fs.sb.version.get().latest_compatible());
     let old_version = match fs.sb.version_upgrade_complete.get() {
         MetadataVersion(0) => fs.sb.version.get(),
@@ -133,7 +133,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
             prt!(out, "Version downgrade required");
 
             let passes = ext(&mut sb).recovery_passes_required[0].get();
-            sb_set_downgrade(&mut sb, c::bcachefs_metadata_version_current.minor(), fs.sb.version.get().minor());
+            sb_set_downgrade(&mut sb, c::MetadataVersion::CURRENT.minor(), fs.sb.version.get().minor());
             let passes = ext(&mut sb).recovery_passes_required[0].get() & !passes;
             if passes != 0 {
                 prt!(out, ", running recovery passes: ");

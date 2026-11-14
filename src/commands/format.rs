@@ -34,7 +34,7 @@ use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_va
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
-use bcachefs_kernel::format::{bcachefs_metadata_version_current, MetadataVersion};
+use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 
@@ -497,7 +497,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     };
 
     let kernel_version = kernel_format_version();
-    let current_version = bcachefs_metadata_version_current;
+    let current_version = MetadataVersion::CURRENT;
     let version = cfg.format_version.unwrap_or(kernel_version);
 
     if cfg.source.is_none() {

@@ -1168,12 +1168,11 @@ pub enum MetadataVersion {
     inline_data_csum = BCH_VERSION(1, 40),
 }
 
-/* The oldest version this one reads */
-#[allow(non_upper_case_globals)]
-pub const bcachefs_metadata_version_min: c::MetadataVersion = c::MetadataVersion::btree_ptr_sectors_written;
-
-#[allow(non_upper_case_globals)]
-pub const bcachefs_metadata_version_current: c::MetadataVersion = c::MetadataVersion(c::MetadataVersion::NR - 1);
+impl MetadataVersion {
+    /* The oldest version this one reads */
+    pub const MIN: Self = Self::btree_ptr_sectors_written;
+    pub const CURRENT: Self = Self(Self::NR - 1);
+}
 
 pub const BCH_SB_SECTOR: u32 = 8;
 

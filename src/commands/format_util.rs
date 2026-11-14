@@ -11,7 +11,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::alloc::disk_groups::Target;
 
 use crate::wrappers::super_io::{die, SUPERBLOCK_SIZE_DEFAULT};
-use bcachefs_kernel::format::{bcachefs_metadata_version_current, MetadataVersion, SbFeature};
+use bcachefs_kernel::format::{MetadataVersion, SbFeature};
 use bcachefs_kernel::sb::io::BCHFS_MAGIC;
 use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::sb::io::SbResize;
@@ -442,7 +442,7 @@ pub(crate) fn kernel_format_version() -> MetadataVersion {
         .stderr(std::process::Stdio::null())
         .status();
 
-    let current = bcachefs_metadata_version_current;
+    let current = MetadataVersion::CURRENT;
     crate::wrappers::sysfs::bcachefs_kernel_version().map_or(current, |k| current.min(k))
 }
 

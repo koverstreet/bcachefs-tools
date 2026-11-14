@@ -9,7 +9,7 @@ use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::format::bcachefs_metadata_version_current;
+use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
@@ -96,7 +96,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
         return false;
     };
 
-    let current = bcachefs_metadata_version_current;
+    let current = MetadataVersion::CURRENT;
     if kernel_version == current {
         return false;
     }

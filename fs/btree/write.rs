@@ -573,7 +573,7 @@ impl BsetWrite {
 
         /* bch2_validate_bset will be modifying: */
         let validate_before_checksum = i.csum_type().is_encryption() ||
-            i.version.get() < c::bcachefs_metadata_version_current;
+            i.version.get() < c::MetadataVersion::CURRENT;
 
         /* if we're going to be encrypting, check metadata validity first: */
         if validate_before_checksum {

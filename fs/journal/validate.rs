@@ -164,7 +164,7 @@ enum Key {
 }
 
 fn bkey_compat(ctx: &Ctx<'_>, k: &mut [u8]) {
-    if ctx.version < c::bcachefs_metadata_version_current ||
+    if ctx.version < c::MetadataVersion::CURRENT ||
        ctx.big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         unsafe {

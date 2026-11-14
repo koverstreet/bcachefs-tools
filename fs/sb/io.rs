@@ -494,7 +494,7 @@ fn validate_layout(layout: &c::bch_sb_layout, out: &mut Printbuf) -> Result<(), 
 
 fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> {
     let (v, v_min) = (sb.version.get(), sb.version_min.get());
-    let (min, current) = (c::bcachefs_metadata_version_min, c::bcachefs_metadata_version_current);
+    let (min, current) = (c::MetadataVersion::MIN, c::MetadataVersion::CURRENT);
 
     for (what, v) in [("version", v), ("version_min", v_min)] {
         sb_err_on!(out, !v.compatible(), BCH_ERR_invalid_sb_version,
@@ -532,7 +532,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
                    "Filesystem has incompatible feature bit {incompat_bit}, highest supported {} ({})",
                    SbFeature(c::SbFeature::NR - 1), c::SbFeature::NR - 1)?;
 
-        let current = c::bcachefs_metadata_version_current;
+        let current = c::MetadataVersion::CURRENT;
         sb_err_on!(out, sb.version.get().major() > current.major() ||
                         sb.version_incompat() > current, BCH_ERR_invalid_sb_features,
                    "Filesystem has incompatible version {}, current version {current}", sb.version.get())?;
@@ -675,8 +675,8 @@ impl MetadataVersion {
     /// Whether this version reads it: its major, and no older than the
     /// oldest it knows - bch2_version_compatible().
     pub fn compatible(self) -> bool {
-        self.major() <= c::bcachefs_metadata_version_current.major() &&
-            self >= c::bcachefs_metadata_version_min
+        self.major() <= Self::CURRENT.major() &&
+            self >= Self::MIN
     }
 
     /// Its name, if it's a version this one knows.
@@ -725,7 +725,7 @@ impl Fs {
         }
 
         // a bit per minor: one major
-        const _: () = assert!(c::bcachefs_metadata_version_current.major() == 1);
+        const _: () = assert!(c::MetadataVersion::CURRENT.major() == 1);
         let minor = version.minor() as usize;
         let requested = &self.incompat_versions_requested;
         if !requested.test(minor) && !requested.test_and_set(minor) {
@@ -777,7 +777,7 @@ impl Fs {
 /// sb_set_downgrade() wants next, until the write's sb_update() brings
 /// it up to date.
 pub(crate) fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool {
-    let current = c::bcachefs_metadata_version_current;
+    let current = c::MetadataVersion::CURRENT;
     let s = sb.sb_mut();
 
     if s.version_upgrade_complete() > current {
@@ -2349,9 +2349,9 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     }
 
     let version = sb.sb().version.get();
-    if version > c::bcachefs_metadata_version_current {
+    if version > c::MetadataVersion::CURRENT {
         crate::fs_fatal_error!(fs, ": attempting to write superblock that wasn't version downgraded ({} > {})",
-                               version, c::bcachefs_metadata_version_current);
+                               version, c::MetadataVersion::CURRENT);
         return fs.throw(Errcode::BCH_ERR_sb_not_downgraded);
     }
 

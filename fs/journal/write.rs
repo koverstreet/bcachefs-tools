@@ -1004,7 +1004,7 @@ fn write_checksum(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError
         validate_before_checksum = true;
     }
 
-    if h.version.get() < c::bcachefs_metadata_version_current {
+    if h.version.get() < c::MetadataVersion::CURRENT {
         validate_before_checksum = true;
     }
 

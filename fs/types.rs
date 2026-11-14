@@ -552,7 +552,7 @@ pub struct Fs {
     #[init(crate::new_lock!(Default::default(), ::pin_init::zeroed(), "&c->sb_lock"))]
     pub sb: Placed<MutexNoio<c::bch_fs_sb, c::bch_sb_cpu>, crate::at!(Fs.sb)>,
     pub incompat_versions_requested: crate::data_structures::bitmap::AtomicBitArray<{
-        bits_to_longs(c::bcachefs_metadata_version_current.minor() as usize) }>,
+        bits_to_longs(c::MetadataVersion::CURRENT.minor() as usize) }>,
     pub cf_encoding: AtomicPtr<c::unicode_map>,
 
     #[init((options.block_size >> 9).ilog2() as c_ushort)]

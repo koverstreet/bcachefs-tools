@@ -868,7 +868,7 @@ impl BtreeTrans<'_> {
                 while !buf.is_empty() {
                     let u64s = u16::from_le_bytes([buf[0], buf[1]]);
                     let (e, rest) = buf.split_at_mut(jset_u64s(u64s.into()) * size_of::<u64>());
-                    journal_entry_validate(fs, e, c::bcachefs_metadata_version_current, cfg!(target_endian = "big"),
+                    journal_entry_validate(fs, e, c::MetadataVersion::CURRENT, cfg!(target_endian = "big"),
                                            validate_context)
                         .map_err(|err| self.commit_invalid_entry(err))?;
                     buf = rest;
