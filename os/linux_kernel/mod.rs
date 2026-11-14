@@ -20,6 +20,7 @@ pub mod ops;
 pub mod percpu;
 pub mod percpu_rwsem;
 pub mod printk;
+pub mod rcu;
 pub mod rwsem;
 pub mod sched;
 pub mod seq_file;

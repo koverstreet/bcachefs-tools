@@ -17,6 +17,7 @@
 #include <linux/rwsem.h>
 #include <linux/sched/signal.h>
 #include <linux/spinlock.h>
+#include <linux/srcu.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
 
@@ -432,4 +433,14 @@ void rust_percpu_down_write(struct percpu_rw_semaphore *sem)
 void rust_percpu_up_write(struct percpu_rw_semaphore *sem)
 {
 	percpu_up_write(sem);
+}
+
+/* os/linux_kernel/rcu.rs: init_srcu_struct() is a macro under lockdep */
+int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key)
+{
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	return __init_srcu_struct(ssp, name, key);
+#else
+	return init_srcu_struct(ssp);
+#endif
 }

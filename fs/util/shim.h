@@ -3,7 +3,6 @@
 #define _BCACHEFS_UTIL_SHIM_H
 
 #include <linux/gfp.h>
-#include <linux/srcu.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
 
@@ -21,8 +20,5 @@ void *rust_bio_pages_alloc(size_t size, gfp_t gfp);
 void rust_bio_pages_free(void *p, size_t size);
 void rust_kfree_rcu_mightsleep(void *p);
 
-
-/* rcu.c's: init_srcu_struct() is a macro under lockdep */
-int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key);
 
 #endif /* _BCACHEFS_UTIL_SHIM_H */

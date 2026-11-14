@@ -56,7 +56,6 @@ obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
 	locking/locking.o			\
-	util/rcu.o				\
 	util/util.o				\
 	vendor/closure.o			\
 	../os/linux_kernel/bio_iov_iter.o	\
