@@ -1447,7 +1447,9 @@ impl Fs {
          * that right we need to at least note somewhere /which/ targets have
          * extents on the pending list:
          */
-        self.request_scan(c::ReconcileScan::pending, true)
+        self.request_scan(c::ReconcileScan::pending, true)?;
+        self.unpark_marks_clear();
+        Ok(())
     }
 
     pub fn dev_offline(&self, ca: &Dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {

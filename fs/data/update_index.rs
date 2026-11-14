@@ -39,7 +39,7 @@ use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, B
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::update::ptr_bits_to_text;
 use crate::data::ptrs::{brand, extents_match, BkeyVPtrs, Branded, PtrMask, Ptrs, PtrsMut};
-use crate::data::reconcile::plan::{park, ParkReason};
+use crate::data::reconcile::plan::{offline_devs, park, ParkReason};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
@@ -490,5 +490,16 @@ pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
      */
     if let Ok(false) = parked {
         u.op.error = -fs.err(Errcode::ec_alloc_failed_pending_race).raw() as i16;
+    }
+}
+
+/// The read had no device to read from: one the extent's on is offline, and
+/// no retry can move it till that device is back. Parked till then - unless
+/// it's back already, and the next try can read it.
+pub(crate) fn no_device_to_read_from(u: &c::data_update) {
+    let fs = u.op.fs();
+    let devs = offline_devs(fs, BkeySC::from(u.k.key()));
+    if !devs.d.is_empty() {
+        let _ = fs.park_for_devs(&devs, || park_update(u, ParkReason::DevsOffline(devs)));
     }
 }

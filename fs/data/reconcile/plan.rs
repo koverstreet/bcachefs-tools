@@ -12,7 +12,8 @@
 //!   can form, data_replicas can't be matched exactly. The entry's marked
 //!   pending, which moves the key to the pending work btree: walked only
 //!   after a pending scan, which a device added, removed, resized, relabelled
-//!   or changing state requests.
+//!   or changing state requests - or, for work waiting on a device that's
+//!   offline, that device coming back online (park_for_devs()).
 //! - Nothing: a race with the write buffer, or a stripe being made from one
 //!   of its buckets.
 //!
@@ -80,6 +81,9 @@ pub enum ParkReason<'a> {
     MoveFailed { err: BchError, opts: &'a c::bch_inode_opts, data_opts: &'a c::data_update_opts },
     /// Its data update, with @opts and @data_opts, ran and failed with @err.
     UpdateFailed { err: BchError, opts: &'a c::bch_inode_opts, data_opts: &'a c::data_update_opts },
+    /// It can't be read until a device in the mask, offline, is back:
+    /// park_for_devs().
+    DevsOffline(c::bch_devs_mask),
 }
 
 pub enum Plan {
@@ -321,11 +325,90 @@ pub fn park(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeyS
             write!(out, "{err}\n{}\n", k.to_text(fs));
             fs.data_update_opts_to_text(out, opts, data_opts);
         }
+        ParkReason::DevsOffline(devs) => {
+            write!(out, "no device to read from, till one of");
+            for d in devs.d.iter() {
+                write!(out, " {d}");
+            }
+            write!(out, " is online\n{}", k.to_text(fs));
+        }
     });
     if let Some(restart) = restart {
         return Err(restart);
     }
     pending_mod(t, iter, level, k, true)
+}
+
+/// The devices @k has pointers on that are offline.
+pub fn offline_devs(fs: &Fs, k: BkeySC<'_>) -> c::bch_devs_mask {
+    let mut devs = c::bch_devs_mask::default();
+    if let Some(kp) = k.arm::<Ptrs>() {
+        for d in kp.ptrs(fs).map(|p| u32::from(p.dev())) {
+            if d != c::BCH_SB_MEMBER_INVALID && !fs.devs_online.test(d as usize) {
+                devs.d.set(d as usize);
+            }
+        }
+    }
+    devs
+}
+
+impl Fs {
+    /// Work parked until a device in @devs, offline now, is back. Each is
+    /// marked first, so the pending list is retried when it's next online -
+    /// at runtime or a later mount - and a crash before the park commits
+    /// leaves a mark with nothing parked, never the reverse. Then @park, which
+    /// says whether it parked anything. Then, if one's back already, the
+    /// pending scan its coming online requested may have run before the park
+    /// committed: it's requested again.
+    pub fn park_for_devs(&self, devs: &c::bch_devs_mask, park: impl FnOnce() -> Result<bool, BchError>)
+        -> Result<(), BchError>
+    {
+        self.unpark_mark(devs);
+        if park()? && devs.d.iter().any(|d| self.devs_online.test(d)) {
+            self.request_scan(c::ReconcileScan::pending, true)?;
+        }
+        Ok(())
+    }
+
+    fn unpark_mark(&self, devs: &c::bch_devs_mask) {
+        let mut sb = self.sb_lock();
+        let mut marked = false;
+        for d in devs.d.iter() {
+            if let Some(m) = sb.member_mut(d as u32).filter(|m| !m.unpark_on_online()) {
+                m.set_unpark_on_online(true);
+                marked = true;
+            }
+        }
+        if marked {
+            self.write_super(&mut sb);
+        }
+    }
+
+    /// Whether a member that's online is marked by park_for_devs().
+    pub fn unpark_marked(&self) -> bool {
+        let mut sb = self.sb_lock();
+        (0..self.nr_devices()).any(|d| self.devs_online.test(d as usize) &&
+                                      sb.member_mut(d).is_some_and(|m| m.unpark_on_online()))
+    }
+
+    /// The marks of the members that are online cleared: once the pending
+    /// scan is requested - a crash between costs a scan, not the retry.
+    pub fn unpark_marks_clear(&self) {
+        let mut sb = self.sb_lock();
+        let mut cleared = false;
+        for d in 0..self.nr_devices() {
+            if !self.devs_online.test(d as usize) {
+                continue;
+            }
+            if let Some(m) = sb.member_mut(d).filter(|m| m.unpark_on_online()) {
+                m.set_unpark_on_online(false);
+                cleared = true;
+            }
+        }
+        if cleared {
+            self.write_super(&mut sb);
+        }
+    }
 }
 
 /// Whether move error @e parks the key rather than failing it: no devices to

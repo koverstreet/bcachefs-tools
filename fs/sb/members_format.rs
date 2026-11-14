@@ -110,7 +110,11 @@ pub struct bch_member_flags {
     rotational_set:                 bool,
     #[bits(4)]  initialized:        MemberInitialized,
     /* 38-46 free, was FAILURE_DOMAIN (now a string, member.failure_domain) */
-    __:                             u26,
+    __:                             u9,
+    /// Reconcile parked work that can't be read without this device: the
+    /// pending list is retried when it's next online
+    unpark_on_online:               bool,
+    __:                             u16,
 }
 
 #[bch_enum(open)]

@@ -530,6 +530,7 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
     write!(out, "Discard:\t{}\n", m.discard() as u8);
     write!(out, "Freespace initialized:\t{}\n", m.freespace_initialized() as u8);
     write!(out, "Resize on mount:\t{}\n", m.resize_on_mount() as u8);
+    write!(out, "Unpark on online:\t{}\n", m.unpark_on_online() as u8);
 
     for (name, f) in [("Last device name", &m.device_name[..]),
                       ("Last device model", &m.device_model[..]),

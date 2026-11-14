@@ -78,8 +78,17 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
         read_error_stats(&u, &read, moving, size);
         moving.io_start(true, size)
     };
+    // A device the extent's on is offline: reconcile retrying the move can't
+    // read it till that device is back, so it's parked till then. Not an IO
+    // error, which a retry may get past, and whose device needn't change.
+    let unreadable = u.opts.type_ == c::DataUpdateType::reconcile &&
+        read.ret.is_err_and(|e| e.matches(Errcode::no_device_to_read_from));
     u.write(read, Resume::RUNQ).await;
     drop(write_io);
+
+    if unreadable {
+        crate::data::update_index::no_device_to_read_from(&u);
+    }
 
     // EC allocation failed: the write never happened, but the extent still
     // needs erasure coding, so mark it pending for reconcile to retry. Not for

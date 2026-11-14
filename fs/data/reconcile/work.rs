@@ -981,6 +981,12 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
         return Ok(());
     }
 
+    // work parked till a device was back, and it is: mounted with it
+    if fs.unpark_marked() {
+        fs.request_scan(c::ReconcileScan::pending, true)?;
+        fs.unpark_marks_clear();
+    }
+
     let ctxt = MovingCtxt::new(fs, &fs.reconcile.work_stats, c::write_point_specifier::RECONCILE,
                                true)?;
     let r = Reconciler { fs, me, ctxt, copygc_runs_unparked: Cell::new(0) };
