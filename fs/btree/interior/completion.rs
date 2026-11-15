@@ -558,7 +558,7 @@ pub(super) fn worker(fs: &Fs) {
         let update = {
             let g = fs.btree.interior_updates.lock.lock();
             match g.unwritten.peek_front() {
-                Some(u) if u.nodes_written() => unsafe { NonNull::new_unchecked(Box::as_ptr(u).cast_mut()) },
+                Some(u) if u.nodes_written() => NonNull::from(&**u),
                 _ => break,
             }
         };
