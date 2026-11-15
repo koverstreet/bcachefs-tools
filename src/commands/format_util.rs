@@ -466,10 +466,7 @@ fn dev_bucket_size_clamp(fs_opts: c::bch_opts, dev_size: u64, fs_bucket_size: u6
 }
 
 fn total_system_ram() -> u64 {
-    let mut info: libc::sysinfo = unsafe { std::mem::zeroed() };
-    if unsafe { libc::sysinfo(&mut info) } != 0 {
-        die("sysinfo() failed");
-    }
+    let info = rustix::system::sysinfo();
     info.totalram as u64 * info.mem_unit as u64
 }
 
