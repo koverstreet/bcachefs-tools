@@ -8,8 +8,8 @@
 //! PlacedDrop unregisters it, while what count() and scan() use is still
 //! there; the Shrinker's own drop checks that it did.
 //!
-//! The shim's reclaim is here too: the registered shrinkers, run when an
-//! allocation fails - run_shrinkers(), slab.h's C allocators' - and once a second by the
+//! The port's reclaim is here too: the registered shrinkers, run when an
+//! allocation fails - run_shrinkers(), alloc.rs's - and once a second by the
 //! shrinkers thread, when free memory's short.
 
 use core::ffi::{c_int, c_void, CStr};
@@ -127,8 +127,7 @@ fn run_shrinkers_allocation_failed() {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn run_shrinkers(gfp: Flags, allocation_failed: bool) {
+pub fn run_shrinkers(gfp: Flags, allocation_failed: bool) {
     if gfp.intersects(flags::NOWAIT | flags::ATOMIC | flags::NOIO) {
         return;
     }

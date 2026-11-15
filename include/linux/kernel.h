@@ -14,29 +14,23 @@
 #include <limits.h>
 
 #include <linux/bug.h>
-#include <linux/cache.h>
 #include <linux/cleanup.h>
 #include <linux/compiler.h>
-#include <linux/kmsan-checks.h>
 
 #define BITS_PER_LONG	__BITS_PER_LONG
 
 struct page;
 struct kmem_cache;
 
-typedef unsigned long		pgoff_t;
-
 typedef unsigned short		umode_t;
 
 typedef unsigned gfp_t;
 
 #define GFP_ATOMIC	0
-#define GFP_NOFS	0
 #define GFP_NOIO	0
 #define GFP_NOWAIT	0
 #define __GFP_RECLAIM	0
 #define __GFP_DIRECT_RECLAIM 0
-#define __GFP_FS	0
 #define __GFP_IO	0
 #define __GFP_NOWARN	0
 #define __GFP_NORETRY	0
@@ -53,42 +47,17 @@ typedef unsigned gfp_t;
 typedef __u64 u64;
 typedef __s64 s64;
 typedef __u32 u32;
-typedef __s32 s32;
 typedef __u16 u16;
-typedef __s16 s16;
 typedef __u8  u8;
-typedef __s8  s8;
 
-typedef unsigned char		unchar;
-typedef unsigned short		ushort;
 typedef unsigned int		uint;
-typedef unsigned long		ulong;
-typedef unsigned long long	ullong;
-
-#define BIT(nr)			(1UL << (nr))
-#define BIT_ULL(nr)		(1ULL << (nr))
 
 #define __ARG_PLACEHOLDER_1 0,
 #define __take_second_arg(__ignored, val, ...) val
 
-#define __and(x, y)			___and(x, y)
-#define ___and(x, y)			____and(__ARG_PLACEHOLDER_##x, y)
-#define ____and(arg1_or_junk, y)	__take_second_arg(arg1_or_junk y, 0)
-
-#define __or(x, y)			___or(x, y)
-#define ___or(x, y)			____or(__ARG_PLACEHOLDER_##x, y)
-#define ____or(arg1_or_junk, y)		__take_second_arg(arg1_or_junk 1, y)
-
 #define __is_defined(x)			___is_defined(x)
 #define ___is_defined(val)		____is_defined(__ARG_PLACEHOLDER_##val)
 #define ____is_defined(arg1_or_junk)	__take_second_arg(arg1_or_junk 1, 0)
-
-/*
- * IS_BUILTIN(CONFIG_FOO) evaluates to 1 if CONFIG_FOO is set to 'y', 0
- * otherwise. For boolean options, this is equivalent to
- * IS_ENABLED(CONFIG_FOO).
- */
-#define IS_BUILTIN(option) __is_defined(option)
 
 /*
  * IS_MODULE(CONFIG_FOO) evaluates to 1 if CONFIG_FOO is set to 'm', 0
@@ -96,40 +65,7 @@ typedef unsigned long long	ullong;
  */
 #define IS_MODULE(option) __is_defined(option##_MODULE)
 
-/*
- * IS_REACHABLE(CONFIG_FOO) evaluates to 1 if the currently compiled
- * code can call a function defined in code compiled based on CONFIG_FOO.
- * This is similar to IS_ENABLED(), but returns false when invoked from
- * built-in code when CONFIG_FOO is set to 'm'.
- */
-#define IS_REACHABLE(option) __or(IS_BUILTIN(option), \
-				__and(IS_MODULE(option), __is_defined(MODULE)))
-
-/*
- * IS_ENABLED(CONFIG_FOO) evaluates to 1 if CONFIG_FOO is set to 'y' or 'm',
- * 0 otherwise.
- */
-#define IS_ENABLED(option) __or(IS_BUILTIN(option), IS_MODULE(option))
-#define EXPORT_SYMBOL(sym)
-
-#define U8_MAX		((u8)~0U)
-#define S8_MAX		((s8)(U8_MAX>>1))
-#define S8_MIN		((s8)(-S8_MAX - 1))
-#define U16_MAX		((u16)~0U)
-#define S16_MAX		((s16)(U16_MAX>>1))
-#define S16_MIN		((s16)(-S16_MAX - 1))
 #define U32_MAX		((u32)~0U)
-#define S32_MAX		((s32)(U32_MAX>>1))
-#define S32_MIN		((s32)(-S32_MAX - 1))
-#define U64_MAX		((u64)~0ULL)
-#define S64_MAX		((s64)(U64_MAX>>1))
-#define S64_MIN		((s64)(-S64_MAX - 1))
-
-#define ALIGN(x, a)	__ALIGN_MASK(x, (typeof(x))(a)-1)
-#define __ALIGN_MASK(x, mask)	(((x)+(mask))&~(mask))
-
-#define PTR_ALIGN(p, a)		((typeof(p))ALIGN((unsigned long)(p), (a)))
-#define IS_ALIGNED(x, a)		(((x) & ((typeof(x))(a) - 1)) == 0)
 
 #define __must_be_array(a)	BUILD_BUG_ON_ZERO(__same_type((a), &(a)[0]))
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]) + __must_be_array(arr))
@@ -159,33 +95,14 @@ typedef unsigned long long	ullong;
 	}
 #endif
 
-#define struct_group(NAME, MEMBERS...)	\
-	__struct_group(/* no tag */, NAME, /* no attrs */, MEMBERS)
-
-/* This counts to 12. Any more, it will return 13th argument. */
-#define __COUNT_ARGS(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _n, X...) _n
-#define COUNT_ARGS(X...) __COUNT_ARGS(, ##X, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
-
 #define _RET_IP_		(unsigned long)__builtin_return_address(0)
 #define _THIS_IP_  ({ __label__ __here; __here: (unsigned long)&&__here; })
-
-#define might_sleep()
-
-#define cpu_relax()		barrier()
-#define cpu_relax_lowlatency()	barrier()
 
 #define panic(fmt, ...)					\
 do {							\
 	printf(fmt, ##__VA_ARGS__);			\
 	BUG();						\
 } while (0)
-
-static const char hex_asc[] = "0123456789abcdef";
-#define hex_asc_lo(x)	hex_asc[((x) & 0x0f)]
-#define hex_asc_hi(x)	hex_asc[((x) & 0xf0) >> 4]
-static const char hex_asc_upper[] = "0123456789ABCDEF";
-#define hex_asc_upper_lo(x)	hex_asc_upper[((x) & 0x0f)]
-#define hex_asc_upper_hi(x)	hex_asc_upper[((x) & 0xf0) >> 4]
 
 /* The hash is always the low bits of hash_len */
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -204,37 +121,9 @@ struct qstr {
 	const unsigned char *name;
 };
 
-#define QSTR_INIT(n,l) { { { .len = l } }, .name = n }
-
-#define POISON_FREE 0x6b
-
-#define unsafe_memcpy(dst, src, bytes, justification)		\
-	memcpy(dst, src, bytes)
-
-#ifdef __DECLARE_FLEX_ARRAY
-#define DECLARE_FLEX_ARRAY(TYPE, NAME) __DECLARE_FLEX_ARRAY(TYPE, NAME)
-#else
-#define DECLARE_FLEX_ARRAY(T, member)        T member[0]
-#endif
-
 typedef u64 sector_t;
 
-typedef void (*swap_r_func_t)(void *a, void *b, int size, const void *priv);
-typedef void (*swap_func_t)(void *a, void *b, int size);
-
-typedef int (*cmp_r_func_t)(const void *a, const void *b, const void *priv);
-typedef int (*cmp_func_t)(const void *a, const void *b);
-
-typedef unsigned int __bitwise slab_flags_t;
-typedef u64 phys_addr_t;
-struct vm_struct;
-struct mnt_idmap;
-
-#include <linux/math.h>
-#include <linux/minmax.h>
-#include <linux/byteorder.h>
-
-#define __cold
+#define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
 
 static inline size_t copy_to_user(void *dst, void *src, size_t len)
 {

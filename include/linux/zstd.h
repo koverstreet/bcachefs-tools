@@ -80,13 +80,6 @@ int zstd_max_clevel(void);
 /* ======   Parameter Selection   ====== */
 
 /**
- * enum zstd_strategy - zstd compression search strategy
- *
- * From faster to stronger. See zstd_lib.h.
- */
-typedef ZSTD_strategy zstd_strategy;
-
-/**
  * struct zstd_compression_parameters - zstd compression parameters
  * @windowLog:    Log of the largest match distance. Larger means more
  *                compression, and more memory needed during decompression.
@@ -104,19 +97,6 @@ typedef ZSTD_strategy zstd_strategy;
  * See zstd_lib.h.
  */
 typedef ZSTD_compressionParameters zstd_compression_parameters;
-
-/**
- * struct zstd_frame_parameters - zstd frame parameters
- * @contentSizeFlag: Controls whether content size will be present in the
- *                   frame header (when known).
- * @checksumFlag:    Controls whether a 32-bit checksum is generated at the
- *                   end of the frame for error detection.
- * @noDictIDFlag:    Controls whether dictID will be saved into the frame
- *                   header when using dictionary compression.
- *
- * The default value is all fields set to 0. See zstd_lib.h.
- */
-typedef ZSTD_frameParameters zstd_frame_parameters;
 
 /**
  * struct zstd_parameters - zstd parameters

@@ -1,17 +1,11 @@
 #include <urcu.h>
 
-#include "include/linux/delay.h"
 #include "include/linux/kernel.h"
 #include "include/linux/llist.h"
 #include "include/linux/lz4.h"
 #include "include/linux/percpu-refcount.h"
-#include "include/linux/posix_acl.h"
-#include "include/linux/random.h"
-#include "include/linux/refcount.h"
 #include "include/linux/rcupdate.h"
 #include "include/linux/sched.h"
-#include "include/linux/seqlock.h"
-#include "include/linux/string.h"
 #include "include/linux/unicode.h"
 #include "include/linux/xxhash.h"
 #include "include/linux/zlib.h"

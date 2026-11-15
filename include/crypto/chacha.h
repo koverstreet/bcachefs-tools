@@ -6,7 +6,6 @@
 #define _CRYPTO_CHACHA20_H
 
 #include <linux/types.h>
-#include <linux/crypto.h>
 #include <linux/unaligned.h>
 
 #define CHACHA_IV_SIZE	16

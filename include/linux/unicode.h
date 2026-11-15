@@ -7,31 +7,6 @@
 struct utf8data;
 struct utf8data_table;
 
-#define UNICODE_MAJ_SHIFT		16
-#define UNICODE_MIN_SHIFT		8
-
-#define UNICODE_AGE(MAJ, MIN, REV)			\
-	(((unsigned int)(MAJ) << UNICODE_MAJ_SHIFT) |	\
-	 ((unsigned int)(MIN) << UNICODE_MIN_SHIFT) |	\
-	 ((unsigned int)(REV)))
-
-#define UTF8_LATEST        UNICODE_AGE(12, 1, 0)
-
-static inline u8 unicode_major(unsigned int age)
-{
-	return (age >> UNICODE_MAJ_SHIFT) & 0xff;
-}
-
-static inline u8 unicode_minor(unsigned int age)
-{
-	return (age >> UNICODE_MIN_SHIFT) & 0xff;
-}
-
-static inline u8 unicode_rev(unsigned int age)
-{
-	return age & 0xff;
-}
-
 /*
  * Two normalization forms are supported:
  * 1) NFDI
@@ -71,12 +46,7 @@ int utf8_normalize(const struct unicode_map *um, const struct qstr *str,
 int utf8_casefold(const struct unicode_map *um, const struct qstr *str,
 		  unsigned char *dest, size_t dlen);
 
-int utf8_casefold_hash(const struct unicode_map *um, const void *salt,
-		       struct qstr *str);
-
 struct unicode_map *utf8_load(unsigned int version);
 void utf8_unload(struct unicode_map *um);
-
-int utf8_parse_version(char *version);
 
 #endif /* _LINUX_UNICODE_H */

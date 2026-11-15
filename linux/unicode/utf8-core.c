@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/string.h>
 #include <stdlib.h>
 //#include <linux/parser.h>
 #include <linux/errno.h>
@@ -15,7 +13,6 @@ int utf8_validate(const struct unicode_map *um, const struct qstr *str)
 		return -1;
 	return 0;
 }
-EXPORT_SYMBOL(utf8_validate);
 
 int utf8_strncmp(const struct unicode_map *um,
 		 const struct qstr *s1, const struct qstr *s2)
@@ -41,7 +38,6 @@ int utf8_strncmp(const struct unicode_map *um,
 
 	return 0;
 }
-EXPORT_SYMBOL(utf8_strncmp);
 
 int utf8_strncasecmp(const struct unicode_map *um,
 		     const struct qstr *s1, const struct qstr *s2)
@@ -67,7 +63,6 @@ int utf8_strncasecmp(const struct unicode_map *um,
 
 	return 0;
 }
-EXPORT_SYMBOL(utf8_strncasecmp);
 
 /* String cf is expected to be a valid UTF-8 casefolded
  * string.
@@ -94,7 +89,6 @@ int utf8_strncasecmp_folded(const struct unicode_map *um,
 
 	return 0;
 }
-EXPORT_SYMBOL(utf8_strncasecmp_folded);
 
 int utf8_casefold(const struct unicode_map *um, const struct qstr *str,
 		  unsigned char *dest, size_t dlen)
@@ -116,7 +110,6 @@ int utf8_casefold(const struct unicode_map *um, const struct qstr *str,
 	}
 	return -EINVAL;
 }
-EXPORT_SYMBOL(utf8_casefold);
 
 int utf8_normalize(const struct unicode_map *um, const struct qstr *str,
 		   unsigned char *dest, size_t dlen)
@@ -138,7 +131,6 @@ int utf8_normalize(const struct unicode_map *um, const struct qstr *str,
 	}
 	return -EINVAL;
 }
-EXPORT_SYMBOL(utf8_normalize);
 
 static const struct utf8data *find_table_version(const struct utf8data *table,
 		size_t nr_entries, unsigned int version)
@@ -183,11 +175,9 @@ out_free_um:
 	free(um);
 	return NULL;
 }
-EXPORT_SYMBOL(utf8_load);
 
 void utf8_unload(struct unicode_map *um)
 {
 	free(um);
 }
-EXPORT_SYMBOL(utf8_unload);
 

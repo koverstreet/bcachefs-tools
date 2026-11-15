@@ -4,7 +4,6 @@
 /* Optimization barrier */
 /* The "volatile" is due to gcc bugs */
 #define barrier() __asm__ __volatile__("": : :"memory")
-#define barrier_data(ptr) __asm__ __volatile__("": :"r"(ptr) :"memory")
 
 #ifndef OPTIMIZER_HIDE_VAR
 /* Make the optimizer believe the variable can be manipulated arbitrarily. */
@@ -31,49 +30,18 @@
 #define __always_inline	inline
 #endif
 
-#define noinline		__attribute__((__noinline__))
-#define noinline_for_stack noinline
-
 #define __user
-#define __kernel
 
-#define __pure			__attribute__((pure))
 #define __aligned(x)		__attribute__((aligned(x)))
-#define __printf(a, b)		__attribute__((format(printf, a, b)))
-#define __used			__attribute__((__used__))
 #define __maybe_unused		__attribute__((unused))
-#define __always_unused		__attribute__((unused))
-#define __packed		__attribute__((__packed__))
-#define __flatten		__attribute__((flatten))
 #define __force
-#define __nocast
-#define __iomem
-#define __chk_user_ptr(x) (void)0
-#define __chk_io_ptr(x) (void)0
-#define __builtin_warning(x, y...) (1)
-#define __must_hold(x)
-#define __acquires(x)
-#define __cond_acquires(x)
-#define __releases(x)
-#define __acquire(x) (void)0
 #define __release(x) (void)0
-#define __cond_lock(x,c) (c)
-#define __percpu
-#define __rcu
 #define __sched
-#define __init
-#define __exit
-#define __private
 #define __must_check
-#define __malloc
-#define __weak			__attribute__((weak))
 #define likely(x)		__builtin_expect(!!(x), 1)
 #define unlikely(x)		__builtin_expect(!!(x), 0)
 #define unreachable()		__builtin_unreachable()
 #define __same_type(a, b)	__builtin_types_compatible_p(typeof(a), typeof(b))
-#define fallthrough		__attribute__((__fallthrough__))
-#define __noreturn		__attribute__((__noreturn__))
-#define __no_kmsan_checks
 
 #ifndef __counted_by
 #define __counted_by(nr)
@@ -82,11 +50,6 @@
 #define ___PASTE(a,b) a##b
 #define __PASTE(a,b) ___PASTE(a,b)
 #define __UNIQUE_ID(prefix) __PASTE(__PASTE(__UNIQUE_ID_, prefix), __LINE__)
-
-#define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
-
-#define __initcall(x)	/* unimplemented */
-#define __exitcall(x)	/* unimplemented */
 
 #include <linux/types.h>
 
@@ -162,41 +125,9 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 #define WRITE_ONCE(x, val) \
 	({ union { typeof(x) __val; char __c[1]; } __u = { .__val = (val) }; __write_once_size(&(x), __u.__c, sizeof(x)); __u.__val; })
 
-#define lockless_dereference(p) \
-({ \
-	typeof(p) _________p1 = READ_ONCE(p); \
-	typeof(*(p)) *___typecheck_p __maybe_unused; \
-	smp_read_barrier_depends(); /* Dependency order vs. p above. */ \
-	(_________p1); \
-})
-
-#define flush_cache_all()			do { } while (0)
-#define flush_cache_mm(mm)			do { } while (0)
-#define flush_cache_dup_mm(mm)			do { } while (0)
-#define flush_cache_range(vma, start, end)	do { } while (0)
-#define flush_cache_page(vma, vmaddr, pfn)	do { } while (0)
-#define ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE 0
-#define flush_dcache_page(page)			do { } while (0)
-#define flush_dcache_mmap_lock(mapping)		do { } while (0)
-#define flush_dcache_mmap_unlock(mapping)	do { } while (0)
-#define flush_icache_range(start, end)		do { } while (0)
-#define flush_icache_page(vma,pg)		do { } while (0)
-#define flush_icache_user_range(vma,pg,adr,len)	do { } while (0)
-#define flush_cache_vmap(start, end)		do { } while (0)
-#define flush_cache_vunmap(start, end)		do { } while (0)
-
 #ifdef __x86_64
 #define CONFIG_X86_64	y
 #endif
-
-#define __is_constexpr(x) \
-	(sizeof(int) == sizeof(*(8 ? ((void *)((long)(x) * 0l)) : (int *)8)))
-#define is_signed_type(type) (((type)(-1)) < (__force type)1)
-#define is_unsigned_type(type) (!is_signed_type(type))
-
-#define TYPEOF_UNQUAL(exp) __typeof__(exp)
-
-#define typeof_member(T, m)	typeof(((T*)0)->m)
 
 #define __cleanup(func) __maybe_unused __attribute__((__cleanup__(func)))
 

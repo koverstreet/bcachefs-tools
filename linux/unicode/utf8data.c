@@ -1,6 +1,5 @@
 /* This file is generated code, do not edit. */
 
-#include <linux/module.h>
 #include <linux/kernel.h>
 #include "utf8n.h"
 
@@ -4119,6 +4118,3 @@ const struct utf8data_table utf8_data_table = {
 
 	.utf8data = utf8data,
 };
-EXPORT_SYMBOL_GPL(utf8_data_table);
-MODULE_DESCRIPTION("UTF8 data table");
-MODULE_LICENSE("GPL v2");

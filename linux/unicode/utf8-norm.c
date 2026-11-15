@@ -587,8 +587,4 @@ ccc_mismatch:
 }
 
 #if IS_MODULE(CONFIG_UNICODE_NORMALIZATION_KUNIT_TEST)
-EXPORT_SYMBOL_GPL(utf8version_is_supported);
-EXPORT_SYMBOL_GPL(utf8nlen);
-EXPORT_SYMBOL_GPL(utf8ncursor);
-EXPORT_SYMBOL_GPL(utf8byte);
 #endif

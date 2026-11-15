@@ -2,7 +2,6 @@
 
 //! Splits, merges and rewrites, on InteriorUpdate.
 
-use core::ffi::{c_int, c_uint};
 use core::ptr;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, ValidateFlags,
@@ -23,7 +22,7 @@ use crate::c;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data::keylist::{keys, keys_mut};
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, BkeyValidate};
@@ -1416,15 +1415,6 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
 
     trans.verify_paths(paths);
     Ok(())
-}
-
-/// # Safety
-/// @merge_count is null, or a counter merges are counted in.
-pub unsafe fn __bch2_foreground_maybe_merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
-                                            path: PathIdx, level: c_uint, flags: c::TransCommitFlags,
-                                            merge_count: *mut u64) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(merge(&t, paths, path, level as usize, flags.into(), unsafe { merge_count.as_mut() }))
 }
 
 /// @path's leaf split - or compacted - so a key of @new_key_u64s fits, and

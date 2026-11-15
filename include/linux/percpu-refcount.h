@@ -7,15 +7,6 @@
 struct percpu_ref;
 typedef void (percpu_ref_func_t)(struct percpu_ref *);
 
-/* flags set in the lower bits of percpu_ref->percpu_count_ptr */
-enum {
-	__PERCPU_REF_ATOMIC	= 1LU << 0,	/* operating in atomic mode */
-	__PERCPU_REF_DEAD	= 1LU << 1,	/* (being) killed */
-	__PERCPU_REF_ATOMIC_DEAD = __PERCPU_REF_ATOMIC | __PERCPU_REF_DEAD,
-
-	__PERCPU_REF_FLAG_BITS	= 2,
-};
-
 /* @flags for percpu_ref_init() */
 enum {
 	PERCPU_REF_INIT_ATOMIC	= 1 << 0,
@@ -169,11 +160,6 @@ static inline void percpu_ref_kill(struct percpu_ref *ref)
 static inline bool percpu_ref_is_zero(struct percpu_ref *ref)
 {
 	return !atomic_long_read(&ref->count);
-}
-
-static inline bool percpu_ref_is_dying(struct percpu_ref *ref)
-{
-	return percpu_ref_is_zero(ref);
 }
 
 #endif /* __TOOLS_LINUX_PERCPU_REFCOUNT_H */

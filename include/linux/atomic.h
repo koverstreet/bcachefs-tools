@@ -30,17 +30,11 @@ typedef struct {
 #define __ATOMIC_OR(v, p)		__atomic_or_fetch(&(p)->counter, v, __ATOMIC_RELAXED)
 
 #define xchg(p, v)			__atomic_exchange_n(p, v, __ATOMIC_SEQ_CST)
-#define xchg_acquire(p, v)		__atomic_exchange_n(p, v, __ATOMIC_ACQUIRE)
 
 #define try_cmpxchg(p, old, new)				\
 	__atomic_compare_exchange_n((p), old, new, false,	\
 				    __ATOMIC_SEQ_CST,		\
 				    __ATOMIC_SEQ_CST)
-
-#define try_cmpxchg_acquire(p, old, new)			\
-	__atomic_compare_exchange_n((p), old, new, false,	\
-				    __ATOMIC_ACQUIRE,		\
-				    __ATOMIC_RELAXED)
 
 #define cmpxchg(p, old, new)					\
 ({								\
@@ -74,11 +68,8 @@ typedef struct {
 
 #define smp_mb__before_atomic()	__atomic_thread_fence(__ATOMIC_SEQ_CST)
 #define smp_mb__after_atomic()	__atomic_thread_fence(__ATOMIC_SEQ_CST)
-#define smp_wmb()		__atomic_thread_fence(__ATOMIC_SEQ_CST)
 #define smp_rmb()		__atomic_thread_fence(__ATOMIC_SEQ_CST)
 #define smp_mb()		__atomic_thread_fence(__ATOMIC_SEQ_CST)
-#define smp_read_barrier_depends()
-#define smp_acquire__after_ctrl_dep()	__atomic_thread_fence(__ATOMIC_SEQ_CST)
 #define smp_store_mb(var, value)  do { WRITE_ONCE(var, value); smp_mb(); } while (0)
 
 #define smp_load_acquire(p)						\
@@ -87,12 +78,6 @@ typedef struct {
 	smp_mb();							\
 	___p1;								\
 })
-
-#define smp_store_release(p, v)						\
-do {									\
-	smp_mb();							\
-	WRITE_ONCE(*p, v);						\
-} while (0)
 
 /* atomic interface: */
 

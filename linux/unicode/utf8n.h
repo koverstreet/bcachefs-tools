@@ -8,9 +8,6 @@
 #define UTF8NORM_H
 
 #include <linux/types.h>
-#include <linux/export.h>
-#include <linux/string.h>
-#include <linux/module.h>
 #include <linux/unicode.h>
 
 int utf8version_is_supported(const struct unicode_map *um, unsigned int version);

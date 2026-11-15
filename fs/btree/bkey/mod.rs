@@ -51,7 +51,7 @@
 //! b.cmp_packed(l, r).
 //!
 //! Conversions go one way: BkeyI (and TransBkey) -> BkeyS -> BkeySC. A
-//! bkey_i's value is inline, after its header; a bkey_s's is split, a
+//! BkeyI's value is inline, after its header; a BkeyS's is split, a
 //! pointer of its own, which may be anywhere - an unpacked key's value is
 //! still in the btree node. So a BkeyS isn't a bkey_i: what needs one -
 //! C's bch2_btree_insert() - takes a BkeyI.

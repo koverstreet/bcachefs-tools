@@ -7,9 +7,10 @@
  */
 
 #include "closure.h"
-#include <linux/export.h>
 #include <linux/rcupdate.h>
+#ifdef __KERNEL__
 #include <linux/sched/debug.h>
+#endif
 
 enum new_closure_state {
 	CLOSURE_normal_put,

@@ -4,7 +4,6 @@
 
 #include <linux/llist.h>
 #include <linux/sched.h>
-#include <linux/sched/task_stack.h>
 #include <linux/workqueue.h>
 
 /*
@@ -352,29 +351,6 @@ static inline void closure_init_stack_release(struct closure *cl)
 #endif
 }
 
-/*
- * Open coded DEFINE_CLASS(closure_stack, ...)
- *
- * We can't use DEFINE_CLASS() because that defines a destructor that destructs
- * a copy...
- */
-typedef struct closure class_closure_stack_t;
-
-static inline void class_closure_stack_destructor(struct closure *cl)
-{
-	closure_sync(cl);
-}
-
-static inline struct closure class_closure_stack_constructor(void)
-{
-	return (struct closure) {
-	      .remaining.counter = CLOSURE_REMAINING_INITIALIZER,
-#ifdef CONFIG_DEBUG_CLOSURES
-	      .magic = CLOSURE_MAGIC_STACK,
-#endif
-	};
-}
-
 /**
  * closure_wake_up - wake up all closures on a wait list,
  *		     with memory barrier
@@ -468,56 +444,5 @@ static inline void closure_call(struct closure *cl, closure_fn fn,
 	closure_init(cl, parent);
 	continue_at_nobarrier(cl, fn, wq);
 }
-
-#define __closure_wait_event(waitlist, _cond)				\
-do {									\
-	CLASS(closure_stack, cl)();					\
-									\
-	while (1) {							\
-		bch2_closure_wait(waitlist, &cl);			\
-		if (_cond)						\
-			break;						\
-		closure_sync(&cl);					\
-	}								\
-	closure_wake_up(waitlist);					\
-} while (0)
-
-#define closure_wait_event(waitlist, _cond)				\
-do {									\
-	if (!(_cond))							\
-		__closure_wait_event(waitlist, _cond);			\
-} while (0)
-
-#define __closure_wait_event_timeout(waitlist, _cond, _until)		\
-({									\
-	CLASS(closure_stack, cl)();					\
-	long _t;							\
-									\
-	while (1) {							\
-		bch2_closure_wait(waitlist, &cl);			\
-		if (_cond) {						\
-			_t = max_t(long, 1L, _until - jiffies);		\
-			break;						\
-		}							\
-		_t = max_t(long, 0L, _until - jiffies);			\
-		if (!_t)						\
-			break;						\
-		closure_sync_timeout(&cl, _t);				\
-	}								\
-	closure_wake_up(waitlist);					\
-	_t;								\
-})
-
-/*
- * Returns 0 if timeout expired, remaining time in jiffies (at least 1) if
- * condition became true
- */
-#define closure_wait_event_timeout(waitlist, _cond, _timeout)		\
-({									\
-	unsigned long _until = jiffies + _timeout;			\
-	(_cond)								\
-		? max_t(long, 1L, _until - jiffies)			\
-		: __closure_wait_event_timeout(waitlist, _cond, _until);\
-})
 
 #endif /* _LINUX_CLOSURE_H */
