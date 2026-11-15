@@ -116,6 +116,46 @@ into_raw! {
     Result<(), BchError> => kernel::ffi::c_long: |r| ret_to_class(r) as kernel::ffi::c_long;
 }
 
+#[cfg(kernel)]
+use {core::ffi::CStr, core::ptr::NonNull, crate::c, crate::util::ffi::c_char};
+
+#[cfg(kernel)]
+from_raw! {
+    &'a CStr              = *const c_char       => |r| CStr::from_ptr(r.cast());
+    &'a mut c::kstat      = *mut c::kstat       => |r| &mut *r;
+    &'a mut c::iattr      = *mut c::iattr       => |r| &mut *r;
+    &'a mut c::file_kattr = *mut c::file_kattr  => |r| &mut *r;
+    &'a mut c::delayed_call = *mut c::delayed_call => |r| &mut *r;
+    &'a mut c::fiemap_extent_info = *mut c::fiemap_extent_info => |r| &mut *r;
+    /// The kernel crate's is fs.h's declaration, opaque; codegen's the same.
+    &'a mut c::kstatfs    = *mut kernel::bindings::kstatfs => |r| &mut *r.cast();
+}
+
+// quotactl's
+#[cfg(kernel)]
+from_raw! {
+    c::kqid               = c::kqid             => |r| r;
+    &'a mut c::kqid       = *mut c::kqid        => |r| &mut *r;
+    &'a mut c::qc_state   = *mut c::qc_state    => |r| &mut *r;
+    &'a c::qc_info        = *mut c::qc_info     => |r| &*r;
+    &'a c::qc_dqblk       = *mut c::qc_dqblk    => |r| &*r;
+    &'a mut c::qc_dqblk   = *mut c::qc_dqblk    => |r| &mut *r;
+}
+
+/// @e, classed, as an ERR_PTR().
+pub(crate) fn err_class_ptr<T>(e: BchError) -> *mut T {
+    e.class() as isize as *mut T
+}
+
+#[cfg(kernel)]
+into_raw! {
+    /// mkdir's: NULL for the dentry it was given, instantiated.
+    Result<(), BchError>    => *mut c::dentry: |r| r.map_or_else(err_class_ptr, |()| core::ptr::null_mut());
+    Result<usize, BchError> => isize: |r| r.map_or_else(|e| e.class() as isize, |n| n as isize);
+    /// alloc_inode's: NULL if there isn't one.
+    Result<NonNull<c::inode>, BchError> => *mut c::inode: |r| r.map_or(core::ptr::null_mut(), NonNull::as_ptr);
+}
+
 /// See the file comment.
 #[macro_export]
 macro_rules! vfs_ops {

@@ -5,10 +5,16 @@
 //! own fmt adapter; this writes bytes, which every Display of ours can make.
 
 use crate::c;
+use crate::os::ops::from_raw;
 use crate::util::ffi::Opaque;
 
 #[repr(transparent)]
 pub struct SeqFile(Opaque<c::seq_file>);
+
+from_raw! {
+    /// One this thread is writing.
+    &'a SeqFile = *mut c::seq_file => |r| SeqFile::from_raw(r);
+}
 
 impl SeqFile {
     /// # Safety

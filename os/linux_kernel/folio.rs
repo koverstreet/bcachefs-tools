@@ -23,7 +23,7 @@ use crate::os::iov_iter::IovIter;
 use crate::os::kernel::{cond_resched, loff};
 use crate::os::ops::from_raw;
 use core::borrow::Borrow;
-use core::ffi::c_int;
+use core::ffi::{c_int, c_void};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, Deref};
 use core::ptr::NonNull;
@@ -559,4 +559,17 @@ from_raw! {
 #[cfg(not(linux_ge = "6.17"))]
 from_raw! {
     VfsWriter = *mut c::file => |_r| VfsWriter;
+}
+
+from_raw! {
+    Mapping               = *mut c::address_space => |r| Mapping::from_raw(r);
+    Folio                 = *mut c::folio         => |r| Folio::from_raw(r);
+    /// read_folio()'s: locked, its lock ours to give up, not its ref.
+    FolioGuard<'a>        = *mut c::folio         => |r| FolioGuard::adopt(Folio::from_raw(r));
+    Readahead<'a>         = *mut c::readahead_control => |r| Readahead::from_raw(r);
+    /// write_end()'s: write_begin()'s, its lock and ref to give up.
+    LockedFolio           = *mut c::folio         => |r| LockedFolio::from_raw(r);
+    /// write_begin()'s out parameters.
+    &'a mut *mut c::folio = *mut *mut c::folio    => |r| &mut *r;
+    &'a mut *mut c_void   = *mut *mut c_void      => |r| &mut *r;
 }

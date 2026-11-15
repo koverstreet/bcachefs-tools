@@ -299,6 +299,20 @@ from_raw! {
     PollTable<'a> = *mut c::poll_table => |r| PollTable(r, PhantomData);
 }
 
+#[cfg(kernel)]
+#[cfg(linux_ge = "6.17")]
+from_raw! {
+    /// mmap_prepare's.
+    &'a mut c::vm_area_desc = *mut c::vm_area_desc => |r| &mut *r;
+}
+
+#[cfg(kernel)]
+#[cfg(not(linux_ge = "6.17"))]
+from_raw! {
+    /// mmap's.
+    &'a mut c::vm_area_struct = *mut c::vm_area_struct => |r| &mut *r;
+}
+
 // SAFETY: SelfOf's: a file of FileVTable::<P>'s is P's, its ops P::ops_of()'s
 impl<P: FileData> SelfOf<P> for *mut c::file {
     type Out = P::Ops;

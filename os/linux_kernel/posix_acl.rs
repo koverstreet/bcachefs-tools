@@ -7,6 +7,8 @@ use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
 
 use crate::c;
+use crate::errcode::BchError;
+use crate::os::ops::{err_class_ptr, from_raw, into_raw};
 
 #[path = "../posix_acl.rs"]
 mod common;
@@ -77,4 +79,16 @@ impl Drop for PosixAcl {
     fn drop(&mut self) {
         unsafe { c::posix_acl_release(self.as_raw()) }
     }
+}
+
+from_raw! {
+    AclType = c_int => |r| AclType::from_vfs(r);
+    /// The VFS's reference, None for no ACL.
+    Option<ManuallyDrop<PosixAcl>> = *mut c::posix_acl => |r| PosixAcl::borrow_raw(r);
+}
+
+into_raw! {
+    /// NULL for no ACL; the ACL's reference ours to give.
+    Result<Option<PosixAcl>, BchError> => *mut c::posix_acl:
+        |r| r.map_or_else(err_class_ptr, |acl| acl.map_or(core::ptr::null_mut(), PosixAcl::into_raw));
 }

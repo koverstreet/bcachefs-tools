@@ -11,12 +11,19 @@ use core::marker::PhantomData;
 
 use crate::c;
 use crate::locking::{Locked, SpinLockIrq};
+use crate::os::ops::from_raw;
 use crate::util::os_str::{qstr_name, OsStr};
 
 #[derive(Clone, Copy)]
 pub struct Dentry<'a> {
     raw:  *mut c::dentry,
     _ref: PhantomData<&'a c::dentry>,
+}
+
+from_raw! {
+    Dentry<'a>            = *mut c::dentry      => |r| Dentry::borrow_raw(r);
+    /// get_link's, None in an RCU walk.
+    Option<Dentry<'a>>    = *mut c::dentry      => |r| (!r.is_null()).then(|| Dentry::borrow_raw(r));
 }
 
 impl<'a> Dentry<'a> {

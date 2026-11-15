@@ -23,6 +23,7 @@ use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::util::ffi::c_char;
 
 use crate::os::dentry::Dentry;
+use crate::os::ops::from_raw;
 
 fn user_ptr(addr: u64) -> *const c_char {
     addr as usize as *const c_char
@@ -31,6 +32,10 @@ fn user_ptr(addr: u64) -> *const c_char {
 /// A path the VFS passes an op - getattr's - ours, held for the call.
 #[repr(transparent)]
 pub struct Path(c::path);
+
+from_raw! {
+    &'a Path = *const c::path => |r| &*r.cast();
+}
 
 impl Path {
     pub fn dentry(&self) -> Dentry<'_> {

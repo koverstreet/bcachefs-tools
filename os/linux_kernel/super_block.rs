@@ -28,6 +28,7 @@ use kernel::error::{code::ENOMEM, to_result, Result};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
 use super::fs_type::{FsType, SuperData};
+use super::ops::{FromRaw, SelfOf};
 
 #[repr(transparent)]
 pub struct SuperBlock<T>(Opaque<c::super_block>, PhantomData<T>);
@@ -95,6 +96,29 @@ impl<T> SuperBlock<T> {
         }
         true
     }
+}
+
+impl<'a, T> FromRaw for &'a SuperBlock<T> {
+    type Raw = *mut c::super_block;
+    unsafe fn from_raw(r: *mut c::super_block) -> Self { unsafe { SuperBlock::from_raw(r) } }
+}
+
+// s_fs_info is set at mount, before the superblock has an inode, to the T
+// that implements its traits: SelfOf's contract
+
+impl<T: 'static> SelfOf<T> for *mut c::super_block {
+    type Out = T;
+    unsafe fn self_of<'a>(&self) -> &'a T { unsafe { &*(**self).s_fs_info.cast::<T>() } }
+}
+
+impl<T: 'static> SelfOf<T> for *mut c::inode {
+    type Out = T;
+    unsafe fn self_of<'a>(&self) -> &'a T { unsafe { SelfOf::<T>::self_of(&(**self).i_sb) } }
+}
+
+impl<T: 'static> SelfOf<T> for *mut c::dentry {
+    type Out = T;
+    unsafe fn self_of<'a>(&self) -> &'a T { unsafe { SelfOf::<T>::self_of(&(**self).d_sb) } }
 }
 
 /// A superblock from sget with s_umount held for writing, its reference: the
