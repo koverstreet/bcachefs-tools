@@ -334,11 +334,7 @@ where
 {
     type Parent = Parent<F>;
     type At = F::At;
-
-    unsafe fn placed_at_raw(p: *const Self) -> *const F::At {
-        // SAFETY: the caller's
-        unsafe { &raw const (*p)._placed_at }
-    }
+    const AT_OFFSET: usize = core::mem::offset_of!(Self, _placed_at);
 }
 
 /// The refs a ReffedWork holds, by their paths from its parent P: one, or a

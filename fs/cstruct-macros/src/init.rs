@@ -169,18 +169,15 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             #[automatically_derived]
             impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
                 type Visible = <Self as crate::util::place::Contained>::Parent;
-                unsafe fn visible(p: *mut Self) -> *mut Self::Visible {
-                    unsafe { crate::util::place::container_of_raw(p) }
-                }
+                const VISIBLE_OFFSET: usize = <#ty>::OFFSET
+                    + <<#ty as crate::util::place::Place>::Base as crate::util::place::Enclosing>::VISIBLE_OFFSET;
             }
         },
         _ => quote! {
             #[automatically_derived]
             impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
                 type Visible = Self;
-                unsafe fn visible(p: *mut Self) -> *mut Self {
-                    p
-                }
+                const VISIBLE_OFFSET: usize = 0;
             }
         },
     };

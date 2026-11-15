@@ -263,6 +263,13 @@ unsafe impl<B, const N: u64> Sync for AtInner<B, N> {}
 
 impl<B, const N: u64> sealed::Sealed for AtInner<B, N> {}
 
+impl<B: Field<N>, const N: u64> AtInner<B, N>
+where
+    B::Type: Wrapper,
+{
+    pub(crate) const OFFSET: usize = B::OFFSET + <B::Type as Wrapper>::INNER_OFFSET;
+}
+
 impl<B: Field<N>, const N: u64> Place for AtInner<B, N>
 where
     B::Type: Wrapper,
@@ -270,22 +277,20 @@ where
     type Base = B;
     type Type = <B::Type as Wrapper>::Inner;
     fn offset(&self) -> usize {
-        B::OFFSET + <B::Type as Wrapper>::INNER_OFFSET
+        Self::OFFSET
     }
 }
 
 /// What a value placed in Self has for its parent: Self - or, Self placed in
 /// a Wrapper, the struct holding that, as a Locked's data is had only with
-/// its lock held, and what's placed in it is had without: visible() of a live
-/// Self is the live Visible it's in, or Self. #[derive(Init)] implements it,
-/// on every struct, as its At says.
+/// its lock held, and what's placed in it is had without. #[derive(Init)]
+/// implements it, on every struct, as its At says.
 pub(crate) trait Enclosing {
     type Visible;
 
-    /// # Safety
-    /// @p points to a live Self.
+    /// Where Self is in its Visible.
     #[doc(hidden)]
-    unsafe fn visible(p: *mut Self) -> *mut Self::Visible;
+    const VISIBLE_OFFSET: usize;
 }
 
 /// The At for B's field N, given to @init - the field's type's initializer -
@@ -405,12 +410,9 @@ pub(crate) trait Contained: Sized {
     #[doc(hidden)]
     type At: Place<Type = Self, Base: Enclosing<Visible = Self::Parent>>;
 
-    /// Its At field, of the Self at @p.
-    ///
-    /// # Safety
-    /// @p points to a Self.
+    /// Where its At field is in it.
     #[doc(hidden)]
-    unsafe fn placed_at_raw(p: *const Self) -> *const Self::At;
+    const AT_OFFSET: usize;
 
     /// The parent this is the field of.
     fn container(&self) -> &Self::Parent {
@@ -447,8 +449,8 @@ pub(crate) unsafe fn container_of_raw<T: Contained>(p: *mut T) -> *mut T::Parent
     // SAFETY: Contained's - p is in its At's Base, at its offset(), the At
     // fixed once made - and Enclosing's
     unsafe {
-        let base = p.byte_sub((*T::placed_at_raw(p)).offset()).cast::<<T::At as Place>::Base>();
-        <<T::At as Place>::Base as Enclosing>::visible(base)
+        let at = &*p.byte_add(T::AT_OFFSET).cast::<T::At>();
+        p.byte_sub(at.offset() + <<T::At as Place>::Base as Enclosing>::VISIBLE_OFFSET).cast()
     }
 }
 
@@ -467,10 +469,7 @@ pub struct Placed<C, A> {
 impl<C, A: Place<Type = Self, Base: Enclosing>> Contained for Placed<C, A> {
     type Parent = <A::Base as Enclosing>::Visible;
     type At = A;
-
-    unsafe fn placed_at_raw(p: *const Self) -> *const A {
-        p.wrapping_byte_add(core::mem::offset_of!(Self, _placed_at)).cast()
-    }
+    const AT_OFFSET: usize = core::mem::offset_of!(Self, _placed_at);
 }
 
 impl<C, A> Placed<C, A> {

@@ -243,10 +243,7 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
                 impl crate::util::place::Contained for #name {
                     type Parent = <#base as crate::util::place::Enclosing>::Visible;
                     type At = #at;
-                    unsafe fn placed_at_raw(p: *const Self) -> *const Self::At {
-                        // SAFETY: the caller's
-                        unsafe { &raw const (*p).#at_field }
-                    }
+                    const AT_OFFSET: usize = core::mem::offset_of!(Self, #at_field);
                 }
                 #init_at
                 #no_drop
