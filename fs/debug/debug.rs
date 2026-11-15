@@ -23,6 +23,7 @@ use crate::fs::Fs;
 use crate::os::debugfs::{DebugFile, DebugOut, DebugRoot};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::place::Contained;
+use crate::util::task::{TaskList, TASKS};
 use crate::util::{rcu, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
 use crate::format::{Bpos, Btree};
@@ -396,6 +397,23 @@ impl DebugFile for BtreeDeadlock {
     }
 }
 
+enum Tasks {}
+
+impl DebugFile for Tasks {
+    type Obj = TaskList;
+
+    async fn show(tasks: &TaskList, out: &mut DebugOut) -> Result<(), BchError> {
+        let mut next = 0;
+        out.print_each(|out| {
+            let rcu = rcu::read_lock();
+            let Some((idx, task)) = tasks.items_from(next, &rcu).next() else { return Ok(false) };
+            task.to_text(out);
+            next = idx + 1;
+            Ok(true)
+        }).await
+    }
+}
+
 /* Creating and removing them */
 
 /// /sys/kernel/debug/bcachefs/, if debugfs is up.
@@ -463,5 +481,6 @@ pub unsafe fn bch2_debug_exit() {
 
 pub fn bch2_debug_init() -> c_int {
     BCH_DEBUG.init(c"bcachefs");
+    BCH_DEBUG.file::<Tasks>(c"tasks", &TASKS);
     0
 }

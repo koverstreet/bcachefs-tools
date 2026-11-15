@@ -81,6 +81,7 @@ fn bcachefs_exit() {
         crate::vfs::buffered::pools_exit();
     }
     unsafe { crate::data::read::pools_exit() };
+    unsafe { crate::util::task::TASKS.exit() };
 }
 
 #[cfg_attr(kernel, unsafe(link_section = ".init.text"))]
@@ -108,6 +109,7 @@ fn init_interfaces() -> Result<(), BchError> {
     let parent = None;
 
     crate::util::maybe_rcu_alloc::free_init()?;
+    unsafe { crate::util::task::TASKS.init() }?;
     crate::data::read::pools_init()?;
     BCACHEFS_KOBJ.0.add(parent, c"bcachefs")?;
     crate::btree::lock_graph::graphs_init()?;

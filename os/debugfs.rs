@@ -103,6 +103,14 @@ impl DebugRoot {
         create_dir(name, Some(root)).map(DebugDir)
     }
 
+    /// Dir::file(), in the root: of something that lasts, as the root does
+    /// till module exit.
+    pub fn file<F: DebugFile>(&self, name: &CStr, obj: &'static F::Obj) {
+        if let Some(root) = NonNull::new(self.0.load(Ordering::Acquire)) {
+            unsafe { create_file::<F>(name, root, obj) }
+        }
+    }
+
     /// # Safety
     /// Every DebugDir subdir() made is gone: they're removed with it.
     pub unsafe fn exit(&self) {

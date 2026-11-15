@@ -82,9 +82,11 @@
 
 mod r#box;
 pub mod completion;
+mod list;
 mod queue;
 
 pub use completion::{waiter, Completion, CompletionReturn, Done, DoneWith, Return, Waiter};
+pub use list::{TaskList, TASKS};
 pub use queue::RunQueue;
 pub use r#box::{exclusive_size, spawn_detached, spawn_static, Exclusive, Join, Shared, TaskBox, TaskSlot};
 
@@ -93,6 +95,8 @@ use crate::errcode::BchError;
 use crate::os::kthread::{Kthread, KthreadRef};
 use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
 use crate::util::sleep::{sleep_until, Sleep};
+use crate::util::Printbuf;
+use crate::prt;
 use crate::os::workqueue::{Queue, RawWork};
 use core::fmt;
 use core::future::Future;
@@ -278,6 +282,7 @@ struct Header {
     thread:    Option<KthreadRef>,
     started:   Cell<bool>,
     finished:  Cell<bool>,
+    listed:    Cell<u32>,
     runq_next: AtomicPtr<Header>,
     vtable:    &'static TaskVtable,
     _rcu:      RcuMember,
@@ -287,6 +292,7 @@ struct Header {
 struct TaskVtable {
     poll:   unsafe fn(NonNull<Header>, &mut Context<'_>) -> Poll<()>,
     finish: unsafe fn(NonNull<Header>),
+    name:   fn() -> &'static str,
 }
 
 // The free's head is @work, dead once the task has finished: only dispatch()
@@ -349,8 +355,11 @@ impl<'q, F: Future + Send> Task<'q, F> {
                 thread:    None,
                 started:   Cell::new(false),
                 finished:  Cell::new(false),
+                listed:    Cell::new(0),
                 runq_next: AtomicPtr::new(null_mut()),
-                vtable:    const { &TaskVtable { poll: Self::poll, finish: Self::finish } },
+                vtable:    const {
+                    &TaskVtable { poll: Self::poll, finish: Self::finish, name: core::any::type_name::<F> }
+                },
                 _rcu:      RcuMember::default(),
             }),
             body <- body,
@@ -358,6 +367,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
             _q:     PhantomData,
         }? BchError)
         .pin_chain(move |task| {
+            task.header.listed.set(TASKS.add(task.task()));
             if let Spawn::Thread(name) = spawn {
                 let task_ref = task.task();
                 let thread_fn = move || unsafe { task_ref.run_thread() };
@@ -403,6 +413,7 @@ impl<F: Future> PinnedDrop for Task<'_, F> {
         let started = task.header.started.get();
         assert!(!started || task.header.finished.get(), "a task freed while it runs");
         if !started {
+            TASKS.remove(task.header.listed.replace(0));
             unsafe { ManuallyDrop::drop(&mut task.body.future) };
         }
         if let Some(thread) = task.header.thread.take() {
@@ -420,6 +431,22 @@ unsafe impl Send for TaskRef {}
 unsafe impl Sync for TaskRef {}
 
 impl TaskRef {
+    pub fn to_text(&self, out: &mut Printbuf) {
+        let h = unsafe { self.0.as_ref() };
+        let waiting = h.waiting.load(Ordering::Relaxed);
+
+        prt!(out, "{} ", (h.vtable.name)());
+        if !h.started.get() {
+            prt!(out, "not started\n");
+        } else if h.finished.get() {
+            prt!(out, "finished\n");
+        } else if !waiting.is_null() {
+            prt!(out, "waiting on {waiting:p}\n");
+        } else {
+            prt!(out, "running\n");
+        }
+    }
+
     /// # Safety
     /// The task's memory lasts till its done function runs, and what its
     /// future borrows outlives it.
@@ -471,6 +498,7 @@ impl TaskRef {
         loop {
             if unsafe { (header.vtable.poll)(self.0, &mut cx) }.is_ready() {
                 let finish = header.vtable.finish;
+                TASKS.remove(header.listed.replace(0));
                 header.finished.set(true);
                 unsafe { finish(self.0) };
                 return true;
