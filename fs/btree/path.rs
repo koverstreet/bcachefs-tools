@@ -585,9 +585,8 @@ impl<'t> Paths<'t> {
     }
 
     pub(crate) fn update_mut(&mut self, i: usize) -> &mut c::btree_insert_entry {
-        let t = self.trans;
-        assert!(i < t.nr_updates.get() as usize);
-        unsafe { &mut *t.updates.get().add(i) }
+        let updates = self.paths_and_updates().updates;
+        &mut updates[i]
     }
 
     /// @n queued at @i, the updates from @i on moved up one: there's room for
