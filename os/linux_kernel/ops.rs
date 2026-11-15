@@ -7,7 +7,9 @@
 //! The header names the trait, the C table, and the vtable that fills it in,
 //! `$VTable<P: Bound> = Impl`: generic over P, what the kernel object's
 //! private pointer points to, Impl the implementor had from it - P itself
-//! for the VFS's, P::Ops for a file's.
+//! for the VFS's, P::Ops for a file's. After it, `type Foo: Bound;` is an
+//! associated type, what the filesystem's types are - its inode's, say -
+//! which ops name as Self::Foo.
 //!
 //! An op is its Rust signature. From it come the trait method - unreachable
 //! unless given a body; #[vtable] sets HAS_* for what an impl has - the
@@ -163,6 +165,7 @@ macro_rules! vfs_ops {
         $(#[$tm:meta])*
         $vis:vis trait $Trait:ident $(: $sup:ident $(+ $sups:ident)*)? for $Ops:ty,
             $VTable:ident<$P:ident: $Bound:path> = $Impl:ty $(, |$o:ident| $init:block)?;
+        $( type $Assoc:ident $(: $AssocBound:path)?; )*
         $( $(#[doc = $doc:expr])* $(#[cfg($cfg:meta)])*
            fn $name:ident ( $(&self = $sa:ident ,)? $($arg:ident : $ty:ty),* $(,)? )
               $(-> $ret:ty)? $({ $($body:tt)* })?
@@ -175,6 +178,7 @@ macro_rules! vfs_ops {
     ) => { $crate::paste! {
         $(#[$tm])*
         $vis trait $Trait: Sized + 'static $(+ $sup $(+ $sups)*)? {
+            $( type $Assoc $(: $AssocBound)?; )*
             $(
                 $(#[cfg($cfg)])*
                 const [<HAS_ $name:upper>]: bool = $crate::vfs_ops!(@has $({ $($body)* })?);
@@ -189,27 +193,48 @@ macro_rules! vfs_ops {
             )*)?
         }
 
+        // The adapters are Impl's - in an impl for it of a trait of their own -
+        // so that an op's types can name its associated types, Self::Foo
+        #[doc(hidden)]
+        $vis trait [<$Trait Adapters>]<$P: $Bound>: $Trait {
+            $(
+                $crate::vfs_ops!(@adapter_fn decl [$(#[cfg($cfg)])*] [$Trait $P $Impl] [$($sa)?]
+                                 $name [<raw_ $name>] [$($arg: $ty),*] [$($ret)?]
+                                 [$( ($($xarg: $xty),*) [$($xret)?] { $($xbody)* } )?]);
+            )*
+            $($(
+                $crate::vfs_ops!(@adapter_fn decl [$(#[cfg($ucfg)])*] [$Trait $P $Impl] [$($usa)?]
+                                 $uname [<raw_ $uname>] [$($uarg: $uty),*] [$($uret)?] []);
+            )*)?
+        }
+
+        impl<$P: $Bound> [<$Trait Adapters>]<$P> for $Impl {
+            $(
+                $crate::vfs_ops!(@adapter_fn def [$(#[cfg($cfg)])*] [$Trait $P $Impl] [$($sa)?]
+                                 $name [<raw_ $name>] [$($arg: $ty),*] [$($ret)?]
+                                 [$( ($($xarg: $xty),*) [$($xret)?] { $($xbody)* } )?]);
+            )*
+            $($(
+                $crate::vfs_ops!(@adapter_fn def [$(#[cfg($ucfg)])*] [$Trait $P $Impl] [$($usa)?]
+                                 $uname [<raw_ $uname>] [$($uarg: $uty),*] [$($uret)?] []);
+            )*)?
+        }
+
         $vis struct $VTable<$P>(::core::marker::PhantomData<$P>);
 
         impl<$P: $Bound> $VTable<$P> {
             $vis const OPS: $Ops = {
                 // zero is NULL, "not implemented"
                 let mut ops: $Ops = ::pin_init::zeroed();
-                $( $(#[cfg($cfg)])* if <$Impl>::[<HAS_ $name:upper>] { ops.$name = Some(Self::$name); } )*
-                $($( $(#[cfg($ucfg)])* if <$Impl>::[<HAS_ $uname:upper>] { ops.$uname = Some(Self::$uname); } )*)?
+                $( $(#[cfg($cfg)])* if <$Impl>::[<HAS_ $name:upper>] {
+                    ops.$name = Some(<$Impl as [<$Trait Adapters>]<$P>>::[<raw_ $name>]);
+                } )*
+                $($( $(#[cfg($ucfg)])* if <$Impl>::[<HAS_ $uname:upper>] {
+                    ops.$uname = Some(<$Impl as [<$Trait Adapters>]<$P>>::[<raw_ $uname>]);
+                } )*)?
                 $( let ops = { let mut $o = ops; $init $o }; )?
                 ops
             };
-
-            $(
-                $crate::vfs_ops!(@adapter_fn [$(#[cfg($cfg)])*] [$P $Impl] [$($sa)?]
-                                 $name [$($arg: $ty),*] [$($ret)?]
-                                 [$( ($($xarg: $xty),*) [$($xret)?] { $($xbody)* } )?]);
-            )*
-            $($(
-                $crate::vfs_ops!(@adapter_fn [$(#[cfg($ucfg)])*] [$P $Impl] [$($usa)?]
-                                 $uname [$($uarg: $uty),*] [$($uret)?] []);
-            )*)?
         }
     } };
 
@@ -240,36 +265,47 @@ macro_rules! vfs_ops {
     // its type, and converted, the method called - on &self, had from the
     // argument while it's still raw - and the return converted to what the
     // table's field has
-    (@adapter_fn [$($cfg:tt)*] $pi:tt $sa:tt $name:ident $args:tt $ret:tt
+    (@adapter_fn decl [$($cfg:tt)*] $tpi:tt $sa:tt $name:ident $raw:ident $args:tt $ret:tt
                  [($($xarg:ident: $xty:ty),*) [$($xret:ty)?] { $($xbody:tt)* }]) => {
         $($cfg)*
-        unsafe extern "C" fn $name($($xarg: $xty),*) $(-> $xret)? { $($xbody)* }
+        unsafe extern "C" fn $raw($($xarg: $xty),*) $(-> $xret)?;
     };
-    (@adapter_fn $cfg:tt $pi:tt $sa:tt $name:ident $args:tt [] []) => {
-        $crate::vfs_ops!(@adapter_fn $cfg $pi $sa $name $args [()] []);
+    (@adapter_fn def [$($cfg:tt)*] $tpi:tt $sa:tt $name:ident $raw:ident $args:tt $ret:tt
+                 [($($xarg:ident: $xty:ty),*) [$($xret:ty)?] { $($xbody:tt)* }]) => {
+        $($cfg)*
+        unsafe extern "C" fn $raw($($xarg: $xty),*) $(-> $xret)? { $($xbody)* }
     };
-    (@adapter_fn [$($cfg:tt)*] [$P:ident $Impl:ty] [$($sa:ident)?] $name:ident
+    (@adapter_fn $mode:ident $cfg:tt $tpi:tt $sa:tt $name:ident $raw:ident $args:tt [] []) => {
+        $crate::vfs_ops!(@adapter_fn $mode $cfg $tpi $sa $name $raw $args [()] []);
+    };
+    (@adapter_fn decl [$($cfg:tt)*] $tpi:tt $sa:tt $name:ident $raw:ident
                  [$($arg:ident: $ty:ty),*] [$ret:ty] []) => {
         $($cfg)*
-        unsafe extern "C" fn $name<RawRet>($($arg: <$ty as $crate::os::ops::FromRaw>::Raw),*) -> RawRet
+        unsafe extern "C" fn $raw<RawRet>($($arg: <$ty as $crate::os::ops::FromRaw>::Raw),*) -> RawRet
+        where $ret: $crate::os::ops::IntoRaw<RawRet>;
+    };
+    (@adapter_fn def [$($cfg:tt)*] [$Trait:ident $P:ident $Impl:ty] [$($sa:ident)?] $name:ident $raw:ident
+                 [$($arg:ident: $ty:ty),*] [$ret:ty] []) => {
+        $($cfg)*
+        unsafe extern "C" fn $raw<RawRet>($($arg: <$ty as $crate::os::ops::FromRaw>::Raw),*) -> RawRet
         where $ret: $crate::os::ops::IntoRaw<RawRet>
         {
-            $crate::vfs_ops!(@call [$P $Impl] [$($sa)?] $name [$($arg: $ty),*])
+            $crate::vfs_ops!(@call [$Trait $P $Impl] [$($sa)?] $name [$($arg: $ty),*])
         }
     };
-    (@call [$P:ident $Impl:ty] [$sa:ident] $name:ident [$($arg:ident: $ty:ty),*]) => {
+    (@call [$Trait:ident $P:ident $Impl:ty] [$sa:ident] $name:ident [$($arg:ident: $ty:ty),*]) => {
         // SAFETY: FromRaw's and SelfOf's
         unsafe {
             let this: &$Impl = $crate::os::ops::SelfOf::<$P>::self_of(&$sa);
             $(let $arg: $ty = $crate::os::ops::FromRaw::from_raw($arg);)*
-            $crate::os::ops::IntoRaw::into_raw(this.$name($($arg),*))
+            $crate::os::ops::IntoRaw::into_raw(<$Impl as $Trait>::$name(this, $($arg),*))
         }
     };
-    (@call [$P:ident $Impl:ty] [] $name:ident [$($arg:ident: $ty:ty),*]) => {
+    (@call [$Trait:ident $P:ident $Impl:ty] [] $name:ident [$($arg:ident: $ty:ty),*]) => {
         // SAFETY: FromRaw's
         unsafe {
             $(let $arg: $ty = $crate::os::ops::FromRaw::from_raw($arg);)*
-            $crate::os::ops::IntoRaw::into_raw(<$Impl>::$name($($arg),*))
+            $crate::os::ops::IntoRaw::into_raw(<$Impl as $Trait>::$name($($arg),*))
         }
     };
 }
