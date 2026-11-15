@@ -10,37 +10,63 @@
 //! fds (BCH_IOCTL_DATA, BCH_IOCTL_FSCK_*) or counts.
 
 use std::io;
-use std::os::fd::{AsFd, AsRawFd};
+use std::marker::PhantomData;
+use std::os::fd::AsFd;
 
 pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
 use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, plain_bytes, plain_bytes_mut, read_past, CountedHead, FlexArray, Plain, Unsized, Unvalidated, VStructError};
 
-fn ret(r: libc::c_int) -> io::Result<i32> {
-    if r < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(r)
+/// Ioctl @I as rustix calls one: its opcode, its argument's address, and
+/// whether the kernel writes through it - rustix's own patterns take the
+/// opcode as a const generic, which I::OPCODE can't be. Returns what the
+/// ioctl does.
+struct Call<I, const MUTATES: bool> {
+    arg: *mut core::ffi::c_void,
+    _i:  PhantomData<I>,
+}
+
+unsafe impl<I: Ioctl, const MUTATES: bool> rustix::ioctl::Ioctl for Call<I, MUTATES> {
+    type Output = i32;
+    const IS_MUTATING: bool = MUTATES;
+
+    fn opcode(&self) -> rustix::ioctl::Opcode {
+        I::OPCODE as rustix::ioctl::Opcode
     }
+
+    fn as_ptr(&mut self) -> *mut core::ffi::c_void {
+        self.arg
+    }
+
+    unsafe fn output_from_ptr(out: rustix::ioctl::IoctlOutput, _: *mut core::ffi::c_void)
+        -> rustix::io::Result<i32>
+    {
+        Ok(out)
+    }
+}
+
+/// @I on @fd, its argument at @arg.
+///
+/// # Safety
+/// @arg is what @I's argument is to the kernel - written through only if
+/// MUTATES.
+unsafe fn call<I: Ioctl, const MUTATES: bool>(fd: impl AsFd, arg: *mut core::ffi::c_void) -> io::Result<i32> {
+    Ok(unsafe { rustix::ioctl::ioctl(fd, Call::<I, MUTATES> { arg, _i: PhantomData }) }?)
 }
 
 /// _IO: no argument.
 pub fn ioctl_none<I: Ioctl<Arg = ()>>(fd: impl AsFd) -> io::Result<i32> {
-    ret(unsafe { libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl) })
+    unsafe { call::<I, false>(fd, core::ptr::null_mut()) }
 }
 
 /// _IOW: the kernel only reads the argument.
 pub fn ioctl_w<I: Ioctl>(fd: impl AsFd, arg: &I::Arg) -> io::Result<i32> {
-    ret(unsafe {
-        libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg as *const I::Arg)
-    })
+    unsafe { call::<I, false>(fd, core::ptr::from_ref(arg).cast_mut().cast()) }
 }
 
 /// _IOR/_IOWR: the kernel writes (or updates) the argument.
 pub fn ioctl_rw<I: Ioctl>(fd: impl AsFd, arg: &mut I::Arg) -> io::Result<i32> {
-    ret(unsafe {
-        libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg as *mut I::Arg)
-    })
+    unsafe { call::<I, true>(fd, core::ptr::from_mut(arg).cast()) }
 }
 
 /// Argument in a caller-managed allocation — for the ioctls whose argument
@@ -53,7 +79,7 @@ pub fn ioctl_rw<I: Ioctl>(fd: impl AsFd, arg: &mut I::Arg) -> io::Result<i32> {
 /// expects for `I`: at least `I::Arg`, plus whatever trailing entries its
 /// header fields promise.
 pub unsafe fn ioctl_ptr<I: Ioctl>(fd: impl AsFd, arg: *mut I::Arg) -> io::Result<i32> {
-    ret(unsafe { libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg) })
+    unsafe { call::<I, true>(fd, arg.cast()) }
 }
 
 /// @call with a reply buffer of @bytes, then twice that, while the kernel
