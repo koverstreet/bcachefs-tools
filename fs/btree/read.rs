@@ -735,7 +735,6 @@ fn validate_vals(v: &mut NodeValidate<'_>, node: &mut ReadInFlightNode<'_>) -> R
     Ok(())
 }
 
-
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {
     pub(crate) static btree_read_corrupt_ratio: u32 = 0;
@@ -813,149 +812,176 @@ impl Drop for ReadInFlightNode<'_> {
     }
 }
 
-async fn read_attempt(io: &mut NodeReadIo<'_>, fs: &Fs, node: &ReadInFlightNode<'_>,
-                      ca: Option<&DevIoRef<c::DevReadRefKind>>, pick: &c::extent_ptr_decoded, waiter: waiter::Async,
-                      start_time: u64) -> Result<(), BchError>
-{
-    let Some(ca) = ca else { return Err(fs.err(blk_status_to_bch_err(c::BLK_STS_REMOVED))) };
+struct NodeRead<'r, 'b> {
+    fs:         &'r Fs,
+    _listed:    AsyncObjSlot,
+    io:         NodeReadIo<'r>,
+    ca:         Option<DevIoRef<c::DevReadRefKind>>,
+    pick:       c::extent_ptr_decoded,
+    failed:     c::bch_io_failures,
+    start_time: u64,
+    /* dropped last: that's the wake, after which the filesystem may go */
+    node:       ReadInFlightNode<'b>,
+}
 
-    io.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
-    io.bio_mut().set_sector(pick.ptr.offset());
-    /* read_done() may have swapped the node's buffer for its sort's */
-    let buf = unsafe { node_buf(node, node.contents()) };
-    let resume = Resume::queue(&fs.btree.read_complete_wq);
-    let status = io.remap_read(buf).submit(waiter).resume_on(resume).await;
-    ca.account_io_completion(c::MemberErrorType::read, start_time, status.is_ok());
-    status.map_err(|e| fs.err(e))
+impl NodeRead<'_, '_> {
+    async fn attempt(&mut self, waiter: waiter::Async) -> Result<(), BchError> {
+        let fs = self.fs;
+        let Some(ca) = &self.ca else { return Err(fs.err(blk_status_to_bch_err(c::BLK_STS_REMOVED))) };
+
+        self.io.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
+        self.io.bio_mut().set_sector(self.pick.ptr.offset());
+        /* read_done() may have swapped the node's buffer for its sort's */
+        let buf = unsafe { node_buf(&self.node, self.node.contents()) };
+        let resume = Resume::queue(&fs.btree.read_complete_wq);
+        let status = self.io.remap_read(buf).submit(waiter).resume_on(resume).await;
+        ca.account_io_completion(c::MemberErrorType::read, self.start_time, status.is_ok());
+        status.map_err(|e| fs.err(e))
+    }
+
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    fn maybe_corrupt(&mut self) {
+        let (dev, ratio) = (btree_read_corrupt_device.get(), btree_read_corrupt_ratio.get());
+        if (dev == self.pick.ptr.dev() as i32 || dev < 0) && ratio != 0 && random_u64_below(ratio.into()) == 0 {
+            let data = unsafe { node_buf(&self.node, self.node.contents()) };
+            let at = random_u64_below((data.len() / 8) as u64) as usize * 8;
+            data[at..at + 8].copy_from_slice(&random_u64().to_ne_bytes());
+        }
+    }
+
+    fn next_replica(&mut self) -> bool {
+        let fs = self.fs;
+        let k = BkeySC::from(self.node.contents().key_i());
+        let Ok(Some(pick)) = k.pick_read_device(fs, Some(&self.failed), 0, c::ReadFlags::empty()) else {
+            return false;
+        };
+        self.pick = pick;
+        self.ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
+        true
+    }
+
+    async fn read(&mut self, err: &mut Printbuf) -> Result<(), BchError> {
+        let waiter = waiter::Async::current().await;
+        loop {
+            self.start_time = local_clock();
+            let ret = match self.attempt(waiter).await {
+                Ok(()) => {
+                    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+                    self.maybe_corrupt();
+
+                    let ca = self.ca.as_ref().expect("a read that completed, from a device it had a ref on");
+                    read_done(self.fs, ca, &mut self.node, Some(&mut self.failed), err)
+                }
+                Err(e) => {
+                    self.failed.mark(&self.pick, e);
+                    Err(e)
+                }
+            };
+            if ret.is_ok() || !self.next_replica() {
+                return ret;
+            }
+        }
+    }
+
+    fn report(&self, ret: Result<(), BchError>, err: &Printbuf) {
+        let (fs, b) = (self.fs, self.node.node());
+        let btree = Btree(b.c.btree_id.into());
+
+        let mut msg = LogMsg::new(fs);
+        prt!(&mut msg, "btree node read error at btree {}\n", b.pos_to_text(fs));
+        msg.write_bytes_indented(err.as_bytes());
+        self.failed.to_text(&mut msg, fs);
+
+        /*
+         * only print retry success if we read from a replica with no errors
+         */
+        if let Err(err) = ret {
+            /*
+             * Initialize buf.suppress before btree_lost_data(); that will
+             * clear it if it did any work (scheduling recovery passes,
+             * marking superblock
+             */
+            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_hard, crate::here!()));
+
+            b.flags.set_read_error(true);
+            let _ = btree_lost_data(fs, &mut msg, btree);
+            note_lost_extents(fs, btree, self.node.contents().key_i().into());
+            prt!(&mut msg, "error {}\n", err.msg());
+        } else if !self.failed.is_empty() {
+            /* Separate ratelimit states for soft vs. hard errors */
+            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_soft, crate::here!()));
+
+            let dev = self.pick.ptr.dev().into();
+            let used = self.failed.dev(dev).is_some();
+            let used_err = |code| self.failed.dev_err(dev).is_some_and(|err| err.matches(code));
+
+            if !used {
+                prt!(&mut msg, "retry success");
+            } else if used_err(c::Errcode::btree_node_validate_err_csum) {
+                prt!(&mut msg, "checksum error, no good replica: read as is, contents unverified");
+            } else {
+                prt!(&mut msg, "repair success");
+            }
+
+            if (!self.failed.is_empty() || b.flags.need_rewrite()) &&
+               fs.recovery.runner.current_pass.get() != RecoveryPass::scan_for_btree_nodes {
+                prt!(&mut msg, " (rewriting node)");
+                fs.async_btree_op(b, self.node.contents(), AsyncBtreeOp::Rewrite);
+            }
+
+            msg.newline();
+
+            /* the replica we're using lost keys: the btree lost data */
+            if used && used_err(c::Errcode::btree_node_validate_err_keys_lost) {
+                let _ = btree_lost_data(fs, &mut msg, btree);
+            }
+        } else {
+            msg.set_suppressed(true);
+        }
+
+        msg.set_level(if ret.is_err() { LogLevel::ERR } else { LogLevel::NOTICE });
+    }
+
+    fn maybe_merge(&self) {
+        let (fs, contents) = (self.fs, self.node.contents());
+        if !crate::debug::params::btree_node_merging_disabled() &&
+           (contents.data().min_key != POS_MIN || contents.key.k.p != SPOS_MAX) &&
+           contents.nr.live_u64s < fs.btree.foreground_merge_threshold / 2 {
+            /* Ensure very empty btree nodes get merged, in case they're
+             * being read but never written to - but with a very low
+             * threshold, or __bch2_foreground_maybe_merge() will
+             * recursively kick off more merge attempts as it reads sibling
+             * nodes:
+             */
+            fs.async_btree_op(&self.node, contents, AsyncBtreeOp::MergeNoRead);
+        }
+    }
 }
 
 #[in_place(NodeReadFut)]
-async fn read_task<'h, 'b>(home: Pin<&'h mut NodeReadBio>, fs: BackRef<Fs>, mut node: ReadInFlightNode<'b>,
-                           mut pick: c::extent_ptr_decoded, mut ca: Option<DevIoRef<c::DevReadRefKind>>) {
-    let (fs, b) = (&*fs, node.node());
+async fn read_task<'h, 'b>(home: Pin<&'h mut NodeReadBio>, fs: BackRef<Fs>, node: ReadInFlightNode<'b>,
+                           pick: c::extent_ptr_decoded, ca: Option<DevIoRef<c::DevReadRefKind>>) {
+    let fs = &*fs;
     let listed = unsafe { AsyncObjSlot::new(fs, &*home) };
-    let mut io = NodeReadIo(home);
-    let waiter = waiter::Async::current().await;
-
-    let mut start_time = local_clock();
-    let mut status = read_attempt(&mut io, fs, &node, ca.as_ref(), &pick, waiter, start_time).await;
-
-    let btree = Btree(b.c.btree_id.into());
-
-    let mut failed = c::bch_io_failures::default();
-
-    let mut buf = LogMsg::new(fs);
-
-    prt!(&mut buf, "btree node read error at btree {}\n", b.pos_to_text(fs));
-
-    let ret = loop {
-        let ret = match status {
-            Ok(()) => {
-                #[cfg(CONFIG_BCACHEFS_DEBUG)]
-                {
-                    let (dev, ratio) = (btree_read_corrupt_device.get(), btree_read_corrupt_ratio.get());
-                    if (dev == pick.ptr.dev() as i32 || dev < 0) &&
-                       ratio != 0 && random_u64_below(ratio.into()) == 0 {
-                        let data = unsafe { node_buf(b, node.contents()) };
-                        let at = random_u64_below((data.len() / 8) as u64) as usize * 8;
-                        data[at..at + 8].copy_from_slice(&random_u64().to_ne_bytes());
-                    }
-                }
-
-                let ca = ca.as_ref().expect("a read that completed, from a device it had a ref on");
-                read_done(fs, ca, &mut node, Some(&mut failed), &mut buf)
-            }
-            Err(err) => {
-                failed.mark(&pick, err);
-                Err(err)
-            }
-        };
-
-        if ret.is_ok() {
-            break ret;
-        }
-        match BkeySC::from(node.contents().key_i())
-            .pick_read_device(fs, Some(&failed), 0, c::ReadFlags::empty()) {
-            Ok(Some(p)) => pick = p,
-            _ => break ret,
-        }
-
-        ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
-        start_time = local_clock();
-        status = read_attempt(&mut io, fs, &node, ca.as_ref(), &pick, waiter, start_time).await;
+    let mut r = NodeRead {
+        fs,
+        _listed: listed,
+        io: NodeReadIo(home),
+        ca,
+        pick,
+        failed: Default::default(),
+        start_time: 0,
+        node,
     };
-    drop(ca);
 
-    failed.to_text(&mut buf, fs);
+    let mut err = Printbuf::new();
+    let ret = r.read(&mut err).await;
+    r.report(ret, &err);
 
-    /*
-     * only print retry success if we read from a replica with no errors
-     */
-    if let Err(err) = ret {
-        /*
-         * Initialize buf.suppress before btree_lost_data(); that will
-         * clear it if it did any work (scheduling recovery passes,
-         * marking superblock
-         */
-        buf.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_hard, crate::here!()));
-
-        b.flags.set_read_error(true);
-        let _ = btree_lost_data(fs, &mut buf, btree);
-        note_lost_extents(fs, btree, node.contents().key_i().into());
-        prt!(&mut buf, "error {}\n", err.msg());
-    } else if !failed.is_empty() {
-        /* Separate ratelimit states for soft vs. hard errors */
-        buf.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_soft, crate::here!()));
-
-        let dev = pick.ptr.dev().into();
-        let used = failed.dev(dev).is_some();
-        let used_err = |code| failed.dev_err(dev).is_some_and(|err| err.matches(code));
-
-        if !used {
-            prt!(&mut buf, "retry success");
-        } else if used_err(c::Errcode::btree_node_validate_err_csum) {
-            prt!(&mut buf, "checksum error, no good replica: read as is, contents unverified");
-        } else {
-            prt!(&mut buf, "repair success");
-        }
-
-        if (!failed.is_empty() || b.flags.need_rewrite()) &&
-           fs.recovery.runner.current_pass.get() != RecoveryPass::scan_for_btree_nodes {
-            prt!(&mut buf, " (rewriting node)");
-            fs.async_btree_op(b, node.contents(), AsyncBtreeOp::Rewrite);
-        }
-
-        buf.newline();
-
-        /* the replica we're using lost keys: the btree lost data */
-        if used && used_err(c::Errcode::btree_node_validate_err_keys_lost) {
-            let _ = btree_lost_data(fs, &mut buf, btree);
-        }
-    } else {
-        buf.set_suppressed(true);
+    fs.times[c::TimeStat::btree_node_read as usize].update(r.start_time);
+    if ret.is_ok() {
+        r.maybe_merge();
     }
-
-    buf.set_level(if ret.is_err() { LogLevel::ERR } else { LogLevel::NOTICE });
-    drop(buf);
-
-    drop(listed);
-    fs.times[c::TimeStat::btree_node_read as usize].update(start_time);
-
-    let contents = node.contents();
-    if ret.is_ok() &&
-       !crate::debug::params::btree_node_merging_disabled() &&
-       (contents.data().min_key != POS_MIN || contents.key.k.p != SPOS_MAX) &&
-       contents.nr.live_u64s < fs.btree.foreground_merge_threshold / 2 {
-        /* Ensure very empty btree nodes get merged, in case they're
-         * being read but never written to - but with a very low
-         * threshold, or __bch2_foreground_maybe_merge() will
-         * recursively kick off more merge attempts as it reads sibling
-         * nodes:
-         */
-        fs.async_btree_op(b, contents, AsyncBtreeOp::MergeNoRead);
-    }
-
-    drop(node);
 }
 
 pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode<'_>, sync: bool) {
