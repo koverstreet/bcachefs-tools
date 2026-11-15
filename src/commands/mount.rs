@@ -138,7 +138,7 @@ fn mount_fs_context(
     src: &str,
     target: &CStr,
     fstype: &str,
-    mountflags: libc::c_ulong,
+    mountflags: core::ffi::c_ulong,
     data: Option<&str>,
     devs: &[DevInfo],
     user_key: Option<&str>,
@@ -318,7 +318,7 @@ fn mount_inner(
     src: OsString,
     target: &std::path::Path,
     fstype: &str,
-    mountflags: libc::c_ulong,
+    mountflags: core::ffi::c_ulong,
     data: Option<String>,
     devs: Vec<DevInfo>,
     unlocked: Option<&Unlocked>,
@@ -370,7 +370,7 @@ fn mount_legacy(
     src: OsString,
     target: &std::path::Path,
     fstype: &str,
-    mut mountflags: libc::c_ulong,
+    mut mountflags: core::ffi::c_ulong,
     data: Option<String>,
 ) -> Result<(), MountError> {
     // An interior NUL can't be expressed in a C string at all. Nothing has been
@@ -433,7 +433,7 @@ pub(crate) struct ParsedMountOptions {
     /// Filesystem-specific options: everything not consumed as a kernel flag.
     pub fs_opts:      Option<String>,
     /// Kernel mount flags for mount(2).
-    pub flags:        libc::c_ulong,
+    pub flags:        core::ffi::c_ulong,
     /// `flags` expressed as fuser options, for the FUSE path. Flags with no
     /// fuser equivalent are omitted here but still apply via `flags`.
     #[cfg(feature = "fuse")]

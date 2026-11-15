@@ -22,7 +22,7 @@ use crate::wrappers::sysfs::{fs_get_devices, sysfs_path_from_fd};
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-extern "C" fn sigint_handler(_: libc::c_int) {
+extern "C" fn sigint_handler(_: core::ffi::c_int) {
     INTERRUPTED.store(true, Ordering::Relaxed);
 }
 
@@ -108,7 +108,7 @@ fn scrub(cli: Cli) -> Result<()> {
 
     unsafe {
         libc::signal(libc::SIGINT,
-                     sigint_handler as extern "C" fn(libc::c_int) as libc::sighandler_t);
+                     sigint_handler as extern "C" fn(core::ffi::c_int) as libc::sighandler_t);
     }
 
     let data_types: u32 = if cli.metadata {

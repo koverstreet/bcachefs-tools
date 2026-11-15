@@ -54,7 +54,7 @@ pub fn open_dir(path: &Path) -> Result<OwnedFd> {
 }
 
 /* Not in the libc crate yet; from linux/stat.h */
-const STATX_SUBVOL: libc::c_uint = 0x8000;
+const STATX_SUBVOL: core::ffi::c_uint = 0x8000;
 
 /// Which filesystem and subvolume @path is in, or None if it isn't on a
 /// filesystem that reports subvolumes.
@@ -75,7 +75,7 @@ fn path_subvol(path: &Path) -> Option<(u64, u64)> {
         return None;
     }
 
-    Some((libc::makedev(stx.stx_dev_major, stx.stx_dev_minor),
+    Some((rustix::fs::makedev(stx.stx_dev_major, stx.stx_dev_minor),
           stx.stx_subvol))
 }
 

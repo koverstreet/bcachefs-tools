@@ -343,7 +343,7 @@ fn opts_table() -> String {
  * illegal insn) aren't on malloc's call path, so this works reliably; if it
  * ever does deadlock, the user can SIGKILL and inspect the core file.
  */
-extern "C" fn fatal_signal_handler(signo: libc::c_int) {
+extern "C" fn fatal_signal_handler(signo: core::ffi::c_int) {
     let name: &[u8] = match signo {
         libc::SIGSEGV => b"\nbcachefs: fatal SIGSEGV\n",
         libc::SIGILL  => b"\nbcachefs: fatal SIGILL\n",
@@ -364,7 +364,7 @@ extern "C" fn fatal_signal_handler(signo: libc::c_int) {
 
 fn install_fatal_signal_handlers() {
     let mut sa: libc::sigaction = unsafe { core::mem::zeroed() };
-    sa.sa_sigaction = fatal_signal_handler as extern "C" fn(libc::c_int) as libc::sighandler_t;
+    sa.sa_sigaction = fatal_signal_handler as extern "C" fn(core::ffi::c_int) as libc::sighandler_t;
     sa.sa_flags = libc::SA_NODEFER | libc::SA_RESETHAND;
     unsafe { libc::sigemptyset(&mut sa.sa_mask) };
 

@@ -102,9 +102,9 @@ fn for_each_hole(ranges: &[CRange], max: u64) -> Vec<CRange> {
 // ---- Utility functions ----
 
 /// Resolve a dev_t to a device path via /sys/dev/block/.
-fn dev_t_to_path(dev: libc::dev_t) -> Result<String> {
-    let major = libc::major(dev);
-    let minor = libc::minor(dev);
+fn dev_t_to_path(dev: u64) -> Result<String> {
+    let major = rustix::fs::major(dev);
+    let minor = rustix::fs::minor(dev);
     let sysfs = format!("/sys/dev/block/{}:{}", major, minor);
 
     let link = fs::read_link(&sysfs)
@@ -193,7 +193,7 @@ fn reserve_new_fs_space(
     file_path: &str,
     block_size: u32,  // in sectors
     dev_size: u64,
-    dev: libc::dev_t,
+    dev: u64,
     force: bool,
 ) -> Result<(Vec<CRange>, u64)> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};

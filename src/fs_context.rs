@@ -64,7 +64,7 @@ use std::{
 
 use rustix::mount;
 
-const FSCONFIG_SET_FLAG: libc::c_uint = 0;
+const FSCONFIG_SET_FLAG: core::ffi::c_uint = 0;
 
 /// The most a single fsconfig(2) parameter value can carry.
 ///
@@ -82,24 +82,24 @@ const FSCONFIG_SET_FLAG: libc::c_uint = 0;
 /// everything else here reports failures through that log.
 pub const PARAM_VALUE_MAX: usize = 255;
 
-pub const MOUNT_ATTR_RDONLY:      libc::c_uint = 0x0000_0001;
-pub const MOUNT_ATTR_NOSUID:      libc::c_uint = 0x0000_0002;
-pub const MOUNT_ATTR_NODEV:       libc::c_uint = 0x0000_0004;
-pub const MOUNT_ATTR_NOEXEC:      libc::c_uint = 0x0000_0008;
-pub const MOUNT_ATTR_NOATIME:     libc::c_uint = 0x0000_0010;
-pub const MOUNT_ATTR_STRICTATIME: libc::c_uint = 0x0000_0020;
-pub const MOUNT_ATTR_NODIRATIME:  libc::c_uint = 0x0000_0080;
+pub const MOUNT_ATTR_RDONLY:      core::ffi::c_uint = 0x0000_0001;
+pub const MOUNT_ATTR_NOSUID:      core::ffi::c_uint = 0x0000_0002;
+pub const MOUNT_ATTR_NODEV:       core::ffi::c_uint = 0x0000_0004;
+pub const MOUNT_ATTR_NOEXEC:      core::ffi::c_uint = 0x0000_0008;
+pub const MOUNT_ATTR_NOATIME:     core::ffi::c_uint = 0x0000_0010;
+pub const MOUNT_ATTR_STRICTATIME: core::ffi::c_uint = 0x0000_0020;
+pub const MOUNT_ATTR_NODIRATIME:  core::ffi::c_uint = 0x0000_0080;
 
 /// MS_LAZYTIME, which libc doesn't define.
-pub const MS_LAZYTIME: libc::c_ulong = 1 << 25;
+pub const MS_LAZYTIME: core::ffi::c_ulong = 1 << 25;
 
 /// Translate the per-mount MS_* flags to the MOUNT_ATTR_* fsmount() takes.
 ///
 /// Flags with no per-mount equivalent are dropped here on purpose; see
 /// [`sb_flag_params`] for where the superblock ones go instead. The two sets
 /// are not disjoint: MS_RDONLY is both, and has to be sent both ways.
-pub fn mount_attrs(mountflags: libc::c_ulong) -> libc::c_uint {
-    const MAP: &[(libc::c_ulong, libc::c_uint)] = &[
+pub fn mount_attrs(mountflags: core::ffi::c_ulong) -> core::ffi::c_uint {
+    const MAP: &[(core::ffi::c_ulong, core::ffi::c_uint)] = &[
         (libc::MS_RDONLY,      MOUNT_ATTR_RDONLY),
         (libc::MS_NOSUID,      MOUNT_ATTR_NOSUID),
         (libc::MS_NODEV,       MOUNT_ATTR_NODEV),
@@ -123,8 +123,8 @@ pub fn mount_attrs(mountflags: libc::c_ulong) -> libc::c_uint {
 /// filesystem to open its devices read-only. Send only the former and a
 /// write-protected device fails the mount outright - the filesystem asks for
 /// O_RDWR and gets EACCES, and mount(8)'s read-only retry has nothing to change.
-pub fn sb_flag_params(mountflags: libc::c_ulong) -> Vec<&'static str> {
-    const MAP: &[(libc::c_ulong, &str)] = &[
+pub fn sb_flag_params(mountflags: core::ffi::c_ulong) -> Vec<&'static str> {
+    const MAP: &[(core::ffi::c_ulong, &str)] = &[
         (libc::MS_RDONLY,      "ro"),
         (libc::MS_SYNCHRONOUS, "sync"),
         (libc::MS_DIRSYNC,     "dirsync"),
@@ -210,7 +210,7 @@ impl FsContext {
                 self.fd.as_raw_fd(),
                 FSCONFIG_SET_FLAG,
                 key.as_ptr(),
-                std::ptr::null::<libc::c_char>(),
+                std::ptr::null::<core::ffi::c_char>(),
                 0,
             )
         };
@@ -237,7 +237,7 @@ impl FsContext {
 
     /// fsmount(2): turn the created superblock into a detached mount. Attach it
     /// with [`move_mount`].
-    pub fn fsmount(&self, attrs: libc::c_uint) -> io::Result<OwnedFd> {
+    pub fn fsmount(&self, attrs: core::ffi::c_uint) -> io::Result<OwnedFd> {
         Ok(mount::fsmount(self.fd.as_fd(), mount::FsMountFlags::FSMOUNT_CLOEXEC,
                           mount::MountAttrFlags::from_bits_retain(attrs))?)
     }

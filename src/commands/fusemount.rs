@@ -618,7 +618,7 @@ struct AtimeOpts {
 
 impl AtimeOpts {
     /// relatime unless told otherwise, as for a kernel mount:
-    fn from_ms_flags(flags: libc::c_ulong) -> Self {
+    fn from_ms_flags(flags: core::ffi::c_ulong) -> Self {
         let mode = if flags & (libc::MS_NOATIME | libc::MS_RDONLY) != 0 {
             AtimeMode::Never
         } else if flags & libc::MS_STRICTATIME != 0 {
@@ -1819,7 +1819,7 @@ pub struct Cli {
 fn parse_fuse_mount_options(
     device: &str,
     options: Option<&str>,
-) -> anyhow::Result<(c::bch_opts, Vec<MountOption>, libc::c_ulong)> {
+) -> anyhow::Result<(c::bch_opts, Vec<MountOption>, core::ffi::c_ulong)> {
     let mut mount_options = vec![
         MountOption::FSName(device.to_string()),
         // Use CUSTOM instead of Subtype — fuser categorizes Subtype as
@@ -2007,7 +2007,7 @@ enum FuseMount {
     /// fuseblk, mounted by us, for block devices.
     Fuseblk {
         source:   PathBuf,
-        ms_flags: libc::c_ulong,
+        ms_flags: core::ffi::c_ulong,
     },
 }
 
@@ -2020,7 +2020,7 @@ enum FuseMount {
 fn mount_fuseblk(
     source:     &Path,
     mountpoint: &str,
-    ms_flags:   libc::c_ulong,
+    ms_flags:   core::ffi::c_ulong,
     blksize:    u32,
 ) -> std::io::Result<OwnedFd> {
     let dev_fuse = OpenOptions::new().read(true).write(true).open("/dev/fuse")?;

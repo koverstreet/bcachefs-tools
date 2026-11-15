@@ -571,7 +571,7 @@ impl rustyline::Helper for KvdbHelper {}
 /// returning what they've collected; the flag is cleared before each command.
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-extern "C" fn kvdb_sigint(_: libc::c_int) {
+extern "C" fn kvdb_sigint(_: core::ffi::c_int) {
     INTERRUPTED.store(true, Ordering::Relaxed);
 }
 
