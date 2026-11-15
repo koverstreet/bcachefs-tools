@@ -38,6 +38,7 @@ use crate::list;
 use crate::locking::{spinlock_t, Locked};
 use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use crate::data_structures::list::ListLinks;
+use crate::os::kernel::jiffies;
 use crate::os::sched;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd};
 use core::ptr;
@@ -202,17 +203,18 @@ impl EventCount {
     }
 
     /// Sleep until @cond, checked after every wake(): whatever it's over, a
-    /// change to it must wake() this.
+    /// change to it must wake() this. @how's timeout is for the whole wait.
     pub fn wait_until<T, E: SleepEnd + Copy>(&self, how: Sleep<E>,
                                              mut cond: impl FnMut() -> Option<T>)
         -> Result<T, E>
     {
+        let start = jiffies();
         loop {
             let seen = self.snapshot();
             if let Some(v) = cond() {
                 return Ok(v);
             }
-            self.wait(seen, how)?;
+            self.wait(seen, how.since(start))?;
         }
     }
 

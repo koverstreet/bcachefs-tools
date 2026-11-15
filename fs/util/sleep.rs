@@ -59,6 +59,16 @@ impl<E> Sleep<E> {
         let timeout = if jiffies >= FOREVER as c_ulong { FOREVER - 1 } else { jiffies as c_long };
         Sleep { state: self.state, io: self.io, timeout, _e: PhantomData }
     }
+
+    /// What's left of this sleep's timeout, started at @start: for a wait
+    /// that sleeps more than once.
+    pub fn since(self, start: c_ulong) -> Self {
+        if self.timeout == FOREVER {
+            return self;
+        }
+        let left = self.timeout - crate::os::kernel::jiffies().wrapping_sub(start) as c_long;
+        Sleep { timeout: left.max(0), ..self }
+    }
 }
 
 impl Sleep<Infallible> {
