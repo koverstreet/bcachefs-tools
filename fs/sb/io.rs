@@ -153,7 +153,7 @@ use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
+use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
@@ -165,7 +165,7 @@ use crate::util::task::waiter;
 use crate::os::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
 use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
-use core::mem::{size_of, size_of_val};
+use core::mem::{size_of, size_of_val, MaybeUninit};
 use crate::data_structures::array_vec::ArrayVec;
 use core::pin::Pin;
 use pin_init::PinInit;
@@ -1000,7 +1000,8 @@ impl bch_sb_buf {
     }
 
     fn buffer(&self) -> &[u8] {
-        self.data.as_deref().unwrap_or(&[])
+        // grow() writes all of it
+        self.data.as_deref().map_or(&[], |b| unsafe { assume_init_ref(b) })
     }
 
     pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
@@ -1790,8 +1791,11 @@ impl bch_sb_buf {
         let old = self.buffer();
         assert!(size >= old.len(), "a superblock buffer of {} bytes grown to {size}", old.len());
         let mut new = io_buf(size, Flags::empty())?;
-        new[..old.len()].copy_from_slice(old);
-        new[old.len()..].fill(0);
+        let (copy, zero) = new.split_at_mut(old.len());
+        for (n, o) in copy.iter_mut().zip(old) {
+            n.write(*o);
+        }
+        zero.fill(MaybeUninit::new(0));
         self.data = Some(new);
         Ok(())
     }
@@ -1803,7 +1807,8 @@ impl bch_sb_buf {
 
     /// The superblock's buffer, all of it: what the superblock can grow into.
     fn buffer_mut(&mut self) -> &mut [u8] {
-        self.data.as_deref_mut().unwrap_or(&mut [])
+        // as buffer()'s
+        self.data.as_deref_mut().map_or(&mut [], |b| unsafe { assume_init_mut(b) })
     }
 
     /// The section at @off - or a new one at the end, None - resized in place

@@ -248,7 +248,7 @@ impl<U, const ALIGN: usize> AlignedBox<[MaybeUninit<U>], ALIGN> {
 
     /// # Safety
     /// Every element is a valid U.
-    pub unsafe fn assume_init(self) -> AlignedBox<[U], ALIGN> {
+    unsafe fn assume_init(self) -> AlignedBox<[U], ALIGN> {
         let ptr = core::mem::ManuallyDrop::new(self).ptr;
         AlignedBox { ptr: NonNull::slice_from_raw_parts(ptr.cast(), ptr.len()) }
     }

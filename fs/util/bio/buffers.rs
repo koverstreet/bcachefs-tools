@@ -8,6 +8,7 @@
 //! needs - the bounce pool, a borrow's lifetime, or a mapped buffer itself.
 
 use core::marker::PhantomData;
+use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::pin::Pin;
 
@@ -198,19 +199,20 @@ unsafe impl MapBuf for &[u8] {
     }
 }
 
-unsafe impl<const A: usize> MapBuf for AlignedBox<[u8], A> {
+unsafe impl<const A: usize> MapBuf for AlignedBox<[MaybeUninit<u8>], A> {
     fn as_raw(&self) -> (*mut u8, usize) {
-        (self.as_ptr().cast_mut(), self.len())
+        (self.as_ptr().cast::<u8>().cast_mut(), self.len())
     }
 }
 
-/// A buffer for IO: page aligned, as userspace reads into it O_DIRECT.
-pub type IoBuf = AlignedBox<[u8], PAGE_SIZE>;
+/// A buffer for IO: page aligned, as userspace reads into it O_DIRECT. Not
+/// initialized: what reads into it, or writes it, has its bytes.
+pub type IoBuf = AlignedBox<[MaybeUninit<u8>], PAGE_SIZE>;
 
 /// An IoBuf of @bytes, with @gfp, not zeroed: as kvmalloc() leaves them, as
-/// C's buffers were - read into, or written, before they're read.
+/// C's buffers were.
 pub fn io_buf(bytes: usize, gfp: Flags) -> Result<IoBuf, AllocError> {
-    Ok(unsafe { AlignedBox::try_new_uninit_slice_gfp(bytes, gfp)?.assume_init() })
+    AlignedBox::try_new_uninit_slice_gfp(bytes, gfp)
 }
 
 /// The bio's buffer, @B: mapped as the bio's made, and held as long as it

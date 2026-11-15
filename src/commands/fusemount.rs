@@ -52,7 +52,6 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::ffi::OsStr;
-use std::mem::MaybeUninit;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -76,6 +75,7 @@ use bcachefs_kernel::snapshots::subvolume;
 
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
+use bcachefs_kernel::util::bio::io_buf;
 
 /// Guard that calls rcu_unregister_thread on drop (i.e. thread exit).
 struct RcuGuard;
@@ -528,7 +528,7 @@ fn fuse_truncate(fs: &Fs, inum: c::subvol_inum, new_size: u64) -> Result<(), Bch
     let tail = (new_size & (block_size - 1)) as usize;
     if tail != 0 {
         let block_start = new_size - tail as u64;
-        let mut buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(block_size as usize, Flags::empty())?;
+        let mut buf = io_buf(block_size as usize, Flags::empty())?;
         let buf = block_on(fs.read(inum, block_start, &bi, &mut buf))?;
 
         if buf[tail..].iter().any(|&b| b != 0) {
@@ -1184,7 +1184,7 @@ impl Filesystem for BcachefsFs {
         let block_size = fs.block_bytes() as usize;
         let aligned_size = (size + block_size - 1) & !(block_size - 1);
 
-        let Ok(mut buf) = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(aligned_size, Flags::empty()) else {
+        let Ok(mut buf) = io_buf(aligned_size, Flags::empty()) else {
             reply.error(Errno::ENOMEM);
             return;
         };
@@ -1489,7 +1489,7 @@ impl Filesystem for BcachefsFs {
         let aligned_end = (offset + read_size as u64).div_ceil(block_size) * block_size;
         let aligned_size = (aligned_end - aligned_start) as usize;
 
-        let Ok(mut buf) = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(aligned_size, Flags::empty()) else {
+        let Ok(mut buf) = io_buf(aligned_size, Flags::empty()) else {
             reply.error(Errno::ENOMEM);
             return;
         };
@@ -1533,7 +1533,7 @@ impl Filesystem for BcachefsFs {
         let aligned_end = (offset + size as u64).div_ceil(block_size) * block_size;
         let aligned_size = (aligned_end - aligned_start) as usize;
 
-        let Ok(mut buf) = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(aligned_size, Flags::empty()) else {
+        let Ok(mut buf) = io_buf(aligned_size, Flags::empty()) else {
             reply.error(Errno::ENOMEM);
             return;
         };

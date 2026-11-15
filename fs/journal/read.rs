@@ -29,7 +29,8 @@ use crate::util::bio::{io_buf, Bio, BioBox, BioBuffersMapped, BioOwner, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
-use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated, Validated, VStruct};
+use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated, Validated,
+                            VStruct};
 use crate::os::workqueue::Queue;
 use crate::util::ToText;
 use crate::{bch_err, bch_err_dev, bch_info, bch_info_dev, field, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
@@ -743,6 +744,17 @@ fn bucket_seqs_monotonic(bucket_seq: &[u64], head: usize, out: &mut Printbuf) ->
     monotonic
 }
 
+/// @bytes of @ca from @sector into @bio's buffer: what it read.
+fn read_at<'b>(ca: &Dev, bio: &'b mut BioBox<Bio, BioBuffersMapped<IoBuf>>, sector: u64, bytes: usize)
+    -> Result<&'b mut [u8], BchError>
+{
+    bio.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ);
+    bio.bio_mut().set_sector(sector);
+    bio.bio_mut().shrink(bytes.try_into().expect("a journal read of 4G or more"));
+    bio.submit_wait()?;
+    Ok(unsafe { assume_init_mut(&mut bio.buf_mut()[..bytes]) })
+}
+
 struct DevReader<'a> {
     fs:   &'a Fs,
     ca:   &'a Dev,
@@ -753,18 +765,10 @@ struct DevReader<'a> {
 impl<'a> DevReader<'a> {
     fn new(fs: &'a Fs, ca: &'a Dev, ring: &'a mut JournalRing) -> Result<Self, BchError> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
-        let mut buf = io_buf(bytes, Flags::empty()).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
-        buf.fill(0);
+        let buf = io_buf(bytes, Flags::empty()).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
         let bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
             ca.disk_sb.bdev, c::req_op_REQ_OP_READ, buf, |b| b.init())?;
         Ok(DevReader { fs, ca, ring, bio })
-    }
-
-    fn read(&mut self, sector: u64, bytes: usize) -> Result<(), BchError> {
-        self.bio.reset(self.ca.disk_sb.bdev, c::req_op_REQ_OP_READ);
-        self.bio.bio_mut().set_sector(sector);
-        self.bio.bio_mut().shrink(bytes.try_into().expect("a journal read of 4G or more"));
-        self.bio.submit_wait()
     }
 
     fn bucket_to_sector(&mut self, bucket: usize) -> u64 {
@@ -779,11 +783,11 @@ impl<'a> DevReader<'a> {
         let mut saw_bad = false;
 
         let submit_time = local_clock();
-        let ret = self.read(offset, ca.bucket_bytes() as usize);
+        let ret = read_at(ca, &mut self.bio, offset, ca.bucket_bytes() as usize);
 
         ca.account_io_completion(c::MemberErrorType::read, submit_time, ret.is_ok());
 
-        if ret.is_err() {
+        let Ok(buf) = ret else {
             crate::bch_err_dev_ratelimited!(ca, "journal read error: sector {}", offset);
             /*
              * We don't error out of the recovery process
@@ -792,10 +796,10 @@ impl<'a> DevReader<'a> {
              * no journal entries will be handled later
              */
             return Ok(());
-        }
+        };
 
         while offset < end {
-            let j = &mut self.bio.buf_mut()[((offset - start) << 9) as usize..];
+            let j = &mut buf[((offset - start) << 9) as usize..];
             let h = cast_plain_mut::<Head<c::jset>>(j).expect("a jset's header");
 
             let sectors = match validate::jset_validate_early(fs, Some(ca), h, offset, (end - offset) as u32)? {
@@ -871,11 +875,11 @@ impl<'a> DevReader<'a> {
      */
     fn peek_bucket(&mut self, bucket: usize) {
         let sector = self.bucket_to_sector(bucket);
-        if self.read(sector, 512 << self.fs.block_bits()).is_err() {
+        let Ok(buf) = read_at(self.ca, &mut self.bio, sector, 512 << self.fs.block_bits()) else {
             return; /* not fatal - bucket may be readable on another device */
-        }
+        };
 
-        let j = cast_plain::<Head<c::jset>>(self.bio.buf()).expect("a jset's header");
+        let j = cast_plain::<Head<c::jset>>(buf).expect("a jset's header");
         if j.magic.get() != self.fs.jset_magic() {
             return;
         }

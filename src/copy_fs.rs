@@ -34,6 +34,7 @@ use bcachefs_kernel::fs::Fs;
 
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
+use bcachefs_kernel::util::bio::io_buf;
 
 const BCACHEFS_ROOT_INO: u64 = 4096;
 const BCACHEFS_ROOT_SUBVOL: u64 = 1;
@@ -441,7 +442,7 @@ fn copy_data(
         let len = std::cmp::min(end - pos, MAX_IO_SIZE as u64) as usize;
         let padded = ((len as u64).div_ceil(block_size) * block_size) as usize;
 
-        let mut buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(padded, Flags::empty())?;
+        let mut buf = io_buf(padded, Flags::empty())?;
         let buf = pread_zero_tail(src_fd, &mut buf, len, pos)?;
 
         write_data(fs, dst_inode, pos, buf)?;
@@ -721,11 +722,11 @@ fn copy_sync_file_range(
     while start != range.end {
         let b = std::cmp::min(range.end - start, MAX_IO_SIZE as u64) as usize;
 
-        let mut src_buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(b, Flags::empty())?;
+        let mut src_buf = io_buf(b, Flags::empty())?;
         let read_len = std::cmp::min(b, (src_size - start) as usize);
         let src_buf = pread_zero_tail(src_fd, &mut src_buf, read_len, start)?;
 
-        let mut dst_buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(b, Flags::empty())?;
+        let mut dst_buf = io_buf(b, Flags::empty())?;
         let dst_buf = block_on(fs.read(dst_inum, start, dst, &mut dst_buf))?;
 
         let mut m = Range { start: 0, end: 0 };

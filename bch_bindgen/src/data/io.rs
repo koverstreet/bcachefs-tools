@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 
-use std::ptr::{self, NonNull};
+use std::ptr::NonNull;
 
 use crate::c;
 use bcachefs_kernel::btree::bkey::spos;
@@ -27,6 +27,7 @@ use bcachefs_kernel::util::bio::{Bio, BioOwner};
 use bcachefs_kernel::util::closure;
 use bcachefs_kernel::util::sleep::Sleep;
 use bcachefs_kernel::util::task::{waiter, CompletionReturn, Spawn, TaskSlot};
+use bcachefs_kernel::util::vstructs::assume_init_mut;
 use bcachefs_kernel::os::workqueue::Queue;
 
 /// Maximum single IO size.
@@ -190,7 +191,7 @@ impl<'a> ReadOp<'a> {
         }, None).expect("a queue's task: nothing in it fails");
         unsafe { task.start_unchecked() };
         let ret = wait.wait(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read");
-        Self { ret: Some(ret.map(|()| unsafe { &mut *(ptr::from_mut(buf) as *mut [u8]) })) }
+        Self { ret: Some(ret.map(|()| unsafe { assume_init_mut(buf) })) }
     }
 }
 

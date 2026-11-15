@@ -17,14 +17,13 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::mem::MaybeUninit;
 use std::os::unix::fs::OpenOptionsExt;
 
 use bch_bindgen::c;
 use clap::Parser;
 
-use bcachefs_kernel::os::kernel::PAGE_SIZE;
-use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
+use bcachefs_kernel::util::alloc::Flags;
+use bcachefs_kernel::util::bio::io_buf;
 use crate::wrappers::ioctl::{ioctl_rw, BCHFS_IOC_PREAD_RAW};
 
 const SECTOR_SIZE: u64 = 512;
@@ -133,7 +132,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
         .custom_flags(libc::O_DIRECT)
         .open(&cli.file)?;
 
-    let mut buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(cli.len.min(CHUNK) as usize, Flags::empty())?;
+    let mut buf = io_buf(cli.len.min(CHUNK) as usize, Flags::empty())?;
     let mut err_msg_buf = vec![0u8; 4096];
 
     let mut sink = match cli.output {

@@ -42,7 +42,6 @@
 // kernel code.
 
 use bcachefs_kernel::btree::bkey::prelude::*;
-use std::mem::MaybeUninit;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 
@@ -56,6 +55,7 @@ use clap::Parser;
 use bcachefs_kernel::format::{Bpos, Btree};
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
+use bcachefs_kernel::util::bio::io_buf;
 
 use crate::wrappers::super_io::write_all_at;
 
@@ -272,8 +272,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                         ErrorType::Csum | ErrorType::Keys => {
                             /* the whole written extent, so we can walk its bsets */
                             let written = b.written.get() as usize;
-                            let mut buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(
-                                (written * 512).max(block_size), Flags::empty())?;
+                            let mut buf = io_buf((written * 512).max(block_size), Flags::empty())?;
                             let buf = &mut buf[..];
 
                             let mut got = 0;

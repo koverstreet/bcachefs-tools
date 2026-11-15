@@ -41,6 +41,7 @@ use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
 use crate::util::alloc::Flags;
 use crate::util::bio::{io_buf, Bio, BioBox, BioBuffersMapped, BioOwner};
+use crate::util::vstructs::assume_init_ref;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
@@ -148,14 +149,14 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     } else {
         (p.crc.compressed_size as usize) << 9
     };
-    let mut buf = io_buf(bytes, Flags::empty()).map_err(|_| BchError::from(c::ENOMEM))?;
-    buf.fill(0);
+    let buf = io_buf(bytes, Flags::empty()).map_err(|_| BchError::from(c::ENOMEM))?;
 
     let mut bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
         ca.disk_sb.bdev, c::req_op_REQ_OP_READ as u32, buf, |b| b.init())?;
     bio.bio_mut().set_sector(p.ptr.offset());
     bio.submit_wait()?;
-    let buf = bio.buf();
+    // the read's
+    let buf = unsafe { assume_init_ref(bio.buf()) };
 
     let mut why = Printbuf::new();
     let good = if is_btree_ptr {
