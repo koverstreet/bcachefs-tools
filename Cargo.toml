@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "fs", "fs/cstruct-macros", "os/linux_user/shim", "os/linux_user/shim/pin-init", "os/linux_user/shim/pin-init/internal", "bch_bindgen", "doc/docgen"]
+members = [".", "fs", "fs/cstruct-macros", "os/linux_user/shim", "os/linux_user/shim/pin-init", "os/linux_user/shim/pin-init/internal", "doc/docgen"]
 default-members = [".", "fs"]
 
 [package]
@@ -32,7 +32,7 @@ uuid = { version = "1.2.2", features = ["v4"] }
 errno = "0.3"
 either = "1.5"
 bcachefs-kernel = { path = "fs" }
-bch_bindgen = { path = "bch_bindgen" }
+linux-keyutils = { version = "0.2", features = ["std"] }
 pin-init = { path = "os/linux_user/shim/pin-init" }
 strum = { version = "0.26", features = ["derive"] }
 strum_macros = "0.26"

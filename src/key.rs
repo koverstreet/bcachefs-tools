@@ -1,5 +1,4 @@
 use std::{
-    ffi::CStr,
     fmt::Write as _,
     fs,
     io::{stdin, IsTerminal},
@@ -13,14 +12,12 @@ use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key};
 use bcachefs_kernel::data::checksum::key_description;
 use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, without_line_ending, Given, Watch};
 use bcachefs_kernel::util::vstructs::plain_bytes;
-use bch_bindgen::keyutils::{self, keyctl_search};
+use linux_keyutils::{KeyRing, KeyRingIdentifier};
 use log::info;
 
 use crate::unlock_socket::UnlockSocket;
 use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
-
-use crate::ErrnoError;
 
 /// Check if a superblock has an encrypted passphrase set.
 pub fn sb_is_encrypted(sb: &bcachefs_kernel::c::bch_sb_buf) -> bool {
@@ -41,11 +38,11 @@ pub enum Keyring {
 }
 
 impl Keyring {
-    pub fn id(self) -> i32 {
+    pub fn id(self) -> KeyRingIdentifier {
         match self {
-            Keyring::Session => keyutils::KEY_SPEC_SESSION_KEYRING,
-            Keyring::User => keyutils::KEY_SPEC_USER_KEYRING,
-            Keyring::UserSession => keyutils::KEY_SPEC_USER_SESSION_KEYRING,
+            Keyring::Session     => KeyRingIdentifier::Session,
+            Keyring::User        => KeyRingIdentifier::User,
+            Keyring::UserSession => KeyRingIdentifier::UserSession,
         }
     }
 }
@@ -138,43 +135,29 @@ pub struct KeyHandle;
 impl KeyHandle {
     pub fn new(passphrase_correct: &PassphraseCorrect, keyring: Keyring) -> Result<Self> {
         let key_name = key_description(&passphrase_correct.fs_uuid);
-        let key_name = key_name.as_c_str().as_ptr();
-        let key_type = c"user";
         let key = plain_bytes(&passphrase_correct.passphrase_key);
 
-        let key_id = unsafe {
-            keyutils::add_key(key_type.as_ptr(), key_name, key.as_ptr().cast(), key.len(), keyring.id())
-        };
-
-        if key_id > 0 {
-            info!("Added key to keyring");
-            Ok(KeyHandle)
-        } else {
-            Err(anyhow!("failed to add key to keyring: {}", errno::errno()))
-        }
+        // a user key: what the kernel's request_key() looks for
+        KeyRing::from_special_id(keyring.id(), true)
+            .and_then(|ring| ring.add_key(key_name.as_str(), key))
+            .map_err(|e| anyhow!("failed to add key to keyring: {e}"))?;
+        info!("Added key to keyring");
+        Ok(KeyHandle)
     }
 
-    fn search_keyring(keyring: i32, key_name: &CStr) -> Result<()> {
-        let key_name = CStr::as_ptr(key_name);
-        let key_type = c"user";
-
-        let key_id = unsafe { keyctl_search(keyring, key_type.as_ptr(), key_name, 0) };
-
-        if key_id > 0 {
-            info!("Found key in keyring");
-            Ok(())
-        } else {
-            Err(ErrnoError(errno::errno()).into())
-        }
+    fn search_keyring(keyring: KeyRingIdentifier, key_name: &str) -> Result<()> {
+        KeyRing::from_special_id(keyring, false)?.search(key_name)?;
+        info!("Found key in keyring");
+        Ok(())
     }
 
     pub fn new_from_search(uuid: &Uuid) -> Result<Self> {
         let key_name = key_description(uuid);
-        let key_name = key_name.as_c_str();
+        let key_name = key_name.as_str();
 
-        Self::search_keyring(keyutils::KEY_SPEC_SESSION_KEYRING, key_name)
-            .or_else(|_| Self::search_keyring(keyutils::KEY_SPEC_USER_KEYRING, key_name))
-            .or_else(|_| Self::search_keyring(keyutils::KEY_SPEC_USER_SESSION_KEYRING, key_name))
+        Self::search_keyring(KeyRingIdentifier::Session, key_name)
+            .or_else(|_| Self::search_keyring(KeyRingIdentifier::User, key_name))
+            .or_else(|_| Self::search_keyring(KeyRingIdentifier::UserSession, key_name))
             .map(|_| KeyHandle)
     }
 

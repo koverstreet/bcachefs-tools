@@ -93,8 +93,8 @@ themselves are never in the worktree.
   More autonomy is appropriate here. Use good judgment, make clean
   commits, and keep things idiomatic.
 
-- **Interfaces and abstractions** (bch_bindgen wrappers, safe Rust APIs
-  over unsafe C): These are in between. The design matters because it
+- **Interfaces and abstractions** (safe Rust APIs over unsafe C, the
+  tools' wrappers in `src/wrappers/`): These are in between. The design matters because it
   affects everything built on top. Discuss the shape before building.
 
 ## Code standards
@@ -176,12 +176,13 @@ clean and make it easy to compare old vs new or revert.
 ## Architecture
 
 - **Rust**: Command dispatch (`src/bcachefs.rs`), all command
-  implementations (`src/commands/`), wrappers over C APIs
-  (`src/wrappers/`, `fs/bch_bindgen/`)
+  implementations (`src/commands/`), and the tools' userspace-only
+  wrappers (`src/wrappers/`): over the fs crate, and over a mounted
+  filesystem's ioctls and sysfs
 - **Commands**: All subcommands are now implemented in Rust.
-- `bch_bindgen` generates Rust bindings via bindgen, plus hand-written
-  safe wrappers for btree iteration, journal parsing, extent iteration,
-  printbuf, and superblock access
+- `fs/` is the `bcachefs-kernel` crate, built into both the tools and the
+  module. Its C bindings are bindgen's: `os/linux_user/shim`'s build
+  script generates userspace's, `os/linux_kernel/codegen.rs` the module's
 - Typed bkey dispatch (`BkeyValSC`, `BkeyValS`) is code-generated from
   the `KEY_TYPE_*` x-macro
 - Transaction restart handling uses `lockrestart_do` / `for_each`

@@ -279,10 +279,10 @@ build/%.o: %.c
 
 BCACHEFS_DEPS=libbcachefs.a
 # Whole crate dirs, not just their src/: a build script is a source file too,
-# and bch_bindgen's generates every binding and x-macro table we have. Leaving
-# it out meant editing it changed nothing until something else happened to make
-# cargo run - a stale binary that looks like a rebuilt one.
-RUST_SRCS:=$(shell find src fs bch_bindgen os/linux_user -type f -iname '*.rs') build.rs
+# and the shim's generates the bindings. Leaving one out meant editing it
+# changed nothing until something else happened to make cargo run - a stale
+# binary that looks like a rebuilt one.
+RUST_SRCS:=$(shell find src fs os/linux_user -type f -iname '*.rs') build.rs
 
 bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 	$(Q)$(CARGO_BUILD)
