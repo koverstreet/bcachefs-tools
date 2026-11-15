@@ -205,9 +205,8 @@ impl Drop for Replay {
 
 /// By seq, from journal_entries_base_seq - the fs's, not ours: C reads it too.
 #[repr(transparent)]
+#[derive(pin_init::Zeroable)]
 pub struct JournalEntries(GenRadix<Option<Replay>>);
-
-unsafe impl pin_init::Zeroable for JournalEntries {}
 
 impl JournalEntries {
     fn idx(fs: &Fs, seq: u64) -> usize {

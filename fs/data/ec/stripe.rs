@@ -474,11 +474,8 @@ pub(crate) fn shape(s: BkeySC<'_, c::Stripe<Validated>>) -> Shape {
 /// its u64s being a u8: the key of a stripe being made, edited as its blocks
 /// are allocated. Zeroed, it's a deleted key, no stripe.
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, ::pin_init::Zeroable)]
 pub struct StripeKey([u64; c::BKEY_U64s_MAX as usize]);
-
-// SAFETY: u64s
-unsafe impl ::pin_init::Zeroable for StripeKey {}
 
 impl StripeKey {
     fn room(&self) -> &[u8] {

@@ -346,11 +346,8 @@ pub const fn bits_to_longs(nr: usize) -> usize {
 #[cfg_attr(target_arch = "powerpc64", repr(align(128)))]
 #[cfg_attr(target_arch = "s390x", repr(align(256)))]
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, ::pin_init::Zeroable)]
 pub struct CacheAligned([u8; 0]);
-
-// SAFETY: no bytes
-unsafe impl ::pin_init::Zeroable for CacheAligned {}
 
 pub const SMP_CACHE_BYTES: usize = align_of::<CacheAligned>();
 pub const L1_CACHE_BYTES: usize = SMP_CACHE_BYTES;

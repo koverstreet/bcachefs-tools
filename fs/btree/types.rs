@@ -986,13 +986,12 @@ pub enum BtreeNodeRewriteReason {
  * ~capacity/1000/btree_node_size entries, which keeps memory tiny.
  */
 #[repr(C)]
+#[derive(pin_init::Zeroable)]
 pub struct btree_evicted_size {
     /* a power of 2 of them; none until btree_init_rw() */
     pub entries: Option<Box<[AtomicU64], KVmalloc>>,
 }
 
-// zeroed is no table: the Box's pointer, Option's None
-unsafe impl pin_init::Zeroable for btree_evicted_size {}
 const _: () = assert!(size_of::<Option<Box<[AtomicU64], KVmalloc>>>() == size_of::<Box<[AtomicU64], KVmalloc>>());
 
 pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
