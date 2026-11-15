@@ -88,7 +88,7 @@ unsafe impl Dir for FsDir {
 }
 
 const FS: &[Attr<Fs>] = &[
-    Attr::ro(c"minor",                  |c, out| writeln!(out, "{}", c.minor)),
+    Attr::ro(c"minor",                  |c, out| writeln!(out, "{}", c.minor.load(core::sync::atomic::Ordering::Relaxed))),
     Attr::ro(c"btree_cache_size",       |c, out| prt!(out, "{}", HumanReadable(c.btree_cache_size()))),
     Attr::ro(c"btree_write_stats",      |c, out| c.btree_write_stats_to_text(out)),
 

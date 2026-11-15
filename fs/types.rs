@@ -22,7 +22,7 @@ use crate::data_structures::genradix::SharedGenRadix;
 use crate::types::{bits_to_longs};
 use crate::util::rcu::RcuHead;
 use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_uint, c_ushort};
+use core::ffi::{c_uint, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU16, AtomicU32, AtomicU64};
 use cstruct_macros::{bch_enum, placed, MaybeZeroable, Fieldwise, Init, Late, TypeInfo};
 use pin_init::pin_data;
@@ -457,9 +457,9 @@ pub struct Fs {
     pub(crate) kobj: Placed<Kobject, crate::at!(Fs.kobj)>,
     pub flags: AtomicBitflags<c::FsFlag>,
 
-    #[init(-1)]
-    pub minor: c_int,
-    pub chardev: *mut c::device,
+    #[init(AtomicI32::new(-1))]
+    pub minor: AtomicI32,
+    pub chardev: AtomicPtr<c::device>,
     pub vfs_sb: *mut c::super_block,
     /// What its devices are claimed for: the open's, from alloc()
     #[pin]

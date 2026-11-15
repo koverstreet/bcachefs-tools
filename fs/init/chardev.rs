@@ -826,8 +826,7 @@ impl Fs {
                 None => return self.throw(Errcode::chardev_init_error),
             }
         };
-        // SAFETY: ours, set up as the filesystem's opened
-        unsafe { (*self.as_ptr()).minor = minor as c_int };
+        self.minor.store(minor as c_int, Relaxed);
 
         let dev = unsafe {
             c::device_create(&*CLASS, core::ptr::null_mut(), mkdev(minor), self.as_ptr().cast(),
@@ -835,7 +834,7 @@ impl Fs {
         };
         match errptr_to_result(NonNull::new(dev).expect("a device, or an error")) {
             Ok(dev) => {
-                unsafe { (*self.as_ptr()).chardev = dev.as_ptr() };
+                self.chardev.store(dev.as_ptr(), Relaxed);
                 Ok(())
             }
             Err(_) => self.throw(Errcode::chardev_init_error),
@@ -843,8 +842,7 @@ impl Fs {
     }
 
     pub(crate) fn chardev_exit(&self) {
-        // SAFETY: ours, as chardev_init() set them, or as allocation left them
-        let (dev, minor) = unsafe { ((*self.as_ptr()).chardev, (*self.as_ptr()).minor) };
+        let (dev, minor) = (self.chardev.load(Relaxed), self.minor.load(Relaxed));
         if !dev.is_null() {
             unsafe { c::device_unregister(dev) };
         }
