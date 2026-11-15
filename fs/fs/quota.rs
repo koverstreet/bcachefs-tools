@@ -263,7 +263,7 @@ mod vfs {
     // ── Enforcement ─────────────────────────────────────────────────────
 
     fn ignore_hardlimit() -> bool {
-        unsafe { c::capable(c::CAP_SYS_RESOURCE as c_int) }
+        crate::os::kernel::capable(crate::os::kernel::Capability::SysResource)
         /*
          * C's, #if 0'd:
          *

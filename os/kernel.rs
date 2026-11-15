@@ -221,4 +221,5 @@ pub fn ktime_get_coarse_real_ts64() -> c::timespec64 {
 pub enum Capability {
     Fowner = 3,
     SysAdmin = 21,
+    SysResource = 24,
 }

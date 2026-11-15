@@ -732,7 +732,7 @@ mod vfs {
 
     /// The trusted handler's ->list().
     unsafe extern "C" fn trusted_list(_dentry: *mut c::dentry) -> bool {
-        unsafe { c::capable(c::CAP_SYS_ADMIN as c_int) }
+        crate::os::kernel::capable(crate::os::kernel::Capability::SysAdmin)
     }
 
     const fn handler(
