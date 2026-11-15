@@ -4,7 +4,6 @@
 
 use std::ffi::CString;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
-use std::os::unix::fs::FileExt;
 use std::os::unix::io::RawFd;
 
 use bch_bindgen::c;
@@ -356,13 +355,12 @@ pub fn format(
             return None;
         }
 
-        let fd = dev.fd();
+        let fd = dev.as_fd();
 
         if dev.sb_offset == c::BCH_SB_SECTOR as u64 {
             // Zero start of disk
             let zeroes = vec![0u8; (c::BCH_SB_SECTOR as usize) << 9];
-            let file = crate::wrappers::super_io::borrowed_file(fd);
-            file.write_all_at(&zeroes, 0)
+            crate::wrappers::super_io::write_all_at(fd, &zeroes, 0)
                 .unwrap_or_else(|e| die(&format!("zeroing start of disk: {}", e)));
         }
 

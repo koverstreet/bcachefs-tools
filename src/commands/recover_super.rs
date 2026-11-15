@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::os::unix::fs::FileExt;
-use std::os::unix::io::AsRawFd;
+use std::os::fd::AsFd;
 use std::path::Path;
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::ValidateFlags;
@@ -259,7 +259,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
     }
 
     if cli.yes || crate::util::ask_yn() {
-        crate::wrappers::super_io::bch2_super_write(dev_file.as_raw_fd(), sb_buf.sb_mut());
+        crate::wrappers::super_io::bch2_super_write(dev_file.as_fd(), sb_buf.sb_mut());
     }
 
     crate::commands::format_util::trigger_udev_for_paths(&[&cli.device]);

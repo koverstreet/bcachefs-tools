@@ -2,8 +2,8 @@
 
 //! Rust implementations of superblock read/write operations.
 
-use std::os::unix::fs::FileExt;
-use std::os::unix::io::FromRawFd;
+use std::io;
+use std::os::fd::{AsRawFd, BorrowedFd};
 
 use bch_bindgen::c;
 use bcachefs_kernel::util::vstructs::{plain_bytes_mut, Head, SelfSized, Unvalidated};
@@ -15,21 +15,37 @@ pub fn die(msg: &str) -> ! {
     std::process::exit(1);
 }
 
-/// Wrap a borrowed file descriptor as a `File` without taking ownership.
-///
-/// The caller must ensure the fd remains valid for the lifetime of the
-/// returned `ManuallyDrop<File>`. The fd will NOT be closed on drop.
-pub fn borrowed_file(fd: i32) -> std::mem::ManuallyDrop<std::fs::File> {
-    std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) })
+/// FileExt::read_exact_at(), of a borrowed fd.
+pub fn read_exact_at(fd: BorrowedFd<'_>, mut buf: &mut [u8], mut offset: u64) -> io::Result<()> {
+    while !buf.is_empty() {
+        match rustix::io::pread(fd, &mut *buf, offset) {
+            Ok(0)                        => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(n)                        => { buf = &mut std::mem::take(&mut buf)[n..]; offset += n as u64; }
+            Err(rustix::io::Errno::INTR) => {}
+            Err(e)                       => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
+/// FileExt::write_all_at(), of a borrowed fd.
+pub fn write_all_at(fd: BorrowedFd<'_>, mut buf: &[u8], mut offset: u64) -> io::Result<()> {
+    while !buf.is_empty() {
+        match rustix::io::pwrite(fd, buf, offset) {
+            Ok(0)                        => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n)                        => { buf = &buf[n..]; offset += n as u64; }
+            Err(rustix::io::Errno::INTR) => {}
+            Err(e)                       => return Err(e.into()),
+        }
+    }
+    Ok(())
 }
 
 /// Write superblock to all layout locations on disk.
 ///
 /// Exits on I/O errors (matches C `die()` behavior).
-pub fn bch2_super_write(fd: i32, sb: &mut c::bch_sb) {
-    let file = borrowed_file(fd);
-
-    let bs = crate::wrappers::bdev::get_blocksize_physical_hint(fd) as usize;
+pub fn bch2_super_write(fd: BorrowedFd<'_>, sb: &mut c::bch_sb) {
+    let bs = crate::wrappers::bdev::get_blocksize_physical_hint(fd.as_raw_fd()) as usize;
     let layout_range = {
         let off = std::mem::offset_of!(Head<c::bch_sb>, layout);
         off..off + std::mem::size_of::<c::bch_sb_layout>()
@@ -58,46 +74,44 @@ pub fn bch2_super_write(fd: i32, sb: &mut c::bch_sb) {
             buf[layout_offset..layout_offset + layout_src.len()].copy_from_slice(layout_src);
             buf[sb_offset..sb_offset + sb_bytes].copy_from_slice(sb_src);
 
-            pwrite_exact(&file, &buf, 0);
+            pwrite_exact(fd, &buf, 0);
         } else {
             if offset_sectors == c::BCH_SB_SECTOR as u64 {
                 // Write backup layout in the block preceding the superblock
                 let mut buf = vec![0u8; bs];
 
-                file.read_exact_at(&mut buf, 4096 - bs as u64)
+                read_exact_at(fd, &mut buf, 4096 - bs as u64)
                     .unwrap_or_else(|e| die(&format!("pread failed at offset {}: {}", 4096 - bs, e)));
 
                 buf[bs - layout_src.len()..].copy_from_slice(layout_src);
 
-                pwrite_exact(&file, &buf, 4096 - bs as u64);
+                pwrite_exact(fd, &buf, 4096 - bs as u64);
             }
 
             let write_len = round_up(sb_bytes, bs);
             let mut buf = vec![0u8; write_len];
             buf[..sb_bytes].copy_from_slice(sb_src);
 
-            pwrite_exact(&file, &buf, offset_sectors << 9);
+            pwrite_exact(fd, &buf, offset_sectors << 9);
         }
     }
 
-    if let Err(e) = rustix::fs::fsync(&*file) {
+    if let Err(e) = rustix::fs::fsync(fd) {
         die(&format!("fsync failed writing superblock: {}", e));
     }
 }
 
 /// Read a superblock from disk at the given sector offset, into a buffer of
 /// its own, as read: Unvalidated, its count checked against what was read.
-pub fn super_read(fd: i32, sector: u64) -> anyhow::Result<SbBuf<Unvalidated>> {
-    let file = borrowed_file(fd);
-
+pub fn super_read(fd: BorrowedFd<'_>, sector: u64) -> anyhow::Result<SbBuf<Unvalidated>> {
     // Read the fixed-size header to learn the full extent
     let mut hdr = pin_init::zeroed::<Head<c::bch_sb>>();
-    file.read_exact_at(plain_bytes_mut(&mut hdr), sector << 9)
+    read_exact_at(fd, plain_bytes_mut(&mut hdr), sector << 9)
         .map_err(|e| anyhow::anyhow!("pread failed at offset {}: {}", sector << 9, e))?;
     let bytes = hdr.bytes();
 
     let mut buf = vec![0u8; bytes];
-    file.read_exact_at(&mut buf, sector << 9)
+    read_exact_at(fd, &mut buf, sector << 9)
         .map_err(|e| anyhow::anyhow!("pread failed at offset {}: {}", sector << 9, e))?;
 
     SbBuf::from_bytes(&buf)
@@ -109,8 +123,8 @@ fn round_up(val: usize, align: usize) -> usize {
 }
 
 /// Write exactly `buf.len()` bytes at `offset`. Exits on error.
-fn pwrite_exact(file: &std::fs::File, buf: &[u8], offset: u64) {
-    file.write_all_at(buf, offset)
+fn pwrite_exact(fd: BorrowedFd<'_>, buf: &[u8], offset: u64) {
+    write_all_at(fd, buf, offset)
         .unwrap_or_else(|e| die(&format!("pwrite failed at offset {}: {}", offset, e)));
 }
 

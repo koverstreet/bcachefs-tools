@@ -43,7 +43,6 @@
 
 use bcachefs_kernel::btree::bkey::prelude::*;
 use std::ops::ControlFlow;
-use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
@@ -56,6 +55,8 @@ use clap::Parser;
 use bcachefs_kernel::format::{Bpos, Btree};
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
+
+use crate::wrappers::super_io::{read_exact_at, write_all_at};
 
 struct KillNode {
     btree:  Btree,
@@ -261,20 +262,18 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                 eprintln!("damaging btree node ({:?}) on dev {} {} l={}\n  {}",
                     cli.error, dev, kill.btree, kill.level, k.to_text(&fs));
 
-                let fd = ca.disk_sb.bdev().fd().as_raw_fd();
-                let file = crate::wrappers::super_io::borrowed_file(fd);
+                let fd = ca.disk_sb.bdev().fd();
                 let offset = ptr.offset() << 9;
 
                 let damage = || -> Result<()> {
                     match cli.error {
-                        ErrorType::Zero =>
-                            std::os::unix::fs::FileExt::write_all_at(&*file, &zeroes, offset)?,
+                        ErrorType::Zero => write_all_at(fd, &zeroes, offset)?,
                         ErrorType::Csum | ErrorType::Keys => {
                             /* the whole written extent, so we can walk its bsets */
                             let written = b.written.get() as usize;
                             let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp((written * 512).max(block_size), Flags::empty())?;
 
-                            std::os::unix::fs::FileExt::read_exact_at(&*file, &mut buf, offset)?;
+                            read_exact_at(fd, &mut buf, offset)?;
 
                             let bset = first_bset_with_keys(&buf, written, fs.block_bits() as u32)
                                 .or_else(|| (cli.error == ErrorType::Csum)
@@ -304,7 +303,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                                       bset.sector, bset.u64s);
 
                             buf[victim] ^= 0xff;
-                            std::os::unix::fs::FileExt::write_all_at(&*file, &buf, offset)?;
+                            write_all_at(fd, &buf, offset)?;
                         }
                     }
                     Ok(())

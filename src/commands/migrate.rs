@@ -16,7 +16,7 @@ use bcachefs_kernel::fs::Dev;
 use std::ffi::CString;
 use std::fs;
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::os::fd::{AsFd, BorrowedFd};
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
@@ -528,7 +528,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .open(dev_path)
         .map_err(|e| anyhow!("Error opening {}: {}", dev_path, e))?;
 
-    let mut sb = super_io::super_read(dev_file.as_raw_fd(), sb_offset)?;
+    let mut sb = super_io::super_read(dev_file.as_fd(), sb_offset)?;
 
     // Validate and add default layout (catches errors early)
     let sb_size = add_default_sb_layout(&mut sb.sb_mut().layout)?;
