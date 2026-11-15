@@ -23,6 +23,9 @@ use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 use crate::c;
+use crate::errcode::BchError;
+use crate::os::dentry::Dentry;
+use crate::os::seq_file::SeqFile;
 use crate::util::ffi::Opaque;
 use kernel::error::{code::ENOMEM, to_result, Result};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
@@ -119,6 +122,33 @@ impl<T: 'static> SelfOf<T> for *mut c::inode {
 impl<T: 'static> SelfOf<T> for *mut c::dentry {
     type Out = T;
     unsafe fn self_of<'a>(&self) -> &'a T { unsafe { SelfOf::<T>::self_of(&(**self).d_sb) } }
+}
+
+crate::vfs_ops! {
+    /// A superblock's operations, super_operations: Self is what s_fs_info
+    /// points to, and each op gets it as &self, but free_inode(), which can
+    /// run after the filesystem's freed.
+    pub(crate) trait SuperOps for c::super_operations, SuperVTable<T: SuperOps> = T;
+    type Inode: IsInode;
+
+    fn alloc_inode(&self = sb, sb: &SuperBlock<Self>) -> Result<NonNull<c::inode>, BchError>;
+    /// The inode's memory, the VFS done with it - an RCU callback after
+    /// eviction, which can run after the filesystem's freed: no &self.
+    fn free_inode(inode: NonNull<Self::Inode>);
+    /// Not always referenced - iput_final() writes one back with i_count 0
+    /// - but I_SYNC or I_WILL_FREE keeps it from eviction meanwhile.
+    fn write_inode(&self = inode, inode: &Self::Inode, wbc: *mut c::writeback_control)
+        -> Result<(), BchError>;
+    /// I_FREEING: ours to evict, the superblock still up.
+    fn evict_inode(&self = inode, inode: &Self::Inode);
+    fn sync_fs(&self = sb, sb: &SuperBlock<Self>, wait: c_int) -> Result<(), BchError>;
+    fn statfs(&self = dentry, dentry: Dentry<'_>, buf: &mut c::kstatfs) -> Result<(), BchError>;
+    fn show_devname(&self = root, m: &SeqFile, root: Dentry<'_>) -> Result<(), BchError>;
+    fn show_options(&self = root, m: &SeqFile, root: Dentry<'_>) -> Result<(), BchError>;
+    /// The VFS's last op on the superblock.
+    fn put_super(&self = sb, sb: &SuperBlock<Self>);
+    fn freeze_fs(&self = sb, sb: &SuperBlock<Self>) -> Result<(), BchError>;
+    fn unfreeze_fs(&self = sb, sb: &SuperBlock<Self>) -> Result<(), BchError>;
 }
 
 /// A superblock from sget with s_umount held for writing, its reference: the

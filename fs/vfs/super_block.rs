@@ -5,11 +5,8 @@
 //! always one of ours: its s_fs_info is its Fs, set before it has an inode
 //! and live until the last is evicted.
 //!
-//! Its operations are a trait, SuperOps, declared by vfs_ops! (ops.rs): Self
-//! is what s_fs_info points to - Fs - and each op gets it as &self, but
-//! free_inode(), which can run after the filesystem's freed.
-//!
-//! SUPER_OPS is ours, the table mount (vfs/fs_type.rs) sets s_op to.
+//! Its operations, os::super_block's SuperOps, are Fs's: SUPER_OPS is the
+//! table mount (vfs/fs_type.rs) sets s_op to.
 
 use core::ffi::c_int;
 use core::ptr::NonNull;
@@ -31,6 +28,7 @@ use cstruct_macros::vtable;
 
 use crate::os::dentry::Dentry;
 use super::inode::InodeInfo;
+use crate::os::super_block::{SuperOps, SuperVTable};
 use crate::os::vfs_inode::VfsInode;
 use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME};
 
@@ -64,33 +62,10 @@ impl VfsInode {
 
 // ── The operations ───────────────────────────────────────────────────────
 
-crate::vfs_ops! {
-    pub(crate) trait SuperOps for c::super_operations, SuperVTable<T: SuperOps> = T;
-
-    fn alloc_inode(&self = sb, sb: &SuperBlock) -> Result<NonNull<c::inode>, BchError>;
-    /// The inode's memory, the VFS done with it - an RCU callback after
-    /// eviction, which can run after the filesystem's freed: no &self.
-    fn free_inode(inode: NonNull<InodeInfo>);
-    /// Not always referenced - iput_final() writes one back with i_count 0
-    /// - but I_SYNC or I_WILL_FREE keeps it from eviction meanwhile.
-    fn write_inode(&self = inode, inode: &InodeInfo, wbc: *mut c::writeback_control)
-        -> Result<(), BchError>;
-    /// I_FREEING: ours to evict, the superblock still up.
-    fn evict_inode(&self = inode, inode: &InodeInfo);
-    fn sync_fs(&self = sb, sb: &SuperBlock, wait: c_int) -> Result<(), BchError>;
-    fn statfs(&self = dentry, dentry: Dentry<'_>, buf: &mut c::kstatfs) -> Result<(), BchError>;
-    fn show_devname(&self = root, m: &SeqFile, root: Dentry<'_>) -> Result<(), BchError>;
-    fn show_options(&self = root, m: &SeqFile, root: Dentry<'_>) -> Result<(), BchError>;
-    /// The VFS's last op on the superblock.
-    fn put_super(&self = sb, sb: &SuperBlock);
-    fn freeze_fs(&self = sb, sb: &SuperBlock) -> Result<(), BchError>;
-    fn unfreeze_fs(&self = sb, sb: &SuperBlock) -> Result<(), BchError>;
-}
-
-// ── bcachefs's ───────────────────────────────────────────────────────────
-
 #[vtable]
 impl SuperOps for Fs {
+    type Inode = InodeInfo;
+
     /// Never the VFS's to call: our inodes are made by NewInode::new().
     fn alloc_inode(&self, _sb: &SuperBlock) -> Result<NonNull<c::inode>, BchError> {
         unreachable!("bcachefs inodes are allocated by NewInode::new()")
