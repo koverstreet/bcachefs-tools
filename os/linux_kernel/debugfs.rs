@@ -75,9 +75,10 @@ fn create_dir(name: &CStr, parent: Option<NonNull<Dentry>>) -> Option<NonNull<De
 /// @obj outlives the file.
 unsafe fn create_file<F: DebugFile>(name: &CStr, parent: NonNull<Dentry>, obj: &F::Obj) {
     unsafe {
-        c::bch2_debugfs_create_file(name.as_ptr().cast(), 0o400, parent.as_ptr(),
+        // debugfs_create_file() is a _Generic() over its fops' type
+        c::debugfs_create_file_full(name.as_ptr().cast(), 0o400, parent.as_ptr(),
                                     core::ptr::from_ref(obj).cast_mut().cast(),
-                                    &FileVTable::<Open<F>>::OPS);
+                                    core::ptr::null(), &FileVTable::<Open<F>>::OPS);
     }
 }
 

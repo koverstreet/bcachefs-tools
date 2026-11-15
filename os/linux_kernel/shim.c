@@ -399,15 +399,6 @@ void bch2_set_worker_desc(const char *desc)
 	set_worker_desc("%s", desc);
 }
 
-#include <linux/debugfs.h>
-
-/* For os/linux_kernel/debugfs.rs: debugfs_create_file() is a _Generic() over its fops' type */
-struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct dentry *parent,
-					void *data, const struct file_operations *fops)
-{
-	return debugfs_create_file(name, mode, parent, data, fops);
-}
-
 #include <linux/cpumask.h>
 
 /* nr_cpu_ids is a variable - or a macro, without SMP */

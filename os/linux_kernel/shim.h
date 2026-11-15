@@ -102,8 +102,6 @@ bool bch2_need_resched(void);
 bool bch2_owner_on_cpu(struct task_struct *owner);
 bool bch2_rt_or_dl_task_current(void);
 #endif
-struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct dentry *parent,
-					void *data, const struct file_operations *fops);
 unsigned bch2_nr_cpu_ids(void);
 
 void bch2_rust_warn(const char *file, unsigned line);
