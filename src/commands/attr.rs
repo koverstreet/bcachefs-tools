@@ -4,7 +4,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use clap::{Arg, ArgAction, Command};
 use rustix::fs::{openat, removexattr, setxattr, statx, AtFlags, Dir, FileType, Mode, OFlags, StatxFlags,
                  XattrFlags};

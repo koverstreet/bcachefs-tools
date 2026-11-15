@@ -14,7 +14,7 @@ use bcachefs_kernel::accounting;
 use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
 use bcachefs_kernel::util::{HumanReadable, ToText};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::util::vstructs::Head;
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bcachefs_kernel::data::moving::{MoveStats, MovingCtxt};

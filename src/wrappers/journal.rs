@@ -11,7 +11,7 @@
 use core::marker::PhantomData;
 use core::ops::Deref;
 
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::btree::journal_overlay::JournalKeysRef;
 use bcachefs_kernel::fs::Fs;
 

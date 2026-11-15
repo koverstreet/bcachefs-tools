@@ -11,7 +11,7 @@
 
 use std::fs::OpenOptions;
 
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use clap::Parser;
 
 use crate::wrappers::ioctl::{ioctl_w, BCHFS_IOC_UNPOISON};

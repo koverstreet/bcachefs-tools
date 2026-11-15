@@ -12,7 +12,7 @@
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::c::bch_sb_handle;
 use bcachefs_kernel::fs::Fs;

@@ -16,7 +16,7 @@ use std::task::{Context, Poll, Waker};
 
 use std::ptr::NonNull;
 
-use crate::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::spos;
 use bcachefs_kernel::data::read::{self, Rbio};
 use bcachefs_kernel::data::write::bch2_write;

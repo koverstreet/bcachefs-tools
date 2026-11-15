@@ -3,7 +3,7 @@ use std::{collections::{HashMap, HashSet}, ffi::CStr, mem, os::fd::OwnedFd,
 use chrono::{Local, TimeZone};
 
 use anyhow::{anyhow, ensure, Context, Result};
-use bch_bindgen::c::{
+use bcachefs_kernel::c::{
     BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node_v2,
     bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2,
     bch_ioctl_subvol_dirent, bch_ioctl_subvol_readdir, bch_ioctl_subvol_to_path,

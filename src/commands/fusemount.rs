@@ -61,7 +61,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bch_bindgen::fs::FsExt;
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bch_bindgen::data::io::block_on;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
@@ -2437,7 +2437,7 @@ pub const CMD: super::CmdDef = typed_cmd!("fusemount", "FUSE mount", Cli, cmd_fu
 mod tests {
     use super::{parse_fuse_mount_options, systime_to_ts, ts_to_systime, AtimeMode, AtimeOpts};
     use super::{NodeMap, ALT_NODE_BASE, BCACHEFS_ROOT_INO, BCACHEFS_ROOT_SUBVOL};
-    use bch_bindgen::c;
+    use bcachefs_kernel::c;
     use fuser::MountOption;
     use std::time::{Duration, UNIX_EPOCH};
 

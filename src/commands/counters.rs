@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use bch_bindgen::fs::FsExt;
-use bch_bindgen::c;
-use bch_bindgen::c::DegradedAction;
-use bch_bindgen::c::PersistentCounter;
+use bcachefs_kernel::c;
+use bcachefs_kernel::c::DegradedAction;
+use bcachefs_kernel::c::PersistentCounter;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::counters::COUNTERS;
 use clap::Parser;

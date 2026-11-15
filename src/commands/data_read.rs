@@ -19,7 +19,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use clap::Parser;
 
 use bcachefs_kernel::util::alloc::Flags;

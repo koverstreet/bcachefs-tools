@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use anyhow::bail;
 use clap::Parser;
 

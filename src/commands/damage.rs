@@ -14,7 +14,7 @@ use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::sb::errors::SbErrorId;
 use bcachefs_kernel::util::vstructs::{plain_bytes, Head, VstructRefEntries};
 use clap::{Parser, Subcommand};

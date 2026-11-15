@@ -25,7 +25,7 @@ use std::process;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::SbFieldType;
 

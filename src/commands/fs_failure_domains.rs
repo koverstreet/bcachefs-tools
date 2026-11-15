@@ -26,7 +26,7 @@ use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{AccountingEntry, DiskAccountingType};
-use bch_bindgen::c::DiskAccountingPosRef as Acct;
+use bcachefs_kernel::c::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::BcachefsHandle;

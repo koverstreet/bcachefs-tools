@@ -1,6 +1,6 @@
 
 use anyhow::{anyhow, bail, Result};
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::{
     entry_type, entry_btree_id, entry_log_str_eq,

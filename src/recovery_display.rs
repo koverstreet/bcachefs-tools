@@ -23,7 +23,7 @@ use std::{
 use anyhow::Context;
 use rustix::fs::{flock, FlockOperation};
 
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::init::passes::RecoveryPass;
 use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::init::passes;

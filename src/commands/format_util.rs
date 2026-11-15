@@ -6,7 +6,7 @@ use std::ffi::CString;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::io::RawFd;
 
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::alloc::disk_groups::Target;
 
 use crate::util::{die, read_exact_at, write_all_at};

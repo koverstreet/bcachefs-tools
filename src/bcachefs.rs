@@ -23,7 +23,7 @@ mod percpu_test;
 mod workqueue_test;
 
 use std::process::ExitCode;
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 
 #[derive(Debug)]
 pub struct ErrnoError(pub errno::Errno);

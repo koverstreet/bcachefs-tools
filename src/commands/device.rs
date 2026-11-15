@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use bch_bindgen::fs::FsExt;
-use bch_bindgen::c::{
+use bcachefs_kernel::c::{
     self,
     DegradedAction,
     BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,

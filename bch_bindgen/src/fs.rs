@@ -12,7 +12,7 @@ use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
-use crate::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::printbuf::Printbuf;

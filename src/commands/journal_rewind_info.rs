@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
 

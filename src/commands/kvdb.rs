@@ -54,7 +54,7 @@ use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::inode;
 use bcachefs_kernel::typeinfo::{self, StructInfo, TypeInfo};
 use bcachefs_kernel::util::vstructs::Head;
-use bch_bindgen::c::DegradedAction;
+use bcachefs_kernel::c::DegradedAction;
 use clap::Parser;
 
 use crate::device_scan::OpenedFs;

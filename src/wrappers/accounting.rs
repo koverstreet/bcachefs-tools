@@ -1,6 +1,6 @@
 use bcachefs_kernel::btree::bkey::prelude::*;
 use anyhow::anyhow;
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::vstructs::{Unvalidated, VstructRefEntries};
 

@@ -7,7 +7,7 @@ use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
 use bcachefs_kernel::btree::iter::BtreeNodeIter;
 use bcachefs_kernel::fs::Fs;
-use bch_bindgen::c::DegradedAction;
+use bcachefs_kernel::c::DegradedAction;
 use clap::Parser;
 use std::io::{stdout, IsTerminal};
 

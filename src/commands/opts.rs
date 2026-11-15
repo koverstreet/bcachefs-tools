@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use anyhow::{bail, Result};
-use bch_bindgen::c;
+use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::Errcode;
 use bcachefs_kernel::opts::{Opt, OptType};
 use bcachefs_kernel::util::printbuf::Printbuf;

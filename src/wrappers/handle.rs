@@ -3,7 +3,7 @@ use std::mem;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
-use bch_bindgen::c::{
+use bcachefs_kernel::c::{
     bch_ioctl_dev_usage, bch_ioctl_dev_usage_v2,
     bch_ioctl_disk, bch_ioctl_disk_v2,
     bch_ioctl_disk_set_state, bch_ioctl_disk_set_state_v2,
@@ -15,7 +15,7 @@ use bch_bindgen::c::{
 };
 use crate::wrappers::ioctl::*;
 use crate::wrappers::sysfs;
-use bch_bindgen::c::bch_sb;
+use bcachefs_kernel::c::bch_sb;
 use bcachefs_kernel::util::vstructs::{read_past, Head};
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::format::{DataType, MetadataVersion};
