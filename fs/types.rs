@@ -240,8 +240,9 @@ pub struct Dev {
      * items, ioctl lookups) hold ref_outer instead, and recheck
      * ca->removing under the lock before touching member state.
      */
+    #[pin]
     #[init(AtomicRef::new(()))]
-    pub ref_outer: AtomicRef<()>,
+    pub ref_outer: Placed<AtomicRef<()>, crate::at!(Dev.ref_outer)>,
     #[pin]
     #[init(::pin_init::pin_init_array_from_fn(|_| crate::util::refcount::PercpuRef::new_dead::<()>()))]
     pub io_ref: [crate::util::refcount::PercpuRef; 2],

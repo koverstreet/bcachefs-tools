@@ -247,8 +247,9 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 #[cfg(kernel)]
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
-     crate::util::place::Contained, crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
+     crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
      core::sync::atomic::Ordering::Acquire};
+use crate::util::place::Contained;
 use crate::types::bits_to_longs;
 use crate::util::bio::{Bio, BioBox, IoBuf};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
@@ -1153,8 +1154,8 @@ impl Fs {
     /* Device add/removal: */
 
     pub fn dev_remove(&self, ca: DevOuterRef, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
-        let ca_p = ca.as_ptr();
-        let dev_idx = ca.dev_idx;
+        let ca_p = ca.container().as_ptr();
+        let dev_idx = ca.container().dev_idx;
         let fast_device_removal = self.compat(c::SbCompat::no_stale_ptrs) &&
             self.request_incompat_feature(MetadataVersion::fast_device_removal).is_ok();
 

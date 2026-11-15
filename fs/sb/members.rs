@@ -18,7 +18,8 @@ use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::refcount::{RefGuard, Refcount, TryRefcount};
+use crate::util::place::Placed;
+use crate::util::refcount::{AtomicRef, RefGuard, Refcount, TryRefcount};
 use crate::alloc::disk_groups;
 use crate::util::ffi::c_char;
 use crate::data_structures::strided::{Strided, StridedMut};
@@ -1218,41 +1219,13 @@ unsafe impl Refcount for Dev {
 /// removal can complete while this is held. For contexts that block on
 /// state_lock, where a DevRef mustn't be held: recheck ca.removing under the
 /// lock before touching member state.
-pub type DevOuterRef = RefGuard<DevOuter>;
+pub type DevOuterRef = RefGuard<Placed<AtomicRef<()>, crate::at!(Dev.ref_outer)>>;
 
-impl RefGuard<Dev> {
+impl DevRef {
     /// An outer ref on it - bch2_dev_get_outer(): this ref holds ref_outer
     /// above zero, removal draining ref_ first.
     pub fn outer_ref(&self) -> DevOuterRef {
-        unsafe { RefGuard::get(DevOuter::of(self)) }
-    }
-}
-
-/// A device, counted by ca->ref_outer.
-#[repr(transparent)]
-pub struct DevOuter(Dev);
-
-impl DevOuter {
-    fn of(ca: &Dev) -> &Self {
-        unsafe { &*core::ptr::from_ref(ca).cast() }
-    }
-}
-
-impl Deref for DevOuter {
-    type Target = Dev;
-
-    fn deref(&self) -> &Dev {
-        &self.0
-    }
-}
-
-unsafe impl Refcount for DevOuter {
-    unsafe fn inc(&self) {
-        unsafe { self.ref_outer.inc() }
-    }
-
-    unsafe fn dec(&self) {
-        unsafe { self.ref_outer.dec() }
+        unsafe { RefGuard::get(&self.ref_outer) }
     }
 }
 
