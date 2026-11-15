@@ -7,7 +7,7 @@ use crate::util::alloc::{flags, Flags};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{bch2_btree_path_to_text, PathIdx, Paths};
-use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write, node_read};
+use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write, node_read, ReadInFlightNode};
 use crate::btree::types::{BtreeCacheGuard, BtreeNodeList, BtreeWriteType};
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
@@ -361,7 +361,7 @@ impl BtreeTrans<'_> {
                  *
                  * and also cache coherency
                  */
-                b.flags.set_read_in_flight(true);
+                let read = unsafe { ReadInFlightNode::new(b) };
                 let intent = held.downgrade();
 
                 let held = if path.is_some() {
@@ -371,11 +371,11 @@ impl BtreeTrans<'_> {
                     drop(intent);
                     self.unlock_from(paths, crate::ret_ip!());
 
-                    node_read(self, b, sync);
+                    node_read(self, read, sync);
 
                     if sync { b.c.lock.relock_as(lock_type, seq) } else { None }
                 } else {
-                    node_read(self, b, sync);
+                    node_read(self, read, sync);
                     Some(if lock_type == SIX_LOCK_read { intent.downgrade() } else { intent })
                 };
                 held.map(|held| (b, held))

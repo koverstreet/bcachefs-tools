@@ -13,7 +13,7 @@ use crate::btree::cache::{node_data_free, node_scratch_alloc, node_struct_free};
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::LockedNode;
-use crate::btree::read::read_done;
+use crate::btree::read::{read_done, ReadInFlightNode};
 use crate::c::{self, Errcode, BtreePtrV2};
 use crate::data::ptrs::extent_ptr_to_text;
 use crate::errcode::BchError;
@@ -268,7 +268,7 @@ impl<'f> DevScan<'f> {
         b.contents.get_mut().set_key(n.to_key().as_bkey_i());
 
         let mut err = Printbuf::new();
-        if read_done(fs, ca, b, None, &mut err).is_err() {
+        if read_done(fs, ca, &mut unsafe { ReadInFlightNode::new(b) }, None, &mut err).is_err() {
             return Ok(());
         }
 
