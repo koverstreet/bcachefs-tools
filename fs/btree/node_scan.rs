@@ -23,10 +23,10 @@ use crate::init::passes;
 use crate::locking::{Locked, Mutex};
 use crate::types::{Le16, Le64};
 use crate::util::alloc::KVVec;
-use crate::util::bio::{buf_nr_bvecs, Bio, BioBox, BioOwner};
+use crate::util::bio::{Bio, BioBox, BioOwner};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::heap::{MinHeap, PeekMut};
-use crate::os::kernel::{cond_resched, jiffies, local_clock, sort_nonatomic, time_after, HZ};
+use crate::os::kernel::{cond_resched, jiffies, local_clock, sort_nonatomic, time_after, HZ, PAGE_SIZE};
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::util::par::{self, Backend};
 use crate::util::rcu::read_lock;
@@ -180,12 +180,13 @@ struct DevScan<'f> {
 
 impl<'f> DevScan<'f> {
     fn new(fs: &'f Fs, ca: &'f Dev) -> Result<Self, BchError> {
-        let Some(mut buf) = NodeBuf::alloc(fs) else {
+        let Some(buf) = NodeBuf::alloc(fs) else {
             bch_err!(fs, "read_btree_nodes_worker: error allocating buf");
             return Err(c::ENOMEM.into());
         };
 
-        let nr_vecs = buf_nr_bvecs(buf.node().contents.get_mut().data.cast(), fs.opts.btree_node_size.get() as usize)
+        /* not buf_nr_bvecs(): it's remapped onto what read_done swaps in, which may be vmalloc */
+        let nr_vecs = (fs.opts.btree_node_size.get() as usize).div_ceil(PAGE_SIZE)
             .try_into().expect("bvecs for a btree node");
         let Ok(bio) = BioBox::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
         else {
