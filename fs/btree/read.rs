@@ -34,10 +34,10 @@ use crate::fs::{Dev, Fs, WriteRef};
 use crate::init::{damage::note_lost_extents, error::id, passes::RecoveryPass, recovery::btree_lost_data};
 use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
-use crate::util::bio::{bch2_bio_map, bio_put, buf_nr_bvecs, of_bio, Bio, BioBox, BioBuffersMapped, BioOwner};
+use crate::util::bio::{bch2_bio_map, bio_put, of_bio, Bio, BioBox, BioBuffersMapped, BioOwner};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::random_u64_below;
-use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, READ};
+use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, PAGE_SIZE, READ};
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::task::{spawn_static, waiter, Resumable, Resume};
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
@@ -814,8 +814,9 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         rb.ca = fs.dev_get_ioref::<c::DevReadRefKind>(rb.pick.ptr.dev().into());
         rb.start_time = local_clock();
         unsafe { crate::os::bio::reset(&raw mut rb.bio, ptr::null_mut(), c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META) };
+        /* read_done() may have swapped the buffer the bio was mapped to for its sort's, and freed it */
+        unsafe { bch2_bio_map(&raw mut rb.bio, b.contents().data.cast(), b.buf_bytes()) };
         rb.bio.bi_iter.bi_sector = rb.pick.ptr.offset();
-        rb.bio.bi_iter.bi_size = b.buf_bytes() as u32;
 
         match &rb.ca {
             Some(ca) => {
@@ -941,8 +942,12 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
     let ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
 
     let (data, bytes) = (unsafe { b.contents() }.data.cast::<u8>(), b.buf_bytes());
+    /*
+     * Not buf_nr_bvecs(): a retry maps the bio onto the buffer read_done()
+     * swapped in, which may be vmalloc where this one is direct mapped
+     */
     let bio = fs.btree.bio.alloc_raw(ptr::null_mut(),
-                                     buf_nr_bvecs(data, bytes) as _,
+                                     bytes.div_ceil(PAGE_SIZE) as _,
                                      c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META,
                                      flags::NOIO);
     let rb = unsafe { of_bio::<BtreeReadBio>(bio) };
