@@ -36,12 +36,8 @@ use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::MaybeZeroable;
-use crate::types::c_opaque;
 use crate::data_structures::genradix::SharedGenRadix;
 use crate::data_structures::ida::Ida;
-
-// A CPU's cache of free slots: fast_list.rs's Cache - C only holds the pointer
-c_opaque!(fast_list_pcpu);
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
@@ -50,7 +46,7 @@ pub struct fast_list {
     pub items: SharedGenRadix<Item>,
     pub slots_allocated: Ida,
     /* set by init() and exit(), which take the list shared, as C's pointer is */
-    pub buffer: AtomicPtr<c::fast_list_pcpu>,
+    buffer: AtomicPtr<Cache>,
 }
 
 /// A slot's item, C's void *: other CPUs change it as it's read.
@@ -63,8 +59,7 @@ unsafe impl ::pin_init::Zeroable for Item {}
 /// What a refill gets, and a full cache spills: half of it.
 const BATCH: usize = 16;
 
-/// A CPU's cache of free slots - C's opaque fast_list_pcpu: with its count,
-/// 128 bytes.
+/// A CPU's cache of free slots: with its count, 128 bytes.
 struct Cache(ArrayVec<u32, 31>);
 
 // SAFETY: zeroed is empty - an ArrayVec is its length and its elements'
@@ -76,7 +71,7 @@ impl c::fast_list {
     fn with_cache<R>(&self, f: impl FnOnce(&mut ArrayVec<u32, 31>) -> R) -> R {
         let irq = IrqGuard::new();
         // SAFETY: init()'s Caches, freed by exit() after the list's last use
-        let caches = unsafe { PerCpuRef::<Cache>::from_raw(self.buffer.load(Relaxed).cast()) };
+        let caches = unsafe { PerCpuRef::<Cache>::from_raw(self.buffer.load(Relaxed)) };
         // SAFETY: only this CPU's own uses touch its copy, which interrupts
         // off keeps to this one
         f(&mut unsafe { caches.this_cpu(&irq).as_mut() }.0)
@@ -176,7 +171,7 @@ impl c::fast_list {
     /// Nothing else is using it: it's zeroed, or exit()ed.
     pub unsafe fn init(&self) -> Result<(), AllocError> {
         unsafe { self.slots_allocated.init_zeroed() };
-        self.buffer.store(PerCpu::<Cache>::alloc()?.into_raw().cast(), Relaxed);
+        self.buffer.store(PerCpu::<Cache>::alloc()?.into_raw(), Relaxed);
         Ok(())
     }
 
@@ -193,7 +188,7 @@ impl c::fast_list {
         }
 
         // SAFETY: init()'s, and no CPU's using it
-        for lp in unsafe { PerCpuRef::<Cache>::from_raw(buffer.cast()) }.cpus() {
+        for lp in unsafe { PerCpuRef::<Cache>::from_raw(buffer) }.cpus() {
             self.free_slots(unsafe { lp.as_mut() }.0.drain(..));
         }
         unsafe { free_percpu(buffer.cast()) };

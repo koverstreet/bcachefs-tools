@@ -186,7 +186,7 @@ pub mod c {
     pub use super::snapshots_types::*;
     pub use super::types::*;
     pub use crate::util::clock::{io_clock, IO_CLOCK_PCPU_SECTORS};
-    pub use crate::data_structures::fast_list::{fast_list, fast_list_pcpu};
+    pub use crate::data_structures::fast_list::fast_list;
     pub use crate::locking::{mutex_noio, percpu_rwsem_noio};
     pub use crate::util::mean_and_variance::{mean_and_variance};
     pub use crate::util::printbuf::{PRINTBUF_INLINE_TABSTOPS, printbuf_bits, printbuf_restore, PrintbufSi};
