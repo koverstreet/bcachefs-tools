@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::data::ec::stripe_new::StripeNewBox;
 use crate::locking::{ByteLock, Locked, Lockdep};
-use crate::types::{bits_to_longs, c_opaque};
+use crate::types::bits_to_longs;
 use crate::data_structures::bitmap::BitArray;
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bch_enum, MaybeZeroable};
@@ -60,9 +60,6 @@ pub enum EcStripeNewState {
 
 /// A set of a stripe's blocks, by index.
 pub type StripeBlockMask = BitArray<{ bits_to_longs(c::BCH_BKEY_PTRS_MAX as usize) }>;
-
-// data/ec/stripe_new.rs's StripeNew, to C: what ob->ec points to
-c_opaque!(ec_stripe_new);
 
 /// The sector allocator's source of erasure coded buckets, one per disk label,
 /// algorithm, redundancy and watermark - its key, fixed when it's made - and

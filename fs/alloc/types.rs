@@ -177,7 +177,7 @@ nest! {
         pub lock: Locked<c::spinlock_t, (), OpenBucketIdentity>,
         pub pin: AtomicI32,
         pub sectors_free: Volatile<u32>,
-        pub ec: AtomicPtr<c::ec_stripe_new>,
+        pub ec: AtomicPtr<crate::data::ec::stripe_new::StripeNew>,
 
         pub freelist: Volatile<Option<OpenBucketIdx>>,
         pub hash: Volatile<Option<OpenBucketIdx>>,

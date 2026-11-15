@@ -59,6 +59,7 @@
 use crate::fs::Dev;
 use crate::alloc::discard::fast_discard_bucket_add;
 use crate::alloc::disk_groups::Target;
+use crate::data::ec::stripe_new::StripeNew;
 use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::Errcode;
@@ -309,10 +310,10 @@ impl RefGuard<OpenBucketRef> {
     /// Claimed by the writer of block @ec_idx of stripe @ec: its pin, given
     /// back, the writer's - the bucket, for it - and its ->ec what keeps it
     /// open for the stripe.
-    pub fn claim(self, ec: *mut c::ec_stripe_new, ec_idx: u8) -> (EcOpenBucket, Self) {
+    pub fn claim(self, ec: &StripeNew, ec_idx: u8) -> (EcOpenBucket, Self) {
         // the pin's holder's to set, before the bucket's handed on
         self.ec_idx.set(ec_idx);
-        self.ec.store(ec, Relaxed);
+        self.ec.store(core::ptr::from_ref(ec).cast_mut(), Relaxed);
         (EcOpenBucket { ob: NonNull::from(&**self) }, self)
     }
 }

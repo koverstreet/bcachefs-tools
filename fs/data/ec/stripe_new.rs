@@ -51,8 +51,7 @@
 //! stripe_new_reuse.rs's, and its task stripe_new_tasks.rs's; repair's
 //! rebuild (repair.rs) makes one from the stripe it replaces.
 //!
-//! A stripe being made is a StripeNew; C has it only by pointer, an open
-//! bucket's ->ec, as ec_stripe_new. It's owned boxed - a StripeNewBox,
+//! A stripe being made is a StripeNew. It's owned boxed - a StripeNewBox,
 //! pinned, as its writers' open buckets and its task hold pointers to it: by
 //! its maker while it's open - its head, or the repair rebuilding a stripe -
 //! then, once it's handed on, by the filesystem until its task tears it down
@@ -444,17 +443,6 @@ impl StripeNew {
         Ok(b)
     }
 
-    /// # Safety
-    /// @p is an open bucket's ->ec: a StripeNew, live while it's borrowed.
-    pub(crate) unsafe fn from_c<'a>(p: *const c::ec_stripe_new) -> &'a StripeNew {
-        // SAFETY: the caller's
-        unsafe { &*p.cast::<StripeNew>() }
-    }
-
-    pub(crate) fn as_c(&self) -> *mut c::ec_stripe_new {
-        core::ptr::from_ref(self).cast_mut().cast()
-    }
-
     /// Its filesystem, for reserve_parity().
     pub(crate) fn fs_ref(&self) -> &BackRef<Fs> {
         &self.fs
@@ -682,7 +670,7 @@ impl OpenBucketRef {
         let s = self.ec.load(Ordering::Relaxed);
         // SAFETY: its ->ec holds an io ref on the stripe while it's open,
         // which it is while it's borrowed
-        (!s.is_null()).then(|| unsafe { StripeNew::from_c(s) })
+        (!s.is_null()).then(|| unsafe { &*s })
     }
 }
 
