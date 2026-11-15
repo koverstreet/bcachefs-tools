@@ -456,7 +456,7 @@ impl Dev {
 }
 
 unsafe impl KobjOwner for Dev {
-    const GROUPS: GroupList = DEV_GROUPS.list();
+    const GROUPS: GroupList<DevDir> = DEV_GROUPS.list();
     type Dir = DevDir;
 
     unsafe fn release(this: NonNull<Dev>) {

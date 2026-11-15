@@ -891,7 +891,7 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
 }
 
 unsafe impl KobjOwner for Fs {
-    const GROUPS: GroupList = FS_GROUPS.list();
+    const GROUPS: GroupList<FsDir> = FS_GROUPS.list();
     type Dir = FsDir;
 
     unsafe fn release(this: NonNull<Fs>) {

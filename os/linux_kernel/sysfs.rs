@@ -37,22 +37,21 @@ pub(crate) const fn ops<D: Dir>() -> c::sysfs_ops {
 
 unsafe extern "C" fn show<D: Dir>(kobj: *mut c::kobject, attr: *mut c::attribute,
                                   buf: *mut c_char) -> isize {
-    // SAFETY: ops()'s, which only D's kobject has; sysfs's attribute and page
+    // ops()'s, which only D's kobject has, its files Attr<D::Obj>s; sysfs's
+    // attribute and page
     unsafe {
-        let obj = obj_of::<D>(kobj.cast());
-        show_page(buf, |out| D::show(obj, &*attr, out))
+        let (obj, file) = (obj_of::<D>(kobj.cast()), Attr::<D::Obj>::of(&*attr));
+        show_page(buf, |out| file.show(obj, out))
     }
 }
 
 unsafe extern "C" fn store<D: Dir>(kobj: *mut c::kobject, attr: *mut c::attribute,
                                    buf: *const c_char, size: usize) -> isize {
-    // SAFETY: ops()'s, which only D's kobject has
-    let obj = unsafe { obj_of::<D>(kobj.cast()) };
-    if let Err(e) = D::may_store(obj) {
-        return e.class() as isize;
+    // as show()'s; a buffer of @size bytes
+    unsafe {
+        let (obj, file) = (obj_of::<D>(kobj.cast()), Attr::<D::Obj>::of(&*attr));
+        store_buf(buf, size, |s| file.store(obj, s))
     }
-    // SAFETY: sysfs's attribute, and buffer of @size bytes
-    unsafe { store_buf(buf, size, |s| D::store(obj, &*attr, s)) }
 }
 
 /// A show: what @f writes - into sysfs's page @buf itself, cut off at its end -

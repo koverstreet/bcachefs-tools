@@ -23,18 +23,21 @@ pub const fn attribute(name: &'static CStr, mode: u16) -> Attribute {
 }
 
 /// Reading a file of a Dir's kobject.
-pub(crate) type ShowFn = fn(&Kobject, &Attribute, &mut Printbuf) -> Result<(), BchError>;
+pub(crate) type ShowFn = unsafe fn(&Kobject, &Attribute, &mut Printbuf) -> Result<(), BchError>;
 
-pub(crate) fn show<D: Dir>(kobj: &Kobject, attr: &Attribute, out: &mut Printbuf) -> Result<(), BchError> {
-    let obj = unsafe { obj_of::<D>(core::ptr::from_ref(kobj).cast_mut()) };
-    D::show(obj, attr, out)
+/// # Safety
+/// @kobj is a D's, and @attr one of its groups' files.
+pub(crate) unsafe fn show<D: Dir>(kobj: &Kobject, attr: &Attribute, out: &mut Printbuf) -> Result<(), BchError> {
+    let (obj, file) = unsafe { (obj_of::<D>(core::ptr::from_ref(kobj).cast_mut()), Attr::<D::Obj>::of(attr)) };
+    file.show(obj, out)
 }
 
 /// Writing a file of a Dir's kobject.
-pub(crate) type StoreFn = fn(&Kobject, &Attribute, &str) -> Result<(), BchError>;
+pub(crate) type StoreFn = unsafe fn(&Kobject, &Attribute, &str) -> Result<(), BchError>;
 
-pub(crate) fn store<D: Dir>(kobj: &Kobject, attr: &Attribute, s: &str) -> Result<(), BchError> {
-    let obj = unsafe { obj_of::<D>(core::ptr::from_ref(kobj).cast_mut()) };
-    D::may_store(obj)?;
-    D::store(obj, attr, s)
+/// # Safety
+/// As show()'s.
+pub(crate) unsafe fn store<D: Dir>(kobj: &Kobject, attr: &Attribute, s: &str) -> Result<(), BchError> {
+    let (obj, file) = unsafe { (obj_of::<D>(core::ptr::from_ref(kobj).cast_mut()), Attr::<D::Obj>::of(attr)) };
+    file.store(obj, s)
 }

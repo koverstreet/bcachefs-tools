@@ -46,48 +46,19 @@ use crate::util::refcount::TryRefcount;
 use crate::os::kobject::{BinFile, BinFiles, Group, Groups, Kobject};
 use crate::util::place::Placed;
 use crate::util::printbuf::parse_human_u64;
-use crate::os::sysfs::{self, parse_int, Attr, Dir, Files, ListAttrs};
+use crate::os::sysfs::{self, gated, parse_int, Attr, Dir, Files};
 use crate::util::{HumanReadable, Printbuf, ToText};
 
 // ── the fs dir ──────────────────────────────────────────────────────────────
 
 pub struct FsDir;
 
-unsafe impl Dir for FsDir {
+impl Dir for FsDir {
     type Obj = Fs;
     type Kobj = Placed<Kobject, crate::at!(Fs.kobj)>;
-
-    fn show(c: &Fs, attr: &sysfs::Attribute, out: &mut Printbuf) -> Result<(), BchError> {
-        if let Some(i) = TIME_STATS.index(attr) {
-            c.times[i].to_text(out);
-        } else if let Some(i) = TIME_STATS_JSON.index(attr) {
-            c.times[i].json_to_text(out);
-        } else if let Some(i) = COUNTER_FILES.index(attr) {
-            counter_to_text(c, i, out);
-        } else if let Some(id) = opt_from_attr(attr) {
-            return opt_show(c, None, id, out);
-        } else {
-            return unsafe { sysfs::attr_show(c, attr, out) };
-        }
-        Ok(())
-    }
-
-    fn store(c: &Fs, attr: &sysfs::Attribute, s: &str) -> Result<(), BchError> {
-        if let Some(i) = TIME_STATS.index(attr).or_else(|| TIME_STATS_JSON.index(attr)) {
-            c.times[i].reset();
-        } else if let Some(i) = COUNTER_FILES.index(attr) {
-            c.counter_reset(i);
-        } else if let Some(id) = opt_from_attr(attr) {
-            return opt_store(c, None, id, s);
-        } else {
-            started(c)?;
-            return unsafe { sysfs::attr_store(c, attr, s) };
-        }
-        Ok(())
-    }
 }
 
-const FS: &[Attr<Fs>] = &[
+const FS: &[Attr<Fs>] = &gated(started, [
     Attr::ro(c"minor",                  |c, out| writeln!(out, "{}", c.minor.load(core::sync::atomic::Ordering::Relaxed))),
     Attr::ro(c"btree_cache_size",       |c, out| prt!(out, "{}", HumanReadable(c.btree_cache_size()))),
     Attr::ro(c"btree_write_stats",      |c, out| c.btree_write_stats_to_text(out)),
@@ -102,11 +73,11 @@ const FS: &[Attr<Fs>] = &[
 
     #[cfg(CONFIG_BCACHEFS_TESTS)]
     Attr::wo(c"perf_test",              perf_test),
-];
+]);
 
 // ── internal/ ───────────────────────────────────────────────────────────────
 
-const INTERNAL: &[Attr<Fs>] = &[
+const INTERNAL: &[Attr<Fs>] = &gated(started, [
     Attr::ro(c"flags",                  |c, out| c.flags.to_text(out)),
     Attr::ro(c"journal_debug",          |c, out| c.journal.to_text(out)),
     Attr::ro(c"journal_reclaim",        |c, out| c.journal_reclaim_to_text(out)),
@@ -171,7 +142,7 @@ const INTERNAL: &[Attr<Fs>] = &[
         c.fs_open_buckets_to_text(out);
     }),
     Attr::ro(c"usage_base",             usage_base_to_text),
-];
+]);
 
 // internal/btree_trans_stats_json, a bin_attribute: kernfs reads one a page a
 // call, so the JSON is made only at offset 0 - kept in
@@ -254,7 +225,7 @@ impl sysfs::Bin for TransStatsJson {
     }
 }
 
-static TRANS_STATS_JSON: BinFile = BinFile::new::<TransStatsJson>(c"btree_trans_stats_json", 0o644);
+static TRANS_STATS_JSON: BinFile<FsDir> = BinFile::new::<TransStatsJson>(c"btree_trans_stats_json", 0o644);
 
 // ── time_stats/, time_stats_json/ ───────────────────────────────────────────
 //
@@ -278,10 +249,14 @@ macro_rules! time_stat_names {
 }
 c::TimeStat_arms!(time_stat_names);
 
-// Each its own table: a group's files are its kobject's, so which directory
-// a file's in is which table its attribute is from
-static TIME_STATS: ListAttrs<{ c::TimeStat::NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
-static TIME_STATS_JSON: ListAttrs<{ c::TimeStat::NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
+const TIME_STATS_NR: usize = c::TimeStat::NR as usize;
+
+const TIME_STATS: [Attr<Fs>; TIME_STATS_NR] = Attr::list(&TIME_STAT_NAMES, &[0o644; TIME_STATS_NR],
+    |c, i, out| Ok(c.times[i].to_text(out)),
+    |c, i, _| Ok(c.times[i].reset()));
+const TIME_STATS_JSON: [Attr<Fs>; TIME_STATS_NR] = Attr::list(&TIME_STAT_NAMES, &[0o644; TIME_STATS_NR],
+    |c, i, out| Ok(c.times[i].json_to_text(out)),
+    |c, i, _| Ok(c.times[i].reset()));
 
 // ── counters/ ───────────────────────────────────────────────────────────────
 //
@@ -295,7 +270,11 @@ macro_rules! counter_names {
 }
 c::PersistentCounter_arms!(counter_names);
 
-static COUNTER_FILES: ListAttrs<{ c::PersistentCounter::NR as usize }> = ListAttrs::new(&COUNTER_NAMES, 0o644);
+const COUNTERS_NR: usize = c::PersistentCounter::NR as usize;
+
+const COUNTER_FILES: [Attr<Fs>; COUNTERS_NR] = Attr::list(&COUNTER_NAMES, &[0o644; COUNTERS_NR],
+    |c, i, out| Ok(counter_to_text(c, i, out)),
+    |c, i, _| Ok(c.counter_reset(i)));
 
 fn counter_to_text(c: &Fs, i: usize, out: &mut Printbuf) {
     let count = c.counter_read(i);
@@ -312,12 +291,11 @@ fn counter_to_text(c: &Fs, i: usize, out: &mut Printbuf) {
 
 // ── options/ ────────────────────────────────────────────────────────────────
 //
-// An option's file is its attribute in OPT_FILES: options/ has the filesystem
-// options', and a device's dir the device options', among its own files.
+// A file per option: options/ has the filesystem options', and a device's dir
+// the device options', among its own files.
 
-/// Each option's file, by OptId - which option a file is, from where
-/// its attribute is: writable if it may be set at runtime.
-static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&crate::cstr_names!(c::OptId), &{
+/// Each option's file's mode: writable if it may be set at runtime.
+const OPT_MODES: [u16; opts::NR] = {
     let mut modes = [0o444; opts::NR];
     let mut i = 0;
     while i < opts::NR {
@@ -327,12 +305,14 @@ static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&crate::cstr_n
         i += 1;
     }
     modes
-});
+};
 
-/// The option @attr is the file of, if it's one.
-fn opt_from_attr(attr: &sysfs::Attribute) -> Option<c::OptId> {
-    OPT_FILES.index(attr).map(|i| c::OptId(i as u32))
-}
+const FS_OPT_FILES: [Attr<Fs>; opts::NR] = Attr::list(&crate::cstr_names!(c::OptId), &OPT_MODES,
+    |c, i, out| opt_show(c, None, c::OptId(i as u32), out),
+    |c, i, s| opt_store(c, None, c::OptId(i as u32), s));
+const DEV_OPT_FILES: [Attr<Dev>; opts::NR] = Attr::list(&crate::cstr_names!(c::OptId), &OPT_MODES,
+    |ca, i, out| opt_show(ca.fs(), Some(ca), c::OptId(i as u32), out),
+    |ca, i, s| opt_store(ca.fs(), Some(ca), c::OptId(i as u32), s));
 
 fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::OptId, out: &mut Printbuf)
     -> Result<(), BchError>
@@ -429,29 +409,29 @@ const DEV_OPTS: [bool; opts::NR] = opts_with_files(false);
 
 // ── the fs dir's groups ─────────────────────────────────────────────────────
 
-static FS_FILES: Files<{ FS.len() + 1 }> = Files::new(FS);
-static INTERNAL_FILES: Files<{ INTERNAL.len() + 1 }> = Files::new(INTERNAL);
-static INTERNAL_BIN_FILES: BinFiles<2> = BinFiles::new([&TRANS_STATS_JSON]);
-static OPTS_FILES: Files<{ nr_true(&FS_OPTS) + 1 }> = Files::with_list::<Fs, { opts::NR }>(&[], &OPT_FILES, &FS_OPTS);
+static FS_FILES: Files<FsDir, { FS.len() + 1 }> = Files::new(FS);
+static INTERNAL_FILES: Files<FsDir, { INTERNAL.len() + 1 }> = Files::new(INTERNAL);
+static INTERNAL_BIN_FILES: BinFiles<FsDir, 2> = BinFiles::new([&TRANS_STATS_JSON]);
+static OPTS_FILES: Files<FsDir, { nr_true(&FS_OPTS) + 1 }> = Files::with_list(&[], &FS_OPT_FILES, &FS_OPTS);
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-static TIME_STATS_FILES: Files<{ c::TimeStat::NR as usize + 1 }> = Files::list(&TIME_STATS);
+static TIME_STATS_FILES: Files<FsDir, { TIME_STATS_NR + 1 }> = Files::new(&TIME_STATS);
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-static TIME_STATS_JSON_FILES: Files<{ c::TimeStat::NR as usize + 1 }> = Files::list(&TIME_STATS_JSON);
-static COUNTERS_FILES: Files<{ c::PersistentCounter::NR as usize + 1 }> = Files::list(&COUNTER_FILES);
+static TIME_STATS_JSON_FILES: Files<FsDir, { TIME_STATS_NR + 1 }> = Files::new(&TIME_STATS_JSON);
+static COUNTERS_FILES: Files<FsDir, { COUNTERS_NR + 1 }> = Files::new(&COUNTER_FILES);
 
-static FS_GROUP: Group = Group::new(None, &FS_FILES);
-static INTERNAL_GROUP: Group = Group::with_bin(Some(c"internal"), &INTERNAL_FILES, &INTERNAL_BIN_FILES);
-static OPTS_GROUP: Group = Group::new(Some(c"options"), &OPTS_FILES);
+static FS_GROUP: Group<FsDir> = Group::new(None, &FS_FILES);
+static INTERNAL_GROUP: Group<FsDir> = Group::with_bin(Some(c"internal"), &INTERNAL_FILES, &INTERNAL_BIN_FILES);
+static OPTS_GROUP: Group<FsDir> = Group::new(Some(c"options"), &OPTS_FILES);
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-static TIME_STATS_GROUP: Group = Group::new(Some(c"time_stats"), &TIME_STATS_FILES);
+static TIME_STATS_GROUP: Group<FsDir> = Group::new(Some(c"time_stats"), &TIME_STATS_FILES);
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-static TIME_STATS_JSON_GROUP: Group = Group::new(Some(c"time_stats_json"), &TIME_STATS_JSON_FILES);
-static COUNTERS_GROUP: Group = Group::new(Some(c"counters"), &COUNTERS_FILES);
+static TIME_STATS_JSON_GROUP: Group<FsDir> = Group::new(Some(c"time_stats_json"), &TIME_STATS_JSON_FILES);
+static COUNTERS_GROUP: Group<FsDir> = Group::new(Some(c"counters"), &COUNTERS_FILES);
 
 const FS_GROUPS_NR: usize = if cfg!(CONFIG_BCACHEFS_NO_LATENCY_ACCT) { 4 } else { 6 };
 
 /// The filesystem's kobject's groups: its files, and its subdirectories
-pub(crate) static FS_GROUPS: Groups<{ FS_GROUPS_NR + 1 }> = Groups::new([
+pub(crate) static FS_GROUPS: Groups<FsDir, { FS_GROUPS_NR + 1 }> = Groups::new([
     &FS_GROUP,
     &INTERNAL_GROUP,
     &OPTS_GROUP,
@@ -516,32 +496,17 @@ fn io_done_to_text(ca: &Dev, out: &mut Printbuf) {
 
 pub struct DevDir;
 
-unsafe impl Dir for DevDir {
+impl Dir for DevDir {
     type Obj = Dev;
     type Kobj = Placed<Kobject, crate::at!(Dev.kobj)>;
-
-    fn show(ca: &Dev, attr: &sysfs::Attribute, out: &mut Printbuf) -> Result<(), BchError> {
-        match opt_from_attr(attr) {
-            Some(id) => opt_show(ca.fs(), Some(ca), id, out),
-            // SAFETY: a device's files that aren't options' are DEV's
-            None     => unsafe { sysfs::attr_show(ca, attr, out) },
-        }
-    }
-
-    fn store(ca: &Dev, attr: &sysfs::Attribute, s: &str) -> Result<(), BchError> {
-        match opt_from_attr(attr) {
-            Some(id) => opt_store(ca.fs(), Some(ca), id, s),
-            // SAFETY: as show()'s
-            None     => unsafe { sysfs::attr_store(ca, attr, s) },
-        }
-    }
 }
 
-static DEV_FILES: Files<{ DEV.len() + nr_true(&DEV_OPTS) + 1 }> = Files::with_list(DEV, &OPT_FILES, &DEV_OPTS);
+static DEV_FILES: Files<DevDir, { DEV.len() + nr_true(&DEV_OPTS) + 1 }> =
+    Files::with_list(DEV, &DEV_OPT_FILES, &DEV_OPTS);
 
-static DEV_GROUP: Group = Group::new(None, &DEV_FILES);
+static DEV_GROUP: Group<DevDir> = Group::new(None, &DEV_FILES);
 
-pub(crate) static DEV_GROUPS: Groups<2> = Groups::new([&DEV_GROUP]);
+pub(crate) static DEV_GROUPS: Groups<DevDir, 2> = Groups::new([&DEV_GROUP]);
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 

@@ -22,16 +22,21 @@ use crate::os::sysfs::{self, obj_of, Attribute, Bin, Dir, Files, ShowFn, StoreFn
 use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
 use crate::util::Printbuf;
 
-/// A Bin's file.
-pub struct BinFile {
+/// A Bin's file, of a directory D.
+#[repr(transparent)]
+pub(crate) struct BinFile<D>(RawBinFile, PhantomData<fn() -> D>);
+
+/// A BinFile, its directory forgotten: what sysfs reads it by.
+struct RawBinFile {
     attr:  Attribute,
     read:  fn(&Kobject, &mut [u8], u64) -> Result<usize, BchError>,
     write: fn(&Kobject, &[u8], u64) -> Result<usize, BchError>,
 }
 
-impl BinFile {
-    pub(crate) const fn new<B: Bin>(name: &'static CStr, mode: u16) -> Self {
-        BinFile { attr: sysfs::attribute(name, mode), read: bin_read::<B>, write: bin_write::<B> }
+impl<D: Dir> BinFile<D> {
+    pub(crate) const fn new<B: Bin<Dir = D>>(name: &'static CStr, mode: u16) -> Self {
+        BinFile(RawBinFile { attr: sysfs::attribute(name, mode), read: bin_read::<B>, write: bin_write::<B> },
+                PhantomData)
     }
 }
 
@@ -47,72 +52,75 @@ fn bin_write<B: Bin>(kobj: &Kobject, buf: &[u8], off: u64) -> Result<usize, BchE
 
 /// A group's bin files: NULL terminated, N files plus one.
 #[repr(transparent)]
-pub struct BinFiles<const N: usize>([*const BinFile; N]);
+pub(crate) struct BinFiles<D, const N: usize>([*const RawBinFile; N], PhantomData<fn() -> D>);
 
-unsafe impl<const N: usize> Sync for BinFiles<N> {}
+unsafe impl<D, const N: usize> Sync for BinFiles<D, N> {}
 
-impl<const N: usize> BinFiles<N> {
-    pub const fn new<const M: usize>(files: [&'static BinFile; M]) -> Self {
+impl<D: Dir, const N: usize> BinFiles<D, N> {
+    pub const fn new<const M: usize>(files: [&'static BinFile<D>; M]) -> Self {
         assert!(M + 1 == N);
 
         let mut ptrs = [core::ptr::null(); N];
         let mut i = 0;
         while i < M {
-            ptrs[i] = files[i];
+            ptrs[i] = &files[i].0;
             i += 1;
         }
-        BinFiles(ptrs)
+        BinFiles(ptrs, PhantomData)
     }
 }
 
-/// An attribute group: a kobject's files, or with a name a subdirectory of
-/// them.
-pub struct Group {
+/// An attribute group of a directory D: a kobject's files, or with a name a
+/// subdirectory of them.
+#[repr(transparent)]
+pub(crate) struct Group<D>(RawGroup, PhantomData<fn() -> D>);
+
+/// A Group, its directory forgotten: what sysfs reads it by.
+struct RawGroup {
     name:  Option<&'static CStr>,
     attrs: *const *const Attribute,
-    bin:   *const *const BinFile,
+    bin:   *const *const RawBinFile,
 }
 
-unsafe impl Sync for Group {}
+unsafe impl<D> Sync for Group<D> {}
 
-impl Group {
-    pub const fn new<const N: usize>(name: Option<&'static CStr>, files: &'static Files<N>) -> Self {
-        Group { name, attrs: files.as_ptr().cast_const().cast(), bin: core::ptr::null() }
+impl<D: Dir> Group<D> {
+    pub const fn new<const N: usize>(name: Option<&'static CStr>, files: &'static Files<D, N>) -> Self {
+        Group(RawGroup { name, attrs: files.as_ptr().cast_const().cast(), bin: core::ptr::null() }, PhantomData)
     }
 
-    pub const fn with_bin<const N: usize, const B: usize>(name: Option<&'static CStr>, files: &'static Files<N>,
-                                                          bin: &'static BinFiles<B>) -> Self {
-        Group { name, attrs: files.as_ptr().cast_const().cast(), bin: bin.0.as_ptr() }
+    pub const fn with_bin<const N: usize, const B: usize>(name: Option<&'static CStr>, files: &'static Files<D, N>,
+                                                          bin: &'static BinFiles<D, B>) -> Self {
+        Group(RawGroup { name, attrs: files.as_ptr().cast_const().cast(), bin: bin.0.as_ptr() }, PhantomData)
     }
 }
 
 /// A kobject's groups, for its type: NULL terminated, N groups plus one.
 #[repr(transparent)]
-pub struct Groups<const N: usize>([*const Group; N]);
+pub(crate) struct Groups<D, const N: usize>([*const RawGroup; N], PhantomData<fn() -> D>);
 
-unsafe impl<const N: usize> Sync for Groups<N> {}
+unsafe impl<D, const N: usize> Sync for Groups<D, N> {}
 
-impl<const N: usize> Groups<N> {
-    pub const fn new<const M: usize>(groups: [&'static Group; M]) -> Self {
+impl<D: Dir, const N: usize> Groups<D, N> {
+    pub const fn new<const M: usize>(groups: [&'static Group<D>; M]) -> Self {
         assert!(M + 1 == N);
 
         let mut ptrs = [core::ptr::null(); N];
         let mut i = 0;
         while i < M {
-            ptrs[i] = groups[i];
+            ptrs[i] = &groups[i].0;
             i += 1;
         }
-        Groups(ptrs)
+        Groups(ptrs, PhantomData)
     }
 
-    pub const fn list(&'static self) -> GroupList {
-        GroupList(self.0.as_ptr())
+    pub const fn list(&'static self) -> GroupList<D> {
+        GroupList(self.0.as_ptr(), PhantomData)
     }
 }
 
-/// Groups<N>, its N forgotten: what a kobject's type points to.
-#[derive(Clone, Copy)]
-pub struct GroupList(*const *const Group);
+/// Groups<D, N>, its N forgotten: what a kobject's type points to.
+pub(crate) struct GroupList<D>(*const *const RawGroup, PhantomData<fn() -> D>);
 
 /// Where a kobject is, as a type: what it's the kobject of - owner() of a
 /// kobject at this place is the Owner it's in.
@@ -138,7 +146,7 @@ impl<A: Place<Type = Self, Base: Enclosing<Visible = A::Base>>> KobjPlace for Pl
 /// Its Dir's kobject was made with Kobject::new::<Self>(); release() frees
 /// what it's given.
 pub(crate) unsafe trait KobjOwner: Sized + 'static {
-    const GROUPS: GroupList;
+    const GROUPS: GroupList<Self::Dir>;
     type Dir: Dir<Obj = Self>;
 
     /// The last ref's been put.
@@ -153,7 +161,7 @@ struct KobjType {
     release: unsafe fn(*mut Kobject),
     show:    ShowFn,
     store:   StoreFn,
-    groups:  GroupList,
+    groups:  *const *const RawGroup,
 }
 
 struct Ktype<T>(PhantomData<T>);
@@ -163,7 +171,7 @@ impl<T: KobjOwner> Ktype<T> {
         release: Self::release,
         show:    sysfs::show::<T::Dir>,
         store:   sysfs::store::<T::Dir>,
-        groups:  T::GROUPS,
+        groups:  T::GROUPS.0,
     };
 
     unsafe fn release(kobj: *mut Kobject) {
@@ -353,36 +361,36 @@ fn null_terminated<'a, T: 'a>(mut p: *const *const T) -> impl Iterator<Item = &'
     })
 }
 
-fn groups(k: &Kobject) -> impl Iterator<Item = &'static Group> + use<> {
-    null_terminated(k.ktype().groups.0)
+fn groups(k: &Kobject) -> impl Iterator<Item = &'static RawGroup> + use<> {
+    null_terminated(k.ktype().groups)
 }
 
-fn group_attrs(g: &Group) -> impl Iterator<Item = &'static Attribute> + use<> {
+fn group_attrs(g: &RawGroup) -> impl Iterator<Item = &'static Attribute> + use<> {
     null_terminated(g.attrs)
 }
 
-fn group_bin_attrs(g: &Group) -> impl Iterator<Item = &'static BinFile> + use<> {
+fn group_bin_attrs(g: &RawGroup) -> impl Iterator<Item = &'static RawBinFile> + use<> {
     null_terminated(g.bin)
 }
 
 /// A kobject's own files, its unnamed groups': its named groups are
 /// subdirectories.
-fn files(k: &Kobject) -> impl Iterator<Item = &'static Group> + use<> {
+fn files(k: &Kobject) -> impl Iterator<Item = &'static RawGroup> + use<> {
     groups(k).filter(|g| g.name.is_none())
 }
 
 enum Entry<'a> {
     Dir(&'a Kobject),
-    Group(&'static Group),
+    Group(&'static RawGroup),
     File(&'a Kobject, &'static Attribute),
-    Bin(&'a Kobject, &'static BinFile),
+    Bin(&'a Kobject, &'static RawBinFile),
 }
 
 /// The file or directory at @path: a file's kobject is its directory's, or
 /// its named group's.
 fn lookup<'a>(tree: &'a Tree, path: &str) -> Result<Entry<'a>, BchError> {
     let mut dir = tree.root().ok_or(BchError::from(c::ENOENT))?;
-    let mut grp: Option<&'static Group> = None;
+    let mut grp: Option<&'static RawGroup> = None;
 
     let names: Vec<&str> = path.split('/').filter(|n| !n.is_empty()).collect();
     for (i, &name) in names.iter().enumerate() {
@@ -442,7 +450,7 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<(), BchError> {
         Entry::File(k, a) => {
             allowed(a, 0o222)?;
             let s = core::str::from_utf8(data).map_err(|_| BchError::from(c::EINVAL))?;
-            (k.ktype().store)(k, a, s)
+            unsafe { (k.ktype().store)(k, a, s) }
         }
         Entry::Bin(k, b) => {
             allowed(&b.attr, 0o222)?;
@@ -518,7 +526,7 @@ pub fn read_or_html_dirlist(path: &str, out: &mut Vec<u8>) -> Result<(), BchErro
         Entry::File(k, a) => {
             readable(a)?;
             let mut buf = Printbuf::new();
-            (k.ktype().show)(k, a, &mut buf)?;
+            unsafe { (k.ktype().show)(k, a, &mut buf)? };
             if buf.allocation_failure() {
                 return Err(c::ENOMEM.into());
             }

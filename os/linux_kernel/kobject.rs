@@ -21,19 +21,19 @@ use crate::os::sysfs::{self, obj_of, Bin, Dir, Files};
 use crate::util::ffi::c_char;
 use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
 
-/// A Bin's file: a bin_attribute, for a static.
+/// A Bin's file, of a directory D: a bin_attribute, for a static.
 #[repr(transparent)]
-pub struct BinFile(c::bin_attribute);
+pub(crate) struct BinFile<D>(c::bin_attribute, PhantomData<fn() -> D>);
 
-unsafe impl Sync for BinFile {}
+unsafe impl<D> Sync for BinFile<D> {}
 
-impl BinFile {
-    pub(crate) const fn new<B: Bin>(name: &'static CStr, mode: u16) -> Self {
+impl<D: Dir> BinFile<D> {
+    pub(crate) const fn new<B: Bin<Dir = D>>(name: &'static CStr, mode: u16) -> Self {
         let mut a: c::bin_attribute = ::pin_init::zeroed();
         a.attr = sysfs::attribute(name, mode);
         a.read = Some(bin_read::<B>);
         a.write = Some(bin_write::<B>);
-        BinFile(a)
+        BinFile(a, PhantomData)
     }
 }
 
@@ -57,12 +57,12 @@ unsafe extern "C" fn bin_write<B: Bin>(_file: *mut c::file, kobj: *mut c::kobjec
 
 /// A group's bin files: NULL terminated, N files plus one.
 #[repr(transparent)]
-pub struct BinFiles<const N: usize>([*const c::bin_attribute; N]);
+pub(crate) struct BinFiles<D, const N: usize>([*const c::bin_attribute; N], PhantomData<fn() -> D>);
 
-unsafe impl<const N: usize> Sync for BinFiles<N> {}
+unsafe impl<D, const N: usize> Sync for BinFiles<D, N> {}
 
-impl<const N: usize> BinFiles<N> {
-    pub const fn new<const M: usize>(files: [&'static BinFile; M]) -> Self {
+impl<D: Dir, const N: usize> BinFiles<D, N> {
+    pub const fn new<const M: usize>(files: [&'static BinFile<D>; M]) -> Self {
         assert!(M + 1 == N);
 
         let mut ptrs = [core::ptr::null(); N];
@@ -71,24 +71,24 @@ impl<const N: usize> BinFiles<N> {
             ptrs[i] = &files[i].0;
             i += 1;
         }
-        BinFiles(ptrs)
+        BinFiles(ptrs, PhantomData)
     }
 }
 
-/// An attribute group: a kobject's files, or with a name a subdirectory of
-/// them.
+/// An attribute group of a directory D: a kobject's files, or with a name a
+/// subdirectory of them.
 #[repr(transparent)]
-pub struct Group(c::attribute_group);
+pub(crate) struct Group<D>(c::attribute_group, PhantomData<fn() -> D>);
 
-unsafe impl Sync for Group {}
+unsafe impl<D> Sync for Group<D> {}
 
-impl Group {
-    pub const fn new<const N: usize>(name: Option<&'static CStr>, files: &'static Files<N>) -> Self {
+impl<D: Dir> Group<D> {
+    pub const fn new<const N: usize>(name: Option<&'static CStr>, files: &'static Files<D, N>) -> Self {
         Self::make(name, files.as_ptr(), core::ptr::null())
     }
 
-    pub const fn with_bin<const N: usize, const B: usize>(name: Option<&'static CStr>, files: &'static Files<N>,
-                                                          bin: &'static BinFiles<B>) -> Self {
+    pub const fn with_bin<const N: usize, const B: usize>(name: Option<&'static CStr>, files: &'static Files<D, N>,
+                                                          bin: &'static BinFiles<D, B>) -> Self {
         Self::make(name, files.as_ptr(), bin.0.as_ptr())
     }
 
@@ -117,18 +117,18 @@ impl Group {
             g.attrs = attrs;
             g.__bindgen_anon_1.bin_attrs_new = bin_attrs;
         }
-        Group(g)
+        Group(g, PhantomData)
     }
 }
 
 /// A kobject's groups, for its kobj_type: NULL terminated, N groups plus one.
 #[repr(transparent)]
-pub struct Groups<const N: usize>([*const c::attribute_group; N]);
+pub(crate) struct Groups<D, const N: usize>([*const c::attribute_group; N], PhantomData<fn() -> D>);
 
-unsafe impl<const N: usize> Sync for Groups<N> {}
+unsafe impl<D, const N: usize> Sync for Groups<D, N> {}
 
-impl<const N: usize> Groups<N> {
-    pub const fn new<const M: usize>(groups: [&'static Group; M]) -> Self {
+impl<D: Dir, const N: usize> Groups<D, N> {
+    pub const fn new<const M: usize>(groups: [&'static Group<D>; M]) -> Self {
         assert!(M + 1 == N);
 
         let mut ptrs = [core::ptr::null(); N];
@@ -137,17 +137,16 @@ impl<const N: usize> Groups<N> {
             ptrs[i] = &groups[i].0;
             i += 1;
         }
-        Groups(ptrs)
+        Groups(ptrs, PhantomData)
     }
 
-    pub const fn list(&'static self) -> GroupList {
-        GroupList(self.0.as_ptr())
+    pub const fn list(&'static self) -> GroupList<D> {
+        GroupList(self.0.as_ptr(), PhantomData)
     }
 }
 
-/// Groups<N>, its N forgotten: what a kobj_type points to.
-#[derive(Clone, Copy)]
-pub struct GroupList(*const *const c::attribute_group);
+/// Groups<D, N>, its N forgotten: what a kobj_type points to.
+pub(crate) struct GroupList<D>(*const *const c::attribute_group, PhantomData<fn() -> D>);
 
 /// Where a kobject is, as a type: what it's the kobject of - owner() of a
 /// kobject at this place is the Owner it's in.
@@ -173,7 +172,7 @@ impl<A: Place<Type = Self, Base: Enclosing<Visible = A::Base>>> KobjPlace for Pl
 /// Its Dir's kobject was made with Kobject::new::<Self>(); release() frees
 /// what it's given.
 pub(crate) unsafe trait KobjOwner: Sized + 'static {
-    const GROUPS: GroupList;
+    const GROUPS: GroupList<Self::Dir>;
     type Dir: Dir<Obj = Self>;
 
     /// The last ref's been put.

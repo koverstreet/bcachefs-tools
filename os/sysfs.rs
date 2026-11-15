@@ -3,19 +3,18 @@
 //! sysfs files in Rust.
 //!
 //! A directory - a Dir - is a kobject in some object T, a bch_fs or a bch_dev,
-//! and its files. Usually those are a table of Attr<T>: the attribute sysfs
-//! sees (name, mode) with its show and store beside it, the kernel's
-//! kobj_attribute pattern - so the directory's ops get from the attribute
-//! they're handed to the Attr by container_of(), and from the kobject to T by
-//! the kobject's place in T. A directory of one file per list entry has a
-//! ListAttrs instead, and one whose files are something else's attributes -
-//! options' - overrides Dir::show() and store(). A file read and written in
-//! pages at an offset is a Bin.
+//! and its files: tables of Attr<T>, each a file whole - the attribute sysfs
+//! sees (name, mode), and what reading and writing it do - or, made by
+//! Attr::list(), one per entry of a list, a counter or an option, each given
+//! its entry. A file read and written in pages at an offset is a Bin.
 //!
-//! The files are an array of pointers to attributes (Files), in attribute
-//! groups (kobject.rs). What an attribute is, and how the files are read and
-//! written, are the port's sysfs.rs, which has this module too: the kernel's
-//! sysfs, through its C structs, or the tree userspace's http.rs serves.
+//! The files are in attribute groups (kobject.rs), typed by their Dir: a
+//! kobject's are its own Attr<T>s, so the port's ops get from the attribute
+//! they're handed to the Attr by container_of(), and from the kobject to T by
+//! the kobject's place in T. What an attribute is, and how the files are read
+//! and written, are the port's sysfs.rs, which has this module too: the
+//! kernel's sysfs, through its C structs, or the tree userspace's http.rs
+//! serves.
 //!
 //! A show writes to a Printbuf, with a trailing newline. A store gets what
 //! was written - with the newline echo leaves - and takes all of it or fails.
@@ -24,6 +23,7 @@
 //! included - so a missing show or store is never called.
 
 use core::ffi::CStr;
+use core::marker::PhantomData;
 
 use crate::c;
 use crate::errcode::BchError;
@@ -33,19 +33,70 @@ use super::{attribute, Attribute};
 
 pub type Show<T>  = fn(&T, &mut Printbuf);
 pub type Store<T> = fn(&T, &str) -> Result<(), BchError>;
+/// A list's file's: of entry @usize.
+pub type ShowEntry<T>  = fn(&T, usize, &mut Printbuf) -> Result<(), BchError>;
+pub type StoreEntry<T> = fn(&T, usize, &str) -> Result<(), BchError>;
+
+enum Ops<T: 'static> {
+    File { show: Option<Show<T>>, store: Option<Store<T>> },
+    Entry { i: usize, show: ShowEntry<T>, store: StoreEntry<T> },
+}
 
 /// A sysfs file of an object T: its attribute, and what reading and writing
 /// it do.
 #[repr(C)]
 pub struct Attr<T: 'static> {
-    attr:  Attribute,
-    show:  Option<Show<T>>,
-    store: Option<Store<T>>,
+    attr: Attribute,
+    ops:  Ops<T>,
+    /// What a store has to pass first: gated()'s.
+    gate: Option<fn(&T) -> Result<(), BchError>>,
 }
 
 impl<T> Attr<T> {
     const fn new(name: &'static CStr, mode: u16, show: Option<Show<T>>, store: Option<Store<T>>) -> Self {
-        Attr { attr: attribute(name, mode), show, store }
+        Attr { attr: attribute(name, mode), ops: Ops::File { show, store }, gate: None }
+    }
+
+    /// A file per entry of a list, each of @names, with its mode in @modes:
+    /// @show and @store given its entry.
+    pub const fn list<const N: usize>(names: &[&'static CStr; N], modes: &[u16; N],
+                                      show: ShowEntry<T>, store: StoreEntry<T>) -> [Self; N] {
+        let mut attrs = [const { Self::new(c"", 0, None, None) }; N];
+        let mut i = 0;
+        while i < N {
+            attrs[i] = Attr { attr: attribute(names[i], modes[i]), ops: Ops::Entry { i, show, store }, gate: None };
+            i += 1;
+        }
+        attrs
+    }
+
+    /// What reading it writes, to @out.
+    pub(crate) fn show(&self, obj: &T, out: &mut Printbuf) -> Result<(), BchError> {
+        match self.ops {
+            Ops::File { show: Some(show), .. } => Ok(show(obj, out)),
+            Ops::File { show: None, .. }       => Ok(()),
+            Ops::Entry { i, show, .. }         => show(obj, i, out),
+        }
+    }
+
+    /// @s, written to it.
+    pub(crate) fn store(&self, obj: &T, s: &str) -> Result<(), BchError> {
+        if let Some(gate) = self.gate {
+            gate(obj)?;
+        }
+        match self.ops {
+            Ops::File { store: Some(store), .. } => store(obj, s),
+            Ops::File { store: None, .. }        => Err(c::EINVAL.into()),
+            Ops::Entry { i, store, .. }          => store(obj, i, s),
+        }
+    }
+
+    /// The file @attr is the attribute of.
+    ///
+    /// # Safety
+    /// @attr is an Attr<T>'s.
+    pub(crate) unsafe fn of(attr: &Attribute) -> &Self {
+        unsafe { &*core::ptr::from_ref(attr).cast() }
     }
 
     /// 0444
@@ -64,69 +115,31 @@ impl<T> Attr<T> {
     }
 }
 
+/// @attrs, each store refused unless @gate passes first: a directory's
+/// files that can't be written until its object can take it.
+pub const fn gated<T, const N: usize>(gate: fn(&T) -> Result<(), BchError>, mut attrs: [Attr<T>; N]) -> [Attr<T>; N] {
+    let mut i = 0;
+    while i < N {
+        attrs[i].gate = Some(gate);
+        i += 1;
+    }
+    attrs
+}
+
 /// A directory's files: an array of pointers to each Attr's attribute, NULL
-/// terminated. N is the number of files plus one - `Files<{ FOO.len() + 1 }>`.
+/// terminated. N is the number of files plus one - `Files<D, { FOO.len() + 1 }>`.
 #[repr(transparent)]
-pub struct Files<const N: usize>([*const Attribute; N]);
+pub(crate) struct Files<D, const N: usize>([*const Attribute; N], PhantomData<fn() -> D>);
 
-impl<const N: usize> Files<N> {
-    pub const fn new<T>(attrs: &'static [Attr<T>]) -> Self {
-        assert!(attrs.len() + 1 == N);
-
-        let mut files = [core::ptr::null(); N];
-        let mut i = 0;
-        while i < attrs.len() {
-            files[i] = &raw const attrs[i].attr;
-            i += 1;
-        }
-        Files(files)
-    }
-}
-
-/// One file per entry of a list - a counter, a time stat - each alike, so an
-/// attribute and nothing beside it: which entry a file is, from where its
-/// attribute is in the array. A static, for that: a const's copies would be
-/// at other addresses.
-#[repr(transparent)]
-pub struct ListAttrs<const N: usize>([Attribute; N]);
-
-// SAFETY: its pointers are to static names; nothing writes it
-unsafe impl<const N: usize> Sync for ListAttrs<N> {}
-
-impl<const N: usize> ListAttrs<N> {
-    pub const fn new(names: &[&'static CStr; N], mode: u16) -> Self {
-        Self::with_modes(names, &[mode; N])
+impl<D: Dir, const N: usize> Files<D, N> {
+    pub const fn new(attrs: &'static [Attr<D::Obj>]) -> Self {
+        Self::with_list::<0>(attrs, &[], &[])
     }
 
-    /// Each entry's file, with a mode of its own.
-    pub const fn with_modes(names: &[&'static CStr; N], modes: &[u16; N]) -> Self {
-        let mut attrs = [const { attribute(c"", 0) }; N];
-        let mut i = 0;
-        while i < N {
-            attrs[i] = attribute(names[i], modes[i]);
-            i += 1;
-        }
-        ListAttrs(attrs)
-    }
-
-    /// The entry @attr is the file of, if it's one of these.
-    pub fn index(&self, attr: &Attribute) -> Option<usize> {
-        let i = (core::ptr::from_ref(attr) as usize)
-            .wrapping_sub(self.0.as_ptr() as usize) / size_of::<Attribute>();
-        (i < N && core::ptr::eq(&self.0[i], attr)).then_some(i)
-    }
-}
-
-impl<const N: usize> Files<N> {
-    /// A ListAttrs' files - M of them, N = M + 1.
-    pub const fn list<const M: usize>(attrs: &'static ListAttrs<M>) -> Self {
-        Self::with_list::<(), M>(&[], attrs, &[true; M])
-    }
-
-    /// @attrs' files, then those of @list's entries that @which says: as many
-    /// as there are, plus one.
-    pub const fn with_list<T, const M: usize>(attrs: &'static [Attr<T>], list: &'static ListAttrs<M>,
-                                              which: &[bool; M]) -> Self {
+    /// @attrs' files, then those of @list's that @which says: as many as there
+    /// are, plus one.
+    pub const fn with_list<const M: usize>(attrs: &'static [Attr<D::Obj>], list: &'static [Attr<D::Obj>; M],
+                                           which: &[bool; M]) -> Self {
         let mut files = [core::ptr::null(); N];
         let mut n = 0;
         while n < attrs.len() {
@@ -136,13 +149,13 @@ impl<const N: usize> Files<N> {
         let mut i = 0;
         while i < M {
             if which[i] {
-                files[n] = &raw const list.0[i];
+                files[n] = &raw const list[i].attr;
                 n += 1;
             }
             i += 1;
         }
         assert!(n + 1 == N);
-        Files(files)
+        Files(files, PhantomData)
     }
 
     /// As a group has them.
@@ -151,58 +164,14 @@ impl<const N: usize> Files<N> {
     }
 }
 
-unsafe impl<const N: usize> Sync for Files<N> {}
+unsafe impl<D, const N: usize> Sync for Files<D, N> {}
 
-/// A directory: the kobject it is, what it asks of every store, and how its
-/// files read and write - by default, as the Attr<Obj>s they are.
-///
-/// # Safety
-/// The port's ops for Self are only ever those of an Obj's kobject; and its
-/// files are Attr<Obj>s, unless show and store are overridden.
-pub(crate) unsafe trait Dir: 'static {
+/// A directory: what it's the directory of, and where in it its kobject is.
+/// Its files are its kobject's groups', each an Attr<Obj>.
+pub(crate) trait Dir: 'static {
     type Obj: 'static;
     /// The directory's kobject: where in Obj it is.
     type Kobj: KobjPlace<Owner = Self::Obj>;
-
-    /// Before any store: may refuse it.
-    fn may_store(_obj: &Self::Obj) -> Result<(), BchError> {
-        Ok(())
-    }
-
-    fn show(obj: &Self::Obj, attr: &Attribute, out: &mut Printbuf) -> Result<(), BchError> {
-        // SAFETY: the trait's: this is an Attr<Obj>'s
-        unsafe { attr_show(obj, attr, out) }
-    }
-
-    fn store(obj: &Self::Obj, attr: &Attribute, s: &str) -> Result<(), BchError> {
-        // SAFETY: the trait's: this is an Attr<Obj>'s
-        unsafe { attr_store(obj, attr, s) }
-    }
-}
-
-/// Reading @attr, an Attr<T>'s: Dir's default, for one whose own show()
-/// has some other files too.
-///
-/// # Safety
-/// @attr is an Attr<T>'s.
-pub unsafe fn attr_show<T: 'static>(obj: &T, attr: &Attribute, out: &mut Printbuf) -> Result<(), BchError> {
-    let attr = unsafe { &*core::ptr::from_ref(attr).cast::<Attr<T>>() };
-    if let Some(show) = attr.show {
-        show(obj, out);
-    }
-    Ok(())
-}
-
-/// Writing @attr, an Attr<T>'s: as attr_show().
-///
-/// # Safety
-/// @attr is an Attr<T>'s.
-pub unsafe fn attr_store<T: 'static>(obj: &T, attr: &Attribute, s: &str) -> Result<(), BchError> {
-    let attr = unsafe { &*core::ptr::from_ref(attr).cast::<Attr<T>>() };
-    match attr.store {
-        Some(store) => store(obj, s),
-        None        => Err(c::EINVAL.into()),
-    }
 }
 
 /// A file read and written in pages at an offset, of a Dir's object.

@@ -38,9 +38,9 @@ pub(crate) struct Root(pub(crate) Kobject);
 
 pub(crate) static BCACHEFS_KOBJ: Root = Root(::pin_init::zeroed());
 
-static NO_GROUPS: Groups<1> = Groups::new([]);
+static NO_GROUPS: Groups<Root, 1> = Groups::new([]);
 
-unsafe impl Dir for Root {
+impl Dir for Root {
     type Obj = Root;
     type Kobj = Root;
 }
@@ -54,7 +54,7 @@ impl KobjPlace for Root {
 }
 
 unsafe impl KobjOwner for Root {
-    const GROUPS: GroupList = NO_GROUPS.list();
+    const GROUPS: GroupList<Root> = NO_GROUPS.list();
     type Dir = Root;
 
     unsafe fn release(_: NonNull<Self>) {}
