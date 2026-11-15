@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Rust's own key types, btree/bkey.rs's BkeySC and BkeyS, are checked to
-//! have the layouts of C's bkey_s_c and bkey_s. The typed keys C generates
-//! for each key type from BCH_BKEY_TYPES() - bkey_i_<type>, bkey_s_c_<type>,
-//! bkey_s_<type> - stay C's; Rust's are BkeyI, BkeySC and BkeyS of the value
-//! type, checked against them.
+//! The typed key for each key type from BCH_BKEY_TYPES(), bkey_i_<type>: a
+//! BkeyI of the value type.
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
+use crate::btree::bkey::BkeyI;
 use crate::cstructs::c as cs;
 use crate::cstructs::c::BkeyType_arms;
 use core::ffi::c_uint;
@@ -93,44 +90,9 @@ use crate::format::Btree;
  * See \S\ref{bkey-type-list} for the complete list of key types.
  */
 
-/*
- * bkey_i	- bkey with inline value
- * bkey_s	- bkey with split value
- * bkey_s_c	- bkey with split value, const
- */
-
-/* bkey with split value, const */
-#[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable)]
-pub struct bkey_s_c {
-    pub k: *const cs::bkey,
-    pub v: *const cs::bch_val,
-}
-
-/* bkey with split value */
-nest! {
-    #[repr(C)]
-    #[derive(MaybeZeroable)]
-    pub struct bkey_s {
-        #>[repr(C)]
-        #>[derive(Clone, Copy, MaybeZeroable)]
-        pub split: pub union bkey_s_split {
-            #>[repr(C)]
-            #>[derive(Clone, Copy, MaybeZeroable)]
-            pub kv: pub struct bkey_s_kv {
-                pub k: *mut cs::bkey,
-                pub v: *mut cs::bch_val,
-            },
-            pub s_c: cs::bkey_s_c,
-        },
-    }
-}
-
 macro_rules! __bkey_typed {
     ($( ($name:ident, $nr:literal, $($ty:ident)::+, $flags:tt) ),* $(,)?) => { ::paste::paste! { $(
-        pub type [<bkey_i_ $name>]   = BkeyI<$($ty)::+>;
-        pub type [<bkey_s_c_ $name>] = BkeySC<'static, $($ty)::+>;
-        pub type [<bkey_s_ $name>]   = BkeyS<'static, $($ty)::+>;
+        pub type [<bkey_i_ $name>] = BkeyI<$($ty)::+>;
     )* } };
 }
 BkeyType_arms!(__bkey_typed);

@@ -352,17 +352,3 @@ pub struct CacheAligned([u8; 0]);
 pub const SMP_CACHE_BYTES: usize = align_of::<CacheAligned>();
 pub const L1_CACHE_BYTES: usize = SMP_CACHE_BYTES;
 
-/// A type C declares, `struct NAME;`, and has only behind pointers: one a .c
-/// file defines - Rust sees it only behind pointers too - or one Rust does,
-/// in a module of its own, that C passes around. Not Send, Sync or Unpin -
-/// the defining side's to say.
-macro_rules! c_opaque {
-    ($name:ident) => {
-        #[repr(C)]
-        pub struct $name {
-            _opaque: [u8; 0],
-            _marker: core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
-        }
-    };
-}
-pub(crate) use c_opaque;

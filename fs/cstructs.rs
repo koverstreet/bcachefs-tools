@@ -90,9 +90,9 @@ pub mod c {
     pub(crate) use crate::btree::path::__btree_path_bits_forward;
     pub use crate::dirent::format::*;
     pub use crate::format::accounting::*;
-    pub use crate::alloc::buckets::{ ReservationFlags, disk_reservation_destructable};
+    pub use crate::alloc::buckets::ReservationFlags;
     pub use crate::alloc::buckets::{BCH_DEV_POS_FRAC_BITS, BucketData, BucketGensArray, BucketGensHead, DiskReservation, RESERVE_FACTOR, bch_dev_usage, bch_dev_usage_full, bch_dev_usage_type, bch_fs_placeable, bch_fs_usage_base, bch_fs_usage_short, bucket};
-    pub use crate::alloc::disk_groups::{ TARGET_DEV_START, TARGET_GROUP_START, TargetType, target_id};
+    pub use crate::alloc::disk_groups::{ TARGET_DEV_START, TARGET_GROUP_START};
     pub use super::alloc_disk_groups_format::*;
     pub use crate::alloc::disk_groups::{DiskGroups, bch_disk_group_cpu};
     pub use crate::alloc::foreground::{AllocBtreeBitmap, alloc_request, alloc_request_bits, alloc_trace_entry, alloc_trace_entry_bits, dev_alloc_list};
@@ -112,7 +112,7 @@ pub mod c {
     pub use crate::btree::node::bset::{BSET_TREE_NR_TYPES, MAX_BSETS};
     pub use super::btree_check_types::*;
     pub use crate::btree::interior::{BTREE_NODE_RESERVE, BTREE_RESERVE_MAX, BtreeReserveCache, bch_fs_btree_interior_updates, bch_fs_btree_reserve_cache, btree_alloc};
-    pub use crate::btree::iter::{trans_for_each_path_inorder_iter, trans_may_drop_updates};
+    pub use crate::btree::iter::trans_may_drop_updates;
     pub use super::btree_journal_overlay_defs::*;
     pub use crate::btree::journal_overlay::{OverwriteRange, OverwriteRanges, OverwriteRangesLive, OverwriteRangesLiveWriter, journal_key, journal_key_flags, journal_key_id, journal_key_journal_pos, journal_key_src, journal_keys, journal_ptr, journal_replay};
     pub(crate) use crate::btree::journal_overlay::{__journal_key_flags_forward, __journal_key_id_forward};
@@ -127,7 +127,7 @@ pub mod c {
     pub use super::data_ec_create_types::*;
     pub use super::data_ec_format::*;
     pub use super::data_ec_types::*;
-    pub use crate::data::extents::{bch_extent_crc, bkey_durability, bkey_ptrs, bkey_ptrs_c};
+    pub use crate::data::extents::bkey_durability;
     pub use super::data_extents_format::*;
     pub use super::data_extents_sb_format::*;
     pub use crate::data::extents::{ ReadFlagBit, bch_io_failures, bch_extent_crc_unpacked, ReadFlags, extent_ptr_decoded};

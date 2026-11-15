@@ -26,7 +26,7 @@ use crate::c;
 use crate::c::JournalFlag as Journal;
 use crate::cstructs::c as cs;
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, Btree, Bversion};
 use crate::init::error::BkeyValidate;
 use crate::journal::entries::NoRoom;
@@ -1163,9 +1163,4 @@ impl BtreeTrans<'_> {
 
 unsafe extern "C" fn commit_journal_pin_flush(_j: *mut c::journal, _pin: *mut c::journal_entry_pin, _seq: u64) -> c_int {
     0
-}
-
-pub fn __bch2_trans_commit(trans: &BtreeTrans<'_>, flags: c::TransCommitFlags, lazy: bool) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(trans.commit_trans(&t, flags.into(), lazy))
 }

@@ -25,30 +25,6 @@ use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
 use crate::types::Le8;
 use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits};
 
-#[repr(C, align(8))]
-#[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
-pub union bch_extent_crc {
-    pub type_: u8,
-    pub crc32: c::bch_extent_crc32,
-    pub crc64: c::bch_extent_crc64,
-    pub crc128: c::bch_extent_crc128,
-}
-
-/* bkey_ptrs: generically over any key type that has ptrs */
-#[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable)]
-pub struct bkey_ptrs_c {
-    pub start: *const c::bch_extent_entry,
-    pub end: *const c::bch_extent_entry,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable)]
-pub struct bkey_ptrs {
-    pub start: *mut c::bch_extent_entry,
-    pub end: *mut c::bch_extent_entry,
-}
-
 /*
  * Everything one walk of a key's pointer list can say about its replication.
  *

@@ -164,16 +164,6 @@ impl<'f> BtreeTrans<'f> {
         self.extra_journal_u64s.set(self.extra_journal_u64s.get() + u64s)
     }
 
-    /// The attempt C began, for Rust that C calls partway through one.
-    ///
-    /// # Safety
-    /// For C entry points only: C has an attempt in progress on this
-    /// transaction, for as long as the TransAttempt lives. Nothing else can
-    /// say that - Rust gets its attempts from begin() and the loops.
-    pub(crate) unsafe fn attempt_in_progress<'a>(&'a self) -> TransAttempt<'a, 'f> {
-        TransAttempt::new(self, self.restart_count.get())
-    }
-
     /// bch2_trans_begin(), for a loop that tracks restarts itself: the new
     /// restart count. Inlined, so that last_begin_ip is the caller's address.
     /// Beginning is trans_attempt.rs's, which holds the key.

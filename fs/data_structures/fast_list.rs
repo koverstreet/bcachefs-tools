@@ -19,8 +19,6 @@
 //! The walk is items_from(): under RCU, the slots read as they change. add() publishes the item with a
 //! release, which items_from()'s acquire pairs with; remove() is a plain
 //! store of NULL.
-//!
-//! C's user is async_objs.h's macros.
 
 #![allow(non_camel_case_types)]
 

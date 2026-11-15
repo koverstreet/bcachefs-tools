@@ -20,14 +20,14 @@ use crate::debug::trace::events;
 use crate::prt;
 use crate::snapshots::snapshot::{has_overwrites, is_ancestor};
 use core::cmp::Ordering;
-use crate::errcode::{Errcode, err_ptr, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::journal::entries::EntryWriter;
 use crate::os::kernel::unlikely;
 use crate::util::vstructs::{Validated, ValidatedEntries, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
-use core::ffi::{c_uint, c_ulong};
+use core::ffi::c_ulong;
 use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
@@ -242,9 +242,8 @@ impl<T: ?Sized> c::btree_trans_subbuf<T> {
 }
 
 /*
- * Only subbuf_append() writes a sub-buffer's entries, and C's
- * __bch2_trans_subbuf_alloc(), each a whole entry: so they're walked as
- * validated, as C walks them.
+ * Only subbuf_append() writes a sub-buffer's entries, each a whole entry: so
+ * they're walked as validated, as C walks them.
  */
 impl c::btree_trans_subbuf<c::bkey_i> {
     pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntries<'_, c::bkey_i>) -> R) -> R {
@@ -365,17 +364,6 @@ impl TransAttempt<'_, '_> {
 
     pub fn set_journal_seq_to_pin(&self, seq: u64) {
         self.trans().journal_seq_to_pin.set(seq)
-    }
-}
-
-/// # Safety
-/// @trans is in an attempt; @buf is one of its sub-buffers.
-pub unsafe fn __bch2_trans_subbuf_alloc(trans: &BtreeTrans<'_>, buf: *mut c::btree_trans_subbuf,
-                                        u64s: c_uint, _ip: c_ulong) -> *mut core::ffi::c_void {
-    let t = unsafe { trans.attempt_in_progress() };
-    match t.subbuf_alloc(unsafe { &*buf.cast::<Cell<c::btree_trans_subbuf>>() }, u64s as usize) {
-        Ok(s)  => s.as_ptr().cast(),
-        Err(e) => err_ptr(e),
     }
 }
 

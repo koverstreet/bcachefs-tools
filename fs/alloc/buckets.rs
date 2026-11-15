@@ -49,12 +49,6 @@ pub enum ReservationFlags {
     partial = 1 << 1,
 }
 
-#[repr(C)]
-#[derive(MaybeZeroable)]
-pub struct disk_reservation_destructable {
-    pub r: c::DiskReservation<'static>,
-}
-
 pub const RESERVE_FACTOR: u32 = 6;
 
 /* A device position as a 32.32 fixed point fraction of its size: see

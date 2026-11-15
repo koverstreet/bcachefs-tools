@@ -145,7 +145,7 @@ pub use super::for_each::*;
 pub use super::trans_attempt::*;
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{btree_path_level, BtreePath, KeyVal, LockedNode, PathIdx, Paths};
+use crate::btree::path::{btree_path_level, BtreePath, KeyVal, LockedNode, Paths};
 use crate::c;
 use crate::data::extents::{bch2_cut_back_s, bch2_cut_front_s};
 use crate::debug::params::debug_check_iterators;
@@ -164,13 +164,6 @@ use core::ptr::{self, NonNull};
 use crate::data::ptrs::BtreePtrs;
 use cstruct_macros::MaybeZeroable;
 use crate::format::{Bpos, Btree, BkeyType};
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct trans_for_each_path_inorder_iter {
-    pub sorted_idx: PathIdx,
-    pub path_idx: PathIdx,
-}
 
 /*
  * Exempt bch2_trans_begin() from the dropped-updates warning for a scope (see
@@ -359,7 +352,7 @@ pub(super) type Peeked = Result<Option<KeyVal>, BchError>;
 
 /// # Safety
 /// @v is @k's value - NULL for a hole - valid for 'k.
-unsafe fn bkey_s_c<'k>(k: &'k c::bkey, v: *const c::bch_val) -> BkeySC<'k> {
+unsafe fn key_from_parts<'k>(k: &'k c::bkey, v: *const c::bch_val) -> BkeySC<'k> {
     BkeySC {
         k,
         // a hole's NULL value: a dangling, aligned one instead, as val_bytes()
@@ -477,7 +470,7 @@ impl<'t> BtreeIter<'t> {
     /// The key @k found: iter->k, and its value in what the iterator's paths
     /// hold, or the transaction's.
     pub(super) fn key_of(&self, k: Option<KeyVal>) -> Option<BkeySC<'_>> {
-        k.map(|KeyVal(v)| unsafe { bkey_s_c(&self.k, v) })
+        k.map(|KeyVal(v)| unsafe { key_from_parts(&self.k, v) })
     }
 
     /// @k - a journal key, or an update's - is what's found: its header ours.
@@ -2009,7 +2002,7 @@ impl<'t> BtreeIter<'t> {
     pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut c::bkey) -> BkeySC<'k> {
         let paths = t.trans().paths();
         let KeyVal(v) = paths[self.path].peek_slot(u).expect("a slot always has a key");
-        unsafe { bkey_s_c(u, v) }
+        unsafe { key_from_parts(u, v) }
     }
 
     /// btree_iter_path()->l[0]: None with no node there.

@@ -82,36 +82,12 @@ use crate::{prt, sb_err_on};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Unvalidated;
 use crate::util::Printbuf;
-use core::ffi::c_uint;
-use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
+use cstruct_macros::{MaybeZeroable, TypeInfo};
 use crate::sb::io::SbResize;
-use nestify::nest;
 
 /* a target is 0 for none, then a device's index, then a disk group's */
 pub const TARGET_DEV_START: u32 = 1;
 pub const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
-
-/* target.type_: what a target names */
-#[bch_enum(closed)]
-#[repr(u32)]
-pub enum TargetType {
-    TARGET_NULL,
-    TARGET_DEV,
-    TARGET_GROUP,
-}
-
-nest! {
-    #[derive(Clone, Copy, MaybeZeroable)]*
-    #[repr(C)]*
-    pub struct target {
-        pub type_: c::TargetType,
-
-        pub id: pub union target_id {
-            pub dev: c_uint,
-            pub group: c_uint,
-        },
-    }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]

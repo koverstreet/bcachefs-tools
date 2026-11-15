@@ -1,9 +1,9 @@
 //! Keys' types and traits - mod.rs has how they fit together; this is what
 //! each is.
 //!
-//! The forms: BkeySC/BkeyS, C's bkey_s_c/bkey_s - a header pointer and a thin
-//! value pointer, V phantom, v() making the reference - and BkeyI, header and
-//! value inline, a DST, a reference covering all of the key.
+//! The forms: BkeySC/BkeyS - a header pointer and a thin value pointer, V
+//! phantom, v() making the reference - and BkeyI, header and value inline, a
+//! DST, a reference covering all of the key.
 //!
 //! Over the forms:
 //!  - BkeyV: a key in any form, TransBkey too - for code generic over how a
@@ -87,14 +87,6 @@ pub struct BkeyS<'a, V: ?Sized + BkeyVal = FamilyVal<AllTypes>> {
     pub(crate) val: PhantomData<*mut V>,
 }
 
-const _: () = {
-    use core::mem::{align_of, offset_of, size_of};
-    assert!(size_of::<BkeySC<'static>>() == size_of::<c::bkey_s_c>());
-    assert!(align_of::<BkeySC<'static>>() == align_of::<c::bkey_s_c>());
-    assert!(offset_of!(BkeySC<'static>, k) == offset_of!(c::bkey_s_c, k));
-    assert!(offset_of!(BkeySC<'static>, v) == offset_of!(c::bkey_s_c, v));
-};
-
 /// Not Clone or Copy: the value can run past V - copying a key is bkey_copy().
 ///
 /// XXX: the header is writable under a key - BkeyI's and BkeyS's pub k,
@@ -134,14 +126,6 @@ impl<'a, V: ?Sized + BkeyVal + ArmRef> BkeySC<'a, V> {
 }
 
 impl<'a> BkeySC<'a> {
-    /// A key C hands over.
-    ///
-    /// # Safety
-    /// @k's header and value are a key's, valid for 'a.
-    pub unsafe fn from_c(k: &'a c::bkey_s_c) -> Self {
-        BkeySC { k: unsafe { &*k.k }, v: k.v, iter: PhantomData, val: PhantomData }
-    }
-
     /// bkey_i_to_s_c(): a whole key, header and value.
     pub fn from_bkey_i(k: &'a c::bkey_i) -> Self {
         BkeySC { k: &k.k, v: &k.v, iter: PhantomData, val: PhantomData }
@@ -258,12 +242,6 @@ impl<V: BkeyWhole> BkeyI<V> {
         let mut hdr = *k.k;
         hdr.set_val_bytes(hdr.val_bytes().min(size_of::<V>()));
         Some(BkeyI { k: hdr, v })
-    }
-}
-
-impl<V: ?Sized + BkeyVal> From<BkeySC<'_, V>> for c::bkey_s_c {
-    fn from(k: BkeySC<'_, V>) -> Self {
-        c::bkey_s_c { k: k.k as *const c::bkey as *mut c::bkey, v: k.v.cast_mut() }
     }
 }
 
