@@ -689,7 +689,11 @@ fn validate_vals(v: &mut NodeValidate<'_>) -> Result<(), BchError> {
             match btree_node_bkey_val_validate(fs, b, u, ValidateFlags::empty()) {
                 Err(err) if err == BchError::from(c::Errcode::fsck_delete_bkey) => true,
                 _ if crate::debug::params::inject_invalid_keys() && u.k.bversion == c::Bversion::MAX => true,
-                r => { r?; false }
+                Err(err) => {
+                    v.replica_failed();
+                    return Err(err);
+                }
+                Ok(()) => false,
             }
         };
 

@@ -111,17 +111,11 @@ impl NodeValidate<'_> {
         }
 
         fs.sb_error_count(err);
+        self.replica_failed();
 
         match &mut self.io {
             NodeIo::Read { ca, failed, err_msg: out } => {
                 err_msg(out, Some(ca), b, at, msg);
-
-                /* not over keys_lost, from earlier in this replica: */
-                if let Some(f) = failed.as_deref_mut() {
-                    if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::btree_node_validate_err)) {
-                        f.set_errcode(ca.dev_idx.into(), -fs.err(e::btree_node_validate_err).raw());
-                    }
-                }
 
                 let have_retry = matches!(BkeySC::from(unsafe { b.contents() }.key_i())
                                               .pick_read_device(fs, failed.as_deref(), 0, c::ReadFlags::empty()),
@@ -161,6 +155,20 @@ impl NodeValidate<'_> {
         fs.emergency_read_only(&mut m);
 
         fs.err(e::fsck_errors_not_fixed)
+    }
+
+    /*
+     * The replica being read failed validation: recorded against its device, so
+     * a retry reads another. Not over keys lost or a bad checksum, from earlier
+     * in this replica - they say more.
+     */
+    pub fn replica_failed(&mut self) {
+        let fs = self.fs;
+        if let NodeIo::Read { ca, failed: Some(f), .. } = &mut self.io {
+            if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::btree_node_validate_err)) {
+                f.set_errcode(ca.dev_idx.into(), -fs.err(e::btree_node_validate_err).raw());
+            }
+        }
     }
 
     /*
