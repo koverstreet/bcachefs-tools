@@ -56,7 +56,8 @@
 //! the permission the child's type implies: read-only, from a type with no
 //! interior mutability - writing an atomic of the parent's through the &P
 //! would be UB - and as a shared reference's, from one with some. So At
-//! holds an UnsafeCell, and every placed type has interior mutability.
+//! holds an atomic - an array of none - and every placed type has interior
+//! mutability.
 //!
 //! Known gaps, to come back to:
 //!
@@ -104,10 +105,10 @@
 use crate::errcode::BchError;
 use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};
 use crate::util::rcu::FreeAnytime;
-use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::size_of;
 use core::pin::Pin;
+use core::sync::atomic::AtomicU8;
 use pin_init::{pin_data, pin_init, Init, PinInit, Zeroable};
 
 /// A field's name, as Field<N>'s N: its FNV-1a hash.
@@ -132,19 +133,16 @@ pub(crate) trait Field<const N: u64> {
 
 /// Proof that what holds it was made at B's field N - by at(), which alone
 /// makes one. Zero bytes, as C's char[0] for it: FFI-safe, as CacheAligned
-/// is, for the C structs that hold one. The UnsafeCell, of no bytes, is so
+/// is, for the C structs that hold one. The atomics, none of them, are so
 /// container() widens to a usable &P - see the file comment.
 #[repr(C)]
 pub struct At<B, const N: u64> {
-    _c:   UnsafeCell<[u8; 0]>,
+    _c:   [AtomicU8; 0],
     _b:   PhantomData<fn() -> B>,
     /// !Unpin - a PhantomData of it, which improper_ctypes skips, as it
     /// doesn't a PhantomPinned field
     _pin: PhantomData<PhantomPinned>,
 }
-
-// SAFETY: no bytes, for threads to race on
-unsafe impl<B, const N: u64> Sync for At<B, N> {}
 
 mod sealed {
     pub(crate) trait Sealed {}
@@ -211,16 +209,13 @@ impl<T, const L: usize> Array for [T; L] {
 /// Proof that what holds it was made as element @index of B's array field N
 /// - by at_index(), which alone makes one. The index itself to C: the field
 /// it's in is the element's own index, as C named it.
-#[repr(transparent)]
+#[repr(C)]
 pub(crate) struct AtIndex<B, const N: u64, I> {
     index: I,
-    _c:    UnsafeCell<[u8; 0]>,
+    _c:    [AtomicU8; 0],
     _b:    PhantomData<fn() -> B>,
     _pin:  PhantomData<PhantomPinned>,
 }
-
-// SAFETY: its index is never written after at_index() made it
-unsafe impl<B, const N: u64, I: Sync> Sync for AtIndex<B, N, I> {}
 
 impl<B, const N: u64, I: Index> AtIndex<B, N, I> {
     /// Which element it is, as C's integer for it.
@@ -254,12 +249,10 @@ pub(crate) trait Wrapper {
 /// by at_inner(), which alone makes one. Zero bytes, as At.
 #[repr(C)]
 pub(crate) struct AtInner<B, const N: u64> {
-    _c:   UnsafeCell<[u8; 0]>,
+    _c:   [AtomicU8; 0],
     _b:   PhantomData<fn() -> B>,
     _pin: PhantomData<PhantomPinned>,
 }
-
-unsafe impl<B, const N: u64> Sync for AtInner<B, N> {}
 
 impl<B, const N: u64> sealed::Sealed for AtInner<B, N> {}
 
@@ -303,7 +296,7 @@ pub(crate) unsafe fn at<B: Field<N>, const N: u64, I, E>(init: impl FnOnce(At<B,
 where
     I: PinInit<B::Type, E>,
 {
-    init(At { _c: UnsafeCell::new([]), _b: PhantomData, _pin: PhantomData })
+    init(At { _c: [], _b: PhantomData, _pin: PhantomData })
 }
 
 /// The AtIndex for element @i of B's array field N, given to @init - the
@@ -322,7 +315,7 @@ where
     B::Type: Array,
     I: PinInit<<B::Type as Array>::Elem, E>,
 {
-    init(AtIndex { index: X::from_usize(i), _c: UnsafeCell::new([]), _b: PhantomData, _pin: PhantomData })
+    init(AtIndex { index: X::from_usize(i), _c: [], _b: PhantomData, _pin: PhantomData })
 }
 
 /// The AtInner for the Inner of B's field N, given to @init - the field's
@@ -339,7 +332,7 @@ where
     B::Type: Wrapper,
     I: PinInit<B::Type, E>,
 {
-    init(AtInner { _c: UnsafeCell::new([]), _b: PhantomData, _pin: PhantomData })
+    init(AtInner { _c: [], _b: PhantomData, _pin: PhantomData })
 }
 
 /// B's field N's initializer, where a placed type lives there: #[placed]
@@ -665,16 +658,13 @@ pub(crate) trait PlacedIn: Sized {
 }
 
 /// Proof that what holds it was made by its container's insert(), which
-/// alone makes one. Zero bytes, as At, and as At an UnsafeCell and !Unpin.
+/// alone makes one. Zero bytes, as At, and as At interior mutable and !Unpin.
 #[repr(C)]
 pub(crate) struct AtIn<T> {
-    _c:   UnsafeCell<[u8; 0]>,
+    _c:   [AtomicU8; 0],
     _t:   PhantomData<fn() -> T>,
     _pin: PhantomData<PhantomPinned>,
 }
-
-// SAFETY: no bytes, for threads to race on
-unsafe impl<T> Sync for AtIn<T> {}
 
 /// What a Container keeps its elements in. An element gets in only by
 /// insert(), made in place and never moved; it leaves only by retain(),
@@ -724,7 +714,7 @@ pub(crate) struct Container<T, C> {
 impl<T: PlacedIn, C: Holds<T>> Container<T, C> {
     /// Make an element here, by @init - placed_init!()'s, given its AtIn.
     pub(crate) fn insert<E: From<AllocError>>(&mut self, init: impl PlacedInit<T, E>) -> Result<(), E> {
-        self.c.insert(init.__init(AtIn { _c: UnsafeCell::new([]), _t: PhantomData, _pin: PhantomData }))
+        self.c.insert(init.__init(AtIn { _c: [], _t: PhantomData, _pin: PhantomData }))
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
