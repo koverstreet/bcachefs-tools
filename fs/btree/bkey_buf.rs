@@ -14,11 +14,12 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::{BkeyI, BkeySC, BKEY_U64S};
+use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::c;
 use crate::format::Btree;
 use core::mem::size_of;
 use crate::util::alloc::{kbox_zeroed_nofail, kzalloc_nofail, KBox};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
@@ -83,21 +84,15 @@ impl BkeyBuf {
     /// Copy @k in, as bch2_bkey_buf_reassemble().
     pub fn reassemble(&mut self, k: BkeySC<'_>) {
         self.realloc(k.k.u64s as usize);
-        // SAFETY: realloc()'s room
-        unsafe { copy_key(self.buf_mut().as_mut_ptr(), k.k, k.v) }
+        copy_key(self.buf_mut(), k.k, k.val_bytes())
     }
 }
 
-/// Copies a key - header @k, value @v - to @dst.
-///
-/// # Safety
-/// @v is @k's value, and @dst has room for @k's u64s.
-pub(crate) unsafe fn copy_key(dst: *mut u64, k: &c::bkey, v: *const c::bch_val) {
-    // SAFETY: the caller's; a key's header and value are whole u64s
-    unsafe {
-        core::ptr::copy_nonoverlapping(core::ptr::from_ref(k).cast::<u64>(), dst, BKEY_U64S);
-        core::ptr::copy_nonoverlapping(v.cast::<u64>(), dst.add(BKEY_U64S), k.val_u64s());
-    }
+/// Copies a key - header @k, value @val - to the front of @dst.
+pub(crate) fn copy_key(dst: &mut [u64], k: &c::bkey, val: &[u8]) {
+    let dst = plain_bytes_mut(dst);
+    dst[..size_of::<c::bkey>()].copy_from_slice(plain_bytes(k));
+    dst[size_of::<c::bkey>()..][..val.len()].copy_from_slice(val);
 }
 
 impl<'a> From<&'a BkeyBuf> for BkeySC<'a> {
@@ -169,7 +164,8 @@ impl c::bkey_buf {
         }
         // SAFETY: init()'s @k, which is @onstack with room for @k, or the
         // heap buffer, with room for any key
-        unsafe { copy_key(self.k.cast(), k.k, k.v) }
+        let dst = unsafe { core::slice::from_raw_parts_mut(self.k.cast::<u64>(), k.k.u64s.into()) };
+        copy_key(dst, k.k, k.val_bytes())
     }
 
     pub fn exit(&mut self) {

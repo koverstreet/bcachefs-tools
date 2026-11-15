@@ -282,7 +282,8 @@ impl c::bkey_cached {
     fn set_key(&mut self, k: BkeySC<'_>) {
         assert!(u16::from(k.k.u64s) <= self.u64s, "a key cache entry given a key of {} u64s, its buffer {}",
                 k.k.u64s, self.u64s);
-        unsafe { copy_key(self.k.cast(), k.k, k.v) }
+        let dst = unsafe { core::slice::from_raw_parts_mut(self.k.cast::<u64>(), self.u64s.into()) };
+        copy_key(dst, k.k, k.val_bytes())
     }
 }
 
