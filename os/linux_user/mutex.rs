@@ -12,8 +12,6 @@ use parking_lot::lock_api::RawMutex as _;
 #[repr(transparent)]
 pub struct Mutex(parking_lot::RawMutex);
 
-unsafe impl ::pin_init::Zeroable for Mutex {}
-
 unsafe impl RawLockBase for Mutex {
     type GuardState = ();
     type InitError = Infallible;

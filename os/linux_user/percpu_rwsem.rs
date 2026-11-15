@@ -13,8 +13,6 @@ use parking_lot::lock_api::RawRwLock as _;
 #[repr(transparent)]
 pub struct PercpuRwSem(parking_lot::RawRwLock);
 
-unsafe impl ::pin_init::Zeroable for PercpuRwSem {}
-
 unsafe impl RawLockBase for PercpuRwSem {
     type GuardState = ();
     type InitError = BchError;

@@ -29,11 +29,6 @@ pub struct SpinLockIrq(RawSpinLock);
 #[repr(transparent)]
 pub struct SpinLock(RawSpinLock);
 
-// Zeroed: unlocked
-unsafe impl ::pin_init::Zeroable for RawSpinLock {}
-unsafe impl ::pin_init::Zeroable for SpinLockIrq {}
-unsafe impl ::pin_init::Zeroable for SpinLock {}
-
 // ── RawSpinLock ──────────────────────────────────────────────────────────
 
 unsafe impl RawLockBase for RawSpinLock {

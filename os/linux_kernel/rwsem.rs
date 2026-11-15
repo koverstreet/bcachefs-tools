@@ -13,9 +13,6 @@ use kernel::bindings as b;
 
 pub type RwSem = Opaque<b::rw_semaphore>;
 
-// Zeroed as the structs holding them start; a lock only once their init runs
-unsafe impl ::pin_init::Zeroable for RwSem {}
-
 unsafe impl RawLockBase for RwSem {
     type GuardState = ();
     type InitError = Infallible;

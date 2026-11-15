@@ -16,10 +16,6 @@ use kernel::bindings as b;
 pub type SpinLockIrq = Opaque<b::spinlock_t>;
 pub type RawSpinLock = Opaque<b::raw_spinlock_t>;
 
-// Zeroed as the structs holding them start; a lock only once their init runs
-unsafe impl ::pin_init::Zeroable for SpinLockIrq {}
-unsafe impl ::pin_init::Zeroable for RawSpinLock {}
-
 // ── SpinLockIrq: spinlock_t, taken irqsave ───────────────────────────────
 
 // Taken with interrupts off - spin_lock_irqsave() - for what interrupt
@@ -68,9 +64,6 @@ unsafe impl RawNestedLock for SpinLockIrq {
 /// raw_spinlock_t.
 #[repr(transparent)]
 pub struct SpinLock(Opaque<b::spinlock_t>);
-
-// Zeroed as SpinLockIrq is: a lock only once init() runs
-unsafe impl ::pin_init::Zeroable for SpinLock {}
 
 unsafe impl RawLockBase for SpinLock {
     type GuardState = MemallocFlags;

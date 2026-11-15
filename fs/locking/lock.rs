@@ -208,17 +208,15 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
         unsafe { l.assume_init() }
     }
 
-    /// A Locked for a static: @g and @p, the raw lock zeroed - a C lock can't
-    /// be made in a const - until init_zeroed().
+    /// A Locked for a static: @g and @p, the raw lock zeroed - a kernel lock
+    /// can't be made in a const - until init_zeroed().
     ///
     /// # Safety
-    /// init_zeroed() runs before anything takes it.
-    pub const unsafe fn uninit(g: G, p: P) -> Self
-    where
-        R: ::pin_init::Zeroable,
-    {
+    /// Zeroes are a valid R, if not a lock yet: init_zeroed() runs before
+    /// anything takes it.
+    pub const unsafe fn uninit(g: G, p: P) -> Self {
         Self {
-            raw:       ::pin_init::zeroed(),
+            raw:       unsafe { core::mem::zeroed() },
             protected: UnsafeCell::new(g),
             published: p,
             _pin:      PhantomData,

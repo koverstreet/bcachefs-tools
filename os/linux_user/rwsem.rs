@@ -12,8 +12,6 @@ use parking_lot::lock_api::RawRwLock as _;
 #[repr(transparent)]
 pub struct RwSem(parking_lot::RawRwLock);
 
-unsafe impl ::pin_init::Zeroable for RwSem {}
-
 unsafe impl RawLockBase for RwSem {
     type GuardState = ();
     type InitError = Infallible;

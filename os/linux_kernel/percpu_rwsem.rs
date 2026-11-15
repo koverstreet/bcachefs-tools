@@ -14,9 +14,6 @@ use kernel::bindings as b;
 
 pub type PercpuRwSem = Opaque<b::percpu_rw_semaphore>;
 
-// Zeroed as the structs holding them start; a lock only once their init runs
-unsafe impl ::pin_init::Zeroable for PercpuRwSem {}
-
 pub use crate::c::{
     rust_percpu_init_rwsem, rust_percpu_free_rwsem, rust_percpu_down_read, rust_percpu_up_read,
     rust_percpu_down_write, rust_percpu_up_write,

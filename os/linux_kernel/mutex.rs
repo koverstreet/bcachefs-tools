@@ -13,9 +13,6 @@ use kernel::bindings as b;
 
 pub type Mutex = Opaque<b::mutex>;
 
-// Zeroed as the structs holding them start; a lock only once their init runs
-unsafe impl ::pin_init::Zeroable for Mutex {}
-
 /// How two locks of one class, by their maps, are ordered: negative for @a
 /// first. Lockdep's lock_cmp_fn, as kCFI hashes it.
 #[cfg(CONFIG_PROVE_LOCKING)]
