@@ -143,7 +143,7 @@ pub mod c {
     pub use super::data_write_types::*;
     pub use crate::debug::async_objs::{ async_obj_list, AsyncObjKind};
     pub(crate) use super::debug_trace_types::*;
-    pub use crate::errcode::{ Errcode, bch_errcode_max, blk_status_to_bch_err};
+    pub use crate::errcode::{ Errcode, blk_status_to_bch_err};
     pub use crate::errcode::status::BLK_STS_REMOVED;
     pub(crate) use crate::errcode::{BCH_ERRCODES, BLK_ERRS, ZSTD_ERRS, __BCH_ERRCODES_0, __BCH_ERRCODES_1};
     pub use super::fs_acl_format::*;

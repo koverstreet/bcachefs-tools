@@ -26,7 +26,7 @@ use core::fmt;
 use core::iter;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
-use cstruct_macros::{bch_enum, MaybeZeroable, xmacro, TypeInfo};
+use cstruct_macros::{bch_enum, xmacro};
 
 xmacro! {
     BLK_ERRS {
@@ -665,24 +665,18 @@ xmacro! {
     }
 }
 
-/*
- * Errcode::MAX is one past the highest errcode number, wherever that entry sits
- * in BCH_ERRCODES(): a union is the size of its largest member, and a char[nr
- * + 1] has no padding, so this one is the largest nr, plus one. Never declared
- * as an object, only measured.
- */
-macro_rules! __bch_errcode_max_0 {
-    ([$($acc:tt)*] $(($class:tt, $err:tt, $nr:tt)),* $(,)?) => {
-        #[allow(non_snake_case)]
-        #[repr(C)]
-        #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
-        pub union bch_errcode_max {
-            $($acc)*
-            $(pub $err: [crate::util::ffi::c_char; (($nr) + 1) as usize],)*
+/// The highest of @nrs: Errcode::MAX is one past the highest errcode number,
+/// wherever that entry sits in BCH_ERRCODES().
+const fn max_nr(nrs: &[u32]) -> u32 {
+    let (mut i, mut max) = (0, 0);
+    while i < nrs.len() {
+        if nrs[i] > max {
+            max = nrs[i];
         }
-    };
+        i += 1;
+    }
+    max
 }
-BCH_ERRCODES!(__bch_errcode_max_0 []);
 
 macro_rules! errcode_enum {
     ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => {
@@ -691,8 +685,7 @@ macro_rules! errcode_enum {
         pub enum Errcode {
             START = 2048,
             $($err = Errcode::START.0 + ($nr as u32),)*
-            MAX = Errcode::START.0
-            + (core::mem::size_of::<c::bch_errcode_max>() as u32),
+            MAX = Errcode::START.0 + max_nr(&[$($nr as u32),*]) + 1,
         }
     };
 }
