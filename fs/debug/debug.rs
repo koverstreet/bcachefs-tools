@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! /sys/kernel/debug/bcachefs/<fs>/: each file a DebugFile (os/*/debugfs.rs).
+//! /sys/kernel/debug/bcachefs/<fs>/: each file a DebugFile (os/debugfs.rs).
 //!
 //! The btree walks don't start until BCH_FS_may_go_rw: until then journal
 //! replay is changing the journal keys' gap buffer, which iteration reads.
@@ -11,9 +11,6 @@
 use core::convert::Infallible;
 use core::ffi::{c_int, CStr};
 use core::ops::ControlFlow;
-use core::ptr::NonNull;
-use core::sync::atomic::{AtomicPtr, Ordering};
-use core::marker::PhantomData;
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter};
@@ -23,7 +20,7 @@ use crate::btree::trans::transaction_fn;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::os::debugfs::{self, DebugFile, DebugOut};
+use crate::os::debugfs::{DebugFile, DebugOut, DebugRoot};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::place::Contained;
 use crate::util::{rcu, Printbuf};
@@ -43,122 +40,118 @@ impl c::btree_debug {
     }
 }
 
-#[derive(Default)]
-struct Keys {
-    from: Bpos,
-}
+enum Keys {}
 
 impl DebugFile for Keys {
     type Obj = c::btree_debug;
 
-    fn read(&mut self, bd: &c::btree_debug, out: &mut DebugOut<'_>) -> Result<(), BchError> {
+    async fn show(bd: &c::btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = bd.fs();
         if !may_iterate(fs) {
             return Ok(());
         }
 
-        let trans = btree_trans!(fs);
-        let mut iter = BtreeIter::new(&*trans, bd.id.get(), self.from,
-                                      BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
-        iter.for_each(&trans, |t, iter, k| {
-            prt!(out, "{}\n", k.to_text(fs));
-            t.unlock();
-            self.from = iter.pos().successor();
-            out.flush()
-        })
+        let mut from = Bpos::default();
+        out.print_each(|out| {
+            let trans = btree_trans!(fs);
+            let mut iter = BtreeIter::new(&*trans, bd.id.get(), from,
+                                          BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
+            iter.for_each(&trans, |t, iter, k| {
+                prt!(out, "{}\n", k.to_text(fs));
+                t.unlock();
+                from = iter.pos().successor();
+                Ok(out.try_flush()?.map_break(|()| true))
+            })
+        }).await
     }
 }
 
 /// formats: each node's format and key counts, level by level, from the
 /// leaves up.
-#[derive(Default)]
-struct Formats {
-    level: u32,
-    from:  Bpos,
-}
+enum Formats {}
 
 impl DebugFile for Formats {
     type Obj = c::btree_debug;
 
-    fn read(&mut self, bd: &c::btree_debug, out: &mut DebugOut<'_>) -> Result<(), BchError> {
+    async fn show(bd: &c::btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = bd.fs();
         if !may_iterate(fs) {
             return Ok(());
         }
 
-        let trans = btree_trans!(fs);
-        while self.level < c::BTREE_MAX_DEPTH as u32 {
-            let mut iter = BtreeNodeIter::new(&*trans, bd.id.get(), self.from, 0, self.level,
-                                              BtreeIterFlags::empty());
-            let full = iter.for_each(&trans, |b| {
-                prt!(out, "{}", b.to_text(fs));
-                let end = b.contents().key.k.p;
-                self.from = if end != SPOS_MAX { end.successor() } else { end };
+        let mut level = 0;
+        let mut from = Bpos::default();
+        out.print_each(|out| {
+            let trans = btree_trans!(fs);
+            while level < c::BTREE_MAX_DEPTH as u32 {
+                let mut iter = BtreeNodeIter::new(&*trans, bd.id.get(), from, 0, level,
+                                                  BtreeIterFlags::empty());
+                let full = iter.for_each(&trans, |b| {
+                    prt!(out, "{}", b.to_text(fs));
+                    let end = b.contents().key.k.p;
+                    from = if end != SPOS_MAX { end.successor() } else { end };
 
-                // C's drop_locks_do(): the next level's iterator is made
-                // from this trans, and needs it locked
-                trans.unlock();
-                let flow = out.flush()?;
-                trans.relock()?;
-                Ok(flow.map_break(|()| true))
-            })?;
-            if full {
-                return Ok(());
+                    // C's drop_locks_do(): the next level's iterator is made
+                    // from this trans, and needs it locked
+                    trans.unlock();
+                    let flow = out.try_flush()?;
+                    trans.relock()?;
+                    Ok(flow.map_break(|()| true))
+                })?;
+                if full {
+                    return Ok(true);
+                }
+
+                level += 1;
+                from = Bpos::default();
             }
-
-            self.level += 1;
-            self.from = Bpos::default();
-        }
-        Ok(())
+            Ok(false)
+        }).await
     }
 }
 
 /// bfloat-failed: for each key, where the bset search tree's lookup of it
 /// failed - after each node, the first time it's reached.
-#[derive(Default)]
-struct BfloatFailed {
-    from:      Bpos,
-    prev_node: Bpos,
-}
+enum BfloatFailed {}
 
 impl DebugFile for BfloatFailed {
     type Obj = c::btree_debug;
 
-    fn read(&mut self, bd: &c::btree_debug, out: &mut DebugOut<'_>) -> Result<(), BchError> {
+    async fn show(bd: &c::btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = bd.fs();
         if !may_iterate(fs) {
             return Ok(());
         }
 
-        let trans = btree_trans!(fs);
-        let mut iter = BtreeIter::new(&*trans, bd.id.get(), self.from,
-                                      BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
-        iter.for_each(&trans, |t, iter, _k| {
-            // SAFETY: used before the unlock below
-            if let Some(l) = unsafe { iter.leaf(t) } {
-                let b = l.node();
-                let end = b.contents().key.k.p;
-                if end > self.prev_node {
-                    prt!(out, "{}", b.to_text(fs));
-                    self.prev_node = end;
+        let mut from = Bpos::default();
+        let mut prev_node = Bpos::default();
+        out.print_each(|out| {
+            let trans = btree_trans!(fs);
+            let mut iter = BtreeIter::new(&*trans, bd.id.get(), from,
+                                          BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
+            iter.for_each(&trans, |t, iter, _k| {
+                // SAFETY: used before the unlock below
+                if let Some(l) = unsafe { iter.leaf(t) } {
+                    let b = l.node();
+                    let end = b.contents().key.k.p;
+                    if end > prev_node {
+                        prt!(out, "{}", b.to_text(fs));
+                        prev_node = end;
+                    }
+                    l.bfloat_to_text(out);
                 }
-                l.bfloat_to_text(out);
-            }
 
-            t.unlock();
-            self.from = iter.pos().successor();
-            out.flush()
-        })
+                t.unlock();
+                from = iter.pos().successor();
+                Ok(out.try_flush()?.map_break(|()| true))
+            })
+        }).await
     }
 }
 
 /* The filesystem's */
 
-#[derive(Default)]
-struct CachedBtreeNodes {
-    /* the slot in bc->nodes to go on from */
-    idx: usize,
-}
+enum CachedBtreeNodes {}
 
 
 fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
@@ -192,75 +185,71 @@ fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
 impl DebugFile for CachedBtreeNodes {
     type Obj = Fs;
 
-    fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
+    async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
+        /* the slot in bc->nodes to go on from */
+        let mut idx = 0;
         out.print_each(|out| {
             let rcu = rcu::read_lock();
             // a struct btree isn't freed while the cache is up, only reused
-            let next = fs.btree.cache.nodes.items_from(self.idx, &rcu)
+            let next = fs.btree.cache.nodes.items_from(idx, &rcu)
                 .map(|(i, b)| (i, unsafe { b.cast::<BtreeNode>().as_ref() }))
                 .find(|(_, b)| b.hash_val() != 0);
             let Some((i, b)) = next else { return Ok(false) };
 
             cached_btree_node_to_text(out, fs, b);
-            self.idx = i + 1;
+            idx = i + 1;
             Ok(true)
-        })
+        }).await
     }
 }
 
 /// The transactions holding the SRCU lock btree nodes are freed under - the
 /// others have nothing locked to show. The cursor is the last one's address.
-#[derive(Default)]
-struct BtreeTransactions {
-    cursor: usize,
-}
+enum BtreeTransactions {}
 
 impl DebugFile for BtreeTransactions {
     type Obj = Fs;
 
-    fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
-        let _srcu = fs.btree.trans.barrier.read_lock();
+    async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
+        let mut cursor = 0;
+        out.print_each(|out| {
+            let _srcu = fs.btree.trans.barrier.read_lock();
+            let mut full = false;
 
-        fs.for_each_trans_from(&mut self.cursor, |t| t.srcu_held(), |t| {
-            prt!(out, "{}", t);
-            prt!(out, "backtrace:\n");
-            t.backtrace_to_text(&mut out.indent(2));
-            prt!(out, "\n");
+            fs.for_each_trans_from(&mut cursor, |t| t.srcu_held(), |t| {
+                prt!(out, "{}", t);
+                prt!(out, "backtrace:\n");
+                t.backtrace_to_text(&mut out.indent(2));
+                prt!(out, "\n");
 
-            // its ref goes before the flush: that can fault, and wait
-            drop(t);
-            out.flush()
-        })
+                // its ref goes before the flush: that can fault, and wait
+                drop(t);
+                let flow = out.try_flush()?;
+                full = flow.is_break();
+                Ok::<_, BchError>(flow)
+            })?;
+            Ok(full)
+        }).await
     }
 }
 
-#[derive(Default)]
-struct JournalPins {
-    seq: u64,
-}
+enum JournalPins {}
 
 impl DebugFile for JournalPins {
     type Obj = Fs;
 
-    fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
+    async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
+        let mut seq = 0;
         out.print_each(|out| {
-            let done = fs.journal.seq_pins_to_text(out, &mut self.seq, None);
-            self.seq += 1;
+            let done = fs.journal.seq_pins_to_text(out, &mut seq, None);
+            seq += 1;
             Ok(!done)
-        })
+        }).await
     }
 }
 
 /// By transaction_fn() index; 0, "(unknown)", is skipped.
-struct TransactionStats {
-    idx: usize,
-}
-
-impl Default for TransactionStats {
-    fn default() -> Self {
-        TransactionStats { idx: 1 }
-    }
-}
+enum TransactionStats {}
 
 impl DebugFile for TransactionStats {
     type Obj = Fs;
@@ -268,65 +257,64 @@ impl DebugFile for TransactionStats {
     // btree_transaction_stats_open() didn't set may_vmalloc
     const MAY_VMALLOC: bool = false;
 
-    fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
-        out.print_each(|out| {
-            let Some(name) = transaction_fn(self.idx) else {
-                return Ok(false);
-            };
+    async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
+        let mut idx = 1;
+        while let Some(name) = transaction_fn(idx) {
             out.write_bytes(name.to_bytes());
             prt!(out, ":\n");
-
-            let s = &fs.btree.trans.stats[self.idx];
-            let mut out = out.indent(2);
-            let locked = s.lock.lock();
-
-            prt!(out, "Max mem used: {}\n", s.lock.max_mem.get());
-            #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-            crate::btree::trans::kmalloc_trace_to_text(&mut out.indent(2), &locked.trans_kmalloc_trace);
-
-            prt!(out, "Transaction duration:\n");
-            prt!(out.indent(2), "{}", s.duration);
-
-            if cfg!(CONFIG_BCACHEFS_LOCK_TIME_STATS) {
-                prt!(out, "Lock hold times:\n");
-                prt!(out.indent(2), "{}", s.lock_hold_times);
-
-                prt!(out, "Lock wait times:\n");
-                prt!(out.indent(2), "{}", s.lock_wait_times);
-            }
-
-            if !locked.max_paths_text.as_bytes().is_empty() {
-                prt!(out, "Maximum allocated btree paths ({}):\n", s.lock.nr_max_paths.get());
-                out.indent(2).write_bytes(locked.max_paths_text.as_bytes());
-            }
-
-            prt!(out, "\n");
-            self.idx += 1;
-            Ok(true)
-        })
+            transaction_stats_to_text(&mut out.indent(2), fs, idx);
+            idx += 1;
+            out.flush().await?;
+        }
+        Ok(())
     }
 }
 
-#[derive(Default)]
-struct BtreeNodeScan {
-    next: usize,
+fn transaction_stats_to_text(out: &mut Printbuf, fs: &Fs, idx: usize) {
+    let s = &fs.btree.trans.stats[idx];
+    let locked = s.lock.lock();
+
+    prt!(out, "Max mem used: {}\n", s.lock.max_mem.get());
+    #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
+    crate::btree::trans::kmalloc_trace_to_text(&mut out.indent(2), &locked.trans_kmalloc_trace);
+
+    prt!(out, "Transaction duration:\n");
+    prt!(out.indent(2), "{}", s.duration);
+
+    if cfg!(CONFIG_BCACHEFS_LOCK_TIME_STATS) {
+        prt!(out, "Lock hold times:\n");
+        prt!(out.indent(2), "{}", s.lock_hold_times);
+
+        prt!(out, "Lock wait times:\n");
+        prt!(out.indent(2), "{}", s.lock_wait_times);
+    }
+
+    if !locked.max_paths_text.as_bytes().is_empty() {
+        prt!(out, "Maximum allocated btree paths ({}):\n", s.lock.nr_max_paths.get());
+        out.indent(2).write_bytes(locked.max_paths_text.as_bytes());
+    }
+
+    prt!(out, "\n");
 }
+
+enum BtreeNodeScan {}
 
 impl DebugFile for BtreeNodeScan {
     type Obj = Fs;
 
-    fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
+    async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
+        let mut next = 0;
         out.print_each(|out| {
             let nodes = fs.btree.node_scan.lock();
-            if self.next >= nodes.len() {
+            if next >= nodes.len() {
                 return Ok(false);
             }
 
             // the nodes are kept in eytzinger order, for searching
-            nodes[Eytzinger0::<usize>::of(&nodes).from_inorder(self.next)].to_text(out, fs);
-            self.next += 1;
+            nodes[Eytzinger0::<usize>::of(&nodes).from_inorder(next)].to_text(out, fs);
+            next += 1;
             Ok(true)
-        })
+        }).await
     }
 }
 
@@ -334,112 +322,92 @@ impl DebugFile for BtreeNodeScan {
 /// end-of-fsck summary prints only the first FSCK_DAMAGED_PATHS_PRINT, which
 /// isn't enough when triaging a badly damaged filesystem. Interim, until the
 /// damage btree lands.
-#[derive(Default)]
-struct FsckDamagedPaths {
-    next: usize,
-}
+enum FsckDamagedPaths {}
 
 impl DebugFile for FsckDamagedPaths {
     type Obj = Fs;
 
-    fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
+    async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
         if !may_iterate(fs) {
             return Ok(());
         }
 
-        let trans = btree_trans!(fs);
+        let mut next = 0;
         out.print_each(|out| {
-            // Copied under the lock, resolved outside it: resolving takes
-            // btree locks, and fsck's error paths take the errors lock under those
-            let entry = fs.errors.state.lock().damaged_paths.get(self.next).copied();
-            let Some(entry) = entry else {
-                return Ok(false);
-            };
+            let trans = btree_trans!(fs);
+            loop {
+                // Copied under the lock, resolved outside it: resolving takes
+                // btree locks, and fsck's error paths take the errors lock under those
+                let entry = fs.errors.state.lock().damaged_paths.get(next).copied();
+                let Some(entry) = entry else {
+                    return Ok(false);
+                };
 
-            crate::init::error::damaged_path_to_text(out, &trans, &entry);
-            self.next += 1;
+                crate::init::error::damaged_path_to_text(out, &trans, &entry);
+                next += 1;
 
-            // Before the flush: it relocks, via lockrestart_do()
-            trans.unlock();
-            Ok(true)
-        })
+                // Before the flush: it relocks, via lockrestart_do()
+                trans.unlock();
+                if out.try_flush()?.is_break() {
+                    return Ok(true);
+                }
+            }
+        }).await
     }
 }
 
-/// A file printed whole by its first read: bch2_simple_print()'s.
-trait PrintOnce: 'static {
-    fn print(fs: &Fs, out: &mut Printbuf);
-}
-
-struct Once<P>(bool, PhantomData<fn() -> P>);
-
-impl<P> Default for Once<P> {
-    fn default() -> Self {
-        Once(false, PhantomData)
-    }
-}
-
-impl<P: PrintOnce> DebugFile for Once<P> {
-    type Obj = Fs;
-
-    fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
-        if !self.0 {
-            P::print(fs, out);
-            self.0 = true;
-        }
-        Ok(())
-    }
-}
+/* Printed whole, bch2_simple_print()'s */
 
 enum BtreeUpdates {}
 
-impl PrintOnce for BtreeUpdates {
-    fn print(fs: &Fs, out: &mut Printbuf) {
-        fs.btree_updates_to_text(out)
+impl DebugFile for BtreeUpdates {
+    type Obj = Fs;
+
+    async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
+        fs.btree_updates_to_text(out);
+        Ok(())
     }
 }
 
 enum WritePoints {}
 
-impl PrintOnce for WritePoints {
-    fn print(fs: &Fs, out: &mut Printbuf) {
-        fs.write_points_to_text(out)
+impl DebugFile for WritePoints {
+    type Obj = Fs;
+
+    async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
+        fs.write_points_to_text(out);
+        Ok(())
     }
 }
 
 enum BtreeDeadlock {}
 
-impl PrintOnce for BtreeDeadlock {
-    fn print(fs: &Fs, out: &mut Printbuf) {
+impl DebugFile for BtreeDeadlock {
+    type Obj = Fs;
+
+    async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
         let mut cursor = 0;
         let Ok(()) = fs.for_each_trans_from(&mut cursor, |_| true, |t| {
             let found = t.check_for_deadlock(out);
             drop(t);
             Ok::<_, Infallible>(if found { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
         });
+        Ok(())
     }
 }
 
 /* Creating and removing them */
 
 /// /sys/kernel/debug/bcachefs/, if debugfs is up.
-static BCH_DEBUG: AtomicPtr<crate::os::debugfs::Dentry> = AtomicPtr::new(core::ptr::null_mut());
-
-fn dentry_ptr(d: Option<NonNull<crate::os::debugfs::Dentry>>) -> *mut crate::os::debugfs::Dentry {
-    d.map_or(core::ptr::null_mut(), NonNull::as_ptr)
-}
+static BCH_DEBUG: DebugRoot = DebugRoot::new();
 
 pub fn debug_exit(fs: &Fs) {
-    if let Some(dir) = NonNull::new(fs.fs_debug_dir) {
-        debugfs::remove_recursive(dir);
-    }
+    drop(unsafe { (*fs.as_ptr()).fs_debug_dir.take() });
 }
 
 /// bcachefs/<fs>/: named by the external UUID if the filesystem has ever had
 /// more than one device, by its one device otherwise.
 pub fn debug_init(fs: &Fs) {
-    let Some(root) = NonNull::new(BCH_DEBUG.load(Ordering::Acquire)) else { return };
-
     let mut name = Printbuf::new();
     if fs.sb.multi_device.get() {
         prt!(&mut name, "{}", fs.sb.user_uuid());
@@ -450,51 +418,50 @@ pub fn debug_init(fs: &Fs) {
         return;
     }
 
-    let dir = debugfs::create_dir(name.as_c_str(), Some(root));
-    // SAFETY: filesystem init, before anything reads it
-    unsafe { (*fs.as_ptr()).fs_debug_dir = dentry_ptr(dir) };
-    let Some(dir) = dir else { return };
+    let Some(fs_dir) = BCH_DEBUG.subdir(name.as_c_str()) else { return };
+    let dir = fs_dir.dir();
 
-    // SAFETY, for each file: the filesystem outlives them - bch2_fs_debug_exit()
+    // SAFETY, for each file: the filesystem outlives them - debug_exit()
     // removes them first
     unsafe {
-        debugfs::create_file::<CachedBtreeNodes>(c"cached_btree_nodes", dir, fs);
-        debugfs::create_file::<BtreeTransactions>(c"btree_transactions", dir, fs);
-        debugfs::create_file::<JournalPins>(c"journal_pins", dir, fs);
-        debugfs::create_file::<Once<BtreeUpdates>>(c"btree_updates", dir, fs);
-        debugfs::create_file::<TransactionStats>(c"btree_transaction_stats", dir, fs);
-        debugfs::create_file::<Once<BtreeDeadlock>>(c"btree_deadlock", dir, fs);
-        debugfs::create_file::<BtreeNodeScan>(c"btree_node_scan", dir, fs);
-        debugfs::create_file::<FsckDamagedPaths>(c"fsck_damaged_paths", dir, fs);
-        debugfs::create_file::<Once<WritePoints>>(c"write_points", dir, fs);
+        dir.file::<CachedBtreeNodes>(c"cached_btree_nodes", fs);
+        dir.file::<BtreeTransactions>(c"btree_transactions", fs);
+        dir.file::<JournalPins>(c"journal_pins", fs);
+        dir.file::<BtreeUpdates>(c"btree_updates", fs);
+        dir.file::<TransactionStats>(c"btree_transaction_stats", fs);
+        dir.file::<BtreeDeadlock>(c"btree_deadlock", fs);
+        dir.file::<BtreeNodeScan>(c"btree_node_scan", fs);
+        dir.file::<FsckDamagedPaths>(c"fsck_damaged_paths", fs);
+        dir.file::<WritePoints>(c"write_points", fs);
     }
 
     crate::debug::async_objs::debugfs_init(fs, dir);
 
-    let btrees = debugfs::create_dir(c"btrees", Some(dir));
-    unsafe { (*fs.as_ptr()).btree_debug_dir = dentry_ptr(btrees) };
-    let Some(btrees) = btrees else { return };
+    if let Some(btrees) = dir.subdir(c"btrees") {
+        static NAMES: &[&CStr] = &crate::cstr_names!(Btree);
+        for bd in fs.btree_debug.iter() {
+            let name = NAMES.get(bd.id.get() as usize).copied().unwrap_or(c"(unknown)");
+            let Some(dir) = btrees.subdir(name) else { continue };
 
-    static NAMES: &[&CStr] = &crate::cstr_names!(Btree);
-    for bd in fs.btree_debug.iter() {
-        let name = NAMES.get(bd.id.get() as usize).copied().unwrap_or(c"(unknown)");
-        let Some(dir) = debugfs::create_dir(name, Some(btrees)) else { continue };
-
-        unsafe {
-            debugfs::create_file::<Keys>(c"keys", dir, bd);
-            debugfs::create_file::<Formats>(c"formats", dir, bd);
-            debugfs::create_file::<BfloatFailed>(c"bfloat-failed", dir, bd);
+            unsafe {
+                dir.file::<Keys>(c"keys", bd);
+                dir.file::<Formats>(c"formats", bd);
+                dir.file::<BfloatFailed>(c"bfloat-failed", bd);
+            }
         }
     }
+
+    // SAFETY: filesystem init, before anything reads it
+    unsafe { (*fs.as_ptr()).fs_debug_dir = Some(fs_dir) };
 }
 
-pub fn bch2_debug_exit() {
-    if let Some(root) = NonNull::new(BCH_DEBUG.load(Ordering::Acquire)) {
-        debugfs::remove_recursive(root);
-    }
+/// # Safety
+/// After the last filesystem's debug_exit().
+pub unsafe fn bch2_debug_exit() {
+    unsafe { BCH_DEBUG.exit() }
 }
 
 pub fn bch2_debug_init() -> c_int {
-    BCH_DEBUG.store(dentry_ptr(debugfs::create_dir(c"bcachefs", None)), Ordering::Release);
+    BCH_DEBUG.init(c"bcachefs");
     0
 }

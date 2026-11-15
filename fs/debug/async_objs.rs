@@ -130,7 +130,7 @@ use crate::data::update_task::Update;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::bio::Bio;
-use crate::os::debugfs::{self, DebugFile, DebugOut};
+use crate::os::debugfs::{DebugFile, DebugOut, Dir};
 use crate::util::place::Contained;
 use crate::util::rcu;
 use crate::util::{Printbuf, ToText};
@@ -205,11 +205,7 @@ impl c::async_obj_list {
     }
 }
 
-/// The cursor is the next slot.
-#[derive(Default)]
-struct AsyncObjList {
-    next: usize,
-}
+enum AsyncObjList {}
 
 impl DebugFile for AsyncObjList {
     type Obj = c::async_obj_list;
@@ -217,34 +213,31 @@ impl DebugFile for AsyncObjList {
     // bch2_async_obj_list_open() didn't set may_vmalloc
     const MAY_VMALLOC: bool = false;
 
-    fn read(&mut self, list: &c::async_obj_list, out: &mut DebugOut<'_>) -> Result<(), BchError> {
+    async fn show(list: &c::async_obj_list, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = list.fs();
         let (_, to_text) = LISTS[list.idx.get() as usize];
 
+        let mut next = 0;
         out.print_each(|out| {
             let rcu = rcu::read_lock();
-            let Some((idx, obj)) = list.list.items_from(self.next, &rcu).next() else {
+            let Some((idx, obj)) = list.list.items_from(next, &rcu).next() else {
                 return Ok(false);
             };
 
             // SAFETY: an object of the list's kind - but see the XXX
             unsafe { to_text(out, fs, obj) };
-            self.next = idx + 1;
+            next = idx + 1;
             Ok(true)
-        })
+        }).await
     }
 }
 
 /// debug_init()'s, in its directory @parent.
-pub(crate) fn debugfs_init(fs: &Fs, parent: NonNull<crate::os::debugfs::Dentry>) {
-    let dir = debugfs::create_dir(c"async_objs", Some(parent));
-    // SAFETY: filesystem init, before anything reads it
-    unsafe { (*fs.as_ptr()).async_obj_dir = dir.map_or(core::ptr::null_mut(), NonNull::as_ptr) };
-
-    let Some(dir) = dir else { return };
+pub(crate) fn debugfs_init(fs: &Fs, parent: Dir<'_>) {
+    let Some(dir) = parent.subdir(c"async_objs") else { return };
     for (list, (name, _)) in fs.async_objs.iter().zip(LISTS) {
-        // SAFETY: bch2_fs_debug_exit() removes them first
-        unsafe { debugfs::create_file::<AsyncObjList>(name, dir, list) };
+        // SAFETY: debug_exit() removes them first
+        unsafe { dir.file::<AsyncObjList>(name, list) };
     }
 }
 }

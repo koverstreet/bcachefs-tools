@@ -64,7 +64,7 @@ unsafe impl KobjOwner for Root {
 
 fn bcachefs_exit() {
     #[cfg(CONFIG_DEBUG_FS)]
-    crate::debug::debug::bch2_debug_exit();
+    unsafe { crate::debug::debug::bch2_debug_exit() };
     #[cfg(not(NO_BCACHEFS_FS))]
     crate::vfs::new_inode::vfs_exit();
     #[cfg(kernel)]

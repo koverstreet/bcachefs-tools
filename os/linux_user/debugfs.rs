@@ -3,6 +3,9 @@
 //! debugfs files, for userspace: os/debugfs.rs's, in a tree of our own - what
 //! http.rs serves, under debug/ - a file read whole, a page at a time, as a
 //! reader of the kernel's would read it.
+//!
+//! A read holds the tree's lock, so removing a directory waits it out, as
+//! debugfs_remove() does.
 
 use core::ffi::CStr;
 use core::ptr::{self, NonNull};
@@ -13,7 +16,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use crate::c;
 use crate::errcode::BchError;
 use crate::os::kernel::PAGE_SIZE;
-use crate::util::Printbuf;
+use crate::util::alloc::KBox;
 
 #[path = "../debugfs.rs"]
 mod common;
@@ -39,7 +42,7 @@ impl UserBuf {
 }
 
 /// A file or directory.
-pub struct Dentry {
+struct Dentry {
     name:   CString,
     /// Null at the top - the debugfs root's
     parent: *const Dentry,
@@ -47,29 +50,34 @@ pub struct Dentry {
     file:   Option<Reader>,
 }
 
-/// A file's object, and how it's read.
+/// A file's object, and its read from the start.
 struct Reader {
     obj:  *const (),
-    read: unsafe fn(*const (), &mut Vec<u8>) -> Result<(), BchError>,
+    open: unsafe fn(*const ()) -> Reading,
 }
 
-/// @obj's file appended to @out, in PAGE_SIZE reads until one copies nothing.
+/// @obj's file.
 ///
 /// # Safety
-/// @obj is the F::Obj create_file() was given, and live.
-unsafe fn read_file<F: DebugFile>(obj: *const (), out: &mut Vec<u8>) -> Result<(), BchError> {
+/// @obj is the F::Obj create_file() was given, and live while it's read.
+unsafe fn open<F: DebugFile>(obj: *const ()) -> Reading {
     let obj = unsafe { &*obj.cast::<F::Obj>() };
-    let mut cursor = F::default();
-    let mut buf = Printbuf::new();
-    buf.set_may_vmalloc(F::MAY_VMALLOC);
+    unsafe { reading(KBox::new(read::<F>(obj))) }
+}
 
+/// @f's text appended to @out, a PAGE_SIZE read at a time.
+///
+/// # Safety
+/// @f's object is live.
+unsafe fn read_file(f: &Reader, out: &mut Vec<u8>) -> Result<(), BchError> {
+    let mut r = unsafe { (f.open)(f.obj) };
     let mut u = UserBuf { out: core::mem::take(out), room: 0 };
     let ret = loop {
         u.room = PAGE_SIZE;
-        if let Err(e) = read_locked(&mut cursor, obj, &mut DebugOut { buf: &mut buf, u: &mut u }) {
+        if let Err(e) = read_into(&mut r, &mut u) {
             break Err(e);
         }
-        if u.room == PAGE_SIZE {
+        if r.is_none() {
             break Ok(());
         }
     };
@@ -78,8 +86,8 @@ unsafe fn read_file<F: DebugFile>(obj: *const (), out: &mut Vec<u8>) -> Result<(
 }
 
 /// Every file and directory, in the order made: a directory's are those it's
-/// the parent of. Nothing's removed: debugfs_remove() was a no-op in C too.
-struct Tree(Vec<*const Dentry>);
+/// the parent of.
+struct Tree(Vec<Box<Dentry>>);
 
 // SAFETY: what it points to is TREE's
 unsafe impl Send for Tree {}
@@ -91,8 +99,8 @@ fn lock() -> MutexGuard<'static, Tree> {
 }
 
 impl Tree {
-    fn children<'a>(&'a self, dir: *const Dentry) -> impl Iterator<Item = &'a Dentry> {
-        self.0.iter().map(|&d| unsafe { &*d }).filter(move |d| d.parent == dir)
+    fn children(&self, dir: *const Dentry) -> impl Iterator<Item = &Dentry> {
+        self.0.iter().map(|d| &**d).filter(move |d| d.parent == dir)
     }
 }
 
@@ -111,30 +119,35 @@ fn create(name: &CStr, parent: Option<NonNull<Dentry>>, file: Option<Reader>) ->
         start();
     }
 
-    let d = Box::leak(Box::new(Dentry {
+    let d = Box::new(Dentry {
         name: name.into(),
         parent: parent.map_or(ptr::null(), |p| p.as_ptr()),
         file,
-    }));
+    });
+    let p = NonNull::from(&*d);
     lock().0.push(d);
-    NonNull::from(d)
+    p
 }
 
 /// Never None: there's always a debugfs here.
-pub fn create_dir(name: &CStr, parent: Option<NonNull<Dentry>>) -> Option<NonNull<Dentry>> {
+fn create_dir(name: &CStr, parent: Option<NonNull<Dentry>>) -> Option<NonNull<Dentry>> {
     Some(create(name, parent, None))
 }
 
-/// Read-only: a DebugFile has no write.
-///
 /// # Safety
-/// @obj outlives the file: it's removed, with remove_recursive(), first.
-pub unsafe fn create_file<F: DebugFile>(name: &CStr, parent: NonNull<Dentry>, obj: &F::Obj) {
-    create(name, Some(parent), Some(Reader { obj: ptr::from_ref(obj).cast(), read: read_file::<F> }));
+/// @obj outlives the file.
+unsafe fn create_file<F: DebugFile>(name: &CStr, parent: NonNull<Dentry>, obj: &F::Obj) {
+    create(name, Some(parent), Some(Reader { obj: ptr::from_ref(obj).cast(), open: open::<F> }));
 }
 
-/// As C's: nothing. The tree only grows.
-pub fn remove_recursive(_dir: NonNull<Dentry>) {}
+fn remove_recursive(dir: NonNull<Dentry>) {
+    let mut tree = lock();
+    let mut gone = vec![dir.as_ptr().cast_const()];
+    while let Some(d) = gone.pop() {
+        gone.extend(tree.children(d).map(ptr::from_ref));
+        tree.0.retain(|n| !ptr::eq(&**n, d));
+    }
+}
 
 /// The file at @path under debugfs, read as a reader would, or its directory
 /// listed as HTML, into @out.
@@ -149,7 +162,7 @@ pub fn read_or_html_dirlist(path: &str, out: &mut Vec<u8>) -> Result<(), BchErro
     }
 
     if let Some(f) = unsafe { dir.as_ref() }.and_then(|d| d.file.as_ref()) {
-        return unsafe { (f.read)(f.obj, out) };
+        return unsafe { read_file(f, out) };
     }
 
     let _ = writeln!(out, "<html>\n<p> {path} </p>");
