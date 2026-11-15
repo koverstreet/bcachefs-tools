@@ -27,7 +27,7 @@ use crate::os::dentry::Dentry;
 use super::idmap::MntIdmap;
 use super::inode::InodeInfo;
 use super::namei::DirOps;
-use super::path::Path;
+use crate::os::path::Path;
 
 crate::vfs_ops! {
     pub(crate) trait InodeOps for c::inode_operations, InodeVTable<T: InodeOps> = T;

@@ -21,7 +21,7 @@ use super::export::NameBuf;
 use crate::os::folio::{Folio, FolioGuard, LockedFolio, Mapping, Readahead};
 use super::idmap::{MntIdmap, RawIdmap};
 use super::inode::InodeInfo;
-use super::path::Path;
+use crate::os::path::Path;
 use super::super_block::SuperBlock;
 
 // s_fs_info is set at mount, before the superblock has an inode, to the T

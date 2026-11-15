@@ -50,7 +50,7 @@ use crate::os::kiocb::Kiocb;
 use crate::vfs::idmap::MntIdmap;
 use crate::vfs::inode::{InodeInfo, InodeRef};
 use crate::os::mount::WriteAccess;
-use crate::vfs::path::{Creating, Removing, UserPath};
+use crate::os::path::{Creating, Removing, UserPath};
 use crate::{bch_err, btree_trans, prt};
 use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, MaybeUninit};
