@@ -711,7 +711,9 @@ mod vfs {
         unsafe { Fs::borrow_raw((*sb).s_fs_info.cast()) }
     }
 
-    fn sb_rdonly(sb: *mut c::super_block) -> bool {
+    /// # Safety
+    /// @sb is live.
+    unsafe fn sb_rdonly(sb: *mut c::super_block) -> bool {
         let flags = unsafe { (*sb).s_flags };
         flags & (1 << SB_RDONLY_BIT) != 0
     }
@@ -731,10 +733,8 @@ mod vfs {
 
     /* Enable/disable/delete quotas for an entire filesystem: */
 
-    fn enable(sb: *mut c::super_block, uflags: u32) -> Result<(), BchError> {
-        let fs = unsafe { sb_fs(sb) };
-
-        if sb_rdonly(sb) {
+    fn enable(fs: &Fs, rdonly: bool, uflags: u32) -> Result<(), BchError> {
+        if rdonly {
             return Err(c::EROFS.into());
         }
 
@@ -765,13 +765,13 @@ mod vfs {
     }
 
     unsafe extern "C" fn quota_enable(sb: *mut c::super_block, uflags: c_uint) -> c_int {
-        ret_to_class(enable(sb, uflags))
+        ret_to_class(unsafe { enable(sb_fs(sb), sb_rdonly(sb), uflags) })
     }
 
     unsafe extern "C" fn quota_disable(sb: *mut c::super_block, uflags: c_uint) -> c_int {
         let fs = unsafe { sb_fs(sb) };
 
-        if sb_rdonly(sb) {
+        if unsafe { sb_rdonly(sb) } {
             return -(c::EROFS as c_int);
         }
 
@@ -781,10 +781,8 @@ mod vfs {
         0
     }
 
-    fn remove(sb: *mut c::super_block, uflags: u32) -> Result<(), BchError> {
-        let fs = unsafe { sb_fs(sb) };
-
-        if sb_rdonly(sb) {
+    fn remove(fs: &Fs, rdonly: bool, uflags: u32) -> Result<(), BchError> {
+        if rdonly {
             return Err(c::EROFS.into());
         }
 
@@ -813,7 +811,7 @@ mod vfs {
     }
 
     unsafe extern "C" fn quota_remove(sb: *mut c::super_block, uflags: c_uint) -> c_int {
-        ret_to_class(remove(sb, uflags))
+        ret_to_class(unsafe { remove(sb_fs(sb), sb_rdonly(sb), uflags) })
     }
 
     /// Which types are accounted, and their time and warning limits.
@@ -844,14 +842,12 @@ mod vfs {
     }
 
     /// A type's time and warning limits, in the superblock.
-    fn set_info(sb: *mut c::super_block, ty: c_int, info: &c::qc_info) -> Result<(), BchError> {
-        let fs = unsafe { sb_fs(sb) };
-
+    fn set_info(fs: &Fs, rdonly: bool, ty: c_int, info: &c::qc_info) -> Result<(), BchError> {
         if false {
             bch_info!(fs, "setting:\n{}", QcInfo(info));
         }
 
-        if sb_rdonly(sb) {
+        if rdonly {
             return Err(c::EROFS.into());
         }
 
@@ -896,7 +892,7 @@ mod vfs {
     }
 
     unsafe extern "C" fn quota_set_info(sb: *mut c::super_block, ty: c_int, info: *mut c::qc_info) -> c_int {
-        ret_to_class(set_info(sb, ty, unsafe { &*info }))
+        ret_to_class(unsafe { set_info(sb_fs(sb), sb_rdonly(sb), ty, &*info) })
     }
 
     /* Get/set individual quotas: */
@@ -982,14 +978,12 @@ mod vfs {
         t.update(&iter, &t.bkey_copy(new_quota.as_ref())?, UpdateTriggerFlags::empty())
     }
 
-    fn set_quota(sb: *mut c::super_block, kqid: c::kqid, qdq: &c::qc_dqblk) -> Result<(), BchError> {
-        let fs = unsafe { sb_fs(sb) };
-
+    fn set_quota(fs: &Fs, rdonly: bool, kqid: c::kqid, qdq: &c::qc_dqblk) -> Result<(), BchError> {
         if false {
             bch_info!(fs, "setting:\n{}", QcDqblk(qdq));
         }
 
-        if sb_rdonly(sb) {
+        if rdonly {
             return Err(c::EROFS.into());
         }
 
@@ -1001,7 +995,7 @@ mod vfs {
     }
 
     unsafe extern "C" fn set_dqblk(sb: *mut c::super_block, kqid: c::kqid, qdq: *mut c::qc_dqblk) -> c_int {
-        ret_to_class(set_quota(sb, kqid, unsafe { &*qdq }))
+        ret_to_class(unsafe { set_quota(sb_fs(sb), sb_rdonly(sb), kqid, &*qdq) })
     }
 
     /// The VFS's: sb->s_qcop.
