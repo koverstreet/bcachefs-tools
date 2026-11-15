@@ -322,7 +322,7 @@ fn spawn_read(fs: &Fs, inode: &InodeInfo, opts: c::bch_inode_opts, nr_vecs: usiz
         .expect("a read bio's box: its pool waits for an element, and an Rbio's init can't fail");
     set_up(slot.home().bio_mut());
     let inum = inode.inum();
-    unsafe { slot.start_inline(Queue::system_dfl(), move |h| read_task(h, inum, hooks, end)) };
+    unsafe { slot.start_inline(Queue::system_dfl(), fs.tasks(), move |h| read_task(h, inum, hooks, end)) };
 }
 
 pub(crate) fn readahead(mut ra: Readahead<'_>) {

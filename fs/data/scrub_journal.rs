@@ -198,7 +198,7 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
     if !reads.is_empty() {
         let (key, found) = (BtreeKeyBuf::new(btree, level, k), found.get());
         unsafe {
-            slot.start(&fs.btree.read_complete_wq, move |reads| async move {
+            slot.start(&fs.btree.read_complete_wq, fs.tasks(), move |reads| async move {
                 found.put(node_verdict(fs_ref, key, reads.get_mut()).await)
             })
         };

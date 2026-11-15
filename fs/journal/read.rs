@@ -995,7 +995,7 @@ impl<'a> DevReader<'a> {
 
 fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::DevReadRefKind>>,
                 full_read: bool) -> Result<(), BchError> {
-    par::scope(Backend::Workqueue(Queue::system_dfl()), |s| {
+    par::scope(Backend::Workqueue(Queue::system_dfl()), fs.tasks(), |s| {
         for ca in devs.iter() {
             let ca: &Dev = ca;
             let ring = unsafe { journal_ring(ca) };

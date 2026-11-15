@@ -62,6 +62,7 @@ use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
 use crate::os::kernel::{cond_resched, local_clock, num_online_cpus, random_u64, random_u64_below};
 use crate::util::par::{self, Backend};
+use crate::util::task::TASKS;
 use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
@@ -452,7 +453,7 @@ fn round<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str, 
     let start = local_clock();
     let end = start + secs * c::NSEC_PER_SEC as u64;
 
-    let ret = par::scope(Backend::Kthreads, |s| {
+    let ret = par::scope(Backend::Kthreads, &TASKS, |s| {
         for i in 0..readers {
             let (writers_left, checked, raced) = (&writers_left, &checked, &raced);
             s.spawn(format_args!("cuckoo torture reader[{i}]"), move || {
@@ -613,7 +614,7 @@ fn shared<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str,
     let start = local_clock();
     let end = start + secs * c::NSEC_PER_SEC as u64;
 
-    let ret = par::scope(Backend::Kthreads, |s| {
+    let ret = par::scope(Backend::Kthreads, &TASKS, |s| {
         // Within a pass - between two meets - a key found is found as the same
         // insert every time: a tentative one returned, then withdrawn, isn't
         for r in 0..readers {
@@ -731,7 +732,7 @@ fn multimap(secs: u64) -> TestRet {
     let ops = &AtomicU64::new(0);
     let end = local_clock() + secs * c::NSEC_PER_SEC as u64;
 
-    let ret = par::scope(Backend::Kthreads, |s| {
+    let ret = par::scope(Backend::Kthreads, &TASKS, |s| {
         for w in 0..WRITERS as u32 {
             s.spawn(format_args!("cuckoo multimap writer[{w}]"), move || {
                 let mut have = [0u32; MULTIMAP_KEYS as usize];
@@ -830,7 +831,7 @@ fn bench_threads<S: CuckooHasher, const W: usize>(
         core::hint::spin_loop();
     };
 
-    par::scope(Backend::Kthreads, |s| {
+    par::scope(Backend::Kthreads, &TASKS, |s| {
         for i in 0..threads {
             let lookups = &lookups;
             s.spawn(format_args!("cuckoo bench reader[{i}]"), move || {

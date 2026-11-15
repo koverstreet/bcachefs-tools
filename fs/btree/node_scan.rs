@@ -321,7 +321,7 @@ impl<'f> DevScan<'f> {
 }
 
 fn read_btree_nodes(fs: &Fs) -> Result<(), BchError> {
-    par::scope(Backend::Kthreads, |sc| {
+    par::scope(Backend::Kthreads, fs.tasks(), |sc| {
         let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
         prt!(&mut msg, "scanning for btree nodes on");
 

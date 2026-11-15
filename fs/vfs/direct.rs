@@ -148,7 +148,9 @@ async fn read_splits(rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum:
         }))
         .try_for_each(|split| {
             let r = splits.get();
-            unsafe { split?.start_inline(Queue::system_dfl(), move |s| split_task(s, r, inum, flags, should_dirty)) };
+            unsafe {
+                split?.start_inline(Queue::system_dfl(), fs.tasks(), move |s| split_task(s, r, inum, flags, should_dirty))
+            };
             Ok(())
         })
     };
@@ -232,7 +234,8 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
 
     unsafe {
         let callers = CallersIter::new(&mut iter);
-        dio.start_inline(Queue::system_dfl(), move |d| dio_task(d, end, callers, offset, inum, flags, len as usize))
+        dio.start_inline(Queue::system_dfl(), fs.tasks(),
+                         move |d| dio_task(d, end, callers, offset, inum, flags, len as usize))
     };
     drop(iter);
 

@@ -22,6 +22,7 @@
 
 use crate::c;
 use crate::fs::Fs;
+use crate::util::task::TaskList;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
 use cstruct_macros::{bch_enum, placed, MaybeZeroable, Init};
@@ -36,6 +37,7 @@ pub enum AsyncObjKind {
     write_op,
     btree_read_bio,
     btree_write_bio,
+    task,
 }
 
 #[placed(Fs.async_objs[], index = idx: c_uint)]
@@ -115,6 +117,12 @@ pub unsafe fn list_del(fs: &Fs, list: c::AsyncObjKind, idx: &mut core::ffi::c_ui
     *idx = 0;
 }
 
+impl Fs {
+    pub fn tasks(&self) -> &TaskList {
+        TaskList::of(&self.async_objs[c::AsyncObjKind::task as usize].list)
+    }
+}
+
 // ── The lists, and their debugfs files ───────────────────────────────────
 
 pub(crate) use lists::debugfs_init;
@@ -133,6 +141,7 @@ use crate::util::bio::Bio;
 use crate::os::debugfs::{DebugFile, DebugOut, Dir};
 use crate::util::place::Contained;
 use crate::util::rcu;
+use crate::util::task::TaskRef;
 use crate::util::{Printbuf, ToText};
 
 pub fn async_obj_init(fs: &Fs) -> Result<(), BchError> {
@@ -146,6 +155,7 @@ pub fn async_obj_init(fs: &Fs) -> Result<(), BchError> {
 }
 
 pub fn async_obj_exit(fs: &Fs) {
+    fs.tasks().drain();
     for l in &fs.async_objs {
         // SAFETY: filesystem teardown, everything done with
         unsafe { l.list.exit() };
@@ -175,6 +185,11 @@ unsafe fn write_op_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>)
 #[cold]
 unsafe fn btree_read_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
     crate::btree::read::read_bio_to_text(out, unsafe { obj.cast().as_ref() })
+}
+
+#[cold]
+unsafe fn task_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
+    unsafe { TaskRef::from_listed(obj) }.to_text(out)
 }
 
 #[cold]

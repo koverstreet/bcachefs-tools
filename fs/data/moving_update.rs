@@ -108,7 +108,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
 
     // SAFETY: flush_all() waits for every task before the context goes
     let task = unsafe {
-        update_task::spawn(t, Spawn::Run(moving.runq()), Errcode::ENOMEM_move_extent)
+        update_task::spawn(t, Spawn::Run(moving.runq()), t.fs().tasks(), Errcode::ENOMEM_move_extent)
     }?;
     // On error init() has cleaned up, and the task is dropped unstarted
     let mut u = match task.init(t, Some(iter), Some(moving), moving.write_point(), io_opts, *data_opts, btree, k) {

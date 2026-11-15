@@ -1064,7 +1064,7 @@ pub fn btree_perf_test(fs: &Fs, testname: &str, nr: u64, nr_threads: u32) -> Res
     // them together as its body returns - and timed from then until the last
     // is done. A short spawn starts none, and has nothing to time
     let mut start = None;
-    let ret = par::scope(Backend::Kthreads, |s| {
+    let ret = par::scope(Backend::Kthreads, fs.tasks(), |s| {
         for i in 0..nr_threads {
             s.spawn(format_args!("bcachefs perf test[{i}]"), move || test(fs, nr / u64::from(nr_threads)))?;
         }

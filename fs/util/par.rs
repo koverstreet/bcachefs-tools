@@ -40,7 +40,7 @@ use core::ffi::CStr;
 use crate::util::alloc::KVVec;
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kthread::Kthread;
-use crate::util::task::{waiter, Spawn, TaskBox, TaskSlot};
+use crate::util::task::{waiter, Spawn, TaskBox, TaskList, TaskSlot};
 use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
 use core::cell::{RefCell, UnsafeCell};
@@ -81,6 +81,7 @@ unsafe fn job_done(home: NonNull<JobHome>) {
 /// The body's: not Sync - only the body spawns.
 pub struct Scope<'scope, 'env: 'scope> {
     backend:   Backend<'env>,
+    tasks:     &'env TaskList,
     freezable: bool,
     /// What the body's spawned, in order.
     jobs:      RefCell<KVVec<Job<'env>>>,
@@ -91,28 +92,29 @@ pub struct Scope<'scope, 'env: 'scope> {
 /// Run @f, which spawns jobs on @backend that may borrow what outlives the
 /// call; if it succeeded, start them, and join them: @f's error, or else the
 /// first a job returned.
-pub fn scope<'env, F>(backend: Backend<'env>, f: F) -> Ret
+pub fn scope<'env, F>(backend: Backend<'env>, tasks: &'env TaskList, f: F) -> Ret
 where
     F: for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> Ret,
 {
-    run_scope(backend, false, f)
+    run_scope(backend, tasks, false, f)
 }
 
 /// scope(), for jobs that freeze in place: their kthreads freezable, and the
 /// join, as their caller must be too.
-pub fn scope_freezable<'env, F>(backend: Backend<'env>, f: F) -> Ret
+pub fn scope_freezable<'env, F>(backend: Backend<'env>, tasks: &'env TaskList, f: F) -> Ret
 where
     F: for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> Ret,
 {
-    run_scope(backend, true, f)
+    run_scope(backend, tasks, true, f)
 }
 
-fn run_scope<'env, F>(backend: Backend<'env>, freezable: bool, f: F) -> Ret
+fn run_scope<'env, F>(backend: Backend<'env>, tasks: &'env TaskList, freezable: bool, f: F) -> Ret
 where
     F: for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> Ret,
 {
     let scope = Scope {
         backend,
+        tasks,
         freezable,
         jobs:  RefCell::new(KVVec::new()),
         scope: PhantomData,
@@ -161,7 +163,7 @@ impl<'scope, 'env> Scope<'scope, 'env> {
             Backend::Workqueue(wq) => (Spawn::Queue(wq), Some(worker_desc(name)), false),
         };
         let home = init!(JobHome { ret: UnsafeCell::new(None), join: UnsafeCell::new(None) }? BchError);
-        let job = TaskSlot::alloc(home)?.init(at, async move |home: &JobHome| {
+        let job = TaskSlot::alloc(home)?.init(at, self.tasks, async move |home: &JobHome| {
             if freezable {
                 Kthread::set_freezable();
             }

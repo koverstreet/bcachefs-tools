@@ -429,8 +429,9 @@ impl StripeNew {
         // SAFETY: stripe_create_wq is destroyed as the filesystem's freed,
         // which drains the task's done
         let wq = unsafe { Queue::from_raw(fs.ec.stripe_create_wq.as_ptr()) };
+        let tasks = unsafe { BackRef::new(fs).get() }.tasks();
         let b = TaskSlot::alloc(init)?
-            .init(Spawn::Queue(wq), async |s: &StripeNew| stripe_task(s.fs_ref(), s).await, Some(stripe_done))?;
+            .init(Spawn::Queue(wq), tasks, async |s: &StripeNew| stripe_task(s.fs_ref(), s).await, Some(stripe_done))?;
         {
             let mut s = b.lock();
             new_stripe_key(fs, &mut s.new_stripe, algorithm as u8, nr_data as u8, nr_parity as u8,

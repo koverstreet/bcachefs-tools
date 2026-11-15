@@ -284,6 +284,7 @@ struct Header {
     finished:  Cell<bool>,
     listed:    Cell<u32>,
     runq_next: AtomicPtr<Header>,
+    list:      NonNull<TaskList>,
     vtable:    &'static TaskVtable,
     _rcu:      RcuMember,
 }
@@ -330,8 +331,8 @@ unsafe impl<F: Future + Send> Send for Task<'_, F> where F::Output: Send {}
 unsafe impl<F: Future + Send> Sync for Task<'_, F> where F::Output: Send {}
 
 impl<'q, F: Future + Send> Task<'q, F> {
-    pub fn new<'n>(spawn: Spawn<'q, 'n>, future: impl PinInit<F> + 'n, owner_done: unsafe fn(NonNull<Self>, F::Output))
-        -> impl PinInit<Self, BchError> + 'n
+    pub fn new<'n>(spawn: Spawn<'q, 'n>, list: &'q TaskList, future: impl PinInit<F> + 'n,
+                   owner_done: unsafe fn(NonNull<Self>, F::Output)) -> impl PinInit<Self, BchError> + 'n
     where
         F: 'n,
         'q: 'n,
@@ -357,6 +358,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
                 finished:  Cell::new(false),
                 listed:    Cell::new(0),
                 runq_next: AtomicPtr::new(null_mut()),
+                list:      NonNull::from(list),
                 vtable:    const {
                     &TaskVtable { poll: Self::poll, finish: Self::finish, name: core::any::type_name::<F> }
                 },
@@ -367,7 +369,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
             _q:     PhantomData,
         }? BchError)
         .pin_chain(move |task| {
-            task.header.listed.set(TASKS.add(task.task()));
+            task.header.listed.set(list.add(task.task()));
             if let Spawn::Thread(name) = spawn {
                 let task_ref = task.task();
                 let thread_fn = move || unsafe { task_ref.run_thread() };
@@ -413,7 +415,7 @@ impl<F: Future> PinnedDrop for Task<'_, F> {
         let started = task.header.started.get();
         assert!(!started || task.header.finished.get(), "a task freed while it runs");
         if !started {
-            TASKS.remove(task.header.listed.replace(0));
+            task.header.unlist();
             unsafe { ManuallyDrop::drop(&mut task.body.future) };
         }
         if let Some(thread) = task.header.thread.take() {
@@ -498,7 +500,7 @@ impl TaskRef {
         loop {
             if unsafe { (header.vtable.poll)(self.0, &mut cx) }.is_ready() {
                 let finish = header.vtable.finish;
-                TASKS.remove(header.listed.replace(0));
+                header.unlist();
                 header.finished.set(true);
                 unsafe { finish(self.0) };
                 return true;

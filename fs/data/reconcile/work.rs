@@ -658,7 +658,7 @@ fn reconcile_phys(fs: &Fs, phase: &'static Phase) -> Result<(), BchError> {
     }
     let name = fs.name().to_str().unwrap_or("?");
 
-    par::scope_freezable(Backend::Kthreads, |sc| {
+    par::scope_freezable(Backend::Kthreads, fs.tasks(), |sc| {
         for &dev in devs.iter() {
             sc.spawn(format_args!("bch-reconcile/{name}:{dev}"), move || {
                 if let Err(e) = phys_dev(fs, phase, dev) {

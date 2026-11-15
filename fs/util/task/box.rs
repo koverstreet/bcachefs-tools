@@ -22,7 +22,7 @@ use crate::errcode::BchError;
 use crate::util::alloc::{init_at, init_with, Alloc, Kmalloc};
 use crate::util::rcu::{Flavor, HasRcuHead, RcuHead};
 use crate::os::workqueue::Queue;
-use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskRef};
+use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskList, TaskRef};
 use core::alloc::Layout;
 use core::future::Future;
 use core::marker::PhantomData;
@@ -121,14 +121,14 @@ where
     /// the box's owner's cue that the task is done and it may drop the box;
     /// with none, the box frees itself. What @make holds outlives the box,
     /// unstarted: started, start_unchecked() says how long the task runs.
-    pub fn init(self, at: Spawn<'q, '_>, make: M, done: Option<unsafe fn(NonNull<H>)>)
+    pub fn init(self, at: Spawn<'q, '_>, list: &'q TaskList, make: M, done: Option<unsafe fn(NonNull<H>)>)
         -> Result<TaskBox<'q, H>, BchError>
     where
         M: 'q,
     {
         let home = ManuallyDrop::new(self).home;
         unsafe {
-            let task = init_task::<H, _, A>(home, at, move || make(home.as_ref()), done)?;
+            let task = init_task::<H, _, A>(home, at, list, move || make(home.as_ref()), done)?;
             Ok(TaskBox { home, task, free: free::<H, FutureOf<M, H>, A>, _q: PhantomData })
         }
     }
@@ -167,22 +167,23 @@ where
     /// @q, and what @make holds and its future borrows beyond the home,
     /// outlive the task; the home, handed @make as 'static, is borrowed by
     /// nothing but the future it makes.
-    pub unsafe fn start(self, q: &'q Queue, make: M) {
-        unsafe { self.make(q, make).start() }
+    pub unsafe fn start(self, q: &'q Queue, list: &'q TaskList, make: M) {
+        unsafe { self.make(q, list, make).start() }
     }
 
     /// start(), its first poll run here.
     ///
     /// # Safety
     /// As start()'s.
-    pub unsafe fn start_inline(self, q: &'q Queue, make: M) {
-        unsafe { self.make(q, make).start_inline() }
+    pub unsafe fn start_inline(self, q: &'q Queue, list: &'q TaskList, make: M) {
+        unsafe { self.make(q, list, make).start_inline() }
     }
 
-    unsafe fn make(self, q: &'q Queue, make: M) -> TaskRef {
+    unsafe fn make(self, q: &'q Queue, list: &'q TaskList, make: M) -> TaskRef {
         let home = ManuallyDrop::new(self).home;
         unsafe {
-            init_task::<H, _, A>(home, Spawn::Queue(q), move || make(Pin::new_unchecked(&mut *home.as_ptr())), None)
+            init_task::<H, _, A>(home, Spawn::Queue(q), list, move || make(Pin::new_unchecked(&mut *home.as_ptr())),
+                                 None)
         }.expect("a queue's task: only a thread's fails to start")
     }
 }
@@ -247,7 +248,8 @@ where
 /// @home is alloc_mem::<H, F, A>()'s, its task not made, and @make's future
 /// borrows nothing of it but the home.
 unsafe fn init_task<'q, H, F: Future<Output = ()> + Send, A: Alloc + Copy>(
-    home: NonNull<H>, at: Spawn<'q, '_>, make: impl FnOnce() -> F, done: Option<unsafe fn(NonNull<H>)>,
+    home: NonNull<H>, at: Spawn<'q, '_>, list: &'q TaskList, make: impl FnOnce() -> F,
+    done: Option<unsafe fn(NonNull<H>)>,
 ) -> Result<TaskRef, BchError> {
     unsafe {
         let w = WithTask::<'q, H, F, A>::of_home(home).as_ptr();
@@ -256,7 +258,7 @@ unsafe fn init_task<'q, H, F: Future<Output = ()> + Send, A: Alloc + Copy>(
         // move of one is a copy of all of it - what's moved here is what
         // @make holds, its args
         let future = init_with(make);
-        let task = Task::new(at, future, task_done::<H, F, A>);
+        let task = Task::new(at, list, future, task_done::<H, F, A>);
         if let Err(e) = init_at(task, (&raw mut (*w).task).cast()) {
             free_slot::<H, F, A>(home);
             return Err(e);
@@ -375,18 +377,19 @@ impl<H> Drop for TaskBox<'_, H> {
 ///
 /// # Safety
 /// @q, and what the future borrows, outlive the task.
-pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(q: &Queue, make: impl FnOnce() -> F)
+pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(q: &Queue, list: &TaskList, make: impl FnOnce() -> F)
     -> Result<(), BchError>
 {
-    unsafe { TaskSlot::exclusive_in(Kmalloc, ())?.start(q, move |_| make()) };
+    unsafe { TaskSlot::exclusive_in(Kmalloc, ())?.start(q, list, move |_| make()) };
     Ok(())
 }
 
-/// spawn_detached(), for a task that borrows nothing, on a queue that lasts.
-pub fn spawn_static<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, make: impl FnOnce() -> F)
-    -> Result<(), BchError>
+/// spawn_detached(), for a task that borrows nothing, on a queue and a list
+/// that last.
+pub fn spawn_static<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, list: &'static TaskList,
+                                                           make: impl FnOnce() -> F) -> Result<(), BchError>
 {
-    unsafe { spawn_detached(q, make) }
+    unsafe { spawn_detached(q, list, make) }
 }
 
 /// A task its spawner awaits, for what it returns: its CompletionReturn's
@@ -406,14 +409,14 @@ impl<T: Send> Join<T> {
     /// @make's future run as a task on @q, for @waiter to wait on - the
     /// CompletionReturn, which outlives nothing the future borrows. Made in
     /// the box, as spawn_detached()'s.
-    pub fn spawn<'a, F>(&'a mut self, q: &Queue, make: impl FnOnce() -> F + Send + 'a, waiter: waiter::Async)
-        -> Result<CompletionReturn<'a, T>, BchError>
+    pub fn spawn<'a, F>(&'a mut self, q: &Queue, list: &TaskList, make: impl FnOnce() -> F + Send + 'a,
+                        waiter: waiter::Async) -> Result<CompletionReturn<'a, T>, BchError>
     where
         F: Future<Output = T> + Send + 'a,
     {
         let slot = TaskSlot::exclusive_in(Kmalloc, ())?;
         let (wait, ret) = CompletionReturn::new(&mut self.0, waiter);
-        unsafe { slot.start(q, move |_| async move { ret.complete(make().await) }) };
+        unsafe { slot.start(q, list, move |_| async move { ret.complete(make().await) }) };
         Ok(wait)
     }
 }

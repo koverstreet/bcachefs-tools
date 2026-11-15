@@ -367,7 +367,7 @@ fn flush_sorted_sharded(
     if let Some(mut cnts) = cnts {
         let wb_idx = wb.idx.get() as usize;
         let mut spawn_failed = false;
-        let ret = par::scope(Backend::Workqueue(&fs.btree.write_buffer_shard_wq), |sc| {
+        let ret = par::scope(Backend::Workqueue(&fs.btree.write_buffer_shard_wq), fs.tasks(), |sc| {
             for (shard, cnt) in sorted.split(n_shards).zip(cnts.iter_mut()) {
                 let queued_time = local_clock();
 

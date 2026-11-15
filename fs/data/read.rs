@@ -1344,7 +1344,11 @@ impl<'r> Planned<'r, '_> {
         let make = move |home| fragment_task(r, Fragment { ca, ..Fragment::new(orig.fs(), Kind::Home(home, buffers), plan) },
                                              orig);
         start_task(t, plan.pick.do_ec_reconstruct, |inline| unsafe {
-            if inline { slot.start_inline(Queue::system_dfl(), make) } else { slot.start(Queue::system_dfl(), make) }
+            if inline {
+                slot.start_inline(Queue::system_dfl(), fs.tasks(), make)
+            } else {
+                slot.start(Queue::system_dfl(), fs.tasks(), make)
+            }
         });
         Ok(())
     }
@@ -1378,7 +1382,11 @@ impl<'r> Planned<'r, '_> {
         let r = reads.get();
         let make = move |_| fragment_task(r, f, orig);
         start_task(t, reconstruct, |inline| unsafe {
-            if inline { slot.start_inline(Queue::system_dfl(), make) } else { slot.start(Queue::system_dfl(), make) }
+            if inline {
+                slot.start_inline(Queue::system_dfl(), fs.tasks(), make)
+            } else {
+                slot.start(Queue::system_dfl(), fs.tasks(), make)
+            }
         });
         Ok(())
     }
@@ -1418,7 +1426,7 @@ mod boxed {
         let mut join = Join::new();
         let wait = {
             let _noio = MemallocFlags::noio();
-            join.spawn(Queue::system_dfl(),
+            join.spawn(Queue::system_dfl(), fs.tasks(),
                        move || ec::io::read_extent(fs, p.data_btree, p.data_pos, bio, &p.pick, p.flags, msg), waiter)
         }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
         wait.resume_on(Resume::SPAWNED).await.expect("a joined task's output, handed back")

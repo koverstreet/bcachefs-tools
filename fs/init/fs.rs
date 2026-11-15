@@ -1155,7 +1155,7 @@ impl Fs {
         let (fs, wq) = unsafe { (BackRef::new(self), self.write_ref_wq()) };
         // SAFETY: what the future has is 'static, or the BackRef above's
         unsafe {
-            crate::util::task::spawn_detached(wq, move || async move {
+            crate::util::task::spawn_detached(wq, self.tasks(), move || async move {
                 let _w = w;
                 make(fs).await
             })

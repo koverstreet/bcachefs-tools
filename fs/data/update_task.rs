@@ -47,7 +47,7 @@ use crate::fs::Fs;
 use crate::util::task::{Completion, Done};
 use crate::util::gather::Gather;
 use crate::util::task::{waiter, Resumable, Resume, Spawn};
-use crate::util::task::{TaskBox, TaskSlot};
+use crate::util::task::{TaskBox, TaskList, TaskSlot};
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
 use core::ffi::c_int;
@@ -90,8 +90,8 @@ pub struct Update {
 ///
 /// # Safety
 /// @at, and what the body borrows, outlive the task.
-pub unsafe fn spawn<'q, M>(t: &TransAttempt<'_, '_>, at: Spawn<'q, 'static>, enomem: c::Errcode)
-    -> Result<Spawned<'q, M>, BchError>
+pub unsafe fn spawn<'q, M>(t: &TransAttempt<'_, '_>, at: Spawn<'q, 'static>, tasks: &'q TaskList,
+                           enomem: c::Errcode) -> Result<Spawned<'q, M>, BchError>
 where
     M: for<'h> AsyncFnOnce<(&'h Update,), Output = ()>,
     for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
@@ -109,15 +109,16 @@ where
         });
         TaskSlot::alloc(init)
     })
-    .map(|slot| Spawned { slot, at })
+    .map(|slot| Spawned { slot, at, tasks })
     .map_err(|e| if e.matches(c::ENOMEM) { fs.err(enomem) } else { e })
 }
 
 /// An update still zeroed, in a box with no task yet: freed a grace period
 /// after it's done - the async object list's walk may still be reading it.
 pub struct Spawned<'q, M> {
-    slot: TaskSlot<'q, Update, M>,
-    at:   Spawn<'q, 'static>,
+    slot:  TaskSlot<'q, Update, M>,
+    at:    Spawn<'q, 'static>,
+    tasks: &'q TaskList,
 }
 
 impl<'q, M> Spawned<'q, M>
@@ -144,15 +145,16 @@ where
         *up.as_mut().project().listed = listed;
 
         let body = Body { up: NonNull::from(up.as_ref().get_ref()) };
-        Ok(Ready { slot: self.slot, at: self.at, body })
+        Ok(Ready { slot: self.slot, at: self.at, tasks: self.tasks, body })
     }
 }
 
 /// An update that's set up, its box's task not made yet: the spawner makes it.
 pub struct Ready<'q, M> {
-    slot: TaskSlot<'q, Update, M>,
-    at:   Spawn<'q, 'static>,
-    body: Body,
+    slot:  TaskSlot<'q, Update, M>,
+    at:    Spawn<'q, 'static>,
+    tasks: &'q TaskList,
+    body:  Body,
 }
 
 impl<'q, M> Ready<'q, M>
@@ -161,8 +163,8 @@ where
     for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
 {
     fn task(self, body: impl FnOnce(Body) -> M) -> TaskBox<'q, Update> {
-        let Ready { slot, at, body: b } = self;
-        slot.init(at, body(b), None).expect("a queue's or run queue's task: nothing in it fails")
+        let Ready { slot, at, tasks, body: b } = self;
+        slot.init(at, tasks, body(b), None).expect("a queue's or run queue's task: nothing in it fails")
     }
 
     /// The task, its future made by @body from the update's Body, for a read

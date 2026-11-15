@@ -184,7 +184,7 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     // SAFETY: the task borrows nothing, and promote_wq is drained before the
     // filesystem is freed
     let task = unsafe {
-        update_task::spawn(t, Spawn::Queue(orig.fs().promote_wq()), Errcode::nopromote_enomem)
+        update_task::spawn(t, Spawn::Queue(orig.fs().promote_wq()), orig.fs().tasks(), Errcode::nopromote_enomem)
     }?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
     // box is dropped
