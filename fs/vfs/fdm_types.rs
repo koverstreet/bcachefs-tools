@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
 use core::ffi::c_ulong;
 use cstruct_macros::{MaybeZeroable};
@@ -26,7 +27,7 @@ c_default!(fdm_slot);
 #[derive(MaybeZeroable)]
 pub struct fdm_hash {
     pub hash_seeds: [u64; c::FDM_NR_HASH as usize],
-    pub wait: c::closure_waitlist,
+    pub wait: EventCount,
     pub slots: [c::fdm_slot; c::FDM_HASH_SIZE as usize],
 }
 c_default!(fdm_hash);

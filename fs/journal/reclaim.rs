@@ -23,7 +23,7 @@ use crate::fs::{Dev, Fs};
 use crate::journal::pins::PinsRead;
 use crate::locking::{ExclusiveGuard, MemallocFlags};
 use crate::util::backtrace::prt_task_backtrace;
-use crate::util::closure::{closure_wait_event, closure_wake_up};
+use crate::util::closure::closure_wake_up;
 use crate::os::blkdev;
 use crate::os::kernel::{cond_resched, jiffies, jiffies_to_msecs, msecs_to_jiffies, time_after, time_in_range,
                         totalram_bytes, HZ};
@@ -413,7 +413,7 @@ impl c::journal {
         if old != last_seq {
             g.published().last_seq.set(last_seq);
             self.space_available(g);
-            closure_wake_up(&self.reclaim_flush_wait);
+            self.reclaim_flush_wait.wake();
         }
     }
 
@@ -725,7 +725,8 @@ impl c::journal {
             return false;
         }
 
-        closure_wait_event(&self.reclaim_flush_wait, || self.flush_done(seq_to_flush, &mut did_work));
+        let Ok(()) = self.reclaim_flush_wait.wait_until(Sleep::UNINTERRUPTIBLE,
+            || self.flush_done(seq_to_flush, &mut did_work).then_some(()));
 
         did_work
     }

@@ -27,7 +27,7 @@ use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, SharedGuard};
 use crate::debug::trace::events;
 use crate::util::alloc::{init_at, AllocError, KVVec};
-use crate::util::closure::{closure_has_waiters, closure_wake_up};
+use crate::util::closure::closure_wake_up;
 use crate::util::projections::{TearSafe, Volatile};
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt, warn_once};
@@ -418,9 +418,7 @@ impl<'a> PinsRead<'a> {
     }
 
     fn wake_flushers(&self) {
-        if closure_has_waiters(&self.j.reclaim_flush_wait) {
-            closure_wake_up(&self.j.reclaim_flush_wait);
-        }
+        self.j.reclaim_flush_wait.wake();
     }
 
     fn maybe_update_last_seq(&self) {

@@ -899,7 +899,7 @@ impl c::journal {
          * and return the appropriate error.
          */
         closure_wake_up(&self.flush_wait);
-        closure_wake_up(&self.reclaim_flush_wait);
+        self.reclaim_flush_wait.wake();
     }
 
     pub fn halt(&self) {

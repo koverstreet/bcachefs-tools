@@ -559,7 +559,7 @@ nest! {
 
         /* Used when waiting because the journal was full */
         pub async_wait: c::closure_waitlist,
-        pub reclaim_flush_wait: c::closure_waitlist,
+        pub reclaim_flush_wait: EventCount,
 
         #[pin]
         #[init(crate::journal::journal::WriteWork::init())]

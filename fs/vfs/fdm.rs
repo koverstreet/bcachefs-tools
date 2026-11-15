@@ -5,8 +5,8 @@
 //! which reads it. vfs/fdm.h has the design.
 
 use crate::c;
-use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::hash::hash_64;
+use crate::util::sleep::Sleep;
 use crate::os::kernel::{current_id, random_u64};
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::{Acquire, Release}};
@@ -58,7 +58,7 @@ impl c::fdm_hash {
      * Insert current task's mapping. Only current ever inserts for itself,
      * so no lock needed. With 3-way hashing at ~3% occupancy, all three
      * slots being occupied is vanishingly rare (~0.003%). If it does
-     * happen, sleep on the closure waitlist until a slot frees up.
+     * happen, sleep until a slot frees up.
      */
     pub fn set(&self, mapping: Mapping) -> FaultsDisabled<'_> {
         let current = current_id();
@@ -66,7 +66,8 @@ impl c::fdm_hash {
                       "faults disabled on a second mapping");
 
         loop {
-            closure_wait_event(&self.wait, || self.slots_of_current().any(|s| s.task.get() == 0));
+            let Ok(()) = self.wait.wait_until(Sleep::UNINTERRUPTIBLE,
+                || self.slots_of_current().any(|s| s.task.get() == 0).then_some(()));
 
             if let Some(s) = self.slots_of_current().find(|s| s.task.get() == 0) {
                 s.mapping.set(mapping.as_ptr().addr() as _);
@@ -98,7 +99,7 @@ impl Drop for FaultsDisabled<'_> {
             s.task.set(0);
             /* Ensure task is cleared before mapping could be reused */
             fence(Release);
-            closure_wake_up(&self.0.wait);
+            self.0.wait.wake();
         }
     }
 }
