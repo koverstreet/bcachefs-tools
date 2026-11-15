@@ -178,6 +178,14 @@ impl<U, A: Alloc> Box<[MaybeUninit<U>], A> {
     }
 }
 
+impl<T: ?Sized, A: AllocGfp> Box<T, WithFlags<A>> {
+    /// Its allocator without the flags, which freeing it doesn't use.
+    pub fn into_unflagged(b: Self) -> Box<T, A> {
+        let b = core::mem::ManuallyDrop::new(b);
+        Box { ptr: b.ptr, given: b.given, alloc: unsafe { core::ptr::read(&b.alloc.0) } }
+    }
+}
+
 impl<T: ?Sized, A: Alloc> Box<T, A> {
     pub fn as_ptr(b: &Self) -> *const T {
         b.ptr.as_ptr()
