@@ -418,7 +418,7 @@ pub enum DataProgressDataTypeSpecial {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_data_progress {
     pub data_type: u8,
     pub btree_id: u8,

@@ -1,5 +1,6 @@
 use std::io::{self, IsTerminal, Read, Write};
 use bcachefs_kernel::format::DataType;
+use bcachefs_kernel::util::vstructs::read_past;
 use std::os::unix::io::FromRawFd;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,9 +40,7 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
     }
     let event_type = buf[0];
     let event_ret = buf[1];
-    let p = unsafe {
-        std::ptr::read_unaligned(buf.as_ptr().add(8) as *const bch_ioctl_data_progress)
-    };
+    let p = read_past::<bch_ioctl_data_progress>(&buf, 8);
     Ok((event_type, event_ret, p))
 }
 
