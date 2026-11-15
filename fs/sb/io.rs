@@ -156,9 +156,9 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past,
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
-use crate::util::alloc::{Arc, KVec, KVVec};
+use crate::util::alloc::{Arc, Flags, KVec, KVVec};
 use core::sync::atomic::AtomicPtr;
-use crate::util::bio::{Bio, BioBox, BioOwner};
+use crate::util::bio::{io_buf, Bio, BioBox, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::task::waiter;
 use crate::os::kernel::NSEC_PER_SEC;
@@ -977,12 +977,29 @@ impl bch_sb_buf {
     pub fn sb(&self) -> &bch_sb {
         // SAFETY: it was read and validated, and this owns its buffer while
         // we're borrowed - resize and realloc take &mut
-        unsafe { bch_sb::<Validated>::from_head_ptr(self.sb) }
+        unsafe { bch_sb::<Validated>::from_head_ptr(self.buffer().as_ptr().cast()) }
     }
 
     pub fn sb_mut(&mut self) -> &mut bch_sb {
         // SAFETY: as sb()'s
-        unsafe { bch_sb::<Validated>::from_head_ptr_mut(self.sb) }
+        unsafe { bch_sb::<Validated>::from_head_ptr_mut(self.as_mut_ptr()) }
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut Head<bch_sb> {
+        self.buffer_mut().as_mut_ptr().cast()
+    }
+
+    /// Whether it has a buffer: none until it's read, or made.
+    pub fn is_allocated(&self) -> bool {
+        self.data.is_some()
+    }
+
+    pub fn buffer_size(&self) -> usize {
+        self.buffer().len()
+    }
+
+    fn buffer(&self) -> &[u8] {
+        self.data.as_deref().unwrap_or(&[])
     }
 
     pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
@@ -994,7 +1011,7 @@ impl bch_sb_buf {
     pub fn field_mut<F: SbField + ?Sized>(&mut self) -> Option<&mut F> {
         self.mark_dirty(F::FIELD_TYPE);
         // SAFETY: the handle's superblock, borrowed mutably with it
-        unsafe { sb_field_get_raw_mut(self.sb) }
+        unsafe { sb_field_get_raw_mut(self.as_mut_ptr()) }
     }
 
     /// Section @ty edited: to_cpu() it, after the next write, if this is the
@@ -1071,12 +1088,13 @@ impl c::bch_sb_io {
         }
         let size = bytes.next_power_of_two();
 
-        if self.buf.sb.is_null() || self.buf.buffer_size < size {
+        if self.buf.buffer_size() < size {
             self.grow(dev, bytes, size)?;
         }
 
         if self.bits.have_bio() != 0 {
-            let nr = crate::util::bio::buf_nr_bvecs(self.buf.sb.cast(), self.buf.buffer_size);
+            let buf = self.buf.buffer();
+            let nr = crate::util::bio::buf_nr_bvecs(buf.as_ptr().cast_mut(), buf.len());
             if self.bio.as_ref().is_some_and(|b| usize::from(b.bio().raw().bi_max_vecs) >= nr) {
                 return Ok(());
             }
@@ -1093,7 +1111,7 @@ impl c::bch_sb_io {
     /// The buffer grown to @size, for a superblock of @bytes: past what its
     /// layout allows, -ENOSPC.
     fn grow(&mut self, dev: &c::bch_sb_bdev, bytes: usize, size: usize) -> Result<(), BchError> {
-        if !self.buf.sb.is_null() && self.bits.have_layout() != 0 {
+        if self.buf.is_allocated() && self.bits.have_layout() != 0 {
             let max = 512u64 << self.buf.sb().layout.sb_max_size_bits;
             if bytes as u64 > max {
                 let bdev = dev.bdev();
@@ -1241,7 +1259,7 @@ impl bch_sb<Unvalidated> {
 /// and its checksum. Not validated.
 fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Result<(), BchError> {
     loop {
-        let len = sb.io.buf.buffer_size;
+        let len = sb.io.buf.buffer_size();
         sb.io.read(&sb.dev, offset, len).inspect_err(|e| prt!(err, "IO error: {}", -e.raw()))?;
 
         let buf: &[u8] = sb.io.buf.buffer_mut();
@@ -1768,26 +1786,23 @@ pub unsafe fn sb_field_get_raw_mut<'a, F: SbField + ?Sized>(sb: *mut Head<bch_sb
 impl bch_sb_buf {
     /// The buffer grown to @size bytes, the superblock kept and zeroes after.
     fn grow(&mut self, size: usize) -> Result<(), crate::util::alloc::AllocError> {
-        let p = crate::util::alloc::kvrealloc_zeroed(self.sb.cast(), self.buffer_size, size)?;
-        self.sb = p.as_ptr().cast();
-        self.buffer_size = size;
+        let old = self.buffer();
+        assert!(size >= old.len(), "a superblock buffer of {} bytes grown to {size}", old.len());
+        let mut new = io_buf(size, Flags::empty())?;
+        new[..old.len()].copy_from_slice(old);
+        new[old.len()..].fill(0);
+        self.data = Some(new);
         Ok(())
     }
 
     /// The buffer freed, and the superblock with it.
     fn free(&mut self) {
-        if let Some(p) = core::ptr::NonNull::new(self.sb.cast::<u8>()) {
-            // SAFETY: grow()'s, buffer_size bytes
-            unsafe { crate::util::alloc::kvfree_sized(p, self.buffer_size) };
-        }
-        self.sb = core::ptr::null_mut();
-        self.buffer_size = 0;
+        self.data = None;
     }
 
     /// The superblock's buffer, all of it: what the superblock can grow into.
     fn buffer_mut(&mut self) -> &mut [u8] {
-        // SAFETY: the handle's, buffer_size bytes, borrowed with it
-        unsafe { core::slice::from_raw_parts_mut(self.sb.cast(), self.buffer_size) }
+        self.data.as_deref_mut().unwrap_or(&mut [])
     }
 
     /// The section at @off - or a new one at the end, None - resized in place
@@ -1835,7 +1850,7 @@ impl bch_sb_buf {
     /// The section at @off, as an F: whole_mut() if that's all of F.
     fn arm_mut_at<F: SbField + ?Sized>(&mut self, off: usize) -> Option<&mut F> {
         // SAFETY: a section of the handle's superblock, borrowed with it
-        unsafe { c::bch_sb_field::<Validated>::from_head_ptr_mut(field_at(self.sb, off)) }.arm_mut::<F>()
+        unsafe { c::bch_sb_field::<Validated>::from_head_ptr_mut(field_at(self.as_mut_ptr(), off)) }.arm_mut::<F>()
     }
 }
 
@@ -1873,7 +1888,7 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
         let at = field_offset(self.sb(), ty);
         let off = self.field_resize_at(at, u64s)?;
         // SAFETY: the section just resized
-        unsafe { (*field_at(self.sb, off)).type_ = Le32::new(ty.0) };
+        unsafe { (*field_at(self.as_mut_ptr(), off)).type_ = Le32::new(ty.0) };
         Some(off)
     }
 
@@ -1947,7 +1962,7 @@ impl core::ops::DerefMut for FsSbResize<'_> {
 impl SbResize for FsSbResize<'_> {
     fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
         let size = (size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>()).next_power_of_two();
-        if !self.sb.is_null() && self.buffer_size >= size {
+        if self.buffer_size() >= size {
             return Ok(());
         }
         self.grow(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
@@ -1982,7 +1997,7 @@ impl<'a> DevSbMut<'a> {
     {
         let io = devs.take(ca);
         let s = ca.sb_read_scratch.as_ref().expect("a device's sb_read_scratch, from its alloc");
-        (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb, io, ca, scratch: unsafe { &mut *s.buf.get() } })
+        io.buf.is_allocated().then(|| DevSbMut { fs_sb, io, ca, scratch: unsafe { &mut *s.buf.get() } })
     }
 }
 
@@ -1997,7 +2012,7 @@ impl Fs {
     pub fn dev_sb<'a>(&self, sb: &'a SbLockGuard<'_>, ca: &'a Dev) -> Option<&'a bch_sb_buf> {
         self.dev_sb_check(sb, ca);
         let io = sb.get_of(&ca.disk_sb);
-        (!io.buf.sb.is_null()).then_some(&io.buf)
+        io.buf.is_allocated().then_some(&io.buf)
     }
 
     /// @ca's superblock, to edit: None if it has none, not attached.

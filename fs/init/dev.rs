@@ -237,7 +237,6 @@ use crate::util::log::{log_dev, log_no_fs, LogLevel};
 use crate::os::percpu::PerCpu;
 use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::Head;
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err_fn, prt};
 use core::ffi::CStr;
@@ -251,20 +250,20 @@ use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, 
      crate::util::place::Contained, crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
      core::sync::atomic::Ordering::Acquire};
 use crate::types::{bits_to_longs, c_default};
-use crate::util::bio::{Bio, BioBox};
+use crate::util::bio::{Bio, BioBox, IoBuf};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
 use crate::util::refcount::{ARef, AlwaysRefCounted, WaitableRef};
 use nestify::nest;
 
-/// A superblock in memory, in a buffer that grows: kvmalloc()'d, a power of
-/// two, zeroes past the superblock. Each of a device's superblock, the
-/// filesystem's copy, and what format builds.
+/// A superblock in memory, in a buffer that grows: a power of two, zeroes past
+/// the superblock, page aligned - it's read and written in place, O_DIRECT in
+/// userspace. Each of a device's superblock, the filesystem's copy, and what
+/// format builds.
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_sb_buf {
-    pub sb:          *mut Head<c::bch_sb>,
-    pub buffer_size: usize,
+    pub(crate) data: Option<IoBuf>,
     /// The section types edited since the last write, by bit: set by
     /// field_mut() and resizing, for the filesystem's to_cpu() to read.
     pub dirty:       u64,

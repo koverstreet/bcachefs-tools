@@ -284,6 +284,7 @@ pub struct Dev {
 
     /// Its superblock, sb_lock's - through Fs::dev_sb() - and the block
     /// device it's on, fixed while it's attached.
+    #[init(LockedBy::new(Default::default(), ::pin_init::zeroed()))]
     pub disk_sb: LockedBy<c::bch_sb_io, c::bch_sb_bdev, crate::at!(Fs.sb)>,
     /// Its superblock's layout, for what can't take sb_lock to read disk_sb -
     /// whose buffer write_super can reallocate: the allocator, steering clear
