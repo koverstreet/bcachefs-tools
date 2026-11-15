@@ -57,7 +57,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::backpointers::backpointer_get_key;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags,
+use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags,
                          CommitFlags, TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
@@ -461,10 +461,6 @@ impl<'a, 'f> Walker<'a, 'f> {
                 let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, r.idx),
                                               BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
                 let k = iter.peek_slot(t)?.expect("a slot");
-                // SAFETY: the key's in the btree - the key cache - not in
-                // @iter, which reconcile_stripe() copies it from before
-                // repair unlocks
-                let k = unsafe { polonius_key(k) };
                 reconcile_stripe(ctxt, t, k, None)
             })?;
         }
