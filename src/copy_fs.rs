@@ -14,9 +14,9 @@ use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
-use bch_bindgen::fs::FsExt;
+use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
-use bch_bindgen::data::io::{block_on, MAX_IO_SIZE};
+use crate::wrappers::io::{block_on, MAX_IO_SIZE};
 use bcachefs_kernel::alloc::capacity::DiskReservation;
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{spos, BkeyV, BKEY_U64S};

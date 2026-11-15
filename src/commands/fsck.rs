@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process;
 
 use anyhow::{anyhow, Result};
-use bch_bindgen::fs::FsExt;
+use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;

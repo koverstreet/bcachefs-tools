@@ -60,9 +60,9 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use bch_bindgen::fs::FsExt;
+use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
-use bch_bindgen::data::io::block_on;
+use crate::wrappers::io::block_on;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};

@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use bch_bindgen::fs::FsExt;
+use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c::{
     self,
     DegradedAction,

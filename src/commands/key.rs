@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Context, Result};
 use bcachefs_kernel::c::{bch_key, bch_encrypted_key};
 use bcachefs_kernel::c;
-use bch_bindgen::fs::FsExt;
+use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::fs::{Fs, OpenFs, SbLockGuard};
 use bcachefs_kernel::sb::io::read_super;
 use clap::Parser;

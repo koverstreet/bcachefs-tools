@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
-use bch_bindgen::fs::FsExt;
+use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::c::DegradedAction;
 use bcachefs_kernel::c::PersistentCounter;

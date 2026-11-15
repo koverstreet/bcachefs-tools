@@ -19,7 +19,7 @@ use std::io;
 use std::os::fd::{AsFd, BorrowedFd};
 
 use anyhow::{anyhow, bail, Result};
-use bch_bindgen::fs::FsExt;
+use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::data_structures::bitmap::AtomicBitmap;

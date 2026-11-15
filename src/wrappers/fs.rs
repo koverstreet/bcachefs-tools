@@ -5,7 +5,7 @@
 //! data/io ops, accounting readout, and device add — all depend on std/alloc
 //! or the userspace data/io wrappers. They can't be inherent methods on the
 //! core `Fs` from this crate (orphan rule), so they're an extension trait;
-//! callers `use bch_bindgen::fs::FsExt` to get the method syntax back.
+//! callers `use crate::wrappers::fs::FsExt` to get the method syntax back.
 
 use std::ffi::CString;
 use std::mem::MaybeUninit;
@@ -17,7 +17,7 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::printbuf::Printbuf;
 
-use crate::data::io::{ReadOp, WriteOp};
+use crate::wrappers::io::{ReadOp, WriteOp};
 
 /// Userspace extension methods on the core [`Fs`].
 pub trait FsExt {

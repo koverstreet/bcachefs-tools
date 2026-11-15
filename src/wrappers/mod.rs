@@ -1,6 +1,8 @@
 pub mod accounting;
 pub mod bdev;
+pub mod fs;
 pub mod handle;
+pub mod io;
 pub mod ioctl;
 pub mod journal;
 pub mod online_iter;
