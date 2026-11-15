@@ -121,7 +121,7 @@ pub mod c {
     pub use crate::btree::update::{ TransCommitFlagBit, TransCommitFlags};
     pub use super::btree_write_buffer_defs::*;
     pub use crate::btree::write_buffer::{ BTREE_WRITE_BUFERED_VAL_U64s_MAX, bch_fs_btree_write_buffer, WbBtree, btree_write_buffered_key, wb_flushing_pin, wb_inc_pin, WbFlushCaller, wb_key_ref, wb_key_ref_key, wb_key_ref_pos_idx, wb_key_ref_words};
-    pub use crate::data::compress::{ bbuf, BbufType, bch_compression_opt};
+    pub use crate::data::compress::{ BbufType, bch_compression_opt};
     pub(crate) use crate::data::compress::{__bch_compression_opt_forward};
     pub use crate::data::copygc::{bch_fs_copygc};
     pub use super::data_ec_create_types::*;

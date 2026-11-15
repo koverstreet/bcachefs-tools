@@ -29,8 +29,8 @@
  */
 
 //! An opt is a compression option's value, a type and a level; an extent's
-//! type is an opt's, or incompressible, or lz4_old. A bounce buffer - C's
-//! struct bbuf - is an extent's data as one buffer:
+//! type is an opt's, or incompressible, or lz4_old. A bounce buffer, Bbuf,
+//! is an extent's data as one buffer:
 //! the bio's own memory if it's virtually contiguous or can be vmapped, else
 //! a copy. A bio's memory is only ever a pointer here: it can change under us
 //! (util/bio/iter.rs).
@@ -55,7 +55,7 @@ use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
-use cstruct_macros::{bitfield, bch_enum, MaybeZeroable};
+use cstruct_macros::{bitfield, bch_enum};
 use crate::format::{Bpos, CompressionType, SbFeatures};
 
 /// A compression option's value: a type, and a level - 0 for the type's
@@ -103,21 +103,6 @@ pub enum BbufType {
     BB_none,
     BB_vmap,
     BB_pool,
-}
-
-/*
- * Bounce buffer for the encode/decode paths: either a direct mapping of a
- * bio's pages (BB_none/BB_vmap - no copy) or a private allocation the caller
- * can scribble on without touching the bio. Exported because the write path
- * assembles its own decode sequence out of these.
- */
-#[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable)]
-pub struct bbuf {
-    pub c: *mut Fs,
-    pub b: *mut c_void,
-    pub type_: c::BbufType,
-    pub rw: c_int,
 }
 
 crate::module_param! {
@@ -185,52 +170,51 @@ pub struct Compress {
 
 // ── Bounce buffers ───────────────────────────────────────────────────────
 
+/*
+ * Bounce buffer for the encode/decode paths: either a direct mapping of a
+ * bio's pages (BB_none/BB_vmap - no copy) or a private allocation the caller
+ * can scribble on without touching the bio.
+ */
 /// Freed on drop. 'a is what it borrows: the bio whose pages it maps, or the
 /// filesystem whose pool it's from - a BB_pool's memory, which it holds.
 pub(crate) struct Bbuf<'a> {
-    raw:    c::bbuf,
+    b:      NonNull<u8>,
+    type_:  bb,
     len:    usize,
     pooled: Option<Box<[MaybeUninit<u8>], &'a Mempool<KVmalloc>>>,
     _a:     PhantomData<&'a ()>,
 }
 
 impl<'a> Bbuf<'a> {
-    fn new(fs: &'a Fs, b: NonNull<u8>, type_: bb, rw: usize, len: usize) -> Self {
-        Bbuf { raw: c::bbuf { c: fs.as_ptr(), b: b.as_ptr().cast(), type_, rw: rw as c_int }, len, pooled: None,
-               _a: PhantomData }
+    fn new(b: NonNull<u8>, type_: bb, len: usize) -> Self {
+        Bbuf { b, type_, len, pooled: None, _a: PhantomData }
     }
 
     /// Ours, or the bio's - which may be written meanwhile.
     pub(crate) fn data(&self) -> VolatileSlice<'_> {
         // SAFETY: @len bytes, until it's dropped
-        unsafe { VolatileSlice::from_raw(NonNull::new(self.raw.b.cast()).expect("a bounce buffer"), self.len) }
+        unsafe { VolatileSlice::from_raw(self.b, self.len) }
     }
 
     /// The bio's own memory: nothing to copy back.
     fn mapped(&self) -> bool {
-        matches!(self.raw.type_, bb::BB_none | bb::BB_vmap)
+        matches!(self.type_, bb::BB_none | bb::BB_vmap)
     }
 }
 
 impl Drop for Bbuf<'_> {
     fn drop(&mut self) {
-        // SAFETY: ours
-        unsafe { bbuf_exit(&mut self.raw) }
-    }
-}
-
-/// # Safety
-/// @buf is one of ours, not used after.
-unsafe fn bbuf_exit(buf: &mut c::bbuf) {
-    // SAFETY: the caller's; its type is how it was allocated
-    match buf.type_ {
-        bb::BB_none => {}
-        #[cfg(kernel)]
-        bb::BB_vmap => unsafe { c::vunmap(buf.b.map_addr(|a| a & !(crate::os::kernel::PAGE_SIZE - 1))) },
-        #[cfg(not(kernel))]
-        bb::BB_vmap => unreachable!(),
-        /* its Bbuf's Box's */
-        bb::BB_pool => {}
+        match self.type_ {
+            bb::BB_none => {}
+            #[cfg(kernel)]
+            bb::BB_vmap => unsafe {
+                c::vunmap(self.b.as_ptr().cast::<c_void>().map_addr(|a| a & !(crate::os::kernel::PAGE_SIZE - 1)))
+            },
+            #[cfg(not(kernel))]
+            bb::BB_vmap => unreachable!(),
+            /* its Bbuf's Box's */
+            bb::BB_pool => {}
+        }
     }
 }
 
@@ -263,7 +247,7 @@ pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
      */
     let mut pooled = Box::try_new_uninit_slice_in(size, &*fs.compress.bounce[rw])
         .expect("a pool's allocation: it waits for an element");
-    let mut b = Bbuf::new(fs, Box::as_non_null(&mut pooled).cast(), bb::BB_pool, rw, size);
+    let mut b = Bbuf::new(Box::as_non_null(&mut pooled).cast(), bb::BB_pool, size);
     b.pooled = Some(pooled);
     b
 }
@@ -295,7 +279,7 @@ fn virt_contig(r: BioRange<'_>) -> Option<NonNull<u8>> {
 /// @r's pages mapped as one - if it's whole pages but where it starts and
 /// ends.
 #[cfg(kernel)]
-fn vmap<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Option<Bbuf<'a>> {
+fn vmap(r: BioRange<'_>) -> Option<Bbuf<'_>> {
     use crate::util::alloc::KVVec;
     use crate::util::bio::{nth_page, Segment};
     use crate::os::kernel::PAGE_SIZE;
@@ -333,7 +317,7 @@ fn vmap<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Option<Bbuf<'a>> {
     // SAFETY: nr of the bio's pages
     let data = unsafe { c::rust_vmap(pages.as_mut_ptr(), nr as c_uint) };
     // SAFETY: within its first page
-    Some(Bbuf::new(fs, unsafe { NonNull::new(data.cast::<u8>())?.add(offset) }, bb::BB_vmap, rw, r.len() as usize))
+    Some(Bbuf::new(unsafe { NonNull::new(data.cast::<u8>())?.add(offset) }, bb::BB_vmap, r.len() as usize))
 }
 
 pub(crate) fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Bbuf<'a> {
@@ -342,10 +326,10 @@ pub(crate) fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Bbuf<
 
     #[cfg(not(CONFIG_HIGHMEM))]
     if let Some(p) = virt_contig(r) {
-        return Bbuf::new(fs, p, bb::BB_none, rw, r.len() as usize);
+        return Bbuf::new(p, bb::BB_none, r.len() as usize);
     }
     #[cfg(kernel)]
-    if let Some(b) = vmap(fs, r, rw) {
+    if let Some(b) = vmap(r) {
         return b;
     }
     bio_bounce(fs, r, rw)
