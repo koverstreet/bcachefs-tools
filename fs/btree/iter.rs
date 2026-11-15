@@ -2087,7 +2087,7 @@ impl<'t> BtreeIter<'t> {
         pos: Bpos,
         flags: BtreeIterFlags,
     ) -> BtreeIter<'t> {
-        let trans = unsafe { &*trans.trans_raw() };
+        let trans = trans.trans();
 
         BtreeIter::init_in(trans, &mut trans.paths(), alive_btree(trans, btree.into()), pos, flags, 0)
     }
@@ -2099,7 +2099,7 @@ impl<'t> BtreeIter<'t> {
         level: u32,
         flags: BtreeIterFlags,
     ) -> BtreeIter<'t> {
-        let trans = unsafe { &*trans.trans_raw() };
+        let trans = trans.trans();
 
         BtreeIter::node_iter_init_in(trans, &mut trans.paths(), alive_btree(trans, btree.into()),
                                      pos, 0, level, flags, crate::ret_ip!())
@@ -2310,7 +2310,7 @@ impl<'t> BtreeNodeIter<'t> {
         depth: u32,
         flags: BtreeIterFlags,
     ) -> BtreeNodeIter<'t> {
-        let trans = unsafe { &*trans.trans_raw() };
+        let trans = trans.trans();
         let raw = BtreeIter::node_iter_init_in(trans, &mut trans.paths(), alive_btree(trans, btree.into()),
                                                pos, locks_want, depth, flags, crate::ret_ip!());
         BtreeNodeIter { raw }

@@ -120,7 +120,7 @@ impl Drop for TransAttempt<'_, '_> {
 /// XXX: a &BtreeTrans may be an attempt's t.trans(), and then that begin is a
 /// nested one - warned of at runtime, with an attempt live, not prevented.
 pub trait TransRef<'t> {
-    fn trans_raw(&self) -> *mut BtreeTrans<'_>;
+    fn trans(&self) -> &'t BtreeTrans<'t>;
 }
 
 fn begin_if_unusable(trans: &BtreeTrans<'_>) {
@@ -134,23 +134,23 @@ fn begin_if_unusable(trans: &BtreeTrans<'_>) {
 }
 
 impl<'i, 'f> TransRef<'i> for &'i BtreeTrans<'f> {
-    fn trans_raw(&self) -> *mut BtreeTrans<'_> {
+    fn trans(&self) -> &'i BtreeTrans<'i> {
         begin_if_unusable(self);
-        self.raw()
+        self
     }
 }
 
 impl<'i, 'f> TransRef<'i> for &'i TransGuard<'f> {
-    fn trans_raw(&self) -> *mut BtreeTrans<'_> {
+    fn trans(&self) -> &'i BtreeTrans<'i> {
         begin_if_unusable(self);
-        self.raw()
+        self
     }
 }
 
 impl<'a, 't> TransRef<'a> for &TransAttempt<'a, 't> {
-    fn trans_raw(&self) -> *mut BtreeTrans<'_> {
+    fn trans(&self) -> &'a BtreeTrans<'a> {
         self.check_live();
-        self.trans.raw()
+        self.trans
     }
 }
 
