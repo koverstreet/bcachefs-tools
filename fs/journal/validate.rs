@@ -14,7 +14,7 @@ use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::SbErrorId;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef, Head,
-                            SelfSized, Unvalidated, VStruct};
+                            SelfSized, Unvalidated, VStruct, VStructError, VstructRef, assume_validated};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
 
@@ -152,9 +152,11 @@ fn journal_key_lost(fs: &Fs, from: &c::bkey_validate_context) {
     let _ = btree_lost_data(fs, &mut msg, from.btree);
 }
 
-fn key_at(e: &[u8], at: usize) -> c::bkey_s_c {
-    let k = e[at..].as_ptr();
-    c::bkey_s_c { k: k.cast(), v: k.wrapping_add(size_of::<c::bkey>()).cast() }
+/// The key at @at, if it's one there - a header, as long as its u64s, within
+/// the entry: read as validated, as bkey_validate() and to_text() take it.
+fn key_at(e: &[u8], at: usize) -> Result<BkeySC<'_>, VStructError> {
+    let k = VstructRef::<c::bkey_i>::new(&e[at..])?;
+    Ok(BkeySC::from(unsafe { assume_validated(k) }.key()))
 }
 
 #[derive(PartialEq, Eq)]
@@ -217,14 +219,14 @@ fn journal_validate_key(ctx: &Ctx<'_>, e: &mut [u8], at: usize) -> Result<Key, B
         bkey_compat(ctx, &mut e[at..at + bytes]);
     }
 
-    let k = key_at(e, at);
-    let ret = crate::btree::bkey::bkey_validate(
-        &BkeyValidate { fs: ctx.fs, k: unsafe { BkeySC::from_c(&k) }, from: &ctx.from });
-    if let Err(err) = ret {
-        if journal_entry_err_on!(ctx, true, journal_entry_bkey_bad_format,
-                                 "bkey validate error {}", err.msg()) {
-            return drop(e, bytes);
-        }
+    let ret = key_at(e, at).map(|k| crate::btree::bkey::bkey_validate(
+        &BkeyValidate { fs: ctx.fs, k, from: &ctx.from }));
+    match ret {
+        Ok(Err(err)) if journal_entry_err_on!(ctx, true, journal_entry_bkey_bad_format,
+                                              "bkey validate error {}", err.msg()) => return drop(e, bytes),
+        Err(err) if journal_entry_err_on!(ctx, true, journal_entry_bkey_bad_format,
+                                          "bkey validate error {err}") => return drop(e, bytes),
+        _ => {}
     }
 
     if write {
@@ -276,8 +278,13 @@ fn journal_entry_btree_keys_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &[u8
         }
 
         prt!(out, "btree={} level={} ", Btree(h.btree_id.into()), h.level);
-        let k = key_at(e, at);
-        crate::btree::bkey::bkey_val_to_text(out, fs, unsafe { BkeySC::from_c(&k) });
+        match key_at(e, at) {
+            Ok(k) => crate::btree::bkey::bkey_val_to_text(out, fs, k),
+            Err(err) => {
+                prt!(out, "(invalid, {err})");
+                break;
+            }
+        }
         first = false;
         at += u64s * 8;
     }
