@@ -212,7 +212,6 @@ pub mod vfs {
     pub mod folio;
     pub mod folio_reservation;
     pub mod fs_type;
-    pub mod idmap;
     pub mod inode;
     pub mod inode_cache;
     pub mod inode_ops;

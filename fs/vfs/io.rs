@@ -34,7 +34,7 @@ use crate::util::Nsecs;
 use crate::{fsck_err_on, has_bio, prt};
 
 use crate::os::iattr::Iattr;
-use super::idmap::MntIdmap;
+use crate::os::idmap::MntIdmap;
 use super::inode::{InodeInfo, QuotaReservation};
 use crate::os::iattr::{ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::vfs_inode::VfsInode;

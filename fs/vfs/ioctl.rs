@@ -47,7 +47,7 @@ use crate::os::dentry::Dentry;
 use crate::os::iov_iter::IovIter;
 use crate::vfs::direct::direct_io_read;
 use crate::os::kiocb::Kiocb;
-use crate::vfs::idmap::MntIdmap;
+use crate::os::idmap::MntIdmap;
 use crate::vfs::inode::{InodeInfo, InodeRef};
 use crate::os::mount::WriteAccess;
 use crate::os::path::{Creating, Removing, UserPath};

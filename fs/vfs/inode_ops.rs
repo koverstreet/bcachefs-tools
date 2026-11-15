@@ -24,7 +24,7 @@ use crate::xattr;
 use cstruct_macros::vtable;
 
 use crate::os::dentry::Dentry;
-use super::idmap::MntIdmap;
+use crate::os::idmap::MntIdmap;
 use super::inode::InodeInfo;
 use super::namei::DirOps;
 use crate::os::path::Path;

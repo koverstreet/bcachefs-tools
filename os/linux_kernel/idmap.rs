@@ -12,11 +12,12 @@ use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ptr::read_volatile;
 
-use crate::os::posix_acl::PosixAcl;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::os::file::File;
 use crate::os::kernel::{current_fsgid, current_fsuid};
+use crate::os::ops::from_raw;
+use crate::os::posix_acl::PosixAcl;
 use crate::os::vfs_inode::VfsInode;
 
 /// The VFS's idmap pointer: const from 7.4.
@@ -29,6 +30,10 @@ pub type RawIdmap = *mut c::mnt_idmap;
 /// open file pins its mount - or the VFS call it was passed to runs.
 #[derive(Clone, Copy)]
 pub struct MntIdmap<'f>(RawIdmap, PhantomData<&'f c::mnt_idmap>);
+
+from_raw! {
+    MntIdmap<'a> = RawIdmap => |r| MntIdmap::borrow_raw(r);
+}
 
 impl<'f> MntIdmap<'f> {
     /// # Safety

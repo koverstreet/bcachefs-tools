@@ -374,7 +374,7 @@ mod vfs {
     use crate::util::ffi::{c_char, opt_bytes, opt_bytes_mut};
     use cstruct_macros::vtable;
     use crate::os::dentry::Dentry;
-    use crate::vfs::idmap::RawIdmap;
+    use crate::os::idmap::RawIdmap;
     use crate::os::iattr::ATTR_CTIME;
     use crate::vfs::inode::InodeInfo;
 

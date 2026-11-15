@@ -7,8 +7,9 @@ use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::os::ops::{err_class_ptr, from_raw, into_raw};
+use crate::os::vfs_inode::VfsInode;
 
 #[path = "../posix_acl.rs"]
 mod common;
@@ -64,6 +65,18 @@ impl PosixAcl {
     pub(crate) fn count(&self) -> usize {
         // SAFETY: the header, the struct_group the fields are in
         unsafe { (*self.as_raw()).__bindgen_anon_1.hdr.as_ref().a_count as usize }
+    }
+
+    /// A new inode's in @dir, with @mode as they make it: its default
+    /// ACL, inherited, and its access ACL - posix_acl_create(). None for
+    /// either it doesn't get.
+    pub fn create(dir: &VfsInode, mode: &mut c::umode_t)
+        -> Result<(Option<PosixAcl>, Option<PosixAcl>), BchError>
+    {
+        let (mut default_acl, mut acl) = (core::ptr::null_mut(), core::ptr::null_mut());
+        ret_to_result_void(unsafe { c::posix_acl_create(dir.as_ptr(), mode, &mut default_acl, &mut acl) })?;
+        Ok((NonNull::new(default_acl).map(|p| unsafe { PosixAcl::from_raw(p) }),
+            NonNull::new(acl).map(|p| unsafe { PosixAcl::from_raw(p) })))
     }
 }
 

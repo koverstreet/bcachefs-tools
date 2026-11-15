@@ -35,7 +35,7 @@ use crate::snapshots::subvolume;
 
 use crate::os::dentry::Dentry;
 use crate::os::iattr::Iattr;
-use super::idmap::MntIdmap;
+use crate::os::idmap::MntIdmap;
 use super::inode::InodeInfo;
 use crate::os::iattr::{ATTR_CTIME, ATTR_SIZE};
 
