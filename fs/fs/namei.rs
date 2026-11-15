@@ -25,7 +25,7 @@
 //! panic here: link counts saturate and schedule the repair
 //! (inode::nlink_add()), depths wrap, as C's did.
 
-use crate::acl::PosixAcl;
+use crate::os::posix_acl::PosixAcl;
 use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{

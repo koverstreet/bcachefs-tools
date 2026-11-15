@@ -175,11 +175,6 @@ impl AclType {
 #[cfg(kernel)]
 pub use vfs::*;
 
-/// struct posix_acl, in userspace: nothing makes one there - the VFS does -
-/// so there are none, and an Option<&PosixAcl> is always None.
-#[cfg(not(kernel))]
-pub enum PosixAcl {}
-
 /// struct posix_acl, and the VFS's entry points: kernel only.
 #[cfg(kernel)]
 mod vfs {
@@ -199,6 +194,7 @@ mod vfs {
     use crate::util::vstructs::Validated;
     use crate::vfs::idmap::MntIdmap;
     use crate::os::iattr::{ATTR_CTIME, ATTR_MODE};
+    use crate::os::posix_acl::PosixAcl;
     use crate::vfs::inode::InodeInfo;
     use crate::vfs::vfs_inode::VfsInode;
     use crate::xattr::{self, Xattrs};
@@ -214,47 +210,15 @@ mod vfs {
         }
     }
 
-    /// A struct posix_acl we hold a reference on, released when dropped. One
-    /// the caller holds is borrowed - borrow_raw() - and one handed to C, to
-    /// keep, goes with into_raw().
-    pub struct PosixAcl(NonNull<c::posix_acl>);
-
     impl PosixAcl {
         /// An ACL of @nr entries, to be filled in: unlocking @t to allocate
         /// if it has to - a restart then.
         fn alloc(t: &TransAttempt<'_, '_>, nr: u32) -> Result<PosixAcl, BchError> {
             t.allocate_dropping_locks(|| {
                 let gfp = crate::util::alloc::current_gfp();
-                NonNull::new(unsafe { c::posix_acl_alloc(nr, gfp) }).map(PosixAcl)
+                NonNull::new(unsafe { c::posix_acl_alloc(nr, gfp) }).map(|p| unsafe { PosixAcl::from_raw(p) })
                     .ok_or(BchError::from(Errcode::ENOMEM_acl))
             })
-        }
-
-        /// @acl, which the caller holds a reference on - None for NULL.
-        ///
-        /// # Safety
-        /// @acl is NULL or a live posix_acl, for as long as this is used.
-        pub unsafe fn borrow_raw(acl: *mut c::posix_acl) -> Option<ManuallyDrop<PosixAcl>> {
-            NonNull::new(acl).map(|acl| ManuallyDrop::new(PosixAcl(acl)))
-        }
-
-        /// Another borrow of what this one holds.
-        fn borrowed(&self) -> ManuallyDrop<PosixAcl> {
-            ManuallyDrop::new(PosixAcl(self.0))
-        }
-
-        /// Our reference, for C to keep.
-        pub fn into_raw(self) -> *mut c::posix_acl {
-            ManuallyDrop::new(self).0.as_ptr()
-        }
-
-        pub(crate) fn as_raw(&self) -> *mut c::posix_acl {
-            self.0.as_ptr()
-        }
-
-        fn count(&self) -> usize {
-            // SAFETY: the header, the struct_group the fields are in
-            unsafe { (*self.as_raw()).__bindgen_anon_1.hdr.as_ref().a_count as usize }
         }
 
         /// Its entries - Err(the tag) for one with a tag ACLs don't have.
@@ -305,7 +269,7 @@ mod vfs {
                 let mut acl = self.clone().into_raw();
                 let gfp = crate::util::alloc::current_gfp();
                 let ret = ret_to_result(unsafe { c::__posix_acl_chmod(&mut acl, gfp, mode) });
-                let acl = NonNull::new(acl).map(PosixAcl);
+                let acl = NonNull::new(acl).map(|p| unsafe { PosixAcl::from_raw(p) });
                 ret?;
                 Ok(acl.expect("__posix_acl_chmod() succeeded without an ACL"))
             })
@@ -319,21 +283,8 @@ mod vfs {
         {
             let (mut default_acl, mut acl) = (core::ptr::null_mut(), core::ptr::null_mut());
             ret_to_result(unsafe { c::posix_acl_create(dir.as_ptr(), mode, &mut default_acl, &mut acl) })?;
-            Ok((NonNull::new(default_acl).map(PosixAcl), NonNull::new(acl).map(PosixAcl)))
-        }
-    }
-
-    /// Another reference: posix_acl_dup().
-    impl Clone for PosixAcl {
-        fn clone(&self) -> Self {
-            PosixAcl(NonNull::new(unsafe { c::posix_acl_dup(self.as_raw()) })
-                     .expect("posix_acl_dup() of an ACL"))
-        }
-    }
-
-    impl Drop for PosixAcl {
-        fn drop(&mut self) {
-            unsafe { c::posix_acl_release(self.as_raw()) }
+            Ok((NonNull::new(default_acl).map(|p| unsafe { PosixAcl::from_raw(p) }),
+                NonNull::new(acl).map(|p| unsafe { PosixAcl::from_raw(p) })))
         }
     }
 

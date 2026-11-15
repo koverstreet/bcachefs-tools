@@ -19,7 +19,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/crc64.h",			// crc64_be(), a string hash
     "linux/xattr.h",			// xattr_handler, which fs.h only declares
     "linux/posix_acl_xattr.h",		// nop_posix_acl_*, xattr.rs's ACL handlers
-    "linux/posix_acl.h",		// struct posix_acl, which fs.h only declares: fs/acl.rs's PosixAcl
+    "linux/posix_acl.h",		// struct posix_acl, which fs.h only declares: os::posix_acl's PosixAcl
     "linux/uidgid.h",			// make_kuid() and the rest, an ACL entry's ids
     "linux/quota.h",			// make_kqid(), quota_send_warning(): quota.rs's
     "crypto/sha2.h",			// sha256(), siphash_old's string hash key

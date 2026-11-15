@@ -12,7 +12,7 @@ use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ptr::read_volatile;
 
-use crate::acl::PosixAcl;
+use crate::os::posix_acl::PosixAcl;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::os::file::File;

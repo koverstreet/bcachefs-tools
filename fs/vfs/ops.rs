@@ -8,7 +8,8 @@ use core::ffi::{c_int, c_void, CStr};
 use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
 
-use crate::acl::{AclType, PosixAcl};
+use crate::acl::AclType;
+use crate::os::posix_acl::PosixAcl;
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::ffi::c_char;

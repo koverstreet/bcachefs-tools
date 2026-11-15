@@ -24,6 +24,7 @@ pub mod mutex;
 pub mod ops;
 pub mod percpu;
 pub mod percpu_rwsem;
+pub mod posix_acl;
 pub mod printk;
 pub mod rcu;
 pub mod rwsem;
