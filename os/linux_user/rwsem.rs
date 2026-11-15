@@ -6,8 +6,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::locking::{RawLock, RawLockBase, RawReadLock, RawRwLock, RawTryReadLock};
+use crate::os::lockdep::LockClass;
 use core::convert::Infallible;
-use core::ffi::{c_void, CStr};
+use core::ffi::CStr;
 use parking_lot::lock_api::RawRwLock as _;
 
 #[repr(transparent)]
@@ -19,7 +20,7 @@ unsafe impl RawLockBase for rw_semaphore {
     type GuardState = ();
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: *mut c_void) -> Result<(), Infallible> {
+    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: LockClass) -> Result<(), Infallible> {
         unsafe { l.write(rw_semaphore(parking_lot::RawRwLock::INIT)) };
         Ok(())
     }

@@ -9,8 +9,8 @@
 //! ByteLock in an array stays one byte.
 
 use super::{RawLock, RawLockBase, RawMovableLock, RawTimedLock, RawTryLock};
-use crate::os::lockdep::LockdepMap;
-use core::ffi::{c_ulong, c_void, CStr};
+use crate::os::lockdep::{LockClass, LockdepMap};
+use core::ffi::{c_ulong, CStr};
 
 /// A LockdepMap's initializer, its class the call site's, named @name:
 /// lockdep_init_map().
@@ -44,7 +44,7 @@ unsafe impl<R: RawLockBase> RawLockBase for Lockdep<R> {
     type GuardState = R::GuardState;
     type InitError = R::InitError;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), R::InitError> {
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), R::InitError> {
         unsafe {
             R::init(&raw mut (*l).raw, name, key)?;
             LockdepMap::init(&raw mut (*l).dep_map, name.as_ptr().cast(), key);

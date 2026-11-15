@@ -10,7 +10,8 @@ pub use common::*;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::MemallocFlags;
-use core::ffi::{c_int, c_void, CStr};
+use crate::os::lockdep::LockClass;
+use core::ffi::{c_int, CStr};
 use core::marker::PhantomData;
 use pin_init::PinInit;
 
@@ -38,12 +39,10 @@ unsafe impl Send for Srcu {}
 unsafe impl Sync for Srcu {}
 
 impl Srcu {
-    /// # Safety
-    /// @key is a static lockdep class.
-    pub unsafe fn new(name: &'static CStr, key: *mut c_void) -> impl PinInit<Self, BchError> {
+    pub fn new(name: &'static CStr, key: LockClass) -> impl PinInit<Self, BchError> {
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                ret_to_result_void(c::rust_init_srcu_struct(slot.cast(), name.as_ptr().cast(), key))
+                ret_to_result_void(c::rust_init_srcu_struct(slot.cast(), name.as_ptr().cast(), key.as_ptr().cast()))
             })
         }
     }

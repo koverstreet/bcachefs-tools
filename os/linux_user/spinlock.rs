@@ -9,8 +9,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::locking::{MemallocFlags, RawLock, RawLockBase, RawMovableLock, RawNestedLock};
+use crate::os::lockdep::LockClass;
 use core::convert::Infallible;
-use core::ffi::{c_ulong, c_void, CStr};
+use core::ffi::{c_ulong, CStr};
 use core::sync::atomic::{AtomicU32, Ordering::{Acquire, Relaxed, Release}};
 use rustix::thread::futex;
 
@@ -41,7 +42,7 @@ unsafe impl RawLockBase for raw_spinlock_t {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: *mut c_void) -> Result<(), Infallible> {
+    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: LockClass) -> Result<(), Infallible> {
         unsafe { (&raw mut (*l).state).write(AtomicU32::new(UNLOCKED)) };
         Ok(())
     }
@@ -76,7 +77,7 @@ unsafe impl RawLockBase for spinlock_t {
     type GuardState = (c_ulong, MemallocFlags);
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
         unsafe { raw_spinlock_t::init(l.cast(), name, key) }
     }
 }
@@ -107,7 +108,7 @@ unsafe impl RawLockBase for SpinLock {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
         unsafe { raw_spinlock_t::init(l.cast(), name, key) }
     }
 }

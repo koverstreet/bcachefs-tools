@@ -62,7 +62,7 @@ macro_rules! new_srcu {
     ($name:literal) => {{
         let key = $crate::new_lock!(@key);
         let name = const { $crate::util::ffi::c_str(::core::concat!($name, "\0")) };
-        unsafe { $crate::util::rcu::Srcu::new(name, key) }
+        $crate::util::rcu::Srcu::new(name, key)
     }};
 }
 

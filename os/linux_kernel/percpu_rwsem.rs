@@ -10,7 +10,7 @@ use crate::locking::{RawLock, RawLockBase, RawReadLock, RawRwLock};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::Opaque;
-use core::ffi::{c_void, CStr};
+use core::ffi::CStr;
 
 use kernel::bindings as b;
 
@@ -23,15 +23,15 @@ pub use crate::c::{
     rust_percpu_init_rwsem, rust_percpu_free_rwsem, rust_percpu_down_read, rust_percpu_up_read,
     rust_percpu_down_write, rust_percpu_up_write,
 };
-use crate::os::lockdep;
+use crate::os::lockdep::{self, LockClass};
 
 unsafe impl RawLockBase for c::percpu_rw_semaphore {
     type GuardState = ();
     /// The per-CPU counts couldn't be allocated
     type InitError = BchError;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { rust_percpu_init_rwsem(l.cast(), name.as_ptr().cast(), key) })
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { rust_percpu_init_rwsem(l.cast(), name.as_ptr().cast(), key.as_ptr().cast()) })
     }
 
     unsafe fn destroy(&self) {

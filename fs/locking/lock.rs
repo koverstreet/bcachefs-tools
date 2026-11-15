@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::os::lockdep::LockClass;
 use crate::util::place::{Contained, Field, FieldOf, Here, Path, Place, Placed, RefValue};
 use crate::util::refcount::AtomicRef;
 use crate::util::projections::Publish;
 use core::cell::UnsafeCell;
-use core::ffi::{c_ulong, c_void, CStr};
+use core::ffi::{c_ulong, CStr};
 use core::marker::{PhantomData, PhantomPinned};
 use core::ops::{Deref, DerefMut};
 
@@ -29,7 +30,7 @@ pub unsafe trait RawLockBase {
     /// In lockdep class @key, named @name, at @l - uninitialized or zeroed
     /// memory, which nothing else reaches until it returns; pinned from here
     /// on.
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void)
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass)
         -> Result<(), Self::InitError>;
 
     /// For a lock that allocates; nothing holds it or will.
@@ -161,11 +162,8 @@ unsafe impl<R: RawLockBase, G: Send, P: Sync> Sync for Locked<R, G, P> {}
 
 impl<R: RawLockBase, G, P> Locked<R, G, P> {
     /// new_lock!()'s, which has a static lockdep key per call site.
-    ///
-    /// # Safety
-    /// @key is a lock class key that lives forever - or null, in userspace.
     #[doc(hidden)]
-    pub unsafe fn new(g: G, p: P, name: &'static CStr, key: *mut c_void)
+    pub fn new(g: G, p: P, name: &'static CStr, key: LockClass)
         -> impl ::pin_init::PinInit<Self, R::InitError>
     {
         // If init() fails, nothing's written to drop.
@@ -182,11 +180,8 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
     /// new(), with @g initialized in place: for a G too big to build on the
     /// stack and move in - new_lock!(<- init). For a lock whose init() can't
     /// fail, so that nothing's left to undo if @g's does.
-    ///
-    /// # Safety
-    /// As new()'s.
     #[doc(hidden)]
-    pub unsafe fn new_init<E>(g: impl ::pin_init::PinInit<G, E>, p: P, name: &'static CStr, key: *mut c_void)
+    pub fn new_init<E>(g: impl ::pin_init::PinInit<G, E>, p: P, name: &'static CStr, key: LockClass)
         -> impl ::pin_init::PinInit<Self, E>
     where
         R: RawLockBase<InitError = core::convert::Infallible>,
@@ -203,11 +198,8 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
     }
 
     /// new(), by value: for a lock that may move - new_lock!(move g).
-    ///
-    /// # Safety
-    /// As new()'s.
     #[doc(hidden)]
-    pub unsafe fn new_movable(g: G, p: P, name: &'static CStr, key: *mut c_void) -> Self
+    pub fn new_movable(g: G, p: P, name: &'static CStr, key: LockClass) -> Self
     where
         R: RawMovableLock<InitError = core::convert::Infallible>,
     {
@@ -238,8 +230,8 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
     ///
     /// # Safety
     /// Once, before anything takes it, its G and P valid - zeroed, or
-    /// uninit()'s. @key is as new()'s.
-    pub unsafe fn init_zeroed(&self, name: &'static CStr, key: *mut c_void) -> Result<(), R::InitError> {
+    /// uninit()'s.
+    pub unsafe fn init_zeroed(&self, name: &'static CStr, key: LockClass) -> Result<(), R::InitError> {
         unsafe { R::init(core::ptr::from_ref(&self.raw).cast_mut(), name, key) }
     }
 
@@ -1000,21 +992,21 @@ macro_rules! new_lock {
         let g = $g;
         let p = $p;
         let name = const { $crate::util::ffi::c_str($name) };
-        unsafe { $crate::locking::Locked::new(g, p, name, key) }
+        $crate::locking::Locked::new(g, p, name, key)
     }};
     (@init_in_place $g:expr, $p:expr, $name:expr) => {{
         let key = $crate::new_lock!(@key);
         let g = $g;
         let p = $p;
         let name = const { $crate::util::ffi::c_str($name) };
-        unsafe { $crate::locking::Locked::new_init(g, p, name, key) }
+        $crate::locking::Locked::new_init(g, p, name, key)
     }};
     (@init_movable $g:expr, $p:expr, $name:expr) => {{
         let key = $crate::new_lock!(@key);
         let g = $g;
         let p = $p;
         let name = const { $crate::util::ffi::c_str($name) };
-        unsafe { $crate::locking::Locked::new_movable(g, p, name, key) }
+        $crate::locking::Locked::new_movable(g, p, name, key)
     }};
     (move $g:expr $(,)?) => {
         $crate::new_lock!(@init_movable $g, (), ::core::concat!(::core::file!(), ":", ::core::line!(), "\0"))

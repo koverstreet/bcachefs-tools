@@ -5,11 +5,16 @@
 use crate::locking::percpu_rw_semaphore;
 use crate::util::ffi::c_char;
 use core::ffi::{c_ulong, c_void};
+use core::pin::Pin;
 
-/// No lockdep, no class: a null key.
+/// No lockdep, no classes: every lock's key is this one.
+pub struct LockClassKey;
+
+pub type LockClass = Pin<&'static LockClassKey>;
+
 #[macro_export]
 macro_rules! lock_class_key {
-    () => { ::core::ptr::null_mut() };
+    () => { ::core::pin::Pin::static_ref(&$crate::os::lockdep::LockClassKey) };
 }
 
 /// C's struct lockdep_map without lockdep: an empty struct.
@@ -19,7 +24,7 @@ pub struct LockdepMap([u8; 0]);
 impl LockdepMap {
     /// # Safety
     /// None: there's nothing to initialize.
-    pub unsafe fn init(_this: *mut Self, _name: *const c_char, _key: *mut c_void) {}
+    pub unsafe fn init(_this: *mut Self, _name: *const c_char, _key: LockClass) {}
     pub fn acquire(&self, _trylock: bool, _read: bool, _ip: c_ulong) {}
     pub fn release(&self, _ip: c_ulong) {}
     pub fn contended(&self, _ip: c_ulong) {}

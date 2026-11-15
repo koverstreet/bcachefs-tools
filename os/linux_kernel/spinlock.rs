@@ -9,10 +9,10 @@
 
 use crate::c;
 use crate::locking::{MemallocFlags, RawLock, RawLockBase, RawMovableLock, RawNestedLock};
-use crate::os::lockdep;
+use crate::os::lockdep::{self, LockClass};
 use crate::util::ffi::Opaque;
 use core::convert::Infallible;
-use core::ffi::{c_ulong, c_void, CStr};
+use core::ffi::{c_ulong, CStr};
 use kernel::bindings as b;
 
 pub type spinlock_t = Opaque<b::spinlock_t>;
@@ -31,8 +31,8 @@ unsafe impl RawLockBase for spinlock_t {
     type GuardState = (c_ulong, MemallocFlags);
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { c::rust_spin_lock_init(l.cast(), name.as_ptr().cast(), key) };
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
+        unsafe { c::rust_spin_lock_init(l.cast(), name.as_ptr().cast(), key.as_ptr().cast()) };
         Ok(())
     }
 }
@@ -79,8 +79,8 @@ unsafe impl RawLockBase for SpinLock {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { c::rust_spin_lock_init(l.cast(), name.as_ptr().cast(), key) };
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
+        unsafe { c::rust_spin_lock_init(l.cast(), name.as_ptr().cast(), key.as_ptr().cast()) };
         Ok(())
     }
 }
@@ -110,8 +110,8 @@ unsafe impl RawLockBase for raw_spinlock_t {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { c::rust_raw_spin_lock_init(l.cast(), name.as_ptr().cast(), key) };
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
+        unsafe { c::rust_raw_spin_lock_init(l.cast(), name.as_ptr().cast(), key.as_ptr().cast()) };
         Ok(())
     }
 }

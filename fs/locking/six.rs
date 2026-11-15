@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
-use crate::os::lockdep::{trace_contention_begin, trace_contention_end};
+use crate::os::lockdep::{trace_contention_begin, trace_contention_end, LockClass};
 use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock, Shared, SharedGuard, SixIntent,
             SixWriteIntent};
 use crate::cstructs::c;
@@ -19,7 +19,7 @@ use crate::util::rcu::{self, FreeAnytime};
 use crate::os::sched;
 use crate::util::sleep::{sleep_until, Sleep};
 use core::convert::Infallible;
-use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
+use core::ffi::{c_int, c_uint, c_ulong, CStr};
 use core::mem::ManuallyDrop;
 use core::ptr::{self, null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
@@ -1216,7 +1216,7 @@ unsafe impl RawLockBase for c::six_lock {
     type GuardState = ();
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
         unsafe { __six_lock_init(l, name.as_ptr().cast(), key, SixLockInitFlags::empty(), Flags::empty()) };
         Ok(())
     }
@@ -1493,7 +1493,7 @@ pub unsafe fn six_lock_exit(lock: *mut c::six_lock) {
 /// Nothing holds or reaches @lock until this returns. What init doesn't set
 /// keeps what it was - zeroes, or six_lock_exit()'s: seq, and readers but
 /// with SixLockInitFlags::pcpu.
-pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: *mut c_void,
+pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: LockClass,
                               flags: c::SixLockInitFlags, gfp: Flags) {
     let wait_lock = crate::new_lock!(six_lock_waiters { next_free_hint: 0, list: ManuallyDrop::new(WaitList::new_zeroed()) },
                                      "&lock->wait_lock");

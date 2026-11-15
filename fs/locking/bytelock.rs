@@ -32,9 +32,10 @@ use super::{Locked, RawLock, RawLockBase, RawMovableLock, RawTimedLock, RawTryLo
 use core::sync::atomic::{AtomicU8, Ordering};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::os::kernel::jiffies;
+use crate::os::lockdep::LockClass;
 use crate::util::sleep::Sleep;
 use core::convert::Infallible;
-use core::ffi::{c_long, c_ulong, c_void, CStr};
+use core::ffi::{c_long, c_ulong, CStr};
 use pin_init::Zeroable;
 
 const UNLOCKED:  u8 = 0;
@@ -95,7 +96,7 @@ unsafe impl RawLockBase for ByteLock {
     type GuardState = ();
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: *mut c_void) -> Result<(), Infallible> {
+    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: LockClass) -> Result<(), Infallible> {
         unsafe { l.write(ByteLock(AtomicU8::new(UNLOCKED))) };
         Ok(())
     }

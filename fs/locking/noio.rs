@@ -30,8 +30,9 @@ use super::{Exclusive, ExclusiveGuard, Locked, RawLock, RawLockBase, RawMovableL
             SharedGuard};
 use crate::cstructs::c;
 use crate::util::alloc::{flags, Flags};
+use crate::os::lockdep::LockClass;
 use crate::os::sched;
-use core::ffi::{c_uint, c_void, CStr};
+use core::ffi::{c_uint, CStr};
 
 pub(crate) use crate::c::{PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 
@@ -125,7 +126,7 @@ unsafe impl<R: RawLockBase, const F: u32> RawLockBase for Memalloc<R, F> {
     type GuardState = (MemallocFlags, R::GuardState);
     type InitError = R::InitError;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), R::InitError> {
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), R::InitError> {
         unsafe { R::init(l.cast(), name, key) }
     }
 

@@ -8,12 +8,18 @@ use crate::c;
 use crate::locking::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock_t};
 use crate::util::ffi::c_char;
 use core::ffi::{c_ulong, c_void};
+use core::pin::Pin;
 use core::ptr;
+
+pub use kernel::sync::LockClassKey;
+
+/// A lock's lockdep class, by its key: a static's.
+pub type LockClass = Pin<&'static LockClassKey>;
 
 /// The lockdep class key of the call site: a static of its own.
 #[macro_export]
 macro_rules! lock_class_key {
-    () => { ::kernel::static_lock_class!().as_ptr().cast() };
+    () => { ::kernel::static_lock_class!() };
 }
 
 /// A lock's struct lockdep_map. Without lockdep it's nothing, as C's is then
@@ -34,9 +40,9 @@ impl LockdepMap {
     }
 
     /// # Safety
-    /// Before its lock is first taken. @key lives forever.
-    pub unsafe fn init(this: *mut Self, name: *const c_char, key: *mut c_void) {
-        unsafe { c::rust_lockdep_init_map(this.cast(), name, key) }
+    /// Before its lock is first taken.
+    pub unsafe fn init(this: *mut Self, name: *const c_char, key: LockClass) {
+        unsafe { c::rust_lockdep_init_map(this.cast(), name, key.as_ptr().cast()) }
     }
 
     pub fn acquire(&self, trylock: bool, read: bool, ip: c_ulong) {
@@ -65,7 +71,7 @@ impl LockdepMap {
 impl LockdepMap {
     /// # Safety
     /// None: there's nothing to initialize.
-    pub unsafe fn init(_this: *mut Self, _name: *const c_char, _key: *mut c_void) {}
+    pub unsafe fn init(_this: *mut Self, _name: *const c_char, _key: LockClass) {}
     pub fn acquire(&self, _trylock: bool, _read: bool, _ip: c_ulong) {}
     pub fn release(&self, _ip: c_ulong) {}
     pub fn contended(&self, _ip: c_ulong) {}

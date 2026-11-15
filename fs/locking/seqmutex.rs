@@ -9,8 +9,9 @@
 
 use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawTryLock};
 use crate::cstructs::c;
+use crate::os::lockdep::LockClass;
 use core::convert::Infallible;
-use core::ffi::{c_void, CStr};
+use core::ffi::CStr;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::MaybeZeroable;
 
@@ -26,7 +27,7 @@ unsafe impl RawLockBase for seqmutex {
     type GuardState = ();
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
         unsafe {
             (&raw mut (*l).seq).write(AtomicU32::new(0));
             c::mutex::init(&raw mut (*l).lock, name, key)

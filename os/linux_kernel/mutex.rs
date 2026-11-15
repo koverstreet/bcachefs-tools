@@ -7,10 +7,10 @@
 
 use crate::c;
 use crate::locking::{RawLock, RawLockBase, RawNestedLock, RawTryLock};
-use crate::os::lockdep;
+use crate::os::lockdep::{self, LockClass};
 use crate::util::ffi::Opaque;
 use core::convert::Infallible;
-use core::ffi::{c_void, CStr};
+use core::ffi::CStr;
 use kernel::bindings as b;
 
 pub type mutex = Opaque<b::mutex>;
@@ -38,8 +38,8 @@ unsafe impl RawLockBase for mutex {
     type GuardState = ();
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
-        unsafe { c::rust_mutex_init(l.cast(), name.as_ptr().cast(), key) };
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
+        unsafe { c::rust_mutex_init(l.cast(), name.as_ptr().cast(), key.as_ptr().cast()) };
         Ok(())
     }
 }

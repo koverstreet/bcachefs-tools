@@ -11,7 +11,8 @@ pub use common::*;
 use crate::c;
 use crate::errcode::BchError;
 use crate::locking::MemallocFlags;
-use core::ffi::{c_int, c_void, CStr};
+use crate::os::lockdep::LockClass;
+use core::ffi::{c_int, CStr};
 use core::marker::PhantomData;
 use pin_init::PinInit;
 
@@ -41,9 +42,7 @@ impl Drop for ReadGuard {
 pub struct Srcu([u8; 0]);
 
 impl Srcu {
-    /// # Safety
-    /// @key is a static lockdep class.
-    pub unsafe fn new(_name: &'static CStr, _key: *mut c_void) -> impl PinInit<Self, BchError> {
+    pub fn new(_name: &'static CStr, _key: LockClass) -> impl PinInit<Self, BchError> {
         unsafe { ::pin_init::pin_init_from_closure(|_slot: *mut Self| Ok(())) }
     }
 

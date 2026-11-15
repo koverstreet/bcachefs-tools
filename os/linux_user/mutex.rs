@@ -6,8 +6,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::locking::{RawLock, RawLockBase, RawNestedLock, RawTryLock};
+use crate::os::lockdep::LockClass;
 use core::convert::Infallible;
-use core::ffi::{c_void, CStr};
+use core::ffi::CStr;
 use parking_lot::lock_api::RawMutex as _;
 
 #[repr(transparent)]
@@ -19,7 +20,7 @@ unsafe impl RawLockBase for mutex {
     type GuardState = ();
     type InitError = Infallible;
 
-    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: *mut c_void) -> Result<(), Infallible> {
+    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: LockClass) -> Result<(), Infallible> {
         unsafe { l.write(mutex(parking_lot::RawMutex::INIT)) };
         Ok(())
     }

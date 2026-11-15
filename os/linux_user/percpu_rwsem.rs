@@ -8,7 +8,8 @@
 
 use crate::errcode::BchError;
 use crate::locking::{RawLock, RawLockBase, RawReadLock, RawRwLock};
-use core::ffi::{c_void, CStr};
+use crate::os::lockdep::LockClass;
+use core::ffi::CStr;
 use parking_lot::lock_api::RawRwLock as _;
 
 #[repr(transparent)]
@@ -20,7 +21,7 @@ unsafe impl RawLockBase for percpu_rw_semaphore {
     type GuardState = ();
     type InitError = BchError;
 
-    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: *mut c_void) -> Result<(), BchError> {
+    unsafe fn init(l: *mut Self, _name: &'static CStr, _key: LockClass) -> Result<(), BchError> {
         unsafe { l.write(percpu_rw_semaphore(parking_lot::RawRwLock::INIT)) };
         Ok(())
     }
