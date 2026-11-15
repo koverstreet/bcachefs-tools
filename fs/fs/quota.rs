@@ -213,20 +213,18 @@ mod vfs {
     use crate::btree::bkey::{pos, BkeyI, POS_MIN};
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
-    use crate::errcode::{Errcode, ret_to_class};
+    use crate::errcode::Errcode;
     use crate::locking::{ExclusiveGuard, Guard as _};
     use crate::sb::io::SbResize;
     use crate::util::ffi::c_char;
     use crate::os::kernel::ktime_get_real_seconds;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
-    use core::ffi::{c_int, c_uint};
+    use crate::vfs::super_block::SuperBlock;
+    use core::ffi::c_int;
     use core::fmt;
+    use cstruct_macros::vtable;
     use core::sync::atomic::Ordering;
-
-    /// SB_RDONLY is BIT(0), a macro bindgen doesn't evaluate. A bit number,
-    /// as s_flags is the kernel's c_ulong - usize - and not core's.
-    const SB_RDONLY_BIT: u32 = 0;
 
     const QTYP_NR: usize = c::QuotaType::NR as usize;
 
@@ -705,17 +703,19 @@ mod vfs {
 
     // ── quotactl ────────────────────────────────────────────────────────
 
-    /// # Safety
-    /// @sb is a bcachefs superblock.
-    unsafe fn sb_fs<'a>(sb: *mut c::super_block) -> &'a Fs {
-        unsafe { Fs::borrow_raw((*sb).s_fs_info.cast()) }
-    }
+    crate::vfs_ops! {
+        /// quotactl(2)'s ops: sb->s_qcop.
+        pub(crate) trait QuotactlOps for c::quotactl_ops, QuotactlVTable<T: QuotactlOps> = T;
 
-    /// # Safety
-    /// @sb is live.
-    unsafe fn sb_rdonly(sb: *mut c::super_block) -> bool {
-        let flags = unsafe { (*sb).s_flags };
-        flags & (1 << SB_RDONLY_BIT) != 0
+        fn quota_enable(sb: &SuperBlock, uflags: u32) -> Result<(), BchError>;
+        fn quota_disable(sb: &SuperBlock, uflags: u32) -> Result<(), BchError>;
+        fn rm_xquota(sb: &SuperBlock, uflags: u32) -> Result<(), BchError>;
+        /// Which types are accounted, and their time and warning limits.
+        fn get_state(sb: &SuperBlock, state: &mut c::qc_state) -> Result<(), BchError>;
+        fn set_info(sb: &SuperBlock, ty: i32, info: &c::qc_info) -> Result<(), BchError>;
+        fn get_dqblk(sb: &SuperBlock, kqid: c::kqid, qdq: &mut c::qc_dqblk) -> Result<(), BchError>;
+        fn get_nextdqblk(sb: &SuperBlock, kqid: &mut c::kqid, qdq: &mut c::qc_dqblk) -> Result<(), BchError>;
+        fn set_dqblk(sb: &SuperBlock, kqid: c::kqid, qdq: &c::qc_dqblk) -> Result<(), BchError>;
     }
 
     fn set_sb_quotas(sb: &mut c::bch_sb_buf, uflags: u32, on: bool) {
@@ -764,21 +764,15 @@ mod vfs {
         Ok(())
     }
 
-    unsafe extern "C" fn quota_enable(sb: *mut c::super_block, uflags: c_uint) -> c_int {
-        ret_to_class(unsafe { enable(sb_fs(sb), sb_rdonly(sb), uflags) })
-    }
-
-    unsafe extern "C" fn quota_disable(sb: *mut c::super_block, uflags: c_uint) -> c_int {
-        let fs = unsafe { sb_fs(sb) };
-
-        if unsafe { sb_rdonly(sb) } {
-            return -(c::EROFS as c_int);
+    fn disable(fs: &Fs, rdonly: bool, uflags: u32) -> Result<(), BchError> {
+        if rdonly {
+            return Err(c::EROFS.into());
         }
 
         let mut sb = fs.sb_lock();
         set_sb_quotas(&mut sb, uflags, false);
         fs.write_super(&mut sb);
-        0
+        Ok(())
     }
 
     fn remove(fs: &Fs, rdonly: bool, uflags: u32) -> Result<(), BchError> {
@@ -810,14 +804,7 @@ mod vfs {
         Ok(())
     }
 
-    unsafe extern "C" fn quota_remove(sb: *mut c::super_block, uflags: c_uint) -> c_int {
-        ret_to_class(unsafe { remove(sb_fs(sb), sb_rdonly(sb), uflags) })
-    }
-
-    /// Which types are accounted, and their time and warning limits.
-    unsafe extern "C" fn quota_get_state(sb: *mut c::super_block, state: *mut c::qc_state) -> c_int {
-        let fs = unsafe { sb_fs(sb) };
-        let state = unsafe { &mut *state };
+    fn get_state(fs: &Fs, state: &mut c::qc_state) {
         let qtypes = enabled_qtypes(fs);
 
         *state = ::pin_init::zeroed();
@@ -838,7 +825,6 @@ mod vfs {
             s.ino_timelimit = l[Q_INO].timelimit.load(Ordering::Relaxed);
             s.ino_warnlimit = l[Q_INO].warnlimit.load(Ordering::Relaxed);
         }
-        0
     }
 
     /// A type's time and warning limits, in the superblock.
@@ -891,10 +877,6 @@ mod vfs {
         Ok(())
     }
 
-    unsafe extern "C" fn quota_set_info(sb: *mut c::super_block, ty: c_int, info: *mut c::qc_info) -> c_int {
-        ret_to_class(unsafe { set_info(sb_fs(sb), sb_rdonly(sb), ty, &*info) })
-    }
-
     /* Get/set individual quotas: */
 
     fn dqblk(src: &c::Memquota) -> c::qc_dqblk {
@@ -920,31 +902,25 @@ mod vfs {
         unsafe { c::from_kqid(core::ptr::addr_of_mut!(c::init_user_ns), kqid) }
     }
 
-    unsafe extern "C" fn get_quota(sb: *mut c::super_block, kqid: c::kqid, qdq: *mut c::qc_dqblk) -> c_int {
-        let fs = unsafe { sb_fs(sb) };
-        let qdq = unsafe { &mut *qdq };
+    fn get_quota(fs: &Fs, kqid: c::kqid, qdq: &mut c::qc_dqblk) {
         let qid = kqid_from(kqid);
 
         let l = Locked::new(fs, kqid.type_ as usize);
         *qdq = l.get(qid as usize).map_or_else(|| ::pin_init::zeroed(), dqblk);
-        0
     }
 
-    unsafe extern "C" fn get_next_quota(sb: *mut c::super_block, kqid: *mut c::kqid,
-                                        qdq: *mut c::qc_dqblk) -> c_int {
-        let fs = unsafe { sb_fs(sb) };
-        let kqid = unsafe { &mut *kqid };
+    fn get_next_quota(fs: &Fs, kqid: &mut c::kqid, qdq: &mut c::qc_dqblk) -> Result<(), BchError> {
         let ty = kqid.type_;
         let qid = kqid_from(*kqid);
 
         let l = Locked::new(fs, ty as usize);
         let Some((pos, mq)) = l.iter_from(qid as usize).find(|(_, mq)| **mq != c::Memquota::default()) else {
-            return -(c::ENOENT as c_int);
+            return Err(c::ENOENT.into());
         };
 
-        unsafe { *qdq = dqblk(mq) };
+        *qdq = dqblk(mq);
         *kqid = unsafe { c::make_kqid(c::current_user_ns(), ty, pos as u32) };
-        0
+        Ok(())
     }
 
     /// The new limits in @qdq onto @new_quota - the key there is, if there is
@@ -994,22 +970,45 @@ mod vfs {
         set(fs, BkeySC::from(new_quota.as_ref()), Some(qdq))
     }
 
-    unsafe extern "C" fn set_dqblk(sb: *mut c::super_block, kqid: c::kqid, qdq: *mut c::qc_dqblk) -> c_int {
-        ret_to_class(unsafe { set_quota(sb_fs(sb), sb_rdonly(sb), kqid, &*qdq) })
+    struct Quotactl;
+
+    #[vtable]
+    impl QuotactlOps for Quotactl {
+        fn quota_enable(sb: &SuperBlock, uflags: u32) -> Result<(), BchError> {
+            enable(sb.fs(), sb.rdonly(), uflags)
+        }
+
+        fn quota_disable(sb: &SuperBlock, uflags: u32) -> Result<(), BchError> {
+            disable(sb.fs(), sb.rdonly(), uflags)
+        }
+
+        fn rm_xquota(sb: &SuperBlock, uflags: u32) -> Result<(), BchError> {
+            remove(sb.fs(), sb.rdonly(), uflags)
+        }
+
+        fn get_state(sb: &SuperBlock, state: &mut c::qc_state) -> Result<(), BchError> {
+            get_state(sb.fs(), state);
+            Ok(())
+        }
+
+        fn set_info(sb: &SuperBlock, ty: i32, info: &c::qc_info) -> Result<(), BchError> {
+            set_info(sb.fs(), sb.rdonly(), ty, info)
+        }
+
+        fn get_dqblk(sb: &SuperBlock, kqid: c::kqid, qdq: &mut c::qc_dqblk) -> Result<(), BchError> {
+            get_quota(sb.fs(), kqid, qdq);
+            Ok(())
+        }
+
+        fn get_nextdqblk(sb: &SuperBlock, kqid: &mut c::kqid, qdq: &mut c::qc_dqblk) -> Result<(), BchError> {
+            get_next_quota(sb.fs(), kqid, qdq)
+        }
+
+        fn set_dqblk(sb: &SuperBlock, kqid: c::kqid, qdq: &c::qc_dqblk) -> Result<(), BchError> {
+            set_quota(sb.fs(), sb.rdonly(), kqid, qdq)
+        }
     }
 
     /// The VFS's: sb->s_qcop.
-    pub(crate) static QUOTACTL_OPS: c::quotactl_ops = c::quotactl_ops {
-        quota_enable:  Some(quota_enable),
-        quota_disable: Some(quota_disable),
-        rm_xquota:     Some(quota_remove),
-
-        get_state:     Some(quota_get_state),
-        set_info:      Some(quota_set_info),
-
-        get_dqblk:     Some(get_quota),
-        get_nextdqblk: Some(get_next_quota),
-        set_dqblk:     Some(set_dqblk),
-        ..::pin_init::zeroed()
-    };
+    pub(crate) static QUOTACTL_OPS: c::quotactl_ops = QuotactlVTable::<Quotactl>::OPS;
 }

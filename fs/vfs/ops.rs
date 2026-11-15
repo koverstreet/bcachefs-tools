@@ -72,6 +72,16 @@ from_raw! {
     &'a mut NameBuf       = *mut c_char         => |r| &mut *r.cast();
 }
 
+// quotactl's
+from_raw! {
+    c::kqid               = c::kqid             => |r| r;
+    &'a mut c::kqid       = *mut c::kqid        => |r| &mut *r;
+    &'a mut c::qc_state   = *mut c::qc_state    => |r| &mut *r;
+    &'a c::qc_info        = *mut c::qc_info     => |r| &*r;
+    &'a c::qc_dqblk       = *mut c::qc_dqblk    => |r| &*r;
+    &'a mut c::qc_dqblk   = *mut c::qc_dqblk    => |r| &mut *r;
+}
+
 #[cfg(linux_ge = "6.17")]
 from_raw! {
     /// mmap_prepare's.
