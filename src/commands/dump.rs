@@ -17,7 +17,8 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, JsetEntryType};
-use bcachefs_kernel::util::vstructs::{assume_validated, cast_plain, cast_plain_slice, Head, SelfSized, Unvalidated};
+use bcachefs_kernel::util::vstructs::{assume_validated, cast_plain, cast_plain_slice, plain_bytes_mut, Head, SelfSized,
+                                      Unvalidated};
 use bcachefs_kernel::POS_MIN;
 
 use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
@@ -229,8 +230,7 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
 
 /// Sanitize a journal buffer in-place: walk jset entries, handle encryption,
 /// zero inline data, optionally scramble filenames, clear checksums.
-fn sanitize_journal(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
-    let fs = unsafe { Fs::borrow_raw(fs_raw) };
+fn sanitize_journal(fs: &Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
     let jset_magic = fs.sb_lock().sb().jset_magic();
     let block_bits = fs.block_bits();
 
@@ -284,8 +284,7 @@ fn sanitize_journal(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Resu
 
 /// Sanitize a btree node buffer in-place: walk bset entries, handle
 /// encryption, zero inline data, optionally scramble filenames.
-fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
-    let fs = unsafe { Fs::borrow_raw(fs_raw) };
+fn sanitize_btree(fs: &Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
     let bset_magic = fs.sb_lock().sb().bset_magic();
     let block_bits = fs.block_bits();
 
@@ -487,24 +486,23 @@ fn get_sb_journal(fs: &Fs, ca: &Dev, entire_journal: bool, d: &mut DumpDev) {
 
 fn write_sanitized_ranges(
     img: &mut Qcow2Image<'_>,
-    fs_raw: *mut Fs,
+    fs: &Fs,
     ranges: &mut Ranges,
     bucket_bytes: u64,
     opts: SanitizeOpts,
-    sanitize_fn: fn(*mut Fs, &mut [u8], SanitizeOpts) -> Result<()>,
+    sanitize_fn: fn(&Fs, &mut [u8], SanitizeOpts) -> Result<()>,
 ) -> Result<()> {
     ranges_sort(ranges);
+    /* u64s: 8 byte aligned, as the jsets and btree nodes read through it need */
     let mut words = vec![0u64; bucket_bytes as usize / 8];
-    // SAFETY: u64s, which any bytes are - 8 byte aligned, as the jsets and
-    // btree nodes read through it need
-    let buf = unsafe { std::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), words.len() * 8) };
+    let buf = plain_bytes_mut(&mut words[..]);
 
     for r in ranges.iter() {
         let len = (r.end - r.start) as usize;
         assert!(len <= bucket_bytes as usize);
 
         qcow2::pread_exact(img.infd(), &mut buf[..len], r.start)?;
-        sanitize_fn(fs_raw, &mut buf[..len], opts)
+        sanitize_fn(fs, &mut buf[..len], opts)
             .with_context(|| format!("sanitizing the {len} bytes at device offset {:#x}; \
                                       not written unsanitized - dump failed", r.start))?;
         img.write_buf(&buf[..len], r.start)?;
@@ -549,7 +547,7 @@ fn write_dev_image(
     // --sanitize.
     if sanitize || single_replica {
         write_sanitized_ranges(
-            &mut img, fs.as_ptr(), &mut d.journal, bucket_bytes, opts, sanitize_journal,
+            &mut img, &fs, &mut d.journal, bucket_bytes, opts, sanitize_journal,
         )?;
     } else {
         img.write_ranges(&mut d.journal)?;
@@ -558,7 +556,7 @@ fn write_dev_image(
     // Btree nodes go through the modify path for --sanitize or --single-replica.
     if sanitize || single_replica {
         write_sanitized_ranges(
-            &mut img, fs.as_ptr(), &mut d.btree, bucket_bytes, opts, sanitize_btree,
+            &mut img, &fs, &mut d.btree, bucket_bytes, opts, sanitize_btree,
         )?;
     } else {
         img.write_ranges(&mut d.btree)?;
