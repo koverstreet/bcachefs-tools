@@ -124,7 +124,7 @@ impl<T, const N: usize, I: FifoIdx> FixedFifo<T, N, I> {
     }
 }
 
-unsafe impl<T, const N: usize, I: FifoIdx> Array for FixedFifo<T, N, I> {
+impl<T, const N: usize, I: FifoIdx> Array for FixedFifo<T, N, I> {
     type Elem = T;
     const ELEMS_OFFSET: usize = core::mem::offset_of!(Self, slots);
 

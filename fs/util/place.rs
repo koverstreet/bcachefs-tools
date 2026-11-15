@@ -124,11 +124,8 @@ pub const fn name(s: &str) -> u64 {
 }
 
 
-/// Self's field N: its type, and where it is.
-///
-/// # Safety
-/// Self has a field of type Type at OFFSET, named N.
-pub(crate) unsafe trait Field<const N: u64> {
+/// Self's field N, named N: its type, Type, and where it is, OFFSET.
+pub(crate) trait Field<const N: u64> {
     type Type;
     const OFFSET: usize;
 }
@@ -193,20 +190,16 @@ index!(u8, u16, u32, u64, usize);
 
 /// An array, or a type wrapping one: what an element placed at a field is an
 /// element of - its elements in a row from ELEMS_OFFSET, each made in place
-/// by init_each().
-///
-/// # Safety
-/// Self's elements are at ELEMS_OFFSET, contiguous; init_each() makes
-/// element i with what @make gives it for i; and an element stays where
-/// it's made, never moved out or remade, until Self drops.
-pub(crate) unsafe trait Array: Sized {
+/// by init_each(), element i with what @make gives it for i, and staying
+/// where it's made, never moved out or remade, until Self drops.
+pub(crate) trait Array: Sized {
     type Elem;
     const ELEMS_OFFSET: usize;
 
     fn init_each<I: PinInit<Self::Elem, E>, E>(make: impl FnMut(usize) -> I) -> impl PinInit<Self, E>;
 }
 
-unsafe impl<T, const L: usize> Array for [T; L] {
+impl<T, const L: usize> Array for [T; L] {
     type Elem = T;
     const ELEMS_OFFSET: usize = 0;
 
@@ -283,12 +276,10 @@ where
 
 /// What a value placed in Self has for its parent: Self - or, Self placed in
 /// a Wrapper, the struct holding that, as a Locked's data is had only with
-/// its lock held, and what's placed in it is had without. #[derive(Init)]
-/// implements it, on every struct, as its At says.
-///
-/// # Safety
-/// visible() of a live Self is the live Visible it's in, or Self.
-pub(crate) unsafe trait Enclosing {
+/// its lock held, and what's placed in it is had without: visible() of a live
+/// Self is the live Visible it's in, or Self. #[derive(Init)] implements it,
+/// on every struct, as its At says.
+pub(crate) trait Enclosing {
     type Visible;
 
     /// # Safety
@@ -350,11 +341,9 @@ where
 /// on the type implements it, its At from at(), for B's #[derive(Init)] to
 /// pick for the field. @A is the placed type's #[init_args], a tuple, which
 /// the field's #[placed_args] gives - or none, and #[derive(Init)] picks it.
-///
-/// # Safety
-/// init() gives its field an At: what it returns is run into B's field N.
+/// init() gives its field an At.
 #[doc(hidden)]
-pub(crate) unsafe trait InitAt<const N: u64, A = ()>: Field<N> {
+pub(crate) trait InitAt<const N: u64, A = ()>: Field<N> {
     /// # Safety
     /// What it returns is run into Self's field N, of a Self being
     /// initialized.
@@ -393,27 +382,22 @@ impl<B: InitAt<N>, const N: u64> PickPlaced<B::Type> for Pick<B, N> {
 
 #[doc(hidden)]
 pub(crate) trait PickZeroed<T> {
-    /// # Safety
-    /// None: unsafe as PickPlaced's is, the call being the same.
-    unsafe fn pick(&self) -> impl Init<T>;
+    fn pick(&self) -> impl Init<T>;
 }
 
 impl<B: Field<N>, const N: u64> PickZeroed<B::Type> for &Pick<B, N>
 where
     B::Type: Zeroable,
 {
-    unsafe fn pick(&self) -> impl Init<B::Type> {
+    fn pick(&self) -> impl Init<B::Type> {
         pin_init::init_zeroed()
     }
 }
 
 /// Every Self is its parent's field: it holds an At, which at() made where
-/// the At says. #[placed] implements it.
-///
-/// # Safety
-/// Self has a field of type Self::At, so a Self is had only from an
-/// initializer at() was given.
-pub(crate) unsafe trait Contained: Sized {
+/// the At says - a field of type Self::At, so a Self is had only from an
+/// initializer at() was given. #[placed] implements it.
+pub(crate) trait Contained: Sized {
     /// What it's the field of - or, that placed in a Wrapper, the struct
     /// holding it: its Base's Enclosing.
     type Parent;
@@ -480,7 +464,7 @@ pub struct Placed<C, A> {
     _placed_at: A,
 }
 
-unsafe impl<C, A: Place<Type = Self, Base: Enclosing>> Contained for Placed<C, A> {
+impl<C, A: Place<Type = Self, Base: Enclosing>> Contained for Placed<C, A> {
     type Parent = <A::Base as Enclosing>::Visible;
     type At = A;
 
@@ -674,12 +658,10 @@ where
 
 /// Every Self lives in the container at Base's field - a Container, which
 /// Self's #[placed(Base.field[..])] makes there: a Self is had only from
-/// that container's insert(), and dies in it. So none outlives its Base.
-///
-/// # Safety
-/// Self has a field of type AtIn<Self>, so a Self is had only from a
-/// PlacedInit its Container's insert() ran.
-pub(crate) unsafe trait PlacedIn: Sized {
+/// that container's insert(), and dies in it. So none outlives its Base: Self
+/// has a field of type AtIn<Self>, so a Self is had only from a PlacedInit
+/// its Container's insert() ran.
+pub(crate) trait PlacedIn: Sized {
     type Base;
 }
 
@@ -695,13 +677,11 @@ pub(crate) struct AtIn<T> {
 // SAFETY: no bytes, for threads to race on
 unsafe impl<T> Sync for AtIn<T> {}
 
-/// What a Container keeps its elements in.
-///
-/// # Safety
-/// An element gets in only by insert(), made in place and never moved; it
-/// leaves only by retain(), dropped; and what's held is dropped when the
-/// container is. No element is had by value, before or after.
-pub(crate) unsafe trait Holds<T>: Sized {
+/// What a Container keeps its elements in. An element gets in only by
+/// insert(), made in place and never moved; it leaves only by retain(),
+/// dropped; and what's held is dropped when the container is. No element is
+/// had by value, before or after.
+pub(crate) trait Holds<T>: Sized {
     fn empty() -> Self;
     fn insert<E: From<AllocError>>(&mut self, init: impl PinInit<T, E>) -> Result<(), E>;
     fn iter<'a>(&'a self) -> impl Iterator<Item = &'a T> where T: 'a;
@@ -709,9 +689,9 @@ pub(crate) unsafe trait Holds<T>: Sized {
     fn retain(&mut self, f: impl FnMut(&T) -> bool);
 }
 
-// SAFETY: each element in a pinned box of its own, made there; room for
-// its box is made first, so an element made is an element held
-unsafe impl<T: FreeAnytime> Holds<T> for KVVec<Pin<KBox<T>>> {
+// each element in a pinned box of its own, made there; room for its box is
+// made first, so an element made is an element held
+impl<T: FreeAnytime> Holds<T> for KVVec<Pin<KBox<T>>> {
     fn empty() -> Self {
         KVVec::new()
     }

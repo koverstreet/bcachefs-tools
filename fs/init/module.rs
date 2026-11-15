@@ -45,7 +45,7 @@ unsafe impl Dir for Root {
     type Kobj = Root;
 }
 
-unsafe impl KobjPlace for Root {
+impl KobjPlace for Root {
     type Owner = Root;
 
     unsafe fn owner(kobj: *mut Kobject) -> *mut Root {

@@ -285,11 +285,9 @@ macro_rules! new_delayed_work {
 
 /// A ReffedWork's function as a type, and the field it runs from: for a
 /// field `w: ReffedWork<f, R>`, the parent's #[derive(Init)] makes f - a
-/// braced struct, a type only, beside the fn f - and this.
-///
-/// # Safety
-/// At is that field's, and only its initializer makes a ReffedWork<Self, _>.
-pub(crate) unsafe trait WorkFunc: Sized + 'static {
+/// braced struct, a type only, beside the fn f - and this. At is that
+/// field's, and only its initializer makes a ReffedWork<Self, _>.
+pub(crate) trait WorkFunc: Sized + 'static {
     #[doc(hidden)]
     type At: Place<Base: Enclosing<Visible = <Self::At as Place>::Base>>;
 
@@ -348,9 +346,7 @@ const _: () = {
 unsafe impl<F: WorkFunc, R> Send for ReffedWork<F, R> {}
 unsafe impl<F: WorkFunc, R> Sync for ReffedWork<F, R> {}
 
-// SAFETY: its At field, given by the parent's #[derive(Init)], from at(),
-// for the field it names
-unsafe impl<F: WorkFunc, R> Contained for ReffedWork<F, R>
+impl<F: WorkFunc, R> Contained for ReffedWork<F, R>
 where
     F::At: Place<Type = Self>,
 {
@@ -367,11 +363,9 @@ where
 /// pair. The first's path is Within what the parent is in, so its ref keeps
 /// the parent for the run; a second's count need only outlive the parent -
 /// its path may go Through a BackRef. Taken in order; put in reverse, the
-/// parent's keeper last - Held's drop order.
-///
-/// # Safety
-/// Held is guards on the refs tryget_live() takes, and adopt() makes.
-pub(crate) unsafe trait WorkRefs<P> {
+/// parent's keeper last - Held's drop order. Held is guards on the refs
+/// tryget_live() takes, and adopt() makes.
+pub(crate) trait WorkRefs<P> {
     /// The refs, held: put when it's dropped.
     type Held;
 
@@ -383,8 +377,7 @@ pub(crate) unsafe trait WorkRefs<P> {
     unsafe fn adopt(p: &P) -> Self::Held;
 }
 
-// SAFETY: its guard
-unsafe impl<P, R: Path<P> + OnePath + Within> WorkRefs<P> for R
+impl<P, R: Path<P> + OnePath + Within> WorkRefs<P> for R
 where
     R::To: TryRefcount,
 {
@@ -399,8 +392,8 @@ where
     }
 }
 
-// SAFETY: their guards, B's first - so it's put first
-unsafe impl<P, A: Path<P> + Within, B: Path<P>> WorkRefs<P> for (A, B)
+// B's guard first, so it's put first
+impl<P, A: Path<P> + Within, B: Path<P>> WorkRefs<P> for (A, B)
 where
     A::To: TryRefcount,
     B::To: TryRefcount,

@@ -167,7 +167,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let enclosing = match at {
         Some(ty) if is_at_inner(ty) => quote! {
             #[automatically_derived]
-            unsafe impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
+            impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
                 type Visible = <Self as crate::util::place::Contained>::Parent;
                 unsafe fn visible(p: *mut Self) -> *mut Self::Visible {
                     unsafe { crate::util::place::container_of_raw(p) }
@@ -176,7 +176,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         },
         _ => quote! {
             #[automatically_derived]
-            unsafe impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
+            impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
                 type Visible = Self;
                 unsafe fn visible(p: *mut Self) -> *mut Self {
                     p
@@ -273,9 +273,7 @@ fn work_func(cfg: &TokenStream, inst_ty: &TokenStream, name: &Ident, f: &Ident) 
         pub(crate) struct #f {}
         #cfg
         #[automatically_derived]
-        // SAFETY: the field's - the one of type ReffedWork<f, _>, its
-        // initializer init()'s, below
-        unsafe impl crate::os::workqueue::WorkFunc for #f {
+        impl crate::os::workqueue::WorkFunc for #f {
             type At = crate::util::place::At<#inst_ty, { crate::util::place::name(#n) }>;
             fn run(p: &#inst_ty) {
                 #f(p)

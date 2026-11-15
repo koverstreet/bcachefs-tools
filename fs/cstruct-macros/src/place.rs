@@ -199,9 +199,7 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
     let init_at = |init: TokenStream| quote! {
         #(#cfgs)*
         #[automatically_derived]
-        // SAFETY: init() is Base's for the field, which Base's #[derive(Init)]
-        // runs it into, the field it's for
-        unsafe impl #lifetime crate::util::place::InitAt<#n, (#(#arg_tys,)*)> for #base {
+        impl #lifetime crate::util::place::InitAt<#n, (#(#arg_tys,)*)> for #base {
             unsafe fn init((#(#arg_pats,)*): (#(#arg_tys,)*)) -> impl ::pin_init::PinInit<
                 <Self as crate::util::place::Field<#n>>::Type,
                 crate::errcode::BchError>
@@ -242,9 +240,7 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
             quote! {
                 #(#cfgs)*
                 #[automatically_derived]
-                // SAFETY: its At field, which its init() takes - given by InitAt's,
-                // from at() or at_index(), for the place the At names
-                unsafe impl crate::util::place::Contained for #name {
+                impl crate::util::place::Contained for #name {
                     type Parent = <#base as crate::util::place::Enclosing>::Visible;
                     type At = #at;
                     unsafe fn placed_at_raw(p: *const Self) -> *const Self::At {
@@ -261,8 +257,7 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
             quote! {
                 #(#cfgs)*
                 #[automatically_derived]
-                // SAFETY: its AtIn field, which only its container's insert() makes
-                unsafe impl crate::util::place::PlacedIn for #name {
+                impl crate::util::place::PlacedIn for #name {
                     type Base = #base;
                 }
                 #init_at
@@ -293,8 +288,7 @@ pub(crate) fn field_impl(cfg: &TokenStream, impl_g: &impl quote::ToTokens, inst_
     quote! {
         #cfg
         #[automatically_derived]
-        // SAFETY: its field, by offset_of!()
-        unsafe impl #impl_g crate::util::place::Field<{ crate::util::place::name(#n) }> for #inst_ty #where_c {
+        impl #impl_g crate::util::place::Field<{ crate::util::place::name(#n) }> for #inst_ty #where_c {
             type Type = #ty;
             const OFFSET: usize = ::core::mem::offset_of!(#inst_ty, #name);
         }
@@ -308,8 +302,10 @@ pub(crate) fn field_init(name: &Ident) -> TokenStream {
     quote! {
         {
             use crate::util::place::{PickPlaced as _, PickZeroed as _};
-            // SAFETY: run into the field, by pin_init!()
-            unsafe { (&crate::util::place::Pick::<Self, { crate::util::place::name(#n) }>::NEW).pick() }
+            // unsafe if it's PickPlaced's pick(): run into the field, by pin_init!()
+            #[allow(unused_unsafe)]
+            let init = unsafe { (&crate::util::place::Pick::<Self, { crate::util::place::name(#n) }>::NEW).pick() };
+            init
         }
     }
 }

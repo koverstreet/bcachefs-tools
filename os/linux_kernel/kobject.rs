@@ -149,11 +149,9 @@ impl<const N: usize> Groups<N> {
 #[derive(Clone, Copy)]
 pub struct GroupList(*const *const c::attribute_group);
 
-/// Where a kobject is, as a type: what it's the kobject of.
-///
-/// # Safety
-/// owner() of a kobject at this place is the Owner it's in.
-pub(crate) unsafe trait KobjPlace {
+/// Where a kobject is, as a type: what it's the kobject of - owner() of a
+/// kobject at this place is the Owner it's in.
+pub(crate) trait KobjPlace {
     type Owner;
 
     /// # Safety
@@ -161,7 +159,7 @@ pub(crate) unsafe trait KobjPlace {
     unsafe fn owner(kobj: *mut Kobject) -> *mut Self::Owner;
 }
 
-unsafe impl<A: Place<Type = Self, Base: Enclosing<Visible = A::Base>>> KobjPlace for Placed<Kobject, A> {
+impl<A: Place<Type = Self, Base: Enclosing<Visible = A::Base>>> KobjPlace for Placed<Kobject, A> {
     type Owner = A::Base;
 
     unsafe fn owner(kobj: *mut Kobject) -> *mut A::Base {
