@@ -38,6 +38,7 @@ use crate::util::closure::Running;
 use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies, time_after_eq, unlikely,
                           WRITE};
 use crate::util::rcu::read_lock;
+use crate::util::refcount::TryRefcount;
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{cast_plain_slice_mut, Head, SelfSized, Unvalidated};
 use crate::util::printbuf::ToText;
@@ -515,6 +516,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
     }
 
     buf_to_free = mem::take(&mut w.data);
+    let in_flight = w.in_flight.take();
     drop(b);
     let _ = w.end();
 
@@ -590,7 +592,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
         fs.do_discards_async();
     }
 
-    unsafe { c::closure_put(&raw const fs.cl as *mut _) };
+    drop(in_flight);
 }
 
 struct Completed {
@@ -1334,10 +1336,8 @@ impl c::journal {
             }
         }
         w.bits.set_write_started(true);
-        unsafe {
-            c::closure_get(&raw const fs.cl as *mut _);
-            crate::util::closure::call(NonNull::from(w), journal_write, Some(&self.wq));
-        }
+        w.in_flight = Some(self.writes_in_flight.tryget().expect("a journal write after the filesystem's exit"));
+        unsafe { crate::util::closure::call(NonNull::from(w), journal_write, Some(&self.wq)) };
     }
 
     pub fn do_writes(&self) {

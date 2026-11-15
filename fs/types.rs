@@ -452,8 +452,6 @@ pub const BCH_LINK_MAX: u32 = c::U32_MAX;
 #[derive(MaybeZeroable, TypeInfo, Init, Late)]
 #[init_args(options: &c::bch_opts)]
 pub struct Fs {
-    pub cl: c::closure,
-
     #[pin]
     #[init(unsafe { Kobject::new::<Fs>() })]
     pub(crate) kobj: Placed<Kobject, crate::at!(Fs.kobj)>,

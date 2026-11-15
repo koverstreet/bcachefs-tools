@@ -14,6 +14,7 @@ use crate::util::alloc::{AlignedBox, AllocError, Flags, KVVec};
 use crate::data_structures::fixed_fifo::FixedFifo;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
+use crate::util::refcount::{AtomicRef, RefGuard};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, Unvalidated};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
@@ -108,6 +109,9 @@ nest! {
     pub struct journal_buf {
         pub io: c::closure,
         pub data: JsetBuf,
+        /* its write's ref on the journal's writes_in_flight */
+        #[init(None)]
+        pub in_flight: Option<RefGuard<AtomicRef<()>>>,
 
         pub key: PaddedKey<{ BKEY_U64S + c::BCH_REPLICAS_MAX as usize }>,
         /*
@@ -544,6 +548,11 @@ nest! {
         pub discard_wq: Late<Workqueue>,
 
         pub flushing_seq: AtomicI64,
+        /* each write's ref, held to the end of write_done() - past waking its
+         * flushers: the filesystem's exit waits them out */
+        #[pin]
+        #[init(AtomicRef::new(()))]
+        pub writes_in_flight: AtomicRef<()>,
         pub oldest_seq_found_ondisk: Volatile<u64>,
 
         /*

@@ -443,8 +443,6 @@ impl Fs {
         #[cfg(kernel)]
         unsafe { c::__module_get(&raw mut kernel::bindings::__this_module) };
 
-        unsafe { c::closure_init(&raw mut (*p).cl, core::ptr::null_mut()) };
-
         allocator_foreground_init(self);
 
         /* must be initialized before we throw any errors */
@@ -871,7 +869,8 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
 
     crate::init::registry::deregister(fs);
 
-    unsafe { c::closure_sync(&raw mut (*p.as_ptr()).cl) };
+    fs.journal.writes_in_flight.stop();
+    fs.journal.writes_in_flight.wait();
 
     for i in 0..fs.nr_devices() as usize {
         // freed outside state_lock: dev_free() drains ref_outer, whose holders
