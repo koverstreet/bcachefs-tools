@@ -680,8 +680,6 @@ pub struct journal_device {
     pub(crate) discard: ReffedWork<discard_work, crate::field!(super.io_ref[WRITE])>,
 }
 
-unsafe impl Send for journal_device {}
-
 /*
  * journal_entry_res - reserve space in every journal entry:
  */

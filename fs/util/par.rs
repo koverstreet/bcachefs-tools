@@ -68,7 +68,6 @@ struct JobHome {
 
 // SAFETY: @ret is the job's to write, then the scope's to read after the
 // join; @join the scope's to set before the start, then the job's done's
-unsafe impl Send for JobHome {}
 unsafe impl Sync for JobHome {}
 
 type Job<'env> = TaskBox<'env, JobHome>;

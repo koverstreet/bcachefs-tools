@@ -165,7 +165,6 @@ pub(crate) struct ReflinkGc {
 
 // SAFETY: the protocol above - shared, the table is only read: genradix
 // lookups are safe from any thread, and refcount is atomic
-unsafe impl Send for ReflinkGc {}
 unsafe impl Sync for ReflinkGc {}
 
 impl ReflinkGc {

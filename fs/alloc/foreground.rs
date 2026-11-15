@@ -274,10 +274,6 @@ impl Deref for OpenBucketRef {
     }
 }
 
-// SAFETY: its fields atomics and Volatiles but its lock, C's spinlock, which
-// is any thread's to take
-unsafe impl Sync for OpenBucketRef {}
-
 // SAFETY: an OpenBucketRef is had only while it's held open - by a pin, or
 // its ->ec - so inc() is from a pin that's held; the last put closes it
 unsafe impl Refcount for OpenBucketRef {
