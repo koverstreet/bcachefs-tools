@@ -44,7 +44,7 @@ impl BkeyBuf {
     /// Holding a deleted key, as bch2_bkey_buf_init() leaves it.
     pub fn new() -> Self {
         let mut b = BkeyBuf { onstack: [0; ONSTACK_U64S], heap: None };
-        b.as_mut().k = c::bkey::new();
+        crate::data::keylist::KeyRoom::new(&mut b.onstack);
         b
     }
 
@@ -106,15 +106,13 @@ impl core::ops::Deref for BkeyBuf {
     type Target = BkeyI;
 
     fn deref(&self) -> &BkeyI {
-        // SAFETY: a key at the start of the buffer, as reassemble() sizes it
-        unsafe { &*BkeyI::from_raw(self.buf().as_ptr().cast()) }
+        crate::data::keylist::keys(self.buf()).next().expect("a key in a key buffer")
     }
 }
 
 impl core::ops::DerefMut for BkeyBuf {
     fn deref_mut(&mut self) -> &mut BkeyI {
-        // SAFETY: as deref()'s
-        unsafe { &mut *BkeyI::from_raw_mut(self.buf_mut().as_mut_ptr().cast()) }
+        crate::data::keylist::key_mut(self.buf_mut())
     }
 }
 
