@@ -293,7 +293,7 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
     // this and the data btrees' direction can't disagree. Only backpointers
     // with bits set pay for the lookup.
     if let Some(bp_v) = bp.filter(|_| w != c::ReconcileWorkId::none) {
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         match backpointer_get_key(t, bp_v, &mut iter, BtreeIterFlags::empty(), last_flushed.borrow())? {
             None => {
                 // No extent: backpointer_get_key() reported the backpointer
@@ -419,7 +419,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
     }
 
     // someone else's: ours, in a slot of our work id's
-    let mut slot = BtreeIter::uninit();
+    let mut slot = BtreeIter::uninit(t.trans());
     t.bkey_get_empty_slot(&mut slot, Btree::reconcile_scan, pos(bp_pos.inode, 1), pos(bp_pos.inode, u64::MAX))?;
     alloc_bp(&slot)?;
     set_bp(slot.pos().offset)
@@ -461,7 +461,7 @@ fn check_reconcile_btree_bps(trans: &TransGuard<'_>) -> Result<(), BchError> {
         fs.recovery.progress.update(t, iter)?;
 
         let Some(bp) = k.arm::<c::Backpointer>() else { return Ok(()) };
-        let mut node_iter = BtreeIter::uninit();
+        let mut node_iter = BtreeIter::uninit(t.trans());
         reconcile_bp_get_key(t, &mut node_iter, bp).map(|_| ())
     })
 }

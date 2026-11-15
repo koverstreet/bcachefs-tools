@@ -526,7 +526,7 @@ fn check_subvol<'a, 't>(
     }
 
     let root = c::subvol_inum { subvol: id, inum: s.v().inode.get() };
-    match inode::peek(t, &mut BtreeIter::uninit(), root, BtreeIterFlags::empty()) {
+    match inode::peek(t, &mut BtreeIter::uninit(t.trans()), root, BtreeIterFlags::empty()) {
         Ok(mut inode) => {
             if fsck_err_on!(t, inode.bi_subvol as u64 != id, id::subvol_root_wrong_bi_subvol,
                             "subvol root {}:{} has wrong bi_subvol field: got {}, should be {id}\n{}\nsnapshot {snapid}: {}\n{}",
@@ -806,7 +806,7 @@ pub fn create(
 ) -> Result<Created, BchError> {
     let fs = t.fs();
 
-    let mut dst_iter = BtreeIter::uninit();
+    let mut dst_iter = BtreeIter::uninit(t.trans());
     match t.bkey_get_empty_slot(&mut dst_iter, Btree::subvolumes, POS_MIN,
                                 pos(0, u32::MAX as u64)) {
         Err(e) if e.matches(Errcode::ENOSPC_btree_slot) =>

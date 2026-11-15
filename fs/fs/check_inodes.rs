@@ -39,7 +39,7 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
     let pos = spos(0, u.bi_inum, u.bi_snapshot);
 
     let mut snapshot = u.bi_snapshot;
-    let mut dirent_iter = BtreeIter::uninit();
+    let mut dirent_iter = BtreeIter::uninit(t.trans());
     let d = namei::inode_get_dirent(t, &mut dirent_iter, u, &mut snapshot).found()?;
     let points = d.is_some_and(|k| namei::dirent_points_to_inode(Dirent::new(k).expect("a dirent"), u));
 
@@ -96,7 +96,7 @@ fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: Xattr
 {
     let hash = str_hash::hash_info_init(t.fs(), u)?;
     let key = xattr::XattrKey { ty, name: OsStr::from_bytes(b"") };
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
 
     Ok(str_hash::lookup_in_snapshot::<Xattrs>(t, &mut iter, &hash,
                                               c::subvol_inum { subvol: 0, inum: u.bi_inum },

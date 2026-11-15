@@ -180,7 +180,7 @@ crate::recovery_pass!(resume_logged_ops => |fs| resume_logged_ops(fs, false));
 /// @k's position is set to. The update is a copy in transaction memory, so
 /// @k needn't outlive the call.
 pub fn start(t: &TransAttempt<'_, '_>, k: &mut BkeyI) -> Result<(), BchError> {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     t.bkey_get_empty_slot(&mut iter, Btree::logged_ops, POS_MIN, pos(INUM, u64::MAX))?;
 
     k.k.p = iter.pos();

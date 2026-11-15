@@ -224,7 +224,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
     let ov = *other_bp.v();
     let other_btree = Btree(ov.btree_id.into());
 
-    let mut other_extent_iter = BtreeIter::uninit();
+    let mut other_extent_iter = BtreeIter::uninit(t.trans());
     let other_extent = match get_key(t, other_bp, &mut other_extent_iter, BtreeIterFlags::empty(), None, false) {
         Err(e) if e.matches(Errcode::backpointer_to_overwritten_btree_node) =>
             return bp_missing(t, extent.into(), bp, other_bp.into()),
@@ -905,7 +905,7 @@ fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<c::bbp
         return Ok(());
     }
 
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     match get_key(t, bp, &mut iter, BtreeIterFlags::empty(), Some(last_flushed), true) {
         Err(e) if e.matches(Errcode::backpointer_to_overwritten_btree_node) => Ok(()),
         r => r.map(|_| ()),

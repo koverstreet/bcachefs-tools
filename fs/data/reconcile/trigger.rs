@@ -232,7 +232,7 @@ fn del_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeyS
 /// of work id @work's: where it went. reconcile_bp_add().
 pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC<'_>,
                     work: u64) -> Result<Bpos, BchError> {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     t.bkey_get_empty_slot(&mut iter, Btree::reconcile_scan, pos(work, 1), pos(work, u64::MAX))?;
 
     let mut bp = t.bkey_alloc_typed::<c::Backpointer>()?;

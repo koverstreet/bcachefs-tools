@@ -159,7 +159,7 @@ impl InodeInfo {
         let trans = crate::btree_trans!(self.fs());
 
         lockrestart_do(&trans, |t| {
-            let mut iter = BtreeIter::uninit();
+            let mut iter = BtreeIter::uninit(t.trans());
             let k = dirent::lookup_key(t, &mut iter, dir, hash, name, BtreeIterFlags::empty())?;
             let inum = dirent::lookup_target(t, dir, k)?;
 

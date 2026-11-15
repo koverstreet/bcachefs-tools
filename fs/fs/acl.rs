@@ -403,7 +403,7 @@ mod vfs {
 
         let trans = crate::btree_trans!(fs);
         let acl = lockrestart_do(&trans, |t| {
-            let mut iter = BtreeIter::uninit();
+            let mut iter = BtreeIter::uninit(t.trans());
             PosixAcl::lookup(t, &mut iter, inode, inum, ty, BtreeIterFlags::empty())
         })?;
 
@@ -459,7 +459,7 @@ mod vfs {
 
             subvolume::is_ro_trans(t, inum.subvol as u32)?;
 
-            let mut inode_iter = BtreeIter::uninit();
+            let mut inode_iter = BtreeIter::uninit(t.trans());
             let mut inode = inode::peek(t, &mut inode_iter, inum, BtreeIterFlags::INTENT)?;
 
             // The mode can say all an access ACL would: then there's none.
@@ -491,7 +491,7 @@ mod vfs {
         mode:  c::umode_t,
     ) -> Result<Option<PosixAcl>, BchError> {
         // None, or one with no entries: nothing to change.
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         let Some(acl) = PosixAcl::lookup(t, &mut iter, inode, inum, AclType::Access,
                                          BtreeIterFlags::INTENT)? else {
             return Ok(None);

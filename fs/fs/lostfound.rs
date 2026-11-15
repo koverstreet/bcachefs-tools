@@ -46,7 +46,7 @@ fn lostfound_dirent(
     snapshot:  u32,
 ) -> Result<Option<u64>, BchError> {
     let fs = t.fs();
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     let Some(k) = str_hash::lookup_in_snapshot::<Dirents>(t, &mut iter, root_hash, root,
                                                            OsStr::from_bytes(LOSTFOUND),
                                                            BtreeIterFlags::empty(), snapshot)
@@ -120,7 +120,7 @@ fn create_lostfound(
     lostfound.bi_snapshot = snapshot;
 
     let is_32bit = inode_opts::get_inode(fs, root_inode).inodes_32bit != 0;
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     inode::create(t, &mut iter, &mut lostfound, snapshot, is_32bit)?;
 
     iter.set_snapshot(snapshot);
@@ -346,7 +346,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
             write!(probe, ".{i}");
         }
 
-        let mut d_iter = BtreeIter::uninit();
+        let mut d_iter = BtreeIter::uninit(t.trans());
         let existing = str_hash::lookup_in_snapshot::<Dirents>(
             t, &mut d_iter, &lostfound_hash,
             c::subvol_inum { subvol: inode.bi_parent_subvol as u64, inum: lostfound.bi_inum },

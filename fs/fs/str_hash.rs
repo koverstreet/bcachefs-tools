@@ -306,7 +306,7 @@ pub fn set_in_snapshot<'t, T: HashTable>(
     set_flags:    SetFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     match set_or_get_in_snapshot::<T>(t, &mut iter, hash_info, inum, snapshot, insert,
                                       set_flags, update_flags)? {
         Some(_) => Err(t.fs().err(Errcode::EEXIST_str_hash_set)),
@@ -359,7 +359,7 @@ pub fn delete<T: HashTable>(
     inum:      c::subvol_inum,
     key:       &T::Key<'_>,
 ) -> Result<(), BchError> {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     lookup::<T>(t, &mut iter, hash_info, inum, key, BtreeIterFlags::INTENT)?;
     delete_at::<T>(t, hash_info, &mut iter, UpdateTriggerFlags::empty())
 }
@@ -657,7 +657,7 @@ impl Repair<'_> {
             new.k_mut().u64s = u8::MAX;
             dirent::init_name(fs, new.key_mut(), self.hash_info, name.as_os_str(), None)?;
 
-            let mut iter = BtreeIter::uninit();
+            let mut iter = BtreeIter::uninit(t.trans());
             match set_or_get_in_snapshot::<Dirents>(t, &mut iter, self.hash_info, dir,
                                                     old.k.p.snapshot, &mut new,
                                                     SetFlags::MUST_CREATE,
@@ -729,7 +729,7 @@ impl Repair<'_> {
         }
 
         let mut new = t.bkey_make_mut_noupdate(k)?;
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         let dir = c::subvol_inum { subvol: 0, inum: k.k.p.inode };
 
         if let Some(dup) = set_or_get_in_snapshot::<T>(t, &mut iter, self.hash_info, dir,

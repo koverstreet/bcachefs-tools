@@ -648,7 +648,7 @@ fn trans_trigger_reflink_p_segment(
     let fs = t.fs();
     let overwrite = flags.contains(UpdateTriggerFlags::OVERWRITE);
     let mut offset_into_extent = idx.wrapping_sub(p.v.idx()) as i64;
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     let k = lookup_indirect_extent(t, &mut iter, &mut offset_into_extent, BkeySC::from(&*p), false,
                                    BtreeIterFlags::INTENT)?;
     *idx = k.k.p.offset;
@@ -982,7 +982,7 @@ pub fn remap_range(
     new_i_size = new_i_size.min(dst_iter.pos().offset << 9);
 
     let ret2 = lockrestart_do(&trans, |t| {
-        let mut inode_iter = BtreeIter::uninit();
+        let mut inode_iter = BtreeIter::uninit(t.trans());
         let mut inode_u = inode::__peek(t, &mut inode_iter, dst_inum, BtreeIterFlags::INTENT,
                                         Some(c"bch2_remap_range"))?;
 

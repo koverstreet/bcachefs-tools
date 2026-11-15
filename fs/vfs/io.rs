@@ -115,7 +115,7 @@ impl InodeInfo {
 
 fn inode_journal_seq(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<u64, BchError> {
     let fs = t.fs();
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     let mut u = inode::__peek(t, &mut iter, inum, BtreeIterFlags::empty(),
                              Some(crate::here!()))?;
 

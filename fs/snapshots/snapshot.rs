@@ -1259,7 +1259,7 @@ pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree,
 pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
     -> Result<TransBkey<'a, 't, c::SnapshotTree>, BchError>
 {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     match t.bkey_get_empty_slot(&mut iter, Btree::snapshot_trees, POS_MIN,
                                 pos(0, u32::MAX as u64)) {
         Err(e) if e.matches(Errcode::ENOSPC_btree_slot) =>

@@ -828,7 +828,7 @@ fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &Dev, bp: BkeySC<'_, c::Backp
                      last_flushed: WbFlush<'_>) -> Result<(), BchError>
 {
     let fs = t.fs();
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     let Some((iter, k)) = backpointer_get_key(t, bp, &mut iter, BtreeIterFlags::empty(), last_flushed)? else {
         return Ok(());
     };

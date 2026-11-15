@@ -284,7 +284,7 @@ impl InodeInfo {
 
         let trans = crate::btree_trans!(fs);
         let ret = lockrestart_do(&trans, |t| {
-            let mut iter = BtreeIter::uninit();
+            let mut iter = BtreeIter::uninit(t.trans());
             let mut bi = inode::__peek(t, &mut iter, self.inum(), BtreeIterFlags::INTENT,
                                        Some(crate::here!()))?;
 

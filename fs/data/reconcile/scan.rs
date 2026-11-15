@@ -404,7 +404,7 @@ fn scan_bp(t: &TransAttempt<'_, '_>, scan: &c::ReconcileScan, bp: BkeySC<'_, c::
 
     let fs = t.fs();
     let level = bp.v().level.into();
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     let Some((iter, k)) = backpointer_get_key(t, bp, &mut iter, BtreeIterFlags::INTENT, last_flushed)? else {
         return Ok(());
     };

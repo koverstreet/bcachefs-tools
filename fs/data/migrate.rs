@@ -299,7 +299,7 @@ impl DevDrop<'_> {
           had_open_stripe: &mut bool, recorded_stripe: &mut u64) -> Result<(), BchError>
     {
         let fs = t.fs();
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         let r = backpointer_get_key(t, bp, &mut iter, BtreeIterFlags::INTENT, last_flushed.reborrow());
         let Some((iter, k)) = unless_overwritten(r)? else { return Ok(()) };
         let Some(k) = k.arm::<Ptrs>().filter(|k| k.has_device(fs, self.dev).is_some()) else {
@@ -309,7 +309,7 @@ impl DevDrop<'_> {
         // For a node pointer, @iter may be at the node or above it: the update
         // needs an iterator holding the node
         if k.k.is_btree_ptr() {
-            let mut iter = BtreeIter::uninit();
+            let mut iter = BtreeIter::uninit(t.trans());
             let Some(b) = unless_overwritten(backpointer_get_node(t, bp, &mut iter, last_flushed))? else {
                 return Ok(());
             };

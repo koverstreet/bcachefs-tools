@@ -304,7 +304,7 @@ impl InodeInfo {
     /// fold_times(), written in @t: for a write of this inode later in @t,
     /// whose peek sees it.
     pub(crate) fn fold_times_trans(&self, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         let mut bi = inode::peek(t, &mut iter, self.inum(), BtreeIterFlags::INTENT)?;
         self.fold_times(&mut bi);
         inode::write(t, &mut iter, &mut bi)
@@ -522,7 +522,7 @@ impl<'i> UpdateLock<'i> {
         let wrote = lockrestart_do(&trans, |t| {
             opt_change = c::inode_opt_change::new();
 
-            let mut iter = BtreeIter::uninit();
+            let mut iter = BtreeIter::uninit(t.trans());
             let mut bi = inode::__peek(t, &mut iter, inode.inum(), BtreeIterFlags::INTENT,
                                        Some(crate::here!()))?;
             let old_r = inode::reconcile_opts_get(fs, &bi);

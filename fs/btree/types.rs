@@ -434,9 +434,9 @@ nest! {
     /// iterator, k - change only through &mut self, iter.rs's methods; through
     /// &self, only key_cache_path, which an update sets up. Hence its Cell.
     #[repr(C)]
-    #[derive(MaybeZeroable, BitfieldMembers)]
+    #[derive(BitfieldMembers)]
     pub struct BtreeIter<'t> {
-        pub(in crate::btree) trans: *mut BtreeTrans<'static>,
+        pub(in crate::btree) trans: &'t BtreeTrans<'t>,
         pub(in crate::btree) path: cs::PathIdx,
         pub(in crate::btree) update_path: cs::PathIdx,
         pub(in crate::btree) key_cache_path: core::cell::Cell<cs::PathIdx>,
@@ -466,9 +466,6 @@ nest! {
         /* C's TRACK_PATH_ALLOCATED: see btree_path */
         #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
         pub(in crate::btree) ip_allocated: c_ulong,
-
-        /* It mustn't outlive the transaction its paths are in */
-        _trans: core::marker::PhantomData<&'t BtreeTrans<'t>>,
     }
 }
 

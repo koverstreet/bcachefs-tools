@@ -67,7 +67,7 @@ fn remove_backpointer(
     }
 
     let mut snapshot = inode.bi_snapshot;
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
 
     // For a subvolume root, a missing parent subvolume reads as ENOENT here, like
     // a missing dirent - what reattach_subvol() is for. Nothing to remove is

@@ -561,7 +561,7 @@ impl BtreeLevels {
         mut f:    F,
     ) -> Result<(), BchError>
     where
-        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, u32, BkeySC<'k, BtreePtrs>)
+        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'a>, u32, BkeySC<'k, BtreePtrs>)
             -> Result<(), BchError>,
     {
         assert!(self.levels.start >= 1, "btree node pointers start at level 1, not {}", self.levels.start);
@@ -580,7 +580,7 @@ impl BtreeLevels {
         f:        F,
     ) -> Result<(), BchError>
     where
-        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, u32, BkeySC<'k>)
+        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'a>, u32, BkeySC<'k>)
             -> Result<(), BchError>,
     {
         self.walk(trans, Some((disk_res, flags.into())), f)
@@ -590,7 +590,7 @@ impl BtreeLevels {
     /// anything: for a body that leaves the transaction unlocked - a move's.
     pub fn for_each<'t, F>(&self, trans: &'t BtreeTrans<'t>, f: F) -> Result<(), BchError>
     where
-        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, u32, BkeySC<'k>)
+        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'a>, u32, BkeySC<'k>)
             -> Result<(), BchError>,
     {
         self.walk(trans, None, f)
@@ -599,14 +599,14 @@ impl BtreeLevels {
     fn walk<'t, F>(&self, trans: &'t BtreeTrans<'t>, commit: Option<(Option<&DiskReservation<'_>>, CommitOpts)>,
                    mut f: F) -> Result<(), BchError>
     where
-        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, u32, BkeySC<'k>)
+        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'a>, u32, BkeySC<'k>)
             -> Result<(), BchError>,
     {
         let iter_flags = BtreeIterFlags::PREFETCH | BtreeIterFlags::NOT_EXTENTS | BtreeIterFlags::ALL_SNAPSHOTS;
 
         for level in self.levels.clone() {
             lockrestart_do(trans, |t| {
-                let mut iter = BtreeIter::uninit();
+                let mut iter = BtreeIter::uninit(t.trans());
                 let Some((iter, k)) = iter.peek_root(t, self.btree, level)? else { return Ok(()) };
                 f(t, iter, level, k)?;
                 commit.map_or(Ok(()), |(disk_res, flags)| t.commit(disk_res, flags))

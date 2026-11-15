@@ -617,7 +617,7 @@ pub fn find_by_inum_in_snapshot(
     snapshot: u32,
     warn:     Option<&CStr>,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     __peek_snapshot(t, &mut iter, inum, snapshot, BtreeIterFlags::empty(), warn)
 }
 
@@ -629,7 +629,7 @@ pub fn find_by_inum_trans(
     inum: c::subvol_inum,
     warn: &CStr,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     __peek(t, &mut iter, inum, BtreeIterFlags::empty(), Some(warn))
 }
 
@@ -638,7 +638,7 @@ pub fn find_by_inum_trans(
 pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum)
     -> Result<c::bch_inode_unpacked, BchError>
 {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     __peek(t, &mut iter, inum, BtreeIterFlags::empty(), None)
 }
 
@@ -1197,7 +1197,7 @@ fn update_has_children(t: &TransAttempt<'_, '_>, mut k: BkeyS<'_, Inodes>, have_
 fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: Bpos, have_child: bool)
     -> Result<(), BchError>
 {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     let Some(k) = snapshot_parent(t, &mut iter, p)? else { return Ok(()) };
 
     if !have_child && has_child_snapshots(t, k.k.p)? {
@@ -1547,7 +1547,7 @@ pub fn or_descendents_is_open(_t: &TransAttempt<'_, '_>, _pos: Bpos) -> Result<b
 fn delete_ancestor_snapshot_inodes(trans: &BtreeTrans<'_>, mut p: Bpos) -> Result<(), BchError> {
     loop {
         let parent = lockrestart_do(trans, |t| {
-            let mut iter = BtreeIter::uninit();
+            let mut iter = BtreeIter::uninit(t.trans());
             Ok(snapshot_parent(t, &mut iter, p)?.map(|k| (k.k.p, is_unlinked(k.flags()))))
         })?;
 

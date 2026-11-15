@@ -273,7 +273,7 @@ impl BtreeIter<'_> {
     /// Its path isn't wanted after this: not preserved, and - if only this
     /// iterator holds it - not needing to stay locked.
     pub fn set_dontneed(&mut self) {
-        let trans = self.trans_c();
+        let trans = self.trans;
         self.set_dontneed_in(&mut trans.paths());
     }
 
@@ -283,7 +283,7 @@ impl BtreeIter<'_> {
     /// bch2_btree_iter_set_pos().
     pub fn set_pos(&mut self, pos: Bpos) {
         if self.update_path != 0 {
-            let trans = self.trans_c();
+            let trans = self.trans;
             self.put_update_path(&mut trans.paths());
         }
         self.set_pos_noput(pos);
@@ -296,7 +296,7 @@ impl BtreeIter<'_> {
 
     fn put_update_path(&mut self, paths: &mut Paths<'_>) {
         if self.update_path != 0 {
-            self.trans_c().path_put(paths, self.update_path, self.intent());
+            self.trans.path_put(paths, self.update_path, self.intent());
         }
         self.update_path = 0;
     }
@@ -437,10 +437,6 @@ fn btree_iter_flags(trans: &BtreeTrans<'_>, btree: Btree, level: u32, mut flags:
 }
 
 impl<'t> BtreeIter<'t> {
-    fn trans_c(&self) -> &'t BtreeTrans<'t> {
-        unsafe { &*self.trans.cast::<BtreeTrans<'t>>() }
-    }
-
     fn trims(&self) -> bool {
         self.iter_flags().contains(BtreeIterFlags::TRIM | BtreeIterFlags::IS_EXTENTS)
     }
@@ -493,7 +489,7 @@ impl<'t> BtreeIter<'t> {
     /* Debug: */
 
     fn verify_now(&self, paths: &mut Paths<'_>) {
-        let trans = self.trans_c();
+        let trans = self.trans;
         let flags = self.iter_flags();
 
         assert_eq!(flags.contains(BtreeIterFlags::CACHED), paths[self.path].cached(),
@@ -532,7 +528,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     fn verify_ret_now(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, k: Peeked) -> Result<(), BchError> {
-        let trans = self.trans_c();
+        let trans = self.trans;
 
         if !self.iter_flags().contains(BtreeIterFlags::FILTER_SNAPSHOTS) {
             return Ok(());
@@ -588,7 +584,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub(super) fn set_dontneed_in(&mut self, paths: &mut Paths<'_>) {
-        let trans = self.trans_c();
+        let trans = self.trans;
 
         if self.path == 0 || trans.restarted().0 != 0 {
             return;
@@ -604,11 +600,11 @@ impl<'t> BtreeIter<'t> {
     /* Btree iterators: */
 
     pub(super) fn traverse_at_pos_in(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>) -> Result<(), BchError> {
-        self.trans_c().path_traverse(t, paths, self.path, self.iter_flags())
+        self.trans.path_traverse(t, paths, self.path, self.iter_flags())
     }
 
     pub(super) fn traverse_in(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>) -> Result<(), BchError> {
-        let trans = self.trans_c();
+        let trans = self.trans;
         let search_key = self.search_key();
 
         trans.verify_not_unlocked_or_in_restart();
@@ -628,7 +624,7 @@ impl<'t> BtreeIter<'t> {
     pub(super) fn peek_node_in(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>)
         -> Result<Option<LockedNode<'_, BtreeNode>>, BchError>
     {
-        let trans = self.trans_c();
+        let trans = self.trans;
 
         ebug_assert!(!paths[self.path].cached());
         self.verify(paths);
@@ -812,7 +808,7 @@ impl<'t> BtreeIter<'t> {
         }
         let kp = self.k.p;
 
-        let trans = self.trans_c();
+        let trans = self.trans;
         let flags = self.iter_flags();
 
         trans.verify_not_unlocked_or_in_restart();
@@ -857,7 +853,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     fn __peek(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, search_key: &mut Bpos, end: Bpos) -> Peeked {
-        let trans = self.trans_c();
+        let trans = self.trans;
         let flags = self.iter_flags();
 
         ebug_assert!(!paths[self.path].cached());
@@ -951,7 +947,7 @@ impl<'t> BtreeIter<'t> {
     fn filter_snapshots(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, search_key: &mut Bpos, end: Bpos)
         -> Result<FilterSnapshots, BchError>
     {
-        let trans = self.trans_c();
+        let trans = self.trans;
         let flags = self.iter_flags();
         let kk = self.k;
 
@@ -1069,7 +1065,7 @@ impl<'t> BtreeIter<'t> {
             return Ok(v);
         }
 
-        let trans = self.trans_c();
+        let trans = self.trans;
         let t = trans.kmalloc_in(self.k.bytes())?.cast::<c::bkey_i>();
 
         let t = unsafe {
@@ -1097,7 +1093,7 @@ impl<'t> BtreeIter<'t> {
 
     /// peek_max()'s search: None past @end.
     fn peek_max_search(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, end: Bpos) -> Peeked {
-        let trans = self.trans_c();
+        let trans = self.trans;
         let flags = self.iter_flags();
         let mut search_key = POS_MIN;
         search_key.assign_fieldwise_fixme_rustc(&self.search_key());
@@ -1159,7 +1155,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub(super) fn peek_max_in(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, end: Bpos) -> Peeked {
-        let trans = self.trans_c();
+        let trans = self.trans;
         let flags = self.iter_flags();
 
         trans.verify_not_unlocked_or_in_restart();
@@ -1198,7 +1194,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     fn __peek_prev(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, mut search_key: Bpos) -> Peeked {
-        let trans = self.trans_c();
+        let trans = self.trans;
         let flags = self.iter_flags();
 
         self.verify(paths);
@@ -1450,7 +1446,7 @@ impl<'t> BtreeIter<'t> {
             }
         }
 
-        let trans = self.trans_c();
+        let trans = self.trans;
 
         trans.verify_not_unlocked_or_in_restart();
         self.verify_entry_exit();
@@ -1481,7 +1477,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     fn __peek_slot(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, end: Bpos, ip: c_ulong) -> Peeked {
-        let trans = self.trans_c();
+        let trans = self.trans;
         let flags = self.iter_flags();
         let mut k: Peeked;
 
@@ -1670,7 +1666,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     /// The key, the root node's, held by the iterator's path.
-    pub(super) fn peek_root_in(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, btree: Btree,
+    pub(super) fn peek_root_in(&mut self, t: &TransAttempt<'t, '_>, paths: &mut Paths<'_>, btree: Btree,
                                level: u32) -> Result<Option<NonNull<BkeyI>>, BchError> {
         let trans = t.trans();
         let fs = trans.fs();
@@ -1702,7 +1698,7 @@ impl<'t> BtreeIter<'t> {
 
     pub(super) fn exit_in(&mut self, paths: &mut Paths<'_>) {
         if self.holds_paths() {
-            let trans = self.trans_c();
+            let trans = self.trans;
             let intent = self.intent();
 
             if self.update_path != 0 {
@@ -1718,15 +1714,13 @@ impl<'t> BtreeIter<'t> {
         self.path = 0;
         self.update_path = 0;
         self.key_cache_path.set(0);
-        self.trans = ptr::null_mut();
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn init_common(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
+    fn init_common(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
                    locks_want: u32, depth: u32, flags: BtreeIterFlags, ip: c_ulong) -> Self {
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(trans);
 
-        iter.trans = ptr::from_ref(trans).cast_mut().cast();
         iter.set_btree(btree);
         iter.flags = flags.bits();
         iter.snapshot = pos.snapshot;
@@ -1740,13 +1734,13 @@ impl<'t> BtreeIter<'t> {
         iter
     }
 
-    pub(super) fn init_in(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
+    pub(super) fn init_in(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
                           flags: BtreeIterFlags, ip: c_ulong) -> Self {
         Self::init_common(trans, paths, btree, pos, 0, 0, btree_iter_flags(trans, btree, 0, flags), ip)
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn init_ll_in(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
+    fn init_ll_in(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
                   locks_want: u32, depth: u32, flags: BtreeIterFlags, ip: c_ulong) -> Self {
         let mut iter = Self::init_common(trans, paths, btree, pos, locks_want, depth,
                                          btree_iter_flags(trans, btree, depth, flags), ip);
@@ -1763,7 +1757,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn node_iter_init_in(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
+    fn node_iter_init_in(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
                          locks_want: u32, depth: u32, mut flags: BtreeIterFlags, ip: c_ulong) -> Self {
         flags |= BtreeIterFlags::NOT_EXTENTS;
         flags |= BtreeIterFlags::SNAPSHOT_FIELD;
@@ -1960,16 +1954,29 @@ pub fn peek_parallel<'k, 't, const N: usize>(
 }
 
 impl<'t> BtreeIter<'t> {
-    pub fn uninit() -> BtreeIter<'t> {
-        // all zeroes is an iterator with no paths - whose exit, its drop, puts
-        // none
-        ::pin_init::zeroed()
+    /// An iterator with no paths - whose exit, its drop, puts none.
+    pub fn uninit(trans: &'t BtreeTrans<'t>) -> BtreeIter<'t> {
+        BtreeIter {
+            trans,
+            path:           0,
+            update_path:    0,
+            key_cache_path: Default::default(),
+            bits:           ::pin_init::zeroed(),
+            min_depth:      0,
+            flags:          0,
+            snapshot:       0,
+            pos:            Default::default(),
+            k:              c::bkey::new(),
+            journal_idx:    0,
+            #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
+            ip_allocated:   0,
+        }
     }
 
     /// The key pointing to @btree's root - none unless the root's just below
     /// @level - with this iterator initialized at it, and given back shared
     /// with the key: bch2_btree_iter_peek_root(), for BtreeLevels.
-    pub(super) fn peek_root<'i>(&'i mut self, t: &TransAttempt<'_, 't>, btree: Btree, level: u32)
+    pub(super) fn peek_root<'i>(&'i mut self, t: &TransAttempt<'t, '_>, btree: Btree, level: u32)
         -> Result<Option<(&'i BtreeIter<'t>, BkeySC<'i>)>, BchError>
     {
         let k = self.peek_root_in(t, &mut t.trans().paths(), btree, level)?;
@@ -2077,7 +2084,7 @@ impl<'t> BtreeIter<'t> {
 
     /// A second iterator at the same position, sharing this one's paths.
     pub fn copy(&self) -> BtreeIter<'t> {
-        let trans = self.trans_c();
+        let trans = self.trans;
         self.copy_in(&mut trans.paths())
     }
 
@@ -2247,14 +2254,14 @@ impl<'t> BtreeIter<'t> {
 
     /// Step past the key just returned: false at the end of the btree.
     pub fn advance(&mut self) -> bool {
-        let trans = self.trans_c();
+        let trans = self.trans;
         self.advance_in(&mut trans.paths())
     }
 
     /// Step back past the key just returned, for walking backwards: false at
     /// the start of the btree.
     pub fn rewind(&mut self) -> bool {
-        let trans = self.trans_c();
+        let trans = self.trans;
         self.rewind_in(&mut trans.paths())
     }
 
@@ -2267,7 +2274,7 @@ impl<'t> BtreeIter<'t> {
         -> Result<R, BchError>
     {
         let trans = t.trans();
-        ebug_assert!(ptr::eq(self.trans_c(), trans), "an iterator of another transaction");
+        ebug_assert!(ptr::eq(self.trans, trans), "an iterator of another transaction");
         assert!(trans.paths()[self.path].intent_locked(0),
                 "cycling the key cache lock at {} without its leaf intent locked", self.pos);
 
@@ -2291,7 +2298,7 @@ impl<'t> BtreeIter<'t> {
 impl<'t> Drop for BtreeIter<'t> {
     fn drop(&mut self) {
         if self.holds_paths() {
-            let trans = self.trans_c();
+            let trans = self.trans;
             self.exit_in(&mut trans.paths());
         }
     }
@@ -2317,7 +2324,7 @@ impl<'t> BtreeNodeIter<'t> {
     }
 
     pub fn peek(&mut self, t: &TransAttempt<'_, 't>) -> Result<Option<LockedNode<'_, BtreeNode>>, BchError> {
-        let trans = self.raw.trans_c();
+        let trans = self.raw.trans;
         self.raw.peek_node_in(t, &mut trans.paths())
     }
 
@@ -2360,7 +2367,7 @@ impl<'t> BtreeNodeIter<'t> {
         end: Bpos,
         flags: BtreeIterFlags,
     ) -> Result<Option<BkeySC<'i>>, BchError> {
-        let trans = self.raw.trans_c();
+        let trans = self.raw.trans;
         let k = self.raw.peek_max_type_in(t, &mut trans.paths(), end, flags)?;
         Ok(self.raw.key_of(k))
     }

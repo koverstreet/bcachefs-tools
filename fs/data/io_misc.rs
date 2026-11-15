@@ -228,7 +228,7 @@ impl BkeyOps for c::LoggedOpTruncate {
 fn truncate_set_isize(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, new_i_size: u64, warn: bool)
     -> Result<(), BchError>
 {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     let mut inode_u = inode::__peek(t, &mut iter, inum, BtreeIterFlags::INTENT,
                                     warn.then_some(c"truncate_set_isize"))?;
 
@@ -308,7 +308,7 @@ fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, offset: u64, le
     let offset = offset << 9;
     let len    = len << 9;
 
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     let mut inode_u = inode::__peek(t, &mut iter, inum, BtreeIterFlags::INTENT,
                                     warn.then_some(c"adjust_i_size"))?;
 

@@ -465,7 +465,7 @@ fn fuse_setattr(
         CommitFlags::NO_ENOSPC,
         |t| {
             let now = fs.current_time();
-            let mut iter = btree::iter::BtreeIter::uninit();
+            let mut iter = btree::iter::BtreeIter::uninit(t.trans());
             let mut inode_u =
                 inode::peek(t, &mut iter, inum, btree::iter::BtreeIterFlags::INTENT)?;
 
@@ -561,7 +561,7 @@ fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: c::subvol_inum, bi: &c::bch_
         CommitFlags::NO_ENOSPC,
         |t| {
             let now = fs.current_time();
-            let mut iter = btree::iter::BtreeIter::uninit();
+            let mut iter = btree::iter::BtreeIter::uninit(t.trans());
             let mut inode_u =
                 inode::peek(t, &mut iter, inum, btree::iter::BtreeIterFlags::INTENT)?;
             if !opts.needs_update(fs, &inode_u, now) {
@@ -583,7 +583,7 @@ fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), Bc
         CommitFlags::NO_ENOSPC,
         |t| {
             let now = fs.current_time();
-            let mut iter = btree::iter::BtreeIter::uninit();
+            let mut iter = btree::iter::BtreeIter::uninit(t.trans());
             let mut inode_u =
                 inode::peek(t, &mut iter, inum, btree::iter::BtreeIterFlags::INTENT)?;
             inode_u.bi_mtime = now;
@@ -1679,7 +1679,7 @@ impl Filesystem for BcachefsFs {
         let trans = bcachefs_kernel::btree_trans!(self.fs());
         let value = lockrestart_do(&trans, |t| {
             let inode_u = inode::find_by_inum_trans(t, inum, bcachefs_kernel::here!())?;
-            let mut iter = BtreeIter::uninit();
+            let mut iter = BtreeIter::uninit(t.trans());
             let k = xattr::lookup(t, &mut iter, &inode_u, inum, ty, name, BtreeIterFlags::empty())?;
             Ok(xattr::value(k).to_vec())
         });

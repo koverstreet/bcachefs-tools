@@ -458,7 +458,7 @@ pub fn lookup(
     let trans = crate::btree_trans!(fs);
 
     lockrestart_do(&trans, |t| {
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         lookup_trans(t, &mut iter, dir, hash_info, name, BtreeIterFlags::empty())
     })
 }
@@ -655,8 +655,8 @@ pub fn rename(
     use c::RenameMode::*;
 
     let mut r = Renamed::default();
-    let mut src_iter = BtreeIter::uninit();
-    let mut dst_iter = BtreeIter::uninit();
+    let mut src_iter = BtreeIter::uninit(t.trans());
+    let mut dst_iter = BtreeIter::uninit(t.trans());
 
     let src_lookup = maybe_casefold(t, src_hash, src_name)?;
     let old_src = {

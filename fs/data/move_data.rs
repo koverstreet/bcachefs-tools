@@ -325,7 +325,7 @@ impl PhysWalker<'_, '_> {
 
         moving.stats().at.offset.set(bp.k.p.offset >> fs.sb.extent_bp_shift.get());
 
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         let Some((iter, k)) = backpointer_get_key(t, BkeySC::from(bp), &mut iter, BtreeIterFlags::empty(),
                                                   self.last_flushed.borrow())? else { return Ok(()) };
 

@@ -634,7 +634,7 @@ fn extent_of<'a>(t: &TransAttempt<'a, '_>, read_pos: Bpos, k: BkeySC<'_>) -> Res
 
     let (k, btree) = match k.arm::<c::ReflinkP>() {
         Some(p) => {
-            let mut it2 = BtreeIter::uninit();
+            let mut it2 = BtreeIter::uninit(t.trans());
             let ik = lookup_indirect_extent(t, &mut it2, &mut offset, p, true, BtreeIterFlags::empty())?;
             if ik.k.key_type().is_deleted() {
                 return Err(t.fs().err(err::missing_indirect_extent));

@@ -590,7 +590,7 @@ impl<'a, 'f> Walker<'a, 'f> {
             return Ok(());
         }
 
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         let Some((_, k)) = backpointer_get_key(t, BkeySC::from(&bp), &mut iter, stripe_intent(bp.v.target().btree),
                                                self.last_flushed.borrow())? else { return Ok(()) };
         let copy = BkeyBuf::from_key(k);
@@ -610,7 +610,7 @@ impl<'a, 'f> Walker<'a, 'f> {
         -> Result<(), BchError>
     {
         let fs = t.fs();
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         let Some(copy) = reconcile_bp_get_key(t, &mut iter, BkeySC::from(bp))? else { return Ok(()) };
         let k = BkeySC::from(&copy);
 

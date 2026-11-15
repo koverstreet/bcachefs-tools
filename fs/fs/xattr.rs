@@ -244,7 +244,7 @@ pub fn get_trans(
     name:   &OsStr,
     buffer: Option<&mut [u8]>,
 ) -> Result<usize, BchError> {
-    let mut iter = BtreeIter::uninit();
+    let mut iter = BtreeIter::uninit(t.trans());
     let k = lookup(t, &mut iter, inode, inum, ty, name, BtreeIterFlags::empty())?;
     copy_out(buffer, value(k))
 }
@@ -315,7 +315,7 @@ pub fn set_trans(
 
     subvolume::is_ro_trans(t, inum.subvol as u32)?;
 
-    let mut inode_iter = BtreeIter::uninit();
+    let mut inode_iter = BtreeIter::uninit(t.trans());
     *inode = inode::peek(t, &mut inode_iter, inum, BtreeIterFlags::INTENT)?;
 
     // Besides the ctime update, extents, dirents and xattrs updates require

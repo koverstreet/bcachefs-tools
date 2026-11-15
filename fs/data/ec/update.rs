@@ -86,7 +86,7 @@ where
             }
 
             last_flushed.inc();
-            let mut iter = BtreeIter::uninit();
+            let mut iter = BtreeIter::uninit(t.trans());
             let k = backpointer_get_key(t, bp, &mut iter, BtreeIterFlags::INTENT, last_flushed.borrow())?;
             f(t, bp, k)
         })

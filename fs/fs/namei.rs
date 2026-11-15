@@ -122,8 +122,8 @@ pub fn create_trans(
     mut flags:        u32,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut dir_iter = BtreeIter::uninit();
-    let mut inode_iter = BtreeIter::uninit();
+    let mut dir_iter = BtreeIter::uninit(t.trans());
+    let mut inode_iter = BtreeIter::uninit(t.trans());
     let now = fs.current_time();
     let mut dir_type = mode_to_type(mode);
 
@@ -274,8 +274,8 @@ pub fn link_trans(
     name:    &OsStr,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut dir_iter = BtreeIter::uninit();
-    let mut inode_iter = BtreeIter::uninit();
+    let mut dir_iter = BtreeIter::uninit(t.trans());
+    let mut inode_iter = BtreeIter::uninit(t.trans());
     let now = fs.current_time();
     let mut dir_offset = 0;
 
@@ -348,9 +348,9 @@ pub fn unlink_trans(
     deleting_subvol: bool,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut dir_iter = BtreeIter::uninit();
-    let mut dirent_iter = BtreeIter::uninit();
-    let mut inode_iter = BtreeIter::uninit();
+    let mut dir_iter = BtreeIter::uninit(t.trans());
+    let mut dirent_iter = BtreeIter::uninit(t.trans());
+    let mut inode_iter = BtreeIter::uninit(t.trans());
     let now = fs.current_time();
 
     let snapshot = if !deleting_subvol {
@@ -458,10 +458,10 @@ pub fn rename_trans(
     use c::RenameMode::*;
 
     let fs = t.fs();
-    let mut src_dir_iter = BtreeIter::uninit();
-    let mut dst_dir_iter = BtreeIter::uninit();
-    let mut src_inode_iter = BtreeIter::uninit();
-    let mut dst_inode_iter = BtreeIter::uninit();
+    let mut src_dir_iter = BtreeIter::uninit(t.trans());
+    let mut dst_dir_iter = BtreeIter::uninit(t.trans());
+    let mut src_inode_iter = BtreeIter::uninit(t.trans());
+    let mut dst_inode_iter = BtreeIter::uninit(t.trans());
     let now = fs.current_time();
     let same_dir = subvol_inum_eq(dst_dir, src_dir);
 
@@ -761,7 +761,7 @@ fn inum_to_path_up(
             break;
         }
 
-        let mut d_iter = BtreeIter::uninit();
+        let mut d_iter = BtreeIter::uninit(t.trans());
         match inode_get_dirent(t, &mut d_iter, &inode, &mut snapshot) {
             Ok(d)  => path.push(Dirent::new(d).expect("a dirent").name())?,
             Err(e) => { ret = Err(e); break; }
@@ -1118,7 +1118,7 @@ fn propagate_has_case_insensitive(t: &TransAttempt<'_, '_>, mut inum: c::subvol_
     -> Result<(), BchError>
 {
     loop {
-        let mut iter = BtreeIter::uninit();
+        let mut iter = BtreeIter::uninit(t.trans());
         let mut inode = inode::peek(t, &mut iter, inum, BtreeIterFlags::empty())?;
 
         if inode.flag(c::InodeFlags::has_case_insensitive) {

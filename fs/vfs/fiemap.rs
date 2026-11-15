@@ -166,7 +166,7 @@ fn next_mapping(t: &TransAttempt<'_, '_>, inode: &InodeInfo, start: u64, end: u6
 
     let (start, sectors) = (k.k.start_offset(), k.k.size);
     let mut offset_into_extent = 0;
-    let mut indirect_iter = BtreeIter::uninit();
+    let mut indirect_iter = BtreeIter::uninit(t.trans());
     let indirect = lookup_indirect_extent(t, &mut indirect_iter, &mut offset_into_extent, p, true,
                                           BtreeIterFlags::empty())?;
     if indirect.k.key_type().is_deleted() {
