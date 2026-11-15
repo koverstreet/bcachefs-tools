@@ -5,7 +5,7 @@
 //! about other btrees (has_child_snapshot, has_inode_opts, the ACL flags) are
 //! right. Repairs edit an unpacked copy, written once at the end.
 
-use crate::acl::AclType;
+use crate::os::posix_acl::AclType;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{

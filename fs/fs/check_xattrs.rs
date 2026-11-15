@@ -15,7 +15,7 @@
 //! the repair commits the walker refetches (see InodeWalker).
 
 use crate::btree::bkey::prelude::*;
-use crate::acl::AclType;
+use crate::os::posix_acl::AclType;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;

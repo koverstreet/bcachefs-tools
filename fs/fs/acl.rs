@@ -15,6 +15,7 @@ use core::mem::size_of;
 
 use crate::c::{self, AclEntry, BCH_ACL_VERSION};
 use crate::init::error::id;
+use crate::os::posix_acl::AclType;
 use crate::sb::errors::SbErrorId;
 use crate::util::vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError};
 use crate::util::Printbuf;
@@ -126,18 +127,7 @@ pub fn to_text(out: &mut Printbuf, value: &[u8]) {
     }
 }
 
-/// Which of an inode's ACLs: its access ACL, or a directory's default ACL,
-/// which what's made in it inherits. The values are the VFS's ACL_TYPE_*.
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum AclType {
-    Access  = 0x8000,
-    Default = 0x4000,
-}
-
 impl AclType {
-    pub const ALL: [Self; 2] = [Self::Access, Self::Default];
-
     pub fn xattr_type(self) -> XattrType {
         match self {
             Self::Access  => XattrType::POSIX_ACL_ACCESS,
@@ -179,7 +169,6 @@ pub use vfs::*;
 #[cfg(kernel)]
 mod vfs {
     use super::*;
-    use core::ffi::c_int;
     use core::mem::ManuallyDrop;
     use core::ptr::NonNull;
     use crate::bch_err;
@@ -198,17 +187,6 @@ mod vfs {
     use crate::vfs::inode::InodeInfo;
     use crate::vfs::vfs_inode::VfsInode;
     use crate::xattr::{self, Xattrs};
-
-    impl AclType {
-        /// Anything else is a bug.
-        pub(crate) fn from_vfs(type_: c_int) -> Self {
-            match type_ {
-                t if t == Self::Access as c_int  => Self::Access,
-                t if t == Self::Default as c_int => Self::Default,
-                _ => panic!("acl type {type_}"),
-            }
-        }
-    }
 
     impl PosixAcl {
         /// An ACL of @nr entries, to be filled in: unlocking @t to allocate

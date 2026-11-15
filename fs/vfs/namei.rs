@@ -12,8 +12,7 @@
 use core::ffi::{c_int, c_uint, c_void, CStr};
 use core::ptr::{self, null};
 
-use crate::acl::AclType;
-use crate::os::posix_acl::PosixAcl;
+use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::init::passes::RecoveryPass;
 use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,

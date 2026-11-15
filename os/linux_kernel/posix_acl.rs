@@ -2,10 +2,26 @@
 
 //! The kernel's struct posix_acl.
 
+use core::ffi::c_int;
 use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
 
 use crate::c;
+
+#[path = "../posix_acl.rs"]
+mod common;
+pub use common::*;
+
+impl AclType {
+    /// Anything else is a bug.
+    pub(crate) fn from_vfs(type_: c_int) -> Self {
+        match type_ {
+            t if t == Self::Access as c_int  => Self::Access,
+            t if t == Self::Default as c_int => Self::Default,
+            _ => panic!("acl type {type_}"),
+        }
+    }
+}
 
 /// A struct posix_acl we hold a reference on, released when dropped. One
 /// the caller holds is borrowed - borrow_raw() - and one handed to C, to

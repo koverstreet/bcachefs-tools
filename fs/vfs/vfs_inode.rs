@@ -19,8 +19,7 @@ use crate::util::ffi::Opaque;
 use {
     core::ffi::{c_int, c_long},
     core::ptr::{read_volatile, write_volatile, NonNull},
-    crate::acl::AclType,
-    crate::os::posix_acl::PosixAcl,
+    crate::os::posix_acl::{AclType, PosixAcl},
     crate::errcode::{ret_to_result_void, BchError},
     crate::os::kernel::loff,
     kernel::sync::aref::{ARef, AlwaysRefCounted},

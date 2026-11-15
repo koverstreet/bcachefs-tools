@@ -23,7 +23,8 @@
 
 use core::ffi::c_int;
 
-use crate::acl::{self, AclType};
+use crate::acl;
+use crate::os::posix_acl::AclType;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::errcode::{Errcode, ret_to_c, ret_to_result_void, BchError};

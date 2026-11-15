@@ -13,8 +13,8 @@
 use core::ffi::{c_uint, CStr};
 use core::mem::ManuallyDrop;
 
-use crate::acl::{self, AclType};
-use crate::os::posix_acl::PosixAcl;
+use crate::acl;
+use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::ffi::{c_char, opt_bytes_mut};

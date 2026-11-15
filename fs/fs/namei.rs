@@ -206,7 +206,8 @@ pub fn create_trans(
     if flags & c::BCH_CREATE_SNAPSHOT == 0 {
         #[cfg(kernel)]
         {
-            use crate::acl::{set_acl_trans, AclType};
+            use crate::acl::set_acl_trans;
+            use crate::os::posix_acl::AclType;
 
             // In the new subvolume, if one was made:
             let new_inum = c::subvol_inum {
