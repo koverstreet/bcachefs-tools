@@ -501,7 +501,7 @@ fn write_sanitized_ranges(
         let len = (r.end - r.start) as usize;
         assert!(len <= bucket_bytes as usize);
 
-        qcow2::pread_exact(img.infd(), &mut buf[..len], r.start)?;
+        crate::util::read_exact_at(img.infd(), &mut buf[..len], r.start)?;
         sanitize_fn(fs, &mut buf[..len], opts)
             .with_context(|| format!("sanitizing the {len} bytes at device offset {:#x}; \
                                       not written unsanitized - dump failed", r.start))?;

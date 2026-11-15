@@ -11,6 +11,7 @@ use bcachefs_kernel::c::{
     DegradedAction,
     BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
 };
+use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::path_to_cstr;
@@ -299,7 +300,7 @@ impl MemberState {
 fn device_size(dev: &str) -> Result<u64> {
     let f = std::fs::File::open(dev)
         .with_context(|| format!("opening {}", dev))?;
-    crate::util::file_size(&f)
+    blkdev::size(std::os::fd::AsFd::as_fd(&f))
         .with_context(|| format!("getting size of {}", dev))
 }
 

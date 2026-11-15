@@ -2,12 +2,10 @@ use std::ffi::CString;
 use std::fs::File;
 use std::io;
 use std::os::fd::{BorrowedFd, OwnedFd};
-use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 use crossterm::{cursor, execute, terminal};
-use rustix::ioctl::{self, Getter};
 
 pub use bcachefs_kernel::util::vstructs::assume_init_mut;
 
@@ -182,20 +180,6 @@ pub fn fmt_num_human(n: u64) -> String {
         val /= 1000.0;
     }
     format!("{}", n)
-}
-
-/// Get the size of a file or block device in bytes.
-pub fn file_size(f: &File) -> Result<u64> {
-    let meta = f.metadata()?;
-    if meta.file_type().is_block_device() {
-        // _IOR(0x12, 114, size_t): the size encoded in the number is
-        // sizeof(size_t), not of the u64 we read into - they differ on 32
-        // bit.
-        const BLKGETSIZE64: ioctl::Opcode = bcachefs_kernel::util::ioctl::_IOR::<usize>(0x12, 114) as ioctl::Opcode;
-        Ok(unsafe { ioctl::ioctl(f, Getter::<BLKGETSIZE64, u64>::new()) }?)
-    } else {
-        Ok(meta.len())
-    }
 }
 
 /// Parse a comma-separated flag list against a table of names.

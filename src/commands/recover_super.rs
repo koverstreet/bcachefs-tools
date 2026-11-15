@@ -3,12 +3,13 @@ use std::os::unix::fs::FileExt;
 use std::os::fd::AsFd;
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::ValidateFlags;
+use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::c;
 use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::sb::SbFieldType;
 use clap::Parser;
 
-use crate::util::{file_size, parse_human_size};
+use crate::util::parse_human_size;
 use bcachefs_kernel::sb::io::{read_super, SbBuf, BCACHE_MAGIC, BCHFS_MAGIC};
 use bcachefs_kernel::util::vstructs::Unvalidated;
 use bcachefs_kernel::sb::members::sb_member;
@@ -237,7 +238,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
 
     let dev_size = match &cli.dev_size {
         Some(s) => parse_human_size(s)?,
-        None => file_size(&dev_file)?,
+        None => blkdev::size(dev_file.as_fd())?,
     };
 
     let mut sb_buf = if let Some(ref src) = cli.src_device {
