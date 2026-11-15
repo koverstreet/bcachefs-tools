@@ -438,7 +438,7 @@ fn copy_data(
 
     while pos < end {
         let len = std::cmp::min(end - pos, MAX_IO_SIZE as u64) as usize;
-        let padded = ((len as u64).div_ceil(block_size) * block_size) as usize;
+        let padded = (len as u64).next_multiple_of(block_size) as usize;
 
         let mut buf = io_buf(padded, Flags::empty())?;
         let buf = pread_zero_tail(src_fd, &mut buf, len, pos)?;
@@ -522,7 +522,7 @@ fn copy_link(
     let target_bytes = target.as_bytes();
     let link_len = target_bytes.len() as u64;
 
-    let padded = (link_len.div_ceil(block_size) * block_size) as usize;
+    let padded = link_len.next_multiple_of(block_size) as usize;
     let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(padded, Flags::empty())?;
     buf[..target_bytes.len()].copy_from_slice(target_bytes);
 
@@ -556,7 +556,7 @@ fn link_file_data(
 
         s.total_input += extent.fe_length;
 
-        let src_max = src_size.div_ceil(block_size) * block_size;
+        let src_max = src_size.next_multiple_of(block_size);
         let length = std::cmp::min(extent.fe_length, src_max - extent.fe_logical);
         let visible_len = std::cmp::min(src_size - extent.fe_logical, length);
 
@@ -648,7 +648,7 @@ struct Range {
 fn align_range(r: Range, bs: u64) -> Range {
     Range {
         start: r.start / bs * bs,
-        end: r.end.div_ceil(bs) * bs,
+        end: r.end.next_multiple_of(bs),
     }
 }
 

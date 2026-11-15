@@ -66,7 +66,7 @@ fn cmd_unpoison(cli: Cli) -> anyhow::Result<()> {
     let mut len = cli.len;
     if len == 0 {
         let meta = std::fs::metadata(&cli.file)?;
-        len = (meta.len() + SECTOR_SIZE - 1) & !(SECTOR_SIZE - 1);
+        len = meta.len().next_multiple_of(SECTOR_SIZE);
     }
 
     if (cli.offset | len) & (SECTOR_SIZE - 1) != 0 {

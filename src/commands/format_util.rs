@@ -614,7 +614,7 @@ pub fn bch2_super_write(fd: BorrowedFd<'_>, sb: &mut c::bch_sb) {
             // write them together.
             let layout_offset = (c::BCH_SB_LAYOUT_SECTOR as usize) << 9;
             let sb_offset = (offset_sectors as usize) << 9;
-            let write_len = round_up(sb_offset + sb_bytes, bs);
+            let write_len = (sb_offset + sb_bytes).next_multiple_of(bs);
             let mut buf = vec![0u8; write_len];
 
             buf[layout_offset..layout_offset + layout_src.len()].copy_from_slice(layout_src);
@@ -634,7 +634,7 @@ pub fn bch2_super_write(fd: BorrowedFd<'_>, sb: &mut c::bch_sb) {
                 pwrite_exact(fd, &buf, 4096 - bs as u64);
             }
 
-            let write_len = round_up(sb_bytes, bs);
+            let write_len = sb_bytes.next_multiple_of(bs);
             let mut buf = vec![0u8; write_len];
             buf[..sb_bytes].copy_from_slice(sb_src);
 
@@ -645,10 +645,6 @@ pub fn bch2_super_write(fd: BorrowedFd<'_>, sb: &mut c::bch_sb) {
     if let Err(e) = rustix::fs::fsync(fd) {
         die(&format!("fsync failed writing superblock: {}", e));
     }
-}
-
-fn round_up(val: usize, align: usize) -> usize {
-    (val + align - 1) & !(align - 1)
 }
 
 /// Write exactly `buf.len()` bytes at `offset`. Exits on error.
@@ -685,7 +681,7 @@ pub fn sb_layout_init(
     for i in 0..l.nr_superblocks as usize {
         if sb_pos != c::BCH_SB_SECTOR as u64 {
             let align = (block_size >> 9) as u64;
-            sb_pos = sb_pos.div_ceil(align) * align;
+            sb_pos = sb_pos.next_multiple_of(align);
         }
 
         l.sb_offset[i] = sb_pos.into();

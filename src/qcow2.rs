@@ -23,7 +23,7 @@ pub fn range_add(ranges: &mut Ranges, offset: u64, size: u64) {
 fn ranges_roundup(ranges: &mut Ranges, block_size: u64) {
     for r in ranges.iter_mut() {
         r.start = r.start / block_size * block_size;
-        r.end = round_up(r.end, block_size);
+        r.end = r.end.next_multiple_of(block_size);
     }
 }
 
@@ -123,7 +123,7 @@ impl<'fd> Qcow2Image<'fd> {
             l1_table:   vec![0u64; l1_size],
             l1_index:   None,
             l2_table:   vec![0u64; l2_size as usize],
-            offset:     round_up(QCOW2_HDR_BYTES as u64, block_size as u64),
+            offset:     (QCOW2_HDR_BYTES as u64).next_multiple_of(block_size as u64),
         })
     }
 
@@ -214,7 +214,7 @@ impl<'fd> Qcow2Image<'fd> {
         let l1_bytes: Vec<u8> = self.l1_table.iter()
             .flat_map(|v| v.to_be_bytes())
             .collect();
-        self.offset += round_up(l1_bytes.len() as u64, self.block_size as u64);
+        self.offset += (l1_bytes.len() as u64).next_multiple_of(self.block_size as u64);
         write_all_at(self.outfd, &l1_bytes, l1_offset)?;
 
         // Write header
@@ -286,8 +286,3 @@ pub fn qcow2_to_raw(infd: BorrowedFd<'_>, outfd: BorrowedFd<'_>) -> Result<()> {
 
     Ok(())
 }
-
-fn round_up(v: u64, align: u64) -> u64 {
-    v.div_ceil(align) * align
-}
-

@@ -1180,7 +1180,7 @@ impl Filesystem for BcachefsFs {
 
         let size = bi.bi_size as usize;
         let block_size = fs.block_bytes() as usize;
-        let aligned_size = (size + block_size - 1) & !(block_size - 1);
+        let aligned_size = size.next_multiple_of(block_size);
 
         let Ok(mut buf) = io_buf(aligned_size, Flags::empty()) else {
             reply.error(Errno::ENOMEM);
@@ -1280,7 +1280,7 @@ impl Filesystem for BcachefsFs {
         // the block size is an extent past the end of the inode, which fsck
         // deletes. readlink stops at i_size.
         let block_size = fs.block_bytes();
-        let padded = (link_bytes.len() as u64).div_ceil(block_size) * block_size;
+        let padded = (link_bytes.len() as u64).next_multiple_of(block_size);
 
         let Ok(mut buf) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(padded as usize, Flags::empty()) else {
             reply.error(Errno::ENOMEM);
@@ -1483,7 +1483,7 @@ impl Filesystem for BcachefsFs {
         let block_size = fs.block_bytes();
         let aligned_start = offset & !(block_size - 1);
         let pad_start = (offset - aligned_start) as usize;
-        let aligned_end = (offset + read_size as u64).div_ceil(block_size) * block_size;
+        let aligned_end = (offset + read_size as u64).next_multiple_of(block_size);
         let aligned_size = (aligned_end - aligned_start) as usize;
 
         let Ok(mut buf) = io_buf(aligned_size, Flags::empty()) else {
@@ -1527,7 +1527,7 @@ impl Filesystem for BcachefsFs {
         // Compute alignment
         let aligned_start = offset & !(block_size - 1);
         let pad_start = (offset - aligned_start) as usize;
-        let aligned_end = (offset + size as u64).div_ceil(block_size) * block_size;
+        let aligned_end = (offset + size as u64).next_multiple_of(block_size);
         let aligned_size = (aligned_end - aligned_start) as usize;
 
         let Ok(mut buf) = io_buf(aligned_size, Flags::empty()) else {

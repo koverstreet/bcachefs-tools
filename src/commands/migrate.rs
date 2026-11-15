@@ -282,8 +282,7 @@ fn find_superblock_space(extents: &[CRange], sb_size: u32, bucket_bytes: u32) ->
     let sb_bytes = (sb_size as u64) << 9;
 
     for r in extents {
-        let start = std::cmp::max(256 << 10, r.start)
-            .div_ceil(bucket_bytes) * bucket_bytes;
+        let start = std::cmp::max(256 << 10, r.start).next_multiple_of(bucket_bytes);
         let end = (r.end / bucket_bytes) * bucket_bytes;
 
         // Need space for two superblocks
@@ -461,8 +460,8 @@ fn migrate_fs(
     // Calculate reserve_start: round up (superblock_size * 2 + BCH_SB_SECTOR) sectors
     // to bucket boundary (in bytes)
     let bucket_bytes = (fs.dev_get(0).expect("device 0").mi.get().bucket_size as u64) << 9;
-    let reserve_start = (((format_opts.superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
-        .div_ceil(bucket_bytes)) * bucket_bytes;
+    let reserve_start = ((format_opts.superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
+        .next_multiple_of(bucket_bytes);
 
     // Copy the filesystem tree
     let mut s = crate::copy_fs::CopyFsState::new_migrate(
