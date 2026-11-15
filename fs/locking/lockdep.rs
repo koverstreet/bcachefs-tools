@@ -38,9 +38,9 @@ pub struct Lockdep<R> {
 }
 
 // lockdep points at a map only while its lock is held
-unsafe impl<R: RawMovableLock> RawMovableLock for Lockdep<R> {}
+impl<R: RawMovableLock> RawMovableLock for Lockdep<R> {}
 
-unsafe impl<R: RawLockBase> RawLockBase for Lockdep<R> {
+impl<R: RawLockBase> RawLockBase for Lockdep<R> {
     type GuardState = R::GuardState;
     type InitError = R::InitError;
 
@@ -57,7 +57,7 @@ unsafe impl<R: RawLockBase> RawLockBase for Lockdep<R> {
     }
 }
 
-unsafe impl<R: RawTryLock> RawLock for Lockdep<R> {
+impl<R: RawTryLock> RawLock for Lockdep<R> {
     fn lock(&self) -> R::GuardState {
         self.dep_map.acquire(false, false, 0);
         let g = self.raw.try_lock().unwrap_or_else(|| {
@@ -78,7 +78,7 @@ unsafe impl<R: RawTryLock> RawLock for Lockdep<R> {
     }
 }
 
-unsafe impl<R: RawTryLock> RawTryLock for Lockdep<R> {
+impl<R: RawTryLock> RawTryLock for Lockdep<R> {
     fn try_lock(&self) -> Option<R::GuardState> {
         let g = self.raw.try_lock()?;
         self.dep_map.acquire(true, false, 0);
@@ -86,7 +86,7 @@ unsafe impl<R: RawTryLock> RawTryLock for Lockdep<R> {
     }
 }
 
-unsafe impl<R: RawTimedLock> RawTimedLock for Lockdep<R> {
+impl<R: RawTimedLock> RawTimedLock for Lockdep<R> {
     fn try_lock_timeout(&self, timeout: c_ulong) -> Option<R::GuardState> {
         self.dep_map.acquire(false, false, 0);
         let g = self.raw.try_lock().or_else(|| {

@@ -12,7 +12,7 @@ use parking_lot::lock_api::RawMutex as _;
 #[repr(transparent)]
 pub struct Mutex(parking_lot::RawMutex);
 
-unsafe impl RawLockBase for Mutex {
+impl RawLockBase for Mutex {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -22,7 +22,7 @@ unsafe impl RawLockBase for Mutex {
     }
 }
 
-unsafe impl RawLock for Mutex {
+impl RawLock for Mutex {
     fn lock(&self) {
         self.0.lock()
     }
@@ -34,13 +34,13 @@ unsafe impl RawLock for Mutex {
     fn assert_held(&self) {}
 }
 
-unsafe impl RawTryLock for Mutex {
+impl RawTryLock for Mutex {
     fn try_lock(&self) -> Option<()> {
         self.0.try_lock().then_some(())
     }
 }
 
-unsafe impl RawNestedLock for Mutex {
+impl RawNestedLock for Mutex {
     fn lock_nested(&self, _subclass: u32) {
         self.lock()
     }

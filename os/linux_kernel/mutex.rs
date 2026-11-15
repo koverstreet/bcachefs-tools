@@ -13,6 +13,10 @@ use kernel::bindings as b;
 
 pub type Mutex = Opaque<b::mutex>;
 
+// taken and released from any thread
+unsafe impl Send for Mutex {}
+unsafe impl Sync for Mutex {}
+
 /// How two locks of one class, by their maps, are ordered: negative for @a
 /// first. Lockdep's lock_cmp_fn, as kCFI hashes it.
 #[cfg(CONFIG_PROVE_LOCKING)]
@@ -29,7 +33,7 @@ impl<G, P> crate::locking::Locked<Mutex, G, P> {
     }
 }
 
-unsafe impl RawLockBase for Mutex {
+impl RawLockBase for Mutex {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -39,7 +43,7 @@ unsafe impl RawLockBase for Mutex {
     }
 }
 
-unsafe impl RawLock for Mutex {
+impl RawLock for Mutex {
     fn lock(&self) {
         unsafe { c::mutex_lock(self.as_ptr().cast()) }
     }
@@ -53,14 +57,14 @@ unsafe impl RawLock for Mutex {
     }
 }
 
-unsafe impl RawTryLock for Mutex {
+impl RawTryLock for Mutex {
     fn try_lock(&self) -> Option<()> {
         (unsafe { c::mutex_trylock(self.as_ptr().cast()) } as i32 != 0).then_some(())
     }
 }
 
 // Without lockdep's lock tracking, mutex_lock_nested() is a macro, mutex_lock()
-unsafe impl RawNestedLock for Mutex {
+impl RawNestedLock for Mutex {
     #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
     fn lock_nested(&self, subclass: u32) {
         unsafe { c::mutex_lock_nested(self.as_ptr().cast(), subclass) }

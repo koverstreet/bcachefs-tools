@@ -92,7 +92,7 @@ impl ByteLock {
     }
 }
 
-unsafe impl RawLockBase for ByteLock {
+impl RawLockBase for ByteLock {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -102,9 +102,9 @@ unsafe impl RawLockBase for ByteLock {
     }
 }
 
-unsafe impl RawMovableLock for ByteLock {}
+impl RawMovableLock for ByteLock {}
 
-unsafe impl RawLock for ByteLock {
+impl RawLock for ByteLock {
     fn lock(&self) {
         self.take()
     }
@@ -118,13 +118,13 @@ unsafe impl RawLock for ByteLock {
     }
 }
 
-unsafe impl RawTryLock for ByteLock {
+impl RawTryLock for ByteLock {
     fn try_lock(&self) -> Option<()> {
         self.try_take().then_some(())
     }
 }
 
-unsafe impl RawTimedLock for ByteLock {
+impl RawTimedLock for ByteLock {
     fn try_lock_timeout(&self, timeout: c_ulong) -> Option<()> {
         crate::os::sched::might_sleep();
 

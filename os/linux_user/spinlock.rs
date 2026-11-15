@@ -31,7 +31,7 @@ pub struct SpinLock(RawSpinLock);
 
 // ── RawSpinLock ──────────────────────────────────────────────────────────
 
-unsafe impl RawLockBase for RawSpinLock {
+impl RawLockBase for RawSpinLock {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
@@ -41,9 +41,9 @@ unsafe impl RawLockBase for RawSpinLock {
     }
 }
 
-unsafe impl RawMovableLock for RawSpinLock {}
+impl RawMovableLock for RawSpinLock {}
 
-unsafe impl RawLock for RawSpinLock {
+impl RawLock for RawSpinLock {
     fn lock(&self) -> MemallocFlags {
         let s = &self.state;
         if s.compare_exchange(UNLOCKED, LOCKED, Acquire, Relaxed).is_err() {
@@ -66,7 +66,7 @@ unsafe impl RawLock for RawSpinLock {
 
 // ── SpinLockIrq ──────────────────────────────────────────────────────────
 
-unsafe impl RawLockBase for SpinLockIrq {
+impl RawLockBase for SpinLockIrq {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
@@ -75,9 +75,9 @@ unsafe impl RawLockBase for SpinLockIrq {
     }
 }
 
-unsafe impl RawMovableLock for SpinLockIrq {}
+impl RawMovableLock for SpinLockIrq {}
 
-unsafe impl RawLock for SpinLockIrq {
+impl RawLock for SpinLockIrq {
     fn lock(&self) -> MemallocFlags {
         self.0.lock()
     }
@@ -89,7 +89,7 @@ unsafe impl RawLock for SpinLockIrq {
     fn assert_held(&self) {}
 }
 
-unsafe impl RawNestedLock for SpinLockIrq {
+impl RawNestedLock for SpinLockIrq {
     fn lock_nested(&self, _subclass: u32) -> MemallocFlags {
         self.lock()
     }
@@ -97,7 +97,7 @@ unsafe impl RawNestedLock for SpinLockIrq {
 
 // ── SpinLock ─────────────────────────────────────────────────────────────
 
-unsafe impl RawLockBase for SpinLock {
+impl RawLockBase for SpinLock {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
@@ -106,9 +106,9 @@ unsafe impl RawLockBase for SpinLock {
     }
 }
 
-unsafe impl RawMovableLock for SpinLock {}
+impl RawMovableLock for SpinLock {}
 
-unsafe impl RawLock for SpinLock {
+impl RawLock for SpinLock {
     fn lock(&self) -> MemallocFlags {
         self.0.lock()
     }

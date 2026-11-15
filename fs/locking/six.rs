@@ -1212,7 +1212,7 @@ pub unsafe fn six_lock_readers_add(lock: &c::six_lock, nr: c_int) {
     }
 }
 
-unsafe impl RawLockBase for c::six_lock {
+impl RawLockBase for c::six_lock {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -1439,7 +1439,7 @@ impl c::six_lock {
     }
 }
 
-unsafe impl RawReadLock for c::six_lock {
+impl RawReadLock for c::six_lock {
     fn lock_read(&self) {
         self.lock_type(SixLockType::SIX_LOCK_read)
     }
@@ -1449,7 +1449,7 @@ unsafe impl RawReadLock for c::six_lock {
     }
 }
 
-unsafe impl RawSixLock for c::six_lock {
+impl RawSixLock for c::six_lock {
     fn lock_intent(&self) {
         self.lock_type(SixLockType::SIX_LOCK_intent)
     }

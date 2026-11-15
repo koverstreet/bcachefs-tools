@@ -13,7 +13,7 @@ use parking_lot::lock_api::RawRwLock as _;
 #[repr(transparent)]
 pub struct PercpuRwSem(parking_lot::RawRwLock);
 
-unsafe impl RawLockBase for PercpuRwSem {
+impl RawLockBase for PercpuRwSem {
     type GuardState = ();
     type InitError = BchError;
 
@@ -23,7 +23,7 @@ unsafe impl RawLockBase for PercpuRwSem {
     }
 }
 
-unsafe impl RawLock for PercpuRwSem {
+impl RawLock for PercpuRwSem {
     fn lock(&self) {
         self.0.lock_exclusive()
     }
@@ -35,7 +35,7 @@ unsafe impl RawLock for PercpuRwSem {
     fn assert_held(&self) {}
 }
 
-unsafe impl RawReadLock for PercpuRwSem {
+impl RawReadLock for PercpuRwSem {
     fn lock_read(&self) {
         self.0.lock_shared()
     }
@@ -45,6 +45,6 @@ unsafe impl RawReadLock for PercpuRwSem {
     }
 }
 
-unsafe impl RawRwLock for PercpuRwSem {
+impl RawRwLock for PercpuRwSem {
     fn assert_held_any(&self) {}
 }

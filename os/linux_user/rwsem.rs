@@ -12,7 +12,7 @@ use parking_lot::lock_api::RawRwLock as _;
 #[repr(transparent)]
 pub struct RwSem(parking_lot::RawRwLock);
 
-unsafe impl RawLockBase for RwSem {
+impl RawLockBase for RwSem {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -22,7 +22,7 @@ unsafe impl RawLockBase for RwSem {
     }
 }
 
-unsafe impl RawLock for RwSem {
+impl RawLock for RwSem {
     fn lock(&self) {
         self.0.lock_exclusive()
     }
@@ -34,7 +34,7 @@ unsafe impl RawLock for RwSem {
     fn assert_held(&self) {}
 }
 
-unsafe impl RawReadLock for RwSem {
+impl RawReadLock for RwSem {
     fn lock_read(&self) {
         self.0.lock_shared()
     }
@@ -44,12 +44,12 @@ unsafe impl RawReadLock for RwSem {
     }
 }
 
-unsafe impl RawTryReadLock for RwSem {
+impl RawTryReadLock for RwSem {
     fn try_lock_read(&self) -> Option<()> {
         self.0.try_lock_shared().then_some(())
     }
 }
 
-unsafe impl RawRwLock for RwSem {
+impl RawRwLock for RwSem {
     fn assert_held_any(&self) {}
 }

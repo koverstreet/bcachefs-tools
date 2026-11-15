@@ -51,7 +51,7 @@ pub struct NotRw<'a> {
 
 /// What's written only before the filesystem can go rw is a LockedBy of
 /// NotRw: had through one, alone - nothing else runs.
-unsafe impl crate::locking::Guard for NotRw<'_> {
+impl crate::locking::Guard for NotRw<'_> {
     type Name = NotRw<'static>;
     type Root = Fs;
 
@@ -60,12 +60,12 @@ unsafe impl crate::locking::Guard for NotRw<'_> {
     }
 }
 
-unsafe impl crate::locking::Alone for NotRw<'_> {}
+impl crate::locking::Alone for NotRw<'_> {}
 
 // Recovery's ref on the journal keys - their AtomicRef's first - is put by
 // journal_keys_put_initial(): in journal_replay, a pass after set_may_go_rw,
 // or at the filesystem's release
-unsafe impl crate::locking::HoldsRef<crate::at!(Fs.journal_keys)> for NotRw<'_> {}
+impl crate::locking::HoldsRef<crate::at!(Fs.journal_keys)> for NotRw<'_> {}
 
 impl Fs {
     /// The asserts are that nothing else runs: called before the filesystem

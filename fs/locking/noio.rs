@@ -116,9 +116,9 @@ pub struct Memalloc<R, const FLAGS: u32>(R);
 /// Lock @R, held in a PF_MEMALLOC_NOIO scope.
 pub type Noio<R> = Memalloc<R, PF_MEMALLOC_NOIO>;
 
-unsafe impl<R: RawMovableLock, const F: u32> RawMovableLock for Memalloc<R, F> {}
+impl<R: RawMovableLock, const F: u32> RawMovableLock for Memalloc<R, F> {}
 
-unsafe impl<R: RawLockBase, const F: u32> RawLockBase for Memalloc<R, F> {
+impl<R: RawLockBase, const F: u32> RawLockBase for Memalloc<R, F> {
     type GuardState = (MemallocFlags, R::GuardState);
     type InitError = R::InitError;
 
@@ -131,7 +131,7 @@ unsafe impl<R: RawLockBase, const F: u32> RawLockBase for Memalloc<R, F> {
     }
 }
 
-unsafe impl<R: RawLock, const F: u32> RawLock for Memalloc<R, F> {
+impl<R: RawLock, const F: u32> RawLock for Memalloc<R, F> {
     fn lock(&self) -> Self::GuardState {
         let scope = MemallocFlags::new(F);
         (scope, self.0.lock())
@@ -147,7 +147,7 @@ unsafe impl<R: RawLock, const F: u32> RawLock for Memalloc<R, F> {
     }
 }
 
-unsafe impl<R: RawTryLock, const F: u32> RawTryLock for Memalloc<R, F> {
+impl<R: RawTryLock, const F: u32> RawTryLock for Memalloc<R, F> {
     fn try_lock(&self) -> Option<Self::GuardState> {
         // not taken: dropped, so restored
         let scope = MemallocFlags::new(F);
@@ -155,7 +155,7 @@ unsafe impl<R: RawTryLock, const F: u32> RawTryLock for Memalloc<R, F> {
     }
 }
 
-unsafe impl<R: RawReadLock, const F: u32> RawReadLock for Memalloc<R, F> {
+impl<R: RawReadLock, const F: u32> RawReadLock for Memalloc<R, F> {
     fn lock_read(&self) -> Self::GuardState {
         let scope = MemallocFlags::new(F);
         (scope, self.0.lock_read())
@@ -167,7 +167,7 @@ unsafe impl<R: RawReadLock, const F: u32> RawReadLock for Memalloc<R, F> {
     }
 }
 
-unsafe impl<R: RawRwLock, const F: u32> RawRwLock for Memalloc<R, F> {
+impl<R: RawRwLock, const F: u32> RawRwLock for Memalloc<R, F> {
     fn assert_held_any(&self) {
         self.0.assert_held_any()
     }

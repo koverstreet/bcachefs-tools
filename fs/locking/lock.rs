@@ -10,15 +10,12 @@ use core::marker::{PhantomData, PhantomPinned};
 use core::ops::{Deref, DerefMut};
 
 /// A lock's state, and how it's initialized and torn down - whatever kind of
-/// lock it is, which the traits over this one say.
-///
-/// # Safety
-/// All of its state is interior-mutable - the kernel's locks are Opaques,
-/// ours atomics - so it's taken and released through a shared reference,
-/// from any thread. One that exists is a lock: init()'s, never zeroes - a
-/// zeroed kernel mutex's wait list is null - so taking it is safe; it's
-/// released with the state taking it returned.
-pub unsafe trait RawLockBase {
+/// lock it is, which the traits over this one say. All of its state is
+/// interior-mutable - the kernel's locks are Opaques, ours atomics - so it's
+/// taken and released through a shared reference. It's a lock once init() has
+/// run on it - a zeroed kernel mutex's wait list is null - which is before
+/// anything takes it: Locked::new()'s, or for one zeroed, init_zeroed().
+pub trait RawLockBase {
     /// What releasing it needs: the interrupt state spin_lock_irqsave()
     /// saved, the memalloc flags a Noio saved, or nothing.
     type GuardState;
@@ -39,19 +36,14 @@ pub unsafe trait RawLockBase {
 /// its holders and waiters points at it - as a kernel spinlock, which C
 /// builds by value, __SPIN_LOCK_UNLOCKED(). Not a mutex: with
 /// CONFIG_DEBUG_MUTEXES, its magic is its own address.
-///
-/// # Safety
-/// Moved with nothing holding or waiting on it, it's the same lock.
-pub unsafe trait RawMovableLock: RawLockBase {}
+pub trait RawMovableLock: RawLockBase {}
 
-/// A lock taken and released whole, by one holder at a time.
-///
-/// # Safety
-/// lock() excludes every other holder until unlock(); as RawLockBase's
-/// otherwise.
-pub unsafe trait RawLock: RawLockBase {
+/// A lock taken and released whole, by one holder at a time: lock() excludes
+/// every other holder until unlock().
+pub trait RawLock: RawLockBase {
     fn lock(&self) -> Self::GuardState;
 
+    /// Held, as lock() took it, with the state it returned.
     unsafe fn unlock(&self, g: Self::GuardState);
 
     /// That it's held exclusively - lockdep_assert_held(), and
@@ -60,59 +52,43 @@ pub unsafe trait RawLock: RawLockBase {
     fn assert_held(&self);
 }
 
-/// A RawLock that can be tried: taken only if no one holds it.
-///
-/// # Safety
-/// try_lock() is RawLock's lock(), when it returns Some; when None, nothing's
-/// taken, and nothing's left to release.
-pub unsafe trait RawTryLock: RawLock {
+/// A RawLock that can be tried: taken only if no one holds it, as lock() takes
+/// it; when None, nothing's taken, and nothing's left to release.
+pub trait RawTryLock: RawLock {
     fn try_lock(&self) -> Option<Self::GuardState>;
 }
 
-/// A RawTryLock that can be waited for, for a while.
-///
-/// # Safety
-/// try_lock_timeout() is RawTryLock's try_lock(), but waiting up to @timeout
-/// jiffies for it.
-pub unsafe trait RawTimedLock: RawTryLock {
+/// A RawTryLock that can be waited for, for up to @timeout jiffies.
+pub trait RawTimedLock: RawTryLock {
     fn try_lock_timeout(&self, timeout: c_ulong) -> Option<Self::GuardState>;
 }
 
 /// A RawLock that can be taken as one of several of its lockdep class held
-/// at once - the others' order keeping them apart - each a subclass.
-///
-/// # Safety
-/// lock_nested() is RawLock's lock(), but for what lockdep is told.
-pub unsafe trait RawNestedLock: RawLock {
+/// at once - the others' order keeping them apart - each a subclass: lock(),
+/// but for what lockdep is told.
+pub trait RawNestedLock: RawLock {
     fn lock_nested(&self, subclass: u32) -> Self::GuardState;
 }
 
 /// A lock readers share, whatever else it has - RawRwLock's writer,
-/// RawSixLock's intent and write.
-///
-/// # Safety
-/// lock_read() excludes only what writes, until unlock_read(); as
-/// RawLockBase's otherwise.
-pub unsafe trait RawReadLock: RawLockBase {
+/// RawSixLock's intent and write: lock_read() excludes only what writes,
+/// until unlock_read().
+pub trait RawReadLock: RawLockBase {
     fn lock_read(&self) -> Self::GuardState;
+
+    /// Held for read, as lock_read() took it, with the state it returned.
     unsafe fn unlock_read(&self, g: Self::GuardState);
 }
 
-/// A RawReadLock that can be tried: taken only if no writer holds it.
-///
-/// # Safety
-/// try_lock_read() is lock_read(), when it returns Some; when None, nothing's
-/// taken, and nothing's left to release.
-pub unsafe trait RawTryReadLock: RawReadLock {
+/// A RawReadLock that can be tried: taken only if no writer holds it; when
+/// None, nothing's taken, and nothing's left to release.
+pub trait RawTryReadLock: RawReadLock {
     fn try_lock_read(&self) -> Option<Self::GuardState>;
 }
 
 /// A RawLock that readers can share: RawLock's lock() and unlock() are the
 /// writer's, alone.
-///
-/// # Safety
-/// lock() excludes readers too; as RawLock's and RawReadLock's otherwise.
-pub unsafe trait RawRwLock: RawLock + RawReadLock {
+pub trait RawRwLock: RawLock + RawReadLock {
     /// lockdep_assert_held(): by a reader or the writer.
     fn assert_held_any(&self);
 }
@@ -121,15 +97,16 @@ pub unsafe trait RawRwLock: RawLock + RawReadLock {
 /// and write, which only the intent holder takes, excluding readers. Not a
 /// RawLock: there's no taking it alone but through intent, which is how an
 /// intent holder gets to write without deadlocking against another.
-///
-/// # Safety
-/// The modes exclude as they say. lock_write() is taken only by the intent
-/// holder, and released by unlock_write() before its unlock_intent(); as
-/// RawReadLock's otherwise.
-pub unsafe trait RawSixLock: RawReadLock {
+pub trait RawSixLock: RawReadLock {
     fn lock_intent(&self) -> Self::GuardState;
+
+    /// Held for intent, as lock_intent() took it, with the state it returned.
     unsafe fn unlock_intent(&self, g: Self::GuardState);
+
+    /// By the intent holder.
     unsafe fn lock_write(&self) -> Self::GuardState;
+
+    /// Held for write, by the intent holder, before its unlock_intent().
     unsafe fn unlock_write(&self, g: Self::GuardState);
 }
 
@@ -157,8 +134,8 @@ unsafe impl<R: RawLockBase, G, P> crate::util::place::Wrapper for Locked<R, G, P
 
 // G is had by one thread at a time, as a std Mutex's; P is every thread's.
 // read() shares G, so it wants G: Sync.
-unsafe impl<R: RawLockBase, G: Send, P: Send> Send for Locked<R, G, P> {}
-unsafe impl<R: RawLockBase, G: Send, P: Sync> Sync for Locked<R, G, P> {}
+unsafe impl<R: RawLockBase + Send, G: Send, P: Send> Send for Locked<R, G, P> {}
+unsafe impl<R: RawLockBase + Sync, G: Send, P: Sync> Sync for Locked<R, G, P> {}
 
 impl<R: RawLockBase, G, P> Locked<R, G, P> {
     /// new_lock!()'s, which has a static lockdep key per call site.
@@ -612,10 +589,9 @@ impl<R: RawLockBase, G, P, U: Unlock<R>, A> Drop for SharedGuard<'_, R, G, P, U,
 /// reaches - a device's, under its filesystem's lock: checked to name this
 /// guard's place, but not that it's this lock - not another filesystem's.
 ///
-/// # Safety
 /// While one lives, what Name names is held - shared, or alone if Alone - and
 /// root() is the struct it's in.
-pub(crate) unsafe trait Guard {
+pub(crate) trait Guard {
     type Name;
     type Root;
 
@@ -659,34 +635,26 @@ pub(crate) unsafe trait Guard {
     }
 }
 
-/// A Guard held alone: what it covers is had by &mut.
-///
-/// # Safety
-/// While one lives, nothing else holds what it names.
-pub(crate) unsafe trait Alone: Guard {}
+/// A Guard held alone: what it covers is had by &mut - while one lives,
+/// nothing else holds what it names.
+pub(crate) trait Alone: Guard {}
 
 // ── Splits: several pieces under one guard ──────────────────────────────────
 
 /// A Guard holding a ref on the AtomicRef placed at @A: its value is live
 /// while the guard is.
-///
-/// # Safety
-/// While one lives, a ref on the AtomicRef at A is held.
-pub(crate) unsafe trait HoldsRef<A>: Guard {}
+pub(crate) trait HoldsRef<A>: Guard {}
 
 /// A path from a guard's root down to what a split of it hands out - as
 /// field!() writes one, of fields and the values of refs the guard holds: at
-/// OFFSET of the root, as many bytes as a To.
-///
-/// # Safety
-/// get() follows the path, to the To at OFFSET of the guard's root.
-pub(crate) unsafe trait GuardPath<G: Guard> {
+/// OFFSET of the root, as many bytes as a To, which get() follows it to.
+pub(crate) trait GuardPath<G: Guard> {
     type To;
     const OFFSET: usize;
     fn get(g: &G) -> &Self::To;
 }
 
-unsafe impl<G: Guard> GuardPath<G> for Here {
+impl<G: Guard> GuardPath<G> for Here {
     type To = G::Root;
     const OFFSET: usize = 0;
     fn get(g: &G) -> &G::Root {
@@ -694,7 +662,7 @@ unsafe impl<G: Guard> GuardPath<G> for Here {
     }
 }
 
-unsafe impl<G: Guard, P: GuardPath<G>, const N: u64> GuardPath<G> for FieldOf<P, N>
+impl<G: Guard, P: GuardPath<G>, const N: u64> GuardPath<G> for FieldOf<P, N>
 where
     P::To: Field<N>,
 {
@@ -705,7 +673,7 @@ where
     }
 }
 
-unsafe impl<G, P, T, A: 'static> GuardPath<G> for RefValue<P>
+impl<G, P, T, A: 'static> GuardPath<G> for RefValue<P>
 where
     G: HoldsRef<A>,
     P: GuardPath<G, To = Placed<AtomicRef<T>, A>>,
@@ -722,10 +690,9 @@ where
 pub(crate) struct Mut<P>(PhantomData<P>);
 pub(crate) struct Ref<P>(PhantomData<P>);
 
-/// # Safety
-/// get() hands out what's in [OFFSET, OFFSET + SIZE) of the guard's root, and
+/// What get() hands out is in [OFFSET, OFFSET + SIZE) of the guard's root, and
 /// only that: by &mut if MUT.
-pub(crate) unsafe trait Piece<'g, G: Guard + 'g> {
+pub(crate) trait Piece<'g, G: Guard + 'g> {
     type Out;
     const OFFSET: usize;
     const SIZE: usize;
@@ -737,7 +704,7 @@ pub(crate) unsafe trait Piece<'g, G: Guard + 'g> {
     unsafe fn get(g: &'g G) -> Self::Out;
 }
 
-unsafe impl<'g, G: Alone + 'g, P: GuardPath<G>> Piece<'g, G> for Mut<P>
+impl<'g, G: Alone + 'g, P: GuardPath<G>> Piece<'g, G> for Mut<P>
 where
     P::To: AsLockedBy<L = G::Name> + 'g,
     <P::To as AsLockedBy>::G: 'g,
@@ -752,7 +719,7 @@ where
     }
 }
 
-unsafe impl<'g, G: Guard + 'g, P: GuardPath<G>> Piece<'g, G> for Ref<P>
+impl<'g, G: Guard + 'g, P: GuardPath<G>> Piece<'g, G> for Ref<P>
 where
     P::To: AsLockedBy<L = G::Name> + 'g,
     <P::To as AsLockedBy>::G: 'g,
@@ -767,12 +734,9 @@ where
     }
 }
 
-/// A tuple of Pieces, Guard::split()'s.
-///
-/// # Safety
-/// DISJOINT evaluates only if the pieces' bytes don't overlap, but two
-/// shared pieces'; get() hands out each piece.
-pub(crate) unsafe trait Split<'g, G: Guard + 'g> {
+/// A tuple of Pieces, Guard::split()'s: DISJOINT evaluates only if the pieces'
+/// bytes don't overlap, but two shared pieces'; get() hands out each piece.
+pub(crate) trait Split<'g, G: Guard + 'g> {
     type Out;
     const DISJOINT: ();
 
@@ -800,7 +764,7 @@ const fn pieces_disjoint(p: &[(usize, usize, bool)]) -> bool {
 
 macro_rules! split_tuple {
     ($($p:ident),+) => {
-        unsafe impl<'g, G: Guard + 'g, $($p: Piece<'g, G>),+> Split<'g, G> for ($($p,)+) {
+        impl<'g, G: Guard + 'g, $($p: Piece<'g, G>),+> Split<'g, G> for ($($p,)+) {
             type Out = ($($p::Out,)+);
             const DISJOINT: () = assert!(pieces_disjoint(&[$(($p::OFFSET, $p::SIZE, $p::MUT)),+]),
                                          "a split's pieces overlap");
@@ -814,7 +778,7 @@ macro_rules! split_tuple {
 split_tuple!(A, B);
 split_tuple!(A, B, C);
 
-unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Guard for SharedGuard<'a, R, G, P, U, A>
+impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Guard for SharedGuard<'a, R, G, P, U, A>
 where
     A::Type: Contained + PlacedLock<R, G, P>,
 {
@@ -826,7 +790,7 @@ where
     }
 }
 
-unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Guard for ExclusiveGuard<'a, R, G, P, U, A>
+impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Guard for ExclusiveGuard<'a, R, G, P, U, A>
 where
     A::Type: Contained + PlacedLock<R, G, P>,
 {
@@ -856,7 +820,7 @@ impl<C: AsLocked, A> PlacedLock<C::R, C::G, C::P> for Placed<C, A> {
 }
 
 // an exclusive guard's U is a mode no other holder shares
-unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Alone for ExclusiveGuard<'a, R, G, P, U, A>
+impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Alone for ExclusiveGuard<'a, R, G, P, U, A>
 where
     A::Type: Contained + PlacedLock<R, G, P>,
 {}

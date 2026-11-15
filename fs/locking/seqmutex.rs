@@ -22,7 +22,7 @@ pub struct seqmutex {
     pub seq:  AtomicU32,
 }
 
-unsafe impl RawLockBase for seqmutex {
+impl RawLockBase for seqmutex {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -34,7 +34,7 @@ unsafe impl RawLockBase for seqmutex {
     }
 }
 
-unsafe impl RawLock for seqmutex {
+impl RawLock for seqmutex {
     fn lock(&self) {
         self.lock.lock();
         self.seq.fetch_add(1, Ordering::Relaxed);

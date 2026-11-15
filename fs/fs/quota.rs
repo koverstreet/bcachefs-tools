@@ -376,7 +376,7 @@ mod vfs {
     }
 
     // its type's lock, and its type: what its counters name
-    unsafe impl crate::locking::Guard for Locked<'_> {
+    impl crate::locking::Guard for Locked<'_> {
         type Name = c::MemquotaType;
         type Root = c::MemquotaType;
 
@@ -385,7 +385,7 @@ mod vfs {
         }
     }
 
-    unsafe impl crate::locking::Alone for Locked<'_> {}
+    impl crate::locking::Alone for Locked<'_> {}
 
     impl<'a> Locked<'a> {
         fn new(fs: &'a Fs, qtype: usize) -> Self {
