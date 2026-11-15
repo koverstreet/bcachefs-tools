@@ -169,7 +169,7 @@ pub struct BioPool {
 /// A bioset of T's bios: a BioPool, its front_pad a T's.
 #[pin_data]
 #[repr(transparent)]
-pub struct BioSet<T: FrontPad> {
+pub struct BioSet<T: HasBio> {
     #[pin]
     set: BioPool,
     _t:  PhantomData<fn() -> T>,
@@ -343,7 +343,7 @@ pub unsafe fn bio_put(bio: *mut c::bio) {
     }
 }
 
-impl<T: FrontPad> Deref for BioSet<T> {
+impl<T: HasBio> Deref for BioSet<T> {
     type Target = BioPool;
 
     fn deref(&self) -> &BioPool {
@@ -351,34 +351,16 @@ impl<T: FrontPad> Deref for BioSet<T> {
     }
 }
 
-/// What a bioset puts in front of its bios: a HasBio type's, or the larger of
-/// two, Either - a bioset C allocates either container from.
-pub trait FrontPad {
-    const FRONT_PAD: usize;
-}
-
-impl<T: HasBio> FrontPad for T {
-    const FRONT_PAD: usize = T::BIO_OFFSET;
-}
-
-pub struct Either<A, B>(PhantomData<(A, B)>);
-
-impl<A: HasBio, B: HasBio> FrontPad for Either<A, B> {
-    const FRONT_PAD: usize = if A::BIO_OFFSET > B::BIO_OFFSET { A::BIO_OFFSET } else { B::BIO_OFFSET };
-}
-
-impl<T: FrontPad> BioSet<T> {
+impl<T: HasBio> BioSet<T> {
     /// @pool_size bios, with BIO_MAX_VECS bvecs each, held in reserve.
     /// Nothing to undo if it fails.
     pub fn new(pool_size: u32) -> impl PinInit<Self, BchError> {
         pin_init!(Self {
-            set <- BioPool::new(pool_size, T::FRONT_PAD),
+            set <- BioPool::new(pool_size, T::BIO_OFFSET),
             _t: PhantomData,
         }? BchError)
     }
-}
 
-impl<T: HasBio> BioSet<T> {
     /// A T with a bio for @bdev, @opf, of @nr_vecs bvecs - inline, or the
     /// set's - and its other fields from @init. GFP_KERNEL: NOIO or NOFS is
     /// the caller's memalloc scope's. Fails only if @init does, or past
@@ -437,9 +419,9 @@ impl<T: HasBio> BioSet<T> {
     }
 }
 
-unsafe impl<T: FrontPad> ::pin_init::Zeroable for BioSet<T> {}
+unsafe impl<T: HasBio> ::pin_init::Zeroable for BioSet<T> {}
 
-impl<T: FrontPad> crate::util::late::LateInit for BioSet<T> {
+impl<T: HasBio> crate::util::late::LateInit for BioSet<T> {
     fn is_made(&self) -> bool {
         self.set.pool.is_made()
     }
