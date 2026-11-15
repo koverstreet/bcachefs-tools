@@ -27,6 +27,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fs_fatal_error;
 use crate::types::Le64;
+use crate::util::alloc::Box;
 use crate::util::vstructs::SelfSized;
 use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
             UPDATE_NODES_MAX};
@@ -448,7 +449,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
     let front_mode = || {
         let g = fs.btree.interior_updates.lock.lock();
         let front = g.unwritten.peek_front().expect("an update completing, on unwritten");
-        assert!(front.as_ptr() == update, "an update completing out of order");
+        assert!(ptr::eq(Box::as_ptr(front), update.as_ptr()), "an update completing out of order");
         u.mode(&g)
     };
     if let Some(Mode::Node(b)) = front_mode() {
@@ -557,7 +558,7 @@ pub(super) fn worker(fs: &Fs) {
         let update = {
             let g = fs.btree.interior_updates.lock.lock();
             match g.unwritten.peek_front() {
-                Some(u) if u.nodes_written() => u.as_ptr(),
+                Some(u) if u.nodes_written() => unsafe { NonNull::new_unchecked(Box::as_ptr(u).cast_mut()) },
                 _ => break,
             }
         };

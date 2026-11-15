@@ -9,6 +9,7 @@ pub use crate::os::alloc::*;
 pub use core::alloc::{AllocError, Allocator};
 
 use core::alloc::Layout;
+use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
@@ -69,58 +70,91 @@ pub fn stateless<A: Alloc>() -> A {
     unsafe { NonNull::<A>::dangling().read() }
 }
 
-/// A @T in what @A gave, A kept with it: dropped, and given back to A by the
-/// size A gave. A slice's too, new_uninit_slice()'s.
-pub struct AllocBox<T: ?Sized, A: Alloc> {
+/// std's Box<T, A>, as much of it as is used, in both builds: the kernel has
+/// no alloc crate. Unlike std's, it frees by the size A gave, not T's - a
+/// mempool tells its elements by their size.
+pub struct Box<T: ?Sized, A: Alloc> {
     ptr:   NonNull<T>,
     /// what A gave, which its free goes by
     given: usize,
     alloc: A,
 }
 
-unsafe impl<T: ?Sized + Send, A: Alloc + Send> Send for AllocBox<T, A> {}
-unsafe impl<T: ?Sized + Sync, A: Alloc + Sync> Sync for AllocBox<T, A> {}
+unsafe impl<T: ?Sized + Send, A: Alloc + Send> Send for Box<T, A> {}
+unsafe impl<T: ?Sized + Sync, A: Alloc + Sync> Sync for Box<T, A> {}
 
-impl<T, A: Alloc> AllocBox<T, A> {
-    pub fn new<E: From<AllocError>>(alloc: A, init: impl ::pin_init::Init<T, E>) -> Result<Self, E> {
+impl<T, A: Alloc> Box<T, A> {
+    /// @init's T, in place: pin-init's try_init(), in @alloc.
+    pub fn try_init_in<E: From<AllocError>>(init: impl ::pin_init::Init<T, E>, alloc: A) -> Result<Self, E> {
         let mem = alloc.allocate(Layout::new::<T>())?;
-        unsafe { Self::init(alloc, mem, init) }
-    }
-
-    /// # Safety
-    /// @mem is @alloc's, for a T.
-    unsafe fn init<E>(alloc: A, mem: NonNull<[u8]>, init: impl ::pin_init::Init<T, E>) -> Result<Self, E> {
         if let Err(e) = unsafe { init_at(init, mem.cast::<T>().as_ptr()) } {
             unsafe { alloc.deallocate(mem.cast(), Layout::from_size_align_unchecked(mem.len(), align_of::<T>())) };
             return Err(e);
         }
-        Ok(AllocBox { ptr: mem.cast(), given: mem.len(), alloc })
+        Ok(Box { ptr: mem.cast(), given: mem.len(), alloc })
+    }
+
+    /// try_init_in(), of an @init that can't fail: pin-init's init().
+    pub fn init_in(init: impl ::pin_init::Init<T>, alloc: A) -> Result<Self, AllocError> {
+        let mem = alloc.allocate(Layout::new::<T>())?;
+        let Ok(()) = unsafe { init_at(init, mem.cast::<T>().as_ptr()) };
+        Ok(Box { ptr: mem.cast(), given: mem.len(), alloc })
+    }
+
+    /// Its pointer, and its allocator, for from_raw_in() to make it again.
+    pub fn into_raw_with_allocator(b: Self) -> (*mut T, A) {
+        let b = core::mem::ManuallyDrop::new(b);
+        (b.ptr.as_ptr(), unsafe { core::ptr::read(&b.alloc) })
+    }
+
+    /// # Safety
+    /// @p is into_raw_with_allocator()'s, of an allocator that gave a T's
+    /// size - or @alloc's own allocation of a T, of a T's layout - and nothing
+    /// else owns it.
+    pub unsafe fn from_raw_in(p: *mut T, alloc: A) -> Self {
+        Box { ptr: unsafe { NonNull::new_unchecked(p) }, given: size_of::<T>(), alloc }
     }
 }
 
-impl<U: ::pin_init::Zeroable, A: Alloc> AllocBox<[U], A> {
-    /// @len Us, zeroed: what a U may be.
-    pub fn new_zeroed_slice(alloc: A, len: usize) -> Result<Self, AllocError> {
-        let mem = alloc.allocate_zeroed(Layout::array::<U>(len).map_err(|_| AllocError)?)?;
-        Ok(AllocBox { ptr: NonNull::slice_from_raw_parts(mem.cast(), len), given: mem.len(), alloc })
-    }
-}
-
-impl<U, A: Alloc> AllocBox<[core::mem::MaybeUninit<U>], A> {
-    /// @len Us, as yet anything.
-    pub fn new_uninit_slice(alloc: A, len: usize) -> Result<Self, AllocError> {
+impl<U, A: Alloc> Box<[U], A> {
+    pub fn try_new_uninit_slice_in(len: usize, alloc: A) -> Result<Box<[MaybeUninit<U>], A>, AllocError> {
         let mem = alloc.allocate(Layout::array::<U>(len).map_err(|_| AllocError)?)?;
-        Ok(AllocBox { ptr: NonNull::slice_from_raw_parts(mem.cast(), len), given: mem.len(), alloc })
+        Ok(Box { ptr: NonNull::slice_from_raw_parts(mem.cast(), len), given: mem.len(), alloc })
+    }
+
+    pub fn try_new_zeroed_slice_in(len: usize, alloc: A) -> Result<Box<[MaybeUninit<U>], A>, AllocError> {
+        let mem = alloc.allocate_zeroed(Layout::array::<U>(len).map_err(|_| AllocError)?)?;
+        Ok(Box { ptr: NonNull::slice_from_raw_parts(mem.cast(), len), given: mem.len(), alloc })
     }
 }
 
-impl<T: ?Sized, A: Alloc> AllocBox<T, A> {
-    pub fn as_ptr(&self) -> NonNull<T> {
-        self.ptr
+impl<U, A: Alloc> Box<[MaybeUninit<U>], A> {
+    /// # Safety
+    /// Every element is a valid U.
+    pub unsafe fn assume_init(self) -> Box<[U], A> {
+        let (ptr, given, alloc) = {
+            let b = core::mem::ManuallyDrop::new(self);
+            (b.ptr, b.given, unsafe { core::ptr::read(&b.alloc) })
+        };
+        Box { ptr: NonNull::slice_from_raw_parts(ptr.cast(), ptr.len()), given, alloc }
     }
 }
 
-impl<T: ?Sized, A: Alloc> core::ops::Deref for AllocBox<T, A> {
+impl<T: ?Sized, A: Alloc> Box<T, A> {
+    pub fn as_ptr(b: &Self) -> *const T {
+        b.ptr.as_ptr()
+    }
+
+    pub fn as_mut_ptr(b: &mut Self) -> *mut T {
+        b.ptr.as_ptr()
+    }
+
+    pub fn as_non_null(b: &mut Self) -> NonNull<T> {
+        b.ptr
+    }
+}
+
+impl<T: ?Sized, A: Alloc> core::ops::Deref for Box<T, A> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -128,13 +162,13 @@ impl<T: ?Sized, A: Alloc> core::ops::Deref for AllocBox<T, A> {
     }
 }
 
-impl<T: ?Sized, A: Alloc> core::ops::DerefMut for AllocBox<T, A> {
+impl<T: ?Sized, A: Alloc> core::ops::DerefMut for Box<T, A> {
     fn deref_mut(&mut self) -> &mut T {
         unsafe { self.ptr.as_mut() }
     }
 }
 
-impl<T: ?Sized, A: Alloc> Drop for AllocBox<T, A> {
+impl<T: ?Sized, A: Alloc> Drop for Box<T, A> {
     fn drop(&mut self) {
         unsafe {
             let align = align_of_val(self.ptr.as_ref());

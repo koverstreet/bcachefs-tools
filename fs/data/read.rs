@@ -88,7 +88,7 @@ use crate::util::bio::{inline_vecs, reset_bvec_offset, Bio, BioBox, BioBuffersOw
                        BioInPlace, BioLend, BioOwner, BioRange, Buffers, HasBio, Lent};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
-use crate::util::alloc::{flags, Flags, AllocBox, AllocError, Kmalloc};
+use crate::util::alloc::{flags, Flags, AllocError, Box, Kmalloc};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
@@ -1472,7 +1472,7 @@ async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'static>,
         };
         let mut ec = {
             let _noio = MemallocFlags::noio();
-            AllocBox::new(Kmalloc, init)
+            Box::try_init_in(init, Kmalloc)
         }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
         // the box's contents never move: only the box does
         unsafe { Pin::new_unchecked(&mut *ec) }.await?;
@@ -1730,7 +1730,7 @@ async fn retry(read: &Rbio, s: &mut RetryState<'_>, at: Locate<'_>) -> Result<()
     ret
 }
 
-struct RetryBox<'a>(AllocBox<RetryOwnedFut<'a>, &'a Mempool<Kmalloc>>);
+struct RetryBox<'a>(Box<RetryOwnedFut<'a>, &'a Mempool<Kmalloc>>);
 
 impl Future for RetryBox<'_> {
     type Output = (Result<(), BchError>, FailureState);
@@ -1761,7 +1761,7 @@ fn retry_boxed<'a>(read: &'a Rbio, f: Fragment<'a>, ret: Result<(), BchError>, a
         })
     };
     let _noio = MemallocFlags::noio();
-    RetryBox(AllocBox::new(&read.fs().read_retry_pool, init).expect("a retry's slot, outside NORECLAIM"))
+    RetryBox(Box::try_init_in(init, &read.fs().read_retry_pool).expect("a retry's slot, outside NORECLAIM"))
 }
 
 /// A fragment's task: @f read - and retried, if that's what it needs - what's

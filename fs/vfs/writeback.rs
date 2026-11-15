@@ -12,7 +12,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::AllocBox;
+use crate::util::alloc::Box;
 use crate::os::blkdev::plugged;
 use crate::util::bio::{bio_put, Bio, BioBuffersUnmanaged, BioOwner};
 use crate::util::closure::{self, closure_wait, StackClosure};
@@ -350,14 +350,14 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
     let inode = mapping.inode();
     let fs = inode.fs();
     let pool = &fs.vfs.writepage_buf_pool;
-    let tmp = {
+    let mut tmp = {
         let _noio = MemallocFlags::noio();
-        AllocBox::<[core::mem::MaybeUninit<u8>], _>::new_uninit_slice(&**pool, pool.element_size())
+        Box::<[u8], _>::try_new_uninit_slice_in(pool.element_size(), &**pool)
     }.expect("a pool's allocation: it waits for an element");
     let mut w = WritepageState {
         io:   None,
         opts: inode_opts::get_inode(fs, &inode.inode()),
-        tmp:  tmp.as_ptr().as_ptr().cast(),
+        tmp:  Box::as_mut_ptr(&mut tmp).cast(),
     };
 
     let ret = plugged(|| {

@@ -48,7 +48,7 @@ use crate::errcode::BchError;
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
-use crate::util::{alloc::{AllocBox, KVmalloc}, bio::{Bio, BioRange},
+use crate::util::{alloc::{Box, KVmalloc}, bio::{Bio, BioRange},
                   late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
@@ -218,7 +218,7 @@ pub struct Compress {
 pub(crate) struct Bbuf<'a> {
     raw:    c::bbuf,
     len:    usize,
-    pooled: Option<AllocBox<[MaybeUninit<u8>], &'a Mempool<KVmalloc>>>,
+    pooled: Option<Box<[MaybeUninit<u8>], &'a Mempool<KVmalloc>>>,
     _a:     PhantomData<&'a ()>,
 }
 
@@ -257,7 +257,7 @@ unsafe fn bbuf_exit(buf: &mut c::bbuf) {
         bb::BB_vmap => unsafe { c::vunmap(buf.b.map_addr(|a| a & !(crate::os::kernel::PAGE_SIZE - 1))) },
         #[cfg(not(kernel))]
         bb::BB_vmap => unreachable!(),
-        /* its Bbuf's AllocBox's */
+        /* its Bbuf's Box's */
         bb::BB_pool => {}
     }
 }
@@ -289,9 +289,9 @@ pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
      * userspace - but it is root-only and explicitly unsafe, so we ignore
      * it.
      */
-    let pooled = AllocBox::new_uninit_slice(&*fs.compress.bounce[rw], size)
+    let mut pooled = Box::try_new_uninit_slice_in(size, &*fs.compress.bounce[rw])
         .expect("a pool's allocation: it waits for an element");
-    let mut b = Bbuf::new(fs, pooled.as_ptr().cast(), bb::BB_pool, rw, size);
+    let mut b = Bbuf::new(fs, Box::as_non_null(&mut pooled).cast(), bb::BB_pool, rw, size);
     b.pooled = Some(pooled);
     b
 }
@@ -420,11 +420,11 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice
     let (src, dst) = (src.as_ptr().cast_const(), dst.as_ptr());
     // none for lz4, and for gzip in userspace, whose workspace is 0 bytes
     let pool = &fs.compress.decompress[opt];
-    let ws = pool.is_made().then(|| {
-        AllocBox::<[MaybeUninit<u8>], _>::new_uninit_slice(&**pool, pool.element_size())
+    let mut ws = pool.is_made().then(|| {
+        Box::<[u8], _>::try_new_uninit_slice_in(pool.element_size(), &**pool)
             .expect("a pool's allocation: it waits for an element")
     });
-    let ws = ws.as_ref().map_or(ptr::null_mut(), |b| b.as_ptr().as_ptr().cast());
+    let ws = ws.as_mut().map_or(ptr::null_mut(), |b| Box::as_mut_ptr(b).cast());
 
     // SAFETY: @src and @dst crc's sizes, apart
     unsafe {
@@ -664,7 +664,7 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
      * reserve is right there.
      */
     let ws_size = compress_workspace_size(fs, t, level);
-    let mut ws = AllocBox::new_uninit_slice(&*fs.compress.workspace[t], ws_size)
+    let mut ws = Box::try_new_uninit_slice_in(ws_size, &*fs.compress.workspace[t])
         .expect("a pool's allocation: it waits for an element");
     let ws: &mut [MaybeUninit<u8>] = &mut ws;
 

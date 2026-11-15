@@ -12,7 +12,7 @@ use crate::fs::Fs;
 use crate::types::Le64;
 use crate::os::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{AllocBox, Kmalloc};
+use crate::util::alloc::{Box, Kmalloc};
 use crate::util::mempool::Mempool;
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{plain_bytes, Head};
@@ -53,7 +53,7 @@ impl WriteSortRuns {
 /// The runs a node read merges, in a fill_iter element: room for a run per
 /// block of the node, twice over.
 pub struct SortRuns<'p> {
-    buf:  AllocBox<[SortRun], &'p Mempool<Kmalloc>>,
+    buf:  Box<[SortRun], &'p Mempool<Kmalloc>>,
     used: usize,
 }
 
@@ -61,9 +61,9 @@ impl<'p> SortRuns<'p> {
     pub fn new(fs: &'p Fs) -> Self {
         let pool = &fs.btree.fill_iter;
         let _noio = MemallocFlags::noio();
-        let buf = AllocBox::new_zeroed_slice(pool, pool.element_size() / size_of::<SortRun>())
+        let buf = Box::try_new_zeroed_slice_in(pool.element_size() / size_of::<SortRun>(), pool)
             .expect("a pool's allocation: it waits for an element");
-        Self { buf, used: 0 }
+        Self { buf: unsafe { buf.assume_init() }, used: 0 }
     }
 
     fn runs(&mut self) -> &mut [SortRun] {

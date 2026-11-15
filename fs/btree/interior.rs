@@ -33,7 +33,7 @@ use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, Sh
 use crate::new_lock;
 use crate::types::{Fifo, Le64, Lent};
 use crate::util::Printbuf;
-use crate::util::alloc::{AllocBox, KVVec, Kmalloc};
+use crate::util::alloc::{Box, KVVec, Kmalloc};
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_symbol;
 use crate::util::futex::EventCount;
@@ -395,7 +395,7 @@ macro_rules! rewrite_reason_strs {
 c::BtreeNodeRewriteReason_arms!(rewrite_reason_strs);
 
 /// An update, in an element of the interior updates' pool.
-type UpdateBox = AllocBox<BtreeUpdate, &'static Mempool<Kmalloc>>;
+type UpdateBox = Box<BtreeUpdate, &'static Mempool<Kmalloc>>;
 
 impl BtreeUpdate {
     fn fs(&self) -> &Fs {
@@ -651,7 +651,7 @@ impl<'t> InteriorUpdate<'t> {
 
         let btree = paths[path].btree_id();
         // made in place: the arrays are kilobytes
-        let owner = AllocBox::new(&*fs_ref.btree.interior_updates.pool, init!(BtreeUpdate {
+        let mut owner = Box::try_init_in(init!(BtreeUpdate {
             fs:           unsafe { BackRef::new(fs) },
             start_time,
             ip_started,
@@ -676,8 +676,8 @@ impl<'t> InteriorUpdate<'t> {
             new_nodes    <- init_zeroed(),
             mode:               LockedBy::new(None, ()),
             write_blocked_list: ListLinks::new(),
-        }? BchError))?;
-        let raw = owner.as_ptr();
+        }? BchError), &*fs_ref.btree.interior_updates.pool)?;
+        let raw = Box::as_non_null(&mut owner);
 
         {
             let mut g = fs.btree.interior_updates.lock.lock();
@@ -897,7 +897,7 @@ unsafe fn update_free(update: NonNull<BtreeUpdate>, trans: &BtreeTrans<'_>, path
 
     let owner = rollback.unwrap_or_else(|| {
         let front = g.unwritten.pop_front().expect("an update completed, on unwritten");
-        assert!(front.as_ptr() == update, "an update completed out of order");
+        assert!(ptr::eq(Box::as_ptr(&front), update.as_ptr()), "an update completed out of order");
         front
     });
     g.live.retain(|p| *p != update);
