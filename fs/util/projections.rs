@@ -137,41 +137,40 @@ impl<P: FakePlaceWrite> Drop for FakePlaceRef<'_, P> {
 /// out: the same bytes, its leaves able to write. A struct of them is
 /// published!(); its leaves are Volatile words and RcuArrays.
 ///
-/// # Safety
 /// Writer is laid out as Self: a &Self is a valid &Writer. What Writer
 /// writes, &Self's readers may read meanwhile: each leaf's writes are atomic,
 /// or published as RCU publishes.
-pub unsafe trait Publish {
+pub trait Publish {
     type Writer;
 }
 
-// SAFETY: nothing to write
-unsafe impl Publish for () {
+// nothing to write
+impl Publish for () {
     type Writer = ();
 }
 
-// SAFETY: element for element, each T's
-unsafe impl<T: Publish, const N: usize> Publish for [T; N] {
+// element for element, each T's
+impl<T: Publish, const N: usize> Publish for [T; N] {
     type Writer = [T::Writer; N];
 }
 
-// SAFETY: its writes are atomic, so its writer is itself
-unsafe impl Publish for core::sync::atomic::AtomicU64 {
+// its writes are atomic, so its writer is itself
+impl Publish for core::sync::atomic::AtomicU64 {
     type Writer = Self;
 }
 
-// SAFETY: as AtomicU64's
-unsafe impl Publish for core::sync::atomic::AtomicI64 {
+// as AtomicU64's
+impl Publish for core::sync::atomic::AtomicI64 {
     type Writer = Self;
 }
 
-// SAFETY: as AtomicU64's
-unsafe impl<T> Publish for core::sync::atomic::AtomicPtr<T> {
+// as AtomicU64's
+impl<T> Publish for core::sync::atomic::AtomicPtr<T> {
     type Writer = Self;
 }
 
-// SAFETY: no bytes
-unsafe impl Publish for crate::types::CacheAligned {
+// no bytes
+impl Publish for crate::types::CacheAligned {
     type Writer = Self;
 }
 
@@ -200,9 +199,9 @@ macro_rules! published {
             $($fvis $field: <$ty as $crate::util::projections::Publish>::Writer),*
         }
 
-        // SAFETY: field for field, each its type's Writer - laid out as it is
+        // field for field, each its type's Writer - laid out as it is
         // (Publish), and checked
-        unsafe impl $crate::util::projections::Publish for $name {
+        impl $crate::util::projections::Publish for $name {
             type Writer = [<$name Writer>];
         }
 
@@ -445,8 +444,8 @@ impl<T: AtomicWord + Default> Default for Volatile<T> {
 // Plain @T
 unsafe impl<T: AtomicWord + crate::util::vstructs::Plain> crate::util::vstructs::Plain for Volatile<T> {}
 
-// SAFETY: VolatileWriter is a Volatile; its stores are atomic
-unsafe impl<T: AtomicWord> Publish for Volatile<T> {
+// VolatileWriter is a Volatile; its stores are atomic
+impl<T: AtomicWord> Publish for Volatile<T> {
     type Writer = VolatileWriter<T>;
 }
 
@@ -547,8 +546,8 @@ impl<T> PublishedOnceWriter<T> {
 // SAFETY: SetOnce's zeroes are its unset state
 unsafe impl<T> ::pin_init::Zeroable for PublishedOnce<T> {}
 
-// SAFETY: the same SetOnce, whose set is atomic
-unsafe impl<T> Publish for PublishedOnce<T> {
+// the same SetOnce, whose set is atomic
+impl<T> Publish for PublishedOnce<T> {
     type Writer = PublishedOnceWriter<T>;
 }
 

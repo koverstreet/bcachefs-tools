@@ -329,7 +329,7 @@ impl<P: RcuPointer> Drop for RcuPtr<P> {
     }
 }
 
-unsafe impl<P: RcuPointer> Publish for RcuPtr<P> {
+impl<P: RcuPointer> Publish for RcuPtr<P> {
     type Writer = RcuPtrWriter<P>;
 }
 
@@ -691,7 +691,7 @@ impl<T: RcuElement> RcuArray<T> {
     }
 }
 
-unsafe impl<T: RcuElement, H: RcuElement> Publish for RcuArray<T, H> {
+impl<T: RcuElement, H: RcuElement> Publish for RcuArray<T, H> {
     type Writer = RcuArrayWriter<T, H>;
 }
 

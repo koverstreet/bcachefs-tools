@@ -121,7 +121,7 @@ pub struct Locked<R: RawLockBase, G = (), P = ()> {
     _pin:      PhantomData<PhantomPinned>,
 }
 
-unsafe impl<R: RawLockBase, G, P> crate::util::place::Wrapper for Locked<R, G, P> {
+impl<R: RawLockBase, G, P> crate::util::place::Wrapper for Locked<R, G, P> {
     type Inner = G;
     const INNER_OFFSET: usize = core::mem::offset_of!(Self, protected);
 }
@@ -607,8 +607,7 @@ pub(crate) trait Guard {
     where
         Self: Sized + 'g,
     {
-        let () = S::DISJOINT;
-        unsafe { S::get(self) }
+        S::get(self)
     }
 }
 
@@ -712,14 +711,13 @@ where
 }
 
 /// A tuple of Pieces, Guard::split()'s: DISJOINT evaluates only if the pieces'
-/// bytes don't overlap, but two shared pieces'; get() hands out each piece.
+/// bytes don't overlap, but two shared pieces'; get() checks it, and hands out
+/// each piece, for as long as it has the guard.
 pub(crate) trait Split<'g, G: Guard + 'g> {
     type Out;
     const DISJOINT: ();
 
-    /// # Safety
-    /// As Piece::get()'s, for every piece.
-    unsafe fn get(g: &'g G) -> Self::Out;
+    fn get(g: &'g mut G) -> Self::Out;
 }
 
 /// Whether pieces (offset, size, mut) overlap only where both are shared.
@@ -746,7 +744,9 @@ macro_rules! split_tuple {
             const DISJOINT: () = assert!(pieces_disjoint(&[$(($p::OFFSET, $p::SIZE, $p::MUT)),+]),
                                          "a split's pieces overlap");
 
-            unsafe fn get(g: &'g G) -> Self::Out {
+            fn get(g: &'g mut G) -> Self::Out {
+                let () = Self::DISJOINT;
+                let g = &*g;
                 unsafe { ($($p::get(g),)+) }
             }
         }

@@ -249,12 +249,10 @@ where
     }
 }
 
-/// A type holding one value, at INNER_OFFSET - a Locked's protected data -
-/// for a type placed in it: #[placed(Base.field.*)].
-///
-/// # Safety
-/// Self holds an Inner at INNER_OFFSET, for as long as Self is.
-pub(crate) unsafe trait Wrapper {
+/// A type holding one value, an Inner at INNER_OFFSET, for as long as it is -
+/// a Locked's protected data - for a type placed in it:
+/// #[placed(Base.field.*)].
+pub(crate) trait Wrapper {
     type Inner;
     const INNER_OFFSET: usize;
 }
@@ -502,7 +500,7 @@ impl<C, A> Placed<C, A> {
 }
 
 // A placed Locked's data is placed as a Locked's is: C is at its start.
-unsafe impl<C: Wrapper, A> Wrapper for Placed<C, A> {
+impl<C: Wrapper, A> Wrapper for Placed<C, A> {
     type Inner = C::Inner;
     const INNER_OFFSET: usize = core::mem::offset_of!(Self, value) + C::INNER_OFFSET;
 }
