@@ -148,8 +148,7 @@ fn bucket_to_sector(bucket_size: u32, bucket: u64) -> u64 {
 }
 
 /// Mark a range of buckets as nouse.
-unsafe fn mark_nouse_range(ca: *const Dev, sector_from: u64, sector_to: u64) {
-    let ca = unsafe { &*ca };
+fn mark_nouse_range(ca: &Dev, sector_from: u64, sector_to: u64) {
     let bucket_size = ca.mi.get().bucket_size as u32;
     ca.buckets_nouse.with(|w| {
         let nouse = AtomicBitmap::from_words(w);
@@ -166,10 +165,9 @@ unsafe fn mark_nouse_range(ca: *const Dev, sector_from: u64, sector_to: u64) {
 
 /// Mark all space NOT covered by the reserved extents as nouse,
 /// plus the space for the default superblock layout.
-unsafe fn mark_unreserved_space(fs: *mut Fs, extents: &[CRange]) {
-    let fs = unsafe { &*fs };
-    let ca = fs.devs[0].as_ptr();
-    let mi = unsafe { &*ca }.mi.get();
+fn mark_unreserved_space(fs: &Fs, extents: &[CRange]) {
+    let ca = fs.dev_get(0).expect("device 0");
+    let mi = ca.mi.get();
     let (bucket_size, nbuckets) = (mi.bucket_size as u32, mi.nbuckets);
 
     // Byte-addressed max for hole iteration
@@ -179,12 +177,12 @@ unsafe fn mark_unreserved_space(fs: *mut Fs, extents: &[CRange]) {
         if hole.start == hole.end {
             continue;
         }
-        unsafe { mark_nouse_range(ca, hole.start >> 9, (hole.end + (1 << 9) - 1) >> 9) };
+        mark_nouse_range(&ca, hole.start >> 9, (hole.end + (1 << 9) - 1) >> 9);
     }
 
     // Also mark space for the default sb layout
-    let sb_size = 1u64 << fs.dev_sb(&fs.sb_lock(), unsafe { &*ca }).expect("device 0's superblock").sb().layout.sb_max_size_bits;
-    unsafe { mark_nouse_range(ca, 0, c::BCH_SB_SECTOR as u64 + sb_size * 2) };
+    let sb_size = 1u64 << fs.dev_sb(&fs.sb_lock(), &ca).expect("device 0's superblock").sb().layout.sb_max_size_bits;
+    mark_nouse_range(&ca, 0, c::BCH_SB_SECTOR as u64 + sb_size * 2);
 }
 
 /// Reserve space for bcachefs metadata file, return extents and inode number.
@@ -446,7 +444,7 @@ fn migrate_fs(
     fs.buckets_nouse_alloc()
         .map_err(|e| anyhow!("Error allocating buckets_nouse: {}", e))?;
 
-    unsafe { mark_unreserved_space(fs.as_ptr(), &extents) };
+    mark_unreserved_space(&fs, &extents);
 
     fs.start()
         .map_err(|e| anyhow!("Error starting new filesystem: {}", e))?;
@@ -461,7 +459,7 @@ fn migrate_fs(
 
     // Calculate reserve_start: round up (superblock_size * 2 + BCH_SB_SECTOR) sectors
     // to bucket boundary (in bytes)
-    let bucket_bytes = unsafe { (*fs.devs[0].as_ptr()).mi.get().bucket_size as u64 } << 9;
+    let bucket_bytes = (fs.dev_get(0).expect("device 0").mi.get().bucket_size as u64) << 9;
     let reserve_start = (((format_opts.superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
         .div_ceil(bucket_bytes)) * bucket_bytes;
 
@@ -561,8 +559,8 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .map_err(|e| anyhow!("Error allocating buckets_nouse: {}", e))?;
 
     // Mark the new sb bucket range as nouse
-    let ca = fs.devs[0].as_ptr();
-    unsafe { mark_nouse_range(ca, 0, c::BCH_SB_SECTOR as u64 + sb_size as u64 * 2) };
+    let ca = fs.dev_get(0).expect("device 0");
+    mark_nouse_range(&ca, 0, c::BCH_SB_SECTOR as u64 + sb_size as u64 * 2);
 
     // Clear no_default_sb feature so recovery doesn't force ro
     {
@@ -583,7 +581,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 
     {
         let mut sb = fs.sb_lock();
-        let mut dev_sb = fs.dev_sb_mut(&mut sb, unsafe { &*ca }).expect("device 0's superblock");
+        let mut dev_sb = fs.dev_sb_mut(&mut sb, &ca).expect("device 0's superblock");
 
         // Verify sb_size consistency
         let actual_sb_size = 1u32 << dev_sb.sb().layout.sb_max_size_bits;
@@ -594,13 +592,11 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     }
 
     // Mark the new sb buckets in FS metadata
-    let ca_ref = fs.dev_get(0)
-        .ok_or_else(|| anyhow!("device 0 not found"))?;
     fs.trans_mark_dev_sb(
-        &ca_ref,
+        &ca,
         bcachefs_kernel::btree::iter::UpdateTriggerFlags::TRANSACTIONAL,
     ).map_err(|e| anyhow!("Error marking superblock buckets: {}", e))?;
-    drop(ca_ref);
+    drop(ca);
 
     drop(fs);
     Ok(())
