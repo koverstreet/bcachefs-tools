@@ -268,11 +268,11 @@ const STATE_IDX_SHIFT: u32 = c::JOURNAL_ENTRY_OFFSET_MAX.count_ones();
 
 impl c::journal_res_state {
     pub fn from_v(v: u64) -> Self {
-        c::journal_res_state { word: c::journal_res_state_word { v } }
+        c::journal_res_state { v }
     }
 
     pub fn v(self) -> u64 {
-        unsafe { self.word.v }
+        self.v
     }
 
     fn count_shift(idx: u32) -> u32 {

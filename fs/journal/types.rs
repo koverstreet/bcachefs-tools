@@ -230,40 +230,28 @@ pub struct journal_res {
     pub seq: u64,
 }
 
-nest! {
-    #[derive(Clone, Copy, MaybeZeroable)]*
-    #[repr(C)]*
-    pub union journal_res_state {
-        pub atomic: pub struct journal_res_state_atomic {
-            pub counter: c::atomic64_t,
-        },
+/// The journal's reservation state, one word: its fields are
+/// journal_res_state_bits.
+#[repr(transparent)]
+#[derive(Clone, Copy, MaybeZeroable)]
+pub struct journal_res_state {
+    pub v: u64,
+}
 
-        pub word: pub struct journal_res_state_word {
-            pub v: u64,
-        },
-
-        /*
-         * The bit layout within the word is the same on both byte orders:
-         * cur_entry_offset at bit 0, idx at 22, then the four counts at bit
-         * 24 + idx*10. That invariant lets count() / inc() / state_buf_put()
-         * index a count with a single shift, not a switch.
-         */
-        #>[derive(BitfieldMembers)]
-        pub fields: pub struct journal_res_state_fields {
-            #[members]
-            #>[derive(Clone, Copy, MaybeZeroable)]-
-            #>[repr(C)]-
-            #>[bitfield(u64)]
-            pub bits: pub struct journal_res_state_bits {
-                cur_entry_offset: u22,
-                idx:              u2,
-                buf0_count:       u10,
-                buf1_count:       u10,
-                buf2_count:       u10,
-                buf3_count:       u10,
-            },
-        },
-    }
+/*
+ * The bit layout within the word is the same on both byte orders:
+ * cur_entry_offset at bit 0, idx at 22, then the four counts at bit
+ * 24 + idx*10. That invariant lets count() / inc() / state_buf_put()
+ * index a count with a single shift, not a switch.
+ */
+#[bitfield(u64)]
+pub struct journal_res_state_bits {
+    cur_entry_offset: u22,
+    idx:              u2,
+    buf0_count:       u10,
+    buf1_count:       u10,
+    buf2_count:       u10,
+    buf3_count:       u10,
 }
 
 pub const JOURNAL_STATE_BUF_COUNT_BITS: u32 = 10; /* matches bufN_count:10 above */
