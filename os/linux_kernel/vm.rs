@@ -8,7 +8,7 @@ use crate::c;
 use crate::util::ffi::Opaque;
 use crate::os::file::File;
 use crate::os::ops::{from_raw, into_raw};
-use crate::vfs::folio::FolioRef;
+use crate::os::folio::FolioRef;
 
 /// A page fault on a mapping: the kernel's vm_fault.
 #[repr(transparent)]

@@ -23,7 +23,7 @@ use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::ffi::c_char;
 
-use super::dentry::Dentry;
+use crate::os::dentry::Dentry;
 
 fn user_ptr(addr: u64) -> *const c_char {
     addr as usize as *const c_char

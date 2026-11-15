@@ -15,9 +15,9 @@ use crate::util::ffi::c_char;
 use crate::os::ops::{from_raw, into_raw, SelfOf};
 use crate::os::seq_file::SeqFile;
 
-use super::dentry::Dentry;
+use crate::os::dentry::Dentry;
 use super::export::NameBuf;
-use super::folio::{Folio, FolioGuard, LockedFolio, Mapping, Readahead};
+use crate::os::folio::{Folio, FolioGuard, LockedFolio, Mapping, Readahead};
 use super::idmap::{MntIdmap, RawIdmap};
 use super::inode::InodeInfo;
 use super::path::Path;

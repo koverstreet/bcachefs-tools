@@ -31,13 +31,13 @@ use crate::locking::MemallocFlags;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::types::CStatic;
 use crate::util::alloc::{init_at, kzalloc, KBox};
+use crate::os::folio::{Folio, FolioGuard, FolioSpan, LockedFolio, Mapping, Readahead};
 use crate::os::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::BioRange;
 
 use super::buffered;
 use super::buffered_write::{self, WriteBegun};
-use super::folio::{AddressSpaceOps, AopsVTable, Folio, FolioGuard, FolioSpan, FolioStateGuard, LockedFolio, Mapping,
-                   Readahead};
+use super::folio::{AddressSpaceOps, AopsVTable, FolioStateGuard};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use super::ops::VfsWriter;

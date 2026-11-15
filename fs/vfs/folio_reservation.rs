@@ -16,7 +16,8 @@ use crate::c::ReservationFlags as ReservationFlags;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 
-use super::folio::{FolioSpan, FolioStateGuard, Folio};
+use super::folio::FolioStateGuard;
+use crate::os::folio::{Folio, FolioSpan};
 use super::inode::{InodeInfo, QuotaReservation};
 use super::pagecache::{blocks_in, blocks_out};
 

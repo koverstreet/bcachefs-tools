@@ -4,9 +4,11 @@ pub mod alloc;
 pub mod bio;
 pub mod blkdev;
 pub mod crc;
+pub mod dentry;
 #[cfg(CONFIG_DEBUG_FS)]
 pub mod debugfs;
 pub mod file;
+pub mod folio;
 pub mod fs_context;
 pub mod fs_type;
 pub mod ioctl;

@@ -22,7 +22,7 @@
  * partially_uptodate does.
  */
 
-use super::folio::{Folio, Mapping, Readahead};
+use crate::os::folio::{Folio, Mapping, Readahead};
 use super::inode::InodeInfo;
 use super::pagecache;
 use crate::btree::bkey::{prelude::*, BkeySC};

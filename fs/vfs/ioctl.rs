@@ -43,7 +43,7 @@ use crate::util::log::LogMsg;
 use crate::util::printbuf::Printbuf;
 use crate::init::chardev::{copy_err_msg, fs_ioctl, ErrMsg, V2};
 use crate::locking::{Locked, RwSem};
-use crate::vfs::dentry::Dentry;
+use crate::os::dentry::Dentry;
 use crate::os::iov_iter::IovIter;
 use crate::vfs::direct::direct_io_read;
 use crate::vfs::kiocb::Kiocb;

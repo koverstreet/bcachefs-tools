@@ -282,7 +282,7 @@ impl Bcachefs {
         #[cfg(CONFIG_UNICODE)]
         {
             // SAFETY: the root's dentry, which @root holds a reference on
-            let d = unsafe { super::dentry::Dentry::borrow_raw(root.as_ptr()) };
+            let d = unsafe { crate::os::dentry::Dentry::borrow_raw(root.as_ptr()) };
             d.set_casefold_ops(d.inode().vfs());
         }
 

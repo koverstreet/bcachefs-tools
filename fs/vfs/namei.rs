@@ -36,7 +36,7 @@ use crate::xattr::{self, XattrType};
 use cstruct_macros::vtable;
 use kernel::sync::aref::ARef;
 
-use super::dentry::Dentry;
+use crate::os::dentry::Dentry;
 use super::idmap::MntIdmap;
 use super::inode::{InodeInfo, InodeRef, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use super::inode_ops::InodeOps;

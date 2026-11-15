@@ -38,7 +38,7 @@ use core::pin::Pin;
 use {
     crate::errcode::{errptr_to_result, loff_to_result, ret_to_result_void},
     crate::os::kernel::loff,
-    crate::vfs::folio::Mapping,
+    crate::os::folio::Mapping,
     core::ffi::{c_uint, c_void},
     core::marker::PhantomData,
     core::mem::MaybeUninit,

@@ -29,7 +29,7 @@ use crate::util::rcu::read_lock;
 use crate::os::seq_file::SeqFile;
 use cstruct_macros::vtable;
 
-use super::dentry::Dentry;
+use crate::os::dentry::Dentry;
 use super::inode::{InodeInfo, ATTR_ATIME, ATTR_CTIME, ATTR_MTIME};
 
 /// One of ours: s_fs_info is its Fs. The type is os/linux_kernel/super_block.rs's.

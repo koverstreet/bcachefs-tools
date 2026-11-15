@@ -23,7 +23,7 @@ use {
     crate::errcode::{ret_to_result_void, BchError},
     crate::os::kernel::loff,
     kernel::sync::aref::{ARef, AlwaysRefCounted},
-    super::folio::Mapping,
+    crate::os::folio::Mapping,
     super::super_block::SuperBlock,
     crate::locking::{ExclusiveGuard, Locked, RwSem, SpinLockIrq},
 };

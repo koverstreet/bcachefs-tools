@@ -22,7 +22,7 @@ use crate::os::ops::IntoRaw;
 use crate::xattr;
 use cstruct_macros::vtable;
 
-use super::dentry::Dentry;
+use crate::os::dentry::Dentry;
 use super::idmap::MntIdmap;
 use super::inode::InodeInfo;
 use super::namei::DirOps;

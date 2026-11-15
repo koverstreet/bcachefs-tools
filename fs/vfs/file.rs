@@ -85,7 +85,7 @@ use super::direct::bch2_read_iter;
 use super::inode::InodeInfo;
 use super::io;
 use super::buffered_write::bch2_write_iter;
-use super::folio::FolioSpan;
+use crate::os::folio::FolioSpan;
 use super::folio_reservation::FolioReservation;
 use super::ioctl::fs_file_ioctl;
 

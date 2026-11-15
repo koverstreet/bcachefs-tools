@@ -4,7 +4,7 @@
 //! writeback to write out.
 
 use super::direct_write::direct_write;
-use super::folio::{FolioSpan, LockedFolio, Mapping};
+use crate::os::folio::{FolioSpan, LockedFolio, Mapping};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use super::kiocb::Kiocb;
