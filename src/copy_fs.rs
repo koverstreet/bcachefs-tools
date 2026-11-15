@@ -31,7 +31,8 @@ use bcachefs_kernel::{acl, dirent, inode, namei, str_hash, xattr};
 use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::fs::Fs;
 
-use crate::util::AlignedBuf;
+use bcachefs_kernel::os::kernel::PAGE_SIZE;
+use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
 
 const BCACHEFS_ROOT_INO: u64 = 4096;
 const BCACHEFS_ROOT_SUBVOL: u64 = 1;
@@ -429,7 +430,7 @@ fn copy_data(
         let len = std::cmp::min(end - pos, MAX_IO_SIZE as u64) as usize;
         let padded = ((len as u64).div_ceil(block_size) * block_size) as usize;
 
-        let mut buf = AlignedBuf::new(padded);
+        let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(padded, Flags::empty())?;
         rustix::io::pread(src_fd, &mut buf[..len], pos)
             .map_err(rustix_err)?;
 
@@ -512,7 +513,7 @@ fn copy_link(
     let target_bytes = target.as_bytes();
     let link_len = target_bytes.len() as u64;
 
-    let mut buf = AlignedBuf::new(MAX_IO_SIZE);
+    let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(MAX_IO_SIZE, Flags::empty())?;
     buf[..target_bytes.len()].copy_from_slice(target_bytes);
     let padded = (link_len.div_ceil(block_size) * block_size) as usize;
 
@@ -710,12 +711,12 @@ fn copy_sync_file_range(
     while start != range.end {
         let b = std::cmp::min(range.end - start, MAX_IO_SIZE as u64) as usize;
 
-        let mut src_buf = AlignedBuf::new(b);
+        let mut src_buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(b, Flags::empty())?;
         let read_len = std::cmp::min(b, (src_size - start) as usize);
         rustix::io::pread(src_fd, &mut src_buf[..read_len], start)
             .map_err(rustix_err)?;
 
-        let mut dst_buf = AlignedBuf::new(b);
+        let mut dst_buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(b, Flags::empty())?;
         block_on(fs.read(dst_inum, start, dst, &mut dst_buf))?;
 
         let mut m = Range { start: 0, end: 0 };

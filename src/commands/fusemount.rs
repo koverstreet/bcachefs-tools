@@ -73,7 +73,8 @@ use bcachefs_kernel::xattr::{self, XattrType};
 use bcachefs_kernel::{inode, inode_opts};
 use bcachefs_kernel::snapshots::subvolume;
 
-use crate::util::AlignedBuf;
+use bcachefs_kernel::os::kernel::PAGE_SIZE;
+use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
 
 /// Guard that calls rcu_unregister_thread on drop (i.e. thread exit).
 struct RcuGuard;
@@ -526,7 +527,7 @@ fn fuse_truncate(fs: &Fs, inum: c::subvol_inum, new_size: u64) -> Result<(), Bch
     let tail = (new_size & (block_size - 1)) as usize;
     if tail != 0 {
         let block_start = new_size - tail as u64;
-        let mut buf = AlignedBuf::new(block_size as usize);
+        let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(block_size as usize, Flags::empty())?;
         block_on(fs.read(inum, block_start, &bi, &mut buf))?;
 
         if buf[tail..].iter().any(|&b| b != 0) {
@@ -1182,7 +1183,10 @@ impl Filesystem for BcachefsFs {
         let block_size = fs.block_bytes() as usize;
         let aligned_size = (size + block_size - 1) & !(block_size - 1);
 
-        let mut buf = AlignedBuf::new(aligned_size);
+        let Ok(mut buf) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(aligned_size, Flags::empty()) else {
+            reply.error(Errno::ENOMEM);
+            return;
+        };
 
         if let Err(e) = block_on(fs.read(inum, 0, &bi, &mut buf)) {
             reply.error(bch_err(&e));
@@ -1279,7 +1283,10 @@ impl Filesystem for BcachefsFs {
         let block_size = fs.block_bytes();
         let padded = (link_bytes.len() as u64).div_ceil(block_size) * block_size;
 
-        let mut buf = AlignedBuf::new(padded as usize);
+        let Ok(mut buf) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(padded as usize, Flags::empty()) else {
+            reply.error(Errno::ENOMEM);
+            return;
+        };
         buf[..link_bytes.len()].copy_from_slice(link_bytes);
 
         let sym_inum = c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum };
@@ -1481,7 +1488,10 @@ impl Filesystem for BcachefsFs {
         let aligned_end = (offset + read_size as u64).div_ceil(block_size) * block_size;
         let aligned_size = (aligned_end - aligned_start) as usize;
 
-        let mut buf = AlignedBuf::new(aligned_size);
+        let Ok(mut buf) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(aligned_size, Flags::empty()) else {
+            reply.error(Errno::ENOMEM);
+            return;
+        };
 
         if let Err(e) = block_on(fs.read(inum, aligned_start, &bi, &mut buf)) {
             reply.error(bch_err(&e));
@@ -1522,11 +1532,17 @@ impl Filesystem for BcachefsFs {
         let aligned_end = (offset + size as u64).div_ceil(block_size) * block_size;
         let aligned_size = (aligned_end - aligned_start) as usize;
 
-        let mut buf = AlignedBuf::new(aligned_size);
+        let Ok(mut buf) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(aligned_size, Flags::empty()) else {
+            reply.error(Errno::ENOMEM);
+            return;
+        };
 
         // RMW: read partial start block
         if pad_start > 0 {
-            let mut start_block = AlignedBuf::new(block_size as usize);
+            let Ok(mut start_block) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(block_size as usize, Flags::empty()) else {
+                reply.error(Errno::ENOMEM);
+                return;
+            };
             if let Err(e) = block_on(fs.read(inum, aligned_start, &bi, &mut start_block)) {
                 reply.error(bch_err(&e));
                 return;
@@ -1539,7 +1555,10 @@ impl Filesystem for BcachefsFs {
         if pad_end > 0 && !(pad_start > 0 && aligned_size == block_size as usize) {
             let end_block_offset = aligned_end - block_size;
             let buf_offset = aligned_size - block_size as usize;
-            let mut end_block = AlignedBuf::new(block_size as usize);
+            let Ok(mut end_block) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(block_size as usize, Flags::empty()) else {
+                reply.error(Errno::ENOMEM);
+                return;
+            };
             if let Err(e) = block_on(fs.read(inum, end_block_offset, &bi, &mut end_block)) {
                 reply.error(bch_err(&e));
                 return;

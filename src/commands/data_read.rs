@@ -22,6 +22,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use bch_bindgen::c;
 use clap::Parser;
 
+use bcachefs_kernel::os::kernel::PAGE_SIZE;
+use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
 use crate::wrappers::ioctl::{ioctl_rw, BCHFS_IOC_PREAD_RAW};
 
 const SECTOR_SIZE: u64 = 512;
@@ -68,34 +70,6 @@ pub struct Cli {
     /// Hex dump width
     #[arg(long, default_value = "16")]
     width: usize,
-}
-
-/// An O_DIRECT-aligned buffer. Owns its allocation so the read loop can use
-/// `?` without leaking it.
-struct AlignedBuf {
-    ptr:    *mut u8,
-    layout: std::alloc::Layout,
-}
-
-impl AlignedBuf {
-    fn new(size: usize) -> anyhow::Result<Self> {
-        let layout = std::alloc::Layout::from_size_align(size, SECTOR_SIZE as usize)?;
-        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-        if ptr.is_null() {
-            anyhow::bail!("failed to allocate {} byte aligned buffer", size);
-        }
-        Ok(Self { ptr, layout })
-    }
-
-    fn as_slice(&self, len: usize) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.ptr, len) }
-    }
-}
-
-impl Drop for AlignedBuf {
-    fn drop(&mut self) {
-        unsafe { std::alloc::dealloc(self.ptr, self.layout) };
-    }
 }
 
 /// Where the data goes: a file, or a hex dump on stdout.
@@ -158,7 +132,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
         .custom_flags(libc::O_DIRECT)
         .open(&cli.file)?;
 
-    let buf = AlignedBuf::new(cli.len.min(CHUNK) as usize)?;
+    let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(cli.len.min(CHUNK) as usize, Flags::empty())?;
     let mut err_msg_buf = vec![0u8; 4096];
 
     let mut sink = match cli.output {
@@ -180,7 +154,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
         let mut arg = c::bch_ioctl_pread_raw {
             offset: cli.offset + pos,
             len:    want,
-            buf:    buf.ptr as u64,
+            buf:    buf.as_mut_ptr() as u64,
             flags:  if cli.no_poison_check { 1 << 0 } else { 0 },
             errors: 0,
             err: c::bch_ioctl_err_msg {
@@ -211,7 +185,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
             }
         };
 
-        sink.write(cli.offset + pos, buf.as_slice(got as usize))?;
+        sink.write(cli.offset + pos, &buf[..got as usize])?;
         pos += got;
 
         // Short of what was asked for, without an error: end of file.

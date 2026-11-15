@@ -54,6 +54,8 @@ use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized};
 use clap::Parser;
 use bcachefs_kernel::format::{Bpos, Btree};
+use bcachefs_kernel::os::kernel::PAGE_SIZE;
+use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
 
 struct KillNode {
     btree:  Btree,
@@ -213,7 +215,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
     let dev_idx = cli.dev.unwrap_or(-1);
 
     // O_DIRECT requires aligned buffers; bd_fd is opened with O_DIRECT
-    let zeroes = crate::util::AlignedBuf::new(block_size);
+    let zeroes = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(block_size, Flags::empty())?;
 
     let trans = bcachefs_kernel::btree_trans!(&fs);
 
@@ -270,7 +272,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                         ErrorType::Csum | ErrorType::Keys => {
                             /* the whole written extent, so we can walk its bsets */
                             let written = b.written.get() as usize;
-                            let mut buf = crate::util::AlignedBuf::new((written * 512).max(block_size));
+                            let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp((written * 512).max(block_size), Flags::empty())?;
 
                             std::os::unix::fs::FileExt::read_exact_at(&*file, &mut buf, offset)?;
 
