@@ -9,12 +9,10 @@
 
 use super::buffered_write::WriteBegun;
 use super::inode::InodeInfo;
-use super::ops::VfsWriter;
-use super::writeback::Wbc;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::{ExclusiveGuard, SpinLockIrq};
-use crate::os::folio::{Folio, FolioGuard, LockedFolio, Mapping, Readahead};
+use crate::os::folio::{Folio, FolioGuard, LockedFolio, Mapping, Readahead, VfsWriter, Wbc};
 use crate::util::alloc::KBox;
 use core::ffi::{c_int, c_uint, c_void};
 use core::ops::{Deref, DerefMut};

@@ -107,20 +107,6 @@ from_raw! {
     &'a mut *mut c_void   = *mut *mut c_void      => |r| &mut *r;
 }
 
-/// write_begin() and write_end()'s first argument, which they don't use: the
-/// kiocb from 6.17, the file before.
-pub(crate) struct VfsWriter;
-
-#[cfg(linux_ge = "6.17")]
-from_raw! {
-    VfsWriter = *const c::kiocb => |_r| VfsWriter;
-}
-
-#[cfg(not(linux_ge = "6.17"))]
-from_raw! {
-    VfsWriter = *mut c::file => |_r| VfsWriter;
-}
-
 // ── Returns ──────────────────────────────────────────────────────────────
 
 /// @e, classed, as an ERR_PTR().

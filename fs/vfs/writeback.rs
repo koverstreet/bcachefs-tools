@@ -20,7 +20,7 @@ use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::util::sleep::Sleep;
 use crate::os::ops::from_raw;
 use crate::util::time_stats::TimeStats;
-use crate::os::folio::{Folio, FolioGuard, FolioSpan, Mapping};
+use crate::os::folio::{Folio, FolioGuard, FolioSpan, Mapping, Wbc};
 use crate::vfs::folio::Writeback;
 use crate::vfs::inode::InodeInfo;
 use c::FolioSectorState as SectorState;
@@ -34,28 +34,6 @@ type Io = c::bch_writepage_io;
 struct WritepageState {
     io:   Option<NonNull<Io>>,
     opts: c::bch_inode_opts,
-}
-
-/// The VFS's writeback of a mapping, for the writepages() it's passed to.
-pub(crate) struct Wbc(NonNull<c::writeback_control>);
-
-from_raw! {
-    Wbc = *mut c::writeback_control => |r| Wbc(NonNull::new_unchecked(r));
-}
-
-impl Wbc {
-    /// The next folio to write back, locked - after @prev, which writing
-    /// returned @err: writeback_iter().
-    fn next(&self, mapping: Mapping, prev: Option<Folio>, err: &mut c_int) -> Option<FolioGuard<'_>> {
-        let prev = prev.map_or(core::ptr::null_mut(), Folio::as_ptr);
-        let folio = unsafe { c::writeback_iter(mapping.as_ptr(), self.0.as_ptr(), prev, err) };
-        (!folio.is_null()).then(|| unsafe { FolioGuard::adopt(Folio::from_raw(folio)) })
-    }
-
-    /// wbc_to_write_flags(): what its writes are submitted as.
-    fn write_flags(&self) -> c::blk_opf_t {
-        unsafe { c::wbc_to_write_flags(self.0.as_ptr()) }
-    }
 }
 
 impl c::bch_writepage_io {

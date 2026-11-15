@@ -10,8 +10,7 @@
 //! Folio until it's dropped, which unlocks and puts it. A FolioRef is one
 //! not locked, kept by a ref someone else has - a walk's batch, walk_folios()'s,
 //! or a fault's page - for its holder to lock: a FolioGuard, a Folio until
-//! it's dropped, or until start_writeback() - a Writeback, the folio unlocked
-//! and under writeback till the last count on that is dropped.
+//! it's dropped, or until it's given up locked, keep_locked().
 //!
 //! A Mapping is an inode's page cache: where a read finds and adds folios - a
 //! NewFolio, alloc_folio()'s, with a ref of its own till it's in. A Readahead
@@ -22,6 +21,7 @@ use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::os::iov_iter::IovIter;
 use crate::os::kernel::{cond_resched, loff};
+use crate::os::ops::from_raw;
 use core::borrow::Borrow;
 use core::ffi::c_int;
 use core::marker::PhantomData;
@@ -135,8 +135,9 @@ impl Folio {
         unsafe { c::folio_end_read(self.as_ptr(), uptodate) }
     }
 
-    /// Its bcachefs state freed.
-    pub fn free_state(self) {
+    /// What its private holds detached and freed - kmalloc'd, as the
+    /// filesystem's state on it is.
+    pub fn free_private(self) {
         unsafe { c::kfree(c::folio_detach_private(self.as_ptr())) }
     }
 }
@@ -306,7 +307,7 @@ impl Drop for LockedFolio {
 
 /// A folio for a mapping, Mapping::alloc_folio()'s, with a ref of its own:
 /// not locked, and in no page cache till add_folio() puts it in, locked.
-/// Dropped before then, its bcachefs state is freed and it's put.
+/// Dropped before then, its private is freed and it's put.
 pub struct NewFolio {
     folio:    Folio,
     in_cache: bool,
@@ -332,7 +333,7 @@ impl Deref for NewFolio {
 impl Drop for NewFolio {
     fn drop(&mut self) {
         if !self.in_cache {
-            self.folio.free_state();
+            self.folio.free_private();
         }
         unsafe { c::folio_put(self.folio.as_ptr()) }
     }
@@ -512,14 +513,50 @@ impl Readahead<'_> {
         Some(Folio(folio))
     }
 
-    /// @folio given back unread, its bcachefs state freed, and with a ref for
+    /// @folio given back unread, its private freed, and with a ref for
     /// the VFS, which unlocks and puts it - readahead_folio() again. Back to
     /// front, so readahead_control's window stays contiguous.
     pub fn unread(&mut self, folio: Folio) {
-        folio.free_state();
+        folio.free_private();
         unsafe { c::folio_get(folio.as_ptr()) };
         let n = folio.nr_pages();
         self.0._nr_pages += n as u32;
         self.0._index -= n as core::ffi::c_ulong;
     }
+}
+
+/// The VFS's writeback of a mapping, for the writepages() it's passed to.
+pub(crate) struct Wbc(NonNull<c::writeback_control>);
+
+from_raw! {
+    Wbc = *mut c::writeback_control => |r| Wbc(NonNull::new_unchecked(r));
+}
+
+impl Wbc {
+    /// The next folio to write back, locked - after @prev, which writing
+    /// returned @err: writeback_iter().
+    pub(crate) fn next(&self, mapping: Mapping, prev: Option<Folio>, err: &mut c_int) -> Option<FolioGuard<'_>> {
+        let prev = prev.map_or(core::ptr::null_mut(), Folio::as_ptr);
+        let folio = unsafe { c::writeback_iter(mapping.as_ptr(), self.0.as_ptr(), prev, err) };
+        (!folio.is_null()).then(|| unsafe { FolioGuard::adopt(Folio::from_raw(folio)) })
+    }
+
+    /// wbc_to_write_flags(): what its writes are submitted as.
+    pub(crate) fn write_flags(&self) -> c::blk_opf_t {
+        unsafe { c::wbc_to_write_flags(self.0.as_ptr()) }
+    }
+}
+
+/// write_begin() and write_end()'s first argument, which they don't use: the
+/// kiocb from 6.17, the file before.
+pub(crate) struct VfsWriter;
+
+#[cfg(linux_ge = "6.17")]
+from_raw! {
+    VfsWriter = *const c::kiocb => |_r| VfsWriter;
+}
+
+#[cfg(not(linux_ge = "6.17"))]
+from_raw! {
+    VfsWriter = *mut c::file => |_r| VfsWriter;
 }

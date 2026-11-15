@@ -31,7 +31,7 @@ use crate::locking::MemallocFlags;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::types::CStatic;
 use crate::util::alloc::{init_at, kzalloc, KBox};
-use crate::os::folio::{Folio, FolioGuard, FolioSpan, LockedFolio, Mapping, Readahead};
+use crate::os::folio::{Folio, FolioGuard, FolioSpan, LockedFolio, Mapping, Readahead, VfsWriter, Wbc};
 use crate::os::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::BioRange;
 
@@ -40,8 +40,7 @@ use super::buffered_write::{self, WriteBegun};
 use super::folio::{AddressSpaceOps, AopsVTable, FolioStateGuard};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
-use super::ops::VfsWriter;
-use super::writeback::{self, Wbc};
+use super::writeback;
 
 impl Mapping {
     /// The folios over [@start, @end), contiguous from @start, as
@@ -425,7 +424,7 @@ impl Folio {
         inode.undirty_folio(FolioSpan::whole(self));
 
         debug_assert!(self.locked());
-        self.free_state();
+        self.free_private();
     }
 }
 
