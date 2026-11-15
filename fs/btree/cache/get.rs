@@ -358,7 +358,8 @@ impl BtreeTrans<'_> {
 
         self.node_lock_write(paths, idx, level)?;
 
-        fs.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
+        let live_u64s = paths[idx].locked_btree_node(level).expect("a level just write locked").contents().nr.live_u64s;
+        fs.btree.evicted_size.record(b.hash_val(), live_u64s);
         let _ = fs.btree_node_transition_state(b, State::FREED);
 
         self.node_unlock_write(paths, idx, level);
