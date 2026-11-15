@@ -1027,7 +1027,9 @@ impl Fs {
 
     /// A ref on device @dev, if there is one: bch2_dev_tryget_noerror().
     pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
-        self.dev_rcu(dev, &read_lock()).map(Dev::get_ref)
+        // in c->devs under the RCU lock: removal takes it out before it kills
+        // ref_, whose count can't reach zero till a grace period after
+        self.dev_rcu(dev, &read_lock()).map(|ca| unsafe { RefGuard::get(ca) })
     }
 
     /// @ca made the ref on device @dev, for a walk by device - kept if it's
@@ -1114,7 +1116,8 @@ impl Fs {
 
     /// The filesystem's devices, a ref on each: for_each_member_device().
     pub fn members(&self) -> impl Iterator<Item = DevRef> + '_ {
-        self.walk(|ca| Some(ca.get_ref()))
+        // as dev_get()'s
+        self.walk(|ca| Some(unsafe { RefGuard::get(ca) }))
     }
 
     /// The devices in a state @state_ok takes, an io ref on each, put when
@@ -1216,6 +1219,14 @@ unsafe impl Refcount for Dev {
 /// state_lock, where a DevRef mustn't be held: recheck ca.removing under the
 /// lock before touching member state.
 pub type DevOuterRef = RefGuard<DevOuter>;
+
+impl RefGuard<Dev> {
+    /// An outer ref on it - bch2_dev_get_outer(): this ref holds ref_outer
+    /// above zero, removal draining ref_ first.
+    pub fn outer_ref(&self) -> DevOuterRef {
+        unsafe { RefGuard::get(DevOuter::of(self)) }
+    }
+}
 
 /// A device, counted by ca->ref_outer.
 #[repr(transparent)]
@@ -1498,17 +1509,6 @@ impl Dev {
     /// The data types with data on it, by the superblock's replicas.
     pub fn has_data(&self) -> DataTypes {
         self.fs().sb_lock().sb().dev_has_data(self.dev_idx.into())
-    }
-
-    /// A ref on it - bch2_dev_get(): the device is alive, being in hand, so
-    /// the get can't fail.
-    pub fn get_ref(&self) -> DevRef {
-        unsafe { RefGuard::get(self) }
-    }
-
-    /// An outer ref on it - bch2_dev_get_outer().
-    pub fn outer_ref(&self) -> DevOuterRef {
-        unsafe { RefGuard::get(DevOuter::of(self)) }
     }
 
     /// Whether @b is one of its buckets: bucket_valid().
