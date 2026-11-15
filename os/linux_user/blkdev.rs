@@ -135,14 +135,28 @@ pub fn lookup(_path: &CStr) -> Result<c::dev_t, BchError> {
 
 /* BLKGETSIZE64: _IOR(0x12, 114, size_t) */
 type BlkGetSize64 = rustix::ioctl::Getter<{ rustix::ioctl::opcode::read::<usize>(0x12, 114) }, u64>;
+/* BLKROTATIONAL: _IO(0x12, 126), which writes an unsigned short */
+type BlkRotational = rustix::ioctl::Getter<{ rustix::ioctl::opcode::none(0x12, 126) }, u16>;
+
+/// @fd's size, in bytes: a file's st_size, or a block device's BLKGETSIZE64.
+pub fn size(fd: BorrowedFd<'_>) -> rustix::io::Result<u64> {
+    let st = rustix::fs::fstat(fd)?;
+    if !is_blk(&st) {
+        return Ok(st.st_size as u64);
+    }
+    unsafe { rustix::ioctl::ioctl(fd, BlkGetSize64::new()) }
+}
+
+/// Whether @fd is a spinning disk: BLKROTATIONAL, which asks its queue - a
+/// partition's disk's, as sysfs's queue/rotational can't. A file isn't.
+pub fn is_rotational(fd: BorrowedFd<'_>) -> bool {
+    rustix::fs::fstat(fd).is_ok_and(|st| is_blk(&st)) &&
+        unsafe { rustix::ioctl::ioctl(fd, BlkRotational::new()) }.is_ok_and(|r| r != 0)
+}
 
 /// The device's size, in 512 byte sectors: a file's, or the block device's.
 pub fn capacity(bdev: &BlockDevice) -> u64 {
-    let st = bdev.fstat();
-    if !is_blk(&st) {
-        return st.st_size as u64 >> 9;
-    }
-    unsafe { rustix::ioctl::ioctl(bdev.fd(), BlkGetSize64::new()) }.expect("BLKGETSIZE64 of an open block device") >> 9
+    size(bdev.fd()).expect("the size of an open block device") >> 9
 }
 
 /// The smallest IO @bdev takes: a file's block size, or the block device's
@@ -169,21 +183,8 @@ pub fn issue_discard(_bdev: &BlockDevice, _sector: u64, _nr_sectors: u64, _gfp: 
     Ok(())
 }
 
-/// Whether @bdev is a spinning disk, as its queue in sysfs says: a file
-/// isn't.
 pub fn rotational(bdev: &BlockDevice) -> bool {
-    let st = bdev.fstat();
-    if !is_blk(&st) {
-        return false;
-    }
-
-    let dev = st.st_rdev;
-    let path = format!("/sys/dev/block/{}:{}/queue/rotational",
-                       rustix::fs::major(dev), rustix::fs::minor(dev));
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .is_some_and(|v| v != 0)
+    is_rotational(bdev.fd())
 }
 
 /// Its page cache dropped: userspace has none.
