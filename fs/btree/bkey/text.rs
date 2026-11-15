@@ -1,7 +1,7 @@
 //! Keys and positions to and from text: Debug and FromStr for positions,
 //! ToText for a key's header, and BkeySCToText for a key with its value.
 
-use super::{AllTypes, BkeySC, BkeyVal, FamilyVal};
+use super::{AllTypes, BkeySC, BkeyV, BkeyVal, FamilyVal, KeyState};
 use crate::c;
 use crate::fs::Fs;
 use crate::util::{Printbuf, ToText};
@@ -85,14 +85,18 @@ pub struct BkeySCToText<'a, 'f, V: ?Sized + BkeyVal = FamilyVal<AllTypes>> {
     pub(crate) fs: &'f Fs,
 }
 
-impl<V: ?Sized + BkeyVal> ToText for BkeySCToText<'_, '_, V> {
+/// A validated key's, or a whole one's: an unvalidated value isn't read.
+impl<V> ToText for BkeySCToText<'_, '_, V>
+where
+    V: ?Sized + BkeyVal<State: KeyState<Of<FamilyVal<AllTypes>> = FamilyVal<AllTypes>>>,
+{
     fn to_text(&self, out: &mut Printbuf) {
-        let k: c::bkey_s_c = self.k.into();
-        crate::btree::bkey::bkey_val_to_text(out, Some(self.fs), unsafe { BkeySC::from_c(&k) })
+        crate::btree::bkey::bkey_val_to_text(out, Some(self.fs), self.k.untyped())
     }
 }
 
-crate::display_via_to_text!(impl[V: ?Sized + BkeyVal] BkeySCToText<'_, '_, V>);
+crate::display_via_to_text!(impl[V: ?Sized + BkeyVal<State: KeyState<Of<FamilyVal<AllTypes>> = FamilyVal<AllTypes>>>]
+                            BkeySCToText<'_, '_, V>);
 
 /// Without its value.
 impl ToText for c::bkey {
