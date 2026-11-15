@@ -5,7 +5,7 @@ use std::{
     os::fd::{AsFd, AsRawFd, OwnedFd},
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
-    ptr, str,
+    str,
 };
 
 use anyhow::{ensure, Result};
@@ -380,43 +380,30 @@ fn mount_legacy(
         text: format!("{what} contains a NUL byte"),
     };
 
-    // bind the CStrings to keep them alive
     let c_src = CString::new(src.clone().into_vec()).map_err(|_| bad_arg("device path"))?;
     let c_target = path_to_cstr(target);
     let data = data.map(CString::new).transpose().map_err(|_| bad_arg("mount options"))?;
     let fstype = CString::new(fstype).map_err(|_| bad_arg("filesystem type"))?;
 
-    // convert to pointers for ffi
-    let c_src = c_src.as_ptr();
-    let c_target = c_target.as_ptr();
-    let data_ptr = data.as_ref().map_or(ptr::null(), |data| data.as_ptr().cast());
-    let fstype = fstype.as_ptr();
+    let ret = loop {
+        info!("mounting filesystem");
+        // REQUIRES: CAP_SYS_ADMIN
+        let ret = rustix::mount::mount(c_src.as_c_str(), c_target.as_c_str(), fstype.as_c_str(),
+                                       rustix::mount::MountFlags::from_bits_retain(mountflags as _),
+                                       data.as_deref());
 
-    let mut ret;
-    loop {
-        ret = {
-            info!("mounting filesystem");
-            // REQUIRES: CAP_SYS_ADMIN
-            unsafe { libc::mount(c_src, c_target, fstype, mountflags, data_ptr) }
-        };
-
-        let err = errno::errno().0;
-
-        if ret == 0
-            || (err != libc::EACCES && err != libc::EROFS)
-            || (mountflags & libc::MS_RDONLY) != 0
-        {
-            break;
+        match ret {
+            Err(e) if (e == rustix::io::Errno::ACCESS || e == rustix::io::Errno::ROFS) &&
+                      mountflags & libc::MS_RDONLY == 0 => {
+                println!("mount: device write-protected, mounting read-only");
+                mountflags |= libc::MS_RDONLY;
+            }
+            ret => break ret,
         }
+    };
 
-        println!("mount: device write-protected, mounting read-only");
-        mountflags |= libc::MS_RDONLY;
-    }
-
-    drop(data);
-
-    if ret != 0 {
-        let err = errno::errno();
+    if let Err(e) = ret {
+        let err = errno::Errno(e.raw_os_error());
 
         // mount(2) has nowhere to put an explanation, so an errno is all there
         // is to report - which is the reason mount_fs_context() exists. EBUSY
