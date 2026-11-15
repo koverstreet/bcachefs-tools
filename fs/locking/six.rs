@@ -10,7 +10,6 @@ use crate::data_structures::dst_vec::DstVec;
 use crate::data_structures::inline_vec::InlineVec;
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;
-use crate::types::c_default;
 use crate::util::alloc::{Flags, init_at};
 use crate::util::ffi::c_char;
 use crate::os::kernel::time_after64;
@@ -60,16 +59,14 @@ pub struct six_lock_waiter {
     /* Index in the wait list, set on insert, used for O(1) self-remove. */
     pub slot_idx: Volatile<u16>,
 }
-c_default!(six_lock_waiter);
 
 /* filled under wait_lock, read without it by the cycle detector: @w last */
 #[repr(C)]
-#[derive(MaybeZeroable)]
+#[derive(Default, MaybeZeroable)]
 pub struct six_lock_wait_slot {
     pub w: AtomicPtr<c::six_lock_waiter>,
     pub start_time: Volatile<u64>,
 }
-c_default!(six_lock_wait_slot);
 
 /* the cycle detector reads them under RCU */
 impl !FreeAnytime for six_lock_wait_slot {}
@@ -1436,7 +1433,7 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
 impl c::six_lock {
     /// six_lock_ip(), without a should_sleep_fn: it can't fail.
     fn lock_type(&self, ty: SixLockType) {
-        let wait = c::six_lock_waiter::default();
+        let wait = ::pin_init::zeroed::<c::six_lock_waiter>();
         let ret = six_lock_ip_waiter(self, ty, &wait, || 0, 0);
         ebug_assert!(ret == 0, "six lock without should_sleep_fn failed: {ret}");
     }

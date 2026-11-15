@@ -220,7 +220,7 @@ impl KeyIter {
      */
     pub fn init(&mut self, fs: &Fs, keys: &Keys<'_>, search: &Bpos) {
         let b = keys.contents();
-        let mut p = c::bkey_packed_padded::default();
+        let mut p = ::pin_init::zeroed::<c::bkey_packed_padded>();
         let mut k = [0u16; NR];
 
         ebug_assert!(*search >= keys.min_key());

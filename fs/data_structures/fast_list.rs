@@ -36,7 +36,7 @@ use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::MaybeZeroable;
-use crate::types::{c_default, c_opaque};
+use crate::types::c_opaque;
 use crate::data_structures::genradix::SharedGenRadix;
 use crate::data_structures::ida::Ida;
 
@@ -52,7 +52,6 @@ pub struct fast_list {
     /* set by init() and exit(), which take the list shared, as C's pointer is */
     pub buffer: AtomicPtr<c::fast_list_pcpu>,
 }
-c_default!(fast_list);
 
 /// A slot's item, C's void *: other CPUs change it as it's read.
 #[repr(transparent)]

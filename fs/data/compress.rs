@@ -56,7 +56,6 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
 use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, TypeInfo, BitfieldMembers};
-use crate::types::c_default;
 use nestify::nest;
 use crate::format::{Bpos, CompressionType, SbFeatures};
 
@@ -78,7 +77,6 @@ nest! {
         },
     }
 }
-c_default!(bch_compression_opt);
 
 impl bch_compression_opt {
     /// Opt value @v's type and level.
@@ -146,7 +144,6 @@ pub struct bbuf {
     pub type_: c::BbufType,
     pub rw: c_int,
 }
-c_default!(bbuf);
 
 crate::module_param! {
     pub(crate) static verify_compress: bool = cfg!(CONFIG_BCACHEFS_DEBUG);

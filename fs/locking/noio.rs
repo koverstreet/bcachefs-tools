@@ -30,7 +30,6 @@ use super::{Exclusive, ExclusiveGuard, Locked, RawLock, RawLockBase, RawMovableL
             SharedGuard};
 use crate::cstructs::c;
 use crate::util::alloc::{flags, Flags};
-use crate::types::c_default;
 use crate::os::sched;
 use core::ffi::{c_uint, c_void, CStr};
 
@@ -214,9 +213,6 @@ impl<'a, R: RawLock<GuardState = ()>, const F: u32, G, P, A> ExclusiveGuard<'a, 
 /// C's struct mutex_noio and percpu_rwsem_noio, declared for C below.
 pub type mutex_noio = Noio<c::mutex>;
 pub type percpu_rwsem_noio = Noio<c::percpu_rw_semaphore>;
-
-c_default!(mutex_noio);
-c_default!(percpu_rwsem_noio);
 
 /// Locks over @G held in a NOIO scope: C's mutex_noio and percpu_rwsem_noio,
 /// and what they protect.

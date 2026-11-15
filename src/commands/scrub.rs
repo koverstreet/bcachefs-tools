@@ -51,7 +51,7 @@ fn start_scrub(ioctl_fd: std::os::fd::BorrowedFd, dev_idx: u32, data_types: u32)
         args: bch_ioctl_data_args {
             scrub: bch_ioctl_data_scrub { dev: dev_idx, data_types },
         },
-        ..Default::default()
+        ..pin_init::zeroed()
     };
 
     let ret = ioctl_w::<BCH_IOCTL_DATA>(ioctl_fd, &cmd)?;

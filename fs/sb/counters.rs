@@ -22,7 +22,7 @@ use crate::util::vstructs::Unvalidated;
 use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
-use crate::types::{Le64, c_default};
+use crate::types::Le64;
 use crate::os::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
 use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
@@ -40,7 +40,6 @@ pub struct bch_fs_counters {
 
     recent: [[AtomicU64; c::PersistentCounter::NR as usize]; c::NR_RECENT_COUNTERS as usize],
 }
-c_default!(bch_fs_counters);
 
 /// What an event's counter counts.
 pub trait Kind {}

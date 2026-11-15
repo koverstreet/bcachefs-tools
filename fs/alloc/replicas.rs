@@ -39,7 +39,6 @@ use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
 use crate::sb::io::SbResize;
-use crate::types::c_default;
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -54,12 +53,11 @@ pub enum WriteCheck {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
+#[derive(Default, Clone, Copy, MaybeZeroable, TypeInfo)]
 pub struct bch_replicas_padded {
     pub bytes: [u8; core::mem::size_of::<Head<c::bch_replicas_entry_v1>>()
                     + c::BCH_BKEY_PTRS_MAX as usize * core::mem::size_of::<u8>()],
 }
-c_default!(bch_replicas_padded);
 
 type Entry = c::bch_replicas_entry_v1<Validated>;
 

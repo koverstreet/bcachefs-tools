@@ -697,7 +697,7 @@ impl FileOps for DataJob {
         let stats = &self.stats;
         let (ret, data_type, pos) = (stats.ret.get(), stats.at.data_type.get(), stats.at.pos.get());
 
-        let mut e = c::bch_ioctl_data_event::default();
+        let mut e = ::pin_init::zeroed::<c::bch_ioctl_data_event>();
         e.type_ = c::DataEvent::BCH_DATA_EVENT_PROGRESS.0 as u8;
         e.ret   = ret.0 as u8;
 

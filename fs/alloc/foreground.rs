@@ -71,7 +71,6 @@ use crate::opts::data_type_str;
 use crate::percpu_field;
 use crate::debug::trace::events;
 use crate::sb::members::data_types_to_text;
-use crate::types::{c_default};
 use crate::util::alloc::init_at;
 use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up};
 use crate::util::time_stats::TimeStats;
@@ -99,7 +98,6 @@ pub struct dev_alloc_list {
     pub nr: c_uint,
     pub data: [u8; c::BCH_SB_MEMBERS_MAX as usize],
 }
-c_default!(dev_alloc_list);
 
 nest! {
     #[repr(C)]

@@ -355,21 +355,6 @@ unsafe impl ::pin_init::Zeroable for CacheAligned {}
 pub const SMP_CACHE_BYTES: usize = align_of::<CacheAligned>();
 pub const L1_CACHE_BYTES: usize = SMP_CACHE_BYTES;
 
-/// Default for a type C shares: all zeroes, C's `= {}` - as bindgen's was. For
-/// types whose every field is C's, to which all zeroes is a valid value - an
-/// unsized vstruct's C definition too, by name: c_default!(T_head).
-macro_rules! c_default {
-    ($name:ty) => {
-        impl Default for $name {
-            fn default() -> Self {
-                // SAFETY: every field is a C type, valid all zeroes
-                unsafe { core::mem::zeroed() }
-            }
-        }
-    };
-}
-pub(crate) use c_default;
-
 /// A type C declares, `struct NAME;`, and has only behind pointers: one a .c
 /// file defines - Rust sees it only behind pointers too - or one Rust does,
 /// in a module of its own, that C passes around. Not Send, Sync or Unpin -

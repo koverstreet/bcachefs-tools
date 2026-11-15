@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct wb_maybe_flush {
     pub last_flushed: c::bkey_buf,
     pub flushed_commit_count: u32,

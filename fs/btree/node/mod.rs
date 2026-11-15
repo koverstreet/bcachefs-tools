@@ -20,7 +20,6 @@ use crate::cstructs::c as cs;
 use crate::data::keylist::PaddedKey;
 use crate::fs::Fs;
 use crate::locking::LockedBy;
-use crate::types::c_default;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use crate::util::{Printbuf, ToText};
@@ -212,7 +211,6 @@ pub struct NodeContents {
     /* Key/pointer for this btree node */
     pub key: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
 }
-c_default!(NodeContents);
 
 impl<'b, 'f> BtreeNode {
     pub fn to_text(&'b self, fs: &'f Fs) -> BtreeNodeToText<'b, 'f> {

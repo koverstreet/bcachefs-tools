@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
 use crate::util::projections::Volatile;
 use core::ffi::c_uint;
 use core::sync::atomic::{AtomicI32, AtomicI64};
@@ -16,7 +15,7 @@ nest! {
     /// on any thread - and what a data job's progress reads as it goes.
     /// Shared throughout, so every field is a Volatile, written one writer at
     /// a time, or an atomic, by many.
-    #[derive(MaybeZeroable, TypeInfo)]*
+    #[derive(Default, MaybeZeroable, TypeInfo)]*
     #[repr(C)]*
     pub struct MoveStats {
         pub ret: Volatile<c::IoctlDataEventRet>,
@@ -38,7 +37,6 @@ nest! {
         pub sectors_error_uncorrected: AtomicI64,
     }
 }
-c_default!(MoveStats);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]

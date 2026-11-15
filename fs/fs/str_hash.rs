@@ -25,7 +25,6 @@ use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
 use bitflags::bitflags;
 use cstruct_macros::{MaybeZeroable, TypeInfo};
-use crate::types::c_default;
 use crate::format::{Bpos, Btree, BkeyType, SbFeature};
 
 #[repr(C)]
@@ -41,7 +40,6 @@ pub struct bch_hash_info {
      */
     pub siphash_key: c::SIPHASH_KEY,
 }
-c_default!(bch_hash_info);
 
 /// A btree that's a hash table keyed by name: dirents, xattrs. The keys passed
 /// to these are valid - from the btree, or built to be inserted.

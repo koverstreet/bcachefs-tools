@@ -162,7 +162,6 @@ use core::ffi::c_ulong;
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 use crate::data::ptrs::BtreePtrs;
-use crate::types::c_default;
 use cstruct_macros::MaybeZeroable;
 use crate::format::{Bpos, Btree, BkeyType};
 
@@ -184,7 +183,6 @@ pub struct trans_may_drop_updates {
     pub trans: *mut BtreeTrans<'static>,
     pub old: bool,
 }
-c_default!(trans_may_drop_updates);
 
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

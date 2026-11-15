@@ -6,7 +6,6 @@
 
 use crate::cstructs::c;
 use crate::locking::Locked;
-use crate::types::c_default;
 use cstruct_macros::{bitfield, bch_enum, BitfieldMembers, MaybeZeroable, TypeInfo};
 use nestify::nest;
 use core::sync::atomic::AtomicI32;
@@ -107,4 +106,3 @@ pub struct bch_folio {
     pub partially_uptodate: u16,
     pub state: Locked<c::spinlock_t, FolioState>,
 }
-c_default!(bch_folio);

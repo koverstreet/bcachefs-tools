@@ -11,7 +11,6 @@
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
 use crate::cstructs::c as cs;
 use crate::cstructs::c::BkeyType_arms;
-use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
 use nestify::nest;
@@ -107,7 +106,6 @@ pub struct bkey_s_c {
     pub k: *const cs::bkey,
     pub v: *const cs::bch_val,
 }
-c_default!(bkey_s_c);
 
 /* bkey with split value */
 nest! {
@@ -127,7 +125,6 @@ nest! {
         },
     }
 }
-c_default!(bkey_s);
 
 macro_rules! __bkey_typed {
     ($( ($name:ident, $nr:literal, $($ty:ident)::+, $flags:tt) ),* $(,)?) => { ::paste::paste! { $(

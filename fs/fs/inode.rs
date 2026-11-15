@@ -63,7 +63,7 @@ use core::ops::ControlFlow;
 use core::ffi::CStr;
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable, TypeInfo};
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
-use crate::types::{c_default, Le64};
+use crate::types::Le64;
 use crate::util::projections::Volatile;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, SbFeature};
 
@@ -152,7 +152,6 @@ pub struct bkey_inode_buf {
     pub inode: BkeyI<c::InodeV3>,
     pub _pad: [u8; BKEY_INODE_BUF_XSUM_0],
 }
-c_default!(bkey_inode_buf);
 
 // The inode x-macros as m! { name = arg, ... }, the way C uses them: each
 // user defines its own m, as C code defines its own x().
@@ -390,7 +389,7 @@ impl AsMut<BkeyI> for c::bkey_inode_buf {
 /// pack is what maintains it.
 pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
-    let mut out = c::bkey_inode_buf::default();
+    let mut out = ::pin_init::zeroed::<c::bkey_inode_buf>();
 
     let mut flags = inode.flags();
     flags.set(c::InodeFlags::has_inode_opts, inode.has_opts());

@@ -193,6 +193,7 @@ dependencies = [
  "libc",
  "log",
  "owo-colors",
+ "pin-init",
  "rustix",
  "rustyline",
  "serde",

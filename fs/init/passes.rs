@@ -22,7 +22,6 @@
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::published;
-use crate::types::c_default;
 use crate::util::projections::Volatile;
 use crate::os::workqueue::ReffedWork;
 use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo, bch_enum};
@@ -86,7 +85,6 @@ pub struct bch_recovery_runner {
     pub passes_failing_nr: [u8; c::RecoveryPass::NR as usize],
 }
 // rewound_from and rewound_to zeroed are pass 0, recovery_pass_empty: none
-c_default!(bch_recovery_runner);
 
 published! {
     /// What the runner publishes: read without its lock - by C, by the
@@ -118,7 +116,7 @@ pub struct bch_fs_recovery {
 
     /* the runner's state, under its lock, and what it publishes */
     #[pin]
-    #[init(new_lock!(Default::default(), ::pin_init::zeroed(), "&c->recovery.lock"))]
+    #[init(new_lock!(::pin_init::zeroed(), ::pin_init::zeroed(), "&c->recovery.lock"))]
     pub runner: Locked<c::spinlock_t, bch_recovery_runner, RecoveryWords>,
 
     /* passes run under it - and what runs as a pass, it serializes */

@@ -18,7 +18,6 @@ use crate::btree::bkey::{BkeyI, BkeySC, BKEY_U64S};
 use crate::c;
 use crate::format::Btree;
 use core::mem::size_of;
-use crate::types::c_default;
 use crate::util::alloc::{kbox_zeroed_nofail, kzalloc_nofail, KBox};
 use cstruct_macros::MaybeZeroable;
 
@@ -28,7 +27,6 @@ pub struct bkey_buf {
     pub k: *mut c::bkey_i,
     pub onstack: [u64; 12],
 }
-c_default!(bkey_buf);
 
 const ONSTACK_U64S: usize = 12;
 

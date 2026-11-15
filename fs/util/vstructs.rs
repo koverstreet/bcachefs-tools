@@ -870,6 +870,10 @@ macro_rules! vstruct_family {
             pub repr: <S as $crate::util::vstructs::State>::Of<$fam>,
         }
 
+        // transparent over its definition: zeroed when that may be
+        unsafe impl<S: $crate::util::vstructs::State> ::pin_init::Zeroable for $name<S>
+            where <S as $crate::util::vstructs::State>::Of<$fam>: ::pin_init::Zeroable {}
+
         $crate::vstruct_family!(@in_state $name);
     };
 
@@ -1919,7 +1923,7 @@ mod tests {
         l.set_val_u64s(2);
         assert_eq!(l.bytes(), 8 + 16);
 
-        let mut b = Head::<c::btree_node_entry>::default();
+        let mut b = ::pin_init::zeroed::<Head<c::btree_node_entry>>();
         b.set_val_u64s(3);
         assert_eq!(b.bytes(), 16 + 24 + 24);
     }
@@ -1928,7 +1932,7 @@ mod tests {
     fn sb(field_u64s: usize) -> Vec<u64> {
         let hdr = size_of::<Head<c::bch_sb>>();
         let mut buf = vec![0u64; hdr / 8 + 1];
-        let mut sb = Head::<c::bch_sb>::default();
+        let mut sb = ::pin_init::zeroed::<Head<c::bch_sb>>();
         sb.set_val_u64s(1);
         put(&mut buf, 0, &sb);
         let mut f = Head::<c::bch_sb_field>::default();

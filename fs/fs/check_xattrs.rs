@@ -100,7 +100,7 @@ fn check_xattrs(fs: &Fs) -> Result<(), BchError> {
     let mut st = CheckXattrs {
         s:         SnapshotsSeen::new(),
         inode:     InodeWalker::new(),
-        hash_info: Default::default(),
+        hash_info: ::pin_init::zeroed(),
     };
 
     let mut iter = BtreeIter::new(&trans, Btree::xattrs,

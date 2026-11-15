@@ -288,7 +288,7 @@ pub fn journal_pos_from_member_info_resume(fs: &Fs) {
     let _not_rw = fs.not_rw();
 
     for ca in fs.members() {
-        let m = crate::sb::members::sb_member(sb.sb(), ca.dev_idx.into()).unwrap_or_default();
+        let m = crate::sb::members::sb_member(sb.sb(), ca.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
 
         let idx = m.last_journal_bucket.get();
         if idx < ca.journal.nr() {

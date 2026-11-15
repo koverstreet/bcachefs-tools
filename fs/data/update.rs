@@ -54,7 +54,6 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
 use c::DataUpdateType as Type;
 use crate::data::read::{ReadFor, ReadDone, Rbio};
-use crate::types::c_default;
 use core::sync::atomic::AtomicBool;
 use nestify::nest;
 use crate::format::{Bpos, Btree, CompressionType};
@@ -106,7 +105,6 @@ nest! {
         pub commit_flags: c::TransCommitFlags,
     }
 }
-c_default!(data_update_opts);
 
 /// An update's key in the in-flight table: where it is, and whether it's
 /// copygc's - so one of each can be in flight at a position.

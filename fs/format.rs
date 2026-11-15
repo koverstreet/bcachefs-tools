@@ -72,7 +72,7 @@
 
 
 use crate::cstructs::c;
-use crate::types::{c_default, Le16, Le32, Le64};
+use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by_self, from_bytes_mut, vstruct,
                             Head, FlexArray, Unvalidated, VStructError, VstructMut, VstructRef};
 use crate::btree::bkey::BkeyPHeader;
@@ -273,7 +273,6 @@ pub struct bkey_packed {
     pub pad: [u8; core::mem::size_of::<c::bkey>() - 3],
 }
 vstruct!(bkey_packed, u64s, start = 0);
-c_default!(bkey_packed);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
@@ -1176,7 +1175,6 @@ pub struct bch_sb_layout {
     pub pad: [u8; 5],
     pub sb_offset: [Le64; 61],
 }
-c_default!(bch_sb_layout);
 // bch_dev's copy is read without sb_lock - by the allocator, until the
 // superblock buckets are marked - and may be read mid-edit, each offset as
 // before or after
@@ -1243,7 +1241,6 @@ pub struct bch_sb {
     pub start: [Head<c::bch_sb_field>; 0],
     pub _data: [Le64; 0],
 }
-c_default!(bch_sb_head);
 
 impl bch_sb<Unvalidated> {
     /// Its count less @u64s, for a section shrunk in place, the sections after
@@ -1989,7 +1986,6 @@ pub struct btree_node {
     /* C's vstruct macros find u64s and _data on the node itself: */
     pub keys: Head<c::bset>,
 }
-c_default!(btree_node_head);
 
 #[bitfield(Le64)]
 pub struct btree_node_flags {
@@ -2023,4 +2019,3 @@ pub struct btree_node_entry {
     /* C's vstruct macros find u64s and _data on the entry itself: */
     pub keys: Head<c::bset>,
 }
-c_default!(btree_node_entry_head);

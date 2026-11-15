@@ -85,7 +85,6 @@ use crate::util::Printbuf;
 use core::ffi::c_uint;
 use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
 use crate::sb::io::SbResize;
-use crate::types::c_default;
 use nestify::nest;
 
 /* a target is 0 for none, then a device's index, then a disk group's */
@@ -113,7 +112,6 @@ nest! {
         },
     }
 }
-c_default!(target);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]

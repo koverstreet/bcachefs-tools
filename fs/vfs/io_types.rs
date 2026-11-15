@@ -5,7 +5,6 @@
 #![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
-use crate::types::c_default;
 use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
@@ -15,7 +14,6 @@ pub struct folio_vec {
     pub fv_offset: usize,
     pub fv_len: usize,
 }
-c_default!(folio_vec);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]

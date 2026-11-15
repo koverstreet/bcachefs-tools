@@ -18,7 +18,7 @@ use cstruct_macros::{bch_enum, xmacro, MaybeZeroable, Plain};
  * padding.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, Plain)]
+#[derive(Clone, Copy, MaybeZeroable, Plain)]
 pub struct bkey_packed_padded {
     pub _pad: [u8; 8],
     pub k: c::bkey_packed,

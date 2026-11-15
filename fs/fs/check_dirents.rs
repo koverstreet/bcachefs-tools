@@ -527,7 +527,7 @@ fn check_dirents(fs: &Fs) -> Result<(), BchError> {
         s:                SnapshotsSeen::new(),
         dir:              InodeWalker::new(),
         target:           InodeWalker::new(),
-        hash_info:        Default::default(),
+        hash_info:        ::pin_init::zeroed(),
         need_second_pass: false,
     };
     let mut did_second_pass = false;

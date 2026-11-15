@@ -591,7 +591,7 @@ impl KeysMut<'_> {
         let f = self.format;
         let set = self.sets.len() - 1;
         let insert_p: &BkeyP = insert.into();
-        let mut packed = c::bkey_packed::default();
+        let mut packed = ::pin_init::zeroed::<c::bkey_packed>();
 
         self.as_keys().bset_verify_rw_aux_tree(&self.sets[set]);
         self.as_keys().verify_insert_pos(where_, insert_p, clobber_u64s);

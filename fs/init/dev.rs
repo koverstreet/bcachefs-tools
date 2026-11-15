@@ -249,7 +249,7 @@ use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::place::Contained, crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
      core::sync::atomic::Ordering::Acquire};
-use crate::types::{bits_to_longs, c_default};
+use crate::types::bits_to_longs;
 use crate::util::bio::{Bio, BioBox, IoBuf};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
@@ -261,24 +261,22 @@ use nestify::nest;
 /// userspace. Each of a device's superblock, the filesystem's copy, and what
 /// format builds.
 #[repr(C)]
-#[derive(MaybeZeroable, TypeInfo)]
+#[derive(Default, MaybeZeroable, TypeInfo)]
 pub struct bch_sb_buf {
     pub(crate) data: Option<IoBuf>,
     /// The section types edited since the last write, by bit: set by
     /// field_mut() and resizing, for the filesystem's to_cpu() to read.
     pub dirty:       u64,
 }
-c_default!(bch_sb_buf);
 
 /// The filesystem's superblock, c->disk_sb: what its devices' are copied
 /// from. Edited in place through its bch_sb_buf; resized only through
 /// Fs::sb_resize(), which grows its devices' with it.
 #[repr(C)]
-#[derive(MaybeZeroable, TypeInfo)]
+#[derive(Default, MaybeZeroable, TypeInfo)]
 pub struct bch_fs_sb {
     buf: c::bch_sb_buf,
 }
-c_default!(bch_fs_sb);
 
 impl core::ops::Deref for bch_fs_sb {
     type Target = c::bch_sb_buf;
@@ -336,7 +334,6 @@ pub struct bch_sb_bdev {
     pub holder: *const crate::sb::io::Holder,
     pub mode: c::blk_mode_t,
 }
-c_default!(bch_sb_bdev);
 
 /// A superblock read from a device: bch2_read_super()'s. To C, one struct
 /// of both halves' members.
@@ -349,7 +346,7 @@ pub struct bch_sb_handle {
 
 impl Default for bch_sb_handle {
     fn default() -> Self {
-        bch_sb_handle { io: Default::default(), dev: Default::default() }
+        bch_sb_handle { io: Default::default(), dev: ::pin_init::zeroed() }
     }
 }
 
@@ -377,7 +374,7 @@ pub struct bch_devs_list {
 }
 
 fn may_add(fs: &Fs, sb: &c::bch_sb) -> Result<(), BchError> {
-    let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_default();
+    let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
 
     if u64::from(sb.block_size.get()) != fs.block_bytes() >> 9 {
         return fs.throw(Errcode::mismatched_block_size);
@@ -635,7 +632,7 @@ impl NewDev {
 
 impl Fs {
     pub fn dev_alloc(&self, dev_idx: u32) -> Result<(), BchError> {
-        let member = sb_member(self.sb_lock().sb(), dev_idx).unwrap_or_default();
+        let member = sb_member(self.sb_lock().sb(), dev_idx).unwrap_or_else(::pin_init::zeroed);
 
         let ca = dev_alloc(self, &member).ok_or_else(|| self.err(Errcode::ENOMEM_dev_alloc))?;
 
@@ -1239,7 +1236,7 @@ impl Fs {
         let mut sb = read_super(path, &mut opts, Some(self.holder()))
             .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?;
 
-        let mut dev_mi = sb_member(sb.sb(), sb.sb().dev_idx.into()).unwrap_or_default();
+        let mut dev_mi = sb_member(sb.sb(), sb.sb().dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
 
         let mut label = Printbuf::new();
         if dev_mi.group() != 0 {

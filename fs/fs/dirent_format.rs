@@ -29,7 +29,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::typeinfo::AccessError;
-use crate::types::{c_default, Le32, Le64};
+use crate::types::{Le32, Le64};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::mem::offset_of;
@@ -99,7 +99,6 @@ nest! {
         },
     }
 }
-c_default!(Dirent);
 
 pub const DT_SUBVOL: u32 = 16;
 pub const BCH_DT_MAX: u32 = 17;
@@ -414,7 +413,7 @@ fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), 
     k.k_mut().u64s = have_u64s.min(u8::MAX as usize) as u8;
 
     // Only cf_encoding is read, and NULL means not casefolded:
-    let hash_info = c::bch_hash_info::default();
+    let hash_info = ::pin_init::zeroed::<c::bch_hash_info>();
     let k = k.as_mut().arm::<c::Dirent>().expect("a dirent");
     super::init_name(fs, k, &hash_info, OsStr::from_bytes(val.as_bytes()), None)
         .map_err(|_| SetError::BadName { val })

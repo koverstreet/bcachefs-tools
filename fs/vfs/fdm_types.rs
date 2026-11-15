@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
 use core::ffi::c_ulong;
@@ -21,7 +20,6 @@ pub struct fdm_slot {
     pub task: Volatile<usize>,
     pub mapping: Volatile<c_ulong>, /* address_space * | dropped_locks bit */
 }
-c_default!(fdm_slot);
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
@@ -30,4 +28,3 @@ pub struct fdm_hash {
     pub wait: EventCount,
     pub slots: [c::fdm_slot; c::FDM_HASH_SIZE as usize],
 }
-c_default!(fdm_hash);

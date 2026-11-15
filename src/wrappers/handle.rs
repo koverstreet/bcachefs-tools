@@ -152,7 +152,7 @@ impl BcachefsHandle {
         }
 
         // Try BCH_IOCTL_QUERY_UUID — if it succeeds, it's a mounted fs path
-        let mut query_uuid = bch_ioctl_query_uuid::default();
+        let mut query_uuid = pin_init::zeroed::<bch_ioctl_query_uuid>();
         if ioctl_rw::<BCH_IOCTL_QUERY_UUID>(&path_fd, &mut query_uuid).is_ok() {
             return Self::open_mounted_path(path_fd, query_uuid.uuid.b).map(Some);
         }

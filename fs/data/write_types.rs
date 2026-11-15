@@ -5,7 +5,7 @@
 use crate::fs::Dev;
 use crate::cstructs::c;
 use crate::fs::Fs;
-use crate::types::{NeBytes, c_default};
+use crate::types::NeBytes;
 use core::ffi::c_uint;
 use cstruct_macros::{MaybeZeroable, Init, bitfield, bch_enum, TypeInfo, BitfieldMembers};
 use nestify::nest;
@@ -75,7 +75,6 @@ nest! {
         pub bio: c::bio,
     }
 }
-c_default!(bch_write_bio);
 
 crate::has_bio!(c::bch_write_bio, bio);
 

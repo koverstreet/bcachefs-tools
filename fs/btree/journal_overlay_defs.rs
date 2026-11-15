@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::MaybeZeroable;
 use crate::format::{Bpos, Btree};
@@ -12,7 +11,7 @@ use crate::format::{Bpos, Btree};
  * seq @seq - after an insert, searched for again
  */
 #[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable)]
+#[derive(Default, Clone, Copy, MaybeZeroable)]
 pub struct journal_iter {
     pub btree_id: Btree,
     pub level: c_uint,
@@ -20,4 +19,3 @@ pub struct journal_iter {
     pub seq: u64,
     pub pos: Bpos,
 }
-c_default!(journal_iter);

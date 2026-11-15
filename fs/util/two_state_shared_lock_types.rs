@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default};
 use crate::util::alloc::init_at;
 use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
@@ -23,7 +22,6 @@ pub struct two_state_lock_t {
     /// Woken as the last holder unlocks
     wait: EventCount,
 }
-c_default!(two_state_lock_t);
 
 fn delta(s: bool) -> isize {
     if s { 1 } else { -1 }

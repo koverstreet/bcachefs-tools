@@ -318,7 +318,7 @@ fn bkey_mantissa_search(k: &c::bkey_packed, f: &BkeyFloat) -> u16 {
 
 /// @pos packed, if it packs, or unpacked: a bound for make_bfloat().
 pub(super) fn pack_pos_or_unpacked(node: *const BtreeNode, pos: Bpos) -> c::bkey_packed_padded {
-    let mut k = c::bkey_packed_padded::default();
+    let mut k = ::pin_init::zeroed::<c::bkey_packed_padded>();
     let (buf, at) = k.as_buf_mut();
 
     if !unsafe { (*node).contents.protected() }.pack_pos(buf, at, pos) {

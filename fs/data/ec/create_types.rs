@@ -28,7 +28,7 @@ pub struct ec_dev_stripe_state {
 /// stripes' data blocks, and of their parity, have been spread across the
 /// devices, for the allocator to go on spreading them.
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable)]
+#[derive(Clone, Copy, MaybeZeroable)]
 pub struct DevStripes {
     pub block_stripe: c::dev_stripe_state,
     pub parity_stripe: c::dev_stripe_state,

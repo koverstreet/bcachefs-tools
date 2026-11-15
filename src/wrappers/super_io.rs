@@ -91,7 +91,7 @@ pub fn super_read(fd: i32, sector: u64) -> anyhow::Result<SbBuf<Unvalidated>> {
     let file = borrowed_file(fd);
 
     // Read the fixed-size header to learn the full extent
-    let mut hdr = Head::<c::bch_sb>::default();
+    let mut hdr = pin_init::zeroed::<Head<c::bch_sb>>();
     file.read_exact_at(plain_bytes_mut(&mut hdr), sector << 9)
         .map_err(|e| anyhow::anyhow!("pread failed at offset {}: {}", sector << 9, e))?;
     let bytes = hdr.bytes();
@@ -132,7 +132,7 @@ pub fn sb_layout_init(
     sb_end: u64,
     no_sb_at_end: bool,
 ) -> anyhow::Result<()> {
-    *l = Default::default();
+    *l = pin_init::zeroed();
 
     l.magic.b = bcachefs_kernel::sb::io::BCHFS_MAGIC;
     l.layout_type = 0;

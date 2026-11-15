@@ -34,7 +34,7 @@ fn runs_validate<S: SbState>(sb: &c::bch_sb<S>, mut runs: KVVec<Range<u64>>, err
     let (Some(first), Some(last)) = (runs.first(), runs.last()) else {
         return Ok(());
     };
-    let m = sb_member(sb, S::head(sb).dev_idx.into()).unwrap_or_default();
+    let m = sb_member(sb, S::head(sb).dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
 
     sb_err_on!(err, first.start == 0, invalid_sb_journal, "journal bucket at sector 0")?;
 

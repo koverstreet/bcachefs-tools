@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default};
 use crate::util::projections::Volatile;
 use crate::locking::{Locked, SeqLock};
 use crate::new_lock;
@@ -157,4 +156,3 @@ pub struct bch_fs_gc_gens {
     /* gc_gens's: where its walk is, for sysfs */
     pub pos: Volatile<c::bbpos>,
 }
-c_default!(bch_fs_gc_gens);

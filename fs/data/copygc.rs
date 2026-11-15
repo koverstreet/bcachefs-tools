@@ -625,7 +625,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let data_opts = c::data_update_opts {
             type_:        c::DataUpdateType::copygc,
             commit_flags: c::TransCommitFlags::from_bits_retain(c::Watermark::copygc as u32),
-            ..Default::default()
+            ..::pin_init::zeroed()
         };
 
         match self.trans().write_buffer_tryflush() {

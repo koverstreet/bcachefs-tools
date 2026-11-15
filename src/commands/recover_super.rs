@@ -58,7 +58,7 @@ pub struct RecoverSuperCli {
 fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
     (0..sb.nr_devices as i32)
         .map(|i| {
-            let m = sb_member(sb, i as u32).unwrap_or_default();
+            let m = sb_member(sb, i as u32).unwrap_or_else(pin_init::zeroed);
             m.last_mount.get()
         })
         .max()
@@ -178,7 +178,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
                            dev_idx, nr_devices));
     }
 
-    let m = sb_member(src_sb.sb(), dev_idx as u32).unwrap_or_default();
+    let m = sb_member(src_sb.sb(), dev_idx as u32).unwrap_or_else(pin_init::zeroed);
     if m.uuid.b == [0u8; 16] {
         return Err(anyhow!("Member {} does not exist in source superblock", dev_idx));
     }

@@ -150,7 +150,7 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     }
 
     use c::WriteFlags as w;
-    let mut update_opts = c::data_update_opts { write_flags: w::alloc_nowait, ..Default::default() };
+    let mut update_opts = c::data_update_opts { write_flags: w::alloc_nowait, ..::pin_init::zeroed() };
 
     match failed.as_deref() {
         Some(f) if !f.is_empty() => {

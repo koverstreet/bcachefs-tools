@@ -22,7 +22,7 @@ use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
-use crate::types::{c_default, Le8};
+use crate::types::Le8;
 use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits};
 
 #[repr(C, align(8))]
@@ -33,7 +33,6 @@ pub union bch_extent_crc {
     pub crc64: c::bch_extent_crc64,
     pub crc128: c::bch_extent_crc128,
 }
-c_default!(bch_extent_crc);
 
 /* bkey_ptrs: generically over any key type that has ptrs */
 #[repr(C)]
@@ -42,7 +41,6 @@ pub struct bkey_ptrs_c {
     pub start: *const c::bch_extent_entry,
     pub end: *const c::bch_extent_entry,
 }
-c_default!(bkey_ptrs_c);
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
@@ -50,7 +48,6 @@ pub struct bkey_ptrs {
     pub start: *mut c::bch_extent_entry,
     pub end: *mut c::bch_extent_entry,
 }
-c_default!(bkey_ptrs);
 
 /*
  * Everything one walk of a key's pointer list can say about its replication.

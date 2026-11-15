@@ -5,7 +5,6 @@
 use crate::cstructs::c;
 use crate::locking::Locked;
 use crate::published;
-use crate::types::c_default;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::util::projections::Volatile;
 use crate::os::workqueue::DelayedWork;
@@ -76,10 +75,9 @@ pub struct InodeInfo {
     #[pin]
     pub ei_writeback_timer: DelayedWork,
 }
-c_default!(InodeInfo);
 
-// SAFETY: as c_default!()'s: all zeroes is valid - an inode's locks and timer
-// are only zeroes until their init
+// SAFETY: all zeroes is valid - an inode's locks and timer are only zeroes
+// until their init
 unsafe impl ::pin_init::Zeroable for InodeInfo {}
 
 #[bch_enum(closed)]

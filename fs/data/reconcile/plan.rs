@@ -104,7 +104,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
         // (data_update_useless_write_fail). Better to fail with
         // freelist_empty and retry from a fresh read.
         write_flags: w::alloc_nowait,
-        ..Default::default()
+        ..::pin_init::zeroed()
     };
     // Replicas can't be added to or dropped from btree nodes incrementally:
     // they always need to be able to spill over to the whole filesystem

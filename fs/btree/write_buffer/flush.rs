@@ -437,7 +437,7 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
 
     sorted.clear();
     for i in keys.idxs() {
-        let mut r = c::wb_key_ref::default();
+        let mut r = ::pin_init::zeroed::<c::wb_key_ref>();
         let p = keys.key(i).k.p;
         r.key.pos_idx.idx = i as u32;
         r.key.pos_idx.pos = plain_bytes(&p).try_into().expect("a bpos's bytes");

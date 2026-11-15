@@ -167,7 +167,7 @@ fn __write_alloc(j: &c::journal, a: &mut c::WriteAlloc, w: &mut c::journal_buf, 
             }
         }
 
-        let mut devs_sorted = c::dev_alloc_list::default();
+        let mut devs_sorted = ::pin_init::zeroed::<c::dev_alloc_list>();
         fs.dev_alloc_list_devs(&mut a.stripe, devs, &chosen, &mut a.wp_domain_keys, &mut devs_sorted);
 
         /* The lowest score in the best failure domain, ties in sort order: */

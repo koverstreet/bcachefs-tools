@@ -39,7 +39,6 @@ use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
 use crate::os::workqueue::{cancel_work_sync, run_raw, RawWork};
 use crate::util::{Printbuf, ToText};
-use crate::types::{c_default};
 use crate::{btree_trans, new_lock, prt};
 use core::ffi::c_int;
 use core::marker::PhantomData;
@@ -131,7 +130,6 @@ nest! {
         },
     }
 }
-c_default!(wb_key_ref);
 
 #[repr(C)]
 #[derive(Default, MaybeZeroable)]

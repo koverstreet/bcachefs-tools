@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
@@ -228,7 +227,6 @@ pub struct bch_ioctl_err_msg {
 pub struct bch_ioctl_query_uuid {
     pub uuid: c::__uuid_t,
 }
-c_default!(bch_ioctl_query_uuid);
 
 /*
  * BCH_IOCTL_DISK_ADD: add a new device to an existing filesystem
@@ -374,7 +372,6 @@ nest! {
         },
     }
 }
-c_default!(bch_ioctl_data);
 
 impl bch_ioctl_data {
     /// The scrub op's arguments.
@@ -455,7 +452,6 @@ nest! {
         },
     }
 }
-c_default!(bch_ioctl_data_event);
 
 #[counted(r.nr_devs, tail = devs: [u8])]
 #[repr(C, packed)]

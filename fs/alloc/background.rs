@@ -1117,7 +1117,7 @@ fn bucket_gens_init(fs: &Fs) -> Result<(), BchError> {
             g = None;
         }
 
-        let (_, gens) = g.get_or_insert_with(|| (gens_pos.key, c::BucketGens::default()));
+        let (_, gens) = g.get_or_insert_with(|| (gens_pos.key, ::pin_init::zeroed::<c::BucketGens>()));
         gens.gens[gens_pos.idx] = alloc_to_v4(k).generation;
         Ok(())
     })?;

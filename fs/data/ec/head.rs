@@ -378,7 +378,7 @@ pub(crate) fn dev_stripe_state_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32
         Some(s) => s,
         None => {
             let s = kbox_pin_init(pin_init!(c::ec_dev_stripe_state {
-                lock <- new_lock!(c::DevStripes::default()),
+                lock <- new_lock!(::pin_init::zeroed::<c::DevStripes>()),
                 disk_label,
             }? BchError))?;
             states.push(s)?;

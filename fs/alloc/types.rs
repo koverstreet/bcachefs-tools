@@ -9,7 +9,7 @@ use crate::format::DataType;
 use crate::util::alloc::KVVec;
 use crate::locking::{ByteLock, Locked, Lockdep, SeqLock};
 use crate::{new_lock, new_work};
-use crate::types::{CacheAligned, c_default};
+use crate::types::CacheAligned;
 use crate::util::bio::BioSet;
 use crate::os::workqueue::ReffedWork;
 use crate::os::percpu::{Counters, PerCpu};
@@ -254,7 +254,6 @@ pub struct dev_stripe_state {
     pub next_alloc: [u64; c::BCH_SB_MEMBERS_MAX as usize],
     pub cached_devs: c::bch_devs_mask,
 }
-c_default!(dev_stripe_state);
 
 #[bch_enum(closed)]
 #[nr]

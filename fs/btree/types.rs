@@ -21,7 +21,7 @@ use crate::util::Printbuf;
 use crate::util::mempool::Mempool;
 use crate::util::rcu::Srcu;
 use crate::os::workqueue::{Workqueue, WqFlags};
-use crate::types::{CacheAligned, NeBytes, bits_to_longs, c_default};
+use crate::types::{CacheAligned, NeBytes, bits_to_longs};
 use crate::btree::node_scan::NodeScan;
 use crate::btree::path::BtreePath;
 use crate::new_lock;
@@ -114,7 +114,6 @@ pub struct btree_cache_list {
     pub clean: BtreeNodeList,
     pub dirty: BtreeNodeList,
 }
-c_default!(btree_cache_list);
 
 /// live[idx]'s shrinker: not bc->lock's, as the lists are - the shrinker
 /// runs without it.
@@ -134,7 +133,6 @@ pub struct btree_root {
     pub level: u8,
     pub alive: u8,
 }
-c_default!(btree_root);
 
 /// root_lock's: each btree's root as the journal and the clean section
 /// record it - key, level, alive. The known btrees', and the rest's, which
@@ -177,7 +175,7 @@ impl BtreeRootsGuard<'_> {
     /// a btree past the known ones that the journal has a root for.
     pub fn grow_to(&mut self, id: u32) -> Result<(), BchError> {
         while id >= self.roots_extra.len() as u32 + Btree::NR {
-            self.roots_extra.push(cs::btree_root::default())?;
+            self.roots_extra.push(::pin_init::zeroed())?;
         }
         let nr = self.roots_extra.len() as u32;
         self.published().roots_nr_extra.set(nr);
@@ -583,7 +581,6 @@ pub struct btree_trans_commit_hook {
     pub fn_: Option<unsafe extern "C" fn(*mut BtreeTrans<'_>, *mut cs::btree_trans_commit_hook) -> c_int>,
     pub next: *mut cs::btree_trans_commit_hook,
 }
-c_default!(btree_trans_commit_hook);
 
 pub const BTREE_TRANS_MEM_MAX: u32 = 1 << 16;
 
@@ -839,7 +836,6 @@ impl BtreeTrans<'_> {
 pub struct btree_trans_buf {
     pub trans: *mut BtreeTrans<'static>,
 }
-c_default!(btree_trans_buf);
 
 /// A transaction function's stats' lock's: what's kept of its biggest - its
 /// memory's allocations, and its paths, as text.
@@ -1008,7 +1004,6 @@ pub struct btree_write_stats {
     pub nr: AtomicI64,
     pub bytes: AtomicI64,
 }
-c_default!(btree_write_stats);
 
 #[placed(Fs.btree)]
 #[pin_data]

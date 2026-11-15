@@ -103,7 +103,6 @@ use core::alloc::Layout;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use crate::types::c_default;
 use cstruct_macros::{args_stored_once, bch_enum, in_place, MaybeZeroable, Init, TypeInfo};
 use crate::format::{Bpos, Btree, Bversion, DataType, MetadataVersion, Nonce};
 
@@ -162,7 +161,6 @@ pub struct Rbio {
     #[pin]
     pub bio: BioLend,
 }
-c_default!(Rbio);
 crate::has_bio!(Rbio, bio);
 
 unsafe impl Send for Rbio {}

@@ -9,7 +9,7 @@ use crate::cstructs::c;
 use crate::data::keylist::PaddedKey;
 use crate::data::ptrs::IoFailures;
 use crate::data::write::DevWriteRef;
-use crate::types::{CacheAligned, c_default};
+use crate::types::CacheAligned;
 use crate::util::alloc::{AlignedBox, AllocError, Flags, KVVec};
 use crate::data_structures::fixed_fifo::FixedFifo;
 use crate::util::place::{Contained, Placed};
@@ -265,7 +265,6 @@ nest! {
         },
     }
 }
-c_default!(journal_res_state);
 
 pub const JOURNAL_STATE_BUF_COUNT_BITS: u32 = 10; /* matches bufN_count:10 above */
 pub const JOURNAL_STATE_BUF_COUNT_MAX: u32 = (1 << c::JOURNAL_STATE_BUF_COUNT_BITS) - 1;
@@ -334,7 +333,6 @@ pub struct journal_bio {
 
     pub bio: c::bio,
 }
-c_default!(journal_bio);
 crate::has_bio!(journal_bio, bio);
 
 #[repr(C)]

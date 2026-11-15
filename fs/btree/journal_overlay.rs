@@ -65,7 +65,6 @@ use cstruct_macros::{bitfield, MaybeZeroable, Init, BitfieldMembers};
 use c::Errcode as e;
 use c::FsFlag as f;
 use crate::journal::JournalEntries;
-use crate::types::{c_default};
 use crate::util::vstructs::Head;
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 use nestify::nest;
@@ -138,7 +137,6 @@ nest! {
         pub overwritten_range: VolatilePublish<u32, OverwriteRanges>,
     }
 }
-c_default!(journal_key);
 
 /// A run of overwritten keys, [start, end) by index, that a reader skips in
 /// one step: btree/journal_overlay.rs.
@@ -235,7 +233,7 @@ impl c::journal_key {
 
     /// For @k, kmalloc()'d, a key of its own.
     fn new_allocated(btree: Btree, level: u32, k: *mut c::bkey_i) -> Self {
-        let mut n = Self::default();
+        let mut n: Self = ::pin_init::zeroed();
         n.id = c::journal_key_id::new().with_btree_id(btree).with_level(level as u8);
         n.flags = c::journal_key_flags::new().with_allocated(true);
         n.src.allocated_k = k;
@@ -1019,7 +1017,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
             }
 
             for k in entry.entries() {
-                let mut n = c::journal_key::default();
+                let mut n = ::pin_init::zeroed::<c::journal_key>();
                 n.id = c::journal_key_id::new()
                     .with_btree_id(Btree(entry.btree_id.into()))
                     .with_level(entry.level);

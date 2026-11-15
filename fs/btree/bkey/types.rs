@@ -231,12 +231,15 @@ impl<V: ?Sized> BkeyI<V> {
     }
 }
 
+// a bkey, valid zeroed, and a V
+unsafe impl<V: ::pin_init::Zeroable> ::pin_init::Zeroable for BkeyI<V> {}
+
 impl<V: BkeyWhole> BkeyI<V> {
     pub fn new() -> Self {
         let mut k = c::bkey::new();
         k.type_ = V::TYPE.0 as u8;
         k.set_val_bytes(size_of::<V>());
-        BkeyI { k, v: V::default() }
+        BkeyI { k, v: V::zeroed() }
     }
 
     /// One at @p.
@@ -513,9 +516,14 @@ pub trait BkeyTyped: BkeyVal {
 /// Any bytes, all zeroes among them, are a valid Self in each of its fields -
 /// padding aside, which may hold anything: val_copy_pad() copies the key's
 /// bytes over a zeroed one.
-pub unsafe trait BkeyWhole: Sized + Default + BkeyTag + BkeyFamily<Validated: ArmRef>
+pub unsafe trait BkeyWhole: Sized + BkeyTag + BkeyFamily<Validated: ArmRef>
     + InFamily<AllTypes> + ValidatedVal
 {
+    /// All zeroes: a value, as any bytes are.
+    fn zeroed() -> Self {
+        unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
+    }
+
     /// @k's value, if it's one, zero padded: it may predate fields Self has,
     /// which a reference would read past its end for.
     fn val_copy_pad(k: BkeySC<'_>) -> Option<Self> {
@@ -557,7 +565,7 @@ pub unsafe trait SizedVal: Sized + 'static {}
 
 // SAFETY: SizedVal's
 unsafe impl<T> BkeyWhole for T
-    where T: SizedVal + Default + BkeyTag + BkeyFamily<Validated: ArmRef> + InFamily<AllTypes>
+    where T: SizedVal + BkeyTag + BkeyFamily<Validated: ArmRef> + InFamily<AllTypes>
            + ValidatedVal
 {}
 

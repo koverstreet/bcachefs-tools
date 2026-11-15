@@ -199,7 +199,7 @@ impl Mover<'_, '_> {
         update_reconcile_opts(t, s, &opts, iter, level, k, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)?;
         t.commit_lazy(Some(&DiskReservation::new(fs)), CommitFlags::NO_ENOSPC)?;
 
-        let mut data_opts = c::data_update_opts { read_dev: u32::MAX, ..Default::default() };
+        let mut data_opts = c::data_update_opts { read_dev: u32::MAX, ..::pin_init::zeroed() };
         let ret = (self.pred)(t, iter.btree(), k, &opts, &mut data_opts);
 
         fs.event_add_trace(events::data_update_pred, k.k.size.into(), |out| {

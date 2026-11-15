@@ -29,7 +29,6 @@ use core::ops::Deref;
 use core::sync::atomic::Ordering;
 use cstruct_macros::{MaybeZeroable, TypeInfo};
 use super::io::*;
-use crate::types::c_default;
 use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
 
 #[repr(C)]
@@ -40,7 +39,6 @@ pub struct bch_dev_identity {
     pub serial: [c_char; 64 + 1],
     pub rotational: bool,
 }
-c_default!(bch_dev_identity);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
@@ -120,7 +118,7 @@ fn sb_member_find_slot(fs: &Fs, sb: &c::bch_sb) -> Result<u32, BchError> {
     let mut nr_deleted = 0;
 
     for dev in (0..c::BCH_SB_MEMBERS_MAX).filter(|&i| i != c::BCH_SB_MEMBER_INVALID) {
-        let m = sb_member(sb, dev).unwrap_or_default();
+        let m = sb_member(sb, dev).unwrap_or_else(::pin_init::zeroed);
         nr_deleted += m.deleted() as u32;
 
         let last_mount = m.last_mount.get();
@@ -304,7 +302,7 @@ pub trait SbMembersMut: SbResize {
             mi.member_bytes = (BCH_MEMBER_V1_BYTES as u16).into();
 
             for i in 0..nr {
-                let m = members_v1(self.sb()).and_then(|v1| v1.get(i)).unwrap_or_default();
+                let m = members_v1(self.sb()).and_then(|v1| v1.get(i)).unwrap_or_else(::pin_init::zeroed);
                 self.put_member_v1::<c::bch_sb_field_members_v2>(MEMBERS_V2_HEAD, i, &m);
             }
         }
@@ -429,7 +427,7 @@ impl SbFieldOps for c::bch_sb_field_members_v2 {
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         for ca in fs.members() {
             let dev = u32::from(ca.dev_idx);
-            let m = sb_member(sb.sb(), dev).unwrap_or_default();
+            let m = sb_member(sb.sb(), dev).unwrap_or_else(::pin_init::zeroed);
             let mut mi = m.to_cpu();
             mi.failure_domain = failure_domain_id(sb.sb(), dev, &m);
 
@@ -439,7 +437,7 @@ impl SbFieldOps for c::bch_sb_field_members_v2 {
 
         if let Some(mi2) = members_v2(sb.sb()) {
             for i in 0..fs.nr_devices() {
-                fs.devs_removed.assign(i as usize, mi2.get(i).unwrap_or_default().deleted());
+                fs.devs_removed.assign(i as usize, mi2.get(i).unwrap_or_else(::pin_init::zeroed).deleted());
             }
         }
         Ok(())
@@ -573,7 +571,7 @@ fn member_to_text_short<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &
 }
 
 pub(crate) fn dev_to_text_short(out: &mut Printbuf, sb: &c::bch_sb, dev: u32) {
-    member_to_text_short(out, &sb_member(sb, dev).unwrap_or_default(), sb, dev);
+    member_to_text_short(out, &sb_member(sb, dev).unwrap_or_else(::pin_init::zeroed), sb, dev);
 }
 
 /// Each of @devs that's a device of @fs's, short: bch2_devs_mask_to_text_locked().
@@ -626,7 +624,7 @@ fn failure_domain_id(sb: &c::bch_sb, dev: u32, m: &c::bch_member) -> u16 {
     if m.failure_domain[0] == 0 {
         return 0;
     }
-    (0..=dev).find(|&i| sb_member(sb, i).unwrap_or_default().failure_domain == m.failure_domain)
+    (0..=dev).find(|&i| sb_member(sb, i).unwrap_or_else(::pin_init::zeroed).failure_domain == m.failure_domain)
         .map_or(0, |i| i as u16 + 1)
 }
 
@@ -1405,7 +1403,7 @@ impl Dev {
     /// Its IO errors, by kind: since the filesystem was made, and since they
     /// were last reset.
     pub fn io_errors_to_text(&self, out: &mut Printbuf) {
-        let m = sb_member(self.fs().sb_lock().sb(), self.dev_idx.into()).unwrap_or_default();
+        let m = sb_member(self.fs().sb_lock().sb(), self.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
         let errors = || MEMBER_ERROR_NAMES.iter().zip(&self.errors).map(|(n, e)| (n, e.load(Ordering::Relaxed) as u64));
 
         out.tabstop_push(12);
@@ -1493,7 +1491,7 @@ impl Dev {
 
     /// Its block device's name, model and serial, and whether it's rotational.
     pub(crate) fn identity(&self) -> c::bch_dev_identity {
-        let mut id = c::bch_dev_identity::default();
+        let mut id = ::pin_init::zeroed::<c::bch_dev_identity>();
         crate::init::dev::read_identity(self.disk_sb.bdev(), &mut id);
         id.rotational = crate::os::blkdev::rotational(self.disk_sb.bdev());
         id
@@ -1585,7 +1583,7 @@ mod tests {
     }
 
     fn member(i: u8) -> c::bch_member {
-        let mut m = c::bch_member::default();
+        let mut m = ::pin_init::zeroed::<c::bch_member>();
         m.uuid.b = [i + 1; 16];
         m.nbuckets = (1000 * u64::from(i) + 1).into();
         m
@@ -1635,7 +1633,7 @@ mod tests {
 
         sb.members_v2_init().unwrap();
         for i in 0..3 {
-            let mut want = c::bch_member::default();
+            let mut want = ::pin_init::zeroed::<c::bch_member>();
             plain_bytes_mut(&mut want)[..BCH_MEMBER_V1_BYTES]
                 .copy_from_slice(&plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
             assert_eq!(plain_bytes(&whole(&mut sb, i)), plain_bytes(&want));

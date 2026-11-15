@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default, Le8, Le64};
+use crate::types::{Le8, Le64};
 use cstruct_macros::{bitfield, xmacro, grown, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View,
                      SizedVal};
 
@@ -141,7 +141,6 @@ pub struct BucketGens {
     pub v: c::bch_val,
     pub gens: [u8; BucketGens::NR],
 }
-c_default!(BucketGens);
 
 impl BucketGens {
     /// A key's buckets: NR of them, the first at its offset << BITS

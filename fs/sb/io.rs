@@ -578,7 +578,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
         let btree_node_bytes = u64::from(sb.btree_node_size()) << 9;
         // the members, as C reads them - not yet validated
         let fs_size = (0..sb.number_of_devices()).map(|i| {
-            let m = crate::sb::members::sb_member(sb, i).unwrap_or_default();
+            let m = crate::sb::members::sb_member(sb, i).unwrap_or_else(::pin_init::zeroed);
             m.nbuckets.get() * u64::from(m.bucket_size.get())
         }).sum::<u64>();
         let bits = crate::inode::shard_bits_default(
@@ -623,7 +623,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
     }
 
     if write {
-        let m = crate::sb::members::sb_member(sb, sb.dev_idx.into()).unwrap_or_default();
+        let m = crate::sb::members::sb_member(sb, sb.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
         sb_err_on!(out, m.seq != sb.seq, invalid_sb_members_missing,
                    "Invalid superblock: member seq {} != sb seq {}", m.seq.get(), sb.seq.get())?;
     }

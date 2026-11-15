@@ -26,7 +26,6 @@ use core::fmt;
 use core::iter;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
-use crate::types::c_default;
 use cstruct_macros::{bch_enum, MaybeZeroable, xmacro, TypeInfo};
 
 xmacro! {
@@ -684,7 +683,6 @@ macro_rules! __bch_errcode_max_0 {
     };
 }
 BCH_ERRCODES!(__bch_errcode_max_0 []);
-c_default!(bch_errcode_max);
 
 macro_rules! errcode_enum {
     ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => {

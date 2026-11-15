@@ -16,7 +16,6 @@ use crate::fs::Dev;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::types::c_default;
 use crate::util::ratelimit::Ratelimit;
 use crate::util::{Printbuf, ToText};
 use core::ffi::CStr;
@@ -30,7 +29,6 @@ pub struct bch_log_msg {
     pub loglevel: u8,
     pub m: Printbuf,
 }
-c_default!(bch_log_msg);
 
 #[bch_enum(closed)]
 #[repr(u32)]

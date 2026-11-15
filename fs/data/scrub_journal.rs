@@ -215,7 +215,7 @@ fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &c::
         type_:      c::DataUpdateType::scrub_no_repair,
         read_flags: c::ReadFlags::hard_require_read_device,
         read_dev:   dev,
-        ..Default::default()
+        ..::pin_init::zeroed()
     };
 
     lockrestart_do(m.trans(), |t| {
@@ -514,7 +514,7 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
         target:        io_opts.background_target.into(),
         ptrs_io_error: bad_devs as u16,
         ptrs_kill:     bad_devs as u16,
-        ..Default::default()
+        ..::pin_init::zeroed()
     };
 
     let ret = m.move_extent(t, None, &io_opts, &data_opts, &iter, 0, k, None);

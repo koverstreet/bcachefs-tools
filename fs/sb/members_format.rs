@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default, Le16, Le32, Le64};
+use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::Head;
 use cstruct_macros::{bitfield, bch_enum, unsized_vstruct, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
 
@@ -79,7 +79,6 @@ pub struct bch_member {
      */
     pub failure_domain: [u8; 32],
 }
-c_default!(bch_member);
 
 /*
  * btree_allocated_bitmap can represent sector addresses of a u64: it itself has

@@ -39,7 +39,6 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::{MaybeZeroable, Init};
 use pin_init::{pinned_drop, pin_data};
 use crate::new_lock;
-use crate::types::c_default;
 use crate::util::ffi::Opaque;
 use crate::util::projections::Volatile;
 use core::ffi::c_uint;
@@ -95,7 +94,7 @@ pub const TIME_STATS_MV_WEIGHT: u32 = 8;
 
 /* the stats' lock's: all in nanoseconds */
 #[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable)]
+#[derive(Default, Clone, Copy, MaybeZeroable)]
 pub struct TimeStatsLocked {
     pub min_duration: u64,
     pub max_duration: u64,
@@ -110,7 +109,6 @@ pub struct TimeStatsLocked {
     pub duration_stats_weighted: c::mean_and_variance,
     pub freq_stats_weighted: c::mean_and_variance,
 }
-c_default!(TimeStatsLocked);
 
 #[pin_data(PinnedDrop)]
 #[repr(C)]
