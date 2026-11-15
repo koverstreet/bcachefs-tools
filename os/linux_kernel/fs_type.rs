@@ -30,11 +30,9 @@ use super::fs_context::{FsContext, FsParam};
 use super::super_block::{ReconfSuper, Root, SuperBlock};
 
 /// What a superblock owns, through s_fs_info: one pointer, given up at
-/// create_super() and taken back at kill_sb.
-///
-/// # Safety
-/// from_raw(into_raw(x)) is x, and the pointer is to a live Target until then.
-pub unsafe trait SuperData: Sized + 'static {
+/// create_super() and taken back at kill_sb: from_raw(into_raw(x)) is x, and
+/// the pointer is to a live Target until then.
+pub trait SuperData: Sized + 'static {
     type Target: 'static;
 
     fn into_raw(self) -> NonNull<Self::Target>;

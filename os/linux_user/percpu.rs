@@ -433,12 +433,10 @@ pub unsafe fn free_percpu(p: *mut c_void) {
 // ── The operations ───────────────────────────────────────────────────────
 
 /// A word per-CPU data is operated on in: u32 or u64. Its operations are
-/// this CPU's copy's; xchg is a cmpxchg loop over them, as C's is.
-///
-/// # Safety
-/// Each is C's this_cpu_*() of a Self: for a @pcp to a per-CPU Self,
-/// allocated for every possible CPU and live.
-pub unsafe trait PerCpuWord: Copy + Eq {
+/// this CPU's copy's; xchg is a cmpxchg loop over them, as C's is. Each is
+/// C's this_cpu_*() of a Self, for a @pcp - the callers' to keep - to a
+/// per-CPU Self, allocated for every possible CPU and live.
+pub trait PerCpuWord: Copy + Eq {
     unsafe fn this_cpu_read(pcp: *mut Self) -> Self;
     unsafe fn this_cpu_add(pcp: *mut Self, val: Self);
     unsafe fn this_cpu_cmpxchg(pcp: *mut Self, old: Self, new: Self) -> Self;
@@ -446,7 +444,7 @@ pub unsafe trait PerCpuWord: Copy + Eq {
 
 macro_rules! per_cpu_word {
     ($($t:ty, $a:ty);*) => { $(
-        unsafe impl PerCpuWord for $t {
+        impl PerCpuWord for $t {
             #[inline(always)]
             unsafe fn this_cpu_read(pcp: *mut $t) -> $t {
                 unsafe { <$a>::from_ptr(this_cpu(pcp)) }.load(Ordering::Relaxed)

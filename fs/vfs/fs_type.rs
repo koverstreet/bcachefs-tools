@@ -49,8 +49,7 @@ use super::vfs_inode::VfsInode;
 
 pub(crate) struct Bcachefs;
 
-// SAFETY: from_raw() takes back what into_raw() gave up
-unsafe impl SuperData for OpenFs {
+impl SuperData for OpenFs {
     type Target = Fs;
 
     fn into_raw(self) -> NonNull<Fs> {
