@@ -39,6 +39,7 @@ use crate::init::damage;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
+use crate::util::alloc::Flags;
 use crate::util::bio::{io_buf, Bio, BioBox, BioBuffersMapped, BioOwner};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
@@ -147,7 +148,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     } else {
         (p.crc.compressed_size as usize) << 9
     };
-    let mut buf = io_buf(bytes).map_err(|_| BchError::from(c::ENOMEM))?;
+    let mut buf = io_buf(bytes, Flags::empty()).map_err(|_| BchError::from(c::ENOMEM))?;
     buf.fill(0);
 
     let mut bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(

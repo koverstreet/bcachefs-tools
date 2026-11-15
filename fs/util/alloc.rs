@@ -225,6 +225,66 @@ impl<T, A: AllocGfp, L: LenUint> From<Vec<T, A, L>> for Box<[T], A> {
     }
 }
 
+/// A Box aligned to @ALIGN, whatever T's alignment - and freed so: kvmalloc()'d.
+pub struct AlignedBox<T: ?Sized, const ALIGN: usize> {
+    ptr: NonNull<T>,
+}
+
+unsafe impl<T: ?Sized + Send, const ALIGN: usize> Send for AlignedBox<T, ALIGN> {}
+unsafe impl<T: ?Sized + Sync, const ALIGN: usize> Sync for AlignedBox<T, ALIGN> {}
+
+// None is its pointer null - zeroed
+unsafe impl<T: ?Sized, const ALIGN: usize> ::pin_init::ZeroableOption for AlignedBox<T, ALIGN> {}
+
+impl<U, const ALIGN: usize> AlignedBox<[MaybeUninit<U>], ALIGN> {
+    pub fn try_new_uninit_slice_gfp(len: usize, gfp: Flags) -> Result<Self, AllocError> {
+        let layout = Layout::array::<U>(len).and_then(|l| l.align_to(ALIGN)).map_err(|_| AllocError)?;
+        let mem = KVmalloc.allocate_gfp(layout, gfp)?;
+        Ok(AlignedBox { ptr: NonNull::slice_from_raw_parts(mem.cast(), len) })
+    }
+
+    /// # Safety
+    /// Every element is a valid U.
+    pub unsafe fn assume_init(self) -> AlignedBox<[U], ALIGN> {
+        let ptr = core::mem::ManuallyDrop::new(self).ptr;
+        AlignedBox { ptr: NonNull::slice_from_raw_parts(ptr.cast(), ptr.len()) }
+    }
+}
+
+impl<U: ::pin_init::Zeroable, const ALIGN: usize> AlignedBox<[U], ALIGN> {
+    pub fn try_new_zeroed_slice_gfp(len: usize, gfp: Flags) -> Result<Self, AllocError> {
+        let b = AlignedBox::<[MaybeUninit<U>], ALIGN>::try_new_uninit_slice_gfp(len, gfp | flags::ZERO)?;
+        Ok(unsafe { b.assume_init() })
+    }
+}
+
+impl<T: ?Sized, const ALIGN: usize> core::ops::Deref for AlignedBox<T, ALIGN> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        unsafe { self.ptr.as_ref() }
+    }
+}
+
+impl<T: ?Sized, const ALIGN: usize> core::ops::DerefMut for AlignedBox<T, ALIGN> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { self.ptr.as_mut() }
+    }
+}
+
+impl<T: ?Sized, const ALIGN: usize> Drop for AlignedBox<T, ALIGN> {
+    fn drop(&mut self) {
+        let layout = Layout::for_value(&**self).align_to(ALIGN).expect("its allocation's layout");
+        unsafe {
+            core::ptr::drop_in_place(self.ptr.as_ptr());
+            // a zero-sized one is dangling: no allocation
+            if layout.size() != 0 {
+                KVmalloc.deallocate(self.ptr.cast(), layout);
+            }
+        }
+    }
+}
+
 pub use crate::data_structures::vec::{DrainAll, IntoIter, PushError, Vec};
 use crate::data_structures::array_vec::LenUint;
 

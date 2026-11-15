@@ -23,7 +23,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::errors::SbErrorId;
 use crate::util::{raid, Printbuf};
-use crate::util::alloc::{kbox_pin_init, KBox};
+use crate::util::alloc::{kbox_pin_init, Flags, KBox};
 use crate::util::bio::{io_buf, IoBuf};
 use crate::util::backref::BackRef;
 use crate::util::closure::{closure_wait, closure_wake_up};
@@ -187,7 +187,7 @@ impl StripeBuf {
             // got
             buf.blocks = blocks;
             for i in blocks_in(blocks) {
-                match io_buf(bytes) {
+                match io_buf(bytes, Flags::empty()) {
                     Ok(b) => buf.data[i] = Some(b),
                     Err(_) => return fs.throw(Errcode::ENOMEM_stripe_buf),
                 }

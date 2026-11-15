@@ -16,7 +16,7 @@ use super::{buf_nr_bvecs, Bio, BioRange};
 use crate::c;
 use crate::errcode::BchError;
 use crate::os::kernel::PAGE_SIZE;
-use crate::util::alloc::{Flags, ABox, AVec, AllocError, ConstAlign};
+use crate::util::alloc::{AlignedBox, AllocError, Flags};
 
 /// # Safety
 /// fill() puts in the bvecs only what release() gives back - or, failing,
@@ -198,22 +198,19 @@ unsafe impl MapBuf for &[u8] {
     }
 }
 
-unsafe impl<const A: usize> MapBuf for ABox<[u8], ConstAlign<A>> {
+unsafe impl<const A: usize> MapBuf for AlignedBox<[u8], A> {
     fn as_raw(&self) -> (*mut u8, usize) {
         (self.as_ptr().cast_mut(), self.len())
     }
 }
 
 /// A buffer for IO: page aligned, as userspace reads into it O_DIRECT.
-pub type IoBuf = ABox<[u8], ConstAlign<PAGE_SIZE>>;
+pub type IoBuf = AlignedBox<[u8], PAGE_SIZE>;
 
-/// An IoBuf of @bytes, not zeroed: as kvmalloc() leaves them, as C's
-/// buffers were - read into, or written, before they're read.
-pub fn io_buf(bytes: usize) -> Result<IoBuf, AllocError> {
-    let mut v = AVec::<u8, ConstAlign<PAGE_SIZE>>::new(PAGE_SIZE);
-    v.try_reserve_exact(bytes).map_err(|_| AllocError)?;
-    unsafe { v.set_len(bytes) };
-    Ok(v.into_boxed_slice())
+/// An IoBuf of @bytes, with @gfp, not zeroed: as kvmalloc() leaves them, as
+/// C's buffers were - read into, or written, before they're read.
+pub fn io_buf(bytes: usize, gfp: Flags) -> Result<IoBuf, AllocError> {
+    Ok(unsafe { AlignedBox::try_new_uninit_slice_gfp(bytes, gfp)?.assume_init() })
 }
 
 /// The bio's buffer, @B: mapped as the bio's made, and held as long as it

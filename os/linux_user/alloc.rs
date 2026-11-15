@@ -332,6 +332,3 @@ pub fn bio_pages_alloc(size: usize, gfp: Flags) -> *mut c_void {
 pub unsafe fn bio_pages_free(p: *mut c_void, _size: usize) {
     unsafe { libc::free(p) }
 }
-
-// ABox<T, A>, and AVec<T, A> to build one: aligned-vec's.
-pub use aligned_vec::{ABox, AVec, Alignment, ConstAlign};

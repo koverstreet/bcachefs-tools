@@ -24,7 +24,7 @@ use crate::journal::buckets::JournalRing;
 use crate::locking::{Guard as _, Locked, Mut, Ref};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
-use crate::util::alloc::{init_at, kvzalloc, AllocError, KVVec};
+use crate::util::alloc::{init_at, kvzalloc, AllocError, Flags, KVVec};
 use crate::util::bio::{io_buf, Bio, BioBox, BioBuffersMapped, BioOwner, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
@@ -754,7 +754,7 @@ struct DevReader<'a> {
 impl<'a> DevReader<'a> {
     fn new(fs: &'a Fs, ca: &'a Dev, ring: &'a mut JournalRing) -> Result<Self, BchError> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
-        let mut buf = io_buf(bytes).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
+        let mut buf = io_buf(bytes, Flags::empty()).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
         buf.fill(0);
         let bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
             ca.disk_sb.bdev, c::req_op_REQ_OP_READ, buf, |b| b.init())?;
