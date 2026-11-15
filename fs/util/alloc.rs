@@ -61,6 +61,41 @@ pub unsafe trait AllocGfp: Alloc {
     /// As Allocator::grow()'s.
     unsafe fn grow_gfp(&self, p: NonNull<u8>, old: Layout, new: Layout, gfp: Flags)
         -> Result<NonNull<[u8]>, AllocError>;
+
+    /// This allocator, its allocations with @gfp: how what takes an
+    /// allocator - a Box - allocates specially.
+    fn with_flags(self, gfp: Flags) -> WithFlags<Self>
+    where
+        Self: Sized,
+    {
+        WithFlags(self, gfp)
+    }
+}
+
+/// AllocGfp::with_flags()'s.
+#[derive(Clone, Copy)]
+pub struct WithFlags<A>(A, Flags);
+
+unsafe impl<A: AllocGfp> Allocator for WithFlags<A> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        self.0.allocate_gfp(layout, self.1)
+    }
+
+    fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        self.0.allocate_zeroed_gfp(layout, self.1)
+    }
+
+    unsafe fn deallocate(&self, p: NonNull<u8>, layout: Layout) {
+        unsafe { self.0.deallocate(p, layout) }
+    }
+
+    unsafe fn grow(&self, p: NonNull<u8>, old: Layout, new: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        unsafe { self.0.grow_gfp(p, old, new, self.1) }
+    }
+}
+
+unsafe impl<A: AllocGfp> Alloc for WithFlags<A> {
+    const KVFREE: bool = A::KVFREE;
 }
 
 /// The allocator of what keeps none - Vec, MaybeRcuAlloc: zero-sized, made
