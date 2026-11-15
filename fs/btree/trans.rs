@@ -329,8 +329,8 @@ pub(crate) type TransList = crate::list!(BtreeTrans<'static>, list);
 
 /// Another thread's transaction's flags: its own thread changes them -
 /// READ_ONCE().
-pub(crate) fn foreign_bits(trans: *const BtreeTrans<'_>) -> c::btree_trans_bits {
-    unsafe { (&raw const (*trans).bits).cast::<c::btree_trans_bits>().read_volatile() }
+pub(crate) fn foreign_bits(trans: &BtreeTrans<'_>) -> c::btree_trans_bits {
+    unsafe { (&raw const trans.bits).cast::<c::btree_trans_bits>().read_volatile() }
 }
 
 /// A transaction off the list, kept live - its paths, its task - by the ref.
@@ -342,7 +342,7 @@ pub struct ListedTrans {
 impl ListedTrans {
     /// Whether it holds the SRCU lock btree nodes are freed under.
     pub fn srcu_held(&self) -> bool {
-        foreign_bits(self.trans).srcu_held()
+        foreign_bits(unsafe { &*self.trans }).srcu_held()
     }
 
     pub fn backtrace_to_text(&self, out: &mut Printbuf) {

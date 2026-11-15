@@ -105,13 +105,19 @@ impl Trans {
 }
 
 /// btree_node_locked_type() of a path another thread may be changing.
-fn path_locked_type(path: *const BtreePath, level: usize) -> BtreeNodeLockedType {
+///
+/// # Safety
+/// @path is in a path table that stays live: the RCU read lock is held.
+unsafe fn path_locked_type(path: *const BtreePath, level: usize) -> BtreeNodeLockedType {
     BtreeNodeLockedType::of(unsafe { (&raw const (*path).nodes_locked).read_volatile() }, level)
 }
 
 /// trans_paths_allocated() and trans_paths_nr(), of a path table another
 /// thread may be using: the bitmap, then nr_paths, sit before the paths.
-fn paths_allocated<'a>(paths: *mut BtreePath) -> (&'a AtomicBitmap, usize) {
+///
+/// # Safety
+/// @paths is a path table that stays live for 'a: the RCU read lock is held.
+unsafe fn paths_allocated<'a>(paths: *mut BtreePath) -> (&'a AtomicBitmap, usize) {
     let nr = unsafe { (*table_header(paths)).nr_paths } as usize;
     let words = table_allocated(paths, nr).cast::<AtomicUsize>();
     (AtomicBitmap::from_words(unsafe { core::slice::from_raw_parts(words, bits_to_longs(nr)) }), nr)
@@ -158,7 +164,7 @@ pub(crate) unsafe fn bch2_btree_trans_to_text(out: &mut Printbuf, trans: *mut Bt
 
     prt!(out, "{} {}\n", if task.is_null() { 0 } else { unsafe { task_pid(task) } }, trans.fn_name());
 
-    if foreign_bits(trans.0).journal_replay_not_finished() {
+    if foreign_bits(unsafe { &*trans.0 }).journal_replay_not_finished() {
         prt!(out, "has journal_keys ref\n");
     }
 
@@ -171,7 +177,7 @@ pub(crate) unsafe fn bch2_btree_trans_to_text(out: &mut Printbuf, trans: *mut Bt
         return;
     }
 
-    let (allocated, nr) = paths_allocated(paths);
+    let (allocated, nr) = unsafe { paths_allocated(paths) };
     let mut idx = 1;
     while let Some(i) = allocated.next(idx, nr) {
         idx = i + 1;
@@ -510,7 +516,7 @@ impl LockGraph {
             return Ok(Step::Up);
         }
 
-        let (allocated, nr_paths) = paths_allocated(paths);
+        let (allocated, nr_paths) = unsafe { paths_allocated(paths) };
         let mut from = self.g[top].path_idx;
 
         while let Some(path_idx) = allocated.next(from, nr_paths) {
@@ -528,7 +534,7 @@ impl LockGraph {
 
             while self.g[top].level < c::BTREE_MAX_DEPTH as usize {
                 let level = self.g[top].level;
-                let lock_held = path_locked_type(path, level);
+                let lock_held = unsafe { path_locked_type(path, level) };
 
                 if lock_held == BtreeNodeLockedType::BTREE_NODE_UNLOCKED {
                     self.g[top].level += 1;
