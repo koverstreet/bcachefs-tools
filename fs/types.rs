@@ -228,7 +228,7 @@ pub const CONGESTED_MAX: u32 = 1024;
 pub struct Dev {
     #[pin]
     #[init(crate::util::refcount::PercpuRef::new())]
-    pub ref_: crate::util::refcount::PercpuRef,
+    pub ref_: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.ref_)>,
     /*
      * ref_outer keeps the bch_dev allocation alive - nothing more.
      * Unlike ca->ref, holding it does NOT mean the device is still a

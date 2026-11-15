@@ -19,7 +19,7 @@ use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::place::Placed;
-use crate::util::refcount::{AtomicRef, RefGuard, Refcount, TryRefcount};
+use crate::util::refcount::{AtomicRef, PercpuRef, RefGuard, Refcount, TryRefcount};
 use crate::alloc::disk_groups;
 use crate::util::ffi::c_char;
 use crate::data_structures::strided::{Strided, StridedMut};
@@ -1030,7 +1030,7 @@ impl Fs {
     pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
         // in c->devs under the RCU lock: removal takes it out before it kills
         // ref_, whose count can't reach zero till a grace period after
-        self.dev_rcu(dev, &read_lock()).map(|ca| unsafe { RefGuard::get(ca) })
+        self.dev_rcu(dev, &read_lock()).map(|ca| unsafe { RefGuard::get(&ca.ref_) })
     }
 
     /// @ca made the ref on device @dev, for a walk by device - kept if it's
@@ -1118,7 +1118,7 @@ impl Fs {
     /// The filesystem's devices, a ref on each: for_each_member_device().
     pub fn members(&self) -> impl Iterator<Item = DevRef> + '_ {
         // as dev_get()'s
-        self.walk(|ca| Some(unsafe { RefGuard::get(ca) }))
+        self.walk(|ca| Some(unsafe { RefGuard::get(&ca.ref_) }))
     }
 
     /// The devices in a state @state_ok takes, an io ref on each, put when
@@ -1199,27 +1199,10 @@ impl Dev {
 
 // ── References ───────────────────────────────────────────────────────────
 
-/// A ref on a device - ca->ref: it stays a member while this is held.
-/// Option<DevRef> has C's layout: a nullable bch_dev *.
-pub type DevRef = RefGuard<Dev>;
-
-/// A device, counted by ca->ref, which its removal drains before it's freed:
-/// bch2_dev_get() and bch2_dev_put(), as members.h's inlines are.
-unsafe impl Refcount for Dev {
-    type Target = Self;
-
-    fn target(&self) -> &Self {
-        self
-    }
-
-    unsafe fn inc(&self) {
-        unsafe { self.ref_.inc() };
-    }
-
-    unsafe fn dec(&self) {
-        unsafe { self.ref_.dec() };
-    }
-}
+/// A ref on a device - ca->ref, which its removal drains before it's freed:
+/// it stays a member while this is held. Option<DevRef> has C's layout - a
+/// nullable bch_dev *, ref_ being its first field.
+pub type DevRef = RefGuard<Placed<PercpuRef, crate::at!(Dev.ref_)>>;
 
 /// ca->ref_outer: keeps the bch_dev's memory alive and nothing else - its
 /// removal can complete while this is held. For contexts that block on
