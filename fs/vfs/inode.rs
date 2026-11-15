@@ -490,7 +490,9 @@ impl<'i> UpdateLock<'i> {
         if project.is_own(&bi) || project.get(&dir_bi) == project.get(&bi) {
             return Ok(());
         }
-        self.set_projid(dir.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ])
+        // dir's quota lock dropped before ours is taken: the same class, either order
+        let projid = dir.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ];
+        self.set_projid(projid)
     }
 
     /// Change the inode with @set, in a transaction of its own that's
