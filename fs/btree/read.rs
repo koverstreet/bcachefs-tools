@@ -6,7 +6,6 @@
 //! checked.
 
 use crate::btree::bkey::prelude::*;
-use crate::util::alloc::flags;
 use crate::btree::bkey::{bkey_val_to_text, types_with, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN,
                          SPOS_MAX};
 use crate::btree::async_ops::AsyncBtreeOp;
@@ -27,45 +26,95 @@ use crate::data::moving::{Moving, MovingIo};
 use crate::data::ptrs::BkeyVRead;
 use crate::data::update::dev_ptr_bit;
 use crate::data_structures::array_vec::ArrayVec;
-use crate::debug::{async_objs, trace::events};
+use crate::debug::{async_objs::{AsyncObj, AsyncObjSlot}, trace::events};
 use crate::errcode::{blk_status_to_bch_err, BchError};
 use crate::format::{BkeyType, BkeyTypeFlags, Btree, BtreeFlags, DataType, Nonce};
 use crate::fs::{Dev, Fs, WriteRef};
 use crate::init::{damage::note_lost_extents, error::id, passes::RecoveryPass, recovery::btree_lost_data};
 use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
-use crate::util::bio::{bch2_bio_map, bio_put, of_bio, Bio, BioBox, BioBuffersMapped, BioOwner};
+use crate::locking::MemallocFlags;
+use crate::util::alloc::Kmalloc;
+use crate::util::bio::{inline_vecs, Bio, BioBox, BioBuffersMapped, BioBuffersUnmanaged, BioOwner, HasBio};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
-use crate::os::kernel::random_u64_below;
+use crate::os::kernel::{random_u64, random_u64_below};
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, PAGE_SIZE, READ};
 use crate::util::log::{LogLevel, LogMsg};
-use crate::util::task::{spawn_static, waiter, Resumable, Resume};
+use crate::util::mempool::Mempool;
+use crate::util::task::{exclusive_size, spawn_static, waiter, Resumable, Resume, Spawn, TaskSlot};
 use crate::os::workqueue::Queue;
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
                             Plain, SelfSized, Unsized, Unvalidated};
-use crate::os::workqueue::{run_raw, RawWork};
-use crate::util::{alloc::init_at, backref::BackRef, printbuf::Msg, refcount::TryRefcount};
+use crate::util::{backref::BackRef, printbuf::Msg, refcount::TryRefcount};
 use crate::util::{time_stats::TimeStats, Printbuf, ToText};
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
 use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
-use core::ptr::{self, NonNull};
+use core::pin::Pin;
+use core::ptr;
 use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
+use cstruct_macros::in_place;
+use pin_init::{pin_data, pin_init, pinned_drop};
 
+/// A node read's bio: the home of the task that reads it, its bvecs inline
+/// after the box.
+#[pin_data(PinnedDrop)]
 #[repr(C)]
-pub struct BtreeReadBio {
-    work:       c::work_struct,
-    fs:         &'static Fs,
-    ca:         Option<DevIoRef<c::DevReadRefKind>>,
-    b:          NonNull<BtreeNode>,
-    start_time: u64,
-    /* its slot on its async object list */
-    list_idx:   c_uint,
-    pick:       c::extent_ptr_decoded,
-    bio:        c::bio,
+pub struct NodeReadBio {
+    #[pin]
+    bio: Bio,
 }
-crate::has_bio!(BtreeReadBio, bio);
+crate::has_bio!(NodeReadBio, bio);
+
+#[pinned_drop]
+impl PinnedDrop for NodeReadBio {
+    fn drop(self: Pin<&mut Self>) {
+        unsafe { self.bio_mut().uninit() }
+    }
+}
+
+unsafe impl AsyncObj for NodeReadBio {
+    const LIST: c::AsyncObjKind = c::AsyncObjKind::btree_read_bio;
+
+    #[cold]
+    fn to_text(&self, out: &mut Printbuf, _: &Fs) {
+        self.bio.to_text(out)
+    }
+}
+
+/// A read's home, as its task has it: the bio's owner.
+struct NodeReadIo<'h>(Pin<&'h mut NodeReadBio>);
+
+unsafe impl BioOwner for NodeReadIo<'_> {
+    type Buffers = BioBuffersUnmanaged;
+
+    fn bio(&self) -> &Bio {
+        &self.0.bio
+    }
+
+    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+        self.0.as_mut().bio_mut()
+    }
+}
+
+/// A node read's box is freed when its task is done, a grace period after the
+/// read - when the filesystem may be gone: so from a pool of the module's.
+/// Btree node reads make forward progress under memory pressure.
+static NODE_READS: Mempool<Kmalloc> = ::pin_init::zeroed();
+
+/// At module init: elements for the most bvecs a bio has.
+pub fn pools_init() -> Result<(), BchError> {
+    let size = exclusive_size::<NodeReadBio, NodeReadFut<'static>, &'static Mempool<Kmalloc>>(
+        inline_vecs(c::BIO_MAX_VECS as u16));
+    unsafe { Mempool::init_static(&NODE_READS, Mempool::kmalloc(1, size)) }
+}
+
+/// # Safety
+/// At module exit, after the last box's grace period.
+pub unsafe fn pools_exit() {
+    unsafe { NODE_READS.exit() }
+}
 
 impl c::bset_head {
     /// The nonce of this bset, at byte @offset of its btree node: the offset,
@@ -761,20 +810,36 @@ fn read_done_wake(b: &BtreeNode) {
     b.flags.wake();
 }
 
-impl RawWork for BtreeReadBio {
-    const WORK: usize = offset_of!(Self, work);
+/// One IO of a node read, from @pick's device - none if @ca is: its status.
+async fn read_attempt(io: &mut NodeReadIo<'_>, fs: &Fs, b: &BtreeNode, ca: Option<&DevIoRef<c::DevReadRefKind>>,
+                      pick: &c::extent_ptr_decoded, waiter: waiter::Async, start_time: u64)
+    -> Result<(), BchError>
+{
+    let Some(ca) = ca else { return Err(fs.err(blk_status_to_bch_err(c::BLK_STS_REMOVED))) };
 
-    unsafe fn run(rb: NonNull<Self>) {
-        unsafe { read_work(rb) }
-    }
+    io.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
+    io.bio_mut().set_sector(pick.ptr.offset());
+    /* read_done() may have swapped the node's buffer for its sort's */
+    let node = unsafe { node_buf(b, b.contents()) };
+    let resume = Resume::queue(&fs.btree.read_complete_wq);
+    let status = io.remap_read(node).submit(waiter).resume_on(resume).await;
+    ca.account_io_completion(c::MemberErrorType::read, start_time, status.is_ok());
+    status.map_err(|e| fs.err(e))
 }
 
-/// # Safety
-/// @rb's first read is done - waited on, or its endio queued it: it's put here.
-unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
-    let rb = unsafe { &mut *rb.as_ptr() };
-    let fs = rb.fs;
-    let b = unsafe { rb.b.as_ref() };
+/// The read of @b from @pick, retried from its other replicas: the node is the
+/// read's while read_in_flight is set, cleared at the end.
+#[in_place(NodeReadFut)]
+async fn read_task<'h>(home: Pin<&'h mut NodeReadBio>, fs: BackRef<Fs>, b: BackRef<BtreeNode>,
+                       mut pick: c::extent_ptr_decoded, mut ca: Option<DevIoRef<c::DevReadRefKind>>) {
+    let (fs, b) = (&*fs, &*b);
+    let listed = unsafe { AsyncObjSlot::new(fs, &*home) };
+    let mut io = NodeReadIo(home);
+    let waiter = waiter::Async::current().await;
+
+    let mut start_time = local_clock();
+    let mut status = read_attempt(&mut io, fs, b, ca.as_ref(), &pick, waiter, start_time).await;
+
     let btree = Btree(b.c.btree_id.into());
 
     let mut failed = c::bch_io_failures::default();
@@ -784,27 +849,26 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
     prt!(&mut buf, "btree node read error at btree {}\n", b.pos_to_text(fs));
 
     let ret = loop {
-        let ca = rb.ca.take();
-
-        let ret = if rb.bio.bi_status == 0 {
-            rb.bio.bi_iter = Default::default();
-            rb.bio.bi_iter.bi_size = b.buf_bytes() as u32;
-
-            #[cfg(CONFIG_BCACHEFS_DEBUG)]
-            {
-                let (dev, ratio) = (btree_read_corrupt_device.get(), btree_read_corrupt_ratio.get());
-                if (dev == rb.pick.ptr.dev() as i32 || dev < 0) &&
-                   ratio != 0 && random_u64_below(ratio.into()) == 0 {
-                    unsafe { Bio::from_raw_mut(&raw mut rb.bio) }.corrupt();
+        let ret = match status {
+            Ok(()) => {
+                #[cfg(CONFIG_BCACHEFS_DEBUG)]
+                {
+                    let (dev, ratio) = (btree_read_corrupt_device.get(), btree_read_corrupt_ratio.get());
+                    if (dev == pick.ptr.dev() as i32 || dev < 0) &&
+                       ratio != 0 && random_u64_below(ratio.into()) == 0 {
+                        let node = unsafe { node_buf(b, b.contents()) };
+                        let at = random_u64_below((node.len() / 8) as u64) as usize * 8;
+                        node[at..at + 8].copy_from_slice(&random_u64().to_ne_bytes());
+                    }
                 }
-            }
 
-            let ca = ca.as_ref().expect("a read that completed, from a device it had a ref on");
-            read_done(fs, ca, b, Some(&mut failed), &mut buf)
-        } else {
-            let err = fs.err(blk_status_to_bch_err(rb.bio.bi_status));
-            failed.mark(&rb.pick, err);
-            Err(err)
+                let ca = ca.as_ref().expect("a read that completed, from a device it had a ref on");
+                read_done(fs, ca, b, Some(&mut failed), &mut buf)
+            }
+            Err(err) => {
+                failed.mark(&pick, err);
+                Err(err)
+            }
         };
 
         if ret.is_ok() {
@@ -812,26 +876,15 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         }
         match BkeySC::from(unsafe { b.contents() }.key_i())
             .pick_read_device(fs, Some(&failed), 0, c::ReadFlags::empty()) {
-            Ok(Some(pick)) => rb.pick = pick,
+            Ok(Some(p)) => pick = p,
             _ => break ret,
         }
 
-        rb.ca = fs.dev_get_ioref::<c::DevReadRefKind>(rb.pick.ptr.dev().into());
-        rb.start_time = local_clock();
-        unsafe { crate::os::bio::reset(&raw mut rb.bio, ptr::null_mut(), c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META) };
-        /* read_done() may have swapped the buffer the bio was mapped to for its sort's, and freed it */
-        unsafe { bch2_bio_map(&raw mut rb.bio, b.contents().data.cast(), b.buf_bytes()) };
-        rb.bio.bi_iter.bi_sector = rb.pick.ptr.offset();
-
-        match &rb.ca {
-            Some(ca) => {
-                unsafe { Bio::from_raw_mut(&raw mut rb.bio) }.set_dev(ca.disk_sb.bdev);
-                let _ = unsafe { crate::os::blkdev::submit_bio_wait(&raw mut rb.bio) };
-                ca.account_io_completion(c::MemberErrorType::read, rb.start_time, rb.bio.bi_status == 0);
-            }
-            None => rb.bio.bi_status = c::BLK_STS_REMOVED,
-        }
+        ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
+        start_time = local_clock();
+        status = read_attempt(&mut io, fs, b, ca.as_ref(), &pick, waiter, start_time).await;
     };
+    drop(ca);
 
     failed.to_text(&mut buf, fs);
 
@@ -854,7 +907,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         /* Separate ratelimit states for soft vs. hard errors */
         buf.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_soft, crate::here!()));
 
-        let dev = rb.pick.ptr.dev().into();
+        let dev = pick.ptr.dev().into();
         let used = failed.dev(dev).is_some();
         let used_err = |code| failed.dev_err(dev).is_some_and(|err| err.matches(code));
 
@@ -885,8 +938,8 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
     buf.set_level(if ret.is_err() { LogLevel::ERR } else { LogLevel::NOTICE });
     drop(buf);
 
-    unsafe { async_objs::list_del(fs, c::AsyncObjKind::btree_read_bio, &mut rb.list_idx) };
-    fs.times[c::TimeStat::btree_node_read as usize].update(rb.start_time);
+    drop(listed);
+    fs.times[c::TimeStat::btree_node_read as usize].update(start_time);
 
     let contents = unsafe { b.contents() };
     if ret.is_ok() &&
@@ -902,23 +955,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         fs.async_btree_op(b, contents, AsyncBtreeOp::MergeNoRead);
     }
 
-    unsafe { bio_put(&raw mut rb.bio) };
     read_done_wake(b);
-}
-
-unsafe extern "C" fn read_endio(bio: *mut c::bio) {
-    let rb = unsafe { &mut *of_bio::<BtreeReadBio>(bio) };
-
-    if let Some(ca) = &rb.ca {
-        ca.account_io_completion(c::MemberErrorType::read, rb.start_time, rb.bio.bi_status == 0);
-    }
-
-    unsafe { rb.fs.btree.read_complete_wq.queue_work(&raw mut rb.work) };
-}
-
-#[cold]
-pub fn read_bio_to_text(out: &mut Printbuf, rb: &BtreeReadBio) {
-    unsafe { Bio::from_raw(&rb.bio) }.to_text(out)
 }
 
 pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
@@ -945,36 +982,10 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
     };
 
     let ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
+    let bytes = b.buf_bytes();
 
-    let (data, bytes) = (unsafe { b.contents() }.data.cast::<u8>(), b.buf_bytes());
-    /*
-     * Not buf_nr_bvecs(): a retry maps the bio onto the buffer read_done()
-     * swapped in, which may be vmalloc where this one is direct mapped
-     */
-    let bio = fs.btree.bio.alloc_raw(ptr::null_mut(),
-                                     bytes.div_ceil(PAGE_SIZE) as _,
-                                     c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META,
-                                     flags::NOIO);
-    let rb = unsafe { of_bio::<BtreeReadBio>(bio) };
-    unsafe {
-        (&raw mut (*rb).fs).write(Fs::borrow_raw(fs.as_ptr()));
-        (&raw mut (*rb).ca).write(ca);
-        (&raw mut (*rb).b).write(NonNull::from(b));
-    }
-    let rb = unsafe { &mut *rb };
-    rb.start_time       = local_clock();
-    rb.pick             = pick;
-    let Ok(()) = unsafe { init_at(crate::new_work!(run_raw::<BtreeReadBio>, "&rb->work"), &raw mut rb.work) };
-    rb.bio.bi_iter.bi_sector = pick.ptr.offset();
-    rb.bio.bi_end_io    = Some(read_endio);
-    unsafe { bch2_bio_map(bio, data.cast(), bytes) };
-
-    let list = &fs.async_objs[c::AsyncObjKind::btree_read_bio as usize].list;
-    rb.list_idx = list.add(NonNull::from(&mut *rb).cast()).unwrap_or(0);
-
-    if let Some(ca) = &rb.ca {
-        ca.io_done_add(READ, DataType::btree, (rb.bio.bi_iter.bi_size >> 9).into());
-        unsafe { Bio::from_raw_mut(bio) }.set_dev(ca.disk_sb.bdev);
+    if let Some(ca) = &ca {
+        ca.io_done_add(READ, DataType::btree, (bytes >> 9) as u64);
 
         /*
          * Callers drop btree locks before reading a node but not srcu
@@ -985,22 +996,30 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
          * stuck codepath; cleared on the next relock/trans_begin().
          */
         trans.set_srcu_io_submitted(true);
+    }
 
-        if sync {
-            let _ = unsafe { crate::os::blkdev::submit_bio_wait(bio) };
-            ca.latency_acct(rb.start_time, READ);
-            unsafe { read_work(NonNull::from(rb)) };
-        } else {
-            unsafe { crate::os::blkdev::submit_bio(bio) };
-        }
-    } else {
-        rb.bio.bi_status = c::BLK_STS_REMOVED;
+    let slot = {
+        let _noio = MemallocFlags::noio();
+        /*
+         * Not buf_nr_bvecs(): a retry maps the bio onto the buffer read_done()
+         * swapped in, which may be vmalloc where this one is direct mapped
+         */
+        TaskSlot::exclusive_bio_in(&NODE_READS, ptr::null_mut(), bytes.div_ceil(PAGE_SIZE) as u16,
+                                   c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META,
+                                   |bio| pin_init!(NodeReadBio { bio <- bio.init::<BchError>() }? BchError))
+    }.expect("a node read's box: its pool waits for an element");
 
-        if sync {
-            unsafe { read_work(NonNull::from(rb)) };
-        } else {
-            unsafe { fs.btree.read_complete_wq.queue_work(&raw mut rb.work) };
-        }
+    let fs_ref = unsafe { BackRef::new(fs) };
+    let fs = unsafe { fs_ref.get() };
+    let (q, tasks) = (&fs.btree.read_complete_wq, fs.tasks());
+    let b_ref = unsafe { BackRef::new(b) };
+    /* inline, to submit the first IO here; with no device there's none, and the failure is reported on the queue */
+    let at = if ca.is_some() { Spawn::Inline } else { Spawn::Queue(q) };
+    let make = move |home| read_task(home, fs_ref, b_ref, pick, ca);
+    unsafe { slot.start(at, tasks, make) };
+
+    if sync {
+        b.wait_on_flag(c::BtreeNodeFlags::read_in_flight);
     }
 }
 

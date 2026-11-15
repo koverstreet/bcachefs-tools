@@ -16,7 +16,7 @@ use crate::btree::trans_attempt::TransAttempt;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
 use crate::util::alloc::{Box, KVVec, KVmalloc, Kmalloc};
-use crate::util::bio::{BioSet, Either};
+use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::mempool::Mempool;
@@ -995,7 +995,7 @@ pub struct bch_fs_btree {
 
     #[pin]
     #[init(BioSet::new(1), ENOMEM_fs_other_alloc)]
-    pub bio: BioSet<Either<crate::btree::read::BtreeReadBio, crate::btree::write::BtreeWriteBio>>,
+    pub bio: BioSet<crate::btree::write::BtreeWriteBio>,
     #[pin]
     #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]
     pub fill_iter: Mempool<Kmalloc>,

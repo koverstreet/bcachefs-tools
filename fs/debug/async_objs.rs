@@ -183,8 +183,8 @@ unsafe fn write_op_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>)
 }
 
 #[cold]
-unsafe fn btree_read_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
-    crate::btree::read::read_bio_to_text(out, unsafe { obj.cast().as_ref() })
+unsafe fn btree_read_bio_obj_to_text(out: &mut Printbuf, fs: &Fs, obj: NonNull<c_void>) {
+    unsafe { obj.cast::<crate::btree::read::NodeReadBio>().as_ref() }.to_text(out, fs)
 }
 
 #[cold]
