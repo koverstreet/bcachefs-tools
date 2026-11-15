@@ -7,6 +7,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::io::RawFd;
 
 use bcachefs_kernel::c;
+use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::alloc::disk_groups::Target;
 
 use crate::util::{die, read_exact_at, write_all_at};
@@ -144,7 +145,9 @@ pub fn format(
     // Get device size if not specified (needed for block size threshold)
     for dev in dev_slice.iter_mut() {
         if dev.fs_size == 0 {
-            dev.fs_size = crate::wrappers::bdev::get_size(dev.fd());
+            dev.fs_size = blkdev::size(dev.as_fd()).unwrap_or_else(|e| {
+                die(&format!("error getting size of {}: {e}", dev.path.to_string_lossy()))
+            });
         }
     }
 
@@ -259,11 +262,10 @@ pub fn format(
         m.nbuckets = dev.nbuckets.into();
         m.first_bucket = 0u16.into();
 
-        let fd = dev.fd();
+        let rotational = blkdev::is_rotational(dev.as_fd());
         let opts = &mut dev.opts;
         if !opts.defined(c::OptId::rotational) {
-            let nonrot = crate::wrappers::bdev::nonrot(fd);
-            opts.set_rotational(!nonrot);
+            opts.set_rotational(rotational);
         }
 
         opt_set_sb_all(&mut sb, Some(idx as u32), &mut dev.opts);

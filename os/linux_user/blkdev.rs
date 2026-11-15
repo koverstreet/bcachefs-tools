@@ -61,10 +61,9 @@ fn is_blk(st: &rustix::fs::Stat) -> bool {
 
 // ── Devices ──────────────────────────────────────────────────────────────
 
-/// @path opened, as @mode says: bdev_file_open_by_path(). The exclusive claim,
-/// with BLK_OPEN_EXCL, is O_EXCL's; userspace has no @holder or @ops to call.
-pub fn open_by_path(path: &CStr, mode: c::blk_mode_t, _holder: *const c_void,
-                    _ops: *const c::blk_holder_ops) -> Result<NonNull<BdevFile>, BchError> {
+/// The open(2) flags of opening a device as @mode says: O_DIRECT unless
+/// BLK_OPEN_BUFFERED, the exclusive claim O_EXCL's.
+pub fn open_flags(mode: c::blk_mode_t) -> OFlags {
     let (read, write) = (mode & c::BLK_OPEN_READ != 0, mode & c::BLK_OPEN_WRITE != 0);
     let mut flags = match (read, write) {
         (true, true)  => OFlags::RDWR,
@@ -80,8 +79,14 @@ pub fn open_by_path(path: &CStr, mode: c::blk_mode_t, _holder: *const c_void,
     if mode & c::BLK_OPEN_CREAT != 0 {
         flags |= OFlags::CREATE;
     }
+    flags
+}
 
-    let fd = rustix::fs::open(path, flags, Mode::from_raw_mode(0o600)).map_err(io_err)?;
+/// @path opened, as @mode says: bdev_file_open_by_path(). The exclusive claim,
+/// with BLK_OPEN_EXCL, is O_EXCL's; userspace has no @holder or @ops to call.
+pub fn open_by_path(path: &CStr, mode: c::blk_mode_t, _holder: *const c_void,
+                    _ops: *const c::blk_holder_ops) -> Result<NonNull<BdevFile>, BchError> {
+    let fd = rustix::fs::open(path, open_flags(mode), Mode::from_raw_mode(0o600)).map_err(io_err)?;
     let st = rustix::fs::fstat(&fd).map_err(io_err)?;
 
     /* strip directory */

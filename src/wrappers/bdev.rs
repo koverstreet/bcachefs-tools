@@ -2,35 +2,14 @@
 
 //! Block device utilities.
 //!
-//! get_size(), get_blocksize(), fd_to_dev_model(), blkid_check(): these work
-//! on any fd (block device or regular file).
+//! get_blocksize(), fd_to_dev_model(), blkid_check(): these work on any fd
+//! (block device or regular file).
 
 use std::fs::Metadata;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
-
-use bcachefs_kernel::c::{BLK_OPEN_BUFFERED, BLK_OPEN_CREAT, BLK_OPEN_EXCL, BLK_OPEN_READ, BLK_OPEN_WRITE};
-use bcachefs_kernel::util::ioctl::{_IO, _IOR};
-
-const BLKGETSIZE64: libc::Ioctl = _IOR::<usize>(0x12, 114) as libc::Ioctl;
-
-/// Returns the size of a file or block device in bytes.
-///
-/// For block devices, uses BLKGETSIZE64 ioctl.
-/// For regular files, returns st_size from fstat.
-pub fn get_size(fd: RawFd) -> u64 {
-    let metadata = fd_metadata(fd);
-
-    if metadata.file_type().is_block_device() {
-        let mut size: u64 = 0;
-        unsafe { libc::ioctl(fd, BLKGETSIZE64, &mut size) };
-        size
-    } else {
-        metadata.size()
-    }
-}
 
 /// Returns the physical block size of a block device (the _larger_ of the two),
 /// with fallback to the filesystem block size hint for regular files, in bytes.
@@ -121,48 +100,10 @@ pub fn fd_to_parent_disk_sysfs(fd: RawFd) -> Option<PathBuf> {
     }
 }
 
-/// Returns true if the block device is non-rotational (SSD).
-///
-/// For regular files (image files) the ioctl fails and we default to false.
-pub fn nonrot(fd: RawFd) -> bool {
-    // Kernel returns !bdev_nonrot(bdev) via put_ushort — bdev_nonrot internally
-    // uses bdev_get_queue(bdev), which resolves to the parent disk's queue for
-    // partitions and handles LVM, md, loop devices, etc. uniformly.
-    const BLKROTATIONAL: libc::Ioctl = _IO(0x12, 126) as libc::Ioctl;
-    let mut rotational: u16 = 0;
-    let ret = unsafe { libc::ioctl(fd, BLKROTATIONAL, &mut rotational) };
-    ret == 0 && rotational == 0
-}
-
-/// Open a block device or file for formatting.
-///
-/// Translates BLK_OPEN_* flags to POSIX open flags.
+/// Open a block device or file for formatting, as BLK_OPEN_* @mode says.
 /// Returns the owned fd on success, or a negative errno on failure.
 pub fn open_device(path: &std::ffi::CStr, mode: u32) -> Result<OwnedFd, i32> {
-    let mut flags = rustix::fs::OFlags::empty();
-
-    let rw = mode & (BLK_OPEN_READ | BLK_OPEN_WRITE);
-    if rw == (BLK_OPEN_READ | BLK_OPEN_WRITE) {
-        flags = rustix::fs::OFlags::RDWR;
-    } else if mode & BLK_OPEN_READ != 0 {
-        flags = rustix::fs::OFlags::RDONLY;
-    } else if mode & BLK_OPEN_WRITE != 0 {
-        flags = rustix::fs::OFlags::WRONLY;
-    }
-
-    if mode & BLK_OPEN_BUFFERED == 0 {
-        flags |= rustix::fs::OFlags::DIRECT;
-    }
-
-    if mode & BLK_OPEN_EXCL != 0 {
-        flags |= rustix::fs::OFlags::EXCL;
-    }
-
-    if mode & BLK_OPEN_CREAT != 0 {
-        flags |= rustix::fs::OFlags::CREATE;
-    }
-
-    rustix::fs::open(path, flags, rustix::fs::Mode::from_raw_mode(0o600))
+    rustix::fs::open(path, bcachefs_kernel::os::blkdev::open_flags(mode), rustix::fs::Mode::from_raw_mode(0o600))
         .map_err(|e| e.raw_os_error())
 }
 

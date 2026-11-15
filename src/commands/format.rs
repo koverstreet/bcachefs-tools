@@ -26,6 +26,7 @@ use std::process;
 use anyhow::{anyhow, bail, Result};
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
+use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::SbFieldType;
 
@@ -573,7 +574,9 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         // user didn't specify them.
         let total_fs_size: u64 = devices.iter_mut().map(|d| {
             if d.fs_size == 0 {
-                d.fs_size = crate::wrappers::bdev::get_size(d.fd());
+                d.fs_size = blkdev::size(d.as_fd()).unwrap_or_else(|e| {
+                    crate::util::die(&format!("error getting size of {}: {e}", d.path.to_string_lossy()))
+                });
             }
             d.fs_size
         }).sum();
