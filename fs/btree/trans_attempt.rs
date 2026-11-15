@@ -59,7 +59,8 @@ use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::write::{node_write_trans, BtreeWriteFlags};
 use crate::cstructs::c::BtreeWriteType;
-use crate::util::vstructs::State;
+use crate::util::vstructs::{plain_bytes_mut, State};
+use crate::btree::bkey_buf::copy_key;
 use crate::format::{Bpos, Btree, BkeyType};
 
 /// One attempt at @trans: from one begin() to the next.
@@ -722,11 +723,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     pub fn bkey_copy(&self, k: &BkeyI) -> Result<TransBkey<'a, 't>, BchError> {
-        let dst = self.bkey_alloc(k.k.u64s as u32)?;
+        let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
         let src = k.as_bytes();
-        unsafe {
-            core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_ptr().cast::<u8>(), src.len());
-        }
+        plain_bytes_mut(dst.as_mut_u64s())[..src.len()].copy_from_slice(src);
         Ok(dst)
     }
 
@@ -737,15 +736,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<TransBkey<'a, 't, V>, BchError>
     {
         let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
-
-        unsafe {
-            core::ptr::copy_nonoverlapping(k.k, &raw mut (*dst.as_ptr()).k, 1);
-            core::ptr::copy_nonoverlapping(
-                k.v as *const c::bch_val as *const u64,
-                dst.as_mut_u64s().as_mut_ptr().add(BKEY_U64S),
-                k.k.val_u64s(),
-            );
-        }
+        copy_key(dst.as_mut_u64s(), k.k, k.val_bytes());
 
         debug_assert!(dst.buf_u64s as usize * size_of::<u64>() >= V::MIN_BYTES);
         Ok(unsafe { dst.cast() })
@@ -760,14 +751,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         dst.as_mut_u64s().fill(0);
 
         let copy_val = k.k.val_u64s().min(val_u64s);
-        unsafe {
-            core::ptr::copy_nonoverlapping(k.k, &mut dst.as_mut().k, 1);
-            core::ptr::copy_nonoverlapping(
-                k.v as *const c::bch_val as *const u64,
-                dst.as_mut_u64s().as_mut_ptr().add(BKEY_U64S),
-                copy_val,
-            );
-        }
+        copy_key(dst.as_mut_u64s(), k.k, &k.val_bytes()[..copy_val * size_of::<u64>()]);
         dst.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
 
         Ok(dst)
@@ -808,15 +792,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let mut dst = self.bkey_alloc(u64s as u32 + 1)?;
         dst.buf_u64s = u64s as u32;
-
-        unsafe {
-            core::ptr::copy_nonoverlapping(k.k, dst.k_mut(), 1);
-            core::ptr::copy_nonoverlapping(
-                k.v as *const c::bch_val as *const u64,
-                dst.as_mut_u64s().as_mut_ptr().add(BKEY_U64S),
-                k.k.val_u64s(),
-            );
-        }
+        copy_key(dst.as_mut_u64s(), k.k, k.val_bytes());
         Ok(unsafe { dst.cast() })
     }
 
