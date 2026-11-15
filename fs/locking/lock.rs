@@ -9,17 +9,15 @@ use core::ffi::{c_ulong, CStr};
 use core::marker::{PhantomData, PhantomPinned};
 use core::ops::{Deref, DerefMut};
 
-/// C's lock state, and how it's initialized and torn down - whatever kind of
-/// lock it is, which the traits over this one say - implemented on C's lock
-/// types themselves, where the kernel crate's lock Backend is a marker over
-/// them.
+/// A lock's state, and how it's initialized and torn down - whatever kind of
+/// lock it is, which the traits over this one say.
 ///
 /// # Safety
-/// All of its state is interior-mutable - C's locks are Opaques, ours atomics
-/// - so it's taken and released through a shared reference, from any thread.
-/// Callers pass an initialized lock, except to init() - for a C lock, a & to
-/// one zeroed isn't one: a zeroed kernel mutex's wait list is null - and
-/// release with the state taking it returned.
+/// All of its state is interior-mutable - the kernel's locks are Opaques,
+/// ours atomics - so it's taken and released through a shared reference,
+/// from any thread. Callers pass an initialized lock, except to init() - a
+/// zeroed kernel mutex isn't one: its wait list is null - and release with
+/// the state taking it returned.
 pub unsafe trait RawLockBase {
     /// What releasing it needs: the interrupt state spin_lock_irqsave()
     /// saved, the memalloc flags a Noio saved, or nothing.
@@ -135,10 +133,12 @@ pub unsafe trait RawSixLock: RawReadLock {
     unsafe fn unlock_write(&self, g: Self::GuardState);
 }
 
-/// Two things locked by @R: @G, protected - reached only with it held, its
-/// guard derefs to it - and @P, published: anyone's, the lock derefs to it,
-/// held or not; written through the guard's published(), so the lock a
-/// writer holds is the one it's in.
+/// Lock @R, and a LockedBy's two halves beside it: @G, protected - reached
+/// only with it held, its guard derefs to it - and @P, published: anyone's,
+/// the lock derefs to it, held or not; written through the guard's
+/// published(), so the lock a writer holds is the one it's in. Not a
+/// LockedBy in it: one would start at its own alignment, P's - a cacheline,
+/// for the journal's - padding what G could follow the lock in.
 #[repr(C)]
 pub struct Locked<R: RawLockBase, G = (), P = ()> {
     raw:       R,
@@ -232,9 +232,6 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
     pub unsafe fn init_zeroed(&self, name: &'static CStr, key: LockClass) -> Result<(), R::InitError> {
         unsafe { R::init(core::ptr::from_ref(&self.raw).cast_mut(), name, key) }
     }
-
-    /// Where the G is in a Locked: for C's container_of() from it.
-    pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
 
     pub(crate) fn raw(&self) -> &R {
         &self.raw
@@ -500,8 +497,7 @@ impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A> ExclusiveGuard<'a, R, G, P, U, A
     where
         P: Publish,
     {
-        // P::Writer is laid out as P (Publish)
-        unsafe { &*core::ptr::from_ref(&self.lock.published).cast::<P::Writer>() }
+        unsafe { as_writer(&self.lock.published) }
     }
 
     /// protected() and published() at once: borrowing the guard once for both.
@@ -509,10 +505,7 @@ impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A> ExclusiveGuard<'a, R, G, P, U, A
     where
         P: Publish,
     {
-        unsafe {
-            (&mut *self.lock.protected.get(),
-             &*core::ptr::from_ref(&self.lock.published).cast::<P::Writer>())
-        }
+        unsafe { (&mut *self.lock.protected.get(), as_writer(&self.lock.published)) }
     }
 }
 
@@ -590,8 +583,7 @@ impl<R: RawSixLock, G, P, A> SharedGuard<'_, R, G, P, SixIntent, A> {
     where
         P: Publish,
     {
-        // P::Writer is laid out as P (Publish)
-        unsafe { &*core::ptr::from_ref(&self.lock.published).cast::<P::Writer>() }
+        unsafe { as_writer(&self.lock.published) }
     }
 }
 
@@ -887,7 +879,6 @@ pub struct LockedBy<G, P = (), L = ()> {
 unsafe impl<G: Send, P: Send, L> Send for LockedBy<G, P, L> {}
 unsafe impl<G: Send, P: Sync, L> Sync for LockedBy<G, P, L> {}
 
-// SAFETY: as each half
 unsafe impl<G: ::pin_init::Zeroable, P: ::pin_init::Zeroable, L> ::pin_init::Zeroable for LockedBy<G, P, L> {}
 
 impl<G, P, L> LockedBy<G, P, L> {
@@ -930,14 +921,22 @@ impl<G, P: crate::util::projections::Publish, L> LockedBy<G, P, L> {
     /// # Safety
     /// The lock that publishes it is held, for as long as the reference lives.
     pub unsafe fn published_writer(&self) -> &P::Writer {
-        // SAFETY: Publish's - a &P is a valid &P::Writer
-        unsafe { &*core::ptr::from_ref(&self.published).cast::<P::Writer>() }
+        unsafe { as_writer(&self.published) }
     }
 
     /// @P as its writer has it, through the only reference to it.
     pub fn published_writer_mut(&mut self) -> &P::Writer {
         unsafe { self.published_writer() }
     }
+}
+
+/// @p as its writer has it - Locked's and LockedBy's both.
+///
+/// # Safety
+/// The lock that publishes it is held, for as long as the reference lives.
+unsafe fn as_writer<P: Publish>(p: &P) -> &P::Writer {
+    // P::Writer is laid out as P (Publish)
+    unsafe { &*core::ptr::from_ref(p).cast::<P::Writer>() }
 }
 
 impl<G, P, L> Deref for LockedBy<G, P, L> {
