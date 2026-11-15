@@ -185,11 +185,11 @@ fn bpos_in_btree_node_key(pos: Bpos, k: &BkeyI) -> bool {
     true
 }
 
-/// @v: the value @dst was copied from.
-fn down_key_mem_ptr_reload(dst: &mut DownKey, v: *const u64) {
-    if dst.k.key_type() == BkeyType::btree_ptr_v2 {
+/// @k: the key @dst was copied from.
+fn down_key_mem_ptr_reload(dst: &mut DownKey, k: BkeySC<'_>) {
+    if let Some(p) = k.arm::<c::BtreePtrV2>() {
         // mem_ptr: the value's first field
-        dst.u64s_mut()[BKEY_U64S] = unsafe { ptr::read_volatile(v) };
+        dst.u64s_mut()[BKEY_U64S] = p.v().mem_ptr.get();
     }
 }
 
@@ -199,15 +199,15 @@ fn set_down_key(dst: &mut DownKey, k: BkeySC<'_>) {
 
     room[..size_of::<c::bkey>()].copy_from_slice(plain_bytes(k.k));
     room[size_of::<c::bkey>()..][..val.len()].copy_from_slice(val);
-    down_key_mem_ptr_reload(dst, val.as_ptr().cast());
+    down_key_mem_ptr_reload(dst, k);
 }
 
 fn set_down_key_packed(dst: &mut DownKey, keys: &Keys<'_>, k: u16) {
-    let f = &keys.contents().format;
-    let key = keys.key_at(k);
+    let mut u = c::bkey::new();
+    let key = keys.disassemble(k, &mut u);
 
-    key.unpacked_into(f, keys.unpack(k), dst.u64s_mut());
-    down_key_mem_ptr_reload(dst, key.val(f).as_ptr());
+    keys.key_at(k).unpacked_into(&keys.contents().format, *key.k, dst.u64s_mut());
+    down_key_mem_ptr_reload(dst, key);
 }
 
 impl BtreeTrans<'_> {
