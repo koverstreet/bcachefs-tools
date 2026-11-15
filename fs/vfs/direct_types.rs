@@ -16,7 +16,7 @@ nest! {
         pub mapping: crate::vfs::folio::Mapping,
         pub inode: *mut c::InodeInfo,
         pub mm: Option<crate::os::kernel::Mm>,
-        pub iov: *const c::iovec,
+        pub iov: Option<crate::util::alloc::Box<[kernel::bindings::iovec], crate::util::alloc::Kmalloc>>,
         #[members]
         #>[bitfield(u8)]
         pub bits: pub struct dio_write_bits {
@@ -31,7 +31,7 @@ nest! {
         pub written: u64,
 
         pub iter: c::iov_iter,
-        pub inline_vecs: [c::iovec; 2],
+        pub inline_vecs: [kernel::bindings::iovec; 2],
 
         /* the dio count and the page cache blocked, and c->writes: till it's
          * done */

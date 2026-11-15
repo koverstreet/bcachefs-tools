@@ -16,7 +16,7 @@ use crate::format::Btree;
 use crate::fs::Fs;
 use crate::inode_opts;
 use crate::snapshots::subvolume;
-use crate::util::alloc::kmalloc;
+use crate::util::alloc::KVec;
 use crate::util::bio::{bio_put, Bio};
 use crate::util::closure;
 use crate::os::iov_iter::{IovIter, IovIterFields};
@@ -112,18 +112,21 @@ fn dio_write_copy_iov(dio: &mut Dio) -> Result<(), ()> {
         return Err(());
     }
 
-    let nr_segs = dio.iter.nr_segs();
-    let mut iov = dio.inline_vecs.as_mut_ptr();
+    // the kernel's iovec isn't Copy
+    let copy = |v: &kernel::bindings::iovec| kernel::bindings::iovec { iov_base: v.iov_base, iov_len: v.iov_len };
+    let src = dio.iter.iov();
+    let iov = if let Some(inline) = dio.inline_vecs.get_mut(..src.len()) {
+        inline.iter_mut().zip(src).for_each(|(d, s)| *d = copy(s));
+        inline.as_ptr()
+    } else {
+        let mut iov = KVec::with_capacity(src.len()).map_err(|_| ())?;
+        for s in src {
+            iov.push(copy(s)).map_err(|_| ())?;
+        }
+        dio.iov.insert(iov.into_boxed_slice()).as_ptr()
+    };
 
-    if nr_segs > dio.inline_vecs.len() {
-        iov = kmalloc(nr_segs * size_of::<c::iovec>()).map_err(|_| ())?.as_ptr().cast();
-        dio.iov = iov;
-    }
-
-    unsafe {
-        core::ptr::copy_nonoverlapping(dio.iter.iov().cast(), iov, nr_segs);
-        dio.iter.set_iov(iov.cast());
-    }
+    unsafe { dio.iter.set_iov(iov) };
     Ok(())
 }
 
@@ -139,7 +142,7 @@ unsafe fn dio_write_done(dio: *mut Dio) -> isize {
     let req = d.req;
     let sync = d.bits.sync() != 0;
 
-    unsafe { crate::util::alloc::kfree_unsized(d.iov.cast()) };
+    d.iov = None;
 
     let mut ret = if d.op.error != 0 { isize::from(d.op.error) } else { (d.written << 9) as isize };
     let (write_ref, started) = (d.write_ref.take(), d.started.take());
@@ -401,7 +404,6 @@ pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
         d.mapping       = mapping;
         d.inode         = inode.raw();
         d.mm            = Mm::current();
-        d.iov           = core::ptr::null();
         d.bits.set_loop_(0);
         d.bits.set_extending(extending.into());
         d.bits.set_sync((k.is_sync() || extending).into());
@@ -420,6 +422,7 @@ pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
 
         // the dio's memory, a bio's front pad: not a dio's yet, nothing to drop
         unsafe {
+            core::ptr::write(&mut d.iov, None);
             core::ptr::write(&mut d.started, Some(started));
             core::ptr::write(&mut d.write_ref, Some(write_ref));
         }

@@ -84,7 +84,7 @@ pub trait IovIterFields {
     fn nr_segs(&self) -> usize;
 
     /// An iovec iter's iovecs.
-    fn iov(&self) -> *const kernel::bindings::iovec;
+    fn iov(&self) -> &[kernel::bindings::iovec];
 
     /// # Safety
     /// An iovec iter's, @iov a copy of its iovecs, which lives as long as it's
@@ -113,8 +113,12 @@ impl IovIterFields for c::iov_iter {
         unsafe { self.__bindgen_anon_2.nr_segs as usize }
     }
 
-    fn iov(&self) -> *const kernel::bindings::iovec {
-        unsafe { self.__bindgen_anon_1.__bindgen_anon_1.as_ref().__bindgen_anon_1.__iov }
+    fn iov(&self) -> &[kernel::bindings::iovec] {
+        assert!(self.is_iovec(), "the iovecs of an iter of type {}", self.iter_type);
+        unsafe {
+            core::slice::from_raw_parts(self.__bindgen_anon_1.__bindgen_anon_1.as_ref().__bindgen_anon_1.__iov,
+                                        self.nr_segs())
+        }
     }
 
     unsafe fn set_iov(&mut self, iov: *const kernel::bindings::iovec) {
