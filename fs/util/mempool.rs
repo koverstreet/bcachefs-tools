@@ -48,19 +48,16 @@ unsafe impl Send for Element {}
 // SAFETY: zeroed is not made
 unsafe impl<A: Elements> ::pin_init::Zeroable for Mempool<A> {}
 
-unsafe impl<A: Elements> LateInit for Mempool<A> {
+impl<A: Elements> LateInit for Mempool<A> {
     fn is_made(&self) -> bool {
         self.size != 0
     }
 }
 
 /// Where a pool's elements come from, and go back to: C's mempool_alloc_t and
-/// mempool_free_t.
-///
-/// # Safety
-/// element_alloc() gives @layout's bytes - zeroed, with __GFP_ZERO - which
-/// element_free() takes back.
-pub unsafe trait Elements {
+/// mempool_free_t. element_alloc() gives @layout's bytes - zeroed, with
+/// __GFP_ZERO - which element_free() takes back.
+pub trait Elements {
     fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>>;
 
     /// # Safety
@@ -70,7 +67,7 @@ pub unsafe trait Elements {
 
 macro_rules! elements {
     ($($a:ident),*) => {$(
-        unsafe impl Elements for $a {
+        impl Elements for $a {
             fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
                 $a.allocate_gfp(layout, gfp).ok().map(NonNull::cast)
             }

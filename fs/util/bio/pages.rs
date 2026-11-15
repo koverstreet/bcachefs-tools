@@ -68,7 +68,7 @@ impl BouncePool {
 /// read, so not zeroed.
 pub struct BouncePages;
 
-unsafe impl Elements for BouncePages {
+impl Elements for BouncePages {
     fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
         NonNull::new(crate::util::alloc::bio_pages_alloc(layout.size(), gfp | flags::SKIP_ZERO).cast())
     }

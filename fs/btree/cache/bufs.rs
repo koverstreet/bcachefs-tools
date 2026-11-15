@@ -20,7 +20,7 @@ use core::ptr::NonNull;
 /// and reclaimable.
 pub struct BounceBufs;
 
-unsafe impl Elements for BounceBufs {
+impl Elements for BounceBufs {
     fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
         KVmalloc::element_alloc(layout, gfp | flags::ACCOUNT | flags::RECLAIMABLE)
     }

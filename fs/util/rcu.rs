@@ -517,7 +517,7 @@ impl<H> RcuArrayHead<H> {
 unsafe impl<H: Send> Send for RcuArrayHead<H> {}
 unsafe impl<H: Sync> Sync for RcuArrayHead<H> {}
 
-unsafe impl<H> DstHead for RcuArrayHead<H> {
+impl<H> DstHead for RcuArrayHead<H> {
     fn nr(&self) -> usize {
         self.nr
     }

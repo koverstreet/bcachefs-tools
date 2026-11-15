@@ -434,7 +434,7 @@ impl<T: HasBio> BioSet<T> {
 
 unsafe impl<T: FrontPad> ::pin_init::Zeroable for BioSet<T> {}
 
-unsafe impl<T: FrontPad> crate::util::late::LateInit for BioSet<T> {
+impl<T: FrontPad> crate::util::late::LateInit for BioSet<T> {
     fn is_made(&self) -> bool {
         self.set.pool.is_made()
     }

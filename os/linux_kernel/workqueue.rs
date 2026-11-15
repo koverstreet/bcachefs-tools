@@ -68,7 +68,7 @@ unsafe impl Sync for Workqueue {}
 // SAFETY: none, a null pointer
 unsafe impl ::pin_init::Zeroable for Workqueue {}
 
-unsafe impl crate::util::late::LateInit for Workqueue {
+impl crate::util::late::LateInit for Workqueue {
     fn is_made(&self) -> bool {
         self.is_some()
     }

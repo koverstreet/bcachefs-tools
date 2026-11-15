@@ -52,9 +52,8 @@ pub fn assert_rcu_freed<T>() {
     <T as ArrayFreeing>::assert_rcu_freed()
 }
 
-/// # Safety
-/// nr() is the length of the array after it.
-pub unsafe trait DstHead {
+/// A DstArray's header: nr() is the length of the array after it.
+pub trait DstHead {
     fn nr(&self) -> usize;
 }
 

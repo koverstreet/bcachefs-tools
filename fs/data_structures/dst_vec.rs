@@ -19,7 +19,7 @@ pub struct DstVecHead<L> {
     cap: L,
 }
 
-unsafe impl<L: LenUint> DstHead for DstVecHead<L> {
+impl<L: LenUint> DstHead for DstVecHead<L> {
     fn nr(&self) -> usize {
         self.cap.to_usize()
     }

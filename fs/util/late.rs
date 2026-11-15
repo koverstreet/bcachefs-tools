@@ -13,11 +13,9 @@ use pin_init::PinInit;
 
 use crate::util::alloc::init_at;
 
-/// Zeroed is not yet made, and what's not made owns nothing.
-///
-/// # Safety
-/// is_made() is false for zeroed, and Drop of an unmade T does nothing.
-pub unsafe trait LateInit: ::pin_init::Zeroable {
+/// Zeroed is not yet made, and what's not made owns nothing: is_made() is
+/// false for zeroed, and Drop of an unmade T does nothing.
+pub trait LateInit: ::pin_init::Zeroable {
     fn is_made(&self) -> bool;
 }
 
