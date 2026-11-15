@@ -105,7 +105,7 @@ use crate::data::keylist::PaddedKey;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::bset::BsetStats;
 use crate::btree::node::BtreeNode;
-use crate::util::alloc::{kvfree_sized, kvzalloc};
+use crate::util::alloc::{Box, KVmalloc};
 use crate::util::place::{Contained, PlacedDrop};
 use crate::os::shrinker::{Shrink, Shrinker};
 use crate::util::sleep::Sleep;
@@ -117,7 +117,6 @@ use crate::os::sched::current;
 use crate::fs::Fs;
 use crate::util::vstructs::Head;
 use core::mem::offset_of;
-use core::ptr::NonNull;
 use crate::util::{HumanReadable, Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::AtomicU64;
@@ -130,7 +129,8 @@ impl c::btree_evicted_size {
     }
 
     fn slot(&self, hash: u64) -> Option<&AtomicU64> {
-        (!self.entries.is_null()).then(|| unsafe { AtomicU64::from_ptr(self.entries.add((hash & self.mask) as usize)) })
+        let t = self.entries.as_deref()?;
+        Some(&t[hash as usize & (t.len() - 1)])
     }
 
     /// An evicted node's live u64s, by its pointer's hash.
@@ -145,47 +145,27 @@ impl c::btree_evicted_size {
         let entry = self.slot(hash)?.load(Relaxed);
         ((entry >> 16) == (hash & c::BTREE_EVICTED_SIZE_HASH_MASK)).then_some(entry as u16)
     }
-}
 
-/// # Safety
-/// Nothing else has @c yet: btree_init_rw() is making it.
-pub unsafe fn btree_evicted_size_init(c: *mut Fs) -> Result<(), BchError> {
-    let fs = unsafe { &*c };
-
-    /*
-     * 128K-entry floor (1 MiB), then add one bit (double the table) for
-     * each four doublings of the maximum possible btree node count above
-     * 4M nodes (~1 TiB at 256K nodes). Keeps the table modest on huge
-     * filesystems: 1 TiB → 1 MiB, 1 PiB → 4 MiB, 256 PiB → 16 MiB.
-     */
-    let max_nodes = fs.capacity.capacity.get() / u64::from(fs.opts.btree_node_size.get() >> 9).max(1);
-    let mut bits = 17;
-    if max_nodes > 1 << 22 {
-        bits += (max_nodes.ilog2() - 22) / 4;
-    }
-    let nr = 1usize << bits;
-
-    let Ok(entries) = kvzalloc(nr * size_of::<u64>()) else {
-        return fs.throw(Errcode::ENOMEM_fs_other_alloc);
-    };
-    unsafe {
-        let e = &raw mut (*c).btree.evicted_size;
-        (*e).entries = entries.as_ptr().cast();
-        (*e).mask    = nr as u64 - 1;
-    }
-    Ok(())
-}
-
-/// # Safety
-/// Nothing uses @c's evicted sizes after.
-pub unsafe fn btree_evicted_size_exit(c: *mut Fs) {
-    unsafe {
-        let e = &raw mut (*c).btree.evicted_size;
-        if let Some(p) = NonNull::new((*e).entries) {
-            kvfree_sized(p.cast(), ((*e).mask as usize + 1) * size_of::<u64>());
+    /// The table for @fs, sized by its capacity: for btree_init_rw().
+    pub fn new(fs: &Fs) -> Result<Self, BchError> {
+        /*
+         * 128K-entry floor (1 MiB), then add one bit (double the table) for
+         * each four doublings of the maximum possible btree node count above
+         * 4M nodes (~1 TiB at 256K nodes). Keeps the table modest on huge
+         * filesystems: 1 TiB → 1 MiB, 1 PiB → 4 MiB, 256 PiB → 16 MiB.
+         */
+        let max_nodes = fs.capacity.capacity.get() / u64::from(fs.opts.btree_node_size.get() >> 9).max(1);
+        let mut bits = 17;
+        if max_nodes > 1 << 22 {
+            bits += (max_nodes.ilog2() - 22) / 4;
         }
-        (*e).entries = core::ptr::null_mut();
-        (*e).mask    = 0;
+        let nr = 1usize << bits;
+
+        let Ok(entries) = Box::try_new_zeroed_slice_in(nr, KVmalloc) else {
+            return fs.throw(Errcode::ENOMEM_fs_other_alloc);
+        };
+        // an AtomicU64 may be zero
+        Ok(Self { entries: Some(unsafe { entries.assume_init() }) })
     }
 }
 

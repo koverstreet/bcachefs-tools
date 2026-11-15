@@ -14,7 +14,7 @@ use crate::errcode::Errcode;
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
-use crate::util::alloc::{KVVec, Kmalloc};
+use crate::util::alloc::{Box, KVVec, KVmalloc, Kmalloc};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
 use crate::util::Printbuf;
@@ -34,7 +34,7 @@ use crate::os::shrinker::Shrinker;
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU64, AtomicU8, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Init, Late, TypeInfo, BitfieldMembers};
 use pin_init::{pin_data, PinInit};
@@ -990,12 +990,14 @@ pub enum BtreeNodeRewriteReason {
  * ~capacity/1000/btree_node_size entries, which keeps memory tiny.
  */
 #[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable)]
 pub struct btree_evicted_size {
-    pub mask: u64, /* table size - 1 (power of 2) */
-    pub entries: *mut u64,
+    /* a power of 2 of them; none until btree_init_rw() */
+    pub entries: Option<Box<[AtomicU64], KVmalloc>>,
 }
-c_default!(btree_evicted_size);
+
+// zeroed is no table: the Box's pointer, Option's None
+unsafe impl pin_init::Zeroable for btree_evicted_size {}
+const _: () = assert!(size_of::<Option<Box<[AtomicU64], KVmalloc>>>() == size_of::<Box<[AtomicU64], KVmalloc>>());
 
 pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
 pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << cs::BTREE_EVICTED_SIZE_HASH_BITS) - 1;

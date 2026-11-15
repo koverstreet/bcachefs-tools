@@ -270,7 +270,7 @@
  * The \textbf{write buffer}: \bchdoc{btree-write-buffer}
  */
 
-use crate::btree::cache::{btree_evicted_size_exit, btree_evicted_size_init};
+use crate::c::btree_evicted_size;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::rcu::Flavor;
@@ -313,7 +313,6 @@ pub(crate) unsafe fn btree_exit(c: *mut Fs) {
     fs.btree.key_cache.exit();
     unsafe {
         btree_iter_exit(c);
-        btree_evicted_size_exit(c);
         fs.btree_cache_exit();
     }
 
@@ -342,5 +341,7 @@ pub(crate) fn btree_init(fs: &Fs) -> Result<(), BchError> {
 /// Nothing else uses what it makes yet.
 pub(crate) unsafe fn btree_init_rw(c: *mut Fs) -> Result<(), BchError> {
     unsafe { &*c }.btree_write_buffer_init()?;
-    unsafe { btree_evicted_size_init(c) }
+    let evicted_size = btree_evicted_size::new(unsafe { &*c })?;
+    unsafe { (*c).btree.evicted_size = evicted_size };
+    Ok(())
 }
