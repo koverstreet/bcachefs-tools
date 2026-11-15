@@ -4,7 +4,7 @@ use super::{cached, LockedEntry};
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, UpdateTriggerFlags, Watermark};
-use crate::btree::path::{BtreePath, NodePtr, Paths};
+use crate::btree::path::{NodePtr, PathIdx, Paths};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::c;
@@ -298,14 +298,11 @@ impl Fs {
     }
 }
 
-/// # Safety
-/// @insert_entry is the transaction's, its path a cached one traversed to its
-/// entry, and write locked.
-pub unsafe fn bch2_btree_insert_key_cached(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
-                                           insert_entry: *mut c::btree_insert_entry) {
-    let fs = trans.fs();
+/// @i is the transaction's, its path a cached one traversed to its entry, and
+/// write locked.
+pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, i: &c::btree_insert_entry) {
+    let fs = t.fs();
     let bc = &fs.btree.key_cache;
-    let i = unsafe { &*insert_entry };
     let ck = paths[i.path].key_cached_mut().expect("a key cache insert with no entry");
     let insert = i.key();
     let mut kick_reclaim = false;
@@ -324,7 +321,7 @@ pub unsafe fn bch2_btree_insert_key_cached(trans: &BtreeTrans<'_>, paths: &mut P
         }
     }
 
-    let journal_res_seq = unsafe { trans.attempt_in_progress() }.journal_res_seq();
+    let journal_res_seq = t.journal_res_seq();
 
     /*
      * To minimize lock contention, we only add the journal pin here and
@@ -362,12 +359,10 @@ pub unsafe fn bch2_btree_insert_key_cached(trans: &BtreeTrans<'_>, paths: &mut P
 }
 
 /// # Safety
-/// @path is the transaction's, a cached one holding its entry write locked.
-pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
-                                        path: *mut BtreePath) {
+/// @idx is a cached path holding its entry write locked.
+pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx) {
     let fs = trans.fs();
     let bc = &fs.btree.key_cache;
-    let idx = trans.path_idx_of(path);
     let ck = paths[idx].key_cached().map(|ck| unsafe { cached(trans, ck) })
         .expect("a key cache drop with no entry");
 

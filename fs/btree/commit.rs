@@ -922,10 +922,9 @@ impl BtreeTrans<'_> {
                 let (path, k) = (i.path, i.key_ptr());
                 self.insert_key_leaf(t, &mut pu, path, unsafe { &mut *<BkeyI>::from_raw_mut(k) }, seq);
             } else if !i.key_cache_already_flushed() {
-                unsafe { bch2_btree_insert_key_cached(self, &mut pu.paths, &raw mut pu.updates[idx]) };
+                bch2_btree_insert_key_cached(t, &mut pu.paths, i);
             } else {
-                let path = &raw mut pu.paths[i.path];
-                unsafe { bch2_btree_key_cache_drop(self, &mut pu.paths, path) };
+                unsafe { bch2_btree_key_cache_drop(self, &mut pu.paths, i.path) };
             }
         }
 

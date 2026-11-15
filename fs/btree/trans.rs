@@ -9,7 +9,7 @@ use super::iter::{CommitOpts, TransAttempt};
 use super::trans_attempt::AttemptKey;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_val_to_text, BkeySC};
-use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, BtreePath, PathIdx, Paths};
+use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, PathIdx, Paths};
 use crate::c;
 use crate::data_structures::bitmap::Bitmap;
 use crate::debug::trace::events;
@@ -232,11 +232,6 @@ impl<'f> BtreeTrans<'f> {
     /// For C, which has it by pointer.
     pub fn raw(&self) -> *mut BtreeTrans<'f> {
         ptr::from_ref(self).cast_mut()
-    }
-
-    /// C's path - trans->paths.
-    pub(crate) fn path_idx_of(&self, path: *const BtreePath) -> PathIdx {
-        unsafe { path.offset_from(self.paths.get()) as PathIdx }
     }
 
     /// The paths in use, by index - from 1: path 0 is never handed out.
