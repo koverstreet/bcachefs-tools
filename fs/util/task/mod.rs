@@ -279,11 +279,14 @@ struct Header {
     started:   Cell<bool>,
     finished:  Cell<bool>,
     runq_next: AtomicPtr<Header>,
-    // Not Context<'_>: 7.4's #[pin_data] takes a lifetime it doesn't know
-    // for a field it borrows
-    poll:      for<'c> unsafe fn(NonNull<Header>, &mut Context<'c>) -> Poll<()>,
-    finish:    unsafe fn(NonNull<Header>),
+    vtable:    &'static TaskVtable,
     _rcu:      RcuMember,
+}
+
+/// What the executor calls on a task without knowing its future's type.
+struct TaskVtable {
+    poll:   unsafe fn(NonNull<Header>, &mut Context<'_>) -> Poll<()>,
+    finish: unsafe fn(NonNull<Header>),
 }
 
 // The free's head is @work, dead once the task has finished: only dispatch()
@@ -347,8 +350,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
                 started:   Cell::new(false),
                 finished:  Cell::new(false),
                 runq_next: AtomicPtr::new(null_mut()),
-                poll:      Self::poll,
-                finish:    Self::finish,
+                vtable:    const { &TaskVtable { poll: Self::poll, finish: Self::finish } },
                 _rcu:      RcuMember::default(),
             }),
             body <- body,
@@ -467,8 +469,8 @@ impl TaskRef {
         let mut cx = ContextBuilder::from_waker(Waker::noop()).ext(&mut polled).build();
 
         loop {
-            if unsafe { (header.poll)(self.0, &mut cx) }.is_ready() {
-                let finish = header.finish;
+            if unsafe { (header.vtable.poll)(self.0, &mut cx) }.is_ready() {
+                let finish = header.vtable.finish;
                 header.finished.set(true);
                 unsafe { finish(self.0) };
                 return true;
