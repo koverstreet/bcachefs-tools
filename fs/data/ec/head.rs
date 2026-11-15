@@ -14,7 +14,7 @@
 
 use crate::fs::Dev;
 use crate::alloc::disk_groups::Target;
-use crate::alloc::foreground::OpenBucket;
+use crate::alloc::foreground::{AllocWait, Blocked, OpenBucket};
 use crate::btree::bkey::BkeyV;
 use crate::btree::iter::TransAttempt;
 use crate::c;
@@ -488,8 +488,19 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
     // makes only what's still missing.
     t.allocate_dropping_locks_big(|| {
         if i.new_buf.is_none() {
-            let wait = req.cl.map_or(MemWait::Never, |cl| MemWait::Closure(NonNull::from(cl).cast()));
-            i.new_buf = Some(StripeBuf::new_whole(fs, i.new_stripe.stripe(), wait)?);
+            let wait = match req.wait {
+                AllocWait::Never       => MemWait::Never,
+                AllocWait::Closure(cl) => MemWait::Closure(NonNull::from(cl).cast()),
+                AllocWait::Sync(_)     => MemWait::Blocked,
+            };
+            let seen = Blocked::StripeBuf.events(fs).snapshot();
+            let buf = StripeBuf::new_whole(fs, i.new_stripe.stripe(), wait);
+            if let (Err(e), AllocWait::Sync(blocked)) = (&buf, &mut req.wait) {
+                if e.matches(Errcode::stripe_buf_mem_blocked) {
+                    *blocked = Some((Blocked::StripeBuf, seen));
+                }
+            }
+            i.new_buf = Some(buf?);
         }
 
         if let Some(r) = i.reuse.as_mut().filter(|r| r.read == OldRead::NoBuf) {

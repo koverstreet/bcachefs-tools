@@ -34,7 +34,7 @@ use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::alloc::background::{FREESPACE_GENBITS_NR, FREESPACE_GENBITS_SHIFT, alloc_to_v4};
 use crate::alloc::check::{check_freespace_key, FreespaceCheck};
-use crate::alloc::foreground::OpenBucket;
+use crate::alloc::foreground::{Blocked, OpenBucket};
 use crate::btree::bkey::pos;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::c;
@@ -502,7 +502,7 @@ impl TransAttempt<'_, '_> {
 
                 fs.times[c::TimeStat::blocked_allocate as usize].track_event_change(true);
 
-                let may_block = req.cl.is_some() &&
+                let may_block = req.may_wait() &&
                     !req.flags.contains(c::WriteFlags::alloc_nowait) &&
                     !req.will_retry();
                 let err = if !may_block {
@@ -510,7 +510,7 @@ impl TransAttempt<'_, '_> {
                 } else if fs.alloc_should_bail(ca, req) {
                     Errcode::bucket_alloc_no_progress
                 } else if !waiting {
-                    req.closure_wait(&fs.allocator.freelist_wait);
+                    req.block_on(fs, &fs.allocator.freelist_wait, Blocked::Freelist);
                     waiting = true;
                     continue;
                 } else {

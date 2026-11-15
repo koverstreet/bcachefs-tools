@@ -76,6 +76,7 @@ use crate::util::alloc::init_at;
 use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up};
 use crate::util::time_stats::TimeStats;
 use crate::util::ffi::Opaque;
+use crate::util::futex::EventCount;
 use crate::util::hash::{hash_64, Fold};
 use crate::data_structures::inline_vec::InlineVec;
 use crate::os::kernel::{jiffies, time_after, unlikely, HZ};
@@ -113,7 +114,7 @@ nest! {
             will_retry_target_devices: bool,
             will_retry_set_devices:    bool,
             copygc_can_make_progress:  bool,
-            have_cl:                   bool,
+            may_wait:                  bool,
             __pad:                     u2,
         },
         pub err: i16,
@@ -138,9 +139,40 @@ pub enum AllocBtreeBitmap {
     BTREE_BITMAP_ANY,
 }
 
+/// How an allocation that can't be had now waits for one that can.
+#[derive(Clone, Copy)]
+pub enum AllocWait<'r> {
+    /// It doesn't: it fails.
+    Never,
+    /// The write path's closure, put on the waitlist: the write continues
+    /// when it's woken.
+    Closure(&'r Opaque<c::closure>),
+    /// Its caller's thread, in wait_on_allocator(): once it's blocked, on
+    /// what, and that count's snapshot from before the check that failed.
+    Sync(Option<(Blocked, u32)>),
+}
+
+/// What a thread's allocation blocked on.
+#[derive(Clone, Copy)]
+pub enum Blocked {
+    Freelist,
+    OpenBuckets,
+    StripeBuf,
+}
+
+impl Blocked {
+    pub fn events(self, fs: &Fs) -> &EventCount {
+        match self {
+            Blocked::Freelist    => &fs.allocator.freelist_events,
+            Blocked::OpenBuckets => &fs.allocator.open_buckets_events,
+            Blocked::StripeBuf   => &fs.ec.stripe_buf_freed,
+        }
+    }
+}
+
 nest! {
     pub struct alloc_request<'r, 'f> {
-        pub cl: Option<&'r Opaque<c::closure>>,
+        pub wait: AllocWait<'r>,
         pub wake_all_counter_snapshot: u32,
         pub nr_replicas: u8,
         pub ec_replicas: u8,
@@ -580,7 +612,7 @@ impl Fs {
 
         if unlikely(u32::from(a.freelist_lock.open_buckets_nr_free.get()) <= open_buckets_reserved(req.watermark)) {
             times(c::TimeStat::blocked_allocate_open_bucket).track_event_change(true);
-            return Err(self.err(match req.closure_wait(&a.open_buckets_wait) {
+            return Err(self.err(match req.block_on(self, &a.open_buckets_wait, Blocked::OpenBuckets) {
                 true  => Errcode::open_bucket_alloc_blocked,
                 false => Errcode::open_buckets_empty,
             }));
@@ -660,6 +692,7 @@ impl Fs {
         self.journal.set_open_buckets_watermark(self.open_buckets_starved_watermark());
 
         closure_wake_up(&self.allocator.open_buckets_wait);
+        self.allocator.open_buckets_events.wake();
     }
 
     /// Open bucket @ob, which its holder won't write to after all, onto the
@@ -681,6 +714,7 @@ impl Fs {
         }
 
         closure_wake_up(&a.open_buckets_wait);
+        a.open_buckets_events.wake();
         if let Some(ca) = self.dev_rcu(dev, &read_lock()) {
             ca.alloc_wake();
         }
@@ -749,7 +783,9 @@ impl Dev {
     /// bumped tells a waiter that tried it the wake is for it.
     pub fn alloc_wake(&self) {
         self.alloc_wake_counter.fetch_add(1, Relaxed);
-        closure_wake_up(&self.fs().allocator.freelist_wait);
+        let a = &self.fs().allocator;
+        closure_wake_up(&a.freelist_wait);
+        a.freelist_events.wake();
     }
 }
 
@@ -759,12 +795,14 @@ impl Fs {
     pub fn alloc_wake_all(&self) {
         self.allocator.wake_all_counter.fetch_add(1, Relaxed);
         closure_wake_up(&self.allocator.freelist_wait);
+        self.allocator.freelist_events.wake();
     }
 
     /// Wake the freelist's waiters with no counter bumped: the only way off a
     /// waitlist for one giving up. The rest wait again.
     pub fn alloc_waiters_unpark(&self) {
         closure_wake_up(&self.allocator.freelist_wait);
+        self.allocator.freelist_events.wake();
     }
 }
 
@@ -781,23 +819,21 @@ impl<'a, 't> TransAttempt<'a, 't> {
     #[allow(clippy::too_many_arguments)]
     pub fn alloc_request(&self, target: u32, erasure_code: bool, devs_have: Option<&'a c::bch_devs_list>,
                          nr_replicas: u32, ec_replicas: u32, watermark: c::Watermark,
-                         flags: c::WriteFlags, cl: Option<&'a Opaque<c::closure>>)
+                         flags: c::WriteFlags, wait: AllocWait<'a>)
         -> Result<AllocRequest<'a, 't>, BchError>
     {
         let req = c::alloc_request::new(self.fs(), target, erasure_code, devs_have, nr_replicas, ec_replicas,
-                                        watermark, flags, cl);
+                                        watermark, flags, wait);
         Ok(AllocRequest(self.alloc_init(req)?))
     }
 
     /// After @req's allocation failed with @err: asleep until there's reason
-    /// to retry - if @cl went on a waitlist for it - then Ok, for the caller
-    /// to retry, unless the filesystem's gone emergency read-only, which
-    /// won't allocate again.
-    pub fn wait_on_allocator(&self, req: &mut c::alloc_request, err: BchError, cl: &Opaque<c::closure>)
-        -> Result<(), BchError>
-    {
-        if unsafe { c::closure_nr_remaining(cl.as_ptr()) } > 1 {
-            self.sleep_on_allocator(req, err, cl);
+    /// to retry - if it blocked - then Ok, for the caller to retry, unless
+    /// the filesystem's gone emergency read-only, which won't allocate again.
+    pub fn wait_on_allocator(&self, req: &mut c::alloc_request, err: BchError) -> Result<(), BchError> {
+        if let AllocWait::Sync(Some((on, seen))) = req.wait {
+            req.wait = AllocWait::Sync(None);
+            self.sleep_on_allocator(req, err, on, seen);
         }
         let fs = self.fs();
         if fs.flags.get(c::FsFlag::emergency_ro) {
@@ -812,7 +848,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
     #[allow(clippy::too_many_arguments)]
     fn new(fs: &Fs, target: u32, erasure_code: bool, devs_have: Option<&'r c::bch_devs_list>, nr_replicas: u32,
            ec_replicas: u32, watermark: c::Watermark, flags: c::WriteFlags,
-           cl: Option<&'r Opaque<c::closure>>)
+           wait: AllocWait<'r>)
         -> impl ::pin_init::Init<Self, Infallible>
     {
         // SAFETY: zeroed - each of its fields but the trace valid zeroed, its
@@ -821,7 +857,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
         unsafe {
             ::pin_init::init_from_closure(move |slot: *mut Self| {
                 slot.write_bytes(0, 1);
-                (&raw mut (*slot).cl).write(cl);
+                (&raw mut (*slot).wait).write(wait);
                 (&raw mut (*slot).wake_all_counter_snapshot).write(fs.allocator.wake_all_counter.load(Relaxed) as u32);
                 (&raw mut (*slot).nr_replicas).write(nr_replicas as u8);
                 (&raw mut (*slot).ec_replicas).write(ec_replicas as u8);
@@ -857,7 +893,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
                 .with_will_retry_target_devices(b.will_retry_target_devices())
                 .with_will_retry_set_devices(b.will_retry_set_devices())
                 .with_copygc_can_make_progress(copygc_can_make_progress)
-                .with_have_cl(self.cl.is_some()),
+                .with_may_wait(self.may_wait()),
             err: err.map_or(0, |e| ret_to_c(Err(e)) as i16),
             wake_counter_snapshot,
             free_buckets,
@@ -885,7 +921,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
                                 (b.will_retry_all_devices(),    " retry_all"),
                                 (b.will_retry_target_devices(), " retry_target"),
                                 (b.will_retry_set_devices(),    " retry_set"),
-                                (b.have_cl(),                   " cl")] {
+                                (b.may_wait(),                  " may_wait")] {
                 if set {
                     write!(out, "{name}");
                 }
@@ -898,13 +934,28 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
         }
     }
 
-    /// Its closure waiting on @list, to retry when it's woken - or already
-    /// waiting: false if it has none, it's not to block.
-    pub fn closure_wait(&self, list: &c::closure_waitlist) -> bool {
-        let Some(cl) = self.cl else { return false };
-        // SAFETY: its caller's closure, which outlives the request
-        unsafe { closure_wait(list, NonNull::from(cl).cast()) };
-        true
+    pub fn may_wait(&self) -> bool {
+        !matches!(self.wait, AllocWait::Never)
+    }
+
+    /// Blocked on @list - or for a thread, @on's count - to retry when it's
+    /// woken: false if it's not to block. Called under the lock the failed
+    /// check was, or before a recheck, so the snapshot is from before what
+    /// would wake it.
+    pub fn block_on(&mut self, fs: &Fs, list: &c::closure_waitlist, on: Blocked) -> bool {
+        match &mut self.wait {
+            AllocWait::Never => false,
+            AllocWait::Closure(cl) => {
+                // SAFETY: its caller's closure, which outlives the request -
+                // or already waiting, as C's closure_wait() allows
+                unsafe { closure_wait(list, NonNull::from(*cl).cast()) };
+                true
+            }
+            AllocWait::Sync(blocked) => {
+                *blocked = Some((on, on.events(fs).snapshot()));
+                true
+            }
+        }
     }
 }
 
@@ -987,7 +1038,7 @@ impl Fs {
         write!(out, "will_retry_target_devices:\t{}\n", u8::from(b.will_retry_target_devices()));
         write!(out, "will_retry_set_devices:\t{}\n", u8::from(b.will_retry_set_devices()));
         write!(out, "copygc_can_make_progress:\t{}\n", u8::from(b.copygc_can_make_progress()));
-        write!(out, "have_cl:\t{}\n", u8::from(req.cl.is_some()));
+        write!(out, "may_wait:\t{}\n", u8::from(req.may_wait()));
 
         if let Some(devs) = req.devs_have.filter(|d| d.nr != 0) {
             write!(out, "devs_have:\t");
@@ -1094,61 +1145,47 @@ impl Fs {
 }
 
 impl TransAttempt<'_, '_> {
-    /// Asleep on @cl - on freelist_wait or open_buckets_wait, for @req's
-    /// allocation that failed with @err - until there's reason to retry it:
-    /// alloc_wait_advanced(), or for any wait but the freelist's, woken at
-    /// all. Past allocator_stuck_timeout it's counted, and dumped - once in
-    /// two minutes, by whichever waiter claims the dump. Its locks dropped
-    /// first.
-    fn sleep_on_allocator(&self, req: &mut c::alloc_request, err: BchError, cl: &Opaque<c::closure>) {
+    /// Asleep - on @on's count, from @seen, for @req's allocation that failed
+    /// with @err - until there's reason to retry it: alloc_wait_advanced(),
+    /// or for any wait but the freelist's, woken at all. Past
+    /// allocator_stuck_timeout it's counted, and dumped - once in two minutes,
+    /// by whichever waiter claims the dump. Its locks dropped first.
+    fn sleep_on_allocator(&self, req: &mut c::alloc_request, err: BchError, on: Blocked, seen: u32) {
         let fs = self.fs();
-        let blocked = err.matches(Errcode::bucket_alloc_blocked);
-        let until = jiffies().wrapping_add(c_ulong::from(fs.opts.allocator_stuck_timeout.get()) * HZ);
+        let ev = on.events(fs);
+
+        // freelist_events is every device's: a wake for none @req tried isn't
+        // for it, and it waits again - unless going emergency read-only, when
+        // a draining device may never have buckets free, and waiting could
+        // block read_only_work forever
+        let retry = |req: &mut c::alloc_request| match on {
+            Blocked::Freelist => (fs.flags.get(c::FsFlag::emergency_ro) || fs.alloc_wait_advanced(req)).then_some(()),
+            _                 => (ev.snapshot() != seen).then_some(()),
+        };
 
         self.unlock();
 
-        loop {
-            // a wake can land before @cl's on the waitlist, so look before
-            // sleeping - and unpark it, which takes it off
-            if blocked && fs.alloc_wait_advanced(req) {
-                fs.alloc_waiters_unpark();
+        let timeout = c_long::from(fs.opts.allocator_stuck_timeout.get()) * HZ as c_long;
+        if timeout > 0 {
+            if self.wait_until_timeout(ev, || retry(req), timeout).is_some() {
                 return;
             }
 
-            let t = until.wrapping_sub(jiffies()) as c_long;
-            if t > 0 && !self.closure_sync_timeout(cl, t) {
-                // every one, though the dump below is one in two minutes
-                fs.event_inc_trace(events::allocator_stuck, |out| {
-                    write!(out, "err {err}\n");
-                    fs.alloc_request_to_text(out, req);
-                });
+            // every one, though the dump below is one in two minutes
+            fs.event_inc_trace(events::allocator_stuck, |out| {
+                write!(out, "err {err}\n");
+                fs.alloc_request_to_text(out, req);
+            });
 
-                let last = &fs.allocator.last_stuck;
-                let old = last.load(Relaxed);
-                if (old == 0 || time_after(jiffies(), (old as c_ulong).wrapping_add(HZ * 60 * 2))) &&
-                   last.compare_exchange(old, jiffies() as usize, Relaxed, Relaxed).is_ok() {
-                    fs.print_allocator_stuck(req, err);
-                }
-            }
-
-            self.closure_sync_timeout(cl, c_long::MAX);
-
-            // going emergency read-only, a draining device may never have
-            // buckets free: waiting again could block read_only_work forever
-            if fs.flags.get(c::FsFlag::emergency_ro) || !blocked || fs.alloc_wait_advanced(req) {
-                return;
-            }
-
-            // freelist_wait is every device's: a wake for none @req tried
-            // isn't for it, and it waits again
-            // SAFETY: the caller's, live; synced, it's on no waitlist
-            unsafe { closure_wait(&fs.allocator.freelist_wait, NonNull::new(cl.as_ptr()).expect("a closure")) };
-
-            if fs.alloc_wait_advanced(req) {
-                fs.alloc_waiters_unpark();
-                return;
+            let last = &fs.allocator.last_stuck;
+            let old = last.load(Relaxed);
+            if (old == 0 || time_after(jiffies(), (old as c_ulong).wrapping_add(HZ * 60 * 2))) &&
+               last.compare_exchange(old, jiffies() as usize, Relaxed, Relaxed).is_ok() {
+                fs.print_allocator_stuck(req, err);
             }
         }
+
+        self.wait_until(ev, || retry(req));
     }
 }
 

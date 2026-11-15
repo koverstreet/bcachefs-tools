@@ -18,6 +18,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
+use crate::alloc::foreground::AllocWait;
 use crate::btree::bkey::{bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -28,12 +29,10 @@ use crate::data::reflink;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
-use crate::util::closure::StackClosure;
 use crate::os::kernel::{MAX_FILE_SIZE, WRITE};
 use crate::util::log::should_print_err;
 use crate::util::{max_of, Printbuf};
 use crate::{bch_err_fn, bch_err_ratelimited, inode, logged_ops};
-use pin_init::stack_pin_init;
 use crate::format::{Bpos, Btree, MetadataVersion, SbFeature};
 
 // ── fallocate ────────────────────────────────────────────────────────────
@@ -77,7 +76,6 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
         }
     }
 
-    stack_pin_init!(let cl = StackClosure::new());
     let mut obs = c::open_buckets::default();
     let mut sectors_allocated = 0;
 
@@ -93,11 +91,11 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
         let devs_have = c::bch_devs_list::default();
         let mut req = t.alloc_request(opts.foreground_target.into(), false, Some(&devs_have),
                                       nr_replicas, nr_replicas, c::Watermark::normal,
-                                      c::WriteFlags::empty(), Some(cl.as_opaque()))?;
+                                      c::WriteFlags::empty(), AllocWait::Sync(None))?;
         let wp = match t.alloc_sectors(&mut req, write_point) {
             Ok(wp) => wp,
             Err(e) if e.matches(Errcode::operation_blocked) => {
-                t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
+                t.wait_on_allocator(&mut req, e)?;
                 return Err(t.restart(Errcode::transaction_restart_nested));
             }
             Err(e) => return Err(e),

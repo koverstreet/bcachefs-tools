@@ -7,6 +7,7 @@
 use crate::fs::Dev;
 use crate::alloc::backpointers::BackpointerPos;
 use crate::alloc::capacity::DiskReservation;
+use crate::alloc::foreground::AllocWait;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::bkey::prelude::*;
@@ -36,13 +37,11 @@ use crate::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::sb::errors::SbErrorId;
 use crate::util::alloc::KBox;
-use crate::util::closure::StackClosure;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use crate::{bch_err, here, log_msg_ratelimited, prt};
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
-use pin_init::stack_pin_init;
 use crate::format::{BkeyType, Bpos, Btree, ErrorKeyReason};
 
 // ── Recording the extents of blocks lost ──
@@ -661,7 +660,6 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
         init_new_stripe_from_old(&mut i, carry, move_, true);
     }
 
-    stack_pin_init!(let cl = StackClosure::new());
 
     // A narrower stripe than the one it replaces carries more parity per data
     // block: new space, so reserve it here, where a full filesystem fails with
@@ -686,11 +684,11 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
     let ret = lockrestart_do(trans, |t| {
         let dev_stripe = dev_stripe_state_get(t, v.disk_label.into())?;
         let mut req = t.alloc_request(target, false, None, 0, 0,
-                                      c::Watermark::normal, c::WriteFlags::empty(), Some(cl.as_opaque()))?;
+                                      c::Watermark::normal, c::WriteFlags::empty(), AllocWait::Sync(None))?;
         let ret = new_stripe_alloc_buckets(t, &mut req, dev_stripe, &mut ns.lock(), true);
         match ret {
             Err(e) if e.matches(Errcode::operation_blocked) => {
-                t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
+                t.wait_on_allocator(&mut req, e)?;
                 Err(t.restart(Errcode::transaction_restart_nested))
             }
             ret => ret,

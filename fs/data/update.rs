@@ -21,6 +21,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::alloc::capacity::DiskReservation;
+use crate::alloc::foreground::AllocWait;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
 use crate::btree::iter::{is_restart, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeTrans,
@@ -37,7 +38,6 @@ use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::{init_at, Box, Flags, KVec, Kmalloc};
 use crate::util::bio::{pages, BioInPlace, HasBio};
-use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::locking::MemallocFlags;
@@ -48,7 +48,6 @@ use crate::util::log::should_print_err;
 use crate::{bch_err_ratelimited, here_str, prt};
 use crate::debug::trace::events;
 use core::ffi::{c_int, c_uint};
-use pin_init::stack_pin_init;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
@@ -464,63 +463,56 @@ impl c::data_update {
     /// it's allocated. Runs transactions of its own.
     fn update_unwritten_extent(&mut self, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
         let fs = self.fs();
-        stack_pin_init!(let cl = StackClosure::new());
 
         let end = self.key().k.p;
-        let ret = (|| {
-            while self.op.pos < end {
-                let ours = BkeySC::from(self.k.key());
-                if !lockrestart_do(trans, |t| {
-                    let mut iter = BtreeIter::new(t, self.btree_id, self.op.pos, BtreeIterFlags::SLOTS);
-                    let k = iter.peek_slot(t)?.expect("a slot always has a key");
-                    Ok(crate::data::ptrs::extents_match(fs, k, ours))
-                })? {
-                    break;
-                }
-
-                let r = lockrestart_do(trans, |t| {
-                    let op = &mut self.op;
-                    let nr = op.bits.nr_replicas().into();
-                    t.alloc_request(op.target.into(), false, Some(&op.devs_have), nr, nr,
-                                    c::Watermark::from_bits(op.bits.watermark().into()),
-                                    op.flags(), Some(cl.as_opaque()))
-                        .and_then(|mut req| t.alloc_sectors(&mut req, op.write_point))
-                });
-                let wp = match r {
-                    Ok(wp) => wp,
-                    Err(e) if e.matches(Errcode::operation_blocked) => {
-                        trans.unlock();
-                        cl.sync();
-                        continue;
-                    }
-                    Err(e) => {
-                        if should_print_err(&e) {
-                            bch_err_ratelimited!(fs, "{}: error allocating for an unwritten extent: {e}",
-                                                 here_str!());
-                        }
-                        return Err(e);
-                    }
-                };
-                let op = &mut self.op;
-                op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize)?;
-                let (pos, obs) = (op.pos, &mut op.open_buckets);
-                let sectors = op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |k| {
-                    wp.unwritten_extent(k, pos, (end.offset - pos.offset) as u32, obs)
-                });
-                op.pos.offset += u64::from(sectors);
-
-                let r = crate::data::update_index::index_update(trans, self);
-                drop(self.op.open_buckets.drain(fs));
-                r?;
+        while self.op.pos < end {
+            let ours = BkeySC::from(self.k.key());
+            if !lockrestart_do(trans, |t| {
+                let mut iter = BtreeIter::new(t, self.btree_id, self.op.pos, BtreeIterFlags::SLOTS);
+                let k = iter.peek_slot(t)?.expect("a slot always has a key");
+                Ok(crate::data::ptrs::extents_match(fs, k, ours))
+            })? {
+                break;
             }
-            Ok(())
-        })();
 
-        if cl.nr_remaining() != 1 {
-            trans.unlock();
-            cl.sync();
+            let r = lockrestart_do(trans, |t| {
+                let op = &mut self.op;
+                let nr = op.bits.nr_replicas().into();
+                let mut req = t.alloc_request(op.target.into(), false, Some(&op.devs_have), nr, nr,
+                                              c::Watermark::from_bits(op.bits.watermark().into()),
+                                              op.flags(), AllocWait::Sync(None))?;
+                match t.alloc_sectors(&mut req, op.write_point) {
+                    Err(e) if e.matches(Errcode::operation_blocked) => {
+                        t.wait_on_allocator(&mut req, e)?;
+                        Err(e)
+                    }
+                    r => r,
+                }
+            });
+            let wp = match r {
+                Ok(wp) => wp,
+                Err(e) if e.matches(Errcode::operation_blocked) => continue,
+                Err(e) => {
+                    if should_print_err(&e) {
+                        bch_err_ratelimited!(fs, "{}: error allocating for an unwritten extent: {e}",
+                                             here_str!());
+                    }
+                    return Err(e);
+                }
+            };
+            let op = &mut self.op;
+            op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize)?;
+            let (pos, obs) = (op.pos, &mut op.open_buckets);
+            let sectors = op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |k| {
+                wp.unwritten_extent(k, pos, (end.offset - pos.offset) as u32, obs)
+            });
+            op.pos.offset += u64::from(sectors);
+
+            let r = crate::data::update_index::index_update(trans, self);
+            drop(self.op.open_buckets.drain(fs));
+            r?;
         }
-        ret
+        Ok(())
     }
 
     /// Sets the update up against @k, in @t's attempt; @iter points at @k, and

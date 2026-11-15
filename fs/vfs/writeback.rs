@@ -15,7 +15,7 @@ use crate::locking::MemallocFlags;
 use crate::util::alloc::Box;
 use crate::os::blkdev::plugged;
 use crate::util::bio::{bio_put, Bio, BioBuffersUnmanaged, BioOwner};
-use crate::util::closure::{self, closure_wait, StackClosure};
+use crate::util::closure;
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::util::sleep::Sleep;
 use crate::os::ops::from_raw;
@@ -191,13 +191,13 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
     w.io = NonNull::new(io);
 }
 
-fn throttle_writes(fs: &Fs, cl: &StackClosure) {
+fn throttle_writes(fs: &Fs) {
     let reserved = c::OPEN_BUCKETS_COUNT -
         (c::OPEN_BUCKETS_COUNT - crate::alloc::foreground::open_buckets_reserved(c::Watermark::normal)) / 2;
-    let clp = NonNull::new(cl.as_ptr()).expect("a closure on the stack");
 
     let mut start = 0;
     loop {
+        let open_buckets_seen = fs.allocator.open_buckets_events.snapshot();
         let journal_seen = fs.journal.async_wait.snapshot();
         let open_buckets_low = unlikely(u32::from(fs.allocator.freelist_lock.open_buckets_nr_free.get()) <= reserved);
         let journal_low = (c::Watermark::normal as u32) < fs.journal.watermark() as u32 && fs.journal.error().is_ok();
@@ -209,15 +209,12 @@ fn throttle_writes(fs: &Fs, cl: &StackClosure) {
             start = local_clock();
         }
 
-        if open_buckets_low {
-            unsafe { closure_wait(&fs.allocator.open_buckets_wait, clp) };
-            cl.sync();
+        let Ok(()) = if open_buckets_low {
+            fs.allocator.open_buckets_events.wait(open_buckets_seen, Sleep::UNINTERRUPTIBLE)
         } else {
-            let Ok(()) = fs.journal.async_wait.wait(journal_seen, Sleep::UNINTERRUPTIBLE);
-        }
+            fs.journal.async_wait.wait(journal_seen, Sleep::UNINTERRUPTIBLE)
+        };
     }
-
-    assert!(cl.nr_remaining() <= 1, "writeback throttle's closure still waiting");
 
     if start != 0 {
         fs.times[c::TimeStat::blocked_writeback_throttle as usize].update(start);
@@ -362,13 +359,11 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
     };
 
     let ret = plugged(|| {
-        pin_init::stack_pin_init!(let cl = StackClosure::new());
-
         let mut prev = None;
         let mut ret = 0;
 
         loop {
-            throttle_writes(fs, &cl);
+            throttle_writes(fs);
             let Some(folio) = wbc.next(mapping, prev, &mut ret) else { break };
             prev = Some(*folio);
             ret = writepage(folio, &wbc, &mut w, &mut tmp);

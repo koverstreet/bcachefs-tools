@@ -367,10 +367,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.unlock_long()
     }
 
-    pub fn closure_sync_timeout(&self, cl: &Opaque<c::closure>, timeout: core::ffi::c_long) -> bool {
-        self.trans.closure_sync_timeout(cl, timeout)
-    }
-
     pub fn wait_until<T>(&self, ev: &crate::util::futex::EventCount, cond: impl FnMut() -> Option<T>) -> T {
         self.trans.wait_until(ev, cond)
     }

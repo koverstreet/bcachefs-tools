@@ -18,7 +18,7 @@
 //! A request's done when its durability's met - or at its first bucket, for
 //! a cached write, a stripe's block, or a cache device's: add_new_bucket().
 
-use crate::alloc::foreground::{FreelistGuard, OpenBucket, OpenBucketRef};
+use crate::alloc::foreground::{AllocWait, FreelistGuard, OpenBucket, OpenBucketRef};
 use crate::btree::iter::{is_restart, TransAttempt};
 use crate::c;
 use crate::c::Errcode;
@@ -280,16 +280,16 @@ impl TransAttempt<'_, '_> {
             }
         }
 
-        let (nr_replicas, cl) = (req.nr_replicas, req.cl);
+        let (nr_replicas, wait) = (req.nr_replicas, req.wait);
         req.nr_replicas = (req.nr_effective + 1) as u8;
-        req.cl = None;
+        req.wait = AllocWait::Never;
         // a cached copy spends no durable space
         req.devs_required = None;
 
         let ret = self.bucket_alloc_set(req, &mut wp.stripe);
 
         req.nr_replicas = nr_replicas;
-        req.cl = cl;
+        req.wait = wait;
         match ret {
             Err(e) if is_restart(&e) => Err(e),
             _ => Ok(()),

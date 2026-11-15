@@ -13,6 +13,7 @@ use crate::types::CacheAligned;
 use crate::util::bio::BioSet;
 use crate::os::workqueue::ReffedWork;
 use crate::os::percpu::{Counters, PerCpu};
+use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
@@ -449,10 +450,12 @@ pub struct bch_fs_allocator {
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&c->allocator.freelist_lock"))]
     pub freelist_lock: Locked<c::spinlock_t, OpenBucketsFree, OpenBucketsFreeNr>,
     pub freelist_wait: c::closure_waitlist,
+    pub freelist_events: EventCount,
     /* jiffies at the last allocator stuck dump; claimed by cmpxchg */
     pub last_stuck: crate::data_structures::bitmap::AtomicULong,
 
     pub open_buckets_wait: c::closure_waitlist,
+    pub open_buckets_events: EventCount,
     #[pin]
     pub open_buckets: [c::open_bucket; c::OPEN_BUCKETS_COUNT as usize],
     pub open_buckets_hash: [Volatile<Option<OpenBucketIdx>>; c::OPEN_BUCKETS_COUNT as usize],

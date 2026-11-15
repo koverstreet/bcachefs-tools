@@ -23,7 +23,6 @@ use crate::util::place::Placed;
 use crate::prt;
 use crate::debug::trace::{events, TraceEvent};
 use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
-use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
 use crate::os::kernel::{jiffies, likely, msecs_to_jiffies, race_fault, time_after, HZ, READ};
 use crate::os::percpu::{migrate_disable, migrate_enable, raw_smp_processor_id};
@@ -1208,32 +1207,6 @@ impl BtreeTrans<'_> {
             }
         }
         fence(Acquire);
-    }
-
-    /// Wait for @cl's refs - the waitlists it's on - to be put, for up to
-    /// @timeout jiffies, c_long::MAX for no limit: false if they weren't.
-    /// Under SRCU in short waits, then without it: trans_closure_sync_timeout().
-    pub fn closure_sync_timeout(&self, cl: &Opaque<c::closure>, timeout: c_long) -> bool {
-        self.closure_sync_timeout_in(&mut self.paths(), cl, timeout)
-    }
-
-    fn closure_sync_timeout_in(&self, paths: &mut Paths<'_>, cl: &Opaque<c::closure>, timeout: c_long) -> bool {
-        let mut remaining = timeout;
-        while remaining > 0 {
-            // SAFETY: a live closure, its count atomic
-            if unsafe { c::closure_nr_remaining(cl.as_ptr()) } <= 1 {
-                return true;
-            }
-
-            let start = jiffies();
-            let wait = self.srcu_wait_budget(paths).map_or(remaining, |left| (left as c_long).min(remaining));
-            // SAFETY: as above; the waitlist's wake puts its ref
-            if unsafe { c::closure_sync_timeout(cl.as_ptr(), wait as c_ulong) } == 0 {
-                return true;
-            }
-            remaining -= jiffies().wrapping_sub(start) as c_long;
-        }
-        false
     }
 
     /// @l locked, waited for under SRCU as wait_until() waits. The caller

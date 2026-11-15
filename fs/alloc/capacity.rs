@@ -41,7 +41,7 @@ use crate::fs::Fs;
 use crate::init::error::trans_inconsistent;
 use crate::percpu_field;
 use crate::debug::trace::events;
-use crate::util::closure::closure_wait_event;
+use crate::util::sleep::Sleep;
 use crate::os::kernel::unlikely;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::os::percpu::{CpuGuard, PerCpuRef};
@@ -207,7 +207,8 @@ impl Fs {
         // to allocate from
         self.journal.wake_async_wait();
 
-        closure_wait_event(&self.allocator.open_buckets_wait, || !dev_has_open_write_point(self, ca));
+        let Ok(()) = self.allocator.open_buckets_events.wait_until(Sleep::UNINTERRUPTIBLE,
+            || (!dev_has_open_write_point(self, ca)).then_some(()));
     }
 }
 

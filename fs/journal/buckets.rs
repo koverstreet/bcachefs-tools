@@ -17,9 +17,9 @@ use crate::c;
 use crate::c::JournalBucketStage::{self as Stage, JOURNAL_BUCKET_cur as CUR, JOURNAL_BUCKET_dirty as DIRTY,
                                      JOURNAL_BUCKET_dirty_ondisk as DIRTY_ONDISK,
                                      JOURNAL_BUCKET_discard as DISCARD};
-use pin_init::stack_pin_init;
 
 use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation};
+use crate::alloc::foreground::AllocWait;
 use crate::btree::iter::{lockrestart_do, UpdateTriggerFlags};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, SbFeature};
@@ -28,7 +28,6 @@ use crate::journal::sb::buckets_to_sb;
 use crate::c::JournalGuard;
 use crate::locking::{Guard as _, LockedBy};
 use crate::util::alloc::KVVec;
-use crate::util::closure::StackClosure;
 use crate::os::kernel::totalram_bytes;
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
@@ -443,7 +442,7 @@ pub fn add(fs: &Fs, ca: &Dev, new: &[u64]) -> Result<(), BchError> {
 
 /* allocate journal on a device: */
 
-fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::Watermark, cl: &StackClosure)
+fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::Watermark)
     -> Result<(), BchError>
 {
     let have = ca.journal.nr();
@@ -459,11 +458,11 @@ fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::Watermark, cl: &StackCl
             let first = bu.is_empty();
             let ob = lockrestart_do(&trans, |t| {
                 let mut req = t.alloc_request(0, false, None, 1, 0, watermark, c::WriteFlags::empty(),
-                                              first.then(|| cl.as_opaque()))?;
+                                              if first { AllocWait::Sync(None) } else { AllocWait::Never })?;
                 req.data_type = DataType::journal;
                 match t.bucket_alloc(&mut req, ca) {
                     Err(e) if e.matches(Errcode::operation_blocked) => {
-                        t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
+                        t.wait_on_allocator(&mut req, e)?;
                         Err(t.restart(Errcode::transaction_restart_nested))
                     }
                     ob => ob,
@@ -508,8 +507,6 @@ fn set_nr_loop(fs: &Fs, ca: &Dev, nr: u32, new_fs: bool) -> Result<(), BchError>
         c::Watermark::normal
     };
 
-    stack_pin_init!(let cl = StackClosure::new());
-
     /* don't handle reducing nr of buckets yet: */
     if nr < ca.journal.nr() {
         return Ok(());
@@ -536,7 +533,7 @@ fn set_nr_loop(fs: &Fs, ca: &Dev, nr: u32, new_fs: bool) -> Result<(), BchError>
             res.add(ca.bucket_to_sector((nr - ca.journal.nr()).into()), 1, c::ReservationFlags::empty())?;
         }
 
-        set_nr_iter(fs, ca, nr, watermark, &cl)?;
+        set_nr_iter(fs, ca, nr, watermark)?;
     }
     Ok(())
 }

@@ -16,6 +16,7 @@
 //! Each check can explain itself into a trace, for reconcile_set_pending.
 
 use crate::alloc::disk_groups::Target;
+use crate::alloc::foreground::AllocWait;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::TransAttempt;
 use crate::c;
@@ -237,7 +238,7 @@ impl TransAttempt<'_, '_> {
             // The ec_alloc_failed subtypes park the extent; a restart must
             // stay one, or an extent that only needed a retry is parked
             let mut req = self.alloc_request(data_opts.target.into(), false, None, 0, replicas,
-                                             c::Watermark::normal, w::empty(), None)?;
+                                             c::Watermark::normal, w::empty(), AllocWait::Never)?;
             // alloc_request() leaves it to the caller. The write path caps it
             // from the options; this probe runs uncapped
             req.ec_max_data_blocks = 0;

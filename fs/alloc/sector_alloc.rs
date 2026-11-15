@@ -179,7 +179,7 @@ impl<'f> TransAttempt<'_, 'f> {
             // wait
             if matches(err, Errcode::freelist_empty) &&
                !matches(err, Errcode::bucket_alloc_no_progress) &&
-               req.cl.is_some() && !req.flags.contains(w::alloc_nowait) {
+               req.may_wait() && !req.flags.contains(w::alloc_nowait) {
                 continue;
             }
 
