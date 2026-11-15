@@ -28,14 +28,14 @@
 //! drop.
 
 use crate::types::GenRadix;
-use crate::util::alloc::{Flags, current_gfp_context, kfree_unsized, kzalloc_gfp, kzalloc_nofail, AllocError};
+use crate::util::alloc::{flags, AllocError, AllocGfp, Box, Flags, Kmalloc, WithFlags, current_gfp_context};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr::{self, NonNull};
 use crate::util::rcu::rcu_dereference;
 use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Relaxed, Release}};
-use pin_init::Zeroable;
+use pin_init::{init_zeroed, Zeroable};
 
 const NODE_SHIFT: u32 = 9;
 pub const NODE_SIZE: usize = 1 << NODE_SHIFT;
@@ -73,11 +73,17 @@ fn root_to_node(r: *mut Node) -> *mut Node {
 }
 
 /// A node: NODE_SIZE bytes, zeroed when allocated - an interior node's ARY
-/// child pointers, or a leaf's data. kmalloc() of a power of two, so aligned
-/// to its size, in either build.
+/// child pointers, or a leaf's data. Aligned to its size: the root's low bits
+/// hold the depth.
+#[repr(C, align(512))]
+#[derive(Zeroable)]
 struct Node {
     _bytes: [u8; NODE_SIZE],
 }
+
+const _: () = assert!(align_of::<Node>() == NODE_SIZE && DEPTH_MASK < NODE_SIZE);
+
+type NodeBox = Box<Node, WithFlags<Kmalloc>>;
 
 impl Node {
     /// # Safety
@@ -86,14 +92,15 @@ impl Node {
         unsafe { AtomicPtr::from_ptr(n.cast::<*mut Node>().add(i)) }
     }
 
-    fn alloc(gfp: Flags) -> *mut Node {
-        kzalloc_gfp(NODE_SIZE, gfp).map_or(ptr::null_mut(), |p| p.as_ptr().cast())
+    /// Zeroed: a Box until the tree takes it, which free() frees.
+    fn alloc(gfp: Flags) -> Result<NodeBox, AllocError> {
+        Box::init_in(init_zeroed(), Kmalloc.with_flags(gfp))
     }
 
     /// # Safety
-    /// @n is alloc()'s, or null, and nothing uses it after.
+    /// @n is one the tree took, and nothing uses it after.
     unsafe fn free(n: *mut Node) {
-        unsafe { kfree_unsized(n.cast()) }
+        drop(unsafe { Box::from_raw_in(n, Kmalloc) });
     }
 }
 
@@ -141,9 +148,11 @@ impl Tree {
      * Returns pointer to the specified byte @offset within @radix, allocating it if
      * necessary - newly allocated slots are always zeroed out:
      */
-    fn ptr_alloc(&self, mut offset: usize, preallocated: Option<&mut NewNode>, gfp: Flags) -> *mut u8 {
+    fn ptr_alloc(&self, mut offset: usize, preallocated: Option<&mut NewNode>, gfp: Flags)
+        -> Result<NonNull<u8>, AllocError>
+    {
         let mut v = rcu_dereference(&self.root);
-        let mut new_node = preallocated.map_or(ptr::null_mut(), |p| core::mem::replace(&mut p.0, ptr::null_mut()));
+        let mut spare = preallocated.and_then(|p| p.0.take());
         let mut n;
         let mut level;
 
@@ -158,24 +167,20 @@ impl Tree {
                 break;
             }
 
-            if new_node.is_null() {
-                new_node = Node::alloc(gfp);
-                if new_node.is_null() {
-                    return ptr::null_mut();
-                }
-            }
-
+            let mut new = match spare.take() { Some(b) => b, None => Node::alloc(gfp)? };
+            let new_node = Box::as_mut_ptr(&mut new);
             unsafe { Node::child(new_node, 0) }.store(n, Relaxed);
             let new_root = new_node.map_addr(|a| a | if n.is_null() { 0 } else { level as usize + 1 });
 
             match self.root.compare_exchange(r, new_root, Release, Relaxed) {
                 Ok(_) => {
                     v = new_root;
-                    new_node = ptr::null_mut();
+                    Box::into_raw_with_allocator(new);
                 }
                 Err(cur) => {
                     v = cur;
                     unsafe { Node::child(new_node, 0) }.store(ptr::null_mut(), Relaxed);
+                    spare = Some(new);
                 }
             }
         }
@@ -187,26 +192,19 @@ impl Tree {
 
             n = rcu_dereference(p);
             if n.is_null() {
-                if new_node.is_null() {
-                    new_node = Node::alloc(gfp);
-                    if new_node.is_null() {
-                        return ptr::null_mut();
-                    }
-                }
+                let mut new = match spare.take() { Some(b) => b, None => Node::alloc(gfp)? };
 
-                match p.compare_exchange(ptr::null_mut(), new_node, Release, Relaxed) {
-                    Ok(_) => {
-                        n = new_node;
-                        new_node = ptr::null_mut();
+                match p.compare_exchange(ptr::null_mut(), Box::as_mut_ptr(&mut new), Release, Relaxed) {
+                    Ok(_) => n = Box::into_raw_with_allocator(new).0,
+                    Err(cur) => {
+                        n = cur;
+                        spare = Some(new);
                     }
-                    Err(cur) => n = cur,
                 }
             }
         }
 
-        unsafe { Node::free(new_node) };
-
-        unsafe { n.cast::<u8>().add(offset) }
+        Ok(unsafe { NonNull::new_unchecked(n.cast::<u8>().add(offset)) })
     }
 
     fn iter_peek(&self, iter: &mut IterPos, objs_per_page: usize) -> *mut u8 {
@@ -345,9 +343,8 @@ impl Tree {
 
 impl<T: Zeroable> GenRadix<T> {
     /// What C's BUILD_BUG_ON() in __idx_to_offset() says. Nodes are
-    /// NODE_SIZE-aligned - kmalloc() of a power of two, in either build - and
-    /// entries at multiples of T's size from a node's start, so every entry is
-    /// aligned too.
+    /// NODE_SIZE-aligned, and entries at multiples of T's size from a node's
+    /// start, so every entry is aligned too.
     const FITS: () = assert!(size_of::<T>() != 0 && size_of::<T>() <= NODE_SIZE,
                              "GenRadix: an entry bigger than a node, or zero-sized");
 
@@ -390,10 +387,9 @@ impl<T: Zeroable> GenRadix<T> {
     #[inline]
     pub fn get_or_alloc(&mut self, idx: usize) -> Result<&mut T, AllocError> {
         let offset = Self::offset(idx).ok_or(AllocError)?;
-        let gfp = Flags::empty();
-        let p = self.tree.ptr_alloc(offset, None, gfp);
+        let p = self.tree.ptr_alloc(offset, None, Flags::empty())?;
         // SAFETY: as get_mut()'s
-        NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
+        Ok(unsafe { p.cast::<T>().as_mut() })
     }
 
     /// get_or_alloc(), with @node for it to use, if it has one - taken if it
@@ -405,9 +401,9 @@ impl<T: Zeroable> GenRadix<T> {
     {
         let offset = Self::offset(idx).ok_or(AllocError)?;
         let gfp = current_gfp_context(gfp);
-        let p = self.tree.ptr_alloc(offset, Some(node), gfp);
+        let p = self.tree.ptr_alloc(offset, Some(node), gfp)?;
         // SAFETY: as get_mut()'s
-        NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
+        Ok(unsafe { p.cast::<T>().as_mut() })
     }
 
     /// The entries from @idx on, with their indices - every entry of each
@@ -447,31 +443,17 @@ impl<T: Zeroable> GenRadix<T> {
 
 /// A node for get_or_alloc_preallocated(), allocated ahead of it - zeroed,
 /// as genradix_alloc_node() - and freed if it's never taken.
-pub struct NewNode(*mut Node);
+pub struct NewNode(Option<NodeBox>);
 
 impl NewNode {
     pub const fn none() -> Self {
-        NewNode(ptr::null_mut())
+        NewNode(None)
     }
 
-    /// GFP_KERNEL - and with @nofail, __GFP_NOFAIL.
+    /// With @nofail, NOFAIL.
     pub fn alloc(&mut self, nofail: bool) -> Result<(), AllocError> {
-        let n = if nofail {
-            kzalloc_nofail(NODE_SIZE).cast()
-        } else {
-            Node::alloc(Flags::empty())
-        };
-        if n.is_null() {
-            return Err(AllocError);
-        }
-        *self = NewNode(n);
+        self.0 = Some(Node::alloc(if nofail { flags::NOFAIL } else { Flags::empty() })?);
         Ok(())
-    }
-}
-
-impl Drop for NewNode {
-    fn drop(&mut self) {
-        unsafe { Node::free(self.0) }
     }
 }
 
@@ -515,9 +497,7 @@ impl<T: Zeroable> SharedGenRadix<T> {
     #[inline]
     pub fn prealloc(&self, idx: usize) -> Result<(), AllocError> {
         let offset = GenRadix::<T>::offset(idx).ok_or(AllocError)?;
-        let gfp = Flags::empty();
-        let p = self.tree().ptr_alloc(offset, None, gfp);
-        if p.is_null() { Err(AllocError) } else { Ok(()) }
+        self.tree().ptr_alloc(offset, None, Flags::empty()).map(|_| ())
     }
 
     /// Every entry below @nr allocated, zeroed, if it hasn't been - as
