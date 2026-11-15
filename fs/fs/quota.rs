@@ -83,6 +83,7 @@ pub struct MemquotaType {
     pub(crate) lock:  Locked<c::mutex>,
     pub(crate) table: SharedGenRadix<crate::locking::LockedBy<Memquota, (), MemquotaType>>,
 }
+crate::genradix_entry!(crate::locking::LockedBy<Memquota, (), MemquotaType>);
 
 impl MemquotaType {
     fn new(lock: impl PinInit<Locked<c::mutex>>) -> impl PinInit<Self> {

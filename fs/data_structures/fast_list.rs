@@ -53,6 +53,7 @@ pub struct Item(AtomicPtr<c_void>);
 
 // SAFETY: zeroed is null, no item
 unsafe impl ::pin_init::Zeroable for Item {}
+crate::genradix_entry!(Item);
 
 /// What a refill gets, and a full cache spills: half of it.
 const BATCH: usize = 16;

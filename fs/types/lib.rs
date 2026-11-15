@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The types the format and the structs C once shared are built from: C's
-//! little-endian integers, the containers C laid out (GenRadix, Fifo), and
+//! little-endian integers, the container C laid out (Fifo), and
 //! what C reads that Rust defines - CStatic, an ops table.
 
 /// The size of the field @f projects to - by its type, so a field of a packed
@@ -170,16 +170,7 @@ impl<T> core::ops::Deref for CStatic<T> {
     }
 }
 
-/// GENRADIX(T) - data_structures/genradix.rs: the element type only, not its
-/// alignment.
-#[repr(C)]
-pub struct GenRadix<T> {
-    pub tree:  crate::data_structures::genradix::Tree,
-    pub _type: core::marker::PhantomData<T>,
-}
-
-// SAFETY: zeroed is empty - genradix_init() is a memset
-unsafe impl<T> ::pin_init::Zeroable for GenRadix<T> {}
+pub use crate::data_structures::genradix::GenRadix;
 
 // Opaque to TypeInfo, as bindgen's were: size only.
 macro_rules! typeinfo_opaque {
@@ -194,7 +185,7 @@ macro_rules! typeinfo_opaque {
         }
     };
 }
-typeinfo_opaque!(GenRadix<T>, T);
+typeinfo_opaque!(GenRadix<T>, T: crate::data_structures::genradix::Entry);
 typeinfo_opaque!(Fifo<T, I>, T, I: crate::data_structures::fifo::FifoIdx);
 
 /// FIFO(T), FIFO_U16_IDX(T)... - data_structures/fifo.h: __FIFO(T, I). Its methods are

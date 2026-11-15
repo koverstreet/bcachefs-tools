@@ -28,6 +28,7 @@ use pin_init::pin_data;
 pub struct gc_stripe {
     pub lock: Locked<ByteLock, GcStripeData>,
 }
+crate::genradix_entry!(gc_stripe);
 
 nest! {
     /// What a gc_stripe's lock protects. Not packed, as a bucket's is:

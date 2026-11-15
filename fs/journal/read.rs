@@ -138,6 +138,7 @@ unsafe impl Send for Replay {}
 unsafe impl Sync for Replay {}
 
 unsafe impl pin_init::ZeroableOption for Replay {}
+crate::genradix_entry!(Option<Replay>);
 
 impl Replay {
     fn new(fs: &Fs, j: &[u8], csum_good: bool) -> Result<Self, BchError> {

@@ -18,7 +18,7 @@ use crate::new_lock;
 use crate::types::GenRadix;
 use crate::util::alloc::{flags, init_at, kbox_zeroed_nofail, AllocError, KBox, KVBox, KVVec};
 use crate::util::ffi::Opaque;
-use crate::data_structures::genradix::{NewNode, NODE_SIZE};
+use crate::data_structures::genradix::NewNode;
 use crate::util::alloc::{KVmalloc, Kmalloc};
 use crate::util::maybe_rcu_alloc::{alloc_at, Retired};
 use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
@@ -206,14 +206,13 @@ struct Seq {
      */
     objs:   GenRadix<Option<Raw>>,
     nr:     usize,
-    /// Where the next push goes, in a node allocated already
-    cursor: *mut Option<Raw>,
     seq:    GpCookie,
 }
+crate::genradix_entry!(Option<Raw>);
 
 impl Seq {
     fn new(seq: GpCookie) -> Self {
-        Seq { objs: Zeroable::zeroed(), nr: 0, cursor: ptr::null_mut(), seq }
+        Seq { objs: Zeroable::zeroed(), nr: 0, seq }
     }
 
     fn get(&self, i: usize) -> Raw {
@@ -226,22 +225,15 @@ impl Seq {
 
     /// Onto the end: false if that needs a node, and there's none to be had
     /// atomically - nor in @node.
-    fn push(&mut self, raw: Raw, node: &mut NewNode) -> bool {
-        if self.cursor.is_null() {
-            match self.objs.get_or_alloc_preallocated(self.nr, node, flags::ATOMIC | flags::NOWARN) {
-                Ok(slot) => self.cursor = ptr::from_mut(slot),
-                Err(_)   => return false,
+    fn push(&mut self, raw: Raw, node: &mut NewNode<Option<Raw>>) -> bool {
+        match self.objs.get_or_alloc_preallocated(self.nr, node, flags::ATOMIC | flags::NOWARN) {
+            Ok(slot) => {
+                *slot = Some(raw);
+                self.nr += 1;
+                true
             }
+            Err(_) => false,
         }
-
-        unsafe { self.cursor.write(Some(raw)) };
-        self.cursor = self.cursor.wrapping_add(1);
-        /* zero cursor if we hit the end of a radix tree node: */
-        if self.cursor as usize & (NODE_SIZE - 1) == 0 {
-            self.cursor = ptr::null_mut();
-        }
-        self.nr += 1;
-        true
     }
 
     /// The newest entry @f is true of, taken out.
@@ -256,7 +248,6 @@ impl Seq {
         }
 
         self.nr -= 1;
-        self.cursor = ptr::null_mut();
         if self.nr == 0 {
             self.objs.free();
         }

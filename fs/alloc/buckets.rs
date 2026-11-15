@@ -62,6 +62,7 @@ pub const BCH_DEV_POS_FRAC_BITS: u32 = 32;
 pub struct bucket {
     pub lock: Locked<ByteLock, BucketData>,
 }
+crate::genradix_entry!(bucket);
 
 nest! {
     /// What a bucket's lock protects. Packed, so it starts right after the

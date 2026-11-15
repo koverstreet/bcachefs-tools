@@ -119,6 +119,7 @@ struct GcEntry {
 // SAFETY: zeroed is offset and size 0 and a refcount of 0 - an AtomicI32 is
 // an i32 - which pin-init doesn't say of atomics
 unsafe impl ::pin_init::Zeroable for GcEntry {}
+crate::genradix_entry!(GcEntry);
 
 /*
  * gc's table of indirect extents: gc counts every reflink_p's references into

@@ -4,474 +4,396 @@
 //! allocated a node at a time and zeroed, whose entries never move once they
 //! exist.
 //!
-//! Very simple and minimalistic, supporting arbitrary size entries up to
-//! NODE_SIZE.
+//! The radix tree allocates a node of entries at a time, so entries may exist
+//! that were never explicitly allocated - they will be initialized to all
+//! zeroes. So an entry type is Zeroable, and says what its leaf is - a node's
+//! worth of entries - with genradix_entry!().
 //!
-//! The radix tree allocates one page of entries at a time, so entries may
-//! exist that were never explicitly allocated - they will be initialized to
-//! all zeroes.
+//! There's a tree per depth: tree d holds the leaves numbered below ARY^d
+//! that tree d - 1 doesn't, under d levels of interior nodes. So an index is
+//! as few steps away as its size needs, and no tree grows by moving its root
+//! under a new one. A link is a OnceEither, to an interior node or a leaf:
+//! set once, from any thread, then never moved.
 //!
-//! Internally, a genradix is just a radix tree of pages, and indexing works in
-//! terms of byte offsets. The split is C's: GenRadix is generic and #[inline],
-//! and turns an index into a byte offset with size_of::<T>() a constant - so a
-//! size that's a power of two is a shift, and one that isn't a multiply and
-//! shift for the divide and the modulo by objects per node; and under it, the
-//! core - Tree - works in byte offsets and isn't generic: one copy, not one
-//! per T.
-//!
-//! An entry in an allocated node is zeroed memory until something writes it,
-//! and so is a T only if zeroed is one: T: Zeroable. Allocating takes &mut -
-//! two callers allocating one index would otherwise each hold a &mut T.
-//!
-//! No Drop: GenRadix's holders free it, with free(), as C's did.
-//! SharedGenRadix, for one allocated from several threads at once, frees on
-//! drop.
+//! Allocating takes &mut - two callers allocating one index would otherwise
+//! each hold a &mut T. SharedGenRadix, for one allocated from several threads
+//! at once, has its entries shared.
 
-use crate::types::GenRadix;
-use crate::util::alloc::{flags, AllocError, AllocGfp, Box, Flags, Kmalloc, WithFlags};
-use core::cell::UnsafeCell;
+use crate::data_structures::array_vec::ArrayVec;
+use crate::util::alloc::{flags, AllocError, AllocGfp, Box, Flags, Kmalloc};
+use crate::util::once_either::{Either, OnceEither};
+use core::iter::Enumerate;
 use core::marker::PhantomData;
 use core::mem::size_of;
-use core::ptr::{self, NonNull};
-use crate::util::rcu::rcu_dereference;
-use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Relaxed, Release}};
+use core::slice;
 use pin_init::{init_zeroed, Zeroable};
 
-const NODE_SHIFT: u32 = 9;
-pub const NODE_SIZE: usize = 1 << NODE_SHIFT;
+pub const NODE_SIZE: usize = 512;
 
-const ARY: usize = NODE_SIZE / size_of::<*mut Node>();
-const ARY_SHIFT: u32 = ARY.ilog2();
+const ARY: usize = NODE_SIZE / size_of::<usize>();
+const ARY_SHIFT: usize = ARY.ilog2() as usize;
 
-/* depth that's needed for a genradix that can address up to ULONG_MAX: */
-const MAX_DEPTH: u32 = (usize::BITS - NODE_SHIFT).div_ceil(ARY_SHIFT);
+/* trees 0 to the depth a usize leaf number needs */
+const ROOTS: usize = (usize::BITS as usize).div_ceil(ARY_SHIFT) + 1;
 
-const DEPTH_MASK: usize = (MAX_DEPTH as usize + 1).next_power_of_two() - 1;
-
-const fn depth_shift(depth: u32) -> u32 {
-    NODE_SHIFT + ARY_SHIFT * depth
+/// A GenRadix's entry type: Zeroable, as a node's entries are before anything
+/// writes them, and its Leaf, genradix_entry!()'s - a node's worth.
+pub trait Entry: Zeroable + Sized {
+    type Leaf: AsRef<[Self]> + AsMut<[Self]> + Zeroable;
 }
 
-/*
- * Returns size (of data, in bytes) that a tree of a given depth holds:
- */
-const fn depth_size(depth: u32) -> usize {
-    1 << depth_shift(depth)
+/// Each type, an Entry of a GenRadix: its leaf, as many as fit in a node.
+#[macro_export]
+macro_rules! genradix_entry {
+    ($($t:ty),+ $(,)?) => {$(
+        impl $crate::data_structures::genradix::Entry for $t {
+            type Leaf = [$t; $crate::data_structures::genradix::NODE_SIZE / ::core::mem::size_of::<$t>()];
+        }
+    )+};
 }
 
-/// ilog2(@offset) < depth_shift(@depth): a tree of @depth holds @offset.
-fn holds(depth: u32, offset: usize) -> bool {
-    offset.checked_shr(depth_shift(depth)).unwrap_or(0) == 0
+const fn per_leaf<T: Entry>() -> usize {
+    let n = size_of::<T::Leaf>() / size_of::<T>();
+    assert!(n > 0 && size_of::<T::Leaf>() == n * size_of::<T>(),
+            "GenRadix: a leaf that isn't an array of entries, or an entry bigger than a node");
+    n
 }
 
-fn root_to_depth(r: *mut Node) -> u32 {
-    (r.addr() & DEPTH_MASK) as u32
-}
-
-fn root_to_node(r: *mut Node) -> *mut Node {
-    r.map_addr(|a| a & !DEPTH_MASK)
-}
-
-/// A node: NODE_SIZE bytes, zeroed when allocated - an interior node's ARY
-/// child pointers, or a leaf's data. Aligned to its size: the root's low bits
-/// hold the depth.
-#[repr(C, align(512))]
+/// A leaf: its entries, aligned so a link can say it's one.
+#[repr(C, align(2))]
 #[derive(Zeroable)]
-struct Node {
-    _bytes: [u8; NODE_SIZE],
+struct Leaf<T: Entry>(T::Leaf);
+
+#[repr(C)]
+#[derive(Zeroable)]
+struct Interior<T: Entry> {
+    children: [Link<T>; ARY],
 }
 
-const _: () = assert!(align_of::<Node>() == NODE_SIZE && DEPTH_MASK < NODE_SIZE);
+type Link<T> = OnceEither<Interior<T>, Leaf<T>>;
 
-type NodeBox = Box<Node, WithFlags<Kmalloc>>;
-
-impl Node {
-    /// # Safety
-    /// @n is an interior node, and @i < ARY.
-    unsafe fn child<'a>(n: *mut Node, i: usize) -> &'a AtomicPtr<Node> {
-        unsafe { AtomicPtr::from_ptr(n.cast::<*mut Node>().add(i)) }
-    }
-
-    /// Zeroed: a Box until the tree takes it, which free() frees.
-    fn alloc(gfp: Flags) -> Result<NodeBox, AllocError> {
-        Box::init_in(init_zeroed(), Kmalloc.with_flags(gfp))
-    }
-
-    /// # Safety
-    /// @n is one the tree took, and nothing uses it after.
-    unsafe fn free(n: *mut Node) {
-        drop(unsafe { Box::from_raw_in(n, Kmalloc) });
+fn interior<I, L>(e: Either<I, L>) -> I {
+    match e {
+        Either::Left(i)  => i,
+        Either::Right(_) => panic!("genradix: a leaf where an interior node goes"),
     }
 }
 
-/// The tree, in byte offsets: its root node, with the tree's depth in the
-/// pointer's low bits.
+fn leaf<I, L>(e: Either<I, L>) -> L {
+    match e {
+        Either::Right(l) => l,
+        Either::Left(_)  => panic!("genradix: an interior node where a leaf goes"),
+    }
+}
+
+/// Zeroed.
+fn alloc_node<N: Zeroable>(gfp: Flags) -> Result<Box<N, Kmalloc>, AllocError> {
+    Box::init_in(init_zeroed(), Kmalloc.with_flags(gfp)).map(Box::into_unflagged)
+}
+
+/// @idx's leaf number, its place in the leaf, and its tree: the depth its
+/// leaf number needs.
+fn split<T: Entry>(idx: usize) -> (usize, usize, usize) {
+    let q = idx / per_leaf::<T>();
+    (q, idx % per_leaf::<T>(), ((usize::BITS - q.leading_zeros()) as usize).div_ceil(ARY_SHIFT))
+}
+
+/// The child of a node at @height that leaf @q is under.
+fn child(q: usize, height: usize) -> usize {
+    (q >> (ARY_SHIFT * (height - 1))) & (ARY - 1)
+}
+
+/// Nodes for get_or_alloc_preallocated(), allocated ahead of it - zeroed, as
+/// genradix_alloc_node() - and freed if they're never taken: a leaf and an
+/// interior node. An allocation that needs more takes what's there, and
+/// fails for the rest only if it can't allocate them.
+pub struct NewNode<T: Entry> {
+    interior: Option<Box<Interior<T>, Kmalloc>>,
+    leaf:     Option<Box<Leaf<T>, Kmalloc>>,
+}
+
+impl<T: Entry> NewNode<T> {
+    pub const fn none() -> Self {
+        NewNode { interior: None, leaf: None }
+    }
+
+    /// What's been taken, allocated again: with @nofail, NOFAIL.
+    pub fn alloc(&mut self, nofail: bool) -> Result<(), AllocError> {
+        let gfp = if nofail { flags::NOFAIL } else { Flags::empty() };
+        if self.interior.is_none() {
+            self.interior = Some(alloc_node(gfp)?);
+        }
+        if self.leaf.is_none() {
+            self.leaf = Some(alloc_node(gfp)?);
+        }
+        Ok(())
+    }
+
+    fn interior(&mut self, gfp: Flags) -> Result<Box<Interior<T>, Kmalloc>, AllocError> {
+        self.interior.take().map_or_else(|| alloc_node(gfp), Ok)
+    }
+
+    fn leaf(&mut self, gfp: Flags) -> Result<Box<Leaf<T>, Kmalloc>, AllocError> {
+        self.leaf.take().map_or_else(|| alloc_node(gfp), Ok)
+    }
+}
+
+/// The trees: GenRadix's and SharedGenRadix's, which differ in how they
+/// allocate.
 #[repr(transparent)]
-pub struct Tree {
-    root: AtomicPtr<Node>,
+#[derive(Zeroable)]
+struct Trees<T: Entry> {
+    roots: [Link<T>; ROOTS],
 }
 
-// null: empty
-unsafe impl Zeroable for Tree {}
-
-/// Where an iteration is: the byte offset, and the index it's of.
-struct IterPos {
-    offset: usize,
-    pos:    usize,
-}
-
-impl Tree {
-    /*
-     * Returns pointer to the specified byte @offset within @radix, or NULL if not
-     * allocated
-     */
-    fn ptr(&self, mut offset: usize) -> *mut u8 {
-        let r = rcu_dereference(&self.root);
-        let mut n = root_to_node(r);
-        let level = root_to_depth(r);
-        let mut shift = depth_shift(level);
-
-        if !holds(level, offset) {
-            return ptr::null_mut();
+impl<T: Entry> Trees<T> {
+    fn get(&self, idx: usize) -> Option<&T> {
+        let (q, r, d) = split::<T>(idx);
+        let mut link = self.roots.get(d)?;
+        for h in (1..=d).rev() {
+            link = &interior(link.get()?).children[child(q, h)];
         }
-
-        while !n.is_null() && shift > NODE_SHIFT {
-            shift -= ARY_SHIFT;
-            n = rcu_dereference(unsafe { Node::child(n, offset >> shift) });
-            offset &= (1 << shift) - 1;
-        }
-
-        if n.is_null() { ptr::null_mut() } else { unsafe { n.cast::<u8>().add(offset) } }
+        Some(&leaf(link.get()?).0.as_ref()[r])
     }
 
-    /*
-     * Returns pointer to the specified byte @offset within @radix, allocating it if
-     * necessary - newly allocated slots are always zeroed out:
-     */
-    fn ptr_alloc(&self, mut offset: usize, preallocated: Option<&mut NewNode>, gfp: Flags)
-        -> Result<NonNull<u8>, AllocError>
-    {
-        let mut v = rcu_dereference(&self.root);
-        let mut spare = preallocated.and_then(|p| p.0.take());
-        let mut n;
-        let mut level;
+    fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
+        let (q, r, d) = split::<T>(idx);
+        let mut link = self.roots.get_mut(d)?;
+        for h in (1..=d).rev() {
+            link = &mut interior(link.get_mut()?).children[child(q, h)];
+        }
+        Some(&mut leaf(link.get_mut()?).0.as_mut()[r])
+    }
 
-        /* Increase tree depth if necessary: */
+    /// @idx, allocating its nodes, zeroed, if they haven't been - from @spare
+    /// first, then with @gfp.
+    fn get_or_alloc(&mut self, idx: usize, spare: &mut NewNode<T>, gfp: Flags) -> Result<&mut T, AllocError> {
+        let (q, r, d) = split::<T>(idx);
+        let mut link = self.roots.get_mut(d).ok_or(AllocError)?;
+        for h in (1..=d).rev() {
+            link = &mut interior(link.get_mut_or_set_left(|| spare.interior(gfp))?).children[child(q, h)];
+        }
+        Ok(&mut leaf(link.get_mut_or_set_right(|| spare.leaf(gfp))?).0.as_mut()[r])
+    }
+
+    /// get_or_alloc(), by &self: what another thread allocated first is
+    /// taken, and what lost to it freed.
+    fn alloc_shared(&self, idx: usize, gfp: Flags) -> Result<(), AllocError> {
+        let (q, _, d) = split::<T>(idx);
+        let mut link = self.roots.get(d).ok_or(AllocError)?;
+        for h in (1..=d).rev() {
+            let e = match link.get() {
+                Some(e) => e,
+                None    => link.get_or_set_left(alloc_node(gfp)?).0,
+            };
+            link = &interior(e).children[child(q, h)];
+        }
+        match link.get() {
+            Some(e) => leaf(e),
+            None    => leaf(link.get_or_set_right(alloc_node(gfp)?).0),
+        };
+        Ok(())
+    }
+
+    fn iter_from(&self, idx: usize) -> Walk<'_, T, &Link<T>, false> {
+        Walk::new(self.roots.iter(), idx)
+    }
+
+    fn iter_rev(&self) -> Walk<'_, T, &Link<T>, true> {
+        Walk::new(self.roots.iter(), 0)
+    }
+
+    fn iter_mut_from(&mut self, idx: usize) -> Walk<'_, T, &mut Link<T>, false> {
+        Walk::new(self.roots.iter_mut(), idx)
+    }
+
+    fn iter_rev_mut(&mut self) -> Walk<'_, T, &mut Link<T>, true> {
+        Walk::new(self.roots.iter_mut(), 0)
+    }
+}
+
+/// A link, shared or not: what a walk opens it to.
+trait Access<'a>: Sized {
+    type Entry;
+    type Links: DoubleEndedIterator<Item = Self> + ExactSizeIterator;
+    type Entries: DoubleEndedIterator<Item = Self::Entry> + ExactSizeIterator;
+
+    fn open(self) -> Option<Either<Self::Links, Self::Entries>>;
+}
+
+impl<'a, T: Entry> Access<'a> for &'a Link<T> {
+    type Entry = &'a T;
+    type Links = slice::Iter<'a, Link<T>>;
+    type Entries = slice::Iter<'a, T>;
+
+    fn open(self) -> Option<Either<Self::Links, Self::Entries>> {
+        Some(match self.get()? {
+            Either::Left(i)  => Either::Left(i.children.iter()),
+            Either::Right(l) => Either::Right(l.0.as_ref().iter()),
+        })
+    }
+}
+
+impl<'a, T: Entry> Access<'a> for &'a mut Link<T> {
+    type Entry = &'a mut T;
+    type Links = slice::IterMut<'a, Link<T>>;
+    type Entries = slice::IterMut<'a, T>;
+
+    fn open(self) -> Option<Either<Self::Links, Self::Entries>> {
+        Some(match self.get_mut()? {
+            Either::Left(i)  => Either::Left(i.children.iter_mut()),
+            Either::Right(l) => Either::Right(l.0.as_mut().iter_mut()),
+        })
+    }
+}
+
+fn step<I: DoubleEndedIterator, const REV: bool>(it: &mut I) -> Option<I::Item> {
+    if REV { it.next_back() } else { it.next() }
+}
+
+/// A node being walked: the first leaf number under it, its height, and its
+/// children.
+struct Frame<I> {
+    q:      usize,
+    height: usize,
+    it:     Enumerate<I>,
+}
+
+/// Every entry of each allocated leaf, written or not, in index order - or
+/// reversed, from the last - and forward, from @start.
+struct Walk<'a, T: Entry, A: Access<'a>, const REV: bool> {
+    start:  usize,
+    roots:  Enumerate<A::Links>,
+    frames: ArrayVec<Frame<A::Links>, ROOTS>,
+    leaf:   Option<(usize, Enumerate<A::Entries>)>,
+    _t:     PhantomData<&'a T>,
+}
+
+impl<'a, T: Entry, A: Access<'a>, const REV: bool> Walk<'a, T, A, REV> {
+    fn new(roots: A::Links, start: usize) -> Self {
+        Walk { start, roots: roots.enumerate(), frames: ArrayVec::new(), leaf: None, _t: PhantomData }
+    }
+}
+
+impl<'a, T: Entry, A: Access<'a>, const REV: bool> Iterator for Walk<'a, T, A, REV> {
+    type Item = (usize, A::Entry);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let start_q = self.start / per_leaf::<T>();
+
         loop {
-            let r = v;
-
-            n     = root_to_node(r);
-            level = root_to_depth(r);
-
-            if !n.is_null() && holds(level, offset) {
-                break;
-            }
-
-            let mut new = match spare.take() { Some(b) => b, None => Node::alloc(gfp)? };
-            let new_node = Box::as_mut_ptr(&mut new);
-            unsafe { Node::child(new_node, 0) }.store(n, Relaxed);
-            let new_root = new_node.map_addr(|a| a | if n.is_null() { 0 } else { level as usize + 1 });
-
-            match self.root.compare_exchange(r, new_root, Release, Relaxed) {
-                Ok(_) => {
-                    v = new_root;
-                    Box::into_raw_with_allocator(new);
-                }
-                Err(cur) => {
-                    v = cur;
-                    unsafe { Node::child(new_node, 0) }.store(ptr::null_mut(), Relaxed);
-                    spare = Some(new);
-                }
-            }
-        }
-
-        while level > 0 {
-            level -= 1;
-            let p = unsafe { Node::child(n, offset >> depth_shift(level)) };
-            offset &= depth_size(level) - 1;
-
-            n = rcu_dereference(p);
-            if n.is_null() {
-                let mut new = match spare.take() { Some(b) => b, None => Node::alloc(gfp)? };
-
-                match p.compare_exchange(ptr::null_mut(), Box::as_mut_ptr(&mut new), Release, Relaxed) {
-                    Ok(_) => n = Box::into_raw_with_allocator(new).0,
-                    Err(cur) => {
-                        n = cur;
-                        spare = Some(new);
-                    }
-                }
-            }
-        }
-
-        Ok(unsafe { NonNull::new_unchecked(n.cast::<u8>().add(offset)) })
-    }
-
-    fn iter_peek(&self, iter: &mut IterPos, objs_per_page: usize) -> *mut u8 {
-        if iter.offset == usize::MAX {
-            return ptr::null_mut();
-        }
-
-        'restart: loop {
-            let r = rcu_dereference(&self.root);
-            if r.is_null() {
-                return ptr::null_mut();
-            }
-
-            let mut n     = root_to_node(r);
-            let mut level = root_to_depth(r);
-
-            if !holds(level, iter.offset) {
-                return ptr::null_mut();
-            }
-
-            while level > 0 {
-                level -= 1;
-
-                let mut i = (iter.offset >> depth_shift(level)) & (ARY - 1);
-
-                loop {
-                    let child = rcu_dereference(unsafe { Node::child(n, i) });
-                    if !child.is_null() {
-                        n = child;
-                        break;
-                    }
-
-                    let objs_per_ptr = depth_size(level);
-
-                    let Some(next) = iter.offset.checked_add(objs_per_ptr) else {
-                        iter.offset = usize::MAX;
-                        iter.pos    = usize::MAX;
-                        return ptr::null_mut();
-                    };
-
-                    i += 1;
-                    iter.offset = next & !(objs_per_ptr - 1);
-                    iter.pos    = (iter.offset >> NODE_SHIFT) * objs_per_page;
-                    if i == ARY {
-                        continue 'restart;
-                    }
+            if let Some((base, entries)) = &mut self.leaf {
+                match step::<_, REV>(entries) {
+                    Some((r, e)) if REV || *base + r >= self.start => return Some((*base + r, e)),
+                    Some(_) => continue,
+                    None    => self.leaf = None,
                 }
             }
 
-            return unsafe { n.cast::<u8>().add(iter.offset & (NODE_SIZE - 1)) };
-        }
-    }
+            let (q, height, link) = match self.frames.last_mut() {
+                Some(f) => match step::<_, REV>(&mut f.it) {
+                    Some((c, link)) => (f.q + (c << (ARY_SHIFT * (f.height - 1))), f.height - 1, link),
+                    None => {
+                        self.frames.pop();
+                        continue;
+                    }
+                },
+                None => {
+                    let (d, link) = step::<_, REV>(&mut self.roots)?;
+                    (0, d, link)
+                }
+            };
 
-    fn iter_peek_prev(&self, iter: &mut IterPos, objs_per_page: usize,
-                      obj_size_plus_page_remainder: usize) -> *mut u8 {
-        if iter.offset == usize::MAX {
-            return ptr::null_mut();
-        }
-
-        'restart: loop {
-            let r = rcu_dereference(&self.root);
-            if r.is_null() {
-                return ptr::null_mut();
+            /* forward, past what's all before @start */
+            let prefix = |q: usize| q.checked_shr((ARY_SHIFT * height) as u32).unwrap_or(0);
+            if !REV && prefix(q) < prefix(start_q) {
+                continue;
             }
 
-            let mut n     = root_to_node(r);
-            let mut level = root_to_depth(r);
-
-            if !holds(level, iter.offset) {
-                iter.offset = depth_size(level);
-                iter.pos    = (iter.offset >> NODE_SHIFT) * objs_per_page;
-
-                iter.offset -= obj_size_plus_page_remainder;
-                iter.pos -= 1;
-            }
-
-            while level > 0 {
-                level -= 1;
-
-                let mut i = (iter.offset >> depth_shift(level)) & (ARY - 1);
-
-                loop {
-                    let child = rcu_dereference(unsafe { Node::child(n, i) });
-                    if !child.is_null() {
-                        n = child;
-                        break;
-                    }
-
-                    let objs_per_ptr = depth_size(level);
-
-                    iter.offset &= !(objs_per_ptr - 1);
-                    iter.pos    = (iter.offset >> NODE_SHIFT) * objs_per_page;
-
-                    if iter.offset == 0 {
-                        return ptr::null_mut();
-                    }
-
-                    iter.offset -= obj_size_plus_page_remainder;
-                    iter.pos -= 1;
-
-                    if i == 0 {
-                        continue 'restart;
-                    }
-                    i -= 1;
+            match link.open() {
+                None => {}
+                Some(Either::Left(children)) => {
+                    assert!(height > 0, "genradix: an interior node where a leaf goes");
+                    self.frames.push(Frame { q, height, it: children.enumerate() });
+                }
+                Some(Either::Right(entries)) => {
+                    assert!(height == 0, "genradix: a leaf where an interior node goes");
+                    self.leaf = Some((q * per_leaf::<T>(), entries.enumerate()));
                 }
             }
-
-            return unsafe { n.cast::<u8>().add(iter.offset & (NODE_SIZE - 1)) };
-        }
-    }
-
-    /// Free every node: empty after.
-    ///
-    /// # Safety
-    /// Nothing is using it, nor any entry it handed out.
-    unsafe fn free(&self) {
-        fn free_recurse(n: *mut Node, level: u32) {
-            if level > 0 {
-                for i in 0..ARY {
-                    let child = unsafe { Node::child(n, i) }.load(Relaxed);
-                    if !child.is_null() {
-                        free_recurse(child, level - 1);
-                    }
-                }
-            }
-
-            unsafe { Node::free(n) }
-        }
-
-        let r = self.root.swap(ptr::null_mut(), Acquire);
-        if !r.is_null() {
-            free_recurse(root_to_node(r), root_to_depth(r));
         }
     }
 }
 
-impl<T: Zeroable> GenRadix<T> {
-    /// What C's BUILD_BUG_ON() in __idx_to_offset() says. Nodes are
-    /// NODE_SIZE-aligned, and entries at multiples of T's size from a node's
-    /// start, so every entry is aligned too.
-    const FITS: () = assert!(size_of::<T>() != 0 && size_of::<T>() <= NODE_SIZE,
-                             "GenRadix: an entry bigger than a node, or zero-sized");
+/// A sparse array of T, allocated by &mut.
+#[repr(transparent)]
+#[derive(Zeroable)]
+pub struct GenRadix<T: Entry>(Trees<T>);
 
-    /// @idx's byte offset - as __idx_to_offset(), None past usize. An entry
-    /// doesn't straddle nodes: for a size that doesn't divide NODE_SIZE, a
-    /// node's tail is unused.
-    #[inline]
-    fn offset(idx: usize) -> Option<usize> {
-        let () = Self::FITS;
-        let size = size_of::<T>();
-
-        if size.is_power_of_two() {
-            idx.checked_mul(size)
-        } else {
-            let per_node = NODE_SIZE / size;
-            (idx / per_node).checked_mul(NODE_SIZE)?.checked_add((idx % per_node) * size)
-        }
-    }
-
+impl<T: Entry> GenRadix<T> {
     /// The entry at @idx - None if its node was never allocated: as
     /// genradix_ptr().
     #[inline]
     pub fn get(&self, idx: usize) -> Option<&T> {
-        let p = self.tree.ptr(Self::offset(idx)?);
-        // SAFETY: an entry of an allocated node - a T, by Zeroable, if
-        // nothing has written it
-        NonNull::new(p.cast::<T>()).map(|p| unsafe { p.as_ref() })
+        self.0.get(idx)
     }
 
-    /// get(), to edit.
     #[inline]
     pub fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
-        let p = self.tree.ptr(Self::offset(idx)?);
-        // SAFETY: as get()'s, and &mut self
-        NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() })
+        self.0.get_mut(idx)
     }
 
     /// The entry at @idx, allocating its node - zeroed - if it hasn't been:
     /// as genradix_ptr_alloc().
     #[inline]
     pub fn get_or_alloc(&mut self, idx: usize) -> Result<&mut T, AllocError> {
-        let offset = Self::offset(idx).ok_or(AllocError)?;
-        let p = self.tree.ptr_alloc(offset, None, Flags::empty())?;
-        // SAFETY: as get_mut()'s
-        Ok(unsafe { p.cast::<T>().as_mut() })
+        self.0.get_or_alloc(idx, &mut NewNode::none(), Flags::empty())
     }
 
-    /// get_or_alloc(), with @node for it to use, if it has one - taken if it
-    /// does: as genradix_ptr_alloc_preallocated(), for a caller that
-    /// allocates as it needs to outside a lock, and retries under it.
+    /// get_or_alloc(), from @node first, then with @gfp: as
+    /// genradix_ptr_alloc_preallocated(), for a caller that allocates as it
+    /// needs to outside a lock, and retries under it.
     #[inline]
-    pub fn get_or_alloc_preallocated(&mut self, idx: usize, node: &mut NewNode, gfp: Flags)
+    pub fn get_or_alloc_preallocated(&mut self, idx: usize, node: &mut NewNode<T>, gfp: Flags)
         -> Result<&mut T, AllocError>
     {
-        let offset = Self::offset(idx).ok_or(AllocError)?;
-        let p = self.tree.ptr_alloc(offset, Some(node), gfp)?;
-        // SAFETY: as get_mut()'s
-        Ok(unsafe { p.cast::<T>().as_mut() })
+        self.0.get_or_alloc(idx, node, gfp)
     }
 
     /// The entries from @idx on, with their indices - every entry of each
     /// allocated node, written or not: as genradix_for_each_from().
-    #[inline]
-    pub fn iter_from(&self, idx: usize) -> Iter<'_, T> {
-        Iter(RawIter::new(&self.tree, idx))
-    }
-
-    /// iter_from(), the entries as pointers: for one C writes as it's read.
-    #[inline]
-    pub fn iter_from_raw(&self, idx: usize) -> RawIter<'_, T> {
-        RawIter::new(&self.tree, idx)
+    pub fn iter_from(&self, idx: usize) -> impl Iterator<Item = (usize, &T)> {
+        self.0.iter_from(idx)
     }
 
     /// iter_from(0)'s entries, last first: as genradix_for_each_reverse().
-    #[inline]
-    pub fn iter_rev(&self) -> RevIter<'_, T> {
-        RevIter(RawRevIter::new(&self.tree))
+    pub fn iter_rev(&self) -> impl Iterator<Item = (usize, &T)> {
+        self.0.iter_rev()
     }
 
-    #[inline]
-    pub fn iter_mut_from(&mut self, idx: usize) -> impl Iterator<Item = (usize, &mut T)> + '_ {
-        RawIter::<T>::new(&self.tree, idx).map(|(pos, mut p)| (pos, unsafe { p.as_mut() }))
+    pub fn iter_mut_from(&mut self, idx: usize) -> impl Iterator<Item = (usize, &mut T)> {
+        self.0.iter_mut_from(idx)
     }
 
-    #[inline]
-    pub fn iter_rev_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> + '_ {
-        RawRevIter::<T>::new(&self.tree).map(|(pos, mut p)| (pos, unsafe { p.as_mut() }))
+    pub fn iter_rev_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
+        self.0.iter_rev_mut()
     }
 
     /// Free every node: as genradix_free(). Empty after, as a new one is.
     pub fn free(&mut self) {
-        unsafe { self.tree.free() }
-    }
-}
-
-/// A node for get_or_alloc_preallocated(), allocated ahead of it - zeroed,
-/// as genradix_alloc_node() - and freed if it's never taken.
-pub struct NewNode(Option<NodeBox>);
-
-impl NewNode {
-    pub const fn none() -> Self {
-        NewNode(None)
-    }
-
-    /// With @nofail, NOFAIL.
-    pub fn alloc(&mut self, nofail: bool) -> Result<(), AllocError> {
-        self.0 = Some(Node::alloc(if nofail { flags::NOFAIL } else { Flags::empty() })?);
-        Ok(())
+        self.0 = Zeroable::zeroed();
     }
 }
 
 /// A GenRadix allocated through shared references, from several threads at
-/// once: Tree::ptr_alloc() is safe against concurrent allocation and lookup,
-/// and a node never moves. Its entries are shared, then: a T is Sync, and what
-/// changes it is its own - a lock in it, atomics, a LockedBy. Freed on drop.
+/// once: a link is set once, by whichever thread gets there first, and a node
+/// never moves. Its entries are shared, then: what changes one is its own - a
+/// lock in it, atomics, a LockedBy.
 #[repr(transparent)]
-pub struct SharedGenRadix<T>(UnsafeCell<GenRadix<T>>);
+#[derive(Zeroable)]
+pub struct SharedGenRadix<T: Entry>(Trees<T>);
 
-// SAFETY: allocation and lookup are safe from any thread; the entries are had
-// shared, so T: Sync
-unsafe impl<T: Send> Send for SharedGenRadix<T> {}
-unsafe impl<T: Send + Sync> Sync for SharedGenRadix<T> {}
-
-// SAFETY: zeroed is empty, as GenRadix's is
-unsafe impl<T> Zeroable for SharedGenRadix<T> {}
-
-impl<T> SharedGenRadix<T> {
+impl<T: Entry> SharedGenRadix<T> {
     /// Empty: as genradix_init().
     pub fn new() -> Self {
         Zeroable::zeroed()
@@ -482,167 +404,101 @@ impl<T> SharedGenRadix<T> {
     /// # Safety
     /// Nothing is using it, nor any entry it handed out.
     pub unsafe fn free(&self) {
-        unsafe { (*self.0.get()).tree.free() }
-    }
-}
-
-impl<T: Zeroable> SharedGenRadix<T> {
-    fn tree(&self) -> &Tree {
-        unsafe { &(*self.0.get()).tree }
+        for r in &self.0.roots {
+            drop(unsafe { r.take_shared() });
+        }
     }
 
     /// Allocate @idx's node, zeroed, if it hasn't been - as
     /// genradix_ptr_alloc(), without the entry.
     #[inline]
     pub fn prealloc(&self, idx: usize) -> Result<(), AllocError> {
-        let offset = GenRadix::<T>::offset(idx).ok_or(AllocError)?;
-        self.tree().ptr_alloc(offset, None, Flags::empty()).map(|_| ())
+        self.0.alloc_shared(idx, Flags::empty())
     }
 
     /// Every entry below @nr allocated, zeroed, if it hasn't been - as
     /// genradix_prealloc(): prealloc() of one entry in each node.
     pub fn prealloc_n(&self, nr: usize) -> Result<(), AllocError> {
-        (0..nr).step_by(NODE_SIZE / size_of::<T>()).try_for_each(|idx| self.prealloc(idx))
+        (0..nr).step_by(per_leaf::<T>()).try_for_each(|idx| self.prealloc(idx))
     }
 
     /// The entry at @idx - None if its node was never allocated: as
-    /// genradix_ptr(). A T, by Zeroable, if nothing has written it.
+    /// genradix_ptr().
     #[inline]
     pub fn get(&self, idx: usize) -> Option<&T> {
-        let p = self.tree().ptr(GenRadix::<T>::offset(idx)?);
-        NonNull::new(p.cast::<T>()).map(|p| unsafe { p.as_ref() })
+        self.0.get(idx)
     }
 
     /// GenRadix::iter_from()'s.
-    #[inline]
-    pub fn iter_from(&self, idx: usize) -> Iter<'_, T> {
-        Iter(RawIter::new(self.tree(), idx))
+    pub fn iter_from(&self, idx: usize) -> impl Iterator<Item = (usize, &T)> {
+        self.0.iter_from(idx)
     }
 }
 
-impl<T> Drop for SharedGenRadix<T> {
-    fn drop(&mut self) {
-        unsafe { self.0.get_mut().tree.free() }
+#[cfg(test)]
+mod tests {
+    use super::{per_leaf, GenRadix, SharedGenRadix, ARY};
+
+    crate::genradix_entry!(u64);
+
+    /// Indices either side of each tree's start, and some way into it.
+    fn indices() -> impl Iterator<Item = usize> {
+        let per = per_leaf::<u64>();
+        (0..5u32).flat_map(move |d| {
+            let start = per * ARY.pow(d);
+            [start - 1, start, start + 1, start * 3 + 7]
+        })
     }
-}
 
-/// GenRadix::iter_from()'s walk, the entries as pointers.
-pub struct RawIter<'a, T> {
-    tree: &'a Tree,
-    iter: IterPos,
-    _t:   PhantomData<&'a T>,
-}
+    #[test]
+    fn get_and_walk() {
+        let mut g: GenRadix<u64> = pin_init::Zeroable::zeroed();
+        let mut want: Vec<usize> = indices().collect();
+        want.sort_unstable();
+        want.dedup();
 
-impl<'a, T: Zeroable> RawIter<'a, T> {
-    #[inline]
-    fn new(tree: &'a Tree, idx: usize) -> Self {
-        // genradix_iter_init(): an offset past usize is the end
-        let offset = GenRadix::<T>::offset(idx).unwrap_or(usize::MAX);
-        RawIter { tree, iter: IterPos { offset, pos: idx }, _t: PhantomData }
-    }
-}
-
-pub struct Iter<'a, T>(RawIter<'a, T>);
-
-impl<'a, T: Zeroable> Iterator for Iter<'a, T> {
-    type Item = (usize, &'a T);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        // SAFETY: as GenRadix::get()'s
-        self.0.next().map(|(pos, p)| (pos, unsafe { p.as_ref() }))
-    }
-}
-
-impl<T: Zeroable> Iterator for RawIter<'_, T> {
-    type Item = (usize, NonNull<T>);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        let size = size_of::<T>();
-
-        // genradix_iter_peek(): which skips unallocated nodes, moving the
-        // iterator to the next allocated one
-        let p = self.tree.iter_peek(&mut self.iter, NODE_SIZE / size);
-        let item = (self.iter.pos, NonNull::new(p.cast::<T>())?);
-
-        // genradix_iter_advance(): past the node's last whole entry, to the
-        // next node
-        let next = self.iter.offset.checked_add(size).and_then(|offset| {
-            if !size.is_power_of_two() && (offset & (NODE_SIZE - 1)) + size > NODE_SIZE {
-                offset.checked_next_multiple_of(NODE_SIZE)
-            } else {
-                Some(offset)
-            }
-        });
-        match next {
-            Some(offset) => {
-                self.iter.offset = offset;
-                self.iter.pos += 1;
-            }
-            None => {
-                self.iter.offset = usize::MAX;
-                self.iter.pos    = usize::MAX;
-            }
+        for &i in &want {
+            *g.get_or_alloc(i).unwrap() = i as u64 + 1;
+        }
+        for &i in &want {
+            assert_eq!(g.get(i).copied(), Some(i as u64 + 1), "get({i})");
         }
 
-        Some(item)
-    }
-}
+        // a walk sees every entry of each allocated leaf: the written ones
+        // are ours, in order
+        let fwd: Vec<usize> = g.iter_from(0).filter(|(_, v)| **v != 0).map(|(i, v)| {
+            assert_eq!(*v, i as u64 + 1);
+            i
+        }).collect();
+        assert_eq!(fwd, want);
 
-/// GenRadix::iter_rev()'s walk.
-pub struct RawRevIter<'a, T> {
-    tree: &'a Tree,
-    iter: IterPos,
-    _t:   PhantomData<&'a T>,
-}
+        let mut rev: Vec<usize> = g.iter_rev().filter(|(_, v)| **v != 0).map(|(i, _)| i).collect();
+        rev.reverse();
+        assert_eq!(rev, want);
 
-impl<'a, T: Zeroable> RawRevIter<'a, T> {
-    #[inline]
-    fn new(tree: &'a Tree) -> Self {
-        // genradix_last_pos(): the last index an offset can hold
-        let pos = usize::MAX / NODE_SIZE * (NODE_SIZE / size_of::<T>()) - 1;
-        let offset = GenRadix::<T>::offset(pos).expect("the last position's offset fits");
-        RawRevIter { tree, iter: IterPos { offset, pos }, _t: PhantomData }
-    }
-}
-
-pub struct RevIter<'a, T>(RawRevIter<'a, T>);
-
-impl<'a, T: Zeroable> Iterator for RevIter<'a, T> {
-    type Item = (usize, &'a T);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        // SAFETY: as GenRadix::get()'s
-        self.0.next().map(|(pos, p)| (pos, unsafe { p.as_ref() }))
-    }
-}
-
-impl<T: Zeroable> Iterator for RawRevIter<'_, T> {
-    type Item = (usize, NonNull<T>);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        let size = size_of::<T>();
-
-        // genradix_iter_peek_prev(): which skips unallocated nodes, moving the
-        // iterator to the last entry of the previous allocated one
-        let p = self.tree.iter_peek_prev(&mut self.iter, NODE_SIZE / size, size + NODE_SIZE % size);
-        let item = (self.iter.pos, NonNull::new(p.cast::<T>())?);
-
-        // genradix_iter_rewind(): back over a node's unused tail, to the
-        // previous node's last whole entry
-        if self.iter.offset == 0 || self.iter.offset == usize::MAX {
-            self.iter.offset = usize::MAX;
-        } else {
-            if self.iter.offset & (NODE_SIZE - 1) == 0 {
-                self.iter.offset -= NODE_SIZE % size;
-            }
-            self.iter.offset -= size;
-            self.iter.pos -= 1;
+        for &start in &want {
+            let from: Vec<usize> = g.iter_from(start).filter(|(_, v)| **v != 0).map(|(i, _)| i).collect();
+            let expect: Vec<usize> = want.iter().copied().filter(|&i| i >= start).collect();
+            assert_eq!(from, expect, "iter_from({start})");
         }
 
-        Some(item)
+        for (i, v) in g.iter_mut_from(0) {
+            if *v != 0 {
+                *v = i as u64 * 2;
+            }
+        }
+        assert!(g.iter_rev_mut().all(|(i, v)| *v == 0 || *v == i as u64 * 2));
+
+        g.free();
+        assert!(g.get(want[0]).is_none() && g.iter_from(0).next().is_none());
+    }
+
+    #[test]
+    fn shared() {
+        let g: SharedGenRadix<u64> = SharedGenRadix::new();
+        g.prealloc_n(per_leaf::<u64>() * ARY + 1).unwrap();
+        assert!(g.get(per_leaf::<u64>() * ARY).is_some());
+        assert!(g.get(per_leaf::<u64>() * ARY * 2).is_none());
+        assert_eq!(g.iter_from(0).count(), per_leaf::<u64>() * (ARY + 1));
     }
 }
