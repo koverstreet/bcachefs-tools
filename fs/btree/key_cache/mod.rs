@@ -90,7 +90,7 @@ fn inc(n: &AtomicUsize) {
 #[derive(::pin_init::Zeroable)]
 pub(crate) struct Free {}
 
-unsafe impl Mode for Free {
+impl Mode for Free {
     type Item = NonNull<c::bkey_cached>;
 
     fn into_raw(ck: Self::Item) -> NonNull<u8> {

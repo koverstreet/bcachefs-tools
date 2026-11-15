@@ -164,34 +164,32 @@ macro_rules! heads {
 heads!(RcuHead, RcuWorkHead);
 
 /// A type's own head: #[derive(RcuHead)]'s, at the field marked #[rcu_head].
-///
-/// # Safety
 /// HEAD is the offset in Self of an RcuHead - an RcuWorkHead, if WORK -
 /// nothing but its free uses.
 #[rustc_specialization_trait]
-pub unsafe trait HasRcuHead {
+pub trait HasRcuHead {
     const HEAD: usize;
     const WORK: bool;
 }
 
-unsafe impl HasRcuHead for RcuMember<RcuHead> {
+impl HasRcuHead for RcuMember<RcuHead> {
     const HEAD: usize = 0;
     const WORK: bool = false;
 }
-unsafe impl HasRcuHead for RcuDropMember<RcuHead> {
+impl HasRcuHead for RcuDropMember<RcuHead> {
     const HEAD: usize = 0;
     const WORK: bool = false;
 }
-unsafe impl HasRcuHead for RcuDropWorkMember<RcuWorkHead> {
+impl HasRcuHead for RcuDropWorkMember<RcuWorkHead> {
     const HEAD: usize = 0;
     const WORK: bool = true;
 }
-unsafe impl<T: HasRcuHead> HasRcuHead for core::mem::ManuallyDrop<T> {
+impl<T: HasRcuHead> HasRcuHead for core::mem::ManuallyDrop<T> {
     const HEAD: usize = T::HEAD;
     const WORK: bool = T::WORK;
 }
 // made or not, its T's head is memory nothing but the free uses
-unsafe impl<T: HasRcuHead> HasRcuHead for core::mem::MaybeUninit<T> {
+impl<T: HasRcuHead> HasRcuHead for core::mem::MaybeUninit<T> {
     const HEAD: usize = T::HEAD;
     const WORK: bool = T::WORK;
 }
@@ -249,10 +247,9 @@ impl<T> NoDetach<T> {
 
 // ── RcuPtr ───────────────────────────────────────────────────────────────
 
-/// # Safety
 /// into_raw() gives itself up as a pointer to the target, which from_raw()
 /// takes back.
-pub unsafe trait RcuPointer: Sized {
+pub trait RcuPointer: Sized {
     type Target;
 
     fn into_raw(self) -> NonNull<Self::Target>;
@@ -267,7 +264,7 @@ pub unsafe trait RcuPointer: Sized {
 /// its type says: a grace period on, if its members say so.
 pub unsafe trait RcuOwner: RcuPointer {}
 
-unsafe impl<T> RcuPointer for NonNull<T> {
+impl<T> RcuPointer for NonNull<T> {
     type Target = T;
 
     fn into_raw(self) -> NonNull<T> {
@@ -279,7 +276,7 @@ unsafe impl<T> RcuPointer for NonNull<T> {
     }
 }
 
-unsafe impl<T: AlwaysRefCounted> RcuPointer for ARef<T> {
+impl<T: AlwaysRefCounted> RcuPointer for ARef<T> {
     type Target = T;
 
     fn into_raw(self) -> NonNull<T> {

@@ -289,7 +289,7 @@ struct Header {
 // The free's head is @work, dead once the task has finished: only dispatch()
 // queues it. What's still reached locklessly after - a late completer's
 // compare-exchange of @waiting, which then fails - must stay outside the head.
-unsafe impl HasRcuHead for Header {
+impl HasRcuHead for Header {
     const HEAD: usize = {
         assert!(size_of::<RcuWorkHead>() <= size_of::<c::work_struct>());
         core::mem::offset_of!(Header, work)

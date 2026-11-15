@@ -32,12 +32,9 @@ const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
 type Raw = NonNull<u8>;
 
 /// What an RcuPending does with what it queues once readers are past it -
-/// and what it queues.
-///
-/// # Safety
-/// from_raw() takes back into_raw()'s - for HAS_HEAD, the item's rcu_head,
-/// unused but by this while it's queued.
-pub unsafe trait Mode: Sized {
+/// and what it queues. from_raw() takes back into_raw()'s - for HAS_HEAD,
+/// the item's rcu_head, unused but by this while it's queued.
+pub trait Mode: Sized {
     type Item;
 
     /// Whether an item has an rcu_head of its own. One that hasn't is given
@@ -61,7 +58,7 @@ pub unsafe trait Mode: Sized {
 /// retired, freed a grace period after it's queued.
 pub struct KvFree<T>(PhantomData<fn(T)>);
 
-unsafe impl<T> Mode for KvFree<T> {
+impl<T> Mode for KvFree<T> {
     type Item = Retired<T, KVmalloc>;
 
     fn into_raw(item: Retired<T, KVmalloc>) -> Raw {
@@ -80,7 +77,7 @@ unsafe impl<T> Mode for KvFree<T> {
 /// kvfree_rcu_mightsleep(), batched: KvFree, of a T without an rcu_head.
 pub struct KvFreeMightSleep<T>(PhantomData<fn(T)>);
 
-unsafe impl<T: Send> Mode for KvFreeMightSleep<T> {
+impl<T: Send> Mode for KvFreeMightSleep<T> {
     type Item = KVBox<T>;
     const HAS_HEAD: bool = false;
 

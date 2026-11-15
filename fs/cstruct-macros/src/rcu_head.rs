@@ -32,7 +32,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
 
     let (impl_g, ty_g, where_c) = input.generics.split_for_impl();
     Ok(quote! {
-        unsafe impl #impl_g crate::util::rcu::HasRcuHead for #name #ty_g #where_c {
+        impl #impl_g crate::util::rcu::HasRcuHead for #name #ty_g #where_c {
             const HEAD: usize = ::core::mem::offset_of!(Self, #member)
                 + <#ty as crate::util::rcu::HasRcuHead>::HEAD;
             const WORK: bool = <#ty as crate::util::rcu::HasRcuHead>::WORK;
