@@ -288,11 +288,7 @@ impl BcachefsHandle {
         opts.set_noexcl(true);
         opts.set_nochanges(true);
 
-        let sb = bch_bindgen::sb::io::read_super_opts(path, opts)
-            .map_err(|e| match e.downcast::<BchError>() {
-                Ok(bch_err) => bch_err,
-                Err(_) => BchError::from(libc::EIO),
-            })?;
+        let sb = bcachefs_kernel::sb::io::read_super(&bcachefs_kernel::path_to_cstr(path), &mut opts, None)?;
 
         let dev_idx = sb.sb().dev_idx as i32;
         let uuid = sb.sb().user_uuid.b;

@@ -1,17 +1,15 @@
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::os::fd::AsFd;
-use std::path::Path;
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::ValidateFlags;
 use bcachefs_kernel::c;
 use bcachefs_kernel::util::vstructs::Head;
-use bch_bindgen::sb::io as sb_io;
-use bch_bindgen::sb::SbFieldType;
+use bcachefs_kernel::sb::SbFieldType;
 use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};
-use bcachefs_kernel::sb::io::{SbBuf, BCACHE_MAGIC, BCHFS_MAGIC};
+use bcachefs_kernel::sb::io::{read_super, SbBuf, BCACHE_MAGIC, BCHFS_MAGIC};
 use bcachefs_kernel::util::vstructs::Unvalidated;
 use bcachefs_kernel::sb::members::sb_member;
 use bcachefs_kernel::util::{HumanReadable, Printbuf};
@@ -169,7 +167,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     opts.set_noexcl(true);
     opts.set_nochanges(true);
 
-    let mut src_sb = sb_io::read_super_opts(Path::new(src_device), opts)
+    let mut src_sb = read_super(&bcachefs_kernel::path_to_cstr(src_device), &mut opts, None)
         .map_err(|e| anyhow!("Error opening {}: {}", src_device, e))?;
 
     let nr_devices = src_sb.sb().nr_devices as i32;

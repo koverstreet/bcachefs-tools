@@ -11,7 +11,6 @@ pub mod c {
 pub mod data;
 pub mod fs;
 pub mod keyutils;
-pub mod sb;
 
 pub use bcachefs_kernel::accounting;
 pub use bcachefs_kernel::OptId;

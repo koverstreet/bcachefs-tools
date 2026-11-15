@@ -360,7 +360,7 @@ fn set_state_offline(device: &str, new_state: c::MemberState) -> Result<()> {
     opts.set_degraded(DegradedAction::very);
 
     // Read superblock to get dev_idx
-    let sb_handle = bch_bindgen::sb::io::read_super_opts(Path::new(device), opts)
+    let sb_handle = bcachefs_kernel::sb::io::read_super(&bcachefs_kernel::path_to_cstr(device), &mut opts, None)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
     let dev_idx = sb_handle.sb().dev_idx as u32;
     drop(sb_handle);

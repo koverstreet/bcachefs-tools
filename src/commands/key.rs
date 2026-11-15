@@ -1,11 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
 use bcachefs_kernel::c::{bch_key, bch_encrypted_key};
 use bch_bindgen::c;
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::fs::{Fs, OpenFs, SbLockGuard};
-use bch_bindgen::sb::io as sb_io;
+use bcachefs_kernel::sb::io::read_super;
 use clap::Parser;
 
 use crate::key::{sb_is_encrypted, KeyHandle, Keyring, Passphrase, PassphraseCorrect};
@@ -33,8 +33,8 @@ pub struct UnlockCli {
 
 fn cmd_unlock(cli: UnlockCli) -> Result<()> {
 
-    let sb = sb_io::read_super(Path::new(&cli.device))
-        .with_context(|| format!("Error opening {}", cli.device))?;
+    let sb = read_super(&bcachefs_kernel::path_to_cstr(&cli.device), &mut Default::default(), None)
+        .map_err(|e| anyhow!("Error opening {}: {e}", cli.device))?;
 
     let encrypted = sb_is_encrypted(&sb);
 

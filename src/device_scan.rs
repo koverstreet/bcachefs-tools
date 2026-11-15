@@ -44,7 +44,7 @@ pub fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<b
     opts.set_nochanges(true);
     opts.set_no_version_check(true);
 
-    bch_bindgen::sb::io::read_super_silent(path.as_ref(), opts)
+    bcachefs_kernel::sb::io::read_super_silent(&bcachefs_kernel::path_to_cstr(path), &mut opts)
 }
 
 pub fn should_skip_multipath_component(dev: &udev::Device) -> bool {
@@ -667,8 +667,10 @@ fn scan_sbs_maybe_waiting(device: &String, opts: &bch_opts, wait: bool)
                     warn_multipath_component(path.as_path(), &mpath_dev);
                 }
 
-                bch_bindgen::sb::io::read_super_opts(path.as_ref(), opts)
+                let mut opts = opts;
+                bcachefs_kernel::sb::io::read_super(&bcachefs_kernel::path_to_cstr(&path), &mut opts, None)
                     .map(|sb| (path, sb))
+                    .map_err(|e| anyhow::anyhow!(e))
             })
             .collect::<Result<Vec<_>>>()
     }
