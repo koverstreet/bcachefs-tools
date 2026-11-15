@@ -44,7 +44,7 @@ unsafe impl RawLockBase for RawSpinLock {
 unsafe impl RawMovableLock for RawSpinLock {}
 
 unsafe impl RawLock for RawSpinLock {
-    unsafe fn lock(&self) -> MemallocFlags {
+    fn lock(&self) -> MemallocFlags {
         let s = &self.state;
         if s.compare_exchange(UNLOCKED, LOCKED, Acquire, Relaxed).is_err() {
             while s.swap(CONTENDED, Acquire) != UNLOCKED {
@@ -61,7 +61,7 @@ unsafe impl RawLock for RawSpinLock {
         }
     }
 
-    unsafe fn assert_held(&self) {}
+    fn assert_held(&self) {}
 }
 
 // ── SpinLockIrq ──────────────────────────────────────────────────────────
@@ -78,20 +78,20 @@ unsafe impl RawLockBase for SpinLockIrq {
 unsafe impl RawMovableLock for SpinLockIrq {}
 
 unsafe impl RawLock for SpinLockIrq {
-    unsafe fn lock(&self) -> MemallocFlags {
-        unsafe { self.0.lock() }
+    fn lock(&self) -> MemallocFlags {
+        self.0.lock()
     }
 
     unsafe fn unlock(&self, noreclaim: MemallocFlags) {
         unsafe { self.0.unlock(noreclaim) }
     }
 
-    unsafe fn assert_held(&self) {}
+    fn assert_held(&self) {}
 }
 
 unsafe impl RawNestedLock for SpinLockIrq {
-    unsafe fn lock_nested(&self, _subclass: u32) -> MemallocFlags {
-        unsafe { self.lock() }
+    fn lock_nested(&self, _subclass: u32) -> MemallocFlags {
+        self.lock()
     }
 }
 
@@ -109,13 +109,13 @@ unsafe impl RawLockBase for SpinLock {
 unsafe impl RawMovableLock for SpinLock {}
 
 unsafe impl RawLock for SpinLock {
-    unsafe fn lock(&self) -> MemallocFlags {
-        unsafe { self.0.lock() }
+    fn lock(&self) -> MemallocFlags {
+        self.0.lock()
     }
 
     unsafe fn unlock(&self, noreclaim: MemallocFlags) {
         unsafe { self.0.unlock(noreclaim) }
     }
 
-    unsafe fn assert_held(&self) {}
+    fn assert_held(&self) {}
 }

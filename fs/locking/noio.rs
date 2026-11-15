@@ -132,9 +132,9 @@ unsafe impl<R: RawLockBase, const F: u32> RawLockBase for Memalloc<R, F> {
 }
 
 unsafe impl<R: RawLock, const F: u32> RawLock for Memalloc<R, F> {
-    unsafe fn lock(&self) -> Self::GuardState {
+    fn lock(&self) -> Self::GuardState {
         let scope = MemallocFlags::new(F);
-        (scope, unsafe { self.0.lock() })
+        (scope, self.0.lock())
     }
 
     unsafe fn unlock(&self, (scope, g): Self::GuardState) {
@@ -142,23 +142,23 @@ unsafe impl<R: RawLock, const F: u32> RawLock for Memalloc<R, F> {
         drop(scope);
     }
 
-    unsafe fn assert_held(&self) {
-        unsafe { self.0.assert_held() }
+    fn assert_held(&self) {
+        self.0.assert_held()
     }
 }
 
 unsafe impl<R: RawTryLock, const F: u32> RawTryLock for Memalloc<R, F> {
-    unsafe fn try_lock(&self) -> Option<Self::GuardState> {
+    fn try_lock(&self) -> Option<Self::GuardState> {
         // not taken: dropped, so restored
         let scope = MemallocFlags::new(F);
-        Some((scope, unsafe { self.0.try_lock() }?))
+        Some((scope, self.0.try_lock()?))
     }
 }
 
 unsafe impl<R: RawReadLock, const F: u32> RawReadLock for Memalloc<R, F> {
-    unsafe fn lock_read(&self) -> Self::GuardState {
+    fn lock_read(&self) -> Self::GuardState {
         let scope = MemallocFlags::new(F);
-        (scope, unsafe { self.0.lock_read() })
+        (scope, self.0.lock_read())
     }
 
     unsafe fn unlock_read(&self, (scope, g): Self::GuardState) {
@@ -168,8 +168,8 @@ unsafe impl<R: RawReadLock, const F: u32> RawReadLock for Memalloc<R, F> {
 }
 
 unsafe impl<R: RawRwLock, const F: u32> RawRwLock for Memalloc<R, F> {
-    unsafe fn assert_held_any(&self) {
-        unsafe { self.0.assert_held_any() }
+    fn assert_held_any(&self) {
+        self.0.assert_held_any()
     }
 }
 
@@ -188,7 +188,7 @@ impl<'a, R: RawRwLock<GuardState = ()>, const F: u32, G: Sync, P, A> SharedGuard
         let lock = self.lock();
         unsafe { lock.raw().0.unlock_read(()) };
         let ret = f(&mut lock.write().placed());
-        unsafe { lock.raw().0.lock_read() };
+        lock.raw().0.lock_read();
         ret
     }
 }
@@ -202,7 +202,7 @@ impl<'a, R: RawLock<GuardState = ()>, const F: u32, G, P, A> ExclusiveGuard<'a, 
         let lock = self.lock();
         unsafe { lock.raw().0.unlock(()) };
         let ret = f();
-        unsafe { lock.raw().0.lock() };
+        lock.raw().0.lock();
         ret
     }
 }

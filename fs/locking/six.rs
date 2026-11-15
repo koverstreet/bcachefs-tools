@@ -1440,7 +1440,7 @@ impl c::six_lock {
 }
 
 unsafe impl RawReadLock for c::six_lock {
-    unsafe fn lock_read(&self) {
+    fn lock_read(&self) {
         self.lock_type(SixLockType::SIX_LOCK_read)
     }
 
@@ -1450,7 +1450,7 @@ unsafe impl RawReadLock for c::six_lock {
 }
 
 unsafe impl RawSixLock for c::six_lock {
-    unsafe fn lock_intent(&self) {
+    fn lock_intent(&self) {
         self.lock_type(SixLockType::SIX_LOCK_intent)
     }
 

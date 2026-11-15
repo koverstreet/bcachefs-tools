@@ -24,7 +24,7 @@ unsafe impl RawLockBase for RwSem {
 }
 
 unsafe impl RawLock for RwSem {
-    unsafe fn lock(&self) {
+    fn lock(&self) {
         unsafe { c::down_write(self.as_ptr().cast()) }
     }
 
@@ -32,13 +32,13 @@ unsafe impl RawLock for RwSem {
         unsafe { c::up_write(self.as_ptr().cast()) }
     }
 
-    unsafe fn assert_held(&self) {
+    fn assert_held(&self) {
         lockdep::rwsem_assert_held_write(self)
     }
 }
 
 unsafe impl RawReadLock for RwSem {
-    unsafe fn lock_read(&self) {
+    fn lock_read(&self) {
         unsafe { c::down_read(self.as_ptr().cast()) }
     }
 
@@ -48,13 +48,13 @@ unsafe impl RawReadLock for RwSem {
 }
 
 unsafe impl RawTryReadLock for RwSem {
-    unsafe fn try_lock_read(&self) -> Option<()> {
+    fn try_lock_read(&self) -> Option<()> {
         (unsafe { c::down_read_trylock(self.as_ptr().cast()) } != 0).then_some(())
     }
 }
 
 unsafe impl RawRwLock for RwSem {
-    unsafe fn assert_held_any(&self) {
+    fn assert_held_any(&self) {
         lockdep::rwsem_assert_held(self)
     }
 }

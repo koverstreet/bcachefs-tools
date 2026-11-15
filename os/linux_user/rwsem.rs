@@ -23,7 +23,7 @@ unsafe impl RawLockBase for RwSem {
 }
 
 unsafe impl RawLock for RwSem {
-    unsafe fn lock(&self) {
+    fn lock(&self) {
         self.0.lock_exclusive()
     }
 
@@ -31,11 +31,11 @@ unsafe impl RawLock for RwSem {
         unsafe { self.0.unlock_exclusive() }
     }
 
-    unsafe fn assert_held(&self) {}
+    fn assert_held(&self) {}
 }
 
 unsafe impl RawReadLock for RwSem {
-    unsafe fn lock_read(&self) {
+    fn lock_read(&self) {
         self.0.lock_shared()
     }
 
@@ -45,11 +45,11 @@ unsafe impl RawReadLock for RwSem {
 }
 
 unsafe impl RawTryReadLock for RwSem {
-    unsafe fn try_lock_read(&self) -> Option<()> {
+    fn try_lock_read(&self) -> Option<()> {
         self.0.try_lock_shared().then_some(())
     }
 }
 
 unsafe impl RawRwLock for RwSem {
-    unsafe fn assert_held_any(&self) {}
+    fn assert_held_any(&self) {}
 }

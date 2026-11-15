@@ -58,11 +58,11 @@ unsafe impl<R: RawLockBase> RawLockBase for Lockdep<R> {
 }
 
 unsafe impl<R: RawTryLock> RawLock for Lockdep<R> {
-    unsafe fn lock(&self) -> R::GuardState {
+    fn lock(&self) -> R::GuardState {
         self.dep_map.acquire(false, false, 0);
-        let g = unsafe { self.raw.try_lock() }.unwrap_or_else(|| {
+        let g = self.raw.try_lock().unwrap_or_else(|| {
             self.dep_map.contended(0);
-            unsafe { self.raw.lock() }
+            self.raw.lock()
         });
         self.dep_map.acquired(0);
         g
@@ -73,25 +73,25 @@ unsafe impl<R: RawTryLock> RawLock for Lockdep<R> {
         unsafe { self.raw.unlock(g) }
     }
 
-    unsafe fn assert_held(&self) {
-        unsafe { self.raw.assert_held() }
+    fn assert_held(&self) {
+        self.raw.assert_held()
     }
 }
 
 unsafe impl<R: RawTryLock> RawTryLock for Lockdep<R> {
-    unsafe fn try_lock(&self) -> Option<R::GuardState> {
-        let g = unsafe { self.raw.try_lock() }?;
+    fn try_lock(&self) -> Option<R::GuardState> {
+        let g = self.raw.try_lock()?;
         self.dep_map.acquire(true, false, 0);
         Some(g)
     }
 }
 
 unsafe impl<R: RawTimedLock> RawTimedLock for Lockdep<R> {
-    unsafe fn try_lock_timeout(&self, timeout: c_ulong) -> Option<R::GuardState> {
+    fn try_lock_timeout(&self, timeout: c_ulong) -> Option<R::GuardState> {
         self.dep_map.acquire(false, false, 0);
-        let g = unsafe { self.raw.try_lock() }.or_else(|| {
+        let g = self.raw.try_lock().or_else(|| {
             self.dep_map.contended(0);
-            unsafe { self.raw.try_lock_timeout(timeout) }
+            self.raw.try_lock_timeout(timeout)
         });
         match g {
             Some(_) => self.dep_map.acquired(0),

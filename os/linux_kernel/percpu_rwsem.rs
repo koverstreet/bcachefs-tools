@@ -35,7 +35,7 @@ unsafe impl RawLockBase for PercpuRwSem {
 }
 
 unsafe impl RawLock for PercpuRwSem {
-    unsafe fn lock(&self) {
+    fn lock(&self) {
         unsafe { rust_percpu_down_write(self.as_ptr().cast()) }
     }
 
@@ -43,13 +43,13 @@ unsafe impl RawLock for PercpuRwSem {
         unsafe { rust_percpu_up_write(self.as_ptr().cast()) }
     }
 
-    unsafe fn assert_held(&self) {
+    fn assert_held(&self) {
         lockdep::percpu_rwsem_assert_held_write(self)
     }
 }
 
 unsafe impl RawReadLock for PercpuRwSem {
-    unsafe fn lock_read(&self) {
+    fn lock_read(&self) {
         unsafe { rust_percpu_down_read(self.as_ptr().cast()) }
     }
 
@@ -59,7 +59,7 @@ unsafe impl RawReadLock for PercpuRwSem {
 }
 
 unsafe impl RawRwLock for PercpuRwSem {
-    unsafe fn assert_held_any(&self) {
+    fn assert_held_any(&self) {
         lockdep::percpu_rwsem_assert_held(self)
     }
 }

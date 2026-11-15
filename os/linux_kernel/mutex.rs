@@ -40,7 +40,7 @@ unsafe impl RawLockBase for Mutex {
 }
 
 unsafe impl RawLock for Mutex {
-    unsafe fn lock(&self) {
+    fn lock(&self) {
         unsafe { c::mutex_lock(self.as_ptr().cast()) }
     }
 
@@ -48,13 +48,13 @@ unsafe impl RawLock for Mutex {
         unsafe { c::mutex_unlock(self.as_ptr().cast()) }
     }
 
-    unsafe fn assert_held(&self) {
+    fn assert_held(&self) {
         lockdep::mutex_assert_held(self)
     }
 }
 
 unsafe impl RawTryLock for Mutex {
-    unsafe fn try_lock(&self) -> Option<()> {
+    fn try_lock(&self) -> Option<()> {
         (unsafe { c::mutex_trylock(self.as_ptr().cast()) } as i32 != 0).then_some(())
     }
 }
@@ -62,12 +62,12 @@ unsafe impl RawTryLock for Mutex {
 // Without lockdep's lock tracking, mutex_lock_nested() is a macro, mutex_lock()
 unsafe impl RawNestedLock for Mutex {
     #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    unsafe fn lock_nested(&self, subclass: u32) {
+    fn lock_nested(&self, subclass: u32) {
         unsafe { c::mutex_lock_nested(self.as_ptr().cast(), subclass) }
     }
 
     #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
-    unsafe fn lock_nested(&self, _subclass: u32) {
-        unsafe { self.lock() }
+    fn lock_nested(&self, _subclass: u32) {
+        self.lock()
     }
 }

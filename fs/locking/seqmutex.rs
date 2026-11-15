@@ -35,8 +35,8 @@ unsafe impl RawLockBase for seqmutex {
 }
 
 unsafe impl RawLock for seqmutex {
-    unsafe fn lock(&self) {
-        unsafe { self.lock.lock() };
+    fn lock(&self) {
+        self.lock.lock();
         self.seq.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -44,8 +44,8 @@ unsafe impl RawLock for seqmutex {
         unsafe { self.lock.unlock(()) }
     }
 
-    unsafe fn assert_held(&self) {
-        unsafe { self.lock.assert_held() }
+    fn assert_held(&self) {
+        self.lock.assert_held()
     }
 }
 
@@ -61,7 +61,7 @@ impl<G, P> Locked<seqmutex, G, P> {
         }
 
         // retaken, not counted: no one else has taken it
-        unsafe { l.lock.try_lock() }?;
+        l.lock.try_lock()?;
         let g = unsafe { ExclusiveGuard::from_held(self, Some(())) };
 
         if l.seq.load(Ordering::Relaxed) != at.0 {

@@ -34,7 +34,7 @@ unsafe impl RawLockBase for SpinLockIrq {
 unsafe impl RawMovableLock for SpinLockIrq {}
 
 unsafe impl RawLock for SpinLockIrq {
-    unsafe fn lock(&self) -> (c_ulong, MemallocFlags) {
+    fn lock(&self) -> (c_ulong, MemallocFlags) {
         let flags = unsafe { c::rust_spin_lock_irqsave(self.as_ptr().cast()) };
         (flags, MemallocFlags::noreclaim())
     }
@@ -43,13 +43,13 @@ unsafe impl RawLock for SpinLockIrq {
         unsafe { c::rust_spin_unlock_irqrestore(self.as_ptr().cast(), flags) }
     }
 
-    unsafe fn assert_held(&self) {
+    fn assert_held(&self) {
         lockdep::spin_lock_assert_held(self)
     }
 }
 
 unsafe impl RawNestedLock for SpinLockIrq {
-    unsafe fn lock_nested(&self, subclass: u32) -> (c_ulong, MemallocFlags) {
+    fn lock_nested(&self, subclass: u32) -> (c_ulong, MemallocFlags) {
         let flags = unsafe { c::rust_spin_lock_irqsave_nested(self.as_ptr().cast(), subclass) };
         (flags, MemallocFlags::noreclaim())
     }
@@ -78,7 +78,7 @@ unsafe impl RawLockBase for SpinLock {
 unsafe impl RawMovableLock for SpinLock {}
 
 unsafe impl RawLock for SpinLock {
-    unsafe fn lock(&self) -> MemallocFlags {
+    fn lock(&self) -> MemallocFlags {
         unsafe { b::spin_lock(self.0.as_ptr()) };
         MemallocFlags::noreclaim()
     }
@@ -87,7 +87,7 @@ unsafe impl RawLock for SpinLock {
         unsafe { b::spin_unlock(self.0.as_ptr()) };
     }
 
-    unsafe fn assert_held(&self) {
+    fn assert_held(&self) {
         lockdep::spin_lock_assert_held(&self.0)
     }
 }
@@ -109,7 +109,7 @@ unsafe impl RawLockBase for RawSpinLock {
 unsafe impl RawMovableLock for RawSpinLock {}
 
 unsafe impl RawLock for RawSpinLock {
-    unsafe fn lock(&self) -> MemallocFlags {
+    fn lock(&self) -> MemallocFlags {
         unsafe { c::rust_raw_spin_lock(self.as_ptr().cast()) };
         MemallocFlags::noreclaim()
     }
@@ -118,7 +118,7 @@ unsafe impl RawLock for RawSpinLock {
         unsafe { c::rust_raw_spin_unlock(self.as_ptr().cast()) }
     }
 
-    unsafe fn assert_held(&self) {
+    fn assert_held(&self) {
         lockdep::raw_spin_lock_assert_held(self)
     }
 }

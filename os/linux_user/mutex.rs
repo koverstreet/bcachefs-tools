@@ -23,7 +23,7 @@ unsafe impl RawLockBase for Mutex {
 }
 
 unsafe impl RawLock for Mutex {
-    unsafe fn lock(&self) {
+    fn lock(&self) {
         self.0.lock()
     }
 
@@ -31,17 +31,17 @@ unsafe impl RawLock for Mutex {
         unsafe { self.0.unlock() }
     }
 
-    unsafe fn assert_held(&self) {}
+    fn assert_held(&self) {}
 }
 
 unsafe impl RawTryLock for Mutex {
-    unsafe fn try_lock(&self) -> Option<()> {
+    fn try_lock(&self) -> Option<()> {
         self.0.try_lock().then_some(())
     }
 }
 
 unsafe impl RawNestedLock for Mutex {
-    unsafe fn lock_nested(&self, _subclass: u32) {
-        unsafe { self.lock() }
+    fn lock_nested(&self, _subclass: u32) {
+        self.lock()
     }
 }

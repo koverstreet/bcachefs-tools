@@ -15,9 +15,9 @@ use core::ops::{Deref, DerefMut};
 /// # Safety
 /// All of its state is interior-mutable - the kernel's locks are Opaques,
 /// ours atomics - so it's taken and released through a shared reference,
-/// from any thread. Callers pass an initialized lock, except to init() - a
-/// zeroed kernel mutex isn't one: its wait list is null - and release with
-/// the state taking it returned.
+/// from any thread. One that exists is a lock: init()'s, never zeroes - a
+/// zeroed kernel mutex's wait list is null - so taking it is safe; it's
+/// released with the state taking it returned.
 pub unsafe trait RawLockBase {
     /// What releasing it needs: the interrupt state spin_lock_irqsave()
     /// saved, the memalloc flags a Noio saved, or nothing.
@@ -50,14 +50,14 @@ pub unsafe trait RawMovableLock: RawLockBase {}
 /// lock() excludes every other holder until unlock(); as RawLockBase's
 /// otherwise.
 pub unsafe trait RawLock: RawLockBase {
-    unsafe fn lock(&self) -> Self::GuardState;
+    fn lock(&self) -> Self::GuardState;
 
     unsafe fn unlock(&self, g: Self::GuardState);
 
     /// That it's held exclusively - lockdep_assert_held(), and
     /// lockdep_assert_held_write() for a lock readers can share: a reader
     /// holding it isn't enough.
-    unsafe fn assert_held(&self);
+    fn assert_held(&self);
 }
 
 /// A RawLock that can be tried: taken only if no one holds it.
@@ -66,7 +66,7 @@ pub unsafe trait RawLock: RawLockBase {
 /// try_lock() is RawLock's lock(), when it returns Some; when None, nothing's
 /// taken, and nothing's left to release.
 pub unsafe trait RawTryLock: RawLock {
-    unsafe fn try_lock(&self) -> Option<Self::GuardState>;
+    fn try_lock(&self) -> Option<Self::GuardState>;
 }
 
 /// A RawTryLock that can be waited for, for a while.
@@ -75,7 +75,7 @@ pub unsafe trait RawTryLock: RawLock {
 /// try_lock_timeout() is RawTryLock's try_lock(), but waiting up to @timeout
 /// jiffies for it.
 pub unsafe trait RawTimedLock: RawTryLock {
-    unsafe fn try_lock_timeout(&self, timeout: c_ulong) -> Option<Self::GuardState>;
+    fn try_lock_timeout(&self, timeout: c_ulong) -> Option<Self::GuardState>;
 }
 
 /// A RawLock that can be taken as one of several of its lockdep class held
@@ -84,7 +84,7 @@ pub unsafe trait RawTimedLock: RawTryLock {
 /// # Safety
 /// lock_nested() is RawLock's lock(), but for what lockdep is told.
 pub unsafe trait RawNestedLock: RawLock {
-    unsafe fn lock_nested(&self, subclass: u32) -> Self::GuardState;
+    fn lock_nested(&self, subclass: u32) -> Self::GuardState;
 }
 
 /// A lock readers share, whatever else it has - RawRwLock's writer,
@@ -94,7 +94,7 @@ pub unsafe trait RawNestedLock: RawLock {
 /// lock_read() excludes only what writes, until unlock_read(); as
 /// RawLockBase's otherwise.
 pub unsafe trait RawReadLock: RawLockBase {
-    unsafe fn lock_read(&self) -> Self::GuardState;
+    fn lock_read(&self) -> Self::GuardState;
     unsafe fn unlock_read(&self, g: Self::GuardState);
 }
 
@@ -104,7 +104,7 @@ pub unsafe trait RawReadLock: RawLockBase {
 /// try_lock_read() is lock_read(), when it returns Some; when None, nothing's
 /// taken, and nothing's left to release.
 pub unsafe trait RawTryReadLock: RawReadLock {
-    unsafe fn try_lock_read(&self) -> Option<Self::GuardState>;
+    fn try_lock_read(&self) -> Option<Self::GuardState>;
 }
 
 /// A RawLock that readers can share: RawLock's lock() and unlock() are the
@@ -114,7 +114,7 @@ pub unsafe trait RawTryReadLock: RawReadLock {
 /// lock() excludes readers too; as RawLock's and RawReadLock's otherwise.
 pub unsafe trait RawRwLock: RawLock + RawReadLock {
     /// lockdep_assert_held(): by a reader or the writer.
-    unsafe fn assert_held_any(&self);
+    fn assert_held_any(&self);
 }
 
 /// A six lock: read; intent, shared with readers but held by one at a time;
@@ -127,7 +127,7 @@ pub unsafe trait RawRwLock: RawLock + RawReadLock {
 /// holder, and released by unlock_write() before its unlock_intent(); as
 /// RawReadLock's otherwise.
 pub unsafe trait RawSixLock: RawReadLock {
-    unsafe fn lock_intent(&self) -> Self::GuardState;
+    fn lock_intent(&self) -> Self::GuardState;
     unsafe fn unlock_intent(&self, g: Self::GuardState);
     unsafe fn lock_write(&self) -> Self::GuardState;
     unsafe fn unlock_write(&self, g: Self::GuardState);
@@ -240,7 +240,7 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
 
 impl<R: RawLock, G, P> Locked<R, G, P> {
     pub fn lock(&self) -> ExclusiveGuard<'_, R, G, P> {
-        let state = unsafe { self.raw.lock() };
+        let state = self.raw.lock();
         ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 
@@ -250,7 +250,7 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     where
         R: RawNestedLock,
     {
-        let state = unsafe { self.raw.lock_nested(subclass) };
+        let state = self.raw.lock_nested(subclass);
         ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 
@@ -259,7 +259,7 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     where
         R: RawTryLock,
     {
-        let state = unsafe { self.raw.try_lock() }?;
+        let state = self.raw.try_lock()?;
         Some(ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData })
     }
 
@@ -268,13 +268,13 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     where
         R: RawTimedLock,
     {
-        let state = unsafe { self.raw.try_lock_timeout(timeout) }?;
+        let state = self.raw.try_lock_timeout(timeout)?;
         Some(ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData })
     }
 
     /// Held exclusively - by the writer, for a lock readers share.
     pub fn assert_held(&self) {
-        unsafe { self.raw.assert_held() }
+        self.raw.assert_held()
     }
 
     /// What it protects, unlocked: for a racy peek, one that can live with
@@ -299,7 +299,7 @@ impl<R: RawLockBase, G, P> Deref for Locked<R, G, P> {
 
 impl<R: RawReadLock, G: Sync, P> Locked<R, G, P> {
     pub fn read(&self) -> SharedGuard<'_, R, G, P> {
-        let state = unsafe { self.raw.lock_read() };
+        let state = self.raw.lock_read();
         SharedGuard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 
@@ -308,7 +308,7 @@ impl<R: RawReadLock, G: Sync, P> Locked<R, G, P> {
     where
         R: RawTryReadLock,
     {
-        let state = unsafe { self.raw.try_lock_read() }?;
+        let state = self.raw.try_lock_read()?;
         Some(SharedGuard { lock: self, state: Some(state), _not_send: PhantomData })
     }
 }
@@ -319,13 +319,13 @@ impl<R: RawRwLock, G: Sync, P> Locked<R, G, P> {
     }
 
     pub fn assert_held_any(&self) {
-        unsafe { self.raw.assert_held_any() }
+        self.raw.assert_held_any()
     }
 }
 
 impl<R: RawSixLock, G: Sync, P> Locked<R, G, P> {
     pub fn intent(&self) -> SharedGuard<'_, R, G, P, SixIntent> {
-        let state = unsafe { self.raw.lock_intent() };
+        let state = self.raw.lock_intent();
         SharedGuard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 }

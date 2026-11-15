@@ -105,7 +105,7 @@ unsafe impl RawLockBase for ByteLock {
 unsafe impl RawMovableLock for ByteLock {}
 
 unsafe impl RawLock for ByteLock {
-    unsafe fn lock(&self) {
+    fn lock(&self) {
         self.take()
     }
 
@@ -113,19 +113,19 @@ unsafe impl RawLock for ByteLock {
         self.release()
     }
 
-    unsafe fn assert_held(&self) {
+    fn assert_held(&self) {
         debug_assert_ne!(self.0.load(Ordering::Relaxed), UNLOCKED);
     }
 }
 
 unsafe impl RawTryLock for ByteLock {
-    unsafe fn try_lock(&self) -> Option<()> {
+    fn try_lock(&self) -> Option<()> {
         self.try_take().then_some(())
     }
 }
 
 unsafe impl RawTimedLock for ByteLock {
-    unsafe fn try_lock_timeout(&self, timeout: c_ulong) -> Option<()> {
+    fn try_lock_timeout(&self, timeout: c_ulong) -> Option<()> {
         crate::os::sched::might_sleep();
 
         (self.try_take() || self.take_contended_until(jiffies().wrapping_add(timeout))).then_some(())
