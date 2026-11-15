@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The export operations: what exportfs, for NFS, has a filesystem do to turn
-//! a file handle back into a dentry connected to the tree. They're a trait,
-//! ExportOps, declared by vfs_ops! (ops.rs) as the super ops are: Self what
-//! s_fs_info points to, Fs, and bch2_export_ops the table, s_export_op.
+//! a file handle back into a dentry connected to the tree: os::export's
+//! ExportOps, Fs's, and EXPORT_OPS the table, s_export_op.
 //!
 //! A handle is a Fid - inode number, subvolume, generation - or, for a file
 //! that isn't a directory, encoded with its parent, a FidWithParent: packed,
@@ -34,12 +33,10 @@ use crate::util::os_str::OsStrExt;
 use cstruct_macros::vtable;
 
 use crate::os::dentry::Dentry;
+use crate::os::export::{ExportOps, ExportVTable, NameBuf};
 use super::inode::{InodeInfo, InodeRef};
 use super::super_block::SuperBlock;
 use crate::format::Btree;
-
-/// A name as get_name returns it: at most NAME_MAX bytes, and a NUL.
-pub(crate) type NameBuf = [u8; c::NAME_MAX as usize + 1];
 
 /// @d's name, as get_name returns it: cut at NAME_MAX.
 fn copy_name(out: &mut NameBuf, d: Dirent<'_>) {
@@ -113,33 +110,10 @@ impl Fs {
     }
 }
 
-crate::vfs_ops! {
-    pub(crate) trait ExportOps for c::export_operations, ExportVTable<T: ExportOps> = T;
-
-    /// @name NAME_MAX + 1 bytes.
-    fn get_name(&self = child, parent: Dentry<'_>, name: &mut NameBuf, child: Dentry<'_>)
-        -> Result<(), BchError>;
-    /// As fh_to_dentry(), the directory @child is in's.
-    fn get_parent(&self = child, child: Dentry<'_>) -> *mut c::dentry;
-
-    unsafe {
-        /// @inode's handle - with @parent's, if given - into @fh, *@max_len
-        /// u32s: its type, and *@max_len its length - or FILEID_INVALID, and
-        /// the length it needs.
-        fn encode_fh(&self = inode, inode: &InodeInfo, fh: *mut u32, max_len: *mut c_int,
-                         parent: Option<&InodeInfo>) -> c_int;
-        /// The dentry handle @fid, @fh_len u32s, of @fh_type names: NULL for
-        /// one that isn't ours, an ERR_PTR, or d_obtain_alias()'s.
-        fn fh_to_dentry(&self = sb, sb: &SuperBlock, fid: *mut c::fid, fh_len: c_int,
-                            fh_type: c_int) -> *mut c::dentry;
-        /// As fh_to_dentry(), the handle's parent's.
-        fn fh_to_parent(&self = sb, sb: &SuperBlock, fid: *mut c::fid, fh_len: c_int,
-                            fh_type: c_int) -> *mut c::dentry;
-    }
-}
-
 #[vtable]
 impl ExportOps for Fs {
+    type Inode = InodeInfo;
+
     fn get_name(&self, parent: Dentry<'_>, name: &mut NameBuf, child: Dentry<'_>) -> Result<(), BchError> {
         let dir = parent.inode();
         if !dir.vfs().is_dir() {

@@ -218,7 +218,6 @@ pub mod vfs {
     pub mod io;
     pub mod namei;
     pub mod new_inode;
-    pub mod ops;
     pub mod pagecache;
     pub mod path;
     pub mod status_fd;
