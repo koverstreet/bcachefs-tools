@@ -37,7 +37,8 @@ use crate::util::bio::BioRange;
 
 use super::buffered;
 use super::buffered_write::{self, WriteBegun};
-use super::folio::{AddressSpaceOps, AopsVTable, FolioStateGuard};
+use super::folio::FolioStateGuard;
+use crate::os::folio::{AddressSpaceOps, AopsVTable};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use super::writeback;
@@ -430,6 +431,8 @@ impl Folio {
 
 #[vtable]
 impl AddressSpaceOps for InodeInfo {
+    type FsData = WriteBegun;
+
     fn read_folio(_file: *mut c::file, folio: FolioGuard<'_>) -> Result<(), BchError> {
         let mapping = folio.mapping().expect("a folio to read, in its mapping");
         folio.read_single(mapping, false)

@@ -1,20 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A page cache folio's bcachefs state - bch_folio, vfs/pagecache.c's - and a
-//! mapping's operations; the folios and the page cache are os::folio's.
+//! A page cache folio's bcachefs state - bch_folio, vfs/pagecache.c's; the
+//! folios, the page cache and its operations are os::folio's.
 //!
 //! A folio's state is created on it before it's read into, and
 //! partially_uptodate is the read's to keep; the rest is under the state's
 //! lock, lock_state()'s.
 
-use super::buffered_write::WriteBegun;
 use super::inode::InodeInfo;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::{ExclusiveGuard, SpinLockIrq};
-use crate::os::folio::{Folio, FolioGuard, LockedFolio, Mapping, Readahead, VfsWriter, Wbc};
-use crate::util::alloc::KBox;
-use core::ffi::{c_int, c_uint, c_void};
+use crate::os::folio::{Folio, FolioGuard, Mapping};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{AcqRel, Relaxed};
@@ -172,27 +169,4 @@ impl Mapping {
             }
         }
     }
-}
-
-crate::vfs_ops! {
-    /// A mapping's operations, address_space_operations.
-    pub(crate) trait AddressSpaceOps for c::address_space_operations, AopsVTable<T: AddressSpaceOps> = T;
-
-    /// @folio's data read in; its lock, the VFS's, given up either way.
-    fn read_folio(_file: *mut c::file, folio: FolioGuard<'_>) -> Result<(), BchError>;
-    fn readahead(ra: Readahead<'_>);
-    fn writepages(mapping: Mapping, wbc: Wbc) -> c_int;
-    /// @folio marked dirty: whether it wasn't.
-    fn dirty_folio(mapping: Mapping, folio: Folio) -> bool;
-    /// The folio @len bytes at @pos are written into, locked, in *@foliop,
-    /// and what write_end() has of the write, in *@fsdata.
-    fn write_begin(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint,
-                   foliop: &mut *mut c::folio, fsdata: &mut *mut c_void) -> Result<(), BchError>;
-    /// @copied of the @len bytes at @pos written into @folio, write_begin()'s:
-    /// how many were.
-    fn write_end(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint, copied: c_uint,
-                 folio: LockedFolio, begun: KBox<WriteBegun>) -> c_int;
-    fn invalidate_folio(folio: Folio, offset: usize, len: usize);
-    /// Whether @folio's bcachefs state was freed, for the folio to be.
-    fn release_folio(folio: Folio, gfp: c::gfp_t) -> bool;
 }

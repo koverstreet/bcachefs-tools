@@ -21,9 +21,10 @@ use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::os::iov_iter::IovIter;
 use crate::os::kernel::{cond_resched, loff};
-use crate::os::ops::from_raw;
+use crate::os::ops::{from_raw, FromRaw};
+use crate::util::alloc::KBox;
 use core::borrow::Borrow;
-use core::ffi::{c_int, c_void};
+use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, Deref};
 use core::ptr::NonNull;
@@ -572,4 +573,35 @@ from_raw! {
     /// write_begin()'s out parameters.
     &'a mut *mut c::folio = *mut *mut c::folio    => |r| &mut *r;
     &'a mut *mut c_void   = *mut *mut c_void      => |r| &mut *r;
+}
+
+/// write_end()'s fsdata: what write_begin() gave the VFS, given back.
+impl<T> FromRaw for KBox<T> {
+    type Raw = *mut c_void;
+    unsafe fn from_raw(r: *mut c_void) -> Self { unsafe { KBox::from_raw(r.cast()) } }
+}
+
+crate::vfs_ops! {
+    /// A mapping's operations, address_space_operations.
+    pub(crate) trait AddressSpaceOps for c::address_space_operations, AopsVTable<T: AddressSpaceOps> = T;
+    // What write_begin() leaves write_end() of the write, in *@fsdata
+    type FsData;
+
+    /// @folio's data read in; its lock, the VFS's, given up either way.
+    fn read_folio(_file: *mut c::file, folio: FolioGuard<'_>) -> Result<(), BchError>;
+    fn readahead(ra: Readahead<'_>);
+    fn writepages(mapping: Mapping, wbc: Wbc) -> c_int;
+    /// @folio marked dirty: whether it wasn't.
+    fn dirty_folio(mapping: Mapping, folio: Folio) -> bool;
+    /// The folio @len bytes at @pos are written into, locked, in *@foliop,
+    /// and what write_end() has of the write, in *@fsdata.
+    fn write_begin(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint,
+                   foliop: &mut *mut c::folio, fsdata: &mut *mut c_void) -> Result<(), BchError>;
+    /// @copied of the @len bytes at @pos written into @folio, write_begin()'s:
+    /// how many were.
+    fn write_end(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint, copied: c_uint,
+                 folio: LockedFolio, begun: KBox<Self::FsData>) -> c_int;
+    fn invalidate_folio(folio: Folio, offset: usize, len: usize);
+    /// Whether @folio's filesystem state was freed, for the folio to be.
+    fn release_folio(folio: Folio, gfp: c::gfp_t) -> bool;
 }

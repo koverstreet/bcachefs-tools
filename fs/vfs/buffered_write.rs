@@ -15,8 +15,7 @@ use crate::util::alloc::KBox;
 use kernel::alloc::flags;
 use crate::os::iov_iter::IovIter;
 use crate::os::kernel::{cond_resched, current_id, fatal_signal_pending, likely, unlikely, PAGE_SIZE};
-use crate::os::ops::{from_raw, IntoRaw};
-use core::ffi::c_void;
+use crate::os::ops::IntoRaw;
 use kernel::page::PAGE_SHIFT;
 
 fn fgf_set_order(size: usize) -> c::fgf_t {
@@ -28,11 +27,6 @@ fn fgf_set_order(size: usize) -> c::fgf_t {
 pub(crate) struct WriteBegun {
     _add: c::TwoStateGuard<'static, c::PagecacheAdd>,
     res:  FolioReservation<'static>,
-}
-
-from_raw! {
-    /// write_end()'s fsdata: write_begin()'s, given back.
-    KBox<WriteBegun> = *mut c_void => |r| KBox::from_raw(r.cast());
 }
 
 /* buffered writes: */
