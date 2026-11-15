@@ -221,9 +221,12 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
     ///
     /// # Safety
     /// init_zeroed() runs before anything takes it.
-    pub const unsafe fn uninit(g: G, p: P) -> Self {
+    pub const unsafe fn uninit(g: G, p: P) -> Self
+    where
+        R: ::pin_init::Zeroable,
+    {
         Self {
-            raw:       unsafe { core::mem::zeroed() },
+            raw:       ::pin_init::zeroed(),
             protected: UnsafeCell::new(g),
             published: p,
             _pin:      PhantomData,
