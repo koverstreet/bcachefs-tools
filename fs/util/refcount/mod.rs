@@ -3,8 +3,8 @@
 //! Refcounts, and refs on them.
 //!
 //! A Refcount is a count on a T, and each count is a type of its own: a T
-//! with two counts has a type for each, as a device has DevIo<R> for its read
-//! and write io refs.
+//! with two counts has a type for each, as a device's read and write io refs
+//! are each a Placed count of their own.
 //!
 //! A ref keeps what it counts alive - and what that's in: its owner waits
 //! the count out before it frees it. That's what a refcount is, and it's

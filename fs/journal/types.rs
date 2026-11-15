@@ -20,7 +20,7 @@ use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
 use crate::journal::pins::{flush_degraded, pin_resize};
 use crate::journal::reclaim::discard_work;
-use crate::os::kernel::{PAGE_SIZE, WRITE};
+use crate::os::kernel::PAGE_SIZE;
 use crate::data_structures::list::ListLinks;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy};
 use core::cell::Cell;
@@ -677,7 +677,7 @@ pub struct journal_device {
     #[init(new_lock!((), "&ca->journal.discard_lock"))]
     pub discard_lock: Locked<c::mutex>,
     #[pin]
-    pub(crate) discard: ReffedWork<discard_work, crate::field!(super.io_ref[WRITE])>,
+    pub(crate) discard: ReffedWork<discard_work, crate::field!(super.io_ref_write)>,
 }
 
 /*

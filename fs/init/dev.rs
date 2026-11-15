@@ -405,9 +405,9 @@ impl Dev {
             self.fs().devs_online.clear(self.dev_idx.into());
         }
 
-        if !self.io_ref[rw].is_zero() {
-            self.io_ref[rw].stop();
-            self.io_ref[rw].wait();
+        if !self.io_ref(rw).is_zero() {
+            self.io_ref(rw).stop();
+            self.io_ref(rw).wait();
         }
     }
 
@@ -505,8 +505,8 @@ pub(crate) fn dev_free(ca: ARef<Dev>) {
     ca.ref_outer.stop();
     ca.ref_outer.wait();
 
-    crate::warn_on!(!ca.io_ref[WRITE].is_zero());
-    crate::warn_on!(!ca.io_ref[READ].is_zero());
+    crate::warn_on!(!ca.io_ref_write.is_zero());
+    crate::warn_on!(!ca.io_ref_read.is_zero());
 
     // not in release(): kobject_put() has taken the kobject out of sysfs by
     // then, and the links in it can't be removed
@@ -542,7 +542,7 @@ impl Fs {
 
 impl StateLockWrite<'_> {
     pub fn dev_offline(&self, ca: &Dev) {
-        if ca.io_ref[READ].is_zero() {
+        if ca.io_ref_read.is_zero() {
             return;
         }
 
@@ -764,8 +764,8 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
         return fs.throw(Errcode::device_size_too_small);
     }
 
-    assert!(ca.io_ref[READ].is_zero(), "attaching device {ca} with read refs");
-    assert!(ca.io_ref[WRITE].is_zero(), "attaching device {ca} with write refs");
+    assert!(ca.io_ref_read.is_zero(), "attaching device {ca} with read refs");
+    assert!(ca.io_ref_write.is_zero(), "attaching device {ca} with write refs");
 
     let ca_p = ca.as_ptr();
     crate::journal::buckets::load(&ca, sb.io.buf.sb())?;
@@ -784,7 +784,7 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
         (*ca_p).dev = crate::os::blkdev::dev(ca.disk_sb.bdev());
     }
 
-    ca.io_ref[READ].start();
+    ca.io_ref_read.start();
 
     Ok(())
 }
@@ -874,8 +874,8 @@ impl StateLockWrite<'_> {
         self.dev_allocator_add(ca);
         recalc_capacity(fs);
 
-        if ca.io_ref[WRITE].is_zero() {
-            ca.io_ref[WRITE].start();
+        if ca.io_ref_write.is_zero() {
+            ca.io_ref_write.start();
         }
 
         fs.do_discards_async();
@@ -1109,7 +1109,7 @@ impl StateLockWrite<'_> {
 
             if fs.flags.get(c::FsFlag::rw) &&
                ca.mi.get().state == MemberState::rw &&
-               !ca.io_ref[READ].is_zero() {
+               !ca.io_ref_read.is_zero() {
                 self.dev_read_write(ca);
             }
         }

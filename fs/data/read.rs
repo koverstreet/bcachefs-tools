@@ -1109,7 +1109,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
     }
 
     let ca: Option<DevIoRef<c::DevReadRefKind>> =
-        if !pick.do_ec_reconstruct { fs.dev_get_ioref(pick.ptr.dev().into()) } else { None };
+        if !pick.do_ec_reconstruct { fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into()) } else { None };
 
     // Stale dirty pointers are treated as IO errors, but @failed isn't
     // allocated unless we're in the retry path - so if we're not in the retry
@@ -1517,7 +1517,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
         }
     }
 
-    let (r, ca, p) = (f.kind.rbio(), f.ca.as_deref().map(|ca| &**ca), &mut f.plan);
+    let (r, ca, p) = (f.kind.rbio(), f.ca.as_deref(), &mut f.plan);
     if ca.is_some_and(|ca| ca.dev_ptr_stale(&p.pick.ptr, &read_lock())) {
         fs.event_inc_trace(events::data_read_reuse_race, |out| {
             let _noreclaim = MemallocFlags::noreclaim();

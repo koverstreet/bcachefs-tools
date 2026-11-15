@@ -142,7 +142,7 @@ extern "C" fn nocow_write_done(mut op: Running<Op>) {
 fn bkey_get_dev_iorefs(fs: &Fs, k: BkeySC<'_, Ptrs>, cas: &mut [Option<DevWriteRef>]) -> Option<usize> {
     let mut i = 0;
     for ptr in k.ptrs(fs) {
-        cas[i] = Some(fs.dev_get_ioref(ptr.dev().into())?);
+        cas[i] = Some(fs.dev_get_ioref::<c::DevWriteRefKind>(ptr.dev().into())?);
         i += 1;
     }
 
@@ -213,7 +213,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
         };
         let cas = &mut cas[..nr_cas];
         let devs: [Option<&Dev>; c::BCH_BKEY_PTRS_MAX as usize] =
-            core::array::from_fn(|i| cas.get(i).and_then(Option::as_deref).map(|ca| &**ca));
+            core::array::from_fn(|i| cas.get(i).and_then(Option::as_deref));
         let devs = &devs[..nr_cas];
 
         /* Unlock before taking nocow locks, doing IO: */
@@ -287,7 +287,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
 
         op.closure().get().leak();
 
-        unsafe { submit_wbio_replicas(to_wbio(bio), op.fs(), DataType::user, copy.key(), Some(cas)) };
+        unsafe { submit_wbio_replicas(to_wbio::<c::DevWriteRefKind>(bio), op.fs(), DataType::user, copy.key(), Some(cas)) };
 
         if op.has(w::convert_unwritten) {
             op.insert_keys.push_key(copy.key());

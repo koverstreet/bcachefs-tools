@@ -9,7 +9,6 @@ use crate::cstructs::c;
 use crate::new_lock;
 use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitflags;
-use crate::os::kernel::WRITE;
 use crate::os::kobject::Kobject;
 use crate::util::projections::Volatile;
 use crate::util::bio::BioSet;
@@ -244,8 +243,11 @@ pub struct Dev {
     #[init(AtomicRef::new(()))]
     pub ref_outer: Placed<AtomicRef<()>, crate::at!(Dev.ref_outer)>,
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| crate::util::refcount::PercpuRef::new_dead::<()>()))]
-    pub io_ref: [crate::util::refcount::PercpuRef; 2],
+    #[init(crate::util::refcount::PercpuRef::new_dead::<()>())]
+    pub io_ref_read: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.io_ref_read)>,
+    #[pin]
+    #[init(crate::util::refcount::PercpuRef::new_dead::<()>())]
+    pub io_ref_write: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.io_ref_write)>,
 
     /// Its filesystem, from the start, attached or not: bch2_dev_add()
     /// writes its superblock before it has a slot, and what fails before then
@@ -348,11 +350,11 @@ pub struct Dev {
 
     #[pin]
     pub(crate) invalidate_work:
-        ReffedWork<do_invalidates_work, (crate::field!(io_ref[WRITE]), crate::field!(fs->writes))>,
+        ReffedWork<do_invalidates_work, (crate::field!(io_ref_write), crate::field!(fs->writes))>,
 
     #[pin]
     pub(crate) discard_fast_work:
-        ReffedWork<do_discards_fast, (crate::field!(io_ref[WRITE]), crate::field!(fs->writes))>,
+        ReffedWork<do_discards_fast, (crate::field!(io_ref_write), crate::field!(fs->writes))>,
     /// Buckets queued for fast discard: alloc/discard.rs's alone.
     #[pin]
     #[init(new_lock!(KVVec::new()))]

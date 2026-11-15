@@ -118,8 +118,8 @@ impl Gathered<BlockErrs> for EcBio {
     fn done(self: Pin<&mut Self>, status: Result<(), BchError>) -> BlockErrs {
         let this = self.project();
         let e = match this.ca.take().expect("a round's bio, with its device") {
-            BlockDev::Read(ca)  => block_done(ca, this.ptr, *this.submit_time, status),
-            BlockDev::Write(ca) => block_done(ca, this.ptr, *this.submit_time, status),
+            BlockDev::Read(ca)  => block_done::<c::DevReadRefKind>(ca, this.ptr, *this.submit_time, status),
+            BlockDev::Write(ca) => block_done::<c::DevWriteRefKind>(ca, this.ptr, *this.submit_time, status),
         };
         let mut errs = BlockErrs::default();
         errs.0[usize::from(*this.idx)] = e;

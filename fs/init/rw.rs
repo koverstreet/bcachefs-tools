@@ -301,7 +301,7 @@ impl StateLockWrite<'_> {
             for ca in fs.online_devs_rcu(&rcu) {
                 if ca.mi.get().state == MemberState::rw {
                     self.dev_allocator_add(ca);
-                    ca.io_ref[WRITE].start();
+                    ca.io_ref_write.start();
                 }
             }
         }

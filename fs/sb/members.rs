@@ -19,14 +19,13 @@ use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::place::Placed;
-use crate::util::refcount::{AtomicRef, PercpuRef, RefGuard, Refcount, TryRefcount};
+use crate::util::refcount::{AtomicRef, PercpuRef, RefGuard, TryRefcount};
 use crate::alloc::disk_groups;
 use crate::util::ffi::c_char;
 use crate::data_structures::strided::{Strided, StridedMut};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, plain_bytes, Head, Unsized, Unvalidated};
 use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::PhantomData;
-use core::ops::Deref;
 use core::sync::atomic::Ordering;
 use cstruct_macros::{MaybeZeroable, TypeInfo};
 use super::io::*;
@@ -1090,7 +1089,7 @@ impl Fs {
     /// writing only if it's rw: bch2_dev_get_ioref().
     pub fn dev_get_ioref<R: IoRefIdx>(&self, dev: u32) -> Option<DevIoRef<R>> {
         let rcu = read_lock();
-        let ca = self.io_ref_tryget(self.dev_rcu(dev, &rcu)?)?;
+        let ca = self.io_ref_tryget::<R>(self.dev_rcu(dev, &rcu)?)?;
         // then_some(), eager: a write ref on a device that isn't rw is put
         (R::RW == READ || ca.mi.get().state == MemberState::rw).then_some(ca)
     }
@@ -1098,7 +1097,7 @@ impl Fs {
     /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
     /// past the section, and the guard hands it out only while it's held.
     pub(crate) fn io_ref_tryget<R: IoRefIdx>(&self, ca: &Dev) -> Option<DevIoRef<R>> {
-        DevIoRef::tryget_live(DevIo::<R>::of(ca))
+        R::count(ca).tryget_live()
     }
 
     /// What @f makes of each device it doesn't skip: each step its own RCU
@@ -1126,18 +1125,18 @@ impl Fs {
     pub fn io_members<R: IoRefIdx>(&self, state_ok: impl Fn(MemberState) -> bool + 'static)
                                    -> impl Iterator<Item = DevIoRef<R>> + '_ {
         self.walk(move |ca| {
-            state_ok(ca.mi.get().state).then(|| self.io_ref_tryget(ca)).flatten()
+            state_ok(ca.mi.get().state).then(|| self.io_ref_tryget::<R>(ca)).flatten()
         })
     }
 
     /// Every online device, an io ref for reading on each: for_each_online_member().
     pub fn online_members(&self) -> impl Iterator<Item = DevIoRef<c::DevReadRefKind>> + '_ {
-        self.io_members(|_| true)
+        self.io_members::<c::DevReadRefKind>(|_| true)
     }
 
     /// The rw devices, an io ref for writing on each: for_each_rw_member().
     pub fn rw_members(&self) -> impl Iterator<Item = DevIoRef<c::DevWriteRefKind>> + '_ {
-        self.io_members(|s| s == MemberState::rw)
+        self.io_members::<c::DevWriteRefKind>(|s| s == MemberState::rw)
     }
 
 }
@@ -1218,18 +1217,31 @@ impl DevRef {
     }
 }
 
-/// Which of a device's io refs: DevReadRefKind for io_ref[READ],
-/// DevWriteRefKind for io_ref[WRITE].
+/// Which of a device's io refs: DevReadRefKind for io_ref_read,
+/// DevWriteRefKind for io_ref_write.
 pub trait IoRefIdx: 'static {
     const RW: usize;
+    type Count: TryRefcount<Target = Dev>;
+
+    fn count(ca: &Dev) -> &Self::Count;
 }
 
 impl IoRefIdx for c::DevReadRefKind {
     const RW: usize = READ;
+    type Count = Placed<PercpuRef, crate::at!(Dev.io_ref_read)>;
+
+    fn count(ca: &Dev) -> &Self::Count {
+        &ca.io_ref_read
+    }
 }
 
 impl IoRefIdx for c::DevWriteRefKind {
     const RW: usize = WRITE;
+    type Count = Placed<PercpuRef, crate::at!(Dev.io_ref_write)>;
+
+    fn count(ca: &Dev) -> &Self::Count {
+        &ca.io_ref_write
+    }
 }
 
 /// What a guard of @N covers on each of its filesystem's devices - each
@@ -1274,56 +1286,21 @@ where
     }
 }
 
-/// A device, counted by its io refs for R: io_ref[R::RW].
-#[repr(transparent)]
-pub struct DevIo<R>(Dev, PhantomData<R>);
-
-impl<R> DevIo<R> {
-    /// @ca, counted by its io refs for R.
-    pub fn of(ca: &Dev) -> &Self {
-        unsafe { &*core::ptr::from_ref(ca).cast() }
-    }
-}
-
-impl<R> Deref for DevIo<R> {
-    type Target = Dev;
-
-    fn deref(&self) -> &Dev {
-        &self.0
-    }
-}
-
-// SAFETY: io_ref[R::RW]'s
-unsafe impl<R: IoRefIdx> Refcount for DevIo<R> {
-    type Target = Self;
-
-    fn target(&self) -> &Self {
-        self
-    }
-
-    unsafe fn inc(&self) {
-        unsafe { self.io_ref[R::RW].inc() }
-    }
-
-    unsafe fn dec(&self) {
-        unsafe { self.io_ref[R::RW].dec() }
-    }
-}
-
-// SAFETY: io_ref[R::RW]'s
-unsafe impl<R: IoRefIdx> TryRefcount for DevIo<R> {
-    fn try_inc(&self) -> bool {
-        self.io_ref[R::RW].try_inc()
-    }
-
-    fn try_inc_live(&self) -> bool {
-        self.io_ref[R::RW].try_inc_live()
-    }
-}
 
 /// An io ref on a device - for reading or writing, as R is: its block
 /// device is open while it's held.
-pub type DevIoRef<R> = RefGuard<DevIo<R>>;
+pub type DevIoRef<R> = RefGuard<<R as IoRefIdx>::Count>;
+
+impl Dev {
+    /// Its io ref count for @rw, READ or WRITE.
+    pub fn io_ref(&self, rw: usize) -> &PercpuRef {
+        match rw {
+            READ  => &self.io_ref_read,
+            WRITE => &self.io_ref_write,
+            _     => panic!("io ref of a device for {rw}, not READ or WRITE"),
+        }
+    }
+}
 
 // SAFETY: a device is every thread's that does IO to it, as its filesystem
 // is: its state behind its own locks, atomics and RCU - so a &bch_dev goes to
@@ -1497,7 +1474,7 @@ impl Dev {
 
     /// Whether its block device is open for IO: bch2_dev_is_online().
     pub fn is_online(&self) -> bool {
-        !self.io_ref[READ].is_zero()
+        !self.io_ref_read.is_zero()
     }
 
     /// Whether the allocator writes to it: bch2_dev_is_rw().

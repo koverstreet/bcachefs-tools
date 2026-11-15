@@ -143,6 +143,7 @@ use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle};
 use crate::os::blkdev::BlockDevice;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
+use crate::util::refcount::{RefGuard, Refcount};
 use crate::locking::Guard as _;
 use crate::sb::errors::SbErrorId;
 use crate::sb::members;
@@ -2095,8 +2096,10 @@ impl SbResize for DevSbResize<'_> {
 impl Fs {
     /// @devs' superblocks, to edit together - as dev_sb_mut() gives each, and
     /// None for one with none, not attached. Panics if one's twice in @devs.
-    pub fn dev_sbs_mut<'a, R: members::IoRefIdx>(&self, sb: &'a mut SbLockGuard<'_>, devs: &'a [members::DevIoRef<R>])
+    pub fn dev_sbs_mut<'a, C>(&self, sb: &'a mut SbLockGuard<'_>, devs: &'a [RefGuard<C>])
         -> impl Iterator<Item = Option<DevSbMut<'a>>>
+    where
+        C: Refcount<Target = Dev>,
     {
         for ca in devs {
             self.dev_sb_check(sb, ca);
