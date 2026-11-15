@@ -17,16 +17,17 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::printbuf::Printbuf;
 
-use crate::wrappers::io::{ReadOp, WriteOp};
+use crate::wrappers::io::{self, WriteResult};
 
 /// Userspace extension methods on the core [`Fs`].
 pub trait FsExt {
     fn open(devs: &[PathBuf], opts: c::bch_opts) -> Result<OpenFs, BchError>;
     fn open_with_key(devs: &[PathBuf], opts: c::bch_opts, user_key: Option<&c::bch_key>)
         -> Result<OpenFs, BchError>;
-    fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64) -> WriteOp;
+    fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64)
+        -> Result<WriteResult, BchError>;
     fn read<'a>(&self, inum: c::subvol_inum, offset: u64, inode: &c::bch_inode_unpacked,
-                buf: &'a mut [MaybeUninit<u8>]) -> ReadOp<'a>;
+                buf: &'a mut [MaybeUninit<u8>]) -> Result<&'a mut [u8], BchError>;
     fn dev_add(&self, path: &str) -> Result<(), BchError>;
 }
 
@@ -49,8 +50,10 @@ impl FsExt for Fs {
         OpenFs::open(devs.iter().map(CString::as_c_str), &mut opts, user_key)
     }
 
-    fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64) -> WriteOp {
-        WriteOp::new(self, inum, offset, subvol, replicas, data, new_i_size)
+    fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64)
+        -> Result<WriteResult, BchError>
+    {
+        io::write(self, inum, offset, subvol, replicas, data, new_i_size)
     }
 
     fn read<'a>(
@@ -59,8 +62,8 @@ impl FsExt for Fs {
         offset: u64,
         inode: &c::bch_inode_unpacked,
         buf: &'a mut [MaybeUninit<u8>],
-    ) -> ReadOp<'a> {
-        ReadOp::new(self, inum, offset, inode, buf)
+    ) -> Result<&'a mut [u8], BchError> {
+        io::read(self, inum, offset, inode, buf)
     }
 
 

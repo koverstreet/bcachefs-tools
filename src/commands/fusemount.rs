@@ -62,7 +62,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
-use crate::wrappers::io::block_on;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
@@ -529,13 +528,12 @@ fn fuse_truncate(fs: &Fs, inum: c::subvol_inum, new_size: u64) -> Result<(), Bch
     if tail != 0 {
         let block_start = new_size - tail as u64;
         let mut buf = io_buf(block_size as usize, Flags::empty())?;
-        let buf = block_on(fs.read(inum, block_start, &bi, &mut buf))?;
+        let buf = fs.read(inum, block_start, &bi, &mut buf)?;
 
         if buf[tail..].iter().any(|&b| b != 0) {
             buf[tail..].fill(0);
             let replicas = std::cmp::max(inode_opts::get_inode(fs, &bi).data_replicas as u32, 1);
-            block_on(fs.write(bi.bi_inum, block_start, inum.subvol as u32,
-                              replicas, buf, new_size))?;
+            fs.write(bi.bi_inum, block_start, inum.subvol as u32, replicas, buf, new_size)?;
         }
     }
 
@@ -1189,7 +1187,7 @@ impl Filesystem for BcachefsFs {
             return;
         };
 
-        let buf = match block_on(fs.read(inum, 0, &bi, &mut buf)) {
+        let buf = match fs.read(inum, 0, &bi, &mut buf) {
             Ok(buf) => buf,
             Err(e)  => { reply.error(bch_err(&e)); return; }
         };
@@ -1291,8 +1289,7 @@ impl Filesystem for BcachefsFs {
         buf[..link_bytes.len()].copy_from_slice(link_bytes);
 
         let sym_inum = c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum };
-        if let Err(e) = block_on(fs.write(new_inode.bi_inum, 0, dir.subvol as u32,
-                                          1, &buf, link_bytes.len() as u64)) {
+        if let Err(e) = fs.write(new_inode.bi_inum, 0, dir.subvol as u32, 1, &buf, link_bytes.len() as u64) {
             reply.error(bch_err(&e));
             return;
         }
@@ -1494,7 +1491,7 @@ impl Filesystem for BcachefsFs {
             return;
         };
 
-        let buf = match block_on(fs.read(inum, aligned_start, &bi, &mut buf)) {
+        let buf = match fs.read(inum, aligned_start, &bi, &mut buf) {
             Ok(buf) => buf,
             Err(e)  => { reply.error(bch_err(&e)); return; }
         };
@@ -1541,7 +1538,7 @@ impl Filesystem for BcachefsFs {
 
         // RMW: read partial start block
         if pad_start > 0 {
-            if let Err(e) = block_on(fs.read(inum, aligned_start, &bi, &mut buf[..block_size as usize])) {
+            if let Err(e) = fs.read(inum, aligned_start, &bi, &mut buf[..block_size as usize]) {
                 reply.error(bch_err(&e));
                 return;
             }
@@ -1552,7 +1549,7 @@ impl Filesystem for BcachefsFs {
         if pad_end > 0 && !(pad_start > 0 && aligned_size == block_size as usize) {
             let end_block_offset = aligned_end - block_size;
             let buf_offset = aligned_size - block_size as usize;
-            if let Err(e) = block_on(fs.read(inum, end_block_offset, &bi, &mut buf[buf_offset..])) {
+            if let Err(e) = fs.read(inum, end_block_offset, &bi, &mut buf[buf_offset..]) {
                 reply.error(bch_err(&e));
                 return;
             }
@@ -1574,8 +1571,7 @@ impl Filesystem for BcachefsFs {
         // lies past it, and a write into the middle of the file would lose the
         // rest of its last block (stored as a short inline extent).
         let new_i_size = std::cmp::max(bi.bi_size, offset + size as u64);
-        if let Err(e) = block_on(fs.write(bi.bi_inum, aligned_start, inum.subvol as u32,
-                                          replicas, &buf, new_i_size)) {
+        if let Err(e) = fs.write(bi.bi_inum, aligned_start, inum.subvol as u32, replicas, buf, new_i_size) {
             reply.error(bch_err(&e));
             return;
         }

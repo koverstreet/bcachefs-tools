@@ -16,7 +16,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
-use crate::wrappers::io::{block_on, MAX_IO_SIZE};
+use crate::wrappers::io::MAX_IO_SIZE;
 use bcachefs_kernel::alloc::capacity::DiskReservation;
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{spos, BkeyV, BKEY_U64S};
@@ -411,9 +411,7 @@ fn write_data(
     offset: u64,
     data: &[u8],
 ) -> Result<(), BchError> {
-    let result = block_on(
-        fs.write(dst_inode.bi_inum, offset, 1, 1, data, u64::MAX)
-    )?;
+    let result = fs.write(dst_inode.bi_inum, offset, 1, 1, data, u64::MAX)?;
     dst_inode.bi_sectors = (dst_inode.bi_sectors as i64 + result.sectors_delta) as u64;
     Ok(())
 }
@@ -727,7 +725,7 @@ fn copy_sync_file_range(
         let src_buf = pread_zero_tail(src_fd, &mut src_buf, read_len, start)?;
 
         let mut dst_buf = io_buf(b, Flags::empty())?;
-        let dst_buf = block_on(fs.read(dst_inum, start, dst, &mut dst_buf))?;
+        let dst_buf = fs.read(dst_inum, start, dst, &mut dst_buf)?;
 
         let mut m = Range { start: 0, end: 0 };
         loop {
