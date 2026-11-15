@@ -33,7 +33,6 @@ type Io = c::bch_writepage_io;
 struct WritepageState {
     io:   Option<NonNull<Io>>,
     opts: c::bch_inode_opts,
-    tmp:  *mut c::bch_folio_sector,
 }
 
 /// The VFS's writeback of a mapping, for the writepages() it's passed to.
@@ -225,7 +224,7 @@ fn throttle_writes(fs: &Fs, cl: &StackClosure) {
     }
 }
 
-fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int {
+fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut [c::bch_folio_sector]) -> c_int {
     let mapping = folio.mapping().expect("a folio in writeback with no mapping");
     let inode = mapping.inode();
     let fs = inode.fs();
@@ -267,7 +266,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
     folio.reserve_writeback(inode).expect("writeback's disk reservation can't fail");
 
     /* Before unlocking the page, get copy of reservations: */
-    let tmp = unsafe { core::slice::from_raw_parts_mut(w.tmp, f_sectors) };
+    let tmp = &mut tmp[..f_sectors];
     let res_nr_replicas = {
         let mut st = folio.lock_state();
 
@@ -350,14 +349,16 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
     let inode = mapping.inode();
     let fs = inode.fs();
     let pool = &fs.vfs.writepage_buf_pool;
-    let mut tmp = {
+    let tmp = {
         let _noio = MemallocFlags::noio();
-        Box::<[u8], _>::try_new_uninit_slice_in(pool.element_size(), &**pool)
+        Box::<[c::bch_folio_sector], _>::try_new_zeroed_slice_in(
+            pool.element_size() / size_of::<c::bch_folio_sector>(), &**pool)
     }.expect("a pool's allocation: it waits for an element");
+    // zeroed is a bch_folio_sector
+    let mut tmp = unsafe { tmp.assume_init() };
     let mut w = WritepageState {
         io:   None,
         opts: inode_opts::get_inode(fs, &inode.inode()),
-        tmp:  Box::as_mut_ptr(&mut tmp).cast(),
     };
 
     let ret = plugged(|| {
@@ -370,7 +371,7 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
             throttle_writes(fs, &cl);
             let Some(folio) = wbc.next(mapping, prev, &mut ret) else { break };
             prev = Some(*folio);
-            ret = writepage(folio, &wbc, &mut w);
+            ret = writepage(folio, &wbc, &mut w, &mut tmp);
         }
 
         if w.io.is_some() {
