@@ -277,7 +277,7 @@ fn star_start_of_lines(s: &str) -> String {
 
 fn journal_entry_header_to_text(
     out: &mut Printbuf,
-    c_fs: *mut Fs,
+    fs: &Fs,
     p: &c::journal_replay,
     blacklisted: bool,
 ) {
@@ -293,13 +293,13 @@ fn journal_entry_header_to_text(
         if blacklisted { "blacklisted " } else { "" },
         p.j.seq.get(),
         p.j.bytes(),
-        p.j.sectors(unsafe { (*c_fs).block_bits }.into()),
+        p.j.sectors(fs.block_bits.into()),
         p.j.version.get(),
         p.j.last_seq.get(),
         if p.j.no_flush() { 0 } else { 1 },
     );
 
-    journal_ptrs_to_text(out, unsafe { Fs::borrow_raw(c_fs) }, p);
+    journal_ptrs_to_text(out, fs, p);
     out.newline();
 }
 
@@ -334,7 +334,7 @@ fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
 
 fn print_one_entry(
     out: &mut Printbuf,
-    c_fs: *mut Fs,
+    fs: &Fs,
     f: &JournalFilter,
     p: &c::journal_replay,
     entry: &c::jset_entry,
@@ -366,7 +366,7 @@ fn print_one_entry(
     if !f.bkey_val && entry_is_print_key(entry) {
         journal_entry_keys_noval_to_text(&mut ind, entry);
     } else {
-        journal_entry_to_text(&mut ind, Some(unsafe { Fs::borrow_raw(c_fs) }), entry.as_unvalidated());
+        journal_entry_to_text(&mut ind, Some(fs), entry.as_unvalidated());
         ind.newline();
     }
 
@@ -377,12 +377,12 @@ fn print_one_entry(
     }
 }
 
-fn journal_replay_print(c_fs: *mut Fs, f: &JournalFilter, p: &c::journal_replay,
+fn journal_replay_print(fs: &Fs, f: &JournalFilter, p: &c::journal_replay,
                         j: &c::jset) {
     let mut buf = Printbuf::new();
     let seq = p.j.seq.get();
     let blacklisted = p.ignore_blacklisted
-        || unsafe { Fs::borrow_raw(c_fs) }.journal_seq_is_blacklisted(seq, false);
+        || fs.journal_seq_is_blacklisted(seq, false);
     let mut printed_header = false;
 
     if f.datetime_only {
@@ -395,7 +395,7 @@ fn journal_replay_print(c_fs: *mut Fs, f: &JournalFilter, p: &c::journal_replay,
 
         for entry in j.entries() {
             if entry_type(entry) == JsetEntryType::datetime {
-                journal_entry_to_text(&mut buf, Some(unsafe { Fs::borrow_raw(c_fs) }), entry.as_unvalidated());
+                journal_entry_to_text(&mut buf, Some(fs), entry.as_unvalidated());
                 break;
             }
         }
@@ -409,16 +409,16 @@ fn journal_replay_print(c_fs: *mut Fs, f: &JournalFilter, p: &c::journal_replay,
     let all_entries: Vec<&c::jset_entry> = j.entries().collect();
 
     if !f.filtering {
-        journal_entry_header_to_text(&mut buf, c_fs, p, blacklisted);
+        journal_entry_header_to_text(&mut buf, fs, p, blacklisted);
 
         if !f.headers_only {
             for &entry in &all_entries {
-                print_one_entry(&mut buf, c_fs, f, p, entry);
+                print_one_entry(&mut buf, fs, f, p, entry);
             }
         }
     } else {
         if f.all_headers {
-            journal_entry_header_to_text(&mut buf, c_fs, p, blacklisted);
+            journal_entry_header_to_text(&mut buf, fs, p, blacklisted);
             printed_header = true;
         }
 
@@ -447,12 +447,12 @@ fn journal_replay_print(c_fs: *mut Fs, f: &JournalFilter, p: &c::journal_replay,
             let t_entries = &all_entries[t_start..t_end];
             if should_print_transaction(f, t_entries) {
                 if !printed_header {
-                    journal_entry_header_to_text(&mut buf, c_fs, p, blacklisted);
+                    journal_entry_header_to_text(&mut buf, fs, p, blacklisted);
                     printed_header = true;
                 }
 
                 for &entry in t_entries {
-                    print_one_entry(&mut buf, c_fs, f, p, entry);
+                    print_one_entry(&mut buf, fs, f, p, entry);
                 }
             }
         }
@@ -737,7 +737,6 @@ pub(crate) fn list_journal_run(
     nr_entries: Option<u32>,
     interrupted: Option<&dyn Fn() -> bool>,
 ) -> Result<()> {
-    let c_fs = fs.as_ptr();
     let replays = JournalReplays::collect(fs);
 
     // Compute min_seq_to_print for contiguous checking
@@ -752,7 +751,7 @@ pub(crate) fn list_journal_run(
                 seq = p_seq;
             }
 
-            while let Some(missing) = journal_entry_missing_range(unsafe { Fs::borrow_raw(c_fs) }, seq, p_seq) {
+            while let Some(missing) = journal_entry_missing_range(fs, seq, p_seq) {
                 seq = missing.end;
                 min_seq_to_print = missing.end;
             }
@@ -771,7 +770,7 @@ pub(crate) fn list_journal_run(
 
     // Main iteration
     let mut seq = 0u64;
-    let last_seq_ondisk = unsafe { &*c_fs }.journal.lock.last_seq_ondisk.get();
+    let last_seq_ondisk = fs.journal.lock.last_seq_ondisk.get();
 
     for p in replays.iter() {
         if interrupted.is_some_and(|i| i()) {
@@ -798,7 +797,7 @@ pub(crate) fn list_journal_run(
         }
 
         // Print missing ranges
-        while let Some(missing) = journal_entry_missing_range(unsafe { Fs::borrow_raw(c_fs) }, seq, p_seq) {
+        while let Some(missing) = journal_entry_missing_range(fs, seq, p_seq) {
             if f.print_missing {
                 println!(
                     "missing {} entries at {}-{}{}",
@@ -819,7 +818,7 @@ pub(crate) fn list_journal_run(
 
         if !f.blacklisted
             && (p.ignore_blacklisted
-                || unsafe { Fs::borrow_raw(c_fs) }.journal_seq_is_blacklisted(p_seq, false))
+                || fs.journal_seq_is_blacklisted(p_seq, false))
         {
             continue;
         }
@@ -828,7 +827,7 @@ pub(crate) fn list_journal_run(
             continue;
         }
 
-        journal_replay_print(c_fs, f, &p, p.jset());
+        journal_replay_print(fs, f, &p, p.jset());
     }
 
     Ok(())
