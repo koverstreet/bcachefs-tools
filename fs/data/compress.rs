@@ -55,43 +55,18 @@ use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
-use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, TypeInfo, BitfieldMembers};
-use nestify::nest;
+use cstruct_macros::{bitfield, bch_enum, MaybeZeroable};
 use crate::format::{Bpos, CompressionType, SbFeatures};
 
-nest! {
-    #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
-    #[repr(C)]
-    pub union bch_compression_opt {
-        pub value: u8,
-        #>[derive(BitfieldMembers)]
-        #>[repr(C)]
-        pub fields: pub struct bch_compression_opt_fields {
-            #[members]
-            #>[derive(Clone, Copy, MaybeZeroable, TypeInfo)]-
-            #>[bitfield(u8)]
-            pub bits: pub struct bch_compression_opt_bits {
-                type_: u4,
-                level: u4,
-            },
-        },
-    }
+/// A compression option's value: a type, and a level - 0 for the type's
+/// default.
+#[bitfield(u8)]
+pub struct bch_compression_opt {
+    type_: u4,
+    level: u4,
 }
 
 impl bch_compression_opt {
-    /// Opt value @v's type and level.
-    pub fn bits(v: u8) -> bch_compression_opt_bits {
-        // SAFETY: every bit pattern is a value of both
-        unsafe { bch_compression_opt { value: v }.fields.bits }
-    }
-
-    /// The opt value of type @t, at @level.
-    pub fn value(t: u8, level: u8) -> u8 {
-        let bits = bch_compression_opt_bits::new().with_type_(t).with_level(level);
-        // SAFETY: as bits()
-        unsafe { bch_compression_opt { fields: bch_compression_opt_fields { bits } }.value }
-    }
-
     /// The compression type opt type @t writes, if it's one: C's
     /// __bch2_compression_opt_to_type[].
     pub fn type_of(t: u8) -> Option<CompressionType> {
@@ -108,14 +83,14 @@ impl bch_compression_opt {
 
     /// A type there is, and a level only with one.
     pub fn valid(v: u8) -> bool {
-        let bits = Self::bits(v);
+        let bits = Self::from_bits(v);
         Self::type_of(bits.type_()).is_some() && !(bits.type_() == 0 && bits.level() != 0)
     }
 
     /// The compression type @v writes: bch2_compression_opt_to_type(). An
     /// unknown type is none - options are validated, so that's warned about.
     pub fn to_type(v: u8, fs: &Fs) -> CompressionType {
-        Self::type_of(Self::bits(v).type_()).unwrap_or_else(|| {
+        Self::type_of(Self::from_bits(v).type_()).unwrap_or_else(|| {
             crate::warn_once!(true, fs, "unknown compression opt {v}");
             CompressionType::none
         })
@@ -635,7 +610,7 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
         return CompressionType::incompressible;
     }
 
-    let bits = bch_compression_opt::bits(compression_opt);
+    let bits = bch_compression_opt::from_bits(compression_opt);
     let (t, level) = (bits.type_() as usize, bits.level() as u32);
     let Some(compression_type) = bch_compression_opt::type_of(t as u8) else {
         panic!("compressing with opt {compression_opt:#x}");
@@ -781,7 +756,7 @@ pub(crate) unsafe fn bio_compress(fs: &Fs, dst: *mut c::bio, dst_len: &mut usize
 // ── Setup ────────────────────────────────────────────────────────────────
 
 pub(crate) fn check_set_has_compressed_data(fs: &Fs, compression_opt: u8) -> Result<(), BchError> {
-    let t = bch_compression_opt::bits(compression_opt).type_() as usize;
+    let t = bch_compression_opt::from_bits(compression_opt).type_() as usize;
     assert!(t < OPT_NR, "compression opt {compression_opt:#x}");
     if t == 0 {
         return Ok(());
@@ -839,7 +814,7 @@ fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: SbFeatures) -> Result<
 }
 
 pub fn compress_init(fs: &Fs) -> Result<(), BchError> {
-    let opt = |v: u8| opt_feature(bch_compression_opt::bits(v).type_().into());
+    let opt = |v: u8| opt_feature(bch_compression_opt::from_bits(v).type_().into());
     let f = fs.sb.features.get() | opt(fs.opts().compression.get()) | opt(fs.opts().background_compression.get());
     init_features(fs, &fs.sb_lock(), f)
 }
@@ -886,11 +861,11 @@ fn opt_parse(val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchE
             }
         };
     }
-    Ok(bch_compression_opt::value(t as u8, level as u8).into())
+    Ok(bch_compression_opt::new().with_type_(t as u8).with_level(level as u8).into_bits().into())
 }
 
 pub fn opt_to_text(out: &mut Printbuf, v: u64) {
-    let bits = bch_compression_opt::bits(v as u8);
+    let bits = bch_compression_opt::from_bits(v as u8);
     opts(bits.type_().into()).to_text(out);
     if bits.level() != 0 {
         write!(out, ":{}", bits.level());
