@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr};
+use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
@@ -416,6 +417,16 @@ fn write_data(
     Ok(())
 }
 
+/// @buf, read from @src_fd at @offset - up to @len bytes, the file's - and
+/// zeroes past what the read got.
+fn pread_zero_tail<'b>(src_fd: BorrowedFd<'_>, buf: &'b mut [MaybeUninit<u8>], len: usize, offset: u64)
+    -> Result<&'b mut [u8], BchError>
+{
+    let got = rustix::io::pread(src_fd, &mut buf[..len], offset).map_err(rustix_err)?.0.len();
+    buf[got..].fill(MaybeUninit::new(0));
+    Ok(unsafe { crate::util::assume_init_mut(buf) })
+}
+
 fn copy_data(
     fs: &Fs,
     dst_inode: &mut c::bch_inode_unpacked,
@@ -430,11 +441,10 @@ fn copy_data(
         let len = std::cmp::min(end - pos, MAX_IO_SIZE as u64) as usize;
         let padded = ((len as u64).div_ceil(block_size) * block_size) as usize;
 
-        let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(padded, Flags::empty())?;
-        rustix::io::pread(src_fd, &mut buf[..len], pos)
-            .map_err(rustix_err)?;
+        let mut buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(padded, Flags::empty())?;
+        let buf = pread_zero_tail(src_fd, &mut buf, len, pos)?;
 
-        write_data(fs, dst_inode, pos, &buf)?;
+        write_data(fs, dst_inode, pos, buf)?;
         pos += len as u64;
     }
 
@@ -513,11 +523,11 @@ fn copy_link(
     let target_bytes = target.as_bytes();
     let link_len = target_bytes.len() as u64;
 
-    let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(MAX_IO_SIZE, Flags::empty())?;
-    buf[..target_bytes.len()].copy_from_slice(target_bytes);
     let padded = (link_len.div_ceil(block_size) * block_size) as usize;
+    let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(padded, Flags::empty())?;
+    buf[..target_bytes.len()].copy_from_slice(target_bytes);
 
-    write_data(fs, dst, 0, &buf[..padded])
+    write_data(fs, dst, 0, &buf)
 }
 
 fn link_file_data(
@@ -711,17 +721,16 @@ fn copy_sync_file_range(
     while start != range.end {
         let b = std::cmp::min(range.end - start, MAX_IO_SIZE as u64) as usize;
 
-        let mut src_buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(b, Flags::empty())?;
+        let mut src_buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(b, Flags::empty())?;
         let read_len = std::cmp::min(b, (src_size - start) as usize);
-        rustix::io::pread(src_fd, &mut src_buf[..read_len], start)
-            .map_err(rustix_err)?;
+        let src_buf = pread_zero_tail(src_fd, &mut src_buf, read_len, start)?;
 
-        let mut dst_buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(b, Flags::empty())?;
-        block_on(fs.read(dst_inum, start, dst, &mut dst_buf))?;
+        let mut dst_buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(b, Flags::empty())?;
+        let dst_buf = block_on(fs.read(dst_inum, start, dst, &mut dst_buf))?;
 
         let mut m = Range { start: 0, end: 0 };
         loop {
-            m = seek_mismatch_aligned(&src_buf, &dst_buf, m.end as usize, b, block_size);
+            m = seek_mismatch_aligned(src_buf, dst_buf, m.end as usize, b, block_size);
             if m.end == 0 {
                 break;
             }

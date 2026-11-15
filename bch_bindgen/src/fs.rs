@@ -8,6 +8,7 @@
 //! callers `use bch_bindgen::fs::FsExt` to get the method syntax back.
 
 use std::ffi::CString;
+use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
@@ -24,7 +25,8 @@ pub trait FsExt {
     fn open_with_key(devs: &[PathBuf], opts: c::bch_opts, user_key: Option<&c::bch_key>)
         -> Result<OpenFs, BchError>;
     fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64) -> WriteOp;
-    fn read<'a>(&'a self, inum: c::subvol_inum, offset: u64, inode: &c::bch_inode_unpacked, buf: &'a mut [u8]) -> ReadOp;
+    fn read<'a>(&self, inum: c::subvol_inum, offset: u64, inode: &c::bch_inode_unpacked,
+                buf: &'a mut [MaybeUninit<u8>]) -> ReadOp<'a>;
     fn dev_add(&self, path: &str) -> Result<(), BchError>;
 }
 
@@ -52,12 +54,12 @@ impl FsExt for Fs {
     }
 
     fn read<'a>(
-        &'a self,
+        &self,
         inum: c::subvol_inum,
         offset: u64,
         inode: &c::bch_inode_unpacked,
-        buf: &'a mut [u8],
-    ) -> ReadOp {
+        buf: &'a mut [MaybeUninit<u8>],
+    ) -> ReadOp<'a> {
         ReadOp::new(self, inum, offset, inode, buf)
     }
 

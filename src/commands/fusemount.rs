@@ -52,6 +52,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::ffi::OsStr;
+use std::mem::MaybeUninit;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -527,14 +528,14 @@ fn fuse_truncate(fs: &Fs, inum: c::subvol_inum, new_size: u64) -> Result<(), Bch
     let tail = (new_size & (block_size - 1)) as usize;
     if tail != 0 {
         let block_start = new_size - tail as u64;
-        let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(block_size as usize, Flags::empty())?;
-        block_on(fs.read(inum, block_start, &bi, &mut buf))?;
+        let mut buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(block_size as usize, Flags::empty())?;
+        let buf = block_on(fs.read(inum, block_start, &bi, &mut buf))?;
 
         if buf[tail..].iter().any(|&b| b != 0) {
             buf[tail..].fill(0);
             let replicas = std::cmp::max(inode_opts::get_inode(fs, &bi).data_replicas as u32, 1);
             block_on(fs.write(bi.bi_inum, block_start, inum.subvol as u32,
-                              replicas, &buf, new_size))?;
+                              replicas, buf, new_size))?;
         }
     }
 
@@ -1183,15 +1184,15 @@ impl Filesystem for BcachefsFs {
         let block_size = fs.block_bytes() as usize;
         let aligned_size = (size + block_size - 1) & !(block_size - 1);
 
-        let Ok(mut buf) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(aligned_size, Flags::empty()) else {
+        let Ok(mut buf) = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(aligned_size, Flags::empty()) else {
             reply.error(Errno::ENOMEM);
             return;
         };
 
-        if let Err(e) = block_on(fs.read(inum, 0, &bi, &mut buf)) {
-            reply.error(bch_err(&e));
-            return;
-        }
+        let buf = match block_on(fs.read(inum, 0, &bi, &mut buf)) {
+            Ok(buf) => buf,
+            Err(e)  => { reply.error(bch_err(&e)); return; }
+        };
 
         let end = buf[..size].iter().position(|&b| b == 0).unwrap_or(size);
         reply.data(&buf[..end]);
@@ -1488,15 +1489,15 @@ impl Filesystem for BcachefsFs {
         let aligned_end = (offset + read_size as u64).div_ceil(block_size) * block_size;
         let aligned_size = (aligned_end - aligned_start) as usize;
 
-        let Ok(mut buf) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(aligned_size, Flags::empty()) else {
+        let Ok(mut buf) = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(aligned_size, Flags::empty()) else {
             reply.error(Errno::ENOMEM);
             return;
         };
 
-        if let Err(e) = block_on(fs.read(inum, aligned_start, &bi, &mut buf)) {
-            reply.error(bch_err(&e));
-            return;
-        }
+        let buf = match block_on(fs.read(inum, aligned_start, &bi, &mut buf)) {
+            Ok(buf) => buf,
+            Err(e)  => { reply.error(bch_err(&e)); return; }
+        };
 
         reply.data(&buf[pad_start..pad_start + read_size]);
     }
@@ -1532,22 +1533,18 @@ impl Filesystem for BcachefsFs {
         let aligned_end = (offset + size as u64).div_ceil(block_size) * block_size;
         let aligned_size = (aligned_end - aligned_start) as usize;
 
-        let Ok(mut buf) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(aligned_size, Flags::empty()) else {
+        let Ok(mut buf) = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(aligned_size, Flags::empty()) else {
             reply.error(Errno::ENOMEM);
             return;
         };
+        let buf = &mut buf[..];
 
         // RMW: read partial start block
         if pad_start > 0 {
-            let Ok(mut start_block) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(block_size as usize, Flags::empty()) else {
-                reply.error(Errno::ENOMEM);
-                return;
-            };
-            if let Err(e) = block_on(fs.read(inum, aligned_start, &bi, &mut start_block)) {
+            if let Err(e) = block_on(fs.read(inum, aligned_start, &bi, &mut buf[..block_size as usize])) {
                 reply.error(bch_err(&e));
                 return;
             }
-            buf[..block_size as usize].copy_from_slice(&start_block);
         }
 
         // RMW: read partial end block (if different from start)
@@ -1555,19 +1552,18 @@ impl Filesystem for BcachefsFs {
         if pad_end > 0 && !(pad_start > 0 && aligned_size == block_size as usize) {
             let end_block_offset = aligned_end - block_size;
             let buf_offset = aligned_size - block_size as usize;
-            let Ok(mut end_block) = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(block_size as usize, Flags::empty()) else {
-                reply.error(Errno::ENOMEM);
-                return;
-            };
-            if let Err(e) = block_on(fs.read(inum, end_block_offset, &bi, &mut end_block)) {
+            if let Err(e) = block_on(fs.read(inum, end_block_offset, &bi, &mut buf[buf_offset..])) {
                 reply.error(bch_err(&e));
                 return;
             }
-            buf[buf_offset..].copy_from_slice(&end_block);
         }
 
         // Overlay user data
-        buf[pad_start..pad_start + size].copy_from_slice(data);
+        for (b, d) in buf[pad_start..pad_start + size].iter_mut().zip(data) {
+            b.write(*d);
+        }
+        // the data, and the reads of the blocks it doesn't cover
+        let buf = unsafe { crate::util::assume_init_mut(buf) };
 
         // Get inode opts for replicas
         let opts = inode_opts::get_inode(fs, &bi);

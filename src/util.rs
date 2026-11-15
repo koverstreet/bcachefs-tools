@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::fs::File;
 use std::io;
+use std::mem::MaybeUninit;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
@@ -8,6 +9,15 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 use crossterm::{cursor, execute, terminal};
 use rustix::ioctl::{self, Getter};
+
+/// @buf, every byte of which has been written, as bytes: std's
+/// <[MaybeUninit<T>]>::assume_init_mut(), which the 1.85 MSRV hasn't.
+///
+/// # Safety
+/// Every byte of @buf is initialized.
+pub unsafe fn assume_init_mut(buf: &mut [MaybeUninit<u8>]) -> &mut [u8] {
+    unsafe { &mut *(std::ptr::from_mut(buf) as *mut [u8]) }
+}
 
 /// Open a directory fd for directory-scoped ioctls and *at() calls.
 pub fn open_dir(path: &Path) -> Result<OwnedFd> {

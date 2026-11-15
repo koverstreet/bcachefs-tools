@@ -9,11 +9,12 @@
 
 use std::cell::UnsafeCell;
 use std::future::Future;
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 
-use std::ptr::NonNull;
+use std::ptr::{self, NonNull};
 
 use crate::c;
 use bcachefs_kernel::btree::bkey::spos;
@@ -153,17 +154,19 @@ impl Future for WriteOp {
 }
 
 /// A read on a bcachefs filesystem: read by a task, which new() waits for.
-pub struct ReadOp {
-    ret: Result<(), BchError>,
+/// Ready with the buffer as bytes - the read writes all of it, holes and what's
+/// past the data as zeroes.
+pub struct ReadOp<'a> {
+    ret: Option<Result<&'a mut [u8], BchError>>,
 }
 
-impl ReadOp {
+impl<'a> ReadOp<'a> {
     pub fn new(
         fs: &Fs,
         inum: c::subvol_inum,
         offset: u64,
         inode: &c::bch_inode_unpacked,
-        buf: &mut [u8],
+        buf: &'a mut [MaybeUninit<u8>],
     ) -> Self {
         type F = c::ReadFlags;
         let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
@@ -173,12 +176,12 @@ impl ReadOp {
             .expect("a bio_read bio of one bvec: from its mempool");
         b.bio_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
         b.bio_mut().set_sector(offset >> 9);
-        unsafe { b.bio_mut().map(buf.as_mut_ptr(), buf.len()) };
+        unsafe { b.bio_mut().map(buf.as_mut_ptr().cast(), buf.len()) };
 
         let flags = F::retry_if_stale | F::may_promote | F::user_mapped;
         let slot = match TaskSlot::alloc(()) {
             Ok(slot) => slot,
-            Err(e) => return Self { ret: Err(e) },
+            Err(e) => return Self { ret: Some(Err(e)) },
         };
         let mut done = None;
         let (wait, r) = CompletionReturn::new(&mut done, waiter::Sync::current());
@@ -186,15 +189,16 @@ impl ReadOp {
             r.complete(read::read(&b, inum, flags, ()).await);
         }, None).expect("a queue's task: nothing in it fails");
         unsafe { task.start_unchecked() };
-        Self { ret: wait.wait(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read") }
+        let ret = wait.wait(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read");
+        Self { ret: Some(ret.map(|()| unsafe { &mut *(ptr::from_mut(buf) as *mut [u8]) })) }
     }
 }
 
-impl Future for ReadOp {
-    type Output = Result<(), BchError>;
+impl<'a> Future for ReadOp<'a> {
+    type Output = Result<&'a mut [u8], BchError>;
 
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(self.ret)
+        Poll::Ready(self.get_mut().ret.take().expect("a ReadOp polled after it was ready"))
     }
 }
 

@@ -10,13 +10,14 @@
 // pointed at whole files, which are routinely larger than a buffer we want to
 // allocate. Chunking bounds the memory and lets the output stream.
 //
-// Nothing here ever emits a byte it did not read. The buffer is allocated
-// zeroed, so padding is indistinguishable from recovered zeros — for a tool
-// whose whole job is telling you what is actually on disk, that distinction is
-// the product.
+// Nothing here ever emits a byte it did not read: only the length the ioctl
+// returns is written out. Padding would be indistinguishable from recovered
+// zeros — for a tool whose whole job is telling you what is actually on disk,
+// that distinction is the product.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::mem::MaybeUninit;
 use std::os::unix::fs::OpenOptionsExt;
 
 use bch_bindgen::c;
@@ -132,7 +133,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
         .custom_flags(libc::O_DIRECT)
         .open(&cli.file)?;
 
-    let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(cli.len.min(CHUNK) as usize, Flags::empty())?;
+    let mut buf = AlignedBox::<[MaybeUninit<u8>], PAGE_SIZE>::try_new_uninit_slice_gfp(cli.len.min(CHUNK) as usize, Flags::empty())?;
     let mut err_msg_buf = vec![0u8; 4096];
 
     let mut sink = match cli.output {
@@ -185,7 +186,9 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
             }
         };
 
-        sink.write(cli.offset + pos, &buf[..got as usize])?;
+        // what the kernel wrote
+        let data = unsafe { crate::util::assume_init_mut(&mut buf[..got as usize]) };
+        sink.write(cli.offset + pos, data)?;
         pos += got;
 
         // Short of what was asked for, without an error: end of file.
