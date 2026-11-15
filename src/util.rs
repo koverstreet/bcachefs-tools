@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::fs::File;
 use std::io;
-use std::os::fd::OwnedFd;
+use std::os::fd::{BorrowedFd, OwnedFd};
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 
@@ -10,6 +10,39 @@ use crossterm::{cursor, execute, terminal};
 use rustix::ioctl::{self, Getter};
 
 pub use bcachefs_kernel::util::vstructs::assume_init_mut;
+
+/// Print error to stderr and exit with failure status.
+/// Matches the C `die()` function behavior.
+pub fn die(msg: &str) -> ! {
+    eprintln!("{}", msg);
+    std::process::exit(1);
+}
+
+/// FileExt::read_exact_at(), of a borrowed fd.
+pub fn read_exact_at(fd: BorrowedFd<'_>, mut buf: &mut [u8], mut offset: u64) -> io::Result<()> {
+    while !buf.is_empty() {
+        match rustix::io::pread(fd, &mut *buf, offset) {
+            Ok(0)                        => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(n)                        => { buf = &mut std::mem::take(&mut buf)[n..]; offset += n as u64; }
+            Err(rustix::io::Errno::INTR) => {}
+            Err(e)                       => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
+/// FileExt::write_all_at(), of a borrowed fd.
+pub fn write_all_at(fd: BorrowedFd<'_>, mut buf: &[u8], mut offset: u64) -> io::Result<()> {
+    while !buf.is_empty() {
+        match rustix::io::pwrite(fd, buf, offset) {
+            Ok(0)                        => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n)                        => { buf = &buf[n..]; offset += n as u64; }
+            Err(rustix::io::Errno::INTR) => {}
+            Err(e)                       => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
 
 /// Open a directory fd for directory-scoped ioctls and *at() calls.
 pub fn open_dir(path: &Path) -> Result<OwnedFd> {
@@ -88,7 +121,7 @@ pub fn ask_yn() -> bool {
 
     let mut line = String::new();
     if matches!(io::stdin().lock().read_line(&mut line), Err(_) | Ok(0)) {
-        crate::wrappers::super_io::die("error reading from standard input");
+        die("error reading from standard input");
     }
     matches!(line.as_bytes().first(), Some(b'y' | b'Y'))
 }

@@ -5,7 +5,6 @@ pub mod ioctl;
 pub mod journal;
 pub mod online_iter;
 pub mod sb_display;
-pub mod super_io;
 pub mod sysfs;
 
 /// Convert a bcachefs error code to a human-readable string.

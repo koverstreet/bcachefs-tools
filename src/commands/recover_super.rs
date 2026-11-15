@@ -15,7 +15,7 @@ use bcachefs_kernel::sb::io::{SbBuf, BCACHE_MAGIC, BCHFS_MAGIC};
 use bcachefs_kernel::util::vstructs::Unvalidated;
 use bcachefs_kernel::sb::members::sb_member;
 use bcachefs_kernel::util::{HumanReadable, Printbuf};
-use crate::wrappers::super_io::{self, SUPERBLOCK_SIZE_DEFAULT};
+use crate::commands::format_util::{self, SUPERBLOCK_SIZE_DEFAULT};
 use bcachefs_kernel::sb::io::SbResize;
 
 /// Attempt to recover an overwritten superblock from backups
@@ -193,7 +193,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     let bucket_size = m.bucket_size.get() as u32;
     let sb_max_size = 1u32 << sb.layout.sb_max_size_bits;
 
-    super_io::sb_layout_init(
+    format_util::sb_layout_init(
         &mut src_sb.sb_mut().layout,
         block_size << 9,
         bucket_size << 9,
@@ -259,7 +259,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
     }
 
     if cli.yes || crate::util::ask_yn() {
-        crate::wrappers::super_io::bch2_super_write(dev_file.as_fd(), sb_buf.sb_mut());
+        format_util::bch2_super_write(dev_file.as_fd(), sb_buf.sb_mut());
     }
 
     crate::commands::format_util::trigger_udev_for_paths(&[&cli.device]);

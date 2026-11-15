@@ -210,7 +210,7 @@ mod blkid {
 
 /// Check for existing filesystems using blkid and optionally wipe them.
 pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
-    use crate::wrappers::super_io::die;
+    use crate::util::die;
 
     let mut version = core::ptr::null();
     let version_code = unsafe { blkid::blkid_get_library_version(&mut version, core::ptr::null_mut()) };
@@ -290,7 +290,7 @@ fn fd_metadata(fd: RawFd) -> Metadata {
     match std::fs::metadata(format!("/proc/self/fd/{}", fd)) {
         Ok(metadata) => metadata,
         Err(_) => {
-            crate::wrappers::super_io::die("stat error");
+            crate::util::die("stat error");
         }
     }
 }

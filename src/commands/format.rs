@@ -36,7 +36,7 @@ use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::printbuf::Printbuf;
-use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
+use crate::commands::format_util::SUPERBLOCK_SIZE_DEFAULT;
 
 const BCH_REPLICAS_MAX: u32 = 4;
 

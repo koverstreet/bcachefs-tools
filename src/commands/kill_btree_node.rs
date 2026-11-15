@@ -57,7 +57,7 @@ use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
 use bcachefs_kernel::util::bio::io_buf;
 
-use crate::wrappers::super_io::write_all_at;
+use crate::util::write_all_at;
 
 struct KillNode {
     btree:  Btree,
