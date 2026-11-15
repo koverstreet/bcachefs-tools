@@ -198,6 +198,6 @@ impl<'a> Dentry<'a> {
     /// The prefix xattrs of @ty list under, here - None for a type that
     /// isn't listed, or that the caller may not see.
     pub fn xattr_list_prefix(&self, ty: XattrType) -> Option<&'static CStr> {
-        crate::xattr::list_prefix(ty, self.raw)
+        crate::xattr::list_prefix(ty, *self)
     }
 }
