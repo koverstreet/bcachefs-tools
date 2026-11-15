@@ -352,7 +352,7 @@ extern "C" fn fatal_signal_handler(signo: libc::c_int) {
         libc::SIGABRT => b"\nbcachefs: fatal SIGABRT\n",
         _             => b"\nbcachefs: fatal signal\n",
     };
-    unsafe { libc::write(libc::STDERR_FILENO, name.as_ptr().cast(), name.len()) };
+    let _ = rustix::io::write(rustix::stdio::stderr(), name);
 
     bcachefs_kernel::util::backtrace::dump_stack();
 
