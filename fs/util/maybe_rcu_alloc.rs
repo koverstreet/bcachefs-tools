@@ -85,6 +85,11 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
         unsafe { Pin::new_unchecked(self.p.as_mut()) }
     }
 
+    /// The T, by pointer, borrowed mutably: for a handle to it.
+    pub fn as_non_null(&mut self) -> NonNull<T> {
+        self.p
+    }
+
     pub fn into_raw(self) -> NonNull<T> {
         ManuallyDrop::new(self).p
     }

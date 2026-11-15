@@ -33,7 +33,8 @@ use crate::format::{Bpos, Btree, BtreeFlags};
 use crate::fs::Fs;
 use crate::journal::pins::Pin;
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags};
-use crate::util::alloc::{flags, Flags, alloc_pinned, free_pinned, AllocError, KVVec};
+use crate::util::alloc::{flags, Flags, AllocError, KVVec};
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::place::{container_of, Contained};
 use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
@@ -568,7 +569,7 @@ impl RawWork for c::bch_fs_btree_write_buffer {
 /// another key refers to, maybe_flush() flushes the write buffer - once per
 /// referring key - and has it look again. Its last_flushed is a bkey_buf whose
 /// key starts in its own storage, so it's built in place, and never moves.
-pub struct WbMaybeFlush(NonNull<c::wb_maybe_flush>);
+pub struct WbMaybeFlush(MaybeRcuAlloc<c::wb_maybe_flush>);
 
 impl WbMaybeFlush {
     /// wb_maybe_flush_init().
@@ -583,11 +584,11 @@ impl WbMaybeFlush {
                 Ok::<_, AllocError>(())
             })
         };
-        Ok(Self(NonNull::new(alloc_pinned(init)?).expect("alloc_pinned() succeeded")))
+        Ok(Self(MaybeRcuAlloc::new(init)?))
     }
 
     pub fn borrow(&mut self) -> WbFlush<'_> {
-        WbFlush(self.0, PhantomData)
+        WbFlush(self.0.as_non_null(), PhantomData)
     }
 
     pub fn inc(&mut self) {
@@ -695,11 +696,7 @@ impl WbFlush<'_> {
 impl Drop for WbMaybeFlush {
     /// wb_maybe_flush_exit()
     fn drop(&mut self) {
-        // SAFETY: ours, from alloc_pinned(), and nothing uses it after
-        unsafe {
-            self.0.as_mut().last_flushed.exit();
-            free_pinned(self.0.as_ptr());
-        }
+        self.0.as_pin_mut().get_mut().last_flushed.exit();
     }
 }
 

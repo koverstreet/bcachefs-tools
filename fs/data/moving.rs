@@ -29,7 +29,8 @@ use crate::c::Errcode;
 use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
-use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
+use crate::util::alloc::AllocError;
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::refcount::Refcount;
 use crate::os::kthread::Kthread;
 use crate::util::task::{waiter, RunQueue};
@@ -163,7 +164,7 @@ pub struct IoCounts {
 
 /// Freed - once what's in flight is done - when it's dropped.
 pub struct MovingCtxt<'a> {
-    ctxt: NonNull<MovingContext>,
+    ctxt: MaybeRcuAlloc<MovingContext>,
     life: PhantomData<(&'a Fs, &'a MoveStats)>,
 }
 
@@ -239,8 +240,7 @@ impl<'a> MovingCtxt<'a> {
             updates:        UnsafeCell::new(Fifo::new()),
             write_next:     Cell::new(0),
         }? BchError);
-        let ctxt = alloc_pinned(init)?;
-        Ok(MovingCtxt { ctxt: NonNull::new(ctxt).expect("alloc_pinned() returns its allocation"), life: PhantomData })
+        Ok(MovingCtxt { ctxt: MaybeRcuAlloc::new(init)?, life: PhantomData })
     }
 }
 
@@ -249,7 +249,7 @@ impl<'a> core::ops::Deref for MovingCtxt<'a> {
 
     fn deref(&self) -> &Moving<'a> {
         // SAFETY: ours, live and pinned until we're dropped
-        unsafe { Moving::from_raw(self.ctxt.as_ptr()) }
+        unsafe { Moving::from_raw(core::ptr::from_ref::<MovingContext>(&self.ctxt).cast_mut()) }
     }
 }
 
@@ -485,9 +485,6 @@ impl Drop for MovingCtxt<'_> {
 
         // Putting a transaction mid-restart is an unhandled restart, but a mover
         // can be told to exit before it's retried
-        unsafe {
-            BtreeTrans::abandon_restart(&self.ctxt.as_ref().trans);
-            free_pinned(self.ctxt.as_ptr());
-        }
+        BtreeTrans::abandon_restart(&self.ctxt.trans);
     }
 }
