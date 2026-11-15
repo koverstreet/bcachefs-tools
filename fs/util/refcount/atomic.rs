@@ -95,17 +95,26 @@ impl<T> Drop for AtomicRef<T> {
 
 impl<T> RefGuard<AtomicRef<T>> {
     pub fn value(&self) -> &T {
-        unsafe { (**self).value_held() }
+        unsafe { self.counted().value_held() }
     }
 }
 
-impl<T, A> RefGuard<Placed<AtomicRef<T>, A>> {
+impl<T, A> RefGuard<Placed<AtomicRef<T>, A>>
+where
+    Placed<AtomicRef<T>, A>: Refcount,
+{
     pub fn value(&self) -> &T {
-        unsafe { (**self).value_held() }
+        unsafe { self.counted().value_held() }
     }
 }
 
 unsafe impl<T> Refcount for AtomicRef<T> {
+    type Target = Self;
+
+    fn target(&self) -> &Self {
+        self
+    }
+
     unsafe fn inc(&self) {
         self.count.fetch_add(1, Relaxed);
     }

@@ -278,6 +278,12 @@ impl Deref for OpenBucketRef {
 // SAFETY: an OpenBucketRef is had only while it's held open - by a pin, or
 // its ->ec - so inc() is from a pin that's held; the last put closes it
 unsafe impl Refcount for OpenBucketRef {
+    type Target = Self;
+
+    fn target(&self) -> &Self {
+        self
+    }
+
     unsafe fn inc(&self) {
         self.pin.fetch_add(1, Relaxed);
     }

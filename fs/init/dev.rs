@@ -249,7 +249,6 @@ use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
      core::sync::atomic::Ordering::Acquire};
-use crate::util::place::Contained;
 use crate::types::bits_to_longs;
 use crate::util::bio::{Bio, BioBox, IoBuf};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
@@ -1154,8 +1153,8 @@ impl Fs {
     /* Device add/removal: */
 
     pub fn dev_remove(&self, ca: DevOuterRef, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
-        let ca_p = ca.container().as_ptr();
-        let dev_idx = ca.container().dev_idx;
+        let ca_p = ca.as_ptr();
+        let dev_idx = ca.dev_idx;
         let fast_device_removal = self.compat(c::SbCompat::no_stale_ptrs) &&
             self.request_incompat_feature(MetadataVersion::fast_device_removal).is_ok();
 
@@ -1713,7 +1712,7 @@ unsafe fn bdev_get_fs(bdev: *mut crate::os::blkdev::BlockDevice) -> Option<RoRef
     unsafe { c::mutex_unlock((&raw mut (*bdev).bd_holder_lock).cast()) };
 
     let r = r?;
-    let fs = r.container();
+    let fs: &Fs = &r;
     let started = |fs: &Fs| fs.flags.get(c::FsFlag::started);
     let Ok(()) = fs.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
         (started(fs) || fs.flags.get(c::FsFlag::stopping)).then_some(())
@@ -1725,7 +1724,7 @@ unsafe fn bdev_get_fs(bdev: *mut crate::os::blkdev::BlockDevice) -> Option<RoRef
 #[cfg(kernel)]
 unsafe extern "C" fn bdev_mark_dead(bdev: *mut crate::os::blkdev::BlockDevice, surprise: bool) {
     let Some(r) = (unsafe { bdev_get_fs(bdev) }) else { return };
-    let fs = r.container();
+    let fs: &Fs = &r;
 
     // Not necessary, c->ro_ref guards against the filesystem being unmounted -
     // we only take this to avoid a warning in sync_filesystem
@@ -1763,7 +1762,7 @@ unsafe extern "C" fn bdev_mark_dead(bdev: *mut crate::os::blkdev::BlockDevice, s
 #[cfg(kernel)]
 unsafe extern "C" fn bdev_sync(bdev: *mut crate::os::blkdev::BlockDevice) {
     let Some(r) = (unsafe { bdev_get_fs(bdev) }) else { return };
-    let fs = r.container();
+    let fs: &Fs = &r;
 
     if let Some(sb) = fs.vfs_super() {
         let _umount = sb.umount().read();

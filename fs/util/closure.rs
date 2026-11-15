@@ -36,6 +36,12 @@ pub type ClosureRef = RefGuard<Opaque<c::closure>>;
 // SAFETY: a closure's refcount is atomic, changed through a shared pointer;
 // closure_get() and a closure_get_not_zero() that succeeds take a ref
 unsafe impl Refcount for Opaque<c::closure> {
+    type Target = Self;
+
+    fn target(&self) -> &Self {
+        self
+    }
+
     unsafe fn inc(&self) {
         // SAFETY: as above
         unsafe { c::closure_get(self.as_ptr()) }

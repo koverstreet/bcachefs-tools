@@ -192,6 +192,12 @@ unsafe impl Send for MovingIo {}
 // SAFETY: evacuate_bucket()'s callers keep a bucket in flight until its count
 // is back to zero - copygc's InFlight, until done()
 unsafe impl Refcount for c::move_bucket {
+    type Target = Self;
+
+    fn target(&self) -> &Self {
+        self
+    }
+
     unsafe fn inc(&self) {
         self.count.fetch_add(1, Relaxed);
     }

@@ -46,7 +46,6 @@ use crate::util::ioctl::Ioctl;
 use crate::util::alloc::{KBox, KVVec};
 use kernel::alloc::flags::GFP_KERNEL;
 use crate::util::rcu::read_lock;
-use crate::util::place::Contained;
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::plain_bytes;
 use crate::accounting;
@@ -809,7 +808,7 @@ impl FileOps for Ctl {
         });
 
         ioctl_ret(match fs {
-            Some(fs) => fs.and_then(|r| fs_ioctl(r.container(), cmd, user)),
+            Some(fs) => fs.and_then(|r| fs_ioctl(&r, cmd, user)),
             None     => global_ioctl(cmd, user),
         })
     }

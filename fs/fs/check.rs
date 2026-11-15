@@ -876,7 +876,6 @@ pub mod ioctl {
     use crate::init::passes::{passes_match, run_passes, PassFlags, RecoveryPass};
     use crate::opts::parse_mount_opts_cstr;
     use crate::os::kernel::{capable, Capability};
-    use crate::util::place::Contained;
     use crate::util::refcount::TryRefcount;
     use crate::os::thread_with_file::{StdioRedirect, ThreadWithFile};
     use crate::os::ioctl::{UserStr, UserVstruct};
@@ -985,7 +984,7 @@ pub mod ioctl {
     }
 
     fn fsck_online_thread(fs_ref: RoRef, opts: c::bch_opts, stdio: &StdioRedirect) -> c_int {
-        let fs = fs_ref.container();
+        let fs: &Fs = &fs_ref;
         let mut buf = Printbuf::new();
 
         let online = passes_match(PassFlags::ONLINE);

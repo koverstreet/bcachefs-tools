@@ -490,6 +490,12 @@ pub(crate) type IoRef = RefGuard<StripeNew>;
 // @in_flight, the last touch: the task may free the stripe after it - while
 // dec()'s &self is still on the stack, as Gather::put()'s is.
 unsafe impl Refcount for StripeNew {
+    type Target = Self;
+
+    fn target(&self) -> &Self {
+        self
+    }
+
     unsafe fn inc(&self) {
         self.io_refs.fetch_add(1, Ordering::Relaxed);
     }

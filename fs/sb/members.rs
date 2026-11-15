@@ -1206,6 +1206,12 @@ pub type DevRef = RefGuard<Dev>;
 /// A device, counted by ca->ref, which its removal drains before it's freed:
 /// bch2_dev_get() and bch2_dev_put(), as members.h's inlines are.
 unsafe impl Refcount for Dev {
+    type Target = Self;
+
+    fn target(&self) -> &Self {
+        self
+    }
+
     unsafe fn inc(&self) {
         unsafe { self.ref_.inc() };
     }
@@ -1306,6 +1312,12 @@ impl<R> Deref for DevIo<R> {
 
 // SAFETY: io_ref[R::RW]'s
 unsafe impl<R: IoRefIdx> Refcount for DevIo<R> {
+    type Target = Self;
+
+    fn target(&self) -> &Self {
+        self
+    }
+
     unsafe fn inc(&self) {
         unsafe { self.io_ref[R::RW].inc() }
     }

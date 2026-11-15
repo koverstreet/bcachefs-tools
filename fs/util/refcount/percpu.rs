@@ -100,6 +100,12 @@ impl Drop for PercpuRef {
 }
 
 unsafe impl Refcount for PercpuRef {
+    type Target = Self;
+
+    fn target(&self) -> &Self {
+        self
+    }
+
     unsafe fn inc(&self) {
         unsafe { c::percpu_ref_get(self.r.get()) }
     }

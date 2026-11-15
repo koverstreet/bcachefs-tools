@@ -25,7 +25,9 @@
 //! TryRefcount, rather than having a tryget() that can't fail.
 //!
 //! Refs are RefGuards: a RefGuard<T> is a ref on T's count, and derefs to
-//! the T. Cloning one takes another, dropping it puts it. What an
+//! what it keeps, T's Target - the T, or for a count placed in what it keeps,
+//! a Placed one, that: a DevRef is a &Dev. Cloning one takes another,
+//! dropping it puts it. What an
 //! implementation supplies are the raw counting - inc(), dec(), try_inc() -
 //! which the guards are made from.
 //!
@@ -63,6 +65,11 @@ pub use bcachefs_shim::sync::aref::{ARef, AlwaysRefCounted};
 /// inc() takes a ref that's held until dec() gives it back - and while one
 /// is, the T isn't freed, nor what it's in.
 pub unsafe trait Refcount {
+    /// What a ref on it keeps, as its guard derefs to it.
+    type Target: ?Sized;
+
+    fn target(&self) -> &Self::Target;
+
     /// # Safety
     /// What the count is in stays alive while the new ref is held.
     unsafe fn inc(&self);
@@ -111,7 +118,12 @@ impl<T: Refcount + ?Sized> RefGuard<T> {
     }
 
     pub fn borrow(&self) -> RefBorrow<'_, T> {
-        RefBorrow { t: &**self }
+        RefBorrow { t: self.counted() }
+    }
+
+    /// The count itself, not what it keeps.
+    pub fn counted(&self) -> &T {
+        unsafe { self.t.as_ref() }
     }
 
     /// A ref taken without a guard, handed over.
@@ -141,11 +153,10 @@ impl<T: TryRefcount + ?Sized> RefGuard<T> {
 }
 
 impl<T: Refcount + ?Sized> Deref for RefGuard<T> {
-    type Target = T;
+    type Target = T::Target;
 
-    fn deref(&self) -> &T {
-        // SAFETY: our ref keeps it - Refcount's contract
-        unsafe { self.t.as_ref() }
+    fn deref(&self) -> &T::Target {
+        self.counted().target()
     }
 }
 
@@ -192,10 +203,10 @@ impl<T: Refcount + ?Sized> Clone for RefBorrow<'_, T> {
 impl<T: Refcount + ?Sized> Copy for RefBorrow<'_, T> {}
 
 impl<T: Refcount + ?Sized> Deref for RefBorrow<'_, T> {
-    type Target = T;
+    type Target = T::Target;
 
-    fn deref(&self) -> &T {
-        self.t
+    fn deref(&self) -> &T::Target {
+        self.t.target()
     }
 }
 
