@@ -55,8 +55,7 @@ fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bvers
     });
 }
 
-fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: *mut c::bio, buf: *mut c_void) -> *mut c::bio {
-    let src = unsafe { &*src };
+fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: &c::bio, buf: *mut c_void) -> *mut c::bio {
     let mut output_available = (wp.sectors_free() << 9).min(src.bi_iter.bi_size);
     let offset = if buf.is_null() { 0 } else { (buf.addr() & (PAGE_SIZE - 1)) as u32 };
 
@@ -358,7 +357,11 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
 }
 
 /// What a failed write_extent() made of @dst, given back.
-fn dst_put(fs: &Fs, dst: *mut c::bio) {
+///
+/// # Safety
+/// @dst is write_extent()'s: the op's bio or write_bio_alloc()'s, not in
+/// flight, and not used after if it was write_bio_alloc()'s.
+unsafe fn dst_put(fs: &Fs, dst: *mut c::bio) {
     unsafe {
         let wbio = to_wbio(dst);
         if wbio.wbio.bits.bounce() != 0 {
@@ -394,14 +397,14 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
         match write_prep_encoded_data(op, wp) {
             Err(e) if e.matches(Errcode::write_encoded_as_is) => {
                 if !ec_buf.is_null() {
-                    dst = write_bio_alloc(fs, wp, src, ec_buf);
+                    dst = write_bio_alloc(fs, wp, &op.wbio.bio, ec_buf);
                     bio_copy_data(dst, src);
                 }
                 init_append_extent(op, wp, op.version, op.crc);
                 return Ok((dst, false));
             }
             Err(e) => {
-                dst_put(fs, dst);
+                unsafe { dst_put(fs, dst) };
                 return Err(e);
             }
             Ok(()) => {}
@@ -412,7 +415,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
        op.bits.compression_opt() != 0 ||
        (op.bits.csum_type() != c::CsumType::none && !op.has(w::pages_stable)) ||
        (op.bits.csum_type().is_encryption() && !op.has(w::pages_owned)) {
-        dst = write_bio_alloc(fs, wp, src, ec_buf);
+        dst = write_bio_alloc(fs, wp, &op.wbio.bio, ec_buf);
         bounce = true;
     }
 
@@ -420,7 +423,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
     let write_corrupt_ratio = crate::data::write::write_corrupt_ratio.get();
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     if !bounce && write_corrupt_ratio != 0 {
-        dst = write_bio_alloc(fs, wp, src, ec_buf);
+        dst = write_bio_alloc(fs, wp, &op.wbio.bio, ec_buf);
         bounce = true;
     }
     let saved_iter = unsafe { (*dst).bi_iter };
@@ -567,7 +570,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
     })();
 
     if let Err(e) = ret {
-        dst_put(fs, dst);
+        unsafe { dst_put(fs, dst) };
         return Err(e);
     }
 
