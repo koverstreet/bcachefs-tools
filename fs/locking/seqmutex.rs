@@ -62,7 +62,7 @@ impl<G, P> Locked<seqmutex, G, P> {
 
         // retaken, not counted: no one else has taken it
         l.lock.try_lock()?;
-        let g = unsafe { ExclusiveGuard::from_held(self, Some(())) };
+        let g = unsafe { ExclusiveGuard::from_held(self, ()) };
 
         if l.seq.load(Ordering::Relaxed) != at.0 {
             return None;    // unlocked, as the guard drops

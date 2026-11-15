@@ -7,6 +7,7 @@ use crate::util::projections::Publish;
 use core::cell::UnsafeCell;
 use core::ffi::{c_ulong, CStr};
 use core::marker::{PhantomData, PhantomPinned};
+use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 
 /// A lock's state, and how it's initialized and torn down - whatever kind of
@@ -199,8 +200,7 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
 
 impl<R: RawLock, G, P> Locked<R, G, P> {
     pub fn lock(&self) -> ExclusiveGuard<'_, R, G, P> {
-        let state = self.raw.lock();
-        ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData }
+        ExclusiveGuard::new(self, self.raw.lock())
     }
 
     /// lock(), as lockdep subclass @subclass: for locks of one class taken
@@ -209,8 +209,7 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     where
         R: RawNestedLock,
     {
-        let state = self.raw.lock_nested(subclass);
-        ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData }
+        ExclusiveGuard::new(self, self.raw.lock_nested(subclass))
     }
 
     /// lock(), if no one holds it.
@@ -218,8 +217,7 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     where
         R: RawTryLock,
     {
-        let state = self.raw.try_lock()?;
-        Some(ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData })
+        Some(ExclusiveGuard::new(self, self.raw.try_lock()?))
     }
 
     /// lock(), if it's free within @timeout jiffies.
@@ -227,8 +225,7 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     where
         R: RawTimedLock,
     {
-        let state = self.raw.try_lock_timeout(timeout)?;
-        Some(ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData })
+        Some(ExclusiveGuard::new(self, self.raw.try_lock_timeout(timeout)?))
     }
 
     /// Held exclusively - by the writer, for a lock readers share.
@@ -258,8 +255,7 @@ impl<R: RawLockBase, G, P> Deref for Locked<R, G, P> {
 
 impl<R: RawReadLock, G: Sync, P> Locked<R, G, P> {
     pub fn read(&self) -> SharedGuard<'_, R, G, P> {
-        let state = self.raw.lock_read();
-        SharedGuard { lock: self, state: Some(state), _not_send: PhantomData }
+        SharedGuard::new(self, self.raw.lock_read())
     }
 
     /// read(), if no writer holds it.
@@ -267,8 +263,7 @@ impl<R: RawReadLock, G: Sync, P> Locked<R, G, P> {
     where
         R: RawTryReadLock,
     {
-        let state = self.raw.try_lock_read()?;
-        Some(SharedGuard { lock: self, state: Some(state), _not_send: PhantomData })
+        Some(SharedGuard::new(self, self.raw.try_lock_read()?))
     }
 }
 
@@ -284,8 +279,7 @@ impl<R: RawRwLock, G: Sync, P> Locked<R, G, P> {
 
 impl<R: RawSixLock, G: Sync, P> Locked<R, G, P> {
     pub fn intent(&self) -> SharedGuard<'_, R, G, P, SixIntent> {
-        let state = self.raw.lock_intent();
-        SharedGuard { lock: self, state: Some(state), _not_send: PhantomData }
+        SharedGuard::new(self, self.raw.lock_intent())
     }
 }
 
@@ -328,14 +322,16 @@ impl<C: AsLocked, A> Placed<C, A> {
     where
         C::R: RawLock,
     {
-        self.locked().lock().placed()
+        let l = self.locked();
+        ExclusiveGuard::new(l, l.raw.lock())
     }
 
     pub fn try_lock(&self) -> Option<ExclusiveGuard<'_, C::R, C::G, C::P, Exclusive, A>>
     where
         C::R: RawTryLock,
     {
-        self.locked().try_lock().map(ExclusiveGuard::placed)
+        let l = self.locked();
+        Some(ExclusiveGuard::new(l, l.raw.try_lock()?))
     }
 
     pub fn read(&self) -> SharedGuard<'_, C::R, C::G, C::P, Shared, A>
@@ -343,7 +339,8 @@ impl<C: AsLocked, A> Placed<C, A> {
         C::R: RawReadLock,
         C::G: Sync,
     {
-        self.locked().read().placed()
+        let l = self.locked();
+        SharedGuard::new(l, l.raw.lock_read())
     }
 
     pub fn write(&self) -> ExclusiveGuard<'_, C::R, C::G, C::P, Exclusive, A>
@@ -351,7 +348,8 @@ impl<C: AsLocked, A> Placed<C, A> {
         C::R: RawRwLock,
         C::G: Sync,
     {
-        self.locked().write().placed()
+        let l = self.locked();
+        ExclusiveGuard::new(l, l.raw.lock())
     }
 }
 
@@ -419,30 +417,27 @@ impl<R: RawSixLock<GuardState = ()>> Unlock<R> for SixWriteIntent {
 #[must_use = "the lock is released as soon as the guard is dropped"]
 pub struct ExclusiveGuard<'a, R: RawLockBase, G = (), P = (), U: Unlock<R> = Exclusive, A = ()> {
     lock:      &'a Locked<R, G, P>,
-    /// None for a lock held by its caller - compat.rs's held(): not ours to
-    /// release
-    state:     Option<R::GuardState>,
+    state:     ManuallyDrop<R::GuardState>,
     _not_send: PhantomData<(*mut (), U, A)>,
 }
 
 impl<'a, R: RawLockBase, G, P, U: Unlock<R>> ExclusiveGuard<'a, R, G, P, U> {
     /// # Safety
-    /// @lock is held exclusively, as @U releases: taken with @state, or by our
-    /// caller for as long as the guard lives, if None.
-    pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: Option<R::GuardState>) -> Self {
-        ExclusiveGuard { lock, state, _not_send: PhantomData }
+    /// @lock is held exclusively, as @U releases, taken with @state.
+    pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: R::GuardState) -> Self {
+        Self::new(lock, state)
     }
 }
 
 impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A> ExclusiveGuard<'a, R, G, P, U, A> {
-    pub(crate) fn lock(&self) -> &'a Locked<R, G, P> {
-        self.lock
+    /// Of @lock, just taken, as @U releases, with @state - placed at @A, if
+    /// it was taken through the Placed<Locked, A>.
+    fn new(lock: &'a Locked<R, G, P>, state: R::GuardState) -> Self {
+        ExclusiveGuard { lock, state: ManuallyDrop::new(state), _not_send: PhantomData }
     }
 
-    /// The guard, of a lock placed at @B: Placed<Locked, B>'s alone to call.
-    pub(super) fn placed<B>(self) -> ExclusiveGuard<'a, R, G, P, U, B> {
-        let mut g = core::mem::ManuallyDrop::new(self);
-        ExclusiveGuard { lock: g.lock, state: g.state.take(), _not_send: PhantomData }
+    pub(crate) fn lock(&self) -> &'a Locked<R, G, P> {
+        self.lock
     }
 
     pub fn protected(&mut self) -> &mut G {
@@ -484,9 +479,7 @@ impl<R: RawLockBase, G, P, U: Unlock<R>, A> DerefMut for ExclusiveGuard<'_, R, G
 
 impl<R: RawLockBase, G, P, U: Unlock<R>, A> Drop for ExclusiveGuard<'_, R, G, P, U, A> {
     fn drop(&mut self) {
-        if let Some(state) = self.state.take() {
-            unsafe { U::unlock(&self.lock.raw, state) }
-        }
+        unsafe { U::unlock(&self.lock.raw, ManuallyDrop::take(&mut self.state)) }
     }
 }
 
@@ -494,8 +487,7 @@ impl<R: RawLockBase, G, P, U: Unlock<R>, A> Drop for ExclusiveGuard<'_, R, G, P,
 #[must_use = "the lock is released as soon as the guard is dropped"]
 pub struct SharedGuard<'a, R: RawLockBase, G = (), P = (), U: Unlock<R> = Shared, A = ()> {
     lock:      &'a Locked<R, G, P>,
-    /// Some till drop takes it
-    state:     Option<R::GuardState>,
+    state:     ManuallyDrop<R::GuardState>,
     _not_send: PhantomData<(*mut (), U, A)>,
 }
 
@@ -503,19 +495,25 @@ impl<'a, R: RawLockBase, G, P, U: Unlock<R>> SharedGuard<'a, R, G, P, U> {
     /// # Safety
     /// @lock is held shared, as @U releases, taken with @state.
     pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: R::GuardState) -> Self {
-        SharedGuard { lock, state: Some(state), _not_send: PhantomData }
+        Self::new(lock, state)
     }
 }
 
 impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A> SharedGuard<'a, R, G, P, U, A> {
-    pub(super) fn lock(&self) -> &'a Locked<R, G, P> {
-        self.lock
+    fn new(lock: &'a Locked<R, G, P>, state: R::GuardState) -> Self {
+        SharedGuard { lock, state: ManuallyDrop::new(state), _not_send: PhantomData }
     }
 
-    /// As ExclusiveGuard::placed().
-    pub(super) fn placed<B>(self) -> SharedGuard<'a, R, G, P, U, B> {
-        let mut g = core::mem::ManuallyDrop::new(self);
-        SharedGuard { lock: g.lock, state: g.state.take(), _not_send: PhantomData }
+    /// Write, for a guard whose own hold its caller has let go: placed as it is.
+    pub(super) fn write_placed(&self) -> ExclusiveGuard<'a, R, G, P, Exclusive, A>
+    where
+        R: RawRwLock,
+    {
+        ExclusiveGuard::new(self.lock, self.lock.raw.lock())
+    }
+
+    pub(super) fn lock(&self) -> &'a Locked<R, G, P> {
+        self.lock
     }
 
     pub fn protected(&self) -> &G {
@@ -532,8 +530,7 @@ impl<R: RawSixLock, G, P, A> SharedGuard<'_, R, G, P, SixIntent, A> {
     /// the guard mutably, so nothing had through it as intent is held across;
     /// dropped, back to intent alone.
     pub fn write(&mut self) -> ExclusiveGuard<'_, R, G, P, SixWrite, A> {
-        let state = unsafe { self.lock.raw.lock_write() };
-        ExclusiveGuard { lock: self.lock, state: Some(state), _not_send: PhantomData }
+        ExclusiveGuard::new(self.lock, unsafe { self.lock.raw.lock_write() })
     }
 
     /// P as its writer has it: the intent holder is the only one, with
@@ -556,9 +553,7 @@ impl<R: RawLockBase, G, P, U: Unlock<R>, A> Deref for SharedGuard<'_, R, G, P, U
 
 impl<R: RawLockBase, G, P, U: Unlock<R>, A> Drop for SharedGuard<'_, R, G, P, U, A> {
     fn drop(&mut self) {
-        if let Some(state) = self.state.take() {
-            unsafe { U::unlock(&self.lock.raw, state) }
-        }
+        unsafe { U::unlock(&self.lock.raw, ManuallyDrop::take(&mut self.state)) }
     }
 }
 

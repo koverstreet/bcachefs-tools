@@ -185,7 +185,7 @@ impl<'a, R: RawRwLock<GuardState = ()>, const F: u32, G: Sync, P, A> SharedGuard
          */
         let lock = self.lock();
         unsafe { lock.raw().0.unlock_read(()) };
-        let ret = f(&mut lock.write().placed());
+        let ret = f(&mut self.write_placed());
         lock.raw().0.lock_read();
         ret
     }

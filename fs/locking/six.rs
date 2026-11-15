@@ -1297,7 +1297,7 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
             match ty {
                 SixLockType::SIX_LOCK_read   => SixHold::Read(SharedGuard::from_held(lock, ())),
                 SixLockType::SIX_LOCK_intent => SixHold::Intent(SharedGuard::from_held(lock, ())),
-                SixLockType::SIX_LOCK_write  => SixHold::Write(ExclusiveGuard::from_held(lock, Some(()))),
+                SixLockType::SIX_LOCK_write  => SixHold::Write(ExclusiveGuard::from_held(lock, ())),
             }
         }
     }
