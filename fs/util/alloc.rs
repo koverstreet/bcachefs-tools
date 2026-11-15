@@ -208,12 +208,25 @@ impl<T: ?Sized, A: Alloc> Drop for Box<T, A> {
         unsafe {
             let align = align_of_val(self.ptr.as_ref());
             core::ptr::drop_in_place(self.ptr.as_ptr());
-            self.alloc.deallocate(self.ptr.cast(), Layout::from_size_align_unchecked(self.given, align));
+            // given nothing - an empty Vec's - it has no allocation
+            if self.given != 0 {
+                self.alloc.deallocate(self.ptr.cast(), Layout::from_size_align_unchecked(self.given, align));
+            }
         }
     }
 }
 
+/// std's: the Vec's allocation, as it is - the Box frees by its capacity.
+impl<T, A: AllocGfp, L: LenUint> From<Vec<T, A, L>> for Box<[T], A> {
+    fn from(v: Vec<T, A, L>) -> Self {
+        let (p, len, cap) = v.into_raw_parts();
+        let ptr = NonNull::slice_from_raw_parts(NonNull::new(p).expect("a vec's pointer, dangling if none"), len);
+        Box { ptr, given: cap * size_of::<T>(), alloc: stateless() }
+    }
+}
+
 pub use crate::data_structures::vec::{DrainAll, IntoIter, PushError, Vec};
+use crate::data_structures::array_vec::LenUint;
 
 pub type KVec<T> = Vec<T, Kmalloc>;
 pub type KVVec<T> = Vec<T, KVmalloc>;

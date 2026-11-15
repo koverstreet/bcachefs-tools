@@ -278,6 +278,10 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
         Vec { nr: L::from_usize(length), size: L::from_usize(capacity), data, _p: PhantomData }
     }
 
+    pub fn into_boxed_slice(self) -> crate::util::alloc::Box<[T], A> {
+        self.into()
+    }
+
     /// Its allocation - dangling for none - length and capacity, the caller's.
     pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
         let mut v = ManuallyDrop::new(self);
