@@ -1,6 +1,6 @@
 use std::ffi::CStr;
 use std::mem;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
 use bcachefs_kernel::c::{
@@ -57,8 +57,8 @@ struct FsSysfsPath {
     name: [u8; 128],
 }
 
-const FS_IOC_GETFSSYSFSPATH: libc::Ioctl =
-    bcachefs_kernel::util::ioctl::_IOR::<FsSysfsPath>(0x15, 1) as libc::Ioctl;
+/* FS_IOC_GETFSSYSFSPATH: _IOR(0x15, 1, struct fs_sysfs_path) */
+type GetFsSysfsPath = rustix::ioctl::Getter<{ rustix::ioctl::opcode::read::<FsSysfsPath>(0x15, 1) }, FsSysfsPath>;
 
 /// A handle to a bcachefs filesystem, with RAII close.
 pub(crate) struct BcachefsHandle {
@@ -220,12 +220,7 @@ impl BcachefsHandle {
     /// Open a mounted filesystem path. The fd becomes the ioctl fd.
     fn open_mounted_path(ioctl_fd: OwnedFd, uuid: [u8; 16]) -> Result<Self, BchError> {
         // Try FS_IOC_GETFSSYSFSPATH to get sysfs path
-        let mut fs_path = FsSysfsPath { len: 0, name: [0; 128] };
-        let ret = unsafe {
-            libc::ioctl(ioctl_fd.as_raw_fd(), FS_IOC_GETFSSYSFSPATH, &mut fs_path)
-        };
-
-        let sysfs_fd = if ret == 0 {
+        let sysfs_fd = if let Ok(fs_path) = unsafe { rustix::ioctl::ioctl(&ioctl_fd, GetFsSysfsPath::new()) } {
             let name_len = fs_path.len as usize;
             let name = std::str::from_utf8(&fs_path.name[..name_len])
                 .map_err(|_| BchError::from(libc::EINVAL))?;

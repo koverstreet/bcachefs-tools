@@ -1,5 +1,5 @@
 use std::ffi::{CStr, OsStr};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
@@ -14,6 +14,10 @@ use super::opts;
 use crate::wrappers::ioctl::{ioctl_none, Ioctl,
     BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, BCHFS_IOC_REINHERIT_ATTRS,
     BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS};
+
+/// BCHFS_IOC_REINHERIT_ATTRS, whose argument is a name's address.
+type ReinheritAttrs =
+    rustix::ioctl::IntegerSetter<{ BCHFS_IOC_REINHERIT_ATTRS::OPCODE as rustix::ioctl::Opcode }>;
 
 /// Each child of @dir, at @path, takes on again what it inherits from @dir,
 /// and each subdirectory's children from it, down the tree: how many failed,
@@ -39,12 +43,9 @@ fn propagate_recurse(dir: &OwnedFd, path: &Path) -> usize {
             }
 
             // The argument is the name's address itself, not a pointer to it
-            // SAFETY: a NUL-terminated name, which the kernel only reads
-            let ret = unsafe {
-                libc::ioctl(dir.as_raw_fd(), BCHFS_IOC_REINHERIT_ATTRS::OPCODE as libc::Ioctl, name.as_ptr())
-            };
-            if ret < 0 {
-                failed += report(name, &std::io::Error::last_os_error());
+            let ret = unsafe { rustix::ioctl::ioctl(dir, ReinheritAttrs::new_pointer(name.as_ptr().cast_mut().cast())) };
+            if let Err(e) = ret {
+                failed += report(name, &e);
                 continue;
             }
             if ty != FileType::Directory {
