@@ -118,6 +118,9 @@ pub struct Box<T: ?Sized, A: Alloc> {
 unsafe impl<T: ?Sized + Send, A: Alloc + Send> Send for Box<T, A> {}
 unsafe impl<T: ?Sized + Sync, A: Alloc + Sync> Sync for Box<T, A> {}
 
+// None is its pointer null - zeroed - whatever the rest are
+unsafe impl<T: ?Sized, A: Alloc> ::pin_init::ZeroableOption for Box<T, A> {}
+
 impl<T, A: Alloc> Box<T, A> {
     /// @init's T, in place: pin-init's try_init(), in @alloc.
     pub fn try_init_in<E: From<AllocError>>(init: impl ::pin_init::Init<T, E>, alloc: A) -> Result<Self, E> {

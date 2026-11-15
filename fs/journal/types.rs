@@ -10,17 +10,17 @@ use crate::data::keylist::PaddedKey;
 use crate::data::ptrs::IoFailures;
 use crate::data::write::DevWriteRef;
 use crate::types::{CacheAligned, c_default};
-use crate::util::alloc::{Flags, kvfree_sized, kvzalloc_gfp, AllocError, KVVec};
+use crate::util::alloc::{AlignedBox, AllocError, Flags, KVVec};
 use crate::data_structures::fixed_fifo::FixedFifo;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
-use crate::util::vstructs::{from_head_ptr, from_head_ptr_mut, Head, Unvalidated};
+use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, Unvalidated};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
 use crate::journal::pins::{flush_degraded, pin_resize};
 use crate::journal::reclaim::discard_work;
-use crate::os::kernel::WRITE;
+use crate::os::kernel::{PAGE_SIZE, WRITE};
 use crate::data_structures::list::ListLinks;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy};
 use core::cell::Cell;
@@ -44,66 +44,50 @@ pub const JOURNAL_STATE_BUF_MASK: u32 = c::JOURNAL_STATE_BUF_NR - 1;
 /* journal bufs: entries open or in flight, at most */
 pub const JOURNAL_BUF_NR: u32 = 256;
 
-/// A journal entry's buffer, freed with it. C moves it whole, data and size
-/// together: between j->free_buf and the bufs in flight.
-#[repr(C)]
+/// A journal entry's buffer, freed with it - or none, zeroed. Moved whole:
+/// between j->free_buf and the bufs in flight. Page aligned: it's written in
+/// place, O_DIRECT in userspace.
+#[derive(Default, pin_init::Zeroable)]
 pub struct JsetBuf {
-    data: *mut Head<c::jset>,
-    size: c_uint, /* size in bytes of @data */
+    data: Option<AlignedBox<[u8], PAGE_SIZE>>,
 }
-
-unsafe impl ::pin_init::Zeroable for JsetBuf {}
 
 impl JsetBuf {
     pub fn new(size: c_uint, gfp: Flags) -> Result<Self, AllocError> {
-        Ok(JsetBuf { data: kvzalloc_gfp(size as usize, gfp)?.as_ptr().cast(), size })
+        Ok(JsetBuf { data: Some(AlignedBox::try_new_zeroed_slice_gfp(size as usize, gfp)?) })
     }
 
     pub fn size(&self) -> c_uint {
-        self.size
+        self.bytes().len() as c_uint
     }
 
     pub fn as_ptr(&self) -> *mut Head<c::jset> {
-        self.data
+        self.data.as_ref().map_or(core::ptr::null_mut(), |d| d.as_ptr().cast_mut().cast())
     }
 
     pub fn head(&self) -> &Head<c::jset> {
-        unsafe { &*self.data }
+        cast_plain(self.bytes()).expect("a journal buffer, holding a jset's header")
     }
 
     pub fn head_mut(&mut self) -> &mut Head<c::jset> {
-        unsafe { &mut *self.data }
+        cast_plain_mut(self.bytes_mut()).expect("a journal buffer, holding a jset's header")
     }
 
     pub fn jset(&self) -> &c::jset<Unvalidated> {
-        unsafe { from_head_ptr(self.data) }
+        c::jset::<Unvalidated>::from_bytes(self.bytes()).expect("a journal buffer's jset, within it")
     }
 
     pub fn jset_mut(&mut self) -> &mut c::jset<Unvalidated> {
-        unsafe { from_head_ptr_mut(self.data) }
+        c::jset::<Unvalidated>::from_bytes_mut(self.bytes_mut()).expect("a journal buffer's jset, within it")
     }
 
     /// The whole buffer, its jset and the room past it.
     pub fn bytes_mut(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.data.cast(), self.size as usize) }
+        self.data.as_deref_mut().unwrap_or_default()
     }
 
     pub fn bytes(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.data.cast(), self.size as usize) }
-    }
-}
-
-impl Default for JsetBuf {
-    fn default() -> Self {
-        JsetBuf { data: core::ptr::null_mut(), size: 0 }
-    }
-}
-
-impl Drop for JsetBuf {
-    fn drop(&mut self) {
-        if let Some(data) = core::ptr::NonNull::new(self.data) {
-            unsafe { kvfree_sized(data.cast(), self.size as usize) };
-        }
+        self.data.as_deref().unwrap_or_default()
     }
 }
 
