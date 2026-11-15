@@ -36,7 +36,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::iter::{polonius_key, BtreeTrans, TransAttempt};
 use crate::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -781,7 +781,6 @@ pub(crate) struct BtreeAndJournalIter<'a, 't> {
     b: LockedNode<'a, BtreeNode>,
     node_iter: KeyIter,
     unpacked: c::bkey,
-    peeked: c::bkey_s_c,
 
     journal: c::journal_iter,
     pos: Bpos,
@@ -801,7 +800,6 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
             b,
             node_iter,
             unpacked: c::bkey::new(),
-            peeked: c::bkey_s_c { k: ptr::null_mut(), v: ptr::null_mut() },
             journal: c::journal_iter::default(),
             pos: b.contents().data().min_key,
             at_end: false,
@@ -848,12 +846,6 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
     /// whichever's first - the journal's if both - skipping whiteouts. Good
     /// until the iterator moves.
     pub(crate) fn peek(&mut self) -> Option<BkeySC<'_>> {
-        self.peeked = self.peek_raw();
-        (!self.peeked.k.is_null()).then(|| unsafe { BkeySC::from_c(&self.peeked) })
-    }
-
-    fn peek_raw(&mut self) -> c::bkey_s_c {
-        let null = c::bkey_s_c { k: ptr::null_mut(), v: ptr::null_mut() };
         let mut iters = 0;
 
         if self.prefetch && self.journal.level != 0 {
@@ -861,61 +853,46 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
         }
         loop {
             if self.at_end {
-                return null;
+                return None;
             }
 
             iters += 1;
             if iters > 20 && self.fail_if_too_many_whiteouts {
-                return null;
+                return None;
             }
 
             let btree_k = loop {
                 let keys = self.b.keys(self.b.contents());
-                let k = self.node_iter.peek_unpack(&keys, &mut self.unpacked).map_or(null, Into::into);
-                // SAFETY: a key of the node's
-                if k.k.is_null() || unsafe { (*k.k).p } >= self.pos {
+                match self.node_iter.peek_unpack(&keys, &mut self.unpacked) {
+                    Some(k) if k.k.p < self.pos => self.node_iter.advance(&keys),
+                    k => break k,
+                }
+            };
+
+            let journal_k = self.jk.and_then(|jk| loop {
+                let k = self.journal.peek(jk, self.pos);
+                // SAFETY: a journal key
+                let k = (!k.is_null()).then(|| BkeySC::from(unsafe { &*BkeyI::from_raw(k) }));
+                if k.is_none_or(|k| k.k.p >= self.pos) {
                     break k;
                 }
-                self.node_iter.advance(&keys);
-            };
+                self.journal.advance(jk);
+            });
 
-            let mut journal_k = ptr::null();
-            if let Some(jk) = self.jk {
-                journal_k = loop {
-                    let k = self.journal.peek(jk, self.pos);
-                    // SAFETY: a journal key
-                    if k.is_null() || unsafe { (*k).k.p } >= self.pos {
-                        break k;
-                    }
-                    self.journal.advance(jk);
-                };
-            }
+            let k = match (journal_k, btree_k) {
+                (Some(j), b) if b.is_none_or(|b| j.k.p <= b.k.p) => Some(j),
+                (_, b) => b,
+            }.filter(|k| k.k.p <= self.b.contents().data().max_key);
 
-            // SAFETY: keys, as they're returned
-            let mut ret = unsafe {
-                if !journal_k.is_null() && (btree_k.k.is_null() || (*journal_k).k.p <= (*btree_k.k).p) {
-                    BkeySC::from(&*BkeyI::from_raw(journal_k)).into()
-                } else {
-                    btree_k
-                }
-            };
-
-            // SAFETY: as ret's
-            if !ret.k.is_null() && unsafe { (*ret.k).p } > self.b.contents().data().max_key {
-                ret = null;
-            }
-
-            if ret.k.is_null() {
+            let Some(k) = k else {
                 self.pos = SPOS_MAX;
                 self.at_end = true;
-                return ret;
-            }
+                return None;
+            };
 
-            // SAFETY: as ret's
-            let k = unsafe { &*ret.k };
-            self.pos = k.p;
-            if k.key_type() != BkeyType::deleted {
-                return ret;
+            self.pos = k.k.p;
+            if k.k.key_type() != BkeyType::deleted {
+                return Some(unsafe { polonius_key(k) });
             }
             self.advance();
         }
