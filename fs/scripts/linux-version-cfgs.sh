@@ -1,10 +1,10 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
 #
-# linux-version-cfgs.sh KERNELVERSION SRCDIR
+# linux-version-cfgs.sh KERNELVERSION SRCDIR...
 #
-# The Rust's kernel version checks: for each cfg(linux_ge = "V") in SRCDIR's
-# Rust, --cfg 'linux_ge="V"' if the kernel is V or later.
+# The Rust's kernel version checks: for each cfg(linux_ge = "V") in the
+# SRCDIRs' Rust, --cfg 'linux_ge="V"' if the kernel is V or later.
 #
 # V is "X.Y" - from X.Y-rc1, where a merge window's changes first appear, as
 # C's KERNEL_VERSION(X, Y, 0) - or "X.Y-rcN", from that rc, for a change that
@@ -12,9 +12,9 @@
 # merge window from X.(Y-1): it's still versioned that.
 
 kv=$1
-src=$2
+shift
 
-grep -rhE --include='*.rs' --exclude-dir=vendor 'linux_ge *= *"' "$src" |
+grep -rhE --include='*.rs' --exclude-dir=vendor 'linux_ge *= *"' "$@" |
 	grep -vE '^\s*//' | grep -oE 'linux_ge *= *"[^"]*"' |
 	sed -E 's/.*"(.*)"/\1/' | sort -u |
 	awk -v kv="$kv" '
