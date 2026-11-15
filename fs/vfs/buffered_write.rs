@@ -7,7 +7,7 @@ use super::direct_write::direct_write;
 use crate::os::folio::{FolioSpan, LockedFolio, Mapping};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
-use super::kiocb::Kiocb;
+use crate::os::kiocb::Kiocb;
 use super::pagecache::ContigFolios;
 use crate::c;
 use crate::errcode::BchError;

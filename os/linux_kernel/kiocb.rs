@@ -3,7 +3,6 @@
 //! The VFS's kiocb: a read or a write of a file, at a position - done by the
 //! call it's passed to, or for an async one, queued and completed later.
 
-use super::inode::InodeInfo;
 use crate::c;
 use crate::errcode::BchError;
 use crate::os::file::File;
@@ -29,10 +28,6 @@ impl<'a> Kiocb<'a> {
     /// Open for the call, and after: the VFS holds it until the kiocb's done.
     pub fn file(&self) -> &'a File {
         unsafe { File::from_raw(self.0.ki_filp) }
-    }
-
-    pub fn inode(&self) -> &'a InodeInfo {
-        unsafe { InodeInfo::of_file(self.file()) }
     }
 
     pub fn pos(&self) -> u64 {

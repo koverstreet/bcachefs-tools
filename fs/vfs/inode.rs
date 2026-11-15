@@ -57,6 +57,7 @@ use crate::util::ffi::Opaque;
 use crate::os::file::File;
 use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::kernel::HZ;
+use crate::os::kiocb::Kiocb;
 use crate::util::log::LogMsg;
 use crate::util::rcu::{read_lock, ReadGuard};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
@@ -727,3 +728,8 @@ impl Drop for QuotaReservation<'_> {
     }
 }
 
+impl<'a> Kiocb<'a> {
+    pub fn inode(&self) -> &'a InodeInfo {
+        unsafe { InodeInfo::of_file(self.file()) }
+    }
+}

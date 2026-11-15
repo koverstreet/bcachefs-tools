@@ -10,7 +10,7 @@
 //! any, then the first; and the dio's ended: the kiocb's completion, or the
 //! caller waiting for it.
 
-use super::kiocb::{self, Kiocb};
+use crate::os::kiocb::{self, Kiocb};
 use crate::c;
 use crate::data::read::{self, ReadErrReport, Rbio};
 use crate::errcode::{Errcode, BchError};

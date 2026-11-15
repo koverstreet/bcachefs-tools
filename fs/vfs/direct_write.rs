@@ -24,7 +24,7 @@ use crate::os::kernel::{current_id, likely, task_io_account_write, unlikely, Mm}
 use crate::util::refcount::TryRefcount;
 use crate::os::folio::Mapping;
 use crate::vfs::inode::InodeInfo;
-use crate::vfs::kiocb::Kiocb;
+use crate::os::kiocb::Kiocb;
 use c::WriteFlags as w;
 use core::ops::ControlFlow;
 use core::ptr::NonNull;
