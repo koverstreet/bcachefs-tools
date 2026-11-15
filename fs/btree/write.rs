@@ -33,9 +33,8 @@ use crate::inode_opts::get_io_opts;
 use crate::locking::six::{six_lock_counts, six_lock_downgrade, six_lock_tryupgrade, six_trylock_ip};
 use crate::types::{Le16, Le64};
 use crate::util::bio::{bch2_bio_map, bio_put, buf_nr_bvecs, of_bio, MapBuf};
-use crate::os::kernel::{dump_stack, local_clock, unlikely, READ};
+use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::util::log::LogMsg;
-use crate::util::refcount::Refcount;
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
 use crate::os::workqueue::{run_raw, RawWork};
@@ -59,7 +58,12 @@ pub struct BtreeWriteBio {
     /* its slot on its async object list */
     list_idx: c_uint,
     failed: c::bch_io_failures,
-    pub(crate) wbio: c::bch_write_bio,
+    /*
+     * XXX: btree writes should be using io_ref[WRITE], but we
+     * aren't retrying failed btree writes yet (due to device
+     * removal/ro):
+     */
+    pub(crate) wbio: c::bch_write_bio<c::DevReadRefKind>,
 }
 crate::has_bio!(BtreeWriteBio, wbio.bio);
 
@@ -243,13 +247,13 @@ unsafe fn write_work(wbio: NonNull<BtreeWriteBio>) {
 }
 
 unsafe extern "C" fn write_endio(bio: *mut c::bio) {
-    let wbio = unsafe { to_wbio(bio) };
+    let wbio = unsafe { to_wbio::<c::DevReadRefKind>(bio) };
     let parent = (wbio.wbio.bits.split() != 0).then_some(wbio.wbio.parent);
     let fs = wbio.fs();
     let b = unsafe { &*wbio.bio.bi_private.cast::<BtreeNode>() };
-    let (ca, dev, status) = (wbio.ca(), wbio.wbio.dev, wbio.bio.bi_status);
+    let (ca, dev, status) = (wbio.ca.take(), wbio.wbio.dev, wbio.bio.bi_status);
 
-    if let Some(ca) = ca {
+    if let Some(ca) = &ca {
         ca.account_io_completion(c::MemberErrorType::write, wbio.wbio.submit_time, status == 0);
         ca.write_unflushed();
     }
@@ -265,9 +269,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
      * XXX: we should be using io_ref[WRITE], but we aren't retrying failed
      * btree writes yet (due to device removal/ro):
      */
-    if let Some(ca) = ca {
-        unsafe { ca.io_ref[READ].dec() };
-    }
+    drop(ca);
 
     if let Some(parent) = parent {
         unsafe {
@@ -617,7 +619,7 @@ impl BsetWrite {
                                          c::req_op_REQ_OP_WRITE | c::REQ_META | c::REQ_SYNC | c::REQ_IDLE,
                                          flags::NOIO);
         let wbio = unsafe { &mut *of_bio::<BtreeWriteBio>(bio) };
-        unsafe { wbio_init(bio) };
+        unsafe { wbio_init::<c::DevReadRefKind>(bio) };
         unsafe { (&raw mut wbio.bounce).write(bounce) };
         wbio.sector_offset  = b.written.get().into();
         wbio.shard_cpu      = b.shard(contents, fs).map(|shard| fs.inode_shard_cpu[shard].load(Relaxed));

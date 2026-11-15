@@ -76,7 +76,7 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: &c::bio, buf: *mut c
     let pages = (output_available + offset).div_ceil(PAGE_SIZE as u32);
 
     let bio = fs.bio_write.alloc_raw(core::ptr::null_mut(), pages as _, 0, flags::NOIO);
-    let wbio = unsafe { wbio_init(bio) };
+    let wbio = unsafe { wbio_init::<c::DevWriteRefKind>(bio) };
     wbio.wbio.bits.set_put_bio(1);
     /* copy WRITE_SYNC flag */
     wbio.bio.bi_opf = src.bi_opf;
@@ -363,7 +363,7 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
 /// flight, and not used after if it was write_bio_alloc()'s.
 unsafe fn dst_put(fs: &Fs, dst: *mut c::bio) {
     unsafe {
-        let wbio = to_wbio(dst);
+        let wbio = to_wbio::<c::DevWriteRefKind>(dst);
         if wbio.wbio.bits.bounce() != 0 {
             pages::free_pages_pool(&fs.bio_bounce, &mut *dst);
         }
@@ -583,7 +583,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
 
         unsafe {
             dst = fs.bio_write.split(src, total_input >> 9, flags::NOIO);
-            wbio_init(dst).wbio.bits.set_put_bio(1);
+            wbio_init::<c::DevWriteRefKind>(dst).wbio.bits.set_put_bio(1);
             /* copy WRITE_SYNC flag */
             (*dst).bi_opf = (*src).bi_opf;
         }

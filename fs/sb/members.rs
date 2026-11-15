@@ -1092,24 +1092,6 @@ impl Fs {
         (R::RW == READ || ca.mi.get().state == MemberState::rw).then_some(ca)
     }
 
-    /// dev_get_ioref(), the ref not in a guard: the caller puts io_ref[@rw]
-    /// itself - bch2_dev_get_ioref().
-    pub fn dev_get_ioref_raw(&self, dev: u32, rw: usize) -> Option<&Dev> {
-        let rcu = read_lock();
-        let ca = self.dev_rcu(dev, &rcu)?;
-        if !ca.io_ref[rw].try_inc_live() {
-            return None;
-        }
-
-        if ca.mi.get().state == MemberState::rw || rw == READ {
-            // the ref keeps the device past the section
-            return Some(unsafe { &*core::ptr::from_ref(ca) });
-        }
-
-        unsafe { ca.io_ref[rw].dec() };
-        None
-    }
-
     /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
     /// past the section, and the guard hands it out only while it's held.
     pub(crate) fn io_ref_tryget<R: IoRefIdx>(&self, ca: &Dev) -> Option<DevIoRef<R>> {

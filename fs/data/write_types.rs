@@ -2,8 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
 use crate::cstructs::c;
+use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::fs::Fs;
 use crate::types::NeBytes;
 use core::ffi::c_uint;
@@ -37,19 +37,12 @@ pub enum WriteFlagBit {
 nest! {
     #[derive(MaybeZeroable, TypeInfo)]*
     #[repr(C)]*
-    pub struct bch_write_bio {
+    pub struct bch_write_bio<R: IoRefIdx = c::DevWriteRefKind> {
         #>[derive(BitfieldMembers)]
         pub wbio: pub struct bch_write_bio_wbio {
             /* set at submit: 'static as a write op's fs() is */
             pub c: Option<&'static Fs>,
             pub parent: *mut c::bch_write_bio,
-            /*
-             * Stashed at submit so endio doesn't have to re-derive the dev pointer
-             * from @dev — c->devs[@dev] may be NULL by then (dev_remove clears the
-             * lookup table before draining refs).  Non-NULL iff we hold an io_ref;
-             * doubles as the "we hold the ref" indicator.
-             */
-            pub ca: Option<&'static Dev>,
 
             pub submit_time: u64,
             pub inode_offset: u64,
@@ -72,11 +65,24 @@ nest! {
             },
         },
 
+        /*
+         * Stashed at submit so endio doesn't have to re-derive the dev pointer
+         * from @dev — c->devs[@dev] may be NULL by then (dev_remove clears the
+         * lookup table before draining refs).  Non-NULL iff we hold an io_ref;
+         * doubles as the "we hold the ref" indicator.
+         */
+        pub ca: Option<DevIoRef<R>>,
+
         pub bio: c::bio,
     }
 }
 
 crate::has_bio!(c::bch_write_bio, bio);
+
+// One bioset clones both kinds' bios - the replica set - and to_wbio() finds
+// either from its bio as the default's
+const _: () = assert!(core::mem::offset_of!(c::bch_write_bio<c::DevReadRefKind>, bio) ==
+                      core::mem::offset_of!(c::bch_write_bio, bio));
 
 nest! {
     /* made by init(): bch2_write_op_init() */

@@ -721,16 +721,16 @@ use crate::data::write_extent::write_extent;
 use crate::data::write_nocow::nocow_write;
 use crate::debug::async_objs;
 use crate::errcode::{Errcode, ret_to_c, BchError};
-use crate::fs::{Dev, Fs};
+use crate::fs::Fs;
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
-use crate::sb::members::{DevIo, DevIoRef};
+use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::snapshots::subvolume;
 use crate::util::bio::{bio_put, of_bio, Bio};
 use crate::util::closure::{ClosureRef, HasClosure, Running};
 use crate::util::ffi::Opaque;
-use crate::os::kernel::{current_runtime, local_clock, unlikely, READ, WRITE};
+use crate::os::kernel::{current_runtime, local_clock, unlikely, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::ratelimit::Ratelimit;
 use crate::util::refcount::TryRefcount;
@@ -861,28 +861,24 @@ fn write_index_default(op: &mut Op) -> Result<(), BchError> {
 }
 
 /// # Safety
-/// @bio is a bch_write_bio's, and no other reference to it is live.
-pub(crate) unsafe fn to_wbio<'a>(bio: *mut c::bio) -> &'a mut c::bch_write_bio {
-    unsafe { &mut *of_bio::<c::bch_write_bio>(bio) }
+/// @bio is a bch_write_bio<R>'s, and no other reference to it is live.
+pub(crate) unsafe fn to_wbio<'a, R: IoRefIdx>(bio: *mut c::bio) -> &'a mut c::bch_write_bio<R> {
+    unsafe { &mut *of_bio::<c::bch_write_bio>(bio).cast() }
 }
 
 /// # Safety
-/// As to_wbio()'s.
-pub(crate) unsafe fn wbio_init<'a>(bio: *mut c::bio) -> &'a mut c::bch_write_bio {
-    let wbio = unsafe { to_wbio(bio) };
+/// As to_wbio()'s, its io ref slot as allocated: written, not dropped.
+pub(crate) unsafe fn wbio_init<'a, R: IoRefIdx>(bio: *mut c::bio) -> &'a mut c::bch_write_bio<R> {
+    let wbio = unsafe { to_wbio::<R>(bio) };
     wbio.wbio = ::pin_init::zeroed();
+    unsafe { (&raw mut wbio.ca).write(None) };
     wbio
 }
 
-impl c::bch_write_bio {
+impl<R: IoRefIdx> c::bch_write_bio<R> {
     /// Set when it's submitted.
     pub(crate) fn fs(&self) -> &'static Fs {
         self.wbio.c.expect("a write bio's filesystem, before it's submitted")
-    }
-
-    /// The device it went to, if it holds an io ref on it.
-    pub(crate) fn ca(&self) -> Option<&'static Dev> {
-        self.wbio.ca
     }
 
     /// While it's ours, not in flight: the write path's bios are always
@@ -936,8 +932,9 @@ pub(crate) fn write_op_error(op: &Op, offset: u64, msg: fmt::Arguments<'_>) {
 /// # Safety
 /// @wbio's bio is set up to submit, and ours; @k a key with pointers. With
 /// @cas, a nocow write's: an io ref of each of its devices, given to the bios.
-pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'static Fs, ty: DataType, k: &BkeyI,
-                                          mut cas: Option<&mut [Option<DevWriteRef>]>) {
+pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_bio<R>, fs: &'static Fs,
+                                                       ty: DataType, k: &BkeyI,
+                                                       mut cas: Option<&mut [Option<DevIoRef<R>>]>) {
     let ptrs = BkeySC::from(k).arm::<Ptrs>().expect("submitting a key with no pointers");
     let nocow = cas.is_some();
 
@@ -950,34 +947,18 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
      * invalid ptr, so cas_idx stays in sync with the iterator. */
     let ptrs = ptrs.ptrs(fs).filter(|p| u32::from(p.dev()) != c::BCH_SB_MEMBER_INVALID);
     for (i, ptr) in ptrs.enumerate() {
-        /*
-         * XXX: btree writes should be using io_ref[WRITE], but we
-         * aren't retrying failed btree writes yet (due to device
-         * removal/ro):
-         */
-        let ca = if ty == DataType::btree {
-            /* btree/write.rs's endio puts it */
-            fs.dev_get_ioref_raw(ptr.dev().into(), READ)
-        } else {
-            let r = match &mut cas {
-                Some(cas) => Some(cas[i].take().expect("a nocow write without its io refs")),
-                None => fs.dev_get_ioref(ptr.dev().into()),
-            };
-            /* the bio's, till write_endio() takes it back */
-            r.map(|r| {
-                let ca = unsafe { &*core::ptr::from_ref::<Dev>(&**r) };
-                r.leak();
-                ca
-            })
+        let ca = match &mut cas {
+            Some(cas) => Some(cas[i].take().expect("a nocow write without its io refs")),
+            None      => fs.dev_get_ioref::<R>(ptr.dev().into()),
         };
 
-        let n: &mut c::bch_write_bio = if i + 1 != last {
+        let n: &mut c::bch_write_bio<R> = if i + 1 != last {
             let bio = unsafe { fs.replica_set.alloc_clone(&raw mut wbio.bio, flags::NOIO) };
-            let n = unsafe { to_wbio(bio) };
+            let n = unsafe { wbio_init::<R>(bio) };
 
             n.bio.bi_end_io     = wbio.bio.bi_end_io;
             n.bio.bi_private    = wbio.bio.bi_private;
-            n.wbio.parent       = wbio;
+            n.wbio.parent       = core::ptr::from_mut(wbio).cast();
             n.wbio.bits.set_split(1);
             n.wbio.bits.set_bounce(0);
             n.wbio.bits.set_put_bio(1);
@@ -990,19 +971,24 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
         };
 
         n.wbio.c            = Some(fs);
-        n.wbio.ca           = ca;
         n.wbio.dev          = ptr.dev();
         n.wbio.bits.set_nocow(nocow.into());
         n.wbio.submit_time  = local_clock();
         n.wbio.inode_offset = k.k().start_offset();
-        if let (true, Some(ca)) = (nocow, ca) {
-            n.wbio.nocow_bucket = ca.ptr_bucket(ptr);
-        }
         n.bio.bi_iter.bi_sector = ptr.offset();
 
-        if let Some(ca) = ca {
+        let bdev = ca.as_deref().map(|ca| {
+            if nocow {
+                n.wbio.nocow_bucket = ca.ptr_bucket(ptr);
+            }
             ca.io_done_add(WRITE, ty, (n.bio.bi_iter.bi_size >> 9).into());
-            n.bio_mut().set_dev(ca.disk_sb.bdev);
+            ca.disk_sb.bdev
+        });
+        /* the bio's, till its endio takes it back */
+        n.ca = ca;
+
+        if let Some(bdev) = bdev {
+            n.bio_mut().set_dev(bdev);
 
             if ty != DataType::btree && unlikely(fs.opts().no_data_io.get() != 0) {
                 unsafe { crate::os::bio::endio(&raw mut n.bio) };
@@ -1259,16 +1245,16 @@ pub unsafe extern "C" fn write_point_do_index_updates(work: *mut c::work_struct)
 }
 
 pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
-    let wbio = unsafe { to_wbio(bio) };
+    let wbio = unsafe { to_wbio::<c::DevWriteRefKind>(bio) };
     let cl = wbio.bio.bi_private.cast::<Opaque<c::closure>>();
     let op = unsafe { &mut *Op::of_closure(cl.cast()) };
     let parent = (wbio.wbio.bits.split() != 0).then_some(wbio.wbio.parent);
     let fs = wbio.fs();
-    let ca = wbio.ca();
+    let ca = wbio.ca.take();
     let status = wbio.bio.bi_status;
     let fua = wbio.bio.bi_opf & c::REQ_FUA != 0;
 
-    if let Some(ca) = ca {
+    if let Some(ca) = &ca {
         ca.account_io_completion(c::MemberErrorType::write, wbio.wbio.submit_time,
                                  status == 0);
         if !fua {
@@ -1283,7 +1269,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     }
 
     if wbio.wbio.bits.nocow() != 0 {
-        let ca = ca.expect("a nocow write's device");
+        let ca = ca.as_deref().expect("a nocow write's device");
         fs.nocow_locks.unlock_bucket(crate::btree::bkey::pos(ca.dev_idx.into(), wbio.wbio.nocow_bucket),
                                      crate::data::nocow_locking::NocowKind::Update);
         if !fua {
@@ -1291,9 +1277,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
         }
     }
 
-    if let Some(ca) = ca {
-        drop(unsafe { DevWriteRef::adopt(DevIo::of(ca)) });
-    }
+    drop(ca);
 
     if wbio.wbio.bits.bounce() != 0 {
         unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, &mut wbio.bio) };
@@ -1456,7 +1440,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
 
             let key_to_write = op.insert_keys.iter_from(key_to_write_offset).next().expect("a write with no key");
 
-            unsafe { submit_wbio_replicas(to_wbio(bio), fs, DataType::user, key_to_write, None) };
+            unsafe { submit_wbio_replicas(to_wbio::<c::DevWriteRefKind>(bio), fs, DataType::user, key_to_write, None) };
 
             if !more {
                 break;
@@ -1573,7 +1557,7 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
     }
 
     op.start_time = local_clock();
-    unsafe { wbio_init(&raw mut op.wbio.bio) }.wbio.bits.set_put_bio(0);
+    unsafe { wbio_init::<c::DevWriteRefKind>(&raw mut op.wbio.bio) }.wbio.bits.set_put_bio(0);
 
     let ret = (|| -> Result<(), BchError> {
         if unlikely(op.wbio.bio.bi_iter.bi_size & (fs.opts().block_size.get() as u32 - 1) != 0) {

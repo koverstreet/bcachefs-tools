@@ -101,6 +101,9 @@ pub struct RefGuard<T: Refcount + ?Sized> {
 unsafe impl<T: Refcount + ?Sized + Sync> Send for RefGuard<T> {}
 unsafe impl<T: Refcount + ?Sized + Sync> Sync for RefGuard<T> {}
 
+// None is a null NonNull: all zeroes
+unsafe impl<T: Refcount> ::pin_init::ZeroableOption for RefGuard<T> {}
+
 impl<T: Refcount + ?Sized> RefGuard<T> {
     pub unsafe fn get(t: &T) -> Self {
         unsafe { t.inc() };
