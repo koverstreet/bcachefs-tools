@@ -53,7 +53,7 @@ fn http_thread(server: tiny_http::Server) {
  */
 fn http_socket_path() -> String {
     let pid = std::process::id();
-    let uid = unsafe { libc::geteuid() };
+    let uid = rustix::process::geteuid().as_raw();
     let parent = if uid == 0 {
         "/run/bcachefs".to_string()
     } else if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
