@@ -153,13 +153,13 @@ impl RoAuxTree<'_> {
  * For the write set - the one we're currently inserting keys into - we don't
  * maintain a full search tree, we just keep a simple lookup table in t->prev.
  */
-fn rw_aux_tree_entry(node: *const BtreeNode, buf: &[u64], t: &BsetTree, k: u16) -> RwAuxEntry {
+fn rw_aux_tree_entry(node: &BtreeNode, buf: &[u64], t: &BsetTree, k: u16) -> RwAuxEntry {
     ebug_assert!(k < t.end_offset);
 
     RwAuxEntry {
         offset: k,
         _pad:   0,
-        k:      unsafe { (*node).contents.protected() }.unpack_pos_at(buf, k),
+        k:      unsafe { node.contents.protected() }.unpack_pos_at(buf, k),
     }
 }
 
@@ -317,11 +317,11 @@ fn bkey_mantissa_search(k: &c::bkey_packed, f: &BkeyFloat) -> u16 {
 }
 
 /// @pos packed, if it packs, or unpacked: a bound for make_bfloat().
-pub(super) fn pack_pos_or_unpacked(node: *const BtreeNode, pos: Bpos) -> c::bkey_packed_padded {
+pub(super) fn pack_pos_or_unpacked(node: &BtreeNode, pos: Bpos) -> c::bkey_packed_padded {
     let mut k = ::pin_init::zeroed::<c::bkey_packed_padded>();
     let (buf, at) = k.as_buf_mut();
 
-    if !unsafe { (*node).contents.protected() }.pack_pos(buf, at, pos) {
+    if !unsafe { node.contents.protected() }.pack_pos(buf, at, pos) {
         let u = c::bkey { p: pos, ..c::bkey::new() };
         plain_bytes_mut(&mut k.k).copy_from_slice(plain_bytes(&u));
     }

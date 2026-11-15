@@ -16,7 +16,7 @@ use core::ops::{Deref, DerefMut};
 
 pub struct Keys<'a> {
     /// For the fast paths, which read only its format and unpack constants.
-    node:              *const BtreeNode,
+    node:              &'a BtreeNode,
     pub sets:          &'a [BsetTree],
     /// The node's buffer, 1 << byte_order bytes: its bsets, and the
     /// unwritten whiteouts at its end.
@@ -30,7 +30,7 @@ pub struct Keys<'a> {
 pub struct KeysMut<'a> {
     /// For the fast paths, which read only its format, borrowed below, and
     /// unpack constants.
-    pub(super) node:   *const BtreeNode,
+    pub(super) node:   &'a BtreeNode,
     pub format:        &'a c::bkey_format,
     pub nr_key_bits:   u8,
     pub unpack_fn_len: u8,
@@ -176,7 +176,7 @@ pub(super) fn set_keys<'a>(buf: &'a [u64], t: &BsetTree) -> impl Iterator<Item =
 
 impl<'a> Keys<'a> {
     pub fn node(&self) -> &'a BtreeNode {
-        unsafe { &*self.node }
+        self.node
     }
 
     /// For its format fields: through a KeysMut's view, what that borrows
