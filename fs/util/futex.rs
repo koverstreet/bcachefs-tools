@@ -110,19 +110,6 @@ unsafe impl Sync for Entry {}
 /// Returns at once if it isn't equal; may return spuriously - the caller
 /// checks its condition again either way.
 pub fn futex_wait<W: FutexWord, E: SleepEnd>(w: &W, expected: W::Val, how: Sleep<E>) -> Result<(), E> {
-    futex_wait_or(w, expected, how, || false)
-}
-
-/// futex_wait(), returning too on any wake that finds @woken(): for a waiter
-/// whose condition isn't all futex words - kthread_should_stop(), which
-/// kthread_stop() follows with a wake_up_process(), not a futex_wake(), or
-/// whatever else C changes and wakes a task for. @woken runs in the sleep's
-/// task state, so it mustn't sleep.
-///
-/// A waiter on several futex words - two EventCounts - would want a
-/// vectored wait instead, its entry on each word's bucket: none does yet.
-pub fn futex_wait_or<W: FutexWord, E: SleepEnd>(w: &W, expected: W::Val, how: Sleep<E>,
-                                                mut woken: impl FnMut() -> bool) -> Result<(), E> {
     let addr = ptr::from_ref(w).addr();
     let b = bucket(addr);
 
@@ -146,7 +133,7 @@ pub fn futex_wait_or<W: FutexWord, E: SleepEnd>(w: &W, expected: W::Val, how: Sl
         unsafe { list.push_back(&entry) };
         drop(list);
 
-        ret = sleep_until(how, || (entry.woken.load(Ordering::Acquire) || woken()).then_some(()));
+        ret = sleep_until(how, || entry.woken.load(Ordering::Acquire).then_some(()));
 
         // woken or not, the lock again: so the waker's done with it
         list = b.list.lock();
@@ -214,10 +201,8 @@ impl EventCount {
         futex_wait(&self.0, seen, how)
     }
 
-    /// Sleep until @cond: checked after every wake(), and every other wake
-    /// too, as wait_event() does - so @cond may be over what isn't this
-    /// count, kthread_should_stop() say. It runs in the sleep's task state
-    /// as well, so it mustn't sleep, and more than once a wake.
+    /// Sleep until @cond, checked after every wake(): whatever it's over, a
+    /// change to it must wake() this.
     pub fn wait_until<T, E: SleepEnd + Copy>(&self, how: Sleep<E>,
                                              mut cond: impl FnMut() -> Option<T>)
         -> Result<T, E>
@@ -227,7 +212,7 @@ impl EventCount {
             if let Some(v) = cond() {
                 return Ok(v);
             }
-            futex_wait_or(&self.0, seen, how, || cond().is_some())?;
+            self.wait(seen, how)?;
         }
     }
 

@@ -1035,6 +1035,8 @@ impl Fs {
 
     /// Stop the thread, and wait for it to: bch2_reconcile_stop().
     pub fn reconcile_stop(&self) {
+        // copygc_wait_run() and copygc_wait_not_running() check should_stop()
+        self.copygc.run_done.wake();
         self.reconcile.thread.stop();
     }
 }
