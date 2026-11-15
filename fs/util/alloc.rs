@@ -270,8 +270,8 @@ pub(crate) fn kv_layout(n: usize) -> Result<core::alloc::Layout, AllocError> {
     core::alloc::Layout::from_size_align(n, align).map_err(|_| AllocError)
 }
 
-/// @size bytes kvmalloc()'d, zeroed: for C's kvfree(), or kvfree_rcu(), to
-/// take back.
+/// @size bytes kvmalloc()'d, zeroed: for kvfree(), or kvfree_rcu(), to take
+/// back.
 pub fn kvzalloc(size: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
     kvrealloc_zeroed(core::ptr::null_mut(), 0, size)
 }
