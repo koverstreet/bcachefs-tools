@@ -26,7 +26,7 @@ use crate::xattr::XattrType;
 use kernel::sync::aref::ARef;
 
 use super::inode::{InodeInfo, InodeRef};
-use super::vfs_inode::VfsInode;
+use crate::os::vfs_inode::VfsInode;
 
 #[cfg(CONFIG_UNICODE)]
 // SAFETY, of the CStatic: immutable, its only parts that aren't Sync pointers

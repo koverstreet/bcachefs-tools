@@ -185,7 +185,7 @@ mod vfs {
     use crate::os::iattr::{ATTR_CTIME, ATTR_MODE};
     use crate::os::posix_acl::PosixAcl;
     use crate::vfs::inode::InodeInfo;
-    use crate::vfs::vfs_inode::VfsInode;
+    use crate::os::vfs_inode::VfsInode;
     use crate::xattr::{self, Xattrs};
 
     impl PosixAcl {

@@ -17,7 +17,7 @@ use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::os::file::File;
 use crate::os::kernel::{current_fsgid, current_fsuid};
-use crate::vfs::vfs_inode::VfsInode;
+use crate::os::vfs_inode::VfsInode;
 
 /// The VFS's idmap pointer: const from 7.4.
 #[cfg(linux_ge = "7.4")]

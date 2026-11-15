@@ -13,34 +13,28 @@
 //! Its reference count, i_count, is AlwaysRefCounted's - ihold(), iput() - so
 //! an InodeRef, ARef<InodeInfo>, holds one.
 
-use crate::c;
-use crate::util::ffi::Opaque;
-#[cfg(kernel)]
-use {
-    core::ffi::{c_int, c_long},
-    core::ptr::{read_volatile, write_volatile, NonNull},
-    crate::os::posix_acl::{AclType, PosixAcl},
-    crate::errcode::{ret_to_result_void, BchError},
-    crate::os::kernel::loff,
-    kernel::sync::aref::{ARef, AlwaysRefCounted},
-    crate::os::folio::Mapping,
-    super::super_block::SuperBlock,
-    crate::locking::{ExclusiveGuard, Locked, RwSem, SpinLockIrq},
-};
+use core::ffi::{c_int, c_long};
+use core::ptr::{read_volatile, write_volatile, NonNull};
 
-/// A struct inode of ours - one InodeInfo's - referenced while this is
-/// borrowed. Both builds lay it out; only the kernel's has a VFS.
-#[repr(transparent)]
-pub struct VfsInode(Opaque<c::inode>);
+use crate::c;
+use crate::errcode::{ret_to_result_void, BchError};
+use crate::locking::{ExclusiveGuard, Locked, RwSem, SpinLockIrq};
+use crate::os::folio::Mapping;
+use crate::os::kernel::loff;
+use crate::os::posix_acl::{AclType, PosixAcl};
+use crate::os::super_block::{IsInode, SuperBlock};
+use kernel::sync::aref::{ARef, AlwaysRefCounted};
+
+#[path = "../vfs_inode.rs"]
+mod common;
+pub use common::*;
 
 /// i_lock, held.
-#[cfg(kernel)]
 pub type ILocked<'a> = ExclusiveGuard<'a, SpinLockIrq>;
 
 /// VfsInode's accessors that are a read or write and nothing else, as a
 /// table: name() -> T, or name(T) to set, and how - a field read or written
 /// whole, READ_ONCE() or WRITE_ONCE(), or the kernel helper that does it.
-#[cfg(kernel)]
 macro_rules! accessors {
     () => {};
     ($(#[$m:meta])* $name:ident() -> $t:ty = READ_ONCE($($f:ident).+); $($rest:tt)*) => {
@@ -69,15 +63,9 @@ macro_rules! accessors {
     };
 }
 
-#[cfg(kernel)]
 impl VfsInode {
     pub fn as_ptr(&self) -> *mut c::inode {
         self.0.as_ptr()
-    }
-
-    pub fn sb(&self) -> &SuperBlock {
-        // SAFETY: set at allocation, to our superblock, which outlives it
-        unsafe { &*(*self.as_ptr()).i_sb.cast::<SuperBlock>() }
     }
 
     accessors! {
@@ -358,7 +346,7 @@ impl VfsInode {
 
     /// The rest of it, for @sb: inode_init_always_gfp() - and its one
     /// reference, the caller's.
-    pub fn init_always(&mut self, sb: &SuperBlock, gfp: c::gfp_t) -> Result<(), BchError> {
+    pub fn init_always<T>(&mut self, sb: &SuperBlock<T>, gfp: c::gfp_t) -> Result<(), BchError> {
         ret_to_result_void(unsafe { c::inode_init_always_gfp(sb.as_ptr(), self.as_ptr(), gfp) })
     }
 
@@ -420,20 +408,16 @@ impl VfsInode {
     }
 }
 
-#[cfg(kernel)]
 pub struct InodeLocked<'a>(&'a VfsInode);
 
-#[cfg(kernel)]
 impl Drop for InodeLocked<'_> {
     fn drop(&mut self) {
         unsafe { c::inode_unlock(self.0.as_ptr()) }
     }
 }
 
-#[cfg(kernel)]
 pub struct TwoNondirsLocked<'a>(&'a VfsInode, &'a VfsInode);
 
-#[cfg(kernel)]
 impl Drop for TwoNondirsLocked<'_> {
     fn drop(&mut self) {
         unsafe { c::unlock_two_nondirectories(self.0.as_ptr(), self.1.as_ptr()) }
@@ -441,7 +425,6 @@ impl Drop for TwoNondirsLocked<'_> {
 }
 
 // SAFETY: a borrowed VfsInode is referenced, as ihold() requires
-#[cfg(kernel)]
 unsafe impl AlwaysRefCounted for VfsInode {
     fn inc_ref(&self) {
         unsafe { c::ihold(self.as_ptr()) }
@@ -453,5 +436,4 @@ unsafe impl AlwaysRefCounted for VfsInode {
 }
 
 // SAFETY: a struct inode, repr(transparent), its reference i_count's
-#[cfg(kernel)]
-unsafe impl crate::os::super_block::IsInode for VfsInode {}
+unsafe impl IsInode for VfsInode {}

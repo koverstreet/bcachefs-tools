@@ -195,38 +195,37 @@ pub mod os;
 pub mod typeinfo;
 pub mod util;
 /// The VFS, for its Rust entry points - kernel only, as C's
-/// #ifndef NO_BCACHEFS_FS - but for the struct inode type bch_inode_info
-/// holds, which both builds lay out.
+/// #ifndef NO_BCACHEFS_FS.
+#[cfg(kernel)]
 pub mod vfs {
-    #[cfg(kernel)] pub mod attr;
-    #[cfg(kernel)] pub mod buffered;
-    #[cfg(kernel)] pub mod buffered_write;
-    #[cfg(kernel)] pub mod dentry;
-    #[cfg(kernel)] pub mod dir;
-    #[cfg(kernel)] pub mod direct;
-    #[cfg(kernel)] pub mod direct_write;
-    #[cfg(kernel)] pub mod export;
-    #[cfg(kernel)] pub mod fdm;
-    #[cfg(kernel)] pub mod fiemap;
-    #[cfg(kernel)] pub mod file;
-    #[cfg(kernel)] pub mod folio;
-    #[cfg(kernel)] pub mod folio_reservation;
-    #[cfg(kernel)] pub mod fs_type;
-    #[cfg(kernel)] pub mod idmap;
-    #[cfg(kernel)] pub mod inode;
-    #[cfg(kernel)] pub mod inode_cache;
-    #[cfg(kernel)] pub mod inode_ops;
-    #[cfg(kernel)] pub mod io;
-    #[cfg(kernel)] pub mod namei;
-    #[cfg(kernel)] pub mod new_inode;
-    #[cfg(kernel)] pub mod ops;
-    #[cfg(kernel)] pub mod pagecache;
-    #[cfg(kernel)] pub mod path;
-    #[cfg(kernel)] pub mod status_fd;
-    #[cfg(kernel)] pub mod super_block;
-    #[cfg(kernel)] pub mod ioctl;
-    #[cfg(kernel)] pub mod writeback;
-    pub mod vfs_inode;
+    pub mod attr;
+    pub mod buffered;
+    pub mod buffered_write;
+    pub mod dentry;
+    pub mod dir;
+    pub mod direct;
+    pub mod direct_write;
+    pub mod export;
+    pub mod fdm;
+    pub mod fiemap;
+    pub mod file;
+    pub mod folio;
+    pub mod folio_reservation;
+    pub mod fs_type;
+    pub mod idmap;
+    pub mod inode;
+    pub mod inode_cache;
+    pub mod inode_ops;
+    pub mod io;
+    pub mod namei;
+    pub mod new_inode;
+    pub mod ops;
+    pub mod pagecache;
+    pub mod path;
+    pub mod status_fd;
+    pub mod super_block;
+    pub mod ioctl;
+    pub mod writeback;
 }
 #[path = "fs/xattr.rs"]        pub mod xattr;
 pub mod data {

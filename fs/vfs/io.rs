@@ -37,7 +37,7 @@ use crate::os::iattr::Iattr;
 use super::idmap::MntIdmap;
 use super::inode::{InodeInfo, QuotaReservation};
 use crate::os::iattr::{ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
-use super::vfs_inode::VfsInode;
+use crate::os::vfs_inode::VfsInode;
 
 #[pin_data]
 #[repr(C)]

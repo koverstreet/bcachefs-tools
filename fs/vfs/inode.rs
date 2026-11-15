@@ -63,7 +63,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
 use super::new_inode::NewInode;
-use super::vfs_inode::{ILocked, VfsInode};
+use crate::os::vfs_inode::{ILocked, VfsInode};
 
 pub use c::InodeInfo;
 use crate::format::Btree;

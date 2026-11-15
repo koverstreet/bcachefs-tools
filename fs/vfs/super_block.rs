@@ -31,6 +31,7 @@ use cstruct_macros::vtable;
 
 use crate::os::dentry::Dentry;
 use super::inode::InodeInfo;
+use crate::os::vfs_inode::VfsInode;
 use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME};
 
 /// One of ours: s_fs_info is its Fs. The type is os/linux_kernel/super_block.rs's.
@@ -51,6 +52,13 @@ impl SuperBlock {
 
     pub fn umount(&self) -> &Locked<RwSem> {
         Locked::from_c(unsafe { &*(&raw const (*self.as_ptr()).s_umount).cast() })
+    }
+}
+
+impl VfsInode {
+    pub fn sb(&self) -> &SuperBlock {
+        // SAFETY: set at allocation, to our superblock, which outlives it
+        unsafe { &*(*self.as_ptr()).i_sb.cast::<SuperBlock>() }
     }
 }
 

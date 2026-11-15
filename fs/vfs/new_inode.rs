@@ -24,7 +24,7 @@ use pin_init::{pin_init, pin_init_from_closure, Zeroable};
 
 use super::inode::{InodeInfo, InodeRef};
 use super::pagecache::INODE_AOPS;
-use super::vfs_inode::VfsInode;
+use crate::os::vfs_inode::VfsInode;
 
 pub(crate) static INODE_CACHE: KmemCache<InodeInfo> = KmemCache::new();
 

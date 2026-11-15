@@ -32,3 +32,6 @@ pub mod workqueue;
 #[path = "../linux_kernel/ops.rs"]
 pub mod ops;
 pub mod thread_with_file;
+// The struct, which InodeInfo lays out; userspace has no VFS for it
+#[path = "../vfs_inode.rs"]
+pub mod vfs_inode;

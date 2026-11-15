@@ -45,7 +45,7 @@ use pin_init::{init, Init};
 
 use super::inode::InodeInfo;
 use super::status_fd::StatusFile;
-use super::vfs_inode::VfsInode;
+use crate::os::vfs_inode::VfsInode;
 
 pub(crate) struct Bcachefs;
 
