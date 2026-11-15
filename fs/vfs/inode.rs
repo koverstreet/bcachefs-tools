@@ -55,6 +55,7 @@ use crate::snapshots::subvolume;
 use crate::prt;
 use crate::util::ffi::Opaque;
 use crate::os::file::File;
+use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::kernel::HZ;
 use crate::util::log::LogMsg;
 use crate::util::rcu::{read_lock, ReadGuard};
@@ -78,16 +79,6 @@ unsafe impl AlwaysRefCounted for InodeInfo {
         unsafe { VfsInode::dec_ref(obj.cast()) }
     }
 }
-
-/// <linux/fs.h>'s ATTR_*: an iattr's ia_valid, and update_after_write()'s
-/// @fields.
-pub const ATTR_MODE:  u32 = 1 << 0;
-pub const ATTR_UID:   u32 = 1 << 1;
-pub const ATTR_GID:   u32 = 1 << 2;
-pub const ATTR_SIZE:  u32 = 1 << 3;
-pub const ATTR_ATIME: u32 = 1 << 4;
-pub const ATTR_MTIME: u32 = 1 << 5;
-pub const ATTR_CTIME: u32 = 1 << 6;
 
 // to_bch_ei(): an InodeInfo is where its struct inode is
 const _: () = assert!(offset_of!(InodeInfo, v) == 0);

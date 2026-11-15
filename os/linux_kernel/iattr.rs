@@ -5,7 +5,15 @@
 
 use crate::c;
 
-use super::inode::{ATTR_ATIME, ATTR_CTIME, ATTR_GID, ATTR_MODE, ATTR_MTIME, ATTR_SIZE, ATTR_UID};
+/// <linux/fs.h>'s ATTR_*: an iattr's ia_valid, and update_after_write()'s
+/// @fields.
+pub const ATTR_MODE:  u32 = 1 << 0;
+pub const ATTR_UID:   u32 = 1 << 1;
+pub const ATTR_GID:   u32 = 1 << 2;
+pub const ATTR_SIZE:  u32 = 1 << 3;
+pub const ATTR_ATIME: u32 = 1 << 4;
+pub const ATTR_MTIME: u32 = 1 << 5;
+pub const ATTR_CTIME: u32 = 1 << 6;
 
 #[repr(transparent)]
 pub struct Iattr(c::iattr);

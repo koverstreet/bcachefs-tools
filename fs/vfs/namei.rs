@@ -38,7 +38,8 @@ use kernel::sync::aref::ARef;
 
 use crate::os::dentry::Dentry;
 use super::idmap::MntIdmap;
-use super::inode::{InodeInfo, InodeRef, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
+use super::inode::{InodeInfo, InodeRef};
+use crate::os::iattr::{ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use super::inode_ops::InodeOps;
 use super::new_inode::NewInode;
 

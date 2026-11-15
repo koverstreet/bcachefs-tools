@@ -375,7 +375,8 @@ mod vfs {
     use cstruct_macros::vtable;
     use crate::os::dentry::Dentry;
     use crate::vfs::idmap::RawIdmap;
-    use crate::vfs::inode::{InodeInfo, ATTR_CTIME};
+    use crate::os::iattr::ATTR_CTIME;
+    use crate::vfs::inode::InodeInfo;
 
     /// A getxattr result as C's int: the length, or the error's class.
     fn len_to_c(r: Result<usize, BchError>) -> c_int {

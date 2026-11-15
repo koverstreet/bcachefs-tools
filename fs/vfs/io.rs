@@ -33,9 +33,10 @@ use crate::util::task::waiter;
 use crate::util::Nsecs;
 use crate::{fsck_err_on, has_bio, prt};
 
-use super::iattr::Iattr;
+use crate::os::iattr::Iattr;
 use super::idmap::MntIdmap;
-use super::inode::{InodeInfo, QuotaReservation, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
+use super::inode::{InodeInfo, QuotaReservation};
+use crate::os::iattr::{ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use super::vfs_inode::VfsInode;
 
 #[pin_data]

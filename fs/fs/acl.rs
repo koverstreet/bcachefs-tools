@@ -198,7 +198,8 @@ mod vfs {
     use crate::util::os_str::{OsStr, OsStrExt};
     use crate::util::vstructs::Validated;
     use crate::vfs::idmap::MntIdmap;
-    use crate::vfs::inode::{InodeInfo, ATTR_CTIME, ATTR_MODE};
+    use crate::os::iattr::{ATTR_CTIME, ATTR_MODE};
+    use crate::vfs::inode::InodeInfo;
     use crate::vfs::vfs_inode::VfsInode;
     use crate::xattr::{self, Xattrs};
 

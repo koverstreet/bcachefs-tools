@@ -49,7 +49,7 @@ use crate::vfs::direct::direct_io_read;
 use crate::vfs::kiocb::Kiocb;
 use crate::vfs::idmap::MntIdmap;
 use crate::vfs::inode::{InodeInfo, InodeRef};
-use crate::vfs::mount::WriteAccess;
+use crate::os::mount::WriteAccess;
 use crate::vfs::path::{Creating, Removing, UserPath};
 use crate::{bch_err, btree_trans, prt};
 use core::ffi::{c_int, c_void};
