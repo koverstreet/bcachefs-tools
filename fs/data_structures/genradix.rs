@@ -28,7 +28,7 @@
 //! drop.
 
 use crate::types::GenRadix;
-use crate::util::alloc::{flags, AllocError, AllocGfp, Box, Flags, Kmalloc, WithFlags, current_gfp_context};
+use crate::util::alloc::{flags, AllocError, AllocGfp, Box, Flags, Kmalloc, WithFlags};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -400,7 +400,6 @@ impl<T: Zeroable> GenRadix<T> {
         -> Result<&mut T, AllocError>
     {
         let offset = Self::offset(idx).ok_or(AllocError)?;
-        let gfp = current_gfp_context(gfp);
         let p = self.tree.ptr_alloc(offset, Some(node), gfp)?;
         // SAFETY: as get_mut()'s
         Ok(unsafe { p.cast::<T>().as_mut() })

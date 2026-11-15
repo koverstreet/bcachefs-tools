@@ -18,7 +18,7 @@ use crate::c;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::errcode::BchError;
-use crate::util::alloc::{flags, Flags, current_gfp_context, AllocError};
+use crate::util::alloc::{flags, Flags, AllocError};
 use crate::os::kernel::PAGE_SIZE;
 use crate::util::mempool::{Elements, Mempool};
 use pin_init::{pin_data, pin_init, PinInit};
@@ -90,7 +90,7 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: Flags) -> Result
         assert!(b % bs == 0, "a bio's pages {b} bytes, not a multiple of its {bs} byte blocks");
 
         // SAFETY: no pointers in
-        let p = NonNull::new(crate::util::alloc::bio_pages_alloc(b, current_gfp_context(gfp))).ok_or(AllocError)?;
+        let p = NonNull::new(crate::util::alloc::bio_pages_alloc(b, gfp)).ok_or(AllocError)?;
         // SAFETY: a fresh allocation of @b bytes, the bio's now
         unsafe { crate::os::bio::add_virt_nofail(bio, p.as_ptr(), b as u32) };
     }

@@ -62,9 +62,9 @@ pub(crate) fn memalloc_flags_restore(flags: u32, was: u32) {
 }
 
 /// A PF_MEMALLOC_* scope, until it's dropped. NOIO: allocations may not
-/// recurse into reclaim IO. NORECLAIM and NOWARN, which only our allocation
-/// entry points apply (util::alloc::current_gfp_context()): as GFP_NOWAIT,
-/// and __GFP_NOWARN.
+/// recurse into reclaim IO. NORECLAIM and NOWARN, which only our allocators
+/// apply (os::alloc's current_gfp_context_raw()): no direct reclaim, and
+/// __GFP_NOWARN.
 #[must_use = "the memalloc scope ends as soon as the guard is dropped"]
 pub struct MemallocFlags {
     flags: u32,

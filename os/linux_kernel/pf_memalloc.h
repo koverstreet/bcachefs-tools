@@ -6,8 +6,8 @@
 
 /*
  * Upstream's, until the revert gave their bits back to sched.h's holes - so
- * the page allocator doesn't see them: our Rust allocation entry points apply
- * them (util/alloc.rs, current_gfp_context()), and nothing else does.
+ * the page allocator doesn't see them: our Rust allocators apply them
+ * (alloc.rs, current_gfp_context_raw()), and nothing else does.
  *
  * Whichever holes this kernel still has: upstream fills them as it goes (7.4's
  * PF_NO_NOTIFY_SIGNAL took 0x00800000), and distro kernels sooner. Rust has

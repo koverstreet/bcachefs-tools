@@ -382,10 +382,10 @@ pub unsafe fn kfree_rcu_mightsleep(p: *mut c_void) {
     unsafe { c::rust_kfree_rcu_mightsleep(p) }
 }
 
-/// @size bytes of pages, with @gfp, for a bio's data: page aligned, as we
-/// don't know the device's DMA alignment.
+/// @size bytes of pages, with @gfp and the task's memalloc scope, for a bio's
+/// data: page aligned, as we don't know the device's DMA alignment.
 pub fn bio_pages_alloc(size: usize, gfp: Flags) -> *mut c_void {
-    unsafe { c::rust_bio_pages_alloc(size, gfp.raw()) }
+    unsafe { c::rust_bio_pages_alloc(size, current_gfp_context_raw(gfp.raw())) }
 }
 
 /// # Safety
