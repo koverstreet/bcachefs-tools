@@ -35,13 +35,8 @@ fn path_subvol(path: &Path) -> Option<(u64, u64)> {
     use std::os::unix::ffi::OsStrExt;
 
     let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
-    let mut stx: libc::statx = unsafe { std::mem::zeroed() };
-
-    if unsafe {
-        libc::statx(libc::AT_FDCWD, c_path.as_ptr(), 0, STATX_SUBVOL, &mut stx)
-    } != 0 {
-        return None;
-    }
+    let stx = rustix::fs::statx(rustix::fs::CWD, c_path.as_c_str(), rustix::fs::AtFlags::empty(),
+                                rustix::fs::StatxFlags::from_bits_retain(STATX_SUBVOL)).ok()?;
 
     if stx.stx_mask & STATX_SUBVOL == 0 {
         return None;
