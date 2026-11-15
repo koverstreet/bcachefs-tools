@@ -315,7 +315,7 @@ pub enum JournalFlag {
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct journal_bio {
-    pub ca: *mut Dev,
+    pub ca: Option<DevWriteRef>,
     pub buf: *mut c::journal_buf,
     pub submit_time: u64,
 

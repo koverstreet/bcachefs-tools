@@ -22,7 +22,6 @@ use crate::c::JournalSpaceFrom::journal_space_discarded;
 use crate::c::{buf_waiters, JournalGuard, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT, JOURNAL_BUF_NOFLUSH,
                JOURNAL_BUF_NOT_IN_FLIGHT};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::data::write::DevWriteRef;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
@@ -717,7 +716,7 @@ unsafe fn jbio_of<'a>(bio: *mut c::bio) -> &'a mut c::journal_bio {
 
 unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let jbio = unsafe { jbio_of(bio) };
-    let ca = unsafe { &*jbio.ca };
+    let ca = jbio.ca.take().expect("a journal write's device");
     let w = unsafe { &mut *jbio.buf };
     let j = w.journal();
     let fs = j.fs();
@@ -733,13 +732,13 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     }
 
     unsafe { c::closure_put(&raw mut w.io) };
-    drop(unsafe { DevWriteRef::adopt(&ca.io_ref_write) });
+    drop(ca);
     unsafe { bio_put(bio) };
 }
 
 unsafe extern "C" fn write_preflush_endio(bio: *mut c::bio) {
     let jbio = unsafe { jbio_of(bio) };
-    let ca = unsafe { &*jbio.ca };
+    let ca = jbio.ca.take().expect("a journal preflush's device");
     let w = unsafe { &mut *jbio.buf };
     let j = w.journal();
     let fs = j.fs();
@@ -754,7 +753,7 @@ unsafe extern "C" fn write_preflush_endio(bio: *mut c::bio) {
     }
 
     unsafe { c::closure_put(&raw mut w.io) };
-    drop(unsafe { DevWriteRef::adopt(&ca.io_ref_write) });
+    drop(ca);
     unsafe { bio_put(bio) };
 }
 
@@ -812,7 +811,6 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
             };
             let jbio = unsafe { jbio_of(bio) };
 
-            jbio.ca = ptr::from_ref::<Dev>(&ca).cast_mut();
             jbio.buf = ptr::from_ref::<c::journal_buf>(&w).cast_mut();
             jbio.submit_time = local_clock();
 
@@ -820,8 +818,9 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
             jbio.bio.bi_private = ptr::from_ref::<Dev>(&ca).cast_mut().cast();
             jbio.bio.bi_ioprio = IOPRIO_RT;
 
-            /* the bio's ref, which write_endio() puts: */
-            ca.leak();
+            /* the bio's ref, which write_endio() takes back - its slot as
+             * the bioset left it, written, not dropped: */
+            unsafe { (&raw mut jbio.ca).write(Some(ca)) };
             unsafe { closure_bio_submit(bio, &w) };
         }
     });
@@ -855,15 +854,15 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
                                            flags::NOIO);
             let jbio = unsafe { jbio_of(bio) };
 
-            jbio.ca = ptr::from_ref::<Dev>(&ca).cast_mut();
             jbio.buf = ptr::from_ref::<c::journal_buf>(&w).cast_mut();
             jbio.submit_time = local_clock();
 
             jbio.bio.bi_end_io = Some(write_preflush_endio);
             jbio.bio.bi_private = ptr::from_ref::<Dev>(&ca).cast_mut().cast();
 
-            /* the bio's ref, which write_preflush_endio() puts: */
-            ca.leak();
+            /* the bio's ref, which write_preflush_endio() takes back - its
+             * slot as the bioset left it, written, not dropped: */
+            unsafe { (&raw mut jbio.ca).write(Some(ca)) };
             unsafe { closure_bio_submit(bio, &w) };
         }
 
