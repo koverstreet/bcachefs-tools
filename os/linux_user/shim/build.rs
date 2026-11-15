@@ -135,10 +135,6 @@ fn main() {
         .allowlist_type("z_stream")
         .allowlist_var("ZLIB_VERSION|MAX_WBITS|Z_OK|Z_STREAM_END|Z_FINISH|Z_DEFLATED")
         .allowlist_var("Z_DEFAULT_STRATEGY|Z_DEFAULT_COMPRESSION|Z_BEST_SPEED|Z_BEST_COMPRESSION")
-        // The keyring, which a key is looked for in (data/checksum.rs): the
-        // kernel's in-kernel, libkeyutils' here.
-        .allowlist_function("request_key|keyctl_read|keyctl_revoke")
-        .allowlist_var("KEY_SPEC_.*")
         // The kernel's DEFINE_LOCK_GUARD / DEFINE_CLASS cleanup machinery
         // (class_*_constructor/destructor/lock_ptr) are never called from Rust,
         // and wrap_static_fns can't emit valid C wrappers for them.

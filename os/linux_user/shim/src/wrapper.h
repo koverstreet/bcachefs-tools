@@ -17,7 +17,6 @@
 #include "raid/raid.h"		/* raid_gen(), raid_rec(): the kernel's raid6/xor, in userspace */
 
 #include <errno.h>
-#include <keyutils.h>
 
 /*
  * liburcu's functions are macros, naming its flavour's - functions, or with

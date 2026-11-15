@@ -12,7 +12,6 @@
 
   # run time
   fuse3,
-  keyutils,
   libaio,
   libsodium,
   libunwind,
@@ -86,7 +85,6 @@ let
     ];
 
     buildInputs = [
-      keyutils
       libaio
       libsodium
       libunwind

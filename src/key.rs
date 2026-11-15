@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{anyhow, bail, ensure, Result};
 use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key};
-use bcachefs_kernel::data::checksum::key_description;
+use bcachefs_kernel::data::checksum::{key_description, keyring_search};
 use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, without_line_ending, Given, Watch};
 use bcachefs_kernel::util::vstructs::plain_bytes;
 use linux_keyutils::{KeyRing, KeyRingIdentifier};
@@ -145,20 +145,10 @@ impl KeyHandle {
         Ok(KeyHandle)
     }
 
-    fn search_keyring(keyring: KeyRingIdentifier, key_name: &str) -> Result<()> {
-        KeyRing::from_special_id(keyring, false)?.search(key_name)?;
-        info!("Found key in keyring");
-        Ok(())
-    }
-
     pub fn new_from_search(uuid: &Uuid) -> Result<Self> {
-        let key_name = key_description(uuid);
-        let key_name = key_name.as_str();
-
-        Self::search_keyring(KeyRingIdentifier::Session, key_name)
-            .or_else(|_| Self::search_keyring(KeyRingIdentifier::User, key_name))
-            .or_else(|_| Self::search_keyring(KeyRingIdentifier::UserSession, key_name))
-            .map(|_| KeyHandle)
+        keyring_search(key_description(uuid).as_str())?;
+        info!("Found key in keyring");
+        Ok(KeyHandle)
     }
 
     fn wait_for_unlock(uuid: &Uuid) -> Result<Self> {

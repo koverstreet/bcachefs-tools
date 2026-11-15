@@ -149,6 +149,7 @@ dependencies = [
  "getrandom",
  "io-uring",
  "libc",
+ "linux-keyutils",
  "linux-raw-sys",
  "log",
  "nestify",

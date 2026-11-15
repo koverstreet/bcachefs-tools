@@ -620,21 +620,26 @@ fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
     }
 }
 
-/// The user key @desc, from the session keyring, the user's, or the user
-/// session's.
+/// The user key @desc, found in the session keyring, the user's, or the user
+/// session's - not read.
+#[cfg(not(kernel))]
+pub fn keyring_search(desc: &str) -> Result<linux_keyutils::Key, BchError> {
+    use linux_keyutils::{KeyRing, KeyRingIdentifier as Ring};
+
+    [Ring::Session, Ring::User, Ring::UserSession].into_iter()
+        .find_map(|ring| KeyRing::from_special_id(ring, false).and_then(|r| r.search(desc)).ok())
+        .ok_or(BchError::from(c::ENOKEY))
+}
+
+/// The user key @desc, from the keyrings keyring_search() looks in.
 #[cfg(not(kernel))]
 fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
-    for ring in [c::KEY_SPEC_SESSION_KEYRING, c::KEY_SPEC_USER_KEYRING, c::KEY_SPEC_USER_SESSION_KEYRING] {
-        // SAFETY: strings
-        let id = unsafe { c::request_key(c"user".as_ptr(), desc.as_ptr(), core::ptr::null(), ring) };
-        if id >= 0 {
-            let mut key = c::bch_key::default();
-            // SAFETY: room for a key
-            let n = unsafe { c::keyctl_read(id, (&raw mut key).cast(), size_of_val(&key)) };
-            return if n == size_of_val(&key) as i64 { Ok(key) } else { Err(BchError::from(c::EINVAL)) };
-        }
+    let key = keyring_search(desc.to_str().expect("a key description, \"bcachefs:<uuid>\""))?;
+    let mut k = c::bch_key::default();
+    match key.read(&mut crate::util::vstructs::plain_bytes_mut(&mut k)) {
+        Ok(n) if n == size_of_val(&k) => Ok(k),
+        _                             => Err(BchError::from(c::EINVAL)),
     }
-    Err(BchError::from_raw(std::io::Error::last_os_error().raw_os_error().unwrap_or(0)))
 }
 
 /// The key derived from a passphrase, asked for, if it's the one @sb's key is
@@ -692,16 +697,13 @@ pub fn request_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
 /// @sb's key taken out of the user keyring: its passphrase is changing.
 #[cfg(not(kernel))]
 pub fn revoke_key(sb: &c::bch_sb) -> Result<(), BchError> {
+    use linux_keyutils::{KeyRing, KeyRingIdentifier};
+
     let desc = key_description(&sb.uuid());
-    // SAFETY: strings
-    let id = unsafe {
-        c::request_key(c"user".as_ptr(), desc.as_c_str().as_ptr(), core::ptr::null(), c::KEY_SPEC_USER_KEYRING)
-    };
-    if id < 0 {
-        return Err(BchError::from_raw(std::io::Error::last_os_error().raw_os_error().unwrap_or(0)));
-    }
-    // SAFETY: a key
-    unsafe { c::keyctl_revoke(id) };
+    let key = KeyRing::from_special_id(KeyRingIdentifier::User, false)
+        .and_then(|r| r.search(desc.as_str()))
+        .map_err(|_| BchError::from(c::ENOKEY))?;
+    let _ = key.revoke();
     Ok(())
 }
 
