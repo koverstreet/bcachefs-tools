@@ -31,7 +31,6 @@ use crate::commands::opts::{bch_opt_lookup_negated, parse_opt_val};
 use crate::key::{KeyHandle, Keyring, Passphrase};
 use crate::commands::format_util::{format_opts_default, DevOpts, FormatOpts};
 use crate::util::fmt_bytes_human;
-use crate::wrappers::super_io;
 
 use fiemap::FiemapExtentFlags;
 
@@ -520,18 +519,23 @@ fn migrate_fs(
 fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
 
-    // Open device and read existing superblock
+    // Read the existing superblock
+    let mut sb_opts: c::bch_opts = Default::default();
+    sb_opts.set_sb(sb_offset);
+    let dev_cstr = CString::new(dev_path)?;
+    let mut sb = bcachefs_kernel::sb::io::read_super(&dev_cstr, &mut sb_opts, None)
+        .map_err(|e| anyhow!("Error reading superblock at sector {sb_offset} of {dev_path}: {e}"))?;
+
+    // Validate and add default layout (catches errors early)
+    let sb_size = add_default_sb_layout(&mut sb.sb_mut().layout)?;
+    drop(sb);
+
     let dev_file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .custom_flags(libc::O_EXCL)
         .open(dev_path)
         .map_err(|e| anyhow!("Error opening {}: {}", dev_path, e))?;
-
-    let mut sb = super_io::super_read(dev_file.as_fd(), sb_offset)?;
-
-    // Validate and add default layout (catches errors early)
-    let sb_size = add_default_sb_layout(&mut sb.sb_mut().layout)?;
 
     // Zero the start of the disk to blow away the old superblock
     let zeroes_len = ((c::BCH_SB_SECTOR as usize) << 9) + std::mem::size_of::<Head<c::bch_sb>>();
@@ -542,7 +546,6 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
             .map_err(|e| anyhow!("Error zeroing start of disk: {}", e))?;
     }
     drop(dev_file);
-    drop(sb);
 
     // Open the filesystem with nostart + sb offset
     let dev_path_pb = std::path::PathBuf::from(dev_path);

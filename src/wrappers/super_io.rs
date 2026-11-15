@@ -6,7 +6,7 @@ use std::io;
 use std::os::fd::BorrowedFd;
 
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::{plain_bytes_mut, Head, SelfSized, Unvalidated};
+use bcachefs_kernel::util::vstructs::Head;
 
 /// Print error to stderr and exit with failure status.
 /// Matches the C `die()` function behavior.
@@ -101,23 +101,6 @@ pub fn bch2_super_write(fd: BorrowedFd<'_>, sb: &mut c::bch_sb) {
     }
 }
 
-/// Read a superblock from disk at the given sector offset, into a buffer of
-/// its own, as read: Unvalidated, its count checked against what was read.
-pub fn super_read(fd: BorrowedFd<'_>, sector: u64) -> anyhow::Result<SbBuf<Unvalidated>> {
-    // Read the fixed-size header to learn the full extent
-    let mut hdr = pin_init::zeroed::<Head<c::bch_sb>>();
-    read_exact_at(fd, plain_bytes_mut(&mut hdr), sector << 9)
-        .map_err(|e| anyhow::anyhow!("pread failed at offset {}: {}", sector << 9, e))?;
-    let bytes = hdr.bytes();
-
-    let mut buf = vec![0u8; bytes];
-    read_exact_at(fd, &mut buf, sector << 9)
-        .map_err(|e| anyhow::anyhow!("pread failed at offset {}: {}", sector << 9, e))?;
-
-    SbBuf::from_bytes(&buf)
-        .map_err(|e| anyhow::anyhow!("superblock at sector {}: {}", sector, e))
-}
-
 fn round_up(val: usize, align: usize) -> usize {
     (val + align - 1) & !(align - 1)
 }
@@ -127,8 +110,6 @@ fn pwrite_exact(fd: BorrowedFd<'_>, buf: &[u8], offset: u64) {
     write_all_at(fd, buf, offset)
         .unwrap_or_else(|e| die(&format!("pwrite failed at offset {}: {}", offset, e)));
 }
-
-use bcachefs_kernel::sb::io::SbBuf;
 
 /// Default superblock size in 512-byte sectors
 pub const SUPERBLOCK_SIZE_DEFAULT: u32 = 2048;
