@@ -35,7 +35,7 @@ use crate::data::nocow_locking::{self, NocowKind};
 use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::util::alloc::{init_at, Flags};
+use crate::util::alloc::{init_at, Box, Flags, KVec, Kmalloc};
 use crate::util::bio::{pages, BioInPlace, HasBio};
 use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
@@ -138,7 +138,7 @@ pub struct data_update {
 
     pub rbio: Rbio,
     pub op: c::bch_write_op,
-    pub bvecs: *mut c::bio_vec,
+    pub bvecs: Option<Box<[c::bio_vec], Kmalloc>>,
 }
 
 /// The read failed only because the extent changed under it - the key was
@@ -404,14 +404,14 @@ impl c::data_update {
         let buf_bytes = buf_bytes.next_multiple_of(block_size);
         let nr_vecs = pages::nr_vecs(buf_bytes as usize);
 
-        let layout = core::alloc::Layout::array::<c::bio_vec>(nr_vecs as usize).map_err(|_| BchError::from(c::ENOMEM))?;
-        self.bvecs = crate::util::alloc::kzalloc(layout).map_err(|_| BchError::from(c::ENOMEM))?.as_ptr().cast();
+        let bvecs = KVec::from_elem(c::bio_vec::default(), nr_vecs as usize).map_err(|_| BchError::from(c::ENOMEM))?;
+        let bvecs = self.bvecs.insert(bvecs.into_boxed_slice()).as_mut_ptr();
 
         // SAFETY: its bios, and the bvecs just made for them
         unsafe {
-            crate::os::bio::init(self.rbio.bio.as_ptr(), core::ptr::null_mut(), self.bvecs, nr_vecs as u16,
+            crate::os::bio::init(self.rbio.bio.as_ptr(), core::ptr::null_mut(), bvecs, nr_vecs as u16,
                                  c::req_op_REQ_OP_READ);
-            crate::os::bio::init(&mut self.op.wbio.bio, core::ptr::null_mut(), self.bvecs, nr_vecs as u16, 0);
+            crate::os::bio::init(&mut self.op.wbio.bio, core::ptr::null_mut(), bvecs, nr_vecs as u16, 0);
         }
         if pages::alloc_pages(&mut self.op.wbio.bio, block_size, buf_bytes as usize, Flags::empty()).is_err() {
             self.bios_free();
@@ -437,13 +437,9 @@ impl c::data_update {
 
     /// The write bio's pages and the bvecs bios_init() made, freed.
     fn bios_free(&mut self) {
-        // SAFETY: the pages are alloc_pages()'s, the bvecs bios_init()'s
-        // kzalloc(); neither bio is in flight
-        unsafe {
-            pages::free_pages_pool(&self.fs().bio_bounce, &mut self.op.wbio.bio);
-            crate::util::alloc::kfree_unsized(self.bvecs.cast());
-        }
-        self.bvecs = core::ptr::null_mut();
+        // SAFETY: the pages are alloc_pages()'s; neither bio is in flight
+        unsafe { pages::free_pages_pool(&self.fs().bio_bounce, &mut self.op.wbio.bio) };
+        self.bvecs = None;
     }
 
     fn trace(&self, ret: c_int) {
