@@ -331,7 +331,8 @@ impl Default for bch_sb_io {
 pub struct bch_sb_bdev {
     pub s_bdev_file: *mut crate::os::blkdev::BdevFile,
     pub bdev: *mut crate::os::blkdev::BlockDevice,
-    pub sb_name: *mut c_char,
+    /// The path it was opened by, NUL-terminated
+    pub sb_name: Option<crate::util::alloc::Box<[u8], crate::util::alloc::Kmalloc>>,
     /// A ref, the handle's
     pub holder: *const crate::sb::io::Holder,
     pub mode: c::blk_mode_t,

@@ -156,7 +156,7 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past,
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
-use crate::util::alloc::{Arc, KVVec};
+use crate::util::alloc::{Arc, KVec, KVVec};
 use core::sync::atomic::AtomicPtr;
 use crate::util::bio::{Bio, BioBox, BioOwner};
 use crate::util::gather::Gather;
@@ -1041,29 +1041,20 @@ impl c::bch_sb_bdev {
 
     /// The path it was opened by
     pub fn name(&self) -> &CStr {
-        // SAFETY: read_super()'s copy of the path, freed with the handle
-        if self.sb_name.is_null() { c"" } else { unsafe { CStr::from_ptr(self.sb_name.cast()) } }
+        self.sb_name.as_deref().map_or(c"", |n| CStr::from_bytes_with_nul(n).expect("a device's name, NUL-terminated"))
     }
 
-    /// The device closed, and what names it freed.
+    /// The device closed, and its holder put.
     fn free(&mut self) {
-        use crate::util::alloc::kfree;
-        use core::alloc::Layout;
         use core::ptr::NonNull;
 
         if let Some(file) = NonNull::new(self.s_bdev_file) {
             // SAFETY: the file the device was opened with
             unsafe { crate::os::blkdev::close(file) };
         }
-        // SAFETY: read_super_and_backups()'s kzalloc() and Arc ref, or null
-        unsafe {
-            if !self.holder.is_null() {
-                drop(Arc::from_raw(self.holder));
-            }
-            if let Some(p) = NonNull::new(self.sb_name) {
-                let len = CStr::from_ptr(p.as_ptr().cast()).to_bytes_with_nul().len();
-                kfree(p.cast(), Layout::array::<u8>(len).expect("the name's layout, as allocated"));
-            }
+        // SAFETY: read_super_and_backups()'s Arc ref, or null
+        if !self.holder.is_null() {
+            drop(unsafe { Arc::from_raw(self.holder) });
         }
     }
 }
@@ -1403,20 +1394,15 @@ fn header(sb: &mut bch_sb_handle) -> &Head<bch_sb> {
 fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&Arc<Holder>>,
                           err: &mut Printbuf) -> Result<bch_sb_handle, BchError>
 {
-    use crate::util::alloc::kzalloc;
-    use core::alloc::Layout;
-
     let mut sb = bch_sb_handle::default();
     sb.dev.mode = c::BLK_OPEN_READ;
     sb.io.bits.set_have_bio(1);
 
     let enomem = |_| BchError::from(c::ENOMEM);
     sb.dev.holder = holder.map_or(core::ptr::null(), |h| Arc::into_raw(h.clone()));
-    let name = path.to_bytes_with_nul();
-    let p = kzalloc(Layout::array::<u8>(name.len()).map_err(|_| BchError::from(c::ENOMEM))?).map_err(enomem)?;
-    // SAFETY: name.len() bytes, just allocated
-    unsafe { core::ptr::copy_nonoverlapping(name.as_ptr(), p.as_ptr(), name.len()) };
-    sb.dev.sb_name = p.as_ptr().cast();
+    let mut name = KVec::new();
+    name.extend_from_slice(path.to_bytes_with_nul()).map_err(enomem)?;
+    sb.dev.sb_name = Some(name.into_boxed_slice());
 
     sb.dev.mode |= open_buffered(opts);
     if !opts.noexcl_or_default() {
