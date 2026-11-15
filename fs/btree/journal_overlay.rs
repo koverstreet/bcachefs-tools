@@ -38,7 +38,7 @@
 
 use crate::btree::iter::{polonius_key, BtreeTrans, TransAttempt};
 use crate::accounting;
-use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
+use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::node::{iter::KeyIter, BtreeNode};
 use crate::btree::path::LockedNode;
@@ -47,7 +47,7 @@ use crate::errcode::BchError;
 use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
 use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Ref};
-use crate::util::projections::{Volatile, VolatilePublish};
+use crate::util::projections::VolatilePublish;
 use crate::util::alloc::KVVec;
 use crate::data_structures::gap_buffer::GapBuffer;
 use crate::os::kernel::cond_resched;
@@ -274,7 +274,7 @@ impl c::journal_keys {
     /// Key @k: its own, or in the journal entry it was read from -
     /// journal_key_k().
     #[inline]
-    pub(crate) fn key_k(&self, k: &c::journal_key) -> *mut c::bkey_i {
+    fn key_k(&self, k: &c::journal_key) -> *mut c::bkey_i {
         // SAFETY: a key read from the journal is in an entry that lives as
         // long as the keys, at its offset
         unsafe {
@@ -1031,13 +1031,8 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     sort_dedup(jk, keys);
 
     for i in keys.iter() {
-        let k = jk.key_k(i);
-        // SAFETY: a key of the entries, which are recovery's
-        unsafe {
-            if (*k).k.key_type() == BkeyType::btree_ptr_v2 {
-                let v = (&raw mut (*k).v).cast::<c::BtreePtrV2>();
-                (&raw mut (*v).repr.mem_ptr).write_unaligned(Volatile::new(0));
-            }
+        if let Some(p) = BkeySC::from(jk.key(i)).arm::<c::BtreePtrV2>() {
+            p.v().mem_ptr.set(0);
         }
     }
 
