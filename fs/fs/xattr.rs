@@ -377,11 +377,11 @@ mod vfs {
     use crate::vfs::idmap::RawIdmap;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME};
 
-    /// A getxattr result as C's int: the length, or -errcode.
+    /// A getxattr result as C's int: the length, or the error's class.
     fn len_to_c(r: Result<usize, BchError>) -> c_int {
         match r {
             Ok(len) => len as c_int,
-            Err(e)  => -e.raw(),
+            Err(e)  => e.class(),
         }
     }
 
