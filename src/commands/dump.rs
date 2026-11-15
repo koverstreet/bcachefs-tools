@@ -375,7 +375,7 @@ fn sanitize_btree(fs: &Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
                         .ok_or_else(|| anyhow!("btree node bset at {pos:#x}: key at {key_pos:#x} not 8 byte aligned"))?;
 
                     u = format.unpack_key(key);
-                    let v = unsafe { buf.as_mut_ptr().add(vs) as *mut c::bch_val };
+                    let v = buf[vs..].as_mut_ptr().cast::<c::bch_val>();
                     // SAFETY: the value after the packed key, in the node's
                     // buffer: as long as the unpacked key's u64s says
                     unsafe { BkeyS::from_parts(&mut u, v) }
