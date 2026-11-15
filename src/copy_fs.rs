@@ -282,7 +282,7 @@ fn copy_times(fs: &Fs, dst: &mut c::bch_inode_unpacked, src: &rustix::fs::Stat) 
         let ts = c::timespec64 {
             tv_sec: sec as _,
             tv_nsec: nsec as _,
-            ..unsafe { std::mem::zeroed() }
+            ..pin_init::zeroed()
         };
         fs.timespec_to_time(ts) as u64
     };

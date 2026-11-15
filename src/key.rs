@@ -3,9 +3,8 @@ use std::{
     fmt::Write as _,
     fs,
     io::{stdin, IsTerminal},
-    mem,
     path::Path,
-    ptr, thread,
+    thread,
     time::Duration,
 };
 
@@ -13,6 +12,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key};
 use bcachefs_kernel::data::checksum::key_description;
 use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, without_line_ending, Given, Watch};
+use bcachefs_kernel::util::vstructs::plain_bytes;
 use bch_bindgen::keyutils::{self, keyctl_search};
 use log::info;
 
@@ -85,14 +85,7 @@ impl Unlocked {
     pub fn hex(&self) -> Option<Zeroizing<String>> {
         let Self::Key(k) = self else { return None };
 
-        // SAFETY: bch_key is four __le64s - no padding, no pointers, and the
-        // borrow lives no longer than @k.
-        let bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                ptr::addr_of!(k.passphrase_key).cast(),
-                mem::size_of_val(&k.passphrase_key),
-            )
-        };
+        let bytes = plain_bytes(&k.passphrase_key);
 
         let mut s = String::with_capacity(bytes.len() * 2);
         for b in bytes {
@@ -147,15 +140,10 @@ impl KeyHandle {
         let key_name = key_description(&passphrase_correct.fs_uuid);
         let key_name = key_name.as_c_str().as_ptr();
         let key_type = c"user";
+        let key = plain_bytes(&passphrase_correct.passphrase_key);
 
         let key_id = unsafe {
-            keyutils::add_key(
-                key_type.as_ptr(),
-                key_name,
-                ptr::addr_of!(passphrase_correct.passphrase_key).cast(),
-                mem::size_of_val(&passphrase_correct.passphrase_key),
-                keyring.id(),
-            )
+            keyutils::add_key(key_type.as_ptr(), key_name, key.as_ptr().cast(), key.len(), keyring.id())
         };
 
         if key_id > 0 {
