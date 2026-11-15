@@ -153,12 +153,29 @@ fn copy_str<const N: usize>(dst: &mut [u8; N], src: &CStr) {
 }
 
 /// A struct inode, as the filesystem has its own: what fill() makes the root
-/// dentry of, from a reference.
+/// dentry of, from a reference, and what the VFS's ops pass it as.
 ///
 /// # Safety
 /// A &Self points to a struct inode, and its AlwaysRefCounted reference is
 /// one on i_count - ihold(), iput().
 pub unsafe trait IsInode: AlwaysRefCounted {}
+
+impl<'a, I: IsInode> FromRaw for &'a I {
+    type Raw = *mut c::inode;
+    unsafe fn from_raw(r: *mut c::inode) -> Self { unsafe { &*r.cast() } }
+}
+
+/// A parent, which may not be given.
+impl<'a, I: IsInode> FromRaw for Option<&'a I> {
+    type Raw = *mut c::inode;
+    unsafe fn from_raw(r: *mut c::inode) -> Self { unsafe { r.cast::<I>().as_ref() } }
+}
+
+/// One the VFS is done with, to free: not borrowed, nor its superblock.
+impl<I: IsInode> FromRaw for NonNull<I> {
+    type Raw = *mut c::inode;
+    unsafe fn from_raw(r: *mut c::inode) -> Self { NonNull::new(r).expect("an inode").cast() }
+}
 
 // ── A new superblock ─────────────────────────────────────────────────────
 

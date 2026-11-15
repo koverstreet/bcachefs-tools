@@ -63,6 +63,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
 use super::new_inode::NewInode;
+use crate::os::super_block::IsInode;
 use crate::os::vfs_inode::{ILocked, VfsInode};
 
 pub use c::InodeInfo;
@@ -83,6 +84,8 @@ unsafe impl AlwaysRefCounted for InodeInfo {
 
 // to_bch_ei(): an InodeInfo is where its struct inode is
 const _: () = assert!(offset_of!(InodeInfo, v) == 0);
+
+unsafe impl IsInode for InodeInfo {}
 
 // SAFETY: the kernel's inode, shared by every thread with it open or in a VFS
 // call. What Rust reaches through &InodeInfo is atomic, behind a lock, or the
