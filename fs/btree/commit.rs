@@ -177,8 +177,8 @@ impl BtreeTrans<'_> {
     fn commit_journal_res_get(&self, paths: &mut Paths<'_>, res: &mut c::journal_res, flags: u32)
         -> Result<(), BchError>
     {
-        let ret = self.fs().journal.res_get_waiting(res, self.journal_u64s.get(), flags, |list, cond, timeout| {
-            self.wait_event_timeout_in(paths, list, cond, timeout)
+        let ret = self.fs().journal.res_get_waiting(res, self.journal_u64s.get(), flags, |ev, cond, timeout| {
+            self.wait_until_timeout_in(paths, ev, || cond().then_some(()), timeout).is_some()
         });
         self.journal_res_seq.set(res.seq);
         ret?;

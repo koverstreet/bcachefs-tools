@@ -17,6 +17,7 @@ use crate::os::blkdev::plugged;
 use crate::util::bio::{bio_put, Bio, BioBuffersUnmanaged, BioOwner};
 use crate::util::closure::{self, closure_wait, StackClosure};
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
+use crate::util::sleep::Sleep;
 use crate::os::ops::from_raw;
 use crate::util::time_stats::TimeStats;
 use crate::vfs::folio::{Folio, FolioGuard, FolioSpan, Mapping, Writeback};
@@ -191,31 +192,30 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
     w.io = NonNull::new(io);
 }
 
-fn can_write_now(fs: &Fs, cl: &StackClosure) -> bool {
+fn throttle_writes(fs: &Fs, cl: &StackClosure) {
     let reserved = c::OPEN_BUCKETS_COUNT -
         (c::OPEN_BUCKETS_COUNT - crate::alloc::foreground::open_buckets_reserved(c::Watermark::normal)) / 2;
-    let cl = NonNull::new(cl.as_ptr()).expect("a closure on the stack");
+    let clp = NonNull::new(cl.as_ptr()).expect("a closure on the stack");
 
-    if unlikely(u32::from(fs.allocator.freelist_lock.open_buckets_nr_free.get()) <= reserved) {
-        unsafe { closure_wait(&fs.allocator.open_buckets_wait, cl) };
-        return false;
-    }
-
-    if (c::Watermark::normal as u32) < fs.journal.watermark() as u32 && fs.journal.error().is_ok() {
-        unsafe { closure_wait(&fs.journal.async_wait, cl) };
-        return false;
-    }
-
-    true
-}
-
-fn throttle_writes(fs: &Fs, cl: &StackClosure) {
     let mut start = 0;
-    while !can_write_now(fs, cl) {
+    loop {
+        let journal_seen = fs.journal.async_wait.snapshot();
+        let open_buckets_low = unlikely(u32::from(fs.allocator.freelist_lock.open_buckets_nr_free.get()) <= reserved);
+        let journal_low = (c::Watermark::normal as u32) < fs.journal.watermark() as u32 && fs.journal.error().is_ok();
+        if !open_buckets_low && !journal_low {
+            break;
+        }
+
         if start == 0 {
             start = local_clock();
         }
-        cl.sync();
+
+        if open_buckets_low {
+            unsafe { closure_wait(&fs.allocator.open_buckets_wait, clp) };
+            cl.sync();
+        } else {
+            let Ok(()) = fs.journal.async_wait.wait(journal_seen, Sleep::UNINTERRUPTIBLE);
+        }
     }
 
     assert!(cl.nr_remaining() <= 1, "writeback throttle's closure still waiting");

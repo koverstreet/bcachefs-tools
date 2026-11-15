@@ -23,7 +23,6 @@ use crate::util::place::Placed;
 use crate::prt;
 use crate::debug::trace::{events, TraceEvent};
 use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
-use crate::util::closure::closure_wait_event_timeout_by;
 use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
 use crate::os::kernel::{jiffies, likely, msecs_to_jiffies, race_fault, time_after, HZ, READ};
@@ -1152,17 +1151,48 @@ impl BtreeTrans<'_> {
     /// that it unlock_long()s, so a long wait doesn't hold up freeing. The
     /// caller must have dropped its btree locks. @cond is called once per
     /// wake, so it may be a trylock.
-    pub fn wait_until<T>(&self, ev: &EventCount, mut cond: impl FnMut() -> Option<T>) -> T {
+    pub fn wait_until<T>(&self, ev: &EventCount, cond: impl FnMut() -> Option<T>) -> T {
+        self.wait_until_by(ev, cond, c_long::MAX, || self.srcu_wait_budget(&mut self.paths()))
+            .expect("an untimed wait timed out")
+    }
+
+    /// wait_until(), for up to @timeout jiffies - c_long::MAX for no limit:
+    /// None if it timed out.
+    pub fn wait_until_timeout<T>(&self, ev: &EventCount, cond: impl FnMut() -> Option<T>, timeout: c_long)
+        -> Option<T>
+    {
+        self.wait_until_by(ev, cond, timeout, || self.srcu_wait_budget(&mut self.paths()))
+    }
+
+    /// wait_until(), under the caller's borrow of the path table: @cond
+    /// mustn't take one.
+    pub(in crate::btree) fn wait_until_in<T>(&self, paths: &mut Paths<'_>, ev: &EventCount,
+                                             cond: impl FnMut() -> Option<T>) -> T {
+        self.wait_until_timeout_in(paths, ev, cond, c_long::MAX).expect("an untimed wait timed out")
+    }
+
+    pub(in crate::btree) fn wait_until_timeout_in<T>(&self, paths: &mut Paths<'_>, ev: &EventCount,
+                                                     cond: impl FnMut() -> Option<T>, timeout: c_long)
+        -> Option<T>
+    {
+        self.wait_until_by(ev, cond, timeout, || self.srcu_wait_budget(paths))
+    }
+
+    fn wait_until_by<T>(&self, ev: &EventCount, mut cond: impl FnMut() -> Option<T>, timeout: c_long,
+                        mut srcu_budget: impl FnMut() -> Option<c_ulong>) -> Option<T> {
+        let start = jiffies();
         loop {
             let seen = ev.snapshot();
             if let Some(v) = cond() {
-                return v;
+                return Some(v);
             }
-            match self.srcu_wait_budget(&mut self.paths()) {
-                // timing out is only the budget running out
-                Some(left) => { let _ = ev.wait(seen, Sleep::UNINTERRUPTIBLE.timeout(left)); }
-                None       => { let Ok(()) = ev.wait(seen, Sleep::UNINTERRUPTIBLE); }
+            let left = timeout - jiffies().wrapping_sub(start) as c_long;
+            if left <= 0 {
+                return None;
             }
+            let left = srcu_budget().map_or(left, |b| left.min(b as c_long));
+            // timing out is the budget or @timeout running out: both rechecked above
+            let _ = ev.wait(seen, Sleep::UNINTERRUPTIBLE.timeout(left as c_ulong));
         }
     }
 
@@ -1204,37 +1234,6 @@ impl BtreeTrans<'_> {
             remaining -= jiffies().wrapping_sub(start) as c_long;
         }
         false
-    }
-
-    /// Sleep until @cond, woken by @list's closure_wake_up()s, for up to
-    /// @timeout jiffies - c_long::MAX for no limit: trans_wait_event_timeout().
-    /// What's left of @timeout, at least 1, once @cond is true; 0 if it timed
-    /// out first. @cond is checked on the list, so a wake between the check
-    /// and the sleep isn't lost.
-    pub fn wait_event_timeout(&self, list: &c::closure_waitlist, cond: impl FnMut() -> bool,
-                              timeout: c_long) -> c_long {
-        closure_wait_event_timeout_by(list, cond, timeout, |cl, t| {
-            self.closure_sync_timeout(cl, t);
-        })
-    }
-
-    /// wait_event_timeout(), with no limit: trans_wait_event().
-    pub fn wait_event(&self, list: &c::closure_waitlist, cond: impl FnMut() -> bool) {
-        self.wait_event_timeout(list, cond, c_long::MAX);
-    }
-
-    /// wait_event_timeout(), under the caller's borrow of the path table: @cond
-    /// mustn't take one.
-    pub(in crate::btree) fn wait_event_timeout_in(&self, paths: &mut Paths<'_>, list: &c::closure_waitlist,
-                                                  cond: impl FnMut() -> bool, timeout: c_long) -> c_long {
-        closure_wait_event_timeout_by(list, cond, timeout, |cl, t| {
-            self.closure_sync_timeout_in(paths, cl, t);
-        })
-    }
-
-    pub(in crate::btree) fn wait_event_in(&self, paths: &mut Paths<'_>, list: &c::closure_waitlist,
-                                          cond: impl FnMut() -> bool) {
-        self.wait_event_timeout_in(paths, list, cond, c_long::MAX);
     }
 
     /// @l locked, waited for under SRCU as wait_until() waits. The caller

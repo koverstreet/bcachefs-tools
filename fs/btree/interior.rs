@@ -597,7 +597,8 @@ impl<'t> InteriorUpdate<'t> {
              * failed mount waited here forever, holding up bch2_fs_stop()):
              */
             trans.unlock_from(paths, crate::ret_ip!());
-            trans.wait_event_in(paths, &fs.journal.async_wait, || !journal_low() || fs.journal.error().is_err());
+            trans.wait_until_in(paths, &fs.journal.async_wait,
+                                || (!journal_low() || fs.journal.error().is_err()).then_some(()));
             trans.relock_from(paths)?;
         }
 

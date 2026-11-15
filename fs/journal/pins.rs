@@ -27,7 +27,6 @@ use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, SharedGuard};
 use crate::debug::trace::events;
 use crate::util::alloc::{init_at, AllocError, KVVec};
-use crate::util::closure::closure_wake_up;
 use crate::util::projections::{TearSafe, Volatile};
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt, warn_once};
@@ -529,7 +528,7 @@ impl<'a> PinsRead<'a> {
     fn set_done(&self, seq: u64, reclaim: bool) {
         /* If the journal is currently full, we might want to call flush_fn immediately: */
         if seq == self.last_seq() {
-            closure_wake_up(&self.j.async_wait);
+            self.j.wake_async_wait();
         }
         if reclaim {
             self.maybe_update_last_seq();

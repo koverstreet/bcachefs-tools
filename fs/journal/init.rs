@@ -15,8 +15,8 @@ use crate::format::DataType;
 use crate::fs::{Dev, StateLockWrite};
 use crate::init::error::id;
 use crate::util::bio::BioSet;
-use crate::util::closure::closure_wait_event;
 use crate::os::kernel::jiffies;
+use crate::util::sleep::Sleep;
 use crate::{bch_err, fsck_err_on, warn_on};
 
 impl c::journal {
@@ -32,7 +32,8 @@ impl c::journal {
     }
 
     pub fn dev_stop(&self, ca: &Dev) {
-        closure_wait_event(&self.async_wait, || !self.writing_to_device(ca.dev_idx.into()));
+        let Ok(()) = self.async_wait.wait_until(Sleep::UNINTERRUPTIBLE,
+            || (!self.writing_to_device(ca.dev_idx.into())).then_some(()));
     }
 
     pub fn stop(&self) {

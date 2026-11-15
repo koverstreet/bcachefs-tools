@@ -41,7 +41,7 @@ use crate::fs::Fs;
 use crate::init::error::trans_inconsistent;
 use crate::percpu_field;
 use crate::debug::trace::events;
-use crate::util::closure::{closure_wait_event, closure_wake_up};
+use crate::util::closure::closure_wait_event;
 use crate::os::kernel::unlikely;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::os::percpu::{CpuGuard, PerCpuRef};
@@ -205,7 +205,7 @@ impl Fs {
         self.alloc_wake_all();
         // a journal reservation waiting on space: there may be no devices left
         // to allocate from
-        closure_wake_up(&self.journal.async_wait);
+        self.journal.wake_async_wait();
 
         closure_wait_event(&self.allocator.open_buckets_wait, || !dev_has_open_write_point(self, ca));
     }

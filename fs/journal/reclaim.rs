@@ -23,7 +23,6 @@ use crate::fs::{Dev, Fs};
 use crate::journal::pins::PinsRead;
 use crate::locking::{ExclusiveGuard, MemallocFlags};
 use crate::util::backtrace::prt_task_backtrace;
-use crate::util::closure::closure_wake_up;
 use crate::os::blkdev;
 use crate::os::kernel::{cond_resched, jiffies, jiffies_to_msecs, msecs_to_jiffies, time_after, time_in_range,
                         totalram_bytes, HZ};
@@ -122,7 +121,7 @@ impl c::journal {
     }
 
     pub fn wake_async_wait(&self) {
-        closure_wake_up(&self.async_wait);
+        self.async_wait.wake();
     }
 
     fn dev_space_available(&self, g: &JournalGuard<'_>, ca: &Dev, from: SpaceFrom) -> c::journal_space {

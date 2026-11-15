@@ -558,7 +558,7 @@ nest! {
         pub flush_wait: c::closure_waitlist,
 
         /* Used when waiting because the journal was full */
-        pub async_wait: c::closure_waitlist,
+        pub async_wait: EventCount,
         pub reclaim_flush_wait: EventCount,
 
         #[pin]

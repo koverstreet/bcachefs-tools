@@ -116,7 +116,7 @@
  */
 
 use core::cell::Cell;
-use core::ffi::{c_int, c_long, c_uint};
+use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::mem;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::fence;
@@ -139,12 +139,13 @@ use crate::journal::entries::EntryWriter;
 use crate::util::alloc::{flags, KVVec};
 use crate::util::backtrace::prt_current_backtrace;
 use crate::format::DataType;
-use crate::util::closure::{closure_fn_addr, closure_has_waiters, closure_wait, closure_wait_event,
-                           closure_wait_event_timeout, closure_waiting, closure_wake_up, detached, waitlist_first,
-                           StackClosure};
+use crate::util::closure::{closure_fn_addr, closure_has_waiters, closure_wait, closure_waiting, closure_wake_up,
+                           detached, waitlist_first, StackClosure};
 use crate::os::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffies, time_after, unlikely, HZ, WRITE};
+use crate::util::futex::EventCount;
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
+use crate::util::sleep::Sleep;
 use crate::util::printbuf::HumanReadable;
 use crate::util::vstructs::{plain_bytes, Head, SelfSized};
 use crate::util::time_stats::TimeStats;
@@ -435,17 +436,17 @@ impl c::journal {
     pub fn res_get(&self, res: &mut c::journal_res, u64s: u32, flags: u32, trans: Option<&TransAttempt<'_, '_>>)
         -> Result<(), BchError>
     {
-        self.res_get_waiting(res, u64s, flags, |list, cond, timeout| match trans {
-            Some(trans) => trans.wait_event_timeout(list, cond, timeout),
-            None => closure_wait_event_timeout(list, cond, timeout),
+        self.res_get_waiting(res, u64s, flags, |ev, cond, timeout| match trans {
+            Some(trans) => trans.wait_until_timeout(ev, || cond().then_some(()), timeout).is_some(),
+            None => ev.wait_until(Sleep::UNINTERRUPTIBLE.timeout(timeout as c_ulong), || cond().then_some(())).is_ok(),
         })
     }
 
-    /// res_get(), blocking with @wait: wait_event_timeout() as the caller's
+    /// res_get(), blocking with @wait: wait_until_timeout() as the caller's
     /// transaction does it.
     #[inline(always)]
     pub fn res_get_waiting(&self, res: &mut c::journal_res, u64s: u32, flags: u32,
-                           mut wait: impl FnMut(&c::closure_waitlist, &mut dyn FnMut() -> bool, c_long) -> c_long)
+                           mut wait: impl FnMut(&EventCount, &mut dyn FnMut() -> bool, c_long) -> bool)
         -> Result<(), BchError>
     {
         ebug_assert!(!res.ref_, "journal reservation taken while holding one");
@@ -918,7 +919,7 @@ impl c::journal {
     }
 
     fn quiesce(&self) {
-        closure_wait_event(&self.async_wait, || self.quiesced());
+        let Ok(()) = self.async_wait.wait_until(Sleep::UNINTERRUPTIBLE, || self.quiesced().then_some(()));
     }
 
     /*
@@ -952,7 +953,7 @@ impl c::journal {
     }
 
     pub fn shutdown_quiesce(&self) {
-        closure_wait_event(&self.async_wait, || self.shutdown_quiesced());
+        let Ok(()) = self.async_wait.wait_until(Sleep::UNINTERRUPTIBLE, || self.shutdown_quiesced().then_some(()));
     }
 
     fn buf_prealloc<'a>(&'a self, mut g: JournalGuard<'a>) -> JournalGuard<'a> {
@@ -1118,7 +1119,7 @@ impl c::journal {
      */
     #[inline(never)]
     fn res_get_slowpath(&self, res: &mut c::journal_res, flags: u32,
-                        wait_on: &mut dyn FnMut(&c::closure_waitlist, &mut dyn FnMut() -> bool, c_long) -> c_long)
+                        wait_on: &mut dyn FnMut(&EventCount, &mut dyn FnMut() -> bool, c_long) -> bool)
         -> Result<(), BchError>
     {
         if flags & c::JOURNAL_RES_GET_NONBLOCK != 0 {
@@ -1143,7 +1144,7 @@ impl c::journal {
         };
         let mut wait = |timeout| wait_on(&self.async_wait, &mut got, timeout);
 
-        if wait(total_wait) != 0 {
+        if wait(total_wait) {
             return ret.get();
         }
 
@@ -1583,14 +1584,8 @@ impl c::journal {
     pub fn next_write_buffer_flush_journal_buf(&self, max_seq: u64, blocked: &mut bool) -> *mut c::journal_buf {
         *blocked = false;
 
-        let mut ret = ptr::null_mut();
-        closure_wait_event(&self.async_wait, || match self.__next_write_buffer_flush_journal_buf(max_seq, blocked) {
-            Some(buf) => {
-                ret = buf;
-                true
-            }
-            None => false,
-        });
+        let Ok(ret) = self.async_wait.wait_until(Sleep::UNINTERRUPTIBLE,
+            || self.__next_write_buffer_flush_journal_buf(max_seq, blocked));
 
         if ret.is_null() && *blocked {
             self.unblock();

@@ -366,17 +366,17 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.unlock_long()
     }
 
-    pub fn wait_event_timeout(&self, list: &c::closure_waitlist, cond: impl FnMut() -> bool,
-                              timeout: core::ffi::c_long) -> core::ffi::c_long {
-        self.trans.wait_event_timeout(list, cond, timeout)
-    }
-
     pub fn closure_sync_timeout(&self, cl: &Opaque<c::closure>, timeout: core::ffi::c_long) -> bool {
         self.trans.closure_sync_timeout(cl, timeout)
     }
 
     pub fn wait_until<T>(&self, ev: &crate::util::futex::EventCount, cond: impl FnMut() -> Option<T>) -> T {
         self.trans.wait_until(ev, cond)
+    }
+
+    pub fn wait_until_timeout<T>(&self, ev: &crate::util::futex::EventCount, cond: impl FnMut() -> Option<T>,
+                                 timeout: core::ffi::c_long) -> Option<T> {
+        self.trans.wait_until_timeout(ev, cond, timeout)
     }
 
     #[inline(always)]
