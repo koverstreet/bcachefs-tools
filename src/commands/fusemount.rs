@@ -164,25 +164,30 @@ fn mode_to_filetype(mode: u32) -> FileType {
     }
 }
 
-/// A readdir's dir_context, which dirent::readdir() emits to: @reply.
-#[repr(C)]
-struct FuseDirContext<'r> {
-    ctx:   c::dir_context,
+/// What dirent::readdir() emits to, for a readdir: @reply.
+struct FuseDir<'r> {
+    pos:   u64,
     reply: &'r mut ReplyDirectory,
 }
 
-unsafe extern "C" fn fuse_filldir(ctx: *mut c::dir_context, name: *const std::ffi::c_char,
-                                  name_len: std::ffi::c_int, pos: bcachefs_kernel::c::loff_t, ino: u64,
-                                  dtype: std::ffi::c_uint) -> bool {
-    let ctx = unsafe { &mut *ctx.cast::<FuseDirContext<'_>>() };
-    let name = OsStr::from_bytes(unsafe { std::slice::from_raw_parts(name.cast(), name_len as usize) });
-    // A fuse dirent's offset field is the cookie to resume the listing
-    // *after* that entry; pos is the entry's own dirent offset
-    // (bch2_dir_emit() sets ctx->pos before emitting). If we reject on a
-    // full reply buffer, ctx->pos never advances past this entry and the
-    // next readdir re-reads it.
-    let full = ctx.reply.add(INodeNo(ino), pos as u64 + 1, dtype_to_filetype(dtype), name);
-    !full
+impl dirent::DirEmit for FuseDir<'_> {
+    fn pos(&self) -> u64 {
+        self.pos
+    }
+
+    fn set_pos(&mut self, pos: u64) {
+        self.pos = pos;
+    }
+
+    fn emit(&mut self, name: &[u8], pos: u64, ino: u64, d_type: u32) -> bool {
+        // A fuse dirent's offset field is the cookie to resume the listing
+        // *after* that entry; pos is the entry's own dirent offset
+        // (bch2_dir_emit() sets ctx->pos before emitting). If we reject on a
+        // full reply buffer, ctx->pos never advances past this entry and the
+        // next readdir re-reads it.
+        let full = self.reply.add(INodeNo(ino), pos + 1, dtype_to_filetype(d_type), OsStr::from_bytes(name));
+        !full
+    }
 }
 
 fn dtype_to_filetype(dtype: u32) -> FileType {
@@ -1651,14 +1656,7 @@ impl Filesystem for BcachefsFs {
             Err(e) => { reply.error(bch_err(&e)); return; }
         };
 
-        let ret = {
-            let mut ctx = FuseDirContext {
-                ctx:   c::dir_context { actor: Some(fuse_filldir), pos },
-                reply: &mut reply,
-            };
-            // fuse_filldir() takes it to the FuseDirContext it heads
-            dirent::readdir(fs, dir, &mut hash, unsafe { dirent::DirContext::from_raw(&raw mut ctx.ctx) })
-        };
+        let ret = dirent::readdir(fs, dir, &mut hash, FuseDir { pos, reply: &mut reply });
         match ret {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(bch_err(&e)),

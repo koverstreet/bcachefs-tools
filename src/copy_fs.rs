@@ -775,31 +775,26 @@ struct DirEntry {
     name:   CString,
 }
 
-/// Trampoline for bch2_readdir callback.
-#[repr(C)]
-struct ReadDirCtx {
-    ctx:     c::dir_context,
-    entries: *mut Vec<DirEntry>,
+/// What dirent::readdir() emits to: all of the directory's entries.
+struct DirEntries<'e> {
+    pos:     u64,
+    entries: &'e mut Vec<DirEntry>,
 }
 
-unsafe extern "C" fn readdir_actor(
-    ctx: *mut c::dir_context,
-    name: *const libc::c_char,
-    name_len: i32,
-    _pos: i64,
-    inum: u64,
-    dtype: u32,
-) -> bool {
-    let (entries, name_slice) = unsafe {
-        let rctx = &mut *(ctx as *mut ReadDirCtx);
-        (
-            &mut *rctx.entries,
-            std::slice::from_raw_parts(name as *const u8, name_len as usize),
-        )
-    };
-    let cname = CString::new(name_slice).unwrap_or_else(|_| CString::new("?").unwrap());
-    entries.push(DirEntry { inum, dtype: dtype as u8, name: cname });
-    true
+impl dirent::DirEmit for DirEntries<'_> {
+    fn pos(&self) -> u64 {
+        self.pos
+    }
+
+    fn set_pos(&mut self, pos: u64) {
+        self.pos = pos;
+    }
+
+    fn emit(&mut self, name: &[u8], _pos: u64, inum: u64, d_type: u32) -> bool {
+        let cname = CString::new(name).unwrap_or_else(|_| CString::new("?").unwrap());
+        self.entries.push(DirEntry { inum, dtype: d_type as u8, name: cname });
+        true
+    }
 }
 
 fn simple_readdir(
@@ -810,17 +805,7 @@ fn simple_readdir(
     let mut hash_info = str_hash::hash_info_init(fs, dir)?;
 
     let mut entries = Vec::new();
-    let mut rctx = ReadDirCtx {
-        ctx: c::dir_context {
-            actor: Some(readdir_actor),
-            pos: 0,
-        },
-        entries: &mut entries,
-    };
-
-    // SAFETY: the actor reaches the rest of rctx: its pointer, not ctx's
-    let ctx = unsafe { dirent::DirContext::from_raw((&raw mut rctx).cast()) };
-    dirent::readdir(fs, dir_inum, &mut hash_info, ctx)?;
+    dirent::readdir(fs, dir_inum, &mut hash_info, DirEntries { pos: 0, entries: &mut entries })?;
 
     // Sort by (type, name) like the C code
     entries.sort_by(|a, b| {

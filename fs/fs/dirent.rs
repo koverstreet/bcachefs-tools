@@ -502,52 +502,71 @@ impl<'c> DirContext<'c> {
     pub unsafe fn from_raw(ctx: *mut c::dir_context) -> Self {
         DirContext(NonNull::new(ctx).expect("a dir_context"), PhantomData)
     }
+}
 
+/// Where readdir's entries go, and where it resumes from: a dir_context -
+/// getdents' - or a Rust caller's own.
+pub trait DirEmit {
+    fn pos(&self) -> u64;
+    fn set_pos(&mut self, pos: u64);
+    /// @name, inode @ino of type @d_type, at @pos: false once full.
+    fn emit(&mut self, name: &[u8], pos: u64, ino: u64, d_type: u32) -> bool;
+}
+
+impl DirEmit for DirContext<'_> {
     // The kernel's pos is a loff_t; only the userspace shim's is a u64
     #[allow(clippy::unnecessary_cast)]
     fn pos(&self) -> u64 {
         unsafe { (*self.0.as_ptr()).pos as u64 }
     }
 
-    /// Emit @d, pointing at @target, unlocking @t. False once the buffer is
-    /// full.
-    fn emit(&mut self, t: &TransAttempt<'_, '_>, d: Dirent<'_>, target: c::subvol_inum) -> bool {
-        let ctx = self.0.as_ptr();
-        let offset = d.k().k.p.offset;
-
-        // Although not required by the kernel code, updating ctx->pos is
-        // needed for the bcachefs FUSE driver. Without this update, the FUSE
-        // implementation will be stuck in an infinite loop when reading
-        // directories (via the bcachefs_fuse_readdir callback): its actor
-        // computes each entry's resume-after cookie as its pos argument + 1.
-        // In kernel space, ctx->pos is updated by the VFS code.
-        unsafe { (*ctx).pos = offset as _ };
-
-        let k = BkeyBuf::from_key(d.k().into());
-        let d = Dirent::new(BkeySC::from(&k)).expect("a dirent");
-        let name = d.name().as_bytes();
-        let d_type = match d.d_type() as u32 {
-            c::DT_SUBVOL => c::DT_DIR,
-            d_type       => d_type,
-        };
-
-        // The actor copies to userspace and can fault, so it can't run with
-        // btree locks held — drop them, then relock for the next iteration.
-        t.unlock();
-
-        let emitted = unsafe {
-            let actor = (*ctx).actor.expect("a dir_context's actor");
-            actor(ctx, name.as_ptr().cast(), name.len() as c_int, (*ctx).pos as _, target.inum, d_type)
-        };
-
-        if emitted {
-            unsafe { (*ctx).pos = (offset + 1) as _ };
-        }
-        // Don't relock here: a restart return would cause the walk to retry
-        // the current key without advancing the iter, which re-emits the
-        // just-emitted dirent. Let the next peek relock transparently.
-        emitted
+    fn set_pos(&mut self, pos: u64) {
+        unsafe { (*self.0.as_ptr()).pos = pos as _ };
     }
+
+    fn emit(&mut self, name: &[u8], pos: u64, ino: u64, d_type: u32) -> bool {
+        let ctx = self.0.as_ptr();
+        unsafe {
+            let actor = (*ctx).actor.expect("a dir_context's actor");
+            actor(ctx, name.as_ptr().cast(), name.len() as c_int, pos as _, ino, d_type)
+        }
+    }
+}
+
+/// Emit @d, pointing at @target, unlocking @t. False once the buffer is
+/// full.
+fn dir_emit(ctx: &mut impl DirEmit, t: &TransAttempt<'_, '_>, d: Dirent<'_>, target: c::subvol_inum) -> bool {
+    let offset = d.k().k.p.offset;
+
+    // Although not required by the kernel code, updating ctx->pos is
+    // needed for the bcachefs FUSE driver. Without this update, the FUSE
+    // implementation will be stuck in an infinite loop when reading
+    // directories (via the bcachefs_fuse_readdir callback): its actor
+    // computes each entry's resume-after cookie as its pos argument + 1.
+    // In kernel space, ctx->pos is updated by the VFS code.
+    ctx.set_pos(offset);
+
+    let k = BkeyBuf::from_key(d.k().into());
+    let d = Dirent::new(BkeySC::from(&k)).expect("a dirent");
+    let name = d.name().as_bytes();
+    let d_type = match d.d_type() as u32 {
+        c::DT_SUBVOL => c::DT_DIR,
+        d_type       => d_type,
+    };
+
+    // The actor copies to userspace and can fault, so it can't run with
+    // btree locks held — drop them, then relock for the next iteration.
+    t.unlock();
+
+    let emitted = ctx.emit(name, offset, target.inum, d_type);
+
+    if emitted {
+        ctx.set_pos(offset + 1);
+    }
+    // Don't relock here: a restart return would cause the walk to retry
+    // the current key without advancing the iter, which re-emits the
+    // just-emitted dirent. Let the next peek relock transparently.
+    emitted
 }
 
 /// Emit directory @dir's entries to @ctx, from ctx->pos: as bch2_readdir().
@@ -559,7 +578,7 @@ pub fn readdir(
     fs:        &Fs,
     dir:       c::subvol_inum,
     hash_info: &mut c::bch_hash_info,
-    mut ctx:   DirContext<'_>,
+    mut ctx:   impl DirEmit,
 ) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, Btree::dirents, pos(dir.inum, ctx.pos()),
@@ -580,7 +599,7 @@ pub fn readdir(
             return Ok(ControlFlow::Continue(()));
         };
 
-        Ok(if ctx.emit(t, d, target) {
+        Ok(if dir_emit(&mut ctx, t, d, target) {
             ControlFlow::Continue(())
         } else {
             ControlFlow::Break(())
