@@ -359,8 +359,7 @@ impl ToText for ListedTrans {
 
 impl Fs {
     pub(crate) fn with_trans_list<R>(&self, f: impl FnOnce(&mut TransList) -> R) -> R {
-        let _guard = self.btree.trans.lock.lock();
-        f(unsafe { TransList::from_c((&raw const self.btree.trans.list).cast_mut()) })
+        f(&mut self.btree.trans.list.lock())
     }
 
     /// Whether this thread has a transaction of this filesystem's, locked.

@@ -883,10 +883,9 @@ pub const BCH_TRANSACTIONS_NR: u32 = 128;
 #[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_btree_trans {
     #[pin]
-    #[init(new_lock!((), "&c->btree.trans.lock"))]
-    pub lock: Locked<cs::seqmutex>,
-    /* zeroed, it's empty: List's first push sets it up */
-    pub list: cs::list_head,
+    /* the filesystem's transactions: zeroed, it's empty - List's first push sets it up */
+    #[init(new_lock!(::pin_init::zeroed(), "&c->btree.trans.lock"))]
+    pub list: Locked<cs::seqmutex, crate::btree::trans::TransList>,
     #[pin]
     #[init(Mempool::kmalloc(1, core::mem::size_of::<BtreeTrans<'_>>()))]
     pub pool: Mempool<Kmalloc>,

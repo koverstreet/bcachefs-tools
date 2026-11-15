@@ -11,14 +11,13 @@
 //! include/linux/list.h's circular doubly linked list, in Rust, typed:
 //! List<T, OFFSET> is a list of T linked through the links at OFFSET in each,
 //! made by list!(T, member), which checks the member is links - ListLinks, or
-//! C's struct list_head. Laid out as C's, so C's lists are these too,
-//! from_c().
+//! C's struct list_head. Laid out as C's, so C's lists are these too.
 //!
 //! What's safe, and why:
 //!
 //! - Holding the list is holding a &List or &mut List: one lives in a
-//!   Locked<R, List<T, OFFSET>>, and from_c() asserts C's is locked. Walking it
-//!   with a cursor, and reordering it - sort() - are safe.
+//!   Locked<R, List<T, OFFSET>>. Walking it with a cursor, and reordering it -
+//!   sort() - are safe.
 //! - An item is live, and doesn't move, while it's on the list, and after
 //!   it's taken off until the list's lock is next released: its owner takes
 //!   the lock before freeing it. So a cursor can take an item off and still
@@ -171,16 +170,6 @@ impl<T, const OFFSET: usize> List<T, OFFSET> {
     /// It doesn't move while it has anything on it.
     pub unsafe fn init(&self) {
         self.head.init()
-    }
-
-    /// C's, held.
-    ///
-    /// # Safety
-    /// @p is a live list of T, through the list_head at OFFSET in each, whose
-    /// lock is held for 'a, and which nothing else in Rust borrows meanwhile.
-    pub unsafe fn from_c<'a>(p: *mut c::list_head) -> &'a mut Self {
-        let () = Self::FITS;
-        unsafe { &mut *p.cast() }
     }
 
     pub fn is_empty(&self) -> bool {
