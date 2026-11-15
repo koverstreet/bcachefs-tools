@@ -23,7 +23,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Exclusive, ExclusiveGuard, Locked, Mutex, PercpuRwSem, RawLock, RawLockBase, RawMovableLock, RawReadLock, RawRwLock,
+use super::{Exclusive, ExclusiveGuard, Locked, Mutex, PercpuRwSem, RawLock, RawLockBase, RawReadLock, RawRwLock,
             RawTryLock, Shared, SharedGuard};
 use crate::util::alloc::{flags, Flags};
 use crate::os::lockdep::LockClass;
@@ -115,8 +115,6 @@ pub struct Memalloc<R, const FLAGS: u32>(R);
 
 /// Lock @R, held in a PF_MEMALLOC_NOIO scope.
 pub type Noio<R> = Memalloc<R, PF_MEMALLOC_NOIO>;
-
-impl<R: RawMovableLock, const F: u32> RawMovableLock for Memalloc<R, F> {}
 
 impl<R: RawLockBase, const F: u32> RawLockBase for Memalloc<R, F> {
     type GuardState = (MemallocFlags, R::GuardState);

@@ -6,7 +6,7 @@
 //! there are no interrupts to save, and nothing sleeps that a RawSpinLock
 //! wouldn't. They're kept apart for what each may do, as the kernel's are.
 
-use crate::locking::{MemallocFlags, RawLock, RawLockBase, RawMovableLock, RawNestedLock};
+use crate::locking::{MemallocFlags, RawLock, RawLockBase, RawNestedLock};
 use crate::os::lockdep::LockClass;
 use core::convert::Infallible;
 use core::ffi::CStr;
@@ -41,8 +41,6 @@ impl RawLockBase for RawSpinLock {
     }
 }
 
-impl RawMovableLock for RawSpinLock {}
-
 impl RawLock for RawSpinLock {
     fn lock(&self) -> MemallocFlags {
         let s = &self.state;
@@ -75,8 +73,6 @@ impl RawLockBase for SpinLockIrq {
     }
 }
 
-impl RawMovableLock for SpinLockIrq {}
-
 impl RawLock for SpinLockIrq {
     fn lock(&self) -> MemallocFlags {
         self.0.lock()
@@ -105,8 +101,6 @@ impl RawLockBase for SpinLock {
         unsafe { RawSpinLock::init(l.cast(), name, key) }
     }
 }
-
-impl RawMovableLock for SpinLock {}
 
 impl RawLock for SpinLock {
     fn lock(&self) -> MemallocFlags {

@@ -20,8 +20,7 @@
 //! C state: atomics - SeqLock's readers copying out, ByteLock a sleeping lock
 //! in one byte, on util/futex.rs.
 //!
-//! compat.rs is what exists because C owns the lock or holds it calling in,
-//! and goes as the C does.
+//! compat.rs is what exists because C owns the lock, and goes as the C does.
 //!
 //! Initializing a lock in place, new_lock!(), gives it a lockdep class of
 //! its own: one per call site, as C's mutex_init() is.
@@ -44,7 +43,7 @@ pub use crate::os::percpu_rwsem::PercpuRwSem;
 pub use crate::os::spinlock::{RawSpinLock, SpinLock, SpinLockIrq};
 pub use crate::os::rwsem::RwSem;
 pub use crate::os::mutex::Mutex;
-pub use lock::{AsLocked, AsLockedBy, Exclusive, ExclusiveGuard, Locked, LockedBy, RawLock, RawLockBase, RawMovableLock, RawNestedLock, RawReadLock, RawRwLock, RawSixLock, RawTimedLock, RawTryLock, RawTryReadLock, Shared, SharedGuard,
+pub use lock::{AsLocked, AsLockedBy, Exclusive, ExclusiveGuard, Locked, LockedBy, RawLock, RawLockBase, RawNestedLock, RawReadLock, RawRwLock, RawSixLock, RawTimedLock, RawTryLock, RawTryReadLock, Shared, SharedGuard,
               SixIntent, SixWrite, SixWriteIntent, Unlock};
 pub(crate) use lock::{Alone, Guard, HoldsRef, Mut, Ref};
 pub use noio::{mutex_noio, percpu_rwsem_noio, Memalloc, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};

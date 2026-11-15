@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! What exists because C owns the lock, or holds it calling in - to go as the
-//! C does: a C struct's lock borrowed as a Locked, a Locked whose caller already
-//! holds it, and a Locked C carries held from one Rust call to another.
+//! What exists because C owns the lock - to go as the C does: a C struct's
+//! lock borrowed as a Locked.
 
-use super::{ExclusiveGuard, Locked, RawLock, RawLockBase};
+use super::{Locked, RawLockBase};
 use core::mem::{align_of, size_of};
 
 impl<R: RawLockBase> Locked<R> {
@@ -15,19 +14,5 @@ impl<R: RawLockBase> Locked<R> {
         // Taking it through a & writes it: a RawLockBase's state is
         // interior-mutable. Borrowed, so never dropped - C frees it.
         unsafe { &*core::ptr::from_ref(raw).cast() }
-    }
-}
-
-impl<R: RawLock, G, P> Locked<R, G, P> {
-    /// The lock, as a caller holds it - C's, calling in: its guard isn't ours
-    /// to release.
-    ///
-    /// # Safety
-    /// The caller holds the lock exclusively - not as one of its readers -
-    /// and holds it for as long as this guard lives; nothing else this task
-    /// holds has the G.
-    pub unsafe fn held(&self) -> ExclusiveGuard<'_, R, G, P> {
-        self.assert_held();
-        unsafe { ExclusiveGuard::from_held(self, None) }
     }
 }

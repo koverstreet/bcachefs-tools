@@ -6,7 +6,7 @@
 //! macros: shim.c's rust_* functions.
 
 use crate::c;
-use crate::locking::{MemallocFlags, RawLock, RawLockBase, RawMovableLock, RawNestedLock};
+use crate::locking::{MemallocFlags, RawLock, RawLockBase, RawNestedLock};
 use crate::os::lockdep::{self, LockClass};
 use crate::util::ffi::Opaque;
 use core::convert::Infallible;
@@ -35,9 +35,6 @@ impl RawLockBase for SpinLockIrq {
         Ok(())
     }
 }
-
-// unlocked, nothing points at one
-impl RawMovableLock for SpinLockIrq {}
 
 impl RawLock for SpinLockIrq {
     fn lock(&self) -> (c_ulong, MemallocFlags) {
@@ -84,8 +81,6 @@ impl RawLockBase for SpinLock {
     }
 }
 
-impl RawMovableLock for SpinLock {}
-
 impl RawLock for SpinLock {
     fn lock(&self) -> MemallocFlags {
         unsafe { b::spin_lock(self.0.as_ptr()) };
@@ -114,8 +109,6 @@ impl RawLockBase for RawSpinLock {
         Ok(())
     }
 }
-
-impl RawMovableLock for RawSpinLock {}
 
 impl RawLock for RawSpinLock {
     fn lock(&self) -> MemallocFlags {

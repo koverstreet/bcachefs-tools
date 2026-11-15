@@ -437,14 +437,6 @@ pub struct UpdateLock<'i> {
 }
 
 impl<'i> UpdateLock<'i> {
-    /// ei_update_lock, held by the caller - C, calling in.
-    ///
-    /// # Safety
-    /// The caller holds @inode's ei_update_lock for 'i.
-    pub unsafe fn held(inode: &'i InodeInfo) -> Self {
-        UpdateLock { inode, _guard: unsafe { inode.ei_update_lock.held() } }
-    }
-
     /// Move the inode's quota charges - its usage, i_blocks +
     /// ei_quota_reserved, and the inode itself - to @qid, in the quota types
     /// of @qtypes that are accounted.
