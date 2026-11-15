@@ -6,7 +6,7 @@
 //! repaired or recorded as lost once we're rw and any rewind has happened.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeyI, BkeySC};
+use crate::btree::bkey::BkeySC;
 use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, CommitFlags,
                          TransAttempt};
@@ -278,7 +278,7 @@ fn scrub_range(m: &Moving<'_>, jk: &c::journal_keys, start: u64, end: u64) -> Op
             continue;
         }
 
-        let k = BkeySC::from(unsafe { &*BkeyI::from_raw(jk.key_k(jkey)) });
+        let k = BkeySC::from(jk.key(jkey));
         let Some(kp) = k.arm::<Ptrs>() else { continue };
         let (btree, level) = (jkey.btree_id(), u32::from(jkey.level()));
 

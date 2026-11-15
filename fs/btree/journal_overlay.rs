@@ -741,7 +741,7 @@ impl c::journal_iter {
     /// The next key not overwritten, if it's in the iterator's btree and
     /// level; after an insert, the first from @pos or where the iterator
     /// started, whichever's later.
-    fn peek(&mut self, jk: &c::journal_keys, pos: Bpos) -> *const c::bkey_i {
+    fn peek<'j>(&mut self, jk: &'j c::journal_keys, pos: Bpos) -> Option<&'j BkeyI> {
         let seq = jk.seq();
         if self.seq != seq {
             self.idx = jk.search(self.btree_id, self.level, pos.max(self.pos));
@@ -759,7 +759,7 @@ impl c::journal_iter {
             }
 
             if !k.is_overwritten() {
-                return jk.key_k(k);
+                return Some(jk.key(k));
             }
 
             self.idx = match k.range() {
@@ -767,7 +767,7 @@ impl c::journal_iter {
                 r => jk.overwrite_range(r, &rcu).end.load(Relaxed),
             };
         }
-        ptr::null()
+        None
     }
 }
 
@@ -870,9 +870,7 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
             };
 
             let journal_k = self.jk.and_then(|jk| loop {
-                let k = self.journal.peek(jk, self.pos);
-                // SAFETY: a journal key
-                let k = (!k.is_null()).then(|| BkeySC::from(unsafe { &*BkeyI::from_raw(k) }));
+                let k = self.journal.peek(jk, self.pos).map(BkeySC::from);
                 if k.is_none_or(|k| k.k.p >= self.pos) {
                     break k;
                 }
