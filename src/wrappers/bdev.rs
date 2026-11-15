@@ -6,7 +6,7 @@
 //! on any fd (block device or regular file).
 
 use std::fs::Metadata;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use bcachefs_kernel::util::ioctl::{_IO, _IOR};
 
 const BLKGETSIZE64: libc::Ioctl = _IOR::<usize>(0x12, 114) as libc::Ioctl;
-const BLKPBSZGET: libc::Ioctl = _IO(0x12, 123) as libc::Ioctl;
 
 /// Returns the size of a file or block device in bytes.
 ///
@@ -35,13 +34,11 @@ pub fn get_size(fd: RawFd) -> u64 {
 /// Returns the physical block size of a block device (the _larger_ of the two),
 /// with fallback to the filesystem block size hint for regular files, in bytes.
 /// (to be used as a performance hint only)
-pub fn get_blocksize_physical_hint(fd: RawFd) -> u32 {
-    let metadata = fd_metadata(fd);
+pub fn get_blocksize_physical_hint(fd: impl AsFd) -> u32 {
+    let metadata = fd_metadata(fd.as_fd().as_raw_fd());
 
     if metadata.file_type().is_block_device() {
-        let mut bs: libc::c_uint = 0;
-        unsafe { libc::ioctl(fd, BLKPBSZGET, &mut bs) };
-        bs
+        rustix::fs::ioctl_blkpbszget(fd).unwrap_or(0)
     } else {
         metadata.blksize() as u32
     }

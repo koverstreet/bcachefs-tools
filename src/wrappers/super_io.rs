@@ -3,7 +3,7 @@
 //! Rust implementations of superblock read/write operations.
 
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::fd::BorrowedFd;
 
 use bch_bindgen::c;
 use bcachefs_kernel::util::vstructs::{plain_bytes_mut, Head, SelfSized, Unvalidated};
@@ -45,7 +45,7 @@ pub fn write_all_at(fd: BorrowedFd<'_>, mut buf: &[u8], mut offset: u64) -> io::
 ///
 /// Exits on I/O errors (matches C `die()` behavior).
 pub fn bch2_super_write(fd: BorrowedFd<'_>, sb: &mut c::bch_sb) {
-    let bs = crate::wrappers::bdev::get_blocksize_physical_hint(fd.as_raw_fd()) as usize;
+    let bs = crate::wrappers::bdev::get_blocksize_physical_hint(fd) as usize;
     let layout_range = {
         let off = std::mem::offset_of!(Head<c::bch_sb>, layout);
         off..off + std::mem::size_of::<c::bch_sb_layout>()
