@@ -100,7 +100,7 @@ impl Trans {
     /// container_of(@w, struct btree_trans, locking_wait): every waiter on a
     /// btree node lock is a transaction's.
     fn of_waiter(w: *mut c::six_lock_waiter) -> Self {
-        Trans(unsafe { w.byte_sub(offset_of!(BtreeTrans<'_>, locking_wait)) }.cast())
+        Trans(w.wrapping_byte_sub(offset_of!(BtreeTrans<'_>, locking_wait)).cast())
     }
 }
 
