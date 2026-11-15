@@ -7,7 +7,7 @@ use crate::data::ec::delete::delete_empty_stripes;
 use crate::data::ec::io::EcBio;
 use crate::data::ec::stripe_new::NewStripes;
 use crate::fs::Fs;
-use crate::locking::{ByteLock, Locked, Lockdep};
+use crate::locking::{ByteLock, Locked, Lockdep, Mutex, SpinLockIrq};
 use crate::new_lock;
 use crate::util::alloc::{KBox, KVVec};
 use crate::util::bio::BioSet;
@@ -63,7 +63,7 @@ pub struct bch_fs_ec {
     /// alone.
     #[pin]
     #[init(new_lock!(0))]
-    pub(crate) stripe_buf_bytes: Locked<c::spinlock_t, usize>,
+    pub(crate) stripe_buf_bytes: Locked<SpinLockIrq, usize>,
     /// Who waits for it, woken together as it's freed: the write path's
     /// closures, until it converts, and Rust's waiters.
     pub stripe_buf_wait: c::closure_waitlist,
@@ -96,7 +96,7 @@ pub struct bch_fs_ec {
     /// stripe_new.rs.
     #[pin]
     #[init(new_lock!(NewStripes::new()))]
-    pub(crate) new_stripes: Locked<c::mutex, NewStripes>,
+    pub(crate) new_stripes: Locked<Mutex, NewStripes>,
     /// Woken as a stripe goes in flight, and as one's freed: for the flushes.
     pub(crate) new_stripes_changed: EventCount,
     pub stripe_new_seq: AtomicI64,

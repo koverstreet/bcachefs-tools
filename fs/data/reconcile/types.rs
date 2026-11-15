@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::data::reconcile::scan::OptChangeScans;
 use crate::data::reconcile::work::Status;
-use crate::locking::{Locked, SeqLock};
+use crate::locking::{Locked, SeqLock, SpinLockIrq};
 use crate::new_lock;
 use crate::data::reconcile::work::StripesPending;
 use crate::os::kthread::Daemon;
@@ -44,7 +44,7 @@ pub struct bch_fs_reconcile {
      */
     #[pin]
     #[init(new_lock!(OptChangeScans::new()))]
-    pub(crate) opt_change_scans: Locked<c::spinlock_t, OptChangeScans>,
+    pub(crate) opt_change_scans: Locked<SpinLockIrq, OptChangeScans>,
 
     /*
      * Stripes whose repair failed in a way only a change elsewhere can fix

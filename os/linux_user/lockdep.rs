@@ -2,7 +2,6 @@
 
 //! Lockdep, for userspace: there's none, so every hook does nothing.
 
-use crate::locking::percpu_rw_semaphore;
 use crate::util::ffi::c_char;
 use core::ffi::{c_ulong, c_void};
 use core::pin::Pin;
@@ -39,6 +38,3 @@ pub fn reclaim_lock_order(_take: impl FnOnce()) {}
 
 pub fn trace_contention_begin<L>(_lock: &L, _flags: core::ffi::c_uint) {}
 pub fn trace_contention_end<L>(_lock: &L, _ret: core::ffi::c_int) {}
-
-pub fn percpu_rwsem_assert_held(_: &percpu_rw_semaphore) {}
-pub fn percpu_rwsem_assert_held_write(_: &percpu_rw_semaphore) {}

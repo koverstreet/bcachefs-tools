@@ -21,7 +21,7 @@ use crate::util::Printbuf;
 use crate::{fs_fatal_error, fsck_err_on};
 use core::sync::atomic::{Ordering, AtomicU32};
 use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
-use crate::locking::Locked;
+use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::util::alloc::KVVec;
 use pin_init::pin_data;
@@ -44,7 +44,7 @@ pub struct bch_fs_logged_ops {
      */
     #[pin]
     #[init(new_lock!(KVVec::new()))]
-    pub(crate) unfinished: Locked<c::mutex, KVVec<u64>>,
+    pub(crate) unfinished: Locked<Mutex, KVVec<u64>>,
 }
 
 /// Where the ops are, in BTREE_ID_logged_ops: at offsets of this inode.

@@ -12,10 +12,7 @@
 //!
 //! Noio<R> is any lock R, taken that way: a RawLock that saves the memalloc
 //! flags, then takes R - and releases R, then restores them - Memalloc<R,
-//! FLAGS> with NOIO; another scope is another FLAGS. Laid out as R,
-//! so Noio<c::mutex> is C's struct mutex_noio and Noio<c::percpu_rw_semaphore>
-//! its struct percpu_rwsem_noio, which C's guards take the same way
-//! (locking.h).
+//! FLAGS> with NOIO; another scope is another FLAGS.
 //!
 //! MemallocFlags is the scope alone - saved on construction, restored on
 //! drop, as memalloc_flags_save() and _restore() pair: scoped (LIFO) use
@@ -26,9 +23,8 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Exclusive, ExclusiveGuard, Locked, RawLock, RawLockBase, RawMovableLock, RawReadLock, RawRwLock, RawTryLock, Shared,
-            SharedGuard};
-use crate::cstructs::c;
+use super::{Exclusive, ExclusiveGuard, Locked, Mutex, PercpuRwSem, RawLock, RawLockBase, RawMovableLock, RawReadLock, RawRwLock,
+            RawTryLock, Shared, SharedGuard};
 use crate::util::alloc::{flags, Flags};
 use crate::os::lockdep::LockClass;
 use crate::os::sched;
@@ -212,8 +208,8 @@ impl<'a, R: RawLock<GuardState = ()>, const F: u32, G, P, A> ExclusiveGuard<'a, 
 }
 
 /// C's struct mutex_noio and percpu_rwsem_noio, declared for C below.
-pub type mutex_noio = Noio<c::mutex>;
-pub type percpu_rwsem_noio = Noio<c::percpu_rw_semaphore>;
+pub type mutex_noio = Noio<Mutex>;
+pub type percpu_rwsem_noio = Noio<PercpuRwSem>;
 
 /// Locks over @G held in a NOIO scope: C's mutex_noio and percpu_rwsem_noio,
 /// and what they protect.

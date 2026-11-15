@@ -23,7 +23,7 @@ use crate::journal::pins::{flush_degraded, pin_resize};
 use crate::journal::reclaim::discard_work;
 use crate::os::kernel::PAGE_SIZE;
 use crate::data_structures::list::ListLinks;
-use crate::locking::{ExclusiveGuard, Locked, LockedBy};
+use crate::locking::{ExclusiveGuard, Locked, LockedBy, Mutex, PercpuRwSem, SpinLockIrq};
 use core::cell::Cell;
 use crate::util::bio::BioSet;
 use crate::util::futex::EventCount;
@@ -466,7 +466,7 @@ impl JournalPublished {
 }
 
 pub type JournalGuard<'a> =
-    ExclusiveGuard<'a, c::spinlock_t, JournalLocked, JournalPublished, crate::locking::Exclusive, JournalLockAt>;
+    ExclusiveGuard<'a, SpinLockIrq, JournalLocked, JournalPublished, crate::locking::Exclusive, JournalLockAt>;
 
 /// The journal lock's place, for what it covers to name.
 pub type JournalLockAt = crate::at!(journal.lock);
@@ -509,7 +509,7 @@ nest! {
 
         #[pin]
         #[init_locked(JournalPublished::closed(), "&j->lock")]
-        pub lock: Placed<Locked<c::spinlock_t, JournalLocked, JournalPublished>, JournalLockAt>,
+        pub lock: Placed<Locked<SpinLockIrq, JournalLocked, JournalPublished>, JournalLockAt>,
 
         pub flags: crate::data_structures::bitmap::AtomicBitflags<c::JournalFlag>,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -581,7 +581,7 @@ nest! {
         #[pin]
         #[init(new_lock!(PinBuf { entries: KVVec::new() }, ::pin_init::zeroed(),
                          "&j->pin_resize_lock"))]
-        pub pin_resize_lock: Locked<c::percpu_rw_semaphore, PinBuf, PinRange>,
+        pub pin_resize_lock: Locked<PercpuRwSem, PinBuf, PinRange>,
         #[pin]
         pub(crate) pin_resize_work: ReffedWork<pin_resize, FsRoRef>,
 
@@ -601,11 +601,11 @@ nest! {
         pub write_alloc: WriteAllocLockedBy,
         #[pin]
         #[init(new_lock!((), "&j->err_lock"))]
-        pub err_lock: Locked<c::spinlock_t>,
+        pub err_lock: Locked<SpinLockIrq>,
 
         #[pin]
         #[init(new_lock!((), ::pin_init::zeroed(), "&j->reclaim_lock"))]
-        pub reclaim_lock: Locked<c::mutex, (), ReclaimPublished>,
+        pub reclaim_lock: Locked<Mutex, (), ReclaimPublished>,
         /*
          * Used for waiting until journal reclaim has freed up space in the
          * journal:
@@ -672,7 +672,7 @@ pub struct journal_device {
 
     #[pin]
     #[init(new_lock!((), "&ca->journal.discard_lock"))]
-    pub discard_lock: Locked<c::mutex>,
+    pub discard_lock: Locked<Mutex>,
     #[pin]
     pub(crate) discard: ReffedWork<discard_work, crate::field!(super.io_ref_write)>,
 }

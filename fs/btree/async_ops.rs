@@ -16,7 +16,7 @@ use crate::errcode::BchError;
 use crate::format::{Bpos, Btree};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes::RecoveryPass;
-use crate::locking::{Locked, MemallocFlags};
+use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::new_lock;
 use crate::util::alloc::{AllocError, Kmalloc, KVVec};
 use crate::util::backref::BackRef;
@@ -113,7 +113,7 @@ pub(crate) struct AsyncOps {
     /* Queued before the filesystem may go read-write: run_pending_async_btree_ops() runs them */
     #[pin]
     #[init(new_lock!(KVVec::new()))]
-    pending: Locked<c::mutex, KVVec<OpBox>>,
+    pending: Locked<Mutex, KVVec<OpBox>>,
     running: AtomicU32,
     running_done: EventCount,
     #[late(Workqueue::new(c"btree_node_rewrite", WqFlags::PERCPU, 0), ENOMEM_btree_interior_update_worker_init)]

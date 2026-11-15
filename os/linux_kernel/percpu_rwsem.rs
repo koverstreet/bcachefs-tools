@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The kernel's percpu_rw_semaphore, as a RawRwLock. Initializing in a lockdep
-//! class is a macro: shim.c's rust_percpu_init_rwsem(), and the rest of its
-//! rust_percpu_* wrappers.
-
-#![allow(non_camel_case_types)]
+//! PercpuRwSem: the kernel's percpu_rw_semaphore, as a RawRwLock.
+//! Initializing in a lockdep class is a macro: shim.c's
+//! rust_percpu_init_rwsem(), and the rest of its rust_percpu_* wrappers.
 
 use crate::locking::{RawLock, RawLockBase, RawReadLock, RawRwLock};
 use crate::c;
@@ -14,10 +12,10 @@ use core::ffi::CStr;
 
 use kernel::bindings as b;
 
-pub type percpu_rw_semaphore = Opaque<b::percpu_rw_semaphore>;
+pub type PercpuRwSem = Opaque<b::percpu_rw_semaphore>;
 
 // Zeroed as the structs holding them start; a lock only once their init runs
-unsafe impl ::pin_init::Zeroable for percpu_rw_semaphore {}
+unsafe impl ::pin_init::Zeroable for PercpuRwSem {}
 
 pub use crate::c::{
     rust_percpu_init_rwsem, rust_percpu_free_rwsem, rust_percpu_down_read, rust_percpu_up_read,
@@ -25,7 +23,7 @@ pub use crate::c::{
 };
 use crate::os::lockdep::{self, LockClass};
 
-unsafe impl RawLockBase for c::percpu_rw_semaphore {
+unsafe impl RawLockBase for PercpuRwSem {
     type GuardState = ();
     /// The per-CPU counts couldn't be allocated
     type InitError = BchError;
@@ -39,7 +37,7 @@ unsafe impl RawLockBase for c::percpu_rw_semaphore {
     }
 }
 
-unsafe impl RawLock for c::percpu_rw_semaphore {
+unsafe impl RawLock for PercpuRwSem {
     unsafe fn lock(&self) {
         unsafe { rust_percpu_down_write(self.as_ptr().cast()) }
     }
@@ -53,7 +51,7 @@ unsafe impl RawLock for c::percpu_rw_semaphore {
     }
 }
 
-unsafe impl RawReadLock for c::percpu_rw_semaphore {
+unsafe impl RawReadLock for PercpuRwSem {
     unsafe fn lock_read(&self) {
         unsafe { rust_percpu_down_read(self.as_ptr().cast()) }
     }
@@ -63,7 +61,7 @@ unsafe impl RawReadLock for c::percpu_rw_semaphore {
     }
 }
 
-unsafe impl RawRwLock for c::percpu_rw_semaphore {
+unsafe impl RawRwLock for PercpuRwSem {
     unsafe fn assert_held_any(&self) {
         lockdep::percpu_rwsem_assert_held(self)
     }

@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The kernel's rw_semaphore, as a RawRwLock. Initializing in a lockdep
-//! class is a macro: shim.c's rust_init_rwsem().
-
-#![allow(non_camel_case_types)]
+//! RwSem: the kernel's rw_semaphore, as a RawRwLock. Initializing in a
+//! lockdep class is a macro: shim.c's rust_init_rwsem().
 
 use crate::c;
 use crate::locking::{RawLock, RawLockBase, RawReadLock, RawRwLock, RawTryReadLock};
@@ -13,12 +11,12 @@ use core::convert::Infallible;
 use core::ffi::CStr;
 use kernel::bindings as b;
 
-pub type rw_semaphore = Opaque<b::rw_semaphore>;
+pub type RwSem = Opaque<b::rw_semaphore>;
 
 // Zeroed as the structs holding them start; a lock only once their init runs
-unsafe impl ::pin_init::Zeroable for rw_semaphore {}
+unsafe impl ::pin_init::Zeroable for RwSem {}
 
-unsafe impl RawLockBase for rw_semaphore {
+unsafe impl RawLockBase for RwSem {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -28,7 +26,7 @@ unsafe impl RawLockBase for rw_semaphore {
     }
 }
 
-unsafe impl RawLock for rw_semaphore {
+unsafe impl RawLock for RwSem {
     unsafe fn lock(&self) {
         unsafe { c::down_write(self.as_ptr().cast()) }
     }
@@ -42,7 +40,7 @@ unsafe impl RawLock for rw_semaphore {
     }
 }
 
-unsafe impl RawReadLock for rw_semaphore {
+unsafe impl RawReadLock for RwSem {
     unsafe fn lock_read(&self) {
         unsafe { c::down_read(self.as_ptr().cast()) }
     }
@@ -52,13 +50,13 @@ unsafe impl RawReadLock for rw_semaphore {
     }
 }
 
-unsafe impl RawTryReadLock for rw_semaphore {
+unsafe impl RawTryReadLock for RwSem {
     unsafe fn try_lock_read(&self) -> Option<()> {
         (unsafe { c::down_read_trylock(self.as_ptr().cast()) } != 0).then_some(())
     }
 }
 
-unsafe impl RawRwLock for rw_semaphore {
+unsafe impl RawRwLock for RwSem {
     unsafe fn assert_held_any(&self) {
         lockdep::rwsem_assert_held(self)
     }

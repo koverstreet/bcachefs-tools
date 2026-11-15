@@ -5,7 +5,7 @@
 #![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use cstruct_macros::{bitfield, bch_enum, BitfieldMembers, MaybeZeroable, TypeInfo};
 use nestify::nest;
 use core::sync::atomic::AtomicI32;
@@ -104,5 +104,5 @@ pub struct bch_folio {
      * readpage_bio_drop_unissued() maintains this.
      */
     pub partially_uptodate: u16,
-    pub state: Locked<c::spinlock_t, FolioState>,
+    pub state: Locked<SpinLockIrq, FolioState>,
 }

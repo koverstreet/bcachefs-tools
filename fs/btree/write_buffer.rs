@@ -32,7 +32,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BtreeFlags};
 use crate::fs::Fs;
 use crate::journal::pins::Pin;
-use crate::locking::{ExclusiveGuard, Locked, MemallocFlags};
+use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, Mutex};
 use crate::util::alloc::{flags, Flags, AllocError, KVVec};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::place::{container_of, Contained};
@@ -183,8 +183,8 @@ crate::published! {
     }
 }
 
-type IncGuard<'a> = ExclusiveGuard<'a, c::mutex, Inc, KeysLive>;
-type FlushingGuard<'a> = ExclusiveGuard<'a, c::mutex, Flushing, FlushingLive>;
+type IncGuard<'a> = ExclusiveGuard<'a, Mutex, Inc, KeysLive>;
+type FlushingGuard<'a> = ExclusiveGuard<'a, Mutex, Flushing, FlushingLive>;
 
 /// inc's journal pin: placed, for its flush fn to have its write buffer.
 #[placed(c::bch_fs_btree_write_buffer.inc_pin)]
@@ -213,13 +213,13 @@ const _: () = assert!(offset_of!(wb_inc_pin, pin) == 0 && offset_of!(wb_flushing
 pub struct bch_fs_btree_write_buffer {
     #[pin]
     #[init(new_lock!(Inc::default(), ::pin_init::zeroed(), "&wb->inc.lock"))]
-    pub inc: Locked<c::mutex, Inc, KeysLive>,
+    pub inc: Locked<Mutex, Inc, KeysLive>,
     #[pin]
     pub inc_pin: c::wb_inc_pin,
 
     #[pin]
     #[init(new_lock!(Flushing::default(), ::pin_init::zeroed(), "&wb->flushing.lock"))]
-    pub flushing: Locked<c::mutex, Flushing, FlushingLive>,
+    pub flushing: Locked<Mutex, Flushing, FlushingLive>,
     #[pin]
     pub flushing_pin: c::wb_flushing_pin,
 

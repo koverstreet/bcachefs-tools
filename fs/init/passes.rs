@@ -19,7 +19,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::locking::Locked;
+use crate::locking::{Locked, Mutex, SpinLockIrq};
 use crate::new_lock;
 use crate::published;
 use crate::util::projections::Volatile;
@@ -117,12 +117,12 @@ pub struct bch_fs_recovery {
     /* the runner's state, under its lock, and what it publishes */
     #[pin]
     #[init(new_lock!(::pin_init::zeroed(), ::pin_init::zeroed(), "&c->recovery.lock"))]
-    pub runner: Locked<c::spinlock_t, bch_recovery_runner, RecoveryWords>,
+    pub runner: Locked<SpinLockIrq, bch_recovery_runner, RecoveryWords>,
 
     /* passes run under it - and what runs as a pass, it serializes */
     #[pin]
     #[init(new_lock!((), "&c->recovery.run_lock"))]
-    pub run_lock: Locked<c::mutex>,
+    pub run_lock: Locked<Mutex>,
 
     /* the async runner: run_async() */
     #[pin]
@@ -462,7 +462,7 @@ fn set_btree_clean_to(fs: &Fs, btree: Btree, clean: bool) {
 
 /// The runner's lock, held: its state, and permission to write what of
 /// recovery's is published. Nothing sleeps while it's held.
-type Recovery<'a> = ExclusiveGuard<'a, c::spinlock_t, Runner, RecoveryWords>;
+type Recovery<'a> = ExclusiveGuard<'a, SpinLockIrq, Runner, RecoveryWords>;
 
 fn lock(fs: &Fs) -> Recovery<'_> {
     fs.recovery.runner.lock()
@@ -508,7 +508,7 @@ pub fn assert_run_lock_held(fs: &Fs) {
 
 /// recovery.run_lock, held: no recovery pass runs - to run one's work outside
 /// the pass framework.
-pub fn run_lock(fs: &Fs) -> ExclusiveGuard<'_, c::mutex> {
+pub fn run_lock(fs: &Fs) -> ExclusiveGuard<'_, Mutex> {
     fs.recovery.run_lock.lock()
 }
 

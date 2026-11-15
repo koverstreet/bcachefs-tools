@@ -75,7 +75,7 @@ use crate::errcode::{Errcode as err, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Dev, Fs};
 use crate::init::{damage, error::{bch2_inum_offset_err_msg_trans, inum_offset_err_msg}};
 use crate::inode_opts::get_io_opts;
-use crate::locking::{Locked, MemallocFlags};
+use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::debug::trace::events;
 use crate::sb::counters::{Event, Sectors};
 use crate::init::error::id;
@@ -138,7 +138,7 @@ pub struct ReadErrs {
 pub struct ReadErrReport {
     #[pin]
     #[init(crate::new_lock!(ReadErrs { errors: 0, msg: Printbuf::new() }, "bch_read_err_report"))]
-    pub errs: Locked<c::mutex, ReadErrs>,
+    pub errs: Locked<Mutex, ReadErrs>,
 }
 
 #[pin_data]

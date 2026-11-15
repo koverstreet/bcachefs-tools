@@ -28,7 +28,7 @@
 
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use crate::util::alloc::{kbox_pin_init, AllocError, KBox};
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::util::Printbuf;
@@ -249,7 +249,7 @@ impl Drop for Kthread {
 #[pin_data]
 pub struct Daemon {
     #[pin]
-    thread: Locked<c::spinlock_t, Option<Kthread>>,
+    thread: Locked<SpinLockIrq, Option<Kthread>>,
 }
 
 impl Daemon {

@@ -66,7 +66,7 @@ use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::init::passes;
-use crate::locking::Locked;
+use crate::locking::{Locked, RwSem};
 use crate::new_lock;
 use crate::snapshots::check_snapshots;
 use crate::snapshots::snapshot;
@@ -128,7 +128,7 @@ pub(crate) struct SnapshotDelete {
     /// across its btree work, so it's never taken for write with btree
     /// locks held: lockdep sees the cycle.
     #[pin]
-    nodes:    Locked<c::rw_semaphore, Option<DeleteNodes>>,
+    nodes:    Locked<RwSem, Option<DeleteNodes>>,
     /// Which sweep the progress describes: 1 or 2.
     version:  AtomicU32,
     progress: c::progress_indicator,

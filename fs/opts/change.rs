@@ -13,7 +13,7 @@ use crate::c;
 use crate::data::compress;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::locking::ExclusiveGuard;
+use crate::locking::{ExclusiveGuard, Mutex};
 use crate::sb::io::SbFieldOps;
 use crate::util::printbuf::Printbuf;
 
@@ -209,7 +209,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
 /// even one are as the options are.
 pub struct OptChange<'f> {
     fs:    &'f Fs,
-    _lock: ExclusiveGuard<'f, c::mutex>,
+    _lock: ExclusiveGuard<'f, Mutex>,
 }
 
 impl<'f> OptChange<'f> {

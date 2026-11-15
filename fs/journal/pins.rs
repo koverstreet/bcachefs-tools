@@ -24,7 +24,7 @@ use crate::data_structures::list::List;
 use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::Fs;
-use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, SharedGuard};
+use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, PercpuRwSem, SharedGuard, SpinLockIrq};
 use crate::debug::trace::events;
 use crate::util::alloc::{init_at, AllocError, KVVec};
 use crate::util::projections::{TearSafe, Volatile};
@@ -140,13 +140,13 @@ impl PinLists {
     }
 }
 
-type ListsGuard<'a> = ExclusiveGuard<'a, c::spinlock_t, PinLists>;
+type ListsGuard<'a> = ExclusiveGuard<'a, SpinLockIrq, PinLists>;
 
 /* One entry's: its pins, and what it takes to retire it */
 #[pin_data]
 pub struct PinList {
     #[pin]
-    lists:      Locked<c::spinlock_t, PinLists>,
+    lists:      Locked<SpinLockIrq, PinLists>,
     /* the entry's own ref while it's open, one while it's unreplayed, one a pin */
     count:      AtomicI32,
     unreplayed: Volatile<bool>,
@@ -232,7 +232,7 @@ impl c::PinRange {
 /* The live entries, with pin_resize_lock held for read */
 pub struct PinsRead<'a> {
     j: &'a c::journal,
-    g: SharedGuard<'a, c::percpu_rw_semaphore, c::PinBuf, c::PinRange>,
+    g: SharedGuard<'a, PercpuRwSem, c::PinBuf, c::PinRange>,
 }
 
 impl c::journal {

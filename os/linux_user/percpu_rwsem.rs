@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! percpu_rw_semaphore, for userspace, as a RawRwLock: parking_lot's, as
-//! rw_semaphore is - readers share it, as the kernel's do; there are no CPUs'
-//! counts to allocate, so init can't fail.
-
-#![allow(non_camel_case_types)]
+//! PercpuRwSem, for userspace: parking_lot's RawRwLock, as RwSem is - readers
+//! share it, as the kernel's do; there are no CPUs' counts to allocate, so
+//! init can't fail.
 
 use crate::errcode::BchError;
 use crate::locking::{RawLock, RawLockBase, RawReadLock, RawRwLock};
@@ -13,21 +11,21 @@ use core::ffi::CStr;
 use parking_lot::lock_api::RawRwLock as _;
 
 #[repr(transparent)]
-pub struct percpu_rw_semaphore(parking_lot::RawRwLock);
+pub struct PercpuRwSem(parking_lot::RawRwLock);
 
-unsafe impl ::pin_init::Zeroable for percpu_rw_semaphore {}
+unsafe impl ::pin_init::Zeroable for PercpuRwSem {}
 
-unsafe impl RawLockBase for percpu_rw_semaphore {
+unsafe impl RawLockBase for PercpuRwSem {
     type GuardState = ();
     type InitError = BchError;
 
     unsafe fn init(l: *mut Self, _name: &'static CStr, _key: LockClass) -> Result<(), BchError> {
-        unsafe { l.write(percpu_rw_semaphore(parking_lot::RawRwLock::INIT)) };
+        unsafe { l.write(PercpuRwSem(parking_lot::RawRwLock::INIT)) };
         Ok(())
     }
 }
 
-unsafe impl RawLock for percpu_rw_semaphore {
+unsafe impl RawLock for PercpuRwSem {
     unsafe fn lock(&self) {
         self.0.lock_exclusive()
     }
@@ -39,7 +37,7 @@ unsafe impl RawLock for percpu_rw_semaphore {
     unsafe fn assert_held(&self) {}
 }
 
-unsafe impl RawReadLock for percpu_rw_semaphore {
+unsafe impl RawReadLock for PercpuRwSem {
     unsafe fn lock_read(&self) {
         self.0.lock_shared()
     }
@@ -49,6 +47,6 @@ unsafe impl RawReadLock for percpu_rw_semaphore {
     }
 }
 
-unsafe impl RawRwLock for percpu_rw_semaphore {
+unsafe impl RawRwLock for PercpuRwSem {
     unsafe fn assert_held_any(&self) {}
 }

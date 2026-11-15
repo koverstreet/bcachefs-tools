@@ -25,7 +25,7 @@ use crate::inode_opts::{get_fs, get_io_opts};
 use crate::debug::trace::events;
 use crate::util::alloc::{Kmalloc, KVVec};
 use crate::util::log::LogMsg;
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use crate::util::gather::{Fold, Gather, GatherRef};
 use crate::util::backref::BackRef;
 use crate::util::task::{waiter, TaskSlot};
@@ -98,7 +98,7 @@ impl Bad {
 
 impl Fold for Bad {
     type Item = Self;
-    type Acc = Locked<c::spinlock_t, Self>;
+    type Acc = Locked<SpinLockIrq, Self>;
 
     fn acc() -> impl PinInit<Self::Acc> {
         new_lock!(Self::default())

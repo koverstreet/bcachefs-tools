@@ -18,7 +18,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::{__six_lock_init, six_lock_counts, six_trylock_ip, SixHold};
-use crate::locking::{memalloc_flags_restore, memalloc_flags_save, AsLocked, Exclusive, ExclusiveGuard, Locked, RawTimedLock, PF_MEMALLOC_NOIO};
+use crate::locking::{memalloc_flags_restore, memalloc_flags_save, AsLocked, Exclusive, ExclusiveGuard, Locked, Mutex, RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::util::place::Placed;
 use crate::prt;
 use crate::debug::trace::{events, TraceEvent};
@@ -1231,8 +1231,8 @@ impl BtreeTrans<'_> {
     }
 
     /// @l locked, not slept on with the btree locks held: bch2_trans_mutex_lock().
-    pub(crate) fn mutex_lock<'l, L: AsLocked<R = c::mutex>, A>(&self, paths: &mut Paths<'_>, l: &'l Placed<L, A>)
-        -> Result<ExclusiveGuard<'l, c::mutex, L::G, L::P, Exclusive, A>, BchError>
+    pub(crate) fn mutex_lock<'l, L: AsLocked<R = Mutex>, A>(&self, paths: &mut Paths<'_>, l: &'l Placed<L, A>)
+        -> Result<ExclusiveGuard<'l, Mutex, L::G, L::P, Exclusive, A>, BchError>
     {
         if let Some(g) = l.try_lock() {
             return Ok(g);

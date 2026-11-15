@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::projections::Volatile;
-use crate::locking::{Locked, SeqLock};
+use crate::locking::{Locked, RwSem, SeqLock};
 use crate::new_lock;
 use core::cmp::Ordering;
 use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, Init, TypeInfo, BitfieldMembers};
@@ -122,7 +122,7 @@ pub struct bch_fs_gc {
      */
     #[pin]
     #[init(new_lock!((), "&c->gc.lock"))]
-    pub lock: Locked<c::rw_semaphore>,
+    pub lock: Locked<RwSem>,
 }
 
 impl bch_fs_gc {

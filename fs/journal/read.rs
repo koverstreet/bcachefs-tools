@@ -21,7 +21,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::init::error::id;
 use crate::journal::buckets::JournalRing;
-use crate::locking::{Guard as _, Locked, Mut, Ref};
+use crate::locking::{Guard as _, Locked, Mut, Mutex, Ref};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
 use crate::util::alloc::{init_at, kvzalloc, AllocError, Flags, KVVec};
@@ -365,7 +365,7 @@ struct ReadState<'a> {
     scrub_seq: u64,
 }
 
-type ReadLock<'a> = Locked<c::mutex, ReadState<'a>>;
+type ReadLock<'a> = Locked<Mutex, ReadState<'a>>;
 
 fn journal_replay_free(fs: &Fs, slot: &mut Option<Replay>, blacklisted: bool) {
     let Some(i) = slot.as_mut() else { return };

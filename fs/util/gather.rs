@@ -50,9 +50,8 @@
 //! owner's ref without starting it, and polls the count: the last put's
 //! cmpxchg is then its last touch.
 
-use crate::c;
 use crate::errcode::{BchError, FirstErr};
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::sleep::{sleep_until, Sleep};
@@ -131,7 +130,7 @@ impl Fold for Result<(), BchError> {
 /// put pushes before its ref's dropped from the count.
 impl<T: Send> Fold for KVVec<T> {
     type Item = T;
-    type Acc = Locked<c::spinlock_t, KVVec<T>>;
+    type Acc = Locked<SpinLockIrq, KVVec<T>>;
 
     const RESERVES: bool = true;
 

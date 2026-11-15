@@ -25,7 +25,7 @@ use core::ptr::NonNull;
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::inode_opts::InodeOpt;
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use crate::util::os_str::{qstr_name, OsStr};
 use crate::xattr::XattrType;
 
@@ -115,11 +115,11 @@ impl<'a> Dentry<'a> {
         Some(opt.get(&dir.inode()))
     }
 
-    fn d_lock(&self) -> &Locked<c::spinlock_t> {
+    fn d_lock(&self) -> &Locked<SpinLockIrq> {
         // SAFETY: referenced, so live; d_lock is a #define, d_lockref.lock, and
-        // c::spinlock_t the kernel's spinlock_t in an Opaque
+        // SpinLockIrq is the kernel's spinlock_t, in an Opaque
         Locked::from_c(unsafe {
-            &*(&raw const (*self.raw).d_lockref.__bindgen_anon_1.__bindgen_anon_1.lock).cast::<c::spinlock_t>()
+            &*(&raw const (*self.raw).d_lockref.__bindgen_anon_1.__bindgen_anon_1.lock).cast::<SpinLockIrq>()
         })
     }
 

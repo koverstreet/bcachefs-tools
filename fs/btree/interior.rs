@@ -29,7 +29,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::journal::pins::Pin;
-use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, SharedGuard};
+use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, Mutex, RwSem, SharedGuard};
 use crate::new_lock;
 use crate::types::{Fifo, Le64, Lent};
 use crate::util::Printbuf;
@@ -88,7 +88,7 @@ pub struct BtreeReserveCache {
 pub struct bch_fs_btree_reserve_cache {
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), (), "&c->btree.reserve_cache.lock"))]
-    pub lock: Locked<c::mutex, BtreeReserveCache>,
+    pub lock: Locked<Mutex, BtreeReserveCache>,
 }
 
 const UPDATE_NODES_MAX: usize = (c::BTREE_MAX_DEPTH as usize - 2) * 2 + c::GC_MERGE_NODES as usize;
@@ -132,9 +132,9 @@ pub(crate) struct Updates {
 unsafe impl Send for Updates {}
 
 /// interior_updates.lock, held.
-pub(crate) type UpdatesGuard<'a> = ExclusiveGuard<'a, c::mutex, Updates, (), Exclusive, UpdatesLockAt>;
+pub(crate) type UpdatesGuard<'a> = ExclusiveGuard<'a, Mutex, Updates, (), Exclusive, UpdatesLockAt>;
 /// commit_lock, held.
-pub(crate) type CommitGuard<'a> = ExclusiveGuard<'a, c::mutex, (), (), Exclusive, CommitLockAt>;
+pub(crate) type CommitGuard<'a> = ExclusiveGuard<'a, Mutex, (), (), Exclusive, CommitLockAt>;
 
 /// The two locks' places, for what they cover to name.
 pub(crate) type UpdatesLockAt = crate::at!(bch_fs_btree_interior_updates.lock);
@@ -154,7 +154,7 @@ pub struct bch_fs_btree_interior_updates {
     pub pool: Late<Mempool<Kmalloc>>,
     #[pin]
     #[init(new_lock!(Updates::default(), (), "&c->btree.interior_updates.lock"))]
-    lock: Placed<Locked<c::mutex, Updates>, UpdatesLockAt>,
+    lock: Placed<Locked<Mutex, Updates>, UpdatesLockAt>,
     /*
      * btree_interior_update_commit_lock is needed for synchronization with
      * btree_node_update_key(): having the lock be at the filesystem level
@@ -162,7 +162,7 @@ pub struct bch_fs_btree_interior_updates {
      */
     #[pin]
     #[init(new_lock!((), (), "&c->btree.interior_updates.commit_lock"))]
-    pub(crate) commit_lock: Placed<Locked<c::mutex>, CommitLockAt>,
+    pub(crate) commit_lock: Placed<Locked<Mutex>, CommitLockAt>,
     pub wait: EventCount,
 
     #[late(Workqueue::new(c"btree_update", WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 8), ENOMEM_btree_interior_update_worker_init)]
@@ -261,7 +261,7 @@ struct StartNode {
     remaining:      u16,
 }
 
-type GcReadLock = SharedGuard<'static, c::rw_semaphore>;
+type GcReadLock = SharedGuard<'static, RwSem>;
 
 /// gc.lock, held for read from start() until the update's done, or freed.
 fn gc_read_lock(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, fs: &'static Fs) -> Result<GcReadLock, BchError> {
@@ -941,7 +941,7 @@ impl Fs {
     }
 }
 
-type RootsGuard<'a> = ExclusiveGuard<'a, c::mutex, c::BtreeRoots, c::BtreeRootsLive>;
+type RootsGuard<'a> = ExclusiveGuard<'a, Mutex, c::BtreeRoots, c::BtreeRootsLive>;
 
 /// The live roots, but those whose bit is set in @skip - a btree past bit 63
 /// can't be. Under root_lock, which owns their on-disk fields: key, level,

@@ -7,8 +7,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawTryLock};
-use crate::cstructs::c;
+use super::{ExclusiveGuard, Locked, Mutex, RawLock, RawLockBase, RawTryLock};
 use crate::os::lockdep::LockClass;
 use core::convert::Infallible;
 use core::ffi::CStr;
@@ -18,7 +17,7 @@ use cstruct_macros::MaybeZeroable;
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct seqmutex {
-    pub lock: c::mutex,
+    pub lock: Mutex,
     /* C writes it under the mutex */
     pub seq:  AtomicU32,
 }
@@ -30,7 +29,7 @@ unsafe impl RawLockBase for seqmutex {
     unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
         unsafe {
             (&raw mut (*l).seq).write(AtomicU32::new(0));
-            c::mutex::init(&raw mut (*l).lock, name, key)
+            Mutex::init(&raw mut (*l).lock, name, key)
         }
     }
 }

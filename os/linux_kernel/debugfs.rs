@@ -8,7 +8,7 @@
 
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
-use crate::locking::Locked;
+use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::util::alloc::{kbox_pin_init, KBox};
 use crate::util::ffi::Opaque;
@@ -34,7 +34,7 @@ pub type Dentry = c::dentry;
 struct Open<F: DebugFile> {
     obj: NonNull<F::Obj>,
     #[pin]
-    state: Locked<c::mutex, (F, Printbuf)>,
+    state: Locked<Mutex, (F, Printbuf)>,
 }
 
 // SAFETY: readers share @obj, as C's do; the state's under its lock

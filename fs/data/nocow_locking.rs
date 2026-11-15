@@ -32,7 +32,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::sb::members::DevRef;
-use crate::locking;
+use crate::locking::{self, SpinLockIrq};
 use crate::new_lock;
 use crate::types::CacheAligned;
 use crate::util::futex::EventCount;
@@ -85,7 +85,7 @@ struct NocowLockBucket {
     _align: CacheAligned,
     /// Taken to claim a slot, or raise its count
     #[pin]
-    lock:   locking::Locked<c::spinlock_t>,
+    lock:   locking::Locked<SpinLockIrq>,
     /// Each slot's device bucket, as bucket_to_u64(): meaningful while its
     /// count is nonzero. Read without the lock by unlock and is_locked(),
     /// which only look for a bucket they know is held

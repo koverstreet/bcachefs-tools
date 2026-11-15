@@ -42,7 +42,7 @@ use crate::os::kernel::{capable, current_fsgid, current_fsuid, Capability};
 use crate::util::log::LogMsg;
 use crate::util::printbuf::Printbuf;
 use crate::init::chardev::{copy_err_msg, fs_ioctl, ErrMsg, V2};
-use crate::locking::Locked;
+use crate::locking::{Locked, RwSem};
 use crate::vfs::dentry::Dentry;
 use crate::os::iov_iter::IovIter;
 use crate::vfs::direct::direct_io_read;
@@ -298,7 +298,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
         let _create = fs.snapshots.create_lock.write();
         if a.flags & SNAPSHOT != 0 {
             // SAFETY: the mounted superblock's, the kernel's rw_semaphore
-            let s_umount = unsafe { &*(&raw const (*fs.vfs_sb).s_umount).cast::<c::rw_semaphore>() };
+            let s_umount = unsafe { &*(&raw const (*fs.vfs_sb).s_umount).cast::<RwSem>() };
             let _umount = Locked::from_c(s_umount).read();
             unsafe { c::sync_inodes_sb(fs.vfs_sb) };
         }

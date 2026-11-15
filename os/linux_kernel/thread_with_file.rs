@@ -51,7 +51,7 @@
 
 use crate::c;
 use crate::errcode::BchError;
-use crate::locking::{ExclusiveGuard, Locked};
+use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::Fifo;
 use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
@@ -151,7 +151,7 @@ struct Buf {
 #[pin_data]
 struct StdioBuf {
     #[pin]
-    buf:  Locked<c::spinlock_t, Buf, Volatile<usize>>,
+    buf:  Locked<SpinLockIrq, Buf, Volatile<usize>>,
     events: EventCount,
     #[pin]
     poll: PollQueue,
@@ -185,7 +185,7 @@ impl StdioBuf {
     }
 }
 
-struct BufGuard<'a>(ExclusiveGuard<'a, c::spinlock_t, Buf, Volatile<usize>>);
+struct BufGuard<'a>(ExclusiveGuard<'a, SpinLockIrq, Buf, Volatile<usize>>);
 
 impl Deref for BufGuard<'_> {
     type Target = Buf;

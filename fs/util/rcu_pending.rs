@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 
 use crate::c;
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::GenRadix;
 use crate::util::alloc::{flags, init_at, kbox_zeroed_nofail, AllocError, KBox, KVBox, KVVec};
@@ -341,7 +341,7 @@ impl PcpuState {
 #[repr(C)]
 struct Pcpu<'f, M: Mode> {
     parent: *const RcuPending<'f, M>,
-    lock:   Locked<c::spinlock_t, PcpuState>,
+    lock:   Locked<SpinLockIrq, PcpuState>,
     /* what's queued here: added under the lock, taken off as it's processed */
     nr:     AtomicUsize,
     cpu:    c_uint,

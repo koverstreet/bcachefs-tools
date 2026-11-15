@@ -48,7 +48,7 @@ use crate::util::{Printbuf, ToText};
 use core::ffi::{c_ulong, CStr};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
-use crate::locking::{Locked, MemallocFlags};
+use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::new_lock;
 use pin_init::pin_data;
 use crate::format::{Bpos, Btree, MemberState};
@@ -119,12 +119,12 @@ pub struct bch_fs_errors {
     /* What the error paths keep: init/error.rs */
     #[pin]
     #[init(new_lock!(ErrorsLocked::new()))]
-    pub(crate) state: Locked<c::mutex, ErrorsLocked>,
+    pub(crate) state: Locked<Mutex, ErrorsLocked>,
 
     /* The superblock's error counts, by id: sb/errors.rs */
     #[pin]
     #[init(new_lock!(KVVec::new()))]
-    pub(crate) counts: Locked<c::mutex, KVVec<c::bch_sb_error_entry_cpu>>,
+    pub(crate) counts: Locked<Mutex, KVVec<c::bch_sb_error_entry_cpu>>,
 }
 
 /// The fsck error ids by their names: id::inode_wrong_nlink.

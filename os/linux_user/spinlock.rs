@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Spinlocks, for userspace, as RawLocks: a futex word, not a pthread mutex -
-//! an unlocked one may be moved, as a kernel spinlock may, where a copy of a
-//! pthread mutex isn't one. spinlock_t, SpinLock and raw_spinlock_t are the
-//! same lock here: there are no interrupts to save, and nothing sleeps that
-//! a raw_spinlock_t wouldn't.
-
-#![allow(non_camel_case_types)]
+//! Spinlocks, for userspace: a futex word, not a pthread mutex - an unlocked
+//! one may be moved, as a kernel spinlock may, where a copy of a pthread mutex
+//! isn't one. SpinLockIrq, SpinLock and RawSpinLock are the same lock here:
+//! there are no interrupts to save, and nothing sleeps that a RawSpinLock
+//! wouldn't. They're kept apart for what each may do, as the kernel's are.
 
 use crate::locking::{MemallocFlags, RawLock, RawLockBase, RawMovableLock, RawNestedLock};
 use crate::os::lockdep::LockClass;
 use core::convert::Infallible;
-use core::ffi::{c_ulong, CStr};
+use core::ffi::CStr;
 use core::sync::atomic::{AtomicU32, Ordering::{Acquire, Relaxed, Release}};
 use rustix::thread::futex;
 
@@ -21,24 +19,24 @@ const LOCKED: u32 = 1;
 const CONTENDED: u32 = 2;
 
 #[repr(C)]
-pub struct raw_spinlock_t {
+pub struct RawSpinLock {
     state: AtomicU32,
 }
 
 #[repr(transparent)]
-pub struct spinlock_t(raw_spinlock_t);
+pub struct SpinLockIrq(RawSpinLock);
 
 #[repr(transparent)]
-pub struct SpinLock(spinlock_t);
+pub struct SpinLock(RawSpinLock);
 
-// Zeroed as the structs holding them start: unlocked
-unsafe impl ::pin_init::Zeroable for raw_spinlock_t {}
-unsafe impl ::pin_init::Zeroable for spinlock_t {}
+// Zeroed: unlocked
+unsafe impl ::pin_init::Zeroable for RawSpinLock {}
+unsafe impl ::pin_init::Zeroable for SpinLockIrq {}
 unsafe impl ::pin_init::Zeroable for SpinLock {}
 
-// ── raw_spinlock_t ───────────────────────────────────────────────────────
+// ── RawSpinLock ──────────────────────────────────────────────────────────
 
-unsafe impl RawLockBase for raw_spinlock_t {
+unsafe impl RawLockBase for RawSpinLock {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
@@ -48,9 +46,9 @@ unsafe impl RawLockBase for raw_spinlock_t {
     }
 }
 
-unsafe impl RawMovableLock for raw_spinlock_t {}
+unsafe impl RawMovableLock for RawSpinLock {}
 
-unsafe impl RawLock for raw_spinlock_t {
+unsafe impl RawLock for RawSpinLock {
     unsafe fn lock(&self) -> MemallocFlags {
         let s = &self.state;
         if s.compare_exchange(UNLOCKED, LOCKED, Acquire, Relaxed).is_err() {
@@ -71,33 +69,33 @@ unsafe impl RawLock for raw_spinlock_t {
     unsafe fn assert_held(&self) {}
 }
 
-// ── spinlock_t, with the kernel's irqsave guard state: no flags here ──────
+// ── SpinLockIrq ──────────────────────────────────────────────────────────
 
-unsafe impl RawLockBase for spinlock_t {
-    type GuardState = (c_ulong, MemallocFlags);
+unsafe impl RawLockBase for SpinLockIrq {
+    type GuardState = MemallocFlags;
     type InitError = Infallible;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
-        unsafe { raw_spinlock_t::init(l.cast(), name, key) }
+        unsafe { RawSpinLock::init(l.cast(), name, key) }
     }
 }
 
-unsafe impl RawMovableLock for spinlock_t {}
+unsafe impl RawMovableLock for SpinLockIrq {}
 
-unsafe impl RawLock for spinlock_t {
-    unsafe fn lock(&self) -> (c_ulong, MemallocFlags) {
-        (0, unsafe { self.0.lock() })
+unsafe impl RawLock for SpinLockIrq {
+    unsafe fn lock(&self) -> MemallocFlags {
+        unsafe { self.0.lock() }
     }
 
-    unsafe fn unlock(&self, (_flags, noreclaim): (c_ulong, MemallocFlags)) {
+    unsafe fn unlock(&self, noreclaim: MemallocFlags) {
         unsafe { self.0.unlock(noreclaim) }
     }
 
     unsafe fn assert_held(&self) {}
 }
 
-unsafe impl RawNestedLock for spinlock_t {
-    unsafe fn lock_nested(&self, _subclass: u32) -> (c_ulong, MemallocFlags) {
+unsafe impl RawNestedLock for SpinLockIrq {
+    unsafe fn lock_nested(&self, _subclass: u32) -> MemallocFlags {
         unsafe { self.lock() }
     }
 }
@@ -109,7 +107,7 @@ unsafe impl RawLockBase for SpinLock {
     type InitError = Infallible;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: LockClass) -> Result<(), Infallible> {
-        unsafe { raw_spinlock_t::init(l.cast(), name, key) }
+        unsafe { RawSpinLock::init(l.cast(), name, key) }
     }
 }
 
@@ -117,11 +115,11 @@ unsafe impl RawMovableLock for SpinLock {}
 
 unsafe impl RawLock for SpinLock {
     unsafe fn lock(&self) -> MemallocFlags {
-        unsafe { self.0.0.lock() }
+        unsafe { self.0.lock() }
     }
 
     unsafe fn unlock(&self, noreclaim: MemallocFlags) {
-        unsafe { self.0.0.unlock(noreclaim) }
+        unsafe { self.0.unlock(noreclaim) }
     }
 
     unsafe fn assert_held(&self) {}

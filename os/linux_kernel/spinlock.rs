@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The kernel's spinlocks, as RawLocks: spinlock_t taken irqsave, SpinLock -
-//! a spinlock_t taken with spin_lock() - and raw_spinlock_t. Initializing in
-//! a lockdep class and spin_lock_irqsave() are macros: shim.c's rust_*
-//! functions.
-
-#![allow(non_camel_case_types)]
+//! The kernel's spinlocks, as RawLocks: SpinLockIrq, a spinlock_t taken
+//! irqsave; SpinLock, a spinlock_t taken with spin_lock(); and RawSpinLock, a
+//! raw_spinlock_t. Initializing in a lockdep class and spin_lock_irqsave() are
+//! macros: shim.c's rust_* functions.
 
 use crate::c;
 use crate::locking::{MemallocFlags, RawLock, RawLockBase, RawMovableLock, RawNestedLock};
@@ -15,19 +13,18 @@ use core::convert::Infallible;
 use core::ffi::{c_ulong, CStr};
 use kernel::bindings as b;
 
-pub type spinlock_t = Opaque<b::spinlock_t>;
-pub type raw_spinlock_t = Opaque<b::raw_spinlock_t>;
+pub type SpinLockIrq = Opaque<b::spinlock_t>;
+pub type RawSpinLock = Opaque<b::raw_spinlock_t>;
 
 // Zeroed as the structs holding them start; a lock only once their init runs
-unsafe impl ::pin_init::Zeroable for spinlock_t {}
-unsafe impl ::pin_init::Zeroable for raw_spinlock_t {}
+unsafe impl ::pin_init::Zeroable for SpinLockIrq {}
+unsafe impl ::pin_init::Zeroable for RawSpinLock {}
 
-// ── spinlock_t, taken irqsave ────────────────────────────────────────────
+// ── SpinLockIrq: spinlock_t, taken irqsave ───────────────────────────────
 
 // Taken with interrupts off - spin_lock_irqsave() - for what interrupt
-// context takes too, an endio; held, it mustn't sleep. The kernel crate's
-// SpinLock leaves interrupts on.
-unsafe impl RawLockBase for spinlock_t {
+// context takes too, an endio; held, it mustn't sleep.
+unsafe impl RawLockBase for SpinLockIrq {
     type GuardState = (c_ulong, MemallocFlags);
     type InitError = Infallible;
 
@@ -38,9 +35,9 @@ unsafe impl RawLockBase for spinlock_t {
 }
 
 // unlocked, nothing points at one
-unsafe impl RawMovableLock for spinlock_t {}
+unsafe impl RawMovableLock for SpinLockIrq {}
 
-unsafe impl RawLock for spinlock_t {
+unsafe impl RawLock for SpinLockIrq {
     unsafe fn lock(&self) -> (c_ulong, MemallocFlags) {
         let flags = unsafe { c::rust_spin_lock_irqsave(self.as_ptr().cast()) };
         (flags, MemallocFlags::noreclaim())
@@ -55,7 +52,7 @@ unsafe impl RawLock for spinlock_t {
     }
 }
 
-unsafe impl RawNestedLock for spinlock_t {
+unsafe impl RawNestedLock for SpinLockIrq {
     unsafe fn lock_nested(&self, subclass: u32) -> (c_ulong, MemallocFlags) {
         let flags = unsafe { c::rust_spin_lock_irqsave_nested(self.as_ptr().cast(), subclass) };
         (flags, MemallocFlags::noreclaim())
@@ -65,14 +62,14 @@ unsafe impl RawNestedLock for spinlock_t {
 // ── SpinLock: spinlock_t, taken with spin_lock() ─────────────────────────
 
 /// A spinlock_t taken with spin_lock(), interrupts as they are, for what no
-/// interrupt takes - where spinlock_t is taken irqsave. Not raw_spinlock_t:
-/// on PREEMPT_RT this one sleeps, so it can be taken in an RCU read section
-/// with a GFP_NOWAIT allocation under it, where RT forbids allocating under a
+/// interrupt takes - where SpinLockIrq is taken irqsave. Not RawSpinLock: on
+/// PREEMPT_RT this one sleeps, so it can be taken in an RCU read section with
+/// a GFP_NOWAIT allocation under it, where RT forbids allocating under a
 /// raw_spinlock_t.
 #[repr(transparent)]
-pub struct SpinLock(spinlock_t);
+pub struct SpinLock(Opaque<b::spinlock_t>);
 
-// SAFETY: zeroed as spinlock_t is: a lock only once init() runs
+// Zeroed as SpinLockIrq is: a lock only once init() runs
 unsafe impl ::pin_init::Zeroable for SpinLock {}
 
 unsafe impl RawLockBase for SpinLock {
@@ -102,11 +99,11 @@ unsafe impl RawLock for SpinLock {
     }
 }
 
-// ── raw_spinlock_t ───────────────────────────────────────────────────────
+// ── RawSpinLock: raw_spinlock_t ──────────────────────────────────────────
 
 // Taken with interrupts as they are, for what no interrupt takes - a lock's
 // wait list. A spinning lock on PREEMPT_RT too, where spinlock_t sleeps.
-unsafe impl RawLockBase for raw_spinlock_t {
+unsafe impl RawLockBase for RawSpinLock {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
@@ -116,9 +113,9 @@ unsafe impl RawLockBase for raw_spinlock_t {
     }
 }
 
-unsafe impl RawMovableLock for raw_spinlock_t {}
+unsafe impl RawMovableLock for RawSpinLock {}
 
-unsafe impl RawLock for raw_spinlock_t {
+unsafe impl RawLock for RawSpinLock {
     unsafe fn lock(&self) -> MemallocFlags {
         unsafe { c::rust_raw_spin_lock(self.as_ptr().cast()) };
         MemallocFlags::noreclaim()

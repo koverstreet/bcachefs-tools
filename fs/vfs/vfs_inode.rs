@@ -25,7 +25,7 @@ use {
     kernel::sync::aref::{ARef, AlwaysRefCounted},
     super::folio::Mapping,
     super::super_block::SuperBlock,
-    crate::locking::{ExclusiveGuard, Locked},
+    crate::locking::{ExclusiveGuard, Locked, RwSem, SpinLockIrq},
 };
 
 /// A struct inode of ours - one InodeInfo's - referenced while this is
@@ -35,7 +35,7 @@ pub struct VfsInode(Opaque<c::inode>);
 
 /// i_lock, held.
 #[cfg(kernel)]
-pub type ILocked<'a> = ExclusiveGuard<'a, c::spinlock_t>;
+pub type ILocked<'a> = ExclusiveGuard<'a, SpinLockIrq>;
 
 /// VfsInode's accessors that are a read or write and nothing else, as a
 /// table: name() -> T, or name(T) to set, and how - a field read or written
@@ -164,8 +164,8 @@ impl VfsInode {
     /// i_rwsem held for write: inode_lock(), as the VFS takes it for a
     /// namespace operation or setattr.
     pub fn assert_locked(&self) {
-        // SAFETY: c::rw_semaphore is the kernel's, i_rwsem one
-        let l = unsafe { &*(&raw const (*self.as_ptr()).i_rwsem).cast::<c::rw_semaphore>() };
+        // RwSem is the kernel's rw_semaphore, i_rwsem one
+        let l = unsafe { &*(&raw const (*self.as_ptr()).i_rwsem).cast::<RwSem>() };
         Locked::from_c(l).assert_held();
     }
 
@@ -242,8 +242,8 @@ impl VfsInode {
 
     /// i_lock: the VFS's for its state and its hash, and the inode cache's
     /// for whether the inode's in it.
-    pub fn i_lock(&self) -> &Locked<c::spinlock_t> {
-        Locked::from_c(unsafe { &*(&raw const (*self.as_ptr()).i_lock).cast::<c::spinlock_t>() })
+    pub fn i_lock(&self) -> &Locked<SpinLockIrq> {
+        Locked::from_c(unsafe { &*(&raw const (*self.as_ptr()).i_lock).cast::<SpinLockIrq>() })
     }
 
     /// The I_* flags: inode_state_read(), which wants i_lock.

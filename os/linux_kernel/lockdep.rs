@@ -5,7 +5,7 @@
 //! asserts.
 
 use crate::c;
-use crate::locking::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock_t};
+use crate::locking::{Mutex, PercpuRwSem, RawSpinLock, RwSem, SpinLockIrq};
 use crate::util::ffi::c_char;
 use core::ffi::{c_ulong, c_void};
 use core::pin::Pin;
@@ -118,30 +118,30 @@ pub fn trace_contention_end<L>(lock: &L, ret: core::ffi::c_int) {
     unsafe { c::rust_trace_contention_end(ptr::from_ref(lock).cast(), ret) }
 }
 
-pub fn mutex_assert_held(l: &mutex) {
+pub fn mutex_assert_held(l: &Mutex) {
     unsafe { c::rust_mutex_assert_held(ptr::from_ref(l).cast_mut().cast()) }
 }
 
-pub fn spin_lock_assert_held(l: &spinlock_t) {
+pub fn spin_lock_assert_held(l: &SpinLockIrq) {
     unsafe { c::rust_spin_lock_assert_held(ptr::from_ref(l).cast_mut().cast()) }
 }
 
-pub fn raw_spin_lock_assert_held(l: &raw_spinlock_t) {
+pub fn raw_spin_lock_assert_held(l: &RawSpinLock) {
     unsafe { c::rust_raw_spin_lock_assert_held(ptr::from_ref(l).cast_mut().cast()) }
 }
 
-pub fn rwsem_assert_held(l: &rw_semaphore) {
+pub fn rwsem_assert_held(l: &RwSem) {
     unsafe { c::rust_rwsem_assert_held(ptr::from_ref(l).cast_mut().cast()) }
 }
 
-pub fn rwsem_assert_held_write(l: &rw_semaphore) {
+pub fn rwsem_assert_held_write(l: &RwSem) {
     unsafe { c::rust_rwsem_assert_held_write(ptr::from_ref(l).cast_mut().cast()) }
 }
 
-pub fn percpu_rwsem_assert_held(l: &percpu_rw_semaphore) {
+pub fn percpu_rwsem_assert_held(l: &PercpuRwSem) {
     unsafe { c::rust_percpu_rwsem_assert_held(ptr::from_ref(l).cast_mut().cast()) }
 }
 
-pub fn percpu_rwsem_assert_held_write(l: &percpu_rw_semaphore) {
+pub fn percpu_rwsem_assert_held_write(l: &PercpuRwSem) {
     unsafe { c::rust_percpu_rwsem_assert_held_write(ptr::from_ref(l).cast_mut().cast()) }
 }

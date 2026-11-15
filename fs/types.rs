@@ -16,7 +16,7 @@ use crate::util::late::Late;
 use crate::util::place::Placed;
 use crate::util::refcount::AtomicRef;
 use crate::os::workqueue::{ReffedWork, Workqueue, WqFlags};
-use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
+use crate::locking::{Locked, LockedBy, Mutex, MutexNoio, PercpuRwsemNoio, RwSem, SpinLockIrq};
 use crate::os::percpu::{Counters, PerCpu};
 use crate::data_structures::genradix::SharedGenRadix;
 use crate::types::{bits_to_longs};
@@ -206,7 +206,7 @@ crate::published! {
 pub struct bucket_bitmap {
     #[pin]
     #[init(crate::new_lock!((), ::pin_init::zeroed(), "&ca->bucket_bitmap.lock"))]
-    pub bits: Locked<c::mutex, (), BucketBits>,
+    pub bits: Locked<Mutex, (), BucketBits>,
 }
 
 #[bch_enum(closed)]
@@ -358,7 +358,7 @@ pub struct Dev {
     /// Buckets queued for fast discard: alloc/discard.rs's alone.
     #[pin]
     #[init(new_lock!(KVVec::new()))]
-    pub(crate) discard_fast: Locked<c::mutex, KVVec<u64>>,
+    pub(crate) discard_fast: Locked<Mutex, KVVec<u64>>,
     /// Discards in flight on it, by every worker: a futex word, a worker at
     /// the limit sleeping on it.
     #[pin]
@@ -501,7 +501,7 @@ pub struct Fs {
     /* ro/rw, add/remove/resize devices: */
     #[pin]
     #[init(new_lock!((), "&c->state_lock"))]
-    pub state_lock: Placed<Locked<c::rw_semaphore>, crate::at!(Fs.state_lock)>,
+    pub state_lock: Placed<Locked<RwSem>, crate::at!(Fs.state_lock)>,
 
     /* Counts outstanding writes, for clean transition to read-only */
     #[init(crate::util::alloc::init_or(
@@ -537,7 +537,7 @@ pub struct Fs {
     pub opts: LockedBy<(), c::PublishedOpts, crate::at!(Fs.sb)>,
     #[pin]
     #[init(new_lock!((), "&c->opt_change_lock"))]
-    pub opt_change_lock: Locked<c::mutex>,
+    pub opt_change_lock: Locked<Mutex>,
     /// Odd while options change, bumped under opt_change_lock by
     /// OptChange, taking it and dropping it; read without it.
     pub opt_change_cookie: crate::util::projections::Volatile<u32>,
@@ -642,7 +642,7 @@ pub struct Fs {
 
     #[pin]
     #[init(new_lock!((), "&c->write_error_lock"))]
-    pub write_error_lock: Locked<c::spinlock_t>,
+    pub write_error_lock: Locked<SpinLockIrq>,
     /*
      * Use a dedicated wq for write ref holder tasks. Required to avoid
      * dependency problems with other wq tasks that can block on ref
@@ -697,12 +697,12 @@ pub struct Fs {
     #[pin]
     #[init(crate::new_lock!(crate::util::alloc::KVVec::new()))]
     pub(crate) scrub_journal_repairs:
-        Locked<c::mutex, crate::util::alloc::KVVec<crate::data::scrub_journal::Repair>>,
+        Locked<Mutex, crate::util::alloc::KVVec<crate::data::scrub_journal::Repair>>,
 
     /* Extents btree ranges from lost btree nodes, awaiting attribution: init/damage.rs */
     #[pin]
     #[init(crate::new_lock!(crate::util::alloc::KVVec::new()))]
-    pub(crate) lost_extents_ranges: Locked<c::mutex, crate::util::alloc::KVVec<core::ops::Range<Bpos>>>,
+    pub(crate) lost_extents_ranges: Locked<Mutex, crate::util::alloc::KVVec<core::ops::Range<Bpos>>>,
 
     #[pin]
     #[init(::pin_init::zeroed::<crate::data::compress::Compress>())]

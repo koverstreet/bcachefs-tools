@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::fs::Fs;
-use crate::locking::Locked;
+use crate::locking::{Locked, Mutex, PercpuRwSem};
 use crate::new_lock;
 use crate::snapshots::subvolume::delete_unlinked;
 use crate::types::{bits_to_longs};
@@ -89,13 +89,13 @@ pub struct bch_fs_snapshots {
     /// The table's writers' lock: taken by table_write(), in snapshot.rs.
     #[pin]
     #[init(new_lock!(()))]
-    pub(crate) table_lock: Locked<c::mutex>,
+    pub(crate) table_lock: Locked<Mutex>,
     /* a topology repair invalidated descendants' is_ancestor bitmaps: */
     #[init(AtomicBool::new(false))]
     pub(crate) need_table_rebuild: AtomicBool,
     #[pin]
     #[init(new_lock!((), "&c->snapshots.create_lock"))]
-    pub create_lock: Locked<c::percpu_rw_semaphore>,
+    pub create_lock: Locked<PercpuRwSem>,
     /// Snapshot deletion's state: Rust's alone - snapshots/delete.rs.
     #[pin]
     #[init(crate::snapshots::delete::SnapshotDelete::init())]
@@ -105,7 +105,7 @@ pub struct bch_fs_snapshots {
     /// Subvolumes unlinked and waiting for the delete work: Rust's alone.
     #[pin]
     #[init(new_lock!(KVVec::new()))]
-    pub(crate) unlinked: Locked<c::mutex, KVVec<u32>>,
+    pub(crate) unlinked: Locked<Mutex, KVVec<u32>>,
 }
 
 #[repr(C)]

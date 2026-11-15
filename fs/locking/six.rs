@@ -3,8 +3,8 @@
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
 use crate::os::lockdep::{trace_contention_begin, trace_contention_end, LockClass};
-use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock, Shared, SharedGuard, SixIntent,
-            SixWriteIntent};
+use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock, RawSpinLock, Shared, SharedGuard,
+            SixIntent, SixWriteIntent};
 use crate::cstructs::c;
 use crate::data_structures::dst_vec::DstVec;
 use crate::data_structures::inline_vec::InlineVec;
@@ -107,7 +107,7 @@ pub struct six_lock {
     /* the intent lock's holder's */
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub owner_stack: core::cell::UnsafeCell<crate::util::alloc::KVVec<c_ulong>>,
-    pub wait_lock: Locked<c::raw_spinlock_t, six_lock_waiters>,
+    pub wait_lock: Locked<RawSpinLock, six_lock_waiters>,
     pub dep_map: LockdepMap,
 }
 
@@ -366,7 +366,7 @@ fn __do_six_trylock(lock: &six_lock, ty: SixLockType, task: *mut c::task_struct,
     ret
 }
 
-type WaitLockGuard<'a> = ExclusiveGuard<'a, c::raw_spinlock_t, six_lock_waiters>;
+type WaitLockGuard<'a> = ExclusiveGuard<'a, RawSpinLock, six_lock_waiters>;
 
 /// The wait list, as wait_lock's holder has it, and its lock: what fills and
 /// empties its slots.

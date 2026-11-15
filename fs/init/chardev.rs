@@ -37,7 +37,7 @@ use crate::init::passes::RecoveryPass;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, WriteRef};
-use crate::locking::Locked;
+use crate::locking::{Locked, Mutex};
 use crate::util::ffi::Opaque;
 use crate::types::CStatic;
 use crate::os::file::{File, FileOps, FileVTable, UserBuf};
@@ -773,7 +773,7 @@ unsafe impl Send for Minors {}
 
 // SAFETY: init_zeroed() by bch2_chardev_init(), at module init, before any
 // filesystem
-static MINORS: Locked<c::mutex, Minors> = unsafe { Locked::uninit(Minors(KVec::new()), ()) };
+static MINORS: Locked<Mutex, Minors> = unsafe { Locked::uninit(Minors(KVec::new()), ()) };
 
 static MAJOR: AtomicU32 = AtomicU32::new(0);
 

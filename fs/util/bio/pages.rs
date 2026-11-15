@@ -15,7 +15,7 @@ use core::alloc::Layout;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::locking::Locked;
+use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::errcode::BchError;
 use crate::util::alloc::{flags, Flags, AllocError};
@@ -34,7 +34,7 @@ const POOL_LEN: usize = PAGE_SIZE << c::PAGE_ALLOC_COSTLY_ORDER;
 #[pin_data]
 pub struct BouncePool {
     #[pin]
-    lock: Locked<c::mutex>,
+    lock: Locked<Mutex>,
     #[pin]
     pool: Mempool<BouncePages>,
 }

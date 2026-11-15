@@ -12,9 +12,8 @@
 //! made. Allocating is GFP_KERNEL, as the task's memalloc scope says: it waits
 //! for an element - or, in a NORECLAIM scope, where it can't, fails.
 
-use crate::c;
 use crate::errcode::BchError;
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::os::kernel::HZ;
 use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVec, KVmalloc, Kmalloc};
@@ -33,7 +32,7 @@ use pin_init::{pin_data, pinned_drop, PinInit};
 pub struct Mempool<A: Elements> {
     /* the reserve, and its length published, for free_raw()'s unlocked check */
     #[pin]
-    reserve: Locked<c::spinlock_t, KVec<Element>, Volatile<usize>>,
+    reserve: Locked<SpinLockIrq, KVec<Element>, Volatile<usize>>,
     /* bumped by every element freed to the reserve, for alloc_raw() to wait on */
     freed:   EventCount,
     min_nr:  usize,

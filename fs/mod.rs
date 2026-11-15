@@ -338,9 +338,8 @@ pub mod c {
     unsafe impl<T: ::pin_init::Zeroable> ::pin_init::Zeroable for __BindgenUnionField<T> {}
 
     // The types defined in Rust that C shares. printbuf the shim has too -
-    // ours; and C's locks, as the structs C shares hold them.
+    // ours.
     pub use crate::cstructs::c::*;
-    pub use crate::cstructs::c::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock_t};
 
     // Userspace #defines timespec64 → timespec (include/linux/time64.h), so
     // bindgen never emits a timespec64; alias it so fs/ can name the kernel's

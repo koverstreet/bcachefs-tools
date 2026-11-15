@@ -19,8 +19,7 @@
 //! deeper tree is allocated outside it, and the tree it replaces freed outside
 //! it - kvmalloc() and kvfree() may sleep.
 
-use crate::c;
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use crate::util::alloc::{AllocError, KVVec};
 use pin_init::Zeroable;
 
@@ -246,7 +245,7 @@ impl Tree {
     }
 }
 
-pub struct Ida(Locked<c::spinlock_t, Tree>);
+pub struct Ida(Locked<SpinLockIrq, Tree>);
 
 // its lock, zeroed, isn't initialized: init_zeroed()
 unsafe impl Zeroable for Ida {}

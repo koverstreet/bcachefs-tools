@@ -20,7 +20,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
-use crate::locking::Locked;
+use crate::locking::{Locked, RwSem};
 use crate::prt;
 use crate::debug::trace::events;
 use crate::os::kernel::ktime_get_ns;
@@ -48,7 +48,7 @@ impl SuperBlock {
         self.data()
     }
 
-    pub fn umount(&self) -> &Locked<c::rw_semaphore> {
+    pub fn umount(&self) -> &Locked<RwSem> {
         Locked::from_c(unsafe { &*(&raw const (*self.as_ptr()).s_umount).cast() })
     }
 }

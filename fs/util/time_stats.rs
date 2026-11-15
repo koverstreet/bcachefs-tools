@@ -28,7 +28,7 @@
 
 use crate::c;
 use crate::util::alloc::flags;
-use crate::locking::{ExclusiveGuard, Locked};
+use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::os::kernel::{local_clock, time_after64};
 use crate::os::percpu::{free_percpu, PerCpu, PerCpuRef, CpuShared};
@@ -116,7 +116,7 @@ pub struct TimeStatsLocked {
 pub struct bch2_time_stats {
     #[pin]
     #[init(new_lock!(c::TimeStatsLocked::new(), "&stats->lock"))]
-    pub lock: Locked<c::spinlock_t, TimeStatsLocked>,
+    pub lock: Locked<SpinLockIrq, TimeStatsLocked>,
     /* the per-cpu buffer, once events come fast enough: installed under the
      * lock, read without it - released and acquired, for what's in it - and
      * freed when the stats drop */
@@ -187,7 +187,7 @@ fn nsecs_aligned(out: &mut Printbuf, ns: u64) {
 
 // ── Counting ─────────────────────────────────────────────────────────────
 
-type StatsGuard<'a> = ExclusiveGuard<'a, c::spinlock_t, c::TimeStatsLocked>;
+type StatsGuard<'a> = ExclusiveGuard<'a, SpinLockIrq, c::TimeStatsLocked>;
 
 /// What an event's duration goes to besides the stats' own: a
 /// bch2_time_stats_quantiles' quantiles, or nothing - ().

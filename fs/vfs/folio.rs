@@ -27,7 +27,7 @@ use super::ops::VfsWriter;
 use super::writeback::Wbc;
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
-use crate::locking::ExclusiveGuard;
+use crate::locking::{ExclusiveGuard, SpinLockIrq};
 use crate::util::alloc::KBox;
 use crate::os::iov_iter::IovIter;
 use crate::os::kernel::{cond_resched, loff};
@@ -225,7 +225,7 @@ impl FolioSpan {
 
 /// A folio's bcachefs state, its lock held.
 pub struct FolioStateGuard<'a> {
-    guard:   ExclusiveGuard<'a, c::spinlock_t, c::FolioState>,
+    guard:   ExclusiveGuard<'a, SpinLockIrq, c::FolioState>,
     sectors: usize,
 }
 

@@ -24,7 +24,7 @@ use crate::sb::io::SbFieldOps;
 use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
 use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo};
-use crate::locking::Locked;
+use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::data_structures::genradix::SharedGenRadix;
 use core::sync::atomic::AtomicU32;
@@ -80,13 +80,13 @@ pub struct QuotaLimit {
 pub struct MemquotaType {
     pub limits:       [QuotaLimit; c::QuotaCounter::NR as usize],
     #[pin]
-    pub(crate) lock:  Locked<c::mutex>,
+    pub(crate) lock:  Locked<Mutex>,
     pub(crate) table: SharedGenRadix<crate::locking::LockedBy<Memquota, (), MemquotaType>>,
 }
 crate::genradix_entry!(crate::locking::LockedBy<Memquota, (), MemquotaType>);
 
 impl MemquotaType {
-    fn new(lock: impl PinInit<Locked<c::mutex>>) -> impl PinInit<Self> {
+    fn new(lock: impl PinInit<Locked<Mutex>>) -> impl PinInit<Self> {
         pin_init!(Self {
             limits:  Default::default(),
             lock    <- lock,
@@ -372,7 +372,7 @@ mod vfs {
     struct Locked<'a> {
         qtype:  usize,
         q:      &'a c::MemquotaType,
-        _guard: ExclusiveGuard<'a, c::mutex>,
+        _guard: ExclusiveGuard<'a, Mutex>,
     }
 
     // its type's lock, and its type: what its counters name

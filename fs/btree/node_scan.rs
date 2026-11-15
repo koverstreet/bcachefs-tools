@@ -20,7 +20,7 @@ use crate::errcode::BchError;
 use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Dev, Fs};
 use crate::init::passes;
-use crate::locking::Locked;
+use crate::locking::{Locked, Mutex};
 use crate::types::{Le16, Le64};
 use crate::util::alloc::KVVec;
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBox, BioOwner};
@@ -35,7 +35,7 @@ use crate::util::vstructs::Head;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_dev_ratelimited, bch_info, bch_info_dev, prt};
 
-pub(crate) type NodeScan = Locked<c::mutex, KVVec<FoundBtreeNode>>;
+pub(crate) type NodeScan = Locked<Mutex, KVVec<FoundBtreeNode>>;
 
 #[derive(Clone)]
 pub(crate) struct FoundBtreeNode {

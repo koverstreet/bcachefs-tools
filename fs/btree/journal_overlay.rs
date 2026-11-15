@@ -46,7 +46,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
-use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Ref};
+use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Mutex, Ref};
 use crate::util::projections::VolatilePublish;
 use crate::util::alloc::KVVec;
 use crate::data_structures::gap_buffer::GapBuffer;
@@ -198,10 +198,10 @@ pub struct journal_keys {
 
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&keys->overwrite_lock"))]
-    pub overwrites: Locked<c::mutex, OverwriteRanges, OverwriteRangesLive>,
+    pub overwrites: Locked<Mutex, OverwriteRanges, OverwriteRangesLive>,
 }
 
-pub(crate) type OverwriteGuard<'a> = ExclusiveGuard<'a, c::mutex, c::OverwriteRanges, c::OverwriteRangesLive>;
+pub(crate) type OverwriteGuard<'a> = ExclusiveGuard<'a, Mutex, c::OverwriteRanges, c::OverwriteRangesLive>;
 
 pub type JournalKeysRef = RefGuard<Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>>;
 

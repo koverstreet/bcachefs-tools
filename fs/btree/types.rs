@@ -13,7 +13,7 @@ use crate::cstructs::c as cs;
 use crate::errcode::Errcode;
 use crate::errcode::BchError;
 use crate::btree::trans_attempt::TransAttempt;
-use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
+use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
 use crate::util::alloc::{Box, KVVec, KVmalloc, Kmalloc};
 use crate::util::bio::{BioSet, Either};
@@ -169,7 +169,7 @@ impl BtreeRoots {
 }
 
 /// root_lock, held: the roots, and what it publishes of them.
-pub type BtreeRootsGuard<'a> = ExclusiveGuard<'a, cs::mutex, BtreeRoots, BtreeRootsLive>;
+pub type BtreeRootsGuard<'a> = ExclusiveGuard<'a, Mutex, BtreeRoots, BtreeRootsLive>;
 
 impl BtreeRootsGuard<'_> {
     /// Slots up to btree @id's, empty, and how many there are published: for
@@ -242,7 +242,7 @@ pub struct BtreeCacheLists {
 /// bc->lock: its holder never enters reclaim, which would take it again
 /// through the node cache's shrinker. NOIO too, for the kernel's own
 /// allocations, which don't know NORECLAIM.
-pub(crate) type BtreeCacheMutex = Memalloc<cs::mutex, { PF_MEMALLOC_NOIO | PF_MEMALLOC_NORECLAIM | PF_MEMALLOC_NOWARN }>;
+pub(crate) type BtreeCacheMutex = Memalloc<Mutex, { PF_MEMALLOC_NOIO | PF_MEMALLOC_NORECLAIM | PF_MEMALLOC_NOWARN }>;
 
 /// bc->lock, held.
 pub type BtreeCacheGuard<'a> =
@@ -288,7 +288,7 @@ impl BtreeCacheLive {
 pub struct bch_fs_btree_cache {
     #[pin]
     #[init(crate::new_lock!(<- BtreeRoots::init(), ::pin_init::zeroed(), "&bc->root_lock"))]
-    pub roots: Locked<cs::mutex, BtreeRoots, BtreeRootsLive>,
+    pub roots: Locked<Mutex, BtreeRoots, BtreeRootsLive>,
 
     #[pin]
     #[init(::pin_init::init_zeroed())]
@@ -870,7 +870,7 @@ pub struct btree_transaction_stats {
     pub lock_wait_times: cs::bch2_time_stats,
     #[pin]
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&s->lock"))]
-    pub lock: Locked<cs::mutex, TransStatsLocked, TransStatsMax>,
+    pub lock: Locked<Mutex, TransStatsLocked, TransStatsMax>,
 }
 
 pub const BCH_TRANSACTIONS_NR: u32 = 128;
@@ -903,7 +903,7 @@ pub struct bch_fs_btree_trans {
 
     #[pin]
     #[init(new_lock!(TransStatsJson { buf: Printbuf::new() }, "&c->btree.trans.stats_json_lock"))]
-    pub stats_json: Locked<cs::mutex, TransStatsJson>,
+    pub stats_json: Locked<Mutex, TransStatsJson>,
 }
 
 /// The transaction stats as JSON, for sysfs: made at a read's offset 0, read

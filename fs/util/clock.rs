@@ -28,7 +28,7 @@
 //! an increment, and the task state and the wake order its recheck after one.
 
 use crate::c;
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use crate::{new_lock, prt};
 use crate::util::alloc::{AllocError, KVVec};
 use crate::os::kernel::HZ;
@@ -57,7 +57,7 @@ pub struct io_clock {
     /// The waiters, latest first: Rust's alone.
     #[pin]
     #[init(new_lock!(KVVec::new(), (), "&clock->timer_lock"))]
-    timers: Locked<c::spinlock_t, KVVec<Timer>>,
+    timers: Locked<SpinLockIrq, KVVec<Timer>>,
 }
 
 /// A waiter on a clock: wakes @task when the clock reaches @expire.

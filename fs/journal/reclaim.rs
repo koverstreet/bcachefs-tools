@@ -21,7 +21,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, SbFeature};
 use crate::fs::{Dev, Fs};
 use crate::journal::pins::PinsRead;
-use crate::locking::{ExclusiveGuard, MemallocFlags};
+use crate::locking::{ExclusiveGuard, MemallocFlags, Mutex};
 use crate::util::backtrace::prt_task_backtrace;
 use crate::os::blkdev;
 use crate::os::kernel::{cond_resched, jiffies, jiffies_to_msecs, msecs_to_jiffies, time_after, time_in_range,
@@ -34,7 +34,7 @@ use crate::util::time_stats::TimeStats;
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err, bch_err_msg, prt};
 
-type ReclaimGuard<'a> = ExclusiveGuard<'a, c::mutex, (), c::ReclaimPublished>;
+type ReclaimGuard<'a> = ExclusiveGuard<'a, Mutex, (), c::ReclaimPublished>;
 
 fn round_down(x: u32, m: u32) -> u32 {
     x / m * m

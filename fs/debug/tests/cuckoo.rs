@@ -53,7 +53,7 @@ use super::TestRet;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::locking::Locked;
+use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::prt;
 use crate::util::alloc::KVVec;
@@ -270,7 +270,7 @@ struct Failure {
 }
 
 /// The first failure, and how many: nonzero stops every thread.
-type Failures = Locked<c::spinlock_t, Option<Failure>, Volatile<u64>>;
+type Failures = Locked<SpinLockIrq, Option<Failure>, Volatile<u64>>;
 
 fn fail(fails: &Failures, what: &'static str, key: u64, seq: u64, want: u64, got: u64) {
     let mut g = fails.lock();

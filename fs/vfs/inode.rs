@@ -48,7 +48,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
-use crate::locking::ExclusiveGuard;
+use crate::locking::{ExclusiveGuard, Mutex};
 use crate::quota::QuotaAcctMode;
 use crate::quota;
 use crate::snapshots::subvolume;
@@ -433,7 +433,7 @@ impl<'i, const N: usize> UpdateLocks<'i, N> {
 /// ei_update_lock, held.
 pub struct UpdateLock<'i> {
     inode:  &'i InodeInfo,
-    _guard: ExclusiveGuard<'i, c::mutex>,
+    _guard: ExclusiveGuard<'i, Mutex>,
 }
 
 impl<'i> UpdateLock<'i> {

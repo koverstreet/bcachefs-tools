@@ -20,7 +20,7 @@ use core::ptr::NonNull;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
-use crate::locking::Locked;
+use crate::locking::{Locked, Mutex};
 use crate::sb::io::Holder;
 use crate::util::alloc::{Arc, KVVec};
 use crate::util::backref::BackRef;
@@ -102,7 +102,7 @@ struct Registry {
 }
 
 // SAFETY: initialized by bch2_fs_registry_init(), at module init
-static REGISTRY: Locked<c::mutex, Registry> =
+static REGISTRY: Locked<Mutex, Registry> =
     unsafe { Locked::uninit(Registry { open: KVVec::new(), opening: KVVec::new() }, ()) };
 
 /// Woken when an Opening ends

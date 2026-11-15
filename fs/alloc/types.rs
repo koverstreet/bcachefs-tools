@@ -7,7 +7,7 @@ use crate::fs::Fs;
 use crate::alloc::discard::{do_discards_work, DiscardBio, DiscardState};
 use crate::format::DataType;
 use crate::util::alloc::KVVec;
-use crate::locking::{ByteLock, Locked, Lockdep, SeqLock};
+use crate::locking::{ByteLock, Locked, Lockdep, Mutex, SeqLock, SpinLockIrq};
 use crate::{new_lock, new_work};
 use crate::types::CacheAligned;
 use crate::util::bio::BioSet;
@@ -175,7 +175,7 @@ nest! {
     pub struct open_bucket {
         #[pin]
         #[init(new_lock!((), ::pin_init::zeroed(), "&ob->lock"))]
-        pub lock: Locked<c::spinlock_t, (), OpenBucketIdentity>,
+        pub lock: Locked<SpinLockIrq, (), OpenBucketIdentity>,
         pub pin: AtomicI32,
         pub sectors_free: Volatile<u32>,
         pub ec: AtomicPtr<crate::data::ec::stripe_new::StripeNew>,
@@ -353,7 +353,7 @@ pub struct write_point_io {
 
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->writes_lock"))]
-    pub writes_lock: Locked<c::spinlock_t, WritePointWrites, WritePointState>,
+    pub writes_lock: Locked<SpinLockIrq, WritePointWrites, WritePointState>,
 }
 
 #[repr(C)]
@@ -419,7 +419,7 @@ pub struct bch_fs_capacity {
     /* the reservation caches' recompute, and the placement it decides */
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->capacity.sectors_available_lock"))]
-    pub sectors_available_lock: Locked<c::spinlock_t, (), Placement>,
+    pub sectors_available_lock: Locked<SpinLockIrq, (), Placement>,
 
     #[init(PerCpu::init())]
     pub pcpu: PerCpu<c::bch_fs_capacity_pcpu>,
@@ -448,7 +448,7 @@ pub struct bch_fs_allocator {
     /* the open buckets not in use, and the partial list */
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&c->allocator.freelist_lock"))]
-    pub freelist_lock: Locked<c::spinlock_t, OpenBucketsFree, OpenBucketsFreeNr>,
+    pub freelist_lock: Locked<SpinLockIrq, OpenBucketsFree, OpenBucketsFreeNr>,
     pub freelist_wait: c::closure_waitlist,
     pub freelist_events: EventCount,
     /* jiffies at the last allocator stuck dump; claimed by cmpxchg */
@@ -522,7 +522,7 @@ pub struct bch_fs_discards {
     /// Buckets with a discard issued, by any worker, not yet marked free.
     #[pin]
     #[init(new_lock!(KVVec::new()))]
-    pub(crate) in_flight: Locked<c::mutex, KVVec<u64>>,
+    pub(crate) in_flight: Locked<Mutex, KVVec<u64>>,
 
     /// The worker's progress, for sysfs and the allocator's stuck report.
     #[pin]
