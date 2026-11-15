@@ -11,6 +11,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 
+use bcachefs_kernel::c::{BLK_OPEN_BUFFERED, BLK_OPEN_CREAT, BLK_OPEN_EXCL, BLK_OPEN_READ, BLK_OPEN_WRITE};
 use bcachefs_kernel::util::ioctl::{_IO, _IOR};
 
 const BLKGETSIZE64: libc::Ioctl = _IOR::<usize>(0x12, 114) as libc::Ioctl;
@@ -132,13 +133,6 @@ pub fn nonrot(fd: RawFd) -> bool {
     let ret = unsafe { libc::ioctl(fd, BLKROTATIONAL, &mut rotational) };
     ret == 0 && rotational == 0
 }
-
-// BLK_OPEN_* flags from include/linux/blk_types.h
-pub const BLK_OPEN_READ: u32     = 1 << 0;
-pub const BLK_OPEN_WRITE: u32    = 1 << 1;
-pub const BLK_OPEN_EXCL: u32     = 1 << 2;
-pub const BLK_OPEN_BUFFERED: u32 = 1 << 5;
-pub const BLK_OPEN_CREAT: u32    = 1 << 6;
 
 /// Open a block device or file for formatting.
 ///

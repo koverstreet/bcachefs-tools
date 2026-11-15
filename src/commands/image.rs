@@ -29,7 +29,6 @@ use crate::commands::format::{
     take_opt_value, take_short_value, version_parse,
 };
 use crate::commands::format_util::{kernel_format_version, DevOpts, FormatOpts};
-use crate::wrappers::bdev;
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
@@ -428,7 +427,7 @@ fn image_create_inner(
     // journal capacity for finish_image's btree migration.
     let target_size = std::cmp::max(input_bytes * 2, 64 << 20);
     for dev in &mut devs {
-        dev.open(bdev::BLK_OPEN_CREAT, false).map_err(|e| {
+        dev.open(c::BLK_OPEN_CREAT, false).map_err(|e| {
             anyhow!("Error opening {}: {}", dev.path.to_string_lossy(), std::io::Error::from_raw_os_error(e))
         })?;
         if rustix::fs::ftruncate(dev.as_fd(), target_size).is_err() {
@@ -554,7 +553,7 @@ fn image_update_inner(
 
     let mut dev_opts = DevOpts::new(CString::new(metadata_path.as_str())?);
 
-    dev_opts.open(bdev::BLK_OPEN_CREAT, false).map_err(|e| {
+    dev_opts.open(c::BLK_OPEN_CREAT, false).map_err(|e| {
         anyhow!("error opening {}: {}", metadata_path, std::io::Error::from_raw_os_error(e))
     })?;
 

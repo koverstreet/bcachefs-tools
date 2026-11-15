@@ -58,7 +58,7 @@ pub struct Cli {
 
 fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
     let mut opts = bcachefs_kernel::opts::parse_mount_opts_vec(&cli.opts, false)
-        .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
+        .map_err(|e| anyhow!("error parsing options: {}", e))?;
     opts.set_noexcl(true);
     opts.set_nochanges(true);
     opts.set_norecovery(true);

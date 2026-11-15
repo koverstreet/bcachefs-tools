@@ -80,8 +80,8 @@ impl DevOpts {
     /// Adds READ|WRITE|EXCL|BUFFERED to the given extra flags
     /// (matching the old C open_for_format behavior).
     pub fn open(&mut self, extra_mode: u32, force: bool) -> Result<(), i32> {
-        use crate::wrappers::bdev::*;
-        let mode = BLK_OPEN_READ | BLK_OPEN_WRITE | BLK_OPEN_EXCL | BLK_OPEN_BUFFERED | extra_mode;
+        use crate::wrappers::bdev::{blkid_check, open_device};
+        let mode = c::BLK_OPEN_READ | c::BLK_OPEN_WRITE | c::BLK_OPEN_EXCL | c::BLK_OPEN_BUFFERED | extra_mode;
         self.file = Some(open_device(&self.path, mode)?);
         blkid_check(self.fd(), &self.path, force);
         Ok(())

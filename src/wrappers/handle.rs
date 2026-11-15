@@ -21,6 +21,7 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::format::{DataType, MetadataVersion};
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
+use uuid::Uuid;
 
 fn io_errno(e: std::io::Error) -> Errno {
     Errno(e.raw_os_error().unwrap_or(libc::EIO))
@@ -95,8 +96,8 @@ impl BcachefsHandle {
 
         // Try as UUID string first (normalized: the sysfs dir is canonical
         // lowercase-with-dashes, the user's spelling may not be)
-        if let Ok(uuid) = parse_uuid(&path_str) {
-            return Self::open_by_name(&format_uuid(&uuid), Some(uuid))
+        if let Ok(uuid) = Uuid::try_parse(&path_str).map(Uuid::into_bytes) {
+            return Self::open_by_name(&Uuid::from_bytes(uuid).to_string(), Some(uuid))
                 .map_err(|e| BchError::from(e.0));
         }
 
@@ -121,14 +122,14 @@ impl BcachefsHandle {
     pub(crate) fn open_if_mounted<P: AsRef<Path>>(path: P) -> Result<Option<Self>, BchError> {
         let path = path.as_ref();
 
-        if let Ok(uuid) = parse_uuid(&path.to_string_lossy()) {
+        if let Ok(uuid) = Uuid::try_parse(&path.to_string_lossy()).map(Uuid::into_bytes) {
             // No sysfs dir for the UUID means not mounted; any other error
             // (e.g. EACCES on the ctl device) is real and must not be
             // mistaken for "not mounted", or callers fall back to offline
             // superblock access on a live filesystem. Normalize the string
             // through parse+format: the sysfs dir is canonical lowercase
             // with dashes, the user's spelling may not be:
-            return match Self::open_by_name(&format_uuid(&uuid), Some(uuid)) {
+            return match Self::open_by_name(&Uuid::from_bytes(uuid).to_string(), Some(uuid)) {
                 Ok(h) => Ok(Some(h)),
                 Err(e) if e.0 == libc::ENOENT => Ok(None),
                 Err(e) => Err(BchError::from(e.0)),
@@ -171,7 +172,7 @@ impl BcachefsHandle {
                 // target looks like "../../fs/bcachefs/<uuid>/dev-N"
                 // We need to extract uuid and dev_idx
                 if let Some((uuid_str, dev_idx)) = parse_sysfs_link(&target) {
-                    let uuid = parse_uuid(uuid_str).ok();
+                    let uuid = Uuid::try_parse(uuid_str).ok().map(Uuid::into_bytes);
                     let mut handle = Self::open_by_name(uuid_str, uuid)
                         .map_err(|e| BchError::from(e.0))?;
                     handle.dev_idx = dev_idx;
@@ -236,7 +237,7 @@ impl BcachefsHandle {
             ).map_err(|e| BchError::from(e.raw_os_error()))?
         } else {
             // Fallback: use UUID
-            let uuid_str = format_uuid(&uuid);
+            let uuid_str = Uuid::from_bytes(uuid).to_string();
             let sysfs = format!("{}{}", SYSFS_BASE, uuid_str);
             rustix::fs::open(
                 sysfs.as_str(),
@@ -292,7 +293,7 @@ impl BcachefsHandle {
 
         let dev_idx = sb.sb().dev_idx as i32;
         let uuid = sb.sb().user_uuid.b;
-        let uuid_str = format_uuid(&uuid);
+        let uuid_str = Uuid::from_bytes(uuid).to_string();
 
         drop(sb);
 
@@ -599,31 +600,6 @@ fn print_errmsg(err_buf: &[u8]) {
             eprintln!("ioctl error: {}", msg.to_string_lossy());
         }
     }
-}
-
-/// Parse a UUID string into 16 bytes.
-fn parse_uuid(s: &str) -> Result<[u8; 16], ()> {
-    let hex: String = s.chars().filter(|c| *c != '-').collect();
-    if hex.len() != 32 {
-        return Err(());
-    }
-    let mut uuid = [0u8; 16];
-    for i in 0..16 {
-        uuid[i] = u8::from_str_radix(&hex[i*2..i*2+2], 16).map_err(|_| ())?;
-    }
-    Ok(uuid)
-}
-
-/// Format a UUID as a lowercase hex string with dashes.
-fn format_uuid(uuid: &[u8; 16]) -> String {
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        uuid[0], uuid[1], uuid[2], uuid[3],
-        uuid[4], uuid[5],
-        uuid[6], uuid[7],
-        uuid[8], uuid[9],
-        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
-    )
 }
 
 /// Parse a sysfs bcachefs symlink target like "../../fs/bcachefs/<uuid>/dev-N".

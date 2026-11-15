@@ -85,7 +85,7 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
 
     let fsck_fd = ioctl_w::<BCH_IOCTL_FSCK_ONLINE>(fs.ioctl_fd(), &fsck)
         .map_err(|e| anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}",
-                             crate::wrappers::bch_err_str(e.raw_os_error().unwrap_or(0))))?;
+                             BchError::from_raw(e.raw_os_error().unwrap_or(0))))?;
 
     let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
     Ok(splice_fd_to_stdinout(fd))
@@ -222,7 +222,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
 
     let opts_str = opts.join(",");
     let fs_opts = bcachefs_kernel::opts::parse_mount_opts_vec(&opts, false)
-        .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
+        .map_err(|e| anyhow!("error parsing options: {}", e))?;
 
     // If any path resolves to a mounted filesystem - mount point, member
     // block device, or UUID - fsck online:
@@ -314,7 +314,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
                 return run_userspace_fsck(devices, fs_opts),
             Err(e) =>
                 return Err(anyhow!("BCH_IOCTL_FSCK_OFFLINE error: {}",
-                                   crate::wrappers::bch_err_str(e.raw_os_error().unwrap_or(0)))),
+                                   BchError::from_raw(e.raw_os_error().unwrap_or(0)))),
         };
 
         let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
@@ -342,7 +342,7 @@ fn run_userspace_fsck(devices: &[String], fs_opts: c::bch_opts) -> Result<()> {
     // not a shutdown that failed
     let ret2 = fs.exit();
     if ret2 != 0 && !BchError::from_raw(ret2).matches(c::Errcode::shutdown_with_errors) {
-        eprintln!("error shutting down filesystem: {}", crate::wrappers::bch_err_str(ret2));
+        eprintln!("error shutting down filesystem: {}", BchError::from_raw(ret2));
         process::exit(ret | 8);
     }
 
