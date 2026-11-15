@@ -26,7 +26,7 @@ use crate::c;
 use crate::c::JournalFlag as Journal;
 use crate::cstructs::c as cs;
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::format::{BkeyType, Btree, Bversion};
 use crate::init::error::BkeyValidate;
 use crate::journal::entries::NoRoom;
@@ -830,7 +830,7 @@ impl BtreeTrans<'_> {
         while !h.is_null() {
             let hook = unsafe { &*h };
             let f = hook.fn_.expect("a commit hook with no function");
-            ret_to_result(unsafe { f(ptr::from_ref(self).cast_mut(), h) })?;
+            unsafe { f(t, h) }?;
             h = hook.next;
         }
 

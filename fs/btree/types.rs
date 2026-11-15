@@ -12,6 +12,7 @@ use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::Errcode;
 use crate::errcode::BchError;
+use crate::btree::trans_attempt::TransAttempt;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
 use crate::util::alloc::{Box, KVVec, KVmalloc, Kmalloc};
@@ -578,7 +579,7 @@ pub const BTREE_ITER_MAX: u32 = 1 << 10;
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
 pub struct btree_trans_commit_hook {
-    pub fn_: Option<unsafe extern "C" fn(*mut BtreeTrans<'_>, *mut cs::btree_trans_commit_hook) -> c_int>,
+    pub fn_: Option<unsafe fn(&TransAttempt<'_, '_>, *mut cs::btree_trans_commit_hook) -> Result<(), BchError>>,
     pub next: *mut cs::btree_trans_commit_hook,
 }
 

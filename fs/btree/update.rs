@@ -396,19 +396,15 @@ impl<'a, 't> TransAttempt<'a, 't> {
             f: F,
         }
 
-        unsafe extern "C" fn run<F>(
-            trans: *mut BtreeTrans<'_>,
-            h:     *mut c::btree_trans_commit_hook,
-        ) -> core::ffi::c_int
+        /// # Safety
+        /// @h is the first field of a Hook<F>.
+        unsafe fn run<F>(t: &TransAttempt<'_, '_>, h: *mut c::btree_trans_commit_hook) -> Result<(), BchError>
         where
             F: Fn(&TransAttempt<'_, '_>) -> Result<(), BchError>,
         {
             // SAFETY: @h is the first field of the Hook<F> commit_hook() queued.
             let hook = unsafe { &*(h as *const Hook<F>) };
-            let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-            // SAFETY: C runs hooks in the commit, in the attempt being committed
-            let t = unsafe { trans.attempt_in_progress() };
-            crate::errcode::ret_to_c((hook.f)(&t))
+            (hook.f)(t)
         }
 
         // bch2_trans_kmalloc() gives 8 byte alignment:
