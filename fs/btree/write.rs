@@ -303,7 +303,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
 
 /// Encrypted, then checksummed, at byte @offset of the node.
 fn seal_bset<H: BsetHolder + ?Sized>(fs: &Fs, n: &mut H, offset: u32) -> Result<(), BchError> {
-    n.encrypt(fs, offset)?;
+    n.crypt(fs, offset)?;
     n.set_csum(n.checksum(fs, offset));
     Ok(())
 }

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Reading btree nodes: a replica read, retried from the others, and its
-//! bsets checked, decrypted and sorted down to one - read_done(); a bset's
-//! checksum and encryption; and scrub, a node's replica read back and
-//! checked.
+//! A node's read is a task, node_read() -> read_task(), trying its replicas
+//! in turn; read_done() checks, decrypts and sorts what each one read. Scrub,
+//! at the end, reads a replica back on its own and rewrites the node if it's
+//! bad.
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_val_to_text, types_with, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN,
@@ -57,8 +57,6 @@ use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
 use cstruct_macros::in_place;
 use pin_init::{pin_data, pin_init, pinned_drop};
 
-/// A node read's bio: the home of the task that reads it, its bvecs inline
-/// after the box.
 #[pin_data(PinnedDrop)]
 #[repr(C)]
 pub struct NodeReadBio {
@@ -83,7 +81,6 @@ unsafe impl AsyncObj for NodeReadBio {
     }
 }
 
-/// A read's home, as its task has it: the bio's owner.
 struct NodeReadIo<'h>(Pin<&'h mut NodeReadBio>);
 
 unsafe impl BioOwner for NodeReadIo<'_> {
@@ -98,12 +95,11 @@ unsafe impl BioOwner for NodeReadIo<'_> {
     }
 }
 
-/// A node read's box is freed when its task is done, a grace period after the
-/// read - when the filesystem may be gone: so from a pool of the module's.
-/// Btree node reads make forward progress under memory pressure.
+/// The module's, not the filesystem's: a box is freed a grace period after its
+/// read, when the filesystem may be gone. A mempool: node reads must make
+/// progress under memory pressure.
 static NODE_READS: Mempool<Kmalloc> = ::pin_init::zeroed();
 
-/// At module init: elements for the most bvecs a bio has.
 pub fn pools_init() -> Result<(), BchError> {
     let size = exclusive_size::<NodeReadBio, NodeReadFut<'static, 'static>, &'static Mempool<Kmalloc>>(
         inline_vecs(c::BIO_MAX_VECS as u16));
@@ -117,9 +113,6 @@ pub unsafe fn pools_exit() {
 }
 
 impl c::bset_head {
-    /// The nonce of this bset, at byte @offset of its btree node: the offset,
-    /// the bset's seq, and the low half of its journal seq, in the btree
-    /// domain.
     pub fn nonce(&self, offset: u32) -> Nonce {
         let seq = self.seq.get();
         Nonce {
@@ -133,9 +126,6 @@ impl c::bset_head {
     }
 }
 
-/// What holds a bset: the node, for its first, or a node entry, for each one
-/// after - checksummed and encrypted at their byte offset in the node, the
-/// node's 0.
 pub trait BsetHolder: Unsized<Head: Plain + SelfSized> {
     const BSET: usize;
     const KEYS: usize = Self::BSET + size_of::<Head<c::bset>>();
@@ -144,8 +134,7 @@ pub trait BsetHolder: Unsized<Head: Plain + SelfSized> {
         None
     }
 
-    /// Or decrypted: ChaCha20 is its own inverse.
-    fn encrypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError>;
+    fn crypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError>;
 
     fn bset(&self) -> &Head<c::bset> {
         Self::head(bytes_of(self))
@@ -155,7 +144,6 @@ pub trait BsetHolder: Unsized<Head: Plain + SelfSized> {
         from_bytes_mut(&mut bytes_of_mut(self)[Self::BSET..]).expect("a bset, its holder's tail")
     }
 
-    /// Its checksum as it's stored: its first bytes.
     fn csum(&self) -> c::bch_csum {
         *cast_plain(bytes_of(self)).expect("a csum, at the start of what holds a bset")
     }
@@ -164,13 +152,11 @@ pub trait BsetHolder: Unsized<Head: Plain + SelfSized> {
         *cast_plain_mut(bytes_of_mut(self)).expect("a csum, at the start of what holds a bset") = csum;
     }
 
-    /// The checksum of all of it past its csum.
     fn checksum(&self, fs: &Fs, offset: u32) -> c::bch_csum {
         let i = self.bset();
         csum_vstruct(Some(fs), i.csum_type(), i.nonce(offset), self)
     }
 
-    /// Its bset's header, in its @bytes - its count not yet checked against them.
     fn head(bytes: &[u8]) -> &Head<c::bset> {
         cast_plain(&bytes[Self::BSET..]).expect("a bset header, in its node's buffer")
     }
@@ -179,13 +165,10 @@ pub trait BsetHolder: Unsized<Head: Plain + SelfSized> {
         cast_plain_mut(&mut bytes[Self::BSET..]).expect("a bset header, in its node's buffer")
     }
 
-    /// Its header and its bset's keys, to the end of their block - by its
-    /// count, not yet checked against @bytes.
     fn sectors(bytes: &[u8], block_bits: u32) -> usize {
         cast_plain::<Self::Head>(bytes).expect("a header, in its node's buffer").sectors(block_bits)
     }
 
-    /// It, at the start of @bytes - its count checked against them.
     fn of(bytes: &[u8]) -> &Self {
         from_bytes(bytes).expect(FITS)
     }
@@ -195,9 +178,6 @@ pub trait BsetHolder: Unsized<Head: Plain + SelfSized> {
     }
 }
 
-/// A node's first bset - its encryption covers the node's header from flags
-/// on too, ahead of the keys, their nonce starting at the next ChaCha20 block
-/// after it.
 impl BsetHolder for c::btree_node<Unvalidated> {
     const BSET: usize = offset_of!(Head<c::btree_node>, keys);
 
@@ -205,7 +185,7 @@ impl BsetHolder for c::btree_node<Unvalidated> {
         Some(self)
     }
 
-    fn encrypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError> {
+    fn crypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError> {
         let (ty, nonce) = (self.keys.csum_type(), self.keys.nonce(offset));
         let (flags, keys) = (offset_of!(Head<c::btree_node>, flags), Self::BSET);
         let bytes = self.as_bytes_mut();
@@ -219,16 +199,12 @@ impl BsetHolder for c::btree_node<Unvalidated> {
 impl BsetHolder for c::btree_node_entry<Unvalidated> {
     const BSET: usize = offset_of!(Head<c::btree_node_entry>, keys);
 
-    fn encrypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError> {
+    fn crypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError> {
         let (ty, nonce) = (self.keys.csum_type(), self.keys.nonce(offset));
         fs.encrypt(ty, nonce, &mut self.as_bytes_mut()[Self::KEYS..])
     }
 }
 
-/// Whether @buf, read from a replica of the node @k points to, is that node:
-/// its magic, its seq if @k has one, and every bset - the first and those
-/// appended since - checksummed, as far as @k says was written; if it doesn't
-/// say, till the first bset of another node. If not, what's wrong, to @err.
 pub fn node_replica_good(fs: &Fs, k: BkeySC<'_>, buf: &[u8], err: &mut Printbuf) -> bool {
     let p = NodePtr::new(fs, k);
     // A corrupt key's sectors_written can't take the walk past the buffer
@@ -267,8 +243,6 @@ pub fn node_replica_good(fs: &Fs, k: BkeySC<'_>, buf: &[u8], err: &mut Printbuf)
     true
 }
 
-/// The bset at sector @written of @buf, checked against @end and against its
-/// checksum: its sectors, or None, and what's wrong in @err.
 fn replica_bset<H: BsetHolder + ?Sized>(fs: &Fs, buf: &[u8], written: usize, end: usize,
                                         err: &mut Printbuf) -> Option<usize> {
     let offset = written << 9;
@@ -292,8 +266,6 @@ fn replica_bset<H: BsetHolder + ?Sized>(fs: &Fs, buf: &[u8], written: usize, end
     Some(sectors)
 }
 
-/// What's on disk of @b, read back from a replica: each bset, checked and
-/// decrypted, and its keys.
 #[cold]
 pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     let contents = unsafe { b.contents() };
@@ -335,8 +307,6 @@ pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     }
 }
 
-/// The bset at the start of @bytes, sector @offset of its node, checked,
-/// decrypted and its keys printed: its sectors, or None if it's bad.
 fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, contents: &NodeContents,
                                                bytes: &mut [u8], offset: usize) -> Option<usize> {
     let ty = H::head(bytes).csum_type();
@@ -357,7 +327,7 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
         return None;
     }
 
-    let _ = n.encrypt(fs, (offset << 9) as u32);
+    let _ = n.crypt(fs, (offset << 9) as u32);
 
     let i = n.bset_mut();
     prt!(out, "  offset {} version {}, journal seq {}\n", offset, i.version.get(), i.journal_seq.get());
@@ -424,9 +394,8 @@ pub fn read_done(fs: &Fs, ca: &Dev, node: &mut ReadInFlightNode<'_>, failed: Opt
 }
 
 struct NodePtr {
-    /// Sectors written: 0 for a v1 pointer, which doesn't say.
+    /// 0: a v1 pointer doesn't say
     written:       usize,
-    /// Where its bsets end: written, or the whole node.
     end:           usize,
     seq:           Option<u64>,
     range_updated: bool,
@@ -447,12 +416,9 @@ impl NodePtr {
 }
 
 enum BsetRead {
-    /// Another node's: the end of this one.
     End,
-    /// Blacklisted, and not the first: its keys aren't the node's.
-    Skipped,
-    /// By offset in the node, in u64s.
-    Keys { keys: Range<usize>, journal_seq: u64 },
+    Blacklisted,
+    Keys { at: Range<usize>, journal_seq: u64 },
 }
 
 /// # Safety
@@ -491,10 +457,10 @@ fn node_read_done(v: &mut NodeValidate<'_>, node: &mut ReadInFlightNode<'_>) -> 
             read_bset::<c::btree_node_entry<Unvalidated>>(v, node, &p, buf)?
         };
         match read {
-            BsetRead::End                        => break,
-            BsetRead::Skipped                    => {}
-            BsetRead::Keys { keys, journal_seq } => {
-                runs.add(keys);
+            BsetRead::End                      => break,
+            BsetRead::Blacklisted              => {}
+            BsetRead::Keys { at, journal_seq } => {
+                runs.add(at);
                 max_journal_seq = max_journal_seq.max(journal_seq);
             }
         }
@@ -572,7 +538,7 @@ fn read_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, node: &mut ReadIn
                       id::bset_bad_csum,
                       "{}", Msg(|out: &mut Printbuf| csum_err_msg(out, ty, stored, csum)))?;
 
-        if let Err(err) = n.encrypt(fs, offset as u32) {
+        if let Err(err) = n.crypt(fs, offset as u32) {
             fs_fatal_error!(fs, "decrypting btree node: {}", err.msg());
             return Err(err);
         }
@@ -653,14 +619,12 @@ fn read_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, node: &mut ReadIn
     b.written.set((written + sectors).min(fs.btree_sectors() as usize) as u16);
 
     if blacklisted && !first {
-        return Ok(BsetRead::Skipped);
+        return Ok(BsetRead::Blacklisted);
     }
 
-    Ok(BsetRead::Keys { keys: keys_at..keys_at + i.u64s(), journal_seq: seq })
+    Ok(BsetRead::Keys { at: keys_at..keys_at + i.u64s(), journal_seq: seq })
 }
 
-/// The node's bsets read to the end: as many sectors as its pointer says, or
-/// none after the last that look like its.
 fn read_done_end(v: &mut NodeValidate<'_>, p: &NodePtr, buf: &[u8]) -> Result<(), BchError> {
     let (fs, b) = (v.fs, v.b);
 
@@ -806,15 +770,11 @@ pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, paths: &mut Paths<'
     trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::write_in_flight);
 }
 
-/// A node whose read has it: its contents the read's while read_in_flight is
-/// set, till this is dropped - which clears it, and wakes its waiters.
 pub struct ReadInFlightNode<'b> {
     node: &'b BtreeNode,
 }
 
 impl<'b> ReadInFlightNode<'b> {
-    /// read_in_flight set on @node.
-    ///
     /// # Safety
     /// Nothing else touches @node's contents while this lives: it's write
     /// locked now, and whoever locks it after waits on read_in_flight first.
@@ -853,7 +813,6 @@ impl Drop for ReadInFlightNode<'_> {
     }
 }
 
-/// One IO of a node read, from @pick's device - none if @ca is: its status.
 async fn read_attempt(io: &mut NodeReadIo<'_>, fs: &Fs, node: &ReadInFlightNode<'_>,
                       ca: Option<&DevIoRef<c::DevReadRefKind>>, pick: &c::extent_ptr_decoded, waiter: waiter::Async,
                       start_time: u64) -> Result<(), BchError>
@@ -870,8 +829,6 @@ async fn read_attempt(io: &mut NodeReadIo<'_>, fs: &Fs, node: &ReadInFlightNode<
     status.map_err(|e| fs.err(e))
 }
 
-/// The read of @b from @pick, retried from its other replicas: the node is the
-/// read's while read_in_flight is set, cleared at the end.
 #[in_place(NodeReadFut)]
 async fn read_task<'h, 'b>(home: Pin<&'h mut NodeReadBio>, fs: BackRef<Fs>, mut node: ReadInFlightNode<'b>,
                            mut pick: c::extent_ptr_decoded, mut ca: Option<DevIoRef<c::DevReadRefKind>>) {
@@ -1056,10 +1013,8 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode<'_>, sync: bool)
     let fs_ref = unsafe { BackRef::new(fs) };
     let fs = unsafe { fs_ref.get() };
     let (q, tasks) = (&fs.btree.read_complete_wq, fs.tasks());
-    /* inline, to submit the first IO here; with no device there's none, and the failure is reported on the queue */
     let at = if ca.is_some() { Spawn::Inline } else { Spawn::Queue(q) };
-    let make = move |home| read_task(home, fs_ref, node, pick, ca);
-    unsafe { slot.start(at, tasks, make) };
+    unsafe { slot.start(at, tasks, move |home| read_task(home, fs_ref, node, pick, ca)) };
 
     if sync {
         b.wait_on_flag(c::BtreeNodeFlags::read_in_flight);
@@ -1100,24 +1055,16 @@ impl Fs {
     }
 }
 
-// ── Scrub ────────────────────────────────────────────────────────────────
-
-/// One of something per pointer of a key.
 pub type Replicas<T> = ArrayVec<T, { c::BCH_BKEY_PTRS_MAX as usize }>;
 
-/// A replica of a btree node, set up to be read back and checked against its
-/// pointer: its buffer and bio, and a ref on its device.
 pub struct ReplicaRead<'f> {
     fs:      &'f Fs,
     ca:      DevIoRef<c::DevReadRefKind>,
     bio:     BioBox<Bio, BioBuffersMapped<Bounce<'f>>>,
-    /// Its pointer's, by position in the key, as ptrs_io_error's bits are
     pub ptr_bit: u32,
 }
 
 impl<'f> ReplicaRead<'f> {
-    /// The replica on @dev of the node @k points to - None if there's none
-    /// there to read.
     pub fn new(fs: &'f Fs, k: BkeySC<'_>, dev: u32) -> Result<Option<Self>, BchError> {
         let pick = k.pick_read_device(fs, None, dev, c::ReadFlags::hard_require_read_device)?;
         let Some(pick) = pick else { return Ok(None) };
@@ -1134,9 +1081,6 @@ impl<'f> ReplicaRead<'f> {
         Ok(Some(Self { fs, ca, bio, ptr_bit }))
     }
 
-    /// Whether the replica, read by read_replicas() - @read, how that went - is
-    /// the node @key points to. If not it's said, with @action - what's done
-    /// about it.
     pub fn good(&self, read: Result<(), BchError>, key: &BtreeKeyBuf, action: &str) -> bool {
         let (fs, k) = (self.fs, key.key());
         let mut err = Printbuf::new();
@@ -1160,8 +1104,8 @@ impl<'f> ReplicaRead<'f> {
     }
 }
 
-/// @reads read, all of them in flight at once - submitted before any is
-/// waited on, as a task waits on one thing at a time: how each went.
+/// All submitted before any is awaited: awaiting each in turn would read them
+/// one at a time.
 pub async fn read_replicas(reads: &mut [ReplicaRead<'_>], q: &Queue) -> Replicas<Result<(), BchError>> {
     let waiter = waiter::Async::current().await;
     let mut submitted = Replicas::new();
@@ -1176,10 +1120,6 @@ pub async fn read_replicas(reads: &mut [ReplicaRead<'_>], q: &Queue) -> Replicas
     ret
 }
 
-/// One replica of the node @k points to, at @level of @btree, on @dev: read
-/// asynchronously, and if it's bad, the node rewritten from another. In
-/// flight in @m till it's done, and counted in its stats: the node's sectors
-/// corrected, or uncorrected if the rewrite fails.
 pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>, dev: u32)
     -> Result<(), BchError>
 {
@@ -1200,11 +1140,9 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
     spawn_static(&fs.btree.read_complete_wq, fs.tasks(), move || rewrite_if_bad(write, fs_ref, key, r, io))
 }
 
-/// The inline data keys of the leaf @key points to checked against their own
-/// checksums, through the btree: a node rewritten from a bset that failed its
-/// checksum has good checksums after, whatever its keys hold - and every
-/// replica the same keys. Each that doesn't match is said, and its sectors
-/// are what's returned: data lost, with no copy to repair it from.
+/// A node rewritten from a bset that failed its checksum gets good checksums
+/// over whatever its keys held, on every replica: so the inline data is
+/// checked against its own checksums, and what fails is lost.
 fn inline_data_bad(fs: &Fs, key: &BtreeKeyBuf) -> u64 {
     let k = key.key();
     let Some(min_key) = k.arm::<c::BtreePtrV2>().map(|v2| v2.v().min_key) else { return 0 };
@@ -1243,7 +1181,6 @@ async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut
     let good = r.good(read, &key, ", rewriting node");
     drop(r);
 
-    // the btree's keys, whichever replica they were read from
     if key.level == 1 && key.btree.key_types() & types_with(BkeyTypeFlags::inline_data) != 0 {
         let bad = inline_data_bad(fs, &key);
         io.stats().sectors_error_uncorrected.fetch_add(bad as i64, Relaxed);

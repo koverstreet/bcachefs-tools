@@ -157,14 +157,10 @@ impl NodeValidate<'_> {
         fs.err(e::fsck_errors_not_fixed)
     }
 
-    /*
-     * The replica being read failed validation: recorded against its device, so
-     * a retry reads another. Not over keys lost or a bad checksum, from earlier
-     * in this replica - they say more.
-     */
     pub fn replica_failed(&mut self) {
         let fs = self.fs;
         if let NodeIo::Read { ca, failed: Some(f), .. } = &mut self.io {
+            /* not over keys_lost, from earlier in this replica: */
             if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::btree_node_validate_err)) {
                 f.set_errcode(ca.dev_idx.into(), -fs.err(e::btree_node_validate_err).raw());
             }

@@ -29,9 +29,9 @@ use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 /// Decrypted, or encrypted again: ChaCha20 is its own inverse.
 fn bset_encrypt(fs: &Fs, buf: &mut [u8], first: bool, offset: u32) -> Result<(), BchError> {
     if first {
-        c::btree_node::<Unvalidated>::of_mut(buf).encrypt(fs, offset)
+        c::btree_node::<Unvalidated>::of_mut(buf).crypt(fs, offset)
     } else {
-        c::btree_node_entry::<Unvalidated>::of_mut(buf).encrypt(fs, offset)
+        c::btree_node_entry::<Unvalidated>::of_mut(buf).crypt(fs, offset)
     }
 }
 
