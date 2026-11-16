@@ -27,6 +27,15 @@ pub fn sched_clock() -> u64 {
     unsafe { c::sched_clock() }
 }
 
+/* TIF_NEED_RESCHED in current's thread_info, the head of its task_struct */
+#[cfg(CONFIG_THREAD_INFO_IN_TASK)]
+#[inline(always)]
+pub fn need_resched() -> bool {
+    let flags = unsafe { core::ptr::read_volatile(&raw const (*current()).thread_info.flags) };
+    flags & (1 << c::TIF_NEED_RESCHED) != 0
+}
+
+#[cfg(not(CONFIG_THREAD_INFO_IN_TASK))]
 #[inline(always)]
 pub fn need_resched() -> bool {
     unsafe { c::bch2_need_resched() }
