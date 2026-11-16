@@ -34,10 +34,11 @@ else
 bcachefs-kernel-rust-why := $(if $(shell command -v $(BINDGEN) 2>/dev/null),,bindgen ($(BINDGEN)) not found)
 endif
 
-# The on-disk format's endian integers are zerocopy's, which the kernel's Rust
-# has only had since 7.2:
+# The kernel's own Rust from 7.4, the vendored stack's version: an older one
+# may lack what we build against - kernel::sync::srcu is 7.3's, zerocopy
+# 7.2's - and the vendored stack is used.
 ifeq ($(bcachefs-kernel-rust-why),)
-bcachefs-kernel-rust-why := $(if $(wildcard $(objtree)/rust/libzerocopy.rmeta),,kernel $(KERNELVERSION)'s Rust has no zerocopy)
+bcachefs-kernel-rust-why := $(if $(filter y,$(shell [ $(VERSION) -gt 7 ] || [ $(VERSION) -eq 7 -a $(PATCHLEVEL) -ge 4 ] && echo y)),,kernel $(KERNELVERSION)'s Rust is older than 7.4)
 endif
 
 # Paranoid FineIBT (x86; cfi=auto on IBT hardware without FRED) rewrites each
