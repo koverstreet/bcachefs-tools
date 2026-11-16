@@ -23,7 +23,8 @@
 //! kthread task always runs there. Or inline: its first poll run by start(),
 //! in the caller's context. Every await says where its task resumes, with
 //! resume_on():
-//! - Queue(q): on workqueue q.
+//! - Queue(q): on workqueue q - or with resume_on_cpu(q, cpu), on q on cpu,
+//!   for the part of a task that wants it there.
 //! - Inline: in the completer's context, an endio, where everything up to the
 //!   next await runs. It must not sleep, or take a lock that isn't irqsave -
 //!   C's continue_at(cl, fn, NULL), and as unchecked.
@@ -155,7 +156,15 @@ pub trait Resumable {
     where
         Self: Sized,
     {
-        Resumed { inner: self, target: r, recorded: None, _pin: PhantomPinned }
+        Resumed { inner: self, target: r, cpu: None, recorded: None, _pin: PhantomPinned }
+    }
+
+    /// resume_on() workqueue @q, on @cpu: queue_work_on().
+    fn resume_on_cpu(self, q: &Queue, cpu: u32) -> Resumed<'_, Self>
+    where
+        Self: Sized,
+    {
+        Resumed { inner: self, target: Resume::queue(q), cpu: Some(cpu), recorded: None, _pin: PhantomPinned }
     }
 }
 
@@ -173,6 +182,7 @@ pub struct Resumed<'r, A> {
     #[pin]
     inner:    A,
     target:   Resume<'r>,
+    cpu:      Option<u32>,
     recorded: Option<Recorded>,
     #[pin]
     _pin:     PhantomPinned,
@@ -198,7 +208,7 @@ impl<A: Resumable> Future for Resumed<'_, A> {
         let header = unsafe { task.0.as_ref() };
         let ours = match this.target.get() {
             ResumeAt::Inline => Target::Inline,
-            ResumeAt::Queue(q) => Target::Queue(NonNull::from(q)),
+            ResumeAt::Queue(q) => Target::Queue(NonNull::from(q), *this.cpu),
             ResumeAt::RunQueue => {
                 debug_assert!(header.runq.is_some(), "Resume::RUNQ, in a task on no RunQueue");
                 return this.inner.poll_resume(cx);
@@ -237,6 +247,11 @@ pub fn requeue(q: &Queue) -> Resumed<'_, Requeue> {
     Requeue { done: Done::completed(), parked: false }.resume_on(Resume::queue(q))
 }
 
+/// requeue(), onto @q on @cpu.
+pub fn requeue_on_cpu(q: &Queue, cpu: u32) -> Resumed<'_, Requeue> {
+    Requeue { done: Done::completed(), parked: false }.resume_on_cpu(q, cpu)
+}
+
 /// Pending once, on a Done that's done: run() moves the task to its target.
 pub struct Requeue {
     done:   Done,
@@ -259,7 +274,8 @@ impl Resumable for Requeue {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Target {
     Inline,
-    Queue(NonNull<Queue>),
+    /* and the cpu, where the await names one */
+    Queue(NonNull<Queue>, Option<u32>),
 }
 
 impl Target {
@@ -345,7 +361,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
     {
         let (target, runq) = match spawn {
             Spawn::Inline => (Target::Inline, None),
-            Spawn::Queue(wq) => (Target::Queue(NonNull::from(wq)), None),
+            Spawn::Queue(wq) => (Target::Queue(NonNull::from(wq), None), None),
             Spawn::Run(rq) => (Target::UNUSED, Some(NonNull::from(rq.get_ref()))),
             Spawn::Thread(_) => (Target::UNUSED, None),
         };
@@ -478,8 +494,12 @@ impl TaskRef {
             Target::Inline => {
                 unsafe { self.run(Target::Inline) };
             }
-            Target::Queue(wq) => {
-                unsafe { wq.as_ref().queue_work(&raw mut (*self.0.as_ptr()).work) };
+            Target::Queue(wq, cpu) => {
+                let work = unsafe { &raw mut (*self.0.as_ptr()).work };
+                match cpu {
+                    Some(cpu) => unsafe { wq.as_ref().queue_work_on(cpu, work) },
+                    None      => unsafe { wq.as_ref().queue_work(work) },
+                };
             }
         }
     }
