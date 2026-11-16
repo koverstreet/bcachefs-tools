@@ -46,10 +46,7 @@ use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
 use crate::os::kernel::likely;
 use crate::util::os_str::{qstr, OsStr, OsStrExt};
-use core::ffi::c_int;
-use core::marker::PhantomData;
 use core::ops::ControlFlow;
-use core::ptr::NonNull;
 
 // ── A valid dirent ───────────────────────────────────────────────────────
 
@@ -490,20 +487,6 @@ pub fn empty_dir_trans(t: &TransAttempt<'_, '_>, dir: c::subvol_inum) -> Result<
     empty_dir_snapshot(t, dir.inum, dir.subvol as u32, snapshot)
 }
 
-/// A dir_context, readdir's output, held as the pointer it came as: its
-/// actor may take it to the struct it heads - container_of(), as getdents'
-/// does - and a &mut dir_context reaches only the dir_context.
-pub struct DirContext<'c>(NonNull<c::dir_context>, PhantomData<&'c mut c::dir_context>);
-
-impl<'c> DirContext<'c> {
-    /// # Safety
-    /// @ctx is a dir_context for 'c, its actor valid to call - a pointer to
-    /// the whole of what it heads, cast, if the actor reaches past it.
-    pub unsafe fn from_raw(ctx: *mut c::dir_context) -> Self {
-        DirContext(NonNull::new(ctx).expect("a dir_context"), PhantomData)
-    }
-}
-
 /// Where readdir's entries go, and where it resumes from: a dir_context -
 /// getdents' - or a Rust caller's own.
 pub trait DirEmit {
@@ -513,23 +496,17 @@ pub trait DirEmit {
     fn emit(&mut self, name: &[u8], pos: u64, ino: u64, d_type: u32) -> bool;
 }
 
-impl DirEmit for DirContext<'_> {
-    // The kernel's pos is a loff_t; only the userspace shim's is a u64
-    #[allow(clippy::unnecessary_cast)]
+impl<E: DirEmit> DirEmit for &mut E {
     fn pos(&self) -> u64 {
-        unsafe { (*self.0.as_ptr()).pos as u64 }
+        (**self).pos()
     }
 
     fn set_pos(&mut self, pos: u64) {
-        unsafe { (*self.0.as_ptr()).pos = pos as _ };
+        (**self).set_pos(pos)
     }
 
     fn emit(&mut self, name: &[u8], pos: u64, ino: u64, d_type: u32) -> bool {
-        let ctx = self.0.as_ptr();
-        unsafe {
-            let actor = (*ctx).actor.expect("a dir_context's actor");
-            actor(ctx, name.as_ptr().cast(), name.len() as c_int, pos as _, ino, d_type)
-        }
+        (**self).emit(name, pos, ino, d_type)
     }
 }
 

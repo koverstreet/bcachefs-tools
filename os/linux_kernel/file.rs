@@ -40,6 +40,8 @@ use core::pin::Pin;
 use {
     crate::errcode::{errptr_to_result, loff_to_result, ret_to_result_void},
     crate::os::kernel::loff,
+    crate::os::dentry::Dentry,
+    crate::os::dir_context::DirContext,
     crate::os::folio::Mapping,
     crate::os::super_block::IsInode,
     core::ffi::{c_uint, c_void},
@@ -102,6 +104,11 @@ pub unsafe trait FsFile: FileData {
 impl<D: FsFile> File<D> {
     pub fn inode(&self) -> &D::Inode {
         unsafe { &*(*self.as_ptr()).f_inode.cast::<D::Inode>() }
+    }
+
+    /// The dentry it was opened by: its inode's.
+    pub fn dentry(&self) -> Dentry<'_, D::Inode> {
+        unsafe { Dentry::borrow_raw(File::<Any>::dentry(self)) }
     }
 }
 
@@ -328,7 +335,7 @@ crate::vfs_ops! {
     #[cfg(kernel)]
     fn llseek(&self = file, file: &File<Self::Data>, offset: i64, whence: c_int) -> Result<u64, BchError>;
     #[cfg(kernel)]
-    fn iterate_shared(&self = file, file: &File<Self::Data>, ctx: *mut c::dir_context) -> Result<(), BchError>;
+    fn iterate_shared(&self = file, file: &File<Self::Data>, ctx: DirContext<'_>) -> Result<(), BchError>;
     #[cfg(kernel)]
     fn fsync(&self = file, file: &File<Self::Data>, start: i64, end: i64, datasync: c_int)
         -> Result<(), BchError>;

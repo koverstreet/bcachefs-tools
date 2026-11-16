@@ -129,6 +129,11 @@ impl VfsInode {
         unsafe { (*self.as_ptr()).i_rdev }
     }
 
+    /// Its inode number, as the VFS has it: set when it's made, never changed.
+    pub fn ino(&self) -> u64 {
+        unsafe { (*self.as_ptr()).i_ino as u64 }
+    }
+
     pub fn flag(&self, flag: u32) -> bool {
         let flags = unsafe { read_volatile(&raw const (*self.as_ptr()).i_flags) };
         flags & flag != 0

@@ -23,8 +23,8 @@
 //! it isn't, as nfsd's and overlayfs's own files are. So it's LockedBy that,
 //! not a lock of its own, and there's no lock to assert.
 //!
-//! The 32-bit readdir puts its own dir_context, Readdir32's, in front of the
-//! VFS's: the actor, emit32(), translates each entry and hands it on.
+//! The 32-bit readdir puts its own DirEmit, Readdir32, in front of the VFS's
+//! dir_context: it translates each entry and hands it on.
 //!
 //! Dir's FileOps are the directory file_operations, DIR_FILE_OPS;
 //! fsync is still C's.
@@ -34,13 +34,14 @@ use core::pin::Pin;
 use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
-use crate::dirent::{self, DirContext};
+use crate::dirent::{self, DirEmit};
+use crate::os::dir_context::DirContext;
 use crate::errcode::BchError;
 use crate::locking::LockedBy;
 use crate::str_hash;
 use crate::util::alloc::KBox;
 use kernel::alloc::flags;
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::Opaque;
 use crate::os::file::{File, FileOps, FileVTable, FsFile, UserBuf};
 use crate::types::CStatic;
 use cstruct_macros::vtable;
@@ -97,35 +98,73 @@ fn pos_from_32(shift: u32, pos: i64) -> u64 {
     }
 }
 
-/// @ctx first: emit32() is given it, and takes it to the whole.
-#[repr(C)]
-struct Readdir32<'a> {
-    ctx:   c::dir_context,
-    dst:   *mut c::dir_context,
+/// A 32-bit reader's readdir, in front of the VFS's dir_context: each entry
+/// handed on with its position a cookie and its inode number truncated.
+struct Readdir32<'a, 'c> {
+    dst:    DirContext<'c>,
+    pos:    u64,
     cookie: &'a mut Cookie,
-    shift: u32,
+    shift:  u32,
     /// An entry was refused: the readdir stopped at a full buffer, not the end.
-    full:  bool,
+    full:   bool,
 }
 
-unsafe extern "C" fn emit32(ctx: *mut c::dir_context, name: *const c_char, namelen: c_int,
-                            offset: c::loff_t, ino: u64, d_type: c_uint) -> bool {
-    // SAFETY: a Readdir32's ctx, given as the whole Readdir32's pointer
-    let r = unsafe { &mut *ctx.cast::<Readdir32<'_>>() };
-    let cookie = pos_to_32(r.shift, offset as u64);
-    let ino = (ino as u32).max(1);
-
-    // SAFETY: the VFS's dir_context, and its actor
-    let emitted = unsafe {
-        let actor = (*r.dst).actor.expect("a dir_context's actor");
-        actor(r.dst, name, namelen, cookie, ino as u64, d_type)
-    };
-    if emitted {
-        *r.cookie = Cookie { valid: true, cookie, next_pos: offset as u64 + 1 };
-    } else {
-        r.full = true;
+impl DirEmit for Readdir32<'_, '_> {
+    fn pos(&self) -> u64 {
+        self.pos
     }
-    emitted
+
+    fn set_pos(&mut self, pos: u64) {
+        self.pos = pos;
+    }
+
+    fn emit(&mut self, name: &[u8], offset: u64, ino: u64, d_type: u32) -> bool {
+        let cookie = pos_to_32(self.shift, offset);
+        let ino = (ino as u32).max(1);
+
+        let emitted = self.dst.emit(name, cookie as u64, ino as u64, d_type);
+        if emitted {
+            *self.cookie = Cookie { valid: true, cookie, next_pos: offset + 1 };
+        } else {
+            self.full = true;
+        }
+        emitted
+    }
+}
+
+impl DirEmit for DirContext<'_> {
+    fn pos(&self) -> u64 {
+        DirContext::pos(self)
+    }
+
+    fn set_pos(&mut self, pos: u64) {
+        DirContext::set_pos(self, pos)
+    }
+
+    fn emit(&mut self, name: &[u8], pos: u64, ino: u64, d_type: u32) -> bool {
+        DirContext::emit(self, name, pos, ino, d_type)
+    }
+}
+
+/// "." and "..", where @e's position is before them - false once it's full:
+/// dir_emit_dots().
+fn emit_dots(file: &File<Dir>, e: &mut impl DirEmit) -> bool {
+    let dentry = file.dentry();
+    if e.pos() == 0 {
+        if !e.emit(b".", 0, file.inode().vfs().ino(), c::DT_DIR) {
+            return false;
+        }
+        e.set_pos(1);
+    }
+    if e.pos() == 1 {
+        // a root is its own parent
+        let ino = dentry.with_parent_inode(|p| p.map(|p| p.vfs().ino())).unwrap_or(file.inode().vfs().ino());
+        if !e.emit(b"..", 1, ino, c::DT_DIR) {
+            return false;
+        }
+        e.set_pos(2);
+    }
+    true
 }
 
 pub(crate) struct Dir(LockedBy<Cookie>);
@@ -167,20 +206,20 @@ impl FileOps for Dir {
         file.generic_llseek_size(offset, whence, max, max)
     }
 
-    fn iterate_shared(&self, file: &File<Self>, ctx: *mut c::dir_context) -> Result<(), BchError> {
+    fn iterate_shared(&self, file: &File<Self>, mut ctx: DirContext<'_>) -> Result<(), BchError> {
         let inode = file.inode();
         let fs = inode.fs();
         let hash = &mut str_hash::hash_info_init(fs, &inode.inode())?;
 
         let ret = if !dirents_32bit(file) {
-            // SAFETY: the VFS's, for the call
-            match unsafe { c::dir_emit_dots(file.as_ptr(), ctx) } {
-                true  => dirent::readdir(fs, inode.inum(), hash, unsafe { DirContext::from_raw(ctx) }),
+            match emit_dots(file, &mut ctx) {
+                true  => dirent::readdir(fs, inode.inum(), hash, ctx),
                 false => Ok(()),
             }
         } else {
-            // SAFETY: readdir; and the VFS's ctx
-            let (cookie, pos) = unsafe { (self.cookie(), (*ctx).pos) };
+            // SAFETY: readdir
+            let cookie = unsafe { self.cookie() };
+            let pos = ctx.pos() as i64;
             let shift = cookie_shift(hash);
             let start = if cookie.valid && cookie.cookie == pos {
                 cookie.next_pos
@@ -188,26 +227,17 @@ impl FileOps for Dir {
                 pos_from_32(shift, pos)
             };
 
-            let mut r = Readdir32 {
-                ctx:    c::dir_context { actor: Some(emit32), pos: start as c::loff_t, ..Default::default() },
-                dst:    ctx,
-                cookie,
-                shift,
-                full:   false,
-            };
-            // Its actor reaches the rest of it: the whole Readdir32's pointer
-            let r32 = (&raw mut r).cast::<c::dir_context>();
-
-            let ret = match unsafe { c::dir_emit_dots(file.as_ptr(), r32) } {
-                true  => dirent::readdir(fs, inode.inum(), hash, unsafe { DirContext::from_raw(r32) }),
+            let mut r = Readdir32 { dst: ctx, pos: start, cookie, shift, full: false };
+            let ret = match emit_dots(file, &mut r) {
+                true  => dirent::readdir(fs, inode.inum(), hash, &mut r),
                 false => Ok(()),
             };
 
             // Out of dirents, or stopped at a full buffer - the dots' too: only
-            // the actor knows
+            // the emit knows
             let eof = ret.is_ok() && !r.full;
-            // SAFETY: the VFS's
-            unsafe { (*ctx).pos = if eof { READDIR_32_EOF } else { pos_to_32(shift, r.ctx.pos as u64) } };
+            let pos = if eof { READDIR_32_EOF } else { pos_to_32(shift, r.pos) };
+            r.dst.set_pos(pos as u64);
             ret
         };
         crate::bch_err_fn!(fs, ret)

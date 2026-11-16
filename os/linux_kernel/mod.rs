@@ -7,6 +7,7 @@ pub mod crc;
 #[cfg(CONFIG_DEBUG_FS)]
 pub mod debugfs;
 pub mod dentry;
+pub mod dir_context;
 pub mod export;
 pub mod fiemap;
 pub mod file;
