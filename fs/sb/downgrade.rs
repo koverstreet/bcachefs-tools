@@ -78,7 +78,7 @@ impl SbFieldOps for Section {
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
-        entries_end::<Entry>(b, SECTION_HEAD, |_| true)
+        entries_end::<c::bch_sb_field_downgrade_entry<Unvalidated>>(b, SECTION_HEAD, |_| true)
     }
 
     /// downgrade_entries(): what this version knows. As C, failing leaves

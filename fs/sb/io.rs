@@ -153,7 +153,7 @@ use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
+use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
@@ -297,12 +297,13 @@ macro_rules! sb_err_on {
 
 /// entries_end() for a section of variable-size entries @E, from @head on:
 /// up to the first that doesn't fit, or that @is_entry says ends the walk -
-/// a terminator, zeroes.
+/// a terminator, zeroes. The section's being read: its entries are
+/// Unvalidated.
 pub fn entries_end<E>(b: &[u8], head: usize, is_entry: impl Fn(&E) -> bool) -> Option<usize>
 where
-    E: Unsized<Head: Plain + SelfSized> + ?Sized,
+    E: Unsized<Head: Plain + SelfSized> + InState<State = Unvalidated> + ?Sized,
 {
-    let entries = ValidatedEntries::<E>::new(b.get(head..)?);
+    let entries = UnvalidatedEntries::<E>::new(b.get(head..)?).map_while(Result::ok);
     Some(head + entries.take_while(|e| is_entry(e)).map(size_of_val).sum::<usize>())
 }
 

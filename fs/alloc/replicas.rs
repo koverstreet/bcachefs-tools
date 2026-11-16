@@ -712,7 +712,7 @@ impl SbFieldOps for c::bch_sb_field_replicas {
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
-        entries_end::<Entry>(b, SECTION_HEAD, |e| e.data_type != DataType::free)
+        entries_end::<c::bch_replicas_entry_v1<Unvalidated>>(b, SECTION_HEAD, |e| e.data_type != DataType::free)
     }
 }
 
@@ -728,7 +728,7 @@ impl SbFieldOps for c::bch_sb_field_replicas_v0 {
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
-        entries_end::<c::bch_replicas_entry_v0<Validated>>(b, SECTION_HEAD, |e| e.data_type != DataType::free)
+        entries_end::<c::bch_replicas_entry_v0<Unvalidated>>(b, SECTION_HEAD, |e| e.data_type != DataType::free)
     }
 }
 

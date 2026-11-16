@@ -53,7 +53,7 @@ impl SbFieldOps for Section {
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
-        entries_end::<c::jset_entry<Validated>>(b, SECTION_HEAD, |_| true)
+        entries_end::<c::jset_entry<Unvalidated>>(b, SECTION_HEAD, |_| true)
     }
 }
 
