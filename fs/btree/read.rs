@@ -1227,7 +1227,3 @@ async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut
         crate::bch_err_ratelimited!(fs, "btree node scrub: error rewriting node: {}", e.msg());
     }
 }
-
-impl BtreeNode {
-
-}

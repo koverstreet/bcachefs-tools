@@ -149,7 +149,6 @@ xmacro! {
         (ENOMEM, ENOMEM_bucket_gens, 81),
         (ENOMEM, ENOMEM_buckets_nouse, 82),
         (ENOMEM, ENOMEM_usage_init, 83),
-        (ENOMEM, ENOMEM_btree_node_read_all_replicas, 84),
         (ENOMEM, ENOMEM_btree_node_reclaim, 85),
         (ENOMEM, ENOMEM_btree_node_mem_alloc, 86),
         (ENOMEM, ENOMEM_btree_cache_cannibalize_lock, 87),

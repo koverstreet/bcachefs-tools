@@ -159,7 +159,6 @@ pub enum DevReadRefKind {
     fs_journal_alloc,
     fs_resize_on_mount,
     btree_node_read,
-    btree_node_read_all_replicas,
     btree_node_scrub,
     btree_node_write,
     btree_node_scan,
