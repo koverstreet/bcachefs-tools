@@ -40,6 +40,7 @@ use crate::os::kernel::random_u64_below;
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, PAGE_SIZE, READ};
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::task::{spawn_static, waiter, Resumable, Resume};
+use crate::os::workqueue::Queue;
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
                             Plain, SelfSized, Unsized, Unvalidated};
 use crate::os::workqueue::{run_raw, RawWork};
@@ -1099,7 +1100,7 @@ impl<'f> ReplicaRead<'f> {
 
 /// @reads read, all of them in flight at once - submitted before any is
 /// waited on, as a task waits on one thing at a time: how each went.
-pub async fn read_replicas(reads: &mut [ReplicaRead<'_>]) -> Replicas<Result<(), BchError>> {
+pub async fn read_replicas(reads: &mut [ReplicaRead<'_>], q: &Queue) -> Replicas<Result<(), BchError>> {
     let waiter = waiter::Async::current().await;
     let mut submitted = Replicas::new();
     for r in reads.iter_mut() {
@@ -1108,7 +1109,7 @@ pub async fn read_replicas(reads: &mut [ReplicaRead<'_>]) -> Replicas<Result<(),
 
     let mut ret = Replicas::new();
     for s in submitted {
-        ret.push(s.resume_on(Resume::SPAWNED).await);
+        ret.push(s.resume_on(Resume::queue(q)).await);
     }
     ret
 }
@@ -1176,7 +1177,7 @@ fn inline_data_bad(fs: &Fs, key: &BtreeKeyBuf) -> u64 {
 async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut r: ReplicaRead<'static>,
                         io: MovingIo) {
     let fs = &*fs;
-    let read = read_replicas(core::slice::from_mut(&mut r)).await[0];
+    let read = read_replicas(core::slice::from_mut(&mut r), &fs.btree.read_complete_wq).await[0];
     let good = r.good(read, &key, ", rewriting node");
     drop(r);
 

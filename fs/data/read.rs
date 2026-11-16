@@ -1418,8 +1418,8 @@ mod boxed {
     /// @f's read of its stripe, its own task joined: in a box, made when it's
     /// awaited, so that a fragment's future isn't the size of one.
     #[in_place(EcReadFut)]
-    pub(super) async fn ec_read<'f, 'r: 'f>(f: &'f mut Fragment<'r>, fs: &'f Fs, msg: &'f mut Printbuf)
-        -> Result<(), BchError>
+    pub(super) async fn ec_read<'f, 'r: 'f>(f: &'f mut Fragment<'r>, fs: &'f Fs, msg: &'f mut Printbuf,
+                                            target: Resume<'static>) -> Result<(), BchError>
     {
         let waiter = waiter::Async::current().await;
         let (bio, p) = (f.kind.bio_mut(), &f.plan);
@@ -1429,7 +1429,7 @@ mod boxed {
             join.spawn(Queue::system_dfl(), fs.tasks(),
                        move || ec::io::read_extent(fs, p.data_btree, p.data_pos, bio, &p.pick, p.flags, msg), waiter)
         }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
-        wait.resume_on(Resume::SPAWNED).await.expect("a joined task's output, handed back")
+        wait.resume_on(target).await.expect("a joined task's output, handed back")
     }
 
     /// A retry, its state and its future together in an element of the
@@ -1470,7 +1470,7 @@ async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'static>,
         let f = &mut *f;
         let ec = {
             let _noio = MemallocFlags::noio();
-            Box::init_in(init_with(move || ec_read(f, fs, msg)), Kmalloc)
+            Box::init_in(init_with(move || ec_read(f, fs, msg, target)), Kmalloc)
         }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
         Box::into_pin(ec).await?;
     } else {
@@ -1915,7 +1915,7 @@ pub async fn read<H: ReadHooks>(orig: &Rbio, inum: c::subvol_inum, flags: F, mut
             own.await;
         }
     }
-    let ret = reads.wait(Resume::SPAWNED).await;
+    let ret = reads.wait(Resume::queue(Queue::system_dfl())).await;
     orig.done();
     walked.and(ret).and(orig.ret())
 }

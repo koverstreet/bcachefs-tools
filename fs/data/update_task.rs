@@ -307,13 +307,13 @@ impl Body {
 
     /// Issues the write of what @read read, if read_done() says there is
     /// one, and waits for it.
-    pub async fn write(&mut self, read: ReadDone) {
+    pub async fn write(&mut self, read: ReadDone, resume: Resume<'_>) {
         if self.read_done(read) {
             let waiter = waiter::Async::current().await;
             // SAFETY: not tied to the Body, which the write is lent
             let write = Completion::new(unsafe { &mut (*self.up.as_ptr()).write }, waiter);
             c::data_update::write(self);
-            write.resume_on(Resume::SPAWNED).await
+            write.resume_on(resume).await
         }
     }
 

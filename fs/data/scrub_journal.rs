@@ -136,7 +136,7 @@ pub type BadRef = GatherRef<Bad, waiter::Sync>;
 /// every one read is.
 async fn node_verdict(fs: BackRef<Fs>, key: BtreeKeyBuf, reads: &mut Replicas<ReplicaRead<'static>>) -> Bad {
     let fs = &*fs;
-    let read = read_replicas(reads).await;
+    let read = read_replicas(reads, &fs.btree.read_complete_wq).await;
 
     let (mut checked, mut bad) = (0, 0);
     for (r, read) in reads.iter().zip(read) {

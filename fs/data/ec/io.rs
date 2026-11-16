@@ -23,6 +23,7 @@ use crate::util::gather::{Fold, Gather};
 use crate::os::kernel::{local_clock, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::task::{waiter, Resume, Waiter};
+use crate::os::workqueue::Queue;
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{log_msg_ratelimited, prt};
@@ -363,7 +364,7 @@ pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: Pin<
                 io.as_mut().submit(s, i);
             }
         }
-        io.as_mut().wait(Resume::SPAWNED).await;
+        io.as_mut().wait(Resume::queue(Queue::system_dfl())).await;
     }
     reconstruct_finish(fs, &key, &mut buf, block, bio, flags, msg)
 }

@@ -20,13 +20,13 @@
 //!
 //! A task is spawned on a workqueue, a RunQueue (queue.rs: run by its owner,
 //! between the owner's own work), or a kthread of its own; a RunQueue or
-//! kthread task always runs there. A workqueue task's awaits can say where it
-//! resumes, with resume_on():
+//! kthread task always runs there. Every await says where its task resumes,
+//! with resume_on():
 //! - Queue(q): on workqueue q.
 //! - Inline: in the completer's context, an endio, where everything up to the
 //!   next await runs. It must not sleep, or take a lock that isn't irqsave -
 //!   C's continue_at(cl, fn, NULL), and as unchecked.
-//! - Spawned, the default: where the task was spawned.
+//! - RUNQ: a RunQueue task's, on its RunQueue - where it always runs.
 //! The target is recorded in the header (@target) while the await is pending.
 //! requeue(q) moves a running task to q, an await of nothing: out of an
 //! endio's context, say, before it allocates. On q already, it runs on.
@@ -121,12 +121,12 @@ unsafe impl Sync for Resume<'_> {}
 pub enum ResumeAt<'a> {
     Inline,
     Queue(&'a Queue),
-    Spawned,
+    RunQueue,
 }
 
 impl<'a> Resume<'a> {
     pub const INLINE: Self = Self::at(1);
-    pub const SPAWNED: Self = Self::at(2);
+    pub const RUNQ: Self = Self::at(2);
 
     const fn at(v: usize) -> Self {
         Resume(unsafe { NonNull::new_unchecked(core::ptr::without_provenance_mut(v)) }, PhantomData)
@@ -139,7 +139,7 @@ impl<'a> Resume<'a> {
     pub fn get(self) -> ResumeAt<'a> {
         match self.0.as_ptr().addr() {
             1 => ResumeAt::Inline,
-            2 => ResumeAt::Spawned,
+            2 => ResumeAt::RunQueue,
             _ => ResumeAt::Queue(unsafe { self.0.as_ref() }),
         }
     }
@@ -198,7 +198,10 @@ impl<A: Resumable> Future for Resumed<'_, A> {
         let ours = match this.target.get() {
             ResumeAt::Inline => Target::Inline,
             ResumeAt::Queue(q) => Target::Queue(NonNull::from(q)),
-            ResumeAt::Spawned => return this.inner.poll_resume(cx),
+            ResumeAt::RunQueue => {
+                debug_assert!(header.runq.is_some(), "Resume::RUNQ, in a task on no RunQueue");
+                return this.inner.poll_resume(cx);
+            }
         };
         match *this.recorded {
             None => *this.recorded = Some(Recorded { task, ours, prev: header.target.get() }),

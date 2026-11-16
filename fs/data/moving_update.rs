@@ -70,7 +70,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     drop(read_io);
     u.read_done.store(true, Relaxed);
 
-    u.turn().wait(Resume::SPAWNED).await;
+    u.turn().wait(Resume::RUNQ).await;
 
     let write_io = {
         let (moving, size) = moving_size(&u);
@@ -78,7 +78,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
         read_error_stats(&u, &read, moving, size);
         moving.io_start(true, size)
     };
-    u.write(read).await;
+    u.write(read, Resume::RUNQ).await;
     drop(write_io);
 
     // EC allocation failed: the write never happened, but the extent still
