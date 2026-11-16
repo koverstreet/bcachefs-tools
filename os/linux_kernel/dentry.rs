@@ -19,11 +19,15 @@
 //! erase.
 
 use core::marker::PhantomData;
+use core::ptr::NonNull;
+
+use kernel::sync::aref::ARef;
 
 use crate::c;
+use crate::errcode::{errptr_to_result, BchError};
 use crate::locking::{Locked, SpinLockIrq};
 use crate::os::file::Any;
-use crate::os::ops::FromRaw;
+use crate::os::ops::{err_class_ptr, FromRaw};
 use crate::os::super_block::IsInode;
 use crate::os::vfs_inode::VfsInode;
 use crate::util::os_str::{qstr_name, OsStr};
@@ -187,5 +191,35 @@ impl<'a, I: IsInode> Dentry<'a, I> {
         // SAFETY: held by this dentry while d_lock is; a directory of the
         // same filesystem
         f(Some(unsafe { &*(*parent).d_inode.cast::<I>() }))
+    }
+
+    /// Give it @inode - None for a negative dentry - or give @inode's alias
+    /// instead, for ->lookup to return: d_splice_alias(), which takes the
+    /// reference, whatever it returns.
+    pub fn splice_alias(self, inode: Option<ARef<I>>) -> *mut c::dentry {
+        let inode = inode.map_or(core::ptr::null_mut(), |i| ARef::into_raw(i).as_ptr().cast());
+        unsafe { c::d_splice_alias(inode, self.raw) }
+    }
+
+    /// Make this negative dentry @inode's: d_instantiate(), which takes the
+    /// reference.
+    pub fn instantiate(&self, inode: ARef<I>) {
+        unsafe { c::d_instantiate(self.raw, ARef::into_raw(inode).as_ptr().cast()) }
+    }
+
+    /// A dentry for @inode, connected or not, as exportfs wants one - its
+    /// casefold ops set, for a directory: d_obtain_alias(), which takes the
+    /// reference. An error, classed, as an ERR_PTR.
+    pub fn obtain_alias(inode: Result<ARef<I>, BchError>) -> *mut c::dentry {
+        let inode = match inode {
+            Ok(inode) => ARef::into_raw(inode).cast::<c::inode>(),
+            Err(e)    => return err_class_ptr(e),
+        };
+        let dentry = unsafe { c::d_obtain_alias(inode.as_ptr()) };
+        if errptr_to_result(NonNull::new(dentry).expect("a dentry, or an error")).is_ok() {
+            // SAFETY: the dentry's, which holds the inode's reference
+            unsafe { Dentry::<I>::borrow_raw(dentry).set_casefold_ops(&*inode.as_ptr().cast::<VfsInode>()) };
+        }
+        dentry
     }
 }
