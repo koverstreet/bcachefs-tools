@@ -32,6 +32,8 @@ use crate::format::{Btree, BkeyType};
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 mod cuckoo;
+#[cfg(CONFIG_BCACHEFS_TESTS)]
+mod srcu;
 
 type TestRet = Result<(), BchError>;
 type TestFn = fn(&Fs, u64) -> TestRet;
@@ -1025,6 +1027,10 @@ fn lookup_test(testname: &[u8]) -> Option<(&'static [u8], TestFn)> {
         (b"test_cuckoo_torture", cuckoo::test_cuckoo_torture),
         #[cfg(CONFIG_BCACHEFS_TESTS)]
         (b"test_cuckoo_bench", cuckoo::test_cuckoo_bench),
+        #[cfg(CONFIG_BCACHEFS_TESTS)]
+        (b"test_srcu", srcu::test_srcu),
+        #[cfg(CONFIG_BCACHEFS_TESTS)]
+        (b"test_srcu_torture", srcu::test_srcu_torture),
     ];
 
     TESTS.iter().copied().find(|(name, _)| testname == *name)
