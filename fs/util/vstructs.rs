@@ -275,13 +275,15 @@ macro_rules! vstruct {
 }
 pub(crate) use vstruct;
 
-/// vstruct_container!(T, E): unsized vstruct T's entries are unsized Es,
-/// from its start[]. T's entries() are E's in T's state - a Validated one's
-/// trusted, as C trusts them; an Unvalidated one's each checked against
-/// what's left, an error ending the walk. With `thin E`, entries that aren't
-/// unsized - keys - as a VstructRef(Mut) of their own bytes, in T's state.
+/// vstruct_container!(T, W, E): T's entries are unsized Es, from the start[]
+/// of W, the struct as written - an unsized vstruct's header, or a #[whole]
+/// type's struct, as long as what holds it says. T's entries() are E's in T's
+/// state - a Validated one's trusted, as C trusts them; an Unvalidated one's
+/// each checked against what's left, an error ending the walk. With `thin
+/// E`, entries that aren't unsized - keys - as a VstructRef(Mut) of their own
+/// bytes, in T's state.
 macro_rules! vstruct_container {
-    ($t:ident, $entry:ident) => { $crate::paste! {
+    ($t:ident, $w:ident, $entry:ident) => {
         impl $t<$crate::util::vstructs::Validated> {
             pub fn entries(&self)
                 -> $crate::util::vstructs::ValidatedEntries<'_, $entry<$crate::util::vstructs::Validated>>
@@ -304,9 +306,9 @@ macro_rules! vstruct_container {
             }
         }
 
-        $crate::util::vstructs::vstruct_container!(@start $t, $entry<$crate::util::vstructs::Validated>);
-    } };
-    ($t:ident, thin $entry:ty) => { $crate::paste! {
+        $crate::util::vstructs::vstruct_container!(@start $t, $w, $entry<$crate::util::vstructs::Validated>);
+    };
+    ($t:ident, $w:ident, thin $entry:ty) => {
         impl $t<$crate::util::vstructs::Validated> {
             pub fn entries(&self) -> $crate::util::vstructs::ViewEntries<'_, $entry> {
                 $crate::util::vstructs::ViewEntries::of(self)
@@ -323,11 +325,11 @@ macro_rules! vstruct_container {
             }
         }
 
-        $crate::util::vstructs::vstruct_container!(@start $t, $entry);
-    } };
-    (@start $t:ident, $entry:ty) => { $crate::paste! {
-        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Unvalidated>, [<$t _head>]);
-        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Validated>, [<$t _head>]);
+        $crate::util::vstructs::vstruct_container!(@start $t, $w, $entry);
+    };
+    (@start $t:ident, $w:ident, $entry:ty) => {
+        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Unvalidated>, $w);
+        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Validated>, $w);
 
         unsafe impl $crate::util::vstructs::Container for $t<$crate::util::vstructs::Validated> {
             type Entry = $entry;
@@ -340,15 +342,15 @@ macro_rules! vstruct_container {
         impl $t<$crate::util::vstructs::Unvalidated> {
             /// start_bytes(), mutably: for entries_mut().
             fn start_bytes_mut(&mut self) -> &mut [u8] {
-                &mut self.as_bytes_mut()[::core::mem::offset_of!([<$t _head>], start)..]
+                &mut self.as_bytes_mut()[::core::mem::offset_of!($w, start)..]
             }
         }
-    } };
-    (@start_of $s:ty, $ffi:ident) => {
+    };
+    (@start_of $s:ty, $w:ident) => {
         impl $s {
             /// Its entries' bytes: from its start[] to its end.
             fn start_bytes(&self) -> &[u8] {
-                &self.as_bytes()[::core::mem::offset_of!($ffi, start)..]
+                &self.as_bytes()[::core::mem::offset_of!($w, start)..]
             }
         }
     };
