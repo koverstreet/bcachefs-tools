@@ -481,8 +481,8 @@ impl BtreeTrans<'_> {
             let btree = Btree(i.btree_id.into());
             for_each_entry_key(i, |k| journal_overlay::insert(not_rw, btree, i.level.into(), k))?;
 
-            if let Ok(c::JsetEntryRef::btree_root(r)) = i.typed() {
-                fs.journal_entry_to_btree_root(r.as_unvalidated());
+            if i.type_() == c::JsetEntryType::btree_root {
+                fs.journal_entry_to_btree_root(i.as_unvalidated());
             }
             Ok(())
         })?;

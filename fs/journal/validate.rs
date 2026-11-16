@@ -308,7 +308,8 @@ trait EntryOps: ArmRef {
         Ok(())
     }
 
-    fn to_text(&self, out: &mut Printbuf, fs: Option<&Fs>);
+    /// @self, the arm of entry @e.
+    fn to_text(&self, e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, fs: Option<&Fs>);
 
     /// Entry @e as its type, its size checked.
     fn arm(e: &[u8]) -> &Self {
@@ -370,8 +371,8 @@ macro_rules! keys_entry_ops {
                 $validate(ctx, e)
             }
 
-            fn to_text(&self, out: &mut Printbuf, fs: Option<&Fs>) {
-                journal_entry_btree_keys_to_text(out, fs, bytes_of(self))
+            fn to_text(&self, e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, fs: Option<&Fs>) {
+                journal_entry_btree_keys_to_text(out, fs, e.as_bytes())
             }
         }
     )* };
@@ -386,13 +387,13 @@ keys_entry_ops!(
 
 impl EntryOps for c::jset_entry_prio_ptrs<Unvalidated> {
     /* obsolete, don't care: */
-    fn to_text(&self, _out: &mut Printbuf, _fs: Option<&Fs>) {}
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, _out: &mut Printbuf, _fs: Option<&Fs>) {}
 }
 
 impl EntryOps for c::jset_entry_blacklist<Unvalidated> {
     const SIZE: Size = Size::Exactly(id::journal_entry_blacklist_bad_size);
 
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "seq={}", self.seq.get());
     }
 }
@@ -409,7 +410,7 @@ impl EntryOps for c::jset_entry_blacklist_v2<Unvalidated> {
         Ok(())
     }
 
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "start={} end={}", self.start.get(), self.end.get());
     }
 }
@@ -417,9 +418,9 @@ impl EntryOps for c::jset_entry_blacklist_v2<Unvalidated> {
 impl EntryOps for c::jset_entry_usage<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_usage_bad_size);
 
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "type=");
-        c::FsUsageType(self.entry.btree_id.into()).to_text(out);
+        c::FsUsageType(e.btree_id.into()).to_text(out);
         prt!(out, " v={}", self.v.get());
     }
 }
@@ -447,7 +448,7 @@ impl EntryOps for c::jset_entry_data_usage<Unvalidated> {
         Ok(())
     }
 
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         match data_usage_replicas(bytes_of(self)) {
             Some(r) => r.to_text(out),
             None    => prt!(out, "(invalid, replicas entry overruns jset_entry)"),
@@ -466,7 +467,7 @@ impl EntryOps for c::jset_entry_clock<Unvalidated> {
         Ok(())
     }
 
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "{}={}", if self.rw != 0 { "write" } else { "read" }, self.time.get());
     }
 }
@@ -481,7 +482,7 @@ impl EntryOps for c::jset_entry_dev_usage<Unvalidated> {
         Ok(())
     }
 
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "dev={}", self.dev.get());
         let mut out = out.indent(2);
 
@@ -495,7 +496,7 @@ impl EntryOps for c::jset_entry_dev_usage<Unvalidated> {
 }
 
 impl EntryOps for c::jset_entry_log<Unvalidated> {
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         let len = self.d.iter().position(|&b| b == 0).unwrap_or(self.d.len());
         out.write_bytes(&self.d[..len]);
     }
@@ -504,7 +505,7 @@ impl EntryOps for c::jset_entry_log<Unvalidated> {
 impl EntryOps for c::jset_entry_datetime<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_datetime_bad_size);
 
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         DateTime(self.seconds.get() as i64).to_text(out);
     }
 }
@@ -512,7 +513,7 @@ impl EntryOps for c::jset_entry_datetime<Unvalidated> {
 impl EntryOps for c::jset_entry_rewind_limit<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_rewind_limit_bad_size);
 
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "seq {}", self.seq.get());
     }
 }
@@ -520,7 +521,7 @@ impl EntryOps for c::jset_entry_rewind_limit<Unvalidated> {
 impl EntryOps for c::jset_entry_rewind<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_rewind_bad_size);
 
-    fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "from {} to {}", self.from.get(), self.to.get());
     }
 }
@@ -545,7 +546,7 @@ pub fn journal_entry_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &c::jset_en
     if u32::from(e.type_) < c::JsetEntryType::NR {
         prt!(out, ": ");
         if let Ok(r) = e.typed() {
-            c::jset_entry_match!(r, a => a.to_text(out, fs))
+            c::jset_entry_match!(r, a => a.to_text(e, out, fs))
         }
     }
 }

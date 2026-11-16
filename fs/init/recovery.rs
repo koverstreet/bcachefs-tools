@@ -515,7 +515,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
     match entry.typed() {
         Ok(c::JsetEntryRef::btree_root(e)) => {
             let Some(k) = e.entries().next() else { return Ok(()) };
-            let id = u32::from(e.entry.btree_id);
+            let id = u32::from(entry.btree_id);
 
             if fsck_err_on!(fs, id >= c::BTREE_ID_NR_MAX, id::invalid_btree_id,
                             "invalid btree id {} (max {})", id, c::BTREE_ID_NR_MAX)? {
@@ -527,7 +527,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
             roots.grow_to(id)?;
 
             let r = roots.get_mut(id).expect("grown to it");
-            r.level = e.entry.level;
+            r.level = entry.level;
             r.key.set_key(k.key());
             r.alive = 1;
             roots.published().roots_error[id as usize].set(0);
@@ -541,7 +541,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
             }
         }
         Ok(c::JsetEntryRef::usage(u)) => {
-            if u.entry.btree_id == c::FsUsageType::key_version.0 as u8 {
+            if entry.btree_id == c::FsUsageType::key_version.0 as u8 {
                 fs.key_version.store(u.v.get() as i64, Relaxed);
             }
         }
