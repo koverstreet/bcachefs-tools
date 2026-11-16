@@ -18,7 +18,11 @@
 # isn't code or data is kept whole: metadata nothing references, which the GC would
 # otherwise drop silently - .modinfo, __param, __bug_table, __jump_table,
 # __ex_table, .altinstructions, and whatever else turns up. Taken from the
-# objects themselves, so a new one is kept, not lost.
+# objects themselves, so a new one is kept, not lost. So are objtool's
+# .discard.* annotations, unallocated - which objtool, run on the output,
+# reads: without them a paravirt patch site's indirect call isn't
+# retpoline-safe to it, and nothing is NOENDBR. What they name is in
+# .altinstructions and __jump_table, kept already.
 #
 # Except a SHF_LINK_ORDER section ('L'), which isn't unreferenced: each piece
 # is tied to the section it describes, and the GC keeps it with that section,
@@ -51,8 +55,9 @@ lds=$work/gc.lds
 			sub(/^ *\[ *[0-9]+\] */, "")
 			# $7 is the flags column - absent where there are none,
 			# when it is the next, numeric, column
-			if ($7 ~ /^[A-Za-z]+$/ && $7 ~ /A/ && $7 !~ /L/ &&
-			    $1 !~ /^\.(text|rodata|data|bss)(\.|$)/)
+			if ($7 ~ /^[A-Za-z]+$/ && $7 !~ /L/ &&
+			    (($7 ~ /A/ && $1 !~ /^\.(text|rodata|data|bss)(\.|$)/) ||
+			     $1 ~ /^\.discard\./))
 				print $1
 		}' | sort -u | while read -r s; do
 		echo "	$s 0 : { KEEP(*($s)) }"
