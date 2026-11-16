@@ -181,6 +181,15 @@ crate::module_param! {
     perm = 0o644, desc = "";
 }
 
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+fn maybe_corrupt(buf: &mut [u8], dev: i32) {
+    let (corrupt_dev, ratio) = (btree_read_corrupt_device.get(), btree_read_corrupt_ratio.get());
+    if (corrupt_dev == dev || corrupt_dev < 0) && ratio != 0 && random_u64_below(ratio.into()) == 0 {
+        let at = random_u64_below((buf.len() / 8) as u64) as usize * 8;
+        buf[at..at + 8].copy_from_slice(&random_u64().to_ne_bytes());
+    }
+}
+
 struct NodeRead<'r> {
     fs:         &'r Fs,
     _listed:    AsyncObjSlot,
@@ -204,18 +213,12 @@ impl NodeRead<'_> {
         let buf = unsafe { node_buf(&self.node, self.node.contents()) };
         let resume = Resume::queue(&fs.btree.read_complete_wq);
         let status = self.io.remap_read(buf).submit(waiter).resume_on(resume).await;
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        if status.is_ok() {
+            maybe_corrupt(buf, self.pick.ptr.dev() as i32);
+        }
         ca.account_io_completion(c::MemberErrorType::read, self.start_time, status.is_ok());
         status.map_err(|e| fs.err(e))
-    }
-
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    fn maybe_corrupt(&mut self) {
-        let (dev, ratio) = (btree_read_corrupt_device.get(), btree_read_corrupt_ratio.get());
-        if (dev == self.pick.ptr.dev() as i32 || dev < 0) && ratio != 0 && random_u64_below(ratio.into()) == 0 {
-            let data = unsafe { node_buf(&self.node, self.node.contents()) };
-            let at = random_u64_below((data.len() / 8) as u64) as usize * 8;
-            data[at..at + 8].copy_from_slice(&random_u64().to_ne_bytes());
-        }
     }
 
     fn next_replica(&mut self) -> bool {
@@ -235,9 +238,6 @@ impl NodeRead<'_> {
             self.start_time = local_clock();
             let ret = match self.attempt(waiter).await {
                 Ok(()) => {
-                    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-                    self.maybe_corrupt();
-
                     let ca = self.ca.as_ref().expect("a read that completed, from a device it had a ref on");
                     read_done(self.fs, ca, &mut self.node, Some(&mut self.failed), err)
                 }
