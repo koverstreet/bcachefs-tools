@@ -569,10 +569,27 @@ fn check_btree_paths_leaked(trans: &BtreeTrans<'_>, paths: &Paths<'_>) {
 #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
 fn check_btree_paths_leaked(_trans: &BtreeTrans<'_>, _paths: &Paths<'_>) {}
 
-unsafe extern "C" fn trans_rcu_free(rcu: *mut c::rcu_head) {
-    unsafe {
-        let trans = rcu.byte_sub(offset_of!(BtreeTrans<'_>, rcu)).cast::<BtreeTrans<'_>>();
-        (*trans).c.btree.trans.pool.free_raw(NonNull::new_unchecked(trans.cast()));
+/// A transaction's memory, out of its percpu cache: the pool's again a grace
+/// period on.
+struct PooledTrans(NonNull<BtreeTrans<'static>>);
+
+// out of the percpu cache, the transaction's memory is the pool's alone
+unsafe impl rcu::RcuOwned for PooledTrans {
+    fn into_head(self) -> NonNull<rcu::RcuHead> {
+        unsafe { NonNull::new_unchecked(&raw mut (*self.0.as_ptr()).rcu).cast() }
+    }
+
+    unsafe fn from_head(head: NonNull<rcu::RcuHead>) -> Self {
+        PooledTrans(unsafe { head.byte_sub(offset_of!(BtreeTrans<'_>, rcu)).cast() })
+    }
+}
+
+// memory, which any thread may give back to the pool
+unsafe impl Send for PooledTrans {}
+
+impl PooledTrans {
+    fn free(self) {
+        unsafe { (*self.0.as_ptr()).c.btree.trans.pool.free_raw(self.0.cast()) };
     }
 }
 
@@ -642,7 +659,8 @@ impl Drop for TransGuard<'_> {
              * finish; per-CPU cache reuse within a grace period is
              * identity-confusion (acceptable per probabilistic detection).
              */
-            unsafe { rcu::Flavor::RCU.call(&raw mut (*trans).rcu, trans_rcu_free) };
+            let trans = PooledTrans(unsafe { NonNull::new_unchecked(trans.cast()) });
+            rcu::Flavor::RCU.call(trans, PooledTrans::free);
         }
     }
 }

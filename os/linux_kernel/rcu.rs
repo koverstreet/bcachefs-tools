@@ -143,11 +143,11 @@ impl<'a> Flavor<'a> {
         }
     }
 
-    /// @func(@head) a grace period on: call_rcu().
+    /// @func(@head) a grace period on: call_rcu(), for util/rcu.rs's call().
     ///
     /// # Safety
     /// @head isn't queued already, and lives until @func runs.
-    pub unsafe fn call(self, head: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head)) {
+    pub(crate) unsafe fn call_raw(self, head: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head)) {
         match self.ssp() {
             Some(ssp) => unsafe { kernel::bindings::call_srcu(ssp, head, Some(func)) },
             None      => unsafe { kernel::bindings::call_rcu(head, Some(func)) },

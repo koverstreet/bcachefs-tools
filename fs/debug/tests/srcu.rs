@@ -16,6 +16,7 @@
 //! after sleeping now and then: one freed under it is the bug.
 
 use core::mem::offset_of;
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering::{Acquire, Relaxed, Release}};
 use pin_init::stack_try_pin_init;
 
@@ -26,7 +27,7 @@ use crate::fs::Fs;
 use crate::new_srcu;
 use crate::os::kernel::{local_clock, msleep, num_online_cpus, random_u64_below};
 use crate::util::par::{self, Backend};
-use crate::util::rcu::{Flavor, Srcu};
+use crate::util::rcu::{Flavor, RcuHead, RcuOwned, Srcu};
 use crate::util::task::TASKS;
 
 #[cfg(not(kernel))]
@@ -61,16 +62,45 @@ impl Flagged {
         Flagged { head: unsafe { core::mem::zeroed() }, ran: AtomicBool::new(false) }
     }
 
-    unsafe extern "C" fn cb(head: *mut c::rcu_head) {
-        let f = unsafe { &*head.byte_sub(offset_of!(Flagged, head)).cast::<Flagged>() };
-        f.ran.store(true, Release);
-    }
-
     /// # Safety
     /// Not queued already, and lives until barrier()'s returned.
     unsafe fn call(&self, flavor: Flavor<'_>) {
-        unsafe { flavor.call((&raw const self.head).cast_mut(), Self::cb) };
+        flavor.call(unsafe { Queued::new(self) }, |q| q.0.ran.store(true, Release));
     }
+}
+
+// its rcu_head is the domain's while queued; the rest atomic
+unsafe impl Sync for Flagged {}
+
+/// A test's object, given up to a grace period.
+struct Queued<'a, T>(&'a T);
+
+impl<'a, T> Queued<'a, T> {
+    /// # Safety
+    /// @t isn't queued already, and lives until its domain's barrier().
+    unsafe fn new(t: &'a T) -> Self {
+        Queued(t)
+    }
+}
+
+// new()'s callers keep it until its callback's run
+unsafe impl<T: HasHead> RcuOwned for Queued<'_, T> {
+    fn into_head(self) -> NonNull<RcuHead> {
+        unsafe { NonNull::from(self.0).byte_add(T::HEAD).cast() }
+    }
+
+    unsafe fn from_head(head: NonNull<RcuHead>) -> Self {
+        Queued(unsafe { head.byte_sub(T::HEAD).cast().as_ref() })
+    }
+}
+
+/// Where a test object's rcu_head is
+trait HasHead {
+    const HEAD: usize;
+}
+
+impl HasHead for Flagged {
+    const HEAD: usize = offset_of!(Flagged, head);
 }
 
 /// A reader that sleeps holds off its domain, and not @other.
@@ -156,10 +186,10 @@ impl Obj {
         self.state.store(DEAD, Release);
         self.free.store(true, Release);
     }
+}
 
-    unsafe extern "C" fn retire_cb(head: *mut c::rcu_head) {
-        unsafe { &*head.byte_sub(offset_of!(Obj, head)).cast::<Obj>() }.retire();
-    }
+impl HasHead for Obj {
+    const HEAD: usize = offset_of!(Obj, head);
 }
 
 // its rcu_head is the domain's while queued, and only the writer queues it;
@@ -242,9 +272,9 @@ impl<'a> Torture<'a> {
                     }
                     old.retire();
                 } else {
-                    // SAFETY: retired once per incarnation; the pool outlives
-                    // the domain's barrier()
-                    unsafe { self.srcu.flavor().call((&raw const old.head).cast_mut(), Obj::retire_cb) };
+                    // retired once per incarnation; the pool outlives the
+                    // domain's barrier()
+                    self.srcu.flavor().call(unsafe { Queued::new(old) }, |q| q.0.retire());
                 }
             }
             n += 1;

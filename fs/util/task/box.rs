@@ -17,10 +17,9 @@
 //! a Join's. A Join is a task its spawner awaits, for what it returns, through
 //! a CompletionReturn.
 
-use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::{init_at, init_with, Alloc, Kmalloc};
-use crate::util::rcu::{Flavor, HasRcuHead, RcuHead};
+use crate::util::rcu::{Flavor, HasRcuHead, RcuHead, RcuOwned};
 use crate::os::workqueue::Queue;
 use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskList, TaskRef};
 use core::alloc::Layout;
@@ -282,23 +281,42 @@ unsafe fn free_slot<H, F: Future<Output = ()>, A: Alloc + Copy>(home: NonNull<H>
     unsafe {
         let w = WithTask::<'_, H, F, A>::of_home(home);
         core::ptr::drop_in_place(home.as_ptr());
-        let head = w.byte_add(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).as_ptr().cast::<c::rcu_head>();
         #[cfg(kernel)]
         if A::KVFREE {
             // tiny RCU passes the head's offset as its callback
             const { assert!(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD < 4096) };
+            let head = w.byte_add(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).as_ptr();
             return crate::util::alloc::kvfree_rcu_head(w.as_ptr().cast(), head.cast());
         }
-        Flavor::RCU.call(head, free_mem::<H, F, A>);
+        Flavor::RCU.call(SlotMem::<H, F, A>(w.cast()), SlotMem::free);
     }
 }
 
-unsafe extern "C" fn free_mem<H, F: Future<Output = ()>, A: Alloc + Copy>(head: *mut c::rcu_head) {
-    unsafe {
-        let w = head.byte_sub(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).cast::<WithTask<'_, H, F, A>>();
-        let (alloc, given) = ((*w).alloc, (*w).given);
-        alloc.deallocate(NonNull::new_unchecked(w).cast(),
-                         Layout::from_size_align_unchecked(given, align_of::<WithTask<'_, H, F, A>>()));
+/// A WithTask's memory, its home and task gone: A's again a grace period on.
+struct SlotMem<H, F: Future<Output = ()>, A: Alloc + Copy>(NonNull<WithTask<'static, H, F, A>>);
+
+// memory, which any thread may give back to A
+unsafe impl<H, F: Future<Output = ()>, A: Alloc + Copy> Send for SlotMem<H, F, A> {}
+
+// its home and task gone, the memory is free_slot()'s alone
+unsafe impl<H, F: Future<Output = ()>, A: Alloc + Copy> RcuOwned for SlotMem<H, F, A> {
+    fn into_head(self) -> NonNull<RcuHead> {
+        unsafe { self.0.byte_add(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).cast() }
+    }
+
+    unsafe fn from_head(head: NonNull<RcuHead>) -> Self {
+        SlotMem(unsafe { head.byte_sub(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).cast() })
+    }
+}
+
+impl<H, F: Future<Output = ()>, A: Alloc + Copy> SlotMem<H, F, A> {
+    fn free(self) {
+        let w = self.0.as_ptr();
+        unsafe {
+            let (alloc, given) = ((*w).alloc, (*w).given);
+            alloc.deallocate(self.0.cast(),
+                             Layout::from_size_align_unchecked(given, align_of::<WithTask<'_, H, F, A>>()));
+        }
     }
 }
 

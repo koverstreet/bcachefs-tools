@@ -22,7 +22,7 @@ use crate::data_structures::genradix::NewNode;
 use crate::util::alloc::{KVmalloc, Kmalloc};
 use crate::util::maybe_rcu_alloc::{alloc_at, Retired};
 use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
-use crate::util::rcu::{Flavor, GpCookie};
+use crate::util::rcu::{Flavor, GpCookie, RcuHead, RcuOwned};
 use crate::os::workqueue::{flush_work, Queue};
 
 const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
@@ -346,6 +346,44 @@ struct Pcpu<'f, M: Mode> {
     work:   Opaque<c::work_struct>,
 }
 
+/// A CPU's one callback, armed: whoever set cb_armed owns its head, until the
+/// callback finds nothing pending and clears it.
+struct Armed<'f, M: Mode>(NonNull<Pcpu<'f, M>>);
+
+// a CPU's state, which its lock serializes, the callback's on any CPU
+unsafe impl<M: Mode> Send for Armed<'_, M> {}
+
+// cb_armed is the head's: set, it's the Armed's alone
+unsafe impl<M: Mode> RcuOwned for Armed<'_, M> {
+    fn into_head(self) -> NonNull<RcuHead> {
+        unsafe { NonNull::new_unchecked((*self.0.as_ptr()).cb.as_ptr()).cast() }
+    }
+
+    unsafe fn from_head(head: NonNull<RcuHead>) -> Self {
+        Armed(unsafe { head.byte_sub(offset_of!(Pcpu<'_, M>, cb)).cast() })
+    }
+}
+
+impl<M: Mode> Armed<'_, M> {
+    /// A grace period's passed: the CPU's expired items processed, and the
+    /// callback armed again while any are still waiting.
+    fn run(self) {
+        // a Pcpu outlives its RcuPending's barrier(), which waits for this
+        let p = unsafe { self.0.as_ref() };
+        let pending = unsafe { &*p.parent };
+
+        unsafe { Queue::system().queue_work_on(p.cpu, p.work.as_ptr()) };
+
+        let mut s = p.lock.lock();
+        if s.has_pending() {
+            drop(s);
+            pending.srcu.call(self, Self::run);
+        } else {
+            s.cb_armed = false;
+        }
+    }
+}
+
 // what other CPUs change is under the lock, or C's - cb and work
 unsafe impl<M: Mode> CpuShared for Pcpu<'_, M> {}
 
@@ -424,21 +462,6 @@ impl<'f, M: Mode> RcuPending<'f, M> {
             let e = p.lock.lock().take_expired(pending.srcu);
             let Some(e) = e else { break };
             pending.process_expired(p, e);
-        }
-    }
-
-    unsafe extern "C" fn rcu_cb(rcu: *mut c::rcu_head) {
-        let p = unsafe { &*rcu.byte_sub(offset_of!(Pcpu<'f, M>, cb)).cast::<Pcpu<'f, M>>() };
-        let pending = unsafe { &*p.parent };
-
-        unsafe { Queue::system().queue_work_on(p.cpu, p.work.as_ptr()) };
-
-        let mut s = p.lock.lock();
-        if s.has_pending() {
-            drop(s);
-            unsafe { pending.srcu.call(p.cb.as_ptr(), Self::rcu_cb) };
-        } else {
-            s.cb_armed = false;
         }
     }
 
@@ -581,7 +604,7 @@ impl<'f, M: Mode> RcuPending<'f, M> {
                  */
                 if !s.cb_armed {
                     s.cb_armed = true;
-                    unsafe { self.srcu.call(p.cb.as_ptr(), Self::rcu_cb) };
+                    self.srcu.call(Armed(NonNull::from(p)), Armed::run);
                 } else {
                     self.srcu.start_poll();
                 }

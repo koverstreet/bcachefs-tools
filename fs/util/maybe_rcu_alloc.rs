@@ -21,7 +21,7 @@ use crate::c;
 use crate::util::alloc::{flags, init_at, stateless, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
-                       RcuHead, RcuWorkHead};
+                       RcuHead, RcuOwned, RcuWorkHead};
 use crate::util::sleep::Sleep;
 use crate::os::workqueue::{Queue, Workqueue, WqFlags};
 
@@ -275,7 +275,7 @@ impl<T> RcuFreeing for T {
     default unsafe fn free<A: Alloc>(p: NonNull<T>) {
         <T as Detach>::detach(unsafe { p.as_ref() });
         PENDING.fetch_add(1, Relaxed);
-        unsafe { Flavor::RCU.call(<T as RcuHeadAt<RcuWorkHead>>::head(p).cast(), queue_fn::<T, A>) };
+        Flavor::RCU.call(unsafe { Freeing::<T, RcuWorkHead, A>::new(p) }, Freeing::queue);
     }
 
     default unsafe fn retire(_p: NonNull<T>) {
@@ -292,7 +292,7 @@ impl<T: DropAtomic> RcuFreeing for T {
 
     default unsafe fn free<A: Alloc>(p: NonNull<T>) {
         <T as Detach>::detach(unsafe { p.as_ref() });
-        unsafe { Flavor::RCU.call(<T as RcuHeadAt<RcuHead>>::head(p).cast(), drop_free_fn::<T, A>) };
+        Flavor::RCU.call(unsafe { Freeing::<T, RcuHead, A>::new(p) }, Freeing::drop_free);
     }
 
     default unsafe fn retire(_p: NonNull<T>) {
@@ -316,7 +316,7 @@ impl<T: DropAtomic + DropAnytime> RcuFreeing for T {
             #[cfg(kernel)]
             <T as RcuHeadAt<RcuHead>>::kvfree_rcu_mem(p);
             #[cfg(not(kernel))]
-            Flavor::RCU.call(<T as RcuHeadAt<RcuHead>>::head(p).cast(), free_fn::<T, A>);
+            Flavor::RCU.call(Freeing::<T, RcuHead, A>::new(p), Freeing::free_mem);
         }
     }
 
@@ -354,13 +354,6 @@ impl<T> NotRetirable<T> {
     const ERR: () = panic!("retire() is an RcuMember's free - dropped at once, its memory a grace period on");
 }
 
-/// The callback of what was dropped at once: its memory alone - userspace's,
-/// whose kvfree_rcu() allocates.
-#[cfg(not(kernel))]
-unsafe extern "C" fn free_fn<T, A: Alloc>(rcu: *mut c::rcu_head) {
-    unsafe { <T as RcuHeadAt<RcuHead>>::free_mem::<A>(<T as RcuHeadAt<RcuHead>>::of_head(rcu.cast())) }
-}
-
 /// # Safety
 /// @h is RcuHeadAt<H>::head()'s, of an alloc::<A>(), and nothing uses it after.
 unsafe fn drop_free<T, H: HeadKind, A: Alloc>(h: *mut H) {
@@ -369,10 +362,6 @@ unsafe fn drop_free<T, H: HeadKind, A: Alloc>(h: *mut H) {
         core::ptr::drop_in_place(p.as_ptr());
         <T as RcuHeadAt<H>>::free_mem::<A>(p);
     }
-}
-
-unsafe extern "C" fn drop_free_fn<T, A: Alloc>(rcu: *mut c::rcu_head) {
-    unsafe { drop_free::<T, RcuHead, A>(rcu.cast()) }
 }
 
 /// RcuDropWorkMembers whose drop is still to come - the word their last write
@@ -393,13 +382,57 @@ pub fn free_exit() {
     drop(unsafe { Workqueue::from_raw(FREE_WQ.swap(core::ptr::null_mut(), Acquire)) });
 }
 
-unsafe extern "C" fn queue_fn<T, A: Alloc>(rcu: *mut c::rcu_head) {
-    let work = rcu.cast::<c::work_struct>();
-    let init = crate::new_work!(work_fn::<T, A>, "rcu_free");
-    let Ok(()) = unsafe { init_at(init, work) };
-    let wq = FREE_WQ.load(Acquire);
-    assert!(!wq.is_null(), "an RcuDropWorkMember's freed outside module init and exit");
-    unsafe { Queue::from_raw(wq).queue_work(work) };
+/// An alloc::<A>()'s, out of readers' reach and its free begun: given up to a
+/// grace period at its head, H.
+struct Freeing<T, H: HeadKind, A: Alloc>(NonNull<T>, PhantomData<(H, A)>);
+
+// memory, and what's in it dropped on whichever thread its callback runs:
+// RcuFreeing's impls hold T to what may be
+unsafe impl<T, H: HeadKind, A: Alloc> Send for Freeing<T, H, A> {}
+
+// free()'s alone, once it's begun
+unsafe impl<T, H: HeadKind, A: Alloc> RcuOwned for Freeing<T, H, A> {
+    fn into_head(self) -> NonNull<RcuHead> {
+        unsafe { NonNull::new_unchecked(<T as RcuHeadAt<H>>::head(self.0).cast()) }
+    }
+
+    unsafe fn from_head(head: NonNull<RcuHead>) -> Self {
+        Freeing(unsafe { <T as RcuHeadAt<H>>::of_head(head.as_ptr().cast()) }, PhantomData)
+    }
+}
+
+impl<T, H: HeadKind, A: Alloc> Freeing<T, H, A> {
+    /// # Safety
+    /// @p is alloc::<A>()'s, and nothing but RCU readers uses it after.
+    unsafe fn new(p: NonNull<T>) -> Self {
+        Freeing(p, PhantomData)
+    }
+
+    fn drop_free(self) {
+        unsafe { drop_free::<T, H, A>(<T as RcuHeadAt<H>>::head(self.0)) }
+    }
+}
+
+impl<T, A: Alloc> Freeing<T, RcuHead, A> {
+    /// What was dropped at once: its memory alone - userspace's, whose
+    /// kvfree_rcu() allocates.
+    #[cfg(not(kernel))]
+    fn free_mem(self) {
+        unsafe { <T as RcuHeadAt<RcuHead>>::free_mem::<A>(self.0) }
+    }
+}
+
+impl<T, A: Alloc> Freeing<T, RcuWorkHead, A> {
+    /// Its drop needs process context: on the free queue, the rcu_head's
+    /// room become the work's.
+    fn queue(self) {
+        let work = unsafe { <T as RcuHeadAt<RcuWorkHead>>::head(self.0) }.cast::<c::work_struct>();
+        let init = crate::new_work!(work_fn::<T, A>, "rcu_free");
+        let Ok(()) = unsafe { init_at(init, work) };
+        let wq = FREE_WQ.load(Acquire);
+        assert!(!wq.is_null(), "an RcuDropWorkMember's freed outside module init and exit");
+        unsafe { Queue::from_raw(wq).queue_work(work) };
+    }
 }
 
 unsafe extern "C" fn work_fn<T, A: Alloc>(work: *mut c::work_struct) {

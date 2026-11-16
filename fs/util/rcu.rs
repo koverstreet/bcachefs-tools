@@ -196,6 +196,40 @@ impl<T: HasRcuHead> HasRcuHead for core::mem::MaybeUninit<T> {
 
 pub use cstruct_macros::RcuHead;
 
+// ── Callbacks ────────────────────────────────────────────────────────────
+
+/// An owner of something with an RcuHead, given up as its head while it waits
+/// out a grace period and taken back after: the kernel's ForeignOwnable, for
+/// RCU. Owning it, call() can't queue a head twice, or let what's queued go
+/// before its callback.
+///
+/// # Safety
+/// into_head()'s head is from_head()'s to take back, once, and owned until
+/// then: nothing else frees what it's in, or queues it.
+pub unsafe trait RcuOwned: Sized {
+    fn into_head(self) -> NonNull<RcuHead>;
+
+    /// # Safety
+    /// @head is into_head()'s, not yet taken back.
+    unsafe fn from_head(head: NonNull<RcuHead>) -> Self;
+}
+
+impl Flavor<'_> {
+    /// @f(@p) a grace period on: call_rcu(). @f captures nothing - an
+    /// rcu_head has room for a function, not its state; what it needs is @p.
+    pub fn call<P: RcuOwned + Send, F: Fn(P) + Copy>(self, p: P, _f: F) {
+        const { assert!(size_of::<F>() == 0, "call()'s callback can't capture: an rcu_head has no room") };
+        unsafe { self.call_raw(p.into_head().as_ptr().cast(), callback::<P, F>) };
+    }
+}
+
+unsafe extern "C" fn callback<P: RcuOwned, F: Fn(P) + Copy>(head: *mut c::rcu_head) {
+    let p = unsafe { P::from_head(NonNull::new_unchecked(head.cast())) };
+    // F is zero-sized, so this is its one value
+    let f = unsafe { NonNull::<F>::dangling().read() };
+    f(p)
+}
+
 /// What holds without owning, or owns as its T says: borrows and pointers,
 /// which free nothing; an ARef, whose last put frees T as T says. The
 /// kernel's Box and Vec, as their T would, are os::alloc's.

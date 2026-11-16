@@ -300,7 +300,7 @@ unsafe fn btree_iter_exit(c: *mut Fs) {
         }
     });
 
-    /* Drain pending trans_rcu_free callbacks before the pool is gone. */
+    /* Drain pending PooledTrans frees before the pool is gone. */
     Flavor::RCU.barrier();
 }
 
