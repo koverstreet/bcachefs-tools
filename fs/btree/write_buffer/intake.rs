@@ -387,9 +387,10 @@ impl<'a> Intake<'a> {
     /// retyped to btree keys.
     pub fn entry(&mut self, i: &mut jset_entry<Unvalidated>) -> Result<(), BchError> {
         let btree = Btree(i.btree_id.into());
-        for k in i.entries_mut() {
-            let Ok(mut k) = k else { break };
-            self.key_to_wb(btree, unsafe { &*BkeyI::from_raw(k.as_mut_ptr()) })?;
+        let keys = i.arm::<c::jset_entry_write_buffer_keys<Unvalidated>>().expect("a write buffer keys entry");
+        for k in keys.entries() {
+            let Ok(k) = k else { break };
+            self.key_to_wb(btree, unsafe { &*BkeyI::from_raw(k.as_bytes().as_ptr().cast()) })?;
         }
 
         i.type_ = c::JsetEntryType::btree_keys.0 as u8;

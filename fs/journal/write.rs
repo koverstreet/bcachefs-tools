@@ -940,7 +940,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
          * add them to this journal entry:
          */
         if ty == c::JsetEntryType::btree_root {
-            fs.journal_entry_to_btree_root(i);
+            fs.journal_entry_to_btree_root(i.arm().expect("a btree root entry, its type says"));
             btree_roots_have |= 1 << i.btree_id;
         } else if ty == c::JsetEntryType::write_buffer_keys {
             let intake = wb.as_mut().expect("write buffer keys in a journal entry not flushing to the write buffer");

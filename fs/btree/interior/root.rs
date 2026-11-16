@@ -17,7 +17,6 @@ use crate::debug::trace::events;
 use crate::errcode::BchError;
 use crate::format::{BkeyType, Btree};
 use crate::fs::Fs;
-use crate::format::jset_entry;
 use crate::prt;
 use crate::util::Printbuf;
 use crate::util::printbuf::ToText;
@@ -88,7 +87,7 @@ impl Fs {
 
     /// A btree root as a journal entry has it, propagated back to the
     /// in-memory roots: as each journal write is made.
-    pub(crate) fn journal_entry_to_btree_root(&self, entry: &mut jset_entry<Unvalidated>) {
+    pub(crate) fn journal_entry_to_btree_root(&self, root: &c::jset_entry_btree_root<Unvalidated>) {
         /*
          * The on-disk root fields (key/level/alive) are owned by root_lock:
          * that's what bch2_btree_set_root_inmem() takes for ->b, and what the
@@ -97,9 +96,9 @@ impl Fs {
          * dragged interior_updates.lock into the journal write path under
          * sb_lock — closing a lockdep cycle with pin_resize_lock.
          */
-        let (btree, level) = (entry.btree_id, entry.level);
-        let Some(Ok(mut k)) = entry.entries_mut().next() else { panic!("a btree root entry with no key") };
-        let k = unsafe { &*BkeyI::from_raw(k.as_mut_ptr()) };
+        let (btree, level) = (root.entry.btree_id, root.entry.level);
+        let Some(Ok(k)) = root.entries().next() else { panic!("a btree root entry with no key") };
+        let k = unsafe { &*BkeyI::from_raw(k.as_bytes().as_ptr().cast()) };
 
         let mut g = self.btree.cache.roots.lock();
         let r = g.get_mut(btree.into()).expect("a journalled root of a btree there's no slot for");

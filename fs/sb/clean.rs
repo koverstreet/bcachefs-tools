@@ -125,9 +125,11 @@ type Key<'a> = VstructRef<'a, c::bkey_i, Validated>;
 fn btree_root<'a>(mut entries: impl Iterator<Item = &'a c::jset_entry>, id: u32)
     -> Option<(u8, Option<Key<'a>>)>
 {
-    let e = entries.find(|e| e.type_() == c::JsetEntryType::btree_root &&
-                              u32::from(e.btree_id) == id)?;
-    Some((e.level, e.entries().next()))
+    let r = entries.find_map(|e| match e.typed() {
+        Ok(c::JsetEntryRef::btree_root(r)) if u32::from(r.entry.btree_id) == id => Some(r),
+        _ => None,
+    })?;
+    Some((r.entry.level, r.entries().next()))
 }
 
 /// A btree root's key in an error message.

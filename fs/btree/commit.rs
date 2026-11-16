@@ -40,7 +40,7 @@ use crate::util::refcount::TryRefcount;
 use crate::init::recovery::NotRw;
 use crate::os::sched;
 use crate::util::time_stats::TimeStats;
-use crate::util::vstructs::{plain_bytes, EntryWalk, Unsized, Unvalidated, Validated};
+use crate::util::vstructs::{plain_bytes, EntryWalk, Validated};
 use crate::{bch_err, fs_fatal_error, fs_inconsistent, prt};
 
 const JSET_ENTRY_LOG_U64S: usize = 4;
@@ -86,14 +86,15 @@ fn for_each_journal_entry(t: &TransAttempt<'_, '_>,
     t.trans().journal_entries.get().iter(t, |mut entries| entries.try_for_each(f))
 }
 
-fn is_keys_entry(e: &c::jset_entry<Validated>) -> bool {
-    let ty = c::JsetEntryType(e.type_.into());
-    ty == c::JsetEntryType::btree_keys || ty == c::JsetEntryType::write_buffer_keys
-}
-
+/// A btree_keys or write_buffer_keys entry's keys: none of any other's.
 fn for_each_entry_key(e: &c::jset_entry<Validated>,
                       mut f: impl FnMut(&BkeyI) -> Result<(), BchError>) -> Result<(), BchError> {
-    e.entries().try_for_each(|k| f(k.key()))
+    let mut keys = match e.typed() {
+        Ok(c::JsetEntryRef::btree_keys(k))        => k.entries(),
+        Ok(c::JsetEntryRef::write_buffer_keys(k)) => k.entries(),
+        _ => return Ok(()),
+    };
+    keys.try_for_each(|k| f(k.key()))
 }
 
 impl BtreeTrans<'_> {
@@ -328,17 +329,14 @@ impl BtreeTrans<'_> {
         }
 
         for_each_journal_entry(t, |i| {
-            if is_keys_entry(i) {
-                for_each_entry_key(i, |k| {
-                    if journal_overlay::check_or_overwrite(jk, g, Btree(i.btree_id.into()), i.level.into(), k.k.p,
-                                                           check) {
-                        Err(BchError::from(Errcode::transaction_restart_journal_overwrites_changed))
-                    } else {
-                        Ok(())
-                    }
-                })?;
-            }
-            Ok(())
+            for_each_entry_key(i, |k| {
+                if journal_overlay::check_or_overwrite(jk, g, Btree(i.btree_id.into()), i.level.into(), k.k.p,
+                                                       check) {
+                    Err(BchError::from(Errcode::transaction_restart_journal_overwrites_changed))
+                } else {
+                    Ok(())
+                }
+            })
         }).is_err()
     }
 
@@ -481,15 +479,11 @@ impl BtreeTrans<'_> {
         }
 
         for_each_journal_entry(t, |i| {
-            if is_keys_entry(i) {
-                let btree = Btree(i.btree_id.into());
-                for_each_entry_key(i, |k| journal_overlay::insert(not_rw, btree, i.level.into(), k))?;
-            }
+            let btree = Btree(i.btree_id.into());
+            for_each_entry_key(i, |k| journal_overlay::insert(not_rw, btree, i.level.into(), k))?;
 
-            if c::JsetEntryType(i.type_.into()) == c::JsetEntryType::btree_root {
-                let e = <c::jset_entry<Unvalidated> as Unsized>::from_raw_mut(ptr::from_ref(i).cast_mut().cast(),
-                                                                             size_of_val(i));
-                fs.journal_entry_to_btree_root(unsafe { &mut *e });
+            if let Ok(c::JsetEntryRef::btree_root(r)) = i.typed() {
+                fs.journal_entry_to_btree_root(r.as_unvalidated());
             }
             Ok(())
         })?;

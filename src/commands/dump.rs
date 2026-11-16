@@ -257,7 +257,7 @@ fn sanitize_journal(fs: &Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
             if matches!(entry_type(e), JsetEntryType::btree_keys
                                      | JsetEntryType::btree_root
                                      | JsetEntryType::write_buffer_keys) {
-                for k in e.entries_mut() {
+                for k in e.keys_mut().into_iter().flatten() {
                     let k = k.map_err(|e| anyhow!("journal entry at {pos:#x}: {e}"))?;
                     // SAFETY: XXX: off disk, not validated - sanitize_val()
                     // should take an Unvalidated key

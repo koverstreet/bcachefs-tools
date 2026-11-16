@@ -74,7 +74,8 @@
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by_self, from_bytes_mut, vstruct,
-                            Head, FlexArray, Unvalidated, VStructError, VstructMut, VstructRef};
+                            Head, FlexArray, Unvalidated, Validated, VStructError, ViewEntries, VstructMut,
+                            VstructRef, VstructRefEntriesMut};
 use crate::btree::bkey::BkeyPHeader;
 use core::mem::offset_of;
 use cstruct_macros::{bitfield, bch_enum, grown, tagged_union, unsized_vstruct, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
@@ -933,7 +934,7 @@ pub struct bch_sb_field_crypt_kdf_flags {
  * On clean shutdown, store btree roots and current journal sequence number in
  * the superblock:
  */
-#[unsized_vstruct(u64s = u64s, entries = thin c::bkey_i)]
+#[unsized_vstruct(u64s = u64s)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry {
@@ -1669,6 +1670,35 @@ macro_rules! jset_entry_keys {
 }
 jset_entry_keys!(jset_entry_btree_keys, jset_entry_btree_root, jset_entry_overwrite,
                  jset_entry_write_buffer_keys, jset_entry_log_bkey);
+
+impl jset_entry<Validated> {
+    /// Its keys, if its payload is keys: None for any other entry.
+    pub fn keys(&self) -> Option<ViewEntries<'_, c::bkey_i>> {
+        Some(match self.typed().ok()? {
+            JsetEntryRef::btree_keys(e)        => e.entries(),
+            JsetEntryRef::btree_root(e)        => e.entries(),
+            JsetEntryRef::overwrite(e)         => e.entries(),
+            JsetEntryRef::write_buffer_keys(e) => e.entries(),
+            JsetEntryRef::log_bkey(e)          => e.entries(),
+            _ => return None,
+        })
+    }
+}
+
+impl jset_entry<Unvalidated> {
+    /// keys(), mutably, each checked against what's left of the entry.
+    pub fn keys_mut(&mut self) -> Option<VstructRefEntriesMut<'_, c::bkey_i>> {
+        Some(match JsetEntryType(self.type_.into()) {
+            JsetEntryType::btree_keys        => self.arm_mut::<jset_entry_btree_keys<Unvalidated>>()?.entries_mut(),
+            JsetEntryType::btree_root        => self.arm_mut::<jset_entry_btree_root<Unvalidated>>()?.entries_mut(),
+            JsetEntryType::overwrite         => self.arm_mut::<jset_entry_overwrite<Unvalidated>>()?.entries_mut(),
+            JsetEntryType::write_buffer_keys =>
+                self.arm_mut::<jset_entry_write_buffer_keys<Unvalidated>>()?.entries_mut(),
+            JsetEntryType::log_bkey          => self.arm_mut::<jset_entry_log_bkey<Unvalidated>>()?.entries_mut(),
+            _ => return None,
+        })
+    }
+}
 
 /* Legacy, no longer written: */
 #[unsized_vstruct(u64s = entry.u64s)]

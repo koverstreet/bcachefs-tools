@@ -169,7 +169,7 @@ fn entry_matches_range(
         return false;
     }
 
-    entry.entries().any(|k| bkey_matches_range(entry, &k, range))
+    entry.keys().is_some_and(|mut keys| keys.any(|k| bkey_matches_range(entry, &k, range)))
 }
 
 fn transaction_matches_transaction_filter(
@@ -317,7 +317,7 @@ fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
 }
 
 fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
-    for k in entry.entries() {
+    for k in entry.keys().into_iter().flatten() {
         let t = entry_type(entry);
         t.to_text(out);
         write!(out, ": ");

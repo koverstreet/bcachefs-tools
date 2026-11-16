@@ -973,14 +973,11 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
 
         for entry in j.entries() {
             let rewind = seq_rewound && entry.level == 0 && !btree_id_is_alloc(entry.btree_id.into());
-            let want = if rewind {
-                c::JsetEntryType::overwrite
-            } else {
-                c::JsetEntryType::btree_keys
+            let entry_keys = match entry.typed() {
+                Ok(c::JsetEntryRef::btree_keys(k)) if !rewind => k.entries(),
+                Ok(c::JsetEntryRef::overwrite(k))  if rewind  => k.entries(),
+                _ => continue,
             };
-            if u32::from(entry.type_) != want.0 {
-                continue;
-            }
 
             /*
              * Keys from before the replay start are only for the journal
@@ -991,7 +988,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
                 continue;
             }
 
-            for k in entry.entries() {
+            for k in entry_keys {
                 let mut n = ::pin_init::zeroed::<c::journal_key>();
                 n.id = c::journal_key_id::new()
                     .with_btree_id(Btree(entry.btree_id.into()))
