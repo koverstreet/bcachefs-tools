@@ -1,20 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! RCU, for userspace, for util/rcu.rs: liburcu's memb flavor, which C's is
-//! too. SRCU is RCU here: a domain has nothing of its own to read under or
-//! wait on, and its grace periods are RCU's.
+//! too, and SRCU domains on it: srcu.rs.
 
 #[path = "../rcu.rs"]
 mod common;
 pub use common::*;
 
 use crate::c;
-use crate::errcode::BchError;
 use crate::locking::MemallocFlags;
-use crate::os::lockdep::LockClass;
-use core::ffi::{c_int, CStr};
 use core::marker::PhantomData;
-use pin_init::PinInit;
 
 /// Not Send: the section is the thread's. A NORECLAIM scope while it lives.
 pub struct ReadGuard {
@@ -37,80 +32,68 @@ impl Drop for ReadGuard {
     }
 }
 
-/// An SRCU domain: nothing of its own here.
-#[repr(C)]
-pub struct Srcu([u8; 0]);
-
-impl Srcu {
-    pub fn new(_name: &'static CStr, _key: LockClass) -> impl PinInit<Self, BchError> {
-        unsafe { ::pin_init::pin_init_from_closure(|_slot: *mut Self| Ok(())) }
-    }
-
-    pub fn read_lock(&self) -> SrcuReadGuard<'_> {
-        unsafe { SrcuReadGuard::from_raw(self, 0) }
-    }
-
-    fn read_unlock(&self, _idx: c_int) {}
-
-    /// Its grace periods, for what waits on or queues to them: RCU's.
-    pub fn flavor(&self) -> Flavor<'_> {
-        Flavor(PhantomData)
-    }
-}
-
-impl Drop for Srcu {
-    fn drop(&mut self) {
-        // what's queued through a flavor() outlives its borrow
-        self.flavor().barrier();
-    }
-}
+pub use super::srcu::Srcu;
 
 pub fn synchronize() {
     unsafe { c::synchronize_rcu() };
 }
 
-/// How many grace periods back a poll's cookies may be pending at once, as
-/// the shim's srcu.h had it.
+/// How many grace periods back a poll's cookies may be pending at once: the
+/// running one's and the next's - liburcu's start_poll_synchronize_rcu()
+/// names one or the other, and a domain's get_state() the same.
 pub const NUM_ACTIVE_POLL_OLDSTATE: usize = 2;
 
-/// A grace period, as the poll API's cookie names one.
-#[derive(Clone, Copy, Default)]
-pub struct GpCookie(c::urcu_gp_poll_state);
+/// A grace period, as the poll API's cookie names one: RCU's grace_period_id,
+/// or a domain's gp_seq.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct GpCookie(pub(super) u64);
 
-impl PartialEq for GpCookie {
-    fn eq(&self, o: &Self) -> bool {
-        self.0.grace_period_id == o.0.grace_period_id
-    }
-}
-
-/// Which RCU: RCU, or an SRCU domain's, borrowed - which is RCU here.
+/// Which RCU: RCU, liburcu's memb flavor, or an SRCU domain's, borrowed.
 #[derive(Clone, Copy)]
-pub struct Flavor<'a>(PhantomData<&'a Srcu>);
+pub struct Flavor<'a>(Option<&'a Srcu>);
 
 impl Flavor<'static> {
-    pub const RCU: Self = Flavor(PhantomData);
+    pub const RCU: Self = Flavor(None);
 }
 
 impl<'a> Flavor<'a> {
-    /// The grace period a reader now would have to be past:
-    /// start_poll_synchronize_rcu(), liburcu having no get_state.
+    pub(super) fn srcu(srcu: &'a Srcu) -> Self {
+        Flavor(Some(srcu))
+    }
+
+    /// The grace period a reader now would have to be past, without starting
+    /// one - RCU's started, liburcu having no get_state.
     pub fn get_state(self) -> GpCookie {
-        GpCookie(unsafe { c::start_poll_synchronize_rcu() })
+        match self.0 {
+            Some(srcu) => srcu.get_state(),
+            None       => self.start_poll(),
+        }
     }
 
     /// get_state(), and that grace period started: start_poll_synchronize_rcu().
     pub fn start_poll(self) -> GpCookie {
-        GpCookie(unsafe { c::start_poll_synchronize_rcu() })
+        match self.0 {
+            Some(srcu) => srcu.start_poll(),
+            None       => GpCookie(unsafe { c::start_poll_synchronize_rcu() }.grace_period_id as u64),
+        }
     }
 
     /// Whether @c's grace period is over: poll_state_synchronize_rcu().
     pub fn poll(self, c: GpCookie) -> bool {
-        unsafe { c::poll_state_synchronize_rcu(c.0) }
+        match self.0 {
+            Some(srcu) => srcu.poll(c),
+            None       => unsafe {
+                c::poll_state_synchronize_rcu(c::urcu_gp_poll_state { grace_period_id: c.0 as _ })
+            },
+        }
     }
 
     /// Every callback queued with call() run: rcu_barrier().
     pub fn barrier(self) {
-        unsafe { c::rcu_barrier() };
+        match self.0 {
+            Some(srcu) => srcu.barrier(),
+            None       => unsafe { c::rcu_barrier() },
+        }
     }
 
     /// @func(@head) a grace period on: call_rcu().
@@ -118,6 +101,9 @@ impl<'a> Flavor<'a> {
     /// # Safety
     /// @head isn't queued already, and lives until @func runs.
     pub unsafe fn call(self, head: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head)) {
-        unsafe { c::call_rcu(head, Some(func)) };
+        match self.0 {
+            Some(srcu) => unsafe { srcu.call(head, func) },
+            None       => unsafe { c::call_rcu(head, Some(func)) },
+        }
     }
 }

@@ -26,6 +26,7 @@ pub mod rwsem;
 pub mod sched;
 pub mod shrinker;
 pub mod spinlock;
+mod srcu;
 pub mod stacktrace;
 pub mod sysfs;
 pub mod workqueue;
