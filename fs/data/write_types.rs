@@ -85,6 +85,9 @@ unsafe impl<R: IoRefIdx> crate::util::bio::HasBio for c::bch_write_bio<R> {
     const BIO_OFFSET: usize = core::mem::offset_of!(c::bch_write_bio, bio);
 }
 
+// no thread's, as its bio is: submitted on one, completed on another
+unsafe impl<R: IoRefIdx> Send for c::bch_write_bio<R> {}
+
 const _: () = assert!(core::mem::offset_of!(c::bch_write_bio, bio) + size_of::<crate::util::bio::Bio>() ==
                       size_of::<c::bch_write_bio>(), "bch_write_bio: its bio isn't last");
 

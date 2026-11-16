@@ -26,6 +26,7 @@ use core::alloc::Layout;
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicU16, AtomicUsize, Ordering::Relaxed};
+use cstruct_macros::args_stored_once;
 use pin_init::{stack_pin_init, PinInit};
 
 /// The replicas' clones: a write has each only while it's in flight, and
@@ -111,8 +112,9 @@ impl<R: IoRefIdx> Gathered<ReplicaErrs> for c::bch_write_bio<R> {
     }
 }
 
-/// A clone's write bio, made where its box has it: its bio there already.
-fn clone_init<R: IoRefIdx>(_: BioInPlace) -> impl PinInit<c::bch_write_bio<R>, BchError> {
+/// A write bio, made where its box has it - a clone's, or a btree node write
+/// task's: its bio there already.
+pub(crate) fn wbio_in_place<R: IoRefIdx>(_: BioInPlace) -> impl PinInit<c::bch_write_bio<R>, BchError> {
     unsafe {
         ::pin_init::pin_init_from_closure(|w: *mut c::bch_write_bio<R>| {
             (&raw mut (*w).wbio).write(::pin_init::zeroed());
@@ -122,14 +124,33 @@ fn clone_init<R: IoRefIdx>(_: BioInPlace) -> impl PinInit<c::bch_write_bio<R>, B
     }
 }
 
-/// @wbio - its bio mapped, its op set - written to each device of @k's
-/// pointers, by itself to the last and by clones of it to the others: the
-/// replicas that failed, once all are done, resumed @at. With @cas, a nocow
-/// write's io refs, one per pointer, which the bios are given.
-pub async fn write_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write_bio<R>>, ty: DataType,
-                                         k: &BkeyI, mut cas: Option<&mut [Option<DevIoRef<R>>]>, at: Resume<'_>)
+/// @buf, by @wbio - a write, its bio mapped to @buf for the IO - written to
+/// each device of @k's pointers, by itself to the last and by clones of it
+/// to the others: the replicas that failed, once all are done, resumed @at.
+/// With @cas, a nocow write's io refs, one per pointer, which the bios are
+/// given.
+#[args_stored_once]
+pub async fn write_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write_bio<R>>, buf: &[u8],
+                                         ty: DataType, k: &BkeyI, cas: Option<&mut [Option<DevIoRef<R>>]>,
+                                         at: Resume<'_>)
     -> ReplicaErrs
 {
+    assert_eq!(wbio.bio.op(), c::req_op_REQ_OP_WRITE, "write_replicas() of a bio for another op");
+    assert_eq!(wbio.bio.raw().bi_vcnt, 0, "write_replicas() of a bio with buffers mapped already");
+    /* mapped while @buf's borrowed: emptied once every replica's done */
+    unsafe { wbio.as_mut().bio_mut().map(buf.as_ptr().cast_mut(), buf.len()) };
+
+    stack_pin_init!(let g = Gather::<ReplicaErrs, waiter::Async>::new());
+    submit_replicas(fs, wbio.as_mut(), ty, k, cas, &g);
+    let errs = g.wait(at).await;
+
+    wbio.bio_mut().truncate_vecs(0);
+    errs
+}
+
+/// write_replicas()'s bios, each submitted into @g.
+fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write_bio<R>>, ty: DataType, k: &BkeyI,
+                                mut cas: Option<&mut [Option<DevIoRef<R>>]>, g: &Gather<ReplicaErrs, waiter::Async>) {
     let ptrs = BkeySC::from(k).arm::<Ptrs>().expect("writing a key with no pointers");
     let nocow = cas.is_some();
 
@@ -141,7 +162,6 @@ pub async fn write_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::
     let last = devs().count();
     assert!(last != 0, "writing with no devices");
 
-    stack_pin_init!(let g = Gather::<ReplicaErrs, waiter::Async>::new());
     for (i, ptr) in devs().enumerate() {
         let ca = match &mut cas {
             Some(cas) => Some(cas[i].take().expect("a nocow write without its io refs")),
@@ -184,7 +204,7 @@ pub async fn write_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::
             let mut n = {
                 let _noio = MemallocFlags::noio();
                 BioBox::<c::bch_write_bio<R>, BioClone<'_>, ReplicaClones>::new_with_in(
-                    ReplicaClones, ptr::null_mut(), opf, HasBio::bio(&*wbio).range(), clone_init)
+                    ReplicaClones, ptr::null_mut(), opf, HasBio::bio(&*wbio).range(), wbio_in_place)
             }.expect("a replica's clone: its pool waits for an element");
 
             if set_up(n.as_mut()) {
@@ -198,6 +218,4 @@ pub async fn write_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::
             g.get().put(wbio.as_mut().done(Ok(())));
         }
     }
-
-    g.wait(at).await
 }

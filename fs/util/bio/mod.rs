@@ -241,7 +241,7 @@ impl Bio {
             .contains(&self.op())
     }
 
-    fn op(&self) -> u32 {
+    pub(crate) fn op(&self) -> u32 {
         req_op(self.bio.bi_opf)
     }
 
