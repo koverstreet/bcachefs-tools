@@ -286,7 +286,7 @@ macro_rules! vstruct_container {
             pub fn entries(&self)
                 -> $crate::util::vstructs::ValidatedEntries<'_, $entry<$crate::util::vstructs::Validated>>
             {
-                $crate::util::vstructs::ValidatedEntries::new(self.start_bytes())
+                $crate::util::vstructs::ValidatedEntries::of(self)
             }
         }
 
@@ -304,12 +304,12 @@ macro_rules! vstruct_container {
             }
         }
 
-        $crate::util::vstructs::vstruct_container!(@start $t);
+        $crate::util::vstructs::vstruct_container!(@start $t, $entry<$crate::util::vstructs::Validated>);
     } };
     ($t:ident, thin $entry:ty) => { $crate::paste! {
         impl $t<$crate::util::vstructs::Validated> {
             pub fn entries(&self) -> $crate::util::vstructs::ViewEntries<'_, $entry> {
-                unsafe { $crate::util::vstructs::ViewEntries::new(self.start_bytes()) }
+                $crate::util::vstructs::ViewEntries::of(self)
             }
         }
 
@@ -323,11 +323,19 @@ macro_rules! vstruct_container {
             }
         }
 
-        $crate::util::vstructs::vstruct_container!(@start $t);
+        $crate::util::vstructs::vstruct_container!(@start $t, $entry);
     } };
-    (@start $t:ident) => { $crate::paste! {
+    (@start $t:ident, $entry:ty) => { $crate::paste! {
         $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Unvalidated>, [<$t _head>]);
         $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Validated>, [<$t _head>]);
+
+        unsafe impl $crate::util::vstructs::Container for $t<$crate::util::vstructs::Validated> {
+            type Entry = $entry;
+
+            fn entry_bytes(&self) -> &[u8] {
+                self.start_bytes()
+            }
+        }
 
         impl $t<$crate::util::vstructs::Unvalidated> {
             /// start_bytes(), mutably: for entries_mut().
@@ -1384,6 +1392,18 @@ pub(crate) fn bytes_of_mut<T: Unsized + ?Sized>(v: &mut T) -> &mut [u8] {
     unsafe { core::slice::from_raw_parts_mut((v as *mut T).cast::<u8>(), len) }
 }
 
+/// A Validated vstruct whose entries follow its start[]: vstruct_container!()'s.
+/// What its Validated walks are made from, so its entries' state is its own.
+///
+/// # Safety
+/// entry_bytes() are its entries, each Validated and as long as its header
+/// says, one after another from the first.
+pub unsafe trait Container {
+    type Entry: ?Sized;
+
+    fn entry_bytes(&self) -> &[u8];
+}
+
 /// A Validated container's entries, each an &E of exactly its own bytes:
 /// vstruct_for_each(), its counts trusted, as C trusts them. One that
 /// doesn't fit, or says it's shorter than its header - which would never end
@@ -1397,6 +1417,11 @@ impl<'a, E: ?Sized> ValidatedEntries<'a, E> {
     /// The entries in @rest: a container's, from its start[].
     pub(crate) fn new(rest: &'a [u8]) -> Self {
         Self { rest, _entry: PhantomData }
+    }
+
+    /// @c's entries.
+    pub fn of<C: Container<Entry = E> + ?Sized>(c: &'a C) -> Self {
+        Self { rest: c.entry_bytes(), _entry: PhantomData }
     }
 }
 
@@ -1537,6 +1562,11 @@ impl<'a, E> ViewEntries<'a, E> {
     /// @rest is whole entries, aligned, each as long as its header says.
     pub(crate) unsafe fn new(rest: &'a [u8]) -> Self {
         Self { rest, at: 0, _entry: PhantomData }
+    }
+
+    /// @c's entries.
+    pub fn of<C: Container<Entry = E> + ?Sized>(c: &'a C) -> Self {
+        Self { rest: c.entry_bytes(), at: 0, _entry: PhantomData }
     }
 }
 
