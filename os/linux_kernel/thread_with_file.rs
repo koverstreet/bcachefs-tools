@@ -73,7 +73,7 @@ use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
 /* ThreadWithFile */
 
-pub trait ThreadFile: FileOps + FreeAnytime {
+pub trait ThreadFile: FileOps<Data = Inner<Self>> + FreeAnytime {
     /// At close, before the thread's stopped: wake it from whatever it's
     /// blocked on that only the file would end.
     fn closing(&self) {}
@@ -413,23 +413,25 @@ pub struct Stdio<T> {
 
 #[vtable]
 impl<T: StdioFile> FileOps for Stdio<T> {
-    fn read(&self, file: &File, buf: &mut UserBuf) -> Result<(), BchError> {
+    type Data = Inner<Self>;
+
+    fn read(&self, file: &File<Self::Data>, buf: &mut UserBuf) -> Result<(), BchError> {
         self.redirect.read_user(buf, file.nonblock())
     }
 
-    fn write(&self, file: &File, buf: &mut UserBuf) -> Result<(), BchError> {
+    fn write(&self, file: &File<Self::Data>, buf: &mut UserBuf) -> Result<(), BchError> {
         self.redirect.write_user(buf, file.nonblock())
     }
 
-    fn poll(&self, file: &File, pt: PollTable<'_>) -> u32 {
+    fn poll(&self, file: &File<Self::Data>, pt: PollTable<'_>) -> u32 {
         self.redirect.poll(file, &pt)
     }
 
-    fn flush(&self, _file: &File) -> c_int {
+    fn flush(&self, _file: &File<Self::Data>) -> c_int {
         self.ret.load(Ordering::Relaxed)
     }
 
-    fn unlocked_ioctl(&self, _file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn unlocked_ioctl(&self, _file: &File<Self::Data>, cmd: c_uint, arg: c_ulong) -> c_long {
         self.data.ioctl(cmd, arg)
     }
 }

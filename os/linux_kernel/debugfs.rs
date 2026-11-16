@@ -44,6 +44,8 @@ unsafe impl<F: DebugFile> Sync for Open<F> {}
 
 #[vtable]
 impl<F: DebugFile> FileOps for Open<F> {
+    type Data = Self;
+
     fn open(inode: &Opaque<c::inode>, _file: &File) -> Result<Pin<KBox<Self>>, BchError> {
         // SAFETY: i_private is create_file()'s @obj, live for each op:
         // debugfs's proxy fails ops once the file's removed
@@ -57,7 +59,7 @@ impl<F: DebugFile> FileOps for Open<F> {
         }? BchError))
     }
 
-    fn read(&self, _file: &File, u: &mut UserBuf) -> Result<(), BchError> {
+    fn read(&self, _file: &File<Self>, u: &mut UserBuf) -> Result<(), BchError> {
         read_into(&mut self.reading.lock(), u)
     }
 }

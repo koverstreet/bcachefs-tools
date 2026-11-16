@@ -30,8 +30,10 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::KBox;
 use crate::util::ffi::{c_char, Opaque};
-use crate::os::ops::{from_raw, SelfOf};
+use crate::os::ops::{from_raw, FromRaw, SelfOf};
 use core::ffi::{c_int, CStr};
+use core::marker::PhantomData;
+use core::ops::Deref;
 use core::pin::Pin;
 
 #[cfg(kernel)]
@@ -39,8 +41,8 @@ use {
     crate::errcode::{errptr_to_result, loff_to_result, ret_to_result_void},
     crate::os::kernel::loff,
     crate::os::folio::Mapping,
+    crate::os::super_block::IsInode,
     core::ffi::{c_uint, c_void},
-    core::marker::PhantomData,
     core::mem::MaybeUninit,
     core::ptr::NonNull,
     kernel::fs::file::FileDescriptorReservation,
@@ -52,18 +54,62 @@ use {
 #[cfg(kernel)]
 use kernel::ffi::{c_long as CLong, c_ulong as CUlong};
 
+/// A file, open: of D's - its FileData, whose table dispatched it - or of
+/// any type, Any's.
 #[repr(transparent)]
-pub struct File(Opaque<c::file>);
+pub struct File<D = Any>(Opaque<c::file>, PhantomData<D>);
+
+/// What a File of no one type is of.
+pub enum Any {}
+
+impl<D> File<D> {
+    pub fn as_ptr(&self) -> *mut c::file {
+        self.0.as_ptr()
+    }
+}
+
+impl<D: FileData> File<D> {
+    /// # Safety
+    /// @f is an open file of D's - its file_operations FileVTable::<D>'s -
+    /// for 'a.
+    pub unsafe fn of_raw<'a>(f: *mut c::file) -> &'a Self {
+        unsafe { &*f.cast::<Self>() }
+    }
+
+    pub fn ops(&self) -> &D::Ops {
+        unsafe { D::ops_of(self.as_ptr()) }
+    }
+}
+
+impl<D: FileData> Deref for File<D> {
+    type Target = File;
+
+    fn deref(&self) -> &File {
+        unsafe { File::from_raw(self.as_ptr()) }
+    }
+}
+
+/// A file of a filesystem's own: its inode one of the filesystem's.
+///
+/// # Safety
+/// Every open file of Self's has an Inode as its f_inode.
+#[cfg(kernel)]
+pub unsafe trait FsFile: FileData {
+    type Inode: IsInode;
+}
+
+#[cfg(kernel)]
+impl<D: FsFile> File<D> {
+    pub fn inode(&self) -> &D::Inode {
+        unsafe { &*(*self.as_ptr()).f_inode.cast::<D::Inode>() }
+    }
+}
 
 impl File {
     /// # Safety
     /// @f is a file, open for 'a.
     pub unsafe fn from_raw<'a>(f: *mut c::file) -> &'a File {
         unsafe { &*f.cast::<File>() }
-    }
-
-    pub fn as_ptr(&self) -> *mut c::file {
-        self.0.as_ptr()
     }
 
     /// The dentry it was opened by.
@@ -230,8 +276,10 @@ crate::vfs_ops! {
             ops.owner = &raw mut kernel::bindings::__this_module;
         }
     };
+    type Data: FileData<Ops = Self>;
 
-    /// For a file opened by path: its private data.
+    /// For a file opened by path: its private data. The file isn't yet of
+    /// Data's - that's what this makes.
     fn open(inode: &Opaque<c::inode>, file: &File) -> Result<Pin<KBox<Self>>, BchError>
         => extern (inode: *mut c::inode, file: *mut c::file) -> c_int
     {
@@ -245,62 +293,71 @@ crate::vfs_ops! {
             Err(e) => e.class(),
         }
     };
-    fn read(&self = file, file: &File, buf: &mut UserBuf) -> Result<(), BchError>
+    fn read(&self = file, file: &File<Self::Data>, buf: &mut UserBuf) -> Result<(), BchError>
         => extern (file: *mut c::file, buf: *mut c_char, len: usize, _ppos: *mut c::loff_t) -> isize
     {
         let mut u = UserBuf::new(buf, len);
         // SAFETY: an open file of P's
-        let r = unsafe { P::ops_of(file).read(File::from_raw(file), &mut u) };
+        let r = unsafe { P::ops_of(file).read(File::<P>::of_raw(file), &mut u) };
         u.ret(r)
     };
     #[cfg(kernel)]
-    fn write(&self = file, file: &File, buf: &mut UserBuf) -> Result<(), BchError>
+    fn write(&self = file, file: &File<Self::Data>, buf: &mut UserBuf) -> Result<(), BchError>
         => extern (file: *mut c::file, buf: *const c_char, len: usize, _ppos: *mut c::loff_t) -> isize
     {
         let mut u = UserBuf::new(buf, len);
         // SAFETY: an open file of P's
-        let r = unsafe { P::ops_of(file).write(File::from_raw(file), &mut u) };
+        let r = unsafe { P::ops_of(file).write(File::<P>::of_raw(file), &mut u) };
         u.ret(r)
     };
     #[cfg(kernel)]
-    fn poll(&self = file, file: &File, pt: PollTable<'_>) -> u32;
+    fn poll(&self = file, file: &File<Self::Data>, pt: PollTable<'_>) -> u32;
     /// What close(2) returns.
     #[cfg(kernel)]
-    fn flush(&self = file, file: &File) -> c_int
+    fn flush(&self = file, file: &File<Self::Data>) -> c_int
         => extern (file: *mut c::file, _id: c::fl_owner_t) -> c_int
     {
         // SAFETY: an open file of P's
-        unsafe { P::ops_of(file).flush(File::from_raw(file)) }
+        unsafe { P::ops_of(file).flush(File::<P>::of_raw(file)) }
     };
     #[cfg(kernel)]
-    fn unlocked_ioctl(&self = file, file: &File, cmd: c_uint, arg: CUlong) -> CLong;
+    fn unlocked_ioctl(&self = file, file: &File<Self::Data>, cmd: c_uint, arg: CUlong) -> CLong;
     #[cfg(kernel)]
-    fn compat_ioctl(&self = file, file: &File, cmd: c_uint, arg: CUlong) -> CLong;
+    fn compat_ioctl(&self = file, file: &File<Self::Data>, cmd: c_uint, arg: CUlong) -> CLong;
     /// The new position.
     #[cfg(kernel)]
-    fn llseek(&self = file, file: &File, offset: i64, whence: c_int) -> Result<u64, BchError>;
+    fn llseek(&self = file, file: &File<Self::Data>, offset: i64, whence: c_int) -> Result<u64, BchError>;
     #[cfg(kernel)]
-    fn iterate_shared(&self = file, file: &File, ctx: *mut c::dir_context) -> Result<(), BchError>;
+    fn iterate_shared(&self = file, file: &File<Self::Data>, ctx: *mut c::dir_context) -> Result<(), BchError>;
     #[cfg(kernel)]
-    fn fsync(&self = file, file: &File, start: i64, end: i64, datasync: c_int)
+    fn fsync(&self = file, file: &File<Self::Data>, start: i64, end: i64, datasync: c_int)
         -> Result<(), BchError>;
     #[cfg(kernel)]
-    fn fallocate(&self = file, file: &File, mode: c_int, offset: i64, len: i64) -> Result<(), BchError>;
-    /// How much was remapped.
+    fn fallocate(&self = file, file: &File<Self::Data>, mode: c_int, offset: i64, len: i64)
+        -> Result<(), BchError>;
+    /// How much was remapped. @file_out is Data's too: the VFS remaps only
+    /// within a filesystem, between regular files.
     #[cfg(kernel)]
-    fn remap_file_range(&self = file_in, file_in: &File, pos_in: i64, file_out: &File, pos_out: i64,
-                        len: i64, remap_flags: c_uint) -> Result<u64, BchError>;
+    fn remap_file_range(&self = file_in, file_in: &File<Self::Data>, pos_in: i64,
+                        file_out: &File<Self::Data>, pos_out: i64, len: i64, remap_flags: c_uint)
+        -> Result<u64, BchError>;
     /// A mapping about to be made: its vm_ops, and whether it may be.
     #[cfg(kernel)]
     #[cfg(linux_ge = "6.17")]
     fn mmap_prepare(desc: &mut c::vm_area_desc) -> Result<(), BchError>;
     #[cfg(kernel)]
     #[cfg(not(linux_ge = "6.17"))]
-    fn mmap(&self = file, file: &File, vma: &mut c::vm_area_struct) -> Result<(), BchError>;
+    fn mmap(&self = file, file: &File<Self::Data>, vma: &mut c::vm_area_struct) -> Result<(), BchError>;
 }
 
 from_raw! {
     &'a File = *mut c::file => |r| File::from_raw(r);
+}
+
+/// An op's file, dispatched by D's table: of D's.
+impl<'a, D: FileData> FromRaw for &'a File<D> {
+    type Raw = *mut c::file;
+    unsafe fn from_raw(r: *mut c::file) -> Self { unsafe { File::of_raw(r) } }
 }
 
 #[cfg(kernel)]
@@ -332,7 +389,7 @@ impl<P: FileData> SelfOf<P> for *mut c::file {
 /// has, or something holding one, as a thread's file holds the thread, and
 /// what it runs on - made by open() or NewFile::new(), dropped at release.
 pub trait FileData: Sized + Send + Sync + 'static {
-    type Ops: FileOps;
+    type Ops: FileOps<Data = Self>;
 
     /// What FileOps::open() makes is the private data itself.
     const OPENABLE: bool = false;
@@ -361,7 +418,7 @@ pub trait FileData: Sized + Send + Sync + 'static {
     }
 }
 
-impl<T: FileOps> FileData for T {
+impl<T: FileOps<Data = T>> FileData for T {
     type Ops = T;
     const OPENABLE: bool = true;
 

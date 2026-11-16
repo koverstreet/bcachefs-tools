@@ -59,7 +59,7 @@ use crate::errcode::{errptr_to_result, ret_to_result_void};
 use crate::sb::members::{DevOuterRef, DevRef};
 use crate::{bch_err, bch_err_dev, bch_err_msg, bch_err_msg_dev, prt};
 use crate::os::kernel::{capable, Capability};
-use crate::os::thread_with_file::{ThreadFile, ThreadWithFile};
+use crate::os::thread_with_file::{Inner, ThreadFile, ThreadWithFile};
 use crate::data::moving::MoveStats;
 use core::mem::size_of;
 use core::ptr::NonNull;
@@ -691,7 +691,9 @@ fn data_job(job: &DataJob, _write_ref: WriteRef) {
 
 #[vtable]
 impl FileOps for DataJob {
-    fn read(&self, _file: &File, buf: &mut UserBuf) -> Result<(), BchError> {
+    type Data = Inner<Self>;
+
+    fn read(&self, _file: &File<Self::Data>, buf: &mut UserBuf) -> Result<(), BchError> {
         let fs = unsafe { self.fs.as_ref() };
         let stats = &self.stats;
         let (ret, data_type, pos) = (stats.ret.get(), stats.at.data_type.get(), stats.at.pos.get());
@@ -790,12 +792,14 @@ struct Ctl;
 
 #[vtable]
 impl FileOps for Ctl {
+    type Data = Self;
+
     fn open(inode: &Opaque<c::inode>, file: &File) -> Result<Pin<KBox<Self>>, BchError> {
         ret_to_result_void(unsafe { c::nonseekable_open(inode.as_ptr(), file.as_ptr()) })?;
         Ok(KBox::pin(Ctl, GFP_KERNEL)?)
     }
 
-    fn unlocked_ioctl(&self, file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn unlocked_ioctl(&self, file: &File<Self>, cmd: c_uint, arg: c_ulong) -> c_long {
         let user = UserPtr::from_addr(arg as usize);
         // SAFETY: an open file's inode, the device's
         let minor = unsafe { (*(*file.as_ptr()).f_inode).i_rdev } & ((1 << c::MINORBITS) - 1);

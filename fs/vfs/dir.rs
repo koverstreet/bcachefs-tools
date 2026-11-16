@@ -41,7 +41,7 @@ use crate::str_hash;
 use crate::util::alloc::KBox;
 use kernel::alloc::flags;
 use crate::util::ffi::{c_char, Opaque};
-use crate::os::file::{File, FileOps, FileVTable, UserBuf};
+use crate::os::file::{File, FileOps, FileVTable, FsFile, UserBuf};
 use crate::types::CStatic;
 use cstruct_macros::vtable;
 
@@ -138,8 +138,14 @@ impl Dir {
     }
 }
 
+unsafe impl FsFile for Dir {
+    type Inode = InodeInfo;
+}
+
 #[vtable]
 impl FileOps for Dir {
+    type Data = Self;
+
     // #[vtable] sees compat_ioctl() whether or not it's built
     const HAS_COMPAT_IOCTL: bool = cfg!(CONFIG_COMPAT);
 
@@ -148,12 +154,12 @@ impl FileOps for Dir {
     }
 
     /// generic_read_dir()'s: read(2) of a directory is EISDIR.
-    fn read(&self, _file: &File, _buf: &mut UserBuf) -> Result<(), BchError> {
+    fn read(&self, _file: &File<Self>, _buf: &mut UserBuf) -> Result<(), BchError> {
         Err(BchError::from(c::EISDIR))
     }
 
     /// A 32-bit reader's positions are cookies, up to READDIR_32_EOF.
-    fn llseek(&self, file: &File, offset: i64, whence: c_int) -> Result<u64, BchError> {
+    fn llseek(&self, file: &File<Self>, offset: i64, whence: c_int) -> Result<u64, BchError> {
         let max = if dirents_32bit(file) { READDIR_32_EOF as u64 } else { u64::MAX };
 
         // SAFETY: llseek
@@ -161,8 +167,8 @@ impl FileOps for Dir {
         file.generic_llseek_size(offset, whence, max, max)
     }
 
-    fn iterate_shared(&self, file: &File, ctx: *mut c::dir_context) -> Result<(), BchError> {
-        let inode = unsafe { InodeInfo::of_file(file) };
+    fn iterate_shared(&self, file: &File<Self>, ctx: *mut c::dir_context) -> Result<(), BchError> {
+        let inode = file.inode();
         let fs = inode.fs();
         let hash = &mut str_hash::hash_info_init(fs, &inode.inode())?;
 
@@ -207,16 +213,16 @@ impl FileOps for Dir {
         crate::bch_err_fn!(fs, ret)
     }
 
-    fn fsync(&self, file: &File, start: i64, end: i64, datasync: c_int) -> Result<(), BchError> {
-        fsync(unsafe { InodeInfo::of_file(file) }, file, start, end, datasync)
+    fn fsync(&self, file: &File<Self>, start: i64, end: i64, datasync: c_int) -> Result<(), BchError> {
+        fsync(file.inode(), file, start, end, datasync)
     }
 
-    fn unlocked_ioctl(&self, file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn unlocked_ioctl(&self, file: &File<Self>, cmd: c_uint, arg: c_ulong) -> c_long {
         fs_file_ioctl(file, cmd, arg)
     }
 
     #[cfg(CONFIG_COMPAT)]
-    fn compat_ioctl(&self, file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn compat_ioctl(&self, file: &File<Self>, cmd: c_uint, arg: c_ulong) -> c_long {
         super::ioctl::fs_file_compat_ioctl(file, cmd, arg)
     }
 }

@@ -74,7 +74,7 @@ use crate::errcode::{Errcode, ret_to_class, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
 use crate::types::CStatic;
-use crate::os::file::{File, FileData, FileOps, FileVTable};
+use crate::os::file::{File, FileData, FileOps, FileVTable, FsFile};
 use crate::os::kernel::{current_id, PAGE_SIZE};
 use crate::os::vm::{VmFault, VmFaultRet, VmOps, VmVTable};
 use core::cmp::{max, min};
@@ -191,7 +191,7 @@ impl VmOps for InodeInfo {
 /// A regular file's state: its inode's. Never made: there's nothing to make.
 /// FileVTable::<InodeInfo> would take the inode for private data - the
 /// blanket FileData of an ops type - and drop it at release: this is the one.
-pub(crate) enum InodeFile {}
+pub enum InodeFile {}
 
 impl FileData for InodeFile {
     type Ops = InodeInfo;
@@ -216,6 +216,10 @@ impl FileData for InodeFile {
     }
 }
 
+unsafe impl FsFile for InodeFile {
+    type Inode = InodeInfo;
+}
+
 /// A shared writable mapping is refused once the filesystem's gone emergency
 /// read-only: @flags the mapping's VM_*.
 fn mmap_check(fs: &Fs, flags: c_ulong) -> Result<(), BchError> {
@@ -228,6 +232,8 @@ fn mmap_check(fs: &Fs, flags: c_ulong) -> Result<(), BchError> {
 
 #[vtable]
 impl FileOps for InodeInfo {
+    type Data = InodeFile;
+
     // #[vtable] sees mmap() and mmap_prepare() whichever one is built
     #[cfg(linux_ge = "6.17")]
     const HAS_MMAP_PREPARE: bool = true;
@@ -248,7 +254,7 @@ impl FileOps for InodeInfo {
     }
 
     #[cfg(not(linux_ge = "6.17"))]
-    fn mmap(&self, file: &File, vma: &mut c::vm_area_struct) -> Result<(), BchError> {
+    fn mmap(&self, file: &File<InodeFile>, vma: &mut c::vm_area_struct) -> Result<(), BchError> {
         // SAFETY: vm_flags and __vm_flags are the one word
         mmap_check(self.fs(), unsafe { vma.__bindgen_anon_2.vm_flags })?;
         file.accessed();
@@ -256,29 +262,29 @@ impl FileOps for InodeInfo {
         Ok(())
     }
 
-    fn llseek(&self, file: &File, offset: i64, whence: c_int) -> Result<u64, BchError> {
+    fn llseek(&self, file: &File<InodeFile>, offset: i64, whence: c_int) -> Result<u64, BchError> {
         io::llseek(self, file, offset, whence)
     }
 
-    fn fsync(&self, file: &File, start: i64, end: i64, datasync: c_int) -> Result<(), BchError> {
+    fn fsync(&self, file: &File<InodeFile>, start: i64, end: i64, datasync: c_int) -> Result<(), BchError> {
         io::fsync(self, file, start, end, datasync)
     }
 
-    fn fallocate(&self, file: &File, mode: c_int, offset: i64, len: i64) -> Result<(), BchError> {
+    fn fallocate(&self, file: &File<InodeFile>, mode: c_int, offset: i64, len: i64) -> Result<(), BchError> {
         io::fallocate(self, file, mode, offset, len)
     }
 
-    fn remap_file_range(&self, file_in: &File, pos_in: i64, file_out: &File, pos_out: i64, len: i64,
-                        remap_flags: c_uint) -> Result<u64, BchError> {
+    fn remap_file_range(&self, file_in: &File<InodeFile>, pos_in: i64, file_out: &File<InodeFile>,
+                        pos_out: i64, len: i64, remap_flags: c_uint) -> Result<u64, BchError> {
         io::remap_file_range(self, file_in, pos_in, file_out, pos_out, len, remap_flags)
     }
 
-    fn unlocked_ioctl(&self, file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn unlocked_ioctl(&self, file: &File<InodeFile>, cmd: c_uint, arg: c_ulong) -> c_long {
         fs_file_ioctl(file, cmd, arg)
     }
 
     #[cfg(CONFIG_COMPAT)]
-    fn compat_ioctl(&self, file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn compat_ioctl(&self, file: &File<InodeFile>, cmd: c_uint, arg: c_ulong) -> c_long {
         super::ioctl::fs_file_compat_ioctl(file, cmd, arg)
     }
 }

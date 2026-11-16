@@ -23,6 +23,7 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
 use crate::util::bio::{Bio, Gathered};
 use crate::os::file::File;
+use super::file::InodeFile;
 use crate::util::gather::Gather;
 use crate::os::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, MAX_FILE_SIZE, PAGE_BYTES, PAGE_SECTORS,
                         PAGE_SECTORS_SHIFT};
@@ -781,9 +782,9 @@ fn quota_reserve_range(inode: &InodeInfo, res: &mut QuotaReservation<'_>, start:
     res.add(sectors, true)
 }
 
-pub(super) fn remap_file_range(src: &InodeInfo, file_src: &File, pos_src: i64, file_dst: &File, pos_dst: i64,
-                               len: i64, remap_flags: u32) -> Result<u64, BchError> {
-    let dst = unsafe { InodeInfo::of_file(file_dst) };
+pub(super) fn remap_file_range(src: &InodeInfo, file_src: &File, pos_src: i64, file_dst: &File<InodeFile>,
+                               pos_dst: i64, len: i64, remap_flags: u32) -> Result<u64, BchError> {
+    let dst = file_dst.inode();
     let fs = src.fs();
     let block_bytes = fs.block_bytes();
     let (pos_src, pos_dst, mut len) = (pos_src as u64, pos_dst as u64, len as u64);

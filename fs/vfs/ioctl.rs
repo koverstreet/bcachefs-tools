@@ -35,7 +35,7 @@ use crate::init::chardev::ioctl_ret;
 use crate::init::damage;
 use crate::namei;
 use crate::util::alloc::KVVec;
-use crate::os::file::File;
+use crate::os::file::{File, FsFile};
 use crate::os::ioctl::{arg, input, no_arg, output, vstruct, UserArg, UserStr};
 use crate::util::ioctl::{dir, Ioctl};
 use crate::os::kernel::{capable, current_fsgid, current_fsuid, current_umask, Capability};
@@ -156,16 +156,17 @@ fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Res
     }
 }
 
-pub(crate) fn fs_file_ioctl(file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
-    let inode = unsafe { InodeInfo::of_file(file) };
-    ioctl_ret(file_ioctl(file, inode, cmd, UserPtr::from_addr(arg as usize)))
+pub(crate) fn fs_file_ioctl<D: FsFile<Inode = InodeInfo>>(file: &File<D>, cmd: c_uint, arg: c_ulong) -> c_long {
+    ioctl_ret(file_ioctl(file, file.inode(), cmd, UserPtr::from_addr(arg as usize)))
 }
 
 /// A 32-bit caller's: the ioctls whose numbers differ only by their
 /// argument's size - misnamed, they take an int either way - as the native
 /// ones, and the label's.
 #[cfg(CONFIG_COMPAT)]
-pub(crate) fn fs_file_compat_ioctl(file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+pub(crate) fn fs_file_compat_ioctl<D: FsFile<Inode = InodeInfo>>(file: &File<D>, cmd: c_uint, arg: c_ulong)
+    -> c_long
+{
     let cmd = match cmd {
         c::FS_IOC32_GETFLAGS   => c::FS_IOC_GETFLAGS,
         c::FS_IOC32_SETFLAGS   => c::FS_IOC_SETFLAGS,
