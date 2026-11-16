@@ -60,6 +60,12 @@
 //! its task's box has no bio of its own: the promote's task is started with
 //! what was read as soon as that bio's given back, the fragment's task going
 //! on in its own memory.
+//!
+//! The futures' steps are out of line, #[inline(never)]: inlined, a step's
+//! transaction and iterator are in the poll's frame - under every await, and
+//! whatever the await runs on that stack. A step makes its Fragment into an
+//! Option its caller holds: one returned, or moved through the poll, is a
+//! copy of it in the frame.
 
 use crate::alloc::{background::bucket_read_time_reset, capacity::DiskReservation};
 use crate::btree::bkey::{pos, prelude::*, BkeyI, BkeySC};
@@ -803,8 +809,6 @@ fn read_opts<'o>(t: &TransAttempt<'_, '_>, orig: &'o Rbio, k: BkeySC<'_>, indire
     Ok(indirect.insert(get_io_opts(t, None, k)?))
 }
 
-// Out of line: inlined, its btree update is in the frame of every read's
-// fragment_of()
 #[inline(never)]
 fn read_inline(t: &TransAttempt<'_, '_>, read: &Rbio, mut r: BioRange<'_>, e: Extent<'_>, flags: F,
                in_retry: bool) -> Result<(), BchError> {
@@ -1610,8 +1614,6 @@ fn retry_fragment<'r, P: WalkPos>(read: &'r Rbio, at: Locate<'_>, walk: &mut Wal
     })
 }
 
-// Apart: what it makes isn't in the frame locate()'s walk of the btree runs
-// under
 #[inline(never)]
 fn retry_fragment_of<'r, P: WalkPos>(t: &TransAttempt<'_, '_>, read: &'r Rbio, e: Extent<'_>, walk: &mut Walk<'r, P>,
                                      failed: &mut FailureState, prev_read: &mut BkeyBuf, f: &mut Option<Fragment<'r>>)
@@ -1657,11 +1659,6 @@ async fn retry_walk(read: &Rbio, range: BioRange<'_>, at: Locate<'_>,
 }
 
 /// The key at @data_pos, into @sk, if it's still the one @pick was read from.
-// Out of line, as are the other steps of the read's futures: a step's
-// transaction and iterator, inlined, are in the poll's frame - under every
-// await, and whatever the await runs on this stack. And a step makes its
-// Fragment into the caller's Option: one returned, or moved through the poll,
-// is a copy of it in the frame.
 #[inline(never)]
 fn retry_key(fs: &Fs, data_btree: Btree, data_pos: Bpos, pick: &c::extent_ptr_decoded, sk: &mut BkeyBuf) {
     // @pick may have been moved to the part of the extent read, with
