@@ -1867,24 +1867,6 @@ pub trait ReadHooks {
 
 impl ReadHooks for () {}
 
-#[args_stored_once]
-pub async fn read<H: ReadHooks>(orig: &Rbio, inum: c::subvol_inum, flags: F, mut hooks: H) -> Result<(), BchError> {
-    stack_pin_init!(let reads = Reads::new());
-    let mut own = None;
-    let walked = read_walk(orig, inum, flags, &mut hooks, &reads, &mut own);
-    {
-        // the read's own bio's task: the fragment in the task's future alone,
-        // made where it lives, and the future gone before the wait below
-        stack_pin_init!(let own = init_with(|| own.map(|f| fragment_task(reads.get(), f, orig))));
-        if let Some(own) = own.as_pin_mut() {
-            own.await;
-        }
-    }
-    let ret = reads.wait(Resume::queue(Queue::system_dfl())).await;
-    orig.done();
-    walked.and(ret).and(orig.ret())
-}
-
 #[inline(never)]
 fn read_walk<'r, H: ReadHooks>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, hooks: &mut H, reads: &Reads,
                                own: &mut Option<Fragment<'r>>) -> Result<(), BchError> {
@@ -1940,4 +1922,22 @@ fn read_walk<'r, H: ReadHooks>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, h
         }
     }
     ret
+}
+
+#[args_stored_once]
+pub async fn read<H: ReadHooks>(orig: &Rbio, inum: c::subvol_inum, flags: F, mut hooks: H) -> Result<(), BchError> {
+    stack_pin_init!(let reads = Reads::new());
+    let mut own = None;
+    let walked = read_walk(orig, inum, flags, &mut hooks, &reads, &mut own);
+    {
+        // the read's own bio's task: the fragment in the task's future alone,
+        // made where it lives, and the future gone before the wait below
+        stack_pin_init!(let own = init_with(|| own.map(|f| fragment_task(reads.get(), f, orig))));
+        if let Some(own) = own.as_pin_mut() {
+            own.await;
+        }
+    }
+    let ret = reads.wait(Resume::queue(Queue::system_dfl())).await;
+    orig.done();
+    walked.and(ret).and(orig.ret())
 }
