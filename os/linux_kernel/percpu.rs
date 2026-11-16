@@ -151,6 +151,15 @@ mod arch {
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
 
+    /* the count only the count: debug and the preemptoff tracer make
+     * preempt_count_add() and _sub() calls */
+    const PREEMPT_INLINE: bool = !cfg!(any(CONFIG_DEBUG_PREEMPT, CONFIG_TRACE_PREEMPT_TOGGLE));
+
+    /* local_irq_save() and _restore() only pushf/cli and sti, or their
+     * paravirt patch sites - not traced - and local_lock_irqsave() only that:
+     * not RT's sleeping lock, no lockdep */
+    const IRQ_INLINE: bool = !cfg!(any(CONFIG_TRACE_IRQFLAGS, CONFIG_PREEMPT_RT, CONFIG_DEBUG_LOCK_ALLOC));
+
     macro_rules! per_cpu_word {
         ($($t:ty, $w:literal);*) => { $(
             impl PerCpuWord for $t {
@@ -232,7 +241,7 @@ mod arch {
     pub(super) fn preempt_disable() {
         if !PREEMPT_INLINE {
             unsafe { crate::c::bch2_preempt_disable() };
-        } else if PREEMPT_COUNT {
+        } else if cfg!(CONFIG_PREEMPT_COUNT) {
             unsafe { core::arch::asm!(preempt_count_inc_asm!(), options(att_syntax, nostack)) };
         } else {
             compiler_fence(SeqCst);
@@ -244,7 +253,7 @@ mod arch {
         if !PREEMPT_INLINE {
             return unsafe { crate::c::bch2_preempt_enable() };
         }
-        if !PREEMPT_COUNT {
+        if !cfg!(CONFIG_PREEMPT_COUNT) {
             return compiler_fence(SeqCst);
         }
         let resched: u8;
@@ -252,7 +261,7 @@ mod arch {
             core::arch::asm!(preempt_count_dec_asm!(), "sete {r}", r = out(reg_byte) resched,
                              options(att_syntax, nostack));
         }
-        if PREEMPTION && resched != 0 {
+        if cfg!(CONFIG_PREEMPTION) && resched != 0 {
             unsafe { crate::c::bch2_preempt_schedule() };
         }
     }
