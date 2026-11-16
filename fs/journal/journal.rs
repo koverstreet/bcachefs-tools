@@ -148,7 +148,6 @@ use crate::util::log::LogMsg;
 use crate::util::sleep::Sleep;
 use crate::util::printbuf::HumanReadable;
 use crate::util::vstructs::{plain_bytes, Head, SelfSized};
-use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;
 use crate::util::{Printbuf, ToText};
 use crate::{prt, warn_once};
@@ -1003,7 +1002,7 @@ impl c::journal {
                   Time::blocked_journal_pin_full,
                   Time::blocked_journal_buf_enomem,
                   Time::blocked_journal_stuck] {
-            fs.times[t as usize].track_event_change(false);
+            fs.times.get(t as usize).track_event_change(false);
         }
     }
 
@@ -1078,7 +1077,7 @@ impl c::journal {
                        (Errcode::journal_stuck,         Time::blocked_journal_stuck)]
             .into_iter().find(|&(e, _)| err == e.into());
         if let Some((_, t)) = blocked {
-            fs.times[t as usize].track_event_change(true);
+            fs.times.get(t as usize).track_event_change(true);
         }
 
         if err.matches(Errcode::operation_blocked) {
@@ -1351,7 +1350,7 @@ impl c::journal {
 
         /* Don't update time_stats when @seq is already flushed: */
         if ret == Ok(false) {
-            fs.times[c::TimeStat::journal_flush_seq as usize].update(start_time);
+            fs.times.get(c::TimeStat::journal_flush_seq as usize).update(start_time);
         }
 
         if self.lock.err_seq.get() != 0 && seq > self.lock.flushed_seq_ondisk.get() {
@@ -1509,7 +1508,7 @@ impl c::journal {
                     Some(new)
                 });
 
-                self.fs().times[c::TimeStat::blocked_journal_blocked as usize]
+                self.fs().times.get(c::TimeStat::blocked_journal_blocked as usize)
                     .track_event_change(false);
             }
         }

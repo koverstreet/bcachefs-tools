@@ -21,7 +21,6 @@ use crate::prt;
 use crate::os::kernel::{cond_resched, local_clock, unlikely};
 use crate::util::log::LogMsg;
 use crate::os::sched::current;
-use crate::util::time_stats::TimeStats;
 use c::BtreeNodeCacheState as State;
 use c::SixLockType::{self, SIX_LOCK_read, SIX_LOCK_write};
 use core::mem::ManuallyDrop;
@@ -216,7 +215,7 @@ impl BtreeTrans<'_> {
                     self.unlock_keep_cannibalize(paths, crate::ret_ip!());
                     bufs.alloc(fs, flags::NOWARN, true).is_ok()
                 };
-                fs.times[c::TimeStat::btree_node_buf_alloc as usize].update(buf_start);
+                fs.times.get(c::TimeStat::btree_node_buf_alloc as usize).update(buf_start);
                 if !got {
                     bufs.free();
                     break 'err;
@@ -259,7 +258,7 @@ impl BtreeTrans<'_> {
                 break 'got_mem got;
             }
 
-            fs.times[c::TimeStat::btree_node_mem_alloc as usize].update(start_time);
+            fs.times.get(c::TimeStat::btree_node_mem_alloc as usize).update(start_time);
             return Err(Errcode::ENOMEM_btree_node_mem_alloc.into());
         };
 
@@ -281,7 +280,7 @@ impl BtreeTrans<'_> {
         b.whiteout_u64s.set(0);
         b.keys_mut(contents).btree_keys_init();
 
-        fs.times[c::TimeStat::btree_node_mem_alloc as usize].update(start_time);
+        fs.times.get(c::TimeStat::btree_node_mem_alloc as usize).update(start_time);
 
         let n = UnhashedNode { fs, b, held: ManuallyDrop::new(held) };
 

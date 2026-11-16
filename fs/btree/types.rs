@@ -19,6 +19,7 @@ use crate::util::alloc::{Box, KVVec, KVmalloc, Kmalloc};
 use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::Printbuf;
+use crate::util::time_stats::TimeStatsArray;
 use crate::util::mempool::Mempool;
 use crate::util::rcu::Srcu;
 use crate::os::workqueue::{Workqueue, WqFlags};
@@ -837,15 +838,6 @@ crate::published! {
 #[derive(MaybeZeroable, Init)]
 pub struct btree_transaction_stats {
     #[pin]
-    #[init(cs::bch2_time_stats::init())]
-    pub duration: cs::bch2_time_stats,
-    #[pin]
-    #[init(cs::bch2_time_stats::init())]
-    pub lock_hold_times: cs::bch2_time_stats,
-    #[pin]
-    #[init(cs::bch2_time_stats::init())]
-    pub lock_wait_times: cs::bch2_time_stats,
-    #[pin]
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&s->lock"))]
     pub lock: Locked<Mutex, TransStatsLocked, TransStatsMax>,
 }
@@ -877,6 +869,16 @@ pub struct bch_fs_btree_trans {
     #[pin]
     #[init(::pin_init::pin_init_array_from_fn(|_| cs::btree_transaction_stats::init()))]
     pub stats: [cs::btree_transaction_stats; cs::BCH_TRANSACTIONS_NR as usize],
+    /* each transaction function's, as stats[] */
+    #[pin]
+    #[init(TimeStatsArray::new())]
+    pub duration: TimeStatsArray<cs::bch2_time_stats, { cs::BCH_TRANSACTIONS_NR as usize }>,
+    #[pin]
+    #[init(TimeStatsArray::new())]
+    pub lock_hold_times: TimeStatsArray<cs::bch2_time_stats, { cs::BCH_TRANSACTIONS_NR as usize }>,
+    #[pin]
+    #[init(TimeStatsArray::new())]
+    pub lock_wait_times: TimeStatsArray<cs::bch2_time_stats, { cs::BCH_TRANSACTIONS_NR as usize }>,
 
     #[pin]
     #[init(new_lock!(TransStatsJson { buf: Printbuf::new() }, "&c->btree.trans.stats_json_lock"))]

@@ -62,7 +62,7 @@ use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSl
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
                             Plain, SelfSized, Unsized, Unvalidated};
 use crate::util::{backref::BackRef, printbuf::Msg};
-use crate::util::{time_stats::TimeStats, Printbuf};
+use crate::util::Printbuf;
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
 use core::ffi::c_uint;
 use core::mem::offset_of;
@@ -864,7 +864,7 @@ fn node_read_done(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resu
 pub fn read_done(fs: &Fs, ca: &Dev, node: &mut ReadInFlightNode, failed: Option<&mut c::bch_io_failures>,
                  err_msg: &mut Printbuf) -> Result<(), BchError> {
     let (b, contents) = node.parts();
-    fs.times[c::TimeStat::btree_node_read_done as usize]
+    fs.times.get(c::TimeStat::btree_node_read_done as usize)
         .time(|| node_read_done(&mut NodeValidate { fs, b, io: NodeIo::Read { ca, failed, err_msg } }, contents))
 }
 
@@ -886,7 +886,7 @@ async fn read_task<'h>(home: Pin<&'h mut NodeReadBio>, fs: BackRef<Fs>, node: Re
     let ret = r.read(&mut err).await;
     r.report(ret, &err);
 
-    fs.times[c::TimeStat::btree_node_read as usize].update(r.start_time);
+    fs.times.get(c::TimeStat::btree_node_read as usize).update(r.start_time);
     if ret.is_ok() {
         r.maybe_merge();
     }

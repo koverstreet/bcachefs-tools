@@ -735,7 +735,6 @@ use crate::os::kernel::{current_runtime, local_clock, unlikely, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::ratelimit::Ratelimit;
 use crate::util::refcount::TryRefcount;
-use crate::util::time_stats::TimeStats;
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{btree_trans, log_msg_ratelimited, prt};
@@ -1013,7 +1012,7 @@ extern "C" fn __write_done(mut op: Running<Op>) {
         op.error = ret_to_c(fs.journal.error()) as i16;
     }
 
-    fs.times[c::TimeStat::data_write as usize].update(op.start_time);
+    fs.times.get(c::TimeStat::data_write as usize).update(op.start_time);
     op.res.put();
 
     drop(op.write_ref.take());

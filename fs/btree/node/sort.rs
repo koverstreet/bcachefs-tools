@@ -14,7 +14,6 @@ use crate::os::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enable
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{Box, Kmalloc};
 use crate::util::mempool::Mempool;
-use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{plain_bytes, Head};
 use crate::data_structures::array_vec::ArrayVec;
 use core::cmp::Ordering;
@@ -460,7 +459,7 @@ pub fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, star
         .fold(0, |out, (_, k)| copy_key(room, out, k, |_| {}));
 
     if sorting_entire_node {
-        fs.times[c::TimeStat::btree_node_sort as usize].update(start_time);
+        fs.times.get(c::TimeStat::btree_node_sort as usize).update(start_time);
     }
 
     /* Make sure we preserve bset journal_seq: */
@@ -548,7 +547,7 @@ pub fn btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src:
 
     dst.bset_head_mut(t.data_offset).set_u64s(out - t.first_offset() as usize);
 
-    fs.times[c::TimeStat::btree_node_sort as usize].update(start_time);
+    fs.times.get(c::TimeStat::btree_node_sort as usize).update(start_time);
 
     dst.set_bset_end(0);
     dst.verify_btree_nr_keys();

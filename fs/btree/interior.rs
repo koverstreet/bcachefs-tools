@@ -40,7 +40,6 @@ use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
 use crate::os::kernel::local_clock;
 use crate::util::place::{Contained, Placed};
-use crate::util::time_stats::TimeStats;
 use crate::os::workqueue::{run_raw, RawWork, Workqueue, WqFlags};
 use crate::util::{late::Late, mempool::Mempool};
 use crate::prt;
@@ -855,7 +854,7 @@ impl<'t> InteriorUpdate<'t> {
         this.reserve_put(this.trans(), paths, false);
         this.pending_put();
 
-        fs.times[c::TimeStat::btree_interior_update_foreground as usize].update(start_time);
+        fs.times.get(c::TimeStat::btree_interior_update_foreground as usize).update(start_time);
     }
 }
 
@@ -890,7 +889,7 @@ unsafe fn update_free(update: NonNull<BtreeUpdate>, trans: &BtreeTrans<'_>, path
     u.disk_res.put();
     u.reserve_put(trans, paths, rollback.is_some());
 
-    fs.times[c::TimeStat::btree_interior_update_total as usize].update(u.start_time);
+    fs.times.get(c::TimeStat::btree_interior_update_total as usize).update(u.start_time);
 
     let updates = &fs.btree.interior_updates;
     let mut g = updates.lock.lock();

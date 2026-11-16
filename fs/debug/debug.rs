@@ -279,15 +279,16 @@ fn transaction_stats_to_text(out: &mut Printbuf, fs: &Fs, idx: usize) {
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
     crate::btree::trans::kmalloc_trace_to_text(&mut out.indent(2), &locked.trans_kmalloc_trace);
 
+    let t = &fs.btree.trans;
     prt!(out, "Transaction duration:\n");
-    prt!(out.indent(2), "{}", s.duration);
+    prt!(out.indent(2), "{}", t.duration.get(idx));
 
     if cfg!(CONFIG_BCACHEFS_LOCK_TIME_STATS) {
         prt!(out, "Lock hold times:\n");
-        prt!(out.indent(2), "{}", s.lock_hold_times);
+        prt!(out.indent(2), "{}", t.lock_hold_times.get(idx));
 
         prt!(out, "Lock wait times:\n");
-        prt!(out.indent(2), "{}", s.lock_wait_times);
+        prt!(out.indent(2), "{}", t.lock_wait_times.get(idx));
     }
 
     if !locked.max_paths_text.as_bytes().is_empty() {

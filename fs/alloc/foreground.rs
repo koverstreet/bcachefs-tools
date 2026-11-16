@@ -74,7 +74,6 @@ use crate::debug::trace::events;
 use crate::sb::members::data_types_to_text;
 use crate::util::alloc::init_at;
 use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up};
-use crate::util::time_stats::TimeStats;
 use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
 use crate::util::hash::{hash_64, Fold};
@@ -605,7 +604,7 @@ impl Fs {
                                           generation: u8) -> Result<Option<OpenBucket>, BchError>
     {
         let a = &self.allocator;
-        let times = |t: c::TimeStat| &self.times[t as usize];
+        let times = |t: c::TimeStat| self.times.get(t as usize);
         let dev = ca.dev_idx;
 
         let mut g = a.freelist_lock.lock();

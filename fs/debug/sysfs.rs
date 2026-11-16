@@ -41,7 +41,6 @@ use crate::sb::members;
 use crate::prt;
 use crate::os::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
-use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;
 use crate::os::kobject::{BinFile, BinFiles, Group, Groups, Kobject};
 use crate::util::place::Placed;
@@ -149,16 +148,17 @@ const INTERNAL: &[Attr<Fs>] = &gated(started, [
 // c->btree.trans.stats_json - and the pages read are of one whole.
 
 /// Each btree transaction's name, up to the first not yet registered, and its
-/// stats.
-fn trans_stats(c: &Fs) -> impl Iterator<Item = (&'static [u8], &c::btree_transaction_stats)> {
+/// index in the btree.trans stats.
+fn trans_stats(c: &Fs) -> impl Iterator<Item = (&'static [u8], usize)> {
     transaction_fns()
         .map(CStr::to_bytes)
-        .zip(c.btree.trans.stats.iter())
+        .zip(0..c.btree.trans.stats.len())
 }
 
 fn trans_stats_json(c: &Fs, out: &mut Printbuf) {
+    let t = &c.btree.trans;
     write!(out, "{{");
-    for (i, (name, s)) in trans_stats(c).enumerate() {
+    for (name, i) in trans_stats(c) {
         if i > 0 {
             write!(out, ",");
         }
@@ -166,16 +166,16 @@ fn trans_stats_json(c: &Fs, out: &mut Printbuf) {
         out.write_bytes(name);
         write!(out, "\":{{");
 
-        write!(out, "\"max_mem\":{},", s.lock.max_mem.get());
+        write!(out, "\"max_mem\":{},", t.stats[i].lock.max_mem.get());
 
         write!(out, "\"duration\":");
-        s.duration.json_to_text(out);
+        t.duration.get(i).json_to_text(out);
 
         if cfg!(CONFIG_BCACHEFS_LOCK_TIME_STATS) {
             write!(out, ",\"lock_hold_times\":");
-            s.lock_hold_times.json_to_text(out);
+            t.lock_hold_times.get(i).json_to_text(out);
             write!(out, ",\"lock_wait_times\":");
-            s.lock_wait_times.json_to_text(out);
+            t.lock_wait_times.get(i).json_to_text(out);
         }
 
         write!(out, "}}");
@@ -211,11 +211,12 @@ impl sysfs::Bin for TransStatsJson {
 
     /// Any write resets every transaction's stats.
     fn write(c: &Fs, buf: &[u8], _off: u64) -> Result<usize, BchError> {
-        for (_, s) in trans_stats(c) {
-            let mut locked = s.lock.lock();
-            s.duration.reset();
-            s.lock_hold_times.reset();
-            s.lock_wait_times.reset();
+        let t = &c.btree.trans;
+        for (_, i) in trans_stats(c) {
+            let mut locked = t.stats[i].lock.lock();
+            t.duration.get(i).reset();
+            t.lock_hold_times.get(i).reset();
+            t.lock_wait_times.get(i).reset();
 
             locked.published().nr_max_paths.set(0);
             locked.published().max_mem.set(0);
@@ -252,11 +253,11 @@ c::TimeStat_arms!(time_stat_names);
 const TIME_STATS_NR: usize = c::TimeStat::NR as usize;
 
 const TIME_STATS: [Attr<Fs>; TIME_STATS_NR] = Attr::list(&TIME_STAT_NAMES, &[0o644; TIME_STATS_NR],
-    |c, i, out| Ok(c.times[i].to_text(out)),
-    |c, i, _| Ok(c.times[i].reset()));
+    |c, i, out| Ok(c.times.get(i).to_text(out)),
+    |c, i, _| Ok(c.times.get(i).reset()));
 const TIME_STATS_JSON: [Attr<Fs>; TIME_STATS_NR] = Attr::list(&TIME_STAT_NAMES, &[0o644; TIME_STATS_NR],
-    |c, i, out| Ok(c.times[i].json_to_text(out)),
-    |c, i, _| Ok(c.times[i].reset()));
+    |c, i, out| Ok(c.times.get(i).json_to_text(out)),
+    |c, i, _| Ok(c.times.get(i).reset()));
 
 // ── counters/ ───────────────────────────────────────────────────────────────
 //
@@ -461,10 +462,10 @@ const DEV: &[Attr<Dev>] = &[
 
     Attr::ro(c"io_latency_read",        |ca, out| writeln!(out, "{}", ca.cur_latency(READ))),
     Attr::ro(c"io_latency_write",       |ca, out| writeln!(out, "{}", ca.cur_latency(WRITE))),
-    Attr::ro(c"io_latency_stats_read",  |ca, out| ca.io_latency[READ].to_text(out)),
-    Attr::ro(c"io_latency_stats_write", |ca, out| ca.io_latency[WRITE].to_text(out)),
-    Attr::ro(c"io_latency_stats_read_json",  |ca, out| ca.io_latency[READ].json_to_text(out)),
-    Attr::ro(c"io_latency_stats_write_json", |ca, out| ca.io_latency[WRITE].json_to_text(out)),
+    Attr::ro(c"io_latency_stats_read",  |ca, out| ca.io_latency.get(READ).to_text(out)),
+    Attr::ro(c"io_latency_stats_write", |ca, out| ca.io_latency.get(WRITE).to_text(out)),
+    Attr::ro(c"io_latency_stats_read_json",  |ca, out| ca.io_latency.get(READ).json_to_text(out)),
+    Attr::ro(c"io_latency_stats_write_json", |ca, out| ca.io_latency.get(WRITE).json_to_text(out)),
     #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
     Attr::ro(c"congested",              |ca, out| ca.congested_to_text(out)),
 

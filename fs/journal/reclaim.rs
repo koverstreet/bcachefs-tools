@@ -30,7 +30,6 @@ use crate::os::kthread::{Kthread, KthreadSelf};
 use crate::util::place::Contained;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::{sleep_until, Sleep, SleepError};
-use crate::util::time_stats::TimeStats;
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err, bch_err_msg, prt};
 
@@ -84,7 +83,7 @@ impl c::journal {
 
         let watermark = watermark.max(open_buckets.into());
 
-        let times = |t: c::TimeStat| &fs.times[t as usize];
+        let times = |t: c::TimeStat| fs.times.get(t as usize);
         let mut changed = false;
         changed |= times(Time::blocked_journal_low_on_space).track_event_change(low_on_space);
         changed |= times(Time::blocked_journal_low_on_pin).track_event_change(low_on_pin);
@@ -486,7 +485,7 @@ impl c::journal {
             } else {
                 Time::journal_pin_flush_other
             };
-            let ok = fs.times[flush_time as usize].time(|| flushing.run());
+            let ok = fs.times.get(flush_time as usize).time(|| flushing.run());
 
             drop(flushing);
 
@@ -864,7 +863,7 @@ impl c::journal {
         for (name, t) in [("  btree",     Time::journal_pin_flush_btree),
                           ("  key_cache", Time::journal_pin_flush_key_cache),
                           ("  other",     Time::journal_pin_flush_other)] {
-            time_stats_summary_to_text(out, name, &fs.times[t as usize]);
+            time_stats_summary_to_text(out, name, fs.times.get(t as usize).stats());
         }
 
         out.newline();
@@ -875,7 +874,7 @@ impl c::journal {
                           ("  max_in_flight",       Time::blocked_journal_max_in_flight),
                           ("  max_open",            Time::blocked_journal_max_open),
                           ("  write_buffer_full",   Time::blocked_write_buffer_full)] {
-            time_stats_summary_to_text(out, name, &fs.times[t as usize]);
+            time_stats_summary_to_text(out, name, fs.times.get(t as usize).stats());
         }
 
         out.newline();

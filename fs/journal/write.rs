@@ -39,7 +39,6 @@ use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_j
                           WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::refcount::TryRefcount;
-use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{cast_plain_slice_mut, Head, SelfSized, Unvalidated};
 use crate::util::printbuf::ToText;
 use crate::{log_msg_ratelimited, prt};
@@ -412,7 +411,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
     } else {
         c::TimeStat::journal_flush_write
     };
-    fs.times[time as usize].update(j.write_start_time.get());
+    fs.times.get(time as usize).update(j.write_start_time.get());
 
     /*
      * j->buf_lock guards journal buf data lifetime against the btree write
@@ -558,7 +557,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
         j.update_last_seq(&pins, &mut g);
         j.space_available(&mut g);
 
-        fs.times[c::TimeStat::blocked_journal_max_in_flight as usize].track_event_change(false);
+        fs.times.get(c::TimeStat::blocked_journal_max_in_flight as usize).track_event_change(false);
 
         j.wake_async_wait();
     }

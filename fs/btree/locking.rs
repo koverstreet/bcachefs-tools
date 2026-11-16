@@ -29,7 +29,9 @@ use crate::os::percpu::{migrate_disable, migrate_enable, raw_smp_processor_id};
 use crate::util::rcu::SrcuReadGuard;
 use crate::util::sleep::Sleep;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-use crate::{os::kernel::local_clock, util::time_stats::TimeStats};
+use crate::os::kernel::local_clock;
+#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+use crate::util::time_stats::{TimeStatsArray, TimeStatsRef};
 use crate::util::Printbuf;
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed}};
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
@@ -149,15 +151,19 @@ pub enum BtreeNodeLockedType {
 /* trans locked state */
 
 impl BtreeTrans<'_> {
+    /// This transaction's function's, of @stats - one of the btree.trans
+    /// time stats arrays - if it has one.
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-    pub(crate) fn stats(&self) -> Option<&c::btree_transaction_stats> {
-        self.fs().btree.trans.stats.get(self.fn_idx.get() as usize)
+    fn fn_time_stats<'a>(&self, stats: &'a TimeStatsArray<c::bch2_time_stats, { c::BCH_TRANSACTIONS_NR as usize }>)
+        -> Option<TimeStatsRef<'a, c::bch2_time_stats>> {
+        let idx = self.fn_idx.get();
+        (u32::from(idx) < c::BCH_TRANSACTIONS_NR).then(|| stats.get(idx.into()))
     }
 
     pub(crate) fn lock_hold_time_update(&self, path: &BtreePath, level: usize) {
         #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-        if let Some(s) = self.stats() {
-            s.lock_hold_times.update_at(path.l[level].lock_taken_time, local_clock());
+        if let Some(s) = self.fn_time_stats(&self.fs().btree.trans.lock_hold_times) {
+            s.update_at(path.l[level].lock_taken_time, local_clock());
         }
         #[cfg(not(CONFIG_BCACHEFS_LOCK_TIME_STATS))]
         let _ = (path, level);
@@ -426,8 +432,8 @@ impl BtreeTrans<'_> {
             b.lock.lock_waiting_as(ty, wait, should_sleep_fn, ip, true)
         });
         #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-        if let Some(s) = self.stats() {
-            s.lock_wait_times.update_at(contended_start, local_clock());
+        if let Some(s) = self.fn_time_stats(&self.fs().btree.trans.lock_wait_times) {
+            s.update_at(contended_start, local_clock());
         }
         ret
     }

@@ -19,7 +19,6 @@ use crate::util::closure;
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::util::sleep::Sleep;
 use crate::os::ops::from_raw;
-use crate::util::time_stats::TimeStats;
 use crate::os::folio::{Folio, FolioGuard, FolioSpan, Mapping, Wbc};
 use crate::vfs::folio::Writeback;
 use crate::vfs::inode::InodeInfo;
@@ -196,7 +195,7 @@ fn throttle_writes(fs: &Fs) {
     }
 
     if start != 0 {
-        fs.times[c::TimeStat::blocked_writeback_throttle as usize].update(start);
+        fs.times.get(c::TimeStat::blocked_writeback_throttle as usize).update(start);
     }
 }
 

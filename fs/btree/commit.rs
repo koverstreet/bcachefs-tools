@@ -39,7 +39,6 @@ use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::init::recovery::NotRw;
 use crate::os::sched;
-use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{plain_bytes, EntryWalk, Validated};
 use crate::{bch_err, fs_fatal_error, fs_inconsistent, prt};
 
@@ -425,7 +424,7 @@ impl BtreeTrans<'_> {
                      kc.nr_keys.load(Relaxed), kc.nr_dirty.load(Relaxed), kc.dirty_over_max());
             });
 
-            let times = &fs.times[c::TimeStat::blocked_key_cache_flush as usize];
+            let times = fs.times.get(c::TimeStat::blocked_key_cache_flush as usize);
             times.track_event_change(true);
             let ret = fs.journal.key_cache_reclaim_wait(|| self.unlock_long_from(paths, crate::ret_ip!()));
             times.track_event_change(false);

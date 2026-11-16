@@ -757,7 +757,7 @@ impl Fs {
 
         prt!(out, "Time stats (shared):\n");
         let mut indent = out.indent(2);
-        self.times[c::TimeStat::btree_write_buffer_flush as usize].to_text(&mut indent);
+        self.times.get(c::TimeStat::btree_write_buffer_flush as usize).to_text(&mut indent);
     }
 
     pub fn btree_write_buffer_stop(&self) {

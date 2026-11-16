@@ -13,7 +13,6 @@ use crate::fs::Fs;
 use crate::locking::six::SixHold;
 use crate::prt;
 use crate::os::kernel::local_clock;
-use crate::util::time_stats::TimeStats;
 use bitflags::bitflags;
 use c::BtreeNodeCacheState as State;
 use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
@@ -194,7 +193,7 @@ impl Fs {
         lists.nr_freed     += freed;
         lists.nr_requested += nr;
 
-        self.times[c::TimeStat::btree_node_cache_scan as usize].update(start_time);
+        self.times.get(c::TimeStat::btree_node_cache_scan as usize).update(start_time);
 
         self.event_inc_trace(events::btree_cache_scan, |out| {
             prt!(out, "scanned {nr_to_scan} nodes, can free {can_free}, freed {freed}, writing {writeback}")

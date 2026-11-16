@@ -32,7 +32,6 @@ use crate::debug::trace::events;
 use crate::util::backref::BackRef;
 use crate::os::kernel::{current_id, local_clock, num_online_cpus};
 use crate::util::refcount::TryRefcount;
-use crate::util::time_stats::TimeStats;
 use crate::util::task::{Resume, Spawn};
 use crate::os::workqueue::Queue;
 use core::ffi::c_int;
@@ -111,7 +110,7 @@ async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
     }
 
     u.write(read, Resume::queue(fs.promote_wq())).await;
-    fs.times[c::TimeStat::data_promote as usize].update(start_time);
+    fs.times.get(c::TimeStat::data_promote as usize).update(start_time);
     drop(listed);
     u.exit(0);
     drop(in_flight);

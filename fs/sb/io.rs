@@ -163,7 +163,6 @@ use crate::util::bio::{io_buf, Bio, BioBox, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::task::waiter;
 use crate::os::kernel::NSEC_PER_SEC;
-use crate::util::time_stats::TimeStats;
 use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
 use core::mem::{size_of, size_of_val, MaybeUninit};
 use crate::data_structures::array_vec::ArrayVec;
@@ -2587,7 +2586,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>, 
 #[track_caller]
 fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>,
                     flags: c::SbWriteFlags) -> Result<(), BchError> {
-    let _timer = fs.times[c::TimeStat::sb_write as usize].timer();
+    let _timer = fs.times.get(c::TimeStat::sb_write as usize).timer();
 
     let dirty = core::mem::take(&mut sb.dirty);
     let ret = write_super_locked(fs, sb, devs, flags);

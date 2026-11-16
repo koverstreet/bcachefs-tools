@@ -635,7 +635,7 @@ impl Fs {
     pub fn dev_latency_max(&self, devs: &c::bch_devs_mask, rw: c_int) -> c_ulong {
         let rcu = read_lock();
         let ns = self.devs_rcu_in(devs.d.iter(), &rcu)
-            .map(|ca| ca.io_latency[rw as usize].stats.lock.lock().max_duration)
+            .map(|ca| ca.io_latency.get(rw as usize).stats().stats.lock.lock().max_duration)
             .max()
             .unwrap_or(0);
         nsecs_to_jiffies(ns)

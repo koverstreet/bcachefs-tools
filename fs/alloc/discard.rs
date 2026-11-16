@@ -68,7 +68,6 @@ use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KVVec;
 use crate::util::bio::{Bio, BioOwner, Gathered};
-use crate::util::time_stats::TimeStats;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::task::waiter;
@@ -679,7 +678,7 @@ fn do_discards(fs: &Fs) {
         let mut again = false;
         if r.flush_journal {
             trans.unlock_long();
-            let ret = fs.times[c::TimeStat::blocked_discard_journal_flush as usize].time(|| fs.journal_flush());
+            let ret = fs.times.get(c::TimeStat::blocked_discard_journal_flush as usize).time(|| fs.journal_flush());
             if let Err(e) = ret {
                 break Err(e);
             }

@@ -35,7 +35,6 @@ use crate::types::{Le16, Le64};
 use crate::util::bio::{bch2_bio_map, bio_put, buf_nr_bvecs, of_bio, MapBuf};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::util::log::LogMsg;
-use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
 use crate::os::workqueue::{run_raw, RawWork};
 use crate::util::names::Names;
@@ -229,7 +228,7 @@ unsafe fn write_work(wbio: NonNull<BtreeWriteBio>) {
         }
     }
 
-    fs.times[c::TimeStat::btree_node_write as usize].update(wbio.start_time);
+    fs.times.get(c::TimeStat::btree_node_write as usize).update(wbio.start_time);
     unsafe {
         async_objs::list_del(fs, c::AsyncObjKind::btree_write_bio, &mut wbio.list_idx);
         bio_put(&raw mut wbio.wbio.bio);

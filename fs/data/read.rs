@@ -91,7 +91,6 @@ use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, Flags, Box, Kmalloc};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
-use crate::util::time_stats::TimeStats;
 use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, Spawn, TaskSlot};
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
 use crate::os::workqueue::Queue;
@@ -231,7 +230,7 @@ impl Rbio {
     /// request, not a split.
     fn done(&self) {
         if self.start_time != 0 {
-            self.fs().times[c::TimeStat::data_read as usize].update(self.start_time);
+            self.fs().times.get(c::TimeStat::data_read as usize).update(self.start_time);
         }
     }
 

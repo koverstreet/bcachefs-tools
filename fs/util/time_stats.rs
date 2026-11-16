@@ -18,8 +18,12 @@
 //! A device's IO latency stats have quantiles too, written under the stats'
 //! lock and read without it, by the congestion accounting. The Quantiles
 //! trait is what an event's duration goes to besides the stats - c::quantiles,
-//! or () - and the TimeStats trait is the stats' methods, written once for a
-//! bare bch2_time_stats and a bch2_time_stats_quantiles.
+//! or () - and TimeStatsKind is a bare bch2_time_stats or a
+//! bch2_time_stats_quantiles.
+//!
+//! Stats come in a TimeStatsArray, which keeps their buffers' pointers - read
+//! by every event - apart from what a flush writes; its get() is a
+//! TimeStatsRef, the stats and their pointer, which the methods are on.
 //!
 //! The time units durations print in, from nanoseconds to eons, are here
 //! too: Nsecs prints in them, as C's bch2_pr_time_units().
@@ -37,8 +41,10 @@ use crate::{percpu_field, warn_on_once};
 use core::pin::Pin;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::{MaybeZeroable, Init};
-use pin_init::{pinned_drop, pin_data};
+use pin_init::{pinned_drop, pin_data, PinInit};
 use crate::new_lock;
+use crate::errcode::BchError;
+use crate::types::CacheAligned;
 use crate::util::ffi::Opaque;
 use crate::util::projections::Volatile;
 use core::ffi::c_uint;
@@ -110,17 +116,13 @@ pub struct TimeStatsLocked {
     pub freq_stats_weighted: c::mean_and_variance,
 }
 
-#[pin_data(PinnedDrop)]
+#[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 pub struct bch2_time_stats {
     #[pin]
     #[init(new_lock!(c::TimeStatsLocked::new(), "&stats->lock"))]
     pub lock: Locked<SpinLockIrq, TimeStatsLocked>,
-    /* the per-cpu buffer, once events come fast enough: installed under the
-     * lock, read without it - released and acquired, for what's in it - and
-     * freed when the stats drop */
-    pub buffer: AtomicUsize,
     /* a state change event in progress since: track_event_change()'s, unlocked */
     pub last_event_start: Volatile<u64>,
 }
@@ -315,58 +317,155 @@ fn count_buffer(g: &mut StatsGuard<'_>, q: &impl Quantiles, b: &c::time_stat_buf
     b.nr.set(0);
 }
 
-impl c::bch2_time_stats {
-    fn buffer(&self) -> Option<PerCpuRef<'_, c::time_stat_buffer>> {
-        // update_at()'s release: the buffer zeroed, its locks initialized
-        let p = self.buffer.load(Acquire) as *mut c::time_stat_buffer;
-        // SAFETY: installed by update_at(), and freed only when the stats
-        // drop
-        (!p.is_null()).then(|| unsafe { PerCpuRef::from_raw(p) })
+// ── Time stats, with or without quantiles ────────────────────────────────
+
+/// A bch2_time_stats, or one with quantiles: the stats, and what its events'
+/// durations go to besides.
+pub trait TimeStatsKind: Sized {
+    type Quantiles: Quantiles;
+
+    fn init() -> impl PinInit<Self, BchError>;
+    fn stats(&self) -> &c::bch2_time_stats;
+    fn quantiles(&self) -> &Self::Quantiles;
+}
+
+impl TimeStatsKind for c::bch2_time_stats {
+    type Quantiles = ();
+
+    fn init() -> impl PinInit<Self, BchError> {
+        c::bch2_time_stats::init()
+    }
+
+    fn stats(&self) -> &c::bch2_time_stats {
+        self
+    }
+
+    fn quantiles(&self) -> &() {
+        &()
     }
 }
 
-// ── Time stats, with or without quantiles ────────────────────────────────
+impl TimeStatsKind for c::bch2_time_stats_quantiles {
+    type Quantiles = c::quantiles;
 
-/// A bch2_time_stats, and what its events' durations go to besides: the
-/// stats, written once for a bare one and a bch2_time_stats_quantiles.
-pub trait TimeStats {
-    type Quantiles: Quantiles;
+    fn init() -> impl PinInit<Self, BchError> {
+        c::bch2_time_stats_quantiles::init()
+    }
 
-    fn stats(&self) -> &c::bch2_time_stats;
-    fn quantiles(&self) -> &Self::Quantiles;
+    fn stats(&self) -> &c::bch2_time_stats {
+        &self.stats
+    }
+
+    fn quantiles(&self) -> &c::quantiles {
+        &self.quantiles
+    }
+}
+
+/// @N time stats, and their per-cpu buffers: each event reads its stats'
+/// buffer pointer, so the pointers - written once - are packed together on
+/// lines of their own, not on the ones a buffer flush writes.
+#[pin_data(PinnedDrop)]
+#[repr(C)]
+pub struct TimeStatsArray<T, const N: usize> {
+    /* each stats' buffer, once events come fast enough: installed under the
+     * stats' lock, read without it - released and acquired, for what's in
+     * it - and freed when the array drops */
+    buffers: [AtomicUsize; N],
+    _align: CacheAligned,
+    #[pin]
+    stats: [T; N],
+}
+
+/* by hand: MaybeZeroable takes no const generics */
+unsafe impl<T: pin_init::Zeroable, const N: usize> pin_init::Zeroable for TimeStatsArray<T, N> {}
+
+impl<T: TimeStatsKind, const N: usize> TimeStatsArray<T, N> {
+    pub fn new() -> impl PinInit<Self, BchError> {
+        pin_init::pin_init!(Self {
+            buffers: [const { AtomicUsize::new(0) }; N],
+            _align: CacheAligned::default(),
+            stats <- pin_init::pin_init_array_from_fn(|_| T::init()),
+        }? BchError)
+    }
+
+    pub fn get(&self, i: usize) -> TimeStatsRef<'_, T> {
+        TimeStatsRef { stats: &self.stats[i], buffer: &self.buffers[i] }
+    }
+}
+
+#[pinned_drop]
+impl<T, const N: usize> PinnedDrop for TimeStatsArray<T, N> {
+    fn drop(self: Pin<&mut Self>) {
+        for b in &self.buffers {
+            let p = b.load(Relaxed) as *mut core::ffi::c_void;
+            if !p.is_null() {
+                // SAFETY: alloc_percpu()'d by update_at(), and ours: the stats
+                // are going
+                unsafe { free_percpu(p) };
+            }
+        }
+    }
+}
+
+/// One of a TimeStatsArray's stats, and its buffer.
+pub struct TimeStatsRef<'a, T> {
+    stats:  &'a T,
+    buffer: &'a AtomicUsize,
+}
+
+impl<T> Clone for TimeStatsRef<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for TimeStatsRef<'_, T> {}
+
+impl<'a, T: TimeStatsKind> TimeStatsRef<'a, T> {
+    pub fn stats(self) -> &'a T {
+        self.stats
+    }
+
+    fn buffer(self) -> Option<PerCpuRef<'a, c::time_stat_buffer>> {
+        // update_at()'s release: the buffer zeroed, its locks initialized
+        let p = self.buffer.load(Acquire) as *mut c::time_stat_buffer;
+        // SAFETY: installed by update_at(), and freed only when the array
+        // drops
+        (!p.is_null()).then(|| unsafe { PerCpuRef::from_raw(p) })
+    }
 
     /// An event from @start, a local_clock() time, to now: bch2_time_stats_update().
-    fn update(&self, start: u64) {
+    pub fn update(self, start: u64) {
         self.update_at(start, local_clock())
     }
 
     /// An event from now to when the Timer's dropped.
-    fn timer(&self) -> Timer<'_, Self> where Self: Sized {
+    pub fn timer(self) -> Timer<'a, T> {
         Timer { stats: self, start: local_clock() }
     }
 
     /// @f, timed as an event.
-    fn time<R>(&self, f: impl FnOnce() -> R) -> R where Self: Sized {
+    pub fn time<R>(self, f: impl FnOnce() -> R) -> R {
         let _timer = self.timer();
         f()
     }
 
     /// An event from @start to @end.
-    fn update_at(&self, start: u64, end: u64) {
-        let (s, q) = (self.stats(), self.quantiles());
+    pub fn update_at(self, start: u64, end: u64) {
+        let (s, q) = (self.stats.stats(), self.stats.quantiles());
 
-        let Some(pcpu) = s.buffer() else {
+        let Some(pcpu) = self.buffer() else {
             let mut g = s.lock.lock();
             count(&mut g, q, start, end);
 
             // fast enough for a buffer - which another may have installed
             // since we looked; none if it can't be had
-            if s.buffer.load(Relaxed) == 0 &&
+            if self.buffer.load(Relaxed) == 0 &&
                g.freq_stats_weighted.median() < 32000 &&
                g.duration_stats.n > 1024 {
                 if let Ok(b) = PerCpu::<c::time_stat_buffer>::alloc_gfp(flags::ATOMIC) {
                     percpu_field!(b.get(), lock).init();
-                    s.buffer.store(b.into_raw() as usize, Release);
+                    self.buffer.store(b.into_raw() as usize, Release);
                 }
             }
             return;
@@ -399,8 +498,8 @@ pub trait TimeStats {
     /// event or ends one. Whether one started. Unlocked, as C's
     /// track_event_change(): racing changes may count one event as two, or
     /// none.
-    fn track_event_change(&self, v: bool) -> bool {
-        let s = self.stats();
+    pub fn track_event_change(self, v: bool) -> bool {
+        let s = self.stats.stats();
         let start = s.last_event_start.get();
         if v == (start != 0) {
             return false;
@@ -416,24 +515,24 @@ pub trait TimeStats {
 
     /// Every CPU's buffer counted, and what's under the lock as of then: to
     /// print, without the lock - the printbuf allocates.
-    fn snapshot(&self) -> c::TimeStatsLocked {
-        let s = self.stats();
+    fn snapshot(self) -> c::TimeStatsLocked {
+        let s = self.stats.stats();
         let mut g = s.lock.lock();
-        if let Some(pcpu) = s.buffer() {
+        if let Some(pcpu) = self.buffer() {
             for b in pcpu.each_cpu() {
-                count_buffer(&mut g, self.quantiles(), b);
+                count_buffer(&mut g, self.stats.quantiles(), b);
             }
         }
         *g
     }
 
     /// As it started, the buffers emptied; not the quantiles.
-    fn reset(&self) {
-        let s = self.stats();
+    pub fn reset(self) {
+        let s = self.stats.stats();
         let mut g = s.lock.lock();
         *g = c::TimeStatsLocked::new();
         s.last_event_start.set(0);
-        if let Some(pcpu) = s.buffer() {
+        if let Some(pcpu) = self.buffer() {
             for b in pcpu.each_cpu() {
                 b.nr.set(0);
             }
@@ -441,7 +540,7 @@ pub trait TimeStats {
     }
 
     /// As JSON.
-    fn json_to_text(&self, out: &mut Printbuf) {
+    pub fn json_to_text(self, out: &mut Printbuf) {
         let s = self.snapshot();
         let (d, f) = (&s.duration_stats, &s.freq_stats);
         let (dw, fw) = (&s.duration_stats_weighted, &s.freq_stats_weighted);
@@ -462,12 +561,12 @@ pub trait TimeStats {
                                       ("mean", f_mean), ("stddev", f_stddev)]);
         write!(out, ",\n");
         json_obj(out, "between_ewma_ns", &[("mean", fw.median() as u64), ("stddev", fw.stddev().into())]);
-        self.quantiles().json_to_text(out);
+        self.stats.quantiles().json_to_text(out);
         write!(out, "\n}}\n");
     }
 
     /// The stats laid out in columns, all time and recent: to_text()'s.
-    fn stats_to_text(&self, out: &mut Printbuf) {
+    fn stats_to_text(self, out: &mut Printbuf) {
         let s = self.snapshot();
         /* the freq stats' count, as C's: none, no means */
         let n = s.freq_stats.n;
@@ -499,54 +598,24 @@ pub trait TimeStats {
         }
 
         out.tabstops_reset();
-        self.quantiles().to_text(out);
+        self.stats.quantiles().to_text(out);
     }
 }
 
 /// An event in progress, counted when it's dropped: one timed to the end of a
 /// scope, however the scope's left.
-pub struct Timer<'a, T: TimeStats> {
-    stats: &'a T,
+pub struct Timer<'a, T: TimeStatsKind> {
+    stats: TimeStatsRef<'a, T>,
     start: u64,
 }
 
-impl<T: TimeStats> Drop for Timer<'_, T> {
+impl<T: TimeStatsKind> Drop for Timer<'_, T> {
     fn drop(&mut self) {
         self.stats.update(self.start)
     }
 }
 
-impl TimeStats for c::bch2_time_stats {
-    type Quantiles = ();
-
-    fn stats(&self) -> &c::bch2_time_stats {
-        self
-    }
-
-    fn quantiles(&self) -> &() {
-        &()
-    }
-}
-
-impl TimeStats for c::bch2_time_stats_quantiles {
-    type Quantiles = c::quantiles;
-
-    fn stats(&self) -> &c::bch2_time_stats {
-        &self.stats
-    }
-
-    fn quantiles(&self) -> &c::quantiles {
-        &self.quantiles
-    }
-}
-
-impl ToText for c::bch2_time_stats {
-    fn to_text(&self, out: &mut Printbuf) {
-        self.stats_to_text(out)
-    }
-}
-
-impl ToText for c::bch2_time_stats_quantiles {
+impl<T: TimeStatsKind> ToText for TimeStatsRef<'_, T> {
     fn to_text(&self, out: &mut Printbuf) {
         self.stats_to_text(out)
     }
@@ -587,22 +656,4 @@ fn mean_and_stddev(out: &mut Printbuf, all: &c::mean_and_variance, recent: &c::m
     out.tab();
     nsecs_aligned(out, u64::from(recent.stddev()));
     out.newline();
-}
-
-#[pinned_drop]
-impl PinnedDrop for c::bch2_time_stats {
-    fn drop(self: Pin<&mut Self>) {
-        let p = self.buffer.load(Relaxed) as *mut core::ffi::c_void;
-        if !p.is_null() {
-            // SAFETY: alloc_percpu()'d by update_at(), and ours: the stats
-            // are going
-            unsafe { free_percpu(p) };
-        }
-    }
-}
-
-// ── For C ────────────────────────────────────────────────────────────────
-
-pub fn __bch2_time_stats_update(stats: &c::bch2_time_stats, start: u64, end: u64) {
-    stats.update_at(start, end)
 }

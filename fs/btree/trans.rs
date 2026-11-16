@@ -35,7 +35,6 @@ use crate::os::percpu::{Counters, CpuGuard};
 use crate::util::rcu;
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::os::sched;
-use crate::util::time_stats::__bch2_time_stats_update;
 use crate::util::vstructs::{Unvalidated, UnvalidatedEntries, VstructRefEntries};
 use zerocopy::IntoBytes;
 use crate::util::{Printbuf, ToText};
@@ -896,8 +895,7 @@ impl BtreeTrans<'_> {
 
         if !cfg!(CONFIG_BCACHEFS_NO_LATENCY_ACCT) &&
            time_after64(now, self.last_begin_time.get() + 10) {
-            __bch2_time_stats_update(&c.btree.trans.stats[self.fn_idx.get() as usize].duration,
-                                     self.last_begin_time.get(), now);
+            c.btree.trans.duration.get(self.fn_idx.get() as usize).update_at(self.last_begin_time.get(), now);
         }
 
         self.srcu_begin(paths, ret_ip);

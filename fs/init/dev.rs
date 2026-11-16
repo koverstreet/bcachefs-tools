@@ -1607,7 +1607,7 @@ impl Dev {
     }
 
     fn congested_acct(&self, io_latency: u64, now: u64, rw: usize) {
-        let latency_capable = self.io_latency[rw].quantiles.at(1);
+        let latency_capable = self.io_latency.get(rw).stats().quantiles.at(1);
         /* ideally we'd be taking into account the device's variance here: */
         let latency_threshold = latency_capable << if rw == READ { 2 } else { 3 };
         let latency_over = io_latency.wrapping_sub(latency_threshold) as i64;
@@ -1628,7 +1628,6 @@ impl Dev {
     /// the device's average and quantiles, and - a read's - its congestion.
     pub fn latency_acct(&self, submit_time: u64, rw: usize) {
         use crate::os::kernel::{local_clock, time_after64};
-        use crate::util::time_stats::TimeStats;
         use core::sync::atomic::Ordering::SeqCst;
 
         let latency = &self.cur_latency[rw];
@@ -1661,7 +1660,7 @@ impl Dev {
             self.congested_acct(io_latency, now, rw);
         }
 
-        self.io_latency[rw].update_at(submit_time, now);
+        self.io_latency.get(rw).update_at(submit_time, now);
     }
 }
 
@@ -1685,7 +1684,7 @@ impl Dev {
 
         // the thresholds are bch2_latency_acct()'s
         for (what, rw, shift) in [("read", READ, 2), ("write", WRITE, 3)] {
-            let q = &self.io_latency[rw].quantiles;
+            let q = &self.io_latency.get(rw).stats().quantiles;
             prt!(out, "{what} latency threshold:\t{}\n", Nsecs(q.at(1) << shift));
             prt!(out, "median {what} latency:\t{}\n", Nsecs(q.at(7)));
         }

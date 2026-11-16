@@ -37,7 +37,6 @@ use crate::util::rcu::{read_lock, ReadGuard, SrcuReadGuard};
 use crate::util::rcu_pending::{Mode, RcuPending};
 use crate::os::shrinker::{Shrink, Shrinker};
 use crate::os::workqueue::Queue;
-use crate::util::time_stats::TimeStats;
 use crate::util::{Printbuf, ToText};
 use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
 #[cfg(kernel)]
@@ -487,7 +486,7 @@ impl c::bch_fs_btree_key_cache {
 
         self.shrink_iter.store(pos, Relaxed);
 
-        fs.times[c::TimeStat::btree_key_cache_scan as usize].update(start_time);
+        fs.times.get(c::TimeStat::btree_key_cache_scan as usize).update(start_time);
 
         Some(freed)
     }

@@ -37,7 +37,6 @@ use crate::new_lock;
 use crate::types::CacheAligned;
 use crate::util::futex::EventCount;
 use crate::util::hash::hash_64;
-use crate::util::time_stats::TimeStats;
 use crate::util::sleep::Sleep;
 use crate::util::{Printbuf, ToText};
 use crate::warn_on_once;
@@ -232,7 +231,7 @@ impl NocowLocks {
                     continue;
                 }
 
-                let _contended = fs.times[c::TimeStat::nocow_lock_contended as usize].timer();
+                let _contended = fs.times.get(c::TimeStat::nocow_lock_contended as usize).timer();
                 if ret.as_ref().is_err_and(is_contended) {
                     ret = l.wait_until(trans, || {
                         let r = l.trylock(fs, b, kind);

@@ -14,6 +14,7 @@ use crate::util::projections::Volatile;
 use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::place::Placed;
+use crate::util::time_stats::TimeStatsArray;
 use crate::util::refcount::AtomicRef;
 use crate::os::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, Mutex, MutexNoio, PercpuRwsemNoio, RwSem, SpinLockIrq};
@@ -382,8 +383,8 @@ pub struct Dev {
     /* The rest of this all shows up in sysfs */
     pub cur_latency: [AtomicI64; 2],
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| c::bch2_time_stats_quantiles::init()))]
-    pub io_latency: [c::bch2_time_stats_quantiles; 2],
+    #[init(TimeStatsArray::new())]
+    pub io_latency: TimeStatsArray<c::bch2_time_stats_quantiles, 2>,
 
     pub congested: AtomicI32,
     /* written racily, by bch2_latency_acct() */
@@ -573,8 +574,8 @@ pub struct Fs {
     #[init(crate::sb::counters::RecentCounters::init())]
     pub counters_recent: crate::os::workqueue::DelayedWork,
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| c::bch2_time_stats::init()))]
-    pub times: [c::bch2_time_stats; c::TimeStat::NR as usize],
+    #[init(TimeStatsArray::new())]
+    pub times: TimeStatsArray<c::bch2_time_stats, { c::TimeStat::NR as usize }>,
     #[pin]
     #[init(c::bch_fs_errors::init())]
     pub errors: c::bch_fs_errors,

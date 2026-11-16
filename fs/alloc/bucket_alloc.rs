@@ -47,7 +47,6 @@ use crate::debug::trace::events;
 use crate::util::Printbuf;
 use crate::os::kernel::{unlikely, WRITE};
 use crate::util::rcu::read_lock;
-use crate::util::time_stats::TimeStats;
 use core::sync::atomic::Ordering::Relaxed;
 
 use c::AllocBtreeBitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO, BTREE_BITMAP_YES};
@@ -500,7 +499,7 @@ impl TransAttempt<'_, '_> {
                     fs.copygc_wakeup();
                 }
 
-                fs.times[c::TimeStat::blocked_allocate as usize].track_event_change(true);
+                fs.times.get(c::TimeStat::blocked_allocate as usize).track_event_change(true);
 
                 let may_block = req.may_wait() &&
                     !req.flags.contains(c::WriteFlags::alloc_nowait) &&

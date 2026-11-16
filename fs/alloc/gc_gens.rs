@@ -17,7 +17,6 @@ use crate::sb::members::DevRef;
 use crate::util::alloc::KVVec;
 use crate::os::kernel::local_clock;
 use crate::util::rcu::read_lock;
-use crate::util::time_stats::TimeStats;
 use crate::util::Printbuf;
 use crate::{bch_err, btree_trans};
 
@@ -82,7 +81,7 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
 
     fs.gc_gens.pos.set(c::bbpos::default());
 
-    fs.times[c::TimeStat::btree_gc as usize].update(start_time);
+    fs.times.get(c::TimeStat::btree_gc as usize).update(start_time);
     fs.event_inc_trace(events::gc_gens_end, |_| {});
 
     if !fs.compat(c::SbCompat::no_stale_ptrs) {

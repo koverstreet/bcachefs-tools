@@ -21,7 +21,6 @@ use crate::util::alloc::KVVec;
 use crate::os::kernel::{local_clock, num_online_cpus, race_fault};
 use crate::util::par::{self, Backend};
 use crate::util::projections::VolatileWriter;
-use crate::util::time_stats::TimeStats;
 use crate::{btree_trans, fs_fatal_error, prt};
 use core::sync::atomic::fence;
 
@@ -375,10 +374,10 @@ fn flush_sorted_sharded(
                     let trans = btree_trans!(fs);
                     let wb = &fs.btree.write_buffer[wb_idx];
 
-                    fs.times[c::TimeStat::btree_write_buffer_flush_shard_sched_delay as usize]
+                    fs.times.get(c::TimeStat::btree_write_buffer_flush_shard_sched_delay as usize)
                         .update(queued_time);
 
-                    fs.times[c::TimeStat::btree_write_buffer_flush_shard_work as usize]
+                    fs.times.get(c::TimeStat::btree_write_buffer_flush_shard_work as usize)
                         .time(|| flush_sorted_range(&trans, wb, shard, accounting_replay_done, cnt))
                 }).inspect_err(|_| spawn_failed = true)?;
             }
@@ -595,7 +594,7 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
         fs_fatal_error!(fs, "{}", e.msg());
     }
 
-    fs.times[c::TimeStat::btree_write_buffer_flush as usize].update(start_time);
+    fs.times.get(c::TimeStat::btree_write_buffer_flush as usize).update(start_time);
 
     *live.nr_flushes.place()                     += 1;
     *live.nr_flushes_caller[caller as usize].place() += 1;

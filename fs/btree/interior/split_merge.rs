@@ -35,7 +35,6 @@ use crate::util::backtrace::prt_task_backtrace;
 use crate::os::kernel::{dump_stack, local_clock};
 use crate::util::log::LogMsg;
 use crate::os::sched;
-use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::Head;
 
 use super::{InteriorUpdate, NewNode, ParentKeys, StartOpts};
@@ -595,7 +594,7 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
         b.shard_pivot(contents, fs) != POS_MIN;
 
     let stat = if split { c::TimeStat::btree_node_split } else { c::TimeStat::btree_node_compact };
-    let _timer = fs.times[stat as usize].timer();
+    let _timer = fs.times.get(stat as usize).timer();
 
     let mut nodes: ArrayVec<NewNode<'_>, 2> = if split {
         let layout = split_layout(update.t(), b, insert_parent_keys.then_some(update));
@@ -1128,7 +1127,7 @@ pub(crate) fn merge(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathI
 
     let ret = merge_in(t, paths, path, level, commit, &mut srcs);
     if matches!(ret, Ok(true)) {
-        fs.times[c::TimeStat::btree_node_merge as usize].update(start_time);
+        fs.times.get(c::TimeStat::btree_node_merge as usize).update(start_time);
         if let Some(n) = merge_count {
             *n += 1;
         }
