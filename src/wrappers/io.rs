@@ -16,7 +16,7 @@ use bcachefs_kernel::data::write::bch2_write;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode_opts;
-use bcachefs_kernel::util::bio::{Bio, BioOwner};
+use bcachefs_kernel::util::bio::{Bio, BioBox, BioOwner};
 use bcachefs_kernel::util::closure;
 use bcachefs_kernel::util::sleep::Sleep;
 use bcachefs_kernel::util::task::{waiter, CompletionReturn, Spawn, TaskSlot};
@@ -92,9 +92,8 @@ pub fn read<'a>(
     type F = c::ReadFlags;
     let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
-    let mut b = fs.bio_read.alloc(std::ptr::null_mut(), 1, c::req_op_REQ_OP_READ,
-                                  |b| Rbio::new(fs, opts, inum.subvol as u32, None, b))
-        .expect("a bio_read bio of one bvec: from its mempool");
+    let mut b = BioBox::new(std::ptr::null_mut(), 1, c::req_op_REQ_OP_READ,
+                            |b| Rbio::new(fs, opts, inum.subvol as u32, None, b))?;
     b.bio_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
     b.bio_mut().set_sector(offset >> 9);
     unsafe { b.bio_mut().map(buf.as_mut_ptr().cast(), buf.len()) };
