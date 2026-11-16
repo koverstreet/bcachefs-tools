@@ -100,9 +100,7 @@ use core::ffi::c_uint;
 use core::sync::atomic::{AtomicBool, AtomicI16, Ordering::Relaxed};
 use core::ops::ControlFlow;
 use core::alloc::Layout;
-use core::future::Future;
 use core::pin::Pin;
-use core::task::{Context, Poll};
 use cstruct_macros::{args_stored_once, bch_enum, in_place, MaybeZeroable, Init, TypeInfo};
 use crate::format::{Bpos, Btree, Bversion, DataType, MetadataVersion, Nonce};
 
@@ -1468,12 +1466,11 @@ async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'static>,
                 Ok::<_, AllocError>(())
             })
         };
-        let mut ec = {
+        let ec = {
             let _noio = MemallocFlags::noio();
             Box::try_init_in(init, Kmalloc)
         }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
-        // the box's contents never move: only the box does
-        unsafe { Pin::new_unchecked(&mut *ec) }.await?;
+        Box::into_pin(ec).await?;
     } else {
         let submit_time = device_read_start(f, fs)?;
         let status = if fs.opts().no_data_io.get() != 0 {
@@ -1728,16 +1725,7 @@ async fn retry(read: &Rbio, s: &mut RetryState<'_>, at: Locate<'_>) -> Result<()
     ret
 }
 
-struct RetryBox<'a>(Box<RetryOwnedFut<'a>, &'a Mempool<Kmalloc>>);
-
-impl Future for RetryBox<'_> {
-    type Output = (Result<(), BchError>, FailureState);
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // the box's contents never move: only the box does
-        unsafe { Pin::new_unchecked(&mut *self.get_mut().0) }.poll(cx)
-    }
-}
+type RetryBox<'a> = Pin<Box<RetryOwnedFut<'a>, &'a Mempool<Kmalloc>>>;
 
 /// @f's retry - @range, if given, for its plan's - made in its element, to be
 /// awaited.
@@ -1759,7 +1747,10 @@ fn retry_boxed<'a>(read: &'a Rbio, f: Fragment<'a>, ret: Result<(), BchError>, a
         })
     };
     let _noio = MemallocFlags::noio();
-    RetryBox(Box::try_init_in(init, &read.fs().read_retry_pool).expect("a retry's slot, outside NORECLAIM"))
+    let b = Box::try_init_in(init, &read.fs().read_retry_pool).expect("a retry's slot, outside NORECLAIM");
+    // not Box::into_pin(): the pool's the filesystem's, and the retry's
+    // fragment's task is drained before it goes
+    unsafe { Pin::new_unchecked(b) }
 }
 
 /// A fragment's task: @f read - and retried, if that's what it needs - what's

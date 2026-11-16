@@ -200,6 +200,12 @@ impl<T: ?Sized, A: Alloc> Box<T, A> {
     }
 }
 
+impl<T: ?Sized, A: Alloc + 'static> Box<T, A> {
+    pub fn into_pin(b: Self) -> core::pin::Pin<Self> {
+        unsafe { core::pin::Pin::new_unchecked(b) }
+    }
+}
+
 impl<T: ?Sized, A: Alloc> core::ops::Deref for Box<T, A> {
     type Target = T;
 
