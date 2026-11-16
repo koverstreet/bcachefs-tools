@@ -348,7 +348,7 @@ mod arch {
     }
 
     #[inline(always)]
-    pub(super) fn local_irq_save() -> c_ulong {
+    pub(crate) fn local_irq_save() -> c_ulong {
         if !IRQ_INLINE {
             return unsafe { crate::c::rust_local_irq_save() };
         }
@@ -358,7 +358,7 @@ mod arch {
     }
 
     #[inline(always)]
-    pub(super) fn local_irq_restore(flags: c_ulong) {
+    pub(crate) fn local_irq_restore(flags: c_ulong) {
         const X86_EFLAGS_IF: c_ulong = 1 << 9;
 
         if !IRQ_INLINE {
@@ -487,7 +487,8 @@ mod arch {
         unsafe { (&raw const (*thread_info()).__bindgen_anon_1.preempt_count).read_volatile() == 0 }
     }
 
-    pub(super) use super::c_arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore};
+    pub(crate) use super::c_arch::{local_irq_restore, local_irq_save};
+    pub(super) use super::c_arch::{local_lock_irqsave, local_unlock_irqrestore};
 }
 
 /// What's C's, out of line, on an arch that doesn't have its own.
@@ -503,11 +504,11 @@ mod c_arch {
         unsafe { crate::c::bch2_raw_smp_processor_id() }
     }
 
-    pub(super) fn local_irq_save() -> core::ffi::c_ulong {
+    pub(crate) fn local_irq_save() -> core::ffi::c_ulong {
         unsafe { crate::c::rust_local_irq_save() }
     }
 
-    pub(super) fn local_irq_restore(flags: core::ffi::c_ulong) {
+    pub(crate) fn local_irq_restore(flags: core::ffi::c_ulong) {
         unsafe { crate::c::rust_local_irq_restore(flags) }
     }
 
@@ -553,12 +554,12 @@ mod arch {
         unsafe { crate::c::bch2_current() }
     }
 
-    pub(super) use super::c_arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore,
-                                   per_cpu_ptr, raw_smp_processor_id};
+    pub(crate) use super::c_arch::{local_irq_restore, local_irq_save};
+    pub(super) use super::c_arch::{local_lock_irqsave, local_unlock_irqrestore, per_cpu_ptr, raw_smp_processor_id};
 }
 
-use arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore, per_cpu_ptr, this_cpu_ptr};
-pub(crate) use arch::current_task;
+use arch::{local_lock_irqsave, local_unlock_irqrestore, per_cpu_ptr, this_cpu_ptr};
+pub(crate) use arch::{current_task, local_irq_restore, local_irq_save};
 
 /// The task held to this CPU while it lives: for this CPU's copy, which
 /// is the copy of whatever CPU the task is on.
