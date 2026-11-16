@@ -1390,14 +1390,13 @@ pub(crate) fn bytes_of_mut<T: Unsized + ?Sized>(v: &mut T) -> &mut [u8] {
 /// the walk - ends it, rather than being read past.
 pub struct ValidatedEntries<'a, E: ?Sized> {
     rest:   &'a [u8],
-    at:     usize,
     _entry: PhantomData<&'a E>,
 }
 
 impl<'a, E: ?Sized> ValidatedEntries<'a, E> {
     /// The entries in @rest: a container's, from its start[].
     pub(crate) fn new(rest: &'a [u8]) -> Self {
-        Self { rest, at: 0, _entry: PhantomData }
+        Self { rest, _entry: PhantomData }
     }
 }
 
@@ -1411,29 +1410,21 @@ impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for Validat
         };
         let (e, rest) = self.rest.split_at(len);
         self.rest = rest;
-        self.at += len;
         // SAFETY: checked_bytes(): its header is there, aligned, and the
         // bytes it says are its - any bytes are an E
         Some(unsafe { &*E::from_raw(e.as_ptr(), len) })
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> EntryWalk for ValidatedEntries<'a, E> {
-    fn offset(&self) -> usize {
-        self.at
-    }
-}
-
 /// ValidatedEntries, mutably.
 pub struct ValidatedEntriesMut<'a, E: ?Sized> {
     rest:   &'a mut [u8],
-    at:     usize,
     _entry: PhantomData<&'a mut E>,
 }
 
 impl<'a, E: ?Sized> ValidatedEntriesMut<'a, E> {
     pub(crate) fn new(rest: &'a mut [u8]) -> Self {
-        Self { rest, at: 0, _entry: PhantomData }
+        Self { rest, _entry: PhantomData }
     }
 }
 
@@ -1447,14 +1438,7 @@ impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for Validat
         };
         let (e, rest) = core::mem::take(&mut self.rest).split_at_mut(len);
         self.rest = rest;
-        self.at += len;
         Some(unsafe { &mut *E::from_raw_mut(e.as_mut_ptr(), len) })
-    }
-}
-
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> EntryWalk for ValidatedEntriesMut<'a, E> {
-    fn offset(&self) -> usize {
-        self.at
     }
 }
 
