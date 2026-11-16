@@ -91,10 +91,10 @@
 //! as C's are, which the kernel patches to those at load but under Xen PV.
 //! Where the kernel's config makes one more than that (preempt debugging or
 //! tracing; traced irqs, RT) it's C's call. arm64 has current (sp_el0) and
-//! this_cpu_ptr() inline, the rest C's, out of line; the walk over the
-//! possible CPUs is C's everywhere.
+//! this_cpu_ptr() inline, the rest C's, out of line. The walk over the
+//! possible CPUs reads the possible mask, everywhere.
 
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::{c_uint, c_ulong};
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::NonNull;
@@ -112,7 +112,7 @@ pub const SIX_PERCPU_READERS: bool = true;
 
 pub use crate::c::{
     free_percpu, bch2_this_cpu_add_u32, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u32, bch2_this_cpu_cmpxchg_u64,
-    bch2_this_cpu_ptr, bch2_per_cpu_ptr, bch2_cpu_possible_next,
+    bch2_this_cpu_ptr, bch2_per_cpu_ptr,
 };
 
 /// The task kept on its CPU, till migrate_enable().
@@ -591,12 +591,32 @@ impl Drop for LocalLockGuard<'_> {
     }
 }
 
+/// for_each_possible_cpu(): the possible mask's bits below nr_cpu_ids. The
+/// mask is set at boot.
+#[cfg(CONFIG_SMP)]
 fn possible_cpus() -> impl Iterator<Item = c_uint> {
-    let mut cpu: c_int = -1;
-    core::iter::from_fn(move || {
-        cpu = unsafe { bch2_cpu_possible_next(cpu) };
-        (cpu >= 0).then_some(cpu as c_uint)
-    })
+    const BITS: usize = c_ulong::BITS as usize;
+    let nr = crate::os::kernel::nr_cpu_ids() as usize;
+    let words = unsafe { &(*(&raw const c::__cpu_possible_mask)).bits };
+
+    words[..nr.div_ceil(BITS)].iter().enumerate()
+        .flat_map(|(i, &w)| {
+            let mut w = w;
+            core::iter::from_fn(move || {
+                (w != 0).then(|| {
+                    let b = w.trailing_zeros() as usize;
+                    w &= w - 1;
+                    i * BITS + b
+                })
+            })
+        })
+        .take_while(move |&cpu| cpu < nr)
+        .map(|cpu| cpu as c_uint)
+}
+
+#[cfg(not(CONFIG_SMP))]
+fn possible_cpus() -> impl Iterator<Item = c_uint> {
+    0..1
 }
 
 // ── PerCpu, and its copies ───────────────────────────────────────────────

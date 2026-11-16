@@ -260,16 +260,10 @@ BCH2_THIS_CPU_OPS(u32)
 BCH2_THIS_CPU_OPS(u64)
 #undef BCH2_THIS_CPU_OPS
 
-/* ...per_cpu_ptr(), and the possible CPUs: the one after @cpu, -1 at the end */
+/* ...per_cpu_ptr() */
 void *bch2_per_cpu_ptr(void *pcp, unsigned cpu)
 {
 	return per_cpu_ptr((void __percpu *) (unsigned long) pcp, cpu);
-}
-
-int bch2_cpu_possible_next(int cpu)
-{
-	cpu = cpumask_next(cpu, cpu_possible_mask);
-	return cpu < nr_cpu_ids ? cpu : -1;
 }
 
 /* ...this CPU's copy */
@@ -403,12 +397,6 @@ void bch2_set_worker_desc(const char *desc)
 }
 
 #include <linux/cpumask.h>
-
-/* nr_cpu_ids is a variable - or a macro, without SMP */
-unsigned bch2_nr_cpu_ids(void)
-{
-	return nr_cpu_ids;
-}
 
 /*
  * For os/linux_kernel/printk.rs's warn_at(), warn_on!()'s: the kernel's own

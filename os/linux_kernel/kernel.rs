@@ -15,9 +15,14 @@ pub fn cpumask_local_spread(i: u32) -> u32 {
     unsafe { c::cpumask_local_spread(i, c::NUMA_NO_NODE) }
 }
 
-/// One more than the highest possible CPU number.
+/// One more than the highest possible CPU number: NR_CPUS, as cpumask.h has
+/// it, where there's no variable.
+#[inline]
 pub fn nr_cpu_ids() -> u32 {
-    unsafe { c::bch2_nr_cpu_ids() }
+    #[cfg(all(CONFIG_SMP, not(CONFIG_FORCE_NR_CPUS)))]
+    return unsafe { c::nr_cpu_ids };
+    #[cfg(not(all(CONFIG_SMP, not(CONFIG_FORCE_NR_CPUS))))]
+    c::NR_CPUS
 }
 
 pub fn totalram_bytes() -> usize {

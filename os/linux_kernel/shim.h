@@ -69,7 +69,6 @@ u32 bch2_this_cpu_cmpxchg_u32(u32 *pcp, u32 old, u32 new);
 u64 bch2_this_cpu_cmpxchg_u64(u64 *pcp, u64 old, u64 new);
 void *bch2_this_cpu_ptr(void *pcp);
 void *bch2_per_cpu_ptr(void *pcp, unsigned cpu);
-int bch2_cpu_possible_next(int cpu);
 void bch2_preempt_disable(void);
 void bch2_preempt_enable(void);
 void bch2_preempt_schedule(void);
@@ -102,7 +101,6 @@ void rust_bio_pages_free(void *p, size_t size);
 bool bch2_owner_on_cpu(struct task_struct *owner);
 bool bch2_rt_or_dl_task_current(void);
 #endif
-unsigned bch2_nr_cpu_ids(void);
 
 void bch2_rust_warn(const char *file, unsigned line);
 void bch2_cond_resched(void);
