@@ -35,7 +35,9 @@ use crate::init::chardev::ioctl_ret;
 use crate::init::damage;
 use crate::namei;
 use crate::util::alloc::KVVec;
-use crate::os::file::{File, FsFile};
+use crate::os::file::File;
+use super::file::InodeFile;
+use super::super_block::SuperBlock;
 use crate::os::ioctl::{arg, input, no_arg, output, vstruct, UserArg, UserStr};
 use crate::util::ioctl::{dir, Ioctl};
 use crate::os::kernel::{capable, current_fsgid, current_fsuid, current_umask, Capability};
@@ -83,7 +85,10 @@ impl Ioctl for FS_IOC_SETFSLABEL {
 
 /* The dispatch */
 
-fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
+/// @file's - @inode's, and @regular if it's a regular file's.
+fn file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>, cmd: c_uint, user: UserPtr)
+    -> Result<c_long, BchError>
+{
     let fs = inode.fs();
     let subvol = inode.inum().subvol as u32;
 
@@ -95,7 +100,7 @@ fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Res
         <FS_IOC_SETFSLABEL as Ioctl>::OPCODE =>
             arg::<FS_IOC_SETFSLABEL, _>(user, |a| set_label(fs, file, a)),
         <c::FS_IOC_GOINGDOWN as Ioctl>::OPCODE =>
-            arg::<c::FS_IOC_GOINGDOWN, _>(user, |a| goingdown(fs, a)),
+            arg::<c::FS_IOC_GOINGDOWN, _>(user, |a| goingdown(inode.vfs().sb(), a)),
         <c::BCHFS_IOC_GET_DAMAGE as Ioctl>::OPCODE =>
             vstruct::<c::BCHFS_IOC_GET_DAMAGE, _, _>(user, |a| get_damage(fs, inode.inum(), a)),
         <c::BCHFS_IOC_CLEAR_DAMAGE as Ioctl>::OPCODE =>
@@ -151,22 +156,25 @@ fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Res
                 subvolume_destroy(fs, file, a, err)
             }),
         <c::BCHFS_IOC_PREAD_RAW as Ioctl>::OPCODE =>
-            arg::<c::BCHFS_IOC_PREAD_RAW, _>(user, |a| pread_raw(file, inode, a)),
+            arg::<c::BCHFS_IOC_PREAD_RAW, _>(user, |a| match regular {
+                Some(file) => pread_raw(file, inode, a),
+                None       => Err(c::EINVAL.into()),
+            }),
         _ => fs_ioctl(fs, cmd, user),
     }
 }
 
-pub(crate) fn fs_file_ioctl<D: FsFile<Inode = InodeInfo>>(file: &File<D>, cmd: c_uint, arg: c_ulong) -> c_long {
-    ioctl_ret(file_ioctl(file, file.inode(), cmd, UserPtr::from_addr(arg as usize)))
+pub(crate) fn fs_file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
+                            cmd: c_uint, arg: c_ulong) -> c_long {
+    ioctl_ret(file_ioctl(file, inode, regular, cmd, UserPtr::from_addr(arg as usize)))
 }
 
 /// A 32-bit caller's: the ioctls whose numbers differ only by their
 /// argument's size - misnamed, they take an int either way - as the native
 /// ones, and the label's.
 #[cfg(CONFIG_COMPAT)]
-pub(crate) fn fs_file_compat_ioctl<D: FsFile<Inode = InodeInfo>>(file: &File<D>, cmd: c_uint, arg: c_ulong)
-    -> c_long
-{
+pub(crate) fn fs_file_compat_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
+                                   cmd: c_uint, arg: c_ulong) -> c_long {
     let cmd = match cmd {
         c::FS_IOC32_GETFLAGS   => c::FS_IOC_GETFLAGS,
         c::FS_IOC32_SETFLAGS   => c::FS_IOC_SETFLAGS,
@@ -174,7 +182,7 @@ pub(crate) fn fs_file_compat_ioctl<D: FsFile<Inode = InodeInfo>>(file: &File<D>,
         c::FS_IOC_GETFSLABEL | c::FS_IOC_SETFSLABEL => cmd,
         _ => return -(c::ENOIOCTLCMD as c_long),
     };
-    fs_file_ioctl(file, cmd, unsafe { c::rust_compat_ptr(arg as u32) } as c_ulong)
+    fs_file_ioctl(file, inode, regular, cmd, unsafe { c::rust_compat_ptr(arg as u32) } as c_ulong)
 }
 
 /* The handlers */
@@ -329,7 +337,7 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMs
 /// BCHFS_IOC_PREAD_RAW: an O_DIRECT read that reports the errors it hit -
 /// checksum, I/O, decompression - rather than failing on them, and with
 /// BCH_PREAD_RAW_no_poison_check, reads poisoned extents. The bytes read.
-fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_raw>)
+fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_raw>)
     -> Result<c_long, BchError>
 {
     let fs = inode.fs();
@@ -399,7 +407,8 @@ fn set_label(fs: &Fs, file: &File, user: UserArg<[u8; FSLABEL_MAX]>) -> Result<(
     fs.write_super_ret(&mut sb)
 }
 
-fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
+fn goingdown(sb: &SuperBlock, user: UserArg<u32>) -> Result<(), BchError> {
+    let fs = sb.fs();
     if !capable(Capability::SysAdmin) {
         return fs.throw(Errcode::EPERM_non_admin);
     }
@@ -413,7 +422,6 @@ fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
         // frozen, everything written is on disk; thawed, it stays read-only:
         // unfreeze_fs() sees the shutdown
         c::FSOP_GOING_FLAGS_DEFAULT => {
-            let sb = fs.vfs_super().expect("an ioctl's filesystem, mounted");
             let who = c::freeze_holder_FREEZE_HOLDER_KERNEL;
             sb.freeze(who)?;
             fs.emergency_read_only(&mut msg);

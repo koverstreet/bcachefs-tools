@@ -282,12 +282,12 @@ impl FileOps for InodeInfo {
     }
 
     fn unlocked_ioctl(&self, file: &File<InodeFile>, cmd: c_uint, arg: c_ulong) -> c_long {
-        fs_file_ioctl(file, cmd, arg)
+        fs_file_ioctl(file, self, Some(file), cmd, arg)
     }
 
     #[cfg(CONFIG_COMPAT)]
     fn compat_ioctl(&self, file: &File<InodeFile>, cmd: c_uint, arg: c_ulong) -> c_long {
-        super::ioctl::fs_file_compat_ioctl(file, cmd, arg)
+        super::ioctl::fs_file_compat_ioctl(file, self, Some(file), cmd, arg)
     }
 }
 

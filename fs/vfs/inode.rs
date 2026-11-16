@@ -54,10 +54,8 @@ use crate::quota;
 use crate::snapshots::subvolume;
 use crate::prt;
 use crate::util::ffi::Opaque;
-use crate::os::file::File;
 use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::kernel::HZ;
-use crate::os::kiocb::Kiocb;
 use crate::util::log::LogMsg;
 use crate::util::rcu::{read_lock, ReadGuard};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
@@ -103,15 +101,6 @@ impl InodeInfo {
     pub unsafe fn from_inode<'a>(vinode: *mut c::inode) -> &'a InodeInfo {
         // SAFETY: the caller's; @v is first
         unsafe { &*vinode.cast::<InodeInfo>() }
-    }
-
-    /// @file's: file_bch_inode().
-    ///
-    /// # Safety
-    /// @file is one of ours.
-    pub unsafe fn of_file(file: &File) -> &InodeInfo {
-        // an open file's inode is referenced while it's open
-        unsafe { Self::from_inode((*file.as_ptr()).f_inode) }
     }
 
     /// @inum's, looked up in @t, the inode cache first.
@@ -728,11 +717,5 @@ impl DerefMut for QuotaReservation<'_> {
 impl Drop for QuotaReservation<'_> {
     fn drop(&mut self) {
         self.inode.quota_reservation_put(&mut self.res)
-    }
-}
-
-impl<'a> Kiocb<'a> {
-    pub fn inode(&self) -> &'a InodeInfo {
-        unsafe { InodeInfo::of_file(self.file()) }
     }
 }

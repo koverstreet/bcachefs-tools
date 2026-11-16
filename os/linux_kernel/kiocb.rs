@@ -5,30 +5,31 @@
 
 use crate::c;
 use crate::errcode::BchError;
-use crate::os::file::File;
+use crate::os::file::{Any, File, FsFile};
 use crate::os::iov_iter::IovIter;
 use core::ffi::c_int;
+use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 
-/// A kiocb, borrowed from the VFS for a call.
-pub struct Kiocb<'a>(&'a mut c::kiocb);
+/// A kiocb of a file of D's, borrowed from the VFS for a call.
+pub struct Kiocb<'a, D = Any>(&'a mut c::kiocb, PhantomData<&'a File<D>>);
 
-impl<'a> Kiocb<'a> {
+impl<'a, D> Kiocb<'a, D> {
     /// # Safety
     /// @k is valid, and used by nothing else, for 'a: the VFS's, for the call
-    /// it's passed to.
+    /// it's passed to; its file is D's.
     pub unsafe fn from_raw(k: *mut c::kiocb) -> Self {
-        Self(unsafe { &mut *k })
+        Self(unsafe { &mut *k }, PhantomData)
     }
 
     /// A synchronous one of our own, in @slot, of @file from @pos:
     /// init_sync_kiocb().
-    pub fn sync(slot: &'a mut MaybeUninit<c::kiocb>, file: &'a File, pos: c::loff_t) -> Self {
+    pub fn sync(slot: &'a mut MaybeUninit<c::kiocb>, file: &'a File<D>, pos: c::loff_t) -> Self {
         unsafe { c::init_sync_kiocb(slot.as_mut_ptr(), file.as_ptr()) };
         let k = unsafe { slot.assume_init_mut() };
         k.ki_pos = pos;
-        Self(k)
+        Self(k, PhantomData)
     }
 
     pub fn as_ptr(&mut self) -> *mut c::kiocb {
@@ -36,8 +37,8 @@ impl<'a> Kiocb<'a> {
     }
 
     /// Open for the call, and after: the VFS holds it until the kiocb's done.
-    pub fn file(&self) -> &'a File {
-        unsafe { File::from_raw(self.0.ki_filp) }
+    pub fn file(&self) -> &'a File<D> {
+        unsafe { &*self.0.ki_filp.cast::<File<D>>() }
     }
 
     pub fn pos(&self) -> u64 {
@@ -90,6 +91,12 @@ impl<'a> Kiocb<'a> {
     /// kiocb for the completion then, and only then.
     pub unsafe fn queued(&mut self) -> Option<Completion> {
         (!self.is_sync()).then(|| Completion(NonNull::from(&mut *self.0)))
+    }
+}
+
+impl<'a, D: FsFile> Kiocb<'a, D> {
+    pub fn inode(&self) -> &'a D::Inode {
+        self.file().inode()
     }
 }
 

@@ -25,6 +25,7 @@ use crate::util::refcount::TryRefcount;
 use crate::os::folio::Mapping;
 use crate::vfs::inode::InodeInfo;
 use crate::os::kiocb::Kiocb;
+use super::file::InodeFile;
 use c::WriteFlags as w;
 use core::ops::ControlFlow;
 use core::ptr::NonNull;
@@ -359,7 +360,7 @@ unsafe fn dio_write_loop_async(op: *mut c::bch_write_op) {
     }
 }
 
-pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
+pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize {
     let mapping = k.file().mapping();
     let inode = k.inode();
     let fs = inode.fs();

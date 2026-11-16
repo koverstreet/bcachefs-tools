@@ -11,6 +11,7 @@
 //! caller waiting for it.
 
 use crate::os::kiocb::{self, Kiocb};
+use super::file::InodeFile;
 use crate::c;
 use crate::data::read::{self, ReadErrReport, Rbio};
 use crate::errcode::{Errcode, BchError};
@@ -190,7 +191,7 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersI
     dio.as_mut().bio_mut().release_user_pages(should_dirty).await;
 }
 
-fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Option<&ReadErrReport>)
+fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_report: Option<&ReadErrReport>)
     -> Result<usize, BchError>
 {
     let inode = req.inode();
@@ -241,7 +242,7 @@ fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Optio
     }
 }
 
-pub fn direct_io_read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F,
+pub fn direct_io_read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F,
                       err_report: Option<&ReadErrReport>) -> Result<usize, BchError> {
     let file = req.file();
     if file.has_pagecache() {
@@ -259,7 +260,7 @@ pub fn direct_io_read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F,
 }
 
 pub unsafe extern "C" fn bch2_read_iter(iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize {
-    let (mut req, mut iter) = unsafe { (Kiocb::from_raw(iocb), IovIter::from_raw(iter)) };
+    let (mut req, mut iter) = unsafe { (Kiocb::<InodeFile>::from_raw(iocb), IovIter::from_raw(iter)) };
     if iter.count() == 0 {
         return 0; /* skip atime */
     }

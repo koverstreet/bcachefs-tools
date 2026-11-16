@@ -8,6 +8,7 @@ use crate::os::folio::{FolioSpan, LockedFolio, Mapping};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use crate::os::kiocb::Kiocb;
+use super::file::InodeFile;
 use super::pagecache::ContigFolios;
 use crate::c;
 use crate::errcode::BchError;
@@ -299,7 +300,7 @@ fn buffered_write_chunk(inode: &InodeInfo, mapping: Mapping, iter: &mut IovIter<
     }
 }
 
-fn buffered_write(k: &Kiocb<'_>, iter: &mut IovIter<'_>) -> Result<usize, BchError> {
+fn buffered_write(k: &Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>) -> Result<usize, BchError> {
     let mapping = k.file().mapping();
     let inode = k.inode();
     let mut written = 0;
@@ -327,7 +328,7 @@ fn buffered_write(k: &Kiocb<'_>, iter: &mut IovIter<'_>) -> Result<usize, BchErr
 }
 
 pub(crate) unsafe extern "C" fn bch2_write_iter(iocb: *mut c::kiocb, from: *mut c::iov_iter) -> isize {
-    let (mut k, mut it) = unsafe { (Kiocb::from_raw(iocb), IovIter::from_raw(from)) };
+    let (mut k, mut it) = unsafe { (Kiocb::<InodeFile>::from_raw(iocb), IovIter::from_raw(from)) };
 
     if k.direct() {
         return direct_write(&mut k, &mut it);
