@@ -282,28 +282,47 @@ impl c::TimeStatsLocked {
     }
 }
 
-/// An event, from @start to @end.
-fn count(g: &mut StatsGuard<'_>, q: &impl Quantiles, start: u64, end: u64) {
+/// An event's duration, if it ended after it started.
+fn duration(start: u64, end: u64) -> Option<u64> {
+    time_after64(end, start).then(|| end - start)
+}
+
+/// The time from @last, the end of the event before - if there was one - to
+/// @end.
+fn since(last: u64, end: u64) -> Option<u64> {
+    (last != 0 && time_after64(end, last)).then(|| end - last)
+}
+
+/// An event's steps of the estimators and quantiles: what must be counted in
+/// order.
+fn step(g: &mut StatsGuard<'_>, q: &impl Quantiles, duration: Option<u64>, freq: Option<u64>) {
     let w = c::TIME_STATS_MV_WEIGHT as u8;
 
-    if time_after64(end, start) {
-        let duration = end - start;
-        g.duration_stats.update(duration as i64, 0);
-        g.duration_stats_weighted.update(duration as i64, w);
-        g.max_duration = g.max_duration.max(duration);
-        g.min_duration = g.min_duration.min(duration);
-        g.total_duration = g.total_duration.wrapping_add(duration);
-        q.update(g, duration);
+    if let Some(d) = duration {
+        g.duration_stats.update(d as i64, 0);
+        g.duration_stats_weighted.update(d as i64, w);
+        q.update(g, d);
     }
-
-    if g.last_event != 0 && time_after64(end, g.last_event) {
-        let freq = end - g.last_event;
-        g.freq_stats.update(freq as i64, 0);
-        g.freq_stats_weighted.update(freq as i64, w);
-        g.max_freq = g.max_freq.max(freq);
-        g.min_freq = g.min_freq.min(freq);
+    if let Some(f) = freq {
+        g.freq_stats.update(f as i64, 0);
+        g.freq_stats_weighted.update(f as i64, w);
     }
+}
 
+/// An event, from @start to @end.
+fn count(g: &mut StatsGuard<'_>, q: &impl Quantiles, start: u64, end: u64) {
+    let (d, f) = (duration(start, end), since(g.last_event, end));
+    step(g, q, d, f);
+
+    if let Some(d) = d {
+        g.max_duration = g.max_duration.max(d);
+        g.min_duration = g.min_duration.min(d);
+        g.total_duration = g.total_duration.wrapping_add(d);
+    }
+    if let Some(f) = f {
+        g.max_freq = g.max_freq.max(f);
+        g.min_freq = g.min_freq.min(f);
+    }
     g.last_event = end;
 }
 
@@ -343,17 +362,15 @@ impl BufferSummary {
             max_freq:       0,
         };
         for e in &b.entries {
-            let (start, end) = (e.start.get(), e.end.get());
-            if time_after64(end, start) {
-                let duration = end - start;
-                s.min_duration = s.min_duration.min(duration);
-                s.max_duration = s.max_duration.max(duration);
-                s.total_duration = s.total_duration.wrapping_add(duration);
+            let end = e.end.get();
+            if let Some(d) = duration(e.start.get(), end) {
+                s.min_duration = s.min_duration.min(d);
+                s.max_duration = s.max_duration.max(d);
+                s.total_duration = s.total_duration.wrapping_add(d);
             }
-            if s.last_end != 0 && time_after64(end, s.last_end) {
-                let freq = end - s.last_end;
-                s.min_freq = s.min_freq.min(freq);
-                s.max_freq = s.max_freq.max(freq);
+            if let Some(f) = since(s.last_end, end) {
+                s.min_freq = s.min_freq.min(f);
+                s.max_freq = s.max_freq.max(f);
             }
             s.last_end = end;
         }
@@ -363,29 +380,16 @@ impl BufferSummary {
 
 /// @b's events counted, @b full and this CPU's: as count() of each, in order.
 fn count_full_buffer(g: &mut StatsGuard<'_>, q: &impl Quantiles, b: &c::time_stat_buffer, s: &BufferSummary) {
-    let w = c::TIME_STATS_MV_WEIGHT as u8;
-
-    let mut last_event = g.last_event;
-    if last_event != 0 && time_after64(s.first_end, last_event) {
-        let freq = s.first_end - last_event;
-        g.min_freq = g.min_freq.min(freq);
-        g.max_freq = g.max_freq.max(freq);
+    if let Some(f) = since(g.last_event, s.first_end) {
+        g.min_freq = g.min_freq.min(f);
+        g.max_freq = g.max_freq.max(f);
     }
 
+    let mut last = g.last_event;
     for e in &b.entries {
-        let (start, end) = (e.start.get(), e.end.get());
-        if time_after64(end, start) {
-            let duration = end - start;
-            g.duration_stats.update(duration as i64, 0);
-            g.duration_stats_weighted.update(duration as i64, w);
-            q.update(g, duration);
-        }
-        if last_event != 0 && time_after64(end, last_event) {
-            let freq = end - last_event;
-            g.freq_stats.update(freq as i64, 0);
-            g.freq_stats_weighted.update(freq as i64, w);
-        }
-        last_event = end;
+        let end = e.end.get();
+        step(g, q, duration(e.start.get(), end), since(last, end));
+        last = end;
     }
 
     g.min_duration = g.min_duration.min(s.min_duration);
