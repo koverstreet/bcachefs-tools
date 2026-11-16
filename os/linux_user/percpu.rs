@@ -77,6 +77,7 @@ use crate::c;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
+use crate::util::vstructs::Plain;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
 /// Don't assume that we have real percpu variables available in userspace.
@@ -623,7 +624,7 @@ impl PerCpuU64s {
     /// races it.
     pub fn set(&mut self, v: &[u64]) {
         for (i, c) in self.iter().enumerate() {
-            unsafe { c.set(v.get(i).copied().unwrap_or(0)) };
+            c.set(v.get(i).copied().unwrap_or(0));
         }
     }
 }
@@ -713,10 +714,11 @@ impl<'a, T> PerCpuRef<'a, T> {
         ThisCpu(unsafe { this_cpu_ptr(self.0, g) }, PhantomData)
     }
 
-    /// Nothing else may reach it meanwhile, on any CPU.
-    pub unsafe fn zero(self) where T: Default {
+    /// Every CPU's copy zeroed: as set()'s, an add racing it may or may not
+    /// count - and any bytes are a T, so what it races leaves one.
+    pub fn zero(self) where T: Default + Plain {
         for cpu in self.cpus() {
-            unsafe { cpu.0.cast_mut().write(T::default()) };
+            unsafe { cpu.0.cast_mut().write_volatile(T::default()) };
         }
     }
 }
@@ -781,12 +783,10 @@ impl<T: PerCpuWord + From<u8>> PerCpuRef<'_, T> {
         unsafe { T::this_cpu_add(self.0, v) }
     }
 
-    /// This CPU's to @v, every other's to 0.
-    ///
-    /// # Safety
-    /// An add racing it may or may not count. Whether that's sound is up to
-    /// what the variable is for - or there are no adders yet.
-    pub unsafe fn set(&self, v: T) {
+    /// This CPU's to @v, every other's to 0. An add racing it may or may not
+    /// count: whether that matters is up to what the variable is for - or
+    /// there are no adders yet.
+    pub fn set(&self, v: T) {
         for cpu in possible_cpus() {
             // SAFETY: a live CPU's copy; another CPU's, written as read
             unsafe { core::ptr::write_volatile(per_cpu_ptr(self.0, cpu), T::from(0)) };

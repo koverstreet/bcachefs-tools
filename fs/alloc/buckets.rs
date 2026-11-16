@@ -37,7 +37,7 @@ use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, 
 use core::convert::Infallible;
 use core::ffi::c_uint;
 use core::sync::atomic::{AtomicU8, Ordering};
-use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, TypeInfo, bch_enum, BitfieldMembers};
+use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, Plain, TypeInfo, bch_enum, BitfieldMembers};
 use core::cell::Cell;
 use nestify::nest;
 use crate::format::{Bpos, Btree, CompressionType, DataType, BkeyType};
@@ -102,14 +102,14 @@ pub type BucketGensArray = crate::util::rcu::RcuArray<core::sync::atomic::Atomic
 
 /* Only info on bucket countns: */
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage {
     pub buckets: [u64; c::DataType::NR as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage_type {
     pub buckets: u64,
@@ -123,14 +123,14 @@ pub struct bch_dev_usage_type {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage_full {
     pub d: [c::bch_dev_usage_type; c::DataType::NR as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_fs_usage_base {
     pub hidden: u64,

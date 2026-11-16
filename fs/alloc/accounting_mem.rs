@@ -661,7 +661,7 @@ fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
 
             let (u, _) = usage_of(fs, &k, &v, |c| {
                 for (c, v) in c.into_iter().zip(v) {
-                    unsafe { c.set(v) };
+                    c.set(v);
                 }
             });
             usage = usage.wrapping_add(u);
@@ -672,7 +672,7 @@ fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
      * the deltas of the entries they went on to drop.
      */
     let base = percpu_field!(fs.capacity.pcpu.get(), counters.usage);
-    unsafe { base.zero() };
+    base.zero();
     base.this_cpu(&CpuGuard::new()).add(usage);
 
     if !underflow_err.is_suppressed() {
@@ -702,10 +702,10 @@ fn read(fs: &Fs) -> Result<(), BchError> {
      */
     fs.accounting_mem_mut(&mut fs.mark_lock().write()).entries.clear();
     for ca in fs.members() {
-        unsafe { ca.usage.get().zero() };
+        ca.usage.get().zero();
     }
     let usage = percpu_field!(fs.capacity.pcpu.get(), counters.usage);
-    unsafe { usage.zero() };
+    usage.zero();
 
     let journal_keys = fs.journal_keys_get().expect("accounting read after recovery was done with the journal keys");
     let journal_keys = journal_keys.value();

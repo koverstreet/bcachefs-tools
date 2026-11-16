@@ -151,7 +151,7 @@ impl c::bch_fs_counters {
     /// Counter @i set to @v: an event counted as it's set may as well not
     /// have been.
     fn set_now(&self, i: usize, v: u64) {
-        unsafe { self.now.at(i).set(v) }
+        self.now.at(i).set(v)
     }
 
     /// Counter @i at mount.
