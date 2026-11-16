@@ -250,7 +250,7 @@ const DOWNGRADE_STRIPES: &[UpDown] = table! {
 
 /// Every superblock has one from mount on.
 pub(crate) fn ext(sb: &mut c::bch_sb_buf) -> &mut c::bch_sb_field_ext<Validated> {
-    sb.field_mut().expect("an ext section")
+    sb.field_mut::<c::bch_sb_field_ext>().expect("an ext section")
 }
 
 /// Upgrading from @old to @new: what each version past @old, up to @new,

@@ -530,7 +530,7 @@ unsafe extern "C" {
 }
 
 #[cfg(not(kernel))]
-impl c::bch_sb_field_crypt {
+impl c::bch_sb_field_crypt<Validated> {
     /// The scrypt parameters a passphrase is derived with. A key stored
     /// unencrypted - formatted with --no_passphrase - never had any, so this
     /// has to run before the first passphrase is set on it.
@@ -540,7 +540,10 @@ impl c::bch_sb_field_crypt {
         self.set_scrypt_r(8u16.ilog2() as u16);
         self.set_scrypt_p(16u16.ilog2() as u16);
     }
+}
 
+#[cfg(not(kernel))]
+impl c::bch_sb_field_crypt {
     pub fn derive_passphrase(&self, passphrase: &[u8]) -> Result<c::bch_key, BchError> {
         let kdf = self.kdf_type();
         assert!(kdf == c::KdfType::scrypt, "unknown kdf type {kdf}");

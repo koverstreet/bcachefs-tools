@@ -818,7 +818,7 @@ impl OptHost for c::bch_sb_field_ext {
     }
 
     fn with_mut<R>(sb: &mut c::bch_sb_buf, _: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
-        sb.field_mut::<Self>().map(f)
+        sb.field_mut::<Self>().and_then(|e| e.whole_mut()).map(f)
     }
 }
 

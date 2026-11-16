@@ -606,7 +606,7 @@ mod vfs {
 
     /// The quota section, made with the default grace period if there isn't
     /// one.
-    fn sb_get_or_create_quota(sb: &mut (impl SbResize + ?Sized)) -> Option<&mut c::bch_sb_field_quota> {
+    fn sb_get_or_create_quota(sb: &mut (impl SbResize + ?Sized)) -> Option<&mut c::bch_sb_field_quota<Validated>> {
         if sb.field::<c::bch_sb_field_quota>().is_some() {
             return sb.field_mut::<c::bch_sb_field_quota>();
         }

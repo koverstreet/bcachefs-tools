@@ -260,7 +260,7 @@ impl c::bch_sb_buf {
         members_v2_mut(self.field_mut::<c::bch_sb_field_members_v2>()?)?.into_whole_mut(idx as usize)
     }
 
-    fn put_member_v1<F: SbField + Unsized + ?Sized>(&mut self, start: usize, i: u32, m: &c::bch_member) {
+    fn put_member_v1<F: SbSection<Arm: Unsized> + ?Sized>(&mut self, start: usize, i: u32, m: &c::bch_member) {
         let at = start + i as usize * BCH_MEMBER_V1_BYTES;
         let f = bytes_of_mut(self.field_mut::<F>().expect("members: just sized"));
         f[at..at + BCH_MEMBER_V1_BYTES].copy_from_slice(&plain_bytes(m)[..BCH_MEMBER_V1_BYTES]);

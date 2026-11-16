@@ -25,7 +25,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, DataTypes, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes::RecoveryPass;
-use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
+use crate::sb::io::{entries_as_read, entries_end, SbFieldOps, SbSection, SbState};
 use crate::sb::members::member_exists;
 use crate::os::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
@@ -587,8 +587,8 @@ impl ReplicasCpu {
     /// room.
     fn to_sb(&self, sb: &mut (impl SbResize + ?Sized)) -> bool {
         /// Section @F, resized, the other one deleted: its entries' bytes.
-        fn section<'a, F: SbField + Unsized + ?Sized + 'a>(sb: &'a mut (impl SbResize + ?Sized), u64s: u32,
-                                                         other: c::SbFieldType) -> Option<&'a mut [u8]> {
+        fn section<'a, F: SbSection<Arm: Unsized + 'a> + ?Sized>(sb: &'a mut (impl SbResize + ?Sized), u64s: u32,
+                                                               other: c::SbFieldType) -> Option<&'a mut [u8]> {
             sb.field_resize::<F>(u64s)?;
             sb.field_delete(other);
             Some(&mut bytes_of_mut(sb.field_mut::<F>().expect("just resized"))[SECTION_HEAD..])

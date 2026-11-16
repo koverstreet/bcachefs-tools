@@ -240,6 +240,17 @@ pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
 
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
 
+/// A section type named by its family, in any state: what a superblock's
+/// accessors take, handing out its Arm - the section in the superblock's
+/// state.
+pub trait SbSection {
+    type Arm: SbField + ?Sized;
+}
+
+impl<F: InState + ?Sized> SbSection for F where F::In<Validated>: SbField {
+    type Arm = F::In<Validated>;
+}
+
 /// How a section type is validated and printed: implemented on its family in
 /// Validated, X<Validated> - an arm in every family, which the dispatch by
 /// its tag names. Both get the section as read, Unvalidated, from a superblock
@@ -906,14 +917,15 @@ const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 /// What walks its sections - C's walk, which trusts their counts: a
 /// validated superblock's.
 impl c::bch_sb {
-    /// Its section of type @F, if it has one, over the bytes its header says
-    /// are its - one written before F grew reads as zero past them.
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
-        field_get_id(self, F::FIELD_TYPE)?.arm::<F>()
+    /// Its section of type @F, in its state - @F names the family, in any -
+    /// if it has one, over the bytes its header says are its: one written
+    /// before F grew reads as zero past them.
+    pub fn field<F: SbSection + ?Sized>(&self) -> Option<&F::Arm> {
+        field_get_id(self, F::Arm::FIELD_TYPE)?.arm()
     }
 
     /// Its crypt section - whole, or none: validate rejects a shorter one.
-    pub fn crypt(&self) -> Option<&bch_sb_field_crypt> {
+    pub fn crypt(&self) -> Option<&bch_sb_field_crypt<Validated>> {
         self.field::<bch_sb_field_crypt>()
     }
 }
@@ -1004,16 +1016,16 @@ impl bch_sb_buf {
         self.data.as_deref().map_or(&[], |b| unsafe { assume_init_ref(b) })
     }
 
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
-        self.sb().field()
+    pub fn field<F: SbSection + ?Sized>(&self) -> Option<&F::Arm> {
+        self.sb().field::<F>()
     }
 
     /// To edit: a field past the section's end is no write it will carry -
     /// whole_mut() for all of it, if it's all there.
-    pub fn field_mut<F: SbField + ?Sized>(&mut self) -> Option<&mut F> {
-        self.mark_dirty(F::FIELD_TYPE);
-        // SAFETY: the handle's superblock, borrowed mutably with it
-        unsafe { sb_field_get_raw_mut(self.as_mut_ptr()) }
+    pub fn field_mut<F: SbSection + ?Sized>(&mut self) -> Option<&mut F::Arm> {
+        self.mark_dirty(F::Arm::FIELD_TYPE);
+        let off = field_offset(self.sb(), F::Arm::FIELD_TYPE)?;
+        self.arm_mut_at::<F>(off)
     }
 
     /// Section @ty edited: to_cpu() it, after the next write, if this is the
@@ -1173,6 +1185,7 @@ impl bch_sb_handle {
         /* Ensure sb_field_ext exists at current size before reading opts, so
          * ext opts see a fully-sized field: */
         let ext = self.field_get_minsize::<c::bch_sb_field_ext>((size_of::<c::bch_sb_field_ext>() / size_of::<u64>()) as u32)
+            .and_then(|e| e.whole_mut())
             .ok_or(BchError::from(Errcode::ENOSPC_sb))?;
         if ext.dev_readahead() == 0 {
             ext.set_dev_readahead((2 << 20) >> 9);
@@ -1773,18 +1786,6 @@ unsafe fn field_at(sb: *mut Head<bch_sb>, off: usize) -> *mut Head<c::bch_sb_fie
     unsafe { sb.byte_add(off).cast() }
 }
 
-/// bch_sb_handle::field_mut(), for a superblock C hands Rust without its
-/// handle.
-///
-/// # Safety
-/// @sb is validated, and nothing else uses it for 'a.
-pub unsafe fn sb_field_get_raw_mut<'a, F: SbField + ?Sized>(sb: *mut Head<bch_sb>) -> Option<&'a mut F> {
-    // SAFETY: the caller's
-    let off = field_offset(unsafe { bch_sb::<Validated>::from_head_ptr(sb) }, F::FIELD_TYPE)?;
-    // SAFETY: a section of it, borrowed as it is
-    unsafe { c::bch_sb_field::<Validated>::from_head_ptr_mut(field_at(sb, off)) }.arm_mut::<F>()
-}
-
 impl bch_sb_buf {
     /// The buffer grown to @size bytes, the superblock kept and zeroes after.
     fn grow(&mut self, size: usize) -> Result<(), crate::util::alloc::AllocError> {
@@ -1853,10 +1854,11 @@ impl bch_sb_buf {
         ret
     }
 
-    /// The section at @off, as an F: whole_mut() if that's all of F.
-    fn arm_mut_at<F: SbField + ?Sized>(&mut self, off: usize) -> Option<&mut F> {
+    /// The section at @off, as an F in the superblock's state: whole_mut() if
+    /// that's all of F.
+    fn arm_mut_at<F: SbSection + ?Sized>(&mut self, off: usize) -> Option<&mut F::Arm> {
         // SAFETY: a section of the handle's superblock, borrowed with it
-        unsafe { c::bch_sb_field::<Validated>::from_head_ptr_mut(field_at(self.as_mut_ptr(), off)) }.arm_mut::<F>()
+        unsafe { c::bch_sb_field::<Validated>::from_head_ptr_mut(field_at(self.as_mut_ptr(), off)) }.arm_mut()
     }
 }
 
@@ -1908,15 +1910,15 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
     }
 
     /// Resized to @u64s, made if there's none: at its (possibly new) place.
-    fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<&mut F> {
-        let off = self.field_resize_id(F::FIELD_TYPE, u64s)?;
-        self.arm_mut_at(off)
+    fn field_resize<F: SbSection + ?Sized>(&mut self, u64s: u32) -> Option<&mut F::Arm> {
+        let off = self.field_resize_id(F::Arm::FIELD_TYPE, u64s)?;
+        self.arm_mut_at::<F>(off)
     }
 
     /// Made or grown to at least @min_u64s.
-    fn field_get_minsize<F: SbField + ?Sized>(&mut self, min_u64s: u32) -> Option<&mut F> {
-        let off = self.field_get_minsize_id(F::FIELD_TYPE, min_u64s)?;
-        self.arm_mut_at(off)
+    fn field_get_minsize<F: SbSection + ?Sized>(&mut self, min_u64s: u32) -> Option<&mut F::Arm> {
+        let off = self.field_get_minsize_id(F::Arm::FIELD_TYPE, min_u64s)?;
+        self.arm_mut_at::<F>(off)
     }
 
     fn field_delete(&mut self, ty: c::SbFieldType) {
@@ -2042,10 +2044,10 @@ impl DevSbMut<'_> {
 
     /// Section @F, one each device has its own of, resized to @u64s - made if
     /// there's none: None if there's no room.
-    pub fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<&mut F> {
-        const { assert!(F::SINGLE_DEVICE, "a section every device's superblock shares: the filesystem's to change") };
-        let off = self.resize().field_resize_id(F::FIELD_TYPE, u64s)?;
-        self.io.buf.arm_mut_at(off)
+    pub fn field_resize<F: SbSection + ?Sized>(&mut self, u64s: u32) -> Option<&mut F::Arm> {
+        const { assert!(F::Arm::SINGLE_DEVICE, "a section every device's superblock shares: the filesystem's to change") };
+        let off = self.resize().field_resize_id(F::Arm::FIELD_TYPE, u64s)?;
+        self.io.buf.arm_mut_at::<F>(off)
     }
 
     pub fn field_delete<F: SbField + ?Sized>(&mut self) {
@@ -2874,8 +2876,8 @@ pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), B
     // room for is left out, as its from_cpu() would have left it - but the
     // extent type sizes, whose from_cpu() failed the write without room,
     // fail the open instead.
-    fn make<F: SbField + ?Sized>(sb: &mut FsSbResize<'_>) -> Result<(), BchError> {
-        sb.field_get_minsize::<F>(<F as ArmRef>::MIN_LEN.div_ceil(size_of::<u64>()) as u32)
+    fn make<F: SbSection + ?Sized>(sb: &mut FsSbResize<'_>) -> Result<(), BchError> {
+        sb.field_get_minsize::<F>(F::Arm::MIN_LEN.div_ceil(size_of::<u64>()) as u32)
             .map(drop).ok_or(Errcode::ENOSPC_sb.into())
     }
     let _ = make::<c::bch_sb_field_counters>(&mut disk_sb);
