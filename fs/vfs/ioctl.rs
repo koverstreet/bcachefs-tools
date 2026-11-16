@@ -42,7 +42,6 @@ use crate::os::kernel::{capable, current_fsgid, current_fsuid, current_umask, Ca
 use crate::util::log::LogMsg;
 use crate::util::printbuf::Printbuf;
 use crate::init::chardev::{copy_err_msg, fs_ioctl, ErrMsg, V2};
-use crate::os::dentry::Dentry;
 use crate::os::iov_iter::IovIter;
 use crate::vfs::direct::direct_io_read;
 use crate::os::kiocb::Kiocb;
@@ -249,22 +248,17 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
         .transpose()?;
     let mut snapshot_src = c::subvol_inum::default();
     if let Some(src) = &src {
-        if !src.on(fs) {
+        let Some(inode) = src.on(fs) else {
             prt!(err, "src_path not on dst filesystem");
             return Err(c::EXDEV.into());
-        }
-        // SAFETY: a positive dentry of ours, held by @src
-        snapshot_src = unsafe { InodeInfo::from_inode((*src.dentry()).d_inode) }.inum();
+        };
+        snapshot_src = inode.inum();
     }
 
     let dst = Creating::start(a.dirfd as c_int, a.dst_ptr)?;
-    if !dst.on(fs) {
+    let Some((dentry, dir)) = dst.on(fs) else {
         prt!(err, "dst_path not on dst filesystem");
         return Err(c::EXDEV.into());
-    }
-    // SAFETY: held by @dst, which holds its parent, @dir, locked
-    let (dentry, dir) = unsafe {
-        (Dentry::borrow_raw(dst.dentry), InodeInfo::from_inode((*dst.path.dentry).d_inode))
     };
     if dentry.inode_opt().is_some() {
         return fs.throw(E::EEXIST_subvolume_create);
@@ -317,12 +311,8 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMs
         }
 
         let r = Removing::start(a.dirfd as c_int, a.dst_ptr)?;
-        if !r.on(fs) {
+        let Some((victim, dir)) = r.on(fs) else {
             return Err(c::EXDEV.into());
-        }
-        // SAFETY: held by @r, which holds its parent, @dir, locked
-        let (victim, dir) = unsafe {
-            (Dentry::borrow_raw(r.victim), InodeInfo::from_inode((*r.path.dentry).d_inode))
         };
 
         MntIdmap::of(file).permission(victim.inode().vfs(), c::MAY_WRITE)?;
