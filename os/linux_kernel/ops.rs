@@ -128,7 +128,6 @@ from_raw! {
     &'a mut c::iattr      = *mut c::iattr       => |r| &mut *r;
     &'a mut c::file_kattr = *mut c::file_kattr  => |r| &mut *r;
     &'a mut c::delayed_call = *mut c::delayed_call => |r| &mut *r;
-    &'a mut c::fiemap_extent_info = *mut c::fiemap_extent_info => |r| &mut *r;
     /// The kernel crate's is fs.h's declaration, opaque; codegen's the same.
     &'a mut c::kstatfs    = *mut kernel::bindings::kstatfs => |r| &mut *r.cast();
 }

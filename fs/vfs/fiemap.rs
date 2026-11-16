@@ -34,7 +34,8 @@ use crate::c;
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::ptrs::{BkeyVPtrs, PtrsMut};
 use crate::data::reflink::lookup_indirect_extent;
-use crate::errcode::{Errcode, ret_to_result, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, BchError};
+use crate::os::fiemap::Fiemap;
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
 
@@ -55,12 +56,10 @@ impl Mapping {
     }
 
     /// True if @info is full, which ends the walk.
-    fn emit(&self, fs: &Fs, info: &mut c::fiemap_extent_info, flags: u32) -> Result<bool, BchError> {
+    fn emit(&self, fs: &Fs, info: &mut Fiemap<'_>, flags: u32) -> Result<bool, BchError> {
 
         let mut fill = |logical: u64, physical: u64, len: u64, flags: u32| {
-            ret_to_result(unsafe { c::fiemap_fill_next_extent(info, logical << 9, physical << 9,
-                                                             len << 9, flags) })
-                .map(|full| full != 0)
+            info.fill_next(logical << 9, physical << 9, len << 9, flags)
         };
         let block_sectors = fs.block_bytes() >> 9;
         let unaligned = |sectors: u64| sectors & (block_sectors - 1) != 0;
@@ -185,11 +184,11 @@ fn next_mapping(t: &TransAttempt<'_, '_>, inode: &InodeInfo, start: u64, end: u6
     Ok(Mapping::Extent(buf))
 }
 
-pub(crate) fn fiemap(inode: &InodeInfo, info: &mut c::fiemap_extent_info, start: u64, mut len: u64)
+pub(crate) fn fiemap(inode: &InodeInfo, mut info: Fiemap<'_>, start: u64, mut len: u64)
     -> Result<(), BchError>
 {
     let fs = inode.fs();
-    ret_to_result_void(unsafe { c::fiemap_prep(inode.vfs().as_ptr(), info, start, &mut len, 0) })?;
+    info.prep(inode.vfs(), start, &mut len)?;
 
     let Some(end) = start.checked_add(len) else {
         return fs.throw(Errcode::EINVAL_fiemap_overflow);
@@ -212,7 +211,7 @@ pub(crate) fn fiemap(inode: &InodeInfo, info: &mut c::fiemap_extent_info, start:
 
         if let Some(prev) = prev.replace(cur) {
             trans.unlock();
-            if prev.emit(fs, info, 0)? {
+            if prev.emit(fs, &mut info, 0)? {
                 return Ok(());
             }
         }
@@ -220,7 +219,7 @@ pub(crate) fn fiemap(inode: &InodeInfo, info: &mut c::fiemap_extent_info, start:
 
     if let Some(prev) = prev {
         trans.unlock();
-        prev.emit(fs, info, c::FIEMAP_EXTENT_LAST)?;
+        prev.emit(fs, &mut info, c::FIEMAP_EXTENT_LAST)?;
     }
     Ok(())
 }

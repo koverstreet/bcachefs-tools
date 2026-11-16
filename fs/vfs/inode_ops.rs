@@ -24,6 +24,7 @@ use crate::xattr;
 use cstruct_macros::vtable;
 
 use crate::os::dentry::Dentry;
+use crate::os::fiemap::Fiemap;
 use crate::os::idmap::MntIdmap;
 use super::inode::InodeInfo;
 use super::namei::DirOps;
@@ -95,8 +96,7 @@ crate::vfs_ops! {
     /// @dentry None in an RCU walk.
     fn get_link(dentry: Option<Dentry<'_>>, inode: &InodeInfo, done: &mut c::delayed_call)
         -> *const c_char;
-    fn fiemap(inode: &InodeInfo, info: &mut c::fiemap_extent_info, start: u64, len: u64)
-        -> Result<(), BchError>;
+    fn fiemap(inode: &InodeInfo, info: Fiemap<'_>, start: u64, len: u64) -> Result<(), BchError>;
     /// @buf None for how many bytes the list would take.
     fn listxattr(dentry: Dentry<'_>, buf: Option<&mut [u8]>) -> Result<usize, BchError>
     {
@@ -118,9 +118,7 @@ struct SpecialOps;
 
 #[vtable]
 impl InodeOps for FileInodeOps {
-    fn fiemap(inode: &InodeInfo, info: &mut c::fiemap_extent_info, start: u64, len: u64)
-        -> Result<(), BchError>
-    {
+    fn fiemap(inode: &InodeInfo, info: Fiemap<'_>, start: u64, len: u64) -> Result<(), BchError> {
         super::fiemap::fiemap(inode, info, start, len)
     }
 }

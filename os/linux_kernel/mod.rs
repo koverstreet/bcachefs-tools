@@ -8,6 +8,7 @@ pub mod crc;
 pub mod debugfs;
 pub mod dentry;
 pub mod export;
+pub mod fiemap;
 pub mod file;
 pub mod folio;
 pub mod fs_context;
