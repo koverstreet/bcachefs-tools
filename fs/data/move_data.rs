@@ -39,7 +39,7 @@ use crate::alloc::check_backpointers::check_one_bucket_backpointer_mismatch;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::read::btree_node_scrub;
+use crate::btree::scrub::btree_node_scrub;
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeLevels, CommitFlags, CommitOpts, TransAttempt};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;

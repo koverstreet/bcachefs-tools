@@ -26,7 +26,7 @@
 use crate::alloc::buckets::gen_cmp;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
-use crate::btree::read::node_replica_good;
+use crate::btree::scrub::node_replica_good;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;

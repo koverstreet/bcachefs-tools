@@ -10,7 +10,7 @@ use crate::btree::bkey::BkeySC;
 use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, CommitFlags,
                          TransAttempt};
-use crate::btree::read::{read_replicas, ReplicaRead, Replicas};
+use crate::btree::scrub::{read_replicas, ReplicaRead, Replicas};
 use crate::c;
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
