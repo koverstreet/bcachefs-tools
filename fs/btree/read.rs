@@ -1,7 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A node's read is a task, node_read() -> read_task(), trying its replicas
-//! in turn; read_done() checks, decrypts and sorts what each one read.
+//! Reading a btree node: its replicas tried in turn, and what's read checked,
+//! decrypted and sorted down to one bset - read_done().
+//!
+//! A read owns its node's contents while read_in_flight is set: the cache's
+//! fill, or btree_root_read(), sets it with the node write locked - making a
+//! ReadInFlightNode - and whoever locks the node after waits on the bit before
+//! touching its contents (bch2_btree_node_wait_on_read()). Dropping the guard
+//! clears it and wakes them; a sync read waits on it as they do.
+//!
+//! node_read() picks a replica and starts the read's task, read_task(), in a
+//! box from the module's pool, NODE_READS, its bio's bvecs inline: freed a
+//! grace period after the task's done, when the filesystem may be gone - and a
+//! pool, so node reads make progress under memory pressure. With a device to
+//! read from, the task starts inline, its first IO submitted by the caller;
+//! with none, on read_complete_wq, where the failure is reported.
+//!
+//! The task's state is a NodeRead. Each attempt maps the bio onto the node's
+//! buffer as it is then - read_done() may have swapped it for its sort's -
+//! submits, and resumes on read_complete_wq for read_done(); a failure marks
+//! the replica failed, and the next is picked. What every attempt found is
+//! reported once, after the IO, in one message. The node goes last, its drop
+//! the wake: btree_flush_all_reads() waits on read_in_flight, and after it the
+//! filesystem may go - the task comes off its list after that, which the
+//! filesystem's teardown waits for too.
+//!
+//! read_done() is node scan's as well, for the nodes it finds: the node its
+//! own, and no failures to record.
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_val_to_text, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN, SPOS_MAX};
