@@ -489,8 +489,8 @@ impl<'f> TransGuard<'f> {
         let trans = TransGuard { trans: bch2_trans_alloc(c) };
         #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
         let _ = unsafe {
-            ::pin_init::PinInit::__pinned_init(crate::new_lockdep_map!("bcachefs_btree"),
-                                               &raw mut (*trans.trans.as_ptr()).dep_map)
+            crate::util::alloc::init_at(crate::new_lockdep_map!("bcachefs_btree"),
+                                        &raw mut (*trans.trans.as_ptr()).dep_map)
         };
 
         /*

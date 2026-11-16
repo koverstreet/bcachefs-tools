@@ -2,22 +2,28 @@
 #
 # The driver model, ACPI and GPU modules and their C helpers: nothing in
 # bcachefs uses them, and they call into C that older kernels don't have or
-# don't export (6.18 has no acpi_of_match_device or gpu_buddy). 0001-trim
-# drops their mod lines, helper includes and bindings headers.
-helpers/acpi.c
+# don't export (6.18 has no acpi_of_match_device or gpu_buddy). With them,
+# interrupt and math: their C is newer than the kernels this stack builds
+# against (local_interrupt_disable() is 7.3, mul_u64_add_u64_div_u64() 6.19).
+# 0001-trim drops their mod lines, helper includes and bindings headers.
 helpers/auxiliary.c
 helpers/binder.c
 helpers/blk.c
 helpers/clk.c
 helpers/cpufreq.c
 helpers/device.c
-helpers/dma.c
 helpers/dma-resv.c
+helpers/dma.c
+helpers/dma_fence.c
 helpers/drm.c
 helpers/drm_gpuvm.c
+helpers/fwctl.c
 helpers/gpu.c
+helpers/interrupt.c
 helpers/io.c
 helpers/irq.c
+helpers/math.c
+helpers/net
 helpers/of.c
 helpers/pci.c
 helpers/platform.c
@@ -25,6 +31,7 @@ helpers/property.c
 helpers/pwm.c
 helpers/regulator.c
 helpers/scatterlist.c
+helpers/serdev.c
 helpers/usb.c
 kernel/acpi.rs
 kernel/auxiliary.rs
@@ -34,25 +41,27 @@ kernel/clk.rs
 kernel/configfs.rs
 kernel/cpufreq.rs
 kernel/device
-kernel/device_id.rs
 kernel/device.rs
+kernel/device_id.rs
 kernel/devres.rs
 kernel/dma.rs
+kernel/dma_buf
 kernel/driver.rs
 kernel/drm
 kernel/faux.rs
 kernel/firmware.rs
+kernel/fwctl.rs
 kernel/gpu
 kernel/gpu.rs
 kernel/i2c.rs
+kernel/interrupt.rs
 kernel/io
-kernel/iommu
 kernel/io.rs
+kernel/iommu
 kernel/irq
 kernel/irq.rs
 kernel/miscdevice.rs
 kernel/net
-kernel/net.rs
 kernel/of.rs
 kernel/opp.rs
 kernel/pci
@@ -61,6 +70,7 @@ kernel/platform.rs
 kernel/pwm.rs
 kernel/regulator.rs
 kernel/scatterlist.rs
+kernel/serdev.rs
 kernel/soc.rs
 kernel/usb.rs
 

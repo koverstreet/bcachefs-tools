@@ -11,6 +11,53 @@
 mod compress;
 pub mod sync;
 
+/// What the vendored aref.rs implements for ARef: the kernel's types.rs, the
+/// rest of which needs the kernel's proc macros
+pub mod types {
+    use core::ffi::c_void;
+
+    /// kernel::types::ForeignOwnable: a type owned through a raw pointer.
+    ///
+    /// # Safety
+    /// As the kernel's: into_foreign()'s pointer is non-null and
+    /// FOREIGN_ALIGN aligned.
+    pub unsafe trait ForeignOwnable: Sized {
+        const FOREIGN_ALIGN: usize;
+
+        type Borrowed<'a>
+        where
+            Self: 'a;
+        type BorrowedMut<'a>
+        where
+            Self: 'a;
+
+        fn into_foreign(self) -> *mut c_void;
+
+        /// # Safety
+        /// @ptr is into_foreign()'s, not yet taken back.
+        unsafe fn from_foreign(ptr: *mut c_void) -> Self;
+
+        /// # Safety
+        /// @ptr is null, or as from_foreign()'s.
+        unsafe fn try_from_foreign(ptr: *mut c_void) -> Option<Self> {
+            (!ptr.is_null()).then(|| unsafe { Self::from_foreign(ptr) })
+        }
+
+        /// # Safety
+        /// @ptr is into_foreign()'s, and outlives 'a.
+        unsafe fn borrow<'a>(ptr: *mut c_void) -> Self::Borrowed<'a>;
+
+        /// # Safety
+        /// As borrow()'s, and nothing else borrows it for 'a.
+        unsafe fn borrow_mut<'a>(ptr: *mut c_void) -> Self::BorrowedMut<'a>;
+    }
+}
+
+/// The kernel crate's, as far as the vendored aref.rs uses it
+pub mod prelude {
+    pub use core::ffi::c_void;
+}
+
 pub mod c {
     #![allow(
         non_camel_case_types,

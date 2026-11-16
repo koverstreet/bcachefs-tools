@@ -11,7 +11,10 @@ use core::mem::{
 };
 use core::num::NonZero;
 
-use crate::const_assert;
+use crate::{
+    const_assert,
+    num::FromConst, //
+};
 
 /// Type representing an alignment, which is always a power of two.
 ///
@@ -166,6 +169,13 @@ impl Alignment {
     }
 }
 
+impl<const V: i128> FromConst<V> for Alignment {
+    const VALUE: Self = match Alignment::new_checked(<usize as FromConst<V>>::VALUE) {
+        Some(alignment) => alignment,
+        None => panic!("constant is not a power of two"),
+    };
+}
+
 /// Trait for items that can be aligned against an [`Alignment`].
 pub trait Alignable: Sized {
     /// Aligns `self` down to `alignment`.
@@ -235,11 +245,20 @@ impl_alignable_uint!(u8, u16, u32, u64, usize);
 ///
 /// This is a generalization of [`size_of`] that works for dynamically sized types.
 pub trait KnownSize {
+    /// Minimum size of this type known at compile-time.
+    const MIN_SIZE: usize;
+
+    /// Minimum alignment of this type known at compile-time.
+    const MIN_ALIGN: Alignment;
+
     /// Get the size of an object of this type in bytes, with the metadata of the given pointer.
     fn size(p: *const Self) -> usize;
 }
 
 impl<T> KnownSize for T {
+    const MIN_SIZE: usize = size_of::<T>();
+    const MIN_ALIGN: Alignment = Alignment::of::<T>();
+
     #[inline(always)]
     fn size(_: *const Self) -> usize {
         size_of::<T>()
@@ -247,6 +266,9 @@ impl<T> KnownSize for T {
 }
 
 impl<T> KnownSize for [T] {
+    const MIN_SIZE: usize = 0;
+    const MIN_ALIGN: Alignment = Alignment::of::<T>();
+
     #[inline(always)]
     fn size(p: *const Self) -> usize {
         p.len() * size_of::<T>()

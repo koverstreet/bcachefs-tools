@@ -7,16 +7,14 @@ PollCondVar's drop calls __wake_up_pollfree, which the kernel doesn't
 export, so a module can't link it. bcachefs doesn't use it.
 
 ---
- kernel/sync.rs | 5 ++++-
- 1 file changed, 4 insertions(+), 1 deletion(-)
 
 diff --git a/kernel/sync.rs b/kernel/sync.rs
-index 993dbf2caa0e..9e15c81f8b0c 100644
+index ee372c048a8a..175bdf1131b5 100644
 --- a/kernel/sync.rs
 +++ b/kernel/sync.rs
-@@ -17,7 +17,10 @@ pub mod completion;
- mod condvar;
+@@ -14,7 +14,10 @@ mod condvar;
  pub mod lock;
+ pub mod lockdep;
  mod locked_by;
 -pub mod poll;
 +// vendored-trim: PollCondVar (sync::poll) is unused by bcachefs and its drop

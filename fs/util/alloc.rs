@@ -366,18 +366,12 @@ pub fn kvzalloc(size: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
     kvrealloc_zeroed(core::ptr::null_mut(), 0, size)
 }
 
-/// @init run on @slot: PinInit's __init() - __pinned_init(), before the
-/// kernel's pin-init v2 (7.3).
+/// @init run on @slot: PinInit's __init().
 ///
 /// # Safety
 /// As PinInit's: @slot is a T's, and stays put if @init needs it to.
 pub unsafe fn init_at<T, E>(init: impl ::pin_init::PinInit<T, E>, slot: *mut T) -> Result<(), E> {
-    // SAFETY: the caller's
-    #[cfg(bch_pin_init_v2)]
-    return unsafe { init.__init(slot) };
-    // SAFETY: the caller's
-    #[cfg(not(bch_pin_init_v2))]
-    return unsafe { init.__pinned_init(slot) };
+    unsafe { init.__init(slot) }
 }
 
 /// An initializer that writes nothing, for a field its owner made already: a

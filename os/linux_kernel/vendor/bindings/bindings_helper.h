@@ -30,10 +30,11 @@
 
 // vendored-trim-618: the kernel crate's driver model is trimmed (see
 // kernel/lib.rs), so the driver-binding headers it needed are dropped here:
-//   acpi, gpu_buddy, drm/*, auxiliary_bus, blk*, clk, configfs, cpufreq,
-//   device/faux, dma*, ethtool, firmware, i2c, interrupt, io-pgtable, ioport,
-//   iosys-map, mdio, miscdevice, of_device, pci, phy, platform_device, pm_opp,
-//   property, pwm, regulator, sys_soc, usb, and the samples' rust_sample trace.
+//   acpi, gpu_buddy, drm/*, auxiliary_bus, blk-mq, clk, configfs, cpufreq,
+//   device/faux, dma*, ethtool, firmware, fwctl, i2c, interrupt, io-pgtable,
+//   ioport, iosys-map, mdio, miscdevice, net/genetlink, net/netlink, of_device,
+//   pci, phy, platform_device, pm_opp, property, pwm, regulator, serdev,
+//   sys_soc, usb, and the samples' rust_sample trace.
 // What remains is bcachefs's kept closure.
 #include <kunit/test.h>
 #include <linux/bitmap.h>
@@ -68,10 +69,22 @@
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
 
+/*
+ * vendored: errno.h's since 7.0; before, the filesystems' own headers
+ * defined them, to these
+ */
+#ifndef EFSBADCRC
+#define EFSBADCRC	EBADMSG
+#endif
+#ifndef EFSCORRUPTED
+#define EFSCORRUPTED	EUCLEAN
+#endif
+
 /* `bindgen` gets confused at certain things. */
 const size_t RUST_CONST_HELPER_ARCH_SLAB_MINALIGN = ARCH_SLAB_MINALIGN;
 const size_t RUST_CONST_HELPER_ARCH_KMALLOC_MINALIGN = ARCH_KMALLOC_MINALIGN;
 const size_t RUST_CONST_HELPER_PAGE_SIZE = PAGE_SIZE;
+// vendored-trim-618: GENLMSG_DEFAULT_SIZE (net/genetlink trimmed)
 const gfp_t RUST_CONST_HELPER_GFP_ATOMIC = GFP_ATOMIC;
 const gfp_t RUST_CONST_HELPER_GFP_KERNEL = GFP_KERNEL;
 const gfp_t RUST_CONST_HELPER_GFP_KERNEL_ACCOUNT = GFP_KERNEL_ACCOUNT;
@@ -79,7 +92,7 @@ const gfp_t RUST_CONST_HELPER_GFP_NOWAIT = GFP_NOWAIT;
 const gfp_t RUST_CONST_HELPER___GFP_ZERO = __GFP_ZERO;
 const gfp_t RUST_CONST_HELPER___GFP_HIGHMEM = ___GFP_HIGHMEM;
 const gfp_t RUST_CONST_HELPER___GFP_NOWARN = ___GFP_NOWARN;
-// vendored-trim-618: BLK_FEAT_ROTATIONAL (block model trimmed; blk_types.h gone)
+// vendored-trim-618: BLK_FEAT_ROTATIONAL (the trimmed block module's)
 const fop_flags_t RUST_CONST_HELPER_FOP_UNSIGNED_OFFSET = FOP_UNSIGNED_OFFSET;
 
 const xa_mark_t RUST_CONST_HELPER_XA_PRESENT = XA_PRESENT;
@@ -95,7 +108,7 @@ const vm_flags_t RUST_CONST_HELPER_VM_SHARED = VM_SHARED;
 const vm_flags_t RUST_CONST_HELPER_VM_MAYREAD = VM_MAYREAD;
 const vm_flags_t RUST_CONST_HELPER_VM_MAYWRITE = VM_MAYWRITE;
 const vm_flags_t RUST_CONST_HELPER_VM_MAYEXEC = VM_MAYEXEC;
-const vm_flags_t RUST_CONST_HELPER_VM_MAYSHARE = VM_MAYSHARE; // vendored-fix-618: upstream copy-paste typo (was VM_MAYEXEC)
+const vm_flags_t RUST_CONST_HELPER_VM_MAYSHARE = VM_MAYSHARE;
 const vm_flags_t RUST_CONST_HELPER_VM_PFNMAP = VM_PFNMAP;
 const vm_flags_t RUST_CONST_HELPER_VM_IO = VM_IO;
 const vm_flags_t RUST_CONST_HELPER_VM_DONTCOPY = VM_DONTCOPY;

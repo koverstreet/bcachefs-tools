@@ -18,16 +18,43 @@ bcachefs.ko carries this stack to kernels built without Rust, back to
     INLINE_COPY_FROM_USER/INLINE_COPY_TO_USER rather than INLINE_COPY_USER;
     and before 6.19 the header declares them there while lib/usercopy.c
     defines them only with CONFIG_RUST, so supply them, as it would.
+  - Srcu's: before 7.3, __init_srcu_struct() exists only with
+    CONFIG_DEBUG_LOCK_ALLOC - init_srcu_struct() is the function without
+    it - and srcu_readers_active() is srcutree.c's own, so Srcu's drop
+    doesn't get to warn of a leaked guard; cleanup_srcu_struct() still
+    WARNs of live readers.
+  - EFSBADCRC and EFSCORRUPTED are errno.h's from 7.0 (602544773763);
+    before, the filesystems defined them, as EBADMSG and EUCLEAN, which
+    the bindings do there. EFTYPE is a new errno in 7.2 (cf1b04aaef8b),
+    so error::code has no EFTYPE: an older kernel has no such error.
 
 Each goes when the oldest kernel bcachefs supports has what it stands in
 for.
 
 ---
- helpers/slab.c    | 18 ++++++++++++++++++
- helpers/uaccess.c | 35 ++++++++++++++++++++++++++++++++++-
- helpers/vmalloc.c | 13 +++++++++++++
- 3 files changed, 65 insertions(+), 1 deletion(-)
 
+diff --git a/bindings/bindings_helper.h b/bindings/bindings_helper.h
+index 8e36395a7eb7..344e6913e765 100644
+--- a/bindings/bindings_helper.h
++++ b/bindings/bindings_helper.h
+@@ -69,6 +69,17 @@
+ #include <linux/workqueue.h>
+ #include <linux/xarray.h>
+ 
++/*
++ * vendored: errno.h's since 7.0; before, the filesystems' own headers
++ * defined them, to these
++ */
++#ifndef EFSBADCRC
++#define EFSBADCRC	EBADMSG
++#endif
++#ifndef EFSCORRUPTED
++#define EFSCORRUPTED	EUCLEAN
++#endif
++
+ /* `bindgen` gets confused at certain things. */
+ const size_t RUST_CONST_HELPER_ARCH_SLAB_MINALIGN = ARCH_SLAB_MINALIGN;
+ const size_t RUST_CONST_HELPER_ARCH_KMALLOC_MINALIGN = ARCH_KMALLOC_MINALIGN;
 diff --git a/helpers/slab.c b/helpers/slab.c
 index 9279f082467d..8010967743aa 100644
 --- a/helpers/slab.c
@@ -68,6 +95,47 @@ index 9279f082467d..8010967743aa 100644
 +	return kvrealloc(p, ALIGN(size, align), flags);
 +#endif
  }
+diff --git a/helpers/srcu.c b/helpers/srcu.c
+index 1a2f563640e0..66a6ae0816d3 100644
+--- a/helpers/srcu.c
++++ b/helpers/srcu.c
+@@ -1,17 +1,36 @@
+ // SPDX-License-Identifier: GPL-2.0
+ 
+ #include <linux/srcu.h>
++#include <linux/version.h>
+ 
+ __rust_helper int rust_helper_init_srcu_struct_with_key(struct srcu_struct *ssp,
+ 							const char *name,
+ 							struct lock_class_key *key)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 3, 0) || defined(CONFIG_DEBUG_LOCK_ALLOC)
+ 	return __init_srcu_struct(ssp, name, key);
++#else
++	/*
++	 * Before 7.3, __init_srcu_struct() is lockdep's: without
++	 * CONFIG_DEBUG_LOCK_ALLOC, init_srcu_struct() is the function, and has
++	 * no use for the name or key.
++	 */
++	return init_srcu_struct(ssp);
++#endif
+ }
+ 
+ __rust_helper bool rust_helper_srcu_readers_active(struct srcu_struct *ssp)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 3, 0)
+ 	return srcu_readers_active(ssp);
++#else
++	/*
++	 * Before 7.3 srcu_readers_active() is srcutree.c's own. Srcu's drop asks
++	 * only to warn of a leaked guard and wait it out; cleanup_srcu_struct()
++	 * still WARNs of live readers itself.
++	 */
++	return false;
++#endif
+ }
+ 
+ __rust_helper int rust_helper_srcu_read_lock(struct srcu_struct *ssp)
 diff --git a/helpers/uaccess.c b/helpers/uaccess.c
 index 6e59cc9c665c..b87105b008d3 100644
 --- a/helpers/uaccess.c
@@ -161,3 +229,17 @@ index 6aed13292313..16402927b20c 100644
  }
  
  __rust_helper bool rust_helper_is_vmalloc_addr(const void *x)
+diff --git a/kernel/error.rs b/kernel/error.rs
+index 9003a1b86da8..008c58744bd2 100644
+--- a/kernel/error.rs
++++ b/kernel/error.rs
+@@ -166,7 +166,8 @@ pub mod code {
+     declare_err!(ENOTRECOVERABLE, "State not recoverable.");
+     declare_err!(ERFKILL, "Operation not possible due to RF-kill.");
+     declare_err!(EHWPOISON, "Memory page has hardware error.");
+-    declare_err!(EFTYPE, "Wrong file type for the intended operation.");
++    // vendored: EFTYPE, "Wrong file type for the intended operation." - a 7.2
++    // errno, which older kernels have no such error as
+ 
+     // From `include/linux/errno.h`.
+     declare_err!(ERESTARTSYS, "Restart the system call.");

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: (BSD-2-Clause OR Apache-2.0) OR MIT
-
+//
 pub mod from_bytes;
 pub mod into_bytes;
 pub mod known_layout;
+pub mod project;
 pub mod try_from_bytes;
 pub mod unaligned;
 
@@ -15,8 +16,8 @@ use crate::{
     util::{Ctx, DataExt, FieldBounds, ImplBlockBuilder, Trait},
 };
 
-pub(crate) fn derive_immutable(ctx: &Ctx, _top_level: Trait) -> TokenStream {
-    match &ctx.ast.data {
+pub(crate) fn derive_immutable(ctx: &Ctx, _top_level: Trait) -> Result<TokenStream, Error> {
+    Ok(match &ctx.ast.data {
         Data::Struct(strct) => {
             ImplBlockBuilder::new(ctx, strct, Trait::Immutable, FieldBounds::ALL_SELF).build()
         }
@@ -26,7 +27,7 @@ pub(crate) fn derive_immutable(ctx: &Ctx, _top_level: Trait) -> TokenStream {
         Data::Union(unn) => {
             ImplBlockBuilder::new(ctx, unn, Trait::Immutable, FieldBounds::ALL_SELF).build()
         }
-    }
+    })
 }
 
 pub(crate) fn derive_hash(ctx: &Ctx, _top_level: Trait) -> Result<TokenStream, Error> {
@@ -97,16 +98,13 @@ pub(crate) fn derive_split_at(ctx: &Ctx, _top_level: Trait) -> Result<TokenStrea
     match &ctx.ast.data {
         Data::Struct(_) => {}
         Data::Enum(_) | Data::Union(_) => {
-            return Err(Error::new(Span::call_site(), "can only be applied to structs"));
+            return ctx
+                .error_or_skip(Error::new(Span::call_site(), "can only be applied to structs"));
         }
     };
 
-    if repr.get_packed().is_some() {
-        return Err(Error::new(Span::call_site(), "must not have #[repr(packed)] attribute"));
-    }
-
     if !(repr.is_c() || repr.is_transparent()) {
-        return Err(Error::new(
+        return ctx.error_or_skip(Error::new(
             Span::call_site(),
             "must have #[repr(C)] or #[repr(transparent)] in order to guarantee this type's layout is splitable",
         ));
@@ -116,17 +114,32 @@ pub(crate) fn derive_split_at(ctx: &Ctx, _top_level: Trait) -> Result<TokenStrea
     let trailing_field = if let Some(((_, _, trailing_field), _)) = fields.split_last() {
         trailing_field
     } else {
-        return Err(Error::new(Span::call_site(), "must at least one field"));
+        return ctx.error_or_skip(Error::new(Span::call_site(), "must at least one field"));
     };
 
     let zerocopy_crate = &ctx.zerocopy_crate;
-    // SAFETY: `#ty`, per the above checks, is `repr(C)` or `repr(transparent)`
-    // and is not packed; its trailing field is guaranteed to be well-aligned
-    // for its type. By invariant on `FieldBounds::TRAILING_SELF`, the trailing
-    // slice of the trailing field is also well-aligned for its type.
+    let elem = quote!(<#trailing_field as #zerocopy_crate::SplitAt>::Elem);
+    let elem =
+        if repr.get_packed().is_some() { quote!(#zerocopy_crate::Unalign<#elem>) } else { elem };
+
+    // SAFETY: The checks above require `repr(C)` or `repr(transparent)`, and
+    // `FieldBounds::TRAILING_SELF` requires the trailing field to be `SplitAt`.
+    // Its `Elem` therefore has the size, bit validity, and `UnsafeCell`
+    // coverage of the actual trailing element. For an unpacked struct, the
+    // trailing field is aligned, so its `SplitAt` alignment guarantee applies.
+    // For a packed struct, wrapping its `Elem` in `Unalign` preserves those
+    // representation properties and gives alignment 1. Thus the trailing
+    // slice can be accessed as `[#elem]` even if packing misaligns its field.
+    // Packing does not change the field's internal layout [1], so its element
+    // size and byte offsets are preserved in either case.
+    //
+    // [1] Per https://doc.rust-lang.org/1.93.0/reference/type-layout.html#layout.repr.alignment.intro:
+    //
+    //   `packed` may also alter the padding between fields (although it will
+    //   not alter the padding inside of any field).
     Ok(ImplBlockBuilder::new(ctx, &ctx.ast.data, Trait::SplitAt, FieldBounds::TRAILING_SELF)
         .inner_extras(quote! {
-            type Elem = <#trailing_field as #zerocopy_crate::SplitAt>::Elem;
+            type Elem = #elem;
         })
         .build())
 }

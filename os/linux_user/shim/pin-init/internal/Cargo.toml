@@ -13,7 +13,7 @@ proc-macro = true
 path = "../../../../linux_kernel/vendor/pin-init/internal/src/lib.rs"
 
 [dependencies]
-syn = { version = "2.0", features = ["full", "visit-mut"] }
+syn = { version = "2.0", features = ["full", "visit", "visit-mut"] }
 quote = "1.0"
 proc-macro2 = "1.0"
 

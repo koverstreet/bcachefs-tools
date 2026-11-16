@@ -36,3 +36,6 @@ __rust_helper void rust_helper_spin_assert_is_held(spinlock_t *lock)
 {
 	lockdep_assert_held(lock);
 }
+
+// vendored-trim-73: the SpinLockIrq helpers: spin_lock_irq_disable() and
+// friends are 7.3

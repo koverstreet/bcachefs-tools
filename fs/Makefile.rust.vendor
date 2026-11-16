@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 #
-# The vendored Rust stack: a patched copy of the kernel's rust/ (7.1), in
+# The vendored Rust stack: a patched copy of the kernel's rust/ (vendor/UPSTREAM), in
 # os/linux_kernel/vendor, built into $(obj)/vrust and bundled into bcachefs.ko,
 # for when the kernel's own Rust can't be used (fs/Makefile.rust decides).
 # Its Rust symbols stay module-local; only the kernel's C ABI crosses the .ko
@@ -9,6 +9,11 @@
 VRD	:= $(obj)/vrust
 VRD_ABS	:= $(abspath $(VRD))
 VENDOR	:= $(src)/../os/linux_kernel/vendor
+
+# A variable of upstream's own rust/Makefile, vendored as vendor/Makefile,
+# for what it sets per crate - so a re-vendor brings it along
+vr-upstream = $(strip $(shell awk -v v='$(1)' '$$1 == v && $$2 == ":=" { f = 1; next } \
+	f && !NF { exit } f { sub(/\\$$/, ""); printf "%s ", $$0 }' $(VENDOR)/Makefile))
 
 # ---- adapting the kernel's build to our rustc ------------------------------
 # The kernel's KBUILD_RUSTFLAGS (set even with CONFIG_RUST=n), rustc_cfg and
@@ -127,7 +132,9 @@ quiet_cmd_bch_vr_bindgen = BINDGEN $@
 	-- $(bch-vr-bindgen-cflags) $(rs-bindgen-cflags) $(rs-post)
 
 # The proc-macros, on Makefile.rust's host crates:
-$(VRD)/libmacros.so $(VRD)/libzerocopy_derive.so: private rs-flags := $(bch-pmac)
+$(VRD)/libmacros.so: private rs-flags := $(bch-pmac)
+$(VRD)/libzerocopy_derive.so: private rs-flags := $(bch-pmac) \
+	$(patsubst %,--cfg='%',$(call vr-upstream,zerocopy_derive-cfgs))
 $(VRD)/libpin_init_internal.so: private rs-flags := $(bch-pmac) --cfg kernel --cfg USE_RUSTC_FEATURES
 
 $(VRD)/libmacros.so: $(VENDOR)/macros/lib.rs $(bch-pmac-deps)
@@ -167,8 +174,9 @@ $(VRD)/ffi.o: $(VENDOR)/ffi.rs $(vr-base-deps)
 $(VRD)/build_error.o: $(VENDOR)/build_error.rs $(vr-base-deps)
 	$(call if_changed_dep,bch_rlib)
 
-$(VRD)/zerocopy.o: private rs-env := CARGO_PKG_VERSION=0.8.50
-$(VRD)/zerocopy.o: private rs-flags := $(vr-base) --extern zerocopy_derive=$(VRD)/libzerocopy_derive.so
+$(VRD)/zerocopy.o: private rs-env := $(call vr-upstream,zerocopy-envs)
+$(VRD)/zerocopy.o: private rs-flags := $(vr-base) --extern zerocopy_derive=$(VRD)/libzerocopy_derive.so \
+	$(patsubst %,--cfg='%',$(call vr-upstream,zerocopy-cfgs))
 $(VRD)/zerocopy.o: $(VENDOR)/zerocopy/src/lib.rs $(VRD)/libzerocopy_derive.so $(vr-base-deps)
 	$(call if_changed_dep,bch_rlib)
 

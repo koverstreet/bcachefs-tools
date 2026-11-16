@@ -24,8 +24,6 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(kernel)");
     // The kernel build's, as for C; types defined in Rust test it.
     println!("cargo::rustc-check-cfg=cfg(__KERNEL__)");
-    // Kernel 7.3+ pin-init uses __init instead of __pinned_init in-kernel.
-    println!("cargo::rustc-check-cfg=cfg(bch_pin_init_v2)");
     // core::intrinsics::return_address(), for C's _RET_IP_: rustc 1.97+.
     println!("cargo::rustc-check-cfg=cfg(bch_return_address)");
     if rustc_version() >= (1, 97) {
