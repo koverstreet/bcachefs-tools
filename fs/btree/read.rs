@@ -965,7 +965,6 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
     }.expect("a node read's box: its pool waits for an element");
 
     let fs_ref = unsafe { BackRef::new(fs) };
-    let fs = unsafe { fs_ref.get() };
     let (q, tasks) = (&fs.btree.read_complete_wq, fs.tasks());
     let at = if ca.is_some() { Spawn::Inline } else { Spawn::Queue(q) };
     unsafe { slot.start(at, tasks, move |home| read_task(home, fs_ref, node, pick, ca)) };
