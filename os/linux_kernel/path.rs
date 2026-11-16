@@ -87,6 +87,16 @@ impl Creating {
         let dentry = errptr_to_result(NonNull::new(dentry).expect("a dentry, or an error"))?.as_ptr();
         Ok(Creating { path: unsafe { path.assume_init() }, dentry })
     }
+
+    /// Whether the LSMs allow a directory of @mode here: security_path_mkdir().
+    pub fn may_mkdir(&self, mode: c::umode_t) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::security_path_mkdir(&self.path, self.dentry, mode) })
+    }
+
+    /// The directory made here, told to fsnotify: fsnotify_mkdir().
+    pub fn notify_mkdir(&self) {
+        unsafe { c::fsnotify_mkdir((*self.path.dentry).d_inode, self.dentry) }
+    }
 }
 
 impl Drop for Creating {
@@ -111,6 +121,11 @@ impl Removing {
         let victim = unsafe { start_removing(dirfd, user_ptr(name), path.as_mut_ptr()) };
         let victim = errptr_to_result(NonNull::new(victim).expect("a dentry, or an error"))?.as_ptr();
         Ok(Removing { path: unsafe { path.assume_init() }, victim })
+    }
+
+    /// The directory removed, told to fsnotify: fsnotify_rmdir().
+    pub fn notify_rmdir(&self) {
+        unsafe { c::fsnotify_rmdir((*self.path.dentry).d_inode, self.victim) }
     }
 }
 

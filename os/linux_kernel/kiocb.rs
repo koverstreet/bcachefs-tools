@@ -8,6 +8,7 @@ use crate::errcode::BchError;
 use crate::os::file::File;
 use crate::os::iov_iter::IovIter;
 use core::ffi::c_int;
+use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 
 /// A kiocb, borrowed from the VFS for a call.
@@ -19,6 +20,15 @@ impl<'a> Kiocb<'a> {
     /// it's passed to.
     pub unsafe fn from_raw(k: *mut c::kiocb) -> Self {
         Self(unsafe { &mut *k })
+    }
+
+    /// A synchronous one of our own, in @slot, of @file from @pos:
+    /// init_sync_kiocb().
+    pub fn sync(slot: &'a mut MaybeUninit<c::kiocb>, file: &'a File, pos: c::loff_t) -> Self {
+        unsafe { c::init_sync_kiocb(slot.as_mut_ptr(), file.as_ptr()) };
+        let k = unsafe { slot.assume_init_mut() };
+        k.ki_pos = pos;
+        Self(k)
     }
 
     pub fn as_ptr(&mut self) -> *mut c::kiocb {

@@ -13,7 +13,7 @@
 //! Its reference count, i_count, is AlwaysRefCounted's - ihold(), iput() - so
 //! an InodeRef, ARef<InodeInfo>, holds one.
 
-use core::ffi::{c_int, c_long};
+use core::ffi::{c_int, c_long, CStr};
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
 use crate::c;
@@ -169,6 +169,13 @@ impl VfsInode {
 
     pub fn mapping(&self) -> Mapping {
         unsafe { Mapping::from_raw((*self.as_ptr()).i_mapping) }
+    }
+
+    /// A symlink's target, @target, written into its page cache:
+    /// page_symlink().
+    pub fn page_symlink(&self, target: &CStr) -> Result<(), BchError> {
+        let len = target.to_bytes_with_nul().len() as c_int;
+        ret_to_result_void(unsafe { c::page_symlink(self.as_ptr(), target.as_ptr().cast(), len) })
     }
 
     pub fn write_and_wait(&self) -> Result<(), BchError> {

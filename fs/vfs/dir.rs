@@ -65,7 +65,7 @@ fn dirents_32bit(file: &File) -> bool {
     let mode = file.mode();
     mode & c::FMODE_32BITHASH != 0 ||
         (mode & c::FMODE_64BITHASH == 0 &&
-         (cfg!(target_pointer_width = "32") || unsafe { c::in_compat_syscall() }))
+         (cfg!(target_pointer_width = "32") || crate::os::kernel::in_compat_syscall()))
 }
 
 fn cookie_shift(hash: &c::bch_hash_info) -> u32 {

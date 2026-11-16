@@ -25,7 +25,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags, TransAttempt};
 use crate::c;
 use crate::data::read::ReadErrReport;
 use crate::dirent;
-use crate::errcode::{Errcode, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::inode_opts::reinherit_attrs as reinherit;
 use crate::str_hash;
@@ -38,11 +38,10 @@ use crate::util::alloc::KVVec;
 use crate::os::file::File;
 use crate::os::ioctl::{arg, input, no_arg, output, vstruct, UserArg, UserStr};
 use crate::util::ioctl::{dir, Ioctl};
-use crate::os::kernel::{capable, current_fsgid, current_fsuid, Capability};
+use crate::os::kernel::{capable, current_fsgid, current_fsuid, current_umask, Capability};
 use crate::util::log::LogMsg;
 use crate::util::printbuf::Printbuf;
 use crate::init::chardev::{copy_err_msg, fs_ioctl, ErrMsg, V2};
-use crate::locking::{Locked, RwSem};
 use crate::os::dentry::Dentry;
 use crate::os::iov_iter::IovIter;
 use crate::vfs::direct::direct_io_read;
@@ -52,7 +51,7 @@ use crate::vfs::inode::{InodeInfo, InodeRef};
 use crate::os::mount::WriteAccess;
 use crate::os::path::{Creating, Removing, UserPath};
 use crate::{bch_err, btree_trans, prt};
-use core::ffi::{c_int, c_void};
+use core::ffi::c_int;
 use core::mem::{offset_of, MaybeUninit};
 use pin_init::stack_try_pin_init;
 use kernel::ffi::{c_long, c_uint, c_ulong};
@@ -274,10 +273,8 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
         return fs.throw(E::ENOENT_directory_dead);
     }
 
-    // SAFETY: a mounted superblock's
-    let sb = unsafe { &*(*dir.vfs().as_ptr()).i_sb };
-    if !unsafe { c::kuid_has_mapping(sb.s_user_ns, current_fsuid()) &&
-                 c::kgid_has_mapping(sb.s_user_ns, current_fsgid()) } {
+    let sb = dir.vfs().sb();
+    if !sb.maps_ids(current_fsuid(), current_fsgid()) {
         prt!(err, "current uid/gid not mapped into fs namespace");
         return Err(c::EOVERFLOW.into());
     }
@@ -285,10 +282,10 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
     let idmap = MntIdmap::of(file);
     idmap.permission(dir.vfs(), c::MAY_WRITE | c::MAY_EXEC)?;
 
-    if sb.s_flags as u64 & c::SB_POSIXACL == 0 {
-        a.mode &= !(unsafe { c::current_umask() } as u16);
+    if sb.flags() as u64 & c::SB_POSIXACL == 0 {
+        a.mode &= !current_umask();
     }
-    ret_to_result_void(unsafe { c::security_path_mkdir(&dst.path, dst.dentry, a.mode) })?;
+    dst.may_mkdir(a.mode)?;
 
     if a.flags & SNAPSHOT != 0 && a.src_ptr == 0 {
         snapshot_src.subvol = dir.inum().subvol;
@@ -297,17 +294,15 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
     let inode = {
         let _create = fs.snapshots.create_lock.write();
         if a.flags & SNAPSHOT != 0 {
-            // SAFETY: the mounted superblock's, the kernel's rw_semaphore
-            let s_umount = unsafe { &*(&raw const (*fs.vfs_sb).s_umount).cast::<RwSem>() };
-            let _umount = Locked::from_c(s_umount).read();
-            unsafe { c::sync_inodes_sb(fs.vfs_sb) };
+            let umount = sb.umount().read();
+            sb.sync_inodes(&umount);
         }
         dir.create(idmap, dentry, a.mode | c::S_IFDIR as u16, 0, snapshot_src, create_flags)?
     };
 
     dentry.set_casefold_ops(inode.vfs());
     dentry.instantiate(inode);
-    unsafe { c::fsnotify_mkdir(dir.vfs().as_ptr(), dst.dentry) };
+    dst.notify_mkdir();
     Ok(())
 }
 
@@ -332,7 +327,7 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMs
 
         MntIdmap::of(file).permission(victim.inode().vfs(), c::MAY_WRITE)?;
         dir.unlink(victim, true)?;
-        unsafe { c::fsnotify_rmdir(dir.vfs().as_ptr(), r.victim) };
+        r.notify_rmdir();
         victim.invalidate();
         Ok(())
     })();
@@ -362,17 +357,12 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
     }
 
     let pos = a.offset as c::loff_t;
-    ret_to_result_void(unsafe { c::rw_verify_area(c::READ as c_int, file.as_ptr(), &pos, a.len as usize) })?;
+    file.verify_read(pos, a.len as usize)?;
 
-    let mut iter = MaybeUninit::<c::iov_iter>::uninit();
-    ret_to_result_void(unsafe {
-        c::import_ubuf(c::ITER_DEST as c_int, a.buf as usize as *mut c_void, a.len as usize, iter.as_mut_ptr())
-    })?;
-    let mut kiocb = MaybeUninit::<c::kiocb>::uninit();
-    unsafe {
-        c::init_sync_kiocb(kiocb.as_mut_ptr(), file.as_ptr());
-        (*kiocb.as_mut_ptr()).ki_pos = pos;
-    }
+    let mut iter = MaybeUninit::uninit();
+    let mut iter = IovIter::user_dest(&mut iter, a.buf, a.len as usize)?;
+    let mut kiocb = MaybeUninit::uninit();
+    let mut kiocb = Kiocb::sync(&mut kiocb, file, pos);
 
     let flags = if a.flags & c::BCH_PREAD_RAW_no_poison_check != 0 {
         c::ReadFlags::no_poison_check
@@ -383,7 +373,6 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
     // The reads' completions add to it, under its lock
     stack_try_pin_init!(let report: ReadErrReport =? ReadErrReport::init());
 
-    let (mut kiocb, mut iter) = unsafe { (Kiocb::from_raw(kiocb.as_mut_ptr()), IovIter::from_raw(iter.as_mut_ptr())) };
     let mut ret = direct_io_read(&mut kiocb, &mut iter, flags, Some(&*report)).map(|n| n as c_long);
 
     let mut errs = report.errs.lock();
@@ -433,10 +422,11 @@ fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
         // frozen, everything written is on disk; thawed, it stays read-only:
         // unfreeze_fs() sees the shutdown
         c::FSOP_GOING_FLAGS_DEFAULT => {
+            let sb = fs.vfs_super().expect("an ioctl's filesystem, mounted");
             let who = c::freeze_holder_FREEZE_HOLDER_KERNEL;
-            ret_to_result_void(unsafe { c::freeze_super(fs.vfs_sb, who, core::ptr::null()) })?;
+            sb.freeze(who)?;
             fs.emergency_read_only(&mut msg);
-            unsafe { c::thaw_super(fs.vfs_sb, who, core::ptr::null()) };
+            let _ = sb.thaw(who);
             Ok(())
         }
         c::FSOP_GOING_FLAGS_LOGFLUSH => {

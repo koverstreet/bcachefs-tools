@@ -23,7 +23,8 @@ use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{ret_to_result_void, BchError};
+use crate::locking::{RwSem, SharedGuard};
 use crate::os::dentry::Dentry;
 use crate::os::seq_file::SeqFile;
 use crate::util::ffi::Opaque;
@@ -98,6 +99,33 @@ impl<T> SuperBlock<T> {
             c::up_read(s_umount);
         }
         true
+    }
+
+    pub fn umount(&self) -> &crate::locking::Locked<RwSem> {
+        // RwSem is the kernel's rw_semaphore, s_umount one
+        crate::locking::Locked::from_c(unsafe { &*(&raw const (*self.as_ptr()).s_umount).cast() })
+    }
+
+    /// Its dirty inodes written back, and waited on: sync_inodes_sb().
+    pub fn sync_inodes(&self, _umount: &SharedGuard<'_, RwSem>) {
+        unsafe { c::sync_inodes_sb(self.as_ptr()) }
+    }
+
+    /// Whether @uid and @gid are ids in its user namespace:
+    /// kuid_has_mapping(), kgid_has_mapping().
+    pub fn maps_ids(&self, uid: c::kuid_t, gid: c::kgid_t) -> bool {
+        let ns = unsafe { (*self.as_ptr()).s_user_ns };
+        unsafe { c::kuid_has_mapping(ns, uid) && c::kgid_has_mapping(ns, gid) }
+    }
+
+    /// Frozen, by @who - writes stopped and what's dirty synced: freeze_super().
+    pub fn freeze(&self, who: c::freeze_holder) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::freeze_super(self.as_ptr(), who, core::ptr::null()) })
+    }
+
+    /// freeze()'s undone: thaw_super(). An error is a freeze @who didn't hold.
+    pub fn thaw(&self, who: c::freeze_holder) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::thaw_super(self.as_ptr(), who, core::ptr::null()) })
     }
 }
 

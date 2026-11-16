@@ -123,6 +123,21 @@ pub fn current_fsgid() -> c::kgid_t {
     unsafe { (*(*crate::os::sched::current()).cred).fsgid }
 }
 
+/// The mode bits this task's new files are made without.
+pub fn current_umask() -> c::umode_t {
+    unsafe { c::current_umask() as c::umode_t }
+}
+
+/// Whether this syscall is a 32-bit task's, on a 64-bit kernel.
+pub fn in_compat_syscall() -> bool {
+    unsafe { c::in_compat_syscall() }
+}
+
+/// A filesystem id made of @uuid, as statfs() reports it.
+pub fn uuid_to_fsid(uuid: &[u8; 16]) -> c::__kernel_fsid_t {
+    unsafe { c::uuid_to_fsid(uuid.as_ptr().cast_mut()) }
+}
+
 /// A user task's address space, for a kthread to do the task's IO in.
 #[repr(transparent)]
 #[derive(Clone, Copy)]

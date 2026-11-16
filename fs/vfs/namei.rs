@@ -353,8 +353,7 @@ impl InodeOps for DirOps {
     {
         let inode = dir.create(idmap, dentry, (c::S_IFLNK | c::S_IRWXUGO) as c::umode_t, 0,
                                Default::default(), c::BCH_CREATE_TMPFILE)?;
-        let len = target.to_bytes_with_nul().len() as c_int;
-        ret_to_result_void(unsafe { c::page_symlink(inode.vfs().as_ptr(), target.as_ptr().cast(), len) })?;
+        inode.vfs().page_symlink(target)?;
         inode.vfs().write_and_wait()?;
         inode.link(dir, dentry.name())?;
         dentry.instantiate(inode);

@@ -89,7 +89,7 @@ impl<'a> Dentry<'a> {
     pub fn casefold_changed(&self) {
         #[cfg(CONFIG_UNICODE)]
         if let Some(dir) = self.inode_opt().filter(|i| i.vfs().is_dir()) {
-            unsafe { c::shrink_dcache_parent(self.as_ptr()) };
+            self.shrink_children();
             let _d_lock = self.d_lock().lock();
             self.set_casefold_flags(dir.vfs());
         }

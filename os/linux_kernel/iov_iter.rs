@@ -3,6 +3,9 @@
 //! The VFS's iov_iter: a read's or a write's buffer, walked as it's used.
 
 use crate::c;
+use crate::errcode::{ret_to_result_void, BchError};
+use core::ffi::{c_int, c_void};
+use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 
 /// An iov_iter, borrowed from the VFS for a call.
@@ -14,6 +17,17 @@ impl<'a> IovIter<'a> {
     /// it's passed to.
     pub unsafe fn from_raw(i: *mut c::iov_iter) -> Self {
         Self(unsafe { &mut *i })
+    }
+
+    /// Our own, in @slot, over @len bytes of user memory at @addr, to read
+    /// into: import_ubuf(), which checks the range is the user's.
+    pub fn user_dest(slot: &'a mut MaybeUninit<c::iov_iter>, addr: u64, len: usize)
+        -> Result<Self, BchError>
+    {
+        ret_to_result_void(unsafe {
+            c::import_ubuf(c::ITER_DEST as c_int, addr as usize as *mut c_void, len, slot.as_mut_ptr())
+        })?;
+        Ok(Self(unsafe { slot.assume_init_mut() }))
     }
 
     pub fn as_ptr(&mut self) -> *mut c::iov_iter {

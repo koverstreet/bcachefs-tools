@@ -93,6 +93,15 @@ impl File {
         self.flags() & c::O_NONBLOCK != 0
     }
 
+    /// Whether @len bytes at @pos may be read - the range, and mandatory
+    /// locks and LSMs: rw_verify_area().
+    #[cfg(kernel)]
+    pub fn verify_read(&self, pos: c::loff_t, len: usize) -> Result<(), BchError> {
+        crate::errcode::ret_to_result_void(unsafe {
+            c::rw_verify_area(c::READ as c_int, self.as_ptr(), &pos, len)
+        })
+    }
+
     #[cfg(kernel)]
     pub fn mapping(&self) -> Mapping {
         unsafe { Mapping::from_raw((*self.as_ptr()).f_mapping) }

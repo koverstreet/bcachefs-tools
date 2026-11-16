@@ -17,10 +17,9 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
-use crate::locking::{Locked, RwSem};
 use crate::prt;
 use crate::debug::trace::events;
-use crate::os::kernel::ktime_get_ns;
+use crate::os::kernel::{ktime_get_ns, uuid_to_fsid};
 use crate::util::{Nsecs, Printbuf};
 use crate::util::rcu::read_lock;
 use crate::os::seq_file::SeqFile;
@@ -46,10 +45,6 @@ impl Fs {
 impl SuperBlock {
     pub fn fs(&self) -> &Fs {
         self.data()
-    }
-
-    pub fn umount(&self) -> &Locked<RwSem> {
-        Locked::from_c(unsafe { &*(&raw const (*self.as_ptr()).s_umount).cast() })
     }
 }
 
@@ -129,8 +124,7 @@ impl SuperOps for Fs {
         buf.f_bavail  = avail >> shift;
         buf.f_files   = accounting::nr_inodes(self) + avail_inodes;
         buf.f_ffree   = avail_inodes;
-        let mut uuid = self.sb.user_uuid.each_ref().map(|b| b.get());
-        buf.f_fsid    = unsafe { c::uuid_to_fsid(uuid.as_mut_ptr()) };
+        buf.f_fsid    = uuid_to_fsid(&self.sb.user_uuid.each_ref().map(|b| b.get()));
         buf.f_namelen = c::BCH_NAME_MAX as _;
         Ok(())
     }

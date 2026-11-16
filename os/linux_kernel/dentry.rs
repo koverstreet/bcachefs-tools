@@ -61,6 +61,11 @@ impl<'a> Dentry<'a> {
         unsafe { c::d_invalidate(self.raw) }
     }
 
+    /// What's cached under it and unused dropped: shrink_dcache_parent().
+    pub fn shrink_children(&self) {
+        unsafe { c::shrink_dcache_parent(self.raw) }
+    }
+
     pub(crate) fn d_lock(&self) -> &Locked<SpinLockIrq> {
         // SAFETY: referenced, so live; d_lock is a #define, d_lockref.lock, and
         // SpinLockIrq is the kernel's spinlock_t, in an Opaque

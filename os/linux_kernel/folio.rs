@@ -372,6 +372,11 @@ impl Mapping {
         ret_to_result_void(unsafe { c::filemap_write_and_wait_range(self.as_ptr(), loff(start), loff(end)) })
     }
 
+    /// Writeback of its dirty pages started, not waited on: filemap_flush().
+    pub fn flush(self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::filemap_flush(self.as_ptr()) })
+    }
+
     /// Its folios from index @start to @end, inclusive, to @f in order until
     /// it breaks or errors: unlocked, for @f to lock or try to. A batch at a
     /// time, as filemap_get_folios() finds them, with a cond_resched() between.

@@ -211,7 +211,7 @@ impl FileData for InodeFile {
         // SAFETY: as ops_of()'s
         let inode = unsafe { Self::ops_of(file) };
         if inode.ei_flags.swap(c::InodeInfoFlag::EI_INODE_FLUSH_ON_CLOSE, false) {
-            unsafe { c::filemap_flush((*inode.vfs().as_ptr()).i_mapping) };
+            let _ = inode.vfs().mapping().flush();
         }
     }
 }
@@ -251,7 +251,7 @@ impl FileOps for InodeInfo {
     fn mmap(&self, file: &File, vma: &mut c::vm_area_struct) -> Result<(), BchError> {
         // SAFETY: vm_flags and __vm_flags are the one word
         mmap_check(self.fs(), unsafe { vma.__bindgen_anon_2.vm_flags })?;
-        unsafe { c::file_accessed(file.as_ptr()) };
+        file.accessed();
         vma.vm_ops = &*VM_OPS;
         Ok(())
     }
