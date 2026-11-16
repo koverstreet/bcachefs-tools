@@ -114,7 +114,7 @@ pub mod c {
     pub(crate) use crate::btree::journal_overlay::{__journal_key_flags_forward, __journal_key_id_forward};
     pub use super::btree_key_cache_types::*;
     pub use crate::btree::locking::{ BtreeNodeLockedType};
-    pub use crate::btree::update::{ TransCommitFlagBit, TransCommitFlags};
+    pub use crate::btree::update::{ TransCommitFlagBit, TransCommitFlags, btree_trans_subbuf};
     pub use super::btree_write_buffer_defs::*;
     pub use crate::btree::write_buffer::{ BTREE_WRITE_BUFERED_VAL_U64s_MAX, bch_fs_btree_write_buffer, WbBtree, btree_write_buffered_key, wb_flushing_pin, wb_inc_pin, WbFlushCaller, wb_key_ref, wb_key_ref_key, wb_key_ref_pos_idx, wb_key_ref_words};
     pub use crate::data::compress::{ BbufType, bch_compression_opt};

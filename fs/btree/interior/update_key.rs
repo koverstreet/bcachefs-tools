@@ -125,9 +125,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
             }
 
             self.journal_entry_add(c::JsetEntryType::overwrite, b.c.btree_id as u8, b.c.level + 1,
-                                   b.contents().key_i().as_bytes())?;
-            self.journal_entry_add(c::JsetEntryType::btree_root, b.c.btree_id as u8, b.c.level,
-                                   key.as_ref().as_bytes())?;
+                                   b.contents().key_i())?;
+            self.journal_entry_add(c::JsetEntryType::btree_root, b.c.btree_id as u8, b.c.level, key.as_ref())?;
 
             /*
              * propagated back to c->btree.roots[].key by

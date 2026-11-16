@@ -37,6 +37,7 @@ use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::os::sched;
 use crate::util::time_stats::__bch2_time_stats_update;
 use crate::util::vstructs::{Unvalidated, UnvalidatedEntries, VstructRefEntries};
+use zerocopy::IntoBytes;
 use crate::util::{Printbuf, ToText};
 use core::cell::UnsafeCell;
 use core::ffi::{c_uint, c_ulong, CStr};
@@ -186,8 +187,8 @@ impl<'f> BtreeTrans<'f> {
     /// entries or accounting.
     pub fn has_updates(&self) -> bool {
         self.nr_updates.get() != 0 ||
-            self.journal_entries.get().u64s != 0 ||
-            self.accounting.get().u64s != 0
+            self.journal_entries.get().u64s() != 0 ||
+            self.accounting.get().u64s() != 0
     }
 
     /// Drop everything queued for the next commit: as C's
@@ -986,24 +987,19 @@ impl BtreeTrans<'_> {
             prt!(out, "\n");
         }
 
-        let subbuf = |base: u16, u64s: u16| {
-            let p = self.mem_with(|m| m.range(usize::from(base), usize::from(u64s)));
-            unsafe { core::slice::from_raw_parts(p.cast::<u8>().as_ptr(), p.len() * size_of::<u64>()) }
-        };
+        self.journal_entries.get().with_u64s(self, |b| {
+            for e in UnvalidatedEntries::<c::jset_entry<Unvalidated>>::new(b.as_bytes()).map_while(Result::ok) {
+                journal_entry_to_text(&mut out, Some(c), e);
+                prt!(out, "\n");
+            }
+        });
 
-        let journal_entries = self.journal_entries.get();
-        for e in UnvalidatedEntries::<c::jset_entry<Unvalidated>>::new(subbuf(journal_entries.base, journal_entries.u64s))
-            .map_while(Result::ok)
-        {
-            journal_entry_to_text(&mut out, Some(c), e);
-            prt!(out, "\n");
-        }
-
-        let accounting = self.accounting.get();
-        for k in VstructRefEntries::<c::bkey_i>::new(subbuf(accounting.base, accounting.u64s)).map_while(Result::ok) {
-            bkey_val_to_text(&mut out, Some(c), BkeySC::from_bkey_i(&k));
-            prt!(out, "\n");
-        }
+        self.accounting.get().with_u64s(self, |b| {
+            for k in VstructRefEntries::<c::bkey_i>::new(b.as_bytes()).map_while(Result::ok) {
+                bkey_val_to_text(&mut out, Some(c), BkeySC::from_bkey_i(&k));
+                prt!(out, "\n");
+            }
+        });
     }
 }
 

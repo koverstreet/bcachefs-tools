@@ -22,16 +22,17 @@ use crate::snapshots::snapshot::{has_overwrites, is_ancestor};
 use core::cmp::Ordering;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::journal::entries::EntryWriter;
 use crate::os::kernel::unlikely;
-use crate::util::vstructs::{Validated, ValidatedEntries, ViewEntries, ViewEntriesMut};
+use crate::util::vstructs::{plain_bytes, EntryWalk, Head, Plain, SelfSized, Unsized, ValidatedEntries,
+                            ValidatedEntriesMut, VStruct};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::ffi::c_ulong;
-use core::mem::size_of;
+use core::marker::PhantomData;
+use core::mem::{size_of, size_of_val};
 use core::ops::Range;
 use core::ptr::NonNull;
-use cstruct_macros::bch_enum;
+use cstruct_macros::{bch_enum, MaybeZeroable};
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use zerocopy::IntoBytes;
 
@@ -232,33 +233,60 @@ impl Fs {
 
 // ── A transaction's updates, and log entries with its commit ────────────
 
-impl<T: ?Sized> c::btree_trans_subbuf<T> {
+/*
+ * Its entries are written only here, each whole - subbuf_push() makes each as
+ * long as its header says, and journal_entry_add()'s hold keys - so they're
+ * walked as validated, as C walks them.
+ */
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct btree_trans_subbuf<T: ?Sized> {
+    base:     u16,
+    u64s:     u16,
+    size:     u16,
+    _entries: PhantomData<T>,
+}
+
+impl<T: ?Sized> Clone for btree_trans_subbuf<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: ?Sized> Copy for btree_trans_subbuf<T> {}
+
+impl<T: ?Sized> Default for btree_trans_subbuf<T> {
+    fn default() -> Self {
+        Self { base: 0, u64s: 0, size: 0, _entries: PhantomData }
+    }
+}
+
+impl<T: ?Sized> btree_trans_subbuf<T> {
+    pub fn u64s(&self) -> usize {
+        usize::from(self.u64s)
+    }
+
     /// All of it, for @f: growing it moves it, so it's only lent for the call.
     #[inline]
-    pub fn with_u64s<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(&mut [u64]) -> R) -> R {
-        let mut p = t.trans().mem_with(|m| m.range(usize::from(self.base), usize::from(self.u64s)));
+    pub fn with_u64s<R>(self, trans: &BtreeTrans<'_>, f: impl FnOnce(&[u64]) -> R) -> R {
+        let p = trans.mem_with(|m| m.range(usize::from(self.base), usize::from(self.u64s)));
+        f(unsafe { p.as_ref() })
+    }
+
+    #[inline]
+    fn with_u64s_mut<R>(self, trans: &BtreeTrans<'_>, f: impl FnOnce(&mut [u64]) -> R) -> R {
+        let mut p = trans.mem_with(|m| m.range(usize::from(self.base), usize::from(self.u64s)));
         f(unsafe { p.as_mut() })
     }
 }
 
-/*
- * Only subbuf_append() writes a sub-buffer's entries, each a whole entry: so
- * they're walked as validated, as C walks them.
- */
-impl c::btree_trans_subbuf<c::bkey_i> {
-    pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntries<'_, c::bkey_i>) -> R) -> R {
-        self.with_u64s(t, |b| f(unsafe { ViewEntries::new(b.as_bytes()) }))
+impl<T: Unsized<Head: Plain + SelfSized> + ?Sized> btree_trans_subbuf<T> {
+    pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ValidatedEntries<'_, T>) -> R) -> R {
+        self.with_u64s(t.trans(), |b| f(ValidatedEntries::new(b.as_bytes())))
     }
 
-    pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntriesMut<'_, c::bkey_i>) -> R) -> R {
-        self.with_u64s(t, |b| f(unsafe { ViewEntriesMut::new(b.as_mut_bytes()) }))
-    }
-}
-
-impl c::btree_trans_subbuf<c::jset_entry<Validated>> {
-    pub fn iter<R>(self, t: &TransAttempt<'_, '_>,
-                   f: impl FnOnce(ValidatedEntries<'_, c::jset_entry<Validated>>) -> R) -> R {
-        self.with_u64s(t, |b| f(ValidatedEntries::new(b.as_bytes())))
+    pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ValidatedEntriesMut<'_, T>) -> R) -> R {
+        self.with_u64s_mut(t.trans(), |b| f(ValidatedEntriesMut::new(b.as_mut_bytes())))
     }
 }
 
@@ -270,40 +298,64 @@ impl TransAttempt<'_, '_> {
         self.trans().updates_to_text(out)
     }
 
-    /// @u64s more at the sub-buffer's end, for @f to fill.
-    pub fn subbuf_append<T: ?Sized, R>(&self, buf: &Cell<c::btree_trans_subbuf<T>>, u64s: usize,
-                                       f: impl FnOnce(&mut [u64]) -> R)
-        -> Result<R, BchError>
+    /// An entry with header @head at the sub-buffer's end, the rest of it - as
+    /// long as @head says - for @tail to write.
+    pub fn subbuf_push<T: Unsized<Head: Plain + SelfSized> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
+                                                                    head: &T::Head, tail: impl FnOnce(&mut [u64]))
+        -> Result<(), BchError>
     {
-        let mut p = self.subbuf_alloc(buf, u64s)?;
-        Ok(f(unsafe { p.as_mut() }))
+        const { assert!(size_of::<T::Head>() == T::TAIL && T::TAIL % size_of::<u64>() == 0 &&
+                        size_of::<T::Elem>() == size_of::<u64>()) };
+
+        let mut p = self.subbuf_alloc(cell, head.bytes() / size_of::<u64>())?;
+        let (h, t) = unsafe { p.as_mut() }.split_at_mut(T::TAIL / size_of::<u64>());
+        h.as_mut_bytes().copy_from_slice(plain_bytes(head));
+        tail(t);
+        Ok(())
     }
 
-    fn subbuf_alloc<T: ?Sized>(&self, cell: &Cell<c::btree_trans_subbuf<T>>, u64s: usize)
+    /// The first of the sub-buffer's entries @f takes, for @f to change - and
+    /// gone, if @f says Some(true): whether @f took one.
+    pub fn subbuf_find_mut<T: Unsized<Head: Plain + SelfSized> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
+                                                                         mut f: impl FnMut(&mut T) -> Option<bool>)
+        -> bool
+    {
+        let found = cell.get().iter_mut(self, |es| es.with_offsets().find_map(|(at, e)| {
+            let at = at / size_of::<u64>();
+            let range = at..at + size_of_val(e) / size_of::<u64>();
+            f(e).map(|remove| remove.then_some(range))
+        }));
+        if let Some(Some(range)) = &found {
+            self.subbuf_remove(cell, range.clone());
+        }
+        found.is_some()
+    }
+
+    fn subbuf_alloc<T: ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>, u64s: usize)
         -> Result<NonNull<[u64]>, BchError>
     {
         let buf = cell.get();
         if usize::from(buf.u64s) + u64s > usize::from(buf.size) {
             self.subbuf_grow(cell, u64s)?;
         } else {
-            cell.set(c::btree_trans_subbuf { u64s: buf.u64s + u64s as u16, ..buf });
+            cell.set(btree_trans_subbuf { u64s: buf.u64s + u64s as u16, ..buf });
         }
         let buf = cell.get();
         Ok(self.trans().mem_with(|m| m.range(usize::from(buf.base + buf.u64s) - u64s, u64s)))
     }
 
-    pub fn subbuf_reserve<T: ?Sized>(&self, cell: &Cell<c::btree_trans_subbuf<T>>, u64s: usize)
+    pub fn subbuf_reserve<T: ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>, u64s: usize)
         -> Result<(), BchError>
     {
         let buf = cell.get();
         if usize::from(buf.u64s) + u64s > usize::from(buf.size) {
             self.subbuf_grow(cell, u64s)?;
-            cell.set(c::btree_trans_subbuf { u64s: buf.u64s, ..cell.get() });
+            cell.set(btree_trans_subbuf { u64s: buf.u64s, ..cell.get() });
         }
         Ok(())
     }
 
-    fn subbuf_grow<T: ?Sized>(&self, buf: &Cell<c::btree_trans_subbuf<T>>, u64s: usize) -> Result<(), BchError> {
+    fn subbuf_grow<T: ?Sized>(&self, buf: &Cell<btree_trans_subbuf<T>>, u64s: usize) -> Result<(), BchError> {
         let b = buf.get();
         let new_top = usize::from(b.u64s) + u64s;
         assert!(new_top.next_power_of_two() <= u16::MAX as usize,
@@ -318,32 +370,43 @@ impl TransAttempt<'_, '_> {
         });
         assert!(base <= u16::MAX as usize, "transaction sub-buffer at u64 {base}: past a u16 of them");
 
-        buf.set(c::btree_trans_subbuf { base: base as u16, u64s: new_top as u16, size: new_size as u16, ..b });
+        buf.set(btree_trans_subbuf { base: base as u16, u64s: new_top as u16, size: new_size as u16, ..b });
         Ok(())
     }
 
-    pub fn subbuf_remove<T: ?Sized>(&self, cell: &Cell<c::btree_trans_subbuf<T>>, range: Range<usize>) {
+    fn subbuf_remove<T: ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>, range: Range<usize>) {
         let len = range.len();
-        cell.get().with_u64s(self, |buf| buf.copy_within(range.end.., range.start));
-        cell.set(c::btree_trans_subbuf { u64s: cell.get().u64s - len as u16, ..cell.get() });
+        cell.get().with_u64s_mut(self.trans(), |buf| buf.copy_within(range.end.., range.start));
+        cell.set(btree_trans_subbuf { u64s: cell.get().u64s - len as u16, ..cell.get() });
     }
 
-    /// An entry of @ty for @btree at @level, holding @data, with this
-    /// transaction's commit.
-    pub(crate) fn journal_entry_add(&self, ty: c::JsetEntryType, btree: u8, level: u8, data: &[u8])
+    fn journal_entry_add_bytes(&self, ty: c::JsetEntryType, btree: u8, level: u8, data: &[u8])
         -> Result<(), BchError>
     {
-        let u64s = c::JSET_KEYS_U64s + data.len().div_ceil(size_of::<u64>());
-        self.subbuf_append(&self.trans().journal_entries, u64s, |buf| {
-            EntryWriter::new(buf)
-                .push_bytes(ty, btree, level, data)
-                .expect("an entry the size allocated for it");
+        let mut h = Head::<c::jset_entry>::default();
+        h.type_ = ty.0 as u8;
+        h.btree_id = btree;
+        h.level = level;
+        h.set_val_u64s(data.len().div_ceil(size_of::<u64>()));
+
+        self.subbuf_push(&self.trans().journal_entries, &h, |v| {
+            let (d, pad) = v.as_mut_bytes().split_at_mut(data.len());
+            d.copy_from_slice(data);
+            pad.fill(0);
         })
+    }
+
+    /// An entry of @ty for @btree at @level, holding @k, with this
+    /// transaction's commit.
+    pub(crate) fn journal_entry_add<V: ?Sized>(&self, ty: c::JsetEntryType, btree: u8, level: u8, k: &BkeyI<V>)
+        -> Result<(), BchError>
+    {
+        self.journal_entry_add_bytes(ty, btree, level, k.as_bytes())
     }
 
     /// @s into the journal, with this transaction's commit.
     pub fn log_str(&self, s: &[u8]) -> Result<(), BchError> {
-        self.journal_entry_add(c::JsetEntryType::log, 0, 1, s)
+        self.journal_entry_add_bytes(c::JsetEntryType::log, 0, 1, s)
     }
 
     /// @msg into the journal, with this transaction's commit;
@@ -358,8 +421,7 @@ impl TransAttempt<'_, '_> {
     /// @k, a key of @btree at @level, into the journal with this
     /// transaction's commit.
     pub fn log_bkey(&self, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
-        self.journal_entry_add(c::JsetEntryType::log_bkey, btree.0 as u8, level as u8,
-                               k.as_bytes())
+        self.journal_entry_add(c::JsetEntryType::log_bkey, btree.0 as u8, level as u8, k)
     }
 
     pub fn set_journal_seq_to_pin(&self, seq: u64) {
@@ -1127,7 +1189,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return self.insert(btree, n, UpdateTriggerFlags::empty());
         }
 
-        self.journal_entry_add(c::JsetEntryType::write_buffer_keys, btree.0 as u8, 0, k.as_bytes())
+        self.journal_entry_add(c::JsetEntryType::write_buffer_keys, btree.0 as u8, 0, k)
     }
 
     pub fn insert<V: ?Sized + ValidatedVal>(

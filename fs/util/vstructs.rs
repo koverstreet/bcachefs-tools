@@ -1578,42 +1578,6 @@ impl<'a, E: SelfSized + Plain + 'a> EntryWalk for ViewEntries<'a, E> {
     }
 }
 
-/// ViewEntries, mutably: each a VstructMut.
-pub struct ViewEntriesMut<'a, E> {
-    rest:   &'a mut [u8],
-    at:     usize,
-    _entry: PhantomData<&'a mut E>,
-}
-
-impl<'a, E> ViewEntriesMut<'a, E> {
-    /// # Safety
-    /// As ViewEntries::new()'s.
-    pub(crate) unsafe fn new(rest: &'a mut [u8]) -> Self {
-        Self { rest, at: 0, _entry: PhantomData }
-    }
-}
-
-impl<'a, E: SelfSized + Plain + 'a> Iterator for ViewEntriesMut<'a, E> {
-    type Item = VstructMut<'a, E, Validated>;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.rest.is_empty() {
-            return None;
-        }
-        let len = unsafe { validated_len::<E>(self.rest) };
-        let (e, rest) = core::mem::take(&mut self.rest).split_at_mut(len);
-        self.rest = rest;
-        self.at += len;
-        Some(VstructMut { bytes: e, _t: PhantomData })
-    }
-}
-
-impl<'a, E: SelfSized + Plain + 'a> EntryWalk for ViewEntriesMut<'a, E> {
-    fn offset(&self) -> usize {
-        self.at
-    }
-}
 
 /// The @T at byte @at of @rest - a field a grown type gained, from the bytes
 /// past its floor (#[grown]) - or as much of it as there is, the rest zero,

@@ -269,7 +269,7 @@ impl BtreeTrans<'_> {
                 if at >= end {
                     break;
                 }
-                let a = k.key().arm::<Accounting>().expect("an accounting key");
+                let a = k.arm::<Accounting>().expect("an accounting key");
                 accounting_mem::trans_commit_revert(t, mark, a.k.p, &a.v.d, flags);
             }
         })
@@ -464,7 +464,7 @@ impl BtreeTrans<'_> {
         }
 
         self.accounting.get().iter(t, |keys| keys.with_offsets().try_for_each(|(at, k)| {
-            let a = k.key().arm::<Accounting>().expect("an accounting key");
+            let a = k.arm::<Accounting>().expect("an accounting key");
             let usage = mem_add(self.fs(), Delta { p: a.k.p, d: &a.v.d }, false, mark).map_err(|err| (err, at))?;
             self.fs_usage_delta_add(usage);
             Ok(())
@@ -489,7 +489,7 @@ impl BtreeTrans<'_> {
         })?;
 
         self.accounting.get().iter(t, |mut keys| {
-            keys.try_for_each(|k| journal_overlay::insert(not_rw, Btree::accounting, 0, k.key()))
+            keys.try_for_each(|k| journal_overlay::insert(not_rw, Btree::accounting, 0, k))
         })
     }
 
@@ -654,7 +654,7 @@ impl BtreeTrans<'_> {
      * buffered write, and reissues the identical commit forever.
      */
     fn commit_became_noop(&self, t: &TransAttempt<'_, '_>, dropped_noops: bool) -> bool {
-        if !dropped_noops || self.nr_updates.get() != 0 || self.accounting.get().u64s != 0 {
+        if !dropped_noops || self.nr_updates.get() != 0 || self.accounting.get().u64s() != 0 {
             return false;
         }
 
@@ -719,12 +719,12 @@ impl BtreeTrans<'_> {
                     .as_mut_bytes().copy_from_slice(k.as_bytes());
             }
 
-            self.journal_entries.get().with_u64s(t, |e| {
+            self.journal_entries.get().with_u64s(self, |e| {
                 invariant!(w.room() >= e.len());
                 w.push_entries(e)
             })?;
 
-            self.accounting.get().with_u64s(t, |a| -> Result<(), NoRoom> {
+            self.accounting.get().with_u64s(self, |a| -> Result<(), NoRoom> {
                 if !a.is_empty() {
                     invariant!(w.room() >= jset_u64s(a.len()));
                     w.add_entry(c::JsetEntryType::write_buffer_keys, Btree::accounting.0 as u8, 0, a.len())?
@@ -831,8 +831,8 @@ impl BtreeTrans<'_> {
         {
             let mut mark = fs.mark_lock().read();
 
-            let hooked = self.accounting.get().iter_mut(t, |keys| keys.with_offsets().try_for_each(|(at, mut k)| {
-                let a = k.key_mut().arm::<Accounting>().expect("an accounting key");
+            let hooked = self.accounting.get().iter_mut(t, |keys| keys.with_offsets().try_for_each(|(at, k)| {
+                let a = k.arm::<Accounting>().expect("an accounting key");
                 accounting_mem::trans_commit_hook(t, &mut mark, res, &mut a.k, &a.v.d, at / size_of::<u64>(), flags)
                     .map_err(|err| (err, at))
             }));
@@ -857,18 +857,10 @@ impl BtreeTrans<'_> {
                 validate_context.set_flags(ValidateFlags::write | ValidateFlags::commit);
             }
 
-            self.journal_entries.get().with_u64s(t, |buf| {
-                let mut buf = buf.as_mut_bytes();
-                while !buf.is_empty() {
-                    let u64s = u16::from_le_bytes([buf[0], buf[1]]);
-                    let (e, rest) = buf.split_at_mut(jset_u64s(u64s.into()) * size_of::<u64>());
-                    journal_entry_validate(fs, e, c::MetadataVersion::CURRENT, cfg!(target_endian = "big"),
-                                           validate_context)
-                        .map_err(|err| self.commit_invalid_entry(err))?;
-                    buf = rest;
-                }
-                Ok::<_, BchError>(())
-            })?;
+            self.journal_entries.get().iter_mut(t, |mut entries| entries.try_for_each(|e| {
+                journal_entry_validate(fs, e.as_bytes_mut(), c::MetadataVersion::CURRENT, cfg!(target_endian = "big"),
+                                       validate_context)
+            })).map_err(|err| self.commit_invalid_entry(err))?;
 
             for i in paths.updates() {
                 validate_context.level = i.level();
@@ -1016,7 +1008,7 @@ impl BtreeTrans<'_> {
             journal_u64s += jset_u64s(JSET_ENTRY_LOG_U64S);
         }
 
-        let accounting_u64s = usize::from(self.accounting.get().u64s);
+        let accounting_u64s = self.accounting.get().u64s();
         if accounting_u64s != 0 {
             journal_u64s += jset_u64s(accounting_u64s);
         }
@@ -1118,7 +1110,7 @@ impl BtreeTrans<'_> {
             }
             self.fs_usage_delta.set(Default::default());
 
-            self.journal_u64s.set((journal_u64s + usize::from(self.journal_entries.get().u64s) +
+            self.journal_u64s.set((journal_u64s + self.journal_entries.get().u64s() +
                                    self.extra_journal_u64s.get() as usize) as u32);
 
             let ret = self.do_commit(t, &mut paths, &mut res, flags, &mut errored_at);

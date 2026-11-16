@@ -53,7 +53,7 @@ use crate::alloc::accounting_mem::{self, mem_read, mem_read_locked, usage_of, De
 use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{replicas_acct, SbEntry};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyTag, BKEY_U64S, POS_MIN, ValidateFlags, BkeyOps};
+use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyTag, POS_MIN, ValidateFlags, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
 use crate::c;
 use crate::errcode::{Errcode, BchError};
@@ -62,7 +62,7 @@ use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::types::ArmOf;
 use crate::util::rcu;
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, EntryWalk, Head, Unvalidated, VStructError};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, Head, Unvalidated, VStructError};
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::os::percpu::Counters as _;
 use crate::util::printbuf::Join;
@@ -334,30 +334,23 @@ pub(crate) fn mod_normal(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &
     let p = normalized_bpos(pos);
 
     let accounting = &t.trans().accounting;
-    let queued = accounting.get().iter_mut(t, |keys| keys.with_offsets().find_map(|(at, mut k)| {
-        let k = k.key_mut();
+    let queued = t.subbuf_find_mut(accounting, |k| {
         if k.k.p != p {
             return None;
         }
 
-        let at = at / size_of::<u64>();
-        let range = at..at + usize::from(k.k.u64s);
         let counters = &mut k.arm::<Accounting>().expect("an accounting key").v_mut().d;
         (counters.len() == d.len()).then(|| {
             for (c, &d) in counters.iter_mut().zip(d) {
                 *c = c.wrapping_add(d);
             }
-            (range, counters.iter().all(|&c| c == 0))
+            counters.iter().all(|&c| c == 0)
         })
-    }));
+    });
 
-    match queued {
-        Some((range, true)) => t.subbuf_remove(accounting, range),
-        Some(_) => {}
-        None => t.subbuf_append(accounting, BKEY_U64S + d.len(), |k| {
-            k[..BKEY_U64S].as_mut_bytes().copy_from_slice(plain_bytes(&accounting_bkey(p, d.len())));
-            k[BKEY_U64S..].copy_from_slice(d);
-        })?,
+    if !queued {
+        let k = c::bkey_i { k: accounting_bkey(p, d.len()), ..Default::default() };
+        t.subbuf_push(accounting, &k, |v| v.copy_from_slice(d))?;
     }
     Ok(())
 }
@@ -412,7 +405,7 @@ pub fn add_at(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[i64], gc: 
  * applicable (i.e. replicas updates)
  */
 pub(crate) fn update_sb(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
-    t.trans().accounting.get().iter(t, |mut keys| keys.try_for_each(|k| update_sb_one(t.fs(), k.key().k.p)))
+    t.trans().accounting.get().iter(t, |mut keys| keys.try_for_each(|k| update_sb_one(t.fs(), k.k.p)))
 }
 
 pub fn mod_dev_cached_sectors(t: &TransAttempt<'_, '_>, dev: u32, sectors: i64, gc: bool)

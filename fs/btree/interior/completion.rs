@@ -224,7 +224,7 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
                                     deleted_u64s);
         key_trigger(t, &mut op)?;
 
-        t.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8, i.key.key().as_bytes())?;
+        t.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8, i.key.key())?;
     }
 
     for i in u.new_nodes_locked(commit_lock).iter_mut() {
@@ -277,7 +277,7 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
             } else {
                 (c::JsetEntryType::btree_keys, level + 1)
             };
-            t.journal_entry_add(ty, btree.0 as u8, level as u8, k.as_ref().as_bytes())?;
+            t.journal_entry_add(ty, btree.0 as u8, level as u8, k.as_ref())?;
         } else {
             let mut parent = BtreeNodeIter::new(t, btree, k.k().p, 0, level + 1, BtreeIterFlags::INTENT);
             parent.iter().traverse(t)?;
