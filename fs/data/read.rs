@@ -287,6 +287,12 @@ pub struct ReadDone {
     pub poisoned:      Option<BkeyBuf>,
 }
 
+impl ReadDone {
+    fn unretried(ret: Result<(), BchError>, pick: Option<c::extent_ptr_decoded>) -> Self {
+        ReadDone { ret, pick, ptrs_io_error: 0, poisoned: None }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Plan<'r> {
     range:              BioRange<'r>,
@@ -469,7 +475,7 @@ impl<'r> Fragment<'r> {
             }
         };
         if let Some(task) = promote {
-            let read = ReadDone { ret, pick: Some(plan.pick), ptrs_io_error: 0, poisoned: None };
+            let read = ReadDone::unretried(ret, Some(plan.pick));
             unsafe { task.start(read) };
         }
     }
@@ -1792,7 +1798,7 @@ fn update_end<'r>(rbio: &'r Rbio, k: &'r BkeyI, btree: Btree, buf: BioRange<'r>,
 {
     let f = f.take().expect("an update's fragment, ended once");
     let pick = f.plan.landed.then_some(f.plan.pick);
-    f.end(rbio, ret, Locate::Key(k, btree), Some(buf)).map(|ret| ReadDone { ret, pick, ptrs_io_error: 0, poisoned: None })
+    f.end(rbio, ret, Locate::Key(k, btree), Some(buf)).map(|ret| ReadDone::unretried(ret, pick))
 }
 
 #[args_stored_once]
@@ -1804,10 +1810,10 @@ pub async fn read_update(rbio: &mut Rbio, k: &BkeyI, btree: Btree, flags: F, dev
         let retry = {
             let mut f = None;
             if let Err(e) = update_fragment(rbio, k, btree, buf, flags, dev, &mut f) {
-                break 'read ReadDone { ret: Err(e), pick: None, ptrs_io_error: 0, poisoned: None };
+                break 'read ReadDone::unretried(Err(e), None);
             }
             let Some(frag) = f.as_mut() else {
-                break 'read ReadDone { ret: Ok(()), pick: None, ptrs_io_error: 0, poisoned: None };
+                break 'read ReadDone::unretried(Ok(()), None);
             };
             let ret = if frag.plan.pick.do_ec_reconstruct {
                 Ok(())
