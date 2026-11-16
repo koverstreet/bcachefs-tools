@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kent Overstreet <kent.overstreet@linux.dev>
+Date: Mon, 16 Nov 2026 16:42:27 -0500
+Subject: [PATCH] VM_MAYSHARE is VM_MAYSHARE
+
+Upstream copy-paste: bindings_helper.h defines RUST_CONST_HELPER_VM_MAYSHARE
+as VM_MAYEXEC, and bindgen_parameters blocklists VM_MAYEXEC twice and
+VM_MAYSHARE not at all. Goes once upstream fixes it.
+
+---
+ bindgen_parameters         | 2 +-
+ bindings/bindings_helper.h | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/bindgen_parameters b/bindgen_parameters
+index 8402b0c93545..93e622aaaf78 100644
+--- a/bindgen_parameters
++++ b/bindgen_parameters
+@@ -50,7 +50,7 @@
+ --blocklist-item VM_MAYREAD
+ --blocklist-item VM_MAYWRITE
+ --blocklist-item VM_MAYEXEC
+---blocklist-item VM_MAYEXEC
++--blocklist-item VM_MAYSHARE
+ --blocklist-item VM_PFNMAP
+ --blocklist-item VM_IO
+ --blocklist-item VM_DONTCOPY
+diff --git a/bindings/bindings_helper.h b/bindings/bindings_helper.h
+index 74b7f48ad056..cfe9118fba4a 100644
+--- a/bindings/bindings_helper.h
++++ b/bindings/bindings_helper.h
+@@ -95,7 +95,7 @@ const vm_flags_t RUST_CONST_HELPER_VM_SHARED = VM_SHARED;
+ const vm_flags_t RUST_CONST_HELPER_VM_MAYREAD = VM_MAYREAD;
+ const vm_flags_t RUST_CONST_HELPER_VM_MAYWRITE = VM_MAYWRITE;
+ const vm_flags_t RUST_CONST_HELPER_VM_MAYEXEC = VM_MAYEXEC;
+-const vm_flags_t RUST_CONST_HELPER_VM_MAYSHARE = VM_MAYEXEC;
++const vm_flags_t RUST_CONST_HELPER_VM_MAYSHARE = VM_MAYSHARE; // vendored-fix-618: upstream copy-paste typo (was VM_MAYEXEC)
+ const vm_flags_t RUST_CONST_HELPER_VM_PFNMAP = VM_PFNMAP;
+ const vm_flags_t RUST_CONST_HELPER_VM_IO = VM_IO;
+ const vm_flags_t RUST_CONST_HELPER_VM_DONTCOPY = VM_DONTCOPY;

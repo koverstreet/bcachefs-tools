@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kent Overstreet <kent.overstreet@linux.dev>
+Date: Mon, 16 Nov 2026 16:42:27 -0500
+Subject: [PATCH] drop sync::poll
+
+PollCondVar's drop calls __wake_up_pollfree, which the kernel doesn't
+export, so a module can't link it. bcachefs doesn't use it.
+
+---
+ kernel/sync.rs | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/sync.rs b/kernel/sync.rs
+index 993dbf2caa0e..9e15c81f8b0c 100644
+--- a/kernel/sync.rs
++++ b/kernel/sync.rs
+@@ -17,7 +17,10 @@ pub mod completion;
+ mod condvar;
+ pub mod lock;
+ mod locked_by;
+-pub mod poll;
++// vendored-trim: PollCondVar (sync::poll) is unused by bcachefs and its drop
++// calls __wake_up_pollfree, which the kernel never EXPORT_SYMBOLs (6.18 or 7.x);
++// bundled into a module that symbol can't link. bcachefs doesn't use poll, so
++// drop the module rather than carry an unresolvable reference.
+ pub mod rcu;
+ mod refcount;
+ mod set_once;

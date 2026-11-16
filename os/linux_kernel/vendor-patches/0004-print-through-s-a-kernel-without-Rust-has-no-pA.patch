@@ -1,0 +1,182 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kent Overstreet <kent.overstreet@linux.dev>
+Date: Mon, 16 Nov 2026 16:42:27 -0500
+Subject: [PATCH] print through %s: a kernel without Rust has no %pA
+
+vsprintf's %pA calls rust_fmt_argument, which only a CONFIG_RUST=y kernel
+has. print::with_formatted() formats a line into a stack buffer instead,
+truncating past 1024 bytes, and printk, the KUnit messages and seq_file
+pass it to %s. Needed for as long as bcachefs.ko carries this stack.
+
+---
+ kernel/kunit.rs    | 26 ++++++++------------
+ kernel/print.rs    | 60 +++++++++++++++++++++++++++++++---------------
+ kernel/seq_file.rs | 14 +++++------
+ 3 files changed, 57 insertions(+), 43 deletions(-)
+
+diff --git a/kernel/kunit.rs b/kernel/kunit.rs
+index cdee5f27bd7f..41457f85a70a 100644
+--- a/kernel/kunit.rs
++++ b/kernel/kunit.rs
+@@ -18,15 +18,12 @@ pub fn err(args: fmt::Arguments<'_>) {
+     #[cfg(not(CONFIG_PRINTK))]
+     let _ = args;
+ 
+-    // SAFETY: The format string is null-terminated and the `%pA` specifier matches the argument we
+-    // are passing.
++    // CONFIG_RUST=n vsprintf has no `%pA` handler, so format in Rust and pass `%s`.
+     #[cfg(CONFIG_PRINTK)]
+-    unsafe {
+-        bindings::_printk(
+-            c"\x013%pA".as_char_ptr(),
+-            core::ptr::from_ref(&args).cast::<c_void>(),
+-        );
+-    }
++    crate::print::with_formatted(args, |s| unsafe {
++        // SAFETY: The format string is null-terminated and `s` is a `%s` C string.
++        bindings::_printk(c"\x013%s".as_char_ptr(), s);
++    });
+ }
+ 
+ /// Prints a KUnit info-level message.
+@@ -38,15 +35,12 @@ pub fn info(args: fmt::Arguments<'_>) {
+     #[cfg(not(CONFIG_PRINTK))]
+     let _ = args;
+ 
+-    // SAFETY: The format string is null-terminated and the `%pA` specifier matches the argument we
+-    // are passing.
++    // CONFIG_RUST=n vsprintf has no `%pA` handler, so format in Rust and pass `%s`.
+     #[cfg(CONFIG_PRINTK)]
+-    unsafe {
+-        bindings::_printk(
+-            c"\x016%pA".as_char_ptr(),
+-            core::ptr::from_ref(&args).cast::<c_void>(),
+-        );
+-    }
++    crate::print::with_formatted(args, |s| unsafe {
++        // SAFETY: The format string is null-terminated and `s` is a `%s` C string.
++        bindings::_printk(c"\x016%s".as_char_ptr(), s);
++    });
+ }
+ 
+ /// Asserts that a boolean expression is `true` at runtime.
+diff --git a/kernel/print.rs b/kernel/print.rs
+index 6fd84389a858..4892e162c051 100644
+--- a/kernel/print.rs
++++ b/kernel/print.rs
+@@ -18,7 +18,33 @@ use crate::{
+     },
+ };
+ 
+-// Called from `vsprintf` with format specifier `%pA`.
++/// Formats `args` into a stack buffer as a NUL-terminated C string and invokes `f`
++/// with a pointer to it.
++///
++/// Used in place of the kernel's `%pA` specifier, which CONFIG_RUST=n vsprintf
++/// can't format (it would call [`rust_fmt_argument`]): each printk-family call site
++/// passes the pointer to a plain `%s`. Keeps printk allocation-free (the buffer is
++/// on the stack) and centralizes the bounds/NUL handling so no call site touches
++/// raw buffer math. Lines longer than the buffer truncate; the pointer is valid
++/// only for the duration of `f`.
++pub(crate) fn with_formatted<R>(args: fmt::Arguments<'_>, f: impl FnOnce(*const c_char) -> R) -> R {
++    use fmt::Write;
++    // The kernel caps a printk line at PRINTK_MESSAGE_MAX (2048); 1024 covers
++    // essentially every Rust log line at a modest stack cost.
++    const LOG_LINE_MAX: usize = 1024;
++    let mut buf = [0u8; LOG_LINE_MAX];
++    let cap = buf.len() - 1; // reserve a byte for the NUL terminator
++    // SAFETY: `buf` is valid for writes for `cap` bytes (one short of its length).
++    let mut w = unsafe { RawFormatter::from_buffer(buf.as_mut_ptr(), cap) };
++    let _ = w.write_fmt(args);
++    buf[core::cmp::min(w.bytes_written(), cap)] = 0;
++    f(buf.as_ptr().cast())
++}
++
++// Called from `vsprintf` with format specifier `%pA` on CONFIG_RUST=y kernels.
++// In this vendored, bundled-into-a-module build the target kernel is CONFIG_RUST=n
++// and never invokes this; `call_printk` formats via `%s` instead. Kept exported to
++// stay close to upstream.
+ #[expect(clippy::missing_safety_doc)]
+ #[export]
+ unsafe extern "C" fn rust_fmt_argument(
+@@ -61,10 +87,12 @@ pub mod format_strings {
+         }
+         assert!(prefix[2] == b'\x00');
+ 
++        // `%s` (not `%pA`): CONFIG_RUST=n vsprintf can't format Rust `Arguments`,
++        // so `call_printk` formats the line in Rust and passes it as a C string.
+         let suffix: &[u8; LENGTH - LENGTH_PREFIX] = if is_cont {
+-            b"%pA\0\0\0\0\0"
++            b"%s\0\0\0\0\0\0"
+         } else {
+-            b"%s: %pA\0"
++            b"%s: %s\0\0"
+         };
+ 
+         [
+@@ -109,14 +137,11 @@ pub unsafe fn call_printk(
+ ) {
+     // `_printk` does not seem to fail in any path.
+     #[cfg(CONFIG_PRINTK)]
+-    // SAFETY: TODO.
+-    unsafe {
+-        bindings::_printk(
+-            format_string.as_ptr(),
+-            module_name.as_ptr(),
+-            core::ptr::from_ref(&args).cast::<c_void>(),
+-        );
+-    }
++    // SAFETY: `format_string` is a fixed `%s`-form string, `module_name` is
++    // null-terminated, and `with_formatted` passes a NUL-terminated buffer.
++    with_formatted(args, |s| unsafe {
++        bindings::_printk(format_string.as_ptr(), module_name.as_ptr(), s);
++    });
+ }
+ 
+ /// Prints a message via the kernel's [`_printk`] for the `CONT` level.
+@@ -128,15 +153,12 @@ pub unsafe fn call_printk(
+ #[cfg_attr(not(CONFIG_PRINTK), allow(unused_variables))]
+ pub fn call_printk_cont(args: fmt::Arguments<'_>) {
+     // `_printk` does not seem to fail in any path.
+-    //
+-    // SAFETY: The format string is fixed.
+     #[cfg(CONFIG_PRINTK)]
+-    unsafe {
+-        bindings::_printk(
+-            format_strings::CONT.as_ptr(),
+-            core::ptr::from_ref(&args).cast::<c_void>(),
+-        );
+-    }
++    // SAFETY: the format string is fixed (`%s`) and `with_formatted` passes a
++    // NUL-terminated buffer.
++    with_formatted(args, |s| unsafe {
++        bindings::_printk(format_strings::CONT.as_ptr(), s);
++    });
+ }
+ 
+ /// Performs formatting and forwards the string to [`call_printk`].
+diff --git a/kernel/seq_file.rs b/kernel/seq_file.rs
+index 518265558d66..a57af485736a 100644
+--- a/kernel/seq_file.rs
++++ b/kernel/seq_file.rs
+@@ -32,14 +32,12 @@ impl SeqFile {
+     /// Used by the [`seq_print`] macro.
+     #[inline]
+     pub fn call_printf(&self, args: fmt::Arguments<'_>) {
+-        // SAFETY: Passing a void pointer to `Arguments` is valid for `%pA`.
+-        unsafe {
+-            bindings::seq_printf(
+-                self.inner.get(),
+-                c"%pA".as_char_ptr(),
+-                core::ptr::from_ref(&args).cast::<crate::ffi::c_void>(),
+-            );
+-        }
++        // CONFIG_RUST=n vsprintf has no `%pA` handler, so format the line in Rust
++        // and pass `seq_printf` a plain `%s` C string (see `print::with_formatted`).
++        crate::print::with_formatted(args, |s| unsafe {
++            // SAFETY: `self.inner` is a valid seq_file and `s` is NUL-terminated.
++            bindings::seq_printf(self.inner.get(), c"%s".as_char_ptr(), s);
++        });
+     }
+ }
+ 

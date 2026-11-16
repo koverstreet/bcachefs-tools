@@ -1,0 +1,528 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kent Overstreet <kent.overstreet@linux.dev>
+Date: Mon, 16 Nov 2026 16:42:09 -0500
+Subject: [PATCH] trim to what bcachefs uses
+
+The kernel crate's driver model (device, driver, pci, platform, usb, drm,
+dma, ...), ACPI and GPU modules are unused here, and call C that older
+kernels lack or don't export - 6.18 has no acpi_of_match_device or
+gpu_buddy - so a module carrying them can't load there. Their sources are
+in vendor-patches/exclude; this drops what refers to them: their mod lines
+in lib.rs, their helpers' #includes, their bindings headers and constants,
+the prelude's dev_* macros and IntoBytes, and the users in modules that
+stay - cpu::from_cpu() (Device), UserSliceWriter::write_dma()
+(dma::Coherent), and mm::virt with the VMA lookups and guards built on it,
+those three behind cfg(kernel_ge_7_1), which nothing sets.
+
+bindings_helper.h names the headers the remaining modules need once the
+driver headers no longer pull them in: blk_types and blkdev (error.rs),
+delay (MAX_UDELAY_MS), uio (uaccess).
+
+Refreshed at every re-vendor: a new upstream module is excluded, and its
+mod line and helper dropped, here.
+
+---
+ bindings/bindings_helper.h | 80 +++++++----------------------------
+ helpers/helpers.c          | 44 +++++++++----------
+ kernel/cpu.rs              |  3 +-
+ kernel/lib.rs              | 86 +++++++++++++++++++-------------------
+ kernel/mm.rs               |  7 ++++
+ kernel/prelude.rs          | 18 +-------
+ kernel/uaccess.rs          |  2 +-
+ 7 files changed, 91 insertions(+), 149 deletions(-)
+
+diff --git a/bindings/bindings_helper.h b/bindings/bindings_helper.h
+index 1124785e210b..bd4fb9bbe87d 100644
+--- a/bindings/bindings_helper.h
++++ b/bindings/bindings_helper.h
+@@ -28,83 +28,43 @@
+  */
+ #include <linux/hrtimer_types.h>
+ 
+-#include <linux/acpi.h>
+-#include <linux/gpu_buddy.h>
+-#include <drm/drm_device.h>
+-#include <drm/drm_drv.h>
+-#include <drm/drm_file.h>
+-#include <drm/drm_gem.h>
+-#include <drm/drm_gem_shmem_helper.h>
+-#include <drm/drm_gpuvm.h>
+-#include <drm/drm_ioctl.h>
++// vendored-trim-618: the kernel crate's driver model is trimmed (see
++// kernel/lib.rs), so the driver-binding headers it needed are dropped here:
++//   acpi, gpu_buddy, drm/*, auxiliary_bus, blk*, clk, configfs, cpufreq,
++//   device/faux, dma*, ethtool, firmware, i2c, interrupt, io-pgtable, ioport,
++//   iosys-map, mdio, miscdevice, of_device, pci, phy, platform_device, pm_opp,
++//   property, pwm, regulator, sys_soc, usb, and the samples' rust_sample trace.
++// What remains is bcachefs's kept closure.
+ #include <kunit/test.h>
+-#include <linux/auxiliary_bus.h>
+ #include <linux/bitmap.h>
+-#include <linux/blk-mq.h>
+-#include <linux/blk_types.h>
+-#include <linux/blkdev.h>
+-#include <linux/clk.h>
++#include <linux/blk_types.h>	// vendored: blk_status, used by the kept error module
++#include <linux/blkdev.h>	// vendored: errno_to_blk_status (error.rs)
+ #include <linux/completion.h>
+-#include <linux/configfs.h>
++#include <linux/delay.h>	// vendored: MAX_UDELAY_MS
++#include <linux/uio.h>	// vendored: iov_iter, used by the kept uaccess module
+ #include <linux/cpu.h>
+-#include <linux/cpufreq.h>
+ #include <linux/cpumask.h>
+ #include <linux/cred.h>
+ #include <linux/debugfs.h>
+-#include <linux/device/faux.h>
+-#include <linux/dma-direction.h>
+-#include <linux/dma-mapping.h>
+-#include <linux/dma-resv.h>
+ #include <linux/errname.h>
+-#include <linux/ethtool.h>
+ #include <linux/fdtable.h>
+ #include <linux/file.h>
+-#include <linux/firmware.h>
+ #include <linux/fs.h>
+-#include <linux/i2c.h>
+-#include <linux/interrupt.h>
+-#include <linux/io-pgtable.h>
+-#include <linux/ioport.h>
+-#include <linux/iosys-map.h>
+ #include <linux/jiffies.h>
+ #include <linux/jump_label.h>
+-#include <linux/mdio.h>
+ #include <linux/mm.h>
+-#include <linux/miscdevice.h>
+-#include <linux/of_device.h>
+-#include <linux/pci.h>
+-#include <linux/phy.h>
+ #include <linux/pid_namespace.h>
+-#include <linux/platform_device.h>
+-#include <linux/pm_opp.h>
+ #include <linux/poll.h>
+-#include <linux/property.h>
+-#include <linux/pwm.h>
+ #include <linux/random.h>
+ #include <linux/refcount.h>
+-#include <linux/regulator/consumer.h>
+ #include <linux/sched.h>
+ #include <linux/security.h>
+ #include <linux/slab.h>
+-#include <linux/sys_soc.h>
+ #include <linux/task_work.h>
+ #include <linux/tracepoint.h>
+-#include <linux/usb.h>
+ #include <linux/wait.h>
+ #include <linux/workqueue.h>
+ #include <linux/xarray.h>
+-#include <trace/events/rust_sample.h>
+-
+-/*
+- * The driver-core Rust code needs to know about some C driver-core private
+- * structures.
+- */
+-#include <../../drivers/base/base.h>
+-
+-#if defined(CONFIG_DRM_PANIC_SCREEN_QR_CODE)
+-// Used by `#[export]` in `drivers/gpu/drm/drm_panic_qr.rs`.
+-#include <drm/drm_panic.h>
+-#endif
+ 
+ /* `bindgen` gets confused at certain things. */
+ const size_t RUST_CONST_HELPER_ARCH_SLAB_MINALIGN = ARCH_SLAB_MINALIGN;
+@@ -117,7 +77,7 @@ const gfp_t RUST_CONST_HELPER_GFP_NOWAIT = GFP_NOWAIT;
+ const gfp_t RUST_CONST_HELPER___GFP_ZERO = __GFP_ZERO;
+ const gfp_t RUST_CONST_HELPER___GFP_HIGHMEM = ___GFP_HIGHMEM;
+ const gfp_t RUST_CONST_HELPER___GFP_NOWARN = ___GFP_NOWARN;
+-const blk_features_t RUST_CONST_HELPER_BLK_FEAT_ROTATIONAL = BLK_FEAT_ROTATIONAL;
++// vendored-trim-618: BLK_FEAT_ROTATIONAL (block model trimmed; blk_types.h gone)
+ const fop_flags_t RUST_CONST_HELPER_FOP_UNSIGNED_OFFSET = FOP_UNSIGNED_OFFSET;
+ 
+ const xa_mark_t RUST_CONST_HELPER_XA_PRESENT = XA_PRESENT;
+@@ -151,17 +111,5 @@ const vm_flags_t RUST_CONST_HELPER_VM_MIXEDMAP = VM_MIXEDMAP;
+ const vm_flags_t RUST_CONST_HELPER_VM_HUGEPAGE = VM_HUGEPAGE;
+ const vm_flags_t RUST_CONST_HELPER_VM_NOHUGEPAGE = VM_NOHUGEPAGE;
+ 
+-#if IS_ENABLED(CONFIG_GPU_BUDDY)
+-const unsigned long RUST_CONST_HELPER_GPU_BUDDY_RANGE_ALLOCATION = GPU_BUDDY_RANGE_ALLOCATION;
+-const unsigned long RUST_CONST_HELPER_GPU_BUDDY_TOPDOWN_ALLOCATION = GPU_BUDDY_TOPDOWN_ALLOCATION;
+-const unsigned long RUST_CONST_HELPER_GPU_BUDDY_CONTIGUOUS_ALLOCATION =
+-								GPU_BUDDY_CONTIGUOUS_ALLOCATION;
+-const unsigned long RUST_CONST_HELPER_GPU_BUDDY_CLEAR_ALLOCATION = GPU_BUDDY_CLEAR_ALLOCATION;
+-const unsigned long RUST_CONST_HELPER_GPU_BUDDY_CLEARED = GPU_BUDDY_CLEARED;
+-const unsigned long RUST_CONST_HELPER_GPU_BUDDY_TRIM_DISABLE = GPU_BUDDY_TRIM_DISABLE;
+-#endif
+-
+-#if IS_ENABLED(CONFIG_ANDROID_BINDER_IPC_RUST)
+-#include "../../drivers/android/binder/rust_binder.h"
+-#include "../../drivers/android/binder/rust_binder_events.h"
+-#endif
++// vendored-trim-618: gpu_buddy const helpers (gpu) + android binder includes
++// (binder) — both trimmed from the kernel crate.
+diff --git a/helpers/helpers.c b/helpers/helpers.c
+index 998e31052e66..da2a8c3bca89 100644
+--- a/helpers/helpers.c
++++ b/helpers/helpers.c
+@@ -38,54 +38,54 @@
+ #define __rust_helper __always_inline
+ #endif
+ 
+-#include "acpi.c"
++// vendored-trim-618: #include "acpi.c" (acpi_of_match_device absent on 6.18)
+ #include "atomic.c"
+ #include "atomic_ext.c"
+-#include "auxiliary.c"
++// vendored-trim-618 (driver model): #include "auxiliary.c"
+ #include "barrier.c"
+-#include "binder.c"
++// vendored-trim-618 (driver model): #include "binder.c"
+ #include "bitmap.c"
+ #include "bitops.c"
+-#include "blk.c"
++// vendored-trim-618 (driver model): #include "blk.c"
+ #include "bug.c"
+ #include "build_assert.c"
+ #include "build_bug.c"
+-#include "clk.c"
++// vendored-trim-618 (driver model): #include "clk.c"
+ #include "completion.c"
+ #include "cpu.c"
+-#include "cpufreq.c"
++// vendored-trim-618 (driver model): #include "cpufreq.c"
+ #include "cpumask.c"
+ #include "cred.c"
+-#include "device.c"
+-#include "dma.c"
+-#include "dma-resv.c"
+-#include "drm.c"
+-#include "drm_gpuvm.c"
++// vendored-trim-618 (driver model): #include "device.c"
++// vendored-trim-618 (driver model): #include "dma.c"
++// vendored-trim-618 (driver model): #include "dma-resv.c"
++// vendored-trim-618 (driver model): #include "drm.c"
++// vendored-trim-618 (driver model): #include "drm_gpuvm.c"
+ #include "err.c"
+-#include "irq.c"
++// vendored-trim-618 (driver model): #include "irq.c"
+ #include "fs.c"
+-#include "gpu.c"
+-#include "io.c"
++// vendored-trim-618: #include "gpu.c" (6.18 lacks gpu_buddy)
++// vendored-trim-618 (driver model): #include "io.c"
+ #include "jump_label.c"
+ #include "kunit.c"
+ #include "list.c"
+ #include "maple_tree.c"
+ #include "mm.c"
+ #include "mutex.c"
+-#include "of.c"
++// vendored-trim-618 (driver model): #include "of.c"
+ #include "page.c"
+-#include "pci.c"
++// vendored-trim-618 (driver model): #include "pci.c"
+ #include "pid_namespace.c"
+-#include "platform.c"
++// vendored-trim-618 (driver model): #include "platform.c"
+ #include "poll.c"
+ #include "processor.c"
+-#include "property.c"
+-#include "pwm.c"
++// vendored-trim-618 (driver model): #include "property.c"
++// vendored-trim-618 (driver model): #include "pwm.c"
+ #include "rbtree.c"
+ #include "rcu.c"
+ #include "refcount.c"
+-#include "regulator.c"
+-#include "scatterlist.c"
++// vendored-trim-618 (driver model): #include "regulator.c"
++// vendored-trim-618 (driver model): #include "scatterlist.c"
+ #include "security.c"
+ #include "signal.c"
+ #include "slab.c"
+@@ -95,7 +95,7 @@
+ #include "task.c"
+ #include "time.c"
+ #include "uaccess.c"
+-#include "usb.c"
++// vendored-trim-618 (driver model): #include "usb.c"
+ #include "vmalloc.c"
+ #include "wait.c"
+ #include "workqueue.c"
+diff --git a/kernel/cpu.rs b/kernel/cpu.rs
+index cb6c0338ef5a..abeacec3ca4c 100644
+--- a/kernel/cpu.rs
++++ b/kernel/cpu.rs
+@@ -4,7 +4,7 @@
+ //!
+ //! C header: [`include/linux/cpu.h`](srctree/include/linux/cpu.h)
+ 
+-use crate::{bindings, device::Device, error::Result, prelude::ENODEV};
++use crate::{bindings, error::Result, prelude::ENODEV};
+ 
+ /// Returns the maximum number of possible CPUs in the current system configuration.
+ #[inline]
+@@ -139,6 +139,7 @@ impl From<CpuId> for i32 {
+ /// Callers must ensure that the CPU device is not used after it has been unregistered.
+ /// This can be achieved, for example, by registering a CPU hotplug notifier and removing
+ /// any references to the CPU device within the notifier's callback.
++#[cfg(kernel_ge_7_1)]
+ pub unsafe fn from_cpu(cpu: CpuId) -> Result<&'static Device> {
+     // SAFETY: It is safe to call `get_cpu_device()` for any CPU.
+     let ptr = unsafe { bindings::get_cpu_device(u32::from(cpu)) };
+diff --git a/kernel/lib.rs b/kernel/lib.rs
+index 9512af7156df..eb14a26f57c2 100644
+--- a/kernel/lib.rs
++++ b/kernel/lib.rs
+@@ -40,88 +40,88 @@ extern crate self as kernel;
+ 
+ pub use ffi;
+ 
+-pub mod acpi;
++// vendored-trim-618: pub mod acpi; (acpi_of_match_device absent on 6.18)
+ pub mod alloc;
+-#[cfg(CONFIG_AUXILIARY_BUS)]
+-pub mod auxiliary;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_AUXILIARY_BUS)]
++// vendored-trim-618-drivermodel: pub mod auxiliary;
+ pub mod bitfield;
+ pub mod bitmap;
+ pub mod bits;
+-#[cfg(CONFIG_BLOCK)]
+-pub mod block;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_BLOCK)]
++// vendored-trim-618-drivermodel: pub mod block;
+ pub mod bug;
+ pub mod build_assert;
+-pub mod clk;
+-#[cfg(CONFIG_CONFIGFS_FS)]
+-pub mod configfs;
++// vendored-trim-618-drivermodel: pub mod clk;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_CONFIGFS_FS)]
++// vendored-trim-618-drivermodel: pub mod configfs;
+ pub mod cpu;
+-#[cfg(CONFIG_CPU_FREQ)]
+-pub mod cpufreq;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_CPU_FREQ)]
++// vendored-trim-618-drivermodel: pub mod cpufreq;
+ pub mod cpumask;
+ pub mod cred;
+ pub mod debugfs;
+-pub mod device;
+-pub mod device_id;
+-pub mod devres;
+-pub mod dma;
+-pub mod driver;
+-#[cfg(CONFIG_DRM = "y")]
+-pub mod drm;
++// vendored-trim-618-drivermodel: pub mod device;
++// vendored-trim-618-drivermodel: pub mod device_id;
++// vendored-trim-618-drivermodel: pub mod devres;
++// vendored-trim-618-drivermodel: pub mod dma;
++// vendored-trim-618-drivermodel: pub mod driver;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_DRM = "y")]
++// vendored-trim-618-drivermodel: pub mod drm;
+ pub mod error;
+-pub mod faux;
+-#[cfg(CONFIG_RUST_FW_LOADER_ABSTRACTIONS)]
+-pub mod firmware;
++// vendored-trim-618-drivermodel: pub mod faux;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_RUST_FW_LOADER_ABSTRACTIONS)]
++// vendored-trim-618-drivermodel: pub mod firmware;
+ pub mod fmt;
+ pub mod fs;
+ #[cfg(CONFIG_GPU_BUDDY = "y")]
+-pub mod gpu;
+-#[cfg(CONFIG_I2C = "y")]
+-pub mod i2c;
++// vendored-trim-618: pub mod gpu; (uses gpu_buddy, absent on 6.18)
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_I2C = "y")]
++// vendored-trim-618-drivermodel: pub mod i2c;
+ pub mod id_pool;
+ #[doc(hidden)]
+ pub mod impl_flags;
+ pub mod init;
+ pub mod interop;
+-pub mod io;
++// vendored-trim-618-drivermodel: pub mod io;
+ pub mod ioctl;
+-pub mod iommu;
++// vendored-trim-618-drivermodel: pub mod iommu;
+ pub mod iov;
+-pub mod irq;
++// vendored-trim-618-drivermodel: pub mod irq;
+ pub mod jump_label;
+ #[cfg(CONFIG_KUNIT)]
+ pub mod kunit;
+ pub mod list;
+ pub mod maple_tree;
+-pub mod miscdevice;
++// vendored-trim-618-drivermodel: pub mod miscdevice;
+ pub mod mm;
+ pub mod module_param;
+-#[cfg(CONFIG_NET)]
+-pub mod net;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_NET)]
++// vendored-trim-618-drivermodel: pub mod net;
+ pub mod num;
+-pub mod of;
+-#[cfg(CONFIG_PM_OPP)]
+-pub mod opp;
++// vendored-trim-618-drivermodel: pub mod of;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_PM_OPP)]
++// vendored-trim-618-drivermodel: pub mod opp;
+ pub mod page;
+-#[cfg(CONFIG_PCI)]
+-pub mod pci;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_PCI)]
++// vendored-trim-618-drivermodel: pub mod pci;
+ pub mod pid_namespace;
+-pub mod platform;
++// vendored-trim-618-drivermodel: pub mod platform;
+ pub mod prelude;
+ pub mod print;
+ pub mod processor;
+ pub mod ptr;
+-#[cfg(CONFIG_RUST_PWM_ABSTRACTIONS)]
+-pub mod pwm;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_RUST_PWM_ABSTRACTIONS)]
++// vendored-trim-618-drivermodel: pub mod pwm;
+ pub mod rbtree;
+-pub mod regulator;
++// vendored-trim-618-drivermodel: pub mod regulator;
+ pub mod revocable;
+ pub mod safety;
+-pub mod scatterlist;
++// vendored-trim-618-drivermodel: pub mod scatterlist;
+ pub mod security;
+ pub mod seq_file;
+ pub mod sizes;
+-#[cfg(CONFIG_SOC_BUS)]
+-pub mod soc;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_SOC_BUS)]
++// vendored-trim-618-drivermodel: pub mod soc;
+ #[doc(hidden)]
+ pub mod std_vendor;
+ pub mod str;
+@@ -132,8 +132,8 @@ pub mod tracepoint;
+ pub mod transmute;
+ pub mod types;
+ pub mod uaccess;
+-#[cfg(CONFIG_USB = "y")]
+-pub mod usb;
++// vendored-trim-618-drivermodel(cfg): #[cfg(CONFIG_USB = "y")]
++// vendored-trim-618-drivermodel: pub mod usb;
+ pub mod workqueue;
+ pub mod xarray;
+ 
+diff --git a/kernel/mm.rs b/kernel/mm.rs
+index 4764d7b68f2a..a3637ebf677b 100644
+--- a/kernel/mm.rs
++++ b/kernel/mm.rs
+@@ -18,7 +18,9 @@ use crate::{
+ };
+ use core::{ops::Deref, ptr::NonNull};
+ 
++#[cfg(kernel_ge_7_1)]
+ pub mod virt;
++#[cfg(kernel_ge_7_1)]
+ use virt::VmaRef;
+ 
+ #[cfg(CONFIG_MMU)]
+@@ -173,6 +175,7 @@ impl MmWithUser {
+     ///
+     /// When per-vma locks are disabled, this always returns `None`.
+     #[inline]
++    #[cfg(kernel_ge_7_1)]
+     pub fn lock_vma_under_rcu(&self, vma_addr: usize) -> Option<VmaReadGuard<'_>> {
+         #[cfg(CONFIG_PER_VMA_LOCK)]
+         {
+@@ -241,6 +244,7 @@ pub struct MmapReadGuard<'a> {
+ impl<'a> MmapReadGuard<'a> {
+     /// Look up a vma at the given address.
+     #[inline]
++    #[cfg(kernel_ge_7_1)]
+     pub fn vma_lookup(&self, vma_addr: usize) -> Option<&virt::VmaRef> {
+         // SAFETY: By the type invariants we hold the mmap read guard, so we can safely call this
+         // method. Any value is okay for `vma_addr`.
+@@ -272,6 +276,7 @@ impl Drop for MmapReadGuard<'_> {
+ /// # Invariants
+ ///
+ /// This `VmaReadGuard` guard owns the vma read lock.
++#[cfg(kernel_ge_7_1)]
+ pub struct VmaReadGuard<'a> {
+     vma: &'a VmaRef,
+     // `vma_end_read` must be called on the same thread as where the lock was taken
+@@ -279,6 +284,7 @@ pub struct VmaReadGuard<'a> {
+ }
+ 
+ // Make all `VmaRef` methods available on `VmaReadGuard`.
++#[cfg(kernel_ge_7_1)]
+ impl Deref for VmaReadGuard<'_> {
+     type Target = VmaRef;
+ 
+@@ -288,6 +294,7 @@ impl Deref for VmaReadGuard<'_> {
+     }
+ }
+ 
++#[cfg(kernel_ge_7_1)]
+ impl Drop for VmaReadGuard<'_> {
+     #[inline]
+     fn drop(&mut self) {
+diff --git a/kernel/prelude.rs b/kernel/prelude.rs
+index ca396f1f78a6..7676ea0a2d9e 100644
+--- a/kernel/prelude.rs
++++ b/kernel/prelude.rs
+@@ -61,16 +61,10 @@ pub use pin_init::{
+ };
+ 
+ #[doc(no_inline)]
+-pub use zerocopy::{
+-    FromBytes,
+-    IntoBytes, //
+-};
++pub use zerocopy::FromBytes;
+ 
+ #[doc(no_inline)]
+-pub use zerocopy_derive::{
+-    FromBytes,
+-    IntoBytes, //
+-};
++pub use zerocopy_derive::FromBytes;
+ 
+ #[doc(no_inline)]
+ pub use super::{
+@@ -92,14 +86,6 @@ pub use super::{
+         static_assert, //
+     },
+     current,
+-    dev_alert,
+-    dev_crit,
+-    dev_dbg,
+-    dev_emerg,
+-    dev_err,
+-    dev_info,
+-    dev_notice,
+-    dev_warn,
+     error::{
+         code::*,
+         Error,
+diff --git a/kernel/uaccess.rs b/kernel/uaccess.rs
+index 5f6c4d7a1a51..d042d2b72c94 100644
+--- a/kernel/uaccess.rs
++++ b/kernel/uaccess.rs
+@@ -7,7 +7,6 @@
+ use crate::{
+     alloc::{Allocator, Flags},
+     bindings,
+-    dma::Coherent,
+     error::Result,
+     ffi::{c_char, c_void},
+     fs::file,
+@@ -525,6 +524,7 @@ impl UserSliceWriter {
+     ///     writer.write_dma(alloc, 0, 256)
+     /// }
+     /// ```
++    #[cfg(kernel_ge_7_1)]
+     pub fn write_dma<T: KnownSize + AsBytes + ?Sized>(
+         &mut self,
+         alloc: &Coherent<T>,

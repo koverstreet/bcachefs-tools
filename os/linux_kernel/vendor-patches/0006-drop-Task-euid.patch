@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kent Overstreet <kent.overstreet@linux.dev>
+Date: Mon, 16 Nov 2026 16:42:27 -0500
+Subject: [PATCH] drop Task::euid()
+
+7.3 deleted task_euid() (15c1f1797971), so its helper doesn't build
+against 7.3 kernels. Nothing here uses it. Goes with a REF from 7.3 on,
+which drops it itself.
+
+---
+ helpers/task.c | 5 -----
+ kernel/task.rs | 7 -------
+ 2 files changed, 12 deletions(-)
+
+diff --git a/helpers/task.c b/helpers/task.c
+index c0e1a06ede78..b46b1433a67e 100644
+--- a/helpers/task.c
++++ b/helpers/task.c
+@@ -28,11 +28,6 @@ __rust_helper kuid_t rust_helper_task_uid(struct task_struct *task)
+ 	return task_uid(task);
+ }
+ 
+-__rust_helper kuid_t rust_helper_task_euid(struct task_struct *task)
+-{
+-	return task_euid(task);
+-}
+-
+ #ifndef CONFIG_USER_NS
+ __rust_helper uid_t rust_helper_from_kuid(struct user_namespace *to, kuid_t uid)
+ {
+diff --git a/kernel/task.rs b/kernel/task.rs
+index 38273f4eedb5..a74575fac92c 100644
+--- a/kernel/task.rs
++++ b/kernel/task.rs
+@@ -217,13 +217,6 @@ impl Task {
+         Kuid::from_raw(unsafe { bindings::task_uid(self.as_ptr()) })
+     }
+ 
+-    /// Returns the effective UID of the given task.
+-    #[inline]
+-    pub fn euid(&self) -> Kuid {
+-        // SAFETY: It's always safe to call `task_euid` on a valid task.
+-        Kuid::from_raw(unsafe { bindings::task_euid(self.as_ptr()) })
+-    }
+-
+     /// Determines whether the given task has pending signals.
+     #[inline]
+     pub fn signal_pending(&self) -> bool {

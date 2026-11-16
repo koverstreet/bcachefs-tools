@@ -1,0 +1,163 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kent Overstreet <kent.overstreet@linux.dev>
+Date: Mon, 16 Nov 2026 16:42:27 -0500
+Subject: [PATCH] helpers for kernels older than the tree
+
+bcachefs.ko carries this stack to kernels built without Rust, back to
+6.16, so the helpers can't assume REF's C:
+
+  - vrealloc_node_align_noprof is exported only from 7.0 (d60769075013).
+    Before that the helper WARNs and fails: bcachefs never uses the
+    Vmalloc allocator; KVmalloc goes through the exported kvrealloc.
+  - krealloc_node_align()/kvrealloc_node_align() are 6.18+. Before that,
+    pad the size to the alignment and call krealloc()/kvrealloc(): the slab
+    allocators' alignment guarantees make that the requested alignment, as
+    the kernel's own Rust allocator relied on before the API existed.
+  - _copy_{from,to}_user() on an arch that inlines copy_{from,to}_user()
+    (arm64): before 7.2 (c02be2ad2b88) it says so with
+    INLINE_COPY_FROM_USER/INLINE_COPY_TO_USER rather than INLINE_COPY_USER;
+    and before 6.19 the header declares them there while lib/usercopy.c
+    defines them only with CONFIG_RUST, so supply them, as it would.
+
+Each goes when the oldest kernel bcachefs supports has what it stands in
+for.
+
+---
+ helpers/slab.c    | 18 ++++++++++++++++++
+ helpers/uaccess.c | 35 ++++++++++++++++++++++++++++++++++-
+ helpers/vmalloc.c | 13 +++++++++++++
+ 3 files changed, 65 insertions(+), 1 deletion(-)
+
+diff --git a/helpers/slab.c b/helpers/slab.c
+index 9279f082467d..8010967743aa 100644
+--- a/helpers/slab.c
++++ b/helpers/slab.c
+@@ -1,17 +1,35 @@
+ // SPDX-License-Identifier: GPL-2.0
+ 
++#include <linux/align.h>
+ #include <linux/slab.h>
++#include <linux/version.h>
+ 
+ __rust_helper void *__must_check __realloc_size(2)
+ rust_helper_krealloc_node_align(const void *objp, size_t new_size, unsigned long align,
+ 				gfp_t flags, int node)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+ 	return krealloc_node_align(objp, new_size, align, flags, node);
++#else
++	/*
++	 * krealloc_node_align() is 6.18+. Pad size to a multiple of align:
++	 * with the slab allocators' alignment guarantees that satisfies the
++	 * requested alignment - it's what the kernel's own Rust allocator
++	 * (Kmalloc::aligned_layout) relied on before this API existed. The
++	 * NUMA hint is dropped; krealloc has no node variant here.
++	 */
++	return krealloc(objp, ALIGN(new_size, align), flags);
++#endif
+ }
+ 
+ __rust_helper void *__must_check __realloc_size(2)
+ rust_helper_kvrealloc_node_align(const void *p, size_t size, unsigned long align,
+ 				 gfp_t flags, int node)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+ 	return kvrealloc_node_align(p, size, align, flags, node);
++#else
++	/* As above; the vmalloc fallback is page-aligned regardless. */
++	return kvrealloc(p, ALIGN(size, align), flags);
++#endif
+ }
+diff --git a/helpers/uaccess.c b/helpers/uaccess.c
+index 6e59cc9c665c..b87105b008d3 100644
+--- a/helpers/uaccess.c
++++ b/helpers/uaccess.c
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0
+ 
+ #include <linux/uaccess.h>
++#include <linux/version.h>
+ 
+ __rust_helper unsigned long
+ rust_helper_copy_from_user(void *to, const void __user *from, unsigned long n)
+@@ -14,16 +15,48 @@ rust_helper_copy_to_user(void __user *to, const void *from, unsigned long n)
+ 	return copy_to_user(to, from, n);
+ }
+ 
+-#ifdef INLINE_COPY_USER
++/*
++ * An arch that inlines copy_{from,to}_user() has no out-of-line
++ * _copy_{from,to}_user() for Rust to call. It says so with INLINE_COPY_USER
++ * - before 7.2, INLINE_COPY_FROM_USER and INLINE_COPY_TO_USER, which this
++ * build has to take too: it builds against kernels back to 6.16.
++ */
++#if defined(INLINE_COPY_USER) || defined(INLINE_COPY_FROM_USER)
+ __rust_helper
+ unsigned long rust_helper__copy_from_user(void *to, const void __user *from, unsigned long n)
+ {
+ 	return _inline_copy_from_user(to, from, n);
+ }
++#endif
+ 
++#if defined(INLINE_COPY_USER) || defined(INLINE_COPY_TO_USER)
+ __rust_helper
+ unsigned long rust_helper__copy_to_user(void __user *to, const void *from, unsigned long n)
+ {
+ 	return _inline_copy_to_user(to, from, n);
+ }
+ #endif
++
++/*
++ * Before 6.19 the header declares _copy_{from,to}_user() even on an arch that
++ * inlines them, and the kernel defines and exports them there only with
++ * CONFIG_RUST - so a pre-6.19 kernel without Rust, which is what this stack
++ * is for, has the declaration and no definition. The bindings take the
++ * declared function over the helpers above, so supply it, as lib/usercopy.c
++ * would.
++ */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 19, 0) && !defined(CONFIG_RUST)
++#ifdef INLINE_COPY_FROM_USER
++unsigned long _copy_from_user(void *to, const void __user *from, unsigned long n)
++{
++	return _inline_copy_from_user(to, from, n);
++}
++#endif
++
++#ifdef INLINE_COPY_TO_USER
++unsigned long _copy_to_user(void __user *to, const void *from, unsigned long n)
++{
++	return _inline_copy_to_user(to, from, n);
++}
++#endif
++#endif
+diff --git a/helpers/vmalloc.c b/helpers/vmalloc.c
+index 6aed13292313..16402927b20c 100644
+--- a/helpers/vmalloc.c
++++ b/helpers/vmalloc.c
+@@ -1,13 +1,26 @@
+ // SPDX-License-Identifier: GPL-2.0
+ 
+ #include <linux/mm.h>
++#include <linux/version.h>
+ #include <linux/vmalloc.h>
+ 
+ __rust_helper void *__must_check __realloc_size(2)
+ rust_helper_vrealloc_node_align(const void *p, size_t size, unsigned long align,
+ 				gfp_t flags, int node)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+ 	return vrealloc_node_align(p, size, align, flags, node);
++#else
++	/*
++	 * vrealloc_node_align_noprof gained EXPORT_SYMBOL only in 7.0 (commit
++	 * d60769075013); on older kernels the bundled helper can't link it from a
++	 * module. bcachefs uses only Kmalloc/KVmalloc (KVmalloc routes through the
++	 * exported kvrealloc), never the Vmalloc allocator, so this path is
++	 * unreachable — WARN if that ever changes.
++	 */
++	WARN_ONCE(1, "bcachefs: Vmalloc realloc unsupported on this kernel (vrealloc not exported pre-7.0)\n");
++	return NULL;
++#endif
+ }
+ 
+ __rust_helper bool rust_helper_is_vmalloc_addr(const void *x)

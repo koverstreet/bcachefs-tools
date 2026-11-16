@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kent Overstreet <kent.overstreet@linux.dev>
+Date: Mon, 16 Nov 2026 16:42:27 -0500
+Subject: [PATCH] bindings bcachefs's own code needs
+
+rhashtable, for os/linux_kernel's glue, and local_lock_t, embedded in
+time_stat_buffer: bcachefs's, not the kernel crate's. They go when those
+users get bindings of their own.
+
+---
+ bindings/bindings_helper.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/bindings/bindings_helper.h b/bindings/bindings_helper.h
+index bd4fb9bbe87d..74b7f48ad056 100644
+--- a/bindings/bindings_helper.h
++++ b/bindings/bindings_helper.h
+@@ -39,6 +39,7 @@
+ #include <linux/bitmap.h>
+ #include <linux/blk_types.h>	// vendored: blk_status, used by the kept error module
+ #include <linux/blkdev.h>	// vendored: errno_to_blk_status (error.rs)
++#include <linux/rhashtable.h>	// vendored: rhashtable, used by bcachefs's glue (mod.rs)
+ #include <linux/completion.h>
+ #include <linux/delay.h>	// vendored: MAX_UDELAY_MS
+ #include <linux/uio.h>	// vendored: iov_iter, used by the kept uaccess module
+@@ -52,6 +53,7 @@
+ #include <linux/fs.h>
+ #include <linux/jiffies.h>
+ #include <linux/jump_label.h>
++#include <linux/local_lock.h>	// vendored: local_lock_t, embedded in time_stat_buffer
+ #include <linux/mm.h>
+ #include <linux/pid_namespace.h>
+ #include <linux/poll.h>

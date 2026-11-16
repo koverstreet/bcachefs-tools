@@ -1,0 +1,69 @@
+# rust/ paths vendor-update.sh doesn't vendor, one per line.
+#
+# The driver model, ACPI and GPU modules and their C helpers: nothing in
+# bcachefs uses them, and they call into C that older kernels don't have or
+# don't export (6.18 has no acpi_of_match_device or gpu_buddy). 0001-trim
+# drops their mod lines, helper includes and bindings headers.
+helpers/acpi.c
+helpers/auxiliary.c
+helpers/binder.c
+helpers/blk.c
+helpers/clk.c
+helpers/cpufreq.c
+helpers/device.c
+helpers/dma.c
+helpers/dma-resv.c
+helpers/drm.c
+helpers/drm_gpuvm.c
+helpers/gpu.c
+helpers/io.c
+helpers/irq.c
+helpers/of.c
+helpers/pci.c
+helpers/platform.c
+helpers/property.c
+helpers/pwm.c
+helpers/regulator.c
+helpers/scatterlist.c
+helpers/usb.c
+kernel/acpi.rs
+kernel/auxiliary.rs
+kernel/block
+kernel/block.rs
+kernel/clk.rs
+kernel/configfs.rs
+kernel/cpufreq.rs
+kernel/device
+kernel/device_id.rs
+kernel/device.rs
+kernel/devres.rs
+kernel/dma.rs
+kernel/driver.rs
+kernel/drm
+kernel/faux.rs
+kernel/firmware.rs
+kernel/gpu
+kernel/gpu.rs
+kernel/i2c.rs
+kernel/io
+kernel/iommu
+kernel/io.rs
+kernel/irq
+kernel/irq.rs
+kernel/miscdevice.rs
+kernel/net
+kernel/net.rs
+kernel/of.rs
+kernel/opp.rs
+kernel/pci
+kernel/pci.rs
+kernel/platform.rs
+kernel/pwm.rs
+kernel/regulator.rs
+kernel/scatterlist.rs
+kernel/soc.rs
+kernel/usb.rs
+
+# Never built here: KUnit's config fragment, zerocopy's benchmarks
+.kunitconfig
+zerocopy/benches
