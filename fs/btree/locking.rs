@@ -1041,9 +1041,7 @@ impl BtreeTrans<'_> {
     }
 
     pub(crate) fn unlock_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
-        self.mark_unlocked(ret_ip);
-
-        self.unlock_paths(paths);
+        self.unlock_keep_cannibalize(paths, ret_ip);
 
         /*
          * Drop the btree cache cannibalize lock too. Holding it across a
@@ -1057,6 +1055,16 @@ impl BtreeTrans<'_> {
         if self.btree_cache_cannibalize_locked() {
             self.btree_cache_cannibalize_unlock();
         }
+    }
+
+    /// unlock_from(), the cannibalize lock kept: for the btree cache's node
+    /// allocation alone, whose sleeps are memory allocation's - reclaim never
+    /// takes the cannibalize lock - and whose caller, reserving an interior
+    /// update's nodes low on memory, holds it across the whole reserve.
+    pub(crate) fn unlock_keep_cannibalize(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
+        self.mark_unlocked(ret_ip);
+
+        self.unlock_paths(paths);
     }
 
     pub fn unlock_long(&self) {

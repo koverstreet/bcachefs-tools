@@ -213,7 +213,7 @@ impl BtreeTrans<'_> {
                 let mut bufs = NodeBufs::new(fs);
                 let buf_start = local_clock();
                 let got = bufs.alloc(fs, flags::NOWAIT, true).is_ok() || {
-                    self.unlock_from(paths, crate::ret_ip!());
+                    self.unlock_keep_cannibalize(paths, crate::ret_ip!());
                     bufs.alloc(fs, flags::NOWARN, true).is_ok()
                 };
                 fs.times[c::TimeStat::btree_node_buf_alloc as usize].update(buf_start);
@@ -230,7 +230,7 @@ impl BtreeTrans<'_> {
                         let b = match cache_node_struct_alloc(fs, pcpu_read_locks, flags::NOWAIT) {
                             Some(b) => b,
                             None => {
-                                self.unlock_from(paths, crate::ret_ip!());
+                                self.unlock_keep_cannibalize(paths, crate::ret_ip!());
                                 match cache_node_struct_alloc(fs, pcpu_read_locks, Flags::empty()) {
                                     Some(b) => b,
                                     None => {

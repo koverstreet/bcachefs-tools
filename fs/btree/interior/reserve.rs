@@ -132,7 +132,7 @@ impl<'t> InteriorUpdate<'t> {
         let mut req = paths.lend(|| t.alloc_request(target, false, Some(&devs_have), nr_replicas, nr_replicas,
                                                     watermark, write, AllocWait::Never))?;
 
-        let ret = match self.reserve_get(paths, nr_nodes, &mut req) {
+        let ret = match self.reserve_get(paths, nr_nodes, &mut req, false) {
             Err(e) if e.matches(c::EAGAIN) || e.matches(c::ENOMEM) => {
                 /*
                  * XXX: this should probably be a separate BTREE_INSERT_NONBLOCK
@@ -145,10 +145,13 @@ impl<'t> InteriorUpdate<'t> {
                 }
 
                 req.wait = AllocWait::Sync(None);
+                let mut low_mem = e.matches(Errcode::ENOMEM_btree_node_mem_alloc);
 
                 loop {
                     let seen = fs.btree.cache.alloc_wait.snapshot();
-                    match self.reserve_get(paths, nr_nodes, &mut req) {
+                    match self.reserve_get(paths, nr_nodes, &mut req, low_mem) {
+                        // low on memory: cannibalize - again, if a sleep in the allocator dropped the lock
+                        Err(e) if e.matches(Errcode::ENOMEM_btree_node_mem_alloc) => low_mem = true,
                         Err(e) if e.matches(Errcode::btree_cache_cannibalize_lock_blocked) => {
                             trans.unlock_from(paths, crate::ret_ip!());
                             let Ok(()) = fs.btree.cache.alloc_wait.wait(seen, Sleep::UNINTERRUPTIBLE);
@@ -174,19 +177,21 @@ impl<'t> InteriorUpdate<'t> {
         ret
     }
 
-    fn reserve_get(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], req: &mut c::alloc_request<'_, 't>)
-        -> Result<(), BchError>
+    /// With @low_mem, under the cannibalize lock - but for a sleep in the
+    /// allocator, which drops it: the nodes come from other cached nodes when
+    /// memory can't be had, and the update with the lock gets all of them -
+    /// two reserving at once, each with part, could deadlock.
+    fn reserve_get(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], req: &mut c::alloc_request<'_, 't>,
+                   low_mem: bool) -> Result<(), BchError>
     {
         let trans = self.trans();
 
         assert!(nr_nodes[0] + nr_nodes[1] <= BTREE_RESERVE_MAX as usize,
                 "an interior update reserving {} nodes", nr_nodes[0] + nr_nodes[1]);
 
-        /*
-         * Protects reaping from the btree node cache and using the btree node
-         * open bucket reserve:
-         */
-        trans.btree_cache_cannibalize_trylock(req.may_wait())?;
+        if low_mem {
+            trans.btree_cache_cannibalize_trylock(req.may_wait())?;
+        }
 
         let ret = (|| {
             for (interior, &nr) in nr_nodes.iter().enumerate() {
