@@ -89,8 +89,6 @@ bool bch2_signal_pending_state(unsigned int state);
 void bch2_set_current_state(unsigned int state);
 void bch2_set_current_state_running(void);
 
-int rust_init_srcu_struct(struct srcu_struct *ssp, const char *name, void *key);
-
 void rust_kfree(const void *p);
 void rust_kvfree(void *p);
 void rust_kvfree_rcu(void *p, struct rcu_head *head);

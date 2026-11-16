@@ -42,7 +42,8 @@ impl Srcu {
     pub fn new(name: &'static CStr, key: LockClass) -> impl PinInit<Self, BchError> {
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                ret_to_result_void(c::rust_init_srcu_struct(slot.cast(), name.as_ptr().cast(), key.as_ptr().cast()))
+                ret_to_result_void(kernel::bindings::init_srcu_struct_with_key(
+                        slot.cast(), name.as_ptr().cast(), key.as_ptr()))
             })
         }
     }
