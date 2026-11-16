@@ -48,6 +48,47 @@ use core::sync::atomic::{fence, Ordering::SeqCst};
 use cstruct_macros::in_place;
 use pin_init::{pin_data, pin_init, pinned_drop};
 
+pub struct ReadInFlightNode {
+    node: BackRef<BtreeNode>,
+}
+
+impl ReadInFlightNode {
+    /// # Safety
+    /// Nothing else touches @node's contents while this lives: it's write
+    /// locked now, and whoever locks it after waits on read_in_flight first.
+    /// And @node outlives this, as BackRef::new()'s.
+    pub unsafe fn new(node: &BtreeNode) -> Self {
+        node.flags.set_read_in_flight(true);
+        ReadInFlightNode { node: unsafe { BackRef::new(node) } }
+    }
+
+    pub fn contents(&self) -> &NodeContents {
+        unsafe { self.node.contents.protected() }
+    }
+
+    pub fn parts(&mut self) -> (&BtreeNode, &mut NodeContents) {
+        let b = &*self.node;
+        (b, unsafe { b.contents.protected_mut() })
+    }
+}
+
+impl Deref for ReadInFlightNode {
+    type Target = BtreeNode;
+
+    fn deref(&self) -> &BtreeNode {
+        &self.node
+    }
+}
+
+impl Drop for ReadInFlightNode {
+    fn drop(&mut self) {
+        let b = &*self.node;
+        b.flags.set_read_in_flight(false);
+        fence(SeqCst);
+        b.flags.wake();
+    }
+}
+
 #[pin_data(PinnedDrop)]
 #[repr(C)]
 pub struct NodeReadBio {
@@ -102,6 +143,195 @@ pub fn pools_init() -> Result<(), BchError> {
 pub unsafe fn pools_exit() {
     unsafe { NODE_READS.exit() }
 }
+
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+crate::module_param! {
+    pub(crate) static btree_read_corrupt_ratio: u32 = 0;
+    perm = 0o644, desc = "";
+}
+
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+crate::module_param! {
+    pub(crate) static btree_read_corrupt_device: i32 = 0;
+    perm = 0o644, desc = "";
+}
+
+struct NodeRead<'r> {
+    fs:         &'r Fs,
+    _listed:    AsyncObjSlot,
+    io:         NodeReadIo<'r>,
+    ca:         Option<DevIoRef<c::DevReadRefKind>>,
+    pick:       c::extent_ptr_decoded,
+    failed:     c::bch_io_failures,
+    start_time: u64,
+    /* dropped last: that's the wake, after which the filesystem may go */
+    node:       ReadInFlightNode,
+}
+
+impl NodeRead<'_> {
+    async fn attempt(&mut self, waiter: waiter::Async) -> Result<(), BchError> {
+        let fs = self.fs;
+        let Some(ca) = &self.ca else { return Err(fs.err(blk_status_to_bch_err(c::BLK_STS_REMOVED))) };
+
+        self.io.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
+        self.io.bio_mut().set_sector(self.pick.ptr.offset());
+        /* read_done() may have swapped the node's buffer for its sort's */
+        let buf = unsafe { node_buf(&self.node, self.node.contents()) };
+        let resume = Resume::queue(&fs.btree.read_complete_wq);
+        let status = self.io.remap_read(buf).submit(waiter).resume_on(resume).await;
+        ca.account_io_completion(c::MemberErrorType::read, self.start_time, status.is_ok());
+        status.map_err(|e| fs.err(e))
+    }
+
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    fn maybe_corrupt(&mut self) {
+        let (dev, ratio) = (btree_read_corrupt_device.get(), btree_read_corrupt_ratio.get());
+        if (dev == self.pick.ptr.dev() as i32 || dev < 0) && ratio != 0 && random_u64_below(ratio.into()) == 0 {
+            let data = unsafe { node_buf(&self.node, self.node.contents()) };
+            let at = random_u64_below((data.len() / 8) as u64) as usize * 8;
+            data[at..at + 8].copy_from_slice(&random_u64().to_ne_bytes());
+        }
+    }
+
+    fn next_replica(&mut self) -> bool {
+        let fs = self.fs;
+        let k = BkeySC::from(self.node.contents().key_i());
+        let Ok(Some(pick)) = k.pick_read_device(fs, Some(&self.failed), 0, c::ReadFlags::empty()) else {
+            return false;
+        };
+        self.pick = pick;
+        self.ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
+        true
+    }
+
+    async fn read(&mut self, err: &mut Printbuf) -> Result<(), BchError> {
+        let waiter = waiter::Async::current().await;
+        loop {
+            self.start_time = local_clock();
+            let ret = match self.attempt(waiter).await {
+                Ok(()) => {
+                    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+                    self.maybe_corrupt();
+
+                    let ca = self.ca.as_ref().expect("a read that completed, from a device it had a ref on");
+                    read_done(self.fs, ca, &mut self.node, Some(&mut self.failed), err)
+                }
+                Err(e) => {
+                    self.failed.mark(&self.pick, e);
+                    Err(e)
+                }
+            };
+            if ret.is_ok() || !self.next_replica() {
+                return ret;
+            }
+        }
+    }
+
+    fn report(&self, ret: Result<(), BchError>, err: &Printbuf) {
+        let (fs, b) = (self.fs, &*self.node);
+        let btree = Btree(b.c.btree_id.into());
+
+        let mut msg = LogMsg::new(fs);
+        prt!(&mut msg, "btree node read error at btree {}\n", b.pos_to_text(fs));
+        msg.write_bytes_indented(err.as_bytes());
+        self.failed.to_text(&mut msg, fs);
+
+        /*
+         * only print retry success if we read from a replica with no errors
+         */
+        if let Err(err) = ret {
+            /*
+             * Initialize buf.suppress before btree_lost_data(); that will
+             * clear it if it did any work (scheduling recovery passes,
+             * marking superblock
+             */
+            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_hard, crate::here!()));
+
+            b.flags.set_read_error(true);
+            let _ = btree_lost_data(fs, &mut msg, btree);
+            note_lost_extents(fs, btree, self.node.contents().key_i().into());
+            prt!(&mut msg, "error {}\n", err.msg());
+        } else if !self.failed.is_empty() {
+            /* Separate ratelimit states for soft vs. hard errors */
+            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_soft, crate::here!()));
+
+            let dev = self.pick.ptr.dev().into();
+            let used = self.failed.dev(dev).is_some();
+            let used_err = |code| self.failed.dev_err(dev).is_some_and(|err| err.matches(code));
+
+            if !used {
+                prt!(&mut msg, "retry success");
+            } else if used_err(c::Errcode::btree_node_validate_err_csum) {
+                prt!(&mut msg, "checksum error, no good replica: read as is, contents unverified");
+            } else {
+                prt!(&mut msg, "repair success");
+            }
+
+            if (!self.failed.is_empty() || b.flags.need_rewrite()) &&
+               fs.recovery.runner.current_pass.get() != RecoveryPass::scan_for_btree_nodes {
+                prt!(&mut msg, " (rewriting node)");
+                fs.async_btree_op(b, self.node.contents(), AsyncBtreeOp::Rewrite);
+            }
+
+            msg.newline();
+
+            /* the replica we're using lost keys: the btree lost data */
+            if used && used_err(c::Errcode::btree_node_validate_err_keys_lost) {
+                let _ = btree_lost_data(fs, &mut msg, btree);
+            }
+        } else {
+            msg.set_suppressed(true);
+        }
+
+        msg.set_level(if ret.is_err() { LogLevel::ERR } else { LogLevel::NOTICE });
+    }
+
+    fn maybe_merge(&self) {
+        let (fs, contents) = (self.fs, self.node.contents());
+        if !crate::debug::params::btree_node_merging_disabled() &&
+           (contents.data().min_key != POS_MIN || contents.key.k.p != SPOS_MAX) &&
+           contents.nr.live_u64s < fs.btree.foreground_merge_threshold / 2 {
+            /* Ensure very empty btree nodes get merged, in case they're
+             * being read but never written to - but with a very low
+             * threshold, or __bch2_foreground_maybe_merge() will
+             * recursively kick off more merge attempts as it reads sibling
+             * nodes:
+             */
+            fs.async_btree_op(&self.node, contents, AsyncBtreeOp::MergeNoRead);
+        }
+    }
+}
+
+pub(super) struct NodePtr {
+    /// 0: a v1 pointer doesn't say
+    pub(super) written: usize,
+    pub(super) end:     usize,
+    pub(super) seq:     Option<u64>,
+    range_updated:      bool,
+}
+
+impl NodePtr {
+    pub(super) fn new(fs: &Fs, k: BkeySC<'_>) -> Self {
+        let v2 = k.arm::<c::BtreePtrV2>();
+        let v2 = v2.as_ref().map(|v2| v2.v());
+        let written = v2.map_or(0, |v2| v2.sectors_written.get() as usize);
+        Self {
+            written,
+            end:           if written != 0 { written } else { fs.btree_sectors() as usize },
+            seq:           v2.map(|v2| v2.seq.get()),
+            range_updated: v2.is_some_and(|v2| v2.range_updated()),
+        }
+    }
+}
+
+enum BsetRead {
+    End,
+    Blacklisted,
+    Keys { at: Range<usize>, journal_seq: u64 },
+}
+
+const NODE_BYTES: usize = size_of::<Head<c::btree_node>>();
+const FITS: &str = "a bset inside the node, checked against its end";
 
 impl c::bset_head {
     pub fn nonce(&self, offset: u32) -> Nonce {
@@ -196,45 +426,21 @@ impl BsetHolder for c::btree_node_entry<Unvalidated> {
     }
 }
 
-#[cold]
-pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
-    let contents = unsafe { b.contents() };
-    let k = BkeySC::from(contents.key_i());
+/// # Safety
+/// The read has the node - read_in_flight - and nothing else has its buffer.
+unsafe fn node_buf<'a>(b: &BtreeNode, contents: &NodeContents) -> &'a mut [u8] {
+    unsafe { core::slice::from_raw_parts_mut(contents.data.cast::<u8>(), b.buf_bytes()) }
+}
 
-    let dev = match k.pick_read_device(fs, None, 0, c::ReadFlags::empty()) {
-        Ok(Some(pick)) => pick.ptr.dev().into(),
-        _ => {
-            prt!(out, "error getting device to read from: invalid device\n");
-            return;
-        }
-    };
-    let Ok(Some(mut r)) = ReplicaRead::new(fs, k, dev) else {
-        prt!(out, "error getting device to read from: not online\n");
-        return;
-    };
+fn node_header(buf: &[u8]) -> Head<c::btree_node> {
+    *cast_plain(buf).expect(FITS)
+}
 
-    if let Err(e) = r.bio.submit_wait() {
-        prt!(out, "IO error reading btree node: {e}\n");
-        return;
-    }
-
-    let buf = r.bio.buf_mut();
-    let node_seq = node_header(buf).keys.seq;
-    let mut offset = 0;
-
-    while offset < fs.btree_sectors() as usize {
-        let bytes = &mut buf[offset << 9..];
-        let sectors = if offset == 0 {
-            bset_ondisk_to_text::<c::btree_node<Unvalidated>>(out, fs, contents, bytes, offset)
-        } else if c::btree_node_entry::<Unvalidated>::head(bytes).seq != node_seq {
-            break;
-        } else {
-            bset_ondisk_to_text::<c::btree_node_entry<Unvalidated>>(out, fs, contents, bytes, offset)
-        };
-        let Some(sectors) = sectors else { return };
-
-        offset += sectors;
-    }
+fn node_header_to_text(out: &mut Printbuf, bn: &Head<c::btree_node>) {
+    bch2_btree_id_level_to_text(out, bn.btree_id(), bn.level() as c_uint);
+    prt!(out, " seq {:x} {}\n", bn.keys.seq.get(), bn.seq());
+    prt!(out, "min: {}\n", bn.min_key);
+    prt!(out, "max: {}", bn.max_key);
 }
 
 fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, contents: &NodeContents,
@@ -280,6 +486,47 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
     Some(sectors)
 }
 
+#[cold]
+pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
+    let contents = unsafe { b.contents() };
+    let k = BkeySC::from(contents.key_i());
+
+    let dev = match k.pick_read_device(fs, None, 0, c::ReadFlags::empty()) {
+        Ok(Some(pick)) => pick.ptr.dev().into(),
+        _ => {
+            prt!(out, "error getting device to read from: invalid device\n");
+            return;
+        }
+    };
+    let Ok(Some(mut r)) = ReplicaRead::new(fs, k, dev) else {
+        prt!(out, "error getting device to read from: not online\n");
+        return;
+    };
+
+    if let Err(e) = r.bio.submit_wait() {
+        prt!(out, "IO error reading btree node: {e}\n");
+        return;
+    }
+
+    let buf = r.bio.buf_mut();
+    let node_seq = node_header(buf).keys.seq;
+    let mut offset = 0;
+
+    while offset < fs.btree_sectors() as usize {
+        let bytes = &mut buf[offset << 9..];
+        let sectors = if offset == 0 {
+            bset_ondisk_to_text::<c::btree_node<Unvalidated>>(out, fs, contents, bytes, offset)
+        } else if c::btree_node_entry::<Unvalidated>::head(bytes).seq != node_seq {
+            break;
+        } else {
+            bset_ondisk_to_text::<c::btree_node_entry<Unvalidated>>(out, fs, contents, bytes, offset)
+        };
+        let Some(sectors) = sectors else { return };
+
+        offset += sectors;
+    }
+}
+
 /*
  * When btree topology repair changes the start or end of a node, that might
  * mean we have to drop keys that are no longer inside the node:
@@ -304,116 +551,6 @@ pub fn drop_keys_outside_node(b: &BtreeNode, contents: &mut NodeContents) {
         assert!(k.k.p <= max_key, "key {} past its node's max {max_key}", k.k.p);
         ControlFlow::Continue(())
     });
-}
-
-const NODE_BYTES: usize = size_of::<Head<c::btree_node>>();
-const FITS: &str = "a bset inside the node, checked against its end";
-
-fn node_header_to_text(out: &mut Printbuf, bn: &Head<c::btree_node>) {
-    bch2_btree_id_level_to_text(out, bn.btree_id(), bn.level() as c_uint);
-    prt!(out, " seq {:x} {}\n", bn.keys.seq.get(), bn.seq());
-    prt!(out, "min: {}\n", bn.min_key);
-    prt!(out, "max: {}", bn.max_key);
-}
-
-pub fn read_done(fs: &Fs, ca: &Dev, node: &mut ReadInFlightNode, failed: Option<&mut c::bch_io_failures>,
-                 err_msg: &mut Printbuf) -> Result<(), BchError> {
-    let (b, contents) = node.parts();
-    fs.times[c::TimeStat::btree_node_read_done as usize]
-        .time(|| node_read_done(&mut NodeValidate { fs, b, io: NodeIo::Read { ca, failed, err_msg } }, contents))
-}
-
-pub(super) struct NodePtr {
-    /// 0: a v1 pointer doesn't say
-    pub(super) written: usize,
-    pub(super) end:     usize,
-    pub(super) seq:     Option<u64>,
-    range_updated:      bool,
-}
-
-impl NodePtr {
-    pub(super) fn new(fs: &Fs, k: BkeySC<'_>) -> Self {
-        let v2 = k.arm::<c::BtreePtrV2>();
-        let v2 = v2.as_ref().map(|v2| v2.v());
-        let written = v2.map_or(0, |v2| v2.sectors_written.get() as usize);
-        Self {
-            written,
-            end:           if written != 0 { written } else { fs.btree_sectors() as usize },
-            seq:           v2.map(|v2| v2.seq.get()),
-            range_updated: v2.is_some_and(|v2| v2.range_updated()),
-        }
-    }
-}
-
-enum BsetRead {
-    End,
-    Blacklisted,
-    Keys { at: Range<usize>, journal_seq: u64 },
-}
-
-/// # Safety
-/// The read has the node - read_in_flight - and nothing else has its buffer.
-unsafe fn node_buf<'a>(b: &BtreeNode, contents: &NodeContents) -> &'a mut [u8] {
-    unsafe { core::slice::from_raw_parts_mut(contents.data.cast::<u8>(), b.buf_bytes()) }
-}
-
-fn node_header(buf: &[u8]) -> Head<c::btree_node> {
-    *cast_plain(buf).expect(FITS)
-}
-
-fn node_read_done(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Result<(), BchError> {
-    let (fs, b) = (v.fs, v.b);
-    let p = NodePtr::new(fs, contents.key_i().into());
-
-    /* We might get called multiple times on read retry: */
-    b.written.set(0);
-
-    let mut runs = SortRuns::new(fs);
-    let buf = unsafe { node_buf(b, contents) };
-
-    let magic = node_header(buf).magic.get();
-    btree_err_on!(v, magic != fs.bset_magic(),
-                  FsckFlags::empty(),
-                  ErrAt::NODE,
-                  id::btree_node_bad_magic,
-                  "bad magic: want {:x}, got {:x}",
-                  fs.bset_magic(), magic)?;
-
-    let mut max_journal_seq = 0;
-    while (b.written.get() as usize) < p.end {
-        let read = if b.written.get() == 0 {
-            read_bset::<c::btree_node<Unvalidated>>(v, contents, &p, buf)?
-        } else {
-            read_bset::<c::btree_node_entry<Unvalidated>>(v, contents, &p, buf)?
-        };
-        match read {
-            BsetRead::End                      => break,
-            BsetRead::Blacklisted              => {}
-            BsetRead::Keys { at, journal_seq } => {
-                runs.add(at);
-                max_journal_seq = max_journal_seq.max(journal_seq);
-            }
-        }
-    }
-
-    read_done_end(v, &p, buf)?;
-    sort_bsets(fs, b, contents, &mut runs, max_journal_seq);
-    validate_vals(v, contents)?;
-
-    b.keys_mut(contents).bset_build_aux_tree(0, false);
-
-    contents.reset_sib_u64s();
-
-    if p.range_updated {
-        drop_keys_outside_node(b, contents);
-    }
-
-    if p.written == 0 {
-        b.flags.set_need_rewrite(true);
-        b.flags.set_need_rewrite_ptr_written_zero(true);
-    }
-
-    Ok(())
 }
 
 fn read_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, contents: &mut NodeContents, p: &NodePtr,
@@ -661,225 +798,66 @@ fn validate_vals(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resul
     Ok(())
 }
 
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-crate::module_param! {
-    pub(crate) static btree_read_corrupt_ratio: u32 = 0;
-    perm = 0o644, desc = "";
-}
+fn node_read_done(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Result<(), BchError> {
+    let (fs, b) = (v.fs, v.b);
+    let p = NodePtr::new(fs, contents.key_i().into());
 
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-crate::module_param! {
-    pub(crate) static btree_read_corrupt_device: i32 = 0;
-    perm = 0o644, desc = "";
-}
+    /* We might get called multiple times on read retry: */
+    b.written.set(0);
 
-pub fn bch2_btree_node_wait_on_read(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
-    if unlikely(!trans.queued_write_bios.get().is_null()) {
-        trans_submit_write_bios(trans);
-    }
+    let mut runs = SortRuns::new(fs);
+    let buf = unsafe { node_buf(b, contents) };
 
-    trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::read_in_flight);
-}
+    let magic = node_header(buf).magic.get();
+    btree_err_on!(v, magic != fs.bset_magic(),
+                  FsckFlags::empty(),
+                  ErrAt::NODE,
+                  id::btree_node_bad_magic,
+                  "bad magic: want {:x}, got {:x}",
+                  fs.bset_magic(), magic)?;
 
-pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
-    /*
-     * The write we're about to wait on may be sitting unsubmitted on
-     * our own queued_write_bios (e.g. the btree cache cannibalize and
-     * evict paths write a node and immediately wait on it) — submit
-     * before sleeping, or we'd wait on ourselves forever:
-     */
-    if unlikely(!trans.queued_write_bios.get().is_null()) {
-        trans_submit_write_bios(trans);
-    }
-
-    trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::write_in_flight);
-}
-
-pub struct ReadInFlightNode {
-    node: BackRef<BtreeNode>,
-}
-
-impl ReadInFlightNode {
-    /// # Safety
-    /// Nothing else touches @node's contents while this lives: it's write
-    /// locked now, and whoever locks it after waits on read_in_flight first.
-    /// And @node outlives this, as BackRef::new()'s.
-    pub unsafe fn new(node: &BtreeNode) -> Self {
-        node.flags.set_read_in_flight(true);
-        ReadInFlightNode { node: unsafe { BackRef::new(node) } }
-    }
-
-    pub fn contents(&self) -> &NodeContents {
-        unsafe { self.node.contents.protected() }
-    }
-
-    pub fn parts(&mut self) -> (&BtreeNode, &mut NodeContents) {
-        let b = &*self.node;
-        (b, unsafe { b.contents.protected_mut() })
-    }
-}
-
-impl Deref for ReadInFlightNode {
-    type Target = BtreeNode;
-
-    fn deref(&self) -> &BtreeNode {
-        &self.node
-    }
-}
-
-impl Drop for ReadInFlightNode {
-    fn drop(&mut self) {
-        let b = &*self.node;
-        b.flags.set_read_in_flight(false);
-        fence(SeqCst);
-        b.flags.wake();
-    }
-}
-
-struct NodeRead<'r> {
-    fs:         &'r Fs,
-    _listed:    AsyncObjSlot,
-    io:         NodeReadIo<'r>,
-    ca:         Option<DevIoRef<c::DevReadRefKind>>,
-    pick:       c::extent_ptr_decoded,
-    failed:     c::bch_io_failures,
-    start_time: u64,
-    /* dropped last: that's the wake, after which the filesystem may go */
-    node:       ReadInFlightNode,
-}
-
-impl NodeRead<'_> {
-    async fn attempt(&mut self, waiter: waiter::Async) -> Result<(), BchError> {
-        let fs = self.fs;
-        let Some(ca) = &self.ca else { return Err(fs.err(blk_status_to_bch_err(c::BLK_STS_REMOVED))) };
-
-        self.io.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
-        self.io.bio_mut().set_sector(self.pick.ptr.offset());
-        /* read_done() may have swapped the node's buffer for its sort's */
-        let buf = unsafe { node_buf(&self.node, self.node.contents()) };
-        let resume = Resume::queue(&fs.btree.read_complete_wq);
-        let status = self.io.remap_read(buf).submit(waiter).resume_on(resume).await;
-        ca.account_io_completion(c::MemberErrorType::read, self.start_time, status.is_ok());
-        status.map_err(|e| fs.err(e))
-    }
-
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    fn maybe_corrupt(&mut self) {
-        let (dev, ratio) = (btree_read_corrupt_device.get(), btree_read_corrupt_ratio.get());
-        if (dev == self.pick.ptr.dev() as i32 || dev < 0) && ratio != 0 && random_u64_below(ratio.into()) == 0 {
-            let data = unsafe { node_buf(&self.node, self.node.contents()) };
-            let at = random_u64_below((data.len() / 8) as u64) as usize * 8;
-            data[at..at + 8].copy_from_slice(&random_u64().to_ne_bytes());
-        }
-    }
-
-    fn next_replica(&mut self) -> bool {
-        let fs = self.fs;
-        let k = BkeySC::from(self.node.contents().key_i());
-        let Ok(Some(pick)) = k.pick_read_device(fs, Some(&self.failed), 0, c::ReadFlags::empty()) else {
-            return false;
-        };
-        self.pick = pick;
-        self.ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
-        true
-    }
-
-    async fn read(&mut self, err: &mut Printbuf) -> Result<(), BchError> {
-        let waiter = waiter::Async::current().await;
-        loop {
-            self.start_time = local_clock();
-            let ret = match self.attempt(waiter).await {
-                Ok(()) => {
-                    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-                    self.maybe_corrupt();
-
-                    let ca = self.ca.as_ref().expect("a read that completed, from a device it had a ref on");
-                    read_done(self.fs, ca, &mut self.node, Some(&mut self.failed), err)
-                }
-                Err(e) => {
-                    self.failed.mark(&self.pick, e);
-                    Err(e)
-                }
-            };
-            if ret.is_ok() || !self.next_replica() {
-                return ret;
-            }
-        }
-    }
-
-    fn report(&self, ret: Result<(), BchError>, err: &Printbuf) {
-        let (fs, b) = (self.fs, &*self.node);
-        let btree = Btree(b.c.btree_id.into());
-
-        let mut msg = LogMsg::new(fs);
-        prt!(&mut msg, "btree node read error at btree {}\n", b.pos_to_text(fs));
-        msg.write_bytes_indented(err.as_bytes());
-        self.failed.to_text(&mut msg, fs);
-
-        /*
-         * only print retry success if we read from a replica with no errors
-         */
-        if let Err(err) = ret {
-            /*
-             * Initialize buf.suppress before btree_lost_data(); that will
-             * clear it if it did any work (scheduling recovery passes,
-             * marking superblock
-             */
-            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_hard, crate::here!()));
-
-            b.flags.set_read_error(true);
-            let _ = btree_lost_data(fs, &mut msg, btree);
-            note_lost_extents(fs, btree, self.node.contents().key_i().into());
-            prt!(&mut msg, "error {}\n", err.msg());
-        } else if !self.failed.is_empty() {
-            /* Separate ratelimit states for soft vs. hard errors */
-            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_soft, crate::here!()));
-
-            let dev = self.pick.ptr.dev().into();
-            let used = self.failed.dev(dev).is_some();
-            let used_err = |code| self.failed.dev_err(dev).is_some_and(|err| err.matches(code));
-
-            if !used {
-                prt!(&mut msg, "retry success");
-            } else if used_err(c::Errcode::btree_node_validate_err_csum) {
-                prt!(&mut msg, "checksum error, no good replica: read as is, contents unverified");
-            } else {
-                prt!(&mut msg, "repair success");
-            }
-
-            if (!self.failed.is_empty() || b.flags.need_rewrite()) &&
-               fs.recovery.runner.current_pass.get() != RecoveryPass::scan_for_btree_nodes {
-                prt!(&mut msg, " (rewriting node)");
-                fs.async_btree_op(b, self.node.contents(), AsyncBtreeOp::Rewrite);
-            }
-
-            msg.newline();
-
-            /* the replica we're using lost keys: the btree lost data */
-            if used && used_err(c::Errcode::btree_node_validate_err_keys_lost) {
-                let _ = btree_lost_data(fs, &mut msg, btree);
-            }
+    let mut max_journal_seq = 0;
+    while (b.written.get() as usize) < p.end {
+        let read = if b.written.get() == 0 {
+            read_bset::<c::btree_node<Unvalidated>>(v, contents, &p, buf)?
         } else {
-            msg.set_suppressed(true);
-        }
-
-        msg.set_level(if ret.is_err() { LogLevel::ERR } else { LogLevel::NOTICE });
-    }
-
-    fn maybe_merge(&self) {
-        let (fs, contents) = (self.fs, self.node.contents());
-        if !crate::debug::params::btree_node_merging_disabled() &&
-           (contents.data().min_key != POS_MIN || contents.key.k.p != SPOS_MAX) &&
-           contents.nr.live_u64s < fs.btree.foreground_merge_threshold / 2 {
-            /* Ensure very empty btree nodes get merged, in case they're
-             * being read but never written to - but with a very low
-             * threshold, or __bch2_foreground_maybe_merge() will
-             * recursively kick off more merge attempts as it reads sibling
-             * nodes:
-             */
-            fs.async_btree_op(&self.node, contents, AsyncBtreeOp::MergeNoRead);
+            read_bset::<c::btree_node_entry<Unvalidated>>(v, contents, &p, buf)?
+        };
+        match read {
+            BsetRead::End                      => break,
+            BsetRead::Blacklisted              => {}
+            BsetRead::Keys { at, journal_seq } => {
+                runs.add(at);
+                max_journal_seq = max_journal_seq.max(journal_seq);
+            }
         }
     }
+
+    read_done_end(v, &p, buf)?;
+    sort_bsets(fs, b, contents, &mut runs, max_journal_seq);
+    validate_vals(v, contents)?;
+
+    b.keys_mut(contents).bset_build_aux_tree(0, false);
+
+    contents.reset_sib_u64s();
+
+    if p.range_updated {
+        drop_keys_outside_node(b, contents);
+    }
+
+    if p.written == 0 {
+        b.flags.set_need_rewrite(true);
+        b.flags.set_need_rewrite_ptr_written_zero(true);
+    }
+
+    Ok(())
+}
+
+pub fn read_done(fs: &Fs, ca: &Dev, node: &mut ReadInFlightNode, failed: Option<&mut c::bch_io_failures>,
+                 err_msg: &mut Printbuf) -> Result<(), BchError> {
+    let (b, contents) = node.parts();
+    fs.times[c::TimeStat::btree_node_read_done as usize]
+        .time(|| node_read_done(&mut NodeValidate { fs, b, io: NodeIo::Read { ca, failed, err_msg } }, contents))
 }
 
 #[in_place(NodeReadFut)]
@@ -1004,4 +982,26 @@ impl Fs {
         drop(held);
         ret
     }
+}
+
+pub fn bch2_btree_node_wait_on_read(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
+    if unlikely(!trans.queued_write_bios.get().is_null()) {
+        trans_submit_write_bios(trans);
+    }
+
+    trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::read_in_flight);
+}
+
+pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
+    /*
+     * The write we're about to wait on may be sitting unsubmitted on
+     * our own queued_write_bios (e.g. the btree cache cannibalize and
+     * evict paths write a node and immediately wait on it) — submit
+     * before sleeping, or we'd wait on ourselves forever:
+     */
+    if unlikely(!trans.queued_write_bios.get().is_null()) {
+        trans_submit_write_bios(trans);
+    }
+
+    trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::write_in_flight);
 }
