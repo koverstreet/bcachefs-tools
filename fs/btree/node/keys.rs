@@ -11,7 +11,7 @@ use crate::btree::bkey::{BkeyP, BkeySC};
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::format::Bpos;
-use crate::util::vstructs::{cast_plain, from_bytes, plain_bytes, Head};
+use crate::util::vstructs::{cast_plain, plain_bytes, Head};
 use core::ops::{Deref, DerefMut};
 
 pub struct Keys<'a> {
@@ -240,9 +240,9 @@ impl<'a> Keys<'a> {
         keys_in(self.buf, r.start, r.end)
     }
 
-    pub fn bset(&self, t: &BsetTree) -> &'a c::bset {
-        from_bytes(plain_bytes(&self.buf[t.data_offset as usize..]))
-            .unwrap_or_else(|e| panic!("no bset at offset {} of a {} u64 node: {e}", t.data_offset, self.buf.len()))
+    pub fn bset(&self, t: &BsetTree) -> &'a Head<c::bset> {
+        cast_plain(plain_bytes(&self.buf[t.data_offset as usize..]))
+            .unwrap_or_else(|| panic!("no bset at offset {} of a {} u64 node", t.data_offset, self.buf.len()))
     }
 
     pub(super) fn header(&self) -> &'a Head<c::btree_node> {
