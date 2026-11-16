@@ -80,7 +80,7 @@ use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members;
 use crate::{prt, sb_err_on};
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::Unvalidated;
+use crate::util::vstructs::{Unvalidated, Validated};
 use crate::util::Printbuf;
 use cstruct_macros::{MaybeZeroable, TypeInfo};
 use crate::sb::io::SbResize;
@@ -449,7 +449,7 @@ pub(crate) fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &
     let v = dev_label_resolve(&mut fs.sb_resize(sb), name)?;
     // more groups than a member's 8 bit group field can name
     sb.fs_member_mut(dev).set_group(v.try_into().map_err(|_| BchError::from(Errcode::ENOSPC_disk_label_add))?);
-    c::bch_sb_field_disk_groups::to_cpu(fs, sb)
+    c::bch_sb_field_disk_groups::<Validated>::to_cpu(fs, sb)
 }
 
 /// As a member's group field: index + 1, 0 for none.
@@ -638,7 +638,7 @@ fn disk_groups_validate<S: SbState>(sb: &c::bch_sb<S>, groups: &[c::bch_disk_gro
     Ok(())
 }
 
-impl SbFieldOps for c::bch_sb_field_disk_groups {
+impl SbFieldOps for c::bch_sb_field_disk_groups<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_disk_groups<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         disk_groups_validate(sb, &f.entries, err)

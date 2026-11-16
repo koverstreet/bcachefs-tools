@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use crate::util::vstructs::Head;
-use cstruct_macros::{bitfield, bch_enum, unsized_vstruct, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -283,10 +282,9 @@ pub struct recovery_pass_entry_flags {
     __:             u31,
 }
 
-#[unsized_vstruct(u64s = field.u64s, start = 0)]
+#[whole(tail = start: [c::recovery_pass_entry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_recovery_passes {
-    pub field: Head<c::bch_sb_field>,
     pub start: [c::recovery_pass_entry; 0],
 }

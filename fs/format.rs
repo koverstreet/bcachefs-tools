@@ -614,19 +614,13 @@ pub struct BackpointerFlags {
 
 /* Optional/variable size superblock sections: */
 
-/// Its u64s count it from its start, its header's included: C's _data[] is
-/// there, at 0, as vstructs.h's macros have it. The unsized tail is Rust's
-/// alone, past the header - C has it as _data[] already.
-///
-/// The count is the crate's, not private: the sections that embed this
-/// header are defined across the crate, and their `u64s = field.u64s` reads
-/// it.
+/// Its u64s count it from its start, its header's included, as vstructs.h's
+/// macros have it: its arm is what's past the header.
 #[unsized_vstruct(tail = [u64], u64s = u64s, start = 0)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field {
-    pub _data: [u64; 0],
-    pub(crate) u64s: Le32,
+    u64s: Le32,
     pub type_: Le32,
 }
 
@@ -843,11 +837,10 @@ pub const BCH_SINGLE_DEVICE_SB_FIELDS: u32 =
 
 /* BCH_SB_FIELD_journal: */
 
-#[unsized_vstruct(u64s = field.u64s, start = 0)]
+#[whole(tail = buckets: [Le64])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal {
-    pub field: Head<c::bch_sb_field>,
     pub buckets: [Le64; 0],
 }
 
@@ -858,12 +851,10 @@ pub struct bch_sb_field_journal_v2_entry {
     pub nr: Le64,
 }
 
-#[unsized_vstruct(u64s = field.u64s, start = 0)]
+#[whole(tail = d: [c::bch_sb_field_journal_v2_entry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_v2 {
-    pub field: Head<c::bch_sb_field>,
-
     pub d: [c::bch_sb_field_journal_v2_entry; 0],
 }
 
@@ -895,12 +886,10 @@ pub struct bch_encrypted_key {
  * just store the master key unencrypted in the superblock so we can access the
  * previously encrypted data.
  */
-#[whole(u64s = field.u64s, start = 0)]
+#[whole]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb_field_crypt {
-    pub field: Head<c::bch_sb_field>,
-
     #[members]
     pub flags: bch_sb_field_crypt_flags,
     #[members]
@@ -947,27 +936,23 @@ pub struct jset_entry {
     pub _data: [u64; 0],
 }
 
-#[unsized_vstruct(u64s = field.u64s, start = 0, entries = jset_entry)]
+#[whole(tail = start: [u64], entries = jset_entry)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_clean {
-    pub field: Head<c::bch_sb_field>,
-
     pub flags: Le32,
     pub _read_clock: Le16, /* no longer used */
     pub _write_clock: Le16,
     pub journal_seq: Le64,
 
-    pub start: [Head<c::jset_entry>; 0],
-    pub _data: [u64; 0],
+    pub start: [u64; 0],
 }
 
-/* sections from before btrees_lost_data are 88 bytes: what validate accepts */
-#[grown(from = btrees_lost_data, u64s = field.u64s, start = 0)]
+/* sections from before btrees_lost_data are 88 bytes, 80 past their header: what validate accepts */
+#[grown(from = btrees_lost_data)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb_field_ext {
-    pub field: Head<c::bch_sb_field>,
     pub recovery_passes_required: [Le64; 2],
     pub errors_silent: [Le64; 8],
     pub btrees_lost_data: Le64,
@@ -1620,7 +1605,6 @@ tagged_union! {
     #[tag(type_: u8)]
     #[tag_enum(JsetEntryType: u32, nr)]
     #[size(header)]
-    #[payload]
     pub enum jset_entry {
         /// Btree key updates
         btree_keys(c::jset_entry_btree_keys) = 0,

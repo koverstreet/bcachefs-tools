@@ -28,7 +28,7 @@ use crate::util::Printbuf;
 use crate::sb::io::SbResize;
 use crate::format::{Btree, MetadataVersion};
 
-type Section = c::bch_sb_field_downgrade;
+type Section = c::bch_sb_field_downgrade<Validated>;
 type Entry = c::bch_sb_field_downgrade_entry<Validated>;
 
 const SECTION_HEAD: usize = size_of::<Head<Section>>();

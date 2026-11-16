@@ -12,7 +12,7 @@ use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{set_all, SbFieldOps};
-use crate::util::vstructs::{Head, Unvalidated};
+use crate::util::vstructs::{Unvalidated, Validated};
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
 
@@ -38,7 +38,7 @@ fn sizes_to_cpu(theirs: &[u8]) -> ([u8; 31], u8) {
     (u64s, nr.max(c::ExtentEntryType::NR as usize) as u8)
 }
 
-impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
+impl SbFieldOps for c::bch_sb_field_extent_type_u64s<Validated> {
     fn validate(_sb: &c::bch_sb<Unvalidated>, e: &c::bch_sb_field_extent_type_u64s<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         for (ty, (&theirs, ours)) in sizes(&e.d).iter().zip(ours()).enumerate() {
@@ -73,8 +73,7 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
 
     /// This version's sizes.
     fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        let u64s = (size_of::<Head<c::bch_sb_field>>() + c::ExtentEntryType::NR as usize)
-            .div_ceil(size_of::<u64>());
+        let u64s = (c::ExtentEntryType::NR as usize).div_ceil(size_of::<u64>());
         let mut sb = fs.sb_resize(sb);
         let e = sb.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);
         let Some(e) = e else {
@@ -93,7 +92,7 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
 mod tests {
     use super::*;
     use crate::types::Le32;
-    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, VStruct};
+    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, VStruct};
 
     /// A section of @sizes, in @buf, as read: Unvalidated.
     fn section<'a>(buf: &'a mut [u64], sizes: &[u8]) -> &'a c::bch_sb_field_extent_type_u64s<Unvalidated> {
@@ -140,7 +139,7 @@ mod tests {
         let validate = |sizes: &[u8]| {
             let mut buf = [0u64; 4];
             let mut err = Printbuf::new();
-            <c::bch_sb_field_extent_type_u64s as SbFieldOps>::validate(sb, section(&mut buf, sizes), flags, &mut err)
+            <c::bch_sb_field_extent_type_u64s<Validated> as SbFieldOps>::validate(sb, section(&mut buf, sizes), flags, &mut err)
                 .map_err(|_| err.as_str().to_owned())
         };
 

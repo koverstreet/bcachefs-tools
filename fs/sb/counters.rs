@@ -18,7 +18,7 @@ use cstruct_macros::{MaybeZeroable, TypeInfo};
 use crate::c;
 use crate::debug::trace::{events, TraceEvent};
 use crate::errcode::BchError;
-use crate::util::vstructs::Unvalidated;
+use crate::util::vstructs::{Unvalidated, Validated};
 use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
@@ -220,7 +220,7 @@ impl Fs {
     }
 }
 
-impl SbFieldOps for c::bch_sb_field_counters {
+impl SbFieldOps for c::bch_sb_field_counters<Validated> {
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
                 f: &c::bch_sb_field_counters<Unvalidated>) {
         for ctr in COUNTERS {
@@ -279,7 +279,7 @@ impl RecentCounters {
 /// mount. A counter the superblock has no slot for starts at 0.
 pub fn counters_init(fs: &Fs) {
     let mut sb = fs.sb_lock();
-    let _ = c::bch_sb_field_counters::to_cpu(fs, &mut sb);
+    let _ = c::bch_sb_field_counters::<Validated>::to_cpu(fs, &mut sb);
 
     let d: &[Le64] = sb.field::<c::bch_sb_field_counters>().map_or(&[], |f| &f.d);
     for (i, ctr) in COUNTERS.iter().enumerate() {

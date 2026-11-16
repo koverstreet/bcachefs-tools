@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use crate::util::vstructs::Head;
-use cstruct_macros::{bitfield, bch_enum, unsized_vstruct, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
 
 /*
  * We refer to members with bitmasks in various places - but we need to get rid
@@ -138,19 +137,17 @@ pub enum MemberInitialized {
     pre_journal_alloc = 4,
 }
 
-#[unsized_vstruct(tail = [u64], u64s = field.u64s, start = 0)]
+#[whole(tail = _members: [u8])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_members_v1 {
-    pub field: Head<c::bch_sb_field>,
     pub _members: [c::bch_member; 0], //Members are now variable size
 }
 
-#[unsized_vstruct(tail = [u64], u64s = field.u64s, start = 0)]
+#[whole(tail = _members: [u8])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_members_v2 {
-    pub field: Head<c::bch_sb_field>,
     pub member_bytes: Le16, //size of single member entry
     pub pad: [u8; 6],
     pub _members: [c::bch_member; 0],

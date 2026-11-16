@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
-use crate::util::vstructs::Head;
-use cstruct_macros::{unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{whole, MaybeZeroable, Plain, TypeInfo};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
@@ -14,10 +13,9 @@ pub struct journal_seq_blacklist_entry {
     pub end: Le64,
 }
 
-#[unsized_vstruct(u64s = field.u64s, start = 0)]
+#[whole(tail = start: [c::journal_seq_blacklist_entry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_seq_blacklist {
-    pub field: Head<c::bch_sb_field>,
     pub start: [c::journal_seq_blacklist_entry; 0],
 }

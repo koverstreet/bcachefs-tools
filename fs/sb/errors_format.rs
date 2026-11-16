@@ -5,8 +5,7 @@
 use crate::cstructs::c;
 use crate::types::Le64;
 use zerocopy::byteorder::little_endian as le;
-use crate::util::vstructs::Head;
-use cstruct_macros::{bitfield, bch_enum, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bitfield, bch_enum, whole, MaybeZeroable, Plain, TypeInfo};
 use nestify::nest;
 
 #[bch_enum(flags)]
@@ -477,11 +476,10 @@ pub struct bch_sb_field_error_entry {
     pub last_error_time: Le64,
 }
 
-#[unsized_vstruct(u64s = field.u64s, start = 0)]
+#[whole(tail = entries: [c::bch_sb_field_error_entry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_errors {
-    pub field: Head<c::bch_sb_field>,
     pub entries: [c::bch_sb_field_error_entry; 0],
 }
 
@@ -521,11 +519,10 @@ nest! {
     }
 }
 
-#[unsized_vstruct(u64s = field.u64s, start = 0)]
+#[whole(tail = entries: [c::bch_sb_field_error_entry_v2])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_errors_v2 {
-    pub field: Head<c::bch_sb_field>,
     pub entries: [c::bch_sb_field_error_entry_v2; 0],
 }
 

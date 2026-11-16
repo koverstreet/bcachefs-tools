@@ -1302,7 +1302,7 @@ impl Fs {
                  * member copy above; re-intern so the new device gets
                  * its failure_domain id.
                  */
-                let _ = c::bch_sb_field_members_v2::to_cpu(self, &mut w);
+                let _ = c::bch_sb_field_members_v2::<crate::util::vstructs::Validated>::to_cpu(self, &mut w);
 
                 if mi_field_upgrades(&mut w, dev_idx, &identity) {
                     w.dirty();

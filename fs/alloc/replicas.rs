@@ -310,9 +310,9 @@ fn v0_entries(b: &[u8]) -> impl Iterator<Item = SbEntry<'_>> {
 /// replicas_v0's.
 pub fn sb_entries<S: SbState>(sb: &c::bch_sb<S>) -> impl Iterator<Item = SbEntry<'_>> {
     type T = c::SbFieldType;
-    let v1 = S::field(sb, T::replicas).map(|f| v1_entries(f.as_bytes()));
+    let v1 = S::field(sb, T::replicas).map(|f| v1_entries(f.payload()));
     let v0 = v1.is_none().then(|| S::field(sb, T::replicas_v0)).flatten()
-        .map(|f| v0_entries(f.as_bytes()));
+        .map(|f| v0_entries(f.payload()));
 
     v1.into_iter().flatten().chain(v0.into_iter().flatten())
 }
@@ -688,7 +688,7 @@ fn section_to_text<'a>(out: &mut Printbuf, entries: impl Iterator<Item = SbEntry
     out.newline();
 }
 
-impl SbFieldOps for c::bch_sb_field_replicas {
+impl SbFieldOps for c::bch_sb_field_replicas<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_replicas<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         section_validate(sb, || v1_entries(f.as_bytes()), err)
@@ -716,7 +716,7 @@ impl SbFieldOps for c::bch_sb_field_replicas {
     }
 }
 
-impl SbFieldOps for c::bch_sb_field_replicas_v0 {
+impl SbFieldOps for c::bch_sb_field_replicas_v0<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_replicas_v0<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         section_validate(sb, || v0_entries(f.as_bytes()), err)
@@ -1034,7 +1034,7 @@ mod tests {
 
             // a u64 more: past the whole entry, 3 bytes, the start of one
             // claiming 20 devices
-            let f = sb.field_resize::<V0>(3).unwrap();
+            let f = sb.field_resize::<V0>(2).unwrap();
             bytes_of_mut(f)[SECTION_HEAD + 3..][..2].copy_from_slice(&[BTREE, 20]);
 
             let flags = if write { ValidateFlags::write } else { ValidateFlags::empty() };
@@ -1046,7 +1046,7 @@ mod tests {
         let (sb, ret, err) = validate(false);
         assert_eq!((ret, err.as_str()), (0, "8 bytes past its last whole entry, dropped"));
         let f = sb.field::<V0>().unwrap();
-        assert_eq!(f.as_bytes().len(), 16);
+        assert_eq!(f.as_bytes().len(), 8);
         assert!(f.as_bytes()[SECTION_HEAD + 3..].iter().all(|&b| b == 0));
         assert_eq!(sb_entries(sb.sb()).count(), 1);
 

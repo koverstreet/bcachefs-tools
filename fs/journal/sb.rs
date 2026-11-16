@@ -9,7 +9,7 @@ use crate::fs::Dev;
 use core::ops::Range;
 
 use crate::c;
-use crate::util::vstructs::Unvalidated;
+use crate::util::vstructs::{Unvalidated, Validated};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::journal::buckets;
@@ -53,7 +53,7 @@ fn runs_validate<S: SbState>(sb: &c::bch_sb<S>, mut runs: KVVec<Range<u64>>, err
     Ok(())
 }
 
-impl SbFieldOps for c::bch_sb_field_journal {
+impl SbFieldOps for c::bch_sb_field_journal<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_journal<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let mut runs = KVVec::with_capacity(f.buckets.len())?;
@@ -73,7 +73,7 @@ impl SbFieldOps for c::bch_sb_field_journal {
     }
 }
 
-impl SbFieldOps for c::bch_sb_field_journal_v2 {
+impl SbFieldOps for c::bch_sb_field_journal_v2<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_journal_v2<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let mut runs = KVVec::with_capacity(f.d.len())?;

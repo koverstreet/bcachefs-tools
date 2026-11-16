@@ -233,20 +233,14 @@ macro_rules! vstruct {
             }
         }
     };
-    // counted past the header it embeds - a btree node's bset, its keys; a
-    // journal entry subtype's entry: the count is that header's, read as it
+    // counted past the header it embeds - a btree node's bset, its keys: the
+    // count is that header's, read as it
     (@count $head:ident, $($embedded:tt)*) => {};
     ($t:ty, $($count:ident).+, start = $start:expr) => {
         $crate::util::vstructs::vstruct!(@impl $t, $start, $($count).+);
     };
     ($t:ty, $count:ident) => {
         $crate::util::vstructs::vstruct!(@impl $t, ::core::mem::size_of::<$t>(), $count);
-    };
-    // past a header reached through a field - a #[whole] type's, repr.hdr
-    ($t:ty, $r:ident . $hdr:ident . $count:ident) => {
-        $crate::util::vstructs::vstruct!(@impl $t,
-            ::core::mem::offset_of!($t, $r.$hdr) + $crate::types::field_size(|p: $t| p.$r.$hdr) as usize,
-            $r.$hdr.$count);
     };
     ($t:ty, $hdr:ident . $count:ident) => {
         $crate::util::vstructs::vstruct!(@impl $t,
@@ -2058,19 +2052,22 @@ mod tests {
         assert!(matches!(es[..], [Err(VStructError::Short { len: 0, .. })]));
     }
 
-    /// A section counts from its start; its entries start at its start[] -
-    /// unsized ones, each as long as it says.
+    /// A section counts from its start, its header's included; its arm is
+    /// what's past the header, its entries from the arm's start[] - unsized
+    /// ones, each as long as it says.
     #[test]
     fn entries_start_at_start() {
-        let hdr = size_of::<Head<c::bch_sb_field_clean>>();
-        let mut buf = vec![0u64; hdr / 8 + 2];
-        let mut clean = Head::<c::bch_sb_field_clean>::default();
-        clean.set_val_u64s(hdr / 8 + 2);
-        put(&mut buf, 0, &clean);
-        put(&mut buf, hdr, &entry(1));
+        let (hdr, start) = (size_of::<Head<c::bch_sb_field>>(), size_of::<c::bch_sb_field_clean>());
+        let mut buf = vec![0u64; (hdr + start) / 8 + 2];
+        let mut f = Head::<c::bch_sb_field>::default();
+        f.set_val_u64s(buf.len());
+        f.type_ = Le32::new(c::SbFieldType::clean.0);
+        put(&mut buf, 0, &f);
+        put(&mut buf, hdr + start, &entry(1));
         // SAFETY: the buffer's, as long as its count says
-        let clean = unsafe { c::bch_sb_field_clean::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
-        assert_eq!(clean.as_bytes().len(), buf.len() * 8);
+        let f = unsafe { c::bch_sb_field::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
+        let clean = f.arm::<c::bch_sb_field_clean<Validated>>().expect("a clean section");
+        assert_eq!(clean.as_bytes().len(), buf.len() * 8 - hdr);
         let es: Vec<_> = clean.entries().collect();
         assert_eq!(es.len(), 1);
         assert_eq!((es[0].u64s(), es[0].as_bytes().len()), (1, 16));

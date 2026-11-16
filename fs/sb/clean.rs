@@ -23,14 +23,15 @@ use crate::sb::errors::SbErrorId;
 use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::KVVec;
-use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VstructRef};
+use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, Unvalidated, UnvalidatedEntriesMut,
+                            Validated, VstructRef};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 use crate::sb::io::SbResize;
 use crate::format::{Btree, MetadataVersion, SbFeatures};
 use crate::fs::btree_id_is_alloc;
 
-type Section = c::bch_sb_field_clean;
+type Section = c::bch_sb_field_clean<Validated>;
 
 const SECTION_HEAD: usize = size_of::<Head<Section>>();
 
@@ -87,7 +88,8 @@ impl core::ops::Deref for CleanSection {
     type Target = Section;
 
     fn deref(&self) -> &Section {
-        unsafe { Section::from_head_ptr(self.0.as_ptr().cast()) }
+        let b = self.0.as_bytes();
+        unsafe { &*Section::from_raw(b.as_ptr(), b.len()) }
     }
 }
 
@@ -110,8 +112,9 @@ impl Fs {
             .map_err(|_| BchError::from(Errcode::ENOMEM_read_superblock_clean))?;
         copy.as_mut_bytes().copy_from_slice(bytes);
 
-        // SAFETY: a copy of a validated section, as long as its count says
-        let clean = unsafe { Section::from_head_ptr_mut(copy.as_mut_ptr().cast()) };
+        // SAFETY: a copy of a validated section, all of it
+        let b = copy.as_mut_bytes();
+        let clean = unsafe { &mut *Section::from_raw_mut(b.as_mut_ptr(), b.len()) };
         validate_late(self, version, big_endian, clean, false)?;
 
         Ok(CleanSection(copy))
@@ -273,12 +276,12 @@ pub fn strip_alloc(fs: &Fs, guard: &mut SbLockGuard<'_>) {
 
         fs.replicas_clear();
 
-        sb.field_resize::<c::bch_sb_field_replicas_v0>(0);
-        sb.field_resize::<c::bch_sb_field_replicas>(0);
+        sb.field_delete(c::SbFieldType::replicas_v0);
+        sb.field_delete(c::SbFieldType::replicas);
 
         for _ca in fs.online_members() {
-            sb.field_resize::<c::bch_sb_field_journal>(0);
-            sb.field_resize::<c::bch_sb_field_journal_v2>(0);
+            sb.field_delete(c::SbFieldType::journal);
+            sb.field_delete(c::SbFieldType::journal_v2);
         }
     }
 

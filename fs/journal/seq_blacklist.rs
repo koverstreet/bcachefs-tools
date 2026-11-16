@@ -38,7 +38,7 @@ use crate::format::SbFeatures;
 use crate::sb_err_on;
 use crate::bch_verbose;
 use crate::c;
-use crate::util::vstructs::Unvalidated;
+use crate::util::vstructs::{Unvalidated, Validated};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
@@ -48,7 +48,7 @@ use crate::util::rcu::{RcuArray, RcuElement};
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
 
-type Section = c::bch_sb_field_journal_seq_blacklist;
+type Section = c::bch_sb_field_journal_seq_blacklist<Validated>;
 
 impl SbFieldOps for Section {
     fn validate(_sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_journal_seq_blacklist<Unvalidated>,

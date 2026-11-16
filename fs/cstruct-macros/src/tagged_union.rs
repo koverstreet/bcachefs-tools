@@ -105,12 +105,14 @@
 //! some unwritten, as could an arm with padding; nothing makes either.
 //!
 //! Or, `#[storage(STORAGE)] #[size(header)]`, the storage is another's: a
-//! header its arms embed and run past, as far as its count says - a journal
+//! header, then its arm, as far as the header's count says - a journal
 //! entry's, a superblock field's: an unsized vstruct (util/vstructs.rs), each
-//! reference to which has its arm's bytes. Then what's
-//! generated is the Ref enum, ArmOf, and on the storage in each state -
-//! X<Unvalidated>, X<Validated> - typed(): the arm its tag selects, over its
-//! bytes, in the storage's state - every arm type has a family
+//! reference to which has its bytes. An arm is what's past the header, its
+//! payload, as a key value is what's past the key; the header is the
+//! storage's alone. Then what's generated is the Ref enum, ArmOf, and on the
+//! storage in each state - X<Unvalidated>, X<Validated> - payload(), its
+//! arm's bytes, and typed(): the arm its tag selects, over those bytes, in
+//! the storage's state - every arm type has a family
 //! (util/vstructs.rs), so an Unvalidated storage's arms are Unvalidated. An
 //! arm may be shorter than its type - written by an older version, before the
 //! type grew - so it's what its definition's ArmRef says: a grown type's at
@@ -120,9 +122,7 @@
 //! edit. And for what's done to whichever arm it is - an ops trait's methods
 //! - NAME_match!(r, a => ..) on what typed() gave, and NAME_by_tag!(tag, A =>
 //! .., _ => ..) by the tag alone: `a: A`, or A, names the arm's type, A<S> in
-//! state S. With `#[payload]`, an arm is what's past the header, payload() -
-//! as a key value is what's past the key - and the header the storage's
-//! alone.
+//! state S.
 //!
 //! Or, `#[storage(HEAD)] #[size(arm)]`, each value is as long as the arm its
 //! tag selects - an ACL's entries: no count to step by, so a tag this version
@@ -153,8 +153,8 @@ use crate::tokens::vs;
 /// The storage is its own: the tag, then a union of the arms, overlaid
 /// with the pad - or another's, #[storage]. @size says what its size is a
 /// function of: nothing, a constant, the pad's; the header's count - the
-/// storage another's, a header its arms embed and run past, and what's
-/// generated only the typed view of it; or the tag - each value as long as
+/// storage another's, a header and then its arm, and what's generated only
+/// the typed view of it; or the tag - each value as long as
 /// the arm its tag selects, the head the start of every arm.
 struct TaggedUnion {
     name:      Ident,
@@ -172,9 +172,6 @@ struct TaggedUnion {
     /// #[packed]: C's __packed - for a struct, the payload right after the
     /// tag whatever the arms' alignment, which is what the format says.
     packed:    bool,
-    /// #[payload]: a header union's arms are what's past the header, not
-    /// embedding it - until every one's are.
-    payload:   bool,
     size:      Size,
     /// The arm types defined in the block, for nestify::nest!.
     defs:      Vec<Ident>,
@@ -195,9 +192,9 @@ enum Size {
     /// holds every arm, and a value of plain data.
     Pad,
     /// Its header's count: a union over another's storage, an unsized
-    /// vstruct, its arms embedding the header and running past it as far as
-    /// the count says - a family (util/vstructs.rs), each state's reference
-    /// to which has its arm's bytes.
+    /// vstruct - a family (util/vstructs.rs), each state's reference to which
+    /// has its bytes - its arms what's past the header, as far as the count
+    /// says: the header the storage's alone.
     Header,
     /// Its tag: the arm the tag selects, whose size it is - a union, its
     /// storage the head every arm starts with, the tag in it; a value read
@@ -218,8 +215,8 @@ impl TaggedUnion {
         if !ok {
             return Err(format!("tagged_union! {name}: #[pad(TYPE)] #[size(pad)] - its own storage, \
                                 which holds its arms, the pad's size - or #[storage(STORAGE)] \
-                                #[size(header)] - over another's storage, whose arms run past its \
-                                header as far as its count says - or #[storage(HEAD)] #[size(arm)] - \
+                                #[size(header)] - over another's storage, whose arms are what's past \
+                                its header, as far as its count says - or #[storage(HEAD)] #[size(arm)] - \
                                 the head every arm starts with, each as long as its arm"));
         }
         if let (Some(_), Some(d)) = (&self.storage, self.defs.first()) {
@@ -247,7 +244,7 @@ struct Decl {
 
 /// The attributes tagged_union! reads. The rest are the storage's - or with
 /// a `*` after, each arm type's the block defines.
-const OURS: &[&str] = &["tag", "tag_enum", "storage", "pad", "size", "packed", "payload"];
+const OURS: &[&str] = &["tag", "tag_enum", "storage", "pad", "size", "packed"];
 
 /// The union the declaration says, and what's generated from its arms besides
 /// it: the tag enum and NAME_arms!.
@@ -282,7 +279,7 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
 
     let mut tag: Option<(Ident, syn::Type)> = None;
     let mut tag_enum: Option<EnumDef> = None;
-    let (mut storage, mut pad, mut size, mut packed, mut payload) = (None, None, None, false, false);
+    let (mut storage, mut pad, mut size, mut packed) = (None, None, None, false);
     for a in &ours {
         let kind = a.path().get_ident().map(ToString::to_string).unwrap_or_default();
         let bad = |e: syn::Error| err(&format!("#[{kind}(..)]: {e}"));
@@ -305,7 +302,6 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
                                                size(header); or of its tag, its arm's, size(arm)"))),
             }),
             "packed"  => packed = true,
-            "payload" => payload = true,
             _ => unreachable!(),
         }
     }
@@ -338,7 +334,6 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
         }).collect(),
         pad,
         packed,
-        payload,
         size: size.ok_or_else(|| err("no #[size(..)] - what it's a function of, pad, header or arm"))?,
         defs: defs.iter().map(|(name, _)| name.clone()).collect(),
     };
@@ -663,16 +658,16 @@ impl Gen<'_> {
         }
     }
 
-    /// #[size(header)]: an unsized vstruct, its arms running past its header
-    /// as far as its count says - each reference to one has them: typed() and
-    /// arm(), on the storage in each state. An arm there may be an older,
-    /// shorter version of its type: as its ArmRef has it, over the storage's
-    /// bytes.
+    /// #[size(header)]: an unsized vstruct, its arm what's past its header -
+    /// its payload() - as far as its count says, each reference to one has
+    /// them: typed() and arm(), on the storage in each state. An arm there
+    /// may be an older, shorter version of its type: as its ArmRef has it,
+    /// over the payload's bytes.
     ///
     /// Its storage is a family, X<S> its definition in each state - what its
-    /// tag is read from. Every arm has a family too - #[unsized_vstruct],
-    /// #[grown], #[whole] - so each is named in the storage's state: a member
-    /// of an Unvalidated one is Unvalidated, all the way down.
+    /// tag is read from. Every arm has a family too - #[whole], #[grown] - so
+    /// each is named in the storage's state: a member of an Unvalidated one
+    /// is Unvalidated, all the way down.
     fn header(&self) -> Result<TokenStream, String> {
         let (tu, vs, vis, s_ty, tag_enum) = (self.tu, vs(), self.vis, &self.s_ty, self.tag_enum);
         let (arms, name, tag_ty) = (&tu.arms, &tu.name, &tu.tag_ty);
@@ -689,10 +684,6 @@ impl Gen<'_> {
                            many as there are, for one written before its type grew: what\n \
                            {name}'s typed() gives.");
         let head = quote!(::core::mem::size_of::<<Self as #vs::Unsized>::Head>());
-        let (arm_bytes, arm_bytes_mut) = match tu.payload {
-            true  => (quote!(self.payload()), quote!(&mut self.as_bytes_mut()[#head..])),
-            false => (quote!(self.as_bytes()), quote!(self.as_bytes_mut())),
-        };
         let mut out = self.given_storage(&storages);
         out.extend(self.arms_enum(en_ref, &doc, quote!(#[derive(Clone, Copy)]),
                                   quote!(<'a, St: #vs::State = #vs::Validated>), |a| {
@@ -712,7 +703,7 @@ impl Gen<'_> {
             let tag_fn = self.tag_fn(" The tag, whether this version knows it or not.", quote!(#det::get(self)));
             let selects = self.select(|a| {
                 let (arm, ty) = (&a.name, &a.ty);
-                quote!(<#ty<#vs::#st> as #vs::ArmRef>::arm_ref(#arm_bytes).map(#en_ref::#arm).ok_or(#t_tag))
+                quote!(<#ty<#vs::#st> as #vs::ArmRef>::arm_ref(self.payload()).map(#en_ref::#arm).ok_or(#t_tag))
             });
             out.extend(quote! {
                 impl #s_ty<#vs::#st> {
@@ -741,7 +732,7 @@ impl Gen<'_> {
                         if #det::get(self) != A::TAG {
                             return None;
                         }
-                        A::arm_ref(#arm_bytes)
+                        A::arm_ref(self.payload())
                     }
 
                     /// arm(), to edit: as its ArmRef has it.
@@ -752,7 +743,7 @@ impl Gen<'_> {
                         if #det::get(self) != A::TAG {
                             return None;
                         }
-                        A::arm_mut(#arm_bytes_mut)
+                        A::arm_mut(&mut self.as_bytes_mut()[#head..])
                     }
                 }
             });

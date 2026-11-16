@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
-use crate::util::vstructs::Head;
-use cstruct_macros::{bitfield, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bitfield, whole, MaybeZeroable, Plain, TypeInfo};
 
 pub const BCH_SB_LABEL_SIZE: u32 = 32;
 
@@ -25,10 +24,9 @@ pub struct bch_disk_group_flags {
     __:                         u40,
 }
 
-#[unsized_vstruct(u64s = field.u64s, start = 0)]
+#[whole(tail = entries: [c::bch_disk_group])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_disk_groups {
-    pub field: Head<c::bch_sb_field>,
     pub entries: [c::bch_disk_group; 0],
 }

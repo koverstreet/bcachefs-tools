@@ -23,7 +23,7 @@ use crate::util::refcount::{AtomicRef, PercpuRef, RefGuard, TryRefcount};
 use crate::alloc::disk_groups;
 use crate::util::ffi::c_char;
 use crate::data_structures::strided::{Strided, StridedMut};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, plain_bytes, Head, Unsized, Unvalidated};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, plain_bytes, Head, Unsized, Unvalidated, Validated};
 use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
@@ -228,7 +228,7 @@ impl<'a> MembersV1<'a> {
 
 /// Construct a MembersV2 reader from a superblock.
 pub fn members_v2<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV2<'_>> {
-    let f = S::field(sb, c::SbFieldType::members_v2)?.as_bytes();
+    let f = S::field(sb, c::SbFieldType::members_v2)?.payload();
     let stride = cast_plain::<Head<c::bch_sb_field_members_v2>>(f)?.member_bytes.get().into();
     Some(MembersV2 {
         members: members_in(f, MEMBERS_V2_HEAD, stride)?,
@@ -238,14 +238,14 @@ pub fn members_v2<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV2<'_>> {
 
 /// Construct a MembersV1 reader from a superblock.
 pub fn members_v1<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV1<'_>> {
-    let f = S::field(sb, c::SbFieldType::members_v1)?.as_bytes();
+    let f = S::field(sb, c::SbFieldType::members_v1)?.payload();
     Some(MembersV1 {
         members: members_in(f, MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES)?,
         nr_devices: S::head(sb).nr_devices.into(),
     })
 }
 
-fn members_v2_mut(mi: &mut c::bch_sb_field_members_v2) -> Option<StridedMut<'_, c::bch_member>> {
+fn members_v2_mut(mi: &mut c::bch_sb_field_members_v2<Validated>) -> Option<StridedMut<'_, c::bch_member>> {
     let stride = mi.member_bytes.get().into();
     StridedMut::new(bytes_of_mut(mi).get_mut(MEMBERS_V2_HEAD..)?, stride)
 }
@@ -274,7 +274,7 @@ pub trait SbMembersMut: SbResize {
     /// extent_flags read - or none, for a superblock they can't.
     fn members_cpy_v2_v1(&mut self) -> Result<(), BchError> {
         if u32::from(self.sb().version_incompat()) > MetadataVersion::extent_flags.0 {
-            self.field_resize::<c::bch_sb_field_members_v1>(0);
+            self.field_delete(c::SbFieldType::members_v1);
             return Ok(());
         }
 
@@ -400,7 +400,7 @@ fn members_to_text<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, members: O
     }
 }
 
-impl SbFieldOps for c::bch_sb_field_members_v1 {
+impl SbFieldOps for c::bch_sb_field_members_v1<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_members_v1<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         members_validate(sb, members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES), err)
@@ -412,7 +412,7 @@ impl SbFieldOps for c::bch_sb_field_members_v1 {
     }
 }
 
-impl SbFieldOps for c::bch_sb_field_members_v2 {
+impl SbFieldOps for c::bch_sb_field_members_v2<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_members_v2<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         members_validate(sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()), err)

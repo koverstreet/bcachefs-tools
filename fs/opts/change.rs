@@ -69,7 +69,7 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bo
             // the groups' devs masks. An error (ENOMEM) leaves it stale until
             // the next superblock swap
             if post {
-                let _ = crate::bch_err_fn!(fs, c::bch_sb_field_disk_groups::to_cpu(fs, &mut fs.sb_lock()));
+                let _ = crate::bch_err_fn!(fs, c::bch_sb_field_disk_groups::<crate::util::vstructs::Validated>::to_cpu(fs, &mut fs.sb_lock()));
             }
 
             // Only the label is in targets: a failure domain only spreads

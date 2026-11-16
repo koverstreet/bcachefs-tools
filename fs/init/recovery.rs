@@ -559,7 +559,9 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
     Ok(())
 }
 
-fn journal_replay_early(fs: &Fs, clean: Option<&c::bch_sb_field_clean>) -> Result<(), BchError> {
+fn journal_replay_early(fs: &Fs, clean: Option<&c::bch_sb_field_clean<crate::util::vstructs::Validated>>)
+    -> Result<(), BchError>
+{
     if let Some(clean) = clean {
         for entry in clean.entries() {
             journal_replay_entry_early(fs, entry)?;

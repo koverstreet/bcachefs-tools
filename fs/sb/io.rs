@@ -251,6 +251,9 @@ impl<F: InState + ?Sized> SbSection for F where F::In<Validated>: SbField {
     type Arm = F::In<Validated>;
 }
 
+/// A section's header, its type and count: its arm is what's past it.
+const FIELD_HEAD: usize = size_of::<Head<c::bch_sb_field>>();
+
 /// How a section type is validated and printed: implemented on its family in
 /// Validated, X<Validated> - an arm in every family, which the dispatch by
 /// its tag names. Both get the section as read, Unvalidated, from a superblock
@@ -281,11 +284,11 @@ pub trait SbFieldOps: SbField + InState {
         Ok(())
     }
 
-    /// Where the whole entries of the section in @b - its bytes, its header's
-    /// included - end: past that, rounded up to a u64, is a partial entry,
-    /// dropped at read and invalid at write. None if it's too short to be
-    /// one. A section of fixed-size entries is as its arm says; one of
-    /// variable-size entries walks them, entries_end().
+    /// Where the whole entries of the section in @b - its arm's bytes, past
+    /// the section's header - end: past that, rounded up to a u64, is a
+    /// partial entry, dropped at read and invalid at write. None if it's too
+    /// short to be one. A section of fixed-size entries is as its arm says;
+    /// one of variable-size entries walks them, entries_end().
     fn entries_end(b: &[u8]) -> Option<usize> {
         <Self as ArmRef>::whole_len(b.len())
     }
@@ -322,10 +325,10 @@ where
 /// @head on: those F::entries_end() finds, each of which fits.
 pub fn entries_as_read<'a, F, E>(b: &'a [u8], head: usize) -> impl Iterator<Item = &'a E>
 where
-    F: SbFieldOps + ?Sized,
+    F: SbSection<Arm: SbFieldOps> + ?Sized,
     E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a,
 {
-    let end = F::entries_end(b).unwrap_or(head);
+    let end = F::Arm::entries_end(b).unwrap_or(head);
     UnvalidatedEntries::<E>::new(b.get(head..end).unwrap_or(&[])).map_while(Result::ok)
 }
 
@@ -346,8 +349,8 @@ fn sb_field_drop_partial(sb: &mut bch_sb<Unvalidated>, f: usize, len: usize, end
     bytes.copy_within(f + len.., f + whole);
     let sb_end = bytes.len();
     bytes[sb_end - dropped..].fill(0);
-    cast_plain_mut::<Head<c::bch_sb_field>>(&mut bytes[f..]).expect("a section's header").u64s =
-        Le32::new((whole / size_of::<u64>()) as u32);
+    cast_plain_mut::<Head<c::bch_sb_field>>(&mut bytes[f..]).expect("a section's header")
+        .set_val_u64s(whole / size_of::<u64>());
     sb.sub_u64s((dropped / size_of::<u64>()) as u32);
 
     write!(err, "{dropped} bytes past its last whole entry, dropped");
@@ -369,8 +372,9 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: ValidateFlags, e
         else { return Ok(()) };
 
     let invalid = || Err(Errcode::invalid_sb_field_size.into());
-    let too_short = |err: &mut Printbuf, len| {
-        write!(err, "too short ({len} < {min_len} bytes)");
+    // @len is the section's, min_len its arm's
+    let too_short = |err: &mut Printbuf, len: usize| {
+        write!(err, "too short ({} < {min_len} bytes)", len - FIELD_HEAD);
         invalid()
     };
 
@@ -400,13 +404,13 @@ const FIELD_NR: usize = c::SbFieldType::NR as usize;
 const _: () = assert!(FIELD_NR <= 64, "bch_sb_buf.dirty: a bit per section type");
 
 impl c::bch_sb_field<Unvalidated> {
-    /// Where its whole entries end, as its type says: None if it's too short
-    /// to be one, or of a type this version doesn't know. By the tag, not
-    /// typed() - it's what finds a partial entry, which typed() can't read the
-    /// arm past.
+    /// Where its whole entries end, from its start, as its type says: None if
+    /// it's too short to be one, or of a type this version doesn't know. By
+    /// the tag, not typed() - it's what finds a partial entry, which typed()
+    /// can't read the arm past.
     fn entries_end(&self) -> Option<usize> {
-        c::bch_sb_field_by_tag!(self.type_.get(), A => <A<Validated> as SbFieldOps>::entries_end(self.as_bytes()),
-                                _ => None)
+        c::bch_sb_field_by_tag!(self.type_.get(), A => <A<Validated> as SbFieldOps>::entries_end(self.payload()),
+                                _ => None).map(|end| FIELD_HEAD + end)
     }
 
     /// Its type's validate(): None if it can't be read as one.
@@ -608,9 +612,9 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
             write!(out, "Invalid superblock: optional field extends past end of superblock");
             return Err(Errcode::invalid_sb_field_size.into());
         };
-        sb_err_on!(out, f.u64s.get() == 0, invalid_sb_field_size,
+        sb_err_on!(out, f.u64s() == 0, invalid_sb_field_size,
                    "Invalid superblock: optional field with size 0 (type {})", f.type_.get())?;
-        off += f.u64s.get() as usize * size_of::<u64>();
+        off += f.u64s() * size_of::<u64>();
         sb_err_on!(out, off > b.len(), invalid_sb_field_size,
                    "Invalid superblock: optional field extends past end of superblock (type {})",
                    f.type_.get())?;
@@ -1882,11 +1886,12 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
         Some(())
     }
 
-    /// The section of type @ty resized to @u64s - made if there's none - with
-    /// the superblock grown to hold it, and what's grown with it: its
-    /// offset, None if there's no room.
+    /// The section of type @ty resized to @u64s past its header - made if
+    /// there's none - with the superblock grown to hold it, and what's grown
+    /// with it: its offset, None if there's no room.
     fn field_resize_id(&mut self, ty: c::SbFieldType, u64s: u32) -> Option<usize> {
         self.mark_dirty(ty);
+        let u64s = (FIELD_HEAD / size_of::<u64>()) as u32 + u64s;
         let d = u64s as isize - (field_bytes(self.sb(), ty) / size_of::<u64>()) as isize;
         let new = (self.sb().u64s() as isize + d) as u32;
 
@@ -1900,22 +1905,24 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
         Some(off)
     }
 
-    /// The section of type @ty, made or grown to at least @u64s.
+    /// The section of type @ty, made or grown to at least @u64s past its
+    /// header.
     fn field_get_minsize_id(&mut self, ty: c::SbFieldType, u64s: u32) -> Option<usize> {
         self.mark_dirty(ty);
-        if field_get_id(self.sb(), ty).is_some_and(|f| f.as_bytes().len() >= u64s as usize * size_of::<u64>()) {
+        if field_get_id(self.sb(), ty).is_some_and(|f| f.as_bytes().len() >= FIELD_HEAD + u64s as usize * size_of::<u64>()) {
             return field_offset(self.sb(), ty);
         }
         self.field_resize_id(ty, u64s)
     }
 
-    /// Resized to @u64s, made if there's none: at its (possibly new) place.
+    /// Its arm resized to @u64s, the section made if there's none: at its
+    /// (possibly new) place. field_delete() deletes it.
     fn field_resize<F: SbSection + ?Sized>(&mut self, u64s: u32) -> Option<&mut F::Arm> {
         let off = self.field_resize_id(F::Arm::FIELD_TYPE, u64s)?;
         self.arm_mut_at::<F>(off)
     }
 
-    /// Made or grown to at least @min_u64s.
+    /// Its arm made or grown to at least @min_u64s.
     fn field_get_minsize<F: SbSection + ?Sized>(&mut self, min_u64s: u32) -> Option<&mut F::Arm> {
         let off = self.field_get_minsize_id(F::Arm::FIELD_TYPE, min_u64s)?;
         self.arm_mut_at::<F>(off)
@@ -2042,8 +2049,8 @@ impl DevSbMut<'_> {
         copy_super(&mut self.resize(), src)
     }
 
-    /// Section @F, one each device has its own of, resized to @u64s - made if
-    /// there's none: None if there's no room.
+    /// Section @F, one each device has its own of, its arm resized to @u64s -
+    /// made if there's none: None if there's no room.
     pub fn field_resize<F: SbSection + ?Sized>(&mut self, u64s: u32) -> Option<&mut F::Arm> {
         const { assert!(F::Arm::SINGLE_DEVICE, "a section every device's superblock shares: the filesystem's to change") };
         let off = self.resize().field_resize_id(F::Arm::FIELD_TYPE, u64s)?;
@@ -2718,10 +2725,10 @@ impl Fs {
 const _: () = assert!(size_of::<c::bch_sb_handle>() == size_of::<crate::locking::LockedBy<c::bch_sb_io, c::bch_sb_bdev>>(),
                       "ca->disk_sb is a struct bch_sb_handle to C");
 
-/// The u64s section @F is with @nr of its tail's entries: for
+/// The u64s section @F's arm is with @nr of its tail's entries: for
 /// field_resize() and field_get_minsize().
-pub fn sb_field_u64s<F: SbField + Unsized + ?Sized>(nr: usize) -> u32 {
-    (F::TAIL + nr * size_of::<F::Elem>()).div_ceil(size_of::<u64>()) as u32
+pub fn sb_field_u64s<F: SbSection<Arm: Unsized> + ?Sized>(nr: usize) -> u32 {
+    (F::Arm::TAIL + nr * size_of::<<F::Arm as Unsized>::Elem>()).div_ceil(size_of::<u64>()) as u32
 }
 
 // ── The filesystem's copies ──────────────────────────────────────────────
@@ -2809,7 +2816,7 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
         None => cpu.errors_silent.iter().for_each(|w| w.set(0)),
     }
 
-    let _ = c::bch_sb_field_members_v2::to_cpu(fs, sb);
+    let _ = c::bch_sb_field_members_v2::<Validated>::to_cpu(fs, sb);
 }
 
 /// @src's header and sections into @dst - all but those each device has its
@@ -2890,9 +2897,9 @@ pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), B
     // nothing to read back after the first write: init reads every section
     sb.dirty = 0;
 
-    c::bch_sb_field_replicas::to_cpu(fs, sb)?;
-    c::bch_sb_field_disk_groups::to_cpu(fs, sb)?;
-    c::bch_sb_field_extent_type_u64s::to_cpu(fs, sb)?;
+    c::bch_sb_field_replicas::<Validated>::to_cpu(fs, sb)?;
+    c::bch_sb_field_disk_groups::<Validated>::to_cpu(fs, sb)?;
+    c::bch_sb_field_extent_type_u64s::<Validated>::to_cpu(fs, sb)?;
     sb_update(fs, sb);
     Ok(())
 }
@@ -3031,7 +3038,8 @@ mod tests {
 
         let f = field(&mut buf, T::journal, 3);
         assert_eq!(f.as_bytes().len(), 24);
-        assert!(matches!(f.typed(), Ok(c::BchSbFieldRef::journal(j)) if j.field.u64s() == 3 && j.buckets.len() == 2));
+        assert_eq!(f.u64s(), 3);
+        assert!(matches!(f.typed(), Ok(c::BchSbFieldRef::journal(j)) if j.buckets.len() == 2));
 
         let f = field(&mut buf, T::from_bits(T::NR), 3);
         assert!(matches!(f.typed(), Err(t) if t == T::from_bits(T::NR)));
@@ -3061,21 +3069,21 @@ mod tests {
 
         type T = c::SbFieldType;
         // too short for its entries to start, and for its type
-        assert_eq!(short::<c::bch_sb_field_clean>(T::clean, 2),
-                   "too short (16 < 24 bytes)");
+        assert_eq!(short::<c::bch_sb_field_clean>(T::clean, 1),
+                   "too short (8 < 16 bytes)");
         // a grown type's floor
-        assert_eq!(short::<c::bch_sb_field_ext<Validated>>(T::ext, 10),
-                   "too short (80 < 88 bytes)");
+        assert_eq!(short::<c::bch_sb_field_ext<Validated>>(T::ext, 9),
+                   "too short (72 < 80 bytes)");
         // a sized type's size
-        assert_eq!(short::<c::bch_sb_field_crypt>(T::crypt, 7),
-                   "too short (56 < 64 bytes)");
-        assert_eq!(short::<c::bch_sb_field_quota>(T::quota, 2),
-                   format!("too short (16 < {} bytes)", size_of::<c::bch_sb_field_quota>()));
+        assert_eq!(short::<c::bch_sb_field_crypt>(T::crypt, 6),
+                   "too short (48 < 56 bytes)");
+        assert_eq!(short::<c::bch_sb_field_quota>(T::quota, 1),
+                   format!("too short (8 < {} bytes)", size_of::<c::bch_sb_field_quota>()));
     }
 
-    /// An ext section from before btrees_lost_data, 88 bytes, is an ext
-    /// section: the fields it has read as they are, the ones it doesn't as
-    /// zero - not as whatever follows it, which here is all ones.
+    /// An ext section from before btrees_lost_data, 88 bytes - an arm of 80 -
+    /// is an ext section: the fields it has read as they are, the ones it
+    /// doesn't as zero - not as whatever follows it, which here is all ones.
     #[test]
     fn sb_field_get_short_section() {
         let mut buf = [u64::MAX; 16];
@@ -3088,7 +3096,7 @@ mod tests {
         assert_eq!(e.btrees_lost_data().get(), 0);
         assert_eq!(e.btrees_clean().get(), 0);
         assert!(e.whole().is_none());
-        assert_eq!((e.as_bytes().len(), size_of_val(e)), (88, 88));
+        assert_eq!((e.as_bytes().len(), size_of_val(e)), (80, 80));
 
         // and as the one arm field() asks for
         let e = f.arm::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
@@ -3096,8 +3104,8 @@ mod tests {
         assert!(f.arm::<c::bch_sb_field_crypt>().is_none());
     }
 
-    /// A clean section is its header, then journal entries to its end - each
-    /// as long as it says.
+    /// A clean section's arm is its fields, past the section's header, then
+    /// journal entries to its end - each as long as it says.
     #[test]
     fn sb_field_clean_entries() {
         let mut buf = [0u64; 6];
@@ -3106,7 +3114,7 @@ mod tests {
         let f = field(&mut buf, c::SbFieldType::clean, 6);
 
         let Ok(c::BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
-        assert_eq!((clean.journal_seq.get(), clean.as_bytes().len()), (42, 48));
+        assert_eq!((clean.journal_seq.get(), clean.as_bytes().len()), (42, 40));
         let es: Vec<_> = clean.entries().map(|e| (e.u64s(), e.type_)).collect();
         assert_eq!(es, [(1, 7), (0, 0)]);
     }
@@ -3131,8 +3139,7 @@ mod tests {
         assert!(matches!(es[..], [Ok(_), Err(VStructError::Overrun { want: 48, have: 8, .. })]));
         assert_eq!(clean.journal_seq.get(), 42);
 
-        // one arm, named in the field's state - c::bch_sb_field_clean alone,
-        // the Validated one, isn't an arm of an Unvalidated field
+        // one arm, named in the field's state
         assert!(f.arm::<c::bch_sb_field_clean<Unvalidated>>().is_some());
     }
 
@@ -3145,7 +3152,7 @@ mod tests {
         let f = field(&mut buf, c::SbFieldType::ext, 15);
         let e = f.arm::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
         let w = e.whole().expect("all of it");
-        assert_eq!((w.flags0.into_bits().get(), e.flags0().into_bits().get(), size_of_val(e)), (7, 7, 120));
+        assert_eq!((w.flags0.into_bits().get(), e.flags0().into_bits().get(), size_of_val(e)), (7, 7, 112));
 
         let mut buf = [0u64; 16];
         let f = field(&mut buf, c::SbFieldType::ext, 10);

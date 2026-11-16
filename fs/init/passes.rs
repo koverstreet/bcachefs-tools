@@ -320,7 +320,7 @@ pub fn prt_stable(out: &mut Printbuf, stable: u64) {
 
 /// When each pass last ran and how long it took, by stable id: what
 /// ratelimiting a pass goes by.
-impl SbFieldOps for c::bch_sb_field_recovery_passes {
+impl SbFieldOps for c::bch_sb_field_recovery_passes<Validated> {
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
                 r: &c::bch_sb_field_recovery_passes<Unvalidated>) {
         while out.nr_tabstops() < 2 {
@@ -339,7 +339,7 @@ impl SbFieldOps for c::bch_sb_field_recovery_passes {
 
 // ── Its entries ──────────────────────────────────────────────────────────────
 
-type Section = c::bch_sb_field_recovery_passes;
+type Section = c::bch_sb_field_recovery_passes<Validated>;
 
 /// For self healing - e.g. missing backpointers - that would otherwise keep
 /// scheduling an expensive repair pass that can wait: run it at most once per
