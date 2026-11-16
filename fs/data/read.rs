@@ -1343,13 +1343,7 @@ impl<'r> Planned<'r, '_> {
         let r = reads.get();
         let make = move |home| fragment_task(r, Fragment { ca, ..Fragment::new(orig.fs(), Kind::Home(home, buffers), plan) },
                                              orig);
-        start_task(t, plan.pick.do_ec_reconstruct, |inline| unsafe {
-            if inline {
-                slot.start(Spawn::Inline, fs.tasks(), make)
-            } else {
-                slot.start(Spawn::Queue(Queue::system_dfl()), fs.tasks(), make)
-            }
-        });
+        start_task(t, plan.pick.do_ec_reconstruct, |at| unsafe { slot.start(at, fs.tasks(), make) });
         Ok(())
     }
 
@@ -1381,13 +1375,7 @@ impl<'r> Planned<'r, '_> {
         };
         let r = reads.get();
         let make = move |_| fragment_task(r, f, orig);
-        start_task(t, reconstruct, |inline| unsafe {
-            if inline {
-                slot.start(Spawn::Inline, fs.tasks(), make)
-            } else {
-                slot.start(Spawn::Queue(Queue::system_dfl()), fs.tasks(), make)
-            }
-        });
+        start_task(t, reconstruct, |at| unsafe { slot.start(at, fs.tasks(), make) });
         Ok(())
     }
 }
@@ -1795,17 +1783,17 @@ async fn fragment_task<'r>(r: ReadRef, mut f: Fragment<'r>, read: &'r Rbio) {
 
 /// A fragment's task, started by @start: queued if it's a @reconstruct - the
 /// retry makes a transaction of its own, and this thread is in one - else
-/// inline, @start(true), till it waits on its IO.
-fn start_task(t: &TransAttempt<'_, '_>, reconstruct: bool, start: impl FnOnce(bool)) {
+/// inline, @start(Spawn::Inline), till it waits on its IO.
+fn start_task(t: &TransAttempt<'_, '_>, reconstruct: bool, start: impl FnOnce(Spawn<'static, 'static>)) {
     if reconstruct {
-        return start(false);
+        return start(Spawn::Queue(Queue::system_dfl()));
     }
     // submit_bio() can block for an unbounded time on a congested
     // device; flag it so the long srcu hold that results doesn't trip
     // the warning in bch2_trans_unlock_long() — it's legitimate IO,
     // not a stuck codepath.
     t.trans().set_srcu_io_submitted(true);
-    start(true);
+    start(Spawn::Inline);
     // We just submitted IO which may block, we expect relock fail
     // events and shouldn't count them:
     t.trans().set_notrace_relock_fail();
