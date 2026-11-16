@@ -72,6 +72,7 @@ void *bch2_per_cpu_ptr(void *pcp, unsigned cpu);
 int bch2_cpu_possible_next(int cpu);
 void bch2_preempt_disable(void);
 void bch2_preempt_enable(void);
+void bch2_preempt_schedule(void);
 void bch2_migrate_disable(void);
 void bch2_migrate_enable(void);
 unsigned bch2_raw_smp_processor_id(void);

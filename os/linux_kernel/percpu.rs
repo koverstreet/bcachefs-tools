@@ -83,10 +83,14 @@
 //! Each arch's are written once, for every width: the asm takes the
 //! operand's register modifier, which sizes the instruction.
 //!
-//! C's everywhere, out of line: per_cpu_ptr() and the possible CPUs, for the
-//! sums; preempt_disable() and _enable(), for CpuGuard; this_cpu_ptr() but on
-//! arm64. Around a ThisCpu on x86 that's three calls where C makes none - a
-//! cost for a slowpath, not yet for anything hotter.
+//! So are current, the CPU's number, preempt_disable() and _enable(),
+//! this_cpu_ptr() and per_cpu_ptr(): on x86 each one instruction on the
+//! kernel's own per-CPU variables, %rip relative as 6.15+ addresses them -
+//! enabling preemption calls out only to reschedule - and local_irq_save() and
+//! _restore() are pushf/cli and sti. Where the kernel's config makes one more
+//! than that (preempt debugging or tracing; paravirt or traced irqs, RT) it's
+//! C's call. arm64 has current (sp_el0) and this_cpu_ptr() inline, the rest
+//! C's, out of line; the walk over the possible CPUs is C's everywhere.
 
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::marker::PhantomData;
@@ -94,8 +98,7 @@ use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::c::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
-              rust_local_unlock_irqrestore};
+use crate::c::rust_local_lock_init;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{current_gfp, current_gfp_context_raw, AllocError, Flags};
 use crate::util::ffi::Opaque;
@@ -122,7 +125,7 @@ pub fn migrate_enable() {
 /// The CPU the task's on: unless it's kept there, it may not be by the time
 /// this is used.
 pub fn raw_smp_processor_id() -> c_uint {
-    unsafe { c::bch2_raw_smp_processor_id() }
+    arch::raw_smp_processor_id()
 }
 
 // ── The operations, an arch's own ────────────────────────────────────────
@@ -140,7 +143,9 @@ pub trait PerCpuWord: Copy + Eq {
 
 #[cfg(target_arch = "x86_64")]
 mod arch {
-    use super::{bch2_this_cpu_ptr, PerCpuWord, Pinned};
+    use super::{PerCpuWord, Pinned};
+    use core::ffi::{c_uint, c_ulong};
+    use core::sync::atomic::{compiler_fence, Ordering::SeqCst};
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
 
@@ -181,7 +186,110 @@ mod arch {
 
     #[inline(always)]
     pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
-        unsafe { bch2_this_cpu_ptr(pcp.cast()).cast() }
+        let mut p = pcp as usize;
+        unsafe {
+            core::arch::asm!(this_cpu_ptr_asm!(), ptr = inout(reg) p,
+                             options(att_syntax, nostack, readonly));
+        }
+        p as *mut T
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn per_cpu_ptr<T>(pcp: *mut T, cpu: c_uint) -> *mut T {
+        let off: usize;
+        unsafe {
+            core::arch::asm!(per_cpu_offset_asm!(), cpu = in(reg) cpu as usize, off = out(reg) off,
+                             options(att_syntax, nostack, pure, readonly, preserves_flags));
+        }
+        pcp.wrapping_byte_add(off)
+    }
+
+    /// The per-CPU current_task, as get_current() reads it.
+    #[inline(always)]
+    pub(crate) fn current_task() -> *mut crate::c::task_struct {
+        let task: *mut crate::c::task_struct;
+        unsafe {
+            core::arch::asm!(current_task_asm!(), val = out(reg) task,
+                             options(att_syntax, nostack, pure, readonly, preserves_flags));
+        }
+        task
+    }
+
+    #[inline(always)]
+    pub(super) fn raw_smp_processor_id() -> c_uint {
+        let cpu: c_uint;
+        unsafe {
+            core::arch::asm!(cpu_number_asm!(), val = out(reg) cpu,
+                             options(att_syntax, nostack, readonly, preserves_flags));
+        }
+        cpu
+    }
+
+    /* not nomem: a compiler barrier, as C's */
+    #[inline(always)]
+    pub(super) fn preempt_disable() {
+        if !PREEMPT_INLINE {
+            unsafe { crate::c::bch2_preempt_disable() };
+        } else if PREEMPT_COUNT {
+            unsafe { core::arch::asm!(preempt_count_inc_asm!(), options(att_syntax, nostack)) };
+        } else {
+            compiler_fence(SeqCst);
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn preempt_enable() {
+        if !PREEMPT_INLINE {
+            return unsafe { crate::c::bch2_preempt_enable() };
+        }
+        if !PREEMPT_COUNT {
+            return compiler_fence(SeqCst);
+        }
+        let resched: u8;
+        unsafe {
+            core::arch::asm!(preempt_count_dec_asm!(), "sete {r}", r = out(reg_byte) resched,
+                             options(att_syntax, nostack));
+        }
+        if PREEMPTION && resched != 0 {
+            unsafe { crate::c::bch2_preempt_schedule() };
+        }
+    }
+
+    /* not nomem: a compiler barrier, as C's; the push and pop are the stack */
+    #[inline(always)]
+    pub(super) fn local_irq_save() -> c_ulong {
+        if !IRQ_INLINE {
+            return unsafe { crate::c::rust_local_irq_save() };
+        }
+        let flags: c_ulong;
+        unsafe { core::arch::asm!("pushf", "pop {f}", "cli", f = out(reg) flags, options(att_syntax)) };
+        flags
+    }
+
+    #[inline(always)]
+    pub(super) fn local_irq_restore(flags: c_ulong) {
+        const X86_EFLAGS_IF: c_ulong = 1 << 9;
+
+        if !IRQ_INLINE {
+            return unsafe { crate::c::rust_local_irq_restore(flags) };
+        }
+        if flags & X86_EFLAGS_IF != 0 {
+            unsafe { core::arch::asm!("sti", options(att_syntax, nostack)) };
+        }
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn local_lock_irqsave(pcp: *mut crate::c::local_lock_t) -> c_ulong {
+        if IRQ_INLINE { local_irq_save() } else { unsafe { crate::c::rust_local_lock_irqsave(pcp) } }
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn local_unlock_irqrestore(pcp: *mut crate::c::local_lock_t, flags: c_ulong) {
+        if IRQ_INLINE {
+            local_irq_restore(flags)
+        } else {
+            unsafe { crate::c::rust_local_unlock_irqrestore(pcp, flags) }
+        }
     }
 }
 
@@ -237,6 +345,57 @@ mod arch {
     pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
         my_cpu(pcp)
     }
+
+    /// The task in sp_el0, as get_current() reads it.
+    #[inline(always)]
+    pub(crate) fn current_task() -> *mut crate::c::task_struct {
+        let task: *mut crate::c::task_struct;
+        unsafe {
+            core::arch::asm!("mrs {}, sp_el0", out(reg) task, options(nomem, nostack, pure, preserves_flags));
+        }
+        task
+    }
+
+    pub(super) use super::c_arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore,
+                                   per_cpu_ptr, preempt_disable, preempt_enable, raw_smp_processor_id};
+}
+
+/// What's C's, out of line, on an arch that doesn't have its own.
+#[cfg(not(target_arch = "x86_64"))]
+mod c_arch {
+    use core::ffi::c_uint;
+
+    pub(super) unsafe fn per_cpu_ptr<T>(pcp: *mut T, cpu: c_uint) -> *mut T {
+        unsafe { super::bch2_per_cpu_ptr(pcp.cast(), cpu).cast() }
+    }
+
+    pub(super) fn raw_smp_processor_id() -> c_uint {
+        unsafe { crate::c::bch2_raw_smp_processor_id() }
+    }
+
+    pub(super) fn preempt_disable() {
+        unsafe { crate::c::bch2_preempt_disable() }
+    }
+
+    pub(super) fn preempt_enable() {
+        unsafe { crate::c::bch2_preempt_enable() }
+    }
+
+    pub(super) fn local_irq_save() -> core::ffi::c_ulong {
+        unsafe { crate::c::rust_local_irq_save() }
+    }
+
+    pub(super) fn local_irq_restore(flags: core::ffi::c_ulong) {
+        unsafe { crate::c::rust_local_irq_restore(flags) }
+    }
+
+    pub(super) unsafe fn local_lock_irqsave(pcp: *mut crate::c::local_lock_t) -> core::ffi::c_ulong {
+        unsafe { crate::c::rust_local_lock_irqsave(pcp) }
+    }
+
+    pub(super) unsafe fn local_unlock_irqrestore(pcp: *mut crate::c::local_lock_t, flags: core::ffi::c_ulong) {
+        unsafe { crate::c::rust_local_unlock_irqrestore(pcp, flags) }
+    }
 }
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -267,9 +426,18 @@ mod arch {
     pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
         unsafe { bch2_this_cpu_ptr(pcp.cast()).cast() }
     }
+
+    pub(crate) fn current_task() -> *mut crate::c::task_struct {
+        unsafe { crate::c::bch2_current() }
+    }
+
+    pub(super) use super::c_arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore,
+                                   per_cpu_ptr, preempt_disable, preempt_enable, raw_smp_processor_id};
 }
 
-use arch::this_cpu_ptr;
+use arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore, per_cpu_ptr,
+           preempt_disable, preempt_enable, this_cpu_ptr};
+pub(crate) use arch::current_task;
 
 /// The task held to this CPU while it lives: for this CPU's copy, which
 /// is the copy of whatever CPU the task is on.
@@ -292,14 +460,14 @@ unsafe impl Pinned for CpuGuard {}
 impl CpuGuard {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        unsafe { c::bch2_preempt_disable() };
+        preempt_disable();
         CpuGuard { _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
     }
 }
 
 impl Drop for CpuGuard {
     fn drop(&mut self) {
-        unsafe { c::bch2_preempt_enable() };
+        preempt_enable();
     }
 }
 
@@ -319,15 +487,14 @@ unsafe impl Pinned for IrqGuard {}
 impl IrqGuard {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        let flags = unsafe { rust_local_irq_save() };
+        let flags = local_irq_save();
         IrqGuard { flags, _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
     }
 }
 
 impl Drop for IrqGuard {
     fn drop(&mut self) {
-        // SAFETY: what new() saved, on this CPU
-        unsafe { rust_local_irq_restore(self.flags) }
+        local_irq_restore(self.flags)
     }
 }
 
@@ -350,7 +517,7 @@ unsafe impl Pinned for LocalLockGuard<'_> {}
 impl Drop for LocalLockGuard<'_> {
     fn drop(&mut self) {
         // SAFETY: this CPU's, which it took
-        unsafe { rust_local_unlock_irqrestore(self.pcp, self.flags) }
+        unsafe { local_unlock_irqrestore(self.pcp, self.flags) }
     }
 }
 
@@ -423,7 +590,7 @@ impl<T> PerCpu<T> {
     pub unsafe fn alloc_init<C>(init: InitCopy<T, C>, ctx: *mut C) -> Result<Self, AllocError> {
         let p = PerCpu::<MaybeUninit<T>>::alloc()?.into_raw().cast::<T>();
         for cpu in possible_cpus() {
-            unsafe { init(bch2_per_cpu_ptr(p.cast(), cpu).cast(), ctx, cpu) };
+            unsafe { init(per_cpu_ptr(p.cast::<u8>(), cpu).cast(), ctx, cpu) };
         }
         Ok(PerCpu(p))
     }
@@ -537,7 +704,7 @@ impl<'a, T> PerCpuRef<'a, T> {
     /// Each possible CPU's copy.
     #[inline]
     pub fn cpus(self) -> impl Iterator<Item = CpuCopy<'a, T>> {
-        possible_cpus().map(move |cpu| CpuCopy(unsafe { bch2_per_cpu_ptr(self.0.cast(), cpu) }.cast(), PhantomData))
+        possible_cpus().map(move |cpu| CpuCopy(unsafe { per_cpu_ptr(self.0, cpu) }, PhantomData))
     }
 
     pub fn this_cpu<'g>(self, g: &'g impl Pinned) -> ThisCpu<'g, T>
@@ -572,7 +739,7 @@ impl<'a> PerCpuRef<'a, Opaque<c::local_lock_t>> {
     pub fn lock_irqsave(self) -> LocalLockGuard<'a> {
         let pcp = self.0.cast::<c::local_lock_t>();
         // SAFETY: live for 'a, and initialized
-        let flags = unsafe { rust_local_lock_irqsave(pcp) };
+        let flags = unsafe { local_lock_irqsave(pcp) };
         LocalLockGuard { pcp, flags, _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
     }
 }
@@ -628,7 +795,7 @@ impl<T: PerCpuWord + From<u8>> PerCpuRef<'_, T> {
     pub fn set(&self, v: T) {
         for cpu in possible_cpus() {
             // SAFETY: a live CPU's copy; another CPU's, written as read
-            unsafe { core::ptr::write_volatile(bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<T>(), T::from(0)) };
+            unsafe { core::ptr::write_volatile(per_cpu_ptr(self.0, cpu), T::from(0)) };
         }
         self.xchg(v);
     }
@@ -673,7 +840,7 @@ impl<'a, T: CpuShared> PerCpuRef<'a, T> {
     pub fn each_cpu(self) -> impl Iterator<Item = &'a T> {
         // SAFETY: a live CPU's copy, for 'a; CpuShared, so a shared
         // reference races nothing
-        possible_cpus().map(move |cpu| unsafe { &*bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<T>() })
+        possible_cpus().map(move |cpu| unsafe { &*per_cpu_ptr(self.0, cpu) })
     }
 
     /// This CPU's copy - or by the time it's used, the one this was on:

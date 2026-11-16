@@ -289,6 +289,14 @@ void bch2_preempt_enable(void)
 	preempt_enable();
 }
 
+/* preempt_enable()'s reschedule, for Rust's inline preempt count */
+void bch2_preempt_schedule(void)
+{
+#ifdef CONFIG_PREEMPTION
+	__preempt_schedule();
+#endif
+}
+
 unsigned bch2_raw_smp_processor_id(void)
 {
 	return raw_smp_processor_id();

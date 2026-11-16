@@ -12,7 +12,7 @@ use core::ptr::NonNull;
 /// This thread's task: current.
 #[inline(always)]
 pub fn current() -> *mut c::task_struct {
-    unsafe { c::bch2_current() }
+    crate::os::percpu::current_task()
 }
 
 #[inline(always)]

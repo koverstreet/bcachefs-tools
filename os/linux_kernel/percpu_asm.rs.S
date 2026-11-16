@@ -13,6 +13,16 @@
 #include <asm/lse.h>
 #endif
 
+/*
+ * 7.3+ x86-64 kernels with a preempt count keep it in a 64 bit word,
+ * need_resched in the top bit: the decrement must see all of it.
+ */
+#ifdef CONFIG_HAS_SEPARATE_PREEMPT_RESCHED_BITS
+#define PREEMPT_COUNT_OP(op)	op "q"
+#else
+#define PREEMPT_COUNT_OP(op)	op "l"
+#endif
+
 // Cut here.
 
 // Each for every width: $w is the register modifier for the operand, which
@@ -33,6 +43,33 @@ macro_rules! this_cpu_cmpxchg_asm {
     ($w:literal) => { concat_literals!("cmpxchg {new" $w "}, %" __stringify(__percpu_seg) ":({ptr})") };
 }
 
+// The kernel's own per-CPU variables, %rip relative, as 6.15+ address them
+
+macro_rules! current_task_asm {
+    () => { concat_literals!("mov %" __stringify(__percpu_seg) ":current_task(%rip), {val}") };
+}
+
+macro_rules! this_cpu_ptr_asm {
+    () => { concat_literals!("add %" __stringify(__percpu_seg) ":this_cpu_off(%rip), {ptr}") };
+}
+
+macro_rules! per_cpu_offset_asm {
+    () => { concat_literals!("mov __per_cpu_offset(,{cpu},8), {off}") };
+}
+
+macro_rules! cpu_number_asm {
+    () => { concat_literals!("mov %" __stringify(__percpu_seg) ":cpu_number(%rip), {val:e}") };
+}
+
+macro_rules! preempt_count_inc_asm {
+    () => { concat_literals!(PREEMPT_COUNT_OP("inc") " %" __stringify(__percpu_seg) ":__preempt_count(%rip)") };
+}
+
+// sets ZF if the count, which holds need_resched inverted, is now 0
+macro_rules! preempt_count_dec_asm {
+    () => { concat_literals!(PREEMPT_COUNT_OP("dec") " %" __stringify(__percpu_seg) ":__preempt_count(%rip)") };
+}
+
 #elif defined(CONFIG_X86_64)
 
 macro_rules! this_cpu_read_asm {
@@ -45,6 +82,30 @@ macro_rules! this_cpu_add_asm {
 
 macro_rules! this_cpu_cmpxchg_asm {
     ($w:literal) => { concat_literals!("cmpxchg {new" $w "}, ({ptr})") };
+}
+
+macro_rules! current_task_asm {
+    () => { concat_literals!("mov current_task(%rip), {val}") };
+}
+
+macro_rules! this_cpu_ptr_asm {
+    () => { concat_literals!("/* {ptr} */") };
+}
+
+macro_rules! per_cpu_offset_asm {
+    () => { concat_literals!("xor {off:e}, {off:e} /* {cpu} */") };
+}
+
+macro_rules! cpu_number_asm {
+    () => { concat_literals!("xor {val:e}, {val:e}") };
+}
+
+macro_rules! preempt_count_inc_asm {
+    () => { concat_literals!(PREEMPT_COUNT_OP("inc") " __preempt_count(%rip)") };
+}
+
+macro_rules! preempt_count_dec_asm {
+    () => { concat_literals!(PREEMPT_COUNT_OP("dec") " __preempt_count(%rip)") };
 }
 
 #elif defined(CONFIG_ARM64)
@@ -64,5 +125,44 @@ macro_rules! this_cpu_add_asm {
         "ldadd\t{val" $w "}, {tmp" $w "}, [{ptr}]\n"
         __nops(3))) };
 }
+
+#endif
+
+// Whether there's a preempt count, and whether enabling preemption may
+// reschedule: preempt_disable() and _enable() as that kernel's config has them
+
+#ifdef CONFIG_X86_64
+
+#ifdef CONFIG_PREEMPT_COUNT
+const PREEMPT_COUNT: bool = true;
+#else
+const PREEMPT_COUNT: bool = false;
+#endif
+
+#ifdef CONFIG_PREEMPTION
+const PREEMPTION: bool = true;
+#else
+const PREEMPTION: bool = false;
+#endif
+
+// Whether the count is only the count: debug and the preemptoff tracer make
+// preempt_count_add() and _sub() calls
+
+#if defined(CONFIG_DEBUG_PREEMPT) || defined(CONFIG_TRACE_PREEMPT_TOGGLE)
+const PREEMPT_INLINE: bool = false;
+#else
+const PREEMPT_INLINE: bool = true;
+#endif
+
+// Whether local_irq_save() and _restore() are the native pushf/cli and sti -
+// not paravirt calls, nor traced - and local_lock_irqsave() is only that:
+// not RT's sleeping lock, no lockdep
+
+#if defined(CONFIG_PARAVIRT_XXL) || defined(CONFIG_TRACE_IRQFLAGS) || \
+    defined(CONFIG_PREEMPT_RT) || defined(CONFIG_DEBUG_LOCK_ALLOC)
+const IRQ_INLINE: bool = false;
+#else
+const IRQ_INLINE: bool = true;
+#endif
 
 #endif
