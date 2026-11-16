@@ -311,20 +311,21 @@ trait EntryOps: ArmRef {
     /// @self, the arm of entry @e.
     fn to_text(&self, e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, fs: Option<&Fs>);
 
-    /// Entry @e as its type, its size checked.
+    /// Entry @e's arm, its type, its size checked.
     fn arm(e: &[u8]) -> &Self {
-        Self::arm_ref(e).expect("its size, checked")
+        Self::arm_ref(&e[HEAD..]).expect("its size, checked")
     }
 }
 
 fn entry_validate<A: EntryOps + ?Sized>(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
+    let len = e.len() - HEAD;
     let bad = match A::SIZE {
         Size::Any          => None,
-        Size::Exactly(err) => (e.len() != A::MIN_LEN).then_some((err, "")),
-        Size::AtLeast(err) => (e.len() < A::MIN_LEN).then_some((err, "at least ")),
+        Size::Exactly(err) => (len != A::MIN_LEN).then_some((err, "")),
+        Size::AtLeast(err) => (len < A::MIN_LEN).then_some((err, "at least ")),
     };
     if let Some((err, at_least)) = bad {
-        ctx.err(err, &message!("bad size {}, expected {at_least}{}", e.len(), A::MIN_LEN))?;
+        ctx.err(err, &message!("bad size {len}, expected {at_least}{}", A::MIN_LEN))?;
         e.fill(0);
         return Ok(());
     }
@@ -425,15 +426,16 @@ impl EntryOps for c::jset_entry_usage<Unvalidated> {
     }
 }
 
-fn data_usage_replicas(e: &[u8]) -> Option<SbEntry<'_>> {
-    e.get(offset_of!(Head<c::jset_entry_data_usage>, r)..)
+/// The replicas entry in data_usage arm @v's bytes.
+fn data_usage_replicas(v: &[u8]) -> Option<SbEntry<'_>> {
+    v.get(offset_of!(c::jset_entry_data_usage_whole, r)..)
         .and_then(|r| c::bch_replicas_entry_v1::<Unvalidated>::from_bytes(r).ok())
         .map(SbEntry::from)
 }
 
 impl EntryOps for c::jset_entry_data_usage<Unvalidated> {
     fn validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
-        let Some(r) = data_usage_replicas(e) else {
+        let Some(r) = data_usage_replicas(&e[HEAD..]) else {
             ctx.err(id::journal_entry_data_usage_bad_size, &message!("invalid journal entry usage: bad size"))?;
             e.fill(0);
             return Ok(());

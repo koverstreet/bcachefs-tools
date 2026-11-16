@@ -944,7 +944,6 @@ pub struct jset_entry {
     pub type_: u8, /* designates what this jset holds */
     pub pad: [u8; 3],
 
-    pub start: [c::bkey_i; 0],
     pub _data: [u64; 0],
 }
 
@@ -1621,6 +1620,7 @@ tagged_union! {
     #[tag(type_: u8)]
     #[tag_enum(JsetEntryType: u32, nr)]
     #[size(header)]
+    #[payload]
     pub enum jset_entry {
         /// Btree key updates
         btree_keys(c::jset_entry_btree_keys) = 0,
@@ -1663,13 +1663,11 @@ tagged_union! {
 /* The entries whose payload is keys: */
 macro_rules! jset_entry_keys {
     ($($name:ident),*) => { $(
-        #[unsized_vstruct(u64s = entry.u64s, entries = thin c::bkey_i)]
+        #[whole(tail = start: [u64], entries = thin c::bkey_i)]
         #[repr(C)]
         #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
         pub struct $name {
-            pub entry: Head<c::jset_entry>,
-            pub start: [c::bkey_i; 0],
-            pub _data: [u64; 0],
+            pub start: [u64; 0],
         }
     )* };
 }
@@ -1706,11 +1704,10 @@ impl jset_entry<Unvalidated> {
 }
 
 /* Legacy, no longer written: */
-#[unsized_vstruct(u64s = entry.u64s)]
+#[whole(tail = _data: [u64])]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_prio_ptrs {
-    pub entry: Head<c::jset_entry>,
     pub _data: [u64; 0],
 }
 
@@ -1724,19 +1721,17 @@ pub struct jset_entry_prio_ptrs {
  * then record that we skipped it so that the next time we crash and recover we
  * don't think there was a missing journal entry.
  */
-#[whole(u64s = repr.entry.u64s)]
+#[whole]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_blacklist {
-    pub entry: Head<c::jset_entry>,
     pub seq: Le64,
 }
 
-#[whole(u64s = repr.entry.u64s)]
+#[whole]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_blacklist_v2 {
-    pub entry: Head<c::jset_entry>,
     pub start: Le64,
     pub end: Le64,
 }
@@ -1750,29 +1745,26 @@ pub enum FsUsageType {
     key_version = 2,
 }
 
-#[whole(u64s = repr.entry.u64s)]
+#[whole]
 #[repr(C, packed)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_usage {
-    pub entry: Head<c::jset_entry>,
     pub v: Le64,
 }
 
 /* r's devs[] are in the tail: the entry's size is its u64s, not r's nr_devs */
-#[unsized_vstruct(tail = [u8], u64s = entry.u64s)]
+#[whole]
 #[repr(C, packed)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_data_usage {
-    pub entry: Head<c::jset_entry>,
     pub v: Le64,
     pub r: Head<c::bch_replicas_entry_v1>,
 }
 
-#[whole(u64s = repr.entry.u64s)]
+#[whole]
 #[repr(C, packed)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_clock {
-    pub entry: Head<c::jset_entry>,
     pub rw: u8,
     pub pad: [u8; 7],
     pub time: Le64,
@@ -1786,11 +1778,10 @@ pub struct jset_entry_dev_usage_type {
     pub fragmented: Le64,
 }
 
-#[unsized_vstruct(u64s = entry.u64s)]
+#[whole(tail = d: [c::jset_entry_dev_usage_type])]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_dev_usage {
-    pub entry: Head<c::jset_entry>,
     pub dev: Le32,
     pub pad: u32,
 
@@ -1800,27 +1791,24 @@ pub struct jset_entry_dev_usage {
     pub d: [c::jset_entry_dev_usage_type; 0],
 }
 
-#[unsized_vstruct(u64s = entry.u64s)]
+#[whole(tail = d: [u8])]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_log {
-    pub entry: Head<c::jset_entry>,
     pub d: [u8; 0],
 }
 
-#[whole(u64s = repr.entry.u64s)]
+#[whole]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_datetime {
-    pub entry: Head<c::jset_entry>,
     pub seconds: Le64,
 }
 
-#[whole(u64s = repr.entry.u64s)]
+#[whole]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_rewind_limit {
-    pub entry: Head<c::jset_entry>,
     pub seq: Le64,
 }
 
@@ -1828,11 +1816,10 @@ pub struct jset_entry_rewind_limit {
  * Records a journal rewind in progress. Keys from journal entries
  * with seq in (to, from] use overwrite entries instead of btree_keys.
  */
-#[whole(u64s = repr.entry.u64s)]
+#[whole]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_rewind {
-    pub entry: Head<c::jset_entry>,
     pub from: Le64,
     pub to: Le64,
 }

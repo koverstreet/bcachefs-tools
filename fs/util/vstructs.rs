@@ -1947,8 +1947,9 @@ mod tests {
         assert_eq!(es[1].bytes(), 32);
     }
 
-    /// A data_usage entry is as long as its u64s say; r's devs are in its
-    /// tail. One shorter than its header isn't one.
+    /// A data_usage entry is as long as its u64s say, its arm what's past its
+    /// header; r's devs are in the arm's tail. One shorter than the arm's
+    /// fields isn't one.
     #[test]
     fn data_usage_entry() {
         let mut buf = [0u64; 3];
@@ -1960,8 +1961,8 @@ mod tests {
         // SAFETY: the buffer's, as long as its count says
         let e = unsafe { c::jset_entry::<Validated>::from_head_ptr(buf.as_ptr().cast()) };
         let Ok(c::JsetEntryRef::data_usage(u)) = e.typed() else { panic!("a data_usage entry") };
-        assert_eq!((u.v.get(), u.as_bytes().len()), (77, 24));
-        assert_eq!(&u._tail[..u.r.nr_devs as usize], [3, 5]);
+        assert_eq!((u.v.get(), u.as_bytes().len()), (77, 16));
+        assert_eq!(&u._rest[..u.r.nr_devs as usize], [3, 5]);
 
         let mut e = entry(1);
         e.type_ = c::JsetEntryType::data_usage.0 as u8;
@@ -1992,10 +1993,6 @@ mod tests {
         let mut f = Head::<c::bch_sb_field>::default();
         f.set_val_u64s(3);
         assert_eq!(f.bytes(), 24);
-
-        let mut l = Head::<c::jset_entry_log>::default();
-        l.set_val_u64s(2);
-        assert_eq!(l.bytes(), 8 + 16);
 
         let mut b = ::pin_init::zeroed::<Head<c::btree_node_entry>>();
         b.set_val_u64s(3);

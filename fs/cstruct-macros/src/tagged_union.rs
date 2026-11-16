@@ -120,7 +120,9 @@
 //! edit. And for what's done to whichever arm it is - an ops trait's methods
 //! - NAME_match!(r, a => ..) on what typed() gave, and NAME_by_tag!(tag, A =>
 //! .., _ => ..) by the tag alone: `a: A`, or A, names the arm's type, A<S> in
-//! state S.
+//! state S. With `#[payload]`, an arm is what's past the header, payload() -
+//! as a key value is what's past the key - and the header the storage's
+//! alone.
 //!
 //! Or, `#[storage(HEAD)] #[size(arm)]`, each value is as long as the arm its
 //! tag selects - an ACL's entries: no count to step by, so a tag this version
@@ -170,6 +172,9 @@ struct TaggedUnion {
     /// #[packed]: C's __packed - for a struct, the payload right after the
     /// tag whatever the arms' alignment, which is what the format says.
     packed:    bool,
+    /// #[payload]: a header union's arms are what's past the header, not
+    /// embedding it - until every one's are.
+    payload:   bool,
     size:      Size,
     /// The arm types defined in the block, for nestify::nest!.
     defs:      Vec<Ident>,
@@ -242,7 +247,7 @@ struct Decl {
 
 /// The attributes tagged_union! reads. The rest are the storage's - or with
 /// a `*` after, each arm type's the block defines.
-const OURS: &[&str] = &["tag", "tag_enum", "storage", "pad", "size", "packed"];
+const OURS: &[&str] = &["tag", "tag_enum", "storage", "pad", "size", "packed", "payload"];
 
 /// The union the declaration says, and what's generated from its arms besides
 /// it: the tag enum and NAME_arms!.
@@ -277,7 +282,7 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
 
     let mut tag: Option<(Ident, syn::Type)> = None;
     let mut tag_enum: Option<EnumDef> = None;
-    let (mut storage, mut pad, mut size, mut packed) = (None, None, None, false);
+    let (mut storage, mut pad, mut size, mut packed, mut payload) = (None, None, None, false, false);
     for a in &ours {
         let kind = a.path().get_ident().map(ToString::to_string).unwrap_or_default();
         let bad = |e: syn::Error| err(&format!("#[{kind}(..)]: {e}"));
@@ -300,6 +305,7 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
                                                size(header); or of its tag, its arm's, size(arm)"))),
             }),
             "packed"  => packed = true,
+            "payload" => payload = true,
             _ => unreachable!(),
         }
     }
@@ -332,6 +338,7 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
         }).collect(),
         pad,
         packed,
+        payload,
         size: size.ok_or_else(|| err("no #[size(..)] - what it's a function of, pad, header or arm"))?,
         defs: defs.iter().map(|(name, _)| name.clone()).collect(),
     };
@@ -681,6 +688,11 @@ impl Gen<'_> {
         let doc = format!(" One of {name}'s arms, with the bytes its header says are its - as\n \
                            many as there are, for one written before its type grew: what\n \
                            {name}'s typed() gives.");
+        let head = quote!(::core::mem::size_of::<<Self as #vs::Unsized>::Head>());
+        let (arm_bytes, arm_bytes_mut) = match tu.payload {
+            true  => (quote!(self.payload()), quote!(&mut self.as_bytes_mut()[#head..])),
+            false => (quote!(self.as_bytes()), quote!(self.as_bytes_mut())),
+        };
         let mut out = self.given_storage(&storages);
         out.extend(self.arms_enum(en_ref, &doc, quote!(#[derive(Clone, Copy)]),
                                   quote!(<'a, St: #vs::State = #vs::Validated>), |a| {
@@ -700,11 +712,16 @@ impl Gen<'_> {
             let tag_fn = self.tag_fn(" The tag, whether this version knows it or not.", quote!(#det::get(self)));
             let selects = self.select(|a| {
                 let (arm, ty) = (&a.name, &a.ty);
-                quote!(<#ty<#vs::#st> as #vs::ArmRef>::arm_ref(self.as_bytes()).map(#en_ref::#arm).ok_or(#t_tag))
+                quote!(<#ty<#vs::#st> as #vs::ArmRef>::arm_ref(#arm_bytes).map(#en_ref::#arm).ok_or(#t_tag))
             });
             out.extend(quote! {
                 impl #s_ty<#vs::#st> {
                     #tag_fn
+
+                    /// Its arm's bytes: what's past its header.
+                    #vis fn payload(&self) -> &[u8] {
+                        &self.as_bytes()[#head..]
+                    }
 
                     /// The arm its tag selects, over its bytes - as many as its count
                     /// says, as its ArmRef has it: Err(the tag) if it isn't one of
@@ -724,7 +741,7 @@ impl Gen<'_> {
                         if #det::get(self) != A::TAG {
                             return None;
                         }
-                        A::arm_ref(self.as_bytes())
+                        A::arm_ref(#arm_bytes)
                     }
 
                     /// arm(), to edit: as its ArmRef has it.
@@ -735,7 +752,7 @@ impl Gen<'_> {
                         if #det::get(self) != A::TAG {
                             return None;
                         }
-                        A::arm_mut(self.as_bytes_mut())
+                        A::arm_mut(#arm_bytes_mut)
                     }
                 }
             });

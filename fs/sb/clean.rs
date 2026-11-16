@@ -17,7 +17,7 @@ use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::journal::entries::{EntryWriter, NoRoom};
+use crate::journal::entries::{entry_u64s, EntryWriter, NoRoom};
 use crate::journal::validate::{journal_entry_to_text, journal_entry_validate};
 use crate::sb::errors::SbErrorId;
 use crate::sb::io::{entries_end, SbFieldOps};
@@ -180,22 +180,21 @@ impl Fs {
 
 // ── Writing it, at a clean shutdown ──────────────────────────────────────────
 
-/// The bytes super_entries_add_common() writes.
-pub(crate) const COMMON_BYTES: usize = size_of::<c::jset_entry_usage>() + 2 * size_of::<c::jset_entry_clock>();
+/// The u64s super_entries_add_common() writes.
+pub(crate) const COMMON_U64S: usize = entry_u64s::<c::jset_entry_usage>() + 2 * entry_u64s::<c::jset_entry_clock>();
 
 /// The entries every journal write carries, and the clean section: the key
 /// version, and both io clocks' times.
 pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {
     let mut u = c::jset_entry_usage::default();
-    u.entry.btree_id = c::FsUsageType::key_version.0 as u8;
     u.v = Le64::new(fs.key_version.load(Relaxed) as u64);
-    w.push_entry(u)?;
+    w.push_entry(c::FsUsageType::key_version.0 as u8, 0, u)?;
 
     for (rw, clock) in fs.io_clock.iter().enumerate() {
         let mut e = c::jset_entry_clock::default();
         e.rw = rw as u8;
         e.time = Le64::new(clock.now.load(Relaxed) as u64);
-        w.push_entry(e)?;
+        w.push_entry(0, 0, e)?;
     }
     Ok(())
 }

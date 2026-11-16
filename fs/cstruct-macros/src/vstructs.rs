@@ -318,7 +318,7 @@ fn dst(ty: &Ident, generic: bool, doc: &str, shape: &Shape<'_>, methods: TokenSt
             let (field, fty) = (&l.ident, &l.ty);
             quote!(::core::mem::offset_of!(#ty, #field) + ::core::mem::size_of::<#fty>())
         }
-        None => quote!(0),
+        None => quote!(0usize),
     };
     let tail_msg = format!("{ty}: its tail starts where its fields end, at TAIL");
     quote! {

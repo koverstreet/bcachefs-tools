@@ -8,7 +8,7 @@ use core::mem::size_of;
 
 use crate::c;
 use crate::types::ArmOf;
-use crate::util::vstructs::{cast_plain_mut, plain_bytes, Head, Plain, VStruct};
+use crate::util::vstructs::{plain_bytes, Head, Plain, VStruct};
 use zerocopy::IntoBytes;
 
 /// No room left in the buffer for the entry.
@@ -21,7 +21,11 @@ pub struct EntryWriter<'a> {
     size: usize,
 }
 
-const HEADER_U64S: usize = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
+/// The u64s of an entry holding an @E, its header and @E: what push_entry()
+/// writes.
+pub const fn entry_u64s<E>() -> usize {
+    c::JSET_KEYS_U64s + size_of::<E>() / size_of::<u64>()
+}
 
 /// An entry's header, of @ty, for @btree_id at @level, with @u64s of value:
 /// journal_entry_init().
@@ -71,7 +75,7 @@ impl<'a> EntryWriter<'a> {
     pub fn add_entry(&mut self, ty: c::JsetEntryType, btree_id: u8, level: u8, u64s: usize)
         -> Result<&'a mut [u64], NoRoom>
     {
-        let (hdr, v) = self.reserve(HEADER_U64S + u64s)?.split_at_mut(HEADER_U64S);
+        let (hdr, v) = self.reserve(c::JSET_KEYS_U64s + u64s)?.split_at_mut(c::JSET_KEYS_U64s);
         hdr[0] = header(ty, btree_id, level, u64s);
         Ok(v)
     }
@@ -102,14 +106,14 @@ impl<'a> EntryWriter<'a> {
         Ok(())
     }
 
-    /// @e, a whole entry of its type, its header's count and type set here:
+    /// An entry of @e's type, for @btree_id at @level, holding @e:
     /// jset_entry_init(), filled in.
-    pub fn push_entry<E: VStruct + Plain + ArmOf<c::jset_entry, Tag = u8>>(&mut self, mut e: E) -> Result<(), NoRoom> {
+    pub fn push_entry<E: Plain + ArmOf<c::jset_entry, Tag = u8>>(&mut self, btree_id: u8, level: u8, e: E)
+        -> Result<(), NoRoom>
+    {
         const { assert!(size_of::<E>() % size_of::<u64>() == 0) };
-        e.set_val_u64s(size_of::<E>() / size_of::<u64>() - HEADER_U64S);
-        let b = self.reserve(size_of::<E>() / size_of::<u64>())?.as_mut_bytes();
-        b.copy_from_slice(plain_bytes(&e));
-        cast_plain_mut::<Head<c::jset_entry>>(b).expect("an entry, u64 aligned").type_ = E::TAG;
+        let v = self.add_entry(c::JsetEntryType(E::TAG.into()), btree_id, level, size_of::<E>() / size_of::<u64>())?;
+        v.as_mut_bytes().copy_from_slice(plain_bytes(&e));
         Ok(())
     }
 }

@@ -27,7 +27,7 @@ use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, Fs};
-use crate::journal::entries::EntryWriter;
+use crate::journal::entries::{entry_u64s, EntryWriter};
 use crate::journal::pins::PinsRead;
 use crate::journal::validate::jset_validate;
 use crate::locking::MemallocFlags;
@@ -881,7 +881,7 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
 /// roots - the datetime, and super_entries_add_common()'s: what
 /// super_entries_journal_res reserves.
 pub(crate) const PREP_ENTRIES_U64S: usize =
-    (size_of::<c::jset_entry_datetime>() + crate::sb::clean::COMMON_BYTES) / size_of::<u64>();
+    entry_u64s::<c::jset_entry_datetime>() + crate::sb::clean::COMMON_U64S;
 
 fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
     let fs = j.fs();
@@ -968,7 +968,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
 
         let mut d = c::jset_entry_datetime::default();
         d.seconds.set(ktime_get_real_seconds() as u64);
-        ew.push_entry(d).expect("super_entries_journal_res's room");
+        ew.push_entry(0, 0, d).expect("super_entries_journal_res's room");
 
         crate::sb::clean::super_entries_add_common(fs, ew).expect("super_entries_journal_res's room");
     });
@@ -1326,7 +1326,7 @@ impl c::journal {
         let w = g.seq_to_buf_mut(seq).expect("an in-flight journal buf");
         match rewind_limit {
             Some(r) => {
-                w.append_entries(|ew| ew.push_entry(r).expect("rewind_limit_res's room"));
+                w.append_entries(|ew| ew.push_entry(0, 0, r).expect("rewind_limit_res's room"));
             }
             None => {
                 w.head_mut().set_no_flush(true);

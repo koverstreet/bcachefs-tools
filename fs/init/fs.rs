@@ -47,7 +47,6 @@ use crate::util::refcount::{ARef, RefGuard, WaitableRef};
 use crate::util::{place::Placed, refcount::AtomicRef};
 use core::ffi::CStr;
 use core::future::Future;
-use core::mem::size_of;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 pub use crate::sb::members::DevRef;
@@ -519,7 +518,7 @@ impl Fs {
         self.journal_entry_res_resize(&self.super_entries_journal_res,
             crate::journal::write::PREP_ENTRIES_U64S as c_uint);
         self.journal_entry_res_resize(&self.rewind_limit_res,
-            (size_of::<c::jset_entry_rewind_limit>() / size_of::<u64>()) as c_uint);
+            crate::journal::entries::entry_u64s::<c::jset_entry_rewind_limit>() as c_uint);
 
         {
             let state = self.state_lock_write();
