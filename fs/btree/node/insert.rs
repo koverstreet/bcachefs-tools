@@ -16,8 +16,7 @@ use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::btree::path::{LockedNode, PathIdx, Paths, PathsUpdates, Write};
 use crate::btree::types::BtreeWriteType;
-use crate::btree::write::{bch2_btree_init_next, bch2_btree_post_write_cleanup, __bch2_btree_node_write,
-                          BtreeWriteFlags};
+use crate::btree::write::{init_next, node_write, post_write_cleanup, BtreeWriteFlags};
 use crate::c;
 use crate::errcode::{BchError, Errcode};
 use crate::format::{BkeyType, Bpos};
@@ -84,7 +83,9 @@ impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
                 })
             });
 
-            __bch2_btree_node_write(trans, self, BtreeWriteFlags::only_if_need.bits());
+            let held = trans.paths().held_btree_node(path_idx, self.c.level.get().into())
+                .expect("the node, locked by node_lock_with_path()");
+            node_write(fs, held, BtreeWriteType::initial, BtreeWriteFlags::only_if_need);
 
             let mut paths = trans.paths();
             trans.node_unlock(&mut paths, path_idx, self.c.level.get().into());
@@ -105,7 +106,7 @@ impl BtreeTrans<'_> {
                                                 b: &mut LockedNode<'_, BtreeNode, Write>) {
         let fs = self.fs();
 
-        if unlikely(b.flags.just_written()) && bch2_btree_post_write_cleanup(fs, b) {
+        if unlikely(b.flags.just_written()) && post_write_cleanup(fs, b) {
             self.node_reinit_iter(t, pu, b.held());
         }
 
@@ -114,7 +115,7 @@ impl BtreeTrans<'_> {
          * a new bset to insert into:
          */
         if b.want_new_bset(b.contents(), fs).is_some() {
-            bch2_btree_init_next(t, pu, b);
+            init_next(t, pu, b);
         }
     }
 

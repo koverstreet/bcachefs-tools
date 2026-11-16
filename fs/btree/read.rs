@@ -39,7 +39,6 @@ use crate::btree::scrub::ReplicaRead;
 use crate::btree::trans::BtreeTrans;
 use crate::btree::validate::{btree_err_on, btree_node_bkey_val_validate, validate_bset,
                              validate_bset_keys, ErrAt, NodeIo, NodeValidate};
-use crate::btree::write::trans_submit_write_bios;
 use crate::c;
 use crate::data::checksum::{csum_err_msg, csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::data::ptrs::BkeyVRead;
@@ -55,7 +54,7 @@ use crate::util::alloc::Kmalloc;
 use crate::util::bio::{inline_vecs, Bio, BioBuffersUnmanaged, BioOwner, HasBio};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::{random_u64, random_u64_below};
-use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, PAGE_SIZE, READ};
+use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, PAGE_SIZE, READ};
 use crate::util::log::{LogLevel, LogMsg};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
@@ -989,23 +988,9 @@ impl Fs {
 }
 
 pub fn bch2_btree_node_wait_on_read(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
-    if unlikely(!trans.queued_write_bios.get().is_null()) {
-        trans_submit_write_bios(trans);
-    }
-
     trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::read_in_flight);
 }
 
 pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
-    /*
-     * The write we're about to wait on may be sitting unsubmitted on
-     * our own queued_write_bios (e.g. the btree cache cannibalize and
-     * evict paths write a node and immediately wait on it) — submit
-     * before sleeping, or we'd wait on ourselves forever:
-     */
-    if unlikely(!trans.queued_write_bios.get().is_null()) {
-        trans_submit_write_bios(trans);
-    }
-
     trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::write_in_flight);
 }

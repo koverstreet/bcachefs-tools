@@ -2,6 +2,7 @@
 
 use super::{bch2_btree_pos_to_text, cached_node};
 use crate::btree::node::BtreeNode;
+use crate::btree::path::LockedNode;
 use crate::btree::types::{BtreeCacheNotFreedReason as NotFreed, BtreeCacheGuard, BtreeWriteType};
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
@@ -248,25 +249,14 @@ impl Fs {
      * Kick writes on @nr dirty nodes the shrinker couldn't free during journal
      * replay: see btree_cache_replay_writeback(). They come back clean when the
      * writes complete, and a later scan frees them.
-     *
-     * Writes are queued on a btree_trans, and a task can't have two locked ones -
-     * fine here, as we never enter memory reclaim with btree locks held (lockdep
-     * checks that).
      */
     fn btree_cache_replay_write(&self, nr: usize) {
-        if nr == 0 {
-            return;
-        }
-
-        let trans = crate::btree_trans!(self);
-
         for _ in 0..nr {
             let Some((b, held)) = self.btree_cache_replay_write_pick() else { break };
 
-            node_write(&trans, b, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
+            node_write(self, LockedNode::of_hold(b, &held), BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
             drop(held);
         }
-        /* putting the trans submits the writes queued on it */
     }
 
     pub(super) fn btree_cache_scan(&self, idx: usize, nr_to_scan: usize) -> Option<usize> {

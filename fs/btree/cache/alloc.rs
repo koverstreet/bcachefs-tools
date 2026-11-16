@@ -6,7 +6,7 @@ use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
 use crate::util::alloc::{flags, Flags};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{bch2_btree_path_to_text, PathIdx, Paths};
+use crate::btree::path::{bch2_btree_path_to_text, LockedNode, PathIdx, Paths};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write, node_read, ReadInFlightNode};
 use crate::btree::types::{BtreeCacheGuard, BtreeNodeList, BtreeWriteType};
 use crate::btree::write::{node_write, BtreeWriteFlags};
@@ -161,7 +161,8 @@ impl BtreeTrans<'_> {
             });
             if let Some((b, held)) = dirty {
                 if b.flags.dirty() {
-                    node_write(self, b, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
+                    node_write(self.fs(), LockedNode::of_hold(b, &held), BtreeWriteType::cache_reclaim,
+                               BtreeWriteFlags::empty());
                 }
                 drop(held);
 

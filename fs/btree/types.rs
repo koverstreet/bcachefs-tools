@@ -16,7 +16,6 @@ use crate::btree::trans_attempt::TransAttempt;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
 use crate::util::alloc::{Box, Flags, KVVec, KVmalloc, Kmalloc};
-use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::time_stats::TimeStatsArray;
@@ -734,15 +733,6 @@ pub struct BtreeTrans<'f> {
      */
     pub locking_wait: cs::six_lock_waiter,
 
-    /*
-     * btree node writes issued in this trans's context are queued here
-     * (singly linked via bi_next) instead of being submitted directly —
-     * no block layer work happens while we hold btree node locks.
-     * Submitted when the trans unlocks, and before waiting on btree
-     * node IO (see bch2_btree_node_wait_on_write()).
-     */
-    pub queued_write_bios: Cell<*mut cs::bio>,
-
     /* update path: */
     pub journal_entries: Cell<cs::btree_trans_subbuf<c::jset_entry<Validated>>>,
     pub accounting: Cell<cs::btree_trans_subbuf<BkeyI>>,
@@ -907,8 +897,6 @@ pub enum BtreeWriteType {
     interior = 4,
 }
 
-pub const BTREE_WRITE_TYPE_MASK: c_ulong =
-    (cs::BtreeWriteType::NR as c_ulong).next_power_of_two() - 1;
 pub const BTREE_WRITE_TYPE_BITS: u32 = (cs::BtreeWriteType::NR as u32).next_power_of_two().ilog2();
 
 /// A btree node's flags: the pending write's type, then the node's state.
@@ -996,9 +984,6 @@ pub struct bch_fs_btree {
 
     pub write_stats: [cs::btree_write_stats; cs::BtreeWriteType::NR as usize],
 
-    #[pin]
-    #[init(BioSet::new(1), ENOMEM_fs_other_alloc)]
-    pub bio: BioSet<crate::btree::write::BtreeWriteBio>,
     #[pin]
     #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]
     pub fill_iter: Mempool<Kmalloc>,

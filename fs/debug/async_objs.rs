@@ -35,7 +35,6 @@ pub enum AsyncObjKind {
     data_update,
     rbio,
     write_op,
-    btree_write_bio,
     task,
 }
 
@@ -140,7 +139,7 @@ use crate::os::debugfs::{DebugFile, DebugOut, Dir};
 use crate::util::place::Contained;
 use crate::util::rcu;
 use crate::util::task::TaskRef;
-use crate::util::{Printbuf, ToText};
+use crate::util::Printbuf;
 
 pub fn async_obj_init(fs: &Fs) -> Result<(), BchError> {
     for l in &fs.async_objs {
@@ -183,12 +182,6 @@ unsafe fn write_op_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>)
 #[cold]
 unsafe fn task_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
     unsafe { TaskRef::from_listed(obj) }.to_text(out)
-}
-
-#[cold]
-unsafe fn btree_write_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
-    let wbio = obj.cast::<crate::btree::write::BtreeWriteBio>().as_ptr();
-    unsafe { &(*wbio).wbio.bio }.to_text(out)
 }
 
 macro_rules! list_table {

@@ -971,14 +971,6 @@ impl BtreeTrans<'_> {
         for i in self.path_idxs() {
             self.path_unlock(paths, i);
         }
-
-        /*
-         * All locks dropped: submit any btree node writes queued in this
-         * trans's context.
-         */
-        if !self.queued_write_bios.get().is_null() {
-            crate::btree::write::trans_submit_write_bios(self);
-        }
     }
 
     pub(crate) fn relock_traced(&self, paths: &mut Paths<'_>, trace: bool, ret_ip: c_ulong) -> Result<(), BchError> {

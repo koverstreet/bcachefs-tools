@@ -434,7 +434,7 @@ impl BtreeNode {
 
     /*
      * Will a new_key_u64s key fit after we compact @b down to a single sorted
-     * bset? Models __bch2_btree_node_write's space accounting exactly: each bset
+     * bset? Models node_write()'s space accounting exactly: each bset
      * write rounds up to block_bytes(c), so a node whose live data rounds up to
      * fill the entire sector budget is born exhausted post-compact - no room for
      * a follow-on bset to land the new key, and the insert path will immediately

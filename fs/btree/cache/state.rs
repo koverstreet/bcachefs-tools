@@ -242,7 +242,7 @@ impl Fs {
 
     /*
      * Settle a hashed node's cache_state from its current flag bits. Called from
-     * the !rearm branch of __btree_node_write_done after the cmpxchg has cleared
+     * the !rearm branch of write_done() after the cmpxchg has cleared
      * write_in_flight; if the dirty bit is also clear the node moves to CLEAN,
      * otherwise btree_node_live_state returns DIRTY and the transition is a
      * no-op.

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::prelude::*;
-use crate::util::alloc::flags;
 use crate::btree::bkey::{bkey_validate, BkeyI, BkeyS, BkeySC, ValidateFlags, BKEY_U64S};
 use crate::btree::cache::Bounce;
 use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
@@ -21,9 +20,8 @@ use crate::cstructs::c as cs;
 use crate::cstructs::c::{BtreeNodeFlags, BtreeWriteType};
 use crate::data_structures::dst_room::DstRoom;
 use crate::data::ptrs::{Ptrs, PtrsMut};
-use crate::data::write::{submit_wbio_replicas, to_wbio, wbio_init};
+use crate::data::write_replicas::{wbio_in_place, write_replicas};
 use crate::data_structures::list::Walk;
-use crate::debug::async_objs;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -32,39 +30,53 @@ use crate::init::error::BkeyValidate;
 use crate::inode_opts::get_io_opts;
 use crate::locking::six::six_lock_counts;
 use crate::types::{Le16, Le64};
-use crate::util::bio::{bch2_bio_map, bio_put, buf_nr_bvecs, of_bio, MapBuf};
+use crate::locking::MemallocFlags;
+use crate::util::alloc::Kmalloc;
+use crate::util::backref::BackRef;
+use crate::util::bio::inline_vecs;
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
+use crate::os::module::{Quiesced, ThisModule};
 use crate::util::log::LogMsg;
+use crate::util::mempool::Mempool;
+use crate::util::task::{exclusive_size, requeue, requeue_on_cpu, Resume, Spawn, TaskSlot};
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
-use crate::os::workqueue::{run_raw, RawWork};
 use crate::util::names::Names;
 use crate::util::{rcu, HumanReadable, Printbuf};
 use crate::{fs_fatal_error, fs_inconsistent, log_msg_ratelimited, prt};
-use core::ffi::c_uint;
 use core::mem::offset_of;
-use core::ptr::{self, NonNull};
+use core::pin::Pin;
+use core::ptr;
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed, SeqCst}};
-use cstruct_macros::bch_enum;
+use cstruct_macros::{bch_enum, in_place};
 
-#[repr(C)]
-pub struct BtreeWriteBio {
-    work: c::work_struct,
-    key: DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>,
-    bounce: Bounce<'static>,
-    sector_offset: c_uint,
-    shard_cpu: Option<u16>,
-    start_time: u64,
-    /* its slot on its async object list */
-    list_idx: c_uint,
-    failed: c::bch_io_failures,
-    /*
-     * XXX: btree writes should be using io_ref[WRITE], but we
-     * aren't retrying failed btree writes yet (due to device
-     * removal/ro):
-     */
-    pub(crate) wbio: c::bch_write_bio<c::DevReadRefKind>,
+/*
+ * XXX: btree writes should be using io_ref[WRITE], but we aren't retrying
+ * failed btree writes yet (due to device removal/ro):
+ */
+type WriteBio = c::bch_write_bio<c::DevReadRefKind>;
+
+/*
+ * blk-wbt.c throttles all writes except those that have both REQ_SYNC
+ * and REQ_IDLE set...
+ */
+const WRITE_OPF: u32 = c::req_op_REQ_OP_WRITE | c::REQ_META | c::REQ_SYNC | c::REQ_IDLE;
+
+type NodeKey = DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>;
+
+/// The module's, not the filesystem's: a write's box is freed a grace period
+/// after its write, when the filesystem may be gone. A mempool: node writes
+/// must make progress under memory pressure.
+static NODE_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
+
+pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
+    let size = exclusive_size::<WriteBio, NodeWriteFut<'static>, &'static Mempool<Kmalloc>>(
+        inline_vecs(c::BIO_MAX_VECS as u16));
+    Mempool::init_static(&NODE_WRITES, Mempool::kmalloc(1, size), m)
 }
-crate::has_bio!(BtreeWriteBio, wbio.bio);
+
+pub fn pools_exit(q: &Quiesced<'_>) {
+    NODE_WRITES.exit(q)
+}
 
 #[bch_enum(closed)]
 #[mask(BtreeWriteFlags: u32)]
@@ -90,8 +102,7 @@ fn write_started(f: BtreeNodeFlags) -> BtreeNodeFlags {
         .with_write_type(BtreeWriteType::initial)
 }
 
-fn write_done(trans: &BtreeTrans<'_>, b: &BtreeNode) {
-    let fs = trans.fs();
+fn write_done(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
     let w = b.prev_write();
 
     /* If this was the first write to a btree node, signal to the interior
@@ -111,16 +122,18 @@ fn write_done(trans: &BtreeTrans<'_>, b: &BtreeNode) {
 
     if rearm(old) {
         /* Re-arm: bit stays set across the new write, no counter change. */
-        node_write(trans, b, old.write_type(), BtreeWriteFlags::already_started);
+        node_write(fs, b, old.write_type(), BtreeWriteFlags::already_started);
     } else {
         fs.btree.cache.nr_in_flight.fetch_sub(1, Relaxed);
-        fs.btree_node_write_done_clean(b);
+        fs.btree_node_write_done_clean(&b);
         fence(SeqCst);
         b.flags.wake();
     }
 }
 
-fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNode) -> Result<(), BchError> {
+fn write_update_key(t: &TransAttempt<'_, '_>, key: &NodeKey, failed: &c::bch_io_failures, b: &BtreeNode)
+    -> Result<(), BchError>
+{
     let fs = t.fs();
 
     let mut iter = match unsafe { BtreeNodeIter::at_node(t, b) } {
@@ -132,17 +145,17 @@ fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNod
     let mut n = t.bkey_reassemble_room(BkeySC::from(node.key()), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
 
     const V2: &str = "a written node's key a btree_ptr_v2: v1 nodes are need_rewrite from their read, never dirtied";
-    let w = BkeySC::from(&*wbio.key).arm::<c::BtreePtrV2>().expect(V2);
+    let w = BkeySC::from(&**key).arm::<c::BtreePtrV2>().expect(V2);
     n.reborrow().arm::<c::BtreePtrV2>().expect(V2).v_mut().sectors_written = w.v().sectors_written;
 
     n.reborrow().arm::<PtrsMut>().expect("a btree node pointer, with pointers")
-        .drop_ptrs_noerror(fs, |p| wbio.failed.dev(p.p.ptr.dev().into()).is_some());
+        .drop_ptrs_noerror(fs, |p| failed.dev(p.p.ptr.dev().into()).is_some());
 
     if n.as_sc().durability_safe(fs).nr_ptrs == 0 {
         return Err(fs.err(c::Errcode::btree_node_write_all_failed));
     }
 
-    if !wbio.failed.is_empty() {
+    if !failed.is_empty() {
         let opts = get_io_opts(t, None, n.as_sc())?;
         n.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
     }
@@ -151,134 +164,27 @@ fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNod
                             CommitOpts::new()
                                 .watermark(Watermark::interior_updates)
                                 .flags(CommitFlags::JOURNAL_RECLAIM | CommitFlags::NO_ENOSPC | CommitFlags::NO_CHECK_RW),
-                            wbio.failed.is_empty())
+                            failed.is_empty())
 }
 
-impl RawWork for BtreeWriteBio {
-    const WORK: usize = offset_of!(Self, work);
+/// A node's write, sorted and sealed by node_write(): written to each device
+/// of the node's key, the key updated - on write_complete_wq, on the node's
+/// shard cpu where it has one - and the write done.
+#[in_place(NodeWriteFut)]
+async fn write_task<'h>(wbio: Pin<&'h mut WriteBio>, fs: BackRef<Fs>, b: BackRef<BtreeNode>, w: BsetWrite,
+                        key: NodeKey, sector_offset: u16, shard_cpu: Option<u16>, start_time: u64) {
+    let fs = unsafe { fs.get() };
 
-    unsafe fn run(wbio: NonNull<Self>) {
-        unsafe { write_work(wbio) }
-    }
-}
-
-/// # Safety
-/// @wbio's replicas are done, its endio queued it: it's put here.
-unsafe fn write_work(wbio: NonNull<BtreeWriteBio>) {
-    let wbio = unsafe { &mut *wbio.as_ptr() };
-    let fs = wbio.wbio.fs();
-    let b = unsafe { &*wbio.wbio.bio.raw().bi_private.cast::<BtreeNode>() };
-
-    let trans = btree_trans!(fs);
-    if let Some(cpu) = wbio.shard_cpu {
-        trans.shard_cpu.set(cpu as i16);
+    let mut at = key;
+    for ptr in BkeyS::from(&mut *at).arm::<PtrsMut>().expect("a btree node pointer, with pointers").ptrs_mut(fs) {
+        ptr.set_offset(ptr.offset() + u64::from(sector_offset));
     }
 
-    /*
-     * btree_node_write_update_key commits through the journal; on a dead
-     * journal that commit fails with journal_shutdown and there's no
-     * point burning lockrestart_do cycles trying. Skip the update — the
-     * read lock + __btree_node_write_done step below still runs so
-     * BTREE_NODE_write_in_flight clears and flushers/cancellers drain.
-     */
-    if fs.journal.error().is_ok() &&
-        (wbio.wbio.wbio.bits.first_btree_write() == 0 || !wbio.failed.is_empty())
-    {
-        let ret = lockrestart_do(&trans, |t| write_update_key(t, wbio, b));
-        if ret.is_err() {
-            b.flags.set_noevict(true);
-        }
+    let errs = write_replicas(fs, wbio, &w.bounce[..w.len()], DataType::btree, &*at, None, Resume::INLINE).await;
 
-        if ret.is_err_and(|e| !e.matches(c::EROFS)) || !wbio.failed.is_empty() {
-            /*
-             * Writing degraded because a device was removed is not
-             * news: the removal was reported when it happened, and
-             * reconcile restores the replicas. Decided before
-             * bch2_ratelimit(), which spends this call site's burst
-             * budget - the noise must not crowd out a real error
-             * arriving in the same window.
-             */
-            let mut msg = if ret.is_ok() && wbio.failed.all_dev_removed() {
-                let mut msg = LogMsg::new(fs);
-                msg.set_suppressed(true);
-                msg
-            } else {
-                /* Separate ratelimit_states for hard and soft errors */
-                log_msg_ratelimited!(fs, ret.is_err() as usize, 2)
-            };
-
-            prt!(&mut *msg, "error writing btree node at {}", b.pos_to_text(fs));
-            msg.newline();
-
-            wbio.failed.to_text(&mut msg, fs);
-
-            match ret {
-                Ok(()) => {
-                    prt!(&mut *msg, "wrote degraded to ");
-                    let key = BkeySC::from(unsafe { b.contents() }.key_i());
-                    let d = key.arm::<Ptrs>().expect("a btree node pointer, with pointers").devs(fs);
-                    fs.devs_list_to_text(&mut msg, &d);
-                    msg.newline();
-                }
-                Err(e) => {
-                    prt!(&mut *msg, "error {}\n", e.msg());
-                    fs.emergency_read_only(&mut msg);
-                }
-            }
-        }
-    }
-
-    fs.times.get(c::TimeStat::btree_node_write as usize).update(wbio.start_time);
-    unsafe {
-        async_objs::list_del(fs, c::AsyncObjKind::btree_write_bio, &mut wbio.list_idx);
-        bio_put(wbio.wbio.bio_mut().raw_mut());
-    }
-
-    lockrestart_do(&trans, |_| {
-        /* identity pinned: write_in_flight (cleared below) blocks reclaim */
-        let idx = trans.node_lock_with_path(&mut trans.paths(), &b.c, c::SixLockType::SIX_LOCK_read, 0)?;
-        write_done(&trans, b);
-        let mut paths = trans.paths();
-        trans.node_unlock(&mut paths, idx, b.c.level.get() as usize);
-        trans.path_put(&mut paths, idx, true);
-        Ok(())
-    }).expect("the write completion's node lock fails only with restarts");
-}
-
-unsafe extern "C" fn write_endio(bio: *mut c::bio) {
-    let wbio = unsafe { to_wbio::<c::DevReadRefKind>(bio) };
-    let parent = (wbio.wbio.bits.split() != 0).then_some(wbio.wbio.parent);
-    let fs = wbio.fs();
-    let b = unsafe { &*wbio.bio.raw().bi_private.cast::<BtreeNode>() };
-    let (ca, dev, status) = (wbio.ca.take(), wbio.wbio.dev, wbio.bio.raw().bi_status);
-
-    if let Some(ca) = &ca {
-        ca.account_io_completion(c::MemberErrorType::write, wbio.wbio.submit_time, status == 0);
-        ca.write_unflushed();
-    }
-
-    let wb = unsafe { &mut *of_bio::<BtreeWriteBio>(parent.map_or(bio, |p| (&raw mut (*p).bio).cast())) };
-
-    if status != 0 {
-        let _g = fs.write_error_lock.lock();
-        wb.failed.set_blk_status(fs, dev.into(), status);
-    }
-
-    /*
-     * XXX: we should be using io_ref[WRITE], but we aren't retrying failed
-     * btree writes yet (due to device removal/ro):
-     */
-    drop(ca);
-
-    if let Some(parent) = parent {
-        unsafe {
-            bio_put(bio);
-            crate::os::bio::endio((&raw mut (*parent).bio).cast());
-        }
-        return;
-    }
-
-    drop(unsafe { (&raw const wb.bounce).read() });
+    /* in the last replica's endio */
+    let first = w.first;
+    drop(w);
 
     let bc = &fs.btree.cache;
     bc.nr_in_flight_inner.fetch_sub(1, Relaxed);
@@ -289,15 +195,91 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     fence(SeqCst);
     b.flags.wake();
 
-    let work = &raw mut wb.work;
-    let Ok(()) = unsafe { crate::util::alloc::init_at(crate::new_work!(run_raw::<BtreeWriteBio>, "&wb->work"), work) };
-    let wq = &*fs.btree.write_complete_wq;
-    unsafe {
-        match wb.shard_cpu {
-            Some(cpu) => wq.queue_work_on(cpu.into(), work),
-            None      => wq.queue_work(work),
+    let failed = errs.failures(fs);
+
+    let q = &*fs.btree.write_complete_wq;
+    match shard_cpu {
+        Some(cpu) => requeue_on_cpu(q, cpu.into()).await,
+        None      => requeue(q).await,
+    }
+
+    let trans = btree_trans!(fs);
+    if let Some(cpu) = shard_cpu {
+        trans.shard_cpu.set(cpu as i16);
+    }
+
+    /*
+     * write_update_key() commits through the journal; on a dead
+     * journal that commit fails with journal_shutdown and there's no
+     * point burning lockrestart_do cycles trying. Skip the update — the
+     * read lock + write_done() step below still runs so
+     * write_in_flight clears and flushers/cancellers drain.
+     */
+    if fs.journal.error().is_ok() &&
+        (!first || !failed.is_empty())
+    {
+        let ret = lockrestart_do(&trans, |t| write_update_key(t, &key, &failed, &b));
+        if ret.is_err() {
+            b.flags.set_noevict(true);
         }
+
+        if ret.is_err_and(|e| !e.matches(c::EROFS)) || !failed.is_empty() {
+            report_write_error(fs, &b, ret, &failed);
+        }
+    }
+
+    fs.times.get(c::TimeStat::btree_node_write as usize).update(start_time);
+
+    lockrestart_do(&trans, |_| {
+        /* identity pinned: write_in_flight (cleared below) blocks reclaim */
+        let idx = trans.node_lock_with_path(&mut trans.paths(), &b.c, c::SixLockType::SIX_LOCK_read, 0)?;
+        let mut paths = trans.paths();
+        let level = b.c.level.get() as usize;
+        write_done(fs, paths.held_btree_node(idx, level).expect("the node, locked by node_lock_with_path()"));
+        trans.node_unlock(&mut paths, idx, level);
+        trans.path_put(&mut paths, idx, true);
+        Ok(())
+    }).expect("the write completion's node lock fails only with restarts");
+}
+
+/// A write's key update that failed, or replicas it lost, reported - the
+/// filesystem going read-only for the first.
+fn report_write_error(fs: &Fs, b: &BtreeNode, ret: Result<(), BchError>, failed: &c::bch_io_failures) {
+    /*
+     * Writing degraded because a device was removed is not
+     * news: the removal was reported when it happened, and
+     * reconcile restores the replicas. Decided before
+     * bch2_ratelimit(), which spends this call site's burst
+     * budget - the noise must not crowd out a real error
+     * arriving in the same window.
+     */
+    let mut msg = if ret.is_ok() && failed.all_dev_removed() {
+        let mut msg = LogMsg::new(fs);
+        msg.set_suppressed(true);
+        msg
+    } else {
+        /* Separate ratelimit_states for hard and soft errors */
+        log_msg_ratelimited!(fs, ret.is_err() as usize, 2)
     };
+
+    prt!(&mut *msg, "error writing btree node at {}", b.pos_to_text(fs));
+    msg.newline();
+
+    failed.to_text(&mut msg, fs);
+
+    match ret {
+        Ok(()) => {
+            prt!(&mut *msg, "wrote degraded to ");
+            let key = BkeySC::from(unsafe { b.contents() }.key_i());
+            let d = key.arm::<Ptrs>().expect("a btree node pointer, with pointers").devs(fs);
+            fs.devs_list_to_text(&mut msg, &d);
+            msg.newline();
+        }
+        Err(e) => {
+            prt!(&mut *msg, "error {}\n", e.msg());
+            fs.emergency_read_only(&mut msg);
+        }
+    }
 }
 
 /// Encrypted, then checksummed, at byte @offset of the node.
@@ -307,7 +289,7 @@ fn seal_bset<H: BsetHolder + ?Sized>(fs: &Fs, n: &mut H, offset: u32) -> Result<
     Ok(())
 }
 
-fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, n: &mut H) -> Result<(), BchError> {
+fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, contents: &NodeContents, n: &mut H) -> Result<(), BchError> {
     let mut from = c::bkey_validate_context {
         level: b.c.level.get() + 1,
         btree: Btree(b.c.btree_id.get().into()),
@@ -316,7 +298,7 @@ fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, n: &m
     from.bits.set_from(c::BkeyValidateFrom::btree_node);
     from.bits.set_flags(ValidateFlags::write);
 
-    let k = BkeySC::from(unsafe { b.contents() }.key_i());
+    let k = BkeySC::from(contents.key_i());
     if let Err(e) = bkey_validate(&BkeyValidate::new(fs, k, &from)) {
         fs_inconsistent!(fs, "invalid btree node key before write");
         return Err(e);
@@ -333,37 +315,14 @@ fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, n: &m
     ret
 }
 
-/// # Safety
-/// @wbio is a btree node write, queued.
-unsafe fn write_do_submit(wbio: &mut BtreeWriteBio) {
-    let fs = wbio.wbio.fs();
-    let mut tmp = wbio.key;
-
-    let mut k = BkeyS::from(&mut *tmp).arm::<PtrsMut>().expect("a btree node pointer, with pointers");
-    for ptr in k.ptrs_mut(fs) {
-        ptr.set_offset(ptr.offset() + wbio.sector_offset as u64);
-    }
-
-    unsafe { submit_wbio_replicas(&mut wbio.wbio, fs, DataType::btree, &*tmp, None) };
-}
-
-/// C's one word: the write type, its flags above.
-fn unpack(flags: c_uint) -> (BtreeWriteType, BtreeWriteFlags) {
-    (BtreeWriteType::from_bits(flags & cs::BTREE_WRITE_TYPE_MASK as c_uint), BtreeWriteFlags::from_bits_truncate(flags))
-}
-
-pub fn __bch2_btree_node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, flags: c_uint) {
-    let (ty, flags) = unpack(flags);
-    node_write(trans, b, ty, flags)
-}
-
-pub(crate) fn node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, mut ty: BtreeWriteType, flags: BtreeWriteFlags) {
-    let fs = trans.fs();
+/// @b's write, if it's to be written: claimed, its unwritten bsets sorted into
+/// a bounce and sealed under the caller's lock, then the rest its task's.
+pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWriteType, flags: BtreeWriteFlags) {
     let start_time = local_clock();
 
     if !flags.contains(BtreeWriteFlags::already_started) {
         let only_if_need = flags.contains(BtreeWriteFlags::only_if_need);
-        let Some(old) = claim(b, only_if_need) else { return };
+        let Some(old) = claim(&b, only_if_need) else { return };
 
         if only_if_need {
             ty = old.write_type();
@@ -376,25 +335,27 @@ pub(crate) fn node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, mut ty: BtreeWri
     assert!(!b.is_fake());
 
     if unlikely(b.will_make_reachable.update().is_some() != (b.written.get() == 0)) {
-        lifecycle_violated(fs, b, ty, flags);
+        lifecycle_violated(fs, &b, ty, flags);
     }
 
-    let contents = unsafe { b.contents() };
+    let contents = b.contents();
     assert!(b.written.get() < fs.btree_sectors() as u16);
     assert!(b.written.get() & (fs.block_sectors() as u16 - 1) == 0);
     assert!(!b.bset_written(contents.last_set()));
     assert!(contents.data().magic.get() == fs.bset_magic());
     assert!(plain_bytes(&contents.data().format) == plain_bytes(&contents.format));
 
-    sort_whiteouts(fs, b, unsafe { b.contents_mut() });
+    sort_whiteouts(fs, &b, unsafe { b.contents_mut() });
 
-    let contents = unsafe { b.contents() };
-    let Some(mut w) = BsetWrite::build(unsafe { Fs::borrow_raw(fs.as_ptr()) }, b, contents) else {
-        write_done(trans, b);
+    let contents = b.contents();
+    let fs_ref = unsafe { BackRef::new(fs) };
+    /* the bounce is the task's */
+    let Some(mut w) = BsetWrite::build(unsafe { fs_ref.get() }, &b, contents) else {
+        write_done(fs, b);
         return;
     };
 
-    let sealed = w.seal(b);
+    let sealed = w.seal(fs, &b, contents);
 
     /*
      * We handle btree write errors by immediately halting the journal -
@@ -411,18 +372,52 @@ pub(crate) fn node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, mut ty: BtreeWri
      * it's critical that we don't do the write in that case otherwise we
      * will have updates visible that weren't in the journal:
      *
-     * Make sure to update b->written so bch2_btree_init_next() doesn't
+     * Make sure to update b.written so init_next() doesn't
      * break:
      */
     if sealed.is_err() || fs.journal.error().is_err() || fs.opts().nochanges.get() != 0 {
         b.flags.set_noevict(true);
         b.written.set(b.written.get() + w.sectors);
         drop(w);
-        write_done(trans, b);
+        write_done(fs, b);
         return;
     }
 
-    w.queue(trans, b, contents, ty, start_time);
+    fs.event_inc_trace(events::btree_node_write, |out| {
+        prt!(out, "offset {} sectors {} bytes {}\n{}", b.written.get(), w.sectors, w.bytes, b.pos_to_text(fs));
+    });
+
+    let mut key = NodeKey::default();
+    key.set_key(contents.key_i());
+
+    let sector_offset = b.written.get();
+    b.written.set(b.written.get() + w.sectors);
+
+    if let Some(mut v2) = BkeyS::from(&mut *key).arm::<c::BtreePtrV2>() {
+        v2.v_mut().sectors_written = Le16::new(b.written.get());
+    }
+
+    let stats = &fs.btree.write_stats[ty as usize];
+    stats.nr.fetch_add(1, Relaxed);
+    stats.bytes.fetch_add(w.bytes as i64, Relaxed);
+
+    fs.btree.cache.nr_in_flight_inner.fetch_add(1, Relaxed);
+    fs.btree.cache.update_throttle();
+
+    let shard_cpu = b.shard(contents, fs).map(|shard| fs.inode_shard_cpu[shard].load(Relaxed));
+
+    let slot = {
+        let _noio = MemallocFlags::noio();
+        TaskSlot::exclusive_bio_in(&NODE_WRITES, ptr::null_mut(), c::BIO_MAX_VECS as u16, WRITE_OPF, wbio_in_place)
+    }.expect("a node write's box: its pool waits for an element");
+
+    /* write_in_flight pins the node's identity: reclaim leaves it */
+    let b = unsafe { BackRef::new(b.node()) };
+    /* no block layer work while the caller holds btree node locks */
+    let at = Spawn::Queue(&fs.btree_update_wq);
+    unsafe {
+        slot.start(at, fs.tasks(), move |home| write_task(home, fs_ref, b, w, key, sector_offset, shard_cpu, start_time))
+    };
 }
 
 /*
@@ -446,22 +441,15 @@ fn claim(b: &BtreeNode, only_if_need: bool) -> Option<BtreeNodeFlags> {
 
 #[cold]
 fn lifecycle_violated(fs: &Fs, b: &BtreeNode, ty: BtreeWriteType, flags: BtreeWriteFlags) -> ! {
-    /* Not a bch_log_msg: that prints when it goes out of scope, which we don't */
-    let mut buf = Printbuf::new();
-    prt!(&mut buf, "btree node write lifecycle invariant violated at {}", b.pos_to_text(fs));
-    buf.newline();
-    prt!(&mut buf, "  written: {}\n", b.written.get());
-    prt!(&mut buf, "  will_make_reachable: {:x}\n", b.will_make_reachable.raw());
-    prt!(&mut buf, "  flags: {}\n", b.flags);
-    prt!(&mut buf, "  write_type: {}\n", ty as u32);
-    prt!(&mut buf, "  already_started: {}\n", flags.contains(BtreeWriteFlags::already_started) as u32);
-    panic!("{}", buf.as_str());
+    panic!("btree node write lifecycle invariant violated at {}\n  written: {}\n  will_make_reachable: {:x}\n  \
+            flags: {}\n  write_type: {}\n  already_started: {}",
+           b.pos_to_text(fs), b.written.get(), b.will_make_reachable.raw(), b.flags, ty as u32,
+           flags.contains(BtreeWriteFlags::already_started) as u32);
 }
 
 /// A node's unwritten bsets and whiteouts, sorted into one bset in a bounce
 /// buffer: in a btree_node if it's the node's first, else a btree_node_entry.
 struct BsetWrite {
-    fs:      &'static Fs,
     bounce:  Bounce<'static>,
     first:   bool,
     keys_at: usize,
@@ -553,32 +541,31 @@ impl BsetWrite {
         i.set_offset(b.written.get());
         i.set_csum_type(fs.meta_checksum_type());
 
-        Some(Self { fs, bounce, first, keys_at, bytes: bytes_to_write, sectors: sectors_to_write })
+        Some(Self { bounce, first, keys_at, bytes: bytes_to_write, sectors: sectors_to_write })
     }
 
     fn bset(&mut self) -> &mut Head<c::bset> {
         bset_at(&mut self.bounce, self.keys_at)
     }
 
-    fn validate(&mut self, b: &BtreeNode) -> Result<(), BchError> {
+    fn validate(&mut self, fs: &Fs, b: &BtreeNode, contents: &NodeContents) -> Result<(), BchError> {
         if self.first {
-            validate_bset_for_write(self.fs, b, c::btree_node::<Unvalidated>::of_mut(&mut self.bounce))
+            validate_bset_for_write(fs, b, contents, c::btree_node::<Unvalidated>::of_mut(&mut self.bounce))
         } else {
-            validate_bset_for_write(self.fs, b, c::btree_node_entry::<Unvalidated>::of_mut(&mut self.bounce))
+            validate_bset_for_write(fs, b, contents, c::btree_node_entry::<Unvalidated>::of_mut(&mut self.bounce))
         }
     }
 
-    fn seal(&mut self, b: &BtreeNode) -> Result<(), BchError> {
-        let fs = self.fs;
+    fn seal(&mut self, fs: &Fs, b: &BtreeNode, contents: &NodeContents) -> Result<(), BchError> {
         let i = self.bset();
 
-        /* bch2_validate_bset will be modifying: */
+        /* validate_bset() will be modifying: */
         let validate_before_checksum = i.csum_type().is_encryption() ||
             i.version.get() < c::MetadataVersion::CURRENT;
 
         /* if we're going to be encrypting, check metadata validity first: */
         if validate_before_checksum {
-            self.validate(b)?;
+            self.validate(fs, b, contents)?;
         }
 
         let offset = (b.written.get() as u32) << 9;
@@ -594,90 +581,17 @@ impl BsetWrite {
 
         /* if we're not encrypting, check metadata after checksumming: */
         if !validate_before_checksum {
-            self.validate(b)?;
+            self.validate(fs, b, contents)?;
         }
         Ok(())
     }
 
-    fn queue(self, trans: &BtreeTrans<'_>, b: &BtreeNode, contents: &NodeContents,
-             ty: BtreeWriteType, start_time: u64) {
-        let Self { fs, bounce, first, bytes, sectors, .. } = self;
-
-        fs.event_inc_trace(events::btree_node_write, |out| {
-            prt!(out, "offset {} sectors {} bytes {}\n{}", b.written.get(), sectors, bytes, b.pos_to_text(fs));
-        });
-
-        /*
-         * blk-wbt.c throttles all writes except those that have both REQ_SYNC
-         * and REQ_IDLE set...
-         */
-
-        let (data, len) = (bounce.as_raw().0, (sectors as usize) << 9);
-        let bio = fs.btree.bio.alloc_raw(ptr::null_mut(),
-                                         buf_nr_bvecs(data, len) as _,
-                                         c::req_op_REQ_OP_WRITE | c::REQ_META | c::REQ_SYNC | c::REQ_IDLE,
-                                         flags::NOIO);
-        let wbio = unsafe { &mut *of_bio::<BtreeWriteBio>(bio) };
-        unsafe { wbio_init::<c::DevReadRefKind>(bio) };
-        unsafe { (&raw mut wbio.bounce).write(bounce) };
-        wbio.sector_offset  = b.written.get().into();
-        wbio.shard_cpu      = b.shard(contents, fs).map(|shard| fs.inode_shard_cpu[shard].load(Relaxed));
-        wbio.start_time     = start_time;
-        unsafe { (&raw mut wbio.failed).write(Default::default()) };
-        wbio.wbio.wbio.c    = Some(fs);
-        wbio.wbio.wbio.bits.set_first_btree_write(first.into());
-        let raw = wbio.wbio.bio_mut().raw_mut();
-        raw.bi_end_io  = Some(write_endio);
-        raw.bi_private = ptr::from_ref(b).cast_mut().cast();
-
-        unsafe { bch2_bio_map(bio, data.cast(), len) };
-
-        wbio.key.set_key(contents.key_i());
-
-        b.written.set(b.written.get() + sectors);
-
-        if let Some(mut v2) = BkeyS::from(&mut *wbio.key).arm::<c::BtreePtrV2>() {
-            v2.v_mut().sectors_written = Le16::new(b.written.get());
-        }
-
-        let stats = &fs.btree.write_stats[ty as usize];
-        stats.nr.fetch_add(1, Relaxed);
-        stats.bytes.fetch_add(bytes as i64, Relaxed);
-
-        let list = &fs.async_objs[c::AsyncObjKind::btree_write_bio as usize].list;
-        wbio.list_idx = list.add(ptr::NonNull::from(&mut *wbio).cast()).unwrap_or(0);
-
-        fs.btree.cache.nr_in_flight_inner.fetch_add(1, Relaxed);
-        fs.btree.cache.update_throttle();
-
-        /*
-         * Queue the bio on the trans — no block layer work while we hold
-         * btree node locks. Submitted when the trans unlocks, or before
-         * waiting on btree node IO.
-         */
-        wbio.wbio.bio_mut().raw_mut().bi_next = trans.queued_write_bios.get();
-        trans.queued_write_bios.set(wbio.wbio.bio_mut().raw_mut());
+    fn len(&self) -> usize {
+        (self.sectors as usize) << 9
     }
 }
 
-pub fn trans_submit_write_bios(trans: &BtreeTrans<'_>) {
-    let mut bio = trans.queued_write_bios.replace(ptr::null_mut());
-
-    while !bio.is_null() {
-        unsafe {
-            let next = (*bio).bi_next;
-
-            (*bio).bi_next = ptr::null_mut();
-            write_do_submit(&mut *of_bio::<BtreeWriteBio>(bio));
-            bio = next;
-        }
-    }
-}
-
-/*
- * Work that must be done with write lock held:
- */
-pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
+pub fn post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
     if !b.flags.just_written() {
         return false;
     }
@@ -727,8 +641,7 @@ pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, 
 
 /// btree_node_write_if_need()
 pub(crate) fn node_write_if_need(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: NodeHold<'_, BtreeNode>) {
-    let (ty, flags) = unpack(BtreeWriteFlags::only_if_need.bits());
-    node_write_trans(trans, paths, b, ty, flags)
+    node_write_trans(trans, paths, b, BtreeWriteType::initial, BtreeWriteFlags::only_if_need)
 }
 
 pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: NodeHold<'_, BtreeNode>,
@@ -738,7 +651,7 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b:
             if let Some(mut b) = b.try_upgrade() {
                 return node_write_intent(trans, paths, &mut b, ty, flags);
             }
-            node_write(trans, &b, ty, flags);
+            node_write(trans.fs(), b.held(), ty, flags);
         }
         NodeHold::Intent(mut b) => node_write_intent(trans, paths, &mut b, ty, flags),
         NodeHold::Write(_) => panic!("node_write_trans() of a node held for write: node_write_locked()"),
@@ -747,12 +660,13 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b:
 
 fn node_write_intent(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &mut LockedNode<'_, BtreeNode, Intent>,
                      ty: BtreeWriteType, flags: BtreeWriteFlags) {
-    node_write(trans, b, ty, flags);
+    let fs = trans.fs();
+    node_write(fs, b.held(), ty, flags);
 
     /* don't cycle lock unnecessarily: */
     if b.flags.just_written() {
         if let Some(mut w) = b.try_write(paths) {
-            bch2_btree_post_write_cleanup(trans.fs(), &mut w);
+            post_write_cleanup(fs, &mut w);
         }
     }
 }
@@ -760,22 +674,21 @@ fn node_write_intent(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &mut Lock
 /// node_write_trans(), of a node held for write.
 pub(crate) fn node_write_locked(trans: &BtreeTrans<'_>, b: &mut LockedNode<'_, BtreeNode, Write>,
                                 ty: BtreeWriteType, flags: BtreeWriteFlags) {
-    node_write(trans, b, ty, flags);
+    let fs = trans.fs();
+    node_write(fs, b.held(), ty, flags);
     if b.flags.just_written() {
-        bch2_btree_post_write_cleanup(trans.fs(), b);
+        post_write_cleanup(fs, b);
     }
 }
 
 /*
- * @bch_btree_init_next - initialize a new (unwritten) bset that can then be
- * inserted into
+ * Initialize a new (unwritten) bset that can then be inserted into.
  *
  * Safe to call if there already is an unwritten bset - will only add a new bset
- * if @b doesn't already have one.
- *
- * Returns true if we sorted (i.e. invalidated iterators
+ * if @b doesn't already have one. If it sorted, the paths' iterators at @b are
+ * reinitialized.
  */
-pub(in crate::btree) fn bch2_btree_init_next(t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
+pub(in crate::btree) fn init_next(t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                              b: &mut LockedNode<'_, BtreeNode, Write>) {
     let trans = t.trans();
     let fs = trans.fs();
@@ -819,25 +732,25 @@ impl Fs {
      * Force-complete in-flight btree writes when a clean shutdown can't finish
      * (journal in error / emergency RO).
      *
-     * The clean-shutdown loop in __bch2_fs_read_only relies on dirty nodes being
+     * The clean-shutdown loop in stop_rw() relies on dirty nodes being
      * written out through the normal journal-flush path; when the journal is dead
      * those writes can't make progress and dirty nodes are stuck. Walk live[].dirty
      * (the only place dirty nodes can live — see the invariant assertion in
-     * bch2_btree_node_transition_state_locked) and:
+     * btree_node_transition_state_locked()) and:
      *
-     *   - clear BTREE_NODE_dirty so __btree_node_write_done's cmpxchg, when an
+     *   - clear dirty so write_done()'s cmpxchg, when an
      *     in-flight write of one of these nodes finishes, won't re-arm the write
-     *   - settle cache_state from the bits via btree_node_live_state(): nodes
+     *   - settle cache_state from the bits via live_state(): nodes
      *     with write_in_flight still set stay DIRTY (the transition is a no-op),
      *     nodes with neither bit set move to CLEAN
      *
-     * Then wait for any actual in-flight writes to drain. btree_node_write_work
-     * fast-paths on bch2_journal_error() so even on a dead journal write_in_flight
-     * gets cleared (synchronously via the !rearm branch of __btree_node_write_done),
-     * which then calls bch2_btree_node_write_done_clean to complete the
+     * Then wait for any actual in-flight writes to drain. write_task()
+     * fast-paths on fs.journal.error() so even on a dead journal write_in_flight
+     * gets cleared (synchronously via the !rearm branch of write_done()),
+     * which then calls btree_node_write_done_clean() to complete the
      * DIRTY → CLEAN transition.
      *
-     * Caller must guarantee bch2_journal_error() is set so the work fast-paths
+     * Caller must guarantee fs.journal.error() is set so the completion fast-paths
      * and so no new writes are submitted concurrently.
      */
     pub fn btree_cancel_all_writes(&self) {
@@ -865,11 +778,11 @@ impl Fs {
         /*
          * Every node, whatever its state: FREEABLE nodes too, as the cache
          * state machine permits them to have a write in flight -
-         * bch2_btree_node_write_done_clean only transitions DIRTY → CLEAN when
+         * btree_node_write_done_clean() only transitions DIRTY → CLEAN when
          * the node is currently DIRTY, so when reclaim moves a node to
          * FREEABLE while its write is still in flight the node legitimately
          * stays on bc->freeable until the write finishes. Going-RO needs
-         * drained writes for the BUG_ONs in bch2_fs_btree_cache_exit's
+         * drained writes for the asserts in btree_cache_exit()'s
          * freeable walk.
          *
          * One pass: a flagged node is waited on with RCU dropped - we don't

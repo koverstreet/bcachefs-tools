@@ -450,7 +450,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
          * so that shutdown works, but the i->journal_seq mechanism
          * won't work to prevent the btree write from being visible (we
          * didn't get a journal sequence number) - instead
-         * __bch2_btree_node_write() doesn't do the actual write if
+         * node_write() doesn't do the actual write if
          * we're in journal error state:
          */
         /*

@@ -1720,6 +1720,12 @@ impl<'p, T: PathNode> LockedNode<'p, T> {
         LockedNode { node, _mode: PhantomData }
     }
 
+    /// @node, by @hold on its lock.
+    pub fn of_hold(node: &'p T, hold: &'p SixHold<'_>) -> Self {
+        assert!(ptr::eq(hold.lock().six(), node.common().lock.six()), "a LockedNode by a hold on another node's lock");
+        LockedNode { node, _mode: PhantomData }
+    }
+
     pub fn contents(&self) -> &'p T::Contents
     where
         T: PathNodeContents,
@@ -1733,11 +1739,6 @@ impl<'p, T: PathNode> LockedNode<'p, T, Write> {
     /// @node is locked for write, for 'p, and nothing else has it as Write.
     pub unsafe fn new_write(node: &'p T) -> Self {
         LockedNode { node, _mode: PhantomData }
-    }
-
-    /// Held, for as long as this is borrowed.
-    pub fn held(&self) -> LockedNode<'_, T> {
-        LockedNode { node: self.node, _mode: PhantomData }
     }
 
     pub fn contents(&self) -> &T::Contents
@@ -1842,6 +1843,11 @@ impl LockedNode<'_, BtreeNode, Write> {
 impl<'p, T: PathNode, M> LockedNode<'p, T, M> {
     pub fn node(&self) -> &'p T {
         self.node
+    }
+
+    /// Held, for as long as this is borrowed.
+    pub fn held(&self) -> LockedNode<'_, T> {
+        LockedNode { node: self.node, _mode: PhantomData }
     }
 }
 

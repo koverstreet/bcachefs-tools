@@ -74,7 +74,7 @@ impl Fs {
         /*
          * On a dead journal the clean-shutdown loop above can't make dirty
          * btree nodes clean: journal_flush_all_pins doesn't push them out,
-         * and __bch2_btree_node_write skips submission for journal_error, so
+         * and node_write() skips submission for journal_error, so
          * BTREE_NODE_dirty stays set on every node that hadn't been written
          * yet. The loop terminates (everything no-ops) but live[].dirty is
          * still populated. Force-cancel: drop dirty bits + transition DIRTY →

@@ -68,6 +68,16 @@ const MAX: usize = c::BCH_BKEY_PTRS_MAX as usize;
 #[derive(Default)]
 pub struct ReplicaErrs(pub ArrayVec<(u8, c::blk_status_t), MAX>);
 
+impl ReplicaErrs {
+    pub fn failures(&self, fs: &Fs) -> c::bch_io_failures {
+        let mut failed = c::bch_io_failures::default();
+        for &(dev, status) in self.0.iter() {
+            failed.set_blk_status(fs, dev.into(), status);
+        }
+        failed
+    }
+}
+
 impl Fold for ReplicaErrs {
     type Item = Option<(u8, c::blk_status_t)>;
     /// How many have failed, and each one's device and status, packed

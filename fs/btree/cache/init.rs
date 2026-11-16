@@ -124,7 +124,7 @@ impl Fs {
         }
 
         /*
-         * btree_node_write_work clears BTREE_NODE_write_in_flight before
+         * a node's write task clears write_in_flight before
          * releasing its read lock on the node, so flush_all_writes returning
          * doesn't guarantee the lock is unheld. Drain the workqueue so the
          * walks below can rely on trylock succeeding without racing with
