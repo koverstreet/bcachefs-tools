@@ -20,8 +20,8 @@
 # __ex_table, .altinstructions, and whatever else turns up. Taken from the
 # objects themselves, so a new one is kept, not lost. So are objtool's
 # .discard.* annotations, unallocated - which objtool, run on the output,
-# reads: without them a paravirt patch site's indirect call isn't
-# retpoline-safe to it, and nothing is NOENDBR. What they name is in
+# reads: without them it doesn't see what they mark, a paravirt patch
+# site's indirect call as retpoline-safe, say. What they name is in
 # .altinstructions and __jump_table, kept already.
 #
 # Except a SHF_LINK_ORDER section ('L'), which isn't unreferenced: each piece
