@@ -63,7 +63,7 @@ use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
 use cstruct_macros::Init;
-use pin_init::pin_data;
+use pin_init::{pin_data, pinned_drop};
 
 // A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
 // before 7.3, and in the shim.
@@ -136,7 +136,7 @@ pub fn buf_bio_bytes(p: *const u8, len: usize) -> usize {
     len
 }
 
-#[pin_data]
+#[pin_data(PinnedDrop)]
 #[repr(C)]
 #[derive(Init)]
 pub struct Bio {
@@ -145,6 +145,15 @@ pub struct Bio {
     data: BioData,
     #[pin]
     _pin: PhantomData<PhantomPinned>,
+}
+
+/// bio_uninit(): a bioset's bio is uninit again by bio_put(), which is
+/// harmless - it frees nothing twice.
+#[pinned_drop]
+impl PinnedDrop for Bio {
+    fn drop(self: Pin<&mut Self>) {
+        unsafe { crate::os::bio::uninit(self.raw_mut()) }
+    }
 }
 
 // SAFETY: a bio is no thread's - submitted on one, completed on another. Not
@@ -191,14 +200,6 @@ impl Bio {
     /// For its own methods, and C's: never moved out of.
     pub(crate) fn raw_mut(self: Pin<&mut Self>) -> &mut c::bio {
         self.project().bio
-    }
-
-    /// bio_uninit(): an inline_bio()'s, as what holds it drops.
-    ///
-    /// # Safety
-    /// Not used after.
-    pub unsafe fn uninit(self: Pin<&mut Self>) {
-        unsafe { crate::os::bio::uninit(self.raw_mut()) }
     }
 
     pub fn range(&self) -> BioRange<'_> {

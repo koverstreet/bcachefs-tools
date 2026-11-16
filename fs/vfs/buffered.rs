@@ -44,7 +44,7 @@ use crate::os::workqueue::Queue;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use cstruct_macros::in_place;
-use pin_init::{pin_data, pin_init, pinned_drop};
+use pin_init::{pin_data, pin_init};
 
 type F = c::ReadFlags;
 
@@ -238,20 +238,13 @@ fn end_reads(b: &impl BioOwner, ret: Result<(), BchError>, except: Option<Folio>
 
 /// A read into the page cache - readahead's, or a single folio's: the home of
 /// the task that reads it, its bvecs inline after the box.
-#[pin_data(PinnedDrop)]
+#[pin_data]
 #[repr(C)]
 struct ReadBio {
     #[pin]
     rbio: Rbio,
 }
 crate::has_bio!(ReadBio, rbio.bio);
-
-#[pinned_drop]
-impl PinnedDrop for ReadBio {
-    fn drop(self: Pin<&mut Self>) {
-        unsafe { self.bio_mut().uninit() }
-    }
-}
 
 /// A read's home, as its task has it: the bio's owner.
 struct ReadHome<'h>(Pin<&'h mut ReadBio>);

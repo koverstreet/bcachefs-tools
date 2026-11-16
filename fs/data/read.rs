@@ -83,7 +83,7 @@ use crate::sb::errors::{bch2_decompress_sb_err, SbErrorId};
 use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot};
 use crate::util::backref::BackRef;
-use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init, PinInit};
+use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
 use crate::util::bio::{bio_box_size, inline_vecs, reset_bvec_offset, Bio, BioBox, BioBuffersOwned, BioBuffersUnmanaged,
                        BioClone, BioInPlace, BioLend, BioOwner, BioRange, Buffers, HasBio, Lent};
 use crate::util::gather::{Gather, GatherRef};
@@ -352,20 +352,13 @@ impl Kind<'_> {
     }
 }
 
-#[pin_data(PinnedDrop)]
+#[pin_data]
 #[repr(C)]
 struct FragmentBio {
     #[pin]
     rbio: Rbio,
 }
 crate::has_bio!(FragmentBio, rbio.bio);
-
-#[pinned_drop]
-impl PinnedDrop for FragmentBio {
-    fn drop(self: Pin<&mut Self>) {
-        unsafe { self.bio_mut().uninit() }
-    }
-}
 
 /// A fragment's task, in place: freed when it's done, after its read is - so
 /// from a pool of the module's, as the box may outlive the filesystem.

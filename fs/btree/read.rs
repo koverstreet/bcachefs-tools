@@ -71,7 +71,7 @@ use core::pin::Pin;
 use core::ptr;
 use core::sync::atomic::{fence, Ordering::SeqCst};
 use cstruct_macros::in_place;
-use pin_init::{pin_data, pin_init, pinned_drop};
+use pin_init::{pin_data, pin_init};
 
 pub struct ReadInFlightNode {
     node: BackRef<BtreeNode>,
@@ -114,20 +114,13 @@ impl Drop for ReadInFlightNode {
     }
 }
 
-#[pin_data(PinnedDrop)]
+#[pin_data]
 #[repr(C)]
 struct NodeReadBio {
     #[pin]
     bio: Bio,
 }
 crate::has_bio!(NodeReadBio, bio);
-
-#[pinned_drop]
-impl PinnedDrop for NodeReadBio {
-    fn drop(self: Pin<&mut Self>) {
-        unsafe { self.bio_mut().uninit() }
-    }
-}
 
 struct NodeReadIo<'h>(Pin<&'h mut NodeReadBio>);
 

@@ -30,7 +30,7 @@ use crate::os::workqueue::Queue;
 use core::pin::{pin, Pin};
 use core::ptr::{self, NonNull};
 use cstruct_macros::{args_stored_once, in_place};
-use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
+use pin_init::{pin_data, pin_init, stack_pin_init};
 
 type F = c::ReadFlags;
 type Splits = Gather<Result<(), BchError>, waiter::Async>;
@@ -72,20 +72,13 @@ impl End {
     }
 }
 
-#[pin_data(PinnedDrop)]
+#[pin_data]
 #[repr(C)]
 struct DioBio {
     #[pin]
     rbio: Rbio,
 }
 crate::has_bio!(DioBio, rbio.bio);
-
-#[pinned_drop]
-impl PinnedDrop for DioBio {
-    fn drop(self: Pin<&mut Self>) {
-        unsafe { self.bio_mut().uninit() }
-    }
-}
 
 struct CallersIter(NonNull<IovIter<'static>>);
 

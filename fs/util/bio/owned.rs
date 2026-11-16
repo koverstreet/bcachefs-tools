@@ -8,7 +8,7 @@
 //!   allocation from a pool, or kmalloc(). Dropped, it's put to its set, or
 //!   freed.
 //! - TaskSlot::exclusive_bio_in(): a T that's a task's home, its bvecs inline
-//!   after the task's box; the T's drop uninit()s its bio.
+//!   after the task's box.
 //!
 //! They deref to the T, and change it through Pin<&mut T>: the T holds its
 //! bio, which is pinned.
@@ -559,7 +559,6 @@ pub fn inline_vecs(nr_vecs: u16) -> Layout {
 
 /// A T, its bio's bvecs the @nr_vecs at @vecs - inline, after what it's in,
 /// inline_vecs()'s room: its bio bio_init()'d, then the rest made by @init.
-/// Its drop is to uninit() the bio, as a BioBox's is.
 ///
 /// # Safety
 /// @vecs is room for @nr_vecs bvecs, that lasts as long as the T.
@@ -678,7 +677,6 @@ impl<T: HasBio, B: Buffers, A: Alloc> Drop for BioBox<T, B, A> {
             if !pool.is_null() {
                 bio_put(bio);
             } else {
-                crate::os::bio::uninit(bio);
                 self.alloc.deallocate(self.t.cast(), inline_layout::<T>(nr_vecs).0);
             }
         }
