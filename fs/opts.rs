@@ -431,7 +431,8 @@ pub struct bch_opts {
     pub journal_rewind_discard_buffer_percent: u8,
 
     /// Scrub data written in the last few journal entries during recovery
-    #[opt(str(ScrubJournalOpt), flags = fs | mount, sb = bch_sb::scrub_journal)]
+    #[opt(str(ScrubJournalOpt), flags = fs | mount, sb = bch_sb::scrub_journal,
+          default = c::ScrubJournalOpt::unclean.0)]
     pub scrub_recent_journal_entries: u8,
 
     /// Maximum time in seconds the journal scrub will rewind (default 10)

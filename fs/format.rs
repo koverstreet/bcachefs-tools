@@ -1593,6 +1593,11 @@ pub enum CompressionOpt {
     zstd = 3,
 }
 
+/*
+ * unclean is 0 so that it is the default, and so existing filesystems get the
+ * scrub without having to be told to. Which means 0 is an *enabled* value:
+ * nothing here may test this option for truthiness.
+ */
 #[bch_enum(open)]
 #[nr]
 #[repr(u32)]

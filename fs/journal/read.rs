@@ -385,7 +385,7 @@ fn journal_replay_maybe_drop_overwrites<'j>(fs: &Fs, j: &'j mut c::jset<Unvalida
     /* Drop overwrites, log entries if we don't need them: */
     let drop = fs.opts.retain_recovery_info.get() == 0 &&
         fs.opts.journal_rewind.get() == 0 &&
-        fs.opts.scrub_recent_journal_entries.get() == 0 &&
+        !fs.journal_scrub_will_run() &&
         j.entries().all(|e| e.is_ok());
 
     let j = j.as_bytes_mut();
@@ -1435,11 +1435,13 @@ fn validate_kept(fs: &Fs, rewind_ranges: &mut KVVec<c::journal_rewind_range>, en
 }
 
 impl Fs {
-    /* The journal scrub runs after an unclean shutdown, or always if asked to */
+    /*
+     * The journal scrub runs when asked to always. unclean - scrub whenever
+     * recovery runs - is the default, and held off until the scrub has had some
+     * time in CI.
+     */
     pub fn journal_scrub_will_run(&self) -> bool {
-        let opt = u32::from(self.opts.scrub_recent_journal_entries.get());
-        opt != 0 &&
-            (self.sb.clean.get() == 0 || opt == c::ScrubJournalOpt::always.0)
+        u32::from(self.opts.scrub_recent_journal_entries.get()) == c::ScrubJournalOpt::always.0
     }
 }
 
