@@ -278,6 +278,7 @@ pub mod data {
     pub mod write;
     pub mod write_extent;
     pub mod write_nocow;
+    pub mod write_replicas;
 }
 pub mod errcode;
 /// The on-disk format.

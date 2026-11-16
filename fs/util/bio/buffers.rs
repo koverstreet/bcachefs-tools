@@ -123,6 +123,7 @@ unsafe impl Buffers for BioBuffersPages {
 /// fill() is __bio_clone(), which isn't exported - but for its device's half,
 /// as a clone's made for no device and bio_set_dev() associates the blkg, and
 /// the crypt context and integrity payload a source has only once submitted.
+#[derive(Default)]
 pub struct BioClone<'a>(PhantomData<BioRange<'a>>);
 
 unsafe impl<'a> Buffers for BioClone<'a> {

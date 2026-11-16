@@ -81,6 +81,7 @@ fn bcachefs_exit() {
         crate::vfs::buffered::pools_exit();
     }
     unsafe { crate::data::read::pools_exit() };
+    unsafe { crate::data::write_replicas::pools_exit() };
     unsafe { crate::btree::read::pools_exit() };
     unsafe { crate::util::task::TASKS.exit() };
 }
@@ -112,6 +113,7 @@ fn init_interfaces() -> Result<(), BchError> {
     crate::util::maybe_rcu_alloc::free_init()?;
     unsafe { crate::util::task::TASKS.init() }?;
     crate::data::read::pools_init()?;
+    crate::data::write_replicas::pools_init()?;
     crate::btree::read::pools_init()?;
     BCACHEFS_KOBJ.0.add(parent, c"bcachefs")?;
     crate::btree::lock_graph::graphs_init()?;

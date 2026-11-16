@@ -77,7 +77,13 @@ nest! {
     }
 }
 
-crate::has_bio!(c::bch_write_bio, bio);
+// SAFETY: its bio, its last field, where it is in either kind's - below
+unsafe impl<R: IoRefIdx> crate::util::bio::HasBio for c::bch_write_bio<R> {
+    const BIO_OFFSET: usize = core::mem::offset_of!(c::bch_write_bio, bio);
+}
+
+const _: () = assert!(core::mem::offset_of!(c::bch_write_bio, bio) + size_of::<crate::util::bio::Bio>() ==
+                      size_of::<c::bch_write_bio>(), "bch_write_bio: its bio isn't last");
 
 // One bioset clones both kinds' bios - the replica set - and to_wbio() finds
 // either from its bio as the default's

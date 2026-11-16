@@ -38,7 +38,7 @@ use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{Exclusive, TaskSlot, Waiter};
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::{Flags, init_at, Alloc, Allocator, Kmalloc};
+use crate::util::alloc::{Flags, init_at, stateless, Alloc, Allocator, Kmalloc};
 use crate::util::mempool::Mempool;
 
 pub struct BioInPlace(*mut c::bio);
@@ -446,8 +446,9 @@ pub trait Gathered<F: Fold>: HasBio {
     fn done(self: Pin<&mut Self>, status: Result<(), BchError>) -> F::Item;
 }
 
-// B is Default: it has nothing the bio doesn't, so the box is its bio
-impl<T: HasBio, B: Buffers + Default> BioBox<T, B> {
+// B is Default: it has nothing the bio doesn't, so the box is its bio; and
+// A has no state, so the endio has the box back from the bio alone
+impl<T: HasBio, B: Buffers + Default, A: Alloc> BioBox<T, B, A> {
     /// Submitted, given up to the IO with its ref to @r's Gather: once it's
     /// done, what its T makes of the IO's status (Gathered) is put - after
     /// the box is dropped, so its bio's freed before the gather's waiter can
@@ -457,32 +458,82 @@ impl<T: HasBio, B: Buffers + Default> BioBox<T, B> {
         T: Gathered<F>,
         Self: Send + 'static,
     {
+        unsafe { self.submit_gathered_unchecked(r) }
+    }
+
+    /// submit_gathered(), of a box that borrows: a clone of another's bvecs.
+    ///
+    /// # Safety
+    /// What the box borrows outlives @r's Gather's wait.
+    pub unsafe fn submit_gathered_unchecked<F: Fold, Wt: Waiter, W: Width>(self, r: GatherRef<F, Wt, W>)
+    where
+        T: Gathered<F>,
+    {
         let bio = bio_of(self.t.as_ptr());
         core::mem::forget(self);
         unsafe {
             (*bio).bi_private = r.into_raw().cast_mut().cast();
-            (*bio).bi_end_io = Some(gathered_endio::<T, B, F, Wt, W>);
+            (*bio).bi_end_io = Some(gathered_endio::<T, B, A, F, Wt, W>);
             crate::os::blkdev::submit_bio(bio);
         }
     }
 }
 
-unsafe extern "C" fn gathered_endio<T, B, F, Wt, W>(bio: *mut c::bio)
+unsafe extern "C" fn gathered_endio<T, B, A, F, Wt, W>(bio: *mut c::bio)
 where
     T: Gathered<F>,
     B: Buffers + Default,
+    A: Alloc,
     F: Fold,
     Wt: Waiter,
     W: Width,
 {
     let (r, mut b) = unsafe {
         (GatherRef::<F, Wt, W>::from_raw((*bio).bi_private.cast()),
-         BioBox::<T, B> { t: NonNull::new_unchecked(of_bio::<T>(bio)), buffers: B::default(), alloc: Kmalloc })
+         BioBox::<T, B, A> {
+             t:       NonNull::new_unchecked(of_bio::<T>(bio)),
+             buffers: B::default(),
+             alloc:   stateless(),
+         })
     };
     let status = b.bio().status();
     let v = b.as_mut().done(status);
     drop(b);
     r.put(v);
+}
+
+/// @t's bio submitted to @r's Gather, as a box's is by submit_gathered(), but
+/// not given up: what its T makes of the IO's status is put, and @t is the
+/// caller's again once the gather's waited on.
+///
+/// # Safety
+/// @t isn't moved, used or dropped till @r's Gather's wait has returned.
+pub unsafe fn submit_gathered_borrowed<T, F, Wt, W>(t: Pin<&mut T>, r: GatherRef<F, Wt, W>)
+where
+    T: Gathered<F>,
+    F: Fold,
+    Wt: Waiter,
+    W: Width,
+{
+    let bio = bio_of(core::ptr::from_ref(&*t).cast_mut());
+    unsafe {
+        (*bio).bi_private = r.into_raw().cast_mut().cast();
+        (*bio).bi_end_io = Some(borrowed_endio::<T, F, Wt, W>);
+        crate::os::blkdev::submit_bio(bio);
+    }
+}
+
+unsafe extern "C" fn borrowed_endio<T, F, Wt, W>(bio: *mut c::bio)
+where
+    T: Gathered<F>,
+    F: Fold,
+    Wt: Waiter,
+    W: Width,
+{
+    let r = unsafe { GatherRef::<F, Wt, W>::from_raw((*bio).bi_private.cast()) };
+    let t = unsafe { Pin::new_unchecked(&mut *of_bio::<T>(bio)) };
+    let status = t.bio().status();
+    r.put(t.done(status));
 }
 
 impl<T: HasBio, B: Buffers, A: Alloc> Deref for BioBox<T, B, A> {
