@@ -65,12 +65,13 @@ pub(crate) trait SelfOf<P> {
     unsafe fn self_of<'a>(&self) -> &'a Self::Out;
 }
 
-/// FromRaw impls, one a line: the Rust type, the raw one, and the one had
-/// from the other, under FromRaw's contract.
+/// FromRaw impls, one a line: the Rust type - its generics, if it has any,
+/// after it in [] - the raw one, and the one had from the other, under
+/// FromRaw's contract. 'a is every impl's.
 macro_rules! from_raw {
-    ($($(#[doc = $d:expr])* $t:ty = $raw:ty => |$r:ident| $e:expr;)*) => {$(
+    ($($(#[doc = $d:expr])* $t:ty $([$($g:tt)*])? = $raw:ty => |$r:ident| $e:expr;)*) => {$(
         $(#[doc = $d])*
-        impl<'a> $crate::os::ops::FromRaw for $t {
+        impl<'a, $($($g)*)?> $crate::os::ops::FromRaw for $t {
             type Raw = $raw;
             #[allow(unused_unsafe)]
             unsafe fn from_raw($r: $raw) -> Self { unsafe { $e } }
@@ -96,14 +97,9 @@ macro_rules! as_passed {
 }
 as_passed!(bool, u16, u32, u64, usize, i32, i64);
 
-impl<T> FromRaw for *mut T {
-    type Raw = *mut T;
-    unsafe fn from_raw(r: *mut T) -> *mut T { r }
-}
-
-impl<T> FromRaw for *const T {
-    type Raw = *const T;
-    unsafe fn from_raw(r: *const T) -> *const T { r }
+from_raw! {
+    *mut T [T]   = *mut T   => |r| r;
+    *const T [T] = *const T => |r| r;
 }
 
 into_raw! {

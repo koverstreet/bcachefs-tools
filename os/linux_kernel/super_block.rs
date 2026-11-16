@@ -32,7 +32,7 @@ use kernel::error::{code::ENOMEM, to_result, Result};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
 use super::fs_type::{FsType, SuperData};
-use super::ops::{FromRaw, SelfOf};
+use super::ops::{from_raw, SelfOf};
 
 #[repr(transparent)]
 pub struct SuperBlock<T>(Opaque<c::super_block>, PhantomData<T>);
@@ -129,9 +129,8 @@ impl<T> SuperBlock<T> {
     }
 }
 
-impl<'a, T> FromRaw for &'a SuperBlock<T> {
-    type Raw = *mut c::super_block;
-    unsafe fn from_raw(r: *mut c::super_block) -> Self { unsafe { SuperBlock::from_raw(r) } }
+from_raw! {
+    &'a SuperBlock<T> [T] = *mut c::super_block => |r| SuperBlock::from_raw(r);
 }
 
 // s_fs_info is set at mount, before the superblock has an inode, to the T
@@ -218,21 +217,12 @@ fn copy_str<const N: usize>(dst: &mut [u8; N], src: &CStr) {
 /// one on i_count - ihold(), iput().
 pub unsafe trait IsInode: AlwaysRefCounted {}
 
-impl<'a, I: IsInode> FromRaw for &'a I {
-    type Raw = *mut c::inode;
-    unsafe fn from_raw(r: *mut c::inode) -> Self { unsafe { &*r.cast() } }
-}
-
-/// A parent, which may not be given.
-impl<'a, I: IsInode> FromRaw for Option<&'a I> {
-    type Raw = *mut c::inode;
-    unsafe fn from_raw(r: *mut c::inode) -> Self { unsafe { r.cast::<I>().as_ref() } }
-}
-
-/// One the VFS is done with, to free: not borrowed, nor its superblock.
-impl<I: IsInode> FromRaw for NonNull<I> {
-    type Raw = *mut c::inode;
-    unsafe fn from_raw(r: *mut c::inode) -> Self { NonNull::new(r).expect("an inode").cast() }
+from_raw! {
+    &'a I [I: IsInode]         = *mut c::inode => |r| &*r.cast();
+    /// A parent, which may not be given.
+    Option<&'a I> [I: IsInode] = *mut c::inode => |r| r.cast::<I>().as_ref();
+    /// One the VFS is done with, to free: not borrowed, nor its superblock.
+    NonNull<I> [I: IsInode]    = *mut c::inode => |r| NonNull::new(r).expect("an inode").cast();
 }
 
 // ── A new superblock ─────────────────────────────────────────────────────

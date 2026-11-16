@@ -27,7 +27,7 @@ use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::locking::{Locked, SpinLockIrq};
 use crate::os::file::Any;
-use crate::os::ops::{err_class_ptr, FromRaw};
+use crate::os::ops::{err_class_ptr, from_raw};
 use crate::os::super_block::IsInode;
 use crate::os::vfs_inode::VfsInode;
 use crate::util::os_str::{qstr_name, OsStr};
@@ -57,16 +57,11 @@ impl<I> Clone for Dentry<'_, I> {
 
 impl<I> Copy for Dentry<'_, I> {}
 
-/// An op's: on the filesystem whose inodes are I.
-impl<'a, I: IsInode> FromRaw for Dentry<'a, I> {
-    type Raw = *mut c::dentry;
-    unsafe fn from_raw(r: *mut c::dentry) -> Self { unsafe { Dentry::borrow_raw(r) } }
-}
-
-/// get_link's, None in an RCU walk.
-impl<'a, I: IsInode> FromRaw for Option<Dentry<'a, I>> {
-    type Raw = *mut c::dentry;
-    unsafe fn from_raw(r: *mut c::dentry) -> Self { (!r.is_null()).then(|| unsafe { Dentry::borrow_raw(r) }) }
+from_raw! {
+    /// An op's: on the filesystem whose inodes are I.
+    Dentry<'a, I> [I: IsInode]         = *mut c::dentry => |r| Dentry::borrow_raw(r);
+    /// get_link's, None in an RCU walk.
+    Option<Dentry<'a, I>> [I: IsInode] = *mut c::dentry => |r| (!r.is_null()).then(|| Dentry::borrow_raw(r));
 }
 
 impl<'a, I> Dentry<'a, I> {

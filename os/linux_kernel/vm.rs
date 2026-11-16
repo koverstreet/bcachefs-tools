@@ -9,7 +9,7 @@ use core::marker::PhantomData;
 use crate::c;
 use crate::util::ffi::Opaque;
 use crate::os::file::{Any, File, FileData, FsFile};
-use crate::os::ops::{into_raw, FromRaw};
+use crate::os::ops::{from_raw, into_raw};
 use crate::os::folio::{FolioRef, FsMapping};
 
 /// A page fault on a mapping of a file of D's: the kernel's vm_fault.
@@ -81,16 +81,11 @@ impl<'a, D> VmArea<'a, D> {
     }
 }
 
-/// mmap_prepare()'s, or mmap()'s: of the file of D's being mapped.
-impl<'a, D: FileData> FromRaw for VmArea<'a, D> {
-    type Raw = *mut VmAreaRaw;
-    unsafe fn from_raw(r: *mut VmAreaRaw) -> Self { VmArea(unsafe { &mut *r }, PhantomData) }
-}
-
-/// A fault on a mapping VmOps' table is installed on: of its Data's file.
-impl<'a, D: FileData> FromRaw for &'a VmFault<D> {
-    type Raw = *mut c::vm_fault;
-    unsafe fn from_raw(r: *mut c::vm_fault) -> Self { unsafe { &*r.cast::<VmFault<D>>() } }
+from_raw! {
+    /// mmap_prepare()'s, or mmap()'s: of the file of D's being mapped.
+    VmArea<'a, D> [D: FileData]   = *mut VmAreaRaw   => |r| VmArea(&mut *r, PhantomData);
+    /// A fault on a mapping VmOps' table is installed on: of its Data's file.
+    &'a VmFault<D> [D: FileData]  = *mut c::vm_fault => |r| &*r.cast::<VmFault<D>>();
 }
 
 /// What a fault returns: vm_fault_t, a VM_FAULT_* or what filemap_fault()

@@ -30,7 +30,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::KBox;
 use crate::util::ffi::{c_char, Opaque};
-use crate::os::ops::{from_raw, FromRaw, SelfOf};
+use crate::os::ops::{from_raw, SelfOf};
 use core::ffi::{c_int, CStr};
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -142,11 +142,10 @@ impl<'a, I: IsInode> OpeningTmpfile<'a, I> {
     }
 }
 
-/// ->tmpfile()'s: a file being opened in a directory of I's filesystem.
 #[cfg(kernel)]
-impl<'a, I: IsInode> FromRaw for OpeningTmpfile<'a, I> {
-    type Raw = *mut c::file;
-    unsafe fn from_raw(r: *mut c::file) -> Self { OpeningTmpfile(unsafe { File::from_raw(r) }, PhantomData) }
+from_raw! {
+    /// ->tmpfile()'s: a file being opened in a directory of I's filesystem.
+    OpeningTmpfile<'a, I> [I: IsInode] = *mut c::file => |r| OpeningTmpfile(File::from_raw(r), PhantomData);
 }
 
 /// A file of a filesystem's own: its inode one of the filesystem's.
@@ -425,12 +424,8 @@ crate::vfs_ops! {
 
 from_raw! {
     &'a File = *mut c::file => |r| File::from_raw(r);
-}
-
-/// An op's file, dispatched by D's table: of D's.
-impl<'a, D: FileData> FromRaw for &'a File<D> {
-    type Raw = *mut c::file;
-    unsafe fn from_raw(r: *mut c::file) -> Self { unsafe { File::of_raw(r) } }
+    /// An op's file, dispatched by D's table: of D's.
+    &'a File<D> [D: FileData] = *mut c::file => |r| File::of_raw(r);
 }
 
 #[cfg(kernel)]

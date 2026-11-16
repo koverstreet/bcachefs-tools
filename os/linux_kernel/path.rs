@@ -25,7 +25,7 @@ use crate::util::ffi::c_char;
 
 use crate::os::dentry::Dentry;
 use crate::os::file::Any;
-use crate::os::ops::FromRaw;
+use crate::os::ops::from_raw;
 use crate::os::super_block::IsInode;
 
 fn user_ptr(addr: u64) -> *const c_char {
@@ -37,9 +37,8 @@ fn user_ptr(addr: u64) -> *const c_char {
 #[repr(transparent)]
 pub struct Path<I = Any>(c::path, PhantomData<I>);
 
-impl<'a, I: IsInode> FromRaw for &'a Path<I> {
-    type Raw = *const c::path;
-    unsafe fn from_raw(r: *const c::path) -> Self { unsafe { &*r.cast() } }
+from_raw! {
+    &'a Path<I> [I: IsInode] = *const c::path => |r| &*r.cast();
 }
 
 impl<I> Path<I> {

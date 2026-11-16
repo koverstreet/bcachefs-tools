@@ -36,7 +36,7 @@ use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::os::file::Any;
 use crate::os::iov_iter::IovIter;
 use crate::os::kernel::{cond_resched, loff};
-use crate::os::ops::{from_raw, FromRaw};
+use crate::os::ops::from_raw;
 use crate::os::super_block::IsInode;
 use crate::util::alloc::KBox;
 use crate::util::ffi::Opaque;
@@ -733,52 +733,23 @@ from_raw! {
 }
 
 // An op's mapping and folios, for a table of A's: A's
-
-impl<A: AddressSpaceOps> FromRaw for Mapping<A> {
-    type Raw = *mut c::address_space;
-    unsafe fn from_raw(r: *mut c::address_space) -> Self { unsafe { Mapping::from_raw(r) } }
-}
-
-/// dirty_folio()'s: for the call.
-impl<'a, A: AddressSpaceOps> FromRaw for &'a Folio<A> {
-    type Raw = *mut c::folio;
-    unsafe fn from_raw(r: *mut c::folio) -> Self { unsafe { Folio::from_raw(r) } }
-}
-
-/// invalidate_folio()'s and release_folio()'s: locked by the VFS, for the
-/// call.
-impl<'a, A: AddressSpaceOps> FromRaw for HeldFolio<'a, A> {
-    type Raw = *mut c::folio;
-    unsafe fn from_raw(r: *mut c::folio) -> Self { HeldFolio(unsafe { FolioLocked::from_raw(r) }) }
-}
-
-/// read_folio()'s: locked, its lock ours to give up, not its ref.
-impl<'a, A: AddressSpaceOps> FromRaw for FolioGuard<'a, A> {
-    type Raw = *mut c::folio;
-    unsafe fn from_raw(r: *mut c::folio) -> Self { unsafe { FolioGuard::adopt(r) } }
-}
-
-impl<'a, A: AddressSpaceOps> FromRaw for Readahead<'a, A> {
-    type Raw = *mut c::readahead_control;
-    unsafe fn from_raw(r: *mut c::readahead_control) -> Self { unsafe { Readahead::from_raw(r) } }
-}
-
-/// write_end()'s: write_begin()'s, its lock and ref to give up.
-impl<A: AddressSpaceOps> FromRaw for LockedFolio<A> {
-    type Raw = *mut c::folio;
-    unsafe fn from_raw(r: *mut c::folio) -> Self { unsafe { LockedFolio::from_raw(r) } }
-}
-
 from_raw! {
+    Mapping<A> [A: AddressSpaceOps]           = *mut c::address_space     => |r| Mapping::from_raw(r);
+    /// dirty_folio()'s: for the call.
+    &'a Folio<A> [A: AddressSpaceOps]         = *mut c::folio             => |r| Folio::from_raw(r);
+    /// invalidate_folio()'s and release_folio()'s: locked by the VFS, for
+    /// the call.
+    HeldFolio<'a, A> [A: AddressSpaceOps]     = *mut c::folio             => |r| HeldFolio(FolioLocked::from_raw(r));
+    /// read_folio()'s: locked, its lock ours to give up, not its ref.
+    FolioGuard<'a, A> [A: AddressSpaceOps]    = *mut c::folio             => |r| FolioGuard::adopt(r);
+    Readahead<'a, A> [A: AddressSpaceOps]     = *mut c::readahead_control => |r| Readahead::from_raw(r);
+    /// write_end()'s: write_begin()'s, its lock and ref to give up.
+    LockedFolio<A> [A: AddressSpaceOps]       = *mut c::folio             => |r| LockedFolio::from_raw(r);
     /// write_begin()'s out parameters.
-    &'a mut *mut c::folio = *mut *mut c::folio    => |r| &mut *r;
-    &'a mut *mut c_void   = *mut *mut c_void      => |r| &mut *r;
-}
-
-/// write_end()'s fsdata: what write_begin() gave the VFS, given back.
-impl<T> FromRaw for KBox<T> {
-    type Raw = *mut c_void;
-    unsafe fn from_raw(r: *mut c_void) -> Self { unsafe { KBox::from_raw(r.cast()) } }
+    &'a mut *mut c::folio                     = *mut *mut c::folio        => |r| &mut *r;
+    &'a mut *mut c_void                       = *mut *mut c_void          => |r| &mut *r;
+    /// write_end()'s fsdata: what write_begin() gave the VFS, given back.
+    KBox<T> [T]                               = *mut c_void               => |r| KBox::from_raw(r.cast());
 }
 
 crate::vfs_ops! {
