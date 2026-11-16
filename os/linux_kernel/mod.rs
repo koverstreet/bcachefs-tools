@@ -10,6 +10,7 @@ pub mod dentry;
 pub mod export;
 pub mod fiemap;
 pub mod file;
+pub mod fileattr;
 pub mod folio;
 pub mod fs_context;
 pub mod fs_type;

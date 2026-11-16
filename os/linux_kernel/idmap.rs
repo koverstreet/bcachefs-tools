@@ -14,6 +14,7 @@ use core::ptr::read_volatile;
 
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
+use crate::os::dentry::Dentry;
 use crate::os::file::File;
 use crate::os::kernel::{current_fsgid, current_fsuid};
 use crate::os::ops::from_raw;
@@ -69,6 +70,13 @@ impl<'f> MntIdmap<'f> {
     /// stack: ACLs and LSMs too.
     pub fn permission(self, inode: &VfsInode, mask: u32) -> Result<(), BchError> {
         ret_to_result(unsafe { c::inode_permission(self.0, inode.as_ptr(), mask as c_int) })
+    }
+
+    /// Whether the caller may make @attr's changes to @dentry's inode -
+    /// which may clear some of them: setattr_prepare().
+    pub fn setattr_prepare(self, dentry: Dentry<'_>, attr: &mut c::iattr) -> Result<(), BchError> {
+        // The kernel crate's struct iattr, codegen's the same
+        ret_to_result(unsafe { c::setattr_prepare(self.0, dentry.as_ptr(), core::ptr::from_mut(attr).cast()) })
     }
 
     /// @inode's owner as the mount's users see it, as stat(2) has it: a

@@ -27,7 +27,7 @@ use crate::acl;
 use crate::os::posix_acl::AclType;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
-use crate::errcode::{Errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
 use crate::quota::QuotaAcctMode;
@@ -152,7 +152,7 @@ impl InodeInfo {
         let bi = self.inode();
         let xflags = FLAGS.iter().filter(|f| bi.flag(f.0)).fold(0, |x, f| x | f.2);
 
-        unsafe { c::fileattr_fill_xflags(fa, xflags) };
+        crate::os::fileattr::fill_xflags(fa, xflags);
         if InodeOpt::of(c::InodeOptId::project).is_own(&bi) {
             fa.fsx_xflags |= c::FS_XFLAG_PROJINHERIT;
         }
@@ -253,10 +253,7 @@ impl InodeInfo {
     {
         self.vfs().assert_locked();
         subvolume::is_ro(self.fs(), self.inum().subvol as u32)?;
-        // The kernel crate's struct iattr, codegen's the same
-        ret_to_result_void(unsafe {
-            c::setattr_prepare(idmap.as_ptr(), dentry.as_ptr(), core::ptr::from_mut(attr).cast())
-        })?;
+        idmap.setattr_prepare(dentry, attr)?;
 
         if attr.ia_valid & ATTR_SIZE != 0 {
             self.truncate(idmap, attr)
