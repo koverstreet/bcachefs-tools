@@ -361,6 +361,9 @@ pub enum VStructError {
     /// @ty's header says it's @len bytes, fewer than the header itself: a
     /// walk would never get past it.
     Short { ty: &'static str, len: usize },
+    /// @ty's header says it's @len bytes, which no @ty is: not a whole number
+    /// of its tail's elements, or of its alignment.
+    Ragged { ty: &'static str, len: usize },
 }
 
 impl core::fmt::Display for VStructError {
@@ -372,6 +375,8 @@ impl core::fmt::Display for VStructError {
                 write!(f, "{ty}: bytes not aligned to {align}"),
             Self::Short { ty, len } =>
                 write!(f, "{ty}: its header says {len} bytes, fewer than the header"),
+            Self::Ragged { ty, len } =>
+                write!(f, "{ty}: its header says {len} bytes, not a whole number of its elements or alignment"),
         }
     }
 }
@@ -384,14 +389,12 @@ impl std::error::Error for VStructError {}
 /// header.
 fn checked_bytes<T: Plain + SelfSized>(bytes: &[u8]) -> Result<usize, VStructError> {
     let ty = core::any::type_name::<T>();
-    if bytes.len() < size_of::<T>() {
-        return Err(VStructError::Overrun { ty, want: size_of::<T>(), have: bytes.len() });
-    }
-    if bytes.as_ptr() as usize % align_of::<T>() != 0 {
-        return Err(VStructError::Misaligned { ty, align: align_of::<T>() });
-    }
-    // SAFETY: the header is there, aligned, and any bytes are a T's
-    let len = unsafe { &*bytes.as_ptr().cast::<T>() }.bytes();
+    let len = cast_plain::<T>(bytes)
+        .ok_or_else(|| match bytes.len() < size_of::<T>() {
+            true  => VStructError::Overrun { ty, want: size_of::<T>(), have: bytes.len() },
+            false => VStructError::Misaligned { ty, align: align_of::<T>() },
+        })?
+        .bytes();
     if len < size_of::<T>() {
         return Err(VStructError::Short { ty, len });
     }
@@ -1246,8 +1249,7 @@ where
     T::Head: Plain + SelfSized,
 {
     let len = checked_bytes::<T::Head>(bytes)?;
-    // SAFETY: that many are there, aligned, and any bytes are a T
-    Ok(unsafe { &*T::from_raw(bytes.as_ptr(), len) })
+    cast(&bytes[..len]).ok_or(VStructError::Ragged { ty: core::any::type_name::<T>(), len })
 }
 
 /// from_bytes(), mutably: T::from_bytes_mut().
@@ -1257,8 +1259,7 @@ where
     T::Head: Plain + SelfSized,
 {
     let len = checked_bytes::<T::Head>(bytes)?;
-    // SAFETY: as from_bytes()
-    Ok(unsafe { &mut *T::from_raw_mut(bytes.as_mut_ptr(), len) })
+    cast_mut(&mut bytes[..len]).ok_or(VStructError::Ragged { ty: core::any::type_name::<T>(), len })
 }
 
 /// Whether @b can be a T, every byte of it: at least its head, aligned for
@@ -1468,15 +1469,16 @@ impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for Unvalid
 
     fn next(&mut self) -> Option<Self::Item> {
         let rest = self.rest.take().filter(|r| !r.is_empty())?;
-        match checked_bytes::<E::Head>(rest) {
-            Ok(len) => {
-                let (e, rest) = rest.split_at_mut(len);
-                self.rest = Some(rest);
-                // SAFETY: as UnvalidatedEntries'
-                Some(Ok(unsafe { &mut *E::from_raw_mut(e.as_mut_ptr(), len) }))
-            }
-            Err(err) => Some(Err(err)),
-        }
+        let len = match checked_bytes::<E::Head>(rest) {
+            Ok(len) => len,
+            Err(err) => return Some(Err(err)),
+        };
+        let (e, rest) = rest.split_at_mut(len);
+        let Some(e) = cast_mut(e) else {
+            return Some(Err(VStructError::Ragged { ty: core::any::type_name::<E>(), len }));
+        };
+        self.rest = Some(rest);
+        Some(Ok(e))
     }
 }
 
@@ -1627,15 +1629,13 @@ impl<T: SizedArm> ArmRef for T {
     const MIN_LEN: usize = size_of::<Self>();
 
     fn arm_ref(b: &[u8]) -> Option<&Self> {
-        // SAFETY: SizedArm's: a T's bytes are there, aligned, any of them one
-        (b.len() >= size_of::<T>() && b.as_ptr() as usize % align_of::<T>() == 0)
-            .then(|| unsafe { &*b.as_ptr().cast() })
+        cast(b.get(..size_of::<T>())?)
     }
 
+    /// None if it has padding, which a write would put over what follows.
     fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {
-        // SAFETY: as arm_ref()'s, and no padding to write over what follows
-        (T::WRITABLE && b.len() >= size_of::<T>() && b.as_ptr() as usize % align_of::<T>() == 0)
-            .then(|| unsafe { &mut *b.as_mut_ptr().cast() })
+        T::WRITABLE.then_some(())?;
+        cast_mut(b.get_mut(..size_of::<T>())?)
     }
 }
 
