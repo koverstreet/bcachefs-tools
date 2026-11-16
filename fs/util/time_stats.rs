@@ -101,6 +101,7 @@ pub const TIME_STATS_MV_WEIGHT: u32 = 8;
 /* the stats' lock's: all in nanoseconds */
 #[repr(C)]
 #[derive(Default, Clone, Copy, MaybeZeroable)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct TimeStatsLocked {
     pub min_duration: u64,
     pub max_duration: u64,
@@ -317,6 +318,84 @@ fn count_buffer(g: &mut StatsGuard<'_>, q: &impl Quantiles, b: &c::time_stat_buf
     b.nr.set(0);
 }
 
+/// What a full buffer's events add to the minimums, maximums and total -
+/// and the times between them, after the first - worked out before taking
+/// the stats' lock: count_full_buffer() then only steps the estimators.
+struct BufferSummary {
+    first_end:      u64,
+    last_end:       u64,
+    min_duration:   u64,
+    max_duration:   u64,
+    total_duration: u64,
+    min_freq:       u64,
+    max_freq:       u64,
+}
+
+impl BufferSummary {
+    fn new(b: &c::time_stat_buffer) -> Self {
+        let mut s = BufferSummary {
+            first_end:      b.entries[0].end.get(),
+            last_end:       0,
+            min_duration:   u64::MAX,
+            max_duration:   0,
+            total_duration: 0,
+            min_freq:       u64::MAX,
+            max_freq:       0,
+        };
+        for e in &b.entries {
+            let (start, end) = (e.start.get(), e.end.get());
+            if time_after64(end, start) {
+                let duration = end - start;
+                s.min_duration = s.min_duration.min(duration);
+                s.max_duration = s.max_duration.max(duration);
+                s.total_duration = s.total_duration.wrapping_add(duration);
+            }
+            if s.last_end != 0 && time_after64(end, s.last_end) {
+                let freq = end - s.last_end;
+                s.min_freq = s.min_freq.min(freq);
+                s.max_freq = s.max_freq.max(freq);
+            }
+            s.last_end = end;
+        }
+        s
+    }
+}
+
+/// @b's events counted, @b full and this CPU's: as count() of each, in order.
+fn count_full_buffer(g: &mut StatsGuard<'_>, q: &impl Quantiles, b: &c::time_stat_buffer, s: &BufferSummary) {
+    let w = c::TIME_STATS_MV_WEIGHT as u8;
+
+    let mut last_event = g.last_event;
+    if last_event != 0 && time_after64(s.first_end, last_event) {
+        let freq = s.first_end - last_event;
+        g.min_freq = g.min_freq.min(freq);
+        g.max_freq = g.max_freq.max(freq);
+    }
+
+    for e in &b.entries {
+        let (start, end) = (e.start.get(), e.end.get());
+        if time_after64(end, start) {
+            let duration = end - start;
+            g.duration_stats.update(duration as i64, 0);
+            g.duration_stats_weighted.update(duration as i64, w);
+            q.update(g, duration);
+        }
+        if last_event != 0 && time_after64(end, last_event) {
+            let freq = end - last_event;
+            g.freq_stats.update(freq as i64, 0);
+            g.freq_stats_weighted.update(freq as i64, w);
+        }
+        last_event = end;
+    }
+
+    g.min_duration = g.min_duration.min(s.min_duration);
+    g.max_duration = g.max_duration.max(s.max_duration);
+    g.total_duration = g.total_duration.wrapping_add(s.total_duration);
+    g.min_freq = g.min_freq.min(s.min_freq);
+    g.max_freq = g.max_freq.max(s.max_freq);
+    g.last_event = s.last_end;
+}
+
 // ── Time stats, with or without quantiles ────────────────────────────────
 
 /// A bch2_time_stats, or one with quantiles: the stats, and what its events'
@@ -490,7 +569,13 @@ impl<'a, T: TimeStatsKind> TimeStatsRef<'a, T> {
         b.nr.set((nr + 1) as u32);
 
         if nr + 1 == b.entries.len() {
-            count_buffer(&mut s.lock.lock(), q, &b);
+            let summary = BufferSummary::new(&b);
+            let mut g = s.lock.lock();
+            /* a snapshot may have counted them since: then nr's 0 */
+            if b.nr.get() as usize == b.entries.len() {
+                count_full_buffer(&mut g, q, &b, &summary);
+            }
+            b.nr.set(0);
         }
     }
 
@@ -656,4 +741,55 @@ fn mean_and_stddev(out: &mut Printbuf, all: &c::mean_and_variance, recent: &c::m
     out.tab();
     nsecs_aligned(out, u64::from(recent.stddev()));
     out.newline();
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pin_init::stack_try_pin_init;
+
+    /// A full buffer's events, counted as one, as count() counts each: the
+    /// same stats and quantiles, over buffers of random events - some of no
+    /// duration, some out of order.
+    #[test]
+    fn full_buffer_counts_as_each() -> Result<(), BchError> {
+        stack_try_pin_init!(let each =? c::bch2_time_stats_quantiles::init());
+        stack_try_pin_init!(let full =? c::bch2_time_stats_quantiles::init());
+        let b: c::time_stat_buffer = pin_init::zeroed();
+
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut rand = move |m: u64| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x % m
+        };
+
+        let mut now = 1 << 32;
+        for _ in 0..1000 {
+            for e in &b.entries {
+                now += rand(4096);
+                let end = if rand(16) == 0 { now - rand(8192) } else { now };
+                let start = if rand(16) == 0 { end + rand(100) } else { end - rand(10000) };
+                e.start.set(start);
+                e.end.set(end);
+            }
+
+            {
+                let mut g = each.stats.lock.lock();
+                for e in &b.entries {
+                    count(&mut g, &each.quantiles, e.start.get(), e.end.get());
+                }
+            }
+            let summary = BufferSummary::new(&b);
+            count_full_buffer(&mut full.stats.lock.lock(), &full.quantiles, &b, &summary);
+
+            assert!(*each.stats.lock.lock() == *full.stats.lock.lock());
+            for i in 0..c::NR_QUANTILES {
+                assert_eq!(each.quantiles.at(i), full.quantiles.at(i));
+            }
+        }
+        Ok(())
+    }
 }

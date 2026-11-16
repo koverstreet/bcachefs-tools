@@ -47,6 +47,7 @@ use cstruct_macros::MaybeZeroable;
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct mean_and_variance {
     pub n: i64,
     pub sum: i64,
