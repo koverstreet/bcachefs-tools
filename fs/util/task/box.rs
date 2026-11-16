@@ -160,31 +160,20 @@ where
         Ok(Self { home, free: free_slot::<H, FutureOfMut<M, H>, A>, _p: PhantomData })
     }
 
-    /// The task of the future @make makes from the home, started to run on
-    /// @q: the box is the task's from here, freed when it's done.
+    /// The task of the future @make makes from the home, started @at: the
+    /// box is the task's from here, freed when it's done.
     ///
     /// # Safety
-    /// @q, and what @make holds and its future borrows beyond the home,
-    /// outlive the task; the home, handed @make as 'static, is borrowed by
-    /// nothing but the future it makes.
-    pub unsafe fn start(self, q: &'q Queue, list: &'q TaskList, make: M) {
-        unsafe { self.make(q, list, make).start() }
-    }
-
-    /// start(), its first poll run here.
-    ///
-    /// # Safety
-    /// As start()'s.
-    pub unsafe fn start_inline(self, q: &'q Queue, list: &'q TaskList, make: M) {
-        unsafe { self.make(q, list, make).start_inline() }
-    }
-
-    unsafe fn make(self, q: &'q Queue, list: &'q TaskList, make: M) -> TaskRef {
+    /// @at's queue, and what @make holds and its future borrows beyond the
+    /// home, outlive the task; the home, handed @make as 'static, is borrowed
+    /// by nothing but the future it makes.
+    pub unsafe fn start(self, at: Spawn<'q, '_>, list: &'q TaskList, make: M) {
         let home = ManuallyDrop::new(self).home;
         unsafe {
-            init_task::<H, _, A>(home, Spawn::Queue(q), list, move || make(Pin::new_unchecked(&mut *home.as_ptr())),
-                                 None)
-        }.expect("a queue's task: only a thread's fails to start")
+            init_task::<H, _, A>(home, at, list, move || make(Pin::new_unchecked(&mut *home.as_ptr())), None)
+                .expect("a task: only a thread's fails to start")
+                .start()
+        }
     }
 }
 
@@ -380,7 +369,7 @@ impl<H> Drop for TaskBox<'_, H> {
 pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(q: &Queue, list: &TaskList, make: impl FnOnce() -> F)
     -> Result<(), BchError>
 {
-    unsafe { TaskSlot::exclusive_in(Kmalloc, ())?.start(q, list, move |_| make()) };
+    unsafe { TaskSlot::exclusive_in(Kmalloc, ())?.start(Spawn::Queue(q), list, move |_| make()) };
     Ok(())
 }
 
@@ -416,7 +405,7 @@ impl<T: Send> Join<T> {
     {
         let slot = TaskSlot::exclusive_in(Kmalloc, ())?;
         let (wait, ret) = CompletionReturn::new(&mut self.0, waiter);
-        unsafe { slot.start(q, list, move |_| async move { ret.complete(make().await) }) };
+        unsafe { slot.start(Spawn::Queue(q), list, move |_| async move { ret.complete(make().await) }) };
         Ok(wait)
     }
 }

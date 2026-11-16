@@ -20,8 +20,9 @@
 //!
 //! A task is spawned on a workqueue, a RunQueue (queue.rs: run by its owner,
 //! between the owner's own work), or a kthread of its own; a RunQueue or
-//! kthread task always runs there. Every await says where its task resumes,
-//! with resume_on():
+//! kthread task always runs there. Or inline: its first poll run by start(),
+//! in the caller's context. Every await says where its task resumes, with
+//! resume_on():
 //! - Queue(q): on workqueue q.
 //! - Inline: in the completer's context, an endio, where everything up to the
 //!   next await runs. It must not sleep, or take a lock that isn't irqsave -
@@ -269,6 +270,8 @@ unsafe impl Send for Target {}
 
 #[derive(Clone, Copy)]
 pub enum Spawn<'q, 'n> {
+    /// Its first poll run by start(), in the caller's context.
+    Inline,
     Queue(&'q Queue),
     Run(Pin<&'q RunQueue>),
     Thread(fmt::Arguments<'n>),
@@ -341,6 +344,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
         'q: 'n,
     {
         let (target, runq) = match spawn {
+            Spawn::Inline => (Target::Inline, None),
             Spawn::Queue(wq) => (Target::Queue(NonNull::from(wq)), None),
             Spawn::Run(rq) => (Target::UNUSED, Some(NonNull::from(rq.get_ref()))),
             Spawn::Thread(_) => (Target::UNUSED, None),
@@ -458,17 +462,6 @@ impl TaskRef {
     pub unsafe fn start(self) {
         assert!(!unsafe { self.0.as_ref() }.started.replace(true), "a task started twice");
         unsafe { self.dispatch() };
-    }
-
-    /// start(), the first poll run here: in the caller's context, as an Inline
-    /// resume is in its completer's, so its first requeue() or Queue resume
-    /// moves it - even to the queue it was spawned on.
-    ///
-    /// # Safety
-    /// As start()'s.
-    pub unsafe fn start_inline(self) {
-        assert!(!unsafe { self.0.as_ref() }.started.replace(true), "a task started twice");
-        unsafe { self.run(Target::Inline) };
     }
 
     unsafe fn dispatch(self) {

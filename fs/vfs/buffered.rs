@@ -39,7 +39,7 @@ use crate::util::bio::{bvec_offset, inline_vecs, Bio, BioBuffersUnmanaged, BioOw
 use crate::os::kernel::PAGE_SIZE;
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, waiter, CompletionReturn, Return, TaskSlot};
+use crate::util::task::{exclusive_size, waiter, CompletionReturn, Return, Spawn, TaskSlot};
 use crate::os::workqueue::Queue;
 use core::pin::Pin;
 use core::ptr::NonNull;
@@ -322,7 +322,7 @@ fn spawn_read(fs: &Fs, inode: &InodeInfo, opts: c::bch_inode_opts, nr_vecs: usiz
         .expect("a read bio's box: its pool waits for an element, and an Rbio's init can't fail");
     set_up(slot.home().bio_mut());
     let inum = inode.inum();
-    unsafe { slot.start_inline(Queue::system_dfl(), fs.tasks(), move |h| read_task(h, inum, hooks, end)) };
+    unsafe { slot.start(Spawn::Inline, fs.tasks(), move |h| read_task(h, inum, hooks, end)) };
 }
 
 pub(crate) fn readahead(mut ra: Readahead<'_>) {

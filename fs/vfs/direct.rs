@@ -25,7 +25,7 @@ use crate::os::kernel::unlikely;
 use crate::util::mempool::Mempool;
 use crate::os::ops::IntoRaw;
 use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, waiter, CompletionReturn, Resume, Return, TaskSlot};
+use crate::util::task::{exclusive_size, waiter, CompletionReturn, Resume, Return, Spawn, TaskSlot};
 use crate::os::workqueue::Queue;
 use core::pin::{pin, Pin};
 use core::ptr::{self, NonNull};
@@ -94,7 +94,7 @@ unsafe impl Send for CallersIter {}
 impl CallersIter {
     /// # Safety
     /// For the dio's task, started inline: @iter is the caller's, gone once
-    /// start_inline() returns - when the task first parks - so it's only got
+    /// start() returns - when the task first parks - so it's only got
     /// from in the task's first poll.
     unsafe fn new(iter: &mut IovIter<'_>) -> Self {
         CallersIter(NonNull::from(iter).cast())
@@ -149,7 +149,7 @@ async fn read_splits(rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum:
         .try_for_each(|split| {
             let r = splits.get();
             unsafe {
-                split?.start_inline(Queue::system_dfl(), fs.tasks(), move |s| split_task(s, r, inum, flags, should_dirty))
+                split?.start(Spawn::Inline, fs.tasks(), move |s| split_task(s, r, inum, flags, should_dirty))
             };
             Ok(())
         })
@@ -234,8 +234,7 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
 
     unsafe {
         let callers = CallersIter::new(&mut iter);
-        dio.start_inline(Queue::system_dfl(), fs.tasks(),
-                         move |d| dio_task(d, end, callers, offset, inum, flags, len as usize))
+        dio.start(Spawn::Inline, fs.tasks(), move |d| dio_task(d, end, callers, offset, inum, flags, len as usize))
     };
     drop(iter);
 

@@ -28,7 +28,7 @@ use crate::util::log::LogMsg;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::util::gather::{Fold, Gather, GatherRef};
 use crate::util::backref::BackRef;
-use crate::util::task::{waiter, TaskSlot};
+use crate::util::task::{waiter, Spawn, TaskSlot};
 use crate::{bch_err, bch_err_ratelimited, bch_info, new_lock, prt};
 use core::ffi::c_int;
 use pin_init::{stack_pin_init, PinInit};
@@ -198,7 +198,7 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
     if !reads.is_empty() {
         let (key, found) = (BtreeKeyBuf::new(btree, level, k), found.get());
         unsafe {
-            slot.start(&fs.btree.read_complete_wq, fs.tasks(), move |reads| async move {
+            slot.start(Spawn::Queue(&fs.btree.read_complete_wq), fs.tasks(), move |reads| async move {
                 found.put(node_verdict(fs_ref, key, reads.get_mut()).await)
             })
         };

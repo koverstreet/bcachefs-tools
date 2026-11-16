@@ -92,7 +92,7 @@ use crate::util::alloc::{flags, init_with, Flags, Box, Kmalloc};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
-use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, TaskSlot};
+use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, Spawn, TaskSlot};
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
@@ -1345,9 +1345,9 @@ impl<'r> Planned<'r, '_> {
                                              orig);
         start_task(t, plan.pick.do_ec_reconstruct, |inline| unsafe {
             if inline {
-                slot.start_inline(Queue::system_dfl(), fs.tasks(), make)
+                slot.start(Spawn::Inline, fs.tasks(), make)
             } else {
-                slot.start(Queue::system_dfl(), fs.tasks(), make)
+                slot.start(Spawn::Queue(Queue::system_dfl()), fs.tasks(), make)
             }
         });
         Ok(())
@@ -1383,9 +1383,9 @@ impl<'r> Planned<'r, '_> {
         let make = move |_| fragment_task(r, f, orig);
         start_task(t, reconstruct, |inline| unsafe {
             if inline {
-                slot.start_inline(Queue::system_dfl(), fs.tasks(), make)
+                slot.start(Spawn::Inline, fs.tasks(), make)
             } else {
-                slot.start(Queue::system_dfl(), fs.tasks(), make)
+                slot.start(Spawn::Queue(Queue::system_dfl()), fs.tasks(), make)
             }
         });
         Ok(())
