@@ -45,6 +45,9 @@
 #include <linux/workqueue.h>
 #include <linux/writeback.h>
 #include <asm/ioctl.h>
+#ifdef CONFIG_PARAVIRT_XXL
+#include <asm/paravirt_types.h>
+#endif
 #include <keys/user-type.h>
 
 #include "pf_memalloc.h"
@@ -94,6 +97,19 @@ const loff_t RUST_CONST_HELPER_MAX_LFS_FILESIZE		= MAX_LFS_FILESIZE;
  */
 const unsigned int RUST_CONST_HELPER_MAX_PAGECACHE_ORDER	=
 	MIN(MAX_XAS_ORDER, PREFERRED_MAX_PAGECACHE_ORDER);
+
+#ifdef CONFIG_PARAVIRT_XXL
+/*
+ * pv_ops' irq ops, which percpu.rs's local_irq_save() and _restore() call
+ * through as C's paravirt patch sites do
+ */
+const size_t RUST_CONST_HELPER_PV_IRQ_SAVE_FL	=
+	offsetof(struct paravirt_patch_template, irq.save_fl.func);
+const size_t RUST_CONST_HELPER_PV_IRQ_DISABLE	=
+	offsetof(struct paravirt_patch_template, irq.irq_disable.func);
+const size_t RUST_CONST_HELPER_PV_IRQ_ENABLE	=
+	offsetof(struct paravirt_patch_template, irq.irq_enable.func);
+#endif
 
 /* blk_status_t's values, for errcode.rs's blk_status_to_bch_err() */
 const blk_status_t RUST_CONST_HELPER_BLK_STS_NOTSUPP		= BLK_STS_NOTSUPP;

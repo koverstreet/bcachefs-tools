@@ -23,6 +23,20 @@
 #define PREEMPT_COUNT_OP(op)	op "l"
 #endif
 
+#ifdef CONFIG_PARAVIRT_XXL
+#include <asm/paravirt_types.h>
+
+/*
+ * A paravirt irq op's call site, as ____PVOP_ALT_CALL() makes one: an indirect
+ * call through the op's slot in pv_ops, at {off}, which the kernel patches at
+ * load to a direct call - and, but under Xen PV, to @native. PARAVIRT_CALL,
+ * but for its "m" operand, which Rust asm doesn't have.
+ */
+#define PV_IRQ_CALL(native)							\
+	ALTERNATIVE_2(ANNOTATE_RETPOLINE_SAFE "\n\t" "call *pv_ops+{off}(%rip)",	\
+		      ALT_CALL_INSTR, ALT_CALL_ALWAYS, native, ALT_NOT_XEN)
+#endif
+
 // Cut here.
 
 // Each for every width: $w is the register modifier for the operand, which
@@ -128,6 +142,24 @@ macro_rules! this_cpu_add_asm {
 
 #endif
 
+#if defined(CONFIG_X86_64) && defined(CONFIG_PARAVIRT_XXL)
+
+// arch_local_save_flags(), _irq_disable() and _irq_enable(), paravirt
+
+macro_rules! pv_save_fl_asm {
+    () => { concat_literals!(PV_IRQ_CALL("pushf; pop %rax;")) };
+}
+
+macro_rules! pv_irq_disable_asm {
+    () => { concat_literals!(PV_IRQ_CALL("cli;")) };
+}
+
+macro_rules! pv_irq_enable_asm {
+    () => { concat_literals!(PV_IRQ_CALL("sti;")) };
+}
+
+#endif
+
 // Whether there's a preempt count, and whether enabling preemption may
 // reschedule: preempt_disable() and _enable() as that kernel's config has them
 
@@ -154,12 +186,12 @@ const PREEMPT_INLINE: bool = false;
 const PREEMPT_INLINE: bool = true;
 #endif
 
-// Whether local_irq_save() and _restore() are the native pushf/cli and sti -
-// not paravirt calls, nor traced - and local_lock_irqsave() is only that:
-// not RT's sleeping lock, no lockdep
+// Whether local_irq_save() and _restore() are only pushf/cli and sti, or
+// their paravirt patch sites - not traced - and local_lock_irqsave() is only
+// that: not RT's sleeping lock, no lockdep
 
-#if defined(CONFIG_PARAVIRT_XXL) || defined(CONFIG_TRACE_IRQFLAGS) || \
-    defined(CONFIG_PREEMPT_RT) || defined(CONFIG_DEBUG_LOCK_ALLOC)
+#if defined(CONFIG_TRACE_IRQFLAGS) || defined(CONFIG_PREEMPT_RT) || \
+    defined(CONFIG_DEBUG_LOCK_ALLOC)
 const IRQ_INLINE: bool = false;
 #else
 const IRQ_INLINE: bool = true;

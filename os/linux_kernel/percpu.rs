@@ -87,10 +87,12 @@
 //! this_cpu_ptr() and per_cpu_ptr(): on x86 each one instruction on the
 //! kernel's own per-CPU variables, %rip relative as 6.15+ addresses them -
 //! enabling preemption calls out only to reschedule - and local_irq_save() and
-//! _restore() are pushf/cli and sti. Where the kernel's config makes one more
-//! than that (preempt debugging or tracing; paravirt or traced irqs, RT) it's
-//! C's call. arm64 has current (sp_el0) and this_cpu_ptr() inline, the rest
-//! C's, out of line; the walk over the possible CPUs is C's everywhere.
+//! _restore() are pushf/cli and sti: under PARAVIRT_XXL, paravirt patch sites
+//! as C's are, which the kernel patches to those at load but under Xen PV.
+//! Where the kernel's config makes one more than that (preempt debugging or
+//! tracing; traced irqs, RT) it's C's call. arm64 has current (sp_el0) and
+//! this_cpu_ptr() inline, the rest C's, out of line; the walk over the
+//! possible CPUs is C's everywhere.
 
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::marker::PhantomData;
@@ -255,14 +257,73 @@ mod arch {
         }
     }
 
-    /* not nomem: a compiler barrier, as C's; the push and pop are the stack */
+    /* none nomem: compiler barriers, as C's */
+    #[cfg(not(CONFIG_PARAVIRT_XXL))]
+    mod irq {
+        use core::ffi::c_ulong;
+
+        #[inline(always)]
+        pub(super) fn save_fl() -> c_ulong {
+            let flags: c_ulong;
+            unsafe { core::arch::asm!("pushf", "pop {f}", f = out(reg) flags, options(att_syntax)) };
+            flags
+        }
+
+        #[inline(always)]
+        pub(super) fn disable() {
+            unsafe { core::arch::asm!("cli", options(att_syntax, nostack)) };
+        }
+
+        #[inline(always)]
+        pub(super) fn enable() {
+            unsafe { core::arch::asm!("sti", options(att_syntax, nostack)) };
+        }
+    }
+
+    /*
+     * The patch sites' call is to a callee that saves all but rax - and, with
+     * ZERO_CALL_USED_REGS, the argument registers (PVOP_VCALLEE_CLOBBERS): those
+     * are clobbered here whatever the config.
+     */
+    #[cfg(CONFIG_PARAVIRT_XXL)]
+    mod irq {
+        use core::ffi::c_ulong;
+
+        macro_rules! pv_irq_op {
+            ($asm:ident, $off:expr) => {{
+                let rax: c_ulong;
+                unsafe {
+                    core::arch::asm!($asm!(), off = const $off, out("rax") rax,
+                                     out("rcx") _, out("rdx") _, out("rsi") _, out("rdi") _,
+                                     options(att_syntax));
+                }
+                rax
+            }};
+        }
+
+        #[inline(always)]
+        pub(super) fn save_fl() -> c_ulong {
+            pv_irq_op!(pv_save_fl_asm, crate::c::PV_IRQ_SAVE_FL)
+        }
+
+        #[inline(always)]
+        pub(super) fn disable() {
+            pv_irq_op!(pv_irq_disable_asm, crate::c::PV_IRQ_DISABLE);
+        }
+
+        #[inline(always)]
+        pub(super) fn enable() {
+            pv_irq_op!(pv_irq_enable_asm, crate::c::PV_IRQ_ENABLE);
+        }
+    }
+
     #[inline(always)]
     pub(super) fn local_irq_save() -> c_ulong {
         if !IRQ_INLINE {
             return unsafe { crate::c::rust_local_irq_save() };
         }
-        let flags: c_ulong;
-        unsafe { core::arch::asm!("pushf", "pop {f}", "cli", f = out(reg) flags, options(att_syntax)) };
+        let flags = irq::save_fl();
+        irq::disable();
         flags
     }
 
@@ -274,7 +335,7 @@ mod arch {
             return unsafe { crate::c::rust_local_irq_restore(flags) };
         }
         if flags & X86_EFLAGS_IF != 0 {
-            unsafe { core::arch::asm!("sti", options(att_syntax, nostack)) };
+            irq::enable();
         }
     }
 
