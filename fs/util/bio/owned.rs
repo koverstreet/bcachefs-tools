@@ -635,6 +635,12 @@ impl<T: HasBio, B: MapBuf> BioBox<T, BioBuffersMapped<B>> {
     }
 }
 
+/// The size of a BioBox's T and @nr_vecs bvecs: what a pool's elements are,
+/// for new_in().
+pub fn bio_box_size<T: HasBio>(nr_vecs: u16) -> usize {
+    inline_layout::<T>(nr_vecs).0.size()
+}
+
 fn inline_layout<T>(nr_vecs: u16) -> (Layout, usize) {
     let (layout, vecs) = Layout::new::<T>().extend(inline_vecs(nr_vecs)).expect("a T and its bvecs");
     (layout.pad_to_align(), vecs)

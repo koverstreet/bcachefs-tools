@@ -37,8 +37,8 @@
 //! run inline till it waits on the IO; resume_target() says where the work
 //! after it runs. The read's own bio's - the read isn't split - is the walk's
 //! last, and read() reads it once its walk is done. A retry's fragments, and a
-//! data update's, are of the filesystem's bioset, read in the caller's task
-//! (Planned::make()).
+//! data update's, are boxes from another of the module's pools, read in the
+//! caller's task (Planned::make()).
 //!
 //! Each fragment's task puts what it read to read()'s Gather, which read()
 //! awaits once its walk is done - having given back first what's the
@@ -84,8 +84,8 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot};
 use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init, PinInit};
-use crate::util::bio::{inline_vecs, reset_bvec_offset, Bio, BioBox, BioBuffersOwned, BioBuffersUnmanaged, BioClone,
-                       BioInPlace, BioLend, BioOwner, BioRange, Buffers, HasBio, Lent};
+use crate::util::bio::{bio_box_size, inline_vecs, reset_bvec_offset, Bio, BioBox, BioBuffersOwned, BioBuffersUnmanaged,
+                       BioClone, BioInPlace, BioLend, BioOwner, BioRange, Buffers, HasBio, Lent};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, Flags, Box, Kmalloc};
@@ -321,8 +321,8 @@ impl Rbio {
 
 enum Kind<'r> {
     Own(LentBio<'r>),
-    Clone(BioBox<Rbio, BioClone<'r>>),
-    Bounce(BioBox<Rbio, BioBuffersOwned<'r>>),
+    Clone(BioBox<Rbio, BioClone<'r>, Pool>),
+    Bounce(BioBox<Rbio, BioBuffersOwned<'r>, Pool>),
     /// The promote's bio, and its task, started with what was read once the
     /// bio's given back
     Promote(Lent<'r>, AwaitingRead<'r>),
@@ -371,16 +371,28 @@ impl PinnedDrop for FragmentBio {
 /// from a pool of the module's, as the box may outlive the filesystem.
 static FRAGMENTS: Mempool<Kmalloc> = ::pin_init::zeroed();
 
+/// A retry's fragments, and a data update's, read in their caller's task: one
+/// at a time, each read and dropped before the next is made.
+static FRAGMENT_BIOS: Mempool<Kmalloc> = ::pin_init::zeroed();
+
+type Pool = &'static Mempool<Kmalloc>;
+
 pub fn pools_init() -> Result<(), BchError> {
-    type Pool = &'static Mempool<Kmalloc>;
-    let size = exclusive_size::<FragmentBio, FragmentFut<'static>, Pool>(inline_vecs(c::BIO_MAX_VECS as u16));
-    unsafe { Mempool::init_static(&FRAGMENTS, Mempool::kmalloc(1, size)) }
+    let max = c::BIO_MAX_VECS as u16;
+    let size = exclusive_size::<FragmentBio, FragmentFut<'static>, Pool>(inline_vecs(max));
+    unsafe {
+        Mempool::init_static(&FRAGMENTS, Mempool::kmalloc(1, size))?;
+        Mempool::init_static(&FRAGMENT_BIOS, Mempool::kmalloc(1, bio_box_size::<Rbio>(max)))
+    }
 }
 
 /// # Safety
 /// At module exit, after the last box's grace period.
 pub unsafe fn pools_exit() {
-    unsafe { FRAGMENTS.exit() }
+    unsafe {
+        FRAGMENT_BIOS.exit();
+        FRAGMENTS.exit();
+    }
 }
 
 struct Fragment<'r> {
@@ -1246,23 +1258,23 @@ struct Planned<'r, 'k> {
 }
 
 impl<'r> Planned<'r, '_> {
-    /// The fragment, its bio of the filesystem's bioset, made into @into: for a
-    /// read awaited in its caller's task - a retry's, a data update's.
+    /// The fragment, its bio from FRAGMENT_BIOS, made into @into: for a read
+    /// awaited in its caller's task - a retry's, a data update's.
     fn make(self, orig: &'r Rbio, into: &mut Option<Fragment<'r>>) -> Result<(), BchError> {
         let Planned { how, plan, ca, k } = self;
         let fs = orig.fs();
         let opf = orig.bio().raw().bi_opf;
 
         let _noio = MemallocFlags::noio();
-        let set = &fs.bio_read_split;
         let fragment = |b| Rbio::fragment(orig, b);
+        let (pool, bdev) = (&FRAGMENT_BIOS, core::ptr::null_mut());
         let kind = match how {
             How::Promote(p) => Kind::Promote(p.rbio.bio.lend(), p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
-                Kind::Bounce(set.alloc_with(core::ptr::null_mut(), 0, (&fs.bio_bounce, bs, size, gfp), fragment)?)
+                Kind::Bounce(BioBox::new_with_in(pool, bdev, 0, (&fs.bio_bounce, bs, size, gfp), fragment)?)
             }
-            How::Clone => Kind::Clone(set.alloc_with(core::ptr::null_mut(), 0, plan.range, fragment)?),
+            How::Clone => Kind::Clone(BioBox::new_with_in(pool, bdev, 0, plan.range, fragment)?),
             How::Own => Kind::Own(orig.lend()),
         };
 

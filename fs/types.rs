@@ -670,9 +670,6 @@ pub struct Fs {
     #[init(BioSet::new(1), ENOMEM_bio_read_init)]
     pub bio_read: BioSet<crate::data::read::Rbio>,
     #[pin]
-    #[init(BioSet::new(1), ENOMEM_bio_read_split_init)]
-    pub bio_read_split: BioSet<crate::data::read::Rbio>,
-    #[pin]
     #[init(crate::data::read::retry_pool(), ENOMEM_fs_other_alloc)]
     pub read_retry_pool: crate::util::mempool::Mempool<crate::util::alloc::Kmalloc>,
     #[late(BioSet::new(1), ENOMEM_bio_write_init)]
