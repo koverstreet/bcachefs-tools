@@ -8,3 +8,5 @@ DEST_MODULE_LOCATION[0]="/kernel/fs/bcachefs"
 STRIP[0]="no"
 # kernels older than 6.16 are currently not supported
 BUILD_EXCLUSIVE_KERNEL_MIN="6.16"
+# need_resched() reads current's thread_info: not before 7.2 on loongarch
+BUILD_EXCLUSIVE_CONFIG="CONFIG_THREAD_INFO_IN_TASK"

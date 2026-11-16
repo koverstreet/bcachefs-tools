@@ -365,8 +365,8 @@ bool bch2_kthread_should_stop(void)
 }
 
 /*
- * os/linux_kernel/sched.rs: current, signal_pending_state() and need_resched()
- * are macros, or inlines over current
+ * os/linux_kernel/sched.rs: current and signal_pending_state() are macros, or
+ * inlines over current
  */
 struct task_struct *bch2_current(void)
 {
@@ -376,11 +376,6 @@ struct task_struct *bch2_current(void)
 bool bch2_signal_pending_state(unsigned int state)
 {
 	return signal_pending_state(state, current);
-}
-
-bool bch2_need_resched(void)
-{
-	return need_resched();
 }
 
 #ifdef CONFIG_SMP

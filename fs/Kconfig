@@ -2,6 +2,7 @@
 config BCACHEFS_FS
 	tristate "bcachefs filesystem support (EXPERIMENTAL)"
 	depends on BLOCK
+	depends on THREAD_INFO_IN_TASK
 	select EXPORTFS
 	select CRC32
 	select CRC64

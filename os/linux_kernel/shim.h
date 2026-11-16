@@ -98,7 +98,6 @@ void rust_kvfree_rcu(void *p, struct rcu_head *head);
 void rust_kfree_rcu_mightsleep(void *p);
 void *rust_bio_pages_alloc(size_t size, gfp_t gfp);
 void rust_bio_pages_free(void *p, size_t size);
-bool bch2_need_resched(void);
 #ifdef CONFIG_SMP
 bool bch2_owner_on_cpu(struct task_struct *owner);
 bool bch2_rt_or_dl_task_current(void);
