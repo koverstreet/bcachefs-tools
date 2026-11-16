@@ -26,10 +26,10 @@ crate::vfs_ops! {
     type Inode: IsInode;
 
     /// @name NAME_MAX + 1 bytes.
-    fn get_name(&self = child, parent: Dentry<'_>, name: &mut NameBuf, child: Dentry<'_>)
-        -> Result<(), BchError>;
+    fn get_name(&self = child, parent: Dentry<'_, Self::Inode>, name: &mut NameBuf,
+                child: Dentry<'_, Self::Inode>) -> Result<(), BchError>;
     /// As fh_to_dentry(), the directory @child is in's.
-    fn get_parent(&self = child, child: Dentry<'_>) -> *mut c::dentry;
+    fn get_parent(&self = child, child: Dentry<'_, Self::Inode>) -> *mut c::dentry;
 
     unsafe {
         /// @inode's handle - with @parent's, if given - into @fh, *@max_len

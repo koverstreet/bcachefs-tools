@@ -11,25 +11,41 @@ use core::marker::PhantomData;
 
 use crate::c;
 use crate::locking::{Locked, SpinLockIrq};
-use crate::os::ops::from_raw;
+use crate::os::file::Any;
+use crate::os::ops::FromRaw;
+use crate::os::super_block::IsInode;
 use crate::util::os_str::{qstr_name, OsStr};
 
-#[derive(Clone, Copy)]
-pub struct Dentry<'a> {
+/// A dentry whose inode, if it has one, is an I.
+pub struct Dentry<'a, I = Any> {
     raw:  *mut c::dentry,
-    _ref: PhantomData<&'a c::dentry>,
+    _ref: PhantomData<(&'a c::dentry, &'a I)>,
 }
 
-from_raw! {
-    Dentry<'a>            = *mut c::dentry      => |r| Dentry::borrow_raw(r);
-    /// get_link's, None in an RCU walk.
-    Option<Dentry<'a>>    = *mut c::dentry      => |r| (!r.is_null()).then(|| Dentry::borrow_raw(r));
+impl<I> Clone for Dentry<'_, I> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-impl<'a> Dentry<'a> {
+impl<I> Copy for Dentry<'_, I> {}
+
+/// An op's: on the filesystem whose inodes are I.
+impl<'a, I: IsInode> FromRaw for Dentry<'a, I> {
+    type Raw = *mut c::dentry;
+    unsafe fn from_raw(r: *mut c::dentry) -> Self { unsafe { Dentry::borrow_raw(r) } }
+}
+
+/// get_link's, None in an RCU walk.
+impl<'a, I: IsInode> FromRaw for Option<Dentry<'a, I>> {
+    type Raw = *mut c::dentry;
+    unsafe fn from_raw(r: *mut c::dentry) -> Self { (!r.is_null()).then(|| unsafe { Dentry::borrow_raw(r) }) }
+}
+
+impl<'a, I> Dentry<'a, I> {
     /// # Safety
     /// @raw is a dentry the VFS holds a reference on, for 'a - its inode, if
-    /// it has one, one of ours.
+    /// it has one, an I.
     pub unsafe fn borrow_raw(raw: *mut c::dentry) -> Self {
         Dentry { raw, _ref: PhantomData }
     }
@@ -72,5 +88,34 @@ impl<'a> Dentry<'a> {
         Locked::from_c(unsafe {
             &*(&raw const (*self.raw).d_lockref.__bindgen_anon_1.__bindgen_anon_1.lock).cast::<SpinLockIrq>()
         })
+    }
+}
+
+impl<'a, I: IsInode> Dentry<'a, I> {
+    /// A positive dentry's inode.
+    pub fn inode(&self) -> &'a I {
+        self.inode_opt().expect("the inode of a negative dentry")
+    }
+
+    pub fn inode_opt(&self) -> Option<&'a I> {
+        // SAFETY: an I, as borrow_raw() was promised. A referenced positive
+        // dentry stays positive - d_delete() only unhashes one with other
+        // references - and a negative one stays negative while the call holds
+        // its directory locked, as a namespace operation does
+        unsafe { (*self.raw).d_inode.cast::<I>().as_ref() }
+    }
+
+    /// @f, of the parent directory's inode - None at a root, its own parent:
+    /// under d_lock, which holds the parent while it's read.
+    pub fn with_parent_inode<R>(&self, f: impl FnOnce(Option<&I>) -> R) -> R {
+        let _d_lock = self.d_lock().lock();
+
+        let parent = unsafe { (*self.raw).d_parent };
+        if parent == self.raw {
+            return f(None);
+        }
+        // SAFETY: held by this dentry while d_lock is; a directory of the
+        // same filesystem
+        f(Some(unsafe { &*(*parent).d_inode.cast::<I>() }))
     }
 }

@@ -5,7 +5,7 @@
 
 use crate::c;
 use crate::fs::Fs;
-use crate::os::dentry::Dentry;
+use super::dentry::Dentry;
 use crate::os::path::{Creating, Removing, UserPath};
 
 use super::inode::InodeInfo;

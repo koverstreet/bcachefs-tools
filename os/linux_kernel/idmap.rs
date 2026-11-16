@@ -74,7 +74,7 @@ impl<'f> MntIdmap<'f> {
 
     /// Whether the caller may make @attr's changes to @dentry's inode -
     /// which may clear some of them: setattr_prepare().
-    pub fn setattr_prepare(self, dentry: Dentry<'_>, attr: &mut c::iattr) -> Result<(), BchError> {
+    pub fn setattr_prepare<I>(self, dentry: Dentry<'_, I>, attr: &mut c::iattr) -> Result<(), BchError> {
         // The kernel crate's struct iattr, codegen's the same
         ret_to_result(unsafe { c::setattr_prepare(self.0, dentry.as_ptr(), core::ptr::from_mut(attr).cast()) })
     }

@@ -32,7 +32,7 @@ use crate::snapshots::subvolume;
 use crate::util::os_str::OsStrExt;
 use cstruct_macros::vtable;
 
-use crate::os::dentry::Dentry;
+use super::dentry::Dentry;
 use crate::os::export::{ExportOps, ExportVTable, NameBuf};
 use super::inode::{InodeInfo, InodeRef};
 use super::super_block::SuperBlock;

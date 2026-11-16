@@ -33,7 +33,7 @@ use crate::inode_opts::InodeOpt;
 use crate::quota::QuotaAcctMode;
 use crate::snapshots::subvolume;
 
-use crate::os::dentry::Dentry;
+use super::dentry::Dentry;
 use crate::os::iattr::Iattr;
 use crate::os::idmap::MntIdmap;
 use super::inode::InodeInfo;

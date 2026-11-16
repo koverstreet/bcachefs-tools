@@ -15,6 +15,7 @@
 //! revalidate the victim under the lock.
 
 use core::ffi::{c_int, c_uint};
+use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 
@@ -23,23 +24,27 @@ use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::util::ffi::c_char;
 
 use crate::os::dentry::Dentry;
-use crate::os::ops::from_raw;
+use crate::os::file::Any;
+use crate::os::ops::FromRaw;
+use crate::os::super_block::IsInode;
 
 fn user_ptr(addr: u64) -> *const c_char {
     addr as usize as *const c_char
 }
 
-/// A path the VFS passes an op - getattr's - ours, held for the call.
+/// A path the VFS passes an op - getattr's - held for the call: of the
+/// filesystem whose inodes are I.
 #[repr(transparent)]
-pub struct Path(c::path);
+pub struct Path<I = Any>(c::path, PhantomData<I>);
 
-from_raw! {
-    &'a Path = *const c::path => |r| &*r.cast();
+impl<'a, I: IsInode> FromRaw for &'a Path<I> {
+    type Raw = *const c::path;
+    unsafe fn from_raw(r: *const c::path) -> Self { unsafe { &*r.cast() } }
 }
 
-impl Path {
-    pub fn dentry(&self) -> Dentry<'_> {
-        // SAFETY: held, its inode ours, as the FromRaw row has it
+impl<I> Path<I> {
+    pub fn dentry(&self) -> Dentry<'_, I> {
+        // SAFETY: held, its inode an I, as the FromRaw row has it
         unsafe { Dentry::borrow_raw(self.0.dentry) }
     }
 }

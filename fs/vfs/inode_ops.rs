@@ -23,7 +23,7 @@ use crate::os::ops::IntoRaw;
 use crate::xattr;
 use cstruct_macros::vtable;
 
-use crate::os::dentry::Dentry;
+use super::dentry::Dentry;
 use crate::os::fiemap::Fiemap;
 use crate::os::idmap::MntIdmap;
 use super::inode::InodeInfo;
@@ -57,7 +57,7 @@ crate::vfs_ops! {
     fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: &File, mode: c::umode_t)
         -> Result<(), BchError>;
 
-    fn getattr(idmap: MntIdmap<'_>, path: &Path, stat: &mut c::kstat, request_mask: u32,
+    fn getattr(idmap: MntIdmap<'_>, path: &Path<InodeInfo>, stat: &mut c::kstat, request_mask: u32,
                    _query_flags: c_uint) -> Result<(), BchError>
     {
         path.dentry().inode().getattr(idmap, stat, request_mask);

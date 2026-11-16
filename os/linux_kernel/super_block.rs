@@ -170,9 +170,9 @@ crate::vfs_ops! {
     /// I_FREEING: ours to evict, the superblock still up.
     fn evict_inode(&self = inode, inode: &Self::Inode);
     fn sync_fs(&self = sb, sb: &SuperBlock<Self>, wait: c_int) -> Result<(), BchError>;
-    fn statfs(&self = dentry, dentry: Dentry<'_>, buf: &mut c::kstatfs) -> Result<(), BchError>;
-    fn show_devname(&self = root, m: &SeqFile, root: Dentry<'_>) -> Result<(), BchError>;
-    fn show_options(&self = root, m: &SeqFile, root: Dentry<'_>) -> Result<(), BchError>;
+    fn statfs(&self = dentry, dentry: Dentry<'_, Self::Inode>, buf: &mut c::kstatfs) -> Result<(), BchError>;
+    fn show_devname(&self = root, m: &SeqFile, root: Dentry<'_, Self::Inode>) -> Result<(), BchError>;
+    fn show_options(&self = root, m: &SeqFile, root: Dentry<'_, Self::Inode>) -> Result<(), BchError>;
     /// The VFS's last op on the superblock.
     fn put_super(&self = sb, sb: &SuperBlock<Self>);
     fn freeze_fs(&self = sb, sb: &SuperBlock<Self>) -> Result<(), BchError>;

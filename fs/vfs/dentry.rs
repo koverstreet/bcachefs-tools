@@ -20,13 +20,15 @@ use core::ptr::NonNull;
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::inode_opts::InodeOpt;
-use crate::os::dentry::Dentry;
 use crate::xattr::XattrType;
 
 use kernel::sync::aref::ARef;
 
 use super::inode::{InodeInfo, InodeRef};
 use crate::os::vfs_inode::VfsInode;
+
+/// Ours: a dentry of this filesystem, its inode an InodeInfo.
+pub type Dentry<'a> = crate::os::dentry::Dentry<'a, InodeInfo>;
 
 #[cfg(CONFIG_UNICODE)]
 // SAFETY, of the CStatic: immutable, its only parts that aren't Sync pointers
@@ -40,33 +42,10 @@ static CASEFOLD_OPS: crate::types::CStatic<c::dentry_operations> = unsafe {
 };
 
 impl<'a> Dentry<'a> {
-    /// A positive dentry's inode.
-    pub fn inode(&self) -> &'a InodeInfo {
-        self.inode_opt().expect("the inode of a negative dentry")
-    }
-
-    pub fn inode_opt(&self) -> Option<&'a InodeInfo> {
-        // SAFETY: ours, as borrow_raw() was promised. A referenced positive
-        // dentry stays positive - d_delete() only unhashes one with other
-        // references - and a negative one stays negative while the call holds
-        // its directory locked, as a namespace operation does
-        let inode = unsafe { (*self.as_ptr()).d_inode };
-        (!inode.is_null()).then(|| unsafe { InodeInfo::from_inode(inode) })
-    }
-
     /// Inode option @opt of the parent directory - None at the root, which
     /// has none: what clearing it on this inode inherits.
     pub fn parent_inode_opt(&self, opt: InodeOpt) -> Option<u64> {
-        let _d_lock = self.d_lock().lock();
-
-        // A root is its own parent:
-        let parent = unsafe { (*self.as_ptr()).d_parent };
-        if parent == self.as_ptr() {
-            return None;
-        }
-        // SAFETY: held by this dentry while d_lock is; a directory of ours
-        let dir = unsafe { InodeInfo::from_inode((*parent).d_inode) };
-        Some(opt.get(&dir.inode()))
+        self.with_parent_inode(|dir| dir.map(|dir| opt.get(&dir.inode())))
     }
 
     /// DCACHE_OP_HASH and DCACHE_OP_COMPARE, set while @inode is casefolded.

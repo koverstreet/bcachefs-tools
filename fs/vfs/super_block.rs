@@ -25,7 +25,7 @@ use crate::util::rcu::read_lock;
 use crate::os::seq_file::SeqFile;
 use cstruct_macros::vtable;
 
-use crate::os::dentry::Dentry;
+use super::dentry::Dentry;
 use super::inode::InodeInfo;
 use crate::os::super_block::{SuperOps, SuperVTable};
 use crate::os::vfs_inode::VfsInode;
