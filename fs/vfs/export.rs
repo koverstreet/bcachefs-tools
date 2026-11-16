@@ -16,8 +16,6 @@
 //! directory's dirents are searched for one that names the inode.
 
 use core::ffi::c_int;
-use core::mem::size_of;
-use core::ptr::{read_unaligned, write_unaligned};
 
 use crate::btree::bkey::{pos, spos};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
@@ -30,12 +28,11 @@ use crate::namei::subvol_inum_eq;
 use crate::types::CStatic;
 use crate::snapshots::subvolume;
 use crate::util::os_str::OsStrExt;
-use cstruct_macros::vtable;
+use cstruct_macros::{vtable, Plain};
 
 use super::dentry::Dentry;
-use crate::os::export::{ExportOps, ExportVTable, NameBuf};
+use crate::os::export::{ExportOps, ExportVTable, FileHandle, HandleBuf, NameBuf};
 use super::inode::{InodeInfo, InodeRef};
-use super::super_block::SuperBlock;
 use crate::format::Btree;
 
 /// @d's name, as get_name returns it: cut at NAME_MAX.
@@ -47,7 +44,7 @@ fn copy_name(out: &mut NameBuf, d: Dirent<'_>) {
 }
 
 #[repr(C, packed)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Plain)]
 struct Fid {
     inum:       u64,
     subvol:     u32,
@@ -55,43 +52,14 @@ struct Fid {
 }
 
 #[repr(C, packed)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Plain)]
 struct FidWithParent {
     fid: Fid,
     dir: Fid,
 }
 
-/// @T's length in a handle: u32s.
-const fn fh_len<T>() -> usize {
-    size_of::<T>() / size_of::<u32>()
-}
-
-/// Handle @fid, if it's one of ours: of a type of ours, and that type's
-/// length.
-///
-/// # Safety
-/// @fid is exportfs's handle, @len u32s.
-unsafe fn our_handle<'a>(fid: *mut c::fid, len: c_int, fh_type: c_int) -> Option<&'a [u32]> {
-    let fh = unsafe { core::slice::from_raw_parts(fid.cast::<u32>(), len.max(0) as usize) };
-    let len = match fh_type as u32 {
-        c::fid_type_FILEID_BCACHEFS_WITHOUT_PARENT => fh_len::<Fid>(),
-        c::fid_type_FILEID_BCACHEFS_WITH_PARENT    => fh_len::<FidWithParent>(),
-        _ => return None,
-    };
-    (fh.len() == len).then_some(fh)
-}
-
-/// @v into @fh, as a handle of @fh_type: its type and length - or, if @fh is
-/// too short, the length it needs.
-fn encode<T>(fh: &mut [u32], v: T, fh_type: u32) -> Result<(c_int, usize), usize> {
-    let len = fh_len::<T>();
-    if fh.len() < len {
-        return Err(len);
-    }
-    // SAFETY: in bounds; packed, so u32-aligned will do
-    unsafe { write_unaligned(fh.as_mut_ptr().cast::<T>(), v) };
-    Ok((fh_type as c_int, len))
-}
+const WITHOUT_PARENT: u32 = c::fid_type_FILEID_BCACHEFS_WITHOUT_PARENT;
+const WITH_PARENT: u32    = c::fid_type_FILEID_BCACHEFS_WITH_PARENT;
 
 impl InodeInfo {
     fn fid(&self) -> Fid {
@@ -169,41 +137,22 @@ impl ExportOps for Fs {
         Dentry::obtain_alias(InodeInfo::get(self, parent))
     }
 
-    unsafe fn encode_fh(&self, inode: &InodeInfo, fh: *mut u32, max_len: *mut c_int,
-                        parent: Option<&InodeInfo>) -> c_int {
-        // SAFETY: the VFS's
-        let fh = unsafe { core::slice::from_raw_parts_mut(fh, (*max_len).max(0) as usize) };
-        let (fh_type, len) = match parent.filter(|_| !inode.vfs().is_dir()) {
-            Some(dir) => encode(fh, FidWithParent { fid: inode.fid(), dir: dir.fid() },
-                                c::fid_type_FILEID_BCACHEFS_WITH_PARENT),
-            None      => encode(fh, inode.fid(), c::fid_type_FILEID_BCACHEFS_WITHOUT_PARENT),
-        }.unwrap_or_else(|len| (c::fid_type_FILEID_INVALID as c_int, len));
-        unsafe { *max_len = len as c_int };
-        fh_type
+    fn encode_fh(&self, inode: &InodeInfo, fh: &mut HandleBuf<'_>, parent: Option<&InodeInfo>) -> c_int {
+        match parent.filter(|_| !inode.vfs().is_dir()) {
+            Some(dir) => fh.put(WITH_PARENT, &FidWithParent { fid: inode.fid(), dir: dir.fid() }),
+            None      => fh.put(WITHOUT_PARENT, &inode.fid()),
+        }
     }
 
-    unsafe fn fh_to_dentry(&self, _sb: &SuperBlock, fid: *mut c::fid, fh_len: c_int, fh_type: c_int)
-        -> *mut c::dentry
-    {
-        // SAFETY: the VFS's
-        let Some(fh) = (unsafe { our_handle(fid, fh_len, fh_type) }) else {
-            return core::ptr::null_mut();
-        };
-        // SAFETY: a Fid's length at least; packed
-        let fid = unsafe { read_unaligned(fh.as_ptr().cast::<Fid>()) };
+    /// Either handle names the inode first.
+    fn fh_to_dentry(&self, fh: FileHandle<'_>) -> *mut c::dentry {
+        let fid = fh.get::<Fid>(WITHOUT_PARENT).or_else(|| fh.get::<FidWithParent>(WITH_PARENT).map(|f| f.fid));
+        let Some(fid) = fid else { return core::ptr::null_mut() };
         Dentry::obtain_alias(self.nfs_get_inode(fid))
     }
 
-    unsafe fn fh_to_parent(&self, _sb: &SuperBlock, fid: *mut c::fid, fh_len: c_int, fh_type: c_int)
-        -> *mut c::dentry
-    {
-        // SAFETY: the VFS's
-        let fh = unsafe { our_handle(fid, fh_len, fh_type) };
-        let Some(fh) = fh.filter(|_| fh_type as u32 == c::fid_type_FILEID_BCACHEFS_WITH_PARENT) else {
-            return core::ptr::null_mut();
-        };
-        // SAFETY: a FidWithParent's length; packed
-        let fid = unsafe { read_unaligned(fh.as_ptr().cast::<FidWithParent>()) };
+    fn fh_to_parent(&self, fh: FileHandle<'_>) -> *mut c::dentry {
+        let Some(fid) = fh.get::<FidWithParent>(WITH_PARENT) else { return core::ptr::null_mut() };
         Dentry::obtain_alias(self.nfs_get_inode(fid.dir))
     }
 }
