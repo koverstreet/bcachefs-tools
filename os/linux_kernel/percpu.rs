@@ -90,14 +90,17 @@
 //! _restore() are pushf/cli and sti: under PARAVIRT_XXL, paravirt patch sites
 //! as C's are, which the kernel patches to those at load but under Xen PV.
 //! Where the kernel's config makes one more than that (preempt debugging or
-//! tracing; traced irqs, RT) it's C's call. arm64 has current (sp_el0) and
-//! this_cpu_ptr() inline, the rest C's, out of line. The walk over the
-//! possible CPUs reads the possible mask, everywhere.
+//! tracing; traced irqs, RT) it's C's call. arm64 has current (sp_el0),
+//! this_cpu_ptr() and per_cpu_ptr() inline, and the CPU's number and the
+//! preempt count from current's thread_info; its irq flags are C's, out of
+//! line. The walk over the possible CPUs reads the possible mask, everywhere.
 
 use core::ffi::{c_uint, c_ulong};
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::NonNull;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use core::sync::atomic::{compiler_fence, Ordering::SeqCst};
 
 use crate::c;
 use crate::c::rust_local_lock_init;
@@ -143,17 +146,50 @@ pub trait PerCpuWord: Copy + Eq {
     unsafe fn this_cpu_cmpxchg(pcp: *mut Self, old: Self, new: Self) -> Self;
 }
 
+/* the preempt count only the count: debug and the preemptoff tracer make
+ * preempt_count_add() and _sub() calls */
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+const PREEMPT_INLINE: bool = !cfg!(any(CONFIG_DEBUG_PREEMPT, CONFIG_TRACE_PREEMPT_TOGGLE));
+
+/// preempt_disable(): the count up, then a compiler barrier - as C's, over
+/// the arch's count where it's inline.
+#[inline(always)]
+pub(crate) fn preempt_disable() {
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    {
+        if PREEMPT_INLINE {
+            if cfg!(CONFIG_PREEMPT_COUNT) {
+                arch::preempt_count_inc();
+            }
+            return compiler_fence(SeqCst);
+        }
+    }
+    unsafe { c::bch2_preempt_disable() }
+}
+
+/// preempt_enable(): a compiler barrier, the count down, and if that's the
+/// last and a reschedule's wanted, the reschedule.
+#[inline(always)]
+pub(crate) fn preempt_enable() {
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    {
+        if PREEMPT_INLINE {
+            compiler_fence(SeqCst);
+            if cfg!(CONFIG_PREEMPT_COUNT) && arch::preempt_count_dec_and_test() && cfg!(CONFIG_PREEMPTION) {
+                unsafe { c::bch2_preempt_schedule() };
+            }
+            return;
+        }
+    }
+    unsafe { c::bch2_preempt_enable() }
+}
+
 #[cfg(target_arch = "x86_64")]
 mod arch {
     use super::{PerCpuWord, Pinned};
     use core::ffi::{c_uint, c_ulong};
-    use core::sync::atomic::{compiler_fence, Ordering::SeqCst};
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
-
-    /* the count only the count: debug and the preemptoff tracer make
-     * preempt_count_add() and _sub() calls */
-    const PREEMPT_INLINE: bool = !cfg!(any(CONFIG_DEBUG_PREEMPT, CONFIG_TRACE_PREEMPT_TOGGLE));
 
     /* local_irq_save() and _restore() only pushf/cli and sti, or their
      * paravirt patch sites - not traced - and local_lock_irqsave() only that:
@@ -236,34 +272,19 @@ mod arch {
         cpu
     }
 
-    /* not nomem: a compiler barrier, as C's */
     #[inline(always)]
-    pub(super) fn preempt_disable() {
-        if !PREEMPT_INLINE {
-            unsafe { crate::c::bch2_preempt_disable() };
-        } else if cfg!(CONFIG_PREEMPT_COUNT) {
-            unsafe { core::arch::asm!(preempt_count_inc_asm!(), options(att_syntax, nostack)) };
-        } else {
-            compiler_fence(SeqCst);
-        }
+    pub(super) fn preempt_count_inc() {
+        unsafe { core::arch::asm!(preempt_count_inc_asm!(), options(att_syntax, nostack)) };
     }
 
     #[inline(always)]
-    pub(super) fn preempt_enable() {
-        if !PREEMPT_INLINE {
-            return unsafe { crate::c::bch2_preempt_enable() };
-        }
-        if !cfg!(CONFIG_PREEMPT_COUNT) {
-            return compiler_fence(SeqCst);
-        }
-        let resched: u8;
+    pub(super) fn preempt_count_dec_and_test() -> bool {
+        let zero: u8;
         unsafe {
-            core::arch::asm!(preempt_count_dec_asm!(), "sete {r}", r = out(reg_byte) resched,
+            core::arch::asm!(preempt_count_dec_asm!(), "sete {r}", r = out(reg_byte) zero,
                              options(att_syntax, nostack));
         }
-        if cfg!(CONFIG_PREEMPTION) && resched != 0 {
-            unsafe { crate::c::bch2_preempt_schedule() };
-        }
+        zero != 0
     }
 
     /* none nomem: compiler barriers, as C's */
@@ -366,6 +387,7 @@ mod arch {
 #[cfg(target_arch = "aarch64")]
 mod arch {
     use super::{CpuGuard, PerCpuWord, Pinned};
+    use core::ffi::{c_uint, c_ulong};
     use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
@@ -426,8 +448,46 @@ mod arch {
         task
     }
 
-    pub(super) use super::c_arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore,
-                                   per_cpu_ptr, preempt_disable, preempt_enable, raw_smp_processor_id};
+    /* current_thread_info(): the head of current's task_struct */
+    #[inline(always)]
+    fn thread_info() -> *mut crate::c::thread_info {
+        unsafe { &raw mut (*current_task()).thread_info }
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn per_cpu_ptr<T>(pcp: *mut T, cpu: c_uint) -> *mut T {
+        let off = unsafe { *(&raw const crate::c::__per_cpu_offset).cast::<c_ulong>().add(cpu as usize) };
+        pcp.wrapping_byte_add(off as usize)
+    }
+
+    #[inline(always)]
+    pub(super) fn raw_smp_processor_id() -> c_uint {
+        unsafe { (*thread_info()).cpu }
+    }
+
+    /* The count is current's, in its thread_info: a plain read and write, as
+     * an interrupt that changes it puts it back */
+    #[inline(always)]
+    fn preempt_count() -> *mut u32 {
+        unsafe { &raw mut (*thread_info()).__bindgen_anon_1.preempt.count }
+    }
+
+    #[inline(always)]
+    pub(super) fn preempt_count_inc() {
+        let pc = preempt_count();
+        unsafe { pc.write_volatile(pc.read_volatile().wrapping_add(1)) };
+    }
+
+    /* need_resched is the count's top half, inverted: the whole word, read
+     * after the decrement, 0 */
+    #[inline(always)]
+    pub(super) fn preempt_count_dec_and_test() -> bool {
+        let pc = preempt_count();
+        unsafe { pc.write_volatile(pc.read_volatile().wrapping_sub(1)) };
+        unsafe { (&raw const (*thread_info()).__bindgen_anon_1.preempt_count).read_volatile() == 0 }
+    }
+
+    pub(super) use super::c_arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore};
 }
 
 /// What's C's, out of line, on an arch that doesn't have its own.
@@ -441,14 +501,6 @@ mod c_arch {
 
     pub(super) fn raw_smp_processor_id() -> c_uint {
         unsafe { crate::c::bch2_raw_smp_processor_id() }
-    }
-
-    pub(super) fn preempt_disable() {
-        unsafe { crate::c::bch2_preempt_disable() }
-    }
-
-    pub(super) fn preempt_enable() {
-        unsafe { crate::c::bch2_preempt_enable() }
     }
 
     pub(super) fn local_irq_save() -> core::ffi::c_ulong {
@@ -502,11 +554,10 @@ mod arch {
     }
 
     pub(super) use super::c_arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore,
-                                   per_cpu_ptr, preempt_disable, preempt_enable, raw_smp_processor_id};
+                                   per_cpu_ptr, raw_smp_processor_id};
 }
 
-use arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore, per_cpu_ptr,
-           preempt_disable, preempt_enable, this_cpu_ptr};
+use arch::{local_irq_restore, local_irq_save, local_lock_irqsave, local_unlock_irqrestore, per_cpu_ptr, this_cpu_ptr};
 pub(crate) use arch::current_task;
 
 /// The task held to this CPU while it lives: for this CPU's copy, which
