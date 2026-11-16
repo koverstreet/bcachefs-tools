@@ -29,7 +29,7 @@ use crate::snapshots::subvolume;
 use crate::str_hash;
 use crate::os::kernel::{current_fsgid, current_fsuid};
 use crate::util::log::LogMsg;
-use crate::os::file::File;
+use crate::os::file::OpeningTmpfile;
 use crate::util::ffi::bytes;
 use crate::util::os_str::{cstr_name, OsStr};
 use crate::xattr::{self, XattrType};
@@ -489,15 +489,11 @@ impl InodeOps for DirOps {
         ret
     }
 
-    fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: &File, mode: c::umode_t)
+    fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: OpeningTmpfile<'_, InodeInfo>, mode: c::umode_t)
         -> Result<(), BchError>
     {
-        // SAFETY: the file being opened's, referenced by it
-        let dentry = unsafe { Dentry::borrow_raw(file.dentry()) };
-        let inode = dir.create(idmap, dentry, mode, 0, Default::default(), c::BCH_CREATE_TMPFILE)?;
-        unsafe { c::d_mark_tmpfile(file.as_ptr(), inode.vfs().as_ptr()) };
-        dentry.instantiate(inode);
-        ret_to_result_void(unsafe { c::finish_open_simple(file.as_ptr(), 0) })
+        let inode = dir.create(idmap, file.dentry(), mode, 0, Default::default(), c::BCH_CREATE_TMPFILE)?;
+        file.finish(inode)
     }
 }
 

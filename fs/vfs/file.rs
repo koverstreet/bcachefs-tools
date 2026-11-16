@@ -70,13 +70,12 @@ use core::ffi::{c_int, c_uint};
 use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
-use crate::errcode::{Errcode, ret_to_class, ret_to_result_void, BchError};
-use crate::fs::Fs;
+use crate::errcode::{Errcode, ret_to_class, BchError};
 use crate::snapshots::subvolume;
 use crate::types::CStatic;
-use crate::os::file::{File, FileData, FileOps, FileVTable, FsFile};
+use crate::os::file::{File, FileData, FileOps, FileVTable, FsFile, Opening};
 use crate::os::kernel::{current_id, PAGE_SIZE};
-use crate::os::vm::{VmFault, VmFaultRet, VmOps, VmVTable};
+use crate::os::vm::{VmArea, VmFault, VmFaultRet, VmOps, VmVTable};
 use core::cmp::{max, min};
 use kernel::page::PAGE_SHIFT;
 use cstruct_macros::vtable;
@@ -223,12 +222,16 @@ unsafe impl FsFile for InodeFile {
 }
 
 /// A shared writable mapping is refused once the filesystem's gone emergency
-/// read-only: @flags the mapping's VM_*.
-fn mmap_check(fs: &Fs, flags: c_ulong) -> Result<(), BchError> {
+/// read-only.
+fn mmap(mut vma: VmArea<'_, InodeFile>) -> Result<(), BchError> {
+    let file = vma.file();
+    let fs = file.inode().fs();
     let shared_writable = c::VM_SHARED | c::VM_WRITE;
-    if flags & shared_writable == shared_writable && fs.flags.get(c::FsFlag::emergency_ro) {
+    if vma.flags() & shared_writable == shared_writable && fs.flags.get(c::FsFlag::emergency_ro) {
         return fs.throw(Errcode::mmap_emergency_ro);
     }
+    file.accessed();
+    vma.set_vm_ops(&VM_OPS);
     Ok(())
 }
 
@@ -243,25 +246,13 @@ impl FileOps for InodeInfo {
     const HAS_MMAP: bool = true;
 
     #[cfg(linux_ge = "6.17")]
-    fn mmap_prepare(desc: &mut c::vm_area_desc) -> Result<(), BchError> {
-        #[cfg(linux_ge = "7.0")]
-        let flags = desc.vma_flags.__vma_flags[0];
-        #[cfg(not(linux_ge = "7.0"))]
-        let flags = desc.vm_flags;
-        // SAFETY: the file being mapped: one of ours, open
-        mmap_check(unsafe { <InodeFile as FileData>::ops_of(desc.file) }.fs(), flags)?;
-        unsafe { c::file_accessed(desc.file) };
-        desc.vm_ops = &*VM_OPS;
-        Ok(())
+    fn mmap_prepare(vma: VmArea<'_, InodeFile>) -> Result<(), BchError> {
+        mmap(vma)
     }
 
     #[cfg(not(linux_ge = "6.17"))]
-    fn mmap(&self, file: &File<InodeFile>, vma: &mut c::vm_area_struct) -> Result<(), BchError> {
-        // SAFETY: vm_flags and __vm_flags are the one word
-        mmap_check(self.fs(), unsafe { vma.__bindgen_anon_2.vm_flags })?;
-        file.accessed();
-        vma.vm_ops = &*VM_OPS;
-        Ok(())
+    fn mmap(&self, _file: &File<InodeFile>, vma: VmArea<'_, InodeFile>) -> Result<(), BchError> {
+        mmap(vma)
     }
 
     fn llseek(&self, file: &File<InodeFile>, offset: i64, whence: c_int) -> Result<u64, BchError> {
@@ -295,14 +286,13 @@ impl FileOps for InodeInfo {
 /// private data, and there's none: this is the table's own.
 unsafe extern "C" fn open(vinode: *mut c::inode, file: *mut c::file) -> c_int {
     // SAFETY: a file of ours being opened, and its inode
-    let (inode, f) = unsafe { (InodeInfo::from_inode(vinode), File::from_raw(file)) };
+    let (inode, f) = unsafe { (InodeInfo::from_inode(vinode), Opening::from_raw(file)) };
     ret_to_class((|| {
-        if f.flags() & (c::O_WRONLY | c::O_RDWR) != 0 {
+        if f.file().flags() & (c::O_WRONLY | c::O_RDWR) != 0 {
             subvolume::is_ro(inode.fs(), inode.inum().subvol as u32)?;
         }
-        // SAFETY: not yet the file of anyone but the opener
-        unsafe { (*file).f_mode |= c::FMODE_CAN_ODIRECT };
-        ret_to_result_void(unsafe { c::generic_file_open(vinode, file) })
+        f.set_can_odirect();
+        f.generic_open()
     })())
 }
 

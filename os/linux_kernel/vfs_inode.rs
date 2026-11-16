@@ -19,7 +19,9 @@ use core::ptr::{read_volatile, write_volatile, NonNull};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::{ExclusiveGuard, Locked, RwSem, SpinLockIrq};
+use crate::os::dentry::Dentry;
 use crate::os::folio::Mapping;
+use crate::util::ffi::c_char;
 use crate::os::kernel::loff;
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::os::super_block::{IsInode, SuperBlock};
@@ -174,6 +176,14 @@ impl VfsInode {
 
     pub fn mapping(&self) -> Mapping {
         unsafe { Mapping::from_raw((*self.as_ptr()).i_mapping) }
+    }
+
+    /// A symlink's target, read from its page cache - @dentry None in an RCU
+    /// walk, which doesn't block - its page's release in @done:
+    /// page_get_link().
+    pub fn page_get_link<I>(&self, dentry: Option<Dentry<'_, I>>, done: &mut c::delayed_call) -> *const c_char {
+        let dentry = dentry.map_or(core::ptr::null_mut(), |d| d.as_ptr());
+        unsafe { c::page_get_link(dentry, self.as_ptr(), done).cast() }
     }
 
     /// A symlink's target, @target, written into its page cache:

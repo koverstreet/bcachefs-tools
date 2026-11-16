@@ -18,7 +18,7 @@ use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::ffi::{c_char, opt_bytes_mut};
-use crate::os::file::File;
+use crate::os::file::OpeningTmpfile;
 use crate::os::ops::IntoRaw;
 use crate::xattr;
 use cstruct_macros::vtable;
@@ -53,8 +53,7 @@ crate::vfs_ops! {
                  rdev: c::dev_t) -> Result<(), BchError>;
     fn rename(idmap: MntIdmap<'_>, src_dir: &InodeInfo, src: Dentry<'_>,
                   dst_dir: &InodeInfo, dst: Dentry<'_>, flags: c_uint) -> Result<(), BchError>;
-    /// @file being opened, its dentry the new inode's to instantiate.
-    fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: &File, mode: c::umode_t)
+    fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: OpeningTmpfile<'_, InodeInfo>, mode: c::umode_t)
         -> Result<(), BchError>;
 
     fn getattr(idmap: MntIdmap<'_>, path: &Path<InodeInfo>, stat: &mut c::kstat, request_mask: u32,
@@ -129,8 +128,7 @@ impl InodeOps for SymlinkOps {
     fn get_link(dentry: Option<Dentry<'_>>, inode: &InodeInfo, done: &mut c::delayed_call)
         -> *const c_char
     {
-        let dentry = dentry.map_or(core::ptr::null_mut(), |d| d.as_ptr());
-        unsafe { c::page_get_link(dentry, inode.vfs().as_ptr(), done).cast() }
+        inode.vfs().page_get_link(dentry, done)
     }
 }
 

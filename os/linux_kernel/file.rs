@@ -91,6 +91,64 @@ impl<D: FileData> Deref for File<D> {
     }
 }
 
+/// A file being opened, by an open that's its table's own: no one's yet but
+/// the opener's.
+#[cfg(kernel)]
+pub struct Opening<'a>(&'a File);
+
+#[cfg(kernel)]
+impl<'a> Opening<'a> {
+    /// # Safety
+    /// @file is being opened, in its f_op->open().
+    pub unsafe fn from_raw(file: *mut c::file) -> Self {
+        Opening(unsafe { File::from_raw(file) })
+    }
+
+    pub fn file(&self) -> &'a File {
+        self.0
+    }
+
+    /// O_DIRECT allowed on it: FMODE_CAN_ODIRECT.
+    pub fn set_can_odirect(&self) {
+        unsafe { (*self.0.as_ptr()).f_mode |= c::FMODE_CAN_ODIRECT }
+    }
+
+    /// The open's generic checks - a large file, opened without
+    /// O_LARGEFILE, refused: generic_file_open().
+    pub fn generic_open(&self) -> Result<(), BchError> {
+        let f = self.0.as_ptr();
+        ret_to_result_void(unsafe { c::generic_file_open((*f).f_inode, f) })
+    }
+}
+
+/// The file ->tmpfile() opens: its dentry negative, the new inode's to be -
+/// in a directory of the filesystem whose inodes are I.
+#[cfg(kernel)]
+pub struct OpeningTmpfile<'a, I>(&'a File, PhantomData<I>);
+
+#[cfg(kernel)]
+impl<'a, I: IsInode> OpeningTmpfile<'a, I> {
+    pub fn dentry(&self) -> Dentry<'a, I> {
+        unsafe { Dentry::borrow_raw(self.0.dentry()) }
+    }
+
+    /// @inode's, opened: d_mark_tmpfile(), the dentry instantiated with it,
+    /// finish_open_simple().
+    pub fn finish(self, inode: ARef<I>) -> Result<(), BchError> {
+        let vinode = core::ptr::from_ref::<I>(&inode).cast_mut().cast::<c::inode>();
+        unsafe { c::d_mark_tmpfile(self.0.as_ptr(), vinode) };
+        self.dentry().instantiate(inode);
+        ret_to_result_void(unsafe { c::finish_open_simple(self.0.as_ptr(), 0) })
+    }
+}
+
+/// ->tmpfile()'s: a file being opened in a directory of I's filesystem.
+#[cfg(kernel)]
+impl<'a, I: IsInode> FromRaw for OpeningTmpfile<'a, I> {
+    type Raw = *mut c::file;
+    unsafe fn from_raw(r: *mut c::file) -> Self { OpeningTmpfile(unsafe { File::from_raw(r) }, PhantomData) }
+}
+
 /// A file of a filesystem's own: its inode one of the filesystem's.
 ///
 /// # Safety
@@ -351,10 +409,11 @@ crate::vfs_ops! {
     /// A mapping about to be made: its vm_ops, and whether it may be.
     #[cfg(kernel)]
     #[cfg(linux_ge = "6.17")]
-    fn mmap_prepare(desc: &mut c::vm_area_desc) -> Result<(), BchError>;
+    fn mmap_prepare(vma: crate::os::vm::VmArea<'_, Self::Data>) -> Result<(), BchError>;
     #[cfg(kernel)]
     #[cfg(not(linux_ge = "6.17"))]
-    fn mmap(&self = file, file: &File<Self::Data>, vma: &mut c::vm_area_struct) -> Result<(), BchError>;
+    fn mmap(&self = file, file: &File<Self::Data>, vma: crate::os::vm::VmArea<'_, Self::Data>)
+        -> Result<(), BchError>;
 }
 
 from_raw! {
@@ -372,19 +431,6 @@ from_raw! {
     PollTable<'a> = *mut c::poll_table => |r| PollTable(r, PhantomData);
 }
 
-#[cfg(kernel)]
-#[cfg(linux_ge = "6.17")]
-from_raw! {
-    /// mmap_prepare's.
-    &'a mut c::vm_area_desc = *mut c::vm_area_desc => |r| &mut *r;
-}
-
-#[cfg(kernel)]
-#[cfg(not(linux_ge = "6.17"))]
-from_raw! {
-    /// mmap's.
-    &'a mut c::vm_area_struct = *mut c::vm_area_struct => |r| &mut *r;
-}
 
 // SAFETY: SelfOf's: a file of FileVTable::<P>'s is P's, its ops P::ops_of()'s
 impl<P: FileData> SelfOf<P> for *mut c::file {
