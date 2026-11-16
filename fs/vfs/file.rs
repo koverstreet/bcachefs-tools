@@ -100,9 +100,11 @@ static VM_OPS: CStatic<c::vm_operations_struct> = unsafe {
 
 #[vtable]
 impl VmOps for InodeInfo {
-    fn fault(vmf: &VmFault) -> VmFaultRet {
+    type Data = InodeFile;
+
+    fn fault(vmf: &VmFault<InodeFile>) -> VmFaultRet {
         let mapping = vmf.file().mapping();
-        let inode = unsafe { InodeInfo::of_file(vmf.file()) };
+        let inode = vmf.file().inode();
         let fs = inode.fs();
         let fdm = fs.fdm_table.get();
 
@@ -133,9 +135,9 @@ impl VmOps for InodeInfo {
         vmf.filemap_fault()
     }
 
-    fn page_mkwrite(vmf: &VmFault) -> VmFaultRet {
+    fn page_mkwrite(vmf: &VmFault<InodeFile>) -> VmFaultRet {
         let file = vmf.file();
-        let inode = unsafe { InodeInfo::of_file(file) };
+        let inode = file.inode();
         let mapping = file.mapping();
         let fs = inode.fs();
         let block_bytes = fs.block_bytes();
