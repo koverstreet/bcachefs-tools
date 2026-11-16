@@ -1,21 +1,30 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The page cache, as a read fills it.
+//! The page cache, as a read fills it and writeback empties it.
 //!
-//! A Folio is a page cache folio the caller holds locked, as a read holds the
-//! folios it fills: the lock keeps it in the page cache, so a Folio is Copy
-//! and takes no ref.
+//! A Folio is a page cache folio, held only by reference: &'a Folio is a
+//! borrow of what holds it for 'a - its lock, or under writeback, its
+//! writeback - and its private data is borrowed from that. What holds a lock
+//! derefs to a FolioLocked, a Folio whose state is its holder's to change:
 //!
-//! A LockedFolio is one looked up locked and with a ref, both its own: a
-//! Folio until it's dropped, which unlocks and puts it. A FolioRef is one
-//! not locked, kept by a ref someone else has - a walk's batch, walk_folios()'s,
-//! or a fault's page - for its holder to lock: a FolioGuard, a Folio until
-//! it's dropped, or until it's given up locked, keep_locked().
+//! - LockedFolio: looked up locked and with a ref, both its own; dropped, it
+//!   unlocks and puts it.
+//! - FolioGuard: its lock, the folio kept by a ref someone else has for 'a -
+//!   a walk's batch - or by the lock itself, in a page cache: readahead's, a
+//!   new folio's once it's in. Dropped, or end_read(), it unlocks; or
+//!   keep_locked() gives the lock up, locked, to a bio or the VFS.
+//! - HeldFolio: one the VFS has locked, lent to an op - which may free its
+//!   private data.
+//! - NewFolio: alloc_folio()'s, with a ref of its own, unlocked and in no page
+//!   cache till add_folio() puts it in, locked.
 //!
-//! A Mapping is an inode's page cache: where a read finds and adds folios - a
-//! NewFolio, alloc_folio()'s, with a ref of its own till it's in. A Readahead
-//! is the VFS's readahead_control: the locked folios it asks a read of, given
-//! back - unread - by unread().
+//! A FolioRef is one not locked, kept by a ref someone else has - a walk's
+//! batch, or a fault's page - for its holder to lock: it has no Folio till
+//! then.
+//!
+//! A Mapping is an inode's page cache: where a read finds and adds folios. A
+//! Readahead is the VFS's readahead_control: the locked folios it asks a read
+//! of, given back - unread - by unread().
 //!
 //! Each is typed by its mapping's operations, A - an inode's page cache by
 //! the inode's, FsMapping::mapping()'s - and a folio's private data is
@@ -30,10 +39,13 @@ use crate::os::kernel::{cond_resched, loff};
 use crate::os::ops::{from_raw, FromRaw};
 use crate::os::super_block::IsInode;
 use crate::util::alloc::KBox;
+use crate::util::ffi::Opaque;
 use core::borrow::Borrow;
+use core::cell::Cell;
 use core::cmp::Ordering;
 use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
+use core::mem::ManuallyDrop;
 use core::ops::{ControlFlow, Deref};
 use core::ptr::NonNull;
 
@@ -62,130 +74,106 @@ pub unsafe trait FsMapping: IsInode + AddressSpaceOps {
 }
 
 #[repr(transparent)]
-pub struct Folio<A = Any>(NonNull<c::folio>, PhantomData<fn() -> A>);
-
-impl<A> Clone for Folio<A> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<A> Copy for Folio<A> {}
-
-impl<A> PartialEq for Folio<A> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<A> Eq for Folio<A> {}
+pub struct Folio<A = Any>(Opaque<c::folio>, PhantomData<fn() -> A>);
 
 impl<A> Folio<A> {
-    fn new(folio: NonNull<c::folio>) -> Self {
-        Folio(folio, PhantomData)
-    }
-
     /// # Safety
-    /// @folio is locked by the caller, for as long as it uses this, and in -
-    /// or for - a mapping of A's.
-    pub unsafe fn from_raw(folio: *mut c::folio) -> Self {
-        Folio::new(NonNull::new(folio).expect("a folio"))
+    /// @folio is held for 'a - locked, or under writeback, its private data
+    /// not freed - and is in, or for, a mapping of A's.
+    pub unsafe fn from_raw<'a>(folio: *mut c::folio) -> &'a Self {
+        assert!(!folio.is_null(), "a folio");
+        unsafe { &*folio.cast() }
     }
 
-    pub fn as_ptr(self) -> *mut c::folio {
+    pub fn as_ptr(&self) -> *mut c::folio {
         self.0.as_ptr()
     }
 
-    pub fn size(self) -> usize {
+    pub fn size(&self) -> usize {
         unsafe { c::folio_size(self.as_ptr()) }
     }
 
-    pub fn nr_sectors(self) -> usize {
+    pub fn nr_sectors(&self) -> usize {
         self.size() >> 9
     }
 
-    pub fn nr_pages(self) -> usize {
+    pub fn nr_pages(&self) -> usize {
         unsafe { c::folio_nr_pages(self.as_ptr()) as usize }
     }
 
-    pub fn pos(self) -> u64 {
+    pub fn pos(&self) -> u64 {
         unsafe { c::folio_pos(self.as_ptr()) as u64 }
     }
 
-    pub fn end_pos(self) -> u64 {
+    pub fn end_pos(&self) -> u64 {
         self.pos() + self.size() as u64
     }
 
-    pub fn sector(self) -> u64 {
+    pub fn sector(&self) -> u64 {
         self.pos() >> 9
     }
 
-    pub fn end_sector(self) -> u64 {
+    pub fn end_sector(&self) -> u64 {
         self.sector() + (self.size() >> 9) as u64
     }
 
-    pub fn uptodate(self) -> bool {
+    pub fn uptodate(&self) -> bool {
         unsafe { c::folio_test_uptodate(self.as_ptr()) }
     }
 
-    pub fn dirty(self) -> bool {
+    pub fn dirty(&self) -> bool {
         unsafe { c::folio_test_dirty(self.as_ptr()) }
     }
 
-    pub fn writeback(self) -> bool {
+    pub fn writeback(&self) -> bool {
         unsafe { c::folio_test_writeback(self.as_ptr()) }
     }
 
-    pub fn locked(self) -> bool {
+    pub fn locked(&self) -> bool {
         unsafe { c::folio_test_locked(self.as_ptr()) }
     }
 
     /// Its mapping, unless it's been truncated out of it.
-    pub fn mapping(self) -> Option<Mapping<A>> {
+    pub fn mapping(&self) -> Option<Mapping<A>> {
         NonNull::new(unsafe { c::rust_folio_mapping(self.as_ptr()) }).map(Mapping::new)
     }
 
     /// Waited for, if its data is being written and mustn't change meanwhile:
     /// folio_wait_stable().
-    pub fn wait_stable(self) {
+    pub fn wait_stable(&self) {
         unsafe { c::folio_wait_stable(self.as_ptr()) }
     }
 
-    pub fn mark_uptodate(self) {
+    pub fn mark_uptodate(&self) {
         unsafe { c::folio_mark_uptodate(self.as_ptr()) }
     }
 
     /// Bytes [@start, @end) of it zeroed: folio_zero_segment().
-    pub fn zero_segment(self, start: usize, end: usize) {
+    pub fn zero_segment(&self, start: usize, end: usize) {
         unsafe { c::folio_zero_segment(self.as_ptr(), start, end) }
     }
 
     /// Bytes [@start1, @end1) and [@start2, @end2) of it zeroed:
     /// folio_zero_segments().
-    pub fn zero_segments(self, start1: usize, end1: usize, start2: usize, end2: usize) {
+    pub fn zero_segments(&self, start1: usize, end1: usize, start2: usize, end2: usize) {
         unsafe { c::folio_zero_segments(self.as_ptr(), start1, end1, start2, end2) }
     }
 
     /// @len bytes of it from @start zeroed: folio_zero_range().
-    pub fn zero_range(self, start: usize, len: usize) {
+    pub fn zero_range(&self, start: usize, len: usize) {
         unsafe { c::folio_zero_range(self.as_ptr(), start, len) }
     }
 
     /// What's written to it through the kernel's mapping made visible through
     /// userspace's: flush_dcache_folio().
-    pub fn flush_dcache(self) {
+    pub fn flush_dcache(&self) {
         unsafe { c::flush_dcache_folio(self.as_ptr()) }
     }
 
     /// Its writeable userspace mappings write-protected, so a write through
     /// one faults - page_mkwrite again: folio_mkclean().
-    pub fn mkclean(self) {
+    pub fn mkclean(&self) {
         unsafe { c::folio_mkclean(self.as_ptr()) };
-    }
-
-    /// Unlocked: the caller's lock, and with it the Folio, given up.
-    pub fn end_read(self, uptodate: bool) {
-        unsafe { c::folio_end_read(self.as_ptr(), uptodate) }
     }
 }
 
@@ -196,8 +184,34 @@ impl<A: AddressSpaceOps> Folio<A> {
         Some(unsafe { p.cast::<A::Private>().as_ref() })
     }
 
-    /// Its private data, made if it has none; None if that fails. Locked, or
-    /// in no page cache yet: nothing else attaches it.
+    /// Its private data, if it has any, detached and freed.
+    ///
+    /// # Safety
+    /// Nothing borrowed of its private data is used after: the caller holds
+    /// it as what every borrow of it is of.
+    unsafe fn free_private(&self) {
+        if let Some(p) = NonNull::new(unsafe { c::folio_detach_private(self.as_ptr()) }) {
+            unsafe { A::Private::free(p.cast(), self.size()) }
+        }
+    }
+}
+
+/// A Folio whose state is its holder's to change: locked - or in no page
+/// cache yet, where nothing else can reach it.
+#[repr(transparent)]
+pub struct FolioLocked<A = Any>(Folio<A>);
+
+impl<A> FolioLocked<A> {
+    /// # Safety
+    /// As Folio::from_raw(), and locked by the caller for 'a.
+    unsafe fn from_raw<'a>(folio: *mut c::folio) -> &'a Self {
+        let folio: &Folio<A> = unsafe { Folio::from_raw(folio) };
+        unsafe { &*core::ptr::from_ref(folio).cast() }
+    }
+}
+
+impl<A: AddressSpaceOps> FolioLocked<A> {
+    /// Its private data, made if it has none; None if that fails.
     pub fn create_private(&self) -> Option<&A::Private> {
         if let Some(p) = self.private() {
             return Some(p);
@@ -208,36 +222,34 @@ impl<A: AddressSpaceOps> Folio<A> {
             Some(p.as_ref())
         }
     }
+}
 
-    /// Its private data, if it has any, detached and freed.
-    ///
-    /// # Safety
-    /// Nothing borrowed of its private data is used after.
-    pub unsafe fn free_private(self) {
-        if let Some(p) = NonNull::new(unsafe { c::folio_detach_private(self.as_ptr()) }) {
-            unsafe { A::Private::free(p.cast(), self.size()) }
-        }
+impl<A> Deref for FolioLocked<A> {
+    type Target = Folio<A>;
+
+    fn deref(&self) -> &Folio<A> {
+        &self.0
     }
 }
 
 /// @len bytes of a folio, from @offset into it.
-pub struct FolioSpan<A = Any> {
-    pub folio:  Folio<A>,
+pub struct FolioSpan<'a, A = Any> {
+    pub folio:  &'a Folio<A>,
     pub offset: usize,
     pub len:    usize,
 }
 
-impl<A> Clone for FolioSpan<A> {
+impl<A> Clone for FolioSpan<'_, A> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<A> Copy for FolioSpan<A> {}
+impl<A> Copy for FolioSpan<'_, A> {}
 
-impl<A> FolioSpan<A> {
+impl<'a, A> FolioSpan<'a, A> {
     /// @folio's part of the file's [@start, @end).
-    pub fn new(folio: Folio<A>, start: u64, end: u64) -> Self {
+    pub fn new(folio: &'a Folio<A>, start: u64, end: u64) -> Self {
         let start = start.max(folio.pos());
         FolioSpan {
             folio,
@@ -246,7 +258,7 @@ impl<A> FolioSpan<A> {
         }
     }
 
-    pub fn whole(folio: Folio<A>) -> Self {
+    pub fn whole(folio: &'a Folio<A>) -> Self {
         FolioSpan { folio, offset: 0, len: folio.size() }
     }
 
@@ -290,22 +302,22 @@ impl Drop for FolioBatch {
 }
 
 /// A folio not locked, kept by a ref someone else has for 'r.
-pub struct FolioRef<'r, A = Any>(Folio<A>, PhantomData<&'r ()>);
+pub struct FolioRef<'r, A = Any>(NonNull<c::folio>, PhantomData<(&'r (), fn() -> A)>);
 
 impl<A> FolioRef<'_, A> {
     /// # Safety
     /// @folio is kept, by a ref of the caller's or its caller's, for 'r, and
     /// in a mapping of A's.
     pub unsafe fn from_raw(folio: *mut c::folio) -> Self {
-        FolioRef(Folio::new(NonNull::new(folio).expect("a folio")), PhantomData)
+        FolioRef(NonNull::new(folio).expect("a folio"), PhantomData)
     }
 
     pub fn pos(&self) -> u64 {
-        self.0.pos()
+        unsafe { c::folio_pos(self.0.as_ptr()) as u64 }
     }
 
     pub fn size(&self) -> usize {
-        self.0.size()
+        unsafe { c::folio_size(self.0.as_ptr()) }
     }
 
     pub fn lock(&self) -> FolioGuard<'_, A> {
@@ -323,29 +335,36 @@ impl<A> FolioRef<'_, A> {
     }
 }
 
-/// A FolioRef's folio, locked: unlocked when dropped.
-pub struct FolioGuard<'a, A = Any>(Folio<A>, PhantomData<&'a ()>);
+/// A folio's lock, the folio kept for 'a: unlocked when dropped.
+pub struct FolioGuard<'a, A = Any>(NonNull<c::folio>, PhantomData<(&'a (), fn() -> A)>);
 
 impl<A> FolioGuard<'_, A> {
-    /// A folio handed to us locked - writeback_iter()'s - as its guard.
+    /// A folio handed to us locked - writeback_iter()'s, or a bio's - as its
+    /// guard.
     ///
     /// # Safety
-    /// @folio is locked, ours to unlock, and kept for 'a.
-    pub unsafe fn adopt(folio: Folio<A>) -> Self {
-        FolioGuard(folio, PhantomData)
+    /// @folio is locked, ours to unlock, kept for 'a, and in a mapping of A's.
+    pub unsafe fn adopt(folio: *mut c::folio) -> Self {
+        FolioGuard(NonNull::new(folio).expect("a folio"), PhantomData)
     }
 
-    /// Left locked, for whoever we return it to: a fault's VM_FAULT_LOCKED.
-    pub fn keep_locked(self) -> Folio<A> {
-        core::mem::ManuallyDrop::new(self).0
+    /// Left locked, for whoever we give it to: a bio reading it, or a fault's
+    /// VM_FAULT_LOCKED.
+    pub fn keep_locked(self) -> NonNull<c::folio> {
+        ManuallyDrop::new(self).0
+    }
+
+    /// Unlocked, its data read in - uptodate, if @uptodate: folio_end_read().
+    pub fn end_read(self, uptodate: bool) {
+        unsafe { c::folio_end_read(self.keep_locked().as_ptr(), uptodate) }
     }
 }
 
 impl<A> Deref for FolioGuard<'_, A> {
-    type Target = Folio<A>;
+    type Target = FolioLocked<A>;
 
-    fn deref(&self) -> &Folio<A> {
-        &self.0
+    fn deref(&self) -> &FolioLocked<A> {
+        unsafe { FolioLocked::from_raw(self.0.as_ptr()) }
     }
 }
 
@@ -355,30 +374,51 @@ impl<A> Drop for FolioGuard<'_, A> {
     }
 }
 
-pub struct LockedFolio<A = Any>(Folio<A>);
+/// A folio its caller has locked, lent to an op - which may free its private
+/// data.
+pub struct HeldFolio<'a, A>(&'a FolioLocked<A>);
+
+impl<A: AddressSpaceOps> HeldFolio<'_, A> {
+    /// Its private data, if it has any, detached and freed.
+    pub fn free_private(self) {
+        unsafe { self.0.free_private() }
+    }
+}
+
+impl<A> Deref for HeldFolio<'_, A> {
+    type Target = FolioLocked<A>;
+
+    fn deref(&self) -> &FolioLocked<A> {
+        self.0
+    }
+}
+
+pub struct LockedFolio<A = Any>(NonNull<c::folio>, PhantomData<fn() -> A>);
 
 impl<A> LockedFolio<A> {
+    /// # Safety
+    /// @folio is locked and has a ref, both ours, and is in a mapping of A's.
     pub unsafe fn from_raw(folio: *mut c::folio) -> Self {
-        LockedFolio(unsafe { Folio::from_raw(folio) })
+        LockedFolio(NonNull::new(folio).expect("a folio"), PhantomData)
     }
 
     /// Its lock and ref given up, to what holds them as C does.
     pub fn into_raw(self) -> *mut c::folio {
-        core::mem::ManuallyDrop::new(self).0.as_ptr()
+        ManuallyDrop::new(self).0.as_ptr()
     }
 }
 
 impl<A> Deref for LockedFolio<A> {
-    type Target = Folio<A>;
+    type Target = FolioLocked<A>;
 
-    fn deref(&self) -> &Folio<A> {
-        &self.0
+    fn deref(&self) -> &FolioLocked<A> {
+        unsafe { FolioLocked::from_raw(self.0.as_ptr()) }
     }
 }
 
-impl<A> Borrow<Folio<A>> for LockedFolio<A> {
-    fn borrow(&self) -> &Folio<A> {
-        &self.0
+impl<A> Borrow<FolioLocked<A>> for LockedFolio<A> {
+    fn borrow(&self) -> &FolioLocked<A> {
+        self
     }
 }
 
@@ -395,31 +435,34 @@ impl<A> Drop for LockedFolio<A> {
 /// not locked, and in no page cache till add_folio() puts it in, locked.
 /// Dropped before then, its private is freed and it's put.
 pub struct NewFolio<A: AddressSpaceOps> {
-    folio:    Folio<A>,
+    folio:    NonNull<c::folio>,
     in_cache: bool,
+    _ops:     PhantomData<fn() -> A>,
 }
 
 impl<A: AddressSpaceOps> NewFolio<A> {
-    /// In the page cache, which keeps it: its ref given up, and its lock the
-    /// caller's.
-    pub fn into_cached(self) -> Folio<A> {
+    /// In the page cache, which keeps it while it's locked: its ref given
+    /// up, and its lock the guard's.
+    pub fn into_cached(self) -> FolioGuard<'static, A> {
         assert!(self.in_cache, "a new folio given out before it's in the page cache");
-        self.folio
+        let folio = self.folio;
+        drop(self);
+        FolioGuard(folio, PhantomData)
     }
 }
 
 impl<A: AddressSpaceOps> Deref for NewFolio<A> {
-    type Target = Folio<A>;
+    type Target = FolioLocked<A>;
 
-    fn deref(&self) -> &Folio<A> {
-        &self.folio
+    fn deref(&self) -> &FolioLocked<A> {
+        unsafe { FolioLocked::from_raw(self.folio.as_ptr()) }
     }
 }
 
 impl<A: AddressSpaceOps> Drop for NewFolio<A> {
     fn drop(&mut self) {
         if !self.in_cache {
-            unsafe { self.folio.free_private() }
+            unsafe { self.free_private() }
         }
         unsafe { c::folio_put(self.folio.as_ptr()) }
     }
@@ -535,7 +578,7 @@ impl<A> Mapping<A> {
     pub fn lock_folio(self, index: u64) -> Option<LockedFolio<A>> {
         let folio = unsafe { c::filemap_lock_folio(self.as_ptr(), index as _) };
         // an ERR_PTR() for none, or NULL on older kernels
-        NonNull::new(folio).and_then(|f| errptr_to_result(f).ok()).map(|f| LockedFolio(Folio::new(f)))
+        NonNull::new(folio).and_then(|f| errptr_to_result(f).ok()).map(|f| LockedFolio(f, PhantomData))
     }
 
     /// The folio at @index, made if there's none.
@@ -547,7 +590,7 @@ impl<A> Mapping<A> {
     /// which has FGP_LOCK.
     pub fn get_folio(self, index: u64, fgp: c::fgf_t, gfp: c::gfp_t) -> Result<LockedFolio<A>, BchError> {
         debug_assert!(fgp & c::FGP_LOCK != 0);
-        self.get_folio_raw(index, fgp, gfp).map(|f| LockedFolio(Folio::new(f)))
+        self.get_folio_raw(index, fgp, gfp).map(|f| LockedFolio(f, PhantomData))
     }
 
     /// The folio at @index, as __filemap_get_folio() finds it with @fgp: a
@@ -575,7 +618,7 @@ impl<A> Mapping<A> {
     }
 
     /// @folio marked dirty: filemap_dirty_folio().
-    pub fn dirty_folio(self, folio: Folio<A>) -> bool {
+    pub fn dirty_folio(self, folio: &Folio<A>) -> bool {
         unsafe { c::filemap_dirty_folio(self.as_ptr(), folio.as_ptr()) }
     }
 
@@ -607,7 +650,7 @@ impl<A: AddressSpaceOps> Mapping<A> {
     pub fn alloc_folio(self, gfp: c::gfp_t, order: u32) -> Option<NewFolio<A>> {
         let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
         NonNull::new(unsafe { c::rust_filemap_alloc_folio(gfp, order) })
-            .map(|f| NewFolio { folio: Folio::new(f), in_cache: false })
+            .map(|folio| NewFolio { folio, in_cache: false, _ops: PhantomData })
     }
 
     /// @folio at @index, locked: filemap_add_folio().
@@ -639,46 +682,40 @@ impl<A: AddressSpaceOps> Readahead<'_, A> {
 
     /// The next folio asked for, locked - the page cache keeps it:
     /// readahead_folio().
-    pub fn next(&mut self) -> Option<Folio<A>> {
+    pub fn next(&mut self) -> Option<FolioGuard<'static, A>> {
         let folio = NonNull::new(unsafe { c::__readahead_folio(self.0) })?;
         unsafe { c::folio_put(folio.as_ptr()) };
-        Some(Folio::new(folio))
+        Some(FolioGuard(folio, PhantomData))
     }
 
-    /// @folio given back unread, its private freed, and with a ref for
-    /// the VFS, which unlocks and puts it - readahead_folio() again. Back to
-    /// front, so readahead_control's window stays contiguous.
-    ///
-    /// # Safety
-    /// As free_private()'s: nothing borrowed of its private data is used
-    /// after.
-    pub unsafe fn unread(&mut self, folio: Folio<A>) {
-        unsafe {
-            folio.free_private();
-            c::folio_get(folio.as_ptr());
-        }
+    /// @folio given back unread, its private freed, and locked and with a ref
+    /// for the VFS, which unlocks and puts it - readahead_folio() again. Back
+    /// to front, so readahead_control's window stays contiguous.
+    pub fn unread(&mut self, folio: FolioGuard<'static, A>) {
+        unsafe { folio.free_private() };
         let n = folio.nr_pages();
+        let folio = folio.keep_locked();
+        unsafe { c::folio_get(folio.as_ptr()) };
         self.0._nr_pages += n as u32;
         self.0._index -= n as core::ffi::c_ulong;
     }
 }
 
-/// The VFS's writeback of a mapping, for the writepages() it's passed to.
-pub struct Wbc(NonNull<c::writeback_control>);
+/// The VFS's writeback of a mapping, for the writepages() it's passed to:
+/// and the folio it last gave, for the next.
+pub struct Wbc(NonNull<c::writeback_control>, Cell<*mut c::folio>);
 
 from_raw! {
-    Wbc = *mut c::writeback_control => |r| Wbc(NonNull::new_unchecked(r));
+    Wbc = *mut c::writeback_control => |r| Wbc(NonNull::new_unchecked(r), Cell::new(core::ptr::null_mut()));
 }
 
 impl Wbc {
-    /// The next folio to write back, locked - after @prev, which writing
+    /// The next folio to write back, locked - after the last, which writing
     /// returned @err: writeback_iter().
-    pub(crate) fn next<A>(&self, mapping: Mapping<A>, prev: Option<Folio<A>>, err: &mut c_int)
-        -> Option<FolioGuard<'_, A>>
-    {
-        let prev = prev.map_or(core::ptr::null_mut(), Folio::as_ptr);
-        let folio = unsafe { c::writeback_iter(mapping.as_ptr(), self.0.as_ptr(), prev, err) };
-        (!folio.is_null()).then(|| unsafe { FolioGuard::adopt(Folio::from_raw(folio)) })
+    pub(crate) fn next<A>(&self, mapping: Mapping<A>, err: &mut c_int) -> Option<FolioGuard<'_, A>> {
+        let folio = unsafe { c::writeback_iter(mapping.as_ptr(), self.0.as_ptr(), self.1.get(), err) };
+        self.1.set(folio);
+        (!folio.is_null()).then(|| unsafe { FolioGuard::adopt(folio) })
     }
 
     /// wbc_to_write_flags(): what its writes are submitted as.
@@ -708,15 +745,23 @@ impl<A: AddressSpaceOps> FromRaw for Mapping<A> {
     unsafe fn from_raw(r: *mut c::address_space) -> Self { unsafe { Mapping::from_raw(r) } }
 }
 
-impl<A: AddressSpaceOps> FromRaw for Folio<A> {
+/// dirty_folio()'s: for the call.
+impl<'a, A: AddressSpaceOps> FromRaw for &'a Folio<A> {
     type Raw = *mut c::folio;
     unsafe fn from_raw(r: *mut c::folio) -> Self { unsafe { Folio::from_raw(r) } }
+}
+
+/// invalidate_folio()'s and release_folio()'s: locked by the VFS, for the
+/// call.
+impl<'a, A: AddressSpaceOps> FromRaw for HeldFolio<'a, A> {
+    type Raw = *mut c::folio;
+    unsafe fn from_raw(r: *mut c::folio) -> Self { HeldFolio(unsafe { FolioLocked::from_raw(r) }) }
 }
 
 /// read_folio()'s: locked, its lock ours to give up, not its ref.
 impl<'a, A: AddressSpaceOps> FromRaw for FolioGuard<'a, A> {
     type Raw = *mut c::folio;
-    unsafe fn from_raw(r: *mut c::folio) -> Self { unsafe { FolioGuard::adopt(Folio::from_raw(r)) } }
+    unsafe fn from_raw(r: *mut c::folio) -> Self { unsafe { FolioGuard::adopt(r) } }
 }
 
 impl<'a, A: AddressSpaceOps> FromRaw for Readahead<'a, A> {
@@ -755,7 +800,7 @@ crate::vfs_ops! {
     fn readahead(ra: Readahead<'_, Self>);
     fn writepages(mapping: Mapping<Self>, wbc: Wbc) -> c_int;
     /// @folio marked dirty: whether it wasn't.
-    fn dirty_folio(mapping: Mapping<Self>, folio: Folio<Self>) -> bool;
+    fn dirty_folio(mapping: Mapping<Self>, folio: &Folio<Self>) -> bool;
     /// The folio @len bytes at @pos are written into, locked, in *@foliop,
     /// and what write_end() has of the write, in *@fsdata.
     fn write_begin(_w: VfsWriter, mapping: Mapping<Self>, pos: c::loff_t, len: c_uint,
@@ -764,7 +809,7 @@ crate::vfs_ops! {
     /// how many were.
     fn write_end(_w: VfsWriter, mapping: Mapping<Self>, pos: c::loff_t, len: c_uint, copied: c_uint,
                  folio: LockedFolio<Self>, begun: KBox<Self::FsData>) -> c_int;
-    fn invalidate_folio(folio: Folio<Self>, offset: usize, len: usize);
+    fn invalidate_folio(folio: HeldFolio<'_, Self>, offset: usize, len: usize);
     /// Whether @folio's filesystem state was freed, for the folio to be.
-    fn release_folio(folio: Folio<Self>, gfp: c::gfp_t) -> bool;
+    fn release_folio(folio: HeldFolio<'_, Self>, gfp: c::gfp_t) -> bool;
 }

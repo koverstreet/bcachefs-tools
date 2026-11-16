@@ -49,7 +49,7 @@ pub(super) fn write_begin(inode: &'static InodeInfo, mapping: Mapping, pos: u64,
 
     let folio = mapping.get_folio(pos >> PAGE_SHIFT, c::FGP_WRITEBEGIN | fgf_set_order(len), mapping.gfp_mask())?;
 
-    let span = FolioSpan::new(*folio, pos, pos + len as u64);
+    let span = FolioSpan::new(&folio, pos, pos + len as u64);
     let FolioSpan { offset, len, .. } = span;
 
     /* If we're writing entire folio, don't need to read it in first: */
@@ -100,7 +100,7 @@ pub(super) fn write_end(inode: &InodeInfo, folio: LockedFolio, mut begun: KBox<W
             folio.mark_uptodate();
         }
 
-        begun.res.dirty(FolioSpan { folio: *folio, offset, len: copied });
+        begun.res.dirty(FolioSpan { folio: &folio, offset, len: copied });
 
         inode.ei_last_dirtied.set(current_id() as _);
     }
@@ -182,14 +182,15 @@ impl ContigFolios {
     /// none of it could be; a folio reserved for in part is read in.
     fn reserve(&mut self, res: &mut FolioReservation<'_>, mapping: Mapping) -> Result<(), BchError> {
         let end = 'reserve: {
-            for s in self.spans() {
+            for (i, f) in self.folios().iter().enumerate() {
+                let s = FolioSpan::new(f, self.pos(), self.end());
                 match res.add_partial(s) {
                     Ok(reserved) if reserved == s.len => {}
-                    Err(e) if s.folio == self.first() => return Err(e),
+                    Err(e) if i == 0 => return Err(e),
                     Err(_) => break 'reserve s.pos(),
                     Ok(reserved) => {
-                        if !s.folio.uptodate() {
-                            s.folio.read_single(mapping, true)?;
+                        if !f.uptodate() {
+                            f.read_single(mapping, true)?;
                         }
                         break 'reserve s.pos() + reserved as u64;
                     }

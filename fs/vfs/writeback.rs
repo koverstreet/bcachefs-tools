@@ -82,7 +82,7 @@ fn io_full(io: &Io, len: u32) -> bool {
 
 /// Every sector of each of the io's folios left with no replicas - after
 /// @f, on the folio.
-fn folios_clear_replicas(io: &Io, f: impl Fn(Folio)) {
+fn folios_clear_replicas(io: &Io, f: impl Fn(&Folio)) {
     for fv in io.range_all().folios() {
         let folio = unsafe { Folio::from_raw(fv.folio.as_ptr()) };
         f(folio);
@@ -217,7 +217,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
 
         /* Is the folio fully outside i_size? (truncate in progress) */
         if folio.pos() >= i_size {
-            inode.undirty_folio(FolioSpan::whole(*folio));
+            inode.undirty_folio(FolioSpan::whole(&folio));
             return 0;
         }
 
@@ -231,7 +231,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
         let f_offset = (i_size - folio.pos()) as usize;
         folio.zero_segment(f_offset, folio.size());
 
-        inode.undirty_folio(FolioSpan::new(*folio, i_size, folio.end_pos()));
+        inode.undirty_folio(FolioSpan::new(&folio, i_size, folio.end_pos()));
     }
 
     let f_sectors = folio.nr_sectors();
@@ -338,13 +338,11 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
     };
 
     let ret = plugged(|| {
-        let mut prev = None;
         let mut ret = 0;
 
         loop {
             throttle_writes(fs);
-            let Some(folio) = wbc.next(mapping, prev, &mut ret) else { break };
-            prev = Some(*folio);
+            let Some(folio) = wbc.next(mapping, &mut ret) else { break };
             ret = writepage(folio, &wbc, &mut w, &mut tmp);
         }
 

@@ -170,7 +170,7 @@ impl VmOps for InodeInfo {
         }
 
         len = min(len as u64, isize - file_offset) as usize;
-        let span = FolioSpan { folio: *locked, offset, len };
+        let span = FolioSpan { folio: &locked, offset, len };
 
         if locked.update_state(inode).and_then(|()| res.add(span)).is_err() {
             return VmFaultRet::SIGBUS;
@@ -181,7 +181,8 @@ impl VmOps for InodeInfo {
         res.dirty(span);
         drop(res);
 
-        locked.keep_locked().wait_stable();
+        locked.wait_stable();
+        locked.keep_locked();
 
         inode.queue_writeback();
 

@@ -37,7 +37,8 @@ use crate::util::bio::BioRange;
 
 use super::buffered;
 use super::buffered_write::{self, WriteBegun};
-use super::folio::{Folio, FolioGuard, FolioSpan, FolioStateGuard, LockedFolio, Mapping, Readahead};
+use super::folio::{Folio, FolioGuard, FolioLocked, FolioSpan, FolioStateGuard, HeldFolio, LockedFolio, Mapping,
+                   Readahead};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use super::writeback;
@@ -103,27 +104,23 @@ impl ContigFolios {
         &self.folios
     }
 
-    pub fn first(&self) -> Folio {
-        *self.folios[0]
-    }
-
-    pub fn last(&self) -> Folio {
-        *self.folios[self.folios.len() - 1]
+    pub fn last(&self) -> &Folio {
+        &self.folios[self.folios.len() - 1]
     }
 
     /// The first folio, if [pos, end) starts partway into it.
-    pub fn head(&self) -> Option<Folio> {
-        self.folios.first().map(|f| **f).filter(|f| f.pos() != self.pos)
+    pub fn head(&self) -> Option<&FolioLocked> {
+        self.folios.first().map(|f| &**f).filter(|f| f.pos() != self.pos)
     }
 
     /// The last folio, if [pos, end) ends partway into it.
-    pub fn tail(&self) -> Option<Folio> {
-        self.folios.last().map(|f| **f).filter(|f| f.end_pos() != self.end)
+    pub fn tail(&self) -> Option<&FolioLocked> {
+        self.folios.last().map(|f| &**f).filter(|f| f.end_pos() != self.end)
     }
 
     /// Each folio's part of [pos, end).
-    pub fn spans(&self) -> impl Iterator<Item = FolioSpan> + '_ {
-        self.folios.iter().map(|f| FolioSpan::new(**f, self.pos, self.end))
+    pub fn spans(&self) -> impl Iterator<Item = FolioSpan<'_>> + '_ {
+        self.folios.iter().map(|f| FolioSpan::new(f, self.pos, self.end))
     }
 
     pub fn flush_dcache(&self) {
@@ -185,21 +182,23 @@ impl c::bch_folio {
     }
 }
 
-impl Folio {
+impl FolioLocked {
     /// Its bcachefs state brought up to date with the btree.
-    pub fn update_state(self, inode: &InodeInfo) -> Result<(), BchError> {
+    pub fn update_state(&self, inode: &InodeInfo) -> Result<(), BchError> {
         inode.read_folio_state(&[self])
     }
+}
 
+impl Folio {
     /* file offset (to folio offset) to bch_folio_sector index */
-    fn sector_index(self, pos: u64) -> usize {
+    fn sector_index(&self, pos: u64) -> usize {
         assert!(pos >= self.pos() && pos < self.end_pos());
         ((pos - self.pos()) >> 9) as usize
     }
 
     /// The sectors of [@start, @end), in sectors, that are this folio's, as
     /// indices of its sectors.
-    fn sector_range(self, start: u64, end: u64) -> Range<usize> {
+    fn sector_range(&self, start: u64, end: u64) -> Range<usize> {
         let (folio_start, folio_end) = (self.sector(), self.end_sector());
         let (start, end) = (max(start, folio_start), min(end, folio_end));
 
@@ -246,9 +245,9 @@ impl InodeInfo {
      * Initialize bch_folio state (allocated/unallocated, nr_replicas) from the
      * extents btree:
      */
-    pub fn read_folio_state<F: Borrow<Folio>>(&self, folios: &[F]) -> Result<(), BchError> {
+    pub fn read_folio_state<F: Borrow<FolioLocked>>(&self, folios: &[F]) -> Result<(), BchError> {
         let fs = self.fs();
-        let folio = |f: &F| -> Folio { *f.borrow() };
+        let folio = <F as Borrow<FolioLocked>>::borrow;
         let offset = folio(&folios[0]).sector();
         let mut need_set = false;
 
@@ -419,15 +418,15 @@ impl FolioStateGuard<'_> {
     }
 }
 
-impl Folio {
+impl HeldFolio<'_> {
     fn release_state(self) {
         let mapping = self.mapping().expect("a folio in the page cache");
         let inode = mapping.inode();
 
-        inode.undirty_folio(FolioSpan::whole(self));
+        inode.undirty_folio(FolioSpan::whole(&self));
 
         debug_assert!(self.locked());
-        unsafe { self.free_private() }
+        self.free_private();
     }
 }
 
@@ -451,7 +450,7 @@ impl AddressSpaceOps for InodeInfo {
         writeback::writepages(mapping, wbc)
     }
 
-    fn dirty_folio(mapping: Mapping, folio: Folio) -> bool {
+    fn dirty_folio(mapping: Mapping, folio: &Folio) -> bool {
         let inode = mapping.inode();
 
         /*
@@ -496,13 +495,13 @@ impl AddressSpaceOps for InodeInfo {
             as c_int
     }
 
-    fn invalidate_folio(folio: Folio, offset: usize, len: usize) {
+    fn invalidate_folio(folio: HeldFolio<'_>, offset: usize, len: usize) {
         if offset == 0 && len >= folio.size() {
             folio.release_state();
         }
     }
 
-    fn release_folio(folio: Folio, _gfp: c::gfp_t) -> bool {
+    fn release_folio(folio: HeldFolio<'_>, _gfp: c::gfp_t) -> bool {
         if folio.dirty() || folio.writeback() {
             return false;
         }
@@ -528,7 +527,7 @@ pub(crate) static INODE_AOPS: CStatic<c::address_space_operations> = unsafe {
 /* fseek: */
 
 impl Folio {
-    fn data_offset(self, pos: u64, min_replicas: u32) -> Option<u64> {
+    fn data_offset(&self, pos: u64, min_replicas: u32) -> Option<u64> {
         let mut s = self.lock_state_if_any()?;
         let start = self.sector_index(pos);
 

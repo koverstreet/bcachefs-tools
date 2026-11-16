@@ -60,7 +60,7 @@ impl Folio {
      * foreground reservation already fell back, that was a decision - retry the
      * normal way, which falls back too, and only insist if that fails.
      */
-    pub fn reserve_writeback(self, inode: &InodeInfo) -> Result<(), BchError> {
+    pub fn reserve_writeback(&self, inode: &InodeInfo) -> Result<(), BchError> {
         let fs = inode.fs();
         let nr_replicas = inode.data_replicas();
         let sectors = self.nr_sectors();

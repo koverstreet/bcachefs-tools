@@ -290,7 +290,7 @@ impl InodeInfo {
          * redirty the full page:
          */
         folio.mkclean();
-        mapping.dirty_folio(*folio);
+        mapping.dirty_folio(&folio);
         Ok(ret)
     }
 

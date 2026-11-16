@@ -20,24 +20,28 @@ use kernel::page::PAGE_SHIFT;
 
 pub type Folio = folio::Folio<InodeInfo>;
 pub type FolioGuard<'a> = folio::FolioGuard<'a, InodeInfo>;
-pub type FolioSpan = folio::FolioSpan<InodeInfo>;
+pub type FolioLocked = folio::FolioLocked<InodeInfo>;
+pub type FolioSpan<'a> = folio::FolioSpan<'a, InodeInfo>;
+pub type HeldFolio<'a> = folio::HeldFolio<'a, InodeInfo>;
 pub type LockedFolio = folio::LockedFolio<InodeInfo>;
 pub type Mapping = folio::Mapping<InodeInfo>;
 pub type Readahead<'a> = folio::Readahead<'a, InodeInfo>;
 
-impl Folio {
+impl FolioLocked {
     /// Its data read in, @mapping's, before this returns - and with @extend,
     /// the read extended as readahead's are.
-    pub fn read_single(self, mapping: Mapping, extend: bool) -> Result<(), BchError> {
+    pub fn read_single(&self, mapping: Mapping, extend: bool) -> Result<(), BchError> {
         super::buffered::read_single_folio(self, mapping, extend)
     }
+}
 
+impl Folio {
     /// Panics if it has no bcachefs state.
-    pub fn partially_uptodate(self) -> u16 {
+    pub fn partially_uptodate(&self) -> u16 {
         self.private().expect("a folio's bch_folio").partially_uptodate.load(Relaxed)
     }
 
-    pub fn set_partially_uptodate(self, sectors: u16) {
+    pub fn set_partially_uptodate(&self, sectors: u16) {
         self.private().expect("a folio's bch_folio").partially_uptodate.store(sectors, Relaxed)
     }
 
@@ -94,15 +98,15 @@ impl FolioGuard<'_> {
         unsafe {
             c::rust_folio_start_writeback(folio.as_ptr());
             c::folio_unlock(folio.as_ptr());
+            Writeback(Folio::from_raw(folio.as_ptr()))
         }
-        Writeback(folio)
     }
 }
 
 /// A count on a folio's writeback, write_count's - which keeps it in the
 /// page cache, as a lock does: start_writeback()'s, and one for each io it's
 /// added to, share()'s. Its writeback is ended when the last is dropped.
-pub struct Writeback(Folio);
+pub struct Writeback(&'static Folio);
 
 impl Writeback {
     /// A count for an io the folio's added to, given back by from_io().
@@ -123,7 +127,7 @@ impl Deref for Writeback {
     type Target = Folio;
 
     fn deref(&self) -> &Folio {
-        &self.0
+        self.0
     }
 }
 
