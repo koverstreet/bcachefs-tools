@@ -100,6 +100,23 @@ pub struct BkeyI<V: ?Sized = FamilyVal<AllTypes>> {
     pub v: V,
 }
 
+/* a zeroed key, its u64s 0, is a header with no value - as val_bytes() has it */
+unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
+    type Head = c::bkey_i;
+    type Elem = V::Elem;
+    const TAIL: usize = size_of::<c::bkey>() + V::TAIL;
+
+    fn from_raw(p: *const u8, bytes: usize) -> *const Self {
+        let v = V::from_raw(p.wrapping_add(size_of::<c::bkey>()), bytes.saturating_sub(size_of::<c::bkey>()));
+        v.wrapping_byte_sub(size_of::<c::bkey>()) as *const Self
+    }
+
+    fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {
+        let v = V::from_raw_mut(p.wrapping_add(size_of::<c::bkey>()), bytes.saturating_sub(size_of::<c::bkey>()));
+        v.wrapping_byte_sub(size_of::<c::bkey>()) as *mut Self
+    }
+}
+
 impl<'a, V: ?Sized + BkeyVal> BkeySC<'a, V> {
     /// The same key, header and value: bkey_and_val_eq().
     pub fn and_val_eq<W: ?Sized + BkeyVal>(&self, r: BkeySC<'_, W>) -> bool {
@@ -733,17 +750,11 @@ impl<F: FamilyTypes, S: KeyState> BkeyFamily for FamilyVal<F, S> {
 /// # Safety
 /// @k is a key whose value is a @V, its length validate's.
 pub(crate) unsafe fn cast_unsized<V: Unsized + ?Sized>(k: *const c::bkey_i) -> *const BkeyI<V> {
-    unsafe {
-        let v = V::from_raw(k.cast::<u8>().add(size_of::<c::bkey>()), (*k).k.val_bytes());
-        v.byte_sub(size_of::<c::bkey>()) as *const BkeyI<V>
-    }
+    <BkeyI<V> as Unsized>::from_raw(k.cast(), unsafe { (*k).k.bytes() })
 }
 
 pub(crate) unsafe fn cast_unsized_mut<V: Unsized + ?Sized>(k: *mut c::bkey_i) -> *mut BkeyI<V> {
-    unsafe {
-        let v = V::from_raw_mut(k.cast::<u8>().add(size_of::<c::bkey>()), (*k).k.val_bytes());
-        v.byte_sub(size_of::<c::bkey>()) as *mut BkeyI<V>
-    }
+    <BkeyI<V> as Unsized>::from_raw_mut(k.cast(), unsafe { (*k).k.bytes() })
 }
 
 /// `bkey_typed! { Enum for F [, unknown]; rows }`: typed() of a
