@@ -23,13 +23,13 @@ use core::cmp::Ordering;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::unlikely;
-use crate::util::vstructs::{plain_bytes, EntryWalk, Head, Plain, SelfSized, Unsized, ValidatedEntries,
-                            ValidatedEntriesMut, VStruct};
+use crate::util::vstructs::{plain_bytes, EntryWalk, Head, Plain, SelfSized, Unsized, Validated, ValidatedEntries,
+                            ValidatedEntriesMut, ViewEntries, ViewEntriesMut, VStruct};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::ffi::c_ulong;
 use core::marker::PhantomData;
-use core::mem::{size_of, size_of_val};
+use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
 use cstruct_macros::{bch_enum, MaybeZeroable};
@@ -280,12 +280,25 @@ impl<T: ?Sized> btree_trans_subbuf<T> {
     }
 }
 
-impl<T: Unsized<Head: Plain + SelfSized> + ?Sized> btree_trans_subbuf<T> {
-    pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ValidatedEntries<'_, T>) -> R) -> R {
+/* Validated keys: the thin walk, as a Validated container's keys are walked */
+impl btree_trans_subbuf<BkeyI> {
+    pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntries<'_, c::bkey_i>) -> R) -> R {
+        self.with_u64s(t.trans(), |b| f(unsafe { ViewEntries::new(b.as_bytes()) }))
+    }
+
+    pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntriesMut<'_, c::bkey_i>) -> R) -> R {
+        self.with_u64s_mut(t.trans(), |b| f(unsafe { ViewEntriesMut::new(b.as_mut_bytes()) }))
+    }
+}
+
+impl btree_trans_subbuf<c::jset_entry<Validated>> {
+    pub fn iter<R>(self, t: &TransAttempt<'_, '_>,
+                   f: impl FnOnce(ValidatedEntries<'_, c::jset_entry<Validated>>) -> R) -> R {
         self.with_u64s(t.trans(), |b| f(ValidatedEntries::new(b.as_bytes())))
     }
 
-    pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ValidatedEntriesMut<'_, T>) -> R) -> R {
+    pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>,
+                       f: impl FnOnce(ValidatedEntriesMut<'_, c::jset_entry<Validated>>) -> R) -> R {
         self.with_u64s_mut(t.trans(), |b| f(ValidatedEntriesMut::new(b.as_mut_bytes())))
     }
 }
@@ -314,16 +327,16 @@ impl TransAttempt<'_, '_> {
         Ok(())
     }
 
-    /// The first of the sub-buffer's entries @f takes, for @f to change - and
+    /// The first of the sub-buffer's keys @f takes, for @f to change - and
     /// gone, if @f says Some(true): whether @f took one.
-    pub fn subbuf_find_mut<T: Unsized<Head: Plain + SelfSized> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
-                                                                         mut f: impl FnMut(&mut T) -> Option<bool>)
+    pub fn subbuf_find_mut(&self, cell: &Cell<btree_trans_subbuf<BkeyI>>,
+                           mut f: impl FnMut(&mut BkeyI) -> Option<bool>)
         -> bool
     {
-        let found = cell.get().iter_mut(self, |es| es.with_offsets().find_map(|(at, e)| {
+        let found = cell.get().iter_mut(self, |keys| keys.with_offsets().find_map(|(at, mut k)| {
             let at = at / size_of::<u64>();
-            let range = at..at + size_of_val(e) / size_of::<u64>();
-            f(e).map(|remove| remove.then_some(range))
+            let range = at..at + usize::from(k.k.u64s);
+            f(k.key_mut()).map(|remove| remove.then_some(range))
         }));
         if let Some(Some(range)) = &found {
             self.subbuf_remove(cell, range.clone());

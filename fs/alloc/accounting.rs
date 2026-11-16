@@ -405,7 +405,7 @@ pub fn add_at(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[i64], gc: 
  * applicable (i.e. replicas updates)
  */
 pub(crate) fn update_sb(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
-    t.trans().accounting.get().iter(t, |mut keys| keys.try_for_each(|k| update_sb_one(t.fs(), k.k.p)))
+    t.trans().accounting.get().iter(t, |mut keys| keys.try_for_each(|k| update_sb_one(t.fs(), k.key().k.p)))
 }
 
 pub fn mod_dev_cached_sectors(t: &TransAttempt<'_, '_>, dev: u32, sectors: i64, gc: bool)
