@@ -42,7 +42,7 @@ use {
     crate::os::kernel::loff,
     crate::os::dentry::Dentry,
     crate::os::dir_context::DirContext,
-    crate::os::folio::Mapping,
+    crate::os::folio::{FsMapping, Mapping},
     crate::os::super_block::IsInode,
     core::ffi::{c_uint, c_void},
     core::mem::MaybeUninit,
@@ -167,6 +167,13 @@ impl<D: FsFile> File<D> {
     /// The dentry it was opened by: its inode's.
     pub fn dentry(&self) -> Dentry<'_, D::Inode> {
         unsafe { Dentry::borrow_raw(File::<Any>::dentry(self)) }
+    }
+
+    /// Its inode's page cache: a filesystem's own file's f_mapping.
+    pub fn mapping(&self) -> Mapping<D::Inode>
+        where D::Inode: FsMapping
+    {
+        self.inode().mapping()
     }
 }
 

@@ -17,7 +17,8 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 
 use super::folio::FolioStateGuard;
-use crate::os::folio::{Folio, FolioSpan};
+use crate::os::folio::FsMapping;
+use super::folio::{Folio, FolioSpan};
 use super::inode::{InodeInfo, QuotaReservation};
 use super::pagecache::{blocks_in, blocks_out};
 
@@ -260,7 +261,7 @@ impl<'i> FolioReservation<'i> {
 
         inode.i_sectors_acct(Some(&mut *self.quota), dirty_sectors);
 
-        if !folio.dirty() { inode.vfs().mapping().dirty_folio(folio) } else { false }
+        if !folio.dirty() { inode.mapping().dirty_folio(folio) } else { false }
     }
 }
 

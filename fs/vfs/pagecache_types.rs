@@ -8,7 +8,7 @@ use crate::cstructs::c;
 use crate::locking::{Locked, SpinLockIrq};
 use cstruct_macros::{bitfield, bch_enum, BitfieldMembers, MaybeZeroable, TypeInfo};
 use nestify::nest;
-use core::sync::atomic::AtomicI32;
+use core::sync::atomic::{AtomicI32, AtomicU16};
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -103,6 +103,6 @@ pub struct bch_folio {
      * of the folio; 0 means nothing partial, so only
      * readpage_bio_drop_unissued() maintains this.
      */
-    pub partially_uptodate: u16,
+    pub partially_uptodate: AtomicU16,
     pub state: Locked<SpinLockIrq, FolioState>,
 }

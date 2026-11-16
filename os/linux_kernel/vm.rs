@@ -8,9 +8,9 @@ use core::marker::PhantomData;
 
 use crate::c;
 use crate::util::ffi::Opaque;
-use crate::os::file::{Any, File, FileData};
+use crate::os::file::{Any, File, FileData, FsFile};
 use crate::os::ops::{into_raw, FromRaw};
-use crate::os::folio::FolioRef;
+use crate::os::folio::{FolioRef, FsMapping};
 
 /// A page fault on a mapping of a file of D's: the kernel's vm_fault.
 #[repr(transparent)]
@@ -31,15 +31,18 @@ impl<D> VmFault<D> {
         unsafe { (*self.as_ptr()).__bindgen_anon_1.pgoff as u64 }
     }
 
-    /// The folio of the page a write faulted on, page_mkwrite()'s: unlocked,
-    /// the fault's ref keeping it.
-    pub fn folio(&self) -> FolioRef<'_> {
-        unsafe { FolioRef::from_raw(c::rust_page_folio((*self.as_ptr()).page)) }
-    }
-
     /// The page cache's fault: filemap_fault().
     pub fn filemap_fault(&self) -> VmFaultRet {
         VmFaultRet(unsafe { c::filemap_fault(self.as_ptr()) })
+    }
+}
+
+impl<D: FsFile> VmFault<D> where D::Inode: FsMapping {
+    /// The folio of the page a write faulted on, page_mkwrite()'s - its
+    /// file's inode's, unless it's since been truncated: unlocked, the
+    /// fault's ref keeping it.
+    pub fn folio(&self) -> FolioRef<'_, D::Inode> {
+        unsafe { FolioRef::from_raw(c::rust_page_folio((*self.as_ptr()).page)) }
     }
 }
 

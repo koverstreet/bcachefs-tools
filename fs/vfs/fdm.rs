@@ -11,7 +11,7 @@ use crate::os::kernel::{current_id, random_u64};
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::{Acquire, Release}};
 
-use crate::os::folio::Mapping;
+use super::folio::Mapping;
 
 impl c::fdm_hash {
     /// Empty, its hash seeds random.

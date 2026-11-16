@@ -13,7 +13,7 @@ nest! {
     #[derive(MaybeZeroable, BitfieldMembers)]
     pub struct dio_write {
         pub req: *mut c::kiocb,
-        pub mapping: crate::os::folio::Mapping,
+        pub mapping: crate::vfs::folio::Mapping,
         pub inode: *mut c::InodeInfo,
         pub mm: Option<crate::os::kernel::Mm>,
         pub iov: Option<crate::util::alloc::Box<[kernel::bindings::iovec], crate::util::alloc::Kmalloc>>,

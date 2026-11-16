@@ -23,6 +23,7 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
 use crate::util::bio::{Bio, Gathered};
 use crate::os::file::File;
+use crate::os::folio::FsMapping;
 use super::file::InodeFile;
 use crate::util::gather::Gather;
 use crate::os::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, MAX_FILE_SIZE, PAGE_BYTES, PAGE_SECTORS,
@@ -186,7 +187,7 @@ impl InodeInfo {
             return;
         }
 
-        if let Some(f) = v.mapping().lock_folio(i_size >> PAGE_SHIFT) {
+        if let Some(f) = self.mapping().lock_folio(i_size >> PAGE_SHIFT) {
             f.zero_segment((i_size - f.pos()) as usize, f.size());
         }
     }
@@ -197,7 +198,7 @@ impl InodeInfo {
         use c::FolioSectorState as SectorState;
 
         let fs = self.fs();
-        let mapping = self.vfs().mapping();
+        let mapping = self.mapping();
         let inum = self.inum();
 
         let folio = match mapping.lock_folio(index) {
@@ -228,7 +229,7 @@ impl InodeInfo {
             return Ok(false);
         }
 
-        if !folio.create_state() {
+        if folio.create_private().is_none() {
             return Err(c::ENOMEM.into());
         }
 
@@ -316,7 +317,7 @@ impl InodeInfo {
          *
          * this has to be done _before_ extending i_size:
          */
-        self.vfs().mapping().write_and_wait_range(inode_u.bi_size, u64::MAX)?;
+        self.mapping().write_and_wait_range(inode_u.bi_size, u64::MAX)?;
 
         self.vfs().truncate_setsize(attr.ia_size as u64);
 
@@ -328,7 +329,7 @@ impl InodeInfo {
 
         let fs = self.fs();
         let v = self.vfs();
-        let mapping = v.mapping();
+        let mapping = self.mapping();
         let new_size = attr.ia_size as u64;
         let mut i_sectors_delta = 0;
 
@@ -477,7 +478,7 @@ impl InodeInfo {
             return fs.throw(Errcode::EINVAL_fcollapse_past_eof);
         }
 
-        v.mapping().write_invalidate_range(offset, u64::MAX)?;
+        self.mapping().write_invalidate_range(offset, u64::MAX)?;
 
         if insert {
             v.set_size(v.size() + len);
@@ -500,7 +501,7 @@ impl InodeInfo {
         let end_pos = pos(inum.inum, end_sector);
         let opts = inode_opts::get_inode(fs, &self.inode());
         let zero_range = mode & c::FALLOC_FL_ZERO_RANGE != 0;
-        let mapping = self.vfs().mapping();
+        let mapping = self.mapping();
 
         let trans = crate::btree_trans!(fs);
         let mut iter = BtreeIter::new(&trans, Btree::extents, pos(inum.inum, start_sector),
@@ -697,7 +698,7 @@ fn seek_data(inode: &InodeInfo, file: &File, offset: u64) -> Result<u64, BchErro
     })?;
 
     if next_data > offset {
-        next_data = inode.vfs().mapping().seek_data(offset, next_data, 0, false)?;
+        next_data = inode.mapping().seek_data(offset, next_data, 0, false)?;
     }
 
     if next_data >= isize {
@@ -732,7 +733,7 @@ fn seek_hole(inode: &InodeInfo, file: &File, mut offset: u64) -> Result<u64, Bch
              * in the page cache:
              */
             t.unlock();
-            let pagecache_hole = inode.vfs().mapping().seek_hole(start_offset, end_offset, 0, false)?;
+            let pagecache_hole = inode.mapping().seek_hole(start_offset, end_offset, 0, false)?;
             if pagecache_hole < end_offset {
                 next_hole = pagecache_hole;
                 return Ok(ControlFlow::Break(()));
@@ -826,7 +827,7 @@ pub(super) fn remap_file_range(src: &InodeInfo, file_src: &File, pos_src: i64, f
 
     dst.zero_pagecache_posteof();
 
-    dst.vfs().mapping().write_invalidate_range(pos_dst, pos_dst + len - 1)?;
+    dst.mapping().write_invalidate_range(pos_dst, pos_dst + len - 1)?;
 
     quota_reserve_range(dst, &mut quota_res, pos_dst >> 9, (pos_dst + aligned_len) >> 9)?;
 
@@ -834,7 +835,7 @@ pub(super) fn remap_file_range(src: &InodeInfo, file_src: &File, pos_src: i64, f
         let _ = file_dst.update_time();
     }
 
-    src.vfs().mapping().mark_unallocated(pos_src >> 9, (pos_src + aligned_len) >> 9);
+    src.mapping().mark_unallocated(pos_src >> 9, (pos_src + aligned_len) >> 9);
 
     let remapped = reflink::remap_range(fs,
                                         dst.inum(), pos_dst >> 9,

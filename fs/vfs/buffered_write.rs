@@ -4,7 +4,7 @@
 //! writeback to write out.
 
 use super::direct_write::direct_write;
-use crate::os::folio::{FolioSpan, LockedFolio, Mapping};
+use super::folio::{FolioSpan, LockedFolio, Mapping};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use crate::os::kiocb::Kiocb;
@@ -25,7 +25,7 @@ fn fgf_set_order(size: usize) -> c::fgf_t {
 
 /// What write_begin() leaves write_end(): the inode's page cache held for
 /// adding to, and the folio's reservation.
-pub(crate) struct WriteBegun {
+pub struct WriteBegun {
     _add: c::TwoStateGuard<'static, c::PagecacheAdd>,
     res:  FolioReservation<'static>,
 }

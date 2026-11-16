@@ -36,6 +36,7 @@ use crate::data::ptrs::{BkeyVPtrs, PtrsMut};
 use crate::data::reflink::lookup_indirect_extent;
 use crate::errcode::{Errcode, BchError};
 use crate::os::fiemap::Fiemap;
+use crate::os::folio::FsMapping;
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
 
@@ -122,7 +123,7 @@ impl Mapping {
 fn pagecache_dirty(t: &TransAttempt<'_, '_>, inode: &InodeInfo, start: u64, end: u64)
     -> Result<Range<u64>, BchError>
 {
-    let pagecache = inode.vfs().mapping();
+    let pagecache = inode.mapping();
     let (start, end) = (start << 9, end << 9);
 
     let scan = |nonblock| {

@@ -22,7 +22,7 @@ use crate::util::closure;
 use crate::os::iov_iter::{IovIter, IovIterFields};
 use crate::os::kernel::{current_id, likely, task_io_account_write, unlikely, Mm};
 use crate::util::refcount::TryRefcount;
-use crate::os::folio::Mapping;
+use super::folio::Mapping;
 use crate::vfs::inode::InodeInfo;
 use crate::os::kiocb::Kiocb;
 use super::file::InodeFile;

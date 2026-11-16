@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! A page cache folio's bcachefs state - bch_folio, vfs/pagecache.c's; the
-//! folios, the page cache and its operations are os::folio's.
+//! folios, the page cache and its operations are os::folio's, typed by
+//! InodeInfo, whose address space operations they have.
 //!
 //! A folio's state is created on it before it's read into, and
 //! partially_uptodate is the read's to keep; the rest is under the state's
@@ -11,11 +12,18 @@ use super::inode::InodeInfo;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::{ExclusiveGuard, SpinLockIrq};
-use crate::os::folio::{Folio, FolioGuard, Mapping};
+use crate::os::folio;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{AcqRel, Relaxed};
 use kernel::page::PAGE_SHIFT;
+
+pub type Folio = folio::Folio<InodeInfo>;
+pub type FolioGuard<'a> = folio::FolioGuard<'a, InodeInfo>;
+pub type FolioSpan = folio::FolioSpan<InodeInfo>;
+pub type LockedFolio = folio::LockedFolio<InodeInfo>;
+pub type Mapping = folio::Mapping<InodeInfo>;
+pub type Readahead<'a> = folio::Readahead<'a, InodeInfo>;
 
 impl Folio {
     /// Its data read in, @mapping's, before this returns - and with @extend,
@@ -24,28 +32,18 @@ impl Folio {
         super::buffered::read_single_folio(self, mapping, extend)
     }
 
-    pub(super) fn state_ptr(self) -> Option<NonNull<c::bch_folio>> {
-        NonNull::new(unsafe { c::folio_get_private(self.as_ptr()) }.cast())
-    }
-
-    /// Its bcachefs state, if it has any: what's atomic of it - the rest is
-    /// lock_state()'s.
-    pub(super) fn state(&self) -> Option<&c::bch_folio> {
-        self.state_ptr().map(|s| unsafe { s.as_ref() })
-    }
-
     /// Panics if it has no bcachefs state.
     pub fn partially_uptodate(self) -> u16 {
-        unsafe { (*self.state_ptr().expect("a folio's bch_folio").as_ptr()).partially_uptodate }
+        self.private().expect("a folio's bch_folio").partially_uptodate.load(Relaxed)
     }
 
     pub fn set_partially_uptodate(self, sectors: u16) {
-        unsafe { (*self.state_ptr().expect("a folio's bch_folio").as_ptr()).partially_uptodate = sectors }
+        self.private().expect("a folio's bch_folio").partially_uptodate.store(sectors, Relaxed)
     }
 
     /// Its bcachefs state, locked, if it has any.
     pub fn lock_state_if_any(&self) -> Option<FolioStateGuard<'_>> {
-        Some(FolioStateGuard { guard: self.state()?.state.lock(), sectors: self.nr_sectors() })
+        Some(FolioStateGuard { guard: self.private()?.state.lock(), sectors: self.nr_sectors() })
     }
 
     /// Its bcachefs state, locked: its caller made it first. Panics if it
@@ -87,7 +85,7 @@ impl FolioGuard<'_> {
     /// folio_unlock(). Panics if it has no bcachefs state, or writes in
     /// flight.
     pub fn start_writeback(self) -> Writeback {
-        let s = self.state().expect("a folio written back with no bch_folio");
+        let s = self.private().expect("a folio written back with no bch_folio");
         assert!(s.write_count.load(Relaxed) == 0, "a folio with writes in flight, written back again");
         assert!(!self.writeback(), "a folio already under writeback, written back again");
         s.write_count.store(1, Relaxed);
@@ -109,7 +107,7 @@ pub struct Writeback(Folio);
 impl Writeback {
     /// A count for an io the folio's added to, given back by from_io().
     pub fn share(&self) {
-        self.state().expect("a folio in writeback with no bch_folio").write_count.fetch_add(1, Relaxed);
+        self.private().expect("a folio in writeback with no bch_folio").write_count.fetch_add(1, Relaxed);
     }
 
     /// An io's count, share()'s, from the io's bio as it ends.
@@ -131,7 +129,7 @@ impl Deref for Writeback {
 
 impl Drop for Writeback {
     fn drop(&mut self) {
-        let s = self.state().expect("a folio in writeback with no bch_folio");
+        let s = self.private().expect("a folio in writeback with no bch_folio");
         if s.write_count.fetch_sub(1, AcqRel) == 1 {
             unsafe { c::folio_end_writeback(self.0.as_ptr()) }
         }
@@ -139,10 +137,6 @@ impl Drop for Writeback {
 }
 
 impl Mapping {
-    pub fn inode(&self) -> &InodeInfo {
-        unsafe { InodeInfo::from_inode((*self.as_ptr()).host) }
-    }
-
     /// Its pages from @start to @end, inclusive, written and dropped:
     /// pagecache_block must be held.
     pub fn write_invalidate_range(self, start: u64, end: u64) -> Result<(), BchError> {

@@ -22,7 +22,7 @@
  * partially_uptodate does.
  */
 
-use crate::os::folio::{Folio, Mapping, Readahead};
+use super::folio::{Folio, Mapping, Readahead};
 use super::inode::InodeInfo;
 use super::pagecache;
 use crate::btree::bkey::{prelude::*, BkeySC};
@@ -65,8 +65,8 @@ impl Folios {
     fn take(ra: &mut Readahead<'_>) -> Result<Self, BchError> {
         let mut f = Folios::new();
         while let Some(folio) = ra.next() {
-            if !folio.create_state() || f.folios.push(folio).is_err() {
-                ra.unread(folio);
+            if folio.create_private().is_none() || f.folios.push(folio).is_err() {
+                unsafe { ra.unread(folio) };
                 return if f.folios.is_empty() { Err(BchError::from(c::ENOMEM)) } else { Ok(f) };
             }
         }
@@ -87,7 +87,7 @@ impl Folios {
 
     fn give_back(&self, ra: &mut Readahead<'_>) {
         for &folio in self.folios.iter().rev() {
-            ra.unread(folio);
+            unsafe { ra.unread(folio) };
         }
     }
 }
@@ -139,7 +139,7 @@ impl PagecacheRead {
         let enomem = || BchError::from(c::ENOMEM);
         let gfp = mapping.readahead_gfp();
         let mut folio = t.allocate_dropping_locks_norelock(|| mapping.alloc_folio(gfp, order).ok_or_else(enomem)).ok()?;
-        t.allocate_dropping_locks_norelock(|| folio.alloc_state().map(drop).ok_or_else(enomem)).ok()?;
+        t.allocate_dropping_locks_norelock(|| folio.create_private().map(drop).ok_or_else(enomem)).ok()?;
         t.allocate_dropping_locks_norelock(|| mapping.add_folio(&mut folio, folio_offset, c::GFP_KERNEL)).ok()?;
         Some(folio.into_cached())
     }
@@ -370,7 +370,7 @@ pub(crate) fn readahead(mut ra: Readahead<'_>) {
 pub(crate) fn read_single_folio(folio: Folio, mapping: Mapping, extend: bool) -> Result<(), BchError> {
     assert!(!folio.uptodate() && !folio.dirty(), "reading a folio uptodate or dirty");
 
-    if !folio.create_state() {
+    if folio.create_private().is_none() {
         return Err(BchError::from_raw(c::ENOMEM as i32));
     }
 

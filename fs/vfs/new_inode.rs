@@ -78,6 +78,9 @@ impl NewInode {
             return None;
         }
         inode.ei_inodes_idx = slot.into_idx();
+        // From the start, as FsMapping has it: inode_init_always() set the
+        // VFS's empty ones
+        inode.v.set_aops(&INODE_AOPS);
         Some(inode)
     }
 
@@ -110,8 +113,6 @@ impl NewInode {
             self.ei_flags.set(c::InodeInfoFlag::EI_INODE_SNAPSHOT, true);
         }
 
-        // SAFETY: C's, initialized at build time
-        self.v.set_aops(&INODE_AOPS);
         match self.v.mode() as u32 & c::S_IFMT {
             c::S_IFREG => self.v.set_ops(&super::inode_ops::FILE_INODE_OPS, Some(&*super::file::FILE_OPS)),
             c::S_IFDIR => self.v.set_ops(&super::inode_ops::DIR_INODE_OPS, Some(&*super::dir::DIR_FILE_OPS)),

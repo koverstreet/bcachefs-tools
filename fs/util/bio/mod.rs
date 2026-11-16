@@ -275,7 +275,7 @@ impl Bio {
     /// # Safety
     /// @folio stays locked till the bio's done with it.
     #[cfg(kernel)]
-    pub unsafe fn add_folio(self: Pin<&mut Self>, folio: crate::os::folio::Folio) {
+    pub unsafe fn add_folio<A>(self: Pin<&mut Self>, folio: crate::os::folio::Folio<A>) {
         let bio = self.raw_mut();
         assert!(bio.bi_vcnt < bio.bi_max_vecs, "adding a folio: the bio's bvecs are full");
         unsafe { c::bio_add_folio_nofail(bio, folio.as_ptr(), folio.size(), 0) }

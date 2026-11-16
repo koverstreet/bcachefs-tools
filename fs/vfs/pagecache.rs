@@ -30,15 +30,14 @@ use crate::snapshots::subvolume;
 use crate::locking::MemallocFlags;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::types::CStatic;
-use crate::util::alloc::{init_at, kzalloc, KBox};
-use crate::os::folio::{Folio, FolioGuard, FolioSpan, LockedFolio, Mapping, Readahead, VfsWriter, Wbc};
+use crate::util::alloc::{init_at, kfree, kzalloc, KBox};
+use crate::os::folio::{AddressSpaceOps, AopsVTable, FolioPrivate, FsMapping, VfsWriter, Wbc};
 use crate::os::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::BioRange;
 
 use super::buffered;
 use super::buffered_write::{self, WriteBegun};
-use super::folio::FolioStateGuard;
-use crate::os::folio::{AddressSpaceOps, AopsVTable};
+use super::folio::{Folio, FolioGuard, FolioSpan, FolioStateGuard, LockedFolio, Mapping, Readahead};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use super::writeback;
@@ -165,25 +164,28 @@ impl c::bch_folio_sector {
     }
 }
 
-impl Folio {
-    /* for newly allocated folios: */
-    pub(super) fn alloc_state(self) -> Option<NonNull<c::bch_folio>> {
-        let size = size_of::<c::bch_folio>() + size_of::<c::bch_folio_sector>() * self.nr_sectors();
-        let layout = Layout::from_size_align(size, align_of::<c::bch_folio>()).ok()?;
-        let s = kzalloc(layout).ok()?.cast::<c::bch_folio>();
+/// A folio's, with s[] - a sector of the folio each - after it.
+impl FolioPrivate for c::bch_folio {
+    fn alloc(size: usize) -> Option<NonNull<Self>> {
+        let layout = Layout::from_size_align(Self::alloc_size(size), align_of::<Self>()).ok()?;
+        let s = kzalloc(layout).ok()?.cast::<Self>();
         let state = c::FolioState { state_uptodate: false, replicas_reserved_at: 0, reserved_degraded: false, s: [] };
         let Ok(()) = unsafe { init_at(new_lock!(state), &raw mut (*s.as_ptr()).state) };
-        unsafe { c::folio_attach_private(self.as_ptr(), s.as_ptr().cast()) };
         Some(s)
     }
 
-    /// Its bcachefs state, made if it has none; false if that fails.
-    pub fn create_state(self) -> bool {
-        debug_assert!(self.locked());
-
-        self.state_ptr().is_some() || self.alloc_state().is_some()
+    unsafe fn free(p: NonNull<Self>, size: usize) {
+        unsafe { kfree(p.cast(), Layout::from_size_align_unchecked(Self::alloc_size(size), align_of::<Self>())) }
     }
+}
 
+impl c::bch_folio {
+    fn alloc_size(folio_size: usize) -> usize {
+        size_of::<Self>() + size_of::<c::bch_folio_sector>() * (folio_size >> 9)
+    }
+}
+
+impl Folio {
     /// Its bcachefs state brought up to date with the btree.
     pub fn update_state(self, inode: &InodeInfo) -> Result<(), BchError> {
         inode.read_folio_state(&[self])
@@ -251,7 +253,7 @@ impl InodeInfo {
         let mut need_set = false;
 
         for f in folios.iter().map(folio) {
-            if !f.create_state() {
+            if f.create_private().is_none() {
                 return Err(c::ENOMEM.into());
             }
 
@@ -425,13 +427,16 @@ impl Folio {
         inode.undirty_folio(FolioSpan::whole(self));
 
         debug_assert!(self.locked());
-        self.free_private();
+        unsafe { self.free_private() }
     }
 }
+
+unsafe impl FsMapping for InodeInfo {}
 
 #[vtable]
 impl AddressSpaceOps for InodeInfo {
     type FsData = WriteBegun;
+    type Private = c::bch_folio;
 
     fn read_folio(_file: *mut c::file, folio: FolioGuard<'_>) -> Result<(), BchError> {
         let mapping = folio.mapping().expect("a folio to read, in its mapping");
