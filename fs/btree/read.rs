@@ -43,7 +43,7 @@ use crate::btree::write::trans_submit_write_bios;
 use crate::c;
 use crate::data::checksum::{csum_err_msg, csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::data::ptrs::BkeyVRead;
-use crate::debug::{async_objs::{AsyncObj, AsyncObjSlot}, trace::events};
+use crate::debug::trace::events;
 use crate::errcode::{blk_status_to_bch_err, BchError};
 use crate::format::{BkeyType, Btree, BtreeFlags, DataType, Nonce};
 use crate::fs::{Dev, Fs};
@@ -62,7 +62,7 @@ use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSl
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
                             Plain, SelfSized, Unsized, Unvalidated};
 use crate::util::{backref::BackRef, printbuf::Msg};
-use crate::util::{time_stats::TimeStats, Printbuf, ToText};
+use crate::util::{time_stats::TimeStats, Printbuf};
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
 use core::ffi::c_uint;
 use core::mem::offset_of;
@@ -116,7 +116,7 @@ impl Drop for ReadInFlightNode {
 
 #[pin_data(PinnedDrop)]
 #[repr(C)]
-pub struct NodeReadBio {
+struct NodeReadBio {
     #[pin]
     bio: Bio,
 }
@@ -126,15 +126,6 @@ crate::has_bio!(NodeReadBio, bio);
 impl PinnedDrop for NodeReadBio {
     fn drop(self: Pin<&mut Self>) {
         unsafe { self.bio_mut().uninit() }
-    }
-}
-
-unsafe impl AsyncObj for NodeReadBio {
-    const LIST: c::AsyncObjKind = c::AsyncObjKind::btree_read_bio;
-
-    #[cold]
-    fn to_text(&self, out: &mut Printbuf, _: &Fs) {
-        self.bio.to_text(out)
     }
 }
 
@@ -192,7 +183,6 @@ fn maybe_corrupt(buf: &mut [u8], dev: i32) {
 
 struct NodeRead<'r> {
     fs:         &'r Fs,
-    _listed:    AsyncObjSlot,
     io:         NodeReadIo<'r>,
     ca:         Option<DevIoRef<c::DevReadRefKind>>,
     pick:       c::extent_ptr_decoded,
@@ -889,10 +879,8 @@ pub fn read_done(fs: &Fs, ca: &Dev, node: &mut ReadInFlightNode, failed: Option<
 async fn read_task<'h>(home: Pin<&'h mut NodeReadBio>, fs: BackRef<Fs>, node: ReadInFlightNode,
                        pick: c::extent_ptr_decoded, ca: Option<DevIoRef<c::DevReadRefKind>>) {
     let fs = &*fs;
-    let listed = unsafe { AsyncObjSlot::new(fs, &*home) };
     let mut r = NodeRead {
         fs,
-        _listed: listed,
         io: NodeReadIo(home),
         ca,
         pick,

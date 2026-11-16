@@ -35,7 +35,6 @@ pub enum AsyncObjKind {
     data_update,
     rbio,
     write_op,
-    btree_read_bio,
     btree_write_bio,
     task,
 }
@@ -180,11 +179,6 @@ unsafe fn rbio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
 #[cold]
 unsafe fn write_op_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
     crate::data::write::write_op_to_text(out, unsafe { obj.cast::<c::bch_write_op>().as_ref() })
-}
-
-#[cold]
-unsafe fn btree_read_bio_obj_to_text(out: &mut Printbuf, fs: &Fs, obj: NonNull<c_void>) {
-    unsafe { obj.cast::<crate::btree::read::NodeReadBio>().as_ref() }.to_text(out, fs)
 }
 
 #[cold]
