@@ -214,7 +214,8 @@ impl InodeInfo {
                     return Ok(false);
                 }
 
-                mapping.lock_folio_create(index, c::GFP_KERNEL).map_err(|_| BchError::from(c::ENOMEM))?
+                mapping.get_folio(index, c::FGP_LOCK | c::FGP_CREAT, c::GFP_KERNEL)
+                    .map_err(|_| BchError::from(c::ENOMEM))?
             }
         };
 

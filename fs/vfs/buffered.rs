@@ -205,11 +205,11 @@ impl ReadHooks for PagecacheRead {
         let mut folios = bio.range().folios();
         if partial != 0 {
             let fv = folios.next().expect("a partial bvec's folio");
-            unsafe { Folio::from_raw(fv.folio.as_ptr()) }.set_partially_uptodate((partial >> 9) as u16);
+            unsafe { Folio::from_raw(fv.folio) }.set_partially_uptodate((partial >> 9) as u16);
             keep += 1;
         }
         for fv in folios {
-            unsafe { FolioGuard::adopt(fv.folio.as_ptr()) }.end_read(false);
+            unsafe { FolioGuard::adopt(fv.folio) }.end_read(false);
         }
 
         bio.bio_mut().truncate_vecs(keep as u16);
@@ -220,7 +220,7 @@ impl ReadHooks for PagecacheRead {
 /// The folio a read stopped inside, if it did: read, but not uptodate.
 fn partial_folio(b: &impl BioOwner) -> Option<NonNull<c::folio>> {
     let fv = b.range_all().folios().last()?;
-    let folio = unsafe { Folio::from_raw(fv.folio.as_ptr()) };
+    let folio = unsafe { Folio::from_raw(fv.folio) };
     (folio.partially_uptodate() != 0).then_some(fv.folio)
 }
 
@@ -230,7 +230,7 @@ fn end_reads(b: &impl BioOwner, ret: Result<(), BchError>, except: Option<NonNul
     let partial = partial_folio(b);
     for fv in b.range_all().folios() {
         if Some(fv.folio) != except {
-            unsafe { FolioGuard::adopt(fv.folio.as_ptr()) }.end_read(ret.is_ok() && Some(fv.folio) != partial);
+            unsafe { FolioGuard::adopt(fv.folio) }.end_read(ret.is_ok() && Some(fv.folio) != partial);
         }
     }
 }

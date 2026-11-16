@@ -347,7 +347,7 @@ pub fn bio_page_state_set(fs: &Fs, range: BioRange<'_>, k: BkeySC<'_>) {
     let state = SectorState::of_key(fs, k);
 
     for fv in range.folios() {
-        unsafe { Folio::from_raw(fv.folio.as_ptr()) }.lock_state()
+        unsafe { Folio::from_raw(fv.folio) }.lock_state()
             .set_sectors(fv.offset >> 9..(fv.offset >> 9) + (fv.len >> 9), nr_ptrs, state);
     }
 }

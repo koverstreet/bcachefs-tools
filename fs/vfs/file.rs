@@ -143,10 +143,7 @@ impl VmOps for InodeInfo {
         let folio = vmf.folio();
 
         let file_offset = (vmf.pgoff() << PAGE_SHIFT) / block_bytes * block_bytes;
-        let offset = (file_offset - folio.pos()) as usize;
         let mut len = max(PAGE_SIZE, block_bytes as usize);
-
-        assert!(offset + len <= folio.size());
 
         let mut res = FolioReservation::new(inode);
 
@@ -168,6 +165,9 @@ impl VmOps for InodeInfo {
         if locked.mapping() != Some(mapping) || file_offset >= isize {
             return VmFaultRet::NOPAGE;
         }
+
+        let offset = (file_offset - locked.pos()) as usize;
+        assert!(offset + len <= locked.size());
 
         len = min(len as u64, isize - file_offset) as usize;
         let span = FolioSpan { folio: &locked, offset, len };

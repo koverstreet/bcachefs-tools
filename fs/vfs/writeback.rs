@@ -84,7 +84,7 @@ fn io_full(io: &Io, len: u32) -> bool {
 /// @f, on the folio.
 fn folios_clear_replicas(io: &Io, f: impl Fn(&Folio)) {
     for fv in io.range_all().folios() {
-        let folio = unsafe { Folio::from_raw(fv.folio.as_ptr()) };
+        let folio = unsafe { Folio::from_raw(fv.folio) };
         f(folio);
 
         let mut s = folio.lock_state();

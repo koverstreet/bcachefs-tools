@@ -98,7 +98,7 @@ impl FolioGuard<'_> {
         unsafe {
             c::rust_folio_start_writeback(folio.as_ptr());
             c::folio_unlock(folio.as_ptr());
-            Writeback(Folio::from_raw(folio.as_ptr()))
+            Writeback(Folio::from_raw(folio))
         }
     }
 }
@@ -119,7 +119,7 @@ impl Writeback {
     /// # Safety
     /// @folio is one share() counted for this io, taken back once.
     pub unsafe fn from_io(folio: NonNull<c::folio>) -> Self {
-        Writeback(unsafe { Folio::from_raw(folio.as_ptr()) })
+        Writeback(unsafe { Folio::from_raw(folio) })
     }
 }
 

@@ -80,9 +80,8 @@ impl<A> Folio<A> {
     /// # Safety
     /// @folio is held for 'a - locked, or under writeback, its private data
     /// not freed - and is in, or for, a mapping of A's.
-    pub unsafe fn from_raw<'a>(folio: *mut c::folio) -> &'a Self {
-        assert!(!folio.is_null(), "a folio");
-        unsafe { &*folio.cast() }
+    pub unsafe fn from_raw<'a>(folio: NonNull<c::folio>) -> &'a Self {
+        unsafe { folio.cast().as_ref() }
     }
 
     pub fn as_ptr(&self) -> *mut c::folio {
@@ -204,9 +203,8 @@ pub struct FolioLocked<A = Any>(Folio<A>);
 impl<A> FolioLocked<A> {
     /// # Safety
     /// As Folio::from_raw(), and locked by the caller for 'a.
-    unsafe fn from_raw<'a>(folio: *mut c::folio) -> &'a Self {
-        let folio: &Folio<A> = unsafe { Folio::from_raw(folio) };
-        unsafe { &*core::ptr::from_ref(folio).cast() }
+    unsafe fn from_raw<'a>(folio: NonNull<c::folio>) -> &'a Self {
+        unsafe { folio.cast().as_ref() }
     }
 }
 
@@ -239,12 +237,8 @@ pub struct FolioSpan<'a, A = Any> {
     pub len:    usize,
 }
 
-impl<A> Clone for FolioSpan<'_, A> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
+// Not derived: that would bound A
+impl<A> Clone for FolioSpan<'_, A> { fn clone(&self) -> Self { *self } }
 impl<A> Copy for FolioSpan<'_, A> {}
 
 impl<'a, A> FolioSpan<'a, A> {
@@ -312,14 +306,6 @@ impl<A> FolioRef<'_, A> {
         FolioRef(NonNull::new(folio).expect("a folio"), PhantomData)
     }
 
-    pub fn pos(&self) -> u64 {
-        unsafe { c::folio_pos(self.0.as_ptr()) as u64 }
-    }
-
-    pub fn size(&self) -> usize {
-        unsafe { c::folio_size(self.0.as_ptr()) }
-    }
-
     pub fn lock(&self) -> FolioGuard<'_, A> {
         unsafe { c::folio_lock(self.0.as_ptr()) };
         FolioGuard(self.0, PhantomData)
@@ -344,8 +330,8 @@ impl<A> FolioGuard<'_, A> {
     ///
     /// # Safety
     /// @folio is locked, ours to unlock, kept for 'a, and in a mapping of A's.
-    pub unsafe fn adopt(folio: *mut c::folio) -> Self {
-        FolioGuard(NonNull::new(folio).expect("a folio"), PhantomData)
+    pub unsafe fn adopt(folio: NonNull<c::folio>) -> Self {
+        FolioGuard(folio, PhantomData)
     }
 
     /// Left locked, for whoever we give it to: a bio reading it, or a fault's
@@ -364,7 +350,7 @@ impl<A> Deref for FolioGuard<'_, A> {
     type Target = FolioLocked<A>;
 
     fn deref(&self) -> &FolioLocked<A> {
-        unsafe { FolioLocked::from_raw(self.0.as_ptr()) }
+        unsafe { FolioLocked::from_raw(self.0) }
     }
 }
 
@@ -396,12 +382,6 @@ impl<A> Deref for HeldFolio<'_, A> {
 pub struct LockedFolio<A = Any>(NonNull<c::folio>, PhantomData<fn() -> A>);
 
 impl<A> LockedFolio<A> {
-    /// # Safety
-    /// @folio is locked and has a ref, both ours, and is in a mapping of A's.
-    pub unsafe fn from_raw(folio: *mut c::folio) -> Self {
-        LockedFolio(NonNull::new(folio).expect("a folio"), PhantomData)
-    }
-
     /// Its lock and ref given up, to what holds them as C does.
     pub fn into_raw(self) -> *mut c::folio {
         ManuallyDrop::new(self).0.as_ptr()
@@ -412,7 +392,7 @@ impl<A> Deref for LockedFolio<A> {
     type Target = FolioLocked<A>;
 
     fn deref(&self) -> &FolioLocked<A> {
-        unsafe { FolioLocked::from_raw(self.0.as_ptr()) }
+        unsafe { FolioLocked::from_raw(self.0) }
     }
 }
 
@@ -455,7 +435,7 @@ impl<A: AddressSpaceOps> Deref for NewFolio<A> {
     type Target = FolioLocked<A>;
 
     fn deref(&self) -> &FolioLocked<A> {
-        unsafe { FolioLocked::from_raw(self.folio.as_ptr()) }
+        unsafe { FolioLocked::from_raw(self.folio) }
     }
 }
 
@@ -472,33 +452,13 @@ impl<A: AddressSpaceOps> Drop for NewFolio<A> {
 /// Ordered by address: lock order, for two of them.
 pub struct Mapping<A = Any>(NonNull<c::address_space>, PhantomData<fn() -> A>);
 
-impl<A> Clone for Mapping<A> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
+// Not derived: that would bound A
+impl<A> Clone for Mapping<A> { fn clone(&self) -> Self { *self } }
 impl<A> Copy for Mapping<A> {}
-
-impl<A> PartialEq for Mapping<A> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
+impl<A> PartialEq for Mapping<A> { fn eq(&self, other: &Self) -> bool { self.0 == other.0 } }
 impl<A> Eq for Mapping<A> {}
-
-impl<A> PartialOrd for Mapping<A> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<A> Ord for Mapping<A> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.cmp(&other.0)
-    }
-}
+impl<A> PartialOrd for Mapping<A> { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }
+impl<A> Ord for Mapping<A> { fn cmp(&self, other: &Self) -> Ordering { self.0.cmp(&other.0) } }
 
 impl<A: IsInode> Mapping<A> {
     pub fn inode(&self) -> &A {
@@ -581,11 +541,6 @@ impl<A> Mapping<A> {
         NonNull::new(folio).and_then(|f| errptr_to_result(f).ok()).map(|f| LockedFolio(f, PhantomData))
     }
 
-    /// The folio at @index, made if there's none.
-    pub fn lock_folio_create(self, index: u64, gfp: c::gfp_t) -> Result<LockedFolio<A>, BchError> {
-        self.get_folio(index, c::FGP_LOCK | c::FGP_CREAT, gfp)
-    }
-
     /// The folio at @index, as __filemap_get_folio() finds it with @fgp -
     /// which has FGP_LOCK.
     pub fn get_folio(self, index: u64, fgp: c::fgf_t, gfp: c::gfp_t) -> Result<LockedFolio<A>, BchError> {
@@ -664,12 +619,6 @@ impl<A: AddressSpaceOps> Mapping<A> {
 pub struct Readahead<'a, A = Any>(&'a mut c::readahead_control, PhantomData<fn() -> A>);
 
 impl<A: AddressSpaceOps> Readahead<'_, A> {
-    /// # Safety
-    /// @ractl is the VFS's, for the call it's given to, of a mapping of A's.
-    pub unsafe fn from_raw(ractl: *mut c::readahead_control) -> Self {
-        Readahead(unsafe { &mut *ractl }, PhantomData)
-    }
-
     pub fn mapping(&self) -> Mapping<A> {
         unsafe { Mapping::from_raw(self.0.mapping) }
     }
@@ -709,7 +658,7 @@ impl Wbc {
     pub(crate) fn next<A>(&self, mapping: Mapping<A>, err: &mut c_int) -> Option<FolioGuard<'_, A>> {
         let folio = unsafe { c::writeback_iter(mapping.as_ptr(), self.0.as_ptr(), self.1.get(), err) };
         self.1.set(folio);
-        (!folio.is_null()).then(|| unsafe { FolioGuard::adopt(folio) })
+        NonNull::new(folio).map(|f| unsafe { FolioGuard::adopt(f) })
     }
 
     /// wbc_to_write_flags(): what its writes are submitted as.
@@ -734,22 +683,23 @@ from_raw! {
 
 // An op's mapping and folios, for a table of A's: A's
 from_raw! {
-    Mapping<A> [A: AddressSpaceOps]           = *mut c::address_space     => |r| Mapping::from_raw(r);
+    Mapping<A> [A: AddressSpaceOps]        = *mut c::address_space     => |r| Mapping::from_raw(r);
     /// dirty_folio()'s: for the call.
-    &'a Folio<A> [A: AddressSpaceOps]         = *mut c::folio             => |r| Folio::from_raw(r);
+    &'a Folio<A> [A: AddressSpaceOps]      = *mut c::folio             => |r| Folio::from_raw(NonNull::new_unchecked(r));
     /// invalidate_folio()'s and release_folio()'s: locked by the VFS, for
     /// the call.
-    HeldFolio<'a, A> [A: AddressSpaceOps]     = *mut c::folio             => |r| HeldFolio(FolioLocked::from_raw(r));
+    HeldFolio<'a, A> [A: AddressSpaceOps]  = *mut c::folio             =>
+        |r| HeldFolio(FolioLocked::from_raw(NonNull::new_unchecked(r)));
     /// read_folio()'s: locked, its lock ours to give up, not its ref.
-    FolioGuard<'a, A> [A: AddressSpaceOps]    = *mut c::folio             => |r| FolioGuard::adopt(r);
-    Readahead<'a, A> [A: AddressSpaceOps]     = *mut c::readahead_control => |r| Readahead::from_raw(r);
+    FolioGuard<'a, A> [A: AddressSpaceOps] = *mut c::folio             => |r| FolioGuard::adopt(NonNull::new_unchecked(r));
+    Readahead<'a, A> [A: AddressSpaceOps]  = *mut c::readahead_control => |r| Readahead(&mut *r, PhantomData);
     /// write_end()'s: write_begin()'s, its lock and ref to give up.
-    LockedFolio<A> [A: AddressSpaceOps]       = *mut c::folio             => |r| LockedFolio::from_raw(r);
+    LockedFolio<A> [A: AddressSpaceOps]    = *mut c::folio             => |r| LockedFolio(NonNull::new_unchecked(r), PhantomData);
     /// write_begin()'s out parameters.
-    &'a mut *mut c::folio                     = *mut *mut c::folio        => |r| &mut *r;
-    &'a mut *mut c_void                       = *mut *mut c_void          => |r| &mut *r;
+    &'a mut *mut c::folio                  = *mut *mut c::folio        => |r| &mut *r;
+    &'a mut *mut c_void                    = *mut *mut c_void          => |r| &mut *r;
     /// write_end()'s fsdata: what write_begin() gave the VFS, given back.
-    KBox<T> [T]                               = *mut c_void               => |r| KBox::from_raw(r.cast());
+    KBox<T> [T]                            = *mut c_void               => |r| KBox::from_raw(r.cast());
 }
 
 crate::vfs_ops! {
