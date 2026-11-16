@@ -389,6 +389,17 @@ pub unsafe fn untouched<T>() -> impl ::pin_init::Init<T> {
     unsafe { ::pin_init::init_from_closure(|_| Ok(())) }
 }
 
+/// What @make returns, written where it's initialized: for what's too big to
+/// make and move, a future.
+pub fn init_with<T>(make: impl FnOnce() -> T) -> impl ::pin_init::Init<T> {
+    unsafe {
+        ::pin_init::init_from_closure(move |slot: *mut T| {
+            slot.write(make());
+            Ok(())
+        })
+    }
+}
+
 /// @init, failing with @err: an allocation's ENOMEM, as the error that says
 /// which it was
 pub fn init_or<T, E>(init: impl ::pin_init::PinInit<T, E>, err: crate::errcode::Errcode)

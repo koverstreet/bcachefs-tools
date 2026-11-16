@@ -88,7 +88,7 @@ use crate::util::bio::{inline_vecs, reset_bvec_offset, Bio, BioBox, BioBuffersOw
                        BioInPlace, BioLend, BioOwner, BioRange, Buffers, HasBio, Lent};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
-use crate::util::alloc::{flags, Flags, AllocError, Box, Kmalloc};
+use crate::util::alloc::{flags, init_with, Flags, Box, Kmalloc};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
@@ -1460,15 +1460,9 @@ async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'static>,
     if f.plan.pick.do_ec_reconstruct {
         let msg = ec_msg.expect("a reconstruct, in a retry");
         let f = &mut *f;
-        let init = unsafe {
-            ::pin_init::init_from_closure(move |slot| {
-                core::ptr::write(slot, ec_read(f, fs, msg));
-                Ok::<_, AllocError>(())
-            })
-        };
         let ec = {
             let _noio = MemallocFlags::noio();
-            Box::try_init_in(init, Kmalloc)
+            Box::init_in(init_with(move || ec_read(f, fs, msg)), Kmalloc)
         }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
         Box::into_pin(ec).await?;
     } else {
@@ -1740,14 +1734,9 @@ fn retry_boxed<'a>(read: &'a Rbio, f: Fragment<'a>, ret: Result<(), BchError>, a
     if let Some(range) = range {
         s.plan.range = range;
     }
-    let init = unsafe {
-        ::pin_init::init_from_closure(move |slot| {
-            core::ptr::write(slot, retry_owned(read, s, at));
-            Ok::<_, AllocError>(())
-        })
-    };
     let _noio = MemallocFlags::noio();
-    let b = Box::try_init_in(init, &read.fs().read_retry_pool).expect("a retry's slot, outside NORECLAIM");
+    let b = Box::init_in(init_with(move || retry_owned(read, s, at)), &read.fs().read_retry_pool)
+        .expect("a retry's slot, outside NORECLAIM");
     // not Box::into_pin(): the pool's the filesystem's, and the retry's
     // fragment's task is drained before it goes
     unsafe { Pin::new_unchecked(b) }
@@ -1913,12 +1902,7 @@ pub async fn read<H: ReadHooks>(orig: &Rbio, inum: c::subvol_inum, flags: F, mut
     {
         // the read's own bio's task: the fragment in the task's future alone,
         // made where it lives, and the future gone before the wait below
-        stack_pin_init!(let own = unsafe {
-            ::pin_init::pin_init_from_closure(|slot: *mut Option<FragmentFut<'_>>| {
-                slot.write(own.map(|f| fragment_task(reads.get(), f, orig)));
-                Ok::<_, core::convert::Infallible>(())
-            })
-        });
+        stack_pin_init!(let own = init_with(|| own.map(|f| fragment_task(reads.get(), f, orig))));
         if let Some(own) = own.as_pin_mut() {
             own.await;
         }

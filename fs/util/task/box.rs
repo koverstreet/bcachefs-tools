@@ -19,7 +19,7 @@
 
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::{init_at, Alloc, Kmalloc};
+use crate::util::alloc::{init_at, init_with, Alloc, Kmalloc};
 use crate::util::rcu::{Flavor, HasRcuHead, RcuHead};
 use crate::os::workqueue::Queue;
 use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskRef};
@@ -255,10 +255,7 @@ unsafe fn init_task<'q, H, F: Future<Output = ()> + Send, A: Alloc + Copy>(
         // made where it lives: a future is its whole state machine, and a
         // move of one is a copy of all of it - what's moved here is what
         // @make holds, its args
-        let future = ::pin_init::pin_init_from_closure(move |slot: *mut F| {
-            slot.write(make());
-            Ok::<_, core::convert::Infallible>(())
-        });
+        let future = init_with(make);
         let task = Task::new(at, future, task_done::<H, F, A>);
         if let Err(e) = init_at(task, (&raw mut (*w).task).cast()) {
             free_slot::<H, F, A>(home);
