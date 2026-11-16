@@ -61,14 +61,57 @@ struct TracepointSrcu(c_ulong);
 #[cfg(linux_ge = "7.0")]
 impl TracepointSrcu {
     fn read_lock() -> Self {
-        Self(unsafe { c::rust_srcu_read_lock_fast_notrace(&raw mut c::tracepoint_srcu) })
+        Self(srcu_fast::lock())
     }
 }
 
 #[cfg(linux_ge = "7.0")]
 impl Drop for TracepointSrcu {
     fn drop(&mut self) {
-        unsafe { c::rust_srcu_read_unlock_fast_notrace(&raw mut c::tracepoint_srcu, self.0) };
+        srcu_fast::unlock(self.0)
+    }
+}
+
+/*
+ * srcu_read_lock_fast_notrace() and _unlock() as srcutree.h has them, where
+ * that's all they are - tree SRCU, no RCU lockdep, NMI-safe this_cpu ops:
+ * this CPU's count of the current reader slot's locks, or its unlocks,
+ * bumped, a compiler barrier on the section's side
+ */
+#[cfg(all(linux_ge = "7.0", CONFIG_TREE_SRCU, not(CONFIG_PROVE_RCU), not(CONFIG_NEED_SRCU_NMI_SAFE)))]
+mod srcu_fast {
+    use super::{c, c_ulong, offset_of};
+    use crate::os::percpu::PerCpuRef;
+    use core::sync::atomic::{compiler_fence, Ordering::SeqCst};
+    use kernel::bindings::srcu_ctr;
+
+    pub(super) fn lock() -> c_ulong {
+        let scp = unsafe { (&raw const c::tracepoint_srcu.srcu_ctrp).read_volatile() };
+        bump(scp, offset_of!(srcu_ctr, srcu_locks));
+        compiler_fence(SeqCst);
+        scp as c_ulong
+    }
+
+    pub(super) fn unlock(scp: c_ulong) {
+        compiler_fence(SeqCst);
+        bump(scp as *mut srcu_ctr, offset_of!(srcu_ctr, srcu_unlocks));
+    }
+
+    fn bump(scp: *mut srcu_ctr, count: usize) {
+        unsafe { PerCpuRef::<c_ulong>::from_raw(scp.wrapping_byte_add(count).cast()) }.add(1)
+    }
+}
+
+#[cfg(all(linux_ge = "7.0", not(all(CONFIG_TREE_SRCU, not(CONFIG_PROVE_RCU), not(CONFIG_NEED_SRCU_NMI_SAFE)))))]
+mod srcu_fast {
+    use super::{c, c_ulong};
+
+    pub(super) fn lock() -> c_ulong {
+        unsafe { c::rust_srcu_read_lock_fast_notrace(&raw mut c::tracepoint_srcu) }
+    }
+
+    pub(super) fn unlock(scp: c_ulong) {
+        unsafe { c::rust_srcu_read_unlock_fast_notrace(&raw mut c::tracepoint_srcu, scp) }
     }
 }
 
