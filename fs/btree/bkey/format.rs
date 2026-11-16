@@ -25,7 +25,7 @@ macro_rules! format_current {
     ($( ($id:ident, $($field:ident).+) ),* $(,)?) => {{
         let mut bits_per_field = [0; NR_FIELDS];
         $(bits_per_field[$id as usize] =
-            (field_size(|k: *const c::bkey| unsafe { core::ptr::addr_of!((*k).$($field).+) }) * 8) as u8;)*
+            (field_size(|k: c::bkey| k.$($field).+) * 8) as u8;)*
 
         bkey_format {
             key_u64s:     BKEY_U64S as u8,

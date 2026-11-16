@@ -217,9 +217,7 @@ impl bkey_format {
             ($( ($id:ident, $($field:ident).+) ),* $(,)?) => {
                 $(compile_bkey_field(self, &mut out, $id,
                                      offset_of!(c::bkey, $($field).+) as u8,
-                                     field_size(|k: *const c::bkey| unsafe {
-                                         core::ptr::addr_of!((*k).$($field).+)
-                                     }) as usize,
+                                     field_size(|k: c::bkey| k.$($field).+) as usize,
                                      &mut eax_zeroed);)*
             };
         }

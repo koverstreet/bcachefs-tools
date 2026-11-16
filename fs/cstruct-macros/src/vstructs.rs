@@ -446,7 +446,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
             // array, or an embedded vstruct's header, which ends where that
             // one's tail starts
             assert!(::core::mem::offset_of!(#written, #last) + crate::types::field_size(
-                        |p: *const #written| unsafe { ::core::ptr::addr_of!((*p).#last) }) as usize
+                        |p: #written| p.#last) as usize
                     == ::core::mem::size_of::<#written>(),
                     #msg);
         };

@@ -245,14 +245,12 @@ macro_rules! vstruct {
     // past a header reached through a field - a #[whole] type's, repr.hdr
     ($t:ty, $r:ident . $hdr:ident . $count:ident) => {
         $crate::util::vstructs::vstruct!(@impl $t,
-            ::core::mem::offset_of!($t, $r.$hdr) + $crate::types::field_size(
-                |p: *const $t| unsafe { ::core::ptr::addr_of!((*p).$r.$hdr) }) as usize,
+            ::core::mem::offset_of!($t, $r.$hdr) + $crate::types::field_size(|p: $t| p.$r.$hdr) as usize,
             $r.$hdr.$count);
     };
     ($t:ty, $hdr:ident . $count:ident) => {
         $crate::util::vstructs::vstruct!(@impl $t,
-            ::core::mem::offset_of!($t, $hdr) + $crate::types::field_size(
-                |p: *const $t| unsafe { ::core::ptr::addr_of!((*p).$hdr) }) as usize,
+            ::core::mem::offset_of!($t, $hdr) + $crate::types::field_size(|p: $t| p.$hdr) as usize,
             $hdr.$count);
     };
     (@impl $t:ty, $start:expr, $($count:ident).+) => {

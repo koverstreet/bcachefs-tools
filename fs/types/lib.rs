@@ -4,9 +4,9 @@
 //! little-endian integers, the container C laid out (Fifo), and
 //! what C reads that Rust defines - CStatic, an ops table.
 
-/// The size of the field @f projects to - by its type, so a field of a packed
+/// The size of the field @f takes out - by its type, so a field of a packed
 /// struct needs no reference. @f is never called.
-pub const fn field_size<S, F>(_f: fn(*const S) -> *const F) -> u64 {
+pub const fn field_size<S, F>(_f: fn(S) -> F) -> u64 {
     core::mem::size_of::<F>() as u64
 }
 
