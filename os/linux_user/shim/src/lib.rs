@@ -8,7 +8,6 @@
 //! lists — from here. In a real kernel build those come from the kernel
 //! itself, and this crate is swapped out behind a cfg.
 
-mod compress;
 pub mod sync;
 
 /// What the vendored aref.rs implements for ARef: the kernel's types.rs, the
@@ -70,8 +69,6 @@ pub mod c {
         clippy::all // bindgen's output
     )]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-
-    pub use crate::compress::*;
 }
 
 pub mod print {

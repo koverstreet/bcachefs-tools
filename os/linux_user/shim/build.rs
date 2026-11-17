@@ -53,7 +53,7 @@ fn main() {
     rerun_if_userspace_config_changed(&root);
     println!("cargo:rerun-if-changed={}", include_dir.display());
 
-    // What src/compress.rs and the crypto wrappers call: linked after this
+    // What os/linux_user/compress.rs calls: linked after this
     // crate, as a link --as-needed only keeps a library that's needed by what
     // comes before it
     println!("cargo:rustc-link-lib=z");
@@ -93,8 +93,9 @@ fn main() {
             non_exhaustive: true,
         })
         // A zstd error a u32, as in-kernel: a code from a newer libzstd
-        // than these bindings would be no value of a Rust enum.
-        .constified_enum("ZSTD_ErrorCode")
+        // than these bindings would be no value of a Rust enum. Its parameter
+        // names and strategies the same, though only passed to it.
+        .constified_enum("ZSTD_ErrorCode|ZSTD_cParameter|ZSTD_ResetDirective|ZSTD_strategy")
         // closure_state_CLOSURE_RUNNING, as in-kernel
         .constified_enum("closure_state")
         // Own only what's defined under include/ — the kernel-compat surface.
@@ -127,11 +128,14 @@ fn main() {
         // The raid library: userspace's stand-in for the kernel's raid6 and
         // xor, as fs/util/raid.rs uses it.
         .allowlist_function("raid_init|raid_zero|raid_gen|raid_rec")
-        // The compression libraries: include/linux's lz4.h and zlib.h are
-        // macros onto them, which src/compress.rs gives the kernel's API.
-        // LZ4_decompress_safe_partial()'s signature is the kernel's.
-        .allowlist_function("LZ4_decompress_safe_partial")
-        .allowlist_type("z_stream")
+        // The compression libraries, what os/linux_user/compress.rs calls
+        .allowlist_function("LZ4_compress_destSize|LZ4_compress_HC|LZ4_decompress_safe_partial")
+        .allowlist_function("deflateInit2_|deflate|deflateEnd|inflateInit2_|inflate|inflateEnd")
+        .allowlist_function("ZSTD_maxCLevel|ZSTD_getParams|ZSTD_isError|ZSTD_getErrorCode")
+        .allowlist_function("ZSTD_estimateCCtxSize_usingCParams|ZSTD_initStaticCCtx|ZSTD_CCtx_reset")
+        .allowlist_function("ZSTD_CCtx_setPledgedSrcSize|ZSTD_CCtx_setParameter|ZSTD_compress2")
+        .allowlist_function("ZSTD_estimateDCtxSize|ZSTD_initStaticDCtx|ZSTD_decompressDCtx")
+        .allowlist_type("z_stream|ZSTD_ErrorCode|ZSTD_cParameter|ZSTD_ResetDirective")
         .allowlist_var("ZLIB_VERSION|MAX_WBITS|Z_OK|Z_STREAM_END|Z_FINISH|Z_DEFLATED")
         .allowlist_var("Z_DEFAULT_STRATEGY|Z_DEFAULT_COMPRESSION|Z_BEST_SPEED|Z_BEST_COMPRESSION")
         // The kernel's DEFINE_LOCK_GUARD / DEFINE_CLASS cleanup machinery

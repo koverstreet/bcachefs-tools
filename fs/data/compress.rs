@@ -51,10 +51,11 @@ use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::util::{alloc::{Box, KVmalloc}, bio::{Bio, BioRange},
                   late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
-use core::ffi::{c_int, c_uint, c_void};
+use crate::os::compress::{lz4, zlib, zstd};
+use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-use core::ptr::{self, NonNull};
+use core::ptr::NonNull;
 use cstruct_macros::{bitfield, bch_enum};
 use crate::format::{Bpos, CompressionType, SbFeatures};
 
@@ -208,7 +209,7 @@ impl Drop for Bbuf<'_> {
             bb::BB_none => {}
             #[cfg(kernel)]
             bb::BB_vmap => unsafe {
-                c::vunmap(self.b.as_ptr().cast::<c_void>().map_addr(|a| a & !(crate::os::kernel::PAGE_SIZE - 1)))
+                c::vunmap(self.b.as_ptr().cast::<core::ffi::c_void>().map_addr(|a| a & !(crate::os::kernel::PAGE_SIZE - 1)))
             },
             #[cfg(not(kernel))]
             bb::BB_vmap => unreachable!(),
@@ -283,6 +284,7 @@ fn vmap(r: BioRange<'_>) -> Option<Bbuf<'_>> {
     use crate::util::alloc::KVVec;
     use crate::util::bio::{nth_page, Segment};
     use crate::os::kernel::PAGE_SIZE;
+    use core::ptr;
 
     let pages_of = |s: &Segment<'_>| ((s.offset + s.len) as usize).div_ceil(PAGE_SIZE);
     let offset = r.segments().next()?.offset as usize;
@@ -337,18 +339,6 @@ pub(crate) fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Bbuf<
 
 // ── Decompression ────────────────────────────────────────────────────────
 
-/// In @ws - which libz, in userspace, has no field for: it allocates its own.
-fn z_stream(src: *const u8, src_len: usize, dst: *mut u8, dst_len: usize,
-            #[cfg_attr(not(kernel), allow(unused))] ws: *mut c_void) -> c::z_stream {
-    c::z_stream {
-        next_in: src as _, avail_in: src_len as _,
-        next_out: dst.cast(), avail_out: dst_len as _,
-        #[cfg(kernel)]
-        workspace: ws,
-        ..Default::default()
-    }
-}
-
 pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
     -> Result<(), BchError>
 {
@@ -373,59 +363,55 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice
     assert!(src.len() >= src_len && dst.len() >= dst_len && !src.overlaps(&dst),
             "decompressing {src_len} bytes from a buffer of {} into {dst_len} of {}, or overlapping",
             src.len(), dst.len());
-    let (src, dst) = (src.as_ptr().cast_const(), dst.as_ptr());
+    let (src, dst) = (src.sub(0..src_len), dst.sub(0..dst_len));
     // none for lz4, and for gzip in userspace, whose workspace is 0 bytes
     let pool = &fs.compress.decompress[opt];
     let mut ws = pool.is_made().then(|| {
         Box::<[u8], _>::try_new_uninit_slice_in(pool.element_size(), &**pool)
             .expect("a pool's allocation: it waits for an element")
     });
-    let ws = ws.as_mut().map_or(ptr::null_mut(), |b| Box::as_mut_ptr(b).cast());
+    let ws: &mut [MaybeUninit<u8>] = ws.as_deref_mut().unwrap_or(&mut []);
 
-    // SAFETY: @src and @dst crc's sizes, apart
-    unsafe {
-        match t {
-            CompressionType::lz4_old | CompressionType::lz4 => {
-                let (s, d) = (src_len as c_int, dst_len as c_int);
-                if c::LZ4_decompress_safe_partial(src.cast(), dst.cast(), s, d, d) != d {
-                    return fs.throw(if t == CompressionType::lz4 { e::decompress_lz4 }
-                                    else { e::decompress_lz4_old });
-                }
+    match t {
+        CompressionType::lz4_old | CompressionType::lz4 => {
+            if lz4::decompress_safe_partial(src, dst, dst_len) != Some(dst_len) {
+                return fs.throw(if t == CompressionType::lz4 { e::decompress_lz4 }
+                                else { e::decompress_lz4_old });
             }
-            CompressionType::gzip => {
-                let mut strm = z_stream(src, src_len, dst, dst_len, ws);
-                c::zlib_inflateInit2(&mut strm, -(c::MAX_WBITS as c_int));
-                let ret = c::zlib_inflate(&mut strm, c::Z_FINISH as c_int);
-                c::zlib_inflateEnd(&mut strm);
-
-                if ret != c::Z_STREAM_END as c_int {
-                    return fs.throw(e::decompress_gzip);
-                }
-                if strm.avail_out != 0 {
-                    return fs.throw(e::decompress_gzip_size_mismatch);
-                }
+        }
+        CompressionType::gzip => {
+            match zlib::inflate(src, dst, ws, -(c::MAX_WBITS as c_int)) {
+                None => return fs.throw(e::decompress_gzip),
+                Some(0) => {}
+                Some(_) => return fs.throw(e::decompress_gzip_size_mismatch),
             }
-            CompressionType::zstd => {
-                let real_src_len = match src_len {
-                    4.. => u32::from_le_bytes(src.cast::<[u8; 4]>().read_unaligned()) as usize,
-                    _ => usize::MAX,
-                };
-                if real_src_len > src_len.saturating_sub(4) {
-                    return fs.throw(e::decompress_zstd_src_len_bad);
+        }
+        CompressionType::zstd => {
+            let mut header = [0u8; 4];
+            let real_src_len = match src_len {
+                4.. => {
+                    src.sub(0..4).copy_to_slice(&mut header);
+                    u32::from_le_bytes(header) as usize
                 }
+                _ => usize::MAX,
+            };
+            if real_src_len > src_len.saturating_sub(4) {
+                return fs.throw(e::decompress_zstd_src_len_bad);
+            }
 
-                let ctx = c::zstd_init_dctx(ws, c::zstd_dctx_workspace_bound());
-                let ret = c::zstd_decompress_dctx(ctx, dst.cast(), dst_len, src.add(4).cast(), real_src_len);
-                if ret != dst_len {
-                    if c::zstd_is_error(ret) != 0 {
-                        return fs.throw(zstd_errcode(c::zstd_get_error_code(ret)));
-                    }
+            let Some(mut dctx) = zstd::Dctx::new(ws) else {
+                return fs.throw(e::compression_workspace_not_initialized);
+            };
+            match dctx.decompress(dst, src.sub(4..4 + real_src_len)) {
+                Err(code) => return fs.throw(zstd_errcode(code)),
+                Ok(ret) if ret != dst_len => {
                     bch_err!(fs, "zstd decompress error: expected {dst_len} bytes, got {ret}");
                     return fs.throw(e::decompress_zstd_size_mismatch);
                 }
+                Ok(_) => {}
             }
-            _ => panic!("decompressing compression type {}", t.0),
         }
+        _ => panic!("decompressing compression type {}", t.0),
     }
     Ok(())
 }
@@ -481,9 +467,8 @@ pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: c::bch
 // ── Compression ──────────────────────────────────────────────────────────
 
 /// Ours go to 15, zstd's to 22.
-fn zstd_params(fs: &Fs, level: u32) -> c::zstd_parameters {
-    // SAFETY: pure functions
-    unsafe { c::zstd_get_params(((level * 3) / 2).min(c::zstd_max_clevel() as u32) as c_int, extent_max(fs) as u64) }
+fn zstd_params(fs: &Fs, level: u32) -> zstd::Params {
+    zstd::get_params(((level * 3) / 2).min(zstd::max_clevel() as u32) as c_int, extent_max(fs) as u64)
 }
 
 /*
@@ -492,16 +477,12 @@ fn zstd_params(fs: &Fs, level: u32) -> c::zstd_parameters {
  * could ask for - highest level, and for lz4 the high-compression variant.
  */
 fn compress_workspace_size(fs: &Fs, t: usize, level: u32) -> usize {
-    // SAFETY: pure functions
-    unsafe {
-        match opts(t as u32) {
-            opts::lz4 if level < c::LZ4HC_MIN_CLEVEL => c::LZ4_MEM_COMPRESS as usize,
-            opts::lz4 => c::LZ4HC_MEM_COMPRESS as usize,
-            opts::gzip =>
-                c::zlib_deflate_workspacesize(c::MAX_WBITS as c_int, c::DEF_MEM_LEVEL as c_int) as usize,
-            opts::zstd => c::zstd_cctx_workspace_bound(&zstd_params(fs, level).cParams),
-            _ => panic!("compression opt type {t}"),
-        }
+    match opts(t as u32) {
+        opts::lz4 if level < lz4::HC_MIN_CLEVEL => lz4::MEM_COMPRESS,
+        opts::lz4 => lz4::HC_MEM_COMPRESS,
+        opts::gzip => zlib::deflate_workspace_size(c::MAX_WBITS as c_int, zlib::DEF_MEM_LEVEL),
+        opts::zstd => zstd::cctx_workspace_bound(&zstd_params(fs, level)),
+        _ => panic!("compression opt type {t}"),
     }
 }
 
@@ -517,68 +498,54 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: VolatileSlice<'_>,
      */
     const LZ4HC_OUTPUT_SLOP: usize = 7;
 
-    let (src_len, dst_len, ws_size) = (src.len(), dst.len(), ws.len());
+    let (src_len, dst_len) = (src.len(), dst.len());
     assert!(src_len % 512 == 0 && dst_len % 512 == 0, "compressing {src_len} bytes into {dst_len}, not sectors");
-    let (src, dst, ws) = (src.as_ptr(), dst.as_ptr(), ws.as_mut_ptr().cast::<c_void>());
-    let int = |x: usize| x as c_int;
 
-    // SAFETY: each its length, apart
-    unsafe {
-        match opts(t as u32) {
-            opts::lz4 if level < c::LZ4HC_MIN_CLEVEL => {
-                let mut len = int(src_len);
-                let ret = c::LZ4_compress_destSize(src.cast(), dst.cast(), &mut len, int(dst_len), ws);
-                if (len as usize) < src_len { -(len as isize) } else { ret as isize }
-            }
-            opts::lz4 => {
-                if dst_len <= LZ4HC_OUTPUT_SLOP {
-                    return -1;
-                }
-                match c::LZ4_compress_HC(src.cast(), dst.cast(), int(src_len),
-                                         int(dst_len - LZ4HC_OUTPUT_SLOP), level as c_int, ws) {
-                    0 => -1,
-                    n => n as isize,
-                }
-            }
-            opts::gzip => {
-                let level = match level {
-                    0 => c::Z_DEFAULT_COMPRESSION as c_int,
-                    l => (l as c_int).clamp(c::Z_BEST_SPEED as c_int, c::Z_BEST_COMPRESSION as c_int),
-                };
-                let mut strm = z_stream(src, src_len, dst, dst_len, ws);
-                if c::zlib_deflateInit2(&mut strm, level, c::Z_DEFLATED as c_int, -(c::MAX_WBITS as c_int),
-                                        c::DEF_MEM_LEVEL as c_int, c::Z_DEFAULT_STRATEGY as c_int) != c::Z_OK as c_int {
-                    return 0;
-                }
-                let done = c::zlib_deflate(&mut strm, c::Z_FINISH as c_int) == c::Z_STREAM_END as c_int;
-                if c::zlib_deflateEnd(&mut strm) != c::Z_OK as c_int || !done {
-                    return 0;
-                }
-                strm.total_out as isize
-            }
-            opts::zstd => {
-                /*
-                 * ZSTD requires that when we decompress we pass in the exact
-                 * compressed size - rounding it up to the nearest sector
-                 * doesn't work, so we use the first 4 bytes of the buffer for
-                 * that.
-                 *
-                 * Additionally, the ZSTD code seems to have a bug where it will
-                 * write just past the end of the buffer - so subtract a fudge
-                 * factor (7 bytes) from the dst buffer size to account for
-                 * that.
-                 */
-                let ctx = c::zstd_init_cctx(ws, ws_size);
-                let len = c::zstd_compress_cctx(ctx, dst.add(4).cast(), dst_len - 4 - 7,
-                                                src.cast(), src_len, &zstd_params(fs, level));
-                if c::zstd_is_error(len) != 0 {
-                    return 0;
-                }
-                dst.cast::<[u8; 4]>().write_unaligned((len as u32).to_le_bytes());
-                (len + 4) as isize
-            }
-            _ => panic!("compression opt type {t}"),
+    match opts(t as u32) {
+        opts::lz4 if level < lz4::HC_MIN_CLEVEL => {
+            let (ret, len) = lz4::compress_dest_size(src, dst, ws);
+            if len < src_len { -(len as isize) } else { ret as isize }
         }
+        opts::lz4 => {
+            if dst_len <= LZ4HC_OUTPUT_SLOP {
+                return -1;
+            }
+            match lz4::compress_hc(src, dst.sub(0..dst_len - LZ4HC_OUTPUT_SLOP), level, ws) {
+                0 => -1,
+                n => n as isize,
+            }
+        }
+        opts::gzip => {
+            let level = match level {
+                0 => c::Z_DEFAULT_COMPRESSION as c_int,
+                l => (l as c_int).clamp(c::Z_BEST_SPEED as c_int, c::Z_BEST_COMPRESSION as c_int),
+            };
+            zlib::deflate(src, dst, ws, level, -(c::MAX_WBITS as c_int), zlib::DEF_MEM_LEVEL,
+                          c::Z_DEFAULT_STRATEGY as c_int)
+                .map_or(0, |n| n as isize)
+        }
+        opts::zstd => {
+            /*
+             * ZSTD requires that when we decompress we pass in the exact
+             * compressed size - rounding it up to the nearest sector
+             * doesn't work, so we use the first 4 bytes of the buffer for
+             * that.
+             *
+             * Additionally, the ZSTD code seems to have a bug where it will
+             * write just past the end of the buffer - so subtract a fudge
+             * factor (7 bytes) from the dst buffer size to account for
+             * that.
+             */
+            let Some(mut cctx) = zstd::Cctx::new(ws) else {
+                return 0;
+            };
+            let Ok(len) = cctx.compress(dst.sub(4..dst_len - 7), src, &zstd_params(fs, level)) else {
+                return 0;
+            };
+            dst.sub(0..4).copy_from_slice(&(len as u32).to_le_bytes());
+            (len + 4) as isize
+        }
+        _ => panic!("compression opt type {t}"),
     }
 }
 
@@ -763,19 +730,12 @@ pub(crate) fn check_set_has_compressed_data(fs: &Fs, compression_opt: u8) -> Res
 
 /// The pools @features' types need, set up if they aren't.
 fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: SbFeatures) -> Result<(), BchError> {
-    // SAFETY: pure functions
-    let (zstd, deflate, inflate, zstd_d) = unsafe {
-        let params = c::zstd_get_params(c::zstd_max_clevel(), extent_max(fs) as u64);
-        (c::zstd_cctx_workspace_bound(&params.cParams),
-         c::zlib_deflate_workspacesize(c::MAX_WBITS as c_int, c::DEF_MEM_LEVEL as c_int) as usize,
-         c::zlib_inflate_workspacesize() as usize,
-         c::zstd_dctx_workspace_bound())
-    };
-    let lz4 = (c::LZ4_MEM_COMPRESS as usize).max(c::LZ4HC_MEM_COMPRESS as usize);
     let types = [
-        (opts::lz4, lz4, 0),
-        (opts::gzip, deflate, inflate),
-        (opts::zstd, zstd, zstd_d),
+        (opts::lz4, lz4::MEM_COMPRESS.max(lz4::HC_MEM_COMPRESS), 0),
+        (opts::gzip, zlib::deflate_workspace_size(c::MAX_WBITS as c_int, zlib::DEF_MEM_LEVEL),
+         zlib::inflate_workspace_size()),
+        (opts::zstd, zstd::cctx_workspace_bound(&zstd::get_params(zstd::max_clevel(), extent_max(fs) as u64)),
+         zstd::dctx_workspace_bound()),
     ].map(|(t, w, d)| (t.0 as usize, w, d));
     let has = |t| features.contains(opt_feature(t));
 
