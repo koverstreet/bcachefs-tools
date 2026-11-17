@@ -52,8 +52,6 @@ use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::util::{alloc::{Box, KVmalloc}, bio::{BioRange, Mapped},
                   late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::{Out, VolatileSlice}, Printbuf, ToText};
-#[cfg(not(bch_maybe_uninit_slice))]
-use crate::util::maybe_uninit::MaybeUninitSlice;
 use crate::os::compress::{lz4, zlib, zstd};
 use core::ffi::{c_int, c_uint};
 use core::mem::MaybeUninit;
@@ -236,10 +234,7 @@ pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bounce<'_, [Maybe
 
 /// @r's data, copied.
 pub(crate) fn bio_bounce<'f>(fs: &'f Fs, r: BioRange<'_>) -> Bounce<'f, [u8]> {
-    let mut b = bounce_alloc(fs, r.len() as usize, READ);
-    r.copy_to_out(Out::from(&mut *b));
-    // SAFETY: all of it, copied from @r
-    unsafe { b.assume_init() }
+    r.copy_into(bounce_alloc(fs, r.len() as usize, READ))
 }
 
 /// @r's data, to read: the bio's own memory if it can be, else a copy.
@@ -261,9 +256,9 @@ pub(crate) fn map_or_alloc<'a>(fs: &'a Fs, r: BioRange<'a>) -> Dst<'a> {
 
 // ── Decompression ────────────────────────────────────────────────────────
 
-/// All of @dst's uncompressed_size written, or an error.
-pub(crate) fn buf_uncompress(fs: &Fs, dst: Out<'_>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
-    -> Result<(), BchError>
+/// @src decompressed in @dst: all of its uncompressed_size, or an error.
+pub(crate) fn buf_uncompress<'a>(fs: &Fs, dst: Out<'a>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
+    -> Result<VolatileSlice<'a>, BchError>
 {
     let t = crc.compression_type.get();
     let opt = type_to_opt(t);
@@ -295,17 +290,18 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: Out<'_>, src: VolatileSlice<'_>, crc:
     });
     let ws: &mut [MaybeUninit<u8>] = ws.as_deref_mut().unwrap_or(&mut []);
 
-    match t {
+    Ok(match t {
         CompressionType::lz4_old | CompressionType::lz4 => {
-            if lz4::decompress_safe_partial(src, dst, dst_len) != Some(dst_len) {
-                return fs.throw(if t == CompressionType::lz4 { e::decompress_lz4 }
-                                else { e::decompress_lz4_old });
+            match lz4::decompress_safe_partial(src, dst, dst_len) {
+                Some(d) if d.len() == dst_len => d,
+                _ => return fs.throw(if t == CompressionType::lz4 { e::decompress_lz4 }
+                                     else { e::decompress_lz4_old }),
             }
         }
         CompressionType::gzip => {
             match zlib::inflate(src, dst, ws, -(c::MAX_WBITS as c_int)) {
                 None => return fs.throw(e::decompress_gzip),
-                Some(0) => {}
+                Some(d) if d.len() == dst_len => d,
                 Some(_) => return fs.throw(e::decompress_gzip_size_mismatch),
             }
         }
@@ -327,16 +323,15 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: Out<'_>, src: VolatileSlice<'_>, crc:
             };
             match dctx.decompress(dst, src.sub(4..4 + real_src_len)) {
                 Err(code) => return fs.throw(zstd_errcode(code)),
-                Ok(ret) if ret != dst_len => {
-                    bch_err!(fs, "zstd decompress error: expected {dst_len} bytes, got {ret}");
+                Ok(d) if d.len() != dst_len => {
+                    bch_err!(fs, "zstd decompress error: expected {dst_len} bytes, got {}", d.len());
                     return fs.throw(e::decompress_zstd_size_mismatch);
                 }
-                Ok(_) => {}
+                Ok(d) => d,
             }
         }
         _ => panic!("decompressing compression type {}", t.0),
-    }
-    Ok(())
+    })
 }
 
 /*
@@ -380,12 +375,13 @@ pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: c::bch
     };
     let mut src_buf = map_or_bounce(fs, src);
 
-    let ret = decompress_err(fs, buf_uncompress(fs, dst_buf.out(), src_buf.data(), &crc));
-    if let (Ok(()), Dst::Bounced(b)) = (&ret, &dst_buf) {
-        // SAFETY: decompressed into, all of it
-        dst.copy_from(&unsafe { b.assume_init_ref() }[(crc.offset as usize) << 9..]);
-    }
-    ret
+    let bounced = matches!(dst_buf, Dst::Bounced(_));
+    let ret = buf_uncompress(fs, dst_buf.out(), src_buf.data(), &crc).map(|d| {
+        if bounced {
+            dst.copy_from_volatile(d.sub(((crc.offset as usize) << 9)..dst_len));
+        }
+    });
+    decompress_err(fs, ret)
 }
 
 // ── Compression ──────────────────────────────────────────────────────────
@@ -410,10 +406,10 @@ fn compress_workspace_size(fs: &Fs, t: usize, level: u32) -> usize {
     }
 }
 
-/// The compressed length; if it didn't fit, negative - how much of @src
-/// would, if the compressor can say - or 0.
-fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: Out<'_>, src: &[u8], t: usize, level: u32)
-    -> isize
+/// @src, compressed; if it didn't fit, negative - how much of @src would, if
+/// the compressor can say - or 0.
+fn attempt_compress<'a>(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: Out<'a>, src: &[u8], t: usize, level: u32)
+    -> Result<VolatileSlice<'a>, isize>
 {
     /*
      * LZ4HC uses LZ4_wildCopy(), which may overwrite up to 7 bytes past
@@ -427,17 +423,14 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: Out<'_>, src: &[u8
 
     match opts(t as u32) {
         opts::lz4 if level < lz4::HC_MIN_CLEVEL => {
-            let (ret, len) = lz4::compress_dest_size(src, dst, ws);
-            if len < src_len { -(len as isize) } else { ret as isize }
+            let (compressed, len) = lz4::compress_dest_size(src, dst, ws);
+            if len < src_len { Err(-(len as isize)) } else { compressed.ok_or(0) }
         }
         opts::lz4 => {
             if dst_len <= LZ4HC_OUTPUT_SLOP {
-                return -1;
+                return Err(-1);
             }
-            match lz4::compress_hc(src, dst.sub(0..dst_len - LZ4HC_OUTPUT_SLOP), level, ws) {
-                0 => -1,
-                n => n as isize,
-            }
+            lz4::compress_hc(src, dst.sub(0..dst_len - LZ4HC_OUTPUT_SLOP), level, ws).ok_or(-1)
         }
         opts::gzip => {
             let level = match level {
@@ -446,7 +439,7 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: Out<'_>, src: &[u8
             };
             zlib::deflate(src, dst, ws, level, -(c::MAX_WBITS as c_int), zlib::DEF_MEM_LEVEL,
                           c::Z_DEFAULT_STRATEGY as c_int)
-                .map_or(0, |n| n as isize)
+                .ok_or(0)
         }
         opts::zstd => {
             /*
@@ -460,29 +453,25 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: Out<'_>, src: &[u8
              * factor (7 bytes) from the dst buffer size to account for
              * that.
              */
-            let Some(mut cctx) = zstd::Cctx::new(ws) else {
-                return 0;
-            };
-            let Ok(len) = cctx.compress(dst.sub(4..dst_len - 7), src, &zstd_params(fs, level)) else {
-                return 0;
-            };
-            dst.sub(0..4).copy_from_slice(&(len as u32).to_le_bytes());
-            (len + 4) as isize
+            let mut cctx = zstd::Cctx::new(ws).ok_or(0isize)?;
+            let body = cctx.compress(dst.sub(4..dst_len - 7), src, &zstd_params(fs, level)).map_err(|_| 0isize)?;
+            let header = dst.sub(0..4).copy_from_slice(&(body.len() as u32).to_le_bytes());
+            Ok(dst.joined(header, body))
         }
         _ => panic!("compression opt type {t}"),
     }
 }
 
-/// The type @src is compressed as into @dst, @src_len and @dst_len how much
-/// of each - or none or incompressible. @src a slice: what's compressed is
-/// written out, and has to be what's checksummed.
-fn compress(fs: &Fs, dst: Out<'_>, dst_len: &mut usize, src: &[u8], src_len: &mut usize,
-            compression_opt: u8, write_pos: Bpos) -> CompressionType {
+/// The type @src is compressed as into @dst, and what it was compressed to -
+/// @src_len how much of it - or none or incompressible. @src a slice: what's
+/// compressed is written out, and has to be what's checksummed.
+fn compress<'a>(fs: &Fs, dst: Out<'a>, src: &[u8], src_len: &mut usize,
+                compression_opt: u8, write_pos: Bpos) -> (CompressionType, Option<VolatileSlice<'a>>) {
     let block = fs.block_bytes() as usize;
 
     // If it's only one block, don't bother trying to compress:
     if *src_len <= block {
-        return CompressionType::incompressible;
+        return (CompressionType::incompressible, None);
     }
 
     let bits = bch_compression_opt::from_bits(compression_opt);
@@ -496,7 +485,7 @@ fn compress(fs: &Fs, dst: Out<'_>, dst_len: &mut usize, src: &[u8], src_len: &mu
                             "compression opt {} set but not marked in superblock", opts(t as u32));
         // not to fix, fsck_err() failing, or no memory for the pools: don't compress
         if !matches!(fix, Ok(true)) || check_set_has_compressed_data(fs, t as u8).is_err() {
-            return CompressionType::none;
+            return (CompressionType::none, None);
         }
     }
 
@@ -519,45 +508,44 @@ fn compress(fs: &Fs, dst: Out<'_>, dst_len: &mut usize, src: &[u8], src_len: &mu
      * XXX: this algorithm sucks when the compression code doesn't tell us
      * how much would fit, like LZ4 does:
      */
-    let fit = loop {
+    let compressed = loop {
         if *src_len <= block {
-            break false;
+            break None;
         }
 
-        let ret = attempt_compress(fs, ws, dst.sub(0..*dst_len), &src[..*src_len], t, level);
-        if ret > 0 {
-            *dst_len = ret as usize;
-            break true;
-        }
+        let ret = match attempt_compress(fs, ws, dst, &src[..*src_len], t, level) {
+            Ok(compressed) => break Some(compressed),
+            Err(ret) => ret,
+        };
 
         // Didn't fit: should we retry with a smaller amount?
-        if *src_len <= *dst_len {
-            break false;
+        if *src_len <= dst.len() {
+            break None;
         }
 
         // If ret is negative, it's a hint as to how much data would fit
         assert!(ret.unsigned_abs() < *src_len, "compressor's hint {ret}, of {src_len} bytes");
-        *src_len = if ret < 0 { ret.unsigned_abs() } else { *src_len - (*src_len - *dst_len) / 2 };
+        *src_len = if ret < 0 { ret.unsigned_abs() } else { *src_len - (*src_len - dst.len()) / 2 };
         *src_len -= *src_len % block;
     };
 
     // Didn't fit, or didn't get smaller:
-    let padded = dst_len.next_multiple_of(block);
-    if !fit || padded >= *src_len {
-        return CompressionType::incompressible;
+    let Some(compressed) = compressed else {
+        return (CompressionType::incompressible, None);
+    };
+    let padded = compressed.len().next_multiple_of(block);
+    if padded >= *src_len {
+        return (CompressionType::incompressible, None);
     }
 
-    dst.sub(*dst_len..padded).fill(0);
-    *dst_len = padded;
+    let compressed = dst.joined(compressed, dst.sub(compressed.len()..padded).fill(0));
 
-    // SAFETY: the compressor's output, and the pad after it
-    let compressed = unsafe { dst.sub(0..*dst_len).assume_init() };
     if unlikely(verify_compress.get()) && !verify(fs, compressed, &src[..*src_len], compression_type, write_pos) {
-        return CompressionType::incompressible;
+        return (CompressionType::incompressible, None);
     }
-    assert!(*dst_len % block == 0 && *src_len % block == 0,
-            "compressed {src_len} bytes to {dst_len}, not whole {block} byte blocks");
-    compression_type
+    assert!(compressed.len() % block == 0 && *src_len % block == 0,
+            "compressed {src_len} bytes to {}, not whole {block} byte blocks", compressed.len());
+    (compression_type, Some(compressed))
 }
 
 fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: Bpos) -> bool {
@@ -569,9 +557,8 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
         ..Default::default()
     };
     let mut check = bounce_alloc(fs, src_len, WRITE);
-    buf_uncompress(fs, Out::from(&mut *check), dst, &crc).expect("decompressing what we just compressed");
-    // SAFETY: decompressed into, all of it
-    if *unsafe { check.assume_init() } == *src {
+    if buf_uncompress(fs, Out::from(&mut *check), dst, &crc).expect("decompressing what we just compressed")
+        .eq_slice(src) {
         return true;
     }
 
@@ -607,12 +594,13 @@ pub(crate) fn bio_compress(fs: &Fs, dst: BioRange<'_>, dst_len: &mut usize,
         // stable: BCH_WRITE_pages_stable
         Src::Mapped(m) => unsafe { m.data().assume_stable() },
     };
-    let t = compress(fs, dst_data.out(), dst_len, src_slice, src_len, compression_opt as u8, write_pos);
-    if t != CompressionType::none && t != CompressionType::incompressible {
-        if let Dst::Bounced(b) = &dst_data {
-            // SAFETY: compressed into, and padded, this far
-            dst.copy_from(unsafe { b[..*dst_len].assume_init_ref() });
+    let bounced = matches!(dst_data, Dst::Bounced(_));
+    let (t, compressed) = compress(fs, dst_data.out(), src_slice, src_len, compression_opt as u8, write_pos);
+    if let Some(compressed) = compressed {
+        if bounced {
+            dst.copy_from_volatile(compressed);
         }
+        *dst_len = compressed.len();
         assert!(*dst_len != 0 && *dst_len <= consume_dst as usize, "compressed to {dst_len} of {consume_dst} bytes");
         assert!(*src_len != 0 && *src_len <= consume_src as usize, "compressed {src_len} of {consume_src} bytes");
     }

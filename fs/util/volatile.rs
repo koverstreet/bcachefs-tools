@@ -61,6 +61,17 @@ impl<'a> VolatileSlice<'a> {
         unsafe { ptr::copy_nonoverlapping(self.as_ptr(), dst.as_mut_ptr(), self.len) }
     }
 
+    /// Whether it's @b's bytes, as they are as it's read.
+    pub fn eq_slice(&self, b: &[u8]) -> bool {
+        const CHUNK: usize = 256;
+        let mut buf = [0u8; CHUNK];
+        self.len == b.len() && b.chunks(CHUNK).enumerate().all(|(i, c)| {
+            let buf = &mut buf[..c.len()];
+            self.sub(i * CHUNK..i * CHUNK + c.len()).copy_to_slice(buf);
+            buf == c
+        })
+    }
+
     /// As a slice.
     ///
     /// # Safety
@@ -81,7 +92,8 @@ impl<'a> From<&'a mut [u8]> for VolatileSlice<'a> {
 }
 
 /// Where C writes - a codec, its output: a bio's memory, or memory of ours not
-/// yet written. Written, never read, until assume_init() says it has been.
+/// yet written. Written, never read: what's written to it is had back as a
+/// VolatileSlice - from C, by assume_init(), saying how much.
 #[derive(Clone, Copy)]
 pub struct Out<'a> {
     p:   NonNull<u8>,
@@ -115,16 +127,33 @@ impl<'a> Out<'a> {
         Out { p: unsafe { self.p.add(r.start) }, len: r.end - r.start, _a: PhantomData }
     }
 
-    pub fn fill(&self, b: u8) {
-        // SAFETY: its bytes, written only by C and these
-        unsafe { ptr::write_bytes(self.as_ptr(), b, self.len) }
+    /// It, written.
+    pub fn fill(self, b: u8) -> VolatileSlice<'a> {
+        // SAFETY: its bytes, written only by C and these; then every one has
+        // been
+        unsafe {
+            ptr::write_bytes(self.as_ptr(), b, self.len);
+            self.assume_init()
+        }
     }
 
-    /// Panics if the lengths differ, as a slice's does.
-    pub fn copy_from_slice(&self, src: &[u8]) {
+    /// It, written. Panics if the lengths differ, as a slice's does.
+    pub fn copy_from_slice(self, src: &[u8]) -> VolatileSlice<'a> {
         assert_eq!(self.len, src.len(), "copying a slice into an output buffer of another length");
         // SAFETY: as fill(): and no reference is to it, so @src isn't
-        unsafe { ptr::copy_nonoverlapping(src.as_ptr(), self.as_ptr(), self.len) }
+        unsafe {
+            ptr::copy_nonoverlapping(src.as_ptr(), self.as_ptr(), self.len);
+            self.assume_init()
+        }
+    }
+
+    /// @a and @b, written within it, the one right after the other, as one.
+    pub fn joined(self, a: VolatileSlice<'a>, b: VolatileSlice<'a>) -> VolatileSlice<'a> {
+        let (base, start, mid) = (self.p.as_ptr().addr(), a.as_ptr().addr(), b.as_ptr().addr());
+        assert!(base <= start && start + a.len() == mid && mid + b.len() <= base + self.len,
+                "joining what isn't written one after the other within an output buffer");
+        // SAFETY: both written, so all of it between
+        unsafe { self.sub(start - base..mid + b.len() - base).assume_init() }
     }
 
     /// Its bytes, written.

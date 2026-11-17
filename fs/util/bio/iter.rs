@@ -17,11 +17,13 @@
 
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
+use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 
 use super::{Bio, BioData};
+use crate::util::alloc::{Alloc, Box};
 use crate::util::place::Contained;
-use crate::util::volatile::{Out, VolatileSlice};
+use crate::util::volatile::VolatileSlice;
 use crate::c;
 use crate::os::kernel::PAGE_SIZE;
 
@@ -180,20 +182,21 @@ impl<'a> BioRange<'a> {
         done
     }
 
-    /// As much as both have, into @dst: as copy_to(), for memory not yet
-    /// written.
-    pub fn copy_to_out(&self, dst: Out<'_>) -> usize {
+    /// All of it, into @b, its length, not yet written: as Box::write(), b
+    /// written. Panics if they differ.
+    pub fn copy_into<A: Alloc>(&self, mut b: Box<[MaybeUninit<u8>], A>) -> Box<[u8], A> {
+        assert_eq!(self.len() as usize, b.len(), "copying a bio range into a buffer of another length");
+        let dst = b.as_mut_ptr().cast::<u8>();
         let mut done = 0;
         for chunk in *self {
-            if done == dst.len() {
-                break;
-            }
-            let n = (chunk.len() as usize).min(dst.len() - done);
-            // SAFETY: n of the chunk's bytes, mapped, into n of @dst
-            chunk.with_mapped(|p, _| unsafe { core::ptr::copy_nonoverlapping(p, dst.as_ptr().add(done), n) });
+            let n = chunk.len() as usize;
+            // SAFETY: the chunk's bytes, mapped, into n of @b - within it, as
+            // the range is its length
+            chunk.with_mapped(|p, _| unsafe { core::ptr::copy_nonoverlapping(p, dst.add(done), n) });
             done += n;
         }
-        done
+        // SAFETY: every byte, the range's, copied
+        unsafe { b.assume_init() }
     }
 
     /// As copy_to(), for memory that can't be a slice.

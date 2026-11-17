@@ -20,32 +20,40 @@ pub mod lz4 {
     /// The kernel's threshold for lz4 against lz4hc.
     pub const HC_MIN_CLEVEL: u32 = 3;
 
-    /// As much of @src as fits in @dst, compressed: its compressed length, 0
-    /// on error, and how much of @src that was.
-    pub fn compress_dest_size(src: &[u8], dst: Out<'_>, _ws: &mut [MaybeUninit<u8>]) -> (usize, usize) {
+    /// As much of @src as fits in @dst, compressed - None on error - and how
+    /// much of @src that was.
+    pub fn compress_dest_size<'a>(src: &[u8], dst: Out<'a>, _ws: &mut [MaybeUninit<u8>])
+        -> (Option<VolatileSlice<'a>>, usize)
+    {
         let mut src_len = int(src.len());
-        let ret = unsafe {
-            c::LZ4_compress_destSize(src.as_ptr().cast(), dst.as_ptr().cast(), &mut src_len, int(dst.len()))
-        };
-        (ret as usize, src_len as usize)
+        unsafe {
+            let ret = c::LZ4_compress_destSize(src.as_ptr().cast(), dst.as_ptr().cast(), &mut src_len,
+                                               int(dst.len()));
+            ((ret > 0).then(|| dst.sub(0..ret as usize).assume_init()), src_len as usize)
+        }
     }
 
-    /// @src's compressed length in @dst: 0 if it didn't fit.
-    pub fn compress_hc(src: &[u8], dst: Out<'_>, level: u32, _ws: &mut [MaybeUninit<u8>]) -> usize {
-        let ret = unsafe {
-            c::LZ4_compress_HC(src.as_ptr().cast(), dst.as_ptr().cast(), int(src.len()), int(dst.len()), level as c_int)
-        };
-        ret as usize
+    /// @src, compressed in @dst - or None if it didn't fit.
+    pub fn compress_hc<'a>(src: &[u8], dst: Out<'a>, level: u32, _ws: &mut [MaybeUninit<u8>])
+        -> Option<VolatileSlice<'a>>
+    {
+        unsafe {
+            let ret = c::LZ4_compress_HC(src.as_ptr().cast(), dst.as_ptr().cast(), int(src.len()), int(dst.len()),
+                                         level as c_int);
+            (ret > 0).then(|| dst.sub(0..ret as usize).assume_init())
+        }
     }
 
-    /// At least @target bytes of @src decompressed into @dst: how many, or
-    /// None if @src is malformed.
-    pub fn decompress_safe_partial(src: VolatileSlice<'_>, dst: Out<'_>, target: usize) -> Option<usize> {
-        let ret = unsafe {
-            c::LZ4_decompress_safe_partial(src.as_ptr().cast_const().cast(), dst.as_ptr().cast(),
-                                           int(src.len()), int(target), int(dst.len()))
-        };
-        ret.try_into().ok()
+    /// At least @target bytes of @src, decompressed in @dst - or None if @src
+    /// is malformed.
+    pub fn decompress_safe_partial<'a>(src: VolatileSlice<'_>, dst: Out<'a>, target: usize)
+        -> Option<VolatileSlice<'a>>
+    {
+        unsafe {
+            let ret = c::LZ4_decompress_safe_partial(src.as_ptr().cast_const().cast(), dst.as_ptr().cast(),
+                                                     int(src.len()), int(target), int(dst.len()));
+            Some(dst.sub(0..ret.try_into().ok()?).assume_init())
+        }
     }
 }
 
@@ -80,10 +88,9 @@ pub mod zlib {
         }
     }
 
-    /// @src deflated into @dst, all of it: its compressed length, or None if
-    /// it didn't fit.
-    pub fn deflate(src: &[u8], dst: Out<'_>, _ws: &mut [MaybeUninit<u8>], level: c_int,
-                   window_bits: c_int, mem_level: c_int, strategy: c_int) -> Option<usize> {
+    /// @src deflated in @dst, all of it - or None if it didn't fit.
+    pub fn deflate<'a>(src: &[u8], dst: Out<'a>, _ws: &mut [MaybeUninit<u8>], level: c_int,
+                       window_bits: c_int, mem_level: c_int, strategy: c_int) -> Option<VolatileSlice<'a>> {
         let mut strm = stream(src.as_ptr(), src.len(), dst);
         unsafe {
             if c::deflateInit2_(&mut strm, level, c::Z_DEFLATED as c_int, window_bits, mem_level, strategy,
@@ -91,14 +98,14 @@ pub mod zlib {
                 return None;
             }
             let done = c::deflate(&mut strm, c::Z_FINISH as c_int) == c::Z_STREAM_END as c_int;
-            (c::deflateEnd(&mut strm) == c::Z_OK as c_int && done).then_some(strm.total_out as usize)
+            (c::deflateEnd(&mut strm) == c::Z_OK as c_int && done)
+                .then(|| dst.sub(0..strm.total_out as usize).assume_init())
         }
     }
 
-    /// @src inflated into @dst: how much of @dst it left, or None if @src is
-    /// malformed or didn't end.
-    pub fn inflate(src: VolatileSlice<'_>, dst: Out<'_>, _ws: &mut [MaybeUninit<u8>],
-                   window_bits: c_int) -> Option<usize> {
+    /// @src inflated in @dst - or None if @src is malformed or didn't end.
+    pub fn inflate<'a>(src: VolatileSlice<'_>, dst: Out<'a>, _ws: &mut [MaybeUninit<u8>],
+                       window_bits: c_int) -> Option<VolatileSlice<'a>> {
         let mut strm = stream(src.as_ptr(), src.len(), dst);
         unsafe {
             if c::inflateInit2_(&mut strm, window_bits, VERSION, STREAM_SIZE) != c::Z_OK as c_int {
@@ -106,7 +113,7 @@ pub mod zlib {
             }
             let ret = c::inflate(&mut strm, c::Z_FINISH as c_int);
             c::inflateEnd(&mut strm);
-            (ret == c::Z_STREAM_END as c_int).then_some(strm.avail_out as usize)
+            (ret == c::Z_STREAM_END as c_int).then(|| dst.sub(0..dst.len() - strm.avail_out as usize).assume_init())
         }
     }
 }
@@ -157,7 +164,7 @@ pub mod zstd {
 
         /// As the kernel's zstd_compress_cctx(): @params set, then compressed
         /// in one.
-        pub fn compress(&mut self, dst: Out<'_>, src: &[u8], params: &Params) -> Result<usize, u32> {
+        pub fn compress<'a>(&mut self, dst: Out<'a>, src: &[u8], params: &Params) -> Result<VolatileSlice<'a>, u32> {
             let (cctx, cp, fp) = (self.0.as_ptr(), &params.cParams, &params.fParams);
             let set = [
                 (c::ZSTD_cParameter_ZSTD_c_windowLog,       cp.windowLog as c_int),
@@ -177,7 +184,9 @@ pub mod zstd {
                 for (param, v) in set {
                     result(c::ZSTD_CCtx_setParameter(cctx, param, v))?;
                 }
-                result(c::ZSTD_compress2(cctx, dst.as_ptr().cast(), dst.len(), src.as_ptr().cast(), src.len()))
+                let len = result(c::ZSTD_compress2(cctx, dst.as_ptr().cast(), dst.len(),
+                                                   src.as_ptr().cast(), src.len()))?;
+                Ok(dst.sub(0..len).assume_init())
             }
         }
     }
@@ -191,11 +200,13 @@ pub mod zstd {
             NonNull::new(p).map(|p| Dctx(p, PhantomData))
         }
 
-        pub fn decompress(&mut self, dst: Out<'_>, src: VolatileSlice<'_>) -> Result<usize, u32> {
-            result(unsafe {
-                c::ZSTD_decompressDCtx(self.0.as_ptr(), dst.as_ptr().cast(), dst.len(),
-                                       src.as_ptr().cast_const().cast(), src.len())
-            })
+        /// @src, decompressed in @dst.
+        pub fn decompress<'a>(&mut self, dst: Out<'a>, src: VolatileSlice<'_>) -> Result<VolatileSlice<'a>, u32> {
+            unsafe {
+                let len = result(c::ZSTD_decompressDCtx(self.0.as_ptr(), dst.as_ptr().cast(), dst.len(),
+                                                        src.as_ptr().cast_const().cast(), src.len()))?;
+                Ok(dst.sub(0..len).assume_init())
+            }
         }
     }
 }

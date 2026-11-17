@@ -178,7 +178,7 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
         map_or_bounce(fs, range)
     };
 
-    let mut ret = buf_uncompress(fs, Out::from(&mut *dst_buf), src_buf.data(), &crc);
+    let mut ret = buf_uncompress(fs, Out::from(&mut *dst_buf), src_buf.data(), &crc).map(|_| ());
     if fs.opts().no_data_io.get() != 0 {
         ret = Ok(());
     }
