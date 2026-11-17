@@ -20,7 +20,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::AnyKeySC;
-use crate::util::vstructs::Unvalidated;
+use crate::util::vstructs::{cast_plain, plain_bytes, Unvalidated};
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{BkeySC, BkeyVal, ValidateFlags};
 use crate::btree::bkey_methods::{self, SetError};
@@ -35,7 +35,7 @@ use crate::types::{Le32, Le64};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::mem::offset_of;
-use cstruct_macros::{bitfield, MaybeZeroable, TypeInfo, SizedVal, BitfieldMembers};
+use cstruct_macros::{bitfield, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 use nestify::nest;
 use zerocopy::byteorder::little_endian as le;
 
@@ -60,10 +60,12 @@ nest! {
 
         /* Target inode number: */
         #>[repr(C)]
+        #>[derive(Plain)]
         pub target: pub union bch_dirent_target {
             pub d_inum: Le64,
             /* DT_SUBVOL */
             #>[repr(C)]
+            #>[derive(Plain)]
             pub subvol: pub struct bch_dirent_subvol {
                 pub d_child_subvol: Le32,
                 pub d_parent_subvol: Le32,
@@ -86,6 +88,7 @@ nest! {
         #>[repr(C, packed)]
         pub name_block: pub union bch_dirent_name_block {
             #>[repr(C)]
+            #>[derive(Plain)]
             pub d_cf_name_block: pub struct bch_dirent_cf_name_block {
                 pub d_pad: u8,
                 /*
@@ -121,13 +124,13 @@ impl c::Dirent {
     /// The inode number the dirent points at. Meaningless for a DT_SUBVOL
     /// dirent, which keeps subvolume IDs in the same space.
     pub fn d_inum(&self) -> u64 {
-        (unsafe { self.target.d_inum }).get()
+        cast_plain::<Le64>(plain_bytes(&self.target)).expect("an arm of the union").get()
     }
 
     /// The target, read through the half of the union d_type says is live.
     pub fn target(&self) -> DirentTarget {
         if self.d_type() as u32 == c::DT_SUBVOL {
-            let s = unsafe { self.target.subvol };
+            let s = cast_plain::<c::bch_dirent_subvol>(plain_bytes(&self.target)).expect("an arm of the union");
             DirentTarget::Subvol {
                 child:  s.d_child_subvol.get(),
                 parent: s.d_parent_subvol.get(),
@@ -212,7 +215,7 @@ impl<'k> RawNames<'k> {
         let block_len = block.len().saturating_sub(padding);
 
         let (name_len, cf_len) = if casefold {
-            let cf = unsafe { &d.name_block.d_cf_name_block };
+            let cf = cast_plain::<c::bch_dirent_cf_name_block>(&v[D_NAME_OFFSET..]).expect("a dirent's name block");
             (cf.d_name_len.get() as usize, cf.d_cf_name_len.get() as usize)
         } else {
             (block_len, 0)
@@ -392,11 +395,10 @@ pub fn set_field<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, field: &'p str, val: &'
         "d_inum" => d.target.d_inum = v.into(),
         _ => {
             let v = u32::try_from(v).map_err(|_| overflow(4, v))?;
-            let s = unsafe { &mut d.target.subvol };
             if field == "d_child_subvol" {
-                s.d_child_subvol = v.into();
+                d.target.subvol.d_child_subvol = v.into();
             } else {
-                s.d_parent_subvol = v.into();
+                d.target.subvol.d_parent_subvol = v.into();
             }
         }
     }

@@ -29,11 +29,11 @@ use crate::tokens::vs;
 /// elements, Plain too, as the attribute checks.
 pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input)?;
-    if def.kind != StructKind::Struct {
-        return Err(format!("{}: Plain is for structs", def.name()));
-    }
     let tys: Vec<&syn::Type> = def.fields.iter().map(|f| &f.ty).collect();
-    Ok(plain(&def.ident, &tys))
+    Ok(match def.kind {
+        StructKind::Struct => plain(&def.ident, &tys),
+        StructKind::Union  => plain_union(&def.ident, &tys),
+    })
 }
 
 /// #[derive(SizedVal)]: the marker, for a key value - as an on-disk value,
@@ -57,6 +57,25 @@ pub(crate) fn derive_sized_val(input: TokenStream) -> Result<TokenStream, String
 /// itself.
 pub(crate) fn plain(name: &Ident, tys: &[impl ToTokens]) -> TokenStream {
     let msg = format!("{name}: padding between its fields - it isn't Plain");
+    plain_impls(name, quote! {
+        #(crate::util::vstructs::assert_plain::<#tys>();)*
+        assert!(::core::mem::size_of::<#name>() == 0 #(+ ::core::mem::size_of::<#tys>())*, #msg);
+    })
+}
+
+/// Plain for union @name, whose arms are of types @tys: each Plain, and as
+/// long as the union - a shorter one, written, leaves the rest of its bytes
+/// uninitialized.
+fn plain_union(name: &Ident, tys: &[impl ToTokens]) -> TokenStream {
+    let msg = format!("{name}: an arm shorter than the union - it isn't Plain");
+    plain_impls(name, quote! {
+        #(crate::util::vstructs::assert_plain::<#tys>();)*
+        #(assert!(::core::mem::size_of::<#tys>() == ::core::mem::size_of::<#name>(), #msg);)*
+    })
+}
+
+/// The impls, and @checks, a const block of what makes them sound.
+fn plain_impls(name: &Ident, checks: TokenStream) -> TokenStream {
     // and Native as itself: a struct reads as a struct. In-kernel, the
     // kernel's own FromBytes and AsBytes - what uaccess's UserSlice reads and
     // writes - whose conditions are Plain's: any bytes are one, every byte is
@@ -72,10 +91,7 @@ pub(crate) fn plain(name: &Ident, tys: &[impl ToTokens]) -> TokenStream {
             fn to_native(self) -> Self { self }
             fn from_native(n: Self) -> Self { n }
         }
-        const _: () = {
-            #(crate::util::vstructs::assert_plain::<#tys>();)*
-            assert!(::core::mem::size_of::<#name>() == 0 #(+ ::core::mem::size_of::<#tys>())*, #msg);
-        };
+        const _: () = { #checks };
     }
 }
 

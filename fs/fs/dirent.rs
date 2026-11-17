@@ -28,6 +28,7 @@ use crate::btree::bkey::prelude::*;
 use format::D_NAME_OFFSET;
 #[cfg(CONFIG_UNICODE)]
 use format::D_NAMES_OFFSET;
+use crate::util::vstructs::cast_plain_mut;
 
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -216,9 +217,9 @@ fn casefold_name(
         None => utf8_casefold(hash_info, OsStr::from_bytes(name), out)?,
     };
 
-    let cf_block = unsafe {
-        &mut k.v_mut().name_block.d_cf_name_block
-    };
+    let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
+    let cf_block = cast_plain_mut::<c::bch_dirent_cf_name_block>(&mut v[D_NAME_OFFSET..])
+        .expect("a dirent's name block");
     cf_block.d_name_len    = (name.len() as u16).into();
     cf_block.d_cf_name_len = (cf_len as u16).into();
 
