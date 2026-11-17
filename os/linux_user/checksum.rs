@@ -3,13 +3,17 @@
 //! The crcs checksums and string hashes are made with: @crc the value so far,
 //! not inverted before or after, as the kernel's lib/crc.
 
+#[path = "../checksum.rs"]
+mod common;
+pub use common::*;
+
 /// The crate's is the standard CRC-32C, which inverts before and after.
-pub fn crc32c(crc: u32, data: &[u8]) -> u32 {
+fn crc32c(crc: u32, data: &[u8]) -> u32 {
     !::crc32c::crc32c_append(!crc, data)
 }
 
 /// ECMA-182, most significant bit first.
-pub fn crc64_be(crc: u64, data: &[u8]) -> u64 {
+fn crc64_be(crc: u64, data: &[u8]) -> u64 {
     const TABLE: [u64; 256] = {
         let mut t = [0u64; 256];
         let mut i = 0;

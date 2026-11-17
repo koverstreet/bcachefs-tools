@@ -38,7 +38,7 @@ use crate::util::bio::{Bio, BioRange};
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use crate::format::{Bversion, Nonce};
-use crate::os::crc::{crc32c, crc64_be};
+use crate::os::checksum::{Checksum, Crc32c, Crc64, Xxh64};
 
 // ── Nonces ───────────────────────────────────────────────────────────────
 
@@ -71,15 +71,15 @@ const POLY1305_KEY_SIZE: usize = 32;
 const POLY1305_DIGEST_SIZE: usize = 16;
 
 /// A checksum being computed, over its data's pieces in order: C's
-/// bch2_checksum_state, and Poly1305's alongside. A crc is its seed so far
+/// bch2_checksum_state, and Poly1305's alongside. A crc is its value so far
 /// and what that's XORed with at the end: all ones for the _nonzero types,
 /// which start there too.
 enum Csum {
     /// none, and a type this version doesn't know: zero, or a merge's seed
     None(u64),
-    Crc32c { seed: u64, xor: u64 },
-    Crc64 { seed: u64, xor: u64 },
-    Xxhash(c::xxh64_state),
+    Crc32c { crc: Crc32c, xor: u32 },
+    Crc64 { crc: Crc64, xor: u64 },
+    Xxhash(Xxh64),
     /// and how many bytes of its digest the type keeps
     Poly1305(c::poly1305_desc_ctx, usize),
 }
@@ -89,16 +89,11 @@ impl Csum {
     fn new(fs: Option<&Fs>, ty: c::CsumType, mut nonce: Nonce) -> Self {
         use c::CsumType as t;
         match ty {
-            t::crc32c          => Csum::Crc32c { seed: 0, xor: 0 },
-            t::crc32c_nonzero  => Csum::Crc32c { seed: u32::MAX.into(), xor: u32::MAX.into() },
-            t::crc64           => Csum::Crc64 { seed: 0, xor: 0 },
-            t::crc64_nonzero   => Csum::Crc64 { seed: u64::MAX, xor: u64::MAX },
-            t::xxhash => {
-                let mut s = c::xxh64_state::default();
-                // SAFETY: a state, to set up
-                unsafe { c::xxh64_reset(&mut s, 0) };
-                Csum::Xxhash(s)
-            }
+            t::crc32c          => Csum::Crc32c { crc: Crc32c::new(0), xor: 0 },
+            t::crc32c_nonzero  => Csum::Crc32c { crc: Crc32c::new(u32::MAX), xor: u32::MAX },
+            t::crc64           => Csum::Crc64 { crc: Crc64::new(0), xor: 0 },
+            t::crc64_nonzero   => Csum::Crc64 { crc: Crc64::new(u64::MAX), xor: u64::MAX },
+            t::xxhash          => Csum::Xxhash(Xxh64::new(0)),
             t::chacha20_poly1305_80 | t::chacha20_poly1305_128 => {
                 let fs = fs.expect("an encryption type's checksum, with no filesystem for its key");
                 let mut key = [0u8; POLY1305_KEY_SIZE];
@@ -120,37 +115,29 @@ impl Csum {
     /// A merge's: the checksum merged onto.
     fn seed(&mut self, v: u64) {
         match self {
-            Csum::None(seed) | Csum::Crc32c { seed, .. } | Csum::Crc64 { seed, .. } => *seed = v,
+            Csum::None(seed) => *seed = v,
+            Csum::Crc32c { crc, .. } => *crc = Crc32c::new(v as u32),
+            Csum::Crc64 { crc, .. } => *crc = Crc64::new(v),
             _ => unreachable!("seeding a checksum that doesn't merge"),
         }
     }
 
     fn update(&mut self, data: &[u8]) {
-        // SAFETY: @data's
-        unsafe { self.update_raw(data.as_ptr(), data.len()) }
-    }
-
-    /// # Safety
-    /// @p is @len bytes.
-    unsafe fn update_raw(&mut self, p: *const u8, len: usize) {
-        // SAFETY: the caller's; the states set up
-        unsafe {
-            match self {
-                Csum::None(_) => {}
-                Csum::Crc32c { seed, .. } => *seed = crc32c(*seed as u32, core::slice::from_raw_parts(p, len)).into(),
-                Csum::Crc64 { seed, .. } => *seed = crc64_be(*seed, core::slice::from_raw_parts(p, len)),
-                Csum::Xxhash(s) => { c::xxh64_update(s, p.cast(), len); }
-                Csum::Poly1305(ctx, _) => c::poly1305_update(ctx, p, len as _),
-            }
+        match self {
+            Csum::None(_) => {}
+            Csum::Crc32c { crc, .. } => crc.update(data),
+            Csum::Crc64 { crc, .. } => crc.update(data),
+            Csum::Xxhash(h) => h.update(data),
+            Csum::Poly1305(ctx, _) => unsafe { c::poly1305_update(ctx, data.as_ptr(), data.len() as _) },
         }
     }
 
     fn finish(self) -> c::bch_csum {
         let lo = match self {
             Csum::None(seed) => seed,
-            Csum::Crc32c { seed, xor } | Csum::Crc64 { seed, xor } => seed ^ xor,
-            // SAFETY: set up
-            Csum::Xxhash(s) => unsafe { c::xxh64_digest(&s) },
+            Csum::Crc32c { crc, xor } => u64::from(crc.finalize() ^ xor),
+            Csum::Crc64 { crc, xor } => crc.finalize() ^ xor,
+            Csum::Xxhash(h) => h.finalize(),
             Csum::Poly1305(mut ctx, bytes) => {
                 let mut digest = [0u8; POLY1305_DIGEST_SIZE];
                 // SAFETY: set up, and room for its digest
@@ -332,8 +319,7 @@ impl Fs {
     pub fn checksum_range(&self, ty: c::CsumType, nonce: Nonce, r: BioRange<'_>) -> c::bch_csum {
         let mut csum = Csum::new(Some(self), ty, nonce);
         for chunk in r {
-            // SAFETY: the chunk's bytes, mapped
-            chunk.with_mapped(|p, len| unsafe { csum.update_raw(p, len) });
+            chunk.with_mapped(|p, len| csum.update(unsafe { core::slice::from_raw_parts(p, len) }));
         }
         csum.finish()
     }

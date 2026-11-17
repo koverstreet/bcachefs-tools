@@ -16,7 +16,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
 use crate::snapshots::{snapshot, subvolume};
-use crate::os::crc::{crc32c, crc64_be};
+use crate::os::checksum::{Checksum, Crc32c, Crc64};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::os_str::OsStrExt;
 use crate::util::siphash::SipHash24;
@@ -76,8 +76,8 @@ pub type TableKey<'k, T> = BkeySC<'k, TableVal<T>>;
 /// The name hash, as it's running: what @info's type hashes with. crc32c and
 /// crc64 are keyed with the first word of the siphash key, hashed first.
 enum StrHash {
-    Crc32c(u32),
-    Crc64(u64),
+    Crc32c(Crc32c),
+    Crc64(Crc64),
     SipHash(SipHash24),
 }
 
@@ -88,8 +88,8 @@ impl StrHash {
         let k0 = info.siphash_key.k0.get().to_le_bytes();
 
         match info.type_ {
-            T::crc32c => Self::Crc32c(crc32c(!0, &k0)),
-            T::crc64  => Self::Crc64(crc64_be(!0, &k0)),
+            T::crc32c => Self::Crc32c(Crc32c::new(!0).chain_update(&k0)),
+            T::crc64  => Self::Crc64(Crc64::new(!0).chain_update(&k0)),
             T::siphash_old | T::siphash => {
                 let k = &info.siphash_key;
                 Self::SipHash(SipHash24::new(k.k0.get(), k.k1.get()))
@@ -100,8 +100,8 @@ impl StrHash {
 
     fn update(&mut self, data: &[u8]) {
         match self {
-            Self::Crc32c(crc) => *crc = crc32c(*crc, data),
-            Self::Crc64(crc) => *crc = crc64_be(*crc, data),
+            Self::Crc32c(crc) => crc.update(data),
+            Self::Crc64(crc) => crc.update(data),
             Self::SipHash(h) => h.update(data),
         }
     }
@@ -109,8 +109,8 @@ impl StrHash {
     /// The hash: 63 bits, other than crc32c's 32.
     fn end(self) -> u64 {
         match self {
-            Self::Crc32c(crc) => crc as u64,
-            Self::Crc64(crc) => crc >> 1,
+            Self::Crc32c(crc) => crc.finalize() as u64,
+            Self::Crc64(crc) => crc.finalize() >> 1,
             Self::SipHash(h) => h.end() >> 1,
         }
     }

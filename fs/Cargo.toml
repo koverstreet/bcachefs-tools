@@ -53,7 +53,7 @@ libc     = "0.2.69"
 io-uring = "0.7"
 # Userspace only: os/linux_user/stacktrace.rs's unwinding and symbols.
 backtrace = "0.3"
-# Userspace only: os/linux_user/crc.rs's crc32c(), in hardware on x86 and arm64.
+# Userspace only: os/linux_user/checksum.rs's crc32c(), in hardware on x86 and arm64.
 crc32c   = "0.6"
 # Userspace only: os/linux_user's Mutex, RwSem and PercpuRwSem.
 parking_lot = "0.12"
