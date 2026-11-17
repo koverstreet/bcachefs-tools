@@ -87,13 +87,13 @@ fn for_each_journal_entry(t: &TransAttempt<'_, '_>,
 
 /// A btree_keys or write_buffer_keys entry's keys: none of any other's.
 fn for_each_entry_key(e: &c::jset_entry<Validated>,
-                      mut f: impl FnMut(&BkeyI) -> Result<(), BchError>) -> Result<(), BchError> {
+                      f: impl FnMut(&BkeyI) -> Result<(), BchError>) -> Result<(), BchError> {
     let mut keys = match e.typed() {
         Ok(c::JsetEntryRef::btree_keys(k))        => k.entries(),
         Ok(c::JsetEntryRef::write_buffer_keys(k)) => k.entries(),
         _ => return Ok(()),
     };
-    keys.try_for_each(|k| f(k.key()))
+    keys.try_for_each(f)
 }
 
 impl BtreeTrans<'_> {
@@ -268,7 +268,7 @@ impl BtreeTrans<'_> {
                 if at >= end {
                     break;
                 }
-                let a = k.key().arm::<Accounting>().expect("an accounting key");
+                let a = k.arm::<Accounting>().expect("an accounting key");
                 accounting_mem::trans_commit_revert(t, mark, a.k.p, &a.v.d, flags);
             }
         })
@@ -463,7 +463,7 @@ impl BtreeTrans<'_> {
         }
 
         self.accounting.get().iter(t, |keys| keys.with_offsets().try_for_each(|(at, k)| {
-            let a = k.key().arm::<Accounting>().expect("an accounting key");
+            let a = k.arm::<Accounting>().expect("an accounting key");
             let usage = mem_add(self.fs(), Delta { p: a.k.p, d: &a.v.d }, false, mark).map_err(|err| (err, at))?;
             self.fs_usage_delta_add(usage);
             Ok(())
@@ -488,7 +488,7 @@ impl BtreeTrans<'_> {
         })?;
 
         self.accounting.get().iter(t, |mut keys| {
-            keys.try_for_each(|k| journal_overlay::insert(not_rw, Btree::accounting, 0, k.key()))
+            keys.try_for_each(|k| journal_overlay::insert(not_rw, Btree::accounting, 0, k))
         })
     }
 
@@ -830,8 +830,8 @@ impl BtreeTrans<'_> {
         {
             let mut mark = fs.mark_lock().read();
 
-            let hooked = self.accounting.get().iter_mut(t, |keys| keys.with_offsets().try_for_each(|(at, mut k)| {
-                let a = k.key_mut().arm::<Accounting>().expect("an accounting key");
+            let hooked = self.accounting.get().iter_mut(t, |keys| keys.with_offsets().try_for_each(|(at, k)| {
+                let a = k.arm::<Accounting>().expect("an accounting key");
                 accounting_mem::trans_commit_hook(t, &mut mark, res, &mut a.k, &a.v.d, at / size_of::<u64>(), flags)
                     .map_err(|err| (err, at))
             }));

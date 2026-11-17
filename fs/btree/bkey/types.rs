@@ -100,6 +100,9 @@ pub struct BkeyI<V: ?Sized = FamilyVal<AllTypes>> {
     pub v: V,
 }
 
+/// Any key, in state S: a keys container's entry, in the container's.
+pub type AnyKey<S> = BkeyI<FamilyVal<AllTypes, S>>;
+
 /* a zeroed key, its u64s 0, is a header with no value - as val_bytes() has it */
 unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
     type Head = c::bkey_i;

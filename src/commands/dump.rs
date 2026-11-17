@@ -17,7 +17,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, JsetEntryType};
-use bcachefs_kernel::util::vstructs::{assume_validated, cast_plain, cast_plain_slice, plain_bytes_mut, Head, SelfSized,
+use bcachefs_kernel::util::vstructs::{cast_plain, cast_plain_slice, plain_bytes_mut, Head, SelfSized,
                                       Unvalidated};
 use bcachefs_kernel::POS_MIN;
 
@@ -261,8 +261,8 @@ fn sanitize_journal(fs: &Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
                     let k = k.map_err(|e| anyhow!("journal entry at {pos:#x}: {e}"))?;
                     // SAFETY: XXX: off disk, not validated - sanitize_val()
                     // should take an Unvalidated key
-                    let mut k = unsafe { assume_validated(k) };
-                    modified |= sanitize_val(&fs, BkeyS::from(k.key_mut()), opts);
+                    let k = unsafe { &mut *BkeyI::from_raw_mut(core::ptr::from_mut(k).cast()) };
+                    modified |= sanitize_val(&fs, BkeyS::from(k), opts);
                 }
             }
         }

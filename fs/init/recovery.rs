@@ -528,7 +528,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
 
             let r = roots.get_mut(id).expect("grown to it");
             r.level = entry.level;
-            r.key.set_key(k.key());
+            r.key.set_key(k);
             r.alive = 1;
             roots.published().roots_error[id as usize].set(0);
 

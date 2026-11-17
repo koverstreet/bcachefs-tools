@@ -1,5 +1,6 @@
 
 use anyhow::{anyhow, bail, Result};
+use bcachefs_kernel::btree::bkey::BkeyI;
 use bcachefs_kernel::c;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::{
@@ -136,7 +137,7 @@ fn transaction_matches_btree_filter(
 
 fn bkey_matches_range(
     entry: &c::jset_entry,
-    k: &c::bkey_i,
+    k: &BkeyI,
     range: &BbposRange,
 ) -> bool {
     let Some(btree) = entry_btree_id(entry) else { return false };
@@ -169,7 +170,7 @@ fn entry_matches_range(
         return false;
     }
 
-    entry.keys().is_some_and(|mut keys| keys.any(|k| bkey_matches_range(entry, &k, range)))
+    entry.keys().is_some_and(|mut keys| keys.any(|k| bkey_matches_range(entry, k, range)))
 }
 
 fn transaction_matches_transaction_filter(

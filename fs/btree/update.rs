@@ -282,11 +282,11 @@ impl<T: ?Sized> btree_trans_subbuf<T> {
 
 /* Validated keys: the thin walk, as a Validated container's keys are walked */
 impl btree_trans_subbuf<BkeyI> {
-    pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntries<'_, c::bkey_i>) -> R) -> R {
+    pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntries<'_, BkeyI>) -> R) -> R {
         self.with_u64s(t.trans(), |b| f(unsafe { ViewEntries::new(b.as_bytes()) }))
     }
 
-    pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntriesMut<'_, c::bkey_i>) -> R) -> R {
+    pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntriesMut<'_, BkeyI>) -> R) -> R {
         self.with_u64s_mut(t.trans(), |b| f(unsafe { ViewEntriesMut::new(b.as_mut_bytes()) }))
     }
 }
@@ -333,10 +333,10 @@ impl TransAttempt<'_, '_> {
                            mut f: impl FnMut(&mut BkeyI) -> Option<bool>)
         -> bool
     {
-        let found = cell.get().iter_mut(self, |keys| keys.with_offsets().find_map(|(at, mut k)| {
+        let found = cell.get().iter_mut(self, |keys| keys.with_offsets().find_map(|(at, k)| {
             let at = at / size_of::<u64>();
             let range = at..at + usize::from(k.k.u64s);
-            f(k.key_mut()).map(|remove| remove.then_some(range))
+            f(k).map(|remove| remove.then_some(range))
         }));
         if let Some(Some(range)) = &found {
             self.subbuf_remove(cell, range.clone());

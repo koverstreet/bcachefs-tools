@@ -31,8 +31,7 @@
 //! which has the room for it to grow.
 //!
 //! A key is thin - its size is its k.u64s, not its reference's - and walked
-//! as a VstructRef of the bytes its count was checked against, in its
-//! container's state.
+//! as a key, an AnyKey, in its container's state.
 //!
 //! A value shorter than its type, written before the type grew, can't be a
 //! &T: it's a View, reading only its own bytes, the fields past its end zero;
@@ -273,16 +272,22 @@ pub(crate) use vstruct;
 /// of W, the struct as written - an unsized vstruct's header, or a #[whole]
 /// type's struct, as long as what holds it says. T's entries() are E's in T's
 /// state - a Validated one's trusted, as C trusts them; an Unvalidated one's
-/// each checked against what's left, an error ending the walk. With `thin
-/// E`, entries that aren't unsized - keys - as a VstructRef(Mut) of their own
-/// bytes, in T's state.
+/// each checked against what's left, an error ending the walk. E<S> is the
+/// entry in state S. With `thin E`, a Validated one's walk is bkey_next()'s,
+/// each entry's length read from its header and on - keys.
 macro_rules! vstruct_container {
     ($t:ident, $w:ident, $entry:ident) => {
+        $crate::util::vstructs::vstruct_container!(@walks $t, $w, $entry, ValidatedEntries);
+    };
+    ($t:ident, $w:ident, thin $entry:ident) => {
+        $crate::util::vstructs::vstruct_container!(@walks $t, $w, $entry, ViewEntries);
+    };
+    (@walks $t:ident, $w:ident, $entry:ident, $walk:ident) => {
         impl $t<$crate::util::vstructs::Validated> {
             pub fn entries(&self)
-                -> $crate::util::vstructs::ValidatedEntries<'_, $entry<$crate::util::vstructs::Validated>>
+                -> $crate::util::vstructs::$walk<'_, $entry<$crate::util::vstructs::Validated>>
             {
-                $crate::util::vstructs::ValidatedEntries::of(self)
+                $crate::util::vstructs::$walk::of(self)
             }
         }
 
@@ -301,25 +306,6 @@ macro_rules! vstruct_container {
         }
 
         $crate::util::vstructs::vstruct_container!(@start $t, $w, $entry<$crate::util::vstructs::Validated>);
-    };
-    ($t:ident, $w:ident, thin $entry:ty) => {
-        impl $t<$crate::util::vstructs::Validated> {
-            pub fn entries(&self) -> $crate::util::vstructs::ViewEntries<'_, $entry> {
-                $crate::util::vstructs::ViewEntries::of(self)
-            }
-        }
-
-        impl $t<$crate::util::vstructs::Unvalidated> {
-            pub fn entries(&self) -> $crate::util::vstructs::VstructRefEntries<'_, $entry> {
-                $crate::util::vstructs::VstructRefEntries::new(self.start_bytes())
-            }
-
-            pub fn entries_mut(&mut self) -> $crate::util::vstructs::VstructRefEntriesMut<'_, $entry> {
-                $crate::util::vstructs::VstructRefEntriesMut::new(self.start_bytes_mut())
-            }
-        }
-
-        $crate::util::vstructs::vstruct_container!(@start $t, $w, $entry);
     };
     (@start $t:ident, $w:ident, $entry:ty) => {
         $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Unvalidated>, $w);
@@ -1529,10 +1515,10 @@ impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for Unvalid
     }
 }
 
-/// An unsized container's thin entries, keys - each a VstructRef of its own
-/// bytes, Validated: a Validated jset_entry's entries(). Validated, so the walk
-/// is bkey_next()'s: each entry's length, read from its header, and on.
-pub struct ViewEntries<'a, E> {
+/// A Validated container's entries, each an &E of its own bytes, in its
+/// state: keys, a Validated jset_entry's entries(). Validated, so the walk is
+/// bkey_next()'s: each entry's length, read from its header, and on.
+pub struct ViewEntries<'a, E: ?Sized> {
     rest:   &'a [u8],
     at:     usize,
     _entry: PhantomData<&'a E>,
@@ -1550,7 +1536,7 @@ unsafe fn validated_len<E: SelfSized + Plain>(rest: &[u8]) -> usize {
     len
 }
 
-impl<'a, E> ViewEntries<'a, E> {
+impl<'a, E: ?Sized> ViewEntries<'a, E> {
     /// The entries in @rest: a validated unsized container's, from its
     /// start[].
     ///
@@ -1566,36 +1552,36 @@ impl<'a, E> ViewEntries<'a, E> {
     }
 }
 
-impl<'a, E: SelfSized + Plain + 'a> Iterator for ViewEntries<'a, E> {
-    type Item = VstructRef<'a, E, Validated>;
+impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ViewEntries<'a, E> {
+    type Item = &'a E;
 
     #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<&'a E> {
         if self.rest.is_empty() {
             return None;
         }
-        let len = unsafe { validated_len::<E>(self.rest) };
+        let len = unsafe { validated_len::<E::Head>(self.rest) };
         let (e, rest) = self.rest.split_at(len);
         self.rest = rest;
         self.at += len;
-        Some(VstructRef { bytes: e, _t: PhantomData })
+        Some(unsafe { &*E::from_raw(e.as_ptr(), len) })
     }
 }
 
-impl<'a, E: SelfSized + Plain + 'a> EntryWalk for ViewEntries<'a, E> {
+impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> EntryWalk for ViewEntries<'a, E> {
     fn offset(&self) -> usize {
         self.at
     }
 }
 
-/// ViewEntries, mutably: each a VstructMut.
-pub struct ViewEntriesMut<'a, E> {
+/// ViewEntries, mutably.
+pub struct ViewEntriesMut<'a, E: ?Sized> {
     rest:   &'a mut [u8],
     at:     usize,
     _entry: PhantomData<&'a mut E>,
 }
 
-impl<'a, E> ViewEntriesMut<'a, E> {
+impl<'a, E: ?Sized> ViewEntriesMut<'a, E> {
     /// # Safety
     /// As ViewEntries::new()'s.
     pub(crate) unsafe fn new(rest: &'a mut [u8]) -> Self {
@@ -1603,23 +1589,23 @@ impl<'a, E> ViewEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: SelfSized + Plain + 'a> Iterator for ViewEntriesMut<'a, E> {
-    type Item = VstructMut<'a, E, Validated>;
+impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ViewEntriesMut<'a, E> {
+    type Item = &'a mut E;
 
     #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<&'a mut E> {
         if self.rest.is_empty() {
             return None;
         }
-        let len = unsafe { validated_len::<E>(self.rest) };
+        let len = unsafe { validated_len::<E::Head>(self.rest) };
         let (e, rest) = core::mem::take(&mut self.rest).split_at_mut(len);
         self.rest = rest;
         self.at += len;
-        Some(VstructMut { bytes: e, _t: PhantomData })
+        Some(unsafe { &mut *E::from_raw_mut(e.as_mut_ptr(), len) })
     }
 }
 
-impl<'a, E: SelfSized + Plain + 'a> EntryWalk for ViewEntriesMut<'a, E> {
+impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> EntryWalk for ViewEntriesMut<'a, E> {
     fn offset(&self) -> usize {
         self.at
     }

@@ -74,9 +74,9 @@
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by_self, from_bytes_mut, vstruct,
-                            Head, FlexArray, Unvalidated, Validated, VStructError, ViewEntries, VstructMut,
-                            VstructRef, VstructRefEntriesMut};
-use crate::btree::bkey::BkeyPHeader;
+                            Head, FlexArray, Unvalidated, UnvalidatedEntriesMut, Validated, VStructError,
+                            ViewEntries, VstructMut, VstructRef};
+use crate::btree::bkey::{AnyKey, BkeyPHeader};
 use core::mem::offset_of;
 use cstruct_macros::{bitfield, bch_enum, grown, tagged_union, unsized_vstruct, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 
@@ -1647,7 +1647,7 @@ tagged_union! {
 /* The entries whose payload is keys: */
 macro_rules! jset_entry_keys {
     ($($name:ident),*) => { $(
-        #[whole(tail = start: [u64], entries = thin c::bkey_i)]
+        #[whole(tail = start: [u64], entries = thin AnyKey)]
         #[repr(C)]
         #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
         pub struct $name {
@@ -1660,7 +1660,7 @@ jset_entry_keys!(jset_entry_btree_keys, jset_entry_btree_root, jset_entry_overwr
 
 impl jset_entry<Validated> {
     /// Its keys, if its payload is keys: None for any other entry.
-    pub fn keys(&self) -> Option<ViewEntries<'_, c::bkey_i>> {
+    pub fn keys(&self) -> Option<ViewEntries<'_, AnyKey<Validated>>> {
         Some(match self.typed().ok()? {
             JsetEntryRef::btree_keys(e)        => e.entries(),
             JsetEntryRef::btree_root(e)        => e.entries(),
@@ -1674,7 +1674,7 @@ impl jset_entry<Validated> {
 
 impl jset_entry<Unvalidated> {
     /// keys(), mutably, each checked against what's left of the entry.
-    pub fn keys_mut(&mut self) -> Option<VstructRefEntriesMut<'_, c::bkey_i>> {
+    pub fn keys_mut(&mut self) -> Option<UnvalidatedEntriesMut<'_, AnyKey<Unvalidated>>> {
         Some(match JsetEntryType(self.type_.into()) {
             JsetEntryType::btree_keys        => self.arm_mut::<jset_entry_btree_keys<Unvalidated>>()?.entries_mut(),
             JsetEntryType::btree_root        => self.arm_mut::<jset_entry_btree_root<Unvalidated>>()?.entries_mut(),
@@ -1884,7 +1884,7 @@ pub const BTREE_MAX_DEPTH: u32 = 4;
  * On disk a btree node is a list/log of these; within each set the keys are
  * sorted
  */
-#[unsized_vstruct(u64s = u64s, entries = thin BkeyPHeader)]
+#[unsized_vstruct(u64s = u64s)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bset {
@@ -1919,6 +1919,15 @@ impl bset_head {
 /// count, and the reference made over, so it still reaches all of it and
 /// nothing past. The bytes past stay what holds it's.
 impl bset<Unvalidated> {
+    /// Its keys' bytes: from its start[] to its end.
+    fn start_bytes(&self) -> &[u8] {
+        &self.as_bytes()[offset_of!(Head<bset>, start)..]
+    }
+
+    fn start_bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.as_bytes_mut()[offset_of!(Head<bset>, start)..]
+    }
+
     /// The key at byte @at of its keys, its u64s checked against what's left:
     /// None at their end.
     pub fn key_at(&self, at: usize) -> Option<Result<VstructRef<'_, BkeyPHeader>, VStructError>> {

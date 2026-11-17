@@ -12,7 +12,7 @@ use core::sync::atomic::Ordering::Relaxed;
 
 use zerocopy::IntoBytes;
 
-use crate::btree::bkey::{BkeySCToText, ValidateFlags};
+use crate::btree::bkey::{AnyKey, BkeySCToText, ValidateFlags};
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
@@ -24,7 +24,7 @@ use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::KVVec;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, Unvalidated, UnvalidatedEntriesMut,
-                            Validated, VstructRef};
+                            Validated};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 use crate::sb::io::SbResize;
@@ -121,7 +121,7 @@ impl Fs {
     }
 }
 
-type Key<'a> = VstructRef<'a, c::bkey_i, Validated>;
+type Key<'a> = &'a AnyKey<Validated>;
 
 /// A btree root's entry in @entries, if there is one: its level, and its key
 /// - None for an entry with no key.
@@ -143,7 +143,7 @@ impl ToText for RootText<'_> {
         match self.1 {
             None               => write!(out, "(none)"),
             Some((l, None))    => write!(out, "l={l} (no key)"),
-            Some((l, Some(k))) => prt!(out, "l={l} {}", BkeySCToText { k: k.key().into(), fs: self.0 }),
+            Some((l, Some(k))) => prt!(out, "l={l} {}", BkeySCToText { k: (*k).into(), fs: self.0 }),
         }
     }
 }
