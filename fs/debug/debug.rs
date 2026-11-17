@@ -180,7 +180,7 @@ fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     prt!(out, "will make reachable:\t{:x}\n", b.will_make_reachable.raw());
 
     for w in &b.writes {
-        prt!(out, "journal pin {:016x}:\t{}\n", core::ptr::from_ref(&w.journal) as usize, w.journal.seq());
+        prt!(out, "journal pin {:016x}:\t{}\n", core::ptr::from_ref(w) as usize, w.seq());
     }
 }
 

@@ -21,7 +21,6 @@ use crate::btree::types::BtreeWriteType;
 use crate::btree::write::{bch2_btree_init_next, bch2_btree_post_write_cleanup, __bch2_btree_node_write,
                           BtreeWriteFlags};
 use crate::c;
-use crate::cstructs::c as cs;
 use crate::errcode::{Errcode, ret_to_c};
 use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
@@ -53,7 +52,7 @@ impl BtreeNode {
     pub fn add_journal_pin(&self, fs: &Fs, seq: u64) {
         let flush: unsafe extern "C" fn(_, _, _) -> _ = if self.flags.write_idx() { node_flush1 } else { node_flush0 };
 
-        fs.journal.pin_add(seq, &self.current_write().journal, journal_pin_type_btree(self.c.level.get()), Some(flush));
+        fs.journal.pin_add(seq, self.current_write(), journal_pin_type_btree(self.c.level.get()), Some(flush));
     }
 }
 
@@ -62,15 +61,13 @@ fn journal_pin_type_btree(level: u8) -> c::JournalPinType {
 }
 
 /// # Safety
-/// @pin is @writes[@idx].journal of a node - which may have been written, and
+/// @pin is @writes[@idx] of a node - which may have been written, and
 /// its memory reused, since: see below.
 unsafe fn node_flush(j: *mut c::journal, pin: *mut Pin, idx: usize, seq: u64) -> c_int {
     let fs = unsafe { &*j.byte_sub(offset_of!(Fs, journal)).cast::<Fs>() };
     let b = unsafe {
-        &*pin.byte_sub(offset_of!(BtreeNode, writes) + idx * size_of::<cs::btree_write>() +
-                       offset_of!(cs::btree_write, journal)).cast::<BtreeNode>()
+        &*pin.byte_sub(offset_of!(BtreeNode, writes) + idx * size_of::<Pin>()).cast::<BtreeNode>()
     };
-    let w = &b.writes[idx];
 
     /*
      * The journal pin doesn't pin the node: another thread can write the
@@ -92,7 +89,7 @@ unsafe fn node_flush(j: *mut c::journal, pin: *mut Pin, idx: usize, seq: u64) ->
                                                  hash_val)?;
 
         let _ = b.flags.fetch_update(Relaxed, Relaxed, |f| {
-            (f.dirty() && f.write_idx() as usize == idx && w.journal.seq() == seq).then(|| {
+            (f.dirty() && f.write_idx() as usize == idx && b.writes[idx].seq() == seq).then(|| {
                 f.with_write_type(BtreeWriteType::journal_reclaim)
                  .with_need_write(true)
             })

@@ -19,6 +19,7 @@ use crate::c;
 use crate::cstructs::c as cs;
 use crate::data_structures::dst_room::DstRoom;
 use crate::fs::Fs;
+use crate::journal::pins::Pin;
 use crate::locking::LockedBy;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
@@ -121,7 +122,8 @@ pub struct BtreeNode {
     #[init(LockedBy::new(NodeContents::new(), ()))]
     pub contents: LockedBy<NodeContents>,
 
-    pub writes: [cs::btree_write; 2],
+    /* the journal pins of its current write and the one before */
+    pub writes: [Pin; 2],
 
     /*
      * XXX: add a delete sequence number, so when bch2_btree_node_relock()
@@ -472,11 +474,11 @@ impl BtreeNode {
         want.then(|| u16::try_from(bne).expect("a bset offset in a node's u16 range"))
     }
 
-    pub fn current_write(&self) -> &cs::btree_write {
+    pub fn current_write(&self) -> &Pin {
         &self.writes[self.flags.write_idx() as usize]
     }
 
-    pub fn prev_write(&self) -> &cs::btree_write {
+    pub fn prev_write(&self) -> &Pin {
         &self.writes[self.flags.write_idx() as usize ^ 1]
     }
 }

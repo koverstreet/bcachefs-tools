@@ -99,7 +99,7 @@ fn write_done(trans: &BtreeTrans<'_>, b: &BtreeNode) {
      */
     b.will_make_reachable.first_write_done();
 
-    fs.journal.pin_drop(&w.journal);
+    fs.journal.pin_drop(w);
 
     let rearm = |f: BtreeNodeFlags| f.dirty() && f.need_write() && !f.never_write() &&
         !f.write_blocked() && !f.will_make_reachable();

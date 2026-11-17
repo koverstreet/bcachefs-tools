@@ -49,12 +49,6 @@ use crate::format::{Bpos, Btree, BtreeFlags, BkeyType};
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct btree_write {
-    pub journal: cs::journal_entry_pin,
-}
-
-#[repr(C)]
-#[derive(MaybeZeroable)]
 pub struct btree_bkey_cached_common {
     pub lock: Locked<cs::six_lock>,
     /* set write locked, on a reused node or entry that others may still be reading */

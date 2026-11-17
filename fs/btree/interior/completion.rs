@@ -166,9 +166,9 @@ impl InteriorUpdate<'_> {
          * when the new nodes are persistent and reachable on disk:
          */
         for w in [b.current_write(), b.prev_write()] {
-            fs.journal.pin_copy(&self.journal, &w.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other,
+            fs.journal.pin_copy(&self.journal, w, c::JournalPinType::JOURNAL_PIN_TYPE_other,
                                 Some(will_free_node_journal_pin_flush));
-            fs.journal.pin_drop(&w.journal);
+            fs.journal.pin_drop(w);
         }
 
         self.owned.borrow_mut().old_nodes.push(OldNode::of(b));
