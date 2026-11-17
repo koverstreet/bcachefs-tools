@@ -140,7 +140,6 @@ use crate::journal::entries::EntryWriter;
 use crate::util::alloc::{flags, KVVec};
 use crate::util::backtrace::prt_current_backtrace;
 use crate::format::DataType;
-use crate::util::closure::closure_fn_addr;
 use crate::util::task::{waiter, Select, WaitSync};
 use crate::util::timer::Timer;
 use crate::os::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffies, time_after, unlikely, HZ, WRITE};
@@ -199,10 +198,8 @@ impl c::journal {
             prt!(out, "refcount:\t{}\n", s.count(state_idx(seq)));
         }
 
-        let r = unsafe { c::closure_nr_remaining(ptr::from_ref(&buf.io).cast_mut()) };
-        prt!(out, "io:\t");
-        out.prt_ptr(c"%pS", closure_fn_addr(&buf.io) as *const core::ffi::c_void);
-        prt!(out, " r {r}\n");
+        prt!(out, "write:\t");
+        buf.data.write_to_text(out);
 
         if !buf.data.as_ptr().is_null() {
             prt!(out, "size:\t{}\n", HumanReadable(buf.data.jset().bytes() as u64));
@@ -718,13 +715,8 @@ impl c::journal {
          */
         let disk_sectors = g.cur_entry_sectors;
         let buf = g.in_flight.push_back().expect("in_flight has a free slot: checked above");
-        buf.io = ::pin_init::zeroed();
         buf.data = data;
         buf.key = Default::default();
-        buf.cas = Default::default();
-        buf.devs_written = Default::default();
-        buf.failed = Default::default();
-        buf.flush_failed = Default::default();
         buf.last_seq = 0;
         buf.sectors = sectors;
         buf.disk_sectors = disk_sectors;

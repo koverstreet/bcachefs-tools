@@ -7,10 +7,17 @@ use crate::fs::{Dev, Fs};
 use crate::init::recovery::NotRw;
 use crate::cstructs::c;
 use crate::data_structures::dst_room::DstRoom;
-use crate::data::ptrs::IoFailures;
-use crate::data::write::DevWriteRef;
 use crate::types::CacheAligned;
-use crate::util::alloc::{AlignedBox, AllocError, Flags, KVVec};
+use crate::journal::write::JournalWrite;
+use crate::data::dev_bio::DevBio;
+use crate::errcode::BchError;
+use crate::os::bio::{BioRange, MappedPages};
+use crate::util::alloc::{init_with, AllocGfp, Box, Flags, KVVec, Kmalloc};
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
+use crate::util::Printbuf;
+use crate::prt;
+use core::mem;
+use core::pin::Pin;
 use crate::data_structures::fixed_fifo::FixedFifo;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
@@ -21,7 +28,6 @@ use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
 use crate::journal::pins::{flush_degraded, pin_resize};
 use crate::journal::reclaim::discard_work;
-use crate::os::kernel::PAGE_SIZE;
 use crate::data_structures::list::ListLinks;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Mutex, MutexNoio, PercpuRwSem, SpinLockIrq};
 use core::cell::Cell;
@@ -47,16 +53,51 @@ pub const JOURNAL_STATE_BUF_MASK: u32 = c::JOURNAL_STATE_BUF_NR - 1;
 pub const JOURNAL_BUF_NR: u32 = 256;
 
 /// A journal entry's buffer, freed with it - or none, zeroed. Moved whole:
-/// between j->free_buf and the bufs in flight. Page aligned: it's written in
-/// place, O_DIRECT in userspace.
+/// between j->free_buf and the bufs in flight. Its pages a bio's own, in high
+/// order allocations, which the CPU sees as one buffer: up to 4M, written by
+/// clones of the bio - a few bvecs each - and page aligned, O_DIRECT in
+/// userspace. With it, the write that writes an entry from it: made with the
+/// buffer, so a write allocates nothing.
 #[derive(Default, pin_init::Zeroable)]
 pub struct JsetBuf {
-    data: Option<AlignedBox<[u8], PAGE_SIZE>>,
+    data:  Option<Box<MappedPages, Kmalloc>>,
+    write: Option<MaybeRcuAlloc<JournalWrite>>,
 }
 
 impl JsetBuf {
-    pub fn new(size: c_uint, gfp: Flags) -> Result<Self, AllocError> {
-        Ok(JsetBuf { data: Some(AlignedBox::try_new_zeroed_slice_gfp(size as usize, gfp)?) })
+    pub fn new(size: c_uint, gfp: Flags) -> Result<Self, BchError> {
+        let mut buf = Self::new_data(size, gfp)?;
+        buf.write = Some(MaybeRcuAlloc::new_gfp(JournalWrite::new(), gfp)?);
+        Ok(buf)
+    }
+
+    /// new()'s data, for swap_data(): no write.
+    pub fn new_data(size: c_uint, gfp: Flags) -> Result<Self, BchError> {
+        let pages = MappedPages::new(size as usize, gfp)?;
+        let data = Box::into_unflagged(Box::init_in(init_with(|| pages), Kmalloc.with_flags(gfp))?);
+        Ok(JsetBuf { data: Some(data), write: None })
+    }
+
+    /// @other's data for ours, the write kept: it may be running.
+    pub fn swap_data(&mut self, other: &mut Self) {
+        mem::swap(&mut self.data, &mut other.data);
+    }
+
+    /// The bio its first @bytes are written from - by clones, which borrow it.
+    pub fn bio_range(&self, bytes: u32) -> BioRange<'_> {
+        self.data.as_ref().expect("a journal buffer's data, to write").bio().range().take(bytes)
+    }
+
+    pub fn write_to_text(&self, out: &mut Printbuf) {
+        match &self.write {
+            Some(w) => w.to_text(out),
+            None    => prt!(out, "none\n"),
+        }
+    }
+
+    /// Its write, made with it.
+    pub fn write(&mut self) -> Pin<&mut JournalWrite> {
+        self.write.as_mut().expect("a journal buffer's write, made with it").as_pin_mut()
     }
 
     pub fn size(&self) -> c_uint {
@@ -64,7 +105,7 @@ impl JsetBuf {
     }
 
     pub fn as_ptr(&self) -> *mut Head<c::jset> {
-        self.data.as_ref().map_or(core::ptr::null_mut(), |d| d.as_ptr().cast_mut().cast())
+        self.data.as_deref().map_or(core::ptr::null_mut(), |d| d.as_slice().as_ptr().cast_mut().cast())
     }
 
     pub fn head(&self) -> &Head<c::jset> {
@@ -85,11 +126,11 @@ impl JsetBuf {
 
     /// The whole buffer, its jset and the room past it.
     pub fn bytes_mut(&mut self) -> &mut [u8] {
-        self.data.as_deref_mut().unwrap_or_default()
+        self.data.as_deref_mut().map_or(&mut [], MappedPages::as_mut_slice)
     }
 
     pub fn bytes(&self) -> &[u8] {
-        self.data.as_deref().unwrap_or_default()
+        self.data.as_deref().map_or(&[], MappedPages::as_slice)
     }
 }
 
@@ -108,28 +149,12 @@ nest! {
     #[repr(C)]
     #[derive(MaybeZeroable, BitfieldMembers, Init)]
     pub struct journal_buf {
-        pub io: c::closure,
         pub data: JsetBuf,
         /* its write's ref on the journal's writes_in_flight */
         #[init(None)]
         pub in_flight: Option<RefGuard<AtomicRef<()>>>,
 
         pub key: DstRoom<BkeyI, [u64; BKEY_U64S + c::BCH_REPLICAS_MAX as usize]>,
-        /*
-         * @cas mirrors the dev ptrs in @key in append order: cas[i] is the
-         * io_ref __journal_write_alloc took on that dev.  Stashed so the
-         * alloc → submit (or alloc → no_io) gap doesn't have to re-derive ca
-         * via c->devs[idx], which dev_remove may have cleared while our
-         * io_ref still pins the dev object.
-         */
-        #[init(<[Option<DevWriteRef>; c::BCH_REPLICAS_MAX as usize]>::default())]
-        pub cas: [Option<DevWriteRef>; c::BCH_REPLICAS_MAX as usize],
-        pub devs_written: c::bch_devs_list,
-        #[init(c::bch_io_failures::default())]
-        pub failed: c::bch_io_failures,
-        /* preflushes go to every rw member with unflushed writes */
-        #[init(IoFailures::default())]
-        pub flush_failed: IoFailures<{ c::BCH_SB_MEMBERS_MAX as usize }>,
 
         pub last_seq: u64, /* copy of data->last_seq */
 
@@ -168,8 +193,6 @@ impl journal_buf {
     /// an entry's opened on it.
     pub fn retire(&mut self) {
         self.data = Default::default();
-        self.cas = Default::default();
-        self.flush_failed = Default::default();
     }
 }
 
@@ -313,17 +336,6 @@ pub enum JournalFlag {
     low_on_wb,
     stuck_reported,
 }
-
-#[repr(C)]
-#[derive(MaybeZeroable)]
-pub struct journal_bio {
-    pub ca: Option<DevWriteRef>,
-    pub buf: *mut c::journal_buf,
-    pub submit_time: u64,
-
-    pub bio: crate::os::bio::Bio,
-}
-crate::has_bio!(journal_bio, bio);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
@@ -598,9 +610,6 @@ nest! {
         #[pin]
         #[init(::pin_init::zeroed::<LockedBy<WriteAlloc>>())]
         pub write_alloc: WriteAllocLockedBy,
-        #[pin]
-        #[init(new_lock!((), "&j->err_lock"))]
-        pub err_lock: Locked<SpinLockIrq>,
 
         #[pin]
         #[init(new_lock!((), ::pin_init::zeroed(), "&j->reclaim_lock"))]
@@ -667,7 +676,7 @@ pub struct journal_device {
      * submit time and free on completion; the pool size bounds the
      * mempool reserve, not in-flight depth.
      */
-    pub bio_set: Late<BioSet<journal_bio>>,
+    pub bio_set: Late<BioSet<DevBio>>,
 
     #[pin]
     #[init(new_lock!((), "&ca->journal.discard_lock"))]
