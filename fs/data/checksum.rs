@@ -5,11 +5,11 @@
 //!
 //! A checksum is computed by a Csum, over its data's pieces in order - a
 //! buffer, or a bio's chunks: a crc's seed, xxhash's state, or a Poly1305
-//! MAC's, an encryption type's checksum. Encryption is ChaCha20, a Chacha,
-//! under the filesystem's key: its own inverse. The MAC is keyed by ChaCha20
-//! under the same key, from the nonce with BCH_NONCE_POLY set. The primitives
-//! are the kernel's lib/crypto, xxhash and crcs - in userspace include/'s, the
-//! crypto over libsodium.
+//! MAC's, an encryption type's checksum. Encryption is ChaCha20 under the
+//! filesystem's key: its own inverse. The MAC is keyed by ChaCha20 under the
+//! same key, from the nonce with BCH_NONCE_POLY set. The primitives are the
+//! kernel's lib/crypto, xxhash and crcs - in userspace include/'s, the crypto
+//! RustCrypto's, which the kernel's is called as.
 //!
 //! A nonce is four little-endian words, on-disk format: decrypting takes the
 //! nonce the data was encrypted with. The top bits of the last are its
@@ -29,7 +29,7 @@
 use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
 use crate::c;
-use crate::util::vstructs::{bytes_of, Unsized, Unvalidated, Validated};
+use crate::util::vstructs::{bytes_of, plain_bytes, Unsized, Unvalidated, Validated};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::io::{SbFieldOps, SbResize};
@@ -39,6 +39,8 @@ use crate::util::Printbuf;
 use core::ffi::c_int;
 use crate::format::{Bversion, Nonce};
 use crate::os::checksum::{Checksum, Crc32c, Crc64, Xxh64};
+// a glob: userspace's are RustCrypto's, called through their traits
+use crate::os::crypto::*;
 
 // ── Nonces ───────────────────────────────────────────────────────────────
 
@@ -68,7 +70,7 @@ impl core::ops::Add<u32> for Nonce {
 
 /// crypto/poly1305.h's, in bytes.
 const POLY1305_KEY_SIZE: usize = 32;
-const POLY1305_DIGEST_SIZE: usize = 16;
+const POLY1305_BLOCK_SIZE: usize = 16;
 
 /// A checksum being computed, over its data's pieces in order: C's
 /// bch2_checksum_state, and Poly1305's alongside. A crc is its value so far
@@ -80,8 +82,9 @@ enum Csum {
     Crc32c { crc: Crc32c, xor: u32 },
     Crc64 { crc: Crc64, xor: u64 },
     Xxhash(Xxh64),
-    /// and how many bytes of its digest the type keeps
-    Poly1305(c::poly1305_desc_ctx, usize),
+    /// Given whole blocks, so the bytes short of one held back; and how many
+    /// bytes of its digest the type keeps
+    Poly1305 { mac: Poly1305, buf: [u8; POLY1305_BLOCK_SIZE], buffered: usize, bytes: usize },
 }
 
 impl Csum {
@@ -103,10 +106,12 @@ impl Csum {
                 let unset = c::bch_key::default();
                 chacha20(fs.encryption_key().unwrap_or(&unset), nonce, &mut key);
 
-                let mut ctx = c::poly1305_desc_ctx::default();
-                // SAFETY: a state, to set up with a key of its size
-                unsafe { c::poly1305_init(&mut ctx, key.as_ptr()) };
-                Csum::Poly1305(ctx, ty.bytes().expect("an encryption type's size") as usize)
+                Csum::Poly1305 {
+                    mac:      Poly1305::new((&key).into()),
+                    buf:      [0; POLY1305_BLOCK_SIZE],
+                    buffered: 0,
+                    bytes:    ty.bytes().expect("an encryption type's size") as usize,
+                }
             }
             _ => Csum::None(0),
         }
@@ -128,7 +133,23 @@ impl Csum {
             Csum::Crc32c { crc, .. } => crc.update(data),
             Csum::Crc64 { crc, .. } => crc.update(data),
             Csum::Xxhash(h) => h.update(data),
-            Csum::Poly1305(ctx, _) => unsafe { c::poly1305_update(ctx, data.as_ptr(), data.len() as _) },
+            Csum::Poly1305 { mac, buf, buffered, .. } => {
+                let mut data = data;
+                if *buffered != 0 {
+                    let n = data.len().min(buf.len() - *buffered);
+                    buf[*buffered..][..n].copy_from_slice(&data[..n]);
+                    *buffered += n;
+                    data = &data[n..];
+                    if *buffered < buf.len() {
+                        return;
+                    }
+                    mac.update(&[Block::from(*buf)]);
+                }
+                let (blocks, rest) = Block::slice_as_chunks(data);
+                mac.update(blocks);
+                buf[..rest.len()].copy_from_slice(rest);
+                *buffered = rest.len();
+            }
         }
     }
 
@@ -138,12 +159,10 @@ impl Csum {
             Csum::Crc32c { crc, xor } => u64::from(crc.finalize() ^ xor),
             Csum::Crc64 { crc, xor } => crc.finalize() ^ xor,
             Csum::Xxhash(h) => h.finalize(),
-            Csum::Poly1305(mut ctx, bytes) => {
-                let mut digest = [0u8; POLY1305_DIGEST_SIZE];
-                // SAFETY: set up, and room for its digest
-                unsafe { c::poly1305_final(&mut ctx, digest.as_mut_ptr()) };
+            Csum::Poly1305 { mac, buf, buffered, bytes } => {
+                let tag = mac.compute_unpadded(&buf[..buffered]);
                 let mut ret = c::bch_csum::default();
-                crate::util::vstructs::plain_bytes_mut(&mut ret)[..bytes].copy_from_slice(&digest[..bytes]);
+                crate::util::vstructs::plain_bytes_mut(&mut ret)[..bytes].copy_from_slice(&tag[..bytes]);
                 return ret;
             }
         };
@@ -313,8 +332,8 @@ impl Fs {
         checksum(Some(self), ty, nonce, data)
     }
 
-    /// The checksum of @r's data. As checksum(). Not inlined: a Csum is 344
-    /// bytes, and the write path, where it's called from, is deep.
+    /// The checksum of @r's data. As checksum(). Not inlined: a Csum is
+    /// hundreds of bytes, and the write path, where it's called from, is deep.
     #[inline(never)]
     pub fn checksum_range(&self, ty: c::CsumType, nonce: Nonce, r: BioRange<'_>) -> c::bch_csum {
         let mut csum = Csum::new(Some(self), ty, nonce);
@@ -327,40 +346,18 @@ impl Fs {
 
 // ── Encryption ───────────────────────────────────────────────────────────
 
-/// ChaCha20 under a key from a nonce, as far as it's got: zeroed on drop.
-struct Chacha(c::chacha_state);
-
-impl Chacha {
-    fn new(key: &c::bch_key, nonce: Nonce) -> Self {
-        let mut words: [u32; 8] = core::array::from_fn(|i| (key.key[i / 2].get() >> (32 * (i % 2))) as u32);
-        let mut s = Chacha(c::chacha_state::default());
-        // SAFETY: a state to set up, from 8 words of key and 16 bytes of iv
-        unsafe { c::chacha_init(&mut s.0, words.as_ptr(), (&raw const nonce).cast()) };
-        c::wipe(&mut words);
-        s
-    }
-
-    /// Each call but the last whole ChaCha20 blocks.
-    ///
-    /// # Safety
-    /// @p is @len bytes, ours to write.
-    unsafe fn crypt(&mut self, p: *mut u8, len: usize) {
-        // SAFETY: the caller's
-        // a size_t from 7.4, an unsigned int before
-        unsafe { c::chacha20_crypt(&mut self.0, p, p, len as _) }
-    }
-}
-
-impl Drop for Chacha {
-    fn drop(&mut self) {
-        c::wipe(&mut self.0)
-    }
+/// ChaCha20 under @key from @nonce, the block it starts at its first word.
+fn keystream(key: &c::bch_key, nonce: Nonce) -> ChaCha20 {
+    let key: &[u8; 32] = plain_bytes(key).try_into().unwrap();
+    let iv: &[u8; 12] = plain_bytes(&nonce.d[1..]).try_into().unwrap();
+    let mut stream = ChaCha20::new(key.into(), iv.into());
+    stream.seek(u64::from(nonce.d[0].get()) * u64::from(CHACHA_BLOCK_SIZE));
+    stream
 }
 
 /// @data, ChaCha20'd under @key from @nonce: encrypted, or decrypted.
 pub fn chacha20(key: &c::bch_key, nonce: Nonce, data: &mut [u8]) {
-    // SAFETY: @data's
-    unsafe { Chacha::new(key, nonce).crypt(data.as_mut_ptr(), data.len()) }
+    keystream(key, nonce).apply_keystream(data)
 }
 
 impl c::bch_encrypted_key {
@@ -395,14 +392,13 @@ impl Fs {
     /// @r's data, encrypted in place: as encrypt(), for an encryption type.
     /// Each chunk but the last must be whole ChaCha20 blocks.
     pub fn encrypt_range(&self, nonce: Nonce, r: BioRange<'_>) -> Result<(), BchError> {
-        let mut chacha = Chacha::new(self.chacha20_key()?, nonce);
+        let mut stream = keystream(self.chacha20_key()?, nonce);
         for chunk in r {
             if chunk.len() % CHACHA_BLOCK_SIZE != 0 {
                 crate::bch_err_ratelimited!(self, "bio not aligned for encryption");
                 return Err(BchError::from(c::EIO));
             }
-            // SAFETY: the chunk's bytes, mapped
-            chunk.with_mapped(|p, len| unsafe { chacha.crypt(p, len) });
+            chunk.with_mapped(|p, len| stream.apply_keystream(unsafe { core::slice::from_raw_parts_mut(p, len) }));
         }
         Ok(())
     }
