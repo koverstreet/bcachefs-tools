@@ -23,8 +23,8 @@ use crate::sb::errors::SbErrorId;
 use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::KVVec;
-use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, Unvalidated, UnvalidatedEntriesMut,
-                            Validated};
+use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, Unvalidated, Validated,
+                            ValidatedEntriesMut};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 use crate::sb::io::SbResize;
@@ -71,10 +71,7 @@ fn validate_late(fs: &Fs, version: MetadataVersion, big_endian: bool, f: &mut Se
     from.set_from(c::BkeyValidateFrom::superblock);
     from.set_flags(if write { ValidateFlags::write } else { ValidateFlags::empty() });
 
-    for e in UnvalidatedEntriesMut::<c::jset_entry<Unvalidated>>::new(&mut bytes_of_mut(f)[SECTION_HEAD..]) {
-        // whole: sb_field_validate() has repaired or refused a section with
-        // one overrunning its end
-        let e = e.map_err(|_| BchError::from(Errcode::invalid_sb_clean))?;
+    for e in ValidatedEntriesMut::of(f) {
         journal_entry_validate(fs, bytes_of_mut(e), version, big_endian, from)?;
     }
     Ok(())

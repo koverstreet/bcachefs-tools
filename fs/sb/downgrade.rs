@@ -19,7 +19,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes;
 use crate::{prt, sb_err_on};
 use crate::sb::errors::{prt_error_ids, SbErrorId};
-use crate::sb::io::{entries_as_read, entries_end, SbFieldOps};
+use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::Le64;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::bitmap::LeBitmap;
@@ -32,18 +32,12 @@ type Section = c::bch_sb_field_downgrade<Validated>;
 
 const SECTION_HEAD: usize = size_of::<Head<Section>>();
 
-/// Its entries, of a section as read.
-fn entries_read(f: &c::bch_sb_field_downgrade<Unvalidated>)
-    -> impl Iterator<Item = &c::bch_sb_field_downgrade_entry<Unvalidated>>
-{
-    entries_as_read::<Section, _>(f.as_bytes(), SECTION_HEAD)
-}
 
 impl SbFieldOps for Section {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_downgrade<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let sb_major = sb.version.get().major();
-        for e in entries_read(f) {
+        for e in f.entries().map_while(Result::ok) {
             let major = e.version.get().major();
             sb_err_on!(err, major != sb_major, invalid_sb_downgrade,
                        "downgrade entry with mismatched major version ({major} != {sb_major})")?;
@@ -57,7 +51,7 @@ impl SbFieldOps for Section {
             out.tabstop_push(16);
         }
 
-        for e in entries_read(f) {
+        for e in f.entries().map_while(Result::ok) {
             prt!(out, "version:\t{}\n", e.version.get());
 
             write!(out, "recovery passes:\t");
