@@ -439,7 +439,7 @@ fn last_uncompleted_write_seq(g: &JournalGuard<'_>, seq_completing: u64) -> u64 
     if front.bits.write_done() || seq == seq_completing { seq } else { 0 }
 }
 
-fn write_done(w: &mut c::journal_buf, out: Written) {
+fn write_done(w: &mut c::journal_buf, written: Written) {
     let j = w.journal();
     let fs = j.fs();
     let seq_wrote = w.seq();
@@ -478,8 +478,8 @@ fn write_done(w: &mut c::journal_buf, out: Written) {
      * the compact device list for refcount updates.
      */
     let mut pins = j.pins();
-    let write_failed = !out.failed.is_empty();
-    let flush_failed = !out.flush_failed.is_empty();
+    let write_failed = !written.failed.is_empty();
+    let flush_failed = !written.flush_failed.is_empty();
 
     if unlikely(write_failed || flush_failed) {
         fs.replicas_entry_put_many(&DevlistEntry::new(DataType::journal, pins.seq_devs(seq_wrote)), 1);
@@ -487,14 +487,14 @@ fn write_done(w: &mut c::journal_buf, out: Written) {
     }
 
     if pins.seq_devs(seq_wrote).nr == 0 && !w.bits.empty() {
-        err = fs.replicas_entry_get(&DevlistEntry::new(DataType::journal, out.devs));
+        err = fs.replicas_entry_get(&DevlistEntry::new(DataType::journal, written.devs));
         if err.is_ok() {
-            pins.seq_set_devs(seq_wrote, &out.devs);
+            pins.seq_set_devs(seq_wrote, &written.devs);
         }
     }
 
     if unlikely(write_failed || flush_failed || err.is_err()) {
-        if out.devs.nr == 0 {
+        if written.devs.nr == 0 {
             err = Err(fs.err(Errcode::journal_write_err));
         }
 
@@ -508,7 +508,7 @@ fn write_done(w: &mut c::journal_buf, out: Written) {
          * and that must still be said - we're going emergency
          * read-only on it.
          */
-        let mut msg = if err.is_ok() && out.failed.all_dev_removed() && out.flush_failed.all_dev_removed() {
+        let mut msg = if err.is_ok() && written.failed.all_dev_removed() && written.flush_failed.all_dev_removed() {
             let mut msg = crate::util::log::LogMsg::new(fs);
             msg.set_suppressed(true);
             msg
@@ -518,17 +518,17 @@ fn write_done(w: &mut c::journal_buf, out: Written) {
         };
 
         prt!(&mut *msg, "error writing journal entry {seq_wrote}\n");
-        out.failed.to_text(&mut msg, fs);
+        written.failed.to_text(&mut msg, fs);
         if flush_failed {
             prt!(&mut *msg, "preflush errors:\n");
-            out.flush_failed.to_text(&mut msg, fs);
+            written.flush_failed.to_text(&mut msg, fs);
         }
 
         match err {
             Ok(()) => {
-                if out.devs.nr < BkeySC::from(&*w.key).arm::<Ptrs>().map_or(0, |k| k.devs(fs).nr) {
+                if written.devs.nr < BkeySC::from(&*w.key).arm::<Ptrs>().map_or(0, |k| k.devs(fs).nr) {
                     prt!(&mut *msg, "wrote degraded to ");
-                    fs.devs_list_to_text(&mut msg, &out.devs);
+                    fs.devs_list_to_text(&mut msg, &written.devs);
                     msg.newline();
                 }
             }
@@ -726,7 +726,7 @@ fn complete_writes<'a>(j: &'a c::journal, mut g: JournalGuard<'a>, pins: &PinsRe
 }
 
 /// In the last bio's endio, of a flush.
-fn wake_flush_waiters(w: &c::journal_buf, out: &Written) {
+fn wake_flush_waiters(w: &c::journal_buf, written: &Written) {
     /*
      * Wake up flush waiters early, if there wasn't an error:
      *
@@ -736,8 +736,8 @@ fn wake_flush_waiters(w: &c::journal_buf, out: &Written) {
      * we're not taking j->lock and updating the various seq_ondisk fields
      * yet:
      */
-    if out.failed.is_empty() &&
-        out.flush_failed.is_empty() &&
+    if written.failed.is_empty() &&
+        written.flush_failed.is_empty() &&
         buf_waiters(w.wait_word().load(Relaxed)) {
         if let Some(waiters) = w.take_waiters(JOURNAL_BUF_FLUSH) {
             waiters.wake();
@@ -951,8 +951,8 @@ fn write_checksum(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError
 }
 
 /// The entry compacted, its devices allocated - their io refs, returned - and
-/// checksummed, its replicas marked: None if there's no IO to do.
-fn write_start(w: &mut c::journal_buf, out: &mut Written) -> Option<Cas> {
+/// checksummed, its replicas marked.
+fn write_start(w: &mut c::journal_buf, written: &mut Written) -> Result<Cas, BchError> {
     let j = w.journal();
     let fs = j.fs();
     let nr_rw_members = fs.allocator.rw_devs[DataType::free].weight();
@@ -965,128 +965,130 @@ fn write_start(w: &mut c::journal_buf, out: &mut Written) -> Option<Cas> {
 
     j.write_start_time.set(local_clock());
 
-    let mut cas = Cas::default();
-    let ret = (|| -> Result<(), BchError> {
-        {
-            let _b = j.buf_lock.lock();
-            buf_realloc(j, w);
-            write_prep(j, w)?;
-        }
-
-        let ret = j.error();
-        if ret.is_err() && j.flags.get(Journal::need_flush_write) {
-            ret?;
-        }
-
-        let mut replicas_allocated = 0;
-        let ret = loop {
-            let ret = write_alloc(j, w, &mut cas, &mut replicas_allocated);
-            if ret.is_ok() || !j.lock.can_discard.get() {
-                break ret;
-            }
-
-            j.do_discards();
-        };
-        ret?;
-
-        write_checksum(j, w)?;
-
-        {
-            let mut g = j.lock.lock();
-            assert!(g.last_unallocated_seq() == w.seq(),
-                    "journal writing seq {}, but the first unallocated is {}", w.seq(), g.last_unallocated_seq());
-
-            /*
-             * write is allocated, no longer need to account for it in
-             * bch2_journal_space_available():
-             */
-            w.sectors = 0;
-            w.bits.set_write_allocated(true);
-            g.entry_bytes_written += w.jset().bytes() as u64;
-
-            if nr_rw_members > 1 {
-                w.bits.set_separate_flush(true);
-            }
-
-            /*
-             * journal entry has been compacted and allocated, recalculate space
-             * available:
-             */
-            j.space_available(&mut g);
-            j.do_writes_locked(&mut g);
-        }
-
-        out.devs = BkeySC::from(&*w.key).arm::<Ptrs>().map(|k| k.devs(fs)).unwrap_or_default();
-
-        if w.wait_word().load(Relaxed) != JOURNAL_BUF_FLUSH_NO_WAIT {
-            /*
-             * Mark journal replicas before we submit the write to guarantee
-             * recovery will find the journal entries after a crash.
-             *
-             * The clean->dirty transition entry (FLUSH_NO_WAIT) is the
-             * exception: we defer this until after the write completes, so the
-             * fs isn't marked dirty before its journal entry is on disk - and
-             * flushers can't wait on that entry, so there's no one to wake
-             * early ahead of the deferred superblock write.
-             */
-            let pins = j.pins();
-            let seq = w.seq();
-
-            if let Err(e) = fs.replicas_entry_get(&DevlistEntry::new(DataType::journal, out.devs)) {
-                pins.seq_set_devs(seq, &c::bch_devs_list::default());
-                return Err(e);
-            }
-
-            pins.seq_set_devs(seq, &out.devs);
-        }
-
-        Ok(())
-    })();
-
-    match ret {
-        Ok(()) if fs.opts().nochanges.get() == 0 => return Some(cas),
-        Ok(()) => {}
-        Err(e) => {
-            let mut msg = crate::util::log::LogMsg::new(fs);
-            msg.set_suppressed(true); /* only print once, when we go ERO */
-
-            prt!(&mut *msg, "Unable to do journal write at seq {} for {} sectors: {}",
-                 w.seq(), w.jset().sectors(fs.block_bits()), e.msg());
-            j.to_text(&mut msg);
-            fs.emergency_read_only(&mut msg);
-        }
+    {
+        let _b = j.buf_lock.lock();
+        buf_realloc(j, w);
+        write_prep(j, w)?;
     }
 
-    /* no_io: */
-    None
+    let ret = j.error();
+    if ret.is_err() && j.flags.get(Journal::need_flush_write) {
+        ret?;
+    }
+
+    let mut cas = Cas::default();
+    let mut replicas_allocated = 0;
+    let ret = loop {
+        let ret = write_alloc(j, w, &mut cas, &mut replicas_allocated);
+        if ret.is_ok() || !j.lock.can_discard.get() {
+            break ret;
+        }
+
+        j.do_discards();
+    };
+    ret?;
+
+    write_checksum(j, w)?;
+
+    {
+        let mut g = j.lock.lock();
+        assert!(g.last_unallocated_seq() == w.seq(),
+                "journal writing seq {}, but the first unallocated is {}", w.seq(), g.last_unallocated_seq());
+
+        /*
+         * write is allocated, no longer need to account for it in
+         * bch2_journal_space_available():
+         */
+        w.sectors = 0;
+        w.bits.set_write_allocated(true);
+        g.entry_bytes_written += w.jset().bytes() as u64;
+
+        if nr_rw_members > 1 {
+            w.bits.set_separate_flush(true);
+        }
+
+        /*
+         * journal entry has been compacted and allocated, recalculate space
+         * available:
+         */
+        j.space_available(&mut g);
+        j.do_writes_locked(&mut g);
+    }
+
+    written.devs = BkeySC::from(&*w.key).arm::<Ptrs>().map(|k| k.devs(fs)).unwrap_or_default();
+
+    if w.wait_word().load(Relaxed) != JOURNAL_BUF_FLUSH_NO_WAIT {
+        /*
+         * Mark journal replicas before we submit the write to guarantee
+         * recovery will find the journal entries after a crash.
+         *
+         * The clean->dirty transition entry (FLUSH_NO_WAIT) is the
+         * exception: we defer this until after the write completes, so the
+         * fs isn't marked dirty before its journal entry is on disk - and
+         * flushers can't wait on that entry, so there's no one to wake
+         * early ahead of the deferred superblock write.
+         */
+        let pins = j.pins();
+        let seq = w.seq();
+
+        if let Err(e) = fs.replicas_entry_get(&DevlistEntry::new(DataType::journal, written.devs)) {
+            pins.seq_set_devs(seq, &c::bch_devs_list::default());
+            return Err(e);
+        }
+
+        pins.seq_set_devs(seq, &written.devs);
+    }
+
+    Ok(cas)
 }
 
-/// A journal entry written: what C did in continuations, IO awaited between.
+/// write_start()'s error: the filesystem goes emergency read-only, and the
+/// write does no IO.
+fn write_start_err(w: &c::journal_buf, e: BchError) {
+    let j = w.journal();
+    let fs = j.fs();
+    let mut msg = crate::util::log::LogMsg::new(fs);
+    msg.set_suppressed(true); /* only print once, when we go ERO */
+
+    prt!(&mut *msg, "Unable to do journal write at seq {} for {} sectors: {}",
+         w.seq(), w.jset().sectors(fs.block_bits()), e.msg());
+    j.to_text(&mut msg);
+    fs.emergency_read_only(&mut msg);
+}
+
+/// A journal entry written: what to and what failed, for its done.
 #[in_place(WriteFut)]
 async fn write_task(buf: BufRef) -> Written {
     let fs: &'static Fs = unsafe { buf.get() }.journal().fs();
     let wq: &'static Queue = &unsafe { buf.get() }.journal().wq;
-    let mut out = Written::default();
+    let mut written = Written::default();
 
-    let Some(cas) = write_start(unsafe { buf.get() }, &mut out) else {
-        return out;
+    let cas = match write_start(unsafe { buf.get() }, &mut written) {
+        Ok(cas) => cas,
+        Err(e) => {
+            write_start_err(unsafe { buf.get() }, e);
+            return written;
+        }
     };
+    if fs.opts().nochanges.get() != 0 {
+        return written;
+    }
 
-    let preflush = {
+    let (flush, separate_flush) = {
         let w = unsafe { buf.get() };
-        !w.jset().no_flush() && w.bits.separate_flush()
+        (!w.jset().no_flush(), w.bits.separate_flush())
     };
-    if preflush {
+
+    if flush && separate_flush {
         stack_pin_init!(let g = Gather::<PreflushErrs, waiter::Async>::new());
-        write_preflush(unsafe { buf.get() }, &out.devs, &g);
+        write_preflush(unsafe { buf.get() }, &written.devs, &g);
         let errs = g.wait(Resume::queue(wq)).await;
-        out.note_failed(fs, errs.0, true);
+        written.note_failed(fs, errs.0, true);
     }
 
     let mut cas = cas;
-    let (flush, errs) = {
+    let errs = {
         let w: &c::journal_buf = unsafe { buf.get() };
-        let flush = !w.jset().no_flush();
         let (opf, bytes) = write_opf(w);
 
         // the replicas are clones of the buffer's bio, from the journal's own
@@ -1094,15 +1096,15 @@ async fn write_task(buf: BufRef) -> Written {
         let mut io = InFlight::with(fs, |ca| &ca.journal.bio_set, IOPRIO_RT);
         io.submit::<c::DevWriteRefKind>(w.data.bio_range(bytes), opf, DataType::journal, &w.key,
                                         Refs::Given(&mut cas), Resume::queue(wq)).await;
-        /* a flush's waiters are woken from the last endio */
-        (flush, io.wait(if flush { Resume::INLINE } else { Resume::queue(wq) }).await)
+        io.wait(Resume::INLINE).await
     };
-    out.note_failed(fs, errs.failed(), false);
+    written.note_failed(fs, errs.failed(), false);
     if flush {
-        wake_flush_waiters(unsafe { buf.get() }, &out);
-        requeue(wq).await;
+        wake_flush_waiters(unsafe { buf.get() }, &written);
     }
-    out
+    requeue(wq).await;
+
+    written
 }
 
 /// What writes a journal entry, made with its buffer: the task, made for each
@@ -1182,9 +1184,9 @@ impl BufRef {
 ///
 /// # Safety
 /// The executor's, as the task's done function.
-unsafe fn write_task_done(task: NonNull<Task<'static, WriteFut>>, out: Written) {
+unsafe fn write_task_done(task: NonNull<Task<'static, WriteFut>>, written: Written) {
     let buf = unsafe { (*task.byte_sub(offset_of!(JournalWrite, task)).cast::<JournalWrite>().as_ptr()).buf };
-    write_done(unsafe { &mut *buf }, out);
+    write_done(unsafe { &mut *buf }, written);
 }
 
 fn waitlist_splice(from: &c::journal_buf, to: &c::journal_buf) -> bool {
