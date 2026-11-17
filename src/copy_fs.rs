@@ -1095,11 +1095,8 @@ pub fn copy_fs(
 
     rustix::process::fchdir(src_fd).map_err(rustix_err)?;
 
-    // Xattrs first: setting each reads the inode back, over the times.
     let dot = CString::new(".").unwrap();
     copy_xattrs(fs, &mut root_inode, &dot)?;
-
-    copy_times(fs, &mut root_inode, &stat);
 
     let dup_fd = rustix::io::dup(src_fd).map_err(rustix_err)?;
     copy_dir(fs, s, &mut root_inode, dup_fd, src_path)?;
@@ -1108,6 +1105,7 @@ pub fn copy_fs(
         reserve_old_fs_space(fs, &mut root_inode, &mut s.extents, s.reserve_start)?;
     }
 
+    copy_times(fs, &mut root_inode, &stat);
     update_inode(fs, &root_inode)?;
 
     // Print summary
