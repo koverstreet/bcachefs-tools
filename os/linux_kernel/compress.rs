@@ -9,7 +9,7 @@ fn int(n: usize) -> core::ffi::c_int {
 pub mod lz4 {
     use super::int;
     use crate::c;
-    use crate::util::volatile::VolatileSlice;
+    use crate::util::volatile::{Out, VolatileSlice};
     use core::mem::MaybeUninit;
 
     pub const MEM_COMPRESS: usize = c::LZ4_MEM_COMPRESS as usize;
@@ -18,7 +18,7 @@ pub mod lz4 {
 
     /// As much of @src as fits in @dst, compressed: its compressed length, 0
     /// on error, and how much of @src that was.
-    pub fn compress_dest_size(src: &[u8], dst: VolatileSlice<'_>, ws: &mut [MaybeUninit<u8>]) -> (usize, usize) {
+    pub fn compress_dest_size(src: &[u8], dst: Out<'_>, ws: &mut [MaybeUninit<u8>]) -> (usize, usize) {
         assert!(ws.len() >= MEM_COMPRESS, "lz4 workspace of {} bytes, not {MEM_COMPRESS}", ws.len());
         let mut src_len = int(src.len());
         let ret = unsafe {
@@ -29,7 +29,7 @@ pub mod lz4 {
     }
 
     /// @src's compressed length in @dst: 0 if it didn't fit.
-    pub fn compress_hc(src: &[u8], dst: VolatileSlice<'_>, level: u32, ws: &mut [MaybeUninit<u8>]) -> usize {
+    pub fn compress_hc(src: &[u8], dst: Out<'_>, level: u32, ws: &mut [MaybeUninit<u8>]) -> usize {
         assert!(ws.len() >= HC_MEM_COMPRESS, "lz4hc workspace of {} bytes, not {HC_MEM_COMPRESS}", ws.len());
         let ret = unsafe {
             c::LZ4_compress_HC(src.as_ptr().cast(), dst.as_ptr().cast(), int(src.len()), int(dst.len()),
@@ -40,7 +40,7 @@ pub mod lz4 {
 
     /// At least @target bytes of @src decompressed into @dst: how many, or
     /// None if @src is malformed.
-    pub fn decompress_safe_partial(src: VolatileSlice<'_>, dst: VolatileSlice<'_>, target: usize) -> Option<usize> {
+    pub fn decompress_safe_partial(src: VolatileSlice<'_>, dst: Out<'_>, target: usize) -> Option<usize> {
         let ret = unsafe {
             c::LZ4_decompress_safe_partial(src.as_ptr().cast_const().cast(), dst.as_ptr().cast(),
                                            int(src.len()), int(target), int(dst.len()))
@@ -52,7 +52,7 @@ pub mod lz4 {
 pub mod zlib {
     use super::int;
     use crate::c;
-    use crate::util::volatile::VolatileSlice;
+    use crate::util::volatile::{Out, VolatileSlice};
     use core::ffi::c_int;
     use core::mem::MaybeUninit;
 
@@ -66,7 +66,7 @@ pub mod zlib {
         unsafe { c::zlib_inflate_workspacesize() as usize }
     }
 
-    fn stream(src: *const u8, src_len: usize, dst: VolatileSlice<'_>, ws: &mut [MaybeUninit<u8>]) -> c::z_stream {
+    fn stream(src: *const u8, src_len: usize, dst: Out<'_>, ws: &mut [MaybeUninit<u8>]) -> c::z_stream {
         c::z_stream {
             next_in:   src.cast(),
             avail_in:  int(src_len) as _,
@@ -79,7 +79,7 @@ pub mod zlib {
 
     /// @src deflated into @dst, all of it: its compressed length, or None if
     /// it didn't fit.
-    pub fn deflate(src: &[u8], dst: VolatileSlice<'_>, ws: &mut [MaybeUninit<u8>], level: c_int,
+    pub fn deflate(src: &[u8], dst: Out<'_>, ws: &mut [MaybeUninit<u8>], level: c_int,
                    window_bits: c_int, mem_level: c_int, strategy: c_int) -> Option<usize> {
         assert!(ws.len() >= deflate_workspace_size(window_bits, mem_level),
                 "zlib deflate workspace of {} bytes, not {}", ws.len(), deflate_workspace_size(window_bits, mem_level));
@@ -96,7 +96,7 @@ pub mod zlib {
 
     /// @src inflated into @dst: how much of @dst it left, or None if @src is
     /// malformed or didn't end.
-    pub fn inflate(src: VolatileSlice<'_>, dst: VolatileSlice<'_>, ws: &mut [MaybeUninit<u8>],
+    pub fn inflate(src: VolatileSlice<'_>, dst: Out<'_>, ws: &mut [MaybeUninit<u8>],
                    window_bits: c_int) -> Option<usize> {
         assert!(ws.len() >= inflate_workspace_size(),
                 "zlib inflate workspace of {} bytes, not {}", ws.len(), inflate_workspace_size());
@@ -114,7 +114,7 @@ pub mod zlib {
 
 pub mod zstd {
     use crate::c;
-    use crate::util::volatile::VolatileSlice;
+    use crate::util::volatile::{Out, VolatileSlice};
     use core::ffi::c_int;
     use core::marker::PhantomData;
     use core::mem::MaybeUninit;
@@ -156,7 +156,7 @@ pub mod zstd {
             NonNull::new(p).map(|p| Cctx(p, PhantomData))
         }
 
-        pub fn compress(&mut self, dst: VolatileSlice<'_>, src: &[u8], params: &Params) -> Result<usize, u32> {
+        pub fn compress(&mut self, dst: Out<'_>, src: &[u8], params: &Params) -> Result<usize, u32> {
             result(unsafe {
                 c::zstd_compress_cctx(self.0.as_ptr(), dst.as_ptr().cast(), dst.len(),
                                       src.as_ptr().cast(), src.len(), params)
@@ -173,7 +173,7 @@ pub mod zstd {
             NonNull::new(p).map(|p| Dctx(p, PhantomData))
         }
 
-        pub fn decompress(&mut self, dst: VolatileSlice<'_>, src: VolatileSlice<'_>) -> Result<usize, u32> {
+        pub fn decompress(&mut self, dst: Out<'_>, src: VolatileSlice<'_>) -> Result<usize, u32> {
             result(unsafe {
                 c::zstd_decompress_dctx(self.0.as_ptr(), dst.as_ptr().cast(), dst.len(),
                                         src.as_ptr().cast_const().cast(), src.len())

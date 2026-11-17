@@ -6,14 +6,15 @@
 use crate::alloc::sector_alloc::LockedWritePoint;
 use crate::util::alloc::flags;
 use crate::c;
-use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce};
+use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce, Src};
 use crate::data::ptrs::{crc_is_compressed, extent_crc_append, extent_nonce};
 use crate::data::write::{to_wbio, wbio_init, write_op_error};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::util::bio::{bio_put, pages, Bio};
-use crate::os::kernel::{unlikely, PAGE_SIZE, READ, WRITE};
+use crate::util::volatile::Out;
+use crate::os::kernel::{unlikely, PAGE_SIZE, WRITE};
 use c::WriteFlags as w;
 use core::ffi::c_void;
 use crate::format::{Bversion, BkeyType};
@@ -168,17 +169,16 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
      * exactly as it found it. So take a private copy rather than letting
      * bch2_bio_map_or_bounce() hand us the bio's own pages, and decrypt that.
      */
-    let encrypted = crc.csum_type.get().is_encryption();
     let range = unsafe { Bio::from_raw(bio) }.range();
-    let mut src_buf = if encrypted { bio_bounce(fs, range, READ) } else { map_or_bounce(fs, range, READ) };
+    let mut src_buf = if crc.csum_type.get().is_encryption() {
+        let mut b = bio_bounce(fs, range);
+        fs.encrypt(crc.csum_type.get(), extent_nonce(op.version, &crc), &mut b[..(crc.compressed_size as usize) << 9])?;
+        Src::Bounced(b)
+    } else {
+        map_or_bounce(fs, range)
+    };
 
-    if encrypted {
-        let src = src_buf.data();
-        let src = unsafe { core::slice::from_raw_parts_mut(src.as_ptr(), (crc.compressed_size as usize) << 9) };
-        fs.encrypt(crc.csum_type.get(), extent_nonce(op.version, &crc), src)?;
-    }
-
-    let mut ret = buf_uncompress(fs, dst_buf.data(), src_buf.data(), &crc);
+    let mut ret = buf_uncompress(fs, Out::from(&mut *dst_buf), src_buf.data(), &crc);
     if fs.opts().no_data_io.get() != 0 {
         ret = Ok(());
     }
@@ -196,7 +196,7 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
 
     unsafe {
         crate::util::bio::memcpy_to_bio(bio, op.wbio.bio.bi_iter,
-                                        dst_buf.data().as_ptr().add((crc.offset as usize) << 9).cast());
+                                        dst_buf.as_ptr().add((crc.offset as usize) << 9).cast());
     }
 
     let crc = &mut op.crc;

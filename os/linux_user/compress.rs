@@ -11,7 +11,7 @@ fn int(n: usize) -> core::ffi::c_int {
 pub mod lz4 {
     use super::int;
     use crate::c;
-    use crate::util::volatile::VolatileSlice;
+    use crate::util::volatile::{Out, VolatileSlice};
     use core::ffi::c_int;
     use core::mem::MaybeUninit;
 
@@ -22,7 +22,7 @@ pub mod lz4 {
 
     /// As much of @src as fits in @dst, compressed: its compressed length, 0
     /// on error, and how much of @src that was.
-    pub fn compress_dest_size(src: &[u8], dst: VolatileSlice<'_>, _ws: &mut [MaybeUninit<u8>]) -> (usize, usize) {
+    pub fn compress_dest_size(src: &[u8], dst: Out<'_>, _ws: &mut [MaybeUninit<u8>]) -> (usize, usize) {
         let mut src_len = int(src.len());
         let ret = unsafe {
             c::LZ4_compress_destSize(src.as_ptr().cast(), dst.as_ptr().cast(), &mut src_len, int(dst.len()))
@@ -31,7 +31,7 @@ pub mod lz4 {
     }
 
     /// @src's compressed length in @dst: 0 if it didn't fit.
-    pub fn compress_hc(src: &[u8], dst: VolatileSlice<'_>, level: u32, _ws: &mut [MaybeUninit<u8>]) -> usize {
+    pub fn compress_hc(src: &[u8], dst: Out<'_>, level: u32, _ws: &mut [MaybeUninit<u8>]) -> usize {
         let ret = unsafe {
             c::LZ4_compress_HC(src.as_ptr().cast(), dst.as_ptr().cast(), int(src.len()), int(dst.len()), level as c_int)
         };
@@ -40,7 +40,7 @@ pub mod lz4 {
 
     /// At least @target bytes of @src decompressed into @dst: how many, or
     /// None if @src is malformed.
-    pub fn decompress_safe_partial(src: VolatileSlice<'_>, dst: VolatileSlice<'_>, target: usize) -> Option<usize> {
+    pub fn decompress_safe_partial(src: VolatileSlice<'_>, dst: Out<'_>, target: usize) -> Option<usize> {
         let ret = unsafe {
             c::LZ4_decompress_safe_partial(src.as_ptr().cast_const().cast(), dst.as_ptr().cast(),
                                            int(src.len()), int(target), int(dst.len()))
@@ -52,7 +52,7 @@ pub mod lz4 {
 pub mod zlib {
     use super::int;
     use crate::c::{self, z_stream};
-    use crate::util::volatile::VolatileSlice;
+    use crate::util::volatile::{Out, VolatileSlice};
     use core::ffi::c_int;
     use core::mem::MaybeUninit;
 
@@ -70,7 +70,7 @@ pub mod zlib {
         0
     }
 
-    fn stream(src: *const u8, src_len: usize, dst: VolatileSlice<'_>) -> z_stream {
+    fn stream(src: *const u8, src_len: usize, dst: Out<'_>) -> z_stream {
         z_stream {
             next_in:   src.cast_mut().cast(),
             avail_in:  int(src_len) as _,
@@ -82,7 +82,7 @@ pub mod zlib {
 
     /// @src deflated into @dst, all of it: its compressed length, or None if
     /// it didn't fit.
-    pub fn deflate(src: &[u8], dst: VolatileSlice<'_>, _ws: &mut [MaybeUninit<u8>], level: c_int,
+    pub fn deflate(src: &[u8], dst: Out<'_>, _ws: &mut [MaybeUninit<u8>], level: c_int,
                    window_bits: c_int, mem_level: c_int, strategy: c_int) -> Option<usize> {
         let mut strm = stream(src.as_ptr(), src.len(), dst);
         unsafe {
@@ -97,7 +97,7 @@ pub mod zlib {
 
     /// @src inflated into @dst: how much of @dst it left, or None if @src is
     /// malformed or didn't end.
-    pub fn inflate(src: VolatileSlice<'_>, dst: VolatileSlice<'_>, _ws: &mut [MaybeUninit<u8>],
+    pub fn inflate(src: VolatileSlice<'_>, dst: Out<'_>, _ws: &mut [MaybeUninit<u8>],
                    window_bits: c_int) -> Option<usize> {
         let mut strm = stream(src.as_ptr(), src.len(), dst);
         unsafe {
@@ -113,7 +113,7 @@ pub mod zlib {
 
 pub mod zstd {
     use crate::c;
-    use crate::util::volatile::VolatileSlice;
+    use crate::util::volatile::{Out, VolatileSlice};
     use core::ffi::c_int;
     use core::marker::PhantomData;
     use core::mem::MaybeUninit;
@@ -157,7 +157,7 @@ pub mod zstd {
 
         /// As the kernel's zstd_compress_cctx(): @params set, then compressed
         /// in one.
-        pub fn compress(&mut self, dst: VolatileSlice<'_>, src: &[u8], params: &Params) -> Result<usize, u32> {
+        pub fn compress(&mut self, dst: Out<'_>, src: &[u8], params: &Params) -> Result<usize, u32> {
             let (cctx, cp, fp) = (self.0.as_ptr(), &params.cParams, &params.fParams);
             let set = [
                 (c::ZSTD_cParameter_ZSTD_c_windowLog,       cp.windowLog as c_int),
@@ -191,7 +191,7 @@ pub mod zstd {
             NonNull::new(p).map(|p| Dctx(p, PhantomData))
         }
 
-        pub fn decompress(&mut self, dst: VolatileSlice<'_>, src: VolatileSlice<'_>) -> Result<usize, u32> {
+        pub fn decompress(&mut self, dst: Out<'_>, src: VolatileSlice<'_>) -> Result<usize, u32> {
             result(unsafe {
                 c::ZSTD_decompressDCtx(self.0.as_ptr(), dst.as_ptr().cast(), dst.len(),
                                        src.as_ptr().cast_const().cast(), src.len())

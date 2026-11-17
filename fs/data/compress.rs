@@ -29,11 +29,12 @@
  */
 
 //! An opt is a compression option's value, a type and a level; an extent's
-//! type is an opt's, or incompressible, or lz4_old. A bounce buffer, Bbuf,
-//! is an extent's data as one buffer:
-//! the bio's own memory if it's virtually contiguous or can be vmapped, else
-//! a copy. A bio's memory is only ever a VolatileSlice here: it can change
-//! under us (util/volatile.rs).
+//! type is an opt's, or incompressible, or lz4_old. A codec reads an extent's
+//! data as one buffer, Src, and writes it to one, Dst: the bio's own memory if
+//! it's virtually contiguous or can be vmapped, else a bounce buffer from a
+//! pool - a copy, to read; to write, unwritten until the codec has. A bio's
+//! memory is only ever a VolatileSlice here: it can change under us
+//! (util/volatile.rs).
 //!
 //! Buffers and workspaces come from the allocator when it has them cheaply,
 //! else from mempools, made as each type is enabled and kept: a mempool can't
@@ -50,7 +51,9 @@ use crate::sb::errors::bch2_decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::util::{alloc::{Box, KVmalloc}, bio::{BioRange, Mapped},
                   late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
-                  volatile::VolatileSlice, Printbuf, ToText};
+                  volatile::{Out, VolatileSlice}, Printbuf, ToText};
+#[cfg(not(bch_maybe_uninit_slice))]
+use crate::util::maybe_uninit::MaybeUninitSlice;
 use crate::os::compress::{lz4, zlib, zstd};
 use core::ffi::{c_int, c_uint};
 use core::mem::MaybeUninit;
@@ -166,29 +169,43 @@ pub struct Compress {
  * bio's pages (no copy) or a private allocation the caller can scribble on
  * without touching the bio.
  */
-/// 'a is what it borrows: the bio whose memory it maps, or the filesystem
-/// whose pool it's from.
-pub(crate) enum Bbuf<'a> {
+pub(crate) type Bounce<'a, T> = Box<T, &'a Mempool<KVmalloc>>;
+
+/// What a codec reads: the bio's memory, or a copy of it. 'a is what it
+/// borrows: the bio whose memory it maps, or the filesystem whose pool it's
+/// from.
+pub(crate) enum Src<'a> {
     Mapped(Mapped<'a>),
-    Pool(Box<[MaybeUninit<u8>], &'a Mempool<KVmalloc>>),
+    Bounced(Bounce<'a, [u8]>),
 }
 
-impl Bbuf<'_> {
+impl Src<'_> {
     /// Ours, or the bio's - which may be written meanwhile.
     pub(crate) fn data(&mut self) -> VolatileSlice<'_> {
         match self {
-            Bbuf::Mapped(m) => m.data(),
-            Bbuf::Pool(b) => VolatileSlice::from(&mut **b),
+            Src::Mapped(m) => m.data(),
+            Src::Bounced(b) => VolatileSlice::from(&mut **b),
         }
-    }
-
-    /// The bio's own memory: nothing to copy back.
-    fn mapped(&self) -> bool {
-        matches!(self, Bbuf::Mapped(_))
     }
 }
 
-pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
+/// Where a codec writes: the bio's memory, or a buffer of ours to copy back
+/// from, unwritten until the codec says how much it wrote. As Src.
+pub(crate) enum Dst<'a> {
+    Mapped(Mapped<'a>),
+    Bounced(Bounce<'a, [MaybeUninit<u8>]>),
+}
+
+impl Dst<'_> {
+    pub(crate) fn out(&mut self) -> Out<'_> {
+        match self {
+            Dst::Mapped(m) => m.data().into(),
+            Dst::Bounced(b) => Out::from(&mut **b),
+        }
+    }
+}
+
+pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bounce<'_, [MaybeUninit<u8>]> {
     assert!(size <= extent_max(fs), "bounce buffer of {size} bytes, past encoded_extent_max {}", extent_max(fs));
 
     /*
@@ -206,37 +223,46 @@ pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
      *    not consumed.
      *
      *  - compression output: the compressor fills the compressed data and
-     *    compress() zeroes the block-alignment pad. The output bio is
-     *    trimmed to the compressed size before submission, so the unwritten
-     *    tail past it (copied into the bio, but never submitted) does not
-     *    reach disk.
+     *    compress() zeroes the block-alignment pad; only that much is copied
+     *    back to the bio, which is trimmed to it before submission.
      *
      * The one hole is no_data_io, which can hand an unwritten buffer to
      * userspace - but it is root-only and explicitly unsafe, so we ignore
      * it.
      */
-    Bbuf::Pool(Box::try_new_uninit_slice_in(size, &*fs.compress.bounce[rw])
-        .expect("a pool's allocation: it waits for an element"))
+    Box::try_new_uninit_slice_in(size, &*fs.compress.bounce[rw])
+        .expect("a pool's allocation: it waits for an element")
 }
 
-pub(crate) fn bio_bounce<'f>(fs: &'f Fs, r: BioRange<'_>, rw: usize) -> Bbuf<'f> {
-    let mut b = bounce_alloc(fs, r.len() as usize, rw);
-    if rw == READ {
-        r.copy_to_volatile(b.data());
-    }
-    b
+/// @r's data, copied.
+pub(crate) fn bio_bounce<'f>(fs: &'f Fs, r: BioRange<'_>) -> Bounce<'f, [u8]> {
+    let mut b = bounce_alloc(fs, r.len() as usize, READ);
+    r.copy_to_out(Out::from(&mut *b));
+    // SAFETY: all of it, copied from @r
+    unsafe { b.assume_init() }
 }
 
-pub(crate) fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Bbuf<'a> {
+/// @r's data, to read: the bio's own memory if it can be, else a copy.
+pub(crate) fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>) -> Src<'a> {
     assert!(r.len() as usize <= extent_max(fs), "mapping {} bytes, past encoded_extent_max {}",
             r.len(), extent_max(fs));
 
-    r.map().map_or_else(|| bio_bounce(fs, r, rw), Bbuf::Mapped)
+    r.map().map_or_else(|| Src::Bounced(bio_bounce(fs, r)), Src::Mapped)
+}
+
+/// Where @r's data is to be written: the bio's own memory if it can be, else a
+/// buffer to copy back from.
+pub(crate) fn map_or_alloc<'a>(fs: &'a Fs, r: BioRange<'a>) -> Dst<'a> {
+    assert!(r.len() as usize <= extent_max(fs), "mapping {} bytes, past encoded_extent_max {}",
+            r.len(), extent_max(fs));
+
+    r.map().map_or_else(|| Dst::Bounced(bounce_alloc(fs, r.len() as usize, WRITE)), Dst::Mapped)
 }
 
 // ── Decompression ────────────────────────────────────────────────────────
 
-pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
+/// All of @dst's uncompressed_size written, or an error.
+pub(crate) fn buf_uncompress(fs: &Fs, dst: Out<'_>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
     -> Result<(), BchError>
 {
     let t = crc.compression_type.get();
@@ -257,7 +283,7 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice
     }
 
     let (src_len, dst_len) = ((crc.compressed_size as usize) << 9, (crc.uncompressed_size as usize) << 9);
-    assert!(src.len() >= src_len && dst.len() >= dst_len && !src.overlaps(&dst),
+    assert!(src.len() >= src_len && dst.len() >= dst_len && !dst.overlaps(&src),
             "decompressing {src_len} bytes from a buffer of {} into {dst_len} of {}, or overlapping",
             src.len(), dst.len());
     let (src, dst) = (src.sub(0..src_len), dst.sub(0..dst_len));
@@ -348,15 +374,16 @@ pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: c::bch
     }
 
     let mut dst_buf = if dst.len() as usize == dst_len {
-        map_or_bounce(fs, dst, WRITE)
+        map_or_alloc(fs, dst)
     } else {
-        bounce_alloc(fs, dst_len, WRITE)
+        Dst::Bounced(bounce_alloc(fs, dst_len, WRITE))
     };
-    let mut src_buf = map_or_bounce(fs, src, READ);
+    let mut src_buf = map_or_bounce(fs, src);
 
-    let ret = decompress_err(fs, buf_uncompress(fs, dst_buf.data(), src_buf.data(), &crc));
-    if ret.is_ok() && !dst_buf.mapped() {
-        dst.copy_from_volatile(dst_buf.data().sub(((crc.offset as usize) << 9)..dst_len));
+    let ret = decompress_err(fs, buf_uncompress(fs, dst_buf.out(), src_buf.data(), &crc));
+    if let (Ok(()), Dst::Bounced(b)) = (&ret, &dst_buf) {
+        // SAFETY: decompressed into, all of it
+        dst.copy_from(&unsafe { b.assume_init_ref() }[(crc.offset as usize) << 9..]);
     }
     ret
 }
@@ -385,7 +412,7 @@ fn compress_workspace_size(fs: &Fs, t: usize, level: u32) -> usize {
 
 /// The compressed length; if it didn't fit, negative - how much of @src
 /// would, if the compressor can say - or 0.
-fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: VolatileSlice<'_>, src: &[u8], t: usize, level: u32)
+fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: Out<'_>, src: &[u8], t: usize, level: u32)
     -> isize
 {
     /*
@@ -449,7 +476,7 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: VolatileSlice<'_>,
 /// The type @src is compressed as into @dst, @src_len and @dst_len how much
 /// of each - or none or incompressible. @src a slice: what's compressed is
 /// written out, and has to be what's checksummed.
-fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], src_len: &mut usize,
+fn compress(fs: &Fs, dst: Out<'_>, dst_len: &mut usize, src: &[u8], src_len: &mut usize,
             compression_opt: u8, write_pos: Bpos) -> CompressionType {
     let block = fs.block_bytes() as usize;
 
@@ -523,7 +550,9 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
     dst.sub(*dst_len..padded).fill(0);
     *dst_len = padded;
 
-    if unlikely(verify_compress.get()) && !verify(fs, dst.sub(0..*dst_len), &src[..*src_len], compression_type, write_pos) {
+    // SAFETY: the compressor's output, and the pad after it
+    let compressed = unsafe { dst.sub(0..*dst_len).assume_init() };
+    if unlikely(verify_compress.get()) && !verify(fs, compressed, &src[..*src_len], compression_type, write_pos) {
         return CompressionType::incompressible;
     }
     assert!(*dst_len % block == 0 && *src_len % block == 0,
@@ -540,9 +569,9 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
         ..Default::default()
     };
     let mut check = bounce_alloc(fs, src_len, WRITE);
-    buf_uncompress(fs, check.data(), dst, &crc).expect("decompressing what we just compressed");
-    // SAFETY: ours, and decompressed in full
-    if unsafe { check.data().assume_stable() } == src {
+    buf_uncompress(fs, Out::from(&mut *check), dst, &crc).expect("decompressing what we just compressed");
+    // SAFETY: decompressed into, all of it
+    if *unsafe { check.assume_init() } == *src {
         return true;
     }
 
@@ -569,17 +598,20 @@ pub(crate) fn bio_compress(fs: &Fs, dst: BioRange<'_>, dst_len: &mut usize,
     let (dst, src) = (dst.take(consume_dst), src.take(consume_src));
     (*dst_len, *src_len) = (consume_dst as usize, consume_src as usize);
 
-    let mut dst_data = map_or_bounce(fs, dst, WRITE);
-    let mut src_data = if bounce_source { bio_bounce(fs, src, READ) } else { map_or_bounce(fs, src, READ) };
+    let mut dst_data = map_or_alloc(fs, dst);
+    let mut src_data = if bounce_source { Src::Bounced(bio_bounce(fs, src)) } else { map_or_bounce(fs, src) };
 
-    // SAFETY: a copy, ours - or the bio's own pages, which C, not asking for
-    // a copy, says are stable: BCH_WRITE_pages_stable
-    let src_slice = unsafe { src_data.data().assume_stable() };
-    let t = compress(fs, dst_data.data(), dst_len, src_slice, src_len, compression_opt as u8, write_pos);
+    let src_slice: &[u8] = match &mut src_data {
+        Src::Bounced(b) => b,
+        // SAFETY: the bio's own pages, which C, not asking for a copy, says are
+        // stable: BCH_WRITE_pages_stable
+        Src::Mapped(m) => unsafe { m.data().assume_stable() },
+    };
+    let t = compress(fs, dst_data.out(), dst_len, src_slice, src_len, compression_opt as u8, write_pos);
     if t != CompressionType::none && t != CompressionType::incompressible {
-        if !dst_data.mapped() {
-            // past what's compressed, uninitialized and never submitted
-            dst.copy_from_volatile(dst_data.data());
+        if let Dst::Bounced(b) = &dst_data {
+            // SAFETY: compressed into, and padded, this far
+            dst.copy_from(unsafe { b[..*dst_len].assume_init_ref() });
         }
         assert!(*dst_len != 0 && *dst_len <= consume_dst as usize, "compressed to {dst_len} of {consume_dst} bytes");
         assert!(*src_len != 0 && *src_len <= consume_src as usize, "compressed {src_len} of {consume_src} bytes");

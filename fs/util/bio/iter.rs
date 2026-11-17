@@ -21,7 +21,7 @@ use core::ptr::NonNull;
 
 use super::{Bio, BioData};
 use crate::util::place::Contained;
-use crate::util::volatile::VolatileSlice;
+use crate::util::volatile::{Out, VolatileSlice};
 use crate::c;
 use crate::os::kernel::PAGE_SIZE;
 
@@ -180,9 +180,9 @@ impl<'a> BioRange<'a> {
         done
     }
 
-    /// As much as both have, into @dst: as copy_to(), for memory that can't be
-    /// a slice.
-    pub fn copy_to_volatile(&self, dst: VolatileSlice<'_>) -> usize {
+    /// As much as both have, into @dst: as copy_to(), for memory not yet
+    /// written.
+    pub fn copy_to_out(&self, dst: Out<'_>) -> usize {
         let mut done = 0;
         for chunk in *self {
             if done == dst.len() {
@@ -196,7 +196,7 @@ impl<'a> BioRange<'a> {
         done
     }
 
-    /// As copy_to_volatile().
+    /// As copy_to(), for memory that can't be a slice.
     pub fn copy_from_volatile(&self, src: VolatileSlice<'_>) -> usize {
         let mut done = 0;
         for chunk in *self {
