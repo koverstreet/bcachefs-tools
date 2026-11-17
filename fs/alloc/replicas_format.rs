@@ -16,11 +16,11 @@ pub struct bch_replicas_entry_v0 {
     pub devs: [u8; 0],
 }
 
-#[whole(tail = entries: [u8])]
+#[whole(tail = start: [u8], entries = thin bch_replicas_entry_v0)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_replicas_v0 {
-    pub entries: [Head<c::bch_replicas_entry_v0>; 0],
+    pub start: [Head<c::bch_replicas_entry_v0>; 0],
 }
 
 #[counted(nr_devs)]
@@ -34,10 +34,10 @@ pub struct bch_replicas_entry_v1 {
     pub devs: [u8; 0],
 }
 
-#[whole(tail = entries: [u8])]
+#[whole(tail = start: [u8], entries = thin bch_replicas_entry_v1)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_replicas {
-    pub entries: [Head<c::bch_replicas_entry_v1>; 0],
+    pub start: [Head<c::bch_replicas_entry_v1>; 0],
 }
 

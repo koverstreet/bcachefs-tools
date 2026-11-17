@@ -136,6 +136,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::alloc::replicas::SbReplicas;
 use crate::btree::bkey::ValidateFlags;
 use crate::fs::Dev;
 use crate::c;
@@ -320,17 +321,6 @@ where
 {
     let entries = UnvalidatedEntries::<E>::new(b.get(head..)?).map_while(Result::ok);
     Some(head + entries.take_while(|e| is_entry(e)).map(size_of_val).sum::<usize>())
-}
-
-/// The entries @E of a section of type @F, as read - @b its bytes, from
-/// @head on: those F::entries_end() finds, each of which fits.
-pub fn entries_as_read<'a, F, E>(b: &'a [u8], head: usize) -> impl Iterator<Item = &'a E>
-where
-    F: SbSection<Arm: SbFieldOps> + ?Sized,
-    E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a,
-{
-    let end = F::Arm::entries_end(b).unwrap_or(head);
-    UnvalidatedEntries::<E>::new(b.get(head..end).unwrap_or(&[])).map_while(Result::ok)
 }
 
 /// The section at @f in @sb, @len bytes, read with a partial entry past its
@@ -1741,7 +1731,7 @@ impl Drop for SbWrite<'_> {
 /// Validated, the walk trusts the sections' counts; Unvalidated, each is
 /// checked, and the walk ends at one that doesn't fit - which validate
 /// reports.
-pub trait SbState: InPlace + Sized {
+pub trait SbState: InPlace + SbReplicas + Sized {
     fn field_by_type(sb: &bch_sb<Self>, ty: c::SbFieldType) -> Option<&c::bch_sb_field<Self>>;
 
     /// Its section of type @F, F's arm in this state: F, its family, is an

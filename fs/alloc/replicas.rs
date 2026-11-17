@@ -25,14 +25,14 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, DataTypes, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes::RecoveryPass;
-use crate::sb::io::{entries_as_read, entries_end, SbFieldOps, SbSection, SbState};
+use crate::sb::io::{entries_end, SbFieldOps, SbSection, SbState};
 use crate::sb::members::member_exists;
 use crate::os::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::strided::StridedBuf;
-use crate::util::vstructs::{bytes_of, bytes_of_mut, from_head_ptr, Head, Unsized, Unvalidated,
+use crate::util::vstructs::{bytes_of, bytes_of_mut, from_head_ptr, Head, State, Unsized, Unvalidated,
                             Validated};
 use crate::util::{Printbuf, ToText};
 use core::fmt;
@@ -90,20 +90,14 @@ pub struct SbEntry<'a> {
     pub devs:        &'a [u8],
 }
 
-impl<'a> From<&'a Entry> for SbEntry<'a> {
-    fn from(e: &'a Entry) -> Self {
+impl<'a, S: State> From<&'a c::bch_replicas_entry_v1<S>> for SbEntry<'a> {
+    fn from(e: &'a c::bch_replicas_entry_v1<S>) -> Self {
         SbEntry { data_type: e.data_type.get(), nr_required: Some(e.nr_required), devs: &e.devs }
     }
 }
 
-impl<'a> From<&'a c::bch_replicas_entry_v1<Unvalidated>> for SbEntry<'a> {
-    fn from(e: &'a c::bch_replicas_entry_v1<Unvalidated>) -> Self {
-        SbEntry { data_type: e.data_type.get(), nr_required: Some(e.nr_required), devs: &e.devs }
-    }
-}
-
-impl<'a> From<&'a c::bch_replicas_entry_v0<Unvalidated>> for SbEntry<'a> {
-    fn from(e: &'a c::bch_replicas_entry_v0<Unvalidated>) -> Self {
+impl<'a, S: State> From<&'a c::bch_replicas_entry_v0<S>> for SbEntry<'a> {
+    fn from(e: &'a c::bch_replicas_entry_v0<S>) -> Self {
         SbEntry { data_type: e.data_type.get(), nr_required: None, devs: &e.devs }
     }
 }
@@ -293,38 +287,64 @@ pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: DataType) ->
 
 // ── The superblock's entries ─────────────────────────────────────────────
 
-/// The entries of a replicas section, @b - its bytes - as far as they go: the
-/// zeroes after the last, or one that doesn't fit.
-fn v1_entries(b: &[u8]) -> impl Iterator<Item = SbEntry<'_>> {
-    entries_as_read::<c::bch_sb_field_replicas, c::bch_replicas_entry_v1<Unvalidated>>(b, SECTION_HEAD)
-        .map(SbEntry::from)
+/// A section's entries, walked: up to the zeroes after the last.
+fn up_to_zeroes<'a, E: ?Sized + 'a>(entries: impl Iterator<Item = &'a E>) -> impl Iterator<Item = SbEntry<'a>>
+where
+    &'a E: Into<SbEntry<'a>>,
+{
+    entries.map(Into::into).take_while(|e: &SbEntry<'_>| e.data_type != DataType::free)
+}
+
+/// The entries of a replicas section as read: as far as they go - the zeroes
+/// after the last, or one that doesn't fit.
+fn v1_entries(f: &c::bch_sb_field_replicas<Unvalidated>) -> impl Iterator<Item = SbEntry<'_>> {
+    up_to_zeroes(f.entries().map_while(Result::ok))
 }
 
 /// v1_entries(), of replicas_v0.
-fn v0_entries(b: &[u8]) -> impl Iterator<Item = SbEntry<'_>> {
-    entries_as_read::<c::bch_sb_field_replicas_v0, c::bch_replicas_entry_v0<Unvalidated>>(b, SECTION_HEAD)
-        .map(SbEntry::from)
+fn v0_entries(f: &c::bch_sb_field_replicas_v0<Unvalidated>) -> impl Iterator<Item = SbEntry<'_>> {
+    up_to_zeroes(f.entries().map_while(Result::ok))
 }
 
-/// The superblock's replicas entries: replicas', if it has the section, else
-/// replicas_v0's.
-pub fn sb_entries<S: SbState>(sb: &c::bch_sb<S>) -> impl Iterator<Item = SbEntry<'_>> {
-    let v1 = S::field::<c::bch_sb_field_replicas>(sb).map(|f| v1_entries(f.as_bytes()));
-    let v0 = v1.is_none().then(|| S::field::<c::bch_sb_field_replicas_v0>(sb)).flatten()
-        .map(|f| v0_entries(f.as_bytes()));
-
+/// Replicas' entries, if the superblock has the section, else replicas_v0's.
+fn v1_or_v0<'a, V1, V0>(v1: Option<V1>, v0: impl FnOnce() -> Option<V0>) -> impl Iterator<Item = SbEntry<'a>>
+where
+    V1: Iterator<Item = SbEntry<'a>>,
+    V0: Iterator<Item = SbEntry<'a>>,
+{
+    let v0 = v1.is_none().then(v0).flatten();
     v1.into_iter().flatten().chain(v0.into_iter().flatten())
+}
+
+/// A superblock's replicas entries, as its state walks them: Validated,
+/// trusting the section, as C does; Unvalidated, as read.
+pub trait SbReplicas: State + Sized {
+    fn sb_entries(sb: &c::bch_sb<Self>) -> impl Iterator<Item = SbEntry<'_>>;
+}
+
+impl SbReplicas for Validated {
+    fn sb_entries(sb: &c::bch_sb) -> impl Iterator<Item = SbEntry<'_>> {
+        v1_or_v0(sb.field::<c::bch_sb_field_replicas>().map(|f| up_to_zeroes(f.entries())),
+                 || sb.field::<c::bch_sb_field_replicas_v0>().map(|f| up_to_zeroes(f.entries())))
+    }
+}
+
+impl SbReplicas for Unvalidated {
+    fn sb_entries(sb: &c::bch_sb<Unvalidated>) -> impl Iterator<Item = SbEntry<'_>> {
+        v1_or_v0(Self::field::<c::bch_sb_field_replicas>(sb).map(v1_entries),
+                 || Self::field::<c::bch_sb_field_replicas_v0>(sb).map(v0_entries))
+    }
 }
 
 impl<S: SbState> c::bch_sb<S> {
     /// Whether it lists journal replicas.
     pub fn has_journal(&self) -> bool {
-        sb_entries(self).any(|e| u32::from(e.data_type) == DataType::journal.0)
+        S::sb_entries(self).any(|e| u32::from(e.data_type) == DataType::journal.0)
     }
 
     /// The data types with data on @dev.
     pub fn dev_has_data(&self, dev: u32) -> DataTypes {
-        sb_entries(self)
+        S::sb_entries(self)
             .filter(|e| e.data_type.0 < 32 && e.devs.iter().any(|&d| u32::from(d) == dev))
             .fold(DataTypes::empty(), |m, e| m | e.data_type.into())
     }
@@ -690,12 +710,12 @@ fn section_to_text<'a>(out: &mut Printbuf, entries: impl Iterator<Item = SbEntry
 impl SbFieldOps for c::bch_sb_field_replicas<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_replicas<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
-        section_validate(sb, || v1_entries(f.as_bytes()), err)
+        section_validate(sb, || v1_entries(f), err)
     }
 
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
                 f: &c::bch_sb_field_replicas<Unvalidated>) {
-        section_to_text(out, v1_entries(f.as_bytes()))
+        section_to_text(out, v1_entries(f))
     }
 
     /// The table, from this section or replicas_v0: at open - after, it
@@ -703,7 +723,7 @@ impl SbFieldOps for c::bch_sb_field_replicas<Validated> {
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         assert!(!fs.flags.get(c::FsFlag::started), "replicas table rebuilt with refs held");
 
-        let mut new = ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))
+        let mut new = ReplicasCpu::from_entries(|| Validated::sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))
             .map_err(|_| BchError::from(Errcode::ENOMEM_cpu_replicas))?;
         new.sort();
         *fs.replicas.write() = new;
@@ -718,12 +738,12 @@ impl SbFieldOps for c::bch_sb_field_replicas<Validated> {
 impl SbFieldOps for c::bch_sb_field_replicas_v0<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_replicas_v0<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
-        section_validate(sb, || v0_entries(f.as_bytes()), err)
+        section_validate(sb, || v0_entries(f), err)
     }
 
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
                 f: &c::bch_sb_field_replicas_v0<Unvalidated>) {
-        section_to_text(out, v0_entries(f.as_bytes()))
+        section_to_text(out, v0_entries(f))
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
@@ -987,7 +1007,7 @@ mod tests {
         let mut sb = c::bch_sb_handle::default();
         sb.sb_realloc(0).unwrap();
         let back = |sb: &c::bch_sb_handle| {
-            let mut b = ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |_| true).unwrap();
+            let mut b = ReplicasCpu::from_entries(|| Validated::sb_entries(sb.sb()), |_| true).unwrap();
             b.sort();
             b
         };
@@ -1047,7 +1067,7 @@ mod tests {
         let f = sb.field::<V0>().unwrap();
         assert_eq!(f.as_bytes().len(), 8);
         assert!(f.as_bytes()[SECTION_HEAD + 3..].iter().all(|&b| b == 0));
-        assert_eq!(sb_entries(sb.sb()).count(), 1);
+        assert_eq!(Validated::sb_entries(sb.sb()).count(), 1);
 
         let (_, ret, err) = validate(true);
         assert!(ret != 0);
