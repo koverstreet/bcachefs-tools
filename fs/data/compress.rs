@@ -32,8 +32,8 @@
 //! type is an opt's, or incompressible, or lz4_old. A bounce buffer, Bbuf,
 //! is an extent's data as one buffer:
 //! the bio's own memory if it's virtually contiguous or can be vmapped, else
-//! a copy. A bio's memory is only ever a pointer here: it can change under us
-//! (util/bio/iter.rs).
+//! a copy. A bio's memory is only ever a VolatileSlice here: it can change
+//! under us (util/volatile.rs).
 //!
 //! Buffers and workspaces come from the allocator when it has them cheaply,
 //! else from mempools, made as each type is enabled and kept: a mempool can't
@@ -42,21 +42,19 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::c::{self, BbufType as bb, CompressionOpt as opts, Errcode as e};
+use crate::c::{self, CompressionOpt as opts, Errcode as e};
 use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
 use crate::errcode::BchError;
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
-use crate::util::{alloc::{Box, KVmalloc}, bio::BioRange,
+use crate::util::{alloc::{Box, KVmalloc}, bio::{BioRange, Mapped},
                   late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use crate::os::compress::{lz4, zlib, zstd};
 use core::ffi::{c_int, c_uint};
-use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-use core::ptr::NonNull;
-use cstruct_macros::{bitfield, bch_enum};
+use cstruct_macros::bitfield;
 use crate::format::{Bpos, CompressionType, SbFeatures};
 
 /// A compression option's value: a type, and a level - 0 for the type's
@@ -96,14 +94,6 @@ impl bch_compression_opt {
             CompressionType::none
         })
     }
-}
-
-#[bch_enum(closed)]
-#[repr(u32)]
-pub enum BbufType {
-    BB_none,
-    BB_vmap,
-    BB_pool,
 }
 
 crate::module_param! {
@@ -173,49 +163,28 @@ pub struct Compress {
 
 /*
  * Bounce buffer for the encode/decode paths: either a direct mapping of a
- * bio's pages (BB_none/BB_vmap - no copy) or a private allocation the caller
- * can scribble on without touching the bio.
+ * bio's pages (no copy) or a private allocation the caller can scribble on
+ * without touching the bio.
  */
-/// Freed on drop. 'a is what it borrows: the bio whose pages it maps, or the
-/// filesystem whose pool it's from - a BB_pool's memory, which it holds.
-pub(crate) struct Bbuf<'a> {
-    b:      NonNull<u8>,
-    type_:  bb,
-    len:    usize,
-    pooled: Option<Box<[MaybeUninit<u8>], &'a Mempool<KVmalloc>>>,
-    _a:     PhantomData<&'a ()>,
+/// 'a is what it borrows: the bio whose memory it maps, or the filesystem
+/// whose pool it's from.
+pub(crate) enum Bbuf<'a> {
+    Mapped(Mapped<'a>),
+    Pool(Box<[MaybeUninit<u8>], &'a Mempool<KVmalloc>>),
 }
 
-impl<'a> Bbuf<'a> {
-    fn new(b: NonNull<u8>, type_: bb, len: usize) -> Self {
-        Bbuf { b, type_, len, pooled: None, _a: PhantomData }
-    }
-
+impl Bbuf<'_> {
     /// Ours, or the bio's - which may be written meanwhile.
-    pub(crate) fn data(&self) -> VolatileSlice<'_> {
-        // SAFETY: @len bytes, until it's dropped
-        unsafe { VolatileSlice::from_raw(self.b, self.len) }
+    pub(crate) fn data(&mut self) -> VolatileSlice<'_> {
+        match self {
+            Bbuf::Mapped(m) => m.data(),
+            Bbuf::Pool(b) => VolatileSlice::from(&mut **b),
+        }
     }
 
     /// The bio's own memory: nothing to copy back.
     fn mapped(&self) -> bool {
-        matches!(self.type_, bb::BB_none | bb::BB_vmap)
-    }
-}
-
-impl Drop for Bbuf<'_> {
-    fn drop(&mut self) {
-        match self.type_ {
-            bb::BB_none => {}
-            #[cfg(kernel)]
-            bb::BB_vmap => unsafe {
-                c::vunmap(self.b.as_ptr().cast::<core::ffi::c_void>().map_addr(|a| a & !(crate::os::kernel::PAGE_SIZE - 1)))
-            },
-            #[cfg(not(kernel))]
-            bb::BB_vmap => unreachable!(),
-            /* its Bbuf's Box's */
-            bb::BB_pool => {}
-        }
+        matches!(self, Bbuf::Mapped(_))
     }
 }
 
@@ -246,95 +215,23 @@ pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
      * userspace - but it is root-only and explicitly unsafe, so we ignore
      * it.
      */
-    let mut pooled = Box::try_new_uninit_slice_in(size, &*fs.compress.bounce[rw])
-        .expect("a pool's allocation: it waits for an element");
-    let mut b = Bbuf::new(Box::as_non_null(&mut pooled).cast(), bb::BB_pool, size);
-    b.pooled = Some(pooled);
-    b
+    Bbuf::Pool(Box::try_new_uninit_slice_in(size, &*fs.compress.bounce[rw])
+        .expect("a pool's allocation: it waits for an element"))
 }
 
 pub(crate) fn bio_bounce<'f>(fs: &'f Fs, r: BioRange<'_>, rw: usize) -> Bbuf<'f> {
-    let b = bounce_alloc(fs, r.len() as usize, rw);
+    let mut b = bounce_alloc(fs, r.len() as usize, rw);
     if rw == READ {
         r.copy_to_volatile(b.data());
     }
     b
 }
 
-/// Where @r starts, if it's virtually contiguous: no HIGHMEM, so every
-/// chunk's in the direct map.
-#[cfg(not(CONFIG_HIGHMEM))]
-fn virt_contig(r: BioRange<'_>) -> Option<NonNull<u8>> {
-    let mut chunks = r.into_iter().map(|c| (c.with_mapped(|p, _| p), c.len() as usize));
-    let (start, len) = chunks.next()?;
-    let mut end = start.wrapping_add(len);
-    for (p, len) in chunks {
-        if p != end {
-            return None;
-        }
-        end = p.wrapping_add(len);
-    }
-    NonNull::new(start)
-}
-
-/// @r's pages mapped as one - if it's whole pages but where it starts and
-/// ends.
-#[cfg(kernel)]
-fn vmap(r: BioRange<'_>) -> Option<Bbuf<'_>> {
-    use crate::util::alloc::KVVec;
-    use crate::util::bio::{nth_page, Segment};
-    use crate::os::kernel::PAGE_SIZE;
-    use core::ptr;
-
-    let pages_of = |s: &Segment<'_>| ((s.offset + s.len) as usize).div_ceil(PAGE_SIZE);
-    let offset = r.segments().next()?.offset as usize;
-    let mut seen = 0;
-    for s in r.segments() {
-        if (seen != 0 && s.offset != 0) ||
-           (seen + s.len != r.len() && (s.offset + s.len) as usize % PAGE_SIZE != 0) {
-            return None;
-        }
-        seen += s.len;
-    }
-    let nr = (offset + r.len() as usize).div_ceil(PAGE_SIZE);
-
-    let mut stack = [ptr::null_mut::<c::page>(); 16];
-    let mut heap;
-    let pages: &mut [*mut c::page] = if nr <= stack.len() {
-        &mut stack[..nr]
-    } else {
-        heap = KVVec::from_elem(ptr::null_mut(), nr).ok()?;
-        &mut heap
-    };
-
-    let mut i = 0;
-    for s in r.segments() {
-        for n in 0..pages_of(&s) {
-            // SAFETY: the segment's pages
-            pages[i] = unsafe { nth_page(s.page.as_ptr(), n) };
-            i += 1;
-        }
-    }
-
-    // SAFETY: nr of the bio's pages
-    let data = unsafe { c::rust_vmap(pages.as_mut_ptr(), nr as c_uint) };
-    // SAFETY: within its first page
-    Some(Bbuf::new(unsafe { NonNull::new(data.cast::<u8>())?.add(offset) }, bb::BB_vmap, r.len() as usize))
-}
-
 pub(crate) fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Bbuf<'a> {
     assert!(r.len() as usize <= extent_max(fs), "mapping {} bytes, past encoded_extent_max {}",
             r.len(), extent_max(fs));
 
-    #[cfg(not(CONFIG_HIGHMEM))]
-    if let Some(p) = virt_contig(r) {
-        return Bbuf::new(p, bb::BB_none, r.len() as usize);
-    }
-    #[cfg(kernel)]
-    if let Some(b) = vmap(r) {
-        return b;
-    }
-    bio_bounce(fs, r, rw)
+    r.map().map_or_else(|| bio_bounce(fs, r, rw), Bbuf::Mapped)
 }
 
 // ── Decompression ────────────────────────────────────────────────────────
@@ -450,12 +347,12 @@ pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: c::bch
         return decompress_err(fs, fs.throw(e::decompress_exceeded_max_encoded_extent));
     }
 
-    let dst_buf = if dst.len() as usize == dst_len {
+    let mut dst_buf = if dst.len() as usize == dst_len {
         map_or_bounce(fs, dst, WRITE)
     } else {
         bounce_alloc(fs, dst_len, WRITE)
     };
-    let src_buf = map_or_bounce(fs, src, READ);
+    let mut src_buf = map_or_bounce(fs, src, READ);
 
     let ret = decompress_err(fs, buf_uncompress(fs, dst_buf.data(), src_buf.data(), &crc));
     if ret.is_ok() && !dst_buf.mapped() {
@@ -642,7 +539,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
         compression_type:  t.into(),
         ..Default::default()
     };
-    let check = bounce_alloc(fs, src_len, WRITE);
+    let mut check = bounce_alloc(fs, src_len, WRITE);
     buf_uncompress(fs, check.data(), dst, &crc).expect("decompressing what we just compressed");
     // SAFETY: ours, and decompressed in full
     if unsafe { check.data().assume_stable() } == src {
@@ -672,8 +569,8 @@ pub(crate) fn bio_compress(fs: &Fs, dst: BioRange<'_>, dst_len: &mut usize,
     let (dst, src) = (dst.take(consume_dst), src.take(consume_src));
     (*dst_len, *src_len) = (consume_dst as usize, consume_src as usize);
 
-    let dst_data = map_or_bounce(fs, dst, WRITE);
-    let src_data = if bounce_source { bio_bounce(fs, src, READ) } else { map_or_bounce(fs, src, READ) };
+    let mut dst_data = map_or_bounce(fs, dst, WRITE);
+    let mut src_data = if bounce_source { bio_bounce(fs, src, READ) } else { map_or_bounce(fs, src, READ) };
 
     // SAFETY: a copy, ours - or the bio's own pages, which C, not asking for
     // a copy, says are stable: BCH_WRITE_pages_stable

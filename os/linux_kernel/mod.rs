@@ -49,4 +49,5 @@ pub mod thread_with_file;
 mod user_pages;
 pub mod vfs_inode;
 pub mod vm;
+pub mod vmap;
 pub mod workqueue;

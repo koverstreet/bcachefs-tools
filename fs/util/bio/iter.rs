@@ -458,6 +458,102 @@ pub(super) fn folio<'a>(rest: &mut BioRange<'a>) -> Option<FolioVec<'a>> {
     })
 }
 
+// ── Mapped as one ────────────────────────────────────────────────────────
+
+/// A range's memory as one buffer, without a copy: in place, its chunks one
+/// after another in the direct map; or in the kernel its pages vmapped,
+/// unmapped when it's dropped.
+pub enum Mapped<'a> {
+    InPlace(VolatileSlice<'a>),
+    #[cfg(kernel)]
+    Vmap { vmap: crate::os::vmap::Vmap, offset: usize, len: usize },
+}
+
+impl Mapped<'_> {
+    pub fn data(&self) -> VolatileSlice<'_> {
+        match self {
+            Mapped::InPlace(data) => *data,
+            #[cfg(kernel)]
+            Mapped::Vmap { vmap, offset, len } => vmap.data().sub(*offset..offset + len),
+        }
+    }
+}
+
+impl<'a> BioRange<'a> {
+    /// None if it can't be: not virtually contiguous, nor whole pages but
+    /// where it starts and ends.
+    pub fn map(self) -> Option<Mapped<'a>> {
+        #[cfg(not(CONFIG_HIGHMEM))]
+        if let Some(data) = self.in_place() {
+            return Some(Mapped::InPlace(data));
+        }
+        #[cfg(kernel)]
+        return self.vmap();
+        #[cfg(not(kernel))]
+        None
+    }
+
+    /// Where it is, if it's virtually contiguous: no HIGHMEM, so every
+    /// chunk's in the direct map.
+    #[cfg(not(CONFIG_HIGHMEM))]
+    fn in_place(self) -> Option<VolatileSlice<'a>> {
+        let mut chunks = self.into_iter();
+        let first = chunks.next()?;
+        let At::Direct(start) = first.at;
+        let mut end = start.as_ptr().wrapping_add(first.len as usize);
+        for c in chunks {
+            let At::Direct(p) = c.at;
+            if p.as_ptr() != end {
+                return None;
+            }
+            end = p.as_ptr().wrapping_add(c.len as usize);
+        }
+        // SAFETY: its bytes, one chunk after another, the bio's for 'a
+        Some(unsafe { VolatileSlice::from_raw(start, self.len() as usize) })
+    }
+
+    #[cfg(kernel)]
+    fn vmap(self) -> Option<Mapped<'a>> {
+        use crate::os::vmap::Vmap;
+        use crate::util::alloc::KVVec;
+        use core::ptr;
+
+        let pages_of = |s: &Segment<'_>| ((s.offset + s.len) as usize).div_ceil(PAGE_SIZE);
+        let offset = self.segments().next()?.offset as usize;
+        let mut seen = 0;
+        for s in self.segments() {
+            if (seen != 0 && s.offset != 0) ||
+               (seen + s.len != self.len() && (s.offset + s.len) as usize % PAGE_SIZE != 0) {
+                return None;
+            }
+            seen += s.len;
+        }
+        let nr = (offset + self.len() as usize).div_ceil(PAGE_SIZE);
+
+        let mut stack = [ptr::null_mut::<c::page>(); 16];
+        let mut heap;
+        let pages: &mut [*mut c::page] = if nr <= stack.len() {
+            &mut stack[..nr]
+        } else {
+            heap = KVVec::from_elem(ptr::null_mut(), nr).ok()?;
+            &mut heap
+        };
+
+        let mut i = 0;
+        for s in self.segments() {
+            for n in 0..pages_of(&s) {
+                // SAFETY: the segment's pages
+                pages[i] = unsafe { nth_page(s.page.as_ptr(), n) };
+                i += 1;
+            }
+        }
+
+        // SAFETY: the bio's pages, which it holds for 'a
+        let vmap = unsafe { Vmap::new(pages) }?;
+        Some(Mapped::Vmap { vmap, offset, len: self.len() as usize })
+    }
+}
+
 #[cfg(all(test, not(kernel)))]
 mod tests {
     use super::super::{Bio, BioBox, BioOwner, BioRange};

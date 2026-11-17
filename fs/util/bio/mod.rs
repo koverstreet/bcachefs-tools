@@ -103,9 +103,7 @@ pub mod pages;
 
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
-pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Segment, Segments, Walk};
-#[cfg(kernel)]
-pub(crate) use iter::nth_page;
+pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
 pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
                   Buffers, IoBuf, MapBuf};
 pub use owned::{bio_box_size, bio_put, inline_bio, inline_vecs, submit_gathered_borrowed, BioBox, BioInPlace, BioLend,

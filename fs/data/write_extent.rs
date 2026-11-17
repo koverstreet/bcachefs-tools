@@ -159,7 +159,7 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
         return decompress_err(fs, Err(fs.err(Errcode::decompress_exceeded_max_encoded_extent)));
     }
 
-    let dst_buf = bounce_alloc(fs, dst_len, WRITE);
+    let mut dst_buf = bounce_alloc(fs, dst_len, WRITE);
 
     /*
      * Encrypted data has to be decrypted before it can be decompressed, and
@@ -170,7 +170,7 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
      */
     let encrypted = crc.csum_type.get().is_encryption();
     let range = unsafe { Bio::from_raw(bio) }.range();
-    let src_buf = if encrypted { bio_bounce(fs, range, READ) } else { map_or_bounce(fs, range, READ) };
+    let mut src_buf = if encrypted { bio_bounce(fs, range, READ) } else { map_or_bounce(fs, range, READ) };
 
     if encrypted {
         let src = src_buf.data();
