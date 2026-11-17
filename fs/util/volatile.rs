@@ -12,6 +12,7 @@
 //! own read buffer gets a checksum error, and the retry bounces.
 
 use core::marker::PhantomData;
+use core::mem::MaybeUninit;
 use core::ops::Range;
 use core::ptr::{self, NonNull};
 
@@ -62,6 +63,20 @@ impl<'a> VolatileSlice<'a> {
         unsafe { ptr::write_bytes(self.as_ptr(), b, self.len) }
     }
 
+    /// Panics if the lengths differ, as a slice's does.
+    pub fn copy_to_slice(&self, dst: &mut [u8]) {
+        assert_eq!(self.len, dst.len(), "copying a volatile slice into a slice of another length");
+        // SAFETY: the invariant: no reference is to it, so @dst isn't
+        unsafe { ptr::copy_nonoverlapping(self.as_ptr(), dst.as_mut_ptr(), self.len) }
+    }
+
+    /// Panics if the lengths differ, as a slice's does.
+    pub fn copy_from_slice(&self, src: &[u8]) {
+        assert_eq!(self.len, src.len(), "copying a slice into a volatile slice of another length");
+        // SAFETY: as copy_to_slice()
+        unsafe { ptr::copy_nonoverlapping(src.as_ptr(), self.as_ptr(), self.len) }
+    }
+
     /// As a slice.
     ///
     /// # Safety
@@ -70,5 +85,13 @@ impl<'a> VolatileSlice<'a> {
     pub unsafe fn assume_stable(self) -> &'a [u8] {
         // SAFETY: the caller's
         unsafe { core::slice::from_raw_parts(self.as_ptr(), self.len) }
+    }
+}
+
+/// Memory of our own, written and read only through it while it's borrowed.
+impl<'a> From<&'a mut [MaybeUninit<u8>]> for VolatileSlice<'a> {
+    fn from(b: &'a mut [MaybeUninit<u8>]) -> Self {
+        // SAFETY: borrowed for 'a, so no other reference is used meanwhile
+        unsafe { Self::from_raw(NonNull::from(&mut *b).cast(), b.len()) }
     }
 }
