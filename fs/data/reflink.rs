@@ -45,16 +45,17 @@ use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::sb::errors::FsckFlags;
 use crate::snapshots::subvolume;
-use crate::types::{GenRadix, Le32, Le64};
+use crate::data_structures::genradix::SharedGenRadix;
+use crate::types::{Le32, Le64};
 use crate::os::kernel::{fatal_signal_pending, unlikely};
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Unvalidated};
 use crate::util::Printbuf;
 use crate::{bch_err, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err, prt};
-use core::cell::UnsafeCell;
 use core::mem::size_of;
 use core::ops::Range;
-use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::Relaxed};
+use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering::Relaxed};
+use cstruct_macros::MaybeZeroable;
 use crate::format::{Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, MetadataVersion, SbFeature};
 
 pub type IndirectTypes = ByFlag<{ BkeyTypeFlags_bits::indirect }>;
@@ -115,22 +116,20 @@ impl c::bkey {
 
 // ── gc ───────────────────────────────────────────────────────────────────
 
-/// An indirect extent, as gc counts the reflink_p references to it.
+/// An indirect extent, as gc counts the reflink_p references to it. Relaxed
+/// throughout: offset and size are published with the table, as its nr() is.
+#[derive(MaybeZeroable)]
 struct GcEntry {
-    offset:   u64,
-    size:     u32,
+    offset:   AtomicU64,
+    size:     AtomicU32,
     refcount: AtomicI32,
 }
-
-// SAFETY: zeroed is offset and size 0 and a refcount of 0 - an AtomicI32 is
-// an i32 - which pin-init doesn't say of atomics
-unsafe impl ::pin_init::Zeroable for GcEntry {}
 crate::genradix_entry!(GcEntry);
 
 /*
  * gc's table of indirect extents: gc counts every reflink_p's references into
  * it, and at its end checks the reflink btree's refcounts against it. Rust's
- * alone, as GenRadix<GcEntry> - C reaches it through the functions below.
+ * alone, as SharedGenRadix<GcEntry> - C reaches it through the functions below.
  *
  * Who uses it when - gc's phase, c->gc.pos, is what orders them:
  *
@@ -162,46 +161,25 @@ crate::genradix_entry!(GcEntry);
  * btree.trans.barrier, which every transaction already holds: gc would wait
  * for it holding gc.lock, which a btree update waits for holding it.
  *
- * So it's shared through &Fs, and its build and free - the two that need it
- * to themselves - are unsafe: their callers vouch for the phase.
+ * So it's shared through &Fs, its entries atomic: the phase is what keeps the
+ * counts right - a reader out of turn would count against a part-built table,
+ * wrongly but safely. The free is what's unsafe - SharedGenRadix::free()'s
+ * nothing using it, which the hole above leaves its caller unable to keep.
  */
 pub(crate) struct ReflinkGc {
-    table: UnsafeCell<GenRadix<GcEntry>>,
+    table: SharedGenRadix<GcEntry>,
     nr:    AtomicUsize,
 }
 
-// SAFETY: the protocol above - shared, the table is only read: genradix
-// lookups are safe from any thread, and refcount is atomic
-unsafe impl Sync for ReflinkGc {}
-
 impl ReflinkGc {
     pub(crate) fn new() -> Self {
-        ReflinkGc { table: UnsafeCell::new(::pin_init::zeroed()), nr: AtomicUsize::new(0) }
-    }
-
-    fn table(&self) -> &GenRadix<GcEntry> {
-        // SAFETY: shared, it's only read - as above
-        unsafe { &*self.table.get() }
-    }
-
-    /// # Safety
-    /// gc's thread, with nothing else using the table: before gc.pos leaves
-    /// not_running, while it's in the reflink btree, or after it's back.
-    #[allow(clippy::mut_from_ref)]
-    unsafe fn table_mut(&self) -> &mut GenRadix<GcEntry> {
-        unsafe { &mut *self.table.get() }
+        ReflinkGc { table: SharedGenRadix::new(), nr: AtomicUsize::new(0) }
     }
 
     fn nr(&self) -> usize {
         // Relaxed: set before gc.pos passes reflink, whose seqcount publishes it; read
         // after gc_reflink_done() zeroes it, it's 0, and nothing is counted
         self.nr.load(Relaxed)
-    }
-}
-
-impl Drop for ReflinkGc {
-    fn drop(&mut self) {
-        self.table.get_mut().free();
     }
 }
 
@@ -221,15 +199,16 @@ fn gc_segment(
     let mut next_idx = p.refd().end;
 
     if r_idx < gc.nr() {
-        let r = gc.table().get(r_idx).expect("a gc table entry below its number");
-        next_idx = next_idx.min(r.offset - r.size as u64);
+        let r = gc.table.get(r_idx).expect("a gc table entry below its number");
+        let offset = r.offset.load(Relaxed);
+        next_idx = next_idx.min(offset - r.size.load(Relaxed) as u64);
 
         if *idx >= next_idx {
             if flags.contains(UpdateTriggerFlags::GC) {
                 assert!(r.refcount.fetch_add(add, Relaxed) + add >= 0,
-                        "reflink gc refcount underflow at {}", r.offset);
+                        "reflink gc refcount underflow at {offset}");
             }
-            *idx = r.offset;
+            *idx = offset;
             return Ok(());
         }
     }
@@ -258,7 +237,7 @@ fn gc_idx(
     let (mut l, mut r) = (0, gc.nr());
     while l < r {
         let m = l + (r - l) / 2;
-        if gc.table().get(m).expect("a gc table entry below its number").offset <= idx {
+        if gc.table.get(m).expect("a gc table entry below its number").offset.load(Relaxed) <= idx {
             l = m + 1;
         } else {
             r = m;
@@ -282,16 +261,16 @@ fn gc_write_reflink_key(
     let fs = t.fs();
     let Some(k) = k.arm::<Indirect>() else { return Ok(()) };
     let refcount = k.refcount();
-    let table = fs.reflink_gc.table();
+    let table = &fs.reflink_gc.table;
 
     let r = loop {
         match table.get(*idx) {
-            Some(r) if r.offset < k.k.p.offset => *idx += 1,
-            r                                   => break r,
+            Some(r) if r.offset.load(Relaxed) < k.k.p.offset => *idx += 1,
+            r                                                 => break r,
         }
     };
 
-    let Some(r) = r.filter(|r| r.offset == k.k.p.offset && r.size == k.k.size) else {
+    let Some(r) = r.filter(|r| r.offset.load(Relaxed) == k.k.p.offset && r.size.load(Relaxed) == k.k.size) else {
         bch_err!(fs, "unexpected inconsistency walking reflink table at gc finish");
         return fs.throw(Errcode::EINVAL_reflink_gc_table_mismatch);
     };
@@ -338,25 +317,24 @@ pub(crate) fn gc_reflink_add(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     }
 
     let gc = &fs.reflink_gc;
-    // SAFETY: gc's thread, gc.pos in the reflink btree - see ReflinkGc
-    let table = unsafe { gc.table_mut() };
     let mut nr = gc.nr();
     let offset = k.k.p.offset;
 
-    if let Some(last) = nr.checked_sub(1).and_then(|i| table.get(i)) {
-        if last.offset == offset {
+    if let Some(last) = nr.checked_sub(1).and_then(|i| gc.table.get(i)) {
+        let last = last.offset.load(Relaxed);
+        if last == offset {
             nr -= 1;
         } else {
-            assert!(last.offset < offset, "reflink gc table built out of order: {offset} after {}",
-                    last.offset);
+            assert!(last < offset, "reflink gc table built out of order: {offset} after {last}");
         }
     }
 
-    let r = table.get_or_alloc(nr)
+    gc.table.prealloc(nr)
         .map_err(|_| fs.err(Errcode::ENOMEM_gc_reflink_start))?;
-    r.offset   = offset;
-    r.size     = k.k.size;
-    r.refcount = AtomicI32::new(0);
+    let r = gc.table.get(nr).expect("a gc table entry, just allocated");
+    r.offset.store(offset, Relaxed);
+    r.size.store(k.k.size, Relaxed);
+    r.refcount.store(0, Relaxed);
     gc.nr.store(nr + 1, Relaxed);
     Ok(())
 }
@@ -367,7 +345,7 @@ pub(crate) fn gc_reflink_add(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
 /// gc.pos is back to not_running, and nothing is still counting into the
 /// table - which isn't guaranteed: see ReflinkGc.
 pub(crate) unsafe fn gc_reflink_free(fs: &Fs) {
-    unsafe { fs.reflink_gc.table_mut() }.free();
+    unsafe { fs.reflink_gc.table.free() }
 }
 
 // ── reflink pointers ─────────────────────────────────────────────────────
