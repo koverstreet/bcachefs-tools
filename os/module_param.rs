@@ -190,6 +190,94 @@ macro_rules! module_param {
     };
 }
 
+/// A static key, a StaticKeyFalse, as a bool module parameter @name, perm
+/// 0644: set, it's enabled or disabled; read, it's Y or N.
+#[cfg(kernel)]
+#[macro_export]
+macro_rules! module_param_static_key {
+    ($name:ident, $key:path, $desc:expr) => {
+        $crate::module_param_cb!($name, $crate::os::jump_label::StaticKeyFalse::as_ptr(&$key).cast(),
+                                 &$crate::os::module_param::STATIC_KEY_OPS, "static_key_t", 0o644, $desc);
+    };
+}
+
+#[cfg(kernel)]
+#[doc(hidden)]
+pub use static_key::OPS as STATIC_KEY_OPS;
+
+#[cfg(kernel)]
+mod static_key {
+    use ::kernel::bindings::{kernel_param, kernel_param_ops, param_set_bool};
+    use crate::os::jump_label::StaticKeyFalse;
+    use crate::util::ffi::c_char;
+    use core::ffi::c_int;
+    use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
+
+    /// # Safety
+    /// @kp is a parameter module_param_static_key!() registered: its arg is
+    /// a StaticKeyFalse, a static.
+    unsafe fn key(kp: *const kernel_param) -> &'static StaticKeyFalse {
+        unsafe { &*(*kp).__bindgen_anon_1.arg.cast::<StaticKeyFalse>() }
+    }
+
+    /// Its count, an atomic_t.
+    fn enabled(key: &StaticKeyFalse) -> &AtomicI32 {
+        unsafe { AtomicI32::from_ptr(&raw mut (*key.as_ptr()).key.enabled.counter) }
+    }
+
+    #[cfg(CONFIG_JUMP_LABEL)]
+    fn set_key(key: &StaticKeyFalse, v: bool) {
+        unsafe {
+            let k = &raw mut (*key.as_ptr()).key;
+            if v {
+                ::kernel::bindings::static_key_enable(k)
+            } else {
+                ::kernel::bindings::static_key_disable(k)
+            }
+        }
+    }
+
+    #[cfg(not(CONFIG_JUMP_LABEL))]
+    fn set_key(key: &StaticKeyFalse, v: bool) {
+        let (to, from) = (i32::from(v), i32::from(!v));
+        let n = enabled(key).load(Relaxed);
+        if n != from {
+            crate::warn_on_once!(n != to);
+            return;
+        }
+        enabled(key).store(to, Relaxed);
+    }
+
+    unsafe extern "C" fn set(val: *const c_char, kp: *const kernel_param) -> c_int {
+        /* Match bool exactly, by re-using it. */
+        let key = unsafe { key(kp) };
+        let mut boolkp = unsafe { kp.read() };
+        let mut v = false;
+
+        boolkp.__bindgen_anon_1.arg = (&raw mut v).cast();
+
+        let ret = unsafe { param_set_bool(val, &boolkp) };
+        if ret != 0 {
+            return ret;
+        }
+        set_key(key, v);
+        0
+    }
+
+    unsafe extern "C" fn get(buffer: *mut c_char, kp: *const kernel_param) -> c_int {
+        let s = if enabled(unsafe { key(kp) }).load(Relaxed) > 0 { b"Y\n\0" } else { b"N\n\0" };
+        unsafe { buffer.copy_from_nonoverlapping(s.as_ptr().cast(), s.len()) };
+        2
+    }
+
+    pub static OPS: kernel_param_ops = kernel_param_ops {
+        flags: ::kernel::bindings::KERNEL_PARAM_OPS_FL_NOARG,
+        set:   Some(set),
+        get:   Some(get),
+        free:  None,
+    };
+}
+
 /// A module parameter's registration, as C's module_param_cb(),
 /// __MODULE_PARM_TYPE() and MODULE_PARM_DESC(): @name, its value at @arg, read
 /// and written by @ops, shown in modinfo as of type @c_type.

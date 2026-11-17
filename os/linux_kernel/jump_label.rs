@@ -17,6 +17,10 @@
 // C's static_branch_unlikely(), out of line, where Rust has no asm of its own.
 pub use crate::c::bch2_static_branch_unlikely;
 
+#[path = "../jump_label.rs"]
+mod common;
+pub use common::StaticKeyFalse;
+
 #[cfg(all(CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64")))]
 include!(concat!(env!("OUT_DIR"), "/jump_label_asm.rs"));
 
@@ -28,12 +32,19 @@ pub(crate) use static_branch_asm;
 /// static_branch_unlikely(). As the kernel crate's macro takes it: a symbol, as
 /// the asm's __jump_table entry has to name one.
 ///
+/// Given only @key, a StaticKeyFalse static, it's safe.
+///
 /// # Safety
 /// @key is a static, its @field a struct static_key_false - in an UnsafeCell, if
 /// Rust defines it - that only the static key API writes.
 #[macro_export]
 macro_rules! static_branch_unlikely {
-    ($key:path, $keytyp:ty, $field:ident) => {{
+    ($key:path) => {{
+        let _: &'static $crate::os::jump_label::StaticKeyFalse = &$key;
+        // SAFETY: a StaticKeyFalse's key, which only the static key API writes
+        unsafe { $crate::static_branch_unlikely!($key, $crate::os::jump_label::StaticKeyFalse, 0) }
+    }};
+    ($key:path, $keytyp:ty, $field:tt) => {{
         #[cfg(all(CONFIG_JUMP_LABEL, target_arch = "x86_64"))]
         let enabled = 'enabled: {
             ::core::arch::asm!(
