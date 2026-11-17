@@ -15,7 +15,7 @@ use crate::errcode::BchError;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
-use crate::util::alloc::{Box, KVVec, KVmalloc, Kmalloc};
+use crate::util::alloc::{Box, Flags, KVVec, KVmalloc, Kmalloc};
 use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::Printbuf;
@@ -489,20 +489,27 @@ pub const BKEY_CACHED_ACCESSED: u32 = 0;
 pub const BKEY_CACHED_DIRTY: u32 = 1;
 pub const BKEY_CACHED_IMMEDIATE_FLUSH: u32 = 2;
 
+#[pin_data]
 #[repr(C)]
-#[derive(MaybeZeroable, RcuHead)]
+#[derive(MaybeZeroable, RcuHead, Init)]
+#[init_args(lock_flags: cs::SixLockInitFlags)]
 pub struct bkey_cached {
+    #[pin]
+    #[init(cs::btree_bkey_cached_common::init(true, lock_flags, Flags::empty()))]
     pub c: cs::btree_bkey_cached_common,
 
+    #[init(AtomicUsize::new(0))]
     pub flags: AtomicUsize,
     /* set write locked; read unlocked, by the table's lookups and the flush walk */
     pub key: Volatile<cs::bkey_cached_key>,
 
     pub journal: cs::journal_entry_pin,
 
+    #[init(LockedBy::new(Default::default(), ()))]
     pub contents: LockedBy<crate::btree::key_cache::EntryContents>,
     /* the key cache's lookups lock it: dropped once they're past it */
     #[rcu_head]
+    #[init(unsafe { RcuDropMember::new() })]
     pub rcu: RcuDropMember<RcuHead>,
 }
 

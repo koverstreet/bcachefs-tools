@@ -27,7 +27,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
 use crate::prt;
-use crate::util::alloc::{init_at, Box, Flags, Kmalloc};
+use crate::util::alloc::{init_at, Box, Kmalloc};
 use crate::util::hash::GoldenRatio;
 use crate::os::kernel::local_clock;
 use crate::os::module::Quiesced;
@@ -47,7 +47,7 @@ use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::{placed, Init, MaybeZeroable, TypeInfo};
-use pin_init::pin_data;
+use pin_init::{pin_data, pin_init, PinInit};
 
 pub(crate) type KeyTable = Cuckoo<Entry<c::bkey_cached>, GoldenRatio>;
 
@@ -101,9 +101,14 @@ fn inc(n: &AtomicUsize) {
 /// An entry, by its lock's readers: percpu, or not. Reused before the btree
 /// trans SRCU's readers are past it, as lookups lock what they find and then
 /// check its key.
+#[pin_data]
 #[repr(transparent)]
 #[derive(RcuHead)]
-pub(crate) struct Cached<const PCPU: bool>(#[rcu_head] c::bkey_cached);
+pub(crate) struct Cached<const PCPU: bool> {
+    #[pin]
+    #[rcu_head]
+    ck: c::bkey_cached,
+}
 
 unsafe impl<const PCPU: bool> RcuRealloc for Cached<PCPU> {
     /*
@@ -112,23 +117,18 @@ unsafe impl<const PCPU: bool> RcuRealloc for Cached<PCPU> {
      * Called under p->lock; six_trylock is safe there (atomic ops only).
      */
     fn try_claim(&self) -> bool {
-        bkey_cached_trylock(&self.0)
+        bkey_cached_trylock(&self.ck)
             .map(|ck| ck.into_parts().1.into_raw())
             .is_some()
     }
 
-    unsafe fn construct(ck: NonNull<Self>) {
+    fn init() -> impl PinInit<Self, BchError> {
         let flags = if PCPU {
             c::SixLockInitFlags::pcpu
         } else {
             c::SixLockInitFlags::empty()
         };
-        let ck = ck.cast::<c::bkey_cached>();
-        let common = c::btree_bkey_cached_common::init(true, flags, Flags::empty());
-        let Ok(()) = unsafe { init_at(common, &raw mut (*ck.as_ptr()).c) };
-        /* Brand new lock, trylock can't fail. */
-        let held = bkey_cached_trylock(unsafe { ck.as_ref() }).expect("a new key cache entry locked by someone else");
-        held.into_parts().1.into_raw();
+        pin_init!(Self { ck <- c::bkey_cached::init(flags) }? BchError)
     }
 }
 
@@ -350,7 +350,7 @@ pub(crate) fn key_buf(u64s: usize) -> Option<KeyBuf> {
 
 /// What an entry's lock protects: written with it write locked, read with it
 /// held.
-#[derive(MaybeZeroable)]
+#[derive(Default, MaybeZeroable)]
 pub struct EntryContents {
     pub(crate) keys_idx: c_uint,
     /* its newest update's journal seq, which its pin is moved up to */
@@ -413,7 +413,7 @@ impl<const PCPU: bool> Drop for NewEntry<'_, PCPU> {
     }
 }
 
-/// A claimed entry's hold, as Cached's try_claim() or construct() left it.
+/// A claimed entry's hold, as Cached's try_claim() left it.
 ///
 /// # Safety
 /// @ck was just claimed, and is had for 'a.

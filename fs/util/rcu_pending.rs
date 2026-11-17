@@ -19,6 +19,7 @@ use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 
 use crate::c;
+use crate::errcode::BchError;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::GenRadix;
@@ -35,18 +36,16 @@ const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
 /// from before its free may still be in it.
 ///
 /// # Safety
-/// Those readers are fine with what they find: the T, or what construct()
-/// made of fresh memory, until a grace period after its free.
+/// Those readers are fine with what they find: the T, or what init() made of
+/// fresh memory, until a grace period after its free.
 pub unsafe trait RcuRealloc: HasRcuHead + Sized {
     /// Whether this one, freed, can be reused yet: if true, it's claimed.
     /// Called under the CPU's lock: mustn't sleep.
     fn try_claim(&self) -> bool;
 
-    /// Memory fresh from the allocator, zeroed, made a T as a claimed one is.
-    ///
-    /// # Safety
-    /// @p is that memory, and nothing else has it.
-    unsafe fn construct(p: NonNull<Self>);
+    /// A T made of memory fresh from the allocator, as a freed one is: alloc()
+    /// claims it.
+    fn init() -> impl PinInit<Self, BchError>;
 }
 
 /// An item, given up: its rcu_head, what the lists thread through.
@@ -578,8 +577,8 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
         Some(unsafe { from_raw(raw) })
     }
 
-    /// A T: one freed and claimed from this CPU, else fresh from A,
-    /// constructed, else one claimed from any CPU.
+    /// A T: one freed and claimed from this CPU, else fresh from A, made by
+    /// its init(), else one claimed from any CPU.
     pub fn alloc(&self) -> Result<NonNull<T>, AllocError> {
         self.alloc_from(|a| a.allocate_zeroed(Layout::new::<T>()))
     }
@@ -594,8 +593,11 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
 
         if let Ok(p) = fresh(self.backing()) {
             let p = p.cast::<T>();
-            unsafe { T::construct(p) };
-            return Ok(p);
+            if unsafe { init_at(T::init(), p.as_ptr()) }.is_ok() {
+                assert!(unsafe { p.as_ref() }.try_claim(), "a fresh T, its claim refused");
+                return Ok(p);
+            }
+            unsafe { self.backing().deallocate(p.cast(), Layout::new::<T>()) };
         }
 
         self.pcpu().each_cpu().find_map(|p| self.claim(p)).ok_or(AllocError)
