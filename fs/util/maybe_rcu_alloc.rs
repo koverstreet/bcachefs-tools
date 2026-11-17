@@ -60,6 +60,9 @@ unsafe impl<T, A: Alloc> DropAnytime for MaybeRcuAlloc<T, A> {}
 unsafe impl<T, A: Alloc> DropAtomic for MaybeRcuAlloc<T, A> {}
 unsafe impl<T, A: Alloc> NothingToDetach for MaybeRcuAlloc<T, A> {}
 
+// None is its pointer null - zeroed
+unsafe impl<T, A: Alloc> ::pin_init::ZeroableOption for MaybeRcuAlloc<T, A> {}
+
 impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     /// @init's T, in memory that starts zeroed - padding too. Fails with
     /// @init's error, or the allocation's.
@@ -79,7 +82,7 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
         Self::new_gfp(init, flags::NOFAIL)
     }
 
-    fn new_gfp<E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<Self, E>
+    pub fn new_gfp<E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<Self, E>
     where
         A: AllocGfp,
     {
