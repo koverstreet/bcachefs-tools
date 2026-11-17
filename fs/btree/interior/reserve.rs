@@ -56,7 +56,7 @@ fn node_free(fs: &Fs, b: &BtreeNode) {
 
     assert!(!b.flags.write_blocked(), "freeing a write blocked node");
     assert!(!b.flags.need_write(), "freeing a node that needs writing");
-    assert!(!fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b)), "freeing a root");
+    assert!(!fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|r| ptr::eq(r, b)), "freeing a root");
     assert!(unsafe { (*b.write_blocked.data_ptr()).is_empty() }, "freeing a node interior updates are blocking");
 
     b.flags.set_permanent(false);
@@ -333,7 +333,7 @@ impl<'t> InteriorUpdate<'t> {
     /// A copy of @b, compacted.
     pub(crate) fn alloc_replacement(&self, paths: &mut Paths<'_>, b: LockedNode<'_, BtreeNode>) -> NewNode<'_> {
         let fs = self.fs();
-        let mut n = self.alloc_node(paths, b.c.level.into());
+        let mut n = self.alloc_node(paths, b.c.level.get().into());
         let b_contents = b.contents();
         let mut format = b.calc_format(b_contents);
 
@@ -389,8 +389,8 @@ impl<'t> InteriorUpdate<'t> {
     /// puts it.
     pub(crate) fn take_path(&self, paths: &mut Paths<'_>, n: &NewNode<'_>) -> PathIdx {
         let pos = n.contents().key_i().k().p;
-        let idx = self.trans().path_get_unlocked_mut(paths, crate::format::Btree(n.c.btree_id.into()),
-                                                     n.c.level.into(), pos, false, crate::ret_ip!());
+        let idx = self.trans().path_get_unlocked_mut(paths, crate::format::Btree(n.c.btree_id.get().into()),
+                                                     n.c.level.get().into(), pos, false, crate::ret_ip!());
         self.take_node(paths, idx, n);
         self.owned.borrow_mut().paths.push(idx);
         idx
@@ -412,7 +412,7 @@ impl<'t> InteriorUpdate<'t> {
      * bch2_btree_reserve_put (err).
      */
     fn take_node(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) {
-        let level = usize::from(n.c.level);
+        let level = usize::from(n.c.level.get());
         let hold = unsafe {
             six_lock_increment_ip(n.c.lock.six(), c::SixLockType::SIX_LOCK_write, 0);
             SixHold::from_raw(&n.c.lock, c::SixLockType::SIX_LOCK_write)
@@ -426,7 +426,7 @@ impl<'t> InteriorUpdate<'t> {
     pub(super) fn node_free_inmem(&self, paths: &mut Paths<'_>, path: PathIdx, b: LockedNode<'_, BtreeNode>) {
         let fs = self.fs();
 
-        assert!(paths[path].write_locked(b.c.level.into()), "freeing a node not write locked");
+        assert!(paths[path].write_locked(b.c.level.get().into()), "freeing a node not write locked");
 
         node_free(fs, &b);
 

@@ -289,7 +289,7 @@ impl BtreeTrans<'_> {
 
     #[inline]
     fn node_write_unlock_seqs(&self, paths: &mut Paths<'_>, b: &c::btree_bkey_cached_common) {
-        let (level, seq) = (b.level as usize, b.lock.six().seq.get());
+        let (level, seq) = (b.level.get() as usize, b.lock.six().seq.get());
 
         if b.lock.six().write_lock_recurse.get() == 0 {
             for i in self.path_idxs() {
@@ -394,7 +394,7 @@ impl BtreeTrans<'_> {
         self.fs().event_trace(events::btree_path_lock, |out| {
             prt!(out, "{} ret {}\nbtree {} level {} lock seq {} node {:p}",
                  self.fn_name(), ret.as_ref().err().map_or("(No error)", |e| e.msg()),
-                 Btree(b.btree_id.into()), b.level, b.lock.six().seq.get(), ptr::from_ref(b));
+                 Btree(b.btree_id.get().into()), b.level.get(), b.lock.six().seq.get(), ptr::from_ref(b));
         });
         ret
     }
@@ -489,7 +489,7 @@ impl BtreeTrans<'_> {
          * locked:
          */
         self.node_lock_nopath(b, lock_may_not_fail, |wait, should_sleep_fn| {
-            paths.lock_write_marked(idx, b.level as usize, wait, should_sleep_fn, ip)
+            paths.lock_write_marked(idx, b.level.get() as usize, wait, should_sleep_fn, ip)
         })
     }
 
@@ -518,13 +518,13 @@ impl BtreeTrans<'_> {
      */
     pub(crate) fn node_lock_with_path(&self, paths: &mut Paths<'_>, b: &c::btree_bkey_cached_common, ty: c::SixLockType,
                                       hash_val: u64) -> Result<PathIdx, BchError> {
-        let path_idx = self.path_get_unlocked_mut(paths, Btree(b.btree_id.into()), b.level.into(), btree_node_pos(b),
+        let path_idx = self.path_get_unlocked_mut(paths, Btree(b.btree_id.get().into()), b.level.get().into(), btree_node_pos(b),
                                                   b.cached, crate::ret_ip!());
 
         self.locking_hash_val.set(hash_val);
         self.locking_root_id.set(Btree(u32::MAX));
 
-        let level = b.level as usize;
+        let level = b.level.get() as usize;
         ebug_assert!(level < c::BTREE_MAX_DEPTH as usize, "locking level {level}");
         self.verify_not_unlocked_or_in_restart();
 
@@ -556,7 +556,7 @@ impl BtreeTrans<'_> {
             let idx = self.node_lock_with_path(&mut paths, b, ty, hash_val)?;
             let ret = f(&mut paths, idx);
 
-            self.node_unlock(&mut paths, idx, b.level.into());
+            self.node_unlock(&mut paths, idx, b.level.get().into());
             self.path_put(&mut paths, idx, true);
             ret
         })
@@ -679,7 +679,7 @@ impl BtreeTrans<'_> {
             let path = &mut paths[idx];
             /* a matching seq must mean the node is still the one we had: */
             let b = path.locked_node(level).expect("a relocked level has its node");
-            ebug_assert!(u32::from(b.btree_id) == path.btree_id().0 && b.level as usize == level,
+            ebug_assert!(u32::from(b.btree_id.get()) == path.btree_id().0 && b.level.get() as usize == level,
                                 "relocked a node that isn't the path's");
             path.lock_taken(level);
             return true;

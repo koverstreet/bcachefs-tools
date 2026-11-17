@@ -1259,7 +1259,7 @@ impl BtreePath {
 
     #[inline(always)]
     pub(crate) fn pos_in_node(&self, b: LockedNode<'_, BtreeNode>) -> bool {
-        u32::from(b.c.btree_id) == self.btree_id().0 && !self.pos_before_node(b) && !self.pos_after_node(b)
+        u32::from(b.c.btree_id.get()) == self.btree_id().0 && !self.pos_before_node(b) && !self.pos_after_node(b)
     }
 
     #[inline(always)]
@@ -1413,7 +1413,7 @@ impl BtreeTrans<'_> {
 
             if path.l[i].b.is_null() {
                 assert!(!(!path.cached() &&
-                          self.fs().btree_id_root(path.btree_id().0).is_some_and(|r| r.c.level as usize > i)));
+                          self.fs().btree_id_root(path.btree_id().0).is_some_and(|r| r.c.level.get() as usize > i)));
                 break;
             }
 

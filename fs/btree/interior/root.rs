@@ -28,8 +28,8 @@ fn root_pack(b: &BtreeNode) -> c_ulong {
     let p = ptr::from_ref(b) as c_ulong;
 
     assert!(p & mask == 0, "a btree node not aligned for its level packed with it");
-    assert!(c_ulong::from(b.c.level) & !mask == 0, "a root at level {}", b.c.level);
-    p | c_ulong::from(b.c.level)
+    assert!(c_ulong::from(b.c.level.get()) & !mask == 0, "a root at level {}", b.c.level.get());
+    p | c_ulong::from(b.c.level.get())
 }
 
 fn set_root_inmem(fs: &Fs, b: &BtreeNode) {
@@ -44,7 +44,7 @@ fn set_root_inmem(fs: &Fs, b: &BtreeNode) {
         b.flags.set_permanent(true);
     }
 
-    fs.btree.cache.roots.lock().published().roots_b[usize::from(b.c.btree_id)].set(root_pack(b));
+    fs.btree.cache.roots.lock().published().roots_b[usize::from(b.c.btree_id.get())].set(root_pack(b));
 
     fs.recalc_btree_reserve();
 }
@@ -58,9 +58,9 @@ impl InteriorUpdate<'_> {
 
         fs.event_inc_trace(events::btree_node_set_root, |out| prt!(out, "{}", n.pos_to_text(fs)));
 
-        let old = fs.btree_id_root(n.c.btree_id.into()).expect("a btree with no root getting a new one");
+        let old = fs.btree_id_root(n.c.btree_id.get().into()).expect("a btree with no root getting a new one");
 
-        assert!(paths[path].write_locked(old.c.level.into()), "setting a root, the old one not write locked");
+        assert!(paths[path].write_locked(old.c.level.get().into()), "setting a root, the old one not write locked");
 
         set_root_inmem(fs, n);
 
@@ -74,7 +74,7 @@ impl Fs {
      * btree roots when initializing a new filesystem:
      */
     pub(crate) fn btree_set_root_for_read(&self, b: &BtreeNode) {
-        assert!(self.btree_id_root(b.c.btree_id.into()).is_none(), "a root read for a btree that has one");
+        assert!(self.btree_id_root(b.c.btree_id.get().into()).is_none(), "a root read for a btree that has one");
 
         set_root_inmem(self, b);
     }

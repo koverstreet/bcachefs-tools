@@ -63,8 +63,8 @@ impl BtreeTrans<'_> {
          * bkey_cached_lock_for_evict.
          */
 
-        ck.c.level    = 0;
-        ck.c.btree_id = btree.0 as u8;
+        ck.c.level.set(0);
+        ck.c.btree_id.set(btree.0 as u8);
         ck.key        = c::bkey_cached_key { btree_id: btree.0, pos };
         ck.flags.store(1 << c::BKEY_CACHED_ACCESSED, Relaxed);
 

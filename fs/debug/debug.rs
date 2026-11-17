@@ -161,7 +161,7 @@ fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     }
 
     prt!(out, "{:016x} ", core::ptr::from_ref(b) as usize);
-    prt!(out, "btree={} level={}", Btree(b.c.btree_id.into()), b.c.level);
+    prt!(out, "btree={} level={}", Btree(b.c.btree_id.get().into()), b.c.level.get());
     prt!(out, "\n");
 
     let mut out = out.indent(2);

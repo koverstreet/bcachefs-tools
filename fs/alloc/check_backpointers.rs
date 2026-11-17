@@ -643,16 +643,16 @@ fn check_btree_root_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToB
     -> Result<u32, BchError>
 {
     let fs = t.fs();
-    let root_level = fs.btree_id_root(btree.0).expect("a btree with a root").c.level;
+    let root_level = fs.btree_id_root(btree.0).expect("a btree with a root").c.level.get();
 
     let mut iter = BtreeIter::new_level(t, btree, POS_MIN, root_level.into(), BtreeIterFlags::empty());
     let b = iter.peek_node(t)?.expect("a btree's root node");
 
-    if !fs.btree_id_root(b.c.btree_id.into()).is_some_and(|root| core::ptr::eq(root, b.node())) {
+    if !fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|root| core::ptr::eq(root, b.node())) {
         return Err(t.restart(Errcode::transaction_restart_lock_root_race));
     }
 
-    let level = u32::from(b.c.level);
+    let level = u32::from(b.c.level.get());
     check_extent_to_backpointers(t, s, btree, level + 1, BkeySC::from(b.contents().key_i()))?;
     Ok(level)
 }

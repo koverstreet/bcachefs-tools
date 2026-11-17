@@ -107,7 +107,7 @@ pub(crate) fn key_is_shard_boundary(fs: &Fs, btree: Btree, key: Bpos) -> bool {
 impl BtreeNode {
     pub fn shard(&self, contents: &NodeContents, fs: &Fs) -> Option<usize> {
         let bits = fs.opts().shard_inode_numbers_bits.get() as u32;
-        let field = shard_field(Btree(self.c.btree_id.into()), contents.key.k.p)?;
+        let field = shard_field(Btree(self.c.btree_id.get().into()), contents.key.k.p)?;
         (bits != 0).then(|| ((field << 1) >> (64 - bits)) as usize)
     }
 
@@ -121,12 +121,12 @@ impl BtreeNode {
      * inside, so successive rewrites converge toward full shard alignment.
      */
     pub fn shard_pivot(&self, contents: &NodeContents, fs: &Fs) -> Bpos {
-        if self.c.level != 0 {
+        if self.c.level.get() != 0 {
             return POS_MIN;
         }
 
         let data = contents.data();
-        let p = shard_pivot_below(fs, Btree(self.c.btree_id.into()), data.max_key);
+        let p = shard_pivot_below(fs, Btree(self.c.btree_id.get().into()), data.max_key);
         if p > data.min_key { p } else { POS_MIN }
     }
 }

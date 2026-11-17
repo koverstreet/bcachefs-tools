@@ -57,8 +57,9 @@ pub struct btree_write {
 #[derive(MaybeZeroable)]
 pub struct btree_bkey_cached_common {
     pub lock: Locked<cs::six_lock>,
-    pub level: u8,
-    pub btree_id: u8,
+    /* set write locked, on a reused node or entry that others may still be reading */
+    pub level: Volatile<u8>,
+    pub btree_id: Volatile<u8>,
     pub cached: bool,
 }
 

@@ -102,11 +102,8 @@ impl<'a> UnhashedNode<'a> {
     }
 
     pub(crate) fn set_id(&mut self, btree: Btree, level: usize) {
-        let p = core::ptr::from_ref(self.b).cast_mut();
-        unsafe {
-            (*p).c.level    = level as u8;
-            (*p).c.btree_id = btree.0 as u8;
-        }
+        self.b.c.level.set(level as u8);
+        self.b.c.btree_id.set(btree.0 as u8);
     }
 
     fn into_parts(self) -> (&'a BtreeNode, SixHold<'a>) {

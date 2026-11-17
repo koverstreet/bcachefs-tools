@@ -49,11 +49,11 @@ impl BtreeNode {
 /* Pinning */
 
 fn node_pinned(lists: &BtreeCacheLists, b: &BtreeNode) -> bool {
-    let pos = c::bbpos { btree: Btree(b.c.btree_id.into()), pos: unsafe { b.contents() }.key_i().k.p };
+    let pos = c::bbpos { btree: Btree(b.c.btree_id.get().into()), pos: unsafe { b.contents() }.key_i().k.p };
 
-    let mask = lists.pinned_nodes_mask[(b.c.level != 0) as usize];
+    let mask = lists.pinned_nodes_mask[(b.c.level.get() != 0) as usize];
 
-    mask & (1 << b.c.btree_id) != 0 &&
+    mask & (1 << b.c.btree_id.get()) != 0 &&
         lists.pinned_nodes_start < pos &&
         lists.pinned_nodes_end >= pos
 }
@@ -103,7 +103,7 @@ impl Fs {
             let mut msg = LogMsg::new(self);
             prt!(msg, "dirty node in unhashed state transition {} -> {}\n", old as u32, new as u32);
             prt!(msg, "btree={} level={} cache_state={} flags=0x{:x} hash_val=0x{:x}\n",
-                 b.c.btree_id, b.c.level, old as u32, b.flags.load().into_bits(), b.hash_val());
+                 b.c.btree_id.get(), b.c.level.get(), old as u32, b.flags.load().into_bits(), b.hash_val());
             b.flags.set_dirty(false);
         }
 
@@ -128,7 +128,7 @@ impl Fs {
                 new = State::FREEABLE;
             } else {
                 lists.nr_vmalloc += is_vmalloc_addr(data) as usize;
-                if let Some(nr) = lists.nr_by_btree.get_mut(b.c.btree_id as usize) {
+                if let Some(nr) = lists.nr_by_btree.get_mut(b.c.btree_id.get() as usize) {
                     *nr += 1;
                 }
             }
@@ -156,7 +156,7 @@ impl Fs {
             fence(SeqCst);
             six_lock_wakeup_all(b.c.lock.six());
 
-            if let Some(nr) = lists.nr_by_btree.get_mut(b.c.btree_id as usize) {
+            if let Some(nr) = lists.nr_by_btree.get_mut(b.c.btree_id.get() as usize) {
                 *nr -= 1;
             }
             lists.nr_vmalloc -= is_vmalloc_addr(data) as usize;

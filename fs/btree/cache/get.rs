@@ -40,7 +40,7 @@ fn btree_bad_header(fs: &Fs, b: &BtreeNode) {
     let data = contents.data();
     let mut msg = LogMsg::new(fs);
     prt!(msg, "cached btree node header doesn't match expected (memory corruption?)\nexpected: ");
-    bch2_btree_id_level_to_text(&mut msg, Btree(b.c.btree_id.into()), b.c.level.into());
+    bch2_btree_id_level_to_text(&mut msg, Btree(b.c.btree_id.get().into()), b.c.level.get().into());
     prt!(msg, "\nptr: ");
     bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(contents.key_i()));
 
@@ -58,8 +58,8 @@ fn btree_check_header(fs: &Fs, b: &BtreeNode) {
     let data = contents.data();
     let k = BkeySC::from(contents.key_i());
 
-    if Btree(b.c.btree_id.into()) != data.btree_id() ||
-        b.c.level != data.level() ||
+    if Btree(b.c.btree_id.get().into()) != data.btree_id() ||
+        b.c.level.get() != data.level() ||
         data.max_key != k.k.p ||
         k.arm::<c::BtreePtrV2>().is_some_and(|p| data.min_key != p.v().min_key) {
         btree_bad_header(fs, b);
@@ -163,7 +163,7 @@ impl BtreeTrans<'_> {
 
                     if unlikely(held.as_ref().is_err_and(|e| *e == Errcode::no_btree_node_reused.into()) ||
                                 b.hash_val() != hash_val ||
-                                b.c.level as usize != level ||
+                                b.c.level.get() as usize != level ||
                                 race_fault()) {
                         drop(held);
                         if self.node_relock(paths, idx, level + 1) {
@@ -220,7 +220,7 @@ impl BtreeTrans<'_> {
 
         prefetch_aux(b);
 
-        ebug_assert!(Btree(b.c.btree_id.into()) == paths[idx].btree_id());
+        ebug_assert!(Btree(b.c.btree_id.get().into()) == paths[idx].btree_id());
         ebug_assert!(usize::from(unsafe { b.contents() }.data().level()) == level);
         btree_check_header(fs, b);
 
@@ -287,7 +287,7 @@ impl BtreeTrans<'_> {
 
         let f = b.flags.load();
         if unlikely(b.hash_val() != hash_val ||
-                    b.c.level as usize != level ||
+                    b.c.level.get() as usize != level ||
                     race_fault() ||
                     f.read_in_flight() ||
                     f.read_error()) {
@@ -302,7 +302,7 @@ impl BtreeTrans<'_> {
 
         prefetch_aux(b);
 
-        ebug_assert!(Btree(b.c.btree_id.into()) == paths[idx].btree_id());
+        ebug_assert!(Btree(b.c.btree_id.get().into()) == paths[idx].btree_id());
         ebug_assert!(usize::from(unsafe { b.contents() }.data().level()) == level);
         btree_check_header(self.fs(), b);
 

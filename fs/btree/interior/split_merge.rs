@@ -53,7 +53,7 @@ fn insert_fixup_btree_ptr(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path:
     }
 
     if let Some(jk) = t.journal_keys() {
-        journal_key_overwrite(jk, Btree(b.c.btree_id.into()), b.c.level.into(), insert.k().p);
+        journal_key_overwrite(jk, Btree(b.c.btree_id.get().into()), b.c.level.get().into(), insert.k().p);
     }
 
     let from = validate_from(&b, ValidateFlags::commit);
@@ -84,7 +84,7 @@ pub(crate) fn insert_keys_interior(t: &TransAttempt<'_, '_>, paths: &mut Paths<'
                                    b: &mut LockedNode<'_, BtreeNode, Write>, mut node_iter: KeyIter,
                                    list: &mut ParentKeys) -> Result<(), BchError> {
     let fs = t.fs();
-    assert!(b.c.level > 0, "inserting pointers into a leaf");
+    assert!(b.c.level.get() > 0, "inserting pointers into a leaf");
 
     let front = list.front().expect("inserting no keys").k().p;
     {
@@ -182,7 +182,7 @@ pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mu
      * Don't use btree_node_is_root(): we're called by btree split, after
      * creating a new root but before setting it
      */
-    if fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b.node())) {
+    if fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|r| ptr::eq(r, b.node())) {
         if data.min_key != POS_MIN {
             prt!(out, "btree root with incorrect min_key: {}\n", data.min_key);
             count_fsck_err(fs, SbErrorId::btree_root_bad_min_key, out);
@@ -196,7 +196,7 @@ pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mu
         }
     }
 
-    if b.c.level == 0 {
+    if b.c.level.get() == 0 {
         return Ok(());
     }
 
@@ -291,10 +291,10 @@ fn predict_split(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], inserting: Option<
             let uk = keys.unpack(i);
 
             let side = if n1_target_u64s != 0 {
-                let shifted = src.c.level != 0 &&
+                let shifted = src.c.level.get() != 0 &&
                     u64s < n1_u64s &&
                     u64s + k.u64s() >= n1_u64s &&
-                    (key_deleted_in_journal(t, Btree(src.c.btree_id.into()), src.c.level.into(), uk.p) ||
+                    (key_deleted_in_journal(t, Btree(src.c.btree_id.get().into()), src.c.level.get().into(), uk.p) ||
                      inserting.is_some_and(|u| u.parent_key_deleted(uk.p)));
                 if shifted {
                     n1_u64s += k.u64s();
@@ -441,7 +441,7 @@ fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, paths: &mut Paths<'_>, srcs: &[
                  DstLayout { format, min_key, max_key }: DstLayout) -> NewNode<'u> {
     // a 32 bit counter, which wraps
     let seq = srcs.iter().map(|s| s.contents().data().seq()).max().unwrap_or(0).wrapping_add(1);
-    let mut n = update.alloc_node(paths, usize::from(srcs[0].c.level));
+    let mut n = update.alloc_node(paths, usize::from(srcs[0].c.level.get()));
     let contents = n.contents_mut();
     assert!(contents.nsets == 1, "packing into a node with {} bsets", contents.nsets);
 
@@ -548,13 +548,13 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
                   insert_parent_keys: bool) -> Result<(), BchError> {
     let trans = update.trans();
     let fs = trans.fs();
-    let level = usize::from(b.c.level);
+    let level = usize::from(b.c.level.get());
     let has_parent = paths[path].locked_btree_node(level + 1).is_some();
 
     trans.verify_paths(paths);
 
     b.keys(b.contents()).verify_btree_nr_keys();
-    assert!(has_parent || fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b.node())),
+    assert!(has_parent || fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|r| ptr::eq(r, b.node())),
             "splitting a node with no parent that isn't the root:\n{}", b.to_text(fs));
     assert!(!has_parent || paths[path].intent_locked(level + 1),
             "splitting a node whose parent isn't intent locked:\n{}", b.to_text(fs));
@@ -670,7 +670,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
                           b: Node<'_>) -> Result<(), BchError> {
     let trans = update.trans();
     let fs = trans.fs();
-    let level = usize::from(b.c.level);
+    let level = usize::from(b.c.level.get());
 
     let u64s_and_live = |b: &BtreeNode, contents: &NodeContents| {
         (b.keys(contents).bset(contents.last_set()).u64s(), contents.nr.live_u64s)
@@ -926,7 +926,7 @@ fn merge_push_pos<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, srcs: &mu
 
     let parent_b = parent(paths, pivot_path, level);
     let pos = if sib == PREV_SIB { data.min_key.predecessor() } else { data.max_key.successor() };
-    let path = trans.path_get(paths, Btree(pivot.c.btree_id.into()), pos, level as u32 + 1, level as u32,
+    let path = trans.path_get(paths, Btree(pivot.c.btree_id.get().into()), pos, level as u32 + 1, level as u32,
                               BtreeIterFlags::INTENT, crate::ret_ip!());
 
     match merge_sibling(t, paths, path, level) {
@@ -1177,7 +1177,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
     };
 
     let b: Node<'n> = paths.held_btree_node(path, level).expect("a merge's node, held by its path");
-    let btree = Btree(b.c.btree_id.into());
+    let btree = Btree(b.c.btree_id.get().into());
     let data = b.contents().data();
 
     if data.min_key == POS_MIN ||
@@ -1450,7 +1450,7 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
         return split_leaf(t, paths, path, 0, commit);
     }
 
-    let level = usize::from(b.c.level);
+    let level = usize::from(b.c.level.get());
     let update = InteriorUpdate::start(t, paths, path, level,
                                        StartOpts { split: true, commit, ..Default::default() })?;
 
@@ -1506,7 +1506,7 @@ fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &m
                        node: &BtreeNode, opts: StartOpts) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
-    let level = usize::from(node.c.level);
+    let level = usize::from(node.c.level.get());
 
     let update = InteriorUpdate::start(t, paths, iter.path, level, opts)?;
 

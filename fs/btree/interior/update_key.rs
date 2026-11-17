@@ -79,7 +79,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return self.new_node_update_key(iter, b, key);
         }
 
-        let btree = Btree(b.c.btree_id.into());
+        let btree = Btree(b.c.btree_id.get().into());
         if !fs.btree_id_root(btree.into()).is_some_and(|r| ptr::eq(r, b.node())) {
             let mut parent = BtreeNodeIter::new(self, btree, b.contents().key.k.p, 0, level as u32 + 1,
                                                 BtreeIterFlags::INTENT);
@@ -124,9 +124,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 key_trigger(self, &mut op)?;
             }
 
-            self.journal_entry_add(c::JsetEntryType::overwrite, b.c.btree_id as u8, b.c.level + 1,
+            self.journal_entry_add(c::JsetEntryType::overwrite, b.c.btree_id.get() as u8, b.c.level.get() + 1,
                                    b.contents().key_i())?;
-            self.journal_entry_add(c::JsetEntryType::btree_root, b.c.btree_id as u8, b.c.level, key.as_ref())?;
+            self.journal_entry_add(c::JsetEntryType::btree_root, b.c.btree_id.get() as u8, b.c.level.get(), key.as_ref())?;
 
             /*
              * propagated back to c->btree.roots[].key by
@@ -185,7 +185,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @b's own copy of its key made @key, under its write lock.
     fn node_key_set(&self, iter: &BtreeIter<'a>, b: LockedNode<'_, BtreeNode>, key: &TransBkey<'_, 't>) {
         let trans = self.trans();
-        let level = usize::from(b.c.level);
+        let level = usize::from(b.c.level.get());
         let mut paths = trans.paths();
 
         trans.node_lock_write_nofail(&mut paths, iter.path, level);

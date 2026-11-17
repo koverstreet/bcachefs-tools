@@ -436,7 +436,7 @@ fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
         return Ok(None);
     };
 
-    assert_eq!(u32::from(b.c.level), u32::from(v.level) - 1, "node at the wrong level");
+    assert_eq!(u32::from(b.c.level.get()), u32::from(v.level) - 1, "node at the wrong level");
 
     let node_k = BkeySC::from(b.contents().key_i());
     if extent_matches_bp(fs, btree, v.level.into(), node_k, bp) {

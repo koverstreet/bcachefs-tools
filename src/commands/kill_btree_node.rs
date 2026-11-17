@@ -236,7 +236,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
         );
 
         iter.for_each(&trans, |b| {
-            if b.c.level != kill.level as u8 {
+            if b.c.level.get() != kill.level as u8 {
                 return Ok(ControlFlow::Continue(()));
             }
 

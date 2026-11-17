@@ -36,7 +36,7 @@ fn btree_cache_exit_locked_dump(fs: &Fs, lists: &BtreeCacheGuard<'_>, b: &BtreeN
     prt!(msg, "{what} on {} node at cache_exit\n",
          if state == State::FREEABLE { "freeable" } else { "live" });
     prt!(msg, "btree={} level={} cache_state={} flags=0x{:x} hash_val=0x{:x}\n",
-         b.c.btree_id, b.c.level, state as u32, b.flags.load().into_bits(), b.hash_val());
+         b.c.btree_id.get(), b.c.level.get(), state as u32, b.flags.load().into_bits(), b.hash_val());
     prt!(msg, "lock state=0x{:x} read={} intent={} write={} (recurse intent={} write={})\n",
          lock.state.load(Relaxed),
          counts.n[SIX_LOCK_read as usize],

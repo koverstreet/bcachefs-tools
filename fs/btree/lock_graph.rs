@@ -133,7 +133,7 @@ fn bkey_cached_common_to_text(out: &mut Printbuf, b: &c::btree_bkey_cached_commo
     };
 
     prt!(out, "\t{:p} {} {} l={}:{}", b, if b.cached { 'c' } else { 'b' },
-         Btree(b.btree_id.into()), b.level, btree_node_pos(b));
+         Btree(b.btree_id.get().into()), b.level.get(), btree_node_pos(b));
     prt!(out, "\t locks {}:{}:{} held by pid {}", c.n[0], c.n[1], c.n[2], pid);
 }
 

@@ -808,7 +808,7 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
         };
 
         if let Some(jk) = jk {
-            iter.journal = c::journal_iter::new(jk, Btree(b.c.btree_id.into()), b.c.level.into(), pos);
+            iter.journal = c::journal_iter::new(jk, Btree(b.c.btree_id.get().into()), b.c.level.get().into(), pos);
         }
         iter
     }

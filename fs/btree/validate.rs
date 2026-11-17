@@ -309,13 +309,13 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
                           "incorrect sequence number (wrong btree node)")?;
         }
 
-        btree_err_on!(v, bn.btree_id() != Btree(b.c.btree_id.into()),
+        btree_err_on!(v, bn.btree_id() != Btree(b.c.btree_id.get().into()),
                       FsckFlags::empty(),
                       ErrAt::bset(&bn.keys),
                       id::btree_node_bad_btree,
                       "incorrect btree id")?;
 
-        btree_err_on!(v, bn.level() as u32 != b.c.level.into(),
+        btree_err_on!(v, bn.level() as u32 != b.c.level.get().into(),
                       FsckFlags::empty(),
                       ErrAt::bset(&bn.keys),
                       id::btree_node_bad_level,
@@ -370,8 +370,8 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
 
 pub(crate) fn validate_from(b: &BtreeNode, flags: ValidateFlags) -> c::bkey_validate_context {
     let mut from = c::bkey_validate_context {
-        level: b.c.level,
-        btree: Btree(b.c.btree_id.into()),
+        level: b.c.level.get(),
+        btree: Btree(b.c.btree_id.get().into()),
         ..Default::default()
     };
     from.bits.set_from(c::BkeyValidateFrom::btree_node);
@@ -431,7 +431,7 @@ fn bkey_compat(v: &NodeValidate<'_>, version: MetadataVersion, big_endian: bool,
        big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         unsafe {
-            compat::bkey_compat(Some(v.fs), Btree(b.c.btree_id.into()), version, big_endian, v.writing(),
+            compat::bkey_compat(Some(v.fs), Btree(b.c.btree_id.get().into()), version, big_endian, v.writing(),
                                 Some(&b.contents().format), k)
         }
     }

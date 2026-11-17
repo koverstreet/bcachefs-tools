@@ -53,7 +53,7 @@ impl BtreeNode {
     pub fn add_journal_pin(&self, fs: &Fs, seq: u64) {
         let flush: unsafe extern "C" fn(_, _, _) -> _ = if self.flags.write_idx() { node_flush1 } else { node_flush0 };
 
-        fs.journal.pin_add(seq, &self.current_write().journal, journal_pin_type_btree(self.c.level), Some(flush));
+        fs.journal.pin_add(seq, &self.current_write().journal, journal_pin_type_btree(self.c.level.get()), Some(flush));
     }
 }
 
@@ -101,7 +101,7 @@ unsafe fn node_flush(j: *mut c::journal, pin: *mut Pin, idx: usize, seq: u64) ->
         __bch2_btree_node_write(trans, b, BtreeWriteFlags::only_if_need.bits());
 
         let mut paths = trans.paths();
-        trans.node_unlock(&mut paths, path_idx, b.c.level.into());
+        trans.node_unlock(&mut paths, path_idx, b.c.level.get().into());
         trans.path_put(&mut paths, path_idx, true);
         Ok(())
     });
@@ -160,7 +160,7 @@ impl BtreeTrans<'_> {
             ebug_assert!(insert.k.p >= contents.data().min_key);
             ebug_assert!(insert.k.p <= contents.data().max_key);
             ebug_assert!(usize::from(insert.k.u64s) <= b.keys_u64s_remaining(contents));
-            ebug_assert!(b.c.level != 0 || insert.k.p == paths[idx].pos);
+            ebug_assert!(b.c.level.get() != 0 || insert.k.p == paths[idx].pos);
 
             let k = unsafe { &*node_iter }.peek_all()
                 .filter(|&k| contents.cmp_left_packed(keys.key_at(k), &insert.k.p).is_eq());
@@ -270,7 +270,7 @@ impl BtreeTrans<'_> {
             return;
         }
 
-        if unlikely(b.c.level != 0 && self.insert_topology_check(t, b.held())) {
+        if unlikely(b.c.level.get() != 0 && self.insert_topology_check(t, b.held())) {
             return;
         }
 

@@ -464,7 +464,7 @@ pub(crate) fn btree_node_is_stale(fs: &Fs, b: LockedNode<'_, BtreeNode>) -> bool
     let contents = b.contents();
     let bn = contents.data();
 
-    in_range(&nodes, Btree(b.c.btree_id.into()), b.c.level, bn.min_key, contents.key.k.p)
+    in_range(&nodes, Btree(b.c.btree_id.get().into()), b.c.level.get(), bn.min_key, contents.key.k.p)
         .any(|n| n.seq > bn.seq())
 }
 

@@ -849,7 +849,7 @@ impl Fs {
                 }
 
                 let root = self.btree_id_root(btree).expect("a root for every btree");
-                let mut iter = BtreeNodeIter::new(&trans, btree, POS_MIN, 0, root.c.level.into(),
+                let mut iter = BtreeNodeIter::new(&trans, btree, POS_MIN, 0, root.c.level.get().into(),
                                                   BtreeIterFlags::empty());
                 lockrestart_do(&trans, |t| {
                     let b = iter.peek(t)?.expect("the root node");

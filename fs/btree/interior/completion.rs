@@ -38,12 +38,12 @@ impl InteriorUpdate<'_> {
      * block @b from being written until @as completes
      */
     pub(super) fn updated_node(&self, b: &BtreeNode) {
-        assert!(self.level_end() >= usize::from(b.c.level), "an interior update's node past its reserve");
+        assert!(self.level_end() >= usize::from(b.c.level.get()), "an interior update's node past its reserve");
         assert!(b.flags.dirty(), "an interior update's node not dirty");
-        assert!(b.c.level != 0, "an interior update's node a leaf");
+        assert!(b.c.level.get() != 0, "an interior update's node a leaf");
 
         let mut g = self.make_visible(Mode::Node(NonNull::from(b)));
-        self.level_end.store(b.c.level, Relaxed);
+        self.level_end.store(b.c.level.get(), Relaxed);
 
         b.flags.set_write_blocked(true);
         unsafe { write_blocked(b, &mut g).push_front(self) };
@@ -454,7 +454,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
     };
     if let Some(Mode::Node(b)) = front_mode() {
         let b = unsafe { b.as_ref() };
-        let level = usize::from(b.c.level);
+        let level = usize::from(b.c.level.get());
 
         /*
          * @b is the node we did the final insert into:
@@ -499,7 +499,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
             };
 
             if do_pin {
-                assert!(b.c.level != 0, "an interior update's node a leaf");
+                assert!(b.c.level.get() != 0, "an interior update's node a leaf");
                 assert!(b.flags.dirty(), "an interior update's node not dirty");
 
                 if ret.is_ok() {

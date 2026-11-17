@@ -239,7 +239,7 @@ unsafe fn write_work(wbio: NonNull<BtreeWriteBio>) {
         let idx = trans.node_lock_with_path(&mut trans.paths(), &b.c, c::SixLockType::SIX_LOCK_read, 0)?;
         write_done(&trans, b);
         let mut paths = trans.paths();
-        trans.node_unlock(&mut paths, idx, b.c.level as usize);
+        trans.node_unlock(&mut paths, idx, b.c.level.get() as usize);
         trans.path_put(&mut paths, idx, true);
         Ok(())
     }).expect("the write completion's node lock fails only with restarts");
@@ -309,8 +309,8 @@ fn seal_bset<H: BsetHolder + ?Sized>(fs: &Fs, n: &mut H, offset: u32) -> Result<
 
 fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, n: &mut H) -> Result<(), BchError> {
     let mut from = c::bkey_validate_context {
-        level: b.c.level + 1,
-        btree: Btree(b.c.btree_id.into()),
+        level: b.c.level.get() + 1,
+        btree: Btree(b.c.btree_id.get().into()),
         ..Default::default()
     };
     from.bits.set_from(c::BkeyValidateFrom::btree_node);

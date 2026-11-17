@@ -362,7 +362,7 @@ impl Fs {
 
         for i in 0..self.btree_id_nr_alive() {
             if let Some(b) = self.btree_id_root(i) {
-                reserve += usize::from(b.c.level).min(1) * 8;
+                reserve += usize::from(b.c.level.get()).min(1) * 8;
             }
         }
 
@@ -391,7 +391,7 @@ pub fn btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level: c_uin
 
 pub fn bch2_btree_pos_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     let k = BkeySC::from(unsafe { b.contents() }.key_i());
-    btree_pos_to_text(out, fs, Btree(b.c.btree_id.into()), b.c.level.into(), k)
+    btree_pos_to_text(out, fs, Btree(b.c.btree_id.get().into()), b.c.level.get().into(), k)
 }
 
 #[cold]
@@ -401,7 +401,7 @@ pub fn btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     b.keys(contents).btree_keys_stats(&mut stats);
 
     let data = contents.data();
-    prt!(out, "l {} {} - {}:\n", b.c.level, data.min_key, data.max_key);
+    prt!(out, "l {} {} - {}:\n", b.c.level.get(), data.min_key, data.max_key);
     prt!(out, "    ptrs: ");
     val_to_text(out, Some(fs), BkeySC::from(contents.key_i()));
     out.newline();

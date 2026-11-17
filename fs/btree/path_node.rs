@@ -20,11 +20,11 @@ use crate::util::Printbuf;
 
 impl BtreeTrans<'_> {
     pub(crate) fn path_at_node(&self, paths: &Paths<'_>, idx: PathIdx, b: &BtreeNode) -> bool {
-        paths[idx].has_node(b.c.level as usize, &b.c, b.c.lock.six().seq.get())
+        paths[idx].has_node(b.c.level.get() as usize, &b.c, b.c.lock.six().seq.get())
     }
 
     pub(crate) fn path_fix_key_modified(&self, paths: &mut Paths<'_>, b: LockedNode<'_, BtreeNode>, where_: u16) {
-        let level = b.c.level as usize;
+        let level = b.c.level.get() as usize;
         let keys = b.keys(b.contents());
 
         for idx in self.path_idxs() {
@@ -43,14 +43,14 @@ impl BtreeTrans<'_> {
     /// caller's.
     pub(crate) unsafe fn node_iter_fix(&self, paths: &mut Paths<'_>, idx: PathIdx, b: LockedNode<'_, BtreeNode>,
                                        node_iter: *mut KeyIter, where_: u16, clobber_u64s: u16, new_u64s: u16) {
-        let level = b.c.level as usize;
+        let level = b.c.level.get() as usize;
         let keys = b.keys(b.contents());
         let t = keys.bkey_to_bset(where_);
 
         if !ptr::eq(node_iter, &paths[idx].l[level].iter) {
             let pos = paths[idx].pos;
             let iter = unsafe { &mut *node_iter };
-            iter.fix(&keys, b.c.level, t, where_, clobber_u64s, new_u64s, &pos);
+            iter.fix(&keys, b.c.level.get(), t, where_, clobber_u64s, new_u64s, &pos);
 
             if self.verify_iterators() {
                 iter.verify(&keys);
@@ -63,7 +63,7 @@ impl BtreeTrans<'_> {
             }
 
             let pos = paths[linked].pos;
-            paths[linked].l[level].iter.fix(&keys, b.c.level, t, where_, clobber_u64s, new_u64s, &pos);
+            paths[linked].l[level].iter.fix(&keys, b.c.level.get(), t, where_, clobber_u64s, new_u64s, &pos);
             self.path_verify_level(paths, linked, level);
         }
     }
@@ -71,13 +71,13 @@ impl BtreeTrans<'_> {
     pub(in crate::btree) fn revalidate_updates_in_node(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                                        b: LockedNode<'_, BtreeNode>) {
         let data = b.contents().data();
-        let btree = Btree(b.c.btree_id.into());
+        let btree = Btree(b.c.btree_id.get().into());
         let PathsUpdates { paths, updates } = pu;
 
         for e in updates.iter_mut() {
             let pos = e.key().k.p;
 
-            if e.cached() || e.key_cache_flushing() || e.level() != b.c.level || e.btree_id() != btree ||
+            if e.cached() || e.key_cache_flushing() || e.level() != b.c.level.get() || e.btree_id() != btree ||
                pos < data.min_key || pos > data.max_key {
                 continue;
             }
@@ -86,7 +86,7 @@ impl BtreeTrans<'_> {
             let mut old_v = paths[e.path].peek_slot(&mut old_k).map_or(ptr::null(), |KeyVal(v)| v);
 
             if let Some(jk) = t.journal_keys() {
-                if let Some(j_k) = peek_slot(jk, btree, b.c.level.into(), pos) {
+                if let Some(j_k) = peek_slot(jk, btree, b.c.level.get().into(), pos) {
                     old_k = j_k.k;
                     old_v = (&raw const j_k.v).cast();
                 }
@@ -103,7 +103,7 @@ impl BtreeTrans<'_> {
      */
     pub(in crate::btree) fn node_add(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                      b: LockedNode<'_, BtreeNode>) {
-        let level = b.c.level as usize;
+        let level = b.c.level.get() as usize;
         let paths = &mut pu.paths;
 
         for idx in self.path_idxs() {
@@ -155,7 +155,7 @@ impl BtreeTrans<'_> {
     }
 
     pub(crate) fn node_verify_not_in_iters(&self, paths: &Paths<'_>, b: &BtreeNode) {
-        let level = b.c.level as usize;
+        let level = b.c.level.get() as usize;
 
         /*
          * Unlocked references were dropped by bch2_trans_node_forget(), locked
@@ -180,7 +180,7 @@ impl BtreeTrans<'_> {
      */
     pub(in crate::btree) fn node_reinit_iter(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                              b: LockedNode<'_, BtreeNode>) {
-        let level = b.c.level as usize;
+        let level = b.c.level.get() as usize;
         let paths = &mut pu.paths;
 
         for idx in self.path_idxs() {

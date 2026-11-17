@@ -205,7 +205,7 @@ struct OldNode {
 
 impl OldNode {
     fn of(b: LockedNode<'_, BtreeNode>) -> Self {
-        OldNode { b: NonNull::from(b.node()), level: b.c.level, seq: b.contents().data().keys.seq, key: node_key(b) }
+        OldNode { b: NonNull::from(b.node()), level: b.c.level.get(), seq: b.contents().data().keys.seq, key: node_key(b) }
     }
 }
 
@@ -231,11 +231,11 @@ enum Pointee {
 impl NewPointer {
     fn node(fs: &Fs, b: LockedNode<'_, BtreeNode>) -> Self {
         NewPointer {
-            level: b.c.level,
+            level: b.c.level.get(),
             key:   node_key(b),
             to:    Pointee::Node {
                 b:               NonNull::from(b.node()),
-                root:            fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b.node())),
+                root:            fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|r| ptr::eq(r, b.node())),
                 update_node_key: false,
             },
         }
@@ -791,7 +791,7 @@ impl<'t> InteriorUpdate<'t> {
     /// there: @b is the node @path holds at its level.
     fn insert_parent_keys_at(&self, paths: &mut Paths<'_>, path: PathIdx,
                              b: &mut LockedNode<'_, BtreeNode, Write>) -> Result<(), BchError> {
-        let node_iter = paths[path].l[usize::from(b.c.level)].iter;
+        let node_iter = paths[path].l[usize::from(b.c.level.get())].iter;
         split_merge::insert_keys_interior(self.t, paths, path, b, node_iter,
                                           &mut self.owned.borrow_mut().parent_keys)
     }

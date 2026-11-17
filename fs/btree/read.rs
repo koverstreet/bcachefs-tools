@@ -237,7 +237,7 @@ impl NodeRead<'_> {
 
     fn report(&self, ret: Result<(), BchError>, err: &Printbuf) {
         let (fs, b) = (self.fs, &*self.node);
-        let btree = Btree(b.c.btree_id.into());
+        let btree = Btree(b.c.btree_id.get().into());
 
         let mut msg = LogMsg::new(fs);
         prt!(&mut msg, "btree node read error at btree {}\n", b.pos_to_text(fs));
@@ -636,8 +636,8 @@ fn read_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, contents: &mut No
                                        Msg(|out: &mut Printbuf| node_header_to_text(out, &bn)))?,
         };
 
-        btree_err_on!(v, b.c.level == 0 &&
-                         Btree(b.c.btree_id.into()).flags().contains(BtreeFlags::extents) &&
+        btree_err_on!(v, b.c.level.get() == 0 &&
+                         Btree(b.c.btree_id.get().into()).flags().contains(BtreeFlags::extents) &&
                          !bn.new_extent_overwrite(),
                       FsckFlags::empty(),
                       ErrAt::NODE,
@@ -896,7 +896,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
     let fs = trans.fs();
     /* for a sync read's wait, after the read has the node */
     let b = unsafe { BackRef::new(&*node) };
-    let btree = Btree(b.c.btree_id.into());
+    let btree = Btree(b.c.btree_id.get().into());
     let key = BkeySC::from(node.contents().key_i());
 
     fs.event_inc_trace(events::btree_node_read, |out| prt!(out, "{}", b.pos_to_text(fs)));

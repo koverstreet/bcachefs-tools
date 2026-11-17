@@ -418,7 +418,7 @@ impl BtreeTrans<'_> {
         {
             let mut msg = msg.indent(2);
             prt!(&mut *msg, "parent:     ");
-            bch2_btree_id_level_to_text(&mut msg, crate::format::Btree(b.c.btree_id.into()), b.c.level.into());
+            bch2_btree_id_level_to_text(&mut msg, crate::format::Btree(b.c.btree_id.get().into()), b.c.level.get().into());
             prt!(&mut *msg, " {} - {}\n", contents.data().min_key, contents.data().max_key);
 
             prt!(&mut *msg, "parent key:  ");

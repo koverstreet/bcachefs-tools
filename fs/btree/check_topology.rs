@@ -100,7 +100,7 @@ fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     let mut b = paths.write_locked_node(idx, level);
     b.contents_mut().data_mut().min_key = new_min;
 
-    let ret = journal_overlay::insert(&mut fs.not_rw(), Btree(b.c.btree_id.into()), level as u32 + 1, &*new);
+    let ret = journal_overlay::insert(&mut fs.not_rw(), Btree(b.c.btree_id.get().into()), level as u32 + 1, &*new);
     if ret.is_ok() {
         drop_keys_outside_node(b.node(), b.contents_mut());
         b.contents_mut().key.set_key(&*new);
@@ -114,7 +114,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
                 new_max: Bpos) -> Result<(), BchError> {
     let fs = trans.fs();
     let b = paths.held_btree_node(idx, level).expect("a node to repair, held by its path");
-    let btree = Btree(b.c.btree_id.into());
+    let btree = Btree(b.c.btree_id.get().into());
 
     if fs.opts.verbose.get() != 0 {
         bch_info!(fs, "set_node_max(): {} -> {new_max}", BkeySC::from(b.contents().key_i()).to_text(fs));
@@ -205,8 +205,8 @@ fn check_node_boundaries(t: &TransAttempt<'_, '_>, b: Node<'_>,
                          prev: Option<Held<'_>>, cur: Held<'_>) -> Result<Repair, BchError> {
     let fs = t.fs();
     let trans = t.trans();
-    let btree = Btree(b.c.btree_id.into());
-    let level = usize::from(b.c.level) - 1;
+    let btree = Btree(b.c.btree_id.get().into());
+    let level = usize::from(b.c.level.get()) - 1;
     let b_data = b.contents().data();
     let cur_min = cur.b.contents().data().min_key;
     let expected_start = match &prev {
@@ -223,7 +223,7 @@ fn check_node_boundaries(t: &TransAttempt<'_, '_>, b: Node<'_>,
         return Ok(Repair::None);
     }
 
-    prt!(&mut buf, " at btree={btree} level={}:\nparent: {}", b.c.level, BkeySC::from(b.contents().key_i()).to_text(fs));
+    prt!(&mut buf, " at btree={btree} level={}:\nparent: {}", b.c.level.get(), BkeySC::from(b.contents().key_i()).to_text(fs));
 
     if let Some(p) = &prev {
         prt!(&mut buf, "\nprev: {}", BkeySC::from(p.b.contents().key_i()).to_text(fs));
@@ -234,7 +234,7 @@ fn check_node_boundaries(t: &TransAttempt<'_, '_>, b: Node<'_>,
     if expected_start < cur_min {								/* gap */
         let mut nodes_found = 0;
 
-        if b.c.level == 1 && btree_id_recovers_from_scan(btree) {
+        if b.c.level.get() == 1 && btree_id_recovers_from_scan(btree) {
             get_scanned_nodes(fs, btree, 0, expected_start, cur_min.predecessor(), &mut buf, &mut nodes_found)?;
             if nodes_found == 0 {
                 prt!(&mut buf, "btree node scan found no nodes this range\n");
@@ -559,7 +559,7 @@ fn check_root_boundaries(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(usiz
     let (level, root_k) = {
         let b = fs.btree_id_root(btree.0).expect("a root, after topology_check_root()");
         /* unlocked: recovery runs alone, and the root stays put */
-        (usize::from(b.c.level), BkeyBuf::from_key(BkeySC::from(unsafe { b.contents() }.key_i())))
+        (usize::from(b.c.level.get()), BkeyBuf::from_key(BkeySC::from(unsafe { b.contents() }.key_i())))
     };
 
     let iter = node_at(t, btree, level, &root_k, BtreeIterFlags::INTENT)?;

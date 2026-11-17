@@ -1664,7 +1664,7 @@ impl<'t> BtreeIter<'t> {
         let trans = t.trans();
         let fs = trans.fs();
 
-        while fs.btree.cache.roots.node(btree.0).is_some_and(|root| level == u32::from(root.c.level) + 1) {
+        while fs.btree.cache.roots.node(btree.0).is_some_and(|root| level == u32::from(root.c.level.get()) + 1) {
             self.exit_in(paths);
             *self = BtreeIter::node_iter_init_in(trans, paths, btree, POS_MIN, 0, level - 1,
                                                  BtreeIterFlags::NOT_EXTENTS | BtreeIterFlags::ALL_SNAPSHOTS,
@@ -2332,9 +2332,9 @@ impl<'t> BtreeNodeIter<'t> {
     /// # Safety
     /// @b's key is stable: the caller holds @b, or is writing it.
     pub(crate) unsafe fn at_node(t: &TransAttempt<'t, 't>, b: &BtreeNode) -> Result<Self, BchError> {
-        let level = usize::from(b.c.level);
+        let level = usize::from(b.c.level.get());
         let pos = unsafe { b.contents() }.key.k.p;
-        let mut iter = BtreeNodeIter::new(t, b.c.btree_id, pos, c::BTREE_MAX_DEPTH, b.c.level.into(),
+        let mut iter = BtreeNodeIter::new(t, b.c.btree_id.get(), pos, c::BTREE_MAX_DEPTH, b.c.level.get().into(),
                                           BtreeIterFlags::INTENT);
         iter.raw.traverse(t)?;
 
@@ -2373,7 +2373,7 @@ pub(crate) struct BtreeNodeRef {
 
 impl BtreeNodeRef {
     pub(crate) fn level(&self) -> u32 {
-        unsafe { self.raw.as_ref().c.level.into() }
+        unsafe { self.raw.as_ref().c.level.get().into() }
     }
 
     pub(crate) fn key(&self) -> &BkeyI {
@@ -2386,7 +2386,7 @@ impl BtreeNodeRef {
     }
 
     pub(crate) fn btree_id(&self) -> Btree {
-        Btree(unsafe { self.raw.as_ref().c.btree_id }.into())
+        Btree(unsafe { self.raw.as_ref().c.btree_id.get() }.into())
     }
 
     /// The node's identity, for telling whether it's the same node as

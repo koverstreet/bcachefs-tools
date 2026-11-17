@@ -119,7 +119,7 @@ impl BtreeCachePins<'_> {
 impl Fs {
     pub(crate) fn btree_node_pin(&self, b: &BtreeNode) {
         let mut lists = self.btree.cache.lock.lock();
-        let is_root = self.btree_id_root(b.c.btree_id.into()).is_some_and(|r| core::ptr::eq(r, b));
+        let is_root = self.btree_id_root(b.c.btree_id.get().into()).is_some_and(|r| core::ptr::eq(r, b));
 
         if is_root || b.flags.pinned() {
             return;

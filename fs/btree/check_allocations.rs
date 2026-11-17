@@ -72,7 +72,7 @@ fn gc_mark_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, iter: &BtreeI
 
 fn gc_btree_root(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(), BchError> {
     let fs = t.fs();
-    let level = fs.btree_id_root(btree.0).expect("a btree gc walks, with a root").c.level;
+    let level = fs.btree_id_root(btree.0).expect("a btree gc walks, with a root").c.level.get();
     let mut iter = BtreeNodeIter::new(t, btree, POS_MIN, 0, level.into(), BtreeIterFlags::empty());
 
     if !iter.peek(t)?.is_some_and(|b| fs.btree_id_root(btree.0).is_some_and(|r| ptr::eq(r, &*b))) {
