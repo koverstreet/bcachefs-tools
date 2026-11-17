@@ -22,9 +22,9 @@ use crate::os::sysfs::{self, obj_of, Attribute, Bin, Dir, Files, ShowFn, StoreFn
 use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
 use crate::util::Printbuf;
 
-#[path = "../kobject_static.rs"]
-mod kobject_static;
-pub use kobject_static::StaticKobject;
+#[path = "../kobject.rs"]
+mod common;
+pub use common::StaticKobject;
 
 /// /sys/fs: a kernel's - our sysfs has no parent above ours.
 pub fn fs_kobj() -> Option<&'static Kobject> {
@@ -334,6 +334,12 @@ impl Kobject {
     pub fn get(&self) {
         let _ = self.ktype();
         self.refs.fetch_add(1, Relaxed);
+    }
+
+    /// get(), unless the last ref's been put.
+    pub fn get_unless_zero(&self) -> bool {
+        let _ = self.ktype();
+        self.refs.fetch_update(Relaxed, Relaxed, |r| (r != 0).then(|| r + 1)).is_ok()
     }
 
     /// A ref given back: the last releases the owner - frees it.

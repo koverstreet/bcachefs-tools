@@ -21,9 +21,9 @@ use crate::os::sysfs::{self, obj_of, Bin, Dir, Files};
 use crate::util::ffi::c_char;
 use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
 
-#[path = "../kobject_static.rs"]
-mod kobject_static;
-pub use kobject_static::StaticKobject;
+#[path = "../kobject.rs"]
+mod common;
+pub use common::StaticKobject;
 
 /// /sys/fs.
 pub fn fs_kobj() -> Option<&'static Kobject> {
@@ -308,6 +308,11 @@ impl Kobject {
     /// A ref, for put() to give back.
     pub fn get(&self) {
         unsafe { c::kobject_get(self.as_ptr()) };
+    }
+
+    /// get(), unless the last ref's been put: kobject_get_unless_zero().
+    pub fn get_unless_zero(&self) -> bool {
+        !unsafe { c::kobject_get_unless_zero(self.as_ptr()) }.is_null()
     }
 
     /// A ref given back: the last releases the owner - frees it.

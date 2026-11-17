@@ -1,8 +1,37 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A kobject in a static: the port's kobject.rs's, which has this module too.
+//! What both ports' kobject.rs have: a kobject's refs, as a Refcount - placed
+//! in what it's the kobject of, a ref keeps that - and a kobject in a static.
 
 use core::ptr::NonNull;
+
+use crate::util::refcount::{Refcount, TryRefcount};
+
+// SAFETY: its release - KobjOwner's - frees what it's in only once the last
+// ref is put
+unsafe impl Refcount for Kobject {
+    type Target = Kobject;
+
+    fn target(&self) -> &Kobject {
+        self
+    }
+
+    unsafe fn inc(&self) {
+        self.get()
+    }
+
+    unsafe fn dec(&self) {
+        // SAFETY: the caller's ref
+        unsafe { Kobject::put(self) }
+    }
+}
+
+// SAFETY: get_unless_zero() takes a ref when it succeeds
+unsafe impl TryRefcount for Kobject {
+    fn try_inc(&self) -> bool {
+        self.get_unless_zero()
+    }
+}
 
 use super::{GroupList, Groups, KobjOwner, KobjPlace, Kobject};
 use crate::os::sysfs::Dir;
