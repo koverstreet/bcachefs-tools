@@ -158,4 +158,4 @@ impl ExportOps for Fs {
 }
 
 // CONFIG_EXPORTFS_BLOCK_OPS's block_ops pointer makes export_operations !Sync
-pub(crate) static EXPORT_OPS: CStatic<c::export_operations> = unsafe { CStatic::new(ExportVTable::<Fs>::OPS) };
+pub(crate) static EXPORT_OPS: CStatic<c::export_operations> = ExportVTable::<Fs>::STATIC;

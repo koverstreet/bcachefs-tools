@@ -57,3 +57,4 @@ pub mod vfs_inode;
 pub mod vm;
 pub mod vmap;
 pub mod workqueue;
+pub mod xattr;

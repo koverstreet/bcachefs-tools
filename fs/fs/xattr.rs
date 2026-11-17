@@ -369,28 +369,20 @@ mod vfs {
 
     use crate::format::MetadataVersion;
     use crate::format::BkeyType;
-    use core::ffi::{c_int, c_void, CStr};
+    use core::ffi::{c_int, CStr};
     use crate::btree::bkey::pos;
     use crate::btree::iter::{lockrestart_do, CommitFlags};
-    use crate::errcode::{Errcode, ret_to_class};
+    use crate::errcode::Errcode;
     use crate::inode_opts::{self, InodeOpt};
     use crate::locking::MemallocFlags;
     use crate::opts::{self, OptChange};
     use crate::types::CStatic;
-    use crate::util::ffi::{c_char, opt_bytes, opt_bytes_mut};
     use cstruct_macros::vtable;
     use crate::vfs::dentry::Dentry;
-    use crate::os::idmap::RawIdmap;
+    use crate::os::posix_acl::AclType;
+    use crate::os::xattr::{posix_acl_list_prefix, XattrHandler, XattrHandlers, XattrPrefix, XattrVTable};
     use crate::os::iattr::ATTR_CTIME;
     use crate::vfs::inode::InodeInfo;
-
-    /// A getxattr result as C's int: the length, or the error's class.
-    fn len_to_c(r: Result<usize, BchError>) -> c_int {
-        match r {
-            Ok(len) => len as c_int,
-            Err(e)  => e.class(),
-        }
-    }
 
     /// What listxattr writes into: as C's struct xattr_buf. Without a buffer,
     /// only how much would be written is counted.
@@ -631,42 +623,6 @@ mod vfs {
 
     // ── The handlers ─────────────────────────────────────────────────────
 
-    /// The namespace a handler is dispatched for.
-    pub(crate) trait XattrPrefix {
-        const PREFIX: &'static CStr;
-    }
-
-    crate::vfs_ops! {
-        /// An xattr namespace's ops: an entry of sb->s_xattr.
-        pub(crate) trait XattrHandler: XattrPrefix for c::xattr_handler,
-            XattrVTable<T: XattrHandler> = T, |h| { h.prefix = T::PREFIX.as_ptr().cast(); };
-
-        /// Whether @dentry's caller sees the namespace's xattrs listed.
-        fn list(dentry: Dentry<'_>) -> bool;
-        /// Xattr @name's value into @buffer, or with None, how long it is.
-        fn get(inode: &InodeInfo, name: &CStr, buffer: Option<&mut [u8]>) -> Result<usize, BchError>
-            => extern (_handler: *const c::xattr_handler, _dentry: *mut c::dentry, inode: *mut c::inode,
-                       name: *const c_char, buffer: *mut c_void, size: usize) -> c_int
-        {
-            len_to_c(unsafe {
-                T::get(InodeInfo::from_inode(inode), CStr::from_ptr(name.cast()), opt_bytes_mut(buffer, size))
-            })
-        };
-        /// Xattr @name set to @value - with None, removed - as setxattr(2)'s
-        /// @flags say.
-        fn set(dentry: Dentry<'_>, inode: &InodeInfo, name: &CStr, value: Option<&[u8]>, flags: c_int)
-            -> Result<(), BchError>
-            => extern (_handler: *const c::xattr_handler, _idmap: RawIdmap, dentry: *mut c::dentry,
-                       inode: *mut c::inode, name: *const c_char, value: *const c_void, size: usize,
-                       flags: c_int) -> c_int
-        {
-            ret_to_class(unsafe {
-                T::set(Dentry::borrow_raw(dentry), InodeInfo::from_inode(inode), CStr::from_ptr(name.cast()),
-                       opt_bytes(value, size), flags)
-            })
-        };
-    }
-
     /// The user, trusted and security namespaces: xattrs of type @TY, stored
     /// as they're named.
     struct Stored<const TY: u32>;
@@ -681,6 +637,8 @@ mod vfs {
 
     #[vtable]
     impl<const TY: u32> XattrHandler for Stored<TY> where Self: XattrPrefix {
+        type Inode = InodeInfo;
+
         fn list(_dentry: Dentry<'_>) -> bool {
             TY != XattrType::TRUSTED.0 || crate::os::kernel::capable(crate::os::kernel::Capability::SysAdmin)
         }
@@ -703,6 +661,8 @@ mod vfs {
 
     #[vtable]
     impl XattrHandler for Bcachefs {
+        type Inode = InodeInfo;
+
         fn get(inode: &InodeInfo, name: &CStr, buffer: Option<&mut [u8]>) -> Result<usize, BchError> {
             bcachefs_get(inode, name, buffer, false)
         }
@@ -721,6 +681,8 @@ mod vfs {
 
     #[vtable]
     impl XattrHandler for BcachefsEffective {
+        type Inode = InodeInfo;
+
         fn get(inode: &InodeInfo, name: &CStr, buffer: Option<&mut [u8]>) -> Result<usize, BchError> {
             bcachefs_get(inode, name, buffer, true)
         }
@@ -733,27 +695,20 @@ mod vfs {
         }
     }
 
-    // SAFETY, of the CStatics: immutable, their only parts that aren't Sync
-    // pointers to static strings and fns
-    static USER_HANDLER: CStatic<c::xattr_handler> = unsafe { CStatic::new(XattrVTable::<User>::OPS) };
-    static TRUSTED_HANDLER: CStatic<c::xattr_handler> = unsafe { CStatic::new(XattrVTable::<Trusted>::OPS) };
-    static SECURITY_HANDLER: CStatic<c::xattr_handler> = unsafe { CStatic::new(XattrVTable::<Security>::OPS) };
-    static BCACHEFS_HANDLER: CStatic<c::xattr_handler> = unsafe { CStatic::new(XattrVTable::<Bcachefs>::OPS) };
-    static BCACHEFS_EFFECTIVE_HANDLER: CStatic<c::xattr_handler> = unsafe {
-        CStatic::new(XattrVTable::<BcachefsEffective>::OPS)
-    };
+    static USER_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<User>::STATIC;
+    static TRUSTED_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<Trusted>::STATIC;
+    static SECURITY_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<Security>::STATIC;
+    static BCACHEFS_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<Bcachefs>::STATIC;
+    static BCACHEFS_EFFECTIVE_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<BcachefsEffective>::STATIC;
 
     /// The VFS's: sb->s_xattr.
-    pub static XATTR_HANDLERS: CStatic<[*const c::xattr_handler; 6]> = unsafe {
-        CStatic::new([
-            core::ptr::addr_of!(USER_HANDLER).cast(),
-            core::ptr::addr_of!(TRUSTED_HANDLER).cast(),
-            core::ptr::addr_of!(SECURITY_HANDLER).cast(),
-            core::ptr::addr_of!(BCACHEFS_HANDLER).cast(),
-            core::ptr::addr_of!(BCACHEFS_EFFECTIVE_HANDLER).cast(),
-            core::ptr::null(),
-        ])
-    };
+    pub static XATTR_HANDLERS: XattrHandlers<5> = XattrHandlers::new([
+        &USER_HANDLER,
+        &TRUSTED_HANDLER,
+        &SECURITY_HANDLER,
+        &BCACHEFS_HANDLER,
+        &BCACHEFS_EFFECTIVE_HANDLER,
+    ]);
 
     /// What an xattr of @ty lists under for @dentry's caller - None if it
     /// doesn't: the handler's prefix, or its name for a POSIX ACL's. As
@@ -761,26 +716,11 @@ mod vfs {
     pub fn list_prefix(ty: XattrType, dentry: Dentry<'_>) -> Option<&'static CStr> {
         match ty {
             XattrType::USER              => User::list(dentry).then_some(User::PREFIX),
-            // SAFETY: the kernel's, and immutable
-            XattrType::POSIX_ACL_ACCESS  => kernel_list_prefix(unsafe { &c::nop_posix_acl_access }, dentry),
-            XattrType::POSIX_ACL_DEFAULT => kernel_list_prefix(unsafe { &c::nop_posix_acl_default }, dentry),
+            XattrType::POSIX_ACL_ACCESS  => posix_acl_list_prefix(AclType::Access, dentry),
+            XattrType::POSIX_ACL_DEFAULT => posix_acl_list_prefix(AclType::Default, dentry),
             XattrType::TRUSTED           => Trusted::list(dentry).then_some(Trusted::PREFIX),
             XattrType::SECURITY          => Security::list(dentry).then_some(Security::PREFIX),
             _ => None,
         }
-    }
-
-    /// list_prefix() of one of the kernel's handlers: xattr_handler_can_list(),
-    /// then xattr_prefix().
-    fn kernel_list_prefix(handler: &'static c::xattr_handler, dentry: Dentry<'_>) -> Option<&'static CStr> {
-        if let Some(list) = handler.list {
-            if !unsafe { list(dentry.as_ptr()) } {
-                return None;
-            }
-        }
-
-        // the handlers' strings are static
-        let p = if handler.prefix.is_null() { handler.name } else { handler.prefix };
-        Some(unsafe { CStr::from_ptr(p.cast()) })
     }
 }

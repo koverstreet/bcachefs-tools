@@ -27,6 +27,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::{RwSem, SharedGuard};
 use crate::os::dentry::Dentry;
 use crate::os::seq_file::SeqFile;
+use crate::os::xattr::XattrHandlers;
 use crate::util::ffi::Opaque;
 use kernel::error::{code::ENOMEM, to_result, Result};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
@@ -294,12 +295,7 @@ impl<T: FsType> NewSuper<T> {
         unsafe { (*self.raw()).s_export_op = (ops as *const c::export_operations).cast() };
     }
 
-    /// The xattr handlers, NULL-terminated.
-    ///
-    /// # Safety
-    /// Every pointer before the NULL is to a handler, live as long as @h.
-    pub unsafe fn set_xattr_handlers<const N: usize>(&mut self, h: &'static [*const c::xattr_handler; N]) {
-        debug_assert!(h.last().is_some_and(|p| p.is_null()), "xattr handlers are NULL-terminated");
+    pub fn set_xattr_handlers<const N: usize>(&mut self, h: &'static XattrHandlers<N>) {
         unsafe { (*self.raw()).s_xattr = h.as_ptr().cast() };
     }
 
