@@ -36,7 +36,7 @@ use crate::util::place::{Contained, PlacedDrop};
 use crate::util::rcu::{read_lock, RcuHead, ReadGuard, SrcuReadGuard};
 use crate::util::rcu_pending::{RcuPending, RcuRealloc};
 use crate::os::shrinker::{Shrink, Shrinker};
-use crate::os::workqueue::Queue;
+use crate::os::workqueue::{Queue, ReffedWork};
 use crate::util::{Printbuf, ToText};
 use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
 #[cfg(kernel)]
@@ -45,9 +45,19 @@ use core::ffi::c_ulong;
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
+use cstruct_macros::{placed, Init, MaybeZeroable, TypeInfo};
+use pin_init::pin_data;
 
 pub(crate) type KeyTable = Cuckoo<Entry<c::bkey_cached>, GoldenRatio>;
+
+#[allow(non_camel_case_types)]
+#[repr(C, align(4))]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]
+pub struct bkey_cached_key {
+    pub btree_id: u32,
+    pub pos: Bpos,
+}
 
 crate::keyed_by!(c::bkey_cached, |ck| &ck.key => c::bkey_cached_key);
 
@@ -122,6 +132,75 @@ unsafe impl<const PCPU: bool> RcuRealloc for Cached<PCPU> {
 
 pub(crate) type Pending<const PCPU: bool> = RcuPending<'static, Cached<PCPU>, &'static KmemCache<c::bkey_cached>>;
 pub(crate) type Pendings = (Pending<false>, Pending<true>);
+
+#[allow(non_camel_case_types)]
+#[placed(c::bch_fs_btree.key_cache)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
+pub struct bch_fs_btree_key_cache {
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    pub(crate) table: KeyTable,
+    /* what's in the table, to walk: an entry's slot is from insert to evict */
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    pub(crate) keys: c::fast_list,
+
+    #[pin]
+    pub(crate) shrinker: c::btree_key_cache_shrinker,
+    #[pin]
+    #[init(AtomicUsize::new(0))]
+    pub(crate) shrink_iter: AtomicUsize,
+
+    /* 0: non pcpu reader locks, 1: pcpu reader locks */
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    /* set up and exited through the struct shared, in place: setup(), exit() */
+    pub(crate) pending: core::cell::UnsafeCell<Pendings>,
+
+    pub nr_keys: AtomicIsize,
+    pub nr_dirty: AtomicIsize,
+
+    /* shrinker stats */
+    #[pin]
+    #[init(ShrinkStats::new())]
+    pub(crate) stats: ShrinkStats,
+}
+
+impl bch_fs_btree_key_cache {
+    pub(crate) fn pending(&self) -> &Pendings {
+        unsafe { &*self.pending.get() }
+    }
+
+    pub fn nr_keys_need_flush(&self) -> usize {
+        let nr_dirty = self.nr_dirty.load(Relaxed);
+        let nr_keys = self.nr_keys.load(Relaxed);
+        let max_dirty = 1024 + nr_keys / 2;
+
+        nr_dirty.saturating_sub(max_dirty).max(0) as usize
+    }
+
+    pub fn dirty_over_max(&self) -> isize {
+        let nr_dirty = self.nr_dirty.load(Relaxed);
+        let nr_keys = self.nr_keys.load(Relaxed);
+        let max_dirty = 4096 + (nr_keys * 3) / 4;
+
+        nr_dirty - max_dirty
+    }
+
+    pub fn must_wait(&self) -> bool {
+        self.dirty_over_max() > 0
+    }
+
+    pub fn wait_done(&self) -> bool {
+        let nr_dirty = self.nr_dirty.load(Relaxed);
+        let nr_keys = self.nr_keys.load(Relaxed);
+        let max_dirty = 2048 + (nr_keys * 5) / 8;
+
+        nr_dirty <= max_dirty
+    }
+}
 
 /// An entry of the cache's, found unlocked: for as long as the transaction
 /// holds the btree trans SRCU, which it's freed a grace period of.
@@ -376,6 +455,20 @@ impl BtreeTrans<'_> {
 }
 
 // ── The shrinker ─────────────────────────────────────────────────────────
+
+/// The key cache's shrinker, Sync - a shrinker's owner is - as the key cache,
+/// with its per-CPU counter and fast_list, isn't.
+#[allow(non_camel_case_types)]
+#[placed(c::bch_fs_btree_key_cache.shrinker)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct btree_key_cache_shrinker {
+    pub(crate) shrink: Shrinker<Self>,
+    /* the table shrunk once scan() has emptied it: its allocation, off reclaim */
+    #[pin]
+    pub(crate) shrink_table_work: ReffedWork<shrink_table, crate::field!(super.super.super.ro_ref)>,
+}
 
 impl Shrink for c::btree_key_cache_shrinker {
     fn shrinker(&self) -> &Shrinker<Self> {

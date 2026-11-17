@@ -14,7 +14,6 @@
 #[path = "btree/bkey_types.rs"] pub mod btree_bkey_types;
 #[path = "btree/journal_overlay_defs.rs"] pub mod btree_journal_overlay_defs;
 #[path = "btree/check_types.rs"] pub mod btree_check_types;
-#[path = "btree/key_cache_types.rs"] pub mod btree_key_cache_types;
 #[path = "data/ec/create_types.rs"] pub mod data_ec_create_types;
 #[path = "data/ec/format.rs"] pub mod data_ec_format;
 #[path = "data/ec/types.rs"] pub mod data_ec_types;
@@ -111,7 +110,7 @@ pub mod c {
     pub use super::btree_journal_overlay_defs::*;
     pub use crate::btree::journal_overlay::{OverwriteRange, OverwriteRanges, OverwriteRangesLive, OverwriteRangesLiveWriter, journal_key, journal_key_flags, journal_key_id, journal_key_journal_pos, journal_key_src, journal_keys, journal_ptr, journal_replay};
     pub(crate) use crate::btree::journal_overlay::{__journal_key_flags_forward, __journal_key_id_forward};
-    pub use super::btree_key_cache_types::*;
+    pub use crate::btree::key_cache::{bch_fs_btree_key_cache, bkey_cached_key, btree_key_cache_shrinker};
     pub use crate::btree::locking::{ BtreeNodeLockedType};
     pub use crate::btree::update::{ TransCommitFlagBit, TransCommitFlags, btree_trans_subbuf};
     pub use crate::btree::write_buffer::{ BTREE_WRITE_BUFERED_VAL_U64s_MAX, bch_fs_btree_write_buffer, WbBtree, btree_write_buffered_key, wb_flushing_pin, wb_inc_pin, WbFlushCaller, wb_key_ref, wb_key_ref_key, wb_key_ref_pos_idx, wb_key_ref_words};
