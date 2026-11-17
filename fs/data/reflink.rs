@@ -781,22 +781,18 @@ static INDIRECT_INLINE_DATA: Trigger = Trigger(trigger_indirect_inline_data);
 
 // ── create ───────────────────────────────────────────────────────────────
 
-/// Make @orig indirect: its data moves to a new indirect extent in the
-/// reflink btree, and @orig becomes a reflink_p to it, in place, for the
-/// caller to update.
-///
-/// # Safety
-/// @orig is a key ours to edit, with room for a reflink_p.
-unsafe fn __make_extent_indirect(
-    t:                               &TransAttempt<'_, '_>,
-    orig:                            *mut c::bkey_i,
+/// Make @orig indirect, and update it: its data moves to a new indirect
+/// extent in the reflink btree, and @orig becomes a reflink_p to it, in its
+/// buffer - which has to have room for one.
+pub fn make_extent_indirect<'a, 't>(
+    t:                               &TransAttempt<'a, 't>,
+    extent_iter:                     &BtreeIter<'a>,
+    orig:                            &mut TransBkey<'a, 't>,
     reflink_p_may_update_opts_field: bool,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    // SAFETY: the caller's
-    let orig = unsafe { &mut *BkeyI::from_raw_mut(orig) };
 
-    if orig.k.key_type() == BkeyType::inline_data {
+    if orig.k().key_type() == BkeyType::inline_data {
         fs.check_set_feature(SbFeature::reflink_inline_data);
     }
 
@@ -820,20 +816,20 @@ unsafe fn __make_extent_indirect(
      * filesystem: we need to implement wraparound, with a cursor in the
      * logged ops btree:
      */
-    if bkey_ge(reflink_iter.pos(), pos(0, c::ReflinkPIdxFlags::IDX_MAX - orig.k.size as u64)) {
+    if bkey_ge(reflink_iter.pos(), pos(0, c::ReflinkPIdxFlags::IDX_MAX - orig.k().size as u64)) {
         return Err(c::ENOSPC.into());
     }
 
-    let r_v_buf_u64s = orig.k.u64s as u32 + 2 + c::BCH_REPLICAS_MAX;
+    let r_v_buf_u64s = orig.k().u64s as u32 + 2 + c::BCH_REPLICAS_MAX;
     let mut r_v = t.bkey_alloc(r_v_buf_u64s)?;
 
     let k = r_v.k_mut();
     *k = c::bkey::new();
-    k.type_    = orig.k.indirect_type().0 as u8;
+    k.type_    = orig.k().indirect_type().0 as u8;
     k.p        = reflink_iter.pos();
-    k.resize(orig.k.size);
-    k.bversion = orig.k.bversion;
-    k.set_val_bytes(size_of::<Le64>() + orig.k.val_bytes());
+    k.resize(orig.k().size);
+    k.bversion = orig.k().bversion;
+    k.set_val_bytes(size_of::<Le64>() + orig.k().val_bytes());
 
     /* The refcount, zero, then the extent's value */
     let (refcount, val) = r_v.val_bytes_mut().split_at_mut(size_of::<Le64>());
@@ -847,33 +843,17 @@ unsafe fn __make_extent_indirect(
     /* orig, rewritten in place as the reflink_p - in the room the caller gave it */
     let r_v_start = r_v.k().start_offset();
 
-    orig.k.set_key_type(BkeyType::reflink_p);
-    orig.k.set_val_bytes(size_of::<c::ReflinkP>());
-    // SAFETY: the room the caller vouched for
-    let orig: &mut BkeyI = unsafe { orig.cast_mut() };
-    (&mut *orig).val_bytes_mut().fill(0);
+    orig.set_val_u64s(size_of::<c::ReflinkP>() / size_of::<u64>())
+        .unwrap_or_else(|e| panic!("no room in {} for a reflink_p: {e}", orig.k()));
+    orig.k_mut().set_key_type(BkeyType::reflink_p);
+    orig.val_bytes_mut().fill(0);
 
-    let r_p = orig.arm::<c::ReflinkP>().expect("a reflink_p, as just made");
-    r_p.v.set_idx(r_v_start);
+    let mut r_p = orig.reborrow().arm::<c::ReflinkP>().expect("a reflink_p, as just made");
+    r_p.v_mut().set_idx(r_v_start);
 
     if reflink_p_may_update_opts_field {
-        r_p.v.set_may_update_options(true);
+        r_p.v_mut().set_may_update_options(true);
     }
-    Ok(())
-}
-
-/// As __make_extent_indirect(), on a key with the room.
-pub fn make_extent_indirect<'a, 't>(
-    t:                               &TransAttempt<'a, 't>,
-    extent_iter:                     &BtreeIter<'a>,
-    orig:                            &mut TransBkey<'a, 't>,
-    reflink_p_may_update_opts_field: bool,
-) -> Result<(), BchError> {
-    assert!(orig.as_u64s().len() * size_of::<u64>() >= size_of::<BkeyI<c::ReflinkP>>(),
-            "no room in {} for a reflink_p", orig.k());
-
-    // SAFETY: in transaction memory, as a TransBkey is, with the room
-    unsafe { __make_extent_indirect(t, orig.as_ptr(), reflink_p_may_update_opts_field) }?;
     t.update(extent_iter, orig, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
