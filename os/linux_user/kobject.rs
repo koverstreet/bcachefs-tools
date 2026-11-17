@@ -203,10 +203,6 @@ unsafe impl Sync for Kobject {}
 
 unsafe impl ::pin_init::Zeroable for Kobject {}
 
-/// struct device: Fs.chardev's, which only the kernel's chardev sets
-#[allow(non_camel_case_types)]
-pub struct device;
-
 /// Every kobject in sysfs, in the order they were added: a directory's
 /// subdirectories are those whose parent it is, and the one with none is the
 /// root.

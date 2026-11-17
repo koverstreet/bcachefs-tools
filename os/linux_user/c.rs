@@ -12,7 +12,6 @@ pub use super::bio::{bio_vec, bvec_iter};
 pub use super::blkdev::{blk_holder_ops, MINORBITS};
 pub use super::fs::*;
 pub use super::jump_label::static_key_false;
-pub use super::kobject::device;
 use core::ffi::c_void;
 
 use super::blkdev::BlockDevice;

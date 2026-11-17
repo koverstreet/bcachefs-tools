@@ -457,9 +457,11 @@ pub struct Fs {
     pub(crate) kobj: Placed<Kobject, crate::at!(Fs.kobj)>,
     pub flags: AtomicBitflags<c::FsFlag>,
 
-    #[init(AtomicI32::new(-1))]
-    pub minor: AtomicI32,
-    pub chardev: AtomicPtr<c::device>,
+    /// Its control device, from online() to stop()
+    #[cfg(kernel)]
+    #[pin]
+    #[init(crate::locking::Locked::new_const(None, ()))]
+    pub(crate) chardev: crate::locking::Locked<crate::locking::ByteLock, Option<crate::init::chardev::CtlDev>>,
     pub vfs_sb: *mut c::super_block,
     /// What its devices are claimed for: the open's, from alloc()
     #[pin]

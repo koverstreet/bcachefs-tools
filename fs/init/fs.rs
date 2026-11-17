@@ -129,6 +129,15 @@ impl Fs {
         crate::util::ffi::cstr_in(&self.name)
     }
 
+    /// Its control device's minor, -1 without one - as in userspace, which
+    /// has no control devices.
+    pub fn minor(&self) -> i32 {
+        #[cfg(kernel)]
+        return self.chardev.lock().as_ref().map_or(-1, |d| d.minor() as i32);
+        #[cfg(not(kernel))]
+        -1
+    }
+
     pub fn opts(&self) -> &c::PublishedOpts {
         &self.opts
     }

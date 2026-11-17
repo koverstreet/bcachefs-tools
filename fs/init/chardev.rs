@@ -8,12 +8,12 @@
 //! fs_ioctl() - or calls global_ioctl(), with none; a mounted filesystem's
 //! file ioctls end up in fs_ioctl() too.
 //!
-//! Minors are MINORS's: the filesystem of each, None for a free one, the
-//! first free reused, under a mutex that covers finding a filesystem and
-//! taking its ro_ref together. bch2_fs_chardev_exit() takes it out, under
-//! the mutex, before the filesystem stops - waiting out ro_refs - so an
-//! ioctl holds a ref on a live filesystem or doesn't find it, never one
-//! that's being torn down.
+//! Minors are MINORS's: a BackRef to the filesystem of each, None for a free
+//! one, the first free reused, under a lock that covers finding a filesystem
+//! and taking its ro_ref together. A filesystem's slot is its own - a
+//! CtlDev, with its device - and stop() drops it, under the lock, before it
+//! waits out ro_refs: so an ioctl holds a ref on a live filesystem or doesn't
+//! find it, never one that's being torn down.
 //!
 //! Before a filesystem's started, only its queries are answered: anything
 //! else is EINVAL_ioctl_not_started. The usage queries read in-memory
@@ -37,10 +37,12 @@ use crate::init::passes::RecoveryPass;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, WriteRef};
-use crate::locking::{Locked, Mutex};
+use crate::locking::{ByteLock, Locked};
+use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
-use crate::types::CStatic;
-use crate::os::file::{File, FileOps, FileVTable, UserBuf};
+use crate::os::chrdev::{self, Chrdev, Class, Device};
+use crate::os::file::{File, FileOps, UserBuf};
+use crate::os::module::{ModuleExit, ThisModule};
 use crate::os::ioctl::{arg, inout, input, output, vstruct, UserArg, UserStr, UserVstruct};
 use crate::util::ioctl::Ioctl;
 use crate::util::alloc::{KBox, KVVec};
@@ -55,7 +57,6 @@ use crate::btree_trans;
 use core::mem::offset_of;
 use core::ops::ControlFlow;
 use crate::util::Printbuf;
-use crate::errcode::{errptr_to_result, ret_to_result_void};
 use crate::sb::members::{DevOuterRef, DevRef};
 use crate::{bch_err, bch_err_dev, bch_err_msg, bch_err_msg_dev, prt};
 use crate::os::kernel::{capable, Capability};
@@ -64,8 +65,8 @@ use crate::data::moving::MoveStats;
 use core::mem::size_of;
 use core::ptr::NonNull;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
-use core::ffi::{c_void, CStr};
+use core::sync::atomic::Ordering::Relaxed;
+use core::ffi::CStr;
 use cstruct_macros::vtable;
 use crate::util::alloc::KVec;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
@@ -767,25 +768,63 @@ const MINOR_GLOBAL: u32 = u8::MAX as u32;
 
 const NAME: &CStr = c"bcachefs-ctl";
 
-struct Minors(KVec<Option<NonNull<Fs>>>);
+/// The filesystems, by minor - None, a free one - each a BackRef to it from
+/// its CtlDev; and the global device.
+struct Minors {
+    fs:     KVec<Option<BackRef<Fs>>>,
+    global: Option<Device>,
+}
 
-// SAFETY: filesystems, each live while it's here: bch2_fs_chardev_exit()
-// takes it out before it's torn down
-unsafe impl Send for Minors {}
+static MINORS: Locked<ByteLock, Minors> = Locked::new_const(Minors { fs: KVec::new(), global: None }, ());
 
-// SAFETY: init_zeroed() by bch2_chardev_init(), at module init, before any
-// filesystem
-static MINORS: Locked<Mutex, Minors> = unsafe { Locked::uninit(Minors(KVec::new()), ()) };
+static CHRDEV: Chrdev = Chrdev::new(NAME);
 
-static MAJOR: AtomicU32 = AtomicU32::new(0);
+static CLASS: Class = Class::new(c"bcachefs");
 
-static CLASS: CStatic<c::class> = unsafe {
-    // SAFETY, of the CStatic: a name, and NULLs
-    CStatic::new(c::class { name: c"bcachefs".as_ptr().cast(), ..::pin_init::zeroed() })
-};
+/// A filesystem's minor, its slot in MINORS: freed when dropped.
+struct Minor(u32);
 
-fn mkdev(minor: u32) -> c::dev_t {
-    MAJOR.load(Relaxed) << c::MINORBITS | minor
+impl Minor {
+    /// The first free one.
+    fn new(fs: &Fs) -> Result<Minor, BchError> {
+        let mut minors = MINORS.lock();
+        // SAFETY: the slot's the Minor's, in the CtlDev that's the
+        // filesystem's: emptied when that's dropped, at stop() or with the
+        // filesystem
+        let entry = Some(unsafe { BackRef::new(fs) });
+        match minors.fs.iter().position(Option::is_none) {
+            Some(i) => {
+                minors.fs[i] = entry;
+                Ok(Minor(i as u32))
+            }
+            None if (minors.fs.len() as u32) < MINOR_GLOBAL && minors.fs.push(entry).is_ok() =>
+                Ok(Minor(minors.fs.len() as u32 - 1)),
+            None => fs.throw(Errcode::chardev_init_error),
+        }
+    }
+}
+
+impl Drop for Minor {
+    fn drop(&mut self) {
+        let mut minors = MINORS.lock();
+        minors.fs[self.0 as usize] = None;
+        // The last one out frees the table: nothing else does, the static
+        // is never dropped
+        if minors.fs.iter().all(Option::is_none) {
+            minors.fs = KVec::new();
+        }
+    }
+}
+
+/// A filesystem's control device, /dev/bcachefsN-ctl, N its minor: the
+/// filesystem's own, in its chardev - the device unregistered, then the
+/// minor freed, when dropped.
+pub(crate) struct CtlDev(Device, Minor);
+
+impl CtlDev {
+    pub(crate) fn minor(&self) -> u32 {
+        self.1.0
+    }
 }
 
 struct Ctl;
@@ -795,19 +834,19 @@ impl FileOps for Ctl {
     type Data = Self;
 
     fn open(inode: &Opaque<c::inode>, file: &File) -> Result<Pin<KBox<Self>>, BchError> {
-        ret_to_result_void(unsafe { c::nonseekable_open(inode.as_ptr(), file.as_ptr()) })?;
+        file.nonseekable_open(inode)?;
         Ok(KBox::pin(Ctl, GFP_KERNEL)?)
     }
 
     fn unlocked_ioctl(&self, file: &File<Self>, cmd: c_uint, arg: c_ulong) -> c_long {
         let user = UserPtr::from_addr(arg as usize);
-        // SAFETY: an open file's inode, the device's
-        let minor = unsafe { (*(*file.as_ptr()).f_inode).i_rdev } & ((1 << c::MINORBITS) - 1);
+        let minor = chrdev::minor(file.rdev());
 
         // The global device's minor is past every filesystem's
-        let fs = MINORS.lock().0.get(minor as usize).copied().flatten().map(|fs| {
-            // SAFETY: live while it's in MINORS
-            let fs = unsafe { fs.as_ref() };
+        let fs = MINORS.lock().fs.get(minor as usize).and_then(Option::as_ref).map(|fs| {
+            // SAFETY: a ro_ref, taken while the filesystem's in MINORS: stop()
+            // takes it out, then waits out its ro_refs
+            let fs = unsafe { fs.get() };
             fs.ro_ref.tryget().ok_or_else(|| fs.err(Errcode::ioctl_fs_stopping))
         });
 
@@ -820,87 +859,38 @@ impl FileOps for Ctl {
 
 impl Fs {
     pub(crate) fn chardev_init(&self) -> Result<(), BchError> {
-        let minor = {
-            let mut minors = MINORS.lock();
-            let fs = Some(NonNull::from(self));
-            match minors.0.iter().position(Option::is_none) {
-                Some(i) => { minors.0[i] = fs; i as u32 }
-                None if (minors.0.len() as u32) < MINOR_GLOBAL && minors.0.push(fs).is_ok() =>
-                    minors.0.len() as u32 - 1,
-                None => return self.throw(Errcode::chardev_init_error),
-            }
-        };
-        self.minor.store(minor as c_int, Relaxed);
+        let minor = Minor::new(self)?;
 
-        let dev = unsafe {
-            c::device_create(&*CLASS, core::ptr::null_mut(), mkdev(minor), self.as_ptr().cast(),
-                             c"bcachefs%u-ctl".as_ptr().cast(), minor)
-        };
-        match errptr_to_result(NonNull::new(dev).expect("a device, or an error")) {
-            Ok(dev) => {
-                self.chardev.store(dev.as_ptr(), Relaxed);
-                Ok(())
-            }
-            Err(_) => self.throw(Errcode::chardev_init_error),
+        let mut name = Printbuf::new();
+        prt!(&mut name, "bcachefs{}-ctl", minor.0);
+        if name.allocation_failure() {
+            return self.throw(Errcode::chardev_init_error);
         }
+        let dev = Device::create(&CLASS, CHRDEV.dev(minor.0), name.as_c_str())
+            .or_else(|_| self.throw(Errcode::chardev_init_error))?;
+
+        *self.chardev.lock() = Some(CtlDev(dev, minor));
+        Ok(())
     }
 
     pub(crate) fn chardev_exit(&self) {
-        let (dev, minor) = (self.chardev.load(Relaxed), self.minor.load(Relaxed));
-        if !dev.is_null() {
-            unsafe { c::device_unregister(dev) };
-        }
-        if minor >= 0 {
-            let mut minors = MINORS.lock();
-            minors.0[minor as usize] = None;
-            // The last one out frees the table: nothing else does, the static
-            // is never dropped
-            if minors.0.iter().all(Option::is_none) {
-                minors.0 = KVec::new();
-            }
-        }
+        let dev = self.chardev.lock().take();
+        drop(dev);
     }
 }
 
-pub fn bch2_chardev_init() -> c_int {
-    // SAFETY: module init, once
-    let Ok(()) = unsafe { MINORS.init_zeroed(c"MINORS", crate::new_lock!(@key)) };
-
-    let fops = &FileVTable::<Ctl>::OPS;
-    let major = unsafe { c::__register_chrdev(0, 0, 256, NAME.as_ptr().cast(), fops) };
-    if major < 0 {
-        return major;
-    }
-    MAJOR.store(major as u32, Relaxed);
-
-    let ret = unsafe { c::class_register(&*CLASS) };
-    if ret != 0 {
-        unsafe { c::__unregister_chrdev(major as c_uint, 0, 256, NAME.as_ptr().cast()) };
-        return ret;
-    }
-
-    let dev = unsafe {
-        c::device_create(&*CLASS, core::ptr::null_mut(), mkdev(MINOR_GLOBAL), core::ptr::null_mut(),
-                         NAME.as_ptr().cast())
-    };
-    if let Err(e) = errptr_to_result(NonNull::new(dev).expect("a device, or an error")) {
-        unsafe {
-            c::class_unregister(&*CLASS);
-            c::__unregister_chrdev(major as c_uint, 0, 256, NAME.as_ptr().cast());
-        }
-        return -e.raw();
-    }
-    0
+/// Failed, module exit undoes what was done.
+pub fn bch2_chardev_init(m: &ThisModule) -> Result<(), BchError> {
+    CHRDEV.register::<Ctl>(m)?;
+    CLASS.register(m)?;
+    let dev = Device::create(&CLASS, CHRDEV.dev(MINOR_GLOBAL), NAME)?;
+    MINORS.lock().global = Some(dev);
+    Ok(())
 }
 
-pub fn bch2_chardev_exit() {
-    let major = MAJOR.load(Relaxed);
-    unsafe {
-        c::device_destroy(&*CLASS, mkdev(MINOR_GLOBAL));
-        c::class_unregister(&*CLASS);
-        // None, if module init failed before registering it
-        if major > 0 {
-            c::__unregister_chrdev(major, 0, 256, NAME.as_ptr().cast());
-        }
-    }
+pub fn bch2_chardev_exit(m: &ModuleExit) {
+    let global = MINORS.lock().global.take();
+    drop(global);
+    CLASS.unregister(m);
+    CHRDEV.unregister(m);
 }

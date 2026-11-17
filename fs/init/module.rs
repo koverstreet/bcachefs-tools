@@ -34,7 +34,7 @@ pub(crate) fn bcachefs_exit(m: &ModuleExit) {
     #[cfg(CONFIG_DEBUG_FS)]
     crate::debug::debug::bch2_debug_exit(m);
     #[cfg(kernel)]
-    crate::init::chardev::bch2_chardev_exit();
+    crate::init::chardev::bch2_chardev_exit(m);
     crate::btree::lock_graph::graphs_exit();
     BCACHEFS_KOBJ.put();
 
@@ -75,7 +75,7 @@ pub(crate) fn bcachefs_init(m: &ThisModule) -> Result<(), BchError> {
     crate::btree::lock_graph::graphs_init()?;
     crate::btree::key_cache::btree_key_cache_module_init()?;
     #[cfg(kernel)]
-    ret_to_result_void(crate::init::chardev::bch2_chardev_init())?;
+    crate::init::chardev::bch2_chardev_init(m)?;
     #[cfg(not(NO_BCACHEFS_FS))]
     crate::vfs::new_inode::vfs_init(m)?;
     #[cfg(CONFIG_DEBUG_FS)]
