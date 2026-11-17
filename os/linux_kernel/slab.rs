@@ -52,13 +52,6 @@ impl<T> KmemCache<T> {
         p
     }
 
-    /// A @T's memory, zeroed.
-    pub fn zalloc(&self, gfp: Flags) -> Option<NonNull<T>> {
-        NonNull::new(unsafe {
-            c::kmem_cache_alloc_noprof(self.as_ptr(), crate::util::alloc::current_gfp_context_raw((gfp | flags::ZERO).raw()))
-        }.cast())
-    }
-
     /// A @T's memory, uninitialized, charged to @lru - a superblock's inode
     /// LRU, for alloc_inode_sb().
     pub fn alloc_lru(&self, lru: *mut c::list_lru, gfp: Flags) -> Option<NonNull<T>> {

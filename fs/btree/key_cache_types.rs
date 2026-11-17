@@ -48,7 +48,7 @@ pub struct bch_fs_btree_key_cache {
     #[pin]
     #[init(::pin_init::init_zeroed())]
     /* set up and exited through the struct shared, in place: setup(), exit() */
-    pub(crate) pending: core::cell::UnsafeCell<[crate::btree::key_cache::Pending; 2]>,
+    pub(crate) pending: core::cell::UnsafeCell<crate::btree::key_cache::Pendings>,
 
     pub nr_keys: AtomicIsize,
     pub nr_dirty: AtomicIsize,
@@ -60,7 +60,7 @@ pub struct bch_fs_btree_key_cache {
 }
 
 impl bch_fs_btree_key_cache {
-    pub(crate) fn pending(&self) -> &[crate::btree::key_cache::Pending; 2] {
+    pub(crate) fn pending(&self) -> &crate::btree::key_cache::Pendings {
         unsafe { &*self.pending.get() }
     }
 

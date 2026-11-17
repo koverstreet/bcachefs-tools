@@ -20,7 +20,7 @@
 //! at once, has its entries shared.
 
 use crate::data_structures::array_vec::ArrayVec;
-use crate::util::alloc::{flags, AllocError, AllocGfp, Box, Flags, Kmalloc};
+use crate::util::alloc::{AllocError, AllocGfp, Box, Flags, Kmalloc};
 use crate::util::once_either::{Either, OnceEither};
 use core::iter::Enumerate;
 use core::marker::PhantomData;
@@ -117,14 +117,13 @@ impl<T: Entry> NewNode<T> {
         NewNode { interior: None, leaf: None }
     }
 
-    /// What's been taken, allocated again: with @nofail, NOFAIL.
-    pub fn alloc(&mut self, nofail: bool) -> Result<(), AllocError> {
-        let gfp = if nofail { flags::NOFAIL } else { Flags::empty() };
+    /// What's been taken, allocated again.
+    pub fn alloc(&mut self) -> Result<(), AllocError> {
         if self.interior.is_none() {
-            self.interior = Some(alloc_node(gfp)?);
+            self.interior = Some(alloc_node(Flags::empty())?);
         }
         if self.leaf.is_none() {
-            self.leaf = Some(alloc_node(gfp)?);
+            self.leaf = Some(alloc_node(Flags::empty())?);
         }
         Ok(())
     }

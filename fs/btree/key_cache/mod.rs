@@ -26,15 +26,15 @@ use crate::data_structures::cuckoo::{Cuckoo, Entry};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
-use crate::locking::six::{six_lock_exit, SixHold};
+use crate::locking::six::SixHold;
 use crate::prt;
-use crate::util::alloc::{flags, init_at, krealloc, Flags};
+use crate::util::alloc::{init_at, krealloc, Flags};
 use crate::util::hash::GoldenRatio;
 use crate::os::kernel::local_clock;
 use crate::os::slab::KmemCache;
 use crate::util::place::{Contained, PlacedDrop};
-use crate::util::rcu::{read_lock, ReadGuard, SrcuReadGuard};
-use crate::util::rcu_pending::{Mode, RcuPending};
+use crate::util::rcu::{read_lock, RcuHead, ReadGuard, SrcuReadGuard};
+use crate::util::rcu_pending::{RcuPending, RcuRealloc};
 use crate::os::shrinker::{Shrink, Shrinker};
 use crate::os::workqueue::Queue;
 use crate::util::{Printbuf, ToText};
@@ -42,7 +42,7 @@ use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
 #[cfg(kernel)]
 use core::ffi::c_int;
 use core::ffi::c_ulong;
-use core::mem::{offset_of, ManuallyDrop};
+use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -84,31 +84,44 @@ fn inc(n: &AtomicUsize) {
     n.fetch_add(1, Relaxed);
 }
 
-/// What an entry freed waits out the btree trans SRCU for: its lock exited,
-/// and it back to the slab.
-#[derive(::pin_init::Zeroable)]
-pub(crate) struct Free {}
+/// An entry, by its lock's readers: percpu, or not. Reused before the btree
+/// trans SRCU's readers are past it, as lookups lock what they find and then
+/// check its key.
+#[repr(transparent)]
+#[derive(RcuHead)]
+pub(crate) struct Cached<const PCPU: bool>(#[rcu_head] c::bkey_cached);
 
-impl Mode for Free {
-    type Item = NonNull<c::bkey_cached>;
-
-    fn into_raw(ck: Self::Item) -> NonNull<u8> {
-        unsafe { NonNull::new_unchecked(&raw mut (*ck.as_ptr()).rcu).cast() }
+unsafe impl<const PCPU: bool> RcuRealloc for Cached<PCPU> {
+    /*
+     * Claimed by taking its intent+write locks: only if the lock is idle (no
+     * SRCU readers still using it), so it can be reused without blocking.
+     * Called under p->lock; six_trylock is safe there (atomic ops only).
+     */
+    fn try_claim(&self) -> bool {
+        bkey_cached_trylock(&self.0)
+            .map(|ck| ck.into_parts().1.into_raw())
+            .is_some()
     }
 
-    unsafe fn from_raw(p: NonNull<u8>) -> Self::Item {
-        unsafe { p.byte_sub(offset_of!(c::bkey_cached, rcu)).cast() }
-    }
-
-    unsafe fn process(&self, _pending: &RcuPending<'_, Self>, ck: Self::Item) {
+    unsafe fn construct(ck: NonNull<Self>) {
+        let flags = if PCPU {
+            c::SixLockInitFlags::pcpu
+        } else {
+            c::SixLockInitFlags::empty()
+        };
+        let ck = ck.cast::<c::bkey_cached>();
         unsafe {
-            six_lock_exit((&raw mut (*ck.as_ptr()).c.lock).cast());
-            KEY_CACHE.free(ck);
+            bch2_btree_lock_init(&raw mut (*ck.as_ptr()).c, flags, Flags::empty());
+            (*ck.as_ptr()).c.cached = true;
         }
+        /* Brand new lock, trylock can't fail. */
+        let held = bkey_cached_trylock(unsafe { ck.as_ref() }).expect("a new key cache entry locked by someone else");
+        held.into_parts().1.into_raw();
     }
 }
 
-pub(crate) type Pending = RcuPending<'static, Free>;
+pub(crate) type Pending<const PCPU: bool> = RcuPending<'static, Cached<PCPU>, &'static KmemCache<c::bkey_cached>>;
+pub(crate) type Pendings = (Pending<false>, Pending<true>);
 
 /// An entry of the cache's, found unlocked: for as long as the transaction
 /// holds the btree trans SRCU, which it's freed a grace period of.
@@ -213,8 +226,16 @@ impl c::bch_fs_btree_key_cache {
         let (ck, held) = ck.into_parts();
         drop(held);
 
+        /* by the lock it has: percpu read counts may not have been allocated */
         let pcpu_readers = ck.c.lock.six().readers.allocated();
-        self.pending()[pcpu_readers as usize].enqueue(NonNull::from(ck));
+        let ck = NonNull::from(ck);
+        unsafe {
+            if pcpu_readers {
+                self.pending().1.free(ck.cast())
+            } else {
+                self.pending().0.free(ck.cast())
+            }
+        }
     }
 
     fn bkey_cached_free(&self, trans: &BtreeTrans<'_>, ck: LockedEntry<'_>) {
@@ -286,45 +307,45 @@ impl c::bkey_cached {
     }
 }
 
-/// A new entry, with its key's buffer of @key_u64s: freed if it's dropped.
-struct NewEntry(NonNull<c::bkey_cached>);
+/// A new entry, from @pending's alloc(), claimed, with its key's buffer: back
+/// to it, its key buffer freed and its locks dropped, if it's dropped - as
+/// when its key buffer can't be had, or relocking after it fails.
+struct NewEntry<'a, const PCPU: bool> {
+    pending: &'a Pending<PCPU>,
+    ck:      NonNull<Cached<PCPU>>,
+}
 
-impl NewEntry {
-    fn alloc(key_u64s: usize) -> Option<Self> {
-        let gfp = flags::ACCOUNT | flags::RECLAIMABLE;
+impl<const PCPU: bool> NewEntry<'_, PCPU> {
+    fn alloc(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pending: &Pending<PCPU>, key_u64s: usize)
+        -> Result<NonNull<c::bkey_cached>, BchError>
+    {
+        let enomem = || BchError::from(Errcode::ENOMEM_btree_key_cache_create);
 
-        let mut ck = NewEntry(KEY_CACHE.zalloc(gfp)?);
-        unsafe { ck.0.as_mut() }.set_key_buf(NewKey::alloc(key_u64s)?);
-        Some(ck)
+        t.allocate_dropping_locks_in(paths, || {
+            let ck = NewEntry { pending, ck: pending.alloc().map_err(|_| enomem())? };
+            let k = NewKey::alloc(key_u64s).ok_or_else(enomem)?;
+            unsafe { ck.ck.cast::<c::bkey_cached>().as_mut() }.set_key_buf(k);
+            Ok(ck)
+        }).map(NewEntry::into_raw)
     }
 
     fn into_raw(self) -> NonNull<c::bkey_cached> {
-        let ck = self.0;
+        let ck = self.ck.cast();
         core::mem::forget(self);
         ck
     }
 }
 
-impl Drop for NewEntry {
+impl<const PCPU: bool> Drop for NewEntry<'_, PCPU> {
     fn drop(&mut self) {
-        unsafe { self.0.as_mut() }.free_key_buf();
-        unsafe { KEY_CACHE.free(self.0) }
+        let ck = unsafe { self.ck.cast::<c::bkey_cached>().as_mut() };
+        ck.free_key_buf();
+        drop(unsafe { SixHold::from_raw(&ck.c.lock, SIX_LOCK_write) });
+        unsafe { self.pending.free(self.ck) }
     }
 }
 
-/*
- * Predicate for rcu_pending_dequeue_where: try to claim a pending entry by
- * taking its intent+write locks. Succeeds only if the lock is currently idle
- * (no SRCU readers still using it), so the returned ck can be reused without
- * blocking. Called under p->lock; six_trylock is safe there (atomic ops only).
- */
-fn bkey_cached_try_claim(ck: &NonNull<c::bkey_cached>) -> bool {
-    bkey_cached_trylock(unsafe { ck.as_ref() })
-        .map(|ck| ck.into_parts().1.into_raw())
-        .is_some()
-}
-
-/// A claimed entry's hold, as bkey_cached_try_claim() left it.
+/// A claimed entry's hold, as Cached's try_claim() or construct() left it.
 ///
 /// # Safety
 /// @ck was just claimed.
@@ -334,42 +355,23 @@ unsafe fn claimed<'t>(trans: &'t BtreeTrans<'_>, ck: NonNull<c::bkey_cached>) ->
 }
 
 impl BtreeTrans<'_> {
+    /// An entry with its key's buffer of @key_u64s, locked; None if there's no
+    /// memory for one.
     fn bkey_cached_alloc(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, btree: Btree, key_u64s: usize)
         -> Result<Option<LockedEntry<'_>>, BchError>
     {
         let bc = &self.fs().btree.key_cache;
-        let pcpu_readers = btree_uses_pcpu_readers(btree);
 
-        if let Some(ck) = bc.pending()[pcpu_readers as usize].dequeue_where(bkey_cached_try_claim) {
-            return Ok(Some(unsafe { claimed(self, ck) }));
-        }
-
-        let ck = match t.allocate_dropping_locks_in(paths, || {
-            NewEntry::alloc(key_u64s).ok_or(BchError::from(Errcode::ENOMEM_btree_key_cache_create))
-        }) {
-            Ok(ck) => Some(ck),
-            Err(e) if e.matches(c::ENOMEM) => None,
-            Err(e) => return Err(e),
+        let ck = if btree_uses_pcpu_readers(btree) {
+            NewEntry::alloc(t, paths, &bc.pending().1, key_u64s)
+        } else {
+            NewEntry::alloc(t, paths, &bc.pending().0, key_u64s)
         };
-
-        if let Some(ck) = ck {
-            let ck = ck.into_raw();
-            let flags = if pcpu_readers {
-                c::SixLockInitFlags::pcpu
-            } else {
-                c::SixLockInitFlags::empty()
-            };
-            unsafe {
-                bch2_btree_lock_init(&raw mut (*ck.as_ptr()).c, flags, Flags::empty());
-                (*ck.as_ptr()).c.cached = true;
-            }
-            let ck = unsafe { cached(self, ck.as_ptr()) };
-            /* Brand new lock, trylock can't fail. */
-            return Ok(Some(bkey_cached_trylock(ck).expect("a new key cache entry locked by someone else")));
+        match ck {
+            Ok(ck) => Ok(Some(unsafe { claimed(self, ck) })),
+            Err(e) if e.matches(c::ENOMEM) => Ok(None),
+            Err(e) => Err(e),
         }
-
-        Ok(bc.pending()[pcpu_readers as usize].dequeue_from_all_where(bkey_cached_try_claim)
-           .map(|ck| unsafe { claimed(self, ck) }))
     }
 }
 
@@ -535,8 +537,10 @@ impl c::bch_fs_btree_key_cache {
         }
 
         /* through pending's own pointer, which exit() may write by */
-        for i in 0..2 {
-            unsafe { RcuPending::exit(self.pending.get().cast::<Pending>().add(i)) };
+        let pending = self.pending.get();
+        unsafe {
+            RcuPending::exit(&raw mut (*pending).0);
+            RcuPending::exit(&raw mut (*pending).1);
         }
     }
 
@@ -544,11 +548,10 @@ impl c::bch_fs_btree_key_cache {
         let fs = self.fs();
 
         let srcu = unsafe { &*ptr::from_ref(&fs.btree.trans.barrier) }.flavor();
-        for i in 0..2 {
-            let slot = unsafe { self.pending.get().cast::<Pending>().add(i) };
-            if unsafe { init_at(RcuPending::new(srcu, Free {}), slot) }.is_err() {
-                return fs.throw(Errcode::ENOMEM_fs_btree_cache_init);
-            }
+        let pending = self.pending.get();
+        if unsafe { init_at(RcuPending::new(srcu, &KEY_CACHE), &raw mut (*pending).0) }.is_err() ||
+           unsafe { init_at(RcuPending::new(srcu, &KEY_CACHE), &raw mut (*pending).1) }.is_err() {
+            return fs.throw(Errcode::ENOMEM_fs_btree_cache_init);
         }
 
         let mut name = Printbuf::new();
@@ -574,7 +577,7 @@ impl ToText for c::bch_fs_btree_key_cache {
         prt!(out, "skipped_accessed:\t{}\r\n",   self.stats.skipped_accessed.load(Relaxed));
         prt!(out, "skipped_lock_fail:\t{}\r\n",  self.stats.skipped_lock_fail.load(Relaxed));
         out.newline();
-        prt!(out, "pending:\t{}\r\n",            self.pending().iter().map(|p| p.nr_pending()).sum::<usize>());
+        prt!(out, "pending:\t{}\r\n",            self.pending().0.nr_pending() + self.pending().1.nr_pending());
     }
 }
 
@@ -585,7 +588,7 @@ pub fn btree_key_cache_module_exit() {
 
 pub fn btree_key_cache_module_init() -> Result<(), BchError> {
     #[cfg(kernel)]
-    KEY_CACHE.create(c"bkey_cached", c::SLAB_RECLAIM_ACCOUNT)
+    KEY_CACHE.create(c"bkey_cached", c::SLAB_RECLAIM_ACCOUNT | c::SLAB_ACCOUNT)
         .map_err(|_| BchError::from_raw(-(c::ENOMEM as c_int)))?;
     Ok(())
 }

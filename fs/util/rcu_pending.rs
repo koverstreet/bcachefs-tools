@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Objects waiting out an RCU or SRCU grace period, then processed - per CPU,
-//! batched by the grace period they wait for - and taken back before then if
-//! wanted. What processing is, and what's queued, is the Mode: the owner's
-//! process callback, or kvfree_rcu().
+//! An allocator of T's, over A: what's freed waits out an RCU or SRCU grace
+//! period - per CPU, batched by the grace period it waits for - before it
+//! goes back to A, and is handed out again before then if T says it can be.
+//!
+//! What's freed is dropped as T says: at its free, if nothing a reader
+//! reaches goes with it - DropAnytime - or else once its grace period is
+//! over, here. So the Allocator, whose users write a T over what allocate()
+//! gives and drop it before deallocate(), is only for a DropAnytime T; for
+//! any other, alloc() gives a T and free() takes one undropped.
 
+use core::alloc::Layout;
 use core::ffi::c_uint;
 use core::marker::{PhantomData, PhantomPinned};
-use core::mem::{offset_of, ManuallyDrop};
+use core::mem::{offset_of, MaybeUninit};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use pin_init::{pin_init_from_closure, PinInit, Zeroable};
@@ -16,100 +22,76 @@ use crate::c;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::GenRadix;
-use crate::util::alloc::{flags, init_at, kbox_zeroed_nofail, AllocError, KBox, KVBox, KVVec};
+use crate::util::alloc::{flags, init_at, Alloc, AllocError, Allocator, KVVec};
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
-use crate::util::alloc::{KVmalloc, Kmalloc};
-use crate::util::maybe_rcu_alloc::{alloc_at, Retired};
 use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
-use crate::util::rcu::{Flavor, GpCookie, RcuHead, RcuOwned};
+use crate::util::rcu::{DropAnytime, Flavor, GpCookie, HasRcuHead, RcuHead, RcuOwned};
 use crate::os::workqueue::{flush_work, Queue};
 
 const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
 
-/// An item, given up: its rcu_head, if it has one - what the lists thread
-/// through - or else its pointer.
-type Raw = NonNull<u8>;
+/// A T that may be handed out again - as a T, by RcuPending - while readers
+/// from before its free may still be in it.
+///
+/// # Safety
+/// Those readers are fine with what they find: the T, or what construct()
+/// made of fresh memory, until a grace period after its free.
+pub unsafe trait RcuRealloc: HasRcuHead + Sized {
+    /// Whether this one, freed, can be reused yet: if true, it's claimed.
+    /// Called under the CPU's lock: mustn't sleep.
+    fn try_claim(&self) -> bool;
 
-/// What an RcuPending does with what it queues once readers are past it -
-/// and what it queues. from_raw() takes back into_raw()'s - for HAS_HEAD,
-/// the item's rcu_head, unused but by this while it's queued.
-pub trait Mode: Sized {
-    type Item;
-
-    /// Whether an item has an rcu_head of its own. One that hasn't is given
-    /// one, allocated, if it has to go on a list: kvfree_rcu_mightsleep()'s.
-    const HAS_HEAD: bool = true;
-
-    fn into_raw(item: Self::Item) -> Raw;
-
+    /// Memory fresh from the allocator, zeroed, made a T as a claimed one is.
+    ///
     /// # Safety
-    /// @p is into_raw()'s, taken back once.
-    unsafe fn from_raw(p: Raw) -> Self::Item;
+    /// @p is that memory, and nothing else has it.
+    unsafe fn construct(p: NonNull<Self>);
+}
 
-    /// # Safety
-    /// @item's grace period is over.
-    unsafe fn process(&self, _pending: &RcuPending<'_, Self>, item: Self::Item) {
-        drop(item)
+/// An item, given up: its rcu_head, what the lists thread through.
+type Raw = NonNull<c::rcu_head>;
+
+fn into_raw<T: HasRcuHead>(p: NonNull<T>) -> Raw {
+    unsafe { p.byte_add(T::HEAD).cast() }
+}
+
+/// # Safety
+/// @raw is into_raw()'s.
+unsafe fn from_raw<T: HasRcuHead>(raw: Raw) -> NonNull<T> {
+    unsafe { raw.byte_sub(T::HEAD).cast() }
+}
+
+/// Whether a T is dropped at its free, or once its grace period's over.
+trait DropAt {
+    fn at_free() -> bool;
+
+    /// A build error for a T that isn't.
+    fn assert_at_free();
+}
+
+impl<T> DropAt for T {
+    default fn at_free() -> bool {
+        false
+    }
+
+    default fn assert_at_free() {
+        let () = NotDroppedAtFree::<T>::ERR;
     }
 }
 
-/// kvfree_rcu(), batched: a MaybeRcuAlloc's memory, its T dropped when it was
-/// retired, freed a grace period after it's queued.
-pub struct KvFree<T>(PhantomData<fn(T)>);
-
-impl<T> Mode for KvFree<T> {
-    type Item = Retired<T, KVmalloc>;
-
-    fn into_raw(item: Retired<T, KVmalloc>) -> Raw {
-        item.into_head().cast()
+impl<T: DropAnytime> DropAt for T {
+    fn at_free() -> bool {
+        true
     }
 
-    unsafe fn from_raw(p: Raw) -> Retired<T, KVmalloc> {
-        unsafe { Retired::from_head(p.cast()) }
-    }
-
-    unsafe fn process(&self, _pending: &RcuPending<'_, Self>, item: Retired<T, KVmalloc>) {
-        unsafe { item.free() }
-    }
+    fn assert_at_free() {}
 }
 
-/// kvfree_rcu_mightsleep(), batched: KvFree, of a T without an rcu_head.
-pub struct KvFreeMightSleep<T>(PhantomData<fn(T)>);
+struct NotDroppedAtFree<T>(PhantomData<T>);
 
-impl<T: Send> Mode for KvFreeMightSleep<T> {
-    type Item = KVBox<T>;
-    const HAS_HEAD: bool = false;
-
-    fn into_raw(item: KVBox<T>) -> Raw {
-        NonNull::new(KVBox::into_raw(item)).expect("a box's pointer").cast()
-    }
-
-    unsafe fn from_raw(p: Raw) -> KVBox<T> {
-        unsafe { KVBox::from_raw(p.as_ptr().cast()) }
-    }
-}
-
-/// The head a list holds an item without one by, in a box of its own.
-#[repr(C)]
-struct SpareHead {
-    head: c::rcu_head,
-    raw:  Option<Raw>,
-}
-
-unsafe impl Zeroable for SpareHead {}
-
-impl SpareHead {
-    fn alloc_atomic() -> Option<KBox<SpareHead>> {
-        let init = unsafe {
-            pin_init_from_closure(|slot: *mut SpareHead| {
-                slot.write(Zeroable::zeroed());
-                Ok::<(), AllocError>(())
-            })
-        };
-        let p = alloc_at::<SpareHead, Kmalloc, AllocError>(init, flags::NOWAIT).ok()?;
-        Some(unsafe { KBox::from_raw(p.as_ptr()) })
-    }
+impl<T> NotDroppedAtFree<T> {
+    const ERR: () = panic!("an Allocator's T is written over and dropped by its user: this T is dropped once readers are past it - alloc() and free() it");
 }
 
 /// @h's link: the kernel's next, or liburcu's next.next.
@@ -283,7 +265,7 @@ struct Expired {
 }
 
 impl PcpuState {
-    /// Items, not Seqs: one can be left empty, by dequeue_where(), or by an
+    /// Items, not Seqs: one can be left empty, by a claim, or by an
     /// enqueue that made it and then found its item's grace period over -
     /// with nothing armed to process it, which counting it would wait on
     /// forever. take_expired() drops it once it's first and expired.
@@ -336,8 +318,8 @@ impl PcpuState {
 }
 
 #[repr(C)]
-struct Pcpu<'f, M: Mode> {
-    parent: *const RcuPending<'f, M>,
+struct Pcpu<'f, T: RcuRealloc, A: Alloc> {
+    parent: *const RcuPending<'f, T, A>,
     lock:   Locked<SpinLockIrq, PcpuState>,
     /* what's queued here: added under the lock, taken off as it's processed */
     nr:     AtomicUsize,
@@ -348,23 +330,23 @@ struct Pcpu<'f, M: Mode> {
 
 /// A CPU's one callback, armed: whoever set cb_armed owns its head, until the
 /// callback finds nothing pending and clears it.
-struct Armed<'f, M: Mode>(NonNull<Pcpu<'f, M>>);
+struct Armed<'f, T: RcuRealloc, A: Alloc>(NonNull<Pcpu<'f, T, A>>);
 
 // a CPU's state, which its lock serializes, the callback's on any CPU
-unsafe impl<M: Mode> Send for Armed<'_, M> {}
+unsafe impl<T: RcuRealloc, A: Alloc> Send for Armed<'_, T, A> {}
 
 // cb_armed is the head's: set, it's the Armed's alone
-unsafe impl<M: Mode> RcuOwned for Armed<'_, M> {
+unsafe impl<T: RcuRealloc, A: Alloc> RcuOwned for Armed<'_, T, A> {
     fn into_head(self) -> NonNull<RcuHead> {
         unsafe { NonNull::new_unchecked((*self.0.as_ptr()).cb.as_ptr()).cast() }
     }
 
     unsafe fn from_head(head: NonNull<RcuHead>) -> Self {
-        Armed(unsafe { head.byte_sub(offset_of!(Pcpu<'_, M>, cb)).cast() })
+        Armed(unsafe { head.byte_sub(offset_of!(Pcpu<'_, T, A>, cb)).cast() })
     }
 }
 
-impl<M: Mode> Armed<'_, M> {
+impl<T: RcuRealloc, A: Alloc> Armed<'_, T, A> {
     /// A grace period's passed: the CPU's expired items processed, and the
     /// callback armed again while any are still waiting.
     fn run(self) {
@@ -385,63 +367,47 @@ impl<M: Mode> Armed<'_, M> {
 }
 
 // what other CPUs change is under the lock, or C's - cb and work
-unsafe impl<M: Mode> CpuShared for Pcpu<'_, M> {}
-
-/// Why enqueue_list() couldn't: what to do with the lock dropped, before
-/// trying again.
-enum ListBlocked {
-    /// Allocate a spare head, which couldn't be had atomically
-    NeedHead,
-    /// Nothing: the item's grace period is over, and it's processed
-    Expired,
-}
+unsafe impl<T: RcuRealloc, A: Alloc> CpuShared for Pcpu<'_, T, A> {}
 
 /// Pinned: each CPU's state points back to it.
-pub struct RcuPending<'f, M: Mode> {
-    p:       *mut Pcpu<'f, M>,
-    srcu:    Flavor<'f>,
-    process: M,
-    _pin:    PhantomData<PhantomPinned>,
+pub struct RcuPending<'f, T: RcuRealloc, A: Alloc> {
+    p:     *mut Pcpu<'f, T, A>,
+    srcu:  Flavor<'f>,
+    /* written by init(), dropped by free_pcpu(): there while p is */
+    alloc: MaybeUninit<A>,
+    _p:    PhantomData<(fn() -> T, PhantomPinned)>,
 }
 
-unsafe impl<M: Mode + Send> Send for RcuPending<'_, M> {}
-unsafe impl<M: Mode + Sync> Sync for RcuPending<'_, M> {}
+// what's pending is T's, handed out on any CPU
+unsafe impl<T: RcuRealloc + Send, A: Alloc + Send> Send for RcuPending<'_, T, A> {}
+unsafe impl<T: RcuRealloc + Send, A: Alloc + Sync> Sync for RcuPending<'_, T, A> {}
 
-impl<'f, M: Mode> RcuPending<'f, M> {
-    /// With @srcu's grace periods, @process done with what's queued once its
-    /// grace period has completed.
-    pub fn new(srcu: Flavor<'f>, process: M) -> impl PinInit<Self, AllocError> {
-        unsafe { pin_init_from_closure(move |slot: *mut Self| Self::init(slot, srcu, process)) }
+impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
+    /// With @srcu's grace periods, over @alloc.
+    pub fn new(srcu: Flavor<'f>, alloc: A) -> impl PinInit<Self, AllocError> {
+        unsafe { pin_init_from_closure(move |slot: *mut Self| Self::init(slot, srcu, alloc)) }
     }
 
-    fn pcpu(&self) -> PerCpuRef<'_, Pcpu<'f, M>> {
+    fn pcpu(&self) -> PerCpuRef<'_, Pcpu<'f, T, A>> {
         unsafe { PerCpuRef::from_raw(self.p) }
     }
 
+    fn backing(&self) -> &A {
+        unsafe { self.alloc.assume_init_ref() }
+    }
+
+    /// An item whose grace period is over, back to A: dropped first, if it
+    /// wasn't at its free.
     fn process_raw(&self, raw: Raw) {
-        unsafe { self.process.process(self, M::from_raw(raw)) }
-    }
-
-    /// A list entry's item: the head itself, or what a spare head holds.
-    fn list_raw(h: NonNull<c::rcu_head>) -> Raw {
-        if M::HAS_HEAD {
-            h.cast()
-        } else {
-            unsafe { (*h.cast::<SpareHead>().as_ptr()).raw }.expect("a spare head's item")
+        let p = unsafe { from_raw::<T>(raw) };
+        if !<T as DropAt>::at_free() {
+            unsafe { ptr::drop_in_place(p.as_ptr()) };
         }
-    }
-
-    /// list_raw(), off the list for good: a spare head freed.
-    fn list_take(h: NonNull<c::rcu_head>) -> Raw {
-        if M::HAS_HEAD {
-            return h.cast();
-        }
-        let spare = unsafe { KBox::from_raw(h.cast::<SpareHead>().as_ptr()) };
-        spare.raw.expect("a spare head's item")
+        unsafe { self.backing().deallocate(p.cast(), Layout::new::<T>()) }
     }
 
     /// What take_expired() took out of @p, processed - with the lock dropped.
-    fn process_expired(&self, p: &Pcpu<'f, M>, e: Expired) {
+    fn process_expired(&self, p: &Pcpu<'f, T, A>, e: Expired) {
         for raw in e.objs.iter().flat_map(Seq::iter) {
             self.process_raw(raw);
             p.nr.fetch_sub(1, Relaxed);
@@ -449,13 +415,13 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         drop(e.objs);
 
         for h in e.list {
-            self.process_raw(Self::list_take(h));
+            self.process_raw(h);
             p.nr.fetch_sub(1, Relaxed);
         }
     }
 
     unsafe extern "C" fn work_fn(work: *mut c::work_struct) {
-        let p = unsafe { &*work.byte_sub(offset_of!(Pcpu<'f, M>, work)).cast::<Pcpu<'f, M>>() };
+        let p = unsafe { &*work.byte_sub(offset_of!(Pcpu<'f, T, A>, work)).cast::<Pcpu<'f, T, A>>() };
         let pending = unsafe { &*p.parent };
 
         loop {
@@ -466,10 +432,9 @@ impl<'f, M: Mode> RcuPending<'f, M> {
     }
 
     /// Onto a list, the radix being out of reach: whether the list is new,
-    /// and wants a grace period started.
-    fn enqueue_list(&self, s: &mut PcpuState, seq: GpCookie, raw: Raw, spare: &mut Option<KBox<SpareHead>>)
-        -> Result<bool, ListBlocked>
-    {
+    /// and wants a grace period started. None if the item's grace period is
+    /// over, for it to be processed with the lock dropped.
+    fn enqueue_list(&self, s: &mut PcpuState, seq: GpCookie, raw: Raw) -> Option<bool> {
         let i = loop {
             if let Some(i) = s.lists[..ACTIVE].iter().position(|l| l.seq == seq) {
                 break i;
@@ -488,45 +453,31 @@ impl<'f, M: Mode> RcuPending<'f, M> {
              * for one of theirs, which interrupts off may keep from ending.
              */
             if self.srcu.poll(seq) {
-                return Err(ListBlocked::Expired);
+                return None;
             }
-        };
-
-        let head = if M::HAS_HEAD {
-            raw.cast()
-        } else {
-            /*
-             * kvfree_rcu_mightsleep(): we weren't passed an
-             * rcu_head, but we need one: allocate a head to hold the pointer
-             * to free by
-             */
-            let mut h = spare.take().or_else(SpareHead::alloc_atomic).ok_or(ListBlocked::NeedHead)?;
-            h.raw = Some(raw);
-            NonNull::new(KBox::into_raw(h)).expect("a box's pointer").cast()
         };
 
         /*
          * Empty, it wants a grace period started - as an empty Seq does -
-         * even with our seq: dequeue_where() may have emptied it, and the
-         * callback have found nothing pending since and disarmed
+         * even with our seq: a claim may have emptied it, and the callback
+         * have found nothing pending since and disarmed
          */
         let l = &mut s.lists[i];
         let new = l.head.is_none();
         l.seq = seq;
-        l.add(head);
-        Ok(new)
+        l.add(raw);
+        Some(new)
     }
 
-    /// Queue @item, to be processed once its grace period has elapsed.
+    /// Queue @p, to be processed once its grace period has elapsed.
     ///
     /// Attempt to enqueue items onto a radix tree; if memory allocation fails,
     /// fall back to a linked list. Will do GFP_KERNEL memory allocations, and
     /// process expired items.
-    pub fn enqueue(&self, item: M::Item) {
-        let raw = M::into_raw(item);
+    fn enqueue(&self, p: NonNull<T>) {
+        let raw = into_raw(p);
         let mut may_sleep = true;
         let mut node = NewNode::none();
-        let mut spare = None;
 
         /* We could technically be scheduled before taking the lock and end up
          * using a different cpu's rcu_pending_pcpu: that's ok, it needs a lock
@@ -577,18 +528,15 @@ impl<'f, M: Mode> RcuPending<'f, M> {
                      */
                     if may_sleep {
                         lock = None;
-                        may_sleep = node.alloc(!M::HAS_HEAD).is_ok();
+                        may_sleep = node.alloc().is_ok();
                         continue 'retry;
                     }
                 }
 
-                match self.enqueue_list(s, seq, raw, &mut spare) {
-                    Ok(start) => start,
-                    Err(b) => {
+                match self.enqueue_list(s, seq, raw) {
+                    Some(start) => start,
+                    None => {
                         lock = None;
-                        if let ListBlocked::NeedHead = b {
-                            spare = Some(kbox_zeroed_nofail());
-                        }
                         continue 'retry;
                     }
                 }
@@ -616,42 +564,50 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         }
     }
 
-    fn pcpu_dequeue(&self, p: &Pcpu<'f, M>, mut try_claim: impl FnMut(&M::Item) -> bool) -> Option<M::Item> {
-        let mut claimed = |raw: Raw| try_claim(&ManuallyDrop::new(unsafe { M::from_raw(raw) }));
+    /// The first of @p's items T::try_claim() claims, dequeued: most recent
+    /// radix-tree entries first, then oldstate lists.
+    fn claim(&self, p: &Pcpu<'f, T, A>) -> Option<NonNull<T>> {
+        let mut claimed = |raw: Raw| unsafe { from_raw::<T>(raw).as_ref() }.try_claim();
         let mut s = p.lock.lock();
 
         let raw = match s.objs.iter_mut().find_map(|o| o.remove_where(&mut claimed)) {
             Some(raw) => raw,
-            None => {
-                let h = s.lists.iter_mut().find_map(|l| l.remove_where(|h| claimed(Self::list_raw(h))))?;
-                Self::list_take(h)
-            }
+            None => s.lists.iter_mut().find_map(|l| l.remove_where(&mut claimed))?,
         };
         p.nr.fetch_sub(1, Relaxed);
-        Some(unsafe { M::from_raw(raw) })
+        Some(unsafe { from_raw(raw) })
     }
 
-    /// The first entry @try_claim returns true for, dequeued: @try_claim
-    /// is called with the CPU's lock held, and returns true if the caller has
-    /// claimed the entry (e.g. taken a lock on it) and it should be dequeued.
-    /// Must not sleep.
-    ///
-    /// Iterates the current CPU's pending lists in order (most recent radix-tree
-    /// entries first, then oldstate lists). Returns the first claimed entry.
-    /// Remaining entries stay queued.
-    pub fn dequeue_where(&self, try_claim: impl FnMut(&M::Item) -> bool) -> Option<M::Item> {
-        self.pcpu_dequeue(self.pcpu().raw_this_cpu(), try_claim)
-    }
-
-    /// dequeue_where(), from every CPU.
-    pub fn dequeue_from_all_where(&self, mut try_claim: impl FnMut(&M::Item) -> bool) -> Option<M::Item> {
-        if let Some(ret) = self.dequeue_where(&mut try_claim) {
-            return Some(ret);
+    /// A T: one freed and claimed from this CPU, else fresh from A,
+    /// constructed, else one claimed from any CPU.
+    pub fn alloc(&self) -> Result<NonNull<T>, AllocError> {
+        if let Some(p) = self.claim(self.pcpu().raw_this_cpu()) {
+            return Ok(p);
         }
-        self.pcpu().each_cpu().find_map(|p| self.pcpu_dequeue(p, &mut try_claim))
+
+        if let Ok(p) = self.backing().allocate_zeroed(Layout::new::<T>()) {
+            let p = p.cast::<T>();
+            unsafe { T::construct(p) };
+            return Ok(p);
+        }
+
+        self.pcpu().each_cpu().find_map(|p| self.claim(p)).ok_or(AllocError)
     }
 
-    /// How many items are queued, not yet processed or dequeued.
+    /// @p freed: dropped now, if T is DropAnytime, else once its grace period
+    /// is over - its memory handed out again, or back to A, after that.
+    ///
+    /// # Safety
+    /// @p is a T in memory from A - alloc()'s, or another RcuPending's over
+    /// the same A - and nothing but readers from before this uses it after.
+    pub unsafe fn free(&self, p: NonNull<T>) {
+        if <T as DropAt>::at_free() {
+            unsafe { ptr::drop_in_place(p.as_ptr()) };
+        }
+        self.enqueue(p)
+    }
+
+    /// How many items are queued, not yet processed or claimed.
     pub fn nr_pending(&self) -> usize {
         self.pcpu().each_cpu().map(|p| p.nr.load(Relaxed)).sum()
     }
@@ -663,7 +619,7 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         })
     }
 
-    unsafe extern "C" fn init_pcpu(slot: *mut Pcpu<'f, M>, this: *mut Self, cpu: c_uint) {
+    unsafe extern "C" fn init_pcpu(slot: *mut Pcpu<'f, T, A>, this: *mut Self, cpu: c_uint) {
         let lock = new_lock!(PcpuState {
             objs:     KVVec::new(),
             lists:    Default::default(),
@@ -683,13 +639,13 @@ impl<'f, M: Mode> RcuPending<'f, M> {
     ///
     /// # Safety
     /// @this doesn't move until it's freed.
-    unsafe fn init(this: *mut Self, srcu: Flavor<'f>, process: M) -> Result<(), AllocError> {
+    unsafe fn init(this: *mut Self, srcu: Flavor<'f>, alloc: A) -> Result<(), AllocError> {
         let p = unsafe { PerCpu::alloc_init(Self::init_pcpu, this) }?.into_raw();
 
         unsafe {
             (&raw mut (*this).p).write(p);
             (&raw mut (*this).srcu).write(srcu);
-            (&raw mut (*this).process).write(process);
+            (&raw mut (*this).alloc).write(MaybeUninit::new(alloc));
         }
         Ok(())
     }
@@ -712,7 +668,7 @@ impl<'f, M: Mode> RcuPending<'f, M> {
 
     /// # Safety
     /// drain()ed, and nothing enqueues after: exit()'s @this.
-    unsafe fn free(this: *mut Self) {
+    unsafe fn free_pcpu(this: *mut Self) {
         for p in unsafe { &*this }.pcpu().cpus() {
             let p = p.as_ptr().cast_mut();
             {
@@ -728,6 +684,7 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         unsafe {
             free_percpu((*this).p.cast());
             (&raw mut (*this).p).write(ptr::null_mut());
+            (*this).alloc.assume_init_drop();
         }
     }
 
@@ -744,15 +701,37 @@ impl<'f, M: Mode> RcuPending<'f, M> {
             return;
         }
         unsafe { &*this }.drain();
-        unsafe { Self::free(this) }
+        unsafe { Self::free_pcpu(this) }
     }
 }
 
-// Zeroed, it's one never init()ed: its percpu state null
-unsafe impl<M: Mode + Zeroable> Zeroable for RcuPending<'_, M> {}
+// Zeroed, it's one never init()ed: its percpu state null, A not there
+unsafe impl<T: RcuRealloc, A: Alloc> Zeroable for RcuPending<'_, T, A> {}
 
-impl<M: Mode> Drop for RcuPending<'_, M> {
+impl<T: RcuRealloc, A: Alloc> Drop for RcuPending<'_, T, A> {
     fn drop(&mut self) {
         unsafe { Self::exit(self) }
     }
 }
+
+/// A T's memory, as alloc() gives it, for its user to write a T over - and
+/// to drop before deallocate(): a build error for a T whose drop waits for
+/// its grace period.
+unsafe impl<T: RcuRealloc, A: Alloc> Allocator for RcuPending<'_, T, A> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        <T as DropAt>::assert_at_free();
+
+        let t = Layout::new::<T>();
+        if layout.size() > t.size() || layout.align() > t.align() {
+            return Err(AllocError);
+        }
+        Ok(NonNull::slice_from_raw_parts(self.alloc()?.cast(), t.size()))
+    }
+
+    unsafe fn deallocate(&self, p: NonNull<u8>, _: Layout) {
+        <T as DropAt>::assert_at_free();
+        self.enqueue(p.cast())
+    }
+}
+
+unsafe impl<T: RcuRealloc, A: Alloc> Alloc for RcuPending<'_, T, A> {}

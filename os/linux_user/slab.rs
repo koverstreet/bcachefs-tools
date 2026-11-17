@@ -3,7 +3,7 @@
 //! The kernel's slab cache of @T's, in userspace: which has no slab caches,
 //! its @T's plain allocations.
 
-use crate::util::alloc::{kfree, kzalloc, Alloc, AllocError, Allocator, Flags, Kmalloc};
+use crate::util::alloc::{kfree, Alloc, AllocError, Allocator, Kmalloc};
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
@@ -13,11 +13,6 @@ pub struct KmemCache<T>(PhantomData<fn() -> T>);
 impl<T> KmemCache<T> {
     pub const fn new() -> Self {
         Self(PhantomData)
-    }
-
-    /// A @T's memory, zeroed.
-    pub fn zalloc(&self, _gfp: Flags) -> Option<NonNull<T>> {
-        kzalloc(Layout::new::<T>()).ok().map(NonNull::cast)
     }
 
     /// # Safety

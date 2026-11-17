@@ -101,8 +101,8 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     }
 
     /// T dropped now, and its memory given up to wait out readers by other
-    /// means than its own free's - an RcuPending's KvFree. A build error for a
-    /// T that's not an RcuMember's.
+    /// means than its own free's. A build error for a T that's not an
+    /// RcuMember's.
     pub fn retire(self) -> Retired<T, A> {
         let p = self.into_raw();
         unsafe { <T as RcuFreeing>::retire(p) };

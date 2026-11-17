@@ -21,7 +21,7 @@ use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::time_stats::TimeStatsArray;
 use crate::util::mempool::Mempool;
-use crate::util::rcu::Srcu;
+use crate::util::rcu::{RcuDropMember, RcuHead, Srcu};
 use crate::os::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, NeBytes, bits_to_longs};
 use crate::btree::node_scan::NodeScan;
@@ -489,7 +489,7 @@ pub const BKEY_CACHED_DIRTY: u32 = 1;
 pub const BKEY_CACHED_IMMEDIATE_FLUSH: u32 = 2;
 
 #[repr(C)]
-#[derive(MaybeZeroable)]
+#[derive(MaybeZeroable, RcuHead)]
 pub struct bkey_cached {
     pub c: cs::btree_bkey_cached_common,
 
@@ -503,7 +503,9 @@ pub struct bkey_cached {
     pub seq: u64,
 
     pub k: *mut cs::bkey_i,
-    pub rcu: cs::rcu_head,
+    /* the key cache's lookups lock it: dropped once they're past it */
+    #[rcu_head]
+    pub rcu: RcuDropMember<RcuHead>,
 }
 
 impl bkey_cached {
