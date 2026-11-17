@@ -23,23 +23,16 @@ use crate::sb::io::{entries_as_read, entries_end, SbFieldOps};
 use crate::types::Le64;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::bitmap::LeBitmap;
-use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated, ValidatedEntries};
+use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated};
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
 use crate::format::{Btree, MetadataVersion};
 
 type Section = c::bch_sb_field_downgrade<Validated>;
-type Entry = c::bch_sb_field_downgrade_entry<Validated>;
 
 const SECTION_HEAD: usize = size_of::<Head<Section>>();
 
-/// Its whole entries. Each is 2 byte aligned and the section's length a
-/// multiple of 8, so up to 6 bytes past the last are padding.
-fn entries(f: &Section) -> ValidatedEntries<'_, Entry> {
-    ValidatedEntries::new(&f.as_bytes()[SECTION_HEAD..])
-}
-
-/// entries(), of a section as read.
+/// Its entries, of a section as read.
 fn entries_read(f: &c::bch_sb_field_downgrade<Unvalidated>)
     -> impl Iterator<Item = &c::bch_sb_field_downgrade_entry<Unvalidated>>
 {
@@ -307,7 +300,7 @@ pub(crate) fn sb_set_downgrade(sb: &mut SbLockGuard<'_>, new_minor: u32, old_min
 
     let mut passes = [0; 2];
     let mut silent = [Le64::new(0); 8];
-    for e in entries(d) {
+    for e in d.entries() {
         let minor = e.version.get().minor();
         if !(new_minor < minor && minor <= old_minor) {
             continue;

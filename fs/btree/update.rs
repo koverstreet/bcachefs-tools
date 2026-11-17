@@ -23,8 +23,8 @@ use core::cmp::Ordering;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::unlikely;
-use crate::util::vstructs::{plain_bytes, EntryWalk, Head, Plain, SelfSized, Unsized, Validated, ValidatedEntries,
-                            ValidatedEntriesMut, ViewEntries, ViewEntriesMut, VStruct};
+use crate::util::vstructs::{plain_bytes, Container, EntryWalk, Head, Plain, SelfSized, Unsized, Validated,
+                            ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut, VStruct};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::ffi::c_ulong;
@@ -266,40 +266,68 @@ impl<T: ?Sized> btree_trans_subbuf<T> {
         usize::from(self.u64s)
     }
 
-    /// All of it, for @f: growing it moves it, so it's only lent for the call.
+    /// Its entries, for @f: growing it moves it, so they're only lent for the
+    /// call.
     #[inline]
-    pub fn with_u64s<R>(self, trans: &BtreeTrans<'_>, f: impl FnOnce(&[u64]) -> R) -> R {
+    pub fn with<R>(self, trans: &BtreeTrans<'_>, f: impl FnOnce(&Subbuf<T>) -> R) -> R {
         let p = trans.mem_with(|m| m.range(usize::from(self.base), usize::from(self.u64s)));
-        f(unsafe { p.as_ref() })
+        f(unsafe { &*(p.as_ptr() as *const Subbuf<T>) })
     }
 
     #[inline]
-    fn with_u64s_mut<R>(self, trans: &BtreeTrans<'_>, f: impl FnOnce(&mut [u64]) -> R) -> R {
-        let mut p = trans.mem_with(|m| m.range(usize::from(self.base), usize::from(self.u64s)));
-        f(unsafe { p.as_mut() })
+    fn with_mut<R>(self, trans: &BtreeTrans<'_>, f: impl FnOnce(&mut Subbuf<T>) -> R) -> R {
+        let p = trans.mem_with(|m| m.range(usize::from(self.base), usize::from(self.u64s)));
+        f(unsafe { &mut *(p.as_ptr() as *mut Subbuf<T>) })
+    }
+}
+
+/// A sub-buffer's entries, in the transaction's memory: Ts, one after
+/// another, in the state T says.
+#[repr(transparent)]
+pub struct Subbuf<T: ?Sized> {
+    _entries: PhantomData<T>,
+    u64s:     [u64],
+}
+
+impl<T: ?Sized> Subbuf<T> {
+    /// Its entries, as the u64s they are.
+    pub fn u64s(&self) -> &[u64] {
+        &self.u64s
+    }
+}
+
+unsafe impl<T: ?Sized> Container for Subbuf<T> {
+    type Entry = T;
+
+    fn entry_bytes(&self) -> &[u8] {
+        self.u64s.as_bytes()
+    }
+
+    fn entry_bytes_mut(&mut self) -> &mut [u8] {
+        self.u64s.as_mut_bytes()
     }
 }
 
 /* Validated keys: the thin walk, as a Validated container's keys are walked */
 impl btree_trans_subbuf<BkeyI> {
     pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntries<'_, BkeyI>) -> R) -> R {
-        self.with_u64s(t.trans(), |b| f(unsafe { ViewEntries::new(b.as_bytes()) }))
+        self.with(t.trans(), |s| f(ViewEntries::of(s)))
     }
 
     pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntriesMut<'_, BkeyI>) -> R) -> R {
-        self.with_u64s_mut(t.trans(), |b| f(unsafe { ViewEntriesMut::new(b.as_mut_bytes()) }))
+        self.with_mut(t.trans(), |s| f(ViewEntriesMut::of(s)))
     }
 }
 
 impl btree_trans_subbuf<c::jset_entry<Validated>> {
     pub fn iter<R>(self, t: &TransAttempt<'_, '_>,
                    f: impl FnOnce(ValidatedEntries<'_, c::jset_entry<Validated>>) -> R) -> R {
-        self.with_u64s(t.trans(), |b| f(ValidatedEntries::new(b.as_bytes())))
+        self.with(t.trans(), |s| f(ValidatedEntries::of(s)))
     }
 
     pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>,
                        f: impl FnOnce(ValidatedEntriesMut<'_, c::jset_entry<Validated>>) -> R) -> R {
-        self.with_u64s_mut(t.trans(), |b| f(ValidatedEntriesMut::new(b.as_mut_bytes())))
+        self.with_mut(t.trans(), |s| f(ValidatedEntriesMut::of(s)))
     }
 }
 
@@ -389,7 +417,7 @@ impl TransAttempt<'_, '_> {
 
     fn subbuf_remove<T: ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>, range: Range<usize>) {
         let len = range.len();
-        cell.get().with_u64s_mut(self.trans(), |buf| buf.copy_within(range.end.., range.start));
+        cell.get().with_mut(self.trans(), |s| s.u64s.copy_within(range.end.., range.start));
         cell.set(btree_trans_subbuf { u64s: cell.get().u64s - len as u16, ..cell.get() });
     }
 

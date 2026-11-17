@@ -718,12 +718,14 @@ impl BtreeTrans<'_> {
                     .as_mut_bytes().copy_from_slice(k.as_bytes());
             }
 
-            self.journal_entries.get().with_u64s(self, |e| {
+            self.journal_entries.get().with(self, |e| {
+                let e = e.u64s();
                 invariant!(w.room() >= e.len());
                 w.push_entries(e)
             })?;
 
-            self.accounting.get().with_u64s(self, |a| -> Result<(), NoRoom> {
+            self.accounting.get().with(self, |a| -> Result<(), NoRoom> {
+                let a = a.u64s();
                 if !a.is_empty() {
                     invariant!(w.room() >= jset_u64s(a.len()));
                     w.add_entry(c::JsetEntryType::write_buffer_keys, Btree::accounting.0 as u8, 0, a.len())?

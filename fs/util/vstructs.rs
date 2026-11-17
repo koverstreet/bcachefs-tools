@@ -317,12 +317,9 @@ macro_rules! vstruct_container {
             fn entry_bytes(&self) -> &[u8] {
                 self.start_bytes()
             }
-        }
 
-        impl $t<$crate::util::vstructs::Unvalidated> {
-            /// start_bytes(), mutably: for entries_mut().
-            fn start_bytes_mut(&mut self) -> &mut [u8] {
-                &mut self.as_bytes_mut()[::core::mem::offset_of!($w, start)..]
+            fn entry_bytes_mut(&mut self) -> &mut [u8] {
+                self.start_bytes_mut()
             }
         }
     };
@@ -331,6 +328,10 @@ macro_rules! vstruct_container {
             /// Its entries' bytes: from its start[] to its end.
             fn start_bytes(&self) -> &[u8] {
                 &self.as_bytes()[::core::mem::offset_of!($w, start)..]
+            }
+
+            fn start_bytes_mut(&mut self) -> &mut [u8] {
+                &mut self.as_bytes_mut()[::core::mem::offset_of!($w, start)..]
             }
         }
     };
@@ -1374,16 +1375,19 @@ pub(crate) fn bytes_of_mut<T: Unsized + ?Sized>(v: &mut T) -> &mut [u8] {
     unsafe { core::slice::from_raw_parts_mut((v as *mut T).cast::<u8>(), len) }
 }
 
-/// A Validated vstruct whose entries follow its start[]: vstruct_container!()'s.
-/// What its Validated walks are made from, so its entries' state is its own.
+/// What holds entries, one after another: vstruct_container!()'s, a
+/// transaction's sub-buffer. What its walks are made from - and only it - so
+/// its entries are in its state, as Entry says.
 ///
 /// # Safety
-/// entry_bytes() are its entries, each Validated and as long as its header
-/// says, one after another from the first.
+/// entry_bytes() are its entries, each an Entry as long as its header says,
+/// one after another from the first.
 pub unsafe trait Container {
     type Entry: ?Sized;
 
     fn entry_bytes(&self) -> &[u8];
+
+    fn entry_bytes_mut(&mut self) -> &mut [u8];
 }
 
 /// A Validated container's entries, each an &E of exactly its own bytes:
@@ -1396,11 +1400,6 @@ pub struct ValidatedEntries<'a, E: ?Sized> {
 }
 
 impl<'a, E: ?Sized> ValidatedEntries<'a, E> {
-    /// The entries in @rest: a container's, from its start[].
-    pub(crate) fn new(rest: &'a [u8]) -> Self {
-        Self { rest, _entry: PhantomData }
-    }
-
     /// @c's entries.
     pub fn of<C: Container<Entry = E> + ?Sized>(c: &'a C) -> Self {
         Self { rest: c.entry_bytes(), _entry: PhantomData }
@@ -1430,8 +1429,9 @@ pub struct ValidatedEntriesMut<'a, E: ?Sized> {
 }
 
 impl<'a, E: ?Sized> ValidatedEntriesMut<'a, E> {
-    pub(crate) fn new(rest: &'a mut [u8]) -> Self {
-        Self { rest, _entry: PhantomData }
+    /// @c's entries, to edit.
+    pub fn of<C: Container<Entry = E> + ?Sized>(c: &'a mut C) -> Self {
+        Self { rest: c.entry_bytes_mut(), _entry: PhantomData }
     }
 }
 
@@ -1537,15 +1537,6 @@ unsafe fn validated_len<E: SelfSized + Plain>(rest: &[u8]) -> usize {
 }
 
 impl<'a, E: ?Sized> ViewEntries<'a, E> {
-    /// The entries in @rest: a validated unsized container's, from its
-    /// start[].
-    ///
-    /// # Safety
-    /// @rest is whole entries, aligned, each as long as its header says.
-    pub(crate) unsafe fn new(rest: &'a [u8]) -> Self {
-        Self { rest, at: 0, _entry: PhantomData }
-    }
-
     /// @c's entries.
     pub fn of<C: Container<Entry = E> + ?Sized>(c: &'a C) -> Self {
         Self { rest: c.entry_bytes(), at: 0, _entry: PhantomData }
@@ -1582,10 +1573,9 @@ pub struct ViewEntriesMut<'a, E: ?Sized> {
 }
 
 impl<'a, E: ?Sized> ViewEntriesMut<'a, E> {
-    /// # Safety
-    /// As ViewEntries::new()'s.
-    pub(crate) unsafe fn new(rest: &'a mut [u8]) -> Self {
-        Self { rest, at: 0, _entry: PhantomData }
+    /// @c's entries, to edit.
+    pub fn of<C: Container<Entry = E> + ?Sized>(c: &'a mut C) -> Self {
+        Self { rest: c.entry_bytes_mut(), at: 0, _entry: PhantomData }
     }
 }
 

@@ -35,8 +35,7 @@ use crate::os::percpu::{Counters, CpuGuard};
 use crate::util::rcu;
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::os::sched;
-use crate::util::vstructs::{Unvalidated, UnvalidatedEntries, VstructRefEntries};
-use zerocopy::IntoBytes;
+use crate::util::vstructs::{ValidatedEntries, ViewEntries};
 use crate::util::{Printbuf, ToText};
 use core::cell::UnsafeCell;
 use core::ffi::{c_uint, c_ulong, CStr};
@@ -1003,16 +1002,16 @@ impl BtreeTrans<'_> {
             prt!(out, "\n");
         }
 
-        self.journal_entries.get().with_u64s(self, |b| {
-            for e in UnvalidatedEntries::<c::jset_entry<Unvalidated>>::new(b.as_bytes()).map_while(Result::ok) {
-                journal_entry_to_text(&mut out, Some(c), e);
+        self.journal_entries.get().with(self, |s| {
+            for e in ValidatedEntries::of(s) {
+                journal_entry_to_text(&mut out, Some(c), e.as_unvalidated());
                 prt!(out, "\n");
             }
         });
 
-        self.accounting.get().with_u64s(self, |b| {
-            for k in VstructRefEntries::<c::bkey_i>::new(b.as_bytes()).map_while(Result::ok) {
-                bkey_val_to_text(&mut out, Some(c), BkeySC::from_bkey_i(&k));
+        self.accounting.get().with(self, |s| {
+            for k in ViewEntries::of(s) {
+                bkey_val_to_text(&mut out, Some(c), BkeySC::from(k));
                 prt!(out, "\n");
             }
         });

@@ -22,9 +22,11 @@ pub struct bch_sb_field_downgrade_entry {
     pub errors: [le::U16; 0],
 }
 
-#[whole(tail = entries: [u8])]
+/* Each entry is 2 byte aligned and the section's length a multiple of 8, so up
+ * to 6 bytes past the last are padding */
+#[whole(tail = start: [u8], entries = bch_sb_field_downgrade_entry)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_downgrade {
-    pub entries: [Head<c::bch_sb_field_downgrade_entry>; 0],
+    pub start: [Head<c::bch_sb_field_downgrade_entry>; 0],
 }
