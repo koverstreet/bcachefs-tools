@@ -795,7 +795,7 @@ impl OptHost for c::bch_sb_head {
     const MEMBER: bool = false;
 
     fn with<R>(sb: &c::bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
-        Some(f(Unvalidated::head(sb)))
+        Some(f(sb))
     }
 
     fn with_mut<R>(sb: &mut c::bch_sb_buf, _: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
@@ -809,7 +809,7 @@ impl OptHost for c::bch_sb_field_ext {
     const MEMBER: bool = false;
 
     fn with<R>(sb: &c::bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
-        let src = Unvalidated::field(sb, c::SbFieldType::ext)?.payload();
+        let src = Unvalidated::field::<Self>(sb)?.as_bytes();
         let mut ext = Self::default();
         let dst = plain_bytes_mut(&mut ext);
         let n = src.len().min(dst.len());

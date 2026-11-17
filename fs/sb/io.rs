@@ -153,7 +153,7 @@ use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated};
+use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InPlace, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
@@ -231,14 +231,15 @@ pub struct bch_sb_cpu {
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - handed out as its ArmRef says, a short one, written
-/// before its type grew, reading as zero past its end.
-pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
+/// before its type grew, reading as zero past its end. An arm of the section
+/// in @S.
+pub trait SbField<S: State = Validated>: ArmOf<c::bch_sb_field<S>, Tag = u32> + ArmRef {
     const FIELD_TYPE: c::SbFieldType = c::SbFieldType(Self::TAG);
     /// Each device has its own: copy_super() leaves it.
     const SINGLE_DEVICE: bool = c::BCH_SINGLE_DEVICE_SB_FIELDS & (1 << Self::TAG) != 0;
 }
 
-impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
+impl<S: State, F: ArmOf<c::bch_sb_field<S>, Tag = u32> + ArmRef + ?Sized> SbField<S> for F {}
 
 /// A section type named by its family, in any state: what a superblock's
 /// accessors take, handing out its Arm - the section in the superblock's
@@ -1734,34 +1735,46 @@ impl Drop for SbWrite<'_> {
 // no section borrowed from the handle outlives it.
 
 /// A superblock's state, for what reads one in either - validate reading
-/// members, a printer, as the rest reads them: its header, and a section by
-/// type, as read - Unvalidated, whatever the superblock's state, for what
-/// reads one that may not be valid. Validated, the walk trusts the sections'
-/// counts; Unvalidated, each is checked, and the walk ends at one that
-/// doesn't fit - which validate reports.
-pub trait SbState: State + Sized {
-    fn head(sb: &bch_sb<Self>) -> &Head<bch_sb>;
+/// members, a printer, as the rest reads them: its sections, in its state.
+/// Validated, the walk trusts the sections' counts; Unvalidated, each is
+/// checked, and the walk ends at one that doesn't fit - which validate
+/// reports.
+pub trait SbState: InPlace + Sized {
+    fn field_by_type(sb: &bch_sb<Self>, ty: c::SbFieldType) -> Option<&c::bch_sb_field<Self>>;
 
-    fn field(sb: &bch_sb<Self>, ty: c::SbFieldType) -> Option<&c::bch_sb_field<Unvalidated>>;
+    /// Its section of type @F, F's arm in this state: F, its family, is an
+    /// arm in both.
+    fn field<F: InState + ?Sized>(sb: &bch_sb<Self>) -> Option<&F::In<Self>>
+    where
+        F::In<Validated>: SbField,
+        F::In<Unvalidated>: SbField<Unvalidated>;
 }
 
 impl SbState for Validated {
-    fn head(sb: &bch_sb) -> &Head<bch_sb> {
-        sb
+    fn field_by_type(sb: &bch_sb, ty: c::SbFieldType) -> Option<&c::bch_sb_field> {
+        field_get_id(sb, ty)
     }
 
-    fn field(sb: &bch_sb, ty: c::SbFieldType) -> Option<&c::bch_sb_field<Unvalidated>> {
-        field_get_id(sb, ty).map(|f| f.as_unvalidated())
+    fn field<F: InState + ?Sized>(sb: &bch_sb) -> Option<&F::In<Self>>
+    where
+        F::In<Validated>: SbField,
+        F::In<Unvalidated>: SbField<Unvalidated>,
+    {
+        sb.field::<F>()
     }
 }
 
 impl SbState for Unvalidated {
-    fn head(sb: &bch_sb<Unvalidated>) -> &Head<bch_sb> {
-        sb
+    fn field_by_type(sb: &bch_sb<Unvalidated>, ty: c::SbFieldType) -> Option<&c::bch_sb_field<Unvalidated>> {
+        sb.entries().map_while(Result::ok).find(|f| f.type_.get() == ty.0)
     }
 
-    fn field(sb: &bch_sb<Unvalidated>, ty: c::SbFieldType) -> Option<&c::bch_sb_field<Unvalidated>> {
-        sb.entries().map_while(Result::ok).find(|f| f.type_.get() == ty.0)
+    fn field<F: InState + ?Sized>(sb: &bch_sb<Unvalidated>) -> Option<&F::In<Self>>
+    where
+        F::In<Validated>: SbField,
+        F::In<Unvalidated>: SbField<Unvalidated>,
+    {
+        Self::field_by_type(sb, <F::In<Self> as SbField<Self>>::FIELD_TYPE)?.arm()
     }
 }
 
@@ -1779,7 +1792,7 @@ fn field_bytes(sb: &bch_sb, ty: c::SbFieldType) -> usize {
 /// Where it is, in bytes from the superblock's start.
 fn field_offset<S: SbState>(sb: &bch_sb<S>, ty: c::SbFieldType) -> Option<usize> {
     let base = core::ptr::from_ref(sb).cast::<u8>() as usize;
-    S::field(sb, ty).map(|f| f.as_bytes().as_ptr() as usize - base)
+    S::field_by_type(sb, ty).map(|f| f.as_bytes().as_ptr() as usize - base)
 }
 
 /// The section at @off in the superblock at @sb.

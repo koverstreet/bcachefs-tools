@@ -83,7 +83,7 @@ pub fn sb_to_text_with_names(
     let sb_as_read = sb.as_unvalidated();
 
     if let Some(ty) = field_only {
-        if let Some(f) = Unvalidated::field(sb_as_read, ty) {
+        if let Some(f) = Unvalidated::field_by_type(sb_as_read, ty) {
             sb::io::field_ops_to_text(out, fs, sb_as_read, f);
         }
     } else {

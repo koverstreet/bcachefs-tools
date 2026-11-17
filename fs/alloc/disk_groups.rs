@@ -194,9 +194,7 @@ fn disk_path_to_text_in<G: DiskGroup>(out: &mut Printbuf, groups: &[G], mut v: u
 }
 
 fn sb_groups<S: SbState>(sb: &c::bch_sb<S>) -> &[c::bch_disk_group] {
-    S::field(sb, c::SbFieldType::disk_groups)
-        .and_then(|f| f.arm::<c::bch_sb_field_disk_groups<Unvalidated>>())
-        .map_or(&[], |g| &g.entries)
+    S::field::<c::bch_sb_field_disk_groups>(sb).map_or(&[], |g| &g.entries)
 }
 
 /// "ssd.fast." is "ssd.fast".
@@ -412,7 +410,7 @@ fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, target: 
     match target {
         Target::Null => write!(out, "none"),
         Target::Dev(d) => {
-            let m = members::sb_member(sb, d).filter(|m| d < u32::from(S::head(sb).nr_devices) && m.alive());
+            let m = members::sb_member(sb, d).filter(|m| d < u32::from(sb.nr_devices) && m.alive());
             match m {
                 Some(m) => prt!(out, "Device {} ({d})", m.uuid),
                 None    => write!(out, "Bad device {d}"),
@@ -599,7 +597,7 @@ fn disk_groups_validate<S: SbState>(sb: &c::bch_sb<S>, groups: &[c::bch_disk_gro
 {
     let nr = groups.len();
 
-    for i in 0..u32::from(S::head(sb).nr_devices) {
+    for i in 0..u32::from(sb.nr_devices) {
         let Some(m) = members::sb_member(sb, i) else { continue };
         let Some(g) = (m.group() as usize).checked_sub(1) else { continue };
 

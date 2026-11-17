@@ -23,7 +23,7 @@ use crate::util::refcount::{AtomicRef, PercpuRef, RefGuard, TryRefcount};
 use crate::alloc::disk_groups;
 use crate::util::ffi::c_char;
 use crate::data_structures::strided::{Strided, StridedMut};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, plain_bytes, Head, Unsized, Unvalidated, Validated};
+use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, InPlace, Unsized, Unvalidated, Validated};
 use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
@@ -95,13 +95,13 @@ impl c::bch_member {
 }
 
 pub fn member_exists<S: SbState>(sb: &c::bch_sb<S>, dev: u32) -> bool {
-    dev < u32::from(S::head(sb).nr_devices) && sb_member(sb, dev).is_some_and(|m| m.alive())
+    dev < u32::from(sb.nr_devices) && sb_member(sb, dev).is_some_and(|m| m.alive())
 }
 
 impl<S: SbState> c::bch_sb<S> {
     /// Its members that exist, of nr_devices' slots.
     pub fn number_of_devices(&self) -> u32 {
-        (0..u32::from(S::head(self).nr_devices)).filter(|&i| member_exists(self, i)).count() as u32
+        (0..u32::from(self.nr_devices)).filter(|&i| member_exists(self, i)).count() as u32
     }
 }
 
@@ -178,10 +178,6 @@ pub fn sb_member<S: SbState>(sb: &c::bch_sb<S>, idx: u32) -> Option<c::bch_membe
     }
 }
 
-fn members_in(f: &[u8], start: usize, stride: usize) -> Option<Strided<'_, c::bch_member>> {
-    Strided::new(f.get(start..)?, stride)
-}
-
 /// Read-only view of members_v2 with bounds-checked access.
 pub struct MembersV2<'a> {
     members:    Strided<'a, c::bch_member>,
@@ -226,28 +222,37 @@ impl<'a> MembersV1<'a> {
     }
 }
 
+impl<S: InPlace> c::bch_sb_field_members_v2<S> {
+    fn members(&self) -> Option<Strided<'_, c::bch_member>> {
+        Strided::new(&self._members, self.member_bytes.get().into())
+    }
+}
+
+impl<S: InPlace> c::bch_sb_field_members_v1<S> {
+    fn members(&self) -> Option<Strided<'_, c::bch_member>> {
+        Strided::new(&self._members, BCH_MEMBER_V1_BYTES)
+    }
+}
+
 /// Construct a MembersV2 reader from a superblock.
 pub fn members_v2<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV2<'_>> {
-    let f = S::field(sb, c::SbFieldType::members_v2)?.payload();
-    let stride = cast_plain::<Head<c::bch_sb_field_members_v2>>(f)?.member_bytes.get().into();
     Some(MembersV2 {
-        members: members_in(f, MEMBERS_V2_HEAD, stride)?,
-        nr_devices: S::head(sb).nr_devices.into(),
+        members: S::field::<c::bch_sb_field_members_v2>(sb)?.members()?,
+        nr_devices: sb.nr_devices.into(),
     })
 }
 
 /// Construct a MembersV1 reader from a superblock.
 pub fn members_v1<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV1<'_>> {
-    let f = S::field(sb, c::SbFieldType::members_v1)?.payload();
     Some(MembersV1 {
-        members: members_in(f, MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES)?,
-        nr_devices: S::head(sb).nr_devices.into(),
+        members: S::field::<c::bch_sb_field_members_v1>(sb)?.members()?,
+        nr_devices: sb.nr_devices.into(),
     })
 }
 
 fn members_v2_mut(mi: &mut c::bch_sb_field_members_v2<Validated>) -> Option<StridedMut<'_, c::bch_member>> {
     let stride = mi.member_bytes.get().into();
-    StridedMut::new(bytes_of_mut(mi).get_mut(MEMBERS_V2_HEAD..)?, stride)
+    StridedMut::new(&mut mi._members, stride)
 }
 
 impl c::bch_sb_buf {
@@ -386,7 +391,7 @@ fn members_to_text<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, members: O
         return;
     };
 
-    let nr = usize::from(S::head(sb).nr_devices);
+    let nr = usize::from(sb.nr_devices);
     if members.len() != nr {
         write!(out, "nr_devices mismatch: have {} entries, should be {nr}", members.len());
     }
@@ -403,24 +408,24 @@ fn members_to_text<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, members: O
 impl SbFieldOps for c::bch_sb_field_members_v1<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_members_v1<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
-        members_validate(sb, members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES), err)
+        members_validate(sb, f.members(), err)
     }
 
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &c::bch_sb<Unvalidated>,
                 f: &c::bch_sb_field_members_v1<Unvalidated>) {
-        members_to_text(out, sb, members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES));
+        members_to_text(out, sb, f.members());
     }
 }
 
 impl SbFieldOps for c::bch_sb_field_members_v2<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_members_v2<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
-        members_validate(sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()), err)
+        members_validate(sb, f.members(), err)
     }
 
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &c::bch_sb<Unvalidated>,
                 f: &c::bch_sb_field_members_v2<Unvalidated>) {
-        members_to_text(out, sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()));
+        members_to_text(out, sb, f.members());
     }
 
     /// ca->mi, and the masks of rotational and removed devices.
@@ -1580,8 +1585,7 @@ mod tests {
         }
 
         let mut out = Printbuf::new();
-        let f = sb.field::<c::bch_sb_field_members_v1>().unwrap();
-        members_to_text(&mut out, sb.sb(), members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES));
+        members_to_text(&mut out, sb.sb(), sb.field::<c::bch_sb_field_members_v1>().unwrap().members());
         assert!(!out.as_str().contains("mismatch"));
         assert_eq!(out.as_str().matches("Device:").count(), 3);
     }
