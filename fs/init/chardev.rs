@@ -40,16 +40,18 @@ use crate::fs::{Fs, WriteRef};
 use crate::locking::{ByteLock, Locked};
 use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
+use crate::util::place::Placed;
 use crate::os::chrdev::{self, Chrdev, Class, Device};
 use crate::os::file::{File, FileOps, UserBuf};
+use crate::os::kobject::Kobject;
 use crate::os::module::{ModuleExit, ThisModule};
 use crate::os::ioctl::{arg, inout, input, output, vstruct, UserArg, UserStr, UserVstruct};
 use crate::util::ioctl::Ioctl;
 use crate::util::alloc::{KBox, KVVec};
 use kernel::alloc::flags::GFP_KERNEL;
 use crate::util::rcu::read_lock;
-use crate::util::refcount::TryRefcount;
-use crate::util::vstructs::plain_bytes;
+use crate::util::refcount::{RefGuard, TryRefcount};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::accounting;
 use crate::alloc::accounting_mem;
 use crate::btree::iter::{btree_iter_params_valid, BtreeIter, BtreeIterFlags};
@@ -63,7 +65,6 @@ use crate::os::kernel::{capable, Capability};
 use crate::os::thread_with_file::{Inner, ThreadFile, ThreadWithFile};
 use crate::data::moving::MoveStats;
 use core::mem::size_of;
-use core::ptr::NonNull;
 use core::pin::Pin;
 use core::sync::atomic::Ordering::Relaxed;
 use core::ffi::CStr;
@@ -662,25 +663,19 @@ fn disk_resize_journal(fs: &Fs, a: c::bch_ioctl_disk_resize_journal, msg: ErrMsg
 /// kthread, and a file whose read() is its progress. Not a stdio file: each
 /// read is the progress now, an event, not the next of a stream.
 struct DataJob {
-    /// XXX: good while the job's write ref is held - until its thread returns
-    /// - but the file can be read after: a read once the filesystem's gone is
-    /// a use after free, as it was in C
-    fs:    NonNull<Fs>,
+    /// Its memory, by a ref on its kobject: the file can be read after the
+    /// filesystem's stopped
+    fs:    RefGuard<Placed<Kobject, crate::at!(Fs.kobj)>>,
     arg:   c::bch_ioctl_data,
     /// The thread's, read() reads as it goes
     stats: MoveStats,
 }
 
-// SAFETY: the filesystem's every thread's
-unsafe impl Send for DataJob {}
-unsafe impl Sync for DataJob {}
-
 impl ThreadFile for DataJob {}
 
 fn data_job(job: &DataJob, _write_ref: WriteRef) {
     let stats = &job.stats;
-    // SAFETY: the job's write ref keeps the filesystem
-    let ret = crate::data::move_data::data_job(unsafe { job.fs.as_ref() }, stats, &job.arg);
+    let ret = crate::data::move_data::data_job(&job.fs, stats, &job.arg);
 
     if ret.err() == Some(Errcode::device_offline.into()) {
         stats.ret.set(c::IoctlDataEventRet::BCH_IOCTL_DATA_EVENT_RET_device_offline);
@@ -695,13 +690,10 @@ impl FileOps for DataJob {
     type Data = Inner<Self>;
 
     fn read(&self, _file: &File<Self::Data>, buf: &mut UserBuf) -> Result<(), BchError> {
-        let fs = unsafe { self.fs.as_ref() };
+        type Event = c::bch_ioctl_data_event;
+        let fs = &self.fs;
         let stats = &self.stats;
         let (ret, data_type, pos) = (stats.ret.get(), stats.at.data_type.get(), stats.at.pos.get());
-
-        let mut e = ::pin_init::zeroed::<c::bch_ioctl_data_event>();
-        e.type_ = c::DataEvent::BCH_DATA_EVENT_PROGRESS.0 as u8;
-        e.ret   = ret.0 as u8;
 
         let mut p = c::bch_ioctl_data_progress::default();
         p.data_type                 = data_type.0 as u8;
@@ -711,28 +703,36 @@ impl FileOps for DataJob {
         p.sectors_error_corrected   = stats.sectors_error_corrected.load(Relaxed) as u64;
         p.sectors_error_uncorrected = stats.sectors_error_uncorrected.load(Relaxed) as u64;
 
-        if c::DataOp(self.arg.op.into()) == c::DataOp::scrub {
-            let scrub = self.arg.scrub();
-            if let Some(ca) = fs.dev_get(scrub.dev) {
-                let u = ca.usage_full_read_fast();
-                p.sectors_total = (c::DataType::btree.0 as usize..u.d.len())
-                    .filter(|&i| scrub.data_types & (1 << i) != 0)
-                    .map(|i| u.d[i].sectors)
-                    .sum();
+        // the total, while the filesystem's up to read it from: the file
+        // outlives it
+        if let Some(_live) = fs.ro_ref.tryget() {
+            if c::DataOp(self.arg.op.into()) == c::DataOp::scrub {
+                let scrub = self.arg.scrub();
+                if let Some(ca) = fs.dev_get(scrub.dev) {
+                    let u = ca.usage_full_read_fast();
+                    p.sectors_total = (c::DataType::btree.0 as usize..u.d.len())
+                        .filter(|&i| scrub.data_types & (1 << i) != 0)
+                        .map(|i| u.d[i].sectors)
+                        .sum();
+                }
+            } else {
+                p.sectors_total = fs.usage_read_short().used;
             }
-        } else {
-            p.sectors_total = fs.usage_read_short().used;
         }
-        e.payload.p = p;
 
-        if buf.len() < size_of::<c::bch_ioctl_data_event>() {
+        if buf.len() < size_of::<Event>() {
             return fs.throw(Errcode::EINVAL_ioctl_data_read_short_buf);
         }
 
-        // SAFETY: zero initialized, then set: every byte is initialized
-        let bytes = unsafe {
-            core::slice::from_raw_parts((&raw const e).cast::<u8>(), size_of::<c::bch_ioctl_data_event>())
-        };
+        // its payload's a union, not Plain: its bytes, as its fields lay them out
+        let mut e = [0u64; size_of::<Event>() / size_of::<u64>()];
+        let bytes = plain_bytes_mut(&mut e);
+        bytes[offset_of!(Event, type_)] = c::DataEvent::BCH_DATA_EVENT_PROGRESS.0 as u8;
+        bytes[offset_of!(Event, ret)]   = ret.0 as u8;
+        let at = offset_of!(Event, payload);
+        bytes[at..at + size_of::<c::bch_ioctl_data_progress>()].copy_from_slice(plain_bytes(&p));
+
+        let bytes = plain_bytes(&e);
         if buf.copy_to(bytes) != bytes.len() {
             return Err(c::EFAULT.into());
         }
@@ -753,7 +753,7 @@ fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
     }
 
     let job = ThreadWithFile::new(Ok(DataJob {
-        fs:    NonNull::from(fs),
+        fs:    fs.kobj.tryget().expect("a ref on an open filesystem's kobject"),
         arg,
         // SAFETY: integers, and the zeroed state data_job() resets it from
         stats: MoveStats::default(),
