@@ -41,6 +41,7 @@ pub mod percpu_rwsem;
 pub mod posix_acl;
 pub mod power_supply;
 pub mod printk;
+pub mod quota;
 pub mod rcu;
 pub mod rwsem;
 pub mod sched;

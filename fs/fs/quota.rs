@@ -219,6 +219,7 @@ mod vfs {
     use crate::sb::io::SbResize;
     use crate::util::ffi::c_char;
     use crate::os::kernel::ktime_get_real_seconds;
+    use crate::os::quota::Kqid as _;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
     use crate::vfs::super_block::SuperBlock;
@@ -336,10 +337,7 @@ mod vfs {
             // Charged only through the VFS:
             let sb = fs.vfs_super().expect("quota warnings, but not mounted");
             for &(qtype, msg) in &self.m[..self.nr] {
-                unsafe {
-                    let kqid = c::make_kqid(&raw mut c::init_user_ns, qtype as c::quota_type, qid.q[qtype]);
-                    c::quota_send_warning(kqid, sb.dev(), msg as c_char)
-                }
+                c::kqid::new(qtype as c::quota_type, qid.q[qtype]).send_warning(sb.dev(), msg as c_char);
             }
         }
     }
@@ -899,12 +897,8 @@ mod vfs {
         }
     }
 
-    fn kqid_from(kqid: c::kqid) -> u32 {
-        unsafe { c::from_kqid(core::ptr::addr_of_mut!(c::init_user_ns), kqid) }
-    }
-
     fn get_quota(fs: &Fs, kqid: c::kqid, qdq: &mut c::qc_dqblk) {
-        let qid = kqid_from(kqid);
+        let qid = kqid.id();
 
         let l = Locked::new(fs, kqid.type_ as usize);
         *qdq = l.get(qid as usize).map_or_else(|| ::pin_init::zeroed(), dqblk);
@@ -912,7 +906,7 @@ mod vfs {
 
     fn get_next_quota(fs: &Fs, kqid: &mut c::kqid, qdq: &mut c::qc_dqblk) -> Result<(), BchError> {
         let ty = kqid.type_;
-        let qid = kqid_from(*kqid);
+        let qid = kqid.id();
 
         let l = Locked::new(fs, ty as usize);
         let Some((pos, mq)) = l.iter_from(qid as usize).find(|(_, mq)| **mq != c::Memquota::default()) else {
@@ -920,7 +914,7 @@ mod vfs {
         };
 
         *qdq = dqblk(mq);
-        *kqid = unsafe { c::make_kqid(c::current_user_ns(), ty, pos as u32) };
+        *kqid = c::kqid::new_current(ty, pos as u32);
         Ok(())
     }
 
@@ -964,7 +958,7 @@ mod vfs {
             return Err(c::EROFS.into());
         }
 
-        let mut new_quota = BkeyI::<c::Quota>::at(pos(kqid.type_ as u64, kqid_from(kqid) as u64));
+        let mut new_quota = BkeyI::<c::Quota>::at(pos(kqid.type_ as u64, kqid.id() as u64));
 
         let trans = crate::btree_trans!(fs);
         commit_do(&trans, None, CommitOpts::new(), |t| set_quota_trans(t, &mut new_quota, qdq))?;
