@@ -2,9 +2,6 @@ use core::cmp::Ordering;
 use core::num::FpCategory;
 use core::ops::{Add, Div, Neg};
 
-use core::f32;
-use core::f64;
-
 use crate::{Num, NumCast, ToPrimitive};
 
 /// Generic trait for floating point numbers that works with `no_std`.
@@ -1866,16 +1863,16 @@ pub trait Float: Num + Copy + NumCast + PartialOrd + Neg<Output = Self> {
     /// ```
     /// use num_traits::Float;
     ///
-    /// let num = 2.0f32;
+    /// let num = 42_f32;
     ///
-    /// // (8388608, -22, 1)
+    /// // (11010048, -18, 1)
     /// let (mantissa, exponent, sign) = Float::integer_decode(num);
     /// let sign_f = sign as f32;
     /// let mantissa_f = mantissa as f32;
-    /// let exponent_f = num.powf(exponent as f32);
+    /// let exponent_f = exponent as f32;
     ///
-    /// // 1 * 8388608 * 2^(-22) == 2
-    /// let abs_difference = (sign_f * mantissa_f * exponent_f - num).abs();
+    /// // 1 * 11010048 * 2^(-18) == 42
+    /// let abs_difference = (sign_f * mantissa_f * exponent_f.exp2() - num).abs();
     ///
     /// assert!(abs_difference < 1e-10);
     /// ```
@@ -2198,7 +2195,7 @@ macro_rules! float_const_impl {
     (@float $T:ident, $($constant:ident,)+) => (
         impl FloatConst for $T {
             constant! {
-                $( $constant() -> $T::consts::$constant; )+
+                $( $constant() -> core::$T::consts::$constant; )+
                 TAU() -> 6.28318530717958647692528676655900577;
                 LOG10_2() -> 0.301029995663981195213738894724493027;
                 LOG2_10() -> 3.32192809488736234787031942948939018;
@@ -2461,7 +2458,6 @@ mod tests {
     fn total_cmp() {
         use crate::float::TotalOrder;
         use core::cmp::Ordering;
-        use core::{f32, f64};
 
         fn check_eq<T: TotalOrder>(x: T, y: T) {
             assert_eq!(x.total_cmp(&y), Ordering::Equal);

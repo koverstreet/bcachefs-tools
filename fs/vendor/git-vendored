@@ -1,2 +1,3 @@
 # Crates vendored from git, exactly: scripts/vendor.sh. NAME URL COMMIT
 nestify https://github.com/koverstreet/nestify.git 49f93fbf42c10d7bffe502f0e51287a0a4e767ad
+num-traits https://github.com/koverstreet/num-traits.git 34eeca40d5e25d564244cb43c0d32753422d3520

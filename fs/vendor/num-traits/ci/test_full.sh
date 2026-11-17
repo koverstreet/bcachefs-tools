@@ -1,0 +1,72 @@
+#!/bin/bash
+
+set -e
+
+CRATE=num-traits
+MSRV=1.60
+
+get_rust_version() {
+  local array=($(rustc --version));
+  echo "${array[1]}";
+  return 0;
+}
+RUST_VERSION=$(get_rust_version)
+
+check_version() {
+  IFS=. read -ra rust <<< "$RUST_VERSION"
+  IFS=. read -ra want <<< "$1"
+  [[ "${rust[0]}" -gt "${want[0]}" ||
+   ( "${rust[0]}" -eq "${want[0]}" &&
+     "${rust[1]}" -ge "${want[1]}" )
+  ]]
+}
+
+export CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback
+generate_lockfile() {
+  cargo generate-lockfile
+  if ! check_version 1.85 ; then
+    cargo +stable update
+  fi
+}
+
+echo "Testing $CRATE on rustc $RUST_VERSION"
+if ! check_version $MSRV ; then
+  echo "The minimum for $CRATE is rustc $MSRV"
+  exit 1
+fi
+
+FEATURES=(libm)
+echo "Testing supported features: ${FEATURES[*]}"
+
+generate_lockfile
+
+# While that correctly chooses libm v0.2.9 for MSRV, some later versions
+# of Cargo complain about the "cargo::" outputs from its build script.
+# So for now, we can bump it manually to avoid that conflict.
+check_version 1.63 && cargo update -p libm --precise 0.2.16
+
+set -x
+
+# test the default
+cargo build
+cargo test
+
+# test `no_std`
+cargo build --no-default-features
+cargo test --no-default-features
+
+# test each isolated feature, with and without std
+for feature in ${FEATURES[*]}; do
+  cargo build --no-default-features --features="std $feature"
+  cargo test --no-default-features --features="std $feature"
+
+  cargo build --no-default-features --features="$feature"
+  cargo test --no-default-features --features="$feature"
+done
+
+# test all supported features, with and without std
+cargo build --features="std ${FEATURES[*]}"
+cargo test --features="std ${FEATURES[*]}"
+
+cargo build --features="${FEATURES[*]}"
+cargo test --features="${FEATURES[*]}"

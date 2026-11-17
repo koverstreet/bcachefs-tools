@@ -305,9 +305,10 @@ $(obj)/libnestify.so: $(src)/vendor/nestify/src/lib.rs $(bch-pmac-deps)
 
 $(obj)/bitflags.o: $(src)/vendor/bitflags/src/lib.rs FORCE
 	$(call if_changed_dep,bch_rlib)
-# num-traits' build.rs only probes for f64::total_cmp() (rustc 1.62): ours
-# has it. no_fp_fmt_parse is the kernel's core's: no float parsing.
-$(obj)/num_traits.o: private rs-flags += --cfg has_total_cmp --cfg no_fp_fmt_parse
+# num-traits' build.rs only probes for f64::total_cmp() (rustc 1.62) and
+# core::num::Saturating (1.74): ours has both. no_fp_fmt_parse is the kernel's
+# core's: no float parsing.
+$(obj)/num_traits.o: private rs-flags += --cfg has_total_cmp --cfg has_num_saturating --cfg no_fp_fmt_parse
 $(obj)/num_traits.o: $(src)/vendor/num-traits/src/lib.rs FORCE
 	$(call if_changed_dep,bch_rlib)
 $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
