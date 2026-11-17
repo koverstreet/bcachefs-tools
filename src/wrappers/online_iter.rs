@@ -4,9 +4,9 @@
 //! The ioctl is stateless - the cursor lives in the arg struct and the
 //! kernel returns one buffer of densely-packed bkeys (struct bkey_i,
 //! unpacked in-memory format) per call. This wrapper hides the
-//! buffer/refill/cursor machinery and yields `BkeySC`s, so consumers
-//! (`bcachefs list`, kvdb) use the same key types and formatting as the
-//! offline `BtreeIter` path.
+//! buffer/refill/cursor machinery and yields `BkeySC`s as read - the
+//! kernel's validate isn't ours - so consumers (`bcachefs list`, kvdb) use
+//! the same key types and formatting as the offline `BtreeIter` path.
 //!
 //! Lending iterator: keys borrow from the internal buffer, which is
 //! invalidated on refill - so this can't implement std::iter::Iterator.
@@ -16,7 +16,7 @@ use std::ops::ControlFlow;
 
 use anyhow::anyhow;
 use bcachefs_kernel::c;
-use bcachefs_kernel::btree::bkey::{AnyKey, BkeyI, BkeySC};
+use bcachefs_kernel::btree::bkey::{AnyKey, AnyKeySC, BkeySC};
 use bcachefs_kernel::util::vstructs::{from_bytes, plain_bytes, Unvalidated};
 
 use crate::wrappers::handle::BcachefsHandle;
@@ -110,7 +110,7 @@ impl<'h> OnlineBtreeIter<'h> {
     /// spin us, a long one walk off what was written - and one that doesn't
     /// fit is an error saying where and why.
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> anyhow::Result<Option<BkeySC<'_>>> {
+    pub fn next(&mut self) -> anyhow::Result<Option<AnyKeySC<'_, Unvalidated>>> {
         if self.pos >= self.arg.used as usize {
             if self.arg.done != 0 {
                 return Ok(None);
@@ -127,16 +127,12 @@ impl<'h> OnlineBtreeIter<'h> {
         let k = from_bytes::<AnyKey<Unvalidated>>(&reply[self.pos..])
             .map_err(|e| anyhow!("reply at byte {}: {e}", self.pos))?;
         self.pos += k.as_bytes().len();
-
-        // SAFETY: XXX: the kernel validated it - by its version's validate,
-        // not ours: the iterator should hand out Unvalidated keys
-        let k = unsafe { &*BkeyI::from_raw(k.as_bytes().as_ptr().cast()) };
         Ok(Some(BkeySC::from(k)))
     }
 
     pub fn for_each<F>(&mut self, mut f: F) -> anyhow::Result<()>
     where
-        F: FnMut(BkeySC<'_>) -> ControlFlow<()>,
+        F: FnMut(AnyKeySC<'_, Unvalidated>) -> ControlFlow<()>,
     {
         while let Some(k) = self.next()? {
             if f(k).is_break() {

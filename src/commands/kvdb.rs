@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::init::passes::RecoveryPass;
-use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
+use bcachefs_kernel::btree::bkey::{AnyKeySC, BkeySC, BkeyVal, POS_MIN, SPOS_MAX};
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey_methods;
 use bcachefs_kernel::btree::iter::{
@@ -53,7 +53,7 @@ use bcachefs_kernel::errcode::{Errcode, BchError};
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::inode;
 use bcachefs_kernel::typeinfo::{self, StructInfo, TypeInfo};
-use bcachefs_kernel::util::vstructs::Head;
+use bcachefs_kernel::util::vstructs::{Head, Unvalidated};
 use bcachefs_kernel::c::DegradedAction;
 use clap::Parser;
 
@@ -302,7 +302,7 @@ fn parse_assign(s: &str) -> Result<(&str, &str)> {
 /// The bcachefs to_text methods are the faithful rendering of the on-disk
 /// structs - that is their purpose. The typeinfo field tables are for
 /// addressing fields on the write side (update/set), not for display.
-fn render_key(fs: &Fs, k: &BkeySC<'_>, key_only: bool) -> String {
+fn render_key(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, key_only: bool) -> String {
     if key_only {
         format!("{}\n", k.k)
     } else {
@@ -319,7 +319,7 @@ fn render_key(fs: &Fs, k: &BkeySC<'_>, key_only: bool) -> String {
 ///
 /// Inodes are read through the decoded form, bch_inode_unpacked, as update
 /// writes them: the varint-packed fields have no fixed position.
-fn render_key_fields(fs: &Fs, k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
+fn render_key_fields(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, paths: &[&str]) -> Result<String> {
     if let Some(i) = k.arm::<inode::Inodes>() {
         let u = inode::unpack(fs, i);
         let bytes = unsafe {
@@ -333,7 +333,7 @@ fn render_key_fields(fs: &Fs, k: &BkeySC<'_>, paths: &[&str]) -> Result<String> 
 }
 
 /// Fields of the value as stored, by its own struct: get -r, for update -r.
-fn render_raw_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
+fn render_raw_fields(k: AnyKeySC<'_, Unvalidated>, paths: &[&str]) -> Result<String> {
     let info = k.k.key_type().info().ok_or_else(|| anyhow!("unknown key type {}", k.k.type_))?;
     render_fields(k.val_bytes(), info, paths)
 }
@@ -457,7 +457,8 @@ enum Render<'a> {
     RawFields(&'a [&'a str]),
 }
 
-fn render_read(fs: &Fs, k: &BkeySC<'_>, how: Render<'_>) -> Result<String> {
+fn render_read<V: ?Sized + BkeyVal>(fs: &Fs, k: &BkeySC<'_, V>, how: Render<'_>) -> Result<String> {
+    let k = k.as_read();
     match how {
         Render::Full => Ok(render_key(fs, k, false)),
         Render::KeyOnly => Ok(render_key(fs, k, true)),
