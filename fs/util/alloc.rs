@@ -194,6 +194,17 @@ impl<U, A: Alloc> Box<[U], A> {
         let mem = alloc.allocate_zeroed(Layout::array::<U>(len).map_err(|_| AllocError)?)?;
         Ok(Box { ptr: NonNull::slice_from_raw_parts(mem.cast(), len), given: mem.len(), alloc })
     }
+
+    /// The same allocation, as a T - a DST over these Us - by @cast of its
+    /// pointer, which keeps its metadata.
+    ///
+    /// # Safety
+    /// What @cast makes is a valid T, of these bytes.
+    pub unsafe fn cast_unsized<T: ?Sized>(b: Self, cast: impl FnOnce(*mut [U]) -> *mut T) -> Box<T, A> {
+        let b = core::mem::ManuallyDrop::new(b);
+        let ptr = unsafe { NonNull::new_unchecked(cast(b.ptr.as_ptr())) };
+        Box { ptr, given: b.given, alloc: unsafe { core::ptr::read(&b.alloc) } }
+    }
 }
 
 impl<U, A: Alloc> Box<[MaybeUninit<U>], A> {

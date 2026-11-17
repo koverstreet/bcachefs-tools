@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use super::LockedEntry;
-use crate::btree::bkey::{BkeyI, BkeySC};
+use crate::btree::bkey::BkeySC;
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, UpdateTriggerFlags, Watermark};
 use crate::btree::path::{NodePtr, PathIdx, Paths};
@@ -111,7 +111,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
         /* Check that we're not violating cache coherency rules: */
         assert!(!btree_k.k.key_type().is_deleted(), "flushing a cached key over a deleted btree key");
 
-        t.update(b_iter, &t.bkey_copy(unsafe { &*BkeyI::from_raw(ck.k) })?,
+        t.update(b_iter, &t.bkey_copy(ck.key())?,
                  UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE |
                  UpdateTriggerFlags::KEY_CACHE_RECLAIM |
                  UpdateTriggerFlags::NORUN)?;

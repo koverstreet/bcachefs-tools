@@ -1251,8 +1251,9 @@ impl BtreePath {
 
             ebug_assert!(Btree(ck.key.btree_id.into()) == self.btree_id() && ck.key.pos == self.pos);
 
-            *u = unsafe { (*ck.k).k };
-            Some(KeyVal(unsafe { &raw const (*ck.k).v }))
+            let k = ck.key();
+            *u = k.k;
+            Some(KeyVal((&raw const k.v).cast()))
         }
     }
 

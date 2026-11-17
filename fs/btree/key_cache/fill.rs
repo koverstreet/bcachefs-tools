@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::NewKey;
+use super::key_buf;
 use crate::btree::bkey::{bkey_val_to_text, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::btree::journal_overlay::peek_max;
@@ -69,11 +69,11 @@ impl BtreeTrans<'_> {
         ck.flags.store(1 << c::BKEY_CACHED_ACCESSED, Relaxed);
 
         let ret = (|| {
-            if key_u64s > usize::from(ck.u64s) {
+            if key_u64s > ck.key_room() {
                 paths[ck_path].mark_locked_noreset(0, BTREE_NODE_UNLOCKED);
 
                 let new_k = match t.allocate_dropping_locks_in(paths, || {
-                    NewKey::alloc(key_u64s).ok_or(BchError::from(Errcode::ENOMEM_btree_key_cache_fill))
+                    key_buf(key_u64s).ok_or(BchError::from(Errcode::ENOMEM_btree_key_cache_fill))
                 }) {
                     Ok(new_k) => new_k,
                     Err(e) if e.matches(c::ENOMEM) => {
@@ -84,7 +84,7 @@ impl BtreeTrans<'_> {
                     Err(e) => return Err(e),
                 };
 
-                ck.set_key_buf(new_k);
+                ck.k = Some(new_k);
             }
 
             paths[ck_path].mark_locked_noreset(0, BTREE_NODE_UNLOCKED);

@@ -494,7 +494,6 @@ pub struct bkey_cached {
     pub c: cs::btree_bkey_cached_common,
 
     pub flags: AtomicUsize,
-    pub u64s: u16,
     pub key: cs::bkey_cached_key,
 
     pub keys_idx: c_uint,
@@ -502,7 +501,8 @@ pub struct bkey_cached {
     pub journal: cs::journal_entry_pin,
     pub seq: u64,
 
-    pub k: *mut cs::bkey_i,
+    /* none once it's freed */
+    pub k: Option<crate::btree::key_cache::KeyBuf>,
     /* the key cache's lookups lock it: dropped once they're past it */
     #[rcu_head]
     pub rcu: RcuDropMember<RcuHead>,

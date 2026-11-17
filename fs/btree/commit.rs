@@ -17,7 +17,7 @@ use crate::btree::cache::BTREE_WRITE_IO_LIMIT;
 use crate::btree::interior::{merge, split_leaf};
 use crate::btree::iter::{is_restart, BtreeTrans, CommitFlags, CommitOpts, TransAttempt};
 use crate::btree::journal_overlay;
-use crate::btree::key_cache::{bch2_btree_insert_key_cached, bch2_btree_key_cache_drop};
+use crate::btree::key_cache::{bch2_btree_insert_key_cached, bch2_btree_key_cache_drop, key_buf};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::btree::trigger::{run_mem_triggers, run_trans_triggers, verify_update_old_key};
@@ -32,7 +32,6 @@ use crate::init::error::BkeyValidate;
 use crate::journal::entries::NoRoom;
 use crate::journal::validate::journal_entry_validate;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::kmalloc;
 use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
 use crate::os::kernel::{likely, prefetch, unlikely};
 use crate::util::log::LogMsg;
@@ -198,47 +197,40 @@ impl BtreeTrans<'_> {
         let fs = self.fs();
         let (ck, btree) = (cached_entry(paths, path), paths[path].btree_id());
 
-        if u64s > usize::from(unsafe { (*ck).u64s }) {
+        if u64s > unsafe { &*ck }.key_room() {
             let new_u64s = (u64s + u64s / 2).next_power_of_two();
-            let bytes = new_u64s * size_of::<u64>();
 
             let first = {
                 let _noreclaim = MemallocFlags::noreclaim();
-                kmalloc(bytes)
+                key_buf(new_u64s)
             };
-            let new_k = match first {
-                Ok(new_k) => new_k,
-                Err(_) => {
+            let mut new_k = match first {
+                Some(new_k) => new_k,
+                None => {
                     self.unlock_updates_write(paths);
                     self.unlock_from(paths, crate::ret_ip!());
 
-                    let Ok(new_k) = kmalloc(bytes) else {
+                    let Some(new_k) = key_buf(new_u64s) else {
                         bch_err!(fs, "error allocating memory for key cache key, btree {btree} u64s {new_u64s}");
                         return fs.throw(Errcode::ENOMEM_btree_key_cache_insert);
                     };
 
-                    if let Err(err) = self.relock_from(paths).and_then(|()| self.lock_updates_write(t, paths)) {
-                        unsafe { crate::util::alloc::kfree_unsized(new_k.as_ptr().cast()) };
-                        return Err(err);
-                    }
+                    self.relock_from(paths).and_then(|()| self.lock_updates_write(t, paths))?;
                     new_k
                 }
             };
-            let new_k = new_k.as_ptr().cast::<c::bkey_i>();
 
             unsafe {
-                let old_k = (*ck).k;
-                ptr::copy_nonoverlapping(old_k.cast::<u64>(), new_k.cast::<u64>(), (*ck).u64s.into());
-                crate::util::alloc::kfree_unsized(old_k.cast());
+                let old_k = (*ck).key();
+                new_k.set_key(old_k);
 
                 for i in paths.paths_and_updates().updates.iter_mut() {
-                    if ptr::eq(i.old_v, &raw const (*old_k).v) {
-                        i.old_v = &raw const (*new_k).v;
+                    if ptr::eq(i.old_v, (&raw const old_k.v).cast()) {
+                        i.old_v = (&raw const new_k.v).cast();
                     }
                 }
 
-                (*ck).u64s = new_u64s as u16;
-                (*ck).k    = new_k;
+                (*ck).k = Some(new_k);
             }
         }
 
@@ -257,7 +249,7 @@ impl BtreeTrans<'_> {
     fn key_can_insert_cached(paths: &Paths<'_>, path: PathIdx, u64s: usize) -> bool {
         let ck = paths.held_key_cached(path).expect("a cached update's path holds its entry");
 
-        likely(u64s <= usize::from(ck.u64s) && ck.dirty())
+        likely(u64s <= ck.key_room() && ck.dirty())
     }
 
     #[cold]

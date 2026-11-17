@@ -19,7 +19,7 @@ use crate::c;
 use crate::data_structures::dst_room::{DstRoom, Storage};
 use crate::data_structures::inline_vec::InlineVec;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{Alloc, AllocError, Box};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Unsized, Unvalidated, UnvalidatedEntries, UnvalidatedEntriesMut};
 use core::mem::size_of;
 
@@ -155,6 +155,14 @@ impl<V: ?Sized + Unsized> DstRoom<BkeyI<V>> {
     /// A deleted key at the front of @buf, as bkey_init() leaves one.
     pub fn new_in(buf: &mut [u64]) -> &mut Self {
         Self::from_elems_mut(buf).init()
+    }
+
+    /// A deleted key, in a room of @u64s from @alloc.
+    pub fn new_boxed_in<A: Alloc>(u64s: usize, alloc: A) -> Result<Box<Self, A>, AllocError> {
+        let b = unsafe { Box::<[u64], A>::try_new_zeroed_slice_in(u64s, alloc)?.assume_init() };
+        let mut b = unsafe { Box::cast_unsized(b, Self::from_elems_raw) };
+        b.init();
+        Ok(b)
     }
 }
 

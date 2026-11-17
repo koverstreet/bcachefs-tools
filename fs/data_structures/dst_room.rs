@@ -59,7 +59,12 @@ impl<T: ?Sized, E: Plain> DstRoom<T, [E]> {
     }
 
     pub fn from_elems_mut(buf: &mut [E]) -> &mut Self {
-        unsafe { &mut *(core::ptr::from_mut(buf) as *mut Self) }
+        unsafe { &mut *Self::from_elems_raw(buf) }
+    }
+
+    /// @buf as a room: for a box of [E] made one.
+    pub fn from_elems_raw(buf: *mut [E]) -> *mut Self {
+        buf as *mut Self
     }
 }
 

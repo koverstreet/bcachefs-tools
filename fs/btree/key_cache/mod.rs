@@ -15,8 +15,8 @@ mod fill;
 mod flush;
 pub(crate) use flush::{bch2_btree_insert_key_cached, bch2_btree_key_cache_drop};
 
-use crate::btree::bkey::{BkeySC, SPOS_MAX};
-use crate::btree::bkey_buf::copy_key;
+use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
+use crate::data_structures::dst_room::DstRoom;
 use crate::btree::locking::bch2_btree_lock_init;
 use crate::btree::iter::TransAttempt;
 use crate::btree::path::Paths;
@@ -28,7 +28,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
 use crate::prt;
-use crate::util::alloc::{init_at, krealloc, Flags};
+use crate::util::alloc::{init_at, Box, Flags, Kmalloc};
 use crate::util::hash::GoldenRatio;
 use crate::os::kernel::local_clock;
 use crate::os::slab::KmemCache;
@@ -42,7 +42,6 @@ use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
 #[cfg(kernel)]
 use core::ffi::c_int;
 use core::ffi::c_ulong;
-use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
@@ -293,7 +292,7 @@ impl c::bch_fs_btree_key_cache {
     }
 
     fn bkey_cached_free_noassert(&self, mut ck: LockedEntry<'_>) {
-        ck.free_key_buf();
+        ck.k = None;
 
         let (ck, held) = ck.into_parts();
         drop(held);
@@ -335,47 +334,31 @@ impl c::bch_fs_btree_key_cache {
     }
 }
 
-/// An entry's key buffer, of @u64s: kmalloc()'d, as C's commit path reallocs
-/// and kfree()s it. Freed if it's dropped.
-struct NewKey {
-    k:    NonNull<u8>,
-    u64s: u16,
-}
+/// An entry's key buffer: kmalloc()'d, as C's commit path reallocs and
+/// kfree()s it.
+pub(crate) type KeyBuf = Box<DstRoom<BkeyI>, Kmalloc>;
 
-impl NewKey {
-    fn alloc(u64s: usize) -> Option<Self> {
-        let k = unsafe { krealloc(ptr::null_mut(), u64s * size_of::<u64>()) }.ok()?;
-        Some(NewKey { k, u64s: u64s as u16 })
-    }
-}
-
-impl Drop for NewKey {
-    fn drop(&mut self) {
-        unsafe { crate::util::alloc::kfree_unsized(self.k.as_ptr().cast()) }
-    }
+/// A key buffer of @u64s, holding a deleted key.
+pub(crate) fn key_buf(u64s: usize) -> Option<KeyBuf> {
+    DstRoom::new_boxed_in(u64s, Kmalloc).ok()
 }
 
 /*
- * An entry's key is in a buffer of u64s u64s, kmalloc()'d - or none, null and
- * 0, its entry freed. What changes either holds the entry write locked.
+ * An entry's key is in a buffer of its own - or none, its entry freed. What
+ * changes either holds the entry write locked.
  */
 impl c::bkey_cached {
-    fn set_key_buf(&mut self, k: NewKey) {
-        let k = ManuallyDrop::new(k);
-        unsafe { crate::util::alloc::kfree_unsized(self.k.cast()) };
-        (self.k, self.u64s) = (k.k.as_ptr().cast(), k.u64s);
+    /// Its key buffer's room, in u64s: 0 for no buffer.
+    pub(crate) fn key_room(&self) -> usize {
+        self.k.as_ref().map_or(0, |k| k.elems().len())
     }
 
-    fn free_key_buf(&mut self) {
-        unsafe { crate::util::alloc::kfree_unsized(self.k.cast()) };
-        (self.k, self.u64s) = (ptr::null_mut(), 0);
+    pub(crate) fn key(&self) -> &BkeyI {
+        self.k.as_deref().expect("a key cache entry's key")
     }
 
     fn set_key(&mut self, k: BkeySC<'_>) {
-        assert!(u16::from(k.k.u64s) <= self.u64s, "a key cache entry given a key of {} u64s, its buffer {}",
-                k.k.u64s, self.u64s);
-        let dst = unsafe { core::slice::from_raw_parts_mut(self.k.cast::<u64>(), self.u64s.into()) };
-        copy_key(dst, k.k, k.val_bytes())
+        self.k.as_mut().expect("a key cache entry's key buffer").set_key(k)
     }
 }
 
@@ -395,8 +378,8 @@ impl<const PCPU: bool> NewEntry<'_, PCPU> {
 
         t.allocate_dropping_locks_in(paths, || {
             let ck = NewEntry { pending, ck: pending.alloc().map_err(|_| enomem())? };
-            let k = NewKey::alloc(key_u64s).ok_or_else(enomem)?;
-            unsafe { ck.ck.cast::<c::bkey_cached>().as_mut() }.set_key_buf(k);
+            let k = key_buf(key_u64s).ok_or_else(enomem)?;
+            unsafe { ck.ck.cast::<c::bkey_cached>().as_mut() }.k = Some(k);
             Ok(ck)
         }).map(NewEntry::into_raw)
     }
@@ -411,7 +394,7 @@ impl<const PCPU: bool> NewEntry<'_, PCPU> {
 impl<const PCPU: bool> Drop for NewEntry<'_, PCPU> {
     fn drop(&mut self) {
         let ck = unsafe { self.ck.cast::<c::bkey_cached>().as_mut() };
-        ck.free_key_buf();
+        ck.k = None;
         drop(unsafe { SixHold::from_raw(&ck.c.lock, SIX_LOCK_write) });
         unsafe { self.pending.free(self.ck) }
     }
