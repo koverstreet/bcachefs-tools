@@ -1114,9 +1114,9 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     root_inode.bi_inum = c::BCACHEFS_ROOT_INO.into();
     root_inode.bi_subvol = c::BCACHEFS_ROOT_SUBVOL;
     let mut packed_inode = inode::pack(&root_inode);
-    packed_inode.inode.k.p.snapshot = u32::MAX;
+    packed_inode.k.p.snapshot = u32::MAX;
 
-    bch_err_msg!(fs, fs.btree_insert(Btree::inodes, packed_inode.as_mut(), None,
+    bch_err_msg!(fs, fs.btree_insert(Btree::inodes, &*packed_inode, None,
                                      CommitFlags::empty(), BtreeIterFlags::empty()),
                  "creating root directory")?;
 

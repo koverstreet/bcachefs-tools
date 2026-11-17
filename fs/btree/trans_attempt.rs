@@ -38,7 +38,6 @@ pub use crate::c::Watermark;
 use crate::errcode::{
     BchError,
     Errcode,
-    errptr_to_result,
     ret_to_result_void as ret_to_result,
 };
 use crate::btree::path::Paths;
@@ -1070,23 +1069,6 @@ impl<'a, 't, V: BkeyWhole> TransBkey<'a, 't, V> {
 }
 
 impl<'a, 't> TransBkey<'a, 't> {
-    /// A key C allocated in @t's transaction memory, sized by its own u64s -
-    /// what a C helper returning a struct bkey_i * in trans mem hands back.
-    ///
-    /// # Safety
-    /// @ptr is such a key, or an ERR_PTR().
-    pub(crate) unsafe fn from_raw(_t: &TransAttempt<'a, 't>, ptr: *mut c::bkey_i)
-        -> Result<Self, BchError>
-    {
-        let ptr = errptr_to_result(NonNull::new(ptr).expect("a trans mem key, or an error"))?;
-        Ok(TransBkey {
-            buf_u64s: unsafe { ptr.as_ref().k.u64s as u32 },
-            ptr,
-            t:        PhantomData,
-            v:        PhantomData,
-        })
-    }
-
     /// A key C has with room past its own u64s - @buf_u64s long, for what
     /// grows it: in @t's memory, or a trigger's update's.
     ///

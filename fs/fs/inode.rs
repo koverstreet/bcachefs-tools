@@ -34,7 +34,8 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::AnyKeySC;
-use crate::util::vstructs::Unvalidated;
+use crate::data_structures::dst_room::DstRoom;
+use crate::util::vstructs::{plain_bytes_mut, Unvalidated, Validated};
 use crate::c;
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
@@ -139,21 +140,13 @@ pub struct InodeUnpackedBiFlags {
 }
 crate::one_word!(InodeUnpackedBiFlags);
 
-macro_rules! __BKEY_INODE_BUF_XSUM_0 {
+macro_rules! __V3_FIELDS_MAX_BYTES {
     ($(($_name:tt, $_bits:tt)),* $(,)?) => {
         #[allow(non_upper_case_globals)]
-        const BKEY_INODE_BUF_XSUM_0: usize = 0 + (0 $(+ 8 + (($_bits) as usize) / 8)*);
+        const V3_FIELDS_MAX_BYTES: usize = 0 + (0 $(+ 8 + (($_bits) as usize) / 8)*);
     };
 }
-BCH_INODE_FIELDS_v3!(__BKEY_INODE_BUF_XSUM_0);
-
-#[repr(C)]
-#[derive(MaybeZeroable)]
-pub struct bkey_inode_buf {
-    /* C's typed key: a v3 inode's header, its fields in _pad */
-    pub inode: BkeyI<c::InodeV3>,
-    pub _pad: [u8; BKEY_INODE_BUF_XSUM_0],
-}
+BCH_INODE_FIELDS_v3!(__V3_FIELDS_MAX_BYTES);
 
 // The inode x-macros as m! { name = arg, ... }, the way C uses them: each
 // user defines its own m, as C code defines its own x().
@@ -365,61 +358,49 @@ pub fn unpack<S: KeyState>(fs: &Fs, k: BkeySC<'_, FamilyVal<InodesTypes, S>>) ->
     })
 }
 
-impl<'a> From<&'a c::bkey_inode_buf> for BkeySC<'a, Inodes> {
-    fn from(b: &'a c::bkey_inode_buf) -> Self {
-        BkeySC::from(b.as_ref()).arm::<Inodes>().expect("pack() makes an inode")
-    }
+/// Room for an inode_v3 key: its fixed part, then every field at its biggest.
+const INODE_ROOM_U64S: usize = (size_of::<BkeyI<c::InodeV3>>() + V3_FIELDS_MAX_BYTES).div_ceil(size_of::<u64>());
+
+/// Where the packed fields start, in the room: after the value's fixed part.
+const FIELDS_AT: usize = offset_of!(BkeyI<c::InodeV3>, v) + V3_FIELDS_OFFSET;
+
+/// What pack() made, as an inode.
+#[cfg(any(test, CONFIG_BCACHEFS_DEBUG))]
+fn packed_sc(k: &BkeyI) -> BkeySC<'_, Inodes> {
+    BkeySC::from(k).arm::<Inodes>().expect("pack() makes an inode")
 }
 
-/// Its key, all of it: the typed key's header, then the fields packed past
-/// it, in _pad - which the typed key, inode, doesn't reach.
-impl AsRef<BkeyI> for c::bkey_inode_buf {
-    fn as_ref(&self) -> &BkeyI {
-        // SAFETY: the key at the start of the buffer, its u64s within it, as
-        // pack() sizes them; from a pointer to all of the buffer
-        unsafe { &*BkeyI::from_raw((&raw const self.inode).cast()) }
-    }
-}
-
-impl AsMut<BkeyI> for c::bkey_inode_buf {
-    fn as_mut(&mut self) -> &mut BkeyI {
-        // SAFETY: as as_ref()'s
-        unsafe { &mut *BkeyI::from_raw_mut((&raw mut self.inode).cast()) }
-    }
+/// An inode_v3 key's fixed fields, in a room pack() made one in.
+fn v3_mut(k: &mut BkeyI) -> &mut c::InodeV3<Validated> {
+    &mut k.arm::<c::InodeV3>().expect("pack() makes an inode_v3").v
 }
 
 /// @inode packed, as an inode_v3 key at snapshot 0 - the caller's to set.
 /// The key ends at the last nonzero field, and has_inode_opts is recomputed -
 /// pack is what maintains it.
-pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
-
-    let mut out = ::pin_init::zeroed::<c::bkey_inode_buf>();
+pub fn pack(inode: &c::bch_inode_unpacked) -> DstRoom<BkeyI, [u64; INODE_ROOM_U64S]> {
+    let mut out = DstRoom::<BkeyI, [u64; INODE_ROOM_U64S]>::zeroed();
 
     let mut flags = inode.flags();
     flags.set(c::InodeFlags::has_inode_opts, inode.has_opts());
 
-    let k = &mut out.inode;
-    *k = BkeyI { k: c::bkey::new(), v: Default::default() };
-    k.k.set_key_type(BkeyType::inode_v3);
-    k.k.set_val_bytes(size_of::<c::InodeV3>());
-    k.k.p.offset = inode.bi_inum;
-    k.v.bi_journal_seq = inode.bi_journal_seq.into();
-    k.v.bi_hash_seed   = inode.bi_hash_seed;
-    k.v.set_flags(flags);
-    k.v.set_str_hash(inode.str_hash());
-    k.v.bi_sectors     = inode.bi_sectors.into();
-    k.v.bi_size        = inode.bi_size.into();
-    k.v.bi_version     = inode.bi_version.into();
-    k.v.set_mode(inode.bi_mode);
-    k.v.set_fields_start((V3_FIELDS_OFFSET / 8) as u8);
+    out.k = c::bkey::new();
+    out.k.set_key_type(BkeyType::inode_v3);
+    out.k.set_val_bytes(size_of::<c::InodeV3>());
+    out.k.p.offset = inode.bi_inum;
 
-    // The fields go after the value's fixed part - in _pad, the room the
-    // buffer has for every one of them at its biggest:
-    const _: () = assert!(offset_of!(c::bkey_inode_buf, _pad) ==
-                          offset_of!(c::bkey_inode_buf, inode) +
-                          offset_of!(BkeyI<c::InodeV3>, v) +
-                          V3_FIELDS_OFFSET);
-    let fields = &mut out._pad;
+    let v = v3_mut(&mut out);
+    v.bi_journal_seq = inode.bi_journal_seq.into();
+    v.bi_hash_seed   = inode.bi_hash_seed;
+    v.set_flags(flags);
+    v.set_str_hash(inode.str_hash());
+    v.bi_sectors     = inode.bi_sectors.into();
+    v.bi_size        = inode.bi_size.into();
+    v.bi_version     = inode.bi_version.into();
+    v.set_mode(inode.bi_mode);
+    v.set_fields_start((V3_FIELDS_OFFSET / 8) as u8);
+
+    let fields = &mut plain_bytes_mut(out.elems_mut())[FIELDS_AT..];
 
     let (mut len, mut nr) = (0, 0);
     let (mut used_len, mut used_nr) = (0, 0);
@@ -443,13 +424,12 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
     // Trailing zero fields are left off; what they encoded to is zeroes,
     // so the value's last u64 is zero-padded:
-    let k = &mut out.inode;
-    k.k.u64s = (BKEY_U64S + (V3_FIELDS_OFFSET + used_len).div_ceil(8)) as u8;
-    k.v.set_nr_fields(used_nr);
+    v3_mut(&mut out).set_nr_fields(used_nr);
+    out.k.u64s = (BKEY_U64S + (V3_FIELDS_OFFSET + used_len).div_ceil(8)) as u8;
 
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     {
-        let u = try_unpack(BkeySC::from(&out).family_as_read())
+        let u = try_unpack(packed_sc(&out).family_as_read())
             .unwrap_or_else(|(_, fieldnr)| panic!("packed inode doesn't unpack, at field {fieldnr}"));
 
         macro_rules! check {
@@ -716,11 +696,7 @@ pub fn find_any_snapshot(t: &TransAttempt<'_, '_>, inum: u64)
 fn pack_trans<'a, 't>(t: &TransAttempt<'a, 't>, inode: &c::bch_inode_unpacked)
     -> Result<TransBkey<'a, 't>, BchError>
 {
-    let buf = t.kmalloc(size_of::<c::bkey_inode_buf>())?.as_mut_ptr() as *mut c::bkey_inode_buf;
-    unsafe {
-        buf.write(pack(inode));
-        TransBkey::from_raw(t, (&raw mut (*buf).inode).cast())
-    }
+    t.bkey_copy(&pack(inode))
 }
 
 /// Queue writing @inode back through @iter, which peeked it, with @flags: as
@@ -770,10 +746,10 @@ pub fn fsck_write_inode(trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacke
 /// tree in at format time.
 pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
     let mut packed = pack(inode);
-    packed.inode.k.p.snapshot = u32::MAX;
+    packed.k.p.snapshot = u32::MAX;
     fs.btree_insert(
         Btree::inodes,
-        packed.as_mut(),
+        &*packed,
         None,
         CommitFlags::empty(),
         BtreeIterFlags::CACHED,
@@ -2000,16 +1976,16 @@ mod tests {
 
     /// Set the key's value to @fields_bytes of packed fields, @nr_fields of
     /// them.
-    fn set_fields_len(k: &mut c::bkey_inode_buf, fields_bytes: usize, nr_fields: u8) {
-        k.inode.k.u64s = (BKEY_U64S + (V3_FIELDS_OFFSET + fields_bytes).div_ceil(8)) as u8;
-        k.inode.v.set_nr_fields(nr_fields);
+    fn set_fields_len(k: &mut BkeyI, fields_bytes: usize, nr_fields: u8) {
+        v3_mut(k).set_nr_fields(nr_fields);
+        k.k.u64s = (BKEY_U64S + (V3_FIELDS_OFFSET + fields_bytes).div_ceil(8)) as u8;
     }
 
     #[test]
     fn pack_unpack_round_trip() {
         let u = sample();
         let packed = pack(&u);
-        let v = try_unpack(BkeySC::from(&packed).family_as_read()).expect("unpacks");
+        let v = try_unpack(packed_sc(&packed).family_as_read()).expect("unpacks");
 
         assert_eq!(v.bi_inum, u.bi_inum);
         assert_eq!(v.bi_hash_seed, u.bi_hash_seed);
@@ -2033,10 +2009,10 @@ mod tests {
 
         // bi_atime: 45 bits, a 7 byte varint, then the high half's 1 byte -
         // so the first u64 of fields holds exactly field 0:
-        let nr_fields = packed.inode.v.nr_fields();
+        let nr_fields = v3_mut(&mut packed).nr_fields();
         set_fields_len(&mut packed, 8, nr_fields);
 
-        let (v, fieldnr) = try_unpack(BkeySC::from(&packed).family_as_read())
+        let (v, fieldnr) = try_unpack(packed_sc(&packed).family_as_read())
             .expect_err("a truncated value doesn't unpack");
 
         assert_eq!(fieldnr, 1);
@@ -2056,12 +2032,13 @@ mod tests {
 
         // The four 96 bit timestamps, zero: two bytes each. Then bi_uid,
         // 32 bits, given 2^40:
+        let fields = &mut plain_bytes_mut(packed.elems_mut())[FIELDS_AT..];
         let mut len = 8;
-        packed._pad[..len].fill(0);
-        len += varint::encode(&mut packed._pad[len..], 1 << 40);
+        fields[..len].fill(0);
+        len += varint::encode(&mut fields[len..], 1 << 40);
         set_fields_len(&mut packed, len, 5);
 
-        let (v, fieldnr) = try_unpack(BkeySC::from(&packed).family_as_read())
+        let (v, fieldnr) = try_unpack(packed_sc(&packed).family_as_read())
             .expect_err("an oversized field doesn't unpack");
         assert_eq!(fieldnr, 4);
         assert_eq!(v.bi_uid, 0);

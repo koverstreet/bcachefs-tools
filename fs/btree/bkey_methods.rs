@@ -219,16 +219,16 @@ impl TransBkey<'_, '_> {
         write(u_bytes, field, &target, v)?;
 
         let mut packed = inode::pack(&u);
-        packed.inode.k.p = self.k().p;
+        packed.k.p = self.k().p;
 
-        let need_u64s = packed.inode.k.u64s as usize;
+        let need_u64s = packed.k.u64s as usize;
         let have_u64s = self.as_u64s().len();
         if need_u64s > have_u64s {
             return Err(NoRoom { need_u64s, have_u64s }.into());
         }
 
         // The packed key, header first - within the buffer pack() sized for it:
-        let packed_u64s = <&BkeyP>::from(packed.as_ref()).as_slice();
+        let packed_u64s = <&BkeyP>::from(&*packed).as_slice();
         self.as_mut_u64s()[..need_u64s].copy_from_slice(packed_u64s);
         Ok(())
     }
