@@ -1504,7 +1504,8 @@ impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ViewEnt
 
     #[inline]
     fn next(&mut self) -> Option<&'a E> {
-        if self.rest.is_empty() {
+        // the end, or a section's padding past its last entry
+        if self.rest.len() < size_of::<E::Head>() {
             return None;
         }
         let len = unsafe { validated_len::<E::Head>(self.rest) };
@@ -1540,7 +1541,7 @@ impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ViewEnt
 
     #[inline]
     fn next(&mut self) -> Option<&'a mut E> {
-        if self.rest.is_empty() {
+        if self.rest.len() < size_of::<E::Head>() {
             return None;
         }
         let len = unsafe { validated_len::<E::Head>(self.rest) };
