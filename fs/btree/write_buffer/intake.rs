@@ -14,7 +14,7 @@ use crate::format::{jset_entry, BkeyType, Btree};
 use crate::fs::Fs;
 use crate::prt;
 use crate::util::alloc::{Flags, AllocError};
-use crate::util::vstructs::Unvalidated;
+use crate::util::vstructs::{Validated, ValidatedEntriesMut};
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
@@ -372,9 +372,11 @@ impl<'a> Intake<'a> {
     /// Write buffer keys from @buf into the write buffer: their entries become
     /// btree keys.
     fn journal_buf(&mut self, buf: &mut c::journal_buf) -> Result<(), BchError> {
-        for i in buf.data.jset_mut().entries_mut() {
-            let Ok(i) = i else { break };
-
+        // closed - blocked, if it was the open one - and its reservations
+        // released: every one's entries whole, not written yet, so not
+        // encrypted
+        let jset = unsafe { buf.data.jset_mut().assume_validated_mut() };
+        for i in ValidatedEntriesMut::of(jset) {
             if c::JsetEntryType(i.type_.into()) == c::JsetEntryType::write_buffer_keys {
                 self.entry(i)?;
             }
@@ -385,12 +387,11 @@ impl<'a> Intake<'a> {
 
     /// A write_buffer_keys entry's keys into the write buffer, and the entry
     /// retyped to btree keys.
-    pub fn entry(&mut self, i: &mut jset_entry<Unvalidated>) -> Result<(), BchError> {
+    pub fn entry(&mut self, i: &mut jset_entry) -> Result<(), BchError> {
         let btree = Btree(i.btree_id.into());
-        let keys = i.arm::<c::jset_entry_write_buffer_keys<Unvalidated>>().expect("a write buffer keys entry");
+        let keys = i.arm::<c::jset_entry_write_buffer_keys<Validated>>().expect("a write buffer keys entry");
         for k in keys.entries() {
-            let Ok(k) = k else { break };
-            self.key_to_wb(btree, unsafe { &*BkeyI::from_raw(k.as_bytes().as_ptr().cast()) })?;
+            self.key_to_wb(btree, k)?;
         }
 
         i.type_ = c::JsetEntryType::btree_keys.0 as u8;

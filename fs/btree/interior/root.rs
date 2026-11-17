@@ -10,7 +10,7 @@ use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::sort::build_aux_trees;
 use crate::btree::path::{PathIdx, Paths};
-use crate::btree::bkey::{BkeyI, BkeyV};
+use crate::btree::bkey::BkeyV;
 use crate::c;
 use crate::data::keylist::KeyRoom;
 use crate::debug::trace::events;
@@ -20,7 +20,7 @@ use crate::fs::Fs;
 use crate::prt;
 use crate::util::Printbuf;
 use crate::util::printbuf::ToText;
-use crate::util::vstructs::Unvalidated;
+use crate::util::vstructs::Validated;
 use crate::{POS_MIN, SPOS_MAX};
 use super::{reserve, InteriorUpdate, NewNode};
 
@@ -87,7 +87,7 @@ impl Fs {
 
     /// A btree root as journal entry @e has it, propagated back to the
     /// in-memory roots: as each journal write is made.
-    pub(crate) fn journal_entry_to_btree_root(&self, e: &c::jset_entry<Unvalidated>) {
+    pub(crate) fn journal_entry_to_btree_root(&self, e: &c::jset_entry) {
         /*
          * The on-disk root fields (key/level/alive) are owned by root_lock:
          * that's what bch2_btree_set_root_inmem() takes for ->b, and what the
@@ -96,9 +96,8 @@ impl Fs {
          * dragged interior_updates.lock into the journal write path under
          * sb_lock — closing a lockdep cycle with pin_resize_lock.
          */
-        let root = e.arm::<c::jset_entry_btree_root<Unvalidated>>().expect("a btree root entry");
-        let Some(Ok(k)) = root.entries().next() else { panic!("a btree root entry with no key") };
-        let k = unsafe { &*BkeyI::from_raw(k.as_bytes().as_ptr().cast()) };
+        let root = e.arm::<c::jset_entry_btree_root<Validated>>().expect("a btree root entry");
+        let k = root.entries().next().expect("a btree root entry with no key");
 
         let mut g = self.btree.cache.roots.lock();
         let r = g.get_mut(e.btree_id.into()).expect("a journalled root of a btree there's no slot for");

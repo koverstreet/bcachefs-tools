@@ -482,7 +482,7 @@ impl BtreeTrans<'_> {
             for_each_entry_key(i, |k| journal_overlay::insert(not_rw, btree, i.level.into(), k))?;
 
             if i.type_() == c::JsetEntryType::btree_root {
-                fs.journal_entry_to_btree_root(i.as_unvalidated());
+                fs.journal_entry_to_btree_root(i);
             }
             Ok(())
         })?;

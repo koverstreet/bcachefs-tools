@@ -39,7 +39,7 @@ use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_j
                           WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::refcount::TryRefcount;
-use crate::util::vstructs::{cast_plain_slice_mut, Head, SelfSized, Unvalidated};
+use crate::util::vstructs::{cast_plain_slice_mut, Head, SelfSized, Unvalidated, ValidatedEntriesMut};
 use crate::util::printbuf::ToText;
 use crate::{log_msg_ratelimited, prt};
 
@@ -911,10 +911,10 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
      * If we wanted to be really fancy here, we could sort all the keys in
      * the jset and drop keys that were overwritten - probably not worth it:
      */
-    for i in w.jset_mut().entries_mut() {
-        /* jset_validate(), in write_checksum(), reports it: */
-        let Ok(i) = i else { break };
-
+    // closed: every reservation's entries are in it, whole - not encrypted
+    // till write_checksum()
+    let jset = unsafe { w.jset_mut().assume_validated_mut() };
+    for i in ValidatedEntriesMut::of(jset) {
         /* Empty entry: */
         if i.u64s() == 0 {
             continue;
