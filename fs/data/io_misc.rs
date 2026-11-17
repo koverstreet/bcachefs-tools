@@ -26,7 +26,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::extents::Extents;
-use crate::data::keylist::KeyRoom;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data::reflink;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -102,7 +102,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
             }
             Err(e) => return Err(e),
         };
-        let got = wp.unwritten_extent(&mut KeyRoom::new(e.as_mut_u64s()), iter.pos(), sectors as u32, &mut obs);
+        let got = wp.unwritten_extent(DstRoom::<BkeyI>::new_in(e.as_mut_u64s()), iter.pos(), sectors as u32, &mut obs);
         sectors_allocated = got.into();
         t.extent_update(inum, iter, &mut e, &res, 0, Some(&mut *i_sectors_delta), true, 0, None)
     })();

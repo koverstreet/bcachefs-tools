@@ -14,7 +14,7 @@ use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::traverse::advance_to_pos;
 use crate::c;
 use crate::cstructs::c as cs;
-use crate::data::keylist::PaddedKey;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::bitmap::Bitmap;
 use crate::debug::params::debug_check_iterators;
 use crate::debug::trace::{events, TraceEvent};
@@ -174,7 +174,7 @@ impl PathSnapshot {
     }
 }
 
-pub(crate) type DownKey = PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>;
+pub(crate) type DownKey = DstRoom<BkeyI, [u64; BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX]>;
 
 /// A transaction's path table, borrowed: one borrow at a time, by a bit in
 /// the transaction's flags - a RefCell's - so a Rust entry into the btree code
@@ -363,7 +363,7 @@ impl Paths<'_> {
     /// The key of the node a path goes down to next: the transaction's, the
     /// path table's holder's to write.
     pub(crate) fn down_key(&self) -> &BkeyI {
-        unsafe { self.trans.btree_path_down.protected() }.key()
+        unsafe { self.trans.btree_path_down.protected() }
     }
 
     pub(crate) fn down_key_mut(&mut self) -> &mut DownKey {

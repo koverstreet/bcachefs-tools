@@ -26,7 +26,7 @@ use crate::c;
 use crate::c::FsFlag as Flag;
 use crate::c::JournalPinType::JOURNAL_PIN_TYPE_other;
 use crate::c::WbFlushCaller as Caller;
-use crate::data::keylist::PaddedKey;
+use crate::data_structures::dst_room::DstRoom;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BtreeFlags};
@@ -136,7 +136,7 @@ pub struct btree_write_buffered_key {
     pub journal_seq: u64,
 
     /* BTREE_WRITE_BUFERED_VAL_U64s_MAX only applies to accounting keys */
-    pub k: PaddedKey<{ BKEY_U64S + c::BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize }>,
+    pub k: DstRoom<BkeyI, [u64; BKEY_U64S + c::BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize]>,
 }
 
 #[bch_enum(closed)]

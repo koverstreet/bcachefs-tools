@@ -189,13 +189,13 @@ fn bpos_in_btree_node_key(pos: Bpos, k: &BkeyI) -> bool {
 fn down_key_mem_ptr_reload(dst: &mut DownKey, k: BkeySC<'_>) {
     if let Some(p) = k.arm::<c::BtreePtrV2>() {
         // mem_ptr: the value's first field
-        dst.u64s_mut()[BKEY_U64S] = p.v().mem_ptr.get();
+        dst.elems_mut()[BKEY_U64S] = p.v().mem_ptr.get();
     }
 }
 
 fn set_down_key(dst: &mut DownKey, k: BkeySC<'_>) {
     let val = k.val_bytes();
-    let room = plain_bytes_mut(dst.u64s_mut());
+    let room = plain_bytes_mut(dst.elems_mut());
 
     room[..size_of::<c::bkey>()].copy_from_slice(plain_bytes(k.k));
     room[size_of::<c::bkey>()..][..val.len()].copy_from_slice(val);
@@ -206,7 +206,7 @@ fn set_down_key_packed(dst: &mut DownKey, keys: &Keys<'_>, k: u16) {
     let mut u = c::bkey::new();
     let key = keys.disassemble(k, &mut u);
 
-    keys.key_at(k).unpacked_into(&keys.contents().format, *key.k, dst.u64s_mut());
+    keys.key_at(k).unpacked_into(&keys.contents().format, *key.k, dst.elems_mut());
     down_key_mem_ptr_reload(dst, key);
 }
 

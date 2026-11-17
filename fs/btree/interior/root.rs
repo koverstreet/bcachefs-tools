@@ -12,7 +12,6 @@ use crate::btree::node::sort::build_aux_trees;
 use crate::btree::path::{PathIdx, Paths};
 use crate::btree::bkey::BkeyV;
 use crate::c;
-use crate::data::keylist::KeyRoom;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
 use crate::format::{BkeyType, Btree};
@@ -109,7 +108,7 @@ impl Fs {
 
     fn btree_alloc_to_text(&self, out: &mut Printbuf, a: &c::btree_alloc) {
         out.indent_add(2);
-        prt!(out, "{}\n", a.k.key().to_text(self));
+        prt!(out, "{}\n", (&*a.k).to_text(self));
 
         for ob in a.ob.iter(self) {
             ob.to_text(out);
@@ -142,10 +141,10 @@ pub(crate) fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level:
     n.flags.set_need_rewrite(true);
 
     let contents = unsafe { n.contents_mut() };
-    let mut k = KeyRoom::new(contents.key.u64s_mut());
-    k.k_mut().set_key_type(BkeyType::btree_ptr);
-    k.k_mut().p = SPOS_MAX;
-    contents.key.u64s_mut()[crate::btree::bkey::BKEY_U64S] = u64::MAX - u64::from(btree.0);
+    let k = contents.key.init();
+    k.k.set_key_type(BkeyType::btree_ptr);
+    k.k.p = SPOS_MAX;
+    contents.key.elems_mut()[crate::btree::bkey::BKEY_U64S] = u64::MAX - u64::from(btree.0);
 
     n.keys_mut(contents).bset_init_first();
     build_aux_trees(n, contents);

@@ -20,7 +20,8 @@ use crate::btree::node::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::c;
-use crate::data::keylist::{Keylist, PaddedKey};
+use crate::data::keylist::Keylist;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::list::ListLinks;
 use crate::data_structures::ref_cell::RefCell;
@@ -59,7 +60,7 @@ pub(crate) use split_merge::{check_topology, check_topology_msg, foreground_mayb
 #[derive(Default, MaybeZeroable)]
 pub struct btree_alloc {
     pub ob: c::open_buckets,
-    pub k: PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
+    pub k: DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>,
 }
 
 /* Maximum number of nodes we might need to allocate atomically: */
@@ -185,7 +186,7 @@ impl bch_fs_btree_interior_updates {
     }
 }
 
-type NodeKey = PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>;
+type NodeKey = DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>;
 
 fn node_key(b: LockedNode<'_, BtreeNode>) -> NodeKey {
     let mut key = NodeKey::default();
@@ -957,7 +958,7 @@ fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWrite
     -> Result<(), NoRoom>
 {
     for (id, r) in roots(fs, root_lock, skip) {
-        let k = r.key.key();
+        let k = &*r.key;
         w.add_entry(c::JsetEntryType::btree_root, id as u8, r.level, k.k.u64s.into())?
             .as_mut_bytes().copy_from_slice(k.as_bytes());
     }

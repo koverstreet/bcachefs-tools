@@ -74,7 +74,7 @@ fn btree_ptr_to_v2(contents: &NodeContents, f: impl FnOnce(&mut c::bkey, &mut c:
     f(&mut k, &mut v);
 
     let mut dst = DownKey::default();
-    let (hdr, val) = plain_bytes_mut(dst.u64s_mut()).split_at_mut(size_of::<c::bkey>());
+    let (hdr, val) = plain_bytes_mut(dst.elems_mut()).split_at_mut(size_of::<c::bkey>());
     let (head, rest) = val.split_at_mut(size_of::<c::BtreePtrV2>());
     hdr.copy_from_slice(plain_bytes(&k));
     head.copy_from_slice(plain_bytes(&v));
@@ -100,10 +100,10 @@ fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     let mut b = paths.write_locked_node(idx, level);
     b.contents_mut().data_mut().min_key = new_min;
 
-    let ret = journal_overlay::insert(&mut fs.not_rw(), Btree(b.c.btree_id.into()), level as u32 + 1, new.key());
+    let ret = journal_overlay::insert(&mut fs.not_rw(), Btree(b.c.btree_id.into()), level as u32 + 1, &*new);
     if ret.is_ok() {
         drop_keys_outside_node(b.node(), b.contents_mut());
-        b.contents_mut().key.set_key(new.key());
+        b.contents_mut().key.set_key(&*new);
     }
 
     trans.node_unlock_write(paths, idx, level);
@@ -131,7 +131,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     let mut not_rw = fs.not_rw();
     let ret = journal_overlay::delete(&mut not_rw, btree, level as u32 + 1, b.contents().key_i().k.p).and_then(|()| {
         b.contents_mut().data_mut().max_key = new_max;
-        journal_overlay::insert(&mut not_rw, btree, level as u32 + 1, new.key())
+        journal_overlay::insert(&mut not_rw, btree, level as u32 + 1, &*new)
     });
     if ret.is_ok() {
         drop_keys_outside_node(b.node(), b.contents_mut());
@@ -152,7 +152,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
         /* unhash, rehash */
         fs.btree_node_transition_state(b.node(), c::BtreeNodeCacheState::FREEABLE)
             .expect("a node leaving the hash table, write locked");
-        b.contents_mut().key.set_key(new.key());
+        b.contents_mut().key.set_key(&*new);
         fs.btree_node_transition_state(b.node(), b.live_state()).expect("a node back into the hash table, write locked");
 
         /*

@@ -19,10 +19,10 @@ use bcachefs_kernel::c;
 use crate::wrappers::io::MAX_IO_SIZE;
 use bcachefs_kernel::alloc::capacity::DiskReservation;
 use bcachefs_kernel::btree;
-use bcachefs_kernel::btree::bkey::{spos, BkeyV, BKEY_U64S};
+use bcachefs_kernel::btree::bkey::{spos, BkeyI, BkeyV, BKEY_U64S};
 use bcachefs_kernel::btree::iter::{CommitFlags, UpdateTriggerFlags};
 use bcachefs_kernel::data::extents::bkey_append_ptr;
-use bcachefs_kernel::data::keylist::PaddedKey;
+use bcachefs_kernel::data_structures::dst_room::DstRoom;
 use bcachefs_kernel::format::{BkeyType, Btree};
 use bcachefs_kernel::inode_opts::get_io_opts;
 use bcachefs_kernel::util::rcu::read_lock;
@@ -474,9 +474,8 @@ fn link_data(
         let b = ca.sector_to_bucket(physical);
         let sectors = (bucket_size - (physical & (bucket_size - 1))).min(length);
 
-        let mut key = PaddedKey::<{ BKEY_U64S + c::BKEY_EXTENT_VAL_U64s_MAX }>::default();
-        let mut k = key.room();
-        *k.k_mut() = c::bkey {
+        let mut k = DstRoom::<BkeyI, [u64; BKEY_U64S + c::BKEY_EXTENT_VAL_U64s_MAX]>::default();
+        k.k = c::bkey {
             type_: BkeyType::extent.0 as u8,
             p:     spos(dst.bi_inum, logical + sectors, u32::MAX),
             size:  sectors as u32,
@@ -490,7 +489,7 @@ fn link_data(
         res.add(sectors, 1, c::ReservationFlags::nofail)?;
 
         btree::iter::trans_commit_do(fs, Some(&res), CommitFlags::empty(), |t| {
-            let mut new = t.bkey_reassemble_room(k.key().into(), c::BKEY_EXTENT_U64s_MAX * size_of::<u64>())?;
+            let mut new = t.bkey_reassemble_room((&*k).into(), c::BKEY_EXTENT_U64s_MAX * size_of::<u64>())?;
             let opts = get_io_opts(t, None, new.as_sc())?;
             new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
             t.insert(Btree::extents, new, UpdateTriggerFlags::empty())

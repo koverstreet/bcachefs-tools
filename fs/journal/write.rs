@@ -160,7 +160,7 @@ fn __write_alloc(j: &c::journal, a: &mut c::WriteAlloc, w: &mut c::journal_buf, 
          * the next should avoid:
          */
         let mut chosen = c::bch_devs_mask::default();
-        if let Some(k) = BkeySC::from(w.key.key()).arm::<Ptrs>() {
+        if let Some(k) = BkeySC::from(&*w.key).arm::<Ptrs>() {
             for ptr in k.ptrs(fs) {
                 chosen.d.set(ptr.dev().into());
             }
@@ -184,7 +184,7 @@ fn __write_alloc(j: &c::journal, a: &mut c::WriteAlloc, w: &mut c::journal_buf, 
              * already using it:
              */
             if ja.nr() == 0 ||
-                BkeySC::from(w.key.key()).arm::<Ptrs>().is_some_and(|k| k.has_device(fs, cand.dev_idx.into()).is_some()) ||
+                BkeySC::from(&*w.key).arm::<Ptrs>().is_some_and(|k| k.has_device(fs, cand.dev_idx.into()).is_some()) ||
                 sectors > ja.sectors_free.get() ||
                 ca.as_ref().is_some_and(|ca| dev_score(a, &cand) >= dev_score(a, ca)) {
                 continue;
@@ -217,7 +217,7 @@ fn __write_alloc(j: &c::journal, a: &mut c::WriteAlloc, w: &mut c::journal_buf, 
         assert!(offset != ca.prev_journal_sector.get(), "journal write to {}:{offset} again", ca.dev_idx);
         ca.prev_journal_sector.set(offset);
 
-        crate::data::extents::bkey_append_ptr(&mut w.key.room(), c::bch_extent_ptr::new().with_offset(offset).with_dev(ca.dev_idx))
+        crate::data::extents::bkey_append_ptr(&mut w.key, c::bch_extent_ptr::new().with_offset(offset).with_dev(ca.dev_idx))
             .expect("a journal key's pointers fit in key_pad");
 
         /* Stash ca alongside the just-appended ptr; submit + no_io
@@ -271,7 +271,7 @@ fn write_alloc(j: &c::journal, w: &mut c::journal_buf, replicas: &mut u32) -> Re
 
     if *replicas != 0 {
         a.wp_prev_devs = c::bch_devs_mask::default();
-        if let Some(k) = BkeySC::from(w.key.key()).arm::<Ptrs>() {
+        if let Some(k) = BkeySC::from(&*w.key).arm::<Ptrs>() {
             for ptr in k.ptrs(fs) {
                 a.wp_prev_devs.d.set(ptr.dev().into());
             }
@@ -486,7 +486,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
 
         match err {
             Ok(()) => {
-                if w.devs_written.nr < BkeySC::from(w.key.key()).arm::<Ptrs>().map_or(0, |k| k.devs(fs).nr) {
+                if w.devs_written.nr < BkeySC::from(&*w.key).arm::<Ptrs>().map_or(0, |k| k.devs(fs).nr) {
                     prt!(&mut *msg, "wrote degraded to ");
                     fs.devs_list_to_text(&mut msg, &w.devs_written);
                     msg.newline();
@@ -774,12 +774,12 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
 
     fs.event_inc_trace(events::journal_write, |out| {
         prt!(out, "seq {} flush {} sectors {sectors}\n", w.seq(), flush as u32);
-        prt!(out, "{}", BkeySC::from(w.key.key()).to_text(fs));
+        prt!(out, "{}", BkeySC::from(&*w.key).to_text(fs));
     });
 
     plugged(|| {
         let ptrs: ArrayVec<u64, { c::BCH_REPLICAS_MAX as usize }> =
-            BkeySC::from(w.key.key()).arm::<Ptrs>().map(|k| k.ptrs(fs).map(|p| p.offset()).collect()).unwrap_or_default();
+            BkeySC::from(&*w.key).arm::<Ptrs>().map(|k| k.ptrs(fs).map(|p| p.offset()).collect()).unwrap_or_default();
 
         for (offset, ca) in ptrs.iter().zip(cas) {
             let ca = ca.expect("an io ref for each of the journal key's pointers");
@@ -1093,7 +1093,7 @@ extern "C" fn journal_write(mut w: Running<c::journal_buf>) {
             j.do_writes_locked(&mut g);
         }
 
-        w.devs_written = BkeySC::from(w.key.key()).arm::<Ptrs>().map(|k| k.devs(fs)).unwrap_or_default();
+        w.devs_written = BkeySC::from(&*w.key).arm::<Ptrs>().map(|k| k.devs(fs)).unwrap_or_default();
 
         if w.wait_word().load(Relaxed) != JOURNAL_BUF_FLUSH_NO_WAIT {
             /*

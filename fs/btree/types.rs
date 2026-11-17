@@ -4,7 +4,7 @@
 
 use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::btree::trans_attempt::TransBkey;
-use crate::data::keylist::PaddedKey;
+use crate::data_structures::dst_room::DstRoom;
 use crate::fs::Fs;
 use crate::btree::node::{sort::SortRun, BtreeNode};
 use crate::c;
@@ -131,7 +131,7 @@ pub struct btree_cache_shrinker {
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct btree_root {
-    pub key: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
+    pub key: DstRoom<BkeyI, [u64; BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX]>,
     pub level: u8,
     pub alive: u8,
 }
@@ -775,7 +775,7 @@ pub struct BtreeTrans<'f> {
     pub extra_disk_res: Cell<u64>,
     pub extra_disk_res_replicas: Cell<u8>,
 
-    pub btree_path_down: LockedBy<PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>>,
+    pub btree_path_down: LockedBy<DstRoom<BkeyI, [u64; BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX]>>,
 
     #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
     pub dep_map: crate::locking::LockdepMap,

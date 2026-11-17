@@ -224,7 +224,7 @@ impl<'a> Intake<'a> {
          * compact / sort — run with inc.lock held).
          */
         for i in self.btree(c::WbBtree::accounting).inc.accounting.iter_mut() {
-            (&mut i.k.key_mut()).val_bytes_mut().fill(0);
+            (&mut &mut *i.k).val_bytes_mut().fill(0);
         }
     }
 
@@ -248,7 +248,7 @@ impl<'a> Intake<'a> {
 
         match Eytzinger0::find_by(&b.inc.accounting, |e| e.k.k.p.cmp(&p)) {
             Some(idx) => {
-                accounting::accumulate(b.inc.accounting[idx].k.key_mut(), BkeySC::from(k));
+                accounting::accumulate(&mut *b.inc.accounting[idx].k, BkeySC::from(k));
                 Ok(())
             }
             None => {
@@ -420,10 +420,10 @@ impl<'a> Intake<'a> {
 
             if ret.is_ok() {
                 for a in accounting.iter_mut() {
-                    if !accounting::is_zero(BkeySC::from(a.k.key())) {
+                    if !accounting::is_zero(BkeySC::from(&*a.k)) {
                         a.journal_seq = seq;
                         live_accounting_keys += 1;
-                        ret = self.key_to_wb_idx(idx, a.k.key());
+                        ret = self.key_to_wb_idx(idx, &*a.k);
                         if ret.is_err() {
                             break;
                         }
@@ -435,7 +435,7 @@ impl<'a> Intake<'a> {
             b.inc.accounting = accounting;
 
             if live_accounting_keys * 2 < b.inc.accounting.len() {
-                b.inc.accounting.retain(|a| !accounting::is_zero(BkeySC::from(a.k.key())));
+                b.inc.accounting.retain(|a| !accounting::is_zero(BkeySC::from(&*a.k)));
                 b.accounting_sort();
             }
 

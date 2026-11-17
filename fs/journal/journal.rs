@@ -730,7 +730,7 @@ impl c::journal {
             .with_need_flush_to_write_buffer(true)
             .with_has_overwrites(has_overwrites);
 
-        let k = &mut buf.key.key_mut().k;
+        let k = &mut buf.key.k;
         *k = c::bkey::new();
         k.set_key_type(BkeyType::extent);
 

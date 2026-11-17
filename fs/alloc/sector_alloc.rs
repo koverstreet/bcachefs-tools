@@ -27,12 +27,12 @@
 use crate::alloc::disk_groups::Target;
 use crate::alloc::write_point::{WritePointGuard, WritePointSpec};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::BkeyS;
+use crate::btree::bkey::{BkeyI, BkeyS};
 use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::Errcode;
 use crate::data::extents::bkey_append_ptr;
-use crate::data::keylist::KeyRoom;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data::ptrs::PtrsMut;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -366,7 +366,7 @@ impl LockedWritePoint<'_> {
     /// takes them from what's free. @k is a key with pointers - btree_ptr,
     /// btree_ptr_v2, extent - on none of their devices, with room for one per
     /// bucket.
-    pub fn append_ptrs(&mut self, k: &mut KeyRoom<'_>, sectors: u32, cached: bool) {
+    pub fn append_ptrs(&mut self, k: &mut DstRoom<BkeyI>, sectors: u32, cached: bool) {
         let (fs, user) = (self.fs, self.wp.alloc.data_type == DataType::user);
         let g = self.g.as_mut().expect("locked till it's dropped");
         assert!(sectors <= g.sectors_free, "{sectors} sectors from a write point with {} free", g.sectors_free);
@@ -386,16 +386,16 @@ impl LockedWritePoint<'_> {
     /// Builds in @k an unwritten extent from @pos: up to @sectors, as many as
     /// are free, its buckets pinned in @ptrs for the index update. Returns
     /// its size.
-    pub fn unwritten_extent(mut self, k: &mut KeyRoom<'_>, pos: Bpos, sectors: u32,
+    pub fn unwritten_extent(mut self, k: &mut DstRoom<BkeyI>, pos: Bpos, sectors: u32,
                             ptrs: &mut c::open_buckets) -> u32 {
         let sectors = sectors.min(self.sectors_free());
-        *k.k_mut() = c::bkey { type_: BkeyType::extent.0 as u8, p: pos, ..c::bkey::new() };
-        k.k_mut().resize(sectors);
+        k.k = c::bkey { type_: BkeyType::extent.0 as u8, p: pos, ..c::bkey::new() };
+        k.k.resize(sectors);
 
         self.open_buckets_get(ptrs);
         self.append_ptrs(k, sectors, false);
 
-        if let Some(mut e) = BkeyS::from(k.key_mut()).arm::<PtrsMut>() {
+        if let Some(mut e) = BkeyS::from(&mut **k).arm::<PtrsMut>() {
             e.ptrs_mut(self.fs).for_each(|p| p.set_unwritten(1));
         }
         sectors

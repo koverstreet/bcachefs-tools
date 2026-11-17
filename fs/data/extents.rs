@@ -7,12 +7,12 @@
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllTypes, BkeyFamily, ByFlag, FamilyTypes, FamilyVal, InFamily, KeyState, BkeyS, BkeySC, BkeyV, BkeyVal,
                          BkeyVMut};
-use crate::btree::bkey::{AnyKeySC, BkeyOps};
+use crate::btree::bkey::{AnyKeySC, BkeyI, BkeyOps};
 use crate::btree::trigger::Trigger;
 use crate::btree::iter::NoRoom;
 use crate::c;
 use crate::data::inline_data::{InlineDataMut, InlineDataRef};
-use crate::data::keylist::KeyRoom;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, IoFailures, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -384,8 +384,8 @@ pub fn bch2_cut_back_s(where_: Bpos, k: BkeyS<'_>) -> c_int {
 /// @ptr after @k's value - its last entry - and @k a u64 longer: @k a key
 /// with pointers - btree_ptr, btree_ptr_v2, extent - and @ptr to a device it
 /// has none on.
-pub fn bkey_append_ptr(k: &mut KeyRoom<'_>, ptr: c::bch_extent_ptr) -> Result<(), NoRoom> {
-    let t = k.k().key_type();
+pub fn bkey_append_ptr(k: &mut DstRoom<BkeyI>, ptr: c::bch_extent_ptr) -> Result<(), NoRoom> {
+    let t = k.k.key_type();
     assert!(matches!(t, BkeyType::btree_ptr | BkeyType::btree_ptr_v2 | BkeyType::extent),
             "a pointer appended to a key of type {}", t.0);
     k.append_val(&[ptr.into_bits().0])

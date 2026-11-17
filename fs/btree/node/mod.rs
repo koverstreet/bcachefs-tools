@@ -17,7 +17,7 @@ pub mod sort;
 use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::c;
 use crate::cstructs::c as cs;
-use crate::data::keylist::PaddedKey;
+use crate::data_structures::dst_room::DstRoom;
 use crate::fs::Fs;
 use crate::locking::LockedBy;
 use crate::util::projections::Volatile;
@@ -209,7 +209,7 @@ pub struct NodeContents {
     pub unpack_fn_len: u8,
 
     /* Key/pointer for this btree node */
-    pub key: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
+    pub key: DstRoom<BkeyI, [u64; BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX]>,
 }
 
 impl<'b, 'f> BtreeNode {
@@ -305,7 +305,7 @@ impl NodeContents {
     }
 
     pub fn key_i(&self) -> &BkeyI {
-        self.key.key()
+        &self.key
     }
 
     pub fn set_key(&mut self, k: impl BkeyV) {

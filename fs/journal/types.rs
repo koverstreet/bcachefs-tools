@@ -2,11 +2,11 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::BKEY_U64S;
+use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::fs::{Dev, Fs};
 use crate::init::recovery::NotRw;
 use crate::cstructs::c;
-use crate::data::keylist::PaddedKey;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data::ptrs::IoFailures;
 use crate::data::write::DevWriteRef;
 use crate::types::CacheAligned;
@@ -113,7 +113,7 @@ nest! {
         #[init(None)]
         pub in_flight: Option<RefGuard<AtomicRef<()>>>,
 
-        pub key: PaddedKey<{ BKEY_U64S + c::BCH_REPLICAS_MAX as usize }>,
+        pub key: DstRoom<BkeyI, [u64; BKEY_U64S + c::BCH_REPLICAS_MAX as usize]>,
         /*
          * @cas mirrors the dev ptrs in @key in append order: cas[i] is the
          * io_ref __journal_write_alloc took on that dev.  Stashed so the

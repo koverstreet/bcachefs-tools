@@ -100,8 +100,8 @@ pub use bufs::{bounce_bufs, node_data_free, node_mem_alloc, node_mem_free, node_
 pub use pins::BtreeCachePins;
 pub(crate) use state::NodeTable;
 
-use crate::btree::bkey::{bkey_val_to_text, val_to_text, BkeySC, BkeyVal, BKEY_U64S};
-use crate::data::keylist::PaddedKey;
+use crate::btree::bkey::{bkey_val_to_text, val_to_text, BkeyI, BkeySC, BkeyVal, BKEY_U64S};
+use crate::data_structures::dst_room::DstRoom;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::bset::BsetStats;
 use crate::btree::node::BtreeNode;
@@ -186,10 +186,10 @@ pub fn btree_ptr_hash_val<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> u64 {
 /// btree_ptr_hash_val() of a node's own key, which has room past its end: a
 /// v1's first value u64, there or not, as C reads it - a fake root's key has
 /// no value, and its identity is the u64 past it.
-pub fn node_key_hash_val<const U64S: usize>(k: &PaddedKey<U64S>) -> u64 {
-    match k.key().k.key_type() {
-        BkeyType::btree_ptr => k.u64s()[BKEY_U64S],
-        _ => btree_ptr_hash_val(BkeySC::from(k.key())),
+pub fn node_key_hash_val(k: &DstRoom<BkeyI>) -> u64 {
+    match k.k.key_type() {
+        BkeyType::btree_ptr => k.elems()[BKEY_U64S],
+        _ => btree_ptr_hash_val(BkeySC::from(&**k)),
     }
 }
 

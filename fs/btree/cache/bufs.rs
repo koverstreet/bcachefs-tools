@@ -239,7 +239,7 @@ fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<NonNu
 
     unsafe {
         let p = b.as_ptr();
-        let k = &mut (*p).contents_mut().key.key_mut().k;
+        let k = &mut (*p).contents_mut().key.k;
         *k = c::bkey::new();
         k.set_key_type(BkeyType::btree_ptr);
         init_list_head((&raw mut (*p).write_blocked).cast());

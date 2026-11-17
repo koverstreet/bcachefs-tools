@@ -18,7 +18,6 @@ use crate::btree::node::sort::{btree_sort_into, build_aux_trees};
 use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
-use crate::data::keylist::KeyRoom;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
@@ -66,7 +65,7 @@ fn node_free(fs: &Fs, b: &BtreeNode) {
 
 /// A new node's range: its key's, and its data's.
 pub(super) fn set_range(contents: &mut crate::btree::node::NodeContents, min: Bpos, max: Bpos) {
-    let mut k = contents.key.key_mut();
+    let mut k = &mut *contents.key;
     if let Some(mut p) = k.as_s().arm::<c::BtreePtrV2>() {
         p.v_mut().min_key = min;
     }
@@ -242,8 +241,8 @@ impl<'t> InteriorUpdate<'t> {
                 } else {
                     0
                 };
-                if can_use_btree_node(fs, &self.disk_res, target, BkeySC::from(a.k.key())) {
-                    contents.key.set_key(a.k.key());
+                if can_use_btree_node(fs, &self.disk_res, target, BkeySC::from(&*a.k)) {
+                    contents.key.set_key(&*a.k);
                     ob = core::mem::take(&mut a.ob);
                     return Ok(());
                 }
@@ -252,11 +251,11 @@ impl<'t> InteriorUpdate<'t> {
             }
             drop(cache);
 
-            let mut k = KeyRoom::new(contents.key.u64s_mut());
-            k.k_mut().set_key_type(BkeyType::btree_ptr_v2);
+            let k = contents.key.init();
+            k.k.set_key_type(BkeyType::btree_ptr_v2);
             k.set_val_u64s(size_of::<c::BtreePtrV2>() / size_of::<u64>())
                 .expect("a btree node's key with room for a btree_ptr_v2");
-            wp.append_ptrs(&mut k, fs.btree_sectors(), false);
+            wp.append_ptrs(k, fs.btree_sectors(), false);
 
             wp.open_buckets_get(&mut ob);
             Ok(())
@@ -311,7 +310,7 @@ impl<'t> InteriorUpdate<'t> {
         data.set_level(level as u8);
         let seq = data.keys.seq;
 
-        if let Some(mut p) = contents.key.key_mut().as_s().arm::<c::BtreePtrV2>() {
+        if let Some(mut p) = (&mut *contents.key).as_s().arm::<c::BtreePtrV2>() {
             let v = p.v_mut();
             v.mem_ptr.set(0);
             v.seq             = seq;

@@ -64,7 +64,7 @@ impl InteriorUpdate<'_> {
         let contents = n.contents_mut();
         let sectors = (contents.data().bytes().next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
 
-        if let Some(mut p) = contents.key.key_mut().as_s().arm::<c::BtreePtrV2>() {
+        if let Some(mut p) = (&mut *contents.key).as_s().arm::<c::BtreePtrV2>() {
             p.v_mut().sectors_written = crate::types::Le16::new(sectors);
         }
     }
@@ -216,7 +216,7 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
 
     for i in u.owned.borrow().old_nodes.iter() {
         let level = u32::from(i.level) + 1;
-        let old = BkeySC::from(i.key.key());
+        let old = BkeySC::from(&*i.key);
         let mut deleted = BkeyI::<c::Deleted>::at(old.k.p);
         let deleted_u64s = deleted.k.u64s.into();
         let mut op = TriggerOp::new(btree, level, old, BkeyS::from(deleted.as_mut()),
@@ -224,7 +224,7 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
                                     deleted_u64s);
         key_trigger(t, &mut op)?;
 
-        t.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8, i.key.key())?;
+        t.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8, &*i.key)?;
     }
 
     for i in u.new_nodes_locked(commit_lock).iter_mut() {
@@ -232,9 +232,9 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
         if let Pointee::Node { update_node_key, .. } = &mut i.to {
             *update_node_key = false;
         }
-        strip_reconcile(fs, i.key.key_mut().as_s());
+        strip_reconcile(fs, (&mut *i.key).as_s());
 
-        let mut k = t.bkey_reassemble_room(BkeySC::from(i.key.key()),
+        let mut k = t.bkey_reassemble_room(BkeySC::from(&*i.key),
                                            c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
         k.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground, 0)?;
 
@@ -317,9 +317,9 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
             u.new_nodes_locked(&mut commit_lock).iter().map(|i| i.key.clone()).collect()
         };
 
-        if !keys.iter().all(|k| fs.btree_bitmap_marked(BkeySC::from(k.key()), true)) {
+        if !keys.iter().all(|k| fs.btree_bitmap_marked(BkeySC::from(&**k), true)) {
             let mut sb = fs.sb_lock();
-            let dirty = keys.iter().fold(false, |d, k| d | fs.btree_bitmap_mark_locked(&mut sb, BkeySC::from(k.key())));
+            let dirty = keys.iter().fold(false, |d, k| d | fs.btree_bitmap_mark_locked(&mut sb, BkeySC::from(&**k)));
             if dirty {
                 fs.write_super(&mut sb);
             }
@@ -346,7 +346,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
      * buffer swapped for a new data buffer).
      */
     let old: ArrayVec<(NonNull<BtreeNode>, Le64, u64), UPDATE_NODES_MAX> = u.owned.borrow().old_nodes.iter()
-        .map(|i| (i.b, i.seq, btree_ptr_hash_val(BkeySC::from(i.key.key()))))
+        .map(|i| (i.b, i.seq, btree_ptr_hash_val(BkeySC::from(&*i.key))))
         .collect();
     for (b, seq, hash) in old {
         let b = unsafe { b.as_ref() };
@@ -420,7 +420,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
             let b = unsafe { b.as_ref() };
 
             if update_node_key {
-                unsafe { b.contents_mut() }.key.set_key(i.key.key());
+                unsafe { b.contents_mut() }.key.set_key(&*i.key);
             }
 
             b.will_make_reachable.clear(update);

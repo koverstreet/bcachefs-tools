@@ -44,9 +44,9 @@ fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bvers
 
     let (pos, cached) = (op.pos, op.has(w::cached));
     op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |e| {
-        *e.k_mut() = c::bkey { type_: BkeyType::extent.0 as u8, p: pos, bversion: version,
+        e.k = c::bkey { type_: BkeyType::extent.0 as u8, p: pos, bversion: version,
                                ..c::bkey::new() };
-        e.k_mut().size = crc.live_size;
+        e.k.size = crc.live_size;
 
         if crc.csum_type != c::CsumType::none || crc.compression_type != c::CompressionType::none || crc.nonce != 0 {
             extent_crc_append(e, &crc).unwrap_or_else(|err| panic!("an extent's crc past its room: {err}"));

@@ -7,7 +7,7 @@ use crate::util::alloc::Flags;
 use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
-use crate::data::keylist::KeyRoom;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
 use crate::data::write::{index_update_wq, to_wbio, wbio_init, submit_wbio_replicas, write_done,
@@ -217,12 +217,11 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
         let devs = &devs[..nr_cas];
 
         /* Unlock before taking nocow locks, doing IO: */
-        let mut buf = [0u64; c::BKEY_EXTENT_U64s_MAX as usize];
-        let mut copy = KeyRoom::new(&mut buf);
+        let mut copy = DstRoom::<BkeyI, [u64; c::BKEY_EXTENT_U64s_MAX as usize]>::default();
         if copy.reassemble(k).is_err() {
             return Ok(());
         }
-        let k = BkeySC::from(copy.key());
+        let k = BkeySC::from(&*copy);
 
         t.unlock();
 
@@ -287,10 +286,10 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
 
         op.closure().get().leak();
 
-        unsafe { submit_wbio_replicas(to_wbio::<c::DevWriteRefKind>(bio), op.fs(), DataType::user, copy.key(), Some(cas)) };
+        unsafe { submit_wbio_replicas(to_wbio::<c::DevWriteRefKind>(bio), op.fs(), DataType::user, &*copy, Some(cas)) };
 
         if op.has(w::convert_unwritten) {
-            op.insert_keys.push_key(copy.key());
+            op.insert_keys.push_key(&copy);
         }
         if op.has(w::submitted) {
             return Ok(());

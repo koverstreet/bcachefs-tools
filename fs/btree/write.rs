@@ -2,7 +2,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::util::alloc::flags;
-use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags, BKEY_U64S};
+use crate::btree::bkey::{bkey_validate, BkeyI, BkeyS, BkeySC, ValidateFlags, BKEY_U64S};
 use crate::btree::cache::Bounce;
 use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::sort::{
@@ -19,7 +19,7 @@ use crate::btree_trans;
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::cstructs::c::{BtreeNodeFlags, BtreeWriteType};
-use crate::data::keylist::PaddedKey;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write::{submit_wbio_replicas, to_wbio, wbio_init};
 use crate::data_structures::list::Walk;
@@ -49,7 +49,7 @@ use cstruct_macros::bch_enum;
 #[repr(C)]
 pub struct BtreeWriteBio {
     work: c::work_struct,
-    key: PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
+    key: DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>,
     bounce: Bounce<'static>,
     sector_offset: c_uint,
     shard_cpu: Option<u16>,
@@ -132,7 +132,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNod
     let mut n = t.bkey_reassemble_room(BkeySC::from(node.key()), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
 
     const V2: &str = "a written node's key a btree_ptr_v2: v1 nodes are need_rewrite from their read, never dirtied";
-    let w = BkeySC::from(wbio.key.key()).arm::<c::BtreePtrV2>().expect(V2);
+    let w = BkeySC::from(&*wbio.key).arm::<c::BtreePtrV2>().expect(V2);
     n.reborrow().arm::<c::BtreePtrV2>().expect(V2).v_mut().sectors_written = w.v().sectors_written;
 
     n.reborrow().arm::<PtrsMut>().expect("a btree node pointer, with pointers")
@@ -339,12 +339,12 @@ unsafe fn write_do_submit(wbio: &mut BtreeWriteBio) {
     let fs = wbio.wbio.fs();
     let mut tmp = wbio.key;
 
-    let mut k = BkeyS::from(tmp.key_mut()).arm::<PtrsMut>().expect("a btree node pointer, with pointers");
+    let mut k = BkeyS::from(&mut *tmp).arm::<PtrsMut>().expect("a btree node pointer, with pointers");
     for ptr in k.ptrs_mut(fs) {
         ptr.set_offset(ptr.offset() + wbio.sector_offset as u64);
     }
 
-    unsafe { submit_wbio_replicas(&mut wbio.wbio, fs, DataType::btree, tmp.key(), None) };
+    unsafe { submit_wbio_replicas(&mut wbio.wbio, fs, DataType::btree, &*tmp, None) };
 }
 
 /// C's one word: the write type, its flags above.
@@ -635,7 +635,7 @@ impl BsetWrite {
 
         b.written.set(b.written.get() + sectors);
 
-        if let Some(mut v2) = BkeyS::from(wbio.key.key_mut()).arm::<c::BtreePtrV2>() {
+        if let Some(mut v2) = BkeyS::from(&mut *wbio.key).arm::<c::BtreePtrV2>() {
             v2.v_mut().sectors_written = Le16::new(b.written.get());
         }
 

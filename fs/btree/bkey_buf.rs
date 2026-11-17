@@ -44,7 +44,7 @@ impl BkeyBuf {
     /// Holding a deleted key, as bch2_bkey_buf_init() leaves it.
     pub fn new() -> Self {
         let mut b = BkeyBuf { onstack: [0; ONSTACK_U64S], heap: None };
-        crate::data::keylist::KeyRoom::new(&mut b.onstack);
+        crate::data_structures::dst_room::DstRoom::<BkeyI>::new_in(&mut b.onstack);
         b
     }
 

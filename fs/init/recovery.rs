@@ -586,7 +586,7 @@ fn read_btree_roots(fs: &Fs) -> Result<(), BchError> {
     for i in 0..fs.btree_id_nr_alive() {
         let Some((key, level)) = fs.btree.cache.roots.lock().get(i)
             .filter(|r| r.alive != 0)
-            .map(|r| (BkeyBuf::from_key(r.key.key().into()), r.level))
+            .map(|r| (BkeyBuf::from_key((&*r.key).into()), r.level))
         else {
             continue;
         };

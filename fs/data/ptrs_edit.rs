@@ -4,9 +4,9 @@
 //! each good until something before it moves.
 
 use super::*;
-use crate::btree::bkey::BKEY_U64S;
+use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::btree::iter::{NoRoom, TransBkey};
-use crate::data::keylist::KeyRoom;
+use crate::data_structures::dst_room::DstRoom;
 
 /// What a PtrsMut key does, in whichever form it's held: dropping only
 /// shrinks it, so any mutable key can; inserting grows it, so that's
@@ -226,9 +226,9 @@ impl TransBkey<'_, '_, PtrsMut> {
 /// @crc appended to @k's entries, as the smallest entry it packs into:
 /// bch2_extent_crc_append(). @k is a key with pointers, its entries running
 /// to its value's end.
-pub(crate) fn extent_crc_append(k: &mut KeyRoom<'_>, crc: &c::bch_extent_crc_unpacked) -> Result<(), NoRoom> {
+pub(crate) fn extent_crc_append(k: &mut DstRoom<BkeyI>, crc: &c::bch_extent_crc_unpacked) -> Result<(), NoRoom> {
     let e = crc_entry(crc, c::ExtentEntryType::crc32);
-    let val_u64s = k.k().val_u64s();
+    let val_u64s = k.k.val_u64s();
     assert!(val_u64s + e.len() <= c::BKEY_EXTENT_VAL_U64s_MAX as usize,
             "appending a crc past an extent's largest value");
     k.append_val(&e)

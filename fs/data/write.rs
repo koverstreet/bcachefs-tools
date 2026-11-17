@@ -1504,10 +1504,10 @@ fn write_data_inline(mut op: Running<Op>, data_len: u32) {
 
     let o = &mut *op;
     o.insert_keys.push_with(room, |id| {
-        *id.k_mut() = k;
+        id.k = k;
         id.set_val_u64s(val_u64s).expect("reserved");
 
-        let d = InlineDataMut::of(BkeyS::from(id.key_mut())).expect("an inline data key");
+        let d = InlineDataMut::of(BkeyS::from(&mut **id)).expect("an inline data key");
         o.wbio.bio_mut().range().copy_to(&mut d.data[..len]);
         if let Some(h) = d.csum {
             *h = c::InlineDataCsum::new(fs, &o.opts, d.data);
