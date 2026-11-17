@@ -39,6 +39,7 @@ pub mod path;
 pub mod percpu;
 pub mod percpu_rwsem;
 pub mod posix_acl;
+pub mod power_supply;
 pub mod printk;
 pub mod rcu;
 pub mod rwsem;

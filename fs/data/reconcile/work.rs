@@ -79,7 +79,9 @@ use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::Cuckoo;
 use crate::os::kernel::{cond_resched, ktime_get_ns, WRITE};
 use crate::os::kthread::{Kthread, KthreadSelf};
+use crate::os::power_supply::{self, PowerNotifier};
 use crate::util::par::{self, Backend};
+use crate::util::place::{Contained, PlacedDrop};
 use crate::util::{HumanReadable, Nsecs, ToText};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::vstructs::Validated;
@@ -1139,62 +1141,31 @@ impl Fs {
 // on_battery, for reconcile_on_ac_only: set as the filesystem starts, and
 // by the power supply notifier on every change, which kicks reconcile.
 
-#[cfg(CONFIG_POWER_SUPPLY)]
-mod power {
-    use super::*;
-    use crate::util::place::{container_of, Contained};
-    use core::ffi::c_int;
-
-    fn on_battery() -> bool {
-        // SAFETY: plain
-        unsafe { c::power_supply_is_system_supplied() == 0 }
+impl power_supply::Watch for c::bch_fs_reconcile {
+    fn power_notifier(&self) -> &PowerNotifier<Self> {
+        &self.power_notifier
     }
 
-    /// The power supply changed: bch2_reconcile_power_notifier().
-    unsafe extern "C" fn notifier(nb: *mut c::notifier_block, _event: kernel::ffi::c_ulong,
-                                  _data: *mut core::ffi::c_void) -> c_int {
-        let r = unsafe { container_of(nb.cast::<c::PowerNotifier>()) };
-        r.on_battery.store(on_battery(), Relaxed);
-        r.container().reconcile_wakeup();
-        c::NOTIFY_OK
-    }
-
-    pub(super) fn register(fs: &Fs) -> Result<(), BchError> {
-        let nb = fs.reconcile.power_notifier.as_ptr();
-        // SAFETY: ours, unregistered by unregister(); set up before it's
-        // registered
-        unsafe {
-            (*nb).notifier_call = Some(notifier);
-            crate::errcode::ret_to_result_void(c::power_supply_reg_notifier(nb))?;
-        }
-        fs.reconcile.on_battery.store(on_battery(), Relaxed);
-        Ok(())
-    }
-
-    pub(super) fn unregister(fs: &Fs) {
-        // SAFETY: ours, registered by register()
-        unsafe { c::power_supply_unreg_notifier(fs.reconcile.power_notifier.as_ptr()) };
+    fn power_changed(&self) {
+        self.on_battery.store(power_supply::on_battery(), Relaxed);
+        self.container().reconcile_wakeup();
     }
 }
 
-/// No power supplies to tell: never on battery.
-#[cfg(not(CONFIG_POWER_SUPPLY))]
-mod power {
-    use super::*;
-
-    pub(super) fn register(_: &Fs) -> Result<(), BchError> {
-        Ok(())
+impl PlacedDrop for c::bch_fs_reconcile {
+    unsafe fn placed_drop(&self) {
+        unsafe { self.power_notifier.unregister() }
     }
-
-    pub(super) fn unregister(_: &Fs) {}
 }
 
 pub fn reconcile_exit(fs: &Fs) {
-    power::unregister(fs)
+    unsafe { fs.reconcile.placed_drop() }
 }
 
 // ── C's ──────────────────────────────────────────────────────────────────
 
 pub fn reconcile_init(fs: &Fs) -> Result<(), BchError> {
-    power::register(fs)
+    PowerNotifier::register(&fs.reconcile)?;
+    fs.reconcile.on_battery.store(power_supply::on_battery(), Relaxed);
+    Ok(())
 }

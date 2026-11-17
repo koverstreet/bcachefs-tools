@@ -26,6 +26,8 @@ pub mod mutex;
 pub mod percpu;
 pub mod percpu_rwsem;
 pub mod posix_acl;
+#[path = "../power_supply.rs"]
+pub mod power_supply;
 pub mod printk;
 pub mod rcu;
 pub mod rwsem;
