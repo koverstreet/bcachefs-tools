@@ -56,8 +56,8 @@ pub struct Block([u8; 16]);
 
 impl Block {
     pub fn slice_as_chunks(buf: &[u8]) -> (&[Block], &[u8]) {
-        let (blocks, rest) = buf.as_chunks::<16>();
-        (unsafe { core::slice::from_raw_parts(blocks.as_ptr().cast(), blocks.len()) }, rest)
+        let (blocks, rest) = buf.split_at(buf.len() / 16 * 16);
+        (unsafe { core::slice::from_raw_parts(blocks.as_ptr().cast(), blocks.len() / 16) }, rest)
     }
 }
 
