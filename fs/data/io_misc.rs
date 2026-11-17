@@ -17,6 +17,8 @@
 //! snapshots.create_lock, for read.
 
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::AnyKeySC;
+use crate::util::vstructs::Unvalidated;
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::AllocWait;
 use crate::btree::bkey::{bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, BkeyOps};
@@ -214,7 +216,7 @@ pub fn fpunch(fs: &Fs, inum: c::subvol_inum, start: u64, end: u64, i_sectors_del
 
 impl BkeyOps for c::LoggedOpTruncate {
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let op = c::LoggedOpTruncate::val_copy_pad(k).expect("a truncate op");
 
         write!(out, "subvol={}", op.subvol.get());
@@ -290,7 +292,7 @@ pub fn truncate(fs: &Fs, inum: c::subvol_inum, new_i_size: u64, i_sectors_delta:
 
 impl BkeyOps for c::LoggedOpFinsert {
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let op = c::LoggedOpFinsert::val_copy_pad(k).expect("a finsert op");
 
         write!(out, "subvol={}", op.subvol.get());

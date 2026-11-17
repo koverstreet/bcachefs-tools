@@ -8,7 +8,7 @@ use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Btree, DataType, MetadataVersion};
 use crate::fs::{Dev, Fs};
-use crate::btree::bkey::{AnyKey, BkeyI, BkeyP, BkeySC, ValidateFlags};
+use crate::btree::bkey::{AnyKey, AnyKeySC, BkeyP, BkeySC, ValidateFlags};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::SbErrorId;
@@ -153,10 +153,9 @@ fn journal_key_lost(fs: &Fs, from: &c::bkey_validate_context) {
 }
 
 /// The key at @at, if it's one there - a header, as long as its u64s, within
-/// the entry: read as validated, as bkey_validate() and to_text() take it.
-fn key_at(e: &[u8], at: usize) -> Result<BkeySC<'_>, VStructError> {
-    let k = from_bytes::<AnyKey<Unvalidated>>(&e[at..])?;
-    Ok(BkeySC::from(unsafe { &*BkeyI::from_raw(k.as_bytes().as_ptr().cast()) }))
+/// the entry.
+fn key_at(e: &[u8], at: usize) -> Result<AnyKeySC<'_, Unvalidated>, VStructError> {
+    Ok(BkeySC::from(from_bytes::<AnyKey<Unvalidated>>(&e[at..])?))
 }
 
 #[derive(PartialEq, Eq)]
@@ -220,7 +219,7 @@ fn journal_validate_key(ctx: &Ctx<'_>, e: &mut [u8], at: usize) -> Result<Key, B
     }
 
     let ret = key_at(e, at).map(|k| crate::btree::bkey::bkey_validate(
-        &BkeyValidate { fs: ctx.fs, k, from: &ctx.from }));
+        &BkeyValidate::new(ctx.fs, k, &ctx.from)));
     match ret {
         Ok(Err(err)) if journal_entry_err_on!(ctx, true, journal_entry_bkey_bad_format,
                                               "bkey validate error {}", err.msg()) => return drop(e, bytes),

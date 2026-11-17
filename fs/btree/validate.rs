@@ -381,12 +381,12 @@ pub(crate) fn validate_from(b: &BtreeNode, flags: ValidateFlags) -> c::bkey_vali
 
 pub fn btree_node_bkey_val_validate(fs: &Fs, b: &BtreeNode, k: BkeySC<'_>,
                                     flags: ValidateFlags) -> Result<(), BchError> {
-    bkey_val_validate(&BkeyValidate { fs, k, from: &validate_from(b, flags) })
+    bkey_val_validate(&BkeyValidate::new(fs, k, &validate_from(b, flags)))
 }
 
 fn bset_key_validate(fs: &Fs, b: &BtreeNode, k: BkeySC<'_>, updated_range: bool,
                      from: &c::bkey_validate_context) -> Result<(), BchError> {
-    let v = BkeyValidate { fs, k, from };
+    let v = BkeyValidate::new(fs, k, from);
 
     bkey_header_validate(&v)?;
     if !updated_range {
@@ -413,7 +413,7 @@ fn bkey_packed_valid(fs: &Fs, b: &BtreeNode, contents: &NodeContents, i: &c::bse
 
     let mut tmp = c::bkey::default();
     let u = k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut tmp);
-    bkey_header_validate(&BkeyValidate { fs, k: u, from: &validate_from(b, ValidateFlags::silent) }).is_ok()
+    bkey_header_validate(&BkeyValidate::new(fs, u, &validate_from(b, ValidateFlags::silent))).is_ok()
 }
 
 fn btree_node_read_bkey_cmp(contents: &NodeContents, l: &BkeyP, r: &BkeyP) -> Ordering {

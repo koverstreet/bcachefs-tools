@@ -317,7 +317,7 @@ fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, n: &m
     from.bits.set_flags(ValidateFlags::write);
 
     let k = BkeySC::from(unsafe { b.contents() }.key_i());
-    if let Err(e) = bkey_validate(&BkeyValidate { fs, k, from: &from }) {
+    if let Err(e) = bkey_validate(&BkeyValidate::new(fs, k, &from)) {
         fs_inconsistent!(fs, "invalid btree node key before write");
         return Err(e);
     }

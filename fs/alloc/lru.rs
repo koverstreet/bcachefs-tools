@@ -19,6 +19,8 @@ use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::AnyKeySC;
+use crate::util::vstructs::Unvalidated;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX, BkeyOps};
 use crate::btree::cache::BtreeCachePins;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
@@ -159,7 +161,7 @@ impl BkeyOps for c::Lru {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         write!(out, "idx {}", k.arm::<c::Lru>().expect("an lru key").v().idx.get());
     }
 }

@@ -57,7 +57,7 @@ fn insert_fixup_btree_ptr(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path:
     }
 
     let from = validate_from(&b, ValidateFlags::commit);
-    let v = BkeyValidate { fs, k, from: &from };
+    let v = BkeyValidate::new(fs, k, &from);
     if bkey_validate(&v).and_then(|()| bkey_in_btree_node(&v, &b)).is_err() {
         crate::fs_inconsistent!(fs, "insert_fixup_btree_ptr(): inserting invalid bkey");
         dump_stack();

@@ -294,10 +294,11 @@
  */
 
 use crate::init::passes::RecoveryPass;
-use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, POS_MAX, POS_MIN, BkeyOps};
+use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, AnyKeySC, BkeyI, BkeySC, BkeyVal, BkeyWhole, POS_MAX, POS_MIN,
+                         BkeyOps};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::prt;
-use crate::util::vstructs::{Validated, Whole};
+use crate::util::vstructs::{Unvalidated, Validated, Whole};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
@@ -962,7 +963,7 @@ fn is_ancestor_debug(t: &TransAttempt<'_, '_>, id: u32, ancestor: u32, fastpath:
 // ── Snapshot node keys ───────────────────────────────────────────────────
 
 /// Zero padded past the fields an older key lacks.
-pub fn val(k: BkeySC<'_>) -> Option<c::Snapshot> {
+pub fn val<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> Option<c::Snapshot> {
     c::Snapshot::val_copy_pad(k)
 }
 
@@ -1205,7 +1206,7 @@ impl BkeyOps for c::Snapshot {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         write!(out, "{}", val(k).expect("a snapshot"));
     }
 
@@ -1239,7 +1240,7 @@ impl BkeyOps for c::SnapshotTree {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let t = c::SnapshotTree::val_copy_pad(k).expect("a snapshot_tree");
         write!(out, "subvol {} root snapshot {}", t.master_subvol.get(), t.root_snapshot.get());
     }

@@ -14,7 +14,7 @@
 //!
 //! The counts are bkey_durability's u8s, summed as C's are: wrapping.
 
-use crate::btree::bkey::{pos, BkeySC, BkeyV, BkeyVMut, BkeyVal};
+use crate::btree::bkey::{pos, AnyKeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::c;
 use crate::data::ec::stripe::ptr_matches_stripe;
@@ -23,7 +23,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::Validated;
+use crate::util::vstructs::{Unvalidated, Validated};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::format::{Btree, MemberState};
 
@@ -183,7 +183,7 @@ pub fn extent_ptr_durability(t: &TransAttempt<'_, '_>, p: &c::extent_ptr_decoded
 
 /// A reservation's: no pointers, but a replica count - all of it online, a
 /// claim on free space.
-fn reservation_durability(k: BkeySC<'_>) -> Option<c::bkey_durability> {
+fn reservation_durability(k: AnyKeySC<'_, Unvalidated>) -> Option<c::bkey_durability> {
     let nr = k.arm::<c::Reservation>()?.v().nr_replicas;
     Some(c::bkey_durability {
         online:          nr,
@@ -212,15 +212,17 @@ fn count_ptr(ret: &mut c::bkey_durability, p: &c::extent_ptr_decoded) {
 }
 
 /// A key's durability and whether it can be read, in whichever form it's
-/// held, of any type.
-pub trait BkeyVDurability: BkeyV<V: BkeyVal<State = Validated>> {
+/// held, of any type - and for durability_safe(), in any state.
+pub trait BkeyVDurability: BkeyV {
     /// Its durability, total and online - each device counted once - with its
     /// replica and pointer counts, the per-pointer sum of desired durability
     /// (acct) and the least of it (min_durability, an evacuating device's
     /// none): bch2_bkey_durability(). Its stripes are looked up in @t.
-    fn durability(&self, t: &TransAttempt<'_, '_>) -> Result<c::bkey_durability, BchError> {
+    fn durability(&self, t: &TransAttempt<'_, '_>) -> Result<c::bkey_durability, BchError>
+    where Self::V: BkeyVal<State = Validated>
+    {
         let key = self.as_sc();
-        if let Some(r) = reservation_durability(key.untyped()) {
+        if let Some(r) = reservation_durability(key.as_read()) {
             return Ok(r);
         }
 
@@ -267,8 +269,8 @@ pub trait BkeyVDurability: BkeyV<V: BkeyVal<State = Validated>> {
     /// isn't counted. bch2_bkey_durability_safe(), for reserving space to
     /// rewrite a key: tolerates bad pointers.
     fn durability_safe(&self, fs: &Fs) -> c::bkey_durability {
-        let key = self.as_sc();
-        if let Some(r) = reservation_durability(key.untyped()) {
+        let key = self.as_sc().as_read();
+        if let Some(r) = reservation_durability(key) {
             return r;
         }
 
@@ -318,7 +320,9 @@ pub trait BkeyVDurability: BkeyV<V: BkeyVal<State = Validated>> {
 
     /// Whether any of it can be read: a pointer not cached, to a device or
     /// with a stripe - bch2_bkey_can_read().
-    fn can_read(&self, fs: &Fs) -> bool {
+    fn can_read(&self, fs: &Fs) -> bool
+    where Self::V: BkeyVal<State = Validated>
+    {
         self.as_sc().arm::<Ptrs>().is_some_and(|k| {
             k.ptrs_decoded(fs).any(|d| {
                 d.p.ptr.cached() == 0 &&
@@ -328,7 +332,7 @@ pub trait BkeyVDurability: BkeyV<V: BkeyVal<State = Validated>> {
     }
 }
 
-impl<K: BkeyV<V: BkeyVal<State = Validated>>> BkeyVDurability for K {}
+impl<K: BkeyV> BkeyVDurability for K {}
 
 // ── dropping what isn't needed ───────────────────────────────────────────
 

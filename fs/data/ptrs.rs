@@ -2,7 +2,7 @@
 //! stripes: the key types flagged BkeyTypeFlags::ptrs. A key
 //! narrows to one with arm::<Ptrs>() - BkeySC<'_, Ptrs> and the rest, the
 //! same keys with the other arms dropped; each value type says where its
-//! extent entries are (PtrsBkey), and the entries - its pointers, and what
+//! extent entries are (PtrsEntries), and the entries - its pointers, and what
 //! applies to them - are walked as the arms they are (BkeyVPtrs).
 //!
 //! An entry's type is the lowest set bit of its first word; how long a type
@@ -31,7 +31,8 @@ use crate::debug::trace::events;
 use crate::typeinfo::{AccessError, ResolveError};
 use crate::types::{Le32, Le64};
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, EntryWalk, Validated};
+use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, EntryWalk, InPlace, Unvalidated,
+                            Validated};
 use crate::data_structures::array_vec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
@@ -273,11 +274,14 @@ impl EntryWalk for EntriesMut<'_> {
 
 // ── keys with pointers ───────────────────────────────────────────────────
 
-/// A value with pointers: where its extent entries are, and how one of its
-/// pointers is dropped.
-pub trait PtrsBkey: BkeyVal<State = Validated> {
+/// A value with pointers, in either state: where its extent entries are -
+/// which the walk checks each of against the value.
+pub trait PtrsEntries: BkeyVal {
     fn entry_range(k: BkeySC<'_, Self>) -> Range<usize>;
+}
 
+/// A value with pointers, Validated: how one of its pointers is dropped.
+pub trait PtrsBkey: PtrsEntries + BkeyVal<State = Validated> {
     /// Drop the pointer at @at, and what was only its; a type whose entries
     /// can't be dropped overrides it.
     fn drop_ptr_noerror(k: BkeyS<'_, Self>, fs: &Fs, at: EntryPos) {
@@ -289,11 +293,13 @@ pub trait PtrsBkey: BkeyVal<State = Validated> {
 /// The types whose extent entries run from their start[] to the value's end.
 macro_rules! entries_to_end {
     ($($ty:ident),*) => { $(
-        impl PtrsBkey for c::$ty<Validated> {
+        impl<S: KeyState> PtrsEntries for c::$ty<S> {
             fn entry_range(k: BkeySC<'_, Self>) -> Range<usize> {
                 offset_of!(c::$ty, repr.start)..k.val_bytes().len()
             }
         }
+
+        impl PtrsBkey for c::$ty<Validated> {}
     )* };
 }
 entries_to_end!(BtreePtr, BtreePtrV2, Extent, ReflinkV);
@@ -301,12 +307,15 @@ entries_to_end!(BtreePtr, BtreePtrV2, Extent, ReflinkV);
 /// A stripe's are its ptrs[nr_blocks] - cut short at the value's end: to_text
 /// and swab run before validate has checked nr_blocks against it, or that
 /// there's a stripe header to read it from - none, if there isn't.
-impl PtrsBkey for c::Stripe<Validated> {
+impl<S: KeyState + InPlace> PtrsEntries for c::Stripe<S> {
     fn entry_range(k: BkeySC<'_, Self>) -> Range<usize> {
         let start = offset_of!(c::Stripe, repr.ptrs);
         let Some(s) = Self::arm_ref(k.val_bytes()) else { return start..start };
         start..(start + s.nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(k.val_bytes().len())
     }
+}
+
+impl PtrsBkey for c::Stripe<Validated> {
 
     /// A stripe's pointers are its blocks, which can't be dropped: one is made
     /// to point nowhere, its dev BCH_SB_MEMBER_INVALID - for fsck's repairs.
@@ -332,16 +341,14 @@ bkey_family!(
     /// BkeyS<'_, BtreePtrs>, &BkeyI<BtreePtrs>.
     BtreePtrs: btree_ptr);
 
-/// A family of key types with pointers is a PtrsBkey as its member is.
+/// A family of key types with pointers is a PtrsEntries, in either state, and
+/// a PtrsBkey, as its members are.
 macro_rules! ptrs_bkey {
-    ($family:ident, $typed:ident; $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
-        impl PtrsBkey for $family {
-            fn entry_range(k: BkeySC<'_, $family>) -> Range<usize> {
-                match k.typed() {
-                    $($typed::$name(k) => PtrsBkey::entry_range(k),)*
-                }
-            }
+    ($family:ident, $types:ident, $typed:ident; $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
+        ptrs_bkey!(@entries $types, $typed, Validated; $($name),*);
+        ptrs_bkey!(@entries $types, $typed, Unvalidated; $($name),*);
 
+        impl PtrsBkey for $family {
             fn drop_ptr_noerror(k: BkeyS<'_, $family>, fs: &Fs, at: EntryPos) {
                 match k.typed() {
                     $($typed::$name(k) => PtrsBkey::drop_ptr_noerror(k, fs, at),)*
@@ -349,10 +356,19 @@ macro_rules! ptrs_bkey {
             }
         }
     };
+    (@entries $types:ident, $typed:ident, $st:ident; $($name:ident),*) => {
+        impl PtrsEntries for FamilyVal<$types, $st> {
+            fn entry_range(k: BkeySC<'_, Self>) -> Range<usize> {
+                match k.typed() {
+                    $($typed::$name(k) => PtrsEntries::entry_range(k),)*
+                }
+            }
+        }
+    };
 }
-c::BkeyType_arms!(cstruct_macros::xmacro_select [ptrs => ptrs_bkey { Ptrs, PtrsTyped; }]);
-c::BkeyType_arms!(cstruct_macros::xmacro_select [ptrs_mut => ptrs_bkey { PtrsMut, PtrsMutTyped; }]);
-c::BkeyType_arms!(cstruct_macros::xmacro_select [btree_ptr => ptrs_bkey { BtreePtrs, BtreePtrsTyped; }]);
+c::BkeyType_arms!(cstruct_macros::xmacro_select [ptrs => ptrs_bkey { Ptrs, PtrsTypes, PtrsTyped; }]);
+c::BkeyType_arms!(cstruct_macros::xmacro_select [ptrs_mut => ptrs_bkey { PtrsMut, PtrsMutTypes, PtrsMutTyped; }]);
+c::BkeyType_arms!(cstruct_macros::xmacro_select [btree_ptr => ptrs_bkey { BtreePtrs, BtreePtrsTypes, BtreePtrsTyped; }]);
 
 const _: () = {
     assert!(types_with(BkeyTypeFlags::ptrs_mut) & !types_with(BkeyTypeFlags::ptrs) == 0,
@@ -366,14 +382,15 @@ unsafe impl<S: KeyState> InFamily<PtrsTypes> for FamilyVal<BtreePtrsTypes, S> {}
 // SAFETY: as above
 unsafe impl<S: KeyState> InFamily<PtrsMutTypes> for FamilyVal<BtreePtrsTypes, S> {}
 
-/// The extent entries of a key with pointers, in whichever form it's held:
-/// any BkeyV whose value is a PtrsBkey - armed to Ptrs, or to one of them.
-pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
+/// The extent entries of a key with pointers, in whichever form it's held and
+/// whatever its state: any BkeyV whose value is a PtrsEntries - armed to
+/// Ptrs, or to one of them.
+pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     /// Its extent entries' bytes, what bkey_ptrs_c() spans: empty for a value
     /// too short to hold them.
     fn entry_bytes(&self) -> &[u8] {
         let k = self.as_sc();
-        k.val_bytes().get(<Self::V as PtrsBkey>::entry_range(k)).unwrap_or_default()
+        k.val_bytes().get(<Self::V as PtrsEntries>::entry_range(k)).unwrap_or_default()
     }
 
     fn extent_entries(&self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'_>> {
@@ -382,7 +399,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
 
     /// extent_entries(), each with where it is.
     fn extent_entries_at(&self, fs: &Fs) -> impl Iterator<Item = (EntryPos, ExtentEntry<'_>)> {
-        let start = <Self::V as PtrsBkey>::entry_range(self.as_sc()).start;
+        let start = <Self::V as PtrsEntries>::entry_range(self.as_sc()).start;
         Entries::new(EntrySizes::of(fs), self.entry_bytes()).with_offsets()
             .map(move |(at, (ty, b, stop))| (EntryPos((start + at) / 8), ExtentEntry::new(ty, b, stop)))
     }
@@ -543,7 +560,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     fn extent_entries_mut_at(&mut self, fs: &Fs) -> impl Iterator<Item = (EntryPos, ExtentEntryMut<'_>)>
     where Self: BkeyVMut
     {
-        let range = <Self::V as PtrsBkey>::entry_range(self.as_sc());
+        let range = <Self::V as PtrsEntries>::entry_range(self.as_sc());
         let start = range.start;
         let b = self.as_s().into_val_bytes_mut().get_mut(range).unwrap_or_default();
         EntriesMut::new(EntrySizes::of(fs), b).with_offsets()
@@ -572,7 +589,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     /// Drop the pointer at @at, as its type does - a stripe's can't be, and is
     /// made to point nowhere: bch2_bkey_drop_ptr_noerror().
     fn drop_ptr_noerror(&mut self, fs: &Fs, at: EntryPos)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         <Self::V as PtrsBkey>::drop_ptr_noerror(self.as_s(), fs, at);
     }
@@ -581,7 +598,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     /// whose redundancy it keeps: then it's made to point nowhere, its dev
     /// BCH_SB_MEMBER_INVALID. bch2_bkey_drop_ptr().
     fn drop_ptr(&mut self, fs: &Fs, at: EntryPos)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         let dev = self.ptrs_decoded(fs).find(|p| p.pos == at)
             .expect("a pointer at the position to drop").p.ptr.dev();
@@ -596,7 +613,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     /// drop_ptr_noerror() each pointer @cond picks, the walk restarted after
     /// each: bch2_bkey_drop_ptrs_noerror().
     fn drop_ptrs_noerror(&mut self, fs: &Fs, mut cond: impl FnMut(&DecodedPtr<'_>) -> bool)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         while let Some(at) = { let at = self.ptrs_decoded(fs).find(|p| cond(p)).map(|p| p.pos); at } {
             self.drop_ptr_noerror(fs, at);
@@ -605,7 +622,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
 
     /// drop_ptrs_noerror(), with drop_ptr(): bch2_bkey_drop_ptrs().
     fn drop_ptrs(&mut self, fs: &Fs, mut cond: impl FnMut(&DecodedPtr<'_>) -> bool)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         while let Some(at) = { let at = self.ptrs_decoded(fs).find(|p| cond(p)).map(|p| p.pos); at } {
             self.drop_ptr(fs, at);
@@ -614,14 +631,14 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
 
     /// Its pointers to @dev: bch2_bkey_drop_device_noerror().
     fn drop_device_noerror(&mut self, fs: &Fs, dev: u32)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         self.drop_ptrs_noerror(fs, |p| u32::from(p.p.ptr.dev()) == dev);
     }
 
     /// Its pointers to @dev, with drop_ptr(): bch2_bkey_drop_device().
     fn drop_device(&mut self, fs: &Fs, dev: u32)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         self.drop_ptrs(fs, |p| u32::from(p.p.ptr.dev()) == dev);
     }
@@ -631,7 +648,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     /// @why: drop_cached_pointer_trace(). Not in a read-side section, as C's
     /// is: the trace's printbuf allocates.
     fn drop_cached_ptr(&mut self, fs: &Fs, at: EntryPos, why: &str)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         let k = self.as_sc();
         let ptr = *self.ptrs_decoded(fs).find(|d| d.pos == at)
@@ -662,7 +679,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
 
     /// Drops the cached pointers it shouldn't have.
     fn drop_extra_cached_ptrs(&mut self, fs: &Fs, opts: &c::bch_inode_opts)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         while let Some((at, why)) = self.cached_ptr_to_drop(fs, opts) {
             self.drop_cached_ptr(fs, at, why);
@@ -677,7 +694,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     /// where this panics; only cached pointers are dropped, and the callers
     /// pass pointers that aren't.
     fn set_cached(&mut self, fs: &Fs, opts: &c::bch_inode_opts, dev: u32)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         // C's pointer to it, forgotten once a drop moves the entries
         let mut ptr_known = true;
@@ -741,7 +758,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     /// that aren't there, which has_stale_ptrs() doesn't count:
     /// __bch2_bkey_drop_stale_ptrs().
     fn drop_stale_ptrs(&mut self, fs: &Fs)
-    where Self: BkeyVMut
+    where Self: BkeyVMut, Self::V: PtrsBkey
     {
         let rcu = read_lock();
         self.drop_ptrs_noerror(fs, |d| {
@@ -752,7 +769,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     }
 }
 
-impl<K: BkeyV<V: PtrsBkey>> BkeyVPtrs for K {}
+impl<K: BkeyV<V: PtrsEntries>> BkeyVPtrs for K {}
 
 /// Why @d shouldn't be cached, if it's a cached pointer - @have_cached if one
 /// before it is: maybe_drop_cached_ptr()'s tests. A bucket its device doesn't

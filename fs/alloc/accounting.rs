@@ -53,6 +53,7 @@ use crate::alloc::accounting_mem::{self, mem_read, mem_read_locked, usage_of, De
 use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{replicas_acct, SbEntry};
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::AnyKeySC;
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyTag, POS_MIN, ValidateFlags, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
 use crate::c;
@@ -305,7 +306,7 @@ impl BkeyOps for c::Accounting {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         key_to_text(out, fs, &DiskAccountingPos::from_bpos(k.k.p));
         write!(out, " {}", Join(" ", k.arm::<Accounting>().expect("an accounting key").v().d.iter().map(|&d| d as i64)));
     }

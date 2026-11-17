@@ -33,6 +33,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::AnyKeySC;
+use crate::util::vstructs::Unvalidated;
 use crate::c;
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
@@ -40,8 +42,8 @@ use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::os::kernel::random_u64;
 use crate::{bch_err_ratelimited, bch_warn, trans_inconsistent};
-use crate::btree::bkey::{bkey_family, pos, spos, BKEY_U64S, BkeyFamily, BkeyI, BkeyS, BkeySC, POS_MIN, SPOS_MAX,
-                         BkeyOps};
+use crate::btree::bkey::{bkey_family, pos, spos, BKEY_U64S, BkeyFamily, BkeyI, BkeyS, BkeySC, FamilyVal, KeyState,
+                         POS_MIN, SPOS_MAX, BkeyOps};
 use crate::init::passes::{self, RecoveryPass};
 use crate::util::varint;
 use core::mem::{offset_of, align_of};
@@ -250,7 +252,7 @@ fn v1_field(in_: &[u8], _bits: u32) -> Option<(u128, usize)> {
 // result_large_err: Ok is the same bch_inode_unpacked, so boxing Err would
 // shrink nothing
 #[allow(clippy::type_complexity, clippy::result_large_err)]
-fn try_unpack(k: BkeySC<'_, Inodes>)
+fn try_unpack(k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>)
     -> Result<c::bch_inode_unpacked, (c::bch_inode_unpacked, usize)>
 {
     let mut u = c::bch_inode_unpacked {
@@ -319,7 +321,8 @@ fn try_unpack(k: BkeySC<'_, Inodes>)
 ///
 /// Not the value's to_text: an inode's unpacks it, and would fail here again.
 #[cold]
-fn unpack_error(fs: &Fs, k: BkeySC<'_, Inodes>, u: &c::bch_inode_unpacked, fieldnr: usize) {
+fn unpack_error(fs: &Fs, k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>, u: &c::bch_inode_unpacked,
+                fieldnr: usize) {
     macro_rules! names {
         ($($name:ident = $bits:literal,)*) => { &[$(stringify!($name),)*] };
     }
@@ -354,7 +357,8 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_, Inodes>, u: &c::bch_inode_unpacked, field
 
 /// Unpack @k. A field that doesn't decode is reported, and left zero with the
 /// fields after it.
-pub fn unpack(fs: &Fs, k: BkeySC<'_, Inodes>) -> c::bch_inode_unpacked {
+pub fn unpack<S: KeyState>(fs: &Fs, k: BkeySC<'_, FamilyVal<InodesTypes, S>>) -> c::bch_inode_unpacked {
+    let k = k.family_as_read();
     try_unpack(k).unwrap_or_else(|(u, fieldnr)| {
         unpack_error(fs, k, &u, fieldnr);
         u
@@ -445,7 +449,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     {
-        let u = try_unpack(BkeySC::from(&out))
+        let u = try_unpack(BkeySC::from(&out).family_as_read())
             .unwrap_or_else(|(_, fieldnr)| panic!("packed inode doesn't unpack, at field {fieldnr}"));
 
         macro_rules! check {
@@ -806,7 +810,7 @@ fn validate_str_hash(v: &BkeyValidate<'_, '_>, str_hash: c::StrHashKind) -> Resu
 }
 
 #[cold]
-fn inode_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+fn inode_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
     let k = k.arm::<Inodes>().expect("an inode type's to_text");
     // with no filesystem - show-super's sb_clean - nothing to report a bad one to
     let inode = match fs {
@@ -822,7 +826,7 @@ impl BkeyOps for c::Inode {
         validate_pos(v)
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         inode_to_text(out, fs, k)
     }
 
@@ -835,7 +839,7 @@ impl BkeyOps for c::InodeV2 {
         validate_pos(v)
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         inode_to_text(out, fs, k)
     }
 
@@ -857,7 +861,7 @@ impl BkeyOps for c::InodeV3 {
         validate_pos(v)
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         inode_to_text(out, fs, k)
     }
 
@@ -871,7 +875,7 @@ impl BkeyOps for c::InodeGeneration {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let generation = (k.arm::<c::InodeGeneration>().expect("an inode_generation").v().bi_generation).get();
         write!(out, "generation: {generation}");
     }
@@ -1100,7 +1104,7 @@ impl BkeyOps for c::InodeAllocCursor {
 
     /// The cursor, and the range it hands out.
     #[cold]
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let v = k.arm::<c::InodeAllocCursor>().expect("an inode alloc cursor").v();
         let idx = v.idx.get();
 
@@ -2005,7 +2009,7 @@ mod tests {
     fn pack_unpack_round_trip() {
         let u = sample();
         let packed = pack(&u);
-        let v = try_unpack(BkeySC::from(&packed)).expect("unpacks");
+        let v = try_unpack(BkeySC::from(&packed).family_as_read()).expect("unpacks");
 
         assert_eq!(v.bi_inum, u.bi_inum);
         assert_eq!(v.bi_hash_seed, u.bi_hash_seed);
@@ -2032,7 +2036,7 @@ mod tests {
         let nr_fields = packed.inode.v.nr_fields();
         set_fields_len(&mut packed, 8, nr_fields);
 
-        let (v, fieldnr) = try_unpack(BkeySC::from(&packed))
+        let (v, fieldnr) = try_unpack(BkeySC::from(&packed).family_as_read())
             .expect_err("a truncated value doesn't unpack");
 
         assert_eq!(fieldnr, 1);
@@ -2057,7 +2061,7 @@ mod tests {
         len += varint::encode(&mut packed._pad[len..], 1 << 40);
         set_fields_len(&mut packed, len, 5);
 
-        let (v, fieldnr) = try_unpack(BkeySC::from(&packed))
+        let (v, fieldnr) = try_unpack(BkeySC::from(&packed).family_as_read())
             .expect_err("an oversized field doesn't unpack");
         assert_eq!(fieldnr, 4);
         assert_eq!(v.bi_uid, 0);

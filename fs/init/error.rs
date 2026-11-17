@@ -31,7 +31,7 @@
 
 use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
-use crate::btree::bkey::{pos, BkeySC, POS_MIN, ValidateFlags};
+use crate::btree::bkey::{pos, AnyKeySC, BkeySC, BkeyVal, POS_MIN, ValidateFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};use crate::c;
 use crate::errcode::{Errcode, BchError};
@@ -45,6 +45,7 @@ use crate::util::printbuf::Msg;
 use crate::util::prompt::{Choice, Prompt, Question, Reply};
 use crate::os::workqueue::Queue;
 use crate::util::{Printbuf, ToText};
+use crate::util::vstructs::Unvalidated;
 use core::ffi::{c_ulong, CStr};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
@@ -270,11 +271,18 @@ pub fn fs_fatal_error(fs: &Fs, from: &CStr, msg: &dyn ToText) {
 }
 
 /// What C's bkey_fsck_err() finds by name in a key type's validate: c, k,
-/// from.
+/// from. The key as read: validating it is what finds out whether it's
+/// valid.
 pub struct BkeyValidate<'a, 'k> {
     pub fs:   &'a Fs,
-    pub k:    BkeySC<'k>,
+    pub k:    AnyKeySC<'k, Unvalidated>,
     pub from: &'a c::bkey_validate_context,
+}
+
+impl<'a, 'k> BkeyValidate<'a, 'k> {
+    pub fn new<V: ?Sized + BkeyVal>(fs: &'a Fs, k: BkeySC<'k, V>, from: &'a c::bkey_validate_context) -> Self {
+        BkeyValidate { fs, k: k.as_read(), from }
+    }
 }
 
 /// The error validate returns: fsck_delete_bkey if the key is to be dropped -
@@ -693,7 +701,7 @@ fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: 
 /// The verdict on an invalid key - fsck_delete_bkey, at once, for a check
 /// that's silent, or an error silenced; else fsck_err_verdict()'s, offering
 /// to delete it - fixed without asking, but where it's a write's or a commit's.
-pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_context, err: SbErrorId,
+pub fn bkey_fsck_err_verdict(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, from: &c::bkey_validate_context, err: SbErrorId,
                              msg: &dyn ToText) -> BchError {
     let vflags = from.bits.flags();
     if vflags.contains(ValidateFlags::silent) {

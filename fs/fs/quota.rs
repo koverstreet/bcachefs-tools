@@ -14,7 +14,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::{BkeySC, BkeyWhole};
+use crate::btree::bkey::{AnyKeySC, BkeyWhole};
 use crate::c;
 use crate::util::vstructs::{Unvalidated, Validated};
 use crate::errcode::BchError;
@@ -157,7 +157,7 @@ impl crate::btree::bkey::BkeyOps for c::Quota {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let q = c::Quota::val_copy_pad(k).expect("a quota");
 
         for (c, counter) in q.c.iter().zip(COUNTERS) {
@@ -211,7 +211,7 @@ pub fn transfer(_fs: &Fs, _qtypes: u32, _dst: c::bch_qid, _src: c::bch_qid, _spa
 #[cfg(CONFIG_BCACHEFS_QUOTA)]
 mod vfs {
     use super::*;
-    use crate::btree::bkey::{pos, BkeyI, POS_MIN};
+    use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
     use crate::errcode::Errcode;

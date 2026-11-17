@@ -7,7 +7,7 @@
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllTypes, BkeyFamily, ByFlag, FamilyTypes, FamilyVal, InFamily, KeyState, BkeyS, BkeySC, BkeyV, BkeyVal,
                          BkeyVMut};
-use crate::btree::bkey::BkeyOps;
+use crate::btree::bkey::{AnyKeySC, BkeyOps};
 use crate::btree::trigger::Trigger;
 use crate::btree::iter::NoRoom;
 use crate::c;
@@ -18,7 +18,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::Validated;
+use crate::util::vstructs::{Unvalidated, Validated};
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
@@ -568,7 +568,7 @@ impl BkeyOps for c::Reservation {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let r = k.arm::<c::Reservation>().expect("a reservation").v();
 
         write!(out, "generation {} replicas {}", r.generation.get(), r.nr_replicas);

@@ -85,7 +85,7 @@ impl<'k> Dirent<'k> {
 impl<'k> From<BkeySC<'k, c::Dirent>> for Dirent<'k> {
     fn from(k: BkeySC<'k, c::Dirent>) -> Self {
         let v = k.v();
-        let names = RawNames::new(k.into()).names()
+        let names = RawNames::new(k).names()
             .expect("dirent names within the value, as validate checked");
         Dirent { k, v, names }
     }

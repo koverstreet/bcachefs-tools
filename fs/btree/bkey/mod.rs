@@ -64,7 +64,7 @@
 //! constraints; a key's length is validate's, as in C.
 //!
 //! **Methods by value type.** A value type's trait says what its keys can
-//! do - PtrsBkey, where its extent entries are - and a form trait gives it
+//! do - PtrsEntries, where its extent entries are - and a form trait gives it
 //! to every form of key whose V has it: BkeyVPtrs (the entry walk),
 //! BkeyVExtents (cut, on a key armed to Extents). bkey::prelude has the
 //! form traits.

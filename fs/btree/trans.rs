@@ -985,7 +985,7 @@ impl BtreeTrans<'_> {
         /* from wherever an error's found - path table borrowed or not; this reads it and is done */
         for i in unsafe { self.updates_unguarded() } {
             let k = i.key();
-            let old = BkeySC { k: &i.old_k, v: i.old_v, iter: PhantomData, val: PhantomData };
+            let old: BkeySC<'_> = BkeySC { k: &i.old_k, v: i.old_v, iter: PhantomData, val: PhantomData };
 
             prt!(out, "update: btree={} cached={} ", i.bits.btree_id(), u32::from(i.bits.cached()));
             prt_symbol(&mut out, i.ip_allocated);

@@ -19,7 +19,8 @@
 //! borrowed, as a BkeySC.
 
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{bkey_eq, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
+use crate::btree::bkey::{bkey_eq, pos, AnyKeySC, BkeyI, BkeySC, BkeyV, POS_MIN};
+use crate::util::vstructs::Unvalidated;
 use crate::c;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{Errcode, BchError};
@@ -276,7 +277,7 @@ impl BkeyOps for c::Stripe {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         // the header's there - bch2_val_to_text() checks min_val_size, all of it,
         // before calling this - but not what's after it
         let s = k.arm::<c::Stripe>().expect("a stripe").v();

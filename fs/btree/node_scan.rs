@@ -503,7 +503,7 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
         let mut from = c::bkey_validate_context { level: (level + 1) as u8, btree, ..Default::default() };
         from.bits.set_from(c::BkeyValidateFrom::btree_node);
         assert!(crate::btree::bkey::bkey_validate(
-            &BkeyValidate { fs, k: k.as_bkey_i().as_sc().into(), from: &from }).is_ok());
+            &BkeyValidate::new(fs, k.as_bkey_i().as_sc(), &from)).is_ok());
 
         if *nodes_found == 0 {
             prt!(out, "recovering from btree node scan at btree={btree} level={level}\n");

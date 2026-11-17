@@ -6,7 +6,8 @@
 
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
+use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
+use crate::util::vstructs::Unvalidated;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
@@ -352,7 +353,7 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
 
 impl crate::btree::bkey::BkeyOps for c::LoggedOpStripeUpdate {
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let k = k.arm::<c::LoggedOpStripeUpdate>().expect("a stripe update op");
         let op = k.v();
 

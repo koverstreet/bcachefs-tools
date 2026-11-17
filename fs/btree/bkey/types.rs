@@ -103,6 +103,9 @@ pub struct BkeyI<V: ?Sized = FamilyVal<AllTypes>> {
 /// Any key, in state S: a keys container's entry, in the container's.
 pub type AnyKey<S> = BkeyI<FamilyVal<AllTypes, S>>;
 
+/// AnyKey, as a header and a value pointer.
+pub type AnyKeySC<'a, S> = BkeySC<'a, FamilyVal<AllTypes, S>>;
+
 /* a zeroed key, its u64s 0, is a header with no value - as val_bytes() has it */
 unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
     type Head = c::bkey_i;
@@ -133,6 +136,19 @@ impl<'a, V: ?Sized + BkeyVal> BkeySC<'a, V> {
 
     fn cast<W: ?Sized + BkeyVal>(self) -> BkeySC<'a, W> {
         BkeySC { k: self.k, v: self.v, iter: PhantomData, val: PhantomData }
+    }
+
+    /// Any key, as read - what every state implies: for what reads a key in
+    /// any, checking what it reads - printing it, validating it.
+    pub fn as_read(self) -> AnyKeySC<'a, Unvalidated> {
+        self.cast()
+    }
+}
+
+impl<'a, F: 'static, S: KeyState> BkeySC<'a, FamilyVal<F, S>> {
+    /// as_read(), of a key narrowed to family F: still F's.
+    pub fn family_as_read(self) -> BkeySC<'a, FamilyVal<F, Unvalidated>> {
+        self.cast()
     }
 }
 
@@ -505,7 +521,7 @@ pub unsafe trait BkeyWhole: Sized + BkeyTag + BkeyFamily<Validated: ArmRef>
 
     /// @k's value, if it's one, zero padded: it may predate fields Self has,
     /// which a reference would read past its end for.
-    fn val_copy_pad(k: BkeySC<'_>) -> Option<Self> {
+    fn val_copy_pad<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> Option<Self> {
         if !k.k.key_type().is::<Self>() {
             return None;
         }

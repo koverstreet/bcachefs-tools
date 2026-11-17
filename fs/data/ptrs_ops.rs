@@ -5,10 +5,11 @@
 use super::*;
 use crate::init::passes::RecoveryPass;
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
-use crate::data::durability::BkeyVDurability;
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
-use crate::btree::bkey::{BkeyOps, ValidateFlags};
+use crate::data::durability::BkeyVDurability;
+use crate::btree::bkey::{AnyKeySC, BkeyOps, ValidateFlags};
+use crate::util::vstructs::Unvalidated;
 use crate::btree::trigger::Trigger;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::rcu::ReadGuard;
@@ -19,7 +20,8 @@ use crate::format::{Btree, CompressionType, BkeyType, MetadataVersion};
 
 /// A pointer, against the rest of the key and its device: extent_ptr_validate().
 /// One to a device that isn't there passes - check_fix_ptrs() repairs it.
-fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, Ptrs>, ptr: &c::bch_extent_ptr,
+fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, FamilyVal<PtrsTypes, Unvalidated>>,
+                       ptr: &c::bch_extent_ptr,
                        size_ondisk: u32) -> Result<(), BchError> {
     if u32::from(ptr.dev()) == c::BCH_SB_MEMBER_INVALID {
         return Ok(());
@@ -66,7 +68,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let (fs, k) = (v.fs, v.k);
     let p = k.arm::<Ptrs>().expect("a key with pointers");
     let is_btree_ptr = matches!(k.k.key_type(), BkeyType::btree_ptr | BkeyType::btree_ptr_v2);
-    let range = Ptrs::entry_range(p);
+    let range = PtrsEntries::entry_range(p);
     let entries_start = k.val_bytes().as_ptr() as usize + range.start;
     let entries_u64s = range.len() / 8;
 
@@ -243,13 +245,13 @@ fn crc_unpacked_to_text(out: &mut Printbuf, crc: &c::bch_extent_crc_unpacked) {
 /// prints keys validate rejected - that's what it's for - so an entry past
 /// the end of the value is reported, not read, and one of a type this code
 /// doesn't know ends it.
-pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
     let Some(fs) = fs else {
         write!(out, "no filesystem object available");
         return;
     };
     let p = k.arm::<Ptrs>().expect("a key with pointers");
-    let entries_start = k.val_bytes().as_ptr() as usize + Ptrs::entry_range(p).start;
+    let entries_start = k.val_bytes().as_ptr() as usize + PtrsEntries::entry_range(p).start;
 
     let past_end = p.extent_entries(fs).find_map(|e| match e {
         ExtentEntry::PastEnd { bytes, .. } => Some((bytes.as_ptr() as usize - entries_start) / 8),
@@ -327,7 +329,7 @@ impl BkeyOps for c::BtreePtr {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         bkey_ptrs_to_text(out, fs, k)
     }
 
@@ -359,7 +361,7 @@ impl BkeyOps for c::BtreePtrV2 {
     #[cold]
     /// A btree_ptr_v2: its node's seq, how much of it is written and its
     /// min_key, then its pointers.
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let bp = k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2").v();
 
         crate::prt!(out, "\nseq {:x} written {} min_key {}{} ",
@@ -397,7 +399,7 @@ impl BkeyOps for c::Extent {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         bkey_ptrs_to_text(out, fs, k)
     }
 

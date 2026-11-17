@@ -479,7 +479,7 @@ use crate::accounting;
 use crate::alloc::check::need_discard_or_freespace_err;
 use crate::alloc::lru::{dev_remove_lrus, lru_change, LruId};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyWhole, POS_MIN, BkeyOps};
+use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyVal, BkeyWhole, POS_MIN, BkeyOps};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt, TransBkey,
                          UpdateTriggerFlags};
 use crate::btree::trigger::{Trigger, TriggerOp};
@@ -494,7 +494,7 @@ use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
 use crate::util::varint;
 use crate::util::Join;
-use crate::util::vstructs::{ArmRef, Validated};
+use crate::util::vstructs::{ArmRef, Unvalidated};
 use crate::util::backtrace::prt_current_backtrace;
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, btree_trans, prt};
@@ -581,12 +581,12 @@ macro_rules! alloc_v1_fields {
 c::BCH_ALLOC_FIELDS_V1!(alloc_v1_fields);
 
 impl AllocUnpacked {
-    fn v1(a: BkeySC<'_, c::Alloc<Validated>>) -> Self {
+    fn v1(a: BkeySC<'_, c::Alloc<Unvalidated>>) -> Self {
         let v = a.v();
         Self { generation: v.generation, ..Default::default() }.v1_fields(v.fields, &v.data)
     }
 
-    fn v2(a: BkeySC<'_, c::AllocV2<Validated>>) -> Option<Self> {
+    fn v2(a: BkeySC<'_, c::AllocV2<Unvalidated>>) -> Option<Self> {
         let v = a.v();
         Self {
             generation: v.generation,
@@ -596,7 +596,7 @@ impl AllocUnpacked {
         }.varint_fields(&v.data, v.nr_fields)
     }
 
-    fn v3(a: BkeySC<'_, c::AllocV3<Validated>>) -> Option<Self> {
+    fn v3(a: BkeySC<'_, c::AllocV3<Unvalidated>>) -> Option<Self> {
         let v = a.v();
         Self {
             journal_seq:  v.journal_seq.get(),
@@ -610,7 +610,7 @@ impl AllocUnpacked {
 
     /// @k, an alloc key before v4 - zeroed, if it isn't one: bch2_alloc_unpack().
     /// Validate has seen v2 and v3 unpack.
-    fn new(k: BkeySC<'_>) -> Self {
+    fn new(k: AnyKeySC<'_, Unvalidated>) -> Self {
         if let Some(a) = k.arm::<c::Alloc>() {
             Self::v1(a)
         } else if let Some(a) = k.arm::<c::AllocV2>() {
@@ -625,7 +625,7 @@ impl AllocUnpacked {
 
 /// v1's value size, in u64s, by the fields it says it has:
 /// bch_alloc_v1_val_u64s().
-fn alloc_v1_val_u64s(a: &c::Alloc<Validated>) -> usize {
+fn alloc_v1_val_u64s(a: &c::Alloc<Unvalidated>) -> usize {
     let fields: usize = ALLOC_V1_FIELD_BYTES.iter().enumerate()
         .filter(|&(i, _)| a.fields & 1 << i != 0)
         .map(|(_, &bytes)| bytes)
@@ -638,7 +638,8 @@ fn alloc_v1_val_u64s(a: &c::Alloc<Validated>) -> usize {
 /// Alloc key @k, of whatever version, as a current one - one that isn't an
 /// alloc key, the slot of a bucket without one, as a zeroed one:
 /// bch2_alloc_to_v4().
-pub fn alloc_to_v4(k: BkeySC<'_>) -> c::AllocV4 {
+pub fn alloc_to_v4<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> c::AllocV4 {
+    let k = k.as_read();
     // A v4 by its length: fields past it are zero, as written before they
     // existed. Not by BACKPOINTERS_START - a key widened without updating
     // it has fields written past it since
@@ -767,7 +768,7 @@ fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[cold]
-fn alloc_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+fn alloc_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
     alloc_v4_to_text(out, fs, k, &alloc_to_v4(k));
 }
 
@@ -776,7 +777,7 @@ impl BkeyOps for c::Alloc {
         alloc_v1_validate(v)
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         alloc_to_text(out, fs, k)
     }
 
@@ -789,7 +790,7 @@ impl BkeyOps for c::AllocV2 {
         bkey_fsck_err_on!(v, AllocUnpacked::v2(a).is_none(), id::alloc_v2_unpack_error, "unpack error")
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         alloc_to_text(out, fs, k)
     }
 
@@ -802,7 +803,7 @@ impl BkeyOps for c::AllocV3 {
         bkey_fsck_err_on!(v, AllocUnpacked::v3(a).is_none(), id::alloc_v3_unpack_error, "unpack error")
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         alloc_to_text(out, fs, k)
     }
 
@@ -815,7 +816,7 @@ impl BkeyOps for c::AllocV4 {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let a = c::AllocV4::val_copy_pad(k).expect("an alloc_v4");
         alloc_v4_to_text(out, fs, k, &a);
     }
@@ -847,7 +848,7 @@ impl BkeyOps for c::AllocV4 {
 
 /// @a, read from alloc key @k: what's printed of a v4's later fields depends
 /// on @k's length, whatever its version.
-fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>, a: &c::AllocV4) {
+fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>, a: &c::AllocV4) {
     let has = |at: usize, len: usize| k.k.val_bytes() >= at + len;
     let ca = fs.and_then(|fs| fs.dev_get(k.k.p.inode as u32));
 
@@ -1081,7 +1082,7 @@ impl BkeyOps for c::BucketGens {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         if let Some(g) = k.arm::<c::BucketGens>() {
             prt!(out, "{}", Join(" ", g.v().gens.iter()));
         }

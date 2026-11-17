@@ -9,6 +9,7 @@
 //! with an empty name - and are acl.rs's.
 
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::AnyKeySC;
 pub use crate::cstructs::fs_xattr_format::XattrType;
 use core::mem::{offset_of, size_of};
 
@@ -24,7 +25,7 @@ use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
 use crate::util::os_str::{OsStr, OsStrExt};
-use crate::util::vstructs::Validated;
+use crate::util::vstructs::{InPlace, Unvalidated, Validated};
 use crate::util::Printbuf;
 use crate::format::Btree;
 
@@ -118,11 +119,13 @@ impl XattrType {
 }
 
 /// An xattr's value, as C reads it: valid, its lengths within it.
-impl c::Xattr<Validated> {
+impl<S: InPlace> c::Xattr<S> {
     pub fn ty(&self) -> XattrType {
         XattrType(self.x_type as u32)
     }
+}
 
+impl c::Xattr<Validated> {
     pub fn name(&self) -> &[u8] {
         &self.x_name_and_value[..self.x_name_len as usize]
     }
@@ -131,10 +134,6 @@ impl c::Xattr<Validated> {
     fn key(&self) -> (XattrType, &[u8]) {
         (self.ty(), self.name())
     }
-}
-
-fn xattr(k: BkeySC<'_>) -> &c::Xattr<Validated> {
-    k.arm::<c::Xattr>().expect("an xattr").v()
 }
 
 /// @k's value - @k an xattr, valid.
@@ -176,8 +175,8 @@ fn to_nul(b: &[u8]) -> &[u8] {
 
 /// @k, an xattr, as text: as bch2_xattr_to_text(). @k may not have passed
 /// validate: lengths past the value are cut to it.
-pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
-    let x = xattr(k);
+pub fn to_text(out: &mut Printbuf, k: AnyKeySC<'_, Unvalidated>) {
+    let x = k.arm::<c::Xattr>().expect("an xattr").v();
     let ty = x.ty();
 
     match ty.prefix() {
@@ -204,7 +203,7 @@ pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
 
 impl crate::btree::bkey::BkeyOps for c::Xattr {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        let x = xattr(v.k);
+        let x = v.k.arm::<c::Xattr>().expect("an xattr").v();
         let name_len = x.x_name_len as usize;
         let val_len  = x.x_val_len.get() as usize;
         let have     = v.k.val_bytes().len() / size_of::<u64>();
@@ -221,12 +220,14 @@ impl crate::btree::bkey::BkeyOps for c::Xattr {
         bkey_fsck_err_on!(v, !x.ty().known(), id::xattr_invalid_type,
                           "invalid type ({})", x.x_type)?;
 
-        bkey_fsck_err_on!(v, x.name().contains(&0), id::xattr_name_invalid_chars,
+        // within the value, by the size checked above
+        let name = &x.x_name_and_value[..name_len];
+        bkey_fsck_err_on!(v, name.contains(&0), id::xattr_name_invalid_chars,
                           "xattr name has invalid characters")
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         to_text(out, k)
     }
 }
@@ -361,6 +362,11 @@ pub use vfs::*;
 #[cfg(kernel)]
 mod vfs {
     use super::*;
+
+    fn xattr(k: BkeySC<'_>) -> &c::Xattr<Validated> {
+        k.arm::<c::Xattr>().expect("an xattr").v()
+    }
+
     use crate::format::MetadataVersion;
     use crate::format::BkeyType;
     use core::ffi::{c_int, c_void, CStr};

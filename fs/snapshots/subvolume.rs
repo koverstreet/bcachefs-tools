@@ -18,8 +18,9 @@
 //! subvolume, maintained by the trigger.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyWhole, POS_MIN, BkeyOps};
-use crate::util::vstructs::{Validated, Whole};
+use crate::btree::bkey::AnyKeySC;
+use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyVal, BkeyWhole, POS_MIN, BkeyOps};
+use crate::util::vstructs::{Unvalidated, Validated, Whole};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
@@ -218,7 +219,7 @@ where
 // ── The state field ──────────────────────────────────────────────────────
 
 /// Zero padded past the fields an older key lacks.
-pub fn val(k: BkeySC<'_>) -> Option<c::Subvolume> {
+pub fn val<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> Option<c::Subvolume> {
     c::Subvolume::val_copy_pad(k)
 }
 
@@ -308,7 +309,7 @@ impl BkeyOps for c::Subvolume {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let s = val(k).expect("a subvolume");
 
         write!(out, "root {} snapshot id {}", s.inode.get(), s.snapshot.get());

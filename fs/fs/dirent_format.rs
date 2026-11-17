@@ -19,8 +19,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::AnyKeySC;
+use crate::util::vstructs::Unvalidated;
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{BkeySC, ValidateFlags};
+use crate::btree::bkey::{BkeySC, BkeyVal, ValidateFlags};
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::TransBkey;
 use crate::c;
@@ -195,7 +197,8 @@ pub struct RawNames<'k> {
 impl<'k> RawNames<'k> {
     /// @k, a dirent at least min_val_size long, as bkey validate and to_text
     /// check before calling the type's.
-    pub fn new(k: BkeySC<'k>) -> Self {
+    pub fn new<V: ?Sized + BkeyVal>(k: BkeySC<'k, V>) -> Self {
+        let k = k.as_read();
         let d = k.arm::<c::Dirent>().expect("a dirent").v();
         let v = k.val_bytes();
         let casefold = d.d_casefold() != 0;
@@ -247,7 +250,7 @@ impl<'k> RawNames<'k> {
 
 /// @k, a dirent, as text: as bch2_dirent_to_text(). @k may not have passed
 /// validate - a name that overruns the value is said to, not printed.
-pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
+pub fn to_text(out: &mut Printbuf, k: AnyKeySC<'_, Unvalidated>) {
     let d = k.arm::<c::Dirent>().expect("a dirent").v();
     let raw = RawNames::new(k);
 
@@ -284,25 +287,23 @@ pub fn d_type_str(d_type: u8) -> &'static str {
 
 impl crate::btree::bkey::BkeyOps for Dirent {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        validate(v).map(|_| ())
+        validate(v)
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         to_text(out, k)
     }
 }
 
 // ── Validate: where a dirent becomes trusted ─────────────────────────────
 
-/// Check @v.k, a dirent: the dirent, now valid, or the error the key fails
-/// with.
+/// Check @v.k, a dirent: the error the key fails with, if it does.
 ///
 /// Only new keys are held to BCH_NAME_MAX: it used to be bigger, and older
 /// keys can have longer names.
-pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<super::Dirent<'k>, BchError> {
-    let k = v.k.arm::<c::Dirent>().expect("a dirent");
-    let d = k.v();
+pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+    let d = v.k.arm::<c::Dirent>().expect("a dirent").v();
     let raw = RawNames::new(v.k);
 
     bkey_fsck_err_on!(v, raw.name_len == 0, id::dirent_empty_name,
@@ -345,7 +346,7 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<super::Dirent<'k>, BchEr
                           "dirent has stray data after cf name's NUL")?;
     }
 
-    Ok(super::Dirent { k, v: d, names })
+    Ok(())
 }
 
 // ── Writing fields, for kvdb ─────────────────────────────────────────────

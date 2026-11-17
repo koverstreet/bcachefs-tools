@@ -867,7 +867,7 @@ impl BtreeTrans<'_> {
                 validate_context.level = i.level();
                 validate_context.btree = i.btree_id();
 
-                bkey_validate(&BkeyValidate { fs, k: BkeySC::from(i.key()), from: &validate_context })
+                bkey_validate(&BkeyValidate::new(fs, BkeySC::from(i.key()), &validate_context))
                     .map_err(|err| self.commit_invalid_key(i, err))?;
                 self.insert_entry_checks(paths, i);
             }

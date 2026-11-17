@@ -7,7 +7,7 @@
 //! checksum can't say which of its keys went bad.
 
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets};
+use crate::btree::bkey::{AnyKeySC, BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, ByFlag, FamilyVal, FieldOffsets};
 use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::bkey::BkeyOps;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
@@ -21,7 +21,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::util::backref::BackRef;
 use crate::util::refcount::TryRefcount;
 use crate::util::task::spawn_static;
-use crate::util::vstructs::{cast_plain, cast_plain_mut};
+use crate::util::vstructs::{cast_plain, cast_plain_mut, Unvalidated};
 use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err_ratelimited, bkey_fsck_err_on, btree_trans, prt};
@@ -50,7 +50,7 @@ pub struct InlineDataRef<'a> {
 
 impl<'a> InlineDataRef<'a> {
     /// None if it isn't inline data.
-    pub fn of(k: BkeySC<'a>) -> Option<Self> {
+    pub fn of<V: ?Sized + BkeyVal>(k: BkeySC<'a, V>) -> Option<Self> {
         let val = k.val_bytes();
         let csum = match CSUM.of(k.k) {
             Some(at) => Some(val.get(at..).and_then(cast_plain)?),
@@ -160,7 +160,7 @@ pub(crate) fn csum_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 impl BkeyOps for c::InlineData {
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         InlineDataRef::of(k).expect("inline data").to_text(out)
     }
 }
@@ -171,7 +171,7 @@ impl BkeyOps for c::InlineDataV2 {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         InlineDataRef::of(k).expect("inline data").to_text(out)
     }
 }

@@ -37,6 +37,7 @@
 use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::AnyKeySC;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyOps};
 use crate::btree::iter::{lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
@@ -59,7 +60,7 @@ use crate::os::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::data_structures::sort::heapsort_by;
-use crate::util::vstructs::plain_bytes;
+use crate::util::vstructs::{plain_bytes, Unvalidated};
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, fsck_err, prt};
 use core::ops::{ControlFlow, RangeInclusive};
@@ -127,7 +128,7 @@ impl BkeyOps for c::Backpointer {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let bp = k.arm::<c::Backpointer>().expect("a backpointer");
         let p = bp.k.p;
         let v = bp.v();

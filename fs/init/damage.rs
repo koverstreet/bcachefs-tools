@@ -30,6 +30,7 @@
 //! later, when the inodes btree can be walked: lost extents below.
 
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::AnyKeySC;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
@@ -42,7 +43,7 @@ use crate::snapshots::subvolume;
 use crate::util::{DateTime, Printbuf};
 use crate::util::alloc::{kvvec_insert, KVVec};
 use crate::os::kernel::ktime_get_real_seconds;
-use crate::util::vstructs::Validated;
+use crate::util::vstructs::{Unvalidated, Validated};
 use crate::{bch_err, bch_err_ratelimited, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
 use c::bch_sb_field_error_entry_v2 as Entry;
 use core::cmp::Ordering;
@@ -80,7 +81,7 @@ impl crate::btree::bkey::BkeyOps for c::Damage {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         for (i, e) in k.arm::<c::Damage>().expect("a damage key").v().entries.iter().enumerate() {
             if i != 0 {
                 out.newline();

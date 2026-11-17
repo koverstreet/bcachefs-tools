@@ -28,6 +28,7 @@
 //! it's held.
 
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{AnyKeySC, BkeyVal};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyI, BkeyS, BkeySC,
                          BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN};
@@ -47,7 +48,7 @@ use crate::snapshots::subvolume;
 use crate::types::{GenRadix, Le32, Le64};
 use crate::os::kernel::{fatal_signal_pending, unlikely};
 use crate::util::refcount::TryRefcount;
-use crate::util::vstructs::{cast_plain, cast_plain_mut};
+use crate::util::vstructs::{cast_plain, cast_plain_mut, Unvalidated};
 use crate::util::Printbuf;
 use crate::{bch_err, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err, prt};
 use core::cell::UnsafeCell;
@@ -69,15 +70,20 @@ fn refcount_offset(k: &c::bkey) -> usize {
     REFCOUNT.of(k).expect("an indirect extent's type has a refcount")
 }
 
+/// The refcount of indirect extent @k, in any state - its type's minimum value
+/// size, which to_text has checked, covers it.
+fn refcount<'a, V: ?Sized + BkeyVal>(k: BkeySC<'a, V>) -> &'a Le64 {
+    k.val_bytes().get(refcount_offset(k.k)..)
+        .and_then(cast_plain)
+        .unwrap_or_else(|| panic!("{}: {} bytes, shorter than validate passes", k.k, k.val_bytes().len()))
+}
+
 /// The refcount of an indirect extent, in whichever form it's held: any BkeyV
 /// armed to Indirect.
 pub trait BkeyVIndirect: BkeyV<V = Indirect> {
     /// bkey_refcount_c().
     fn refcount(&self) -> &Le64 {
-        let k = self.as_sc();
-        k.val_bytes().get(refcount_offset(k.k)..)
-            .and_then(cast_plain)
-            .unwrap_or_else(|| panic!("{}: {} bytes, shorter than validate passes", k.k, k.val_bytes().len()))
+        refcount(self.as_sc())
     }
 
     /// bkey_refcount().
@@ -396,7 +402,7 @@ impl BkeyOps for c::ReflinkP {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let p = k.arm::<c::ReflinkP>().expect("a reflink_p").v();
 
         write!(out, "idx {} front_pad {} back_pad {}", p.idx(), p.front_pad.get(), p.back_pad.get());
@@ -461,8 +467,8 @@ impl BkeyOps for c::ReflinkV {
     }
 
     #[cold]
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        write!(out, "refcount: {} ", k.arm::<Indirect>().expect("a reflink_v").refcount().get());
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
+        write!(out, "refcount: {} ", refcount(k).get());
 
         crate::data::ptrs::bkey_ptrs_to_text(out, fs, k);
     }
@@ -478,8 +484,8 @@ impl BkeyOps for c::ReflinkV {
 // ── indirect inline data ─────────────────────────────────────────────────
 
 #[cold]
-fn indirect_inline_data_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
-    write!(out, "refcount {} ", k.arm::<Indirect>().expect("indirect inline data").refcount().get());
+fn indirect_inline_data_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
+    write!(out, "refcount {} ", refcount(k).get());
     InlineDataRef::of(k).expect("inline data").to_text(out);
 }
 
@@ -488,7 +494,7 @@ impl BkeyOps for c::IndirectInlineData {
         indirect_pos_validate(v)
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         indirect_inline_data_to_text(out, fs, k)
     }
 
@@ -501,7 +507,7 @@ impl BkeyOps for c::IndirectInlineDataV2 {
         crate::data::inline_data::csum_validate(v)
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         indirect_inline_data_to_text(out, fs, k)
     }
 

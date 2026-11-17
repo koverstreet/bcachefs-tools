@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeyS, BkeySC, ValidateFlags};
+use crate::btree::bkey::{AnyKeySC, BkeyS, BkeySC, BkeyVal, ValidateFlags};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::btree::trigger::Trigger;
 use crate::c;
@@ -11,6 +11,7 @@ use crate::fs::Fs;
 use crate::init::error::BkeyValidate;
 use crate::prt;
 use crate::util::Printbuf;
+use crate::util::vstructs::Unvalidated;
 use core::fmt;
 
 /// A key type's methods, on its value's type: each a no-op where the type
@@ -22,7 +23,7 @@ pub trait BkeyOps {
 
     /// The value, which may not have validated: printing one that didn't is
     /// the point - only its minimum size is checked first.
-    fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _k: BkeySC<'_>) {}
+    fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _k: AnyKeySC<'_, Unvalidated>) {}
 
     /// Its fields byte swapped, read from a filesystem of the other endianness.
     fn swab(_fs: Option<&Fs>, _k: BkeyS<'_>) {}
@@ -49,7 +50,7 @@ pub trait BkeyOps {
 #[derive(Clone, Copy)]
 pub struct Ops {
     pub validate:     fn(&BkeyValidate<'_, '_>) -> Result<(), BchError>,
-    pub to_text:      fn(&mut Printbuf, Option<&Fs>, BkeySC<'_>),
+    pub to_text:      fn(&mut Printbuf, Option<&Fs>, AnyKeySC<'_, Unvalidated>),
     pub swab:         fn(Option<&Fs>, BkeyS<'_>),
     pub merge:        fn(&Fs, BkeyS<'_>, BkeySC<'_>) -> bool,
     pub compat:       fn(Btree, MetadataVersion, bool, bool, BkeyS<'_>),
@@ -71,7 +72,7 @@ impl BkeyOps for c::ExtentWhiteout {}
 impl BkeyOps for c::Error {
     /// Why it's an error: none in a value from before there was a reason.
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let err = k.val_bytes().get(core::mem::offset_of!(c::Error, repr.err)).copied().unwrap_or(0);
         crate::util::ToText::to_text(&ErrorKeyReason(err.into()), out)
     }
@@ -79,7 +80,7 @@ impl BkeyOps for c::Error {
 
 impl BkeyOps for c::Cookie {
     #[cold]
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         crate::prt!(out, "{}", k.arm::<c::Cookie>().expect("a cookie").v().cookie.get());
     }
 }
@@ -142,7 +143,8 @@ pub fn bkey_to_text(out: &mut Printbuf, k: &c::bkey) {
 /// The value, by its type's to_text - which may not have
 /// validated: printing one that didn't is the point.
 #[cold]
-pub fn val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+pub fn val_to_text<V: ?Sized + BkeyVal>(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_, V>) {
+    let k = k.as_read();
     /*
      * Printing a key that failed to validate is the entire point of being
      * able to print it, so val_to_text() methods run on unvalidated values
@@ -169,7 +171,8 @@ pub fn val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
 
 /// bch2_bkey_val_to_text(): the header, and the value.
 #[cold]
-pub fn bkey_val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+pub fn bkey_val_to_text<V: ?Sized + BkeyVal>(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_, V>) {
+    let k = k.as_read();
     if usize::from(k.k.u64s) < crate::btree::bkey::BKEY_U64S {
         prt!(out, "(invalid, u64s {} < {})", k.k.u64s, crate::btree::bkey::BKEY_U64S);
         return;
