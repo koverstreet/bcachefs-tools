@@ -20,7 +20,7 @@ use core::ptr::NonNull;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
-use crate::locking::{Locked, Mutex};
+use crate::locking::{ByteLock, Locked};
 use crate::sb::io::Holder;
 use crate::util::alloc::{Arc, KVVec};
 use crate::util::backref::BackRef;
@@ -101,9 +101,8 @@ struct Registry {
     opening: KVVec<OpeningEntry>,
 }
 
-// SAFETY: initialized by bch2_fs_registry_init(), at module init
-static REGISTRY: Locked<Mutex, Registry> =
-    unsafe { Locked::uninit(Registry { open: KVVec::new(), opening: KVVec::new() }, ()) };
+static REGISTRY: Locked<ByteLock, Registry> =
+    Locked::new_const(Registry { open: KVVec::new(), opening: KVVec::new() }, ());
 
 /// Woken when an Opening ends
 static OPENING_DONE: EventCount = EventCount::new();
@@ -249,11 +248,6 @@ impl Opening {
 /// Not pinned, as FsHandle::Open
 pub fn find(key: Key<'_>) -> Option<NonNull<Fs>> {
     REGISTRY.lock().find(key)
-}
-
-pub fn bch2_fs_registry_init() {
-    // SAFETY: module init, once
-    let Ok(()) = unsafe { REGISTRY.init_zeroed(c"REGISTRY", crate::new_lock!(@key)) };
 }
 
 pub fn register(fs: &Fs) -> Result<(), BchError> {

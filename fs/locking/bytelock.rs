@@ -51,6 +51,14 @@ unsafe impl Zeroable for ByteLock {}
 // what it holds is valid zeroed
 unsafe impl<G: Zeroable, P: Zeroable> Zeroable for Locked<ByteLock, G, P> {}
 
+impl<G, P> Locked<ByteLock, G, P> {
+    /// In a const, for a static: there's nothing to init().
+    pub const fn new_const(g: G, p: P) -> Self {
+        // SAFETY: zeroed, a ByteLock is unlocked and initialized
+        unsafe { Self::uninit(g, p) }
+    }
+}
+
 impl ByteLock {
     fn try_take(&self) -> bool {
         self.0.compare_exchange(UNLOCKED, LOCKED, Ordering::Acquire, Ordering::Relaxed).is_ok()

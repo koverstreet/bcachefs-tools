@@ -63,7 +63,6 @@ pub(crate) fn bcachefs_init(m: &ThisModule) -> Result<(), BchError> {
     crate::btree::bkey::pack_test();
 
     crate::util::futex::bch2_futex_init();
-    crate::init::registry::bch2_fs_registry_init();
 
     BCACHEFS_KOBJ.init();
 
