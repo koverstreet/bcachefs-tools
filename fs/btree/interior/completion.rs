@@ -441,7 +441,6 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
     };
     if let Some(Mode::Node(b)) = front_mode() {
         let b = unsafe { b.as_ref() };
-        let level = usize::from(b.c.level.get());
 
         /*
          * @b is the node we did the final insert into:
@@ -462,8 +461,13 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
          * leak write_blocked and leave b unwritable forever.
          * The reparent race is handled by the as->b recheck
          * under interior_updates.lock.
+         *
+         * Except that a reparent clears write_blocked for us, and
+         * then b can be freed and reused before we have its lock:
+         * its level is read once it's locked.
          */
         let _ = trans.node_locked_do(&b.c, SIX_LOCK_intent, 0, |paths, idx| {
+            let level = usize::from(b.c.level.get());
             trans.node_lock_write(paths, idx, level)?;
 
             let do_pin = {

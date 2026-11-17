@@ -528,16 +528,22 @@ impl BtreeTrans<'_> {
         ebug_assert!(level < c::BTREE_MAX_DEPTH as usize, "locking level {level}");
         self.verify_not_unlocked_or_in_restart();
 
-        if let Some(held) = b.lock.try_lock_as(ty) {
-            paths[path_idx].put_level(level, b, held);
-        } else if !self.level_lock_from(paths, path_idx, level, b, ty) {
-            let held = match self.node_lock_contended(b, ty, paths[path_idx].ip_allocated()) {
-                Ok(held) => held,
+        let held = match b.lock.try_lock_as(ty) {
+            Some(held) => Some(held),
+            None if self.level_lock_from(paths, path_idx, level, b, ty) => None,
+            None => match self.node_lock_contended(b, ty, paths[path_idx].ip_allocated()) {
+                Ok(held) => Some(held),
                 Err(e) => {
                     self.path_put(paths, path_idx, true);
                     return Err(e);
                 }
-            };
+            },
+        };
+
+        // reread, now it's ours: freed and reused before we got it, @b is at
+        // its new level
+        let level = b.level.get() as usize;
+        if let Some(held) = held {
             paths[path_idx].put_level(level, b, held);
         }
         paths[path_idx].lock_taken(level);
