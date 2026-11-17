@@ -58,7 +58,6 @@ fn main() {
     // comes before it
     println!("cargo:rustc-link-lib=z");
     println!("cargo:rustc-link-lib=lz4");
-    println!("cargo:rustc-link-lib=sodium");
 
     let urcu = pkg_config::probe_library("liburcu").expect("Failed to find urcu lib");
     let target = std::env::var("TARGET").unwrap();

@@ -13,7 +13,6 @@
   # run time
   fuse3,
   libaio,
-  libsodium,
   libunwind,
   liburcu,
   libuuid,
@@ -86,7 +85,6 @@ let
 
     buildInputs = [
       libaio
-      libsodium
       libunwind
       liburcu
       libuuid

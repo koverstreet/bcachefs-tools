@@ -7,7 +7,6 @@ Build dependencies:
  * libblkid
  * libclang
  * liblz4
- * libsodium
  * liburcu
  * libunwind
  * libuuid
@@ -43,7 +42,7 @@ sufficient to build current master.
 
 ``` shell
 apt install -y pkg-config libaio-dev libblkid-dev \
-    liblz4-dev libsodium-dev libunwind-dev liburcu-dev libzstd-dev \
+    liblz4-dev libunwind-dev liburcu-dev libzstd-dev \
     uuid-dev zlib1g-dev valgrind libudev-dev udev git build-essential \
     python3 python3-docutils libclang-dev debhelper dh-python systemd-dev
 ```
@@ -57,7 +56,7 @@ that the distribution kernel is supported.
 
 Fedora: install build dependencies either with `dnf builddep bcachefs-tools` or with:
 ```shell
-dnf install -y @c-development libaio-devel libsodium-devel \
+dnf install -y @c-development libaio-devel \
     libblkid-devel libzstd-devel zlib-devel userspace-rcu-devel \
     lz4-devel libuuid-devel valgrind-devel \
     findutils systemd-devel clang-devel llvm-devel rust cargo
@@ -65,7 +64,7 @@ dnf install -y @c-development libaio-devel libsodium-devel \
 
 openSUSE: install build dependencies with:
 ```shell
-zypper in -y libaio-devel libsodium-devel libblkid-devel liburcu-devel \
+zypper in -y libaio-devel libblkid-devel liburcu-devel \
     libzstd-devel zlib-devel liblz4-devel libuuid-devel valgrind-devel \
     findutils udev systemd-devel llvm-devel
 ```
@@ -73,7 +72,7 @@ zypper in -y libaio-devel libsodium-devel libblkid-devel liburcu-devel \
 Arch: install bcachefs-tools-git from the AUR.
 Or to build from source, install build dependencies with
 ```shell
-pacman -S base-devel libaio libsodium liburcu zstd valgrind llvm
+pacman -S base-devel libaio liburcu zstd valgrind llvm
 ```
 
 Then, just `make && make install`
