@@ -8,6 +8,7 @@ use super::{Header, TaskRef};
 use crate::c;
 use crate::locking::MemallocFlags;
 use crate::os::kernel::msleep;
+use crate::os::module::{Quiesced, ThisModule};
 use crate::prt;
 use crate::util::alloc::AllocError;
 use crate::util::log::{log_no_fs, LogLevel};
@@ -30,15 +31,16 @@ impl TaskList {
         unsafe { &*core::ptr::from_ref(list).cast::<TaskList>() }
     }
 
-    /// # Safety
-    /// At module init, before any task is made.
-    pub unsafe fn init(&self) -> Result<(), AllocError> {
+    /// Panics if it was made already.
+    pub fn init(&'static self, _: &ThisModule) -> Result<(), AllocError> {
+        assert!(!self.0.is_made(), "the module's task list made twice");
+        // SAFETY: zeroed, at module init, before any task is made
         unsafe { self.0.init() }
     }
 
-    /// # Safety
-    /// At module exit, after the last task is done.
-    pub unsafe fn exit(&self) {
+    pub fn exit(&'static self, _: &Quiesced<'_>) {
+        // SAFETY: at module exit, past the barrier: with no filesystem, the
+        // last tasks - those freed after a grace period - have run
         unsafe { self.0.exit() }
     }
 

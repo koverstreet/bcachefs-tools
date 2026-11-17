@@ -1,21 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The module: its init and exit, and /sys/fs/bcachefs, where each
-//! filesystem's directory is.
-//!
-//! The entry points are ours, not the kernel crate's module!()'s, as
-//! util/module_param.rs's parameters are: what it generates differs from
-//! kernel to kernel, and is edition 2021's. In a module, init_module() and
-//! cleanup_module(), as C's module_init() and module_exit() alias them; built
-//! in, an initcall. Userspace runs init as a constructor, at the shim's
-//! module_init() priority: after its percpu and scheduler setup.
+//! filesystem's directory is. What runs them - the kernel's entry points, or
+//! userspace's constructor - is the port's module.rs.
 
-use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::os::kobject::{GroupList, Groups, KobjOwner, KobjPlace, Kobject};
-use crate::os::sysfs::Dir;
-use core::ffi::c_int;
-use core::ptr::NonNull;
+use crate::os::kobject::{fs_kobj, StaticKobject};
+use crate::os::module::{ModuleExit, ThisModule};
 
 #[cfg(kernel)]
 crate::module_info!("license" = "GPL");
@@ -28,156 +19,67 @@ crate::module_info!("file" = env!("RUST_MODFILE"));
 
 crate::module_param! {
     #[cfg(kernel)]
-    static version: u32 = c::MetadataVersion::CURRENT.0;
+    static version: u32 = crate::c::MetadataVersion::CURRENT.0;
     perm = 0o444
 }
 
 /// /sys/fs/bcachefs.
-#[repr(transparent)]
-pub(crate) struct Root(pub(crate) Kobject);
-
-pub(crate) static BCACHEFS_KOBJ: Root = Root(::pin_init::zeroed());
-
-static NO_GROUPS: Groups<Root, 1> = Groups::new([]);
-
-impl Dir for Root {
-    type Obj = Root;
-    type Kobj = Root;
-}
-
-impl KobjPlace for Root {
-    type Owner = Root;
-
-    unsafe fn owner(kobj: *mut Kobject) -> *mut Root {
-        kobj.cast()
-    }
-}
-
-unsafe impl KobjOwner for Root {
-    const GROUPS: GroupList<Root> = NO_GROUPS.list();
-    type Dir = Root;
-
-    unsafe fn release(_: NonNull<Self>) {}
-}
+pub(crate) static BCACHEFS_KOBJ: StaticKobject = StaticKobject::new();
 
 /* Global interfaces/init */
 
-fn bcachefs_exit() {
+/// Undoes what of bcachefs_init() was done: each exit a no-op on what wasn't
+/// made.
+pub(crate) fn bcachefs_exit(m: &ModuleExit) {
     #[cfg(CONFIG_DEBUG_FS)]
-    unsafe { crate::debug::debug::bch2_debug_exit() };
-    #[cfg(not(NO_BCACHEFS_FS))]
-    crate::vfs::new_inode::vfs_exit();
+    crate::debug::debug::bch2_debug_exit(m);
     #[cfg(kernel)]
     crate::init::chardev::bch2_chardev_exit();
-    crate::btree::key_cache::btree_key_cache_module_exit();
     crate::btree::lock_graph::graphs_exit();
-    unsafe { Kobject::put(&BCACHEFS_KOBJ.0) };
-    // what's freed a grace period on runs our code
-    crate::util::maybe_rcu_alloc::barrier();
-    crate::util::maybe_rcu_alloc::free_exit();
+    BCACHEFS_KOBJ.put();
+
+    // what's freed a grace period on runs our code, and goes back to our
+    // caches and pools
+    let q = m.quiesce();
     #[cfg(not(NO_BCACHEFS_FS))]
-    unsafe {
-        crate::vfs::direct::pools_exit();
-        crate::vfs::buffered::pools_exit();
+    crate::vfs::new_inode::vfs_exit(&q);
+    crate::btree::key_cache::btree_key_cache_module_exit(&q);
+    crate::util::maybe_rcu_alloc::free_exit(&q);
+    #[cfg(not(NO_BCACHEFS_FS))]
+    {
+        crate::vfs::direct::pools_exit(&q);
+        crate::vfs::buffered::pools_exit(&q);
     }
-    unsafe { crate::data::read::pools_exit() };
-    unsafe { crate::data::write_replicas::pools_exit() };
-    unsafe { crate::btree::read::pools_exit() };
-    unsafe { crate::util::task::TASKS.exit() };
+    crate::data::read::pools_exit(&q);
+    crate::data::write_replicas::pools_exit(&q);
+    crate::btree::read::pools_exit(&q);
+    crate::util::task::TASKS.exit(&q);
 }
 
+/// Failed, bcachefs_exit() undoes it.
 #[cfg_attr(kernel, unsafe(link_section = ".init.text"))]
-fn bcachefs_init() -> c_int {
+pub(crate) fn bcachefs_init(m: &ThisModule) -> Result<(), BchError> {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     crate::btree::bkey::pack_test();
 
     crate::util::futex::bch2_futex_init();
     crate::init::registry::bch2_fs_registry_init();
 
-    unsafe { BCACHEFS_KOBJ.0.init::<Root>() };
-
-    if init_interfaces().is_err() {
-        bcachefs_exit();
-        return -(c::ENOMEM as c_int);
-    }
-    0
-}
-
-#[cfg_attr(kernel, unsafe(link_section = ".init.text"))]
-fn init_interfaces() -> Result<(), BchError> {
-    #[cfg(kernel)]
-    let parent = Some(unsafe { Kobject::from_raw(c::fs_kobj) });
-    #[cfg(not(kernel))]
-    let parent = None;
+    BCACHEFS_KOBJ.init();
 
     crate::util::maybe_rcu_alloc::free_init()?;
-    unsafe { crate::util::task::TASKS.init() }?;
-    crate::data::read::pools_init()?;
-    crate::data::write_replicas::pools_init()?;
-    crate::btree::read::pools_init()?;
-    BCACHEFS_KOBJ.0.add(parent, c"bcachefs")?;
+    crate::util::task::TASKS.init(m)?;
+    crate::data::read::pools_init(m)?;
+    crate::data::write_replicas::pools_init(m)?;
+    crate::btree::read::pools_init(m)?;
+    BCACHEFS_KOBJ.kobj().add(fs_kobj(), c"bcachefs")?;
     crate::btree::lock_graph::graphs_init()?;
     crate::btree::key_cache::btree_key_cache_module_init()?;
     #[cfg(kernel)]
     ret_to_result_void(crate::init::chardev::bch2_chardev_init())?;
     #[cfg(not(NO_BCACHEFS_FS))]
-    crate::vfs::new_inode::vfs_init()?;
+    crate::vfs::new_inode::vfs_init(m)?;
     #[cfg(CONFIG_DEBUG_FS)]
     ret_to_result_void(crate::debug::debug::bch2_debug_init())?;
     Ok(())
 }
-
-#[cfg(all(kernel, MODULE))]
-#[unsafe(no_mangle)]
-#[unsafe(link_section = ".init.text")]
-pub extern "C" fn init_module() -> c_int {
-    bcachefs_init()
-}
-
-#[cfg(all(kernel, MODULE))]
-#[unsafe(no_mangle)]
-#[unsafe(link_section = ".exit.text")]
-pub extern "C" fn cleanup_module() {
-    bcachefs_exit()
-}
-
-// ___ADDRESSABLE(), as module_init() and module_exit() have: what's called
-// only through its address keeps its ENDBR, which objtool seals off otherwise.
-#[cfg(all(kernel, MODULE))]
-#[used(compiler)]
-#[unsafe(link_section = ".init.data")]
-static INIT_MODULE_ADDRESSABLE: extern "C" fn() -> c_int = init_module;
-
-#[cfg(all(kernel, MODULE))]
-#[used(compiler)]
-#[unsafe(link_section = ".exit.data")]
-static CLEANUP_MODULE_ADDRESSABLE: extern "C" fn() = cleanup_module;
-
-#[cfg(all(kernel, not(MODULE)))]
-#[unsafe(link_section = ".init.text")]
-extern "C" fn initcall() -> c_int {
-    bcachefs_init()
-}
-
-#[cfg(all(kernel, not(MODULE), not(CONFIG_HAVE_ARCH_PREL32_RELOCATIONS)))]
-#[used(compiler)]
-#[unsafe(link_section = ".initcall6.init")]
-static INITCALL: extern "C" fn() -> c_int = initcall;
-
-#[cfg(all(kernel, not(MODULE), CONFIG_HAVE_ARCH_PREL32_RELOCATIONS))]
-core::arch::global_asm!(
-    ".section \".initcall6.init\", \"a\"",
-    ".long {initcall} - .",
-    ".previous",
-    initcall = sym initcall,
-);
-
-#[cfg(not(kernel))]
-#[used]
-#[unsafe(link_section = ".init_array.00120")]
-static INIT: extern "C" fn() = {
-    extern "C" fn init() {
-        assert!(bcachefs_init() == 0, "bcachefs_init");
-    }
-    init
-};

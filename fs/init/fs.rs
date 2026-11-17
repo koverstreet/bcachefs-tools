@@ -663,7 +663,7 @@ impl Fs {
         } else {
             name.write_bytes(self.name().to_bytes());
         }
-        let parent = &crate::init::module::BCACHEFS_KOBJ.0;
+        let parent = crate::init::module::BCACHEFS_KOBJ.kobj();
         if name.allocation_failure() || self.kobj.add(Some(parent), name.as_c_str()).is_err() {
             return self.throw(Errcode::sysfs_init_error);
         }

@@ -37,6 +37,7 @@ use crate::util::alloc::{KVVec, Kmalloc, PushError};
 use crate::os::blkdev::plugged;
 use crate::util::bio::{bvec_offset, inline_vecs, Bio, BioBuffersUnmanaged, BioOwner, BioRange, HasBio};
 use crate::os::kernel::PAGE_SIZE;
+use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, CompletionReturn, Return, Spawn, TaskSlot};
@@ -265,16 +266,14 @@ unsafe impl BioOwner for ReadHome<'_> {
 static READS: Mempool<Kmalloc> = ::pin_init::zeroed();
 
 /// At module init: elements for the most bvecs a bio has.
-pub fn pools_init() -> Result<(), BchError> {
+pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<ReadBio, ReadFut<'static>, &'static Mempool<Kmalloc>>(
         inline_vecs(c::BIO_MAX_VECS as u16));
-    unsafe { Mempool::init_static(&READS, Mempool::kmalloc(1, size)) }
+    Mempool::init_static(&READS, Mempool::kmalloc(1, size), m)
 }
 
-/// # Safety
-/// At module exit, after the last box's grace period.
-pub unsafe fn pools_exit() {
-    unsafe { READS.exit() }
+pub fn pools_exit(q: &Quiesced<'_>) {
+    READS.exit(q)
 }
 
 /// What's done with a read's folios once it's read.

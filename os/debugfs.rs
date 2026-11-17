@@ -28,6 +28,7 @@ use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use crate::c;
 use crate::errcode::BchError;
+use crate::os::module::ModuleExit;
 use crate::util::alloc::KBox;
 use crate::util::rcu::FreeAnytime;
 use crate::util::Printbuf;
@@ -111,9 +112,9 @@ impl DebugRoot {
         }
     }
 
-    /// # Safety
-    /// Every DebugDir subdir() made is gone: they're removed with it.
-    pub unsafe fn exit(&self) {
+    /// At module exit: every DebugDir subdir() made - a filesystem's - is gone
+    /// already, and they're removed with it.
+    pub fn exit(&self, _: &ModuleExit) {
         if let Some(dir) = NonNull::new(self.0.swap(ptr::null_mut(), Ordering::AcqRel)) {
             remove_recursive(dir)
         }

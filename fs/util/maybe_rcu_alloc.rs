@@ -23,6 +23,7 @@ use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
                        RcuHead, RcuOwned, RcuWorkHead};
 use crate::util::sleep::Sleep;
+use crate::os::module::Quiesced;
 use crate::os::workqueue::{Queue, Workqueue, WqFlags};
 
 pub(crate) fn alloc_at<T, A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags)
@@ -377,8 +378,8 @@ pub fn free_init() -> Result<(), AllocError> {
     Ok(())
 }
 
-/// After barrier(), so nothing's on it.
-pub fn free_exit() {
+/// Nothing's on it, nor will be.
+pub fn free_exit(_: &Quiesced<'_>) {
     drop(unsafe { Workqueue::from_raw(FREE_WQ.swap(core::ptr::null_mut(), Acquire)) });
 }
 

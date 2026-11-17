@@ -19,6 +19,7 @@ use crate::new_lock;
 use crate::os::kernel::HZ;
 use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVec, KVmalloc, Kmalloc};
 use crate::util::futex::EventCount;
+use crate::os::module::{Quiesced, ThisModule};
 use crate::util::late::LateInit;
 use crate::util::projections::Volatile;
 use crate::util::sleep::Sleep;
@@ -276,19 +277,24 @@ unsafe impl<A: AllocGfp + Copy> Alloc for Mempool<A> {}
 
 impl<A: AllocGfp + Copy> Mempool<A> {
     /// A pool in a static - which never drops - made in place at module init.
-    ///
-    /// # Safety
-    /// @this is unmade, zeroed, and nothing uses it till this returns.
-    pub unsafe fn init_static(this: &'static Self, init: impl PinInit<Self, BchError>) -> Result<(), BchError> {
+    /// Panics if it was made already.
+    pub fn init_static(this: &'static Self, init: impl PinInit<Self, BchError>, _: &ThisModule)
+        -> Result<(), BchError>
+    {
+        assert!(!this.is_made(), "a static mempool made twice");
+        // SAFETY: zeroed, as a static never made is, and nothing else runs at
+        // module init to use it
         unsafe { crate::util::alloc::init_at(init, core::ptr::from_ref(this).cast_mut()) }
     }
 
     /// The reserve freed, of a pool in a static, at module exit: a no-op on
-    /// one never made.
-    ///
-    /// # Safety
-    /// Nothing allocates from it, or frees to it, after.
-    pub unsafe fn exit(&self) {
+    /// one never made. Nothing allocates from it after, with no filesystem,
+    /// nor frees to it: what a box freed after a grace period has been.
+    pub fn exit(&self, _: &Quiesced<'_>) {
+        self.free_reserve();
+    }
+
+    fn free_reserve(&self) {
         if self.is_made() {
             let mut reserve = core::mem::replace(&mut *self.reserve.lock(), KVec::new());
             drain(self.backing(), &mut reserve, self.layout());
@@ -299,6 +305,6 @@ impl<A: AllocGfp + Copy> Mempool<A> {
 #[pinned_drop]
 impl<A: AllocGfp + Copy> PinnedDrop for Mempool<A> {
     fn drop(self: Pin<&mut Self>) {
-        unsafe { self.exit() }
+        self.free_reserve()
     }
 }

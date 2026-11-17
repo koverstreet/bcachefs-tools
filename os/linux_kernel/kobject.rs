@@ -21,6 +21,16 @@ use crate::os::sysfs::{self, obj_of, Bin, Dir, Files};
 use crate::util::ffi::c_char;
 use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
 
+#[path = "../kobject_static.rs"]
+mod kobject_static;
+pub use kobject_static::StaticKobject;
+
+/// /sys/fs.
+pub fn fs_kobj() -> Option<&'static Kobject> {
+    // SAFETY: the kernel's, made at boot and never freed
+    Some(unsafe { Kobject::from_raw(c::fs_kobj) })
+}
+
 /// A Bin's file, of a directory D: a bin_attribute, for a static.
 #[repr(transparent)]
 pub(crate) struct BinFile<D>(c::bin_attribute, PhantomData<fn() -> D>);
@@ -243,6 +253,11 @@ impl Kobject {
     /// @kobj is initialized, and lives as long as 'a.
     pub unsafe fn from_raw<'a>(kobj: *mut c::kobject) -> &'a Kobject {
         unsafe { &*kobj.cast() }
+    }
+
+    /// init()ed, or made by new().
+    pub fn initialized(&self) -> bool {
+        u32::from(unsafe { (*self.as_ptr()).state_initialized() }) != 0
     }
 
     /// In sysfs: added, and not deleted since.

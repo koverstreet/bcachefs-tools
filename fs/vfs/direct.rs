@@ -22,6 +22,7 @@ use crate::util::bio::{inline_vecs, Bio, HasBio};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::iov_iter::IovIter;
 use crate::os::kernel::unlikely;
+use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::os::ops::IntoRaw;
 use crate::util::sleep::Sleep;
@@ -41,21 +42,15 @@ static DIOS: Mempool<Kmalloc> = ::pin_init::zeroed();
 static SPLITS: Mempool<Kmalloc> = ::pin_init::zeroed();
 
 /// At module init: elements for the most bvecs a bio has.
-pub fn pools_init() -> Result<(), BchError> {
+pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let vecs = inline_vecs(c::BIO_MAX_VECS as u16);
-    unsafe {
-        Mempool::init_static(&DIOS, Mempool::kmalloc(4, exclusive_size::<DioBio, DioFut<'static>, Pool>(vecs)))?;
-        Mempool::init_static(&SPLITS, Mempool::kmalloc(1, exclusive_size::<DioBio, SplitFut<'static>, Pool>(vecs)))
-    }
+    Mempool::init_static(&DIOS, Mempool::kmalloc(4, exclusive_size::<DioBio, DioFut<'static>, Pool>(vecs)), m)?;
+    Mempool::init_static(&SPLITS, Mempool::kmalloc(1, exclusive_size::<DioBio, SplitFut<'static>, Pool>(vecs)), m)
 }
 
-/// # Safety
-/// At module exit, after the last box's grace period.
-pub unsafe fn pools_exit() {
-    unsafe {
-        SPLITS.exit();
-        DIOS.exit();
-    }
+pub fn pools_exit(q: &Quiesced<'_>) {
+    SPLITS.exit(q);
+    DIOS.exit(q);
 }
 
 enum End {

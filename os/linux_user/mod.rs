@@ -19,6 +19,7 @@ pub mod keyring;
 pub mod kobject;
 pub mod kthread;
 pub mod lockdep;
+pub mod module;
 pub mod mutex;
 pub mod percpu;
 pub mod percpu_rwsem;

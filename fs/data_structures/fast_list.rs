@@ -166,6 +166,11 @@ impl c::fast_list {
         self.put_idx(idx);
     }
 
+    /// init()ed, and not exit()ed since.
+    pub fn is_made(&self) -> bool {
+        !self.buffer.load(Relaxed).is_null()
+    }
+
     /// # Safety
     /// Nothing else is using it: it's zeroed, or exit()ed.
     pub unsafe fn init(&self) -> Result<(), AllocError> {

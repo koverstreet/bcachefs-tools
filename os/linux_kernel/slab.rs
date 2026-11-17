@@ -5,6 +5,7 @@
 //! destroyed at exit, with nothing of it allocated before or after.
 
 use crate::c;
+use crate::os::module::Quiesced;
 use crate::util::alloc::{flags, Alloc, AllocError, Allocator, Flags};
 use core::alloc::Layout;
 use core::ffi::CStr;
@@ -37,9 +38,10 @@ impl<T> KmemCache<T> {
         Ok(())
     }
 
-    /// # Safety
-    /// Nothing it allocated is still allocated, or will be.
-    pub unsafe fn destroy(&self) {
+    /// At module exit: with no filesystem, and what was freed after a grace
+    /// period - an inode - freed, nothing it allocated is still allocated, or
+    /// will be.
+    pub fn destroy(&self, _: &Quiesced<'_>) {
         let p = self.cache.swap(null_mut(), Acquire);
         if !p.is_null() {
             unsafe { c::kmem_cache_destroy(p) }

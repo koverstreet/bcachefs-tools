@@ -57,6 +57,7 @@ use crate::util::bio::{inline_vecs, Bio, BioBuffersUnmanaged, BioOwner, HasBio};
 use crate::os::kernel::{random_u64, random_u64_below};
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, unlikely, PAGE_SIZE, READ};
 use crate::util::log::{LogLevel, LogMsg};
+use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSlot};
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
@@ -141,16 +142,14 @@ unsafe impl BioOwner for NodeReadIo<'_> {
 /// progress under memory pressure.
 static NODE_READS: Mempool<Kmalloc> = ::pin_init::zeroed();
 
-pub fn pools_init() -> Result<(), BchError> {
+pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<NodeReadBio, NodeReadFut<'static>, &'static Mempool<Kmalloc>>(
         inline_vecs(c::BIO_MAX_VECS as u16));
-    unsafe { Mempool::init_static(&NODE_READS, Mempool::kmalloc(1, size)) }
+    Mempool::init_static(&NODE_READS, Mempool::kmalloc(1, size), m)
 }
 
-/// # Safety
-/// At module exit, after the last box's grace period.
-pub unsafe fn pools_exit() {
-    unsafe { NODE_READS.exit() }
+pub fn pools_exit(q: &Quiesced<'_>) {
+    NODE_READS.exit(q)
 }
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]

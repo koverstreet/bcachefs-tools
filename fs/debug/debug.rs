@@ -21,6 +21,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::os::debugfs::{DebugFile, DebugOut, DebugRoot};
+use crate::os::module::ModuleExit;
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::place::Contained;
 use crate::util::task::{TaskList, TASKS};
@@ -474,10 +475,8 @@ pub fn debug_init(fs: &Fs) {
     unsafe { (*fs.as_ptr()).fs_debug_dir = Some(fs_dir) };
 }
 
-/// # Safety
-/// After the last filesystem's debug_exit().
-pub unsafe fn bch2_debug_exit() {
-    unsafe { BCH_DEBUG.exit() }
+pub fn bch2_debug_exit(m: &ModuleExit) {
+    BCH_DEBUG.exit(m)
 }
 
 pub fn bch2_debug_init() -> c_int {

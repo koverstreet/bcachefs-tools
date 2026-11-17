@@ -15,6 +15,7 @@ use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::new_lock;
 use crate::util::alloc::{flags, init_at, AllocError, Flags};
+use crate::os::module::{Quiesced, ThisModule};
 use crate::os::slab::KmemCache;
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut};
@@ -178,20 +179,17 @@ pub(super) fn free(inode: NonNull<InodeInfo>) {
     unsafe { INODE_CACHE.free(inode) }
 }
 
-/// At module init: the inode cache, then the filesystem type.
-pub fn vfs_init() -> Result<(), BchError> {
+/// At module init: the inode cache, then the filesystem type. Failed, module
+/// exit undoes what was done.
+pub fn vfs_init(m: &ThisModule) -> Result<(), BchError> {
     INODE_CACHE.create(c"bch_inode_info", c::SLAB_RECLAIM_ACCOUNT | c::SLAB_ACCOUNT)?;
-    super::direct::pools_init()?;
-    super::buffered::pools_init()?;
-    if let Err(e) = ret_to_result_void(super::fs_type::bch2_fs_type_register()) {
-        vfs_exit();
-        return Err(e);
-    }
-    Ok(())
+    super::direct::pools_init(m)?;
+    super::buffered::pools_init(m)?;
+    ret_to_result_void(super::fs_type::bch2_fs_type_register())
 }
 
-pub fn vfs_exit() {
+/// Past the grace period free() waits: the last inode's back in the cache.
+pub fn vfs_exit(q: &Quiesced<'_>) {
     super::fs_type::bch2_fs_type_unregister();
-    // SAFETY: at module exit, or a failed init: no filesystem, so no inode
-    unsafe { INODE_CACHE.destroy() };
+    INODE_CACHE.destroy(q);
 }

@@ -31,6 +31,7 @@ use crate::prt;
 use crate::util::alloc::{init_at, Box, Flags, Kmalloc};
 use crate::util::hash::GoldenRatio;
 use crate::os::kernel::local_clock;
+use crate::os::module::Quiesced;
 use crate::os::slab::KmemCache;
 use crate::util::place::{Contained, PlacedDrop};
 use crate::util::projections::TearSafe;
@@ -665,9 +666,9 @@ impl ToText for c::bch_fs_btree_key_cache {
     }
 }
 
-pub fn btree_key_cache_module_exit() {
+pub fn btree_key_cache_module_exit(_q: &Quiesced<'_>) {
     #[cfg(kernel)]
-    unsafe { KEY_CACHE.destroy() }
+    KEY_CACHE.destroy(_q)
 }
 
 pub fn btree_key_cache_module_init() -> Result<(), BchError> {

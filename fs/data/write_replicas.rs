@@ -19,6 +19,7 @@ use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::util::alloc::{Alloc, AllocError, Allocator, Kmalloc};
 use crate::util::bio::{bio_box_size, submit_gathered_borrowed, BioBox, BioClone, BioInPlace, Gathered, HasBio};
 use crate::util::gather::{Fold, Gather};
+use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::task::{waiter, Resume};
 use core::alloc::Layout;
@@ -31,14 +32,12 @@ use pin_init::{stack_pin_init, PinInit};
 /// allocates the next once it's submitted, so a pool of a few makes progress.
 static REPLICA_CLONES: Mempool<Kmalloc> = ::pin_init::zeroed();
 
-pub fn pools_init() -> Result<(), BchError> {
-    unsafe { Mempool::init_static(&REPLICA_CLONES, Mempool::kmalloc(4, bio_box_size::<c::bch_write_bio>(0))) }
+pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
+    Mempool::init_static(&REPLICA_CLONES, Mempool::kmalloc(4, bio_box_size::<c::bch_write_bio>(0)), m)
 }
 
-/// # Safety
-/// At module exit, with no write in flight.
-pub unsafe fn pools_exit() {
-    unsafe { REPLICA_CLONES.exit() }
+pub fn pools_exit(q: &Quiesced<'_>) {
+    REPLICA_CLONES.exit(q)
 }
 
 /// REPLICA_CLONES with no state: a clone's endio frees it to the pool with

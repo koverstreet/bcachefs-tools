@@ -95,6 +95,7 @@ use crate::util::bio::{bio_box_size, inline_vecs, reset_bvec_offset, Bio, BioBox
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, Flags, Box, Kmalloc};
+use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
 use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, Spawn, TaskSlot};
@@ -375,22 +376,16 @@ static FRAGMENT_BIOS: Mempool<Kmalloc> = ::pin_init::zeroed();
 
 type Pool = &'static Mempool<Kmalloc>;
 
-pub fn pools_init() -> Result<(), BchError> {
+pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let max = c::BIO_MAX_VECS as u16;
     let size = exclusive_size::<FragmentBio, FragmentFut<'static>, Pool>(inline_vecs(max));
-    unsafe {
-        Mempool::init_static(&FRAGMENTS, Mempool::kmalloc(1, size))?;
-        Mempool::init_static(&FRAGMENT_BIOS, Mempool::kmalloc(1, bio_box_size::<Rbio>(max)))
-    }
+    Mempool::init_static(&FRAGMENTS, Mempool::kmalloc(1, size), m)?;
+    Mempool::init_static(&FRAGMENT_BIOS, Mempool::kmalloc(1, bio_box_size::<Rbio>(max)), m)
 }
 
-/// # Safety
-/// At module exit, after the last box's grace period.
-pub unsafe fn pools_exit() {
-    unsafe {
-        FRAGMENT_BIOS.exit();
-        FRAGMENTS.exit();
-    }
+pub fn pools_exit(q: &Quiesced<'_>) {
+    FRAGMENT_BIOS.exit(q);
+    FRAGMENTS.exit(q);
 }
 
 struct Fragment<'r> {

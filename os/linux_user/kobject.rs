@@ -22,6 +22,15 @@ use crate::os::sysfs::{self, obj_of, Attribute, Bin, Dir, Files, ShowFn, StoreFn
 use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
 use crate::util::Printbuf;
 
+#[path = "../kobject_static.rs"]
+mod kobject_static;
+pub use kobject_static::StaticKobject;
+
+/// /sys/fs: a kernel's - our sysfs has no parent above ours.
+pub fn fs_kobj() -> Option<&'static Kobject> {
+    None
+}
+
 /// A Bin's file, of a directory D.
 #[repr(transparent)]
 pub(crate) struct BinFile<D>(RawBinFile, PhantomData<fn() -> D>);
@@ -256,6 +265,11 @@ impl Kobject {
     fn name(&self) -> &CStr {
         let name = self.name.load(Relaxed);
         if name.is_null() { c"" } else { unsafe { CStr::from_ptr(name) } }
+    }
+
+    /// init()ed, or made by new().
+    pub fn initialized(&self) -> bool {
+        !self.ktype.load(Relaxed).is_null()
     }
 
     /// In sysfs: added, and not deleted since.
