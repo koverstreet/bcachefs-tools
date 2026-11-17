@@ -2,8 +2,6 @@
 
 /* Inserting into a given leaf node (last stage of insert): */
 
-use core::ffi::c_int;
-use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering::Relaxed;
 
 
@@ -21,10 +19,10 @@ use crate::btree::types::BtreeWriteType;
 use crate::btree::write::{bch2_btree_init_next, bch2_btree_post_write_cleanup, __bch2_btree_node_write,
                           BtreeWriteFlags};
 use crate::c;
-use crate::errcode::{Errcode, ret_to_c};
+use crate::errcode::{BchError, Errcode};
 use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
-use crate::journal::pins::Pin;
+use crate::journal::pins::PinHolder;
 use crate::types::Le64;
 use crate::os::kernel::unlikely;
 use crate::util::log::LogMsg;
@@ -50,9 +48,7 @@ fn push_whiteout(b: &mut LockedNode<'_, BtreeNode, Write>, pos: Bpos) {
 impl BtreeNode {
     #[inline]
     pub fn add_journal_pin(&self, fs: &Fs, seq: u64) {
-        let flush: unsafe extern "C" fn(_, _, _) -> _ = if self.flags.write_idx() { node_flush1 } else { node_flush0 };
-
-        fs.journal.pin_add(seq, self.current_write(), journal_pin_type_btree(self.c.level.get()), Some(flush));
+        fs.journal.pin_add(seq, self.current_write(), journal_pin_type_btree(self.c.level.get()));
     }
 }
 
@@ -60,61 +56,47 @@ fn journal_pin_type_btree(level: u8) -> c::JournalPinType {
     c::JournalPinType::from_bits(c::JournalPinType::JOURNAL_PIN_TYPE_btree0 as u32 - u32::from(level))
 }
 
-/// # Safety
-/// @pin is @writes[@idx] of a node - which may have been written, and
-/// its memory reused, since: see below.
-unsafe fn node_flush(j: *mut c::journal, pin: *mut Pin, idx: usize, seq: u64) -> c_int {
-    let fs = unsafe { &*j.byte_sub(offset_of!(Fs, journal)).cast::<Fs>() };
-    let b = unsafe {
-        &*pin.byte_sub(offset_of!(BtreeNode, writes) + idx * size_of::<Pin>()).cast::<BtreeNode>()
-    };
+impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
+    fn journal_flush(&self, fs: &Fs, seq: u64) -> Result<(), BchError> {
+        /*
+         * The journal pin doesn't pin the node: another thread can write the
+         * node and drop the pin while we run, and reclaim can then reuse the
+         * node's memory. Snapshot the identity to arm the reuse check: gone
+         * already (unhashed nodes can't be dirty), or going while we'd sleep
+         * on the lock (aborting the attempt), means the pinned write is done
+         * and there's nothing to flush.
+         */
+        let hash_val = self.hash_val();
+        if hash_val == 0 {
+            return Ok(());
+        }
 
-    /*
-     * The journal pin doesn't pin the node: another thread can write the
-     * node and drop the pin while we run, and reclaim can then reuse the
-     * node's memory. Snapshot the identity to arm the reuse check: gone
-     * already (unhashed nodes can't be dirty), or going while we'd sleep
-     * on the lock (aborting the attempt), means the pinned write is done
-     * and there's nothing to flush.
-     */
-    let hash_val = b.hash_val();
-    if hash_val == 0 {
-        return 0;
-    }
+        let trans = crate::btree_trans!(fs);
+        let ret = lockrestart_do(&trans, |t| {
+            let trans = t.trans();
+            let path_idx = trans.node_lock_with_path(&mut trans.paths(), &self.c, c::SixLockType::SIX_LOCK_read,
+                                                     hash_val)?;
 
-    let trans = crate::btree_trans!(fs);
-    let ret = lockrestart_do(&trans, |t| {
-        let trans = t.trans();
-        let path_idx = trans.node_lock_with_path(&mut trans.paths(), &b.c, c::SixLockType::SIX_LOCK_read,
-                                                 hash_val)?;
+            let _ = self.flags.fetch_update(Relaxed, Relaxed, |f| {
+                (f.dirty() && f.write_idx() as usize == I && self.writes[I].seq() == seq).then(|| {
+                    f.with_write_type(BtreeWriteType::journal_reclaim)
+                     .with_need_write(true)
+                })
+            });
 
-        let _ = b.flags.fetch_update(Relaxed, Relaxed, |f| {
-            (f.dirty() && f.write_idx() as usize == idx && b.writes[idx].seq() == seq).then(|| {
-                f.with_write_type(BtreeWriteType::journal_reclaim)
-                 .with_need_write(true)
-            })
+            __bch2_btree_node_write(trans, self, BtreeWriteFlags::only_if_need.bits());
+
+            let mut paths = trans.paths();
+            trans.node_unlock(&mut paths, path_idx, self.c.level.get().into());
+            trans.path_put(&mut paths, path_idx, true);
+            Ok(())
         });
 
-        __bch2_btree_node_write(trans, b, BtreeWriteFlags::only_if_need.bits());
-
-        let mut paths = trans.paths();
-        trans.node_unlock(&mut paths, path_idx, b.c.level.get().into());
-        trans.path_put(&mut paths, path_idx, true);
-        Ok(())
-    });
-
-    match ret {
-        Err(e) if e.matches(Errcode::no_btree_node_reused) => 0,
-        r => ret_to_c(r),
+        match ret {
+            Err(e) if e.matches(Errcode::no_btree_node_reused) => Ok(()),
+            r => r,
+        }
     }
-}
-
-unsafe extern "C" fn node_flush0(j: *mut c::journal, pin: *mut Pin, seq: u64) -> c_int {
-    unsafe { node_flush(j, pin, 0, seq) }
-}
-
-unsafe extern "C" fn node_flush1(j: *mut c::journal, pin: *mut Pin, seq: u64) -> c_int {
-    unsafe { node_flush(j, pin, 1, seq) }
 }
 
 impl BtreeTrans<'_> {

@@ -27,6 +27,7 @@ use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, PercpuRwSem, SharedGuard, SpinLockIrq};
 use crate::debug::trace::events;
 use crate::util::alloc::{init_at, AllocError, KVVec};
+use crate::util::place::{up, FieldPath};
 use crate::util::projections::{TearSafe, Volatile};
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt, warn_once};
@@ -54,7 +55,40 @@ const PIN_LIST: usize = offset_of!(Pin, locked) +
 
 type PinListHead = List<Pin, PIN_LIST>;
 
+/// What holds a journal pin, at P: what flushing it does.
+pub(crate) trait PinHolder<P: FieldPath<Self, To = Pin>>: Sized {
+    fn journal_flush(&self, fs: &Fs, seq: u64) -> Result<(), BchError>;
+}
+
+fn flush<H: PinHolder<P>, P: FieldPath<H, To = Pin>>(fs: &Fs, pin: &Pin, seq: u64) -> Result<(), BchError> {
+    unsafe { up::<H, P>(pin) }.journal_flush(fs, seq)
+}
+
+fn noflush(_: &Fs, _: &Pin, _: u64) -> Result<(), BchError> {
+    Ok(())
+}
+
 impl Pin {
+    fn with_flush(flush: c::PinFlushFn) -> Self {
+        Self { locked: LockedBy::new(pin_init::zeroed(), ()), seq: Volatile::new(0), flush }
+    }
+
+    /// A pin on nothing, flushed by its H's journal_flush(). Only H's
+    /// #[derive(Init)] calls it, for each pin field.
+    ///
+    /// # Safety
+    /// It's made in its place in an H: at P.
+    #[doc(hidden)]
+    pub(crate) unsafe fn new<H: PinHolder<P>, P: FieldPath<H, To = Pin>>() -> Self {
+        Self::with_flush(flush::<H, P>)
+    }
+
+    /// A pin on nothing whose flush does nothing: its holder drops it when
+    /// what it pins is done.
+    pub fn noflush() -> Self {
+        Self::with_flush(noflush)
+    }
+
     pub fn seq(&self) -> u64 {
         self.seq.get()
     }
@@ -63,14 +97,10 @@ impl Pin {
         ptr::from_ref(self).cast_mut()
     }
 
-    /* Its flush function, without its lists held: for messages */
-    fn flush_peek(&self) -> c::journal_pin_flush_fn {
-        unsafe { (*self.locked.data_ptr()).flush.get() }
+    /* Its flush function, which names it */
+    fn name(&self) -> Symbol {
+        Symbol(self.flush as *const c_void)
     }
-}
-
-fn flush_addr(f: c::journal_pin_flush_fn) -> *mut c_void {
-    f.map_or(ptr::null_mut(), |f| f as *mut c_void)
 }
 
 /* A function, as %ps prints it */
@@ -283,26 +313,26 @@ impl c::journal {
         false
     }
 
-    pub fn pin_set(&self, seq: u64, pin: &Pin, ty: PinType, flush: c::journal_pin_flush_fn) {
-        self.pins().set(seq, pin, ty, flush)
+    pub fn pin_set(&self, seq: u64, pin: &Pin, ty: PinType) {
+        self.pins().set(seq, pin, ty)
     }
 
-    pub fn pin_add(&self, seq: u64, pin: &Pin, ty: PinType, flush: c::journal_pin_flush_fn) {
+    pub fn pin_add(&self, seq: u64, pin: &Pin, ty: PinType) {
         let held = pin.seq();
         if held == 0 || held > seq {
-            self.pin_set(seq, pin, ty, flush)
+            self.pin_set(seq, pin, ty)
         }
     }
 
-    pub fn pin_update(&self, seq: u64, pin: &Pin, ty: PinType, flush: c::journal_pin_flush_fn) {
+    pub fn pin_update(&self, seq: u64, pin: &Pin, ty: PinType) {
         let held = pin.seq();
         if held == 0 || held < seq {
-            self.pin_set(seq, pin, ty, flush)
+            self.pin_set(seq, pin, ty)
         }
     }
 
-    pub fn pin_copy(&self, dst: &Pin, src: &Pin, ty: PinType, flush: c::journal_pin_flush_fn) {
-        self.pins().copy(dst, src, ty, flush)
+    pub fn pin_copy(&self, dst: &Pin, src: &Pin, ty: PinType) {
+        self.pins().copy(dst, src, ty)
     }
 
     pub fn pin_drop(&self, pin: &Pin) {
@@ -348,7 +378,7 @@ impl<'a> PinsRead<'a> {
     fn pin_slot(&self, pin: &Pin, seq: u64) -> &PinList {
         warn_once!(seq < self.front() || seq >= self.back(), self.fs(),
                    "journal pin {} at seq {} outside live range [{}, {})",
-                   Symbol(flush_addr(pin.flush_peek())), seq, self.front(), self.back());
+                   pin.name(), seq, self.front(), self.back());
         self.slot(seq)
     }
 
@@ -436,7 +466,7 @@ impl<'a> PinsRead<'a> {
         if !unsafe { PinListHead::unlink(pin) } {
             let _f = MemallocFlags::noreclaim();
             warn_once!(true, self.fs(), "journal pin {} active at seq {} but on no list",
-                       Symbol(flush_addr(pin.flush_peek())), pin.seq());
+                       pin.name(), pin.seq());
         }
 
         if self.j.flush_in_progress.load(Relaxed) == pin.as_ptr() {
@@ -457,27 +487,19 @@ impl<'a> PinsRead<'a> {
     }
 
     fn set_locked(&self, old: Option<&PinList>, new: &PinList, new_lists: &mut PinLists,
-                  pin: &Pin, seq: u64, ty: PinType, flush: c::journal_pin_flush_fn) -> bool {
+                  pin: &Pin, seq: u64, ty: PinType) -> bool {
         let reclaim = old.is_some_and(|old| self.drop_locked(old, pin));
 
         /* inactive <=> on no list - or the push below corrupts the old one */
         if PinListHead::linked(pin) {
             let _f = MemallocFlags::noreclaim();
             warn_once!(true, self.fs(), "journal pin {} inactive but still on a list",
-                       Symbol(flush_addr(pin.flush_peek())));
+                       pin.name());
         }
-
-        /*
-         * flush_fn is how we identify journal pins in debugfs, so must always
-         * exist, even if it doesn't do anything:
-         */
-        assert!(flush.is_some(), "journal pin set with no flush fn");
 
         new.count.fetch_add(1, Relaxed);
         pin.seq.set(seq);
-        let locked = self.locked(pin, new_lists);
-        locked.flush.set(flush);
-        locked.pin_type.set(ty);
+        self.locked(pin, new_lists).pin_type.set(ty);
 
         let list = &mut new_lists.unflushed[ty as usize];
         if list.is_empty() {
@@ -487,7 +509,7 @@ impl<'a> PinsRead<'a> {
         reclaim
     }
 
-    pub fn set(&self, seq: u64, pin: &Pin, ty: PinType, flush: c::journal_pin_flush_fn) {
+    pub fn set(&self, seq: u64, pin: &Pin, ty: PinType) {
         /*
          * A pin outside the live window lands on an out-of-[front,back) slot:
          * that pin is never reclaimed (reclaim only walks the window) and is
@@ -507,7 +529,7 @@ impl<'a> PinsRead<'a> {
          */
         warn_once!(seq < self.last_seq(), self.fs(),
                    "journal pin {} set for seq {}, already retired (last_seq {})",
-                   Symbol(flush_addr(flush)), seq, self.last_seq());
+                   pin.name(), seq, self.last_seq());
 
         loop {
             let old_seq = pin.seq();
@@ -518,7 +540,7 @@ impl<'a> PinsRead<'a> {
             if old_seq != pin.seq() {
                 continue;
             }
-            let reclaim = self.set_locked(old, new, locked.new_lists(), pin, seq, ty, flush);
+            let reclaim = self.set_locked(old, new, locked.new_lists(), pin, seq, ty);
             drop(locked);
             return self.set_done(seq, reclaim);
         }
@@ -535,7 +557,7 @@ impl<'a> PinsRead<'a> {
         }
     }
 
-    pub fn copy(&self, dst: &Pin, src: &Pin, ty: PinType, flush: c::journal_pin_flush_fn) {
+    pub fn copy(&self, dst: &Pin, src: &Pin, ty: PinType) {
         loop {
             let (src_seq, dst_seq) = (src.seq(), dst.seq());
             if src_seq == 0 {
@@ -560,7 +582,7 @@ impl<'a> PinsRead<'a> {
                 return;
             }
 
-            let reclaim = self.set_locked(dst_l, src_l, locked.new_lists(), dst, src_seq, ty, flush);
+            let reclaim = self.set_locked(dst_l, src_l, locked.new_lists(), dst, src_seq, ty);
             drop(locked);
             return self.set_done(src_seq, reclaim);
         }
@@ -605,14 +627,14 @@ impl<'a> PinsRead<'a> {
         fence(Acquire);
 
         let lists = unsafe { &*l.lists.data_ptr() };
-        let first = lists.all().find_map(|l| l.first()).map(|p| p.flush_peek());
+        let first = lists.all().find_map(|l| l.first());
         let count = l.count.load(Relaxed);
 
         if first.is_some() || count != 0 {
             let _f = MemallocFlags::noreclaim();
             warn_once!(true, self.fs(), "journal seq {} retired with count {}{}{}", seq, count,
                        if first.is_some() { ", pins still listed, first " } else { "" },
-                       Symbol(flush_addr(first.flatten())));
+                       first.map_or(Symbol(ptr::null()), Pin::name));
         }
     }
 
@@ -645,18 +667,15 @@ impl<'a> PinsRead<'a> {
             if let Some(pin) = pin {
                 assert!(self.j.flush_in_progress.load(Relaxed).is_null(),
                         "journal pin flush started with one in progress");
-                let locked = self.locked(pin, &g);
-                let flush = locked.flush.get().expect("a journal pin with no flush function");
                 self.j.flush_in_progress.store(pin.as_ptr(), Relaxed);
-                self.j.flush_in_progress_fn.store(flush_addr(Some(flush)), Relaxed);
+                self.j.flush_in_progress_fn.store(pin.flush as *mut c_void, Relaxed);
                 self.j.flush_in_progress_dropped.set(false);
                 return Some(Flushing {
                     j:     self.j,
                     /* past the lock: its owner waits in pin_flush() until our drop */
                     pin:   unsafe { &*pin.as_ptr() },
                     seq,
-                    ty:    locked.pin_type.get(),
-                    flush,
+                    ty:    self.locked(pin, &g).pin_type.get(),
                     ok:    false,
                 });
             }
@@ -733,7 +752,7 @@ impl<'a> PinsRead<'a> {
         for (name, lists) in [("unflushed", &g.unflushed[..]), ("flushed", core::slice::from_ref(&g.flushed))] {
             prt!(out, "{}:\n", name);
             for pin in lists.iter().flat_map(|l| l.iter()) {
-                prt!(out, "\t{:p} {}\n", pin.as_ptr(), Symbol(flush_addr(self.locked(pin, &g).flush.get())));
+                prt!(out, "\t{:p} {}\n", pin.as_ptr(), pin.name());
                 if let Some(nr) = nr.as_deref_mut() {
                     *nr += 1;
                 }
@@ -751,14 +770,13 @@ pub(crate) struct Flushing<'a> {
     pin:    &'a Pin,
     seq:    u64,
     pub ty: PinType,
-    flush:  unsafe extern "C" fn(*mut c::journal, *mut Pin, u64) -> c_int,
     ok:     bool,
 }
 
 impl Flushing<'_> {
     /* The pin's flush function: whether it succeeded */
     pub(crate) fn run(&mut self) -> bool {
-        self.ok = unsafe { (self.flush)(self.j.as_ptr(), self.pin.as_ptr(), self.seq) } == 0;
+        self.ok = (self.pin.flush)(self.j.fs(), self.pin, self.seq).is_ok();
         self.ok
     }
 }

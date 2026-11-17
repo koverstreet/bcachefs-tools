@@ -95,7 +95,7 @@ pub struct BkeyUnpackField {
 
 #[pin_data]
 #[repr(C)]
-#[derive(MaybeZeroable, Init)]
+#[derive(Init)]
 #[init_args(fs: &Fs, lock_flags: c::SixLockInitFlags, gfp: Flags)]
 pub struct BtreeNode {
     #[pin]

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr;
@@ -877,8 +876,7 @@ impl BtreeTrans<'_> {
             }
 
             if unlikely(!self.journal_pin.get().is_null()) {
-                j.pin_set(res.seq, unsafe { &*self.journal_pin.get() }, c::JournalPinType::JOURNAL_PIN_TYPE_other,
-                          Some(commit_journal_pin_flush));
+                j.pin_set(res.seq, unsafe { &*self.journal_pin.get() }, c::JournalPinType::JOURNAL_PIN_TYPE_other);
             }
 
             if !self.flush.get().is_null() {
@@ -1135,8 +1133,4 @@ impl BtreeTrans<'_> {
         self.reset_updates(&mut self.paths());
         ret
     }
-}
-
-unsafe extern "C" fn commit_journal_pin_flush(_j: *mut c::journal, _pin: *mut c::journal_entry_pin, _seq: u64) -> c_int {
-    0
 }

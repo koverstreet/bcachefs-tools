@@ -646,6 +646,41 @@ where
     }
 }
 
+/// A path of fields and elements only: what it reaches is at a fixed offset
+/// in the T it starts from, so the T is had back from it - up().
+pub(crate) trait FieldPath<T>: Path<T> {
+    const OFFSET: usize;
+}
+
+impl<T> FieldPath<T> for Here {
+    const OFFSET: usize = 0;
+}
+
+impl<T, P: FieldPath<T>, const N: u64> FieldPath<T> for FieldOf<P, N>
+where
+    P::To: Field<N> + 'static,
+{
+    const OFFSET: usize = P::OFFSET + <P::To as Field<N>>::OFFSET;
+}
+
+impl<T, P, E, const I: usize, const N: usize> FieldPath<T> for ElemOf<P, I>
+where
+    P: FieldPath<T, To = [E; N]>,
+{
+    const OFFSET: usize = {
+        assert!(I < N, "an array path's index past its end");
+        P::OFFSET + I * size_of::<E>()
+    };
+}
+
+/// The T @to is in, at P.
+///
+/// # Safety
+/// @to is what P reaches from a T, borrowed from it.
+pub(crate) unsafe fn up<T, P: FieldPath<T>>(to: &P::To) -> &T {
+    unsafe { &*core::ptr::from_ref(to).byte_sub(P::OFFSET).cast() }
+}
+
 // ── Elements of a container ──────────────────────────────────────────────
 
 /// Every Self lives in the container at Base's field - a Container, which

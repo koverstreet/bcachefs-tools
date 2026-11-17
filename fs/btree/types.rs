@@ -485,7 +485,7 @@ pub const BKEY_CACHED_IMMEDIATE_FLUSH: u32 = 2;
 
 #[pin_data]
 #[repr(C)]
-#[derive(MaybeZeroable, RcuHead, Init)]
+#[derive(RcuHead, Init)]
 #[init_args(lock_flags: cs::SixLockInitFlags)]
 pub struct bkey_cached {
     #[pin]

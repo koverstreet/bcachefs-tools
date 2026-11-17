@@ -31,16 +31,15 @@ use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BtreeFlags};
 use crate::fs::Fs;
-use crate::journal::pins::Pin;
+use crate::journal::pins::{Pin, PinHolder};
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, Mutex};
 use crate::util::alloc::{flags, Flags, AllocError, KVVec};
-use crate::util::place::{container_of, Contained};
+use crate::util::place::{Contained, FieldPath};
 use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
 use crate::os::workqueue::{cancel_work_sync, run_raw, RawWork};
 use crate::util::{Printbuf, ToText};
 use crate::{btree_trans, new_lock, prt};
-use core::ffi::c_int;
 use core::mem::{offset_of, size_of};
 use core::ptr::NonNull;
 use core::sync::atomic::fence;
@@ -184,42 +183,20 @@ crate::published! {
 type IncGuard<'a> = ExclusiveGuard<'a, Mutex, Inc, KeysLive>;
 type FlushingGuard<'a> = ExclusiveGuard<'a, Mutex, Flushing, FlushingLive>;
 
-/// inc's journal pin: placed, for its flush fn to have its write buffer.
-#[placed(c::bch_fs_btree_write_buffer.inc_pin)]
-#[pin_data]
-#[repr(C)]
-#[derive(MaybeZeroable, Init)]
-pub struct wb_inc_pin {
-    pub pin: c::journal_entry_pin,
-}
-
-/// flushing's journal pin, as inc's.
-#[placed(c::bch_fs_btree_write_buffer.flushing_pin)]
-#[pin_data]
-#[repr(C)]
-#[derive(MaybeZeroable, Init)]
-pub struct wb_flushing_pin {
-    pub pin: c::journal_entry_pin,
-}
-
-const _: () = assert!(offset_of!(wb_inc_pin, pin) == 0 && offset_of!(wb_flushing_pin, pin) == 0);
-
 #[placed(c::bch_fs_btree.write_buffer[], index = idx: u32)]
 #[pin_data]
 #[repr(C)]
-#[derive(MaybeZeroable, TypeInfo, Init)]
+#[derive(TypeInfo, Init)]
 pub struct bch_fs_btree_write_buffer {
     #[pin]
     #[init(new_lock!(Inc::default(), ::pin_init::zeroed(), "&wb->inc.lock"))]
     pub inc: Locked<Mutex, Inc, KeysLive>,
-    #[pin]
-    pub inc_pin: c::wb_inc_pin,
+    pub inc_pin: Pin,
 
     #[pin]
     #[init(new_lock!(Flushing::default(), ::pin_init::zeroed(), "&wb->flushing.lock"))]
     pub flushing: Locked<Mutex, Flushing, FlushingLive>,
-    #[pin]
-    pub flushing_pin: c::wb_flushing_pin,
+    pub flushing_pin: Pin,
 
     #[pin]
     #[init(crate::new_work!(run_raw::<c::bch_fs_btree_write_buffer>, "&wb->flush_work"))]
@@ -269,24 +246,17 @@ impl c::bch_fs_btree_write_buffer {
 
     fn pin(&self, b: Buf) -> &Pin {
         match b {
-            Buf::Inc      => &self.inc_pin.pin,
-            Buf::Flushing => &self.flushing_pin.pin,
-        }
-    }
-
-    fn pin_flush_fn(b: Buf) -> c::journal_pin_flush_fn {
-        match b {
-            Buf::Inc      => Some(journal_flush::<c::wb_inc_pin>),
-            Buf::Flushing => Some(journal_flush::<c::wb_flushing_pin>),
+            Buf::Inc      => &self.inc_pin,
+            Buf::Flushing => &self.flushing_pin,
         }
     }
 
     fn pin_add(&self, b: Buf, seq: u64) {
-        self.fs().journal.pin_add(seq, self.pin(b), JOURNAL_PIN_TYPE_other, Self::pin_flush_fn(b))
+        self.fs().journal.pin_add(seq, self.pin(b), JOURNAL_PIN_TYPE_other)
     }
 
     fn pin_update(&self, b: Buf, seq: u64) {
-        self.fs().journal.pin_update(seq, self.pin(b), JOURNAL_PIN_TYPE_other, Self::pin_flush_fn(b))
+        self.fs().journal.pin_update(seq, self.pin(b), JOURNAL_PIN_TYPE_other)
     }
 
     fn pin_drop(&self, b: Buf) {
@@ -439,17 +409,15 @@ fn flush_seq(trans: &BtreeTrans<'_>, max_seq: u64, did_work: &mut bool, caller: 
  * and move_keys_from_inc_to_flushing). All we need to do is kick the per-btree
  * flush worker; it will drain the buffer and drop the pin asynchronously.
  *
- * Returning 0 here moves the pin to the per-type "flushed" list so reclaim
+ * Returning Ok here moves the pin to the per-type "flushed" list so reclaim
  * stops re-picking it; the worker's pin_drop removes it from the list when
  * the keys are actually written. No wait, no journal fetch needed.
  */
-unsafe extern "C" fn journal_flush<P: Contained<Parent = c::bch_fs_btree_write_buffer>>(
-    _j: *mut c::journal, pin: *mut c::journal_entry_pin, _seq: u64) -> c_int
-{
-    let wb = unsafe { container_of(pin.cast::<P>()) };
-
-    wb.queue_flush(Caller::journal_pin);
-    0
+impl<P: FieldPath<Self, To = Pin>> PinHolder<P> for c::bch_fs_btree_write_buffer {
+    fn journal_flush(&self, _fs: &Fs, _seq: u64) -> Result<(), BchError> {
+        self.queue_flush(Caller::journal_pin);
+        Ok(())
+    }
 }
 
 impl BtreeTrans<'_> {
@@ -747,8 +715,8 @@ impl Fs {
 /* The write buffers are an array, in wb_btree order: so are their locks, of each class */
 #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
 unsafe extern "C" fn wb_keys_lock_cmp_fn(a: *const kernel::bindings::lockdep_map,
-                                         b: *const kernel::bindings::lockdep_map) -> c_int {
-    (a as usize).cmp(&(b as usize)) as c_int
+                                         b: *const kernel::bindings::lockdep_map) -> core::ffi::c_int {
+    (a as usize).cmp(&(b as usize)) as core::ffi::c_int
 }
 
 impl Fs {

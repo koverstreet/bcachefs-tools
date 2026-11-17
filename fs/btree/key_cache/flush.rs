@@ -9,9 +9,10 @@ use crate::btree::trans::BtreeTrans;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::c;
 use crate::data_structures::sort::heapsort_by;
-use crate::errcode::{Errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
+use crate::journal::pins::PinHolder;
 use crate::util::alloc::{flags, KVVec};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
@@ -19,7 +20,6 @@ use crate::{fs_fatal_error, prt};
 use c::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
 use c::SixLockType::SIX_LOCK_intent;
 use core::ffi::c_int;
-use core::mem::offset_of;
 use core::sync::atomic::Ordering::Relaxed;
 
 /*
@@ -161,33 +161,32 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
     Ok(())
 }
 
-pub(crate) unsafe extern "C" fn bch2_btree_key_cache_journal_flush(j: *mut c::journal, pin: *mut c::journal_entry_pin,
-                                                                   seq: u64) -> c_int {
-    let fs = unsafe { (*j).fs() };
-    let ck = unsafe { &*pin.byte_sub(offset_of!(c::bkey_cached, journal)).cast::<c::bkey_cached>() };
-    let mut ret = Ok(());
+impl PinHolder<crate::field!(journal)> for c::bkey_cached {
+    fn journal_flush(&self, fs: &Fs, seq: u64) -> Result<(), BchError> {
+        let _srcu = fs.btree.trans.barrier.read_lock();
 
-    let _srcu = fs.btree.trans.barrier.read_lock();
+        /*
+         * Lockless bailout: if the pin has already been updated past @seq, or
+         * the key isn't dirty, there's nothing to do. False negatives (we miss
+         * work) are fine — reclaim retries. Avoids taking ck's intent lock on
+         * the hot reclaim path when there's nothing to do.
+         *
+         * The intent lock taken below serializes against
+         * btree_key_cache_flush_pos(), which reads ck->journal.seq while the
+         * cached path's intent lock is held: a read lock here would let
+         * pin_update advance the pin out from under that reader, leaving it
+         * with a captured ck->journal.seq < j->last_seq and BUG'ing in
+         * bch2_journal_pin_set() once the trans commit fed it back in.
+         */
+        if self.journal.seq() != seq || !self.dirty() {
+            return Ok(());
+        }
 
-    /*
-     * Lockless bailout: if the pin has already been updated past @seq, or
-     * the key isn't dirty, there's nothing to do. False negatives (we miss
-     * work) are fine — reclaim retries. Avoids taking ck's intent lock on
-     * the hot reclaim path when there's nothing to do.
-     *
-     * The intent lock taken below serializes against
-     * btree_key_cache_flush_pos(), which reads ck->journal.seq while the
-     * cached path's intent lock is held: a read lock here would let
-     * pin_update advance the pin out from under that reader, leaving it
-     * with a captured ck->journal.seq < j->last_seq and BUG'ing in
-     * bch2_journal_pin_set() once the trans commit fed it back in.
-     */
-    if ck.journal.seq() == seq && ck.dirty() {
         let trans = crate::btree_trans!(fs);
 
-        ret = lockrestart_do(&trans, |t| {
+        let ret = lockrestart_do(&trans, |t| {
             let mut paths = trans.paths();
-            let path_idx = trans.node_lock_with_path(&mut paths, &ck.c, SIX_LOCK_intent, 0)?;
+            let path_idx = trans.node_lock_with_path(&mut paths, &self.c, SIX_LOCK_intent, 0)?;
             let ck = paths.held_key_cached(path_idx).expect("an entry just locked");
             let key = ck.key.get();
             let ck_seq = ck.contents().seq;
@@ -196,8 +195,7 @@ pub(crate) unsafe extern "C" fn bch2_btree_key_cache_journal_flush(j: *mut c::jo
                 /* raced; nothing to do */
                 false
             } else if ck_seq != seq {
-                fs.journal.pin_update(ck_seq, &ck.journal, JOURNAL_PIN_TYPE_key_cache,
-                                      Some(bch2_btree_key_cache_journal_flush));
+                fs.journal.pin_update(ck_seq, &ck.journal, JOURNAL_PIN_TYPE_key_cache);
                 false
             } else {
                 true
@@ -218,15 +216,15 @@ pub(crate) unsafe extern "C" fn bch2_btree_key_cache_journal_flush(j: *mut c::jo
                 fs_fatal_error!(fs, "flushing key cache: {}", e.msg());
             }
         }
+        ret
     }
-    ret_to_c(ret)
 }
 
 impl Fs {
     /*
      * Going RO: flush every dirty key cache entry to the btree, dropping its
      * journal pin. The journal-pin-driven flush path
-     * (bch2_btree_key_cache_journal_flush) has a re-journal branch when we're at
+     * (bkey_cached's journal_flush()) has a re-journal branch when we're at
      * j->last_seq and the journal is low on space - it acquires a fresh journal
      * reservation and pins a new sequence. That's what we want during normal
      * operation to free up space, but it defeats the clean_passes loop in
@@ -353,7 +351,7 @@ pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<
                       "key cache insert pinning journal seq {seq}, live range [{last_seq}, {pin_back}){}",
                       if nojournal { " (nojournal)" } else { "" });
 
-    fs.journal.pin_add(seq, &ck.journal, JOURNAL_PIN_TYPE_key_cache, Some(bch2_btree_key_cache_journal_flush));
+    fs.journal.pin_add(seq, &ck.journal, JOURNAL_PIN_TYPE_key_cache);
     bkey_cached_check_pin(fs, ck.held());
 
     if kick_reclaim {

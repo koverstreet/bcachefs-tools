@@ -188,18 +188,15 @@ pub enum JournalPinType {
     JOURNAL_PIN_TYPE_NR,
 }
 
-#[allow(non_camel_case_types)]
-pub type journal_pin_flush_fn = Option<unsafe extern "C" fn(j: *mut c::journal, *mut c::journal_entry_pin,
-                                                            u64) -> c_int>;
+pub type PinFlushFn = fn(&Fs, &c::journal_entry_pin, u64) -> Result<(), crate::errcode::BchError>;
 
 /* A pin's, its seq's pin list lock's: the list it's on, and what it's on it as */
 pub struct PinLocked {
     pub list:     ListLinks,
-    pub flush:    Cell<c::journal_pin_flush_fn>,
     pub pin_type: Cell<c::JournalPinType>,
 }
 
-// Zeroed, it's a pin never set: on no list, no flush function, JOURNAL_PIN_TYPE_btree3
+// Zeroed, it's a pin never set: on no list, JOURNAL_PIN_TYPE_btree3
 unsafe impl ::pin_init::Zeroable for PinLocked {}
 
 pub type PinLockedBy = LockedBy<PinLocked>;
@@ -216,12 +213,12 @@ pub struct WriteAlloc {
 
 pub type WriteAllocLockedBy = LockedBy<WriteAlloc>;
 
-#[repr(C)]
-#[derive(MaybeZeroable)]
 pub struct journal_entry_pin {
     pub locked: PinLockedBy,
     /* the entry it holds, 0 for none */
     pub seq:    Volatile<u64>,
+    /* its holder's, set when it's made: it names the pin, in messages */
+    pub(crate) flush: PinFlushFn,
 }
 
 #[repr(C)]

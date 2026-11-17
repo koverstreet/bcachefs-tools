@@ -49,12 +49,16 @@
 //! and the field's initializer, ReffedWork::new() given the At, with a
 //! lockdep class of its own - a static in this generated code, one per
 //! field, as a static in ReffedWork's generic code wouldn't be.
+//!
+//! A field that's a journal pin, or an array of them, is made here too: each
+//! pin at its place, flushed by the struct's PinHolder for that place
+//! (journal/pins.rs) - so a struct holding one doesn't build without it.
 
 use proc_macro2::{Literal, TokenStream, TokenTree};
 use quote::{quote, ToTokens as _};
 use syn::punctuated::Punctuated;
-use syn::{Attribute, Data, DataStruct, DeriveInput, Error, FnArg, GenericArgument, Ident, PathArguments, Token,
-          Type};
+use syn::{Attribute, Data, DataStruct, DeriveInput, Error, Expr, ExprLit, FnArg, GenericArgument, Ident, Lit,
+          PathArguments, Token, Type};
 
 use crate::place;
 
@@ -149,6 +153,10 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             inits.push(quote!(#name <- #w,));
             continue;
         }
+        if let (None, Some(pins)) = (&init, journal_pins(&parent, name, ty)?) {
+            inits.push(quote!(#name: unsafe { #pins },));
+            continue;
+        }
         inits.push(match init {
             Some(init) => quote!(#name <- #init,),
             // SAFETY: core's atomics are their integers, and zero is one -
@@ -241,6 +249,36 @@ fn is_placed(ty: &Type) -> bool {
 /// Whether At type @ty is an AtInner: its struct placed in a Wrapper.
 fn is_at_inner(ty: &Type) -> bool {
     matches!(ty, Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "AtInner"))
+}
+
+// ── Journal pin fields ──────────────────────────────────────────────────────
+
+/// Field @name's journal pins, if field type @ty is one - a Pin - or an
+/// array of them: each made at its place, for its flush to be the parent's
+/// PinHolder for that place.
+fn journal_pins(parent: &str, name: &Ident, ty: &Type) -> syn::Result<Option<TokenStream>> {
+    let new = |at: TokenStream| quote!(crate::journal::pins::Pin::new::<Self, crate::field!(#at)>());
+    match ty {
+        Type::Array(a) if is_journal_pin(&a.elem) => {
+            let Expr::Lit(ExprLit { lit: Lit::Int(len), .. }) = &a.len else {
+                return Err(Error::new_spanned(&a.len, format!("{parent}.{name}: an array of journal pins is \
+                                                               made pin by pin - its length a literal")));
+            };
+            let pins = (0..len.base10_parse::<usize>()?).map(|i| {
+                let i = Literal::usize_unsuffixed(i);
+                new(quote!(#name[#i]))
+            });
+            Ok(Some(quote!([#(#pins),*])))
+        }
+        _ if is_journal_pin(ty) => Ok(Some(new(quote!(#name)))),
+        _ => Ok(None),
+    }
+}
+
+/// Whether @ty is a journal pin: core's Pin always has its pointer argument.
+fn is_journal_pin(ty: &Type) -> bool {
+    matches!(ty, Type::Path(p) if p.path.segments.last().is_some_and(|s|
+        (s.ident == "Pin" || s.ident == "journal_entry_pin") && s.arguments.is_empty()))
 }
 
 // ── ReffedWork fields ───────────────────────────────────────────────────────

@@ -5,7 +5,6 @@
 //! the writes are in, its pointers committed, in the order the updates were
 //! made visible, and the node it updated unblocked.
 
-use core::ffi::c_int;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut};
@@ -142,8 +141,7 @@ impl InteriorUpdate<'_> {
 
             while let Some(p) = blocked.remove_current() {
                 *unsafe { p.mode.protected_mut() } = Some(Mode::Update);
-                fs.journal.pin_copy(&self.journal, &p.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other,
-                                    Some(update_reparent_journal_pin_flush));
+                fs.journal.pin_copy(&self.journal, &p.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other);
 
                 /*
                  * for flush_held_btree_writes() waiting on updates to flush or
@@ -166,23 +164,12 @@ impl InteriorUpdate<'_> {
          * when the new nodes are persistent and reachable on disk:
          */
         for w in [b.current_write(), b.prev_write()] {
-            fs.journal.pin_copy(&self.journal, w, c::JournalPinType::JOURNAL_PIN_TYPE_other,
-                                Some(will_free_node_journal_pin_flush));
+            fs.journal.pin_copy(&self.journal, w, c::JournalPinType::JOURNAL_PIN_TYPE_other);
             fs.journal.pin_drop(w);
         }
 
         self.owned.borrow_mut().old_nodes.push(OldNode::of(b));
     }
-}
-
-unsafe extern "C" fn update_reparent_journal_pin_flush(_j: *mut c::journal, _pin: *mut c::journal_entry_pin,
-                                                       _seq: u64) -> c_int {
-    0
-}
-
-unsafe extern "C" fn will_free_node_journal_pin_flush(_j: *mut c::journal, _pin: *mut c::journal_entry_pin,
-                                                      _seq: u64) -> c_int {
-    0
 }
 
 fn has_reconcile(fs: &Fs, k: BkeySC<'_>) -> bool {
