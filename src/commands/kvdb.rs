@@ -322,11 +322,9 @@ fn render_key(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, key_only: bool) -> String {
 fn render_key_fields(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, paths: &[&str]) -> Result<String> {
     if let Some(i) = k.arm::<inode::Inodes>() {
         let u = inode::unpack(fs, i);
-        let bytes = unsafe {
-            core::slice::from_raw_parts(&u as *const _ as *const u8,
-                                        size_of::<c::bch_inode_unpacked>())
-        };
-        return render_fields(bytes, <c::bch_inode_unpacked as TypeInfo>::INFO, paths);
+        let mut bytes = [0u8; size_of::<c::bch_inode_unpacked>()];
+        typeinfo::field_bytes(&u, &mut bytes);
+        return render_fields(&bytes, <c::bch_inode_unpacked as TypeInfo>::INFO, paths);
     }
 
     render_raw_fields(k, paths)

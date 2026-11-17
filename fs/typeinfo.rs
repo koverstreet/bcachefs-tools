@@ -373,6 +373,35 @@ pub fn read_scalar(buf: &[u8], r: &FieldRef) -> Result<u64, AccessError> {
     }
 }
 
+/// @v's scalar fields' bytes, into @out at their offsets: @v as read_scalar()
+/// reads it, without its padding, which has no bytes to read.
+pub fn field_bytes<T: TypeInfo>(v: &T, out: &mut [u8]) {
+    let p = (v as *const T).cast::<u8>();
+    let out = &mut out[..size_of::<T>()];
+    struct_extents(T::INFO, 0, &mut |at, len| {
+        out[at..at + len].copy_from_slice(unsafe { core::slice::from_raw_parts(p.add(at), len) });
+    });
+}
+
+/// Each scalar of @s at @at: its offset and width.
+fn struct_extents(s: &StructInfo, at: usize, f: &mut dyn FnMut(usize, usize)) {
+    for field in s.fields {
+        kind_extents(&field.kind, at + field.offset, f);
+    }
+}
+
+fn kind_extents(kind: &FieldKind, at: usize, f: &mut dyn FnMut(usize, usize)) {
+    match kind {
+        FieldKind::Int { bytes, .. } | FieldKind::Bits { bytes, .. } => f(at, *bytes as usize),
+        FieldKind::Struct(s) => match bitfield_word(kind) {
+            Some((bytes, _)) => f(at, bytes as usize),
+            None => struct_extents(s, at, f),
+        },
+        FieldKind::Array { elem, n, stride } => (0..*n).for_each(|i| kind_extents(elem, at + i * stride, f)),
+        FieldKind::VarTail { .. } | FieldKind::Opaque => {}
+    }
+}
+
 /// The mask of a bit range @lo..@hi's width.
 fn bits_mask(lo: u8, hi: u8) -> u64 {
     let width = hi - lo;

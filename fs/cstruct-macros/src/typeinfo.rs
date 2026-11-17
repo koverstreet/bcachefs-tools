@@ -91,7 +91,11 @@ fn kind(ty: &syn::Type, last: bool) -> TokenStream {
         }
         FieldType::Named { int: Some(IntType { bytes, endian, signed }), .. } => {
             let bytes = match bytes {
-                Some(b) => quote!(#b),
+                // what field_bytes() reads of the field
+                Some(b) => quote!({
+                    const _: () = assert!(::core::mem::size_of::<#ty>() == #b as usize);
+                    #b
+                }),
                 None    => quote!(::core::mem::size_of::<#ty>() as u8),
             };
             let endian = format_ident!("{endian}");
