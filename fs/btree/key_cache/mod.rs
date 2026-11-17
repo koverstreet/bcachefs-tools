@@ -31,7 +31,7 @@ use crate::prt;
 use crate::util::alloc::{flags, init_at, krealloc, Flags};
 use crate::util::hash::GoldenRatio;
 use crate::os::kernel::local_clock;
-use crate::util::kmem_cache::KmemCache;
+use crate::os::slab::KmemCache;
 use crate::util::place::{Contained, PlacedDrop};
 use crate::util::rcu::{read_lock, ReadGuard, SrcuReadGuard};
 use crate::util::rcu_pending::{Mode, RcuPending};

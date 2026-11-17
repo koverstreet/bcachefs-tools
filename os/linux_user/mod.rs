@@ -26,6 +26,7 @@ pub mod rcu;
 pub mod rwsem;
 pub mod sched;
 pub mod shrinker;
+pub mod slab;
 pub mod spinlock;
 mod srcu;
 pub mod stacktrace;

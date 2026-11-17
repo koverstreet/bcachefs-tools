@@ -3,22 +3,16 @@
 //! A slab cache of @T's - kmem_cache_create()'s - for what's allocated and
 //! freed often enough to want its own. A static: made at module init and
 //! destroyed at exit, with nothing of it allocated before or after.
-//! Userspace has no slab caches: its @T's are plain allocations.
 
 use crate::c;
-use crate::util::alloc::Flags;
-#[cfg(kernel)]
-use crate::util::alloc::{flags, AllocError};
-#[cfg(kernel)]
+use crate::util::alloc::{flags, AllocError, Flags};
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::AtomicPtr;
-#[cfg(kernel)]
 use core::sync::atomic::Ordering::{Acquire, Release};
 
 pub struct KmemCache<T> {
-    #[cfg_attr(not(kernel), allow(dead_code))]
     cache: AtomicPtr<c::kmem_cache>,
     _t:    PhantomData<fn() -> T>,
 }
@@ -30,7 +24,6 @@ impl<T> KmemCache<T> {
 
     /// Made, as KMEM_CACHE() makes one: @name, of @T's size and alignment,
     /// with @flags - SLAB_*.
-    #[cfg(kernel)]
     pub fn create(&self, name: &'static CStr, flags: c::slab_flags_t) -> Result<(), AllocError> {
         // plain data, all zeroes the defaults
         let mut args: c::kmem_cache_args = ::pin_init::zeroed();
@@ -45,7 +38,6 @@ impl<T> KmemCache<T> {
 
     /// # Safety
     /// Nothing it allocated is still allocated, or will be.
-    #[cfg(kernel)]
     pub unsafe fn destroy(&self) {
         let p = self.cache.swap(null_mut(), Acquire);
         if !p.is_null() {
@@ -53,7 +45,6 @@ impl<T> KmemCache<T> {
         }
     }
 
-    #[cfg(kernel)]
     pub fn as_ptr(&self) -> *mut c::kmem_cache {
         let p = self.cache.load(Acquire);
         debug_assert!(!p.is_null(), "a KmemCache used before its create(), or after its destroy()");
@@ -62,20 +53,13 @@ impl<T> KmemCache<T> {
 
     /// A @T's memory, zeroed.
     pub fn zalloc(&self, gfp: Flags) -> Option<NonNull<T>> {
-        #[cfg(kernel)]
-        return NonNull::new(unsafe {
+        NonNull::new(unsafe {
             c::kmem_cache_alloc_noprof(self.as_ptr(), crate::util::alloc::current_gfp_context_raw((gfp | flags::ZERO).raw()))
-        }.cast());
-        #[cfg(not(kernel))]
-        {
-            let _ = gfp;
-            crate::util::alloc::kzalloc(core::alloc::Layout::new::<T>()).ok().map(NonNull::cast)
-        }
+        }.cast())
     }
 
     /// A @T's memory, uninitialized, charged to @lru - a superblock's inode
     /// LRU, for alloc_inode_sb().
-    #[cfg(kernel)]
     pub fn alloc_lru(&self, lru: *mut c::list_lru, gfp: Flags) -> Option<NonNull<T>> {
         NonNull::new(unsafe {
             c::kmem_cache_alloc_lru_noprof(self.as_ptr(), lru, crate::util::alloc::current_gfp_context_raw(gfp.raw()))
@@ -85,9 +69,6 @@ impl<T> KmemCache<T> {
     /// # Safety
     /// @p is this cache's, and nothing uses it after.
     pub unsafe fn free(&self, p: NonNull<T>) {
-        #[cfg(kernel)]
         unsafe { c::kmem_cache_free(self.as_ptr(), p.as_ptr().cast()) }
-        #[cfg(not(kernel))]
-        unsafe { crate::util::alloc::kfree(p.cast(), core::alloc::Layout::new::<T>()) }
     }
 }

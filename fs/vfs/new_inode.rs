@@ -15,7 +15,7 @@ use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::new_lock;
 use crate::util::alloc::{flags, init_at, AllocError, Flags};
-use crate::util::kmem_cache::KmemCache;
+use crate::os::slab::KmemCache;
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;

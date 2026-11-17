@@ -39,6 +39,7 @@ pub mod rwsem;
 pub mod sched;
 pub mod seq_file;
 pub mod shrinker;
+pub mod slab;
 pub mod spinlock;
 pub mod stacktrace;
 pub mod super_block;
