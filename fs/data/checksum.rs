@@ -36,7 +36,6 @@ use crate::sb::io::{SbFieldOps, SbResize};
 use crate::types::{Le32, Le64};
 use crate::util::bio::{Bio, BioRange};
 use crate::util::Printbuf;
-use core::ffi::c_int;
 use crate::format::{Bversion, Nonce};
 use crate::os::checksum::{Checksum, Crc32c, Crc64, Xxh64};
 // a glob: userspace's are RustCrypto's, called through their traits
@@ -504,13 +503,6 @@ impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
     }
 }
 
-// libsodium's
-#[cfg(not(kernel))]
-unsafe extern "C" {
-    fn crypto_pwhash_scryptsalsa208sha256_ll(passwd: *const u8, passwdlen: usize, salt: *const u8, saltlen: usize,
-                                             n: u64, r: u32, p: u32, buf: *mut u8, buflen: usize) -> c_int;
-}
-
 #[cfg(not(kernel))]
 impl c::bch_sb_field_crypt<Validated> {
     /// The scrypt parameters a passphrase is derived with. A key stored
@@ -537,8 +529,8 @@ impl c::bch_sb_field_crypt {
          * superblock was never wrapped with a passphrase.
          */
         let (n_log, r_log, p_log) = (self.scrypt_n(), self.scrypt_r(), self.scrypt_p());
-        // A corrupt superblock's: scrypt takes N as a u64, r and p as u32s
-        if n_log >= 64 || r_log >= 32 || p_log >= 32 {
+        // A corrupt superblock's: scrypt takes N below 2^64, r * p below 2^30
+        if n_log >= 64 || r_log + p_log >= 30 {
             std::eprintln!("cannot derive a key from a passphrase: scrypt parameters out of range \
                             (N=2^{n_log}, r=2^{r_log}, p=2^{p_log})");
             return Err(Errcode::crypt_kdf_failed.into());
@@ -557,14 +549,12 @@ impl c::bch_sb_field_crypt {
 
         let salt = b"bcache\0";
         let mut key = c::bch_key::default();
-        let ret = unsafe {
-            crypto_pwhash_scryptsalsa208sha256_ll(passphrase.as_ptr(), passphrase.len(), salt.as_ptr(), salt.len(),
-                                                  1 << n_log, r as u32, p as u32,
-                                                  (&raw mut key).cast(), size_of_val(&key))
-        };
-        if ret != 0 {
-            std::eprintln!("scrypt returned {ret} ({}) deriving a key with N={}, r={r}, p={p}",
-                           std::io::Error::last_os_error(), 1u64 << n_log);
+        let ret = scrypt::Params::new(n_log as u8, r as u32, p as u32).map_err(|e| e.to_string())
+            .and_then(|params| scrypt::scrypt(passphrase, salt, &params,
+                                              crate::util::vstructs::plain_bytes_mut(&mut key))
+                      .map_err(|e| e.to_string()));
+        if let Err(e) = ret {
+            std::eprintln!("scrypt: {e}, deriving a key with N={}, r={r}, p={p}", 1u64 << n_log);
             return Err(Errcode::crypt_kdf_failed.into());
         }
         Ok(key)
@@ -793,4 +783,27 @@ pub fn enable_encryption(fs: &Fs, keyed: bool) -> Result<(), BchError> {
     assert!(sb.published().encryption_key.set(key), "a key, on a filesystem with no crypt section");
     fs.write_super(&mut sb);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A passphrase's key unlocks every filesystem it was set on, so it can
+    // never change: this is what libsodium's scrypt, which derived it before,
+    // gives - and OpenSSL's
+    #[test]
+    fn derive_passphrase() {
+        let mut crypt = c::bch_sb_field_crypt::default();
+        crypt.set_kdf_type(c::KdfType::scrypt);
+        crypt.set_scrypt_n(10);
+        crypt.set_scrypt_r(3);
+        crypt.set_scrypt_p(1);
+
+        let key = crypt.derive_passphrase(b"bcachefs").unwrap();
+        assert_eq!(plain_bytes(&key), [
+            0x4d, 0xb6, 0x7a, 0x7e, 0x9b, 0x9e, 0x94, 0x6f, 0xfc, 0xa4, 0xde, 0xcb, 0x72, 0x20, 0x05, 0xed,
+            0x3a, 0x76, 0xac, 0xcd, 0x35, 0x19, 0x56, 0xa3, 0x34, 0x73, 0x5b, 0x9f, 0x74, 0x45, 0xf8, 0x1e,
+        ]);
+    }
 }
