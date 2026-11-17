@@ -71,10 +71,6 @@ fn leaf<'t>(paths: &Paths<'t>, i: &c::btree_insert_entry) -> LockedNode<'t, Btre
     paths.held_btree_node(i.path, i.level().into()).expect("an update's path has its node locked")
 }
 
-fn cached_entry(paths: &Paths<'_>, idx: PathIdx) -> *mut cs::bkey_cached {
-    paths[idx].node(0).as_ptr().cast()
-}
-
 /// The transaction's journal entries are its own, made by its updates: trusted,
 /// as C trusts them.
 fn for_each_journal_entry(t: &TransAttempt<'_, '_>,
@@ -195,9 +191,10 @@ impl BtreeTrans<'_> {
         -> Result<(), BchError>
     {
         let fs = self.fs();
-        let (ck, btree) = (cached_entry(paths, path), paths[path].btree_id());
+        let btree = paths[path].btree_id();
+        let room = paths.held_key_cached(path).expect("a cached update's path holds its entry").contents().key_room();
 
-        if u64s > unsafe { &*ck }.key_room() {
+        if u64s > room {
             let new_u64s = (u64s + u64s / 2).next_power_of_two();
 
             let first = {
@@ -220,22 +217,22 @@ impl BtreeTrans<'_> {
                 }
             };
 
-            unsafe {
-                let old_k = (*ck).key();
-                new_k.set_key(old_k);
+            let mut ck = paths.write_locked_key_cached(path);
+            let old_k = ck.contents().key();
+            new_k.set_key(old_k);
+            let (old_v, new_v) = ((&raw const old_k.v).cast(), (&raw const new_k.v).cast());
 
-                for i in paths.paths_and_updates().updates.iter_mut() {
-                    if ptr::eq(i.old_v, (&raw const old_k.v).cast()) {
-                        i.old_v = (&raw const new_k.v).cast();
-                    }
+            for i in paths.paths_and_updates().updates.iter_mut() {
+                if ptr::eq(i.old_v, old_v) {
+                    i.old_v = new_v;
                 }
-
-                (*ck).k = Some(new_k);
             }
+
+            ck.contents_mut().k = Some(new_k);
         }
 
         if watermark(flags) < c::Watermark::reclaim as u32 &&
-           !unsafe { &*ck }.dirty() &&
+           !paths.held_key_cached(path).expect("a cached update's path holds its entry").dirty() &&
            fs.btree.key_cache.must_wait() &&
            fs.journal.flags.get(Journal::replay_done)
         {
@@ -249,7 +246,7 @@ impl BtreeTrans<'_> {
     fn key_can_insert_cached(paths: &Paths<'_>, path: PathIdx, u64s: usize) -> bool {
         let ck = paths.held_key_cached(path).expect("a cached update's path holds its entry");
 
-        likely(u64s <= ck.key_room() && ck.dirty())
+        likely(u64s <= ck.contents().key_room() && ck.dirty())
     }
 
     #[cold]

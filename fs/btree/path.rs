@@ -7,6 +7,7 @@
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BKEY_U64S};
 use crate::btree::cache::bch2_btree_id_level_to_text;
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
+use crate::btree::key_cache::EntryContents;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::{Keys, KeysMut};
 use crate::btree::locking::BtreeNodeLockedType::{self, *};
@@ -299,6 +300,13 @@ impl<'t> Paths<'t> {
         let b = self.held_btree_node(idx, level).expect("a write locked path's node is a btree node");
         assert!(six_lock_write_held(b.c.lock.six()), "path {idx}'s node at level {level} isn't write locked");
         unsafe { LockedNode::new_write(b.node()) }
+    }
+
+    /// held_key_cached(), of an entry the path holds write locked.
+    pub(crate) fn write_locked_key_cached(&self, idx: PathIdx) -> LockedNode<'t, c::bkey_cached, Write> {
+        assert!(self[idx].write_locked(0), "path {idx}'s key cache entry isn't write locked");
+        let ck = self.held_key_cached(idx).expect("a write locked cached path's entry");
+        unsafe { LockedNode::new_write(ck.node()) }
     }
 }
 
@@ -1211,14 +1219,6 @@ impl BtreePath {
         Some(unsafe { &*ck.as_ptr().cast::<c::bkey_cached>() })
     }
 
-    /// key_cached(), for a path holding its entry write locked: to write it.
-    pub(crate) fn key_cached_mut(&mut self) -> Option<&mut c::bkey_cached> {
-        ebug_assert!(self.cached());
-        assert!(self.write_locked(0), "a cached path's entry written without its write lock");
-        let ck = self.l[0].b.get().ok().flatten()?;
-        Some(unsafe { &mut *ck.as_ptr().cast::<c::bkey_cached>() })
-    }
-
     pub(crate) fn peek_slot(&self, u: &mut c::bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
 
@@ -1247,11 +1247,11 @@ impl BtreePath {
             u.p = self.pos;
             Some(KeyVal(ptr::null()))
         } else {
-            let ck = self.key_cached()?;
+            let ck = self.downcast::<c::bkey_cached>()?.locked_node(0)?;
 
-            ebug_assert!(Btree(ck.key.btree_id.into()) == self.btree_id() && ck.key.pos == self.pos);
+            ebug_assert!({ let key = ck.key.get(); Btree(key.btree_id) == self.btree_id() && key.pos == self.pos });
 
-            let k = ck.key();
+            let k = ck.contents().key();
             *u = k.k;
             Some(KeyVal((&raw const k.v).cast()))
         }
@@ -1431,8 +1431,8 @@ impl BtreeTrans<'_> {
         }
 
         let path = &paths[idx];
-        let ck = path.key_cached().expect("a relocked key cache path's entry");
-        assert!(Btree(ck.key.btree_id.into()) == path.btree_id() && ck.key.pos == path.pos);
+        let key = path.key_cached().expect("a relocked key cache path's entry").key.get();
+        assert!(Btree(key.btree_id) == path.btree_id() && key.pos == path.pos);
 
         if !locked {
             self.node_unlock(paths, idx, 0);
@@ -1665,6 +1665,14 @@ impl PathNodeContents for BtreeNode {
     type Contents = NodeContents;
 
     fn locked_contents(&self) -> &LockedBy<NodeContents> {
+        &self.contents
+    }
+}
+
+impl PathNodeContents for c::bkey_cached {
+    type Contents = EntryContents;
+
+    fn locked_contents(&self) -> &LockedBy<EntryContents> {
         &self.contents
     }
 }

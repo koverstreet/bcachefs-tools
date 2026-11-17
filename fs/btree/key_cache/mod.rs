@@ -19,7 +19,7 @@ use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
 use crate::data_structures::dst_room::DstRoom;
 use crate::btree::locking::bch2_btree_lock_init;
 use crate::btree::iter::TransAttempt;
-use crate::btree::path::Paths;
+use crate::btree::path::{LockedNode, Paths, Write};
 use crate::btree::trans::BtreeTrans;
 use crate::c;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
@@ -33,6 +33,7 @@ use crate::util::hash::GoldenRatio;
 use crate::os::kernel::local_clock;
 use crate::os::slab::KmemCache;
 use crate::util::place::{Contained, PlacedDrop};
+use crate::util::projections::TearSafe;
 use crate::util::rcu::{read_lock, RcuHead, ReadGuard, SrcuReadGuard};
 use crate::util::rcu_pending::{RcuPending, RcuRealloc};
 use crate::os::shrinker::{Shrink, Shrinker};
@@ -41,8 +42,8 @@ use crate::util::{Printbuf, ToText};
 use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
 #[cfg(kernel)]
 use core::ffi::c_int;
-use core::ffi::c_ulong;
-use core::ops::{Deref, DerefMut};
+use core::ffi::{c_uint, c_ulong};
+use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::{placed, Init, MaybeZeroable, TypeInfo};
@@ -58,9 +59,13 @@ pub struct bkey_cached_key {
     pub pos: Bpos,
 }
 
-crate::keyed_by!(c::bkey_cached, |ck| &ck.key => c::bkey_cached_key);
+// Torn, a mix of two keys: a lookup that matches one locks the entry and
+// checks its key again
+unsafe impl TearSafe for bkey_cached_key {}
 
-// what's shared is the entry lock's, or atomic
+crate::keyed_by_value!(c::bkey_cached, |ck| ck.key.get() => c::bkey_cached_key);
+
+// what's shared is the entry lock's, published, or atomic
 unsafe impl Sync for c::bkey_cached {}
 
 fn btree_uses_pcpu_readers(id: Btree) -> bool {
@@ -201,9 +206,9 @@ impl bch_fs_btree_key_cache {
     }
 }
 
-/// An entry, held write locked: what its plain fields are written through.
+/// An entry, held write locked: what its contents are written through.
 pub(super) struct LockedEntry<'a> {
-    ck:   NonNull<c::bkey_cached>,
+    ck:   LockedNode<'a, c::bkey_cached, Write>,
     held: SixHold<'a>,
 }
 
@@ -211,11 +216,19 @@ impl<'a> LockedEntry<'a> {
     fn new(ck: &'a c::bkey_cached, held: SixHold<'a>) -> Self {
         assert!(held.ty() == SIX_LOCK_write && ptr::eq(held.lock(), &ck.c.lock),
                 "a key cache entry's handle without its write lock");
-        LockedEntry { ck: NonNull::from(ck), held }
+        LockedEntry { ck: unsafe { LockedNode::new_write(ck) }, held }
     }
 
     fn into_parts(self) -> (&'a c::bkey_cached, SixHold<'a>) {
-        (unsafe { self.ck.as_ref() }, self.held)
+        (self.ck.node(), self.held)
+    }
+
+    fn contents(&self) -> &EntryContents {
+        self.ck.contents()
+    }
+
+    fn contents_mut(&mut self) -> &mut EntryContents {
+        self.ck.contents_mut()
     }
 }
 
@@ -223,13 +236,7 @@ impl Deref for LockedEntry<'_> {
     type Target = c::bkey_cached;
 
     fn deref(&self) -> &c::bkey_cached {
-        unsafe { self.ck.as_ref() }
-    }
-}
-
-impl DerefMut for LockedEntry<'_> {
-    fn deref_mut(&mut self) -> &mut c::bkey_cached {
-        unsafe { self.ck.as_mut() }
+        self.ck.node()
     }
 }
 
@@ -260,11 +267,11 @@ fn bkey_cached_lock_for_evict(ck: &c::bkey_cached) -> Option<LockedEntry<'_>> {
 
 impl c::bch_fs_btree_key_cache {
     fn bkey_cached_evict(&self, ck: &mut LockedEntry<'_>) -> bool {
-        let ret = self.table.remove_entry(&ck.key, ck.ck);
+        let ret = self.table.remove_entry(&ck.key.get(), NonNull::from(ck.ck.node()));
         if ret {
-            self.keys.remove(ck.keys_idx);
-            ck.keys_idx = 0;
-            ck.key = c::bkey_cached_key { btree_id: !0, pos: SPOS_MAX };
+            self.keys.remove(ck.contents().keys_idx);
+            ck.contents_mut().keys_idx = 0;
+            ck.key.set(c::bkey_cached_key { btree_id: !0, pos: SPOS_MAX });
             self.nr_keys.fetch_sub(1, Relaxed);
         }
 
@@ -286,13 +293,13 @@ impl c::bch_fs_btree_key_cache {
      * later - so the walks never see one that's been freed.
      */
     fn bkey_cached_keys_add(&self, ck: &mut LockedEntry<'_>) -> Result<(), BchError> {
-        ck.keys_idx = self.keys.add(ck.ck.cast())
+        ck.contents_mut().keys_idx = self.keys.add(NonNull::from(ck.ck.node()).cast())
             .map_err(|_| BchError::from(Errcode::ENOMEM_btree_key_cache_create))?;
         Ok(())
     }
 
     fn bkey_cached_free_noassert(&self, mut ck: LockedEntry<'_>) {
-        ck.k = None;
+        ck.contents_mut().k = None;
 
         let (ck, held) = ck.into_parts();
         drop(held);
@@ -343,11 +350,18 @@ pub(crate) fn key_buf(u64s: usize) -> Option<KeyBuf> {
     DstRoom::new_boxed_in(u64s, Kmalloc).ok()
 }
 
-/*
- * An entry's key is in a buffer of its own - or none, its entry freed. What
- * changes either holds the entry write locked.
- */
-impl c::bkey_cached {
+/// What an entry's lock protects: written with it write locked, read with it
+/// held.
+#[derive(MaybeZeroable)]
+pub struct EntryContents {
+    pub(crate) keys_idx: c_uint,
+    /* its newest update's journal seq, which its pin is moved up to */
+    pub(crate) seq: u64,
+    /* its key, in a buffer of its own: none once it's freed */
+    pub(crate) k: Option<KeyBuf>,
+}
+
+impl EntryContents {
     /// Its key buffer's room, in u64s: 0 for no buffer.
     pub(crate) fn key_room(&self) -> usize {
         self.k.as_ref().map_or(0, |k| k.elems().len())
@@ -367,45 +381,46 @@ impl c::bkey_cached {
 /// when its key buffer can't be had, or relocking after it fails.
 struct NewEntry<'a, const PCPU: bool> {
     pending: &'a Pending<PCPU>,
-    ck:      NonNull<Cached<PCPU>>,
+    /* taken by into_entry() */
+    ck:      Option<LockedEntry<'a>>,
 }
 
-impl<const PCPU: bool> NewEntry<'_, PCPU> {
-    fn alloc(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pending: &Pending<PCPU>, key_u64s: usize)
-        -> Result<NonNull<c::bkey_cached>, BchError>
+impl<'a, const PCPU: bool> NewEntry<'a, PCPU> {
+    fn alloc(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pending: &'a Pending<PCPU>, key_u64s: usize)
+        -> Result<LockedEntry<'a>, BchError>
     {
         let enomem = || BchError::from(Errcode::ENOMEM_btree_key_cache_create);
 
         t.allocate_dropping_locks_in(paths, || {
-            let ck = NewEntry { pending, ck: pending.alloc().map_err(|_| enomem())? };
+            let ck = pending.alloc().map_err(|_| enomem())?;
+            let mut ck = NewEntry { pending, ck: Some(unsafe { claimed(ck.cast()) }) };
             let k = key_buf(key_u64s).ok_or_else(enomem)?;
-            unsafe { ck.ck.cast::<c::bkey_cached>().as_mut() }.k = Some(k);
+            ck.ck.as_mut().expect("a new entry").contents_mut().k = Some(k);
             Ok(ck)
-        }).map(NewEntry::into_raw)
+        }).map(NewEntry::into_entry)
     }
 
-    fn into_raw(self) -> NonNull<c::bkey_cached> {
-        let ck = self.ck.cast();
-        core::mem::forget(self);
-        ck
+    fn into_entry(mut self) -> LockedEntry<'a> {
+        self.ck.take().expect("a new entry")
     }
 }
 
 impl<const PCPU: bool> Drop for NewEntry<'_, PCPU> {
     fn drop(&mut self) {
-        let ck = unsafe { self.ck.cast::<c::bkey_cached>().as_mut() };
-        ck.k = None;
-        drop(unsafe { SixHold::from_raw(&ck.c.lock, SIX_LOCK_write) });
-        unsafe { self.pending.free(self.ck) }
+        let Some(mut ck) = self.ck.take() else { return };
+        ck.contents_mut().k = None;
+        let (ck, held) = ck.into_parts();
+        drop(held);
+        unsafe { self.pending.free(NonNull::from(ck).cast()) }
     }
 }
 
 /// A claimed entry's hold, as Cached's try_claim() or construct() left it.
 ///
 /// # Safety
-/// @ck was just claimed.
-unsafe fn claimed<'t>(_trans: &'t BtreeTrans<'_>, ck: NonNull<c::bkey_cached>) -> LockedEntry<'t> {
-    let ck: &'t c::bkey_cached = unsafe { ck.as_ref() };
+/// @ck was just claimed, and is had for 'a.
+unsafe fn claimed<'a>(ck: NonNull<c::bkey_cached>) -> LockedEntry<'a> {
+    let ck: &'a c::bkey_cached = unsafe { ck.as_ref() };
     LockedEntry::new(ck, unsafe { SixHold::from_raw(&ck.c.lock, SIX_LOCK_write) })
 }
 
@@ -423,7 +438,7 @@ impl BtreeTrans<'_> {
             NewEntry::alloc(t, paths, &bc.pending().0, key_u64s)
         };
         match ck {
-            Ok(ck) => Ok(Some(unsafe { claimed(self, ck) })),
+            Ok(ck) => Ok(Some(ck)),
             Err(e) if e.matches(c::ENOMEM) => Ok(None),
             Err(e) => Err(e),
         }

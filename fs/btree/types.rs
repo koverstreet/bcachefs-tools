@@ -495,15 +495,12 @@ pub struct bkey_cached {
     pub c: cs::btree_bkey_cached_common,
 
     pub flags: AtomicUsize,
-    pub key: cs::bkey_cached_key,
-
-    pub keys_idx: c_uint,
+    /* set write locked; read unlocked, by the table's lookups and the flush walk */
+    pub key: Volatile<cs::bkey_cached_key>,
 
     pub journal: cs::journal_entry_pin,
-    pub seq: u64,
 
-    /* none once it's freed */
-    pub k: Option<crate::btree::key_cache::KeyBuf>,
+    pub contents: LockedBy<crate::btree::key_cache::EntryContents>,
     /* the key cache's lookups lock it: dropped once they're past it */
     #[rcu_head]
     pub rcu: RcuDropMember<RcuHead>,

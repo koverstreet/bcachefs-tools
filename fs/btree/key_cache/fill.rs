@@ -16,6 +16,7 @@ use crate::locking::MemallocFlags;
 use crate::prt;
 use c::SixLockType::SIX_LOCK_read;
 use core::ffi::c_int;
+use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 
 impl BtreeTrans<'_> {
@@ -65,11 +66,11 @@ impl BtreeTrans<'_> {
 
         ck.c.level.set(0);
         ck.c.btree_id.set(btree.0 as u8);
-        ck.key        = c::bkey_cached_key { btree_id: btree.0, pos };
+        ck.key.set(c::bkey_cached_key { btree_id: btree.0, pos });
         ck.flags.store(1 << c::BKEY_CACHED_ACCESSED, Relaxed);
 
         let ret = (|| {
-            if key_u64s > ck.key_room() {
+            if key_u64s > ck.contents().key_room() {
                 paths[ck_path].mark_locked_noreset(0, BTREE_NODE_UNLOCKED);
 
                 let new_k = match t.allocate_dropping_locks_in(paths, || {
@@ -84,7 +85,7 @@ impl BtreeTrans<'_> {
                     Err(e) => return Err(e),
                 };
 
-                ck.k = Some(new_k);
+                ck.contents_mut().k = Some(new_k);
             }
 
             paths[ck_path].mark_locked_noreset(0, BTREE_NODE_UNLOCKED);
@@ -93,14 +94,14 @@ impl BtreeTrans<'_> {
                 bc.table.make_room().map_err(|_| BchError::from(Errcode::ENOMEM_btree_key_cache_insert))
             })?;
 
-            ck.set_key(k);
+            ck.contents_mut().set_key(k);
 
             let level = paths[path].level() as usize;
             self.node_lock_write(paths, path, level)?;
 
             let ret = {
                 let _noreclaim = MemallocFlags::noreclaim();
-                bc.table.insert_new(unsafe { Entry::new(ck.ck) })
+                bc.table.insert_new(unsafe { Entry::new(NonNull::from(&*ck)) })
             };
 
             self.node_unlock_write(paths, path, level);
@@ -124,8 +125,8 @@ impl BtreeTrans<'_> {
             return Ok(true);
         }
 
-        bc.keys.remove(ck.keys_idx);
-        ck.keys_idx = 0;
+        bc.keys.remove(ck.contents().keys_idx);
+        ck.contents_mut().keys_idx = 0;
         bc.bkey_cached_free(self, ck);
         paths[ck_path].mark_locked_noreset(0, BTREE_NODE_UNLOCKED);
 
@@ -204,7 +205,7 @@ impl BtreeTrans<'_> {
 
             let held = self.node_lock(paths, idx, &ck.c, 0, lock_want)?;
 
-            if { ck.key } != (c::bkey_cached_key { btree_id: btree.0, pos }) {
+            if ck.key.get() != (c::bkey_cached_key { btree_id: btree.0, pos }) {
                 drop(held);
                 continue;
             }

@@ -4,7 +4,7 @@ use super::LockedEntry;
 use crate::btree::bkey::BkeySC;
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, UpdateTriggerFlags, Watermark};
-use crate::btree::path::{NodePtr, PathIdx, Paths};
+use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::c;
@@ -32,15 +32,16 @@ use core::sync::atomic::Ordering::Relaxed;
  */
 #[cold]
 #[inline(never)]
-fn bkey_cached_pin_warn(fs: &Fs, ck: &c::bkey_cached, what: &str) {
+fn bkey_cached_pin_warn(fs: &Fs, ck: LockedNode<'_, c::bkey_cached>, what: &str) {
     let mut buf = LogMsg::new(fs);
+    let key = ck.key.get();
     prt!(buf, "{} {}: dirty {} seq {} pin seq {}, journal last_seq {}",
-         Btree(ck.key.btree_id), { ck.key.pos }, ck.dirty() as u32,
-         ck.seq, ck.journal.seq(), fs.journal.lock.last_seq.get());
+         Btree(key.btree_id), { key.pos }, ck.dirty() as u32,
+         ck.contents().seq, ck.journal.seq(), fs.journal.lock.last_seq.get());
     crate::warn_once!(true, fs, "cached key {what}: {}", buf.as_str());
 }
 
-fn bkey_cached_check_pin(fs: &Fs, ck: &c::bkey_cached) {
+fn bkey_cached_check_pin(fs: &Fs, ck: LockedNode<'_, c::bkey_cached>) {
     let pin_seq = ck.journal.seq();
 
     if ck.dirty() {
@@ -48,7 +49,7 @@ fn bkey_cached_check_pin(fs: &Fs, ck: &c::bkey_cached) {
             bkey_cached_pin_warn(fs, ck, "dirty with no journal pin");
         } else if pin_seq < fs.journal.lock.last_seq.get() {
             bkey_cached_pin_warn(fs, ck, "dirty, pinning a retired journal seq");
-        } else if ck.seq < pin_seq {
+        } else if ck.contents().seq < pin_seq {
             bkey_cached_pin_warn(fs, ck, "newest update older than its journal pin");
         }
     } else if pin_seq != 0 {
@@ -80,7 +81,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
 
     c_iter.traverse(t)?;
 
-    let Some(ck) = trans.paths().held_key_cached(c_iter.path).map(|ck| ck.node()) else {
+    let Some(ck) = trans.paths().held_key_cached(c_iter.path) else {
         return Ok(());
     };
 
@@ -111,7 +112,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
         /* Check that we're not violating cache coherency rules: */
         assert!(!btree_k.k.key_type().is_deleted(), "flushing a cached key over a deleted btree key");
 
-        t.update(b_iter, &t.bkey_copy(ck.key())?,
+        t.update(b_iter, &t.bkey_copy(ck.contents().key())?,
                  UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE |
                  UpdateTriggerFlags::KEY_CACHE_RECLAIM |
                  UpdateTriggerFlags::NORUN)?;
@@ -151,7 +152,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
         }
         bkey_cached_check_pin(fs, ck);
 
-        let mut ck = LockedEntry::new(ck, paths[path].take_level(0).expect("a flushed cached path not locked"));
+        let mut ck = LockedEntry::new(ck.node(), paths[path].take_level(0).expect("a flushed cached path not locked"));
         if bc.bkey_cached_evict(&mut ck) {
             bc.bkey_cached_free(trans, ck);
         }
@@ -187,13 +188,15 @@ pub(crate) unsafe extern "C" fn bch2_btree_key_cache_journal_flush(j: *mut c::jo
         ret = lockrestart_do(&trans, |t| {
             let mut paths = trans.paths();
             let path_idx = trans.node_lock_with_path(&mut paths, &ck.c, SIX_LOCK_intent, 0)?;
-            let key = ck.key;
+            let ck = paths.held_key_cached(path_idx).expect("an entry just locked");
+            let key = ck.key.get();
+            let ck_seq = ck.contents().seq;
 
             let do_flush = if ck.journal.seq() != seq || !ck.dirty() {
                 /* raced; nothing to do */
                 false
-            } else if ck.seq != seq {
-                fs.journal.pin_update(ck.seq, &ck.journal, JOURNAL_PIN_TYPE_key_cache,
+            } else if ck_seq != seq {
+                fs.journal.pin_update(ck_seq, &ck.journal, JOURNAL_PIN_TYPE_key_cache,
                                       Some(bch2_btree_key_cache_journal_flush));
                 false
             } else {
@@ -263,7 +266,7 @@ impl Fs {
                         continue;
                     }
 
-                    if keys.push_gfp(ck.key, flags::NOWAIT | flags::NOWARN).is_err() {
+                    if keys.push_gfp(ck.key.get(), flags::NOWAIT | flags::NOWARN).is_err() {
                         full = true;
                         break;
                     }
@@ -303,13 +306,13 @@ impl Fs {
 pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, i: &c::btree_insert_entry) {
     let fs = t.fs();
     let bc = &fs.btree.key_cache;
-    let ck = paths[i.path].key_cached_mut().expect("a key cache insert with no entry");
+    let mut ck = paths.write_locked_key_cached(i.path);
     let insert = i.key();
     let mut kick_reclaim = false;
 
     assert!(!insert.k.key_type().is_deleted(), "a deleted key inserted into the key cache");
 
-    ck.set_key(BkeySC::from(insert));
+    ck.contents_mut().set_key(BkeySC::from(insert));
 
     if !ck.dirty() {
         ebug_assert!(!fs.flags.get(c::FsFlag::clean_shutdown));
@@ -337,7 +340,7 @@ pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<
      */
     let nojournal = i.flags & UpdateTriggerFlags::NOJOURNAL.bits() != 0;
     if !nojournal || ck.journal.seq() == 0 {
-        ck.seq = journal_res_seq;
+        ck.contents_mut().seq = journal_res_seq;
     }
     /*
      * The seq we pin with is the commit's journal reservation, or for a
@@ -351,7 +354,7 @@ pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<
                       if nojournal { " (nojournal)" } else { "" });
 
     fs.journal.pin_add(seq, &ck.journal, JOURNAL_PIN_TYPE_key_cache, Some(bch2_btree_key_cache_journal_flush));
-    bkey_cached_check_pin(fs, ck);
+    bkey_cached_check_pin(fs, ck.held());
 
     if kick_reclaim {
         fs.journal.reclaim_kick();
@@ -363,7 +366,7 @@ pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<
 pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx) {
     let fs = trans.fs();
     let bc = &fs.btree.key_cache;
-    let ck = paths.held_key_cached(idx).expect("a key cache drop with no entry locked").node();
+    let ck = paths.held_key_cached(idx).expect("a key cache drop with no entry locked");
 
     /*
      * We just did an update to the btree, bypassing the key cache: the key
@@ -376,7 +379,7 @@ pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Path
     }
     bkey_cached_check_pin(fs, ck);
 
-    let mut locked = LockedEntry::new(ck, paths[idx].take_level(0).expect("a key cache drop of an entry not locked"));
+    let mut locked = LockedEntry::new(ck.node(), paths[idx].take_level(0).expect("a key cache drop of an entry not locked"));
     bc.bkey_cached_evict(&mut locked);
     bc.bkey_cached_free(trans, locked);
 
