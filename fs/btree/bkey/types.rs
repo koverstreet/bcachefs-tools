@@ -179,10 +179,10 @@ impl<'a, V: ?Sized + BkeyVal> BkeyS<'a, V> {
     }
 }
 
-impl<'a> BkeyS<'a> {
+impl<'a, S: KeyState> BkeyS<'a, FamilyVal<AllTypes, S>> {
     /// # Safety
     /// @v is @k's value, as long as k.u64s says, nothing else touching it for
-    /// 'a.
+    /// 'a, and what S says of it is true.
     pub unsafe fn from_parts(k: &'a mut c::bkey, v: *mut c::bch_val) -> Self {
         BkeyS { k, v, val: PhantomData }
     }

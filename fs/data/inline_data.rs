@@ -109,7 +109,7 @@ pub struct InlineDataMut<'a> {
 
 impl<'a> InlineDataMut<'a> {
     /// None if it isn't inline data.
-    pub fn of(k: BkeyS<'a>) -> Option<Self> {
+    pub fn of<V: ?Sized + BkeyVal>(k: BkeyS<'a, V>) -> Option<Self> {
         let (data_at, csum_at) = (DATA.of(k.k())?, CSUM.of(k.k()));
         let (head, data) = k.into_val_bytes_mut().split_at_mut_checked(data_at)?;
         let csum = match csum_at {

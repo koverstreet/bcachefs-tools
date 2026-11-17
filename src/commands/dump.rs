@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 
 use bcachefs_kernel::btree;
-use bcachefs_kernel::btree::bkey::{BkeyI, BkeyP, BkeyS};
+use bcachefs_kernel::btree::bkey::{AllTypes, AnyKey, BkeyP, BkeyS, FamilyVal};
 use bcachefs_kernel::btree::read::BsetHolder;
 use bcachefs_kernel::data::inline_data::InlineDataMut;
 use bcachefs_kernel::data::ptrs::Ptrs;
@@ -17,8 +17,8 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, JsetEntryType};
-use bcachefs_kernel::util::vstructs::{cast_plain, cast_plain_slice, plain_bytes_mut, Head, SelfSized,
-                                      Unvalidated};
+use bcachefs_kernel::util::vstructs::{cast_plain, cast_plain_slice, from_bytes_mut, plain_bytes_mut, Head,
+                                      SelfSized, Unvalidated};
 use bcachefs_kernel::POS_MIN;
 
 use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
@@ -177,7 +177,7 @@ const MEMBER_INVALID: u8 = c::BCH_SB_MEMBER_INVALID as u8;
 /// device index and set every other pointer's device to `BCH_SB_MEMBER_INVALID`.
 /// Returns whether it changed anything. The surviving replica is the one the
 /// dump actually wrote, and the only one the read path will consider.
-fn derep(fs: &Fs, k: BkeyS) -> bool {
+fn derep(fs: &Fs, k: BkeyS<'_, FamilyVal<AllTypes, Unvalidated>>) -> bool {
     let Some(mut k) = k.arm::<Ptrs>() else { return false };
     let min_dev = k.ptrs_mut(fs)
         .map(|p| p.dev())
@@ -200,7 +200,7 @@ fn derep(fs: &Fs, k: BkeyS) -> bool {
 /// filenames). Called for every key in both btree nodes and journal entries, so
 /// de-replication reaches the btree_root pointers carried in the journal as well
 /// as the interior/leaf pointers in btree nodes. Returns whether it modified.
-fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
+fn sanitize_val(fs: &Fs, mut k: BkeyS<'_, FamilyVal<AllTypes, Unvalidated>>, opts: SanitizeOpts) -> bool {
     const BTREE_PTR:            BkeyType = BkeyType::btree_ptr;
     const BTREE_PTR_V2:         BkeyType = BkeyType::btree_ptr_v2;
     const DIRENT:               BkeyType = BkeyType::dirent;
@@ -259,9 +259,6 @@ fn sanitize_journal(fs: &Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
                                      | JsetEntryType::write_buffer_keys) {
                 for k in e.keys_mut().into_iter().flatten() {
                     let k = k.map_err(|e| anyhow!("journal entry at {pos:#x}: {e}"))?;
-                    // SAFETY: XXX: off disk, not validated - sanitize_val()
-                    // should take an Unvalidated key
-                    let k = unsafe { &mut *BkeyI::from_raw_mut(core::ptr::from_mut(k).cast()) };
                     modified |= sanitize_val(&fs, BkeyS::from(k), opts);
                 }
             }
@@ -380,9 +377,8 @@ fn sanitize_btree(fs: &Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
                     // buffer: as long as the unpacked key's u64s says
                     unsafe { BkeyS::from_parts(&mut u, v) }
                 } else {
-                    // SAFETY: an unpacked key in the node's buffer, as long
-                    // as its u64s say
-                    let ki = unsafe { &mut *BkeyI::from_raw_mut(buf.as_mut_ptr().add(key_pos).cast()) };
+                    let ki = from_bytes_mut::<AnyKey<Unvalidated>>(&mut buf[key_pos..][..key_bytes])
+                        .map_err(|e| anyhow!("btree node bset at {pos:#x}: key at {key_pos:#x}: {e}"))?;
                     BkeyS::from(ki)
                 };
 
