@@ -17,6 +17,8 @@ use crate::init::error::id;
 use crate::inode;
 use crate::snapshots::{snapshot, subvolume};
 use crate::os::checksum::{Checksum, Crc32c, Crc64};
+// a glob: userspace's are RustCrypto's, called through their traits
+use crate::os::crypto::*;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::os_str::OsStrExt;
 use crate::util::siphash::SipHash24;
@@ -394,11 +396,7 @@ pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bc
 
     // siphash_old's key is the first 16 bytes of the seed's sha256
     if info.type_ == c::StrHashKind::siphash_old {
-        let seed = plain_bytes(&inode.bi_hash_seed);
-        let mut digest = [0u8; 32];
-        // SAFETY: @seed's bytes in, a sha256 digest's out
-        unsafe { c::sha256(seed.as_ptr(), seed.len() as _, digest.as_mut_ptr()) };
-
+        let digest = Sha256::digest(plain_bytes(&inode.bi_hash_seed));
         let key = plain_bytes_mut(&mut info.siphash_key);
         key.copy_from_slice(&digest[..key.len()]);
     }

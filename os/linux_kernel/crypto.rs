@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! ChaCha20 and Poly1305: the kernel's lib/crypto, called as RustCrypto's
-//! chacha20 and poly1305 crates are - userspace's.
+//! ChaCha20, Poly1305 and SHA-256: the kernel's lib/crypto, called as
+//! RustCrypto's chacha20, poly1305 and sha2 crates are - userspace's.
 
 use crate::c;
 use crate::data::checksum::CHACHA_BLOCK_SIZE;
@@ -95,5 +95,15 @@ impl Poly1305 {
 impl Drop for Poly1305 {
     fn drop(&mut self) {
         c::wipe(&mut self.0)
+    }
+}
+
+pub struct Sha256;
+
+impl Sha256 {
+    pub fn digest(data: &[u8]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        unsafe { c::sha256(data.as_ptr(), data.len() as _, out.as_mut_ptr()) };
+        out
     }
 }

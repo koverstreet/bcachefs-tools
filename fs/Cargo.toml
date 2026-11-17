@@ -55,9 +55,10 @@ io-uring = "0.7"
 backtrace = "0.3"
 # Userspace only: os/linux_user/checksum.rs's crc32c(), in hardware on x86 and arm64.
 crc32c   = "0.6"
-# Userspace only: os/linux_user/crypto.rs's ChaCha20 and Poly1305.
+# Userspace only: os/linux_user/crypto.rs's ChaCha20, Poly1305 and SHA-256.
 chacha20 = { version = "0.10", features = ["zeroize"] }
 poly1305 = { version = "0.9", features = ["zeroize"] }
+sha2     = { version = "0.11", default-features = false }
 # Userspace only: os/linux_user's Mutex, RwSem and PercpuRwSem.
 parking_lot = "0.12"
 owo-colors = "4"
