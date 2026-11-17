@@ -410,7 +410,7 @@ fn check_btree_alloc(fs: &Fs, trans: &TransGuard<'_>) -> Result<(), BchError> {
         bucket_gens: BtreeIter::new(trans, Btree::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH),
     };
 
-    let mut last_flushed = WbMaybeFlush::new()?;
+    let mut last_flushed = WbMaybeFlush::new();
     let mut ca = None;
 
     while lockrestart_do(trans, |t| {
@@ -626,7 +626,7 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
     check_btree_alloc(fs, &trans)?;
 
     {
-        let mut last_flushed = WbMaybeFlush::new()?;
+        let mut last_flushed = WbMaybeFlush::new();
         let mut iter = BtreeIter::new(&trans, Btree::need_discard, POS_MIN, BtreeIterFlags::PREFETCH);
         iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, _| {
             passes::cancelled(fs)?;
@@ -714,7 +714,7 @@ fn check_alloc_to_lru_ref<'t>(
 }
 
 fn check_alloc_to_lru_refs(fs: &Fs) -> Result<(), BchError> {
-    let mut last_flushed = WbMaybeFlush::new()?;
+    let mut last_flushed = WbMaybeFlush::new();
     let progress = Progress::recovery(fs, c"bch2_check_alloc_to_lru_refs", &[Btree::alloc], &[]);
 
     let trans = crate::btree_trans!(fs);

@@ -100,7 +100,7 @@ fn check_backpointer_has_valid_bucket(t: &TransAttempt<'_, '_>, k: BkeySC<'_>,
 
 fn check_btree_backpointers(fs: &Fs) -> Result<(), BchError> {
     let progress = Progress::recovery(fs, c"bch2_check_btree_backpointers", &[Btree::backpointers], &[]);
-    let mut last_flushed = WbMaybeFlush::new()?;
+    let mut last_flushed = WbMaybeFlush::new();
 
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, Btree::backpointers, POS_MIN, BtreeIterFlags::empty());
@@ -828,7 +828,7 @@ fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &TransGuard<'_>, pins: &Bt
 fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let pins = fs.btree_cache_pins();
-    let mut s = ExtentsToBpState { bp_range: POS_MIN..=SPOS_MAX, last_flushed: WbMaybeFlush::new()? };
+    let mut s = ExtentsToBpState { bp_range: POS_MIN..=SPOS_MAX, last_flushed: WbMaybeFlush::new() };
     let mut checked_bad = POS_MAX;
 
     let mut iter = BtreeIter::new(&trans, Btree::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
@@ -928,7 +928,7 @@ fn check_bucket_backpointers_to_extents(trans: &TransGuard<'_>, ca: &Dev, bucket
 fn check_backpointers_to_extents_pass(fs: &Fs, trans: &TransGuard<'_>, range: RangeInclusive<c::bbpos>)
     -> Result<(), BchError>
 {
-    let mut last_flushed = WbMaybeFlush::new()?;
+    let mut last_flushed = WbMaybeFlush::new();
     let btrees = [Btree::backpointers, Btree::stripe_backpointers];
     let progress = Progress::recovery(fs, c"backpointers_to_extents", &btrees, &[]);
 

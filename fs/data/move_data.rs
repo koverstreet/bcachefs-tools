@@ -416,7 +416,7 @@ impl Moving<'_> {
             mover:        Mover { moving: self, bucket, name, pred },
             w,
             ca:           ca.as_deref(),
-            last_flushed: WbMaybeFlush::new().map_err(|_| BchError::from(c::ENOMEM))?,
+            last_flushed: WbMaybeFlush::new(),
             audited:      ca.as_ref().map_or(0, |ca| ca.sector_to_bucket(w.start)),
             stripe_scrubbed: None,
         };

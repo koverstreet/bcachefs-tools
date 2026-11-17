@@ -347,7 +347,7 @@ pub(crate) fn dev_data_drop_by_backpointers(fs: &Fs, ca: &Dev, mut d: DevDrop<'_
     const MAX_STALLED: u32 = 10;
 
     let trans = crate::btree_trans!(fs);
-    let mut last_flushed = WbMaybeFlush::new()?;
+    let mut last_flushed = WbMaybeFlush::new();
     let p = c::progress_indicator::default();
     let progress = Progress::new(&p, fs, c"dropping device data", 1 << Btree::backpointers.0, 0);
 

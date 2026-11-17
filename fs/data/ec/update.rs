@@ -68,7 +68,7 @@ where
 {
     let fs = trans.fs();
     let (btree, range) = block_bps(fs, s, block);
-    let mut last_flushed = WbMaybeFlush::new()?;
+    let mut last_flushed = WbMaybeFlush::new();
 
     BtreeIter::new(trans, btree, *range.start(), BtreeIterFlags::empty())
         .for_each_max_commit(trans, *range.end(), BtreeIterFlags::empty(), res, flags, |t, _, bp_k| {

@@ -254,7 +254,7 @@ fn check_reconcile_work_data_btrees(trans: &TransGuard<'_>) -> Result<(), BchErr
                   rb_iter(Btree::reconcile_pending)];
 
     let mut s = PerSnapshotIoOpts::new(fs);
-    let mut last_flushed = WbMaybeFlush::new()?;
+    let mut last_flushed = WbMaybeFlush::new();
 
     fs.recovery.progress.init(fs, c"check_reconcile_work_data_btrees",
                               &[Btree::extents, Btree::reflink], &[]);
@@ -341,7 +341,7 @@ fn check_reconcile_work_phys(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let mut bp_iter = BtreeIter::new(trans, Btree::backpointers, POS_MIN, BtreeIterFlags::PREFETCH);
     let mut phys = [BtreeIter::new(trans, Btree::reconcile_work_phys, POS_MIN, BtreeIterFlags::PREFETCH),
                     BtreeIter::new(trans, Btree::reconcile_hipri_phys, POS_MIN, BtreeIterFlags::PREFETCH)];
-    let mut last_flushed = WbMaybeFlush::new()?;
+    let mut last_flushed = WbMaybeFlush::new();
 
     loop {
         commit_do(trans, None, NO_ENOSPC, |t| {

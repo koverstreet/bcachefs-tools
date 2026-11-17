@@ -111,7 +111,7 @@ fn check_bucket_to_stripe_ref(t: &TransAttempt<'_, '_>, r: Bpos) -> Result<(), B
 /// Every stripe's refs, then every bucket_to_stripe entry's stripe:
 /// bch2_check_stripe_refs(), in check_alloc_to_lru_refs.
 pub fn check_stripe_refs(trans: &TransGuard<'_>) -> Result<(), BchError> {
-    let mut last_flushed = WbMaybeFlush::new()?;
+    let mut last_flushed = WbMaybeFlush::new();
 
     BtreeIter::new(trans, Btree::stripes, POS_MIN, BtreeIterFlags::PREFETCH)
         .for_each_commit(trans, None, CommitFlags::NO_ENOSPC, |t, _, k| check_stripe_refs_one(t, k, &mut last_flushed))?;

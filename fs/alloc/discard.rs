@@ -926,7 +926,7 @@ pub(crate) fn do_invalidates_work(ca: &Dev) {
     let fs = ca.fs();
     let trans = crate::btree_trans!(fs);
     let ret = (|| -> Result<(), BchError> {
-        let mut last_flushed = WbMaybeFlush::new().map_err(|_| BchError::from(c::ENOMEM))?;
+        let mut last_flushed = WbMaybeFlush::new();
         let _ = trans.write_buffer_tryflush();
 
         let mut nr = ca.should_invalidate_buckets(&ca.usage_read_fast()) as i64;

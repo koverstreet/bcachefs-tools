@@ -438,7 +438,7 @@ impl<'a, 'f> Walker<'a, 'f> {
             ctxt,
             work:         WorkBuf::new()?,
             s:            PerSnapshotIoOpts::new(ctxt.trans().fs()),
-            last_flushed: WbMaybeFlush::new()?,
+            last_flushed: WbMaybeFlush::new(),
             retry:        StripeRetries::new(),
         })
     }
