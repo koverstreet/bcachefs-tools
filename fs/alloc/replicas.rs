@@ -1043,7 +1043,7 @@ mod tests {
         };
 
         let (sb, ret, err) = validate(false);
-        assert_eq!((ret, err.as_str()), (0, "8 bytes past its last whole entry, dropped"));
+        assert_eq!((ret, err.as_str()), (0, "13 bytes past its last whole entry, dropped"));
         let f = sb.field::<V0>().unwrap();
         assert_eq!(f.as_bytes().len(), 8);
         assert!(f.as_bytes()[SECTION_HEAD + 3..].iter().all(|&b| b == 0));

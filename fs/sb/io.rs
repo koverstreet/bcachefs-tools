@@ -334,10 +334,11 @@ where
 }
 
 /// The section at @f in @sb, @len bytes, read with a partial entry past its
-/// whole ones, which end at @end - C's readers ignored one: shrunk to them,
-/// the rest of its last u64 zeroed as a writer leaves it, the sections after
-/// it moved down, and a warning in @err. Repaired as it's read, as
-/// validate() repairs version_incompat_allowed, and written whole
+/// whole ones, which end at @end, or bytes there that aren't zeroes - C's
+/// readers ignored them, and a trusting walk would read them as an entry:
+/// shrunk to its entries, the rest of its last u64 zeroed as a writer leaves
+/// it, the sections after it moved down, and a warning in @err. Repaired as
+/// it's read, as validate() repairs version_incompat_allowed, and written whole
 /// with the next superblock write; unrepaired, a reader would find no
 /// section, or not all of it. The section itself doesn't move, so
 /// validate()'s walk goes on from where the next one now is.
@@ -354,7 +355,7 @@ fn sb_field_drop_partial(sb: &mut bch_sb<Unvalidated>, f: usize, len: usize, end
         .set_val_u64s(whole / size_of::<u64>());
     sb.sub_u64s((dropped / size_of::<u64>()) as u32);
 
-    write!(err, "{dropped} bytes past its last whole entry, dropped");
+    write!(err, "{} bytes past its last whole entry, dropped", len - end);
 }
 
 /// The header of the section at @off of @sb, as read: its extent checked.
@@ -385,7 +386,8 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: ValidateFlags, e
     let Some(end) = f.entries_end() else {
         return too_short(err, len);
     };
-    if end.next_multiple_of(size_of::<u64>()) < len {
+    let past = &sb.as_bytes()[off + end..off + len];
+    if end.next_multiple_of(size_of::<u64>()) < len || past.iter().any(|&b| b != 0) {
         if flags.contains(ValidateFlags::write) {
             write!(err, "{} bytes past its last whole entry", len - end);
             return invalid();
