@@ -693,6 +693,24 @@ impl State for Validated {
     type OfSized<T: 'static> = T;
 }
 
+/// A value in place, Validated or Unvalidated: the states a sized family
+/// defines alike, X_validated, so X<S> derefs to it in either - for code
+/// generic over the state.
+pub trait InPlace: State {
+    fn def<D: ?Sized, F: Family<Unvalidated = D, Validated = D>>(r: &Self::Of<F>) -> &D;
+    fn def_mut<D: ?Sized, F: Family<Unvalidated = D, Validated = D>>(r: &mut Self::Of<F>) -> &mut D;
+}
+
+impl InPlace for Unvalidated {
+    fn def<D: ?Sized, F: Family<Unvalidated = D, Validated = D>>(r: &Self::Of<F>) -> &D { r }
+    fn def_mut<D: ?Sized, F: Family<Unvalidated = D, Validated = D>>(r: &mut Self::Of<F>) -> &mut D { r }
+}
+
+impl InPlace for Validated {
+    fn def<D: ?Sized, F: Family<Unvalidated = D, Validated = D>>(r: &Self::Of<F>) -> &D { r }
+    fn def_mut<D: ?Sized, F: Family<Unvalidated = D, Validated = D>>(r: &mut Self::Of<F>) -> &mut D { r }
+}
+
 /// A sized T from outside, Unvalidated: its bytes, as T's - read as one,
 /// through Deref.
 #[repr(transparent)]
@@ -876,13 +894,27 @@ macro_rules! vstruct_family {
         }
     };
 
-    // To its definition in each state - or, a typestate, Unvalidated to
+    // To its definition in each state: Whole's, and in place the one both
+    // states have, generic over them - or, a typestate, Unvalidated to
     // X<Validated>, where X's methods are, not to their definition: a #[grown]
     // type's, which is one for both, and whose length validate checks before
     // anything reads it
-    (@deref $name:ident, $fam:ident) => {
-        $crate::vstruct_family!(@deref_to_def $name, $fam, Whole, Validated, Unvalidated);
-    };
+    (@deref $name:ident, $fam:ident) => { const _: () = {
+        use $crate::util::vstructs::{Family, InPlace};
+
+        $crate::vstruct_family!(@deref_to_def $name, $fam, Whole);
+
+        impl<S: InPlace> ::core::ops::Deref for $name<S> {
+            type Target = <$fam as Family>::Validated;
+            #[inline]
+            fn deref(&self) -> &Self::Target { S::def::<_, $fam>(&self.repr) }
+        }
+
+        impl<S: InPlace> ::core::ops::DerefMut for $name<S> {
+            #[inline]
+            fn deref_mut(&mut self) -> &mut Self::Target { S::def_mut::<_, $fam>(&mut self.repr) }
+        }
+    }; };
     (@deref typestate $name:ident, $fam:ident) => { const _: () = {
         use $crate::util::vstructs::{Unvalidated, Validated};
 
