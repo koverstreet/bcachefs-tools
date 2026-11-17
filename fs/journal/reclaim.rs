@@ -19,9 +19,10 @@ use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, SbFeature};
-use crate::fs::{Dev, Fs};
+use crate::fs::Dev;
 use crate::journal::pins::PinsRead;
 use crate::locking::{ExclusiveGuard, MemallocFlags, Mutex};
+use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::os::blkdev;
 use crate::os::kernel::{cond_resched, jiffies, jiffies_to_msecs, msecs_to_jiffies, time_after, time_in_range,
@@ -613,9 +614,10 @@ impl c::journal {
             return Ok(());
         }
 
-        let fs: &'static Fs = unsafe { &*fs.as_ptr() };
+        // the thread's stopped before the journal goes - reclaim_stop()
+        let fs_ref = unsafe { BackRef::new(fs) };
         let ret = self.reclaim_thread.start(format_args!("bch-reclaim/{}", fs.name().to_str().unwrap_or("?")),
-                                            move |me| reclaim_thread(&fs.journal, me));
+                                            move |me| reclaim_thread(&fs_ref.journal, me));
         bch_err_msg!(fs, ret, "creating journal reclaim thread")
     }
 

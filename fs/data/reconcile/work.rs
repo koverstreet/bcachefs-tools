@@ -80,6 +80,7 @@ use crate::data_structures::cuckoo::Cuckoo;
 use crate::os::kernel::{cond_resched, ktime_get_ns, WRITE};
 use crate::os::kthread::{Kthread, KthreadSelf};
 use crate::os::power_supply::{self, PowerNotifier};
+use crate::util::backref::BackRef;
 use crate::util::par::{self, Backend};
 use crate::util::place::{Contained, PlacedDrop};
 use crate::util::{HumanReadable, Nsecs, ToText};
@@ -1025,12 +1026,12 @@ impl Fs {
 
         r.thread_exit_ret.store(0, Relaxed);
 
-        // SAFETY: the thread's stopped before the filesystem goes -
-        // reconcile_stop(), on the way to read-only
-        let fs: &'static Fs = unsafe { &*self.as_ptr() };
+        // the thread's stopped before the filesystem goes - reconcile_stop(),
+        // on the way to read-only
+        let fs = unsafe { BackRef::new(self) };
         r.thread.start(format_args!("bch-reconcile/{}", self.name().to_str().unwrap_or("?")),
                        move |me| {
-            if let Err(e) = thread(fs, me) {
+            if let Err(e) = thread(&fs, me) {
                 // going read-only isn't an error, as do_reconcile() has it
                 if !e.matches(c::EROFS) {
                     fs.event_inc_trace(events::reconcile_error, |out| write!(out, "{e}"));

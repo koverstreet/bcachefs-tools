@@ -72,6 +72,7 @@ use crate::debug::trace::events;
 use crate::types::{Fifo};
 use crate::prt;
 use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
+use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Private, RegisterError, Registration};
 use crate::util::siphash::SipHash13Key;
@@ -820,11 +821,11 @@ impl Fs {
             return Ok(());
         }
 
-        // SAFETY: the thread's stopped before the filesystem goes -
-        // copygc_stop(), on the way to read-only
-        let fs: &'static Fs = unsafe { &*self.as_ptr() };
+        // the thread's stopped before the filesystem goes - copygc_stop(), on
+        // the way to read-only
+        let fs = unsafe { BackRef::new(self) };
         let ret = self.copygc.thread.start(format_args!("bch-copygc/{}", self.name().to_str().unwrap_or("?")),
-                                           move |me| { let _ = thread(fs, me); });
+                                           move |me| { let _ = thread(&fs, me); });
         bch_err_msg!(self, ret, "creating copygc thread")
     }
 
