@@ -67,6 +67,7 @@ use crate::locking::{MemallocFlags, SeqLock};
 use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KVVec;
+use crate::util::atomic::try_update;
 use crate::util::bio::{Bio, BioOwner, Gathered};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
@@ -285,8 +286,7 @@ impl Dev {
     /// A discard in flight, if there's room.
     fn discard_slot_get(&self, fastpath: bool) -> bool {
         let max = dev_in_flight_max(fastpath);
-        self.discards_in_flight
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < max).then_some(n + 1))
+        try_update(&self.discards_in_flight, Ordering::Relaxed, Ordering::Relaxed, |n| (n < max).then_some(n + 1))
             .is_ok()
     }
 

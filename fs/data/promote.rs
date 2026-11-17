@@ -29,6 +29,7 @@ use crate::errcode::BchError;
 use crate::fs::{Fs, WriteRef};
 use crate::prt;
 use crate::debug::trace::events;
+use crate::util::atomic::try_update;
 use crate::util::backref::BackRef;
 use crate::os::kernel::{current_id, local_clock, num_online_cpus};
 use crate::util::refcount::TryRefcount;
@@ -48,9 +49,7 @@ const PROMOTES_PER_CPU: u32 = 32;
 impl Fs {
     pub fn promote_limit_tryget(&self) -> bool {
         let max = PROMOTES_PER_CPU * num_online_cpus();
-        self.promotes_in_flight
-            .fetch_update(Relaxed, Relaxed, |n| (n < max).then_some(n + 1))
-            .is_ok()
+        try_update(&self.promotes_in_flight, Relaxed, Relaxed, |n| (n < max).then_some(n + 1)).is_ok()
     }
 
     pub fn promote_limit_put(&self) {

@@ -126,7 +126,7 @@ pub(crate) fn atomic(item: &syn::ItemStruct, storage: &Ident) -> TokenStream {
             #vis fn fetch_update(&self, set: #ordering, fetch: #ordering, mut f: impl FnMut(#name) -> Option<#name>)
                 -> Result<#name, #name>
             {
-                self.0.fetch_update(set, fetch, |w| f(#name::from_bits(w)).map(#name::into_bits))
+                crate::util::atomic::try_update(&self.0, set, fetch, |w| f(#name::from_bits(w)).map(#name::into_bits))
                     .map(#name::from_bits)
                     .map_err(#name::from_bits)
             }

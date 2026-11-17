@@ -19,6 +19,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::os::kernel::PAGE_SIZE;
 use crate::os::sysfs::{self, obj_of, Attribute, Bin, Dir, Files, ShowFn, StoreFn};
+use crate::util::atomic::try_update;
 use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
 use crate::util::Printbuf;
 
@@ -335,7 +336,7 @@ impl Kobject {
     /// get(), unless the last ref's been put.
     pub fn get_unless_zero(&self) -> bool {
         let _ = self.ktype();
-        self.refs.fetch_update(Relaxed, Relaxed, |r| (r != 0).then(|| r + 1)).is_ok()
+        try_update(&self.refs, Relaxed, Relaxed, |r| (r != 0).then(|| r + 1)).is_ok()
     }
 
     /// A ref given back: the last releases the owner - frees it.

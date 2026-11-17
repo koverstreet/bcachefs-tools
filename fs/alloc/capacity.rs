@@ -41,6 +41,7 @@ use crate::fs::Fs;
 use crate::init::error::trans_inconsistent;
 use crate::percpu_field;
 use crate::debug::trace::events;
+use crate::util::atomic::try_update;
 use crate::util::sleep::Sleep;
 use crate::os::kernel::unlikely;
 use crate::util::log::{log_no_fs, LogLevel};
@@ -279,8 +280,8 @@ pub(crate) fn account_disk_usage_change(t: &TransAttempt<'_, '_>) {
         // of them: too much self-heals at the next recalc, too little would
         // overcommit
         for a in &fs.capacity.sectors_available {
-            let _ = a.fetch_update(Ordering::Relaxed, Ordering::Relaxed,
-                                   |old| Some(old.saturating_sub(should_not_have_added as u64)));
+            let _ = try_update(a, Ordering::Relaxed, Ordering::Relaxed,
+                               |old| Some(old.saturating_sub(should_not_have_added as u64)));
         }
         added -= should_not_have_added;
     }
@@ -761,7 +762,7 @@ impl Fs {
             }
 
             let need = want - have;
-            let got = global.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
+            let got = try_update(global, Ordering::Relaxed, Ordering::Relaxed, |old| {
                 let get = need.min(old);
                 (get != 0).then(|| old - get)
             }).map_or(0, |old| need.min(old));

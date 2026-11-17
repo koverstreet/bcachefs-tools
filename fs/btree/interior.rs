@@ -35,6 +35,7 @@ use crate::new_lock;
 use crate::types::{Fifo, Le64, Lent};
 use crate::util::Printbuf;
 use crate::util::alloc::{Box, KVVec, Kmalloc};
+use crate::util::atomic::try_update;
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_symbol;
 use crate::util::futex::EventCount;
@@ -481,7 +482,7 @@ impl WillMakeReachable {
 
     /// The node's first write done: the update's ref for it put.
     pub(crate) fn first_write_done(&self) {
-        if let Ok(v) = self.0.fetch_update(SeqCst, Relaxed, |v| (v & 1 != 0).then_some(v & !1)) {
+        if let Ok(v) = try_update(&self.0, SeqCst, Relaxed, |v| (v & 1 != 0).then_some(v & !1)) {
             unsafe { &*((v & !1) as *const BtreeUpdate) }.pending_put();
         }
     }

@@ -7,6 +7,7 @@ use core::sync::atomic::{fence, AtomicU32, Ordering::{Acquire, Relaxed, Release}
 use pin_init::{pin_init_from_closure, PinInit};
 
 use super::{RefGuard, Refcount, TryRefcount, WaitableRef};
+use crate::util::atomic::try_update;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::place::Placed;
 use crate::util::sleep::Sleep;
@@ -128,7 +129,7 @@ unsafe impl<T> Refcount for AtomicRef<T> {
 
 unsafe impl<T> TryRefcount for AtomicRef<T> {
     fn try_inc(&self) -> bool {
-        self.count.fetch_update(Relaxed, Relaxed, |r| (r & STOPPED == 0).then_some(r + 1)).is_ok()
+        try_update(&self.count, Relaxed, Relaxed, |r| (r & STOPPED == 0).then_some(r + 1)).is_ok()
     }
 }
 
@@ -138,7 +139,7 @@ impl<T> WaitableRef for AtomicRef<T> {
     /// with nothing outstanding - a BtreeTrans's, every exit - is a cmpxchg
     /// and a store.
     fn stop(&self) {
-        if self.count.fetch_update(Release, Relaxed, |r| (r & STOPPED == 0).then_some((r - 1) | STOPPED))
+        if try_update(&self.count, Release, Relaxed, |r| (r & STOPPED == 0).then_some((r - 1) | STOPPED))
                == Ok(1) {
             self.drop_value();
         }
