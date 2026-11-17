@@ -5,7 +5,8 @@
 //! destroyed at exit, with nothing of it allocated before or after.
 
 use crate::c;
-use crate::util::alloc::{flags, AllocError, Flags};
+use crate::util::alloc::{flags, Alloc, AllocError, Allocator, Flags};
+use core::alloc::Layout;
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::ptr::{null_mut, NonNull};
@@ -71,4 +72,35 @@ impl<T> KmemCache<T> {
     pub unsafe fn free(&self, p: NonNull<T>) {
         unsafe { c::kmem_cache_free(self.as_ptr(), p.as_ptr().cast()) }
     }
+
+    /// The Allocator's: @layout, if it's within T's.
+    fn alloc(&self, layout: Layout, zeroed: bool) -> Result<NonNull<[u8]>, AllocError> {
+        let t = Layout::new::<T>();
+        if layout.size() > t.size() || layout.align() > t.align() {
+            return Err(AllocError);
+        }
+
+        let gfp = if zeroed { flags::ZERO } else { Flags::empty() };
+        let p = NonNull::new(unsafe {
+            c::kmem_cache_alloc_noprof(self.as_ptr(), crate::util::alloc::current_gfp_context_raw(gfp.raw()))
+        }).ok_or(AllocError)?;
+        Ok(NonNull::slice_from_raw_parts(p.cast(), t.size()))
+    }
 }
+
+/// An allocator of a @T's memory: of no more than its layout.
+unsafe impl<T> Allocator for KmemCache<T> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        self.alloc(layout, false)
+    }
+
+    fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        self.alloc(layout, true)
+    }
+
+    unsafe fn deallocate(&self, p: NonNull<u8>, _: Layout) {
+        unsafe { self.free(p.cast()) }
+    }
+}
+
+unsafe impl<T> Alloc for KmemCache<T> {}
