@@ -48,7 +48,7 @@ use crate::errcode::BchError;
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
-use crate::util::{alloc::{Box, KVmalloc}, bio::{Bio, BioRange},
+use crate::util::{alloc::{Box, KVmalloc}, bio::BioRange,
                   late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use crate::os::compress::{lz4, zlib, zstd};
@@ -660,47 +660,33 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
     false
 }
 
-/// # Safety
-/// @dst and @src are bios, ours.
-///
 /// Not inlined: in __write() its locals were 700 bytes of the frame, on every
 /// uncompressed write too.
 #[inline(never)]
-pub(crate) unsafe fn bio_compress(fs: &Fs, dst: *mut c::bio, dst_len: &mut usize,
-                                  src: *mut c::bio, src_len: &mut usize, compression_opt: c_uint,
-                                  write_pos: Bpos, bounce_source: bool) -> CompressionType {
-    // SAFETY: the caller's - their sizes ours to clamp, and put back
-    let (dst_size, src_size) = unsafe { ((*dst).bi_iter.bi_size, (*src).bi_iter.bi_size) };
+pub(crate) fn bio_compress(fs: &Fs, dst: BioRange<'_>, dst_len: &mut usize,
+                           src: BioRange<'_>, src_len: &mut usize, compression_opt: c_uint,
+                           write_pos: Bpos, bounce_source: bool) -> CompressionType {
     // Don't consume more than encoded_extent_max from @src, or make more than it:
-    let consume_src = src_size.min(extent_max(fs) as u32);
-    let consume_dst = dst_size.min(consume_src);
-    // SAFETY: as above
-    unsafe { ((*dst).bi_iter.bi_size, (*src).bi_iter.bi_size) = (consume_dst, consume_src) };
+    let consume_src = src.len().min(extent_max(fs) as u32);
+    let consume_dst = dst.len().min(consume_src);
+    let (dst, src) = (dst.take(consume_dst), src.take(consume_src));
     (*dst_len, *src_len) = (consume_dst as usize, consume_src as usize);
 
-    let t = {
-        // SAFETY: the caller's
-        let (dst, src) = unsafe { (Bio::from_raw(dst).range(), Bio::from_raw(src).range()) };
-        let dst_data = map_or_bounce(fs, dst, WRITE);
-        let src_data = if bounce_source { bio_bounce(fs, src, READ) } else { map_or_bounce(fs, src, READ) };
+    let dst_data = map_or_bounce(fs, dst, WRITE);
+    let src_data = if bounce_source { bio_bounce(fs, src, READ) } else { map_or_bounce(fs, src, READ) };
 
-        // SAFETY: a copy, ours - or the bio's own pages, which C, not asking for
-        // a copy, says are stable: BCH_WRITE_pages_stable
-        let src_slice = unsafe { src_data.data().assume_stable() };
-        let t = compress(fs, dst_data.data(), dst_len, src_slice, src_len, compression_opt as u8, write_pos);
-        if t != CompressionType::none && t != CompressionType::incompressible {
-            if !dst_data.mapped() {
-                // past what's compressed, uninitialized and never submitted
-                dst.copy_from_volatile(dst_data.data());
-            }
-            assert!(*dst_len != 0 && *dst_len <= consume_dst as usize, "compressed to {dst_len} of {consume_dst} bytes");
-            assert!(*src_len != 0 && *src_len <= consume_src as usize, "compressed {src_len} of {consume_src} bytes");
+    // SAFETY: a copy, ours - or the bio's own pages, which C, not asking for
+    // a copy, says are stable: BCH_WRITE_pages_stable
+    let src_slice = unsafe { src_data.data().assume_stable() };
+    let t = compress(fs, dst_data.data(), dst_len, src_slice, src_len, compression_opt as u8, write_pos);
+    if t != CompressionType::none && t != CompressionType::incompressible {
+        if !dst_data.mapped() {
+            // past what's compressed, uninitialized and never submitted
+            dst.copy_from_volatile(dst_data.data());
         }
-        t
-    };
-
-    // SAFETY: as above, the references gone
-    unsafe { ((*dst).bi_iter.bi_size, (*src).bi_iter.bi_size) = (dst_size, src_size) };
+        assert!(*dst_len != 0 && *dst_len <= consume_dst as usize, "compressed to {dst_len} of {consume_dst} bytes");
+        assert!(*src_len != 0 && *src_len <= consume_src as usize, "compressed {src_len} of {consume_src} bytes");
+    }
     t
 }
 

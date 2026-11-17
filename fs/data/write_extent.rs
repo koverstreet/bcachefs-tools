@@ -445,10 +445,9 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
                 c::CompressionType::incompressible
             } else if op.bits.compression_opt() != 0 {
                 let (mut d, mut s) = (0usize, 0usize);
-                let t = unsafe {
-                    bio_compress(fs, dst, &mut d, src, &mut s, op.bits.compression_opt().into(), op.pos,
-                                 !op.has(w::pages_stable))
-                };
+                let (dst_r, src_r) = unsafe { (Bio::from_raw(dst).range(), Bio::from_raw(src).range()) };
+                let t = bio_compress(fs, dst_r, &mut d, src_r, &mut s, op.bits.compression_opt().into(), op.pos,
+                                     !op.has(w::pages_stable));
                 (dst_len, src_len) = (d as u32, s as u32);
                 t
             } else {
