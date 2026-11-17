@@ -255,7 +255,7 @@ impl BtreeTrans<'_> {
 
     #[inline]
     fn key_can_insert_cached(paths: &Paths<'_>, path: PathIdx, u64s: usize) -> bool {
-        let ck = unsafe { &*cached_entry(paths, path) };
+        let ck = paths.held_key_cached(path).expect("a cached update's path holds its entry");
 
         likely(u64s <= usize::from(ck.u64s) && ck.dirty())
     }

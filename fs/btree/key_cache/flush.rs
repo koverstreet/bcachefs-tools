@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{cached, LockedEntry};
+use super::LockedEntry;
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, UpdateTriggerFlags, Watermark};
@@ -80,7 +80,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
 
     c_iter.traverse(t)?;
 
-    let Some(ck) = trans.paths()[c_iter.path].key_cached().map(|ck| unsafe { cached(trans, ck) }) else {
+    let Some(ck) = trans.paths().held_key_cached(c_iter.path).map(|ck| ck.node()) else {
         return Ok(());
     };
 
@@ -363,8 +363,7 @@ pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<
 pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx) {
     let fs = trans.fs();
     let bc = &fs.btree.key_cache;
-    let ck = paths[idx].key_cached().map(|ck| unsafe { cached(trans, ck) })
-        .expect("a key cache drop with no entry");
+    let ck = paths.held_key_cached(idx).expect("a key cache drop with no entry locked").node();
 
     /*
      * We just did an update to the btree, bypassing the key cache: the key

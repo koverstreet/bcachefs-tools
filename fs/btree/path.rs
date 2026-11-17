@@ -283,6 +283,13 @@ impl<'t> Paths<'t> {
         Some(unsafe { LockedNode::new(&*ptr::from_ref(b.node())) })
     }
 
+    /// Path @idx's key cache entry, if it's a cached path holding it locked:
+    /// for the attempt, as held_btree_node()'s is.
+    pub(crate) fn held_key_cached(&self, idx: PathIdx) -> Option<LockedNode<'t, c::bkey_cached>> {
+        let ck = self[idx].downcast::<c::bkey_cached>()?.locked_node(0)?;
+        Some(unsafe { LockedNode::new(&*ptr::from_ref(ck.node())) })
+    }
+
     /// held_btree_node(), of a node the path holds for intent and the
     /// transaction for write - through this path, or another at the node: an
     /// update to a leaf another update's path locked.

@@ -202,15 +202,6 @@ impl bch_fs_btree_key_cache {
     }
 }
 
-/// An entry of the cache's, found unlocked: for as long as the transaction
-/// holds the btree trans SRCU, which it's freed a grace period of.
-///
-/// # Safety
-/// @ck is the cache's, found under @trans's SRCU.
-pub(super) unsafe fn cached<'t>(_trans: &'t BtreeTrans<'_>, ck: *const c::bkey_cached) -> &'t c::bkey_cached {
-    unsafe { &*ck }
-}
-
 /// An entry, held write locked: what its plain fields are written through.
 pub(super) struct LockedEntry<'a> {
     ck:   NonNull<c::bkey_cached>,
@@ -249,10 +240,12 @@ fn bkey_cached_trylock(ck: &c::bkey_cached) -> Option<LockedEntry<'_>> {
 }
 
 impl BtreeTrans<'_> {
+    /// @pos's entry, found unlocked: for as long as the transaction holds the
+    /// btree trans SRCU, which an entry is freed a grace period of.
     pub(crate) fn btree_key_cache_find(&self, btree: Btree, pos: Bpos) -> Option<&c::bkey_cached> {
         let key = c::bkey_cached_key { btree_id: btree.0, pos };
 
-        self.fs().btree.key_cache.table.get_entry(&key, &read_lock()).map(|ck| unsafe { cached(self, ck) })
+        self.fs().btree.key_cache.table.get_entry(&key, &read_lock()).map(|ck| unsafe { &*ptr::from_ref(ck) })
     }
 }
 
@@ -428,8 +421,8 @@ impl<const PCPU: bool> Drop for NewEntry<'_, PCPU> {
 ///
 /// # Safety
 /// @ck was just claimed.
-unsafe fn claimed<'t>(trans: &'t BtreeTrans<'_>, ck: NonNull<c::bkey_cached>) -> LockedEntry<'t> {
-    let ck = unsafe { cached(trans, ck.as_ptr()) };
+unsafe fn claimed<'t>(_trans: &'t BtreeTrans<'_>, ck: NonNull<c::bkey_cached>) -> LockedEntry<'t> {
+    let ck: &'t c::bkey_cached = unsafe { ck.as_ref() };
     LockedEntry::new(ck, unsafe { SixHold::from_raw(&ck.c.lock, SIX_LOCK_write) })
 }
 
