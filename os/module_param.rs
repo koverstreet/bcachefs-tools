@@ -178,14 +178,14 @@ macro_rules! module_param {
     ) => {
         $(#[$attr])*
         #[allow(non_upper_case_globals)]
-        $vis static $name: $crate::util::module_param::ModuleParam<$t> =
-            $crate::util::module_param::ModuleParam::<$t>::new($default);
+        $vis static $name: $crate::os::module_param::ModuleParam<$t> =
+            $crate::os::module_param::ModuleParam::<$t>::new($default);
 
         #[cfg(kernel)]
         $(#[$reg])*
         $crate::module_param_cb!($name, $name.as_arg(),
-                                 <$t as $crate::util::module_param::ParamType>::OPS,
-                                 <$t as $crate::util::module_param::ParamType>::C_NAME,
+                                 <$t as $crate::os::module_param::ParamType>::OPS,
+                                 <$t as $crate::os::module_param::ParamType>::C_NAME,
                                  $perm $(, $desc)?);
     };
 }
@@ -201,7 +201,7 @@ macro_rules! module_param_cb {
         $($crate::module_info!("parm" = ::core::stringify!($name), ":", $desc);)?
 
         const _: () = {
-            use $crate::util::module_param::{verify_perm, KernelParam};
+            use $crate::os::module_param::{verify_perm, KernelParam};
 
             #[unsafe(link_section = "__param")]
             #[used(compiler)]
@@ -232,7 +232,7 @@ macro_rules! module_param_cb {
 macro_rules! module_info {
     ($tag:literal = $($part:expr),+) => {
         const _: () = {
-            use $crate::util::module_param::{modinfo, modinfo_len, MODINFO_PREFIX};
+            use $crate::os::module_param::{modinfo, modinfo_len, MODINFO_PREFIX};
 
             const INFO: &[&str] = &[MODINFO_PREFIX, $tag, "=", $($part),+];
             #[unsafe(link_section = ".modinfo")]

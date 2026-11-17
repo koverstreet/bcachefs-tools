@@ -2,7 +2,7 @@
 
 //! The module's entry points, into init/module.rs's bcachefs_init() and
 //! bcachefs_exit(). Ours, not the kernel crate's module!()'s, as
-//! util/module_param.rs's parameters are: what it generates differs from
+//! module_param.rs's parameters are: what it generates differs from
 //! kernel to kernel, and is edition 2021's. In a module, init_module() and
 //! cleanup_module(), as C's module_init() and module_exit() alias them; built
 //! in, an initcall.

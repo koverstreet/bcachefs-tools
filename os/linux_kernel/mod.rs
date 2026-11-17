@@ -30,6 +30,8 @@ pub mod kobject;
 pub mod kthread;
 pub mod lockdep;
 pub mod module;
+#[path = "../module_param.rs"]
+pub mod module_param;
 pub mod mount;
 pub mod mutex;
 pub mod ops;

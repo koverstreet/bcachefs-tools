@@ -15,7 +15,6 @@ pub mod log;
 pub mod maybe_rcu_alloc;
 pub mod mean_and_variance;
 pub mod mempool;
-pub mod module_param;
 pub mod names;
 pub mod once_either;
 pub mod os_str;
