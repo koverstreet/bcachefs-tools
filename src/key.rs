@@ -9,7 +9,8 @@ use std::{
 
 use anyhow::{anyhow, bail, ensure, Result};
 use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key};
-use bcachefs_kernel::data::checksum::{key_description, keyring_search};
+use bcachefs_kernel::data::checksum::key_description;
+use bcachefs_kernel::os::keyring::request_key;
 use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, without_line_ending, Given, Watch};
 use bcachefs_kernel::util::vstructs::plain_bytes;
 use linux_keyutils::{KeyRing, KeyRingIdentifier};
@@ -146,7 +147,7 @@ impl KeyHandle {
     }
 
     pub fn new_from_search(uuid: &Uuid) -> Result<Self> {
-        keyring_search(key_description(uuid).as_str())?;
+        request_key(key_description(uuid).as_c_str())?;
         info!("Found key in keyring");
         Ok(KeyHandle)
     }

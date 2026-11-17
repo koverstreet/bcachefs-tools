@@ -68,6 +68,6 @@ parking_lot = "0.12"
 owo-colors = "4"
 log      = { version = "0.4", features = ["std"] }
 zeroize  = { version = "1", optional = true, features = ["std", "zeroize_derive"] }
-# The keyring the passphrase key is looked for in (data/checksum.rs): the
-# kernel's in-kernel, these syscalls here.
+# The keyring the passphrase key is looked for in (os/linux_user/keyring.rs):
+# the kernel's in-kernel, these syscalls here.
 linux-keyutils = { version = "0.2", optional = true }

@@ -23,6 +23,7 @@ pub mod ioctl;
 pub mod iov_iter;
 pub mod jump_label;
 pub mod kernel;
+pub mod keyring;
 pub mod kiocb;
 pub mod kobject;
 pub mod kthread;

@@ -40,6 +40,7 @@ use crate::format::{Bversion, Nonce};
 use crate::os::checksum::{Checksum, Crc32c, Crc64, Xxh64};
 // a glob: userspace's are RustCrypto's, called through their traits
 use crate::os::crypto::*;
+use crate::os::keyring;
 
 // ── Nonces ───────────────────────────────────────────────────────────────
 
@@ -571,45 +572,9 @@ pub fn key_description(uuid: &uuid::Uuid) -> Printbuf {
     out
 }
 
-/// The user key @desc, from the kernel's keyring.
-#[cfg(kernel)]
+/// The user key @desc, from the keyring.
 fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
-    // SAFETY: a string
-    let key = unsafe { c::request_key(&raw mut c::key_type_user, desc.as_ptr().cast(), core::ptr::null()) };
-    let key = core::ptr::NonNull::new(key).expect("request_key(): a key, or an ERR_PTR()");
-    let key = crate::errcode::errptr_to_result(key)?.as_ptr();
-
-    // SAFETY: a key, our ref on it put after; its payload read under its sem
-    unsafe {
-        c::down_read(&raw mut (*key).sem);
-        let mut len = 0;
-        let data = c::rust_user_key_data(key, &mut len);
-        let ret = if usize::from(len) == size_of::<c::bch_key>() {
-            Ok(core::ptr::read_unaligned(data.cast::<c::bch_key>()))
-        } else {
-            Err(BchError::from(c::EINVAL))
-        };
-        c::up_read(&raw mut (*key).sem);
-        c::key_put(key);
-        ret
-    }
-}
-
-/// The user key @desc, found in the session keyring, the user's, or the user
-/// session's - not read.
-#[cfg(not(kernel))]
-pub fn keyring_search(desc: &str) -> Result<linux_keyutils::Key, BchError> {
-    use linux_keyutils::{KeyRing, KeyRingIdentifier as Ring};
-
-    [Ring::Session, Ring::User, Ring::UserSession].into_iter()
-        .find_map(|ring| KeyRing::from_special_id(ring, false).and_then(|r| r.search(desc)).ok())
-        .ok_or(BchError::from(c::ENOKEY))
-}
-
-/// The user key @desc, from the keyrings keyring_search() looks in.
-#[cfg(not(kernel))]
-fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
-    let key = keyring_search(desc.to_str().expect("a key description, \"bcachefs:<uuid>\""))?;
+    let key = keyring::request_key(desc)?;
     let mut k = c::bch_key::default();
     match key.read(&mut crate::util::vstructs::plain_bytes_mut(&mut k)) {
         Ok(n) if n == size_of_val(&k) => Ok(k),
@@ -672,7 +637,7 @@ pub fn request_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
 /// @sb's key taken out of the user keyring: its passphrase is changing.
 #[cfg(not(kernel))]
 pub fn revoke_key(sb: &c::bch_sb) -> Result<(), BchError> {
-    use linux_keyutils::{KeyRing, KeyRingIdentifier};
+    use keyring::{KeyRing, KeyRingIdentifier};
 
     let desc = key_description(&sb.uuid());
     let key = KeyRing::from_special_id(KeyRingIdentifier::User, false)

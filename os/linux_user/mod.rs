@@ -15,6 +15,7 @@ pub mod file;
 pub mod fs;
 pub mod jump_label;
 pub mod kernel;
+pub mod keyring;
 pub mod kobject;
 pub mod kthread;
 pub mod lockdep;
