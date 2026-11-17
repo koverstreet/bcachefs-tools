@@ -30,7 +30,10 @@ use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
-use cstruct_macros::MaybeZeroable;
+use crate::format::BkeyType;
+use crate::util::alloc::Flags;
+use cstruct_macros::{Init, MaybeZeroable};
+use pin_init::pin_data;
 
 /* Btree nodes: */
 
@@ -89,9 +92,13 @@ pub struct BkeyUnpackField {
     pub shift_right: u8, /* 64 - bits, or 64 if field has no bits in packed */
 }
 
+#[pin_data]
 #[repr(C)]
-#[derive(MaybeZeroable)]
+#[derive(MaybeZeroable, Init)]
+#[init_args(fs: &Fs, lock_flags: c::SixLockInitFlags, gfp: Flags)]
 pub struct BtreeNode {
+    #[pin]
+    #[init(cs::btree_bkey_cached_common::init(false, lock_flags, gfp))]
     pub c: cs::btree_bkey_cached_common,
 
     pub hash_val: core::cell::UnsafeCell<u64>,
@@ -108,8 +115,10 @@ pub struct BtreeNode {
     pub whiteout_u64s: Volatile<u16>,
 
     pub aux_data: *mut c_void,
+    #[init(fs.opts.btree_node_size.get().ilog2() as u8)]
     pub byte_order: u8,
 
+    #[init(LockedBy::new(NodeContents::new(), ()))]
     pub contents: LockedBy<NodeContents>,
 
     pub writes: [cs::btree_write; 2],
@@ -138,6 +147,7 @@ pub struct BtreeNode {
      * another write - because that write also won't yet be reachable and
      * marking it as completed before it's reachable would be incorrect:
      */
+    #[init(crate::btree::interior::WillMakeReachable::default())]
     pub will_make_reachable: crate::btree::interior::WillMakeReachable,
 
     /* lru list */
@@ -296,6 +306,14 @@ impl BtreeNode {
 }
 
 impl NodeContents {
+    /// A new node's: no keys, no buffer, and its key an empty btree_ptr.
+    fn new() -> Self {
+        let mut contents: Self = ::pin_init::zeroed();
+        contents.key.k = c::bkey::new();
+        contents.key.k.set_key_type(BkeyType::btree_ptr);
+        contents
+    }
+
     pub fn data(&self) -> &Head<cs::btree_node> {
         unsafe { &*self.data }
     }

@@ -17,7 +17,6 @@ pub(crate) use flush::{bch2_btree_insert_key_cached, bch2_btree_key_cache_drop};
 
 use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
 use crate::data_structures::dst_room::DstRoom;
-use crate::btree::locking::bch2_btree_lock_init;
 use crate::btree::iter::TransAttempt;
 use crate::btree::path::{LockedNode, Paths, Write};
 use crate::btree::trans::BtreeTrans;
@@ -125,10 +124,8 @@ unsafe impl<const PCPU: bool> RcuRealloc for Cached<PCPU> {
             c::SixLockInitFlags::empty()
         };
         let ck = ck.cast::<c::bkey_cached>();
-        unsafe {
-            bch2_btree_lock_init(&raw mut (*ck.as_ptr()).c, flags, Flags::empty());
-            (*ck.as_ptr()).c.cached = true;
-        }
+        let common = c::btree_bkey_cached_common::init(true, flags, Flags::empty());
+        let Ok(()) = unsafe { init_at(common, &raw mut (*ck.as_ptr()).c) };
         /* Brand new lock, trylock can't fail. */
         let held = bkey_cached_trylock(unsafe { ck.as_ref() }).expect("a new key cache entry locked by someone else");
         held.into_parts().1.into_raw();

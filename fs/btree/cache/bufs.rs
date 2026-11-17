@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::locking::bch2_btree_lock_init;
 use crate::btree::node::bset::BSET_CACHELINE;
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
 use crate::errcode::{Errcode, BchError};
-use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{flags, Flags, kfree, kv_layout, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc, WithFlags};
 use crate::os::kernel::is_vmalloc_addr;
+use crate::util::maybe_rcu_alloc::alloc_at;
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::ptr::NonNull;
@@ -139,15 +138,6 @@ unsafe fn free_raw(p: *mut c_void, bytes: usize) {
     }
 }
 
-/// # Safety
-/// @l is valid to write, and on no list.
-unsafe fn init_list_head(l: *mut c::list_head) {
-    unsafe {
-        (*l).next = l;
-        (*l).prev = l;
-    }
-}
-
 /// A node's buffers, allocated before the node they're for: its data and
 /// aux_data, for a node of 1 << byte_order bytes.
 pub(crate) struct NodeBufs {
@@ -232,26 +222,14 @@ impl NodeBufs {
     }
 }
 
-/// A struct btree: its lock initialized and nothing else, with @gfp. Freed by
-/// node_struct_free().
+/// A struct btree, made by its init(), with @gfp. Freed by node_struct_free().
 fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<NonNull<BtreeNode>> {
-    let b = Kmalloc.allocate_zeroed_gfp(Layout::new::<BtreeNode>(), gfp).ok()?.cast::<BtreeNode>();
-
-    unsafe {
-        let p = b.as_ptr();
-        let k = &mut (*p).contents_mut().key.k;
-        *k = c::bkey::new();
-        k.set_key_type(BkeyType::btree_ptr);
-        init_list_head((&raw mut (*p).write_blocked).cast());
-        (*p).byte_order = fs.opts.btree_node_size.get().ilog2() as u8;
-        let flags = if pcpu_read_locks {
-            c::SixLockInitFlags::pcpu
-        } else {
-            c::SixLockInitFlags::empty()
-        };
-        bch2_btree_lock_init(&raw mut (*p).c, flags, gfp);
-    }
-    Some(b)
+    let flags = if pcpu_read_locks {
+        c::SixLockInitFlags::pcpu
+    } else {
+        c::SixLockInitFlags::empty()
+    };
+    alloc_at::<_, Kmalloc, BchError>(BtreeNode::init(fs, flags, gfp), gfp).ok()
 }
 
 /// A node of the cache's, borrowed for as long as the filesystem: the cache

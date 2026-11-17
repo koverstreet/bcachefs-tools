@@ -1326,16 +1326,21 @@ fn srcu_hold_warn_thresh(fs: &Fs) -> c_ulong {
     (fs.dev_latency_max(&online, READ as c_int) * 2).max(HZ * 10)
 }
 
-// ── For C, until its callers are Rust ────────────────────────────────────
-
-/// # Safety
-/// @b's lock is uninitialized.
-pub unsafe fn bch2_btree_lock_init(b: *mut c::btree_bkey_cached_common, flags: c::SixLockInitFlags,
-                                   gfp: Flags) {
-    let lock = unsafe { &raw mut (*b).lock };
-    unsafe {
-        __six_lock_init(lock.cast(), c"b->c.lock".as_ptr().cast(), crate::new_lock!(@key), flags, gfp);
-        (*lock.cast::<c::six_lock>()).dep_map.set_notrack_class();
+impl c::btree_bkey_cached_common {
+    /// A btree node's, or a key cache entry's - @cached: its lock initialized,
+    /// with @flags - its percpu read counts allocated with @gfp - and the rest
+    /// zeroed.
+    pub fn init(cached: bool, flags: c::SixLockInitFlags, gfp: Flags) -> impl ::pin_init::PinInit<Self> {
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                slot.write_bytes(0, 1);
+                let lock = (&raw mut (*slot).lock).cast::<c::six_lock>();
+                __six_lock_init(lock.cast(), c"b->c.lock".as_ptr().cast(), crate::new_lock!(@key), flags, gfp);
+                (*lock).dep_map.set_notrack_class();
+                (*slot).cached = cached;
+                Ok(())
+            })
+        }
     }
 }
 
