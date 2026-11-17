@@ -70,6 +70,14 @@
 //! task - and so every Done in its memory - is freed only after an RCU grace
 //! period, and both sides make that last access under rcu_read_lock().
 //!
+//! Its owner may reuse the memory for another task at once, though: a task
+//! made where a finished one was. A late completer of the old one then
+//! reaches the new one's header, and its compare-exchange succeeds only if
+//! the new task is parked on a Done at the same address - so it dispatches a
+//! parked task, as a wake does, and the task's poll finds that Done not done
+//! and parks again. That's a spurious wakeup, which the protocol takes like
+//! any other: even on an Inline target nothing past the await runs.
+//!
 //! A poll finds its task through Context::ext() (current_task()), not through
 //! a Waker. Nothing wakes a task through a Waker, so the Context's is
 //! Waker::noop().
