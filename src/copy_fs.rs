@@ -372,14 +372,16 @@ fn copy_xattrs(
         )?;
     }
 
-    // Each set above reads the inode back into @dst, so a flag set before
-    // the last would be lost: set them now. Written with the rest of the
-    // inode by the caller.
+    // Each xattr set above reads the inode back into @dst, and so does
+    // creating a child when this is a directory. Set the flags after the
+    // last xattr, and write them now, before the caller creates children.
+    if acl_flags.is_empty() {
+        return Ok(());
+    }
     for flag in acl_flags {
         dst.set_flag(flag, true);
     }
-
-    Ok(())
+    update_inode(fs, dst)
 }
 
 /// A POSIX ACL as the xattr API gives it - <linux/posix_acl_xattr.h>: a
