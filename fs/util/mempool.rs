@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A mempool, in both builds: elements of a size, from @A, with a reserve of
-//! them set aside when it's made, so allocating can wait for one to be freed
-//! where the allocator would fail.
+//! A mempool, in both builds: elements of a size, from an allocator @A - C's
+//! mempool_alloc_t and mempool_free_t - with a reserve of them set aside when
+//! it's made, so allocating can wait for one to be freed where the allocator
+//! would fail.
 //!
 //! A pool of an allocator's elements is an allocator itself, of any size up
 //! to its elements': Alloc, below.
@@ -22,14 +23,15 @@ use crate::util::late::LateInit;
 use crate::util::projections::Volatile;
 use crate::util::sleep::Sleep;
 use core::alloc::Layout;
-use core::marker::PhantomData;
+use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering};
 use pin_init::{pin_data, pinned_drop, PinInit};
 
+/// A pool's allocator is Copy: it's held, never dropped.
 #[pin_data(PinnedDrop)]
-pub struct Mempool<A: Elements> {
+pub struct Mempool<A: AllocGfp + Copy> {
     /* the reserve, and its length published, for free_raw()'s unlocked check */
     #[pin]
     reserve: Locked<SpinLockIrq, KVec<Element>, Volatile<usize>>,
@@ -37,7 +39,8 @@ pub struct Mempool<A: Elements> {
     freed:   EventCount,
     min_nr:  usize,
     size:    usize,
-    _a:      PhantomData<fn() -> A>,
+    /* written by new(): there while it's made */
+    alloc:   MaybeUninit<A>,
 }
 
 /// An element in the reserve: the pool's, for any thread to take.
@@ -46,40 +49,18 @@ struct Element(NonNull<u8>);
 unsafe impl Send for Element {}
 
 // SAFETY: zeroed is not made
-unsafe impl<A: Elements> ::pin_init::Zeroable for Mempool<A> {}
+unsafe impl<A: AllocGfp + Copy> ::pin_init::Zeroable for Mempool<A> {}
 
-impl<A: Elements> LateInit for Mempool<A> {
+impl<A: AllocGfp + Copy> LateInit for Mempool<A> {
     fn is_made(&self) -> bool {
         self.size != 0
     }
 }
 
-/// Where a pool's elements come from, and go back to: C's mempool_alloc_t and
-/// mempool_free_t. element_alloc() gives @layout's bytes - zeroed, with
-/// __GFP_ZERO - which element_free() takes back.
-pub trait Elements {
-    fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>>;
-
-    /// # Safety
-    /// @p is element_alloc()'s, of @layout, and not used after.
-    unsafe fn element_free(p: NonNull<u8>, layout: Layout);
+/// @layout's bytes from @alloc: zeroed, if @gfp has __GFP_ZERO.
+fn element_alloc<A: AllocGfp>(alloc: &A, layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
+    alloc.allocate_gfp(layout, gfp).ok().map(NonNull::cast)
 }
-
-macro_rules! elements {
-    ($($a:ident),*) => {$(
-        impl Elements for $a {
-            fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
-                $a.allocate_gfp(layout, gfp).ok().map(NonNull::cast)
-            }
-
-            unsafe fn element_free(p: NonNull<u8>, layout: Layout) {
-                unsafe { $a.deallocate(p, layout) }
-            }
-        }
-    )*};
-}
-
-elements!(Kmalloc, KVmalloc);
 
 /// What's asked of the allocator for an element, as the task's memalloc scope
 /// says: the pool is the reserve, so no emergency reserves, no looping in the
@@ -94,13 +75,13 @@ fn first_try(gfp: Flags) -> Flags {
 }
 
 /// The reserve: @min_nr elements, or none, if one can't be had.
-fn fill<A: Elements>(min_nr: usize, layout: Layout) -> Result<KVec<Element>, AllocError> {
+fn fill<A: AllocGfp>(alloc: &A, min_nr: usize, layout: Layout) -> Result<KVec<Element>, AllocError> {
     let mut reserve = KVec::with_capacity(min_nr)?;
     let gfp = Flags::empty();
 
     for _ in 0..min_nr {
-        let Some(p) = A::element_alloc(layout, gfp) else {
-            drain::<A>(&mut reserve, layout);
+        let Some(p) = element_alloc(alloc, layout, gfp) else {
+            drain(alloc, &mut reserve, layout);
             return Err(AllocError);
         };
         let _ = reserve.push_within_capacity(Element(p));
@@ -108,28 +89,33 @@ fn fill<A: Elements>(min_nr: usize, layout: Layout) -> Result<KVec<Element>, All
     Ok(reserve)
 }
 
-fn drain<A: Elements>(reserve: &mut KVec<Element>, layout: Layout) {
+fn drain<A: AllocGfp>(alloc: &A, reserve: &mut KVec<Element>, layout: Layout) {
     for e in reserve.drain_all() {
-        unsafe { A::element_free(e.0, layout) };
+        unsafe { alloc.deallocate(e.0, layout) };
     }
 }
 
-impl<A: Elements> Mempool<A> {
-    /// @min_nr elements of @size bytes, A's. Nothing to undo if it fails.
-    pub fn new(min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
+impl<A: AllocGfp + Copy> Mempool<A> {
+    /// @min_nr elements of @size bytes, from @alloc. Nothing to undo if it
+    /// fails.
+    pub fn new(alloc: A, min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
         let layout = kv_layout(size);
         ::pin_init::pin_init!(Self {
-            reserve <- new_lock!(fill::<A>(min_nr, layout?)?, Volatile::new(min_nr), "mempool"),
+            reserve <- new_lock!(fill(&alloc, min_nr, layout?)?, Volatile::new(min_nr), "mempool"),
             freed: EventCount::new(),
             min_nr,
             size,
-            _a: PhantomData,
+            alloc: MaybeUninit::new(alloc),
         }? BchError)
     }
 
     /// The size of its elements: the most it allocates.
     pub fn element_size(&self) -> usize {
         self.size
+    }
+
+    fn backing(&self) -> &A {
+        unsafe { self.alloc.assume_init_ref() }
     }
 
     fn layout(&self) -> Layout {
@@ -149,7 +135,7 @@ impl<A: Elements> Mempool<A> {
         let mut gfp_temp = first_try(gfp);
 
         loop {
-            if let Some(p) = A::element_alloc(layout, gfp_temp) {
+            if let Some(p) = element_alloc(self.backing(), layout, gfp_temp) {
                 return Ok(p);
             }
 
@@ -218,20 +204,20 @@ impl<A: Elements> Mempool<A> {
             }
         }
 
-        unsafe { A::element_free(p, self.layout()) }
+        unsafe { self.backing().deallocate(p, self.layout()) }
     }
 }
 
 impl Mempool<Kmalloc> {
     /// mempool_init_kmalloc_pool().
     pub fn kmalloc(min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
-        Self::new(min_nr, size)
+        Self::new(Kmalloc, min_nr, size)
     }
 }
 
 impl Mempool<KVmalloc> {
     pub fn kvmalloc(min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
-        Self::new(min_nr, size)
+        Self::new(KVmalloc, min_nr, size)
     }
 }
 
@@ -239,7 +225,7 @@ impl Mempool<KVmalloc> {
 /// if it's less than an element, from A cheaply, then an element, the worst
 /// case. free() goes by the size alloc() gave: an element back to the pool,
 /// anything smaller to A.
-impl<A: Elements> Mempool<A> {
+impl<A: AllocGfp + Copy> Mempool<A> {
     /// Alloc's alloc(), allocating with @gfp - as the task's memalloc scope
     /// says.
     pub fn alloc_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
@@ -255,7 +241,7 @@ impl<A: Elements> Mempool<A> {
         if layout.size() < size {
             let gfp = first_try(element_gfp(gfp));
             let gfp = if zeroed { gfp | flags::ZERO } else { gfp };
-            if let Some(p) = A::element_alloc(layout, gfp) {
+            if let Some(p) = element_alloc(self.backing(), layout, gfp) {
                 return Ok(NonNull::slice_from_raw_parts(p, layout.size()));
             }
         }
@@ -268,7 +254,7 @@ impl<A: Elements> Mempool<A> {
     }
 }
 
-unsafe impl<A: Elements> Allocator for Mempool<A> {
+unsafe impl<A: AllocGfp + Copy> Allocator for Mempool<A> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.alloc_or_element(layout, false, Flags::empty())
     }
@@ -281,14 +267,14 @@ unsafe impl<A: Elements> Allocator for Mempool<A> {
         if layout.size() == self.element_size() {
             unsafe { self.free_raw(p) }
         } else {
-            unsafe { A::element_free(p, layout) }
+            unsafe { self.backing().deallocate(p, layout) }
         }
     }
 }
 
-unsafe impl<A: Elements> Alloc for Mempool<A> {}
+unsafe impl<A: AllocGfp + Copy> Alloc for Mempool<A> {}
 
-impl<A: Elements> Mempool<A> {
+impl<A: AllocGfp + Copy> Mempool<A> {
     /// A pool in a static - which never drops - made in place at module init.
     ///
     /// # Safety
@@ -305,13 +291,13 @@ impl<A: Elements> Mempool<A> {
     pub unsafe fn exit(&self) {
         if self.is_made() {
             let mut reserve = core::mem::replace(&mut *self.reserve.lock(), KVec::new());
-            drain::<A>(&mut reserve, self.layout());
+            drain(self.backing(), &mut reserve, self.layout());
         }
     }
 }
 
 #[pinned_drop]
-impl<A: Elements> PinnedDrop for Mempool<A> {
+impl<A: AllocGfp + Copy> PinnedDrop for Mempool<A> {
     fn drop(self: Pin<&mut Self>) {
         unsafe { self.exit() }
     }

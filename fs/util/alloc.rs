@@ -98,6 +98,36 @@ unsafe impl<A: AllocGfp> Alloc for WithFlags<A> {
     const KVFREE: bool = A::KVFREE;
 }
 
+/// Its flags, and what's asked
+unsafe impl<A: AllocGfp> AllocGfp for WithFlags<A> {
+    fn allocate_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
+        self.0.allocate_gfp(layout, gfp | self.1)
+    }
+
+    unsafe fn grow_gfp(&self, p: NonNull<u8>, old: Layout, new: Layout, gfp: Flags)
+        -> Result<NonNull<[u8]>, AllocError>
+    {
+        unsafe { self.0.grow_gfp(p, old, new, gfp | self.1) }
+    }
+}
+
+/// An allocator by reference, with flags: a mempool's.
+unsafe impl<A: AllocGfp + ?Sized> AllocGfp for &A {
+    fn allocate_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
+        (**self).allocate_gfp(layout, gfp)
+    }
+
+    fn allocate_zeroed_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
+        (**self).allocate_zeroed_gfp(layout, gfp)
+    }
+
+    unsafe fn grow_gfp(&self, p: NonNull<u8>, old: Layout, new: Layout, gfp: Flags)
+        -> Result<NonNull<[u8]>, AllocError>
+    {
+        unsafe { (**self).grow_gfp(p, old, new, gfp) }
+    }
+}
+
 /// The allocator of what keeps none - Vec, MaybeRcuAlloc: zero-sized, made
 /// where it's used. Only those, for now.
 pub fn stateless<A: Alloc>() -> A {

@@ -992,7 +992,7 @@ pub struct bch_fs_btree {
     pub foreground_merge_threshold: u16,
 
     #[pin]
-    #[init(Mempool::new(1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
+    #[init(Mempool::new(crate::btree::cache::bounce_bufs(), 1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
     pub bounce_pool: Mempool<crate::btree::cache::BounceBufs>,
 
     pub write_stats: [cs::btree_write_stats; cs::BtreeWriteType::NR as usize],

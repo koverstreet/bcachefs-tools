@@ -18,9 +18,9 @@ use crate::c;
 use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::errcode::BchError;
-use crate::util::alloc::{flags, Flags, AllocError};
+use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Allocator, Flags};
 use crate::os::kernel::PAGE_SIZE;
-use crate::util::mempool::{Elements, Mempool};
+use crate::util::mempool::Mempool;
 use pin_init::{pin_data, pin_init, PinInit};
 
 use super::iter::page_address;
@@ -44,7 +44,7 @@ impl BouncePool {
         let max = opts.btree_node_size.max(opts.encoded_extent_max);
         pin_init!(Self {
             lock <- new_lock!((), "&c->bio_bounce_pages_lock"),
-            pool <- Mempool::new(max as usize / POOL_LEN, POOL_LEN),
+            pool <- Mempool::new(BouncePages, max as usize / POOL_LEN, POOL_LEN),
         }? BchError)
     }
 
@@ -66,15 +66,29 @@ impl BouncePool {
 
 /// The bounce pool's elements: data buffers, overwritten before they're
 /// read, so not zeroed.
+#[derive(Clone, Copy)]
 pub struct BouncePages;
 
-impl Elements for BouncePages {
-    fn element_alloc(layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
-        NonNull::new(crate::util::alloc::bio_pages_alloc(layout.size(), gfp | flags::SKIP_ZERO).cast())
+unsafe impl Allocator for BouncePages {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        self.allocate_gfp(layout, Flags::empty())
     }
 
-    unsafe fn element_free(p: NonNull<u8>, layout: Layout) {
+    unsafe fn deallocate(&self, p: NonNull<u8>, layout: Layout) {
         unsafe { crate::util::alloc::bio_pages_free(p.as_ptr().cast(), layout.size()) }
+    }
+}
+
+unsafe impl Alloc for BouncePages {}
+
+unsafe impl AllocGfp for BouncePages {
+    fn allocate_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
+        let p = NonNull::new(crate::util::alloc::bio_pages_alloc(layout.size(), gfp | flags::SKIP_ZERO)).ok_or(AllocError)?;
+        Ok(NonNull::slice_from_raw_parts(p.cast(), layout.size()))
+    }
+
+    unsafe fn grow_gfp(&self, _: NonNull<u8>, _: Layout, _: Layout, _: Flags) -> Result<NonNull<[u8]>, AllocError> {
+        Err(AllocError)
     }
 }
 

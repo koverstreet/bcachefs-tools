@@ -22,7 +22,7 @@ use crate::c;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::GenRadix;
-use crate::util::alloc::{flags, init_at, Alloc, AllocError, Allocator, KVVec};
+use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, Flags, KVVec};
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
 use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
@@ -581,17 +581,37 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
     /// A T: one freed and claimed from this CPU, else fresh from A,
     /// constructed, else one claimed from any CPU.
     pub fn alloc(&self) -> Result<NonNull<T>, AllocError> {
+        self.alloc_from(|a| a.allocate_zeroed(Layout::new::<T>()))
+    }
+
+    /// alloc(), its fresh memory @fresh's.
+    fn alloc_from(&self, fresh: impl FnOnce(&A) -> Result<NonNull<[u8]>, AllocError>)
+        -> Result<NonNull<T>, AllocError>
+    {
         if let Some(p) = self.claim(self.pcpu().raw_this_cpu()) {
             return Ok(p);
         }
 
-        if let Ok(p) = self.backing().allocate_zeroed(Layout::new::<T>()) {
+        if let Ok(p) = fresh(self.backing()) {
             let p = p.cast::<T>();
             unsafe { T::construct(p) };
             return Ok(p);
         }
 
         self.pcpu().each_cpu().find_map(|p| self.claim(p)).ok_or(AllocError)
+    }
+
+    /// The Allocator's alloc(): @layout, if it's within T's.
+    fn allocate_from(&self, layout: Layout, fresh: impl FnOnce(&A) -> Result<NonNull<[u8]>, AllocError>)
+        -> Result<NonNull<[u8]>, AllocError>
+    {
+        <T as DropAt>::assert_at_free();
+
+        let t = Layout::new::<T>();
+        if layout.size() > t.size() || layout.align() > t.align() {
+            return Err(AllocError);
+        }
+        Ok(NonNull::slice_from_raw_parts(self.alloc_from(fresh)?.cast(), t.size()))
     }
 
     /// @p freed: dropped now, if T is DropAnytime, else once its grace period
@@ -719,13 +739,7 @@ impl<T: RcuRealloc, A: Alloc> Drop for RcuPending<'_, T, A> {
 /// its grace period.
 unsafe impl<T: RcuRealloc, A: Alloc> Allocator for RcuPending<'_, T, A> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        <T as DropAt>::assert_at_free();
-
-        let t = Layout::new::<T>();
-        if layout.size() > t.size() || layout.align() > t.align() {
-            return Err(AllocError);
-        }
-        Ok(NonNull::slice_from_raw_parts(self.alloc()?.cast(), t.size()))
+        self.allocate_from(layout, |a| a.allocate_zeroed(Layout::new::<T>()))
     }
 
     unsafe fn deallocate(&self, p: NonNull<u8>, _: Layout) {
@@ -735,3 +749,19 @@ unsafe impl<T: RcuRealloc, A: Alloc> Allocator for RcuPending<'_, T, A> {
 }
 
 unsafe impl<T: RcuRealloc, A: Alloc> Alloc for RcuPending<'_, T, A> {}
+
+/// A mempool's: its flags for what's fresh from A. One claimed is a T freed,
+/// not zeroed: zeroed here if it's asked for.
+unsafe impl<T: RcuRealloc, A: AllocGfp> AllocGfp for RcuPending<'_, T, A> {
+    fn allocate_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
+        let p = self.allocate_from(layout, |a| a.allocate_zeroed_gfp(Layout::new::<T>(), gfp))?;
+        if gfp.contains(flags::ZERO) {
+            unsafe { p.cast::<u8>().write_bytes(0, p.len()) };
+        }
+        Ok(p)
+    }
+
+    unsafe fn grow_gfp(&self, _: NonNull<u8>, _: Layout, _: Layout, _: Flags) -> Result<NonNull<[u8]>, AllocError> {
+        Err(AllocError)
+    }
+}
