@@ -154,7 +154,7 @@ use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InPlace, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated};
+use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InPlace, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntriesMut};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
@@ -1021,8 +1021,7 @@ impl bch_sb_buf {
     /// whole_mut() for all of it, if it's all there.
     pub fn field_mut<F: SbSection + ?Sized>(&mut self) -> Option<&mut F::Arm> {
         self.mark_dirty(F::Arm::FIELD_TYPE);
-        let off = field_offset(self.sb(), F::Arm::FIELD_TYPE)?;
-        self.arm_mut_at::<F>(off)
+        self.arm_mut::<F>()
     }
 
     /// Section @ty edited: to_cpu() it, after the next write, if this is the
@@ -1787,14 +1786,6 @@ fn field_offset<S: SbState>(sb: &bch_sb<S>, ty: c::SbFieldType) -> Option<usize>
     S::field_by_type(sb, ty).map(|f| f.as_bytes().as_ptr() as usize - base)
 }
 
-/// The section at @off in the superblock at @sb.
-///
-/// # Safety
-/// @sb is validated, @off a section's offset in it: field_offset()'s.
-unsafe fn field_at(sb: *mut Head<bch_sb>, off: usize) -> *mut Head<c::bch_sb_field> {
-    unsafe { sb.byte_add(off).cast() }
-}
-
 impl bch_sb_buf {
     /// The buffer grown to @size bytes, the superblock kept and zeroes after.
     fn grow(&mut self, size: usize) -> Result<(), crate::util::alloc::AllocError> {
@@ -1821,10 +1812,10 @@ impl bch_sb_buf {
         self.data.as_deref_mut().map_or(&mut [], |b| unsafe { assume_init_mut(b) })
     }
 
-    /// The section at @off - or a new one at the end, None - resized in place
-    /// to @u64s, those after it moved: grown, zeroed; 0, deleted. Its offset,
-    /// if it's still there. The buffer must have room.
-    fn field_resize_at(&mut self, off: Option<usize>, u64s: u32) -> Option<usize> {
+    /// The section at @off - or a new one of type @ty at the end, None -
+    /// resized in place to @u64s, those after it moved: grown, zeroed; 0,
+    /// deleted. Its offset, if it's still there. The buffer must have room.
+    fn field_resize_at(&mut self, ty: c::SbFieldType, off: Option<usize>, u64s: u32) -> Option<usize> {
         let new = u64s as usize * size_of::<u64>();
         let buf = self.buffer_mut();
         let sb = cast_plain_mut::<Head<bch_sb>>(buf).expect("a superblock's head");
@@ -1840,8 +1831,9 @@ impl bch_sb_buf {
             None if u64s == 0 => None,
             None => {
                 buf[end..new_end].fill(0);
-                cast_plain_mut::<Head<c::bch_sb_field>>(&mut buf[end..]).expect("a section's head")
-                    .set_val_u64s(u64s as usize);
+                let h = cast_plain_mut::<Head<c::bch_sb_field>>(&mut buf[end..]).expect("a section's head");
+                h.set_val_u64s(u64s as usize);
+                h.type_ = Le32::new(ty.0);
                 Some(end)
             }
             Some(off) => {
@@ -1863,11 +1855,12 @@ impl bch_sb_buf {
         ret
     }
 
-    /// The section at @off, as an F in the superblock's state: whole_mut() if
-    /// that's all of F.
-    fn arm_mut_at<F: SbSection + ?Sized>(&mut self, off: usize) -> Option<&mut F::Arm> {
-        // SAFETY: a section of the handle's superblock, borrowed with it
-        unsafe { c::bch_sb_field::<Validated>::from_head_ptr_mut(field_at(self.as_mut_ptr(), off)) }.arm_mut()
+    /// Its section of type @F, as an F in the superblock's state: whole_mut()
+    /// if that's all of F.
+    fn arm_mut<F: SbSection + ?Sized>(&mut self) -> Option<&mut F::Arm> {
+        ValidatedEntriesMut::of(self.sb_mut())
+            .find(|f| f.type_.get() == F::Arm::FIELD_TYPE.0)?
+            .arm_mut()
     }
 }
 
@@ -1904,10 +1897,7 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
         self.grow_with(d)?;
 
         let at = field_offset(self.sb(), ty);
-        let off = self.field_resize_at(at, u64s)?;
-        // SAFETY: the section just resized
-        unsafe { (*field_at(self.as_mut_ptr(), off)).type_ = Le32::new(ty.0) };
-        Some(off)
+        self.field_resize_at(ty, at, u64s)
     }
 
     /// The section of type @ty, made or grown to at least @u64s past its
@@ -1923,20 +1913,20 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
     /// Its arm resized to @u64s, the section made if there's none: at its
     /// (possibly new) place. field_delete() deletes it.
     fn field_resize<F: SbSection + ?Sized>(&mut self, u64s: u32) -> Option<&mut F::Arm> {
-        let off = self.field_resize_id(F::Arm::FIELD_TYPE, u64s)?;
-        self.arm_mut_at::<F>(off)
+        self.field_resize_id(F::Arm::FIELD_TYPE, u64s)?;
+        self.arm_mut::<F>()
     }
 
     /// Its arm made or grown to at least @min_u64s.
     fn field_get_minsize<F: SbSection + ?Sized>(&mut self, min_u64s: u32) -> Option<&mut F::Arm> {
-        let off = self.field_get_minsize_id(F::Arm::FIELD_TYPE, min_u64s)?;
-        self.arm_mut_at::<F>(off)
+        self.field_get_minsize_id(F::Arm::FIELD_TYPE, min_u64s)?;
+        self.arm_mut::<F>()
     }
 
     fn field_delete(&mut self, ty: c::SbFieldType) {
         self.mark_dirty(ty);
         if let Some(off) = field_offset(self.sb(), ty) {
-            self.field_resize_at(Some(off), 0);
+            self.field_resize_at(ty, Some(off), 0);
         }
     }
 }
@@ -2058,8 +2048,8 @@ impl DevSbMut<'_> {
     /// made if there's none: None if there's no room.
     pub fn field_resize<F: SbSection + ?Sized>(&mut self, u64s: u32) -> Option<&mut F::Arm> {
         const { assert!(F::Arm::SINGLE_DEVICE, "a section every device's superblock shares: the filesystem's to change") };
-        let off = self.resize().field_resize_id(F::Arm::FIELD_TYPE, u64s)?;
-        self.io.buf.arm_mut_at::<F>(off)
+        self.resize().field_resize_id(F::Arm::FIELD_TYPE, u64s)?;
+        self.io.buf.arm_mut::<F>()
     }
 
     pub fn field_delete<F: SbField + ?Sized>(&mut self) {
@@ -2868,7 +2858,7 @@ fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &bch_sb) -> Result<(), Bch
         }
 
         let at = field_offset(dst.sb(), ty);
-        let off = dst.field_resize_at(at, u64s as u32);
+        let off = dst.field_resize_at(ty, at, u64s as u32);
         if let (Some(off), Some(f)) = (off, src_f) {
             dst.buffer_mut()[off..][..f.len()].copy_from_slice(f);
         }
