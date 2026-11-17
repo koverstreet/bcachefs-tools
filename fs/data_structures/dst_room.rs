@@ -102,7 +102,8 @@ where
     fn check(&self) -> *const T::Head {
         let () = Self::ALIGNED;
         let cap = self.capacity();
-        assert!(size_of::<T::Head>() <= cap, "a room of {cap} bytes, short of its header");
+        assert!(T::MIN_BYTES <= cap, "a room of {cap} bytes, short of the {} a {} is at least",
+                T::MIN_BYTES, core::any::type_name::<T>());
 
         let head = self.buf.elems().as_ptr().cast::<T::Head>();
         let bytes = unsafe { (*head).bytes() };

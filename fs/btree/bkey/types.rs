@@ -111,6 +111,7 @@ unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
     type Head = c::bkey_i;
     type Elem = V::Elem;
     const TAIL: usize = size_of::<c::bkey>() + V::TAIL;
+    const MIN_BYTES: usize = (size_of::<c::bkey>() + V::MIN_BYTES).next_multiple_of(align_of::<c::bkey>());
 
     fn from_raw(p: *const u8, bytes: usize) -> *const Self {
         let v = V::from_raw(p.wrapping_add(size_of::<c::bkey>()), bytes.saturating_sub(size_of::<c::bkey>()));
@@ -718,6 +719,7 @@ unsafe impl<F: 'static, S: State> Unsized for FamilyVal<F, S> {
     type Head = ();
     type Elem = u64;
     const TAIL: usize = 0;
+    const MIN_BYTES: usize = 0;
 
     fn from_raw(p: *const u8, bytes: usize) -> *const Self {
         core::ptr::slice_from_raw_parts(p.cast::<u64>(), bytes / size_of::<u64>()) as *const Self

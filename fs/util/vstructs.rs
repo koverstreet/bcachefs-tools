@@ -761,6 +761,7 @@ macro_rules! vstruct_family {
             type Head = $head;
             type Elem = $elem;
             const TAIL: usize = $tail_at;
+            const MIN_BYTES: usize = size_of::<$head>();
             #[inline]
             fn from_raw(p: *const u8, bytes: usize) -> *const Self {
                 let n = (bytes - Self::TAIL) / size_of::<$elem>();
@@ -959,6 +960,7 @@ macro_rules! vstruct_family {
             type Head = <$def as Unsized>::Head;
             type Elem = <$def as Unsized>::Elem;
             const TAIL: usize = <$def as Unsized>::TAIL;
+            const MIN_BYTES: usize = <$def as Unsized>::MIN_BYTES;
             #[inline]
             fn from_raw(p: *const u8, bytes: usize) -> *const Self {
                 <$def as Unsized>::from_raw(p, bytes) as *const Self
@@ -1137,9 +1139,10 @@ pub type Head<T> = <T as Unsized>::Head;
 /// # Safety
 /// Self is Head's fields, every bit pattern of each valid, then its tail at
 /// TAIL - size_of::<Head>(), or within it; from_raw() and from_raw_mut() make
-/// a pointer to all of @bytes - a sized Self's, to its first size_of::<Self>()
-/// - which are no fewer than Head's: a reference from it claims them, and none
-/// past, if they're a whole number of Self's alignment long too.
+/// a pointer to all of @bytes, which are no fewer than MIN_BYTES - a sized
+/// Self's, to its first size_of::<Self>(), its MIN_BYTES: a reference from it
+/// claims them, and none past, if they're a whole number of Self's alignment
+/// long too. MIN_BYTES is no fewer than Head's.
 pub unsafe trait Unsized {
     /// What precedes the tail: what it derefs to.
     type Head;
@@ -1149,6 +1152,10 @@ pub unsafe trait Unsized {
 
     /// Where its tail starts.
     const TAIL: usize;
+
+    /// The fewest bytes a reference from it claims: a sized Self's size, an
+    /// unsized one's head's.
+    const MIN_BYTES: usize;
 
     /// The value at @p, @bytes long.
     fn from_raw(p: *const u8, bytes: usize) -> *const Self;
@@ -1631,6 +1638,7 @@ unsafe impl<T: SizedArm> Unsized for T {
     type Head = T;
     type Elem = u8;
     const TAIL: usize = size_of::<T>();
+    const MIN_BYTES: usize = size_of::<T>();
 
     fn from_raw(p: *const u8, _bytes: usize) -> *const Self {
         p.cast()
