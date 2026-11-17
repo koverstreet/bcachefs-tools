@@ -193,6 +193,19 @@ impl File {
         unsafe { (*self.as_ptr()).f_path.dentry }
     }
 
+    /// Its inode's device number: a device node's.
+    #[cfg(kernel)]
+    pub fn rdev(&self) -> c::dev_t {
+        // SAFETY: an open file has an inode
+        unsafe { (*(*self.as_ptr()).f_inode).i_rdev }
+    }
+
+    /// Being opened, as a file with no position: nonseekable_open().
+    #[cfg(kernel)]
+    pub fn nonseekable_open(&self, inode: &Opaque<c::inode>) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::nonseekable_open(inode.as_ptr(), self.as_ptr()) })
+    }
+
     /// FMODE_*: set at open.
     #[cfg(kernel)]
     pub fn mode(&self) -> c::fmode_t {

@@ -4,6 +4,7 @@ pub mod alloc;
 pub mod bio;
 pub mod blkdev;
 pub mod checksum;
+pub mod chrdev;
 pub mod compress;
 pub mod crypto;
 #[cfg(CONFIG_DEBUG_FS)]
