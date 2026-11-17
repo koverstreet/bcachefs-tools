@@ -5,7 +5,7 @@
 #include <string.h>
 #include <linux/kernel.h>
 
-/* Little-endian loads and stores at any alignment: xxhash's and chacha's */
+/* Little-endian loads at any alignment: xxhash's */
 
 static inline u32 get_unaligned_le32(const void *p)
 {
@@ -27,14 +27,6 @@ static inline u64 get_unaligned_le64(const void *p)
 	v = __builtin_bswap64(v);
 #endif
 	return v;
-}
-
-static inline void put_unaligned_le32(u32 v, void *p)
-{
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	v = __builtin_bswap32(v);
-#endif
-	memcpy(p, &v, sizeof(v));
 }
 
 #endif /* _LINUX_UNALIGNED_H */
