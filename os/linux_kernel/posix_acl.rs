@@ -10,6 +10,7 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::os::ops::{err_class_ptr, from_raw, into_raw};
 use crate::os::vfs_inode::VfsInode;
+use crate::util::alloc::current_gfp;
 
 #[path = "../posix_acl.rs"]
 mod common;
@@ -67,6 +68,36 @@ impl PosixAcl {
         unsafe { (*self.as_raw()).__bindgen_anon_1.hdr.as_ref().a_count as usize }
     }
 
+    /// Its entries, as (tag, perm, id): the id in the initial user namespace,
+    /// 0 for a tag that has none.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (u16, u16, u32)> + '_ {
+        // an ACL's entries follow it, a_count of them
+        let entries = unsafe { (*self.as_raw()).a_entries.as_slice(self.count()) };
+        entries.iter().map(|e| {
+            let tag = e.e_tag as u16;
+            // the union is the id the tag says, if it has one
+            let id = unsafe {
+                match tag as u32 {
+                    c::ACL_USER  => c::from_kuid(&raw mut c::init_user_ns, *e.__bindgen_anon_1.e_uid.as_ref()),
+                    c::ACL_GROUP => c::from_kgid(&raw mut c::init_user_ns, *e.__bindgen_anon_1.e_gid.as_ref()),
+                    _            => 0,
+                }
+            };
+            (tag, e.e_perm, id)
+        })
+    }
+
+    /// A copy with its permissions changed to match file mode @mode:
+    /// __posix_acl_chmod(), allocating with the current scope's flags.
+    pub(crate) fn chmod(&self, mode: c::umode_t) -> Result<PosixAcl, BchError> {
+        // __posix_acl_chmod() consumes the reference it's given, failing too
+        let mut acl = self.clone().into_raw();
+        let ret = ret_to_result_void(unsafe { c::__posix_acl_chmod(&mut acl, current_gfp(), mode) });
+        let acl = NonNull::new(acl).map(PosixAcl);
+        ret?;
+        Ok(acl.expect("__posix_acl_chmod() succeeded without an ACL"))
+    }
+
     /// A new inode's in @dir, with @mode as they make it: its default
     /// ACL, inherited, and its access ACL - posix_acl_create(). None for
     /// either it doesn't get.
@@ -77,6 +108,42 @@ impl PosixAcl {
         ret_to_result_void(unsafe { c::posix_acl_create(dir.as_ptr(), mode, &mut default_acl, &mut acl) })?;
         Ok((NonNull::new(default_acl).map(|p| unsafe { PosixAcl::from_raw(p) }),
             NonNull::new(acl).map(|p| unsafe { PosixAcl::from_raw(p) })))
+    }
+}
+
+/// An ACL being filled in: its only reference ours, so its entries are ours
+/// to write. A PosixAcl once it's done, to be shared.
+pub struct NewPosixAcl(PosixAcl);
+
+impl NewPosixAcl {
+    /// @nr entries, to be set: posix_acl_alloc(), with the current scope's
+    /// flags.
+    pub(crate) fn alloc(nr: u32) -> Option<Self> {
+        NonNull::new(unsafe { c::posix_acl_alloc(nr, current_gfp()) }).map(|p| NewPosixAcl(PosixAcl(p)))
+    }
+
+    /// Entry @i set to (@tag, @perm, @id), the id in the initial user
+    /// namespace, ignored for a tag that has none.
+    pub(crate) fn set(&mut self, i: usize, (tag, perm, id): (u16, u16, u32)) {
+        assert!(i < self.0.count(), "entry {i} of an ACL of {}", self.0.count());
+        // in bounds, and ours alone
+        let e = unsafe { &mut *(&raw mut (*self.0.as_raw()).a_entries).cast::<c::posix_acl_entry>().add(i) };
+        e.e_tag  = tag as i16;
+        e.e_perm = perm;
+        // the kernel's, which take any id
+        unsafe {
+            match tag as u32 {
+                c::ACL_USER  => *e.__bindgen_anon_1.e_uid.as_mut() = c::make_kuid(&raw mut c::init_user_ns, id),
+                c::ACL_GROUP => *e.__bindgen_anon_1.e_gid.as_mut() = c::make_kgid(&raw mut c::init_user_ns, id),
+                _            => {}
+            }
+        }
+    }
+}
+
+impl From<NewPosixAcl> for PosixAcl {
+    fn from(acl: NewPosixAcl) -> Self {
+        acl.0
     }
 }
 

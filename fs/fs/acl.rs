@@ -169,13 +169,11 @@ pub use vfs::*;
 #[cfg(kernel)]
 mod vfs {
     use super::*;
-    use core::mem::ManuallyDrop;
-    use core::ptr::NonNull;
     use crate::bch_err;
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
-    use crate::errcode::{Errcode, ret_to_result_void as ret_to_result, BchError};
+    use crate::errcode::{Errcode, BchError};
     use crate::inode;
     use crate::snapshots::subvolume;
     use crate::str_hash;
@@ -183,75 +181,9 @@ mod vfs {
     use crate::util::vstructs::Validated;
     use crate::os::idmap::MntIdmap;
     use crate::os::iattr::{ATTR_CTIME, ATTR_MODE};
-    use crate::os::posix_acl::PosixAcl;
+    use crate::os::posix_acl::{NewPosixAcl, PosixAcl};
     use crate::vfs::inode::InodeInfo;
     use crate::xattr::{self, Xattrs};
-
-    impl PosixAcl {
-        /// An ACL of @nr entries, to be filled in: unlocking @t to allocate
-        /// if it has to - a restart then.
-        fn alloc(t: &TransAttempt<'_, '_>, nr: u32) -> Result<PosixAcl, BchError> {
-            t.allocate_dropping_locks(|| {
-                let gfp = crate::util::alloc::current_gfp();
-                NonNull::new(unsafe { c::posix_acl_alloc(nr, gfp) }).map(|p| unsafe { PosixAcl::from_raw(p) })
-                    .ok_or(BchError::from(Errcode::ENOMEM_acl))
-            })
-        }
-
-        /// Its entries - Err(the tag) for one with a tag ACLs don't have.
-        /// Their ids are in the initial user namespace, as on disk.
-        fn entries(&self) -> impl Iterator<Item = Result<AclEntry, u16>> + '_ {
-            // SAFETY: an ACL's entries follow it, a_count of them
-            let entries = unsafe { (*self.as_raw()).a_entries.as_slice(self.count()) };
-            entries.iter().map(|e| {
-                let tag = e.e_tag as u16;
-                // SAFETY: the union is the id the tag says, if it has one
-                let id = unsafe {
-                    match tag as u32 {
-                        c::ACL_USER  => c::from_kuid(&raw mut c::init_user_ns, *e.__bindgen_anon_1.e_uid.as_ref()),
-                        c::ACL_GROUP => c::from_kgid(&raw mut c::init_user_ns, *e.__bindgen_anon_1.e_gid.as_ref()),
-                        _            => 0,
-                    }
-                };
-                AclEntry::new(tag, e.e_perm, id)
-            })
-        }
-
-        /// Set entry @i, of one alloc() just made - below the count it was
-        /// made with.
-        fn set_entry(&mut self, i: usize, e: AclEntry) {
-            assert!(i < self.count());
-            let (tag, perm, id) = e.vfs();
-            // SAFETY: in bounds; not yet shared, so ours to write
-            let raw = unsafe { &mut *(&raw mut (*self.as_raw()).a_entries).cast::<c::posix_acl_entry>().add(i) };
-            raw.e_tag  = tag as i16;
-            raw.e_perm = perm;
-            // SAFETY: the kernel's, which take any id
-            unsafe {
-                match tag as u32 {
-                    c::ACL_USER  => *raw.__bindgen_anon_1.e_uid.as_mut() = c::make_kuid(&raw mut c::init_user_ns, id),
-                    c::ACL_GROUP => *raw.__bindgen_anon_1.e_gid.as_mut() = c::make_kgid(&raw mut c::init_user_ns, id),
-                    _            => {}
-                }
-            }
-        }
-
-        /// This ACL with its permissions changed to match file mode @mode:
-        /// a new one, as __posix_acl_chmod() makes, unlocking @t to allocate
-        /// if it has to.
-        fn chmod(self, t: &TransAttempt<'_, '_>, mode: c::umode_t) -> Result<PosixAcl, BchError> {
-            t.allocate_dropping_locks(|| {
-                // __posix_acl_chmod() consumes the reference it's given -
-                // failing too - so each try gets its own:
-                let mut acl = self.clone().into_raw();
-                let gfp = crate::util::alloc::current_gfp();
-                let ret = ret_to_result(unsafe { c::__posix_acl_chmod(&mut acl, gfp, mode) });
-                let acl = NonNull::new(acl).map(|p| unsafe { PosixAcl::from_raw(p) });
-                ret?;
-                Ok(acl.expect("__posix_acl_chmod() succeeded without an ACL"))
-            })
-        }
-    }
 
     // ── To and from disk ─────────────────────────────────────────────────
 
@@ -268,11 +200,13 @@ mod vfs {
                 return Ok(None);
             }
 
-            let mut acl = Self::alloc(t, nr as u32)?;
+            let mut acl = t.allocate_dropping_locks(|| {
+                NewPosixAcl::alloc(nr as u32).ok_or(BchError::from(Errcode::ENOMEM_acl))
+            })?;
             for (i, e) in entries.enumerate() {
-                acl.set_entry(i, e);
+                acl.set(i, e.vfs());
             }
-            Ok(Some(acl))
+            Ok(Some(acl.into()))
         }
 
         /// Inode @inode's (@inum's) ACL of @ty, @iter pointed at its xattr -
@@ -291,11 +225,13 @@ mod vfs {
         fn to_xattr<'a, 't>(&self, t: &TransAttempt<'a, 't>, ty: AclType)
             -> Result<TransBkey<'a, 't, c::Xattr<Validated>>, BchError>
         {
+            let entries = || self.entries().map(|(tag, perm, id)| AclEntry::new(tag, perm, id));
+
             // A tag ACLs don't have: EINVAL
-            if self.entries().any(|e| e.is_err()) {
+            if entries().any(|e| e.is_err()) {
                 return Err(BchError::from(c::EINVAL));
             }
-            let entries = || self.entries().map(|e| e.expect("checked above"));
+            let entries = || entries().map(|e| e.expect("checked above"));
 
             let mut k = xattr::new_key(t, ty.xattr_type(), b"", encoded_len(entries()))?
                 .ok_or(BchError::from(c::E2BIG))?;
@@ -414,7 +350,7 @@ mod vfs {
             return Ok(None);
         };
 
-        let acl = acl.chmod(t, mode)?;
+        let acl = t.allocate_dropping_locks(|| acl.chmod(mode))?;
 
         let mut new = acl.to_xattr(t, AclType::Access)?;
         new.k_mut().p = iter.pos();
