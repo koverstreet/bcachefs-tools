@@ -16,8 +16,8 @@ use std::ops::ControlFlow;
 
 use anyhow::anyhow;
 use bcachefs_kernel::c;
-use bcachefs_kernel::btree::bkey::BkeySC;
-use bcachefs_kernel::util::vstructs::{assume_validated, plain_bytes, VstructRef};
+use bcachefs_kernel::btree::bkey::{AnyKey, BkeyI, BkeySC};
+use bcachefs_kernel::util::vstructs::{from_bytes, plain_bytes, Unvalidated};
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::grow_on_erange;
@@ -124,14 +124,14 @@ impl<'h> OnlineBtreeIter<'h> {
         let reply = plain_bytes(&self.buf[..]).get(..self.arg.used as usize).ok_or_else(|| {
             anyhow!("{} bytes used, of {}", self.arg.used, self.buf.len() * 8)
         })?;
-        let k = VstructRef::<c::bkey_i>::new(&reply[self.pos..])
+        let k = from_bytes::<AnyKey<Unvalidated>>(&reply[self.pos..])
             .map_err(|e| anyhow!("reply at byte {}: {e}", self.pos))?;
         self.pos += k.as_bytes().len();
 
         // SAFETY: XXX: the kernel validated it - by its version's validate,
         // not ours: the iterator should hand out Unvalidated keys
-        let k = unsafe { assume_validated(k) };
-        Ok(Some(BkeySC::from(k.key())))
+        let k = unsafe { &*BkeyI::from_raw(k.as_bytes().as_ptr().cast()) };
+        Ok(Some(BkeySC::from(k)))
     }
 
     pub fn for_each<F>(&mut self, mut f: F) -> anyhow::Result<()>

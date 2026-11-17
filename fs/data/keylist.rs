@@ -13,13 +13,13 @@
 //! the top, in room reserve() made, by push_with() - which checks what's
 //! appended to it against the room.
 
-use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BKEY_U64S};
+use crate::btree::bkey::{AnyKey, BkeyI, BkeySC, BkeyV, BKEY_U64S};
 use crate::btree::iter::NoRoom;
 use crate::c;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
-use crate::util::vstructs::{assume_validated, plain_bytes, plain_bytes_mut, VstructRefEntries, VstructRefEntriesMut};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Unvalidated, UnvalidatedEntries, UnvalidatedEntriesMut};
 use core::mem::size_of;
 
 
@@ -307,26 +307,22 @@ fn key_set(room: &mut [u64], k: &c::bkey, val: &[u8]) {
 /// The keys in @u64s, from where a key starts.
 pub(crate) fn keys(u64s: &[u64]) -> impl Iterator<Item = &BkeyI> + '_ {
     let len = u64s.len();
-    VstructRefEntries::<c::bkey_i>::new(plain_bytes(u64s)).map(move |k| {
+    UnvalidatedEntries::<AnyKey<Unvalidated>>::new(plain_bytes(u64s)).map(move |k| {
         let k = k.unwrap_or_else(|e| panic!("a key overruns its buffer, of {len} u64s: {e}"));
         // SAFETY: a keylist's keys are made in memory, by what adds them
-        unsafe { assume_validated(k) }.key()
+        unsafe { &*BkeyI::from_raw(core::ptr::from_ref(k).cast()) }
     })
 }
 
 pub(crate) fn keys_mut(u64s: &mut [u64]) -> impl Iterator<Item = &mut BkeyI> + '_ {
     let len = u64s.len();
-    VstructRefEntriesMut::<c::bkey_i>::new(plain_bytes_mut(u64s)).map(move |k| {
+    UnvalidatedEntriesMut::<AnyKey<Unvalidated>>::new(plain_bytes_mut(u64s)).map(move |k| {
         let k = k.unwrap_or_else(|e| panic!("a key overruns its buffer, of {len} u64s: {e}"));
-        unsafe { assume_validated(k) }.into_key_mut()
+        unsafe { &mut *BkeyI::from_raw_mut(core::ptr::from_mut(k).cast()) }
     })
 }
 
 /// The key at the front of @u64s.
 pub(crate) fn key_mut(u64s: &mut [u64]) -> &mut BkeyI {
-    let len = u64s.len();
-    let k = VstructRefEntriesMut::<c::bkey_i>::new(plain_bytes_mut(u64s)).next()
-        .expect("a key in an empty buffer")
-        .unwrap_or_else(|e| panic!("a key overruns its buffer, of {len} u64s: {e}"));
-    unsafe { assume_validated(k) }.into_key_mut()
+    keys_mut(u64s).next().expect("a key in an empty buffer")
 }

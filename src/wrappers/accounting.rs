@@ -1,8 +1,9 @@
 use bcachefs_kernel::btree::bkey::prelude::*;
+use bcachefs_kernel::btree::bkey::AnyKey;
 use anyhow::anyhow;
 use bcachefs_kernel::c;
 use bcachefs_kernel::format::MetadataVersion;
-use bcachefs_kernel::util::vstructs::{Unvalidated, VstructRefEntries};
+use bcachefs_kernel::util::vstructs::{Unvalidated, UnvalidatedEntries};
 
 use super::handle::BcachefsHandle;
 use super::ioctl::{grow_on_erange, ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING, BCH_IOCTL_QUERY_ACCOUNTING_v2};
@@ -110,9 +111,9 @@ fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>>
     // Kernels before disk_accounting_big_endian wrote the pos byte swapped
     let need_swab = bcachefs_kernel_version().is_some_and(|v| v < MetadataVersion::disk_accounting_big_endian);
 
-    VstructRefEntries::<c::bkey_i>::new(data)
+    UnvalidatedEntries::<AnyKey<Unvalidated>>::new(data)
         .map(|k| {
-            let k = k.map_err(|e| anyhow!("QUERY_ACCOUNTING reply: {e}"))?.key();
+            let k = k.map_err(|e| anyhow!("QUERY_ACCOUNTING reply: {e}"))?;
             let a = k.arm::<c::Accounting>().ok_or_else(|| {
                 anyhow!("QUERY_ACCOUNTING reply: a key of type {} at {}", k.k.type_, k.k.p)
             })?;

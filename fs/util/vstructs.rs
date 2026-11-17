@@ -453,13 +453,6 @@ impl<'a, T, S: State> InState for VstructRef<'a, T, S> {
     type State = S;
 }
 
-// SAFETY: the same bytes in every state
-unsafe impl<'a, T, S: State> Restate for VstructRef<'a, T, S> {
-    unsafe fn restate<U: State>(self) -> VstructRef<'a, T, U> {
-        VstructRef { bytes: self.bytes, _t: PhantomData }
-    }
-}
-
 /// An unsized container's thin entries, keys - each an VstructRef of
 /// its own bytes, checked against what's left: an Unvalidated
 /// jset_entry's entries().
@@ -547,44 +540,6 @@ impl<'a, T, S: State> InState for VstructMut<'a, T, S> {
     type State = S;
 }
 
-// SAFETY: the same bytes in every state
-unsafe impl<'a, T, S: State> Restate for VstructMut<'a, T, S> {
-    unsafe fn restate<U: State>(self) -> VstructMut<'a, T, U> {
-        VstructMut { bytes: self.bytes, _t: PhantomData }
-    }
-}
-
-/// VstructRefEntries, mutably: each an VstructMut.
-pub struct VstructRefEntriesMut<'a, E> {
-    rest:   Option<&'a mut [u8]>,
-    at:     usize,
-    _entry: PhantomData<&'a mut E>,
-}
-
-impl<'a, E> VstructRefEntriesMut<'a, E> {
-    /// The entries in @rest: an unsized container's, from its start[].
-    pub(crate) fn new(rest: &'a mut [u8]) -> Self {
-        Self { rest: Some(rest), at: 0, _entry: PhantomData }
-    }
-}
-
-impl<'a, E: Plain + SelfSized + 'a> Iterator for VstructRefEntriesMut<'a, E> {
-    type Item = Result<VstructMut<'a, E>, VStructError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let rest = self.rest.take().filter(|r| !r.is_empty())?;
-        match checked_bytes::<E>(rest) {
-            Ok(len) => {
-                let (e, rest) = rest.split_at_mut(len);
-                self.rest = Some(rest);
-                self.at += len;
-                Some(Ok(VstructMut { bytes: e, _t: PhantomData }))
-            }
-            Err(err) => Some(Err(err)),
-        }
-    }
-}
-
 /// A walk over entries that knows where it is: offset() is where the entry
 /// next() returns starts, in bytes from where the walk did - as an entry's
 /// own length is.
@@ -609,12 +564,6 @@ impl<I: EntryWalk> Iterator for WithOffsets<I> {
 }
 
 impl<'a, E: Plain + SelfSized + 'a> EntryWalk for VstructRefEntries<'a, E> {
-    fn offset(&self) -> usize {
-        self.at
-    }
-}
-
-impl<'a, E: Plain + SelfSized + 'a> EntryWalk for VstructRefEntriesMut<'a, E> {
     fn offset(&self) -> usize {
         self.at
     }
@@ -1154,31 +1103,6 @@ macro_rules! vstruct_family {
             const INFO: &'static $crate::typeinfo::StructInfo = <$whole as $crate::typeinfo::TypeInfo>::INFO;
         }
     };
-}
-
-/// What's the same bytes in every state - a thin entry - so it's in another
-/// by a cast: restate().
-///
-/// # Safety
-/// Self and Self::In<S> have the same representation, for every S.
-pub unsafe trait Restate: InState + Sized {
-    /// Self, in state S.
-    ///
-    /// # Safety
-    /// What S says of it is true.
-    unsafe fn restate<S: State>(self) -> Self::In<S>
-        where Self::In<S>: Sized;
-}
-
-/// @t, Validated - the unsafe way up, from Unvalidated.
-///
-/// # Safety
-/// It is: what Validated says of it is true - validate passed.
-pub unsafe fn assume_validated<T>(t: T) -> T::In<Validated>
-    where T: Restate<State = Unvalidated>, T::In<Validated>: Sized
-{
-    // SAFETY: the caller's
-    unsafe { t.restate() }
 }
 
 /// The head of a #[counted] family - a header, and an array it counts in

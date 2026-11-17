@@ -185,25 +185,6 @@ impl BkeyI {
     }
 }
 
-/// A thin entry's key, in the state it is: its container's.
-impl<'a, S: KeyState> crate::util::vstructs::VstructRef<'a, c::bkey_i, S> {
-    pub fn key(&self) -> &'a BkeyI<FamilyVal<AllTypes, S>> {
-        // SAFETY: the walk checked its u64s against its bytes
-        unsafe { &*cast_unsized(self.as_bytes().as_ptr().cast()) }
-    }
-}
-
-impl<'a, S: KeyState> crate::util::vstructs::VstructMut<'a, c::bkey_i, S> {
-    pub fn key_mut(&mut self) -> &mut BkeyI<FamilyVal<AllTypes, S>> {
-        // SAFETY: the walk checked its u64s against its bytes
-        unsafe { &mut *cast_unsized_mut(self.as_mut_ptr()) }
-    }
-
-    pub fn into_key_mut(mut self) -> &'a mut BkeyI<FamilyVal<AllTypes, S>> {
-        unsafe { &mut *cast_unsized_mut(self.as_mut_ptr()) }
-    }
-}
-
 impl<V: ?Sized> BkeyI<V> {
     /// All of it, as its u64s say: header and value.
     pub fn as_bytes(&self) -> &[u8] {
