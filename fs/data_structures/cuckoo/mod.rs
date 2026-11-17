@@ -6,8 +6,9 @@
 //! default, or hash_64()'s golden ratio (util/hash.rs) where a lookup's cost
 //! matters more than keys with structure colliding.
 //!
-//! Keys are std's: an item - the u64, or the entry it points to - is Hash +
-//! Eq, and a lookup takes anything it Borrows, as HashSet::get() does; an
+//! Keys are hashbrown's: an item - the u64, or the entry it points to - is
+//! Hash + Eq, and a lookup takes anything Equivalent to it - anything it
+//! Borrows, as HashSet::get() does, or a key an entry has only by value; an
 //! entry's Hash and Eq are its key's. An entry the map doesn't own can hold
 //! its own place in it, and its key - a Registration - so that dropping the
 //! entry takes it out.
@@ -141,6 +142,19 @@ unsafe impl CuckooItem for u64 {
     }
 }
 
+/// A lookup's key, compared with what's in the table: hashbrown's Equivalent.
+/// Anything an item Borrows is one; so is a key an entry has only by value -
+/// published, read a word at a time - which nothing can borrow.
+pub trait Equivalent<K: ?Sized> {
+    fn equivalent(&self, key: &K) -> bool;
+}
+
+impl<Q: ?Sized + Eq, K: ?Sized + Borrow<Q>> Equivalent<K> for Q {
+    fn equivalent(&self, key: &K) -> bool {
+        *self == *key.borrow()
+    }
+}
+
 /// @ty hashed, compared and borrowed as the key @key gives - `|e| &e.key`, or
 /// a method's - for a map's entry, which is its key: the derives would
 /// compare all of it. `impl[...]` first for generics.
@@ -173,6 +187,38 @@ macro_rules! keyed_by {
     };
     ($ty:ty, |$s:ident| $key:expr => $k:ty) => {
         $crate::keyed_by!(impl[] $ty, |$s| $key => $k);
+    };
+}
+
+/// keyed_by!(), for an entry whose key is had only by value - published, read
+/// a word at a time - so nothing can borrow it: a lookup's key is its
+/// Equivalent instead.
+#[macro_export]
+macro_rules! keyed_by_value {
+    ($ty:ty, |$s:ident| $key:expr => $k:ty) => {
+        impl ::core::hash::Hash for $ty {
+            fn hash<H: ::core::hash::Hasher>(&self, h: &mut H) {
+                let $s = self;
+                ::core::hash::Hash::hash(&$key, h)
+            }
+        }
+
+        impl ::core::cmp::PartialEq for $ty {
+            fn eq(&self, o: &Self) -> bool {
+                let a: $k = { let $s = self; $key };
+                let $s = o;
+                a == $key
+            }
+        }
+
+        impl ::core::cmp::Eq for $ty {}
+
+        impl $crate::data_structures::cuckoo::Equivalent<$ty> for $k {
+            fn equivalent(&self, o: &$ty) -> bool {
+                let $s = o;
+                *self == $key
+            }
+        }
     };
 }
 
@@ -333,15 +379,11 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Default for Cuckoo
 
 impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M> {
     /// @key's item, in a read-side section of its own.
-    pub fn get<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
-    where I::Target: Borrow<Q>
-    {
+    pub fn get<Q: ?Sized + Hash + Equivalent<I::Target>>(&self, key: &Q) -> Option<I> {
         self.get_rcu(key, &read_lock())
     }
 
-    pub fn contains<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> bool
-    where I::Target: Borrow<Q>
-    {
+    pub fn contains<Q: ?Sized + Hash + Equivalent<I::Target>>(&self, key: &Q) -> bool {
         self.get(key).is_some()
     }
 
@@ -350,9 +392,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
     }
 
     /// @key's item, under @g's section.
-    pub fn get_rcu<Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &ReadGuard) -> Option<I>
-    where I::Target: Borrow<Q>
-    {
+    pub fn get_rcu<Q: ?Sized + Hash + Equivalent<I::Target>>(&self, key: &Q, g: &ReadGuard) -> Option<I> {
         self.lookup(key, g)
     }
 
@@ -377,9 +417,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
 
 impl<E: Hash + Eq + Sync, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<Entry<E>, S, W, M> {
     /// @key's entry, for as long as @g's read-side section.
-    pub fn get_entry<'g, Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &'g ReadGuard) -> Option<&'g E>
-    where E: Borrow<Q>
-    {
+    pub fn get_entry<'g, Q: ?Sized + Hash + Equivalent<E>>(&self, key: &Q, g: &'g ReadGuard) -> Option<&'g E> {
         // SAFETY: in the table during @g's section, so valid until it ends
         // (Entry::new())
         self.get_rcu(key, g).map(|e| unsafe { e.0.as_ref() })
@@ -387,9 +425,7 @@ impl<E: Hash + Eq + Sync, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<Entry
 
     /// @e out, if it's what @key has - not another entry put in its place:
     /// whether it was.
-    pub fn remove_entry<Q: ?Sized + Hash + Eq>(&self, key: &Q, e: NonNull<E>) -> bool
-    where E: Borrow<Q>
-    {
+    pub fn remove_entry<Q: ?Sized + Hash + Equivalent<E>>(&self, key: &Q, e: NonNull<E>) -> bool {
         self.take_if(key, |i| i.0 == e).is_some()
     }
 }
@@ -430,9 +466,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
     }
 
     /// Take @key out: its item, if it was in.
-    pub fn remove<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
-    where I::Target: Borrow<Q>
-    {
+    pub fn remove<Q: ?Sized + Hash + Equivalent<I::Target>>(&self, key: &Q) -> Option<I> {
         self.take_if(key, |_| true)
     }
 
@@ -452,8 +486,8 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
 /// An entry's place in a map, and its key, held by the entry: dropping it
 /// takes the entry out. A reference each way, owning neither - the table
 /// points to the entry, the entry to the table - so the entry is pinned while
-/// it's in, and leaves as it's dropped. Made by new(), the entry's Hash, Eq
-/// and Borrow<K> are key()'s, which nothing can change; an entry that holds
+/// it's in, and leaves as it's dropped. Made by new(), the entry's Hash and Eq,
+/// and K's Equivalent, are key()'s, which nothing can change; an entry that holds
 /// its key itself is registered by register(), and this held beside it.
 ///
 /// The table is a BackRef: it outlives its entries.
@@ -462,7 +496,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
 /// detached first - and, for a Shared table's readers, a grace period on: its
 /// RcuMember.
 pub struct Registration<K, E, S = SipHash13Key, const W: usize = 2, M: Mode = Shared>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
+where K: Hash + Eq + Equivalent<E>, E: Hash + Eq + Sync, S: CuckooHasher
 {
     table:   BackRef<Cuckoo<Entry<E>, S, W, M>>,
     entry:   NonNull<E>,
@@ -477,10 +511,10 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 // thread: no Send for one of its. Shared, it gives out only the key. @entry
 // is compared, never followed
 unsafe impl<K, E, S, const W: usize> Send for Registration<K, E, S, W, Shared>
-where K: Hash + Eq + Send, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
+where K: Hash + Eq + Send + Equivalent<E>, E: Hash + Eq + Sync, S: CuckooHasher
 {}
 unsafe impl<K, E, S, const W: usize, M: Mode> Sync for Registration<K, E, S, W, M>
-where K: Hash + Eq + Sync, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
+where K: Hash + Eq + Sync + Equivalent<E>, E: Hash + Eq + Sync, S: CuckooHasher
 {}
 
 /// Why a Registration wasn't made: its key's in the table already - another
@@ -498,7 +532,7 @@ impl From<AllocError> for RegisterError {
 }
 
 impl<K, E, S, const W: usize, M: Mode> Registration<K, E, S, W, M>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
+where K: Hash + Eq + Equivalent<E>, E: Hash + Eq + Sync, S: CuckooHasher
 {
     /// A Shared table's readers may hold an &E past its drop: only its memory
     /// waits for them.
@@ -559,7 +593,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 }
 
 impl<K, E, S, const W: usize, M: Mode> Detach for Registration<K, E, S, W, M>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
+where K: Hash + Eq + Equivalent<E>, E: Hash + Eq + Sync, S: CuckooHasher
 {
     /// Out, if the slot is still this entry's: an insert() of its key may
     /// have put another in its place - or the entry's out already.
@@ -570,7 +604,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 }
 
 impl<K, E, S, const W: usize, M: Mode> Drop for Registration<K, E, S, W, M>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
+where K: Hash + Eq + Equivalent<E>, E: Hash + Eq + Sync, S: CuckooHasher
 {
     fn drop(&mut self) {
         // not self.detach(): that's &mut Self's, which has nothing to detach

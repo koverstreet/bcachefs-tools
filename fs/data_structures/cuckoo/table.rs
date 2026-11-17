@@ -105,14 +105,13 @@
 //! table only until it unlinks it.
 
 use crate::data_structures::array_vec::ArrayVec;
-use core::borrow::Borrow;
 use core::hash::Hash;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, AtomicPtr, AtomicU32, AtomicU64};
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
 
-use super::{Contents, Cuckoo, CuckooHasher, CuckooItem, Faults, Held, Mode};
+use super::{Contents, Cuckoo, CuckooHasher, CuckooItem, Equivalent, Faults, Held, Mode};
 use crate::util::alloc::AllocError;
 use crate::os::kernel::random_u64;
 use crate::os::percpu::CpuGuard;
@@ -288,15 +287,13 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
         self.index(key)
     }
 
-    fn probe<Q: ?Sized + Eq>(&self, key: &Q, slots: [usize; W]) -> Probe<'a, I>
-    where I::Target: Borrow<Q>
-    {
+    fn probe<Q: ?Sized + Equivalent<I::Target>>(&self, key: &Q, slots: [usize; W]) -> Probe<'a, I> {
         let mut unstable = false;
         for i in slots {
             self.faults.read_window();
             let Some(s) = self.slots.get(i) else { continue };
             match s.load() {
-                Contents::Item(it) if key_of(&it).borrow() == key => return Probe::Hit(s, it),
+                Contents::Item(it) if key.equivalent(key_of(&it)) => return Probe::Hit(s, it),
                 Contents::Claimed | Contents::Unstable(_) => unstable = true,
                 _ => {}
             }
@@ -304,11 +301,9 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
         if unstable { Probe::Unstable } else { Probe::Miss }
     }
 
-    fn find_item<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<&'a Slot<I>>
-    where I::Target: Borrow<Q>
-    {
+    fn find_item<Q: ?Sized + Hash + Equivalent<I::Target>>(&self, key: &Q) -> Option<&'a Slot<I>> {
         self.index(key).into_iter().map(|i| &self.slots[i])
-            .find(|s| s.load().item().is_some_and(|it| key_of(&it).borrow() == key))
+            .find(|s| s.load().item().is_some_and(|it| key.equivalent(key_of(&it))))
     }
 
     /// A chain for @key, into @chain: made where it's used, not returned - one
@@ -444,9 +439,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         })
     }
 
-    pub(super) fn lookup<Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &ReadGuard) -> Option<I>
-    where I::Target: Borrow<Q>
-    {
+    pub(super) fn lookup<Q: ?Sized + Hash + Equivalent<I::Target>>(&self, key: &Q, g: &ReadGuard) -> Option<I> {
         let mirror = self.mirror.load();
         let mirrored = key_slots::<W, S, Q>(mirror, key);
 
@@ -459,9 +452,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
 
     /// @key's slot and item in @t, by a probe no move ran during and that
     /// met nothing unstable.
-    fn find<'a, Q: ?Sized + Eq>(&self, t: &Table<'a, I, S, W>, key: &Q, slots: [usize; W]) -> Option<(&'a Slot<I>, I)>
-    where I::Target: Borrow<Q>
-    {
+    fn find<'a, Q: ?Sized + Equivalent<I::Target>>(&self, t: &Table<'a, I, S, W>, key: &Q, slots: [usize; W]) -> Option<(&'a Slot<I>, I)> {
         loop {
             let moves = self.moves.load(Acquire);
             match t.probe(key, slots) {
@@ -481,9 +472,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         }
     }
 
-    fn find_all<'g, Q: ?Sized + Hash + Eq>(&'g self, key: &Q, g: &'g ReadGuard) -> Option<(&'g Slot<I>, I)>
-    where I::Target: Borrow<Q>
-    {
+    fn find_all<'g, Q: ?Sized + Hash + Equivalent<I::Target>>(&'g self, key: &Q, g: &'g ReadGuard) -> Option<(&'g Slot<I>, I)> {
         self.tables(g).find_map(|t| self.find(&t, key, t.index(key)))
     }
 
@@ -602,9 +591,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         }
     }
 
-    pub(super) fn take_if<Q: ?Sized + Hash + Eq>(&self, key: &Q, pred: impl Fn(&I) -> bool) -> Option<I>
-    where I::Target: Borrow<Q>
-    {
+    pub(super) fn take_if<Q: ?Sized + Hash + Equivalent<I::Target>>(&self, key: &Q, pred: impl Fn(&I) -> bool) -> Option<I> {
         let g = read_lock();
         loop {
             let (s, i) = self.find_all(key, &g).filter(|(_, i)| pred(i))?;
