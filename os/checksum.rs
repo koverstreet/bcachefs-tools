@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::c;
-
 /// A checksum computed over its data's pieces in order, from a seed.
 pub trait Checksum: Sized {
     type Seed;
@@ -54,26 +52,5 @@ impl Checksum for Crc64 {
 
     fn finalize(self) -> u64 {
         self.0
-    }
-}
-
-pub struct Xxh64(c::xxh64_state);
-
-impl Checksum for Xxh64 {
-    type Seed = u64;
-    type Output = u64;
-
-    fn new(seed: u64) -> Self {
-        let mut s = c::xxh64_state::default();
-        unsafe { c::xxh64_reset(&mut s, seed) };
-        Xxh64(s)
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        unsafe { c::xxh64_update(&mut self.0, data.as_ptr().cast(), data.len()) };
-    }
-
-    fn finalize(self) -> u64 {
-        unsafe { c::xxh64_digest(&self.0) }
     }
 }

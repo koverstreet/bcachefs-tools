@@ -7,7 +7,6 @@
 #include "include/linux/rcupdate.h"
 #include "include/linux/sched.h"
 #include "include/linux/unicode.h"
-#include "include/linux/xxhash.h"
 #include "include/linux/zlib.h"
 #include "include/linux/zstd.h"
 #include "fs/vendor/closure.h"
