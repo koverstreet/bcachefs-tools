@@ -36,6 +36,7 @@ use crate::util::backref::BackRef;
 use crate::util::bio::inline_vecs;
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
+use crate::os::workqueue::Queue;
 use crate::util::log::LogMsg;
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, requeue, requeue_on_cpu, Resume, Spawn, TaskSlot};
@@ -197,7 +198,7 @@ async fn write_task<'h>(wbio: Pin<&'h mut WriteBio>, fs: BackRef<Fs>, b: BackRef
 
     let failed = errs.failures(fs);
 
-    let q = &*fs.btree.write_complete_wq;
+    let q: &Queue = &fs.btree.write_complete_wq;
     match shard_cpu {
         Some(cpu) => requeue_on_cpu(q, cpu.into()).await,
         None      => requeue(q).await,
