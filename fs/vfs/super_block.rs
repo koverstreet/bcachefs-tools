@@ -9,7 +9,6 @@
 //! table mount (vfs/fs_type.rs) sets s_op to.
 
 use core::ffi::c_int;
-use core::ptr::NonNull;
 
 use crate::accounting;
 use crate::alloc::capacity::avail_factor;
@@ -52,10 +51,6 @@ impl SuperBlock {
 #[vtable]
 impl SuperOps for Fs {
     type Inode = InodeInfo;
-
-    fn free_inode(inode: NonNull<InodeInfo>) {
-        super::new_inode::free(inode)
-    }
 
     fn write_inode(&self, inode: &InodeInfo, _wbc: *mut c::writeback_control) -> Result<(), BchError> {
         inode.update_lock().write_inode(ATTR_ATIME | ATTR_MTIME | ATTR_CTIME, |_, _| Ok(()))

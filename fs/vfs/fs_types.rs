@@ -8,7 +8,7 @@ use crate::published;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::util::projections::Volatile;
 use crate::os::workqueue::DelayedWork;
-use crate::os::vfs_inode::VfsInode;
+use crate::os::vfs_inode::{Live, VfsInode};
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
 use core::ffi::{c_int, c_void};
@@ -22,14 +22,14 @@ use crate::btree::iter::BtreeTrans;
  * while Rust has a &InodeInfo - so what Rust touches is typed for that: @v,
  * the struct inode the kernel writes, a VfsInode; ei_inode a
  * VolatileInodeUnpacked; ei_update_lock and ei_quota_lock Locked, the second
- * over what it protects.
+ * over what it protects. St is @v's state: New while it's a NewInode's.
  */
 #[pin_data]
 #[repr(C)]
 #[derive(TypeInfo)]
-pub struct InodeInfo {
+pub struct InodeInfo<St = Live> {
     #[pin]
-    pub v: VfsInode<crate::fs::Fs>,
+    pub v: VfsInode<crate::fs::Fs, St>,
     /* the inode cache's key: set before it's in, unchanged while it is */
     pub ei_inum: c::subvol_inum,
 

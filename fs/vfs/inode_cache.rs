@@ -119,27 +119,30 @@ impl InodeCache {
             self.add_holder(inode.fs(), inum)?;
         }
 
-        let lost = loop {
+        // in the cache, it's published: lookups find it
+        let published = inode.publish(|inode, p| loop {
             // SAFETY: freed a grace period after it's out, as the VFS frees
             // inodes, by RCU; its key set
-            let e = unsafe { Entry::new(Cached::of(&inode)) };
+            let e = unsafe { Entry::new(p.cast::<Cached>()) };
             let inserted = if nofail { Ok(self.inodes.insert_new_nofail(e)) } else { self.inodes.insert_new(e) };
             match inserted {
-                Ok(Ok(())) => break None,
+                Ok(Ok(())) => break Ok(()),
                 // another's in first: it, if it's still there
                 Ok(Err(_)) => match self.find(t, inum).transpose() {
-                    Some(old) => break Some(old),
+                    Some(old) => break Err(old),
                     None => continue,
                 },
-                Err(_) => break Some(Err(inode.fs().err(Errcode::ENOMEM_inode_cache_insert))),
+                Err(_) => break Err(Err(inode.fs().err(Errcode::ENOMEM_inode_cache_insert))),
+            }
+        });
+        let inode = match published {
+            Ok(inode) => inode,
+            Err(ret) => {
+                self.remove_holder(inum);
+                return ret;
             }
         };
-        if let Some(ret) = lost {
-            self.remove_holder(inum);
-            return ret;
-        }
 
-        let inode = inode.into_ref();
         inode.vfs().fake_hash();
         inode.vfs().sb_list_add();
         inode.fs().vfs.inodes.set(inode.ei_inodes_idx, NonNull::from(&*inode).cast());

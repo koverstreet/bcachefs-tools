@@ -5,8 +5,9 @@
 //! &mut, until InodeCache::insert() takes it. Dropped instead, it's given up
 //! as a bad inode, which evict doesn't delete.
 //!
-//! Inodes are INODE_CACHE's, a slab cache made at module init; the VFS frees
-//! them, a grace period after evict, through free().
+//! Inodes are INODE_CACHE's, a slab cache made at module init - InodeInfo's,
+//! is_inode!() says - which the VFS frees them back to, a grace period after
+//! evict.
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c::{self, two_state_lock_init, InodeQuota, InodeReserved, InodeReservedRange};
@@ -18,22 +19,17 @@ use crate::util::alloc::{flags, AllocError, Flags};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::slab::KmemCache;
 use crate::os::workqueue::{run_raw, RawWork};
-use core::mem::{offset_of, ManuallyDrop};
-use core::ops::{Deref, DerefMut};
+use core::mem::offset_of;
 use core::ptr::NonNull;
-use kernel::sync::aref::ARef;
 use pin_init::{pin_init, pin_init_from_closure, Zeroable};
 
-use super::inode::{InodeInfo, InodeRef};
+use super::inode::InodeInfo;
 use super::pagecache::INODE_AOPS;
-use crate::os::vfs_inode::VfsInode;
+use crate::os::vfs_inode::{New, VfsInode};
 
-pub(crate) static INODE_CACHE: KmemCache<InodeInfo> = KmemCache::new();
+pub(crate) static INODE_CACHE: KmemCache<InodeInfo<New>> = KmemCache::new();
 
-pub struct NewInode(NonNull<InodeInfo>);
-
-// SAFETY: an inode, and a reference to it, which any thread may put
-unsafe impl Send for NewInode {}
+pub type NewInode = crate::os::vfs_inode::NewInode<InodeInfo>;
 
 impl NewInode {
     /// An inode with its locks, timer and place on the filesystem's list, and
@@ -44,7 +40,7 @@ impl NewInode {
         let _gfp = MemallocFlags::for_gfp(gfp);
         let slot = fs.vfs.inodes.get_slot().ok()?;
 
-        let init = pin_init!(InodeInfo {
+        let init = pin_init!(InodeInfo::<New> {
             v <- VfsInode::new(sb, gfp),
             ei_reserved <- new_lock!(InodeReserved { ei_reserved_replicas: 0, ei_reserved_state: 0 },
                                      InodeReservedRange { ei_reserved_start: Zeroable::zeroed(),
@@ -69,7 +65,7 @@ impl NewInode {
             ei_inode: Zeroable::zeroed(),
         }? BchError);
 
-        let mut inode = NewInode(INODE_CACHE.alloc_inode(sb, gfp, init)?);
+        let mut inode = NewInode::alloc(sb, gfp, init)?;
         inode.ei_inodes_idx = slot.into_idx();
         // From the start, as FsMapping has it: inode_init_always() set the
         // VFS's empty ones
@@ -126,38 +122,6 @@ impl NewInode {
         }
         self.v.set_folio_min_size(block_bytes as usize);
     }
-
-    /// For InodeCache::insert(): the reference, the cache's to give back.
-    pub(super) fn into_ref(self) -> InodeRef {
-        // SAFETY: the reference new() took
-        unsafe { ARef::from_raw(ManuallyDrop::new(self).0) }
-    }
-}
-
-impl Deref for NewInode {
-    type Target = InodeInfo;
-
-    fn deref(&self) -> &InodeInfo {
-        // SAFETY: live while we hold it
-        unsafe { self.0.as_ref() }
-    }
-}
-
-impl DerefMut for NewInode {
-    fn deref_mut(&mut self) -> &mut InodeInfo {
-        // SAFETY: never in the cache, nor on the superblock's list: ours alone
-        unsafe { self.0.as_mut() }
-    }
-}
-
-impl Drop for NewInode {
-    /// Given up: a bad inode, which evict doesn't delete, and our reference
-    /// put.
-    fn drop(&mut self) {
-        self.v.make_bad();
-        // SAFETY: the reference new() took
-        drop(unsafe { InodeRef::from_raw(self.0) });
-    }
 }
 
 /// The writeback timer's: the inode written back, if it's live. Evict cancels
@@ -170,12 +134,6 @@ impl RawWork for InodeInfo {
             let _ = r.write_now(false);
         }
     }
-}
-
-/// The VFS's, a grace period after evict: free_inode().
-pub(super) fn free(inode: NonNull<InodeInfo>) {
-    // SAFETY: INODE_CACHE's, and the VFS is done with it
-    unsafe { INODE_CACHE.free(inode) }
 }
 
 /// At module init: the inode cache, then the filesystem type. Failed, module

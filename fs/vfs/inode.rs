@@ -35,7 +35,6 @@
 
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::{c_long, c_ulong, CStr};
-use core::mem::offset_of;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::SeqCst};
@@ -58,7 +57,7 @@ use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::kernel::HZ;
 use crate::util::log::LogMsg;
 use crate::util::rcu::{read_lock, ReadGuard};
-use kernel::sync::aref::{ARef, AlwaysRefCounted};
+use kernel::sync::aref::ARef;
 
 use super::new_inode::NewInode;
 use crate::os::super_block::IsInode;
@@ -69,23 +68,8 @@ use crate::format::Btree;
 
 pub type InodeRef = ARef<InodeInfo>;
 
-// SAFETY: its count is its struct inode's, which is first
-unsafe impl AlwaysRefCounted for InodeInfo {
-    fn inc_ref(&self) {
-        self.vfs().inc_ref()
-    }
-
-    unsafe fn dec_ref(obj: NonNull<Self>) {
-        unsafe { VfsInode::<Fs>::dec_ref(obj.cast()) }
-    }
-}
-
 // to_bch_ei(): an InodeInfo is where its struct inode is
-const _: () = assert!(offset_of!(InodeInfo, v) == 0);
-
-unsafe impl IsInode for InodeInfo {
-    type Super = Fs;
-}
+crate::is_inode!(InodeInfo { v }: Fs, super::new_inode::INODE_CACHE);
 
 // SAFETY: the kernel's inode, shared by every thread with it open or in a VFS
 // call. What Rust reaches through &InodeInfo is atomic, behind a lock, or the
@@ -214,12 +198,15 @@ impl InodeInfo {
     pub fn raw(&self) -> *mut c::InodeInfo {
         core::ptr::from_ref(self).cast_mut()
     }
+}
 
+// a new inode's too, NewInode::init()'s
+impl<St> InodeInfo<St> {
     pub fn fs(&self) -> &Fs {
-        self.sb().fs()
+        self.v.sb().fs()
     }
 
-    pub fn vfs(&self) -> &VfsInode<Fs> {
+    pub fn vfs(&self) -> &VfsInode<Fs, St> {
         &self.v
     }
 
@@ -271,7 +258,9 @@ impl InodeInfo {
 
         self.ei_inode.set(bi);
     }
+}
 
+impl InodeInfo {
     /// @bi, about to be written, with the VFS's times: see the file comment.
     pub(crate) fn fold_times(&self, bi: &mut c::bch_inode_unpacked) {
         let (fs, v) = (self.fs(), self.vfs());

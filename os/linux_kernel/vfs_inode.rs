@@ -14,6 +14,8 @@
 //! an InodeRef, ARef<InodeInfo>, holds one.
 
 use core::ffi::{c_int, c_long, CStr};
+use core::mem::ManuallyDrop;
+use core::ops::{Deref, DerefMut};
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
 use crate::c;
@@ -27,7 +29,7 @@ use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::os::file::{Any, FileData, FileOps};
 use crate::os::folio::AddressSpaceOps;
 use crate::os::inode_ops::InodeOps;
-use crate::os::super_block::{SuperBlock, SuperOps};
+use crate::os::super_block::{IsInode, SuperBlock, SuperOps};
 use crate::types::CStatic;
 use crate::util::alloc::Flags;
 use pin_init::PinInit;
@@ -71,7 +73,7 @@ macro_rules! accessors {
     };
 }
 
-impl<S> VfsInode<S> {
+impl<S, St> VfsInode<S, St> {
     pub fn as_ptr(&self) -> *mut c::inode {
         self.0.as_ptr()
     }
@@ -177,7 +179,11 @@ impl<S> VfsInode<S> {
         let acl = acl.map_or(core::ptr::null_mut(), PosixAcl::as_raw);
         unsafe { c::set_cached_acl(self.as_ptr(), ty as c_int, acl) }
     }
+}
 
+// What reaches the inode through the VFS's ops - which have it as an I, Live -
+// or makes it reachable by others: a Live inode's only
+impl<S> VfsInode<S> {
     // ── The page cache ───────────────────────────────────────────────────
 
     pub fn mapping(&self) -> Mapping {
@@ -358,7 +364,9 @@ impl<S> VfsInode<S> {
     pub fn clear(&self) {
         unsafe { c::clear_inode(self.as_ptr()) }
     }
+}
 
+impl<S, St> VfsInode<S, St> {
     // ── A new inode, its creator's alone: &mut ───────────────────────────
 
     /// Given up: make_bad_inode() - which evict doesn't delete.
@@ -397,15 +405,15 @@ impl<S> VfsInode<S> {
 
     /// The i_rwsems of @a and @b, in the VFS's order, held for write until the
     /// guard's dropped: lock_two_nondirectories().
-    pub fn lock_two_nondirectories<'a>(a: &'a Self, b: &'a Self) -> TwoNondirsLocked<'a, S> {
+    pub fn lock_two_nondirectories<'a>(a: &'a Self, b: &'a Self) -> TwoNondirsLocked<'a, S, St> {
         unsafe { c::lock_two_nondirectories(a.as_ptr(), b.as_ptr()) };
         TwoNondirsLocked(a, b)
     }
 }
 
-impl<S: SuperOps> VfsInode<S> {
+impl<S: SuperOps> VfsInode<S, New> {
     /// A new inode on @sb: inode_init_once(), then inode_init_always_gfp(),
-    /// its one reference the caller's.
+    /// its one reference the caller's - NewInode's.
     pub fn new(sb: &SuperBlock<S>, gfp: Flags) -> impl PinInit<Self, BchError> + '_ {
         // SAFETY: inode_init_once() writes all of it
         unsafe {
@@ -415,7 +423,9 @@ impl<S: SuperOps> VfsInode<S> {
             })
         }
     }
+}
 
+impl<S: SuperOps, St> VfsInode<S, St> {
     pub fn sb(&self) -> &SuperBlock<S> {
         unsafe { SuperBlock::from_raw((*self.as_ptr()).i_sb) }
     }
@@ -445,6 +455,58 @@ impl<S: SuperOps> VfsInode<S> {
     }
 }
 
+/// A new inode, its creator's alone: its one reference the creator's, and on
+/// nothing yet - no hash, no list, no dentry - so what's set of it is set
+/// through &mut. It's an I::New, I in the New state, of which no reference
+/// can be taken, until publish() makes it an I. Dropped instead, it's given
+/// up as a bad inode, as iget_failed() does: make_bad_inode(), which evict
+/// doesn't delete, then iput().
+pub struct NewInode<I: IsInode>(NonNull<I::New>);
+
+// an inode, and a reference to it, which any thread may put
+unsafe impl<I: IsInode + Send + Sync> Send for NewInode<I> {}
+
+impl<I: IsInode> NewInode<I> {
+    /// An I from its cache, made by @init - whose VfsInode::new() is what
+    /// makes its one reference - on @sb. None if there's no memory, as @gfp
+    /// allows, or @init fails.
+    pub fn alloc<E>(sb: &SuperBlock<I::Super>, gfp: Flags, init: impl PinInit<I::New, E>) -> Option<Self> {
+        I::cache().alloc_inode(sb, gfp, init).map(NewInode)
+    }
+
+    /// Published by @f - put where others find it, from its address - and its
+    /// reference given up, an I's. @f failing, it wasn't, and it's dropped:
+    /// an @f that fails must leave it where only its creator has it.
+    pub fn publish<E>(self, f: impl FnOnce(&I::New, NonNull<I>) -> Result<(), E>) -> Result<ARef<I>, E> {
+        f(&self, self.0.cast())?;
+        Ok(unsafe { ARef::from_raw(ManuallyDrop::new(self).0.cast()) })
+    }
+}
+
+impl<I: IsInode> Deref for NewInode<I> {
+    type Target = I::New;
+
+    fn deref(&self) -> &I::New {
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl<I: IsInode> DerefMut for NewInode<I> {
+    fn deref_mut(&mut self) -> &mut I::New {
+        unsafe { self.0.as_mut() }
+    }
+}
+
+impl<I: IsInode> Drop for NewInode<I> {
+    fn drop(&mut self) {
+        let v = self.0.as_ptr().cast::<VfsInode<I::Super, New>>();
+        unsafe {
+            (*v).make_bad();
+            c::iput(v.cast());
+        }
+    }
+}
+
 pub struct InodeLocked<'a, S = Any>(&'a VfsInode<S>);
 
 impl<S> Drop for InodeLocked<'_, S> {
@@ -453,9 +515,9 @@ impl<S> Drop for InodeLocked<'_, S> {
     }
 }
 
-pub struct TwoNondirsLocked<'a, S = Any>(&'a VfsInode<S>, &'a VfsInode<S>);
+pub struct TwoNondirsLocked<'a, S = Any, St = Live>(&'a VfsInode<S, St>, &'a VfsInode<S, St>);
 
-impl<S> Drop for TwoNondirsLocked<'_, S> {
+impl<S, St> Drop for TwoNondirsLocked<'_, S, St> {
     fn drop(&mut self) {
         unsafe { c::unlock_two_nondirectories(self.0.as_ptr(), self.1.as_ptr()) }
     }

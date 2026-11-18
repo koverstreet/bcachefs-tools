@@ -34,6 +34,7 @@ use crate::os::quota::QuotactlOps;
 use crate::os::seq_file::SeqFile;
 use crate::os::vfs_inode::{ILocked, VfsInode};
 use crate::os::xattr::XattrHandlers;
+use crate::os::slab::KmemCache;
 use crate::types::CStatic;
 use crate::util::ffi::Opaque;
 use kernel::error::{code::ENOMEM, to_result, Result};
@@ -172,16 +173,14 @@ impl<T: 'static> SelfOf<T> for *mut c::dentry {
 
 crate::vfs_ops! {
     /// A superblock's operations, super_operations: Self is what s_fs_info
-    /// points to, and each op gets it as &self, but free_inode(), which can
-    /// run after the filesystem's freed.
+    /// points to, and each op gets it as &self. Its inodes' memory is theirs,
+    /// os's to allocate and free.
     pub(crate) trait SuperOps for c::super_operations, SuperVTable<T: SuperOps> = T, |ops| {
         ops.alloc_inode = Some(no_alloc_inode);
+        ops.free_inode = Some(free_inode::<T>);
     };
     type Inode: IsInode<Super = Self>;
 
-    /// The inode's memory, the VFS done with it - an RCU callback after
-    /// eviction, which can run after the filesystem's freed: no &self.
-    fn free_inode(inode: NonNull<Self::Inode>);
     /// Not always referenced - iput_final() writes one back with i_count 0
     /// - but I_SYNC or I_WILL_FREE keeps it from eviction meanwhile.
     fn write_inode(&self = inode, inode: &Self::Inode, wbc: *mut c::writeback_control)
@@ -205,6 +204,13 @@ crate::vfs_ops! {
 unsafe extern "C" fn no_alloc_inode(_sb: *mut c::super_block) -> *mut c::inode {
     crate::warn_on_once!(true);
     core::ptr::null_mut()
+}
+
+/// The inode's memory, the VFS done with it, back to its type's cache: an RCU
+/// callback after eviction, which can run after the filesystem's freed.
+unsafe extern "C" fn free_inode<T: SuperOps>(inode: *mut c::inode) {
+    let inode = NonNull::new(inode).expect("an inode").cast();
+    unsafe { <T::Inode as IsInode>::cache().free(inode) }
 }
 
 /// A superblock from sget with s_umount held for writing, its reference: the
@@ -244,9 +250,17 @@ fn copy_str<const N: usize>(dst: &mut [u8; N], src: &CStr) {
 ///
 /// # Safety
 /// Self starts with its VfsInode<Super>, and its AlwaysRefCounted reference
-/// is one on i_count - ihold(), iput().
+/// is one on i_count - ihold(), iput(): is_inode!()'s, which checks the
+/// first.
 pub unsafe trait IsInode: AlwaysRefCounted {
     type Super: SuperOps<Inode = Self>;
+    /// Self in the New state, NewInode's: the same struct but for its
+    /// VfsInode's state.
+    type New: 'static;
+
+    /// Where its memory comes from and goes back to: NewInode::alloc()'s,
+    /// free_inode()'s.
+    fn cache() -> &'static KmemCache<Self::New>;
 
     fn vfs(&self) -> &VfsInode<Self::Super>
         where Self: Sized
@@ -267,6 +281,48 @@ pub unsafe trait IsInode: AlwaysRefCounted {
     {
         self.vfs().iget(i_lock).map(|r| unsafe { ARef::from_raw(ARef::into_raw(r).cast()) })
     }
+}
+
+/// IsInode, and AlwaysRefCounted, for $t: generic over its state, as its
+/// field $v is - a VfsInode<$super, St>, first, as checked here - its memory
+/// $cache's.
+#[macro_export]
+macro_rules! is_inode {
+    ($t:ident { $v:ident }: $super:ty, $cache:path) => {
+        const _: () = {
+            use ::core::mem::{align_of, offset_of, size_of};
+            use $crate::os::vfs_inode::{Live, New, VfsInode};
+
+            assert!(offset_of!($t<Live>, $v) == 0 && offset_of!($t<New>, $v) == 0);
+            assert!(size_of::<$t<Live>>() == size_of::<$t<New>>() &&
+                    align_of::<$t<Live>>() == align_of::<$t<New>>());
+            #[allow(dead_code)]
+            fn v<St>(i: &$t<St>) -> &VfsInode<$super, St> { &i.$v }
+        };
+
+        unsafe impl $crate::os::super_block::IsInode for $t {
+            type Super = $super;
+            type New = $t<$crate::os::vfs_inode::New>;
+
+            fn cache() -> &'static $crate::os::slab::KmemCache<Self::New> {
+                &$cache
+            }
+        }
+
+        // its count is its struct inode's
+        unsafe impl ::kernel::sync::aref::AlwaysRefCounted for $t {
+            fn inc_ref(&self) {
+                $crate::os::super_block::IsInode::vfs(self).inc_ref()
+            }
+
+            unsafe fn dec_ref(obj: ::core::ptr::NonNull<Self>) {
+                unsafe {
+                    <$crate::os::vfs_inode::VfsInode<$super> as ::kernel::sync::aref::AlwaysRefCounted>
+                        ::dec_ref(obj.cast())
+                }
+            }
+        }
+    };
 }
 
 from_raw! {

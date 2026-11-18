@@ -13,7 +13,7 @@ use crate::util::os_str::{cstr_name, OsStr};
 
 /// The xattrs the LSMs label new @inode in @dir with - @name its name - each
 /// a name and value to @set: security_inode_init_security().
-pub fn inode_init_security<S, F>(inode: &VfsInode<S>, dir: &VfsInode<S>, name: Option<&c::qstr>, mut set: F)
+pub fn inode_init_security<S, St, F>(inode: &VfsInode<S, St>, dir: &VfsInode<S>, name: Option<&c::qstr>, mut set: F)
     -> Result<(), BchError>
 where
     F: FnMut(&OsStr, &[u8]) -> Result<(), BchError>,
