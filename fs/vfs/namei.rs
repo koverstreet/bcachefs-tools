@@ -9,8 +9,7 @@
 //! Lookup writes nothing, unless a dirent and its inode disagree, which it
 //! repairs. The inodes it returns come from the inode cache.
 
-use core::ffi::{c_int, c_uint, c_void, CStr};
-use core::ptr::{self, null};
+use core::ffi::{c_uint, CStr};
 
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::init::passes::RecoveryPass;
@@ -19,7 +18,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, C
                          TransAttempt};
 use crate::c;
 use crate::dirent::{self, Dirent};
-use crate::errcode::{Errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::init::passes;
 use crate::inode;
 use crate::namei;
@@ -30,8 +29,8 @@ use crate::str_hash;
 use crate::os::kernel::{current_fsgid, current_fsuid};
 use crate::util::log::LogMsg;
 use crate::os::file::OpeningTmpfile;
-use crate::util::ffi::bytes;
-use crate::util::os_str::{cstr_name, OsStr};
+use crate::os::security;
+use crate::util::os_str::OsStr;
 use crate::xattr::{self, XattrType};
 use cstruct_macros::vtable;
 use kernel::sync::aref::ARef;
@@ -275,28 +274,10 @@ fn init_security(t: &TransAttempt<'_, '_>, dir: &InodeInfo, inode: &mut NewInode
     inode.v.set_uid(inode_u.bi_uid);
     inode.v.set_gid(inode_u.bi_gid);
 
-    let mut ctx = InitXattrs { t, inum, hash: str_hash::hash_info_init(t.fs(), inode_u)? };
-    ret_to_result_void(unsafe {
-        c::security_inode_init_security(inode.v.as_ptr(), dir.v.as_ptr(), name.map_or(null(), ptr::from_ref),
-                                        Some(initxattrs), (&raw mut ctx).cast())
+    let hash = str_hash::hash_info_init(t.fs(), inode_u)?;
+    security::inode_init_security(&inode.v, &dir.v, name, |name, value| {
+        xattr::set_key(t, inum, &hash, name, value, XattrType::SECURITY, xattr::XATTR_CREATE)
     })
-}
-
-struct InitXattrs<'a, 'b, 'f> {
-    t:    &'a TransAttempt<'b, 'f>,
-    inum: c::subvol_inum,
-    hash: c::bch_hash_info<'f>,
-}
-
-/// security_inode_init_security()'s: the xattrs the LSMs made, set.
-unsafe extern "C" fn initxattrs(_inode: *mut c::inode, xattrs: *const c::xattr, ctx: *mut c_void) -> c_int {
-    let ctx = unsafe { &*ctx.cast::<InitXattrs<'_, '_, '_>>() };
-    // ended by one with no name
-    let mut xattrs = (0..).map(|i| unsafe { &*xattrs.add(i) }).take_while(|x| !x.name.is_null());
-    ret_to_c(xattrs.try_for_each(|x| {
-        let (name, value) = unsafe { (cstr_name(x.name), bytes(x.value, x.value_len)) };
-        xattr::set_key(ctx.t, ctx.inum, &ctx.hash, name, value, XattrType::SECURITY, xattr::XATTR_CREATE)
-    }))
 }
 
 pub(crate) struct DirOps;

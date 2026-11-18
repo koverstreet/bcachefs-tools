@@ -45,6 +45,7 @@ pub mod quota;
 pub mod rcu;
 pub mod rwsem;
 pub mod sched;
+pub mod security;
 pub mod seq_file;
 pub mod shrinker;
 pub mod slab;
