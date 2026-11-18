@@ -107,15 +107,21 @@ impl NewInode {
         }
 
         match self.v.mode() as u32 & c::S_IFMT {
-            c::S_IFREG => self.v.set_ops(&super::inode_ops::FILE_INODE_OPS, Some(&*super::file::FILE_OPS)),
-            c::S_IFDIR => self.v.set_ops(&super::inode_ops::DIR_INODE_OPS, Some(&*super::dir::DIR_FILE_OPS)),
+            c::S_IFREG => {
+                self.v.set_ops(&super::inode_ops::FILE_INODE_OPS);
+                self.v.set_fop(&super::file::FILE_OPS);
+            }
+            c::S_IFDIR => {
+                self.v.set_ops(&super::inode_ops::DIR_INODE_OPS);
+                self.v.set_fop(&super::dir::DIR_FILE_OPS);
+            }
             c::S_IFLNK => {
                 self.v.nohighmem();
-                self.v.set_ops(&super::inode_ops::SYMLINK_INODE_OPS, None);
+                self.v.set_ops(&super::inode_ops::SYMLINK_INODE_OPS);
             }
             _ => {
                 self.v.init_special();
-                self.v.set_ops(&super::inode_ops::SPECIAL_INODE_OPS, None);
+                self.v.set_ops(&super::inode_ops::SPECIAL_INODE_OPS);
             }
         }
         self.v.set_folio_min_size(block_bytes as usize);

@@ -20,6 +20,7 @@ pub mod fs_context;
 pub mod fs_type;
 pub mod iattr;
 pub mod idmap;
+pub mod inode_ops;
 pub mod ioctl;
 pub mod iov_iter;
 pub mod jump_label;

@@ -40,7 +40,7 @@ use crate::os::idmap::MntIdmap;
 use super::inode::{InodeInfo, InodeRef};
 use crate::os::iattr::{ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::super_block::IsInode;
-use super::inode_ops::InodeOps;
+use crate::os::inode_ops::InodeOps;
 use super::new_inode::NewInode;
 
 const DIR_ENTRIES_CHANGED: u32 = ATTR_MTIME | ATTR_CTIME | ATTR_SIZE;
@@ -285,6 +285,8 @@ pub(crate) struct DirOps;
 
 #[vtable]
 impl InodeOps for DirOps {
+    type Inode = InodeInfo;
+
     /// Any error is a negative dentry, as C had it.
     fn lookup(dir: &InodeInfo, dentry: Dentry<'_>, _flags: c_uint) -> *mut c::dentry {
         let fs = dir.fs();

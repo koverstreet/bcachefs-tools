@@ -24,7 +24,8 @@
 use core::ffi::c_int;
 
 use crate::acl;
-use crate::os::posix_acl::AclType;
+use crate::os::inode_ops::InodeAttrs;
+use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::errcode::{Errcode, ret_to_c, BchError};
@@ -100,8 +101,8 @@ impl FileattrSet {
     }
 }
 
-impl InodeInfo {
-    pub(crate) fn getattr(&self, idmap: MntIdmap<'_>, stat: &mut c::kstat, request_mask: u32) {
+impl InodeAttrs for InodeInfo {
+    fn getattr(&self, idmap: MntIdmap<'_>, stat: &mut c::kstat, request_mask: u32) {
         let fs = self.fs();
         let v = self.vfs();
         let block_bytes = fs.block_bytes() as u32;
@@ -149,7 +150,7 @@ impl InodeInfo {
         }
     }
 
-    pub(crate) fn fileattr_get(&self, fa: &mut c::file_kattr) {
+    fn fileattr_get(&self, fa: &mut c::file_kattr) {
         let bi = self.inode();
         let xflags = FLAGS.iter().filter(|f| bi.flag(f.0)).fold(0, |x, f| x | f.2);
 
@@ -164,7 +165,7 @@ impl InodeInfo {
     }
 
     /// @dentry is this inode's.
-    pub(crate) fn fileattr_set(&self, dentry: Dentry<'_>, fa: &mut c::file_kattr)
+    fn fileattr_set(&self, dentry: Dentry<'_>, fa: &mut c::file_kattr)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -213,6 +214,34 @@ impl InodeInfo {
         Ok(())
     }
 
+    fn setattr(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, attr: &mut c::iattr)
+        -> Result<(), BchError>
+    {
+        self.vfs().assert_locked();
+        subvolume::is_ro(self.fs(), self.inum().subvol as u32)?;
+        idmap.setattr_prepare(dentry, attr)?;
+
+        if attr.ia_valid & ATTR_SIZE != 0 {
+            self.truncate(idmap, attr)
+        } else {
+            self.setattr_nonsize(idmap, Iattr::of(attr))
+        }
+    }
+
+    fn get_acl(&self, ty: AclType) -> Result<Option<PosixAcl>, BchError> {
+        acl::get_acl(self, ty)
+    }
+
+    fn set_acl(&self, idmap: MntIdmap<'_>, acl: Option<&PosixAcl>, ty: AclType) -> Result<(), BchError> {
+        acl::set_acl(idmap, self, acl, ty)
+    }
+
+    fn listxattr(dentry: Dentry<'_>, buf: Option<&mut [u8]>) -> Result<usize, BchError> {
+        crate::xattr::listxattr(dentry, buf)
+    }
+}
+
+impl InodeInfo {
     /// What @attr changes, into @bi: @uid as stored, @kgid as the
     /// filesystem has it.
     fn setattr_copy(&self, idmap: MntIdmap<'_>, attr: &Iattr, uid: Option<u32>,
@@ -246,20 +275,6 @@ impl InodeInfo {
                 mode &= !(c::S_ISGID as c::umode_t);
             }
             bi.bi_mode = mode;
-        }
-    }
-
-    pub(crate) fn setattr(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, attr: &mut c::iattr)
-        -> Result<(), BchError>
-    {
-        self.vfs().assert_locked();
-        subvolume::is_ro(self.fs(), self.inum().subvol as u32)?;
-        idmap.setattr_prepare(dentry, attr)?;
-
-        if attr.ia_valid & ATTR_SIZE != 0 {
-            self.truncate(idmap, attr)
-        } else {
-            self.setattr_nonsize(idmap, Iattr::of(attr))
         }
     }
 

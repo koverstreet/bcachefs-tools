@@ -1,122 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! An inode's operations as a trait, InodeOps, declared by vfs_ops!
-//! (ops.rs), as the super ops are.
+//! bcachefs's inode operations, os::inode_ops's InodeOps.
 //!
 //! There are four tables - a directory's, a regular file's, a symlink's, and
-//! everything else's - so four zero-sized types implement it, with no state:
-//! each op is an associated fn. The ops every table has - getattr, setattr,
-//! listxattr, the ACLs, fileattr - are provided, their HAS_* true unless an
-//! impl says otherwise; the rest are each table's. A directory's, DirOps,
-//! are the namespace operations, namei.rs's.
+//! everything else's - so four zero-sized types implement it. The ops every
+//! table has are InodeInfo's, InodeAttrs (attr.rs); the rest are each
+//! table's. A directory's, DirOps, are the namespace operations, namei.rs's.
 
-use core::ffi::{c_uint, CStr};
-use core::mem::ManuallyDrop;
-
-use crate::acl;
-use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::ffi::{c_char, opt_bytes_mut};
-use crate::os::file::OpeningTmpfile;
-use crate::os::ops::IntoRaw;
-use crate::xattr;
+use crate::util::ffi::c_char;
+use crate::types::CStatic;
 use cstruct_macros::vtable;
 
 use super::dentry::Dentry;
 use crate::os::fiemap::Fiemap;
-use crate::os::idmap::MntIdmap;
+use crate::os::inode_ops::{InodeOps, InodeVTable};
 use super::inode::InodeInfo;
 use super::namei::DirOps;
-use crate::os::path::Path;
 
-crate::vfs_ops! {
-    pub(crate) trait InodeOps for c::inode_operations, InodeVTable<T: InodeOps> = T;
-
-    /// What d_splice_alias() makes of the inode @dentry names.
-    fn lookup(dir: &InodeInfo, dentry: Dentry<'_>, flags: c_uint) -> *mut c::dentry;
-    #[cfg(not(linux_ge = "7.3"))]
-    fn create(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t,
-                  excl: bool) -> Result<(), BchError>;
-    #[cfg(linux_ge = "7.3")]
-    fn create(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t)
-        -> Result<(), BchError>;
-    fn link(old: Dentry<'_>, dir: &InodeInfo, dentry: Dentry<'_>) -> Result<(), BchError>;
-    fn unlink(dir: &InodeInfo, dentry: Dentry<'_>) -> Result<(), BchError>;
-    fn symlink(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, target: &CStr)
-        -> Result<(), BchError>;
-    /// NULL for the dentry it was given, instantiated.
-    fn mkdir(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t)
-        -> Result<(), BchError>;
-    fn rmdir(dir: &InodeInfo, dentry: Dentry<'_>) -> Result<(), BchError>;
-    fn mknod(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t,
-                 rdev: c::dev_t) -> Result<(), BchError>;
-    fn rename(idmap: MntIdmap<'_>, src_dir: &InodeInfo, src: Dentry<'_>,
-                  dst_dir: &InodeInfo, dst: Dentry<'_>, flags: c_uint) -> Result<(), BchError>;
-    fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: OpeningTmpfile<'_, InodeInfo>, mode: c::umode_t)
-        -> Result<(), BchError>;
-
-    fn getattr(idmap: MntIdmap<'_>, path: &Path<InodeInfo>, stat: &mut c::kstat, request_mask: u32,
-                   _query_flags: c_uint) -> Result<(), BchError>
-    {
-        path.dentry().inode().getattr(idmap, stat, request_mask);
-        Ok(())
-    };
-    fn setattr(idmap: MntIdmap<'_>, dentry: Dentry<'_>, attr: &mut c::iattr) -> Result<(), BchError>
-    {
-        dentry.inode().setattr(idmap, dentry, attr)
-    };
-    /// An RCU walk can't sleep, as a lookup may: ECHILD, to try again
-    /// without.
-    fn get_inode_acl(inode: &InodeInfo, ty: AclType, rcu: bool)
-        -> Result<Option<PosixAcl>, BchError>
-    {
-        if rcu {
-            return Err(c::ECHILD.into());
-        }
-        acl::get_acl(inode, ty)
-    };
-    fn set_acl(idmap: MntIdmap<'_>, dentry: Dentry<'_>, acl: Option<ManuallyDrop<PosixAcl>>,
-                   ty: AclType) -> Result<(), BchError>
-    {
-        acl::set_acl(idmap, dentry.inode(), acl.as_deref(), ty)
-    };
-    fn fileattr_get(dentry: Dentry<'_>, fa: &mut c::file_kattr) -> Result<(), BchError>
-    {
-        dentry.inode().fileattr_get(fa);
-        Ok(())
-    };
-    fn fileattr_set(_idmap: MntIdmap<'_>, dentry: Dentry<'_>, fa: &mut c::file_kattr)
-        -> Result<(), BchError>
-    {
-        dentry.inode().fileattr_set(dentry, fa)
-    };
-
-    /// @dentry None in an RCU walk.
-    fn get_link(dentry: Option<Dentry<'_>>, inode: &InodeInfo, done: &mut c::delayed_call)
-        -> *const c_char;
-    fn fiemap(inode: &InodeInfo, info: Fiemap<'_>, start: u64, len: u64) -> Result<(), BchError>;
-    /// @buf None for how many bytes the list would take.
-    fn listxattr(dentry: Dentry<'_>, buf: Option<&mut [u8]>) -> Result<usize, BchError>
-    {
-        xattr::listxattr(dentry, buf)
-    }
-        => extern (dentry: *mut c::dentry, buf: *mut c_char, size: usize) -> isize
-    {
-        // SAFETY: the VFS's: a dentry of ours, and @size bytes at @buf, or NULL
-        let r = unsafe { T::listxattr(Dentry::borrow_raw(dentry), opt_bytes_mut(buf.cast(), size)) };
-        IntoRaw::into_raw(r)
-    };
-}
-
-// ── bcachefs's ───────────────────────────────────────────────────────────
-
-struct FileInodeOps;
-struct SymlinkOps;
-struct SpecialOps;
+pub(super) struct FileInodeOps;
+pub(super) struct SymlinkOps;
+pub(super) struct SpecialOps;
 
 #[vtable]
 impl InodeOps for FileInodeOps {
+    type Inode = InodeInfo;
+
     fn fiemap(inode: &InodeInfo, info: Fiemap<'_>, start: u64, len: u64) -> Result<(), BchError> {
         super::fiemap::fiemap(inode, info, start, len)
     }
@@ -124,6 +34,8 @@ impl InodeOps for FileInodeOps {
 
 #[vtable]
 impl InodeOps for SymlinkOps {
+    type Inode = InodeInfo;
+
     /// The target, in the page cache: symlink() wrote it there.
     fn get_link(dentry: Option<Dentry<'_>>, inode: &InodeInfo, done: &mut c::delayed_call)
         -> *const c_char
@@ -133,10 +45,12 @@ impl InodeOps for SymlinkOps {
 }
 
 #[vtable]
-impl InodeOps for SpecialOps {}
+impl InodeOps for SpecialOps {
+    type Inode = InodeInfo;
+}
 
 // i_op, as NewInode::init() sets it:
-pub static DIR_INODE_OPS: c::inode_operations = InodeVTable::<DirOps>::OPS;
-pub static FILE_INODE_OPS: c::inode_operations = InodeVTable::<FileInodeOps>::OPS;
-pub static SYMLINK_INODE_OPS: c::inode_operations = InodeVTable::<SymlinkOps>::OPS;
-pub static SPECIAL_INODE_OPS: c::inode_operations = InodeVTable::<SpecialOps>::OPS;
+pub(super) static DIR_INODE_OPS: CStatic<c::inode_operations, DirOps> = InodeVTable::<DirOps>::STATIC;
+pub(super) static FILE_INODE_OPS: CStatic<c::inode_operations, FileInodeOps> = InodeVTable::<FileInodeOps>::STATIC;
+pub(super) static SYMLINK_INODE_OPS: CStatic<c::inode_operations, SymlinkOps> = InodeVTable::<SymlinkOps>::STATIC;
+pub(super) static SPECIAL_INODE_OPS: CStatic<c::inode_operations, SpecialOps> = InodeVTable::<SpecialOps>::STATIC;

@@ -25,7 +25,10 @@ use crate::util::ffi::c_char;
 use crate::os::kernel::loff;
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::os::file::Any;
+use crate::os::folio::AddressSpaceOps;
+use crate::os::inode_ops::InodeOps;
 use crate::os::super_block::{SuperBlock, SuperOps};
+use crate::types::CStatic;
 use crate::util::alloc::Flags;
 use pin_init::PinInit;
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
@@ -375,20 +378,11 @@ impl<S> VfsInode<S> {
         unsafe { (*self.as_ptr()).i_generation = generation }
     }
 
-    // codegen's operations structs, the inode's fields the kernel crate's: the
-    // same structs
-    pub fn set_ops(&mut self, iop: &'static c::inode_operations, fop: Option<&'static c::file_operations>) {
-        unsafe {
-            (*self.as_ptr()).i_op = core::ptr::from_ref(iop).cast();
-            if let Some(fop) = fop {
-                // in a union with free_inode
-                (*self.as_ptr()).__bindgen_anon_3.i_fop = core::ptr::from_ref(fop).cast();
-            }
-        }
-    }
-
-    pub fn set_aops(&mut self, aops: &'static c::address_space_operations) {
-        unsafe { (*(*self.as_ptr()).i_mapping).a_ops = core::ptr::from_ref(aops).cast() }
+    // XXX: any file ops - FileOps doesn't say whose inode's they are
+    pub fn set_fop(&mut self, fop: &'static c::file_operations) {
+        // in a union with free_inode; codegen's file_operations, i_fop the
+        // kernel crate's: the same struct
+        unsafe { (*self.as_ptr()).__bindgen_anon_3.i_fop = core::ptr::from_ref(fop).cast() }
     }
 
     /// A device, fifo or socket's ops, from its mode and rdev:
@@ -431,6 +425,20 @@ impl<S: SuperOps> VfsInode<S> {
 
     pub fn sb(&self) -> &SuperBlock<S> {
         unsafe { SuperBlock::from_raw((*self.as_ptr()).i_sb) }
+    }
+
+    /// Its ops: one of its type's tables.
+    pub fn set_ops<T: InodeOps<Inode = S::Inode>>(&mut self, iop: &'static CStatic<c::inode_operations, T>) {
+        // codegen's inode_operations, i_op the kernel crate's: the same struct
+        unsafe { (*self.as_ptr()).i_op = core::ptr::from_ref(&**iop).cast() }
+    }
+
+    /// Its page cache's ops: its type's.
+    pub fn set_aops(&mut self, aops: &'static CStatic<c::address_space_operations, S::Inode>)
+        where S::Inode: AddressSpaceOps
+    {
+        // codegen's address_space_operations, a_ops the kernel crate's
+        unsafe { (*(*self.as_ptr()).i_mapping).a_ops = core::ptr::from_ref(&**aops).cast() }
     }
 }
 
