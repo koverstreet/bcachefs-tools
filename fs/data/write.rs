@@ -718,7 +718,7 @@ use crate::c;
 use crate::data::inline_data::{InlineDataMut, DATA};
 use crate::data::keylist::Keylist;
 use crate::data::ptrs::{Ptrs, PtrsMut};
-use crate::data::write_extent::write_extent;
+use crate::data::write_extent::{write_extent, Extent};
 use crate::data::write_nocow::nocow_write;
 use crate::debug::async_objs;
 use crate::errcode::{Errcode, ret_to_c, BchError};
@@ -1405,8 +1405,8 @@ pub(crate) fn __write(mut op: Running<Op>) {
                 ret.map(Some)
             });
 
-            let (bio, more) = match ret {
-                Ok(Some(r)) => r,
+            let Extent { bio, more, reserved } = match ret {
+                Ok(Some(e)) => e,
                 Ok(None) => continue 'again,
                 Err(e) => {
                     op.set(w::submitted);
@@ -1449,7 +1449,8 @@ pub(crate) fn __write(mut op: Running<Op>) {
 
             unsafe { submit_wbio_replicas(to_wbio::<c::DevWriteRefKind>(bio), fs, DataType::user, key_to_write, None) };
 
-            if !more {
+            /* a reserve's memory is the next extent's only once this one's done */
+            if !more || reserved {
                 break;
             }
         }

@@ -365,6 +365,10 @@ impl BioPool {
         }? BchError)
     }
 
+    pub fn reserve_drawn(&self) -> bool {
+        self.pool.reserve_drawn()
+    }
+
     /// bio_alloc_bioset(): a bio with room for @nr_vecs bvecs. Null past
     /// BIO_MAX_VECS, or where the pool can't wait - a NORECLAIM scope;
     /// otherwise it waits on the pool.
