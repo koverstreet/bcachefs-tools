@@ -24,7 +24,8 @@
 //! in the caller's context. Every await says where its task resumes, with
 //! resume_on():
 //! - Queue(q): on workqueue q - or with resume_on_cpu(q, cpu), on q on cpu,
-//!   for the part of a task that wants it there.
+//!   for the part of a task that wants it there; or with
+//!   resume_on_run_queue(rq), on a worked RunQueue, by its work on its queue.
 //! - Inline: in the completer's context, an endio, where everything up to the
 //!   next await runs. It must not sleep, or take a lock that isn't irqsave -
 //!   C's continue_at(cl, fn, NULL), and as unchecked.
@@ -156,7 +157,7 @@ pub trait Resumable {
     where
         Self: Sized,
     {
-        Resumed { inner: self, target: r, cpu: None, recorded: None, _pin: PhantomPinned }
+        Resumed { inner: self, target: r, cpu: None, runq: None, recorded: None, _pin: PhantomPinned }
     }
 
     /// resume_on() workqueue @q, on @cpu: queue_work_on().
@@ -164,7 +165,17 @@ pub trait Resumable {
     where
         Self: Sized,
     {
-        Resumed { inner: self, target: Resume::queue(q), cpu: Some(cpu), recorded: None, _pin: PhantomPinned }
+        Resumed { inner: self, target: Resume::queue(q), cpu: Some(cpu), runq: None, recorded: None,
+                  _pin: PhantomPinned }
+    }
+
+    /// Resumed on @rq, a RunQueue::worked() one.
+    fn resume_on_run_queue(self, rq: Pin<&RunQueue>) -> Resumed<'_, Self>
+    where
+        Self: Sized,
+    {
+        Resumed { inner: self, target: Resume::INLINE, cpu: None, runq: Some(rq.get_ref()),
+                  recorded: None, _pin: PhantomPinned }
     }
 }
 
@@ -183,6 +194,8 @@ pub struct Resumed<'r, A> {
     inner:    A,
     target:   Resume<'r>,
     cpu:      Option<u32>,
+    /* resume_on_run_queue()'s: dispatched onto it, in place of @target */
+    runq:     Option<&'r RunQueue>,
     recorded: Option<Recorded>,
     #[pin]
     _pin:     PhantomPinned,
@@ -206,10 +219,11 @@ impl<A: Resumable> Future for Resumed<'_, A> {
         };
 
         let header = unsafe { task.0.as_ref() };
-        let ours = match this.target.get() {
-            ResumeAt::Inline => Target::Inline,
-            ResumeAt::Queue(q) => Target::Queue(NonNull::from(q), *this.cpu),
-            ResumeAt::RunQueue => {
+        let ours = match (*this.runq, this.target.get()) {
+            (Some(rq), _) => Target::Run(NonNull::from(rq)),
+            (None, ResumeAt::Inline) => Target::Inline,
+            (None, ResumeAt::Queue(q)) => Target::Queue(NonNull::from(q), *this.cpu),
+            (None, ResumeAt::RunQueue) => {
                 debug_assert!(header.runq.is_some(), "Resume::RUNQ, in a task on no RunQueue");
                 return this.inner.poll_resume(cx);
             }
@@ -276,6 +290,8 @@ enum Target {
     Inline,
     /* and the cpu, where the await names one */
     Queue(NonNull<Queue>, Option<u32>),
+    /* a worked RunQueue */
+    Run(NonNull<RunQueue>),
 }
 
 impl Target {
@@ -501,6 +517,7 @@ impl TaskRef {
                     None      => unsafe { wq.as_ref().queue_work(work) },
                 };
             }
+            Target::Run(rq) => unsafe { rq.as_ref().push_worked(self.0) },
         }
     }
 
