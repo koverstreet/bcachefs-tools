@@ -1525,12 +1525,7 @@ unsafe impl Send for Issued {}
 async fn write_task<'h>(home: Pin<&'h mut Issued>) {
     let op = unsafe { &mut *home.op.as_ptr() };
     let wq = index_update_wq(op);
-    if op.has(w::update) {
-        let u = op.update_mut();
-        write(&mut u.op, Some(&mut u.pages), Resume::queue(wq)).await;
-    } else {
-        write(op, None, Resume::queue(wq)).await;
-    }
+    write(op, None, Resume::queue(wq)).await;
 
     let home = Pin::into_inner(home);
     let op = unsafe { Running::<Op>::from_raw(home.op) };
