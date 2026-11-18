@@ -396,11 +396,14 @@ impl<T: FsType> NewSuper<T> {
         unsafe { (*self.raw()).s_flags |= flags };
     }
 
-    /// # Safety
-    /// @map is live until kill_sb - generic_shutdown_super() is its last user.
+    /// Its encoding, if @map has one, of the data it owns: which lives until
+    /// kill_sb drops it, after generic_shutdown_super(), the encoding's last
+    /// user.
     #[cfg(CONFIG_UNICODE)]
-    pub unsafe fn set_encoding(&self, map: &crate::os::unicode::UnicodeMap) {
-        unsafe { (*self.raw()).s_encoding = map.as_ptr().cast() };
+    pub fn set_encoding(&self, map: for<'a> fn(&'a Data<T>) -> Option<&'a crate::os::unicode::UnicodeMap>) {
+        if let Some(p) = map(self.sb().data()).map(|m| m.as_ptr()) {
+            unsafe { (*self.raw()).s_encoding = p.cast() };
+        }
     }
 
     /// Its root, made from @root's reference - d_make_root() - which makes it

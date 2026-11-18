@@ -254,11 +254,7 @@ impl Bcachefs {
             // (Dentry::set_casefold_ops()), keeping DCACHE_OP_COMPARE off
             // directories that aren't casefolded
             #[cfg(CONFIG_UNICODE)]
-            if let Some(enc) = fs.cf_encoding.as_ref() {
-                // SAFETY: the filesystem's, unloaded when it's freed: after
-                // kill_sb's kill_anon_super()
-                unsafe { sb.set_encoding(enc) };
-            }
+            sb.set_encoding(|fs| fs.cf_encoding.as_ref());
 
             let root = InodeInfo::get_warn(fs, c::subvol_inum::ROOT, c"bch2_fs_get_tree")
                 .inspect_err(|e| crate::bch_err!(fs, "mounting: error getting root inode: {}", e.msg()))?;
