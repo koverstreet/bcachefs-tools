@@ -37,7 +37,9 @@ pub enum WriteFlagBit {
 nest! {
     #[derive(MaybeZeroable, TypeInfo)]*
     #[repr(C)]*
-    pub struct bch_write_bio<R: IoRefIdx = c::DevWriteRefKind> {
+    /* K, not R: #[pin_data]'s with_project() has a generic named R */
+    #[pin_data]
+    pub struct bch_write_bio<K: IoRefIdx = c::DevWriteRefKind> {
         #>[derive(BitfieldMembers)]
         pub wbio: pub struct bch_write_bio_wbio {
             /* set at submit: 'static as a write op's fs() is */
@@ -71,9 +73,10 @@ nest! {
          * lookup table before draining refs).  Non-NULL iff we hold an io_ref;
          * doubles as the "we hold the ref" indicator.
          */
-        pub ca: Option<DevIoRef<R>>,
+        pub ca: Option<DevIoRef<K>>,
 
-        pub bio: c::bio,
+        #[pin]
+        pub bio: crate::util::bio::Bio,
     }
 }
 
@@ -215,6 +218,7 @@ nest! {
         pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
 
         /* Must be last - and its bio set up by the op's owner, before init() */
+        #[pin]
         #[init(unsafe { crate::util::alloc::untouched() })]
         pub wbio: c::bch_write_bio,
     }

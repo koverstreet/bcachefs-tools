@@ -884,7 +884,7 @@ impl<R: IoRefIdx> c::bch_write_bio<R> {
     /// While it's ours, not in flight: the write path's bios are always
     /// whole, initialized bios.
     pub(crate) fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        unsafe { Bio::from_raw_mut(&mut self.bio) }
+        unsafe { Pin::new_unchecked(&mut self.bio) }
     }
 }
 
@@ -953,17 +953,18 @@ pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_b
         };
 
         let n: &mut c::bch_write_bio<R> = if i + 1 != last {
-            let bio = unsafe { fs.replica_set.alloc_clone(&raw mut wbio.bio, flags::NOIO) };
+            let bio = unsafe { fs.replica_set.alloc_clone(wbio.bio_mut().raw_mut(), flags::NOIO) };
             let n = unsafe { wbio_init::<R>(bio) };
 
-            n.bio.bi_end_io     = wbio.bio.bi_end_io;
-            n.bio.bi_private    = wbio.bio.bi_private;
+            let b = n.bio_mut().raw_mut();
+            b.bi_end_io         = wbio.bio.raw().bi_end_io;
+            b.bi_private        = wbio.bio.raw().bi_private;
             n.wbio.parent       = core::ptr::from_mut(wbio).cast();
             n.wbio.bits.set_split(1);
             n.wbio.bits.set_bounce(0);
             n.wbio.bits.set_put_bio(1);
-            n.bio.bi_opf        = wbio.bio.bi_opf;
-            unsafe { crate::os::bio::inc_remaining(&raw mut wbio.bio) };
+            n.bio_mut().set_opf(wbio.bio.raw().bi_opf);
+            unsafe { crate::os::bio::inc_remaining(wbio.bio_mut().raw_mut()) };
             n
         } else {
             wbio.wbio.bits.set_split(0);
@@ -975,13 +976,13 @@ pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_b
         n.wbio.bits.set_nocow(nocow.into());
         n.wbio.submit_time  = local_clock();
         n.wbio.inode_offset = k.k().start_offset();
-        n.bio.bi_iter.bi_sector = ptr.offset();
+        n.bio_mut().set_sector(ptr.offset());
 
         let bdev = ca.as_deref().map(|ca| {
             if nocow {
                 n.wbio.nocow_bucket = ca.ptr_bucket(ptr);
             }
-            ca.io_done_add(WRITE, ty, (n.bio.bi_iter.bi_size >> 9).into());
+            ca.io_done_add(WRITE, ty, (n.bio.range().len() >> 9).into());
             ca.disk_sb.bdev
         });
         /* the bio's, till its endio takes it back */
@@ -991,14 +992,14 @@ pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_b
             n.bio_mut().set_dev(bdev);
 
             if ty != DataType::btree && unlikely(fs.opts().no_data_io.get() != 0) {
-                unsafe { crate::os::bio::endio(&raw mut n.bio) };
+                unsafe { crate::os::bio::endio(n.bio_mut().raw_mut()) };
                 continue;
             }
 
-            unsafe { crate::os::blkdev::submit_bio(&raw mut n.bio) };
+            unsafe { crate::os::blkdev::submit_bio(n.bio_mut().raw_mut()) };
         } else {
-            n.bio.bi_status = c::BLK_STS_REMOVED;
-            unsafe { crate::os::bio::endio(&raw mut n.bio) };
+            n.bio_mut().set_status(c::BLK_STS_REMOVED);
+            unsafe { crate::os::bio::endio(n.bio_mut().raw_mut()) };
         }
     }
 }
@@ -1185,7 +1186,7 @@ extern "C" fn write_index(mut op: Running<Op>) {
 
     if op.has(w::submitted) && op.has(w::update) {
         let fs = op.fs();
-        unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, &mut op.wbio.bio) };
+        unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, op.wbio.bio_mut().raw_mut()) };
     }
 
     // the op's running ref, the list's while it's queued
@@ -1246,13 +1247,13 @@ pub unsafe extern "C" fn write_point_do_index_updates(work: *mut c::work_struct)
 
 pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let wbio = unsafe { to_wbio::<c::DevWriteRefKind>(bio) };
-    let cl = wbio.bio.bi_private.cast::<Opaque<c::closure>>();
+    let cl = wbio.bio.raw().bi_private.cast::<Opaque<c::closure>>();
     let op = unsafe { &mut *Op::of_closure(cl.cast()) };
     let parent = (wbio.wbio.bits.split() != 0).then_some(wbio.wbio.parent);
     let fs = wbio.fs();
     let ca = wbio.ca.take();
-    let status = wbio.bio.bi_status;
-    let fua = wbio.bio.bi_opf & c::REQ_FUA != 0;
+    let status = wbio.bio.raw().bi_status;
+    let fua = wbio.bio.raw().bi_opf & c::REQ_FUA != 0;
 
     if let Some(ca) = &ca {
         ca.account_io_completion(c::MemberErrorType::write, wbio.wbio.submit_time,
@@ -1280,7 +1281,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     drop(ca);
 
     if wbio.wbio.bits.bounce() != 0 {
-        unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, &mut wbio.bio) };
+        unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, wbio.bio_mut().raw_mut()) };
     }
 
     if wbio.wbio.bits.put_bio() != 0 {
@@ -1288,7 +1289,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     }
 
     match parent {
-        Some(parent) => unsafe { crate::os::bio::endio(&raw mut (*parent).bio) },
+        Some(parent) => unsafe { crate::os::bio::endio((&raw mut (*parent).bio).cast()) },
         None => drop(unsafe { ClosureRef::adopt(&*cl) }),
     }
 }
@@ -1489,7 +1490,7 @@ fn write_data_inline(mut op: Running<Op>, data_len: u32) {
         BkeyType::inline_data
     };
 
-    let sectors = op.wbio.bio.bi_iter.bi_size >> 9;
+    let sectors = op.wbio.bio.range().len() >> 9;
     let p = Bpos { offset: op.pos.offset + u64::from(sectors), ..op.pos };
     let k = c::bkey { type_: ty.0 as u8, p, size: sectors, bversion: op.version, ..c::bkey::new() };
 
@@ -1539,7 +1540,7 @@ fn data_write_trace(out: &mut Printbuf, op: &Op) {
  */
 pub extern "C" fn bch2_write(mut op: Running<Op>) {
     let fs = op.fs();
-    let sectors = u64::from(op.wbio.bio.bi_iter.bi_size >> 9);
+    let sectors = u64::from(op.wbio.bio.range().len() >> 9);
 
     if !op.has(w::update) {
         fs.event_add_trace(events::data_write, sectors, |out| data_write_trace(out, &op));
@@ -1561,10 +1562,10 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
     }
 
     op.start_time = local_clock();
-    unsafe { wbio_init::<c::DevWriteRefKind>(&raw mut op.wbio.bio) }.wbio.bits.set_put_bio(0);
+    unsafe { wbio_init::<c::DevWriteRefKind>(op.wbio.bio_mut().raw_mut()) }.wbio.bits.set_put_bio(0);
 
     let ret = (|| -> Result<(), BchError> {
-        if unlikely(op.wbio.bio.bi_iter.bi_size & (fs.opts().block_size.get() as u32 - 1) != 0) {
+        if unlikely(op.wbio.bio.range().len() & (fs.opts().block_size.get() as u32 - 1) != 0) {
             write_op_error(&op, op.pos.offset, format_args!("misaligned write"));
             crate::warn_on!(true);
             return Err(fs.err(Errcode::data_write_misaligned));
@@ -1588,7 +1589,7 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
 
     fs.io_clock[WRITE].increment(sectors);
 
-    let data_len = u64::from(op.wbio.bio.bi_iter.bi_size).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
+    let data_len = u64::from(op.wbio.bio.range().len()).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
 
     if fs.opts().inline_data.get() != 0 && data_len <= u64::from((fs.block_bytes() / 2).min(1024)) {
         return write_data_inline(op, data_len as u32);

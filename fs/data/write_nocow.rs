@@ -178,7 +178,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
     let mut iter = BtreeIter::new(t, Btree::extents, spos(op.pos.inode, op.pos.offset, snapshot),
                                   BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM);
     loop {
-        let sectors = u64::from(op.wbio.bio.bi_iter.bi_size >> 9);
+        let sectors = u64::from(op.wbio.bio.range().len() >> 9);
 
         t.relock()?;
 
@@ -261,15 +261,15 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
 
         let bio: *mut c::bio = if k.k.p.offset < op.pos.offset + sectors {
             unsafe {
-                let bio = fs.bio_write.split(&raw mut op.wbio.bio, (k.k.p.offset - op.pos.offset) as u32,
+                let bio = fs.bio_write.split(op.wbio.bio_mut().raw_mut(), (k.k.p.offset - op.pos.offset) as u32,
                                              Flags::empty());
                 wbio_init::<c::DevWriteRefKind>(bio).wbio.bits.set_put_bio(1);
-                (*bio).bi_opf = op.wbio.bio.bi_opf;
+                (*bio).bi_opf = op.wbio.bio.raw().bi_opf;
                 bio
             }
         } else {
             op.set(w::submitted);
-            &raw mut op.wbio.bio
+            op.wbio.bio_mut().raw_mut()
         };
 
         let bio = unsafe { &mut *bio };

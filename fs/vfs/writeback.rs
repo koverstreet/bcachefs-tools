@@ -47,11 +47,11 @@ unsafe impl BioOwner for c::bch_writepage_io {
     type Buffers = BioBuffersUnmanaged;
 
     fn bio(&self) -> &Bio {
-        unsafe { Bio::from_raw(&self.op.wbio.bio) }
+        &self.op.wbio.bio
     }
 
     fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        unsafe { Bio::from_raw_mut(&mut self.op.wbio.bio) }
+        self.op.wbio.bio_mut()
     }
 }
 
@@ -76,7 +76,7 @@ fn bio_full(bio: &c::bio, len: u32) -> bool {
  * when the bounce path can be enhanced to accommodate larger source bios.
  */
 fn io_full(io: &Io, len: u32) -> bool {
-    let bio = &io.op.wbio.bio;
+    let bio = io.op.wbio.bio.raw();
     bio_full(bio, len) || bio.bi_iter.bi_size + len > c::BIO_MAX_VECS * PAGE_SIZE as u32
 }
 
@@ -133,7 +133,7 @@ unsafe fn writepage_io_done(op: *mut c::bch_write_op) {
         drop(unsafe { Writeback::from_io(f.folio) });
     }
 
-    unsafe { bio_put(&mut io.op.wbio.bio) };
+    unsafe { bio_put(io.op.wbio.bio_mut().raw_mut()) };
 }
 
 fn writepage_do_io(w: &mut WritepageState) {
@@ -164,8 +164,8 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
     op.pos             = pos(inode.inum().inum, sector);
     op.end_io          = Some(writepage_io_done);
     op.devs_need_flush = &inode.ei_devs_need_flush;
-    op.wbio.bio.bi_iter.bi_sector = sector;
-    op.wbio.bio.bi_opf = wbc.write_flags();
+    op.wbio.bio_mut().set_sector(sector);
+    op.wbio.bio_mut().set_opf(wbc.write_flags());
 
     w.io = NonNull::new(io);
 }
@@ -291,7 +291,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
          */
         if let Some(io) = w.io {
             let io = unsafe { io.as_ref() };
-            let bio = &io.op.wbio.bio;
+            let bio = io.op.wbio.bio.raw();
             if u32::from(io.op.bits.nr_replicas()) != nr_replicas_this_write ||
                io.op.res.nr_replicas.get() != res_nr_replicas ||
                io_full(io, (sectors << 9) as u32) ||
@@ -308,7 +308,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
 
         let io = unsafe { w.io.expect("an io, just made").as_mut() };
         assert!(core::ptr::eq(io.inode, inode.raw()), "a writepage io of another inode");
-        unsafe { c::bio_add_folio_nofail(&mut io.op.wbio.bio, folio.as_ptr(), sectors << 9, offset << 9) };
+        unsafe { c::bio_add_folio_nofail(io.op.wbio.bio_mut().raw_mut(), folio.as_ptr(), sectors << 9, offset << 9) };
 
         io.op.res.sectors.set(io.op.res.sectors.get() + reserved_sectors);
         io.op.i_sectors_delta -= i64::from(dirty_sectors);

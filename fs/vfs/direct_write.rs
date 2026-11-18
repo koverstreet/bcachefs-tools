@@ -68,11 +68,11 @@ impl c::dio_write {
     }
 
     fn bio_mut(&mut self) -> &mut c::bio {
-        &mut self.op.wbio.bio
+        self.op.wbio.bio_mut().raw_mut()
     }
 
     fn bio_sectors(&self) -> u64 {
-        u64::from(self.op.wbio.bio.bi_iter.bi_size >> 9)
+        u64::from(self.op.wbio.bio.range().len() >> 9)
     }
 }
 
@@ -213,7 +213,7 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
         debug_assert!(fs.fdm_table.get().is_none(), "a DIO write with page faults disabled already");
         let fdm = fs.fdm_table.set(mapping);
 
-        let mut ret = unsafe { Bio::from_raw_mut(d.bio_mut()) }
+        let mut ret = d.op.wbio.bio_mut()
             .pin_user_pages(&mut unsafe { IovIter::from_raw(&mut d.iter) });
 
         let dropped_locks = fdm.dropped_locks();
@@ -239,16 +239,17 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
                 break Err(e);
             }
 
-            if d.op.wbio.bio.bi_iter.bi_size == 0 {
+            if d.op.wbio.bio.range().is_empty() {
                 continue;
             }
         }
 
-        let unaligned = d.op.wbio.bio.bi_iter.bi_size & (fs.block_bytes() as u32 - 1);
-        d.op.wbio.bio.bi_iter.bi_size -= unaligned;
+        let len = d.op.wbio.bio.range().len();
+        let unaligned = len & (fs.block_bytes() as u32 - 1);
+        d.op.wbio.bio_mut().shrink(len - unaligned);
         d.iter.revert(unaligned as usize);
 
-        if d.op.wbio.bio.bi_iter.bi_size == 0 {
+        if d.op.wbio.bio.range().is_empty() {
             /*
              * bio_iov_iter_get_pages was only able to get <
              * blocksize worth of pages:
@@ -291,7 +292,7 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
             }
         }
 
-        task_io_account_write(d.op.wbio.bio.bi_iter.bi_size as usize);
+        task_io_account_write(d.op.wbio.bio.range().len() as usize);
 
         if unlikely(d.iter.count() != 0) &&
            d.bits.sync() == 0 &&

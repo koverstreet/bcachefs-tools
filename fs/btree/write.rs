@@ -167,7 +167,7 @@ impl RawWork for BtreeWriteBio {
 unsafe fn write_work(wbio: NonNull<BtreeWriteBio>) {
     let wbio = unsafe { &mut *wbio.as_ptr() };
     let fs = wbio.wbio.fs();
-    let b = unsafe { &*wbio.wbio.bio.bi_private.cast::<BtreeNode>() };
+    let b = unsafe { &*wbio.wbio.bio.raw().bi_private.cast::<BtreeNode>() };
 
     let trans = btree_trans!(fs);
     if let Some(cpu) = wbio.shard_cpu {
@@ -231,7 +231,7 @@ unsafe fn write_work(wbio: NonNull<BtreeWriteBio>) {
     fs.times.get(c::TimeStat::btree_node_write as usize).update(wbio.start_time);
     unsafe {
         async_objs::list_del(fs, c::AsyncObjKind::btree_write_bio, &mut wbio.list_idx);
-        bio_put(&raw mut wbio.wbio.bio);
+        bio_put(wbio.wbio.bio_mut().raw_mut());
     }
 
     lockrestart_do(&trans, |_| {
@@ -249,15 +249,15 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let wbio = unsafe { to_wbio::<c::DevReadRefKind>(bio) };
     let parent = (wbio.wbio.bits.split() != 0).then_some(wbio.wbio.parent);
     let fs = wbio.fs();
-    let b = unsafe { &*wbio.bio.bi_private.cast::<BtreeNode>() };
-    let (ca, dev, status) = (wbio.ca.take(), wbio.wbio.dev, wbio.bio.bi_status);
+    let b = unsafe { &*wbio.bio.raw().bi_private.cast::<BtreeNode>() };
+    let (ca, dev, status) = (wbio.ca.take(), wbio.wbio.dev, wbio.bio.raw().bi_status);
 
     if let Some(ca) = &ca {
         ca.account_io_completion(c::MemberErrorType::write, wbio.wbio.submit_time, status == 0);
         ca.write_unflushed();
     }
 
-    let wb = unsafe { &mut *of_bio::<BtreeWriteBio>(parent.map_or(bio, |p| &raw mut (*p).bio)) };
+    let wb = unsafe { &mut *of_bio::<BtreeWriteBio>(parent.map_or(bio, |p| (&raw mut (*p).bio).cast())) };
 
     if status != 0 {
         let _g = fs.write_error_lock.lock();
@@ -273,7 +273,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     if let Some(parent) = parent {
         unsafe {
             bio_put(bio);
-            crate::os::bio::endio(&raw mut (*parent).bio);
+            crate::os::bio::endio((&raw mut (*parent).bio).cast());
         }
         return;
     }
@@ -626,8 +626,9 @@ impl BsetWrite {
         unsafe { (&raw mut wbio.failed).write(Default::default()) };
         wbio.wbio.wbio.c    = Some(fs);
         wbio.wbio.wbio.bits.set_first_btree_write(first.into());
-        wbio.wbio.bio.bi_end_io  = Some(write_endio);
-        wbio.wbio.bio.bi_private = ptr::from_ref(b).cast_mut().cast();
+        let raw = wbio.wbio.bio_mut().raw_mut();
+        raw.bi_end_io  = Some(write_endio);
+        raw.bi_private = ptr::from_ref(b).cast_mut().cast();
 
         unsafe { bch2_bio_map(bio, data.cast(), len) };
 
@@ -654,8 +655,8 @@ impl BsetWrite {
          * btree node locks. Submitted when the trans unlocks, or before
          * waiting on btree node IO.
          */
-        wbio.wbio.bio.bi_next = trans.queued_write_bios.get();
-        trans.queued_write_bios.set(&raw mut wbio.wbio.bio);
+        wbio.wbio.bio_mut().raw_mut().bi_next = trans.queued_write_bios.get();
+        trans.queued_write_bios.set(wbio.wbio.bio_mut().raw_mut());
     }
 }
 

@@ -136,7 +136,6 @@ use crate::data::read::Rbio;
 use crate::data::update_task::Update;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::util::bio::Bio;
 use crate::os::debugfs::{DebugFile, DebugOut, Dir};
 use crate::util::place::Contained;
 use crate::util::rcu;
@@ -189,7 +188,7 @@ unsafe fn task_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
 #[cold]
 unsafe fn btree_write_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
     let wbio = obj.cast::<crate::btree::write::BtreeWriteBio>().as_ptr();
-    unsafe { Bio::from_raw(&raw const (*wbio).wbio.bio) }.to_text(out)
+    unsafe { &(*wbio).wbio.bio }.to_text(out)
 }
 
 macro_rules! list_table {

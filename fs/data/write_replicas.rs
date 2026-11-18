@@ -92,14 +92,14 @@ impl Fold for ReplicaErrs {
 /// A replica's bio done, in its endio's context: its IO accounted against its
 /// device, its nocow bucket unlocked, its io ref put.
 impl<R: IoRefIdx> Gathered<ReplicaErrs> for c::bch_write_bio<R> {
-    fn done(self: Pin<&mut Self>, _: Result<(), BchError>) -> Option<(u8, c::blk_status_t)> {
-        let w = self.get_mut();
-        let ca = w.ca.take();
-        let (dev, status) = (w.wbio.dev, w.bio.bi_status);
+    fn done(mut self: Pin<&mut Self>, _: Result<(), BchError>) -> Option<(u8, c::blk_status_t)> {
+        let ca = self.as_mut().project().ca.take();
+        let w = &*self;
+        let (dev, status) = (w.wbio.dev, w.bio.raw().bi_status);
 
         if let Some(ca) = &ca {
             ca.account_io_completion(c::MemberErrorType::write, w.wbio.submit_time, status == 0);
-            if w.bio.bi_opf & c::REQ_FUA == 0 {
+            if w.bio.raw().bi_opf & c::REQ_FUA == 0 {
                 ca.write_unflushed();
             }
             if w.wbio.bits.nocow() != 0 {
@@ -148,50 +148,51 @@ pub async fn write_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::
             None      => fs.dev_get_ioref::<R>(ptr.dev().into()),
         };
 
-        let set_up = |n: &mut c::bch_write_bio<R>| {
+        let set_up = |n: Pin<&mut c::bch_write_bio<R>>| {
+            let mut n = n.project();
             n.wbio.c            = Some(fs);
             n.wbio.dev          = ptr.dev();
             n.wbio.bits.set_nocow(nocow.into());
             n.wbio.submit_time  = local_clock();
             n.wbio.inode_offset = k.k().start_offset();
-            n.bio.bi_iter.bi_sector = ptr.offset();
+            n.bio.as_mut().set_sector(ptr.offset());
 
             let bdev = ca.as_deref().map(|ca| {
                 if nocow {
                     n.wbio.nocow_bucket = ca.ptr_bucket(ptr);
                 }
-                ca.io_done_add(WRITE, ty, (n.bio.bi_iter.bi_size >> 9).into());
+                ca.io_done_add(WRITE, ty, (n.bio.range().len() >> 9).into());
                 ca.disk_sb.bdev
             });
             /* the bio's, till its endio takes it back */
-            n.ca = ca;
+            *n.ca = ca;
 
             match bdev {
                 Some(bdev) => {
-                    n.bio_mut().set_dev(bdev);
+                    n.bio.set_dev(bdev);
                     !(ty != DataType::btree && fs.opts().no_data_io.get() != 0)
                 }
                 None => {
-                    n.bio.bi_status = c::BLK_STS_REMOVED;
+                    n.bio.set_status(c::BLK_STS_REMOVED);
                     false
                 }
             }
         };
 
         if i + 1 != last {
-            let opf = wbio.bio.bi_opf;
+            let opf = wbio.bio.raw().bi_opf;
             let mut n = {
                 let _noio = MemallocFlags::noio();
                 BioBox::<c::bch_write_bio<R>, BioClone<'_>, ReplicaClones>::new_with_in(
                     ReplicaClones, ptr::null_mut(), opf, HasBio::bio(&*wbio).range(), clone_init)
             }.expect("a replica's clone: its pool waits for an element");
 
-            if set_up(n.as_mut().get_mut()) {
+            if set_up(n.as_mut()) {
                 unsafe { n.submit_gathered_unchecked(g.get()) };
             } else {
                 g.get().put(n.as_mut().done(Ok(())));
             }
-        } else if set_up(wbio.as_mut().get_mut()) {
+        } else if set_up(wbio.as_mut()) {
             unsafe { submit_gathered_borrowed(wbio.as_mut(), g.get()) };
         } else {
             g.get().put(wbio.as_mut().done(Ok(())));
