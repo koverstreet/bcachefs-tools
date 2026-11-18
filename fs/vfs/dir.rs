@@ -185,6 +185,9 @@ unsafe impl FsFile for Dir {
 impl FileOps for Dir {
     type Data = Self;
 
+    // As a regular file's (file.rs): no module reference by each open
+    const MODULE_REF: bool = false;
+
     // #[vtable] sees compat_ioctl() whether or not it's built
     const HAS_COMPAT_IOCTL: bool = cfg!(CONFIG_COMPAT);
 
@@ -257,11 +260,4 @@ impl FileOps for Dir {
     }
 }
 
-pub static DIR_FILE_OPS: CStatic<c::file_operations> = unsafe {
-    CStatic::new({
-        let mut ops = FileVTable::<Dir>::OPS;
-        // As a regular file's (file.rs): no module reference by each open
-        ops.owner = core::ptr::null_mut();
-        ops
-    })
-};
+pub static DIR_FILE_OPS: CStatic<c::file_operations> = FileVTable::<Dir>::STATIC;

@@ -328,11 +328,9 @@ fn buffered_write(k: &Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>) -> Result<us
     Ok(written)
 }
 
-pub(crate) unsafe extern "C" fn bch2_write_iter(iocb: *mut c::kiocb, from: *mut c::iov_iter) -> isize {
-    let (mut k, mut it) = unsafe { (Kiocb::<InodeFile>::from_raw(iocb), IovIter::from_raw(from)) };
-
+pub(super) fn write_iter(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize {
     if k.direct() {
-        return direct_write(&mut k, &mut it);
+        return direct_write(k, it);
     }
 
     let inode = k.inode();
@@ -357,14 +355,14 @@ pub(crate) unsafe extern "C" fn bch2_write_iter(iocb: *mut c::kiocb, from: *mut 
         let _create_lock = fs.snapshots.create_lock.read();
 
         (|| {
-            if k.write_checks(&mut it)? == 0 {
+            if k.write_checks(it)? == 0 {
                 return Ok(0);
             }
 
             k.file().remove_privs()?;
             k.file().update_time()?;
 
-            let written = buffered_write(&k, &mut it)?;
+            let written = buffered_write(k, it)?;
             k.advance(written as u64);
             Ok::<_, BchError>(written)
         })()

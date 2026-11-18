@@ -512,17 +512,7 @@ impl AddressSpaceOps for InodeInfo {
 }
 
 /// An inode's mapping's operations, as NewInode::init() sets them.
-pub(crate) static INODE_AOPS: CStatic<c::address_space_operations> = unsafe {
-    CStatic::new({
-        let mut ops = AopsVTable::<InodeInfo>::OPS;
-        #[cfg(CONFIG_MIGRATION)]
-        {
-            ops.migrate_folio  = Some(c::filemap_migrate_folio);
-        }
-        ops.error_remove_folio = Some(c::generic_error_remove_folio);
-        ops
-    })
-};
+pub(crate) static INODE_AOPS: CStatic<c::address_space_operations> = AopsVTable::<InodeInfo>::STATIC;
 
 /* fseek: */
 

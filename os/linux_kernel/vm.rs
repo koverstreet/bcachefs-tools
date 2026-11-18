@@ -106,7 +106,10 @@ into_raw! {
 }
 
 crate::vfs_ops! {
-    pub(crate) trait VmOps for c::vm_operations_struct, VmVTable<T: VmOps> = T;
+    // Faults around through the page cache: filemap_map_pages()
+    pub(crate) trait VmOps for c::vm_operations_struct, VmVTable<T: VmOps> = T, |ops| {
+        ops.map_pages = Some(c::filemap_map_pages);
+    };
     // The files whose mappings the table is installed on: mmap's to keep
     type Data: FileData;
 

@@ -43,6 +43,8 @@ use {
     crate::os::dentry::Dentry,
     crate::os::dir_context::DirContext,
     crate::os::folio::{FsMapping, Mapping},
+    crate::os::iov_iter::IovIter,
+    crate::os::kiocb::Kiocb,
     crate::os::super_block::IsInode,
     core::ffi::{c_uint, c_void},
     core::mem::MaybeUninit,
@@ -91,20 +93,22 @@ impl<D: FileData> Deref for File<D> {
     }
 }
 
-/// A file being opened, by an open that's its table's own: no one's yet but
-/// the opener's.
+/// A file of D's being opened, by D's check_open(): no one's yet but the
+/// opener's. Typed, as an open file is, because D's state isn't the private
+/// data open would set - it's CHECKS_OPEN.
 #[cfg(kernel)]
-pub struct Opening<'a>(&'a File);
+pub struct Opening<'a, D: FileData>(&'a File<D>);
 
 #[cfg(kernel)]
-impl<'a> Opening<'a> {
+impl<'a, D: FileData> Opening<'a, D> {
     /// # Safety
-    /// @file is being opened, in its f_op->open().
+    /// @file is being opened, in its f_op->open(), its table FileVTable::<D>'s,
+    /// and D CHECKS_OPEN.
     pub unsafe fn from_raw(file: *mut c::file) -> Self {
-        Opening(unsafe { File::from_raw(file) })
+        Opening(unsafe { File::of_raw(file) })
     }
 
-    pub fn file(&self) -> &'a File {
+    pub fn file(&self) -> &'a File<D> {
         self.0
     }
 
@@ -354,13 +358,32 @@ pub fn read_file(path: &CStr, buf: &mut [u8]) -> Result<usize, BchError> {
 crate::vfs_ops! {
     pub trait FileOps: Send + Sync for c::file_operations, FileVTable<P: FileData> = P::Ops, |ops| {
         assert!(!<P::Ops>::HAS_OPEN || P::OPENABLE, "open() makes the ops' type, not the private data");
+        assert!(!(<P::Ops>::HAS_OPEN && P::CHECKS_OPEN), "open() is FileOps' or FileData's, not both");
         ops.release = Some(Self::release);
+        #[cfg(kernel)]
+        if P::CHECKS_OPEN {
+            ops.open = Some(Self::check_open);
+        }
         #[cfg(all(kernel, MODULE))]
-        {
+        if <P::Ops>::MODULE_REF {
             ops.owner = &raw mut kernel::bindings::__this_module;
+        }
+        #[cfg(kernel)]
+        if <P::Ops>::PAGECACHE {
+            ops.splice_read  = Some(c::filemap_splice_read);
+            ops.splice_write = Some(c::iter_file_splice_write);
+            #[cfg(CONFIG_TRANSPARENT_HUGEPAGE)]
+            {
+                ops.get_unmapped_area = Some(c::thp_get_unmapped_area);
+            }
         }
     };
     type Data: FileData<Ops = Self>;
+    // Each open takes a reference on the module - not where something that
+    // outlives the file holds one, as a mounted filesystem's mount does
+    const MODULE_REF: bool = true;
+    // A file in the page cache: the kernel's splice, and THP mappings
+    const PAGECACHE: bool = false;
 
     /// For a file opened by path: its private data. The file isn't yet of
     /// Data's - that's what this makes.
@@ -393,6 +416,20 @@ crate::vfs_ops! {
         // SAFETY: an open file of P's
         let r = unsafe { P::ops_of(file).write(File::<P>::of_raw(file), &mut u) };
         u.ret(r)
+    };
+    #[cfg(kernel)]
+    fn read_iter(req: &mut Kiocb<'_, Self::Data>, iter: &mut IovIter<'_>) -> isize
+        => extern (iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize
+    {
+        let (mut k, mut i) = unsafe { (Kiocb::<P>::from_raw(iocb), IovIter::from_raw(iter)) };
+        <P::Ops>::read_iter(&mut k, &mut i)
+    };
+    #[cfg(kernel)]
+    fn write_iter(req: &mut Kiocb<'_, Self::Data>, iter: &mut IovIter<'_>) -> isize
+        => extern (iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize
+    {
+        let (mut k, mut i) = unsafe { (Kiocb::<P>::from_raw(iocb), IovIter::from_raw(iter)) };
+        <P::Ops>::write_iter(&mut k, &mut i)
     };
     #[cfg(kernel)]
     fn poll(&self = file, file: &File<Self::Data>, pt: PollTable<'_>) -> u32;
@@ -462,6 +499,16 @@ pub trait FileData: Sized + Send + Sync + 'static {
     /// What FileOps::open() makes is the private data itself.
     const OPENABLE: bool = false;
 
+    /// Opened, a file of this type has nothing to make - its state is had
+    /// some other way, as a regular file's is its inode's - only check_open()
+    /// to run.
+    const CHECKS_OPEN: bool = false;
+
+    #[cfg(kernel)]
+    fn check_open(_file: Opening<'_, Self>) -> Result<(), BchError> {
+        unreachable!("not CHECKS_OPEN")
+    }
+
     fn ops(&self) -> &Self::Ops;
 
     /// The ops of @file.
@@ -500,6 +547,11 @@ impl<T: FileOps<Data = T>> FileData for T {
 }
 
 impl<P: FileData> FileVTable<P> {
+    #[cfg(kernel)]
+    unsafe extern "C" fn check_open(_inode: *mut c::inode, file: *mut c::file) -> c_int {
+        crate::errcode::ret_to_class(P::check_open(unsafe { Opening::from_raw(file) }))
+    }
+
     unsafe extern "C" fn release(_inode: *mut c::inode, file: *mut c::file) -> c_int {
         // SAFETY: an open file of P's, its last use
         unsafe { P::release(file) };

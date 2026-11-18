@@ -703,8 +703,15 @@ from_raw! {
 }
 
 crate::vfs_ops! {
-    /// A mapping's operations, address_space_operations.
-    pub trait AddressSpaceOps for c::address_space_operations, AopsVTable<T: AddressSpaceOps> = T;
+    /// A mapping's operations, address_space_operations: migration and memory
+    /// errors the kernel's generic ones.
+    pub trait AddressSpaceOps for c::address_space_operations, AopsVTable<T: AddressSpaceOps> = T, |ops| {
+        #[cfg(CONFIG_MIGRATION)]
+        {
+            ops.migrate_folio = Some(c::filemap_migrate_folio);
+        }
+        ops.error_remove_folio = Some(c::generic_error_remove_folio);
+    };
     // What write_begin() leaves write_end() of the write, in *@fsdata
     type FsData;
     // Its folios' private data

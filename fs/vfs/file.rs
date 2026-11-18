@@ -7,8 +7,8 @@
 //! are InodeInfo's, &self the file's inode - FileVTable over InodeFile,
 //! whose ops_of() is f_inode. Open checks and release flushes, making and
 //! dropping nothing. llseek, fsync, fallocate and remap_file_range are
-//! vfs/io.rs's; read and write are C's still. A mapping's ops are InodeInfo's
-//! VmOps, its map_pages the kernel's generic, set in the table as it is.
+//! vfs/io.rs's, read_iter direct.rs's and write_iter buffered_write.rs's. A
+//! mapping's ops are InodeInfo's VmOps.
 //!
 //! A shared writable mapping of a filesystem gone emergency read-only is
 //! refused: its first write fault couldn't get a disk reservation, and
@@ -70,32 +70,25 @@ use core::ffi::{c_int, c_uint};
 use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
-use crate::errcode::{Errcode, ret_to_class, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::snapshots::subvolume;
 use crate::types::CStatic;
 use crate::os::file::{File, FileData, FileOps, FileVTable, FsFile, Opening};
+use crate::os::iov_iter::IovIter;
+use crate::os::kiocb::Kiocb;
 use crate::os::kernel::{current_id, PAGE_SIZE};
 use crate::os::vm::{VmArea, VmFault, VmFaultRet, VmOps, VmVTable};
 use core::cmp::{max, min};
 use kernel::page::PAGE_SHIFT;
 use cstruct_macros::vtable;
 
-use super::direct::bch2_read_iter;
 use super::inode::InodeInfo;
 use super::io;
-use super::buffered_write::bch2_write_iter;
 use super::folio::FolioSpan;
 use super::folio_reservation::FolioReservation;
 use super::ioctl::fs_file_ioctl;
 
-// SAFETY, of the CStatic: immutable, its only parts that aren't Sync pointers
-static VM_OPS: CStatic<c::vm_operations_struct> = unsafe {
-    CStatic::new({
-        let mut ops = VmVTable::<InodeInfo>::OPS;
-        ops.map_pages = Some(c::filemap_map_pages);
-        ops
-    })
-};
+static VM_OPS: CStatic<c::vm_operations_struct> = VmVTable::<InodeInfo>::STATIC;
 
 #[vtable]
 impl VmOps for InodeInfo {
@@ -198,6 +191,18 @@ pub enum InodeFile {}
 impl FileData for InodeFile {
     type Ops = InodeInfo;
 
+    const CHECKS_OPEN: bool = true;
+
+    /// Opened for writing, the subvolume must be writable.
+    fn check_open(f: Opening<'_, Self>) -> Result<(), BchError> {
+        let inode = f.file().inode();
+        if f.file().flags() & (c::O_WRONLY | c::O_RDWR) != 0 {
+            subvolume::is_ro(inode.fs(), inode.inum().subvol as u32)?;
+        }
+        f.set_can_odirect();
+        f.generic_open()
+    }
+
     fn ops(&self) -> &InodeInfo {
         match *self {}
     }
@@ -239,6 +244,18 @@ fn mmap(mut vma: VmArea<'_, InodeFile>) -> Result<(), BchError> {
 #[vtable]
 impl FileOps for InodeInfo {
     type Data = InodeFile;
+
+    // The mount holds the module, and an open of a regular file is hot
+    const MODULE_REF: bool = false;
+    const PAGECACHE: bool = true;
+
+    fn read_iter(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>) -> isize {
+        super::direct::read_iter(req, iter)
+    }
+
+    fn write_iter(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>) -> isize {
+        super::buffered_write::write_iter(req, iter)
+    }
 
     // #[vtable] sees mmap() and mmap_prepare() whichever one is built
     #[cfg(linux_ge = "6.17")]
@@ -283,36 +300,5 @@ impl FileOps for InodeInfo {
     }
 }
 
-/// Opened for writing, the subvolume must be writable. FileOps' open() makes
-/// private data, and there's none: this is the table's own.
-unsafe extern "C" fn open(vinode: *mut c::inode, file: *mut c::file) -> c_int {
-    // SAFETY: a file of ours being opened, and its inode
-    let (inode, f) = unsafe { (InodeInfo::from_inode(vinode), Opening::from_raw(file)) };
-    ret_to_class((|| {
-        if f.file().flags() & (c::O_WRONLY | c::O_RDWR) != 0 {
-            subvolume::is_ro(inode.fs(), inode.inum().subvol as u32)?;
-        }
-        f.set_can_odirect();
-        f.generic_open()
-    })())
-}
-
 /// i_fop, as NewInode::init() sets it for a regular file.
-pub static FILE_OPS: CStatic<c::file_operations> = unsafe {
-    CStatic::new({
-        let mut ops = FileVTable::<InodeFile>::OPS;
-        // No module reference taken by each open, as FileVTable has it: the
-        // mount holds one, and an open of a regular file is hot
-        ops.owner            = core::ptr::null_mut();
-        ops.open             = Some(open);
-        ops.read_iter        = Some(bch2_read_iter);
-        ops.write_iter       = Some(bch2_write_iter);
-        #[cfg(CONFIG_TRANSPARENT_HUGEPAGE)]
-        {
-            ops.get_unmapped_area = Some(c::thp_get_unmapped_area);
-        }
-        ops.splice_read      = Some(c::filemap_splice_read);
-        ops.splice_write     = Some(c::iter_file_splice_write);
-        ops
-    })
-};
+pub static FILE_OPS: CStatic<c::file_operations> = FileVTable::<InodeFile>::STATIC;

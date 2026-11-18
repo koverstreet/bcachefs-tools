@@ -249,16 +249,15 @@ pub fn direct_io_read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, fl
     Ok(ret)
 }
 
-pub unsafe extern "C" fn bch2_read_iter(iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize {
-    let (mut req, mut iter) = unsafe { (Kiocb::<InodeFile>::from_raw(iocb), IovIter::from_raw(iter)) };
+pub(super) fn read_iter(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>) -> isize {
     if iter.count() == 0 {
         return 0; /* skip atime */
     }
 
     if req.direct() {
-        direct_io_read(&mut req, &mut iter, F::empty(), None).into_raw()
+        direct_io_read(req, iter, F::empty(), None).into_raw()
     } else {
         let _add = req.inode().ei_pagecache_lock.lock::<c::PagecacheAdd>();
-        req.filemap_read(&mut iter)
+        req.filemap_read(iter)
     }
 }
