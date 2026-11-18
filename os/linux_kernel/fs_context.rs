@@ -97,10 +97,12 @@ impl<T: FsType> FsContext<T> {
         Ok(())
     }
 
-    /// For a reconfigure, the superblock being reconfigured: None for a mount.
-    pub fn root_super(&self) -> Option<&SuperBlock<Data<T>>> {
+    /// ctx(), and for a reconfigure the superblock being reconfigured - None
+    /// for a mount: parsing a parameter, against the filesystem it's for.
+    pub fn ctx_and_root_super(&mut self) -> (&mut T::Context, Option<&SuperBlock<Data<T>>>) {
         let root = self.raw().root;
-        (!root.is_null()).then(|| unsafe { SuperBlock::from_raw((*root).d_sb.cast()) })
+        let sb = (!root.is_null()).then(|| unsafe { SuperBlock::from_raw((*root).d_sb.cast()) });
+        (unsafe { &mut *self.raw().fs_private.cast::<T::Context>() }, sb)
     }
 
     // ── The log ──────────────────────────────────────────────────────────

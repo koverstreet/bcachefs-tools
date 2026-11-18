@@ -364,13 +364,10 @@ impl FsType for Bcachefs {
 
             _ => {
                 // for reconfigure, we already have the filesystem
-                let fs = fc.root_super().map(|sb| NonNull::from(sb.data()));
-                // SAFETY: the superblock being reconfigured's, which holds it
-                // for the call
-                let fs = fs.map(|fs| unsafe { fs.as_ref() });
+                let (p, sb) = fc.ctx_and_root_super();
+                let fs = sb.map(|sb| sb.data());
 
                 let mut err = Printbuf::new();
-                let p = fc.ctx();
                 let ret = crate::opts::parse_one_mount_opt(fs, Some(&mut p.opts), Some(&mut p.parse_later),
                                                            key.to_bytes(), val.as_deref(), &mut err);
                 // @err describes only a bad value: the refusals returned
