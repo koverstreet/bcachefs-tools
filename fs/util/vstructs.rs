@@ -1269,6 +1269,15 @@ impl<'a, E: ?Sized> ValidatedEntriesMut<'a, E> {
     pub fn of<C: Container<Entry = E> + ?Sized>(c: &'a mut C) -> Self {
         Self { rest: c.entry_bytes_mut(), _entry: PhantomData }
     }
+
+    /// A container's entries, to edit, had without its header.
+    ///
+    /// # Safety
+    /// @rest is a Validated container's entry bytes: exactly what of() its
+    /// container would walk.
+    pub unsafe fn of_bytes(rest: &'a mut [u8]) -> Self {
+        Self { rest, _entry: PhantomData }
+    }
 }
 
 impl<'a, E: SelfSized + Unsized + ?Sized + 'a> Iterator for ValidatedEntriesMut<'a, E> {

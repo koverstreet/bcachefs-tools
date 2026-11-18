@@ -150,7 +150,7 @@ use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
 use crate::util::sleep::Sleep;
 use crate::util::printbuf::HumanReadable;
-use crate::util::vstructs::{plain_bytes, Head, SelfSized};
+use crate::util::vstructs::{Head, SelfSized};
 use crate::util::refcount::TryRefcount;
 use crate::util::{Printbuf, ToText};
 use crate::{prt, warn_once};
@@ -508,13 +508,14 @@ impl c::journal {
         };
 
         let buf = self.in_flight.locked(g).get(seq).expect("the open journal entry is in flight");
-        let data = unsafe { buf.data.protected_mut() };
+        let h = unsafe { buf.data.protected().header_mut() };
 
         /* Close out old buffer: */
-        data.head_mut().set_u64s(offset as usize);
+        h.set_u64s(offset as usize);
+        let entry_bytes = size_of::<Head<c::jset>>() + h.u64s() * size_of::<u64>();
 
         if let Close::Closed(pins) = how {
-            let bytes = data.jset().bytes().next_power_of_two();
+            let bytes = entry_bytes.next_power_of_two();
 
             pins.seq_set_bytes(seq, bytes as u32);
             g.dirty_entry_bytes += bytes;
@@ -523,20 +524,20 @@ impl c::journal {
         fs.event_trace(events::journal_entry_close, |out| {
             let _f = MemallocFlags::noreclaim();
 
-            prt!(out, "entry size: {}\n", HumanReadable(data.jset().bytes() as u64));
+            prt!(out, "entry size: {}\n", HumanReadable(entry_bytes as u64));
             let _g = MemallocFlags::for_gfp(flags::NOWAIT);
             let _ = prt_current_backtrace(out, 1);
         });
 
         let u64s_reserved = *g.get_of(&buf.u64s_reserved);
-        let sectors = ((data.jset().bytes() + u64s_reserved as usize * size_of::<u64>())
+        let sectors = ((entry_bytes + u64s_reserved as usize * size_of::<u64>())
             .next_multiple_of(512 << fs.block_bits()) >> 9) as u32;
         if unlikely(sectors > *g.get_of(&buf.sectors)) {
             let _f = MemallocFlags::noreclaim();
             let mut msg = LogMsg::new(fs);
             prt!(&mut *msg, "journal entry overran reserved space: {sectors} > {}\n", g.get_of(&buf.sectors));
             prt!(&mut *msg, "buf u64s {} u64s reserved {u64s_reserved} cur_entry_u64s {} block_bits {}\n",
-                 data.head().u64s(),
+                 h.u64s(),
                  self.lock.hot.cur_entry_u64s.get(),
                  fs.block_bits());
             fs.emergency_read_only_locked(&mut msg, g);
@@ -566,8 +567,8 @@ impl c::journal {
          */
         let last_seq = self.lock.last_seq.get();
         *g.get_mut_of(&buf.last_seq) = last_seq;
-        data.head_mut().last_seq.set(last_seq);
-        assert!(last_seq <= data.head().seq.get(), "journal entry {seq} closed with last_seq {last_seq}, past it");
+        h.last_seq.set(last_seq);
+        assert!(last_seq <= h.seq.get(), "journal entry {seq} closed with last_seq {last_seq}, past it");
 
         /*
          * bch2_journal_halt may or may not be called with pin_resize_lock held,
@@ -702,13 +703,6 @@ impl c::journal {
         data.head_mut().set_u64s(0);
 
         let early = mem::take(&mut g.early_journal_entries);
-        if !early.is_empty() {
-            let hdr = size_of::<Head<c::jset>>();
-            let early_bytes = plain_bytes(&early[..]);
-            data.bytes_mut()[hdr..hdr + early_bytes.len()].copy_from_slice(early_bytes);
-            data.head_mut().set_u64s(early.len());
-        }
-        let data_u64s = data.head().u64s() as u32;
         let data_ptr = data.as_ptr();
 
         /*
@@ -770,6 +764,13 @@ impl c::journal {
         g.published().hot.ring_has_overwrites[idx as usize].set(has_overwrites);
 
         /*
+         * What was journalled before the journal started, as the body's first
+         * reservation: no other is taken till the entry's opened below.
+         */
+        let early_res = c::journal_res { seq, ..Default::default() };
+        unsafe { self.res_entry(&early_res).cast::<u64>().copy_from_nonoverlapping(early.as_ptr(), early.len()) };
+
+        /*
          * Must be set before marking the journal entry as open:
          */
         g.published().hot.cur_entry_u64s.set(u64s as u32);
@@ -785,7 +786,7 @@ impl c::journal {
             new.inc();
 
             /* Handle any already added entries */
-            new.set_cur_entry_offset(data_u64s);
+            new.set_cur_entry_offset(early.len() as u32);
             Some(new)
         });
 
@@ -1538,7 +1539,7 @@ impl c::journal {
         });
 
         if old.cur_entry_offset() < c::JOURNAL_ENTRY_BLOCKED_VAL {
-            unsafe { self.cur_buf(g).data.protected_mut() }.head_mut().set_u64s(old.cur_entry_offset() as usize);
+            unsafe { self.cur_buf(g).data.protected().header_mut() }.set_u64s(old.cur_entry_offset() as usize);
         }
     }
 
@@ -1550,7 +1551,7 @@ impl c::journal {
 
     /* None while the buf still has reservations to wait for */
     fn __next_write_buffer_flush_journal_buf(&self, max_seq: u64, blocked: &mut bool)
-        -> Option<Option<&c::journal_buf>>
+        -> Option<Option<(u64, &c::journal_buf)>>
     {
         let mut g = self.lock.lock();
         let cur_seq = self.fs().journal_cur_seq();
@@ -1572,14 +1573,16 @@ impl c::journal {
                     *blocked = true;
                 }
 
-                return (self.state_seq_count(s, seq) <= open).then_some(Some(buf));
+                return (self.state_seq_count(s, seq) <= open).then_some(Some((seq, buf)));
             }
         }
 
         Some(None)
     }
 
-    pub fn next_write_buffer_flush_journal_buf(&self, max_seq: u64, blocked: &mut bool) -> Option<&c::journal_buf> {
+    pub fn next_write_buffer_flush_journal_buf(&self, max_seq: u64, blocked: &mut bool)
+        -> Option<(u64, &c::journal_buf)>
+    {
         *blocked = false;
 
         let Ok(ret) = self.async_wait.wait_until(Sleep::UNINTERRUPTIBLE,

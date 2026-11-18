@@ -21,7 +21,7 @@ use pin_init::pin_data;
  * waiters decided flush. It's decided by cmpxchg on this word, so the writer
  * and noflush_seq() don't both win - but for the first write after the
  * filesystem was clean, see do_writes_locked(). JSET_NO_FLUSH records the
- * outcome in the jset.
+ * outcome in the jset, as write_prep() writes it from the word.
  */
 pub const JOURNAL_BUF_NOT_IN_FLIGHT: *mut FlushEntry = 1 as _;
 pub const JOURNAL_BUF_NOFLUSH: *mut FlushEntry = 2 as _;

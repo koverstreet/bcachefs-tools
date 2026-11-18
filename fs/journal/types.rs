@@ -22,7 +22,7 @@ use crate::data_structures::fifo::FifoRead;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
 use crate::util::refcount::{AtomicRef, RefGuard};
-use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, Unvalidated};
+use crate::util::vstructs::{Head, Unvalidated};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
@@ -96,24 +96,49 @@ impl JsetBuf {
     }
 
     /// Its write, made with it.
-    pub fn write(&mut self) -> Pin<&mut JournalWrite> {
-        self.write.as_mut().expect("a journal buffer's write, made with it").as_pin_mut()
+    ///
+    /// # Safety
+    /// The write's to have: nothing else refers to it.
+    pub unsafe fn write(&self) -> Pin<&mut JournalWrite> {
+        let w = self.write.as_ref().expect("a journal buffer's write, made with it").as_non_null();
+        unsafe { Pin::new_unchecked(&mut *w.as_ptr()) }
     }
 
     pub fn size(&self) -> c_uint {
-        self.bytes().len() as c_uint
+        self.data.as_deref().map_or(0, MappedPages::len) as c_uint
     }
 
     pub fn as_ptr(&self) -> *mut Head<c::jset> {
-        self.data.as_deref().map_or(core::ptr::null_mut(), |d| d.as_slice().as_ptr().cast_mut().cast())
+        self.data.as_deref().map_or(core::ptr::null_mut(), |d| d.as_non_null().as_ptr().cast())
     }
 
+    /// The header alone: not the body, which may be its reservations'.
     pub fn head(&self) -> &Head<c::jset> {
-        cast_plain(self.bytes()).expect("a journal buffer, holding a jset's header")
+        unsafe { self.as_ptr().as_ref() }.expect("a journal buffer, holding a jset's header")
     }
 
     pub fn head_mut(&mut self) -> &mut Head<c::jset> {
-        cast_plain_mut(self.bytes_mut()).expect("a journal buffer, holding a jset's header")
+        unsafe { self.header_mut() }
+    }
+
+    /// The header, to write, while the body may be another's.
+    ///
+    /// # Safety
+    /// j->lock is held, and nothing else refers to the header.
+    pub unsafe fn header_mut(&self) -> &mut Head<c::jset> {
+        unsafe { self.as_ptr().as_mut() }.expect("a journal buffer, holding a jset's header")
+    }
+
+    /// The body's first @u64s, the entries, to edit, without the header.
+    ///
+    /// # Safety
+    /// The caller holds the body: buf_lock, with the entry's reservations
+    /// put. Nothing else refers to these bytes.
+    pub unsafe fn entries_mut(&self, u64s: usize) -> &mut [u8] {
+        let hdr = mem::size_of::<Head<c::jset>>();
+        let d = self.data.as_deref().expect("a journal buffer, holding a jset").as_non_null();
+        assert!(hdr + u64s * 8 <= d.len(), "journal entries of {u64s} u64s past a buffer of {} bytes", d.len());
+        unsafe { core::slice::from_raw_parts_mut(d.as_ptr().cast::<u8>().add(hdr), u64s * 8) }
     }
 
     pub fn jset(&self) -> &c::jset<Unvalidated> {
@@ -164,11 +189,12 @@ pub type BufLocked<T> = LockedBy<T, (), JournalLockAt>;
 #[derive(MaybeZeroable, Init)]
 pub struct journal_buf {
     /*
-     * Its holders', by phase. Open: the reservations', each copying into its
-     * own range of the body - till they put their refs, which can be after
-     * close; the header's j->lock's, which closes it. Then the write's - and
-     * buf_lock's, for the btree write buffer, while need_flush_to_write_buffer
-     * is set.
+     * The entry's jset: its header published under j->lock; its body under a
+     * reservation - each its own range - or buf_lock. The write's no
+     * different: buf_lock for the body, j->lock to write the header. The
+     * JsetBuf itself - where they are - is changed only under j->lock, and
+     * buf_lock too once the body might be the write buffer's. to_text()
+     * reads it all racily: it's printing.
      */
     pub data: LockedBy<JsetBuf>,
     /* its write's ref on the journal's writes_in_flight */

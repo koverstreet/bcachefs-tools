@@ -371,14 +371,13 @@ impl<'a> Intake<'a> {
         Ok(())
     }
 
-    /// Write buffer keys from a journal buf's @data into the write buffer:
-    /// their entries become btree keys.
-    fn journal_buf(&mut self, data: &mut c::JsetBuf) -> Result<(), BchError> {
+    /// Write buffer keys from a journal buf's @entries into the write buffer:
+    /// they become btree keys.
+    fn journal_buf(&mut self, entries: &mut [u8]) -> Result<(), BchError> {
         // closed - blocked, if it was the open one - and its reservations
         // released: every one's entries whole, not written yet, so not
         // encrypted
-        let jset = unsafe { data.jset_mut().assume_validated_mut() };
-        for i in ValidatedEntriesMut::of(jset) {
+        for i in unsafe { ValidatedEntriesMut::<jset_entry>::of_bytes(entries) } {
             if c::JsetEntryType(i.type_.into()) == c::JsetEntryType::write_buffer_keys {
                 self.entry(i)?;
             }
@@ -479,12 +478,13 @@ pub(super) fn fetch_wb_keys_from_journal(fs: &Fs, max_seq: u64) -> Result<(), Bc
     let mut dst = Intake::lock(fs);
 
     while ret.is_ok() {
-        let Some(buf) = j.next_write_buffer_flush_journal_buf(max_seq, &mut blocked) else { break };
-        let data = unsafe { buf.data.protected_mut() };
+        let Some((seq, buf)) = j.next_write_buffer_flush_journal_buf(max_seq, &mut blocked) else { break };
+        let data = unsafe { buf.data.protected() };
 
-        dst.begin(data.head().seq.get());
+        dst.begin(seq);
 
-        ret = dst.journal_buf(data);
+        /* its u64s, which hold still while the body's ours */
+        ret = dst.journal_buf(unsafe { data.entries_mut(data.head().u64s()) });
         ret = dst.end_locked().and(ret);
 
         if !blocked && ret.is_ok() {

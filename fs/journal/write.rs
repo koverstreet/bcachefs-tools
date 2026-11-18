@@ -100,13 +100,15 @@ impl c::JsetBuf {
         self.bytes_mut().split_at_mut(bytes)
     }
 
-    /// Entries appended to its jset, by @f: the u64s they took.
-    fn append_entries(&mut self, f: impl FnOnce(&mut EntryWriter<'_>)) -> usize {
+    /// Entries appended to its jset, by @f: the u64s they took, added to the
+    /// header under j->lock.
+    fn append_entries(&mut self, j: &c::journal, f: impl FnOnce(&mut EntryWriter<'_>)) -> usize {
         let (_, tail) = self.jset_and_tail();
         let mut ew = EntryWriter::new(cast_plain_slice_mut(tail).expect("a journal buf, u64s past its jset"));
         f(&mut ew);
         let u64s = ew.len();
 
+        let _g = j.lock.lock();
         let h = self.head_mut();
         h.set_u64s(h.u64s() + u64s);
         u64s
@@ -124,6 +126,11 @@ impl c::journal_buf {
             Ok(_) => true,
             Err(old) => old != JOURNAL_BUF_NOFLUSH,
         }
+    }
+
+    /* A noflush made a flush: nothing waits on a noflush's word */
+    fn flush_noflushed(&self) -> bool {
+        self.wait_word().compare_exchange(JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_FLUSH, SeqCst, Relaxed).is_ok()
     }
 }
 
@@ -802,6 +809,22 @@ fn write_prep(j: &c::journal, w: &c::journal_buf, data: &mut c::JsetBuf) -> Resu
     let mut btree_roots_have = 0u64;
     let seq = data.seq();
 
+    /*
+     * The write's flush or noflush, as do_writes_locked() left its wait word -
+     * final by now - into the header: a flush's rewind limit, or a noflush's
+     * flag and no last_seq, which empty below is reckoned on.
+     */
+    if w.must_not_flush() {
+        let _g = j.lock.lock();
+        let h = data.head_mut();
+        h.set_no_flush(true);
+        h.last_seq.set(0);
+    } else {
+        let mut r = c::jset_entry_rewind_limit::default();
+        r.seq.set(j.lock.rewind_seq.get().min(seq + 1));
+        data.append_entries(j, |ew| ew.push_entry(0, 0, r).expect("rewind_limit_res's room"));
+    }
+
     let mut empty = data.head().seq.get() == data.head().last_seq.get();
 
     if j.lock.lock().get_of(&w.bits).need_flush_to_write_buffer() {
@@ -874,7 +897,7 @@ fn write_prep(j: &c::journal, w: &c::journal_buf, data: &mut c::JsetBuf) -> Resu
         j.lock.lock().get_mut_of(&w.bits).set_empty(true);
     }
 
-    let u64s = data.append_entries(|ew| {
+    let u64s = data.append_entries(j, |ew| {
         btree_roots_to_journal_entries(fs, ew, btree_roots_have).expect("root_journal_res's room");
 
         let mut d = c::jset_entry_datetime::default();
@@ -903,23 +926,27 @@ fn write_prep(j: &c::journal, w: &c::journal_buf, data: &mut c::JsetBuf) -> Resu
 
 fn write_checksum(j: &c::journal, w: &c::journal_buf, data: &mut c::JsetBuf) -> Result<(), BchError> {
     let fs = j.fs();
-    let has_overwrites = j.lock.lock().get_of(&w.bits).has_overwrites();
     let csum_type = fs.meta_checksum_type();
-    let h = data.head_mut();
     let mut validate_before_checksum = false;
 
-    h.magic.set(fs.jset_magic());
-    h.version.set(fs.sb.version.get());
+    {
+        let g = j.lock.lock();
+        let has_overwrites = g.get_of(&w.bits).has_overwrites();
+        let h = data.head_mut();
 
-    h.set_big_endian(cfg!(target_endian = "big"));
-    h.set_csum_type(csum_type);
-    h.set_has_overwrites(has_overwrites);
+        h.magic.set(fs.jset_magic());
+        h.version.set(fs.sb.version.get());
+
+        h.set_big_endian(cfg!(target_endian = "big"));
+        h.set_csum_type(csum_type);
+        h.set_has_overwrites(has_overwrites);
+    }
 
     if csum_type.is_encryption() {
         validate_before_checksum = true;
     }
 
-    if h.version.get() < c::MetadataVersion::CURRENT {
+    if data.head().version.get() < c::MetadataVersion::CURRENT {
         validate_before_checksum = true;
     }
 
@@ -933,7 +960,10 @@ fn write_checksum(j: &c::journal, w: &c::journal_buf, data: &mut c::JsetBuf) -> 
     }
 
     let csum = data.jset().checksum(fs);
-    data.head_mut().csum = csum;
+    {
+        let _g = j.lock.lock();
+        data.head_mut().csum = csum;
+    }
 
     if !validate_before_checksum {
         jset_validate(fs, None, data.jset_and_tail().0, 0, ValidateFlags::write)?;
@@ -947,7 +977,7 @@ fn write_checksum(j: &c::journal, w: &c::journal_buf, data: &mut c::JsetBuf) -> 
 
 /// The entry compacted, its devices allocated - their io refs, returned - and
 /// checksummed, its replicas marked.
-fn write_start(w: &c::journal_buf, written: &mut Written) -> Result<Cas, BchError> {
+fn write_start(w: &c::journal_buf, seq: u64, written: &mut Written) -> Result<Cas, BchError> {
     let j = w.journal();
     let fs = j.fs();
     let nr_rw_members = fs.allocator.rw_devs[DataType::free].weight();
@@ -959,7 +989,7 @@ fn write_start(w: &c::journal_buf, written: &mut Written) -> Result<Cas, BchErro
     /* the write's, but the write buffer's under buf_lock till write_prep() takes it out */
     let b = j.buf_lock.lock();
     let data = unsafe { w.data.protected_mut() };
-    let seq = data.seq();
+    ebug_assert!(seq == data.seq(), "journal buf for seq {seq} holding {}", data.seq());
     {
         let l = j.lock.lock();
         let bits = l.get_of(&w.bits);
@@ -988,7 +1018,10 @@ fn write_start(w: &c::journal_buf, written: &mut Written) -> Result<Cas, BchErro
     };
     ret?;
 
-    write_checksum(j, w, data)?;
+    {
+        let _b = j.buf_lock.lock();
+        write_checksum(j, w, data)?;
+    }
 
     {
         let mut g = j.lock.lock();
@@ -1058,13 +1091,13 @@ fn write_start_err(w: &c::journal_buf, e: BchError) {
 
 /// A journal entry written: what to and what failed, for its done.
 #[in_place(WriteFut)]
-async fn write_task(w: &'static c::journal_buf) -> Written {
+async fn write_task(w: &'static c::journal_buf, seq: u64) -> Written {
     let j = w.journal();
     let fs: &'static Fs = j.fs();
     let wq: &'static Queue = &j.wq;
     let mut written = Written::default();
 
-    let cas = match write_start(w, &mut written) {
+    let cas = match write_start(w, seq, &mut written) {
         Ok(cas) => cas,
         Err(e) => {
             write_start_err(w, e);
@@ -1128,9 +1161,9 @@ impl JournalWrite {
     /// started on the journal's workqueue.
     ///
     /// # Safety
-    /// @buf's write is started, from the buffer this is the write of, and has
-    /// its data to itself till its done.
-    unsafe fn start(self: Pin<&mut Self>, buf: &'static c::journal_buf) {
+    /// @buf's write, of entry @seq, is started, from the buffer this is the
+    /// write of, and has its data to itself till its done.
+    unsafe fn start(self: Pin<&mut Self>, buf: &'static c::journal_buf, seq: u64) {
         let j = buf.journal();
         let w = unsafe { self.get_unchecked_mut() };
         if mem::replace(&mut w.made, true) {
@@ -1138,7 +1171,7 @@ impl JournalWrite {
         }
         w.buf = Some(buf);
 
-        let future = init_with(move || write_task(buf));
+        let future = init_with(move || write_task(buf, seq));
         let task = Task::new(Spawn::Queue(&j.wq), j.fs().tasks(), future, write_task_done);
         unsafe { init_at(task, w.task.as_mut_ptr()) }.expect("a task on a workqueue: only a thread's fails");
         unsafe { w.task.assume_init_ref().task().start() };
@@ -1293,9 +1326,6 @@ impl c::journal {
                 return;
             }
 
-            ebug_assert!(seq == unsafe { w.data.protected() }.seq(),
-                         "journal buf for seq {seq} holding {}", unsafe { w.data.protected() }.seq());
-
             let flush = self.should_flush(g, w, seq);
 
             if flush {
@@ -1312,15 +1342,17 @@ impl c::journal {
                 /*
                  * Lost to bch2_journal_noflush_seq(): a noflush, unless it's the
                  * first write since the filesystem was clean, which must be a
-                 * flush whatever was promised - as __should_flush() asks first:
+                 * flush whatever was promised - as __should_flush() asks first.
+                 * The word's made a flush then too: it's what completion and
+                 * noflush_seq() go by, and write_prep() writes the header from.
                  */
-                w.try_flush() || self.flags.get(Journal::need_flush_write)
+                w.try_flush() || (self.flags.get(Journal::need_flush_write) && w.flush_noflushed())
             } else {
                 false
             }
         };
 
-        let rewind_limit = if flush {
+        if flush {
             g.last_flush_write = jiffies();
             g.nr_flush_writes += 1;
 
@@ -1341,33 +1373,18 @@ impl c::journal {
             if fs.opts().journal_rewind_discard_buffer_percent.get() == 0 {
                 g.published().rewind_seq.set(seq + 1);
             }
-
-            let mut r = c::jset_entry_rewind_limit::default();
-            r.seq.set(self.lock.rewind_seq.get().min(seq + 1));
-            Some(r)
         } else {
             g.nr_noflush_writes += 1;
-            None
-        };
+            *g.get_mut_of(&w.last_seq) = 0;
+        }
 
         g.seq_write_started = seq;
 
-        let data = unsafe { w.data.protected_mut() };
-        match rewind_limit {
-            Some(r) => {
-                data.append_entries(|ew| ew.push_entry(0, 0, r).expect("rewind_limit_res's room"));
-            }
-            None => {
-                data.head_mut().set_no_flush(true);
-                data.head_mut().last_seq.set(0);
-                *g.get_mut_of(&w.last_seq) = 0;
-            }
-        }
         g.get_mut_of(&w.bits).set_write_started(true);
         *g.get_mut_of(&w.in_flight) =
             Some(self.writes_in_flight.tryget().expect("a journal write after the filesystem's exit"));
 
-        unsafe { data.write().start(w) };
+        unsafe { w.data.protected().write().start(w, seq) };
     }
 
     pub fn do_writes(&self) {

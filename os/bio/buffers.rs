@@ -163,6 +163,12 @@ impl MappedPages {
         unsafe { core::slice::from_raw_parts_mut(self.data().as_ptr(), self.len()) }
     }
 
+    /// Its pages, by pointer: not a borrow of them, which what's had through
+    /// it may be parts of, each its own holder's.
+    pub fn as_non_null(&self) -> NonNull<[u8]> {
+        NonNull::slice_from_raw_parts(self.data(), self.len())
+    }
+
     /// Its bio, over all of it: to write some of it from, by clones that
     /// borrow it - a write's, which only read the pages.
     pub(crate) fn bio(&self) -> &Bio {
