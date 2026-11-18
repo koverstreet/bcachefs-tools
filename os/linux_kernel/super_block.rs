@@ -586,8 +586,11 @@ impl<T: FsType> Root<T> {
         Root { dentry: dentry.cast(), sb, _t: PhantomData }
     }
 
-    pub fn as_ptr(&self) -> *mut c::dentry {
-        self.dentry.as_ptr()
+    /// The root dentry, of fill()'s inode.
+    pub fn dentry(&self) -> Dentry<'_, <Data<T> as SuperOps>::Inode>
+        where Data<T>: SuperOps
+    {
+        unsafe { Dentry::borrow_raw(self.dentry.as_ptr()) }
     }
 
     pub fn sb(&self) -> &SuperBlock<Data<T>> {

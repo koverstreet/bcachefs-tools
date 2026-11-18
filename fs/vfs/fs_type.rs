@@ -257,8 +257,7 @@ impl Bcachefs {
         // The root has no attach site of its own: its ops from its own inode
         #[cfg(CONFIG_UNICODE)]
         {
-            // SAFETY: the root's dentry, which @root holds a reference on
-            let d = unsafe { super::dentry::Dentry::borrow_raw(root.as_ptr()) };
+            let d = root.dentry();
             d.set_casefold_ops(d.inode().vfs());
         }
 
