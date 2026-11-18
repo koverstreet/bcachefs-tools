@@ -131,6 +131,7 @@ impl WorkAt for InodeInfo {
 pub fn vfs_init(m: &ThisModule) -> Result<(), BchError> {
     INODE_CACHE.create(c"bch_inode_info", c::SLAB_RECLAIM_ACCOUNT | c::SLAB_ACCOUNT)?;
     super::direct::pools_init(m)?;
+    super::direct_write::pools_init(m)?;
     super::buffered::pools_init(m)?;
     ret_to_result_void(super::fs_type::bch2_fs_type_register())
 }

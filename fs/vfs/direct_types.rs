@@ -7,12 +7,15 @@
 use crate::cstructs::c;
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
+use pin_init::pin_data;
 
 nest! {
+    #[pin_data]
     #[repr(C)]
     #[derive(MaybeZeroable, BitfieldMembers)]
     pub struct dio_write {
-        pub req: *mut c::kiocb,
+        /* where its next bio's written: the kiocb's, moved on as it's done */
+        pub pos: u64,
         pub mapping: crate::vfs::folio::Mapping,
         pub inode: *mut c::InodeInfo,
         pub mm: Option<crate::os::kernel::Mm>,
@@ -20,12 +23,10 @@ nest! {
         #[members]
         #>[bitfield(u8)]
         pub bits: pub struct dio_write_bits {
-            loop_:     u1,
             extending: u1,
             sync:      u1,
-            sync_done: u1,
             flush:     u1,
-            __pad:     u3,
+            __pad:     u5,
         },
         pub quota_res: c::quota_res,
         pub written: u64,
@@ -39,8 +40,13 @@ nest! {
         pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
 
         /* must be last: */
+        #[pin]
         pub op: c::bch_write_op,
     }
 }
 
 crate::has_bio!(dio_write, op.wbio.bio);
+
+// its task's home: its pointers - the inode, the mm - are its dio's, good on
+// whichever thread the task runs
+unsafe impl Send for c::dio_write {}

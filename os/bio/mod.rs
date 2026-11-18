@@ -121,7 +121,7 @@ fn req_op(opf: u32) -> u32 {
 /* the OS's half: bio_init() and the rest of C's, and a buffer's bvecs */
 #[cfg_attr(kernel, path = "../linux_kernel/bio.rs")]
 #[cfg_attr(not(kernel), path = "../linux_user/bio.rs")]
-pub(crate) mod sys;
+pub(super) mod sys;
 
 pub use sys::{buf_bio_bytes, buf_nr_bvecs};
 

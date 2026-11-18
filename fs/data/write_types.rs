@@ -78,6 +78,22 @@ nest! {
 }
 
 impl<K: IoRefIdx> c::bch_write_bio<K> {
+    /// A write op's, around the bio and what else its owner set up: no io ref
+    /// held - @ca is set at submit, and taken back by the endio. An op
+    /// dropped without one submitted drops a @ca of None, not what its
+    /// memory last held.
+    ///
+    /// # Safety
+    /// Its bio's initialized by the time its struct's initializer runs.
+    pub unsafe fn around_bio() -> impl ::pin_init::Init<Self> {
+        unsafe {
+            ::pin_init::init_from_closure(|w: *mut Self| {
+                (&raw mut (*w).ca).write(None);
+                Ok(())
+            })
+        }
+    }
+
     /// A clone of @src, made where @b is: borrowing @src's bvecs for its box's
     /// life.
     pub fn clone_of<'a>(b: crate::os::bio::BioInPlace<'a>, src: crate::os::bio::BioRange<'a>)
@@ -230,7 +246,7 @@ nest! {
 
         /* Must be last - and its bio set up by the op's owner, before init() */
         #[pin]
-        #[init(unsafe { crate::util::alloc::untouched() })]
+        #[init(unsafe { c::bch_write_bio::around_bio() })]
         pub wbio: c::bch_write_bio,
     }
 }
