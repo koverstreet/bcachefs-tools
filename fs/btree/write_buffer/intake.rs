@@ -9,6 +9,7 @@ use crate::c;
 use crate::c::WbFlushCaller as Caller;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::eytzinger::Eytzinger0;
+use crate::locking::Guard as _;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
 use crate::format::{jset_entry, BkeyType, Btree};
@@ -370,13 +371,13 @@ impl<'a> Intake<'a> {
         Ok(())
     }
 
-    /// Write buffer keys from @buf into the write buffer: their entries become
-    /// btree keys.
-    fn journal_buf(&mut self, buf: &mut c::journal_buf) -> Result<(), BchError> {
+    /// Write buffer keys from a journal buf's @data into the write buffer:
+    /// their entries become btree keys.
+    fn journal_buf(&mut self, data: &mut c::JsetBuf) -> Result<(), BchError> {
         // closed - blocked, if it was the open one - and its reservations
         // released: every one's entries whole, not written yet, so not
         // encrypted
-        let jset = unsafe { buf.data.jset_mut().assume_validated_mut() };
+        let jset = unsafe { data.jset_mut().assume_validated_mut() };
         for i in ValidatedEntriesMut::of(jset) {
             if c::JsetEntryType(i.type_.into()) == c::JsetEntryType::write_buffer_keys {
                 self.entry(i)?;
@@ -478,17 +479,16 @@ pub(super) fn fetch_wb_keys_from_journal(fs: &Fs, max_seq: u64) -> Result<(), Bc
     let mut dst = Intake::lock(fs);
 
     while ret.is_ok() {
-        let buf = j.next_write_buffer_flush_journal_buf(max_seq, &mut blocked);
-        let Some(buf) = (unsafe { buf.as_mut() }) else { break };
+        let Some(buf) = j.next_write_buffer_flush_journal_buf(max_seq, &mut blocked) else { break };
+        let data = unsafe { buf.data.protected_mut() };
 
-        dst.begin(buf.data.head().seq.get());
+        dst.begin(data.head().seq.get());
 
-        ret = dst.journal_buf(buf);
+        ret = dst.journal_buf(data);
         ret = dst.end_locked().and(ret);
 
         if !blocked && ret.is_ok() {
-            let _g = j.lock.lock();
-            buf.bits.set_need_flush_to_write_buffer(false);
+            j.lock.lock().get_mut_of(&buf.bits).set_need_flush_to_write_buffer(false);
         }
 
         if blocked {

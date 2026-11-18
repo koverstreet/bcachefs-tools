@@ -10,6 +10,8 @@ use crate::btree::bkey::prelude::*;
 use crate::c;
 use crate::c::JournalFlag as Journal;
 use crate::data::ptrs::Ptrs;
+use crate::data_structures::fifo::FifoRead;
+use crate::locking::Guard as _;
 use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, StateLockWrite};
@@ -26,8 +28,8 @@ impl c::journal {
         let fs = self.fs();
         let g = self.lock.lock();
 
-        g.in_flight.iter().any(|buf| {
-            (&*buf.key).as_sc().arm::<Ptrs>().is_some_and(|k| k.has_device(fs, dev_idx).is_some())
+        self.in_flight.locked(&g).iter().any(|buf| {
+            (&**g.get_of(&buf.key)).as_sc().arm::<Ptrs>().is_some_and(|k| k.has_device(fs, dev_idx).is_some())
         })
     }
 
@@ -111,27 +113,21 @@ impl c::journal {
             let mut g = self.lock.lock();
             g.seq_write_started = cur_seq - 1;
 
-            /*
-             * Align the in_flight FIFO with seq numbering: front == seq_ondisk + 1
-             * == cur_seq initially (empty fifo), so in_flight.get(seq)
-             * indexes by seq once entries start pushing.
-             */
-            g.in_flight.start_at(cur_seq);
-
             let rewind_unset = self.lock.rewind_seq.get() == 0;
             let p = g.published();
             p.replay_journal_seq_end.set(cur_seq);
             p.last_seq_ondisk.set(last_seq);
             p.flushed_seq_ondisk.set(cur_seq - 1);
             p.seq_ondisk.set(cur_seq - 1);
+            /* with seq_ondisk: in_flight's front and back, (seq_ondisk, seq] empty */
+            self.lock.seq.store((cur_seq - 1) as i64, Relaxed);
+            self.lock.hot.res_seq.store((cur_seq - 1) as i64, Relaxed);
             p.last_seq.set(last_seq);
             if rewind_unset {
                 p.rewind_seq.set(last_seq);
                 p.rewind_seq_ondisk.set(last_seq);
             }
         }
-        self.lock.seq.store((cur_seq - 1) as i64, Relaxed);
-        self.lock.hot.res_seq.store((cur_seq - 1) as i64, Relaxed);
 
         let mut had_entries = false;
         let jk = fs.journal_keys_get();

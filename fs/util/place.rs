@@ -35,8 +35,8 @@
 //!   name: I)] - its index, which C sees as the field it replaces, as C named
 //!   it, and at_index() writes for each element as the array's InitAt makes
 //!   them. Its container() is the array's offset, plus that many elements.
-//!   The field's an Array: an array, or a type wrapping one - a FixedFifo -
-//!   whose elements stay where they're made.
+//!   The field's an Array: an array, or a type wrapping one whose elements
+//!   stay where they're made.
 //!
 //! - Contained is the child's side - its Parent, and its At, which ties the two
 //!   - and container() the field's address back to its parent's.

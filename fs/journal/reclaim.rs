@@ -21,7 +21,8 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, SbFeature};
 use crate::fs::Dev;
 use crate::journal::pins::PinsRead;
-use crate::locking::{ExclusiveGuard, MemallocFlags, Mutex};
+use crate::data_structures::fifo::FifoRead;
+use crate::locking::{ExclusiveGuard, Guard as _, MemallocFlags, Mutex};
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::os::blkdev;
@@ -179,8 +180,8 @@ impl c::journal {
          * We that we don't allocate the space for a journal entry
          * until we write it out - thus, account for it here:
          */
-        for buf in g.in_flight.iter() {
-            let unwritten = buf.sectors;
+        for buf in self.in_flight.locked(g).iter() {
+            let unwritten = *g.get_of(&buf.sectors);
             if unwritten == 0 {
                 continue;
             }

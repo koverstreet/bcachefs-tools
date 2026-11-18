@@ -49,23 +49,6 @@ impl c::journal {
     }
 }
 
-impl c::JournalLocked {
-    /*
-     * Look up the buffer for @seq via the in_flight FIFO: under j->lock, since
-     * the FIFO front moves with seq_ondisk and buffers are retired on pop.
-     *
-     * A reservation holder doesn't need its buf: ring_data and
-     * ring_has_overwrites are its ring slot's, pinned by the reservation.
-     */
-    pub fn seq_to_buf(&self, seq: u64) -> Option<&c::journal_buf> {
-        self.in_flight.get(seq)
-    }
-
-    pub fn seq_to_buf_mut(&mut self, seq: u64) -> Option<&mut c::journal_buf> {
-        self.in_flight.get_mut(seq)
-    }
-}
-
 /* idx follows cur_entry_offset's 22 bits, the buf counts idx's 2 */
 const STATE_IDX_SHIFT: u32 = c::JOURNAL_ENTRY_OFFSET_MAX.count_ones();
 

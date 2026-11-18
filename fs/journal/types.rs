@@ -18,7 +18,7 @@ use crate::util::Printbuf;
 use crate::prt;
 use core::mem;
 use core::pin::Pin;
-use crate::data_structures::fixed_fifo::FixedFifo;
+use crate::data_structures::fifo::FifoRead;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
 use crate::util::refcount::{AtomicRef, RefGuard};
@@ -39,7 +39,7 @@ use crate::{new_lock, published};
 use pin_init::pin_data;
 use crate::journal::journal::journal_write_work;
 use crate::os::workqueue::{DelayedWork, OnQueue, ReffedWork, Workqueue, WqFlags};
-use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Init, Late, BitfieldMembers};
+use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Init, Late};
 use nestify::nest;
 
 /* btree write buffer steals 8 bits for its own purposes: */
@@ -134,6 +134,21 @@ impl JsetBuf {
     }
 }
 
+#[bitfield(u16)]
+pub struct journal_buf_bits {
+    separate_flush:             bool,
+    need_flush_to_write_buffer: bool,
+    write_started:              bool,
+    write_allocated:            bool,
+    write_done:                 bool,
+    empty:                      bool,
+    has_overwrites:             bool,
+    __pad:                      u9,
+}
+
+/* A journal buf's, j->lock's */
+pub type BufLocked<T> = LockedBy<T, (), JournalLockAt>;
+
 /*
  * One journal buffer: staging area for a journal entry. A slot of
  * j->in_flight, made with the journal: an entry from the moment it's
@@ -143,56 +158,123 @@ impl JsetBuf {
  * reservation state encoded in j->reservations; in-flight depth is
  * bounded by JOURNAL_BUF_NR, and natural memory/device backpressure.
  */
-nest! {
-    #[placed(JournalLocked.in_flight[], index = idx: u8)]
-    #[pin_data]
-    #[repr(C)]
-    #[derive(MaybeZeroable, BitfieldMembers, Init)]
-    pub struct journal_buf {
-        pub data: JsetBuf,
-        /* its write's ref on the journal's writes_in_flight */
-        #[init(None)]
-        pub in_flight: Option<RefGuard<AtomicRef<()>>>,
+#[placed(InFlightLocked.bufs[], index = idx: u8)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct journal_buf {
+    /*
+     * Its holders', by phase. Open: the reservations', each copying into its
+     * own range of the body - till they put their refs, which can be after
+     * close; the header's j->lock's, which closes it. Then the write's - and
+     * buf_lock's, for the btree write buffer, while need_flush_to_write_buffer
+     * is set.
+     */
+    pub data: LockedBy<JsetBuf>,
+    /* its write's ref on the journal's writes_in_flight */
+    #[init(LockedBy::new(None, ()))]
+    pub in_flight: BufLocked<Option<RefGuard<AtomicRef<()>>>>,
 
-        pub key: DstRoom<BkeyI, [u64; BKEY_U64S + c::BCH_REPLICAS_MAX as usize]>,
+    #[init(LockedBy::new(Default::default(), ()))]
+    pub key: BufLocked<DstRoom<BkeyI, [u64; BKEY_U64S + c::BCH_REPLICAS_MAX as usize]>>,
 
-        pub last_seq: u64, /* copy of data->last_seq */
+    pub last_seq: BufLocked<u64>, /* copy of data->last_seq */
 
-        pub sectors: c_uint, /* maximum size for current entry */
-        pub disk_sectors: c_uint, /* maximum size entry could have been, if
-                                                buf_size was bigger */
-        pub u64s_reserved: c_uint,
+    pub sectors: BufLocked<c_uint>, /* maximum size for current entry */
+    pub disk_sectors: BufLocked<c_uint>, /* maximum size entry could have been, if
+                                            buf_size was bigger */
+    pub u64s_reserved: BufLocked<c_uint>,
 
-        #[members]
-        #>[bitfield(u16)]
-        pub bits: pub struct journal_buf_bits {
-            separate_flush:             bool,
-            need_flush_to_write_buffer: bool,
-            write_started:              bool,
-            write_allocated:            bool,
-            write_done:                 bool,
-            empty:                      bool,
-            has_overwrites:             bool,
-            __pad:                      u9,
-        },
+    pub bits: BufLocked<journal_buf_bits>,
 
-        /* must not be memset, only manipulated by xchg/cmpxchg */
-        #[init(AtomicPtr::new(crate::journal::flush_wait::JOURNAL_BUF_NOT_IN_FLIGHT))]
-        pub wait: AtomicPtr<crate::journal::flush_wait::FlushEntry>,
-    }
+    /* must not be memset, only manipulated by xchg/cmpxchg */
+    #[init(AtomicPtr::new(crate::journal::flush_wait::JOURNAL_BUF_NOT_IN_FLIGHT))]
+    pub wait: AtomicPtr<crate::journal::flush_wait::FlushEntry>,
 }
+
+// its wait word only ever touched atomically, the rest had only as its
+// LockedBys' holders have it, on any thread: data's bvecs point into its own
+// buffer, not anything of the thread that made them
+unsafe impl Sync for journal_buf {}
 
 impl journal_buf {
     /// Its journal, as 'static: a buf is retired before its journal goes, and
     /// what it hands out of it goes no further than the buf's write.
     pub fn journal(&self) -> &'static c::journal {
+        self.container().journal()
+    }
+}
+
+/*
+ * The bufs of the entries open or in flight, a fifo by seq - locked(), with
+ * j->lock held - whose front and back are the journal's: (seq_ondisk, seq],
+ * which j->lock moves both ends of - an entry's opened at seq's increment,
+ * and leaves as seq_ondisk passes it.
+ */
+#[placed(journal.in_flight)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct InFlight {
+    #[pin]
+    locked: InFlightLocked,
+}
+
+const _: () = assert!(JOURNAL_BUF_NR.is_power_of_two(), "a seq's buf is its low bits");
+
+impl InFlight {
+    pub fn journal(&self) -> &'static c::journal {
         unsafe { &*core::ptr::from_ref(self.container()) }
     }
 
-    /// What it holds dropped, its write done: a free slot holds nothing, till
-    /// an entry's opened on it.
-    pub fn retire(&mut self) {
-        self.data = Default::default();
+    /// The buf @seq's entry has, if it's open or in flight - or another seq's:
+    /// for what reads its wait word without j->lock.
+    pub fn buf(&self, seq: u64) -> &journal_buf {
+        &self.locked.bufs[seq as usize & (JOURNAL_BUF_NR as usize - 1)]
+    }
+
+    /// Its fifo, under the j->lock that moves its ends. Of the journal, not
+    /// the guard: the bufs it hands out have fields the guard then writes.
+    pub fn locked(&self, _: &c::JournalGuard<'_>) -> &InFlightLocked {
+        &self.locked
+    }
+}
+
+/// InFlight's bufs, as the fifo they are with j->lock held.
+#[placed(InFlight.locked)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct InFlightLocked {
+    #[pin]
+    bufs: [journal_buf; JOURNAL_BUF_NR as usize],
+}
+
+impl InFlightLocked {
+    fn journal(&self) -> &'static c::journal {
+        self.container().journal()
+    }
+}
+
+// every slot a journal_buf, made with the journal
+unsafe impl FifoRead for InFlightLocked {
+    type Elem = journal_buf;
+    type Idx = u64;
+
+    fn front_idx(&self) -> u64 {
+        self.journal().lock.seq_ondisk.get() + 1
+    }
+
+    fn back_idx(&self) -> u64 {
+        self.journal().fs().journal_cur_seq() + 1
+    }
+
+    fn capacity(&self) -> usize {
+        JOURNAL_BUF_NR as usize
+    }
+
+    fn slot(&self, seq: u64) -> *const journal_buf {
+        &self.bufs[seq as usize & (JOURNAL_BUF_NR as usize - 1)]
     }
 }
 
@@ -367,19 +449,6 @@ pub struct JournalLocked {
     pub entry_bytes_written: u64,
 
     /*
-     * FIFO of in-flight journal bufs, one entry per seq in
-     * (seq_ondisk, cur_seq]. fifo.front = seq_ondisk + 1, fifo.back =
-     * cur_seq + 1, so seq-indexed lookup is O(1).
-     * Bufs are the FIFO's slots: pushed (and reset) in
-     * journal_entry_open(), popped in journal_write_done() as seq_ondisk
-     * advances.
-     *
-     * The fifo is j->lock's; its bufs are used outside it, by their refs.
-     */
-    #[pin]
-    pub in_flight: FixedFifo<c::journal_buf, { c::JOURNAL_BUF_NR as usize }, u64>,
-
-    /*
      * We may queue up some things to be journalled (log messages) before
      * the journal has actually started - stash them here:
      */
@@ -522,6 +591,9 @@ nest! {
         #[pin]
         #[init_locked(JournalPublished::closed(), "&j->lock")]
         pub lock: Placed<Locked<SpinLockIrq, JournalLocked, JournalPublished>, JournalLockAt>,
+
+        #[pin]
+        pub in_flight: InFlight,
 
         pub flags: crate::data_structures::bitmap::AtomicBitflags<c::JournalFlag>,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
