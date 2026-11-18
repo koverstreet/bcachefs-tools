@@ -75,7 +75,9 @@ pub(crate) struct MountParams {
     /// "status_fd"'s channel, for as long as the filesystem might still print
     /// there: see start() and status_fd.rs.
     status:      Option<StatusFile>,
-    user_key:    Option<UserKey>,
+    /// "user_key"'s key, made in place, so no copy of it is left behind: a
+    /// bch_key wipes itself when it's dropped.
+    user_key:    Option<c::bch_key>,
 }
 
 /// A device's path, NUL-terminated.
@@ -91,24 +93,6 @@ impl DevPath {
 
     fn as_cstr(&self) -> &CStr {
         CStr::from_bytes_with_nul(&self.0).expect("a path from a C string, NUL-terminated once")
-    }
-}
-
-/// "user_key"'s key, wiped when it's dropped, however the mount went: made in
-/// place, so no copy of it is left behind.
-struct UserKey(c::bch_key);
-
-impl Drop for UserKey {
-    fn drop(&mut self) {
-        wipe(plain_bytes_mut(&mut self.0));
-    }
-}
-
-/// A secret, gone: volatile writes, which the compiler can't drop as dead
-/// before the memory's freed.
-fn wipe(b: &mut [u8]) {
-    for x in b {
-        unsafe { core::ptr::write_volatile(x, 0) };
     }
 }
 
@@ -168,7 +152,7 @@ impl Bcachefs {
     // under all of recovery
     #[inline(never)]
     fn open_opts(p: &MountParams, claimed: Claimed, opts: &mut c::bch_opts) -> Result<OpenFs, BchError> {
-        let fs = claimed.open(opts, p.user_key.as_ref().map(|k| &k.0))?;
+        let fs = claimed.open(opts, p.user_key.as_ref())?;
 
         if opts.defined(OptId::discard) {
             fs.flags.set(c::FsFlag::discard_mount_opt_set, true);
@@ -365,11 +349,11 @@ impl FsType for Bcachefs {
                 let Some(s) = val else {
                     return Err(fc.invalf(format_args!("user_key: no key given")));
                 };
-                let k = fc.ctx().user_key.insert(UserKey(Default::default()));
-                let ok = hex2bin(plain_bytes_mut(&mut k.0), s);
+                let k = fc.ctx().user_key.insert(Default::default());
+                let ok = hex2bin(plain_bytes_mut(k), s);
 
                 // the VFS frees it with kfree(), not kfree_sensitive()
-                wipe(s);
+                c::wipe(s);
 
                 if !ok {
                     fc.ctx().user_key = None;
