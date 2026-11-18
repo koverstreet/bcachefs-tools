@@ -37,12 +37,12 @@ use crate::c;
 use crate::dirent::{self, DirEmit};
 use crate::os::dir_context::DirContext;
 use crate::errcode::BchError;
-use crate::locking::LockedBy;
+use crate::locking::{Guard, LockedBy};
 use crate::str_hash;
 use crate::util::alloc::KBox;
 use kernel::alloc::flags;
 use crate::util::ffi::Opaque;
-use crate::os::file::{File, FileOps, FileVTable, UserBuf};
+use crate::os::file::{File, FileOps, FileVTable, FPos, PosLocked, UserBuf};
 use crate::types::CStatic;
 use cstruct_macros::vtable;
 
@@ -167,15 +167,7 @@ fn emit_dots(file: &File<Dir>, e: &mut impl DirEmit) -> bool {
     true
 }
 
-pub(crate) struct Dir(LockedBy<Cookie>);
-
-impl Dir {
-    /// # Safety
-    /// In readdir or llseek, which the VFS serializes on one open file.
-    unsafe fn cookie(&self) -> &mut Cookie {
-        unsafe { self.0.protected_mut() }
-    }
-}
+pub(crate) struct Dir(LockedBy<Cookie, (), FPos>);
 
 #[vtable]
 impl FileOps for Dir {
@@ -198,15 +190,18 @@ impl FileOps for Dir {
     }
 
     /// A 32-bit reader's positions are cookies, up to READDIR_32_EOF.
-    fn llseek(&self, file: &File<Self>, offset: i64, whence: c_int) -> Result<u64, BchError> {
+    fn llseek(&self, file: &File<Self>, fpos: &mut PosLocked<'_, Self>, offset: i64, whence: c_int)
+        -> Result<u64, BchError>
+    {
         let max = if dirents_32bit(file) { READDIR_32_EOF as u64 } else { u64::MAX };
 
-        // SAFETY: llseek
-        unsafe { self.cookie() }.valid = false;
+        fpos.get_mut_of(&self.0).valid = false;
         file.generic_llseek_size(offset, whence, max, max)
     }
 
-    fn iterate_shared(&self, file: &File<Self>, mut ctx: DirContext<'_>) -> Result<(), BchError> {
+    fn iterate_shared(&self, file: &File<Self>, fpos: &mut PosLocked<'_, Self>, mut ctx: DirContext<'_>)
+        -> Result<(), BchError>
+    {
         let inode = file.inode();
         let fs = inode.fs();
         let hash = &mut str_hash::hash_info_init(fs, &inode.inode())?;
@@ -217,8 +212,7 @@ impl FileOps for Dir {
                 false => Ok(()),
             }
         } else {
-            // SAFETY: readdir
-            let cookie = unsafe { self.cookie() };
+            let cookie = fpos.get_mut_of(&self.0);
             let pos = ctx.pos() as i64;
             let shift = cookie_shift(hash);
             let start = if cookie.valid && cookie.cookie == pos {

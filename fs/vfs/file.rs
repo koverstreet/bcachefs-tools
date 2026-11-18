@@ -73,7 +73,7 @@ use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::snapshots::subvolume;
 use crate::types::CStatic;
-use crate::os::file::{File, FileData, FileOps, FileVTable, Opening};
+use crate::os::file::{File, FileData, FileOps, FileVTable, Opening, PosLocked};
 use crate::os::iov_iter::IovIter;
 use crate::os::kiocb::Kiocb;
 use crate::os::kernel::{current_id, PAGE_SIZE};
@@ -271,7 +271,9 @@ impl FileOps for InodeInfo {
         mmap(vma)
     }
 
-    fn llseek(&self, file: &File<InodeFile>, offset: i64, whence: c_int) -> Result<u64, BchError> {
+    fn llseek(&self, file: &File<InodeFile>, _fpos: &mut PosLocked<'_, Self>, offset: i64, whence: c_int)
+        -> Result<u64, BchError>
+    {
         io::llseek(self, file, offset, whence)
     }
 

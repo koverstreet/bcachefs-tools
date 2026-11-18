@@ -350,6 +350,31 @@ impl File {
     }
 }
 
+/// The position of an open file, held: llseek's and iterate_shared's, which
+/// the VFS serializes on one open file - fdget_pos() takes f_pos_lock, always
+/// for a directory, else unless only this task has the file. What's
+/// LockedBy<_, _, FPos> in the file's private data is theirs, alone - not in
+/// ops another file shares, as a regular file's, its inode's.
+#[cfg(kernel)]
+pub struct PosLocked<'f, O: ?Sized>(&'f O);
+
+/// What a PosLocked holds: an open file's position.
+#[cfg(kernel)]
+pub enum FPos {}
+
+#[cfg(kernel)]
+impl<O: FileOps<Data = O>> crate::locking::Guard for PosLocked<'_, O> {
+    type Name = FPos;
+    type Root = O;
+
+    fn root(&self) -> &O {
+        self.0
+    }
+}
+
+#[cfg(kernel)]
+impl<O: FileOps<Data = O>> crate::locking::Alone for PosLocked<'_, O> {}
+
 /// One read, from the start of the file at @path: enough for a sysfs
 /// attribute, which hands over its value in one go.
 pub fn read_file(path: &CStr, buf: &mut [u8]) -> Result<usize, BchError> {
@@ -466,9 +491,25 @@ crate::vfs_ops! {
     fn compat_ioctl(&self = file, file: &File<Self::Data>, cmd: c_uint, arg: CUlong) -> CLong;
     /// The new position.
     #[cfg(kernel)]
-    fn llseek(&self = file, file: &File<Self::Data>, offset: i64, whence: c_int) -> Result<u64, BchError>;
+    fn llseek(&self = file, file: &File<Self::Data>, fpos: &mut PosLocked<'_, Self>, offset: i64, whence: c_int)
+        -> Result<u64, BchError>
+        => extern (file: *mut c::file, offset: c::loff_t, whence: c_int) -> c::loff_t
+    {
+        // the VFS holds the file's position across the call
+        let ops = unsafe { P::ops_of(file) };
+        let r = ops.llseek(unsafe { File::<P>::of_raw(file) }, &mut PosLocked(ops), offset, whence);
+        crate::os::ops::IntoRaw::into_raw(r)
+    };
     #[cfg(kernel)]
-    fn iterate_shared(&self = file, file: &File<Self::Data>, ctx: DirContext<'_>) -> Result<(), BchError>;
+    fn iterate_shared(&self = file, file: &File<Self::Data>, fpos: &mut PosLocked<'_, Self>, ctx: DirContext<'_>)
+        -> Result<(), BchError>
+        => extern (file: *mut c::file, ctx: *mut c::dir_context) -> c_int
+    {
+        // the VFS holds the file's position across the call
+        let ops = unsafe { P::ops_of(file) };
+        let ctx = unsafe { <DirContext<'_> as crate::os::ops::FromRaw>::from_raw(ctx) };
+        crate::errcode::ret_to_class(ops.iterate_shared(unsafe { File::<P>::of_raw(file) }, &mut PosLocked(ops), ctx))
+    };
     #[cfg(kernel)]
     fn fsync(&self = file, file: &File<Self::Data>, start: i64, end: i64, datasync: c_int)
         -> Result<(), BchError>;
