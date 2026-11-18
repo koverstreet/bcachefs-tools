@@ -433,7 +433,11 @@ impl HeldFolio<'_> {
     }
 }
 
-unsafe impl FsMapping for InodeInfo {}
+impl FsMapping for InodeInfo {
+    fn aops() -> &'static CStatic<c::address_space_operations, InodeInfo> {
+        &INODE_AOPS
+    }
+}
 
 #[vtable]
 impl AddressSpaceOps for InodeInfo {

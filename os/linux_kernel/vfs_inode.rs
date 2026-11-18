@@ -27,7 +27,7 @@ use crate::util::ffi::c_char;
 use crate::os::kernel::loff;
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::os::file::{Any, FileData, FileOps};
-use crate::os::folio::AddressSpaceOps;
+use crate::os::folio::FsMapping;
 use crate::os::inode_ops::InodeOps;
 use crate::os::super_block::{IsInode, SuperBlock, SuperOps};
 use crate::types::CStatic;
@@ -445,14 +445,6 @@ impl<S: SuperOps, St> VfsInode<S, St> {
         // kernel crate's: the same struct
         unsafe { (*self.as_ptr()).__bindgen_anon_3.i_fop = core::ptr::from_ref(&**fop).cast() }
     }
-
-    /// Its page cache's ops: its type's.
-    pub fn set_aops(&mut self, aops: &'static CStatic<c::address_space_operations, S::Inode>)
-        where S::Inode: AddressSpaceOps
-    {
-        // codegen's address_space_operations, a_ops the kernel crate's
-        unsafe { (*(*self.as_ptr()).i_mapping).a_ops = core::ptr::from_ref(&**aops).cast() }
-    }
 }
 
 /// A new inode, its creator's alone: its one reference the creator's, and on
@@ -470,8 +462,15 @@ impl<I: IsInode> NewInode<I> {
     /// An I from its cache, made by @init - whose VfsInode::new() is what
     /// makes its one reference - on @sb. None if there's no memory, as @gfp
     /// allows, or @init fails.
-    pub fn alloc<E>(sb: &SuperBlock<I::Super>, gfp: Flags, init: impl PinInit<I::New, E>) -> Option<Self> {
-        I::cache().alloc_inode(sb, gfp, init).map(NewInode)
+    pub fn alloc<E>(sb: &SuperBlock<I::Super>, gfp: Flags, init: impl PinInit<I::New, E>) -> Option<Self>
+        where I: FsMapping
+    {
+        let p = I::cache().alloc_inode(sb, gfp, init)?;
+        // over the empty ones inode_init_always() set: its page cache's ops,
+        // FsMapping's, from the start. Codegen's address_space_operations,
+        // a_ops the kernel crate's
+        unsafe { (*(*p.as_ptr().cast::<c::inode>()).i_mapping).a_ops = core::ptr::from_ref(&**I::aops()).cast() };
+        Some(NewInode(p))
     }
 
     /// Published by @f - put where others find it, from its address - and its

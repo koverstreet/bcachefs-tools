@@ -38,6 +38,7 @@ use crate::os::iov_iter::IovIter;
 use crate::os::kernel::{cond_resched, loff};
 use crate::os::ops::from_raw;
 use crate::os::super_block::IsInode;
+use crate::types::CStatic;
 use crate::util::alloc::KBox;
 use crate::util::ffi::Opaque;
 use core::borrow::Borrow;
@@ -63,12 +64,11 @@ pub trait FolioPrivate: Sized {
 }
 
 /// An inode whose page cache is its own: it implements the address space
-/// operations its mapping has.
-///
-/// # Safety
-/// Every inode of Self's has as its i_mapping's a_ops a table of
-/// AopsVTable<Self>'s.
-pub unsafe trait FsMapping: IsInode + AddressSpaceOps {
+/// operations its mapping has - aops(), AopsVTable<Self>'s table, which
+/// NewInode::alloc() gives every inode of Self's, and nothing else sets.
+pub trait FsMapping: IsInode + AddressSpaceOps {
+    fn aops() -> &'static CStatic<c::address_space_operations, Self>;
+
     fn mapping(&self) -> Mapping<Self> {
         unsafe { Mapping::from_raw((*core::ptr::from_ref(self).cast::<c::inode>()).i_mapping) }
     }

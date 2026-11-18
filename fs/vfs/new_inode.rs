@@ -24,7 +24,6 @@ use core::ptr::NonNull;
 use pin_init::{pin_init, pin_init_from_closure, Zeroable};
 
 use super::inode::InodeInfo;
-use super::pagecache::INODE_AOPS;
 use crate::os::vfs_inode::{New, VfsInode};
 
 pub(crate) static INODE_CACHE: KmemCache<InodeInfo<New>> = KmemCache::new();
@@ -67,9 +66,6 @@ impl NewInode {
 
         let mut inode = NewInode::alloc(sb, gfp, init)?;
         inode.ei_inodes_idx = slot.into_idx();
-        // From the start, as FsMapping has it: inode_init_always() set the
-        // VFS's empty ones
-        inode.v.set_aops(&INODE_AOPS);
         Some(inode)
     }
 
