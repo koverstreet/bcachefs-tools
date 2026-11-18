@@ -107,6 +107,11 @@ pub struct Completion(NonNull<c::kiocb>);
 unsafe impl Send for Completion {}
 
 impl Completion {
+    /// Its position moved on @bytes, before it's completed: what was written.
+    pub fn advance(&mut self, bytes: u64) {
+        unsafe { (*self.0.as_ptr()).ki_pos += bytes as i64 };
+    }
+
     pub fn complete(self, ret: isize) {
         let k = self.0.as_ptr();
         unsafe { ((*k).ki_complete.expect("an async kiocb's completion"))(k, ret) }

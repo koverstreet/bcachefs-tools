@@ -54,13 +54,15 @@ pub fn pools_exit(q: &Quiesced<'_>) {
     DIOS.exit(q);
 }
 
-enum End {
+/// A dio's end: its kiocb's completion, or its caller waiting - the read's
+/// and the write's.
+pub(super) enum End {
     Async(kiocb::Completion),
     Sync(Return<Result<usize, BchError>, waiter::Sync>),
 }
 
 impl End {
-    fn complete(self, ret: Result<usize, BchError>) {
+    pub(super) fn complete(self, ret: Result<usize, BchError>) {
         match self {
             End::Async(done) => done.complete(ret.into_raw()),
             End::Sync(r) => r.complete(ret),
