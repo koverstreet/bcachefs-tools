@@ -26,7 +26,7 @@ use crate::btree::iter::BtreeTrans;
  */
 #[pin_data]
 #[repr(C)]
-#[derive(MaybeZeroable, TypeInfo)]
+#[derive(TypeInfo)]
 pub struct InodeInfo {
     #[pin]
     pub v: VfsInode,
@@ -75,10 +75,6 @@ pub struct InodeInfo {
     #[pin]
     pub ei_writeback_timer: DelayedWork,
 }
-
-// SAFETY: all zeroes is valid - an inode's locks and timer are only zeroes
-// until their init
-unsafe impl ::pin_init::Zeroable for InodeInfo {}
 
 #[bch_enum(closed)]
 #[repr(u32)]

@@ -61,7 +61,12 @@ impl NewInode {
             ei_quota <- new_lock!(InodeQuota { ei_qid: Default::default(), ei_quota_reserved: 0 },
                                   "&inode->ei_quota_lock"),
             ei_writeback_timer <- crate::new_delayed_work!(run_raw::<InodeInfo>, "&inode->ei_writeback_timer"),
-            ..Zeroable::init_zeroed()
+            ei_inum: Zeroable::zeroed(),
+            ei_inodes_idx: 0,
+            ei_flags: Zeroable::zeroed(),
+            ei_last_dirtied: Zeroable::zeroed(),
+            ei_devs_need_flush: Zeroable::zeroed(),
+            ei_inode: Zeroable::zeroed(),
         });
 
         let mut inode = NewInode(INODE_CACHE.alloc_inode(sb, gfp, init)?);

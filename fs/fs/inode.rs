@@ -87,7 +87,7 @@ macro_rules! __bch_inode_unpacked_0 {
         /// one writer at a time, read without a lock, field by field - and
         /// laid out as it is, so C has it as one.
         #[repr(C)]
-        #[derive(TypeInfo, BitfieldMembers)]
+        #[derive(MaybeZeroable, TypeInfo, BitfieldMembers)]
         pub struct VolatileInodeUnpacked {
             $($(#[$m])* pub $f: Volatile<$ft>,)*
             $(pub $_name: Volatile<[<u $_bits>]>,)*
