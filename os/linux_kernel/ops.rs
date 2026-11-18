@@ -9,7 +9,8 @@
 //! private pointer points to, Impl the implementor had from it - P itself
 //! for the VFS's, P::Ops for a file's. After it, `type Foo: Bound;` is an
 //! associated type, what the filesystem's types are - its inode's, say -
-//! which ops name as Self::Foo.
+//! which ops name as Self::Foo; then `const FOO: T = default;`, which an
+//! impl may set, for the header's `|ops| { }` to read.
 //!
 //! An op is its Rust signature. From it come the trait method - unreachable
 //! unless given a body; #[vtable] sets HAS_* for what an impl has - the
@@ -161,6 +162,7 @@ macro_rules! vfs_ops {
         $vis:vis trait $Trait:ident $(: $sup:ident $(+ $sups:ident)*)? for $Ops:ty,
             $VTable:ident<$P:ident: $Bound:path> = $Impl:ty $(, |$o:ident| $init:block)?;
         $( type $Assoc:ident $(: $AssocBound:path)?; )*
+        $( const $Const:ident: $ConstTy:ty = $ConstV:expr; )*
         $( $(#[doc = $doc:expr])* $(#[cfg($cfg:meta)])*
            fn $name:ident ( $(&self = $sa:ident ,)? $($arg:ident : $ty:ty),* $(,)? )
               $(-> $ret:ty)? $({ $($body:tt)* })?
@@ -174,6 +176,7 @@ macro_rules! vfs_ops {
         $(#[$tm])*
         $vis trait $Trait: Sized + 'static $(+ $sup $(+ $sups)*)? {
             $( type $Assoc $(: $AssocBound)?; )*
+            $( const $Const: $ConstTy = $ConstV; )*
             $(
                 $(#[cfg($cfg)])*
                 const [<HAS_ $name:upper>]: bool = $crate::vfs_ops!(@has $({ $($body)* })?);
