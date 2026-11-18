@@ -10,13 +10,12 @@
 
 use super::inode::InodeInfo;
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, SpinLockIrq};
 use crate::os::folio;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{AcqRel, Relaxed};
-use kernel::page::PAGE_SHIFT;
 
 pub type Folio = folio::Folio<InodeInfo>;
 pub type FolioGuard<'a> = folio::FolioGuard<'a, InodeInfo>;
@@ -159,9 +158,7 @@ impl Mapping {
                 return Ok(());
             }
 
-            match ret_to_result_void(unsafe {
-                c::invalidate_inode_pages2_range(self.as_ptr(), (start >> PAGE_SHIFT) as _, (end >> PAGE_SHIFT) as _)
-            }) {
+            match self.invalidate_range(start, end) {
                 Err(e) if e.matches(c::EBUSY) => {}
                 r => return r,
             }

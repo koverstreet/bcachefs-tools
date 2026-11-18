@@ -48,6 +48,7 @@ use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::{ControlFlow, Deref};
 use core::ptr::NonNull;
+use kernel::page::PAGE_SHIFT;
 
 /// A folio's private data: made for a folio of a size, and freed knowing it -
 /// a folio's size doesn't change while it has private data, which is
@@ -502,6 +503,14 @@ impl<A> Mapping<A> {
     /// whoever sees it first - a file's own is File::write_and_wait_range().
     pub fn write_and_wait_range(self, start: u64, end: u64) -> Result<(), BchError> {
         ret_to_result_void(unsafe { c::filemap_write_and_wait_range(self.as_ptr(), loff(start), loff(end)) })
+    }
+
+    /// Its pages from byte @start to @end, inclusive, dropped - EBUSY if one
+    /// couldn't be: invalidate_inode_pages2_range().
+    pub fn invalidate_range(self, start: u64, end: u64) -> Result<(), BchError> {
+        ret_to_result_void(unsafe {
+            c::invalidate_inode_pages2_range(self.as_ptr(), (start >> PAGE_SHIFT) as _, (end >> PAGE_SHIFT) as _)
+        })
     }
 
     /// Writeback of its dirty pages started, not waited on: filemap_flush().
