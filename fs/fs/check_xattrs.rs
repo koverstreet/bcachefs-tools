@@ -28,10 +28,10 @@ use crate::xattr::Xattrs;
 use crate::{fsck_err_on, inode, str_hash};
 use crate::format::Btree;
 
-struct CheckXattrs {
+struct CheckXattrs<'f> {
     s:         SnapshotsSeen,
     inode:     InodeWalker,
-    hash_info: c::bch_hash_info,
+    hash_info: c::bch_hash_info<'f>,
 }
 
 /// The inode flag a POSIX ACL xattr needs.
@@ -65,7 +65,7 @@ fn check_xattr<'t>(
     t:    &TransAttempt<'_, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
-    st:   &mut CheckXattrs,
+    st:   &mut CheckXattrs<'t>,
 ) -> Result<(), BchError> {
     let fs = t.fs();
 

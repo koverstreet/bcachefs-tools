@@ -285,7 +285,7 @@ fn init_security(t: &TransAttempt<'_, '_>, dir: &InodeInfo, inode: &mut NewInode
 struct InitXattrs<'a, 'b, 'f> {
     t:    &'a TransAttempt<'b, 'f>,
     inum: c::subvol_inum,
-    hash: c::bch_hash_info,
+    hash: c::bch_hash_info<'f>,
 }
 
 /// security_inode_init_security()'s: the xattrs the LSMs made, set.

@@ -39,11 +39,11 @@ use crate::{inode, namei, str_hash};
 use core::ops::ControlFlow;
 use crate::format::{Btree, BkeyType};
 
-struct CheckDirents {
+struct CheckDirents<'f> {
     s:                SnapshotsSeen,
     dir:              InodeWalker,
     target:           InodeWalker,
-    hash_info:        c::bch_hash_info,
+    hash_info:        c::bch_hash_info<'f>,
     need_second_pass: bool,
 }
 
@@ -457,7 +457,7 @@ fn check_dirent<'t>(
     t:    &TransAttempt<'_, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
-    st:   &mut CheckDirents,
+    st:   &mut CheckDirents<'t>,
 ) -> Result<(), BchError> {
     let fs = t.fs();
 

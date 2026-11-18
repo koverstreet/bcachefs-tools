@@ -35,6 +35,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::AnyKeySC;
 use crate::data_structures::dst_room::DstRoom;
+use crate::os::unicode::UnicodeMap;
 use crate::util::vstructs::{plain_bytes_mut, Unvalidated, Validated};
 use crate::c;
 use crate::errcode::{Errcode, BchError, Found};
@@ -1704,14 +1705,10 @@ pub fn init(
 
 // ── Options and casefolding ──────────────────────────────────────────────
 
-/// The unicode map directory @inode's names are casefolded with, or NULL if
-/// it isn't casefolded: for its bch_hash_info.
-pub fn cf_encoding(fs: &Fs, inode: &c::bch_inode_unpacked) -> *mut c::unicode_map {
-    if inode.casefold(fs) {
-        fs.cf_encoding.load(core::sync::atomic::Ordering::Relaxed)
-    } else {
-        core::ptr::null_mut()
-    }
+/// The unicode map directory @inode's names are casefolded with, if it's
+/// casefolded: for its bch_hash_info.
+pub fn cf_encoding<'f>(fs: &'f Fs, inode: &c::bch_inode_unpacked) -> Option<&'f UnicodeMap> {
+    fs.cf_encoding.as_ref().filter(|_| inode.casefold(fs))
 }
 
 /// Set casefolding on directory @inode, @inum, to @v: it has to be empty -

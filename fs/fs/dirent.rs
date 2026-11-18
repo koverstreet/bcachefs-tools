@@ -38,15 +38,13 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::errcode::{Errcode, BchError};
-#[cfg(CONFIG_UNICODE)]
-use crate::errcode::ret_to_result_void as ret_to_result;
 use crate::format::{Bpos, Btree, BkeyType};
 use crate::fs::Fs;
 use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
-use crate::os::kernel::likely;
-use crate::util::os_str::{qstr, OsStr, OsStrExt};
+use crate::os::unicode::UnicodeMap;
+use crate::util::os_str::{OsStr, OsStrExt};
 use core::ops::ControlFlow;
 
 // ── A valid dirent ───────────────────────────────────────────────────────
@@ -173,17 +171,20 @@ pub fn init_name(
         return Err(BchError::from(c::ENAMETOOLONG));
     }
 
-    let casefold = !hash_info.cf_encoding.is_null();
+    let casefold = hash_info.cf_encoding.is_some();
     debug_assert!(casefold || cf_name.is_none(), "a casefolded name for a dirent that isn't");
     k.v_mut().set_d_casefold(casefold as u8);
 
-    let end = if !casefold {
-        let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
-        v[D_NAME_OFFSET..][..name.len()].copy_from_slice(name);
-        D_NAME_OFFSET + name.len()
-    } else {
-        fs.casefold_enabled()?;
-        casefold_name(k, hash_info, name, cf_name)?
+    let end = match hash_info.cf_encoding {
+        None => {
+            let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
+            v[D_NAME_OFFSET..][..name.len()].copy_from_slice(name);
+            D_NAME_OFFSET + name.len()
+        }
+        Some(map) => {
+            fs.casefold_enabled()?;
+            casefold_name(k, map, name, cf_name)?
+        }
     };
 
     // NUL padding to the end of the u64: what the name's length is read from.
@@ -200,10 +201,10 @@ pub fn init_name(
 /// their lengths. Where the names end.
 #[cfg(CONFIG_UNICODE)]
 fn casefold_name(
-    k:         &mut BkeyI<c::Dirent>,
-    hash_info: &c::bch_hash_info,
-    name:      &[u8],
-    cf_name:   Option<&[u8]>,
+    k:       &mut BkeyI<c::Dirent>,
+    map:     &UnicodeMap,
+    name:    &[u8],
+    cf_name: Option<&[u8]>,
 ) -> Result<usize, BchError> {
     let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
     let (names, out) = v[D_NAMES_OFFSET..].split_at_mut(name.len());
@@ -214,7 +215,7 @@ fn casefold_name(
             out[..cf.len()].copy_from_slice(cf);
             cf.len()
         }
-        None => utf8_casefold(hash_info, OsStr::from_bytes(name), out)?,
+        None => map.casefold(OsStr::from_bytes(name), out)?,
     };
 
     let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
@@ -226,15 +227,14 @@ fn casefold_name(
     Ok(D_NAMES_OFFSET + name.len() + cf_len)
 }
 
-/// Without CONFIG_UNICODE, bch2_fs_casefold_enabled() has refused already.
 #[cfg(not(CONFIG_UNICODE))]
 fn casefold_name(
-    _k:         &mut BkeyI<c::Dirent>,
-    _hash_info: &c::bch_hash_info,
-    _name:      &[u8],
-    _cf_name:   Option<&[u8]>,
+    _k:       &mut BkeyI<c::Dirent>,
+    map:      &UnicodeMap,
+    _name:    &[u8],
+    _cf_name: Option<&[u8]>,
 ) -> Result<usize, BchError> {
-    unreachable!("casefolding without CONFIG_UNICODE")
+    match *map {}
 }
 
 /// A new dirent in directory @dir named @name, of type @d_type, pointing at
@@ -324,37 +324,27 @@ pub fn create(
 
 // ── Casefolding ──────────────────────────────────────────────────────────
 
-/// @name casefolded under @info's encoding, into @out: how long it is - as
-/// utf8_casefold().
-#[cfg(CONFIG_UNICODE)]
-fn utf8_casefold(info: &c::bch_hash_info, name: &OsStr, out: &mut [u8]) -> Result<usize, BchError> {
-    let ret = unsafe { c::utf8_casefold(info.cf_encoding, &qstr(name), out.as_mut_ptr(), out.len()) };
-    ret_to_result(ret.min(0))?;
-    Ok(ret as usize)
-}
-
-/// @name casefolded under @info's encoding, in transaction memory: as
-/// bch2_casefold().
+/// @name casefolded with @map, in transaction memory: as bch2_casefold().
 #[cfg(CONFIG_UNICODE)]
 pub fn casefold<'a>(
     t:    &TransAttempt<'a, '_>,
-    info: &c::bch_hash_info,
+    map:  &UnicodeMap,
     name: &OsStr,
 ) -> Result<&'a OsStr, BchError> {
     t.fs().casefold_enabled()?;
 
     let buf = t.kmalloc(c::BCH_NAME_MAX as usize + 1)?;
-    let len = utf8_casefold(info, name, buf)?;
+    let len = map.casefold(name, buf)?;
     Ok(OsStr::from_bytes(&buf[..len]))
 }
 
 #[cfg(not(CONFIG_UNICODE))]
 pub fn casefold<'a>(
-    t:     &TransAttempt<'a, '_>,
-    _info: &c::bch_hash_info,
+    _t:    &TransAttempt<'a, '_>,
+    map:   &UnicodeMap,
     _name: &OsStr,
 ) -> Result<&'a OsStr, BchError> {
-    Err(t.fs().err(Errcode::no_casefolding_without_utf8))
+    match *map {}
 }
 
 /// The name @name is hashed and looked up by in a directory with @info -
@@ -364,10 +354,9 @@ pub fn maybe_casefold<'a>(
     info: &c::bch_hash_info,
     name: &'a OsStr,
 ) -> Result<&'a OsStr, BchError> {
-    if likely(info.cf_encoding.is_null()) {
-        Ok(name)
-    } else {
-        casefold(t, info, name)
+    match info.cf_encoding {
+        None      => Ok(name),
+        Some(map) => casefold(t, map, name),
     }
 }
 
@@ -683,7 +672,7 @@ pub fn rename(
         r.src_offset = dst_pos.offset;
     }
 
-    let cf = |hash: &c::bch_hash_info, lookup| (!hash.cf_encoding.is_null()).then_some(lookup);
+    let cf = |hash: &c::bch_hash_info, lookup| hash.cf_encoding.is_some().then_some(lookup);
 
     // Untyped, as new_src may be a deletion or a whiteout:
     let mut new_dst: TransBkey<'_, '_> = {

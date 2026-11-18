@@ -19,6 +19,11 @@ use crate::util::refcount::AtomicRef;
 use crate::os::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, Mutex, MutexNoio, PercpuRwsemNoio, RwSem, SpinLockIrq};
 use crate::os::percpu::{Counters, PerCpu};
+use crate::os::unicode::UnicodeMap;
+#[cfg(kernel)]
+use kernel::sync::SetOnce;
+#[cfg(not(kernel))]
+use bcachefs_shim::sync::SetOnce;
 use crate::data_structures::genradix::SharedGenRadix;
 use crate::types::{bits_to_longs};
 use crate::util::rcu::RcuHead;
@@ -555,7 +560,8 @@ pub struct Fs {
     pub sb: Placed<MutexNoio<c::bch_fs_sb, c::bch_sb_cpu>, crate::at!(Fs.sb)>,
     pub incompat_versions_requested: crate::data_structures::bitmap::AtomicBitArray<{
         bits_to_longs(c::MetadataVersion::CURRENT.minor() as usize) }>,
-    pub cf_encoding: AtomicPtr<c::unicode_map>,
+    #[init(SetOnce::new())]
+    pub cf_encoding: SetOnce<UnicodeMap>,
 
     #[init((options.block_size >> 9).ilog2() as c_ushort)]
     pub block_bits: c_ushort, /* ilog2(block_size) */

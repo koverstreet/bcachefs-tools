@@ -17,6 +17,7 @@ use crate::init::error::id;
 use crate::inode;
 use crate::snapshots::{snapshot, subvolume};
 use crate::os::checksum::{Checksum, Crc32c, Crc64};
+use crate::os::unicode::UnicodeMap;
 // a glob: userspace's are RustCrypto's, called through their traits
 use crate::os::crypto::*;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
@@ -26,16 +27,16 @@ use crate::util::Printbuf;
 use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
 use bitflags::bitflags;
-use cstruct_macros::{MaybeZeroable, TypeInfo};
+use cstruct_macros::MaybeZeroable;
 use crate::format::{Bpos, Btree, BkeyType, SbFeature};
 
 #[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
-pub struct bch_hash_info {
+#[derive(Clone, Copy, MaybeZeroable)]
+pub struct bch_hash_info<'f> {
     pub inum_snapshot: u32,
     pub type_: c::StrHashKind,
     pub is_31bit: bool,
-    pub cf_encoding: *mut c::unicode_map,
+    pub cf_encoding: Option<&'f UnicodeMap>,
     /*
      * For crc32 or crc64 string hashes the first key value of
      * the siphash_key (k0) is used as the key.
@@ -385,7 +386,7 @@ pub fn new_inode_type(fs: &Fs) -> c::StrHashKind {
 
 /// Without hash_info_init()'s check that casefolding is enabled: for comparing
 /// hash info, not hashing with it.
-pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_hash_info {
+pub fn hash_info_init_unchecked<'f>(fs: &'f Fs, inode: &c::bch_inode_unpacked) -> c::bch_hash_info<'f> {
     let mut info = c::bch_hash_info {
         inum_snapshot: inode.bi_snapshot,
         type_:         inode.str_hash(),
@@ -410,12 +411,14 @@ impl PartialEq for c::SIPHASH_KEY {
 }
 
 /// Field by field: memcmp() would compare padding.
-impl PartialEq for c::bch_hash_info {
+impl PartialEq for c::bch_hash_info<'_> {
     fn eq(&self, other: &Self) -> bool {
+        let map = |i: &Self| i.cf_encoding.map(core::ptr::from_ref);
+
         self.inum_snapshot == other.inum_snapshot &&
         self.type_         == other.type_ &&
         self.is_31bit      == other.is_31bit &&
-        self.cf_encoding   == other.cf_encoding &&
+        map(self)          == map(other) &&
         self.siphash_key   == other.siphash_key
     }
 }
@@ -423,11 +426,11 @@ impl PartialEq for c::bch_hash_info {
 /// @inode's string hash: its type and seed, and if it's a casefolded
 /// directory, the unicode map to fold names with - which the filesystem has to
 /// have.
-pub fn hash_info_init(
-    fs:    &Fs,
+pub fn hash_info_init<'f>(
+    fs:    &'f Fs,
     inode: &c::bch_inode_unpacked,
-) -> Result<c::bch_hash_info, BchError> {
-    if inode.casefold(fs) && fs.cf_encoding.load(core::sync::atomic::Ordering::Relaxed).is_null() {
+) -> Result<c::bch_hash_info<'f>, BchError> {
+    if inode.casefold(fs) && fs.cf_encoding.as_ref().is_none() {
         return fs.throw(Errcode::casefold_dir_but_disabled);
     }
     Ok(hash_info_init_unchecked(fs, inode))
@@ -475,7 +478,7 @@ fn needs_check<'k, T: HashTable>(hash_info: &c::bch_hash_info, k: BkeySC<'k>)
 {
     let k = k.arm::<T::Val>()?;
     let miscased = k.arm::<c::Dirent>().map(|k| k.v())
-        .is_some_and(|d| (d.d_casefold() != 0) == hash_info.cf_encoding.is_null());
+        .is_some_and(|d| (d.d_casefold() != 0) == hash_info.cf_encoding.is_none());
 
     (T::hash_bkey(hash_info, k) != k.k.p.offset || miscased).then_some(k)
 }
@@ -583,13 +586,13 @@ impl Seen<'_> {
 }
 
 /// What the repairs for one key share.
-struct Repair<'r> {
+struct Repair<'r, 'f> {
     s:                    Seen<'r>,
-    hash_info:            &'r mut c::bch_hash_info,
+    hash_info:            &'r mut c::bch_hash_info<'f>,
     updated_before_k_pos: &'r mut bool,
 }
 
-impl Repair<'_> {
+impl Repair<'_, '_> {
     /// @new, at @pos, may be a dirent that moved: point its inodes at it.
     fn update_backpointers<T: HashTable>(
         &mut self,
@@ -771,7 +774,7 @@ impl Repair<'_> {
         let fs = t.fs();
         let d = Dirent::new(k).expect("a dirent");
 
-        if !fsck_err_on!(t, (d.v().d_casefold() != 0) == self.hash_info.cf_encoding.is_null(),
+        if !fsck_err_on!(t, (d.v().d_casefold() != 0) == self.hash_info.cf_encoding.is_none(),
                          id::dirent_casefold_mismatch,
                          "dirent casefold does not match dir casefold\n{}", k.to_text(fs))? {
             return Ok(());

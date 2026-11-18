@@ -415,7 +415,7 @@ fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), 
     let have_u64s = k.as_u64s().len();
     k.k_mut().u64s = have_u64s.min(u8::MAX as usize) as u8;
 
-    // Only cf_encoding is read, and NULL means not casefolded:
+    // Only cf_encoding is read, and None means not casefolded:
     let hash_info = ::pin_init::zeroed::<c::bch_hash_info>();
     let k = k.as_mut().arm::<c::Dirent>().expect("a dirent");
     super::init_name(fs, k, &hash_info, OsStr::from_bytes(val.as_bytes()), None)

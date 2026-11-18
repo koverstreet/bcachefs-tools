@@ -345,8 +345,8 @@ impl<T: FsType> NewSuper<T> {
     /// # Safety
     /// @map is live until kill_sb - generic_shutdown_super() is its last user.
     #[cfg(CONFIG_UNICODE)]
-    pub unsafe fn set_encoding(&mut self, map: *mut c::unicode_map) {
-        unsafe { (*self.raw()).s_encoding = map.cast() };
+    pub unsafe fn set_encoding(&mut self, map: &crate::os::unicode::UnicodeMap) {
+        unsafe { (*self.raw()).s_encoding = map.as_ptr().cast() };
     }
 
     /// Its root, made from @root's reference - d_make_root() - which makes it

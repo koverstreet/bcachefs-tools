@@ -497,17 +497,14 @@ impl Fs {
         #[cfg(CONFIG_UNICODE)]
         if self.casefold_enabled().is_ok() {
             /* Default encoding until we can potentially have more as an option. */
-            let enc = unsafe { c::utf8_load(BCH_FS_DEFAULT_UTF8_ENCODING) };
-            match NonNull::new(enc).map(crate::errcode::errptr_to_result) {
-                Some(Ok(enc)) => self.cf_encoding.store(enc.as_ptr(), Relaxed),
-                _ => {
-                    prt!(out, "Cannot load UTF-8 encoding for filesystem. Version: {}.{}.{}\n",
-                         BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
-                         (BCH_FS_DEFAULT_UTF8_ENCODING >> 8) & 0xff,
-                         BCH_FS_DEFAULT_UTF8_ENCODING & 0xff);
-                    return self.throw(Errcode::EINVAL_utf8_load_failed);
-                }
-            }
+            let Some(enc) = crate::os::unicode::UnicodeMap::load(BCH_FS_DEFAULT_UTF8_ENCODING) else {
+                prt!(out, "Cannot load UTF-8 encoding for filesystem. Version: {}.{}.{}\n",
+                     BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
+                     (BCH_FS_DEFAULT_UTF8_ENCODING >> 8) & 0xff,
+                     BCH_FS_DEFAULT_UTF8_ENCODING & 0xff);
+                return self.throw(Errcode::EINVAL_utf8_load_failed);
+            };
+            self.cf_encoding.populate(enc);
         }
         #[cfg(not(CONFIG_UNICODE))]
         if self.feature(SbFeature::casefolding) {
@@ -640,7 +637,7 @@ impl Fs {
         /* this really should be part of our one multi line mount message, but -
          * xfstests... */
         #[cfg(CONFIG_UNICODE)]
-        if !self.cf_encoding.load(Relaxed).is_null() {
+        if self.cf_encoding.as_ref().is_some() {
             crate::bch_info!(self, "Using encoding defined by superblock: utf8-{}.{}.{}",
                       BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
                       (BCH_FS_DEFAULT_UTF8_ENCODING >> 8) & 0xff,
@@ -913,9 +910,6 @@ unsafe fn release(p: *mut Fs) {
     let fs = unsafe { &*p };
 
     journal_keys_put_initial(fs);
-
-    #[cfg(CONFIG_UNICODE)]
-    unsafe { c::utf8_unload(fs.cf_encoding.load(Relaxed)) };
 
     fs.reconcile_stop();
     fs.copygc_stop();
