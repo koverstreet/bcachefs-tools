@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
-use crate::os::file::{FileData, FileVTable};
+use crate::os::file::{Any, FileData, FileOps, FileVTable};
 use crate::os::module::{ModuleExit, ThisModule};
 use crate::types::CStatic;
 
@@ -26,7 +26,9 @@ impl Chrdev {
     }
 
     /// A dynamic major, its minors opened as @P's files.
-    pub fn register<P: FileData>(&'static self, _: &ThisModule) -> Result<(), BchError> {
+    pub fn register<P: FileData>(&'static self, _: &ThisModule) -> Result<(), BchError>
+        where P::Ops: FileOps<Inode = Any>
+    {
         // SAFETY: a name, and ops that last
         let major = unsafe {
             c::__register_chrdev(0, 0, 256, self.name.as_ptr().cast(), &FileVTable::<P>::OPS)

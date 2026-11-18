@@ -164,13 +164,17 @@ from_raw! {
     OpeningTmpfile<'a, I> [I: IsInode] = *mut c::file => |r| OpeningTmpfile(File::from_raw(r), PhantomData);
 }
 
-/// A file of a filesystem's own: its inode one of the filesystem's.
-///
-/// # Safety
-/// Every open file of Self's has an Inode as its f_inode.
+/// A file of a filesystem's own, its ops' Inode a filesystem's inode type:
+/// its f_inode one of those, as only VfsInode::set_fop() puts its table on
+/// an inode, and only on one of that type.
 #[cfg(kernel)]
-pub unsafe trait FsFile: FileData {
+pub trait FsFile: FileData {
     type Inode: IsInode;
+}
+
+#[cfg(kernel)]
+impl<D: FileData> FsFile for D where <D::Ops as FileOps>::Inode: IsInode {
+    type Inode = <D::Ops as FileOps>::Inode;
 }
 
 #[cfg(kernel)]
@@ -391,6 +395,9 @@ crate::vfs_ops! {
         }
     };
     type Data: FileData<Ops = Self>;
+    // The inode its files are on: a filesystem's inode type, for a table an
+    // inode carries - set_fop()'s - or Any, for a file of no inode of ours
+    type Inode;
     // Each open takes a reference on the module - not where something that
     // outlives the file holds one, as a mounted filesystem's mount does
     const MODULE_REF: bool = true;
@@ -600,7 +607,9 @@ pub struct NewFile<P: FileData> {
 impl<P: FileData> NewFile<P> {
     /// An anonymous inode's file, of @data, named for the caller: O_CLOEXEC,
     /// readable and writable as its ops are.
-    pub fn new(data: Pin<KBox<P>>) -> Result<Self, BchError> {
+    pub fn new(data: Pin<KBox<P>>) -> Result<Self, BchError>
+        where P::Ops: FileOps<Inode = Any>
+    {
         let name = current_comm();
         let flags = c::O_CLOEXEC | match (<P::Ops>::HAS_READ, <P::Ops>::HAS_WRITE) {
             (true,  true)  => c::O_RDWR,

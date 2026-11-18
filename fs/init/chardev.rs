@@ -42,7 +42,7 @@ use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
 use crate::util::place::Placed;
 use crate::os::chrdev::{self, Chrdev, Class, Device};
-use crate::os::file::{File, FileOps, UserBuf};
+use crate::os::file::{Any, File, FileOps, UserBuf};
 use crate::os::kobject::Kobject;
 use crate::os::module::{ModuleExit, ThisModule};
 use crate::os::ioctl::{arg, inout, input, output, vstruct, UserArg, UserStr, UserVstruct};
@@ -688,6 +688,7 @@ fn data_job(job: &DataJob, _write_ref: WriteRef) {
 #[vtable]
 impl FileOps for DataJob {
     type Data = Inner<Self>;
+    type Inode = Any;
 
     fn read(&self, _file: &File<Self::Data>, buf: &mut UserBuf) -> Result<(), BchError> {
         type Event = c::bch_ioctl_data_event;
@@ -832,6 +833,7 @@ struct Ctl;
 #[vtable]
 impl FileOps for Ctl {
     type Data = Self;
+    type Inode = Any;
 
     fn open(inode: &Opaque<c::inode>, file: &File) -> Result<Pin<KBox<Self>>, BchError> {
         file.nonseekable_open(inode)?;

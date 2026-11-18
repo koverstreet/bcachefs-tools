@@ -42,7 +42,7 @@ use crate::str_hash;
 use crate::util::alloc::KBox;
 use kernel::alloc::flags;
 use crate::util::ffi::Opaque;
-use crate::os::file::{File, FileOps, FileVTable, FsFile, UserBuf};
+use crate::os::file::{File, FileOps, FileVTable, UserBuf};
 use crate::types::CStatic;
 use cstruct_macros::vtable;
 
@@ -177,13 +177,10 @@ impl Dir {
     }
 }
 
-unsafe impl FsFile for Dir {
-    type Inode = InodeInfo;
-}
-
 #[vtable]
 impl FileOps for Dir {
     type Data = Self;
+    type Inode = InodeInfo;
 
     // As a regular file's (file.rs): no module reference by each open
     const MODULE_REF: bool = false;

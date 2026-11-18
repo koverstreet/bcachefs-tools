@@ -12,7 +12,7 @@ use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::util::alloc::{kbox_pin_init, KBox};
 use crate::util::ffi::Opaque;
-use crate::os::file::{File, FileOps, FileVTable};
+use crate::os::file::{Any, File, FileOps, FileVTable};
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::pin::Pin;
@@ -45,6 +45,7 @@ unsafe impl<F: DebugFile> Sync for Open<F> {}
 #[vtable]
 impl<F: DebugFile> FileOps for Open<F> {
     type Data = Self;
+    type Inode = Any;
 
     fn open(inode: &Opaque<c::inode>, _file: &File) -> Result<Pin<KBox<Self>>, BchError> {
         // SAFETY: i_private is create_file()'s @obj, live for each op:

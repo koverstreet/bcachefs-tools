@@ -73,7 +73,7 @@ use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::snapshots::subvolume;
 use crate::types::CStatic;
-use crate::os::file::{File, FileData, FileOps, FileVTable, FsFile, Opening};
+use crate::os::file::{File, FileData, FileOps, FileVTable, Opening};
 use crate::os::iov_iter::IovIter;
 use crate::os::kiocb::Kiocb;
 use crate::os::kernel::{current_id, PAGE_SIZE};
@@ -210,7 +210,7 @@ impl FileData for InodeFile {
 
     unsafe fn ops_of<'a>(file: *mut c::file) -> &'a InodeInfo {
         // SAFETY: an open file of ours: its inode's referenced while it's open
-        unsafe { InodeInfo::from_inode((*file).f_inode) }
+        unsafe { File::<Self>::of_raw(file) }.inode()
     }
 
     /// Writeback started, if a truncate to zero asked for it: see
@@ -222,10 +222,6 @@ impl FileData for InodeFile {
             let _ = inode.vfs().mapping().flush();
         }
     }
-}
-
-unsafe impl FsFile for InodeFile {
-    type Inode = InodeInfo;
 }
 
 /// A shared writable mapping is refused once the filesystem's gone emergency
@@ -245,6 +241,7 @@ fn mmap(mut vma: VmArea<'_, InodeFile>) -> Result<(), BchError> {
 #[vtable]
 impl FileOps for InodeInfo {
     type Data = InodeFile;
+    type Inode = InodeInfo;
 
     // The mount holds the module, and an open of a regular file is hot
     const MODULE_REF: bool = false;

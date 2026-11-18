@@ -24,7 +24,7 @@ use crate::os::folio::Mapping;
 use crate::util::ffi::c_char;
 use crate::os::kernel::loff;
 use crate::os::posix_acl::{AclType, PosixAcl};
-use crate::os::file::Any;
+use crate::os::file::{Any, FileData, FileOps};
 use crate::os::folio::AddressSpaceOps;
 use crate::os::inode_ops::InodeOps;
 use crate::os::super_block::{SuperBlock, SuperOps};
@@ -378,13 +378,6 @@ impl<S> VfsInode<S> {
         unsafe { (*self.as_ptr()).i_generation = generation }
     }
 
-    // XXX: any file ops - FileOps doesn't say whose inode's they are
-    pub fn set_fop(&mut self, fop: &'static c::file_operations) {
-        // in a union with free_inode; codegen's file_operations, i_fop the
-        // kernel crate's: the same struct
-        unsafe { (*self.as_ptr()).__bindgen_anon_3.i_fop = core::ptr::from_ref(fop).cast() }
-    }
-
     /// A device, fifo or socket's ops, from its mode and rdev:
     /// init_special_inode().
     pub fn init_special(&mut self) {
@@ -431,6 +424,16 @@ impl<S: SuperOps> VfsInode<S> {
     pub fn set_ops<T: InodeOps<Inode = S::Inode>>(&mut self, iop: &'static CStatic<c::inode_operations, T>) {
         // codegen's inode_operations, i_op the kernel crate's: the same struct
         unsafe { (*self.as_ptr()).i_op = core::ptr::from_ref(&**iop).cast() }
+    }
+
+    /// The ops its files are opened with: of a file type on its type's
+    /// inodes.
+    pub fn set_fop<P: FileData>(&mut self, fop: &'static CStatic<c::file_operations, P>)
+        where P::Ops: FileOps<Inode = S::Inode>
+    {
+        // in a union with free_inode; codegen's file_operations, i_fop the
+        // kernel crate's: the same struct
+        unsafe { (*self.as_ptr()).__bindgen_anon_3.i_fop = core::ptr::from_ref(&**fop).cast() }
     }
 
     /// Its page cache's ops: its type's.

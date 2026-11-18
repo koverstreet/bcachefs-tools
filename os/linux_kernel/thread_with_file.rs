@@ -57,7 +57,7 @@ use crate::types::Fifo;
 use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
 use crate::util::ffi::c_char;
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
-use crate::os::file::{file_data, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
+use crate::os::file::{file_data, Any, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
 use crate::util::futex::EventCount;
 use crate::os::kernel::current_comm;
 use crate::os::kthread::Kthread;
@@ -74,7 +74,7 @@ use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
 /* ThreadWithFile */
 
-pub trait ThreadFile: FileOps<Data = Inner<Self>> + FreeAnytime {
+pub trait ThreadFile: FileOps<Data = Inner<Self>, Inode = Any> + FreeAnytime {
     /// At close, before the thread's stopped: wake it from whatever it's
     /// blocked on that only the file would end.
     fn closing(&self) {}
@@ -409,6 +409,7 @@ pub struct Stdio<T> {
 #[vtable]
 impl<T: StdioFile> FileOps for Stdio<T> {
     type Data = Inner<Self>;
+    type Inode = Any;
 
     fn read(&self, file: &File<Self::Data>, buf: &mut UserBuf) -> Result<(), BchError> {
         self.redirect.read_user(buf, file.nonblock())
