@@ -73,7 +73,7 @@ use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::snapshots::subvolume;
 use crate::types::CStatic;
-use crate::os::file::{File, FileData, FileOps, FileVTable, Opening, PosLocked};
+use crate::os::file::{File, FileOps, FileVTable, InodeFileOps, Opening, PosLocked};
 use crate::os::iov_iter::IovIter;
 use crate::os::kiocb::Kiocb;
 use crate::os::kernel::{current_id, PAGE_SIZE};
@@ -184,18 +184,11 @@ impl VmOps for InodeInfo {
     }
 }
 
-/// A regular file's state: its inode's. Never made: there's nothing to make.
-/// FileVTable::<InodeInfo> would take the inode for private data - the
-/// blanket FileData of an ops type - and drop it at release: this is the one.
-pub enum InodeFile {}
+pub type InodeFile = crate::os::file::InodeFile<InodeInfo>;
 
-impl FileData for InodeFile {
-    type Ops = InodeInfo;
-
-    const CHECKS_OPEN: bool = true;
-
+impl InodeFileOps for InodeInfo {
     /// Opened for writing, the subvolume must be writable.
-    fn check_open(f: Opening<'_, Self>) -> Result<(), BchError> {
+    fn check_open(f: Opening<'_, InodeFile>) -> Result<(), BchError> {
         let inode = f.file().inode();
         if f.file().flags() & (c::O_WRONLY | c::O_RDWR) != 0 {
             subvolume::is_ro(inode.fs(), inode.inum().subvol as u32)?;
@@ -204,22 +197,11 @@ impl FileData for InodeFile {
         f.generic_open()
     }
 
-    fn ops(&self) -> &InodeInfo {
-        match *self {}
-    }
-
-    unsafe fn ops_of<'a>(file: *mut c::file) -> &'a InodeInfo {
-        // SAFETY: an open file of ours: its inode's referenced while it's open
-        unsafe { File::<Self>::of_raw(file) }.inode()
-    }
-
     /// Writeback started, if a truncate to zero asked for it: see
     /// DOC(replace-in-place).
-    unsafe fn release(file: *mut c::file) {
-        // SAFETY: as ops_of()'s
-        let inode = unsafe { Self::ops_of(file) };
-        if inode.ei_flags.swap(c::InodeInfoFlag::EI_INODE_FLUSH_ON_CLOSE, false) {
-            let _ = inode.vfs().mapping().flush();
+    fn released(&self, _file: &File<InodeFile>) {
+        if self.ei_flags.swap(c::InodeInfoFlag::EI_INODE_FLUSH_ON_CLOSE, false) {
+            let _ = self.vfs().mapping().flush();
         }
     }
 }

@@ -606,6 +606,47 @@ impl<T: FileOps<Data = T>> FileData for T {
     }
 }
 
+/// A regular file's state: its inode's, I's. Never made: there's nothing to
+/// make. FileVTable::<I> would take the inode for private data - the blanket
+/// FileData of an ops type - and drop it at release: this is the one.
+#[cfg(kernel)]
+pub struct InodeFile<I>(core::convert::Infallible, PhantomData<I>);
+
+/// An inode type whose regular files' ops are its own: InodeFile<Self>'s.
+#[cfg(kernel)]
+pub trait InodeFileOps: FileOps<Data = InodeFile<Self>, Inode = Self> + IsInode + 'static {
+    /// Whether @f may be opened: the only thing opening one does.
+    fn check_open(f: Opening<'_, InodeFile<Self>>) -> Result<(), BchError>;
+
+    /// @file's last use.
+    fn released(&self, _file: &File<InodeFile<Self>>) {}
+}
+
+#[cfg(kernel)]
+impl<I: InodeFileOps> FileData for InodeFile<I> {
+    type Ops = I;
+
+    const CHECKS_OPEN: bool = true;
+
+    fn check_open(f: Opening<'_, Self>) -> Result<(), BchError> {
+        I::check_open(f)
+    }
+
+    fn ops(&self) -> &I {
+        match self.0 {}
+    }
+
+    // an open file of I's: its inode's referenced while it's open
+    unsafe fn ops_of<'a>(file: *mut c::file) -> &'a I {
+        unsafe { File::<Self>::of_raw(file) }.inode()
+    }
+
+    unsafe fn release(file: *mut c::file) {
+        let file = unsafe { File::<Self>::of_raw(file) };
+        file.inode().released(file)
+    }
+}
+
 impl<P: FileData> FileVTable<P> {
     #[cfg(kernel)]
     unsafe extern "C" fn check_open(_inode: *mut c::inode, file: *mut c::file) -> c_int {
