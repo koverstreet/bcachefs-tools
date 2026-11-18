@@ -51,8 +51,10 @@ impl BouncePool {
     /// Allocates the rest of @size into @bio, waiting for elements - in a
     /// NORECLAIM scope, where it can't, failing, with what it had allocated
     /// left on the bio. It hands out whole elements, so the bio's size is
-    /// trimmed to @size after.
-    pub fn alloc(&self, bio: &mut c::bio, size: usize) -> Result<(), AllocError> {
+    /// trimmed to @size after. Whether it took any: its elements may be the
+    /// reserve's, and one holding those mustn't ask again till they're freed.
+    pub fn alloc(&self, bio: &mut c::bio, size: usize) -> Result<bool, AllocError> {
+        let took = (bio.bi_iter.bi_size as usize) < size;
         let _lock = self.lock.lock();
 
         while (bio.bi_iter.bi_size as usize) < size {
@@ -60,7 +62,7 @@ impl BouncePool {
             unsafe { crate::os::bio::add_virt_nofail(bio, p.as_ptr().cast(), POOL_LEN as u32) };
         }
         bio.bi_iter.bi_size = bio.bi_iter.bi_size.min(size as u32);
-        Ok(())
+        Ok(took)
     }
 }
 
