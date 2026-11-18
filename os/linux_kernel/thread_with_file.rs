@@ -69,6 +69,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use cstruct_macros::vtable;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
+use kernel::sync::aref::ARef;
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
 /* ThreadWithFile */
@@ -129,12 +130,6 @@ impl<T: ThreadFile> ThreadWithFile<T> {
             t.wake();
         }
         Ok(file.install())
-    }
-
-    /// # Safety
-    /// @file is an open ThreadWithFile<T>'s.
-    pub unsafe fn from_file<'a>(file: *mut c::file) -> &'a T {
-        unsafe { file_data::<Inner<T>>(file) }.ops()
     }
 }
 
@@ -466,7 +461,7 @@ impl<T: StdioFile> ThreadWithFile<Stdio<T>> {
 
     /// No thread: the caller prints, and calls stdio().set_done() when it's
     /// finished. The fd, and the file ref to hold while it may print.
-    pub fn get_fd(self) -> Result<(c_int, NonNull<c::file>), BchError> {
+    pub fn get_fd(self) -> Result<(c_int, ARef<File<Inner<Stdio<T>>>>), BchError> {
         let file = NewFile::new(self.0)?;
         let r = file.get_file();
         Ok((file.install(), r))

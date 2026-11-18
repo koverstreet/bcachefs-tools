@@ -18,7 +18,9 @@ use crate::init::chardev::{fs_ioctl, ioctl_ret};
 use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::util::ioctl::Ioctl;
-use crate::os::thread_with_file::{Stdio, StdioFile, ThreadWithFile};
+use crate::os::file::File;
+use crate::os::thread_with_file::{Inner, Stdio, StdioFile, ThreadWithFile};
+use kernel::sync::aref::ARef;
 use core::ffi::c_void;
 use core::mem::size_of;
 use core::ptr::NonNull;
@@ -104,7 +106,7 @@ impl StdioFile for StatusFd {
 /// its fd, and the file frees the channel when both are gone. Dropped when
 /// the mount's over, however it went: the channel is closed, so a reader gets
 /// EOF rather than waiting for a filesystem that isn't coming.
-pub(crate) struct StatusFile(NonNull<c::file>);
+pub(crate) struct StatusFile(ARef<File<Inner<Stdio<StatusFd>>>>);
 
 impl StatusFile {
     /// A new status channel: its fd, for userspace, and the mount's ref.
@@ -117,8 +119,7 @@ impl StatusFile {
     }
 
     fn status(&self) -> &Stdio<StatusFd> {
-        // SAFETY: open()'s file, which this holds a ref on
-        unsafe { ThreadWithFile::<Stdio<StatusFd>>::from_file(self.0.as_ptr()) }
+        self.0.ops()
     }
 
     /// @fs starts up with the channel - what it prints for the user, and its
@@ -135,7 +136,6 @@ impl StatusFile {
 impl Drop for StatusFile {
     fn drop(&mut self) {
         self.status().redirect.set_done();
-        unsafe { c::fput(self.0.as_ptr()) };
     }
 }
 

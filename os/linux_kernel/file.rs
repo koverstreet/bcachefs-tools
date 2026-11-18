@@ -50,7 +50,7 @@ use {
     core::mem::MaybeUninit,
     core::ptr::NonNull,
     kernel::fs::file::FileDescriptorReservation,
-    kernel::sync::aref::ARef,
+    kernel::sync::aref::{ARef, AlwaysRefCounted},
     crate::os::kernel::current_comm,
 };
 
@@ -69,6 +69,18 @@ pub enum Any {}
 impl<D> File<D> {
     pub fn as_ptr(&self) -> *mut c::file {
         self.0.as_ptr()
+    }
+}
+
+// f_count's, as the kernel crate's File's
+#[cfg(kernel)]
+unsafe impl<D> AlwaysRefCounted for File<D> {
+    fn inc_ref(&self) {
+        unsafe { kernel::bindings::get_file(self.as_ptr().cast()) };
+    }
+
+    unsafe fn dec_ref(obj: NonNull<Self>) {
+        unsafe { kernel::bindings::fput(obj.cast().as_ptr()) }
     }
 }
 
@@ -618,9 +630,9 @@ impl<P: FileData> NewFile<P> {
         unsafe { file_data::<P>(self.file.as_ptr()) }
     }
 
-    /// A ref on the file, for the caller to fput().
-    pub fn get_file(&self) -> NonNull<c::file> {
-        ARef::into_raw(self.file.clone()).cast()
+    /// A ref on the file.
+    pub fn get_file(&self) -> ARef<File<P>> {
+        unsafe { ARef::from_raw(ARef::into_raw(self.file.clone()).cast()) }
     }
 
     /// The fd - from here userspace may close it at any moment.
