@@ -5,7 +5,7 @@ use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::locking::BtreeNodeLockedType;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{bch2_btree_path_to_text, NodePtr, PathIdx, Paths};
+use crate::btree::path::{bch2_btree_path_to_text, LockedNode, NodePtr, PathIdx, Paths};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write};
 use crate::btree::types::BtreeWriteType;
 use crate::btree::write::{node_write, BtreeWriteFlags};
@@ -31,12 +31,12 @@ fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
 
 #[cold]
 #[inline(never)]
-fn btree_bad_header(fs: &Fs, b: &BtreeNode) {
+fn btree_bad_header(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
     if fs.recovery.runner.pass_done.get() < RecoveryPass::check_allocations {
         return;
     }
 
-    let contents = unsafe { b.contents() };
+    let contents = b.contents();
     let data = contents.data();
     let mut msg = LogMsg::new(fs);
     prt!(msg, "cached btree node header doesn't match expected (memory corruption?)\nexpected: ");
@@ -53,8 +53,8 @@ fn btree_bad_header(fs: &Fs, b: &BtreeNode) {
 }
 
 #[inline(always)]
-fn btree_check_header(fs: &Fs, b: &BtreeNode) {
-    let contents = unsafe { b.contents() };
+fn btree_check_header(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
+    let contents = b.contents();
     let data = contents.data();
     let k = BkeySC::from(contents.key_i());
 
@@ -67,12 +67,12 @@ fn btree_check_header(fs: &Fs, b: &BtreeNode) {
 }
 
 #[inline(always)]
-fn prefetch_aux(b: &BtreeNode) {
+fn prefetch_aux(b: LockedNode<'_, BtreeNode>) {
     prefetch(b.aux_data);
 
-    let contents = unsafe { b.contents() };
+    let contents = b.contents();
     for t in &contents.set[..contents.nsets as usize] {
-        let p = unsafe { b.aux_data.cast::<u64>().add(t.aux_data_offset as usize).cast::<u8>() };
+        let p = b.aux_data.cast::<u64>().wrapping_add(t.aux_data_offset as usize).cast::<u8>();
 
         prefetch(p.wrapping_add(L1_CACHE_BYTES * 0));
         prefetch(p.wrapping_add(L1_CACHE_BYTES * 1));
@@ -218,11 +218,12 @@ impl BtreeTrans<'_> {
             return Err(Errcode::btree_node_read_err_cached.into());
         }
 
-        prefetch_aux(b);
+        let locked = LockedNode::of_hold(b, &held);
+        prefetch_aux(locked);
 
         ebug_assert!(Btree(b.c.btree_id.get().into()) == paths[idx].btree_id());
-        ebug_assert!(usize::from(unsafe { b.contents() }.data().level()) == level);
-        btree_check_header(fs, b);
+        ebug_assert!(usize::from(locked.contents().data().level()) == level);
+        btree_check_header(fs, locked);
 
         let down = paths.down_key();
         if unlikely(!btree_node_mem_ptr(fs, down).is_some_and(|p| core::ptr::eq(p, b))) &&
@@ -300,11 +301,12 @@ impl BtreeTrans<'_> {
             b.flags.set_accessed(true);
         }
 
-        prefetch_aux(b);
+        let locked = LockedNode::of_hold(b, &held);
+        prefetch_aux(locked);
 
         ebug_assert!(Btree(b.c.btree_id.get().into()) == paths[idx].btree_id());
-        ebug_assert!(usize::from(unsafe { b.contents() }.data().level()) == level);
-        btree_check_header(self.fs(), b);
+        ebug_assert!(usize::from(locked.contents().data().level()) == level);
+        btree_check_header(self.fs(), locked);
 
         Ok((b, held))
     }

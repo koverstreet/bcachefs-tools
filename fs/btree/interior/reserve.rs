@@ -295,10 +295,11 @@ impl<'t> InteriorUpdate<'t> {
         let mut node = unsafe { UnhashedNode::from_raw(fs, b) };
         node.set_id(self.btree, level);
 
-        let n: &BtreeNode = &node;
+        let mut locked = node.locked();
+        let n = locked.node();
         n.flags.set_accessed(true);
 
-        let contents = unsafe { n.contents_mut() };
+        let contents = locked.contents_mut();
         n.keys_mut(contents).bset_init_first();
 
         contents.nr = Default::default();

@@ -6,7 +6,7 @@ use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
 use crate::util::alloc::{flags, Flags};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{bch2_btree_path_to_text, LockedNode, PathIdx, Paths};
+use crate::btree::path::{bch2_btree_path_to_text, LockedNode, PathIdx, Paths, Write};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write, node_read, ReadInFlightNode};
 use crate::btree::types::{BtreeCacheGuard, BtreeNodeList, BtreeWriteType};
 use crate::btree::write::{node_write, BtreeWriteFlags};
@@ -55,7 +55,7 @@ impl Fs {
         let mut lists = self.btree.cache.lock.lock();
         let (b, held) = self.btree_node_reclaim_first(&mut lists, list, pcpu_read_locks, ReclaimFlags::empty())?;
 
-        self.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
+        self.btree.evicted_size.record(b.hash_val(), LockedNode::of_hold(b, &held).contents().nr.live_u64s);
         let _ = self.btree_node_transition_state_locked(&mut lists, b, State::NONE);
         Some((b, held))
     }
@@ -99,6 +99,11 @@ impl<'a> UnhashedNode<'a> {
         let b = unsafe { cached_node(fs, b.as_ptr()) };
         let held = unsafe { SixHold::from_raw(&b.c.lock, SIX_LOCK_write) };
         UnhashedNode { fs, b, held: ManuallyDrop::new(held) }
+    }
+
+    pub(crate) fn locked(&mut self) -> LockedNode<'_, BtreeNode, Write> {
+        // its hold is the only one on it, and no one else can find it
+        unsafe { LockedNode::new_write(self.b) }
     }
 
     pub(crate) fn set_id(&mut self, btree: Btree, level: usize) {
@@ -264,14 +269,17 @@ impl BtreeTrans<'_> {
         assert!(b.hash_val() == 0, "a hashed node allocated");
         assert!(!b.flags.dirty(), "a dirty node allocated");
         assert!(!b.flags.write_in_flight(), "a node allocated with a write in flight");
-        assert!(!unsafe { b.contents() }.data.is_null(), "a node allocated with no buffer");
+        assert!(!LockedNode::of_hold(b, &held).contents().data.is_null(), "a node allocated with no buffer");
 
         /* @b may have been a node our paths still have cached: */
         self.node_forget(paths, b);
 
+        let mut n = UnhashedNode { fs, b, held: ManuallyDrop::new(held) };
+
         b.flags.store(Default::default());
         b.written.set(0);
-        let contents = unsafe { b.contents_mut() };
+        let mut locked = n.locked();
+        let contents = locked.contents_mut();
         contents.nsets = 0;
         contents.sib_u64s[0].set(0);
         contents.sib_u64s[1].set(0);
@@ -279,8 +287,6 @@ impl BtreeTrans<'_> {
         b.keys_mut(contents).btree_keys_init();
 
         fs.times.get(c::TimeStat::btree_node_mem_alloc as usize).update(start_time);
-
-        let n = UnhashedNode { fs, b, held: ManuallyDrop::new(held) };
 
         /*
          * Room in the table for the node's hash insert, which grows it under
@@ -346,7 +352,7 @@ impl BtreeTrans<'_> {
             r => r?,
         };
 
-        unsafe { n.contents_mut() }.set_key(k);
+        n.locked().contents_mut().set_key(k);
         n.set_id(btree, level);
 
         let ret = match n.hash(State::CLEAN) {

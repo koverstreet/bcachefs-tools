@@ -176,7 +176,8 @@ impl Fs {
                     lists.not_freed[NotFreed::access_bit as usize] += 1;
                     touched -= 1;
                 } else if let Ok(held) = self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER) {
-                    self.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
+                    self.btree.evicted_size.record(b.hash_val(),
+                                                   LockedNode::of_hold(b, &held).contents().nr.live_u64s);
                     let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
 
                     freed += 1;
