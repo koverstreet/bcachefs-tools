@@ -472,7 +472,7 @@ impl BtreeUpdate {
                 assert!(r.ob.nr == 0, "a node taken from the reserve, kept but never written");
             }
 
-            trans.node_unlock_write_pathless(paths, b);
+            trans.node_unlock_write_pathless(paths, &b.c);
             unsafe { six_unlock_ip(b.c.lock.six(), c::SixLockType::SIX_LOCK_intent, crate::ret_ip!()) };
         }
 

@@ -11,7 +11,7 @@ use crate::btree::node::sort::{
 };
 use crate::btree::node::bset::MAX_BSETS;
 use crate::btree::node::{BtreeNode, NodeContents};
-use crate::btree::path::{LockedNode, Paths, PathsUpdates, Write};
+use crate::btree::path::{Intent, LockedNode, NodeHold, Paths, PathsUpdates, Write};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
 use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
@@ -30,7 +30,7 @@ use crate::fs::Fs;
 use crate::format::{Btree, DataType};
 use crate::init::error::BkeyValidate;
 use crate::inode_opts::get_io_opts;
-use crate::locking::six::{six_lock_counts, six_lock_downgrade, six_lock_tryupgrade, six_trylock_ip};
+use crate::locking::six::six_lock_counts;
 use crate::types::{Le16, Le64};
 use crate::util::bio::{bch2_bio_map, bio_put, buf_nr_bvecs, of_bio, MapBuf};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
@@ -726,36 +726,34 @@ pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, 
 }
 
 /// btree_node_write_if_need()
-pub(crate) fn node_write_if_need(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode,
-                                 lock_type_held: c::SixLockType) {
+pub(crate) fn node_write_if_need(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: NodeHold<'_, BtreeNode>) {
     let (ty, flags) = unpack(BtreeWriteFlags::only_if_need.bits());
-    node_write_trans(trans, paths, b, lock_type_held, ty, flags)
+    node_write_trans(trans, paths, b, ty, flags)
 }
 
-pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode,
-                               lock_type_held: c::SixLockType, ty: BtreeWriteType, flags: BtreeWriteFlags) {
-    use c::SixLockType::*;
-
-    let fs = trans.fs();
-    let lock = b.c.lock.six();
-
-    if lock_type_held == SIX_LOCK_intent ||
-        (lock_type_held == SIX_LOCK_read && unsafe { six_lock_tryupgrade(lock) })
-    {
-        node_write(trans, b, ty, flags);
-
-        /* don't cycle lock unnecessarily: */
-        if b.flags.just_written() && six_trylock_ip(lock, SIX_LOCK_write, crate::ret_ip!()) {
-            bch2_btree_post_write_cleanup(fs, &mut unsafe { LockedNode::new_write(b) });
-            trans.node_unlock_write_pathless(paths, b);
+pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: NodeHold<'_, BtreeNode>,
+                               ty: BtreeWriteType, flags: BtreeWriteFlags) {
+    match b {
+        NodeHold::Read(mut b) => {
+            if let Some(mut b) = b.try_upgrade() {
+                return node_write_intent(trans, paths, &mut b, ty, flags);
+            }
+            node_write(trans, &b, ty, flags);
         }
+        NodeHold::Intent(mut b) => node_write_intent(trans, paths, &mut b, ty, flags),
+        NodeHold::Write(_) => panic!("node_write_trans() of a node held for write: node_write_locked()"),
+    }
+}
 
-        if lock_type_held == SIX_LOCK_read {
-            unsafe { six_lock_downgrade(lock) };
+fn node_write_intent(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &mut LockedNode<'_, BtreeNode, Intent>,
+                     ty: BtreeWriteType, flags: BtreeWriteFlags) {
+    node_write(trans, b, ty, flags);
+
+    /* don't cycle lock unnecessarily: */
+    if b.flags.just_written() {
+        if let Some(mut w) = b.try_write(paths) {
+            bch2_btree_post_write_cleanup(trans.fs(), &mut w);
         }
-    } else {
-        assert!(lock_type_held != SIX_LOCK_write, "node_write_trans() of a node held for write: node_write_locked()");
-        node_write(trans, b, ty, flags);
     }
 }
 

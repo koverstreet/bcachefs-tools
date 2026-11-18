@@ -32,7 +32,7 @@ use crate::util::Printbuf;
 use crate::os::kernel::local_clock;
 use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};
 use crate::locking::{Locked, LockedBy};
-use crate::locking::six::{six_lock_increment_ip, six_lock_write_held, SixHold};
+use crate::locking::six::{six_lock_increment_ip, six_lock_write_held, six_trylock_ip, SixHold};
 use crate::c::SixLockType;
 use core::cmp::Ordering;
 use core::ffi::{c_int, c_ulong};
@@ -282,6 +282,17 @@ impl<'t> Paths<'t> {
     pub(crate) fn held_btree_node(&self, idx: PathIdx, level: usize) -> Option<LockedNode<'t, BtreeNode>> {
         let b = self[idx].locked_btree_node(level)?;
         Some(unsafe { LockedNode::new(&*ptr::from_ref(b.node())) })
+    }
+
+    /// held_btree_node(), as the level holds it.
+    pub(crate) fn btree_node_hold(&self, idx: PathIdx, level: usize) -> Option<NodeHold<'t, BtreeNode>> {
+        let node = self.held_btree_node(idx, level)?.node();
+        Some(match self[idx].locked_type(level) {
+            BTREE_NODE_READ_LOCKED   => NodeHold::Read(LockedNode { node, _mode: PhantomData }),
+            BTREE_NODE_INTENT_LOCKED => NodeHold::Intent(LockedNode { node, _mode: PhantomData }),
+            BTREE_NODE_WRITE_LOCKED  => NodeHold::Write(LockedNode { node, _mode: PhantomData }),
+            BTREE_NODE_UNLOCKED      => unreachable!("held_btree_node() of an unlocked level"),
+        })
     }
 
     /// Path @idx's key cache entry, if it's a cached path holding it locked:
@@ -1677,10 +1688,20 @@ impl PathNodeContents for c::bkey_cached {
     }
 }
 
-/// How a LockedNode's node is held: Held any way, its contents had by &; or
-/// for Write, by &mut.
+/// How a LockedNode's node is held: Held any way, its contents had by &; Read
+/// or Intent, as a path level holds it; or for Write, its contents by &mut.
 pub struct Held;
+pub struct Read;
+pub struct Intent;
 pub struct Write;
+
+/// A path level's node, as the level holds it: SixHold, borrowed from the
+/// path.
+pub enum NodeHold<'p, T: PathNode> {
+    Read(LockedNode<'p, T, Read>),
+    Intent(LockedNode<'p, T, Intent>),
+    Write(LockedNode<'p, T, Write>),
+}
 
 /// A node a path has locked, borrowed from the attempt as a key is: good until
 /// the attempt's next unlock or error, which nothing checks (see TransRef).
@@ -1731,6 +1752,83 @@ impl<'p, T: PathNode> LockedNode<'p, T, Write> {
         T: PathNodeContents,
     {
         unsafe { self.node.locked_contents().protected_mut() }
+    }
+}
+
+impl<T: PathNode> LockedNode<'_, T, Read> {
+    /// Intent, if no one else holds it, for as long as the guard lives: read
+    /// again after.
+    pub fn try_upgrade(&mut self) -> Option<Upgraded<'_, T>> {
+        let lock = &self.node.common().lock;
+        match unsafe { SixHold::from_raw(lock, SixLockType::SIX_LOCK_read) }.try_upgrade() {
+            Ok(intent) => {
+                intent.into_raw();
+                Some(Upgraded(LockedNode { node: self.node, _mode: PhantomData }))
+            }
+            Err(read) => {
+                read.into_raw();
+                None
+            }
+        }
+    }
+}
+
+/// A node held for read, upgraded: back to read as this is dropped.
+pub struct Upgraded<'a, T: PathNode>(LockedNode<'a, T, Intent>);
+
+impl<'a, T: PathNode> Deref for Upgraded<'a, T> {
+    type Target = LockedNode<'a, T, Intent>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: PathNode> DerefMut for Upgraded<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T: PathNode> Drop for Upgraded<'_, T> {
+    fn drop(&mut self) {
+        unsafe { SixHold::from_raw(&self.0.node.common().lock, SixLockType::SIX_LOCK_intent) }.downgrade().into_raw();
+    }
+}
+
+impl<T: PathNode> LockedNode<'_, T, Intent> {
+    /// Write too, if no one holds it for read, for as long as the guard lives.
+    pub fn try_write<'a, 't>(&'a mut self, paths: &'a mut Paths<'t>) -> Option<WriteLocked<'a, 't, T>> {
+        six_trylock_ip(self.node.common().lock.six(), SixLockType::SIX_LOCK_write, crate::ret_ip!())
+            .then(|| WriteLocked { node: LockedNode { node: self.node, _mode: PhantomData }, paths })
+    }
+}
+
+/// A node held for intent, write locked too: released as it's dropped, the
+/// paths that have the node keeping their lock seqs.
+pub struct WriteLocked<'a, 't, T: PathNode> {
+    node:  LockedNode<'a, T, Write>,
+    paths: &'a mut Paths<'t>,
+}
+
+impl<'a, T: PathNode> Deref for WriteLocked<'a, '_, T> {
+    type Target = LockedNode<'a, T, Write>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.node
+    }
+}
+
+impl<T: PathNode> DerefMut for WriteLocked<'_, '_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.node
+    }
+}
+
+impl<T: PathNode> Drop for WriteLocked<'_, '_, T> {
+    fn drop(&mut self) {
+        let trans = self.paths.trans;
+        trans.node_unlock_write_pathless(self.paths, self.node.node.common());
     }
 }
 

@@ -926,10 +926,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let idx = iter.raw.path;
         let mut paths = trans.paths();
-        let b = paths.held_btree_node(idx, level as usize).expect("a node, peeked");
+        let b = paths.btree_node_hold(idx, level as usize).expect("a node, peeked");
 
-        node_write_trans(trans, &mut paths, b.node(), c::SixLockType::SIX_LOCK_intent,
-                         BtreeWriteType::interior, BtreeWriteFlags::empty());
+        node_write_trans(trans, &mut paths, b, BtreeWriteType::interior, BtreeWriteFlags::empty());
         Ok(())
     }
 
