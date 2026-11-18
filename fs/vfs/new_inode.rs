@@ -17,6 +17,7 @@ use crate::new_lock;
 use crate::util::alloc::{flags, init_at, AllocError, Flags};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::slab::KmemCache;
+use crate::os::workqueue::{run_raw, RawWork};
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
@@ -65,7 +66,7 @@ impl NewInode {
             },
             ei_quota <- new_lock!(InodeQuota { ei_qid: Default::default(), ei_quota_reserved: 0 },
                                   "&inode->ei_quota_lock"),
-            ei_writeback_timer <- crate::new_delayed_work!(writeback_fn, "&inode->ei_writeback_timer"),
+            ei_writeback_timer <- crate::new_delayed_work!(run_raw::<InodeInfo>, "&inode->ei_writeback_timer"),
             ..Zeroable::init_zeroed()
         });
         // SAFETY: @p is ours, uninitialized; nothing in it can fail
@@ -164,12 +165,13 @@ impl Drop for NewInode {
 
 /// The writeback timer's: the inode written back, if it's live. Evict cancels
 /// it before the inode's freed.
-unsafe extern "C" fn writeback_fn(work: *mut c::work_struct) {
-    const { assert!(offset_of!(c::delayed_work, work) == 0) };
-    // SAFETY: an inode's ei_writeback_timer's work
-    let inode = unsafe { &*work.byte_sub(offset_of!(InodeInfo, ei_writeback_timer)).cast::<InodeInfo>() };
-    if let Some(r) = inode.vfs().igrab() {
-        let _ = r.write_now(false);
+impl RawWork for InodeInfo {
+    const WORK: usize = offset_of!(InodeInfo, ei_writeback_timer) + offset_of!(c::delayed_work, work);
+
+    unsafe fn run(this: NonNull<Self>) {
+        if let Some(r) = unsafe { this.as_ref() }.vfs().igrab() {
+            let _ = r.write_now(false);
+        }
     }
 }
 
