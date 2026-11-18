@@ -15,49 +15,40 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::chardev::{fs_ioctl, ioctl_ret};
-use crate::locking::{Locked, Mutex};
-use crate::new_lock;
+use crate::util::loan::Loan;
+use crate::util::vstructs::plain_bytes;
 use crate::util::ioctl::Ioctl;
 use crate::os::file::File;
 use crate::os::thread_with_file::{Inner, Stdio, StdioFile, ThreadWithFile};
 use kernel::sync::aref::ARef;
-use core::ffi::c_void;
-use core::mem::size_of;
-use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{Relaxed, Release};
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
-use kernel::uaccess::UserPtr;
+use core::ops::ControlFlow;
+use kernel::uaccess::{UserPtr, UserSlice};
 use pin_init::{pin_data, pin_init};
 
 #[pin_data]
 struct StatusFd {
-    /// The filesystem coming up on this channel. The mounting thread sets it
-    /// around Fs::start() and clears it after, because that is the only
-    /// window where we know it's alive - the fd outlives the mount either way.
+    /// The filesystem coming up on this channel. The mounting thread lends it
+    /// for Fs::start(), because that is the only window where we know it's
+    /// alive - the fd outlives the mount either way.
     ///
-    /// A mutex, not a spinlock, because the ioctl hands the filesystem to
+    /// The loan's lock is a mutex, because the ioctl hands the filesystem to
     /// bch2_fs_ioctl(), which sleeps: the lock has to be held across that
     /// call, or the mounting thread could return from Fs::start() and
     /// tear it down underneath it. The only waiter is that thread, once, at
     /// the end of the mount.
     #[pin]
-    fs: Locked<Mutex, Option<NonNull<Fs>>>,
+    fs: Loan<Fs>,
 }
-
-// SAFETY: the filesystem's every thread's, and only touched under @fs's lock
-unsafe impl Send for StatusFd {}
-unsafe impl Sync for StatusFd {}
 
 impl StdioFile for StatusFd {
     fn ioctl(&self, cmd: c_uint, arg: c_ulong) -> c_long {
-        let mut status = c::bch_ioctl_recovery_status::default();
-        {
-            let fs = self.fs.lock();
-            let Some(fs) = *fs else {
-                return -(c::ENODEV as c_long);
+        let status = self.fs.with(|fs| {
+            let Some(fs) = fs else {
+                return ControlFlow::Break(-(c::ENODEV as c_long));
             };
-            // SAFETY: set only while it's alive, and we hold the lock
-            let fs = unsafe { fs.as_ref() };
+            let mut status = c::bch_ioctl_recovery_status::default();
 
             // Everything else this filesystem answers, it answers here: the
             // chardev's ioctl exists to turn a minor back into a bch_fs, and
@@ -70,7 +61,7 @@ impl StdioFile for StatusFd {
             // read-only queries and then refuses anything else until
             // BCH_FS_started, which isn't set until recovery is done.
             if cmd != <c::BCH_IOCTL_RECOVERY_STATUS as Ioctl>::OPCODE {
-                return ioctl_ret(fs_ioctl(fs, cmd, UserPtr::from_addr(arg as usize)));
+                return ControlFlow::Break(ioctl_ret(fs_ioctl(fs, cmd, UserPtr::from_addr(arg as usize))));
             }
 
             // Whoever's asking is drawing it: keep it off the console.
@@ -88,16 +79,17 @@ impl StdioFile for StatusFd {
             status.passes_scheduled_sb.v[0] = fs.sb.recovery_passes_required.get();
             let (units, seen, total) = r.progress.status();
             (status.units, status.seen, status.total) = (units.0, seen, total);
-        }
+            ControlFlow::Continue(status)
+        });
+        let status = match status {
+            ControlFlow::Continue(status) => status,
+            ControlFlow::Break(ret) => return ret,
+        };
 
-        // SAFETY: copy_to_user() checks the caller's buffer is theirs
-        if unsafe {
-            c::copy_to_user(arg as *mut c_void, (&raw const status).cast(),
-                            size_of::<c::bch_ioctl_recovery_status>() as _)
-        } != 0 {
-            -(c::EFAULT as c_long)
-        } else {
-            0
+        match UserSlice::new(UserPtr::from_addr(arg as usize), size_of_val(&status)).writer()
+            .write_slice(plain_bytes(&status)) {
+            Ok(()) => 0,
+            Err(_) => -(c::EFAULT as c_long),
         }
     }
 }
@@ -112,7 +104,7 @@ impl StatusFile {
     /// A new status channel: its fd, for userspace, and the mount's ref.
     pub(crate) fn open() -> Result<(c_int, StatusFile), BchError> {
         let status = ThreadWithFile::new_stdio(pin_init!(StatusFd {
-            fs <- new_lock!(None),
+            fs <- Loan::new(),
         }? BchError))?;
         let (fd, file) = status.get_fd()?;
         Ok((fd, StatusFile(file)))
@@ -122,38 +114,25 @@ impl StatusFile {
         self.0.ops()
     }
 
-    /// @fs starts up with the channel - what it prints for the user, and its
-    /// questions, go to it, and its ioctl answers for @fs - until the guard
-    /// returned drops: recovery's over, however it went.
-    pub(crate) fn attach<'a>(&'a self, fs: &'a Fs) -> Attached<'a> {
+    /// @f - @fs starting up - with the channel: what @fs prints for the user,
+    /// and its questions, go to it, and its ioctl answers for @fs.
+    pub(crate) fn attached<R>(&self, fs: &Fs, f: impl FnOnce() -> R) -> R {
         fs.stdio_user_only.store(true, Relaxed);
         fs.stdio.store(self.status().redirect.as_ptr(), Release);
-        *self.status().data.fs.lock() = Some(NonNull::from(fs));
-        Attached { file: self, fs }
+        let ret = self.status().data.fs.lend(fs, f);
+
+        // The loan over first is what makes the reader flag safe to clear
+        // after it: the ioctl only sets it having seen a filesystem lent, so
+        // no further ioctl can set it.
+        fs.stdio.store(core::ptr::null_mut(), Release);
+        fs.stdio_user_only.store(false, Relaxed);
+        fs.stdio_progress_reader.store(false, Relaxed);
+        ret
     }
 }
 
 impl Drop for StatusFile {
     fn drop(&mut self) {
         self.status().redirect.set_done();
-    }
-}
-
-/// A filesystem the channel is for: StatusFile::attach()'s.
-pub(crate) struct Attached<'a> {
-    file: &'a StatusFile,
-    fs:   &'a Fs,
-}
-
-impl Drop for Attached<'_> {
-    fn drop(&mut self) {
-        // Clearing the channel's filesystem first is what makes the reader
-        // flag safe to clear after it: the ioctl only sets it having seen a
-        // filesystem under this lock, so no further ioctl can set it.
-        *self.file.status().data.fs.lock() = None;
-
-        self.fs.stdio.store(core::ptr::null_mut(), Release);
-        self.fs.stdio_user_only.store(false, Relaxed);
-        self.fs.stdio_progress_reader.store(false, Relaxed);
     }
 }

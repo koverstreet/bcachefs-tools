@@ -199,10 +199,10 @@ impl Bcachefs {
         // channel's filesystem mustn't outlive @fs, which an error tears down.
         // stdio_user_only describes that redirect, so it dies with it: an
         // online fsck later installs its own c->stdio.
-        let attached = p.status.as_ref().map(|s| s.attach(&fs));
-        let ret = fs.start();
-        drop(attached);
-        ret?;
+        match &p.status {
+            Some(s) => s.attached(&fs, || fs.start()),
+            None    => fs.start(),
+        }?;
 
         Ok(fs)
     }

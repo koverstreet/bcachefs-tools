@@ -930,7 +930,7 @@ pub enum ProgressUnit {
  * the point of having the room here now, so that widening isn't an ABI break.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_recovery_pass_mask {
     pub v: [u64; 2],
 }
@@ -960,7 +960,7 @@ pub struct bch_recovery_pass_mask {
  * spinner rather than an empty bar.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_recovery_status {
     pub passes_scheduled_sb: c::bch_recovery_pass_mask,
     pub passes_scheduled_ephemeral: c::bch_recovery_pass_mask,

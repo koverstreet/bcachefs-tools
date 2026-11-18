@@ -12,6 +12,7 @@ pub mod gather;
 pub mod hash;
 pub mod ioctl;
 pub mod late;
+pub mod loan;
 pub mod log;
 pub mod maybe_rcu_alloc;
 pub mod mean_and_variance;
