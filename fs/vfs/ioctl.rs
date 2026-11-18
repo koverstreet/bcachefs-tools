@@ -51,6 +51,7 @@ use crate::os::idmap::MntIdmap;
 use crate::vfs::inode::{InodeInfo, InodeRef};
 use crate::os::mount::WriteAccess;
 use crate::os::path::{Creating, Removing, UserPath};
+use crate::os::super_block::IsInode;
 use crate::{bch_err, btree_trans, prt};
 use core::ffi::c_int;
 use core::mem::{offset_of, MaybeUninit};
@@ -100,7 +101,7 @@ fn file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
         <FS_IOC_SETFSLABEL as Ioctl>::OPCODE =>
             arg::<FS_IOC_SETFSLABEL, _>(user, |a| set_label(fs, file, a)),
         <c::FS_IOC_GOINGDOWN as Ioctl>::OPCODE =>
-            arg::<c::FS_IOC_GOINGDOWN, _>(user, |a| goingdown(inode.vfs().sb(), a)),
+            arg::<c::FS_IOC_GOINGDOWN, _>(user, |a| goingdown(inode.sb(), a)),
         <c::BCHFS_IOC_GET_DAMAGE as Ioctl>::OPCODE =>
             vstruct::<c::BCHFS_IOC_GET_DAMAGE, _, _>(user, |a| get_damage(fs, inode.inum(), a)),
         <c::BCHFS_IOC_CLEAR_DAMAGE as Ioctl>::OPCODE =>
@@ -276,7 +277,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
         return fs.throw(E::ENOENT_directory_dead);
     }
 
-    let sb = dir.vfs().sb();
+    let sb = dir.sb();
     if !sb.maps_ids(current_fsuid(), current_fsgid()) {
         prt!(err, "current uid/gid not mapped into fs namespace");
         return Err(c::EOVERFLOW.into());

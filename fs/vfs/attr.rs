@@ -38,6 +38,7 @@ use crate::os::iattr::Iattr;
 use crate::os::idmap::MntIdmap;
 use super::inode::InodeInfo;
 use crate::os::iattr::{ATTR_CTIME, ATTR_SIZE};
+use crate::os::super_block::IsInode;
 
 use c::InodeFlags as F;
 
@@ -105,7 +106,7 @@ impl InodeInfo {
         let v = self.vfs();
         let block_bytes = fs.block_bytes() as u32;
 
-        stat.dev     = v.sb().dev();
+        stat.dev     = self.sb().dev();
         stat.ino     = self.inum().inum;
         stat.mode    = v.mode();
         stat.nlink   = v.nlink();

@@ -83,7 +83,10 @@ unsafe impl AlwaysRefCounted for InodeInfo {
 // to_bch_ei(): an InodeInfo is where its struct inode is
 const _: () = assert!(offset_of!(InodeInfo, v) == 0);
 
-unsafe impl IsInode for InodeInfo {}
+// NewInode::new() makes them, on Fs's superblock
+unsafe impl IsInode for InodeInfo {
+    type Super = Fs;
+}
 
 // SAFETY: the kernel's inode, shared by every thread with it open or in a VFS
 // call. What Rust reaches through &InodeInfo is atomic, behind a lock, or the
@@ -214,7 +217,7 @@ impl InodeInfo {
     }
 
     pub fn fs(&self) -> &Fs {
-        self.vfs().sb().fs()
+        self.sb().fs()
     }
 
     pub fn vfs(&self) -> &VfsInode {

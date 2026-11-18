@@ -24,7 +24,7 @@ use crate::os::folio::Mapping;
 use crate::util::ffi::c_char;
 use crate::os::kernel::loff;
 use crate::os::posix_acl::{AclType, PosixAcl};
-use crate::os::super_block::{IsInode, SuperBlock};
+use crate::os::super_block::SuperBlock;
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
 #[path = "../vfs_inode.rs"]
@@ -456,6 +456,3 @@ unsafe impl AlwaysRefCounted for VfsInode {
         unsafe { c::iput(obj.as_ptr().cast()) }
     }
 }
-
-// SAFETY: a struct inode, repr(transparent), its reference i_count's
-unsafe impl IsInode for VfsInode {}

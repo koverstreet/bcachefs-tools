@@ -59,8 +59,8 @@ impl UserPath {
         Ok(UserPath(unsafe { p.assume_init() }))
     }
 
-    pub fn dentry(&self) -> *mut c::dentry {
-        self.0.dentry
+    pub fn dentry(&self) -> Dentry<'_> {
+        unsafe { Dentry::borrow_raw(self.0.dentry) }
     }
 }
 
@@ -90,6 +90,16 @@ impl Creating {
         };
         let dentry = errptr_to_result(NonNull::new(dentry).expect("a dentry, or an error"))?.as_ptr();
         Ok(Creating { path: unsafe { path.assume_init() }, dentry })
+    }
+
+    /// The dentry to create: negative.
+    pub fn dentry(&self) -> Dentry<'_> {
+        unsafe { Dentry::borrow_raw(self.dentry) }
+    }
+
+    /// The directory it's in, held and locked.
+    pub fn dir(&self) -> Dentry<'_> {
+        unsafe { Dentry::borrow_raw(self.path.dentry) }
     }
 
     /// Whether the LSMs allow a directory of @mode here: security_path_mkdir().
@@ -125,6 +135,16 @@ impl Removing {
         let victim = unsafe { start_removing(dirfd, user_ptr(name), path.as_mut_ptr()) };
         let victim = errptr_to_result(NonNull::new(victim).expect("a dentry, or an error"))?.as_ptr();
         Ok(Removing { path: unsafe { path.assume_init() }, victim })
+    }
+
+    /// The dentry to remove.
+    pub fn victim(&self) -> Dentry<'_> {
+        unsafe { Dentry::borrow_raw(self.victim) }
+    }
+
+    /// The directory it's in, held and locked.
+    pub fn dir(&self) -> Dentry<'_> {
+        unsafe { Dentry::borrow_raw(self.path.dentry) }
     }
 
     /// The directory removed, told to fsnotify: fsnotify_rmdir().

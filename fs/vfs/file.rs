@@ -77,6 +77,7 @@ use crate::os::file::{File, FileData, FileOps, FileVTable, FsFile, Opening};
 use crate::os::iov_iter::IovIter;
 use crate::os::kiocb::Kiocb;
 use crate::os::kernel::{current_id, PAGE_SIZE};
+use crate::os::super_block::IsInode;
 use crate::os::vm::{VmArea, VmFault, VmFaultRet, VmOps, VmVTable};
 use core::cmp::{max, min};
 use kernel::page::PAGE_SHIFT;
@@ -141,7 +142,7 @@ impl VmOps for InodeInfo {
         let mut res = FolioReservation::new(inode);
 
         let _create_lock = fs.snapshots.create_lock.read();
-        let _write = inode.vfs().sb().start_pagefault();
+        let _write = inode.sb().start_pagefault();
         let _ = file.update_time();
 
         /*

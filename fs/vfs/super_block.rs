@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The VFS's struct super_block, for Rust: the filesystem's, once it's
-//! mounted - Fs::vfs_super(), or an inode's, VfsInode::sb(). A SuperBlock is
+//! mounted - Fs::vfs_super(), or an inode's, IsInode::sb(). A SuperBlock is
 //! always one of ours: its s_fs_info is its Fs, set before it has an inode
 //! and live until the last is evicted.
 //!
@@ -28,7 +28,7 @@ use cstruct_macros::vtable;
 use super::dentry::Dentry;
 use super::inode::InodeInfo;
 use crate::os::super_block::{SuperOps, SuperVTable};
-use crate::os::vfs_inode::VfsInode;
+use crate::types::CStatic;
 use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME};
 
 /// One of ours: s_fs_info is its Fs. The type is os/linux_kernel/super_block.rs's.
@@ -45,13 +45,6 @@ impl Fs {
 impl SuperBlock {
     pub fn fs(&self) -> &Fs {
         self.data()
-    }
-}
-
-impl VfsInode {
-    pub fn sb(&self) -> &SuperBlock {
-        // SAFETY: set at allocation, to our superblock, which outlives it
-        unsafe { &*(*self.as_ptr()).i_sb.cast::<SuperBlock>() }
     }
 }
 
@@ -177,4 +170,4 @@ impl SuperOps for Fs {
     }
 }
 
-pub(crate) static SUPER_OPS: c::super_operations = SuperVTable::<Fs>::OPS;
+pub(crate) static SUPER_OPS: CStatic<c::super_operations, Fs> = SuperVTable::<Fs>::STATIC;

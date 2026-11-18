@@ -29,6 +29,7 @@ use crate::os::dentry::Dentry;
 use crate::os::seq_file::SeqFile;
 use crate::os::vfs_inode::{ILocked, VfsInode};
 use crate::os::xattr::XattrHandlers;
+use crate::types::CStatic;
 use crate::util::ffi::Opaque;
 use kernel::error::{code::ENOMEM, to_result, Result};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
@@ -163,7 +164,7 @@ crate::vfs_ops! {
     /// points to, and each op gets it as &self, but free_inode(), which can
     /// run after the filesystem's freed.
     pub(crate) trait SuperOps for c::super_operations, SuperVTable<T: SuperOps> = T;
-    type Inode: IsInode;
+    type Inode: IsInode<Super = Self>;
 
     fn alloc_inode(&self = sb, sb: &SuperBlock<Self>) -> Result<NonNull<c::inode>, BchError>;
     /// The inode's memory, the VFS done with it - an RCU callback after
@@ -216,13 +217,22 @@ fn copy_str<const N: usize>(dst: &mut [u8; N], src: &CStr) {
     dst[n] = 0;
 }
 
-/// A struct inode, as the filesystem has its own: what fill() makes the root
-/// dentry of, from a reference, and what the VFS's ops pass it as.
+/// A struct inode, as the filesystem has its own - the only kind on Super's
+/// superblocks, its SuperOps::Inode: what fill() makes the root dentry of,
+/// from a reference, and what the VFS's ops pass it as.
 ///
 /// # Safety
-/// A &Self points to a struct inode, and its AlwaysRefCounted reference is
-/// one on i_count - ihold(), iput().
+/// A &Self points to a struct inode on a SuperBlock<Super>, and its
+/// AlwaysRefCounted reference is one on i_count - ihold(), iput().
 pub unsafe trait IsInode: AlwaysRefCounted {
+    type Super: SuperOps<Inode = Self>;
+
+    fn sb(&self) -> &SuperBlock<Self::Super>
+        where Self: Sized
+    {
+        unsafe { SuperBlock::from_raw((*core::ptr::from_ref(self).cast::<c::inode>()).i_sb) }
+    }
+
     /// A reference, taken under its i_lock - none, if the VFS is freeing it:
     /// VfsInode::iget()'s, as one of Self's.
     fn iget(&self, i_lock: &ILocked<'_>) -> Option<ARef<Self>>
@@ -299,10 +309,12 @@ impl<T: FsType> NewSuper<T> {
         }
     }
 
-    /// The ops. A table, so 'static. Its functions take s_fs_info as T::Data's
-    /// target: SuperVTable::<Data<T>>::OPS is the one that does.
-    pub fn set_ops(&mut self, ops: &'static c::super_operations) {
-        unsafe { (*self.raw()).s_op = ops };
+    /// Its ops, before it has an inode: Data<T>'s, whose inodes are its
+    /// SuperOps::Inode.
+    pub fn set_ops(&mut self, ops: &'static CStatic<c::super_operations, Data<T>>)
+        where Data<T>: SuperOps
+    {
+        unsafe { (*self.raw()).s_op = &**ops };
     }
 
     pub fn set_export_ops(&mut self, ops: &'static c::export_operations) {
@@ -369,7 +381,9 @@ impl<T: FsType> NewSuper<T> {
 
     /// Its root, made from @root's reference - d_make_root() - which makes it
     /// active and mountable: into_root() then.
-    pub fn fill<I: IsInode>(&mut self, root: ARef<I>) -> Result {
+    pub fn fill(&mut self, root: ARef<<Data<T> as SuperOps>::Inode>) -> Result
+        where Data<T>: SuperOps
+    {
         let sb = self.raw();
         debug_assert!(unsafe { (*sb).s_root }.is_null(), "a superblock is filled once");
         let dentry = unsafe { c::d_make_root(ARef::into_raw(root).as_ptr().cast()) };

@@ -39,6 +39,7 @@ use super::dentry::Dentry;
 use crate::os::idmap::MntIdmap;
 use super::inode::{InodeInfo, InodeRef};
 use crate::os::iattr::{ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
+use crate::os::super_block::IsInode;
 use super::inode_ops::InodeOps;
 use super::new_inode::NewInode;
 
@@ -59,7 +60,7 @@ impl InodeInfo {
         let name = (!tmpfile).then_some(dentry);
         let uid = dir.uid_of(idmap.fsuid(dir));
         let gid = dir.gid_of(idmap.fsgid(dir));
-        let is_posixacl = dir.sb().flags() as u64 & c::SB_POSIXACL != 0;
+        let is_posixacl = self.sb().flags() as u64 & c::SB_POSIXACL != 0;
 
         // preallocate acls + vfs inode before btree transaction, so that
         // nothing can fail after the transaction succeeds:

@@ -28,7 +28,7 @@ use crate::errcode::{errptr_to_result, BchError};
 use crate::locking::{Locked, SpinLockIrq};
 use crate::os::file::Any;
 use crate::os::ops::{err_class_ptr, from_raw};
-use crate::os::super_block::IsInode;
+use crate::os::super_block::{IsInode, SuperBlock, SuperOps};
 use crate::os::vfs_inode::VfsInode;
 use crate::util::os_str::{qstr_name, OsStr};
 
@@ -74,6 +74,11 @@ impl<'a, I> Dentry<'a, I> {
 
     pub fn as_ptr(&self) -> *mut c::dentry {
         self.raw
+    }
+
+    /// As a dentry of @sb's, if it is one: its inode, if it has one, T's.
+    pub(crate) fn on<T: SuperOps>(&self, sb: &SuperBlock<T>) -> Option<Dentry<'a, T::Inode>> {
+        (unsafe { (*self.raw).d_sb } == sb.as_ptr()).then_some(Dentry { raw: self.raw, _ref: PhantomData })
     }
 
     /// Stable while its directory is locked, as the namespace operations

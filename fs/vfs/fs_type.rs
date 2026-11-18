@@ -40,12 +40,10 @@ use crate::os::super_block::{ReconfSuper, Root};
 use crate::util::alloc::KVVec;
 use crate::util::printbuf::Printbuf;
 use crate::util::vstructs::plain_bytes_mut;
-use kernel::sync::aref::ARef;
 use pin_init::{init, Init};
 
 use super::inode::InodeInfo;
 use super::status_fd::StatusFile;
-use crate::os::vfs_inode::VfsInode;
 
 pub(crate) struct Bcachefs;
 
@@ -266,7 +264,7 @@ impl Bcachefs {
             let root = InodeInfo::get_warn(fs, c::subvol_inum::ROOT, c"bch2_fs_get_tree")
                 .inspect_err(|e| crate::bch_err!(fs, "mounting: error getting root inode: {}", e.msg()))?;
 
-            Ok(sb.fill(ARef::<VfsInode>::from(root.vfs()))
+            Ok(sb.fill(root)
                 .inspect_err(|_| crate::bch_err!(fs, "error mounting: error allocating root dentry"))?)
         })();
 
