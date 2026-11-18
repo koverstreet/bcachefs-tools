@@ -172,10 +172,11 @@ crate::vfs_ops! {
     /// A superblock's operations, super_operations: Self is what s_fs_info
     /// points to, and each op gets it as &self, but free_inode(), which can
     /// run after the filesystem's freed.
-    pub(crate) trait SuperOps for c::super_operations, SuperVTable<T: SuperOps> = T;
+    pub(crate) trait SuperOps for c::super_operations, SuperVTable<T: SuperOps> = T, |ops| {
+        ops.alloc_inode = Some(no_alloc_inode);
+    };
     type Inode: IsInode<Super = Self>;
 
-    fn alloc_inode(&self = sb, sb: &SuperBlock<Self>) -> Result<NonNull<c::inode>, BchError>;
     /// The inode's memory, the VFS done with it - an RCU callback after
     /// eviction, which can run after the filesystem's freed: no &self.
     fn free_inode(inode: NonNull<Self::Inode>);
@@ -193,6 +194,15 @@ crate::vfs_ops! {
     fn put_super(&self = sb, sb: &SuperBlock<Self>);
     fn freeze_fs(&self = sb, sb: &SuperBlock<Self>) -> Result<(), BchError>;
     fn unfreeze_fs(&self = sb, sb: &SuperBlock<Self>) -> Result<(), BchError>;
+}
+
+/// The VFS's own inode allocation - new_inode(), iget_locked() - refused: a
+/// superblock's inodes are its filesystem's, VfsInode::new()'s, on it from
+/// the start. Not NULL in the table, which would have the VFS allocate a bare
+/// struct inode.
+unsafe extern "C" fn no_alloc_inode(_sb: *mut c::super_block) -> *mut c::inode {
+    crate::warn_on_once!(true);
+    core::ptr::null_mut()
 }
 
 /// A superblock from sget with s_umount held for writing, its reference: the
@@ -231,15 +241,21 @@ fn copy_str<const N: usize>(dst: &mut [u8; N], src: &CStr) {
 /// from a reference, and what the VFS's ops pass it as.
 ///
 /// # Safety
-/// A &Self points to a struct inode on a SuperBlock<Super>, and its
-/// AlwaysRefCounted reference is one on i_count - ihold(), iput().
+/// Self starts with its VfsInode<Super>, and its AlwaysRefCounted reference
+/// is one on i_count - ihold(), iput().
 pub unsafe trait IsInode: AlwaysRefCounted {
     type Super: SuperOps<Inode = Self>;
+
+    fn vfs(&self) -> &VfsInode<Self::Super>
+        where Self: Sized
+    {
+        unsafe { &*core::ptr::from_ref(self).cast() }
+    }
 
     fn sb(&self) -> &SuperBlock<Self::Super>
         where Self: Sized
     {
-        unsafe { SuperBlock::from_raw((*core::ptr::from_ref(self).cast::<c::inode>()).i_sb) }
+        self.vfs().sb()
     }
 
     /// A reference, taken under its i_lock - none, if the VFS is freeing it:
@@ -247,8 +263,7 @@ pub unsafe trait IsInode: AlwaysRefCounted {
     fn iget(&self, i_lock: &ILocked<'_>) -> Option<ARef<Self>>
         where Self: Sized
     {
-        let v = unsafe { &*core::ptr::from_ref(self).cast::<VfsInode>() };
-        v.iget(i_lock).map(|r| unsafe { ARef::from_raw(ARef::into_raw(r).cast()) })
+        self.vfs().iget(i_lock).map(|r| unsafe { ARef::from_raw(ARef::into_raw(r).cast()) })
     }
 }
 

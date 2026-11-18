@@ -126,7 +126,7 @@ impl<'a, I> Dentry<'a, I> {
     /// DCACHE_OP_HASH and DCACHE_OP_COMPARE, set while @inode is casefolded.
     /// d_lock held.
     #[cfg(CONFIG_UNICODE)]
-    fn set_casefold_flags(&self, inode: &VfsInode) {
+    fn set_casefold_flags<S>(&self, inode: &VfsInode<S>) {
         let op = c::DCACHE_OP_HASH | c::DCACHE_OP_COMPARE;
         // SAFETY: referenced; d_flags is written under d_lock, which is held,
         // and read without it - READ_ONCE(), WRITE_ONCE()
@@ -151,7 +151,7 @@ impl<'a, I> Dentry<'a, I> {
 
     /// For a directory @inode, before it's this dentry's: the dentry ops that
     /// fold names, which it uses while @inode is casefolded.
-    pub fn set_casefold_ops(&self, inode: &VfsInode) {
+    pub fn set_casefold_ops<S>(&self, inode: &VfsInode<S>) {
         #[cfg(CONFIG_UNICODE)]
         if inode.is_dir() {
             let _d_lock = self.d_lock().lock();

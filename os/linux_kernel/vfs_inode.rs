@@ -24,7 +24,10 @@ use crate::os::folio::Mapping;
 use crate::util::ffi::c_char;
 use crate::os::kernel::loff;
 use crate::os::posix_acl::{AclType, PosixAcl};
-use crate::os::super_block::SuperBlock;
+use crate::os::file::Any;
+use crate::os::super_block::{SuperBlock, SuperOps};
+use crate::util::alloc::Flags;
+use pin_init::PinInit;
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
 #[path = "../vfs_inode.rs"]
@@ -65,7 +68,7 @@ macro_rules! accessors {
     };
 }
 
-impl VfsInode {
+impl<S> VfsInode<S> {
     pub fn as_ptr(&self) -> *mut c::inode {
         self.0.as_ptr()
     }
@@ -226,7 +229,7 @@ impl VfsInode {
     }
 
     /// i_rwsem, held for write until the guard's dropped: inode_lock().
-    pub fn lock(&self) -> InodeLocked<'_> {
+    pub fn lock(&self) -> InodeLocked<'_, S> {
         unsafe { c::inode_lock(self.as_ptr()) };
         InodeLocked(self)
     }
@@ -276,7 +279,7 @@ impl VfsInode {
 
     /// A reference, taken under i_lock: __iget() - or none, if the VFS is
     /// freeing it.
-    pub fn iget(&self, i_lock: &ILocked<'_>) -> Option<ARef<VfsInode>> {
+    pub fn iget(&self, i_lock: &ILocked<'_>) -> Option<ARef<Self>> {
         if self.state(i_lock) & (c::I_FREEING | c::I_WILL_FREE) != 0 {
             return None;
         }
@@ -308,7 +311,7 @@ impl VfsInode {
     /// kernel's own wait for an inode being freed, on its __I_NEW bit's. The
     /// waitqueue is found by @inode's address alone, so it needn't be live -
     /// nothing of it is read.
-    pub fn wait_new_bit(inode: NonNull<VfsInode>, still: impl FnOnce() -> bool, timeout: c_long) {
+    pub fn wait_new_bit(inode: NonNull<Self>, still: impl FnOnce() -> bool, timeout: c_long) {
         let mut wait: c::wait_bit_queue_entry = ::pin_init::zeroed();
         unsafe {
             let wq = c::inode_bit_waitqueue(&mut wait, inode.as_ptr().cast(), c::__I_NEW);
@@ -326,7 +329,7 @@ impl VfsInode {
     }
 
     /// A reference, if the VFS isn't freeing it: igrab().
-    pub fn igrab(&self) -> Option<ARef<VfsInode>> {
+    pub fn igrab(&self) -> Option<ARef<Self>> {
         // SAFETY: igrab()'s reference, if any, is ours
         NonNull::new(unsafe { c::igrab(self.as_ptr()) }).map(|p| unsafe { ARef::from_raw(p.cast()) })
     }
@@ -354,23 +357,6 @@ impl VfsInode {
     }
 
     // ── A new inode, its creator's alone: &mut ───────────────────────────
-
-    /// What inode_init_once() makes of an allocation: its lists and locks.
-    pub fn init_once() -> impl ::pin_init::PinInit<Self> {
-        // SAFETY: inode_init_once() writes all of it
-        unsafe {
-            ::pin_init::pin_init_from_closure(|slot: *mut Self| {
-                c::inode_init_once(slot.cast());
-                Ok(())
-            })
-        }
-    }
-
-    /// The rest of it, for @sb: inode_init_always_gfp() - and its one
-    /// reference, the caller's.
-    pub fn init_always<T>(&mut self, sb: &SuperBlock<T>, gfp: c::gfp_t) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { c::inode_init_always_gfp(sb.as_ptr(), self.as_ptr(), gfp) })
-    }
 
     /// Given up: make_bad_inode() - which evict doesn't delete.
     pub fn make_bad(&mut self) {
@@ -424,30 +410,48 @@ impl VfsInode {
 
     /// The i_rwsems of @a and @b, in the VFS's order, held for write until the
     /// guard's dropped: lock_two_nondirectories().
-    pub fn lock_two_nondirectories<'a>(a: &'a VfsInode, b: &'a VfsInode) -> TwoNondirsLocked<'a> {
+    pub fn lock_two_nondirectories<'a>(a: &'a Self, b: &'a Self) -> TwoNondirsLocked<'a, S> {
         unsafe { c::lock_two_nondirectories(a.as_ptr(), b.as_ptr()) };
         TwoNondirsLocked(a, b)
     }
 }
 
-pub struct InodeLocked<'a>(&'a VfsInode);
+impl<S: SuperOps> VfsInode<S> {
+    /// A new inode on @sb: inode_init_once(), then inode_init_always_gfp(),
+    /// its one reference the caller's.
+    pub fn new(sb: &SuperBlock<S>, gfp: Flags) -> impl PinInit<Self, BchError> + '_ {
+        // SAFETY: inode_init_once() writes all of it
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                c::inode_init_once(slot.cast());
+                ret_to_result_void(c::inode_init_always_gfp(sb.as_ptr(), slot.cast(), gfp.raw()))
+            })
+        }
+    }
 
-impl Drop for InodeLocked<'_> {
+    pub fn sb(&self) -> &SuperBlock<S> {
+        unsafe { SuperBlock::from_raw((*self.as_ptr()).i_sb) }
+    }
+}
+
+pub struct InodeLocked<'a, S = Any>(&'a VfsInode<S>);
+
+impl<S> Drop for InodeLocked<'_, S> {
     fn drop(&mut self) {
         unsafe { c::inode_unlock(self.0.as_ptr()) }
     }
 }
 
-pub struct TwoNondirsLocked<'a>(&'a VfsInode, &'a VfsInode);
+pub struct TwoNondirsLocked<'a, S = Any>(&'a VfsInode<S>, &'a VfsInode<S>);
 
-impl Drop for TwoNondirsLocked<'_> {
+impl<S> Drop for TwoNondirsLocked<'_, S> {
     fn drop(&mut self) {
         unsafe { c::unlock_two_nondirectories(self.0.as_ptr(), self.1.as_ptr()) }
     }
 }
 
 // SAFETY: a borrowed VfsInode is referenced, as ihold() requires
-unsafe impl AlwaysRefCounted for VfsInode {
+unsafe impl<S> AlwaysRefCounted for VfsInode<S> {
     fn inc_ref(&self) {
         unsafe { c::ihold(self.as_ptr()) }
     }

@@ -76,14 +76,13 @@ unsafe impl AlwaysRefCounted for InodeInfo {
     }
 
     unsafe fn dec_ref(obj: NonNull<Self>) {
-        unsafe { VfsInode::dec_ref(obj.cast()) }
+        unsafe { VfsInode::<Fs>::dec_ref(obj.cast()) }
     }
 }
 
 // to_bch_ei(): an InodeInfo is where its struct inode is
 const _: () = assert!(offset_of!(InodeInfo, v) == 0);
 
-// NewInode::new() makes them, on Fs's superblock
 unsafe impl IsInode for InodeInfo {
     type Super = Fs;
 }
@@ -220,7 +219,7 @@ impl InodeInfo {
         self.sb().fs()
     }
 
-    pub fn vfs(&self) -> &VfsInode {
+    pub fn vfs(&self) -> &VfsInode<Fs> {
         &self.v
     }
 

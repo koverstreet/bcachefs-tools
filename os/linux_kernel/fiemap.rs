@@ -17,7 +17,7 @@ from_raw! {
 impl Fiemap<'_> {
     /// The request checked for @inode, and @len cut to what it may map:
     /// fiemap_prep().
-    pub fn prep(&mut self, inode: &VfsInode, start: u64, len: &mut u64) -> Result<(), BchError> {
+    pub fn prep<S>(&mut self, inode: &VfsInode<S>, start: u64, len: &mut u64) -> Result<(), BchError> {
         ret_to_result_void(unsafe { c::fiemap_prep(inode.as_ptr(), self.0, start, len, 0) })
     }
 

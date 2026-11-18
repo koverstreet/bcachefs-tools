@@ -116,7 +116,7 @@ into_raw! {
 }
 
 #[cfg(kernel)]
-use {core::ffi::CStr, core::ptr::NonNull, crate::c, crate::util::ffi::c_char};
+use {core::ffi::CStr, crate::c, crate::util::ffi::c_char};
 
 #[cfg(kernel)]
 from_raw! {
@@ -150,8 +150,6 @@ into_raw! {
     /// mkdir's: NULL for the dentry it was given, instantiated.
     Result<(), BchError>    => *mut c::dentry: |r| r.map_or_else(err_class_ptr, |()| core::ptr::null_mut());
     Result<usize, BchError> => isize: |r| r.map_or_else(|e| e.class() as isize, |n| n as isize);
-    /// alloc_inode's: NULL if there isn't one.
-    Result<NonNull<c::inode>, BchError> => *mut c::inode: |r| r.map_or(core::ptr::null_mut(), NonNull::as_ptr);
 }
 
 /// See the file comment.

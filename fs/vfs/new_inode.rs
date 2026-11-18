@@ -45,7 +45,7 @@ impl NewInode {
         let slot = fs.vfs.inodes.get_slot().ok()?;
 
         let init = pin_init!(InodeInfo {
-            v <- VfsInode::init_once(),
+            v <- VfsInode::new(sb, gfp),
             ei_reserved <- new_lock!(InodeReserved { ei_reserved_replicas: 0, ei_reserved_state: 0 },
                                      InodeReservedRange { ei_reserved_start: Zeroable::zeroed(),
                                                           ei_reserved_end: Zeroable::zeroed() },
@@ -67,15 +67,9 @@ impl NewInode {
             ei_last_dirtied: Zeroable::zeroed(),
             ei_devs_need_flush: Zeroable::zeroed(),
             ei_inode: Zeroable::zeroed(),
-        });
+        }? BchError);
 
         let mut inode = NewInode(INODE_CACHE.alloc_inode(sb, gfp, init)?);
-        if inode.v.init_always(sb, gfp.raw()).is_err() {
-            // not yet a VFS inode: no reference to put
-            // SAFETY: ours, and nothing of the VFS's in it
-            unsafe { INODE_CACHE.free(ManuallyDrop::new(inode).0) };
-            return None;
-        }
         inode.ei_inodes_idx = slot.into_idx();
         // From the start, as FsMapping has it: inode_init_always() set the
         // VFS's empty ones

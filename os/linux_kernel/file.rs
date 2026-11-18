@@ -63,7 +63,7 @@ use kernel::ffi::{c_long as CLong, c_ulong as CUlong};
 #[repr(transparent)]
 pub struct File<D = Any>(Opaque<c::file>, PhantomData<D>);
 
-/// What a File of no one type is of.
+/// What a File, Dentry or VfsInode of no one type is of, or on.
 pub enum Any {}
 
 impl<D> File<D> {

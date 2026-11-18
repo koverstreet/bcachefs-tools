@@ -62,13 +62,13 @@ impl<'f> MntIdmap<'f> {
         self.0
     }
 
-    pub fn owner_or_capable(self, inode: &VfsInode) -> bool {
+    pub fn owner_or_capable<S>(self, inode: &VfsInode<S>) -> bool {
         unsafe { c::inode_owner_or_capable(self.0, inode.as_ptr()) }
     }
 
     /// Whether the caller has @mask - MAY_* - on @inode, by the whole VFS
     /// stack: ACLs and LSMs too.
-    pub fn permission(self, inode: &VfsInode, mask: u32) -> Result<(), BchError> {
+    pub fn permission<S>(self, inode: &VfsInode<S>, mask: u32) -> Result<(), BchError> {
         ret_to_result(unsafe { c::inode_permission(self.0, inode.as_ptr(), mask as c_int) })
     }
 
@@ -81,7 +81,7 @@ impl<'f> MntIdmap<'f> {
 
     /// @inode's owner as the mount's users see it, as stat(2) has it: a
     /// vfsuid_t and vfsgid_t, in the kuid_t and kgid_t they're carried as.
-    pub fn owner(self, inode: &VfsInode) -> (c::kuid_t, c::kgid_t) {
+    pub fn owner<S>(self, inode: &VfsInode<S>) -> (c::kuid_t, c::kgid_t) {
         let uid = unsafe { c::make_vfsuid(self.0, inode.user_ns(), inode.kuid()) };
         let gid = unsafe { c::make_vfsgid(self.0, inode.user_ns(), inode.kgid()) };
         (c::kuid_t { val: uid.val }, c::kgid_t { val: gid.val })
@@ -89,26 +89,26 @@ impl<'f> MntIdmap<'f> {
 
     /// The caller's fsuid, through this mount, as an id of @inode's
     /// filesystem: mapped_fsuid() - what a new inode in it is owned by.
-    pub fn fsuid(self, inode: &VfsInode) -> c::kuid_t {
+    pub fn fsuid<S>(self, inode: &VfsInode<S>) -> c::kuid_t {
         self.kuid(inode, c::vfsuid_t { val: current_fsuid().val })
     }
 
-    pub fn fsgid(self, inode: &VfsInode) -> c::kgid_t {
+    pub fn fsgid<S>(self, inode: &VfsInode<S>) -> c::kgid_t {
         self.kgid(inode, c::vfsgid_t { val: current_fsgid().val })
     }
 
-    pub fn kuid(self, inode: &VfsInode, vfsuid: c::vfsuid_t) -> c::kuid_t {
+    pub fn kuid<S>(self, inode: &VfsInode<S>, vfsuid: c::vfsuid_t) -> c::kuid_t {
         unsafe { c::from_vfsuid(self.0, inode.user_ns(), vfsuid) }
     }
 
-    pub fn kgid(self, inode: &VfsInode, vfsgid: c::vfsgid_t) -> c::kgid_t {
+    pub fn kgid<S>(self, inode: &VfsInode<S>, vfsgid: c::vfsgid_t) -> c::kgid_t {
         unsafe { c::from_vfsgid(self.0, inode.user_ns(), vfsgid) }
     }
 
     /// The mode @inode takes with @acl as its access ACL, into @mode: the
     /// ACL's permissions, and setgid as setattr_copy() keeps it - and @acl
     /// None if the mode says all it would.
-    pub fn acl_update_mode(self, inode: &VfsInode, mode: &mut c::umode_t,
+    pub fn acl_update_mode<S>(self, inode: &VfsInode<S>, mode: &mut c::umode_t,
                                   acl: &mut Option<ManuallyDrop<PosixAcl>>) -> Result<(), BchError> {
         let mut raw = acl.as_deref().map_or(core::ptr::null_mut(), PosixAcl::as_raw);
         ret_to_result(unsafe { c::posix_acl_update_mode(self.0, inode.as_ptr(), mode, &mut raw) })?;
@@ -118,7 +118,7 @@ impl<'f> MntIdmap<'f> {
         Ok(())
     }
 
-    pub fn in_group_or_capable(self, inode: &VfsInode, gid: c::kgid_t) -> bool {
+    pub fn in_group_or_capable<S>(self, inode: &VfsInode<S>, gid: c::kgid_t) -> bool {
         unsafe {
             c::in_group_or_capable(self.0, inode.as_ptr(), c::make_vfsgid(self.0, inode.user_ns(), gid))
         }

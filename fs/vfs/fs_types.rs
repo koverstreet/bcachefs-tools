@@ -29,7 +29,7 @@ use crate::btree::iter::BtreeTrans;
 #[derive(TypeInfo)]
 pub struct InodeInfo {
     #[pin]
-    pub v: VfsInode,
+    pub v: VfsInode<crate::fs::Fs>,
     /* the inode cache's key: set before it's in, unchanged while it is */
     pub ei_inum: c::subvol_inum,
 

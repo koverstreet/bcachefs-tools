@@ -53,11 +53,6 @@ impl SuperBlock {
 impl SuperOps for Fs {
     type Inode = InodeInfo;
 
-    /// Never the VFS's to call: our inodes are made by NewInode::new().
-    fn alloc_inode(&self, _sb: &SuperBlock) -> Result<NonNull<c::inode>, BchError> {
-        unreachable!("bcachefs inodes are allocated by NewInode::new()")
-    }
-
     fn free_inode(inode: NonNull<InodeInfo>) {
         super::new_inode::free(inode)
     }
