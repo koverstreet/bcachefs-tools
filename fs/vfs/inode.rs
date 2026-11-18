@@ -71,15 +71,6 @@ pub type InodeRef = ARef<InodeInfo>;
 // to_bch_ei(): an InodeInfo is where its struct inode is
 crate::is_inode!(InodeInfo { v }: Fs, super::new_inode::INODE_CACHE);
 
-// SAFETY: the kernel's inode, shared by every thread with it open or in a VFS
-// call. What Rust reaches through &InodeInfo is atomic, behind a lock, or the
-// VFS inode's, read and written as VfsInode has it. The plain fields -
-// ei_inum, the inode cache's key, and ei_inodes_idx - are set before the
-// inode's shared, and never after. ei_last_dirtied is a hint, written racily
-// by both.
-unsafe impl Send for InodeInfo {}
-unsafe impl Sync for InodeInfo {}
-
 impl InodeInfo {
     /// # Safety
     /// @vinode is one of ours, live for 'a: the VFS holds a reference on it,

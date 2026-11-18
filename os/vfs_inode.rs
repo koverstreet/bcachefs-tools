@@ -18,6 +18,11 @@ use crate::util::rcu::RcuDropMember;
 #[repr(transparent)]
 pub struct VfsInode<S = Any, St = Live>(pub(super) Opaque<c::inode>, PhantomData<(fn() -> (S, St), RcuDropMember)>);
 
+// The kernel's, shared by every task with it open or in a VFS call: its
+// fields are C's, read and written as the VFS does, under its locks
+unsafe impl<S, St> Send for VfsInode<S, St> {}
+unsafe impl<S, St> Sync for VfsInode<S, St> {}
+
 /// An inode anyone may hold a reference to: published.
 pub enum Live {}
 
