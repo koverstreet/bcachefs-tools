@@ -33,7 +33,6 @@ use crate::types::CStatic;
 use crate::util::alloc::{init_at, kfree, kzalloc, KBox};
 use crate::os::folio::{AddressSpaceOps, AopsVTable, FolioPrivate, FsMapping, VfsWriter, Wbc};
 use crate::os::kernel::PAGE_SECTORS_SHIFT;
-use crate::util::bio::BioRange;
 
 use super::buffered;
 use super::buffered_write::{self, WriteBegun};
@@ -337,8 +336,9 @@ impl InodeInfo {
     }
 }
 
-/// The sectors of @range's folios, set as @k has them.
-pub fn bio_page_state_set(fs: &Fs, range: BioRange<'_>, k: BkeySC<'_>) {
+/// Sectors @sectors of @folios, set as @k has them.
+pub fn folios_state_set<'f>(fs: &Fs, folios: impl Iterator<Item = &'f Folio>, sectors: Range<u64>,
+                            k: BkeySC<'_>) {
     let nr_ptrs = if k.k.key_type() == BkeyType::reflink_v {
         0
     } else {
@@ -346,9 +346,12 @@ pub fn bio_page_state_set(fs: &Fs, range: BioRange<'_>, k: BkeySC<'_>) {
     };
     let state = SectorState::of_key(fs, k);
 
-    for fv in range.folios() {
-        unsafe { Folio::from_raw(fv.folio) }.lock_state()
-            .set_sectors(fv.offset >> 9..(fv.offset >> 9) + (fv.len >> 9), nr_ptrs, state);
+    for folio in folios {
+        let (start, end) = (sectors.start.max(folio.sector()), sectors.end.min(folio.end_sector()));
+        if start < end {
+            let base = folio.sector();
+            folio.lock_state().set_sectors((start - base) as usize..(end - base) as usize, nr_ptrs, state);
+        }
     }
 }
 

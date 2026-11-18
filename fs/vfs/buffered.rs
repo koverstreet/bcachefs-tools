@@ -35,7 +35,7 @@ use crate::fs::Fs;
 use crate::inode_opts::get_inode;
 use crate::util::alloc::{KVVec, Kmalloc, PushError};
 use crate::os::blkdev::plugged;
-use crate::util::bio::{bvec_offset, inline_vecs, Bio, BioBuffersUnmanaged, BioOwner, BioRange, HasBio};
+use crate::util::bio::{bvec_offset, inline_vecs, Bio, BioRange, HasBio, Lent};
 use crate::os::kernel::PAGE_SIZE;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
@@ -93,22 +93,101 @@ impl Folios {
     }
 }
 
-/// What a read into the page cache does besides read::read()'s.
-struct PagecacheRead {
+/// A read's folios, its bio's bvecs: a single folio's read's first, its lock
+/// the caller's, then those whose locks are the read's - each given up as the
+/// read ends, or as truncate() abandons it. Folios go into the bio only
+/// through this, and their locks are given up only here: so each bvec is a
+/// folio locked for the read, and the read's task, holding this, holds the
+/// locks. Nothing's kept but how many: the bvecs are the folios.
+///
+/// XXX: the bio should be made of its folios - Bio<B>, typed by its buffers,
+/// walked as them - and the casts here go.
+struct ReadFolios {
+    /// The first is the caller's
+    callers: bool,
+    /// How many after it are the read's
+    locked:  u16,
+}
+
+impl ReadFolios {
+    /// A read's, @folio its first, and its lock the read's.
+    fn starting_with(bio: Pin<&mut Bio>, folio: FolioGuard<'static>) -> Self {
+        let mut f = ReadFolios { callers: false, locked: 0 };
+        f.push(bio, folio);
+        f
+    }
+
+    /// A single folio's read's, @folio its first, its lock the caller's, who
+    /// waits for the read.
+    fn callers(bio: Pin<&mut Bio>, folio: &FolioLocked) -> Self {
+        unsafe { bio.add_folio(folio) };
+        ReadFolios { callers: true, locked: 0 }
+    }
+
+    /// The folio in each bvec of @range, of this read's bio.
+    fn folios<'b>(&'b self, range: BioRange<'b>) -> impl Iterator<Item = &'b Folio> {
+        range.folios().map(|fv| unsafe { Folio::from_raw(fv.folio) })
+    }
+
+    /// @folio into @bio, after the rest: its lock the read's.
+    fn push(&mut self, bio: Pin<&mut Bio>, folio: FolioGuard<'static>) {
+        unsafe { bio.add_folio(&folio) };
+        folio.keep_locked();
+        self.locked += 1;
+    }
+
+    /// The read's folios from bvec @from on, their locks given back: the
+    /// caller's is never the read's.
+    fn take<'b>(&mut self, bio: &'b Bio, from: usize) -> impl Iterator<Item = FolioGuard<'static>> + 'b {
+        let first = self.callers as usize;
+        let from = from.max(first);
+        self.locked = (from - first) as u16;
+        bio.range_all().folios().skip(from).map(|fv| unsafe { FolioGuard::adopt(fv.folio) })
+    }
+
+    /// Each folio from bvec @keep on, never to be read: its read abandoned,
+    /// and @bio truncated to the rest.
+    fn truncate(&mut self, mut bio: Lent<'_>, keep: usize) {
+        for folio in self.take(&bio, keep) {
+            folio.end_read(false);
+        }
+        bio.bio_mut().truncate_vecs(keep as u16);
+    }
+
+    /// The read's done: each folio whose lock is the read's unlocked, uptodate
+    /// if the read read all of it.
+    fn end(mut self, bio: &Bio, ret: &Result<(), BchError>) {
+        /* a stale partially_uptodate would spin do_read_cache_folio() forever: */
+        let partial = self.folios(bio.range_all()).last().is_some_and(|f| f.partially_uptodate() != 0);
+        let n = self.locked as usize;
+        for (i, folio) in self.take(bio, 0).enumerate() {
+            folio.end_read(ret.is_ok() && !(i + 1 == n && partial));
+        }
+    }
+}
+
+/// What a read into the page cache reads, and may extend into.
+struct Window {
     /// The readahead's folios to extend into - none but new ones, for a
     /// single folio's read that's extended - or None, not extended
-    folios:    Option<NonNull<Folios>>,
+    batch:     Option<NonNull<Folios>>,
     mapping:   Mapping,
     read_from: u64,
     /// The readahead window: past this is the speculative extension
     orig_end:  u64,
 }
 
-// The folios are on the stack of the read's caller: the hooks are called only
+// The batch is on the stack of the read's caller: the hooks are called only
 // in read()'s walk, before its first await, which runs inline in the caller.
-unsafe impl Send for PagecacheRead {}
+unsafe impl Send for Window {}
 
-impl PagecacheRead {
+/// What a read into the page cache does besides read::read()'s.
+struct PagecacheRead<'r> {
+    window: Window,
+    read:   &'r mut ReadFolios,
+}
+
+impl Window {
     fn new_folio(&self, t: &TransAttempt<'_, '_>, end_sector: u64, sectors_remaining: u32)
         -> Option<FolioGuard<'static>>
     {
@@ -148,15 +227,15 @@ impl PagecacheRead {
     }
 }
 
-impl ReadHooks for PagecacheRead {
+impl ReadHooks for PagecacheRead<'_> {
     fn read_from(&self) -> u64 {
-        self.read_from
+        self.window.read_from
     }
 
     fn extend(&mut self, t: &TransAttempt<'_, '_>, read: &Rbio, k: BkeySC<'_>, sectors: u32)
         -> Result<(), BchError>
     {
-        let Some(folios) = self.folios else { return Ok(()) };
+        let Some(folios) = self.window.batch else { return Ok(()) };
         let folios = unsafe { &mut *folios.as_ptr() };
         let get_more = k.arm::<Ptrs>()
             .is_some_and(|kp| kp.crcs(read.fs()).any(|crc| crc.csum_type != c::CsumType::none ||
@@ -173,7 +252,7 @@ impl ReadHooks for PagecacheRead {
 
             let folio = match folios.next() {
                 Some(folio) => folio,
-                None if get_more => match self.new_folio(t, end_sector, sectors - bio_sectors) {
+                None if get_more => match self.window.new_folio(t, end_sector, sectors - bio_sectors) {
                     Some(folio) => folio,
                     None => break,
                 },
@@ -181,8 +260,7 @@ impl ReadHooks for PagecacheRead {
             };
 
             assert_eq!(folio.sector(), end_sector, "a folio added to a read bio, not at its end");
-            unsafe { bio.bio_mut().add_folio(&folio) };
-            folio.keep_locked();
+            self.read.push(bio.bio_mut(), folio);
         }
         drop(bio);
 
@@ -190,49 +268,28 @@ impl ReadHooks for PagecacheRead {
     }
 
     fn extent(&mut self, read: &Rbio, range: BioRange<'_>, k: BkeySC<'_>) {
-        pagecache::bio_page_state_set(read.fs(), range, k);
+        let start = range.pos().bi_sector;
+        let sectors = start..start + u64::from(range.len() >> 9);
+        pagecache::folios_state_set(read.fs(), self.read.folios(range), sectors, k);
     }
 
     /* everything asked for is issued; the rest isn't worth a retry */
     fn give_up(&mut self, read: &Rbio) -> bool {
-        let mut bio = read.bio.lend();
+        let bio = read.bio.lend();
         let iter = bio.raw().bi_iter;
-        if self.folios.is_none() || iter.bi_sector < self.orig_end {
+        if self.window.batch.is_none() || iter.bi_sector < self.window.orig_end {
             return false;
         }
 
-        let mut keep = iter.bi_idx;
+        let mut keep = iter.bi_idx as usize;
         let partial = bvec_offset(&iter);
-        let mut folios = bio.range().folios();
         if partial != 0 {
-            let fv = folios.next().expect("a partial bvec's folio");
-            unsafe { Folio::from_raw(fv.folio) }.set_partially_uptodate((partial >> 9) as u16);
+            let folio = self.read.folios(bio.range()).next().expect("a partial bvec's folio");
+            folio.set_partially_uptodate((partial >> 9) as u16);
             keep += 1;
         }
-        for fv in folios {
-            unsafe { FolioGuard::adopt(fv.folio) }.end_read(false);
-        }
-
-        bio.bio_mut().truncate_vecs(keep as u16);
+        self.read.truncate(bio, keep);
         true
-    }
-}
-
-/// The folio a read stopped inside, if it did: read, but not uptodate.
-fn partial_folio(b: &impl BioOwner) -> Option<NonNull<c::folio>> {
-    let fv = b.range_all().folios().last()?;
-    let folio = unsafe { Folio::from_raw(fv.folio) };
-    (folio.partially_uptodate() != 0).then_some(fv.folio)
-}
-
-/// Each of @b's folios but @except unlocked: uptodate if read.
-fn end_reads(b: &impl BioOwner, ret: Result<(), BchError>, except: Option<NonNull<c::folio>>) {
-    /* a stale partially_uptodate would spin do_read_cache_folio() forever: */
-    let partial = partial_folio(b);
-    for fv in b.range_all().folios() {
-        if Some(fv.folio) != except {
-            unsafe { FolioGuard::adopt(fv.folio) }.end_read(ret.is_ok() && Some(fv.folio) != partial);
-        }
     }
 }
 
@@ -245,21 +302,6 @@ struct ReadBio {
     rbio: Rbio,
 }
 crate::has_bio!(ReadBio, rbio.bio);
-
-/// A read's home, as its task has it: the bio's owner.
-struct ReadHome<'h>(Pin<&'h mut ReadBio>);
-
-unsafe impl BioOwner for ReadHome<'_> {
-    type Buffers = BioBuffersUnmanaged;
-
-    fn bio(&self) -> &Bio {
-        self.0.rbio.bio()
-    }
-
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        self.0.as_mut().bio_mut()
-    }
-}
 
 /// A read's box is freed when its task is done, after the read - when the
 /// filesystem may be gone: so from a pool of the module's.
@@ -276,44 +318,34 @@ pub fn pools_exit(q: &Quiesced<'_>) {
     READS.exit(q)
 }
 
-/// What's done with a read's folios once it's read.
+/// Whom a read's done for: readahead, or a single folio's caller, waiting.
 enum End {
-    /// Readahead's: each ended
     Readahead,
-    /// A single folio's: those extend() added ended - @folio is the caller's -
-    /// and the caller, waiting for it, given what was read
-    Single { folio: NonNull<c::folio>, extend: bool, r: Return<Result<(), BchError>, waiter::Sync> },
+    Single(Return<Result<(), BchError>, waiter::Sync>),
 }
 
-// @folio's the caller's, locked, and the caller's waiting on the task
-unsafe impl Send for End {}
-
 #[in_place(ReadFut)]
-async fn read_task<'h>(home: Pin<&'h mut ReadBio>, inum: c::subvol_inum, hooks: PagecacheRead, end: End) {
+async fn read_task<'h>(home: Pin<&'h mut ReadBio>, inum: c::subvol_inum, mut folios: ReadFolios,
+                       window: Window, end: End) {
+    let hooks = PagecacheRead { window, read: &mut folios };
     let ret = read::read(&home.rbio, inum, F::retry_if_stale | F::may_promote, hooks).await;
-    let b = ReadHome(home);
-    match end {
-        End::Readahead => end_reads(&b, ret, None),
-        End::Single { folio, extend, r } => {
-            if extend {
-                end_reads(&b, ret, Some(folio));
-            }
-            r.complete(ret);
-        }
+    folios.end(&home.rbio.bio.lend(), &ret);
+    if let End::Single(r) = end {
+        r.complete(ret);
     }
 }
 
-/// A read of @inode into a bio of @nr_vecs bvecs, set up by @set_up: read by a
-/// task of its own, its first poll here, and ended as @end says.
+/// A read of @inode into a bio of @nr_vecs bvecs, set up by @set_up, with
+/// its first folio: read by a task of its own, its first poll here.
 fn spawn_read(fs: &Fs, inode: &InodeInfo, opts: c::bch_inode_opts, nr_vecs: usize,
-              set_up: impl FnOnce(Pin<&mut Bio>), hooks: PagecacheRead, end: End) {
+              set_up: impl FnOnce(Pin<&mut Bio>) -> ReadFolios, window: Window, end: End) {
     let subvol = inode.inum().subvol as u32;
     let mut slot = TaskSlot::exclusive_bio_in(&READS, core::ptr::null_mut(), nr_vecs as u16, c::req_op_REQ_OP_READ,
                                               |b| pin_init!(ReadBio { rbio <- Rbio::new(fs, opts, subvol, None, b) }? BchError))
         .expect("a read bio's box: its pool waits for an element, and an Rbio's init can't fail");
-    set_up(slot.home().bio_mut());
+    let folios = set_up(slot.home().bio_mut());
     let inum = inode.inum();
-    unsafe { slot.start(Spawn::Inline, fs.tasks(), move |h| read_task(h, inum, hooks, end)) };
+    unsafe { slot.start(Spawn::Inline, fs.tasks(), move |h| read_task(h, inum, folios, window, end)) };
 }
 
 pub(crate) fn readahead(mut ra: Readahead<'_>) {
@@ -341,20 +373,18 @@ pub(crate) fn readahead(mut ra: Readahead<'_>) {
         let orig_end = folios.0.first().map_or(0, |f| f.end_sector());
         while let Some(folio) = folios.next() {
             let nr_vecs = (folios.remaining() + 1).min(c::BIO_MAX_VECS as usize);
-            let read_from = folio.sector() + u64::from(folio.partially_uptodate());
-            let set_up = move |mut b: Pin<&mut Bio>| {
-                b.as_mut().set_sector(folio.sector());
-                unsafe { b.add_folio(&folio) };
-                folio.keep_locked();
-            };
-
-            let hooks = PagecacheRead {
-                folios: Some(NonNull::from(&mut folios)),
+            let sector = folio.sector();
+            let window = Window {
+                batch:     Some(NonNull::from(&mut folios)),
                 mapping,
-                read_from,
+                read_from: sector + u64::from(folio.partially_uptodate()),
                 orig_end,
             };
-            spawn_read(fs, inode, opts, nr_vecs, set_up, hooks, End::Readahead);
+            let set_up = |mut b: Pin<&mut Bio>| {
+                b.as_mut().set_sector(sector);
+                ReadFolios::starting_with(b, folio)
+            };
+            spawn_read(fs, inode, opts, nr_vecs, set_up, window, End::Readahead);
         }
     });
 }
@@ -386,11 +416,11 @@ pub(crate) fn read_single_folio(folio: &FolioLocked, mapping: Mapping, extend: b
     let set_up = |mut b: Pin<&mut Bio>| {
         b.as_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
         b.as_mut().set_sector(folio.sector());
-        unsafe { b.add_folio(folio) };
+        ReadFolios::callers(b, folio)
     };
 
-    let hooks = PagecacheRead {
-        folios:    extend.then(|| NonNull::from(&mut folios)),
+    let window = Window {
+        batch:     extend.then(|| NonNull::from(&mut folios)),
         mapping,
         read_from: folio.sector() + u64::from(folio.partially_uptodate()),
         orig_end:  folio.end_sector(),
@@ -401,8 +431,7 @@ pub(crate) fn read_single_folio(folio: &FolioLocked, mapping: Mapping, extend: b
      * The folios extend() added after @folio are locked and ours to finish,
      * as readahead's end does; @folio stays locked, it's the caller's.
      */
-    let end = End::Single { folio: NonNull::from(folio).cast(), extend, r };
-    plugged(|| spawn_read(fs, inode, opts, nr_vecs, set_up, hooks, end));
+    plugged(|| spawn_read(fs, inode, opts, nr_vecs, set_up, window, End::Single(r)));
     let ret = wait.wait(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read");
 
     ret?;
