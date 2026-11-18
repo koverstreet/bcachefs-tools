@@ -14,7 +14,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::new_lock;
-use crate::util::alloc::{flags, init_at, AllocError, Flags};
+use crate::util::alloc::{flags, AllocError, Flags};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::slab::KmemCache;
 use crate::os::workqueue::{run_raw, RawWork};
@@ -42,13 +42,7 @@ impl NewInode {
     pub fn new(fs: &Fs, gfp: Flags) -> Option<Self> {
         let sb = fs.vfs_super().expect("an inode for a filesystem with no VFS superblock");
         let _gfp = MemallocFlags::for_gfp(gfp);
-        // SAFETY: the superblock's own inode LRU
-        let p = INODE_CACHE.alloc_lru(unsafe { &raw mut (*sb.as_ptr()).s_inode_lru }, gfp)?;
-        let Ok(slot) = fs.vfs.inodes.get_slot() else {
-            // SAFETY: just allocated, nothing in it
-            unsafe { INODE_CACHE.free(p) };
-            return None;
-        };
+        let slot = fs.vfs.inodes.get_slot().ok()?;
 
         let init = pin_init!(InodeInfo {
             v <- VfsInode::init_once(),
@@ -69,10 +63,8 @@ impl NewInode {
             ei_writeback_timer <- crate::new_delayed_work!(run_raw::<InodeInfo>, "&inode->ei_writeback_timer"),
             ..Zeroable::init_zeroed()
         });
-        // SAFETY: @p is ours, uninitialized; nothing in it can fail
-        let Ok(()) = unsafe { init_at(init, p.as_ptr()) };
 
-        let mut inode = NewInode(p);
+        let mut inode = NewInode(INODE_CACHE.alloc_inode(sb, gfp, init)?);
         if inode.v.init_always(sb, gfp.raw()).is_err() {
             // not yet a VFS inode: no reference to put
             // SAFETY: ours, and nothing of the VFS's in it

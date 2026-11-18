@@ -7,12 +7,15 @@
 use crate::c;
 use crate::os::module::Quiesced;
 use crate::util::alloc::{flags, Alloc, AllocError, Allocator, Flags};
+use crate::os::super_block::SuperBlock;
 use core::alloc::Layout;
+use core::convert::Infallible;
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Release};
+use pin_init::PinInit;
 
 pub struct KmemCache<T> {
     cache: AtomicPtr<c::kmem_cache>,
@@ -54,12 +57,16 @@ impl<T> KmemCache<T> {
         p
     }
 
-    /// A @T's memory, uninitialized, charged to @lru - a superblock's inode
-    /// LRU, for alloc_inode_sb().
-    pub fn alloc_lru(&self, lru: *mut c::list_lru, gfp: Flags) -> Option<NonNull<T>> {
-        NonNull::new(unsafe {
-            c::kmem_cache_alloc_lru_noprof(self.as_ptr(), lru, crate::util::alloc::current_gfp_context_raw(gfp.raw()))
-        }.cast())
+    /// A new @T, made by @init, charged to @sb's inode LRU: alloc_inode_sb().
+    /// None if there's no memory, as @gfp allows.
+    pub fn alloc_inode<S>(&self, sb: &SuperBlock<S>, gfp: Flags, init: impl PinInit<T, Infallible>)
+        -> Option<NonNull<T>>
+    {
+        let p = NonNull::new(unsafe {
+            c::kmem_cache_alloc_lru_noprof(self.as_ptr(), sb.inode_lru(), crate::util::alloc::current_gfp_context_raw(gfp.raw()))
+        })?.cast::<T>();
+        let Ok(()) = unsafe { crate::util::alloc::init_at(init, p.as_ptr()) };
+        Some(p)
     }
 
     /// # Safety

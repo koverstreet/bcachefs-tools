@@ -64,6 +64,11 @@ impl<T> SuperBlock<T> {
         self.0.as_ptr()
     }
 
+    /// The LRU its inodes' memory is charged to: KmemCache::alloc_inode()'s.
+    pub(crate) fn inode_lru(&self) -> *mut c::list_lru {
+        unsafe { &raw mut (*self.as_ptr()).s_inode_lru }
+    }
+
     /// What s_fs_info points to.
     pub fn data(&self) -> &T {
         unsafe { &*(*self.as_ptr()).s_fs_info.cast::<T>() }
