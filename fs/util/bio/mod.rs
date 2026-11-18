@@ -280,6 +280,12 @@ impl Bio {
         unsafe { c::bio_add_folio_nofail(bio, folio.as_ptr(), folio.size(), 0) }
     }
 
+    /// Emptied, for another IO from scratch: bio_reset(), its bvecs and its
+    /// position gone - a bio whose pages are new each IO, a dio's.
+    pub fn clear(self: Pin<&mut Self>, opf: u32) {
+        unsafe { crate::os::bio::reset(self.raw_mut(), core::ptr::null_mut(), opf) };
+    }
+
     /// For another IO: bio_reset(), its bvecs kept - the buffers it was made
     /// with - and its position all of them again, from the table: after an IO
     /// bi_iter is the block layer's. Panics on a clone, whose bvecs aren't its
