@@ -2,8 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
-use crate::util::alloc::init_at;
 use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
 use cstruct_macros::MaybeZeroable;
@@ -33,6 +31,10 @@ pub trait TwoState {
 }
 
 impl two_state_lock_t {
+    pub const fn new() -> Self {
+        two_state_lock_t { v: AtomicIsize::new(0), wait: EventCount::new() }
+    }
+
     fn trylock(&self, s: bool) -> bool {
         let i = delta(s);
         let mut old = self.v.load(Relaxed);
@@ -98,14 +100,5 @@ pub struct TwoStateGuard<'a, S: TwoState> {
 impl<S: TwoState> Drop for TwoStateGuard<'_, S> {
     fn drop(&mut self) {
         self.lock.unlock_raw(S::S);
-    }
-}
-
-/// # Safety
-/// @lock is a two_state_lock_t's memory, not yet in use.
-pub unsafe fn two_state_lock_init(lock: *mut c::two_state_lock_t) {
-    unsafe {
-        (&raw mut (*lock).v).write(AtomicIsize::new(0));
-        let Ok(()) = init_at(EventCount::new(), &raw mut (*lock).wait);
     }
 }

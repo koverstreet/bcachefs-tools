@@ -10,7 +10,7 @@
 //! evict.
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
-use crate::c::{self, two_state_lock_init, InodeQuota, InodeReserved, InodeReservedRange};
+use crate::c::{self, InodeQuota, InodeReserved, InodeReservedRange};
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
@@ -21,7 +21,7 @@ use crate::os::slab::KmemCache;
 use crate::os::workqueue::{run_raw, RawWork};
 use core::mem::offset_of;
 use core::ptr::NonNull;
-use pin_init::{pin_init, pin_init_from_closure, Zeroable};
+use pin_init::{pin_init, Zeroable};
 
 use super::inode::InodeInfo;
 use crate::os::vfs_inode::{New, VfsInode};
@@ -46,13 +46,7 @@ impl NewInode {
                                                           ei_reserved_end: Zeroable::zeroed() },
                                      "&inode->ei_reserved_lock"),
             ei_update_lock <- new_lock!((), "&inode->ei_update_lock"),
-            // SAFETY: initialized in place, as two_state_lock_init() does
-            ei_pagecache_lock <- unsafe {
-                pin_init_from_closure(|l: *mut c::two_state_lock_t| {
-                    two_state_lock_init(l);
-                    Ok::<_, core::convert::Infallible>(())
-                })
-            },
+            ei_pagecache_lock: c::two_state_lock_t::new(),
             ei_quota <- new_lock!(InodeQuota { ei_qid: Default::default(), ei_quota_reserved: 0 },
                                   "&inode->ei_quota_lock"),
             ei_writeback_timer <- crate::new_delayed_work!(run_raw::<InodeInfo>, "&inode->ei_writeback_timer"),
