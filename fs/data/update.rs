@@ -862,12 +862,6 @@ impl c::data_update {
         true
     }
 
-    /// Issues the write read_done() set up; it completes to op.end_io().
-    pub fn write(&mut self) {
-        // SAFETY: its op, ready to write
-        unsafe { crate::util::closure::call(core::ptr::NonNull::from(&mut self.op), crate::data::write::bch2_write, None) };
-    }
-
     /// Gives back what init() took: @held, the reservation, its place in its
     /// moving context's counts - whose waiters are woken after the nocow locks
     /// go - and the bios' memory.
