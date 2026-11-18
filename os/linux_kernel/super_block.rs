@@ -30,6 +30,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::{RwSem, SharedGuard};
 use crate::os::dentry::Dentry;
 use crate::os::export::ExportOps;
+use crate::os::quota::QuotactlOps;
 use crate::os::seq_file::SeqFile;
 use crate::os::vfs_inode::{ILocked, VfsInode};
 use crate::os::xattr::XattrHandlers;
@@ -365,10 +366,13 @@ impl<T: FsType> NewSuper<T> {
         unsafe { (*self.raw()).s_xattr = h.as_ptr().cast() };
     }
 
-    pub fn set_quotactl(&self, ops: &'static c::quotactl_ops, types: u32) {
+    /// Its quotactl ops: a table of Data<T>'s.
+    pub fn set_quotactl<Q>(&self, ops: &'static CStatic<c::quotactl_ops, Q>, types: u32)
+        where Q: QuotactlOps<Super = Data<T>>
+    {
         let sb = self.raw();
         unsafe {
-            (*sb).s_qcop = (ops as *const c::quotactl_ops).cast();
+            (*sb).s_qcop = core::ptr::from_ref(&**ops).cast();
             (*sb).s_quota_types = types as _;
         }
     }

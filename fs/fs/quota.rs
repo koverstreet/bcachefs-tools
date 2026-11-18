@@ -219,7 +219,8 @@ mod vfs {
     use crate::sb::io::SbResize;
     use crate::util::ffi::c_char;
     use crate::os::kernel::ktime_get_real_seconds;
-    use crate::os::quota::Kqid as _;
+    use crate::os::quota::{Kqid as _, QuotactlOps, QuotactlVTable};
+    use crate::types::CStatic;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
     use crate::vfs::super_block::SuperBlock;
@@ -702,21 +703,6 @@ mod vfs {
 
     // ── quotactl ────────────────────────────────────────────────────────
 
-    crate::vfs_ops! {
-        /// quotactl(2)'s ops: sb->s_qcop.
-        pub(crate) trait QuotactlOps for c::quotactl_ops, QuotactlVTable<T: QuotactlOps> = T;
-
-        fn quota_enable(sb: &SuperBlock, uflags: u32) -> Result<(), BchError>;
-        fn quota_disable(sb: &SuperBlock, uflags: u32) -> Result<(), BchError>;
-        fn rm_xquota(sb: &SuperBlock, uflags: u32) -> Result<(), BchError>;
-        /// Which types are accounted, and their time and warning limits.
-        fn get_state(sb: &SuperBlock, state: &mut c::qc_state) -> Result<(), BchError>;
-        fn set_info(sb: &SuperBlock, ty: i32, info: &c::qc_info) -> Result<(), BchError>;
-        fn get_dqblk(sb: &SuperBlock, kqid: c::kqid, qdq: &mut c::qc_dqblk) -> Result<(), BchError>;
-        fn get_nextdqblk(sb: &SuperBlock, kqid: &mut c::kqid, qdq: &mut c::qc_dqblk) -> Result<(), BchError>;
-        fn set_dqblk(sb: &SuperBlock, kqid: c::kqid, qdq: &c::qc_dqblk) -> Result<(), BchError>;
-    }
-
     fn set_sb_quotas(sb: &mut c::bch_sb_buf, uflags: u32, on: bool) {
         let sb = sb.sb_mut();
         if uflags & c::FS_QUOTA_UDQ_ENFD != 0 {
@@ -965,10 +951,12 @@ mod vfs {
         set(fs, BkeySC::from(new_quota.as_ref()), Some(qdq))
     }
 
-    struct Quotactl;
+    pub(crate) struct Quotactl;
 
     #[vtable]
     impl QuotactlOps for Quotactl {
+        type Super = Fs;
+
         fn quota_enable(sb: &SuperBlock, uflags: u32) -> Result<(), BchError> {
             enable(sb.fs(), sb.rdonly(), uflags)
         }
@@ -1005,5 +993,5 @@ mod vfs {
     }
 
     /// The VFS's: sb->s_qcop.
-    pub(crate) static QUOTACTL_OPS: c::quotactl_ops = QuotactlVTable::<Quotactl>::OPS;
+    pub(crate) static QUOTACTL_OPS: CStatic<c::quotactl_ops, Quotactl> = QuotactlVTable::<Quotactl>::STATIC;
 }
