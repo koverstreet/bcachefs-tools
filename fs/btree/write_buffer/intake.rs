@@ -181,7 +181,7 @@ impl<'a> Intake<'a> {
          * Intake allocates under the write buffer locks (key array resizes,
          * accounting pushes), which sit on the reclaim path when swap is on
          * bcachefs: callers must have established a NOIO scope. Both current
-         * callers hold j->buf_lock, a mutex_noio, across the whole bracket:
+         * callers hold j->buf_lock, a MutexNoio, across the whole bracket:
          */
         #[cfg(kernel)]
         ebug_assert!(crate::os::sched::memalloc_flags() & crate::locking::PF_MEMALLOC_NOIO != 0,

@@ -17,7 +17,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
 use crate::init::recovery::NotRw;
-use crate::locking::{percpu_rwsem_noio, Exclusive, ExclusiveGuard, Guard, Shared, SharedGuard};
+use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwSem, Shared, SharedGuard};
 use crate::debug::trace::events;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
@@ -42,8 +42,8 @@ impl<'a> From<BkeySC<'a, Accounting<Validated>>> for Delta<'a> {
     }
 }
 
-pub(crate) type MarkRead<'a> = SharedGuard<'a, percpu_rwsem_noio, (), (), Shared, c::MarkLockAt>;
-pub(crate) type MarkWrite<'a> = ExclusiveGuard<'a, percpu_rwsem_noio, (), (), Exclusive, c::MarkLockAt>;
+pub(crate) type MarkRead<'a> = SharedGuard<'a, Noio<PercpuRwSem>, (), (), Shared, c::MarkLockAt>;
+pub(crate) type MarkWrite<'a> = ExclusiveGuard<'a, Noio<PercpuRwSem>, (), (), Exclusive, c::MarkLockAt>;
 
 pub(crate) trait MarkHeld: Guard<Name = c::MarkLockAt> {
     fn insert(&mut self, fs: &Fs, a: Delta<'_>) -> Result<(), BchError>;

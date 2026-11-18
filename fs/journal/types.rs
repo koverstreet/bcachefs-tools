@@ -23,7 +23,7 @@ use crate::journal::pins::{flush_degraded, pin_resize};
 use crate::journal::reclaim::discard_work;
 use crate::os::kernel::PAGE_SIZE;
 use crate::data_structures::list::ListLinks;
-use crate::locking::{ExclusiveGuard, Locked, LockedBy, Mutex, PercpuRwSem, SpinLockIrq};
+use crate::locking::{ExclusiveGuard, Locked, LockedBy, Mutex, MutexNoio, PercpuRwSem, SpinLockIrq};
 use core::cell::Cell;
 use crate::os::bio::BioSet;
 use crate::util::futex::EventCount;
@@ -523,7 +523,7 @@ nest! {
          */
         #[pin]
         #[init(new_lock!((), "&j->buf_lock"))]
-        pub buf_lock: Locked<c::mutex_noio>,
+        pub buf_lock: MutexNoio,
 
         /*
          * When we need a flush but no open journal entry was flushable, wait

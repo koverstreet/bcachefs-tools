@@ -205,12 +205,7 @@ impl<'a, R: RawLock<GuardState = ()>, const F: u32, G, P, A> ExclusiveGuard<'a, 
     }
 }
 
-/// C's struct mutex_noio and percpu_rwsem_noio, declared for C below.
-pub type mutex_noio = Noio<Mutex>;
-pub type percpu_rwsem_noio = Noio<PercpuRwSem>;
-
-/// Locks over @G held in a NOIO scope: C's mutex_noio and percpu_rwsem_noio,
-/// and what they protect.
-pub type MutexNoio<G = (), P = ()> = Locked<mutex_noio, G, P>;
-pub type PercpuRwsemNoio<G = (), P = ()> = Locked<percpu_rwsem_noio, G, P>;
+/// Locks over @G held in a NOIO scope, and what they protect.
+pub type MutexNoio<G = (), P = ()> = Locked<Noio<Mutex>, G, P>;
+pub type PercpuRwsemNoio<G = (), P = ()> = Locked<Noio<PercpuRwSem>, G, P>;
 
