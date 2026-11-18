@@ -53,6 +53,7 @@ pub mod stacktrace;
 pub mod super_block;
 pub mod sysfs;
 pub mod thread_with_file;
+pub mod tracepoint;
 #[path = "../unicode.rs"]
 pub mod unicode;
 mod user_pages;

@@ -270,7 +270,7 @@ static inline void *rust_vmap(struct page **pages, unsigned int count)
 	return vmap(pages, count, VM_MAP, PAGE_KERNEL);
 }
 
-/* macros: what debug/trace.rs's tracepoints and their probes run under */
+/* macros: what tracepoint.rs's tracepoints and their probes run under */
 static inline void rust_preempt_disable_notrace(void)
 {
 	preempt_disable_notrace();

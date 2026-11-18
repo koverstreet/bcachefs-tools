@@ -56,7 +56,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/kthread.h",			// kthread_use_mm(): an async DIO write's continuation
     "linux/swap.h",			// mm_account_reclaimed_pages(): btree/cache.rs's node buffers
     "linux/vmalloc.h",			// __vmalloc_noprof(): the same
-    "linux/trace_events.h",		// struct trace_event_call and the rest: debug/trace.rs's
+    "linux/trace_events.h",		// struct trace_event_call and the rest: tracepoint.rs's
 					// tracepoints' events, and what their probes call
 ];
 
@@ -249,11 +249,11 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "clear_inode",
     // vfs/buffered_write.rs: a static inline
     "fgf_set_order",
-    // debug/trace.rs's tracepoints: exports, static inlines, and codegen.h's -
+    // tracepoint.rs's tracepoints: exports, static inlines, and codegen.h's -
     // srcu's from 7.0
     "trace_event_reg", "trace_event_raw_init", "trace_trigger_soft_disabled",
     "trace_event_buffer_reserve", "trace_event_buffer_commit",
-    "trace_raw_output_prep", "trace_event_printf", "trace_handle_return",
+    "trace_raw_output_prep", "trace_seq_putmem", "trace_handle_return",
     "perf_trace_buf_alloc", "perf_trace_run_bpf_submit", "bpf_prog_array_valid", "bpf_trace_run2",
     "rust_srcu_read_lock_fast_notrace", "rust_srcu_read_unlock_fast_notrace",
     "rust_preempt_disable_notrace", "rust_preempt_enable_notrace", "rust_perf_fetch_caller_regs",
@@ -266,7 +266,7 @@ const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state"
                                   // the kernel crate's fs_context and fs_parameter are opaque
                                   "fs_context", "fs_parameter", "fs_context_operations",
                                   "readahead_control", "folio_batch",
-                                  // debug/trace.rs's statics
+                                  // tracepoint.rs's statics
                                   "trace_event_call", "trace_event_class", "trace_event_fields",
                                   "trace_event_functions", "trace_entry", "trace_event_buffer"];
 /// Structs in an unblocklisted header - defined there, or only declared, as
@@ -399,7 +399,7 @@ fn opaque_arrays_zeroable(bindings: &str) -> String {
         .collect()
 }
 
-/// The same for a struct's bitfields, __BindgenBitfieldUnit - debug/trace's
+/// The same for a struct's bitfields, __BindgenBitfieldUnit - tracepoint.rs's
 /// trace_event_fields: bindgen defines it only for bindings that have one.
 fn bitfield_unit_zeroable(bindings: &str) -> &'static str {
     if bindings.contains("pub struct __BindgenBitfieldUnit<") {

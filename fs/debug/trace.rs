@@ -10,24 +10,29 @@
 //! its key - os::jump_label's static_branch_unlikely!() - so a disabled one
 //! costs a NOP; its message is built only once it's on, out of line, as
 //! __event_trace() builds it, and handed to its probes. The tracepoints and
-//! their events are trace/tracepoints.rs's. Userspace has no tracepoints: none
-//! is ever on.
+//! their events' class are trace/tracepoints.rs's, made with os::tracepoint -
+//! which in userspace, or without CONFIG_TRACEPOINTS, has none: none is ever
+//! on.
 
 use crate::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 
-#[cfg(all(kernel, CONFIG_TRACEPOINTS))]
 mod tracepoints;
 
 /// A tracepoint - one of BCH_PERSISTENT_COUNTERS()'s, or of those that have
-/// no counter, BCH_NOCOUNTER_TRACEPOINTS() and BCH_PATH_TRACEPOINTS().
+/// no counter, BCH_NOCOUNTER_TRACEPOINTS() and BCH_PATH_TRACEPOINTS(). One
+/// that doesn't exist - a path tracepoint without
+/// CONFIG_BCACHEFS_PATH_TRACEPOINTS - is never on.
 pub trait TraceEvent: Copy {
     /// Whether its tracepoint is on: trace_<name>_enabled().
-    fn trace_enabled() -> bool;
+    #[inline(always)]
+    fn trace_enabled() -> bool {
+        false
+    }
 
     /// Fire its tracepoint, with @msg: trace_<name>().
-    fn trace(fs: &Fs, msg: &Printbuf);
+    fn trace(_fs: &Fs, _msg: &Printbuf) {}
 }
 
 /// Each event a type: both lists' entries start with the name.
@@ -49,45 +54,35 @@ pub mod events {
     c::BCH_PATH_TRACEPOINTS!(event_types);
 }
 
-/// Their tracepoints, real where [on] holds - by default, a kernel build with
-/// tracepoints.
+/// Their tracepoints.
 macro_rules! trace_events {
-    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
-        trace_events! { [all(kernel, CONFIG_TRACEPOINTS)] $(($name)),* }
-    };
-    ([$on:meta] $(($name:ident)),*) => { ::paste::paste! {
+    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
         $(
             impl TraceEvent for events::$name {
-                #[cfg($on)]
                 #[inline(always)]
                 fn trace_enabled() -> bool {
-                    unsafe {
-                        crate::static_branch_unlikely!(tracepoints::[<__tracepoint_ $name>],
-                                                       c::tracepoint, key)
-                    }
+                    crate::tracepoint_enabled!(tracepoints::[<__tracepoint_ $name>])
                 }
 
-                #[cfg(not($on))]
-                #[inline(always)]
-                fn trace_enabled() -> bool {
-                    false
-                }
-
-                #[cfg($on)]
                 fn trace(fs: &Fs, msg: &Printbuf) {
-                    tracepoints::call(&tracepoints::[<__tracepoint_ $name>], fs.name(), msg.as_c_str());
+                    tracepoints::[<__tracepoint_ $name>].call(fs.name(), msg.as_c_str());
                 }
-
-                #[cfg(not($on))]
-                fn trace(_fs: &Fs, _msg: &Printbuf) {}
             }
         )*
     } };
 }
+
+macro_rules! no_trace_events {
+    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
+        $( impl TraceEvent for events::$name {} )*
+    };
+}
 c::PersistentCounter_arms!(trace_events);
 c::BCH_NOCOUNTER_TRACEPOINTS!(trace_events);
-c::BCH_PATH_TRACEPOINTS!(trace_events
-    [all(kernel, CONFIG_TRACEPOINTS, CONFIG_BCACHEFS_PATH_TRACEPOINTS)]);
+#[cfg(CONFIG_BCACHEFS_PATH_TRACEPOINTS)]
+c::BCH_PATH_TRACEPOINTS!(trace_events);
+#[cfg(not(CONFIG_BCACHEFS_PATH_TRACEPOINTS))]
+c::BCH_PATH_TRACEPOINTS!(no_trace_events);
 
 impl Fs {
     /// Fire @e's tracepoint, if it's on, with the message @msg writes - its

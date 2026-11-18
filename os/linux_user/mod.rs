@@ -42,6 +42,7 @@ pub mod workqueue;
 #[path = "../linux_kernel/ops.rs"]
 pub mod ops;
 pub mod thread_with_file;
+pub mod tracepoint;
 #[path = "../unicode.rs"]
 pub mod unicode;
 // The struct, which InodeInfo lays out; userspace has no VFS for it
