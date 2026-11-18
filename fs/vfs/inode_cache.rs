@@ -28,6 +28,7 @@ use core::ptr::NonNull;
 
 use super::inode::{InodeInfo, InodeRef};
 use super::new_inode::NewInode;
+use crate::os::super_block::IsInode;
 use crate::os::vfs_inode::VfsInode;
 
 /// An inode as the cache keys it: by its subvol_inum, set before it's in and

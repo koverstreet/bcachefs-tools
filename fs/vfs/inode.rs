@@ -221,13 +221,6 @@ impl InodeInfo {
         &self.v
     }
 
-    /// A reference, taken under its i_lock - none, if the VFS is freeing it:
-    /// VfsInode::iget().
-    pub fn iget(&self, i_lock: &ILocked<'_>) -> Option<InodeRef> {
-        // SAFETY: @v is first: the reference is ours
-        self.v.iget(i_lock).map(|r| unsafe { ARef::from_raw(ARef::into_raw(r).cast()) })
-    }
-
     pub fn inum(&self) -> c::subvol_inum {
         self.ei_inum
     }

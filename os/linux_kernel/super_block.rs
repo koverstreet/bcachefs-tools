@@ -27,6 +27,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::{RwSem, SharedGuard};
 use crate::os::dentry::Dentry;
 use crate::os::seq_file::SeqFile;
+use crate::os::vfs_inode::{ILocked, VfsInode};
 use crate::os::xattr::XattrHandlers;
 use crate::util::ffi::Opaque;
 use kernel::error::{code::ENOMEM, to_result, Result};
@@ -216,7 +217,16 @@ fn copy_str<const N: usize>(dst: &mut [u8; N], src: &CStr) {
 /// # Safety
 /// A &Self points to a struct inode, and its AlwaysRefCounted reference is
 /// one on i_count - ihold(), iput().
-pub unsafe trait IsInode: AlwaysRefCounted {}
+pub unsafe trait IsInode: AlwaysRefCounted {
+    /// A reference, taken under its i_lock - none, if the VFS is freeing it:
+    /// VfsInode::iget()'s, as one of Self's.
+    fn iget(&self, i_lock: &ILocked<'_>) -> Option<ARef<Self>>
+        where Self: Sized
+    {
+        let v = unsafe { &*core::ptr::from_ref(self).cast::<VfsInode>() };
+        v.iget(i_lock).map(|r| unsafe { ARef::from_raw(ARef::into_raw(r).cast()) })
+    }
+}
 
 from_raw! {
     &'a I [I: IsInode]         = *mut c::inode => |r| &*r.cast();
