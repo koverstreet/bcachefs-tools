@@ -4,6 +4,7 @@
 //! each a namespace's ops - an XattrHandler, dispatched by its prefix.
 
 use core::ffi::{c_int, c_void, CStr};
+use core::marker::PhantomData;
 
 use crate::c;
 use crate::errcode::{ret_to_class, BchError};
@@ -65,18 +66,28 @@ struct Table<const N: usize> {
     null:     *const c::xattr_handler,
 }
 
-pub struct XattrHandlers<const N: usize>(CStatic<Table<N>>);
+/// One of an XattrHandlers' handlers: of I's xattrs.
+pub struct Handler<I>(*const c::xattr_handler, PhantomData<fn() -> I>);
 
-impl<const N: usize> XattrHandlers<N> {
-    pub const fn new(handlers: [&'static CStatic<c::xattr_handler>; N]) -> Self {
+impl<I> Handler<I> {
+    pub(crate) const fn of<H: XattrHandler<Inode = I>>(h: &'static CStatic<c::xattr_handler, H>) -> Self {
+        Handler(core::ptr::from_ref(h).cast(), PhantomData)
+    }
+}
+
+/// sb->s_xattr, of I's xattrs.
+pub struct XattrHandlers<I, const N: usize>(CStatic<Table<N>>, PhantomData<fn() -> I>);
+
+impl<I, const N: usize> XattrHandlers<I, N> {
+    pub const fn new(handlers: [Handler<I>; N]) -> Self {
         let mut table = Table { handlers: [core::ptr::null(); N], null: core::ptr::null() };
         let mut i = 0;
         while i < N {
-            table.handlers[i] = core::ptr::from_ref(handlers[i]).cast();
+            table.handlers[i] = handlers[i].0;
             i += 1;
         }
         // pointers to statics, and NULL
-        XattrHandlers(unsafe { CStatic::new(table) })
+        XattrHandlers(unsafe { CStatic::new(table) }, PhantomData)
     }
 
     pub(crate) fn as_ptr(&self) -> *const *const c::xattr_handler {

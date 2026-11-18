@@ -310,7 +310,10 @@ impl<T: FsType> NewSuper<T> {
         unsafe { (*self.raw()).s_export_op = (ops as *const c::export_operations).cast() };
     }
 
-    pub fn set_xattr_handlers<const N: usize>(&mut self, h: &'static XattrHandlers<N>) {
+    /// Its xattr handlers: its inodes'.
+    pub fn set_xattr_handlers<const N: usize>(&mut self, h: &'static XattrHandlers<<Data<T> as SuperOps>::Inode, N>)
+        where Data<T>: SuperOps
+    {
         unsafe { (*self.raw()).s_xattr = h.as_ptr().cast() };
     }
 

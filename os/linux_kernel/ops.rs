@@ -235,8 +235,8 @@ macro_rules! vfs_ops {
             };
 
             /// OPS as the static C reads: a C ops struct, fn and static
-            /// pointers that nothing writes through.
-            $vis const STATIC: $crate::types::CStatic<$Ops> = unsafe { $crate::types::CStatic::new(Self::OPS) };
+            /// pointers that nothing writes through - $P's.
+            $vis const STATIC: $crate::types::CStatic<$Ops, $P> = unsafe { $crate::types::CStatic::new(Self::OPS) };
         }
     } };
 

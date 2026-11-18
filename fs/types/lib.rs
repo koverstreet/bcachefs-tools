@@ -144,25 +144,25 @@ pub trait Lent<'a, A: ?Sized>: Sized {
     unsafe fn lent(from: &'a A) -> Self;
 }
 
-/// A static C reads, defined in Rust: an ops table. Sync for the pointers a C
-/// struct holds, which aren't: C reads it from anywhere, and nothing writes
-/// it.
+/// A static C reads, defined in Rust: an ops table - vfs_ops!' of P's ops, or
+/// with P (), no one's. Sync for the pointers a C struct holds, which aren't:
+/// C reads it from anywhere, and nothing writes it.
 #[repr(transparent)]
-pub struct CStatic<T>(T);
+pub struct CStatic<T, P = ()>(T, core::marker::PhantomData<fn() -> P>);
 
 // SAFETY: new()'s
-unsafe impl<T> Sync for CStatic<T> {}
+unsafe impl<T, P> Sync for CStatic<T, P> {}
 
-impl<T> CStatic<T> {
+impl<T, P> CStatic<T, P> {
     /// # Safety
     /// Nothing in @v is written through a shared reference - no Cell, no
     /// atomic: its pointers are its only parts that aren't Sync.
     pub const unsafe fn new(v: T) -> Self {
-        CStatic(v)
+        CStatic(v, core::marker::PhantomData)
     }
 }
 
-impl<T> core::ops::Deref for CStatic<T> {
+impl<T, P> core::ops::Deref for CStatic<T, P> {
     type Target = T;
 
     fn deref(&self) -> &T {

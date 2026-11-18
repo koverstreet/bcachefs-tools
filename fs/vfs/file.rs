@@ -88,7 +88,7 @@ use super::folio::FolioSpan;
 use super::folio_reservation::FolioReservation;
 use super::ioctl::fs_file_ioctl;
 
-static VM_OPS: CStatic<c::vm_operations_struct> = VmVTable::<InodeInfo>::STATIC;
+static VM_OPS: CStatic<c::vm_operations_struct, InodeInfo> = VmVTable::<InodeInfo>::STATIC;
 
 #[vtable]
 impl VmOps for InodeInfo {
@@ -301,4 +301,4 @@ impl FileOps for InodeInfo {
 }
 
 /// i_fop, as NewInode::init() sets it for a regular file.
-pub static FILE_OPS: CStatic<c::file_operations> = FileVTable::<InodeFile>::STATIC;
+pub static FILE_OPS: CStatic<c::file_operations, InodeFile> = FileVTable::<InodeFile>::STATIC;

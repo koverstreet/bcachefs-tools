@@ -380,7 +380,7 @@ mod vfs {
     use cstruct_macros::vtable;
     use crate::vfs::dentry::Dentry;
     use crate::os::posix_acl::AclType;
-    use crate::os::xattr::{posix_acl_list_prefix, XattrHandler, XattrHandlers, XattrPrefix, XattrVTable};
+    use crate::os::xattr::{posix_acl_list_prefix, Handler, XattrHandler, XattrHandlers, XattrPrefix, XattrVTable};
     use crate::os::iattr::ATTR_CTIME;
     use crate::vfs::inode::InodeInfo;
 
@@ -695,19 +695,19 @@ mod vfs {
         }
     }
 
-    static USER_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<User>::STATIC;
-    static TRUSTED_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<Trusted>::STATIC;
-    static SECURITY_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<Security>::STATIC;
-    static BCACHEFS_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<Bcachefs>::STATIC;
-    static BCACHEFS_EFFECTIVE_HANDLER: CStatic<c::xattr_handler> = XattrVTable::<BcachefsEffective>::STATIC;
+    static USER_HANDLER: CStatic<c::xattr_handler, User> = XattrVTable::<User>::STATIC;
+    static TRUSTED_HANDLER: CStatic<c::xattr_handler, Trusted> = XattrVTable::<Trusted>::STATIC;
+    static SECURITY_HANDLER: CStatic<c::xattr_handler, Security> = XattrVTable::<Security>::STATIC;
+    static BCACHEFS_HANDLER: CStatic<c::xattr_handler, Bcachefs> = XattrVTable::<Bcachefs>::STATIC;
+    static BCACHEFS_EFFECTIVE_HANDLER: CStatic<c::xattr_handler, BcachefsEffective> = XattrVTable::<BcachefsEffective>::STATIC;
 
     /// The VFS's: sb->s_xattr.
-    pub static XATTR_HANDLERS: XattrHandlers<5> = XattrHandlers::new([
-        &USER_HANDLER,
-        &TRUSTED_HANDLER,
-        &SECURITY_HANDLER,
-        &BCACHEFS_HANDLER,
-        &BCACHEFS_EFFECTIVE_HANDLER,
+    pub static XATTR_HANDLERS: XattrHandlers<InodeInfo, 5> = XattrHandlers::new([
+        Handler::of(&USER_HANDLER),
+        Handler::of(&TRUSTED_HANDLER),
+        Handler::of(&SECURITY_HANDLER),
+        Handler::of(&BCACHEFS_HANDLER),
+        Handler::of(&BCACHEFS_EFFECTIVE_HANDLER),
     ]);
 
     /// What an xattr of @ty lists under for @dentry's caller - None if it

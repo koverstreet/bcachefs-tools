@@ -515,7 +515,7 @@ impl AddressSpaceOps for InodeInfo {
 }
 
 /// An inode's mapping's operations, as NewInode::init() sets them.
-pub(crate) static INODE_AOPS: CStatic<c::address_space_operations> = AopsVTable::<InodeInfo>::STATIC;
+pub(crate) static INODE_AOPS: CStatic<c::address_space_operations, InodeInfo> = AopsVTable::<InodeInfo>::STATIC;
 
 /* fseek: */
 

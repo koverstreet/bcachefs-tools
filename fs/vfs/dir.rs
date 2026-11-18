@@ -260,4 +260,4 @@ impl FileOps for Dir {
     }
 }
 
-pub static DIR_FILE_OPS: CStatic<c::file_operations> = FileVTable::<Dir>::STATIC;
+pub static DIR_FILE_OPS: CStatic<c::file_operations, Dir> = FileVTable::<Dir>::STATIC;
