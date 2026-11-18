@@ -31,8 +31,9 @@
 //!   C's continue_at(cl, fn, NULL), and as unchecked.
 //! - RUNQ: a RunQueue task's, on its RunQueue - where it always runs.
 //! The target is recorded in the header (@target) while the await is pending.
-//! requeue(q) moves a running task to q, an await of nothing: out of an
-//! endio's context, say, before it allocates. On q already, it runs on.
+//! requeue(at) moves a running task to @at - a queue, or any Resume - an
+//! await of nothing: out of an endio's context, say, before it allocates. On
+//! @at already, it runs on.
 //!
 //! # Running and waiting
 //!
@@ -148,6 +149,12 @@ impl<'a> Resume<'a> {
     }
 }
 
+impl<'a> From<&'a Queue> for Resume<'a> {
+    fn from(q: &'a Queue) -> Self {
+        Resume::queue(q)
+    }
+}
+
 pub trait Resumable {
     type Output;
 
@@ -257,8 +264,8 @@ impl<A> PinnedDrop for Resumed<'_, A> {
     }
 }
 
-pub fn requeue(q: &Queue) -> Resumed<'_, Requeue> {
-    Requeue { done: Done::completed(), parked: false }.resume_on(Resume::queue(q))
+pub fn requeue<'a>(at: impl Into<Resume<'a>>) -> Resumed<'a, Requeue> {
+    Requeue { done: Done::completed(), parked: false }.resume_on(at.into())
 }
 
 /// requeue(), onto @q on @cpu.
