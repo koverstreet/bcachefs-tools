@@ -111,16 +111,16 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: Flags) -> Result
     Ok(())
 }
 
-/// Allocates @size bytes into @bio with alloc_pages(), and the rest from
-/// @pool - failing as the pool does, what was allocated left on the bio. The
-/// bio must have the bvecs for them.
-pub fn alloc_pages_pool(pool: &BouncePool, bio: &mut c::bio, bs: u32, size: usize, gfp: Flags)
+/// Allocates @size bytes into @bio with alloc_pages(), and the rest, up to
+/// @at_least, from @pool - failing as the pool does, what was allocated left
+/// on the bio. The bio must have the bvecs for them.
+pub fn alloc_pages_pool(pool: &BouncePool, bio: &mut c::bio, bs: u32, size: usize, at_least: usize, gfp: Flags)
     -> Result<(), AllocError>
 {
     // short is fine: the pool has the rest
     let _ = alloc_pages(bio, bs, size, gfp);
-    if (bio.bi_iter.bi_size as usize) < size {
-        pool.alloc(bio, size)?;
+    if (bio.bi_iter.bi_size as usize) < at_least {
+        pool.alloc(bio, at_least)?;
     }
     Ok(())
 }
