@@ -10,20 +10,17 @@ use crate::util::sleep::Sleep;
 use crate::os::kernel::{current_id, random_u64};
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::{Acquire, Release}};
+use pin_init::Zeroable;
 
 use super::folio::Mapping;
 
 impl c::fdm_hash {
     /// Empty, its hash seeds random.
     pub fn init() -> impl pin_init::Init<Self> {
-        // zeroed is empty: every field's a C type, valid all zeroes
-        unsafe {
-            pin_init::init_from_closure(|p: *mut Self| {
-                p.write_bytes(0, 1);
-                (*p).hash_seeds = core::array::from_fn(|_| random_u64());
-                Ok(())
-            })
-        }
+        pin_init::init!(Self {
+            hash_seeds: core::array::from_fn(|_| random_u64()),
+            ..Zeroable::init_zeroed()
+        })
     }
 
     /// The current task's slots, one per hash.
