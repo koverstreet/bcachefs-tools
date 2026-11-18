@@ -390,9 +390,9 @@ fn buf_realloc(j: &c::journal, data: &mut c::JsetBuf) {
 
     /*
      * Speculative growth, and every failure path here just declines to
-     * grow - but we're under j->buf_lock, which journal_write_done() needs
-     * as its first act, so sitting in reclaim for a bigger buffer stalls
-     * journal write completions. Take the failure immediately instead.
+     * grow - but we're under j->buf_lock, which the next journal write and
+     * the btree write buffer's flush need, so sitting in reclaim for a bigger
+     * buffer stalls them. Take the failure immediately instead.
      */
     let Ok(mut new_buf) = c::JsetBuf::new(new_size, flags::NOIO | flags::NORETRY | flags::NOWARN) else {
         return;
@@ -488,23 +488,11 @@ fn write_done(w: &c::journal_buf, written: Written) {
     let mut err = Ok(());
 
     /*
-     * j->buf_lock guards journal buf data lifetime against the btree write
-     * buffer flush path: fetch_wb_keys_from_journal() walks buf->data with
-     * buf_lock held, and on the error path (emergency shutdown) we can get
-     * here with need_flush_to_write_buffer still set - i.e. with a flush
-     * concurrently reading the buf we're about to free.
-     *
-     * Lock ordering: buf_lock, pin_resize_lock, then j->lock - same as the
-     * flusher and the journal write path.
-     */
-
-    /*
      * kvfree can sleep, so it can't run under j->lock (or any lock here):
      * bufs_to_free is dropped after every lock is.
      */
     let bufs_to_free;
 
-    let b = j.buf_lock.lock();
     let data = written.data;
     let seq_wrote = data.seq();
 
@@ -604,7 +592,6 @@ fn write_done(w: &c::journal_buf, written: Written) {
         (Some(data), Some(write))
     };
     let in_flight = g.get_mut_of(&w.in_flight).take();
-    drop(b);
 
     let (mut g, done) = complete_writes(j, g, &pins, seq_wrote);
 

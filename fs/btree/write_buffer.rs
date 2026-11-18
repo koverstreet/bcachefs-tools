@@ -213,7 +213,7 @@ pub struct bch_fs_btree_write_buffer {
  * works (more slowly) at its current size. Both call sites run under the
  * write buffer locks, which the journal write path and the flush path both
  * nest under j->buf_lock, so a caller that sits in direct reclaim here stalls
- * journal write completions. __GFP_NORETRY buys the failure immediately
+ * journal writes. __GFP_NORETRY buys the failure immediately
  * instead of waiting for reclaim that a speculative resize doesn't merit.
  */
 const WB_RESIZE_GFP: Flags = flags::NORETRY.union(flags::NOWARN);
