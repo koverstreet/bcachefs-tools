@@ -460,6 +460,12 @@ impl<A> Eq for Mapping<A> {}
 impl<A> PartialOrd for Mapping<A> { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }
 impl<A> Ord for Mapping<A> { fn cmp(&self, other: &Self) -> Ordering { self.0.cmp(&other.0) } }
 
+/// The FGP flags asking get_folio() for a folio of about @size bytes:
+/// fgf_set_order().
+pub fn fgf_set_order(size: usize) -> c::fgf_t {
+    unsafe { c::fgf_set_order(size) }
+}
+
 impl<A: IsInode> Mapping<A> {
     pub fn inode(&self) -> &A {
         unsafe { &*(*self.as_ptr()).host.cast::<A>() }

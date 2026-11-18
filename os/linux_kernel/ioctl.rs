@@ -49,6 +49,12 @@ impl IoctlRet for c_long {
     }
 }
 
+/// A 32-bit task's pointer argument, as a native one: compat_ptr().
+#[cfg(CONFIG_COMPAT)]
+pub fn compat_ptr(arg: u32) -> kernel::ffi::c_ulong {
+    unsafe { c::rust_compat_ptr(arg) as kernel::ffi::c_ulong }
+}
+
 pub fn input<I, R>(user: UserPtr, f: impl FnOnce(I::Arg) -> Result<R, BchError>)
     -> Result<c_long, BchError>
 where

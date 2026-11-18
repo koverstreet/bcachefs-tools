@@ -182,7 +182,7 @@ pub(crate) fn fs_file_compat_ioctl(file: &File, inode: &InodeInfo, regular: Opti
         c::FS_IOC_GETFSLABEL | c::FS_IOC_SETFSLABEL => cmd,
         _ => return -(c::ENOIOCTLCMD as c_long),
     };
-    fs_file_ioctl(file, inode, regular, cmd, unsafe { c::rust_compat_ptr(arg as u32) } as c_ulong)
+    fs_file_ioctl(file, inode, regular, cmd, crate::os::ioctl::compat_ptr(arg as u32))
 }
 
 /* The handlers */

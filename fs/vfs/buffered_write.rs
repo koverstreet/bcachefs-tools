@@ -5,6 +5,7 @@
 
 use super::direct_write::direct_write;
 use super::folio::{FolioSpan, LockedFolio, Mapping};
+use crate::os::folio::fgf_set_order;
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use crate::os::kiocb::Kiocb;
@@ -18,10 +19,6 @@ use crate::os::iov_iter::IovIter;
 use crate::os::kernel::{cond_resched, current_id, fatal_signal_pending, likely, unlikely, PAGE_SIZE};
 use crate::os::ops::IntoRaw;
 use kernel::page::PAGE_SHIFT;
-
-fn fgf_set_order(size: usize) -> c::fgf_t {
-    unsafe { c::fgf_set_order(size) }
-}
 
 /// What write_begin() leaves write_end(): the inode's page cache held for
 /// adding to, and the folio's reservation.
