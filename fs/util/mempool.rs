@@ -115,6 +115,12 @@ impl<A: AllocGfp + Copy> Mempool<A> {
         self.size
     }
 
+    /// Whether an element of the reserve is out - a hint, racing frees: who
+    /// holds one mustn't wait on the pool for another.
+    pub fn reserve_drawn(&self) -> bool {
+        (*self.reserve).get() < self.min_nr
+    }
+
     fn backing(&self) -> &A {
         unsafe { self.alloc.assume_init_ref() }
     }
