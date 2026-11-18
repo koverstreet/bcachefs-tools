@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::{BkeyI, BKEY_U64S};
+use crate::format::BkeyType;
 use crate::fs::{Dev, Fs};
 use crate::init::recovery::NotRw;
 use crate::cstructs::c;
@@ -174,6 +175,18 @@ pub struct journal_buf_bits {
 /* A journal buf's, j->lock's */
 pub type BufLocked<T> = LockedBy<T, (), JournalLockAt>;
 
+/* A journal entry's extent key: a pointer for each device it's written to */
+pub type JournalKey = DstRoom<BkeyI, [u64; BKEY_U64S + c::BCH_REPLICAS_MAX as usize]>;
+
+impl JournalKey {
+    pub fn empty() -> Self {
+        let mut key = Self::default();
+        key.k = c::bkey::new();
+        key.k.set_key_type(BkeyType::extent);
+        key
+    }
+}
+
 /*
  * One journal buffer: staging area for a journal entry. A slot of
  * j->in_flight, made with the journal: an entry from the moment it's
@@ -201,8 +214,9 @@ pub struct journal_buf {
     #[init(LockedBy::new(None, ()))]
     pub in_flight: BufLocked<Option<RefGuard<AtomicRef<()>>>>,
 
+    /* its write's, published as it's allocated */
     #[init(LockedBy::new(Default::default(), ()))]
-    pub key: BufLocked<DstRoom<BkeyI, [u64; BKEY_U64S + c::BCH_REPLICAS_MAX as usize]>>,
+    pub key: BufLocked<JournalKey>,
 
     pub last_seq: BufLocked<u64>, /* copy of data->last_seq */
 

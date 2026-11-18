@@ -132,7 +132,7 @@ use crate::journal::flush_wait::{BufWait, FlushEntry, FlushWait, Waiters, JOURNA
                                  JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT};
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, SbFeature};
+use crate::format::SbFeature;
 use crate::journal::pins::PinsRead;
 use crate::data_structures::fifo::FifoRead;
 use crate::locking::{Guard as _, MemallocFlags};
@@ -720,11 +720,7 @@ impl c::journal {
             .with_need_flush_to_write_buffer(true)
             .with_has_overwrites(has_overwrites);
 
-        let key = g.get_mut_of(&buf.key);
-        *key = Default::default();
-        let k = &mut key.k;
-        *k = c::bkey::new();
-        k.set_key_type(BkeyType::extent);
+        *g.get_mut_of(&buf.key) = c::JournalKey::empty();
 
         /* if filesystem is clean, the first journal write must be a flush */
         if fs.sb.clean.get() != 0 {
