@@ -216,7 +216,7 @@ fn __write_alloc(j: &c::journal, a: &mut c::WriteAlloc, w: &mut c::journal_buf, 
          * submissions aren't in allocation order, and a ring lap can
          * make two consecutive ones the same sector, legitimately:
          */
-        assert!(offset != ca.prev_journal_sector.get(), "journal write to {}:{offset} again", ca.dev_idx);
+        crate::warn_once!(offset == ca.prev_journal_sector.get(), fs, "journal write to {}:{offset} again", ca.dev_idx);
         ca.prev_journal_sector.set(offset);
 
         crate::data::extents::bkey_append_ptr(&mut w.key, c::bch_extent_ptr::new().with_offset(offset).with_dev(ca.dev_idx))
