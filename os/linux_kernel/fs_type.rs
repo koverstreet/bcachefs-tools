@@ -27,7 +27,7 @@ use kernel::error::to_result;
 use pin_init::Init;
 
 use super::fs_context::{FsContext, FsParam};
-use super::super_block::{ReconfSuper, Root, SuperBlock};
+use super::super_block::{MountedOn, ReconfSuper, Root, SuperBlock};
 
 /// What a superblock owns, through s_fs_info: one pointer, given up at
 /// create_super() and taken back at kill_sb: from_raw(into_raw(x)) is x, and
@@ -40,6 +40,9 @@ pub trait SuperData: Sized + 'static {
     /// # Safety
     /// @p is from into_raw(), and taken back once.
     unsafe fn from_raw(p: NonNull<Self::Target>) -> Self;
+
+    /// Where in @target the superblock it's mounted as is kept.
+    fn mounted_on(target: &Self::Target) -> &MountedOn<Self::Target>;
 }
 
 pub trait FsType: Sized + 'static {

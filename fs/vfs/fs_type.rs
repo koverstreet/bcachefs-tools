@@ -36,7 +36,7 @@ use crate::init::registry::{self, Claim, FsHandle, Key, Opener, Opening};
 use crate::OptId;
 use crate::os::fs_context::{FsContext, FsParam, ParamValue};
 use crate::os::fs_type::{FsType, FsTypeTable, SuperData};
-use crate::os::super_block::{ReconfSuper, Root};
+use crate::os::super_block::{MountedOn, ReconfSuper, Root};
 use crate::util::alloc::KVVec;
 use crate::util::printbuf::Printbuf;
 use crate::util::vstructs::plain_bytes_mut;
@@ -56,6 +56,10 @@ impl SuperData for OpenFs {
 
     unsafe fn from_raw(p: NonNull<Fs>) -> Self {
         unsafe { OpenFs::from_raw(p) }
+    }
+
+    fn mounted_on(fs: &Fs) -> &MountedOn<Fs> {
+        &fs.vfs_sb
     }
 }
 
@@ -212,10 +216,8 @@ impl Bcachefs {
             fc.set_sb_flags(c::SB_RDONLY as u32);
         }
 
-        let fs_ptr = fs.as_ptr();
-        let mut sb = fc.create_super(fs)?;
-        // SAFETY: the superblock's now, live until kill_sb
-        let fs = unsafe { Fs::borrow_raw(fs_ptr) };
+        let sb = fc.create_super(fs)?;
+        let fs = sb.sb().data();
 
         let filled = (|| {
             sb.set_blocksize(fs.opts().block_size.get() as u32);
@@ -239,12 +241,9 @@ impl Bcachefs {
             }
 
             sb.set_shrinker_seeks(0);
-            unsafe { (*fs_ptr).vfs_sb = sb.sb().as_ptr() };
             sb.set_id(fs.name());
 
             sb.setup_bdi(crate::alloc::capacity::fs_ra_pages(fs) as _)?;
-
-            unsafe { (*fs_ptr).dev = sb.sb().dev() };
 
             if fs.opts().acl.get() != 0 {
                 sb.set_flags(c::SB_POSIXACL as _);

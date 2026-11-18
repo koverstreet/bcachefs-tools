@@ -37,8 +37,7 @@ pub type SuperBlock = crate::os::super_block::SuperBlock<Fs>;
 impl Fs {
     /// The VFS superblock it's mounted as: None while it isn't.
     pub fn vfs_super(&self) -> Option<&SuperBlock> {
-        // SAFETY: set at mount, live until unmount clears it
-        unsafe { self.vfs_sb.cast::<SuperBlock>().as_ref() }
+        self.vfs_sb.as_ref().map(|sb| &**sb)
     }
 }
 

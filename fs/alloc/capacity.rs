@@ -112,9 +112,8 @@ pub(crate) fn recalc_capacity(fs: &Fs) {
     }
 
     #[cfg(kernel)]
-    if !fs.vfs_sb.is_null() {
-        // SAFETY: the superblock VFS mounted us on, while it's mounted
-        unsafe { (*(*fs.vfs_sb).s_bdi).ra_pages = fs_ra_pages(fs) as _ };
+    if let Some(sb) = fs.vfs_super() {
+        sb.set_ra_pages(fs_ra_pages(fs) as _);
     }
 
     fs.capacity.reserved.set(reserved);

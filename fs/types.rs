@@ -467,12 +467,13 @@ pub struct Fs {
     #[pin]
     #[init(crate::locking::Locked::new_const(None, ()))]
     pub(crate) chardev: crate::locking::Locked<crate::locking::ByteLock, Option<crate::init::chardev::CtlDev>>,
-    pub vfs_sb: *mut c::super_block,
+    #[cfg(kernel)]
+    #[init(SetOnce::new())]
+    pub vfs_sb: crate::os::super_block::MountedOn<Fs>,
     /// What its devices are claimed for: the open's, from alloc()
     #[pin]
     #[init(None)]
     pub(crate) holder: Option<crate::util::alloc::Arc<crate::sb::io::Holder>>,
-    pub dev: c::dev_t,
     pub name: [c_char; 40],
 
     /// This, stdio_filter and stdio_user_only: set as a redirect attaches and

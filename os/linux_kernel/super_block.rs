@@ -21,6 +21,9 @@ use core::ffi::{c_int, CStr};
 use kernel::ffi::c_ulong;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
+use kernel::sync::SetOnce;
+
+use crate::util::backref::BackRef;
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
@@ -63,6 +66,12 @@ impl<T> SuperBlock<T> {
 
     pub fn as_ptr(&self) -> *mut c::super_block {
         self.0.as_ptr()
+    }
+
+    /// Readahead's size, in pages, for its bdi: a MountedOn's, whose bdi is
+    /// its own.
+    pub fn set_ra_pages(&self, pages: c_ulong) {
+        unsafe { (*(*self.as_ptr()).s_bdi).ra_pages = pages };
     }
 
     /// The LRU its inodes' memory is charged to: KmemCache::alloc_inode()'s.
@@ -265,6 +274,14 @@ pub struct NewSuper<T: FsType>(Locked, PhantomData<T>);
 
 type Data<T> = <<T as FsType>::Data as SuperData>::Target;
 
+/// The superblock a T is mounted as, a backref from the T it owns: set once,
+/// by NewSuper::setup_bdi(), where the T's SuperData::mounted_on() says.
+pub type MountedOn<T> = SetOnce<BackRef<SuperBlock<T>>>;
+
+// The VFS's, shared by every task with the filesystem: its fields are C's,
+// changed through its own locks
+unsafe impl<T: Sync> Sync for SuperBlock<T> {}
+
 impl<T: FsType> NewSuper<T> {
     /// # Safety
     /// @sb is a superblock sget_fc() created, s_umount held for writing, its
@@ -278,12 +295,12 @@ impl<T: FsType> NewSuper<T> {
     }
 
     /// The superblock, for writing its fields: see NewSuper.
-    fn raw(&mut self) -> *mut c::super_block {
+    fn raw(&self) -> *mut c::super_block {
         self.0 .0.as_ptr()
     }
 
     /// @bytes a power of two.
-    pub fn set_blocksize(&mut self, bytes: u32) {
+    pub fn set_blocksize(&self, bytes: u32) {
         let sb = self.raw();
         unsafe {
             (*sb).s_blocksize = bytes as c_ulong;
@@ -291,16 +308,16 @@ impl<T: FsType> NewSuper<T> {
         }
     }
 
-    pub fn set_maxbytes(&mut self, max: i64) {
+    pub fn set_maxbytes(&self, max: i64) {
         unsafe { (*self.raw()).s_maxbytes = max };
     }
 
-    pub fn set_magic(&mut self, magic: c_ulong) {
+    pub fn set_magic(&self, magic: c_ulong) {
         unsafe { (*self.raw()).s_magic = magic };
     }
 
     /// Timestamp granularity in nanoseconds, and the range representable.
-    pub fn set_time(&mut self, gran: u32, min: i64, max: i64) {
+    pub fn set_time(&self, gran: u32, min: i64, max: i64) {
         let sb = self.raw();
         unsafe {
             (*sb).s_time_gran = gran;
@@ -311,25 +328,25 @@ impl<T: FsType> NewSuper<T> {
 
     /// Its ops, before it has an inode: Data<T>'s, whose inodes are its
     /// SuperOps::Inode.
-    pub fn set_ops(&mut self, ops: &'static CStatic<c::super_operations, Data<T>>)
+    pub fn set_ops(&self, ops: &'static CStatic<c::super_operations, Data<T>>)
         where Data<T>: SuperOps
     {
         unsafe { (*self.raw()).s_op = &**ops };
     }
 
-    pub fn set_export_ops(&mut self, ops: &'static c::export_operations) {
+    pub fn set_export_ops(&self, ops: &'static c::export_operations) {
         // codegen's export_operations, s_export_op the kernel crate's: the same struct
         unsafe { (*self.raw()).s_export_op = (ops as *const c::export_operations).cast() };
     }
 
     /// Its xattr handlers: its inodes'.
-    pub fn set_xattr_handlers<const N: usize>(&mut self, h: &'static XattrHandlers<<Data<T> as SuperOps>::Inode, N>)
+    pub fn set_xattr_handlers<const N: usize>(&self, h: &'static XattrHandlers<<Data<T> as SuperOps>::Inode, N>)
         where Data<T>: SuperOps
     {
         unsafe { (*self.raw()).s_xattr = h.as_ptr().cast() };
     }
 
-    pub fn set_quotactl(&mut self, ops: &'static c::quotactl_ops, types: u32) {
+    pub fn set_quotactl(&self, ops: &'static c::quotactl_ops, types: u32) {
         let sb = self.raw();
         unsafe {
             (*sb).s_qcop = (ops as *const c::quotactl_ops).cast();
@@ -337,51 +354,58 @@ impl<T: FsType> NewSuper<T> {
         }
     }
 
-    pub fn set_uuid(&mut self, uuid: &[u8; 16]) {
+    pub fn set_uuid(&self, uuid: &[u8; 16]) {
         unsafe { c::super_set_uuid(self.raw(), uuid.as_ptr(), uuid.len() as u32) }
     }
 
     /// The sysfs name: the UUID, as a multi-device filesystem has it.
-    pub fn set_sysfs_name_uuid(&mut self) {
+    pub fn set_sysfs_name_uuid(&self) {
         unsafe { c::super_set_sysfs_name_uuid(self.raw()) }
     }
 
-    pub fn set_sysfs_name(&mut self, name: &CStr) {
+    pub fn set_sysfs_name(&self, name: &CStr) {
         copy_str(unsafe { &mut (*self.raw()).s_sysfs_name }, name);
     }
 
     /// s_id, what the VFS's messages name the superblock by.
-    pub fn set_id(&mut self, id: &CStr) {
+    pub fn set_id(&self, id: &CStr) {
         copy_str(unsafe { &mut (*self.raw()).s_id }, id);
     }
 
     /// The superblock shrinker's seeks: 0 for a filesystem with its own cache
     /// policy.
-    pub fn set_shrinker_seeks(&mut self, seeks: c_int) {
+    pub fn set_shrinker_seeks(&self, seeks: c_int) {
         unsafe { (*(*self.raw()).s_shrink).seeks = seeks }
     }
 
-    /// Give it a bdi of its own, readahead @ra_pages.
-    pub fn setup_bdi(&mut self, ra_pages: c_ulong) -> Result {
+    /// Give it a bdi of its own, readahead @ra_pages - and from here, the data
+    /// it owns is MountedOn it: its bdi's its own, not the noop one every
+    /// superblock starts with, for set_ra_pages().
+    pub fn setup_bdi(&self, ra_pages: c_ulong) -> Result {
         to_result(unsafe { c::super_setup_bdi(self.raw()) })?;
-        unsafe { (*(*self.raw()).s_bdi).ra_pages = ra_pages };
+        let sb = self.sb();
+        sb.set_ra_pages(ra_pages);
+        // the superblock owns its data, and drops it at kill_sb, before it
+        // goes: the data's what holds this
+        let set = <T::Data as SuperData>::mounted_on(sb.data()).populate(unsafe { BackRef::new(sb) });
+        assert!(set, "a filesystem set up as a second superblock");
         Ok(())
     }
 
-    pub fn set_flags(&mut self, flags: c_ulong) {
+    pub fn set_flags(&self, flags: c_ulong) {
         unsafe { (*self.raw()).s_flags |= flags };
     }
 
     /// # Safety
     /// @map is live until kill_sb - generic_shutdown_super() is its last user.
     #[cfg(CONFIG_UNICODE)]
-    pub unsafe fn set_encoding(&mut self, map: &crate::os::unicode::UnicodeMap) {
+    pub unsafe fn set_encoding(&self, map: &crate::os::unicode::UnicodeMap) {
         unsafe { (*self.raw()).s_encoding = map.as_ptr().cast() };
     }
 
     /// Its root, made from @root's reference - d_make_root() - which makes it
     /// active and mountable: into_root() then.
-    pub fn fill(&mut self, root: ARef<<Data<T> as SuperOps>::Inode>) -> Result
+    pub fn fill(&self, root: ARef<<Data<T> as SuperOps>::Inode>) -> Result
         where Data<T>: SuperOps
     {
         let sb = self.raw();
