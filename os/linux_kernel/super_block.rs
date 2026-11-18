@@ -29,6 +29,7 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::{RwSem, SharedGuard};
 use crate::os::dentry::Dentry;
+use crate::os::export::ExportOps;
 use crate::os::seq_file::SeqFile;
 use crate::os::vfs_inode::{ILocked, VfsInode};
 use crate::os::xattr::XattrHandlers;
@@ -349,9 +350,12 @@ impl<T: FsType> NewSuper<T> {
         unsafe { (*self.raw()).s_op = &**ops };
     }
 
-    pub fn set_export_ops(&self, ops: &'static c::export_operations) {
+    /// Its exportfs ops: Data<T>'s, as its ops are.
+    pub fn set_export_ops(&self, ops: &'static CStatic<c::export_operations, Data<T>>)
+        where Data<T>: ExportOps
+    {
         // codegen's export_operations, s_export_op the kernel crate's: the same struct
-        unsafe { (*self.raw()).s_export_op = (ops as *const c::export_operations).cast() };
+        unsafe { (*self.raw()).s_export_op = core::ptr::from_ref(&**ops).cast() };
     }
 
     /// Its xattr handlers: its inodes'.

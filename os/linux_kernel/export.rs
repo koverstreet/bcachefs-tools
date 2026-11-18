@@ -76,7 +76,7 @@ impl FileHandle<'_> {
 
 crate::vfs_ops! {
     pub(crate) trait ExportOps for c::export_operations, ExportVTable<T: ExportOps> = T;
-    type Inode: IsInode;
+    type Inode: IsInode<Super = Self>;
 
     /// @name NAME_MAX + 1 bytes.
     fn get_name(&self = child, parent: Dentry<'_, Self::Inode>, name: &mut NameBuf,
