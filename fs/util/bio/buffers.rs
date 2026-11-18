@@ -62,23 +62,23 @@ unsafe impl Buffers for BioBuffersUnmanaged {
 
 /// Pages of the bio's own, from the page allocator - or what it can't give
 /// from the bounce pool, which waits rather than fails, but in a NORECLAIM
-/// scope. @Src is the pool, the
-/// block size each allocation is a multiple of, the size, and how to
-/// allocate.
+/// scope. @Src is the pool, the block size each allocation is a multiple of,
+/// the size, how much of it the pool makes up - all of it, or for a bio that
+/// can do with less, a write's, that much - and how to allocate.
 pub struct BioBuffersOwned<'p> {
     pool: &'p BouncePool,
 }
 
 unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
-    type Src<'s> = (&'p BouncePool, u32, usize, Flags);
+    type Src<'s> = (&'p BouncePool, u32, usize, usize, Flags);
 
-    fn nr_vecs(&(_, _, size, _): &Self::Src<'_>) -> u16 {
+    fn nr_vecs(&(_, _, size, _, _): &Self::Src<'_>) -> u16 {
         pages::nr_vecs(size)
     }
 
-    fn fill(bio: Pin<&mut Bio>, (pool, bs, size, gfp): Self::Src<'_>) -> Result<Self, BchError> {
+    fn fill(bio: Pin<&mut Bio>, (pool, bs, size, at_least, gfp): Self::Src<'_>) -> Result<Self, BchError> {
         let bio = bio.raw_mut();
-        if let Err(e) = pages::alloc_pages_pool(pool, bio, bs, size, gfp) {
+        if let Err(e) = pages::alloc_pages_pool(pool, bio, bs, size, at_least, gfp) {
             unsafe { pages::free_pages_pool(pool, bio) };
             return Err(e.into());
         }

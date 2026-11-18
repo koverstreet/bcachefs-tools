@@ -1263,7 +1263,7 @@ impl<'r> Planned<'r, '_> {
             How::Promote(p) => Kind::Promote(p.rbio.bio.lend(), p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
-                Kind::Bounce(BioBox::new_with_in(pool, bdev, 0, (&fs.bio_bounce, bs, size, gfp), fragment)?)
+                Kind::Bounce(BioBox::new_with_in(pool, bdev, 0, (&fs.bio_bounce, bs, size, size, gfp), fragment)?)
             }
             How::Clone => Kind::Clone(BioBox::new_with_in(pool, bdev, 0, plan.range, fragment)?),
             How::Own => Kind::Own(orig.lend()),
@@ -1306,7 +1306,7 @@ impl<'r> Planned<'r, '_> {
         let Planned { how, plan, ca, k } = self;
         let bounce = match how {
             How::Clone => None,
-            How::Bounce(size, gfp) => Some((&fs.bio_bounce, fs.opts().block_size.get().into(), size, gfp)),
+            How::Bounce(size, gfp) => Some((&fs.bio_bounce, fs.opts().block_size.get().into(), size, size, gfp)),
             How::Own | How::Promote(_) => unreachable!("a fragment start() made or started above"),
         };
         let nr_vecs = bounce.as_ref().map_or(0, BioBuffersOwned::nr_vecs);
