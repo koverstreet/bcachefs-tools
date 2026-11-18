@@ -50,6 +50,7 @@
 //!    saves. readline sleeps TASK_IDLE: someone typing is no hung task.
 
 use crate::c;
+use crate::data_structures::fifo::FifoRead;
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
 use crate::new_lock;

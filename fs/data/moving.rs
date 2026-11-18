@@ -35,6 +35,7 @@ use crate::util::refcount::Refcount;
 use crate::os::kthread::Kthread;
 use crate::util::task::{waiter, RunQueue, WaitSync};
 use crate::util::sleep::Sleep;
+use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
 use crate::util::gather::{Gather, GatherRef};
 use core::cell::{Cell, UnsafeCell};

@@ -22,7 +22,7 @@ use crate::types::Fifo;
 use crate::util::alloc::{flags, kvfree_sized, kvrealloc, AllocError, Flags};
 use core::mem::{needs_drop, size_of, MaybeUninit};
 use core::ptr::NonNull;
-use num_traits::{AsPrimitive, ConstZero, PrimInt, Unsigned, WrappingAdd, WrappingSub};
+use num_traits::{AsPrimitive, ConstZero, One, PrimInt, Unsigned, WrappingAdd, WrappingSub};
 
 pub trait FifoIdx: PrimInt + Unsigned + ConstZero + WrappingAdd + WrappingSub + AsPrimitive<usize> {
     /// Truncated to the type's width, as C's index arithmetic is.
@@ -36,6 +36,69 @@ where
 {
     fn from_usize(n: usize) -> I {
         n.as_()
+    }
+}
+
+/// A fifo, read: its entries the slots from front to back, by absolute index.
+/// The indices are the implementor's - its own, or counters something else
+/// keeps - and so are push and pop, which move them.
+///
+/// # Safety
+/// While &self lives, slot(i) points to a valid Elem for every i in
+/// [front_idx(), back_idx()).
+pub unsafe trait FifoRead {
+    type Elem;
+    type Idx: FifoIdx;
+
+    fn front_idx(&self) -> Self::Idx;
+
+    /// One past the last entry's index: the next push_back()'s.
+    fn back_idx(&self) -> Self::Idx;
+
+    fn capacity(&self) -> usize;
+
+    /// Slot @i, entry or not.
+    fn slot(&self, i: Self::Idx) -> *const Self::Elem;
+
+    fn len(&self) -> usize {
+        self.back_idx().wrapping_sub(&self.front_idx()).as_()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.front_idx() == self.back_idx()
+    }
+
+    fn free(&self) -> usize {
+        self.capacity() - self.len()
+    }
+
+    fn is_full(&self) -> bool {
+        self.len() == self.capacity()
+    }
+
+    fn get(&self, i: Self::Idx) -> Option<&Self::Elem> {
+        (i.wrapping_sub(&self.front_idx()).as_() < self.len()).then(|| unsafe { &*self.slot(i) })
+    }
+
+    fn peek_front(&self) -> Option<&Self::Elem> {
+        self.get(self.front_idx())
+    }
+
+    fn peek_back(&self) -> Option<&Self::Elem> {
+        self.get(self.back_idx().wrapping_sub(&One::one()))
+    }
+
+    /// The entries, front to back, with their indices.
+    fn iter_indexed(&self) -> impl Iterator<Item = (Self::Idx, &Self::Elem)> {
+        let front = self.front_idx();
+        (0..self.len()).map(move |k| {
+            let i = front.wrapping_add(&Self::Idx::from_usize(k));
+            (i, unsafe { &*self.slot(i) })
+        })
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &Self::Elem> {
+        self.iter_indexed().map(|(_, e)| e)
     }
 }
 
@@ -68,7 +131,7 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         i.wrapping_sub(&self.front).as_()
     }
 
-    fn slot(&self, i: I) -> *mut T {
+    fn slot_mut(&self, i: I) -> *mut T {
         self.data.wrapping_add((i & self.mask).as_())
     }
 
@@ -77,51 +140,9 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         if self.data.is_null() { 0 } else { self.mask.as_() + 1 }
     }
 
-    pub fn len(&self) -> usize {
-        self.offset(self.back)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.front == self.back
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.size.as_()
-    }
-
-    pub fn free(&self) -> usize {
-        self.capacity() - self.len()
-    }
-
-    pub fn is_full(&self) -> bool {
-        self.len() == self.capacity()
-    }
-
-    pub fn front_idx(&self) -> I {
-        self.front
-    }
-
-    /// One past the last entry's index: the next push_back()'s.
-    pub fn back_idx(&self) -> I {
-        self.back
-    }
-
-    pub fn get(&self, i: I) -> Option<&T> {
-        // SAFETY: in [front, back): an entry
-        (self.offset(i) < self.len()).then(|| unsafe { &*self.slot(i) })
-    }
-
     pub fn get_mut(&mut self, i: I) -> Option<&mut T> {
-        // SAFETY: as get()'s
-        (self.offset(i) < self.len()).then(|| unsafe { &mut *self.slot(i) })
-    }
-
-    pub fn peek_front(&self) -> Option<&T> {
-        self.get(self.front)
-    }
-
-    pub fn peek_back(&self) -> Option<&T> {
-        self.get(Self::prev(self.back))
+        // SAFETY: in [front, back): an entry
+        (self.offset(i) < self.len()).then(|| unsafe { &mut *self.slot_mut(i) })
     }
 
     pub fn push_back(&mut self, v: T) -> Result<(), T> {
@@ -129,7 +150,7 @@ impl<T, I: FifoIdx> Fifo<T, I> {
             return Err(v);
         }
         // SAFETY: a free slot
-        unsafe { self.slot(self.back).write(v) };
+        unsafe { self.slot_mut(self.back).write(v) };
         self.back = Self::add(self.back, 1);
         Ok(())
     }
@@ -140,7 +161,7 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         }
         self.front = Self::prev(self.front);
         // SAFETY: a free slot
-        unsafe { self.slot(self.front).write(v) };
+        unsafe { self.slot_mut(self.front).write(v) };
         Ok(())
     }
 
@@ -149,7 +170,7 @@ impl<T, I: FifoIdx> Fifo<T, I> {
             return None;
         }
         // SAFETY: an entry, no longer one once front's past it
-        let v = unsafe { self.slot(self.front).read() };
+        let v = unsafe { self.slot_mut(self.front).read() };
         self.front = Self::add(self.front, 1);
         Some(v)
     }
@@ -160,7 +181,7 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         }
         self.back = Self::prev(self.back);
         // SAFETY: an entry, no longer one now back's at it
-        Some(unsafe { self.slot(self.back).read() })
+        Some(unsafe { self.slot_mut(self.back).read() })
     }
 
     /// Drop the first @n entries.
@@ -173,11 +194,6 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         } else {
             self.front = Self::add(self.front, n);
         }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
-        let (a, b) = self.as_slices();
-        a.iter().chain(b)
     }
 
     /// The entries, front to back, as the buffer has them: two stretches,
@@ -266,6 +282,33 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         self.mask = size - I::one();
         self.size = size;
         Ok(())
+    }
+}
+
+// [front, back) are entries: written by push, read out by pop
+unsafe impl<T, I: FifoIdx> FifoRead for Fifo<T, I> {
+    type Elem = T;
+    type Idx = I;
+
+    fn front_idx(&self) -> I {
+        self.front
+    }
+
+    fn back_idx(&self) -> I {
+        self.back
+    }
+
+    fn capacity(&self) -> usize {
+        self.size.as_()
+    }
+
+    fn slot(&self, i: I) -> *const T {
+        self.slot_mut(i)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        let (a, b) = self.as_slices();
+        a.iter().chain(b)
     }
 }
 

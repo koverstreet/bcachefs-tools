@@ -14,6 +14,7 @@ use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::{Acquire, AcqRel, Relaxed, SeqCst}};
 use cstruct_macros::{placed, MaybeZeroable, Init, Late, TypeInfo};
 use crate::alloc::capacity::DiskReservation;
+use crate::data_structures::fifo::FifoRead;
 use crate::alloc::foreground::OpenBucket;
 use crate::btree::cache::OwnedNode;
 use crate::btree::iter::{BtreeNodeRef, BtreeTrans, CommitOpts, TransAttempt, Watermark};

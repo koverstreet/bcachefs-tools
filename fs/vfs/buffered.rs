@@ -34,6 +34,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::init::error::bch2_inum_offset_err_msg_trans;
 use crate::inode_opts::get_inode;
+use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
 use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
