@@ -24,10 +24,10 @@
 //!
 //! A ref has no lifetime. What keeps the Gather there for it is that a
 //! Gather is only ever made pinned (PinInit), so its Drop runs before its
-//! memory is reused - and its Drop waits for every ref outstanding. So a ref
-//! can go anywhere - to C, an endio's private pointer, through into_raw() -
-//! and the owner's frame waits for it. Await or wait before it's dropped:
-//! that Drop sleeps.
+//! memory is reused - and is waited on, or awaited, before it's dropped,
+//! which its Drop asserts if any ref's still out. So a ref can go anywhere -
+//! to C, an endio's private pointer, through into_raw() - and the owner's
+//! wait waits for it.
 //!
 //! No lock: what's put folds into atomics - Fold, a trait on the result -
 //! from any context, an endio's included, and the count and whether the
@@ -47,15 +47,15 @@
 //! the count to zero - that, or the last put - completes it. The owner waits
 //! on the Done, not the count, so the Gather is there until complete() has
 //! marked it done, its last touch: the putter's, from its context - an
-//! endio's, interrupt context perhaps. A Gather dropped unwaited drops the
-//! owner's ref without starting it, and polls the count: the last put's
-//! cmpxchg is then its last touch.
+//! endio's, interrupt context perhaps. A Gather dropped unwaited has no ref
+//! out but the owner's, or it's a bug: a drop can't await, and one that
+//! slept would hide the wait it was meant to be.
 
 use crate::errcode::{BchError, FirstErr};
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::util::alloc::{AllocError, KVVec};
-use crate::util::sleep::{sleep_until, Sleep};
+use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, RunQueue, Waiter};
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
@@ -331,8 +331,7 @@ impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
         }
     }
 
-    /// Waited on before: that wait is over, as a Completion's drop waits it
-    /// out.
+    /// Waited on before: that wait is over, as a Completion's drop asserts.
     fn waited(&self) -> bool {
         W::load(&self.state, Ordering::Acquire) & Self::WAITED != 0
     }
@@ -446,19 +445,10 @@ impl<T: Send, Wt: Waiter, W: Width> Gather<KVVec<T>, Wt, W> {
 #[pin_init::pinned_drop]
 impl<T: Fold, Wt: Waiter, W: Width> PinnedDrop for Gather<T, Wt, W> {
     fn drop(self: Pin<&mut Self>) {
-        // Not waited on - its owner returned early - and refs may be out, raw
-        // ones in C's hands: wait them out. It's pinned, so it's where they
-        // point until it's freed.
-        if !self.waited() {
-            let mut old = W::load(&self.state, Ordering::Acquire);
-            while let Err(cur) = W::compare_exchange_weak(&self.state, old, old - 1) {
-                old = cur;
-            }
-            let all_put = || (W::load(&self.state, Ordering::Acquire) & Self::COUNT == 0).then_some(());
-            while all_put().is_none() {
-                let _ = sleep_until(Sleep::IDLE.timeout(1), all_put);
-            }
-        }
+        // not waited on, its owner's ref the only one: no ref's out to put
+        // into it once it's gone
+        assert!(self.waited() || W::load(&self.state, Ordering::Acquire) & Self::COUNT == 1,
+                "a Gather dropped with refs out, unwaited: wait on it, or await it, first");
     }
 }
 
