@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### New options
+
+- `bcachefs list --mode keys --btree extents --replicas-min N` filters leaf
+  extents to those with at least N allocated pointers to existing filesystem
+  members.
+
 ## v1.39.7 - Sun Oct 4 2026
 
 ### Major changes:
