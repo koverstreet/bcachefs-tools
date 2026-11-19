@@ -16,21 +16,22 @@ use crate::os::bio::{BioRange, MappedPages};
 use crate::util::alloc::{init_with, AllocGfp, Box, Flags, KVVec, Kmalloc};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::Printbuf;
+use crate::util::printbuf::HumanReadable;
 use crate::prt;
 use core::mem;
-use core::pin::Pin;
+use core::ptr::NonNull;
 use crate::data_structures::fifo::FifoRead;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
 use crate::util::refcount::{AtomicRef, RefGuard};
-use crate::util::vstructs::{Head, Unvalidated};
+use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
 use crate::journal::pins::{flush_degraded, pin_resize};
 use crate::journal::reclaim::discard_work;
 use crate::data_structures::list::ListLinks;
-use crate::locking::{ExclusiveGuard, Locked, LockedBy, Mutex, MutexNoio, PercpuRwSem, SpinLockIrq};
+use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mutex, MutexNoio, Noio, PercpuRwSem, SpinLockIrq};
 use core::cell::Cell;
 use crate::os::bio::BioSet;
 use crate::util::futex::EventCount;
@@ -53,93 +54,61 @@ pub const JOURNAL_STATE_BUF_MASK: u32 = c::JOURNAL_STATE_BUF_NR - 1;
 /* journal bufs: entries open or in flight, at most */
 pub const JOURNAL_BUF_NR: u32 = 256;
 
-/// A journal entry's buffer, freed with it - or none, zeroed. Moved whole:
-/// between j->free_buf and the bufs in flight. Its pages a bio's own, in high
+/// A journal entry's buffer, freed with it. Its pages a bio's own, in high
 /// order allocations, which the CPU sees as one buffer: up to 4M, written by
 /// clones of the bio - a few bvecs each - and page aligned, O_DIRECT in
-/// userspace. With it, the write that writes an entry from it: made with the
-/// buffer, so a write allocates nothing.
-#[derive(Default, pin_init::Zeroable)]
-pub struct JsetBuf {
-    data:  Option<Box<MappedPages, Kmalloc>>,
-    write: Option<MaybeRcuAlloc<JournalWrite>>,
-}
+/// userspace. Made with the write that writes it, so a write allocates
+/// nothing: the two go from j->free_buf to an open entry's buf, side by side;
+/// the buffer into the write as it starts, then its task, and back as it's
+/// done.
+pub struct JsetBuf(Box<MappedPages, Kmalloc>);
+
+// None is its pointer null - zeroed
+unsafe impl ::pin_init::ZeroableOption for JsetBuf {}
 
 impl JsetBuf {
     pub fn new(size: c_uint, gfp: Flags) -> Result<Self, BchError> {
-        let mut buf = Self::new_data(size, gfp)?;
-        buf.write = Some(MaybeRcuAlloc::new_gfp(JournalWrite::new(), gfp)?);
-        Ok(buf)
-    }
-
-    /// new()'s data, for swap_data(): no write.
-    pub fn new_data(size: c_uint, gfp: Flags) -> Result<Self, BchError> {
         let pages = MappedPages::new(size as usize, gfp)?;
-        let data = Box::into_unflagged(Box::init_in(init_with(|| pages), Kmalloc.with_flags(gfp))?);
-        Ok(JsetBuf { data: Some(data), write: None })
-    }
-
-    /// @other's data for ours, the write kept: it may be running.
-    pub fn swap_data(&mut self, other: &mut Self) {
-        mem::swap(&mut self.data, &mut other.data);
+        Ok(JsetBuf(Box::into_unflagged(Box::init_in(init_with(|| pages), Kmalloc.with_flags(gfp))?)))
     }
 
     /// The bio its first @bytes are written from - by clones, which borrow it.
     pub fn bio_range(&self, bytes: u32) -> BioRange<'_> {
-        self.data.as_ref().expect("a journal buffer's data, to write").bio().range().take(bytes)
-    }
-
-    pub fn write_to_text(&self, out: &mut Printbuf) {
-        match &self.write {
-            Some(w) => w.to_text(out),
-            None    => prt!(out, "none\n"),
-        }
-    }
-
-    /// Its write, made with it.
-    ///
-    /// # Safety
-    /// The write's to have: nothing else refers to it.
-    pub unsafe fn write(&self) -> Pin<&mut JournalWrite> {
-        let w = self.write.as_ref().expect("a journal buffer's write, made with it").as_non_null();
-        unsafe { Pin::new_unchecked(&mut *w.as_ptr()) }
+        self.0.bio().range().take(bytes)
     }
 
     pub fn size(&self) -> c_uint {
-        self.data.as_deref().map_or(0, MappedPages::len) as c_uint
+        self.0.len() as c_uint
     }
 
     pub fn as_ptr(&self) -> *mut Head<c::jset> {
-        self.data.as_deref().map_or(core::ptr::null_mut(), |d| d.as_non_null().as_ptr().cast())
+        self.0.as_non_null().as_ptr().cast()
     }
 
-    /// The header alone: not the body, which may be its reservations'.
     pub fn head(&self) -> &Head<c::jset> {
-        unsafe { self.as_ptr().as_ref() }.expect("a journal buffer, holding a jset's header")
+        cast_plain(self.bytes()).expect("a journal buffer, a jset's header at its start")
     }
 
     pub fn head_mut(&mut self) -> &mut Head<c::jset> {
-        unsafe { self.header_mut() }
+        cast_plain_mut(self.bytes_mut()).expect("a journal buffer, a jset's header at its start")
     }
 
     /// The header, to write, while the body may be another's.
     ///
     /// # Safety
     /// j->lock is held, and nothing else refers to the header.
-    pub unsafe fn header_mut(&self) -> &mut Head<c::jset> {
-        unsafe { self.as_ptr().as_mut() }.expect("a journal buffer, holding a jset's header")
+    unsafe fn header_mut(&self) -> &mut Head<c::jset> {
+        unsafe { &mut *self.as_ptr() }
     }
 
-    /// The body's first @u64s, the entries, to edit, without the header.
-    ///
-    /// # Safety
-    /// The caller holds the body: buf_lock, with the entry's reservations
-    /// put. Nothing else refers to these bytes.
-    pub unsafe fn entries_mut(&self, u64s: usize) -> &mut [u8] {
+    /// Where the body's first @u64s are, the entries, without the header: for
+    /// the write buffer's flush, which has them by buf_lock.
+    pub(crate) fn entries_ptr(&self, u64s: usize) -> NonNull<[u8]> {
         let hdr = mem::size_of::<Head<c::jset>>();
-        let d = self.data.as_deref().expect("a journal buffer, holding a jset").as_non_null();
+        let d = self.0.as_non_null();
         assert!(hdr + u64s * 8 <= d.len(), "journal entries of {u64s} u64s past a buffer of {} bytes", d.len());
-        unsafe { core::slice::from_raw_parts_mut(d.as_ptr().cast::<u8>().add(hdr), u64s * 8) }
+        let entries = d.cast::<u8>().map_addr(|a| a.checked_add(hdr).expect("a journal buffer's entries, within it"));
+        NonNull::slice_from_raw_parts(entries, u64s * 8)
     }
 
     pub fn jset(&self) -> &c::jset<Unvalidated> {
@@ -152,11 +121,60 @@ impl JsetBuf {
 
     /// The whole buffer, its jset and the room past it.
     pub fn bytes_mut(&mut self) -> &mut [u8] {
-        self.data.as_deref_mut().map_or(&mut [], MappedPages::as_mut_slice)
+        self.0.as_mut_slice()
     }
 
     pub fn bytes(&self) -> &[u8] {
-        self.data.as_deref().map_or(&[], MappedPages::as_slice)
+        self.0.as_slice()
+    }
+}
+
+/// An entry's buffer of @size, and the write that writes it.
+pub fn jset_buf_alloc(size: c_uint, gfp: Flags) -> Result<(JsetBuf, MaybeRcuAlloc<JournalWrite>), BchError> {
+    let buf = JsetBuf::new(size, gfp)?;
+    let write = MaybeRcuAlloc::new_gfp(JournalWrite::new(), gfp)?;
+    Ok((buf, write))
+}
+
+/// A buf's JsetBuf, had only as what's held allows: its header with j->lock;
+/// its body with buf_lock, once the entry's reservations are put - till then
+/// each reservation has its own range, through ring_data
+/// (res_append_entries()). The JsetBuf itself is only put in, as the entry's
+/// opened, and taken out, into its write as it starts.
+#[derive(pin_init::Zeroable)]
+pub struct BufJset(BufLocked<Option<JsetBuf>>);
+
+impl BufJset {
+    /// An entry's buffer, in, as it's opened.
+    pub fn put(&self, g: &mut c::JournalGuard<'_>, data: JsetBuf) {
+        let old = g.get_mut_of(&self.0).replace(data);
+        assert!(old.is_none(), "a journal buf given an entry's buffer, holding another's");
+    }
+
+    /// Out, into its write as it starts.
+    pub fn take(&self, g: &mut c::JournalGuard<'_>) -> JsetBuf {
+        g.get_mut_of(&self.0).take().expect("a journal write's buffer, in its buf")
+    }
+
+    pub fn header<'g>(&'g self, g: &'g mut c::JournalGuard<'_>) -> &'g mut Head<c::jset> {
+        let data = (*g).get_of(&self.0).as_ref().expect("an open journal entry's buffer");
+        unsafe { data.header_mut() }
+    }
+
+    pub fn size(&self, g: &c::JournalGuard<'_>) -> c_uint {
+        g.get_of(&self.0).as_ref().map_or(0, JsetBuf::size)
+    }
+
+    pub fn to_text(&self, g: &c::JournalGuard<'_>, out: &mut Printbuf) {
+        if let Some(data) = g.get_of(&self.0) {
+            prt!(out, "size:\t{}\n", HumanReadable(data.jset().bytes() as u64));
+        }
+    }
+
+    /// Where its entries are, as many as its header says.
+    pub(crate) fn entries_ptr(&self, g: &mut c::JournalGuard<'_>) -> NonNull<[u8]> {
+        let u64s = self.header(g).u64s();
+        g.get_of(&self.0).as_ref().expect("an open journal entry's buffer").entries_ptr(u64s)
     }
 }
 
@@ -174,6 +192,8 @@ pub struct journal_buf_bits {
 
 /* A journal buf's, j->lock's */
 pub type BufLocked<T> = LockedBy<T, (), JournalLockAt>;
+
+pub type BufLockGuard<'a> = ExclusiveGuard<'a, Noio<Mutex>>;
 
 /* A journal entry's extent key: a pointer for each device it's written to */
 pub type JournalKey = DstRoom<BkeyI, [u64; BKEY_U64S + c::BCH_REPLICAS_MAX as usize]>;
@@ -201,15 +221,11 @@ impl JournalKey {
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 pub struct journal_buf {
-    /*
-     * The entry's jset: its header published under j->lock; its body under a
-     * reservation - each its own range - or buf_lock. The write's no
-     * different: buf_lock for the body, j->lock to write the header. The
-     * JsetBuf itself - where they are - is changed only under j->lock, and
-     * buf_lock too once the body might be the write buffer's. to_text()
-     * reads it all racily: it's printing.
-     */
-    pub data: LockedBy<JsetBuf>,
+    /* the entry's jset, till its write starts */
+    pub data: BufJset,
+    /* and the write, made with it */
+    #[init(LockedBy::new(None, ()))]
+    pub write: BufLocked<Option<MaybeRcuAlloc<JournalWrite>>>,
     /* its write's ref on the journal's writes_in_flight */
     #[init(LockedBy::new(None, ()))]
     pub in_flight: BufLocked<Option<RefGuard<AtomicRef<()>>>>,
@@ -233,8 +249,7 @@ pub struct journal_buf {
 }
 
 // its wait word only ever touched atomically, the rest had only as its
-// LockedBys' holders have it, on any thread: data's bvecs point into its own
-// buffer, not anything of the thread that made them
+// LockedBys and BufJset let their holders have it, on any thread
 unsafe impl Sync for journal_buf {}
 
 impl journal_buf {
@@ -479,7 +494,9 @@ pub struct JournalLocked {
     pub seq_write_started: u64,
     pub last_empty_seq: u64,
 
-    pub free_buf: JsetBuf,
+    /* the next entry's buffer and write: both, or neither */
+    pub free_buf:   Option<JsetBuf>,
+    pub free_write: Option<MaybeRcuAlloc<JournalWrite>>,
 
     pub dirty_entry_bytes: usize,
     pub space: [c::journal_space; c::JournalSpaceFrom::journal_space_nr as usize],

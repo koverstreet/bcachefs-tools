@@ -201,13 +201,13 @@ impl c::journal {
         let enomem = || fs.err(Errcode::ENOMEM_journal_buf);
         let size = c::JOURNAL_ENTRY_SIZE_MIN;
 
-        let buf = c::JsetBuf::new(size, Flags::empty()).map_err(|_| enomem())?;
+        let (buf, write) = c::jset_buf_alloc(size, Flags::empty()).map_err(|_| enomem())?;
 
-        /* the old one freed outside the lock: kvfree can sleep */
+        /* the old ones freed outside the lock: kvfree can sleep */
         let old = {
             let mut g = self.lock.lock();
             g.published().buf_size_want.set(size);
-            core::mem::replace(&mut g.free_buf, buf)
+            (g.free_buf.replace(buf), g.free_write.replace(write))
         };
         drop(old);
         Ok(())

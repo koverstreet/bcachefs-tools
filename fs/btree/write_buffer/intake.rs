@@ -474,17 +474,16 @@ pub(super) fn fetch_wb_keys_from_journal(fs: &Fs, max_seq: u64) -> Result<(), Bc
     let mut blocked = false;
     let mut ret = Ok(());
 
-    let _buf_lock = j.buf_lock.lock();
+    let mut buf_lock = j.buf_lock.lock();
     let mut dst = Intake::lock(fs);
 
     while ret.is_ok() {
-        let Some((seq, buf)) = j.next_write_buffer_flush_journal_buf(max_seq, &mut blocked) else { break };
-        let data = unsafe { buf.data.protected() };
+        let Some((seq, buf, entries)) = j.next_write_buffer_flush_journal_buf(&mut buf_lock, max_seq, &mut blocked)
+        else { break };
 
         dst.begin(seq);
 
-        /* its u64s, which hold still while the body's ours */
-        ret = dst.journal_buf(unsafe { data.entries_mut(data.head().u64s()) });
+        ret = dst.journal_buf(entries);
         ret = dst.end_locked().and(ret);
 
         if !blocked && ret.is_ok() {
