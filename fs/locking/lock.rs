@@ -594,6 +594,23 @@ pub(crate) trait Guard {
         unsafe { c.locked_by().protected_mut() }
     }
 
+    /// What it covers, reached through what else it covers: @c read, the one
+    /// @f finds from it had mutably - this guard has both. Panics if the two
+    /// overlap.
+    fn get_mut_through<'g, C, D>(&'g mut self, c: &'g C, f: impl FnOnce(&'g C::G) -> &'g D) -> &'g mut D::G
+    where
+        C: AsLockedBy<L = Self::Name>,
+        D: AsLockedBy<L = Self::Name> + 'g,
+        Self: Alone,
+    {
+        let outer = unsafe { c.locked_by().protected() };
+        let inner = f(outer).locked_by();
+        let (o, i) = (core::ptr::from_ref(outer).addr(), inner.data_ptr().addr());
+        assert!(o + size_of_val(outer) <= i || i + size_of::<D::G>() <= o,
+                "a LockedBy reached through another it overlaps");
+        unsafe { inner.protected_mut() }
+    }
+
     fn writer_of<'g, C>(&'g self, c: &'g C) -> &'g <C::P as Publish>::Writer
     where
         C: AsLockedBy<L = Self::Name, P: Publish>,
