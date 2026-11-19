@@ -365,12 +365,12 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
     Ok(())
 }
 
-/// What a failed write_extent() made of @dst, given back.
+/// What write_extent() made of @dst, given back: it failed, or its IO's done.
 ///
 /// # Safety
-/// @dst is write_extent()'s: the op's bio or write_bio_alloc()'s, not in
-/// flight, and not used after if it was write_bio_alloc()'s.
-unsafe fn dst_put(fs: &Fs, dst: *mut c::bio) {
+/// @dst is write_extent()'s: the op's bio, write_bio_alloc()'s or a split, not
+/// in flight, and not used after if it wasn't the op's.
+pub(crate) unsafe fn dst_put(fs: &Fs, dst: *mut c::bio) {
     unsafe {
         let wbio = to_wbio::<c::DevWriteRefKind>(dst);
         if wbio.wbio.bits.bounce() != 0 {

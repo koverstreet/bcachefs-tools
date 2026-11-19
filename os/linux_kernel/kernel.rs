@@ -173,25 +173,6 @@ impl Drop for KthreadMm {
     }
 }
 
-/// What this task has run, as of @now: 0 where the scheduler doesn't say.
-pub fn current_runtime(now: u64) -> u64 {
-    #[cfg(not(any(CONFIG_SCHED_ALT, CONFIG_SCHED_MUQSS)))]
-    {
-        let se = unsafe { &(*crate::os::sched::current()).se };
-        se.sum_exec_runtime.wrapping_add(now.wrapping_sub(se.exec_start))
-    }
-    /*
-     * BMQ/PDS (CONFIG_SCHED_ALT) and MuQSS replace CFS and drop
-     * task_struct.se; this is only write-point runtime accounting,
-     * so skip it there.
-     */
-    #[cfg(any(CONFIG_SCHED_ALT, CONFIG_SCHED_MUQSS))]
-    {
-        let _ = now;
-        0
-    }
-}
-
 /// @bytes written, to this task's io accounting.
 pub fn task_io_account_write(bytes: usize) {
     unsafe { c::task_io_account_write(bytes) }

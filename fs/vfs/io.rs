@@ -60,8 +60,8 @@ impl InodeInfo {
         let fs = self.fs();
 
         /*
-         * Fetch-and-clear must be atomic: bch2_write_endio() sets bits here
-         * from bio completion, with no serialization against us. A plain
+         * Fetch-and-clear must be atomic: the write path sets bits here as
+         * a nocow write's IO completes, with no serialization against us. A plain
          * copy + memset can erase a bit set in between - fsync would then
          * complete without flushing a device that had a completed write.
          * Bits set after the exchange belong to the next flush.
