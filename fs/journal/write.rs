@@ -312,8 +312,8 @@ fn __write_alloc(j: &c::journal, a: &mut c::WriteAlloc, key: &mut c::JournalKey,
     }
 }
 
-fn write_alloc(j: &c::journal, key: &mut c::JournalKey, data: &c::JsetBuf, cas: &mut Cas, replicas: &mut u32)
-    -> Result<(), BchError>
+fn write_alloc(j: &c::journal, a: &mut c::WriteAlloc, key: &mut c::JournalKey, data: &c::JsetBuf, cas: &mut Cas,
+               replicas: &mut u32) -> Result<(), BchError>
 {
     let fs = j.fs();
     let sectors = data.jset().sectors(fs.block_bits()) as u32;
@@ -323,7 +323,6 @@ fn write_alloc(j: &c::journal, key: &mut c::JournalKey, data: &c::JsetBuf, cas: 
     };
     let replicas_want = fs.journal_replicas();
     let seq = data.seq();
-    let a = unsafe { j.write_alloc.protected_mut() };
 
     'target: loop {
         let devs = fs.target_rw_devs(DataType::journal, Target::decode(target.into()));
@@ -1028,7 +1027,7 @@ fn write_start(w: &c::journal_buf, seq: u64, b: c::BufLockGuard<'_>, closed: &Cl
     let mut cas = Cas::default();
     let mut replicas_allocated = 0;
     let ret = loop {
-        let ret = write_alloc(j, &mut key, data, &mut cas, &mut replicas_allocated);
+        let ret = write_alloc(j, &mut j.write_alloc.lock(), &mut key, data, &mut cas, &mut replicas_allocated);
         if ret.is_ok() || !j.lock.can_discard.get() {
             break ret;
         }

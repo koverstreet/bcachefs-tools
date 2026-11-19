@@ -372,8 +372,6 @@ pub struct WriteAlloc {
     pub wp_prev_devs: c::bch_devs_mask,
 }
 
-pub type WriteAllocLockedBy = LockedBy<WriteAlloc>;
-
 pub struct journal_entry_pin {
     pub locked: PinLockedBy,
     /* the entry it holds, 0 for none */
@@ -735,10 +733,10 @@ nest! {
 
         pub replay_journal_seq: Volatile<u64>,
 
-        /* protected by journal writes being allocated in order: */
+        /* the allocating write's: journal writes allocate one at a time, in order */
         #[pin]
-        #[init(::pin_init::zeroed::<LockedBy<WriteAlloc>>())]
-        pub write_alloc: WriteAllocLockedBy,
+        #[init(new_lock!(<- ::pin_init::init_zeroed(), (), "&j->write_alloc"))]
+        pub write_alloc: Locked<Mutex, WriteAlloc>,
 
         #[pin]
         #[init(new_lock!((), ::pin_init::zeroed(), "&j->reclaim_lock"))]
