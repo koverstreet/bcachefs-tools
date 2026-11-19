@@ -11,6 +11,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_val_to_text, BkeySC};
 use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, PathIdx, Paths};
 use crate::c;
+use crate::journal::flush_wait::Flush;
 use crate::data_structures::bitmap::Bitmap;
 use crate::debug::trace::events;
 use crate::errcode::{BchError, Errcode};
@@ -26,7 +27,7 @@ use super::types::TransMem;
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::util::backtrace::{prt_backtrace, save_backtrace};
 use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::c_char;
 use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64};
 #[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
 use crate::util::log::LogMsg;
@@ -296,13 +297,13 @@ impl<'f> BtreeTrans<'f> {
         &self,
         t:        &TransAttempt<'_, '_>,
         disk_res: Option<&DiskReservation<'_>>,
-        flush:    Option<&Opaque<c::closure>>,
+        flush:    Option<&mut Option<Flush<'_>>>,
         flags:    CommitOpts,
         lazy:     bool,
     ) -> Result<(), BchError> {
         self.disk_res.set(disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr()));
         self.journal_seq.set(core::ptr::null_mut());
-        self.flush.set(flush.map_or(core::ptr::null_mut(), Opaque::as_ptr));
+        self.flush.set(flush.map_or(core::ptr::null_mut(), |f| core::ptr::from_mut(f).cast()));
         self.commit_trans(t, flags, lazy)
     }
 }

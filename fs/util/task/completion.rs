@@ -36,6 +36,7 @@
 //! it's parked on this Done.
 
 use crate::c;
+use crate::util::ffi::Opaque;
 use crate::util::rcu;
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::task::{current_task, task_in, Resumable, TaskRef, WaitSync};
@@ -342,7 +343,20 @@ impl<W: Waiter> Drop for Armable<'_, W> {
     }
 }
 
-impl Unarmed<'_> {
+impl<'a> Unarmed<'a> {
+    /// For a closure's wait, not an Armable's: arming takes a ref on @cl, its
+    /// completer puts it.
+    pub fn for_closure(cl: &'a Opaque<c::closure>) -> Self {
+        unsafe fn arm(p: NonNull<()>) -> DynDone<'static> {
+            unsafe { c::closure_get(p.cast().as_ptr()) };
+            unsafe { DynDone::from_fn(p, put) }
+        }
+        unsafe fn put(p: NonNull<()>) {
+            unsafe { c::closure_put(p.cast().as_ptr()) }
+        }
+        Unarmed { a: NonNull::from(cl).cast(), arm, _slot: PhantomData }
+    }
+
     pub fn arm(self) -> DynDone<'static> {
         unsafe { (self.arm)(self.a) }
     }

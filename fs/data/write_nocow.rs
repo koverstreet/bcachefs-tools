@@ -15,8 +15,10 @@ use crate::data::write::{index_update_wq, to_wbio, wbio_init, submit_wbio_replic
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::format::{Btree, DataType, BkeyType};
+use crate::journal::flush_wait::Flush;
 use crate::snapshots::subvolume;
 use crate::util::closure::Running;
+use crate::util::task::Unarmed;
 use crate::os::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::{btree_trans, fs_inconsistent, inode};
@@ -104,7 +106,8 @@ fn nocow_write_convert_unwritten(op: &mut Op) {
                 let flush = op.has(w::flush) && is_last && bkey_ge(k.k.p, orig.k().p);
 
                 nocow_write_convert_one_unwritten(t, iter, op, orig, k)?;
-                t.commit_flush(Some(&op.res), flush.then_some(&op.cl), CommitFlags::NO_ENOSPC)?;
+                let mut f = flush.then(|| unsafe { Flush::new(&op.flush_entry, Unarmed::for_closure(&op.cl)) });
+                t.commit_flush(Some(&op.res), Some(&mut f), CommitFlags::NO_ENOSPC)?;
                 Ok(ControlFlow::<()>::Continue(()))
             }).map(|_| ())
         })

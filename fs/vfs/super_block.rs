@@ -67,7 +67,7 @@ impl SuperOps for Fs {
         let ret = if disabled {
             Ok(())
         } else if wait == 0 {
-            self.journal.flush_async(None);
+            self.journal.flush_async();
             Ok(())
         } else {
             self.journal_flush()

@@ -724,6 +724,7 @@ use crate::debug::async_objs;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
+use crate::journal::flush_wait::Flush;
 use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, IoRefIdx};
@@ -735,6 +736,7 @@ use crate::os::kernel::{current_runtime, local_clock, unlikely, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::ratelimit::Ratelimit;
 use crate::util::refcount::TryRefcount;
+use crate::util::task::Unarmed;
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{btree_trans, log_msg_ratelimited, prt};
@@ -839,8 +841,9 @@ fn write_index_default(op: &mut Op) -> Result<(), BchError> {
             let mut iter = BtreeIter::new(t, crate::format::Btree::extents, sk.k().start_pos(),
                                           BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
 
+            let mut f = flush.then(|| unsafe { Flush::new(&op.flush_entry, Unarmed::for_closure(&op.cl)) });
             t.extent_update(inum, &mut iter, &mut sk, &op.res, op.new_i_size, Some(&mut op.i_sectors_delta),
-                            check_enospc, op.opts.change_cookie, flush.then_some(&op.cl))?;
+                            check_enospc, op.opts.change_cookie, Some(&mut f))?;
             Ok(iter.pos())
         })?;
 

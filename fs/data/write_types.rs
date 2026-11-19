@@ -220,6 +220,12 @@ nest! {
         #[init(None)]
         pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
 
+        /* its journal flush's waiter, a ref on cl: attached by an index
+         * update's last commit, and the next index update runs once cl's refs
+         * are put, this one's with them */
+        #[init(crate::journal::flush_wait::FlushEntry::new())]
+        pub flush_entry: crate::journal::flush_wait::FlushEntry,
+
         /* Must be last - and its bio set up by the op's owner, before init() */
         #[pin]
         #[init(unsafe { crate::util::alloc::untouched() })]
