@@ -13,7 +13,7 @@
 use core::ffi::{c_int, c_uint, c_void};
 use core::mem::offset_of;
 use core::ptr;
-use core::sync::atomic::{fence, AtomicI32, Ordering::{Acquire, Relaxed, Release, SeqCst}};
+use core::sync::atomic::{AtomicI32, Ordering::{Relaxed, Release, SeqCst}};
 
 use pin_init::{pin_data, PinInit, Zeroable};
 use cstruct_macros::NoUninit;
@@ -196,9 +196,8 @@ impl PinList {
         })
     }
 
-    /* Unlocked: an entry being opened is no one else's - and what was on it is forgotten */
+    /* An entry being opened: its lists emptied as it retired, by retire() */
     fn reset(&self, count: i32) {
-        unsafe { self.lists.data_ptr().cast_mut().write(Zeroable::zeroed()) };
         self.count.store(count, Relaxed);
         self.unreplayed.set(false);
         self.devs.set(PinDevs::default());
@@ -403,7 +402,7 @@ impl<'a> PinsRead<'a> {
     pub fn advance_front(&self, last_seq_ondisk: u64) {
         let new_front = self.back().min(last_seq_ondisk);
         for seq in self.front()..new_front {
-            self.check_retired(self.slot(seq), seq);
+            self.retire(self.slot(seq), seq);
         }
         self.j.pin_range().pin_front.set(new_front);
     }
@@ -414,12 +413,7 @@ impl<'a> PinsRead<'a> {
     }
 
     pub fn seq_unpinned(&self, seq: u64) -> bool {
-        let l = self.get(seq);
-        let unpinned = l.count.load(SeqCst) == 0;
-        if unpinned {
-            self.check_retired(l, seq);
-        }
-        unpinned
+        self.get(seq).count.load(SeqCst) == 0
     }
 
     pub fn seq_replayed(&self, seq: u64) -> bool {
@@ -612,24 +606,17 @@ impl<'a> PinsRead<'a> {
     }
 
     /*
-     * An entry the journal is done with - retired past last_seq, or dropped
-     * off the front of the pin fifo - must hold no pins. count is the pins on
-     * its lists plus refs that are gone by then, so a pin still listed means
-     * count was decremented for a pin that never left, or a pin was added to
-     * an entry already retired. Either way the pin now sits on a seq nothing
-     * will flush, and slot() will hand its slot to a new seq.
+     * An entry dropped off the front of the pin fifo, which the journal is
+     * done with: it must hold no pins. count is the pins on its lists plus
+     * refs that are gone by then, so a pin still listed means count was
+     * decremented for a pin that never left, or a pin was added to an entry
+     * already retired. Either way the pin now sits on a seq nothing will
+     * flush, and slot() will hand its slot to a new seq: its lists are
+     * emptied here, for that one, and what was on them is forgotten.
      */
-    fn check_retired(&self, l: &PinList, seq: u64) {
-        /*
-         * Lockless, after the caller saw count == 0: a dropped pin leaves its
-         * list before count is decremented (drop_locked(), whose fetch_sub()
-         * orders the two), so pair that here or a weakly ordered CPU can see
-         * the count and a stale list together:
-         */
-        fence(Acquire);
-
-        let lists = unsafe { &*l.lists.data_ptr() };
-        let first = lists.all().find_map(|l| l.first());
+    fn retire(&self, l: &PinList, seq: u64) {
+        let mut g = l.lists.lock();
+        let first = g.all().find_map(|l| l.first());
         let count = l.count.load(Relaxed);
 
         if first.is_some() || count != 0 {
@@ -638,6 +625,7 @@ impl<'a> PinsRead<'a> {
                        if first.is_some() { ", pins still listed, first " } else { "" },
                        first.map_or(Symbol(ptr::null()), Pin::name));
         }
+        *g.protected() = Zeroable::zeroed();
     }
 
     /* Reclaim: picking pins to flush, and whether they're done */
