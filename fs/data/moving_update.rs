@@ -47,7 +47,7 @@ fn moving_size(u: &c::data_update) -> (&Moving<'_>, u32) {
 fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, size: u32) {
     let stats = moving.stats();
     let fs = u.op.fs();
-    let k = read.poisoned.as_ref().map_or(BkeySC::from(u.index.k.as_ref()), BkeySC::from);
+    let k = read.poisoned.as_deref().map_or(BkeySC::from(u.index.k.as_ref()), BkeySC::from);
     let poisoned = u.index.opts.type_ == c::DataUpdateType::scrub &&
         k.arm::<Ptrs>().is_some_and(|k| k.poisoned(fs));
 

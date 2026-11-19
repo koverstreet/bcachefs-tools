@@ -831,7 +831,7 @@ impl c::data_update {
         let type_ = self.index.opts.type_;
 
         self.index.opts.ptrs_io_error |= ptrs_io_error;
-        if let Some(k) = &poisoned {
+        if let Some(k) = poisoned.as_deref() {
             // XXX: a poisoned key that's outgrown the inline room moves to the
             // heap while the in-flight listing may be reading it, racily: a
             // torn read of the room can follow a half-written pointer

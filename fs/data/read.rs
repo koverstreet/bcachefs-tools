@@ -95,7 +95,7 @@ use crate::os::bio::{pages, reset_bvec_offset, Bio, BioBox, BioFuture, BioLend, 
                        BvecMempool, HasBio, Lent, Pages};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
-use crate::util::alloc::{flags, init_with, Flags, Box, Kmalloc};
+use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Kmalloc};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
@@ -293,8 +293,12 @@ pub struct ReadDone {
     pub ret:           Result<(), BchError>,
     pub pick:          Option<c::extent_ptr_decoded>,
     pub ptrs_io_error: u16,
-    pub poisoned:      Option<BkeyBuf>,
+    pub poisoned:      Option<Poisoned>,
 }
+
+/// The key a read poisoned, as it now is in the btree: boxed, as it's rare and
+/// a ReadDone is moved through its awaiters' stack frames.
+pub type Poisoned = Box<BkeyBuf, Kmalloc>;
 
 impl ReadDone {
     fn unretried(ret: Result<(), BchError>, pick: Option<c::extent_ptr_decoded>) -> Self {
@@ -525,7 +529,7 @@ pub(crate) fn retry_pool() -> impl PinInit<Mempool<Kmalloc>, BchError> {
 struct FailureState {
     io:       c::bch_io_failures,
     read:     Option<c::extent_ptr_decoded>,
-    poisoned: Option<BkeyBuf>,
+    poisoned: Option<Poisoned>,
 }
 
 struct RetryState<'r> {
@@ -1073,12 +1077,15 @@ fn maybe_poison_extent(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, fla
                                              size_of::<c::bch_extent_flags>())?;
     new.reborrow().arm::<PtrsMut>().expect("poisoning an extent whose entries can't be edited")
         .extent_flags_set(fs, extent_flags | c::ExtentFlags::poisoned).expect("room for an extent flags entry: made for it");
-    let poisoned = read.is_update().then(|| BkeyBuf::from_key(new.as_sc()));
+    let poisoned = read.is_update().then(|| {
+        Box::init_in(BkeyBuf::from_key(new.as_sc()), Kmalloc.with_flags(flags::NOFAIL))
+            .expect("a NOFAIL allocation")
+    });
     t.update(&iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(Some(&DiskReservation::new(fs)), CommitFlags::empty())?;
 
     if let Some(k) = poisoned {
-        failed.poisoned = Some(k);
+        failed.poisoned = Some(Box::into_unflagged(k));
     }
 
     fs.event_inc_trace(events::data_read_fail_and_poison, |out| {
