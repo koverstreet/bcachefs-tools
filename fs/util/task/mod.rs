@@ -11,10 +11,10 @@
 //! the poller's stack and moves it into the awaiting future, so large state
 //! belongs in the task's own locals, with stack_pin_init!().)
 //!
-//! When the future returns, the executor calls the owner's done function.
-//! That's the executor's last access to the task: the done function is where
-//! the owner learns the task has finished, and may free it. Dropping a task
-//! that started and hasn't finished panics.
+//! When the future returns, the executor takes its output, marks the task
+//! finished - its last access to the task - and calls the owner's done
+//! function with the output: where the owner learns the task has finished,
+//! and may free it. Dropping a task that started and hasn't finished panics.
 //!
 //! # Where a task runs
 //!
@@ -121,7 +121,7 @@ use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use core::task::{Context, ContextBuilder, Poll, Waker};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
@@ -339,7 +339,8 @@ pub(crate) struct Header {
     target:    Cell<Target>,
     thread:    Option<KthreadRef>,
     started:   Cell<bool>,
-    finished:  Cell<bool>,
+    /* the executor's done with its memory: set by finish(), read by its drop */
+    finished:  AtomicBool,
     listed:    Cell<u32>,
     runq_next: AtomicPtr<Header>,
     list:      NonNull<TaskList>,
@@ -413,7 +414,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
                 target:    Cell::new(target),
                 thread:    None,
                 started:   Cell::new(false),
-                finished:  Cell::new(false),
+                finished:  AtomicBool::new(false),
                 listed:    Cell::new(0),
                 runq_next: AtomicPtr::new(null_mut()),
                 list:      NonNull::from(list),
@@ -459,10 +460,11 @@ impl<'q, F: Future + Send> Task<'q, F> {
 
     unsafe fn finish(header: NonNull<Header>) {
         let task = header.cast::<Self>();
-        unsafe {
-            let output = ManuallyDrop::into_inner((&raw const (*task.as_ptr()).body.output).read());
-            ((*task.as_ptr()).owner_done)(task, output)
+        let (output, owner_done) = unsafe {
+            (ManuallyDrop::into_inner((&raw const (*task.as_ptr()).body.output).read()), (*task.as_ptr()).owner_done)
         };
+        unsafe { header.as_ref() }.finished.store(true, Ordering::Release);
+        unsafe { owner_done(task, output) };
     }
 }
 
@@ -471,7 +473,7 @@ impl<F: Future> PinnedDrop for Task<'_, F> {
     fn drop(self: Pin<&mut Self>) {
         let task = unsafe { self.get_unchecked_mut() };
         let started = task.header.started.get();
-        assert!(!started || task.header.finished.get(), "a task freed while it runs");
+        assert!(!started || task.header.finished.load(Ordering::Acquire), "a task freed while it runs");
         if !started {
             task.header.unlist();
             unsafe { ManuallyDrop::drop(&mut task.body.future) };
@@ -498,7 +500,7 @@ impl TaskRef {
         prt!(out, "{} ", (h.vtable.name)());
         if !h.started.get() {
             prt!(out, "not started\n");
-        } else if h.finished.get() {
+        } else if h.finished.load(Ordering::Relaxed) {
             prt!(out, "finished\n");
         } else if !waiting.is_null() {
             prt!(out, "waiting on {waiting:p}\n");
@@ -540,7 +542,7 @@ impl TaskRef {
     /// target moves it.
     unsafe fn run(self, running_on: Target) -> bool {
         let header = unsafe { self.0.as_ref() };
-        debug_assert!(header.waiting.load(Ordering::Relaxed).is_null() && !header.finished.get());
+        debug_assert!(header.waiting.load(Ordering::Relaxed).is_null() && !header.finished.load(Ordering::Relaxed));
         let never_moves = header.thread.is_some();
         let mut polled = Polled { task: self, parks_on: None };
         let mut cx = ContextBuilder::from_waker(Waker::noop()).ext(&mut polled).build();
@@ -549,7 +551,6 @@ impl TaskRef {
             if unsafe { (header.vtable.poll)(self.0, &mut cx) }.is_ready() {
                 let finish = header.vtable.finish;
                 header.unlist();
-                header.finished.set(true);
                 unsafe { finish(self.0) };
                 return true;
             }
