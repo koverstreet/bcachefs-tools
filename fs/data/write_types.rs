@@ -73,9 +73,9 @@ nest! {
 }
 
 impl<K: IoRefIdx> c::bch_write_bio<K> {
-    /// A write op's, around the bio and what else its owner set up: no io ref
-    /// held - @ca is set at submit, and taken back by the endio. An op
-    /// dropped without one submitted drops a @ca of None, not what its
+    /// A write's, around the bio and what else its owner set up: no io ref
+    /// held - @ca is set at submit, and taken back by the endio. One
+    /// dropped without being submitted drops a @ca of None, not what its
     /// memory last held.
     ///
     /// # Safety
@@ -227,11 +227,6 @@ nest! {
         /* c->writes, held till it's done - a data update's holds its own */
         #[init(None)]
         pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
-
-        /* Must be last - and its bio set up by the op's owner, before init() */
-        #[pin]
-        #[init(unsafe { c::bch_write_bio::around_bio() })]
-        pub wbio: c::bch_write_bio,
     }
 }
 
@@ -246,8 +241,7 @@ impl c::bch_write_op {
         unsafe { self.c.get() }
     }
 
-    /// An op for @fs, with @opts, made at @op by init(): its wbio's bio left as
-    /// its owner set it up.
+    /// An op for @fs, with @opts, made at @op by init().
     ///
     /// # Safety
     /// @fs outlives the op, and @op holds nothing to drop: new memory, or an

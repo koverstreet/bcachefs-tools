@@ -842,8 +842,8 @@ impl<R: IoRefIdx> c::bch_write_bio<R> {
         self.wbio.c.expect("a write bio's filesystem, before it's submitted")
     }
 
-    /// Pinned: a write bio is never moved once it's made - an op's, where its
-    /// owner made the op, or a BioBox's - as its bio's bvecs, and its IO in
+    /// Pinned: a write bio is never moved once it's made - a write's, in its
+    /// caller's home, or a BioBox's - as its bio's bvecs, and its IO in
     /// flight, point at it.
     pub(crate) fn pinned(&mut self) -> Pin<&mut Self> {
         unsafe { Pin::new_unchecked(self) }
@@ -875,12 +875,12 @@ pub(crate) type WriteGather = Gather<ReplicaErrs, waiter::Async>;
 
 type WriteBio = BioBox<'static, c::bch_write_bio>;
 
-/// An extent's bio: the op's own, or one of its own - put back, its buffers
-/// with it, as it's dropped, its IO done.
+/// An extent's bio: the write's own - its wbio - or one of its own - put back,
+/// its buffers with it, as it's dropped, its IO done.
 pub(crate) enum ExtentBio {
-    /// The op's, all that's left of it
+    /// The write's, all that's left of it
     Op,
-    /// The extent's part of the op's bio, split off it: its bvecs the op's
+    /// The extent's part of the write's bio, split off it: its bvecs the write's
     Split(WriteBio),
     /// Pages of its own, the extent's data bounced into them: to compress,
     /// checksum or encrypt
@@ -901,21 +901,21 @@ impl Drop for ExtentBio {
 }
 
 impl ExtentBio {
-    /// @op's bio's first @sectors, split off it: bio_split().
+    /// @wbio's first @sectors, split off it: bio_split().
     ///
     /// # Safety
-    /// @op's bvecs - its caller's data - aren't changed while it lives: till
+    /// @wbio's bvecs - its caller's data - aren't changed while it lives: till
     /// its pass's IO is waited on.
-    pub(crate) unsafe fn split(op: &mut Op, sectors: u32) -> Self {
+    pub(crate) unsafe fn split(fs: &Fs, wbio: &mut c::bch_write_bio, sectors: u32) -> Self {
         let bytes = sectors << 9;
-        let size = op.wbio.bio.range().len();
+        let size = wbio.bio.range().len();
         assert!(bytes != 0 && bytes < size, "splitting {sectors} sectors off a {size} byte bio");
 
-        let opf = op.wbio.bio.opf();
-        let range = unsafe { core::mem::transmute::<BioRange<'_>, BioRange<'static>>(op.wbio.bio.range().take(bytes)) };
-        let split = op.fs().bio_write.alloc(0, opf, |b| c::bch_write_bio::clone_of(b, range))
+        let opf = wbio.bio.opf();
+        let range = unsafe { core::mem::transmute::<BioRange<'_>, BioRange<'static>>(wbio.bio.range().take(bytes)) };
+        let split = fs.bio_write.alloc(0, opf, |b| c::bch_write_bio::clone_of(b, range))
             .unwrap_or_else(|e: BchError| panic!("a split of a write's bio: its bioset waits rather than fail, but {e}"));
-        op.wbio.bio_mut().advance(bytes);
+        wbio.bio_mut().advance(bytes);
         ExtentBio::Split(split)
     }
 
@@ -933,28 +933,28 @@ impl ExtentBio {
         }
     }
 
-    /// Its bio: the op's, @op's, if it's that.
-    pub(crate) fn bio_ref<'a>(&'a self, op: &'a c::bch_write_bio) -> &'a Bio {
-        self.own().unwrap_or(&op.bio)
+    /// Its bio: the write's, @wbio's, if it's that.
+    pub(crate) fn bio_ref<'a>(&'a self, wbio: &'a c::bch_write_bio) -> &'a Bio {
+        self.own().unwrap_or(&wbio.bio)
     }
 
-    pub(crate) fn len(&self, op: &c::bch_write_bio) -> u32 {
-        self.bio_ref(op).range().len()
+    pub(crate) fn len(&self, wbio: &c::bch_write_bio) -> u32 {
+        self.bio_ref(wbio).range().len()
     }
 
-    /// Its wbio: the op's, @op's, if it's that.
-    pub(crate) fn wbio<'a>(&'a mut self, op: &'a mut c::bch_write_bio) -> Pin<&'a mut c::bch_write_bio> {
+    /// Its wbio: the write's, @wbio, if it's that.
+    pub(crate) fn wbio<'a>(&'a mut self, wbio: &'a mut c::bch_write_bio) -> Pin<&'a mut c::bch_write_bio> {
         match self {
-            ExtentBio::Op           => op.pinned(),
+            ExtentBio::Op           => wbio.pinned(),
             ExtentBio::Split(b)     => b.as_mut(),
             ExtentBio::Bounce(b, _) => b.as_mut(),
             ExtentBio::Stripe(b)    => b.as_mut(),
         }
     }
 
-    /// Its bio: the op's, @op's, if it's that.
-    pub(crate) fn bio<'a>(&'a mut self, op: &'a mut c::bch_write_bio) -> &'a mut Bio {
-        HasBio::bio_mut(self.wbio(op))
+    /// Its bio: the write's, @wbio's, if it's that.
+    pub(crate) fn bio<'a>(&'a mut self, wbio: &'a mut c::bch_write_bio) -> &'a mut Bio {
+        HasBio::bio_mut(self.wbio(wbio))
     }
 }
 
@@ -980,7 +980,7 @@ impl Extents {
         self.0.is_empty()
     }
 
-    /// Given back, their IO done: write_extent()'s, or the op's own.
+    /// Given back, their IO done: write_extent()'s, or the write's own.
     pub(crate) fn put(&mut self) {
         self.0.clear();
     }
@@ -1179,8 +1179,8 @@ struct Pass {
 /// @in_caller: in its caller's context, where it waits on the allocator.
 /// @stuck: its last wait on the allocator ran out allocator_stuck_timeout -
 /// blocked again, it's reported.
-fn write_pass(op: &mut Op, update: Option<&c::data_update_index>, in_caller: bool, stuck: bool,
-              retried_for_encoded: &mut bool, g: &WriteGather, extents: &mut Extents) -> Pass {
+fn write_pass(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_update_index>, in_caller: bool,
+              stuck: bool, retried_for_encoded: &mut bool, g: &WriteGather, extents: &mut Extents) -> Pass {
     let fs = op.fs();
     let _noio = MemallocFlags::noio();
     let mut pass = Pass { wp: None, blocked: None };
@@ -1249,7 +1249,7 @@ fn write_pass(op: &mut Op, update: Option<&c::data_update_index>, in_caller: boo
 
         let ret = ret.and_then(|mut l| {
             l.open_buckets_get(&mut op.open_buckets);
-            let ret = write_extent(op, update, &mut l);
+            let ret = write_extent(op, wbio, update, &mut l);
 
             /*
              * The extent wouldn't decompress, so it has to go out as it came
@@ -1293,7 +1293,7 @@ fn write_pass(op: &mut Op, update: Option<&c::data_update_index>, in_caller: boo
             op.set(w::submitted);
         }
 
-        submit_extent(op, bio, key_to_write_offset, g, extents);
+        submit_extent(op, wbio, bio, key_to_write_offset, g, extents);
 
         /* a reserve's memory is the next extent's only once this one's done */
         if !more || reserved {
@@ -1305,7 +1305,8 @@ fn write_pass(op: &mut Op, update: Option<&c::data_update_index>, in_caller: boo
 /// @bio, an extent of @op's, written to each device of its key, the one at
 /// @key_offset of the op's keys: its bios into @g, held in @extents till
 /// they're done.
-fn submit_extent(op: &mut Op, bio: ExtentBio, key_offset: usize, g: &WriteGather, extents: &mut Extents) {
+fn submit_extent(op: &mut Op, wbio: &mut c::bch_write_bio, bio: ExtentBio, key_offset: usize, g: &WriteGather,
+                 extents: &mut Extents) {
     let fs = op.fs();
     let mut opf = c::req_op_REQ_OP_WRITE;
 
@@ -1324,7 +1325,7 @@ fn submit_extent(op: &mut Op, bio: ExtentBio, key_offset: usize, g: &WriteGather
     }
 
     let k = op.insert_keys.iter_from(key_offset).next().expect("a write with no key");
-    let mut wbio = extents.push(bio).wbio(&mut op.wbio);
+    let mut wbio = extents.push(bio).wbio(wbio);
     HasBio::bio_mut(wbio.as_mut()).raw_mut().bi_opf |= opf;
     unsafe { submit_replicas(fs, wbio, DataType::user, k, None, g) };
 }
@@ -1332,7 +1333,7 @@ fn submit_extent(op: &mut Op, bio: ExtentBio, key_offset: usize, g: &WriteGather
 /// The op's data written, and its index updated, a pass at a time: what one
 /// couldn't write - its write point full, its open buckets used up, the
 /// allocator blocked - the next does.
-async fn __write(op: &mut Op, of: WriteFor<'_>, mut pages: Option<&mut Bio<Pages<'_>>>,
+async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, mut pages: Option<&mut Bio<Pages<'_>>>,
                  mut flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
     let update = of.update();
@@ -1350,7 +1351,7 @@ async fn __write(op: &mut Op, of: WriteFor<'_>, mut pages: Option<&mut Bio<Pages
     let mut stuck = false;
 
     if unlikely(op.opts.nocow != 0 && fs.opts().nocow_enabled.get() != 0) &&
-       nocow_write(op, of, flush.as_deref_mut(), &mut in_caller).await {
+       nocow_write(op, wbio, of, flush.as_deref_mut(), &mut in_caller).await {
         return;
     }
 
@@ -1359,7 +1360,7 @@ async fn __write(op: &mut Op, of: WriteFor<'_>, mut pages: Option<&mut Bio<Pages
 
         stack_pin_init!(let g = WriteGather::new());
         let mut extents = Extents::default();
-        let pass = write_pass(op, update, in_caller, stuck, &mut retried_for_encoded, &g, &mut extents);
+        let pass = write_pass(op, wbio, update, in_caller, stuck, &mut retried_for_encoded, &g, &mut extents);
 
         match pass.wp {
             Some(wp) => {
@@ -1394,7 +1395,7 @@ async fn __write(op: &mut Op, of: WriteFor<'_>, mut pages: Option<&mut Bio<Pages
     }
 }
 
-fn write_data_inline(op: &mut Op, update: Option<&c::data_update_index>, data_len: u32,
+fn write_data_inline(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_update_index>, data_len: u32,
                      flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
 
@@ -1413,7 +1414,7 @@ fn write_data_inline(op: &mut Op, update: Option<&c::data_update_index>, data_le
         BkeyType::inline_data
     };
 
-    let sectors = op.wbio.bio.range().len() >> 9;
+    let sectors = wbio.bio.range().len() >> 9;
     let p = Bpos { offset: op.pos.offset + u64::from(sectors), ..op.pos };
     let k = c::bkey { type_: ty.0 as u8, p, size: sectors, bversion: op.version, ..c::bkey::new() };
 
@@ -1432,7 +1433,7 @@ fn write_data_inline(op: &mut Op, update: Option<&c::data_update_index>, data_le
         id.set_val_u64s(val_u64s).expect("reserved");
 
         let d = InlineDataMut::of(BkeyS::from(&mut **id)).expect("an inline data key");
-        o.wbio.bio_mut().range().copy_to(&mut d.data[..len]);
+        wbio.bio_mut().range().copy_to(&mut d.data[..len]);
         if let Some(h) = d.csum {
             *h = c::InlineDataCsum::new(fs, &o.opts, d.data);
         }
@@ -1481,14 +1482,16 @@ impl<'a> WriteFor<'a> {
  * after the data is written it calls bch_journal, and after the keys have been
  * added to the next journal write they're inserted into the btree.
  */
-/// Done, its task resumed @at if it waited - not left where its last wait
-/// was, which may be its write point's index updates.
+/// @wbio's data written, @wbio its caller's. Done, its task resumed @at if it
+/// waited - not left where its last wait was, which may be its write point's
+/// index updates.
 ///
-/// @pages: an update's, which its op's bio's bvecs are - freed once its
-/// data's written, before the index update.
-pub async fn write(op: &mut Op, of: WriteFor<'_>, pages: Option<&mut Bio<Pages<'_>>>, at: Resume<'_>) {
+/// @pages: an update's, which @wbio's bvecs are - freed once its data's
+/// written, before the index update.
+pub async fn write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, pages: Option<&mut Bio<Pages<'_>>>,
+                   at: Resume<'_>) {
     let fs = op.fs();
-    let sectors = u64::from(op.wbio.bio.range().len() >> 9);
+    let sectors = u64::from(wbio.bio.range().len() >> 9);
     let update = of.update();
 
     assert!(update.is_some() == op.has(w::update), "a write's update and its w::update flag disagree");
@@ -1509,11 +1512,9 @@ pub async fn write(op: &mut Op, of: WriteFor<'_>, pages: Option<&mut Bio<Pages<'
     }
 
     op.start_time = local_clock();
-    op.wbio.wbio = ::pin_init::zeroed();
-    op.wbio.ca = None;
 
     let ret = (|| -> Result<(), BchError> {
-        if unlikely(op.wbio.bio.range().len() & (fs.opts().block_size.get() as u32 - 1) != 0) {
+        if unlikely(wbio.bio.range().len() & (fs.opts().block_size.get() as u32 - 1) != 0) {
             write_op_error(op, update, op.pos.offset, format_args!("misaligned write"));
             crate::warn_on!(true);
             return Err(fs.err(Errcode::data_write_misaligned));
@@ -1543,12 +1544,12 @@ pub async fn write(op: &mut Op, of: WriteFor<'_>, pages: Option<&mut Bio<Pages<'
         false => None,
     };
 
-    let data_len = u64::from(op.wbio.bio.range().len()).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
+    let data_len = u64::from(wbio.bio.range().len()).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
 
     if fs.opts().inline_data.get() != 0 && data_len <= u64::from((fs.block_bytes() / 2).min(1024)) {
-        write_data_inline(op, update, data_len as u32, Some(&mut flush));
+        write_data_inline(op, wbio, update, data_len as u32, Some(&mut flush));
     } else {
-        __write(op, of, pages, Some(&mut flush)).await;
+        __write(op, wbio, of, pages, Some(&mut flush)).await;
     }
 
     // if no commit took it, none had anything to flush: there's nothing to wait for

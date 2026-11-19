@@ -113,7 +113,9 @@ fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, src: &Bio, short:
     ExtentBio::Bounce(bounce, Some(pages))
 }
 
-fn write_rechecksum(fs: &Fs, op: &mut Op, mut new_csum_type: c::CsumType) -> Result<(), BchError> {
+fn write_rechecksum(fs: &Fs, op: &mut Op, wbio: &mut c::bch_write_bio, mut new_csum_type: c::CsumType)
+    -> Result<(), BchError>
+{
     let mut new_crc = c::bch_extent_crc_unpacked::default();
 
     /* bch2_rechecksum_bio() can't encrypt or decrypt data: */
@@ -122,11 +124,11 @@ fn write_rechecksum(fs: &Fs, op: &mut Op, mut new_csum_type: c::CsumType) -> Res
         new_csum_type = op.crc.csum_type.get();
     }
 
-    fs.rechecksum_bio(&op.wbio.bio, op.version, op.crc, None, Some(&mut new_crc),
+    fs.rechecksum_bio(&wbio.bio,op.version, op.crc, None, Some(&mut new_crc),
                       op.crc.offset.into(), op.crc.live_size, new_csum_type)?;
 
-    op.wbio.bio_mut().advance(u32::from(op.crc.offset) << 9);
-    op.wbio.bio_mut().shrink(op.crc.live_size << 9);
+    wbio.bio_mut().advance(u32::from(op.crc.offset) << 9);
+    wbio.bio_mut().shrink(op.crc.live_size << 9);
     op.crc = new_crc;
     Ok(())
 }
@@ -141,16 +143,18 @@ fn write_rechecksum(fs: &Fs, op: &mut Op, mut new_csum_type: c::CsumType) -> Res
  * @bio and @op->crc are untouched unless this returns 0, so a caller that can't
  * use the plaintext still has the extent exactly as it arrived.
  */
-fn write_op_decode(op: &mut Op, update: Option<&c::data_update_index>) -> Result<(), BchError> {
+fn write_op_decode(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_update_index>)
+    -> Result<(), BchError>
+{
     let fs = op.fs();
     let crc = op.crc;
     let dst_len = (crc.uncompressed_size as usize) << 9;
 
     /* bio must own its pages: */
-    assert!(op.wbio.bio.nr_vecs() != 0, "decoding an extent in a bio that doesn't own its pages");
-    assert!((crc.live_size as usize) << 9 <= pages::bytes(&op.wbio.bio),
+    assert!(wbio.bio.nr_vecs() != 0, "decoding an extent in a bio that doesn't own its pages");
+    assert!((crc.live_size as usize) << 9 <= pages::bytes(&wbio.bio),
             "decoding an extent bigger than its bio");
-    assert!(op.wbio.bio.range().len() == crc.compressed_size << 9, "decoding a bio that isn't its extent");
+    assert!(wbio.bio.range().len() == crc.compressed_size << 9, "decoding a bio that isn't its extent");
 
     if crc.uncompressed_size << 9 > fs.opts().encoded_extent_max.get() {
         write_op_error(op, update, op.pos.offset, format_args!("extent too big to decompress ({} > {})",
@@ -168,7 +172,7 @@ fn write_op_decode(op: &mut Op, update: Option<&c::data_update_index>) -> Result
      * exactly as it found it. So take a private copy rather than letting
      * bch2_bio_map_or_bounce() hand us the bio's own pages, and decrypt that.
      */
-    let range = op.wbio.bio.range();
+    let range = wbio.bio.range();
     let mut src_buf = if crc.csum_type.get().is_encryption() {
         let mut b = bio_bounce(fs, range);
         fs.encrypt(crc.csum_type.get(), extent_nonce(op.version, &crc), &mut b[..(crc.compressed_size as usize) << 9])?;
@@ -193,11 +197,11 @@ fn write_op_decode(op: &mut Op, update: Option<&c::data_update_index>) -> Result
      * XXX: don't have a good way to assert that the bio was allocated with
      * enough space, we depend on move_extent() doing the right thing
      */
-    op.wbio.bio_mut().raw_mut().bi_iter.bi_size = crc.live_size << 9;
+    wbio.bio_mut().raw_mut().bi_iter.bi_size = crc.live_size << 9;
 
     if let Some(data) = data {
         let offset = usize::from(crc.offset) << 9;
-        op.wbio.bio.range().copy_from_volatile(data.sub(offset..offset + ((crc.live_size as usize) << 9)));
+        wbio.bio.range().copy_from_volatile(data.sub(offset..offset + ((crc.live_size as usize) << 9)));
     }
 
     let crc = &mut op.crc;
@@ -222,12 +226,13 @@ fn csum_err(op: &Op, update: Option<&c::data_update_index>, csum: c::bch_csum) -
 }
 
 #[inline(never)]
-fn write_prep_encoded_data(op: &mut Op, update: Option<&c::data_update_index>, wp: &LockedWritePoint<'_>)
+fn write_prep_encoded_data(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_update_index>,
+                           wp: &LockedWritePoint<'_>)
     -> Result<(), BchError>
 {
     let fs = op.fs();
 
-    assert!(op.wbio.bio.range().len() >> 9 == op.crc.compressed_size, "an encoded write's bio isn't its extent");
+    assert!(wbio.bio.range().len() >> 9 == op.crc.compressed_size, "an encoded write's bio isn't its extent");
 
     /* Can we just write the entire extent as is? */
     if op.crc.uncompressed_size == op.crc.live_size &&
@@ -238,7 +243,7 @@ fn write_prep_encoded_data(op: &mut Op, update: Option<&c::data_update_index>, w
         op.bits.incompressible() != 0) {
         if op.crc.csum_type != op.bits.csum_type() {
             if !crc_is_compressed(&op.crc) {
-                write_rechecksum(fs, op, op.bits.csum_type())?;
+                write_rechecksum(fs, op, wbio, op.bits.csum_type())?;
             } else {
                 /*
                  * bch2_rechecksum_bio() works in uncompressed
@@ -264,9 +269,9 @@ fn write_prep_encoded_data(op: &mut Op, update: Option<&c::data_update_index>, w
                  * with a fresh valid checksum:
                  */
                 let nonce = extent_nonce(op.version, &op.crc);
-                let new_csum = fs.checksum_range(op.bits.csum_type(), nonce, op.wbio.bio.range());
+                let new_csum = fs.checksum_range(op.bits.csum_type(), nonce, wbio.bio.range());
 
-                let csum = fs.checksum_range(op.crc.csum_type.get(), nonce, op.wbio.bio.range());
+                let csum = fs.checksum_range(op.crc.csum_type.get(), nonce, wbio.bio.range());
                 if csum_differs(op.crc.csum, csum) && fs.opts().no_data_io.get() == 0 {
                     return Err(csum_err(op, update, csum));
                 }
@@ -286,7 +291,7 @@ fn write_prep_encoded_data(op: &mut Op, update: Option<&c::data_update_index>, w
     if crc_is_compressed(&op.crc) {
         /* Last point we can still verify checksum: */
         let nonce = extent_nonce(op.version, &op.crc);
-        let csum = fs.checksum_range(op.crc.csum_type.get(), nonce, op.wbio.bio.range());
+        let csum = fs.checksum_range(op.crc.csum_type.get(), nonce, wbio.bio.range());
         if csum_differs(op.crc.csum, csum) && fs.opts().no_data_io.get() == 0 {
             return Err(csum_err(op, update, csum));
         }
@@ -298,7 +303,7 @@ fn write_prep_encoded_data(op: &mut Op, update: Option<&c::data_update_index>, w
          * data won't decompress there is nothing to undo, and writing
          * the extent as we found it is still on the table:
          */
-        if let Err(e) = write_op_decode(op, update) {
+        if let Err(e) = write_op_decode(op, wbio, update) {
             if !e.matches(Errcode::decompress) {
                 return Err(e);
             }
@@ -334,7 +339,7 @@ fn write_prep_encoded_data(op: &mut Op, update: Option<&c::data_update_index>, w
      * rechecksum and adjust bio to point to currently live data:
      */
     if op.crc.live_size != op.crc.uncompressed_size || op.crc.csum_type != op.bits.csum_type() {
-        write_rechecksum(fs, op, op.bits.csum_type())?;
+        write_rechecksum(fs, op, wbio, op.bits.csum_type())?;
     }
 
     /*
@@ -343,12 +348,12 @@ fn write_prep_encoded_data(op: &mut Op, update: Option<&c::data_update_index>, w
     if op.crc.csum_type.get().is_encryption() &&
        (op.bits.compression_opt() != 0 || op.crc.csum_type != op.bits.csum_type()) {
         let nonce = extent_nonce(op.version, &op.crc);
-        let csum = fs.checksum_range(op.crc.csum_type.get(), nonce, op.wbio.bio.range());
+        let csum = fs.checksum_range(op.crc.csum_type.get(), nonce, wbio.bio.range());
         if csum_differs(op.crc.csum, csum) && fs.opts().no_data_io.get() == 0 {
             return Err(csum_err(op, update, csum));
         }
 
-        fs.encrypt_range(nonce, op.wbio.bio.range())?;
+        fs.encrypt_range(nonce, wbio.bio.range())?;
 
         op.crc.csum_type.set(c::CsumType::none);
         op.crc.csum = c::bch_csum::default();
@@ -368,8 +373,8 @@ pub(crate) struct Extent {
 
 /// The next of @op's data written out at @wp: its extents' keys appended,
 /// and the bio to submit.
-pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, wp: &mut LockedWritePoint<'_>)
-    -> Result<Extent, BchError>
+pub(crate) fn write_extent(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_update_index>,
+                           wp: &mut LockedWritePoint<'_>) -> Result<Extent, BchError>
 {
     let fs = op.fs();
     let mut dst = ExtentBio::Op;
@@ -383,16 +388,16 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
         op.bits.set_compression_opt(0);
     }
 
-    assert!(op.wbio.bio.range().len() >> 9 != 0, "writing an empty bio");
+    assert!(wbio.bio.range().len() >> 9 != 0, "writing an empty bio");
 
     let ec_buf = wp.ec_buf();
 
     if unlikely(op.has(w::data_encoded)) {
-        match write_prep_encoded_data(op, update, wp) {
+        match write_prep_encoded_data(op, wbio, update, wp) {
             Err(e) if e.matches(Errcode::write_encoded_as_is) => {
                 if !ec_buf.is_null() {
-                    dst = write_bio_alloc(fs, wp, &op.wbio.bio, &mut short, ec_buf);
-                    dst.own().expect("a stripe's bio").range().copy_from_range(op.wbio.bio.range());
+                    dst = write_bio_alloc(fs, wp, &wbio.bio, &mut short, ec_buf);
+                    dst.own().expect("a stripe's bio").range().copy_from_range(wbio.bio.range());
                 }
                 init_append_extent(op, wp, op.version, op.crc);
                 let reserved = reserved(&dst, &short);
@@ -407,7 +412,7 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
        op.bits.compression_opt() != 0 ||
        (op.bits.csum_type() != c::CsumType::none && !op.has(w::pages_stable)) ||
        (op.bits.csum_type().is_encryption() && !op.has(w::pages_owned)) {
-        dst = write_bio_alloc(fs, wp, &op.wbio.bio, &mut short, ec_buf);
+        dst = write_bio_alloc(fs, wp, &wbio.bio, &mut short, ec_buf);
         bounce = true;
     }
 
@@ -415,24 +420,24 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
     let write_corrupt_ratio = crate::data::write::write_corrupt_ratio.get();
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     if !bounce && write_corrupt_ratio != 0 {
-        dst = write_bio_alloc(fs, wp, &op.wbio.bio, &mut short, ec_buf);
+        dst = write_bio_alloc(fs, wp, &wbio.bio, &mut short, ec_buf);
         bounce = true;
     }
-    let saved_iter = dst.bio_ref(&op.wbio).raw().bi_iter;
+    let saved_iter = dst.bio_ref(wbio).raw().bi_iter;
 
     let ret = (|| -> Result<(), BchError> {
         loop {
             let mut crc = c::bch_extent_crc_unpacked::default();
             let mut version = op.version;
             let (mut dst_len, mut src_len) = (0u32, 0u32);
-            let src_size = op.wbio.bio.range().len();
+            let src_size = wbio.bio.range().len();
 
             assert!(u64::from(src_size) & (fs.block_bytes() - 1) == 0,
                     "a write of {src_size} bytes, not whole blocks");
 
             if short.pages &&
-               dst.len(&op.wbio) < wp.sectors_free() << 9 &&
-               dst.len(&op.wbio) < fs.opts().encoded_extent_max.get() {
+               dst.len(wbio) < wp.sectors_free() << 9 &&
+               dst.len(wbio) < fs.opts().encoded_extent_max.get() {
                 return Ok(());
             }
 
@@ -445,7 +450,7 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
             } else if op.bits.compression_opt() != 0 {
                 let (mut d, mut s) = (0usize, 0usize);
                 let dst_r = dst.own().expect("compressing into a bio of its own").range();
-                let t = bio_compress(fs, dst_r, &mut d, op.wbio.bio.range(), &mut s, op.bits.compression_opt().into(),
+                let t = bio_compress(fs, dst_r, &mut d, wbio.bio.range(), &mut s, op.bits.compression_opt().into(),
                                      op.pos, !op.has(w::pages_stable));
                 (dst_len, src_len) = (d as u32, s as u32);
                 t
@@ -454,7 +459,7 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
             });
 
             if !crc_is_compressed(&crc) {
-                dst_len = dst.len(&op.wbio).min(src_size);
+                dst_len = dst.len(wbio).min(src_size);
                 dst_len = dst_len.min(wp.sectors_free() << 9);
 
                 if op.bits.csum_type() != c::CsumType::none {
@@ -463,7 +468,7 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
 
                 if bounce {
                     dst.own().expect("bounced into a bio of its own").range().take(dst_len)
-                        .copy_from_range(op.wbio.bio.range());
+                        .copy_from_range(wbio.bio.range());
                 }
 
                 src_len = dst_len;
@@ -499,7 +504,7 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
                  */
                 let old = op.crc;
                 let csum_type = op.bits.csum_type();
-                fs.rechecksum_bio(&op.wbio.bio, version, old,
+                fs.rechecksum_bio(&wbio.bio,version, old,
                                   Some(&mut crc), Some(&mut op.crc),
                                   src_len >> 9,
                                   (src_size >> 9) - (src_len >> 9),
@@ -514,7 +519,7 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
             } else {
                 if op.has(w::data_encoded) {
                     let old = op.crc;
-                    fs.rechecksum_bio(&op.wbio.bio, version, old,
+                    fs.rechecksum_bio(&wbio.bio,version, old,
                                       None, Some(&mut op.crc),
                                       src_len >> 9,
                                       (src_size >> 9) - (src_len >> 9),
@@ -525,7 +530,7 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
                 crc.uncompressed_size = src_len >> 9;
                 crc.live_size         = src_len >> 9;
 
-                let extent = dst.bio_ref(&op.wbio).range().take(dst_len);
+                let extent = dst.bio_ref(wbio).range().take(dst_len);
                 let csum_type = op.bits.csum_type();
                 if csum_type.is_encryption() {
                     fs.encrypt_range(extent_nonce(version, &crc), extent)?;
@@ -539,18 +544,18 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
 
             #[cfg(CONFIG_BCACHEFS_DEBUG)]
             if write_corrupt_ratio != 0 && crate::os::kernel::random_u64_below(write_corrupt_ratio.into()) == 0 {
-                dst.bio_ref(&op.wbio).range().take(dst_len).corrupt();
+                dst.bio_ref(wbio).range().take(dst_len).corrupt();
             }
 
             if !dst.is_op() {
-                dst.bio(&mut op.wbio).advance(dst_len);
+                dst.bio(wbio).advance(dst_len);
             }
-            op.wbio.bio_mut().advance(src_len);
+            wbio.bio_mut().advance(src_len);
             total_output += dst_len;
             total_input  += src_len;
 
-            if !(dst.len(&op.wbio) != 0 &&
-                 op.wbio.bio.range().len() != 0 &&
+            if !(dst.len(wbio) != 0 &&
+                 wbio.bio.range().len() != 0 &&
                  wp.sectors_free() != 0 &&
                  op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize).is_ok()) {
                 return Ok(());
@@ -559,16 +564,16 @@ pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, w
     })();
     ret?;
 
-    let more = op.wbio.bio.range().len() != 0;
+    let more = wbio.bio.range().len() != 0;
 
-    dst.bio(&mut op.wbio).raw_mut().bi_iter = saved_iter;
+    dst.bio(wbio).raw_mut().bi_iter = saved_iter;
 
     if dst.is_op() && more {
         assert!(total_output == total_input, "a split of a bio we didn't bounce, its output not its input");
-        dst = unsafe { ExtentBio::split(op, total_input >> 9) };
+        dst = unsafe { ExtentBio::split(fs, wbio, total_input >> 9) };
     }
 
-    dst.bio(&mut op.wbio).raw_mut().bi_iter.bi_size = total_output;
+    dst.bio(wbio).raw_mut().bi_iter.bi_size = total_output;
     let reserved = reserved(&dst, &short);
     Ok(Extent { bio: dst, more, reserved })
 }

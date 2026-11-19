@@ -32,7 +32,8 @@ pub struct WriteResult {
 // A write's op and its bio, which maps @data: on the heap, made in place.
 // 'static: the caller holds @data till the task's done.
 struct WriteState {
-    op: c::bch_write_op,
+    op:   c::bch_write_op,
+    wbio: c::bch_write_bio,
 }
 
 // handed to the write's task: its bvecs map the caller's @data
@@ -48,17 +49,18 @@ pub fn write(
     data: &[u8],
     new_i_size: u64,
 ) -> Result<WriteResult, BchError> {
-    // Made in place: the op's bio first, which the op's init() leaves be
+    // Made in place: the write bio's bio first, which around_bio() leaves be
     let mut state = Box::new(std::mem::MaybeUninit::<WriteState>::zeroed());
     let p = state.as_mut_ptr();
     let mut state = unsafe {
-        let bio = &raw mut (*p).op.wbio.bio;
+        let bio = &raw mut (*p).wbio.bio;
         let data: &'static [u8] = &*std::ptr::from_ref(data);
         let fill = |at: BioInPlace<'static>| at.init_from(|b| {
             Buffer::fill(b, data);
             Ok::<_, BchError>(Data)
         });
         init_at(BioInPlace::own(Buffer::nr_vecs(&data), c::req_op_REQ_OP_WRITE, fill), bio)?;
+        let Ok(()) = init_at(c::bch_write_bio::around_bio(), &raw mut (*p).wbio);
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };
@@ -76,8 +78,8 @@ pub fn write(
     let (wait, r) = CompletionReturn::new(&mut done, waiter::Sync::current());
     let task = slot.init(Spawn::Queue(Queue::system_dfl()), fs.tasks(), async move |_: &()| {
         let mut state = state;
-        let op = &mut state.op;
-        write::write(op, write::WriteFor::Tools, None, Resume::queue(Queue::system_dfl())).await;
+        let WriteState { op, wbio, .. } = &mut *state;
+        write::write(op, wbio, write::WriteFor::Tools, None, Resume::queue(Queue::system_dfl())).await;
         r.complete(match op.error as i32 {
             0     => Ok(WriteResult { sectors_delta: op.i_sectors_delta }),
             error => Err(BchError::from_raw(-error)),
