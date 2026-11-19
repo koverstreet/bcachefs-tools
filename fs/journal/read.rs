@@ -213,14 +213,6 @@ impl Drop for JournalEntries {
     }
 }
 
-/// @ca's ring, the journal read's before the filesystem can go rw.
-///
-/// # Safety
-/// No other reference to it lives meanwhile.
-unsafe fn journal_ring(ca: &Dev) -> &mut JournalRing {
-    unsafe { ca.journal.buckets.protected_mut() }
-}
-
 pub fn journal_pos_from_member_info_set(fs: &Fs, sb: &mut crate::fs::SbLockGuard<'_>) {
     for ca in fs.members() {
         let ja = &ca.journal;
@@ -241,7 +233,7 @@ pub fn journal_pos_from_member_info_resume(fs: &Fs) {
 
         let idx = m.last_journal_bucket.get();
         if idx < ca.journal.nr() {
-            unsafe { journal_ring(&ca) }.set_cur(idx);
+            ca.with_journal_ring(|r| r.set_cur(idx));
         }
         let offset = m.last_journal_bucket_offset.get();
         let bucket_size = u32::from(ca.mi.get().bucket_size);
@@ -703,24 +695,87 @@ fn read_at<'b>(ca: &DevIoRef<c::DevReadRefKind>, bio: &'b mut BioBox<Bio<Buffer<
     Ok(unsafe { assume_init_mut(&mut bio.as_mut().get_mut().buf_mut()[..bytes]) })
 }
 
+/// A device's ring, as a read has it: its buckets, and the newest seq each
+/// bucket had when it was copied - from the reads before.
+struct RingCopy {
+    buckets: KVVec<u64>,
+    seqs:    KVVec<u64>,
+}
+
+impl RingCopy {
+    /// @ca's, copied out from under j->lock into room made outside it.
+    fn of(ca: &Dev) -> Result<Self, BchError> {
+        let nr = ca.journal.nr() as usize;
+        let (mut buckets, mut seqs) = (KVVec::with_capacity(nr)?, KVVec::with_capacity(nr)?);
+        ca.with_journal_ring(|r| {
+            assert_eq!(r.nr() as usize, nr, "{ca}: the journal ring's nr out of step with its published nr");
+            buckets.extend_from_slice(r.buckets()).expect("room made for the ring's buckets");
+            seqs.extend_from_slice(r.seqs()).expect("room made for the ring's seqs");
+        });
+        Ok(RingCopy { buckets, seqs })
+    }
+}
+
+/// The newest entry a read found, and where: the write head.
+struct WriteHead {
+    seq:          u64,
+    bucket:       u32,
+    sectors_free: u32,
+}
+
+/// What a device's read found: the newest seq it saw in each bucket, and the
+/// newest entry.
+struct Found {
+    seqs: KVVec<u64>,
+    head: Option<WriteHead>,
+}
+
+impl Found {
+    /// Merged into @ca's ring: each bucket's seq the newest any read saw, and
+    /// cur the newest entry's bucket if it's newer than any before.
+    fn merge(self, ca: &Dev) {
+        let Found { seqs, head } = self;
+        ca.with_journal_ring(|r| {
+            for (s, &n) in r.seqs_mut().iter_mut().zip(seqs.iter()) {
+                *s = (*s).max(n);
+            }
+            if let Some(h) = head {
+                if r.set_cur_if_newest(h.bucket, h.seq) {
+                    ca.journal.sectors_free.set(h.sectors_free);
+                }
+            }
+        });
+    }
+}
+
 struct DevReader<'a> {
-    fs:   &'a Fs,
-    ca:   &'a DevIoRef<c::DevReadRefKind>,
-    ring: &'a mut JournalRing,
-    bio:  BioBox<'static, Bio<Buffer<IoBuf>>>,
+    fs:      &'a Fs,
+    ca:      &'a DevIoRef<c::DevReadRefKind>,
+    buckets: KVVec<u64>,
+    found:   Found,
+    bio:     BioBox<'static, Bio<Buffer<IoBuf>>>,
 }
 
 impl<'a> DevReader<'a> {
-    fn new(fs: &'a Fs, ca: &'a DevIoRef<c::DevReadRefKind>, ring: &'a mut JournalRing) -> Result<Self, BchError> {
+    fn new(fs: &'a Fs, ca: &'a DevIoRef<c::DevReadRefKind>, buckets: KVVec<u64>) -> Result<Self, BchError> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
         let buf = io_buf(bytes, Flags::empty()).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
         let bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
             Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ, |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
-        Ok(DevReader { fs, ca, ring, bio })
+        let found = Found { seqs: KVVec::from_elem(0, buckets.len())?, head: None };
+        Ok(DevReader { fs, ca, buckets, found, bio })
+    }
+
+    fn nr(&self) -> usize {
+        self.buckets.len()
+    }
+
+    fn seqs(&self) -> &[u64] {
+        &self.found.seqs
     }
 
     fn bucket_to_sector(&mut self, bucket: usize) -> u64 {
-        self.ca.bucket_to_sector(self.ring.buckets()[bucket])
+        self.ca.bucket_to_sector(self.buckets[bucket])
     }
 
     fn read_bucket(&mut self, read: &ReadLock<'_>, bucket: usize) -> Result<(), BchError> {
@@ -768,8 +823,12 @@ impl<'a> DevReader<'a> {
 
             let sectors = j.sectors(fs.block_bits()) as u64;
             let seq = j.seq.get();
-            if self.ring.set_cur_if_newest(bucket as u32, seq) {
-                ca.journal.sectors_free.set((end - offset - sectors) as u32);
+            if self.found.head.as_ref().is_none_or(|h| seq > h.seq) {
+                self.found.head = Some(WriteHead {
+                    seq,
+                    bucket:       bucket as u32,
+                    sectors_free: (end - offset - sectors) as u32,
+                });
             }
 
             /*
@@ -778,11 +837,11 @@ impl<'a> DevReader<'a> {
              * journal entries. We don't need the rest of the
              * bucket:
              */
-            if seq < self.ring.seqs()[bucket] {
+            if seq < self.found.seqs[bucket] {
                 return Ok(());
             }
 
-            self.ring.seqs_mut()[bucket] = seq;
+            self.found.seqs[bucket] = seq;
 
             let (csum_good, csum) = jset_csum_good(fs, j);
 
@@ -832,7 +891,7 @@ impl<'a> DevReader<'a> {
             return;
         }
 
-        self.ring.seqs_mut()[bucket] = j.seq.get();
+        self.found.seqs[bucket] = j.seq.get();
     }
 
     /*
@@ -844,11 +903,11 @@ impl<'a> DevReader<'a> {
             self.peek_bucket(bucket);
             peeked[bucket] = true;
         }
-        self.ring.seqs()[bucket]
+        self.seqs()[bucket]
     }
 
     fn read_live(&mut self, read: &ReadLock<'_>, mut order: KVVec<(usize, u64)>) -> Result<(), BchError> {
-        let nr = self.ring.nr() as usize;
+        let nr = self.nr();
 
         /*
          * Sort by seq descending, then read in that order. Once
@@ -870,14 +929,14 @@ impl<'a> DevReader<'a> {
              * bucket's max seq (now in bucket_seq from the full
              * read) is below it, we're done:
              */
-            if keep_from != 0 && self.ring.seqs()[bucket] < keep_from {
+            if keep_from != 0 && self.seqs()[bucket] < keep_from {
                 break;
             }
 
             last_seq_idx = bucket;
         }
 
-        let bucket_seq = self.ring.seqs();
+        let bucket_seq = self.seqs();
 
         /* Find write head — bucket with max seq among all buckets */
         let max_bucket = (0..nr).fold(0, |m, i| if bucket_seq[i] > bucket_seq[m] { i } else { m });
@@ -898,8 +957,8 @@ impl<'a> DevReader<'a> {
         Ok(())
     }
 
-    fn read_device(&mut self, read: &ReadLock<'_>, full_read: bool) -> Result<(), BchError> {
-        let nr = self.ring.nr() as usize;
+    fn read_device(mut self, read: &ReadLock<'_>, full_read: bool) -> Result<Found, BchError> {
+        let nr = self.nr();
 
         /*
          * Optimization for large journals on slow devices (e.g. SD cards):
@@ -929,28 +988,30 @@ impl<'a> DevReader<'a> {
                 self.read_bucket(read, i)?;
             }
         }
-
-        /*
-         * Set dirty_idx to indicate the entire journal is full and needs to be
-         * reclaimed - journal reclaim will immediately reclaim whatever isn't
-         * pinned when it first runs:
-         */
-        self.ring.start();
-        Ok(())
+        Ok(self.found)
     }
 }
 
+/// Each of @devs read, in parallel, each one's finds put in its slot, then
+/// merged into its ring.
 fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::DevReadRefKind>>,
                 full_read: bool) -> Result<(), BchError> {
-    par::scope(Backend::Workqueue(Queue::system_dfl()), fs.tasks(), |s| {
-        for io in devs.iter() {
+    let mut found: KVVec<Option<Found>> = KVVec::with_capacity(devs.len())?;
+    for _ in devs.iter() {
+        found.push(None)?;
+    }
+
+    let ret = par::scope(Backend::Workqueue(Queue::system_dfl()), fs.tasks(), |s| {
+        for (io, found) in devs.iter().zip(found.iter_mut()) {
             let ca: &Dev = io;
-            let ring = unsafe { journal_ring(ca) };
             s.spawn(format_args!("journal read {}", ca), move || {
-                let ret = if ring.nr() == 0 {
+                let ret = if ca.journal.nr() == 0 {
                     Ok(())
                 } else {
-                    DevReader::new(fs, io, ring).and_then(|mut r| r.read_device(read, full_read))
+                    RingCopy::of(ca)
+                        .and_then(|ring| DevReader::new(fs, io, ring.buckets))
+                        .and_then(|r| r.read_device(read, full_read))
+                        .map(|f| *found = Some(f))
                 };
 
                 match &ret {
@@ -961,7 +1022,20 @@ fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::DevReadRef
             })?;
         }
         Ok(())
-    })
+    });
+
+    for (ca, found) in devs.iter().zip(found) {
+        if let Some(found) = found {
+            found.merge(ca);
+            /*
+             * Set dirty_idx to indicate the entire journal is full and needs to be
+             * reclaimed - journal reclaim will immediately reclaim whatever isn't
+             * pinned when it first runs:
+             */
+            ca.with_journal_ring(JournalRing::start);
+        }
+    }
+    ret
 }
 
 fn journal_devs(fs: &Fs, want: impl Fn(&Dev) -> bool, degraded: bool)
@@ -1132,16 +1206,18 @@ pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
         }));
 
         for ca in journal_devs(fs, |ca| ca.journal.nr() != 0, false)?.iter() {
-            let mut r = DevReader::new(fs, ca, unsafe { journal_ring(ca) })?;
+            let RingCopy { buckets, seqs } = RingCopy::of(ca)?;
+            let mut r = DevReader::new(fs, ca, buckets)?;
 
-            for i in 0..r.ring.nr() as usize {
+            for (i, &seq) in seqs.iter().enumerate() {
                 /* Only re-read buckets that might have entries we need */
-                if r.ring.seqs()[i] < need_from {
+                if seq < need_from {
                     continue;
                 }
 
                 r.read_bucket(&read, i)?;
             }
+            r.found.merge(ca);
         }
     }
 
