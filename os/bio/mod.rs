@@ -46,7 +46,7 @@
 //! it's over c::bio here, in both builds - the shim's bio_vec laid out as the
 //! kernel's.
 
-use core::ffi::{c_ulong, c_void};
+use core::ffi::c_ulong;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
@@ -880,7 +880,3 @@ impl<O: BioOwner, B> Drop for Remapped<'_, O, B> {
     }
 }
 
-pub unsafe fn memcpy_to_bio(dst: *mut c::bio, dst_iter: c::bvec_iter, src: *const c_void) {
-    let dst = unsafe { Bio::from_raw(dst).range_at(dst_iter) };
-    dst.copy_from(unsafe { core::slice::from_raw_parts(src.cast(), dst.len() as usize) });
-}
