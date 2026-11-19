@@ -988,12 +988,12 @@ impl bch_sb_buf {
     pub fn sb(&self) -> &bch_sb {
         // SAFETY: it was read and validated, and this owns its buffer while
         // we're borrowed - resize and realloc take &mut
-        unsafe { bch_sb::<Validated>::from_head_ptr(self.buffer().as_ptr().cast()) }
+        unsafe { &*bch_sb::<Validated>::from_thin(self.buffer().as_ptr().cast()) }
     }
 
     pub fn sb_mut(&mut self) -> &mut bch_sb {
         // SAFETY: as sb()'s
-        unsafe { bch_sb::<Validated>::from_head_ptr_mut(self.as_mut_ptr()) }
+        unsafe { &mut *bch_sb::<Validated>::from_thin(self.as_mut_ptr().cast()).cast_mut() }
     }
 
     fn as_mut_ptr(&mut self) -> *mut Head<bch_sb> {
@@ -3000,7 +3000,7 @@ mod tests {
     use crate::btree::bkey::ValidateFlags;
     use crate::c;
     use crate::types::Le32;
-    use crate::util::vstructs::{Head, Unvalidated, Validated, VStruct, VStructError};
+    use crate::util::vstructs::{Head, SelfSized, Unvalidated, Validated, VStruct, VStructError};
     use crate::util::Printbuf;
     use core::ffi::c_int;
 
@@ -3013,7 +3013,7 @@ mod tests {
         unsafe {
             (*f).set_val_u64s(u64s);
             (*f).type_ = Le32::new(ty.0);
-            c::bch_sb_field::<Validated>::from_head_ptr(f)
+            &*c::bch_sb_field::<Validated>::from_thin(f.cast())
         }
     }
 
