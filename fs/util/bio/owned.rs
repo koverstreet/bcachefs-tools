@@ -221,38 +221,6 @@ impl BioPool {
         }
     }
 
-    /// bio_alloc_clone(): a bio of @src's bvecs from where it is, none of its
-    /// own - for no device, bio_set_dev()'s after.
-    ///
-    /// # Safety
-    /// @src is live, and its bvecs outlive the clone.
-    pub unsafe fn alloc_clone(&self, src: *mut c::bio, gfp: Flags) -> *mut c::bio {
-        let bio = self.alloc_raw(core::ptr::null_mut(), 0, unsafe { (*src).bi_opf }, gfp);
-        if !bio.is_null() {
-            unsafe { super::buffers::clone_from(&mut *bio, &*src, (*src).bi_iter) };
-        }
-        bio
-    }
-
-    /// bio_split(): @bio's first @sectors, a clone, and @bio advanced past
-    /// them.
-    ///
-    /// # Safety
-    /// As alloc_clone()'s.
-    pub unsafe fn split(&self, bio: *mut c::bio, sectors: u32, gfp: Flags) -> *mut c::bio {
-        let size = unsafe { (*bio).bi_iter.bi_size };
-        assert!(sectors != 0 && sectors < size >> 9, "splitting {sectors} sectors off a {size} byte bio");
-
-        let split = unsafe { self.alloc_clone(bio, gfp) };
-        if !split.is_null() {
-            unsafe {
-                (*split).bi_iter.bi_size = sectors << 9;
-                Bio::from_raw_mut(bio).advance(sectors << 9);
-            }
-        }
-        split
-    }
-
     /*
      * Allocate a bio (possibly a chain of bios via chain()) covering
      * [base, base+size) on @bdev starting at sector @sector. Each bio in the
@@ -598,6 +566,11 @@ impl<T: HasBio, B: Buffers, A: Alloc> BioBox<T, B, A> {
         // SAFETY: the T, live while it's had, and the box's alone - a bio in
         // flight has given up its box; never moved from where its set made it
         unsafe { Pin::new_unchecked(self.t.as_mut()) }
+    }
+
+    /// What its bvecs point at.
+    pub fn buffers(&self) -> &B {
+        &self.buffers
     }
 }
 
