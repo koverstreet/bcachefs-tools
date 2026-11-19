@@ -175,15 +175,17 @@ fn write_op_decode(op: &mut Op, update: Option<&c::data_update_index>) -> Result
         map_or_bounce(fs, range)
     };
 
-    let mut ret = buf_uncompress(fs, Out::from(&mut *dst_buf), src_buf.data(), &crc).map(|_| ());
+    let ret = buf_uncompress(fs, Out::from(&mut *dst_buf), src_buf.data(), &crc);
     drop(src_buf);
-    if fs.opts().no_data_io.get() != 0 {
-        ret = Ok(());
-    }
-    if let Err(e) = ret {
-        write_op_error(op, update, op.pos.offset, format_args!("{e}"));
-        return decompress_err(fs, Err(e));
-    }
+    let data = match ret {
+        Ok(data) => Some(data),
+        // nothing was read: there's nothing to copy
+        Err(_) if fs.opts().no_data_io.get() != 0 => None,
+        Err(e) => {
+            write_op_error(op, update, op.pos.offset, format_args!("{e}"));
+            return decompress_err(fs, Err(e));
+        }
+    };
 
     /*
      * XXX: don't have a good way to assert that the bio was allocated with
@@ -191,10 +193,9 @@ fn write_op_decode(op: &mut Op, update: Option<&c::data_update_index>) -> Result
      */
     op.wbio.bio_mut().raw_mut().bi_iter.bi_size = crc.live_size << 9;
 
-    let iter = op.wbio.bio.raw().bi_iter;
-    unsafe {
-        crate::util::bio::memcpy_to_bio(op.wbio.bio_mut().raw_mut(), iter,
-                                        dst_buf.as_ptr().add((crc.offset as usize) << 9).cast());
+    if let Some(data) = data {
+        let offset = usize::from(crc.offset) << 9;
+        op.wbio.bio.range().copy_from_volatile(data.sub(offset..offset + ((crc.live_size as usize) << 9)));
     }
 
     let crc = &mut op.crc;
