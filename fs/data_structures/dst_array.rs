@@ -24,6 +24,16 @@ use core::ptr::{self, NonNull};
 
 /// How an array of these is freed: prefix(), the bytes before the header -
 /// the rcu_head - and free(), of the allocation's start.
+///
+/// Not RcuFreeing's dispatch, because of where it frees: six's wait list and
+/// multimap's vals free what they've grown out of under a spinlock, where a
+/// headless kvfree_rcu() may sleep, and DstVecHead has no rcu_head - and one
+/// over the header would be over the length readers are reading. So the head
+/// goes before the header, where no reader looks.
+///
+/// XXX: for RcuFreeing to free these, the head goes in the header instead -
+/// DstVecHead always carrying one, or DstVec taking its header type - and
+/// this goes.
 trait ArrayFreeing {
     fn prefix() -> usize;
     unsafe fn free<A: Alloc>(base: NonNull<u8>, layout: Layout, a: &A);
