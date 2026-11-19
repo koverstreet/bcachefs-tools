@@ -989,14 +989,16 @@ impl Extents {
 impl ReplicaErrs {
     /// On @op: its failures - io_error, and
     /// each device's in @op.failed - and its devices to flush, the inode's.
-    pub(crate) fn record(&self, op: &mut Op) {
+    pub(crate) fn record(&self, op: &mut Op, of: WriteFor<'_>) {
         let fs = op.fs();
         for (dev, status) in self.failed() {
             op.failed.set_blk_status(fs, dev.into(), status);
             op.io_error = 1;
         }
-        for dev in self.unflushed.d.iter() {
-            unsafe { (*op.devs_need_flush).set(dev) };
+        if let WriteFor::Inode(devs_need_flush) = of {
+            for dev in self.unflushed.d.iter() {
+                devs_need_flush.set(dev);
+            }
         }
     }
 }
@@ -1330,9 +1332,10 @@ fn submit_extent(op: &mut Op, bio: ExtentBio, key_offset: usize, g: &WriteGather
 /// The op's data written, and its index updated, a pass at a time: what one
 /// couldn't write - its write point full, its open buckets used up, the
 /// allocator blocked - the next does.
-async fn __write(op: &mut Op, update: Option<&c::data_update_index>, mut pages: Option<&mut Bio<Pages<'_>>>,
+async fn __write(op: &mut Op, of: WriteFor<'_>, mut pages: Option<&mut Bio<Pages<'_>>>,
                  mut flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
+    let update = of.update();
     let mut retried_for_encoded = false;
 
     /*
@@ -1347,7 +1350,7 @@ async fn __write(op: &mut Op, update: Option<&c::data_update_index>, mut pages: 
     let mut stuck = false;
 
     if unlikely(op.opts.nocow != 0 && fs.opts().nocow_enabled.get() != 0) &&
-       nocow_write(op, flush.as_deref_mut(), &mut in_caller).await {
+       nocow_write(op, of, flush.as_deref_mut(), &mut in_caller).await {
         return;
     }
 
@@ -1361,7 +1364,7 @@ async fn __write(op: &mut Op, update: Option<&c::data_update_index>, mut pages: 
         match pass.wp {
             Some(wp) => {
                 in_caller = false;
-                g.wait(Resume::run_queue(wp.index_updates())).await.record(op);
+                g.wait(Resume::run_queue(wp.index_updates())).await.record(op, of);
             }
             /* failed before finding a write point: nothing submitted, nothing to wait for */
             None => assert!(extents.is_empty(), "a write pass submitted, with no write point"),
@@ -1444,6 +1447,27 @@ fn data_write_trace(out: &mut Printbuf, op: &Op, update: Option<&c::data_update_
     write_op_to_text(out, op, update)
 }
 
+/// Whose a write is: what it tells, besides its op.
+#[derive(Clone, Copy)]
+pub enum WriteFor<'a> {
+    /// A file's, with its bitmask of devices that have had nocow writes
+    /// issued to them since last flush
+    Inode(&'a c::AtomicDevsMask),
+    /// A data update's, which its index update rewrites the extent of
+    Update(&'a c::data_update_index),
+    /// The tools': no fsync to tell
+    Tools,
+}
+
+impl<'a> WriteFor<'a> {
+    pub(crate) fn update(self) -> Option<&'a c::data_update_index> {
+        match self {
+            Self::Update(u) => Some(u),
+            _ => None,
+        }
+    }
+}
+
 /**
  * write() - handle a write to a cache device or flash only volume
  *
@@ -1462,10 +1486,10 @@ fn data_write_trace(out: &mut Printbuf, op: &Op, update: Option<&c::data_update_
 ///
 /// @pages: an update's, which its op's bio's bvecs are - freed once its
 /// data's written, before the index update.
-pub async fn write(op: &mut Op, update: Option<&c::data_update_index>, pages: Option<&mut Bio<Pages<'_>>>,
-                   at: Resume<'_>) {
+pub async fn write(op: &mut Op, of: WriteFor<'_>, pages: Option<&mut Bio<Pages<'_>>>, at: Resume<'_>) {
     let fs = op.fs();
     let sectors = u64::from(op.wbio.bio.range().len() >> 9);
+    let update = of.update();
 
     assert!(update.is_some() == op.has(w::update), "a write's update and its w::update flag disagree");
     assert!(update.is_some() == pages.is_some(), "a write's update and its pages disagree");
@@ -1524,7 +1548,7 @@ pub async fn write(op: &mut Op, update: Option<&c::data_update_index>, pages: Op
     if fs.opts().inline_data.get() != 0 && data_len <= u64::from((fs.block_bytes() / 2).min(1024)) {
         write_data_inline(op, update, data_len as u32, Some(&mut flush));
     } else {
-        __write(op, update, pages, Some(&mut flush)).await;
+        __write(op, of, pages, Some(&mut flush)).await;
     }
 
     // if no commit took it, none had anything to flush: there's nothing to wait for

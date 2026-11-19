@@ -220,12 +220,6 @@ nest! {
         #[init(crate::data::keylist::Keylist::new())]
         pub insert_keys: crate::data::keylist::Keylist<{ c::BKEY_EXTENT_U64s_MAX * 2 }>,
 
-        /*
-         * Bitmask of devices that have had nocow writes issued to them since
-         * last flush:
-         */
-        pub devs_need_flush: *const c::AtomicDevsMask,
-
         /* what failed writing this round's buckets: */
         #[init(c::bch_io_failures::default())]
         pub failed: c::bch_io_failures,
@@ -240,10 +234,6 @@ nest! {
         pub wbio: c::bch_write_bio,
     }
 }
-
-// written by its write's task, on whichever thread runs it; what it points
-// to - the inode's devs_need_flush - outlives it, and is atomic
-unsafe impl Send for c::bch_write_op {}
 
 const _: () = assert!((c::WriteFlagBit::convert_unwritten as u32) < u16::BITS,
                       "the write flags don't fit in bch_write_op's flags");
