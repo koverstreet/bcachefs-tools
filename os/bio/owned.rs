@@ -394,41 +394,6 @@ impl BioPool {
         }
     }
 
-    /// bio_alloc_clone(): a bio of @src's bvecs from where it is, none of its
-    /// own - for no device, its submit's.
-    ///
-    /// # Safety
-    /// @src is live, and its bvecs outlive the clone.
-    pub unsafe fn alloc_clone(&self, src: *mut c::bio, gfp: Flags) -> *mut c::bio {
-        let bio = self.alloc_raw(0, unsafe { (*src).bi_opf }, gfp);
-        if !bio.is_null() {
-            let Ok(()) = unsafe {
-                let clone = BioInPlace(bio, PhantomData).clone_of::<core::convert::Infallible>(Bio::from_raw(src).range());
-                init_at(clone, bio.cast::<Bio>())
-            };
-        }
-        bio
-    }
-
-    /// bio_split(): @bio's first @sectors, a clone, and @bio advanced past
-    /// them.
-    ///
-    /// # Safety
-    /// As alloc_clone()'s.
-    pub unsafe fn split(&self, bio: *mut c::bio, sectors: u32, gfp: Flags) -> *mut c::bio {
-        let size = unsafe { (*bio).bi_iter.bi_size };
-        assert!(sectors != 0 && sectors < size >> 9, "splitting {sectors} sectors off a {size} byte bio");
-
-        let split = unsafe { self.alloc_clone(bio, gfp) };
-        if !split.is_null() {
-            unsafe {
-                (*split).bi_iter.bi_size = sectors << 9;
-                Bio::from_raw_mut(bio).advance(sectors << 9);
-            }
-        }
-        split
-    }
-
     /// @bio's memory back to the pool, what's in it dropped already.
     ///
     /// # Safety

@@ -42,15 +42,6 @@ impl<'p> Pages<'p> {
         Ok(Self { pool, used_pool: ret? })
     }
 
-    /// The pages fill() put on a raw bounce bio, which kept no Pages of them:
-    /// for free_from().
-    ///
-    /// # Safety
-    /// The bio it's freed from has fill()'s bvecs, from @pool.
-    pub unsafe fn from_raw(pool: &'p BouncePool) -> Self {
-        Self { pool, used_pool: false }
-    }
-
     /// What it holds freed, from @bio, which they were put on beside it, not
     /// owned by it: a fragment task's home's.
     pub fn free_from(self, bio: &mut Bio) {

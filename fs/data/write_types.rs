@@ -54,12 +54,8 @@ nest! {
             #>[repr(C)]-
             #>[bitfield(u8)]
             pub bits: pub struct bch_write_bio_bits {
-                bounce:            u1,
-                put_bio:           u1,
                 nocow:             u1,
-                used_mempool:      u1,
-                first_btree_write: u1,
-                __pad:             u3,
+                __pad:             u7,
             },
         },
 
