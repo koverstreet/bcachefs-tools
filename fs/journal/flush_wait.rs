@@ -64,11 +64,6 @@ impl FlushEntry {
         FlushEntry { next: AtomicPtr::new(ptr::null_mut()), done: UnsafeCell::new(done) }
     }
 
-    /// One on no list, its completion given it by the Flush that attaches it.
-    pub fn new() -> Self {
-        Self::of(None)
-    }
-
     /// Its Done, for its one completer.
     ///
     /// # Safety
@@ -163,15 +158,7 @@ impl<'a, W: Waiter> FlushWait<'a, W> {
     }
 }
 
-impl<'a> Flush<'a> {
-    /// @entry's, completed by what arming @done gives.
-    ///
-    /// # Safety
-    /// @entry is on no list: never attached, or completed since.
-    pub unsafe fn new(entry: &'a FlushEntry, done: Unarmed<'a>) -> Self {
-        Flush { entry, done }
-    }
-
+impl Flush<'_> {
     /// Attached to @seq's flush, in @j: its wait armed, and its entry on a
     /// list - the word returned.
     pub fn attach(self, j: &c::journal, seq: u64) -> &AtomicPtr<FlushEntry> {

@@ -709,42 +709,50 @@
  * \texttt{bcachefs data scrub}. Nocow data cannot be scrubbed (no checksums).
  */
 
-use crate::alloc::foreground::AllocWait;
+use crate::alloc::foreground::{AllocWait, Blocked};
 use crate::btree::bkey::prelude::*;
-use crate::util::alloc::flags;
 use crate::btree::bkey::{bkey_ge, BkeyI, BkeyS, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
 use crate::data::inline_data::{InlineDataMut, DATA};
 use crate::data::keylist::Keylist;
 use crate::data::ptrs::{Ptrs, PtrsMut};
-use crate::data::write_extent::{write_extent, Extent};
+use crate::data::write_extent::{dst_put, write_extent, Extent};
 use crate::data::write_nocow::nocow_write;
+use crate::data::write_replicas::{submit_replicas, ReplicaErrs};
+use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::async_objs;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
-use crate::journal::flush_wait::Flush;
 use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::snapshots::subvolume;
-use crate::util::bio::{bio_put, of_bio, Bio};
-use crate::util::closure::{ClosureRef, HasClosure, Running};
-use crate::util::ffi::Opaque;
-use crate::os::kernel::{current_runtime, local_clock, unlikely, WRITE};
+use crate::util::alloc::Kmalloc;
+use crate::util::bio::{of_bio, Bio};
+use crate::util::closure::Running;
+use crate::util::gather::Gather;
+use crate::util::mempool::Mempool;
+use crate::os::kernel::{local_clock, unlikely, WRITE};
+use crate::os::module::{Quiesced, ThisModule};
 use crate::util::log::LogMsg;
 use crate::util::ratelimit::Ratelimit;
 use crate::util::refcount::TryRefcount;
-use crate::util::task::Unarmed;
+use crate::util::sleep::Sleep;
+use crate::util::task::{exclusive_size, requeue, waiter, Completion, Done, DynDone, Resumable, Resume, RunQueue,
+                        Spawn, TaskSlot, WaitSync};
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{btree_trans, log_msg_ratelimited, prt};
 use c::WriteFlags as w;
-use c::{WritePointStateWriter, WritePointWrites};
+use crate::journal::flush_wait::{Flush, FlushWait};
+use core::alloc::Layout;
 use core::fmt;
 use core::pin::Pin;
 use core::ptr::NonNull;
+use cstruct_macros::in_place;
+use pin_init::stack_pin_init;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {
@@ -796,10 +804,12 @@ impl c::bch_write_op {
 }
 
 /// Off the async object list, and to its end_io, which may free it.
-fn write_op_end(op: Running<Op>) {
-    let fs = op.fs();
-    let mut op = op.end();
+///
+/// # Safety
+/// @op is bch2_write()'s, its write done, and touched by no one after.
+unsafe fn write_op_end(mut op: NonNull<Op>) {
     unsafe {
+        let fs = op.as_ref().fs();
         async_objs::list_del(fs, c::AsyncObjKind::write_op, &mut op.as_mut().list_idx);
         if let Some(end_io) = op.as_ref().end_io {
             end_io(op.as_ptr());
@@ -807,7 +817,7 @@ fn write_op_end(op: Running<Op>) {
     }
 }
 
-fn write_index_default(op: &mut Op) -> Result<(), BchError> {
+fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -> Result<(), BchError> {
     let fs = op.fs();
     let subvol = op.subvol;
     let inum = c::subvol_inum {
@@ -819,14 +829,13 @@ fn write_index_default(op: &mut Op) -> Result<(), BchError> {
 
     let trans = btree_trans!(fs);
     let check_enospc = op.has(w::check_enospc);
-    let flush = op.has(w::flush);
 
     loop {
         let next = lockrestart_do(&trans, |t| {
             let k = op.insert_keys.front().expect("an index update with no keys");
 
             let is_last = usize::from(k.k().u64s) == op.insert_keys.u64s();
-            let flush = is_last && flush;
+            let flush = flush.as_deref_mut().filter(|_| is_last);
 
             /*
              * If we did a degraded write, bch2_bkey_set_needs_reconcile() will add
@@ -841,9 +850,8 @@ fn write_index_default(op: &mut Op) -> Result<(), BchError> {
             let mut iter = BtreeIter::new(t, crate::format::Btree::extents, sk.k().start_pos(),
                                           BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
 
-            let mut f = flush.then(|| unsafe { Flush::new(&op.flush_entry, Unarmed::for_closure(&op.cl)) });
             t.extent_update(inum, &mut iter, &mut sk, &op.res, op.new_i_size, Some(&mut op.i_sectors_delta),
-                            check_enospc, op.opts.change_cookie, Some(&mut f))?;
+                            check_enospc, op.opts.change_cookie, flush)?;
             Ok(iter.pos())
         })?;
 
@@ -900,6 +908,60 @@ pub(crate) fn index_update_wq(op: &Op) -> &'static Queue {
     }
 }
 
+impl c::write_point {
+    pub(crate) fn index_updates(&self) -> Pin<&RunQueue> {
+        unsafe { Pin::new_unchecked(&*self.index_updates) }
+    }
+}
+
+pub(crate) type WriteGather = Gather<ReplicaErrs, waiter::Async>;
+
+/// A pass's extents' bios, each the last of its replicas and borrowed by its
+/// IO: given back once the pass's Gather is waited on.
+#[derive(Default)]
+pub(crate) struct Extents(ArrayVec<*mut c::bio, { c::BCH_BKEY_PTRS_MAX as usize }>);
+
+// the pass's: its IO has them only till the wait
+unsafe impl Send for Extents {}
+
+impl Extents {
+    pub(crate) fn push(&mut self, bio: *mut c::bio) {
+        assert!(self.0.try_push(bio).is_ok(), "more extents in a pass than it holds");
+    }
+
+    /// A cow pass never fills it - an extent takes an open bucket at least,
+    /// and the op has as many - a nocow pass stops when it has.
+    pub(crate) fn is_full(&self) -> bool {
+        self.0.is_full()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Given back, their IO done: write_extent()'s, or the op's own.
+    pub(crate) fn put(&mut self, fs: &Fs) {
+        for bio in self.0.drain(..) {
+            unsafe { dst_put(fs, bio) };
+        }
+    }
+}
+
+impl ReplicaErrs {
+    /// On @op, as its bios' endios once did: its failures - io_error, and
+    /// each device's in @op.failed - and its devices to flush, the inode's.
+    pub(crate) fn record(&self, op: &mut Op) {
+        let fs = op.fs();
+        for (dev, status) in self.failed() {
+            op.failed.set_blk_status(fs, dev.into(), status);
+            op.io_error = 1;
+        }
+        for dev in self.unflushed.d.iter() {
+            unsafe { (*op.devs_need_flush).set(dev) };
+        }
+    }
+}
+
 fn keylist_sectors<const N: usize>(keys: &Keylist<N>) -> u64 {
     keys.iter().map(|k| u64::from(k.k().size)).sum()
 }
@@ -925,89 +987,7 @@ pub(crate) fn write_op_error(op: &Op, offset: u64, msg: fmt::Arguments<'_>) {
     prt!(&mut *m, "{msg}");
 }
 
-/*
- * @cas is the caller's bch_dev pointer array (parallel to @k's ptrs)
- * for the nocow path — those io_refs were already taken by the caller
- * via bkey_get_dev_iorefs and we just transfer them to the per-bio
- * wbios here.  Non-nocow callers pass NULL and we take fresh io_refs
- * via bch2_dev_get_ioref atomically.
- */
-/// # Safety
-/// @wbio's bio is set up to submit, and ours; @k a key with pointers. With
-/// @cas, a nocow write's: an io ref of each of its devices, given to the bios.
-pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_bio<R>, fs: &'static Fs,
-                                                       ty: DataType, k: &BkeyI,
-                                                       mut cas: Option<&mut [Option<DevIoRef<R>>]>) {
-    let ptrs = BkeySC::from(k).arm::<Ptrs>().expect("submitting a key with no pointers");
-    let nocow = cas.is_some();
-
-    assert!(fs.opts().nochanges.get() == 0, "writing with nochanges");
-
-    let last = ptrs.ptrs(fs).filter(|p| u32::from(p.dev()) != c::BCH_SB_MEMBER_INVALID).count();
-    assert!(last != 0, "submitting a write with no devices");
-
-    /* For nocow, bkey_get_dev_iorefs would have bailed if it hit an
-     * invalid ptr, so cas_idx stays in sync with the iterator. */
-    let ptrs = ptrs.ptrs(fs).filter(|p| u32::from(p.dev()) != c::BCH_SB_MEMBER_INVALID);
-    for (i, ptr) in ptrs.enumerate() {
-        let ca = match &mut cas {
-            Some(cas) => Some(cas[i].take().expect("a nocow write without its io refs")),
-            None      => fs.dev_get_ioref::<R>(ptr.dev().into()),
-        };
-
-        let n: &mut c::bch_write_bio<R> = if i + 1 != last {
-            let bio = unsafe { fs.replica_set.alloc_clone(wbio.bio_mut().raw_mut(), flags::NOIO) };
-            let n = unsafe { wbio_init::<R>(bio) };
-
-            let b = n.bio_mut().raw_mut();
-            b.bi_end_io         = wbio.bio.raw().bi_end_io;
-            b.bi_private        = wbio.bio.raw().bi_private;
-            n.wbio.parent       = core::ptr::from_mut(wbio).cast();
-            n.wbio.bits.set_split(1);
-            n.wbio.bits.set_bounce(0);
-            n.wbio.bits.set_put_bio(1);
-            n.bio_mut().set_opf(wbio.bio.raw().bi_opf);
-            unsafe { crate::os::bio::inc_remaining(wbio.bio_mut().raw_mut()) };
-            n
-        } else {
-            wbio.wbio.bits.set_split(0);
-            &mut *wbio
-        };
-
-        n.wbio.c            = Some(fs);
-        n.wbio.dev          = ptr.dev();
-        n.wbio.bits.set_nocow(nocow.into());
-        n.wbio.submit_time  = local_clock();
-        n.wbio.inode_offset = k.k().start_offset();
-        n.bio_mut().set_sector(ptr.offset());
-
-        let bdev = ca.as_deref().map(|ca| {
-            if nocow {
-                n.wbio.nocow_bucket = ca.ptr_bucket(ptr);
-            }
-            ca.io_done_add(WRITE, ty, (n.bio.range().len() >> 9).into());
-            ca.disk_sb.bdev
-        });
-        /* the bio's, till its endio takes it back */
-        n.ca = ca;
-
-        if let Some(bdev) = bdev {
-            n.bio_mut().set_dev(bdev);
-
-            if ty != DataType::btree && unlikely(fs.opts().no_data_io.get() != 0) {
-                unsafe { crate::os::bio::endio(n.bio_mut().raw_mut()) };
-                continue;
-            }
-
-            unsafe { crate::os::blkdev::submit_bio(n.bio_mut().raw_mut()) };
-        } else {
-            n.bio_mut().set_status(c::BLK_STS_REMOVED);
-            unsafe { crate::os::bio::endio(n.bio_mut().raw_mut()) };
-        }
-    }
-}
-
-extern "C" fn __write_done(mut op: Running<Op>) {
+fn __write_done(op: &mut Op) {
     let fs = op.fs();
 
     debug_assert!(op.open_buckets.nr == 0, "write done with open buckets");
@@ -1021,18 +1001,17 @@ extern "C" fn __write_done(mut op: Running<Op>) {
 
     drop(op.write_ref.take());
     op.keys_free();
-
-    debug_assert!(!op.cl.has_parent(), "a write op's closure with a parent");
-    write_op_end(op);
 }
 
-pub(crate) fn write_done(op: Running<Op>) {
-    if op.has(w::sync) {
-        op.sync();
+/// The journal flush its last index update asked for done - in process
+/// context, if it had to wait - and then the op. One no commit attached -
+/// the commit had nothing to commit, or the update failed first - is done
+/// already.
+async fn write_done(op: &mut Op, flush: Option<Pin<&mut FlushWait<'_>>>) {
+    if let Some(f) = flush {
+        f.completion().resume_on(Resume::queue(index_update_wq(op))).await;
     }
-
-    let wq = (op.nr_remaining() > 1).then(|| index_update_wq(&op));
-    op.continue_at(__write_done, wq);
+    __write_done(op);
 }
 
 #[inline(never)]
@@ -1054,9 +1033,11 @@ fn write_drop_io_error_ptrs(op: &mut Op) -> Result<(), BchError> {
     })
 }
 
-/// After a write, update index to point to new data.
-fn __write_index(op: &mut Op) {
+/// After a write, update index to point to new data - with w::flush, the
+/// write's last update asking for its journal flush.
+fn __write_index(op: &mut Op, flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
+    let flush = flush.filter(|_| op.has(w::submitted));
 
     /*
      * the btree code sets PF_MEMALLOC_NOIO when it has btree locks held,
@@ -1110,7 +1091,7 @@ fn __write_index(op: &mut Op) {
             let sectors_start = keylist_sectors(&op.insert_keys);
 
             let ret = if !op.has(w::update) {
-                write_index_default(op)
+                write_index_default(op, flush)
             } else {
                 let trans = btree_trans!(fs);
                 crate::data::update_index::index_update(&trans, op.update_mut())
@@ -1147,159 +1128,172 @@ fn __write_index(op: &mut Op) {
     op.open_buckets.drain(fs).for_each(drop);
 }
 
-fn __wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, state: c::WritePointStatus) {
-    let state = state as u32;
-    let old = s.state.get();
-    if state != old {
-        let now = crate::os::kernel::ktime_get_ns();
-        let runtime = current_runtime(now);
-
-        if state == c::WritePointStatus::runnable as u32 {
-            w.last_runtime = runtime;
-        } else if old == c::WritePointStatus::runnable as u32 {
-            let t = &s.time[c::WritePointStatus::running as usize];
-            t.set(t.get().wrapping_add(runtime.wrapping_sub(w.last_runtime)));
-        }
-
-        if w.last_state_change != 0 && crate::os::kernel::time_after64(now, w.last_state_change) {
-            let t = &s.time[old as usize];
-            t.set(t.get().wrapping_add(now - w.last_state_change));
-        }
-        s.state.set(state);
-        w.last_state_change = now;
-    }
+/// How a pass ended: the write point it last allocated from, if it found one,
+/// and what the allocator blocked on, if it did.
+struct Pass {
+    wp:      Option<&'static c::write_point>,
+    blocked: Option<(Blocked, u32)>,
 }
 
-fn wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, running: bool) {
-    let empty = w.writes.is_empty();
-    let state = if running {
-        c::WritePointStatus::runnable
-    } else if !empty {
-        c::WritePointStatus::waiting_io
-    } else {
-        c::WritePointStatus::stopped
-    };
-
-    __wp_update_state(w, s, state);
-}
-
-extern "C" fn write_index(mut op: Running<Op>) {
-    let wp = op.wp.expect("an index update queued on no write point");
-    let wq = index_update_wq(&op);
-
-    if op.has(w::submitted) && op.has(w::update) {
-        let fs = op.fs();
-        unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, op.wbio.bio_mut().raw_mut()) };
-    }
-
-    // the op's running ref, the list's while it's queued
-    let op = op.into_raw();
-    {
-        let mut g = wp.io.writes_lock.lock();
-        let (w, s) = g.parts();
-        if s.state.get() == c::WritePointStatus::waiting_io as u32 {
-            __wp_update_state(w, s, c::WritePointStatus::waiting_work);
-        }
-        unsafe { w.writes.push_back(op.as_ref()) };
-    }
-
-    unsafe { wq.queue_work(core::ptr::from_ref(&wp.io.index_update_work).cast_mut()) };
-}
-
-fn write_queue(op: &mut Op, wp: &'static c::write_point) {
-    op.wp = Some(wp);
-
-    if wp.io.writes_lock.state.get() == c::WritePointStatus::stopped as u32 {
-        let mut g = wp.io.writes_lock.lock();
-        let (w, s) = g.parts();
-        __wp_update_state(w, s, c::WritePointStatus::waiting_io);
-    }
-}
-
-/// # Safety
-/// @work is a write point's index_update_work.
-pub unsafe extern "C" fn write_point_do_index_updates(work: *mut c::work_struct) {
-    let wp = unsafe {
-        &*work.byte_sub(core::mem::offset_of!(c::write_point, io) +
-                        core::mem::offset_of!(c::write_point_io, index_update_work)).cast::<c::write_point>()
-    };
+/// A pass's extents - as many as its write point and open buckets take -
+/// allocated and written out, each submitted into @g and held in @extents.
+/// @in_caller: in its caller's context, where it waits on the allocator.
+/// @stuck: its last wait on the allocator ran out allocator_stuck_timeout -
+/// blocked again, it's reported.
+fn write_pass(op: &mut Op, in_caller: bool, stuck: bool, retried_for_encoded: &mut bool, g: &WriteGather,
+              extents: &mut Extents) -> Pass {
+    let fs = op.fs();
+    let _noio = MemallocFlags::noio();
+    let mut pass = Pass { wp: None, blocked: None };
 
     loop {
-        let op = {
-            let mut g = wp.io.writes_lock.lock();
-            let (w, s) = g.parts();
-            let op = w.writes.cursor_mut().remove_current().map(NonNull::from);
-            wp_update_state(w, s, op.is_some());
-            op
+        let key_to_write_offset = op.insert_keys.u64s();
+
+        /* +1 for possible cache device: */
+        if usize::from(op.open_buckets.nr) + usize::from(op.bits.nr_replicas()) + 1 > op.open_buckets.v.len() {
+            return pass;
+        }
+
+        if op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize).is_err() {
+            return pass;
+        }
+
+        let trans = btree_trans!(fs);
+        let io_in_flight = op.open_buckets.nr != 0;
+
+        let ret = lockrestart_do(&trans, |t| {
+            let wait = match (io_in_flight, in_caller) {
+                (true, _)      => AllocWait::Never,
+                (false, true)  => AllocWait::Sync(None),
+                (false, false) => AllocWait::Async(None),
+            };
+            let mut req = t.alloc_request(op.target.into(),
+                                          op.opts.erasure_code != 0 && !op.has(w::cached),
+                                          Some(&op.devs_have),
+                                          op.bits.nr_replicas().into(),
+                                          op.opts.data_replicas.into(),
+                                          c::Watermark::from_bits(op.bits.watermark().into()),
+                                          op.flags(),
+                                          wait)?;
+            req.ec_max_data_blocks = fs.opts().ec_max_data_blocks.get() as _;
+
+            let ret = t.alloc_sectors(&mut req, op.write_point);
+            // the write point last found, whatever came of allocating from it -
+            // kept if this attempt found none, as an extent before it may be
+            // in flight
+            pass.wp = req.wp.or(pass.wp);
+
+            match ret {
+                Err(e) if e.matches(Errcode::operation_blocked) && in_caller => {
+                    t.wait_on_allocator(&mut req, e)?;
+                    Err(t.restart(Errcode::transaction_restart_nested))
+                }
+                Err(e) if e.matches(Errcode::operation_blocked) => {
+                    if let AllocWait::Async(b) = &req.wait {
+                        pass.blocked = *b;
+                    }
+                    if stuck {
+                        fs.allocator_stuck(&req, e);
+                    }
+                    Err(e)
+                }
+                r => r,
+            }
+        });
+        trans.unlock_long();
+
+        let ret = match ret {
+            Err(_) if io_in_flight => return pass,
+            Err(e) if e.matches(Errcode::operation_blocked) => return pass,
+            r => r,
         };
 
-        let Some(op) = op else { break };
-        let mut op = unsafe { Running::<Op>::from_raw(op) };
+        let ret = ret.and_then(|mut l| {
+            l.open_buckets_get(&mut op.open_buckets);
+            let ret = write_extent(op, &mut l);
 
-        op.set(w::in_worker);
+            /*
+             * The extent wouldn't decompress, so it has to go out as it came
+             * in - and it can't be split, so it needs a write point with room
+             * for the whole compressed extent. Retire the buckets that came up
+             * short and allocate fresh, the way __bch2_btree_node_alloc() does
+             * for a btree node.
+             *
+             * Once only: nothing constrains encoded_extent_max against bucket
+             * size, so fresh buckets aren't guaranteed to be big enough either
+             * and retrying on that would never end. Giving up means the write
+             * fails, which is what happened before any of this.
+             */
+            if unlikely(ret.as_ref().is_err_and(|e| e.matches(Errcode::data_write_need_fresh_buckets))) &&
+               !*retried_for_encoded {
+                *retried_for_encoded = true;
+                l.retire_short(op.crc.compressed_size);
+                return Ok(None);
+            }
 
-        __write_index(&mut op);
+            pass.wp = Some(l.done());
+            ret.map(Some)
+        });
 
-        if !op.has(w::submitted) {
-            __write(op);
-        } else {
-            write_done(op);
+        let Extent { bio, more, reserved } = match ret {
+            Ok(Some(e)) => e,
+            Ok(None) => continue,
+            Err(e) => {
+                op.set(w::submitted);
+                op.set_error(e);
+
+                /* Extra info on errors from the allocator: */
+                if !op.has(w::update) {
+                    write_op_error(op, op.pos.offset, format_args!("__bch2_write(): {e}"));
+                }
+                return pass;
+            }
+        };
+
+        if !more {
+            op.set(w::submitted);
+        }
+
+        let key_to_write = op.insert_keys.iter_from(key_to_write_offset).next().expect("a write with no key");
+        submit_extent(op, bio, key_to_write, g, extents);
+
+        /* a reserve's memory is the next extent's only once this one's done */
+        if !more || reserved {
+            return pass;
         }
     }
 }
 
-pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
-    let wbio = unsafe { to_wbio::<c::DevWriteRefKind>(bio) };
-    let cl = wbio.bio.raw().bi_private.cast::<Opaque<c::closure>>();
-    let op = unsafe { &mut *Op::of_closure(cl.cast()) };
-    let parent = (wbio.wbio.bits.split() != 0).then_some(wbio.wbio.parent);
-    let fs = wbio.fs();
-    let ca = wbio.ca.take();
-    let status = wbio.bio.raw().bi_status;
-    let fua = wbio.bio.raw().bi_opf & c::REQ_FUA != 0;
-
-    if let Some(ca) = &ca {
-        ca.account_io_completion(c::MemberErrorType::write, wbio.wbio.submit_time,
-                                 status == 0);
-        if !fua {
-            ca.write_unflushed();
-        }
-    }
-
-    if unlikely(status != 0) {
-        let _g = fs.write_error_lock.lock();
-        op.failed.set_blk_status(fs, wbio.wbio.dev.into(), status);
-        op.io_error = 1;
-    }
-
-    if wbio.wbio.bits.nocow() != 0 {
-        let ca = ca.as_deref().expect("a nocow write's device");
-        fs.nocow_locks.unlock_bucket(crate::btree::bkey::pos(ca.dev_idx.into(), wbio.wbio.nocow_bucket),
-                                     crate::data::nocow_locking::NocowKind::Update);
-        if !fua {
-            unsafe { (*op.devs_need_flush).set(wbio.wbio.dev.into()) };
-        }
-    }
-
-    drop(ca);
-
-    if wbio.wbio.bits.bounce() != 0 {
-        unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, wbio.bio_mut().raw_mut()) };
-    }
-
-    if wbio.wbio.bits.put_bio() != 0 {
-        unsafe { bio_put(bio) };
-    }
-
-    match parent {
-        Some(parent) => unsafe { crate::os::bio::endio((&raw mut (*parent).bio).cast()) },
-        None => drop(unsafe { ClosureRef::adopt(&*cl) }),
-    }
-}
-
-pub(crate) fn __write(mut op: Running<Op>) {
+/// @bio, an extent of @op's, written to each device of @k, its key, its bios
+/// into @g; held in @extents till they're done.
+fn submit_extent(op: &Op, bio: *mut c::bio, k: &BkeyI, g: &WriteGather, extents: &mut Extents) {
     let fs = op.fs();
-    let mut wp: Option<&'static c::write_point> = None;
+    let b = unsafe { &mut *bio };
+    b.bi_opf |= c::req_op_REQ_OP_WRITE;
+
+    if op.has(w::update) {
+        b.bi_opf |= c::REQ_SYNC | c::REQ_IDLE;
+    }
+
+    /*
+     * Internal moves can be issued FUA, making the journal's cache
+     * flush a no-op for them. Off by default: the per-write FUA
+     * regresses background-move throughput, and the journal flushes
+     * every device on commit regardless, so durability is unchanged.
+     */
+    if op.has(w::update) && fs.opts().move_writes_fua.get() != 0 {
+        b.bi_opf |= c::REQ_FUA;
+    }
+
+    extents.push(bio);
+    unsafe { submit_replicas(fs, Pin::new_unchecked(to_wbio::<c::DevWriteRefKind>(bio)), DataType::user, k, None, g) };
+}
+
+/// The op's data written, and its index updated, a pass at a time: what one
+/// couldn't write - its write point full, its open buckets used up, the
+/// allocator blocked - the next does.
+async fn __write(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) {
+    let fs = op.fs();
     let mut retried_for_encoded = false;
 
     /*
@@ -1309,174 +1303,56 @@ pub(crate) fn __write(mut op: Running<Op>) {
      * synchronously here if we weren't able to submit all of the IO at
      * once, as that signals backpressure to the caller.
      */
-    let wait_on_allocator_sync = op.has(w::sync) ||
-        (!op.has(w::submitted) && !op.has(w::in_worker));
+    /* in its caller's context, where it may block, till it first waits for IO */
+    let mut in_caller = true;
+    let mut stuck = false;
 
-    let _noio = MemallocFlags::noio();
-
-    if unlikely(op.opts.nocow != 0 && fs.opts().nocow_enabled.get() != 0) {
-        match nocow_write(op) {
-            Ok(()) => return,
-            Err(o) => op = o,
-        }
+    if unlikely(op.opts.nocow != 0 && fs.opts().nocow_enabled.get() != 0) &&
+       nocow_write(op, flush.as_deref_mut(), &mut in_caller).await {
+        return;
     }
-    'again: loop {
+
+    loop {
         op.failed.reset_devs();
 
-        loop {
-            let key_to_write_offset = op.insert_keys.u64s();
+        stack_pin_init!(let g = WriteGather::new());
+        let mut extents = Extents::default();
+        let pass = write_pass(op, in_caller, stuck, &mut retried_for_encoded, &g, &mut extents);
 
-            /* +1 for possible cache device: */
-            if usize::from(op.open_buckets.nr) + usize::from(op.bits.nr_replicas()) + 1 > op.open_buckets.v.len() {
-                break;
+        match pass.wp {
+            Some(wp) => {
+                in_caller = false;
+                g.wait_on_run_queue(wp.index_updates()).await.record(op);
             }
+            /* failed before finding a write point: nothing submitted, nothing to wait for */
+            None => assert!(extents.is_empty(), "a write pass submitted, with no write point"),
+        }
+        extents.put(fs);
 
-            if op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize).is_err() {
-                break;
-            }
+        if op.has(w::submitted) && op.has(w::update) {
+            unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, op.wbio.bio_mut().raw_mut()) };
+        }
 
-            let trans = btree_trans!(fs);
-            let io_in_flight = op.open_buckets.nr != 0;
+        __write_index(op, flush.as_deref_mut());
 
-            let ret = lockrestart_do(&trans, |t| {
-                let wait = match (io_in_flight, wait_on_allocator_sync) {
-                    (true, _)      => AllocWait::Never,
-                    (false, true)  => AllocWait::Sync(None),
-                    (false, false) => AllocWait::Closure(op.closure().into_ref()),
-                };
-                let mut req = t.alloc_request(op.target.into(),
-                                              op.opts.erasure_code != 0 && !op.has(w::cached),
-                                              Some(&op.devs_have),
-                                              op.bits.nr_replicas().into(),
-                                              op.opts.data_replicas.into(),
-                                              c::Watermark::from_bits(op.bits.watermark().into()),
-                                              op.flags(),
-                                              wait)?;
-                req.ec_max_data_blocks = fs.opts().ec_max_data_blocks.get() as _;
+        if op.has(w::submitted) {
+            return;
+        }
 
-                let ret = t.alloc_sectors(&mut req, op.write_point);
-                // the write point last found, whatever came of allocating from it
-                wp = req.wp;
-
-                match ret {
-                    Err(e) if e.matches(Errcode::operation_blocked) && wait_on_allocator_sync => {
-                        let ret = t.wait_on_allocator(&mut req, e);
-                        // it borrows the op, which the index update writes
-                        drop(req);
-                        __write_index(&mut op);
-                        op.failed.reset_devs();
-                        ret?;
-                        Err(t.restart(Errcode::transaction_restart_nested))
-                    }
-                    r => r,
-                }
-            });
-            trans.unlock_long();
-
-            let ret = match ret {
-                Err(_) if io_in_flight => break,
-                Err(e) if e.matches(Errcode::operation_blocked) => break,
-                r => r,
-            };
-
-            let ret = ret.and_then(|mut l| {
-                l.open_buckets_get(&mut op.open_buckets);
-                let ret = write_extent(&mut op, &mut l);
-
-                /*
-                 * The extent wouldn't decompress, so it has to go out as it came
-                 * in - and it can't be split, so it needs a write point with room
-                 * for the whole compressed extent. Retire the buckets that came up
-                 * short and allocate fresh, the way __bch2_btree_node_alloc() does
-                 * for a btree node.
-                 *
-                 * Once only: nothing constrains encoded_extent_max against bucket
-                 * size, so fresh buckets aren't guaranteed to be big enough either
-                 * and retrying on that would never end. Giving up means the write
-                 * fails, which is what happened before any of this.
-                 */
-                if unlikely(ret.as_ref().is_err_and(|e| e.matches(Errcode::data_write_need_fresh_buckets))) &&
-                   !retried_for_encoded {
-                    retried_for_encoded = true;
-                    l.retire_short(op.crc.compressed_size);
-                    return Ok(None);
-                }
-
-                wp = Some(l.done());
-                ret.map(Some)
-            });
-
-            let Extent { bio, more, reserved } = match ret {
-                Ok(Some(e)) => e,
-                Ok(None) => continue 'again,
+        stuck = match pass.blocked {
+            Some((on, seen)) => match on.wait_async(fs, seen, Resume::queue(index_update_wq(op))).await {
+                Ok(stuck) => stuck,
                 Err(e) => {
-                    op.set(w::submitted);
                     op.set_error(e);
-
-                    /* Extra info on errors from the allocator: */
-                    if !op.has(w::update) {
-                        write_op_error(&op, op.pos.offset, format_args!("__bch2_write(): {e}"));
-                    }
-                    break;
+                    return;
                 }
-            };
-
-            if !more {
-                op.set(w::submitted);
-            }
-
-            let bio = unsafe { &mut *bio };
-            bio.bi_end_io  = Some(write_endio);
-            bio.bi_private = op.closure().into_ref().as_ptr().cast();
-            bio.bi_opf    |= c::req_op_REQ_OP_WRITE;
-
-            if op.has(w::update) {
-                bio.bi_opf |= c::REQ_SYNC | c::REQ_IDLE;
-            }
-
-            /*
-             * Internal moves can be issued FUA, making the journal's cache
-             * flush a no-op for them. Off by default: the per-write FUA
-             * regresses background-move throughput, and the journal flushes
-             * every device on commit regardless, so durability is unchanged.
-             */
-            if op.has(w::update) && fs.opts().move_writes_fua.get() != 0 {
-                bio.bi_opf |= c::REQ_FUA;
-            }
-
-            op.closure().get().leak();
-
-            let key_to_write = op.insert_keys.iter_from(key_to_write_offset).next().expect("a write with no key");
-
-            unsafe { submit_wbio_replicas(to_wbio::<c::DevWriteRefKind>(bio), fs, DataType::user, key_to_write, None) };
-
-            /* a reserve's memory is the next extent's only once this one's done */
-            if !more || reserved {
-                break;
-            }
-        }
-
-        if op.has(w::sync) {
-            op.sync();
-
-            __write_index(&mut op);
-
-            if !op.has(w::submitted) {
-                continue 'again;
-            }
-
-            return write_done(op);
-        } else if let Some(wp) = wp {
-            write_queue(&mut op, wp);
-            return op.continue_at(write_index, None);
-        } else {
-            /* failed before finding a write point: nothing in flight */
-            return write_done(op);
-        }
+            },
+            None => false,
+        };
     }
 }
 
-fn write_data_inline(mut op: Running<Op>, data_len: u32) {
+fn write_data_inline(op: &mut Op, data_len: u32, flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
 
     op.failed.reset_devs();
@@ -1503,7 +1379,7 @@ fn write_data_inline(mut op: Running<Op>, data_len: u32) {
     let room = crate::btree::bkey::BKEY_U64S + val_u64s;
     if let Err(e) = op.insert_keys.reserve(room) {
         op.set_error(e.into());
-        return write_done(op);
+        return;
     }
     op.pos = p;
 
@@ -1519,8 +1395,7 @@ fn write_data_inline(mut op: Running<Op>, data_len: u32) {
         }
     });
 
-    __write_index(&mut op);
-    write_done(op);
+    __write_index(op, flush);
 }
 
 #[cold]
@@ -1542,24 +1417,21 @@ fn data_write_trace(out: &mut Printbuf, op: &Op) {
  * after the data is written it calls bch_journal, and after the keys have been
  * added to the next journal write they're inserted into the btree.
  */
-pub extern "C" fn bch2_write(mut op: Running<Op>) {
+/// Done, its task resumed @at if it waited - not left where its last wait
+/// was, which may be its write point's index updates.
+pub async fn write(op: &mut Op, at: Resume<'_>) {
     let fs = op.fs();
     let sectors = u64::from(op.wbio.bio.range().len() >> 9);
 
     if !op.has(w::update) {
-        fs.event_add_trace(events::data_write, sectors, |out| data_write_trace(out, &op));
+        fs.event_add_trace(events::data_write, sectors, |out| data_write_trace(out, op));
     } else {
-        fs.event_add_trace(events::data_update_write, sectors, |out| data_write_trace(out, &op));
+        fs.event_add_trace(events::data_update_write, sectors, |out| data_write_trace(out, op));
     }
 
-    debug_assert!(!op.cl.has_parent(), "a write op's closure with a parent");
     assert!(op.bits.nr_replicas() != 0, "a write of no replicas");
     assert!(op.write_point.v != 0, "a write with no write point");
     assert!(op.pos != crate::POS_MAX, "a write at POS_MAX");
-
-    let obj = core::ptr::from_mut::<Op>(&mut op).cast();
-    op.list_idx = fs.async_objs[c::AsyncObjKind::write_op as usize].list
-        .add(NonNull::new(obj).expect("an op")).unwrap_or(0);
 
     if op.has(w::only_specified_devs) {
         op.set(w::alloc_nowait);
@@ -1570,7 +1442,7 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
 
     let ret = (|| -> Result<(), BchError> {
         if unlikely(op.wbio.bio.range().len() & (fs.opts().block_size.get() as u32 - 1) != 0) {
-            write_op_error(&op, op.pos.offset, format_args!("misaligned write"));
+            write_op_error(op, op.pos.offset, format_args!("misaligned write"));
             crate::warn_on!(true);
             return Err(fs.err(Errcode::data_write_misaligned));
         }
@@ -1588,18 +1460,115 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
     if let Err(e) = ret {
         op.set_error(e);
         op.res.put();
-        return write_op_end(op);
+        return;
     }
 
     fs.io_clock[WRITE].increment(sectors);
 
+    let mut slot = core::pin::pin!(None);
+    let mut flush = match op.has(w::flush) {
+        true  => Some(FlushWait::new(slot.as_mut(), waiter::Async::current().await)),
+        false => None,
+    };
+
     let data_len = u64::from(op.wbio.bio.range().len()).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
 
     if fs.opts().inline_data.get() != 0 && data_len <= u64::from((fs.block_bytes() / 2).min(1024)) {
-        return write_data_inline(op, data_len as u32);
+        write_data_inline(op, data_len as u32, Some(&mut flush));
+    } else {
+        __write(op, Some(&mut flush)).await;
     }
 
-    __write(op)
+    // if no commit took it, none had anything to flush: there's nothing to wait for
+    drop(flush);
+    write_done(op, slot.as_mut().as_pin_mut()).await;
+    requeue(at).await
+}
+
+/// A write bch2_write() issues: its task's, till its callers await write().
+/// Freed a grace period after the write, when the filesystem may be gone -
+/// so from pools of the module's; copygc's writes from their own, so writes
+/// holding an element while they wait for buckets never keep the writes that
+/// free buckets from getting one.
+static WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
+static COPYGC_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
+
+pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
+    let size = exclusive_size::<Issued, WriteFut<'static>, &'static Mempool<Kmalloc>>(Layout::new::<()>());
+    Mempool::init_static(&WRITES, Mempool::kmalloc(1, size), m)?;
+    Mempool::init_static(&COPYGC_WRITES, Mempool::kmalloc(1, size), m)
+}
+
+pub fn pools_exit(q: &Quiesced<'_>) {
+    WRITES.exit(q);
+    COPYGC_WRITES.exit(q);
+}
+
+/// What bch2_write()'s task is of: the op - its till its end_io, with the
+/// op's closure's running ref - and a sync write's caller's wait.
+struct Issued {
+    op:   NonNull<Op>,
+    done: Option<DynDone<'static>>,
+}
+
+unsafe impl Send for Issued {}
+
+/// write(), then the op's end. A sync write's is here, and wakes its caller.
+/// Another's is a work item's, as C's __bch2_write_done() was: never in the
+/// caller's stack, nor the task's, holding its box - its end_io may issue the
+/// next write, whose box comes from the same pool.
+#[in_place(WriteFut)]
+async fn write_task<'h>(home: Pin<&'h mut Issued>) {
+    let op = unsafe { &mut *home.op.as_ptr() };
+    let wq = index_update_wq(op);
+    write(op, Resume::queue(wq)).await;
+
+    let home = Pin::into_inner(home);
+    let op = unsafe { Running::<Op>::from_raw(home.op) };
+    match home.done.take() {
+        Some(done) => {
+            unsafe { write_op_end(op.end()) };
+            done.complete();
+        }
+        None => {
+            let wq = index_update_wq(&op);
+            op.continue_at_nobarrier(write_end, Some(wq));
+        }
+    }
+}
+
+extern "C" fn write_end(op: Running<Op>) {
+    unsafe { write_op_end(op.end()) };
+}
+
+/// write(), by a task of its own, its first poll here, to the op's end_io:
+/// returning once that's run, if the op's w::sync.
+pub extern "C" fn bch2_write(op: Running<Op>) {
+    debug_assert!(!op.cl.has_parent(), "a write op's closure with a parent");
+    let fs = op.fs();
+
+    let mut done = Done::completed();
+    let (sync, done) = match op.has(w::sync) {
+        true  => {
+            let (c, d) = Completion::new_dyn(&mut done, waiter::Sync::current());
+            (Some(c), Some(d))
+        }
+        false => (None, None),
+    };
+    let pool = if op.bits.watermark() == c::Watermark::copygc as u8 { &COPYGC_WRITES } else { &WRITES };
+
+    let mut op = op.into_raw();
+    let o = unsafe { op.as_mut() };
+    o.list_idx = fs.async_objs[c::AsyncObjKind::write_op as usize].list
+        .add(op.cast()).unwrap_or(0);
+
+    let home = Issued { op, done };
+    let slot = TaskSlot::exclusive_in(pool, home).expect("a write's task: its pool waits for an element");
+    unsafe { slot.start(Spawn::Inline, fs.tasks(), write_task) };
+
+    if let Some(c) = sync {
+        c.wait_sync(Sleep::UNINTERRUPTIBLE);
+    }
 }
 
 #[cold]
@@ -1636,7 +1605,6 @@ pub fn __write_op_to_text(out: &mut Printbuf, op: &Op) {
     }
     out.newline();
 
-    prt!(out, "ref:\t{}\n", op.cl.nr_remaining());
     prt!(out, "ret\t{}\n", BchError::from_raw(op.error.into()));
 }
 
