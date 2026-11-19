@@ -131,7 +131,8 @@ pub mod c {
     pub use super::data_reconcile_types::*;
     pub use crate::data::reconcile::work::ReconcileScan;
     pub use super::data_reflink_format::*;
-    pub use crate::data::update::{ DataUpdateType, data_update, data_update_key, data_update_opts, data_update_opts_bits};
+    pub use crate::data::update::{ DataUpdateType, data_update, data_update_index, data_update_key, data_update_opts,
+                                   data_update_opts_bits};
     pub(crate) use crate::data::update::{__data_update_opts_bits_forward};
     pub use super::data_write_types::*;
     pub use crate::debug::async_objs::{ async_obj_list, AsyncObjKind};

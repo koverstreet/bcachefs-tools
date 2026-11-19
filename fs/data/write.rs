@@ -781,17 +781,6 @@ impl c::bch_write_op {
     fn keys_free(&mut self) {
         self.insert_keys = Keylist::new();
     }
-
-    /// A move's op is its data update's.
-    fn update(&self) -> &c::data_update {
-        assert!(self.has(w::update), "a write op that isn't a data update's");
-        unsafe { &*core::ptr::from_ref(self).byte_sub(core::mem::offset_of!(c::data_update, op)).cast() }
-    }
-
-    fn update_mut(&mut self) -> &mut c::data_update {
-        assert!(self.has(w::update), "a write op that isn't a data update's");
-        unsafe { &mut *core::ptr::from_mut(self).byte_sub(core::mem::offset_of!(c::data_update, op)).cast() }
-    }
 }
 
 fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -> Result<(), BchError> {
@@ -1008,7 +997,7 @@ fn keylist_sectors<const N: usize>(keys: &Keylist<N>) -> u64 {
 
 /* Writes */
 
-fn log_write_error_start(out: &mut Printbuf, op: &Op, offset: u64) {
+fn log_write_error_start(out: &mut Printbuf, op: &Op, update: Option<&c::data_update_index>, offset: u64) {
     prt!(out, "error writing data at ");
 
     let pos = Bpos { offset, ..op.pos };
@@ -1017,13 +1006,13 @@ fn log_write_error_start(out: &mut Printbuf, op: &Op, offset: u64) {
     let _ = lockrestart_do(&trans, |t| crate::init::error::inum_offset_err_msg(t, out, op.subvol, pos));
     out.newline();
 
-    write_op_to_text(out, op);
+    write_op_to_text(out, op, update);
 }
 
-pub(crate) fn write_op_error(op: &Op, offset: u64, msg: fmt::Arguments<'_>) {
+pub(crate) fn write_op_error(op: &Op, update: Option<&c::data_update_index>, offset: u64, msg: fmt::Arguments<'_>) {
     let mut m = log_msg_ratelimited!(op.fs());
 
-    log_write_error_start(&mut m, op, offset);
+    log_write_error_start(&mut m, op, update, offset);
     prt!(&mut *m, "{msg}");
 }
 
@@ -1075,7 +1064,7 @@ fn write_drop_io_error_ptrs(op: &mut Op) -> Result<(), BchError> {
 
 /// After a write, update index to point to new data - with w::flush, the
 /// write's last update asking for its journal flush.
-fn __write_index(op: &mut Op, flush: Option<&mut Option<Flush<'_>>>) {
+fn __write_index(op: &mut Op, update: Option<&c::data_update_index>, flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
     let flush = flush.filter(|_| op.has(w::submitted));
 
@@ -1111,7 +1100,7 @@ fn __write_index(op: &mut Op, flush: Option<&mut Option<Flush<'_>>>) {
             }
 
             let k = op.insert_keys.front().expect("an index update with no keys");
-            log_write_error_start(&mut msg, op, k.k().start_offset());
+            log_write_error_start(&mut msg, op, update, k.k().start_offset());
             op.failed.to_text(&mut msg, fs);
 
             match &ret {
@@ -1130,11 +1119,9 @@ fn __write_index(op: &mut Op, flush: Option<&mut Option<Flush<'_>>>) {
         if !op.insert_keys.is_empty() {
             let sectors_start = keylist_sectors(&op.insert_keys);
 
-            let ret = if !op.has(w::update) {
-                write_index_default(op, flush)
-            } else {
-                let trans = btree_trans!(fs);
-                crate::data::update_index::index_update(&trans, op.update_mut())
+            let ret = match update {
+                None    => write_index_default(op, flush),
+                Some(u) => crate::data::update_index::index_update(&btree_trans!(fs), op, u),
             };
 
             assert!(!ret.as_ref().is_err_and(crate::btree::iter::is_restart),
@@ -1147,7 +1134,7 @@ fn __write_index(op: &mut Op, flush: Option<&mut Option<Flush<'_>>>) {
             if let Err(e) = &ret {
                 if !e.matches(c::EROFS) {
                     let insert = op.insert_keys.front().expect("keys left by an index update's error");
-                    write_op_error(op, insert.k().start_offset(), format_args!("btree update error: {e}"));
+                    write_op_error(op, update, insert.k().start_offset(), format_args!("btree update error: {e}"));
                 }
             }
 
@@ -1180,8 +1167,8 @@ struct Pass {
 /// @in_caller: in its caller's context, where it waits on the allocator.
 /// @stuck: its last wait on the allocator ran out allocator_stuck_timeout -
 /// blocked again, it's reported.
-fn write_pass(op: &mut Op, in_caller: bool, stuck: bool, retried_for_encoded: &mut bool, g: &WriteGather,
-              extents: &mut Extents) -> Pass {
+fn write_pass(op: &mut Op, update: Option<&c::data_update_index>, in_caller: bool, stuck: bool,
+              retried_for_encoded: &mut bool, g: &WriteGather, extents: &mut Extents) -> Pass {
     let fs = op.fs();
     let _noio = MemallocFlags::noio();
     let mut pass = Pass { wp: None, blocked: None };
@@ -1250,7 +1237,7 @@ fn write_pass(op: &mut Op, in_caller: bool, stuck: bool, retried_for_encoded: &m
 
         let ret = ret.and_then(|mut l| {
             l.open_buckets_get(&mut op.open_buckets);
-            let ret = write_extent(op, &mut l);
+            let ret = write_extent(op, update, &mut l);
 
             /*
              * The extent wouldn't decompress, so it has to go out as it came
@@ -1283,8 +1270,8 @@ fn write_pass(op: &mut Op, in_caller: bool, stuck: bool, retried_for_encoded: &m
                 op.set_error(e);
 
                 /* Extra info on errors from the allocator: */
-                if !op.has(w::update) {
-                    write_op_error(op, op.pos.offset, format_args!("__bch2_write(): {e}"));
+                if update.is_none() {
+                    write_op_error(op, None, op.pos.offset, format_args!("__bch2_write(): {e}"));
                 }
                 return pass;
             }
@@ -1333,7 +1320,8 @@ fn submit_extent(op: &mut Op, bio: ExtentBio, key_offset: usize, g: &WriteGather
 /// The op's data written, and its index updated, a pass at a time: what one
 /// couldn't write - its write point full, its open buckets used up, the
 /// allocator blocked - the next does.
-async fn __write(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) {
+async fn __write(op: &mut Op, update: Option<&c::data_update_index>,
+                 mut flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
     let mut retried_for_encoded = false;
 
@@ -1358,7 +1346,7 @@ async fn __write(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) {
 
         stack_pin_init!(let g = WriteGather::new());
         let mut extents = Extents::default();
-        let pass = write_pass(op, in_caller, stuck, &mut retried_for_encoded, &g, &mut extents);
+        let pass = write_pass(op, update, in_caller, stuck, &mut retried_for_encoded, &g, &mut extents);
 
         match pass.wp {
             Some(wp) => {
@@ -1374,7 +1362,7 @@ async fn __write(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) {
             unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, op.wbio.bio_mut().raw_mut()) };
         }
 
-        __write_index(op, flush.as_deref_mut());
+        __write_index(op, update, flush.as_deref_mut());
 
         if op.has(w::submitted) {
             return;
@@ -1393,7 +1381,8 @@ async fn __write(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) {
     }
 }
 
-fn write_data_inline(op: &mut Op, data_len: u32, flush: Option<&mut Option<Flush<'_>>>) {
+fn write_data_inline(op: &mut Op, update: Option<&c::data_update_index>, data_len: u32,
+                     flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
 
     op.failed.reset_devs();
@@ -1436,13 +1425,13 @@ fn write_data_inline(op: &mut Op, data_len: u32, flush: Option<&mut Option<Flush
         }
     });
 
-    __write_index(op, flush);
+    __write_index(op, update, flush);
 }
 
 #[cold]
 #[inline(never)]
-fn data_write_trace(out: &mut Printbuf, op: &Op) {
-    write_op_to_text(out, op)
+fn data_write_trace(out: &mut Printbuf, op: &Op, update: Option<&c::data_update_index>) {
+    write_op_to_text(out, op, update)
 }
 
 /**
@@ -1460,14 +1449,16 @@ fn data_write_trace(out: &mut Printbuf, op: &Op) {
  */
 /// Done, its task resumed @at if it waited - not left where its last wait
 /// was, which may be its write point's index updates.
-pub async fn write(op: &mut Op, at: Resume<'_>) {
+pub async fn write(op: &mut Op, update: Option<&c::data_update_index>, at: Resume<'_>) {
     let fs = op.fs();
     let sectors = u64::from(op.wbio.bio.range().len() >> 9);
 
-    if !op.has(w::update) {
-        fs.event_add_trace(events::data_write, sectors, |out| data_write_trace(out, op));
+    assert!(update.is_some() == op.has(w::update), "a write's update and its w::update flag disagree");
+
+    if update.is_none() {
+        fs.event_add_trace(events::data_write, sectors, |out| data_write_trace(out, op, update));
     } else {
-        fs.event_add_trace(events::data_update_write, sectors, |out| data_write_trace(out, op));
+        fs.event_add_trace(events::data_update_write, sectors, |out| data_write_trace(out, op, update));
     }
 
     assert!(op.bits.nr_replicas() != 0, "a write of no replicas");
@@ -1484,7 +1475,7 @@ pub async fn write(op: &mut Op, at: Resume<'_>) {
 
     let ret = (|| -> Result<(), BchError> {
         if unlikely(op.wbio.bio.range().len() & (fs.opts().block_size.get() as u32 - 1) != 0) {
-            write_op_error(op, op.pos.offset, format_args!("misaligned write"));
+            write_op_error(op, update, op.pos.offset, format_args!("misaligned write"));
             crate::warn_on!(true);
             return Err(fs.err(Errcode::data_write_misaligned));
         }
@@ -1516,9 +1507,9 @@ pub async fn write(op: &mut Op, at: Resume<'_>) {
     let data_len = u64::from(op.wbio.bio.range().len()).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
 
     if fs.opts().inline_data.get() != 0 && data_len <= u64::from((fs.block_bytes() / 2).min(1024)) {
-        write_data_inline(op, data_len as u32, Some(&mut flush));
+        write_data_inline(op, update, data_len as u32, Some(&mut flush));
     } else {
-        __write(op, Some(&mut flush)).await;
+        __write(op, update, Some(&mut flush)).await;
     }
 
     // if no commit took it, none had anything to flush: there's nothing to wait for
@@ -1565,16 +1556,15 @@ pub fn __write_op_to_text(out: &mut Printbuf, op: &Op) {
 }
 
 #[cold]
-pub fn write_op_to_text(out: &mut Printbuf, op: &Op) {
+pub fn write_op_to_text(out: &mut Printbuf, op: &Op, update: Option<&c::data_update_index>) {
     __write_op_to_text(out, op);
 
-    if op.has(w::update) {
+    if let Some(u) = update {
         let fs = op.fs();
         let mut out = out.indent(2);
         prt!(out, "update:\n");
         let mut out = out.indent(2);
-        let u = op.update();
-        fs.data_update_opts_to_text(&mut out, &u.op.opts, &u.opts);
+        fs.data_update_opts_to_text(&mut out, &op.opts, &u.opts);
         out.newline();
 
         prt!(out, "old key:\t{}\n", BkeySC::from(u.k.key()).to_text(fs));
