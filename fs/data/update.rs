@@ -834,7 +834,7 @@ impl c::data_update {
         let type_ = self.index.opts.type_;
 
         self.index.opts.ptrs_io_error |= ptrs_io_error;
-        if let Some(k) = &poisoned {
+        if let Some(k) = poisoned.as_deref() {
             self.index.k.reassemble(BkeySC::from(k));
         }
 
