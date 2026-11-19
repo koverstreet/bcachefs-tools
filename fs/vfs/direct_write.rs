@@ -14,7 +14,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::btree_trans;
 use crate::c;
 use crate::data::durability::BkeyVDurability;
-use crate::data::write::write;
+use crate::data::write::{write, WriteFor};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
@@ -257,7 +257,6 @@ async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
         op.bits.set_nr_replicas(op.opts.data_replicas);
         op.subvol      = inode.inum().subvol as u32;
         op.pos         = pos(inode.inum().inum, d.pos >> 9);
-        op.devs_need_flush = &inode.ei_devs_need_flush;
 
         if d.bits.flush() != 0 {
             d.op.set(w::flush);
@@ -281,7 +280,7 @@ async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
 
         task_io_account_write(d.op.wbio.bio.range().len() as usize);
 
-        write(&mut d.op, None, Resume::queue(Queue::system_dfl())).await;
+        write(&mut d.op, WriteFor::Inode(&inode.ei_devs_need_flush), Resume::queue(Queue::system_dfl())).await;
 
         dio_write_end(d);
 

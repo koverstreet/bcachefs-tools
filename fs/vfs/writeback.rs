@@ -9,7 +9,7 @@
 
 use crate::btree::bkey::pos;
 use crate::c;
-use crate::data::write::write;
+use crate::data::write::{write, WriteFor};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
@@ -155,7 +155,8 @@ fn writepage_io_done(io: &mut Io) {
 #[in_place(WritepageFut)]
 async fn writepage_task<'h>(io: Pin<&'h mut Io>) {
     let io = unsafe { io.get_unchecked_mut() };
-    write(&mut io.op, None, Resume::queue(Queue::system_dfl())).await;
+    let inode = io.inode();
+    write(&mut io.op, WriteFor::Inode(&inode.ei_devs_need_flush), Resume::queue(Queue::system_dfl())).await;
     writepage_io_done(io);
 }
 
@@ -188,7 +189,6 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
     op.write_point     = c::write_point_specifier::hashed(inode.ei_last_dirtied.get() as usize);
     op.subvol          = inode.inum().subvol as u32;
     op.pos             = pos(inode.inum().inum, sector);
-    op.devs_need_flush = &inode.ei_devs_need_flush;
     op.wbio.bio_mut().set_sector(sector);
     op.wbio.bio_mut().set_opf(wbc.write_flags());
 
