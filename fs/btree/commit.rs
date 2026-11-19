@@ -381,10 +381,13 @@ impl BtreeTrans<'_> {
         }
 
         if err == Errcode::btree_insert_btree_node_full.into() {
-            let i = paths.updates()[i.expect("a full node is an update's")];
+            let (path, u64s) = {
+                let i = &paths.updates()[i.expect("a full node is an update's")];
+                (i.path, i.key().k.u64s)
+            };
             let flags = if self.commit_has_extents(paths) { flags.watermark_hipri() } else { flags };
 
-            let ret = split_leaf(t, paths, i.path, i.key().k.u64s.into(), flags);
+            let ret = split_leaf(t, paths, path, u64s.into(), flags);
             if ret.is_ok() && self.has_interior_updates() {
                 return Err(self.restart(Errcode::transaction_restart_split_with_interior_updates));
             }
@@ -392,7 +395,7 @@ impl BtreeTrans<'_> {
             if ret.as_ref().is_err_and(is_restart) {
                 fs.event_inc_trace(events::trans_restart_btree_node_split, |out| {
                     prt!(out, "{}\n", self.fn_name());
-                    self.path_to_text(out, paths, i.path);
+                    self.path_to_text(out, paths, path);
                 });
             }
             return ret;
