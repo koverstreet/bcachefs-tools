@@ -337,7 +337,10 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// The devices that need copygc now - fragmented space over their
     /// allowance, i.e. wait amount exhausted - into @devs, neediest first.
     /// When there are none, the amount of io (in sectors, by the write io
-    /// clock) until the closest device will need it; else 0.
+    /// clock) until the closest device will need it; else 0. Not inlined:
+    /// its device iterator and masks aren't needed in the frame the
+    /// evacuations run under.
+    #[inline(never)]
     fn dev_list(&self, devs: &mut KVVec<CopygcDev>) -> Result<u64, BchError> {
         let fs = self.fs;
         let mut wants_space = c::DevsMask::default();
@@ -619,15 +622,11 @@ impl<'f, 'w> Copygc<'f, 'w> {
         self.trans().unlock_long();
     }
 
-    fn pick_and_evacuate(&mut self, batch: &mut Batch<'f>, picked: &mut usize, devs: &mut KVVec<CopygcDev>)
-        -> Result<(), BchError>
-    {
+    /// This pass's buckets, into @batch. Not inlined: its iterators aren't
+    /// needed in the frame the evacuations run under.
+    #[inline(never)]
+    fn pick(&self, batch: &mut Batch<'f>, devs: &mut KVVec<CopygcDev>) -> Result<(), BchError> {
         let fs = self.fs;
-        let data_opts = c::data_update_opts {
-            type_:        c::DataUpdateType::copygc,
-            commit_flags: c::TransCommitFlags::from_bits_retain(c::Watermark::copygc as u32),
-            ..::pin_init::zeroed()
-        };
 
         match self.trans().write_buffer_tryflush() {
             Err(e) if e.matches(c::EROFS) => return Err(e),
@@ -639,10 +638,22 @@ impl<'f, 'w> Copygc<'f, 'w> {
         }
 
         if self.should_do_ec(devs) {
-            self.get_stripe_buckets(batch)?;
+            self.get_stripe_buckets(batch)
         } else {
-            self.get_buckets(batch, devs)?;
+            self.get_buckets(batch, devs)
         }
+    }
+
+    fn pick_and_evacuate(&mut self, batch: &mut Batch<'f>, picked: &mut usize, devs: &mut KVVec<CopygcDev>)
+        -> Result<(), BchError>
+    {
+        let data_opts = c::data_update_opts {
+            type_:        c::DataUpdateType::copygc,
+            commit_flags: c::TransCommitFlags::from_bits_retain(c::Watermark::copygc as u32),
+            ..::pin_init::zeroed()
+        };
+
+        self.pick(batch, devs)?;
 
         *picked = batch.len();
         self.in_flight.reserve(batch.len())?;
