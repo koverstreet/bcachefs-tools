@@ -687,8 +687,7 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
 impl<T: RcuElement> RcuArray<T> {
     /// Room for at least @nr elements: if there isn't, a new buffer, sized to
     /// a power of two bytes as C's tables are, the old elements copied and the
-    /// rest zero, published. An error if it would be more than INT_MAX bytes,
-    /// which kvmalloc() won't do.
+    /// rest zero, published.
     ///
     /// # Safety
     /// As RcuBuf::replace(): the caller holds the writers' lock.

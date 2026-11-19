@@ -192,11 +192,10 @@ enum Probe<'a, I: CuckooItem> {
 }
 
 /// From an item's slot to an empty one: the occupied slots, with the item seen
-/// in each, and the empty one at the end. u32s, as an RcuArray is at most
-/// INT_MAX bytes.
+/// in each, and the empty one at the end.
 struct Chain<I> {
-    steps: ArrayVec<(u32, I), MAX_KICKS>,
-    end:   u32,
+    steps: ArrayVec<(usize, I), MAX_KICKS>,
+    end:   usize,
 }
 
 pub(super) struct Head {
@@ -312,7 +311,7 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
         let own = self.index(key);
         if let Some(i) = own.into_iter().find(|&i| self.slots[i].is_empty()) {
             chain.steps.clear();
-            chain.end = i as u32;
+            chain.end = i;
             return Ok(());
         }
         own.into_iter().map(|start| self.walk(start, chain))
@@ -327,16 +326,16 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
         loop {
             let item = match self.slots[s].load() {
                 Contents::Empty => {
-                    chain.end = s as u32;
+                    chain.end = s;
                     return Ok(());
                 }
                 Contents::Retired => return Err(NotIn::Retired),
                 Contents::Claimed | Contents::Unstable(_) => return Err(NotIn::Busy),
                 Contents::Item(i) => i,
             };
-            steps.try_push((s as u32, item)).map_err(|_| NotIn::NoChain)?;
+            steps.try_push((s, item)).map_err(|_| NotIn::NoChain)?;
 
-            let on_chain = |o: usize| steps.iter().any(|&(c, _)| c as usize == o);
+            let on_chain = |o: usize| steps.iter().any(|&(c, _)| c == o);
             let others = self.index(key_of(&item)).into_iter().filter(|&o| !on_chain(o));
             let empty = others.clone().find(|&o| self.slots[o].is_empty());
             s = empty.or_else(|| others.last()).ok_or(NotIn::NoChain)?;
@@ -362,16 +361,16 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
     /// off from here to its store. Busy, with every claim let go, if anything
     /// on @chain changed since it was found.
     fn claim_room(&self, chain: &Chain<I>, moves: &AtomicU64) -> Result<&'a Slot<I>, NotIn> {
-        let end = &self.slots[chain.end as usize];
+        let end = &self.slots[chain.end];
         if !end.cas(Contents::Empty, Contents::Claimed) {
             saw!(self.faults, busy);
             return Err(NotIn::Busy);
         }
         for (n, &(c, x)) in chain.steps.iter().enumerate().rev() {
             self.faults.move_window();
-            if !self.slots[c as usize].cas(Contents::Item(x), Contents::Unstable(x)) {
+            if !self.slots[c].cas(Contents::Item(x), Contents::Unstable(x)) {
                 for &(c, x) in &chain.steps[n + 1..] {
-                    self.slots[c as usize].store(Contents::Item(x));
+                    self.slots[c].store(Contents::Item(x));
                 }
                 end.store(Contents::Empty);
                 saw!(self.faults, busy);
@@ -385,7 +384,7 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
             self.faults.move_window();
             moves.fetch_add(1, Release);
             self.faults.move_window();
-            to = &self.slots[c as usize];
+            to = &self.slots[c];
         }
         Ok(to)
     }

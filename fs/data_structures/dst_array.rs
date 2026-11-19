@@ -79,15 +79,14 @@ impl<H: DstHead, T> DstArray<H, T> {
     }
 
     /// One with @head, whose nr() it's sized by, and its elements all zero.
-    /// An error past INT_MAX bytes, which kvmalloc() won't do.
     pub fn alloc(head: H) -> Result<NonNull<H>, AllocError> {
         Self::alloc_gfp(head, Flags::empty())
     }
 
-    /// alloc(), for what mustn't fail to allocate: past INT_MAX bytes is a
-    /// bug.
+    /// alloc(), for what mustn't fail to allocate: a size past isize::MAX
+    /// bytes is a bug.
     pub fn alloc_nofail(head: H) -> NonNull<H> {
-        Self::alloc_gfp(head, flags::NOFAIL).expect("a DstArray past INT_MAX bytes")
+        Self::alloc_gfp(head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes")
     }
 
     fn alloc_gfp(head: H, gfp: Flags) -> Result<NonNull<H>, AllocError> {
@@ -97,7 +96,6 @@ impl<H: DstHead, T> DstArray<H, T> {
         let prefix = <T as ArrayFreeing>::prefix();
         let bytes = head.nr().checked_mul(size_of::<T>())
             .and_then(|b| b.checked_add(Self::TAIL + prefix))
-            .filter(|&b| b <= i32::MAX as usize)
             .ok_or(AllocError)?;
         let layout = Layout::from_size_align(bytes, 8).map_err(|_| AllocError)?;
 

@@ -16,9 +16,10 @@ use crate::c;
 use crate::util::alloc::{kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::rcu::{DropAnytime, DropAtomic, FreeAnytime, NothingToDetach};
 use core::alloc::Layout;
-use core::ffi::c_void;
+use core::ffi::{c_int, c_void};
 use core::ptr::NonNull;
 use kernel::alloc::NumaNode;
+use kernel::bindings::{krealloc_node_align, kvrealloc_node_align, vrealloc_node_align};
 
 pub type KBox<T> = kernel::alloc::Box<T, Kmalloc>;
 pub type KVBox<T> = kernel::alloc::Box<T, KVmalloc>;
@@ -93,7 +94,7 @@ macro_rules! allocators {
 allocators!(Kmalloc, Vmalloc, KVmalloc);
 
 macro_rules! allocs {
-    ($($a:ident => $realloc:ident, $layout:expr),*) => {$(
+    ($($a:ident => $realloc:expr, $layout:expr),*) => {$(
         unsafe impl Allocator for $a {
             fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
                 self.allocate_gfp(layout, Flags::empty())
@@ -148,7 +149,7 @@ macro_rules! allocs {
             unsafe fn c_realloc(p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
                 -> Result<NonNull<[u8]>, AllocError>
             {
-                use kernel::bindings::{$realloc, NUMA_NO_NODE};
+                use kernel::bindings::NUMA_NO_NODE;
 
                 let layout: Layout = $layout(layout);
                 // a zero-sized allocation is dangling: nothing for C to free
@@ -156,7 +157,7 @@ macro_rules! allocs {
                 ebug_assert!(!gfp.contains(flags::NOFAIL) || !memalloc_scope().0,
                              "a NOFAIL allocation, in a NORECLAIM scope");
                 let gfp = current_gfp_context_raw(gfp.raw());
-                let q = unsafe { $realloc(p, layout.size(), layout.align() as _, gfp, NUMA_NO_NODE) };
+                let q = ($realloc)(p, old.size(), layout.size(), layout.align(), gfp, NUMA_NO_NODE);
                 let q = if layout.size() == 0 {
                     core::ptr::without_provenance_mut(layout.align())
                 } else {
@@ -169,9 +170,32 @@ macro_rules! allocs {
 }
 
 // kmalloc() sizes a size padded to its alignment, as the kernel's Rust has it.
-allocs!(Kmalloc  => krealloc_node_align,  |l: Layout| l.pad_to_align(),
-        Vmalloc  => vrealloc_node_align,  |l: Layout| l,
-        KVmalloc => kvrealloc_node_align, |l: Layout| l.pad_to_align());
+allocs!(Kmalloc  => |p, _, size, align, gfp, nid| unsafe { krealloc_node_align(p, size, align, gfp, nid) },
+                    |l: Layout| l.pad_to_align(),
+        Vmalloc  => |p, _, size, align, gfp, nid| unsafe { vrealloc_node_align(p, size, align, gfp, nid) },
+                    |l: Layout| l,
+        KVmalloc => |p, old, size, align, gfp, nid| unsafe { kvrealloc_unbounded(p, old, size, align, gfp, nid) },
+                    |l: Layout| l.pad_to_align());
+
+/// C's kvrealloc(), past INT_MAX bytes too: kvmalloc() refuses more - "Don't
+/// even allow crazy sizes" - and vmalloc() doesn't. A kmalloc()'d @p, of @old
+/// bytes, is copied into a vmalloc()'d one, as kvrealloc() does when
+/// krealloc() fails.
+unsafe fn kvrealloc_unbounded(p: *const c_void, old: usize, size: usize, align: usize, gfp: c::gfp_t, nid: c_int)
+    -> *mut c_void
+{
+    if size <= i32::MAX as usize || crate::os::kernel::is_vmalloc_addr(p) {
+        return unsafe { kvrealloc_node_align(p, size, align, gfp, nid) };
+    }
+    let q = unsafe { vrealloc_node_align(core::ptr::null(), size, align, gfp, nid) };
+    if !q.is_null() && !p.is_null() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(p.cast::<u8>(), q.cast::<u8>(), old);
+            kernel::bindings::kfree(p);
+        }
+    }
+    q
+}
 
 // The kernel's Rust Box and Arc fail with an AllocError of their own.
 impl From<kernel::alloc::AllocError> for crate::errcode::BchError {
