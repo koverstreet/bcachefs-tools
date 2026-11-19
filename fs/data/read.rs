@@ -94,7 +94,7 @@ use crate::util::bio::{bio_box_size, inline_vecs, reset_bvec_offset, Bio, BioBox
                        BioClone, BioInPlace, BioLend, BioOwner, BioRange, Buffers, HasBio, Lent};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
-use crate::util::alloc::{flags, init_with, Flags, Box, Kmalloc};
+use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Kmalloc};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
@@ -290,8 +290,12 @@ pub struct ReadDone {
     pub ret:           Result<(), BchError>,
     pub pick:          Option<c::extent_ptr_decoded>,
     pub ptrs_io_error: u16,
-    pub poisoned:      Option<BkeyBuf>,
+    pub poisoned:      Option<Poisoned>,
 }
+
+/// The key a read poisoned, as it now is in the btree: boxed, as it's rare and
+/// a ReadDone is moved through its awaiters' stack frames.
+pub type Poisoned = Box<BkeyBuf, Kmalloc>;
 
 impl ReadDone {
     fn unretried(ret: Result<(), BchError>, pick: Option<c::extent_ptr_decoded>) -> Self {
@@ -498,7 +502,7 @@ pub(crate) fn retry_pool() -> impl PinInit<Mempool<Kmalloc>, BchError> {
 struct FailureState {
     io:       c::bch_io_failures,
     read:     Option<c::extent_ptr_decoded>,
-    poisoned: Option<BkeyBuf>,
+    poisoned: Option<Poisoned>,
 }
 
 struct RetryState<'r> {
@@ -1050,7 +1054,9 @@ fn maybe_poison_extent(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, fla
     t.commit(Some(&DiskReservation::new(fs)), CommitFlags::empty())?;
 
     if read.is_update() {
-        failed.poisoned = Some(BkeyBuf::from_key(new.as_sc()));
+        let k = Box::init_in(BkeyBuf::from_key(new.as_sc()), Kmalloc.with_flags(flags::NOFAIL))
+            .expect("a NOFAIL allocation");
+        failed.poisoned = Some(Box::into_unflagged(k));
     }
 
     fs.event_inc_trace(events::data_read_fail_and_poison, |out| {
