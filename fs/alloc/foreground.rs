@@ -84,6 +84,7 @@ use crate::util::place::Contained;
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{RefBorrow, RefGuard, Refcount};
+use crate::util::task::Resume;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_long, c_uint, c_ulong};
 use core::convert::Infallible;
@@ -149,6 +150,9 @@ pub enum AllocWait<'r> {
     /// Its caller's thread, in wait_on_allocator(): once it's blocked, on
     /// what, and that count's snapshot from before the check that failed.
     Sync(Option<(Blocked, u32)>),
+    /// Its caller's task, as Sync's: Blocked::wait_async() awaits it, the
+    /// transaction dropped first.
+    Async(Option<(Blocked, u32)>),
 }
 
 /// What a thread's allocation blocked on.
@@ -166,6 +170,26 @@ impl Blocked {
             Blocked::OpenBuckets => &fs.allocator.open_buckets_events,
             Blocked::StripeBuf   => &fs.ec.stripe_buf_freed,
         }
+    }
+
+    /// An AllocWait::Async request's wait, its task's locks dropped: till
+    /// any wake after @seen, resumed @at, to retry - true if none came in
+    /// allocator_stuck_timeout, for the retry to report as stuck if it
+    /// blocks again: the request is its. Or an error, if the filesystem's
+    /// gone emergency read-only and won't allocate again.
+    pub async fn wait_async(self, fs: &Fs, seen: u32, at: Resume<'_>) -> Result<bool, BchError> {
+        let timeout = c_ulong::from(fs.opts.allocator_stuck_timeout.get()) * HZ;
+        let stuck = match timeout {
+            0 => {
+                self.events(fs).wait_async(seen, at).await;
+                false
+            }
+            _ => self.events(fs).wait_async_timeout(seen, timeout, at).await.is_err(),
+        };
+        if fs.flags.get(c::FsFlag::emergency_ro) {
+            return fs.throw(c::Errcode::emergency_ro);
+        }
+        Ok(stuck)
     }
 }
 
@@ -950,7 +974,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
                 unsafe { closure_wait(list, NonNull::from(*cl).cast()) };
                 true
             }
-            AllocWait::Sync(blocked) => {
+            AllocWait::Sync(blocked) | AllocWait::Async(blocked) => {
                 *blocked = Some((on, on.events(fs).snapshot()));
                 true
             }
@@ -1169,22 +1193,29 @@ impl TransAttempt<'_, '_> {
             if self.wait_until_timeout(ev, || retry(req), timeout).is_some() {
                 return;
             }
-
-            // every one, though the dump below is one in two minutes
-            fs.event_inc_trace(events::allocator_stuck, |out| {
-                write!(out, "err {err}\n");
-                fs.alloc_request_to_text(out, req);
-            });
-
-            let last = &fs.allocator.last_stuck;
-            let old = last.load(Relaxed);
-            if (old == 0 || time_after(jiffies(), (old as c_ulong).wrapping_add(HZ * 60 * 2))) &&
-               last.compare_exchange(old, jiffies() as usize, Relaxed, Relaxed).is_ok() {
-                fs.print_allocator_stuck(req, err);
-            }
+            fs.allocator_stuck(req, err);
         }
 
         self.wait_until(ev, || retry(req));
+    }
+}
+
+impl Fs {
+    /// @req's allocation, blocked with @err for allocator_stuck_timeout:
+    /// counted, and dumped - once in two minutes.
+    pub fn allocator_stuck(&self, req: &c::alloc_request, err: BchError) {
+        // every one, though the dump below is one in two minutes
+        self.event_inc_trace(events::allocator_stuck, |out| {
+            write!(out, "err {err}\n");
+            self.alloc_request_to_text(out, req);
+        });
+
+        let last = &self.allocator.last_stuck;
+        let old = last.load(Relaxed);
+        if (old == 0 || time_after(jiffies(), (old as c_ulong).wrapping_add(HZ * 60 * 2))) &&
+           last.compare_exchange(old, jiffies() as usize, Relaxed, Relaxed).is_ok() {
+            self.print_allocator_stuck(req, err);
+        }
     }
 }
 
