@@ -4,13 +4,12 @@
 //! checksummed and submitted - a preflush first, if its flush goes
 //! separately - and, once written, completed in seq order.
 
-use core::mem::{self, offset_of, MaybeUninit};
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 
 use cstruct_macros::in_place;
-use pin_init::{pin_data, pin_init_from_closure, pinned_drop, stack_pin_init, PinInit};
+use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
 
 use crate::alloc::disk_groups::Target;
 use crate::util::alloc::flags;
@@ -36,17 +35,17 @@ use crate::journal::entries::{entry_u64s, EntryWriter};
 use crate::journal::pins::PinsRead;
 use crate::journal::validate::jset_validate;
 use crate::data_structures::fifo::FifoRead;
-use crate::locking::{Guard as _, MemallocFlags};
+use crate::locking::{Guard as _, LockedBy, MemallocFlags};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::sb::members::DevIoRef;
 use crate::data::write::DevWriteRef;
 use crate::os::workqueue::{Own, Queue};
-use crate::util::alloc::{init_at, init_with, AllocError};
+use crate::util::alloc::{init_with, AllocError};
 use crate::data::dev_bio::{DevBio, DevErrs};
 use crate::data::write_replicas::{InFlight, Refs};
 use crate::util::gather::Gather;
 use crate::util::printbuf::Printbuf;
-use crate::util::task::{requeue, waiter, Resume, Spawn, Task};
+use crate::util::task::{requeue, waiter, Resume, Spawn, Task, TaskInPlace};
 use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies, time_after_eq, unlikely,
                           WRITE};
 use crate::util::rcu::read_lock;
@@ -86,6 +85,8 @@ struct Allocated {
 /// What a write wrote, to where, and what failed: the task's output, for its
 /// done.
 pub struct Written {
+    /* the buf written, for its done */
+    buf:          &'static c::journal_buf,
     /* the entry's buffer, the write's from write_start() on */
     data:         c::JsetBuf,
     devs:         c::bch_devs_list,
@@ -97,8 +98,9 @@ pub struct Written {
 }
 
 impl Written {
-    fn new(data: c::JsetBuf) -> Self {
+    fn new(buf: &'static c::journal_buf, data: c::JsetBuf) -> Self {
         Written {
+            buf,
             data,
             devs:         Default::default(),
             failed:       Default::default(),
@@ -984,7 +986,7 @@ fn write_checksum(j: &c::journal, data: &mut c::JsetBuf, closed: &Closed) -> Res
 /// The entry's buffer, out of its write for its task, and what close
 /// settled of it - under buf_lock, held till write_prep() is done: the write
 /// buffer's flush reads the buffer in the write till then.
-fn write_take(w: &c::journal_buf, seq: u64, _: &c::BufLockGuard<'_>) -> (Closed, Written) {
+fn write_take(w: &'static c::journal_buf, seq: u64, _: &c::BufLockGuard<'_>) -> (Closed, Written) {
     let mut l = w.journal().lock.lock();
     let bits = l.get_of(&w.bits);
     assert!(bits.write_started(), "journal write of seq {seq} not started");
@@ -998,7 +1000,8 @@ fn write_take(w: &c::journal_buf, seq: u64, _: &c::BufLockGuard<'_>) -> (Closed,
         u64s_reserved:              *l.get_of(&w.u64s_reserved),
     };
 
-    (closed, Written::new(w.write_take_buf(&mut l)))
+    let data = w.write_take_buf(&mut l);
+    (closed, Written::new(w, data))
 }
 
 /// The entry compacted - under @b, its buf_lock, from write_take() - its
@@ -1164,13 +1167,10 @@ async fn write_task(w: &'static c::journal_buf, seq: u64) -> Written {
 
 /// What writes a journal entry, made with its buffer: the task, made for each
 /// write where the last one finished.
-#[pin_data(PinnedDrop)]
+#[pin_data]
 pub struct JournalWrite {
     #[pin]
-    task: MaybeUninit<Task<'static, WriteFut>>,
-    made: bool,
-    /* the buf the task writes, for its done */
-    buf:  Option<&'static c::journal_buf>,
+    task: TaskInPlace<'static, WriteFut>,
     /*
      * The buffer start() moves in, till the task takes it: the write buffer's
      * flush reads it here till then.
@@ -1178,62 +1178,37 @@ pub struct JournalWrite {
     data: c::BufLocked<Option<c::JsetBuf>>,
 }
 
-// the task's, which has its buffers to itself
-unsafe impl Send for JournalWrite {}
-unsafe impl Sync for JournalWrite {}
-
 impl JournalWrite {
-    /// In memory MaybeRcuAlloc zeroed: the task unmade.
     pub fn new() -> impl PinInit<Self, AllocError> {
-        unsafe { pin_init_from_closure(|_: *mut Self| Ok(())) }
+        pin_init!(Self {
+            task <- TaskInPlace::new(),
+            data: LockedBy::new(None, ()),
+        }? AllocError)
     }
 
-    /// The task that writes @buf's entry, made where the last write's was, and
+    /// The task that writes @buf's entry @seq - its write started under
+    /// j->lock, @buf holding this write - made where the last write's was, and
     /// started on the journal's workqueue.
-    ///
-    /// # Safety
-    /// @buf's write, of entry @seq, is started, under j->lock, and @buf holds
-    /// this write.
-    unsafe fn start(self: Pin<&mut Self>, buf: &'static c::journal_buf, seq: u64, data: c::JsetBuf) {
+    fn start(self: Pin<&mut Self>, buf: &'static c::journal_buf, seq: u64, data: c::JsetBuf) {
         let j = buf.journal();
-        let w = unsafe { self.get_unchecked_mut() };
-        if mem::replace(&mut w.made, true) {
-            unsafe { w.task.assume_init_drop() };
-        }
-        w.buf = Some(buf);
+        let w = self.project();
         assert!(w.data.get_mut().replace(data).is_none(), "a journal write started, holding the last one's buffer");
 
-        let future = init_with(move || write_task(buf, seq));
-        let task = Task::new(Spawn::Queue(&j.wq), j.fs().tasks(), future, write_task_done);
-        unsafe { init_at(task, w.task.as_mut_ptr()) }.expect("a task on a workqueue: only a thread's fails");
-        unsafe { w.task.assume_init_ref().task().start() };
+        w.task.start(Spawn::Queue(&j.wq), j.fs().tasks(), init_with(move || write_task(buf, seq)), write_task_done)
+            .expect("a task on a workqueue: only a thread's fails");
     }
 
     pub fn to_text(&self, out: &mut Printbuf) {
-        match self.made {
-            true  => unsafe { self.task.assume_init_ref() }.task().to_text(out),
-            false => prt!(out, "never started\n"),
-        }
-    }
-}
-
-#[pinned_drop]
-impl PinnedDrop for JournalWrite {
-    fn drop(self: Pin<&mut Self>) {
-        let w = unsafe { self.get_unchecked_mut() };
-        if w.made {
-            unsafe { w.task.assume_init_drop() };
+        match self.task.get() {
+            Some(task) => task.task().to_text(out),
+            None       => prt!(out, "never started\n"),
         }
     }
 }
 
 /// The write's done, where its task finished: on the journal's workqueue.
-///
-/// # Safety
-/// The executor's, as the task's done function.
-unsafe fn write_task_done(task: NonNull<Task<'static, WriteFut>>, written: Written) {
-    let buf = unsafe { (*task.byte_sub(offset_of!(JournalWrite, task)).cast::<JournalWrite>().as_ptr()).buf };
-    write_done(buf.expect("a started write's buf"), written);
+fn write_task_done(_: NonNull<Task<'static, WriteFut>>, written: Written) {
+    write_done(written.buf, written);
 }
 
 fn waitlist_splice(from: &c::journal_buf, to: &c::journal_buf) -> bool {
@@ -1417,7 +1392,7 @@ impl c::journal {
 
         let data = w.data.take(g);
         let write = g.get_mut_of(&w.write).as_mut().expect("a journal buf's write, made with its buffer");
-        unsafe { write.as_pin_mut().start(w, seq, data) };
+        write.as_pin_mut().start(w, seq, data);
     }
 
     pub fn do_writes(&self) {
