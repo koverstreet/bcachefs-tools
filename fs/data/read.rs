@@ -1417,12 +1417,17 @@ mod boxed {
     }
 
     /// A retry, its state and its future together in an element of the
-    /// filesystem's retry pool: a fragment's future holds neither.
+    /// filesystem's retry pool: a fragment's future holds neither. Its
+    /// failures stay in it: what they come to is what the awaiter gets.
     #[in_place(RetryOwnedFut)]
-    pub(super) async fn retry_owned<'a>(read: &'a Rbio, mut s: RetryState<'a>, at: Locate<'a>)
-        -> (Result<(), BchError>, FailureState)
-    {
-        (retry(read, &mut s, at).await, s.failures)
+    pub(super) async fn retry_owned<'a>(read: &'a Rbio, mut s: RetryState<'a>, at: Locate<'a>) -> ReadDone {
+        let ret = retry(read, &mut s, at).await;
+        let f = s.failures;
+        let ptrs_io_error = match at {
+            Locate::Key(k, _) => ptrs_io_error(read.fs(), BkeySC::from(k), &f.io),
+            Locate::Inode(_)  => 0,
+        };
+        ReadDone { ret, pick: f.read, ptrs_io_error, poisoned: f.poisoned }
     }
 }
 use boxed::{ec_read, retry_owned, RetryOwnedFut};
@@ -1759,7 +1764,7 @@ async fn fragment_task<'r>(r: ReadRef, mut f: Fragment<'r>, read: &'r Rbio) {
         Ok(ret) => return r.put(ret),
         Err(retry) => retry,
     };
-    r.put(retry.await.0);
+    r.put(retry.await.ret);
 }
 
 /// A fragment's task, started by @start: queued if it's a @reconstruct - the
@@ -1831,9 +1836,7 @@ pub async fn read_update(rbio: &mut Rbio, k: &BkeyI, btree: Btree, flags: F, dev
                 Err(retry) => retry,
             }
         };
-        let (ret, failures) = retry.await;
-        ReadDone { ret, pick: failures.read, ptrs_io_error: ptrs_io_error(rbio.fs(), BkeySC::from(k), &failures.io),
-                   poisoned: failures.poisoned }
+        retry.await
     };
     if read.ret.is_err() {
         rbio.set_ret(read.ret);
