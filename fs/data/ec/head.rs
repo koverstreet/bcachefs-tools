@@ -491,11 +491,11 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
             let wait = match req.wait {
                 AllocWait::Never       => MemWait::Never,
                 AllocWait::Closure(cl) => MemWait::Closure(NonNull::from(cl).cast()),
-                AllocWait::Sync(_)     => MemWait::Blocked,
+                AllocWait::Sync(_) | AllocWait::Async(_) => MemWait::Blocked,
             };
             let seen = Blocked::StripeBuf.events(fs).snapshot();
             let buf = StripeBuf::new_whole(fs, i.new_stripe.stripe(), wait);
-            if let (Err(e), AllocWait::Sync(blocked)) = (&buf, &mut req.wait) {
+            if let (Err(e), AllocWait::Sync(blocked) | AllocWait::Async(blocked)) = (&buf, &mut req.wait) {
                 if e.matches(Errcode::stripe_buf_mem_blocked) {
                     *blocked = Some((Blocked::StripeBuf, seen));
                 }
