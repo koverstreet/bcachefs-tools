@@ -31,7 +31,8 @@ use crate::os::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, MA
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::util::rcu::read_lock;
-use crate::util::task::waiter;
+use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, WaitSync};
 use crate::util::Nsecs;
 use crate::{fsck_err_on, has_bio, prt};
 
@@ -87,7 +88,7 @@ impl InodeInfo {
                 .expect("a nocow flush bio: the bioset's mempool waits rather than fail");
             bio.submit_gathered(g.get());
         }
-        g.wait_sync();
+        g.wait_sync(Sleep::IDLE);
     }
 
     /*

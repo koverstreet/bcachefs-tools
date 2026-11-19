@@ -28,7 +28,8 @@ use crate::util::log::LogMsg;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::util::gather::{Fold, Gather, GatherRef};
 use crate::util::backref::BackRef;
-use crate::util::task::{waiter, Spawn, TaskSlot};
+use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, Spawn, TaskSlot, WaitSync};
 use crate::{bch_err, bch_err_ratelimited, bch_info, new_lock, prt};
 use core::ffi::c_int;
 use pin_init::{stack_pin_init, PinInit};
@@ -315,7 +316,7 @@ fn scrub_range(m: &Moving<'_>, jk: &c::journal_keys, start: u64, end: u64) -> Op
 
     // flush_all() first: the extents' updates run only in its waits
     m.flush_all();
-    let bad = found.wait_sync();
+    let bad = found.wait_sync(Sleep::IDLE);
 
     if let Err(e) = move_ret {
         bch_err!(fs, "journal scrub: move error {e} in flush range seq {}-{end}", start + 1);

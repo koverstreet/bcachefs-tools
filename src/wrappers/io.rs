@@ -19,7 +19,7 @@ use bcachefs_kernel::inode_opts;
 use bcachefs_kernel::util::bio::{Bio, BioBox, BioOwner};
 use bcachefs_kernel::util::closure;
 use bcachefs_kernel::util::sleep::Sleep;
-use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Spawn, TaskSlot};
+use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Spawn, TaskSlot, WaitSync};
 use bcachefs_kernel::util::vstructs::assume_init_mut;
 use bcachefs_kernel::os::workqueue::Queue;
 
@@ -106,6 +106,6 @@ pub fn read<'a>(
         r.complete(read::read(&b, inum, flags, ()).await);
     }, None).expect("a queue's task: nothing in it fails");
     unsafe { task.start_unchecked() };
-    wait.wait(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read")?;
+    wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read")?;
     Ok(unsafe { assume_init_mut(buf) })
 }

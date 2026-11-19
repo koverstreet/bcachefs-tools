@@ -11,7 +11,7 @@
 //!     stack_pin_init!(let g = Gather::<Result<(), BchError>, waiter::Sync>::new());
 //!     let r = g.get();                // one more in flight
 //!     r.put(ret);                     // folded in; dropped unput, nothing is
-//!     let ret = g.wait_sync();        // an Async Gather: g.wait(at).await
+//!     let ret = g.wait_sync(Sleep::IDLE); // an Async Gather: g.wait(at).await
 //!
 //! It's waited on by & - everything in it is atomic - so one in something
 //! shared is waited on by whoever's job that is: a scope's jobs, by the
@@ -56,7 +56,7 @@ use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, RunQueue, Waiter};
+use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, RunQueue, WaitSync, Waiter};
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
@@ -366,23 +366,16 @@ impl<T: Fold, Wt: Waiter, W: Width> Drop for InWait<'_, T, Wt, W> {
     }
 }
 
-impl<T: Fold, W: Width> Gather<T, waiter::Sync, W> {
-    /// Wait for every ref to be put, sleeping TASK_IDLE - no hung task
-    /// warnings - and take the result.
-    pub fn wait_sync(&self) -> T {
-        self.wait_sync_state(Sleep::IDLE)
-    }
+/// Every ref put, and the result. Sleep::IDLE, for no hung task warnings;
+/// freezable, for refs whose holders freeze in place - kthreads that do -
+/// whose owner must too.
+impl<T: Fold, W: Width> WaitSync for &Gather<T, waiter::Sync, W> {
+    type Output = T;
 
-    /// wait_sync(), freezable: for refs whose holders freeze in place - kthreads
-    /// that do - whose owner must too.
-    pub fn wait_sync_freezable(&self) -> T {
-        self.wait_sync_state(Sleep::IDLE.freezable())
-    }
-
-    fn wait_sync_state(&self, how: Sleep) -> T {
+    fn wait_sync(self, how: Sleep) -> T {
         let _w = self.begin_wait();
         if !self.waited() {
-            self.start(waiter::Sync::current()).wait(how);
+            self.start(waiter::Sync::current()).wait_sync(how);
         }
         T::result(&self.acc)
     }

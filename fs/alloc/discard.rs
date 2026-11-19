@@ -71,7 +71,7 @@ use crate::util::atomic::try_update;
 use crate::util::bio::{Bio, BioOwner, Gathered};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
-use crate::util::task::waiter;
+use crate::util::task::{waiter, WaitSync};
 use crate::os::blkdev;
 use crate::os::kernel::{unlikely, READ};
 use crate::util::place::Contained;
@@ -529,7 +529,7 @@ impl<'a> Worker<'a> {
     /// Wait out the discards in flight, and mark free the rest's buckets.
     fn finish(self, trans: &TransGuard<'_>) -> Result<(), BchError> {
         trans.unlock_long();
-        self.mark_free(trans, self.g.wait_sync())
+        self.mark_free(trans, self.g.wait_sync(Sleep::IDLE))
     }
 }
 
