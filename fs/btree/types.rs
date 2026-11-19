@@ -749,7 +749,7 @@ pub struct BtreeTrans<'f> {
     pub journal_seq_to_pin: Cell<u64>,
     pub journal_seq: Cell<*mut u64>,
     pub disk_res: Cell<*mut cs::DiskReservation<'static>>,
-    pub flush: Cell<*mut cs::closure>,
+    pub flush: Cell<*mut Option<crate::journal::flush_wait::Flush<'static>>>,
 
     pub fs_usage_delta: Cell<cs::bch_fs_usage_base>,
 

@@ -19,8 +19,9 @@ use crate::c;
 use crate::c::JournalBucketStage::JOURNAL_BUCKET_cur;
 use crate::c::JournalFlag as Journal;
 use crate::c::JournalSpaceFrom::journal_space_discarded;
-use crate::c::{buf_waiters, JournalGuard, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT, JOURNAL_BUF_NOFLUSH,
-               JOURNAL_BUF_NOT_IN_FLIGHT};
+use crate::c::JournalGuard;
+use crate::journal::flush_wait::{buf_waiters, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT, JOURNAL_BUF_NOFLUSH,
+                                 JOURNAL_BUF_NOT_IN_FLIGHT};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;

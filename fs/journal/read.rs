@@ -5,6 +5,7 @@ use crate::format::{Btree, MemberState, Nonce};
 
 #[path = "buckets.rs"] pub mod buckets;
 #[path = "entries.rs"] pub mod entries;
+#[path = "flush_wait.rs"] pub mod flush_wait;
 #[path = "init.rs"] pub mod init;
 #[path = "journal.rs"] pub mod journal;
 #[path = "pins.rs"] pub mod pins;

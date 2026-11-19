@@ -24,6 +24,7 @@ use crate::btree::bkey::{bkey_ge, bkey_gt, pos, spos, BkeyI, BkeyS, BkeySC, Bkey
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::update::extent_whiteout_type;
 use crate::c;
+use crate::journal::flush_wait::Flush;
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
 use crate::errcode::BchError;
@@ -31,7 +32,6 @@ use crate::fs::Fs;
 use crate::init::error::count_fsck_err;
 use crate::debug::trace::events;
 use crate::sb::errors::SbErrorId;
-use crate::util::ffi::Opaque;
 use crate::os::kernel::{likely, unlikely};
 use crate::util::log::LogMsg;
 use crate::{inode, inode_opts, prt};
@@ -371,7 +371,7 @@ impl<'t> TransAttempt<'_, 't> {
                                     k: &mut TransBkey<'_, 't, V>, disk_res: &DiskReservation<'_>,
                                     new_i_size: u64, i_sectors_delta_total: Option<&mut i64>,
                                     check_enospc: bool, change_cookie: u32,
-                                    mut flush: Option<&Opaque<c::closure>>) -> Result<(), BchError>
+                                    mut flush: Option<&mut Option<Flush<'_>>>) -> Result<(), BchError>
     {
         let mut k: TransBkey<'_, 't> = unsafe { k.reborrow().cast() };
 
