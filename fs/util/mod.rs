@@ -35,6 +35,7 @@ pub mod sharing;
 pub mod siphash;
 pub mod sleep;
 pub mod task;
+pub mod thin;
 pub mod time_stats;
 pub mod timer;
 pub mod varint;
