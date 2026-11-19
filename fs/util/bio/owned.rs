@@ -561,6 +561,11 @@ impl<T: HasBio, B: Buffers, A: Alloc> BioBox<T, B, A> {
         // flight has given up its box; never moved from where its set made it
         unsafe { Pin::new_unchecked(self.t.as_mut()) }
     }
+
+    /// What its bvecs point at.
+    pub fn buffers(&self) -> &B {
+        &self.buffers
+    }
 }
 
 impl<T: HasBio> BioBox<T> {

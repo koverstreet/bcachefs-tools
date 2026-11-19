@@ -711,15 +711,15 @@
 
 use crate::alloc::foreground::{AllocWait, Blocked};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_ge, BkeyI, BkeyS, BkeySC};
+use crate::btree::bkey::{bkey_ge, BkeyS, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
 use crate::data::inline_data::{InlineDataMut, DATA};
 use crate::data::keylist::Keylist;
 use crate::data::ptrs::{Ptrs, PtrsMut};
-use crate::data::write_extent::{dst_put, write_extent, Extent};
+use crate::data::write_extent::{write_extent, Extent};
 use crate::data::write_nocow::nocow_write;
-use crate::data::write_replicas::{submit_replicas, ReplicaErrs};
+use crate::data::write_replicas::{submit_replicas, wbio_in_place, ReplicaErrs};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::fs::Fs;
@@ -728,7 +728,7 @@ use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::snapshots::subvolume;
-use crate::util::bio::{of_bio, Bio, HasBio};
+use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioBuffersOwned, BioClone, BioRange, HasBio};
 use crate::util::gather::Gather;
 use crate::os::kernel::{local_clock, unlikely, WRITE};
 use crate::util::log::LogMsg;
@@ -742,6 +742,7 @@ use c::WriteFlags as w;
 use crate::journal::flush_wait::{Flush, FlushWait};
 use core::fmt;
 use core::pin::Pin;
+use core::ptr;
 use pin_init::stack_pin_init;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -847,21 +848,6 @@ fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -
     }
 }
 
-/// # Safety
-/// @bio is a bch_write_bio<R>'s, and no other reference to it is live.
-pub(crate) unsafe fn to_wbio<'a, R: IoRefIdx>(bio: *mut c::bio) -> &'a mut c::bch_write_bio<R> {
-    unsafe { &mut *of_bio::<c::bch_write_bio>(bio).cast() }
-}
-
-/// # Safety
-/// As to_wbio()'s, its io ref slot as allocated: written, not dropped.
-pub(crate) unsafe fn wbio_init<'a, R: IoRefIdx>(bio: *mut c::bio) -> &'a mut c::bch_write_bio<R> {
-    let wbio = unsafe { to_wbio::<R>(bio) };
-    wbio.wbio = ::pin_init::zeroed();
-    unsafe { (&raw mut wbio.ca).write(None) };
-    wbio
-}
-
 impl<R: IoRefIdx> c::bch_write_bio<R> {
     /// Set when it's submitted.
     pub(crate) fn fs(&self) -> &'static Fs {
@@ -899,17 +885,90 @@ impl c::write_point {
 
 pub(crate) type WriteGather = Gather<ReplicaErrs, waiter::Async>;
 
+type WriteBio<B> = BioBox<c::bch_write_bio, B>;
+
+/// An extent's bio: the op's own, or one of its own - put back, its buffers
+/// with it, as it's dropped, its IO done.
+pub(crate) enum ExtentBio {
+    /// The op's, all that's left of it
+    Op,
+    /// The extent's part of the op's bio, split off it: its bvecs the op's
+    Split(WriteBio<BioClone<'static>>),
+    /// Pages of its own, the extent's data bounced into them: to compress,
+    /// checksum or encrypt
+    Bounce(WriteBio<BioBuffersOwned<'static>>),
+    /// The write point's EC stripe buffer, mapped
+    Stripe(WriteBio<BioBuffersMapped<&'static mut [u8]>>),
+}
+
+impl ExtentBio {
+    /// @op's bio's first @sectors, split off it: bio_split().
+    ///
+    /// # Safety
+    /// @op's bvecs - its caller's data - aren't changed while it lives: till
+    /// its pass's IO is waited on.
+    pub(crate) unsafe fn split(op: &mut Op, sectors: u32) -> Self {
+        let bytes = sectors << 9;
+        let size = op.wbio.bio.range().len();
+        assert!(bytes != 0 && bytes < size, "splitting {sectors} sectors off a {size} byte bio");
+
+        let opf = op.wbio.bio.raw().bi_opf;
+        let range = unsafe { core::mem::transmute::<BioRange<'_>, BioRange<'static>>(op.wbio.bio.range().take(bytes)) };
+        let split = op.fs().bio_write.alloc_with(ptr::null_mut(), opf, range, wbio_in_place)
+            .unwrap_or_else(|e: BchError| panic!("a split of a write's bio: its bioset waits rather than fail, but {e}"));
+        op.wbio.bio_mut().advance(bytes);
+        ExtentBio::Split(split)
+    }
+
+    pub(crate) fn is_op(&self) -> bool {
+        matches!(self, ExtentBio::Op)
+    }
+
+    /// Its bio, if it's one of its own.
+    pub(crate) fn own(&self) -> Option<&Bio> {
+        match self {
+            ExtentBio::Op        => None,
+            ExtentBio::Split(b)  => Some(&b.bio),
+            ExtentBio::Bounce(b) => Some(&b.bio),
+            ExtentBio::Stripe(b) => Some(&b.bio),
+        }
+    }
+
+    /// Its bio: the op's, @op's, if it's that.
+    pub(crate) fn bio_ref<'a>(&'a self, op: &'a c::bch_write_bio) -> &'a Bio {
+        self.own().unwrap_or(&op.bio)
+    }
+
+    pub(crate) fn len(&self, op: &c::bch_write_bio) -> u32 {
+        self.bio_ref(op).range().len()
+    }
+
+    /// Its wbio: the op's, @op's, if it's that.
+    pub(crate) fn wbio<'a>(&'a mut self, op: &'a mut c::bch_write_bio) -> Pin<&'a mut c::bch_write_bio> {
+        match self {
+            ExtentBio::Op        => op.pinned(),
+            ExtentBio::Split(b)  => b.as_mut(),
+            ExtentBio::Bounce(b) => b.as_mut(),
+            ExtentBio::Stripe(b) => b.as_mut(),
+        }
+    }
+
+    /// Its bio: the op's, @op's, if it's that.
+    pub(crate) fn bio<'a>(&'a mut self, op: &'a mut c::bch_write_bio) -> Pin<&'a mut Bio> {
+        HasBio::bio_mut(self.wbio(op))
+    }
+}
+
 /// A pass's extents' bios, each the last of its replicas and borrowed by its
 /// IO: given back once the pass's Gather is waited on.
 #[derive(Default)]
-pub(crate) struct Extents(ArrayVec<*mut c::bio, { c::BCH_BKEY_PTRS_MAX as usize }>);
-
-// the pass's: its IO has them only till the wait
-unsafe impl Send for Extents {}
+pub(crate) struct Extents(ArrayVec<ExtentBio, { c::BCH_BKEY_PTRS_MAX as usize }>);
 
 impl Extents {
-    pub(crate) fn push(&mut self, bio: *mut c::bio) {
+    /// @bio, the latest: submitted, for its IO to borrow.
+    pub(crate) fn push(&mut self, bio: ExtentBio) -> &mut ExtentBio {
         assert!(self.0.try_push(bio).is_ok(), "more extents in a pass than it holds");
+        self.0.last_mut().expect("just pushed")
     }
 
     /// A cow pass never fills it - an extent takes an open bucket at least,
@@ -923,10 +982,8 @@ impl Extents {
     }
 
     /// Given back, their IO done: write_extent()'s, or the op's own.
-    pub(crate) fn put(&mut self, fs: &Fs) {
-        for bio in self.0.drain(..) {
-            unsafe { dst_put(fs, bio) };
-        }
+    pub(crate) fn put(&mut self) {
+        self.0.clear();
     }
 }
 
@@ -1237,8 +1294,7 @@ fn write_pass(op: &mut Op, in_caller: bool, stuck: bool, retried_for_encoded: &m
             op.set(w::submitted);
         }
 
-        let key_to_write = op.insert_keys.iter_from(key_to_write_offset).next().expect("a write with no key");
-        submit_extent(op, bio, key_to_write, g, extents);
+        submit_extent(op, bio, key_to_write_offset, g, extents);
 
         /* a reserve's memory is the next extent's only once this one's done */
         if !more || reserved {
@@ -1247,15 +1303,15 @@ fn write_pass(op: &mut Op, in_caller: bool, stuck: bool, retried_for_encoded: &m
     }
 }
 
-/// @bio, an extent of @op's, written to each device of @k, its key, its bios
-/// into @g; held in @extents till they're done.
-fn submit_extent(op: &Op, bio: *mut c::bio, k: &BkeyI, g: &WriteGather, extents: &mut Extents) {
+/// @bio, an extent of @op's, written to each device of its key, the one at
+/// @key_offset of the op's keys: its bios into @g, held in @extents till
+/// they're done.
+fn submit_extent(op: &mut Op, bio: ExtentBio, key_offset: usize, g: &WriteGather, extents: &mut Extents) {
     let fs = op.fs();
-    let b = unsafe { &mut *bio };
-    b.bi_opf |= c::req_op_REQ_OP_WRITE;
+    let mut opf = c::req_op_REQ_OP_WRITE;
 
     if op.has(w::update) {
-        b.bi_opf |= c::REQ_SYNC | c::REQ_IDLE;
+        opf |= c::REQ_SYNC | c::REQ_IDLE;
     }
 
     /*
@@ -1265,11 +1321,13 @@ fn submit_extent(op: &Op, bio: *mut c::bio, k: &BkeyI, g: &WriteGather, extents:
      * every device on commit regardless, so durability is unchanged.
      */
     if op.has(w::update) && fs.opts().move_writes_fua.get() != 0 {
-        b.bi_opf |= c::REQ_FUA;
+        opf |= c::REQ_FUA;
     }
 
-    extents.push(bio);
-    unsafe { submit_replicas(fs, to_wbio::<c::DevWriteRefKind>(bio).pinned(), DataType::user, k, None, g) };
+    let k = op.insert_keys.iter_from(key_offset).next().expect("a write with no key");
+    let mut wbio = extents.push(bio).wbio(&mut op.wbio);
+    HasBio::bio_mut(wbio.as_mut()).raw_mut().bi_opf |= opf;
+    unsafe { submit_replicas(fs, wbio, DataType::user, k, None, g) };
 }
 
 /// The op's data written, and its index updated, a pass at a time: what one
@@ -1310,7 +1368,7 @@ async fn __write(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) {
             /* failed before finding a write point: nothing submitted, nothing to wait for */
             None => assert!(extents.is_empty(), "a write pass submitted, with no write point"),
         }
-        extents.put(fs);
+        extents.put();
 
         if op.has(w::submitted) && op.has(w::update) {
             unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, op.wbio.bio_mut().raw_mut()) };
@@ -1421,7 +1479,8 @@ pub async fn write(op: &mut Op, at: Resume<'_>) {
     }
 
     op.start_time = local_clock();
-    unsafe { wbio_init::<c::DevWriteRefKind>(op.wbio.bio_mut().raw_mut()) }.wbio.bits.set_put_bio(0);
+    op.wbio.wbio = ::pin_init::zeroed();
+    op.wbio.ca = None;
 
     let ret = (|| -> Result<(), BchError> {
         if unlikely(op.wbio.bio.range().len() & (fs.opts().block_size.get() as u32 - 1) != 0) {

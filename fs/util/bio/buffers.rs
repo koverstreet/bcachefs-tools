@@ -66,7 +66,16 @@ unsafe impl Buffers for BioBuffersUnmanaged {
 /// the size, how much of it the pool makes up - all of it, or for a bio that
 /// can do with less, a write's, that much - and how to allocate.
 pub struct BioBuffersOwned<'p> {
-    pool: &'p BouncePool,
+    pool:      &'p BouncePool,
+    used_pool: bool,
+}
+
+impl BioBuffersOwned<'_> {
+    /// Whether the pool made some of it up: its elements may be its reserve,
+    /// and a bio holding those mustn't ask for more till they're freed.
+    pub fn used_pool(&self) -> bool {
+        self.used_pool
+    }
 }
 
 unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
@@ -78,11 +87,13 @@ unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
 
     fn fill(bio: Pin<&mut Bio>, (pool, bs, size, at_least, gfp): Self::Src<'_>) -> Result<Self, BchError> {
         let bio = bio.raw_mut();
-        if let Err(e) = pages::alloc_pages_pool(pool, bio, bs, size, at_least, gfp) {
-            unsafe { pages::free_pages_pool(pool, bio) };
-            return Err(e.into());
+        match pages::alloc_pages_pool(pool, bio, bs, size, at_least, gfp) {
+            Ok(used_pool) => Ok(Self { pool, used_pool }),
+            Err(e) => {
+                unsafe { pages::free_pages_pool(pool, bio) };
+                Err(e.into())
+            }
         }
-        Ok(Self { pool })
     }
 
     fn release(&mut self, bio: Pin<&mut Bio>) {

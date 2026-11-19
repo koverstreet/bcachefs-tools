@@ -3,7 +3,7 @@
 //! The write path's in place writes, over extents that allow them: nocow.
 
 use crate::btree::bkey::prelude::*;
-use crate::util::alloc::Flags;
+use crate::util::bio::HasBio;
 use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
@@ -11,8 +11,7 @@ use crate::journal::flush_wait::Flush;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
-use crate::data::write::{index_update_wq, to_wbio, wbio_init, write_op_error, DevWriteRef, Extents,
-                         WriteGather};
+use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, ExtentBio, Extents, WriteGather};
 use crate::data::write_replicas::submit_replicas;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
@@ -264,34 +263,28 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Op, g: &WriteGather, ex
         }
 
         let mut reserved = false;
-        let bio: *mut c::bio = if k.k.p.offset < op.pos.offset + sectors {
-            unsafe {
-                let bio = fs.bio_write.split(op.wbio.bio_mut().raw_mut(), (k.k.p.offset - op.pos.offset) as u32,
-                                             Flags::empty());
-                wbio_init::<c::DevWriteRefKind>(bio).wbio.bits.set_put_bio(1);
-                (*bio).bi_opf = op.wbio.bio.raw().bi_opf;
-                reserved = fs.bio_write.reserve_drawn();
-                bio
-            }
+        let bio = if k.k.p.offset < op.pos.offset + sectors {
+            let bio = unsafe { ExtentBio::split(op, (k.k.p.offset - op.pos.offset) as u32) };
+            reserved = fs.bio_write.reserve_drawn();
+            bio
         } else {
             op.set(w::submitted);
-            op.wbio.bio_mut().raw_mut()
+            ExtentBio::Op
         };
 
-        let bio = unsafe { &mut *bio };
-        let bio_sectors = bio.bi_iter.bi_size >> 9;
+        let bio_sectors = bio.len(&op.wbio) >> 9;
         op.pos.offset += u64::from(bio_sectors);
         op.written += bio_sectors;
 
-        bio.bi_opf |= c::req_op_REQ_OP_WRITE;
+        let mut opf = c::req_op_REQ_OP_WRITE;
         if op.has(w::flush) {
-            bio.bi_opf |= c::REQ_FUA;
+            opf |= c::REQ_FUA;
         }
 
-        extents.push(bio);
-        unsafe {
-            submit_replicas(op.fs(), to_wbio::<c::DevWriteRefKind>(bio).pinned(), DataType::user, &copy, Some(cas), g)
-        };
+        let op_fs = op.fs();
+        let mut wbio = extents.push(bio).wbio(&mut op.wbio);
+        HasBio::bio_mut(wbio.as_mut()).raw_mut().bi_opf |= opf;
+        unsafe { submit_replicas(op_fs, wbio, DataType::user, &copy, Some(cas), g) };
 
         if op.has(w::convert_unwritten) {
             op.insert_keys.push_key(&copy);
@@ -329,8 +322,6 @@ fn nocow_write_pass(op: &mut Op, g: &WriteGather, extents: &mut Extents) -> bool
 pub(crate) async fn nocow_write(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>, in_caller: &mut bool)
     -> bool
 {
-    let fs = op.fs();
-
     if op.has(w::update) {
         return false;
     }
@@ -348,7 +339,7 @@ pub(crate) async fn nocow_write(op: &mut Op, mut flush: Option<&mut Option<Flush
          * a mutex
          */
         let errs = g.wait(Resume::queue(index_update_wq(op))).await;
-        extents.put(fs);
+        extents.put();
         errs.record(op);
         if op.written != 0 {
             *in_caller = false;
