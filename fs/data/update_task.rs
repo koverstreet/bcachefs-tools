@@ -289,7 +289,8 @@ impl Body {
     pub async fn write(&mut self, read: ReadDone, resume: Resume<'_>) {
         if self.read_done(read) {
             let u = &mut **self;
-            crate::data::write::write(&mut u.op, crate::data::write::WriteFor::Update(&u.index), resume).await
+            crate::data::write::write(&mut u.op, &mut u.wbio, crate::data::write::WriteFor::Update(&u.index), resume)
+                .await
         }
     }
 

@@ -34,6 +34,7 @@ pub struct WriteResult {
 // bio points into it.
 struct WriteState {
     op:    c::bch_write_op,
+    wbio:  c::bch_write_bio,
     bvecs: [c::bio_vec; MAX_BVECS],
 }
 
@@ -51,14 +52,15 @@ pub fn write(
     data: &[u8],
     new_i_size: u64,
 ) -> Result<WriteResult, BchError> {
-    // Made in place: the op's bio first, which the op's init() leaves be
+    // Made in place: the write bio's bio first, which around_bio() leaves be
     let mut state = Box::new(std::mem::MaybeUninit::<WriteState>::zeroed());
     let p = state.as_mut_ptr();
     let mut state = unsafe {
-        let bio = (&raw mut (*p).op.wbio.bio).cast::<c::bio>();
+        let bio = (&raw mut (*p).wbio.bio).cast::<c::bio>();
         bcachefs_kernel::os::bio::init(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(),
                                        MAX_BVECS as u16, 0);
         Bio::from_raw_mut(bio).map(data.as_ptr().cast_mut(), data.len());
+        let Ok(()) = bcachefs_kernel::util::alloc::init_at(c::bch_write_bio::around_bio(), &raw mut (*p).wbio);
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };
@@ -76,8 +78,8 @@ pub fn write(
     let (wait, r) = CompletionReturn::new(&mut done, waiter::Sync::current());
     let task = slot.init(Spawn::Queue(Queue::system_dfl()), fs.tasks(), async move |_: &()| {
         let mut state = state;
-        let op = &mut state.op;
-        write::write(op, write::WriteFor::Tools, Resume::queue(Queue::system_dfl())).await;
+        let WriteState { op, wbio, .. } = &mut *state;
+        write::write(op, wbio, write::WriteFor::Tools, Resume::queue(Queue::system_dfl())).await;
         r.complete(match op.error as i32 {
             0     => Ok(WriteResult { sectors_delta: op.i_sectors_delta }),
             error => Err(BchError::from_raw(-error)),
