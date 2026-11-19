@@ -35,6 +35,7 @@ use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use crate::btree::bkey::ValidateFlags;
 use crate::format::SbFeatures;
+use crate::locking::Guard as _;
 use crate::sb_err_on;
 use crate::bch_verbose;
 use crate::c;
@@ -46,7 +47,6 @@ use crate::types::Le64;
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::rcu::RcuArray;
 use crate::util::Printbuf;
-use crate::util::projections::Publish;
 use crate::sb::io::SbResize;
 
 type Section = c::bch_sb_field_journal_seq_blacklist<Validated>;
@@ -83,8 +83,7 @@ impl SbFieldOps for Section {
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         let Some(bl) = sb.field::<Section>() else { return Ok(()) };
 
-        // SAFETY: under sb_lock, the writers' lock
-        unsafe { fs.journal_seq_blacklist.writer() }.rebuild(bl.start.len(), |t| {
+        sb.writer::<crate::field!(journal_seq_blacklist)>().rebuild(bl.start.len(), |t| {
             for (t, e) in t.iter_mut().zip(&bl.start) {
                 t.start = e.start.get();
                 t.end   = e.end.get();
@@ -221,23 +220,24 @@ pub(crate) fn blacklist_entries_gc(fs: &Fs, guard: &mut SbLockGuard<'_>) -> bool
     let bl = &mut f.start;
     let nr = bl.len();
 
-    // SAFETY: under sb_lock, the writers' lock, and nothing's rebuilt here
-    let t = unsafe { fs.journal_seq_blacklist.writer().get_locked() };
-    assert_eq!(t.len(), nr, "blacklist table out of sync with the superblock");
-
     let oldest = fs.journal.oldest_seq_found_ondisk.get();
-    let mut new_nr = 0;
-    // in order, the section's order
-    for (src, i) in Eytzinger0::of(t).iter().enumerate() {
-        let e = &t[i];
-        assert!(e.start == bl[src].start.get() && e.end == bl[src].end.get(),
-                "blacklist table out of sync with the superblock");
+    let new_nr = fs.journal_seq_blacklist.with(|t| {
+        assert_eq!(t.len(), nr, "blacklist table out of sync with the superblock");
 
-        if e.dirty.load(Relaxed) || e.end >= oldest {
-            bl[new_nr] = bl[src];
-            new_nr += 1;
+        let mut new_nr = 0;
+        // in order, the section's order
+        for (src, i) in Eytzinger0::of(t).iter().enumerate() {
+            let e = &t[i];
+            assert!(e.start == bl[src].start.get() && e.end == bl[src].end.get(),
+                    "blacklist table out of sync with the superblock");
+
+            if e.dirty.load(Relaxed) || e.end >= oldest {
+                bl[new_nr] = bl[src];
+                new_nr += 1;
+            }
         }
-    }
+        new_nr
+    });
 
     if new_nr == nr {
         return false;

@@ -614,10 +614,9 @@ pub struct Fs {
     #[pin]
     #[init(AtomicRef::pin_init(c::journal_keys::init()))]
     pub journal_keys: Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>,
-    /// The blacklist, in memory: journal/seq_blacklist.rs's alone.
-    #[pin]
-    #[init(::pin_init::zeroed::<crate::journal::seq_blacklist::JournalSeqBlacklist>())]
-    pub(crate) journal_seq_blacklist: crate::journal::seq_blacklist::JournalSeqBlacklist,
+    /// The blacklist, in memory: journal/seq_blacklist.rs's alone, rebuilt
+    /// under sb_lock.
+    pub(crate) journal_seq_blacklist: LockedBy<(), crate::journal::seq_blacklist::JournalSeqBlacklist, crate::at!(Fs.sb)>,
 
     #[pin]
     pub recovery: c::bch_fs_recovery,
