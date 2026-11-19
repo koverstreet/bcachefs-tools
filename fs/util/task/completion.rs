@@ -133,7 +133,7 @@ pub struct Done<W: Waiter = waiter::Async> {
 }
 
 impl<W: Waiter> Done<W> {
-    fn new(waiter: W) -> Self {
+    pub(super) fn new(waiter: W) -> Self {
         Done { word: AtomicPtr::new(waiter.as_ptr().as_ptr()), _w: PhantomData }
     }
 
@@ -169,6 +169,28 @@ impl<W: Waiter> Done<W> {
         self.word.store(null_mut(), Ordering::Release);
         // seeing null, the waiter may return and be freed: RCU keeps it
         unsafe { W::wake(w, NonNull::from(self).cast()) };
+    }
+
+    /// complete(), by one of several completers - a Select's inputs - if it's
+    /// owed: the rest find it done, their load or cmpxchg their last touch.
+    /// The load's SeqCst, the pair of rearm()'s store: after the caller's
+    /// record of what it completed, which the waiter reads after rearm().
+    ///
+    /// # Safety
+    /// Its completers are done with it before it's freed.
+    pub(super) unsafe fn complete_if_owed(&self) {
+        let _rcu = rcu::read_lock();
+        let w = self.word.load(Ordering::SeqCst);
+        if !w.is_null() && self.word.compare_exchange(w, null_mut(), Ordering::Release, Ordering::Relaxed).is_ok() {
+            unsafe { W::wake(NonNull::new_unchecked(w), NonNull::from(self).cast()) };
+        }
+    }
+
+    /// Owed again, by @waiter, its own: once it's done, for the next of
+    /// several completers - complete_if_owed()'s.
+    pub(super) fn rearm(&self, waiter: W) {
+        debug_assert!(self.done(), "a Done rearmed while it's owed");
+        self.word.store(waiter.as_ptr().as_ptr(), Ordering::SeqCst);
     }
 
     pub fn done(&self) -> bool {

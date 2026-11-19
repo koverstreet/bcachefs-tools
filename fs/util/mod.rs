@@ -36,6 +36,7 @@ pub mod siphash;
 pub mod sleep;
 pub mod task;
 pub mod time_stats;
+pub mod timer;
 pub mod varint;
 pub mod volatile;
 pub mod vstructs;
