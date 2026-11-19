@@ -23,7 +23,7 @@ use core::cmp::Ordering;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::unlikely;
-use crate::util::vstructs::{plain_bytes, Container, EntryWalk, Head, Plain, SelfSized, Unsized, Validated,
+use crate::util::vstructs::{plain_bytes, Container, EntryWalk, FakeDst, Head, Plain, Unsized, Validated,
                             ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut, VStruct};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
@@ -341,7 +341,7 @@ impl TransAttempt<'_, '_> {
 
     /// An entry with header @head at the sub-buffer's end, the rest of it - as
     /// long as @head says - for @tail to write.
-    pub fn subbuf_push<T: Unsized<Head: Plain + SelfSized> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
+    pub fn subbuf_push<T: Unsized<Head: Plain + FakeDst> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
                                                                     head: &T::Head, tail: impl FnOnce(&mut [u64]))
         -> Result<(), BchError>
     {

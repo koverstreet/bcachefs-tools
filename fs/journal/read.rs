@@ -30,7 +30,7 @@ use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
-use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated, Validated,
+use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, FakeDst, Head, SelfSized, Unvalidated, Validated,
                             VStruct};
 use crate::os::workqueue::Queue;
 use crate::util::ToText;

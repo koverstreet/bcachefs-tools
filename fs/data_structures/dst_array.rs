@@ -85,10 +85,6 @@ impl<H, T> DstArray<H, T> {
 // SAFETY: the header says how long the array is - nr(), which nothing
 // changes through it - and is had only by &
 unsafe impl<H: DstHead, T> SelfSized for DstArray<H, T> {
-    fn bytes(&self) -> usize {
-        size_of_val(self)
-    }
-
     unsafe fn from_thin(p: *const ()) -> *const Self {
         // a slice pointer's length is the DST's tail's
         ptr::slice_from_raw_parts(p.cast::<T>(), unsafe { (*p.cast::<H>()).nr() }) as *const Self

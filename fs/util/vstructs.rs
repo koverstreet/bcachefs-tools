@@ -12,12 +12,14 @@
 //! from fewer bytes than the header.
 //!
 //! What a variable-size type can be, most general first:
-//!  - SelfSized: its own bytes say how big it is. A #[counted_by] array's
+//!  - FakeDst: sized, its own bytes say how far past them it runs - a DST
+//!    typed as its header, to be converted. A #[counted_by] array's
 //!    FlexArray is; extent entries aren't - the superblock sizes those.
-//!  - VStruct: SelfSized by a count of u64s, vstructs.h's, 8 byte aligned:
+//!  - VStruct: a FakeDst by a count of u64s, vstructs.h's, 8 byte aligned:
 //!    vstruct!().
 //!  - Unsized: a DST of ours, its reference fat - an unsized vstruct, a
-//!    #[counted] array, a #[whole] or #[grown] value.
+//!    #[counted] array, a #[whole] or #[grown] value. SelfSized, if its head
+//!    says how long it is, as an unsized vstruct's does.
 //!  - A container: an unsized vstruct whose entries follow its start[]:
 //!    vstruct_container!()'s entries().
 //!
@@ -39,14 +41,14 @@
 //! bytes there are.
 //!
 //! vstructs.h, and where it goes:
-//!  - vstruct_bytes(), replicas_entry_bytes(): SelfSized::bytes()
+//!  - vstruct_bytes(), replicas_entry_bytes(): FakeDst::bytes(), SelfSized::bytes()
 //!  - devs[]: #[counted]; FlexArray where it's read by stride
 //!  - vstruct_for_each(), vstruct_next(), vstruct_last(): entries()
 //!
 //! What's trusted: Plain, that any bytes are a valid value - which
 //! #[derive(Plain)] checks at compile time, and zerocopy's FromBytes for the
 //! types we define - and, for a reference from a pointer to its header, the
-//! count SelfSized::bytes() reads, which vstruct!() and #[counted_by] generate
+//! count FakeDst::bytes() reads, which vstruct!() and #[counted_by] generate
 //! from the field the struct declares.
 
 use core::marker::PhantomData;
@@ -164,24 +166,26 @@ macro_rules! native_byteorder {
 }
 native_byteorder!(U16: u16, U32: u32, U64: u64, U128: u128, I16: i16, I32: i32, I64: i64, I128: i128);
 
-/// A type whose values say how far they run, by their own fields: so a thin
-/// pointer, the value's address alone, reaches all of one - a sized type, or
-/// a DST whose head records its length (util/thin.rs's pointer types).
+/// A DST whose head records its length: so a thin pointer, the value's
+/// address alone, reaches all of one (util/thin.rs's pointer types). Never a
+/// sized type - a pointer to one is already thin, and one that runs past its
+/// size_of is a FakeDst.
 ///
 /// # Safety
-/// from_thin() of the address of a valid Self is a pointer to it - a sized
-/// Self's size_of, an unsized one's bytes(). What an unsized Self's reads to
-/// say how long it is can't change through a &Self, nor a &mut Self.
+/// from_thin() of the address of a valid Self is a pointer to all of it. What
+/// it reads to say how long it is can't change through a &Self, nor a &mut
+/// Self.
 pub unsafe trait SelfSized {
-    /// The bytes this value spans, its header's included: vstruct_bytes(),
-    /// replicas_entry_bytes().
-    fn bytes(&self) -> usize;
-
     /// The value at @p - a thin pointer, its address - as long as it says.
     ///
     /// # Safety
     /// @p points to a valid Self.
     unsafe fn from_thin(p: *const ()) -> *const Self;
+
+    /// The bytes this value spans: vstruct_bytes().
+    fn bytes(&self) -> usize {
+        size_of_val(self)
+    }
 
     /// Its 512 byte sectors, whole blocks of 512 << @block_bits:
     /// vstruct_sectors().
@@ -190,8 +194,27 @@ pub unsafe trait SelfSized {
     }
 }
 
-/// vstructs.h's: SelfSized by a count of u64s.
-pub trait VStruct: SelfSized {
+impl<T> !SelfSized for T {}
+
+/// A sized type whose fields say how far past its size_of its value runs: a
+/// DST typed as its header - a struct ending in a flexible array member, a
+/// key - or a family's head, standing in for the DST it heads.
+///
+/// XXX: what we're converting away from. Each goes as it becomes a DST of its
+/// own, SelfSized, or its family's length is read from the family; then this
+/// does.
+pub trait FakeDst {
+    /// vstruct_bytes(), replicas_entry_bytes().
+    fn bytes(&self) -> usize;
+
+    /// As SelfSized::sectors().
+    fn sectors(&self, block_bits: u32) -> usize {
+        self.bytes().next_multiple_of(512 << block_bits) >> 9
+    }
+}
+
+/// vstructs.h's: a FakeDst by a count of u64s.
+pub trait VStruct: FakeDst {
     /// Set the count; panics if its field can't hold @u64s.
     fn set_val_u64s(&mut self, u64s: usize);
 }
@@ -207,15 +230,10 @@ pub trait FlexArray {
     fn nr(&self) -> usize;
 }
 
-// sized: a pointer to one is already thin
-unsafe impl<T: FlexArray> SelfSized for T {
+impl<T: FlexArray> FakeDst for T {
     #[inline]
     fn bytes(&self) -> usize {
         T::TAIL + self.nr() * size_of::<T::Elem>()
-    }
-
-    unsafe fn from_thin(p: *const ()) -> *const Self {
-        p.cast()
     }
 }
 
@@ -315,16 +333,11 @@ macro_rules! vstruct {
     (@impl $t:ty, $start:expr, $($count:ident).+) => {
         const _: () = assert!(($start) % 8 == 0, concat!(stringify!($t), ": a vstruct's u64s start u64 aligned"));
 
-        // sized: a pointer to one is already thin
-        unsafe impl $crate::util::vstructs::SelfSized for $t {
+        impl $crate::util::vstructs::FakeDst for $t {
             #[inline]
             fn bytes(&self) -> usize {
                 // the count by value: a packed struct's field can't be borrowed
                 ($start) + $crate::util::vstructs::Count::count(&{ self.$($count).+ }) * 8
-            }
-
-            unsafe fn from_thin(p: *const ()) -> *const Self {
-                p.cast()
             }
         }
 
@@ -449,7 +462,7 @@ impl std::error::Error for VStructError {}
 /// How many of @bytes a T at their start says are its: an error if they
 /// don't hold its header, aligned, or that many - or it says fewer than its
 /// header.
-fn checked_bytes<T: Plain + SelfSized>(bytes: &[u8]) -> Result<usize, VStructError> {
+fn checked_bytes<T: Plain + FakeDst>(bytes: &[u8]) -> Result<usize, VStructError> {
     let ty = core::any::type_name::<T>();
     let len = cast_plain::<T>(bytes)
         .ok_or_else(|| match bytes.len() < size_of::<T>() {
@@ -503,7 +516,7 @@ impl<T, S: State> Deref for VstructRef<'_, T, S> {
     }
 }
 
-impl<'a, T: Plain + SelfSized> VstructRef<'a, T> {
+impl<'a, T: Plain + FakeDst> VstructRef<'a, T> {
     /// The T at the start of @bytes from outside, as many of them as its
     /// header says.
     pub fn new(bytes: &'a [u8]) -> Result<Self, VStructError> {
@@ -542,7 +555,7 @@ impl<'a, E> VstructRefEntries<'a, E> {
     }
 }
 
-impl<'a, E: Plain + SelfSized + 'a> Iterator for VstructRefEntries<'a, E> {
+impl<'a, E: Plain + FakeDst + 'a> Iterator for VstructRefEntries<'a, E> {
     type Item = Result<VstructRef<'a, E>, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -583,7 +596,7 @@ impl<T, S: State> DerefMut for VstructMut<'_, T, S> {
     }
 }
 
-impl<'a, T: Plain + SelfSized> VstructMut<'a, T> {
+impl<'a, T: Plain + FakeDst> VstructMut<'a, T> {
     /// As VstructRef::new(), mutably.
     pub fn new(bytes: &'a mut [u8]) -> Result<Self, VStructError> {
         let len = checked_bytes::<T>(bytes)?;
@@ -634,7 +647,7 @@ impl<I: EntryWalk> Iterator for WithOffsets<I> {
     }
 }
 
-impl<'a, E: Plain + SelfSized + 'a> EntryWalk for VstructRefEntries<'a, E> {
+impl<'a, E: Plain + FakeDst + 'a> EntryWalk for VstructRefEntries<'a, E> {
     fn offset(&self) -> usize {
         self.at
     }
@@ -1053,11 +1066,6 @@ macro_rules! vstruct_family {
         // SAFETY: its header's count says how long it is, and that's a
         // private field - Deref is to the header, to read
         unsafe impl SelfSized for $name<$st> {
-            #[inline]
-            fn bytes(&self) -> usize {
-                size_of_val(self)
-            }
-
             unsafe fn from_thin(p: *const ()) -> *const Self {
                 <Self as Unsized>::from_raw(p.cast(), unsafe { (*p.cast::<$head>()).bytes() })
             }
@@ -1217,7 +1225,7 @@ pub unsafe trait Unsized {
 pub fn from_bytes<T>(bytes: &[u8]) -> Result<&T, VStructError>
 where
     T: Unsized + ?Sized,
-    T::Head: Plain + SelfSized,
+    T::Head: Plain + FakeDst,
 {
     let len = checked_bytes::<T::Head>(bytes)?;
     cast(&bytes[..len]).ok_or(VStructError::Ragged { ty: core::any::type_name::<T>(), len })
@@ -1227,7 +1235,7 @@ where
 pub fn from_bytes_mut<T>(bytes: &mut [u8]) -> Result<&mut T, VStructError>
 where
     T: Unsized + ?Sized,
-    T::Head: Plain + SelfSized,
+    T::Head: Plain + FakeDst,
 {
     let len = checked_bytes::<T::Head>(bytes)?;
     cast_mut(&mut bytes[..len]).ok_or(VStructError::Ragged { ty: core::any::type_name::<T>(), len })
@@ -1386,7 +1394,7 @@ impl<'a, E: ?Sized> ValidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
+impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
     type Item = &'a E;
 
     fn next(&mut self) -> Option<&'a E> {
@@ -1415,7 +1423,7 @@ impl<'a, E: ?Sized> ValidatedEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ValidatedEntriesMut<'a, E> {
+impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ValidatedEntriesMut<'a, E> {
     type Item = &'a mut E;
 
     fn next(&mut self) -> Option<&'a mut E> {
@@ -1445,7 +1453,7 @@ impl<'a, E: ?Sized> UnvalidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
+impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
     type Item = Result<&'a E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1477,7 +1485,7 @@ impl<'a, E: ?Sized> UnvalidatedEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
+impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
     type Item = Result<&'a mut E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1510,7 +1518,7 @@ pub struct ViewEntries<'a, E: ?Sized> {
 /// @rest starts with a whole, aligned E, which says it's at least its header
 /// and no longer than @rest.
 #[inline(always)]
-unsafe fn validated_len<E: SelfSized + Plain>(rest: &[u8]) -> usize {
+unsafe fn validated_len<E: FakeDst + Plain>(rest: &[u8]) -> usize {
     let len = unsafe { &*rest.as_ptr().cast::<E>() }.bytes();
     debug_assert!(len >= size_of::<E>() && len <= rest.len(), "a validated entry of {len} bytes, in {}", rest.len());
     len
@@ -1523,7 +1531,7 @@ impl<'a, E: ?Sized> ViewEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ViewEntries<'a, E> {
+impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ViewEntries<'a, E> {
     type Item = &'a E;
 
     #[inline]
@@ -1540,7 +1548,7 @@ impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ViewEnt
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> EntryWalk for ViewEntries<'a, E> {
+impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> EntryWalk for ViewEntries<'a, E> {
     fn offset(&self) -> usize {
         self.at
     }
@@ -1560,7 +1568,7 @@ impl<'a, E: ?Sized> ViewEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ViewEntriesMut<'a, E> {
+impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ViewEntriesMut<'a, E> {
     type Item = &'a mut E;
 
     #[inline]
@@ -1576,7 +1584,7 @@ impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ViewEnt
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> EntryWalk for ViewEntriesMut<'a, E> {
+impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> EntryWalk for ViewEntriesMut<'a, E> {
     fn offset(&self) -> usize {
         self.at
     }

@@ -10,7 +10,7 @@ use bcachefs_kernel::journal::{
 use bcachefs_kernel::journal::validate::journal_entry_to_text;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::util::ToText;
-use bcachefs_kernel::util::vstructs::SelfSized;
+use bcachefs_kernel::util::vstructs::FakeDst;
 use clap::Parser;
 
 use bcachefs_kernel::util::printbuf::Printbuf;

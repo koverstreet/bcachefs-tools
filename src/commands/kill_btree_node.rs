@@ -50,7 +50,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
-use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized};
+use bcachefs_kernel::util::vstructs::{cast_plain, FakeDst, Head};
 use clap::Parser;
 use bcachefs_kernel::format::{Bpos, Btree};
 use bcachefs_kernel::os::kernel::PAGE_SIZE;

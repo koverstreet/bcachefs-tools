@@ -317,7 +317,7 @@ pub struct bkey_i {
 }
 
 /// _data, as long as k.u64s says - its own count is its bkey's, a field of a
-/// field, which #[vstruct] doesn't take: SelfSized::bytes() is bkey_bytes().
+/// field, which #[vstruct] doesn't take: FakeDst::bytes() is bkey_bytes().
 impl FlexArray for bkey_i {
     type Elem = u64;
     const TAIL: usize = core::mem::offset_of!(bkey_i, _data);
