@@ -728,7 +728,7 @@ use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::snapshots::subvolume;
-use crate::os::bio::{of_bio, Bio, Pages};
+use crate::os::bio::{of_bio, Bio, HasBio, Pages};
 use crate::util::gather::Gather;
 use crate::os::kernel::{local_clock, unlikely, WRITE};
 use crate::util::log::LogMsg;
@@ -868,10 +868,17 @@ impl<R: IoRefIdx> c::bch_write_bio<R> {
         self.wbio.c.expect("a write bio's filesystem, before it's submitted")
     }
 
+    /// Pinned: a write bio is never moved once it's made - an op's, where its
+    /// owner made the op, or a BioBox's - as its bio's bvecs, and its IO in
+    /// flight, point at it.
+    pub(crate) fn pinned(&mut self) -> Pin<&mut Self> {
+        unsafe { Pin::new_unchecked(self) }
+    }
+
     /// While it's ours, not in flight: the write path's bios are always
     /// whole, initialized bios.
     pub(crate) fn bio_mut(&mut self) -> &mut Bio {
-        &mut self.bio
+        HasBio::bio_mut(self.pinned())
     }
 }
 
@@ -1262,7 +1269,7 @@ fn submit_extent(op: &Op, bio: *mut c::bio, k: &BkeyI, g: &WriteGather, extents:
     }
 
     extents.push(bio);
-    unsafe { submit_replicas(fs, Pin::new_unchecked(to_wbio::<c::DevWriteRefKind>(bio)), DataType::user, k, None, g) };
+    unsafe { submit_replicas(fs, to_wbio::<c::DevWriteRefKind>(bio).pinned(), DataType::user, k, None, g) };
 }
 
 /// The op's data written, and its index updated, a pass at a time: what one

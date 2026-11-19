@@ -24,7 +24,6 @@ use crate::util::task::Resume;
 use crate::{btree_trans, fs_inconsistent, inode};
 use c::WriteFlags as w;
 use core::ops::ControlFlow;
-use core::pin::Pin;
 use pin_init::stack_pin_init;
 
 type Op = c::bch_write_op;
@@ -291,8 +290,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Op, g: &WriteGather, ex
 
         extents.push(bio);
         unsafe {
-            submit_replicas(op.fs(), Pin::new_unchecked(to_wbio::<c::DevWriteRefKind>(bio)), DataType::user,
-                            &copy, Some(cas), g)
+            submit_replicas(op.fs(), to_wbio::<c::DevWriteRefKind>(bio).pinned(), DataType::user, &copy, Some(cas), g)
         };
 
         if op.has(w::convert_unwritten) {
