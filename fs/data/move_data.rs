@@ -315,9 +315,14 @@ impl PhysWalker<'_, '_> {
         }
     }
 
-    /// Backpointer @bp's key resolved - and moved, if it's of a data type
-    /// moved and the predicate picks it. An error stops the walk.
-    fn bp(&mut self, t: &TransAttempt<'_, '_>, bp: &BkeyI<c::Backpointer>) -> Result<(), BchError> {
+    /// Backpointer @k's key resolved - and moved, if it's of a data type
+    /// moved and the predicate picks it. An error stops the walk. Not
+    /// inlined: its iterator and keys aren't needed in the frame the walk
+    /// ratelimits in, running the moves' index updates.
+    #[inline(never)]
+    fn bp(&mut self, t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchError> {
+        let Some(bp) = BkeyI::<c::Backpointer>::from_key(k) else { return Ok(()) };
+        let bp = &bp;
         let fs = t.fs();
         let moving = self.mover.moving;
         let v = &bp.v;
@@ -439,9 +444,7 @@ impl Moving<'_> {
                 }));
             }
 
-            if let Some(bp) = BkeyI::<c::Backpointer>::from_key(k) {
-                walker.bp(t, &bp)?;
-            }
+            walker.bp(t, k)?;
             // between backpointers: it unlocks, and @k is done with
             self.ratelimit()
         })?;
