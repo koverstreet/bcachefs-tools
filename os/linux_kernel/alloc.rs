@@ -174,8 +174,28 @@ allocs!(Kmalloc  => |p, _, size, align, gfp, nid| unsafe { krealloc_node_align(p
                     |l: Layout| l.pad_to_align(),
         Vmalloc  => |p, old, size, align, gfp, nid| unsafe { vrealloc(p, old, size, align, gfp, nid) },
                     |l: Layout| l,
-        KVmalloc => |p, _, size, align, gfp, nid| unsafe { kvrealloc_node_align(p, size, align, gfp, nid) },
+        KVmalloc => |p, old, size, align, gfp, nid| unsafe { kvrealloc_unbounded(p, old, size, align, gfp, nid) },
                     |l: Layout| l.pad_to_align());
+
+/// C's kvrealloc(), past INT_MAX bytes too: kvmalloc() refuses more - "Don't
+/// even allow crazy sizes" - and vmalloc() doesn't. A kmalloc()'d @p, of @old
+/// bytes, is copied into a vmalloc()'d one, as kvrealloc() does when
+/// krealloc() fails.
+unsafe fn kvrealloc_unbounded(p: *const c_void, old: usize, size: usize, align: usize, gfp: c::gfp_t, nid: c_int)
+    -> *mut c_void
+{
+    if size <= i32::MAX as usize || crate::os::kernel::is_vmalloc_addr(p) {
+        return unsafe { kvrealloc_node_align(p, size, align, gfp, nid) };
+    }
+    let q = unsafe { vrealloc(core::ptr::null(), 0, size, align, gfp, nid) };
+    if !q.is_null() && !p.is_null() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(p.cast::<u8>(), q.cast::<u8>(), old);
+            kernel::bindings::kfree(p);
+        }
+    }
+    q
+}
 
 /// C's vrealloc(): @p, of @old bytes, as @size - freed if 0.
 #[cfg(linux_ge = "7.0")]
