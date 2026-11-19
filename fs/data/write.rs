@@ -721,7 +721,6 @@ use crate::data::write_extent::{dst_put, write_extent, Extent};
 use crate::data::write_nocow::nocow_write;
 use crate::data::write_replicas::{submit_replicas, ReplicaErrs};
 use crate::data_structures::array_vec::ArrayVec;
-use crate::debug::async_objs;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
@@ -729,29 +728,20 @@ use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::snapshots::subvolume;
-use crate::util::alloc::Kmalloc;
 use crate::util::bio::{of_bio, Bio};
-use crate::util::closure::Running;
 use crate::util::gather::Gather;
-use crate::util::mempool::Mempool;
 use crate::os::kernel::{local_clock, unlikely, WRITE};
-use crate::os::module::{Quiesced, ThisModule};
 use crate::util::log::LogMsg;
 use crate::util::ratelimit::Ratelimit;
 use crate::util::refcount::TryRefcount;
-use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, requeue, waiter, Completion, Done, DynDone, Resumable, Resume, RunQueue,
-                        Spawn, TaskSlot, WaitSync};
+use crate::util::task::{requeue, waiter, Resumable, Resume, RunQueue};
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{btree_trans, log_msg_ratelimited, prt};
 use c::WriteFlags as w;
 use crate::journal::flush_wait::{Flush, FlushWait};
-use core::alloc::Layout;
 use core::fmt;
 use core::pin::Pin;
-use core::ptr::NonNull;
-use cstruct_macros::in_place;
 use pin_init::stack_pin_init;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -800,20 +790,6 @@ impl c::bch_write_op {
     fn update_mut(&mut self) -> &mut c::data_update {
         assert!(self.has(w::update), "a write op that isn't a data update's");
         unsafe { &mut *core::ptr::from_mut(self).byte_sub(core::mem::offset_of!(c::data_update, op)).cast() }
-    }
-}
-
-/// Off the async object list, and to its end_io, which may free it.
-///
-/// # Safety
-/// @op is bch2_write()'s, its write done, and touched by no one after.
-unsafe fn write_op_end(mut op: NonNull<Op>) {
-    unsafe {
-        let fs = op.as_ref().fs();
-        async_objs::list_del(fs, c::AsyncObjKind::write_op, &mut op.as_mut().list_idx);
-        if let Some(end_io) = op.as_ref().end_io {
-            end_io(op.as_ptr());
-        }
     }
 }
 
@@ -1405,7 +1381,7 @@ fn data_write_trace(out: &mut Printbuf, op: &Op) {
 }
 
 /**
- * bch2_write() - handle a write to a cache device or flash only volume
+ * write() - handle a write to a cache device or flash only volume
  *
  * This is the starting point for any data to end up in a cache device; it could
  * be from a normal write, or a writeback write, or a write to a flash only
@@ -1483,92 +1459,6 @@ pub async fn write(op: &mut Op, at: Resume<'_>) {
     drop(flush);
     write_done(op, slot.as_mut().as_pin_mut()).await;
     requeue(at).await
-}
-
-/// A write bch2_write() issues: its task's, till its callers await write().
-/// Freed a grace period after the write, when the filesystem may be gone -
-/// so from pools of the module's; copygc's writes from their own, so writes
-/// holding an element while they wait for buckets never keep the writes that
-/// free buckets from getting one.
-static WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
-static COPYGC_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
-
-pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let size = exclusive_size::<Issued, WriteFut<'static>, &'static Mempool<Kmalloc>>(Layout::new::<()>());
-    Mempool::init_static(&WRITES, Mempool::kmalloc(1, size), m)?;
-    Mempool::init_static(&COPYGC_WRITES, Mempool::kmalloc(1, size), m)
-}
-
-pub fn pools_exit(q: &Quiesced<'_>) {
-    WRITES.exit(q);
-    COPYGC_WRITES.exit(q);
-}
-
-/// What bch2_write()'s task is of: the op - its till its end_io, with the
-/// op's closure's running ref - and a sync write's caller's wait.
-struct Issued {
-    op:   NonNull<Op>,
-    done: Option<DynDone<'static>>,
-}
-
-unsafe impl Send for Issued {}
-
-/// write(), then the op's end. A sync write's is here, and wakes its caller.
-/// Another's is a work item's, as C's __bch2_write_done() was: never in the
-/// caller's stack, nor the task's, holding its box - its end_io may issue the
-/// next write, whose box comes from the same pool.
-#[in_place(WriteFut)]
-async fn write_task<'h>(home: Pin<&'h mut Issued>) {
-    let op = unsafe { &mut *home.op.as_ptr() };
-    let wq = index_update_wq(op);
-    write(op, Resume::queue(wq)).await;
-
-    let home = Pin::into_inner(home);
-    let op = unsafe { Running::<Op>::from_raw(home.op) };
-    match home.done.take() {
-        Some(done) => {
-            unsafe { write_op_end(op.end()) };
-            done.complete();
-        }
-        None => {
-            let wq = index_update_wq(&op);
-            op.continue_at_nobarrier(write_end, Some(wq));
-        }
-    }
-}
-
-extern "C" fn write_end(op: Running<Op>) {
-    unsafe { write_op_end(op.end()) };
-}
-
-/// write(), by a task of its own, its first poll here, to the op's end_io:
-/// returning once that's run, if the op's w::sync.
-pub extern "C" fn bch2_write(op: Running<Op>) {
-    debug_assert!(!op.cl.has_parent(), "a write op's closure with a parent");
-    let fs = op.fs();
-
-    let mut done = Done::completed();
-    let (sync, done) = match op.has(w::sync) {
-        true  => {
-            let (c, d) = Completion::new_dyn(&mut done, waiter::Sync::current());
-            (Some(c), Some(d))
-        }
-        false => (None, None),
-    };
-    let pool = if op.bits.watermark() == c::Watermark::copygc as u8 { &COPYGC_WRITES } else { &WRITES };
-
-    let mut op = op.into_raw();
-    let o = unsafe { op.as_mut() };
-    o.list_idx = fs.async_objs[c::AsyncObjKind::write_op as usize].list
-        .add(op.cast()).unwrap_or(0);
-
-    let home = Issued { op, done };
-    let slot = TaskSlot::exclusive_in(pool, home).expect("a write's task: its pool waits for an element");
-    unsafe { slot.start(Spawn::Inline, fs.tasks(), write_task) };
-
-    if let Some(c) = sync {
-        c.wait_sync(Sleep::UNINTERRUPTIBLE);
-    }
 }
 
 #[cold]

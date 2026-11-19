@@ -677,7 +677,7 @@ impl c::data_update {
             }
 
             // Check that the write can allocate, rather than failing in
-            // bch2_write() after a useless read: alloc_nowait (promotes), a
+            // write() after a useless read: alloc_nowait (promotes), a
             // full or offline target, too little durability on it. Not for a
             // drop: it doesn't write.
             if type_ != Type::copygc && !drop_only {
