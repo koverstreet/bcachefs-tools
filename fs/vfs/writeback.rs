@@ -153,14 +153,22 @@ fn writepage_io_done(io: &mut Io) {
     }
 }
 
-#[in_place(WritepageFut)]
-async fn writepage_task<'h>(io: Pin<&'h mut Io>) {
-    let io = unsafe { io.get_unchecked_mut() };
-    let inode = io.inode();
-    write(&mut io.op, &mut io.wbio, WriteFor::Inode(&inode.ei_devs_need_flush), Resume::queue(Queue::system_dfl()))
-        .await;
-    writepage_io_done(io);
+/// The task's future apart: before rustc 1.87, every item of the module its
+/// type is named in that has the type in its signature must be its defining
+/// use - here, only the fn that makes it.
+mod task {
+    use super::*;
+
+    #[in_place(WritepageFut)]
+    pub(super) async fn writepage_task<'h>(io: Pin<&'h mut Io>) {
+        let io = unsafe { io.get_unchecked_mut() };
+        let inode = io.inode();
+        write(&mut io.op, &mut io.wbio, WriteFor::Inode(&inode.ei_devs_need_flush), Resume::queue(Queue::system_dfl()))
+            .await;
+        writepage_io_done(io);
+    }
 }
+use task::{writepage_task, WritepageFut};
 
 fn writepage_do_io(w: &mut WritepageState) {
     let mut slot = w.io.take().expect("writepage_do_io() with no io");
