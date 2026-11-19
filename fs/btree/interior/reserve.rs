@@ -76,6 +76,9 @@ pub(super) fn set_range(contents: &mut crate::btree::node::NodeContents, min: Bp
     data.max_key = max;
 }
 
+/// Not inlined: its device iterators aren't needed in the frame a node's
+/// allocation runs under.
+#[inline(never)]
 fn can_use_btree_node(fs: &Fs, res: &DiskReservation<'_>, target: u32, k: BkeySC<'_>) -> bool {
     let k = k.arm::<BtreePtrs>().expect("a btree node pointer");
 
