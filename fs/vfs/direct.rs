@@ -26,7 +26,7 @@ use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::os::ops::IntoRaw;
 use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, waiter, CompletionReturn, Resume, Return, Spawn, TaskSlot};
+use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Return, Spawn, TaskSlot};
 use crate::os::workqueue::Queue;
 use core::pin::{pin, Pin};
 use core::ptr::{self, NonNull};
@@ -211,7 +211,7 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
     })?;
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped | flags;
 
-    let mut slot = None;
+    let mut slot = DoneWith::new();
     let (end, wait) = match unsafe { req.queued() } {
         Some(done) => (End::Async(done), None),
         None => {

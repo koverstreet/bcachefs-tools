@@ -42,10 +42,11 @@
 //! for the rest: reaping.
 //!
 //! The wait is a Completion on the Gather's Done, of its waiter kind: Sync's,
-//! wait_sync(), sleeping as closure_sync() does, or Async's, wait(), awaited. The wait starts it, then drops the owner's ref; whichever
-//! takes the count to zero - that, or the last put - completes it. The owner
-//! waits on the Done, not the count, so the Gather is there until complete()
-//! has stored DONE, its last touch: the putter's, from its context - an
+//! wait_sync(), sleeping as closure_sync() does, or Async's, wait(),
+//! awaited. The wait starts it, then drops the owner's ref; whichever takes
+//! the count to zero - that, or the last put - completes it. The owner waits
+//! on the Done, not the count, so the Gather is there until complete() has
+//! marked it done, its last touch: the putter's, from its context - an
 //! endio's, interrupt context perhaps. A Gather dropped unwaited drops the
 //! owner's ref without starting it, and polls the count: the last put's
 //! cmpxchg is then its last touch.
@@ -307,7 +308,8 @@ impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
             }
         }
         if (old - 1) & (Self::COUNT|Self::WAITED) == Self::WAITED {
-            self.done().complete();
+            // the last put, once the wait's begun: the one
+            unsafe { self.done().complete() };
         }
     }
 
@@ -346,7 +348,8 @@ impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
             old = cur;
         }
         if (old - 1) & Self::COUNT == 0 {
-            self.done().complete();
+            // no refs left to put: the one
+            unsafe { self.done().complete() };
         }
         c
     }
@@ -497,7 +500,7 @@ impl<T: Fold, Wt: Waiter, W: Width> GatherRef<T, Wt, W> {
     /// # Safety
     /// @g is from into_raw(), and this is the one from_raw() of it.
     pub unsafe fn from_raw(g: *const Gather<T, Wt, W>) -> Self {
-        GatherRef(NonNull::new(g.cast_mut()).unwrap())
+        GatherRef(NonNull::new(g.cast_mut()).expect("a GatherRef from_raw() of null"))
     }
 }
 

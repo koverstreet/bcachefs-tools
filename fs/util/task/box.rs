@@ -405,12 +405,12 @@ pub fn spawn_static<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, 
 /// future goes straight into its box - a spawner that's a future holds the
 /// Join and the CompletionReturn, not the task's state. The box is had before
 /// the Done's armed, so failing to allocate it leaves nothing to wait on.
-pub struct Join<T>(Option<DoneWith<T>>);
+pub struct Join<T>(DoneWith<T>);
 
 impl<T: Send> Join<T> {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Join(None)
+        Join(DoneWith::new())
     }
 
     /// @make's future run as a task on @q, for @waiter to wait on - the
