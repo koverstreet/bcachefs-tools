@@ -9,7 +9,7 @@
 //! The storage is its own element type, not T's: a T's tail may be bytes
 //! under a header of words, as a typed key's value is under its bkey.
 
-use crate::util::vstructs::{from_head_ptr, from_head_ptr_mut, Plain, SelfSized, Unsized};
+use crate::util::vstructs::{Plain, SelfSized, Unsized};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
@@ -119,7 +119,9 @@ where
     type Target = T;
 
     fn deref(&self) -> &T {
-        unsafe { from_head_ptr(self.check()) }
+        let head = self.check();
+        // SAFETY: check()'s: a T, as long as its head says, within the room
+        unsafe { &*T::from_raw(head.cast(), (*head).bytes()) }
     }
 }
 
@@ -128,7 +130,9 @@ where
     T::Head: Plain + SelfSized,
 {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { from_head_ptr_mut(self.check().cast_mut()) }
+        let head = self.check().cast_mut();
+        // SAFETY: as deref()'s, the room ours
+        unsafe { &mut *T::from_raw_mut(head.cast(), (*head).bytes()) }
     }
 }
 
