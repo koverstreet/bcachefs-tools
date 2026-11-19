@@ -471,14 +471,13 @@ impl Drop for Intake<'_> {
 
 pub(super) fn fetch_wb_keys_from_journal(fs: &Fs, max_seq: u64) -> Result<(), BchError> {
     let j = &fs.journal;
-    let mut blocked = false;
     let mut ret = Ok(());
 
     let mut buf_lock = j.buf_lock.lock();
     let mut dst = Intake::lock(fs);
 
     while ret.is_ok() {
-        let Some((seq, buf, entries)) = j.next_write_buffer_flush_journal_buf(&mut buf_lock, max_seq, &mut blocked)
+        let Some((seq, buf, entries, blocked)) = j.next_write_buffer_flush_journal_buf(&mut buf_lock, max_seq)
         else { break };
 
         dst.begin(seq);
@@ -486,13 +485,13 @@ pub(super) fn fetch_wb_keys_from_journal(fs: &Fs, max_seq: u64) -> Result<(), Bc
         ret = dst.journal_buf(entries);
         ret = dst.end_locked().and(ret);
 
-        if !blocked && ret.is_ok() {
-            j.lock.lock().get_mut_of(&buf.bits).set_need_flush_to_write_buffer(false);
+        /* the open entry: there's more to come */
+        if blocked.is_some() {
+            break;
         }
 
-        if blocked {
-            j.unblock();
-            break;
+        if ret.is_ok() {
+            j.lock.lock().get_mut_of(&buf.bits).set_need_flush_to_write_buffer(false);
         }
     }
 

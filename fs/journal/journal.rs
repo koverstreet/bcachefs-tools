@@ -1495,7 +1495,7 @@ impl c::journal {
 
     /* block/unlock the journal: */
 
-    pub fn unblock(&self) {
+    fn unblock(&self) {
         {
             let mut g = self.lock.lock();
             let blocked = self.lock.blocked.get() - 1;
@@ -1545,8 +1545,8 @@ impl c::journal {
     }
 
     /* None while the buf still has reservations to wait for */
-    fn __next_write_buffer_flush_journal_buf(&self, max_seq: u64, blocked: &mut bool)
-        -> Option<Option<(u64, &c::journal_buf, NonNull<[u8]>)>>
+    fn __next_write_buffer_flush_journal_buf<'a>(&'a self, max_seq: u64, blocked: &mut Option<JournalBlocked<'a>>)
+        -> Option<Option<(u64, &'a c::journal_buf, NonNull<[u8]>)>>
     {
         let mut g = self.lock.lock();
         let cur_seq = self.fs().journal_cur_seq();
@@ -1562,10 +1562,10 @@ impl c::journal {
 
                 let open = u32::from(seq == cur_seq && s.is_open());
 
-                if open != 0 && !*blocked {
+                if open != 0 && blocked.is_none() {
                     self.__block(&mut g);
                     s = c::journal_res_state::from_v(self.lock.hot.reservations.load(Acquire));
-                    *blocked = true;
+                    *blocked = Some(JournalBlocked(self));
                 }
 
                 if self.state_seq_count(s, seq) > open {
@@ -1579,20 +1579,17 @@ impl c::journal {
     }
 
     /// The next buf flushing to the write buffer, and its entries, had for as
-    /// long as @buf_lock - this journal's - is held.
-    pub fn next_write_buffer_flush_journal_buf<'a, 'b>(&'a self, buf_lock: &'b mut c::BufLockGuard<'a>, max_seq: u64,
-                                                       blocked: &mut bool)
-        -> Option<(u64, &'a c::journal_buf, &'b mut [u8])>
+    /// long as @buf_lock - this journal's - is held. If it's the open entry,
+    /// the journal's blocked till the JournalBlocked is dropped: the entries
+    /// are what was reserved before.
+    pub fn next_write_buffer_flush_journal_buf<'a, 'b>(&'a self, buf_lock: &'b mut c::BufLockGuard<'a>, max_seq: u64)
+        -> Option<(u64, &'a c::journal_buf, &'b mut [u8], Option<JournalBlocked<'a>>)>
     {
         assert!(ptr::eq(buf_lock.lock(), &self.buf_lock), "the write buffer's flush with another journal's buf_lock");
-        *blocked = false;
+        let mut blocked = None;
 
         let Ok(ret) = self.async_wait.wait_until(Sleep::UNINTERRUPTIBLE,
-            || self.__next_write_buffer_flush_journal_buf(max_seq, blocked));
-
-        if ret.is_none() && *blocked {
-            self.unblock();
-        }
+            || self.__next_write_buffer_flush_journal_buf(max_seq, &mut blocked));
 
         /*
          * Closed, or blocked, with its reservations put: the body's buf_lock's.
@@ -1601,7 +1598,7 @@ impl c::journal {
          * dropped.
          */
         let (seq, buf, entries) = ret?;
-        Some((seq, buf, unsafe { &mut *entries.as_ptr() }))
+        Some((seq, buf, unsafe { &mut *entries.as_ptr() }, blocked))
     }
 
     /* debug: */
