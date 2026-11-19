@@ -6,8 +6,8 @@
 //! - Done: one word, where the IO's completer finds it - a bio's bi_private,
 //!   or a field C reaches by container_of. Born with its waiter: owed.
 //! - Completion: a borrow of the Done, awaited or waited on - made with it,
-//!   so an owed Done always has its waiter waiting on it: the Completion's
-//!   drop waits, too.
+//!   so an owed Done always has its waiter waiting on it, waited on or
+//!   awaited to its end: dropped before, it asserts.
 //! - DynDone: a Done's completer, of either waiter's, for a waitlist: one per
 //!   owed Done - complete() consumes it, and dropping it completes it.
 //!
@@ -85,11 +85,7 @@ pub mod waiter {
 /// A waiter, as the pointer in a Done's word, and how complete() wakes it -
 /// both sealed: the Done's alone, as only complete()'s RCU read lock keeps
 /// the waiter there to wake.
-pub trait Waiter: sealed::Waiter + Copy + 'static {
-    /// Whether the thread dropping a Completion is its waiter, so complete()
-    /// wakes it: a thread's is, its Completion !Send; a task's isn't.
-    const WAKES_DROPPER: bool;
-}
+pub trait Waiter: sealed::Waiter + Copy + 'static {}
 
 mod sealed {
     use core::ptr::NonNull;
@@ -104,9 +100,7 @@ mod sealed {
     }
 }
 
-impl Waiter for waiter::Sync {
-    const WAKES_DROPPER: bool = true;
-}
+impl Waiter for waiter::Sync {}
 
 impl sealed::Waiter for waiter::Sync {
     fn as_ptr(self) -> NonNull<()> {
@@ -118,9 +112,7 @@ impl sealed::Waiter for waiter::Sync {
     }
 }
 
-impl Waiter for waiter::Async {
-    const WAKES_DROPPER: bool = false;
-}
+impl Waiter for waiter::Async {}
 
 impl sealed::Waiter for waiter::Async {
     fn as_ptr(self) -> NonNull<()> {
@@ -189,16 +181,11 @@ impl<W: Waiter> Done<W> {
         self.word.load(Ordering::SeqCst).is_null()
     }
 
-    /// Waited out, as its wait goes: its waiter's thread, or not.
-    fn wait_out(&self) {
-        if W::WAKES_DROPPER {
-            let Ok(()) = sleep_until(Sleep::IDLE, || self.done().then_some(()));
-        } else {
-            // complete() wakes the task, not the thread dropping its wait
-            while !self.done() {
-                let _ = sleep_until(Sleep::IDLE.timeout(1), || self.done().then_some(()));
-            }
-        }
+    /// Done, as its wait goes: a wait is waited on, or awaited, to its end.
+    /// A task's drop can't await, and a drop that slept for a thread's would
+    /// hide the wait it was meant to be.
+    fn assert_waited(&self) {
+        assert!(self.done(), "a wait dropped before what it waited on was done: wait on it, or await it, first");
     }
 
     fn sleep_until_done(&self, how: Sleep) {
@@ -275,12 +262,12 @@ impl Drop for DynDone<'_> {
 /// A completion that's only owed if what it waits on asks for it - a journal
 /// flush's, if a commit attaches it: a Done not owed yet and its waiter, made
 /// in place with the one Unarmed that may arm it. Waited on, it's done at
-/// once if it never was armed; dropped, it waits for its Done if it was.
-/// Pinned: once armed, its completer points into it.
+/// once if it never was armed; armed, it's waited on to its end before it's
+/// dropped. Pinned: once armed, its completer points into it.
 ///
 /// Made chained(), arming's completer completes another first - a Select's
-/// input - then its Done: so its drop's wait is for all of it, the input's
-/// touch of the Select included, as a waitlist with no cancel needs.
+/// input - then its Done: so its wait is for all of it, the input's touch of
+/// the Select included, as a waitlist with no cancel needs.
 pub struct Armable<'a, W: Waiter = waiter::Async> {
     done:   Done<W>,
     waiter: W,
@@ -351,7 +338,7 @@ impl<'a, W: Waiter> Armable<'a, W> {
 
 impl<W: Waiter> Drop for Armable<'_, W> {
     fn drop(&mut self) {
-        self.done.wait_out();
+        self.done.assert_waited();
     }
 }
 
@@ -362,11 +349,11 @@ impl Unarmed<'_> {
     }
 }
 
-#[must_use = "an IO's Completion is waited on, or its drop waits for it"]
+#[must_use = "an IO's Completion is waited on, or awaited, to its end"]
 pub struct Completion<'a, W: Waiter = waiter::Async> {
     d:  &'a Done<W>,
     /// Send as the waiter is: a thread's isn't, as complete() wakes the
-    /// thread it was born on, and its drop waits there
+    /// thread it was born on, which waits on it
     _w: PhantomData<W>,
 }
 
@@ -401,7 +388,7 @@ impl<'a, W: Waiter> Completion<'a, W> {
 
 impl<W: Waiter> Drop for Completion<'_, W> {
     fn drop(&mut self) {
-        self.d.wait_out();
+        self.d.assert_waited();
     }
 }
 
@@ -440,7 +427,7 @@ impl<T, W: Waiter> DoneWith<T, W> {
 
 /// A Completion that returns what its completer left: None if it was dropped
 /// without leaving anything.
-#[must_use = "a Completion is waited on, or its drop waits for it"]
+#[must_use = "a Completion is waited on, or awaited, to its end"]
 pub struct CompletionReturn<'a, T, W: Waiter = waiter::Async> {
     d:  &'a DoneWith<T, W>,
     /// Send as the waiter is, as a Completion's
@@ -455,7 +442,7 @@ unsafe impl<T: Send, W: Waiter> Send for Return<T, W> {}
 
 impl<'a, T, W: Waiter> CompletionReturn<'a, T, W> {
     /// @d, not owed, born with @waiter: the wait on it, and its completer.
-    /// The completer holds no borrow: the wait's drop waits for it.
+    /// The completer holds no borrow: the wait is to its end.
     pub fn new(d: &'a mut DoneWith<T, W>, waiter: W) -> (Self, Return<T, W>) {
         assert!(d.done.done(), "a DoneWith born while it's owed");
         d.done = Done::new(waiter);
@@ -471,7 +458,7 @@ impl<'a, T, W: Waiter> CompletionReturn<'a, T, W> {
 
 impl<T, W: Waiter> Drop for CompletionReturn<'_, T, W> {
     fn drop(&mut self) {
-        self.d.done.wait_out();
+        self.d.done.assert_waited();
     }
 }
 
