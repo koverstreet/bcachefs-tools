@@ -7,41 +7,32 @@
 //!
 //! It's wait_event() without the waitlist on the fast path. A waiter reads
 //! the word, checks its condition, and only if it's going to sleep calls
-//! futex_wait() with the value it read - which compares it again under the
-//! bucket lock, so a change in between, and the wake that came with it,
-//! isn't lost: it returns at once. A lock waits on its own word (ByteLock);
-//! an eventcount is a counter every wake bumps.
+//! futex_wait() with the value it read - which compares it again once it's
+//! on its bucket's waitlist, so a change in between, and the wake that came
+//! with it, isn't lost: it returns at once. A lock waits on its own word
+//! (ByteLock); an eventcount is a counter every wake bumps.
 //!
 //! Waiters queue in a static table of buckets, hashed by address, as the
-//! kernel's futexes and wait_var_event() do. futex_wake() takes a bucket's
-//! lock only if its count says someone's waiting - the kernel futex's
-//! ordering (kernel/futex/waitwake.c). The waiter increments the count,
-//! fences, reads the word; the waker writes the word, fences, reads the
-//! count. One sees the other's write: the waiter sees the new value and
-//! doesn't sleep, or the waker sees the waiter.
+//! kernel's futexes and wait_var_event() do: each a WaitList, keyed by
+//! address. The waiter's on its bucket's list, then reads the word; the
+//! waker writes the word, then wakes - WaitList's ordering, the kernel
+//! futex's: the waiter sees the new value, or the waker sees the waiter.
 //!
 //! An address is hashed and compared, never dereferenced, so waking one
 //! whose memory is gone is fine: whatever's there now is woken spuriously,
 //! and every waiter rechecks.
 //!
-//! A waiter's entry is on its stack, on its bucket's list while it sleeps,
-//! and holds the waiting thread, as a wait_queue_entry's private does. The
-//! waker takes it off, marks it woken and wakes the thread, all under the
-//! bucket lock, as kernel/wait.c's wake_up() does. The waiter, woken or not -
-//! a signal, a timeout - takes the lock once more on its way out, and takes
-//! its entry off if it's still on: so the waker is done with it, and with the
-//! thread, before it goes - no ref on the thread - and a wake meant for one
-//! waiter that it took is a wake it reports.
+//! A wait is a WaitlistCompletion, any waiter's, on its bucket's list: a
+//! futex_wake() takes it off and completes it, or the waiter takes it off
+//! and completes it itself. A waiter whose wait a wake took waits for the
+//! wake's completion, and reports a wake.
 
-use crate::c;
-use crate::list;
-use crate::locking::{Locked, SpinLockIrq};
-use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
-use crate::data_structures::list::ListLinks;
 use crate::os::kernel::jiffies;
-use crate::os::sched;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd};
+use crate::util::task::{waiter, Resumable, Resume, WaitList, WaitSync, WaitlistCompletion};
+use core::pin::pin;
 use core::ptr;
+use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 /// A word futex_wait() can wait on.
 pub trait FutexWord {
@@ -65,21 +56,24 @@ futex_word!(AtomicU8: u8, AtomicU32: u32, AtomicUsize: usize);
 const BUCKET_BITS: u32 = 8;
 
 #[repr(align(64))]
-struct Bucket {
-    waiters: AtomicUsize,
-    list:    Locked<SpinLockIrq, list!(Entry, links)>,
-}
+struct Bucket(WaitList<usize>);
 
 struct Table([Bucket; 1 << BUCKET_BITS]);
 
 // Zeroed, until bch2_futex_init() - before anything can wait - makes each
-// bucket's lock a lock and its list a list.
+// bucket's lock a lock.
 static TABLE: Table = unsafe { core::mem::zeroed() };
 
-fn bucket(addr: usize) -> &'static Bucket {
+fn bucket(addr: usize) -> &'static WaitList<usize> {
     // hash_ptr(): times the golden ratio, the top bits
     let h = (addr as u64).wrapping_mul(0x61c8864680b583eb) >> (64 - BUCKET_BITS);
-    &TABLE.0[h as usize]
+    &TABLE.0[h as usize].0
+}
+
+/// @w's bucket's list, and its key there.
+fn waitlist<W: FutexWord>(w: &W) -> (&'static WaitList<usize>, usize) {
+    let addr = ptr::from_ref(w).addr();
+    (bucket(addr), addr)
 }
 
 /// Before anything can wait: at module init, in both builds.
@@ -88,93 +82,44 @@ pub fn bch2_futex_init() {
 
     for b in &TABLE.0 {
         // SAFETY: zeroed, and nothing can take it until we return; static
-        unsafe {
-            let Ok(()) = b.list.init_zeroed(c"futex bucket", key);
-            b.list.lock().init();
-        }
+        unsafe { b.0.init_zeroed(c"futex bucket", key) };
     }
 }
-
-struct Entry {
-    links:  ListLinks,
-    addr:   usize,
-    /// Off the list by the waker, under the lock
-    woken:  AtomicBool,
-    task:   *mut c::task_struct,
-}
-
-// SAFETY: the task is woken only under the bucket lock, which its waiter
-// takes before it returns
-unsafe impl Sync for Entry {}
 
 /// Sleep, as @how says, while *@w == @expected, until a futex_wake() on @w.
 /// Returns at once if it isn't equal; may return spuriously - the caller
 /// checks its condition again either way.
 pub fn futex_wait<W: FutexWord, E: SleepEnd>(w: &W, expected: W::Val, how: Sleep<E>) -> Result<(), E> {
-    let addr = ptr::from_ref(w).addr();
-    let b = bucket(addr);
+    let (list, addr) = waitlist(w);
+    let mut slot = pin!(None);
+    let wait = WaitlistCompletion::waiter(slot.as_mut(), list, addr, waiter::Sync::current(),
+                                          || w.load(Ordering::Relaxed) != expected);
 
-    b.waiters.fetch_add(1, Ordering::Relaxed);
-    fence(Ordering::SeqCst);
+    let ret = sleep_until(how, || wait.is_done().then_some(()));
+    let cancelled = wait.cancel();
+    wait.completion().wait_sync(Sleep::IDLE);
+    // a wake meant for one waiter that we took is a wake we report
+    if cancelled { ret } else { Ok(()) }
+}
 
-    let task = sched::current();
-    assert!(!task.is_null(), "a blocking wait needs a task - a kthread, in userspace");
-    let entry = Entry {
-        links:  ListLinks::new(),
-        addr,
-        woken:  AtomicBool::new(false),
-        task,
-    };
-
-    let mut ret = Ok(());
-    let mut list = b.list.lock();
-    if w.load(Ordering::Relaxed) == expected {
-        // SAFETY: init()ed; the entry's on no list, and is taken off below,
-        // with the lock held, before it goes
-        unsafe { list.push_back(&entry) };
-        drop(list);
-
-        ret = sleep_until(how, || entry.woken.load(Ordering::Acquire).then_some(()));
-
-        // woken or not, the lock again: so the waker's done with it
-        list = b.list.lock();
-        // SAFETY: if it's on a list, it's this one; if it's not, it was woken
-        if !unsafe { list.remove(&entry) } {
-            ret = Ok(());
-        }
-    }
-    drop(list);
-
-    b.waiters.fetch_sub(1, Ordering::Relaxed);
-    ret
+/// futex_wait(), for a task: parked while *@w == @expected, until a
+/// futex_wake() on @w, and resumed @at. As futex_wait(), it may return
+/// spuriously.
+pub async fn futex_wait_async<W: FutexWord + Sync>(w: &W, expected: W::Val, at: Resume<'_>)
+    where W::Val: Send
+{
+    let (list, addr) = waitlist(w);
+    let mut slot = pin!(None);
+    let wait = WaitlistCompletion::waiter(slot.as_mut(), list, addr, waiter::Async::current().await,
+                                          || w.load(Ordering::Relaxed) != expected);
+    wait.completion().resume_on(at).await;
 }
 
 /// Wake up to @n waiters on @addr; how many it woke. From any context, an
 /// endio's included.
 pub fn futex_wake(addr: *const (), n: usize) -> usize {
-    fence(Ordering::SeqCst);
-
     let addr = addr.addr();
-    let b = bucket(addr);
-    if b.waiters.load(Ordering::Relaxed) == 0 {
-        return 0;
-    }
-
-    let mut woken = 0;
-    let mut list = b.list.lock();
-    let mut cur = list.cursor_mut();
-    while woken < n {
-        let Some(e) = cur.current() else { break };
-        if e.addr != addr {
-            cur.move_next();
-            continue;
-        }
-        cur.remove_current();
-        e.woken.store(true, Ordering::Release);
-        unsafe { c::wake_up_process(e.task) };
-        woken += 1;
-    }
-    woken
+    bucket(addr).wake(n, |&a| a == addr)
 }
 
 /// wait_event(), on a futex: for a condition over state that isn't a futex
@@ -216,6 +161,11 @@ impl EventCount {
             }
             self.wait(seen, how.since(start))?;
         }
+    }
+
+    /// wait(), for a task: parked until a wake() after @seen, resumed @at.
+    pub async fn wait_async(&self, seen: u32, at: Resume<'_>) {
+        futex_wait_async(&self.0, seen, at).await
     }
 
     pub fn wake(&self) {

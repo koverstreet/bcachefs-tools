@@ -4,9 +4,10 @@
 //! is a promise about its lifetime that nothing checks, and every list that
 //! goes wrong goes wrong as use-after-free. New code wants a vector - KVVec,
 //! DArray - and the lists we have are to become vectors. This exists for
-//! what can't be one: the futex's waiters, whose entries live on their
-//! stacks so that waiting can't fail to allocate, and C's lists while C has
-//! them. Anything new needs an extremely good reason, said where it's used.
+//! what can't be one: util/task's WaitList, whose entries live in their
+//! waiters' memory so that waiting can't fail to allocate, and C's lists
+//! while C has them. Anything new needs an extremely good reason, said where
+//! it's used.
 //!
 //! include/linux/list.h's circular doubly linked list, in Rust, typed:
 //! List<T, OFFSET> is a list of T linked through the links at OFFSET in each,
