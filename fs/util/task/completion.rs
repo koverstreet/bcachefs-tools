@@ -261,12 +261,19 @@ impl Drop for DynDone<'_> {
 /// in place with the one Unarmed that may arm it. Waited on, it's done at
 /// once if it never was armed; dropped, it waits for its Done if it was.
 /// Pinned: once armed, its completer points into it.
-pub struct Armable<W: Waiter = waiter::Async> {
+///
+/// Made chained(), arming's completer completes another first - a Select's
+/// input - then its Done: so its drop's wait is for all of it, the input's
+/// touch of the Select included, as a waitlist with no cancel needs.
+pub struct Armable<'a, W: Waiter = waiter::Async> {
     done:   Done<W>,
     waiter: W,
     /* set by its arming, by its waiter's task: what its Done can't say
      * once it's completed */
     armed:  Cell<bool>,
+    /* chained()'s: completed by arming's completer before @done, or dropped
+     * with it, never armed */
+    first:  UnsafeCell<Option<DynDone<'a>>>,
     _pin:   PhantomPinned,
 }
 
@@ -280,17 +287,35 @@ pub struct Unarmed<'a> {
 // as a DynDone: armed and completed as a &Done is
 unsafe impl Send for Unarmed<'_> {}
 
-impl<W: Waiter> Armable<W> {
+impl<'a, W: Waiter> Armable<'a, W> {
     /// One, in @slot, for @waiter - what was there dropped, as it waits for
     /// its Done - and the right to arm it.
-    pub fn new(mut slot: Pin<&mut Option<Self>>, waiter: W) -> Unarmed<'_> {
+    pub fn new(slot: Pin<&mut Option<Self>>, waiter: W) -> Unarmed<'_> {
+        Self::make(slot, waiter, None)
+    }
+
+    /// new(), arming's completer completing @first before its Done.
+    pub fn chained<'s>(slot: Pin<&'s mut Option<Self>>, waiter: W, first: DynDone<'a>) -> Unarmed<'s> {
+        Self::make(slot, waiter, Some(first))
+    }
+
+    fn make<'s>(mut slot: Pin<&'s mut Option<Self>>, waiter: W, first: Option<DynDone<'a>>) -> Unarmed<'s> {
         unsafe fn arm<W: Waiter>(p: NonNull<()>) -> DynDone<'static> {
-            let a = unsafe { p.cast::<Armable<W>>().as_ref() };
+            let a = unsafe { p.cast::<Armable<'static, W>>().as_ref() };
             a.done.word.store(a.waiter.as_ptr().as_ptr(), Ordering::Relaxed);
             a.armed.set(true);
-            unsafe { DynDone::of(&a.done) }
+            match unsafe { (*a.first.get()).is_some() } {
+                false => unsafe { DynDone::of(&a.done) },
+                true  => unsafe { DynDone::from_fn(p, end_chained::<W>) },
+            }
         }
-        slot.set(Some(Armable { done: Done::completed(), waiter, armed: Cell::new(false), _pin: PhantomPinned }));
+        unsafe fn end_chained<W: Waiter>(p: NonNull<()>) {
+            let a = unsafe { p.cast::<Armable<'static, W>>().as_ref() };
+            unsafe { (*a.first.get()).take() }.expect("a chained Armable, completed twice").complete();
+            unsafe { a.done.complete() };
+        }
+        slot.set(Some(Armable { done: Done::completed(), waiter, armed: Cell::new(false),
+                                first: UnsafeCell::new(first), _pin: PhantomPinned }));
         let a = slot.into_ref().get_ref().as_ref().expect("just set");
         Unarmed { a: NonNull::from(a).cast(), arm: arm::<W>, _slot: PhantomData }
     }
@@ -305,7 +330,7 @@ impl<W: Waiter> Armable<W> {
     }
 }
 
-impl<W: Waiter> Drop for Armable<W> {
+impl<W: Waiter> Drop for Armable<'_, W> {
     fn drop(&mut self) {
         self.done.wait_out();
     }
