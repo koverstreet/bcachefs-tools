@@ -11,7 +11,7 @@ use crate::journal::flush_wait::Flush;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
-use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, ExtentBio, Extents, WriteGather};
+use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, ExtentBio, Extents, WriteFor, WriteGather};
 use crate::data::write_replicas::submit_replicas;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
@@ -319,8 +319,8 @@ fn nocow_write_pass(op: &mut Op, g: &WriteGather, extents: &mut Extents) -> bool
 /// The op written in place, a pass at a time: true - or, where it can't be,
 /// false, for the cow write path to write the rest. @in_caller cleared once
 /// it's waited for IO.
-pub(crate) async fn nocow_write(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>, in_caller: &mut bool)
-    -> bool
+pub(crate) async fn nocow_write(op: &mut Op, of: WriteFor<'_>, mut flush: Option<&mut Option<Flush<'_>>>,
+                                in_caller: &mut bool) -> bool
 {
     if op.has(w::update) {
         return false;
@@ -340,7 +340,7 @@ pub(crate) async fn nocow_write(op: &mut Op, mut flush: Option<&mut Option<Flush
          */
         let errs = g.wait(Resume::queue(index_update_wq(op))).await;
         extents.put();
-        errs.record(op);
+        errs.record(op, of);
         if op.written != 0 {
             *in_caller = false;
         }
