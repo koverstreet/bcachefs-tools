@@ -783,6 +783,9 @@ impl c::bch_write_op {
     }
 }
 
+/// Not inlined: its attempt's key and iterator aren't needed in the frame a
+/// data update's index update runs under.
+#[inline(never)]
 fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -> Result<(), BchError> {
     let fs = op.fs();
     let subvol = op.subvol;
@@ -1064,6 +1067,49 @@ fn write_drop_io_error_ptrs(op: &mut Op) -> Result<(), BchError> {
     })
 }
 
+/// The failed devices' pointers dropped from the keys of a write that got IO
+/// errors - an error if a key's left with none - and logged. Not inlined: its
+/// message isn't needed in the frame the index update runs under.
+#[cold]
+#[inline(never)]
+fn write_io_error_keys(op: &mut Op, update: Option<&c::data_update_index>) -> Result<(), BchError> {
+    let fs = op.fs();
+    let ret = write_drop_io_error_ptrs(op);
+
+    let mut msg = LogMsg::new(fs);
+
+    /*
+     * Writing degraded because a device was removed is not news:
+     * the removal was reported when it happened, and reconcile
+     * restores the replicas. Decided before bch2_ratelimit(),
+     * which spends this call site's burst budget - the noise must
+     * not crowd out a real error arriving in the same window.
+     */
+    if ret.is_ok() && op.failed.all_dev_removed() {
+        msg.set_suppressed(true);
+    } else {
+        /* Separate ratelimit_states for hard and soft errors */
+        static RATELIMIT: [Ratelimit; 2] = [const { Ratelimit::new() }; 2];
+        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT[ret.is_err() as usize], crate::here!()));
+    }
+
+    let k = op.insert_keys.front().expect("an index update with no keys");
+    log_write_error_start(&mut msg, op, update, k.k().start_offset());
+    op.failed.to_text(&mut msg, fs);
+
+    match &ret {
+        Ok(()) => {
+            prt!(&mut *msg, "wrote degraded to ");
+            let d = BkeySC::from(k).arm::<Ptrs>().map(|k| k.devs(fs)).unwrap_or_default();
+            fs.devs_list_to_text(&mut msg, &d);
+            msg.newline();
+        }
+        Err(e) => prt!(&mut *msg, "error {e}\n"),
+    }
+
+    ret
+}
+
 /// After a write, update index to point to new data - with w::flush, the
 /// write's last update asking for its journal flush.
 fn __write_index(op: &mut Op, update: Option<&c::data_update_index>, flush: Option<&mut Option<Flush<'_>>>) {
@@ -1082,40 +1128,7 @@ fn __write_index(op: &mut Op, update: Option<&c::data_update_index>, flush: Opti
         // io_error stays set for the op's later passes: one that wrote nothing
         // has no keys to drop pointers from, and its error was reported
         if unlikely(op.io_error != 0) && !op.insert_keys.is_empty() {
-            let ret = write_drop_io_error_ptrs(op);
-
-            let mut msg = LogMsg::new(fs);
-
-            /*
-             * Writing degraded because a device was removed is not news:
-             * the removal was reported when it happened, and reconcile
-             * restores the replicas. Decided before bch2_ratelimit(),
-             * which spends this call site's burst budget - the noise must
-             * not crowd out a real error arriving in the same window.
-             */
-            if ret.is_ok() && op.failed.all_dev_removed() {
-                msg.set_suppressed(true);
-            } else {
-                /* Separate ratelimit_states for hard and soft errors */
-                static RATELIMIT: [Ratelimit; 2] = [const { Ratelimit::new() }; 2];
-                msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT[ret.is_err() as usize], crate::here!()));
-            }
-
-            let k = op.insert_keys.front().expect("an index update with no keys");
-            log_write_error_start(&mut msg, op, update, k.k().start_offset());
-            op.failed.to_text(&mut msg, fs);
-
-            match &ret {
-                Ok(()) => {
-                    prt!(&mut *msg, "wrote degraded to ");
-                    let d = BkeySC::from(k).arm::<Ptrs>().map(|k| k.devs(fs)).unwrap_or_default();
-                    fs.devs_list_to_text(&mut msg, &d);
-                    msg.newline();
-                }
-                Err(e) => prt!(&mut *msg, "error {e}\n"),
-            }
-
-            ret?;
+            write_io_error_keys(op, update)?;
         }
 
         if !op.insert_keys.is_empty() {
