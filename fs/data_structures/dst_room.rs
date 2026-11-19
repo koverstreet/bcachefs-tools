@@ -9,7 +9,7 @@
 //! The storage is its own element type, not T's: a T's tail may be bytes
 //! under a header of words, as a typed key's value is under its bkey.
 
-use crate::util::vstructs::{Plain, SelfSized, Unsized};
+use crate::util::vstructs::{FakeDst, Plain, Unsized};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
@@ -94,7 +94,7 @@ impl<T: ?Sized, B: ?Sized + Storage> DstRoom<T, B> {
 
 impl<T: ?Sized + Unsized, B: ?Sized + Storage> DstRoom<T, B>
 where
-    T::Head: Plain + SelfSized,
+    T::Head: Plain + FakeDst,
 {
     const ALIGNED: () = assert!(align_of::<T::Head>() <= align_of::<B::Elem>(),
                                 "a DstRoom's storage, less aligned than what it holds");
@@ -114,7 +114,7 @@ where
 
 impl<T: ?Sized + Unsized, B: ?Sized + Storage> Deref for DstRoom<T, B>
 where
-    T::Head: Plain + SelfSized,
+    T::Head: Plain + FakeDst,
 {
     type Target = T;
 
@@ -127,7 +127,7 @@ where
 
 impl<T: ?Sized + Unsized, B: ?Sized + Storage> DerefMut for DstRoom<T, B>
 where
-    T::Head: Plain + SelfSized,
+    T::Head: Plain + FakeDst,
 {
     fn deref_mut(&mut self) -> &mut T {
         let head = self.check().cast_mut();

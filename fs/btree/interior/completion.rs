@@ -26,7 +26,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fs_fatal_error;
 use crate::types::Le64;
-use crate::util::vstructs::{Head, SelfSized};
+use crate::util::vstructs::{FakeDst, Head};
 use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
             UpdateBox, WriteBlocked, UPDATE_NODES_MAX};
 

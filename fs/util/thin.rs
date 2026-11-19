@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Thin pointers to a SelfSized type - a DST whose head records its length,
-//! or a sized one: one word, the value's address, whatever its size.
+//! Thin pointers to a SelfSized type - a DST whose head records its length:
+//! one word, the value's address, whatever its length.
 //!
 //! - ThinRef<'a, T>, ThinMut<'a, T>: a &T or &mut T, thin - for a slot that
 //!   has room for a word.
