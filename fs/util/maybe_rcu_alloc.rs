@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! MaybeRcuAlloc<T, A>: the owner of a typed allocation, pinned, and freed as
-//! T says (util/rcu.rs's Freeing).
+//! T says (util/rcu.rs's Freeing) - by RcuFreeing, which frees a DST's too,
+//! a ThinBox's: SelfSized, A's allocation, its head its own or none.
 //!
 //! C holds one by into_raw() and gives it back by from_raw(), never to C's
 //! kvfree(): what isn't FreeAnytime may be behind a header, not at its
@@ -23,6 +24,7 @@ use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
                        RcuHead, RcuOwned, RcuWorkHead};
 use crate::util::sleep::Sleep;
+use crate::util::vstructs::SelfSized;
 use crate::os::module::Quiesced;
 use crate::os::workqueue::{Queue, Workqueue, WqFlags};
 
@@ -109,35 +111,31 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     pub fn retire(self) -> Retired<T, A> {
         let p = self.into_raw();
         unsafe { <T as RcuFreeing>::retire(p) };
-        Retired { p, _p: PhantomData }
+        Retired(unsafe { Freeing::new(p) })
     }
 }
 
 /// retire()'s memory, which readers may still be in: dropping it leaks it.
-pub struct Retired<T, A: Alloc = KVmalloc> {
-    p:  NonNull<T>,
-    _p: PhantomData<fn() -> (T, A)>,
-}
+pub struct Retired<T, A: Alloc = KVmalloc>(Freeing<T, RcuHead, A>);
 
 // memory, its T gone
-unsafe impl<T, A: Alloc> Send for Retired<T, A> {}
 unsafe impl<T, A: Alloc> Sync for Retired<T, A> {}
 
 impl<T, A: Alloc> Retired<T, A> {
     pub fn into_head(self) -> NonNull<c::rcu_head> {
-        unsafe { NonNull::new_unchecked(<T as RcuHeadAt<RcuHead>>::head(self.p).cast()) }
+        <T as RcuHeadAt<RcuHead>>::head(&self.0).cast()
     }
 
     /// # Safety
     /// @h is into_head()'s, of a Retired<T, A>, taken back once.
     pub unsafe fn from_head(h: NonNull<c::rcu_head>) -> Self {
-        Self { p: unsafe { <T as RcuHeadAt<RcuHead>>::of_head(h.as_ptr().cast()) }, _p: PhantomData }
+        Retired(unsafe { Freeing::from_head(h.cast()) })
     }
 
     /// # Safety
     /// Its readers are past it.
     pub unsafe fn free(self) {
-        unsafe { <T as RcuHeadAt<RcuHead>>::free_mem::<A>(self.p) }
+        self.0.free_mem()
     }
 }
 
@@ -158,31 +156,27 @@ impl<T, A: Alloc> Drop for MaybeRcuAlloc<T, A> {
 // ── Freeing ──────────────────────────────────────────────────────────────
 
 /// The head a free uses: T's own, or a Headed<T, H>'s, which is then the
-/// allocation.
-trait RcuHeadAt<H: HeadKind>: Sized {
-    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<Self, E>, gfp: Flags) -> Result<NonNull<Self>, E>;
+/// allocation. A DST - SelfSized - is never allocated here, A's alone: its
+/// head is its own, or it has none, and then only a free that needs none may
+/// be used on it, its memory a grace period on by kvfree_rcu().
+trait RcuHeadAt<H: HeadKind> {
+    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<Self, E>, gfp: Flags) -> Result<NonNull<Self>, E>
+    where
+        Self: Sized;
+
+    /// The head, in the allocation @f has.
+    fn head<A: Alloc>(f: &Freeing<Self, H, A>) -> NonNull<H>;
 
     /// # Safety
-    /// @p is alloc()'s.
-    unsafe fn head(p: NonNull<Self>) -> *mut H;
+    /// @h is head()'s, of a Freeing given up as it.
+    unsafe fn of_head(h: NonNull<H>) -> NonNull<Self>;
 
-    /// # Safety
-    /// @h is head()'s.
-    unsafe fn of_head(h: *mut H) -> NonNull<Self>;
+    /// The memory alone: what's in it dropped already, or never to be.
+    fn free_mem<A: Alloc>(f: Freeing<Self, H, A>);
 
-    /// The memory alone, its T dropped already.
-    ///
-    /// # Safety
-    /// @p is alloc::<A>()'s, and nothing uses it after.
-    unsafe fn free_mem<A: Alloc>(p: NonNull<Self>);
-
-    /// free_mem(), a grace period on, by kvfree_rcu(): batched.
-    ///
-    /// # Safety
-    /// @p is alloc()'s, its T dropped already, and nothing but RCU readers
-    /// uses it after.
-    #[cfg(kernel)]
-    unsafe fn kvfree_rcu_mem(p: NonNull<Self>);
+    /// free_mem(), a grace period on, RCU readers using it till then: by
+    /// kvfree_rcu(), batched, if kvfree() frees A's memory, else a callback.
+    fn free_mem_rcu<A: Alloc>(f: Freeing<Self, H, A>);
 }
 
 #[repr(C)]
@@ -198,25 +192,27 @@ impl<T, H: HeadKind> RcuHeadAt<H> for T {
         Ok(unsafe { NonNull::new_unchecked(&raw mut (*p.as_ptr()).value) })
     }
 
-    default unsafe fn head(p: NonNull<T>) -> *mut H {
-        unsafe { p.as_ptr().byte_sub(offset_of!(Headed<T, H>, value)).cast() }
+    default fn head<A: Alloc>(f: &Freeing<T, H, A>) -> NonNull<H> {
+        // the allocation's start, a Headed<T, H>
+        unsafe { f.0.byte_sub(offset_of!(Headed<T, H>, value)).cast() }
     }
 
-    default unsafe fn of_head(h: *mut H) -> NonNull<T> {
-        unsafe { NonNull::new_unchecked(h.byte_add(offset_of!(Headed<T, H>, value)).cast()) }
+    default unsafe fn of_head(h: NonNull<H>) -> NonNull<T> {
+        unsafe { h.byte_add(offset_of!(Headed<T, H>, value)).cast() }
     }
 
-    default unsafe fn free_mem<A: Alloc>(p: NonNull<T>) {
-        let head = unsafe { NonNull::new_unchecked(<T as RcuHeadAt<H>>::head(p).cast()) };
+    default fn free_mem<A: Alloc>(f: Freeing<T, H, A>) {
+        let head = <T as RcuHeadAt<H>>::head(&f).cast();
         unsafe { stateless::<A>().deallocate(head, Layout::new::<Headed<T, H>>()) }
     }
 
-    #[cfg(kernel)]
-    default unsafe fn kvfree_rcu_mem(p: NonNull<T>) {
-        unsafe {
-            let h = <T as RcuHeadAt<H>>::head(p);
-            crate::util::alloc::kvfree_rcu_head(h.cast(), h.cast());
+    default fn free_mem_rcu<A: Alloc>(f: Freeing<T, H, A>) {
+        #[cfg(kernel)]
+        if A::KVFREE {
+            let h = <T as RcuHeadAt<H>>::head(&f).as_ptr();
+            return unsafe { crate::util::alloc::kvfree_rcu_head(h.cast(), h.cast()) };
         }
+        Flavor::RCU.call(f, Freeing::free_mem);
     }
 }
 
@@ -226,38 +222,104 @@ impl<T: HasRcuHead, H: HeadKind> RcuHeadAt<H> for T {
         alloc_at::<T, A, E>(init, gfp)
     }
 
-    unsafe fn head(p: NonNull<T>) -> *mut H {
-        unsafe { p.as_ptr().byte_add(T::HEAD).cast() }
+    fn head<A: Alloc>(f: &Freeing<T, H, A>) -> NonNull<H> {
+        unsafe { f.0.byte_add(T::HEAD).cast() }
     }
 
-    unsafe fn of_head(h: *mut H) -> NonNull<T> {
-        unsafe { NonNull::new_unchecked(h.byte_sub(T::HEAD).cast()) }
+    unsafe fn of_head(h: NonNull<H>) -> NonNull<T> {
+        unsafe { h.byte_sub(T::HEAD).cast() }
     }
 
-    unsafe fn free_mem<A: Alloc>(p: NonNull<T>) {
-        unsafe { stateless::<A>().deallocate(p.cast(), Layout::new::<T>()) }
+    fn free_mem<A: Alloc>(f: Freeing<T, H, A>) {
+        unsafe { stateless::<A>().deallocate(f.0.cast(), Layout::new::<T>()) }
     }
 
+    fn free_mem_rcu<A: Alloc>(f: Freeing<T, H, A>) {
+        own_head_free_mem_rcu(f)
+    }
+}
+
+// A DST's head is its own or none: what reaches it from its head is
+// from_thin(), and it's sized by its reference.
+impl<T: ?Sized + SelfSized, H: HeadKind> RcuHeadAt<H> for T {
+    default fn alloc<A: AllocGfp, E: From<AllocError>>(_: impl PinInit<T, E>, _: Flags) -> Result<NonNull<T>, E>
+    where
+        T: Sized,
+    {
+        unreachable!("SelfSized is never Sized")
+    }
+
+    default fn head<A: Alloc>(_: &Freeing<T, H, A>) -> NonNull<H> {
+        let () = NoHead::<T>::ERR;
+        unreachable!()
+    }
+
+    default unsafe fn of_head(_: NonNull<H>) -> NonNull<T> {
+        let () = NoHead::<T>::ERR;
+        unreachable!()
+    }
+
+    default fn free_mem<A: Alloc>(f: Freeing<T, H, A>) {
+        // dropped, but its size is its pointer's metadata: nothing's read
+        unsafe { stateless::<A>().deallocate(f.0.cast(), Layout::for_value(f.0.as_ref())) }
+    }
+
+    /// No head to queue: kvfree_rcu() may wait out the grace period itself.
+    default fn free_mem_rcu<A: Alloc>(f: Freeing<T, H, A>) {
+        const { assert!(A::KVFREE, "a DST freed a grace period on with no rcu_head of its own: by kvfree_rcu(), \
+                                    and kvfree() doesn't free its allocator's memory") };
+        unsafe { crate::util::alloc::kfree_rcu_mightsleep(f.0.as_ptr().cast()) }
+    }
+}
+
+impl<T: ?Sized + SelfSized + HasRcuHead, H: HeadKind> RcuHeadAt<H> for T {
+    fn head<A: Alloc>(f: &Freeing<T, H, A>) -> NonNull<H> {
+        unsafe { f.0.byte_add(T::HEAD).cast() }
+    }
+
+    unsafe fn of_head(h: NonNull<H>) -> NonNull<T> {
+        unsafe { NonNull::new_unchecked(T::from_thin(h.byte_sub(T::HEAD).as_ptr().cast()).cast_mut()) }
+    }
+
+    fn free_mem_rcu<A: Alloc>(f: Freeing<T, H, A>) {
+        own_head_free_mem_rcu(f)
+    }
+}
+
+struct NoHead<T: ?Sized>(PhantomData<T>);
+
+impl<T: ?Sized> NoHead<T> {
+    const ERR: () = panic!("a DST freed by a callback - dropped after a grace period - needs an rcu_head of its own");
+}
+
+/// free_mem_rcu() by T's own head: kvfree_rcu() of T, batched, if kvfree()
+/// frees A's memory.
+fn own_head_free_mem_rcu<T: ?Sized + HasRcuHead + RcuHeadAt<H>, H: HeadKind, A: Alloc>(f: Freeing<T, H, A>) {
     #[cfg(kernel)]
-    unsafe fn kvfree_rcu_mem(p: NonNull<T>) {
+    if A::KVFREE {
         // tiny RCU passes the head's offset as its callback
         const { assert!(T::HEAD < 4096, "kvfree_rcu() of a head more than a page into its object") };
-        unsafe { crate::util::alloc::kvfree_rcu_head(p.as_ptr().cast(), <T as RcuHeadAt<H>>::head(p).cast()) }
+        let h = <T as RcuHeadAt<H>>::head(&f);
+        return unsafe { crate::util::alloc::kvfree_rcu_head(f.0.as_ptr().cast(), h.as_ptr().cast()) };
     }
+    Flavor::RCU.call(f, Freeing::free_mem);
 }
 
 /// From the most a free has to wait for to the least: dropped after a grace
 /// period on the free queue; dropped after one in the RCU callback; dropped
 /// at once, its memory freed after one; freed at once.
-pub(crate) trait RcuFreeing: Sized {
+pub(crate) trait RcuFreeing {
     /// A build error for a T that's dropped before RCU readers are done with
     /// it: what an owning RcuPtr publishes is read whole.
     fn assert_rcu_freed();
 
-    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<Self, E>, gfp: Flags) -> Result<NonNull<Self>, E>;
+    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<Self, E>, gfp: Flags) -> Result<NonNull<Self>, E>
+    where
+        Self: Sized;
 
     /// # Safety
-    /// @p is alloc::<A>()'s, and nothing but RCU readers uses it after.
+    /// @p is alloc::<A>()'s - a DST's, A's - and nothing but RCU readers uses
+    /// it after.
     unsafe fn free<A: Alloc>(p: NonNull<Self>);
 
     /// An RcuMember's free, but for the memory: T dropped, its memory left
@@ -268,10 +330,13 @@ pub(crate) trait RcuFreeing: Sized {
     unsafe fn retire(p: NonNull<Self>);
 }
 
-impl<T> RcuFreeing for T {
+impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead>> RcuFreeing for T {
     default fn assert_rcu_freed() {}
 
-    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E>
+    where
+        T: Sized,
+    {
         <T as RcuHeadAt<RcuWorkHead>>::alloc::<A, E>(init, gfp)
     }
 
@@ -286,10 +351,13 @@ impl<T> RcuFreeing for T {
     }
 }
 
-impl<T: DropAtomic> RcuFreeing for T {
+impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic> RcuFreeing for T {
     default fn assert_rcu_freed() {}
 
-    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E>
+    where
+        T: Sized,
+    {
         <T as RcuHeadAt<RcuHead>>::alloc::<A, E>(init, gfp)
     }
 
@@ -303,24 +371,22 @@ impl<T: DropAtomic> RcuFreeing for T {
     }
 }
 
-impl<T: DropAtomic + DropAnytime> RcuFreeing for T {
+impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + DropAnytime> RcuFreeing for T {
     default fn assert_rcu_freed() {
         let () = NotRcuFreed::<T>::ERR;
     }
 
-    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+    default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E>
+    where
+        T: Sized,
+    {
         <T as RcuHeadAt<RcuHead>>::alloc::<A, E>(init, gfp)
     }
 
     /// No detach: its drop takes it out of readers' way.
     default unsafe fn free<A: Alloc>(p: NonNull<T>) {
-        unsafe {
-            core::ptr::drop_in_place(p.as_ptr());
-            #[cfg(kernel)]
-            <T as RcuHeadAt<RcuHead>>::kvfree_rcu_mem(p);
-            #[cfg(not(kernel))]
-            Flavor::RCU.call(Freeing::<T, RcuHead, A>::new(p), Freeing::free_mem);
-        }
+        unsafe { core::ptr::drop_in_place(p.as_ptr()) };
+        <T as RcuHeadAt<RcuHead>>::free_mem_rcu(unsafe { Freeing::<T, RcuHead, A>::new(p) });
     }
 
     default unsafe fn retire(p: NonNull<T>) {
@@ -328,15 +394,21 @@ impl<T: DropAtomic + DropAnytime> RcuFreeing for T {
     }
 }
 
-impl<T: DropAtomic + DropAnytime + FreeAnytime> RcuFreeing for T {
-    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + DropAnytime + FreeAnytime> RcuFreeing
+    for T
+{
+    fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E>
+    where
+        T: Sized,
+    {
         alloc_at::<T, A, E>(init, gfp)
     }
 
     unsafe fn free<A: Alloc>(p: NonNull<T>) {
         unsafe {
+            let layout = Layout::for_value(p.as_ref());
             core::ptr::drop_in_place(p.as_ptr());
-            stateless::<A>().deallocate(p.cast(), Layout::new::<T>());
+            stateless::<A>().deallocate(p.cast(), layout);
         }
     }
 
@@ -345,26 +417,16 @@ impl<T: DropAtomic + DropAnytime + FreeAnytime> RcuFreeing for T {
     }
 }
 
-struct NotRcuFreed<T>(PhantomData<T>);
+struct NotRcuFreed<T: ?Sized>(PhantomData<T>);
 
-impl<T> NotRcuFreed<T> {
+impl<T: ?Sized> NotRcuFreed<T> {
     const ERR: () = panic!("what's read whole under RCU must be dropped a grace period on: it needs an RcuDropMember");
 }
 
-struct NotRetirable<T>(PhantomData<T>);
+struct NotRetirable<T: ?Sized>(PhantomData<T>);
 
-impl<T> NotRetirable<T> {
+impl<T: ?Sized> NotRetirable<T> {
     const ERR: () = panic!("retire() is an RcuMember's free - dropped at once, its memory a grace period on");
-}
-
-/// # Safety
-/// @h is RcuHeadAt<H>::head()'s, of an alloc::<A>(), and nothing uses it after.
-unsafe fn drop_free<T, H: HeadKind, A: Alloc>(h: *mut H) {
-    unsafe {
-        let p = <T as RcuHeadAt<H>>::of_head(h);
-        core::ptr::drop_in_place(p.as_ptr());
-        <T as RcuHeadAt<H>>::free_mem::<A>(p);
-    }
 }
 
 /// RcuDropWorkMembers whose drop is still to come - the word their last write
@@ -387,24 +449,24 @@ pub fn free_exit(_: &Quiesced<'_>) {
 
 /// An alloc::<A>()'s, out of readers' reach and its free begun: given up to a
 /// grace period at its head, H.
-struct Freeing<T, H: HeadKind, A: Alloc>(NonNull<T>, PhantomData<(H, A)>);
+struct Freeing<T: ?Sized, H: HeadKind, A: Alloc>(NonNull<T>, PhantomData<(H, A)>);
 
 // memory, and what's in it dropped on whichever thread its callback runs:
 // RcuFreeing's impls hold T to what may be
-unsafe impl<T, H: HeadKind, A: Alloc> Send for Freeing<T, H, A> {}
+unsafe impl<T: ?Sized, H: HeadKind, A: Alloc> Send for Freeing<T, H, A> {}
 
 // free()'s alone, once it's begun
-unsafe impl<T, H: HeadKind, A: Alloc> RcuOwned for Freeing<T, H, A> {
+unsafe impl<T: ?Sized + RcuHeadAt<H>, H: HeadKind, A: Alloc> RcuOwned for Freeing<T, H, A> {
     fn into_head(self) -> NonNull<RcuHead> {
-        unsafe { NonNull::new_unchecked(<T as RcuHeadAt<H>>::head(self.0).cast()) }
+        <T as RcuHeadAt<H>>::head(&self).cast()
     }
 
     unsafe fn from_head(head: NonNull<RcuHead>) -> Self {
-        Freeing(unsafe { <T as RcuHeadAt<H>>::of_head(head.as_ptr().cast()) }, PhantomData)
+        Freeing(unsafe { <T as RcuHeadAt<H>>::of_head(head.cast()) }, PhantomData)
     }
 }
 
-impl<T, H: HeadKind, A: Alloc> Freeing<T, H, A> {
+impl<T: ?Sized + RcuHeadAt<H>, H: HeadKind, A: Alloc> Freeing<T, H, A> {
     /// # Safety
     /// @p is alloc::<A>()'s, and nothing but RCU readers uses it after.
     unsafe fn new(p: NonNull<T>) -> Self {
@@ -412,24 +474,22 @@ impl<T, H: HeadKind, A: Alloc> Freeing<T, H, A> {
     }
 
     fn drop_free(self) {
-        unsafe { drop_free::<T, H, A>(<T as RcuHeadAt<H>>::head(self.0)) }
+        unsafe { core::ptr::drop_in_place(self.0.as_ptr()) };
+        <T as RcuHeadAt<H>>::free_mem(self);
     }
-}
 
-impl<T, A: Alloc> Freeing<T, RcuHead, A> {
-    /// What was dropped at once: its memory alone - userspace's, whose
-    /// kvfree_rcu() allocates.
-    #[cfg(not(kernel))]
+    /// What was dropped at once: its memory alone - for what kvfree() doesn't
+    /// free, or userspace's, whose kvfree_rcu() allocates.
     fn free_mem(self) {
-        unsafe { <T as RcuHeadAt<RcuHead>>::free_mem::<A>(self.0) }
+        <T as RcuHeadAt<H>>::free_mem(self)
     }
 }
 
-impl<T, A: Alloc> Freeing<T, RcuWorkHead, A> {
+impl<T: ?Sized + RcuHeadAt<RcuWorkHead>, A: Alloc> Freeing<T, RcuWorkHead, A> {
     /// Its drop needs process context: on the free queue, the rcu_head's
     /// room become the work's.
     fn queue(self) {
-        let work = unsafe { <T as RcuHeadAt<RcuWorkHead>>::head(self.0) }.cast::<c::work_struct>();
+        let work = <T as RcuHeadAt<RcuWorkHead>>::head(&self).cast::<c::work_struct>().as_ptr();
         let init = crate::new_work!(work_fn::<T, A>, "rcu_free");
         let Ok(()) = unsafe { init_at(init, work) };
         let wq = FREE_WQ.load(Acquire);
@@ -438,8 +498,8 @@ impl<T, A: Alloc> Freeing<T, RcuWorkHead, A> {
     }
 }
 
-unsafe extern "C" fn work_fn<T, A: Alloc>(work: *mut c::work_struct) {
-    unsafe { drop_free::<T, RcuWorkHead, A>(work.cast()) };
+unsafe extern "C" fn work_fn<T: ?Sized + RcuHeadAt<RcuWorkHead>, A: Alloc>(work: *mut c::work_struct) {
+    unsafe { Freeing::<T, RcuWorkHead, A>::from_head(NonNull::new_unchecked(work.cast())) }.drop_free();
 
     if PENDING.fetch_sub(1, Release) == 1 {
         futex_wake(core::ptr::from_ref(&PENDING).cast(), usize::MAX);

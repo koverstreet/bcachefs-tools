@@ -263,7 +263,7 @@ pub trait Detach {
 
 pub use cstruct_macros::Detach;
 
-impl<T> Detach for T {
+impl<T: ?Sized> Detach for T {
     default fn detach(&self) {
         let () = NoDetach::<T>::ERR;
     }
@@ -271,13 +271,13 @@ impl<T> Detach for T {
 
 // default, so a derive on what turns out to have nothing to detach is
 // another no-op, not a conflict
-impl<T: NothingToDetach> Detach for T {
+impl<T: ?Sized + NothingToDetach> Detach for T {
     default fn detach(&self) {}
 }
 
-struct NoDetach<T>(PhantomData<T>);
+struct NoDetach<T: ?Sized>(PhantomData<T>);
 
-impl<T> NoDetach<T> {
+impl<T: ?Sized> NoDetach<T> {
     const ERR: () = panic!("has something to detach before it's freed - a DetachMember - and no Detach impl");
 }
 
