@@ -164,12 +164,24 @@ macro_rules! native_byteorder {
 }
 native_byteorder!(U16: u16, U32: u32, U64: u64, U128: u128, I16: i16, I32: i32, I64: i64, I128: i128);
 
-/// A type whose values run past size_of::<Self>(), as far as their own fields
-/// say.
-pub trait SelfSized {
+/// A type whose values say how far they run, by their own fields: so a thin
+/// pointer, the value's address alone, reaches all of one - a sized type, or
+/// a DST whose head records its length (util/thin.rs's pointer types).
+///
+/// # Safety
+/// from_thin() of the address of a valid Self is a pointer to it - a sized
+/// Self's size_of, an unsized one's bytes(). What an unsized Self's reads to
+/// say how long it is can't change through a &Self, nor a &mut Self.
+pub unsafe trait SelfSized {
     /// The bytes this value spans, its header's included: vstruct_bytes(),
     /// replicas_entry_bytes().
     fn bytes(&self) -> usize;
+
+    /// The value at @p - a thin pointer, its address - as long as it says.
+    ///
+    /// # Safety
+    /// @p points to a valid Self.
+    unsafe fn from_thin(p: *const ()) -> *const Self;
 
     /// Its 512 byte sectors, whole blocks of 512 << @block_bits:
     /// vstruct_sectors().
@@ -195,10 +207,15 @@ pub trait FlexArray {
     fn nr(&self) -> usize;
 }
 
-impl<T: FlexArray> SelfSized for T {
+// sized: a pointer to one is already thin
+unsafe impl<T: FlexArray> SelfSized for T {
     #[inline]
     fn bytes(&self) -> usize {
         T::TAIL + self.nr() * size_of::<T::Elem>()
+    }
+
+    unsafe fn from_thin(p: *const ()) -> *const Self {
+        p.cast()
     }
 }
 
@@ -298,11 +315,16 @@ macro_rules! vstruct {
     (@impl $t:ty, $start:expr, $($count:ident).+) => {
         const _: () = assert!(($start) % 8 == 0, concat!(stringify!($t), ": a vstruct's u64s start u64 aligned"));
 
-        impl $crate::util::vstructs::SelfSized for $t {
+        // sized: a pointer to one is already thin
+        unsafe impl $crate::util::vstructs::SelfSized for $t {
             #[inline]
             fn bytes(&self) -> usize {
                 // the count by value: a packed struct's field can't be borrowed
                 ($start) + $crate::util::vstructs::Count::count(&{ self.$($count).+ }) * 8
+            }
+
+            unsafe fn from_thin(p: *const ()) -> *const Self {
+                p.cast()
             }
         }
 
@@ -828,13 +850,6 @@ macro_rules! vstruct_family {
             assert!($tail_at <= size_of::<$head>());
         };
 
-        impl<$($g)*> SelfSized for $ty {
-            #[inline]
-            fn bytes(&self) -> usize {
-                size_of_val(self)
-            }
-        }
-
         // as a tagged union's arm, over the bytes its storage says are its
         impl<$($g)*> ArmRef for $ty {
             const MIN_LEN: usize = size_of::<$head>();
@@ -1028,19 +1043,25 @@ macro_rules! vstruct_family {
     };
     (@in_place $name:ident, $def:ident, $($st:ident),*) => { $(
         $crate::vstruct_family!(@unsized $name, $st, $def);
-
-        impl $crate::util::vstructs::SelfSized for $name<$crate::util::vstructs::$st> {
-            #[inline]
-            fn bytes(&self) -> usize {
-                ::core::mem::size_of_val(self)
-            }
-        }
     )* };
 
     // An unsized type in state @st: made from a pointer to its header, @head,
     // or bytes, or from the other state
     (@state $name:ident, $st:ident, $head:ident) => { const _: () = {
         use $crate::util::vstructs::*;
+
+        // SAFETY: its header's count says how long it is, and that's a
+        // private field - Deref is to the header, to read
+        unsafe impl SelfSized for $name<$st> {
+            #[inline]
+            fn bytes(&self) -> usize {
+                size_of_val(self)
+            }
+
+            unsafe fn from_thin(p: *const ()) -> *const Self {
+                <Self as Unsized>::from_raw(p.cast(), unsafe { (*p.cast::<$head>()).bytes() })
+            }
+        }
 
         // every family's way in, whether or not this one's used
         #[allow(dead_code)]

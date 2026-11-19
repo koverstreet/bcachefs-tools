@@ -200,10 +200,15 @@ pub struct bch_ioctl_readdir_entry {
     pub name: [u8; 0],
 }
 
-impl crate::util::vstructs::SelfSized for bch_ioctl_readdir_entry {
+// sized: a pointer to one is already thin
+unsafe impl crate::util::vstructs::SelfSized for bch_ioctl_readdir_entry {
     /// reclen: the header, the name and its NUL, padding to 8.
     fn bytes(&self) -> usize {
         self.reclen as usize
+    }
+
+    unsafe fn from_thin(p: *const ()) -> *const Self {
+        p.cast()
     }
 }
 
@@ -769,10 +774,15 @@ pub struct bch_ioctl_subvol_dirent {
     pub path: [c_char; 0],
 }
 
-impl crate::util::vstructs::SelfSized for bch_ioctl_subvol_dirent {
+// sized: a pointer to one is already thin
+unsafe impl crate::util::vstructs::SelfSized for bch_ioctl_subvol_dirent {
     /// reclen: the header, the path and its NUL, padding to 8.
     fn bytes(&self) -> usize {
         self.reclen as usize
+    }
+
+    unsafe fn from_thin(p: *const ()) -> *const Self {
+        p.cast()
     }
 }
 
