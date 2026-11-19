@@ -89,7 +89,7 @@ pub mod completion;
 mod list;
 mod queue;
 
-pub use completion::{waiter, Completion, CompletionReturn, Done, DoneWith, Return, Waiter};
+pub use completion::{waiter, Armable, Completion, CompletionReturn, Done, DoneWith, DynDone, Return, Unarmed, Waiter};
 pub use list::{TaskList, TASKS};
 pub use queue::RunQueue;
 pub use r#box::{exclusive_size, spawn_detached, spawn_static, Exclusive, Join, Shared, TaskBox, TaskSlot};

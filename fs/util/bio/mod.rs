@@ -669,7 +669,7 @@ impl Resumable for BioFuture<'_, waiter::Async> {
 }
 
 unsafe extern "C" fn done_endio<W: Waiter>(bio: *mut c::bio) {
-    unsafe { Done::<W>::from_ptr((&raw mut (*bio).bi_private).cast()) }.complete();
+    unsafe { Done::<W>::from_ptr((&raw mut (*bio).bi_private).cast()).complete() };
 }
 
 unsafe extern "C" fn mapped_gathered_endio(bio: *mut c::bio) {

@@ -19,7 +19,7 @@ use bcachefs_kernel::inode_opts;
 use bcachefs_kernel::util::bio::{Bio, BioBox, BioOwner};
 use bcachefs_kernel::util::closure;
 use bcachefs_kernel::util::sleep::Sleep;
-use bcachefs_kernel::util::task::{waiter, CompletionReturn, Spawn, TaskSlot};
+use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Spawn, TaskSlot};
 use bcachefs_kernel::util::vstructs::assume_init_mut;
 use bcachefs_kernel::os::workqueue::Queue;
 
@@ -100,7 +100,7 @@ pub fn read<'a>(
 
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped;
     let slot = TaskSlot::alloc(())?;
-    let mut done = None;
+    let mut done = DoneWith::new();
     let (wait, r) = CompletionReturn::new(&mut done, waiter::Sync::current());
     let task = slot.init(Spawn::Queue(Queue::system_dfl()), fs.tasks(), async move |_: &()| {
         r.complete(read::read(&b, inum, flags, ()).await);

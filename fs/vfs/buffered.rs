@@ -40,7 +40,7 @@ use crate::os::kernel::PAGE_SIZE;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, waiter, CompletionReturn, Return, Spawn, TaskSlot};
+use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Return, Spawn, TaskSlot};
 use crate::os::workqueue::Queue;
 use core::pin::Pin;
 use core::ptr::NonNull;
@@ -425,7 +425,7 @@ pub(crate) fn read_single_folio(folio: &FolioLocked, mapping: Mapping, extend: b
         read_from: folio.sector() + u64::from(folio.partially_uptodate()),
         orig_end:  folio.end_sector(),
     };
-    let mut slot = None;
+    let mut slot = DoneWith::new();
     let (wait, r) = CompletionReturn::new(&mut slot, waiter::Sync::current());
     /*
      * The folios extend() added after @folio are locked and ours to finish,
