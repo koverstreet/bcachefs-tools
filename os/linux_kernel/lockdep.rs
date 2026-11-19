@@ -33,6 +33,10 @@ pub struct LockdepMap(
     #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))] [u8; 0],
 );
 
+// lockdep's, which its hooks synchronize: its lock's taken on any thread
+unsafe impl Send for LockdepMap {}
+unsafe impl Sync for LockdepMap {}
+
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
 impl LockdepMap {
     fn raw(&self) -> *mut c_void {
