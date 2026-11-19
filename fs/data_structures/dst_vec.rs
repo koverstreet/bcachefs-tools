@@ -8,6 +8,7 @@
 use crate::data_structures::array_vec::LenUint;
 use crate::data_structures::dst_array::{DstArray, DstHead};
 use crate::util::alloc::{Alloc, AllocError, KVmalloc};
+use crate::util::vstructs::SelfSized;
 use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
@@ -22,7 +23,8 @@ pub struct DstVecHead<L, A> {
     alloc: A,
 }
 
-impl<L: LenUint, A> DstHead for DstVecHead<L, A> {
+// SAFETY: cap, a plain field, written only as it's made
+unsafe impl<L: LenUint, A> DstHead for DstVecHead<L, A> {
     fn nr(&self) -> usize {
         self.cap.to_usize()
     }
@@ -71,19 +73,19 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
     }
 
     fn buf(&self) -> &Buf<T, L, A> {
-        unsafe { &*Buf::<T, L, A>::from_thin(self.head.as_ptr()) }
+        unsafe { &*Buf::<T, L, A>::from_thin(self.head.as_ptr().cast()) }
     }
 
     fn buf_mut(&mut self) -> &mut Buf<T, L, A> {
-        unsafe { &mut *Buf::<T, L, A>::from_thin(self.head.as_ptr()) }
+        unsafe { &mut *Buf::<T, L, A>::from_thin(self.head.as_ptr().cast()).cast_mut() }
     }
 
     pub fn len(&self) -> usize {
-        self.buf().head.len.to_usize()
+        self.buf().head().len.to_usize()
     }
 
     pub fn capacity(&self) -> usize {
-        self.buf().head.cap.to_usize()
+        self.buf().head().cap.to_usize()
     }
 
     pub fn as_mut_ptr(&mut self) -> *mut T {
@@ -93,7 +95,9 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
     /// # Safety
     /// The first @len are initialized, and @len is within its capacity.
     pub unsafe fn set_len(&mut self, len: usize) {
-        self.buf_mut().head.len = L::from_usize(len);
+        // through the buffer's own pointer to its header, not the buffer: it
+        // has its header only by &
+        unsafe { (*self.head.as_ptr()).len = L::from_usize(len) };
     }
 
     /// Room for @additional more: if there isn't, a new allocation at least
@@ -108,7 +112,7 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
             return Err(AllocError);
         }
 
-        let alloc = self.buf().head.alloc;
+        let alloc = self.buf().head().alloc;
         let cap = want.max(self.capacity().saturating_mul(2)).min(L::MAX);
         let head = |room: usize| DstVecHead { len: L::from_usize(len), cap: L::from_usize(room.min(L::MAX)), alloc };
         let new = unsafe { Buf::<T, L, A>::realloc_in(self.head, len, cap, head, &alloc)? };
@@ -130,7 +134,7 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
     /// Its first len() have been moved out, and nothing but RCU readers uses
     /// it after.
     pub(crate) unsafe fn free_moved(self) {
-        let alloc = self.buf().head.alloc;
+        let alloc = self.buf().head().alloc;
         unsafe { Buf::<T, L, A>::free_in(self.into_raw(), &alloc) };
     }
 
@@ -141,8 +145,8 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
     /// As InlineVec::read_rcu()'s.
     pub(crate) unsafe fn read_rcu<'a>(head: *mut DstVecHead<L, A>) -> &'a [T] {
         unsafe {
-            let buf = Buf::<T, L, A>::from_thin(head);
-            let len = ptr::read_volatile(&raw const (*buf).head.len).to_usize();
+            let buf = Buf::<T, L, A>::from_thin(head.cast());
+            let len = ptr::read_volatile(&raw const (*head).len).to_usize();
             slice::from_raw_parts((&raw const (*buf).elems).cast::<T>(), len)
         }
     }
@@ -169,7 +173,7 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
 impl<T, L: LenUint, A: Alloc + Copy> Drop for DstVec<T, L, A> {
     fn drop(&mut self) {
         self.clear();
-        let alloc = self.buf().head.alloc;
+        let alloc = self.buf().head().alloc;
         unsafe { Buf::<T, L, A>::free_in(self.head, &alloc) };
     }
 }
@@ -179,7 +183,7 @@ impl<T, L: LenUint, A: Alloc + Copy> Deref for DstVec<T, L, A> {
 
     fn deref(&self) -> &[T] {
         let buf = self.buf();
-        unsafe { slice::from_raw_parts(buf.elems.as_ptr().cast(), buf.head.len.to_usize()) }
+        unsafe { slice::from_raw_parts(buf.elems.as_ptr().cast(), buf.head().len.to_usize()) }
     }
 }
 
