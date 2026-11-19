@@ -39,13 +39,16 @@ nest! {
         pub started: Option<crate::vfs::inode::DioStarted>,
         pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
 
-        /* must be last: */
         #[pin]
         pub op: c::bch_write_op,
+
+        /* must be last: */
+        #[pin]
+        pub wbio: c::bch_write_bio,
     }
 }
 
-crate::has_bio!(dio_write, op.wbio.bio);
+crate::has_bio!(dio_write, wbio.bio);
 
 // its task's home: its pointers - the inode, the mm - are its dio's, good on
 // whichever thread the task runs

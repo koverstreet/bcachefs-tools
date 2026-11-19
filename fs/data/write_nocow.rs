@@ -159,14 +159,14 @@ fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) ->
     })
 }
 
-/// The op's bio written in place, as much as its extents allow, in @t: the
-/// pointers overwritten written, each bio submitted, completing into @g and
-/// held in @extents, and the keys to convert from unwritten on the keylist.
+/// The write's bio, @wbio, written in place, as much as its extents allow, in
+/// @t: the pointers overwritten written, each bio submitted, completing into @g
+/// and held in @extents, and the keys to convert from unwritten on the keylist.
 /// Stops, falling back, at what can't be - or, true, for another pass: after
 /// a split that took bio_write's reserve, till it's back, or as many splits as
 /// @extents holds.
-fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Op, g: &WriteGather, extents: &mut Extents)
-    -> Result<bool, BchError>
+fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Op, wbio: &mut c::bch_write_bio, g: &WriteGather,
+                      extents: &mut Extents) -> Result<bool, BchError>
 {
     let fs = t.fs();
 
@@ -181,7 +181,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Op, g: &WriteGather, ex
     let mut iter = BtreeIter::new(t, Btree::extents, spos(op.pos.inode, op.pos.offset, snapshot),
                                   BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM);
     loop {
-        let sectors = u64::from(op.wbio.bio.range().len() >> 9);
+        let sectors = u64::from(wbio.bio.range().len() >> 9);
 
         t.relock()?;
 
@@ -264,7 +264,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Op, g: &WriteGather, ex
 
         let mut reserved = false;
         let bio = if k.k.p.offset < op.pos.offset + sectors {
-            let bio = unsafe { ExtentBio::split(op, (k.k.p.offset - op.pos.offset) as u32) };
+            let bio = unsafe { ExtentBio::split(fs, wbio, (k.k.p.offset - op.pos.offset) as u32) };
             reserved = fs.bio_write.reserve_drawn();
             bio
         } else {
@@ -272,7 +272,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Op, g: &WriteGather, ex
             ExtentBio::Op
         };
 
-        let bio_sectors = bio.len(&op.wbio) >> 9;
+        let bio_sectors = bio.len(wbio) >> 9;
         op.pos.offset += u64::from(bio_sectors);
         op.written += bio_sectors;
 
@@ -282,7 +282,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Op, g: &WriteGather, ex
         }
 
         let op_fs = op.fs();
-        let mut wbio = extents.push(bio).wbio(&mut op.wbio);
+        let mut wbio = extents.push(bio).wbio(wbio);
         HasBio::bio_mut(wbio.as_mut()).raw_mut().bi_opf |= opf;
         unsafe { submit_replicas(op_fs, wbio, DataType::user, &copy, Some(cas), g) };
 
@@ -302,10 +302,10 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Op, g: &WriteGather, ex
 /// bios submitted into @g and held in @extents - true if it stopped for the
 /// next pass to go on from: at a split that took bio_write's reserve, or with
 /// @extents full.
-fn nocow_write_pass(op: &mut Op, g: &WriteGather, extents: &mut Extents) -> bool {
+fn nocow_write_pass(op: &mut Op, wbio: &mut c::bch_write_bio, g: &WriteGather, extents: &mut Extents) -> bool {
     let ret = {
         let trans = btree_trans!(op.fs());
-        lockrestart_do(&trans, |t| nocow_write_submit(t, op, g, extents))
+        lockrestart_do(&trans, |t| nocow_write_submit(t, op, wbio, g, extents))
     };
     // its transaction gone first: the error's message has one of its own
     ret.unwrap_or_else(|e| {
@@ -319,8 +319,8 @@ fn nocow_write_pass(op: &mut Op, g: &WriteGather, extents: &mut Extents) -> bool
 /// The op written in place, a pass at a time: true - or, where it can't be,
 /// false, for the cow write path to write the rest. @in_caller cleared once
 /// it's waited for IO.
-pub(crate) async fn nocow_write(op: &mut Op, of: WriteFor<'_>, mut flush: Option<&mut Option<Flush<'_>>>,
-                                in_caller: &mut bool) -> bool
+pub(crate) async fn nocow_write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>,
+                                mut flush: Option<&mut Option<Flush<'_>>>, in_caller: &mut bool) -> bool
 {
     if op.has(w::update) {
         return false;
@@ -331,7 +331,7 @@ pub(crate) async fn nocow_write(op: &mut Op, of: WriteFor<'_>, mut flush: Option
     loop {
         stack_pin_init!(let g = WriteGather::new());
         let mut extents = Extents::default();
-        let more = nocow_write_pass(op, &g, &mut extents);
+        let more = nocow_write_pass(op, wbio, &g, &mut extents);
 
         /*
          * XXX
