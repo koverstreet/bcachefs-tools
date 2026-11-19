@@ -49,7 +49,7 @@ use core::sync::atomic::{fence, AtomicPtr, Ordering};
 use crate::c;
 use crate::data_structures::dst_array::{DstArray, DstHead};
 use crate::util::alloc::{Alloc, AllocError, KVmalloc};
-use crate::util::vstructs::NonZeroWord;
+use crate::util::vstructs::{NonZeroWord, SelfSized};
 use crate::util::maybe_rcu_alloc::{MaybeRcuAlloc, RcuFreeing};
 use crate::util::projections::{Publish, Volatile};
 use crate::util::refcount::{ARef, AlwaysRefCounted, RefGuard, Refcount};
@@ -393,17 +393,13 @@ pub fn rcu_dereference<T>(p: &AtomicPtr<T>) -> *mut T {
 }
 
 /// A buffer starting with an rcu_head, which a thin pointer - C's - reaches
-/// all of: sized, or a DST whose head records its length.
+/// all of: SelfSized.
 ///
 /// # Safety
-/// Head starts with a c::rcu_head; from_thin() of a pointer to the Head of a
-/// valid Self is a pointer to all of it. Self has no Drop.
-pub unsafe trait RcuPointee {
+/// Head starts with a c::rcu_head, and is what a pointer to a Self points
+/// at. Self has no Drop.
+pub unsafe trait RcuPointee: SelfSized {
     type Head;
-
-    /// # Safety
-    /// @p points to the Head of a valid Self.
-    unsafe fn from_thin(p: *mut Self::Head) -> *mut Self;
 }
 
 #[repr(transparent)]
@@ -421,7 +417,7 @@ unsafe impl<T: ?Sized + RcuPointee> ::pin_init::Zeroable for RcuBuf<T> {}
 impl<T: ?Sized + RcuPointee> RcuBuf<T> {
     pub fn read<'a>(&'a self, _g: &'a ReadGuard) -> Option<&'a T> {
         let p = rcu_dereference(&self.p);
-        (!p.is_null()).then(|| unsafe { &*T::from_thin(p) })
+        (!p.is_null()).then(|| unsafe { &*T::from_thin(p.cast()) })
     }
 
     /// read(), in a section of its own for as long as @f runs.
@@ -436,7 +432,7 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
     /// it's done with the &T.
     pub unsafe fn get_locked(&self) -> Option<&T> {
         let p = self.p.load(Ordering::Relaxed);
-        (!p.is_null()).then(|| unsafe { &*T::from_thin(p) })
+        (!p.is_null()).then(|| unsafe { &*T::from_thin(p.cast()) })
     }
 
     /// # Safety
@@ -492,7 +488,8 @@ impl<H> RcuArrayHead<H> {
 unsafe impl<H: Send> Send for RcuArrayHead<H> {}
 unsafe impl<H: Sync> Sync for RcuArrayHead<H> {}
 
-impl<H> DstHead for RcuArrayHead<H> {
+// SAFETY: nr, a plain field, written only as it's made
+unsafe impl<H> DstHead for RcuArrayHead<H> {
     fn nr(&self) -> usize {
         self.nr
     }
@@ -502,10 +499,6 @@ pub type RcuArrayBuf<T, H = ()> = DstArray<RcuArrayHead<H>, T>;
 
 unsafe impl<T: RcuElement, H: RcuElement> RcuPointee for RcuArrayBuf<T, H> {
     type Head = RcuArrayHead<H>;
-
-    unsafe fn from_thin(p: *mut RcuArrayHead<H>) -> *mut Self {
-        unsafe { RcuArrayBuf::<T, H>::from_thin(p) }
-    }
 }
 
 /// # Safety
@@ -537,7 +530,7 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     }
 
     pub fn read_head<'a>(&'a self, g: &'a ReadGuard) -> Option<(&'a H, &'a [T])> {
-        self.0.read(g).map(|b| (&b.head.h, &b.elems))
+        self.0.read(g).map(|b| (&b.head().h, &b.elems))
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&[T]) -> R) -> R {
@@ -553,7 +546,7 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     /// # Safety
     /// As RcuBuf::get_locked().
     pub unsafe fn get_head_locked(&self) -> Option<(&H, &[T])> {
-        unsafe { self.0.get_locked() }.map(|b| (&b.head.h, &b.elems))
+        unsafe { self.0.get_locked() }.map(|b| (&b.head().h, &b.elems))
     }
 
     /// A zeroed buffer of exactly @nr elements, and header @h, filled by
@@ -570,7 +563,7 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
 
         // no reader sees it until replace() publishes it
         unsafe {
-            if let Err(e) = fill(&mut (*RcuArrayBuf::<T, H>::from_thin(new.as_ptr())).elems) {
+            if let Err(e) = fill(&mut (*RcuArrayBuf::<T, H>::from_thin(new.as_ptr().cast()).cast_mut()).elems) {
                 RcuArrayBuf::<T, H>::free_in(new, &KVmalloc);
                 return Ok(Err(e));
             }
@@ -594,8 +587,8 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     /// # Safety
     /// @p is alloc()'s, and isn't freed for 'a.
     pub unsafe fn parts<'a>(p: NonNull<RcuArrayHead<H>>) -> (&'a H, &'a [T]) {
-        let b = unsafe { &*RcuArrayBuf::<T, H>::from_thin(p.as_ptr()) };
-        (&b.head.h, &b.elems)
+        let b = unsafe { &*RcuArrayBuf::<T, H>::from_thin(p.as_ptr().cast()) };
+        (&b.head().h, &b.elems)
     }
 
     /// # Safety

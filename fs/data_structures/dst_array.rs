@@ -18,6 +18,7 @@ use crate::c;
 use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
 use crate::util::rcu::FreeAnytime;
+use crate::util::vstructs::SelfSized;
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 
@@ -57,31 +58,44 @@ pub fn assert_rcu_freed<T>() {
 }
 
 /// A DstArray's header: nr() is the length of the array after it.
-pub trait DstHead {
+///
+/// # Safety
+/// nr() reads nothing that changes through a &Self.
+pub unsafe trait DstHead {
     fn nr(&self) -> usize;
 }
 
+/// Its header is had only by &: nothing holding a DstArray can change how
+/// long it says the array is.
 #[repr(C)]
 pub struct DstArray<H, T> {
-    pub head: H,
+    head: H,
     pub elems: [T],
 }
 
 impl<H, T> DstArray<H, T> {
     /// The array's offset.
     pub const TAIL: usize = size_of::<H>().next_multiple_of(align_of::<T>());
+
+    pub fn head(&self) -> &H {
+        &self.head
+    }
+}
+
+// SAFETY: the header says how long the array is - nr(), which nothing
+// changes through it - and is had only by &
+unsafe impl<H: DstHead, T> SelfSized for DstArray<H, T> {
+    fn bytes(&self) -> usize {
+        size_of_val(self)
+    }
+
+    unsafe fn from_thin(p: *const ()) -> *const Self {
+        // a slice pointer's length is the DST's tail's
+        ptr::slice_from_raw_parts(p.cast::<T>(), unsafe { (*p.cast::<H>()).nr() }) as *const Self
+    }
 }
 
 impl<H: DstHead, T> DstArray<H, T> {
-    /// What a thin pointer to its header is to.
-    ///
-    /// # Safety
-    /// @p points to a valid H, followed by its nr() Ts.
-    pub unsafe fn from_thin(p: *mut H) -> *mut Self {
-        // a slice pointer's length is the DST's tail's
-        ptr::slice_from_raw_parts_mut(p.cast::<T>(), unsafe { (*p).nr() }) as *mut Self
-    }
-
     /// What one of @nr elements is allocated as: its rcu_head, if it has one,
     /// its header, and the array.
     pub fn layout(nr: usize) -> Result<Layout, AllocError> {
@@ -140,8 +154,8 @@ impl<H: DstHead, T> DstArray<H, T> {
     {
         let new = Self::alloc_in(nr, head, a)?;
         unsafe {
-            let from = (*Self::from_thin(old.as_ptr())).elems.as_ptr();
-            let to = (*Self::from_thin(new.as_ptr())).elems.as_mut_ptr();
+            let from = (*Self::from_thin(old.as_ptr().cast())).elems.as_ptr();
+            let to = (*Self::from_thin(new.as_ptr().cast()).cast_mut()).elems.as_mut_ptr();
             ptr::copy_nonoverlapping(from, to, keep);
         }
         Ok(new)
