@@ -5,7 +5,8 @@
 //!
 //! - ThinRef<'a, T>, ThinMut<'a, T>: a &T or &mut T, thin - for a slot that
 //!   has room for a word.
-//! - ThinBox<T, A>: an owned one, freed by kvfree(), which needs no size.
+//! - ThinBox<T, A>: an owned one, freed as T says (RcuFreeing): at once, or a
+//!   grace period on.
 //!
 //! Each is made from a reference or a box, and derefs back to the T through
 //! SelfSized::from_thin(): the value says how long it is, and nothing holding
@@ -17,6 +18,7 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use crate::util::alloc::{Alloc, Box};
+use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::vstructs::SelfSized;
 
 /// A &'a T, thin.
@@ -100,8 +102,8 @@ impl<T: ?Sized + SelfSized> DerefMut for ThinMut<'_, T> {
     }
 }
 
-/// A Box<T, A>, thin: A frees by kvfree(), which needs no size, and has no
-/// state - stateless().
+/// A Box<T, A>, thin: A has no state - stateless() - and T is freed as its
+/// markers say, by its reference's size.
 pub struct ThinBox<T: ?Sized + SelfSized, A: Alloc> {
     p:  NonNull<()>,
     _t: PhantomData<(Box<T, A>, A)>,
@@ -115,15 +117,9 @@ unsafe impl<T: ?Sized + SelfSized + Sync, A: Alloc> Sync for ThinBox<T, A> {}
 unsafe impl<T: ?Sized + SelfSized, A: Alloc> ::pin_init::ZeroableOption for ThinBox<T, A> {}
 
 impl<T: ?Sized + SelfSized, A: Alloc> ThinBox<T, A> {
-    const FREE: () = {
-        assert!(A::KVFREE, "a ThinBox from an allocator kvfree() doesn't free: it frees without a size");
-        assert!(size_of::<A>() == 0, "a ThinBox from an allocator with state: it keeps none");
-    };
-
     pub fn new(b: Box<T, A>) -> Self {
-        let () = Self::FREE;
-        // the Box's allocation, ours: A has no state, and what it gave
-        // kvfree() frees without being told
+        const { assert!(size_of::<A>() == 0, "a ThinBox from an allocator with state: it keeps none") };
+        // the Box's allocation, ours: A has no state
         let mut b = ManuallyDrop::new(b);
         ThinBox { p: Box::as_non_null(&mut b).cast(), _t: PhantomData }
     }
@@ -168,11 +164,7 @@ impl<T: ?Sized + SelfSized, A: Alloc> DerefMut for ThinBox<T, A> {
 
 impl<T: ?Sized + SelfSized, A: Alloc> Drop for ThinBox<T, A> {
     fn drop(&mut self) {
-        // SAFETY: a Box<T>'s, ours: its T dropped, then its memory kvfree()'s,
-        // as A's is
-        unsafe {
-            core::ptr::drop_in_place(T::from_thin(self.p.as_ptr()).cast_mut());
-            crate::os::alloc::kvfree_unsized(self.p.as_ptr().cast());
-        }
+        // SAFETY: a Box<T, A>'s, ours
+        unsafe { <T as RcuFreeing>::free::<A>(NonNull::new_unchecked(T::from_thin(self.p.as_ptr()).cast_mut())) }
     }
 }
