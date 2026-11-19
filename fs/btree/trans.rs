@@ -435,7 +435,7 @@ fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
                 /*
                  * We'd much prefer to be stricter here and completely
                  * disallow multiple btree_trans in the same thread -
-                 * but the data move path calls bch2_write when we
+                 * but the data move path calls write() when we
                  * already have a btree_trans initialized.
                  */
                 assert!(!(!pos_task.is_null() &&

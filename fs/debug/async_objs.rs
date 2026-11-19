@@ -34,7 +34,6 @@ use pin_init::pin_data;
 pub enum AsyncObjKind {
     data_update,
     rbio,
-    write_op,
     task,
 }
 
@@ -156,11 +155,6 @@ unsafe fn data_update_obj_to_text(out: &mut Printbuf, fs: &Fs, obj: NonNull<c_vo
 #[cold]
 unsafe fn rbio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
     unsafe { obj.cast::<Rbio>().as_ref() }.to_text(out)
-}
-
-#[cold]
-unsafe fn write_op_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
-    crate::data::write::write_op_to_text(out, unsafe { obj.cast::<c::bch_write_op>().as_ref() })
 }
 
 #[cold]

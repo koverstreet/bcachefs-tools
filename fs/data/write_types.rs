@@ -25,7 +25,6 @@ pub enum WriteFlagBit {
     must_ec,
     wrote_data_inline,
     check_enospc,
-    sync,
     flush,
     update,
     replicas_best_effort,
@@ -131,14 +130,9 @@ nest! {
     #[derive(MaybeZeroable, BitfieldMembers, TypeInfo, Init)]
     #[init_args(fs: &Fs, opts: c::bch_inode_opts)]
     pub struct bch_write_op {
-        pub cl: crate::util::ffi::Opaque<c::closure>,
         #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
         pub c: crate::util::backref::BackRef<Fs>,
-        pub end_io: Option<unsafe fn(*mut c::bch_write_op)>,
         pub start_time: u64,
-
-        /* its slot on its async object list */
-        pub list_idx: c_uint,
 
         pub written: c_uint, /* sectors */
         pub flags: u16,
@@ -250,8 +244,6 @@ nest! {
         pub wbio: c::bch_write_bio,
     }
 }
-
-crate::has_closure!(c::bch_write_op, cl);
 
 // written by its write's task, on whichever thread runs it; what it points
 // to - the inode's devs_need_flush - outlives it, and is atomic
