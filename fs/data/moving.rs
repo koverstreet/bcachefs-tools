@@ -466,7 +466,7 @@ impl<'a> Moving<'a> {
     }
 }
 
-impl c::data_update {
+impl c::data_update_index {
     /// The moving context the update is in flight in, if it's a mover's.
     pub(crate) fn moving(&self) -> Option<&Moving<'_>> {
         // SAFETY: an update is in flight in its context from init() to exit(),

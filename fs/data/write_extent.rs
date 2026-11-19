@@ -139,7 +139,7 @@ fn write_rechecksum(fs: &Fs, op: &mut Op, mut new_csum_type: c::CsumType) -> Res
  * @bio and @op->crc are untouched unless this returns 0, so a caller that can't
  * use the plaintext still has the extent exactly as it arrived.
  */
-fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
+fn write_op_decode(op: &mut Op, update: Option<&c::data_update_index>) -> Result<(), BchError> {
     let fs = op.fs();
     let crc = op.crc;
     let dst_len = (crc.uncompressed_size as usize) << 9;
@@ -151,9 +151,9 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
     assert!(op.wbio.bio.range().len() == crc.compressed_size << 9, "decoding a bio that isn't its extent");
 
     if crc.uncompressed_size << 9 > fs.opts().encoded_extent_max.get() {
-        write_op_error(op, op.pos.offset, format_args!("extent too big to decompress ({} > {})",
-                                                       crc.uncompressed_size << 9,
-                                                       fs.opts().encoded_extent_max.get()));
+        write_op_error(op, update, op.pos.offset, format_args!("extent too big to decompress ({} > {})",
+                                                               crc.uncompressed_size << 9,
+                                                               fs.opts().encoded_extent_max.get()));
         return decompress_err(fs, Err(fs.err(Errcode::decompress_exceeded_max_encoded_extent)));
     }
 
@@ -181,7 +181,7 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
         ret = Ok(());
     }
     if let Err(e) = ret {
-        write_op_error(op, op.pos.offset, format_args!("{e}"));
+        write_op_error(op, update, op.pos.offset, format_args!("{e}"));
         return decompress_err(fs, Err(e));
     }
 
@@ -207,11 +207,11 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
     Ok(())
 }
 
-fn csum_err(op: &Op, csum: c::bch_csum) -> BchError {
+fn csum_err(op: &Op, update: Option<&c::data_update_index>, csum: c::bch_csum) -> BchError {
     let fs = op.fs();
     let ty = op.crc.csum_type.get();
     let ty_name: &dyn core::fmt::Display = if ty.0 < c::CsumType::NR { &ty } else { &"(unknown)" };
-    write_op_error(op, op.pos.offset, format_args!(
+    write_op_error(op, update, op.pos.offset, format_args!(
         "error verifying existing checksum while moving existing data (memory corruption?)\n  \
          expected {:0x}:{:0x} got {:0x}:{:0x} type {}",
         op.crc.csum.hi.get(), op.crc.csum.lo.get(), csum.hi.get(), csum.lo.get(), ty_name));
@@ -219,7 +219,9 @@ fn csum_err(op: &Op, csum: c::bch_csum) -> BchError {
 }
 
 #[inline(never)]
-fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(), BchError> {
+fn write_prep_encoded_data(op: &mut Op, update: Option<&c::data_update_index>, wp: &LockedWritePoint<'_>)
+    -> Result<(), BchError>
+{
     let fs = op.fs();
 
     assert!(op.wbio.bio.range().len() >> 9 == op.crc.compressed_size, "an encoded write's bio isn't its extent");
@@ -263,7 +265,7 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
 
                 let csum = fs.checksum_range(op.crc.csum_type.get(), nonce, op.wbio.bio.range());
                 if csum_differs(op.crc.csum, csum) && fs.opts().no_data_io.get() == 0 {
-                    return Err(csum_err(op, csum));
+                    return Err(csum_err(op, update, csum));
                 }
 
                 op.crc.csum_type.set(op.bits.csum_type());
@@ -283,7 +285,7 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
         let nonce = extent_nonce(op.version, &op.crc);
         let csum = fs.checksum_range(op.crc.csum_type.get(), nonce, op.wbio.bio.range());
         if csum_differs(op.crc.csum, csum) && fs.opts().no_data_io.get() == 0 {
-            return Err(csum_err(op, csum));
+            return Err(csum_err(op, update, csum));
         }
 
         /*
@@ -293,7 +295,7 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
          * data won't decompress there is nothing to undo, and writing
          * the extent as we found it is still on the table:
          */
-        if let Err(e) = write_op_decode(op) {
+        if let Err(e) = write_op_decode(op, update) {
             if !e.matches(Errcode::decompress) {
                 return Err(e);
             }
@@ -340,7 +342,7 @@ fn write_prep_encoded_data(op: &mut Op, wp: &LockedWritePoint<'_>) -> Result<(),
         let nonce = extent_nonce(op.version, &op.crc);
         let csum = fs.checksum_range(op.crc.csum_type.get(), nonce, op.wbio.bio.range());
         if csum_differs(op.crc.csum, csum) && fs.opts().no_data_io.get() == 0 {
-            return Err(csum_err(op, csum));
+            return Err(csum_err(op, update, csum));
         }
 
         fs.encrypt_range(nonce, op.wbio.bio.range())?;
@@ -363,7 +365,9 @@ pub(crate) struct Extent {
 
 /// The next of @op's data written out at @wp: its extents' keys appended,
 /// and the bio to submit.
-pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result<Extent, BchError> {
+pub(crate) fn write_extent(op: &mut Op, update: Option<&c::data_update_index>, wp: &mut LockedWritePoint<'_>)
+    -> Result<Extent, BchError>
+{
     let fs = op.fs();
     let mut dst = ExtentBio::Op;
     let (mut total_output, mut total_input) = (0u32, 0u32);
@@ -381,7 +385,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
     let ec_buf = wp.ec_buf();
 
     if unlikely(op.has(w::data_encoded)) {
-        match write_prep_encoded_data(op, wp) {
+        match write_prep_encoded_data(op, update, wp) {
             Err(e) if e.matches(Errcode::write_encoded_as_is) => {
                 if !ec_buf.is_null() {
                     dst = write_bio_alloc(fs, wp, &op.wbio.bio, &mut short, ec_buf);

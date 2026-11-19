@@ -115,7 +115,7 @@ fn nocow_write_convert_unwritten(op: &mut Op, mut flush: Option<&mut Option<Flus
     if let Err(e) = ret {
         if !e.matches(c::EROFS) {
             let insert = op.insert_keys.front().expect("keys left by an index update's error");
-            write_op_error(op, insert.k().start_offset(), format_args!("btree update error: {e}"));
+            write_op_error(op, None, insert.k().start_offset(), format_args!("btree update error: {e}"));
         }
         op.set_error(e);
     }
@@ -309,7 +309,7 @@ fn nocow_write_pass(op: &mut Op, g: &WriteGather, extents: &mut Extents) -> bool
     };
     // its transaction gone first: the error's message has one of its own
     ret.unwrap_or_else(|e| {
-        write_op_error(op, op.pos.offset, format_args!("bch2_nocow_write(): btree lookup error: {e}"));
+        write_op_error(op, None, op.pos.offset, format_args!("bch2_nocow_write(): btree lookup error: {e}"));
         op.set_error(e);
         op.set(w::submitted);
         false

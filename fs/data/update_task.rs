@@ -230,7 +230,7 @@ impl PinnedDrop for Update {
         // exit() leaves the key buffer for here, as the list's walk may still
         // be reading it. Zeroed, for an update never init()ed, it's valid too
         // SAFETY: a raw place, as the update may be zeroed
-        unsafe { (*self.u.get().cast::<c::data_update>()).k.exit_rcu() };
+        unsafe { (*self.u.get().cast::<c::data_update>()).index.k.exit_rcu() };
     }
 }
 
@@ -288,7 +288,8 @@ impl Body {
     /// resumed @resume once it's done.
     pub async fn write(&mut self, read: ReadDone, resume: Resume<'_>) {
         if self.read_done(read) {
-            crate::data::write::write(&mut self.op, resume).await
+            let u = &mut **self;
+            crate::data::write::write(&mut u.op, Some(&u.index), resume).await
         }
     }
 

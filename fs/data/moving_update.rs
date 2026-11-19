@@ -37,7 +37,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::args_stored_once;
 
 fn moving_size(u: &c::data_update) -> (&Moving<'_>, u32) {
-    (u.moving().expect("a mover's update has its context"), u.k.key().k().size)
+    (u.index.moving().expect("a mover's update has its context"), u.index.k.key().k().size)
 }
 
 /// Counts the read's errors in the context's stats. For a scrub, a poisoned
@@ -47,8 +47,8 @@ fn moving_size(u: &c::data_update) -> (&Moving<'_>, u32) {
 fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, size: u32) {
     let stats = moving.stats();
     let fs = u.op.fs();
-    let k = read.poisoned.as_ref().map_or(BkeySC::from(u.k.key()), BkeySC::from);
-    let poisoned = u.opts.type_ == c::DataUpdateType::scrub &&
+    let k = read.poisoned.as_ref().map_or(BkeySC::from(u.index.k.key()), BkeySC::from);
+    let poisoned = u.index.opts.type_ == c::DataUpdateType::scrub &&
         k.arm::<Ptrs>().is_some_and(|k| k.poisoned(fs));
 
     let ret = read.ret;
@@ -69,7 +69,8 @@ fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, si
 async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>, runq: Resume<'_>) {
     let read = {
         let d = &mut *u;
-        read_update(&mut d.rbio, d.k.key(), d.btree_id, d.opts.read_flags, d.opts.read_dev, runq).await
+        read_update(&mut d.rbio, d.index.k.key(), d.index.btree_id, d.index.opts.read_flags, d.index.opts.read_dev,
+                    runq).await
     };
     drop(read_io);
     u.read_done.store(true, Relaxed);
@@ -88,7 +89,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     // A device the extent's on is offline: reconcile retrying the move can't
     // read it till that device is back, so it's parked till then. Not an IO
     // error, which a retry may get past, and whose device needn't change.
-    let unreadable = u.opts.type_ == c::DataUpdateType::reconcile &&
+    let unreadable = u.index.opts.type_ == c::DataUpdateType::reconcile &&
         read.ret.is_err_and(|e| e.matches(Errcode::no_device_to_read_from));
     u.write(read, runq).await;
     drop(write_io);
@@ -136,7 +137,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     u.set_found(found);
     u.io_seq = moving.update_issue(u.turn().get());
 
-    let size = BkeySC::from(u.k.key()).k.size;
+    let size = BkeySC::from(u.index.k.key()).k.size;
     let read_io = moving.io_start(false, size);
     let bucket = bucket_in_flight.map(|b| unsafe { RefGuard::get(b) });
     let runq = Resume::run_queue(moving.runq());
