@@ -29,7 +29,6 @@ pub enum WriteFlagBit {
     flush,
     update,
     replicas_best_effort,
-    in_worker,
     submitted,
     convert_unwritten,
 }
@@ -44,7 +43,6 @@ nest! {
         pub wbio: pub struct bch_write_bio_wbio {
             /* set at submit: 'static as a write op's fs() is */
             pub c: Option<&'static Fs>,
-            pub parent: *mut c::bch_write_bio,
 
             pub submit_time: u64,
             pub inode_offset: u64,
@@ -57,13 +55,12 @@ nest! {
             #>[repr(C)]-
             #>[bitfield(u8)]
             pub bits: pub struct bch_write_bio_bits {
-                split:             u1,
                 bounce:            u1,
                 put_bio:           u1,
                 nocow:             u1,
                 used_mempool:      u1,
                 first_btree_write: u1,
-                __pad:             u2,
+                __pad:             u3,
             },
         },
 
@@ -106,7 +103,7 @@ unsafe impl<R: IoRefIdx> Send for c::bch_write_bio<R> {}
 const _: () = assert!(core::mem::offset_of!(c::bch_write_bio, bio) + size_of::<crate::os::bio::Bio>() ==
                       size_of::<c::bch_write_bio>(), "bch_write_bio: its bio isn't last");
 
-// One bioset clones both kinds' bios - the replica set - and to_wbio() finds
+// One pool clones both kinds' bios - REPLICA_CLONES - and to_wbio() finds
 // either from its bio as the default's
 const _: () = assert!(core::mem::offset_of!(c::bch_write_bio<c::DevReadRefKind>, bio) ==
                       core::mem::offset_of!(c::bch_write_bio, bio));
@@ -204,10 +201,6 @@ nest! {
 
         pub write_point: c::write_point_specifier,
 
-        /* the filesystem's, so 'static: as the op's fs() */
-        pub wp: Option<&'static c::write_point>,
-        pub wp_list: c::list_head,
-
         /* Reserved at @res.nr_replicas, which is not @nr_replicas - see above */
         #[init(c::DiskReservation::new(unsafe { crate::util::backref::BackRef::new(fs).get() }))]
         pub res: c::DiskReservation<'static>,
@@ -235,12 +228,6 @@ nest! {
         #[init(None)]
         pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
 
-        /* its journal flush's waiter, a ref on cl: attached by an index
-         * update's last commit, and the next index update runs once cl's refs
-         * are put, this one's with them */
-        #[init(crate::journal::flush_wait::FlushEntry::new())]
-        pub flush_entry: crate::journal::flush_wait::FlushEntry,
-
         /* Must be last - and its bio set up by the op's owner, before init() */
         #[pin]
         #[init(unsafe { crate::util::alloc::untouched() })]
@@ -250,8 +237,9 @@ nest! {
 
 crate::has_closure!(c::bch_write_op, cl);
 
-/// A write point's writes, waiting for their index updates.
-pub type WriteOpList = crate::list!(c::bch_write_op, wp_list);
+// written by its write's task, on whichever thread runs it; what it points
+// to - the inode's devs_need_flush - outlives it, and is atomic
+unsafe impl Send for c::bch_write_op {}
 
 const _: () = assert!((c::WriteFlagBit::convert_unwritten as u32) < u16::BITS,
                       "the write flags don't fit in bch_write_op's flags");

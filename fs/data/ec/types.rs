@@ -64,9 +64,7 @@ pub struct bch_fs_ec {
     #[pin]
     #[init(new_lock!(0))]
     pub(crate) stripe_buf_bytes: Locked<SpinLockIrq, usize>,
-    /// Who waits for it, woken together as it's freed: the write path's
-    /// closures, until it converts, and Rust's waiters.
-    pub stripe_buf_wait: c::closure_waitlist,
+    /// Woken as it's freed, for who waits for it.
     pub(crate) stripe_buf_freed: EventCount,
 
     /// The open stripes, by index, and the buckets of stripes being made:

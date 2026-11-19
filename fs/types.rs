@@ -19,7 +19,7 @@ use crate::util::place::Placed;
 use crate::util::time_stats::TimeStatsArray;
 use crate::util::refcount::AtomicRef;
 use crate::os::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
-use crate::locking::{Locked, LockedBy, Mutex, MutexNoio, PercpuRwsemNoio, RwSem, SpinLockIrq};
+use crate::locking::{Locked, LockedBy, Mutex, MutexNoio, PercpuRwsemNoio, RwSem};
 use crate::os::percpu::{Counters, PerCpu};
 use crate::os::unicode::UnicodeMap;
 #[cfg(kernel)]
@@ -333,8 +333,8 @@ pub struct Dev {
 
     /*
      * Incremented by alloc_wake() at every site that wakes
-     * freelist_wait for a specific device. Waiters on
-     * c->allocator.freelist_wait snapshot the counters for the devices
+     * freelist_events for a specific device. Waiters on
+     * c->allocator.freelist_events snapshot the counters for the devices
      * they need at park time and compare on wake: if none have advanced,
      * the wake didn't concern this waiter and it re-parks without the
      * full alloc retry. Fs-wide wakes bump allocator.wake_all_counter
@@ -653,9 +653,6 @@ pub struct Fs {
     #[pin]
     pub snapshots: c::bch_fs_snapshots,
 
-    #[pin]
-    #[init(new_lock!((), "&c->write_error_lock"))]
-    pub write_error_lock: Locked<SpinLockIrq>,
     /*
      * Use a dedicated wq for write ref holder tasks. Required to avoid
      * dependency problems with other wq tasks that can block on ref
@@ -685,8 +682,6 @@ pub struct Fs {
     pub read_retry_pool: crate::util::mempool::Mempool<crate::util::alloc::Kmalloc>,
     #[late(BioSet::new(1), ENOMEM_bio_write_init)]
     pub bio_write: Late<BioSet<c::bch_write_bio>>,
-    #[late(BioSet::new(4), ENOMEM_bio_write_init)]
-    pub replica_set: Late<BioSet<c::bch_write_bio>>,
     #[pin]
     #[init(crate::os::bio::pages::BouncePool::new(options), ENOMEM_bio_bounce_pages_init)]
     pub(crate) bio_bounce: crate::os::bio::pages::BouncePool,

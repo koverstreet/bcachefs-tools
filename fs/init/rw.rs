@@ -121,9 +121,9 @@ impl Fs {
         READ_ONLY_EVENTS.wake();
 
         /*
-         * Wake threads parked in wait_on_allocator(): going-RO won't
-         * complete while they hold open closures on freelist_wait, and they
-         * won't otherwise notice the fs is shutting down.
+         * Wake writes parked on the allocator: going-RO won't complete
+         * while they wait on freelist_events, and they won't otherwise
+         * notice the fs is shutting down.
          */
         self.alloc_wake_all();
 
@@ -241,6 +241,7 @@ impl StateLockWrite<'_> {
         }
 
         fs.init_late(self).map_err(|e| fs.err(e))?;
+        fs.write_points_index_updates_init();
         btree_init_rw(fs)?;
         fs.journal.init_rw()?;
         fs.journal.reclaim_start()?;

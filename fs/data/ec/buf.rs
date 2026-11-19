@@ -26,7 +26,6 @@ use crate::util::{raid, Printbuf};
 use crate::util::alloc::{kbox_pin_init, Flags, KBox};
 use crate::os::bio::{io_buf, IoBuf};
 use crate::util::backref::BackRef;
-use crate::util::closure::{closure_wait, closure_wake_up};
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::ratelimit::Ratelimit;
 use crate::util::sleep::Sleep;
@@ -35,7 +34,6 @@ use crate::{here, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::CStr;
 use core::pin::Pin;
-use core::ptr::NonNull;
 use pin_init::{init, Init};
 
 /// A buffer's errors: as read, and after reconstruction.
@@ -52,9 +50,8 @@ pub(crate) const EC_BLOCKS_ALL: u32 = !0;
 // so the memory they hold is counted, ec.stripe_buf_bytes, against
 // ec_stripe_buf_limit, a percentage of RAM. A buffer that would go over waits,
 // if it can, for others to be freed - unless nothing else is counted: then
-// it's let in, or a stripe bigger than the limit would never be made. Who
-// waits is the write path's closures, on ec.stripe_buf_wait, until it
-// converts, and Rust's, on ec.stripe_buf_freed; freeing wakes both.
+// it's let in, or a stripe bigger than the limit would never be made. It
+// waits on ec.stripe_buf_freed, which freeing wakes.
 //
 // IO doesn't outlive a buffer here: a round of IO has the buffer by &mut until
 // it's waited on (BlockIo), so freeing it waits for nothing - where C's exit
@@ -64,9 +61,6 @@ pub(crate) const EC_BLOCKS_ALL: u32 = !0;
 pub(crate) enum MemWait {
     /// It doesn't: it's let in - a read reconstructing, which can't wait.
     Never,
-    /// The write path's closure, put on the waitlist: stripe_buf_mem_blocked,
-    /// and the write waits on its closure.
-    Closure(NonNull<c::closure>),
     /// stripe_buf_mem_blocked, for the caller to drop its locks,
     /// stripe_buf_mem_wait() and try again.
     Blocked,
@@ -84,11 +78,6 @@ impl Fs {
         let mut in_use = self.ec.stripe_buf_bytes.lock();
 
         if !matches!(wait, MemWait::Never) && *in_use != 0 && *in_use + bytes > limit {
-            if let MemWait::Closure(cl) = wait {
-                // SAFETY: the write path's closure, waiting on nothing else -
-                // or already here, as C's closure_wait() allows
-                unsafe { closure_wait(&self.ec.stripe_buf_wait, cl) };
-            }
             return self.throw(Errcode::stripe_buf_mem_blocked);
         }
         *in_use += bytes;
@@ -97,12 +86,7 @@ impl Fs {
 
     /// @bytes of stripe buffer memory given back, and its waiters woken.
     fn stripe_buf_mem_put(&self, bytes: usize) {
-        {
-            let mut in_use = self.ec.stripe_buf_bytes.lock();
-            *in_use -= bytes;
-            // as C's, under the lock
-            closure_wake_up(&self.ec.stripe_buf_wait);
-        }
+        *self.ec.stripe_buf_bytes.lock() -= bytes;
         self.ec.stripe_buf_freed.wake();
     }
 

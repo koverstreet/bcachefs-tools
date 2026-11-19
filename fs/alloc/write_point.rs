@@ -31,6 +31,7 @@ use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
 use crate::prt;
 use crate::util::hash::hash_64;
 use crate::os::kernel::local_clock;
+use crate::os::workqueue::Queue;
 use crate::util::{HumanReadable, Nsecs, Printbuf, ToText};
 use core::ffi::{c_uint, c_ulong};
 
@@ -249,9 +250,7 @@ impl Fs {
     /// and the partial list's, and the btree's reserve cache emptied; the
     /// stripes being made on @ca stopped.
     pub fn open_buckets_stop(&self, ca: Option<&Dev>, ec: bool) {
-        let a = &self.allocator;
-        for wp in a.write_points.iter().chain([&self.copygc.write_point, &a.reconcile_write_point,
-                                               &a.btree_write_point]) {
+        for wp in self.write_points_all() {
             self.writepoint_stop(wp, ca, ec);
         }
 
@@ -272,6 +271,26 @@ impl Fs {
 // ── Starting ─────────────────────────────────────────────────────────────
 
 impl Fs {
+    /// Every write point: the hashed ones, and copygc's, reconcile's and the
+    /// btree's.
+    fn write_points_all(&self) -> impl Iterator<Item = &c::write_point> {
+        let a = &self.allocator;
+        a.write_points.iter().chain([&self.copygc.write_point, &a.reconcile_write_point, &a.btree_write_point])
+    }
+
+    /// Each write point's index updates given the queue they run on, once
+    /// it's made: copygc's copygc's queue, every other's btree_update_wq.
+    pub(crate) fn write_points_index_updates_init(&self) {
+        for wp in self.write_points_all() {
+            let q: &Queue = if core::ptr::eq(wp, &self.copygc.write_point) {
+                &self.copygc.wq
+            } else {
+                &self.btree_update_wq
+            };
+            unsafe { wp.index_updates.set_queue(q) };
+        }
+    }
+
     /// Every write point in use, each last used for its own address - which
     /// no write names, a hashed specifier having bit 0 set - and in the hash
     /// for it.
@@ -299,10 +318,6 @@ impl Fs {
         prt!(out, "{}: {} last wrote: {}", wp.alloc.lock.write_point.get(),
              HumanReadable(g.sectors_allocated << 9),
              Nsecs(local_clock().wrapping_sub(wp.alloc.lock.last_used.get())));
-
-        for (i, t) in wp.io.writes_lock.time.iter().enumerate() {
-            prt!(out, " {}: {}", c::WritePointStatus::from_bits(i as u32), Nsecs(t.get()));
-        }
         writeln!(out);
 
         let mut out = out.indent(2);
