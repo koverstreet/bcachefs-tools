@@ -282,7 +282,7 @@ async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
 
         task_io_account_write(d.op.wbio.bio.range().len() as usize);
 
-        write(&mut d.op, None, Resume::queue(Queue::system_dfl())).await;
+        write(&mut d.op, None, None, Resume::queue(Queue::system_dfl())).await;
 
         dio_write_end(d);
 

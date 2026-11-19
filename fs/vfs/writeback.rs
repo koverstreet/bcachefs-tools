@@ -163,7 +163,7 @@ mod task {
     #[in_place(WritepageFut)]
     pub(super) async fn writepage_task<'h>(io: Pin<&'h mut Io>) {
         let io = unsafe { io.get_unchecked_mut() };
-        write(&mut io.op, None, Resume::queue(Queue::system_dfl())).await;
+        write(&mut io.op, None, None, Resume::queue(Queue::system_dfl())).await;
         writepage_io_done(io);
     }
 }

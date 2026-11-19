@@ -234,7 +234,7 @@ impl PinnedDrop for Update {
     fn drop(self: Pin<&mut Self>) {
         // the key buffer, dropped a grace period on, past the list's walk.
         // Zeroed, for an update never init()ed, it's valid too
-        unsafe { core::ptr::drop_in_place(&raw mut (*self.u.get().cast::<c::data_update>()).k) };
+        unsafe { core::ptr::drop_in_place(&raw mut (*self.u.get().cast::<c::data_update>()).index.k) };
     }
 }
 
@@ -293,7 +293,7 @@ impl Body {
     pub async fn write(&mut self, read: ReadDone, resume: Resume<'_>) {
         if self.read_done(read) {
             let u = &mut **self;
-            crate::data::write::write(&mut u.op, Some(&mut u.pages), resume).await
+            crate::data::write::write(&mut u.op, Some(&u.index), Some(&mut u.pages), resume).await
         }
     }
 
