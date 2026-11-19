@@ -486,6 +486,65 @@ impl<F: Future> PinnedDrop for Task<'_, F> {
     }
 }
 
+/// Where a task is made again for each run, in place of the last - which has
+/// finished, or never started: dropping one that runs panics. For work done
+/// again and again in memory made once. None, till start().
+///
+/// Started safely, as its task is 'static: what the future borrows outlives
+/// it, and it's pinned, so its memory lasts till the task's done - a drop
+/// while it runs panics, and what holds it is freed a grace period on, past
+/// its late completers.
+#[pin_data(PinnedDrop)]
+pub struct TaskInPlace<'q, F: Future> {
+    #[pin]
+    task: core::mem::MaybeUninit<Task<'q, F>>,
+    made: bool,
+    _rcu: RcuMember,
+}
+
+impl<F: Future + Send + 'static> TaskInPlace<'static, F> {
+    /// A task of @future, made where the last one was - dropped first - and
+    /// started.
+    pub fn start<'n>(self: Pin<&mut Self>, spawn: Spawn<'static, 'n>, list: &'static TaskList,
+                     future: impl PinInit<F> + 'n, done: fn(NonNull<Task<'static, F>>, F::Output))
+        -> Result<(), BchError>
+    {
+        let task = self.make(Task::new(spawn, list, future, done))?;
+        unsafe { task.task().start() };
+        Ok(())
+    }
+}
+
+impl<'q, F: Future + Send> TaskInPlace<'q, F> {
+    pub fn new<E>() -> impl PinInit<Self, E> {
+        pin_init!(Self { task: core::mem::MaybeUninit::uninit(), made: false, _rcu: RcuMember::default() }? E)
+    }
+
+    fn make(self: Pin<&mut Self>, init: impl PinInit<Task<'q, F>, BchError>) -> Result<Pin<&mut Task<'q, F>>, BchError> {
+        let this = unsafe { self.get_unchecked_mut() };
+        if core::mem::replace(&mut this.made, false) {
+            unsafe { this.task.assume_init_drop() };
+        }
+        unsafe { crate::util::alloc::init_at(init, this.task.as_mut_ptr()) }?;
+        this.made = true;
+        Ok(unsafe { Pin::new_unchecked(this.task.assume_init_mut()) })
+    }
+
+    pub fn get(&self) -> Option<&Task<'q, F>> {
+        self.made.then(|| unsafe { self.task.assume_init_ref() })
+    }
+}
+
+#[pinned_drop]
+impl<F: Future> PinnedDrop for TaskInPlace<'_, F> {
+    fn drop(self: Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+        if this.made {
+            unsafe { this.task.assume_init_drop() };
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct TaskRef(NonNull<Header>);
 
