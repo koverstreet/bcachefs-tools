@@ -370,7 +370,7 @@ pub(crate) struct Extent {
 }
 
 /// The next of @op's data written out at @wp: its extents' keys appended,
-/// and the bio to submit.
+/// and the bio to submit - or an error, and no keys appended.
 pub(crate) fn write_extent(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_update_index>,
                            wp: &mut LockedWritePoint<'_>) -> Result<Extent, BchError>
 {
@@ -564,9 +564,16 @@ pub(crate) fn write_extent(op: &mut Op, wbio: &mut c::bch_write_bio, update: Opt
             }
         }
     })();
-    ret?;
-
-    let more = wbio.bio.range().len() != 0;
+    let more = match ret {
+        Ok(()) => wbio.bio.range().len() != 0,
+        Err(e) if total_input == 0 => return Err(e),
+        // keys appended for the pieces before it: those go out, and the write
+        // ends there, failed - the rest not written, its extent left as it was
+        Err(e) => {
+            op.set_error(e);
+            false
+        }
+    };
 
     dst.bio(wbio).raw_mut().bi_iter = saved_iter;
 
