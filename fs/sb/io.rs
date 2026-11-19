@@ -162,7 +162,8 @@ use crate::util::alloc::{Arc, Flags, KVec, KVVec};
 use core::sync::atomic::AtomicPtr;
 use crate::util::bio::{io_buf, Bio, BioBox, BioOwner};
 use crate::util::gather::Gather;
-use crate::util::task::waiter;
+use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, WaitSync};
 use crate::os::kernel::NSEC_PER_SEC;
 use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
 use core::mem::{size_of, size_of_val, MaybeUninit};
@@ -2190,7 +2191,7 @@ impl<'a> SbIos<'a> {
     /// Every IO complete: each superblock back, with its IO's result.
     pub fn wait(self: Pin<&mut Self>) -> impl Iterator<Item = (DevSbMut<'a>, Result<(), BchError>)> {
         let this = self.project();
-        this.gather.wait_sync();
+        this.gather.wait_sync(Sleep::IDLE);
         core::mem::take(this.frozen).into_iter().map(|f| {
             let ret = f.sb.io.bio.as_ref().expect("an IO's bio").bio().status();
             (f.sb, ret)

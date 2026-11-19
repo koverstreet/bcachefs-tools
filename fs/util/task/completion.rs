@@ -14,7 +14,7 @@
 //! ```ignore
 //! let (c, d) = Completion::new_dyn(&mut done, waiter::Async::current().await);
 //! d.complete();               // its end, once - by the IO's completer: consumed
-//! c.resume_on(at).await;      // a thread: waiter::Sync::current(), c.wait(how)
+//! c.resume_on(at).await;      // a thread: waiter::Sync::current(), c.wait_sync(how)
 //! ```
 //!
 //! An Armable is a Done that may never be owed - a journal flush's wait, if
@@ -38,7 +38,7 @@
 use crate::c;
 use crate::util::rcu;
 use crate::util::sleep::{sleep_until, Sleep};
-use crate::util::task::{current_task, task_in, Resumable, TaskRef};
+use crate::util::task::{current_task, task_in, Resumable, TaskRef, WaitSync};
 use core::cell::{Cell, UnsafeCell};
 use core::ffi::c_void;
 use core::marker::{PhantomData, PhantomPinned};
@@ -392,8 +392,10 @@ impl<W: Waiter> Drop for Completion<'_, W> {
     }
 }
 
-impl Completion<'_, waiter::Sync> {
-    pub fn wait(self, how: Sleep) {
+impl WaitSync for Completion<'_, waiter::Sync> {
+    type Output = ();
+
+    fn wait_sync(self, how: Sleep) {
         self.d.sleep_until_done(how);
     }
 }
@@ -462,8 +464,10 @@ impl<T, W: Waiter> Drop for CompletionReturn<'_, T, W> {
     }
 }
 
-impl<T> CompletionReturn<'_, T, waiter::Sync> {
-    pub fn wait(self, how: Sleep) -> Option<T> {
+impl<T> WaitSync for CompletionReturn<'_, T, waiter::Sync> {
+    type Output = Option<T>;
+
+    fn wait_sync(self, how: Sleep) -> Option<T> {
         self.d.done.sleep_until_done(how);
         self.take()
     }

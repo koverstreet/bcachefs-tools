@@ -58,7 +58,7 @@ use crate::errcode::BchError;
 use crate::util::backtrace::prt_symbol;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, Completion, Done, Waiter};
+use crate::util::task::{waiter, Completion, Done, WaitSync, Waiter};
 use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
@@ -554,7 +554,7 @@ pub unsafe trait BioOwner {
     // it static - if one comes for something else.
     /// submit(), waited on by this thread, asleep as IO wait: its status.
     fn submit_wait(&mut self) -> Result<(), BchError> {
-        self.submit(waiter::Sync::current()).wait(Sleep::UNINTERRUPTIBLE.io())
+        self.submit(waiter::Sync::current()).wait_sync(Sleep::UNINTERRUPTIBLE.io())
     }
 
     /// Submitted, its IO's Completion made here for @waiter: the endio's end in
@@ -641,7 +641,7 @@ impl<O: BioOwner, B> Remapped<'_, O, B> {
 
 /// A bio submitted: the Completion of its IO, and a ref on the bio for its
 /// status once that's done. Dropped, it waits for the IO.
-#[must_use = "a bio's IO is waited on, or its drop waits for it"]
+#[must_use = "a bio's IO is waited on, or awaited, to its end"]
 pub struct BioFuture<'a, W: Waiter> {
     c:   Completion<'a, W>,
     bio: &'a Bio,
@@ -650,10 +650,12 @@ pub struct BioFuture<'a, W: Waiter> {
 // the Bio's Send, and read only once it's done
 unsafe impl Send for BioFuture<'_, waiter::Async> {}
 
-impl BioFuture<'_, waiter::Sync> {
-    pub fn wait(self, how: Sleep) -> Result<(), BchError> {
+impl WaitSync for BioFuture<'_, waiter::Sync> {
+    type Output = Result<(), BchError>;
+
+    fn wait_sync(self, how: Sleep) -> Result<(), BchError> {
         let bio = self.bio;
-        self.c.wait(how);
+        self.c.wait_sync(how);
         bio.status()
     }
 }

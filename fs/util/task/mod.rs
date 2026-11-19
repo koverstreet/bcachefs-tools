@@ -155,6 +155,14 @@ impl<'a> From<&'a Queue> for Resume<'a> {
     }
 }
 
+/// What a thread waits on - a Completion, a Gather, a Select - sleeping as
+/// @how says, to its end: a task's is Resumable, awaited.
+pub trait WaitSync {
+    type Output;
+
+    fn wait_sync(self, how: Sleep) -> Self::Output;
+}
+
 pub trait Resumable {
     type Output;
 

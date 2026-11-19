@@ -26,7 +26,8 @@ use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::os::ops::IntoRaw;
 use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Return, Spawn, TaskSlot};
+use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Return, Spawn, TaskSlot,
+                        WaitSync};
 use crate::os::workqueue::Queue;
 use core::pin::{pin, Pin};
 use core::ptr::{self, NonNull};
@@ -228,7 +229,7 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
 
     match wait {
         None => Err(c::EIOCBQUEUED.into()),
-        Some(wait) => wait.wait(Sleep::UNINTERRUPTIBLE).expect("a dio's task, ended with what it read"),
+        Some(wait) => wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a dio's task, ended with what it read"),
     }
 }
 
