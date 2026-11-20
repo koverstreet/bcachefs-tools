@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A mover's data update: a data update's task (update_task.rs) on the moving
-//! context's run queue. The run queue runs only in the mover's waits, so
-//! updates run on the mover's thread between its own steps: a mover can't
-//! issue faster than it completes, and its work stays out of everyone else's
-//! way.
+//! A mover's data update: a data update's task (update_task.rs), resumed on
+//! the moving context's run queue. The run queue runs only in the mover's
+//! waits, so an update's steps run on the mover's thread between its own: a
+//! mover can't issue faster than it completes, and its work stays out of
+//! everyone else's way. Its write is allocated there too, blocking the mover
+//! when the allocator is - backpressure; its write's completion, the IO and
+//! the index update, runs where every write's does, as the write point's
+//! buckets are put there.
 //!
 //! Writes start in the order the reads were issued: a mover walks keys in
 //! order, and data written in order is laid out together. An update's turn is
@@ -60,17 +63,19 @@ fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, si
 
 /// The body: reads, counted in the context as @read_io; then waits for its
 /// turn, then writes - nothing, if the read failed. @bucket counts the update
-/// against the bucket it's moving data off, until it's done.
+/// against the bucket it's moving data off, until it's done. @runq is the
+/// context's run queue.
 #[args_stored_once]
-async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>) {
+async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>, runq: Resume<'_>) {
     let read = {
         let d = &mut *u;
-        read_update(&mut d.rbio, d.index.k.key(), d.index.btree_id, d.index.opts.read_flags, d.index.opts.read_dev).await
+        read_update(&mut d.rbio, d.index.k.key(), d.index.btree_id, d.index.opts.read_flags, d.index.opts.read_dev,
+                    runq).await
     };
     drop(read_io);
     u.read_done.store(true, Relaxed);
 
-    u.turn().wait(Resume::RUNQ).await;
+    u.turn().wait(runq).await;
 
     let write_io = {
         let (moving, size) = moving_size(&u);
@@ -83,7 +88,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     // error, which a retry may get past, and whose device needn't change.
     let unreadable = u.index.opts.type_ == c::DataUpdateType::reconcile &&
         read.ret.is_err_and(|e| e.matches(Errcode::no_device_to_read_from));
-    u.write(read, Resume::RUNQ).await;
+    u.write(read, runq).await;
     drop(write_io);
 
     if unreadable {
@@ -132,8 +137,9 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     let size = BkeySC::from(u.index.k.key()).k.size;
     let read_io = moving.io_start(false, size);
     let bucket = bucket_in_flight.map(|b| unsafe { RefGuard::get(b) });
+    let runq = Resume::run_queue(moving.runq());
 
-    u.start(|b| async move |_: &Update| run(b, read_io, bucket).await);
+    u.start(|b| async move |_: &Update| run(b, read_io, bucket, runq).await);
 
     moving.stats().keys_moved.fetch_add(1, Relaxed);
     moving.stats().sectors_moved.fetch_add(size.into(), Relaxed);

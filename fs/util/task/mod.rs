@@ -19,17 +19,17 @@
 //! # Where a task runs
 //!
 //! A task is spawned on a workqueue, a RunQueue (queue.rs: run by its owner,
-//! between the owner's own work), or a kthread of its own; a RunQueue or
-//! kthread task always runs there. Or inline: its first poll run by start(),
-//! in the caller's context. Every await says where its task resumes, with
+//! between the owner's own work), or a kthread of its own; a kthread task
+//! always runs there. Or inline: its first poll run by start(), in the
+//! caller's context. Every await says where its task resumes, with
 //! resume_on():
 //! - Queue(q): on workqueue q - or with resume_on_cpu(q, cpu), on q on cpu,
-//!   for the part of a task that wants it there; or with
-//!   resume_on_run_queue(rq), on a worked RunQueue, by its work on its queue.
+//!   for the part of a task that wants it there.
+//! - RunQueue(rq): on rq, by its owner's run() - a thread's, or a worked
+//!   one's work.
 //! - Inline: in the completer's context, an endio, where everything up to the
 //!   next await runs. It must not sleep, or take a lock that isn't irqsave -
 //!   C's continue_at(cl, fn, NULL), and as unchecked.
-//! - RUNQ: a RunQueue task's, on its RunQueue - where it always runs.
 //! The target is recorded in the header (@target) while the await is pending.
 //! requeue(at) moves a running task to @at - a queue, or any Resume - an
 //! await of nothing: out of an endio's context, say, before it allocates. On
@@ -115,8 +115,10 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{Context, ContextBuilder, Poll, Waker};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
-/// Where an await resumes its task: one word, in every await - a queue, or
-/// a value no queue is at.
+/// Where an await resumes its task: one word, in every await - a queue, a
+/// RunQueue, tagged in its low bit, or a value neither is at. A queue's
+/// address is even: a workqueue_struct, whose fields are pointers, wherever
+/// it's allocated.
 #[derive(Clone, Copy)]
 pub struct Resume<'a>(NonNull<Queue>, PhantomData<&'a Queue>);
 
@@ -127,12 +129,11 @@ unsafe impl Sync for Resume<'_> {}
 pub enum ResumeAt<'a> {
     Inline,
     Queue(&'a Queue),
-    RunQueue,
+    RunQueue(Pin<&'a RunQueue>),
 }
 
 impl<'a> Resume<'a> {
     pub const INLINE: Self = Self::at(1);
-    pub const RUNQ: Self = Self::at(2);
 
     const fn at(v: usize) -> Self {
         Resume(unsafe { NonNull::new_unchecked(core::ptr::without_provenance_mut(v)) }, PhantomData)
@@ -142,10 +143,20 @@ impl<'a> Resume<'a> {
         Resume(unsafe { NonNull::new_unchecked(core::ptr::from_ref(q).cast_mut()) }, PhantomData)
     }
 
+    pub fn run_queue(rq: Pin<&'a RunQueue>) -> Self {
+        const { assert!(align_of::<RunQueue>() > 1) };
+        let p = core::ptr::from_ref(rq.get_ref()).cast_mut().map_addr(|a| a | 1);
+        Resume(unsafe { NonNull::new_unchecked(p.cast()) }, PhantomData)
+    }
+
     pub fn get(self) -> ResumeAt<'a> {
-        match self.0.as_ptr().addr() {
+        let p = self.0.as_ptr();
+        match p.addr() {
             1 => ResumeAt::Inline,
-            2 => ResumeAt::RunQueue,
+            a if a & 1 != 0 => {
+                let rq = p.map_addr(|a| a & !1).cast::<RunQueue>();
+                ResumeAt::RunQueue(unsafe { Pin::new_unchecked(&*rq) })
+            }
             _ => ResumeAt::Queue(unsafe { self.0.as_ref() }),
         }
     }
@@ -174,7 +185,7 @@ pub trait Resumable {
     where
         Self: Sized,
     {
-        Resumed { inner: self, target: r, cpu: None, runq: None, recorded: None, _pin: PhantomPinned }
+        Resumed { inner: self, target: r, cpu: None, recorded: None, _pin: PhantomPinned }
     }
 
     /// resume_on() workqueue @q, on @cpu: queue_work_on().
@@ -182,17 +193,7 @@ pub trait Resumable {
     where
         Self: Sized,
     {
-        Resumed { inner: self, target: Resume::queue(q), cpu: Some(cpu), runq: None, recorded: None,
-                  _pin: PhantomPinned }
-    }
-
-    /// Resumed on @rq, a RunQueue::worked() one.
-    fn resume_on_run_queue(self, rq: Pin<&RunQueue>) -> Resumed<'_, Self>
-    where
-        Self: Sized,
-    {
-        Resumed { inner: self, target: Resume::INLINE, cpu: None, runq: Some(rq.get_ref()),
-                  recorded: None, _pin: PhantomPinned }
+        Resumed { inner: self, target: Resume::queue(q), cpu: Some(cpu), recorded: None, _pin: PhantomPinned }
     }
 }
 
@@ -211,8 +212,6 @@ pub struct Resumed<'r, A> {
     inner:    A,
     target:   Resume<'r>,
     cpu:      Option<u32>,
-    /* resume_on_run_queue()'s: dispatched onto it, in place of @target */
-    runq:     Option<&'r RunQueue>,
     recorded: Option<Recorded>,
     #[pin]
     _pin:     PhantomPinned,
@@ -236,14 +235,10 @@ impl<A: Resumable> Future for Resumed<'_, A> {
         };
 
         let header = unsafe { task.0.as_ref() };
-        let ours = match (*this.runq, this.target.get()) {
-            (Some(rq), _) => Target::Run(NonNull::from(rq)),
-            (None, ResumeAt::Inline) => Target::Inline,
-            (None, ResumeAt::Queue(q)) => Target::Queue(NonNull::from(q), *this.cpu),
-            (None, ResumeAt::RunQueue) => {
-                debug_assert!(header.runq.is_some(), "Resume::RUNQ, in a task on no RunQueue");
-                return this.inner.poll_resume(cx);
-            }
+        let ours = match this.target.get() {
+            ResumeAt::Inline       => Target::Inline,
+            ResumeAt::Queue(q)     => Target::Queue(NonNull::from(q), *this.cpu),
+            ResumeAt::RunQueue(rq) => Target::Run(NonNull::from(rq.get_ref())),
         };
         match *this.recorded {
             None => *this.recorded = Some(Recorded { task, ours, prev: header.target.get() }),
@@ -307,7 +302,6 @@ enum Target {
     Inline,
     /* and the cpu, where the await names one */
     Queue(NonNull<Queue>, Option<u32>),
-    /* a worked RunQueue */
     Run(NonNull<RunQueue>),
 }
 
@@ -333,7 +327,6 @@ struct Header {
     work:      c::work_struct,
     waiting:   AtomicPtr<Done>,
     target:    Cell<Target>,
-    runq:      Option<NonNull<RunQueue>>,
     thread:    Option<KthreadRef>,
     started:   Cell<bool>,
     finished:  Cell<bool>,
@@ -392,11 +385,11 @@ impl<'q, F: Future + Send> Task<'q, F> {
         F: 'n,
         'q: 'n,
     {
-        let (target, runq) = match spawn {
-            Spawn::Inline => (Target::Inline, None),
-            Spawn::Queue(wq) => (Target::Queue(NonNull::from(wq), None), None),
-            Spawn::Run(rq) => (Target::UNUSED, Some(NonNull::from(rq.get_ref()))),
-            Spawn::Thread(_) => (Target::UNUSED, None),
+        let target = match spawn {
+            Spawn::Inline    => Target::Inline,
+            Spawn::Queue(wq) => Target::Queue(NonNull::from(wq), None),
+            Spawn::Run(rq)   => Target::Run(NonNull::from(rq.get_ref())),
+            Spawn::Thread(_) => Target::UNUSED,
         };
         let body = unsafe {
             pin_init::pin_init_from_closure(move |slot: *mut Body<F, F::Output>| {
@@ -408,7 +401,6 @@ impl<'q, F: Future + Send> Task<'q, F> {
                 work <- crate::new_work!(crate::os::workqueue::run_raw::<Header>, "bcachefs task"),
                 waiting:   AtomicPtr::new(null_mut()),
                 target:    Cell::new(target),
-                runq,
                 thread:    None,
                 started:   Cell::new(false),
                 finished:  Cell::new(false),
@@ -519,10 +511,6 @@ impl TaskRef {
             thread.wake();
             return;
         }
-        if let Some(runq) = header.runq {
-            unsafe { runq.as_ref().push(self.0) };
-            return;
-        }
         match header.target.get() {
             Target::Inline => {
                 unsafe { self.run(Target::Inline) };
@@ -534,7 +522,7 @@ impl TaskRef {
                     None      => unsafe { wq.as_ref().queue_work(work) },
                 };
             }
-            Target::Run(rq) => unsafe { rq.as_ref().push_worked(self.0) },
+            Target::Run(rq) => unsafe { rq.as_ref().dispatch(self.0) },
         }
     }
 
@@ -543,7 +531,7 @@ impl TaskRef {
     unsafe fn run(self, running_on: Target) -> bool {
         let header = unsafe { self.0.as_ref() };
         debug_assert!(header.waiting.load(Ordering::Relaxed).is_null() && !header.finished.get());
-        let never_moves = header.runq.is_some() || header.thread.is_some();
+        let never_moves = header.thread.is_some();
         let mut polled = Polled { task: self, parks_on: None };
         let mut cx = ContextBuilder::from_waker(Waker::noop()).ext(&mut polled).build();
 

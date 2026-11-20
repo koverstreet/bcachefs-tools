@@ -26,7 +26,8 @@
 //!
 //! read() reads a range of a file into a read bio, and is awaited. A data
 //! update's read, read_update(), reads its one fragment in the update's own
-//! task, and writes nothing of the update but its rbio.
+//! task, resumed where its caller says, and writes nothing of the update but
+//! its rbio.
 //!
 //! A read walks the extents of its range, and each extent's part of it is a
 //! fragment. fragment_of() picks the replica in the caller's transaction, and
@@ -1403,7 +1404,7 @@ mod boxed {
     /// awaited, so that a fragment's future isn't the size of one.
     #[in_place(EcReadFut)]
     pub(super) async fn ec_read<'f, 'r: 'f>(f: &'f mut Fragment<'r>, fs: &'f Fs, msg: &'f mut Printbuf,
-                                            target: Resume<'static>) -> Result<(), BchError>
+                                            target: Resume<'f>) -> Result<(), BchError>
     {
         let waiter = waiter::Async::current().await;
         let (bio, p) = (f.kind.bio_mut(), &f.plan);
@@ -1450,7 +1451,7 @@ fn device_read_done(f: &Fragment<'_>, fs: &Fs, submit_time: u64, status: Result<
 }
 
 #[args_stored_once]
-async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'static>, ec_msg: Option<&mut Printbuf>)
+async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'_>, ec_msg: Option<&mut Printbuf>)
     -> Result<(), BchError>
 {
     let fs = read.fs();
@@ -1470,8 +1471,8 @@ async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'static>,
             f.submit(waiter::Async::current().await).resume_on(Resume::INLINE).await
         };
         let ret = device_read_done(f, fs, submit_time, status);
-        if let ResumeAt::Queue(q) = target.get() {
-            requeue(q).await;
+        if !matches!(target.get(), ResumeAt::Inline) {
+            requeue(target).await;
         }
         ret?;
     }
@@ -1809,7 +1810,9 @@ fn update_end<'r>(rbio: &'r Rbio, k: &'r BkeyI, btree: Btree, buf: BioRange<'r>,
 }
 
 #[args_stored_once]
-pub async fn read_update(rbio: &mut Rbio, k: &BkeyI, btree: Btree, flags: F, dev: c_uint) -> ReadDone {
+pub async fn read_update(rbio: &mut Rbio, k: &BkeyI, btree: Btree, flags: F, dev: c_uint, at: Resume<'_>)
+    -> ReadDone
+{
     let buf = rbio.bio().range();
     let read = 'read: {
         // the fragment's gone before the retry's await: a future keeps a
@@ -1825,8 +1828,7 @@ pub async fn read_update(rbio: &mut Rbio, k: &BkeyI, btree: Btree, flags: F, dev
             let ret = if frag.plan.pick.do_ec_reconstruct {
                 Ok(())
             } else {
-                let target = resume_target(frag);
-                fragment_io(frag, rbio, target, None).await
+                fragment_io(frag, rbio, at, None).await
             };
             if ret.is_err() {
                 rbio.saw_error.store(true, Relaxed);

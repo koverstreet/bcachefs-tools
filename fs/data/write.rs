@@ -1368,7 +1368,7 @@ async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>,
         match pass.wp {
             Some(wp) => {
                 in_caller = false;
-                g.wait_on_run_queue(wp.index_updates()).await.record(op, of);
+                g.wait(Resume::run_queue(wp.index_updates())).await.record(op, of);
             }
             /* failed before finding a write point: nothing submitted, nothing to wait for */
             None => assert!(extents.is_empty(), "a write pass submitted, with no write point"),

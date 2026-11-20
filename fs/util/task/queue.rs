@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A RunQueue's tasks run only in its owner's run(): a mover's updates, run
-//! between its own steps instead of competing with it. A dispatch pushes the
-//! task on a lockless stack - from any context, an endio's - and wakes the
-//! queue's EventCount; run() takes the stack whole and runs it oldest first,
-//! in the order the tasks were woken.
+//! What's dispatched on a RunQueue runs only in its owner's run(): a mover's
+//! updates, run between its own steps instead of competing with it. A
+//! dispatch pushes the task on a lockless stack - from any context, an
+//! endio's - and wakes the queue's EventCount; run() takes the stack whole and
+//! runs it oldest first, in the order the tasks were woken. A task runs there
+//! only for the awaits that resume it there - Resume::run_queue() - and moves
+//! on as its next await says.
 //!
 //! Its owner is a thread, waiting on the EventCount - or its own work item, a
 //! worker of its own while it has tasks and nothing when it's idle: a write
-//! point's index updates. An await resumed on a worked RunQueue - with
-//! resume_on_run_queue() - is dispatched onto it and queues the work, which
-//! run()s it, on the RunQueue's queue: always the same one, as a work item is
-//! non-reentrant only on one.
+//! point's index updates. A dispatch onto a worked RunQueue also queues the
+//! work, which run()s it, on the RunQueue's queue: always the same one, as a
+//! work item is non-reentrant only on one.
 
 use super::{Header, TaskRef};
 use crate::c;
@@ -63,15 +64,14 @@ impl RunQueue {
         })
     }
 
-    /// A dispatch onto a worked() one: pushed, and its work queued.
+    /// Pushed, and a worked() one's work queued.
     ///
     /// # Safety
     /// As push()'s.
-    pub(super) unsafe fn push_worked(&self, h: NonNull<Header>) {
-        let q = self.queue.expect("an await resumed on a RunQueue with no work of its own");
-        unsafe {
-            self.push(h);
-            q.as_ref().queue_work(core::ptr::from_ref(&self.work).cast_mut());
+    pub(super) unsafe fn dispatch(&self, h: NonNull<Header>) {
+        unsafe { self.push(h) };
+        if let Some(q) = self.queue {
+            unsafe { q.as_ref().queue_work(core::ptr::from_ref(&self.work).cast_mut()) };
         }
     }
 
@@ -86,7 +86,7 @@ impl RunQueue {
 
     /// # Safety
     /// @h is a live task's, owned and dispatched here.
-    pub(super) unsafe fn push(&self, h: NonNull<Header>) {
+    unsafe fn push(&self, h: NonNull<Header>) {
         let hr = unsafe { h.as_ref() };
         let mut head = self.head.load(Ordering::Relaxed);
         loop {
