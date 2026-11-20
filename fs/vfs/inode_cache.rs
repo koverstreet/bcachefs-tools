@@ -26,6 +26,7 @@ use crate::util::printbuf::{Printbuf, ToText};
 use crate::prt;
 use crate::os::kernel::HZ;
 use crate::util::rcu::read_lock;
+use crate::util::siphash::SipHash13Key;
 use core::ptr::NonNull;
 
 use super::inode::{InodeInfo, InodeRef};
@@ -48,9 +49,9 @@ crate::keyed_by!(Cached, |e| &e.0.ei_inum => c::subvol_inum);
 
 #[derive(Default)]
 pub struct InodeCache {
-    inodes:  Cuckoo<Entry<Cached>>,
+    inodes:  Cuckoo<Entry<Cached>, SipHash13Key, 3>,
     /// Inode number -> subvolumes holding it
-    by_inum: CuckooMultimap<u64, u32, 2>,
+    by_inum: CuckooMultimap<u64, u32, 2, SipHash13Key, 3>,
 }
 
 impl InodeCache {
