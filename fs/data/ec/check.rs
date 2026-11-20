@@ -51,9 +51,9 @@ fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: 
     let fs = t.fs();
     let idx = k.k.p.offset;
 
-    let lru_idx = s.v().lru_pos();
+    let lru_idx = s.v().fragmentation_lru_pos();
     if lru_idx != 0 {
-        lru_check_set(t, LruPos::new(LruId::Stripes.id(), lru_idx, idx), k, last_flushed.borrow())?;
+        lru_check_set(t, LruPos::new(LruId::StripeFragmentation.id(), lru_idx, idx), k, last_flushed.borrow())?;
     }
 
     for (i, ptr) in s.v().block_ptrs().iter().enumerate() {

@@ -45,7 +45,7 @@ pub(crate) fn stripe_delete(t: &TransAttempt<'_, '_>, idx: u64, is_open: bool) -
         return Ok(());
     };
 
-    if s.v().lru_pos() != STRIPE_LRU_POS_EMPTY {
+    if s.v().fragmentation_lru_pos() != STRIPE_LRU_POS_EMPTY {
         return Ok(());
     }
 
@@ -60,7 +60,7 @@ pub(crate) fn stripe_delete(t: &TransAttempt<'_, '_>, idx: u64, is_open: bool) -
 pub(crate) fn delete_empty_stripes(ec: &c::bch_fs_ec) {
     let fs = ec.container();
     let trans = btree_trans!(fs);
-    let at = |offset| LruPos::new(LruId::Stripes.id(), STRIPE_LRU_POS_EMPTY, offset).to_bpos();
+    let at = |offset| LruPos::new(LruId::StripeFragmentation.id(), STRIPE_LRU_POS_EMPTY, offset).to_bpos();
 
     // as C's: errors - going read-only - end the walk, and are dropped
     let _ = trans.write_buffer_tryflush().and_then(|_| {

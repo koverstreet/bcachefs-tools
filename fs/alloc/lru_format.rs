@@ -18,7 +18,7 @@ pub struct Lru {
 pub enum LruType {
     read = 0,
     fragmentation = 1,
-    stripes = 2,
+    stripe_fragmentation = 2,
 }
 
 /*

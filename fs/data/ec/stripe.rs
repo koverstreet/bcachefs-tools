@@ -151,7 +151,7 @@ impl c::Stripe<Validated> {
     /// deleted, which would update it.
     ///
     /// Written by the stripe trigger, checked by check_lrus.
-    pub fn lru_pos(&self) -> u64 {
+    pub fn fragmentation_lru_pos(&self) -> u64 {
         let Some(counts) = self.blockcounts() else { return 0 };
         let nr_data = self.nr_data();
         let blocks_empty = counts.iter().take(nr_data as usize).filter(|n| n.get() == 0).count() as u32;
@@ -376,7 +376,7 @@ impl<'k> Block<'k> {
 
     /// Its sector count. Of a stripe of a checksum type this version knows:
     /// one the trigger's csum_type_check() passed, or one in the stripe lru -
-    /// copygc's - which lru_pos() keeps the others out of.
+    /// copygc's - which fragmentation_lru_pos() keeps the others out of.
     pub(crate) fn sectors(self) -> u16 {
         let counts = self.s.v().blockcounts().expect("a stripe of a checksum type this version knows");
         counts[usize::from(self.idx)].get()
