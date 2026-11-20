@@ -138,7 +138,7 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
     let Some(old) = k.arm::<c::Stripe>() else { return Ok(None) };
     let v = old.v();
 
-    if v.lru_pos() == STRIPE_LRU_POS_EMPTY {
+    if v.fragmentation_lru_pos() == STRIPE_LRU_POS_EMPTY {
         // the trigger doesn't always delete them: a stripe may still have
         // been open when the last of its data went
         if fs.stripe_is_open(idx) {
@@ -213,7 +213,7 @@ pub(crate) fn init_new_stripe_from_old(s: &mut Internal, carry: u32, move_: u32,
 /// stripe_alloc_blocked if there's none.
 fn stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchError> {
     let fs = t.fs();
-    let lru = LruPos::range(LruId::Stripes);
+    let lru = LruPos::range(LruId::StripeFragmentation);
     let mut iter = BtreeIter::new(t, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
     let found = iter.for_each_max_norestart(t, lru.end().to_bpos(), |_, k| {
         Ok(match get_old_stripe(t, s, k.k.p.offset)? {

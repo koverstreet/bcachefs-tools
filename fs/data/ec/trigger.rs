@@ -5,8 +5,9 @@
 //! A stripe update's trigger owns: each block's bucket - a parity block's
 //! sectors, every block's stripe_refcount and bucket_to_stripe entry - and
 //! its backpointer; parity replicas, reconcile work and fragmentation
-//! accounting; the stripe lru, whose position (lru_pos()) the deleter and
-//! stripe reuse walk; and deleting a stripe gone empty, unless it's open.
+//! accounting; the stripe lru, whose position (fragmentation_lru_pos()) the
+//! deleter and stripe reuse walk; and deleting a stripe gone empty, unless
+//! it's open.
 //! Its data blocks' sectors are their extents', counted from the extent
 //! side, trigger_stripe_ptr() in alloc/buckets.rs - which updates the stripe
 //! key, running this.
@@ -81,8 +82,8 @@ fn stripe_of(k: BkeySC<'_>) -> Option<StripeK<'_>> {
 }
 
 /// Its time in the stripe lru - none for no stripe.
-fn lru_pos(s: Option<StripeK<'_>>) -> u64 {
-    s.map_or(0, |s| s.v().lru_pos())
+fn fragmentation_lru_pos(s: Option<StripeK<'_>>) -> u64 {
+    s.map_or(0, |s| s.v().fragmentation_lru_pos())
 }
 
 fn needs_reconcile(s: Option<StripeK<'_>>) -> i64 {
@@ -100,9 +101,9 @@ fn blocks_unchanged(old: StripeK<'_>, new: StripeK<'_>) -> bool {
 }
 
 /// Refresh @new's can_widen from the RW members its disk label has now,
-/// before lru_pos() reads it: else an update committing after reconcile's
-/// stripes scan passed the stripe would keep a stale one, and the scan's
-/// cookie be cleared with it wrong.
+/// before fragmentation_lru_pos() reads it: else an update committing after
+/// reconcile's stripes scan passed the stripe would keep a stale one, and the
+/// scan's cookie be cleared with it wrong.
 fn refresh_can_widen(fs: &Fs, new: &mut BkeyS<'_>) {
     let Some(mut s) = new.as_s().arm::<c::Stripe>() else { return };
     let v = s.v();
@@ -390,12 +391,12 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), B
 
     let needs_reconcile_delta = needs_reconcile(new) - needs_reconcile(old);
 
-    if flags & (F::ATOMIC | F::GC) == F::ATOMIC && new.is_some() && lru_pos(new) == STRIPE_LRU_POS_EMPTY {
+    if flags & (F::ATOMIC | F::GC) == F::ATOMIC && new.is_some() && fragmentation_lru_pos(new) == STRIPE_LRU_POS_EMPTY {
         fs.do_stripe_deletes();
     }
 
     if flags.contains(F::TRANSACTIONAL) {
-        let (old_lru, new_lru) = (lru_pos(old), lru_pos(new));
+        let (old_lru, new_lru) = (fragmentation_lru_pos(old), fragmentation_lru_pos(new));
 
         // stripes is key-cached: deleted by an update, which goes through
         // the key cache's flush - editing @op.new into a deletion would
@@ -405,7 +406,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), B
             return t.delete(Btree::stripes, op.new.k().p, F::OVERWRITE_TRIGGERED);
         }
 
-        lru_change(t, LruId::Stripes, idx, old_lru, new_lru)?;
+        lru_change(t, LruId::StripeFragmentation, idx, old_lru, new_lru)?;
 
         if needs_reconcile_delta != 0 {
             t.bit_mod_buffered(Btree::reconcile_hipri, data_to_rb_work_pos(Btree::stripes, op.new.k().p),

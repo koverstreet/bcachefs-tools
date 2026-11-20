@@ -522,12 +522,12 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let Some(s) = s_k.arm::<c::Stripe>() else { return Ok(None) };
 
         /* write buffer race? */
-        Ok((s.v().lru_pos() == lru.time).then_some(s))
+        Ok((s.v().fragmentation_lru_pos() == lru.time).then_some(s))
     }
 
     fn get_stripe_buckets(&self, batch: &mut Batch<'f>) -> Result<(), BchError> {
         let trans = self.trans();
-        let lru = LruPos::range(LruId::Stripes);
+        let lru = LruPos::range(LruId::StripeFragmentation);
         let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
         iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
@@ -559,7 +559,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// buckets is always right.
     fn should_do_ec(&self, devs: &KVVec<CopygcDev>) -> bool {
         let trans = self.trans();
-        let lru = LruPos::range(LruId::Stripes);
+        let lru = LruPos::range(LruId::StripeFragmentation);
         let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
         let stripe_frag_ratio = iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
