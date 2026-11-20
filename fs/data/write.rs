@@ -1335,8 +1335,8 @@ fn submit_extent(op: &mut Op, wbio: &mut c::bch_write_bio, bio: ExtentBio, key_o
 
 /// The op's data written, and its index updated, a pass at a time: what one
 /// couldn't write - its write point full, its open buckets used up, the
-/// allocator blocked - the next does.
-async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>,
+/// allocator blocked - the next does, back @at.
+async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, at: Resume<'_>,
                  mut flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
     let update = of.update();
@@ -1386,14 +1386,17 @@ async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>,
         }
 
         stuck = match pass.blocked {
-            Some((on, seen)) => match on.wait_async(fs, seen, Resume::queue(index_update_wq(op))).await {
+            Some((on, seen)) => match on.wait_async(fs, seen, at).await {
                 Ok(stuck) => stuck,
                 Err(e) => {
                     op.set_error(e);
                     return;
                 }
             },
-            None => false,
+            None => {
+                requeue(at).await;
+                false
+            }
         };
     }
 }
@@ -1485,9 +1488,11 @@ impl<'a> WriteFor<'a> {
  * after the data is written it calls bch_journal, and after the keys have been
  * added to the next journal write they're inserted into the btree.
  */
-/// @wbio's data written, @wbio its caller's. Done, its task resumed @at if it
-/// waited - not left where its last wait was, which may be its write point's
-/// index updates.
+/// @wbio's data written, @wbio its caller's. It's allocated @at, its caller's
+/// context, where a blocked allocation waits - backpressure; each pass's IO
+/// and index update complete on its write point's index updates, where its
+/// buckets are put, so no allocation waits on the completions queued behind
+/// it. Done, its task resumed @at - not left where its last wait was.
 pub async fn write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, at: Resume<'_>) {
     let fs = op.fs();
     let sectors = u64::from(wbio.bio.range().len() >> 9);
@@ -1547,7 +1552,7 @@ pub async fn write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, a
     if fs.opts().inline_data.get() != 0 && data_len <= u64::from((fs.block_bytes() / 2).min(1024)) {
         write_data_inline(op, wbio, update, data_len as u32, Some(&mut flush));
     } else {
-        __write(op, wbio, of, Some(&mut flush)).await;
+        __write(op, wbio, of, at, Some(&mut flush)).await;
     }
 
     // if no commit took it, none had anything to flush: there's nothing to wait for
