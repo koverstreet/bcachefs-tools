@@ -113,6 +113,8 @@ use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
 
 use super::{Contents, Cuckoo, CuckooHasher, CuckooItem, Equivalent, Faults, Held, Mode};
 use crate::util::alloc::AllocError;
+use crate::util::printbuf::{Printbuf, ToText};
+use crate::prt;
 use crate::os::kernel::random_u64;
 use crate::os::percpu::CpuGuard;
 use crate::util::rcu::{kvfree_rcu, read_lock, RcuArray, RcuArrayHead, RcuElement, ReadGuard};
@@ -414,6 +416,24 @@ enum Rival {
 struct Full {
     newest:   *const Head,
     no_chain: bool,
+}
+
+/// Its count, and each table's slots used - counted, not taken from the
+/// count: a table mid-rehash has items in more than one, and a count that's
+/// drifted shows against them.
+impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> ToText for Cuckoo<I, S, W, M> {
+    #[cold]
+    fn to_text(&self, out: &mut Printbuf) {
+        out.tabstop_push(12);
+        prt!(out, "items:\t{}\r\n", self.len());
+        prt!(out, "moves:\t{}\r\n", self.moves.load(Relaxed));
+
+        let g = read_lock();
+        for t in self.tables(&g) {
+            let used = t.slots.iter().filter(|s| !s.is_empty()).count();
+            prt!(out, "table:\t2^{} slots, {} used ({}%)\r\n", t.bits(), used, used * 100 / t.slots.len());
+        }
+    }
 }
 
 impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M> {
