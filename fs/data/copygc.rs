@@ -65,6 +65,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, LoopFlow, Tr
 use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::c::Errcode;
+use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
 use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -316,6 +317,12 @@ fn fragmentation_lru(dev: u32) -> core::ops::RangeInclusive<LruPos> {
     LruPos::range(LruId::Fragmentation { dev })
 }
 
+/// The stripe lru past its empty stripes, which are the delete worker's.
+fn stripe_lru() -> core::ops::RangeInclusive<LruPos> {
+    let lru = LruPos::range(LruId::StripeFragmentation);
+    LruPos::new(LruId::StripeFragmentation.id(), STRIPE_LRU_POS_EMPTY + 1, 0)..=*lru.end()
+}
+
 /// The pass's batch is full: 16 buckets, or a quarter of those in flight.
 fn batch_full(batch: &Batch<'_>, in_flight: usize) -> bool {
     batch.len() >= 16usize.max(in_flight / 4)
@@ -527,7 +534,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
 
     fn get_stripe_buckets(&self, batch: &mut Batch<'f>) -> Result<(), BchError> {
         let trans = self.trans();
-        let lru = LruPos::range(LruId::StripeFragmentation);
+        let lru = stripe_lru();
         let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
         iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
@@ -559,27 +566,17 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// buckets is always right.
     fn should_do_ec(&self, devs: &KVVec<CopygcDev>) -> bool {
         let trans = self.trans();
-        let lru = LruPos::range(LruId::StripeFragmentation);
+        let lru = stripe_lru();
         let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
+        // a stripe's time is how full it is, on the bucket fragmentation
+        // lrus' scale: Stripe::fragmentation_lru_pos()
         let stripe_frag_ratio = iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
             let mut s_iter = BtreeIter::new(t, Btree::stripes, Bpos::default(), BtreeIterFlags::empty());
-            let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
-
-            let v = s.v();
-            let nr_data = v.nr_data();
-            let blocks_nonempty = s.data_blocks().filter(|b| b.sectors() != 0).count() as u64;
-
-            /* stripe is pending delete */
-            if blocks_nonempty == 0 {
-                return Ok(LoopFlow::Continue);
-            }
-
-            /* This matches the calculation in alloc_lru_idx_fragmentation, so we can
-             * directly compare without actually looking up the bucket pointed to by the
-             * bucket fragmentation lru:
-             */
-            Ok(LoopFlow::Break((blocks_nonempty << 31) / u64::from(nr_data)))
+            Ok(match Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? {
+                Some(_) => LoopFlow::Break(LruPos::from_bpos(lru_k.k.p).time),
+                None    => LoopFlow::Continue,
+            })
         }).unwrap_or(0);
 
         /*

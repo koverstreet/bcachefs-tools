@@ -6,8 +6,8 @@
 //! sectors, every block's stripe_refcount and bucket_to_stripe entry - and
 //! its backpointer; parity replicas, reconcile work and fragmentation
 //! accounting; the stripe lru, whose position (fragmentation_lru_pos()) the
-//! deleter and stripe reuse walk; and deleting a stripe gone empty, unless
-//! it's open.
+//! deleter and copygc walk, and the stripe reuse lru (reuse_lru_pos()); and
+//! deleting a stripe gone empty, unless it's open.
 //! Its data blocks' sectors are their extents', counted from the extent
 //! side, trigger_stripe_ptr() in alloc/buckets.rs - which updates the stripe
 //! key, running this.
@@ -84,6 +84,11 @@ fn stripe_of(k: BkeySC<'_>) -> Option<StripeK<'_>> {
 /// Its time in the stripe lru - none for no stripe.
 fn fragmentation_lru_pos(s: Option<StripeK<'_>>) -> u64 {
     s.map_or(0, |s| s.v().fragmentation_lru_pos())
+}
+
+/// Its time in the stripe reuse lru - none for no stripe.
+fn reuse_lru_pos(s: Option<StripeK<'_>>) -> u64 {
+    s.map_or(0, |s| s.v().reuse_lru_pos())
 }
 
 fn needs_reconcile(s: Option<StripeK<'_>>) -> i64 {
@@ -407,6 +412,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
         }
 
         lru_change(t, LruId::StripeFragmentation, idx, old_lru, new_lru)?;
+        lru_change(t, LruId::StripeReuse, idx, reuse_lru_pos(old), reuse_lru_pos(new))?;
 
         if needs_reconcile_delta != 0 {
             t.bit_mod_buffered(Btree::reconcile_hipri, data_to_rb_work_pos(Btree::stripes, op.new.k.p),

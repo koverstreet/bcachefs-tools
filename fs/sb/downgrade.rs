@@ -183,11 +183,14 @@ const UPGRADE: &[UpDown] = table! {
 /// past bucket_stripe_sectors, check_allocations, and the bucket sector
 /// counts it fixes silently; past inline_data_csum, the passes that move
 /// stripe backpointers, and their reconcile phys entries, to and from the
-/// stripe index's key.
+/// stripe index's key, and the lru checks, for the stripe lru's split into
+/// copygc's and reuse's.
 const UPGRADE_STRIPES: &[UpDown] = table! {
     bucket_stripe_sectors  => [check_allocations], [alloc_key_dirty_sectors_wrong, alloc_key_stripe_sectors_wrong];
-    inline_data_csum       => [check_backpointers_to_extents, check_extents_to_backpointers, check_reconcile_work],
-        [backpointer_to_missing_ptr, ptr_to_missing_backpointer, reconcile_work_phys_incorrectly_set];
+    inline_data_csum       => [check_backpointers_to_extents, check_extents_to_backpointers, check_reconcile_work,
+                               check_lrus, check_alloc_to_lru_refs],
+        [backpointer_to_missing_ptr, ptr_to_missing_backpointer, reconcile_work_phys_incorrectly_set,
+         lru_entry_bad, alloc_key_to_missing_lru_entry];
 };
 
 /// For an incompatible upgrade: one past what version_incompat_allowed was.
@@ -227,10 +230,12 @@ const DOWNGRADE: &[UpDown] = table! {
 /// which it needs - an empty one, if that's all.
 const DOWNGRADE_STRIPES: &[UpDown] = table! {
     bucket_stripe_sectors  => [check_allocations], [alloc_key_dirty_sectors_wrong];
-    // older versions reject the keys with a stripe index
-    inline_data_csum       => [check_backpointers_to_extents, check_extents_to_backpointers, check_reconcile_work],
+    // older versions reject the keys with a stripe index, and have one stripe
+    // lru: they delete the reuse lru's entries, an id they don't know
+    inline_data_csum       => [check_backpointers_to_extents, check_extents_to_backpointers, check_reconcile_work,
+                               check_lrus, check_alloc_to_lru_refs],
         [backpointer_to_missing_ptr, ptr_to_missing_backpointer, reconcile_work_phys_incorrectly_set,
-         bkey_snapshot_nonzero];
+         bkey_snapshot_nonzero, lru_entry_bad, alloc_key_to_missing_lru_entry];
 };
 
 // ── Applying them ────────────────────────────────────────────────────────────

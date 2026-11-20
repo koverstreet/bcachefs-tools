@@ -19,6 +19,7 @@ pub enum LruType {
     read = 0,
     fragmentation = 1,
     stripe_fragmentation = 2,
+    stripe_reuse = 3,
 }
 
 /*
@@ -30,6 +31,12 @@ pub const BCH_LRU_BUCKET_FRAGMENTATION_START: u32 = 1 << 13;
 pub const BCH_LRU_BUCKET_FRAGMENTATION_END: u32 = 2 << 13;
 
 pub const BCH_LRU_STRIPE_FRAGMENTATION: u32 = (1 << 16) - 2;
+
+/*
+ * Stripe reuse: stripes by what a new stripe packed into them must match, then
+ * by how much they can take - stripe.rs's reuse_lru_pos():
+ */
+pub const BCH_LRU_STRIPE_REUSE: u32 = (1 << 16) - 3;
 
 /*
  * Obsolete: the single fs-wide bucket fragmentation lru, replaced by the
