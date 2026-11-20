@@ -82,6 +82,8 @@ const INTERNAL: &[Attr<Fs>] = &gated(started, [
     Attr::ro(c"journal_reclaim",        |c, out| c.journal_reclaim_to_text(out)),
     Attr::ro(c"btree_cache",            |c, out| c.btree.cache.to_text(out)),
     Attr::ro(c"btree_key_cache",        |c, out| c.btree.key_cache.to_text(out)),
+    #[cfg(not(NO_BCACHEFS_FS))]
+    Attr::ro(c"inode_cache",            |c, out| c.vfs.inode_cache.to_text(out)),
     Attr::ro(c"btree_reserve_cache",    |c, out| c.btree_reserve_cache_to_text(out)),
     Attr::ro(c"btree_write_buffer",     |c, out| c.btree_write_buffer_to_text(out)),
     Attr::ro(c"new_stripes",            |c, out| c.new_stripes_to_text(out)),

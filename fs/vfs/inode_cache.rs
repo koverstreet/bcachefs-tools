@@ -22,6 +22,8 @@ use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::alloc::KVVec;
+use crate::util::printbuf::{Printbuf, ToText};
+use crate::prt;
 use crate::os::kernel::HZ;
 use crate::util::rcu::read_lock;
 use core::ptr::NonNull;
@@ -196,6 +198,16 @@ impl InodeCache {
                 return Ok(subvols);
             }
         }
+    }
+}
+
+impl ToText for InodeCache {
+    #[cold]
+    fn to_text(&self, out: &mut Printbuf) {
+        prt!(out, "inodes:\n");
+        self.inodes.to_text(&mut out.indent(2));
+        prt!(out, "by inode number:\n");
+        self.by_inum.to_text(&mut out.indent(2));
     }
 }
 

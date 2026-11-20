@@ -18,6 +18,7 @@ use crate::locking::{Locked, MemallocFlags, SpinLock};
 use crate::new_lock;
 use crate::util::alloc::{AllocError, Kmalloc};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
+use crate::util::printbuf::{Printbuf, ToText};
 use crate::util::rcu::{read_lock, RcuMember};
 use crate::util::siphash::SipHash13Key;
 use core::hash::Hash;
@@ -169,5 +170,14 @@ where K: Hash + Eq + Copy + Send + Sync, V: Copy + Eq + Send + Sync
 
     pub fn is_empty(&self) -> bool {
         self.table.len() == 0
+    }
+}
+
+/// Its table's: one item a key, its group.
+impl<K, V, const N: usize, S: CuckooHasher, const W: usize> ToText for CuckooMultimap<K, V, N, S, W>
+where K: Hash + Eq + Sync, V: Send
+{
+    fn to_text(&self, out: &mut Printbuf) {
+        self.table.to_text(out)
     }
 }
