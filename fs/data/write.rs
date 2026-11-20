@@ -1322,7 +1322,7 @@ async fn __write(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) {
         match pass.wp {
             Some(wp) => {
                 in_caller = false;
-                g.wait_on_run_queue(wp.index_updates()).await.record(op);
+                g.wait(Resume::run_queue(wp.index_updates())).await.record(op);
             }
             /* failed before finding a write point: nothing submitted, nothing to wait for */
             None => assert!(extents.is_empty(), "a write pass submitted, with no write point"),
