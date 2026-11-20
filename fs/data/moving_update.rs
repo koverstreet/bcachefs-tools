@@ -30,7 +30,7 @@ use crate::data::update::{read_err_benign, IOPRIO_IDLE};
 use crate::errcode::BchError;
 use crate::data::update_task::{self, Body, Update};
 use crate::util::refcount::RefGuard;
-use crate::util::task::{Resume, Spawn};
+use crate::util::task::{requeue, Resume, Spawn};
 use crate::data::read::{read_update, ReadDone};
 use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
@@ -76,6 +76,9 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     u.read_done.store(true, Relaxed);
 
     u.turn().wait(runq).await;
+    // the context's updates are its thread's: there, if the turn was ours
+    // already and the wait didn't move us - a read's retry ends where it ran
+    requeue(runq).await;
 
     let write_io = {
         let (moving, size) = moving_size(&u);
