@@ -68,7 +68,10 @@ impl c::alloc_request<'_, '_> {
 
 impl Fs {
     /// From @wp's buckets, those @req wants - until it's done - the rest
-    /// left there.
+    /// left there. Not inlined, nor are the partial list's or a cached copy's
+    /// picks: their iterators, lists and traces aren't needed in the frame a
+    /// fresh bucket's allocation runs under.
+    #[inline(never)]
     fn bucket_alloc_set_writepoint(&self, req: &mut c::alloc_request, wp: &mut c::WritePointLocked) -> bool {
         let mut done = false;
 
@@ -110,6 +113,7 @@ impl Fs {
     /// each round - not the first that will do: most allocations end here,
     /// and first fit would undo bucket_alloc_set()'s spreading of fresh
     /// buckets - until it's done, or none will do.
+    #[inline(never)]
     fn bucket_alloc_set_partial(&self, req: &mut c::alloc_request) -> bool {
         let a = &self.allocator;
         if a.freelist_lock.open_buckets_partial_nr.get() == 0 {
@@ -251,6 +255,7 @@ impl TransAttempt<'_, '_> {
     /// the partial list, or fresh - never blocking, as a write doesn't wait
     /// for its cached copy, and not getting one isn't an error. Only a
     /// restart is.
+    #[inline(never)]
     pub(crate) fn bucket_alloc_cached(&self, req: &mut c::alloc_request, wp: &mut c::WritePointLocked)
         -> Result<(), BchError>
     {
