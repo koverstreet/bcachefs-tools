@@ -18,6 +18,7 @@
 //! edited as its blocks are allocated. What only reads a key takes it
 //! borrowed, as a BkeySC.
 
+use crate::alloc::lru::{LruId, LruPos};
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_eq, pos, AnyKeySC, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::util::vstructs::Unvalidated;
@@ -38,7 +39,7 @@ use crate::util::Printbuf;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::dst_room::DstRoom;
 use core::mem::{offset_of, size_of};
-use core::ops::Range;
+use core::ops::{Range, RangeInclusive};
 
 /// The most blocks a stripe has: a pointer each, of the most a key holds.
 pub(crate) const MAX_BLOCKS: usize = c::BCH_BKEY_PTRS_MAX as usize;
@@ -144,27 +145,58 @@ impl c::Stripe<Validated> {
         Some(cast_plain_slice_mut(&mut self.ptrs[at]).expect("a stripe's block counts, aligned"))
     }
 
-    /// Its time in the stripe lru: 0, not in it, if it has no room for new
-    /// data; STRIPE_LRU_POS_EMPTY if it has no data, for the stripe_delete
-    /// worker; else earlier the more it can take - empty data blocks, and
-    /// blocks it could be widened by - to be reused first. Not in it either
-    /// with a checksum type this version doesn't know: it can't be reused or
-    /// deleted, which would update it.
+    /// How many of its data blocks are empty: None with a checksum type this
+    /// version doesn't know, which hides its block counts.
+    fn data_blocks_empty(&self) -> Option<u32> {
+        let counts = self.blockcounts()?;
+        Some(counts.iter().take(self.nr_data() as usize).filter(|n| n.get() == 0).count() as u32)
+    }
+
+    /// Its time in the stripe fragmentation lru, copygc's: STRIPE_LRU_POS_EMPTY
+    /// if it has no data, for the stripe_delete worker; 0, not in it, if it's
+    /// full; else how full its data blocks are, on the scale of a bucket's
+    /// fragmentation lru time, so copygc compares the two directly. Not in it
+    /// with a checksum type this version doesn't know: it can't be evacuated
+    /// or deleted, which would update it.
     ///
     /// Written by the stripe trigger, checked by check_lrus.
     pub fn fragmentation_lru_pos(&self) -> u64 {
-        let Some(counts) = self.blockcounts() else { return 0 };
+        let Some(empty) = self.data_blocks_empty() else { return 0 };
         let nr_data = self.nr_data();
-        let blocks_empty = counts.iter().take(nr_data as usize).filter(|n| n.get() == 0).count() as u32;
+        let nonempty = u64::from(nr_data - empty);
 
-        if blocks_empty == nr_data {
-            return STRIPE_LRU_POS_EMPTY;
+        if nonempty == 0 {
+            STRIPE_LRU_POS_EMPTY
+        } else if empty == 0 {
+            0
+        } else {
+            (nonempty << 31) / u64::from(nr_data)
         }
+    }
 
-        match blocks_empty + u32::from(self.can_widen()) {
-            0        => 0,
-            reusable => c::LRU_TIME_MAX - u64::from(reusable),
+    /// Its time in the stripe reuse lru: its group, reuse_group(), then how
+    /// many live data blocks it has - fewer than a new stripe packed into it
+    /// has data blocks. Not in it, 0: with no data, as it's to be deleted;
+    /// with as many live blocks as a stripe of its redundancy can have data
+    /// blocks, as nothing can take it; or with a checksum type this version
+    /// doesn't know, as it can't be updated.
+    ///
+    /// Written by the stripe trigger, checked by check_lrus.
+    pub fn reuse_lru_pos(&self) -> u64 {
+        let Some(empty) = self.data_blocks_empty() else { return 0 };
+        let live = self.nr_data() - empty;
+
+        if live == 0 || live >= c::BCH_BKEY_PTRS_MAX.saturating_sub(self.nr_redundant.into()) {
+            return 0;
         }
+        self.reuse_group() << STRIPE_REUSE_LIVE_BITS | u64::from(live)
+    }
+
+    /// What a new stripe packed into it must match: may_reuse_stripe()'s
+    /// static checks.
+    fn reuse_group(&self) -> u64 {
+        u64::from(self.bits.algorithm()) << 32 | u64::from(self.nr_redundant) << 24 |
+            u64::from(self.disk_label) << 16 | u64::from(self.sectors.get())
     }
 }
 
@@ -202,6 +234,20 @@ impl<B: AsMut<[u8]>> StripeCsums<B> {
 }
 
 pub const STRIPE_LRU_POS_EMPTY: u64 = 1;
+
+/// A stripe's time in the reuse lru is its group, then its live data blocks -
+/// fewer than BCH_BKEY_PTRS_MAX: the stripes a new stripe fits are one range
+/// of the lru, and stripe_reuse() walks only that.
+const STRIPE_REUSE_LIVE_BITS: u32 = 8;
+
+/// The stripe reuse lru's entries new stripe @new may be packed into, fewest
+/// live blocks first: None if it's too narrow to take any.
+pub fn stripe_reuse_lru(new: &c::Stripe<Validated>) -> Option<RangeInclusive<LruPos>> {
+    let group = new.reuse_group();
+    let at = |live, target| LruPos::new(LruId::StripeReuse.id(), group << STRIPE_REUSE_LIVE_BITS | live, target);
+    let nr_data = u64::from(new.nr_data());
+    (nr_data > 1).then(|| at(1, 0)..=at(nr_data - 1, u64::MAX))
+}
 
 /// Whether @p is the data block its stripe_ptr names in @s:
 /// bch2_ptr_matches_stripe(). A block past the value matches nothing.

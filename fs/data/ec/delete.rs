@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Deleting stripes gone empty: the stripe trigger queues the work, and
-//! the worker walks the stripe lru's empty end.
+//! the worker walks the stripe fragmentation lru's empty end.
 
 use crate::alloc::lru::{LruId, LruPos};
 use crate::btree::bkey::{pos, BkeyV};
@@ -54,7 +54,7 @@ pub(crate) fn stripe_delete(t: &TransAttempt<'_, '_>, idx: u64, is_open: bool) -
 }
 
 /// Deletes empty stripes that aren't open. They sit at lru time
-/// STRIPE_LRU_POS_EMPTY, ahead of every reusable one: it walks just those.
+/// STRIPE_LRU_POS_EMPTY, ahead of every one with data: it walks just those.
 ///
 /// XXX: can we kill this and delete stripes from the trigger?
 pub(crate) fn delete_empty_stripes(ec: &c::bch_fs_ec) {

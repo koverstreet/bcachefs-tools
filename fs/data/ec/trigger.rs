@@ -6,8 +6,8 @@
 //! sectors, every block's stripe_refcount and bucket_to_stripe entry - and
 //! its backpointer; parity replicas, reconcile work and fragmentation
 //! accounting; the stripe lru, whose position (fragmentation_lru_pos()) the
-//! deleter and stripe reuse walk; and deleting a stripe gone empty, unless
-//! it's open.
+//! deleter and copygc walk, and the stripe reuse lru (reuse_lru_pos()); and
+//! deleting a stripe gone empty, unless it's open.
 //! Its data blocks' sectors are their extents', counted from the extent
 //! side, trigger_stripe_ptr() in alloc/buckets.rs - which updates the stripe
 //! key, running this.
@@ -86,6 +86,11 @@ fn fragmentation_lru_pos(s: Option<StripeK<'_>>) -> u64 {
     s.map_or(0, |s| s.v().fragmentation_lru_pos())
 }
 
+/// Its time in the stripe reuse lru - none for no stripe.
+fn reuse_lru_pos(s: Option<StripeK<'_>>) -> u64 {
+    s.map_or(0, |s| s.v().reuse_lru_pos())
+}
+
 fn needs_reconcile(s: Option<StripeK<'_>>) -> i64 {
     s.map_or(0, |s| s.v().needs_reconcile().into())
 }
@@ -100,10 +105,9 @@ fn blocks_unchanged(old: StripeK<'_>, new: StripeK<'_>) -> bool {
         plain_bytes(o.block_ptrs()) == plain_bytes(n.block_ptrs())
 }
 
-/// Refresh @new's can_widen from the RW members its disk label has now,
-/// before fragmentation_lru_pos() reads it: else an update committing after
-/// reconcile's stripes scan passed the stripe would keep a stale one, and the
-/// scan's cookie be cleared with it wrong.
+/// Refresh @new's can_widen from the RW members its disk label has now: else
+/// an update committing after reconcile's stripes scan passed the stripe
+/// would keep a stale one, and the scan's cookie be cleared with it wrong.
 fn refresh_can_widen(fs: &Fs, new: &mut BkeyS<'_>) {
     let Some(mut s) = new.as_s().arm::<c::Stripe>() else { return };
     let v = s.v();
@@ -357,7 +361,7 @@ fn mark_stripe_buckets(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new: 
 /// The stripe key's trigger: bch2_trigger_stripe().
 ///
 /// Transactional: the new key's can_widen refreshed; an empty stripe that
-/// isn't open deleted; its place in the stripe lru, and its reconcile_hipri
+/// isn't open deleted; its places in the stripe lrus, and its reconcile_hipri
 /// bit. With gc as well: reconcile work, fragmentation and parity replicas
 /// accounting - gc's copy of the stripe made - and each changed block's
 /// bucket and backpointer. Atomic: a stripe gone empty kicks the deleter.
@@ -407,6 +411,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), B
         }
 
         lru_change(t, LruId::StripeFragmentation, idx, old_lru, new_lru)?;
+        lru_change(t, LruId::StripeReuse, idx, reuse_lru_pos(old), reuse_lru_pos(new))?;
 
         if needs_reconcile_delta != 0 {
             t.bit_mod_buffered(Btree::reconcile_hipri, data_to_rb_work_pos(Btree::stripes, op.new.k().p),

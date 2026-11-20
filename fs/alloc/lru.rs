@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The lru btree: per-device read and fragmentation lrus, and the stripe lru.
+//! The lru btree: per-device read and fragmentation lrus, and the stripe lrus,
+//! copygc's and reuse's.
 //!
 //! An entry is a set bit at an LruPos: which lru, a time, and the entry's
 //! target - a bucket (bucket_to_u64()) for the read and fragmentation lrus, a
-//! stripe index for the stripe lru. It's encoded into a bpos as inode = id <<
+//! stripe index for the stripe lrus. It's encoded into a bpos as inode = id <<
 //! LRU_TIME_BITS | time, offset = target, so the bpos order is (id, time,
 //! target): an lru is one contiguous range, oldest first. LruPos is that
 //! position, its own type rather than a bpos, converted only at the btree.
@@ -46,6 +47,7 @@ pub enum LruId {
     /// Before per_dev_fragmentation_lru: one lru for every device's buckets
     FragmentationOld,
     StripeFragmentation,
+    StripeReuse,
     /// None of ours: check_lrus() deletes its entries
     Unknown(u16),
 }
@@ -62,6 +64,8 @@ impl From<u16> for LruId {
             Self::FragmentationOld
         } else if id32 == c::BCH_LRU_STRIPE_FRAGMENTATION {
             Self::StripeFragmentation
+        } else if id32 == c::BCH_LRU_STRIPE_REUSE {
+            Self::StripeReuse
         } else {
             Self::Unknown(id)
         }
@@ -76,6 +80,7 @@ impl LruId {
             Self::Fragmentation { dev } => c::BCH_LRU_BUCKET_FRAGMENTATION_START + dev,
             Self::FragmentationOld      => c::BCH_LRU_BUCKET_FRAGMENTATION_OLD,
             Self::StripeFragmentation   => c::BCH_LRU_STRIPE_FRAGMENTATION,
+            Self::StripeReuse           => c::BCH_LRU_STRIPE_REUSE,
             Self::Unknown(id)           => u32::from(id),
         } as u16;
 
@@ -92,6 +97,7 @@ impl LruId {
             Self::Read { .. } | Self::Unknown(_)           => T::read,
             Self::Fragmentation { .. } | Self::FragmentationOld => T::fragmentation,
             Self::StripeFragmentation                      => T::stripe_fragmentation,
+            Self::StripeReuse                              => T::stripe_reuse,
         }
     }
 }
@@ -138,7 +144,7 @@ impl LruPos {
     /// The key the entry is for: lru_pos_to_bp().
     pub fn backing(self) -> c::bbpos {
         match self.lru_id().lru_type() {
-            c::LruType::stripe_fragmentation => c::bbpos {
+            c::LruType::stripe_fragmentation | c::LruType::stripe_reuse => c::bbpos {
                 btree: Btree::stripes,
                 pos:   pos(0, self.target),
             },
@@ -283,6 +289,7 @@ fn expected_time(fs: &Fs, ty: c::LruType, k: BkeySC<'_>) -> u64 {
             fs.dev_rcu(k.k.p.inode as u32, &rcu).map_or(0, |ca| a.lru_idx_fragmentation(ca))
         }
         T::stripe_fragmentation => k.arm::<c::Stripe>().map_or(0, |s| s.v().fragmentation_lru_pos()),
+        T::stripe_reuse => k.arm::<c::Stripe>().map_or(0, |s| s.v().reuse_lru_pos()),
         t => unreachable!("lru type {}", t.0),
     }
 }
@@ -337,14 +344,14 @@ fn check_lru_key(
 }
 
 /// Pin lru @lru's backing keys in the btree node cache: a per-device lru's
-/// are its device's slice of the alloc btree, the stripe lru's the stripes
+/// are its device's slice of the alloc btree, the stripe lrus' the stripes
 /// btree. The others' entries - the old fs-wide fragmentation lru, ids nothing
 /// uses - are scattered or bogus, stragglers to be deleted: no pin.
 fn pin_backing(trans: &TransGuard<'_>, pins: &BtreeCachePins<'_>, lru: LruId) -> Result<(), BchError> {
     let (btree, start, end) = match lru {
         LruId::Read { dev } | LruId::Fragmentation { dev } =>
             (Btree::alloc, pos(dev.into(), 0), spos(dev.into(), u64::MAX, u32::MAX)),
-        LruId::StripeFragmentation =>
+        LruId::StripeFragmentation | LruId::StripeReuse =>
             (Btree::stripes, POS_MIN, SPOS_MAX),
         LruId::FragmentationOld | LruId::Unknown(_) => {
             pins.unpin();

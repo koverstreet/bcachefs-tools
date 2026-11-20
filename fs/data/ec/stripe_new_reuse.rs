@@ -5,8 +5,10 @@
 //!
 //! A new stripe can be packed into an old one instead of being cut whole from
 //! new buckets: where the devices are low on space, or a full stripe of new
-//! buckets can't be had. The stripe lru has the stripes with the most room -
-//! empty data blocks, and blocks they could be widened by - first. The old
+//! buckets can't be had. The stripe reuse lru has the stripes by what a new
+//! stripe packed into them must match - algorithm, redundancy, disk label and
+//! block size - then by how many live data blocks they have, fewest first: a
+//! new stripe walks only the range it fits, from the most room. The old
 //! stripe's live data blocks come forward: carried, in place, if their device
 //! is good, moved to a new bucket if not. Its empty blocks and its parity are
 //! left behind, and new buckets fill out the rest.
@@ -19,14 +21,13 @@
 //! A repair's rebuild reuses the stripe it replaces the same way, with every
 //! data block it can keep carried or moved: repair.rs.
 
-use crate::alloc::lru::{LruId, LruPos};
-use crate::btree::bkey::{pos, BkeySC, BkeyV, BkeyVMut};
+use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::data::ec::buf::{blocks_in, StripeBuf};
 use crate::data::ec::open::{OpenStripe, StripeClaim};
 use crate::data::ec::repair::StripeBlocks;
-use crate::data::ec::stripe::{StripeKey, STRIPE_LRU_POS_EMPTY};
+use crate::data::ec::stripe::{stripe_reuse_lru, StripeKey, STRIPE_LRU_POS_EMPTY};
 use crate::data::ec::stripe_new::{Internal, Slot};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -120,12 +121,11 @@ fn may_reuse_stripe(s: &Internal, old: &c::Stripe<Validated>, b: StripeBlocks) -
 }
 
 /// Stripe @idx, if @s may be packed into it: opened, with its key, as @s's
-/// Reuse - and its blocks. None if it's gone - the lru races with the write
-/// buffer - can't be reused, or is open already. get_old_stripe().
+/// Reuse - and its blocks. None if it's gone or changed - the lru races with
+/// the write buffer - or is open already. get_old_stripe().
 ///
-/// An empty one that isn't open is deleted, and one whose can_widen is too
-/// high is demoted: each a commit, and transaction_restart_commit, for the
-/// caller's walk to pick up from.
+/// An empty one that isn't open is deleted: a commit, and
+/// transaction_restart_commit, for the caller's walk to pick up from.
 fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
     -> Result<Option<StripeBlocks>, BchError>
 {
@@ -145,20 +145,6 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
             return Ok(None);
         }
         t.delete_at(iter, UpdateTriggerFlags::empty())?;
-        return t.commit_lazy(None, CommitFlags::NO_ENOSPC).map(|()| None);
-    }
-
-    // A can_widen gone stale-high - its label's RW members shrank since the
-    // last stripes scan - would keep a stripe that can't be widened at the
-    // front of the lru, ahead of real candidates. Only demoted here:
-    // promotion, devices added or going RW, is the scan's. Against the RW
-    // members online or not, as the scan's is, so devices coming and going
-    // don't churn every stripe's.
-    let want = v.want_can_widen(fs.ec_rw_member_devs_nr(v.disk_label, v.sectors.get()),
-                                fs.opts().ec_max_data_blocks.get().into());
-    if v.can_widen() > want {
-        t.bkey_make_mut(iter, old, UpdateTriggerFlags::empty(),
-                        |u| Ok(u.v_mut().bits.set_can_widen(want)))?;
         return t.commit_lazy(None, CommitFlags::NO_ENOSPC).map(|()| None);
     }
 
@@ -209,11 +195,13 @@ pub(crate) fn init_new_stripe_from_old(s: &mut Internal, carry: u32, move_: u32,
     }
 }
 
-/// Pack @s into the first stripe in the stripe lru it may be packed into:
-/// stripe_alloc_blocked if there's none.
+/// Pack @s into the first stripe in the stripe reuse lru it may be packed
+/// into: stripe_alloc_blocked if there's none.
 fn stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchError> {
     let fs = t.fs();
-    let lru = LruPos::range(LruId::StripeFragmentation);
+    let Some(lru) = stripe_reuse_lru(s.new_stripe.stripe().v()) else {
+        return fs.throw(Errcode::stripe_alloc_blocked);
+    };
     let mut iter = BtreeIter::new(t, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
     let found = iter.for_each_max_norestart(t, lru.end().to_bpos(), |_, k| {
         Ok(match get_old_stripe(t, s, k.k.p.offset)? {

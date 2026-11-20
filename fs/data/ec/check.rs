@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! fsck of what refers to stripes, and what stripes refer to -
-//! check_stripe_refs: each stripe's entry in the stripe lru, and a
+//! check_stripe_refs: each stripe's entries in the stripe lrus, and a
 //! bucket_to_stripe entry for each of its blocks' buckets; and back, that
 //! each bucket_to_stripe entry's stripe exists, with a block in that bucket.
 //!
@@ -44,7 +44,7 @@ fn bucket_stripe_ref_mod(t: &TransAttempt<'_, '_>, bucket: Bpos, stripe: u64, se
     t.bit_mod(Btree::bucket_to_stripe, pos(bucket_to_u64(bucket), stripe), set)
 }
 
-/// Stripe @k's lru entry and its blocks' buckets' refs to it.
+/// Stripe @k's lru entries and its blocks' buckets' refs to it.
 /// check_stripe_refs_one().
 fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: &mut WbMaybeFlush)
     -> Result<(), BchError>
@@ -53,9 +53,11 @@ fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: 
     let fs = t.fs();
     let idx = k.k.p.offset;
 
-    let lru_idx = s.v().fragmentation_lru_pos();
-    if lru_idx != 0 {
-        lru_check_set(t, LruPos::new(LruId::StripeFragmentation.id(), lru_idx, idx), k, last_flushed.borrow())?;
+    for (lru, time) in [(LruId::StripeFragmentation, s.v().fragmentation_lru_pos()),
+                        (LruId::StripeReuse,         s.v().reuse_lru_pos())] {
+        if time != 0 {
+            lru_check_set(t, LruPos::new(lru.id(), time, idx), k, last_flushed.borrow())?;
+        }
     }
 
     for (i, ptr) in s.v().block_ptrs().iter().enumerate() {
