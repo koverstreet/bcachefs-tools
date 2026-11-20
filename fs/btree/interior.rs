@@ -550,19 +550,52 @@ impl<'t> InteriorUpdate<'t> {
     pub(crate) fn start(t: &'t TransAttempt<'t, 't>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
                         opts: StartOpts) -> Result<Self, BchError> {
         let ip = crate::ret_ip!();
-        Self::start_in(t, paths, path, level, opts, ip)
+        let trans = t.trans();
+        let fs = trans.fs();
+        let restart_count = trans.restart_count();
+        let (target, write) = (opts.target, opts.write);
+
+        let (update, nr_nodes) = Self::start_in(t, paths, path, level, opts, ip)?;
+
+        /*
+         * We don't want to allocate if we're in an error state, that can cause
+         * deadlock on emergency shutdown due to open buckets getting stuck in
+         * the btree_reserve_cache after allocator shutdown has cleared it out.
+         * This check needs to come after adding us to the btree_interior_update
+         * list but before calling bch2_btree_reserve_get, to synchronize with
+         * __bch2_fs_read_only().
+         */
+        let ret = fs.journal.error()
+            .and_then(|()| update.reserve(paths, nr_nodes, target, update.flags, write))
+            .and_then(|()| trans.relock_from(paths));
+        if let Err(e) = ret {
+            if crate::util::log::should_print_err(&e) &&
+               !e.matches(c::ENOSPC) &&
+               !e.matches(c::EROFS) &&
+               e != BchError::from(Errcode::journal_reclaim_would_deadlock) &&
+               e != BchError::from(Errcode::journal_shutdown) {
+                crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());
+            }
+            return Err(e);
+        }
+
+        trans.verify_not_restarted(restart_count);
+        Ok(update)
     }
 
+    /// The update, on the live list, and the nodes to reserve for it at the
+    /// leaf level and above. Not inlined: its initializer's copies aren't
+    /// needed in the frame the reserve allocates under.
+    #[inline(never)]
     fn start_in(t: &'t TransAttempt<'t, 't>, paths: &mut Paths<'_>, path: PathIdx, level_start: usize,
-                StartOpts { mut split, target, mut commit, write, new_key_u64s, range }: StartOpts,
-                ip_started: c_ulong) -> Result<Self, BchError>
+                StartOpts { mut split, target: _, mut commit, write: _, new_key_u64s, range }: StartOpts,
+                ip_started: c_ulong) -> Result<(Self, [usize; 2]), BchError>
     {
         use c::Watermark as wm;
 
         let trans = t.trans();
         let fs = trans.fs();
         let start_time = local_clock();
-        let restart_count = trans.restart_count();
 
         trans.verify_paths(paths);
         assert!(paths[path].should_be_locked(), "an interior update on a path that isn't locked");
@@ -687,32 +720,7 @@ impl<'t> InteriorUpdate<'t> {
             let more = g.live.len() - g.unwritten.len();
             g.unwritten.reserve_nofail(more);
         }
-        let update = InteriorUpdate { t, raw, owner: RefCell::new(Some(owner)) };
-
-        /*
-         * We don't want to allocate if we're in an error state, that can cause
-         * deadlock on emergency shutdown due to open buckets getting stuck in
-         * the btree_reserve_cache after allocator shutdown has cleared it out.
-         * This check needs to come after adding us to the btree_interior_update
-         * list but before calling bch2_btree_reserve_get, to synchronize with
-         * __bch2_fs_read_only().
-         */
-        let ret = fs.journal.error()
-            .and_then(|()| update.reserve(paths, nr_nodes, target, commit, write))
-            .and_then(|()| trans.relock_from(paths));
-        if let Err(e) = ret {
-            if crate::util::log::should_print_err(&e) &&
-               !e.matches(c::ENOSPC) &&
-               !e.matches(c::EROFS) &&
-               e != BchError::from(Errcode::journal_reclaim_would_deadlock) &&
-               e != BchError::from(Errcode::journal_shutdown) {
-                crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());
-            }
-            return Err(e);
-        }
-
-        trans.verify_not_restarted(restart_count);
-        Ok(update)
+        Ok((InteriorUpdate { t, raw, owner: RefCell::new(Some(owner)) }, nr_nodes))
     }
 
     pub(crate) fn t(&self) -> &'t TransAttempt<'t, 't> {
