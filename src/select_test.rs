@@ -11,7 +11,8 @@
 //! - `a_wake_ends_the_wait_before_its_timeout`: the wake not completing the
 //!   Select, or the Timer not deleted as it drops - the wait then sits out
 //!   the whole timeout
-//! - `a_wake_racing_the_timer`: both inputs completing the Select - a second
+//! - `a_wake_racing_the_timer`, run with --ignored - whether the race happens
+//!   is the scheduler's: both inputs completing the Select - a second
 //!   completion that isn't a no-op asserts, one that's lost hangs
 
 use bcachefs_kernel::os::kernel::HZ;
@@ -84,6 +85,7 @@ fn a_wake_ends_the_wait_before_its_timeout() {
 }
 
 #[test]
+#[ignore = "a race the scheduler has to make: run with --ignored"]
 fn a_wake_racing_the_timer() {
     init();
     static EV: EventCount = EventCount::new();
