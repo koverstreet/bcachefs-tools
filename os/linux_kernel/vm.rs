@@ -68,7 +68,10 @@ impl<'a, D> VmArea<'a, D> {
     pub fn flags(&self) -> kernel::ffi::c_ulong {
         #[cfg(linux_ge = "7.0")]
         let flags = self.0.vma_flags.__vma_flags[0];
-        #[cfg(all(linux_ge = "6.17", not(linux_ge = "7.0")))]
+        // vm_flags and vma_flags are the one word
+        #[cfg(all(linux_ge = "6.19", not(linux_ge = "7.0")))]
+        let flags = unsafe { self.0.__bindgen_anon_1.vm_flags };
+        #[cfg(all(linux_ge = "6.17", not(linux_ge = "6.19")))]
         let flags = self.0.vm_flags;
         // vm_flags and __vm_flags are the one word
         #[cfg(not(linux_ge = "6.17"))]
