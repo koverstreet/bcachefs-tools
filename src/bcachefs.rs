@@ -20,6 +20,8 @@ mod backtrace_test;
 #[cfg(test)]
 mod percpu_test;
 #[cfg(test)]
+mod select_test;
+#[cfg(test)]
 mod workqueue_test;
 
 use std::process::ExitCode;

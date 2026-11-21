@@ -26,7 +26,8 @@ use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::os::ops::IntoRaw;
 use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, waiter, CompletionReturn, Resume, Return, Spawn, TaskSlot};
+use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Return, Spawn, TaskSlot,
+                        WaitSync};
 use crate::os::workqueue::Queue;
 use core::pin::{pin, Pin};
 use core::ptr::{self, NonNull};
@@ -53,13 +54,15 @@ pub fn pools_exit(q: &Quiesced<'_>) {
     DIOS.exit(q);
 }
 
-enum End {
+/// A dio's end: its kiocb's completion, or its caller waiting - the read's
+/// and the write's.
+pub(super) enum End {
     Async(kiocb::Completion),
     Sync(Return<Result<usize, BchError>, waiter::Sync>),
 }
 
 impl End {
-    fn complete(self, ret: Result<usize, BchError>) {
+    pub(super) fn complete(self, ret: Result<usize, BchError>) {
         match self {
             End::Async(done) => done.complete(ret.into_raw()),
             End::Sync(r) => r.complete(ret),
@@ -211,7 +214,7 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
     })?;
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped | flags;
 
-    let mut slot = None;
+    let mut slot = DoneWith::new();
     let (end, wait) = match unsafe { req.queued() } {
         Some(done) => (End::Async(done), None),
         None => {
@@ -228,7 +231,7 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
 
     match wait {
         None => Err(c::EIOCBQUEUED.into()),
-        Some(wait) => wait.wait(Sleep::UNINTERRUPTIBLE).expect("a dio's task, ended with what it read"),
+        Some(wait) => wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a dio's task, ended with what it read"),
     }
 }
 

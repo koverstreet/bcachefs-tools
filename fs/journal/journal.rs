@@ -118,8 +118,8 @@
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::mem;
-use core::ptr::{self, NonNull};
-use core::sync::atomic::fence;
+use core::ptr;
+use core::sync::atomic::{fence, AtomicPtr};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
 
 
@@ -127,8 +127,9 @@ use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::JournalCycleFlags as Cycle;
 use crate::c::JournalFlag as Journal;
-use crate::c::{buf_waiters, BufWait, JournalGuard, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT,
-               JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT};
+use crate::c::JournalGuard;
+use crate::journal::flush_wait::{BufWait, FlushEntry, FlushWait, Waiters, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT,
+                                 JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT};
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, SbFeature};
@@ -139,8 +140,9 @@ use crate::journal::entries::EntryWriter;
 use crate::util::alloc::{flags, KVVec};
 use crate::util::backtrace::prt_current_backtrace;
 use crate::format::DataType;
-use crate::util::closure::{closure_fn_addr, closure_has_waiters, closure_wait, closure_waiting, closure_wake_up,
-                           detached, waitlist_first, StackClosure};
+use crate::util::closure::closure_fn_addr;
+use crate::util::task::{waiter, Select, WaitSync};
+use crate::util::timer::Timer;
 use crate::os::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffies, time_after, unlikely, HZ, WRITE};
 use crate::util::futex::EventCount;
 use crate::util::rcu::read_lock;
@@ -756,7 +758,7 @@ impl c::journal {
         let new_first = if self.lock.last_seq_ondisk.get() == seq {
             JOURNAL_BUF_FLUSH_NO_WAIT
         } else {
-            waitlist_first(&self.flush_wait).swap(ptr::null_mut(), SeqCst)
+            self.flush_wait.swap(ptr::null_mut(), SeqCst)
         };
 
         let was = g.seq_to_buf(seq).expect("the entry just opened").wait_word().swap(new_first, SeqCst);
@@ -804,8 +806,13 @@ impl c::journal {
         Ok(())
     }
 
+    /// Whether anything's on flush_wait - a hint, racing its adds and wakes.
+    fn flush_waiting(&self) -> bool {
+        !self.flush_wait.load(Relaxed).is_null()
+    }
+
     fn has_flush_waiters(&self, g: &c::JournalLocked) -> bool {
-        closure_has_waiters(&self.flush_wait) ||
+        self.flush_waiting() ||
             (self.reservations().is_open() && self.cur_buf(g).must_flush())
     }
 
@@ -813,7 +820,7 @@ impl c::journal {
         if self.reservations().is_open() {
             self.has_flush_waiters(g) && g.in_flight.len() <= 1
         } else {
-            closure_has_waiters(&self.flush_wait)
+            self.flush_waiting()
         }
     }
 
@@ -835,7 +842,7 @@ impl c::journal {
 
     fn should_open(&self, flags: c::JournalCycleFlags) -> bool {
         !self.reservations().is_open() &&
-            (flags.contains(Cycle::must_open) || closure_has_waiters(&self.flush_wait))
+            (flags.contains(Cycle::must_open) || self.flush_waiting())
     }
 
     /*
@@ -892,13 +899,15 @@ impl c::journal {
         self.wake_async_wait();
 
         /*
-         * Wake closure waiters who'd otherwise be parked indefinitely once
+         * Wake flush waiters who'd otherwise be parked indefinitely once
          * we enter error state: no future write_done will fire, so the
          * usual per-write wake-ups (and reclaim-side wake-ups) won't reach
          * them. They re-check on wake, see the journal is shutting down,
          * and return the appropriate error.
          */
-        closure_wake_up(&self.flush_wait);
+        if let Some(waiters) = Waiters::take(&self.flush_wait, ptr::null_mut()) {
+            waiters.wake();
+        }
         self.reclaim_flush_wait.wake();
     }
 
@@ -943,7 +952,7 @@ impl c::journal {
             seq == self.lock.seq_ondisk.get()
         } else {
             seq == self.lock.flushed_seq_ondisk.get()
-        }) && !closure_has_waiters(&self.flush_wait);
+        }) && !self.flush_waiting();
 
         if !ret {
             let _ = self.cycle_locked(&pins, &mut g, Cycle::must_close);
@@ -1197,16 +1206,14 @@ impl c::journal {
 
     /* journal flushing: */
 
-    /// # Safety
-    /// @cl is a live closure, on no waitlist.
-    pub unsafe fn __flush_seq_async(&self, mut seq: u64, cl: NonNull<c::closure>) -> *const c::closure_waitlist {
-        assert!(!unsafe { closure_waiting(cl) }, "journal flush waiting with a closure already on a waitlist");
-
+    /// @e, waiting for @seq's flush - which it asks for - till it's
+    /// completed: on a buf's word or flush_wait, the one returned.
+    pub fn __flush_seq_async(&self, mut seq: u64, e: &FlushEntry) -> &AtomicPtr<FlushEntry> {
         let in_flight = unsafe { &(*self.lock.data_ptr()).in_flight };
         let mut wait = None;
 
         /*
-         * Walk forward to the first live entry (open or in flight) and attach cl
+         * Walk forward to the first live entry (open or in flight) and attach e
          * to it; its write completion (or halt) wakes us.
          *
          * A slot reads as JOURNAL_BUF_NOT_IN_FLIGHT when no entry occupies it: the
@@ -1216,11 +1223,11 @@ impl c::journal {
          */
         loop {
             let buf = in_flight.slot(seq);
-            match unsafe { buf.wait(cl) } {
+            match buf.wait(e) {
                 BufWait::NotWaitable => seq += 1,
                 BufWait::NotInFlight => break,
                 BufWait::Waiting { first } => {
-                    let w = &raw const buf.wait;
+                    let w = buf.wait_word();
                     /* If the waitlist already had waiters we can skip the
                      * barrier and close check */
                     if !first {
@@ -1241,8 +1248,8 @@ impl c::journal {
          * data is durable.
          */
         let wait = wait.unwrap_or_else(|| {
-            assert!(unsafe { closure_wait(&self.flush_wait, cl) }, "journal flush closure already waiting");
-            &raw const self.flush_wait
+            e.push(&self.flush_wait);
+            &self.flush_wait
         });
 
         fence(SeqCst);
@@ -1250,7 +1257,7 @@ impl c::journal {
         let cycle = if self.reservations().is_open() {
             self.lock.seq_ondisk.get() + 1 == self.fs().journal_cur_seq()
         } else {
-            closure_has_waiters(&self.flush_wait)
+            self.flush_waiting()
         };
         if cycle {
             self.cycle(Cycle::empty());
@@ -1269,12 +1276,15 @@ impl c::journal {
      * Like bch2_journal_wait_on_seq, except that it triggers a write immediately if
      * necessary
      */
-    unsafe fn flush_seq_async(&self, mut seq: u64, cl: NonNull<c::closure>) -> Result<bool, BchError> {
+    /// @attach puts the waiter on the flush of the seq it's to wait for -
+    /// dropped uncalled, if it's not to wait: Ok(true), or an error.
+    fn flush_seq_async(&self, mut seq: u64,
+                       attach: impl for<'j> FnOnce(&'j Self, u64) -> &'j AtomicPtr<FlushEntry>)
+        -> Result<bool, BchError>
+    {
         let fs = self.fs();
         let flushed_seq_ondisk = self.lock.flushed_seq_ondisk.get();
         let cur_seq = fs.journal_cur_seq();
-
-        assert!(!unsafe { closure_waiting(cl) }, "journal flush waiting with a closure already on a waitlist");
 
         if seq <= flushed_seq_ondisk {
             return Ok(true);
@@ -1301,7 +1311,7 @@ impl c::journal {
 
         self.flushing_seq.fetch_max(seq as i64, SeqCst);
 
-        let wait = unsafe { self.__flush_seq_async(seq, cl) };
+        let wait = attach(self, seq);
 
         /*
          * Memory barrier between wait and checking for journal error is in
@@ -1319,8 +1329,12 @@ impl c::journal {
         let fs = self.fs();
         let start_time = local_clock();
 
-        pin_init::stack_pin_init!(let cl = StackClosure::new());
-        let ret = unsafe { self.flush_seq_async(seq, NonNull::new_unchecked(cl.as_ptr())) };
+        const FLUSHED: u32 = 1 << 0;
+        let mut sel = core::pin::pin!(None);
+        let (mut wait, [flushed, timed_out]) = Select::new(sel.as_mut(), waiter::Sync::current());
+        let mut slot = core::pin::pin!(None);
+        let flush = FlushWait::chained(slot.as_mut(), waiter::Sync::current(), flushed);
+        let ret = self.flush_seq_async(seq, |j, seq| flush.attach(j, seq));
 
         /*
          * Don't report stuck until we've waited longer than a flush could
@@ -1339,14 +1353,16 @@ impl c::journal {
         let online = c::bch_devs_mask { d: fs.devs_online.load() };
         let total_wait = (fs.dev_latency_max(&online, WRITE as c_int) * 5).max(HZ * 10);
 
-        if unsafe { c::closure_sync_timeout(cl.as_ptr(), total_wait) } != 0 {
-            {
+        if slot.as_ref().as_pin_ref().expect("just made").armed() {
+            pin_init::stack_pin_init!(let _timer = Timer::new(timed_out, total_wait));
+            if wait.wait_sync(Sleep::UNINTERRUPTIBLE) & FLUSHED == 0 {
                 let mut msg = LogMsg::new(fs);
                 prt!(&mut *msg, "bch2_journal_flush_seq stuck? Waited {}s for seq {seq}\n", total_wait / HZ);
                 self.to_text(&mut msg);
             }
-            cl.sync();
         }
+        // the flush's own wait - completed after the Select's: so all of it's done
+        slot.as_mut().as_pin_mut().expect("just made").completion().wait_sync(Sleep::UNINTERRUPTIBLE);
 
         /* Don't update time_stats when @seq is already flushed: */
         if ret == Ok(false) {
@@ -1362,17 +1378,11 @@ impl c::journal {
 
     /*
      * If there is an open journal entry, or a journal still being written, write
-     * it and wait for the write to complete - @cl's, or no one's
+     * it - waited for by no one
      */
-    pub fn flush_async(&self, cl: Option<NonNull<c::closure>>) {
-        match cl {
-            None => detached(|cl| {
-                let _ = unsafe { self.flush_seq_async(self.lock.seq.load(Relaxed) as u64, cl) };
-            }),
-            Some(cl) => {
-                let _ = unsafe { self.flush_seq_async(self.lock.seq.load(Relaxed) as u64, cl) };
-            }
-        }
+    pub fn flush_async(&self) {
+        let _ = self.flush_seq_async(self.lock.seq.load(Relaxed) as u64,
+                                     |j, seq| j.__flush_seq_async(seq, FlushEntry::detached()));
     }
 
     /// Everything committed before the call is on disk when it returns
@@ -1428,7 +1438,7 @@ impl c::journal {
     /// Write a journal entry with nothing in it but metadata, and wait for it
     /// to be flushed - without a write ref: meta()'s, for callers that hold one.
     pub fn __meta(&self) -> Result<(), BchError> {
-        pin_init::stack_pin_init!(let cl = StackClosure::new());
+        let mut slot = core::pin::pin!(None);
 
         /*
          * An empty entry is the journal's own forward progress: it can't wait
@@ -1437,10 +1447,10 @@ impl c::journal {
         let mut res = c::journal_res::default();
         let u64s = (size_of::<Head<c::jset_entry>>() / size_of::<u64>()) as u32;
         self.res_get(&mut res, u64s, c::Watermark::reclaim as u32, None)?;
-        unsafe { self.__flush_seq_async(res.seq, NonNull::new_unchecked(cl.as_ptr())) };
+        FlushWait::new(slot.as_mut(), waiter::Sync::current()).attach(self, res.seq);
         self.res_put(&mut res);
 
-        cl.sync();
+        slot.as_mut().as_pin_mut().expect("just made").completion().wait_sync(Sleep::UNINTERRUPTIBLE);
 
         self.error()
     }
@@ -1641,7 +1651,7 @@ impl c::journal {
         prt!(out, "reclaim runs in:\t{} ms\n",
              if time_after(next_reclaim, now) { jiffies_to_msecs(next_reclaim.wrapping_sub(jiffies())) } else { 0 });
         prt!(out, "blocked:\t{}\n",                     self.lock.blocked.get());
-        prt!(out, "flush_wait:\t{}\n",                  u32::from(closure_has_waiters(&self.flush_wait)));
+        prt!(out, "flush_wait:\t{}\n",                  u32::from(self.flush_waiting()));
         prt!(out, "current entry sectors:\t{}\n",       g.cur_entry_sectors);
         prt!(out, "current entry error:\t{}\n",         BchError::from_raw(self.lock.cur_entry_error.get()).msg());
         prt!(out, "current entry:\t");
@@ -1712,7 +1722,7 @@ crate::fs_delayed_work! {
     pub(crate) work WriteWork: field journal.write_work;
 
     fn run(fs: &Fs) {
-        fs.journal.flush_async(None);
+        fs.journal.flush_async();
     }
 }
 
@@ -1729,24 +1739,15 @@ impl NotRw<'_> {
 /*
  * Slowpath: wake a journal flush waitlist after the journal errored.
  *
- * Sentinel-safe: buf->wait.list.first multiplexes journal sentinels
- * (NOT_IN_FLIGHT/NOFLUSH/FLUSH_NO_WAIT) with closure-list pointers, so grab
- * into a local and wake only real closures. xchg to NULL races cleanly with
- * the journal_write_done{,_flush}() grabbers - they just get NULL, and
- * closure_wake_up() on a NULL list is a no-op, so no sentinel is ever walked.
+ * Sentinel-safe: buf->wait multiplexes journal sentinels
+ * (NOT_IN_FLIGHT/NOFLUSH/FLUSH_NO_WAIT) with waiter chains, so grab into a
+ * local and wake only real waiters. xchg to NULL races cleanly with the
+ * journal_write_done{,_flush}() grabbers - they just get NULL, so no sentinel
+ * is ever walked.
  */
 #[cold]
-fn flush_seq_err_wake(wait: *const c::closure_waitlist) {
-    let first = waitlist_first(unsafe { &*wait }).swap(ptr::null_mut(), SeqCst);
-    if buf_waiters(first) {
-        closure_wake_up(&c::closure_waitlist { list: c::llist_head { first } });
+fn flush_seq_err_wake(wait: &AtomicPtr<FlushEntry>) {
+    if let Some(waiters) = Waiters::take(wait, ptr::null_mut()) {
+        waiters.wake();
     }
-}
-
-/// # Safety
-/// @cl is a live closure, on no waitlist.
-pub unsafe fn __bch2_journal_flush_seq_async(j: &c::journal, seq: u64, cl: *mut c::closure)
-    -> *mut c::closure_waitlist
-{
-    unsafe { j.__flush_seq_async(seq, NonNull::new_unchecked(cl)) }.cast_mut()
 }

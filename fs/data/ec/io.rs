@@ -22,7 +22,8 @@ use crate::util::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, BioOwner, Gathered};
 use crate::util::gather::{Fold, Gather};
 use crate::os::kernel::{local_clock, WRITE};
 use crate::util::rcu::read_lock;
-use crate::util::task::{waiter, Resume, Waiter};
+use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, Resume, WaitSync, Waiter};
 use crate::os::workqueue::Queue;
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
@@ -251,11 +252,13 @@ where
     }
 }
 
-impl<R: IoRefIdx> BlockIo<'_, R, waiter::Sync> {
-    /// Every bio done, and each block's error in the buffer.
-    pub(crate) fn wait_sync(self: Pin<&mut Self>) {
+/// Every bio done, and each block's error in the buffer.
+impl<R: IoRefIdx> WaitSync for Pin<&mut BlockIo<'_, R, waiter::Sync>> {
+    type Output = ();
+
+    fn wait_sync(self, how: Sleep) {
         let this = self.project();
-        record(this.buf, this.done.wait_sync());
+        record(this.buf, this.done.wait_sync(how));
     }
 }
 
@@ -282,7 +285,7 @@ pub(crate) fn read_sync(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut 
     for i in blocks_in(blocks & ((1u64 << s.v().nr_blocks) - 1) as u32) {
         io.as_mut().submit(s, i);
     }
-    io.as_mut().wait_sync();
+    io.as_mut().wait_sync(Sleep::IDLE);
 }
 
 // ── Scrub ────────────────────────────────────────────────────────────────

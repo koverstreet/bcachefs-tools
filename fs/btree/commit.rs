@@ -879,8 +879,8 @@ impl BtreeTrans<'_> {
                 j.pin_set(res.seq, unsafe { &*self.journal_pin.get() }, c::JournalPinType::JOURNAL_PIN_TYPE_other);
             }
 
-            if !self.flush.get().is_null() {
-                unsafe { crate::journal::journal::__bch2_journal_flush_seq_async(j, res.seq, self.flush.get()) };
+            if let Some(f) = unsafe { self.flush.get().as_mut() }.and_then(Option::take) {
+                f.attach(j, res.seq);
             }
         } else {
             /* No reservation, so the caller named the seq to pin: */

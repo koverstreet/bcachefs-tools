@@ -41,6 +41,12 @@ impl Bio {
         }
     }
 
+    /// The user's pages it pinned, given back as they are: a write's, which
+    /// only read them.
+    pub fn release_pinned_pages(self: Pin<&mut Self>) {
+        unsafe { c::bio_release_pages(self.raw_mut(), false) };
+    }
+
     /// The user's pages it pinned, given back - @dirtied, if set_pages_dirty()
     /// dirtied them, as they're checked dirty still: those cleaned since are
     /// dirtied again first, under their folio locks.

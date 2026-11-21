@@ -40,7 +40,8 @@ use core::ffi::CStr;
 use crate::util::alloc::KVVec;
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kthread::Kthread;
-use crate::util::task::{waiter, Spawn, TaskBox, TaskList, TaskSlot};
+use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, Spawn, TaskBox, TaskList, TaskSlot, WaitSync};
 use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
 use core::cell::{RefCell, UnsafeCell};
@@ -134,9 +135,9 @@ where
         unsafe { job.task().start() };
     }
     if freezable {
-        join.wait_sync_freezable();
+        join.wait_sync(Sleep::IDLE.freezable());
     } else {
-        join.wait_sync();
+        join.wait_sync(Sleep::IDLE);
     }
 
     let mut ret = Ok(());

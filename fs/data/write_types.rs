@@ -25,11 +25,9 @@ pub enum WriteFlagBit {
     must_ec,
     wrote_data_inline,
     check_enospc,
-    sync,
     flush,
     update,
     replicas_best_effort,
-    in_worker,
     submitted,
     convert_unwritten,
 }
@@ -44,7 +42,6 @@ nest! {
         pub wbio: pub struct bch_write_bio_wbio {
             /* set at submit: 'static as a write op's fs() is */
             pub c: Option<&'static Fs>,
-            pub parent: *mut c::bch_write_bio,
 
             pub submit_time: u64,
             pub inode_offset: u64,
@@ -57,13 +54,8 @@ nest! {
             #>[repr(C)]-
             #>[bitfield(u8)]
             pub bits: pub struct bch_write_bio_bits {
-                split:             u1,
-                bounce:            u1,
-                put_bio:           u1,
                 nocow:             u1,
-                used_mempool:      u1,
-                first_btree_write: u1,
-                __pad:             u2,
+                __pad:             u7,
             },
         },
 
@@ -80,6 +72,24 @@ nest! {
     }
 }
 
+impl<K: IoRefIdx> c::bch_write_bio<K> {
+    /// A write's, around the bio and what else its owner set up: no io ref
+    /// held - @ca is set at submit, and taken back by the endio. One
+    /// dropped without being submitted drops a @ca of None, not what its
+    /// memory last held.
+    ///
+    /// # Safety
+    /// Its bio's initialized by the time its struct's initializer runs.
+    pub unsafe fn around_bio() -> impl ::pin_init::Init<Self> {
+        unsafe {
+            ::pin_init::init_from_closure(|w: *mut Self| {
+                (&raw mut (*w).ca).write(None);
+                Ok(())
+            })
+        }
+    }
+}
+
 // SAFETY: its bio, its last field, where it is in either kind's - below
 unsafe impl<R: IoRefIdx> crate::util::bio::HasBio for c::bch_write_bio<R> {
     const BIO_OFFSET: usize = core::mem::offset_of!(c::bch_write_bio, bio);
@@ -91,7 +101,7 @@ unsafe impl<R: IoRefIdx> Send for c::bch_write_bio<R> {}
 const _: () = assert!(core::mem::offset_of!(c::bch_write_bio, bio) + size_of::<crate::util::bio::Bio>() ==
                       size_of::<c::bch_write_bio>(), "bch_write_bio: its bio isn't last");
 
-// One bioset clones both kinds' bios - the replica set - and to_wbio() finds
+// One pool clones both kinds' bios - REPLICA_CLONES - and to_wbio() finds
 // either from its bio as the default's
 const _: () = assert!(core::mem::offset_of!(c::bch_write_bio<c::DevReadRefKind>, bio) ==
                       core::mem::offset_of!(c::bch_write_bio, bio));
@@ -103,14 +113,9 @@ nest! {
     #[derive(MaybeZeroable, BitfieldMembers, TypeInfo, Init)]
     #[init_args(fs: &Fs, opts: c::bch_inode_opts)]
     pub struct bch_write_op {
-        pub cl: crate::util::ffi::Opaque<c::closure>,
         #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
         pub c: crate::util::backref::BackRef<Fs>,
-        pub end_io: Option<unsafe fn(*mut c::bch_write_op)>,
         pub start_time: u64,
-
-        /* its slot on its async object list */
-        pub list_idx: c_uint,
 
         pub written: c_uint, /* sectors */
         pub flags: u16,
@@ -189,10 +194,6 @@ nest! {
 
         pub write_point: c::write_point_specifier,
 
-        /* the filesystem's, so 'static: as the op's fs() */
-        pub wp: Option<&'static c::write_point>,
-        pub wp_list: c::list_head,
-
         /* Reserved at @res.nr_replicas, which is not @nr_replicas - see above */
         #[init(c::DiskReservation::new(unsafe { crate::util::backref::BackRef::new(fs).get() }))]
         pub res: c::DiskReservation<'static>,
@@ -206,12 +207,6 @@ nest! {
         #[init(crate::data::keylist::Keylist::new())]
         pub insert_keys: crate::data::keylist::Keylist<{ c::BKEY_EXTENT_U64s_MAX * 2 }>,
 
-        /*
-         * Bitmask of devices that have had nocow writes issued to them since
-         * last flush:
-         */
-        pub devs_need_flush: *const c::AtomicDevsMask,
-
         /* what failed writing this round's buckets: */
         #[init(c::bch_io_failures::default())]
         pub failed: c::bch_io_failures,
@@ -219,18 +214,8 @@ nest! {
         /* c->writes, held till it's done - a data update's holds its own */
         #[init(None)]
         pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
-
-        /* Must be last - and its bio set up by the op's owner, before init() */
-        #[pin]
-        #[init(unsafe { crate::util::alloc::untouched() })]
-        pub wbio: c::bch_write_bio,
     }
 }
-
-crate::has_closure!(c::bch_write_op, cl);
-
-/// A write point's writes, waiting for their index updates.
-pub type WriteOpList = crate::list!(c::bch_write_op, wp_list);
 
 const _: () = assert!((c::WriteFlagBit::convert_unwritten as u32) < u16::BITS,
                       "the write flags don't fit in bch_write_op's flags");

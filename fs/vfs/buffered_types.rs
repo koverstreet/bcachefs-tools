@@ -6,14 +6,23 @@
 
 use crate::cstructs::c;
 use cstruct_macros::{MaybeZeroable, TypeInfo};
+use pin_init::pin_data;
 
+#[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_writepage_io {
     pub inode: *mut c::InodeInfo,
+    #[pin]
+    pub op: c::bch_write_op,
 
     /* must be last: */
-    pub op: c::bch_write_op,
+    #[pin]
+    pub wbio: c::bch_write_bio,
 }
 
-crate::has_bio!(bch_writepage_io, op.wbio.bio);
+crate::has_bio!(bch_writepage_io, wbio.bio);
+
+// its task's home: its inode is held by its folios' writeback, on whichever
+// thread the task runs
+unsafe impl Send for c::bch_writepage_io {}

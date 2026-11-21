@@ -2,21 +2,27 @@
 
 //! Buffered writeback: buffered.c's writepages. A writeback walk's dirty
 //! sectors, gathered into bch_writepage_ios - one bio's worth of contiguous
-//! sectors at one replica count each - and written by bch2_write(), each
-//! io's end_io ending its folios' writeback.
+//! sectors at one replica count each. Each io is the home of a task, in one
+//! allocation with the task and its bvecs, from a pool of the module's - its
+//! folios added before it's started, then its write awaited, and its folios'
+//! writeback ended.
 
 use crate::btree::bkey::pos;
 use crate::c;
-use crate::data::write::bch2_write;
+use crate::data::write::{write, WriteFor};
+use crate::data::write_replicas::wbio_in_place;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::Box;
+use crate::util::alloc::{Box, Kmalloc};
 use crate::os::blkdev::plugged;
-use crate::util::bio::{bio_put, Bio, BioBuffersUnmanaged, BioOwner};
-use crate::util::closure;
+use crate::util::bio::{inline_vecs, Bio, BioBuffersUnmanaged, BioOwner};
+use crate::util::mempool::Mempool;
+use crate::util::task::{exclusive_size, Exclusive, Resume, Spawn, TaskSlot};
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
+use crate::os::module::{Quiesced, ThisModule};
+use crate::os::workqueue::Queue;
 use crate::util::sleep::Sleep;
 use crate::os::ops::from_raw;
 use crate::os::folio::Wbc;
@@ -27,13 +33,35 @@ use c::FolioSectorState as SectorState;
 use c::WriteFlags as w;
 use core::ffi::c_int;
 use core::pin::Pin;
-use core::ptr::NonNull;
+use core::ptr;
+use cstruct_macros::in_place;
+use pin_init::pin_init;
 
 type Io = c::bch_writepage_io;
+type Pool = &'static Mempool<Kmalloc>;
+/// An io, being filled: its task not started.
+type IoSlot = TaskSlot<'static, Io, fn(Pin<&'static mut Io>) -> WritepageFut<'static>, Pool, Exclusive>;
+
+static WRITEPAGES: Mempool<Kmalloc> = ::pin_init::zeroed();
+
+/// At module init: elements for the most bvecs a bio has.
+pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
+    let vecs = inline_vecs(c::BIO_MAX_VECS as u16);
+    Mempool::init_static(&WRITEPAGES, Mempool::kmalloc(4, exclusive_size::<Io, WritepageFut<'static>, Pool>(vecs)), m)
+}
+
+pub fn pools_exit(q: &Quiesced<'_>) {
+    WRITEPAGES.exit(q);
+}
 
 struct WritepageState {
-    io:   Option<NonNull<Io>>,
+    io:   Option<IoSlot>,
     opts: c::bch_inode_opts,
+}
+
+/// Its io, not started: ours to fill.
+fn io_of(slot: &mut IoSlot) -> &mut Io {
+    unsafe { slot.home().get_unchecked_mut() }
 }
 
 impl c::bch_writepage_io {
@@ -47,20 +75,12 @@ unsafe impl BioOwner for c::bch_writepage_io {
     type Buffers = BioBuffersUnmanaged;
 
     fn bio(&self) -> &Bio {
-        &self.op.wbio.bio
+        &self.wbio.bio
     }
 
     fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        self.op.wbio.bio_mut()
+        self.wbio.bio_mut()
     }
-}
-
-/// The io of a write op's end_io.
-///
-/// # Safety
-/// @op is a bch_writepage_io's.
-unsafe fn of_op(op: *mut c::bch_write_op) -> *mut Io {
-    op.wrapping_byte_sub(core::mem::offset_of!(Io, op)).cast()
 }
 
 fn bio_full(bio: &c::bio, len: u32) -> bool {
@@ -76,7 +96,7 @@ fn bio_full(bio: &c::bio, len: u32) -> bool {
  * when the bounce path can be enhanced to accommodate larger source bios.
  */
 fn io_full(io: &Io, len: u32) -> bool {
-    let bio = io.op.wbio.bio.raw();
+    let bio = io.wbio.bio.raw();
     bio_full(bio, len) || bio.bi_iter.bi_size + len > c::BIO_MAX_VECS * PAGE_SIZE as u32
 }
 
@@ -94,8 +114,7 @@ fn folios_clear_replicas(io: &Io, f: impl Fn(&Folio)) {
     }
 }
 
-unsafe fn writepage_io_done(op: *mut c::bch_write_op) {
-    let io = unsafe { &mut *of_op(op) };
+fn writepage_io_done(io: &mut Io) {
     let inode = io.inode();
 
     if io.op.error != 0 {
@@ -132,14 +151,30 @@ unsafe fn writepage_io_done(op: *mut c::bch_write_op) {
     for f in io.range_all().folios() {
         drop(unsafe { Writeback::from_io(f.folio) });
     }
-
-    unsafe { bio_put(io.op.wbio.bio_mut().raw_mut()) };
 }
 
-fn writepage_do_io(w: &mut WritepageState) {
-    let io = w.io.take().expect("writepage_do_io() with no io");
+/// The task's future apart: before rustc 1.87, every item of the module its
+/// type is named in that has the type in its signature must be its defining
+/// use - here, only the fn that makes it.
+mod task {
+    use super::*;
 
-    unsafe { closure::call(NonNull::from(&mut (*io.as_ptr()).op), bch2_write, None) };
+    #[in_place(WritepageFut)]
+    pub(super) async fn writepage_task<'h>(io: Pin<&'h mut Io>) {
+        let io = unsafe { io.get_unchecked_mut() };
+        let inode = io.inode();
+        write(&mut io.op, &mut io.wbio, WriteFor::Inode(&inode.ei_devs_need_flush), Resume::queue(Queue::system_dfl()))
+            .await;
+        writepage_io_done(io);
+    }
+}
+use task::{writepage_task, WritepageFut};
+
+fn writepage_do_io(w: &mut WritepageState) {
+    let mut slot = w.io.take().expect("writepage_do_io() with no io");
+    let fs = io_of(&mut slot).op.fs();
+
+    unsafe { slot.start(Spawn::Inline, fs.tasks(), writepage_task) };
 }
 
 /*
@@ -148,26 +183,28 @@ fn writepage_do_io(w: &mut WritepageState) {
  */
 fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeInfo,
                       sector: u64, nr_replicas: u32, res_nr_replicas: u32) {
-    let bio = fs.vfs.writepage_bioset.alloc_raw(core::ptr::null_mut(), c::BIO_MAX_VECS as u16,
-                                                c::req_op_REQ_OP_WRITE, crate::util::alloc::Flags::empty());
-    let io = unsafe { crate::util::bio::of_bio::<Io>(bio) };
-    let i = unsafe { &mut *io };
+    let opts = w.opts;
+    let mut slot = IoSlot::exclusive_bio_in(&WRITEPAGES, ptr::null_mut(), c::BIO_MAX_VECS as u16,
+                                            c::req_op_REQ_OP_WRITE, |b| {
+        pin_init!(Io {
+            inode: inode.raw(),
+            op    <- c::bch_write_op::init(fs, opts),
+            wbio  <- wbio_in_place(b),
+        }? BchError)
+    }).expect("a writepage io's box: its pool waits for an element, and an op's init can't fail");
 
-    i.inode = inode.raw();
-    unsafe { c::bch_write_op::init_at(&raw mut i.op, fs, w.opts) };
-    let op = &mut i.op;
-    op.target          = w.opts.foreground_target;
+    let io = io_of(&mut slot);
+    let op = &mut io.op;
+    op.target          = opts.foreground_target;
     op.bits.set_nr_replicas(nr_replicas as u8);
     op.res.nr_replicas.set(res_nr_replicas);
     op.write_point     = c::write_point_specifier::hashed(inode.ei_last_dirtied.get() as usize);
     op.subvol          = inode.inum().subvol as u32;
     op.pos             = pos(inode.inum().inum, sector);
-    op.end_io          = Some(writepage_io_done);
-    op.devs_need_flush = &inode.ei_devs_need_flush;
-    op.wbio.bio_mut().set_sector(sector);
-    op.wbio.bio_mut().set_opf(wbc.write_flags());
+    io.wbio.bio_mut().set_sector(sector);
+    io.wbio.bio_mut().set_opf(wbc.write_flags());
 
-    w.io = NonNull::new(io);
+    w.io = Some(slot);
 }
 
 fn throttle_writes(fs: &Fs) {
@@ -289,9 +326,9 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
          * One io's reservation is charged at one count, so a folio in
          * another slot starts a new io, as a differing width does.
          */
-        if let Some(io) = w.io {
-            let io = unsafe { io.as_ref() };
-            let bio = io.op.wbio.bio.raw();
+        if let Some(slot) = w.io.as_mut() {
+            let io = io_of(slot);
+            let bio = io.wbio.bio.raw();
             if u32::from(io.op.bits.nr_replicas()) != nr_replicas_this_write ||
                io.op.res.nr_replicas.get() != res_nr_replicas ||
                io_full(io, (sectors << 9) as u32) ||
@@ -306,9 +343,9 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
 
         folio.share();
 
-        let io = unsafe { w.io.expect("an io, just made").as_mut() };
+        let io = io_of(w.io.as_mut().expect("an io, just made"));
         assert!(core::ptr::eq(io.inode, inode.raw()), "a writepage io of another inode");
-        unsafe { c::bio_add_folio_nofail(io.op.wbio.bio_mut().raw_mut(), folio.as_ptr(), sectors << 9, offset << 9) };
+        unsafe { c::bio_add_folio_nofail(io.wbio.bio_mut().raw_mut(), folio.as_ptr(), sectors << 9, offset << 9) };
 
         io.op.res.sectors.set(io.op.res.sectors.get() + reserved_sectors);
         io.op.i_sectors_delta -= i64::from(dirty_sectors);

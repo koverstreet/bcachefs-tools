@@ -33,7 +33,7 @@ use crate::util::alloc::AllocError;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::refcount::Refcount;
 use crate::os::kthread::Kthread;
-use crate::util::task::{waiter, RunQueue};
+use crate::util::task::{waiter, RunQueue, WaitSync};
 use crate::util::sleep::Sleep;
 use crate::types::Fifo;
 use crate::util::gather::{Gather, GatherRef};
@@ -466,7 +466,7 @@ impl<'a> Moving<'a> {
     }
 }
 
-impl c::data_update {
+impl c::data_update_index {
     /// The moving context the update is in flight in, if it's a mover's.
     pub(crate) fn moving(&self) -> Option<&Moving<'_>> {
         // SAFETY: an update is in flight in its context from init() to exit(),
@@ -487,7 +487,7 @@ impl Drop for MovingCtxt<'_> {
             }
         }
         // an IO's counts are given back, and its waiters woken, before its ref
-        self.0.in_flight.wait_sync();
+        self.0.in_flight.wait_sync(Sleep::IDLE);
 
         // Putting a transaction mid-restart is an unhandled restart, but a mover
         // can be told to exit before it's retried

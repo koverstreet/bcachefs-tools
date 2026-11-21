@@ -24,14 +24,16 @@
 //! in the caller's context. Every await says where its task resumes, with
 //! resume_on():
 //! - Queue(q): on workqueue q - or with resume_on_cpu(q, cpu), on q on cpu,
-//!   for the part of a task that wants it there.
+//!   for the part of a task that wants it there; or with
+//!   resume_on_run_queue(rq), on a worked RunQueue, by its work on its queue.
 //! - Inline: in the completer's context, an endio, where everything up to the
 //!   next await runs. It must not sleep, or take a lock that isn't irqsave -
 //!   C's continue_at(cl, fn, NULL), and as unchecked.
 //! - RUNQ: a RunQueue task's, on its RunQueue - where it always runs.
 //! The target is recorded in the header (@target) while the await is pending.
-//! requeue(q) moves a running task to q, an await of nothing: out of an
-//! endio's context, say, before it allocates. On q already, it runs on.
+//! requeue(at) moves a running task to @at - a queue, or any Resume - an
+//! await of nothing: out of an endio's context, say, before it allocates. On
+//! q already, it runs on.
 //!
 //! # Running and waiting
 //!
@@ -86,10 +88,12 @@ mod r#box;
 pub mod completion;
 mod list;
 mod queue;
+mod select;
 
-pub use completion::{waiter, Completion, CompletionReturn, Done, DoneWith, Return, Waiter};
+pub use completion::{waiter, Armable, Completion, CompletionReturn, Done, DoneWith, DynDone, Return, Unarmed, Waiter};
 pub use list::{TaskList, TASKS};
 pub use queue::RunQueue;
+pub use select::{Select, SelectWait};
 pub use r#box::{exclusive_size, spawn_detached, spawn_static, Exclusive, Join, Shared, TaskBox, TaskSlot};
 
 use crate::c;
@@ -147,6 +151,20 @@ impl<'a> Resume<'a> {
     }
 }
 
+impl<'a> From<&'a Queue> for Resume<'a> {
+    fn from(q: &'a Queue) -> Self {
+        Resume::queue(q)
+    }
+}
+
+/// What a thread waits on - a Completion, a Gather, a Select - sleeping as
+/// @how says, to its end: a task's is Resumable, awaited.
+pub trait WaitSync {
+    type Output;
+
+    fn wait_sync(self, how: Sleep) -> Self::Output;
+}
+
 pub trait Resumable {
     type Output;
 
@@ -156,7 +174,7 @@ pub trait Resumable {
     where
         Self: Sized,
     {
-        Resumed { inner: self, target: r, cpu: None, recorded: None, _pin: PhantomPinned }
+        Resumed { inner: self, target: r, cpu: None, runq: None, recorded: None, _pin: PhantomPinned }
     }
 
     /// resume_on() workqueue @q, on @cpu: queue_work_on().
@@ -164,7 +182,17 @@ pub trait Resumable {
     where
         Self: Sized,
     {
-        Resumed { inner: self, target: Resume::queue(q), cpu: Some(cpu), recorded: None, _pin: PhantomPinned }
+        Resumed { inner: self, target: Resume::queue(q), cpu: Some(cpu), runq: None, recorded: None,
+                  _pin: PhantomPinned }
+    }
+
+    /// Resumed on @rq, a RunQueue::worked() one.
+    fn resume_on_run_queue(self, rq: Pin<&RunQueue>) -> Resumed<'_, Self>
+    where
+        Self: Sized,
+    {
+        Resumed { inner: self, target: Resume::INLINE, cpu: None, runq: Some(rq.get_ref()),
+                  recorded: None, _pin: PhantomPinned }
     }
 }
 
@@ -183,6 +211,8 @@ pub struct Resumed<'r, A> {
     inner:    A,
     target:   Resume<'r>,
     cpu:      Option<u32>,
+    /* resume_on_run_queue()'s: dispatched onto it, in place of @target */
+    runq:     Option<&'r RunQueue>,
     recorded: Option<Recorded>,
     #[pin]
     _pin:     PhantomPinned,
@@ -206,10 +236,11 @@ impl<A: Resumable> Future for Resumed<'_, A> {
         };
 
         let header = unsafe { task.0.as_ref() };
-        let ours = match this.target.get() {
-            ResumeAt::Inline => Target::Inline,
-            ResumeAt::Queue(q) => Target::Queue(NonNull::from(q), *this.cpu),
-            ResumeAt::RunQueue => {
+        let ours = match (*this.runq, this.target.get()) {
+            (Some(rq), _) => Target::Run(NonNull::from(rq)),
+            (None, ResumeAt::Inline) => Target::Inline,
+            (None, ResumeAt::Queue(q)) => Target::Queue(NonNull::from(q), *this.cpu),
+            (None, ResumeAt::RunQueue) => {
                 debug_assert!(header.runq.is_some(), "Resume::RUNQ, in a task on no RunQueue");
                 return this.inner.poll_resume(cx);
             }
@@ -243,8 +274,8 @@ impl<A> PinnedDrop for Resumed<'_, A> {
     }
 }
 
-pub fn requeue(q: &Queue) -> Resumed<'_, Requeue> {
-    Requeue { done: Done::completed(), parked: false }.resume_on(Resume::queue(q))
+pub fn requeue<'a>(at: impl Into<Resume<'a>>) -> Resumed<'a, Requeue> {
+    Requeue { done: Done::completed(), parked: false }.resume_on(at.into())
 }
 
 /// requeue(), onto @q on @cpu.
@@ -276,6 +307,8 @@ enum Target {
     Inline,
     /* and the cpu, where the await names one */
     Queue(NonNull<Queue>, Option<u32>),
+    /* a worked RunQueue */
+    Run(NonNull<RunQueue>),
 }
 
 impl Target {
@@ -501,6 +534,7 @@ impl TaskRef {
                     None      => unsafe { wq.as_ref().queue_work(work) },
                 };
             }
+            Target::Run(rq) => unsafe { rq.as_ref().push_worked(self.0) },
         }
     }
 

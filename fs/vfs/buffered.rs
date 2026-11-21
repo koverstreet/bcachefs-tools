@@ -40,7 +40,7 @@ use crate::os::kernel::PAGE_SIZE;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, waiter, CompletionReturn, Return, Spawn, TaskSlot};
+use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Return, Spawn, TaskSlot, WaitSync};
 use crate::os::workqueue::Queue;
 use core::pin::Pin;
 use core::ptr::NonNull;
@@ -425,14 +425,14 @@ pub(crate) fn read_single_folio(folio: &FolioLocked, mapping: Mapping, extend: b
         read_from: folio.sector() + u64::from(folio.partially_uptodate()),
         orig_end:  folio.end_sector(),
     };
-    let mut slot = None;
+    let mut slot = DoneWith::new();
     let (wait, r) = CompletionReturn::new(&mut slot, waiter::Sync::current());
     /*
      * The folios extend() added after @folio are locked and ours to finish,
      * as readahead's end does; @folio stays locked, it's the caller's.
      */
     plugged(|| spawn_read(fs, inode, opts, nr_vecs, set_up, window, End::Single(r)));
-    let ret = wait.wait(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read");
+    let ret = wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read");
 
     ret?;
     folio.set_partially_uptodate(0);

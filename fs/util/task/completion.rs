@@ -5,22 +5,31 @@
 //!
 //! - Done: one word, where the IO's completer finds it - a bio's bi_private,
 //!   or a field C reaches by container_of. Born with its waiter: owed.
-//! - Completion: a borrow of the Done, awaited or waited on.
-//!
-//! The two are made as a pair, so an owed Done always has its waiter waiting
-//! on it - the Completion's drop waits, too:
+//! - Completion: a borrow of the Done, awaited or waited on - made with it,
+//!   so an owed Done always has its waiter waiting on it, waited on or
+//!   awaited to its end: dropped before, it asserts.
+//! - DynDone: a Done's completer, of either waiter's, for a waitlist: one per
+//!   owed Done - complete() consumes it, and dropping it completes it.
 //!
 //! ```ignore
-//! let c = Completion::new(&mut done, waiter::Async::current().await);
-//! c.complete();               // its end, once - by the IO's completer
-//! c.resume_on(at).await;      // a thread: waiter::Sync::current(), c.wait(how)
+//! let (c, d) = Completion::new_dyn(&mut done, waiter::Async::current().await);
+//! d.complete();               // its end, once - by the IO's completer: consumed
+//! c.resume_on(at).await;      // a thread: waiter::Sync::current(), c.wait_sync(how)
 //! ```
+//!
+//! An Armable is a Done that may never be owed - a journal flush's wait, if
+//! nothing attaches it: made with the one Unarmed that may arm it, which
+//! arming consumes for the DynDone.
+//!
+//! A DoneWith is a Done and what its completer leaves - a task's result: its
+//! CompletionReturn returns it, and its completer, a Return, leaves it as it
+//! completes.
 //!
 //! The word:
 //!
 //! ```text
 //! waiter    owed, the waiter waits
-//! null      done
+//! null      not owed: done, or an Armable's not armed
 //! ```
 //!
 //! A task's wake (TaskRef::wake(), task/mod.rs) writes to the task only if
@@ -29,10 +38,10 @@
 use crate::c;
 use crate::util::rcu;
 use crate::util::sleep::{sleep_until, Sleep};
-use crate::util::task::{current_task, task_in, Resumable, TaskRef};
-use core::cell::UnsafeCell;
+use crate::util::task::{current_task, task_in, Resumable, TaskRef, WaitSync};
+use core::cell::{Cell, UnsafeCell};
 use core::ffi::c_void;
-use core::marker::PhantomData;
+use core::marker::{PhantomData, PhantomPinned};
 use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -76,11 +85,7 @@ pub mod waiter {
 /// A waiter, as the pointer in a Done's word, and how complete() wakes it -
 /// both sealed: the Done's alone, as only complete()'s RCU read lock keeps
 /// the waiter there to wake.
-pub trait Waiter: sealed::Waiter + Copy + 'static {
-    /// Whether the thread dropping a Completion is its waiter, so complete()
-    /// wakes it: a thread's is, its Completion !Send; a task's isn't.
-    const WAKES_DROPPER: bool;
-}
+pub trait Waiter: sealed::Waiter + Copy + 'static {}
 
 mod sealed {
     use core::ptr::NonNull;
@@ -95,9 +100,7 @@ mod sealed {
     }
 }
 
-impl Waiter for waiter::Sync {
-    const WAKES_DROPPER: bool = true;
-}
+impl Waiter for waiter::Sync {}
 
 impl sealed::Waiter for waiter::Sync {
     fn as_ptr(self) -> NonNull<()> {
@@ -109,9 +112,7 @@ impl sealed::Waiter for waiter::Sync {
     }
 }
 
-impl Waiter for waiter::Async {
-    const WAKES_DROPPER: bool = false;
-}
+impl Waiter for waiter::Async {}
 
 impl sealed::Waiter for waiter::Async {
     fn as_ptr(self) -> NonNull<()> {
@@ -132,7 +133,7 @@ pub struct Done<W: Waiter = waiter::Async> {
 }
 
 impl<W: Waiter> Done<W> {
-    fn new(waiter: W) -> Self {
+    pub(super) fn new(waiter: W) -> Self {
         Done { word: AtomicPtr::new(waiter.as_ptr().as_ptr()), _w: PhantomData }
     }
 
@@ -156,13 +157,40 @@ impl<W: Waiter> Done<W> {
         unsafe { &*p.cast::<Self>() }
     }
 
-    pub fn complete(&self) {
+    /// What a completer's made of - a DynDone, a Return, a bio's endio, a
+    /// Gather's last put.
+    ///
+    /// # Safety
+    /// It's owed, and this is its one completion.
+    pub unsafe fn complete(&self) {
         let _rcu = rcu::read_lock();
         // Relaxed: stored at the Done's birth, before the IO was handed out
         let w = NonNull::new(self.word.load(Ordering::Relaxed)).expect("Done completed when not owed: twice, or never born");
         self.word.store(null_mut(), Ordering::Release);
         // seeing null, the waiter may return and be freed: RCU keeps it
         unsafe { W::wake(w, NonNull::from(self).cast()) };
+    }
+
+    /// complete(), by one of several completers - a Select's inputs - if it's
+    /// owed: the rest find it done, their load or cmpxchg their last touch.
+    /// The load's SeqCst, the pair of rearm()'s store: after the caller's
+    /// record of what it completed, which the waiter reads after rearm().
+    ///
+    /// # Safety
+    /// Its completers are done with it before it's freed.
+    pub(super) unsafe fn complete_if_owed(&self) {
+        let _rcu = rcu::read_lock();
+        let w = self.word.load(Ordering::SeqCst);
+        if !w.is_null() && self.word.compare_exchange(w, null_mut(), Ordering::Release, Ordering::Relaxed).is_ok() {
+            unsafe { W::wake(NonNull::new_unchecked(w), NonNull::from(self).cast()) };
+        }
+    }
+
+    /// Owed again, by @waiter, its own: once it's done, for the next of
+    /// several completers - complete_if_owed()'s.
+    pub(super) fn rearm(&self, waiter: W) {
+        debug_assert!(self.done(), "a Done rearmed while it's owed");
+        self.word.store(waiter.as_ptr().as_ptr(), Ordering::SeqCst);
     }
 
     pub fn done(&self) -> bool {
@@ -174,13 +202,180 @@ impl<W: Waiter> Done<W> {
     pub(super) fn done_ordered(&self) -> bool {
         self.word.load(Ordering::SeqCst).is_null()
     }
+
+    /// Done, as its wait goes: a wait is waited on, or awaited, to its end.
+    /// A task's drop can't await, and a drop that slept for a thread's would
+    /// hide the wait it was meant to be.
+    fn assert_waited(&self) {
+        assert!(self.done(), "a wait dropped before what it waited on was done: wait on it, or await it, first");
+    }
+
+    fn sleep_until_done(&self, how: Sleep) {
+        let Ok(()) = sleep_until(how, || self.done().then_some(()));
+    }
 }
 
-#[must_use = "an IO's Completion is waited on, or its drop waits for it"]
+impl Done<waiter::Async> {
+    fn poll_done(&self, cx: &mut Context<'_>) -> Poll<()> {
+        if self.done() {
+            return Poll::Ready(());
+        }
+        // run() parks the task on it, once the poll's returned
+        super::park_on(cx, self);
+        Poll::Pending
+    }
+}
+
+/// A Done's completer, of either waiter's, for a list that completes what's on
+/// it without knowing whose: a futex bucket's, a journal flush's. One per
+/// owed Done: complete() consumes it, and dropping it completes it. 'a is
+/// what it completes - a Select's input borrows the Select; a Done whose
+/// waiter waits for it, as a Completion's drop does, is 'static.
+pub struct DynDone<'a> {
+    p:   NonNull<()>,
+    end: unsafe fn(NonNull<()>),
+    _l:  PhantomData<&'a ()>,
+}
+
+// a Done's completer may be anywhere: it's completed as a &Done is
+unsafe impl Send for DynDone<'_> {}
+unsafe impl Sync for DynDone<'_> {}
+
+impl<'a> DynDone<'a> {
+    /// # Safety
+    /// @d is owed, and this is its one completer.
+    unsafe fn of<W: Waiter>(d: &Done<W>) -> Self {
+        unsafe fn end<W: Waiter>(d: NonNull<()>) {
+            unsafe { d.cast::<Done<W>>().as_ref().complete() }
+        }
+        DynDone { p: NonNull::from(d).cast(), end: end::<W>, _l: PhantomData }
+    }
+
+    /// A completion that's @end(@p): a Select's input, or a waiter's entry
+    /// that frees itself.
+    ///
+    /// # Safety
+    /// @end(@p) is sound once, when this is completed or dropped, within 'a.
+    pub unsafe fn from_fn(p: NonNull<()>, end: unsafe fn(NonNull<()>)) -> Self {
+        DynDone { p, end, _l: PhantomData }
+    }
+
+    /// Its drop's the completion.
+    pub fn complete(self) {}
+
+    /// 'a forgotten: for a list of entries of any lifetime, a futex bucket's.
+    ///
+    /// # Safety
+    /// It's completed, or dropped, within 'a.
+    pub unsafe fn erase(self) -> DynDone<'static> {
+        let d = core::mem::ManuallyDrop::new(self);
+        DynDone { p: d.p, end: d.end, _l: PhantomData }
+    }
+}
+
+impl Drop for DynDone<'_> {
+    fn drop(&mut self) {
+        unsafe { (self.end)(self.p) }
+    }
+}
+
+/* A Done that may never be owed */
+
+/// A completion that's only owed if what it waits on asks for it - a journal
+/// flush's, if a commit attaches it: a Done not owed yet and its waiter, made
+/// in place with the one Unarmed that may arm it. Waited on, it's done at
+/// once if it never was armed; armed, it's waited on to its end before it's
+/// dropped. Pinned: once armed, its completer points into it.
+///
+/// Made chained(), arming's completer completes another first - a Select's
+/// input - then its Done: so its wait is for all of it, the input's touch of
+/// the Select included, as a waitlist with no cancel needs.
+pub struct Armable<'a, W: Waiter = waiter::Async> {
+    done:   Done<W>,
+    waiter: W,
+    /* set by its arming, by its waiter's task: what its Done can't say
+     * once it's completed */
+    armed:  Cell<bool>,
+    /* chained()'s: completed by arming's completer before @done, or dropped
+     * with it, never armed */
+    first:  UnsafeCell<Option<DynDone<'a>>>,
+    _pin:   PhantomPinned,
+}
+
+/// The right to arm an Armable, once: arm() consumes it, for the Done's
+/// completer - as what it's waiting on takes it, a waitlist's entry. Dropped,
+/// the Armable never is.
+pub struct Unarmed<'a> {
+    a:     NonNull<()>,
+    arm:   unsafe fn(NonNull<()>) -> DynDone<'static>,
+    _slot: PhantomData<&'a mut ()>,
+}
+
+// as a DynDone: armed and completed as a &Done is
+unsafe impl Send for Unarmed<'_> {}
+
+impl<'a, W: Waiter> Armable<'a, W> {
+    /// One, in @slot, for @waiter - what was there dropped, as it waits for
+    /// its Done - and the right to arm it.
+    pub fn new(slot: Pin<&mut Option<Self>>, waiter: W) -> Unarmed<'_> {
+        Self::make(slot, waiter, None)
+    }
+
+    /// new(), arming's completer completing @first before its Done.
+    pub fn chained<'s>(slot: Pin<&'s mut Option<Self>>, waiter: W, first: DynDone<'a>) -> Unarmed<'s> {
+        Self::make(slot, waiter, Some(first))
+    }
+
+    fn make<'s>(mut slot: Pin<&'s mut Option<Self>>, waiter: W, first: Option<DynDone<'a>>) -> Unarmed<'s> {
+        unsafe fn arm<W: Waiter>(p: NonNull<()>) -> DynDone<'static> {
+            let a = unsafe { p.cast::<Armable<'static, W>>().as_ref() };
+            a.done.word.store(a.waiter.as_ptr().as_ptr(), Ordering::Relaxed);
+            a.armed.set(true);
+            match unsafe { (*a.first.get()).is_some() } {
+                false => unsafe { DynDone::of(&a.done) },
+                true  => unsafe { DynDone::from_fn(p, end_chained::<W>) },
+            }
+        }
+        unsafe fn end_chained<W: Waiter>(p: NonNull<()>) {
+            let a = unsafe { p.cast::<Armable<'static, W>>().as_ref() };
+            unsafe { (*a.first.get()).take() }.expect("a chained Armable, completed twice").complete();
+            unsafe { a.done.complete() };
+        }
+        slot.set(Some(Armable { done: Done::completed(), waiter, armed: Cell::new(false),
+                                first: UnsafeCell::new(first), _pin: PhantomPinned }));
+        let a = slot.into_ref().get_ref().as_ref().expect("just set");
+        Unarmed { a: NonNull::from(a).cast(), arm: arm::<W>, _slot: PhantomData }
+    }
+
+    /// The wait on it: done at once, if it was never armed.
+    pub fn completion(self: Pin<&mut Self>) -> Completion<'_, W> {
+        Completion { d: &self.into_ref().get_ref().done, _w: PhantomData }
+    }
+
+    /// Whether it was armed - completed since, or not.
+    pub fn armed(&self) -> bool {
+        self.armed.get()
+    }
+}
+
+impl<W: Waiter> Drop for Armable<'_, W> {
+    fn drop(&mut self) {
+        self.done.assert_waited();
+    }
+}
+
+impl Unarmed<'_> {
+    /// Its Armable owed, its waiter waiting: and the Done's completer.
+    pub fn arm(self) -> DynDone<'static> {
+        unsafe { (self.arm)(self.a) }
+    }
+}
+
+#[must_use = "an IO's Completion is waited on, or awaited, to its end"]
 pub struct Completion<'a, W: Waiter = waiter::Async> {
     d:  &'a Done<W>,
     /// Send as the waiter is: a thread's isn't, as complete() wakes the
-    /// thread it was born on, and its drop waits there
+    /// thread it was born on, which waits on it
     _w: PhantomData<W>,
 }
 
@@ -199,24 +394,31 @@ impl<'a, W: Waiter> Completion<'a, W> {
     pub unsafe fn init_at(p: *mut *mut c_void, waiter: W) -> Self {
         Completion { d: unsafe { Done::init_at(p, waiter) }, _w: PhantomData }
     }
+
+    /// new(), and its Done's completer: for a waitlist's entry to be
+    /// completed by.
+    pub fn new_dyn(d: &'a mut Done<W>, waiter: W) -> (Self, DynDone<'static>) {
+        let c = Self::new(d, waiter);
+        let d = unsafe { DynDone::of(c.d) };
+        (c, d)
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.d.done()
+    }
 }
 
 impl<W: Waiter> Drop for Completion<'_, W> {
     fn drop(&mut self) {
-        if W::WAKES_DROPPER {
-            let Ok(()) = sleep_until(Sleep::IDLE, || self.d.done().then_some(()));
-        } else {
-            // complete() wakes the task, not the thread dropping it
-            while !self.d.done() {
-                let _ = sleep_until(Sleep::IDLE.timeout(1), || self.d.done().then_some(()));
-            }
-        }
+        self.d.assert_waited();
     }
 }
 
-impl Completion<'_, waiter::Sync> {
-    pub fn wait(self, how: Sleep) {
-        let Ok(()) = sleep_until(how, || self.d.done().then_some(()));
+impl WaitSync for Completion<'_, waiter::Sync> {
+    type Output = ();
+
+    fn wait_sync(self, how: Sleep) {
+        self.d.sleep_until_done(how);
     }
 }
 
@@ -224,12 +426,7 @@ impl Resumable for Completion<'_, waiter::Async> {
     type Output = ();
 
     fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if self.d.done() {
-            return Poll::Ready(());
-        }
-        // run() parks the task on it, once the poll's returned
-        super::park_on(cx, self.d);
-        Poll::Pending
+        self.d.poll_done(cx)
     }
 }
 
@@ -244,12 +441,21 @@ pub struct DoneWith<T, W: Waiter = waiter::Async> {
 
 unsafe impl<T: Send, W: Waiter> Sync for DoneWith<T, W> {}
 
+impl<T, W: Waiter> DoneWith<T, W> {
+    /// Not owed, nothing in it: as Done::completed().
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        DoneWith { done: Done::completed(), value: UnsafeCell::new(None) }
+    }
+}
+
 /// A Completion that returns what its completer left: None if it was dropped
 /// without leaving anything.
-#[must_use = "a Completion is waited on, or its drop waits for it"]
+#[must_use = "a Completion is waited on, or awaited, to its end"]
 pub struct CompletionReturn<'a, T, W: Waiter = waiter::Async> {
-    c: Completion<'a, W>,
-    d: &'a DoneWith<T, W>,
+    d:  &'a DoneWith<T, W>,
+    /// Send as the waiter is, as a Completion's
+    _w: PhantomData<W>,
 }
 
 /// The completer's side of a CompletionReturn: complete() leaves its value
@@ -259,12 +465,14 @@ pub struct Return<T, W: Waiter = waiter::Async>(NonNull<DoneWith<T, W>>);
 unsafe impl<T: Send, W: Waiter> Send for Return<T, W> {}
 
 impl<'a, T, W: Waiter> CompletionReturn<'a, T, W> {
-    /// A DoneWith in @slot, born with @waiter: the wait on it, and its
-    /// completer. The completer holds no borrow: the wait's drop waits for it.
-    pub fn new(slot: &'a mut Option<DoneWith<T, W>>, waiter: W) -> (Self, Return<T, W>) {
-        let d = slot.insert(DoneWith { done: Done::new(waiter), value: UnsafeCell::new(None) });
+    /// @d, not owed, born with @waiter: the wait on it, and its completer.
+    /// The completer holds no borrow: the wait is to its end.
+    pub fn new(d: &'a mut DoneWith<T, W>, waiter: W) -> (Self, Return<T, W>) {
+        assert!(d.done.done(), "a DoneWith born while it's owed");
+        d.done = Done::new(waiter);
+        *d.value.get_mut() = None;
         let ret = Return(NonNull::from(&*d));
-        (CompletionReturn { c: Completion { d: &d.done, _w: PhantomData }, d }, ret)
+        (CompletionReturn { d, _w: PhantomData }, ret)
     }
 
     fn take(&self) -> Option<T> {
@@ -272,9 +480,17 @@ impl<'a, T, W: Waiter> CompletionReturn<'a, T, W> {
     }
 }
 
-impl<T> CompletionReturn<'_, T, waiter::Sync> {
-    pub fn wait(self, how: Sleep) -> Option<T> {
-        let Ok(()) = sleep_until(how, || self.d.done.done().then_some(()));
+impl<T, W: Waiter> Drop for CompletionReturn<'_, T, W> {
+    fn drop(&mut self) {
+        self.d.done.assert_waited();
+    }
+}
+
+impl<T> WaitSync for CompletionReturn<'_, T, waiter::Sync> {
+    type Output = Option<T>;
+
+    fn wait_sync(self, how: Sleep) -> Option<T> {
+        self.d.done.sleep_until_done(how);
         self.take()
     }
 }
@@ -284,10 +500,7 @@ impl<T> Resumable for CompletionReturn<'_, T, waiter::Async> {
 
     fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
         let this = self.get_mut();
-        match Pin::new(&mut this.c).poll_resume(cx) {
-            Poll::Ready(()) => Poll::Ready(this.take()),
-            Poll::Pending => Poll::Pending,
-        }
+        this.d.done.poll_done(cx).map(|()| this.take())
     }
 }
 

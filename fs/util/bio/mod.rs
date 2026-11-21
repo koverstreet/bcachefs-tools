@@ -58,7 +58,7 @@ use crate::errcode::BchError;
 use crate::util::backtrace::prt_symbol;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, Completion, Done, Waiter};
+use crate::util::task::{waiter, Completion, Done, WaitSync, Waiter};
 use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
@@ -277,6 +277,12 @@ impl Bio {
         let bio = self.raw_mut();
         assert!(bio.bi_vcnt < bio.bi_max_vecs, "adding a folio: the bio's bvecs are full");
         unsafe { c::bio_add_folio_nofail(bio, folio.as_ptr(), folio.size(), 0) }
+    }
+
+    /// Emptied, for another IO from scratch: bio_reset(), its bvecs and its
+    /// position gone - a bio whose pages are new each IO, a dio's.
+    pub fn clear(self: Pin<&mut Self>, opf: u32) {
+        unsafe { crate::os::bio::reset(self.raw_mut(), core::ptr::null_mut(), opf) };
     }
 
     /// For another IO: bio_reset(), its bvecs kept - the buffers it was made
@@ -554,7 +560,7 @@ pub unsafe trait BioOwner {
     // it static - if one comes for something else.
     /// submit(), waited on by this thread, asleep as IO wait: its status.
     fn submit_wait(&mut self) -> Result<(), BchError> {
-        self.submit(waiter::Sync::current()).wait(Sleep::UNINTERRUPTIBLE.io())
+        self.submit(waiter::Sync::current()).wait_sync(Sleep::UNINTERRUPTIBLE.io())
     }
 
     /// Submitted, its IO's Completion made here for @waiter: the endio's end in
@@ -641,7 +647,7 @@ impl<O: BioOwner, B> Remapped<'_, O, B> {
 
 /// A bio submitted: the Completion of its IO, and a ref on the bio for its
 /// status once that's done. Dropped, it waits for the IO.
-#[must_use = "a bio's IO is waited on, or its drop waits for it"]
+#[must_use = "a bio's IO is waited on, or awaited, to its end"]
 pub struct BioFuture<'a, W: Waiter> {
     c:   Completion<'a, W>,
     bio: &'a Bio,
@@ -650,10 +656,12 @@ pub struct BioFuture<'a, W: Waiter> {
 // the Bio's Send, and read only once it's done
 unsafe impl Send for BioFuture<'_, waiter::Async> {}
 
-impl BioFuture<'_, waiter::Sync> {
-    pub fn wait(self, how: Sleep) -> Result<(), BchError> {
+impl WaitSync for BioFuture<'_, waiter::Sync> {
+    type Output = Result<(), BchError>;
+
+    fn wait_sync(self, how: Sleep) -> Result<(), BchError> {
         let bio = self.bio;
-        self.c.wait(how);
+        self.c.wait_sync(how);
         bio.status()
     }
 }
@@ -669,7 +677,7 @@ impl Resumable for BioFuture<'_, waiter::Async> {
 }
 
 unsafe extern "C" fn done_endio<W: Waiter>(bio: *mut c::bio) {
-    unsafe { Done::<W>::from_ptr((&raw mut (*bio).bi_private).cast()) }.complete();
+    unsafe { Done::<W>::from_ptr((&raw mut (*bio).bi_private).cast()).complete() };
 }
 
 unsafe extern "C" fn mapped_gathered_endio(bio: *mut c::bio) {
@@ -687,7 +695,3 @@ pub unsafe fn bch2_bio_map(bio: *mut c::bio, base: *mut c_void, size: usize) {
     unsafe { Bio::from_raw_mut(bio).map(base.cast(), size) }
 }
 
-pub unsafe fn memcpy_to_bio(dst: *mut c::bio, dst_iter: c::bvec_iter, src: *const c_void) {
-    let dst = unsafe { Bio::from_raw(dst).range_at(dst_iter) };
-    dst.copy_from(unsafe { core::slice::from_raw_parts(src.cast(), dst.len() as usize) });
-}

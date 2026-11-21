@@ -48,6 +48,8 @@ pub(crate) fn bcachefs_exit(m: &ModuleExit) {
     #[cfg(not(NO_BCACHEFS_FS))]
     {
         crate::vfs::direct::pools_exit(&q);
+        crate::vfs::direct_write::pools_exit(&q);
+        crate::vfs::writeback::pools_exit(&q);
         crate::vfs::buffered::pools_exit(&q);
     }
     crate::data::read::pools_exit(&q);

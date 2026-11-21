@@ -38,6 +38,7 @@ pub mod spinlock;
 mod srcu;
 pub mod stacktrace;
 pub mod sysfs;
+pub mod timer;
 pub mod workqueue;
 #[path = "../linux_kernel/ops.rs"]
 pub mod ops;

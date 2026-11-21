@@ -192,6 +192,11 @@ impl BioPool {
         }? BchError)
     }
 
+    /// Mempool::reserve_drawn(): whether its reserve bio is out.
+    pub fn reserve_drawn(&self) -> bool {
+        self.pool.reserve_drawn()
+    }
+
     /// bio_alloc_bioset(): a bio with room for @nr_vecs bvecs. Null past
     /// BIO_MAX_VECS, or where the pool can't wait - a NORECLAIM scope;
     /// otherwise it waits on the pool.
@@ -555,6 +560,11 @@ impl<T: HasBio, B: Buffers, A: Alloc> BioBox<T, B, A> {
         // SAFETY: the T, live while it's had, and the box's alone - a bio in
         // flight has given up its box; never moved from where its set made it
         unsafe { Pin::new_unchecked(self.t.as_mut()) }
+    }
+
+    /// What its bvecs point at.
+    pub fn buffers(&self) -> &B {
+        &self.buffers
     }
 }
 

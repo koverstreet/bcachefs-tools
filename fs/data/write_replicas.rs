@@ -25,7 +25,7 @@ use crate::util::task::{waiter, Resume};
 use core::alloc::Layout;
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicU16, AtomicUsize, Ordering::Relaxed};
+use core::sync::atomic::{AtomicU8, Ordering::Relaxed};
 use cstruct_macros::args_stored_once;
 use pin_init::{stack_pin_init, PinInit};
 
@@ -62,16 +62,34 @@ unsafe impl Allocator for ReplicaClones {
 
 unsafe impl Alloc for ReplicaClones {}
 
-const MAX: usize = c::BCH_BKEY_PTRS_MAX as usize;
+const MEMBERS: usize = c::BCH_SB_MEMBERS_MAX as usize;
 
-/// The replicas of a write that failed: each one's device and block status.
-#[derive(Default)]
-pub struct ReplicaErrs(pub ArrayVec<(u8, c::blk_status_t), MAX>);
+/// What writes' replicas came to, by device - one key's, or each extent's of a
+/// data write's pass, into one Gather: the devices that failed, with their
+/// errors, and those a nocow write left with writes to flush. Small, as each
+/// wait for it has a copy in its poll's frame.
+///
+/// Failures past a key's pointers' worth aren't kept: a key's - a btree
+/// node's - can't have more, nor a cow pass's, whose devices are its open
+/// buckets'; a nocow pass's can, but it fails the whole write on any.
+pub struct ReplicaErrs {
+    failed:        ArrayVec<(u8, c::blk_status_t), { c::BCH_BKEY_PTRS_MAX as usize }>,
+    pub unflushed: c::bch_devs_mask,
+}
+
+/// A replica's: its device, its status, and whether it's a nocow write not
+/// FUA.
+pub type ReplicaDone = (u8, c::blk_status_t, bool);
 
 impl ReplicaErrs {
+    /// Each device that failed, and its status.
+    pub fn failed(&self) -> impl Iterator<Item = (u8, c::blk_status_t)> + '_ {
+        self.failed.iter().copied()
+    }
+
     pub fn failures(&self, fs: &Fs) -> c::bch_io_failures {
         let mut failed = c::bch_io_failures::default();
-        for &(dev, status) in self.0.iter() {
+        for (dev, status) in self.failed() {
             failed.set_blk_status(fs, dev.into(), status);
         }
         failed
@@ -79,46 +97,57 @@ impl ReplicaErrs {
 }
 
 impl Fold for ReplicaErrs {
-    type Item = Option<(u8, c::blk_status_t)>;
-    /// How many have failed, and each one's device and status, packed
-    type Acc = (AtomicUsize, [AtomicU16; MAX]);
+    type Item = ReplicaDone;
+    /// Each device's last error - in the Gather, not copied - and the
+    /// unflushed devices.
+    type Acc = ([AtomicU8; MEMBERS], c::AtomicDevsMask);
 
     fn acc() -> impl PinInit<Self::Acc> {
-        (AtomicUsize::new(0), core::array::from_fn(|_| AtomicU16::new(0)))
+        (core::array::from_fn(|_| AtomicU8::new(0)), c::AtomicDevsMask::default())
     }
 
-    fn fold(acc: &Self::Acc, v: Self::Item) {
-        if let Some((dev, status)) = v {
-            let i = acc.0.fetch_add(1, Relaxed);
-            acc.1[i].store(u16::from(dev) << 8 | u16::from(status), Relaxed);
+    fn fold(acc: &Self::Acc, (dev, status, unflushed): ReplicaDone) {
+        if status != 0 {
+            acc.0[usize::from(dev)].store(status, Relaxed);
+        }
+        if unflushed {
+            acc.1.set(dev.into());
         }
     }
 
     fn result(acc: &Self::Acc) -> Self {
-        let n = acc.0.load(Relaxed);
-        ReplicaErrs(acc.1[..n].iter().map(|e| e.load(Relaxed)).map(|e| ((e >> 8) as u8, e as u8)).collect())
+        let mut failed = ArrayVec::new();
+        for (dev, status) in acc.0.iter().enumerate() {
+            let status = status.load(Relaxed);
+            if status != 0 && failed.try_push((dev as u8, status)).is_err() {
+                break;
+            }
+        }
+        ReplicaErrs { failed, unflushed: c::bch_devs_mask { d: acc.1.load() } }
     }
 }
 
 /// A replica's bio done, in its endio's context: its IO accounted against its
 /// device, its nocow bucket unlocked, its io ref put.
 impl<R: IoRefIdx> Gathered<ReplicaErrs> for c::bch_write_bio<R> {
-    fn done(mut self: Pin<&mut Self>, _: Result<(), BchError>) -> Option<(u8, c::blk_status_t)> {
+    fn done(mut self: Pin<&mut Self>, _: Result<(), BchError>) -> ReplicaDone {
         let ca = self.as_mut().project().ca.take();
         let w = &*self;
         let (dev, status) = (w.wbio.dev, w.bio.raw().bi_status);
+        let fua = w.bio.raw().bi_opf & c::REQ_FUA != 0;
+        let nocow = w.wbio.bits.nocow() != 0;
 
         if let Some(ca) = &ca {
             ca.account_io_completion(c::MemberErrorType::write, w.wbio.submit_time, status == 0);
-            if w.bio.raw().bi_opf & c::REQ_FUA == 0 {
+            if !fua {
                 ca.write_unflushed();
             }
-            if w.wbio.bits.nocow() != 0 {
+            if nocow {
                 w.fs().nocow_locks.unlock_bucket(pos(ca.dev_idx.into(), w.wbio.nocow_bucket), NocowKind::Update);
             }
         }
 
-        (status != 0).then_some((dev, status))
+        (dev, status, nocow && !fua)
     }
 }
 
@@ -151,16 +180,29 @@ pub async fn write_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::
     unsafe { wbio.as_mut().bio_mut().map(buf.as_ptr().cast_mut(), buf.len()) };
 
     stack_pin_init!(let g = Gather::<ReplicaErrs, waiter::Async>::new());
-    submit_replicas(fs, wbio.as_mut(), ty, k, cas, &g);
+    unsafe { submit_replicas(fs, wbio.as_mut(), ty, k, cas, &g) };
     let errs = g.wait(at).await;
 
     wbio.bio_mut().truncate_vecs(0);
     errs
 }
 
-/// write_replicas()'s bios, each submitted into @g.
-fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write_bio<R>>, ty: DataType, k: &BkeyI,
-                                mut cas: Option<&mut [Option<DevIoRef<R>>]>, g: &Gather<ReplicaErrs, waiter::Async>) {
+/*
+ * @cas is the caller's bch_dev pointer array (parallel to @k's ptrs)
+ * for the nocow path — those io_refs were already taken by the caller
+ * via bkey_get_dev_iorefs and we just transfer them to the per-bio
+ * wbios here.  Non-nocow callers pass NULL and we take fresh io_refs
+ * via bch2_dev_get_ioref atomically.
+ */
+/// write_replicas()'s bios, each submitted into @g: @wbio to the last
+/// device, borrowed, and an independent clone of it to each of the others.
+///
+/// # Safety
+/// @wbio isn't moved, used or dropped till @g's wait has returned.
+pub(crate) unsafe fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write_bio<R>>,
+                                                  ty: DataType, k: &BkeyI,
+                                                  mut cas: Option<&mut [Option<DevIoRef<R>>]>,
+                                                  g: &Gather<ReplicaErrs, waiter::Async>) {
     let ptrs = BkeySC::from(k).arm::<Ptrs>().expect("writing a key with no pointers");
     let nocow = cas.is_some();
 

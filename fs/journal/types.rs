@@ -151,8 +151,8 @@ nest! {
         },
 
         /* must not be memset, only manipulated by xchg/cmpxchg */
-        #[init(c::closure_waitlist { list: c::llist_head { first: c::JOURNAL_BUF_NOT_IN_FLIGHT } })]
-        pub wait: c::closure_waitlist,
+        #[init(AtomicPtr::new(crate::journal::flush_wait::JOURNAL_BUF_NOT_IN_FLIGHT))]
+        pub wait: AtomicPtr<crate::journal::flush_wait::FlushEntry>,
     }
 }
 
@@ -526,7 +526,7 @@ nest! {
          * When we need a flush but no open journal entry was flushable, wait
          * here - transferred to journal_buf.wait on entry open
          */
-        pub flush_wait: c::closure_waitlist,
+        pub flush_wait: AtomicPtr<crate::journal::flush_wait::FlushEntry>,
 
         /* Used when waiting because the journal was full */
         pub async_wait: EventCount,

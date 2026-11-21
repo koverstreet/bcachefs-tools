@@ -11,7 +11,7 @@
 //!     stack_pin_init!(let g = Gather::<Result<(), BchError>, waiter::Sync>::new());
 //!     let r = g.get();                // one more in flight
 //!     r.put(ret);                     // folded in; dropped unput, nothing is
-//!     let ret = g.wait_sync();        // an Async Gather: g.wait(at).await
+//!     let ret = g.wait_sync(Sleep::IDLE); // an Async Gather: g.wait(at).await
 //!
 //! It's waited on by & - everything in it is atomic - so one in something
 //! shared is waited on by whoever's job that is: a scope's jobs, by the
@@ -24,10 +24,10 @@
 //!
 //! A ref has no lifetime. What keeps the Gather there for it is that a
 //! Gather is only ever made pinned (PinInit), so its Drop runs before its
-//! memory is reused - and its Drop waits for every ref outstanding. So a ref
-//! can go anywhere - to C, an endio's private pointer, through into_raw() -
-//! and the owner's frame waits for it. Await or wait before it's dropped:
-//! that Drop sleeps.
+//! memory is reused - and is waited on, or awaited, before it's dropped,
+//! which its Drop asserts if any ref's still out. So a ref can go anywhere -
+//! to C, an endio's private pointer, through into_raw() - and the owner's
+//! wait waits for it.
 //!
 //! No lock: what's put folds into atomics - Fold, a trait on the result -
 //! from any context, an endio's included, and the count and whether the
@@ -42,20 +42,21 @@
 //! for the rest: reaping.
 //!
 //! The wait is a Completion on the Gather's Done, of its waiter kind: Sync's,
-//! wait_sync(), sleeping as closure_sync() does, or Async's, wait(), awaited. The wait starts it, then drops the owner's ref; whichever
-//! takes the count to zero - that, or the last put - completes it. The owner
-//! waits on the Done, not the count, so the Gather is there until complete()
-//! has stored DONE, its last touch: the putter's, from its context - an
-//! endio's, interrupt context perhaps. A Gather dropped unwaited drops the
-//! owner's ref without starting it, and polls the count: the last put's
-//! cmpxchg is then its last touch.
+//! wait_sync(), sleeping as closure_sync() does, or Async's, wait(),
+//! awaited. The wait starts it, then drops the owner's ref; whichever takes
+//! the count to zero - that, or the last put - completes it. The owner waits
+//! on the Done, not the count, so the Gather is there until complete() has
+//! marked it done, its last touch: the putter's, from its context - an
+//! endio's, interrupt context perhaps. A Gather dropped unwaited has no ref
+//! out but the owner's, or it's a bug: a drop can't await, and one that
+//! slept would hide the wait it was meant to be.
 
 use crate::errcode::{BchError, FirstErr};
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::util::alloc::{AllocError, KVVec};
-use crate::util::sleep::{sleep_until, Sleep};
-use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, Waiter};
+use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, RunQueue, WaitSync, Waiter};
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
@@ -307,7 +308,8 @@ impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
             }
         }
         if (old - 1) & (Self::COUNT|Self::WAITED) == Self::WAITED {
-            self.done().complete();
+            // the last put, once the wait's begun: the one
+            unsafe { self.done().complete() };
         }
     }
 
@@ -329,8 +331,7 @@ impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
         }
     }
 
-    /// Waited on before: that wait is over, as a Completion's drop waits it
-    /// out.
+    /// Waited on before: that wait is over, as a Completion's drop asserts.
     fn waited(&self) -> bool {
         W::load(&self.state, Ordering::Acquire) & Self::WAITED != 0
     }
@@ -346,7 +347,8 @@ impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
             old = cur;
         }
         if (old - 1) & Self::COUNT == 0 {
-            self.done().complete();
+            // no refs left to put: the one
+            unsafe { self.done().complete() };
         }
         c
     }
@@ -364,23 +366,16 @@ impl<T: Fold, Wt: Waiter, W: Width> Drop for InWait<'_, T, Wt, W> {
     }
 }
 
-impl<T: Fold, W: Width> Gather<T, waiter::Sync, W> {
-    /// Wait for every ref to be put, sleeping TASK_IDLE - no hung task
-    /// warnings - and take the result.
-    pub fn wait_sync(&self) -> T {
-        self.wait_sync_state(Sleep::IDLE)
-    }
+/// Every ref put, and the result. Sleep::IDLE, for no hung task warnings;
+/// freezable, for refs whose holders freeze in place - kthreads that do -
+/// whose owner must too.
+impl<T: Fold, W: Width> WaitSync for &Gather<T, waiter::Sync, W> {
+    type Output = T;
 
-    /// wait_sync(), freezable: for refs whose holders freeze in place - kthreads
-    /// that do - whose owner must too.
-    pub fn wait_sync_freezable(&self) -> T {
-        self.wait_sync_state(Sleep::IDLE.freezable())
-    }
-
-    fn wait_sync_state(&self, how: Sleep) -> T {
+    fn wait_sync(self, how: Sleep) -> T {
         let _w = self.begin_wait();
         if !self.waited() {
-            self.start(waiter::Sync::current()).wait(how);
+            self.start(waiter::Sync::current()).wait_sync(how);
         }
         T::result(&self.acc)
     }
@@ -390,6 +385,11 @@ impl<T: Fold, W: Width> Gather<T, waiter::Async, W> {
     /// Wait for every ref to be put, resumed @at, for the result.
     pub fn wait<'a>(&'a self, at: Resume<'a>) -> Resumed<'a, GatherWait<'a, T, W>> {
         GatherWait { c: None, w: self.begin_wait() }.resume_on(at)
+    }
+
+    /// wait(), resumed on @rq, a RunQueue::worked() one.
+    pub fn wait_on_run_queue<'a>(&'a self, rq: Pin<&'a RunQueue>) -> Resumed<'a, GatherWait<'a, T, W>> {
+        GatherWait { c: None, w: self.begin_wait() }.resume_on_run_queue(rq)
     }
 }
 
@@ -438,19 +438,10 @@ impl<T: Send, Wt: Waiter, W: Width> Gather<KVVec<T>, Wt, W> {
 #[pin_init::pinned_drop]
 impl<T: Fold, Wt: Waiter, W: Width> PinnedDrop for Gather<T, Wt, W> {
     fn drop(self: Pin<&mut Self>) {
-        // Not waited on - its owner returned early - and refs may be out, raw
-        // ones in C's hands: wait them out. It's pinned, so it's where they
-        // point until it's freed.
-        if !self.waited() {
-            let mut old = W::load(&self.state, Ordering::Acquire);
-            while let Err(cur) = W::compare_exchange_weak(&self.state, old, old - 1) {
-                old = cur;
-            }
-            let all_put = || (W::load(&self.state, Ordering::Acquire) & Self::COUNT == 0).then_some(());
-            while all_put().is_none() {
-                let _ = sleep_until(Sleep::IDLE.timeout(1), all_put);
-            }
-        }
+        // not waited on, its owner's ref the only one: no ref's out to put
+        // into it once it's gone
+        assert!(self.waited() || W::load(&self.state, Ordering::Acquire) & Self::COUNT == 1,
+                "a Gather dropped with refs out, unwaited: wait on it, or await it, first");
     }
 }
 
@@ -492,7 +483,7 @@ impl<T: Fold, Wt: Waiter, W: Width> GatherRef<T, Wt, W> {
     /// # Safety
     /// @g is from into_raw(), and this is the one from_raw() of it.
     pub unsafe fn from_raw(g: *const Gather<T, Wt, W>) -> Self {
-        GatherRef(NonNull::new(g.cast_mut()).unwrap())
+        GatherRef(NonNull::new(g.cast_mut()).expect("a GatherRef from_raw() of null"))
     }
 }
 

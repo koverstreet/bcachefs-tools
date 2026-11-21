@@ -34,6 +34,7 @@ use super::types::{BtreeIter, BtreeTrans};
 use super::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
+use crate::journal::flush_wait::Flush;
 pub use crate::c::Watermark;
 use crate::errcode::{
     BchError,
@@ -45,7 +46,6 @@ use crate::btree::trans::TransGuard;
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::types::Le64;
-use crate::util::ffi::Opaque;
 use crate::os::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
@@ -414,12 +414,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.commit_inner(self, disk_res, None, flags.into(), false)
     }
 
-    /// commit(), with a ref on @flush until the commit's journal entry is
-    /// flushed.
+    /// commit(), its journal entry flushed: @flush taken and attached to the
+    /// flush - left, if the commit fails first.
     pub fn commit_flush(
         &self,
         disk_res: Option<&DiskReservation<'_>>,
-        flush:    Option<&Opaque<c::closure>>,
+        flush:    Option<&mut Option<Flush<'_>>>,
         flags:    impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
         assert!(self.live.get(), "commit in an attempt that ended");
