@@ -33,7 +33,7 @@ use crate::types::{Le16, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
 use crate::util::backref::BackRef;
-use crate::util::bio::{inline_vecs, HasBio};
+use crate::util::bio::{BvecMempool, HasBio};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::workqueue::Queue;
@@ -62,14 +62,16 @@ type NodeKey = DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>
 /// after its write, when the filesystem may be gone. A mempool: node writes
 /// must make progress under memory pressure.
 static NODE_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
+static NODE_WRITE_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let size = exclusive_size::<c::bch_write_bio, NodeWriteFut<'static>, &'static Mempool<Kmalloc>>(
-        inline_vecs(c::BIO_MAX_VECS as u16));
-    Mempool::init_static(&NODE_WRITES, Mempool::kmalloc(1, size), m)
+    let size = exclusive_size::<c::bch_write_bio, NodeWriteFut<'static>, &'static Mempool<Kmalloc>>();
+    Mempool::init_static(&NODE_WRITES, Mempool::kmalloc(1, size), m)?;
+    BvecMempool::init_static(&NODE_WRITE_BVECS, 1, m)
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
+    NODE_WRITE_BVECS.exit(q);
     NODE_WRITES.exit(q)
 }
 
@@ -404,7 +406,7 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
 
     let slot = {
         let _noio = MemallocFlags::noio();
-        TaskSlot::exclusive_bio_in(&NODE_WRITES, ptr::null_mut(), c::BIO_MAX_VECS as u16, WRITE_OPF,
+        TaskSlot::exclusive_bio_in(&NODE_WRITES, &NODE_WRITE_BVECS, ptr::null_mut(), c::BIO_MAX_VECS as u16, WRITE_OPF,
                                    c::bch_write_bio::new::<BchError>)
     }.expect("a node write's box: its pool waits for an element");
 

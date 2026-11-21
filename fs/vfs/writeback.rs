@@ -16,7 +16,7 @@ use crate::inode_opts;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{Box, Kmalloc};
 use crate::os::blkdev::plugged;
-use crate::util::bio::{inline_vecs, Bio, BioBuffersUnmanaged, BioOwner};
+use crate::util::bio::{Bio, BioBuffersUnmanaged, BioOwner, BvecMempool};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, Exclusive, Resume, Spawn, TaskSlot};
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
@@ -42,14 +42,15 @@ type Pool = &'static Mempool<Kmalloc>;
 type IoSlot = TaskSlot<'static, Io, fn(Pin<&'static mut Io>) -> WritepageFut<'static>, Pool, Exclusive>;
 
 static WRITEPAGES: Mempool<Kmalloc> = ::pin_init::zeroed();
+static WRITEPAGE_BVECS: BvecMempool = ::pin_init::zeroed();
 
-/// At module init: elements for the most bvecs a bio has.
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let vecs = inline_vecs(c::BIO_MAX_VECS as u16);
-    Mempool::init_static(&WRITEPAGES, Mempool::kmalloc(4, exclusive_size::<Io, WritepageFut<'static>, Pool>(vecs)), m)
+    Mempool::init_static(&WRITEPAGES, Mempool::kmalloc(4, exclusive_size::<Io, WritepageFut<'static>, Pool>()), m)?;
+    BvecMempool::init_static(&WRITEPAGE_BVECS, 4, m)
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
+    WRITEPAGE_BVECS.exit(q);
     WRITEPAGES.exit(q);
 }
 
@@ -183,7 +184,7 @@ fn writepage_do_io(w: &mut WritepageState) {
 fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeInfo,
                       sector: u64, nr_replicas: u32, res_nr_replicas: u32) {
     let opts = w.opts;
-    let mut slot = IoSlot::exclusive_bio_in(&WRITEPAGES, ptr::null_mut(), c::BIO_MAX_VECS as u16,
+    let mut slot = IoSlot::exclusive_bio_in(&WRITEPAGES, &WRITEPAGE_BVECS, ptr::null_mut(), c::BIO_MAX_VECS as u16,
                                             c::req_op_REQ_OP_WRITE, |b| {
         pin_init!(Io {
             inode: inode.raw(),

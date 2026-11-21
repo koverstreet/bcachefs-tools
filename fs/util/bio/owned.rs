@@ -4,18 +4,19 @@
 //! the T's last field, and the T is found from it by that offset.
 //!
 //! - BioBox<T>: a T from a BioSet<T>, a bioset whose front_pad is the rest of
-//!   the T - or, from BioBox::new_in(), a T and its inline bvecs, in one
-//!   allocation from a pool, or kmalloc(). Dropped, it's put to its set, or
-//!   freed.
-//! - TaskSlot::exclusive_bio_in(): a T that's a task's home, its bvecs inline
-//!   after the task's box.
+//!   the T - or, from BioBox::new_in(), a T from a pool, or kmalloc().
+//!   Dropped, it's put to its set, or freed.
+//! - TaskSlot::exclusive_bio_in(): a T that's a task's home.
+//!
+//! A bio's bvecs past its inline few are its BvecAlloc's: its set's
+//! BvecMempool, or its home's pool's, as a bioset's bvec_pool is.
 //!
 //! They deref to the T, and change it through Pin<&mut T>: the T holds its
 //! bio, which is pinned.
 //!
 //! A T is made around its bio: the bioset, or BioBox::new(), puts the bio
-//! where it goes, then the caller's initializer does the rest of the T - its
-//! bio field from BioInPlace::init(), which writes nothing.
+//! where it goes - bio_init() - then the caller's initializer does the rest of
+//! the T - its bio field from BioInPlace::init(), which writes nothing.
 //!
 //! A box submitted to a Gather (BioBox::submit_gathered()) is given up to its
 //! IO, and its endio has it back from the bio, drops it, then puts what its T
@@ -34,13 +35,16 @@ use pin_init::{pin_data, pin_init, PinInit};
 
 use core::task::{ready, Context, Poll};
 
-use super::{bio_of, of_bio, AtEnd, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, Buffers, HasBio,
-            MapBuf};
+use super::{bio_of, of_bio, AtEnd, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, BioVecs, Buffers,
+            HasBio, MapBuf};
 use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{waiter, Completion, Exclusive, Resumable, TaskSlot, Waiter};
 use crate::c;
+use crate::data_structures::dst_vec::DstVec;
 use crate::errcode::BchError;
-use crate::util::alloc::{Flags, init_at, stateless, Alloc, Allocator, Kmalloc};
+use crate::locking::MemallocFlags;
+use crate::os::module::{Quiesced, ThisModule};
+use crate::util::alloc::{Flags, init_at, stateless, Alloc, AllocError, Allocator, Kmalloc};
 use crate::util::mempool::Mempool;
 
 pub struct BioInPlace(*mut c::bio);
@@ -154,17 +158,117 @@ impl Drop for Lent<'_> {
     }
 }
 
+/// A pool of bvecs, BIO_MAX_VECS each: a bioset's bvec_pool.
+#[pin_data]
+#[repr(transparent)]
+#[derive(::pin_init::Zeroable)]
+pub struct BvecMempool {
+    #[pin]
+    pool: Mempool<Kmalloc>,
+}
+
+impl BvecMempool {
+    /// @min_nr held in reserve: as many as the bios it serves.
+    pub fn new(min_nr: usize) -> impl PinInit<Self, BchError> {
+        pin_init!(Self { pool <- Mempool::kmalloc(min_nr, Self::element_size()) }? BchError)
+    }
+
+    pub fn init_static(this: &'static Self, min_nr: usize, m: &ThisModule) -> Result<(), BchError> {
+        Mempool::init_static(&this.pool, Mempool::kmalloc(min_nr, Self::element_size()), m)
+    }
+
+    fn element_size() -> usize {
+        DstVec::<c::bio_vec, u16, BvecAlloc>::alloc_size(c::BIO_MAX_VECS as usize)
+    }
+
+    pub fn exit(&self, q: &Quiesced<'_>) {
+        self.pool.exit(q)
+    }
+
+    /// For its bios to take bvecs from: a static's, which outlives them all.
+    pub fn alloc(&'static self) -> BvecAlloc {
+        BvecAlloc(Bvecs::Pool(NonNull::from(self)))
+    }
+
+    /// alloc(), of a pool that isn't a static's: a set's.
+    ///
+    /// # Safety
+    /// The pool outlives every bio that takes bvecs from it.
+    unsafe fn alloc_unbound(&self) -> BvecAlloc {
+        BvecAlloc(Bvecs::Pool(NonNull::from(self)))
+    }
+}
+
+/// Where a bio's bvecs past its inline few come from: a BvecMempool - its
+/// set's, its home's pool's - kmalloc(), for a box of its own, or nowhere, a
+/// bio with none of its own: a clone, whose are its parent's. By pointer, as
+/// bi_pool is: what made the bio outlives it - so made only by a pool's
+/// alloc(), or here.
+#[derive(Clone, Copy)]
+pub struct BvecAlloc(Bvecs);
+
+#[derive(Clone, Copy)]
+enum Bvecs {
+    Pool(NonNull<BvecMempool>),
+    Kmalloc,
+    None,
+}
+
+impl BvecAlloc {
+    pub(super) const KMALLOC: Self = BvecAlloc(Bvecs::Kmalloc);
+    pub(super) const NONE: Self = BvecAlloc(Bvecs::None);
+}
+
+unsafe impl Allocator for BvecAlloc {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        match self.0 {
+            Bvecs::Pool(p) => unsafe { p.as_ref() }.pool.allocate(layout),
+            Bvecs::Kmalloc => Kmalloc.allocate(layout),
+            Bvecs::None    => Err(AllocError),
+        }
+    }
+
+    unsafe fn deallocate(&self, p: NonNull<u8>, layout: Layout) {
+        match self.0 {
+            Bvecs::Pool(pool) => unsafe { pool.as_ref().pool.deallocate(p, layout) },
+            Bvecs::Kmalloc    => unsafe { Kmalloc.deallocate(p, layout) },
+            Bvecs::None       => unreachable!("freeing bvecs a bio with no BvecAlloc never had"),
+        }
+    }
+}
+
+unsafe impl Alloc for BvecAlloc {}
+
+/// bio_init(), of the Bio at @bio: room for @nr_vecs bvecs - its inline few,
+/// or from @bvecs - as the task's memalloc scope allows. Fails as @bvecs does.
+///
+/// # Safety
+/// @bio is room for a Bio, not in flight.
+unsafe fn bio_init(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
+                   bvecs: BvecAlloc) -> Result<(), AllocError> {
+    let mut vecs = BioVecs::new_in(bvecs);
+    vecs.reserve(nr_vecs.into())?;
+    unsafe {
+        (&raw mut (*bio).vecs).write(vecs);
+        let vecs = &mut *(&raw mut (*bio).vecs);
+        let max = vecs.capacity().min(c::BIO_MAX_VECS as usize) as u16;
+        crate::os::bio::init(bio.cast(), bdev, vecs.as_mut_ptr(), max, opf);
+    }
+    Ok(())
+}
+
 // ── BioSet, BioBox ───────────────────────────────────────────────────────
 
-/// A set's bios, untyped: each a bio with what it's in before it and its
-/// bvecs inline after, in one allocation from a pool of elements sized for
-/// BIO_MAX_VECS - where it's less, the allocator's first, as any pool's
-/// allocations. A bio's bi_pool is its BioPool, so it's put back knowing
+/// A set's bios, untyped: each a bio with what it's in before it, in one
+/// allocation from a pool, its bvecs past its inline few from the set's
+/// BvecMempool. A bio's bi_pool is its BioPool, so it's put back knowing
 /// nothing else of it.
 #[pin_data]
 pub struct BioPool {
     #[pin]
     pool:      Mempool<Kmalloc>,
+    #[pin]
+    bvecs:     BvecMempool,
     front_pad: usize,
 }
 
@@ -177,19 +281,18 @@ pub struct BioSet<T: HasBio> {
     _t:  PhantomData<fn() -> T>,
 }
 
-/// A bio with @front_pad bytes before it and @nr_vecs bvecs after: its
-/// allocation, and where the bvecs start.
-fn bio_layout(front_pad: usize, nr_vecs: u16) -> (Layout, usize) {
-    let bio = Layout::from_size_align(front_pad + size_of::<Bio>(), align_of::<Bio>())
-        .expect("a bio and what it's in");
-    let (layout, vecs) = bio.extend(inline_vecs(nr_vecs)).expect("a bio and its bvecs");
-    (layout.pad_to_align(), vecs)
+/// A bio with @front_pad bytes before it: its allocation.
+fn bio_layout(front_pad: usize) -> Layout {
+    Layout::from_size_align(front_pad + size_of::<Bio>(), align_of::<Bio>())
+        .expect("a bio and what it's in")
+        .pad_to_align()
 }
 
 impl BioPool {
     fn new(pool_size: u32, front_pad: usize) -> impl PinInit<Self, BchError> {
         pin_init!(Self {
-            pool <- Mempool::kmalloc(pool_size as usize, bio_layout(front_pad, c::BIO_MAX_VECS as u16).0.size()),
+            pool  <- Mempool::kmalloc(pool_size as usize, bio_layout(front_pad).size()),
+            bvecs <- BvecMempool::new(pool_size as usize),
             front_pad,
         }? BchError)
     }
@@ -202,23 +305,34 @@ impl BioPool {
     /// BIO_MAX_VECS, or where the pool can't wait - a NORECLAIM scope;
     /// otherwise it waits on the pool.
     pub fn alloc_raw(&self, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32, gfp: Flags) -> *mut c::bio {
-        let (layout, vecs) = bio_layout(self.front_pad, nr_vecs);
+        let layout = bio_layout(self.front_pad);
         let Ok(p) = self.pool.alloc_gfp(layout, gfp) else {
             return core::ptr::null_mut();
         };
-        /*
-         * Given a whole element, as bvec_alloc() falls back to its mempool's,
-         * it has room for BIO_MAX_VECS: bio_put() frees what's recorded, so
-         * the element goes back to the reserve.
-         */
-        let nr_vecs = if p.len() > layout.size() { c::BIO_MAX_VECS as u16 } else { nr_vecs };
         let p = p.cast::<u8>();
         unsafe {
-            let bio = p.add(self.front_pad).cast::<c::bio>().as_ptr();
-            crate::os::bio::init(bio, bdev, p.add(vecs).cast().as_ptr(), nr_vecs, opf);
+            let bio = p.add(self.front_pad).cast::<Bio>().as_ptr();
+            let made = {
+                let _gfp = MemallocFlags::for_gfp(gfp);
+                bio_init(bio, bdev, nr_vecs, opf, self.bvecs.alloc_unbound())
+            };
+            if made.is_err() {
+                self.pool.deallocate(p, layout);
+                return core::ptr::null_mut();
+            }
+            let bio = bio.cast::<c::bio>();
             (*bio).bi_pool = core::ptr::from_ref(self).cast_mut().cast();
             bio
         }
+    }
+
+    /// @bio's memory back to the pool, what's in it dropped already.
+    ///
+    /// # Safety
+    /// @bio is this pool's, and nothing uses it after.
+    unsafe fn free(&self, bio: *mut c::bio) {
+        let p = unsafe { NonNull::new_unchecked(bio.byte_sub(self.front_pad)) };
+        unsafe { self.pool.deallocate(p.cast(), bio_layout(self.front_pad)) };
     }
 
     /*
@@ -303,17 +417,22 @@ unsafe extern "C" fn chain_endio(bio: *mut c::bio) {
     }
 }
 
-/// bio_put(): a set's bio back to its pool. What it's in isn't dropped, as
-/// C's isn't.
+/// # Safety
+/// @bio is a bio, and its pool outlives 'a.
+unsafe fn pool_of<'a>(bio: *const c::bio) -> &'a BioPool {
+    unsafe { (*bio).bi_pool.cast::<BioPool>().as_ref() }.expect("a set's bio, of no BioSet")
+}
+
+/// bio_put(): a set's bio - its bvecs with it - back to its pool. What it's
+/// in isn't dropped, as C's isn't.
 ///
 /// # Safety
 /// @bio is a BioPool's, and nothing uses it after.
 pub unsafe fn bio_put(bio: *mut c::bio) {
     unsafe {
-        let set = (*bio).bi_pool.cast::<BioPool>().as_ref().expect("bio_put() of a bio no BioSet made");
-        let (layout, _) = bio_layout(set.front_pad, (*bio).bi_max_vecs);
-        crate::os::bio::uninit(bio);
-        set.pool.deallocate(NonNull::new_unchecked(bio.byte_sub(set.front_pad)).cast(), layout);
+        let set = pool_of(bio);
+        core::ptr::drop_in_place(bio.cast::<Bio>());
+        set.free(bio);
     }
 }
 
@@ -529,43 +648,35 @@ impl<T: HasBio, B: Buffers, A: Alloc> BioBox<T, B, A> {
 }
 
 impl<T: HasBio> BioBox<T> {
-    /// As BioSet::alloc(), the bvecs inline. kzalloc(), not kvzalloc(): an
-    /// endio may drop it, and kvfree() isn't safe in interrupt context.
+    /// As BioSet::alloc(), from kmalloc() - its bvecs past its inline few
+    /// too. kzalloc(), not kvzalloc(): an endio may drop it, and kvfree()
+    /// isn't safe in interrupt context.
     pub fn new<E, I>(bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
                      init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
     where
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        Self::new_in(Kmalloc, bdev, nr_vecs, opf, init)
+        Self::new_in(Kmalloc, BvecAlloc::KMALLOC, bdev, nr_vecs, opf, init)
     }
 }
 
 impl<T: HasBio, A: Alloc> BioBox<T, BioBuffersUnmanaged, A> {
-    /// new(), from @alloc - a pool, whose elements are its reserve.
-    pub fn new_in<E, I>(alloc: A, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
+    /// new(), from @alloc - a pool, whose elements are its reserve - and its
+    /// bvecs past its inline few from @bvecs.
+    pub fn new_in<E, I>(alloc: A, bvecs: BvecAlloc, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
                         init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
     where
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        let (layout, vecs) = inline_layout::<T>(nr_vecs);
-        let p = alloc.allocate_zeroed(layout).map_err(|_| BchError::from(c::ENOMEM))?;
-        /*
-         * Given more - a pool's whole element - the bvecs that fit are
-         * recorded: drop frees what's recorded, so the element goes back to
-         * the reserve.
-         */
-        let fit = (p.len() - vecs) / size_of::<c::bio_vec>();
-        let nr_vecs = fit.min(c::BIO_MAX_VECS as usize) as u16;
-        let p = p.cast::<u8>();
-        let t = p.as_ptr().cast::<T>();
-
+        let layout = Layout::new::<T>();
+        let p = alloc.allocate_zeroed(layout).map_err(|_| BchError::from(c::ENOMEM))?.cast::<T>();
         unsafe {
-            match init_at(inline_bio(bdev, p.add(vecs), nr_vecs, opf, init), t) {
-                Ok(()) => Ok(BioBox { t: p.cast(), buffers: BioBuffersUnmanaged, alloc }),
+            match init_at(bio_in(bdev, nr_vecs, opf, bvecs, init), p.as_ptr()) {
+                Ok(()) => Ok(BioBox { t: p, buffers: BioBuffersUnmanaged, alloc }),
                 Err(e) => {
-                    alloc.deallocate(p, inline_layout::<T>(nr_vecs).0);
+                    alloc.deallocate(p.cast(), layout);
                     Err(e)
                 }
             }
@@ -573,26 +684,19 @@ impl<T: HasBio, A: Alloc> BioBox<T, BioBuffersUnmanaged, A> {
     }
 }
 
-/// The room for @nr_vecs bvecs inline: a bio's, after what it's in.
-pub fn inline_vecs(nr_vecs: u16) -> Layout {
-    Layout::array::<c::bio_vec>(nr_vecs.into()).expect("a u16's worth of bvecs")
-}
-
-/// A T, its bio's bvecs the @nr_vecs at @vecs - inline, after what it's in,
-/// inline_vecs()'s room: its bio bio_init()'d, then the rest made by @init.
-///
-/// # Safety
-/// @vecs is room for @nr_vecs bvecs, that lasts as long as the T.
-pub unsafe fn inline_bio<T: HasBio, E, I>(bdev: *mut crate::os::blkdev::BlockDevice, vecs: NonNull<u8>, nr_vecs: u16, opf: u32,
-                                          init: impl FnOnce(BioInPlace) -> I) -> impl PinInit<T, E>
+/// A T, its bio bio_init()'d - room for @nr_vecs bvecs, its inline few or
+/// from @bvecs - then the rest made by @init.
+fn bio_in<T: HasBio, E, I>(bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32, bvecs: BvecAlloc,
+                           init: impl FnOnce(BioInPlace) -> I) -> impl PinInit<T, E>
 where
     I: PinInit<T, E>,
+    E: From<BchError>,
 {
     unsafe {
         ::pin_init::pin_init_from_closure(move |t: *mut T| {
             let bio = bio_of(t);
-            crate::os::bio::init(bio, bdev, vecs.as_ptr().cast(), nr_vecs, opf);
-            init_at(init(BioInPlace(bio)), t).inspect_err(|_| crate::os::bio::uninit(bio))
+            bio_init(bio.cast(), bdev, nr_vecs, opf, bvecs).map_err(|_| BchError::from(c::ENOMEM))?;
+            init_at(init(BioInPlace(bio)), t).inspect_err(|_| core::ptr::drop_in_place(bio.cast::<Bio>()))
         })
     }
 }
@@ -604,38 +708,39 @@ where
     M: FnOnce<(Pin<&'static mut T>,)>,
     <M as FnOnce<(Pin<&'static mut T>,)>>::Output: Future<Output = ()> + Send,
 {
-    /// An Exclusive task's TaskSlot from @alloc, its home a T whose bio's
-    /// @nr_vecs bvecs are inline, after the box: inline_bio()'s.
-    pub fn exclusive_bio_in<E, I>(alloc: A, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
-                                  init: impl FnOnce(BioInPlace) -> I) -> Result<Self, BchError>
+    /// An Exclusive task's TaskSlot from @alloc, its home a T whose bio has
+    /// room for @nr_vecs bvecs, its inline few or from @bvecs: bio_in()'s.
+    pub fn exclusive_bio_in<E, I>(alloc: A, bvecs: &'static BvecMempool, bdev: *mut crate::os::blkdev::BlockDevice,
+                                  nr_vecs: u16, opf: u32, init: impl FnOnce(BioInPlace) -> I) -> Result<Self, BchError>
     where
         I: PinInit<T, E>,
+        E: From<BchError>,
         BchError: From<E>,
     {
-        Self::exclusive_tail_in(alloc, inline_vecs(nr_vecs), |vecs| unsafe { inline_bio(bdev, vecs, nr_vecs, opf, init) })
+        Self::exclusive_in(alloc, bio_in(bdev, nr_vecs, opf, bvecs.alloc(), init))
     }
 }
 
 impl<T: HasBio, B: Buffers> BioBox<T, B> {
-    /// As BioSet::alloc_with(), the bvecs inline.
+    /// As BioSet::alloc_with(), from kmalloc().
     pub fn new_with<E, I>(bdev: *mut crate::os::blkdev::BlockDevice, opf: u32, src: B::Src<'_>,
                           init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
     where
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        Self::new_with_in(Kmalloc, bdev, opf, src, init)
+        Self::new_with_in(Kmalloc, BvecAlloc::KMALLOC, bdev, opf, src, init)
     }
 }
 
 impl<T: HasBio, B: Buffers, A: Alloc + Copy> BioBox<T, B, A> {
-    pub fn new_with_in<E, I>(alloc: A, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32, src: B::Src<'_>,
-                             init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
+    pub fn new_with_in<E, I>(alloc: A, bvecs: BvecAlloc, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32,
+                             src: B::Src<'_>, init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
     where
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        let mut b = BioBox::<T, BioBuffersUnmanaged, A>::new_in(alloc, bdev, B::nr_vecs(&src), opf, init)?;
+        let mut b = BioBox::<T, BioBuffersUnmanaged, A>::new_in(alloc, bvecs, bdev, B::nr_vecs(&src), opf, init)?;
         let buffers = B::fill(b.bio_mut(), src)?;
         let b = core::mem::ManuallyDrop::new(b);
         Ok(BioBox { t: b.t, buffers, alloc: b.alloc })
@@ -653,17 +758,6 @@ impl<T: HasBio, B: MapBuf> BioBox<T, BioBuffersMapped<B>> {
     {
         &mut self.buffers.0
     }
-}
-
-/// The size of a BioBox's T and @nr_vecs bvecs: what a pool's elements are,
-/// for new_in().
-pub fn bio_box_size<T: HasBio>(nr_vecs: u16) -> usize {
-    inline_layout::<T>(nr_vecs).0.size()
-}
-
-fn inline_layout<T>(nr_vecs: u16) -> (Layout, usize) {
-    let (layout, vecs) = Layout::new::<T>().extend(inline_vecs(nr_vecs)).expect("a T and its bvecs");
-    (layout.pad_to_align(), vecs)
 }
 
 // An Option of one is None as its pointer is null, all zeroes; Unmanaged
@@ -684,21 +778,16 @@ unsafe impl<T: HasBio, B: Buffers, A: Alloc> BioOwner for BioBox<T, B, A> {
 }
 
 impl<T: HasBio, B: Buffers, A: Alloc> Drop for BioBox<T, B, A> {
-    /// A bioset's bio is put to its set - bio_put() - and one with its bvecs
-    /// inline, which has no set, freed to its allocator as new_in() laid it
-    /// out: its bvecs' count is bi_max_vecs, which bio_init() set and
-    /// bio_reset() keeps.
     fn drop(&mut self) {
         let t = self.t.as_ptr();
         let bio = bio_of(t);
         self.buffers.release(unsafe { Bio::from_raw_mut(bio) });
         unsafe {
-            let (pool, nr_vecs) = ((*bio).bi_pool, (*bio).bi_max_vecs);
+            let set = (*bio).bi_pool.cast::<BioPool>().as_ref();
             core::ptr::drop_in_place(t);
-            if !pool.is_null() {
-                bio_put(bio);
-            } else {
-                self.alloc.deallocate(self.t.cast(), inline_layout::<T>(nr_vecs).0);
+            match set {
+                Some(set) => set.free(bio),
+                None      => self.alloc.deallocate(self.t.cast(), Layout::new::<T>()),
             }
         }
     }

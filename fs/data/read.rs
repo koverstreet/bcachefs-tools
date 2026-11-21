@@ -91,8 +91,8 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot};
 use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::util::bio::{bio_box_size, inline_vecs, reset_bvec_offset, Bio, BioBox, BioBuffersOwned, BioBuffersUnmanaged,
-                       BioClone, BioInPlace, BioLend, BioOwner, BioRange, Buffers, HasBio, Lent};
+use crate::util::bio::{reset_bvec_offset, Bio, BioBox, BioBuffersOwned, BioBuffersUnmanaged, BioClone, BioInPlace,
+                       BioLend, BioOwner, BioRange, Buffers, BvecMempool, HasBio, Lent};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Kmalloc};
@@ -379,16 +379,22 @@ static FRAGMENTS: Mempool<Kmalloc> = ::pin_init::zeroed();
 /// at a time, each read and dropped before the next is made.
 static FRAGMENT_BIOS: Mempool<Kmalloc> = ::pin_init::zeroed();
 
+static FRAGMENT_BVECS: BvecMempool = ::pin_init::zeroed();
+static FRAGMENT_BIO_BVECS: BvecMempool = ::pin_init::zeroed();
+
 type Pool = &'static Mempool<Kmalloc>;
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let max = c::BIO_MAX_VECS as u16;
-    let size = exclusive_size::<FragmentBio, FragmentFut<'static>, Pool>(inline_vecs(max));
+    let size = exclusive_size::<FragmentBio, FragmentFut<'static>, Pool>();
     Mempool::init_static(&FRAGMENTS, Mempool::kmalloc(1, size), m)?;
-    Mempool::init_static(&FRAGMENT_BIOS, Mempool::kmalloc(1, bio_box_size::<Rbio>(max)), m)
+    Mempool::init_static(&FRAGMENT_BIOS, Mempool::kmalloc(1, size_of::<Rbio>()), m)?;
+    BvecMempool::init_static(&FRAGMENT_BVECS, 1, m)?;
+    BvecMempool::init_static(&FRAGMENT_BIO_BVECS, 1, m)
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
+    FRAGMENT_BIO_BVECS.exit(q);
+    FRAGMENT_BVECS.exit(q);
     FRAGMENT_BIOS.exit(q);
     FRAGMENTS.exit(q);
 }
@@ -1265,14 +1271,15 @@ impl<'r> Planned<'r, '_> {
 
         let _noio = MemallocFlags::noio();
         let fragment = |b| Rbio::fragment(orig, b);
-        let (pool, bdev) = (&FRAGMENT_BIOS, core::ptr::null_mut());
+        let (pool, bvecs, bdev) = (&FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc(), core::ptr::null_mut());
         let kind = match how {
             How::Promote(p) => Kind::Promote(p.rbio.bio.lend(), p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
-                Kind::Bounce(BioBox::new_with_in(pool, bdev, 0, (&fs.bio_bounce, bs, size, size, gfp), fragment)?)
+                let src = (&fs.bio_bounce, bs, size, size, gfp);
+                Kind::Bounce(BioBox::new_with_in(pool, bvecs, bdev, 0, src, fragment)?)
             }
-            How::Clone => Kind::Clone(BioBox::new_with_in(pool, bdev, 0, plan.range, fragment)?),
+            How::Clone => Kind::Clone(BioBox::new_with_in(pool, bvecs, bdev, 0, plan.range, fragment)?),
             How::Own => Kind::Own(orig.lend()),
         };
 
@@ -1320,7 +1327,7 @@ impl<'r> Planned<'r, '_> {
         let opf = orig.bio().raw().bi_opf;
 
         let _noio = MemallocFlags::noio();
-        let mut slot = TaskSlot::exclusive_bio_in(&FRAGMENTS, core::ptr::null_mut(), nr_vecs, 0, |b| {
+        let mut slot = TaskSlot::exclusive_bio_in(&FRAGMENTS, &FRAGMENT_BVECS, core::ptr::null_mut(), nr_vecs, 0, |b| {
             pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b) }? BchError)
         })?;
         let buffers = match bounce {

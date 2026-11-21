@@ -21,7 +21,7 @@ use crate::fs::Fs;
 use crate::inode_opts;
 use crate::snapshots::subvolume;
 use crate::util::alloc::{KVec, Kmalloc};
-use crate::util::bio::inline_vecs;
+use crate::util::bio::BvecMempool;
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Spawn, TaskSlot, WaitSync};
@@ -46,14 +46,15 @@ type Dio = c::dio_write;
 type Pool = &'static Mempool<Kmalloc>;
 
 static DIO_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
+static DIO_WRITE_BVECS: BvecMempool = ::pin_init::zeroed();
 
-/// At module init: elements for the most bvecs a bio has.
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let vecs = inline_vecs(c::BIO_MAX_VECS as u16);
-    Mempool::init_static(&DIO_WRITES, Mempool::kmalloc(4, exclusive_size::<Dio, DioWriteFut<'static>, Pool>(vecs)), m)
+    Mempool::init_static(&DIO_WRITES, Mempool::kmalloc(4, exclusive_size::<Dio, DioWriteFut<'static>, Pool>()), m)?;
+    BvecMempool::init_static(&DIO_WRITE_BVECS, 4, m)
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
+    DIO_WRITE_BVECS.exit(q);
     DIO_WRITES.exit(q);
 }
 
@@ -361,7 +362,7 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
         let opts = inode_opts::get_inode(fs, &inode.inode());
         let nr_vecs = it.bio_vecs();
 
-        let mut dio = match TaskSlot::exclusive_bio_in(&DIO_WRITES, ptr::null_mut(), nr_vecs,
+        let mut dio = match TaskSlot::exclusive_bio_in(&DIO_WRITES, &DIO_WRITE_BVECS, ptr::null_mut(), nr_vecs,
                                                        c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE, |b| {
             pin_init!(Dio {
                 pos:         ki_pos,

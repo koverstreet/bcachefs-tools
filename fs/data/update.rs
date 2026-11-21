@@ -37,7 +37,7 @@ use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::{init_at, Box, Flags, KVec, Kmalloc};
-use crate::util::bio::{pages, BioInPlace, HasBio};
+use crate::util::bio::{pages, Bio, BioInPlace, HasBio};
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::locking::MemallocFlags;
@@ -428,9 +428,9 @@ impl c::data_update {
 
         // SAFETY: its bios, and the bvecs just made for them
         unsafe {
-            crate::os::bio::init(self.rbio.bio.as_ptr(), core::ptr::null_mut(), bvecs, nr_vecs as u16,
-                                 c::req_op_REQ_OP_READ);
-            crate::os::bio::init((&raw mut self.wbio.bio).cast(), core::ptr::null_mut(), bvecs, nr_vecs as u16, 0);
+            Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), core::ptr::null_mut(), bvecs, nr_vecs as u16,
+                               c::req_op_REQ_OP_READ);
+            Bio::init_borrowed(&raw mut self.wbio.bio, core::ptr::null_mut(), bvecs, nr_vecs as u16, 0);
         }
         if pages::alloc_pages(self.wbio.bio_mut().raw_mut(), block_size, buf_bytes as usize, Flags::empty()).is_err() {
             self.bios_free();

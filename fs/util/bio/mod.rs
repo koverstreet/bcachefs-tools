@@ -4,9 +4,10 @@
 //! owned.rs:
 //!
 //! - A bio describes one block IO: device, op, sector, a position in its
-//!   data, and its bvecs - (page, offset, len), in an array that may be
-//!   inline, right after the bio in its allocation. Bio is a view of one; its
-//!   c::bio is private, read through raw().
+//!   data, and its bvecs - (page, offset, len), in storage of its own: its
+//!   first few inline, more from a BvecMempool - or borrowed, a clone's
+//!   parent's. Bio is a view of one; its c::bio is private, read through
+//!   raw().
 //! - Its data is what the bvecs point at. A position is a bvec_iter: a bvec,
 //!   an offset into it, and the bytes left. The bio's own is bi_iter, which
 //!   the block layer advances as the IO completes. A BioRange is a position
@@ -55,6 +56,7 @@ use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
 use core::task::{ready, Context, Poll};
 
 use crate::c;
+use crate::data_structures::inline_vec::InlineVec;
 use crate::errcode::BchError;
 use crate::util::backtrace::prt_symbol;
 use crate::util::printbuf::prt_bdevname;
@@ -107,8 +109,8 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
 pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
                   Buffers, IoBuf, MapBuf};
-pub use owned::{bio_box_size, bio_put, inline_bio, inline_vecs, BioBox, BioInPlace, BioLend, BioPool, BioSet, Gathered,
-                Lent, Submitted};
+pub use owned::{bio_put, BioBox, BioInPlace, BioLend, BioPool, BioSet, BvecAlloc, BvecMempool, Gathered, Lent,
+                Submitted};
 
 fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)
@@ -135,23 +137,34 @@ pub fn buf_bio_bytes(p: *const u8, len: usize) -> usize {
     len
 }
 
+pub const BIO_INLINE_VECS: usize = 4;
+
+/// A bio's bvecs: the storage its bi_io_vec points into, its first few
+/// inline. How many are in use is its bi_vcnt, which C's fillers keep.
+type BioVecs = InlineVec<c::bio_vec, BIO_INLINE_VECS, u16, BvecAlloc>;
+
 #[pin_data(PinnedDrop)]
 #[repr(C)]
 #[derive(Init)]
 pub struct Bio {
     bio:  c::bio,
+    #[init(BioVecs::new_in(BvecAlloc::NONE))]
+    vecs: BioVecs,
     #[pin]
     data: BioData,
     #[pin]
     _pin: PhantomData<PhantomPinned>,
 }
 
-/// bio_uninit(): a bioset's bio is uninit again by bio_put(), which is
-/// harmless - it frees nothing twice.
+/// bio_uninit(), and its bvecs freed: emptied first, as a bioset's bio is
+/// dropped again by bio_put() when what it's in fails to init - which frees
+/// nothing twice.
 #[pinned_drop]
 impl PinnedDrop for Bio {
     fn drop(self: Pin<&mut Self>) {
-        unsafe { crate::os::bio::uninit(self.raw_mut()) }
+        let this = unsafe { self.get_unchecked_mut() };
+        unsafe { crate::os::bio::uninit(&mut this.bio) };
+        drop(core::mem::replace(&mut this.vecs, BioVecs::new_in(BvecAlloc::NONE)));
     }
 }
 
@@ -190,6 +203,20 @@ impl Bio {
     pub unsafe fn from_raw_mut<'a>(ptr: *mut c::bio) -> Pin<&'a mut Self> {
         // SAFETY: the caller's; a bio never moves
         unsafe { Pin::new_unchecked(&mut *ptr.cast()) }
+    }
+
+    /// bio_init() of a Bio at @bio whose bvecs are @table's, which it doesn't
+    /// own: a data update's read and write bios share theirs.
+    ///
+    /// # Safety
+    /// @bio is room for a Bio, not in flight; @table has room for @max_vecs,
+    /// and outlives the bio.
+    pub unsafe fn init_borrowed(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, table: *mut c::bio_vec,
+                                max_vecs: u16, opf: u32) {
+        unsafe {
+            (&raw mut (*bio).vecs).write(BioVecs::new_in(BvecAlloc::NONE));
+            crate::os::bio::init(bio.cast(), bdev, table, max_vecs, opf);
+        }
     }
 
     pub fn raw(&self) -> &c::bio {

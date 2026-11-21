@@ -36,7 +36,7 @@ use crate::inode_opts::get_inode;
 use crate::types::Fifo;
 use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
-use crate::util::bio::{bvec_offset, inline_vecs, Bio, BioRange, HasBio, Lent};
+use crate::util::bio::{bvec_offset, Bio, BioRange, BvecMempool, HasBio, Lent};
 use crate::os::kernel::PAGE_SIZE;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
@@ -315,15 +315,16 @@ crate::has_bio!(ReadBio, rbio.bio);
 /// A read's box is freed when its task is done, after the read - when the
 /// filesystem may be gone: so from a pool of the module's.
 static READS: Mempool<Kmalloc> = ::pin_init::zeroed();
+static READ_BVECS: BvecMempool = ::pin_init::zeroed();
 
-/// At module init: elements for the most bvecs a bio has.
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let size = exclusive_size::<ReadBio, ReadFut<'static>, &'static Mempool<Kmalloc>>(
-        inline_vecs(c::BIO_MAX_VECS as u16));
-    Mempool::init_static(&READS, Mempool::kmalloc(1, size), m)
+    let size = exclusive_size::<ReadBio, ReadFut<'static>, &'static Mempool<Kmalloc>>();
+    Mempool::init_static(&READS, Mempool::kmalloc(1, size), m)?;
+    BvecMempool::init_static(&READ_BVECS, 1, m)
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
+    READ_BVECS.exit(q);
     READS.exit(q)
 }
 
@@ -349,7 +350,8 @@ async fn read_task<'h>(home: Pin<&'h mut ReadBio>, inum: c::subvol_inum, mut fol
 fn spawn_read(fs: &Fs, inode: &InodeInfo, opts: c::bch_inode_opts, nr_vecs: usize,
               set_up: impl FnOnce(Pin<&mut Bio>) -> ReadFolios, window: Window, end: End) {
     let subvol = inode.inum().subvol as u32;
-    let mut slot = TaskSlot::exclusive_bio_in(&READS, core::ptr::null_mut(), nr_vecs as u16, c::req_op_REQ_OP_READ,
+    let mut slot = TaskSlot::exclusive_bio_in(&READS, &READ_BVECS, core::ptr::null_mut(), nr_vecs as u16,
+                                              c::req_op_REQ_OP_READ,
                                               |b| pin_init!(ReadBio { rbio <- Rbio::new(fs, opts, subvol, None, b) }? BchError))
         .expect("a read bio's box: its pool waits for an element, and an Rbio's init can't fail");
     let folios = set_up(slot.home().bio_mut());

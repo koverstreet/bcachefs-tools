@@ -103,6 +103,16 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
         if self.spilled() { unsafe { self.repr.heap.capacity() } } else { N }
     }
 
+    /// Where its elements are, all capacity() of them: for what writes them
+    /// in place, the length its own - C's.
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        if self.spilled() {
+            unsafe { (*self.repr.heap).as_mut_ptr() }
+        } else {
+            unsafe { (*self.repr.inline).elems.as_mut_ptr().cast() }
+        }
+    }
+
     /// # Safety
     /// It isn't spilled; the first @len are initialized, and @len is at most N.
     unsafe fn set_inline_len(&mut self, len: usize) {

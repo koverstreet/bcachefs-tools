@@ -64,6 +64,12 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
         Ok(Self { head: Buf::<T, L, A>::alloc_in(cap, head, &alloc)?, _t: PhantomData })
     }
 
+    /// What one with room for @cap is allocated as: a mempool's element, for
+    /// a pool of them.
+    pub fn alloc_size(cap: usize) -> usize {
+        Buf::<T, L, A>::layout(cap).expect("a DstVec's layout").size()
+    }
+
     fn buf(&self) -> &Buf<T, L, A> {
         unsafe { &*Buf::<T, L, A>::from_thin(self.head.as_ptr()) }
     }

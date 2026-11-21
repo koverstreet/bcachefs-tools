@@ -18,7 +18,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::inode_opts::get_inode;
 use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
-use crate::util::bio::{inline_vecs, Bio, HasBio};
+use crate::util::bio::{Bio, BvecMempool, HasBio};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::iov_iter::IovIter;
 use crate::os::kernel::unlikely;
@@ -41,15 +41,19 @@ type Pool = &'static Mempool<Kmalloc>;
 
 static DIOS: Mempool<Kmalloc> = ::pin_init::zeroed();
 static SPLITS: Mempool<Kmalloc> = ::pin_init::zeroed();
+static DIO_BVECS: BvecMempool = ::pin_init::zeroed();
+static SPLIT_BVECS: BvecMempool = ::pin_init::zeroed();
 
-/// At module init: elements for the most bvecs a bio has.
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let vecs = inline_vecs(c::BIO_MAX_VECS as u16);
-    Mempool::init_static(&DIOS, Mempool::kmalloc(4, exclusive_size::<DioBio, DioFut<'static>, Pool>(vecs)), m)?;
-    Mempool::init_static(&SPLITS, Mempool::kmalloc(1, exclusive_size::<DioBio, SplitFut<'static>, Pool>(vecs)), m)
+    Mempool::init_static(&DIOS, Mempool::kmalloc(4, exclusive_size::<DioBio, DioFut<'static>, Pool>()), m)?;
+    Mempool::init_static(&SPLITS, Mempool::kmalloc(1, exclusive_size::<DioBio, SplitFut<'static>, Pool>()), m)?;
+    BvecMempool::init_static(&DIO_BVECS, 4, m)?;
+    BvecMempool::init_static(&SPLIT_BVECS, 1, m)
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
+    SPLIT_BVECS.exit(q);
+    DIO_BVECS.exit(q);
     SPLITS.exit(q);
     DIOS.exit(q);
 }
@@ -131,7 +135,7 @@ async fn read_splits(rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum:
     let started = {
         let (fs, err_report) = (rbio.fs(), rbio.err_report.as_deref());
         core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
-            let mut split = TaskSlot::exclusive_bio_in(&SPLITS, ptr::null_mut(), iter.get().bio_vecs(),
+            let mut split = TaskSlot::exclusive_bio_in(&SPLITS, &SPLIT_BVECS, ptr::null_mut(), iter.get().bio_vecs(),
                                                        c::req_op_REQ_OP_READ, |b| {
                 pin_init!(DioBio { rbio <- Rbio::new(fs, rbio.opts, rbio.subvol, err_report, b) }? BchError)
             }).expect("a split's box: its pool waits for an element, and an Rbio's init can't fail");
@@ -209,7 +213,7 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
     let inum = inode.inum();
     let subvol = inum.subvol as u32;
 
-    let dio = TaskSlot::exclusive_bio_in(&DIOS, ptr::null_mut(), iter.bio_vecs(), c::req_op_REQ_OP_READ, |b| {
+    let dio = TaskSlot::exclusive_bio_in(&DIOS, &DIO_BVECS, ptr::null_mut(), iter.bio_vecs(), c::req_op_REQ_OP_READ, |b| {
         pin_init!(DioBio { rbio <- Rbio::new(fs, opts, subvol, err_report, b) }? BchError)
     })?;
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped | flags;
