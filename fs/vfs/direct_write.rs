@@ -382,7 +382,7 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
                 started:   Some(started),
                 write_ref: Some(write_ref),
                 op         <- c::bch_write_op::init(fs, opts),
-                wbio       <- b.init::<BchError>(),
+                wbio       <- b.init::<BchError, _>(),
             }? BchError)
         }) {
             Ok(dio) => dio,

@@ -35,8 +35,8 @@ use pin_init::{pin_data, pin_init, PinInit};
 
 use core::task::{ready, Context, Poll};
 
-use super::{bio_of, of_bio, AtEnd, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, BioVecs, Buffers,
-            HasBio, MapBuf};
+use super::{bio_of, of_bio, AtEnd, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, BioOwns, BioVecs,
+            Buffers, Data, HasBio, MapBuf};
 use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{waiter, Completion, Exclusive, Resumable, TaskSlot, Waiter};
 use crate::c;
@@ -59,11 +59,12 @@ impl BioInPlace {
         BioInPlace(bio)
     }
 
-    pub fn init<E>(self) -> impl PinInit<Bio, E> {
+    /// A Bio<B> of what bio_init() made: its bvecs empty, whatever B is.
+    pub fn init<E, B: BioOwns>(self) -> impl PinInit<Bio<B>, E> {
         let bio = self.0;
         // SAFETY: writes nothing, the bio being there - its slot, checked
         unsafe {
-            ::pin_init::pin_init_from_closure(move |slot: *mut Bio| {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Bio<B>| {
                 assert_eq!(slot.cast::<c::bio>(), bio, "BioInPlace: another bio's slot");
                 Ok(())
             })
@@ -244,7 +245,7 @@ unsafe impl Alloc for BvecAlloc {}
 /// @bio is room for a Bio, not in flight.
 unsafe fn bio_init(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
                    bvecs: BvecAlloc) -> Result<(), AllocError> {
-    let mut vecs = BioVecs::new_in(bvecs);
+    let mut vecs = BioVecs::<Data>::new_in(bvecs);
     vecs.reserve(nr_vecs.into())?;
     unsafe {
         (&raw mut (*bio).vecs).write(vecs);

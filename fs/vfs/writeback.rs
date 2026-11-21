@@ -192,7 +192,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, mapping: Mappi
         pin_init!(Io {
             mapping,
             op   <- c::bch_write_op::init(fs, opts),
-            wbio <- b.init::<BchError>(),
+            wbio <- b.init::<BchError, _>(),
         }? BchError)
     }).expect("a writepage io's box: its pool waits for an element, and an op's init can't fail");
 

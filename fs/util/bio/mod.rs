@@ -32,6 +32,10 @@
 //! - A value: it moves as one, its bvecs with it, and is changed through
 //!   &mut Bio - its own methods, given one by its owner's bio_mut(). Its C
 //!   view, bi_io_vec, is pointed at its bvecs as it goes out to C.
+//! - A Bio<B> owns its bvecs as B says: B::Bvec is what's in its vec. A
+//!   Bio<Holds<H>> holds folios (bvec.rs): its bvecs Bvec<H>s, a range of a
+//!   folio and what it holds of it, pushed and dropped as a Vec's elements are.
+//!   It's lent as the plain Bio, Bio<Data>, which can't add or free them.
 //!
 //! The generics, below, are those terms as traits. A bio is a field of a
 //! struct of its user's - an rbio, a write op - and HasBio is that
@@ -65,7 +69,6 @@ use crate::util::task::{waiter, Completion, Done, WaitSync, Waiter};
 use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
-use cstruct_macros::Init;
 use pin_init::{pin_data, pinned_drop};
 
 // A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
@@ -100,6 +103,8 @@ macro_rules! bi_io_vec {
 }
 
 mod buffers;
+#[cfg(kernel)]
+mod bvec;
 mod iter;
 mod owned;
 pub mod pages;
@@ -109,6 +114,8 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
 pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
                   Buffers, IoBuf, MapBuf};
+#[cfg(kernel)]
+pub use bvec::{Bvec, FolioHold, Holds};
 pub use owned::{bio_put, BioBox, BioInPlace, BioLend, BioPool, BioSet, BvecAlloc, BvecMempool, Gathered, Lent,
                 Submitted};
 
@@ -139,9 +146,22 @@ pub fn buf_bio_bytes(p: *const u8, len: usize) -> usize {
 
 pub const BIO_INLINE_VECS: usize = 4;
 
+/// What a bio's bvecs are, and so what it owns of what they point at.
+pub trait BioOwns {
+    type Bvec;
+}
+
+/// Plain data buffers, which the bio doesn't own: it reads and writes them.
+pub struct Data;
+
+impl BioOwns for Data {
+    type Bvec = c::bio_vec;
+}
+
 /// A bio's bvecs: the storage its bi_io_vec points into, its first few
-/// inline. How many are in use is its bi_vcnt, which C's fillers keep.
-type BioVecs = InlineVec<c::bio_vec, BIO_INLINE_VECS, u16, BvecAlloc>;
+/// inline. How many are in use is its bi_vcnt, which C's fillers keep - or a
+/// Bio<Holds<H>>'s, its length.
+type BioVecs<B = Data> = InlineVec<<B as BioOwns>::Bvec, BIO_INLINE_VECS, u16, BvecAlloc>;
 
 /// Where a bio's bvec table is: its own BioVecs - which move with it, so
 /// bi_io_vec is pointed at them again as the bio goes out to C - or not.
@@ -158,15 +178,12 @@ pub enum VecsAt {
 // XXX: a Bio moves, and is swapped, as any Rust value - but what its bvecs
 // point at is its box's Buffers, not its own: swap two boxes' bios and each
 // box gives back the other's pages, or a clone outlives the parent its
-// BioClone<'a> borrowed. Sound once a bio is generic over what it owns.
+// BioClone<'a> borrowed. Sound once a box's Buffers are its bio's B.
 #[pin_data(PinnedDrop)]
 #[repr(C)]
-#[derive(Init)]
-pub struct Bio {
+pub struct Bio<B: BioOwns = Data> {
     bio:     c::bio,
-    #[init(BioVecs::new_in(BvecAlloc::NONE))]
-    vecs:    BioVecs,
-    #[init(VecsAt::Own)]
+    vecs:    BioVecs<B>,
     vecs_at: VecsAt,
     #[pin]
     data:    BioData,
@@ -176,17 +193,17 @@ pub struct Bio {
 /// dropped again by bio_put() when what it's in fails to init - which frees
 /// nothing twice.
 #[pinned_drop]
-impl PinnedDrop for Bio {
+impl<B: BioOwns> PinnedDrop for Bio<B> {
     fn drop(self: Pin<&mut Self>) {
         let this = self.get_mut();
         unsafe { crate::os::bio::uninit(&mut this.bio) };
-        drop(core::mem::replace(&mut this.vecs, BioVecs::new_in(BvecAlloc::NONE)));
+        drop(core::mem::replace(&mut this.vecs, BioVecs::<B>::new_in(BvecAlloc::NONE)));
     }
 }
 
 // SAFETY: a bio is no thread's - submitted on one, completed on another. Not
 // Sync: two holders of a &Bio could write its data at once.
-unsafe impl Send for Bio {}
+unsafe impl<B: BioOwns + Send> Send for Bio<B> {}
 
 // Unnameable outside the bio code: crate-visible for the place machinery's
 // Field, in a module nothing else can reach
@@ -205,6 +222,19 @@ mod data {
     pub(crate) struct BioData {}
 }
 use data::BioData;
+
+// BioData's place in the plain Bio, which is what a BioRange's bio is: what
+// #[derive(Init)] would make, by hand - a Bio<B> is made in place by
+// bio_init(), and the derive's init() would be generic over B.
+impl crate::util::place::Field<{ crate::util::place::name("data") }> for Bio {
+    type Type = BioData;
+    const OFFSET: usize = core::mem::offset_of!(Bio, data);
+}
+
+impl crate::util::place::Enclosing for Bio {
+    type Visible = Self;
+    const VISIBLE_OFFSET: usize = 0;
+}
 
 impl Bio {
     /// # Safety
@@ -229,7 +259,7 @@ impl Bio {
     pub unsafe fn init_borrowed(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, table: *mut c::bio_vec,
                                 max_vecs: u16, opf: u32) {
         unsafe {
-            (&raw mut (*bio).vecs).write(BioVecs::new_in(BvecAlloc::NONE));
+            (&raw mut (*bio).vecs).write(BioVecs::<Data>::new_in(BvecAlloc::NONE));
             (&raw mut (*bio).vecs_at).write(VecsAt::Borrowed);
             crate::os::bio::init(bio.cast(), bdev, table, max_vecs, opf);
         }
@@ -575,7 +605,7 @@ unsafe impl HasBio for Bio {
 pub unsafe trait BioField {
     const AT: usize = 0;
 }
-unsafe impl BioField for Bio {}
+unsafe impl<B: BioOwns> BioField for Bio<B> {}
 unsafe impl BioField for c::bio {}
 
 #[doc(hidden)]

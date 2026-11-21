@@ -407,7 +407,7 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
     let slot = {
         let _noio = MemallocFlags::noio();
         TaskSlot::exclusive_bio_in(&NODE_WRITES, &NODE_WRITE_BVECS, ptr::null_mut(), c::BIO_MAX_VECS as u16, WRITE_OPF,
-                                   BioInPlace::init::<BchError>)
+                                   BioInPlace::init::<BchError, _>)
     }.expect("a node write's box: its pool waits for an element");
 
     /* write_in_flight pins the node's identity: reclaim leaves it */
