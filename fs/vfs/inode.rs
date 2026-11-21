@@ -645,6 +645,9 @@ impl InodeInfo {
 /// and so on its filesystem.
 pub(crate) struct DioStarted(NonNull<InodeInfo>);
 
+// ended by whichever thread finishes the write, as C's are
+unsafe impl Send for DioStarted {}
+
 impl DioStarted {
     pub(crate) fn inode(&self) -> &InodeInfo {
         unsafe { self.0.as_ref() }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! O_DIRECT writes: direct.c's write half. A dio write is a task, its home a
-//! dio_write - a write op over the user's pages - in one allocation with the
+//! Dio - a write op over the user's pages - in one allocation with the
 //! task and the op's bvecs, from a pool of the module's: freed when its task
 //! is done, after the dio's ended, when the filesystem may be gone. It writes
 //! a bio's worth of pages at a time, in order, awaiting each write: the
@@ -20,19 +20,20 @@ use crate::format::Btree;
 use crate::fs::Fs;
 use crate::inode_opts;
 use crate::snapshots::subvolume;
-use crate::util::alloc::{KVec, Kmalloc};
-use crate::os::bio::BvecMempool;
+use crate::util::alloc::Kmalloc;
+use crate::os::bio::{Bio, BvecMempool};
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Spawn, TaskSlot, WaitSync};
-use crate::os::iov_iter::{IovIter, IovIterFields};
+use crate::os::iov_iter::{HeldIovIter, IovIter};
 use crate::os::kernel::{current_id, likely, task_io_account_write, unlikely, Mm};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::ops::IntoRaw;
 use crate::os::workqueue::Queue;
-use crate::util::refcount::TryRefcount;
+use crate::util::refcount::{PercpuRef, RefGuard, TryRefcount};
 use super::direct::End;
-use crate::vfs::inode::InodeInfo;
+use crate::vfs::folio::Mapping;
+use crate::vfs::inode::DioStarted;
 use crate::os::kiocb::Kiocb;
 use super::file::InodeFile;
 use c::WriteFlags as w;
@@ -40,9 +41,34 @@ use core::ops::ControlFlow;
 use core::pin::Pin;
 use core::ptr;
 use cstruct_macros::in_place;
-use pin_init::pin_init;
+use pin_init::{pin_data, pin_init};
 
-type Dio = c::dio_write;
+#[pin_data]
+struct Dio {
+    /* where its next bio's written: the kiocb's, moved on as it's done */
+    pos:       u64,
+    mapping:   Mapping,
+    mm:        Option<Mm>,
+    extending: bool,
+    sync:      bool,
+    flush:     bool,
+    quota_res: c::quota_res,
+    written:   u64,
+
+    iter:      HeldIovIter,
+
+    /* the dio count and the page cache blocked, and c->writes: till it's
+     * done */
+    started:   Option<DioStarted>,
+    write_ref: Option<RefGuard<PercpuRef>>,
+
+    #[pin]
+    op:        c::bch_write_op,
+    #[pin]
+    wbio:      Bio,
+}
+crate::has_bio!(Dio, wbio);
+
 type Pool = &'static Mempool<Kmalloc>;
 
 static DIO_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
@@ -86,13 +112,7 @@ fn check_range_allocated(fs: &Fs, inum: c::subvol_inum, mut offset: u64, size: u
     ret.is_ok() && allocated
 }
 
-impl c::dio_write {
-    /// 'static for the dio: its DioStarted, the i_dio_count, is its ref on
-    /// the inode, and thus on the filesystem.
-    fn inode(&self) -> &'static InodeInfo {
-        unsafe { InodeInfo::from_inode(self.inode.cast()) }
-    }
-
+impl Dio {
     fn bio_sectors(&self) -> u64 {
         u64::from(self.wbio.range().len() >> 9)
     }
@@ -105,7 +125,7 @@ impl c::dio_write {
 
 #[inline(never)]
 fn dio_write_check_allocated(dio: &Dio) -> bool {
-    check_range_allocated(dio.op.fs(), dio.inode().inum(), dio.op.pos.offset, dio.bio_sectors(),
+    check_range_allocated(dio.op.fs(), dio.mapping.inode().inum(), dio.op.pos.offset, dio.bio_sectors(),
                           dio.op.opts.data_replicas.into(), dio.op.opts.compression != 0)
 }
 
@@ -132,28 +152,11 @@ fn dio_write_copy_iov(dio: &mut Dio) -> Result<(), ()> {
         return Err(());
     }
 
-    // the kernel's iovec isn't Copy
-    let copy = |v: &kernel::bindings::iovec| kernel::bindings::iovec { iov_base: v.iov_base, iov_len: v.iov_len };
-    let src = dio.iter.iov();
-    let iov = if let Some(inline) = dio.inline_vecs.get_mut(..src.len()) {
-        inline.iter_mut().zip(src).for_each(|(d, s)| *d = copy(s));
-        inline.as_ptr()
-    } else {
-        let mut iov = KVec::with_capacity(src.len()).map_err(|_| ())?;
-        for s in src {
-            iov.push(copy(s)).map_err(|_| ())?;
-        }
-        dio.iov.insert(iov.into_boxed_slice()).as_ptr()
-    };
-
-    unsafe { dio.iter.set_iov(iov) };
-    Ok(())
+    dio.iter.keep_iovecs().map_err(|_| ())
 }
 
 /// What the dio wrote, or its error, what it held given back.
 fn dio_write_done(d: &mut Dio) -> Result<usize, BchError> {
-    d.iov = None;
-
     let ret = match d.op.error {
         0 => Ok((d.written << 9) as usize),
         e => Err(BchError::from_raw(e.into())),
@@ -167,12 +170,13 @@ fn dio_write_done(d: &mut Dio) -> Result<usize, BchError> {
 
 #[inline(always)]
 fn dio_write_end(dio: &mut Dio) {
-    let inode = dio.inode();
+    let mapping = dio.mapping;
+    let inode = mapping.inode();
 
     dio.pos += u64::from(dio.op.written) << 9;
     dio.written += u64::from(dio.op.written);
 
-    if dio.bits.extending() != 0 {
+    if dio.extending {
         inode.v.size_extend(dio.pos);
     }
 
@@ -191,10 +195,10 @@ fn dio_write_end(dio: &mut Dio) {
 /// caller's context - or, @in_caller false, a worker, in its caller's address
 /// space.
 fn dio_write_pin(d: &mut Dio, in_caller: bool) -> Result<(), BchError> {
-    let fs = d.inode().fs();
+    let fs = d.op.fs();
 
     loop {
-        let iter_count = d.iter.count();
+        let iter_count = d.iter.get().count();
 
         let (mut ret, dropped_locks) = {
             let _mm = (!in_caller).then_some(d.mm).flatten().map(|mm| unsafe { mm.use_in_kthread() });
@@ -202,7 +206,7 @@ fn dio_write_pin(d: &mut Dio, in_caller: bool) -> Result<(), BchError> {
             debug_assert!(fs.fdm_table.get().is_none(), "a DIO write with page faults disabled already");
             let fdm = fs.fdm_table.set(d.mapping);
 
-            let ret = d.wbio.pin_user_pages(&mut unsafe { IovIter::from_raw(&mut d.iter) });
+            let ret = d.wbio.pin_user_pages(&mut d.iter.get());
             (ret, fdm.dropped_locks())
         };
 
@@ -227,7 +231,7 @@ fn dio_write_pin(d: &mut Dio, in_caller: bool) -> Result<(), BchError> {
         let len = d.wbio.range().len();
         let unaligned = len & (fs.block_bytes() as u32 - 1);
         d.wbio.shrink(len - unaligned);
-        d.iter.revert(unaligned as usize);
+        d.iter.get().revert(unaligned as usize);
 
         if d.wbio.range().is_empty() {
             /*
@@ -243,7 +247,8 @@ fn dio_write_pin(d: &mut Dio, in_caller: bool) -> Result<(), BchError> {
 /// The dio's writes, a bio's worth of its pages at a time, the first's
 /// pinned by its caller.
 async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
-    let inode = d.inode();
+    let mapping = d.mapping;
+    let inode = mapping.inode();
     let fs = inode.fs();
     let opts = inode_opts::get_inode(fs, &inode.inode());
     // its caller's, not a worker's: every bio of the dio to the same one
@@ -258,7 +263,7 @@ async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
         op.subvol      = inode.inum().subvol as u32;
         op.pos         = pos(inode.inum().inum, d.pos >> 9);
 
-        if d.bits.flush() != 0 {
+        if d.flush {
             d.op.set(w::flush);
         }
         d.op.set(w::check_enospc);
@@ -285,11 +290,11 @@ async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
 
         dio_write_end(d);
 
-        if likely(d.iter.count() == 0) || d.op.error != 0 {
+        if likely(d.iter.get().count() == 0) || d.op.error != 0 {
             return Ok(());
         }
 
-        let opf = match d.bits.sync() != 0 {
+        let opf = match d.sync {
             true  => c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE,
             false => c::req_op_REQ_OP_WRITE,
         };
@@ -300,12 +305,13 @@ async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
 
 #[in_place(DioWriteFut)]
 async fn dio_write_task<'h>(dio: Pin<&'h mut Dio>, mut end: End) {
-    let d = unsafe { dio.get_unchecked_mut() };
+    let d = dio.get_mut();
 
     if let Err(e) = dio_write_loop(d).await {
         d.op.set_error(e);
         d.release_pages();
-        d.inode().quota_reservation_put(&mut d.quota_res);
+        let mapping = d.mapping;
+        mapping.inode().quota_reservation_put(&mut d.quota_res);
     }
 
     // an async kiocb's position moved on before it's completed; a sync
@@ -364,20 +370,19 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
         let mut dio = match TaskSlot::exclusive_bio_in(&DIO_WRITES, &DIO_WRITE_BVECS, nr_vecs,
                                                        c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE, |b| {
             pin_init!(Dio {
-                pos:         ki_pos,
+                pos:       ki_pos,
                 mapping,
-                inode:       inode.raw(),
-                mm:          Mm::current(),
-                iov:         None,
-                bits:        c::dio_write_bits::new().with_extending(extending.into()).with_flush(flush.into()),
-                quota_res:   c::quota_res { sectors: 0 },
-                written:     0,
-                iter:        unsafe { ptr::read(it.as_ptr()) },
-                inline_vecs: [const { kernel::bindings::iovec { iov_base: ptr::null_mut(), iov_len: 0 } }; 2],
-                started:     Some(started),
-                write_ref:   Some(write_ref),
-                op           <- c::bch_write_op::init(fs, opts),
-                wbio         <- b.init::<BchError, _>(),
+                mm:        Mm::current(),
+                extending,
+                sync:      false,
+                flush,
+                quota_res: c::quota_res { sectors: 0 },
+                written:   0,
+                iter:      unsafe { HeldIovIter::new(it) },
+                started:   Some(started),
+                write_ref: Some(write_ref),
+                op         <- c::bch_write_op::init(fs, opts),
+                wbio       <- b.init::<BchError, _>(),
             }? BchError)
         }) {
             Ok(dio) => dio,
@@ -387,15 +392,15 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
         // the first bio's pages pinned here, in the caller: if there's more,
         // an async kiocb's iovec - which may be on its caller's stack - is
         // copied, or the dio is waited for here
-        let d = unsafe { dio.home().get_unchecked_mut() };
+        let d = dio.home().get_mut();
         if let Err(e) = dio_write_pin(d, true) {
             d.release_pages();
             break 'out e.class() as isize;
         }
-        if unlikely(d.iter.count() != 0) && !sync && dio_write_copy_iov(d).is_err() {
+        if unlikely(d.iter.get().count() != 0) && !sync && dio_write_copy_iov(d).is_err() {
             sync = true;
         }
-        d.bits.set_sync(sync.into());
+        d.sync = sync;
 
         let mut slot = DoneWith::new();
         let (end, wait) = match sync {
