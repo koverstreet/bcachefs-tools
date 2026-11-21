@@ -1399,15 +1399,25 @@ impl Dev {
     /// ends a run of write errors, or a failure, counted against the device.
     /// From any context, an endio's included.
     pub fn account_io_completion(&self, ty: c::MemberErrorType, submit_time: u64, success: bool) {
-        use c::MemberErrorType as T;
-
-        #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-        if ty != T::checksum {
+        if ty != c::MemberErrorType::checksum {
             // @ty is read or write: the rw it takes
-            self.latency_acct(submit_time, ty.0 as usize);
+            self.io_latency_acct(submit_time, ty.0 as usize);
         }
+        self.account_io_result(ty, success);
+    }
+
+    /// latency_acct(), unless the build doesn't account latency.
+    pub fn io_latency_acct(&self, submit_time: u64, rw: usize) {
+        #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+        self.latency_acct(submit_time, rw);
         #[cfg(CONFIG_BCACHEFS_NO_LATENCY_ACCT)]
-        let _ = submit_time;
+        let _ = (submit_time, rw);
+    }
+
+    /// account_io_completion() but for the latency: what can wait till the
+    /// IO's waiter has it.
+    pub fn account_io_result(&self, ty: c::MemberErrorType, success: bool) {
+        use c::MemberErrorType as T;
 
         if success {
             if ty == T::write && self.write_errors_start.load(Ordering::Relaxed) != 0 {
