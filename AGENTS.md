@@ -9,6 +9,15 @@ command).
 
 The primary maintainer is Kent Overstreet.
 
+## mem::forget is banned
+
+`mem::forget` is not used in this codebase unless something specifically
+requires it, and then it's treated as unsafe. It is not something we
+design around: a type whose drop finishes a wait - a Completion, a
+Gather, a bio in flight - is sound because nothing forgets it.
+`ManuallyDrop` or `into_raw()` say what's meant where ownership really
+does pass somewhere else.
+
 ## Long-term direction
 
 The goal is to convert the entire bcachefs codebase — both userspace
