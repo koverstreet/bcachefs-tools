@@ -13,6 +13,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, SpinLockIrq};
 use crate::os::folio;
+use crate::os::bio::FolioHold;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{AcqRel, Relaxed};
@@ -108,17 +109,26 @@ impl FolioGuard<'_> {
 pub struct Writeback(&'static Folio);
 
 impl Writeback {
-    /// A count for an io the folio's added to, given back by from_io().
-    pub fn share(&self) {
+    /// A count for an io the folio's added to.
+    pub fn share(&self) -> Writeback {
         self.private().expect("a folio in writeback with no bch_folio").write_count.fetch_add(1, Relaxed);
+        Writeback(self.0)
+    }
+}
+
+// ended by whichever thread finishes the io it's in
+unsafe impl Send for Writeback {}
+
+// a count on its writeback, which keeps it
+unsafe impl FolioHold for Writeback {
+    type A = InodeInfo;
+
+    fn folio(&self) -> NonNull<c::folio> {
+        NonNull::from(self.0).cast()
     }
 
-    /// An io's count, share()'s, from the io's bio as it ends.
-    ///
-    /// # Safety
-    /// @folio is one share() counted for this io, taken back once.
-    pub unsafe fn from_io(folio: NonNull<c::folio>) -> Self {
-        Writeback(unsafe { Folio::from_raw(folio) })
+    unsafe fn release(folio: NonNull<c::folio>, _: usize, _: usize) {
+        drop(Writeback(unsafe { Folio::from_raw(folio) }));
     }
 }
 

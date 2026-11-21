@@ -433,8 +433,8 @@ impl Bio {
     /// bvecs are full.
     ///
     /// # Safety
-    /// @folio stays held - locked, in writeback, pinned, or the caller's - till
-    /// the bio's done with it.
+    /// @folio stays held - locked, pinned, or the caller's - till the bio's
+    /// done with it.
     #[cfg(kernel)]
     pub(crate) unsafe fn add_folio_part<A>(&mut self, folio: &crate::os::folio::Folio<A>, offset: usize, len: usize) {
         assert!(offset + len <= folio.size(), "adding {len} bytes at {offset} of a folio of {}", folio.size());

@@ -16,7 +16,7 @@ use crate::inode_opts;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{Box, Kmalloc};
 use crate::os::blkdev::plugged;
-use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool, Data};
+use crate::os::bio::{Bio, BioSubmit, Bvec, BvecMempool, Holds};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, Exclusive, Resume, Spawn, TaskSlot};
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
@@ -40,9 +40,9 @@ struct Io {
     #[pin]
     op:      c::bch_write_op,
     #[pin]
-    wbio:    Bio,
+    wbio:    Bio<Holds<Writeback>>,
 }
-crate::has_bio!(Io, wbio);
+crate::has_bio!(Io, wbio, owns Holds<Writeback>);
 
 type Pool = &'static Mempool<Kmalloc>;
 /// An io, being filled: its task not started.
@@ -81,10 +81,6 @@ impl BioSubmit for Io {
     }
 }
 
-unsafe impl BioOwner for Io {
-    type Owns = Data;
-}
-
 fn bio_full(bio: &Bio, len: u32) -> bool {
     bio.nr_vecs() >= bio.max_vecs() || bio.range().len() > u32::MAX - len
 }
@@ -105,8 +101,8 @@ fn io_full(io: &Io, len: u32) -> bool {
 /// Every sector of each of the io's folios left with no replicas - after
 /// @f, on the folio.
 fn folios_clear_replicas(io: &Io, f: impl Fn(&Folio)) {
-    for fv in io.range_all().folios() {
-        let folio = unsafe { Folio::from_raw(fv.folio) };
+    for v in io.wbio.vecs() {
+        let folio = v.folio();
         f(folio);
 
         let mut s = folio.lock_state();
@@ -151,9 +147,7 @@ fn writepage_io_done(io: &mut Io) {
      */
     inode.i_sectors_acct(None, io.op.i_sectors_delta);
 
-    for f in io.range_all().folios() {
-        drop(unsafe { Writeback::from_io(f.folio) });
-    }
+    io.wbio.release();
 }
 
 /// The task's future apart: before rustc 1.87, every item of the module its
@@ -346,11 +340,10 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
             writepage_io_alloc(fs, wbc, w, mapping, sector, nr_replicas_this_write, res_nr_replicas);
         }
 
-        folio.share();
-
         let io = io_of(w.io.as_mut().expect("an io, just made"));
         assert!(io.mapping == mapping, "a writepage io of another inode");
-        unsafe { io.wbio.add_folio_part(&folio, offset << 9, sectors << 9) };
+        io.wbio.push(Bvec::new(folio.share(), offset << 9, sectors << 9))
+            .expect("a writepage io's bvecs: room for BIO_MAX_VECS, and io_full() checked");
 
         io.op.res.sectors.set(io.op.res.sectors.get() + reserved_sectors);
         io.op.i_sectors_delta -= i64::from(dirty_sectors);
