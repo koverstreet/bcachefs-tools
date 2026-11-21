@@ -53,15 +53,15 @@ const PAGE_SECTORS: u64 = (PAGE_SIZE >> 9) as u64;
 
 /// The folios a readahead asked for, each with its bcachefs state, last
 /// first: read from the end, or given back.
-struct Folios(KVVec<FolioGuard<'static>>);
+struct ReadaheadIter(KVVec<FolioGuard<'static>>);
 
-impl Folios {
+impl ReadaheadIter {
     fn new() -> Self {
-        Folios(KVVec::new())
+        ReadaheadIter(KVVec::new())
     }
 
     fn take(ra: &mut Readahead<'_>) -> Result<Self, BchError> {
-        let mut f = Folios::new();
+        let mut f = ReadaheadIter::new();
         while let Some(folio) = ra.next() {
             let ok = folio.create_private().is_some() && f.0.reserve(1).is_ok();
             let pushed = if ok { f.0.push_within_capacity(folio) } else { Err(PushError(folio)) };
@@ -170,7 +170,7 @@ impl ReadFolios {
 struct Window {
     /// The readahead's folios to extend into - none but new ones, for a
     /// single folio's read that's extended - or None, not extended
-    batch:     Option<NonNull<Folios>>,
+    batch:     Option<NonNull<ReadaheadIter>>,
     mapping:   Mapping,
     read_from: u64,
     /// The readahead window: past this is the speculative extension
@@ -354,7 +354,7 @@ pub(crate) fn readahead(mut ra: Readahead<'_>) {
     let fs = inode.fs();
     let opts = get_inode(fs, &inode.inode());
 
-    let Ok(mut folios) = Folios::take(&mut ra) else { return };
+    let Ok(mut folios) = ReadaheadIter::take(&mut ra) else { return };
 
     /*
      * Besides being a general performance optimization, plugging helps with
@@ -412,7 +412,7 @@ pub(crate) fn read_single_folio(folio: &FolioLocked, mapping: Mapping, extend: b
         1
     };
 
-    let mut folios = Folios::new();
+    let mut folios = ReadaheadIter::new();
     let set_up = |mut b: Pin<&mut Bio>| {
         b.as_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
         b.as_mut().set_sector(folio.sector());
