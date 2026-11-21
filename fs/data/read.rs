@@ -150,12 +150,11 @@ pub struct ReadErrReport {
     pub errs: Locked<Mutex, ReadErrs>,
 }
 
-/// B is what its bio owns: nothing, or a page cache extent's folios - read as
-/// the plain Rbio (erased()).
-#[pin_data]
+/// A read, apart from its bio: what its fragments read of it, and report to
+/// it, while one of them may have the bio.
 #[derive(MaybeZeroable, TypeInfo)]
 #[repr(C)]
-pub struct Rbio<B: BioOwns = Data> {
+pub struct RbioHdr {
     pub c: *mut Fs,
     pub start_time: u64,
 
@@ -168,7 +167,18 @@ pub struct Rbio<B: BioOwns = Data> {
     pub opts: c::bch_inode_opts,
 
     pub err_report: Option<BackRef<ReadErrReport>>,
+}
 
+unsafe impl Send for RbioHdr {}
+unsafe impl Sync for RbioHdr {}
+
+/// B is what its bio owns: nothing, or a page cache extent's folios - read as
+/// the plain Rbio (erased()).
+#[pin_data]
+#[derive(MaybeZeroable, TypeInfo)]
+#[repr(C)]
+pub struct Rbio<B: BioOwns = Data> {
+    pub hdr: RbioHdr,
     #[pin]
     pub bio: BioLend<B>,
 }
@@ -177,7 +187,15 @@ crate::has_bio!(Rbio<B>, bio, owns B where B: BioOwns);
 unsafe impl<B: BioOwns + Send> Send for Rbio<B> {}
 unsafe impl<B: BioOwns + Send> Sync for Rbio<B> {}
 
-impl Rbio {
+impl<B: BioOwns> core::ops::Deref for Rbio<B> {
+    type Target = RbioHdr;
+
+    fn deref(&self) -> &RbioHdr {
+        &self.hdr
+    }
+}
+
+impl RbioHdr {
     pub fn ret(&self) -> Result<(), BchError> {
         ret_to_result_void(self.ret.load(Relaxed).into())
     }
@@ -206,6 +224,16 @@ impl Rbio {
         self.read_for != ReadFor::BCH_READ_FOR_update
     }
 
+    /// Only called on a top level bch_read_bio to complete an entire read
+    /// request, not a split.
+    fn done(&self) {
+        if self.start_time != 0 {
+            self.fs().times.get(c::TimeStat::data_read as usize).update(self.start_time);
+        }
+    }
+}
+
+impl Rbio {
     pub(crate) fn update<'a>(fs: &Fs, opts: c::bch_inode_opts, read_for: ReadFor,
                              bio: impl PinInit<Bio, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a
     {
@@ -230,7 +258,7 @@ impl<B: Typed> Rbio<B> {
 impl<B: BioOwns> Rbio<B> {
     /// The bio of a fragment of @orig's read: what the read is - its
     /// subvolume, options, error report - stays @orig's, and is read there.
-    fn fragment<'a>(orig: &'a Rbio, bio: impl PinInit<Bio<B>, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a
+    fn fragment<'a>(orig: &'a RbioHdr, bio: impl PinInit<Bio<B>, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a
     where
         B: 'a,
     {
@@ -251,29 +279,23 @@ impl<B: BioOwns> Rbio<B> {
         -> impl PinInit<Self, BchError>
     {
         pin_init!(Rbio {
-            c,
-            start_time,
-            saw_error:    AtomicBool::new(false),
-            self_healing: AtomicBool::new(false),
-            ret:          AtomicI16::new(0),
-            read_for,
-            subvol,
-            opts,
-            err_report,
-            bio           <- BioLend::new(bio),
+            hdr: RbioHdr {
+                c,
+                start_time,
+                saw_error:    AtomicBool::new(false),
+                self_healing: AtomicBool::new(false),
+                ret:          AtomicI16::new(0),
+                read_for,
+                subvol,
+                opts,
+                err_report,
+            },
+            bio <- BioLend::new(bio),
         }? BchError)
     }
 }
 
 impl Rbio {
-    /// Only called on a top level bch_read_bio to complete an entire read
-    /// request, not a split.
-    fn done(&self) {
-        if self.start_time != 0 {
-            self.fs().times.get(c::TimeStat::data_read as usize).update(self.start_time);
-        }
-    }
-
     #[cold]
     fn state_to_text(&self, out: &mut Printbuf, flags: Option<F>) {
         if out.nr_tabstops() == 0 {
@@ -502,7 +524,7 @@ impl<'r> Fragment<'r> {
         }
     }
 
-    fn end_in_retry(self, read: &Rbio, failed: &mut FailureState, ret: Result<(), BchError>)
+    fn end_in_retry(self, read: &RbioHdr, failed: &mut FailureState, ret: Result<(), BchError>)
         -> Result<(), BchError>
     {
         if self.plan.landed {
@@ -1469,7 +1491,7 @@ fn device_read_done(f: &Fragment<'_>, submit_time: u64, status: Result<(), BchEr
 }
 
 #[args_stored_once]
-async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'_>, ec_msg: Option<&mut Printbuf>)
+async fn fragment_io(f: &mut Fragment<'_>, read: &RbioHdr, target: Resume<'_>, ec_msg: Option<&mut Printbuf>)
     -> Result<(), BchError>
 {
     let fs = f.fs;
@@ -1497,7 +1519,7 @@ async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'_>, ec_m
     fragment_read_done(f, read)
 }
 
-fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError> {
+fn fragment_read_done(f: &mut Fragment<'_>, read: &RbioHdr) -> Result<(), BchError> {
     let fs = f.fs;
     let no_data_io = fs.opts().no_data_io.get() != 0;
     let (bounced, split, promote) = (f.bounced(), f.split(), matches!(f.kind, Kind::Promote(..)));
