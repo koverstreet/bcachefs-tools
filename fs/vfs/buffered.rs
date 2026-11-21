@@ -198,16 +198,15 @@ crate::has_bio!(ReadBio, rbio.bio, owns Holds<ReadPart>);
 impl PinnedDrop for ReadBio {
     /* its parts given back - failed, if its read did - before its caller's told */
     fn drop(self: Pin<&mut Self>) {
-        let this = self.project();
+        let this = self.get_mut();
         let ret = this.rbio.erased().ret();
-        let mut bio = this.rbio.bio.lend();
+        let bio = this.rbio.bio.get_mut();
         if ret.is_err() {
             for v in bio.vecs() {
                 v.folio().read_failed();
             }
         }
-        bio.bio_mut().release();
-        drop(bio);
+        bio.release();
         if let Some(r) = this.single.take() {
             r.put(ret);
         }
@@ -273,9 +272,7 @@ fn read_extent(t: &TransAttempt<'_, '_>, w: &PagecacheRead<'_>, iter: &mut Reada
     })?;
     t.relock()?;
     {
-        let home = slot.home().into_ref().get_ref();
-        let mut bio = home.rbio.bio.lend();
-        let bio = bio.bio_mut();
+        let bio = slot.home().get_mut().rbio.bio.get_mut();
         for v in iter.parts(to) {
             bio.push(v).expect("a read bio's bvecs, room made for its parts");
         }

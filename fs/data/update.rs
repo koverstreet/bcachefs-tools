@@ -449,7 +449,7 @@ impl c::data_update {
         }
 
         let iter = c::bvec_iter { bi_sector: self.key().k.start_offset(), bi_size: buf_bytes, ..Default::default() };
-        unsafe { self.rbio.bio.lend().bio_mut().set_iter(iter) };
+        unsafe { self.rbio.bio.get_mut().set_iter(iter) };
         self.wbio.set_ioprio(IOPRIO_IDLE);
         Ok(())
     }

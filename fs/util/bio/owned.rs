@@ -148,19 +148,15 @@ pub struct BioLend<B: BioOwns = Data> {
 // SAFETY: this is what makes a &BioLend's bio writable, so here's the whole
 // of it.
 //
-// A &mut Bio is made only through a Lent, and only one Lent is out at a time:
-// lend() takes it by an atomic swap of `lent`, Acquire, and the Lent's drop
-// gives it back, Release - so one holder's writes happen before the next's,
-// whichever CPU each runs on. It's atomic, not a RefCell, because the holders
-// are tasks, which run on any CPU, and not one task: a read's walk lends its
-// bio to each step and each page cache hook - to advance it, grow it by a
-// folio, set its folios' state, trim it - and then, if the read isn't split,
-// lends it to its one fragment, whose task holds it through the IO. The walk
-// is done with the bio before that: a fragment that's lent the read's bio is
-// the walk's last. A data update's read bio is lent by the update before its
-// read - to set its position and priority - and then to the fragment reading
-// into it. So the flag never actually sees two at once; it says so if that's
-// ever broken.
+// A &mut Bio is made through get_mut(), by an owner that has the BioLend
+// alone, or through a Lent, and only one Lent is out at a time: lend() takes it
+// by an atomic swap of `lent`, Acquire, and the Lent's drop gives it back,
+// Release - so one holder's writes happen before the next's, whichever CPU
+// each runs on. It's atomic, not a RefCell, because the holders are tasks,
+// which run on any CPU: a read's bio is lent, if the read isn't split, to its
+// one fragment, whose task holds it through the IO; a promote's, to the
+// fragment reading into it. So the flag never actually sees two at once; it
+// says so if that's ever broken.
 //
 // What's read through & while the bio's lent isn't ordered against the
 // holder, so a & reader reads only what the holder doesn't change: the bvecs
@@ -177,6 +173,10 @@ impl<B: BioOwns> BioLend<B> {
     pub fn lend(&self) -> Lent<'_, B> {
         assert!(!self.lent.swap(true, Acquire), "a bio lent while it's lent already");
         Lent(self)
+    }
+
+    pub fn get_mut(&mut self) -> &mut Bio<B> {
+        self.bio.get_mut()
     }
 
     /// For C to make the bio in place: bio_init(), before anything's lent it.
