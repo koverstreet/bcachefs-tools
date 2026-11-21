@@ -939,7 +939,7 @@ fn narrow_crcs_from_read(fs: &Fs, rbio: &Rbio, p: &Plan<'_>) {
     }
 
     let mut new = c::bch_extent_crc_unpacked::default();
-    if fs.rechecksum_bio(rbio.bio(), p.version, crc, None, Some(&mut new), crc.offset.into(), crc.live_size,
+    if fs.rechecksum_bio(rbio.bio().range(), p.version, crc, None, Some(&mut new), crc.offset.into(), crc.live_size,
                          crc.csum_type.get()).is_err() {
         bch_err!(fs, "error verifying existing checksum while narrowing checksum (memory corruption?)");
         return;

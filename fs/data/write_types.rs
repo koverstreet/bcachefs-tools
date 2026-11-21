@@ -88,18 +88,6 @@ impl<K: IoRefIdx> c::bch_write_bio<K> {
             })
         }
     }
-
-    /// A clone of @src, made where @b is: borrowing @src's bvecs for its box's
-    /// life.
-    pub fn clone_of<'a>(b: crate::os::bio::BioInPlace<'a>, src: crate::os::bio::BioRange<'a>)
-        -> impl ::pin_init::PinInit<Self, crate::errcode::BchError> + 'a
-    {
-        ::pin_init::pin_init!(Self {
-            wbio: ::pin_init::zeroed(),
-            ca:   None,
-            bio   <- b.clone_of::<crate::errcode::BchError>(src),
-        }? crate::errcode::BchError)
-    }
 }
 
 // SAFETY: its bio, its last field, where it is in either kind's - below

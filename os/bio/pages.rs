@@ -23,7 +23,7 @@ use crate::util::mempool::Mempool;
 use pin_init::{pin_data, pin_init, PinInit};
 
 use super::iter::page_address;
-use super::{reserve_bvecs, Bio, BioVecs};
+use super::{reserve_bvecs, BioVecs};
 
 /// The bounce pool's element size
 const POOL_LEN: usize = PAGE_SIZE << c::PAGE_ALLOC_COSTLY_ORDER;
@@ -145,12 +145,6 @@ pub(super) fn alloc_pages_pool(pool: &BouncePool, vecs: &mut BioVecs, bs: u32, s
 /// allocation, and each but the last at least the pool's element size.
 pub fn nr_vecs(size: usize) -> u16 {
     size.div_ceil(POOL_LEN).try_into().expect("a bio's pages in more than 64k allocations")
-}
-
-/// How many bytes of pages @bio has, alloc_pages()'s: its bvecs' lengths,
-/// whatever size each allocation was.
-pub fn bytes(bio: &Bio) -> usize {
-    bio.range_all().len() as usize
 }
 
 /// Frees what alloc_pages() and the bounce pool put on @vecs, and empties

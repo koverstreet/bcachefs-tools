@@ -34,7 +34,7 @@ use crate::types::{Le16, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
 use crate::util::backref::BackRef;
-use crate::os::bio::BvecMempool;
+use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool, Data, HasBio};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::workqueue::Queue;
@@ -170,6 +170,24 @@ fn write_update_key(t: &TransAttempt<'_, '_>, key: &NodeKey, failed: &c::bch_io_
                             failed.is_empty())
 }
 
+/// A node write's bio, its task's home's, which owns no buffers: remapped to
+/// the write's bounce for the replicas' IO.
+struct NodeWriteIo<'h>(&'h mut Bio);
+
+impl BioSubmit for NodeWriteIo<'_> {
+    fn bio(&self) -> &Bio {
+        self.0
+    }
+
+    fn bio_mut(&mut self) -> &mut Bio {
+        self.0
+    }
+}
+
+unsafe impl BioOwner for NodeWriteIo<'_> {
+    type Owns = Data;
+}
+
 /// A node's write, sorted and sealed by node_write(): written to each device
 /// of the node's key, the key updated - on write_complete_wq, on the node's
 /// shard cpu where it has one - and the write done.
@@ -183,7 +201,9 @@ async fn write_task<'h>(wbio: Pin<&'h mut WriteBio>, fs: BackRef<Fs>, b: BackRef
         ptr.set_offset(ptr.offset() + u64::from(sector_offset));
     }
 
-    let errs = write_replicas(fs, wbio, &w.bounce[..w.len()], DataType::btree, &*at, None, Resume::INLINE).await;
+    let mut io = NodeWriteIo(HasBio::bio_mut(wbio));
+    let bio = io.remap_write(&w.bounce[..w.len()]).expect("a node, into a bio with room for BIO_MAX_VECS bvecs");
+    let errs = write_replicas(fs, bio, DataType::btree, &*at, Resume::INLINE).await;
 
     /* in the last replica's endio */
     let first = w.first;

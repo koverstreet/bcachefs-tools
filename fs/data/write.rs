@@ -719,17 +719,14 @@ use crate::data::keylist::Keylist;
 use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write_extent::{write_extent, Extent};
 use crate::data::write_nocow::nocow_write;
-use crate::data::write_replicas::{submit_replicas, ReplicaErrs};
-use crate::data_structures::array_vec::ArrayVec;
+use crate::data::write_replicas::{InFlight, ReplicaErrs};
 use crate::errcode::{Errcode, ret_to_c, BchError};
-use crate::fs::Fs;
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::snapshots::subvolume;
-use crate::os::bio::{Bio, BioBox, BioRange, HasBio, Pages};
-use crate::util::gather::Gather;
+use crate::os::bio::{Bio, BioBox, BioOwns, BioRange, BioVecs, Buffer, HasBio, Pages, Typed};
 use crate::os::kernel::{local_clock, unlikely, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::ratelimit::Ratelimit;
@@ -741,8 +738,8 @@ use crate::{btree_trans, log_msg_ratelimited, prt};
 use c::WriteFlags as w;
 use crate::journal::flush_wait::{Flush, FlushWait};
 use core::fmt;
+use core::ops::ControlFlow;
 use core::pin::Pin;
-use pin_init::stack_pin_init;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {
@@ -840,11 +837,6 @@ fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -
 }
 
 impl<R: IoRefIdx> c::bch_write_bio<R> {
-    /// Set when it's submitted.
-    pub(crate) fn fs(&self) -> &'static Fs {
-        self.wbio.c.expect("a write bio's filesystem, before it's submitted")
-    }
-
     /// Pinned: a write bio is never moved once it's made - a write's, in its
     /// caller's home, or a BioBox's - as its bio's bvecs, and its IO in
     /// flight, point at it.
@@ -874,120 +866,45 @@ impl c::write_point {
     }
 }
 
-pub(crate) type WriteGather = Gather<ReplicaErrs, waiter::Async>;
+/// An extent's data, which its replicas are clones of.
+pub(crate) enum ExtentData<'a> {
+    /// A range of the op's, written in place
+    InPlace(BioRange<'a>),
+    Own(ExtentBio),
+}
 
-type WriteBio = BioBox<'static, c::bch_write_bio>;
+/// A bio of an extent's own, its data in it - freed, its buffers with it, as
+/// it's dropped, once its replicas are done.
+pub(crate) type ExtentBio = BioBox<'static, Bio<ExtentBuf>>;
 
-/// An extent's bio: the write's own - its wbio - or one of its own - put back,
-/// its buffers with it, as it's dropped, its IO done.
-pub(crate) enum ExtentBio {
-    /// The write's, all that's left of it
-    Op,
-    /// The extent's part of the write's bio, split off it: its bvecs the write's
-    Split(WriteBio),
+pub(crate) enum ExtentBuf {
     /// Pages of its own, the extent's data bounced into them: to compress,
     /// checksum or encrypt
-    Bounce(WriteBio, Option<Pages<'static>>),
+    Bounce(Pages<'static>),
     /// The write point's EC stripe buffer, mapped
-    Stripe(WriteBio),
+    Stripe(Buffer<&'static mut [u8]>),
 }
 
-// XXX: a bounce's pages are held beside its box, its bio not typed: freed
-// here, before the box goes
-impl Drop for ExtentBio {
-    fn drop(&mut self) {
-        if let ExtentBio::Bounce(b, p) = self &&
-           let Some(p) = p.take() {
-            p.free_from(HasBio::bio_mut(b.as_mut()));
-        }
-    }
-}
+impl BioOwns for ExtentBuf {
+    type Bvec = c::bio_vec;
 
-impl ExtentBio {
-    /// @wbio's first @sectors, split off it: bio_split().
-    ///
-    /// # Safety
-    /// @wbio's bvecs - its caller's data - aren't changed while it lives: till
-    /// its pass's IO is waited on.
-    pub(crate) unsafe fn split(fs: &Fs, wbio: &mut c::bch_write_bio, sectors: u32) -> Self {
-        let bytes = sectors << 9;
-        let size = wbio.bio.range().len();
-        assert!(bytes != 0 && bytes < size, "splitting {sectors} sectors off a {size} byte bio");
-
-        let opf = wbio.bio.opf();
-        let range = unsafe { core::mem::transmute::<BioRange<'_>, BioRange<'static>>(wbio.bio.range().take(bytes)) };
-        let split = fs.bio_write.alloc(0, opf, |b| c::bch_write_bio::clone_of(b, range))
-            .unwrap_or_else(|e: BchError| panic!("a split of a write's bio: its bioset waits rather than fail, but {e}"));
-        wbio.bio_mut().advance(bytes);
-        ExtentBio::Split(split)
-    }
-
-    pub(crate) fn is_op(&self) -> bool {
-        matches!(self, ExtentBio::Op)
-    }
-
-    /// Its bio, if it's one of its own.
-    pub(crate) fn own(&self) -> Option<&Bio> {
+    fn release(&mut self, vecs: &mut BioVecs) {
         match self {
-            ExtentBio::Op           => None,
-            ExtentBio::Split(b)     => Some(&b.bio),
-            ExtentBio::Bounce(b, _) => Some(&b.bio),
-            ExtentBio::Stripe(b)    => Some(&b.bio),
+            ExtentBuf::Bounce(p) => p.release(vecs),
+            ExtentBuf::Stripe(b) => b.release(vecs),
         }
     }
 
-    /// Its bio: the write's, @wbio's, if it's that.
-    pub(crate) fn bio_ref<'a>(&'a self, wbio: &'a c::bch_write_bio) -> &'a Bio {
-        self.own().unwrap_or(&wbio.bio)
-    }
-
-    pub(crate) fn len(&self, wbio: &c::bch_write_bio) -> u32 {
-        self.bio_ref(wbio).range().len()
-    }
-
-    /// Its wbio: the write's, @wbio, if it's that.
-    pub(crate) fn wbio<'a>(&'a mut self, wbio: &'a mut c::bch_write_bio) -> Pin<&'a mut c::bch_write_bio> {
-        match self {
-            ExtentBio::Op           => wbio.pinned(),
-            ExtentBio::Split(b)     => b.as_mut(),
-            ExtentBio::Bounce(b, _) => b.as_mut(),
-            ExtentBio::Stripe(b)    => b.as_mut(),
-        }
-    }
-
-    /// Its bio: the write's, @wbio's, if it's that.
-    pub(crate) fn bio<'a>(&'a mut self, wbio: &'a mut c::bch_write_bio) -> &'a mut Bio {
-        HasBio::bio_mut(self.wbio(wbio))
+    fn allows_op(op: u32) -> bool {
+        Pages::allows_op(op) && Buffer::<&mut [u8]>::allows_op(op)
     }
 }
 
-/// A pass's extents' bios, each the last of its replicas and borrowed by its
-/// IO: given back once the pass's Gather is waited on.
-#[derive(Default)]
-pub(crate) struct Extents(ArrayVec<ExtentBio, { c::BCH_BKEY_PTRS_MAX as usize }>);
+impl Typed for ExtentBuf {}
 
-impl Extents {
-    /// @bio, the latest: submitted, for its IO to borrow.
-    pub(crate) fn push(&mut self, bio: ExtentBio) -> &mut ExtentBio {
-        assert!(self.0.try_push(bio).is_ok(), "more extents in a pass than it holds");
-        self.0.last_mut().expect("just pushed")
-    }
-
-    /// A cow pass never fills it - an extent takes an open bucket at least,
-    /// and the op has as many - a nocow pass stops when it has.
-    pub(crate) fn is_full(&self) -> bool {
-        self.0.is_full()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Given back, their IO done: write_extent()'s, or the write's own.
-    pub(crate) fn put(&mut self) {
-        self.0.clear();
-    }
-}
+/// A pass's extents of their own bios: their replicas, in flight, borrow them
+/// till the pass is waited on.
+pub(crate) type Owned = [Option<ExtentBio>; c::BCH_BKEY_PTRS_MAX as usize];
 
 impl ReplicaErrs {
     /// On @op: its failures - io_error, and
@@ -1187,16 +1104,109 @@ struct Pass {
     blocked: Option<(Blocked, u32)>,
 }
 
-/// A pass's extents - as many as its write point and open buckets take -
-/// allocated and written out, each submitted into @g and held in @extents.
-/// @in_caller: in its caller's context, where it waits on the allocator.
-/// @stuck: its last wait on the allocator ran out allocator_stuck_timeout -
-/// blocked again, it's reported.
-fn write_pass(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_update_index>, in_caller: bool,
-              stuck: bool, retried_for_encoded: &mut bool, g: &WriteGather, extents: &mut Extents) -> Pass {
+/// The pass's next extent, its sectors allocated and its data written out of
+/// @data - Ok(None) to go again - or Break: no more this pass, with IO in
+/// flight already, or the allocator blocked. Out of line and not async: its
+/// transaction and memalloc scope go before its replicas are waited on.
+#[allow(clippy::too_many_arguments)]
+fn next_extent<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Option<&c::data_update_index>,
+                   in_caller: bool, stuck: bool, retried_for_encoded: &mut bool, pass: &mut Pass)
+    -> ControlFlow<(), Result<Option<Extent<'s>>, BchError>>
+{
     let fs = op.fs();
     let _noio = MemallocFlags::noio();
+    let trans = btree_trans!(fs);
+    let io_in_flight = op.open_buckets.nr != 0;
+
+    let ret = lockrestart_do(&trans, |t| {
+        let wait = match (io_in_flight, in_caller) {
+            (true, _)      => AllocWait::Never,
+            (false, true)  => AllocWait::Sync(None),
+            (false, false) => AllocWait::Async(None),
+        };
+        let mut req = t.alloc_request(op.target.into(),
+                                      op.opts.erasure_code != 0 && !op.has(w::cached),
+                                      Some(&op.devs_have),
+                                      op.bits.nr_replicas().into(),
+                                      op.opts.data_replicas.into(),
+                                      c::Watermark::from_bits(op.bits.watermark().into()),
+                                      op.flags(),
+                                      wait)?;
+        req.ec_max_data_blocks = fs.opts().ec_max_data_blocks.get() as _;
+
+        let ret = t.alloc_sectors(&mut req, op.write_point);
+        // the write point last found, whatever came of allocating from it -
+        // kept if this attempt found none, as an extent before it may be
+        // in flight
+        pass.wp = req.wp.or(pass.wp);
+
+        match ret {
+            Err(e) if e.matches(Errcode::operation_blocked) && in_caller => {
+                t.wait_on_allocator(&mut req, e)?;
+                Err(t.restart(Errcode::transaction_restart_nested))
+            }
+            Err(e) if e.matches(Errcode::operation_blocked) => {
+                if let AllocWait::Async(b) = &req.wait {
+                    pass.blocked = *b;
+                }
+                if stuck {
+                    fs.allocator_stuck(&req, e);
+                }
+                Err(e)
+            }
+            r => r,
+        }
+    });
+    trans.unlock_long();
+
+    let ret = match ret {
+        Err(_) if io_in_flight => return ControlFlow::Break(()),
+        Err(e) if e.matches(Errcode::operation_blocked) => return ControlFlow::Break(()),
+        r => r,
+    };
+
+    ControlFlow::Continue(ret.and_then(|mut l| {
+        l.open_buckets_get(&mut op.open_buckets);
+        let ret = write_extent(op, data, opf, update, &mut l);
+
+        /*
+         * The extent wouldn't decompress, so it has to go out as it came
+         * in - and it can't be split, so it needs a write point with room
+         * for the whole compressed extent. Retire the buckets that came up
+         * short and allocate fresh, the way __bch2_btree_node_alloc() does
+         * for a btree node.
+         *
+         * Once only: nothing constrains encoded_extent_max against bucket
+         * size, so fresh buckets aren't guaranteed to be big enough either
+         * and retrying on that would never end. Giving up means the write
+         * fails, which is what happened before any of this.
+         */
+        if unlikely(ret.as_ref().is_err_and(|e| e.matches(Errcode::data_write_need_fresh_buckets))) &&
+           !*retried_for_encoded {
+            *retried_for_encoded = true;
+            l.retire_short(op.crc.compressed_size);
+            return Ok(None);
+        }
+
+        pass.wp = Some(l.done());
+        ret.map(Some)
+    }))
+}
+
+/// A pass's extents - as many as its write point and open buckets take -
+/// allocated and written out from @data, a position in the write's bio, of
+/// @opf, advanced past them: each one's replicas submitted into @io, its own
+/// bio, if it has one, kept in @owned till they're done. @in_caller: in its
+/// caller's context, where it waits on the allocator. @stuck: its last wait
+/// on the allocator ran out allocator_stuck_timeout - blocked again, it's
+/// reported.
+#[allow(clippy::too_many_arguments)]
+async fn write_pass<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Option<&c::data_update_index>,
+                        in_caller: bool, stuck: bool, retried_for_encoded: &mut bool,
+                        owned: &mut impl Iterator<Item = &'s mut Option<ExtentBio>>,
+                        io: &mut InFlight<'s>, at: Resume<'_>) -> Pass {
     let mut pass = Pass { wp: None, blocked: None };
+    let opf = opf | write_opf(op);
 
     loop {
         let key_to_write_offset = op.insert_keys.u64s();
@@ -1210,84 +1220,12 @@ fn write_pass(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_
             return pass;
         }
 
-        let trans = btree_trans!(fs);
-        let io_in_flight = op.open_buckets.nr != 0;
-
-        let ret = lockrestart_do(&trans, |t| {
-            let wait = match (io_in_flight, in_caller) {
-                (true, _)      => AllocWait::Never,
-                (false, true)  => AllocWait::Sync(None),
-                (false, false) => AllocWait::Async(None),
-            };
-            let mut req = t.alloc_request(op.target.into(),
-                                          op.opts.erasure_code != 0 && !op.has(w::cached),
-                                          Some(&op.devs_have),
-                                          op.bits.nr_replicas().into(),
-                                          op.opts.data_replicas.into(),
-                                          c::Watermark::from_bits(op.bits.watermark().into()),
-                                          op.flags(),
-                                          wait)?;
-            req.ec_max_data_blocks = fs.opts().ec_max_data_blocks.get() as _;
-
-            let ret = t.alloc_sectors(&mut req, op.write_point);
-            // the write point last found, whatever came of allocating from it -
-            // kept if this attempt found none, as an extent before it may be
-            // in flight
-            pass.wp = req.wp.or(pass.wp);
-
-            match ret {
-                Err(e) if e.matches(Errcode::operation_blocked) && in_caller => {
-                    t.wait_on_allocator(&mut req, e)?;
-                    Err(t.restart(Errcode::transaction_restart_nested))
-                }
-                Err(e) if e.matches(Errcode::operation_blocked) => {
-                    if let AllocWait::Async(b) = &req.wait {
-                        pass.blocked = *b;
-                    }
-                    if stuck {
-                        fs.allocator_stuck(&req, e);
-                    }
-                    Err(e)
-                }
-                r => r,
-            }
-        });
-        trans.unlock_long();
-
-        let ret = match ret {
-            Err(_) if io_in_flight => return pass,
-            Err(e) if e.matches(Errcode::operation_blocked) => return pass,
-            r => r,
+        let extent = match next_extent(op, data, opf, update, in_caller, stuck, retried_for_encoded, &mut pass) {
+            ControlFlow::Break(()) => return pass,
+            ControlFlow::Continue(extent) => extent,
         };
 
-        let ret = ret.and_then(|mut l| {
-            l.open_buckets_get(&mut op.open_buckets);
-            let ret = write_extent(op, wbio, update, &mut l);
-
-            /*
-             * The extent wouldn't decompress, so it has to go out as it came
-             * in - and it can't be split, so it needs a write point with room
-             * for the whole compressed extent. Retire the buckets that came up
-             * short and allocate fresh, the way __bch2_btree_node_alloc() does
-             * for a btree node.
-             *
-             * Once only: nothing constrains encoded_extent_max against bucket
-             * size, so fresh buckets aren't guaranteed to be big enough either
-             * and retrying on that would never end. Giving up means the write
-             * fails, which is what happened before any of this.
-             */
-            if unlikely(ret.as_ref().is_err_and(|e| e.matches(Errcode::data_write_need_fresh_buckets))) &&
-               !*retried_for_encoded {
-                *retried_for_encoded = true;
-                l.retire_short(op.crc.compressed_size);
-                return Ok(None);
-            }
-
-            pass.wp = Some(l.done());
-            ret.map(Some)
-        });
-
-        let Extent { bio, more, reserved } = match ret {
+        let Extent { data: written, more, reserved } = match extent {
             Ok(Some(e)) => e,
             Ok(None) => continue,
             Err(e) => {
@@ -1306,7 +1244,12 @@ fn write_pass(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_
             op.set(w::submitted);
         }
 
-        submit_extent(op, wbio, bio, key_to_write_offset, g, extents);
+        let range = match written {
+            ExtentData::InPlace(r) => r,
+            ExtentData::Own(b)     => owned.next().expect("more extents in a pass than it holds").insert(b).range(),
+        };
+        let k = op.insert_keys.iter_from(key_to_write_offset).next().expect("a write with no key");
+        io.submit::<c::DevWriteRefKind>(range, opf, DataType::user, k, None, at).await;
 
         /* a reserve's memory is the next extent's only once this one's done */
         if !more || reserved {
@@ -1315,11 +1258,8 @@ fn write_pass(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_
     }
 }
 
-/// @bio, an extent of @op's, written to each device of its key, the one at
-/// @key_offset of the op's keys: its bios into @g, held in @extents till
-/// they're done.
-fn submit_extent(op: &mut Op, wbio: &mut c::bch_write_bio, bio: ExtentBio, key_offset: usize, g: &WriteGather,
-                 extents: &mut Extents) {
+/// What an op's replicas are written with, besides its bio's.
+fn write_opf(op: &Op) -> u32 {
     let fs = op.fs();
     let mut opf = c::req_op_REQ_OP_WRITE;
 
@@ -1336,11 +1276,7 @@ fn submit_extent(op: &mut Op, wbio: &mut c::bch_write_bio, bio: ExtentBio, key_o
     if op.has(w::update) && fs.opts().move_writes_fua.get() != 0 {
         opf |= c::REQ_FUA;
     }
-
-    let k = op.insert_keys.iter_from(key_offset).next().expect("a write with no key");
-    let mut wbio = extents.push(bio).wbio(wbio);
-    HasBio::bio_mut(wbio.as_mut()).raw_mut().bi_opf |= opf;
-    unsafe { submit_replicas(fs, wbio, DataType::user, k, None, g) };
+    opf
 }
 
 /// The op's data written, and its index updated, a pass at a time: what one
@@ -1371,19 +1307,20 @@ async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, mut
     loop {
         op.failed.reset_devs();
 
-        stack_pin_init!(let g = WriteGather::new());
-        let mut extents = Extents::default();
-        let pass = write_pass(op, wbio, update, in_caller, stuck, &mut retried_for_encoded, &g, &mut extents);
-
-        match pass.wp {
-            Some(wp) => {
-                in_caller = false;
-                g.wait(Resume::run_queue(wp.index_updates())).await.record(op, of);
-            }
+        let (pass, pos) = {
+            let mut owned: Owned = [const { None }; c::BCH_BKEY_PTRS_MAX as usize];
+            let (mut data, opf) = (wbio.bio.range(), wbio.bio.opf());
+            let mut io = InFlight::new(fs);
+            let pass = write_pass(op, &mut data, opf, update, in_caller, stuck, &mut retried_for_encoded,
+                                  &mut owned.iter_mut(), &mut io, at).await;
             /* failed before finding a write point: nothing submitted, nothing to wait for */
-            None => assert!(extents.is_empty(), "a write pass submitted, with no write point"),
-        }
-        extents.put();
+            if let Some(wp) = pass.wp {
+                in_caller = false;
+                io.wait(Resume::run_queue(wp.index_updates())).await.record(op, of);
+            }
+            (pass, data.pos())
+        };
+        wbio.bio_mut().set_iter(pos);
 
         if let (true, Some(pages)) = (op.has(w::submitted), pages.as_deref_mut()) {
             pages.free_pages();

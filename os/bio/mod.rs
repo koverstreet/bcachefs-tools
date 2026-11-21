@@ -111,8 +111,8 @@ pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, 
 pub use buffers::{io_buf, Buffer, IoBuf, MapBuf, Pages, IO_ALIGN};
 #[cfg(kernel)]
 pub use bvec::{Bvec, FolioHold, Holds};
-pub use owned::{bio_put, submit_gathered_borrowed, BioBox, BioInPlace, BioLend, BioPool, BioSet, BvecAlloc,
-                BvecMempool, Gathered, HoldsDev, Lent, Submitted};
+pub use owned::{bio_put, BioBox, BioInPlace, BioLend, BioPool, BioSet, BvecAlloc, BvecMempool, Gathered, HoldsDev,
+                Lent, Submitted};
 
 fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)
@@ -233,7 +233,7 @@ impl<B: Typed> Deref for Bio<B> {
 
 // XXX: through this, its bvecs can be swapped with another bio's - mem::swap()
 // of two &mut Bio - and its drop then releases what B never held. And Bio
-// still has map(), add_folio_part(), truncate_vecs(), clear() and
+// still has add_folio_part(), truncate_vecs(), clear() and
 // pin_user_pages(), for the owners that aren't typed yet - each goes with its
 // last; till then a Bio<B> could gain bvecs that aren't B's through them.
 impl<B: Typed> DerefMut for Bio<B> {
@@ -412,13 +412,14 @@ impl Bio {
     }
 
     /// @len bytes of @buf mapped, pushed onto its bvecs - or with no room for
-    /// them, as reserve_bvecs() says, none of it. For a buffer kept by other
-    /// means than the bio - a write's, by write_replicas(); a Buffer holds one.
+    /// them, as reserve_bvecs() says, none of it. The bio code's alone: a
+    /// bio's buffers are what owns them - a Buffer, as it's made - or, for an
+    /// owner whose bio owns none, a remap_*(), for as long as it borrows them.
     ///
     /// # Safety
     /// @buf is the allocators' - in the direct map, or vmalloc - and outlives
     /// its place in the bvecs; nothing has the bio in flight.
-    pub unsafe fn map(&mut self, buf: *mut u8, len: usize) -> Result<(), BchError> {
+    unsafe fn map(&mut self, buf: *mut u8, len: usize) -> Result<(), BchError> {
         let len32 = u32::try_from(len).expect("mapping a buffer of 4G or more into a bio");
         reserve_bvecs(&mut self.vecs, buf_nr_bvecs(buf, len))?;
         for bv in unsafe { crate::os::bio::sys::bvecs(buf, len) } {
@@ -466,14 +467,6 @@ impl Bio {
     pub fn set_range(&mut self, range: BioRange<'_>) {
         assert!(range.is_of(self), "a bio set to another bio's range");
         self.raw_mut().bi_iter = range.pos();
-    }
-
-    /// Its position @bytes on. Panics past its end.
-    pub fn advance(&mut self, bytes: u32) {
-        let mut r = self.range();
-        r.advance(bytes);
-        let pos = r.pos();
-        self.raw_mut().bi_iter = pos;
     }
 
     /// Panics past its end.

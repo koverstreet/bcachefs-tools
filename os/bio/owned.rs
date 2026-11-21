@@ -620,18 +620,6 @@ impl<T: HasBio, A: Alloc> BioBox<'_, T, A> {
         T: Gathered<F> + HoldsDev,
         Self: Send + 'static,
     {
-        unsafe { self.submit_gathered_unchecked(dev, sector, r) }
-    }
-
-    /// submit_gathered(), of a box that borrows: a clone of another's bvecs.
-    ///
-    /// # Safety
-    /// What the box borrows outlives @r's Gather's wait.
-    pub unsafe fn submit_gathered_unchecked<F: Fold, Wt: Waiter, W: Width>(self, dev: T::Dev, sector: u64,
-                                                                           r: GatherRef<F, Wt, W>)
-    where
-        T: Gathered<F> + HoldsDev,
-    {
         let bio = hold_dev(core::mem::ManuallyDrop::new(self).as_mut(), dev, sector);
         unsafe {
             (*bio).bi_private = r.into_raw().cast_mut().cast();
@@ -657,41 +645,6 @@ where
     let v = b.as_mut().done(status);
     drop(b);
     r.put(v);
-}
-
-/// @t's bio submitted to @r's Gather, as a box's is by submit_gathered(), but
-/// not given up: what its T makes of the IO's status is put, and @t is the
-/// caller's again once the gather's waited on.
-///
-/// # Safety
-/// @t isn't moved, used or dropped till @r's Gather's wait has returned.
-pub unsafe fn submit_gathered_borrowed<T, F, Wt, W>(t: Pin<&mut T>, dev: T::Dev, sector: u64,
-                                                    r: GatherRef<F, Wt, W>)
-where
-    T: Gathered<F> + HoldsDev,
-    F: Fold,
-    Wt: Waiter,
-    W: Width,
-{
-    let bio = hold_dev(t, dev, sector);
-    unsafe {
-        (*bio).bi_private = r.into_raw().cast_mut().cast();
-        (*bio).bi_end_io = Some(borrowed_endio::<T, F, Wt, W>);
-        crate::os::blkdev::submit_bio(bio);
-    }
-}
-
-unsafe extern "C" fn borrowed_endio<T, F, Wt, W>(bio: *mut c::bio)
-where
-    T: Gathered<F>,
-    F: Fold,
-    Wt: Waiter,
-    W: Width,
-{
-    let r = unsafe { GatherRef::<F, Wt, W>::from_raw((*bio).bi_private.cast()) };
-    let t = unsafe { Pin::new_unchecked(&mut *of_bio::<T>(bio)) };
-    let status = t.bio().status();
-    r.put(t.done(status));
 }
 
 /// A box submitted: given up to its IO till it's done, and then, awaited,
