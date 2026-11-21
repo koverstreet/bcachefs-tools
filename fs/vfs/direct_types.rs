@@ -44,11 +44,11 @@ nest! {
 
         /* must be last: */
         #[pin]
-        pub wbio: c::bch_write_bio,
+        pub wbio: crate::os::bio::Bio,
     }
 }
 
-crate::has_bio!(dio_write, wbio.bio);
+crate::has_bio!(dio_write, wbio);
 
 // its task's home: its pointers - the inode, the mm - are its dio's, good on
 // whichever thread the task runs

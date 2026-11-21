@@ -13,7 +13,7 @@ use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
 use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, WriteFor};
 use crate::data::write_replicas::{InFlight, ReplicaErrs};
 use crate::data_structures::array_vec::ArrayVec;
-use crate::os::bio::BioRange;
+use crate::os::bio::{Bio, BioRange};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::format::{Btree, DataType, BkeyType};
@@ -334,7 +334,7 @@ async fn nocow_write_pass<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32, at
 /// The op written in place, a pass at a time: true - or, where it can't be,
 /// false, for the cow write path to write the rest. @in_caller cleared once
 /// it's waited for IO.
-pub(crate) async fn nocow_write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>,
+pub(crate) async fn nocow_write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>,
                                 mut flush: Option<&mut Option<Flush<'_>>>, in_caller: &mut bool) -> bool
 {
     if op.has(w::update) {
@@ -351,11 +351,11 @@ pub(crate) async fn nocow_write(op: &mut Op, wbio: &mut c::bch_write_bio, of: Wr
          */
         let at = Resume::queue(index_update_wq(op));
         let (more, errs, pos) = {
-            let (mut data, opf) = (wbio.bio.range(), wbio.bio.opf());
+            let (mut data, opf) = (wbio.range(), wbio.opf());
             let (more, errs) = nocow_write_pass(op, &mut data, opf, at).await;
             (more, errs, data.pos())
         };
-        wbio.bio_mut().set_iter(pos);
+        wbio.set_iter(pos);
         errs.record(op, of);
         if op.written != 0 {
             *in_caller = false;

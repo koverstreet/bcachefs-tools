@@ -15,7 +15,7 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode_opts;
 use bcachefs_kernel::util::alloc::init_at;
-use bcachefs_kernel::os::bio::{BioBox, BioInPlace, BioSubmit, Buffer, Data};
+use bcachefs_kernel::os::bio::{Bio, BioBox, BioInPlace, BioSubmit, Buffer, Data};
 use bcachefs_kernel::util::sleep::Sleep;
 use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Resume, Spawn, TaskSlot, WaitSync};
 use bcachefs_kernel::util::vstructs::assume_init_mut;
@@ -33,7 +33,7 @@ pub struct WriteResult {
 // 'static: the caller holds @data till the task's done.
 struct WriteState {
     op:   c::bch_write_op,
-    wbio: c::bch_write_bio,
+    wbio: Bio<Buffer<&'static [u8]>>,
 }
 
 // handed to the write's task: its bvecs map the caller's @data
@@ -49,18 +49,14 @@ pub fn write(
     data: &[u8],
     new_i_size: u64,
 ) -> Result<WriteResult, BchError> {
-    // Made in place: the write bio's bio first, which around_bio() leaves be
+    // Made in place: the write bio's bio, then the op
     let mut state = Box::new(std::mem::MaybeUninit::<WriteState>::zeroed());
     let p = state.as_mut_ptr();
     let mut state = unsafe {
-        let bio = &raw mut (*p).wbio.bio;
+        let bio = &raw mut (*p).wbio;
         let data: &'static [u8] = &*std::ptr::from_ref(data);
-        let fill = |at: BioInPlace<'static>| at.init_from(|b| {
-            Buffer::fill(b, data);
-            Ok::<_, BchError>(Data)
-        });
-        init_at(BioInPlace::own(Buffer::nr_vecs(&data), c::req_op_REQ_OP_WRITE, fill), bio)?;
-        let Ok(()) = init_at(c::bch_write_bio::around_bio(), &raw mut (*p).wbio);
+        init_at(BioInPlace::own(Buffer::nr_vecs(&data), c::req_op_REQ_OP_WRITE,
+                                |at| at.init_from(|b| Ok::<_, BchError>(Buffer::fill(b, data)))), bio)?;
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };

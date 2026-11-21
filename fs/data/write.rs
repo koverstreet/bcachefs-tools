@@ -724,9 +724,9 @@ use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
-use crate::sb::members::{DevIoRef, IoRefIdx};
+use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
-use crate::os::bio::{Bio, BioBox, BioOwns, BioRange, BioVecs, Buffer, HasBio, Pages, Typed};
+use crate::os::bio::{Bio, BioBox, BioOwns, BioRange, BioVecs, Buffer, Pages, Typed};
 use crate::os::kernel::{local_clock, unlikely, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::ratelimit::Ratelimit;
@@ -832,21 +832,6 @@ fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -
         if op.insert_keys.is_empty() {
             return Ok(());
         }
-    }
-}
-
-impl<R: IoRefIdx> c::bch_write_bio<R> {
-    /// Pinned: a write bio is never moved once it's made - a write's, in its
-    /// caller's home, or a BioBox's - as its bio's bvecs, and its IO in
-    /// flight, point at it.
-    pub(crate) fn pinned(&mut self) -> Pin<&mut Self> {
-        unsafe { Pin::new_unchecked(self) }
-    }
-
-    /// While it's ours, not in flight: the write path's bios are always
-    /// whole, initialized bios.
-    pub(crate) fn bio_mut(&mut self) -> &mut Bio {
-        HasBio::bio_mut(self.pinned())
     }
 }
 
@@ -1286,7 +1271,7 @@ fn write_opf(op: &Op) -> u32 {
 /// The op's data written, and its index updated, a pass at a time: what one
 /// couldn't write - its write point full, its open buckets used up, the
 /// allocator blocked - the next does, back @at.
-async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, mut pages: Option<&mut Bio<Pages<'_>>>,
+async fn __write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>, mut pages: Option<&mut Bio<Pages<'_>>>,
                  at: Resume<'_>, mut flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
     let update = of.update();
@@ -1313,7 +1298,7 @@ async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, mut
 
         let (pass, pos) = {
             let mut owned: Owned = [const { None }; c::BCH_BKEY_PTRS_MAX as usize];
-            let (mut data, opf) = (wbio.bio.range(), wbio.bio.opf());
+            let (mut data, opf) = (wbio.range(), wbio.opf());
             let mut io = InFlight::new(fs);
             let pass = write_pass(op, &mut data, opf, update, in_caller, stuck, &mut retried_for_encoded,
                                   &mut owned.iter_mut(), &mut io, at).await;
@@ -1324,7 +1309,7 @@ async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, mut
             }
             (pass, data.pos())
         };
-        wbio.bio_mut().set_iter(pos);
+        wbio.set_iter(pos);
 
         if let (true, Some(pages)) = (op.has(w::submitted), pages.as_deref_mut()) {
             pages.free_pages();
@@ -1352,7 +1337,7 @@ async fn __write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, mut
     }
 }
 
-fn write_data_inline(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c::data_update_index>, data_len: u32,
+fn write_data_inline(op: &mut Op, wbio: &mut Bio, update: Option<&c::data_update_index>, data_len: u32,
                      flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
 
@@ -1371,7 +1356,7 @@ fn write_data_inline(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c
         BkeyType::inline_data
     };
 
-    let sectors = wbio.bio.range().len() >> 9;
+    let sectors = wbio.range().len() >> 9;
     let p = Bpos { offset: op.pos.offset + u64::from(sectors), ..op.pos };
     let k = c::bkey { type_: ty.0 as u8, p, size: sectors, bversion: op.version, ..c::bkey::new() };
 
@@ -1390,7 +1375,7 @@ fn write_data_inline(op: &mut Op, wbio: &mut c::bch_write_bio, update: Option<&c
         id.set_val_u64s(val_u64s).expect("reserved");
 
         let d = InlineDataMut::of(BkeyS::from(&mut **id)).expect("an inline data key");
-        wbio.bio_mut().range().copy_to(&mut d.data[..len]);
+        wbio.range().copy_to(&mut d.data[..len]);
         if let Some(h) = d.csum {
             *h = c::InlineDataCsum::new(fs, &o.opts, d.data);
         }
@@ -1447,10 +1432,10 @@ impl<'a> WriteFor<'a> {
 ///
 /// @pages: an update's, which @wbio's bvecs are - freed once its data's
 /// written, before the index update.
-pub async fn write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, pages: Option<&mut Bio<Pages<'_>>>,
+pub async fn write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>, pages: Option<&mut Bio<Pages<'_>>>,
                    at: Resume<'_>) {
     let fs = op.fs();
-    let sectors = u64::from(wbio.bio.range().len() >> 9);
+    let sectors = u64::from(wbio.range().len() >> 9);
     let update = of.update();
 
     assert!(update.is_some() == op.has(w::update), "a write's update and its w::update flag disagree");
@@ -1473,7 +1458,7 @@ pub async fn write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, p
     op.start_time = local_clock();
 
     let ret = (|| -> Result<(), BchError> {
-        if unlikely(wbio.bio.range().len() & (fs.opts().block_size.get() as u32 - 1) != 0) {
+        if unlikely(wbio.range().len() & (fs.opts().block_size.get() as u32 - 1) != 0) {
             write_op_error(op, update, op.pos.offset, format_args!("misaligned write"));
             crate::warn_on!(true);
             return Err(fs.err(Errcode::data_write_misaligned));
@@ -1503,7 +1488,7 @@ pub async fn write(op: &mut Op, wbio: &mut c::bch_write_bio, of: WriteFor<'_>, p
         false => None,
     };
 
-    let data_len = u64::from(wbio.bio.range().len()).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
+    let data_len = u64::from(wbio.range().len()).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
 
     if fs.opts().inline_data.get() != 0 && data_len <= u64::from((fs.block_bytes() / 2).min(1024)) {
         write_data_inline(op, wbio, update, data_len as u32, Some(&mut flush));

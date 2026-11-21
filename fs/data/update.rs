@@ -149,7 +149,7 @@ pub struct data_update {
 
     pub rbio: Rbio,
     pub op: c::bch_write_op,
-    pub wbio: c::bch_write_bio,
+    pub wbio: Bio,
     /* both bios' bvecs, and their pages: what the read reads, the write writes */
     pub pages: Bio<Pages<'static>>,
 }
@@ -429,9 +429,9 @@ impl c::data_update {
             init_at(Bio::<Pages>::new(&fs.bio_bounce, block_size, buf_bytes as usize, Flags::empty()),
                     &raw mut self.pages)?;
             Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), &mut self.pages, c::req_op_REQ_OP_READ);
-            Bio::init_borrowed(&raw mut self.wbio.bio, &mut self.pages, 0);
+            Bio::init_borrowed(&raw mut self.wbio, &mut self.pages, 0);
         }
-        self.wbio.bio_mut().set_size(buf_bytes);
+        self.wbio.set_size(buf_bytes);
 
         let read_for = if self.index.opts.type_ == Type::scrub {
             ReadFor::BCH_READ_FOR_scrub
@@ -446,7 +446,7 @@ impl c::data_update {
 
         let iter = c::bvec_iter { bi_sector: self.key().k.start_offset(), bi_size: buf_bytes, ..Default::default() };
         self.rbio.bio.get_mut().set_iter(iter);
-        self.wbio.bio_mut().set_ioprio(IOPRIO_IDLE);
+        self.wbio.set_ioprio(IOPRIO_IDLE);
         Ok(())
     }
 
@@ -556,7 +556,6 @@ impl c::data_update {
 
         // SAFETY: an update is done before the filesystem goes
         unsafe { c::bch_write_op::init_at(&raw mut self.op, fs, *io_opts) };
-        let Ok(()) = unsafe { init_at(c::bch_write_bio::around_bio(), &raw mut self.wbio) };
         self.op.pos = self.index.k.as_ref().k().start_pos();
         self.op.version = self.index.k.as_ref().k().bversion;
         self.op.target = data_opts.target;
@@ -876,7 +875,7 @@ impl c::data_update {
         assert!(self.pages.nr_vecs() != 0, "a data update's write without its pages");
 
         self.op.crc = crc;
-        self.wbio.bio_mut().set_size(crc.compressed_size << 9);
+        self.wbio.set_size(crc.compressed_size << 9);
         true
     }
 

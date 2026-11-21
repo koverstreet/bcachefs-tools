@@ -15,7 +15,6 @@ use crate::btree_trans;
 use crate::c;
 use crate::data::durability::BkeyVDurability;
 use crate::data::write::{write, WriteFor};
-use crate::data::write_replicas::wbio_in_place;
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
@@ -95,12 +94,12 @@ impl c::dio_write {
     }
 
     fn bio_sectors(&self) -> u64 {
-        u64::from(self.wbio.bio.range().len() >> 9)
+        u64::from(self.wbio.range().len() >> 9)
     }
 
     /// Its pages given back: a write only read them.
     fn release_pages(&mut self) {
-        self.wbio.bio_mut().release_pinned_pages();
+        self.wbio.release_pinned_pages();
     }
 }
 
@@ -203,8 +202,7 @@ fn dio_write_pin(d: &mut Dio, in_caller: bool) -> Result<(), BchError> {
             debug_assert!(fs.fdm_table.get().is_none(), "a DIO write with page faults disabled already");
             let fdm = fs.fdm_table.set(d.mapping);
 
-            let ret = d.wbio.bio_mut()
-                .pin_user_pages(&mut unsafe { IovIter::from_raw(&mut d.iter) });
+            let ret = d.wbio.pin_user_pages(&mut unsafe { IovIter::from_raw(&mut d.iter) });
             (ret, fdm.dropped_locks())
         };
 
@@ -221,17 +219,17 @@ fn dio_write_pin(d: &mut Dio, in_caller: bool) -> Result<(), BchError> {
         if unlikely(dropped_locks) {
             d.mapping.write_invalidate_range(d.pos, d.pos + iter_count as u64 - 1)?;
 
-            if d.wbio.bio.range().is_empty() {
+            if d.wbio.range().is_empty() {
                 continue;
             }
         }
 
-        let len = d.wbio.bio.range().len();
+        let len = d.wbio.range().len();
         let unaligned = len & (fs.block_bytes() as u32 - 1);
-        d.wbio.bio_mut().shrink(len - unaligned);
+        d.wbio.shrink(len - unaligned);
         d.iter.revert(unaligned as usize);
 
-        if d.wbio.bio.range().is_empty() {
+        if d.wbio.range().is_empty() {
             /*
              * bio_iov_iter_get_pages was only able to get <
              * blocksize worth of pages:
@@ -280,7 +278,7 @@ async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
             }
         }
 
-        task_io_account_write(d.wbio.bio.range().len() as usize);
+        task_io_account_write(d.wbio.range().len() as usize);
 
         write(&mut d.op, &mut d.wbio, WriteFor::Inode(&inode.ei_devs_need_flush), None, Resume::queue(Queue::system_dfl()))
             .await;
@@ -295,7 +293,7 @@ async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
             true  => c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE,
             false => c::req_op_REQ_OP_WRITE,
         };
-        d.wbio.bio_mut().clear(opf);
+        d.wbio.clear(opf);
         dio_write_pin(d, false)?;
     }
 }
@@ -379,7 +377,7 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
                 started:     Some(started),
                 write_ref:   Some(write_ref),
                 op           <- c::bch_write_op::init(fs, opts),
-                wbio         <- wbio_in_place(b),
+                wbio         <- b.init::<BchError, _>(),
             }? BchError)
         }) {
             Ok(dio) => dio,

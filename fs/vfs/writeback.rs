@@ -10,7 +10,6 @@
 use crate::btree::bkey::pos;
 use crate::c;
 use crate::data::write::{write, WriteFor};
-use crate::data::write_replicas::wbio_in_place;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
@@ -73,11 +72,11 @@ impl c::bch_writepage_io {
 
 impl BioSubmit for c::bch_writepage_io {
     fn bio(&self) -> &Bio {
-        &self.wbio.bio
+        &self.wbio
     }
 
     fn bio_mut(&mut self) -> &mut Bio {
-        self.wbio.bio_mut()
+        &mut self.wbio
     }
 }
 
@@ -98,7 +97,7 @@ fn bio_full(bio: &Bio, len: u32) -> bool {
  * when the bounce path can be enhanced to accommodate larger source bios.
  */
 fn io_full(io: &Io, len: u32) -> bool {
-    let bio = &io.wbio.bio;
+    let bio = &io.wbio;
     bio_full(bio, len) || bio.range().len() + len > c::BIO_MAX_VECS * PAGE_SIZE as u32
 }
 
@@ -191,7 +190,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
         pin_init!(Io {
             inode: inode.raw(),
             op    <- c::bch_write_op::init(fs, opts),
-            wbio  <- wbio_in_place(b),
+            wbio         <- b.init::<BchError, _>(),
         }? BchError)
     }).expect("a writepage io's box: its pool waits for an element, and an op's init can't fail");
 
@@ -203,8 +202,8 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
     op.write_point     = c::write_point_specifier::hashed(inode.ei_last_dirtied.get() as usize);
     op.subvol          = inode.inum().subvol as u32;
     op.pos             = pos(inode.inum().inum, sector);
-    io.wbio.bio_mut().set_sector(sector);
-    io.wbio.bio_mut().set_opf(wbc.write_flags());
+    io.wbio.set_sector(sector);
+    io.wbio.set_opf(wbc.write_flags());
 
     w.io = Some(slot);
 }
@@ -330,7 +329,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
          */
         if let Some(slot) = w.io.as_mut() {
             let io = io_of(slot);
-            let bio = io.wbio.bio.raw();
+            let bio = io.wbio.raw();
             if u32::from(io.op.bits.nr_replicas()) != nr_replicas_this_write ||
                io.op.res.nr_replicas.get() != res_nr_replicas ||
                io_full(io, (sectors << 9) as u32) ||
@@ -347,7 +346,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
 
         let io = io_of(w.io.as_mut().expect("an io, just made"));
         assert!(core::ptr::eq(io.inode, inode.raw()), "a writepage io of another inode");
-        unsafe { io.wbio.bio_mut().add_folio_part(&folio, offset << 9, sectors << 9) };
+        unsafe { io.wbio.add_folio_part(&folio, offset << 9, sectors << 9) };
 
         io.op.res.sectors.set(io.op.res.sectors.get() + reserved_sectors);
         io.op.i_sectors_delta -= i64::from(dirty_sectors);
