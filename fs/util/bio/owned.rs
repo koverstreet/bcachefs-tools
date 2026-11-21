@@ -180,7 +180,7 @@ pub struct BioSet<T: HasBio> {
 /// A bio with @front_pad bytes before it and @nr_vecs bvecs after: its
 /// allocation, and where the bvecs start.
 fn bio_layout(front_pad: usize, nr_vecs: u16) -> (Layout, usize) {
-    let bio = Layout::from_size_align(front_pad + size_of::<c::bio>(), align_of::<c::bio>())
+    let bio = Layout::from_size_align(front_pad + size_of::<Bio>(), align_of::<Bio>())
         .expect("a bio and what it's in");
     let (layout, vecs) = bio.extend(inline_vecs(nr_vecs)).expect("a bio and its bvecs");
     (layout.pad_to_align(), vecs)
