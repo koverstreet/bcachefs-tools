@@ -47,7 +47,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::c;
 use crate::data_structures::dst_array::{DstArray, DstHead};
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{AllocError, KVmalloc};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::projections::Publish;
 use crate::util::refcount::{ARef, AlwaysRefCounted};
@@ -630,7 +630,7 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
         // no reader sees it until replace() publishes it
         unsafe {
             if let Err(e) = fill(&mut (*RcuArrayBuf::<T, H>::from_thin(new.as_ptr())).elems) {
-                RcuArrayBuf::<T, H>::free(new);
+                RcuArrayBuf::<T, H>::free_in(new, &KVmalloc);
                 return Ok(Err(e));
             }
             self.replace(new);
@@ -703,11 +703,12 @@ impl<T: RcuElement> RcuArray<T> {
             .and_then(usize::checked_next_power_of_two)
             .ok_or(AllocError)?;
 
-        let head = RcuArrayHead::new((bytes - tail) / size_of::<T>(), ());
+        let nr = (bytes - tail) / size_of::<T>();
+        let head = RcuArrayHead::new(nr, ());
         // the old elements don't change under the writers' lock, and readers
         // keep reading them until the grace period after replace()
         let new = match NonNull::new(self.0.p.load(Ordering::Relaxed)) {
-            Some(p) => unsafe { RcuArrayBuf::<T>::realloc(p, old.len(), head)? },
+            Some(p) => unsafe { RcuArrayBuf::<T>::realloc_in(p, old.len(), nr, |_| head, &KVmalloc)? },
             None => RcuArrayBuf::<T>::alloc(head)?,
         };
         unsafe { self.0.replace(new) };

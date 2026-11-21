@@ -6,15 +6,16 @@
 //! for util/rcu.rs's RcuArray.
 //!
 //! Allocated as RcuArray's always were, by kvzalloc() - so kvfree_rcu() can
-//! free one - and so at least 8-aligned: a thin pointer's low bits are its
-//! holder's to tag.
+//! free one - or by an allocator of its owner's; at least 8-aligned either
+//! way: a thin pointer's low bits are its holder's to tag.
 //!
 //! Freed as its elements say (util/rcu.rs): at once, or - what an RCU reader
 //! may still be in, elements that aren't FreeAnytime - a grace period on, by
-//! kvfree_rcu() of an rcu_head before the header.
+//! kvfree_rcu() of an rcu_head before the header, which only an allocator
+//! kvfree() frees for can do.
 
 use crate::c;
-use crate::util::alloc::{flags, AllocError, AllocGfp, Flags, KVmalloc};
+use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
 use crate::util::rcu::FreeAnytime;
 use core::marker::PhantomData;
@@ -24,19 +25,22 @@ use core::ptr::{self, NonNull};
 /// the rcu_head - and free(), of the allocation's start.
 trait ArrayFreeing {
     fn prefix() -> usize;
-    unsafe fn free(base: *mut u8);
+    unsafe fn free<A: Alloc>(base: NonNull<u8>, layout: Layout, a: &A);
     fn assert_rcu_freed();
 }
 
 impl<T> ArrayFreeing for T {
     default fn prefix() -> usize { size_of::<c::rcu_head>().next_multiple_of(8) }
-    default unsafe fn free(base: *mut u8) { unsafe { crate::util::alloc::kvfree_rcu_head(base.cast(), base.cast()) } }
+    default unsafe fn free<A: Alloc>(base: NonNull<u8>, _: Layout, _: &A) {
+        const { assert!(A::KVFREE, "an array RCU readers may be in, from an allocator kvfree_rcu() can't free to") };
+        unsafe { crate::util::alloc::kvfree_rcu_head(base.as_ptr().cast(), base.as_ptr().cast()) }
+    }
     default fn assert_rcu_freed() {}
 }
 
 impl<T: FreeAnytime> ArrayFreeing for T {
     fn prefix() -> usize { 0 }
-    unsafe fn free(base: *mut u8) { unsafe { crate::util::alloc::kvfree_unsized(base.cast()) } }
+    unsafe fn free<A: Alloc>(base: NonNull<u8>, layout: Layout, a: &A) { unsafe { a.deallocate(base, layout) } }
     fn assert_rcu_freed() { let () = NotRcuFreed::<T>::ERR; }
 }
 
@@ -78,6 +82,28 @@ impl<H: DstHead, T> DstArray<H, T> {
         ptr::slice_from_raw_parts_mut(p.cast::<T>(), unsafe { (*p).nr() }) as *mut Self
     }
 
+    /// What one of @nr elements is allocated as: its rcu_head, if it has one,
+    /// its header, and the array.
+    pub fn layout(nr: usize) -> Result<Layout, AllocError> {
+        const { assert!(size_of::<T>() != 0, "a DstArray of a zero sized type") };
+        const { assert!(align_of::<H>() <= 8 && align_of::<T>() <= 8, "kvzalloc() aligns to 8") };
+
+        let bytes = nr.checked_mul(size_of::<T>())
+            .and_then(|b| b.checked_add(Self::TAIL + <T as ArrayFreeing>::prefix()))
+            .ok_or(AllocError)?;
+        Layout::from_size_align(bytes, 8).map_err(|_| AllocError)
+    }
+
+    /// @head of the room @given has for elements, at the start of @given past
+    /// its rcu_head.
+    fn place(head: impl FnOnce(usize) -> H, given: NonNull<[u8]>) -> NonNull<H> {
+        let prefix = <T as ArrayFreeing>::prefix();
+        let room = (given.len() - prefix - Self::TAIL) / size_of::<T>();
+        let p = unsafe { given.cast::<u8>().add(prefix) }.cast::<H>();
+        unsafe { p.write(head(room)) };
+        p
+    }
+
     /// One with @head, whose nr() it's sized by, and its elements all zero.
     pub fn alloc(head: H) -> Result<NonNull<H>, AllocError> {
         Self::alloc_gfp(head, Flags::empty())
@@ -90,29 +116,29 @@ impl<H: DstHead, T> DstArray<H, T> {
     }
 
     fn alloc_gfp(head: H, gfp: Flags) -> Result<NonNull<H>, AllocError> {
-        const { assert!(size_of::<T>() != 0, "a DstArray of a zero sized type") };
-        const { assert!(align_of::<H>() <= 8 && align_of::<T>() <= 8, "kvzalloc() aligns to 8") };
-
-        let prefix = <T as ArrayFreeing>::prefix();
-        let bytes = head.nr().checked_mul(size_of::<T>())
-            .and_then(|b| b.checked_add(Self::TAIL + prefix))
-            .ok_or(AllocError)?;
-        let layout = Layout::from_size_align(bytes, 8).map_err(|_| AllocError)?;
-
-        let p = unsafe { KVmalloc.allocate_zeroed_gfp(layout, gfp)?.byte_add(prefix) }.cast::<H>();
-        unsafe { p.write(head) };
-        Ok(p)
+        let given = KVmalloc.allocate_zeroed_gfp(Self::layout(head.nr())?, gfp)?;
+        Ok(Self::place(|_| head, given))
     }
 
-    /// One with @head, @old's first @keep elements moved into it, the rest
-    /// zero. @old stays allocated: freeing it is its owner's, now or after a
-    /// grace period.
+    /// alloc(), of room for @nr from @a, its header @head of the room @a gave
+    /// - which may be more, and is what it's freed as: a mempool tells its
+    /// elements by their size.
+    pub fn alloc_in<A: Alloc>(nr: usize, head: impl FnOnce(usize) -> H, a: &A) -> Result<NonNull<H>, AllocError> {
+        let given = a.allocate_zeroed(Self::layout(nr)?)?;
+        Ok(Self::place(head, given))
+    }
+
+    /// One of room for @nr from @a, as alloc_in(), @old's first @keep elements
+    /// moved into it, the rest zero. @old stays allocated: freeing it is its
+    /// owner's, now or after a grace period.
     ///
     /// # Safety
     /// @old is valid, and @keep within both. Its first @keep are moved, not
     /// copied: they're not to be dropped in @old.
-    pub unsafe fn realloc(old: NonNull<H>, keep: usize, head: H) -> Result<NonNull<H>, AllocError> {
-        let new = Self::alloc(head)?;
+    pub unsafe fn realloc_in<A: Alloc>(old: NonNull<H>, keep: usize, nr: usize, head: impl FnOnce(usize) -> H, a: &A)
+        -> Result<NonNull<H>, AllocError>
+    {
+        let new = Self::alloc_in(nr, head, a)?;
         unsafe {
             let from = (*Self::from_thin(old.as_ptr())).elems.as_ptr();
             let to = (*Self::from_thin(new.as_ptr())).elems.as_mut_ptr();
@@ -124,9 +150,11 @@ impl<H: DstHead, T> DstArray<H, T> {
     /// Now, or a grace period on: as its elements say.
     ///
     /// # Safety
-    /// @p is alloc()'s, its elements dropped or moved, and nothing but RCU
-    /// readers uses it after.
-    pub unsafe fn free(p: NonNull<H>) {
-        unsafe { <T as ArrayFreeing>::free(p.as_ptr().cast::<u8>().byte_sub(<T as ArrayFreeing>::prefix())) };
+    /// @p is @a's - alloc()'s are KVmalloc's - its nr() the room @a gave, its
+    /// elements dropped or moved, and nothing but RCU readers uses it after.
+    pub unsafe fn free_in<A: Alloc>(p: NonNull<H>, a: &A) {
+        let layout = Self::layout(unsafe { p.as_ref() }.nr()).expect("a DstArray's own layout");
+        let base = unsafe { p.cast::<u8>().byte_sub(<T as ArrayFreeing>::prefix()) };
+        unsafe { <T as ArrayFreeing>::free(base, layout, a) };
     }
 }
