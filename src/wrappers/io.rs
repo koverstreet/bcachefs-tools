@@ -16,7 +16,7 @@ use bcachefs_kernel::data::write::bch2_write;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode_opts;
-use bcachefs_kernel::util::bio::{Bio, BioBox, BioOwner};
+use bcachefs_kernel::util::bio::{Bio, BioBox, BioInPlace, BioOwner};
 use bcachefs_kernel::util::closure;
 use bcachefs_kernel::util::sleep::Sleep;
 use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Spawn, TaskSlot, WaitSync};
@@ -33,11 +33,9 @@ pub struct WriteResult {
     pub sectors_delta: i64,
 }
 
-// A write's op and the bvecs its bio maps @data with: on the heap, as the
-// bio points into it.
+// A write's op and its bio, which maps @data: on the heap, made in place.
 struct WriteState {
-    op:    c::bch_write_op,
-    bvecs: [c::bio_vec; MAX_BVECS],
+    op: c::bch_write_op,
 }
 
 /// @data written at @offset of inode @inum, done when this returns.
@@ -54,10 +52,9 @@ pub fn write(
     let mut state = Box::new(std::mem::MaybeUninit::<WriteState>::zeroed());
     let p = state.as_mut_ptr();
     let mut state = unsafe {
-        let bio = (&raw mut (*p).op.wbio.bio).cast::<c::bio>();
-        bcachefs_kernel::os::bio::init(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(),
-                                       MAX_BVECS as u16, 0);
-        Bio::from_raw_mut(bio).map(data.as_ptr().cast_mut(), data.len());
+        let bio = &raw mut (*p).op.wbio.bio;
+        BioInPlace::own_at(bio.cast(), std::ptr::null_mut(), MAX_BVECS as u16, 0)?;
+        Bio::from_raw_mut(bio.cast()).map(data.as_ptr().cast_mut(), data.len());
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };

@@ -24,8 +24,9 @@ impl Bio {
     /// Its bvecs the pages of @iter's next bytes, pinned, as many as it has
     /// room for - @iter advanced past them. release_user_pages() gives them
     /// back.
-    pub fn pin_user_pages(self: Pin<&mut Self>, iter: &mut IovIter<'_>) -> Result<(), BchError> {
-        let ret = unsafe { bch2_bio_iov_iter_get_pages(self.raw_mut(), iter.as_ptr(), 0) };
+    pub fn pin_user_pages(mut self: Pin<&mut Self>, iter: &mut IovIter<'_>) -> Result<(), BchError> {
+        let ret = unsafe { bch2_bio_iov_iter_get_pages(self.as_mut().raw_mut(), iter.as_ptr(), 0) };
+        self.raw_filled();
         if ret < 0 { Err(BchError::from_raw(ret)) } else { Ok(()) }
     }
 

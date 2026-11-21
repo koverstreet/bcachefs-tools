@@ -155,7 +155,7 @@ impl<'a> BioRange<'a> {
     pub fn resize(mut self, bytes: u32) -> Self {
         let bio = self.bio();
         assert!(!bio.cloned(), "resizing a range of a clone: its bvecs are its parent's");
-        let room = (self.iter.bi_idx..u32::from(bio.raw().bi_vcnt)).map(|i| unsafe { bio.bvec(i) }.bv_len).sum::<u32>()
+        let room = (self.iter.bi_idx..u32::from(bio.nr_vecs())).map(|i| bio.bvec(i).bv_len).sum::<u32>()
             - bi_offset!(self.iter);
         assert!(bytes <= room, "resizing a bio range to {bytes} bytes: its bio has {room} from it");
         self.iter.bi_size = bytes;
@@ -255,8 +255,7 @@ impl<'a> BioRange<'a> {
     /// __bvec_iter_bvec()
     fn bvec(&self) -> c::bio_vec {
         debug_assert!(!self.is_empty());
-        // SAFETY: the invariant - not empty, so its start is in a bvec
-        unsafe { self.bio().bvec(self.iter.bi_idx) }
+        self.bio().bvec(self.iter.bi_idx)
     }
 
     /// mp_bvec_iter_offset(): past the bvec's first page, if it spans pages

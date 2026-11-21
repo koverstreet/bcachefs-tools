@@ -729,7 +729,7 @@ use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::snapshots::subvolume;
-use crate::util::bio::{bio_put, of_bio, Bio};
+use crate::util::bio::{bio_put, of_bio, Bio, BioBuffersOwned};
 use crate::util::closure::{ClosureRef, HasClosure, Running};
 use crate::util::ffi::Opaque;
 use crate::os::kernel::{current_runtime, local_clock, unlikely, WRITE};
@@ -1188,8 +1188,8 @@ extern "C" fn write_index(mut op: Running<Op>) {
     let wq = index_update_wq(&op);
 
     if op.has(w::submitted) && op.has(w::update) {
-        let fs = op.fs();
-        unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, op.wbio.bio_mut().raw_mut()) };
+        let pool = &op.fs().bio_bounce;
+        unsafe { BioBuffersOwned::from_raw(pool).free_from(Pin::new_unchecked(&mut op.update_mut().pages)) };
     }
 
     // the op's running ref, the list's while it's queued
@@ -1284,7 +1284,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     drop(ca);
 
     if wbio.wbio.bits.bounce() != 0 {
-        unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, wbio.bio_mut().raw_mut()) };
+        unsafe { BioBuffersOwned::from_raw(&fs.bio_bounce) }.free_from(wbio.bio_mut());
     }
 
     if wbio.wbio.bits.put_bio() != 0 {

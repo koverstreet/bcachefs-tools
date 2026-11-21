@@ -17,7 +17,7 @@ use crate::locking::MemallocFlags;
 use crate::os::kernel::{local_clock, WRITE};
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::util::alloc::{Alloc, AllocError, Allocator, Kmalloc};
-use crate::util::bio::{bio_box_size, submit_gathered_borrowed, BioBox, BioClone, BioInPlace, Gathered, HasBio};
+use crate::util::bio::{submit_gathered_borrowed, BioBox, BioClone, BioInPlace, BvecMempool, Gathered, HasBio};
 use crate::util::gather::{Fold, Gather};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
@@ -32,12 +32,15 @@ use pin_init::{stack_pin_init, PinInit};
 /// The replicas' clones: a write has each only while it's in flight, and
 /// allocates the next once it's submitted, so a pool of a few makes progress.
 static REPLICA_CLONES: Mempool<Kmalloc> = ::pin_init::zeroed();
+static REPLICA_CLONE_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    Mempool::init_static(&REPLICA_CLONES, Mempool::kmalloc(4, bio_box_size::<c::bch_write_bio>(0)), m)
+    Mempool::init_static(&REPLICA_CLONES, Mempool::kmalloc(4, size_of::<c::bch_write_bio>()), m)?;
+    BvecMempool::init_static(&REPLICA_CLONE_BVECS, 1, m)
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
+    REPLICA_CLONE_BVECS.exit(q);
     REPLICA_CLONES.exit(q)
 }
 
@@ -214,7 +217,8 @@ fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write
             let mut n = {
                 let _noio = MemallocFlags::noio();
                 BioBox::<c::bch_write_bio<R>, BioClone<'_>, ReplicaClones>::new_with_in(
-                    ReplicaClones, ptr::null_mut(), opf, HasBio::bio(&*wbio).range(), wbio_in_place)
+                    ReplicaClones, REPLICA_CLONE_BVECS.alloc(), ptr::null_mut(), opf, HasBio::bio(&*wbio).range(),
+                    wbio_in_place)
             }.expect("a replica's clone: its pool waits for an element");
 
             if set_up(n.as_mut()) {

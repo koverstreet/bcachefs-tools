@@ -4,19 +4,17 @@
 //! owned.rs:
 //!
 //! - A bio describes one block IO: device, op, sector, a position in its
-//!   data, and its bvecs - (page, offset, len), in an array that may be
-//!   inline, right after the bio in its allocation. Bio is a view of one; its
-//!   c::bio is private, read through raw().
+//!   data, and its bvecs - (page, offset, len), its own, or a clone's
+//!   source's. Its c::bio is private, read through raw().
 //! - Its data is what the bvecs point at. A position is a bvec_iter: a bvec,
 //!   an offset into it, and the bytes left. The bio's own is bi_iter, which
 //!   the block layer advances as the IO completes. A BioRange is a position
 //!   and its bio; walking one gives chunks, virtually contiguous pieces of the
 //!   data, or segments, the bvecs as they are, or folios (iter.rs).
-//! - Its owner is what allocated it and holds it (owned.rs): a BioBox, from
-//!   a BioSet or a struct and its inline bvecs in one allocation. Only the
-//!   owner builds a bio, submits it, and walks all of its
-//!   bvecs wherever its position is - range_all(), C's _all walks. Anything
-//!   with a &Bio may read it, and walk its data from a position.
+//! - Its owner is what allocated it and holds it (owned.rs). Only the owner
+//!   builds a bio, submits it, and walks all of its bvecs wherever its
+//!   position is - range_all(), C's _all walks. Anything with a &Bio may read
+//!   it, and walk its data from a position.
 //! - Mapping a buffer adds it to the bvecs, until they're emptied: reset()
 //!   keeps them, for another IO of the same buffers. A buffer's mapped as the
 //!   bio's made, and the bio holds it (BioBuffersMapped); one whose owner
@@ -51,10 +49,12 @@
 use core::ffi::{c_ulong, c_void};
 use core::marker::{PhantomData, PhantomPinned};
 use core::pin::Pin;
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
 use core::task::{ready, Context, Poll};
 
 use crate::c;
+use crate::data_structures::inline_vec::InlineVec;
 use crate::errcode::BchError;
 use crate::util::backtrace::prt_symbol;
 use crate::util::printbuf::prt_bdevname;
@@ -107,57 +107,78 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
 pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
                   Buffers, IoBuf, MapBuf};
-pub use owned::{bio_box_size, bio_put, inline_bio, inline_vecs, submit_gathered_borrowed, BioBox, BioInPlace, BioLend,
-                BioPool, BioSet, Gathered, Lent, Submitted};
+pub use owned::{bio_put, submit_gathered_borrowed, BioBox, BioInPlace, BioLend, BioPool, BioSet, BvecAlloc,
+                BvecMempool, Gathered, Lent, Submitted};
 
 fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)
 }
 
-/// How many bvecs mapping @len bytes at @p takes: a page each for vmalloc
-/// memory, one for the direct map.
-pub fn buf_nr_bvecs(p: *const u8, len: usize) -> usize {
-    use crate::os::kernel::{is_vmalloc_addr, PAGE_SIZE};
-    if is_vmalloc_addr(p) {
-        return (len + (p as usize & (PAGE_SIZE - 1))).div_ceil(PAGE_SIZE);
-    }
-    1
-}
+pub use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs};
 
-/// How much of @len bytes at @p one bio maps, in at most BIO_MAX_VECS bvecs:
-/// all of them, but vmalloc memory spanning more pages - where @p is in its
-/// first page says how many fit.
-pub fn buf_bio_bytes(p: *const u8, len: usize) -> usize {
-    use crate::os::kernel::{is_vmalloc_addr, PAGE_SIZE};
-    if is_vmalloc_addr(p) {
-        return len.min(c::BIO_MAX_VECS as usize * PAGE_SIZE - (p as usize & (PAGE_SIZE - 1)));
-    }
-    len
+pub const BIO_INLINE_VECS: usize = 4;
+
+pub(crate) type BioVecs = InlineVec<c::bio_vec, BIO_INLINE_VECS, u16, BvecAlloc>;
+
+/// Where a bio's bvec table is: its own BioVecs, or another bio's - a clone's
+/// source's, init_borrowed()'s table's - read where they are now, as they
+/// grow. bi_io_vec is only ever where they were when the bio last went out to
+/// C: raw_mut() writes it, and nothing reads it but an ITER_BVEC's, which is
+/// the iter's table.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VecsAt {
+    Own,
+    /// A clone's, or a table its owner keeps - init_borrowed()'s: the bio
+    /// whose bvecs they are, which outlives it
+    Borrowed(NonNull<Bio>),
+    /// An ITER_BVEC's, which pinning its pages made the bio's, till it's
+    /// cleared for the next: the iter's table, which doesn't move - C's view
+    /// the one place its bvecs are
+    Iter,
 }
 
 #[pin_data(PinnedDrop)]
 #[repr(C)]
 #[derive(Init)]
 pub struct Bio {
-    bio:  c::bio,
+    bio:     c::bio,
+    #[init(BioVecs::new_in(BvecAlloc::NONE))]
+    vecs:    BioVecs,
+    #[init(VecsAt::Own)]
+    vecs_at: VecsAt,
     #[pin]
-    data: BioData,
+    data:    BioData,
     #[pin]
-    _pin: PhantomData<PhantomPinned>,
+    _pin:    PhantomData<PhantomPinned>,
 }
 
-/// bio_uninit(): a bioset's bio is uninit again by bio_put(), which is
-/// harmless - it frees nothing twice.
+/// bio_uninit(), and its bvecs freed: emptied first, as a bioset's bio is
+/// dropped again by bio_put() when what it's in fails to init - which frees
+/// nothing twice.
 #[pinned_drop]
 impl PinnedDrop for Bio {
     fn drop(self: Pin<&mut Self>) {
-        unsafe { crate::os::bio::uninit(self.raw_mut()) }
+        let this = unsafe { self.get_unchecked_mut() };
+        unsafe { crate::os::bio::uninit(&mut this.bio) };
+        drop(core::mem::replace(&mut this.vecs, BioVecs::new_in(BvecAlloc::NONE)));
     }
 }
 
 // SAFETY: a bio is no thread's - submitted on one, completed on another. Not
 // Sync: two holders of a &Bio could write its data at once.
 unsafe impl Send for Bio {}
+
+impl Bio {
+    /// After its bvecs change: C's view of them.
+    fn sync(self: Pin<&mut Self>) {
+        let this = self.project();
+        assert!(matches!(this.vecs_at, VecsAt::Own), "changing the bvecs of a bio whose table isn't its own");
+        let (nr, max) = (this.vecs.len() as u16, this.vecs.capacity().min(c::BIO_MAX_VECS as usize) as u16);
+        bi_io_vec!(*this.bio) = this.vecs.as_mut_ptr();
+        this.bio.bi_vcnt = nr;
+        this.bio.bi_max_vecs = max;
+    }
+}
 
 // Unnameable outside the bio code: crate-visible for the place machinery's
 // Field, in a module nothing else can reach
@@ -179,9 +200,8 @@ use data::BioData;
 
 impl Bio {
     /// # Safety
-    /// @ptr is a bio, valid for 'a, and not in flight.
+    /// @ptr is a Bio's c::bio, its first field, valid for 'a, and not in flight.
     pub unsafe fn from_raw<'a>(ptr: *const c::bio) -> &'a Self {
-        // SAFETY: the caller's; Bio is a transparent c::bio
         unsafe { &*ptr.cast() }
     }
 
@@ -192,21 +212,87 @@ impl Bio {
         unsafe { Pin::new_unchecked(&mut *ptr.cast()) }
     }
 
+    /// bio_init() of a Bio at @bio whose bvecs are @table's, all of them,
+    /// which it doesn't own: a data update's read and write bios share its
+    /// pages' bio's.
+    ///
+    /// # Safety
+    /// @bio is room for a Bio, not in flight; @table outlives the bio, and
+    /// its bvecs don't change while the bio's IO is in flight.
+    pub unsafe fn init_borrowed(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, table: &Bio, opf: u32) {
+        let nr = table.vecs.len() as u16;
+        unsafe {
+            (&raw mut (*bio).vecs).write(BioVecs::new_in(BvecAlloc::NONE));
+            (&raw mut (*bio).vecs_at).write(VecsAt::Borrowed(NonNull::from(table)));
+            crate::os::bio::init(bio.cast(), bdev, table.vecs.as_ptr().cast_mut(), nr, opf);
+            (*bio).bio.bi_vcnt = nr;
+        }
+    }
+
     pub fn raw(&self) -> &c::bio {
         &self.bio
     }
 
+    /// An ITER_BVEC's are the iter's. A clone has none of its own: its
+    /// source's are its, from its position.
+    fn bvecs(&self) -> &[c::bio_vec] {
+        match self.vecs_at {
+            VecsAt::Iter       => unsafe { core::slice::from_raw_parts(self.table(), self.bio.bi_vcnt.into()) },
+            _ if self.cloned() => &[],
+            _                  => &self.vecs_owner().vecs,
+        }
+    }
+
     pub fn nr_vecs(&self) -> u16 {
-        self.bio.bi_vcnt
+        self.bvecs().len() as u16
     }
 
     pub fn max_vecs(&self) -> u16 {
-        self.bio.bi_max_vecs
+        self.vecs.capacity().min(c::BIO_MAX_VECS as usize) as u16
     }
 
-    /// For its own methods, and C's: never moved out of.
+    /// For its own methods, and C's: never moved out of, bi_io_vec pointed at
+    /// its bvecs, where they are now.
     pub(crate) fn raw_mut(self: Pin<&mut Self>) -> &mut c::bio {
-        self.project().bio
+        let this = self.project();
+        match *this.vecs_at {
+            VecsAt::Own         => bi_io_vec!(*this.bio) = this.vecs.as_mut_ptr(),
+            VecsAt::Borrowed(s) => bi_io_vec!(*this.bio) = unsafe { s.as_ref() }.bvecs().as_ptr().cast_mut(),
+            VecsAt::Iter        => {}
+        }
+        this.bio
+    }
+
+    fn vecs_owner(&self) -> &Bio {
+        match self.vecs_at {
+            VecsAt::Own | VecsAt::Iter => self,
+            VecsAt::Borrowed(s)        => unsafe { s.as_ref() },
+        }
+    }
+
+    /// bi_io_vec, for an ITER_BVEC's table: from 7.4 a union's, so unsafe to
+    /// read, for a bio no dma-buf has - none of ours.
+    #[allow(unused_unsafe)]
+    fn table(&self) -> *mut c::bio_vec {
+        unsafe { bi_io_vec!(self.bio) }
+    }
+
+    /// After C has filled it, pinning its pages: what C pushed onto its vec,
+    /// in the room past its length, now its own - or, an ITER_BVEC's, C took
+    /// the iter's table for it, which is its table till it's done.
+    #[cfg(kernel)]
+    pub(crate) fn raw_filled(self: Pin<&mut Self>) {
+        let table = self.table();
+        let this = self.project();
+        match *this.vecs_at {
+            VecsAt::Own if table == this.vecs.as_mut_ptr() => {
+                let nr = usize::from(this.bio.bi_vcnt);
+                assert!(nr >= this.vecs.len() && nr <= this.vecs.capacity(), "C filled a bio past its vec's room");
+                unsafe { this.vecs.set_len(nr) };
+            }
+            VecsAt::Own => *this.vecs_at = VecsAt::Iter,
+            _ => {}
+        }
     }
 
     pub fn range(&self) -> BioRange<'_> {
@@ -231,8 +317,7 @@ impl Bio {
     /// Panics on a clone.
     pub(crate) fn range_all(&self) -> BioRange<'_> {
         assert!(!self.cloned(), "the _all walk of a cloned bio: its bvecs are its parent's");
-        // SAFETY: its own bvecs, bi_vcnt of them
-        let size = (0..u32::from(self.bio.bi_vcnt)).map(|i| unsafe { self.bvec(i) }.bv_len).sum();
+        let size = self.bvecs().iter().map(|bv| bv.bv_len).sum();
         // INVARIANT: from its first bvec, all of them
         BioRange {
             data: &self.data,
@@ -254,38 +339,50 @@ impl Bio {
         req_op(self.bio.bi_opf)
     }
 
-    /// @len bytes of @buf mapped. Panics if they don't fit, where
-    /// __bio_add_page() would write past the bvecs. For a buffer kept by other
-    /// means than the bio - a stripe buffer's blocks, kept by the IO's round;
-    /// BioBuffersMapped holds it.
+    /// @len bytes of @buf mapped, pushed onto its bvecs. Panics if there's no
+    /// room for them. For a buffer kept by other means than the bio - a stripe
+    /// buffer's blocks, kept by the IO's round; BioBuffersMapped holds it.
     ///
     /// # Safety
     /// @buf is the allocators' - in the direct map, or vmalloc - and outlives
     /// its place in the bvecs; nothing has the bio in flight.
-    pub unsafe fn map(self: Pin<&mut Self>, buf: *mut u8, len: usize) {
-        let len = u32::try_from(len).expect("mapping a buffer of 4G or more into a bio");
-        let bio = self.raw_mut();
-        #[cfg(kernel)]
-        // SAFETY: the caller's
-        if unsafe { c::is_vmalloc_addr(buf.cast()) } {
-            assert!(unsafe { c::bio_add_vmalloc(bio, buf.cast(), len) },
-                    "mapping {len} bytes of vmalloc memory: more pages than the bio's bvecs");
-            return;
+    pub unsafe fn map(mut self: Pin<&mut Self>, buf: *mut u8, len: usize) {
+        let len32 = u32::try_from(len).expect("mapping a buffer of 4G or more into a bio");
+        for bv in unsafe { crate::os::bio::bvecs(buf, len) } {
+            self.as_mut().project().vecs.push(bv)
+                .unwrap_or_else(|_| panic!("mapping {len} bytes into a bio: no room for its bvecs"));
         }
-        assert!(bio.bi_vcnt < bio.bi_max_vecs, "mapping {len} bytes: the bio's bvecs are full");
-        // SAFETY: the caller's, and a bvec free
-        unsafe { crate::os::bio::add_virt_nofail(bio, buf.cast(), len) };
+        self.as_mut().sync();
+        self.raw_mut().bi_iter.bi_size += len32;
     }
 
-    /// Panics if the bio's bvecs are full.
+    /// @len bytes of @folio from @offset, its last bvec. Panics if the bio's
+    /// bvecs are full.
     ///
     /// # Safety
-    /// @folio stays locked till the bio's done with it.
+    /// @folio stays locked, or in writeback, till the bio's done with it.
     #[cfg(kernel)]
-    pub unsafe fn add_folio<A>(self: Pin<&mut Self>, folio: &crate::os::folio::Folio<A>) {
-        let bio = self.raw_mut();
-        assert!(bio.bi_vcnt < bio.bi_max_vecs, "adding a folio: the bio's bvecs are full");
-        unsafe { c::bio_add_folio_nofail(bio, folio.as_ptr(), folio.size(), 0) }
+    pub unsafe fn add_folio_part<A>(mut self: Pin<&mut Self>, folio: &crate::os::folio::Folio<A>, offset: usize,
+                                    len: usize) {
+        assert!(offset + len <= folio.size(), "adding {len} bytes at {offset} of a folio of {}", folio.size());
+        assert!(self.vecs.len() < usize::from(self.max_vecs()), "adding a folio: the bio's bvecs are full");
+        self.as_mut().project().vecs
+            .push(c::bio_vec { bv_page: folio.as_ptr().cast(), bv_len: len as u32, bv_offset: offset as u32 })
+            .expect("a bvec, into the room it has");
+        self.as_mut().sync();
+        self.raw_mut().bi_iter.bi_size += len as u32;
+    }
+
+    /// Emptied, for another IO from scratch: bio_reset(), its bvecs and its
+    /// position gone - a bio whose pages are new each IO, a dio's.
+    pub fn clear(mut self: Pin<&mut Self>, opf: u32) {
+        let this = self.as_mut().project();
+        if *this.vecs_at == VecsAt::Iter {
+            *this.vecs_at = VecsAt::Own;
+        }
+        this.vecs.clear();
+        unsafe { crate::os::bio::reset(self.as_mut().raw_mut(), core::ptr::null_mut(), opf) };
+        self.sync();
     }
 
     /// For another IO: bio_reset(), its bvecs kept - the buffers it was made
@@ -294,12 +391,10 @@ impl Bio {
     /// own. BioOwner::reset(), which checks the buffers serve @opf.
     pub(super) fn reset(mut self: Pin<&mut Self>, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
         let size = self.as_ref().range_all().len();
-        let bio = self.as_mut().raw_mut();
-        let vcnt = bio.bi_vcnt;
         // SAFETY: had by &mut, so not in flight
-        unsafe { crate::os::bio::reset(bio, bdev, opf) };
-        bio.bi_vcnt = vcnt;
-        bio.bi_iter.bi_size = size;
+        unsafe { crate::os::bio::reset(self.as_mut().raw_mut(), bdev, opf) };
+        self.as_mut().sync();
+        self.raw_mut().bi_iter.bi_size = size;
     }
 
     /// Panics if @range isn't this bio's.
@@ -369,11 +464,11 @@ impl Bio {
 
     /// Its bvecs after the first @nr dropped, and its position with them -
     /// their pages given back by whoever has them.
-    pub fn truncate_vecs(self: Pin<&mut Self>, nr: u16) {
-        let bio = self.raw_mut();
-        assert!(nr <= bio.bi_vcnt, "truncating a bio to more bvecs than it has");
-        bio.bi_vcnt = nr;
-        bio.bi_iter.bi_size = 0;
+    pub fn truncate_vecs(mut self: Pin<&mut Self>, nr: u16) {
+        assert!(usize::from(nr) <= self.vecs.len(), "truncating a bio to more bvecs than it has");
+        self.as_mut().project().vecs.truncate(nr.into());
+        self.as_mut().sync();
+        self.raw_mut().bi_iter.bi_size = 0;
     }
 
     /// Its completed IO's result: a BLK_STS_* errcode on failure.
@@ -390,11 +485,14 @@ impl Bio {
         self.bio.bi_flags & (1 << c::BIO_CLONED as u32) != 0
     }
 
-    /// # Safety
-    /// @idx is one of its bvecs - bi_vcnt of them, or its parent's, a clone's.
-    unsafe fn bvec(&self, idx: u32) -> c::bio_vec {
-        // SAFETY: the caller's
-        unsafe { *bi_io_vec!(self.bio).add(idx as usize) }
+    /// Its bvec @idx: its own, or a clone's source's as they are now. Panics
+    /// past them - a clone's source emptied under it.
+    fn bvec(&self, idx: u32) -> c::bio_vec {
+        let vecs = self.vecs_owner().bvecs();
+        *vecs.get(idx as usize).unwrap_or_else(|| {
+            let whose = if self.cloned() { "a clone, of its source's" } else { "a bio" };
+            panic!("reading bvec {idx} of {whose} {}", vecs.len())
+        })
     }
 }
 
@@ -458,8 +556,8 @@ impl ToText for Bio {
         prt_symbol(out, b.bi_end_io.map_or(0, |f| f as usize as c_ulong));
         out.newline();
 
-        write!(out, "bi_vcnt\t{}\n", b.bi_vcnt);
-        write!(out, "bi_max_vecs\t{}\n", b.bi_max_vecs);
+        write!(out, "bi_vcnt\t{}\n", self.nr_vecs());
+        write!(out, "bi_max_vecs\t{}\n", self.max_vecs());
     }
 }
 

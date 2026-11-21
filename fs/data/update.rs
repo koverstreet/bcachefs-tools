@@ -36,8 +36,8 @@ use crate::data::nocow_locking::{self, NocowKind};
 use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::util::alloc::{init_at, Box, Flags, KVec, Kmalloc};
-use crate::util::bio::{pages, BioInPlace, HasBio};
+use crate::util::alloc::{init_at, Flags};
+use crate::util::bio::{Bio, BioBuffersOwned, BioInPlace, HasBio};
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::locking::MemallocFlags;
@@ -48,6 +48,7 @@ use crate::util::log::should_print_err;
 use crate::{bch_err_ratelimited, here_str, prt};
 use crate::debug::trace::events;
 use core::ffi::{c_int, c_uint};
+use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
@@ -135,7 +136,8 @@ pub struct data_update {
 
     pub rbio: Rbio,
     pub op: c::bch_write_op,
-    pub bvecs: Option<Box<[c::bio_vec], Kmalloc>>,
+    /* both bios' bvecs, and their pages: what the read reads, the write writes */
+    pub pages: Bio,
 }
 
 /// The read failed only because the extent changed under it - the key was
@@ -399,21 +401,16 @@ impl c::data_update {
         let fs = self.fs();
         let block_size = u32::from(fs.opts().block_size.get());
         let buf_bytes = buf_bytes.next_multiple_of(block_size);
-        let nr_vecs = pages::nr_vecs(buf_bytes as usize);
 
-        let bvecs = KVec::from_elem(c::bio_vec::default(), nr_vecs as usize).map_err(|_| BchError::from(c::ENOMEM))?;
-        let bvecs = self.bvecs.insert(bvecs.into_boxed_slice()).as_mut_ptr();
-
-        // SAFETY: its bios, and the bvecs just made for them
+        // SAFETY: its bios, and the pages just made for them
         unsafe {
-            crate::os::bio::init(self.rbio.bio.as_ptr(), core::ptr::null_mut(), bvecs, nr_vecs as u16,
-                                 c::req_op_REQ_OP_READ);
-            crate::os::bio::init((&raw mut self.op.wbio.bio).cast(), core::ptr::null_mut(), bvecs, nr_vecs as u16, 0);
+            Bio::init_pages(&raw mut self.pages, &fs.bio_bounce, block_size, buf_bytes as usize, Flags::empty())
+                .map_err(|_| BchError::from(c::ENOMEM))?;
+            Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), core::ptr::null_mut(), &self.pages,
+                               c::req_op_REQ_OP_READ);
+            Bio::init_borrowed(&raw mut self.op.wbio.bio, core::ptr::null_mut(), &self.pages, 0);
         }
-        if pages::alloc_pages(self.op.wbio.bio_mut().raw_mut(), block_size, buf_bytes as usize, Flags::empty()).is_err() {
-            self.bios_free();
-            return Err(c::ENOMEM.into());
-        }
+        self.op.wbio.bio_mut().set_size(buf_bytes);
 
         let read_for = if self.opts.type_ == Type::scrub {
             ReadFor::BCH_READ_FOR_scrub
@@ -432,11 +429,13 @@ impl c::data_update {
         Ok(())
     }
 
-    /// The write bio's pages and the bvecs bios_init() made, freed.
+    /// The pages bios_init() made, and their bio, freed.
     fn bios_free(&mut self) {
-        // SAFETY: the pages are alloc_pages()'s; neither bio is in flight
-        unsafe { pages::free_pages_pool(&self.fs().bio_bounce, self.op.wbio.bio_mut().raw_mut()) };
-        self.bvecs = None;
+        // SAFETY: bios_init()'s, dropped once: neither bio is in flight
+        unsafe {
+            BioBuffersOwned::from_raw(&self.fs().bio_bounce).free_from(Pin::new_unchecked(&mut self.pages));
+            core::ptr::drop_in_place(&raw mut self.pages);
+        }
     }
 
     fn trace(&self, ret: c_int) {
@@ -855,10 +854,10 @@ impl c::data_update {
             return false;
         }
 
-        assert!(self.op.wbio.bio.nr_vecs() != 0, "a data update's write bio must own its pages");
+        assert!(self.pages.nr_vecs() != 0, "a data update's write without its pages");
 
         self.op.crc = crc;
-        self.op.wbio.bio_mut().raw_mut().bi_iter.bi_size = crc.compressed_size << 9;
+        self.op.wbio.bio_mut().set_size(crc.compressed_size << 9);
         true
     }
 

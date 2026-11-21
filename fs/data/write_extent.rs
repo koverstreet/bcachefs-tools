@@ -12,7 +12,7 @@ use crate::data::write::{to_wbio, wbio_init, write_op_error};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
-use crate::util::bio::{bio_put, pages, Bio};
+use crate::util::bio::{bio_put, pages, Bio, BioBuffersOwned, Buffers};
 use crate::util::volatile::Out;
 use crate::os::kernel::{unlikely, PAGE_SIZE, WRITE};
 use c::WriteFlags as w;
@@ -99,16 +99,12 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: &c::bio, buf: *mut c
      * for data buffers we're just passing through and are about to be
      * overwritten with real data:
      */
-    let _ = pages::alloc_pages(wbio.bio_mut().raw_mut(), block_size, output_available as usize,
-                               flags::NOIO | flags::SKIP_ZERO);
-
     let required = output_available.min(fs.opts().encoded_extent_max.get());
-
-    if unlikely(wbio.bio.range().len() < required) {
+    {
         let _noio = MemallocFlags::noio();
-        fs.bio_bounce.alloc(wbio.bio_mut().raw_mut(), required as usize)
-            .expect("a write's bounce pages, outside NORECLAIM");
-    }
+        BioBuffersOwned::fill(wbio.bio_mut(), (&fs.bio_bounce, block_size, output_available as usize,
+                                               required as usize, flags::NOIO | flags::SKIP_ZERO))
+    }.unwrap_or_else(|e| panic!("a write's bounce pages, outside NORECLAIM: {e}"));
 
     bio
 }
@@ -147,8 +143,8 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
     let dst_len = (crc.uncompressed_size as usize) << 9;
 
     /* bio must own its pages: */
-    assert!(op.wbio.bio.raw().bi_vcnt != 0, "decoding an extent in a bio that doesn't own its pages");
-    assert!((crc.live_size as usize) << 9 <= pages::bytes(op.wbio.bio.raw()),
+    assert!(op.wbio.bio.nr_vecs() != 0, "decoding an extent in a bio that doesn't own its pages");
+    assert!((crc.live_size as usize) << 9 <= pages::bytes(&op.wbio.bio),
             "decoding an extent bigger than its bio");
     assert!(op.wbio.bio.range().len() == crc.compressed_size << 9, "decoding a bio that isn't its extent");
 
@@ -363,7 +359,7 @@ unsafe fn dst_put(fs: &Fs, dst: *mut c::bio) {
     unsafe {
         let wbio = to_wbio::<c::DevWriteRefKind>(dst);
         if wbio.wbio.bits.bounce() != 0 {
-            pages::free_pages_pool(&fs.bio_bounce, &mut *dst);
+            BioBuffersOwned::from_raw(&fs.bio_bounce).free_from(Bio::from_raw_mut(dst));
         }
         if wbio.wbio.bits.put_bio() != 0 {
             bio_put(dst);

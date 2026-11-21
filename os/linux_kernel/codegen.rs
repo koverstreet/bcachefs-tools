@@ -161,7 +161,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "folio_get", "folio_put", "folio_detach_private", "folio_test_uptodate", "folio_test_dirty",
     "folio_mark_uptodate", "folio_end_read", "filemap_add_folio", "readahead_gfp_mask",
     "mapping_min_folio_order", "mapping_max_folio_order", "__readahead_folio", "xa_load", "xa_is_value",
-    "bio_add_folio_nofail", "folio_unlock", "filemap_lock_folio",
+    "folio_unlock", "filemap_lock_folio",
     "folio_zero_segment", "folio_zero_range", "folio_zero_segments", "flush_dcache_folio",
     "mapping_writably_mapped", "mapping_gfp_mask",
     "folio_mkclean", "filemap_dirty_folio",
@@ -182,6 +182,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "bio_set_dev", "bio_iov_vecs_to_alloc", "bio_release_pages",
     // util/bio/owned.rs
     "bio_inc_remaining",
+    // os/linux_kernel/bio.rs: a bvec of memory, which a Bio pushes - static
+    // inlines, and an export
+    "virt_to_folio", "folio_address", "vmalloc_to_page",
     // vfs/direct_write.rs: static inlines, and the VFS's write checks
     "inode_dio_begin", "inode_dio_end", "iocb_is_dsync", "generic_write_checks", "generic_write_sync",
     "file_remove_privs",

@@ -308,7 +308,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
 
         let io = unsafe { w.io.expect("an io, just made").as_mut() };
         assert!(core::ptr::eq(io.inode, inode.raw()), "a writepage io of another inode");
-        unsafe { c::bio_add_folio_nofail(io.op.wbio.bio_mut().raw_mut(), folio.as_ptr(), sectors << 9, offset << 9) };
+        unsafe { io.op.wbio.bio_mut().add_folio_part(&folio, offset << 9, sectors << 9) };
 
         io.op.res.sectors.set(io.op.res.sectors.get() + reserved_sectors);
         io.op.i_sectors_delta -= i64::from(dirty_sectors);

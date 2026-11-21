@@ -11,9 +11,10 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::pin::Pin;
+use core::ptr;
 
 use super::pages::{self, BouncePool};
-use super::{buf_nr_bvecs, Bio, BioRange};
+use super::{buf_nr_bvecs, Bio, BioInPlace, BioRange};
 use crate::c;
 use crate::errcode::BchError;
 use crate::os::kernel::PAGE_SIZE;
@@ -66,7 +67,8 @@ unsafe impl Buffers for BioBuffersUnmanaged {
 /// the size, how much of it the pool makes up - all of it, or for a bio that
 /// can do with less, a write's, that much - and how to allocate.
 pub struct BioBuffersOwned<'p> {
-    pool: &'p BouncePool,
+    pool:      &'p BouncePool,
+    used_pool: bool,
 }
 
 unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
@@ -76,17 +78,73 @@ unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
         pages::nr_vecs(size)
     }
 
-    fn fill(bio: Pin<&mut Bio>, (pool, bs, size, at_least, gfp): Self::Src<'_>) -> Result<Self, BchError> {
-        let bio = bio.raw_mut();
-        if let Err(e) = pages::alloc_pages_pool(pool, bio, bs, size, at_least, gfp) {
-            unsafe { pages::free_pages_pool(pool, bio) };
-            return Err(e.into());
+    fn fill(mut bio: Pin<&mut Bio>, (pool, bs, size, at_least, gfp): Self::Src<'_>) -> Result<Self, BchError> {
+        let ret = pages::alloc_pages_pool(pool, bio.as_mut().project().vecs, bs, size, at_least, gfp);
+        if ret.is_err() {
+            unsafe { pages::free_pages_pool(pool, bio.as_mut().project().vecs) };
         }
-        Ok(Self { pool })
+        bio.as_mut().sync();
+        let used_pool = ret?;
+        /* the pool's whole elements may come to more */
+        let covers = pages::vecs_len(&bio.vecs).min(if used_pool { at_least } else { size });
+        bio.raw_mut().bi_iter.bi_size = covers as u32;
+        Ok(Self { pool, used_pool })
     }
 
-    fn release(&mut self, bio: Pin<&mut Bio>) {
-        unsafe { pages::free_pages_pool(self.pool, bio.raw_mut()) }
+    fn release(&mut self, mut bio: Pin<&mut Bio>) {
+        unsafe { pages::free_pages_pool(self.pool, bio.as_mut().project().vecs) };
+        bio.sync();
+    }
+}
+
+impl<'p> BioBuffersOwned<'p> {
+    /// The pages fill() put on a raw bounce bio, which kept no
+    /// BioBuffersOwned of them, or Bio::init_pages()'s: for free_from().
+    ///
+    /// # Safety
+    /// The bio it's freed from has fill()'s bvecs, from @pool, or
+    /// init_pages()'s.
+    pub unsafe fn from_raw(pool: &'p BouncePool) -> Self {
+        Self { pool, used_pool: false }
+    }
+
+    /// What it holds freed, from @bio, which they were put on beside it, not
+    /// owned by it: a fragment task's home's.
+    pub fn free_from(mut self, mut bio: Pin<&mut Bio>) {
+        self.release(bio.as_mut());
+        bio.raw_mut().bi_iter.bi_size = 0;
+    }
+
+    /// Whether the pool made some of it up: its elements may be its reserve,
+    /// and a bio holding those mustn't ask for more till they're freed.
+    pub fn used_pool(&self) -> bool {
+        self.used_pool
+    }
+}
+
+impl Bio {
+    /// bio_init() of a Bio at @bio with @size bytes of pages, from the page
+    /// allocator alone, each allocation a multiple of @bs - failing as it
+    /// does, with nothing made: a data update's, whose read and write bios
+    /// borrow its bvecs, and which frees its pages from it as @pool's.
+    ///
+    /// # Safety
+    /// @bio is room for one, not in flight.
+    pub unsafe fn init_pages(bio: *mut Bio, pool: &BouncePool, bs: u32, size: usize, gfp: Flags)
+        -> Result<(), AllocError>
+    {
+        unsafe {
+            BioInPlace::own_at(bio.cast(), ptr::null_mut(), pages::nr_vecs(size), 0)?;
+            let mut b = Pin::new_unchecked(&mut *bio);
+            if let Err(e) = pages::alloc_pages(b.as_mut().project().vecs, bs, size, gfp) {
+                pages::free_pages_pool(pool, b.as_mut().project().vecs);
+                ptr::drop_in_place(bio);
+                return Err(e);
+            }
+            b.as_mut().sync();
+            b.raw_mut().bi_iter.bi_size = size as u32;
+        }
+        Ok(())
     }
 }
 
@@ -103,17 +161,20 @@ unsafe impl Buffers for BioBuffersPages {
         pages::nr_vecs(size)
     }
 
-    fn fill(bio: Pin<&mut Bio>, (bs, size, gfp): Self::Src<'_>) -> Result<Self, BchError> {
-        let bio = bio.raw_mut();
-        if pages::alloc_pages(bio, bs, size, gfp).is_err() {
-            unsafe { pages::free_pages(bio) };
+    fn fill(mut bio: Pin<&mut Bio>, (bs, size, gfp): Self::Src<'_>) -> Result<Self, BchError> {
+        if pages::alloc_pages(bio.as_mut().project().vecs, bs, size, gfp).is_err() {
+            unsafe { pages::free_pages(bio.as_mut().project().vecs) };
+            bio.sync();
             return Err(c::ENOMEM.into());
         }
+        bio.as_mut().sync();
+        bio.raw_mut().bi_iter.bi_size = size as u32;
         Ok(Self)
     }
 
-    fn release(&mut self, bio: Pin<&mut Bio>) {
-        unsafe { pages::free_pages(bio.raw_mut()) }
+    fn release(&mut self, mut bio: Pin<&mut Bio>) {
+        unsafe { pages::free_pages(bio.as_mut().project().vecs) };
+        bio.sync();
     }
 }
 
@@ -134,7 +195,7 @@ unsafe impl<'a> Buffers for BioClone<'a> {
     }
 
     fn fill(bio: Pin<&mut Bio>, src: BioRange<'a>) -> Result<Self, BchError> {
-        unsafe { clone_from(bio.raw_mut(), src.bio().raw(), src.pos()) };
+        unsafe { clone_from(bio, src.bio(), src.pos()) };
         Ok(Self(PhantomData))
     }
 
@@ -145,13 +206,19 @@ unsafe impl<'a> Buffers for BioClone<'a> {
 ///
 /// # Safety
 /// @s's bvecs outlive @b.
-pub(super) unsafe fn clone_from(b: &mut c::bio, s: &c::bio, iter: c::bvec_iter) {
+pub(super) unsafe fn clone_from(b: Pin<&mut Bio>, s: &Bio, iter: c::bvec_iter) {
+    let owner = s.vecs_owner();
+    let table = owner.bvecs().as_ptr().cast_mut();
+    let this = b.project();
+    *this.vecs_at = super::VecsAt::Borrowed(ptr::NonNull::from(owner));
+    let (b, s) = (this.bio, &s.bio);
     assert!(b.bi_bdev.is_null(), "a clone made for a device: it's bio_set_dev()'s, after");
     b.bi_flags |= 1 << c::BIO_CLONED;
     b.bi_ioprio = s.bi_ioprio;
     clone_hints(b, s);
     b.bi_iter = iter;
     bi_io_vec!(clone b, s);
+    bi_io_vec!(b) = table;
 }
 
 /// The rest of __bio_clone()'s copies, as each kernel's struct bio has them;

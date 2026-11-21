@@ -316,6 +316,13 @@ pub mod c {
     #[cfg(kernel)]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
+    // kernel::bindings', private here so they're unnameable: a Bio's bvecs
+    // are its vec, which C's fillers would write behind
+    macro_rules! hidden { ($($f:ident),*) => { $(#[cfg(kernel)] const $f: () = ();)* } }
+    hidden!(bio_add_page, __bio_add_page, bio_add_folio, bio_add_folio_nofail, bio_add_virt_nofail,
+            bio_add_vmalloc, bio_add_vmalloc_chunk, bio_add_hw_page, bio_add_hw_folio, bio_add_pc_page,
+            bio_add_zone_append_page, bio_iov_iter_get_pages, bio_iov_bvec_set);
+
     // codegen.rs blocklists it: ours, whether kernel::bindings has it or not
     #[cfg(kernel)]
     #[repr(C)]

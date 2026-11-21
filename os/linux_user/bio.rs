@@ -5,7 +5,6 @@
 
 use crate::c;
 use crate::os::kernel::PAGE_SIZE;
-use core::ffi::c_void;
 use core::mem::offset_of;
 use core::sync::atomic::{AtomicI32, Ordering::{AcqRel, SeqCst}};
 
@@ -40,22 +39,27 @@ unsafe fn flagged(bio: *const c::bio, bit: u32) -> bool {
     unsafe { (*bio).bi_flags & (1 << bit) != 0 }
 }
 
+/// The bvecs of @len bytes at @buf: one, its page - its address here - and
+/// the offset into it, however many pages it spans.
+///
 /// # Safety
-/// @bio is a bio, not in flight, with a bvec free; @vaddr is the allocators',
-/// @len bytes of it in one bvec, and outlives its place there.
-pub unsafe fn add_virt_nofail(bio: *mut c::bio, vaddr: *mut c_void, len: u32) {
-    unsafe {
-        crate::warn_on_once!(flagged(bio, c::BIO_CLONED));
-        crate::warn_on_once!((*bio).bi_vcnt >= (*bio).bi_max_vecs);
+/// @buf is the allocators', @len bytes of it.
+pub unsafe fn bvecs(buf: *mut u8, len: usize) -> impl Iterator<Item = c::bio_vec> {
+    core::iter::once(c::bio_vec {
+        bv_page:   buf.map_addr(|a| a & !(PAGE_SIZE - 1)).cast(),
+        bv_len:    u32::try_from(len).expect("a bvec of 4G or more"),
+        bv_offset: (buf.addr() & (PAGE_SIZE - 1)) as u32,
+    })
+}
 
-        let bv = &mut *(*bio).bi_io_vec.add((*bio).bi_vcnt.into());
-        bv.bv_page   = vaddr.map_addr(|a| a & !(PAGE_SIZE - 1)).cast();
-        bv.bv_offset = (vaddr.addr() & (PAGE_SIZE - 1)) as u32;
-        bv.bv_len    = len;
+/// How many bvecs mapping @len bytes at @p takes: one.
+pub fn buf_nr_bvecs(_p: *const u8, _len: usize) -> usize {
+    1
+}
 
-        (*bio).bi_iter.bi_size += len;
-        (*bio).bi_vcnt += 1;
-    }
+/// How much of @len bytes at @p one bio maps: all of it, in one bvec.
+pub fn buf_bio_bytes(_p: *const u8, len: usize) -> usize {
+    len
 }
 
 unsafe fn remaining_done(bio: *mut c::bio) -> bool {

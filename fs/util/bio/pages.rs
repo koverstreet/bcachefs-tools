@@ -24,6 +24,7 @@ use crate::util::mempool::Mempool;
 use pin_init::{pin_data, pin_init, PinInit};
 
 use super::iter::page_address;
+use super::{Bio, BioVecs};
 
 /// The bounce pool's element size
 const POOL_LEN: usize = PAGE_SIZE << c::PAGE_ALLOC_COSTLY_ORDER;
@@ -48,19 +49,23 @@ impl BouncePool {
         }? BchError)
     }
 
-    /// Allocates the rest of @size into @bio, waiting for elements - in a
+    /// Allocates the rest of @size onto @vecs, waiting for elements - in a
     /// NORECLAIM scope, where it can't, failing, with what it had allocated
-    /// left on the bio. It hands out whole elements, so the bio's size is
-    /// trimmed to @size after.
-    pub fn alloc(&self, bio: &mut c::bio, size: usize) -> Result<(), AllocError> {
+    /// left on them. It hands out whole elements, so they may come to more
+    /// than @size. Whether it took any: its elements may be the reserve's, and
+    /// one holding those mustn't ask again till they're freed.
+    pub fn alloc(&self, vecs: &mut BioVecs, size: usize) -> Result<bool, AllocError> {
+        let mut have = vecs_len(vecs);
+        let took = have < size;
         let _lock = self.lock.lock();
 
-        while (bio.bi_iter.bi_size as usize) < size {
+        while have < size {
+            vecs.reserve(1)?;
             let p = self.pool.alloc_raw()?;
-            unsafe { crate::os::bio::add_virt_nofail(bio, p.as_ptr().cast(), POOL_LEN as u32) };
+            push_alloc(vecs, p.as_ptr().cast(), POOL_LEN);
+            have += POOL_LEN;
         }
-        bio.bi_iter.bi_size = bio.bi_iter.bi_size.min(size as u32);
-        Ok(())
+        Ok(took)
     }
 }
 
@@ -92,37 +97,49 @@ unsafe impl AllocGfp for BouncePages {
     }
 }
 
-/// Allocates pages into @bio up to @size bytes, each allocation a multiple of
-/// @bs. On AllocError, what was allocated stays on the bio. The bio must have
-/// the bvecs for them.
-pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: Flags) -> Result<(), AllocError> {
+pub(super) fn vecs_len(vecs: &BioVecs) -> usize {
+    vecs.iter().map(|bv| bv.bv_len as usize).sum()
+}
+
+/// Allocates pages onto @vecs up to @size bytes, each allocation a multiple
+/// of @bs. On AllocError, what was allocated stays on them.
+pub fn alloc_pages(vecs: &mut BioVecs, bs: u32, size: usize, gfp: Flags) -> Result<(), AllocError> {
     let bs = bs as usize;
     assert!(bs.is_power_of_two() && size % bs == 0, "allocating {size} bytes for a bio of {bs} byte blocks");
 
-    while (bio.bi_iter.bi_size as usize) < size {
-        let b = (size - bio.bi_iter.bi_size as usize).min(bs.max(POOL_LEN));
+    let mut have = vecs_len(vecs);
+    while have < size {
+        let b = (size - have).min(bs.max(POOL_LEN));
         assert!(b % bs == 0, "a bio's pages {b} bytes, not a multiple of its {bs} byte blocks");
 
-        // SAFETY: no pointers in
+        vecs.reserve(1)?;
         let p = NonNull::new(crate::util::alloc::bio_pages_alloc(b, gfp)).ok_or(AllocError)?;
-        // SAFETY: a fresh allocation of @b bytes, the bio's now
-        unsafe { crate::os::bio::add_virt_nofail(bio, p.as_ptr(), b as u32) };
+        push_alloc(vecs, p.as_ptr().cast(), b);
+        have += b;
     }
     Ok(())
 }
 
-/// Allocates @size bytes into @bio with alloc_pages(), and the rest, up to
+/// @len bytes at @p, a fresh allocation in the direct map - one bvec - pushed
+/// where one was reserved.
+fn push_alloc(vecs: &mut BioVecs, p: *mut u8, len: usize) {
+    for bv in unsafe { crate::os::bio::bvecs(p, len) } {
+        vecs.push(bv).expect("pushing a bvec reserved");
+    }
+}
+
+/// Allocates @size bytes onto @vecs with alloc_pages(), and the rest, up to
 /// @at_least, from @pool - failing as the pool does, what was allocated left
-/// on the bio. The bio must have the bvecs for them.
-pub fn alloc_pages_pool(pool: &BouncePool, bio: &mut c::bio, bs: u32, size: usize, at_least: usize, gfp: Flags)
-    -> Result<(), AllocError>
+/// on them. Whether it took from the pool, as BouncePool::alloc() says.
+pub(super) fn alloc_pages_pool(pool: &BouncePool, vecs: &mut BioVecs, bs: u32, size: usize, at_least: usize, gfp: Flags)
+    -> Result<bool, AllocError>
 {
     // short is fine: the pool has the rest
-    let _ = alloc_pages(bio, bs, size, gfp);
-    if (bio.bi_iter.bi_size as usize) < at_least {
-        pool.alloc(bio, at_least)?;
+    let _ = alloc_pages(vecs, bs, size, gfp);
+    match vecs_len(vecs) < at_least {
+        true  => pool.alloc(vecs, at_least),
+        false => Ok(false),
     }
-    Ok(())
 }
 
 /// The most bvecs @size takes, from alloc_pages() and the bounce pool: one an
@@ -133,34 +150,31 @@ pub fn nr_vecs(size: usize) -> u16 {
 
 /// How many bytes of pages @bio has, alloc_pages()'s: its bvecs' lengths,
 /// whatever size each allocation was.
-pub fn bytes(bio: &c::bio) -> usize {
-    (0..bio.bi_vcnt as usize)
-        .map(|i| unsafe { (*bi_io_vec!(bio).add(i)).bv_len } as usize)
-        .sum()
+pub fn bytes(bio: &Bio) -> usize {
+    bio.range_all().len() as usize
 }
 
-/// Frees what alloc_pages() and the bounce pool put on @bio.
+/// Frees what alloc_pages() and the bounce pool put on @vecs, and empties
+/// them.
 ///
 /// # Safety
-/// Each of @bio's bvecs is a whole allocation of one of them, and the bio's
-/// done with: not in flight.
-pub unsafe fn free_pages_pool(pool: &BouncePool, bio: &mut c::bio) {
-    unsafe { free(Some(pool), bio) }
+/// Each of @vecs is a whole allocation of one of them, done with: no bio of
+/// them in flight.
+pub(super) unsafe fn free_pages_pool(pool: &BouncePool, vecs: &mut BioVecs) {
+    unsafe { free(Some(pool), vecs) }
 }
 
-/// Frees what alloc_pages() put on @bio.
+/// Frees what alloc_pages() put on @vecs, and empties them.
 ///
 /// # Safety
-/// Each of @bio's bvecs is a whole allocation of alloc_pages()'s, and the
-/// bio's done with: not in flight.
-pub unsafe fn free_pages(bio: &mut c::bio) {
-    unsafe { free(None, bio) }
+/// Each of @vecs is a whole allocation of alloc_pages()'s, done with: no bio
+/// of them in flight.
+pub unsafe fn free_pages(vecs: &mut BioVecs) {
+    unsafe { free(None, vecs) }
 }
 
-unsafe fn free(pool: Option<&BouncePool>, bio: &mut c::bio) {
-    for i in 0..bio.bi_vcnt as usize {
-        // SAFETY: one of its bvecs
-        let bv = unsafe { *bi_io_vec!(bio).add(i) };
+unsafe fn free(pool: Option<&BouncePool>, vecs: &mut BioVecs) {
+    for bv in vecs.iter() {
         // SAFETY: the caller's: an allocation of bv_len, at its page's address
         unsafe {
             let p = page_address(NonNull::new(bv.bv_page).expect("a bvec's page")).add(bv.bv_offset as usize);
@@ -170,5 +184,5 @@ unsafe fn free(pool: Option<&BouncePool>, bio: &mut c::bio) {
             }
         }
     }
-    bio.bi_vcnt = 0;
+    vecs.clear();
 }
