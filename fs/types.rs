@@ -382,6 +382,9 @@ pub struct Dev {
     pub journal: c::journal_device,
     pub prev_journal_sector: Volatile<u64>,
 
+    /// The bios of writes' replicas on it: write_replicas.rs's
+    pub(crate) write_clones: Late<BioSet<crate::data::dev_bio::DevBio>>,
+
     #[pin]
     pub(crate) io_error_work: ReffedWork<io_error_work, crate::field!(ref_outer)>,
 
