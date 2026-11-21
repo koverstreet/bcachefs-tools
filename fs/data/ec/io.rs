@@ -17,7 +17,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
-use crate::sb::members::{DevIoRef, IoRefIdx};
+use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
 use crate::util::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, BioOwner, Gathered};
 use crate::util::gather::{Fold, Gather};
 use crate::os::kernel::{local_clock, WRITE};
@@ -94,24 +94,6 @@ pub struct EcBio {
 }
 
 crate::has_bio!(EcBio, bio);
-
-/// A block IO's device, by its io ref: a read's, or a write's.
-pub(crate) enum BlockDev {
-    Read(DevIoRef<c::DevReadRefKind>),
-    Write(DevIoRef<c::DevWriteRefKind>),
-}
-
-impl From<DevIoRef<c::DevReadRefKind>> for BlockDev {
-    fn from(ca: DevIoRef<c::DevReadRefKind>) -> Self {
-        BlockDev::Read(ca)
-    }
-}
-
-impl From<DevIoRef<c::DevWriteRefKind>> for BlockDev {
-    fn from(ca: DevIoRef<c::DevWriteRefKind>) -> Self {
-        BlockDev::Write(ca)
-    }
-}
 
 /// A round's bio done: its IO accounted against the device, and its block's
 /// error folded into the round's Gather - the device's, or its pointer gone

@@ -1297,6 +1297,35 @@ where
 /// device is open while it's held.
 pub type DevIoRef<R> = RefGuard<<R as IoRefIdx>::Count>;
 
+/// A block IO's device, by its io ref: a read's, or a write's.
+pub enum BlockDev {
+    Read(DevIoRef<c::DevReadRefKind>),
+    Write(DevIoRef<c::DevWriteRefKind>),
+}
+
+impl From<DevIoRef<c::DevReadRefKind>> for BlockDev {
+    fn from(ca: DevIoRef<c::DevReadRefKind>) -> Self {
+        BlockDev::Read(ca)
+    }
+}
+
+impl From<DevIoRef<c::DevWriteRefKind>> for BlockDev {
+    fn from(ca: DevIoRef<c::DevWriteRefKind>) -> Self {
+        BlockDev::Write(ca)
+    }
+}
+
+impl core::ops::Deref for BlockDev {
+    type Target = Dev;
+
+    fn deref(&self) -> &Dev {
+        match self {
+            BlockDev::Read(ca)  => ca,
+            BlockDev::Write(ca) => ca,
+        }
+    }
+}
+
 impl Dev {
     /// Its io ref count for @rw, READ or WRITE.
     pub fn io_ref(&self, rw: usize) -> &PercpuRef {
