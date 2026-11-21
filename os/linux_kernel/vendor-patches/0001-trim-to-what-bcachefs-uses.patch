@@ -23,6 +23,10 @@ bindings_helper.h names the headers the remaining modules need once the
 driver headers no longer pull them in: blk_types and blkdev (error.rs),
 delay (MAX_UDELAY_MS), uio (uaccess).
 
+uapi_helper.h is ioctl.h alone: the kernel crate's ioctl.rs is the uapi
+crate's one user, and the driver headers beside it aren't in every kernel
+(android/binder_netlink.h is 6.18).
+
 Refreshed at every re-vendor: a new upstream module is excluded, and its
 mod line and helper dropped, here.
 
@@ -944,3 +948,20 @@ index f1aecda7a90c..6e67fcbff834 100644
      pub fn write_dma<T: KnownSize + AsBytes + ?Sized>(
          &mut self,
          alloc: &Coherent<'_, T>,
+diff --git a/uapi/uapi_helper.h b/uapi/uapi_helper.h
+index 489748ef642c..c12f494a872b 100644
+--- a/uapi/uapi_helper.h
++++ b/uapi/uapi_helper.h
+@@ -6,12 +6,4 @@
+  * Sorted alphabetically.
+  */
+ 
+-#include <uapi/drm/drm.h>
+-#include <uapi/drm/nova_drm.h>
+-#include <uapi/drm/panthor_drm.h>
+-#include <uapi/linux/android/binder.h>
+-#include <uapi/linux/android/binder_netlink.h>
+ #include <uapi/linux/ioctl.h>
+-#include <uapi/linux/mdio.h>
+-#include <uapi/linux/mii.h>
+-#include <uapi/linux/ethtool.h>
