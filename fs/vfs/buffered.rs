@@ -254,7 +254,7 @@ impl ReadHooks for PagecacheRead<'_> {
         let mut bio = read.bio.lend();
 
         loop {
-            let (vcnt, max_vecs, iter) = (bio.raw().bi_vcnt, bio.raw().bi_max_vecs, bio.raw().bi_iter);
+            let (vcnt, max_vecs, iter) = (bio.nr_vecs(), bio.max_vecs(), bio.raw().bi_iter);
             let bio_sectors = iter.bi_size >> 9;
             if bio_sectors >= sectors || vcnt >= max_vecs {
                 break;

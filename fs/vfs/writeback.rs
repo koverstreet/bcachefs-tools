@@ -63,8 +63,8 @@ unsafe fn of_op(op: *mut c::bch_write_op) -> *mut Io {
     op.wrapping_byte_sub(core::mem::offset_of!(Io, op)).cast()
 }
 
-fn bio_full(bio: &c::bio, len: u32) -> bool {
-    bio.bi_vcnt >= bio.bi_max_vecs || bio.bi_iter.bi_size > u32::MAX - len
+fn bio_full(bio: &Bio, len: u32) -> bool {
+    bio.nr_vecs() >= bio.max_vecs() || bio.range().len() > u32::MAX - len
 }
 
 /*
@@ -76,8 +76,8 @@ fn bio_full(bio: &c::bio, len: u32) -> bool {
  * when the bounce path can be enhanced to accommodate larger source bios.
  */
 fn io_full(io: &Io, len: u32) -> bool {
-    let bio = io.op.wbio.bio.raw();
-    bio_full(bio, len) || bio.bi_iter.bi_size + len > c::BIO_MAX_VECS * PAGE_SIZE as u32
+    let bio = &io.op.wbio.bio;
+    bio_full(bio, len) || bio.range().len() + len > c::BIO_MAX_VECS * PAGE_SIZE as u32
 }
 
 /// Every sector of each of the io's folios left with no replicas - after
