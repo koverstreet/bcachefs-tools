@@ -738,7 +738,6 @@ use crate::{btree_trans, log_msg_ratelimited, prt};
 use c::WriteFlags as w;
 use crate::journal::flush_wait::{Flush, FlushWait};
 use core::fmt;
-use core::ops::ControlFlow;
 use core::pin::Pin;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -1107,19 +1106,35 @@ struct Pass {
     blocked: Option<(Blocked, u32)>,
 }
 
+enum Next<'a> {
+    Extent(Extent<'a>),
+    /// Fresh buckets for an extent that wouldn't decompress: go again
+    Again,
+    /// No more this pass: IO in flight already, the allocator blocked, or
+    /// the write failed
+    Stop,
+}
+
 /// The pass's next extent, its sectors allocated and its data written out of
-/// @data - Ok(None) to go again - or Break: no more this pass, with IO in
-/// flight already, or the allocator blocked. Out of line and not async: its
-/// transaction and memalloc scope go before its replicas are waited on.
+/// @data. Out of line and not async: its transaction and memalloc scope go
+/// before its replicas are waited on.
 #[allow(clippy::too_many_arguments)]
 fn next_extent<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Option<&c::data_update_index>,
-                   in_caller: bool, stuck: bool, retried_for_encoded: &mut bool, pass: &mut Pass)
-    -> ControlFlow<(), Result<Option<Extent<'s>>, BchError>>
-{
+                   in_caller: bool, stuck: bool, retried_for_encoded: &mut bool, pass: &mut Pass) -> Next<'s> {
     let fs = op.fs();
     let _noio = MemallocFlags::noio();
     let trans = btree_trans!(fs);
     let io_in_flight = op.open_buckets.nr != 0;
+    let failed = |op: &mut Op, e: BchError| {
+        op.set(w::submitted);
+        op.set_error(e);
+
+        /* Extra info on errors from the allocator: */
+        if update.is_none() {
+            write_op_error(op, None, op.pos.offset, format_args!("__bch2_write(): {e}"));
+        }
+        Next::Stop
+    };
 
     let ret = lockrestart_do(&trans, |t| {
         let wait = match (io_in_flight, in_caller) {
@@ -1162,38 +1177,40 @@ fn next_extent<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Optio
     });
     trans.unlock_long();
 
-    let ret = match ret {
-        Err(_) if io_in_flight => return ControlFlow::Break(()),
-        Err(e) if e.matches(Errcode::operation_blocked) => return ControlFlow::Break(()),
-        r => r,
+    let mut l = match ret {
+        Ok(l) => l,
+        Err(_) if io_in_flight => return Next::Stop,
+        Err(e) if e.matches(Errcode::operation_blocked) => return Next::Stop,
+        Err(e) => return failed(op, e),
     };
 
-    ControlFlow::Continue(ret.and_then(|mut l| {
-        l.open_buckets_get(&mut op.open_buckets);
-        let ret = write_extent(op, data, opf, update, &mut l);
+    l.open_buckets_get(&mut op.open_buckets);
+    let ret = write_extent(op, data, opf, update, &mut l);
 
-        /*
-         * The extent wouldn't decompress, so it has to go out as it came
-         * in - and it can't be split, so it needs a write point with room
-         * for the whole compressed extent. Retire the buckets that came up
-         * short and allocate fresh, the way __bch2_btree_node_alloc() does
-         * for a btree node.
-         *
-         * Once only: nothing constrains encoded_extent_max against bucket
-         * size, so fresh buckets aren't guaranteed to be big enough either
-         * and retrying on that would never end. Giving up means the write
-         * fails, which is what happened before any of this.
-         */
-        if unlikely(ret.as_ref().is_err_and(|e| e.matches(Errcode::data_write_need_fresh_buckets))) &&
-           !*retried_for_encoded {
-            *retried_for_encoded = true;
-            l.retire_short(op.crc.compressed_size);
-            return Ok(None);
-        }
+    /*
+     * The extent wouldn't decompress, so it has to go out as it came
+     * in - and it can't be split, so it needs a write point with room
+     * for the whole compressed extent. Retire the buckets that came up
+     * short and allocate fresh, the way __bch2_btree_node_alloc() does
+     * for a btree node.
+     *
+     * Once only: nothing constrains encoded_extent_max against bucket
+     * size, so fresh buckets aren't guaranteed to be big enough either
+     * and retrying on that would never end. Giving up means the write
+     * fails, which is what happened before any of this.
+     */
+    if unlikely(ret.as_ref().is_err_and(|e| e.matches(Errcode::data_write_need_fresh_buckets))) &&
+       !*retried_for_encoded {
+        *retried_for_encoded = true;
+        l.retire_short(op.crc.compressed_size);
+        return Next::Again;
+    }
 
-        pass.wp = Some(l.done());
-        ret.map(Some)
-    }))
+    pass.wp = Some(l.done());
+    match ret {
+        Ok(e)  => Next::Extent(e),
+        Err(e) => failed(op, e),
+    }
 }
 
 /// A pass's extents - as many as its write point and open buckets take -
@@ -1223,24 +1240,11 @@ async fn write_pass<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: 
             return pass;
         }
 
-        let extent = match next_extent(op, data, opf, update, in_caller, stuck, retried_for_encoded, &mut pass) {
-            ControlFlow::Break(()) => return pass,
-            ControlFlow::Continue(extent) => extent,
-        };
-
-        let Extent { data: written, more, reserved } = match extent {
-            Ok(Some(e)) => e,
-            Ok(None) => continue,
-            Err(e) => {
-                op.set(w::submitted);
-                op.set_error(e);
-
-                /* Extra info on errors from the allocator: */
-                if update.is_none() {
-                    write_op_error(op, None, op.pos.offset, format_args!("__bch2_write(): {e}"));
-                }
-                return pass;
-            }
+        let next = next_extent(op, data, opf, update, in_caller, stuck, retried_for_encoded, &mut pass);
+        let Extent { data: written, more, reserved } = match next {
+            Next::Extent(e) => e,
+            Next::Again => continue,
+            Next::Stop => return pass,
         };
 
         if !more {
