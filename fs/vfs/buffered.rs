@@ -199,7 +199,7 @@ impl PinnedDrop for ReadBio {
     /* its parts given back - failed, if its read did - before its caller's told */
     fn drop(self: Pin<&mut Self>) {
         let this = self.get_mut();
-        let ret = this.rbio.erased().ret();
+        let ret = this.rbio.ret();
         let bio = this.rbio.bio.get_mut();
         if ret.is_err() {
             for v in bio.vecs() {
