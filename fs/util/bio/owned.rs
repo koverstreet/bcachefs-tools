@@ -32,10 +32,12 @@ use core::ptr::NonNull;
 
 use pin_init::{pin_data, pin_init, PinInit};
 
-use super::{bio_of, of_bio, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, Buffers, HasBio,
+use core::task::{ready, Context, Poll};
+
+use super::{bio_of, of_bio, AtEnd, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, Buffers, HasBio,
             MapBuf};
 use crate::util::gather::{Fold, GatherRef, Width};
-use crate::util::task::{Exclusive, TaskSlot, Waiter};
+use crate::util::task::{waiter, Completion, Exclusive, Resumable, TaskSlot, Waiter};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::{Flags, init_at, stateless, Alloc, Allocator, Kmalloc};
@@ -534,6 +536,43 @@ where
     let t = unsafe { Pin::new_unchecked(&mut *of_bio::<T>(bio)) };
     let status = t.bio().status();
     r.put(t.done(status));
+}
+
+/// A box submitted: given up to its IO till it's done, and then, awaited,
+/// given back - its bio's status its own. Dropped before that, it asserts.
+#[must_use = "a bio's IO is waited on, or awaited, to its end"]
+pub struct Submitted<T: AtEnd, B: Buffers, A: Alloc, W: Waiter> {
+    /* first: its Done is the box's bi_private, so it's done before the box goes */
+    c: Completion<'static, W>,
+    b: Option<BioBox<T, B, A>>,
+}
+
+// moving it moves neither the box's allocation nor the Done in it
+impl<T: AtEnd, B: Buffers, A: Alloc, W: Waiter> Unpin for Submitted<T, B, A, W> {}
+
+impl<T: AtEnd, B: Buffers, A: Alloc> BioBox<T, B, A> {
+    /// Submitted, its T's at_end() run in the endio: Submitted's till it's
+    /// awaited.
+    pub fn submit_owned<W: Waiter>(mut self, waiter: W) -> Submitted<T, B, A, W> {
+        let bio: *mut c::bio = self.bio_mut().raw_mut();
+        let c = unsafe {
+            let c = Completion::init_at((&raw mut (*bio).bi_private).cast(), waiter);
+            (*bio).bi_end_io = Some(super::at_end_endio::<T, W>);
+            crate::os::blkdev::submit_bio(bio);
+            c
+        };
+        Submitted { c, b: Some(self) }
+    }
+}
+
+impl<T: AtEnd, B: Buffers, A: Alloc> Resumable for Submitted<T, B, A, waiter::Async> {
+    type Output = BioBox<T, B, A>;
+
+    fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        ready!(Pin::new(&mut this.c).poll_resume(cx));
+        Poll::Ready(this.b.take().expect("a submitted bio, given back twice"))
+    }
 }
 
 impl<T: HasBio, B: Buffers, A: Alloc> Deref for BioBox<T, B, A> {

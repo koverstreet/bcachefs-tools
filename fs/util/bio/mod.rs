@@ -22,8 +22,9 @@
 //!   bio's made, and the bio holds it (BioBuffersMapped); one whose owner
 //!   puts nothing in its bvecs is remapped (BioOwner::remap_read()).
 //! - In flight: submitted, until its endio. A gathered submit consumes the
-//!   box, and its endio drops it (BioBox::submit_gathered()); or submit()
-//!   borrows it for its BioFuture, which yields the status. Either way nothing
+//!   box, and its endio drops it (BioBox::submit_gathered()); submit()
+//!   borrows it for its BioFuture, which yields the status; submit_owned()
+//!   consumes it for its Submitted, which gives it back. Either way nothing
 //!   reaches a bio in flight - but submit_gathered(), the superblock's, which
 //!   is why it's unsafe. Those states are what make reading a bio's fields
 //!   through &Bio safe.
@@ -107,7 +108,7 @@ pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, 
 pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
                   Buffers, IoBuf, MapBuf};
 pub use owned::{bio_box_size, bio_put, inline_bio, inline_vecs, submit_gathered_borrowed, BioBox, BioInPlace, BioLend,
-                BioPool, BioSet, Gathered, Lent};
+                BioPool, BioSet, Gathered, Lent, Submitted};
 
 fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)
@@ -672,6 +673,20 @@ impl Resumable for BioFuture<'_, waiter::Async> {
 
 unsafe extern "C" fn done_endio<W: Waiter>(bio: *mut c::bio) {
     unsafe { Done::<W>::from_ptr((&raw mut (*bio).bi_private).cast()).complete() };
+}
+
+/// What a bio's T does as its IO completes, in its endio, before its waiter
+/// has it: only what must see the completion as it happens - a device's
+/// latency. The rest is its waiter's.
+pub trait AtEnd: HasBio {
+    fn at_end(&self);
+}
+
+unsafe extern "C" fn at_end_endio<T: AtEnd, W: Waiter>(bio: *mut c::bio) {
+    unsafe {
+        (*of_bio::<T>(bio)).at_end();
+        Done::<W>::from_ptr((&raw mut (*bio).bi_private).cast()).complete()
+    }
 }
 
 unsafe extern "C" fn mapped_gathered_endio(bio: *mut c::bio) {
