@@ -160,12 +160,14 @@ where
     }
 
     /// The task of the future @make makes from the home, started @at: the
-    /// box is the task's from here, freed when it's done.
+    /// box is the task's from here, freed when it's done. @make is called and
+    /// dropped before this returns, so what it holds need only outlive the
+    /// call.
     ///
     /// # Safety
-    /// @at's queue, and what @make holds and its future borrows beyond the
-    /// home, outlive the task; the home, handed @make as 'static, is borrowed
-    /// by nothing but the future it makes.
+    /// @at's queue, and what the future borrows beyond the home, outlive the
+    /// task; the home, handed @make as 'static, is borrowed by nothing but the
+    /// future it makes.
     pub unsafe fn start(self, at: Spawn<'q, '_>, list: &'q TaskList, make: M) {
         let home = ManuallyDrop::new(self).home;
         unsafe {
