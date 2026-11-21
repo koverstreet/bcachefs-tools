@@ -34,7 +34,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::io::{SbFieldOps, SbResize};
 use crate::types::{Le32, Le64};
-use crate::util::bio::{Bio, BioRange};
+use crate::util::bio::BioRange;
 use crate::util::Printbuf;
 use crate::format::{Bversion, Nonce};
 use crate::os::checksum::{Checksum, Crc32c, Crc64, Xxh64};
@@ -407,20 +407,20 @@ impl Fs {
 // ── For C ────────────────────────────────────────────────────────────────
 
 impl Fs {
-    /// @bio's data checksummed afresh, as @new_csum_type, in three: @len_a
+    /// @range's data checksummed afresh, as @new_csum_type, in three: @len_a
     /// sectors into @crc_a, @len_b into @crc_b, and the rest - having checked
     /// it against @crc_old, what it was read with: the new checksums merged, if
     /// they merge, else it checksummed again whole. Can't encrypt or decrypt,
     /// so both types are encryption, or neither.
     #[allow(clippy::too_many_arguments)]
-    pub fn rechecksum_bio(&self, bio: &Bio, version: Bversion, crc_old: c::bch_extent_crc_unpacked,
+    pub fn rechecksum_bio(&self, range: BioRange<'_>, version: Bversion, crc_old: c::bch_extent_crc_unpacked,
                           crc_a: Option<&mut c::bch_extent_crc_unpacked>,
                           crc_b: Option<&mut c::bch_extent_crc_unpacked>,
                           len_a: u32, len_b: u32, new_csum_type: c::CsumType) -> Result<(), BchError> {
         use crate::data::ptrs::{crc_is_compressed, extent_nonce};
         let fs = self;
         let (old_ty, new_ty) = (crc_old.csum_type.get(), new_csum_type);
-        let sectors = bio.raw().bi_iter.bi_size >> 9;
+        let sectors = range.len() >> 9;
 
         assert!(len_a + len_b <= sectors, "rechecksumming {len_a} + {len_b} sectors of a bio of {sectors}");
         assert_eq!(crc_old.uncompressed_size, sectors, "rechecksumming a bio that isn't its crc's extent");
@@ -432,7 +432,7 @@ impl Fs {
         let mut splits = [(crc_a, len_a), (crc_b, len_b), (None, sectors - len_a - len_b)]
             .map(|(crc, len)| (crc, len, c::bch_csum::default()));
 
-        let (mut r, mut nonce) = (bio.range(), extent_nonce(version, &crc_old));
+        let (mut r, mut nonce) = (range, extent_nonce(version, &crc_old));
         for (crc, len, csum) in &mut splits {
             if mergeable || crc.is_some() {
                 *csum = fs.checksum_range(new_ty, nonce, r.take(*len << 9));
@@ -444,7 +444,7 @@ impl Fs {
         let merged = if mergeable {
             splits.iter().fold(c::bch_csum::default(), |m, (_, len, csum)| new_ty.merge(m, *csum, (*len << 9) as usize))
         } else {
-            fs.checksum_range(old_ty, extent_nonce(version, &crc_old), bio.range())
+            fs.checksum_range(old_ty, extent_nonce(version, &crc_old), range)
         };
 
         // in constant time, as C's bch2_crc_cmp() means to be

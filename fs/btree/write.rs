@@ -33,7 +33,7 @@ use crate::types::{Le16, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
 use crate::util::backref::BackRef;
-use crate::util::bio::inline_vecs;
+use crate::util::bio::{inline_vecs, HasBio};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::workqueue::Queue;
@@ -181,7 +181,8 @@ async fn write_task<'h>(wbio: Pin<&'h mut WriteBio>, fs: BackRef<Fs>, b: BackRef
         ptr.set_offset(ptr.offset() + u64::from(sector_offset));
     }
 
-    let errs = write_replicas(fs, wbio, &w.bounce[..w.len()], DataType::btree, &*at, None, Resume::INLINE).await;
+    let errs = write_replicas(fs, HasBio::bio_mut(wbio), &w.bounce[..w.len()], DataType::btree, &*at, Resume::INLINE)
+        .await;
 
     /* in the last replica's endio */
     let first = w.first;

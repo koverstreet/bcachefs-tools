@@ -107,8 +107,8 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
 pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
                   Buffers, IoBuf, MapBuf};
-pub use owned::{bio_box_size, bio_put, inline_bio, inline_vecs, submit_gathered_borrowed, BioBox, BioInPlace, BioLend,
-                BioPool, BioSet, Gathered, Lent, Submitted};
+pub use owned::{bio_box_size, bio_put, inline_bio, inline_vecs, BioBox, BioInPlace, BioLend, BioPool, BioSet, Gathered,
+                Lent, Submitted};
 
 fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)

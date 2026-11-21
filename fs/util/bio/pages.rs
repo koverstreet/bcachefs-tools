@@ -134,14 +134,6 @@ pub fn nr_vecs(size: usize) -> u16 {
     size.div_ceil(POOL_LEN).try_into().expect("a bio's pages in more than 64k allocations")
 }
 
-/// How many bytes of pages @bio has, alloc_pages()'s: its bvecs' lengths,
-/// whatever size each allocation was.
-pub fn bytes(bio: &c::bio) -> usize {
-    (0..bio.bi_vcnt as usize)
-        .map(|i| unsafe { (*bi_io_vec!(bio).add(i)).bv_len } as usize)
-        .sum()
-}
-
 /// Frees what alloc_pages() and the bounce pool put on @bio.
 ///
 /// # Safety
