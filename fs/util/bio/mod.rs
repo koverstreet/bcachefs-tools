@@ -485,8 +485,7 @@ unsafe impl HasBio for Bio {
     const BIO_OFFSET: usize = 0;
 }
 
-/// A struct's bio field: a Bio, or a C-shared struct's c::bio - the same
-/// memory, Bio being transparent - or a BioLend, its bio AT into it.
+/// A struct's bio field: a Bio, or a BioLend, its bio AT into it.
 ///
 /// # Safety
 /// A bio is AT bytes into the field, and ends it.
@@ -494,7 +493,6 @@ pub unsafe trait BioField {
     const AT: usize = 0;
 }
 unsafe impl BioField for Bio {}
-unsafe impl BioField for c::bio {}
 
 #[doc(hidden)]
 pub const fn bio_field_at<B: BioField>(_: *const B) -> usize {
