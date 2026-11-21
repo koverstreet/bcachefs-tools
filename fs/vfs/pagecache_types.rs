@@ -8,7 +8,7 @@ use crate::cstructs::c;
 use crate::locking::{Locked, SpinLockIrq};
 use cstruct_macros::{bitfield, bch_enum, BitfieldMembers, MaybeZeroable, TypeInfo};
 use nestify::nest;
-use core::sync::atomic::{AtomicI32, AtomicU16};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32};
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -97,11 +97,18 @@ pub struct FolioState {
 #[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_folio {
     pub write_count: AtomicI32,
+    pub read_count: AtomicU32,
+    /* the read's window handed out all of the folio from read_from on */
+    pub read_covered: AtomicBool,
+    pub read_failed: AtomicBool,
+    /* the lock's the caller's, waiting for the read: the last count keeps it */
+    pub read_callers: AtomicBool,
     /*
      * The data: sectors [0, partially_uptodate) are read but the folio
      * isn't uptodate. One offset suffices because reads start at the front
-     * of the folio; 0 means nothing partial, so only
-     * readpage_bio_drop_unissued() maintains this.
+     * of the folio; 0 means nothing partial. Set by a read's window as it
+     * stops inside the folio; cleared by the read's last count if it failed,
+     * or read the rest.
      */
     pub partially_uptodate: AtomicU16,
     pub state: Locked<SpinLockIrq, FolioState>,
