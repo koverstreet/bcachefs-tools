@@ -34,7 +34,7 @@ pub struct WriteResult {
 // bio points into it.
 struct WriteState {
     op:    c::bch_write_op,
-    wbio:  c::bch_write_bio,
+    wbio:  Bio,
     bvecs: [c::bio_vec; MAX_BVECS],
 }
 
@@ -56,7 +56,7 @@ pub fn write(
     let mut state = Box::new(std::mem::MaybeUninit::<WriteState>::zeroed());
     let p = state.as_mut_ptr();
     let mut state = unsafe {
-        let bio = &raw mut (*p).wbio.bio;
+        let bio = &raw mut (*p).wbio;
         Bio::init_borrowed(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(), MAX_BVECS as u16, 0);
         Bio::from_raw_mut(bio.cast()).map(data.as_ptr().cast_mut(), data.len());
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));

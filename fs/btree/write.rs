@@ -33,7 +33,7 @@ use crate::types::{Le16, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
 use crate::util::backref::BackRef;
-use crate::util::bio::{BvecMempool, HasBio};
+use crate::util::bio::{Bio, BioInPlace, BvecMempool, HasBio};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::workqueue::Queue;
@@ -65,7 +65,7 @@ static NODE_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
 static NODE_WRITE_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let size = exclusive_size::<c::bch_write_bio, NodeWriteFut<'static>, &'static Mempool<Kmalloc>>();
+    let size = exclusive_size::<Bio, NodeWriteFut<'static>, &'static Mempool<Kmalloc>>();
     Mempool::init_static(&NODE_WRITES, Mempool::kmalloc(1, size), m)?;
     BvecMempool::init_static(&NODE_WRITE_BVECS, 1, m)
 }
@@ -168,7 +168,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, key: &NodeKey, failed: &c::bch_io_
 /// of the node's key, the key updated - on write_complete_wq, on the node's
 /// shard cpu where it has one - and the write done.
 #[in_place(NodeWriteFut)]
-async fn write_task<'h>(wbio: Pin<&'h mut c::bch_write_bio>, fs: BackRef<Fs>, b: BackRef<BtreeNode>, w: BsetWrite,
+async fn write_task<'h>(wbio: Pin<&'h mut Bio>, fs: BackRef<Fs>, b: BackRef<BtreeNode>, w: BsetWrite,
                         key: NodeKey, sector_offset: u16, shard_cpu: Option<u16>, start_time: u64) {
     let fs = unsafe { fs.get() };
 
@@ -407,7 +407,7 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
     let slot = {
         let _noio = MemallocFlags::noio();
         TaskSlot::exclusive_bio_in(&NODE_WRITES, &NODE_WRITE_BVECS, ptr::null_mut(), c::BIO_MAX_VECS as u16, WRITE_OPF,
-                                   c::bch_write_bio::new::<BchError>)
+                                   BioInPlace::init::<BchError>)
     }.expect("a node write's box: its pool waits for an element");
 
     /* write_in_flight pins the node's identity: reclaim leaves it */

@@ -11,7 +11,7 @@ use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::os::kobject::Kobject;
 use crate::util::projections::Volatile;
-use crate::util::bio::BioSet;
+use crate::util::bio::{Bio, BioSet};
 use crate::util::late::Late;
 use crate::util::place::Placed;
 use crate::util::time_stats::TimeStatsArray;
@@ -680,7 +680,7 @@ pub struct Fs {
     #[init(crate::data::read::retry_pool(), ENOMEM_fs_other_alloc)]
     pub read_retry_pool: crate::util::mempool::Mempool<crate::util::alloc::Kmalloc>,
     #[late(BioSet::new(1), ENOMEM_bio_write_init)]
-    pub bio_write: Late<BioSet<c::bch_write_bio>>,
+    pub bio_write: Late<BioSet<Bio>>,
     #[pin]
     #[init(crate::util::bio::pages::BouncePool::new(options), ENOMEM_bio_bounce_pages_init)]
     pub(crate) bio_bounce: crate::util::bio::pages::BouncePool,

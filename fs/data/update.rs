@@ -148,7 +148,7 @@ pub struct data_update {
 
     pub rbio: Rbio,
     pub op: c::bch_write_op,
-    pub wbio: c::bch_write_bio,
+    pub wbio: Bio,
     pub bvecs: Option<Box<[c::bio_vec], Kmalloc>>,
 }
 
@@ -430,9 +430,9 @@ impl c::data_update {
         unsafe {
             Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), core::ptr::null_mut(), bvecs, nr_vecs as u16,
                                c::req_op_REQ_OP_READ);
-            Bio::init_borrowed(&raw mut self.wbio.bio, core::ptr::null_mut(), bvecs, nr_vecs as u16, 0);
+            Bio::init_borrowed(&raw mut self.wbio, core::ptr::null_mut(), bvecs, nr_vecs as u16, 0);
         }
-        if pages::alloc_pages(self.wbio.bio_mut().raw_mut(), block_size, buf_bytes as usize, Flags::empty()).is_err() {
+        if pages::alloc_pages(self.wbio.raw_mut(), block_size, buf_bytes as usize, Flags::empty()).is_err() {
             self.bios_free();
             return Err(c::ENOMEM.into());
         }
@@ -450,14 +450,14 @@ impl c::data_update {
 
         let iter = c::bvec_iter { bi_sector: self.key().k.start_offset(), bi_size: buf_bytes, ..Default::default() };
         unsafe { self.rbio.bio.lend().bio_mut().set_iter(iter) };
-        self.wbio.bio_mut().set_ioprio(IOPRIO_IDLE);
+        self.wbio.set_ioprio(IOPRIO_IDLE);
         Ok(())
     }
 
     /// The write bio's pages and the bvecs bios_init() made, freed.
     fn bios_free(&mut self) {
         // SAFETY: the pages are alloc_pages()'s; neither bio is in flight
-        unsafe { pages::free_pages_pool(&self.fs().bio_bounce, self.wbio.bio_mut().raw_mut()) };
+        unsafe { pages::free_pages_pool(&self.fs().bio_bounce, self.wbio.raw_mut()) };
         self.bvecs = None;
     }
 
@@ -877,10 +877,10 @@ impl c::data_update {
             return false;
         }
 
-        assert!(self.wbio.bio.nr_vecs() != 0, "a data update's write bio must own its pages");
+        assert!(self.wbio.nr_vecs() != 0, "a data update's write bio must own its pages");
 
         self.op.crc = crc;
-        self.wbio.bio_mut().raw_mut().bi_iter.bi_size = crc.compressed_size << 9;
+        self.wbio.raw_mut().bi_iter.bi_size = crc.compressed_size << 9;
         true
     }
 

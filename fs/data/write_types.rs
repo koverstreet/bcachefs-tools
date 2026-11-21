@@ -31,26 +31,6 @@ pub enum WriteFlagBit {
     convert_unwritten,
 }
 
-/// A write's bio - the op's data, its replicas cloned from it - in the home
-/// its owner made it in, where it stays: a dio's, a writepage's, a data
-/// update's, a btree node write task's, or a BioBox of bio_write's.
-#[derive(MaybeZeroable, TypeInfo)]
-#[repr(C)]
-#[pin_data]
-pub struct bch_write_bio {
-    #[pin]
-    pub bio: crate::util::bio::Bio,
-}
-
-crate::has_bio!(c::bch_write_bio, bio);
-
-impl c::bch_write_bio {
-    /// Made where its bioset or its owner has its bio.
-    pub fn new<E>(bio: crate::util::bio::BioInPlace) -> impl ::pin_init::PinInit<Self, E> {
-        ::pin_init::pin_init!(Self { bio <- bio.init::<E>() }? E)
-    }
-}
-
 nest! {
     /* made by init(): bch2_write_op_init() */
     #[pin_data]

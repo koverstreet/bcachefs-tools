@@ -18,10 +18,10 @@ pub struct bch_writepage_io {
 
     /* must be last: */
     #[pin]
-    pub wbio: c::bch_write_bio,
+    pub wbio: crate::util::bio::Bio,
 }
 
-crate::has_bio!(bch_writepage_io, wbio.bio);
+crate::has_bio!(bch_writepage_io, wbio);
 
 // its task's home: its inode is held by its folios' writeback, on whichever
 // thread the task runs
