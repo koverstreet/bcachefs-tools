@@ -107,7 +107,7 @@ pub mod pages;
 
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
-pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
+pub use iter::{reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
 pub use buffers::{io_buf, Buffer, IoBuf, MapBuf, Pages, IO_ALIGN};
 #[cfg(kernel)]
 pub use bvec::{Bvec, FolioHold, Holds};
@@ -232,9 +232,9 @@ impl<B: Typed> Deref for Bio<B> {
 
 // XXX: through this, its bvecs can be swapped with another bio's - mem::swap()
 // of two &mut Bio - and its drop then releases what B never held. And Bio
-// still has add_folio_part(), truncate_vecs() and
-// pin_user_pages(), for the owners that aren't typed yet - each goes with its
-// last; till then a Bio<B> could gain bvecs that aren't B's through them.
+// still has pin_user_pages() and add_folio_part(), for the owners that aren't
+// typed yet - they go with their last; till then a Bio<B> could gain bvecs
+// that aren't B's through them.
 impl<B: Typed> DerefMut for Bio<B> {
     fn deref_mut(&mut self) -> &mut Bio {
         let () = Self::ERASES;
@@ -411,8 +411,8 @@ impl Bio {
     /// bvecs are full.
     ///
     /// # Safety
-    /// @folio stays held - locked, pinned, or the caller's - till the bio's
-    /// done with it.
+    /// @folio stays held - pinned, or the caller's - till the bio's done with
+    /// it.
     #[cfg(kernel)]
     pub(crate) unsafe fn add_folio_part<A>(&mut self, folio: &crate::os::folio::Folio<A>, offset: usize, len: usize) {
         assert!(offset + len <= folio.size(), "adding {len} bytes at {offset} of a folio of {}", folio.size());
@@ -485,8 +485,9 @@ impl Bio {
     }
 
     /// Its bvecs after the first @nr dropped, and its position with them -
-    /// their pages given back by whoever has them.
-    pub fn truncate_vecs(&mut self, nr: u16) {
+    /// their pages given back by whoever has them. The bio code's alone, as
+    /// map() is.
+    fn truncate_vecs(&mut self, nr: u16) {
         assert!(usize::from(nr) <= self.vecs.len(), "truncating a bio to more bvecs than it has");
         self.vecs.truncate(nr.into());
         self.sync(0);

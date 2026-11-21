@@ -116,7 +116,7 @@ fn set_up(b: &mut Bio, iter: &mut IovIter<'_>, offset: &mut u64, should_dirty: b
 #[in_place(SplitFut)]
 async fn split_task<'h>(mut split: Pin<&'h mut DioBio>, r: SplitRef, inum: c::subvol_inum, flags: F,
                         should_dirty: bool) {
-    r.put(read::read(&split.rbio, inum, flags, ()).await);
+    r.put(read::read(&split.rbio, inum, flags).await);
     split.as_mut().bio_mut().release_user_pages(should_dirty).await;
 }
 
@@ -163,7 +163,7 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersI
         Ok(()) => {
             let rbio = &dio.rbio;
 
-            let first = pin!(read::read(rbio, inum, flags, ()));
+            let first = pin!(read::read(rbio, inum, flags));
             let first = crate::eager!(first);
 
             let splits = if unlikely(iter.get().count() != 0) {

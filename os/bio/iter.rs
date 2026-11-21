@@ -87,11 +87,6 @@ pub fn reset_bvec_offset(iter: &mut c::bvec_iter) {
     bi_offset!(iter) = 0;
 }
 
-/// How far into its bvec @iter is.
-pub fn bvec_offset(iter: &c::bvec_iter) -> u32 {
-    bi_offset!(iter)
-}
-
 /// # Invariants
 /// @iter is a position of @bio: within its bvecs, bi_size bytes of them
 /// after it.

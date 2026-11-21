@@ -41,6 +41,10 @@
 //! data update's, are boxes from another of the module's pools, read in the
 //! caller's task (Planned::make()).
 //!
+//! The page cache walks its own extents (vfs/buffered.rs): each extent's bio
+//! is a read of its own, its one fragment planned and made as its task starts
+//! (extent_make()), and read in the task.
+//!
 //! Each fragment's task puts what it read to read()'s Gather, which read()
 //! awaits once its walk is done - having given back first what's the
 //! filesystem's, as once it's put the read and the filesystem may go. The
@@ -411,8 +415,9 @@ crate::has_bio!(FragmentBio, rbio.bio);
 /// from a pool of the module's, as the box may outlive the filesystem.
 static FRAGMENTS: Mempool<Kmalloc> = ::pin_init::zeroed();
 
-/// A retry's fragments, and a data update's, read in their caller's task: one
-/// at a time, each read and dropped before the next is made.
+/// The fragments read in their caller's task - a retry's, a data update's, a
+/// page cache extent's: each caller has one at a time, read and dropped before
+/// the next is made, so one in reserve keeps them all going.
 static FRAGMENT_BIOS: Mempool<Kmalloc> = ::pin_init::zeroed();
 
 static FRAGMENT_BVECS: BvecMempool = ::pin_init::zeroed();
@@ -435,7 +440,7 @@ pub fn pools_exit(q: &Quiesced<'_>) {
     FRAGMENTS.exit(q);
 }
 
-struct Fragment<'r> {
+pub(crate) struct Fragment<'r> {
     /* first, to be dropped before the bio it lists */
     listed: AsyncObjSlot,
     kind:   Kind<'r>,
@@ -559,8 +564,8 @@ struct RetryState<'r> {
     failures: FailureState,
 }
 
-/// Where a walk is: the read bio's own bi_iter - which a folio added to the
-/// bio grows - or, for a retry, the iter of what it rereads.
+/// Where a walk is: the read bio's own bi_iter, or, for a retry, the iter of
+/// what it rereads.
 trait WalkPos {
     fn get(&self, read: &Rbio) -> c::bvec_iter;
     fn set(&mut self, read: &Rbio, iter: c::bvec_iter);
@@ -649,12 +654,12 @@ enum Locate<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct Extent<'a> {
-    read_pos: Bpos,
-    btree:    Btree,
-    k:        BkeySC<'a>,
-    offset:   u32,
-    sectors:  u32,
+pub(crate) struct Extent<'a> {
+    pub(crate) read_pos: Bpos,
+    btree:               Btree,
+    pub(crate) k:        BkeySC<'a>,
+    offset:              u32,
+    pub(crate) sectors:  u32,
 }
 
 fn locate<'a>(t: &TransAttempt<'a, '_>, at: Locate<'a>, range: BioRange<'_>) -> Result<Extent<'a>, BchError> {
@@ -678,7 +683,7 @@ fn locate<'a>(t: &TransAttempt<'a, '_>, at: Locate<'a>, range: BioRange<'_>) -> 
 
 /// Its key copied into the attempt's memory: fragment_of() unlocks the
 /// transaction before it's done with it.
-fn extent_of<'a>(t: &TransAttempt<'a, '_>, read_pos: Bpos, k: BkeySC<'_>) -> Result<Extent<'a>, BchError> {
+pub(crate) fn extent_of<'a>(t: &TransAttempt<'a, '_>, read_pos: Bpos, k: BkeySC<'_>) -> Result<Extent<'a>, BchError> {
     let mut offset = (read_pos.offset - k.k.start_offset()) as i64;
     let sectors = k.k.size - offset as u32;
 
@@ -1306,7 +1311,8 @@ struct Planned<'r, 'k> {
 
 impl<'r> Planned<'r, '_> {
     /// The fragment, its bio from FRAGMENT_BIOS, made into @into: for a read
-    /// awaited in its caller's task - a retry's, a data update's.
+    /// awaited in its caller's task - a retry's, a data update's, a page cache
+    /// extent's.
     fn make(self, orig: &'r Rbio, into: &mut Option<Fragment<'r>>) -> Result<(), BchError> {
         let Planned { how, plan, ca, k } = self;
         let fs = orig.fs();
@@ -1778,7 +1784,11 @@ fn retry_boxed<'a>(read: &'a Rbio, f: Fragment<'a>, ret: Result<(), BchError>, a
 /// What it read is put to @r last, what's the filesystem's given back first:
 /// once it's put, the read and the filesystem may go.
 #[in_place(FragmentFut)]
-async fn fragment_task<'r>(r: ReadRef, mut f: Fragment<'r>, read: &'r Rbio) {
+async fn fragment_task<'r>(r: ReadRef, f: Fragment<'r>, read: &'r Rbio) {
+    r.put(fragment_read(f, read).await)
+}
+
+async fn fragment_read<'r>(mut f: Fragment<'r>, read: &'r Rbio) -> Result<(), BchError> {
     let ret = if f.plan.pick.do_ec_reconstruct {
         Ok(())
     } else {
@@ -1810,16 +1820,64 @@ async fn fragment_task<'r>(r: ReadRef, mut f: Fragment<'r>, read: &'r Rbio) {
     // the retry's state goes in its box, before the await: not in this future
     let inum = c::subvol_inum { subvol: read.subvol.into(), inum: f.plan.read_pos.inode };
     let retry = match f.end(read, ret, Locate::Inode(inum), None) {
-        Ok(ret) => return r.put(ret),
+        Ok(ret) => return ret,
         Err(retry) => retry,
     };
-    r.put(retry.await.ret);
+    retry.await.ret
+}
+
+/// A page cache extent's read: @e, into all of the bio of the Rbio the task's
+/// made for - planned as it's made, under @t, in the task's start(). A restart
+/// is put in @restart, and the task reads nothing.
+#[cfg(not(NO_BCACHEFS_FS))]
+pub(crate) fn extent_make<'a>(t: &'a TransAttempt<'_, '_>, e: Extent<'a>, flags: F,
+                              restart: &'a mut Result<(), BchError>)
+    -> impl FnOnce(&'static Rbio) -> ExtentFut<'static> + 'a
+{
+    move |read| {
+        let mut f = None;
+        let planned = fragment_of(t, read, read.bio().range(), e, None, flags, false, u32::MAX)
+            .and_then(|p| p.map_or(Ok(()), |p| p.make(read, &mut f)));
+        let restarted = match planned {
+            Ok(()) => false,
+            Err(e) if e.matches(err::transaction_restart) => {
+                *restart = Err(e);
+                true
+            }
+            Err(e) => {
+                read.set_ret(Err(e));
+                false
+            }
+        };
+        extent_task(f, read, restarted)
+    }
+}
+
+/// @read's one fragment read, if it has one; a @restarted read never was one,
+/// and isn't timed.
+#[cfg(not(NO_BCACHEFS_FS))]
+#[in_place(ExtentFut)]
+pub(crate) async fn extent_task<'r>(f: Option<Fragment<'r>>, read: &'r Rbio, restarted: bool) {
+    if restarted {
+        return;
+    }
+    if let Some(f) = f {
+        // started inline, in the walk's transaction: a reconstruct's retry
+        // makes one of its own
+        if f.plan.pick.do_ec_reconstruct {
+            requeue(Queue::system_dfl()).await;
+        }
+        if let Err(e) = fragment_read(f, read).await {
+            read.set_ret(Err(e));
+        }
+    }
+    read.done();
 }
 
 /// A fragment's task, started by @start: queued if it's a @reconstruct - the
 /// retry makes a transaction of its own, and this thread is in one - else
 /// inline, @start(Spawn::Inline), till it waits on its IO.
-fn start_task(t: &TransAttempt<'_, '_>, reconstruct: bool, start: impl FnOnce(Spawn<'static, 'static>)) {
+pub(crate) fn start_task(t: &TransAttempt<'_, '_>, reconstruct: bool, start: impl FnOnce(Spawn<'static, 'static>)) {
     if reconstruct {
         return start(Spawn::Queue(Queue::system_dfl()));
     }
@@ -1895,36 +1953,10 @@ pub async fn read_update(rbio: &mut Rbio, k: &BkeyI, btree: Btree, flags: F, dev
     read
 }
 
-/// What a read of the page cache does besides; for any other read, nothing.
-pub trait ReadHooks {
-    /// Extents ending at or before this sector are read already, and skipped.
-    fn read_from(&self) -> u64 {
-        0
-    }
-
-    /// @k runs @sectors past where the walk is, beyond the read bio's end:
-    /// what's added to the bio is read too.
-    fn extend(&mut self, _t: &TransAttempt<'_, '_>, _read: &Rbio, _k: BkeySC<'_>, _sectors: u32)
-        -> Result<(), BchError>
-    {
-        Ok(())
-    }
-
-    /// @range, of @read's bio, is about to be read, of @k.
-    fn extent(&mut self, _read: &Rbio, _range: BioRange<'_>, _k: BkeySC<'_>) {}
-
-    /// A transaction restart, @read's bi_iter where the walk stopped: true if
-    /// the read ends with what it's issued.
-    fn give_up(&mut self, _read: &Rbio) -> bool {
-        false
-    }
-}
-
-impl ReadHooks for () {}
-
 #[inline(never)]
-fn read_walk<'r, H: ReadHooks>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, hooks: &mut H, reads: &Reads,
-                               own: &mut Option<Fragment<'r>>) -> Result<(), BchError> {
+fn read_walk<'r>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, reads: &Reads, own: &mut Option<Fragment<'r>>)
+    -> Result<(), BchError>
+{
     let fs = orig.fs();
     let trans = btree_trans!(fs);
     let mut walk = Walk { read: orig, pos: BioIter, flags, split: false };
@@ -1933,15 +1965,7 @@ fn read_walk<'r, H: ReadHooks>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, h
     let ret = for_each_in_subvolume_max(&trans, &mut iter, pos(inum.inum, u64::MAX), inum.subvol as u32,
                                         BtreeIterFlags::SLOTS, |t, iter, k| {
         let step = extent_of(t, iter.pos(), k).and_then(|e| {
-            let end = e.read_pos.offset + u64::from(e.sectors);
-            if end <= hooks.read_from() {
-                return Ok(Step::More(((end - e.read_pos.offset) << 9) as u32));
-            }
-            if walk.range().len() >> 9 < e.sectors {
-                hooks.extend(t, orig, e.k, e.sectors)?;
-            }
             let (range, step) = walk.fragment(&e);
-            hooks.extent(orig, range, e.k);
             // the read's own bio, the walk's last, into @own: read by read(),
             // once it's done
             let started = fragment_of(t, orig, range, e, None, walk.flags, walk.split, u32::MAX)
@@ -1955,13 +1979,7 @@ fn read_walk<'r, H: ReadHooks>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, h
             Ok(step)
         });
         match step {
-            Err(e) if e.matches(err::transaction_restart) => {
-                if !hooks.give_up(orig) {
-                    return Err(e);
-                }
-                t.restarts_handled();
-                Ok(LoopFlow::Break(()))
-            }
+            Err(e) if e.matches(err::transaction_restart) => Err(e),
             step => match walk.step(step) {
                 ControlFlow::Break(ret) => ret.map(LoopFlow::Break),
                 ControlFlow::Continue(()) => Ok(LoopFlow::ContinueFrom(pos(inum.inum, walk.range().pos().bi_sector))),
@@ -1980,10 +1998,10 @@ fn read_walk<'r, H: ReadHooks>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, h
 }
 
 #[args_stored_once]
-pub async fn read<H: ReadHooks>(orig: &Rbio, inum: c::subvol_inum, flags: F, mut hooks: H) -> Result<(), BchError> {
+pub async fn read(orig: &Rbio, inum: c::subvol_inum, flags: F) -> Result<(), BchError> {
     stack_pin_init!(let reads = Reads::new());
     let mut own = None;
-    let walked = read_walk(orig, inum, flags, &mut hooks, &reads, &mut own);
+    let walked = read_walk(orig, inum, flags, &reads, &mut own);
     {
         // the read's own bio's task: the fragment in the task's future alone,
         // made where it lives, and the future gone before the wait below
