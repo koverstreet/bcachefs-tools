@@ -148,6 +148,9 @@ pub fn uuid_to_fsid(uuid: &[u8; 16]) -> c::__kernel_fsid_t {
 #[derive(Clone, Copy)]
 pub struct Mm(core::ptr::NonNull<c::mm_struct>);
 
+// for another thread to use: what it's for
+unsafe impl Send for Mm {}
+
 impl Mm {
     /// This task's: None for a kthread's.
     pub fn current() -> Option<Self> {
