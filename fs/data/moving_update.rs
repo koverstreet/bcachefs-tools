@@ -69,8 +69,8 @@ fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, si
 async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>, runq: Resume<'_>) {
     let read = {
         let d = &mut *u;
-        read_update(&mut d.rbio, d.index.k.key(), d.index.btree_id, d.index.opts.read_flags, d.index.opts.read_dev,
-                    runq).await
+        read_update(d.op.fs(), &mut d.rbio, d.index.k.key(), d.index.btree_id, d.index.opts.read_flags,
+                    d.index.opts.read_dev, runq).await
     };
     drop(read_io);
     u.read_done.store(true, Relaxed);

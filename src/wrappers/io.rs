@@ -111,7 +111,7 @@ pub fn read<'a>(
     let mut done = DoneWith::new();
     let (wait, r) = CompletionReturn::new(&mut done, waiter::Sync::current());
     let task = slot.init(Spawn::Queue(Queue::system_dfl()), fs.tasks(), async move |_: &()| {
-        r.complete(read::read(&b, inum, flags).await);
+        r.complete(read::read(fs, &b, inum, flags).await);
     }, None).expect("a queue's task: nothing in it fails");
     unsafe { task.start_unchecked() };
     wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read")?;

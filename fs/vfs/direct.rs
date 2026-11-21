@@ -15,6 +15,7 @@ use super::file::InodeFile;
 use crate::c;
 use crate::data::read::{self, ReadErrReport, Rbio};
 use crate::errcode::{Errcode, BchError};
+use crate::fs::Fs;
 use crate::inode_opts::get_inode;
 use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
@@ -114,16 +115,16 @@ fn set_up(b: &mut Bio, iter: &mut IovIter<'_>, offset: &mut u64, should_dirty: b
 }
 
 #[in_place(SplitFut)]
-async fn split_task<'h>(mut split: Pin<&'h mut DioBio>, r: SplitRef, inum: c::subvol_inum, flags: F,
+async fn split_task<'h>(mut split: Pin<&'h mut DioBio>, fs: &'h Fs, r: SplitRef, inum: c::subvol_inum, flags: F,
                         should_dirty: bool) {
-    r.put(read::read(&split.rbio, inum, flags).await);
+    r.put(read::read(fs, &split.rbio, inum, flags).await);
     split.as_mut().bio_mut().release_user_pages(should_dirty).await;
 }
 
 /// What's left of @iter past the dio's first bio, in splits.
 #[inline(never)]
 #[args_stored_once]
-async fn read_splits(rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum: c::subvol_inum, flags: F,
+async fn read_splits(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum: c::subvol_inum, flags: F,
                      should_dirty: bool) -> Result<(), BchError> {
     stack_pin_init!(let splits = Splits::new());
 
@@ -133,7 +134,7 @@ async fn read_splits(rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum:
     // A split takes as much of @iter as its pages pin into; one that fails
     // pinned none, and has nothing to release
     let started = {
-        let (fs, err_report) = (rbio.fs(), rbio.err_report.as_deref());
+        let err_report = rbio.err_report.as_deref();
         core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
             let mut split = TaskSlot::exclusive_bio_in(&SPLITS, &SPLIT_BVECS, ptr::null_mut(), iter.get().bio_vecs(),
                                                        c::req_op_REQ_OP_READ, |b| {
@@ -144,7 +145,7 @@ async fn read_splits(rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum:
         .try_for_each(|split| {
             let r = splits.get();
             unsafe {
-                split?.start(Spawn::Inline, fs.tasks(), move |s| split_task(s, r, inum, flags, should_dirty))
+                split?.start(Spawn::Inline, fs.tasks(), move |s| split_task(s, fs, r, inum, flags, should_dirty))
             };
             Ok(())
         })
@@ -154,7 +155,8 @@ async fn read_splits(rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum:
 }
 
 #[in_place(DioFut)]
-async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersIter, mut offset: u64,
+#[allow(clippy::too_many_arguments)]
+async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, fs: &'h Fs, end: End, mut iter: CallersIter, mut offset: u64,
                       inum: c::subvol_inum, flags: F, count: usize) {
     let should_dirty = iter.get().user_backed();
 
@@ -163,11 +165,11 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersI
         Ok(()) => {
             let rbio = &dio.rbio;
 
-            let first = pin!(read::read(rbio, inum, flags));
+            let first = pin!(read::read(fs, rbio, inum, flags));
             let first = crate::eager!(first);
 
             let splits = if unlikely(iter.get().count() != 0) {
-                read_splits(rbio, &mut iter, offset, inum, flags, should_dirty).await
+                read_splits(fs, rbio, &mut iter, offset, inum, flags, should_dirty).await
             } else {
                 Ok(())
             };
@@ -229,7 +231,7 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
 
     unsafe {
         let callers = CallersIter::new(&mut iter);
-        dio.start(Spawn::Inline, fs.tasks(), move |d| dio_task(d, end, callers, offset, inum, flags, len as usize))
+        dio.start(Spawn::Inline, fs.tasks(), move |d| dio_task(d, fs, end, callers, offset, inum, flags, len as usize))
     };
     drop(iter);
 

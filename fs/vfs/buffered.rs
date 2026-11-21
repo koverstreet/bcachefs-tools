@@ -284,7 +284,7 @@ fn read_extent(t: &TransAttempt<'_, '_>, w: &PagecacheRead<'_>, iter: &mut Reada
     }
 
     let mut restart = Ok(());
-    let make = read::extent_make(t, e, F::retry_if_stale | F::may_promote, &mut restart);
+    let make = read::extent_make(fs, t, e, F::retry_if_stale | F::may_promote, &mut restart);
     read::start_task(t, false, |at| unsafe {
         slot.start(at, fs.tasks(), move |h: Pin<&'static mut ReadBio>| make(h.into_ref().get_ref().rbio.erased()))
     });
