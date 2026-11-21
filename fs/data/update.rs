@@ -435,7 +435,7 @@ impl c::data_update {
                     &raw mut self.pages)?;
             let clone = BioInPlace::own(0, c::req_op_REQ_OP_READ,
                                         |at| at.borrowing().clone_of(self.pages.range()));
-            if let Err(e) = init_at(Rbio::update(fs, *io_opts, read_for, clone), &raw mut self.rbio) {
+            if let Err(e) = init_at(Rbio::update(*io_opts, read_for, clone), &raw mut self.rbio) {
                 core::ptr::drop_in_place(&raw mut self.pages);
                 return Err(e);
             }

@@ -137,10 +137,8 @@ fn should_promote(fs: &Fs, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<()
     Ok(())
 }
 
-fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
-                   orig: &'r Rbio, opts: &c::bch_inode_opts,
+fn promote_new<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, btree: Btree, k: BkeySC<'_>, opts: &c::bch_inode_opts,
                    failed: Option<&mut c::bch_io_failures>) -> Result<AwaitingRead<'r>, BchError> {
-    let fs = t.fs();
 
     if failed.is_none() {
         should_promote(fs, k, opts)?;
@@ -181,7 +179,7 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     // SAFETY: the task borrows nothing, and promote_wq is drained before the
     // filesystem is freed
     let task = unsafe {
-        update_task::spawn(t, Spawn::Queue(orig.fs().promote_wq()), orig.fs().tasks(), Errcode::nopromote_enomem)
+        update_task::spawn(t, Spawn::Queue(fs.promote_wq()), fs.tasks(), Errcode::nopromote_enomem)
     }?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
     // box is dropped
@@ -205,11 +203,10 @@ pub(crate) struct Promoted<'r> {
 // Out of line: inlined, the update's setup - its opts, copied into the task -
 // is in the frame of every read's fragment_of()
 #[inline(never)]
-pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, orig: &'r Rbio,
+pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, k: BkeySC<'_>, orig: &'r Rbio,
                                 opts: &c::bch_inode_opts, failed: Option<&mut c::bch_io_failures>)
     -> Result<Option<Promoted<'r>>, BchError>
 {
-    let fs = t.fs();
     let self_healing = failed.is_some();
     let btree = if k.k.key_type() == BkeyType::reflink_v {
         Btree::reflink
@@ -217,7 +214,7 @@ pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, orig: &
         Btree::extents
     };
 
-    match promote_new(t, btree, k, orig, opts, failed) {
+    match promote_new(t, fs, btree, k, opts, failed) {
         Ok(task) => {
             if self_healing {
                 orig.self_healing.store(true, Relaxed);

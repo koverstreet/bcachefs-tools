@@ -100,7 +100,7 @@ pub fn read<'a>(
 
     let mut b = BioBox::new(Buffer::nr_vecs(&&mut *buf), c::req_op_REQ_OP_READ, |b| {
         let into = &mut *buf;
-        Rbio::new(fs, opts, inum.subvol as u32, None, b.init_from(move |bio| Ok(Buffer::fill(bio, into))))
+        Rbio::new(opts, inum.subvol as u32, None, b.init_from(move |bio| Ok(Buffer::fill(bio, into))))
     })?;
     b.bio_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
     b.bio_mut().set_sector(offset >> 9);
