@@ -388,26 +388,35 @@ impl Rbio {
     }
 }
 
+/// A fragment's bio - the read's own, or, split, one of its own, and the read
+/// it's of.
 enum Kind<'r> {
     Own(LentBio<'r>),
-    Clone(BioBox<'r, Rbio, Pool>),
-    Bounce(BioBox<'r, Rbio<Pages<'r>>, Pool>),
+    Clone(&'r Rbio, BioBox<'r, Rbio, Pool>),
+    Bounce(&'r Rbio, BioBox<'r, Rbio<Pages<'r>>, Pool>),
     /// The promote's task, reading into its bio, started with what was read
     /// once the fragment's done with it
-    Promote(AwaitingRead<'r>),
+    Promote(&'r Rbio, AwaitingRead<'r>),
     /// A fragment's task's own bio, in its home: a clone, or bounced into the
     /// pages it has
-    Home(Pin<&'r mut FragmentBio>, Option<Pages<'r>>),
+    Home(&'r Rbio, Pin<&'r mut FragmentBio>, Option<Pages<'r>>),
 }
 
 impl Kind<'_> {
+    fn read(&self) -> &Rbio {
+        match self {
+            Kind::Own(b) => b.rbio,
+            Kind::Clone(read, _) | Kind::Bounce(read, _) | Kind::Promote(read, _) | Kind::Home(read, ..) => read,
+        }
+    }
+
     fn rbio(&self) -> &Rbio {
         match self {
             Kind::Own(b) => b.rbio,
-            Kind::Promote(task) => task.rbio(),
-            Kind::Clone(b) => b,
-            Kind::Bounce(b) => b.erased(),
-            Kind::Home(h, _) => &h.rbio,
+            Kind::Promote(_, task) => task.rbio(),
+            Kind::Clone(_, b) => b,
+            Kind::Bounce(_, b) => b.erased(),
+            Kind::Home(_, h, _) => &h.rbio,
         }
     }
 }
@@ -422,10 +431,10 @@ impl BioSubmit for Kind<'_> {
     fn bio_mut(&mut self) -> &mut Bio {
         match self {
             Kind::Own(LentBio { bio, .. }) => bio.bio_mut(),
-            Kind::Promote(task) => task.rbio_mut().bio.get_mut(),
-            Kind::Clone(b) => b.bio_mut(),
-            Kind::Bounce(b) => b.bio_mut(),
-            Kind::Home(h, _) => h.as_mut().bio_mut(),
+            Kind::Promote(_, task) => task.rbio_mut().bio.get_mut(),
+            Kind::Clone(_, b) => b.bio_mut(),
+            Kind::Bounce(_, b) => b.bio_mut(),
+            Kind::Home(_, h, _) => h.as_mut().bio_mut(),
         }
     }
 }
@@ -520,7 +529,7 @@ impl<'r> Fragment<'r> {
     }
 
     fn bounced(&self) -> bool {
-        matches!(self.kind, Kind::Bounce(..) | Kind::Promote(..) | Kind::Home(_, Some(_)))
+        matches!(self.kind, Kind::Bounce(..) | Kind::Promote(..) | Kind::Home(_, _, Some(_)))
     }
 
     #[cold]
@@ -529,25 +538,23 @@ impl<'r> Fragment<'r> {
     }
 
     /// Done, or its retry to await: of @range, if given, not the plan's.
-    fn end(self, read: &'r Rbio, ret: Result<(), BchError>, at: Locate<'r>, range: Option<BioRange<'r>>)
+    fn end(self, ret: Result<(), BchError>, at: Locate<'r>, range: Option<BioRange<'r>>)
         -> Result<Result<(), BchError>, RetryBox<'r>>
     {
         if self.plan.pick.do_ec_reconstruct || ret.is_err_and(should_retry) {
-            Err(retry_boxed(read, self, ret, at, range))
+            Err(retry_boxed(self, ret, at, range))
         } else {
             self.free(ret);
             Ok(ret)
         }
     }
 
-    fn end_in_retry(self, read: &RbioHdr, failed: &mut FailureState, ret: Result<(), BchError>)
-        -> Result<(), BchError>
-    {
+    fn end_in_retry(self, failed: &mut FailureState, ret: Result<(), BchError>) -> Result<(), BchError> {
         if self.plan.landed {
             failed.read = Some(self.plan.pick);
         }
         if let Err(e) = ret {
-            read.saw_error.store(true, Relaxed);
+            self.kind.read().saw_error.store(true, Relaxed);
             mark_failure(&self.plan.pick, &mut failed.io, e);
             failed_bio_to_text(&mut failed.io, self.bio(), e);
         }
@@ -555,29 +562,30 @@ impl<'r> Fragment<'r> {
         ret
     }
 
-    fn free(self, ret: Result<(), BchError>) {
+    /// Its bio and what's the filesystem's given back: the read it was of,
+    /// given back too.
+    fn free(self, ret: Result<(), BchError>) -> &'r Rbio {
         let Fragment { listed, kind, ca, plan, .. } = self;
         drop(listed);
         drop(ca);
 
-        let promote = match kind {
-            Kind::Promote(task) => {
+        let (read, promote) = match kind {
+            Kind::Own(b) => (b.rbio, None),
+            Kind::Promote(read, task) => {
                 task.rbio().set_ret(ret);
-                Some(task)
+                (read, Some(task))
             }
-            Kind::Home(mut h, Some(pages)) => {
+            Kind::Home(read, mut h, Some(pages)) => {
                 pages.free_from(h.as_mut().bio_mut());
-                None
+                (read, None)
             }
-            kind => {
-                drop(kind);
-                None
-            }
+            Kind::Clone(read, _) | Kind::Bounce(read, _) | Kind::Home(read, ..) => (read, None),
         };
         if let Some(task) = promote {
-            let read = ReadDone::unretried(ret, Some(plan.pick));
-            unsafe { task.start(read) };
+            let done = ReadDone::unretried(ret, Some(plan.pick));
+            unsafe { task.start(done) };
         }
+        read
     }
 }
 
@@ -815,7 +823,7 @@ fn should_retry(e: BchError) -> bool {
         e.matches(err::blockdev_io_error)
 }
 
-fn retry_state<'r>(mut f: Fragment<'r>, read: &'r Rbio, ret: Result<(), BchError>) -> RetryState<'r> {
+fn retry_state<'r>(mut f: Fragment<'r>, ret: Result<(), BchError>) -> (RetryState<'r>, &'r Rbio) {
     f.fs.event_inc_trace(events::data_read_retry, |out| f.to_text(out));
     let mut failures = FailureState { io: c::bch_io_failures::default(), read: f.plan.landed.then_some(f.plan.pick), poisoned: None };
     if let Err(e) = ret {
@@ -827,13 +835,13 @@ fn retry_state<'r>(mut f: Fragment<'r>, read: &'r Rbio, ret: Result<(), BchError
         f.reset_iter();
     }
     let (plan, dst) = (f.plan, f.dst);
-    f.free(ret);
+    let read = f.free(ret);
     // the read's own bio, given back: read from where it was
     let range = match dst {
         Dst::Range(r) => r,
         Dst::Own(_) => read.bio().range(),
     };
-    RetryState { plan, range, ret, failures }
+    (RetryState { plan, range, ret, failures }, read)
 }
 
 fn resume_target(f: &Fragment<'_>) -> Resume<'static> {
@@ -1333,15 +1341,15 @@ impl<'r> Planned<'r, '_> {
         let _noio = MemallocFlags::noio();
         let (pool, bvecs) = (&FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc());
         let kind = match how {
-            How::Promote(p) => Kind::Promote(p.task),
+            How::Promote(p) => Kind::Promote(orig, p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
-                Kind::Bounce(BioBox::new_in(pool, bvecs, pages::nr_vecs(size), 0, |b| {
+                Kind::Bounce(orig, BioBox::new_in(pool, bvecs, pages::nr_vecs(size), 0, |b| {
                     Rbio::fragment(orig, b.init_from(|bio| Pages::fill(bio, &fs.bio_bounce, bs, size, size, gfp)))
                 })?)
             }
-            How::Clone => Kind::Clone(BioBox::new_in(pool, bvecs, 0, 0,
-                                                     |b| Rbio::fragment(orig, b.clone_of(range)))?),
+            How::Clone => Kind::Clone(orig, BioBox::new_in(pool, bvecs, 0, 0,
+                                                           |b| Rbio::fragment(orig, b.clone_of(range)))?),
             How::Own => Kind::Own(orig.lend()),
         };
 
@@ -1408,9 +1416,10 @@ impl<'r> Planned<'r, '_> {
         }
 
         let r = reads.get();
-        let make = move |home| fragment_task(r, Fragment { ca, ..Fragment::new(fs, Kind::Home(home, buffers), plan,
-                                                                                Dst::Range(range)) },
-                                             orig);
+        let make = move |home| {
+            let kind = Kind::Home(orig, home, buffers);
+            fragment_task(r, Fragment { ca, ..Fragment::new(fs, kind, plan, Dst::Range(range)) })
+        };
         start_task(t, plan.pick.do_ec_reconstruct, |at| unsafe { slot.start(at, fs.tasks(), make) });
         Ok(())
     }
@@ -1440,7 +1449,7 @@ impl<'r> Planned<'r, '_> {
             }
         };
         let r = reads.get();
-        let make = move |_| fragment_task(r, f, orig);
+        let make = move |_| fragment_task(r, f);
         start_task(t, reconstruct, |at| unsafe { slot.start(at, fs.tasks(), make) });
         Ok(())
     }
@@ -1516,8 +1525,7 @@ fn device_read_done(f: &Fragment<'_>, submit_time: u64, status: Result<(), BchEr
 }
 
 #[args_stored_once]
-async fn fragment_io(f: &mut Fragment<'_>, read: &RbioHdr, target: Resume<'_>, ec_msg: Option<&mut Printbuf>)
-    -> Result<(), BchError>
+async fn fragment_io(f: &mut Fragment<'_>, target: Resume<'_>, ec_msg: Option<&mut Printbuf>) -> Result<(), BchError>
 {
     let fs = f.fs;
     if f.plan.pick.do_ec_reconstruct {
@@ -1541,10 +1549,10 @@ async fn fragment_io(f: &mut Fragment<'_>, read: &RbioHdr, target: Resume<'_>, e
         }
         ret?;
     }
-    fragment_read_done(f, read)
+    fragment_read_done(f)
 }
 
-fn fragment_read_done(f: &mut Fragment<'_>, read: &RbioHdr) -> Result<(), BchError> {
+fn fragment_read_done(f: &mut Fragment<'_>) -> Result<(), BchError> {
     let fs = f.fs;
     let no_data_io = fs.opts().no_data_io.get() != 0;
     let (bounced, split, promote) = (f.bounced(), f.split(), matches!(f.kind, Kind::Promote(..)));
@@ -1560,7 +1568,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &RbioHdr) -> Result<(), BchErr
         }
     }
 
-    let (r, ca, p) = (f.kind.rbio(), f.ca.as_deref(), &mut f.plan);
+    let (read, r, ca, p) = (f.kind.read(), f.kind.rbio(), f.ca.as_deref(), &mut f.plan);
     if ca.is_some_and(|ca| ca.dev_ptr_stale(&p.pick.ptr, &read_lock())) {
         fs.event_inc_trace(events::data_read_reuse_race, |out| {
             let _noreclaim = MemallocFlags::noreclaim();
@@ -1707,9 +1715,9 @@ async fn retry_walk(fs: &Fs, read: &Rbio, range: BioRange<'_>, at: Locate<'_>,
 
         let step = match (step, &mut f) {
             (Ok(step), Some(frag)) => {
-                let ret = fragment_io(frag, read, Resume::queue(Queue::system_dfl()), Some(&mut failed.io.ec_msg)).await;
+                let ret = fragment_io(frag, Resume::queue(Queue::system_dfl()), Some(&mut failed.io.ec_msg)).await;
                 let f = f.take().expect("the fragment just read");
-                f.end_in_retry(read, failed, ret).map(|()| step)
+                f.end_in_retry(failed, ret).map(|()| step)
             }
             (step, _) => step,
         };
@@ -1769,12 +1777,13 @@ type RetryBox<'a> = Pin<Box<RetryOwnedFut<'a>, &'a Mempool<Kmalloc>>>;
 // Out of line, @f ended in it: its RetryState is in this frame, not its
 // caller's
 #[inline(never)]
-fn retry_boxed<'a>(read: &'a Rbio, f: Fragment<'a>, ret: Result<(), BchError>, at: Locate<'a>,
-                   range: Option<BioRange<'a>>) -> RetryBox<'a> {
+fn retry_boxed<'a>(f: Fragment<'a>, ret: Result<(), BchError>, at: Locate<'a>, range: Option<BioRange<'a>>)
+    -> RetryBox<'a>
+{
     // ended - its bio and its device ref given back - before the wait on the
     // pool: not held while waiting on another mempool
     let fs = f.fs;
-    let mut s = retry_state(f, read, ret);
+    let (mut s, read) = retry_state(f, ret);
     if let Some(range) = range {
         s.range = range;
     }
@@ -1789,11 +1798,11 @@ fn retry_boxed<'a>(read: &'a Rbio, f: Fragment<'a>, ret: Result<(), BchError>, a
 /// What it read is put to @r last, what's the filesystem's given back first:
 /// once it's put, the read and the filesystem may go.
 #[in_place(FragmentFut)]
-async fn fragment_task<'r>(r: ReadRef, f: Fragment<'r>, read: &'r Rbio) {
-    r.put(fragment_read(f, read).await)
+async fn fragment_task<'r>(r: ReadRef, f: Fragment<'r>) {
+    r.put(fragment_read(f).await)
 }
 
-async fn fragment_read<'r>(mut f: Fragment<'r>, read: &'r Rbio) -> Result<(), BchError> {
+async fn fragment_read(mut f: Fragment<'_>) -> Result<(), BchError> {
     let ret = if f.plan.pick.do_ec_reconstruct {
         Ok(())
     } else {
@@ -1811,11 +1820,11 @@ async fn fragment_read<'r>(mut f: Fragment<'r>, read: &'r Rbio) -> Result<(), Bc
                 if let ResumeAt::Queue(q) = resume_target(&f).get() {
                     requeue(q).await;
                 }
-                ret.and_then(|()| fragment_read_done(&mut f, read))
+                ret.and_then(|()| fragment_read_done(&mut f))
             }
         };
         if let Err(e) = ret {
-            read.saw_error.store(true, Relaxed);
+            f.kind.read().saw_error.store(true, Relaxed);
             if should_retry(e) {
                 requeue(Queue::system_dfl()).await;
             }
@@ -1823,8 +1832,8 @@ async fn fragment_read<'r>(mut f: Fragment<'r>, read: &'r Rbio) -> Result<(), Bc
         ret
     };
     // the retry's state goes in its box, before the await: not in this future
-    let inum = c::subvol_inum { subvol: read.subvol.into(), inum: f.plan.read_pos.inode };
-    let retry = match f.end(read, ret, Locate::Inode(inum), None) {
+    let inum = c::subvol_inum { subvol: f.kind.read().subvol.into(), inum: f.plan.read_pos.inode };
+    let retry = match f.end(ret, Locate::Inode(inum), None) {
         Ok(ret) => return ret,
         Err(retry) => retry,
     };
@@ -1872,7 +1881,7 @@ pub(crate) async fn extent_task<'r>(fs: &'r Fs, f: Option<Fragment<'r>>, read: &
         if f.plan.pick.do_ec_reconstruct {
             requeue(Queue::system_dfl()).await;
         }
-        if let Err(e) = fragment_read(f, read).await {
+        if let Err(e) = fragment_read(f).await {
             read.set_ret(Err(e));
         }
     }
@@ -1913,12 +1922,12 @@ fn update_fragment<'r>(fs: &'r Fs, rbio: &'r Rbio, k: &BkeyI, btree: Btree, buf:
 }
 
 #[inline(never)]
-fn update_end<'r>(rbio: &'r Rbio, k: &'r BkeyI, btree: Btree, buf: BioRange<'r>, f: &mut Option<Fragment<'r>>,
+fn update_end<'r>(k: &'r BkeyI, btree: Btree, buf: BioRange<'r>, f: &mut Option<Fragment<'r>>,
                   ret: Result<(), BchError>) -> Result<ReadDone, RetryBox<'r>>
 {
     let f = f.take().expect("an update's fragment, ended once");
     let pick = f.plan.landed.then_some(f.plan.pick);
-    f.end(rbio, ret, Locate::Key(k, btree), Some(buf)).map(|ret| ReadDone::unretried(ret, pick))
+    f.end(ret, Locate::Key(k, btree), Some(buf)).map(|ret| ReadDone::unretried(ret, pick))
 }
 
 #[args_stored_once]
@@ -1940,12 +1949,12 @@ pub async fn read_update(fs: &Fs, rbio: &mut Rbio, k: &BkeyI, btree: Btree, flag
             let ret = if frag.plan.pick.do_ec_reconstruct {
                 Ok(())
             } else {
-                fragment_io(frag, rbio, at, None).await
+                fragment_io(frag, at, None).await
             };
             if ret.is_err() {
                 rbio.saw_error.store(true, Relaxed);
             }
-            match update_end(rbio, k, btree, buf, &mut f, ret) {
+            match update_end(k, btree, buf, &mut f, ret) {
                 Ok(done) => break 'read done,
                 Err(retry) => retry,
             }
@@ -2010,7 +2019,7 @@ pub async fn read(fs: &Fs, orig: &Rbio, inum: c::subvol_inum, flags: F) -> Resul
     {
         // the read's own bio's task: the fragment in the task's future alone,
         // made where it lives, and the future gone before the wait below
-        stack_pin_init!(let own = init_with(|| own.map(|f| fragment_task(reads.get(), f, orig))));
+        stack_pin_init!(let own = init_with(|| own.map(|f| fragment_task(reads.get(), f))));
         if let Some(own) = own.as_pin_mut() {
             own.await;
         }
