@@ -250,7 +250,7 @@ use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::sleep::Sleep, core::sync::atomic::Ordering::Acquire};
 use crate::types::bits_to_longs;
-use crate::os::bio::{Bio, BioBox, IO_ALIGN};
+use crate::os::bio::{Bio, BioBox, BioSet, IO_ALIGN};
 use crate::data_structures::dst_room::DstRoom;
 use crate::util::alloc::AlignedBox;
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
@@ -779,6 +779,8 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
 
     crate::journal::buckets::load(&ca, sb.sb())?;
     ca.journal_init(state)?;
+    /* a write waits for one only with none held: the reserve's for progress */
+    ca.write_clones.init(state, || BioSet::new(4)).map_err(|_| fs.err(Errcode::ENOMEM_dev_write_clones_init))?;
 
     let mut name = Printbuf::new();
     prt_bdevname(&mut name, Some(sb.bdev()));
