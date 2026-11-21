@@ -230,6 +230,7 @@ pub mod data {
     pub mod checksum;
     pub mod compress;
     pub mod copygc;
+    pub mod dev_bio;
     pub mod durability;
     pub mod ec {
         pub mod buf;
