@@ -17,10 +17,11 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
+use crate::data::dev_bio::DevBio;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
 use crate::util::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, BioOwner, Gathered};
 use crate::util::gather::{Fold, Gather};
-use crate::os::kernel::{local_clock, WRITE};
+use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Resume, WaitSync, Waiter};
@@ -83,17 +84,14 @@ impl Fold for BlockErrs {
 #[pin_data]
 #[repr(C)]
 pub struct EcBio {
-    /// Its block's device, kept by the bio's io ref on it, for the endio
-    ca:          Option<BlockDev>,
     /// The block's pointer, for the endio's staleness check
-    ptr:         c::bch_extent_ptr,
-    submit_time: u64,
-    idx:         u8,
+    ptr: c::bch_extent_ptr,
+    idx: u8,
     #[pin]
-    bio:         Bio,
+    dev: DevBio,
 }
 
-crate::has_bio!(EcBio, bio);
+crate::has_bio!(EcBio, dev.bio);
 
 /// A round's bio done: its IO accounted against the device, and its block's
 /// error folded into the round's Gather - the device's, or its pointer gone
@@ -101,33 +99,15 @@ crate::has_bio!(EcBio, bio);
 impl Gathered<BlockErrs> for EcBio {
     fn done(self: Pin<&mut Self>, status: Result<(), BchError>) -> BlockErrs {
         let this = self.project();
-        let e = match this.ca.take().expect("a round's bio, with its device") {
-            BlockDev::Read(ca)  => block_done::<c::DevReadRefKind>(ca, this.ptr, *this.submit_time, status),
-            BlockDev::Write(ca) => block_done::<c::DevWriteRefKind>(ca, this.ptr, *this.submit_time, status),
+        let (ca, _) = this.dev.end();
+        let e = match status {
+            Err(e) => Some(e),
+            Ok(()) if ca.dev_ptr_stale(this.ptr, &read_lock()) => Some(ca.fs().err(Errcode::stripe_read_ptr_stale)),
+            Ok(()) => None,
         };
         let mut errs = BlockErrs::default();
         errs.0[usize::from(*this.idx)] = e;
         errs
-    }
-}
-
-/// A bio's IO, on block pointer @ptr, accounted against its device - @ca, its
-/// io ref, put as this returns: its error, or its pointer gone stale.
-fn block_done<R: IoRefIdx>(ca: DevIoRef<R>, ptr: &c::bch_extent_ptr, submit_time: u64,
-                           status: Result<(), BchError>) -> Option<BchError> {
-    use c::MemberErrorType as T;
-    let write = R::RW == WRITE;
-    ca.account_io_completion(if write { T::write } else { T::read },
-                             submit_time, status.is_ok());
-    if write {
-        ca.write_unflushed();
-    }
-
-    match status {
-        Err(e) => Some(e),
-        Ok(()) if ca.dev_ptr_stale(ptr, &read_lock()) =>
-            Some(ca.fs().err(Errcode::stripe_read_ptr_stale)),
-        Ok(()) => None,
     }
 }
 
@@ -215,19 +195,17 @@ where
             // page says how much it maps
             let b = buf_bio_bytes(base.wrapping_add(offset), bytes - offset);
             let nr_vecs = buf_nr_bvecs(base.wrapping_add(offset), b);
-            let dev = Some(ca.clone().into());
-            let mut bio = set.alloc::<BchError, _>(ca.disk_sb.bdev, nr_vecs as u16, opf, |at| pin_init!(EcBio {
-                ca: dev,
+            let mut bio = set.alloc::<BchError, _>(core::ptr::null_mut(), nr_vecs as u16, opf, |at| pin_init!(EcBio {
                 ptr,
-                submit_time: local_clock(),
                 idx: idx as u8,
-                bio <- at.init::<BchError>(),
+                dev <- DevBio::new::<BchError>(at),
             }? BchError)).expect("a bio from the stripe bioset's mempool");
 
             bio.bio_mut().set_sector(ptr.offset() + u64::from(sector_offset) + (offset >> 9) as u64);
             // SAFETY: the block's buffer, which the round has until its wait,
             // after this bio's endio
             unsafe { bio.bio_mut().map(base.wrapping_add(offset), b) };
+            bio.as_mut().project().dev.for_dev(ca.clone());
             bio.submit_gathered(this.done.get());
             offset += b;
         }

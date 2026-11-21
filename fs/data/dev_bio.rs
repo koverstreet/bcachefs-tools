@@ -57,6 +57,14 @@ impl DevBio {
         (status != 0).then_some((ca.dev_idx, status))
     }
 
+    /// Its end in its endio, for a bio gathered, whose endio is all its end
+    /// has: all of it accounted, and its device and status, for what else its
+    /// owner looks at there.
+    pub fn end(self: Pin<&mut Self>) -> (BlockDev, c::blk_status_t) {
+        self.at_end();
+        self.take_end()
+    }
+
     /// Its result accounted against its device: the device, and its status.
     fn take_end(self: Pin<&mut Self>) -> (BlockDev, c::blk_status_t) {
         let this = self.project();
