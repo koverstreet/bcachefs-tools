@@ -83,10 +83,6 @@ unsafe fn chunk_at(page: NonNull<c::page>, offset: u32, len: u32) -> (At, u32) {
     (At::Direct(unsafe { page_address(page).add(offset as usize) }), len)
 }
 
-pub fn reset_bvec_offset(iter: &mut c::bvec_iter) {
-    bi_offset!(iter) = 0;
-}
-
 /// # Invariants
 /// @iter is a position of @bio: within its bvecs, bi_size bytes of them
 /// after it.
