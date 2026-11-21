@@ -10,7 +10,6 @@
 use crate::btree::bkey::pos;
 use crate::c;
 use crate::data::write::{write, WriteFor};
-use crate::data::write_replicas::wbio_in_place;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
@@ -189,7 +188,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
         pin_init!(Io {
             inode: inode.raw(),
             op    <- c::bch_write_op::init(fs, opts),
-            wbio  <- wbio_in_place(b),
+            wbio  <- c::bch_write_bio::new::<BchError>(b),
         }? BchError)
     }).expect("a writepage io's box: its pool waits for an element, and an op's init can't fail");
 

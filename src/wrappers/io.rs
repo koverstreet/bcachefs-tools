@@ -52,7 +52,7 @@ pub fn write(
     data: &[u8],
     new_i_size: u64,
 ) -> Result<WriteResult, BchError> {
-    // Made in place: the write bio's bio first, which around_bio() leaves be
+    // Made in place: the write bio's bio, then the op
     let mut state = Box::new(std::mem::MaybeUninit::<WriteState>::zeroed());
     let p = state.as_mut_ptr();
     let mut state = unsafe {
@@ -60,7 +60,6 @@ pub fn write(
         bcachefs_kernel::os::bio::init(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(),
                                        MAX_BVECS as u16, 0);
         Bio::from_raw_mut(bio).map(data.as_ptr().cast_mut(), data.len());
-        let Ok(()) = bcachefs_kernel::util::alloc::init_at(c::bch_write_bio::around_bio(), &raw mut (*p).wbio);
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };

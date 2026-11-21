@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::fs::Fs;
 use crate::types::NeBytes;
 use core::ffi::c_uint;
@@ -32,79 +31,25 @@ pub enum WriteFlagBit {
     convert_unwritten,
 }
 
-nest! {
-    #[derive(MaybeZeroable, TypeInfo)]*
-    #[repr(C)]*
-    /* K, not R: #[pin_data]'s with_project() has a generic named R */
-    #[pin_data]
-    pub struct bch_write_bio<K: IoRefIdx = c::DevWriteRefKind> {
-        #>[derive(BitfieldMembers)]
-        pub wbio: pub struct bch_write_bio_wbio {
-            /* set at submit: 'static as a write op's fs() is */
-            pub c: Option<&'static Fs>,
+/// A write's bio - the op's data, its replicas cloned from it - in the home
+/// its owner made it in, where it stays: a dio's, a writepage's, a data
+/// update's, a btree node write task's, or a BioBox of bio_write's.
+#[derive(MaybeZeroable, TypeInfo)]
+#[repr(C)]
+#[pin_data]
+pub struct bch_write_bio {
+    #[pin]
+    pub bio: crate::util::bio::Bio,
+}
 
-            pub submit_time: u64,
-            pub inode_offset: u64,
-            pub nocow_bucket: u64,
+crate::has_bio!(c::bch_write_bio, bio);
 
-            pub dev: u8,
-
-            #[members]
-            #>[derive(MaybeZeroable, TypeInfo)]-
-            #>[repr(C)]-
-            #>[bitfield(u8)]
-            pub bits: pub struct bch_write_bio_bits {
-                nocow:             u1,
-                __pad:             u7,
-            },
-        },
-
-        /*
-         * Stashed at submit so endio doesn't have to re-derive the dev pointer
-         * from @dev — c->devs[@dev] may be NULL by then (dev_remove clears the
-         * lookup table before draining refs).  Non-NULL iff we hold an io_ref;
-         * doubles as the "we hold the ref" indicator.
-         */
-        pub ca: Option<DevIoRef<K>>,
-
-        #[pin]
-        pub bio: crate::util::bio::Bio,
+impl c::bch_write_bio {
+    /// Made where its bioset or its owner has its bio.
+    pub fn new<E>(bio: crate::util::bio::BioInPlace) -> impl ::pin_init::PinInit<Self, E> {
+        ::pin_init::pin_init!(Self { bio <- bio.init::<E>() }? E)
     }
 }
-
-impl<K: IoRefIdx> c::bch_write_bio<K> {
-    /// A write's, around the bio and what else its owner set up: no io ref
-    /// held - @ca is set at submit, and taken back by the endio. One
-    /// dropped without being submitted drops a @ca of None, not what its
-    /// memory last held.
-    ///
-    /// # Safety
-    /// Its bio's initialized by the time its struct's initializer runs.
-    pub unsafe fn around_bio() -> impl ::pin_init::Init<Self> {
-        unsafe {
-            ::pin_init::init_from_closure(|w: *mut Self| {
-                (&raw mut (*w).ca).write(None);
-                Ok(())
-            })
-        }
-    }
-}
-
-// SAFETY: its bio, its last field, where it is in either kind's - below
-unsafe impl<R: IoRefIdx> crate::util::bio::HasBio for c::bch_write_bio<R> {
-    const BIO_OFFSET: usize = core::mem::offset_of!(c::bch_write_bio, bio);
-}
-
-// no thread's, as its bio is: submitted on one, completed on another
-unsafe impl<R: IoRefIdx> Send for c::bch_write_bio<R> {}
-
-const _: () = assert!(core::mem::offset_of!(c::bch_write_bio, bio) + size_of::<crate::util::bio::Bio>() ==
-                      size_of::<c::bch_write_bio>(), "bch_write_bio: its bio isn't last");
-
-// One pool clones both kinds' bios - REPLICA_CLONES - and to_wbio() finds
-// either from its bio as the default's
-const _: () = assert!(core::mem::offset_of!(c::bch_write_bio<c::DevReadRefKind>, bio) ==
-                      core::mem::offset_of!(c::bch_write_bio, bio));
 
 nest! {
     /* made by init(): bch2_write_op_init() */

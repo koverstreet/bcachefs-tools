@@ -563,7 +563,6 @@ impl c::data_update {
 
         // SAFETY: an update is done before the filesystem goes
         unsafe { c::bch_write_op::init_at(&raw mut self.op, fs, *io_opts) };
-        let Ok(()) = unsafe { init_at(c::bch_write_bio::around_bio(), &raw mut self.wbio) };
         self.op.pos = self.index.k.key().k().start_pos();
         self.op.version = self.index.k.key().k().bversion;
         self.op.target = data_opts.target;

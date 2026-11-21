@@ -20,7 +20,7 @@ use crate::cstructs::c as cs;
 use crate::cstructs::c::{BtreeNodeFlags, BtreeWriteType};
 use crate::data_structures::dst_room::DstRoom;
 use crate::data::ptrs::{Ptrs, PtrsMut};
-use crate::data::write_replicas::{wbio_in_place, write_replicas};
+use crate::data::write_replicas::write_replicas;
 use crate::data_structures::list::Walk;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
@@ -51,12 +51,6 @@ use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed, SeqCst}};
 use cstruct_macros::{bch_enum, in_place};
 
 /*
- * XXX: btree writes should be using io_ref[WRITE], but we aren't retrying
- * failed btree writes yet (due to device removal/ro):
- */
-type WriteBio = c::bch_write_bio<c::DevReadRefKind>;
-
-/*
  * blk-wbt.c throttles all writes except those that have both REQ_SYNC
  * and REQ_IDLE set...
  */
@@ -70,7 +64,7 @@ type NodeKey = DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>
 static NODE_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let size = exclusive_size::<WriteBio, NodeWriteFut<'static>, &'static Mempool<Kmalloc>>(
+    let size = exclusive_size::<c::bch_write_bio, NodeWriteFut<'static>, &'static Mempool<Kmalloc>>(
         inline_vecs(c::BIO_MAX_VECS as u16));
     Mempool::init_static(&NODE_WRITES, Mempool::kmalloc(1, size), m)
 }
@@ -172,7 +166,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, key: &NodeKey, failed: &c::bch_io_
 /// of the node's key, the key updated - on write_complete_wq, on the node's
 /// shard cpu where it has one - and the write done.
 #[in_place(NodeWriteFut)]
-async fn write_task<'h>(wbio: Pin<&'h mut WriteBio>, fs: BackRef<Fs>, b: BackRef<BtreeNode>, w: BsetWrite,
+async fn write_task<'h>(wbio: Pin<&'h mut c::bch_write_bio>, fs: BackRef<Fs>, b: BackRef<BtreeNode>, w: BsetWrite,
                         key: NodeKey, sector_offset: u16, shard_cpu: Option<u16>, start_time: u64) {
     let fs = unsafe { fs.get() };
 
@@ -410,7 +404,8 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
 
     let slot = {
         let _noio = MemallocFlags::noio();
-        TaskSlot::exclusive_bio_in(&NODE_WRITES, ptr::null_mut(), c::BIO_MAX_VECS as u16, WRITE_OPF, wbio_in_place)
+        TaskSlot::exclusive_bio_in(&NODE_WRITES, ptr::null_mut(), c::BIO_MAX_VECS as u16, WRITE_OPF,
+                                   c::bch_write_bio::new::<BchError>)
     }.expect("a node write's box: its pool waits for an element");
 
     /* write_in_flight pins the node's identity: reclaim leaves it */

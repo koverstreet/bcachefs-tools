@@ -15,7 +15,6 @@ use crate::btree_trans;
 use crate::c;
 use crate::data::durability::BkeyVDurability;
 use crate::data::write::{write, WriteFor};
-use crate::data::write_replicas::wbio_in_place;
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
@@ -378,7 +377,7 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
                 started:     Some(started),
                 write_ref:   Some(write_ref),
                 op           <- c::bch_write_op::init(fs, opts),
-                wbio         <- wbio_in_place(b),
+                wbio         <- c::bch_write_bio::new::<BchError>(b),
             }? BchError)
         }) {
             Ok(dio) => dio,

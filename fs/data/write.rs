@@ -724,7 +724,7 @@ use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
-use crate::sb::members::{DevIoRef, IoRefIdx};
+use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
 use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioBuffersOwned, BioRange, HasBio};
 use crate::os::kernel::{local_clock, unlikely, WRITE};
@@ -836,7 +836,7 @@ fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -
     }
 }
 
-impl<R: IoRefIdx> c::bch_write_bio<R> {
+impl c::bch_write_bio {
     /// Pinned: a write bio is never moved once it's made - a write's, in its
     /// caller's home, or a BioBox's - as its bio's bvecs, and its IO in
     /// flight, point at it.

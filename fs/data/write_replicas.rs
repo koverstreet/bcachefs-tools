@@ -18,13 +18,12 @@ use crate::locking::MemallocFlags;
 use crate::os::kernel::WRITE;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
 use crate::util::alloc::Kmalloc;
-use crate::util::bio::{Bio, BioBox, BioClone, BioInPlace, BioRange, HasBio, Submitted};
+use crate::util::bio::{Bio, BioBox, BioClone, BioRange, HasBio, Submitted};
 use crate::os::workqueue::Queue;
 use crate::util::task::{waiter, Resumable, Resume, ResumeAt};
 use core::pin::Pin;
 use core::ptr;
 use cstruct_macros::args_stored_once;
-use pin_init::PinInit;
 
 const PTRS: usize = c::BCH_BKEY_PTRS_MAX as usize;
 
@@ -56,18 +55,6 @@ impl ReplicaErrs {
 
     fn fail(&mut self, dev: u8, status: c::blk_status_t) {
         let _ = self.failed.try_push((dev, status));
-    }
-}
-
-/// A write bio, made where its box has it - a write's bounce or stripe bio,
-/// or a btree node write task's: its bio there already.
-pub(crate) fn wbio_in_place<R: IoRefIdx>(_: BioInPlace) -> impl PinInit<c::bch_write_bio<R>, BchError> {
-    unsafe {
-        ::pin_init::pin_init_from_closure(|w: *mut c::bch_write_bio<R>| {
-            (&raw mut (*w).wbio).write(::pin_init::zeroed());
-            (&raw mut (*w).ca).write(None);
-            Ok(())
-        })
     }
 }
 
@@ -203,6 +190,10 @@ pub async fn write_replicas(fs: &'static Fs, mut bio: Pin<&mut Bio>, buf: &[u8],
 
     let errs = {
         let mut io = InFlight::new(fs);
+        /*
+         * XXX: btree writes should be using io_ref[WRITE], but we aren't retrying
+         * failed btree writes yet (due to device removal/ro):
+         */
         io.submit::<c::DevReadRefKind>(bio.range(), bio.raw().bi_opf, ty, k, None, Resume::queue(Queue::system_dfl()))
             .await;
         io.wait(at).await

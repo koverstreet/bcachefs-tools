@@ -9,7 +9,6 @@ use crate::c;
 use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce, Src};
 use crate::data::ptrs::{crc_is_compressed, extent_crc_append, extent_nonce};
 use crate::data::write::{write_op_error, ExtentBio, ExtentData};
-use crate::data::write_replicas::wbio_in_place;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
@@ -83,7 +82,7 @@ fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u3
 
     if !buf.is_null() {
         let buf = unsafe { core::slice::from_raw_parts_mut(buf.cast::<u8>(), output_available as usize) };
-        return ExtentBio::Stripe(fs.bio_write.alloc_with(ptr::null_mut(), opf, buf, wbio_in_place)
+        return ExtentBio::Stripe(fs.bio_write.alloc_with(ptr::null_mut(), opf, buf, c::bch_write_bio::new)
             .unwrap_or_else(|e: BchError| panic!("a write's bio for its stripe: its bioset waits, but {e}")));
     }
 
@@ -103,7 +102,7 @@ fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u3
         fs.bio_write.alloc_with::<BioBuffersOwned<'static>, BchError, _>(
             ptr::null_mut(), opf,
             (&fs.bio_bounce, block_size, output_available as usize, required as usize, flags::NOIO | flags::SKIP_ZERO),
-            wbio_in_place)
+            c::bch_write_bio::new)
     }.unwrap_or_else(|e: BchError| panic!("a write's bounce pages, outside NORECLAIM: {e}"));
     short.pool  = bounce.buffers().used_pool();
     short.pages = bounce.bio.range().len() < output_available;
