@@ -266,7 +266,7 @@ fn read_extent(t: &TransAttempt<'_, '_>, w: &PagecacheRead<'_>, iter: &mut Reada
     let mut slot = t.allocate_dropping_locks_norelock(|| {
         TaskSlot::exclusive_bio_in(&READS, &READ_BVECS, core::ptr::null_mut(), nr_vecs, c::req_op_REQ_OP_READ,
                                    |b| pin_init!(ReadBio {
-            rbio   <- Rbio::new(fs, w.opts, subvol, None, b.init()),
+            rbio   <- Rbio::new(w.opts, subvol, None, b.init()),
             single: w.single.map(Single::get),
         }? BchError))
     })?;

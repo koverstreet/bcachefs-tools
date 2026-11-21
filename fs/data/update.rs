@@ -442,7 +442,7 @@ impl c::data_update {
         } else {
             ReadFor::BCH_READ_FOR_update
         };
-        let rbio = Rbio::update(fs, *io_opts, read_for, unsafe { BioInPlace::at(self.rbio.bio.as_ptr()) });
+        let rbio = Rbio::update(*io_opts, read_for, unsafe { BioInPlace::at(self.rbio.bio.as_ptr()) });
         if let Err(e) = unsafe { init_at(rbio, &raw mut self.rbio) } {
             self.bios_free();
             return Err(e);

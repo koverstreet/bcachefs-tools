@@ -155,7 +155,6 @@ pub struct ReadErrReport {
 #[derive(MaybeZeroable, TypeInfo)]
 #[repr(C)]
 pub struct RbioHdr {
-    pub c: *mut Fs,
     pub start_time: u64,
 
     pub saw_error: AtomicBool,
@@ -169,9 +168,6 @@ pub struct RbioHdr {
     pub err_report: Option<BackRef<ReadErrReport>>,
 }
 
-unsafe impl Send for RbioHdr {}
-unsafe impl Sync for RbioHdr {}
-
 /// B is what its bio owns: nothing, or a page cache extent's folios - read as
 /// the plain Rbio (erased()).
 #[pin_data]
@@ -183,9 +179,6 @@ pub struct Rbio<B: BioOwns = Data> {
     pub bio: BioLend<B>,
 }
 crate::has_bio!(Rbio<B>, bio, owns B where B: BioOwns);
-
-unsafe impl<B: BioOwns + Send> Send for Rbio<B> {}
-unsafe impl<B: BioOwns + Send> Sync for Rbio<B> {}
 
 impl<B: BioOwns> core::ops::Deref for Rbio<B> {
     type Target = RbioHdr;
@@ -202,10 +195,6 @@ impl RbioHdr {
 
     pub fn set_ret(&self, ret: Result<(), BchError>) {
         self.ret.store(ret_to_c(ret) as i16, Relaxed);
-    }
-
-    pub(crate) fn fs(&self) -> &Fs {
-        unsafe { Fs::borrow_raw(self.c) }
     }
 
     fn report(&self, errors: u32, msg: impl Fn(&mut Printbuf)) -> bool {
@@ -226,18 +215,18 @@ impl RbioHdr {
 
     /// Only called on a top level bch_read_bio to complete an entire read
     /// request, not a split.
-    fn done(&self) {
+    fn done(&self, fs: &Fs) {
         if self.start_time != 0 {
-            self.fs().times.get(c::TimeStat::data_read as usize).update(self.start_time);
+            fs.times.get(c::TimeStat::data_read as usize).update(self.start_time);
         }
     }
 }
 
 impl Rbio {
-    pub(crate) fn update(fs: &Fs, opts: c::bch_inode_opts, read_for: ReadFor, bio: BioInPlace)
+    pub(crate) fn update(opts: c::bch_inode_opts, read_for: ReadFor, bio: BioInPlace)
         -> impl PinInit<Self, BchError>
     {
-        Self::with(fs.as_ptr(), local_clock(), read_for, 0, opts, None, bio.init())
+        Self::with(local_clock(), read_for, 0, opts, None, bio.init())
     }
 }
 
@@ -262,25 +251,24 @@ impl<B: BioOwns> Rbio<B> {
     where
         B: 'a,
     {
-        Self::with(orig.c, orig.start_time, orig.read_for, 0, c::bch_inode_opts::default(), None, bio)
+        Self::with(orig.start_time, orig.read_for, 0, c::bch_inode_opts::default(), None, bio)
     }
 
-    pub fn new<'a>(fs: &'a Fs, opts: c::bch_inode_opts, subvol: u32, err_report: Option<&'a ReadErrReport>,
+    pub fn new<'a>(opts: c::bch_inode_opts, subvol: u32, err_report: Option<&'a ReadErrReport>,
                    bio: impl PinInit<Bio<B>, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a
     where
         B: 'a,
     {
         let err_report = err_report.map(|r| unsafe { BackRef::new(r) });
-        Self::with(fs.as_ptr(), local_clock(), ReadFor::BCH_READ_FOR_read, subvol, opts, err_report, bio)
+        Self::with(local_clock(), ReadFor::BCH_READ_FOR_read, subvol, opts, err_report, bio)
     }
 
-    fn with(c: *mut Fs, start_time: u64, read_for: ReadFor, subvol: u32, opts: c::bch_inode_opts,
+    fn with(start_time: u64, read_for: ReadFor, subvol: u32, opts: c::bch_inode_opts,
             err_report: Option<BackRef<ReadErrReport>>, bio: impl PinInit<Bio<B>, BchError>)
         -> impl PinInit<Self, BchError>
     {
         pin_init!(Rbio {
             hdr: RbioHdr {
-                c,
                 start_time,
                 saw_error:    AtomicBool::new(false),
                 self_healing: AtomicBool::new(false),
@@ -728,9 +716,8 @@ pub fn data_read_sb_err(e: BchError) -> SbErrorId {
 }
 
 #[cold]
-fn retry_report(read: &Rbio, read_pos: Bpos, k: BkeySC<'_>,
+fn retry_report(fs: &Fs, read: &Rbio, read_pos: Bpos, k: BkeySC<'_>,
                 failed: &c::bch_io_failures, orig_ret: Result<(), BchError>, ret: Result<(), BchError>) {
-    let fs = read.fs();
     let trans = btree_trans!(fs);
     let trans = &trans;
     let ret = ret.err();
@@ -822,8 +809,8 @@ fn can_narrow_crc(n: &c::bch_extent_crc_unpacked) -> bool {
     n.csum_type != c::CsumType::none && n.live_size < n.uncompressed_size && !crc_is_compressed(n)
 }
 
-fn trace_read<E: Event<Kind = Sectors>>(read: &Rbio, e: E, sectors: u64, k: BkeySC<'_>, read_pos: Bpos, flags: F) {
-    let fs = read.fs();
+fn trace_read<E: Event<Kind = Sectors>>(fs: &Fs, read: &Rbio, e: E, sectors: u64, k: BkeySC<'_>, read_pos: Bpos,
+                                        flags: F) {
     fs.event_add_trace(e, sectors, |out| {
         write!(out, "{}\n", k.to_text(fs));
         read.to_text_atomic(out, read_pos, flags);
@@ -846,7 +833,7 @@ fn read_opts<'o>(t: &TransAttempt<'_, '_>, orig: &'o Rbio, k: BkeySC<'_>, indire
 fn read_inline(t: &TransAttempt<'_, '_>, read: &Rbio, mut r: BioRange<'_>, e: Extent<'_>, flags: F,
                in_retry: bool) -> Result<(), BchError> {
     let fs = t.fs();
-    trace_read(read, events::data_read_inline, (r.len() >> 9).into(), e.k, e.read_pos, flags);
+    trace_read(fs, read, events::data_read_inline, (r.len() >> 9).into(), e.k, e.read_pos, flags);
 
     let d = InlineDataRef::of(e.k).expect("inline data");
     if d.poisoned() && !flags.contains(F::no_poison_check) {
@@ -1100,14 +1087,14 @@ fn maybe_poison_extent(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, fla
     Ok(())
 }
 
-fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioRange<'r>, e: Extent<'k>,
+#[allow(clippy::too_many_arguments)]
+fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, mut range: BioRange<'r>, e: Extent<'k>,
                        mut failed: Option<&mut FailureState>, flags: F, split: bool, dev: u32)
     -> Result<Option<Planned<'r, 'k>>, BchError>
 {
     assert!(range.is_of(orig.bio()), "a read into another bio's range");
     let Extent { read_pos, k, offset: mut offset_into_extent, .. } = e;
     let trans = t.trans();
-    let fs = trans.fs();
 
     if k.k.extent_is_inline_data() {
         return read_inline(t, orig, range, e, flags, failed.is_some()).map(|()| None);
@@ -1123,7 +1110,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
     let mut pick = match k.pick_read_device(fs, failed.as_deref().map(|f| &f.io), dev, flags) {
         Ok(Some(p)) => p,
         Ok(None) => {
-            trace_read(orig, events::data_read_hole, (range.len() >> 9).into(), k, read_pos, flags);
+            trace_read(fs, orig, events::data_read_hole, (range.len() >> 9).into(), k, read_pos, flags);
             range.zero();
             if orig.is_update() {
                 return Err(fs.err(err::data_read_key_overwritten));
@@ -1217,7 +1204,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, orig: &'r Rbio, mut range: BioR
     let promote = if !orig.is_update() &&
                      ((opts.promote_target != 0 && flags.contains(F::may_promote) && !pick.do_ec_reconstruct) ||
                       have_io_error) {
-        promote_alloc(t, k, orig, opts, failed.map(|f| &mut f.io))?
+        promote_alloc(t, fs, k, orig, opts, failed.map(|f| &mut f.io))?
     } else {
         None
     };
@@ -1420,9 +1407,9 @@ fn trace_fragment(fs: &Fs, orig: &Rbio, rb: &Rbio, plan: &Plan<'_>, bounced: boo
     }
     let sectors = (rb.bio().raw().bi_iter.bi_size >> 9).into();
     if orig.is_update() {
-        trace_read(rb, events::data_update_read, sectors, k, read_pos, flags);
+        trace_read(fs, rb, events::data_update_read, sectors, k, read_pos, flags);
     } else {
-        trace_read(rb, events::data_read, sectors, k, read_pos, flags);
+        trace_read(fs, rb, events::data_read, sectors, k, read_pos, flags);
     }
 
     fs.io_clock[READ].increment(sectors);
@@ -1665,7 +1652,7 @@ fn retry_fragment_of<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, read: &'r Rbio, e
         prev_read.reassemble(e.k);
     }
     let (range, step) = walk.fragment(&e);
-    if let Some(p) = fragment_of(t, read, range, e, Some(&mut *failed), walk.flags, walk.split, u32::MAX)? {
+    if let Some(p) = fragment_of(t, fs, read, range, e, Some(&mut *failed), walk.flags, walk.split, u32::MAX)? {
         p.make(fs, read, f)?;
     }
     Ok(step)
@@ -1735,7 +1722,7 @@ async fn retry(fs: &Fs, read: &Rbio, s: &mut RetryState<'_>, at: Locate<'_>) -> 
     let ret = retry_walk(fs, read, range, at, failures, &mut sk, flags).await;
 
     let reported = if read.is_update() && ret.is_err_and(read_err_benign) { Ok(()) } else { ret };
-    retry_report(read, read_pos, BkeySC::from(&sk), &failures.io, orig_ret, reported);
+    retry_report(fs, read, read_pos, BkeySC::from(&sk), &failures.io, orig_ret, reported);
     ret
 }
 
@@ -1816,7 +1803,7 @@ pub(crate) fn extent_make<'a>(fs: &'a Fs, t: &'a TransAttempt<'_, '_>, e: Extent
 {
     move |read| {
         let mut f = None;
-        let planned = fragment_of(t, read, read.bio().range(), e, None, flags, false, u32::MAX)
+        let planned = fragment_of(t, fs, read, read.bio().range(), e, None, flags, false, u32::MAX)
             .and_then(|p| p.map_or(Ok(()), |p| p.make(fs, read, &mut f)));
         let restarted = match planned {
             Ok(()) => false,
@@ -1829,7 +1816,7 @@ pub(crate) fn extent_make<'a>(fs: &'a Fs, t: &'a TransAttempt<'_, '_>, e: Extent
                 false
             }
         };
-        extent_task(f, read, restarted)
+        extent_task(fs, f, read, restarted)
     }
 }
 
@@ -1837,7 +1824,7 @@ pub(crate) fn extent_make<'a>(fs: &'a Fs, t: &'a TransAttempt<'_, '_>, e: Extent
 /// and isn't timed.
 #[cfg(not(NO_BCACHEFS_FS))]
 #[in_place(ExtentFut)]
-pub(crate) async fn extent_task<'r>(f: Option<Fragment<'r>>, read: &'r Rbio, restarted: bool) {
+pub(crate) async fn extent_task<'r>(fs: &'r Fs, f: Option<Fragment<'r>>, read: &'r Rbio, restarted: bool) {
     if restarted {
         return;
     }
@@ -1851,7 +1838,7 @@ pub(crate) async fn extent_task<'r>(f: Option<Fragment<'r>>, read: &'r Rbio, res
             read.set_ret(Err(e));
         }
     }
-    read.done();
+    read.done(fs);
 }
 
 /// A fragment's task, started by @start: queued if it's a @reconstruct - the
@@ -1880,7 +1867,7 @@ fn update_fragment<'r>(fs: &'r Fs, rbio: &'r Rbio, k: &BkeyI, btree: Btree, buf:
     let e = Extent { read_pos: k.k.start_pos(), btree, k: BkeySC::from(k), offset: 0, sectors: buf.len() >> 9 };
     let trans = btree_trans!(fs);
     lockrestart_do(&trans, |t| {
-        if let Some(p) = fragment_of(t, rbio, buf, e, None, flags, false, dev)? {
+        if let Some(p) = fragment_of(t, fs, rbio, buf, e, None, flags, false, dev)? {
             p.make(fs, rbio, f)?;
         }
         Ok(())
@@ -1930,7 +1917,7 @@ pub async fn read_update(fs: &Fs, rbio: &mut Rbio, k: &BkeyI, btree: Btree, flag
     if read.ret.is_err() {
         rbio.set_ret(read.ret);
     }
-    rbio.done();
+    rbio.done(fs);
     read
 }
 
@@ -1948,7 +1935,7 @@ fn read_walk<'r>(fs: &'r Fs, orig: &'r Rbio, inum: c::subvol_inum, flags: F, rea
             let (range, step) = walk.fragment(&e);
             // the read's own bio, the walk's last, into @own: read by read(),
             // once it's done
-            let started = fragment_of(t, orig, range, e, None, walk.flags, walk.split, u32::MAX)
+            let started = fragment_of(t, fs, orig, range, e, None, walk.flags, walk.split, u32::MAX)
                 .and_then(|p| p.map_or(Ok(()), |p| p.start(t, fs, orig, reads, step != Step::Last, &mut *own)));
             match started {
                 Ok(()) => {}
@@ -1991,6 +1978,6 @@ pub async fn read(fs: &Fs, orig: &Rbio, inum: c::subvol_inum, flags: F) -> Resul
         }
     }
     let ret = reads.wait(Resume::queue(Queue::system_dfl())).await;
-    orig.done();
+    orig.done(fs);
     walked.and(ret).and(orig.ret())
 }
