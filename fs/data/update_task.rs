@@ -180,6 +180,11 @@ impl AwaitingRead<'_> {
         unsafe { &(*self.0.u.get()).assume_init_ref().rbio }
     }
 
+    /// Its rbio, the task not started: the read's, reading into it.
+    pub fn rbio_mut(&mut self) -> &mut Rbio {
+        unsafe { &mut (*self.0.u.get()).assume_init_mut().rbio }
+    }
+
     /// # Safety
     /// spawn()'s: its queue, and what the body borrows, outlive it.
     pub unsafe fn start(self, read: ReadDone) {

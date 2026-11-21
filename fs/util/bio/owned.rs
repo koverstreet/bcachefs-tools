@@ -154,9 +154,8 @@ pub struct BioLend<B: BioOwns = Data> {
 // Release - so one holder's writes happen before the next's, whichever CPU
 // each runs on. It's atomic, not a RefCell, because the holders are tasks,
 // which run on any CPU: a read's bio is lent, if the read isn't split, to its
-// one fragment, whose task holds it through the IO; a promote's, to the
-// fragment reading into it. So the flag never actually sees two at once; it
-// says so if that's ever broken.
+// one fragment, whose task holds it through the IO. So the flag never
+// actually sees two at once; it says so if that's ever broken.
 //
 // What's read through & while the bio's lent isn't ordered against the
 // holder, so a & reader reads only what the holder doesn't change: the bvecs

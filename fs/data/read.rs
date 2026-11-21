@@ -366,9 +366,9 @@ enum Kind<'r> {
     Own(LentBio<'r>),
     Clone(BioBox<'r, Rbio, Pool>),
     Bounce(BioBox<'r, Rbio<Pages<'r>>, Pool>),
-    /// The promote's bio, and its task, started with what was read once the
-    /// bio's given back
-    Promote(Lent<'r>, AwaitingRead<'r>),
+    /// The promote's task, reading into its bio, started with what was read
+    /// once the fragment's done with it
+    Promote(AwaitingRead<'r>),
     /// A fragment's task's own bio, in its home: a clone, or bounced into the
     /// pages it has
     Home(Pin<&'r mut FragmentBio>, Option<Pages<'r>>),
@@ -378,7 +378,7 @@ impl Kind<'_> {
     fn rbio(&self) -> &Rbio {
         match self {
             Kind::Own(b) => b.rbio,
-            Kind::Promote(_, task) => task.rbio(),
+            Kind::Promote(task) => task.rbio(),
             Kind::Clone(b) => b,
             Kind::Bounce(b) => b.erased(),
             Kind::Home(h, _) => &h.rbio,
@@ -387,7 +387,8 @@ impl Kind<'_> {
 
     fn bio_mut(&mut self) -> &mut Bio {
         match self {
-            Kind::Own(LentBio { bio, .. }) | Kind::Promote(bio, _) => bio.bio_mut(),
+            Kind::Own(LentBio { bio, .. }) => bio.bio_mut(),
+            Kind::Promote(task) => task.rbio_mut().bio.get_mut(),
             Kind::Clone(b) => b.bio_mut(),
             Kind::Bounce(b) => b.bio_mut(),
             Kind::Home(h, _) => h.as_mut().bio_mut(),
@@ -512,10 +513,8 @@ impl<'r> Fragment<'r> {
         drop(ca);
 
         let promote = match kind {
-            Kind::Promote(bio, task) => {
+            Kind::Promote(task) => {
                 task.rbio().set_ret(ret);
-                // given back before the promote's task, which writes from it, starts
-                drop(bio);
                 Some(task)
             }
             Kind::Home(mut h, Some(mut pages)) => {
@@ -1278,7 +1277,7 @@ impl<'r> Planned<'r, '_> {
         let _noio = MemallocFlags::noio();
         let (pool, bvecs, bdev) = (&FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc(), core::ptr::null_mut());
         let kind = match how {
-            How::Promote(p) => Kind::Promote(p.rbio.bio.lend(), p.task),
+            How::Promote(p) => Kind::Promote(p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
                 Kind::Bounce(BioBox::new_in(pool, bvecs, bdev, pages::nr_vecs(size), 0, |b| {
