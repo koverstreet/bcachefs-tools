@@ -249,9 +249,9 @@ impl<B: Typed> Deref for Bio<B> {
 
 // XXX: through this, its bvecs can be swapped with another bio's - mem::swap()
 // of two &mut Bio - and its drop then releases what B never held. And Bio
-// still has map(), add_folio(), truncate_vecs() and pin_user_pages(), for the
-// owners that aren't typed yet - each goes with its last; till then a Bio<B>
-// could gain bvecs that aren't B's through them.
+// still has map(), truncate_vecs() and pin_user_pages(), for the owners that
+// aren't typed yet - each goes with its last; till then a Bio<B> could gain
+// bvecs that aren't B's through them.
 impl<B: Typed> DerefMut for Bio<B> {
     fn deref_mut(&mut self) -> &mut Bio {
         let () = Self::ERASES;
@@ -442,17 +442,6 @@ impl Bio {
         assert!(bio.bi_vcnt < bio.bi_max_vecs, "mapping {len} bytes: the bio's bvecs are full");
         // SAFETY: the caller's, and a bvec free
         unsafe { crate::os::bio::add_virt_nofail(bio, buf.cast(), len) };
-    }
-
-    /// Panics if the bio's bvecs are full.
-    ///
-    /// # Safety
-    /// @folio stays locked till the bio's done with it.
-    #[cfg(kernel)]
-    pub unsafe fn add_folio<A>(&mut self, folio: &crate::os::folio::Folio<A>) {
-        let bio = self.raw_mut();
-        assert!(bio.bi_vcnt < bio.bi_max_vecs, "adding a folio: the bio's bvecs are full");
-        unsafe { c::bio_add_folio_nofail(bio, folio.as_ptr(), folio.size(), 0) }
     }
 
     /// For another IO: bio_reset(), its bvecs kept - the buffers it was made

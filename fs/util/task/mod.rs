@@ -616,7 +616,7 @@ pub fn current_task() -> impl Future<Output = TaskRef> {
 /// doesn't move the task.
 ///
 /// ```ignore
-/// let read = pin!(read::read(rbio, inum, flags, ()));
+/// let read = pin!(read::read(rbio, inum, flags));
 /// let read = eager!(read);
 /// ...
 /// read.await
