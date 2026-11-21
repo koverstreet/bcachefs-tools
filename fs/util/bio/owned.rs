@@ -432,7 +432,7 @@ impl<T: HasBio, B: Buffers + Default, A: Alloc> BioBox<T, B, A> {
         T: Gathered<F>,
         Self: Send + 'static,
     {
-        let bio = bio_of(core::mem::ManuallyDrop::new(self).t.as_ptr());
+        let bio = core::mem::ManuallyDrop::new(self).bio_mut().to_raw();
         unsafe {
             (*bio).bi_private = r.into_raw().cast_mut().cast();
             (*bio).bi_end_io = Some(gathered_endio::<T, B, A, F, Wt, W>);
@@ -480,7 +480,7 @@ impl<T: AtEnd, B: Buffers, A: Alloc> BioBox<T, B, A> {
     /// Submitted, its T's at_end() run in the endio: Submitted's till it's
     /// awaited.
     pub fn submit_owned<W: Waiter>(mut self, waiter: W) -> Submitted<T, B, A, W> {
-        let bio: *mut c::bio = self.bio_mut().raw_mut();
+        let bio = self.bio_mut().to_raw();
         let c = unsafe {
             let c = Completion::init_at((&raw mut (*bio).bi_private).cast(), waiter);
             (*bio).bi_end_io = Some(super::at_end_endio::<T, W>);

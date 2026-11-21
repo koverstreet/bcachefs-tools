@@ -201,6 +201,12 @@ impl Bio {
         self.project().bio
     }
 
+    /// The bio as C has it, for its IO: a pointer derived from this borrow,
+    /// which its holder keeps till the block layer's done with it.
+    pub(crate) fn to_raw(self: Pin<&mut Self>) -> *mut c::bio {
+        self.raw_mut()
+    }
+
     pub fn range(&self) -> BioRange<'_> {
         BioRange { data: &self.data, iter: self.bio.bi_iter }
     }
@@ -568,12 +574,13 @@ pub unsafe trait BioOwner {
     /// bi_private, the waiter's the BioFuture - awaited or waited on, now or
     /// later, for the IO's status.
     fn submit<W: Waiter>(&mut self, waiter: W) -> BioFuture<'_, W> {
-        let bio: *mut c::bio = self.bio_mut().raw_mut();
+        let mut bio = self.bio_mut();
+        let raw = bio.as_mut().to_raw();
         unsafe {
-            let c = Completion::init_at((&raw mut (*bio).bi_private).cast(), waiter);
-            (*bio).bi_end_io = Some(done_endio::<W>);
-            crate::os::blkdev::submit_bio(bio);
-            BioFuture { c, bio: &*bio.cast::<Bio>() }
+            let c = Completion::init_at((&raw mut (*raw).bi_private).cast(), waiter);
+            (*raw).bi_end_io = Some(done_endio::<W>);
+            crate::os::blkdev::submit_bio(raw);
+            BioFuture { c, bio }
         }
     }
 
@@ -637,21 +644,24 @@ impl<O: BioOwner, B> Remapped<'_, O, B> {
     /// reset().
     pub unsafe fn submit_gathered(self, r: GatherRef<(), waiter::Sync>) {
         let mut this = core::mem::ManuallyDrop::new(self);
-        let bio = this.owner.bio_mut().raw_mut();
-        bio.bi_private = r.into_raw().cast_mut().cast();
-        bio.bi_end_io = Some(mapped_gathered_endio);
+        let bio = this.owner.bio_mut().to_raw();
         // SAFETY: the owner's, built for this IO; the caller keeps it, and
         // the buffer, from being touched until it's done
-        unsafe { crate::os::blkdev::submit_bio(bio) };
+        unsafe {
+            (*bio).bi_private = r.into_raw().cast_mut().cast();
+            (*bio).bi_end_io = Some(mapped_gathered_endio);
+            crate::os::blkdev::submit_bio(bio);
+        }
     }
 }
 
-/// A bio submitted: the Completion of its IO, and a ref on the bio for its
-/// status once that's done. Dropped, it waits for the IO.
+/// A bio submitted: the Completion of its IO, and the bio, held exclusively -
+/// the block layer and the endio write it till the IO's done - for its status
+/// once it is. Dropped, it waits for the IO.
 #[must_use = "a bio's IO is waited on, or awaited, to its end"]
 pub struct BioFuture<'a, W: Waiter> {
     c:   Completion<'a, W>,
-    bio: &'a Bio,
+    bio: Pin<&'a mut Bio>,
 }
 
 // the Bio's Send, and read only once it's done
@@ -661,8 +671,8 @@ impl WaitSync for BioFuture<'_, waiter::Sync> {
     type Output = Result<(), BchError>;
 
     fn wait_sync(self, how: Sleep) -> Result<(), BchError> {
-        let bio = self.bio;
-        self.c.wait_sync(how);
+        let BioFuture { c, bio } = self;
+        c.wait_sync(how);
         bio.status()
     }
 }
