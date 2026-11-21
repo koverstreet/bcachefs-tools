@@ -945,7 +945,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
          */
         TaskSlot::exclusive_bio_in(&NODE_READS, &NODE_READ_BVECS, ptr::null_mut(), bytes.div_ceil(PAGE_SIZE) as u16,
                                    c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META,
-                                   |bio| pin_init!(NodeReadBio { bio <- bio.init::<BchError>() }? BchError))
+                                   |bio| pin_init!(NodeReadBio { bio <- bio.init::<BchError, _>() }? BchError))
     }.expect("a node read's box: its pool waits for an element");
 
     let fs_ref = unsafe { BackRef::new(fs) };

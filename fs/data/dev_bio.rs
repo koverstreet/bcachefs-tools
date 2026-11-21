@@ -33,7 +33,7 @@ crate::has_bio!(DevBio, bio);
 impl DevBio {
     /// Made where its bioset or its owner has its bio, for no device yet.
     pub fn new<E>(bio: BioInPlace) -> impl PinInit<Self, E> {
-        pin_init!(Self { ca: None, submit_time: 0, unflushed: false, bio <- bio.init::<E>() }? E)
+        pin_init!(Self { ca: None, submit_time: 0, unflushed: false, bio <- bio.init::<E, _>() }? E)
     }
 
     /// For an IO to @ca, from now - its bvecs and position set: the bio's
