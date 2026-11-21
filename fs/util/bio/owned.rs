@@ -471,8 +471,7 @@ impl<T: HasBio, B: Buffers + Default, A: Alloc> BioBox<T, B, A> {
     where
         T: Gathered<F>,
     {
-        let bio = bio_of(self.t.as_ptr());
-        core::mem::forget(self);
+        let bio: *mut c::bio = core::mem::ManuallyDrop::new(self).bio_mut().raw_mut();
         unsafe {
             (*bio).bi_private = r.into_raw().cast_mut().cast();
             (*bio).bi_end_io = Some(gathered_endio::<T, B, A, F, Wt, W>);
