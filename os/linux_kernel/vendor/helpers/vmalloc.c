@@ -14,9 +14,9 @@ rust_helper_vrealloc_node_align(const void *p, size_t size, unsigned long align,
 	/*
 	 * vrealloc_node_align_noprof gained EXPORT_SYMBOL only in 7.0 (commit
 	 * d60769075013); on older kernels the bundled helper can't link it from a
-	 * module. bcachefs uses only Kmalloc/KVmalloc (KVmalloc routes through the
-	 * exported kvrealloc), never the Vmalloc allocator, so this path is
-	 * unreachable — WARN if that ever changes.
+	 * module. bcachefs's Vmalloc, os/linux_kernel/alloc.rs's, calls
+	 * __vmalloc_node_noprof() and vfree() there instead, and doesn't come
+	 * here - WARN if that ever changes.
 	 */
 	WARN_ONCE(1, "bcachefs: Vmalloc realloc unsupported on this kernel (vrealloc not exported pre-7.0)\n");
 	return NULL;
