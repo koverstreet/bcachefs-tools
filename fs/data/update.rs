@@ -877,7 +877,7 @@ impl c::data_update {
             return false;
         }
 
-        assert!(self.wbio.bio.raw().bi_vcnt != 0, "a data update's write bio must own its pages");
+        assert!(self.wbio.bio.nr_vecs() != 0, "a data update's write bio must own its pages");
 
         self.op.crc = crc;
         self.wbio.bio_mut().raw_mut().bi_iter.bi_size = crc.compressed_size << 9;

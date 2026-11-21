@@ -196,6 +196,14 @@ impl Bio {
         &self.bio
     }
 
+    pub fn nr_vecs(&self) -> u16 {
+        self.bio.bi_vcnt
+    }
+
+    pub fn max_vecs(&self) -> u16 {
+        self.bio.bi_max_vecs
+    }
+
     /// For its own methods, and C's: never moved out of.
     pub(crate) fn raw_mut(self: Pin<&mut Self>) -> &mut c::bio {
         self.project().bio

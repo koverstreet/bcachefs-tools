@@ -184,7 +184,7 @@ impl<'a> InFlight<'a> {
 pub async fn write_replicas(fs: &'static Fs, mut bio: Pin<&mut Bio>, buf: &[u8], ty: DataType, k: &BkeyI,
                             at: Resume<'_>) -> ReplicaErrs {
     assert_eq!(bio.op(), c::req_op_REQ_OP_WRITE, "write_replicas() of a bio for another op");
-    assert_eq!(bio.raw().bi_vcnt, 0, "write_replicas() of a bio with buffers mapped already");
+    assert_eq!(bio.nr_vecs(), 0, "write_replicas() of a bio with buffers mapped already");
     /* mapped while @buf's borrowed: emptied once every replica's done */
     unsafe { bio.as_mut().map(buf.as_ptr().cast_mut(), buf.len()) };
 
