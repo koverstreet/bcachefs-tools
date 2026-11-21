@@ -335,46 +335,28 @@ fn report_bad_unlink(
     Ok(())
 }
 
-/// Unlink @name from directory @dir - inode @inode, if the caller knows
-/// which it should be; with @deleting_subvol, a subvolume's root, deleting
-/// the subvolume. @dir_u and @inode_u are read and returned.
+/// The core of an unlink.
+/// @dir_iter: intent iterator on the dirent's parent
+/// @dir_hash: parent directory's hash info
+/// @dirent_iter: intent iterator positioned at the dirent to remove
+/// @inode_iter: intent iterator on the target inode to unlink
 #[allow(clippy::too_many_arguments)]
-pub fn unlink_trans(
-    t:               &TransAttempt<'_, '_>,
-    dir:             c::subvol_inum,
+pub fn __unlink_trans<'t>(
+    t:               &TransAttempt<'_, 't>,
+    dir_iter:        &mut BtreeIter<'t>,
     dir_u:           &mut c::bch_inode_unpacked,
+    dir_hash:        &c::bch_hash_info<'_>,
+    dirent_iter:     &mut BtreeIter<'t>,
     inode:           c::subvol_inum,
+    inode_iter:      &mut BtreeIter<'t>,
     inode_u:         &mut c::bch_inode_unpacked,
-    name:            &OsStr,
     deleting_subvol: bool,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut dir_iter = BtreeIter::uninit(t.trans());
-    let mut dirent_iter = BtreeIter::uninit(t.trans());
-    let mut inode_iter = BtreeIter::uninit(t.trans());
     let now = fs.current_time();
 
-    let snapshot = if !deleting_subvol {
-        subvolume::is_ro_trans(t, dir.subvol as u32)?
-    } else {
-        subvolume::get_snapshot(t, dir.subvol as u32)?
-    };
-
-    *dir_u = inode::peek_snapshot(t, &mut dir_iter, dir, snapshot, BtreeIterFlags::INTENT)?;
-
-    let dir_hash = str_hash::hash_info_init(fs, dir_u)?;
-
-    let inum = dirent::lookup_snapshot(t, &mut dirent_iter, dir, snapshot, &dir_hash, name,
-                                       BtreeIterFlags::INTENT)?;
-
-    if (inode.subvol != 0 || inode.inum != 0) && !subvol_inum_eq(inode, inum) {
-        report_bad_unlink(t, inode, inum, name)?;
-    }
-
-    *inode_u = inode::peek(t, &mut inode_iter, inum, BtreeIterFlags::INTENT)?;
-
     if !deleting_subvol && inode_u.is_dir() {
-        dirent::empty_dir_trans(t, inum)?;
+        dirent::empty_dir_trans(t, inode)?;
     }
 
     if deleting_subvol && inode_u.bi_subvol == 0 {
@@ -416,10 +398,51 @@ pub fn unlink_trans(
     inode_u.bi_ctime = now;
     inode::nlink_add(t, dir_u, -(inode_u.is_subdir_for_nlink() as i32))?;
 
-    str_hash::delete_at::<Dirents>(t, &dir_hash, &mut dirent_iter,
+    str_hash::delete_at::<Dirents>(t, dir_hash, dirent_iter,
                                    UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
-    inode::write(t, &mut dir_iter, dir_u)?;
-    inode::write(t, &mut inode_iter, inode_u)
+    inode::write(t, dir_iter, dir_u)?;
+    inode::write(t, inode_iter, inode_u)
+}
+
+/// Unlink @name from directory @dir - inode @inode, if the caller knows
+/// which it should be; with @deleting_subvol, a subvolume's root, deleting
+/// the subvolume. @dir_u and @inode_u are read and returned.
+#[allow(clippy::too_many_arguments)]
+pub fn unlink_trans(
+    t:               &TransAttempt<'_, '_>,
+    dir:             c::subvol_inum,
+    dir_u:           &mut c::bch_inode_unpacked,
+    inode:           c::subvol_inum,
+    inode_u:         &mut c::bch_inode_unpacked,
+    name:            &OsStr,
+    deleting_subvol: bool,
+) -> Result<(), BchError> {
+    let fs = t.fs();
+    let mut dir_iter = BtreeIter::uninit(t.trans());
+    let mut dirent_iter = BtreeIter::uninit(t.trans());
+    let mut inode_iter = BtreeIter::uninit(t.trans());
+
+    let snapshot = if !deleting_subvol {
+        subvolume::is_ro_trans(t, dir.subvol as u32)?
+    } else {
+        subvolume::get_snapshot(t, dir.subvol as u32)?
+    };
+
+    *dir_u = inode::peek_snapshot(t, &mut dir_iter, dir, snapshot, BtreeIterFlags::INTENT)?;
+
+    let dir_hash = str_hash::hash_info_init(fs, dir_u)?;
+
+    let inum = dirent::lookup_snapshot(t, &mut dirent_iter, dir, snapshot, &dir_hash, name,
+                                       BtreeIterFlags::INTENT)?;
+
+    if (inode.subvol != 0 || inode.inum != 0) && !subvol_inum_eq(inode, inum) {
+        report_bad_unlink(t, inode, inum, name)?;
+    }
+
+    *inode_u = inode::peek(t, &mut inode_iter, inum, BtreeIterFlags::INTENT)?;
+
+    __unlink_trans(t, &mut dir_iter, dir_u, &dir_hash, &mut dirent_iter,
+                   inum, &mut inode_iter, inode_u, deleting_subvol)
 }
 
 /// Subvolume @subvol's path in the filesystem now starts in subvolume
