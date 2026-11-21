@@ -555,53 +555,23 @@ struct RetryState<'r> {
     failures: FailureState,
 }
 
-/// Where a walk is: the read bio's own bi_iter, or, for a retry, the iter of
-/// what it rereads.
-trait WalkPos {
-    fn get(&self, read: &Rbio) -> c::bvec_iter;
-    fn set(&mut self, read: &Rbio, iter: c::bvec_iter);
-}
-
-struct BioIter;
-
-impl WalkPos for BioIter {
-    fn get(&self, read: &Rbio) -> c::bvec_iter {
-        read.bio().raw().bi_iter
-    }
-
-    fn set(&mut self, read: &Rbio, iter: c::bvec_iter) {
-        unsafe { read.bio.lend().bio_mut().set_iter(iter) }
-    }
-}
-
-impl WalkPos for c::bvec_iter {
-    fn get(&self, _: &Rbio) -> c::bvec_iter {
-        *self
-    }
-
-    fn set(&mut self, _: &Rbio, iter: c::bvec_iter) {
-        *self = iter;
-    }
-}
-
-/// After the Last step the walk's position isn't looked at: its bio may be in
-/// flight.
 #[derive(Clone, Copy, PartialEq)]
 enum Step {
     More(u32),
     Last,
 }
 
-struct Walk<'a, P: WalkPos> {
-    read:  &'a Rbio,
-    pos:   P,
+/// What's left of a read's range to walk: the bio isn't moved, as its earlier
+/// fragments may be in flight.
+struct Walk<'a> {
+    range: BioRange<'a>,
     flags: F,
     split: bool,
 }
 
-impl<'a, P: WalkPos> Walk<'a, P> {
+impl<'a> Walk<'a> {
     fn range(&self) -> BioRange<'a> {
-        unsafe { self.read.bio().range_at(self.pos.get(self.read)) }
+        self.range
     }
 
     fn fragment(&mut self, e: &Extent<'_>) -> (BioRange<'a>, Step) {
@@ -620,9 +590,7 @@ impl<'a, P: WalkPos> Walk<'a, P> {
         match ret {
             Ok(Step::Last) => Break(Ok(())),
             Ok(Step::More(bytes)) => {
-                let mut range = self.range();
-                range.advance(bytes);
-                self.pos.set(self.read, range.pos());
+                self.range.advance(bytes);
                 Continue(())
             }
             Err(e) => {
@@ -1658,7 +1626,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
 }
 
 #[inline(never)]
-fn retry_fragment<'r, P: WalkPos>(read: &'r Rbio, at: Locate<'_>, walk: &mut Walk<'r, P>,
+fn retry_fragment<'r>(read: &'r Rbio, at: Locate<'_>, walk: &mut Walk<'r>,
                                   failed: &mut FailureState, prev_read: &mut BkeyBuf, f: &mut Option<Fragment<'r>>)
     -> Result<Step, BchError>
 {
@@ -1670,7 +1638,7 @@ fn retry_fragment<'r, P: WalkPos>(read: &'r Rbio, at: Locate<'_>, walk: &mut Wal
 }
 
 #[inline(never)]
-fn retry_fragment_of<'r, P: WalkPos>(t: &TransAttempt<'_, '_>, read: &'r Rbio, e: Extent<'_>, walk: &mut Walk<'r, P>,
+fn retry_fragment_of<'r>(t: &TransAttempt<'_, '_>, read: &'r Rbio, e: Extent<'_>, walk: &mut Walk<'r>,
                                      failed: &mut FailureState, prev_read: &mut BkeyBuf, f: &mut Option<Fragment<'r>>)
     -> Result<Step, BchError>
 {
@@ -1689,7 +1657,7 @@ fn retry_fragment_of<'r, P: WalkPos>(t: &TransAttempt<'_, '_>, read: &'r Rbio, e
 async fn retry_walk(read: &Rbio, range: BioRange<'_>, at: Locate<'_>,
                     failed: &mut FailureState, prev_read: &mut BkeyBuf, flags: F) -> Result<(), BchError> {
     assert!(range.is_of(read.bio()), "a retry of another bio's range");
-    let mut walk = Walk { read, pos: range.pos(), flags, split: true };
+    let mut walk = Walk { range, flags, split: true };
     let ret = loop {
         let mut f = None;
         let step = retry_fragment(read, at, &mut walk, failed, prev_read, &mut f);
@@ -1953,7 +1921,7 @@ fn read_walk<'r>(orig: &'r Rbio, inum: c::subvol_inum, flags: F, reads: &Reads, 
 {
     let fs = orig.fs();
     let trans = btree_trans!(fs);
-    let mut walk = Walk { read: orig, pos: BioIter, flags, split: false };
+    let mut walk = Walk { range: orig.bio().range(), flags, split: false };
     let mut iter = BtreeIter::new(&trans, Btree::extents, pos(inum.inum, walk.range().pos().bi_sector),
                                   BtreeIterFlags::SLOTS);
     let ret = for_each_in_subvolume_max(&trans, &mut iter, pos(inum.inum, u64::MAX), inum.subvol as u32,
