@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A bio's owners. Each owns a T that ends in its bio - HasBio: the bio is
-//! the T's last field, and the T is found from it by that offset.
+//! A bio's owners. Each owns a T with a bio in it - HasBio: the T is found
+//! from its bio by its offset.
 //!
 //! - BioBox<T>: a T from a BioSet<T>, a bioset whose front_pad is the rest of
 //!   the T - or, from BioBox::new_in(), a T from a pool, or kmalloc().
 //!   Dropped, it's put to its set, or freed.
 //! - TaskSlot::exclusive_bio_in(): a T that's a task's home.
 //!
-//! They deref to the T, and change it through Pin<&mut T>: the T holds its
-//! bio, which is pinned.
+//! They deref to the T, and change it through Pin<&mut T>: a T may have
+//! pinned fields of its own.
 //!
 //! A T is made around its bio: the bioset, or BioBox::new(), puts the bio
 //! where it goes - bio_init() - then the caller's initializer does the rest of
@@ -115,8 +115,6 @@ pub struct BioLend {
 // holder, so a & reader reads only what the holder doesn't change: the bvecs
 // as mapped, and the data through a BioRange - which borrows BioData, a ZST,
 // none of the bio's fields - or it's the holder itself, reading its own.
-//
-// The bio is where its bioset placed it, pinned, and the cell never moves.
 unsafe impl Sync for BioLend {}
 
 impl BioLend {
@@ -145,8 +143,8 @@ unsafe impl BioField for BioLend {
 pub struct Lent<'a>(&'a BioLend);
 
 impl Lent<'_> {
-    pub fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        unsafe { Pin::new_unchecked(&mut *self.0.bio.get()) }
+    pub fn bio_mut(&mut self) -> &mut Bio {
+        unsafe { &mut *self.0.bio.get() }
     }
 
     /// For C to change it, through the lend.
@@ -485,6 +483,9 @@ impl<T: HasBio> BioSet<T> {
     /// @pool_size bios, with BIO_MAX_VECS bvecs each, held in reserve.
     /// Nothing to undo if it fails.
     pub fn new(pool_size: u32) -> impl PinInit<Self, BchError> {
+        // an element is front_pad bytes, then the bio
+        const { assert!(T::BIO_OFFSET + size_of::<Bio>() == size_of::<T>(), "a BioSet's T whose bio isn't last") };
+
         pin_init!(Self {
             set <- BioPool::new(pool_size, T::BIO_OFFSET),
             _t: PhantomData,
@@ -847,7 +848,7 @@ unsafe impl<T: HasBio, B: Buffers, A: Alloc> BioOwner for BioBox<T, B, A> {
         HasBio::bio(&**self)
     }
 
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+    fn bio_mut(&mut self) -> &mut Bio {
         HasBio::bio_mut(self.as_mut())
     }
 }

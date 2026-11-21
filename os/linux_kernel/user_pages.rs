@@ -19,7 +19,6 @@ use crate::util::bio::Bio;
 use crate::util::task::requeue;
 use crate::os::workqueue::Queue;
 use core::ffi::{c_int, c_uint};
-use core::pin::Pin;
 use core::ptr::NonNull;
 
 /// Pages extracted at a time: the room on the stack for their pointers.
@@ -51,9 +50,9 @@ impl Bio {
     /// iter's - a run of one folio a bvec, as many as it has room for, @iter
     /// advanced past them. Fails only if it got none. release_user_pages()
     /// gives them back.
-    pub fn pin_user_pages(mut self: Pin<&mut Self>, iter: &mut IovIter<'_>) -> Result<(), BchError> {
+    pub fn pin_user_pages(&mut self, iter: &mut IovIter<'_>) -> Result<(), BchError> {
         if iter.user_backed() {
-            self.as_mut().raw_mut().bi_flags |= 1 << c::BIO_PAGE_PINNED;
+            self.raw_mut().bi_flags |= 1 << c::BIO_PAGE_PINNED;
         }
         let start = self.nr_vecs();
 
@@ -83,9 +82,7 @@ impl Bio {
                     (n, len) = contig_folio_len(&pages[i..i + n], folio, left, offset);
                 }
 
-                unsafe {
-                    self.as_mut().add_folio_part(Folio::<Any>::from_raw(NonNull::new_unchecked(folio)), folio_offset, len)
-                };
+                unsafe { self.add_folio_part(Folio::<Any>::from_raw(NonNull::new_unchecked(folio)), folio_offset, len) };
                 left -= len;
                 i += n;
                 offset = 0;
@@ -95,8 +92,8 @@ impl Bio {
     }
 
     /// Its pages dirtied, before it's read into: the user's.
-    pub fn set_pages_dirty(self: Pin<&mut Self>) {
-        for f in self.into_ref().get_ref().range_all().folios() {
+    pub fn set_pages_dirty(&mut self) {
+        for f in self.range_all().folios() {
             let folio = f.folio.as_ptr();
             unsafe {
                 c::folio_lock(folio);
@@ -109,12 +106,12 @@ impl Bio {
     /// The user's pages it pinned, given back - @dirtied, if set_pages_dirty()
     /// dirtied them, as they're checked dirty still: those cleaned since are
     /// dirtied again first, under their folio locks.
-    pub async fn release_user_pages(mut self: Pin<&mut Self>, dirtied: bool) {
-        let redirty = dirtied && !self.as_ref().get_ref().range_all().folios()
+    pub async fn release_user_pages(&mut self, dirtied: bool) {
+        let redirty = dirtied && !self.range_all().folios()
             .all(|f| unsafe { c::folio_test_dirty(f.folio.as_ptr()) });
         if redirty {
             requeue(Queue::system_dfl()).await;
         }
-        unsafe { c::bio_release_pages(self.as_mut().raw_mut(), redirty) };
+        unsafe { c::bio_release_pages(self.raw_mut(), redirty) };
     }
 }

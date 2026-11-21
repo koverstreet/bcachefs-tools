@@ -163,7 +163,7 @@ struct ReadFolios {
 
 impl ReadFolios {
     /// A read's, @folio its first, and its lock the read's.
-    fn starting_with(bio: Pin<&mut Bio>, folio: FolioGuard<'static>) -> Self {
+    fn starting_with(bio: &mut Bio, folio: FolioGuard<'static>) -> Self {
         let mut f = ReadFolios { callers: false, locked: 0 };
         f.push(bio, folio);
         f
@@ -171,7 +171,7 @@ impl ReadFolios {
 
     /// A single folio's read's, @folio its first, its lock the caller's, who
     /// waits for the read.
-    fn callers(bio: Pin<&mut Bio>, folio: &FolioLocked) -> Self {
+    fn callers(bio: &mut Bio, folio: &FolioLocked) -> Self {
         unsafe { bio.add_folio_part(folio, 0, folio.size()) };
         ReadFolios { callers: true, locked: 0 }
     }
@@ -182,7 +182,7 @@ impl ReadFolios {
     }
 
     /// @folio into @bio, after the rest: its lock the read's.
-    fn push(&mut self, bio: Pin<&mut Bio>, folio: FolioGuard<'static>) {
+    fn push(&mut self, bio: &mut Bio, folio: FolioGuard<'static>) {
         unsafe { bio.add_folio_part(&folio, 0, folio.size()) };
         folio.keep_locked();
         self.locked += 1;
@@ -348,7 +348,7 @@ async fn read_task<'h>(home: Pin<&'h mut ReadBio>, inum: c::subvol_inum, mut fol
 /// A read of @inode into a bio of @nr_vecs bvecs, set up by @set_up, with
 /// its first folio: read by a task of its own, its first poll here.
 fn spawn_read(fs: &Fs, inode: &InodeInfo, opts: c::bch_inode_opts, nr_vecs: usize,
-              set_up: impl FnOnce(Pin<&mut Bio>) -> ReadFolios, window: Window, end: End) {
+              set_up: impl FnOnce(&mut Bio) -> ReadFolios, window: Window, end: End) {
     let subvol = inode.inum().subvol as u32;
     let mut slot = TaskSlot::exclusive_bio_in(&READS, &READ_BVECS, core::ptr::null_mut(), nr_vecs as u16,
                                               c::req_op_REQ_OP_READ,
@@ -390,8 +390,8 @@ pub(crate) fn readahead(mut ra: Readahead<'_>) {
                 read_from: sector + u64::from(folio.partially_uptodate()),
                 orig_end,
             };
-            let set_up = |mut b: Pin<&mut Bio>| {
-                b.as_mut().set_sector(sector);
+            let set_up = |b: &mut Bio| {
+                b.set_sector(sector);
                 ReadFolios::starting_with(b, folio)
             };
             spawn_read(fs, inode, opts, nr_vecs, set_up, window, End::Readahead);
@@ -423,9 +423,9 @@ pub(crate) fn read_single_folio(folio: &FolioLocked, mapping: Mapping, extend: b
     };
 
     let mut folios = ReadaheadIter::new(mapping, folio.end_sector());
-    let set_up = |mut b: Pin<&mut Bio>| {
-        b.as_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
-        b.as_mut().set_sector(folio.sector());
+    let set_up = |b: &mut Bio| {
+        b.set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
+        b.set_sector(folio.sector());
         ReadFolios::callers(b, folio)
     };
 

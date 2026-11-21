@@ -188,7 +188,7 @@ fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write
             n.wbio.bits.set_nocow(nocow.into());
             n.wbio.submit_time  = local_clock();
             n.wbio.inode_offset = k.k().start_offset();
-            n.bio.as_mut().set_sector(ptr.offset());
+            n.bio.set_sector(ptr.offset());
 
             let bdev = ca.as_deref().map(|ca| {
                 if nocow {

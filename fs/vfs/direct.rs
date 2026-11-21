@@ -98,10 +98,10 @@ impl CallersIter {
     }
 }
 
-fn set_up(mut b: Pin<&mut Bio>, iter: &mut IovIter<'_>, offset: &mut u64, should_dirty: bool) -> Result<(), BchError> {
-    b.as_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
-    b.as_mut().set_sector(*offset >> 9);
-    b.as_mut().pin_user_pages(iter)?;
+fn set_up(b: &mut Bio, iter: &mut IovIter<'_>, offset: &mut u64, should_dirty: bool) -> Result<(), BchError> {
+    b.set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
+    b.set_sector(*offset >> 9);
+    b.pin_user_pages(iter)?;
 
     *offset += u64::from(b.raw().bi_iter.bi_size);
 

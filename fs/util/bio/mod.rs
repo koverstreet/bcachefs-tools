@@ -26,12 +26,12 @@
 //!   reaches a bio in flight - but submit_gathered(), the superblock's, which
 //!   is why it's unsafe. Those states are what make reading a bio's fields
 //!   through &Bio safe.
-//! - Pinned: inline bvecs make a bio self-referential, so it's never moved,
-//!   and changed only through Pin<&mut Bio> - its own methods, given one by
-//!   its owner's bio_mut().
+//! - A value: it moves as one, its bvecs with it, and is changed through
+//!   &mut Bio - its own methods, given one by its owner's bio_mut(). Its C
+//!   view, bi_io_vec, is pointed at its bvecs as it goes out to C.
 //!
-//! The generics, below, are those terms as traits. A bio is the last field
-//! of a struct of its user's - an rbio, a write op - and HasBio is that
+//! The generics, below, are those terms as traits. A bio is a field of a
+//! struct of its user's - an rbio, a write op - and HasBio is that
 //! struct, found from its bio by the offset has_bio!() checks; BioField is
 //! what the field may be. BioOwner is whatever holds a bio to build and
 //! submit; Gathered, what an owner's T puts to the Gather it was submitted
@@ -47,7 +47,7 @@
 //! kernel's.
 
 use core::ffi::{c_ulong, c_void};
-use core::marker::{PhantomData, PhantomPinned};
+use core::marker::PhantomData;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
@@ -122,8 +122,8 @@ pub(crate) type BioVecs = InlineVec<c::bio_vec, BIO_INLINE_VECS, u16, BvecAlloc>
 
 /// Where a bio's bvec table is: its own BioVecs, or another bio's - a clone's
 /// source's, init_borrowed()'s table's - read where they are now, as they
-/// grow. bi_io_vec is only ever where they were when the bio last went out to
-/// C: raw_mut() writes it, and nothing reads it.
+/// move or grow. bi_io_vec is only ever where they were when the bio last
+/// went out to C: raw_mut() writes it, and nothing reads it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VecsAt {
     Own,
@@ -132,6 +132,10 @@ pub enum VecsAt {
     Borrowed(NonNull<Bio>),
 }
 
+// XXX: a Bio moves, and is swapped, as any Rust value - but what its bvecs
+// point at is its box's Buffers, not its own: swap two boxes' bios and each
+// box gives back the other's pages, or a clone outlives the parent its
+// BioClone<'a> borrowed. Sound once a bio is generic over what it owns.
 #[pin_data(PinnedDrop)]
 #[repr(C)]
 #[derive(Init)]
@@ -143,8 +147,6 @@ pub struct Bio {
     vecs_at: VecsAt,
     #[pin]
     data:    BioData,
-    #[pin]
-    _pin:    PhantomData<PhantomPinned>,
 }
 
 /// bio_uninit(), and its bvecs freed: emptied first, as a bioset's bio is
@@ -153,7 +155,7 @@ pub struct Bio {
 #[pinned_drop]
 impl PinnedDrop for Bio {
     fn drop(self: Pin<&mut Self>) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = self.get_mut();
         unsafe { crate::os::bio::uninit(&mut this.bio) };
         drop(core::mem::replace(&mut this.vecs, BioVecs::new_in(BvecAlloc::NONE)));
     }
@@ -165,13 +167,12 @@ unsafe impl Send for Bio {}
 
 impl Bio {
     /// After its bvecs change: C's view of them.
-    fn sync(self: Pin<&mut Self>) {
-        let this = self.project();
-        assert!(matches!(this.vecs_at, VecsAt::Own), "changing the bvecs of a bio whose table isn't its own");
-        let (nr, max) = (this.vecs.len() as u16, this.vecs.capacity().min(c::BIO_MAX_VECS as usize) as u16);
-        bi_io_vec!(*this.bio) = this.vecs.as_mut_ptr();
-        this.bio.bi_vcnt = nr;
-        this.bio.bi_max_vecs = max;
+    fn sync(&mut self) {
+        assert!(matches!(self.vecs_at, VecsAt::Own), "changing the bvecs of a bio whose table isn't its own");
+        let (nr, max) = (self.vecs.len() as u16, self.vecs.capacity().min(c::BIO_MAX_VECS as usize) as u16);
+        bi_io_vec!(self.bio) = self.vecs.as_mut_ptr();
+        self.bio.bi_vcnt = nr;
+        self.bio.bi_max_vecs = max;
     }
 }
 
@@ -202,9 +203,8 @@ impl Bio {
 
     /// # Safety
     /// As from_raw()'s, and nothing else has it for 'a.
-    pub unsafe fn from_raw_mut<'a>(ptr: *mut c::bio) -> Pin<&'a mut Self> {
-        // SAFETY: the caller's; a bio never moves
-        unsafe { Pin::new_unchecked(&mut *ptr.cast()) }
+    pub unsafe fn from_raw_mut<'a>(ptr: *mut c::bio) -> &'a mut Self {
+        unsafe { &mut *ptr.cast() }
     }
 
     /// bio_init() of a Bio at @bio whose bvecs are @table's, all of them,
@@ -214,12 +214,13 @@ impl Bio {
     /// # Safety
     /// @bio is room for a Bio, not in flight; @table outlives the bio, and
     /// its bvecs don't change while the bio's IO is in flight.
-    pub unsafe fn init_borrowed(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, table: &Bio, opf: u32) {
+    pub unsafe fn init_borrowed(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, table: &mut Bio,
+                                opf: u32) {
         let nr = table.vecs.len() as u16;
         unsafe {
             (&raw mut (*bio).vecs).write(BioVecs::new_in(BvecAlloc::NONE));
-            (&raw mut (*bio).vecs_at).write(VecsAt::Borrowed(NonNull::from(table)));
-            crate::os::bio::init(bio.cast(), bdev, table.vecs.as_ptr().cast_mut(), nr, opf);
+            (&raw mut (*bio).vecs_at).write(VecsAt::Borrowed(NonNull::from(&*table)));
+            crate::os::bio::init(bio.cast(), bdev, table.vecs.as_mut_ptr(), nr, opf);
             (*bio).bio.bi_vcnt = nr;
         }
     }
@@ -241,15 +242,14 @@ impl Bio {
         self.vecs.capacity().min(c::BIO_MAX_VECS as usize) as u16
     }
 
-    /// For its own methods, and C's: never moved out of, bi_io_vec pointed at
-    /// its bvecs, where they are now.
-    pub(crate) fn raw_mut(self: Pin<&mut Self>) -> &mut c::bio {
-        let this = self.project();
-        bi_io_vec!(*this.bio) = match *this.vecs_at {
-            VecsAt::Own         => this.vecs.as_mut_ptr(),
+    /// For its own methods, and C's: bi_io_vec pointed at its bvecs, where
+    /// they are now.
+    pub(crate) fn raw_mut(&mut self) -> &mut c::bio {
+        bi_io_vec!(self.bio) = match self.vecs_at {
+            VecsAt::Own         => self.vecs.as_mut_ptr(),
             VecsAt::Borrowed(s) => unsafe { s.as_ref() }.bvecs().as_ptr().cast_mut(),
         };
-        this.bio
+        &mut self.bio
     }
 
     fn vecs_owner(&self) -> &Bio {
@@ -310,13 +310,12 @@ impl Bio {
     /// # Safety
     /// @buf is the allocators' - in the direct map, or vmalloc - and outlives
     /// its place in the bvecs; nothing has the bio in flight.
-    pub unsafe fn map(mut self: Pin<&mut Self>, buf: *mut u8, len: usize) {
+    pub unsafe fn map(&mut self, buf: *mut u8, len: usize) {
         let len32 = u32::try_from(len).expect("mapping a buffer of 4G or more into a bio");
         for bv in unsafe { crate::os::bio::bvecs(buf, len) } {
-            self.as_mut().project().vecs.push(bv)
-                .unwrap_or_else(|_| panic!("mapping {len} bytes into a bio: no room for its bvecs"));
+            self.vecs.push(bv).unwrap_or_else(|_| panic!("mapping {len} bytes into a bio: no room for its bvecs"));
         }
-        self.as_mut().sync();
+        self.sync();
         self.raw_mut().bi_iter.bi_size += len32;
     }
 
@@ -327,22 +326,20 @@ impl Bio {
     /// @folio stays held - locked, in writeback, pinned, or the caller's - till
     /// the bio's done with it.
     #[cfg(kernel)]
-    pub(crate) unsafe fn add_folio_part<A>(mut self: Pin<&mut Self>, folio: &crate::os::folio::Folio<A>,
-                                           offset: usize, len: usize) {
+    pub(crate) unsafe fn add_folio_part<A>(&mut self, folio: &crate::os::folio::Folio<A>, offset: usize, len: usize) {
         assert!(offset + len <= folio.size(), "adding {len} bytes at {offset} of a folio of {}", folio.size());
         assert!(self.vecs.len() < usize::from(self.max_vecs()), "adding a folio: the bio's bvecs are full");
-        self.as_mut().project().vecs
-            .push(c::bio_vec { bv_page: folio.as_ptr().cast(), bv_len: len as u32, bv_offset: offset as u32 })
+        self.vecs.push(c::bio_vec { bv_page: folio.as_ptr().cast(), bv_len: len as u32, bv_offset: offset as u32 })
             .expect("a bvec, into the room it has");
-        self.as_mut().sync();
+        self.sync();
         self.raw_mut().bi_iter.bi_size += len as u32;
     }
 
     /// Emptied, for another IO from scratch: bio_reset(), its bvecs and its
     /// position gone - a bio whose pages are new each IO, a dio's.
-    pub fn clear(mut self: Pin<&mut Self>, opf: u32) {
-        self.as_mut().project().vecs.clear();
-        unsafe { crate::os::bio::reset(self.as_mut().raw_mut(), core::ptr::null_mut(), opf) };
+    pub fn clear(&mut self, opf: u32) {
+        self.vecs.clear();
+        unsafe { crate::os::bio::reset(self.raw_mut(), core::ptr::null_mut(), opf) };
         self.sync();
     }
 
@@ -350,22 +347,22 @@ impl Bio {
     /// with - and its position all of them again, from the table: after an IO
     /// bi_iter is the block layer's. Panics on a clone, whose bvecs aren't its
     /// own. BioOwner::reset(), which checks the buffers serve @opf.
-    pub(super) fn reset(mut self: Pin<&mut Self>, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
-        let size = self.as_ref().range_all().len();
+    pub(super) fn reset(&mut self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
+        let size = self.range_all().len();
         // SAFETY: had by &mut, so not in flight
-        unsafe { crate::os::bio::reset(self.as_mut().raw_mut(), bdev, opf) };
-        self.as_mut().sync();
+        unsafe { crate::os::bio::reset(self.raw_mut(), bdev, opf) };
+        self.sync();
         self.raw_mut().bi_iter.bi_size = size;
     }
 
     /// Panics if @range isn't this bio's.
-    pub fn set_range(self: Pin<&mut Self>, range: BioRange<'_>) {
-        assert!(range.is_of(&self), "a bio set to another bio's range");
+    pub fn set_range(&mut self, range: BioRange<'_>) {
+        assert!(range.is_of(self), "a bio set to another bio's range");
         self.raw_mut().bi_iter = range.pos();
     }
 
     /// Its position @bytes on. Panics past its end.
-    pub fn advance(self: Pin<&mut Self>, bytes: u32) {
+    pub fn advance(&mut self, bytes: u32) {
         let mut r = self.range();
         r.advance(bytes);
         let pos = r.pos();
@@ -373,7 +370,7 @@ impl Bio {
     }
 
     /// Panics past its end.
-    pub fn shrink(self: Pin<&mut Self>, bytes: u32) {
+    pub fn shrink(&mut self, bytes: u32) {
         let iter = &mut self.raw_mut().bi_iter;
         assert!(bytes <= iter.bi_size, "shrinking a bio of {} bytes to {bytes}", iter.bi_size);
         iter.bi_size = bytes;
@@ -381,7 +378,7 @@ impl Bio {
 
     /// A random u64 of its data overwritten: the debug corrupt ratios'.
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub fn corrupt(self: Pin<&mut Self>) {
+    pub fn corrupt(&mut self) {
         use crate::os::kernel::{random_u64, random_u64_below};
         let u64s = self.bio.bi_iter.bi_size / 8;
         if u64s == 0 {
@@ -392,43 +389,43 @@ impl Bio {
         r.take(8).copy_from(&random_u64().to_ne_bytes());
     }
 
-    pub fn set_dev(self: Pin<&mut Self>, bdev: *mut crate::os::blkdev::BlockDevice) {
+    pub fn set_dev(&mut self, bdev: *mut crate::os::blkdev::BlockDevice) {
         crate::os::blkdev::bio_set_dev(self.raw_mut(), bdev)
     }
 
     /// # Safety
     /// @iter is a position of its bvecs.
-    pub unsafe fn set_iter(self: Pin<&mut Self>, iter: c::bvec_iter) {
+    pub unsafe fn set_iter(&mut self, iter: c::bvec_iter) {
         self.raw_mut().bi_iter = iter;
     }
 
-    pub fn set_opf(self: Pin<&mut Self>, opf: u32) {
+    pub fn set_opf(&mut self, opf: u32) {
         self.raw_mut().bi_opf = opf as _;
     }
 
-    pub fn set_ioprio(self: Pin<&mut Self>, prio: u16) {
+    pub fn set_ioprio(&mut self, prio: u16) {
         self.raw_mut().bi_ioprio = prio;
     }
 
-    pub fn set_status(self: Pin<&mut Self>, status: u8) {
+    pub fn set_status(&mut self, status: u8) {
         self.raw_mut().bi_status = status;
     }
 
-    pub fn set_sector(self: Pin<&mut Self>, sector: u64) {
+    pub fn set_sector(&mut self, sector: u64) {
         self.raw_mut().bi_iter.bi_sector = sector;
     }
 
     /// Its size, for a bio with no data to size it by: a discard's.
-    pub fn set_size(self: Pin<&mut Self>, bytes: u32) {
+    pub fn set_size(&mut self, bytes: u32) {
         self.raw_mut().bi_iter.bi_size = bytes;
     }
 
     /// Its bvecs after the first @nr dropped, and its position with them -
     /// their pages given back by whoever has them.
-    pub fn truncate_vecs(mut self: Pin<&mut Self>, nr: u16) {
+    pub fn truncate_vecs(&mut self, nr: u16) {
         assert!(usize::from(nr) <= self.vecs.len(), "truncating a bio to more bvecs than it has");
-        self.as_mut().project().vecs.truncate(nr.into());
-        self.as_mut().sync();
+        self.vecs.truncate(nr.into());
+        self.sync();
         self.raw_mut().bi_iter.bi_size = 0;
     }
 
@@ -523,10 +520,7 @@ impl ToText for Bio {
 }
 
 /// # Safety
-/// BIO_OFFSET is the offset of a Bio field that ends the struct, #[repr(C)]. If the
-/// struct projects its pinning - #[pin_data] - that field is #[pin]: so
-/// BioBox::as_mut()'s Pin<&mut Self> never hands it out unpinned, to be
-/// moved off its bvecs.
+/// BIO_OFFSET is the offset of a Bio field.
 pub unsafe trait HasBio: Sized {
     const BIO_OFFSET: usize;
 
@@ -534,7 +528,7 @@ pub unsafe trait HasBio: Sized {
         unsafe { Bio::from_raw(bio_of(core::ptr::from_ref(self).cast_mut())) }
     }
 
-    fn bio_mut(self: Pin<&mut Self>) -> Pin<&mut Bio> {
+    fn bio_mut(self: Pin<&mut Self>) -> &mut Bio {
         unsafe { Bio::from_raw_mut(bio_of(self.get_unchecked_mut())) }
     }
 }
@@ -558,21 +552,16 @@ pub const fn bio_field_at<B: BioField>(_: *const B) -> usize {
     B::AT
 }
 
-/// HasBio for $t, by its bio field $f: checked to be a BioField, and its bio
-/// last - not that it's #[pin], which HasBio asks of a struct with
-/// #[pin_data].
+/// HasBio for $t, by its bio field $f: checked to be a BioField - not that
+/// it's #[pin], which HasBio asks of a struct with #[pin_data].
 #[macro_export]
 macro_rules! has_bio {
     ($t:ty, $($f:ident).+) => {
-        // SAFETY: a bio field, below, its bio ending the struct
         unsafe impl $crate::util::bio::HasBio for $t {
             const BIO_OFFSET: usize = {
                 let t = ::core::mem::MaybeUninit::<$t>::uninit();
                 let field = unsafe { &raw const (*t.as_ptr()).$($f).+ };
-                let off = ::core::mem::offset_of!($t, $($f).+) + $crate::util::bio::bio_field_at(field);
-                assert!(off + ::core::mem::size_of::<$crate::util::bio::Bio>() == ::core::mem::size_of::<$t>(),
-                        concat!(stringify!($t), ": its bio isn't last"));
-                off
+                ::core::mem::offset_of!($t, $($f).+) + $crate::util::bio::bio_field_at(field)
             };
         }
     };
@@ -598,7 +587,7 @@ pub unsafe trait BioOwner {
 
     fn bio(&self) -> &Bio;
 
-    fn bio_mut(&mut self) -> Pin<&mut Bio>;
+    fn bio_mut(&mut self) -> &mut Bio;
 
     /// For another IO, of @opf, to or from the same buffers: Bio::reset().
     /// Panics if they can't serve it - a buffer borrowed shared, for a read.
@@ -627,8 +616,8 @@ pub unsafe trait BioOwner {
     /// bi_private, the waiter's the BioFuture - awaited or waited on, now or
     /// later, for the IO's status.
     fn submit<W: Waiter>(&mut self, waiter: W) -> BioFuture<'_, W> {
-        let mut bio = self.bio_mut();
-        let raw: *mut c::bio = bio.as_mut().raw_mut();
+        let bio = self.bio_mut();
+        let raw: *mut c::bio = bio.raw_mut();
         unsafe {
             let c = Completion::init_at((&raw mut (*raw).bi_private).cast(), waiter);
             (*raw).bi_end_io = Some(done_endio::<W>);
@@ -714,7 +703,7 @@ impl<O: BioOwner, B> Remapped<'_, O, B> {
 #[must_use = "a bio's IO is waited on, or awaited, to its end"]
 pub struct BioFuture<'a, W: Waiter> {
     c:   Completion<'a, W>,
-    bio: Pin<&'a mut Bio>,
+    bio: &'a mut Bio,
 }
 
 // the Bio's Send, and read only once it's done

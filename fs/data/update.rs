@@ -48,7 +48,6 @@ use crate::util::log::should_print_err;
 use crate::{bch_err_ratelimited, here_str, prt};
 use crate::debug::trace::events;
 use core::ffi::{c_int, c_uint};
-use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
@@ -406,9 +405,9 @@ impl c::data_update {
         unsafe {
             Bio::init_pages(&raw mut self.pages, &fs.bio_bounce, block_size, buf_bytes as usize, Flags::empty())
                 .map_err(|_| BchError::from(c::ENOMEM))?;
-            Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), core::ptr::null_mut(), &self.pages,
+            Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), core::ptr::null_mut(), &mut self.pages,
                                c::req_op_REQ_OP_READ);
-            Bio::init_borrowed(&raw mut self.op.wbio.bio, core::ptr::null_mut(), &self.pages, 0);
+            Bio::init_borrowed(&raw mut self.op.wbio.bio, core::ptr::null_mut(), &mut self.pages, 0);
         }
         self.op.wbio.bio_mut().set_size(buf_bytes);
 
@@ -433,7 +432,7 @@ impl c::data_update {
     fn bios_free(&mut self) {
         // SAFETY: bios_init()'s, dropped once: neither bio is in flight
         unsafe {
-            BioBuffersOwned::from_raw(&self.fs().bio_bounce).free_from(Pin::new_unchecked(&mut self.pages));
+            BioBuffersOwned::from_raw(&self.fs().bio_bounce).free_from(&mut self.pages);
             core::ptr::drop_in_place(&raw mut self.pages);
         }
     }

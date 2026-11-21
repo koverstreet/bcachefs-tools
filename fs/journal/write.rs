@@ -816,12 +816,10 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
             jbio.buf = ptr::from_ref::<c::journal_buf>(&w).cast_mut();
             jbio.submit_time = local_clock();
 
-            let raw = (&raw mut jbio.bio).cast::<c::bio>();
-            unsafe {
-                (*raw).bi_end_io = Some(write_endio);
-                (*raw).bi_private = ptr::from_ref::<Dev>(&ca).cast_mut().cast();
-                (*raw).bi_ioprio = IOPRIO_RT;
-            }
+            let raw = jbio.bio.raw_mut();
+            raw.bi_end_io = Some(write_endio);
+            raw.bi_private = ptr::from_ref::<Dev>(&ca).cast_mut().cast();
+            raw.bi_ioprio = IOPRIO_RT;
 
             /* the bio's ref, which write_endio() takes back - its slot as
              * the bioset left it, written, not dropped: */
@@ -862,11 +860,9 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
             jbio.buf = ptr::from_ref::<c::journal_buf>(&w).cast_mut();
             jbio.submit_time = local_clock();
 
-            let raw = (&raw mut jbio.bio).cast::<c::bio>();
-            unsafe {
-                (*raw).bi_end_io = Some(write_preflush_endio);
-                (*raw).bi_private = ptr::from_ref::<Dev>(&ca).cast_mut().cast();
-            }
+            let raw = jbio.bio.raw_mut();
+            raw.bi_end_io = Some(write_preflush_endio);
+            raw.bi_private = ptr::from_ref::<Dev>(&ca).cast_mut().cast();
 
             /* the bio's ref, which write_preflush_endio() takes back - its
              * slot as the bioset left it, written, not dropped: */

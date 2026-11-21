@@ -743,7 +743,6 @@ use crate::{btree_trans, log_msg_ratelimited, prt};
 use c::WriteFlags as w;
 use c::{WritePointStateWriter, WritePointWrites};
 use core::fmt;
-use core::pin::Pin;
 use core::ptr::NonNull;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -886,8 +885,8 @@ impl<R: IoRefIdx> c::bch_write_bio<R> {
 
     /// While it's ours, not in flight: the write path's bios are always
     /// whole, initialized bios.
-    pub(crate) fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        unsafe { Pin::new_unchecked(&mut self.bio) }
+    pub(crate) fn bio_mut(&mut self) -> &mut Bio {
+        &mut self.bio
     }
 }
 
@@ -1189,7 +1188,7 @@ extern "C" fn write_index(mut op: Running<Op>) {
 
     if op.has(w::submitted) && op.has(w::update) {
         let pool = &op.fs().bio_bounce;
-        unsafe { BioBuffersOwned::from_raw(pool).free_from(Pin::new_unchecked(&mut op.update_mut().pages)) };
+        unsafe { BioBuffersOwned::from_raw(pool) }.free_from(&mut op.update_mut().pages);
     }
 
     // the op's running ref, the list's while it's queued

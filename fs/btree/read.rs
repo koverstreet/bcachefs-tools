@@ -135,7 +135,7 @@ unsafe impl BioOwner for NodeReadIo<'_> {
         &self.0.bio
     }
 
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+    fn bio_mut(&mut self) -> &mut Bio {
         self.0.as_mut().bio_mut()
     }
 }

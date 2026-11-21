@@ -50,7 +50,7 @@ unsafe impl BioOwner for c::bch_writepage_io {
         &self.op.wbio.bio
     }
 
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+    fn bio_mut(&mut self) -> &mut Bio {
         self.op.wbio.bio_mut()
     }
 }
