@@ -149,6 +149,19 @@ impl<'a> BioRange<'a> {
         self
     }
 
+    /// @bytes from where it starts, shorter or longer: the bytes a bio's
+    /// buffer has past its data, a decoded extent's. Panics past its bio's
+    /// bvecs, or on a clone's, whose aren't its own.
+    pub fn resize(mut self, bytes: u32) -> Self {
+        let bio = self.bio();
+        assert!(!bio.cloned(), "resizing a range of a clone: its bvecs are its parent's");
+        let room = (self.iter.bi_idx..u32::from(bio.raw().bi_vcnt)).map(|i| unsafe { bio.bvec(i) }.bv_len).sum::<u32>()
+            - bi_offset!(self.iter);
+        assert!(bytes <= room, "resizing a bio range to {bytes} bytes: its bio has {room} from it");
+        self.iter.bi_size = bytes;
+        self
+    }
+
     pub fn segments(self) -> Segments<'a> {
         Walk::new(self, segment)
     }
