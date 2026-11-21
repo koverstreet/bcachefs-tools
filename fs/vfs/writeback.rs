@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Buffered writeback: buffered.c's writepages. A writeback walk's dirty
-//! sectors, gathered into bch_writepage_ios - one bio's worth of contiguous
-//! sectors at one replica count each. Each io is the home of a task, in one
+//! sectors, gathered into ios - one bio's worth of contiguous sectors at one
+//! replica count each. Each io is the home of a task, in one
 //! allocation with the task and its bvecs, from a pool of the module's - its
 //! folios added before it's started, then its write awaited, and its folios'
 //! writeback ended.
@@ -27,16 +27,24 @@ use crate::os::ops::from_raw;
 use crate::os::folio::Wbc;
 use super::folio::{Folio, FolioGuard, FolioSpan, Mapping};
 use crate::vfs::folio::Writeback;
-use crate::vfs::inode::InodeInfo;
 use c::FolioSectorState as SectorState;
 use c::WriteFlags as w;
 use core::ffi::c_int;
 use core::pin::Pin;
 use core::ptr;
 use cstruct_macros::in_place;
-use pin_init::pin_init;
+use pin_init::{pin_data, pin_init};
 
-type Io = c::bch_writepage_io;
+#[pin_data]
+struct Io {
+    mapping: Mapping,
+    #[pin]
+    op:      c::bch_write_op,
+    #[pin]
+    wbio:    Bio,
+}
+crate::has_bio!(Io, wbio);
+
 type Pool = &'static Mempool<Kmalloc>;
 /// An io, being filled: its task not started.
 type IoSlot = TaskSlot<'static, Io, fn(Pin<&'static mut Io>) -> WritepageFut<'static>, Pool, Exclusive>;
@@ -61,17 +69,10 @@ struct WritepageState {
 
 /// Its io, not started: ours to fill.
 fn io_of(slot: &mut IoSlot) -> &mut Io {
-    unsafe { slot.home().get_unchecked_mut() }
+    slot.home().get_mut()
 }
 
-impl c::bch_writepage_io {
-    /// Its writeback state - its folios' - is the io's ref on it.
-    fn inode(&self) -> &'static InodeInfo {
-        unsafe { InodeInfo::from_inode(self.inode.cast()) }
-    }
-}
-
-unsafe impl BioOwner for c::bch_writepage_io {
+unsafe impl BioOwner for Io {
     type Buffers = BioBuffersUnmanaged;
 
     fn bio(&self) -> &Bio {
@@ -115,7 +116,8 @@ fn folios_clear_replicas(io: &Io, f: impl Fn(&Folio)) {
 }
 
 fn writepage_io_done(io: &mut Io) {
-    let inode = io.inode();
+    let mapping = io.mapping;
+    let inode = mapping.inode();
 
     if io.op.error != 0 {
         inode.ei_flags.set(c::InodeInfoFlag::EI_INODE_ERROR, true);
@@ -161,8 +163,9 @@ mod task {
 
     #[in_place(WritepageFut)]
     pub(super) async fn writepage_task<'h>(io: Pin<&'h mut Io>) {
-        let io = unsafe { io.get_unchecked_mut() };
-        let inode = io.inode();
+        let io = io.get_mut();
+        let mapping = io.mapping;
+        let inode = mapping.inode();
         write(&mut io.op, &mut io.wbio, WriteFor::Inode(&inode.ei_devs_need_flush), Resume::queue(Queue::system_dfl()))
             .await;
         writepage_io_done(io);
@@ -178,21 +181,22 @@ fn writepage_do_io(w: &mut WritepageState) {
 }
 
 /*
- * Get a bch_writepage_io and add @page to it - appending to an existing one if
+ * Get a writepage io and add @page to it - appending to an existing one if
  * possible, else allocating a new one:
  */
-fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeInfo,
+fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, mapping: Mapping,
                       sector: u64, nr_replicas: u32, res_nr_replicas: u32) {
     let opts = w.opts;
     let mut slot = IoSlot::exclusive_bio_in(&WRITEPAGES, &WRITEPAGE_BVECS, ptr::null_mut(), c::BIO_MAX_VECS as u16,
                                             c::req_op_REQ_OP_WRITE, |b| {
         pin_init!(Io {
-            inode: inode.raw(),
-            op    <- c::bch_write_op::init(fs, opts),
-            wbio         <- b.init::<BchError>(),
+            mapping,
+            op   <- c::bch_write_op::init(fs, opts),
+            wbio <- b.init::<BchError>(),
         }? BchError)
     }).expect("a writepage io's box: its pool waits for an element, and an op's init can't fail");
 
+    let inode = mapping.inode();
     let io = io_of(&mut slot);
     let op = &mut io.op;
     op.target          = opts.foreground_target;
@@ -338,13 +342,13 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
         }
 
         if w.io.is_none() {
-            writepage_io_alloc(fs, wbc, w, inode, sector, nr_replicas_this_write, res_nr_replicas);
+            writepage_io_alloc(fs, wbc, w, mapping, sector, nr_replicas_this_write, res_nr_replicas);
         }
 
         folio.share();
 
         let io = io_of(w.io.as_mut().expect("an io, just made"));
-        assert!(core::ptr::eq(io.inode, inode.raw()), "a writepage io of another inode");
+        assert!(io.mapping == mapping, "a writepage io of another inode");
         unsafe { c::bio_add_folio_nofail(io.wbio.raw_mut(), folio.as_ptr(), sectors << 9, offset << 9) };
 
         io.op.res.sectors.set(io.op.res.sectors.get() + reserved_sectors);

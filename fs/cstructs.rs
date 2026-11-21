@@ -43,7 +43,6 @@
 #[path = "types.rs"] pub mod types;
 #[path = "util/two_state_shared_lock_types.rs"] pub mod util_two_state_shared_lock_types;
 #[path = "util/util_types.rs"] pub mod util_util_types;
-#[path = "vfs/buffered_types.rs"] pub mod vfs_buffered_types;
 #[path = "vfs/direct_types.rs"] pub mod vfs_direct_types;
 #[path = "vfs/fdm_types.rs"] pub mod vfs_fdm_types;
 #[path = "vfs/fs_types.rs"] pub mod vfs_fs_types;
@@ -191,8 +190,6 @@ pub mod c {
     pub use crate::util::time_stats::{NR_QUANTILES, TIME_STATS_MV_WEIGHT, TimeStatsLocked, bch2_time_stats, bch2_time_stats_quantiles, quantile_entry, quantiles, time_stat_buffer, time_stat_buffer_entry};
     pub use super::util_two_state_shared_lock_types::*;
     pub use super::util_util_types::*;
-    #[cfg(not(NO_BCACHEFS_FS))]
-    pub use super::vfs_buffered_types::*;
     #[cfg(not(NO_BCACHEFS_FS))]
     pub use super::vfs_direct_types::*;
     pub use super::vfs_fdm_types::*;
