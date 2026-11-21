@@ -542,11 +542,11 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
 
             #[cfg(CONFIG_BCACHEFS_DEBUG)]
             if write_corrupt_ratio != 0 && crate::os::kernel::random_u64_below(write_corrupt_ratio.into()) == 0 {
-                let mut b = dst.as_mut().expect("corrupting a bio of its own").bio_mut();
+                let b = dst.as_mut().expect("corrupting a bio of its own").bio_mut();
                 let s = b.range().len();
-                b.as_mut().raw_mut().bi_iter.bi_size = dst_len;
-                b.as_mut().corrupt();
-                b.as_mut().raw_mut().bi_iter.bi_size = s;
+                b.raw_mut().bi_iter.bi_size = dst_len;
+                b.corrupt();
+                b.raw_mut().bi_iter.bi_size = s;
             }
 
             if let Some(d) = &mut dst {
@@ -577,9 +577,9 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
 
     let extent = match dst.zip(saved_iter) {
         Some((mut d, iter)) => {
-            let mut b = d.bio_mut();
-            b.as_mut().raw_mut().bi_iter = iter;
-            b.as_mut().raw_mut().bi_iter.bi_size = total_output;
+            let b = d.bio_mut();
+            b.raw_mut().bi_iter = iter;
+            b.raw_mut().bi_iter.bi_size = total_output;
             ExtentData::Own(d)
         }
         None => {

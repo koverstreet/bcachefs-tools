@@ -10,7 +10,6 @@
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
-use core::pin::Pin;
 
 use super::pages::{self, BouncePool};
 use super::{buf_nr_bvecs, Bio, BioRange};
@@ -29,10 +28,10 @@ pub unsafe trait Buffers: Sized {
     fn nr_vecs(src: &Self::Src<'_>) -> u16;
 
     /// Into the bvecs of @bio, fresh, with nr_vecs() of them.
-    fn fill(bio: Pin<&mut Bio>, src: Self::Src<'_>) -> Result<Self, BchError>;
+    fn fill(bio: &mut Bio, src: Self::Src<'_>) -> Result<Self, BchError>;
 
     /// As the bio is destroyed: done with, and not in flight.
-    fn release(&mut self, bio: Pin<&mut Bio>);
+    fn release(&mut self, bio: &mut Bio);
 
     /// Whether an IO of @op may go to or from them: they last the bio's life,
     /// through each reset() for another IO.
@@ -53,11 +52,11 @@ unsafe impl Buffers for BioBuffersUnmanaged {
         *nr
     }
 
-    fn fill(_: Pin<&mut Bio>, _: u16) -> Result<Self, BchError> {
+    fn fill(_: &mut Bio, _: u16) -> Result<Self, BchError> {
         Ok(Self)
     }
 
-    fn release(&mut self, _: Pin<&mut Bio>) {}
+    fn release(&mut self, _: &mut Bio) {}
 }
 
 /// Pages of the bio's own, from the page allocator - or what it can't give
@@ -85,7 +84,7 @@ unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
         pages::nr_vecs(size)
     }
 
-    fn fill(bio: Pin<&mut Bio>, (pool, bs, size, at_least, gfp): Self::Src<'_>) -> Result<Self, BchError> {
+    fn fill(bio: &mut Bio, (pool, bs, size, at_least, gfp): Self::Src<'_>) -> Result<Self, BchError> {
         let bio = bio.raw_mut();
         match pages::alloc_pages_pool(pool, bio, bs, size, at_least, gfp) {
             Ok(used_pool) => Ok(Self { pool, used_pool }),
@@ -96,7 +95,7 @@ unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
         }
     }
 
-    fn release(&mut self, bio: Pin<&mut Bio>) {
+    fn release(&mut self, bio: &mut Bio) {
         unsafe { pages::free_pages_pool(self.pool, bio.raw_mut()) }
     }
 }
@@ -114,7 +113,7 @@ unsafe impl Buffers for BioBuffersPages {
         pages::nr_vecs(size)
     }
 
-    fn fill(bio: Pin<&mut Bio>, (bs, size, gfp): Self::Src<'_>) -> Result<Self, BchError> {
+    fn fill(bio: &mut Bio, (bs, size, gfp): Self::Src<'_>) -> Result<Self, BchError> {
         let bio = bio.raw_mut();
         if pages::alloc_pages(bio, bs, size, gfp).is_err() {
             unsafe { pages::free_pages(bio) };
@@ -123,7 +122,7 @@ unsafe impl Buffers for BioBuffersPages {
         Ok(Self)
     }
 
-    fn release(&mut self, bio: Pin<&mut Bio>) {
+    fn release(&mut self, bio: &mut Bio) {
         unsafe { pages::free_pages(bio.raw_mut()) }
     }
 }
@@ -144,25 +143,30 @@ unsafe impl<'a> Buffers for BioClone<'a> {
         0
     }
 
-    fn fill(bio: Pin<&mut Bio>, src: BioRange<'a>) -> Result<Self, BchError> {
-        unsafe { clone_from(bio.raw_mut(), src.bio().raw(), src.pos()) };
+    fn fill(bio: &mut Bio, src: BioRange<'a>) -> Result<Self, BchError> {
+        unsafe { clone_from(bio, src.bio(), src.pos()) };
         Ok(Self(PhantomData))
     }
 
-    fn release(&mut self, _: Pin<&mut Bio>) {}
+    fn release(&mut self, _: &mut Bio) {}
 }
 
-/// __bio_clone(), of @s from @iter, into a bio of no bvecs and no device.
+/// __bio_clone(), of @s from @iter, into a bio of no bvecs and no device: its
+/// table @s's, where it is - borrowed, as @s doesn't move while it is.
 ///
 /// # Safety
 /// @s's bvecs outlive @b.
-pub(super) unsafe fn clone_from(b: &mut c::bio, s: &c::bio, iter: c::bvec_iter) {
+pub(super) unsafe fn clone_from(b: &mut Bio, s: &Bio, iter: c::bvec_iter) {
+    let table = s.vecs_ptr().cast_mut();
+    b.vecs_at = super::VecsAt::Borrowed;
+    let (b, s) = (&mut b.bio, &s.bio);
     assert!(b.bi_bdev.is_null(), "a clone made for a device: it's bio_set_dev()'s, after");
     b.bi_flags |= 1 << c::BIO_CLONED;
     b.bi_ioprio = s.bi_ioprio;
     clone_hints(b, s);
     b.bi_iter = iter;
     bi_io_vec!(clone b, s);
+    bi_io_vec!(b) = table;
 }
 
 /// The rest of __bio_clone()'s copies, as each kernel's struct bio has them;
@@ -240,14 +244,14 @@ unsafe impl<B: MapBuf> Buffers for BioBuffersMapped<B> {
     }
 
     /// Panics if the bio's op isn't one B allows.
-    fn fill(bio: Pin<&mut Bio>, buf: B) -> Result<Self, BchError> {
+    fn fill(bio: &mut Bio, buf: B) -> Result<Self, BchError> {
         assert!(B::allows_op(bio.op()), "mapping a buffer into a bio for an op it can't serve");
         let (p, len) = buf.as_raw();
         unsafe { bio.map(p, len) };
         Ok(Self(buf))
     }
 
-    fn release(&mut self, _: Pin<&mut Bio>) {}
+    fn release(&mut self, _: &mut Bio) {}
 
     fn allows_op(op: u32) -> bool {
         B::allows_op(op)

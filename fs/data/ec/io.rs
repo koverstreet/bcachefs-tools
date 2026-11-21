@@ -314,7 +314,7 @@ pub fn scrub_block(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -
 /// stripe being open is what makes a stale pointer one - the key may have
 /// been deleted while the IO was in flight.
 #[args_stored_once]
-pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: Pin<&mut Bio>,
+pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut Bio,
                                 pick: &c::extent_ptr_decoded, flags: c::ReadFlags, msg: &mut Printbuf)
     -> Result<(), BchError>
 {
@@ -407,7 +407,7 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
 }
 
 /// The IO done: what it read checked, and @block's copied into @bio.
-fn reconstruct_finish(fs: &Fs, key: &BkeyBuf, buf: &mut StripeBuf, block: usize, mut bio: Pin<&mut Bio>,
+fn reconstruct_finish(fs: &Fs, key: &BkeyBuf, buf: &mut StripeBuf, block: usize, bio: &mut Bio,
                       flags: c::ReadFlags, msg: &mut Printbuf) -> Result<(), BchError> {
     let s = BkeySC::from(key).arm::<c::Stripe>().expect("a stripe, as looked up");
     let iter = bio.raw().bi_iter;
@@ -423,7 +423,7 @@ fn reconstruct_finish(fs: &Fs, key: &BkeyBuf, buf: &mut StripeBuf, block: usize,
     if ret.is_ok() {
         let from = ((offset - buf.offset) as usize) << 9;
         let src = &buf.block(block)[from..from + ((sectors as usize) << 9)];
-        bio.as_mut().range().copy_from(src);
+        bio.range().copy_from(src);
     }
 
     if ret.is_ok() && errs_only_dev_offline(buf) {

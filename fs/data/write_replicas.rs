@@ -21,7 +21,6 @@ use crate::util::alloc::Kmalloc;
 use crate::util::bio::{Bio, BioBox, BioClone, BioRange, HasBio, Submitted};
 use crate::os::workqueue::Queue;
 use crate::util::task::{waiter, Resumable, Resume, ResumeAt};
-use core::pin::Pin;
 use core::ptr;
 use cstruct_macros::args_stored_once;
 
@@ -181,12 +180,12 @@ impl<'a> InFlight<'a> {
 /// @buf, by @bio - a write, mapped to @buf for the IO - written to each device
 /// of @k's pointers: the replicas that failed, once all are done, resumed @at.
 #[args_stored_once]
-pub async fn write_replicas(fs: &'static Fs, mut bio: Pin<&mut Bio>, buf: &[u8], ty: DataType, k: &BkeyI,
+pub async fn write_replicas(fs: &'static Fs, bio: &mut Bio, buf: &[u8], ty: DataType, k: &BkeyI,
                             at: Resume<'_>) -> ReplicaErrs {
     assert_eq!(bio.op(), c::req_op_REQ_OP_WRITE, "write_replicas() of a bio for another op");
     assert_eq!(bio.nr_vecs(), 0, "write_replicas() of a bio with buffers mapped already");
     /* mapped while @buf's borrowed: emptied once every replica's done */
-    unsafe { bio.as_mut().map(buf.as_ptr().cast_mut(), buf.len()) };
+    unsafe { bio.map(buf.as_ptr().cast_mut(), buf.len()) };
 
     let errs = {
         let mut io = InFlight::new(fs);

@@ -353,7 +353,7 @@ impl Kind<'_> {
         }
     }
 
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+    fn bio_mut(&mut self) -> &mut Bio {
         match self {
             Kind::Own(LentBio { bio, .. }) | Kind::Promote(bio, _) => bio.bio_mut(),
             Kind::Clone(b) => b.bio_mut(),
@@ -414,7 +414,7 @@ unsafe impl BioOwner for Fragment<'_> {
         self.rbio().bio()
     }
 
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+    fn bio_mut(&mut self) -> &mut Bio {
         self.kind.bio_mut()
     }
 }
@@ -1337,8 +1337,8 @@ impl<'r> Planned<'r, '_> {
                 None
             }
         };
-        let mut bio = slot.home().bio_mut();
-        bio.as_mut().set_opf(opf);
+        let bio = slot.home().bio_mut();
+        bio.set_opf(opf);
         bio.set_sector(plan.pick.ptr.offset());
         let rb = &slot.home().into_ref().get_ref().rbio;
         trace_fragment(orig, rb, &plan, bounce.is_some(), k);

@@ -16,7 +16,6 @@ use crate::util::bio::Bio;
 use crate::util::task::requeue;
 use crate::os::workqueue::Queue;
 use core::ffi::{c_int, c_uint};
-use core::pin::Pin;
 
 use crate::c::bch2_bio_iov_iter_get_pages;
 
@@ -24,14 +23,15 @@ impl Bio {
     /// Its bvecs the pages of @iter's next bytes, pinned, as many as it has
     /// room for - @iter advanced past them. release_user_pages() gives them
     /// back.
-    pub fn pin_user_pages(self: Pin<&mut Self>, iter: &mut IovIter<'_>) -> Result<(), BchError> {
+    pub fn pin_user_pages(&mut self, iter: &mut IovIter<'_>) -> Result<(), BchError> {
         let ret = unsafe { bch2_bio_iov_iter_get_pages(self.raw_mut(), iter.as_ptr(), 0) };
+        self.raw_filled();
         if ret < 0 { Err(BchError::from_raw(ret)) } else { Ok(()) }
     }
 
     /// Its pages dirtied, before it's read into: the user's.
-    pub fn set_pages_dirty(self: Pin<&mut Self>) {
-        for f in self.into_ref().get_ref().range_all().folios() {
+    pub fn set_pages_dirty(&mut self) {
+        for f in self.range_all().folios() {
             let folio = f.folio.as_ptr();
             unsafe {
                 c::folio_lock(folio);
@@ -43,19 +43,19 @@ impl Bio {
 
     /// The user's pages it pinned, given back as they are: a write's, which
     /// only read them.
-    pub fn release_pinned_pages(self: Pin<&mut Self>) {
+    pub fn release_pinned_pages(&mut self) {
         unsafe { c::bio_release_pages(self.raw_mut(), false) };
     }
 
     /// The user's pages it pinned, given back - @dirtied, if set_pages_dirty()
     /// dirtied them, as they're checked dirty still: those cleaned since are
     /// dirtied again first, under their folio locks.
-    pub async fn release_user_pages(mut self: Pin<&mut Self>, dirtied: bool) {
-        let redirty = dirtied && !self.as_ref().get_ref().range_all().folios()
+    pub async fn release_user_pages(&mut self, dirtied: bool) {
+        let redirty = dirtied && !self.range_all().folios()
             .all(|f| unsafe { c::folio_test_dirty(f.folio.as_ptr()) });
         if redirty {
             requeue(Queue::system_dfl()).await;
         }
-        unsafe { c::bio_release_pages(self.as_mut().raw_mut(), redirty) };
+        unsafe { c::bio_release_pages(self.raw_mut(), redirty) };
     }
 }

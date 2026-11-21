@@ -845,7 +845,7 @@ impl c::bch_write_bio {
 
     /// While it's ours, not in flight: the write path's bios are always
     /// whole, initialized bios.
-    pub(crate) fn bio_mut(&mut self) -> Pin<&mut Bio> {
+    pub(crate) fn bio_mut(&mut self) -> &mut Bio {
         HasBio::bio_mut(self.pinned())
     }
 }
@@ -892,7 +892,7 @@ impl ExtentBio {
         }
     }
 
-    pub(crate) fn bio_mut(&mut self) -> Pin<&mut Bio> {
+    pub(crate) fn bio_mut(&mut self) -> &mut Bio {
         match self {
             ExtentBio::Bounce(b) => HasBio::bio_mut(b.as_mut()),
             ExtentBio::Stripe(b) => HasBio::bio_mut(b.as_mut()),
