@@ -7,8 +7,9 @@ bcachefs.ko carries this stack to kernels built without Rust, back to
 6.16, so the helpers can't assume REF's C:
 
   - vrealloc_node_align_noprof is exported only from 7.0 (d60769075013).
-    Before that the helper WARNs and fails: bcachefs never uses the
-    Vmalloc allocator; KVmalloc goes through the exported kvrealloc.
+    Before that the helper WARNs and fails: bcachefs's Vmalloc, in
+    os/linux_kernel/alloc.rs, calls __vmalloc_noprof() and vfree()
+    there instead; KVmalloc goes through the exported kvrealloc.
   - krealloc_node_align()/kvrealloc_node_align() are 6.18+. Before that,
     pad the size to the alignment and call krealloc()/kvrealloc(): the slab
     allocators' alignment guarantees make that the requested alignment, as
@@ -34,7 +35,7 @@ for.
 ---
 
 diff --git a/bindings/bindings_helper.h b/bindings/bindings_helper.h
-index 8e36395a7eb7..344e6913e765 100644
+index 58830be7d1c2..ecc398be5890 100644
 --- a/bindings/bindings_helper.h
 +++ b/bindings/bindings_helper.h
 @@ -69,6 +69,17 @@
@@ -199,7 +200,7 @@ index 6e59cc9c665c..b87105b008d3 100644
 +#endif
 +#endif
 diff --git a/helpers/vmalloc.c b/helpers/vmalloc.c
-index 6aed13292313..16402927b20c 100644
+index 6aed13292313..b98188151ed7 100644
 --- a/helpers/vmalloc.c
 +++ b/helpers/vmalloc.c
 @@ -1,13 +1,26 @@
@@ -219,9 +220,9 @@ index 6aed13292313..16402927b20c 100644
 +	/*
 +	 * vrealloc_node_align_noprof gained EXPORT_SYMBOL only in 7.0 (commit
 +	 * d60769075013); on older kernels the bundled helper can't link it from a
-+	 * module. bcachefs uses only Kmalloc/KVmalloc (KVmalloc routes through the
-+	 * exported kvrealloc), never the Vmalloc allocator, so this path is
-+	 * unreachable — WARN if that ever changes.
++	 * module. bcachefs's Vmalloc, os/linux_kernel/alloc.rs's, calls
++	 * __vmalloc_noprof() and vfree() there instead, and doesn't come
++	 * here - WARN if that ever changes.
 +	 */
 +	WARN_ONCE(1, "bcachefs: Vmalloc realloc unsupported on this kernel (vrealloc not exported pre-7.0)\n");
 +	return NULL;

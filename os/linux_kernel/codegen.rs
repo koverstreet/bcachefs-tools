@@ -55,7 +55,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/task_io_accounting_ops.h",	// task_io_account_write(): vfs/direct_write.rs's
     "linux/kthread.h",			// kthread_use_mm(): an async DIO write's continuation
     "linux/swap.h",			// mm_account_reclaimed_pages(): btree/cache.rs's node buffers
-    "linux/vmalloc.h",			// __vmalloc_noprof(): the same
+    "linux/vmalloc.h",			// __vmalloc_noprof(), vfree(): alloc.rs's Vmalloc before 7.0
     "linux/trace_events.h",		// struct trace_event_call and the rest: tracepoint.rs's
 					// tracepoints' events, and what their probes call
 ];
@@ -243,7 +243,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "mapping_set_folio_min_order", "inode_init_once", "inode_init_always_gfp", "make_bad_inode",
     "init_special_inode", "inode_nohighmem", "igrab", "write_inode_now",
     // btree/cache.rs's node buffers
-    "mm_account_reclaimed_pages", "__vmalloc_noprof",
+    "mm_account_reclaimed_pages",
+    // alloc.rs's Vmalloc before 7.0, which exports no vrealloc()
+    "__vmalloc_noprof", "vfree",
     // vfs/vfs_inode.rs, an evicted inode's: a static inline from 6.19, and the exports
     "inode_state_read_once", "is_bad_inode", "truncate_inode_pages_final", "d_mark_dontcache",
     "clear_inode",
