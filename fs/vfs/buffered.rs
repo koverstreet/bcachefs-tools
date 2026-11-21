@@ -33,7 +33,8 @@ use crate::data::read::{self, ReadHooks, Rbio};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts::get_inode;
-use crate::util::alloc::{KVVec, Kmalloc, PushError};
+use crate::types::Fifo;
+use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
 use crate::util::bio::{bvec_offset, inline_vecs, Bio, BioRange, HasBio, Lent};
 use crate::os::kernel::PAGE_SIZE;
@@ -51,43 +52,94 @@ type F = c::ReadFlags;
 
 const PAGE_SECTORS: u64 = (PAGE_SIZE >> 9) as u64;
 
-/// The folios a readahead asked for, each with its bcachefs state, last
-/// first: read from the end, or given back.
-struct ReadaheadIter(KVVec<FolioGuard<'static>>);
+/// A readahead's window, to @end: the folios it asked for, each with its
+/// bcachefs state, and the new ones a read extends it by. Taken in order, or
+/// given back.
+struct ReadaheadIter {
+    mapping: Mapping,
+    folios:  Fifo<FolioGuard<'static>>,
+    end:     u64,
+}
 
 impl ReadaheadIter {
-    fn new() -> Self {
-        ReadaheadIter(KVVec::new())
+    /// None of a readahead's: the window ends at @end, for a single folio's
+    /// read to extend past.
+    fn new(mapping: Mapping, end: u64) -> Self {
+        ReadaheadIter { mapping, folios: Fifo::new(), end }
     }
 
     fn take(ra: &mut Readahead<'_>) -> Result<Self, BchError> {
-        let mut f = ReadaheadIter::new();
+        let mut f = ReadaheadIter::new(ra.mapping(), 0);
         while let Some(folio) = ra.next() {
-            let ok = folio.create_private().is_some() && f.0.reserve(1).is_ok();
-            let pushed = if ok { f.0.push_within_capacity(folio) } else { Err(PushError(folio)) };
-            if let Err(PushError(folio)) = pushed {
+            let ok = folio.create_private().is_some() && f.folios.reserve(1).is_ok();
+            let pushed = if ok { f.folios.push_back(folio) } else { Err(folio) };
+            if let Err(folio) = pushed {
                 ra.unread(folio);
-                if f.0.is_empty() {
+                if f.folios.is_empty() {
                     return Err(BchError::from(c::ENOMEM));
                 }
                 break;
             }
         }
-        f.0.reverse();
+        f.end = f.folios.peek_back().map_or(0, |folio| folio.end_sector());
         Ok(f)
     }
 
     fn next(&mut self) -> Option<FolioGuard<'static>> {
-        self.0.pop()
+        self.folios.pop_front()
     }
 
     fn remaining(&self) -> usize {
-        self.0.len()
+        self.folios.len()
+    }
+
+    /// The window extended by a new folio at its end, of up to @sectors: if
+    /// the page cache hasn't one there, and it can be made.
+    fn extend(&mut self, t: &TransAttempt<'_, '_>, sectors: u32) -> Option<()> {
+        let mapping = self.mapping;
+        if u64::from(sectors) < PAGE_SECTORS << mapping.min_folio_order() {
+            return None;
+        }
+
+        let folio_offset = self.end / PAGE_SECTORS;
+        let order = (u64::from(sectors) / PAGE_SECTORS).ilog2()
+            /* ensure proper alignment */
+            .min((folio_offset | 1 << 31).trailing_zeros())
+            /*
+             * mapping_max_folio_order() is 0 on !THP no matter what
+             * we asked for at inode init: without THP the MM has no
+             * split_folio(), only a stub that warns and returns
+             * -EINVAL, so a large folio we put in the page cache
+             * here can never be split again.
+             *
+             * This can't fight the mapping_min_folio_order() check
+             * above: a min order above 0 means bs > ps, and
+             * bch2_fs_alloc() already refuses to mount such a
+             * filesystem on !THP.
+             */
+            .min(mapping.max_folio_order());
+
+        if mapping.has_folio(folio_offset) {
+            return None;
+        }
+
+        let enomem = || BchError::from(c::ENOMEM);
+        let gfp = mapping.readahead_gfp();
+        t.allocate_dropping_locks_norelock(|| self.folios.reserve(1).map_err(|_| enomem())).ok()?;
+        let mut folio = t.allocate_dropping_locks_norelock(|| mapping.alloc_folio(gfp, order).ok_or_else(enomem)).ok()?;
+        t.allocate_dropping_locks_norelock(|| folio.create_private().map(drop).ok_or_else(enomem)).ok()?;
+        t.allocate_dropping_locks_norelock(|| mapping.add_folio(&mut folio, folio_offset, c::GFP_KERNEL)).ok()?;
+
+        let folio = folio.into_cached();
+        self.end = folio.end_sector();
+        let pushed = self.folios.push_back(folio);
+        assert!(pushed.is_ok(), "a readahead window's folio, pushed into room reserved for it");
+        Some(())
     }
 
     /// Back to front, as unread() wants them.
     fn give_back(&mut self, ra: &mut Readahead<'_>) {
-        for folio in self.0.drain_all() {
+        while let Some(folio) = self.folios.pop_back() {
             ra.unread(folio);
         }
     }
@@ -171,7 +223,6 @@ struct Window {
     /// The readahead's folios to extend into - none but new ones, for a
     /// single folio's read that's extended - or None, not extended
     batch:     Option<NonNull<ReadaheadIter>>,
-    mapping:   Mapping,
     read_from: u64,
     /// The readahead window: past this is the speculative extension
     orig_end:  u64,
@@ -185,46 +236,6 @@ unsafe impl Send for Window {}
 struct PagecacheRead<'r> {
     window: Window,
     read:   &'r mut ReadFolios,
-}
-
-impl Window {
-    fn new_folio(&self, t: &TransAttempt<'_, '_>, end_sector: u64, sectors_remaining: u32)
-        -> Option<FolioGuard<'static>>
-    {
-        let mapping = self.mapping;
-        if u64::from(sectors_remaining) < PAGE_SECTORS << mapping.min_folio_order() {
-            return None;
-        }
-
-        let folio_offset = end_sector / PAGE_SECTORS;
-        let order = (u64::from(sectors_remaining) / PAGE_SECTORS).ilog2()
-            /* ensure proper alignment */
-            .min((folio_offset | 1 << 31).trailing_zeros())
-            /*
-             * mapping_max_folio_order() is 0 on !THP no matter what
-             * we asked for at inode init: without THP the MM has no
-             * split_folio(), only a stub that warns and returns
-             * -EINVAL, so a large folio we put in the page cache
-             * here can never be split again.
-             *
-             * This can't fight the mapping_min_folio_order() check
-             * above: a min order above 0 means bs > ps, and
-             * bch2_fs_alloc() already refuses to mount such a
-             * filesystem on !THP.
-             */
-            .min(mapping.max_folio_order());
-
-        if mapping.has_folio(folio_offset) {
-            return None;
-        }
-
-        let enomem = || BchError::from(c::ENOMEM);
-        let gfp = mapping.readahead_gfp();
-        let mut folio = t.allocate_dropping_locks_norelock(|| mapping.alloc_folio(gfp, order).ok_or_else(enomem)).ok()?;
-        t.allocate_dropping_locks_norelock(|| folio.create_private().map(drop).ok_or_else(enomem)).ok()?;
-        t.allocate_dropping_locks_norelock(|| mapping.add_folio(&mut folio, folio_offset, c::GFP_KERNEL)).ok()?;
-        Some(folio.into_cached())
-    }
 }
 
 impl ReadHooks for PagecacheRead<'_> {
@@ -250,13 +261,11 @@ impl ReadHooks for PagecacheRead<'_> {
             }
             let end_sector = iter.bi_sector + u64::from(bio_sectors);
 
-            let folio = match folios.next() {
-                Some(folio) => folio,
-                None if get_more => match self.window.new_folio(t, end_sector, sectors - bio_sectors) {
-                    Some(folio) => folio,
-                    None => break,
-                },
-                None => break,
+            let Some(folio) = folios.next() else {
+                if get_more && folios.extend(t, sectors - bio_sectors).is_some() {
+                    continue;
+                }
+                break;
             };
 
             assert_eq!(folio.sector(), end_sector, "a folio added to a read bio, not at its end");
@@ -370,13 +379,12 @@ pub(crate) fn readahead(mut ra: Readahead<'_>) {
             return folios.give_back(&mut ra);
         };
 
-        let orig_end = folios.0.first().map_or(0, |f| f.end_sector());
+        let orig_end = folios.end;
         while let Some(folio) = folios.next() {
             let nr_vecs = (folios.remaining() + 1).min(c::BIO_MAX_VECS as usize);
             let sector = folio.sector();
             let window = Window {
                 batch:     Some(NonNull::from(&mut folios)),
-                mapping,
                 read_from: sector + u64::from(folio.partially_uptodate()),
                 orig_end,
             };
@@ -412,7 +420,7 @@ pub(crate) fn read_single_folio(folio: &FolioLocked, mapping: Mapping, extend: b
         1
     };
 
-    let mut folios = ReadaheadIter::new();
+    let mut folios = ReadaheadIter::new(mapping, folio.end_sector());
     let set_up = |mut b: Pin<&mut Bio>| {
         b.as_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
         b.as_mut().set_sector(folio.sector());
@@ -421,7 +429,6 @@ pub(crate) fn read_single_folio(folio: &FolioLocked, mapping: Mapping, extend: b
 
     let window = Window {
         batch:     extend.then(|| NonNull::from(&mut folios)),
-        mapping,
         read_from: folio.sector() + u64::from(folio.partially_uptodate()),
         orig_end:  folio.end_sector(),
     };
