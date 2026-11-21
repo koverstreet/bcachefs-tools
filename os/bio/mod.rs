@@ -353,19 +353,6 @@ impl Bio {
         BioRange { data: &self.data, iter: self.bio.bi_iter }
     }
 
-    /// Its data from @pos: a position saved from it, its bi_iter before the IO
-    /// advanced it or a range's pos().
-    ///
-    /// # Safety
-    /// @pos is a position of this bio: within its bvecs, as many bytes of
-    /// them after it as bi_size says.
-    // XXX: unsafe, as a position carries nothing saying which bio it's of. A
-    // lifetime tying them together may make this safe, once bcachefs walks its
-    // bios this way throughout.
-    pub unsafe fn range_at(&self, pos: c::bvec_iter) -> BioRange<'_> {
-        BioRange { data: &self.data, iter: pos }
-    }
-
     /// All its bvecs, wherever its position is: its owner's walk -
     /// BioOwner::range_all() - or, for C, a bio's whose ref we were given.
     /// Panics on a clone.
