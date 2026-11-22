@@ -28,8 +28,10 @@
 //! wake's completion, and reports a wake.
 
 use crate::os::kernel::jiffies;
-use crate::util::sleep::{sleep_until, Sleep, SleepEnd};
+use crate::util::sleep::{sleep_until, Sleep, SleepEnd, SleepError};
 use crate::util::task::{waiter, Resumable, Resume, WaitList, WaitSync, WaitlistCompletion};
+use crate::util::timer::with_timeout;
+use core::ffi::c_ulong;
 use core::pin::pin;
 use core::ptr;
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
@@ -166,6 +168,14 @@ impl EventCount {
     /// wait(), for a task: parked until a wake() after @seen, resumed @at.
     pub async fn wait_async(&self, seen: u32, at: Resume<'_>) {
         futex_wait_async(&self.0, seen, at).await
+    }
+
+    /// wait_async(), for at most @timeout jiffies: Err(Timeout) if it ran out.
+    pub async fn wait_async_timeout(&self, seen: u32, timeout: c_ulong, at: Resume<'_>)
+        -> Result<(), SleepError>
+    {
+        let (list, addr) = waitlist(&self.0);
+        with_timeout(timeout, at, list, addr, || self.0.load(Ordering::Relaxed) != seen).await
     }
 
     pub fn wake(&self) {
