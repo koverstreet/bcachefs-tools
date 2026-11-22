@@ -83,7 +83,7 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: &c::bio, buf: *mut c
     wbio.bio_mut().set_opf(src.bi_opf);
 
     if !buf.is_null() {
-        unsafe { crate::util::bio::bch2_bio_map(bio, buf, output_available as usize) };
+        unsafe { Bio::from_raw_mut(bio).map(buf.cast(), output_available as usize) };
         return bio;
     }
 

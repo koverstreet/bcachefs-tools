@@ -843,10 +843,6 @@ impl<O: BioOwner, B> Drop for Remapped<'_, O, B> {
     }
 }
 
-pub unsafe fn bch2_bio_map(bio: *mut c::bio, base: *mut c_void, size: usize) {
-    unsafe { Bio::from_raw_mut(bio).map(base.cast(), size) }
-}
-
 pub unsafe fn memcpy_to_bio(dst: *mut c::bio, dst_iter: c::bvec_iter, src: *const c_void) {
     let dst = unsafe { Bio::from_raw(dst).range_at(dst_iter) };
     dst.copy_from(unsafe { core::slice::from_raw_parts(src.cast(), dst.len() as usize) });
