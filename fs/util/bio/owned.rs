@@ -139,10 +139,10 @@ fn clone_hints(_: &mut c::bio, _: &c::bio) {}
 /// panics.
 #[pin_data]
 #[repr(C)]
-pub struct BioLend {
+pub struct BioLend<B: BioOwns = Data> {
     lent: AtomicBool,
     #[pin]
-    bio:  UnsafeCell<Bio>,
+    bio:  UnsafeCell<Bio<B>>,
 }
 
 // SAFETY: this is what makes a &BioLend's bio writable, so here's the whole
@@ -166,15 +166,15 @@ pub struct BioLend {
 // holder, so a & reader reads only what the holder doesn't change: the bvecs
 // as mapped, and the data through a BioRange - which borrows BioData, a ZST,
 // none of the bio's fields - or it's the holder itself, reading its own.
-unsafe impl Sync for BioLend {}
+unsafe impl<B: BioOwns + Send> Sync for BioLend<B> {}
 
-impl BioLend {
-    pub fn new<E>(bio: impl PinInit<Bio, E>) -> impl PinInit<Self, E> {
-        let bio = unsafe { ::pin_init::cast_pin_init::<Bio, UnsafeCell<Bio>, E>(bio) };
+impl<B: BioOwns> BioLend<B> {
+    pub fn new<E>(bio: impl PinInit<Bio<B>, E>) -> impl PinInit<Self, E> {
+        let bio = unsafe { ::pin_init::cast_pin_init::<Bio<B>, UnsafeCell<Bio<B>>, E>(bio) };
         ::pin_init::pin_init!(BioLend { lent: AtomicBool::new(false), bio <- bio }? E)
     }
 
-    pub fn lend(&self) -> Lent<'_> {
+    pub fn lend(&self) -> Lent<'_, B> {
         assert!(!self.lent.swap(true, Acquire), "a bio lent while it's lent already");
         Lent(self)
     }
@@ -185,17 +185,17 @@ impl BioLend {
     }
 }
 
-unsafe impl BioField for BioLend {
-    type Owns = Data;
-    const AT: usize = core::mem::offset_of!(BioLend, bio);
+unsafe impl<B: BioOwns> BioField for BioLend<B> {
+    type Owns = B;
+    const AT: usize = core::mem::offset_of!(BioLend<B>, bio);
 }
 
 /// A BioLend's bio, lent: given back as it's dropped.
 #[must_use = "dropped, the bio's given back"]
-pub struct Lent<'a>(&'a BioLend);
+pub struct Lent<'a, B: BioOwns = Data>(&'a BioLend<B>);
 
-impl Lent<'_> {
-    pub fn bio_mut(&mut self) -> &mut Bio {
+impl<B: BioOwns> Lent<'_, B> {
+    pub fn bio_mut(&mut self) -> &mut Bio<B> {
         unsafe { &mut *self.0.bio.get() }
     }
 
@@ -205,15 +205,15 @@ impl Lent<'_> {
     }
 }
 
-impl Deref for Lent<'_> {
-    type Target = Bio;
+impl<B: BioOwns> Deref for Lent<'_, B> {
+    type Target = Bio<B>;
 
-    fn deref(&self) -> &Bio {
+    fn deref(&self) -> &Bio<B> {
         unsafe { &*self.0.bio.get() }
     }
 }
 
-impl Drop for Lent<'_> {
+impl<B: BioOwns> Drop for Lent<'_, B> {
     fn drop(&mut self) {
         self.0.lent.store(false, Release);
     }
