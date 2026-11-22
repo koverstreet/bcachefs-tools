@@ -175,7 +175,7 @@ struct DevScan<'f> {
     fs:  &'f Fs,
     ca:  &'f Dev,
     buf: NodeBuf,
-    bio: BioBox<Bio>,
+    bio: BioBox<'static, Bio>,
 }
 
 impl<'f> DevScan<'f> {

@@ -13,7 +13,7 @@ use pin_init::{pin_data, pin_init, PinInit};
 use crate::c;
 use crate::os::kernel::{local_clock, READ, WRITE};
 use crate::sb::members::BlockDev;
-use crate::util::bio::{AtEnd, Bio, BioBox, BioInPlace, Buffers};
+use crate::util::bio::{AtEnd, Bio, BioBox, Buffers};
 
 #[pin_data]
 #[repr(C)]
@@ -31,9 +31,10 @@ pub struct DevBio {
 crate::has_bio!(DevBio, bio);
 
 impl DevBio {
-    /// Made where its bioset or its owner has its bio, for no device yet.
-    pub fn new<E>(bio: BioInPlace) -> impl PinInit<Self, E> {
-        pin_init!(Self { ca: None, submit_time: 0, unflushed: false, bio <- bio.init::<E, _>() }? E)
+    /// Made around @bio, where its bioset or its owner has it, for no device
+    /// yet.
+    pub fn new<E>(bio: impl PinInit<Bio, E>) -> impl PinInit<Self, E> {
+        pin_init!(Self { ca: None, submit_time: 0, unflushed: false, bio <- bio }? E)
     }
 
     /// For an IO to @ca, from now - its bvecs and position set: the bio's

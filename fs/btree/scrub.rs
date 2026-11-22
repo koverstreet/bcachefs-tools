@@ -95,7 +95,7 @@ pub type Replicas<T> = ArrayVec<T, { c::BCH_BKEY_PTRS_MAX as usize }>;
 pub struct ReplicaRead<'f> {
     fs:             &'f Fs,
     ca:             DevIoRef<c::DevReadRefKind>,
-    pub(super) bio: BioBox<Bio, BioBuffersMapped<Bounce<'f>>>,
+    pub(super) bio: BioBox<'static, Bio, BioBuffersMapped<Bounce<'f>>>,
     pub ptr_bit:    u32,
 }
 

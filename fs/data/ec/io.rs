@@ -198,7 +198,7 @@ where
             let mut bio = set.alloc::<BchError, _>(core::ptr::null_mut(), nr_vecs as u16, opf, |at| pin_init!(EcBio {
                 ptr,
                 idx: idx as u8,
-                dev <- DevBio::new::<BchError>(at),
+                dev <- DevBio::new(at.init::<BchError, _>()),
             }? BchError)).expect("a bio from the stripe bioset's mempool");
 
             bio.bio_mut().set_sector(ptr.offset() + u64::from(sector_offset) + (offset >> 9) as u64);

@@ -135,7 +135,7 @@ async fn read_splits(rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum:
         core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
             let mut split = TaskSlot::exclusive_bio_in(&SPLITS, &SPLIT_BVECS, ptr::null_mut(), iter.get().bio_vecs(),
                                                        c::req_op_REQ_OP_READ, |b| {
-                pin_init!(DioBio { rbio <- Rbio::new(fs, rbio.opts, rbio.subvol, err_report, b) }? BchError)
+                pin_init!(DioBio { rbio <- Rbio::new(fs, rbio.opts, rbio.subvol, err_report, b.init()) }? BchError)
             }).expect("a split's box: its pool waits for an element, and an Rbio's init can't fail");
             set_up(split.home().bio_mut(), iter.get(), &mut offset, should_dirty).map(|()| split)
         }))
@@ -212,7 +212,7 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
     let subvol = inum.subvol as u32;
 
     let dio = TaskSlot::exclusive_bio_in(&DIOS, &DIO_BVECS, ptr::null_mut(), iter.bio_vecs(), c::req_op_REQ_OP_READ, |b| {
-        pin_init!(DioBio { rbio <- Rbio::new(fs, opts, subvol, err_report, b) }? BchError)
+        pin_init!(DioBio { rbio <- Rbio::new(fs, opts, subvol, err_report, b.init()) }? BchError)
     })?;
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped | flags;
 

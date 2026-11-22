@@ -17,7 +17,7 @@ use crate::locking::MemallocFlags;
 use crate::os::kernel::{local_clock, WRITE};
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::util::alloc::{Alloc, AllocError, Allocator, Kmalloc};
-use crate::util::bio::{submit_gathered_borrowed, BioBox, BioClone, BioInPlace, BvecMempool, Gathered, HasBio};
+use crate::util::bio::{submit_gathered_borrowed, BioBox, BioInPlace, BvecMempool, Gathered, HasBio};
 use crate::util::gather::{Fold, Gather};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
@@ -216,9 +216,8 @@ fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write
             let opf = wbio.bio.raw().bi_opf;
             let mut n = {
                 let _noio = MemallocFlags::noio();
-                BioBox::<c::bch_write_bio<R>, BioClone<'_>, ReplicaClones>::new_with_in(
-                    ReplicaClones, REPLICA_CLONE_BVECS.alloc(), ptr::null_mut(), opf, HasBio::bio(&*wbio).range(),
-                    wbio_in_place)
+                BioBox::new_in(ReplicaClones, REPLICA_CLONE_BVECS.alloc(), ptr::null_mut(), 0, opf,
+                               |b| c::bch_write_bio::<R>::clone_of(b, HasBio::bio(&*wbio).range()))
             }.expect("a replica's clone: its pool waits for an element");
 
             if set_up(n.as_mut()) {

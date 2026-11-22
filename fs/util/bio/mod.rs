@@ -40,9 +40,10 @@
 //! what the field may be. BioOwner is whatever holds a bio to build and
 //! submit; Gathered, what an owner's T puts to the Gather it was submitted
 //! to when its IO completes. The owner itself, BioBox, is owned.rs's,
-//! generic over Buffers too (buffers.rs): what its bvecs point at - its own,
-//! or a clone's source's - filled as the bio's made and released as it's
-//! dropped.
+//! generic over Buffers too (buffers.rs): what its bvecs point at - pages of
+//! its own, or a mapped buffer - filled as the bio's made and released as
+//! it's dropped. A clone's are its source's, borrowed for its box's 'a
+//! (BioInPlace::clone_of()).
 //!
 //! After Andreas Hindborg's kernel::block::bio, from his rnull series
 //! (git.kernel.org a.hindborg/linux.git, rnull-v6.19-rc5, 41e04e1bb2e6): the
@@ -110,8 +111,7 @@ pub mod pages;
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
-pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersUnmanaged, BioClone,
-                  Buffers, IoBuf, MapBuf};
+pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersUnmanaged, Buffers, IoBuf, MapBuf};
 #[cfg(kernel)]
 pub use bvec::{Bvec, FolioHold, Holds};
 pub use owned::{bio_put, submit_gathered_borrowed, BioBox, BioInPlace, BioLend, BioPool, BioSet, BvecAlloc,
@@ -152,9 +152,9 @@ enum VecsAt {
 }
 
 // XXX: a Bio moves, and is swapped, as any Rust value - but what its bvecs
-// point at is its box's Buffers, not its own: swap two boxes' bios and each
-// box gives back the other's pages, or a clone outlives the parent its
-// BioClone<'a> borrowed. Sound once a box's Buffers are its bio's B.
+// point at is its box's: its Buffers, or a clone's source, borrowed for the
+// box's 'a. Swap two boxes' bios and each box gives back the other's pages,
+// or a clone outlives its source.
 #[pin_data(PinnedDrop)]
 #[repr(C)]
 pub struct Bio<B: BioOwns = Data> {
