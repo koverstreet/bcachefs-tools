@@ -12,7 +12,7 @@ use crate::data::write::{to_wbio, wbio_init, write_op_error};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
-use crate::util::bio::{bio_put, pages, Bio, BioBuffersOwned, Buffers};
+use crate::util::bio::{bio_put, pages, Bio, Pages};
 use crate::util::volatile::Out;
 use crate::os::kernel::{unlikely, PAGE_SIZE, WRITE};
 use c::WriteFlags as w;
@@ -102,8 +102,8 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: &c::bio, buf: *mut c
     let required = output_available.min(fs.opts().encoded_extent_max.get());
     {
         let _noio = MemallocFlags::noio();
-        BioBuffersOwned::fill(wbio.bio_mut(), (&fs.bio_bounce, block_size, output_available as usize,
-                                               required as usize, flags::NOIO | flags::SKIP_ZERO))
+        Pages::fill(wbio.bio_mut(), &fs.bio_bounce, block_size, output_available as usize, required as usize,
+                    flags::NOIO | flags::SKIP_ZERO)
     }.unwrap_or_else(|e| panic!("a write's bounce pages, outside NORECLAIM: {e}"));
 
     bio
@@ -359,7 +359,7 @@ unsafe fn dst_put(fs: &Fs, dst: *mut c::bio) {
     unsafe {
         let wbio = to_wbio::<c::DevWriteRefKind>(dst);
         if wbio.wbio.bits.bounce() != 0 {
-            BioBuffersOwned::from_raw(&fs.bio_bounce).free_from(Bio::from_raw_mut(dst));
+            Pages::from_raw(&fs.bio_bounce).free_from(Bio::from_raw_mut(dst));
         }
         if wbio.wbio.bits.put_bio() != 0 {
             bio_put(dst);

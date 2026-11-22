@@ -51,7 +51,7 @@ use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
-use crate::util::bio::{Bio, BioBuffersUnmanaged, BioOwner, BvecMempool, HasBio};
+use crate::util::bio::{Bio, BioOwner, BvecMempool, Data, HasBio};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::{random_u64, random_u64_below};
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, PAGE_SIZE, READ};
@@ -129,7 +129,7 @@ crate::has_bio!(NodeReadBio, bio);
 struct NodeReadIo<'h>(Pin<&'h mut NodeReadBio>);
 
 unsafe impl BioOwner for NodeReadIo<'_> {
-    type Buffers = BioBuffersUnmanaged;
+    type Owns = Data;
 
     fn bio(&self) -> &Bio {
         &self.0.bio
@@ -519,7 +519,7 @@ pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode, contents:
         return;
     }
 
-    let buf = r.bio.buf_mut();
+    let buf = r.bio.as_mut().get_mut().buf_mut();
     let node_seq = node_header(buf).keys.seq;
     let mut offset = 0;
 

@@ -17,8 +17,8 @@
 //!   it, and walk its data from a position.
 //! - Mapping a buffer adds it to the bvecs, until they're emptied: reset()
 //!   keeps them, for another IO of the same buffers. A buffer's mapped as the
-//!   bio's made, and the bio holds it (BioBuffersMapped); one whose owner
-//!   puts nothing in its bvecs is remapped (BioOwner::remap_read()).
+//!   bio's made, and the bio holds it (Buffer); one whose owner puts nothing
+//!   in its bvecs is remapped (BioOwner::remap_read()).
 //! - In flight: submitted, until its endio. A gathered submit consumes the
 //!   box, and its endio drops it (BioBox::submit_gathered()); submit()
 //!   borrows it for its BioFuture, which yields the status; submit_owned()
@@ -29,21 +29,15 @@
 //! - A value: it moves as one, its bvecs with it, and is changed through
 //!   &mut Bio - its own methods, given one by its owner's bio_mut(). Its C
 //!   view, bi_io_vec, is pointed at its bvecs as it goes out to C.
-//! - A Bio<B> owns its bvecs as B says: B::Bvec is what's in its vec. A
-//!   Bio<Holds<H>> holds folios (bvec.rs): its bvecs Bvec<H>s, a range of a
-//!   folio and what it holds of it, pushed and dropped as a Vec's elements are.
-//!   It's lent as the plain Bio, Bio<Data>, which can't add or free them.
+//! - A Bio<B> owns what its bvecs point at as B says (BioOwns), and is lent
+//!   as the plain Bio, Bio<Data>, which can't add or free them.
 //!
 //! The generics, below, are those terms as traits. A bio is a field of a
 //! struct of its user's - an rbio, a write op - and HasBio is that
 //! struct, found from its bio by the offset has_bio!() checks; BioField is
 //! what the field may be. BioOwner is whatever holds a bio to build and
 //! submit; Gathered, what an owner's T puts to the Gather it was submitted
-//! to when its IO completes. The owner itself, BioBox, is owned.rs's,
-//! generic over Buffers too (buffers.rs): what its bvecs point at - pages of
-//! its own, or a mapped buffer - filled as the bio's made and released as
-//! it's dropped. A clone's are its source's, borrowed for its box's 'a
-//! (BioInPlace::clone_of()).
+//! to when its IO completes. The owner itself, BioBox, is owned.rs's.
 //!
 //! After Andreas Hindborg's kernel::block::bio, from his rnull series
 //! (git.kernel.org a.hindborg/linux.git, rnull-v6.19-rc5, 41e04e1bb2e6): the
@@ -53,6 +47,7 @@
 
 use core::ffi::{c_ulong, c_void};
 use core::marker::PhantomData;
+use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
@@ -111,7 +106,7 @@ pub mod pages;
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
-pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersUnmanaged, Buffers, IoBuf, MapBuf};
+pub use buffers::{io_buf, Buffer, IoBuf, MapBuf, Pages};
 #[cfg(kernel)]
 pub use bvec::{Bvec, FolioHold, Holds};
 pub use owned::{bio_put, submit_gathered_borrowed, BioBox, BioInPlace, BioLend, BioPool, BioSet, BvecAlloc,
@@ -125,12 +120,25 @@ pub use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs};
 
 pub const BIO_INLINE_VECS: usize = 4;
 
-/// What a bio's bvecs are, and so what it owns of what they point at.
-pub trait BioOwns {
+/// What a bio owns of what its bvecs point at - pages, a mapped buffer,
+/// folios: made with the bio, by BioInPlace::init_from(), and living as long
+/// as it does.
+pub trait BioOwns: Sized {
     type Bvec;
+
+    /// As the bio's dropped, its bvecs still there - done with, and not in
+    /// flight: what dropping them doesn't give back.
+    fn release(&mut self, _vecs: &mut BioVecs<Self>) {}
+
+    /// Whether an IO of @op may go to or from them: they last the bio's life,
+    /// through each reset() for another IO.
+    fn allows_op(_op: u32) -> bool {
+        true
+    }
 }
 
 /// Plain data buffers, which the bio doesn't own: it reads and writes them.
+#[derive(Default)]
 pub struct Data;
 
 impl BioOwns for Data {
@@ -151,10 +159,9 @@ enum VecsAt {
     Borrowed(NonNull<Bio>),
 }
 
-// XXX: a Bio moves, and is swapped, as any Rust value - but what its bvecs
-// point at is its box's: its Buffers, or a clone's source, borrowed for the
-// box's 'a. Swap two boxes' bios and each box gives back the other's pages,
-// or a clone outlives its source.
+// XXX: a Bio moves, and is swapped, as any Rust value - but a clone's bvecs
+// are its source's, borrowed for its box's 'a, not by the Bio: swap two boxes'
+// bios and a clone outlives its source.
 #[pin_data(PinnedDrop)]
 #[repr(C)]
 pub struct Bio<B: BioOwns = Data> {
@@ -163,15 +170,18 @@ pub struct Bio<B: BioOwns = Data> {
     vecs_at: VecsAt,
     #[pin]
     data:    BioData,
+    /* last: the plain Bio is every Bio<B>'s first part */
+    owns:    B,
 }
 
-/// bio_uninit(), and its bvecs freed: emptied first, as a bioset's bio is
-/// dropped again by bio_put() when what it's in fails to init - which frees
-/// nothing twice.
+/// Its bvecs emptied as they're freed: a bioset's bio is dropped again by
+/// bio_put() when what it's in fails to init. What it owns drops last: a
+/// mapped buffer outlives the bio.
 #[pinned_drop]
 impl<B: BioOwns> PinnedDrop for Bio<B> {
     fn drop(self: Pin<&mut Self>) {
         let this = self.get_mut();
+        this.owns.release(&mut this.vecs);
         unsafe { crate::os::bio::uninit(&mut this.bio) };
         drop(core::mem::replace(&mut this.vecs, BioVecs::<B>::new_in(BvecAlloc::NONE)));
     }
@@ -181,7 +191,45 @@ impl<B: BioOwns> PinnedDrop for Bio<B> {
 // Sync: two holders of a &Bio could write its data at once.
 unsafe impl<B: BioOwns + Send> Send for Bio<B> {}
 
+/// A B other than Data: its bio is lent as the plain Bio, which can't add or
+/// free its bvecs.
+pub trait Typed: BioOwns {}
+
+impl<B: Typed> Bio<B> {
+    pub(crate) const ERASES: () = assert!(
+        size_of::<B::Bvec>() == size_of::<c::bio_vec>() && align_of::<B::Bvec>() == align_of::<c::bio_vec>() &&
+            (size_of::<B>() == 0 || size_of::<Bio>() <= core::mem::offset_of!(Self, owns)),
+        "a bio not laid out as the plain one, then what it owns");
+}
+
+/// The same bytes, as far as the plain Bio goes: its bvecs are bio_vecs, and
+/// what it owns comes after.
+impl<B: Typed> Deref for Bio<B> {
+    type Target = Bio;
+
+    fn deref(&self) -> &Bio {
+        let () = Self::ERASES;
+        unsafe { &*core::ptr::from_ref(self).cast() }
+    }
+}
+
+// XXX: through this, its bvecs can be swapped with another bio's - mem::swap()
+// of two &mut Bio - and its drop then releases what B never held. And Bio
+// still has map(), add_folio_part(), truncate_vecs(), clear() and
+// pin_user_pages(), for the owners that aren't typed yet - each goes with its
+// last; till then a Bio<B> could gain bvecs that aren't B's through them.
+impl<B: Typed> DerefMut for Bio<B> {
+    fn deref_mut(&mut self) -> &mut Bio {
+        let () = Self::ERASES;
+        unsafe { &mut *core::ptr::from_mut(self).cast() }
+    }
+}
+
 impl<B: BioOwns> Bio<B> {
+    pub fn owns(&self) -> &B {
+        &self.owns
+    }
+
     /// After its bvecs change: C's view of them.
     fn sync(&mut self) {
         assert!(matches!(self.vecs_at, VecsAt::Own), "changing the bvecs of a bio whose table isn't its own");
@@ -243,12 +291,12 @@ impl Bio {
     /// # Safety
     /// @bio is room for a Bio, not in flight; @table outlives the bio, and
     /// its bvecs don't change while the bio's IO is in flight.
-    pub unsafe fn init_borrowed(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, table: &mut Bio,
-                                opf: u32) {
+    pub unsafe fn init_borrowed<B: Typed<Bvec = c::bio_vec>>(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice,
+                                                            table: &mut Bio<B>, opf: u32) {
         let nr = table.vecs.len() as u16;
         unsafe {
             (&raw mut (*bio).vecs).write(BioVecs::<Data>::new_in(BvecAlloc::NONE));
-            (&raw mut (*bio).vecs_at).write(VecsAt::Borrowed(NonNull::from(&*table)));
+            (&raw mut (*bio).vecs_at).write(VecsAt::Borrowed(NonNull::from(&**table)));
             crate::os::bio::init(bio.cast(), bdev, table.vecs.as_mut_ptr(), nr, opf);
             (*bio).bio.bi_vcnt = nr;
         }
@@ -334,7 +382,7 @@ impl Bio {
 
     /// @len bytes of @buf mapped, pushed onto its bvecs. Panics if there's no
     /// room for them. For a buffer kept by other means than the bio - a stripe
-    /// buffer's blocks, kept by the IO's round; BioBuffersMapped holds it.
+    /// buffer's blocks, kept by the IO's round; a Buffer holds it.
     ///
     /// # Safety
     /// @buf is the allocators' - in the direct map, or vmalloc - and outlives
@@ -549,8 +597,9 @@ impl ToText for Bio {
 }
 
 /// # Safety
-/// BIO_OFFSET is the offset of a Bio field.
+/// BIO_OFFSET is the offset of a Bio<Owns> field.
 pub unsafe trait HasBio: Sized {
+    type Owns: BioOwns;
     const BIO_OFFSET: usize;
 
     fn bio(&self) -> &Bio {
@@ -563,37 +612,45 @@ pub unsafe trait HasBio: Sized {
 }
 
 // SAFETY: a bio, at its own start
-unsafe impl HasBio for Bio {
+unsafe impl<B: BioOwns> HasBio for Bio<B> {
+    type Owns = B;
     const BIO_OFFSET: usize = 0;
 }
 
-/// A struct's bio field: a Bio, or a BioLend, its bio AT into it.
+/// A struct's bio field: a Bio<Owns>, or a BioLend, its bio AT into it.
 ///
 /// # Safety
-/// A bio is AT bytes into the field, and ends it.
+/// A Bio<Owns> is AT bytes into the field, and ends it.
 pub unsafe trait BioField {
+    type Owns: BioOwns;
     const AT: usize = 0;
 }
-unsafe impl<B: BioOwns> BioField for Bio<B> {}
-
-#[doc(hidden)]
-pub const fn bio_field_at<B: BioField>(_: *const B) -> usize {
-    B::AT
+unsafe impl<B: BioOwns> BioField for Bio<B> {
+    type Owns = B;
 }
 
-/// HasBio for $t, by its bio field $f: checked to be a BioField - not that
-/// it's #[pin], which HasBio asks of a struct with #[pin_data].
+#[doc(hidden)]
+pub const fn bio_field_at<F: BioField<Owns = O>, O: BioOwns>(_: *const F) -> usize {
+    F::AT
+}
+
+/// HasBio for $t, by its bio field $f, which owns $o - Data, if it's not
+/// given: checked to be a BioField that does - not that it's #[pin], which
+/// HasBio asks of a struct with #[pin_data].
 #[macro_export]
 macro_rules! has_bio {
-    ($t:ty, $($f:ident).+) => {
+    ($t:ty, $($f:ident).+ $(, owns $o:ty)?) => {
         unsafe impl $crate::util::bio::HasBio for $t {
+            type Owns = $crate::has_bio!(@owns $($o)?);
             const BIO_OFFSET: usize = {
                 let t = ::core::mem::MaybeUninit::<$t>::uninit();
                 let field = unsafe { &raw const (*t.as_ptr()).$($f).+ };
-                ::core::mem::offset_of!($t, $($f).+) + $crate::util::bio::bio_field_at(field)
+                ::core::mem::offset_of!($t, $($f).+) + $crate::util::bio::bio_field_at::<_, Self::Owns>(field)
             };
         }
     };
+    (@owns) => { $crate::util::bio::Data };
+    (@owns $o:ty) => { $o };
 }
 
 fn bio_of<T: HasBio>(t: *mut T) -> *mut c::bio {
@@ -612,7 +669,7 @@ pub unsafe fn of_bio<T: HasBio>(bio: *mut c::bio) -> *mut T {
 /// bio() is the implementor's own, which nothing else has - in flight, or
 /// to build on - while it's had.
 pub unsafe trait BioOwner {
-    type Buffers: Buffers;
+    type Owns: BioOwns;
 
     fn bio(&self) -> &Bio;
 
@@ -621,7 +678,7 @@ pub unsafe trait BioOwner {
     /// For another IO, of @opf, to or from the same buffers: Bio::reset().
     /// Panics if they can't serve it - a buffer borrowed shared, for a read.
     fn reset(&mut self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
-        assert!(Self::Buffers::allows_op(req_op(opf)), "resetting a bio for an op its buffers can't serve");
+        assert!(Self::Owns::allows_op(req_op(opf)), "resetting a bio for an op its buffers can't serve");
         self.bio_mut().reset(bdev, opf)
     }
 
@@ -659,12 +716,11 @@ pub unsafe trait BioOwner {
     /// whose buffer isn't one for its life - the superblock's, which serves its
     /// buffer and the read-back's; node scan's, whose node's buffer read_done
     /// swaps. A bio's buffer is otherwise the one it's made with,
-    /// BioBuffersMapped. The bvecs are the owner's to replace: its Buffers put
-    /// nothing there. Panics if the bio isn't a read, or hasn't the bvecs for
-    /// @buf.
+    /// a Buffer. The bvecs are the owner's to replace: its bio owns nothing
+    /// there. Panics if the bio isn't a read, or hasn't the bvecs for @buf.
     fn remap_read<'a>(&'a mut self, buf: &'a mut [u8]) -> Remapped<'a, Self, &'a mut [u8]>
     where
-        Self: Sized + BioOwner<Buffers = BioBuffersUnmanaged>,
+        Self: Sized + BioOwner<Owns = Data>,
     {
         assert_eq!(self.bio().op(), c::req_op_REQ_OP_READ, "remap_read() of a bio for another op");
         self.bio_mut().truncate_vecs(0);
@@ -676,7 +732,7 @@ pub unsafe trait BioOwner {
     /// Panics if the bio isn't a write, or hasn't the bvecs for @buf.
     fn remap_write<'a>(&'a mut self, buf: &'a [u8]) -> Remapped<'a, Self, &'a [u8]>
     where
-        Self: Sized + BioOwner<Buffers = BioBuffersUnmanaged>,
+        Self: Sized + BioOwner<Owns = Data>,
     {
         assert_eq!(self.bio().op(), c::req_op_REQ_OP_WRITE, "remap_write() of a bio for another op");
         self.bio_mut().truncate_vecs(0);

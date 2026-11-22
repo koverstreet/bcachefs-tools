@@ -14,7 +14,7 @@ use crate::inode_opts;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Box;
 use crate::os::blkdev::plugged;
-use crate::util::bio::{bio_put, Bio, BioBuffersUnmanaged, BioOwner};
+use crate::util::bio::{bio_put, Bio, BioOwner, Data};
 use crate::util::closure;
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::util::sleep::Sleep;
@@ -44,7 +44,7 @@ impl c::bch_writepage_io {
 }
 
 unsafe impl BioOwner for c::bch_writepage_io {
-    type Buffers = BioBuffersUnmanaged;
+    type Owns = Data;
 
     fn bio(&self) -> &Bio {
         &self.op.wbio.bio

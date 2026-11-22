@@ -13,7 +13,7 @@ use pin_init::{pin_data, pin_init, PinInit};
 use crate::c;
 use crate::os::kernel::{local_clock, READ, WRITE};
 use crate::sb::members::BlockDev;
-use crate::util::bio::{AtEnd, Bio, BioBox, Buffers};
+use crate::util::bio::{AtEnd, Bio, BioBox};
 
 #[pin_data]
 #[repr(C)]
@@ -52,7 +52,7 @@ impl DevBio {
     /// Its IO done - submit_owned() and awaited - the rest of its end: its
     /// device and status, if it failed. The box goes before the io ref, which
     /// keeps the device's bioset its bio is put back to.
-    pub fn finish<B: Buffers>(mut b: BioBox<Self, B>) -> Option<(u8, c::blk_status_t)> {
+    pub fn finish(mut b: BioBox<Self>) -> Option<(u8, c::blk_status_t)> {
         let (ca, status) = b.as_mut().take_end();
         drop(b);
         (status != 0).then_some((ca.dev_idx, status))

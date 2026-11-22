@@ -14,7 +14,6 @@ use crate::os::folio::Folio;
 use crate::util::alloc::AllocError;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
-use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 
 /// What a bvec holds of its folio, given up as the folio and released with
@@ -83,9 +82,17 @@ impl<H: FolioHold> Drop for Bvec<H> {
 /// as the bvec's dropped.
 pub struct Holds<H: FolioHold>(PhantomData<H>);
 
+impl<H: FolioHold> Default for Holds<H> {
+    fn default() -> Self {
+        Holds(PhantomData)
+    }
+}
+
 impl<H: FolioHold> BioOwns for Holds<H> {
     type Bvec = Bvec<H>;
 }
+
+impl<H: FolioHold> super::Typed for Holds<H> {}
 
 impl<H: FolioHold> Bio<Holds<H>> {
     /// @v, last: grown into, from its BvecAlloc, past what it has room for.
@@ -107,26 +114,5 @@ impl<H: FolioHold> Bio<Holds<H>> {
         self.vecs.clear();
         self.sync();
         self.raw_mut().bi_iter.bi_size = 0;
-    }
-}
-
-/// What it's lent to - the write path, submit - has the plain Bio, which
-/// can't add or free them: the same bytes, a Bvec<H> being a bio_vec.
-impl<H: FolioHold> Deref for Bio<Holds<H>> {
-    type Target = Bio;
-
-    fn deref(&self) -> &Bio {
-        unsafe { &*ptr::from_ref(self).cast() }
-    }
-}
-
-// XXX: through this, its bvecs can be swapped with another bio's - mem::swap()
-// of two &mut Bio - and its drop then releases what H never held. And Bio
-// still has map(), add_folio(), truncate_vecs(), clear() and pin_user_pages(),
-// for the owners that aren't typed yet - each goes with its last; till then a
-// Bio<Holds<H>> could gain bvecs that aren't H's.
-impl<H: FolioHold> DerefMut for Bio<Holds<H>> {
-    fn deref_mut(&mut self) -> &mut Bio {
-        unsafe { &mut *ptr::from_mut(self).cast() }
     }
 }

@@ -90,8 +90,8 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot};
 use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::util::bio::{reset_bvec_offset, Bio, BioBox, BioBuffersOwned, BioBuffersUnmanaged, BioInPlace, BioLend,
-                       BioOwner, BioRange, Buffers, BvecMempool, HasBio, Lent};
+use crate::util::bio::{pages, reset_bvec_offset, Bio, BioBox, BioInPlace, BioLend, BioOwner, BioRange,
+                       BvecMempool, Data, HasBio, Lent, Pages};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, Flags, Box, Kmalloc};
@@ -329,14 +329,15 @@ impl Rbio {
 
 enum Kind<'r> {
     Own(LentBio<'r>),
-    Clone(BioBox<'r, Rbio, BioBuffersUnmanaged, Pool>),
-    Bounce(BioBox<'r, Rbio, BioBuffersOwned<'r>, Pool>),
+    Clone(BioBox<'r, Rbio, Pool>),
+    /// Bounced into the pages it has
+    Bounce(BioBox<'r, Rbio, Pool>, Pages<'r>),
     /// The promote's bio, and its task, started with what was read once the
     /// bio's given back
     Promote(Lent<'r>, AwaitingRead<'r>),
     /// A fragment's task's own bio, in its home: a clone, or bounced into the
     /// pages it has
-    Home(Pin<&'r mut FragmentBio>, Option<BioBuffersOwned<'r>>),
+    Home(Pin<&'r mut FragmentBio>, Option<Pages<'r>>),
 }
 
 impl Kind<'_> {
@@ -345,7 +346,7 @@ impl Kind<'_> {
             Kind::Own(b) => b.rbio,
             Kind::Promote(_, task) => task.rbio(),
             Kind::Clone(b) => b,
-            Kind::Bounce(b) => b,
+            Kind::Bounce(b, _) => b,
             Kind::Home(h, _) => &h.rbio,
         }
     }
@@ -354,7 +355,7 @@ impl Kind<'_> {
         match self {
             Kind::Own(LentBio { bio, .. }) | Kind::Promote(bio, _) => bio.bio_mut(),
             Kind::Clone(b) => b.bio_mut(),
-            Kind::Bounce(b) => b.bio_mut(),
+            Kind::Bounce(b, _) => b.bio_mut(),
             Kind::Home(h, _) => h.as_mut().bio_mut(),
         }
     }
@@ -404,8 +405,10 @@ struct Fragment<'r> {
     plan:   Plan<'r>,
 }
 
+// XXX: Data is what its bio's had as, not what it owns - a bounce's or a
+// home's pages are held beside it, which remap_*() would leak
 unsafe impl BioOwner for Fragment<'_> {
-    type Buffers = BioBuffersUnmanaged;
+    type Owns = Data;
 
     fn bio(&self) -> &Bio {
         self.rbio().bio()
@@ -431,7 +434,7 @@ impl<'r> Fragment<'r> {
     }
 
     fn bounced(&self) -> bool {
-        matches!(self.kind, Kind::Bounce(_) | Kind::Promote(..) | Kind::Home(_, Some(_)))
+        matches!(self.kind, Kind::Bounce(..) | Kind::Promote(..) | Kind::Home(_, Some(_)))
     }
 
     #[cold]
@@ -478,8 +481,12 @@ impl<'r> Fragment<'r> {
                 drop(bio);
                 Some(task)
             }
-            Kind::Home(mut h, Some(mut pages)) => {
-                pages.release(h.as_mut().bio_mut());
+            Kind::Bounce(mut b, pages) => {
+                pages.free_from(b.bio_mut());
+                None
+            }
+            Kind::Home(mut h, Some(pages)) => {
+                pages.free_from(h.as_mut().bio_mut());
                 None
             }
             kind => {
@@ -1270,8 +1277,10 @@ impl<'r> Planned<'r, '_> {
             How::Promote(p) => Kind::Promote(p.rbio.bio.lend(), p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
-                let src = (&fs.bio_bounce, bs, size, size, gfp);
-                Kind::Bounce(BioBox::new_with_in(pool, bvecs, bdev, 0, src, |b| Rbio::fragment(orig, b.init()))?)
+                let mut b = BioBox::new_in(pool, bvecs, bdev, pages::nr_vecs(size), 0,
+                                           |b| Rbio::fragment(orig, b.init()))?;
+                let pages = Pages::fill(b.bio_mut(), &fs.bio_bounce, bs, size, size, gfp)?;
+                Kind::Bounce(b, pages)
             }
             How::Clone => Kind::Clone(BioBox::new_in(pool, bvecs, bdev, 0, 0,
                                                      |b| Rbio::fragment(orig, b.clone_of(plan.range)))?),
@@ -1315,16 +1324,15 @@ impl<'r> Planned<'r, '_> {
         let Planned { how, plan, ca, k } = self;
         let bounce = match how {
             How::Clone => None,
-            How::Bounce(size, gfp) => Some((&fs.bio_bounce, fs.opts().block_size.get().into(), size, size, gfp)),
+            How::Bounce(size, gfp) => Some((size, gfp)),
             How::Own | How::Promote(_) => unreachable!("a fragment start() made or started above"),
         };
-        let nr_vecs = bounce.as_ref().map_or(0, BioBuffersOwned::nr_vecs);
         let opf = orig.bio().raw().bi_opf;
 
         let _noio = MemallocFlags::noio();
         let (home, null) = (&FRAGMENTS, core::ptr::null_mut());
         let mut slot = match bounce {
-            Some(_) => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, null, nr_vecs, 0, |b| {
+            Some((size, _)) => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, null, pages::nr_vecs(size), 0, |b| {
                 pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b.init()) }? BchError)
             }),
             None => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, null, 0, 0, |b| {
@@ -1332,7 +1340,9 @@ impl<'r> Planned<'r, '_> {
                 pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b.clone_of(plan.range)) }? BchError)
             }),
         }?;
-        let buffers = bounce.map(|src| BioBuffersOwned::fill(slot.home().bio_mut(), src)).transpose()?;
+        let bs = fs.opts().block_size.get().into();
+        let buffers = bounce.map(|(size, gfp)| Pages::fill(slot.home().bio_mut(), &fs.bio_bounce, bs, size, size, gfp))
+            .transpose()?;
         let bio = slot.home().bio_mut();
         bio.set_opf(opf);
         bio.set_sector(plan.pick.ptr.offset());

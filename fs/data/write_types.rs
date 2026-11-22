@@ -96,6 +96,7 @@ impl<K: IoRefIdx> c::bch_write_bio<K> {
 
 // SAFETY: its bio, its last field, where it is in either kind's - below
 unsafe impl<R: IoRefIdx> crate::util::bio::HasBio for c::bch_write_bio<R> {
+    type Owns = crate::util::bio::Data;
     const BIO_OFFSET: usize = core::mem::offset_of!(c::bch_write_bio, bio);
 }
 

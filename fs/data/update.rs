@@ -37,7 +37,7 @@ use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::{init_at, Flags};
-use crate::util::bio::{Bio, BioBuffersOwned, BioInPlace, HasBio};
+use crate::util::bio::{Bio, BioInPlace, HasBio, Pages};
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::locking::MemallocFlags;
@@ -136,7 +136,7 @@ pub struct data_update {
     pub rbio: Rbio,
     pub op: c::bch_write_op,
     /* both bios' bvecs, and their pages: what the read reads, the write writes */
-    pub pages: Bio,
+    pub pages: Bio<Pages<'static>>,
 }
 
 /// The read failed only because the extent changed under it - the key was
@@ -403,7 +403,8 @@ impl c::data_update {
 
         // SAFETY: its bios, and the pages just made for them
         unsafe {
-            Bio::init_pages(&raw mut self.pages, &fs.bio_bounce, block_size, buf_bytes as usize, Flags::empty())
+            Bio::<Pages>::init_pages(&raw mut self.pages, &fs.bio_bounce, block_size, buf_bytes as usize,
+                                     Flags::empty())
                 .map_err(|_| BchError::from(c::ENOMEM))?;
             Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), core::ptr::null_mut(), &mut self.pages,
                                c::req_op_REQ_OP_READ);
@@ -431,10 +432,7 @@ impl c::data_update {
     /// The pages bios_init() made, and their bio, freed.
     fn bios_free(&mut self) {
         // SAFETY: bios_init()'s, dropped once: neither bio is in flight
-        unsafe {
-            BioBuffersOwned::from_raw(&self.fs().bio_bounce).free_from(&mut self.pages);
-            core::ptr::drop_in_place(&raw mut self.pages);
-        }
+        unsafe { core::ptr::drop_in_place(&raw mut self.pages) };
     }
 
     fn trace(&self, ret: c_int) {
