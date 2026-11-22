@@ -453,19 +453,6 @@ impl Bio {
         iter.bi_size = bytes;
     }
 
-    /// A random u64 of its data overwritten: the debug corrupt ratios'.
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub fn corrupt(&mut self) {
-        use crate::os::kernel::{random_u64, random_u64_below};
-        let u64s = self.bio.bi_iter.bi_size / 8;
-        if u64s == 0 {
-            return;
-        }
-        let mut r = self.range();
-        r.advance(random_u64_below(u64s.into()) as u32 * 8);
-        r.take(8).copy_from(&random_u64().to_ne_bytes());
-    }
-
     pub fn set_dev(&mut self, bdev: *mut crate::os::blkdev::BlockDevice) {
         crate::os::blkdev::bio_set_dev(self.raw_mut(), bdev)
     }

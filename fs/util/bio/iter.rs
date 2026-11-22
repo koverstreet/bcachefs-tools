@@ -250,6 +250,19 @@ impl<'a> BioRange<'a> {
         }
     }
 
+    /// A random u64 of it overwritten: the debug corrupt ratios'.
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    pub fn corrupt(&self) {
+        use crate::os::kernel::{random_u64, random_u64_below};
+        let u64s = self.len() / 8;
+        if u64s == 0 {
+            return;
+        }
+        let mut r = *self;
+        r.advance(random_u64_below(u64s.into()) as u32 * 8);
+        r.take(8).copy_from(&random_u64().to_ne_bytes());
+    }
+
     // ── bvec.h's arithmetic, on the position: each as the function named ──
 
     /// __bvec_iter_bvec()

@@ -538,12 +538,9 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
 
             #[cfg(CONFIG_BCACHEFS_DEBUG)]
             if write_corrupt_ratio != 0 {
-                let s = size(dst);
-                set_size(dst, dst_len);
                 if crate::os::kernel::random_u64_below(write_corrupt_ratio.into()) == 0 {
-                    unsafe { Bio::from_raw_mut(dst) }.corrupt();
+                    unsafe { Bio::from_raw(dst) }.range().take(dst_len).corrupt();
                 }
-                set_size(dst, s);
             }
 
             if dst != src {
