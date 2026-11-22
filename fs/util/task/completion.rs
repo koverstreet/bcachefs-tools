@@ -378,6 +378,11 @@ impl<'a, W: Waiter> Completion<'a, W> {
         (c, d)
     }
 
+    /// The wait on @d, owed already: a WaitlistCompletion's.
+    pub(super) fn owed(d: &'a Done<W>) -> Self {
+        Completion { d, _w: PhantomData }
+    }
+
     pub fn is_done(&self) -> bool {
         self.d.done()
     }

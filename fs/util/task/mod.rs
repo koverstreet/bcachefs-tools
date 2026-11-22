@@ -89,11 +89,13 @@ pub mod completion;
 mod list;
 mod queue;
 mod select;
+mod waitlist;
 
 pub use completion::{waiter, Armable, Completion, CompletionReturn, Done, DoneWith, DynDone, Return, Unarmed, Waiter};
 pub use list::{TaskList, TASKS};
 pub use queue::RunQueue;
 pub use select::{Select, SelectWait};
+pub use waitlist::{Complete, DynComplete, WaitList, WaitlistCompletion};
 pub use r#box::{exclusive_size, spawn_detached, spawn_static, Exclusive, Join, Shared, TaskBox, TaskSlot};
 
 use crate::c;

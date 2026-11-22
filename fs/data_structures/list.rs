@@ -163,6 +163,11 @@ impl<T, const OFFSET: usize> List<T, OFFSET> {
     const FITS: () = assert!(OFFSET + size_of::<ListHead>() <= size_of::<T>(),
                              "List: links past the end of their item");
 
+    /// Empty: set up by its first push, as a zeroed one is.
+    pub const fn new() -> Self {
+        List { head: ListHead::new(), _t: PhantomData }
+    }
+
     /// INIT_LIST_HEAD(): empty, whatever was on it forgotten. A zeroed list
     /// is empty too, and set up by its first push.
     ///
