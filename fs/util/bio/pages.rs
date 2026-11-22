@@ -8,8 +8,7 @@
 //!
 //! Freeing what may have come from the bounce pool, free_pages_pool(), tells
 //! them apart by size: a bvec of exactly the element size goes back to the
-//! pool. Pages that never did - a bio's that mustn't take from it - are
-//! free_pages()'s.
+//! pool.
 
 use core::alloc::Layout;
 use core::ptr::NonNull;
@@ -140,28 +139,15 @@ pub fn nr_vecs(size: usize) -> u16 {
 /// Each of @bio's bvecs is a whole allocation of one of them, and the bio's
 /// done with: not in flight.
 pub unsafe fn free_pages_pool(pool: &BouncePool, bio: &mut c::bio) {
-    unsafe { free(Some(pool), bio) }
-}
-
-/// Frees what alloc_pages() put on @bio.
-///
-/// # Safety
-/// Each of @bio's bvecs is a whole allocation of alloc_pages()'s, and the
-/// bio's done with: not in flight.
-pub unsafe fn free_pages(bio: &mut c::bio) {
-    unsafe { free(None, bio) }
-}
-
-unsafe fn free(pool: Option<&BouncePool>, bio: &mut c::bio) {
     for i in 0..bio.bi_vcnt as usize {
         // SAFETY: one of its bvecs
         let bv = unsafe { *bi_io_vec!(bio).add(i) };
         // SAFETY: the caller's: an allocation of bv_len, at its page's address
         unsafe {
             let p = page_address(NonNull::new(bv.bv_page).expect("a bvec's page")).add(bv.bv_offset as usize);
-            match pool {
-                Some(pool) if bv.bv_len as usize == POOL_LEN => pool.pool.free_raw(p),
-                _ => crate::util::alloc::bio_pages_free(p.as_ptr().cast(), bv.bv_len as usize),
+            match bv.bv_len as usize == POOL_LEN {
+                true  => pool.pool.free_raw(p),
+                false => crate::util::alloc::bio_pages_free(p.as_ptr().cast(), bv.bv_len as usize),
             }
         }
     }

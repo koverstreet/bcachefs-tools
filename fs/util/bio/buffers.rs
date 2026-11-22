@@ -100,33 +100,6 @@ unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
     }
 }
 
-/// Pages of the bio's own, from the page allocator alone: failing, where
-/// BioBuffersOwned waits on the bounce pool, as a bio that holds them longer
-/// than an IO - the journal's buffers - mustn't take from it. @Src as Owned's,
-/// but the pool.
-pub struct BioBuffersPages;
-
-unsafe impl Buffers for BioBuffersPages {
-    type Src<'s> = (u32, usize, Flags);
-
-    fn nr_vecs(&(_, size, _): &Self::Src<'_>) -> u16 {
-        pages::nr_vecs(size)
-    }
-
-    fn fill(bio: &mut Bio, (bs, size, gfp): Self::Src<'_>) -> Result<Self, BchError> {
-        let bio = bio.raw_mut();
-        if pages::alloc_pages(bio, bs, size, gfp).is_err() {
-            unsafe { pages::free_pages(bio) };
-            return Err(c::ENOMEM.into());
-        }
-        Ok(Self)
-    }
-
-    fn release(&mut self, bio: &mut Bio) {
-        unsafe { pages::free_pages(bio.raw_mut()) }
-    }
-}
-
 /// A clone of @Src's bio, at @Src: its bvecs, and the data, are the source's,
 /// borrowed as long as the clone lives.
 ///

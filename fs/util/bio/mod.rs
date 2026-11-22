@@ -112,7 +112,7 @@ pub mod pages;
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
-pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
+pub use buffers::{io_buf, BioBuffersMapped, BioBuffersOwned, BioBuffersUnmanaged, BioClone,
                   Buffers, IoBuf, MapBuf};
 #[cfg(kernel)]
 pub use bvec::{Bvec, FolioHold, Holds};
