@@ -53,7 +53,7 @@
 //! it's over c::bio here, in both builds - the shim's bio_vec laid out as the
 //! kernel's.
 
-use core::ffi::{c_ulong, c_void};
+use core::ffi::c_ulong;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
@@ -856,9 +856,5 @@ impl<O: BioOwner, B> Drop for Remapped<'_, O, B> {
     fn drop(&mut self) {
         self.owner.bio_mut().truncate_vecs(0);
     }
-}
-
-pub unsafe fn bch2_bio_map(bio: *mut c::bio, base: *mut c_void, size: usize) {
-    unsafe { Bio::from_raw_mut(bio).map(base.cast(), size) }
 }
 

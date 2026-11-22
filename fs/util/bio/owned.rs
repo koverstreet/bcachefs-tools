@@ -426,7 +426,7 @@ impl BioPool {
             opf &= !c::REQ_PREFLUSH; /* only on the first bio */
 
             unsafe {
-                super::bch2_bio_map(bio, base.cast(), chunk_size);
+                Bio::from_raw_mut(bio).map(base, chunk_size);
                 (*bio).bi_iter.bi_sector = sector;
 
                 if !tail.is_null() {
