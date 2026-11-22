@@ -761,7 +761,7 @@ struct DevReader<'a> {
     fs:   &'a Fs,
     ca:   &'a Dev,
     ring: &'a mut JournalRing,
-    bio:  BioBox<Bio, BioBuffersMapped<IoBuf>>,
+    bio:  BioBox<'static, Bio, BioBuffersMapped<IoBuf>>,
 }
 
 impl<'a> DevReader<'a> {

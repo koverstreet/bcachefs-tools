@@ -91,8 +91,8 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot};
 use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::util::bio::{reset_bvec_offset, Bio, BioBox, BioBuffersOwned, BioBuffersUnmanaged, BioClone, BioInPlace,
-                       BioLend, BioOwner, BioRange, Buffers, BvecMempool, HasBio, Lent};
+use crate::util::bio::{reset_bvec_offset, Bio, BioBox, BioBuffersOwned, BioBuffersUnmanaged, BioInPlace, BioLend,
+                       BioOwner, BioRange, Buffers, BvecMempool, HasBio, Lent};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Kmalloc};
@@ -201,7 +201,7 @@ impl Rbio {
     }
 
     pub fn new<'a>(fs: &'a Fs, opts: c::bch_inode_opts, subvol: u32, err_report: Option<&'a ReadErrReport>,
-                   bio: BioInPlace) -> impl PinInit<Self, BchError> + 'a {
+                   bio: impl PinInit<Bio, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a {
         let err_report = err_report.map(|r| unsafe { BackRef::new(r) });
         Self::with(fs.as_ptr(), local_clock(), ReadFor::BCH_READ_FOR_read, subvol, opts, err_report, bio)
     }
@@ -209,17 +209,19 @@ impl Rbio {
     pub(crate) fn update(fs: &Fs, opts: c::bch_inode_opts, read_for: ReadFor, bio: BioInPlace)
         -> impl PinInit<Self, BchError>
     {
-        Self::with(fs.as_ptr(), local_clock(), read_for, 0, opts, None, bio)
+        Self::with(fs.as_ptr(), local_clock(), read_for, 0, opts, None, bio.init())
     }
 
     /// The bio of a fragment of @orig's read: what the read is - its
     /// subvolume, options, error report - stays @orig's, and is read there.
-    fn fragment(orig: &Rbio, bio: BioInPlace) -> impl PinInit<Self, BchError> + '_ {
+    fn fragment<'a>(orig: &'a Rbio, bio: impl PinInit<Bio, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a {
         Self::with(orig.c, orig.start_time, orig.read_for, 0, c::bch_inode_opts::default(), None, bio)
     }
 
     fn with(c: *mut Fs, start_time: u64, read_for: ReadFor, subvol: u32, opts: c::bch_inode_opts,
-            err_report: Option<BackRef<ReadErrReport>>, bio: BioInPlace) -> impl PinInit<Self, BchError> {
+            err_report: Option<BackRef<ReadErrReport>>, bio: impl PinInit<Bio, BchError>)
+        -> impl PinInit<Self, BchError>
+    {
         pin_init!(Rbio {
             c,
             start_time,
@@ -332,8 +334,8 @@ impl Rbio {
 
 enum Kind<'r> {
     Own(LentBio<'r>),
-    Clone(BioBox<Rbio, BioClone<'r>, Pool>),
-    Bounce(BioBox<Rbio, BioBuffersOwned<'r>, Pool>),
+    Clone(BioBox<'r, Rbio, BioBuffersUnmanaged, Pool>),
+    Bounce(BioBox<'r, Rbio, BioBuffersOwned<'r>, Pool>),
     /// The promote's bio, and its task, started with what was read once the
     /// bio's given back
     Promote(Lent<'r>, AwaitingRead<'r>),
@@ -1270,16 +1272,16 @@ impl<'r> Planned<'r, '_> {
         let opf = orig.bio().raw().bi_opf;
 
         let _noio = MemallocFlags::noio();
-        let fragment = |b| Rbio::fragment(orig, b);
         let (pool, bvecs, bdev) = (&FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc(), core::ptr::null_mut());
         let kind = match how {
             How::Promote(p) => Kind::Promote(p.rbio.bio.lend(), p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
                 let src = (&fs.bio_bounce, bs, size, size, gfp);
-                Kind::Bounce(BioBox::new_with_in(pool, bvecs, bdev, 0, src, fragment)?)
+                Kind::Bounce(BioBox::new_with_in(pool, bvecs, bdev, 0, src, |b| Rbio::fragment(orig, b.init()))?)
             }
-            How::Clone => Kind::Clone(BioBox::new_with_in(pool, bvecs, bdev, 0, plan.range, fragment)?),
+            How::Clone => Kind::Clone(BioBox::new_in(pool, bvecs, bdev, 0, 0,
+                                                     |b| Rbio::fragment(orig, b.clone_of(plan.range)))?),
             How::Own => Kind::Own(orig.lend()),
         };
 
@@ -1327,16 +1329,17 @@ impl<'r> Planned<'r, '_> {
         let opf = orig.bio().raw().bi_opf;
 
         let _noio = MemallocFlags::noio();
-        let mut slot = TaskSlot::exclusive_bio_in(&FRAGMENTS, &FRAGMENT_BVECS, core::ptr::null_mut(), nr_vecs, 0, |b| {
-            pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b) }? BchError)
-        })?;
-        let buffers = match bounce {
-            Some(src) => Some(BioBuffersOwned::fill(slot.home().bio_mut(), src)?),
-            None => {
-                BioClone::fill(slot.home().bio_mut(), plan.range)?;
-                None
-            }
-        };
+        let (home, null) = (&FRAGMENTS, core::ptr::null_mut());
+        let mut slot = match bounce {
+            Some(_) => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, null, nr_vecs, 0, |b| {
+                pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b.init()) }? BchError)
+            }),
+            None => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, null, 0, 0, |b| {
+                let b = unsafe { b.borrowing() };
+                pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b.clone_of(plan.range)) }? BchError)
+            }),
+        }?;
+        let buffers = bounce.map(|src| BioBuffersOwned::fill(slot.home().bio_mut(), src)).transpose()?;
         let bio = slot.home().bio_mut();
         bio.set_opf(opf);
         bio.set_sector(plan.pick.ptr.offset());

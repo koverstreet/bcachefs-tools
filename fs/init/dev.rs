@@ -292,7 +292,7 @@ impl core::ops::DerefMut for bch_fs_sb {
     }
 }
 
-pub type SbBio = Option<BioBox<Bio>>;
+pub type SbBio = Option<BioBox<'static, Bio>>;
 
 nest! {
     /// A device's superblock, and what reads and writes it: what changes

@@ -101,7 +101,7 @@ pub fn read<'a>(
     let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
     let mut b = BioBox::new(std::ptr::null_mut(), 1, c::req_op_REQ_OP_READ,
-                            |b| Rbio::new(fs, opts, inum.subvol as u32, None, b))?;
+                            |b| Rbio::new(fs, opts, inum.subvol as u32, None, b.init()))?;
     b.bio_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
     b.bio_mut().set_sector(offset >> 9);
     unsafe { b.bio_mut().map(buf.as_mut_ptr().cast(), buf.len()) };

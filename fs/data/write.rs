@@ -850,7 +850,7 @@ impl c::write_point {
     }
 }
 
-type WriteBio<B> = BioBox<Bio, B>;
+type WriteBio<B> = BioBox<'static, Bio, B>;
 
 /// An extent's data, which its replicas are clones of.
 pub(crate) enum ExtentData<'a> {

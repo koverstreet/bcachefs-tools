@@ -5,14 +5,13 @@
 //!
 //! The bvecs are the record of what was got, and release() walks them: a
 //! Buffers is mostly a type, saying how, and its value what giving them back
-//! needs - the bounce pool, a borrow's lifetime, or a mapped buffer itself.
+//! needs - the bounce pool, or a mapped buffer itself.
 
-use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
 
 use super::pages::{self, BouncePool};
-use super::{buf_nr_bvecs, Bio, BioRange};
+use super::{buf_nr_bvecs, Bio};
 use crate::c;
 use crate::errcode::BchError;
 use crate::os::kernel::PAGE_SIZE;
@@ -99,62 +98,6 @@ unsafe impl<'p> Buffers for BioBuffersOwned<'p> {
         unsafe { pages::free_pages_pool(self.pool, bio.raw_mut()) }
     }
 }
-
-/// A clone of @Src's bio, at @Src: its bvecs, and the data, are the source's,
-/// borrowed as long as the clone lives.
-///
-/// fill() is __bio_clone(), which isn't exported - but for its device's half,
-/// as a clone's made for no device and bio_set_dev() associates the blkg, and
-/// the crypt context and integrity payload a source has only once submitted.
-#[derive(Default)]
-pub struct BioClone<'a>(PhantomData<BioRange<'a>>);
-
-unsafe impl<'a> Buffers for BioClone<'a> {
-    type Src<'s> = BioRange<'a>;
-
-    fn nr_vecs(_: &BioRange<'a>) -> u16 {
-        0
-    }
-
-    fn fill(bio: &mut Bio, src: BioRange<'a>) -> Result<Self, BchError> {
-        unsafe { clone_from(bio, src.bio(), src.pos()) };
-        Ok(Self(PhantomData))
-    }
-
-    fn release(&mut self, _: &mut Bio) {}
-}
-
-/// __bio_clone(), of @s from @iter, into a bio of no bvecs and no device: its
-/// table @s's, where it is - borrowed, as @s doesn't move while it is.
-///
-/// # Safety
-/// @s's bvecs outlive @b.
-pub(super) unsafe fn clone_from(b: &mut Bio, s: &Bio, iter: c::bvec_iter) {
-    let table = s.vecs_ptr().cast_mut();
-    b.vecs_at = super::VecsAt::Borrowed;
-    let (b, s) = (&mut b.bio, &s.bio);
-    assert!(b.bi_bdev.is_null(), "a clone made for a device: it's bio_set_dev()'s, after");
-    b.bi_flags |= 1 << c::BIO_CLONED;
-    b.bi_ioprio = s.bi_ioprio;
-    clone_hints(b, s);
-    b.bi_iter = iter;
-    bi_io_vec!(clone b, s);
-    bi_io_vec!(b) = table;
-}
-
-/// The rest of __bio_clone()'s copies, as each kernel's struct bio has them;
-/// the shim's has none.
-#[cfg(kernel)]
-fn clone_hints(b: &mut c::bio, s: &c::bio) {
-    b.bi_write_hint = s.bi_write_hint;
-    #[cfg(linux_ge = "6.16")]
-    { b.bi_write_stream = s.bi_write_stream; }
-    #[cfg(linux_ge = "6.19")]
-    { b.bi_bvec_gap_bit = s.bi_bvec_gap_bit; }
-}
-
-#[cfg(not(kernel))]
-fn clone_hints(_: &mut c::bio, _: &c::bio) {}
 
 /// A buffer the bio's IO goes to or from, which the bio holds as long as it
 /// lives: borrowed - &mut [u8], for reads, which the device writes, and

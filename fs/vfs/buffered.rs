@@ -352,7 +352,7 @@ fn spawn_read(fs: &Fs, inode: &InodeInfo, opts: c::bch_inode_opts, nr_vecs: usiz
     let subvol = inode.inum().subvol as u32;
     let mut slot = TaskSlot::exclusive_bio_in(&READS, &READ_BVECS, core::ptr::null_mut(), nr_vecs as u16,
                                               c::req_op_REQ_OP_READ,
-                                              |b| pin_init!(ReadBio { rbio <- Rbio::new(fs, opts, subvol, None, b) }? BchError))
+                                              |b| pin_init!(ReadBio { rbio <- Rbio::new(fs, opts, subvol, None, b.init()) }? BchError))
         .expect("a read bio's box: its pool waits for an element, and an Rbio's init can't fail");
     let folios = set_up(slot.home().bio_mut());
     let inum = inode.inum();
