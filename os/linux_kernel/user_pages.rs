@@ -14,13 +14,12 @@ use super::kernel::PAGE_SIZE;
 use crate::c;
 use crate::errcode::BchError;
 use crate::os::file::Any;
+use crate::os::folio::Folio;
 use crate::util::bio::{Bio, Bvec, FolioHold, Holds};
 use crate::util::task::requeue;
 use crate::os::workqueue::Queue;
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::ptr::NonNull;
-
-use crate::c::bch2_bio_iov_iter_get_pages;
 
 /// What a bio of an iov_iter's pages holds of their folios: Pinned, a
 /// user-backed iter's - iov_iter_extract_will_pin() - or Callers'.
@@ -153,37 +152,33 @@ impl<P: UserPage> Bio<Holds<P>> {
     }
 }
 
-impl Bio {
-    /// Its bvecs the pages of @iter's next bytes, pinned, as many as it has
-    /// room for - @iter advanced past them. release_user_pages() gives them
-    /// back.
-    pub fn pin_user_pages(&mut self, iter: &mut IovIter<'_>) -> Result<(), BchError> {
-        let ret = unsafe { bch2_bio_iov_iter_get_pages(self.raw_mut(), iter.as_ptr(), 0) };
-        self.raw_filled();
-        if ret < 0 { Err(BchError::from_raw(ret)) } else { Ok(()) }
+/// @folio dirtied, under its lock: folio_mark_dirty_lock().
+fn mark_dirty(folio: &Folio) {
+    unsafe {
+        c::folio_lock(folio.as_ptr());
+        c::folio_mark_dirty(folio.as_ptr());
+        c::folio_unlock(folio.as_ptr());
     }
+}
 
+impl<P: UserPage> Bio<Holds<P>> {
     /// Its pages dirtied, before it's read into: the user's.
     pub fn set_pages_dirty(&mut self) {
-        for f in self.range_all().folios() {
-            let folio = f.folio.as_ptr();
-            unsafe {
-                c::folio_lock(folio);
-                c::folio_mark_dirty(folio);
-                c::folio_unlock(folio);
-            }
+        for v in self.vecs() {
+            mark_dirty(v.folio());
         }
     }
 
-    /// The user's pages it pinned, given back - @dirtied, if set_pages_dirty()
-    /// dirtied them, as they're checked dirty still: those cleaned since are
-    /// dirtied again first, under their folio locks.
+    /// Its pages given back - @dirtied, if set_pages_dirty() dirtied them, as
+    /// they're checked dirty still: those cleaned since are dirtied again
+    /// first, under their folio locks, as bio_release_pages() does.
     pub async fn release_user_pages(&mut self, dirtied: bool) {
-        let redirty = dirtied && !self.range_all().folios()
-            .all(|f| unsafe { c::folio_test_dirty(f.folio.as_ptr()) });
-        if redirty {
+        if dirtied && !self.vecs().iter().all(|v| v.folio().dirty()) {
             requeue(Queue::system_dfl()).await;
+            for v in self.vecs().iter().filter(|v| !v.folio().dirty()) {
+                mark_dirty(v.folio());
+            }
         }
-        unsafe { c::bio_release_pages(self.raw_mut(), redirty) };
+        self.release();
     }
 }

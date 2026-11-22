@@ -47,15 +47,9 @@ impl<'a> IovIter<'a> {
         unsafe { self.0.__bindgen_anon_1.__bindgen_anon_1.as_mut().count = count }
     }
 
-    /// bio_iov_vecs_to_alloc(): the bvecs a bio of its next pages wants, up to
-    /// BIO_MAX_VECS.
-    pub fn bio_vecs(&mut self) -> u16 {
-        unsafe { c::bio_iov_vecs_to_alloc(self.0, c::BIO_MAX_VECS as core::ffi::c_int) as u16 }
-    }
-
     /// The bvecs a bio of its next pages, a page each, wants - up to
     /// BIO_MAX_VECS: iov_iter_npages(), as bio_iov_vecs_to_alloc() is but
-    /// for a bvec iter, which C's bio borrows the bvecs of.
+    /// for a bvec iter, which C's bio borrows the bvecs of and ours copies.
     #[cfg(kernel)]
     pub fn bio_pages(&mut self) -> u16 {
         unsafe { c::iov_iter_npages(self.0, c::BIO_MAX_VECS as c_int) as u16 }

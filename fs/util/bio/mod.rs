@@ -185,8 +185,6 @@ pub enum VecsAt {
     Own,
     /// A clone's parent's, or a table its owner keeps - init_borrowed()'s
     Borrowed,
-    /// An ITER_BVEC's, which pinning its pages made the bio's
-    Iter,
 }
 
 // XXX: a Bio moves, and is swapped, as any Rust value - but a clone's bvecs
@@ -249,9 +247,9 @@ impl<B: Typed> Deref for Bio<B> {
 
 // XXX: through this, its bvecs can be swapped with another bio's - mem::swap()
 // of two &mut Bio - and its drop then releases what B never held. And Bio
-// still has map(), truncate_vecs() and pin_user_pages(), for the owners that
-// aren't typed yet - each goes with its last; till then a Bio<B> could gain
-// bvecs that aren't B's through them.
+// still has map() and truncate_vecs(), for the owners that aren't typed - its
+// remaps, write_replicas', the EC IO's; a Bio<B> could gain bvecs that aren't
+// B's through them.
 impl<B: Typed> DerefMut for Bio<B> {
     fn deref_mut(&mut self) -> &mut Bio {
         let () = Self::ERASES;
@@ -365,15 +363,6 @@ impl Bio {
     #[allow(unused_unsafe)]
     fn table(&self) -> *mut c::bio_vec {
         unsafe { bi_io_vec!(self.bio) }
-    }
-
-    /// After C has filled it: if C took a table of its own for it - an
-    /// ITER_BVEC's, pinning its pages - that's its table till it's cleared.
-    #[cfg(kernel)]
-    pub(crate) fn raw_filled(&mut self) {
-        if self.vecs_at == VecsAt::Own && self.table() != self.vecs.as_mut_ptr() {
-            self.vecs_at = VecsAt::Iter;
-        }
     }
 
     pub fn range(&self) -> BioRange<'_> {
