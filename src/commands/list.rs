@@ -6,9 +6,13 @@ use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
 use bcachefs_kernel::btree::iter::BtreeNodeIter;
+use bcachefs_kernel::btree::bkey::{AnyKeySC, BkeySC, KeyState};
+use bcachefs_kernel::util::vstructs::Unvalidated;
+use bcachefs_kernel::data::ptrs::{extent_entry_type_name, BkeyVPtrs, ExtentEntry, Ptrs};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::c::DegradedAction;
 use clap::Parser;
+use serde_json::{json, Value};
 use std::io::{stdout, IsTerminal};
 
 use crate::logging;
@@ -17,25 +21,180 @@ use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 use bcachefs_kernel::format::{Bpos, Btree, BkeyType};
 
+fn bpos_json(p: Bpos) -> Value {
+    let (inode, offset, snapshot) = (p.inode, p.offset, p.snapshot);
+
+    json!({"inode": inode, "offset": offset, "snapshot": snapshot})
+}
+
+fn csum_json(lo: u64, hi: u64) -> Value {
+    json!({
+        "lo": lo,
+        "hi": hi,
+        "lo_hex": format!("{lo:016x}"),
+        "hi_hex": format!("{hi:016x}"),
+    })
+}
+
+fn default_crc_json(size: u32) -> Value {
+    json!({
+        "compressed_size": size,
+        "uncompressed_size": size,
+        "live_size": size,
+        "csum_type": 0,
+        "compression_type": 0,
+        "offset": 0,
+        "nonce": 0,
+        "csum": csum_json(0, 0),
+    })
+}
+
+fn crc_json(crc: &c::bch_extent_crc_unpacked) -> Value {
+    json!({
+        "compressed_size": crc.compressed_size,
+        "uncompressed_size": crc.uncompressed_size,
+        "live_size": crc.live_size,
+        "csum_type": crc.csum_type.get().0,
+        "compression_type": crc.compression_type.get().0,
+        "offset": crc.offset,
+        "nonce": crc.nonce,
+        "csum": csum_json(crc.csum.lo.get(), crc.csum.hi.get()),
+    })
+}
+
+fn extent_entries_json(k: BkeySC<'_, <Unvalidated as KeyState>::Of<Ptrs>>, fs: &Fs) -> Vec<Value> {
+    let mut entries = Vec::new();
+    let mut current_crc = default_crc_json(k.k.size);
+    let mut crcs = k.crcs(fs);
+
+    for entry in k.extent_entries(fs) {
+        let ty = entry.ty();
+        let mut out = json!({
+            "entry_type": ty,
+            "entry_type_name": extent_entry_type_name(ty).unwrap_or("unknown"),
+        });
+
+        match entry {
+            ExtentEntry::ptr(ptr) => {
+                out["ptr"] = json!({
+                    "dev": ptr.dev(),
+                    "offset": ptr.offset(),
+                    "generation": ptr.generation(),
+                    "cached": ptr.cached() != 0,
+                    "unwritten": ptr.unwritten() != 0,
+                    "crc": current_crc.clone(),
+                });
+            }
+            ExtentEntry::crc32(_) | ExtentEntry::crc64(_) | ExtentEntry::crc128(_) => {
+                current_crc = crc_json(&crcs.next().expect("CRC entry has unpacked value"));
+                out["crc"] = current_crc.clone();
+            }
+            ExtentEntry::stripe_ptr(stripe) => {
+                out["stripe_ptr"] = json!({
+                    "idx": stripe.idx(),
+                    "block": stripe.block(),
+                    "redundancy": stripe.redundancy(),
+                    "crc": current_crc.clone(),
+                });
+            }
+            _ => {}
+        }
+
+        entries.push(out);
+    }
+
+    entries
+}
+
+fn reflink_p_json(v: &c::ReflinkP) -> Value {
+    json!({
+        "idx": v.idx(),
+        "error": v.error(),
+        "may_update_options": v.may_update_options(),
+        "front_pad": v.front_pad.get(),
+        "back_pad": v.back_pad.get(),
+    })
+}
+
+fn backpointer_json(v: &c::Backpointer) -> Value {
+    json!({
+        "btree_id": v.btree_id,
+        "level": v.level,
+        "data_type": v.data_type,
+        "bucket_gen": v.bucket_gen,
+        "flags": u32::from(v.flags),
+        "bucket_len": v.bucket_len,
+        "pos": bpos_json(v.pos),
+    })
+}
+
+fn key_json(fs: &Fs, btree: Btree, level: u32, k: AnyKeySC<'_, Unvalidated>) -> Value {
+    let key_type = k.k.type_;
+    let bversion = k.k.bversion;
+    let (bversion_lo, bversion_hi) = (bversion.lo, bversion.hi);
+
+    let mut out = json!({
+        "btree": format!("{btree}"),
+        "btree_id": btree.0,
+        "level": level,
+        "key": {
+            "type": key_type,
+            "type_name": BkeyType(key_type as u32).name().unwrap_or("unknown"),
+            "pos": bpos_json(k.k.p),
+            "start_pos": bpos_json(k.k.start_pos()),
+            "size": k.k.size,
+            "bversion": {"lo": bversion_lo, "hi": bversion_hi},
+            "deleted": BkeyType(key_type as u32).is_deleted(),
+        },
+        "text": format!("{}", k.to_text(fs)),
+    });
+
+    if let Some(ptrs) = k.arm::<Ptrs>() {
+        let entries = extent_entries_json(ptrs, fs);
+        if !entries.is_empty() {
+            out["extent_entries"] = json!(entries);
+        }
+    }
+
+    if let Some(v) = k.arm::<c::ReflinkP>() {
+        out["reflink_p"] = reflink_p_json(v.v());
+    } else if let Some(v) = k.arm::<c::ReflinkV>() {
+        out["reflink_v"] = json!({"refcount": v.v().refcount.get()});
+    } else if let Some(v) = k.arm::<c::Backpointer>() {
+        out["backpointer"] = backpointer_json(v.v());
+    }
+
+    out
+}
+
+fn print_key(fs: &Fs, opt: &Cli, btree: Btree, k: AnyKeySC<'_, Unvalidated>) {
+    if opt.json {
+        println!("{}", key_json(fs, btree, opt.level, k));
+    } else {
+        println!("{}", k.to_text(fs));
+    }
+}
+
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
+    let (btree, start, end) = opt.list_range()?;
 
     let mut flags = BtreeIterFlags::PREFETCH;
 
-    if opt.start.snapshot == 0 {
+    if start.snapshot == 0 {
         flags |= BtreeIterFlags::ALL_SNAPSHOTS;
     }
 
     let mut iter = BtreeIter::new_level(
         &trans,
-        opt.btree,
-        opt.start,
+        btree,
+        start,
         opt.level,
         flags,
     );
 
     iter.for_each(&trans, |_, _, k| {
-        if k.k.p > opt.end {
+        if k.k.p > end {
             return Ok(ControlFlow::Break(()));
         }
 
@@ -45,7 +204,7 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
             }
         }
 
-        println!("{}", k.to_text(fs));
+        print_key(fs, opt, btree, k.as_read());
         Ok(ControlFlow::Continue(()))
     })?;
 
@@ -54,11 +213,12 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
+    let (btree, start, end) = opt.list_range()?;
     for level in opt.level..c::BTREE_MAX_DEPTH {
         let mut iter = BtreeNodeIter::new(
             &trans,
-            opt.btree,
-            opt.start,
+            btree,
+            start,
             0,
             level,
             BtreeIterFlags::PREFETCH,
@@ -66,7 +226,7 @@ fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
         iter.for_each(&trans, |b| {
             let contents = b.contents();
-            if contents.key.k.p > opt.end {
+            if contents.key.k.p > end {
                 return Ok(ControlFlow::Break(()));
             }
 
@@ -80,11 +240,12 @@ fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
+    let (btree, start, end) = opt.list_range()?;
     for level in opt.level..c::BTREE_MAX_DEPTH {
         let mut iter = BtreeNodeIter::new(
             &trans,
-            opt.btree,
-            opt.start,
+            btree,
+            start,
             0,
             level,
             BtreeIterFlags::PREFETCH,
@@ -92,7 +253,7 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
         iter.for_each(&trans, |b| {
             let contents = b.contents();
-            if contents.key.k.p > opt.end {
+            if contents.key.k.p > end {
                 return Ok(ControlFlow::Break(()));
             }
 
@@ -106,11 +267,12 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
+    let (btree, start, end) = opt.list_range()?;
     for level in opt.level..c::BTREE_MAX_DEPTH {
         let mut iter = BtreeNodeIter::new(
             &trans,
-            opt.btree,
-            opt.start,
+            btree,
+            start,
             0,
             level,
             BtreeIterFlags::PREFETCH,
@@ -118,7 +280,7 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
         iter.for_each(&trans, |b| {
             let contents = b.contents();
-            if contents.key.k.p > opt.end {
+            if contents.key.k.p > end {
                 return Ok(ControlFlow::Break(()));
             }
 
@@ -137,16 +299,17 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 /// disk groups comes from the superblock; annotations needing live allocator
 /// state are omitted.
 fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
+    let (btree, start, end) = opt.list_range()?;
+
     let mut flags = OnlineIterFlags::default();
-    if opt.start.snapshot == 0 {
+    if start.snapshot == 0 {
         flags = flags | OnlineIterFlags::ALL_SNAPSHOTS;
     }
 
-    let mut iter = OnlineBtreeIter::new(handle, opt.btree, opt.level,
-					opt.start, opt.end, flags);
+    let mut iter = OnlineBtreeIter::new(handle, btree, opt.level, start, end, flags);
 
     while let Some(k) = iter.next().map_err(|e| anyhow::anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {}", e))? {
-        if k.k.p > opt.end {
+        if k.k.p > end {
             break;
         }
 
@@ -156,7 +319,7 @@ fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Resu
             }
         }
 
-        println!("{}", k.to_text(fs));
+        print_key(fs, opt, btree, k);
     }
 
     Ok(())
@@ -206,6 +369,10 @@ pub struct Cli {
     #[arg(short = 'k', long)]
     bkey_type: Option<BkeyType>,
 
+    /// Emit keys as JSON
+    #[arg(long)]
+    json: bool,
+
     /// Btree depth to descend to (0 == leaves)
     #[arg(short, long, default_value_t = 0)]
     level: u32,
@@ -217,6 +384,18 @@ pub struct Cli {
     /// End position
     #[arg(short, long, default_value = "SPOS_MAX")]
     end: Bpos,
+
+    /// Limit extents listing to one inode number
+    #[arg(long, conflicts_with_all = ["btree", "start", "end"])]
+    inode: Option<u64>,
+
+    /// First bpos offset to list with --inode
+    #[arg(long, requires = "inode", default_value_t = 0)]
+    inode_start_offset: u64,
+
+    /// Last bpos offset to list with --inode
+    #[arg(long, requires = "inode", default_value_t = u64::MAX)]
+    inode_end_offset: u64,
 
     /// Check (fsck) the filesystem first
     #[arg(short, long)]
@@ -235,7 +414,34 @@ pub struct Cli {
     devices: Vec<std::path::PathBuf>,
 }
 
+impl Cli {
+    fn list_range(&self) -> Result<(Btree, Bpos, Bpos)> {
+        if let Some(inode) = self.inode {
+            if self.inode_start_offset > self.inode_end_offset {
+                bail!(
+                    "--inode-start-offset ({}) must be <= --inode-end-offset ({})",
+                    self.inode_start_offset,
+                    self.inode_end_offset,
+                );
+            }
+
+            return Ok((
+                Btree::extents,
+                Bpos { inode, offset: self.inode_start_offset, snapshot: 0 },
+                Bpos { inode, offset: self.inode_end_offset, snapshot: u32::MAX },
+            ));
+        }
+
+        Ok((self.btree, self.start, self.end))
+    }
+}
+
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
+    // Validate ranges and output mode before opening filesystem devices.
+    opt.list_range()?;
+    if opt.json && !matches!(opt.mode, Mode::Keys) {
+        bail!("--json is only supported with keys mode");
+    }
     let mut fs_opts = c::bch_opts::default();
 
     fs_opts.set_noexcl(true);
