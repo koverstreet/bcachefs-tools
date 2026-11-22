@@ -919,6 +919,8 @@ unsafe fn release(p: *mut Fs) {
     // each workqueue's destroy is its flush: before the exits free what their
     // work uses
     unsafe { fs.exit_late() };
+    // after: the delete work, flushed with its workqueue, can requeue its retry
+    fs.subvol_delete_retry.cancel_sync();
     #[cfg(not(NO_BCACHEFS_FS))]
     unsafe { fs.vfs.inodes.exit() };
     reconcile_exit(fs);

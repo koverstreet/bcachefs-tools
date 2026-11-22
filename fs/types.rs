@@ -578,6 +578,11 @@ pub struct Fs {
     #[init(crate::sb::members::BtreeBitmapGcSchedule::init())]
     pub maybe_schedule_btree_bitmap_gc: crate::os::workqueue::DelayedWork,
 
+    /// Unlinked subvolumes whose inodes are held: their delete work retried
+    #[pin]
+    #[init(crate::snapshots::subvolume::SubvolDeleteRetry::init())]
+    pub(crate) subvol_delete_retry: crate::os::workqueue::DelayedWork,
+
     pub counters: c::bch_fs_counters,
     #[pin]
     #[init(crate::sb::counters::RecentCounters::init())]

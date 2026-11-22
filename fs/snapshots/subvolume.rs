@@ -37,6 +37,7 @@ use crate::init::error::{count_fsck_err, id, BkeyValidate};
 use crate::init::passes;
 use crate::inode;
 use crate::snapshots::snapshot;
+use crate::os::workqueue::Queue;
 use crate::util::alloc::KVVec;
 use crate::util::place::Contained;
 use crate::util::Printbuf;
@@ -732,33 +733,73 @@ fn set_deleted(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
     commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| __set_deleted(t, subvol))
 }
 
-/// Waits for inodes still in use.
+/// Has @subvols' inodes evicted, and returns those still held: not waiting.
 #[cfg(kernel)]
-fn evict_inodes(fs: &Fs, subvols: &[u32]) {
+fn evict_inodes(fs: &Fs, subvols: &[u32]) -> Result<KVVec<u32>, BchError> {
     crate::vfs::inode::evict_subvolume_inodes(fs, subvols)
 }
 
 #[cfg(not(kernel))]
-fn evict_inodes(_fs: &Fs, _subvols: &[u32]) {}
+fn evict_inodes(_fs: &Fs, _subvols: &[u32]) -> Result<KVVec<u32>, BchError> {
+    Ok(KVVec::new())
+}
 
-/// Deletes unlinked subvolumes, once the VFS has let go of their inodes:
-/// unlink() queues it, holding a write ref.
+/// Deletes unlinked subvolumes the VFS has let go of the inodes of: unlink()
+/// queues it, holding a write ref. Not waiting for the held ones - they stay
+/// on the list, as does one whose delete failed, and the work is retried
+/// after a second, with a write ref of its own.
 pub(crate) fn delete_unlinked(snapshots: &c::bch_fs_snapshots) {
     let fs = snapshots.container();
-    loop {
-        let subvols = core::mem::replace(&mut *snapshots.unlinked.lock(), KVVec::new());
-        if subvols.is_empty() {
+
+    let pending = {
+        let unlinked = snapshots.unlinked.lock();
+        let mut pending = KVVec::new();
+        if bch_err_msg!(fs, pending.extend_from_slice(&unlinked), "copying pending subvolumes").is_err() {
+            return retry_delete_unlinked(fs);
+        }
+        pending
+    };
+    if pending.is_empty() {
+        return;
+    }
+
+    let Ok(busy) = bch_err_msg!(fs, evict_inodes(fs, &pending), "evicting inodes from pending subvolumes") else {
+        return retry_delete_unlinked(fs);
+    };
+
+    let trans = crate::btree_trans!(fs);
+    for &id in pending.iter().filter(|id| !busy.contains(id)) {
+        if bch_err_msg!(fs, set_deleted(&trans, id), "deleting subvolume {id}").is_err() {
             break;
         }
+        snapshots.unlinked.lock().retain(|u| *u != id);
+    }
 
-        evict_inodes(fs, &subvols);
+    if !snapshots.unlinked.lock().is_empty() {
+        retry_delete_unlinked(fs);
+    }
+}
 
-        let trans = crate::btree_trans!(fs);
-        for &id in subvols.iter() {
-            if bch_err_msg!(fs, set_deleted(&trans, id), "deleting subvolume {id}").is_err() {
-                return;
-            }
-        }
+/// Unlinked subvolumes left on the list - by a read-only in between - have
+/// their delete work queued again.
+pub(crate) fn retry_pending_deletes(fs: &Fs) {
+    if !fs.snapshots.unlinked.lock().is_empty() {
+        fs.snapshots.wait_for_pagecache_and_delete_work.queue(fs.write_ref_wq());
+    }
+}
+
+fn retry_delete_unlinked(fs: &Fs) {
+    fs.subvol_delete_retry.queue(Queue::system_long(), c::HZ as core::ffi::c_ulong);
+}
+
+crate::fs_delayed_work! {
+    /// Held subvolumes' delete work, retried: it queues the delete work again,
+    /// which takes a write ref of its own - none if going read-only. Holds
+    /// none itself: going read-only cancels it.
+    pub(crate) work SubvolDeleteRetry: field subvol_delete_retry;
+
+    fn run(fs: &Fs) {
+        fs.snapshots.wait_for_pagecache_and_delete_work.queue(fs.write_ref_wq());
     }
 }
 

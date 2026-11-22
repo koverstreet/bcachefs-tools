@@ -46,6 +46,7 @@ impl Fs {
         let mut seq = 0;
 
         self.maybe_schedule_btree_bitmap_gc.cancel_sync();
+        self.subvol_delete_retry.cancel_sync();
         stripe_heads_stop(self, None);
         self.open_buckets_stop(None, true);
         self.copygc_stop();
@@ -349,6 +350,9 @@ impl StateLockWrite<'_> {
             self.read_only();
             return ret;
         }
+
+        // Held subvolumes' deletes, left for the last read-only: retried
+        crate::snapshots::subvolume::retry_pending_deletes(fs);
 
         /* copygc was started before recovery, and waits for BCH_FS_rw: */
         fs.copygc_wakeup();
