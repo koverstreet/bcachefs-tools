@@ -202,6 +202,14 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
         Ok(v)
     }
 
+    /// The element at @index, taken out, those after it moved down: std's.
+    pub fn remove(&mut self, index: usize) -> T {
+        let len = self.len();
+        assert!(index < len, "removing element {index} of a vector of {len}");
+        self[index..].rotate_left(1);
+        self.pop().expect("not empty")
+    }
+
     /// Its first @len kept, the rest dropped.
     pub fn truncate(&mut self, len: usize) {
         let old = self.len();
