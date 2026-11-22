@@ -115,4 +115,11 @@ impl<H: FolioHold> Bio<Holds<H>> {
         self.vecs.clear();
         self.sync(0);
     }
+
+    /// Emptied, for another IO from scratch: its bvecs released, then
+    /// bio_reset().
+    pub fn clear(&mut self, opf: u32) {
+        self.release();
+        unsafe { crate::os::bio::sys::reset(self.raw_mut(), ptr::null_mut(), opf) };
+    }
 }

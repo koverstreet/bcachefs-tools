@@ -233,7 +233,7 @@ impl<B: Typed> Deref for Bio<B> {
 
 // XXX: through this, its bvecs can be swapped with another bio's - mem::swap()
 // of two &mut Bio - and its drop then releases what B never held. And Bio
-// still has add_folio_part(), truncate_vecs(), clear() and
+// still has add_folio_part(), truncate_vecs() and
 // pin_user_pages(), for the owners that aren't typed yet - each goes with its
 // last; till then a Bio<B> could gain bvecs that aren't B's through them.
 impl<B: Typed> DerefMut for Bio<B> {
@@ -442,14 +442,6 @@ impl Bio {
         self.vecs.push(c::bio_vec { bv_page: folio.as_ptr().cast(), bv_len: len as u32, bv_offset: offset as u32 })
             .expect("a bvec, into the room it has");
         self.sync(self.bio.bi_iter.bi_size + len as u32);
-    }
-
-    /// Emptied, for another IO from scratch: bio_reset(), its bvecs and its
-    /// position gone - a bio whose pages are new each IO, a dio's.
-    pub fn clear(&mut self, opf: u32) {
-        self.vecs.clear();
-        unsafe { crate::os::bio::sys::reset(self.raw_mut(), core::ptr::null_mut(), opf) };
-        self.sync(0);
     }
 
     /// For another IO: bio_reset(), its bvecs kept - the buffers it was made

@@ -21,11 +21,12 @@ use crate::fs::Fs;
 use crate::inode_opts;
 use crate::snapshots::subvolume;
 use crate::util::alloc::Kmalloc;
-use crate::os::bio::{Bio, BvecMempool};
+use crate::os::bio::{Bio, BvecMempool, Holds};
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Spawn, TaskSlot, WaitSync};
 use crate::os::iov_iter::{HeldIovIter, IovIter};
+use crate::os::user_pages::{Callers, Pinned, UserPage};
 use crate::os::kernel::{current_id, likely, task_io_account_write, unlikely, Mm};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::ops::IntoRaw;
@@ -43,8 +44,10 @@ use core::ptr;
 use cstruct_macros::in_place;
 use pin_init::{pin_data, pin_init};
 
+/// P is what its bio has of the user's pages: Pinned, a user-backed iter's,
+/// or the caller's.
 #[pin_data]
-struct Dio {
+struct Dio<P: UserPage> {
     /* where its next bio's written: the kiocb's, moved on as it's done */
     pos:       u64,
     mapping:   Mapping,
@@ -65,9 +68,9 @@ struct Dio {
     #[pin]
     op:        c::bch_write_op,
     #[pin]
-    wbio:      Bio,
+    wbio:      Bio<Holds<P>>,
 }
-crate::has_bio!(Dio, wbio);
+crate::has_bio!(Dio<P>, wbio, owns Holds<P> where P: UserPage);
 
 type Pool = &'static Mempool<Kmalloc>;
 
@@ -75,7 +78,9 @@ static DIO_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
 static DIO_WRITE_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    Mempool::init_static(&DIO_WRITES, Mempool::kmalloc(4, exclusive_size::<Dio, DioWriteFut<'static>, Pool>()), m)?;
+    let size = exclusive_size::<Dio<Pinned>, DioWriteFut<'static, Pinned>, Pool>()
+        .max(exclusive_size::<Dio<Callers>, DioWriteFut<'static, Callers>, Pool>());
+    Mempool::init_static(&DIO_WRITES, Mempool::kmalloc(4, size), m)?;
     BvecMempool::init_static(&DIO_WRITE_BVECS, 4, m)
 }
 
@@ -112,19 +117,14 @@ fn check_range_allocated(fs: &Fs, inum: c::subvol_inum, mut offset: u64, size: u
     ret.is_ok() && allocated
 }
 
-impl Dio {
+impl<P: UserPage> Dio<P> {
     fn bio_sectors(&self) -> u64 {
         u64::from(self.wbio.range().len() >> 9)
-    }
-
-    /// Its pages given back: a write only read them.
-    fn release_pages(&mut self) {
-        self.wbio.release_pinned_pages();
     }
 }
 
 #[inline(never)]
-fn dio_write_check_allocated(dio: &Dio) -> bool {
+fn dio_write_check_allocated<P: UserPage>(dio: &Dio<P>) -> bool {
     check_range_allocated(dio.op.fs(), dio.mapping.inode().inum(), dio.op.pos.offset, dio.bio_sectors(),
                           dio.op.opts.data_replicas.into(), dio.op.opts.compression != 0)
 }
@@ -136,11 +136,17 @@ fn dio_write_check_allocated(dio: &Dio) -> bool {
  * the IO:
  */
 #[inline(never)]
-fn dio_write_copy_iov(dio: &mut Dio) -> Result<(), ()> {
+fn dio_write_copy_iov<P: UserPage>(dio: &mut Dio<P>) -> Result<(), ()> {
     /*
      * iov_iter has a single embedded iovec - nothing to do:
      */
     if dio.iter.is_ubuf() {
+        return Ok(());
+    }
+
+    // a bvec iter's array is its caller's till the dio's done, as C's bio over
+    // it was
+    if dio.iter.is_bvec() {
         return Ok(());
     }
 
@@ -156,7 +162,7 @@ fn dio_write_copy_iov(dio: &mut Dio) -> Result<(), ()> {
 }
 
 /// What the dio wrote, or its error, what it held given back.
-fn dio_write_done(d: &mut Dio) -> Result<usize, BchError> {
+fn dio_write_done<P: UserPage>(d: &mut Dio<P>) -> Result<usize, BchError> {
     let ret = match d.op.error {
         0 => Ok((d.written << 9) as usize),
         e => Err(BchError::from_raw(e.into())),
@@ -169,7 +175,7 @@ fn dio_write_done(d: &mut Dio) -> Result<usize, BchError> {
 }
 
 #[inline(always)]
-fn dio_write_end(dio: &mut Dio) {
+fn dio_write_end<P: UserPage>(dio: &mut Dio<P>) {
     let mapping = dio.mapping;
     let inode = mapping.inode();
 
@@ -184,17 +190,16 @@ fn dio_write_end(dio: &mut Dio) {
         inode.i_sectors_acct_put(&mut dio.quota_res, dio.op.i_sectors_delta);
     }
 
-    dio.release_pages();
+    dio.wbio.release();
 
     if unlikely(dio.op.error != 0) {
         inode.ei_flags.set(c::InodeInfoFlag::EI_INODE_ERROR, true);
     }
 }
 
-/// The dio's next bio's worth of pages pinned, whole blocks of them: in its
-/// caller's context - or, @in_caller false, a worker, in its caller's address
-/// space.
-fn dio_write_pin(d: &mut Dio, in_caller: bool) -> Result<(), BchError> {
+/// The dio's next bio's worth of pages, whole blocks of them: in its caller's
+/// context - or, @in_caller false, a worker, in its caller's address space.
+fn dio_write_pin<P: UserPage>(d: &mut Dio<P>, in_caller: bool) -> Result<(), BchError> {
     let fs = d.op.fs();
 
     loop {
@@ -206,7 +211,7 @@ fn dio_write_pin(d: &mut Dio, in_caller: bool) -> Result<(), BchError> {
             debug_assert!(fs.fdm_table.get().is_none(), "a DIO write with page faults disabled already");
             let fdm = fs.fdm_table.set(d.mapping);
 
-            let ret = d.wbio.pin_user_pages(&mut d.iter.get());
+            let ret = P::extract_pages(&mut d.wbio, &mut d.iter.get());
             (ret, fdm.dropped_locks())
         };
 
@@ -246,7 +251,7 @@ fn dio_write_pin(d: &mut Dio, in_caller: bool) -> Result<(), BchError> {
 
 /// The dio's writes, a bio's worth of its pages at a time, the first's
 /// pinned by its caller.
-async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
+async fn dio_write_loop<P: UserPage>(d: &mut Dio<P>) -> Result<(), BchError> {
     let mapping = d.mapping;
     let inode = mapping.inode();
     let fs = inode.fs();
@@ -304,12 +309,12 @@ async fn dio_write_loop(d: &mut Dio) -> Result<(), BchError> {
 }
 
 #[in_place(DioWriteFut)]
-async fn dio_write_task<'h>(dio: Pin<&'h mut Dio>, mut end: End) {
+async fn dio_write_task<'h, P: UserPage>(dio: Pin<&'h mut Dio<P>>, mut end: End) {
     let d = dio.get_mut();
 
     if let Err(e) = dio_write_loop(d).await {
         d.op.set_error(e);
-        d.release_pages();
+        d.wbio.release();
         let mapping = d.mapping;
         mapping.inode().quota_reservation_put(&mut d.quota_res);
     }
@@ -323,6 +328,13 @@ async fn dio_write_task<'h>(dio: Pin<&'h mut Dio>, mut end: End) {
 }
 
 pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize {
+    match it.user_backed() {
+        true  => direct_write_of::<Pinned>(k, it),
+        false => direct_write_of::<Callers>(k, it),
+    }
+}
+
+fn direct_write_of<P: UserPage>(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize {
     let mapping = k.file().mapping();
     let inode = k.inode();
     let fs = inode.fs();
@@ -365,11 +377,11 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
         let mut sync = k.is_sync() || extending;
         let flush = k.is_dsync() && fs.opts().journal_flush_disabled.get() == 0;
         let opts = inode_opts::get_inode(fs, &inode.inode());
-        let nr_vecs = it.bio_vecs();
+        let nr_vecs = it.bio_pages();
 
         let mut dio = match TaskSlot::exclusive_bio_in(&DIO_WRITES, &DIO_WRITE_BVECS, nr_vecs,
                                                        c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE, |b| {
-            pin_init!(Dio {
+            pin_init!(Dio::<P> {
                 pos:       ki_pos,
                 mapping,
                 mm:        Mm::current(),
@@ -389,12 +401,12 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
             Err(e) => break 'out e.class() as isize,
         };
 
-        // the first bio's pages pinned here, in the caller: if there's more,
+        // the first bio's pages got here, in the caller: if there's more,
         // an async kiocb's iovec - which may be on its caller's stack - is
         // copied, or the dio is waited for here
         let d = dio.home().get_mut();
         if let Err(e) = dio_write_pin(d, true) {
-            d.release_pages();
+            d.wbio.release();
             break 'out e.class() as isize;
         }
         if unlikely(d.iter.get().count() != 0) && !sync && dio_write_copy_iov(d).is_err() {

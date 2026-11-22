@@ -15,11 +15,47 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::os::file::Any;
 use crate::os::folio::Folio;
-use crate::os::bio::Bio;
+use crate::os::bio::{Bio, Bvec, FolioHold, Holds};
 use crate::util::task::requeue;
 use crate::os::workqueue::Queue;
-use core::ffi::{c_int, c_uint};
+use core::ffi::{c_int, c_uint, c_ulong};
 use core::ptr::NonNull;
+
+/// What a bio of an iov_iter's pages holds of their folios: Pinned, a
+/// user-backed iter's - iov_iter_extract_will_pin() - or Callers'.
+pub trait UserPage: FolioHold<A = Any> + Send + 'static {
+    /// @bio's bvecs @iter's next pages, a run of one folio a bvec, as many as
+    /// it has room for - @iter advanced past them. Fails only if it got none.
+    /// Panics if @iter's pages aren't held as Self holds them.
+    fn extract_pages(bio: &mut Bio<Holds<Self>>, iter: &mut IovIter<'_>) -> Result<(), BchError>;
+}
+
+/// A user folio, the pages of it a bvec has: PINNED, a user-backed iter's,
+/// unpinned as it's released; or the caller's - a bvec or kvec iter's -
+/// which it keeps till the IO that has it is done. Made only as its pages
+/// are extracted.
+pub struct UserFolio<const PINNED: bool>(NonNull<c::folio>);
+
+pub type Pinned = UserFolio<true>;
+pub type Callers = UserFolio<false>;
+
+// a folio's, for whichever thread ends the IO
+unsafe impl<const PINNED: bool> Send for UserFolio<PINNED> {}
+
+unsafe impl<const PINNED: bool> FolioHold for UserFolio<PINNED> {
+    type A = Any;
+
+    fn folio(&self) -> NonNull<c::folio> {
+        self.0
+    }
+
+    unsafe fn release(folio: NonNull<c::folio>, offset: usize, len: usize) {
+        if PINNED {
+            let pages = (offset + len).div_ceil(PAGE_SIZE) - offset / PAGE_SIZE;
+            unsafe { c::unpin_user_folio(folio.as_ptr(), pages as c_ulong) }
+        }
+    }
+}
 
 /// Pages extracted at a time: the room on the stack for their pointers.
 const EXTRACT_BATCH: usize = 16;
@@ -43,6 +79,49 @@ fn contig_folio_len(pages: &[*mut c::page], folio: *mut c::folio, mut left: usiz
         j += 1;
     }
     (j, len)
+}
+
+impl<const PINNED: bool> UserPage for UserFolio<PINNED> {
+    fn extract_pages(bio: &mut Bio<Holds<Self>>, iter: &mut IovIter<'_>) -> Result<(), BchError> {
+        assert_eq!(iter.user_backed(), PINNED, "a bio of {} pages, of an iter whose pages aren't",
+                   if PINNED { "pinned" } else { "the caller's" });
+        let start = bio.nr_vecs();
+
+        while iter.count() != 0 && bio.nr_vecs() < bio.max_vecs() {
+            let mut pages = [core::ptr::null_mut::<c::page>(); EXTRACT_BATCH];
+            let mut p = pages.as_mut_ptr();
+            let mut offset = 0;
+            let room = usize::from(bio.max_vecs() - bio.nr_vecs()).min(EXTRACT_BATCH);
+            let max = (u32::MAX - bio.range().len()) as usize;
+
+            let got = unsafe { c::iov_iter_extract_pages(iter.as_ptr(), &mut p, max, room as c_uint, 0, &mut offset) };
+            if got <= 0 {
+                if bio.nr_vecs() != start {
+                    break;
+                }
+                return Err(if got < 0 { BchError::from_raw(got as c_int) } else { c::EFAULT.into() });
+            }
+
+            let (mut left, mut i) = (got as usize, 0);
+            let pages = &pages[..(offset + left).div_ceil(PAGE_SIZE)];
+            while left != 0 {
+                let (page, folio) = (pages[i], unsafe { c::rust_page_folio(pages[i]) });
+                let folio_offset = unsafe { c::rust_folio_page_idx(folio, page) } as usize * PAGE_SIZE + offset;
+                let mut len = (unsafe { c::folio_size(folio) } - folio_offset).min(left);
+                let mut n = (offset + len).div_ceil(PAGE_SIZE);
+                if n > 1 {
+                    (n, len) = contig_folio_len(&pages[i..i + n], folio, left, offset);
+                }
+
+                let held = UserFolio(NonNull::new(folio).expect("an extracted page's folio"));
+                bio.push(Bvec::new(held, folio_offset, len)).expect("extracting pages: no more than it has room for");
+                left -= len;
+                i += n;
+                offset = 0;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Bio {
@@ -101,12 +180,6 @@ impl Bio {
                 c::folio_unlock(folio);
             }
         }
-    }
-
-    /// The user's pages it pinned, given back as they are: a write's, which
-    /// only read them.
-    pub fn release_pinned_pages(&mut self) {
-        unsafe { c::bio_release_pages(self.raw_mut(), false) };
     }
 
     /// The user's pages it pinned, given back - @dirtied, if set_pages_dirty()

@@ -67,7 +67,7 @@ impl BioOwns for Pages<'_> {
 impl<'p> Bio<Pages<'p>> {
     /// A Bio owning @size bytes of pages, from the page allocator alone, each
     /// allocation a multiple of @bs - failing as it does, with nothing made: a
-    /// data update's, whose read and write bios borrow its bvecs.
+    /// data update's, whose write is of it.
     pub fn new(pool: &'p BouncePool, bs: u32, size: usize, gfp: Flags) -> impl PinInit<Self, BchError> + 'p {
         BioInPlace::own(pages::nr_vecs(size), 0, move |at| at.init_from(move |b| {
             if let Err(e) = pages::alloc_pages(&mut b.vecs, bs, size, gfp) {
