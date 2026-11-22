@@ -36,7 +36,7 @@ use crate::data::nocow_locking::{self, NocowKind};
 use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::util::alloc::{init_at, Box, Flags, KVec, Kmalloc};
+use crate::util::alloc::{flags, init_at, Box, Flags, KVec, Kmalloc};
 use crate::util::bio::{pages, BioInPlace, HasBio};
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
@@ -393,15 +393,36 @@ impl c::data_update {
         BkeySC::from(self.k.key())
     }
 
+    /// bios_init_gfp(), without waiting for memory first: the transaction still
+    /// holds the btree trans SRCU read lock - unlock() drops the node locks,
+    /// not that - and a long direct reclaim stall in the allocation would
+    /// stall SRCU grace periods for everyone. Failing that, drop SRCU and
+    /// retry allowed to wait; only the reclaim case pays for iterator
+    /// revalidation afterwards.
+    fn bios_init(&mut self, t: &TransAttempt<'_, '_>, io_opts: &c::bch_inode_opts, buf_bytes: u32)
+        -> Result<(), BchError>
+    {
+        match self.bios_init_gfp(io_opts, buf_bytes, flags::NOWAIT) {
+            Err(e) if e.matches(c::ENOMEM) => {
+                t.unlock_long();
+                self.bios_init_gfp(io_opts, buf_bytes, Flags::empty())
+            }
+            ret => ret,
+        }
+    }
+
     /// The read and write bios share bvecs and pages: the write writes what
     /// the read filled in.
-    fn bios_init(&mut self, io_opts: &c::bch_inode_opts, buf_bytes: u32) -> Result<(), BchError> {
+    fn bios_init_gfp(&mut self, io_opts: &c::bch_inode_opts, buf_bytes: u32, gfp: Flags) -> Result<(), BchError> {
         let fs = self.fs();
         let block_size = u32::from(fs.opts().block_size.get());
         let buf_bytes = buf_bytes.next_multiple_of(block_size);
         let nr_vecs = pages::nr_vecs(buf_bytes as usize);
 
-        let bvecs = KVec::from_elem(c::bio_vec::default(), nr_vecs as usize).map_err(|_| BchError::from(c::ENOMEM))?;
+        let bvecs = {
+            let _scope = MemallocFlags::for_gfp(gfp);
+            KVec::from_elem(c::bio_vec::default(), nr_vecs as usize).map_err(|_| BchError::from(c::ENOMEM))?
+        };
         let bvecs = self.bvecs.insert(bvecs.into_boxed_slice()).as_mut_ptr();
 
         // SAFETY: its bios, and the bvecs just made for them
@@ -410,7 +431,7 @@ impl c::data_update {
                                  c::req_op_REQ_OP_READ);
             crate::os::bio::init((&raw mut self.op.wbio.bio).cast(), core::ptr::null_mut(), bvecs, nr_vecs as u16, 0);
         }
-        if pages::alloc_pages(self.op.wbio.bio_mut().raw_mut(), block_size, buf_bytes as usize, Flags::empty()).is_err() {
+        if pages::alloc_pages(self.op.wbio.bio_mut().raw_mut(), block_size, buf_bytes as usize, gfp).is_err() {
             self.bios_free();
             return Err(c::ENOMEM.into());
         }
@@ -734,7 +755,7 @@ impl c::data_update {
 
         t.unlock();
 
-        self.bios_init(io_opts, buf_bytes)?;
+        self.bios_init(t, io_opts, buf_bytes)?;
 
         Ok(held)
     }
