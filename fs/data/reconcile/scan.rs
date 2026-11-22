@@ -26,12 +26,12 @@ use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::data::ec::stripe::WidenCache;
-use crate::data::moving::{key_sectors, MovingCtxt};
+use crate::data::moving::{key_sectors, target_has_rotational, MovingCtxt, RotationalLimit};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::BchError;
 use crate::namei::inum_snapshot_to_path;
 use crate::fs::Fs;
-use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
+use crate::inode_opts::{get_fs, get_io_opts, PerSnapshotIoOpts};
 use crate::debug::trace::events;
 use crate::os::kthread::Kthread;
 use crate::util::Printbuf;
@@ -297,6 +297,11 @@ impl ScanCookie {
         ctxt.set_stats(stats);
 
         let scan = &self.scan;
+        ctxt.reset_limits();
+        let metadata = *scan == S::metadata;
+        if target_has_rotational(fs, get_fs(fs, metadata).background_target.into()) {
+            ctxt.set_rotational_limits(RotationalLimit::Background);
+        }
         match *scan {
             S::fs        => scan_fs(ctxt, scan, s, false)?,
             S::metadata  => scan_fs(ctxt, scan, s, true)?,

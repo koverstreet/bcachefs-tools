@@ -45,7 +45,7 @@ use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::c::Errcode as err;
 use crate::data::ec::repair::{scrub_stripe_block, stripe_block_to_scrub};
-use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
+use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt, RotationalLimit};
 use crate::data::moving_update;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
@@ -400,7 +400,23 @@ fn evacuate_ptrs(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, io_opts: &c::bch_inode
 }
 
 impl Moving<'_> {
+    /// @w walked, its moves limited to a rotational window if the device
+    /// it walks is one - the context's limits as they were after.
     fn move_data_phys(&self, bucket: Option<&c::move_bucket>, w: &PhysWalk, name: &str, pred: &mut Pred<'_>)
+        -> Result<(), BchError>
+    {
+        let saved = self.limits();
+        if let BpWalk::Dev(dev) = w.bps {
+            if self.trans().fs().dev_rotational(dev) {
+                self.set_rotational_limits(RotationalLimit::Background);
+            }
+        }
+        let ret = self.move_data_phys_walk(bucket, w, name, pred);
+        self.restore_limits(saved);
+        ret
+    }
+
+    fn move_data_phys_walk(&self, bucket: Option<&c::move_bucket>, w: &PhysWalk, name: &str, pred: &mut Pred<'_>)
         -> Result<(), BchError>
     {
         let trans = self.trans();

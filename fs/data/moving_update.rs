@@ -15,9 +15,12 @@
 //! updates fifo holds till every update issued before it has started its own
 //! (moving.rs).
 //!
-//! A read leaves the context's read counts when its task sees it done, and is
-//! counted as a write once its write starts; in between, the fifo is what
-//! flush_all() waits on.
+//! A read stays in the context's read counts, with its buffer, till its write
+//! starts, and is counted as a write from then: a read waiting its turn to
+//! write still holds its place in the window, so reads can't pile up behind
+//! writes. On a rotational device, where the window is small, that keeps the
+//! head from seeking between more extents than it can finish. In between,
+//! the fifo is what flush_all() waits on.
 
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, TransAttempt};
@@ -61,8 +64,8 @@ fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, si
     }
 }
 
-/// The body: reads, counted in the context as @read_io; then waits for its
-/// turn, then writes - nothing, if the read failed. @bucket counts the update
+/// The body: reads, counted in the context as @read_io - till its write
+/// starts; then waits for its turn, then writes - nothing, if the read failed. @bucket counts the update
 /// against the bucket it's moving data off, until it's done. @runq is the
 /// context's run queue.
 #[args_stored_once]
@@ -72,7 +75,6 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
         read_update(d.op.fs(), &mut d.rbio, d.index.k.key(), d.index.btree_id, d.index.opts.read_flags,
                     d.index.opts.read_dev, runq).await
     };
-    drop(read_io);
     u.read_done.store(true, Relaxed);
 
     u.turn().wait(runq).await;
@@ -86,6 +88,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
         read_error_stats(&u, &read, moving, size);
         moving.io_start(true, size)
     };
+    drop(read_io);
     // A device the extent's on is offline: reconcile retrying the move can't
     // read it till that device is back, so it's parked till then. Not an IO
     // error, which a retry may get past, and whose device needn't change.
