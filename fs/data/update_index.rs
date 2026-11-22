@@ -38,7 +38,7 @@ use crate::c::Errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, BkeyVDurability};
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::update::ptr_bits_to_text;
-use crate::data::ptrs::{brand, extents_match, BkeyVPtrs, Branded, PtrMask, Ptrs, PtrsMut};
+use crate::data::ptrs::{brand, crc_is_compressed, extents_match, BkeyVPtrs, Branded, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::plan::{offline_devs, park, ParkReason};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -450,6 +450,42 @@ pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -
         write!(msg, "new: {}", new.as_sc().to_text(fs));
         msg.newline();
         Ok(())
+    })
+}
+
+/// The index update for a rechecksum: every replica of @u's extent, as it
+/// still is, under @old - the crc it was read with - gets @new instead; an
+/// extent that's changed since, or has other crcs, is left alone. Nothing's
+/// written, so the keys keep their pointers.
+pub(crate) fn index_update_rechecksum(trans: &TransGuard<'_>, u: &c::data_update,
+                                      old_crc: c::bch_extent_crc_unpacked,
+                                      new_crc: c::bch_extent_crc_unpacked) -> Result<(), BchError> {
+    let fs = trans.fs();
+    let old = BkeySC::from(u.k.key());
+    let res = DiskReservation::new(fs);
+
+    for_each_old_slot(trans, u, Some(&res), |t, iter, k| {
+        if k.k.key_type() != BkeyType::extent || !extents_match(fs, k, old) {
+            return Ok(());
+        }
+        let Some(kp) = k.arm::<Ptrs>() else { return Ok(()) };
+        if kp.ptrs_decoded(fs).any(|d| d.p.has_ec || crc_is_compressed(&d.p.crc) || d.p.crc != old_crc) {
+            return Ok(());
+        }
+
+        // room for the new crc: narrow_crc() may need a crc128 for each
+        let mut new = t.bkey_reassemble_room(k, k.k.bytes() + RECONCILE_ROOM)?;
+        let done = new.reborrow().arm::<PtrsMut>().expect("an extent with pointers, matched")
+            .narrow_crc(fs, old_crc, new_crc);
+        if !done {
+            return Ok(());
+        }
+        let mut new: TransBkey<'_, '_> = new.into();
+
+        let opts = get_io_opts(t, None, k)?;
+        new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
+                                u.op.opts.change_cookie)?;
+        t.update(iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)
     })
 }
 

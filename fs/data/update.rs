@@ -63,6 +63,9 @@ pub enum DataUpdateType {
     other,
     copygc,
     reconcile,
+    /// Only checksums change: the completed read's data kept, its extent's
+    /// crcs replaced - no write. Reconcile's, for a data_checksum change.
+    rechecksum,
     promote,
     self_heal,
     scrub,
@@ -668,7 +671,9 @@ impl c::data_update {
 
             // No new replicas needed: the settings changed since it was
             // written
-            if nr == 0 && !drop_only {
+            // (a rechecksum writes nothing unless a replica's read fails, which
+            // read_done() turns into a normal reconcile write)
+            if nr == 0 && !drop_only && type_ != Type::rechecksum {
                 // without @iter, it's a promote
                 if let Some(iter) = iter {
                     extent_drop_ptrs(t, iter, k, io_opts, &self.opts)?;
@@ -680,7 +685,7 @@ impl c::data_update {
             // bch2_write() after a useless read: alloc_nowait (promotes), a
             // full or offline target, too little durability on it. Not for a
             // drop: it doesn't write.
-            if type_ != Type::copygc && !drop_only {
+            if type_ != Type::copygc && type_ != Type::rechecksum && !drop_only {
                 fs.data_update_write_feasible(io_opts, &self.opts, &self.op.devs_have, k, None)?;
             }
 
@@ -808,9 +813,15 @@ impl c::data_update {
         let fs = self.fs();
         let ReadDone { mut ret, pick, ptrs_io_error, poisoned } = read;
         let mut crc = pick.map(|p| p.crc);
-        let type_ = self.opts.type_;
 
         self.opts.ptrs_io_error |= ptrs_io_error;
+        // A replica failed to read: its checksum mustn't be replaced by the good
+        // one's - that would make corrupt data readable unchecked - so it's
+        // repaired as any reconcile move is, by write
+        if self.opts.type_ == Type::rechecksum && self.opts.ptrs_io_error != 0 {
+            self.opts.type_ = Type::reconcile;
+        }
+        let type_ = self.opts.type_;
         if let Some(k) = &poisoned {
             self.k.reassemble(BkeySC::from(k));
         }
@@ -852,6 +863,20 @@ impl c::data_update {
         }
 
         if unlikely(self.opts.ptrs_io_error != 0) && !self.ptrs_io_error_kill() {
+            return false;
+        }
+
+        if type_ == Type::rechecksum {
+            // plan() chose this for whole, plain extents: what was read is all
+            // of it, so checksummed afresh it's the new crc of every replica
+            let mut new_crc = c::bch_extent_crc_unpacked::default();
+            let version = self.key().k.bversion;
+            self.op.error = ret_to_c(fs.rechecksum_bio(self.rbio.bio(), version, crc, None, Some(&mut new_crc),
+                                                       0, crc.live_size, self.op.bits.csum_type())
+                .and_then(|()| {
+                    let trans = crate::btree_trans!(fs);
+                    crate::data::update_index::index_update_rechecksum(&trans, self, crc, new_crc)
+                })) as i16;
             return false;
         }
 

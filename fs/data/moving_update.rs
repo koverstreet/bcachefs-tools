@@ -81,7 +81,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     // A device the extent's on is offline: reconcile retrying the move can't
     // read it till that device is back, so it's parked till then. Not an IO
     // error, which a retry may get past, and whose device needn't change.
-    let unreadable = u.opts.type_ == c::DataUpdateType::reconcile &&
+    let unreadable = matches!(u.opts.type_, c::DataUpdateType::reconcile | c::DataUpdateType::rechecksum) &&
         read.ret.is_err_and(|e| e.matches(Errcode::no_device_to_read_from));
     u.write(read, Resume::RUNQ).await;
     drop(write_io);
