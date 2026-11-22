@@ -16,8 +16,8 @@
 //!
 //! A T is made around its bio: the bioset, or BioBox::new(), puts the bio
 //! where it goes - bio_init() - then the caller's initializer does the rest of
-//! the T - its bio field from BioInPlace::init(), which writes nothing, or
-//! clone_of().
+//! the T - its bio field from BioInPlace::init(), or init_from(), which fills
+//! its bvecs with what the bio's to own.
 //!
 //! A box submitted to a Gather (BioBox::submit_gathered()) is given up to its
 //! IO, and its endio has it back from the bio, drops it, then puts what its T
@@ -28,7 +28,7 @@ use core::cell::UnsafeCell;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, Ordering::{Acquire, Release}};
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
 use core::pin::Pin;
 use core::ptr::NonNull;
 
@@ -36,8 +36,7 @@ use pin_init::{pin_data, pin_init, PinInit};
 
 use core::task::{ready, Context, Poll};
 
-use super::{bio_of, of_bio, AtEnd, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, BioOwns, BioRange,
-            BioVecs, Buffers, Data, HasBio, MapBuf, VecsAt};
+use super::{bio_of, of_bio, AtEnd, Bio, BioField, BioOwner, BioOwns, BioRange, BioVecs, Data, HasBio, VecsAt};
 use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{waiter, Completion, Exclusive, Resumable, TaskSlot, Waiter};
 use crate::c;
@@ -74,9 +73,10 @@ impl BioInPlace<'static> {
 }
 
 impl<'a> BioInPlace<'a> {
-    /// A Bio<B> of what bio_init() made: its bvecs empty, whatever B is.
-    pub fn init<E, B: BioOwns>(self) -> impl PinInit<Bio<B>, E> {
-        self.init_from(|_| Ok(()))
+    /// A Bio<B> of what bio_init() made: its bvecs empty, and B what owns
+    /// none yet.
+    pub fn init<E, B: BioOwns + Default>(self) -> impl PinInit<Bio<B>, E> {
+        self.init_from(|_| Ok(B::default()))
     }
 
     /// A clone of @src's bio, at @src: its bvecs, and the data, the source's,
@@ -98,18 +98,22 @@ impl<'a> BioInPlace<'a> {
             b.bi_iter = src.pos();
             bi_io_vec!(clone b, s);
             bi_io_vec!(b) = table;
-            Ok(())
+            Ok(Data)
         })
     }
 
-    /// A Bio<B> of what bio_init() made, @fill given the bio as it is.
-    fn init_from<E, B: BioOwns>(self, fill: impl FnOnce(&mut Bio) -> Result<(), E>) -> impl PinInit<Bio<B>, E> {
+    /// A Bio<B> of what bio_init() made, and what it owns made by @owns from
+    /// the bio: its bvecs filled - room for them made already - or, failing,
+    /// nothing in them.
+    pub fn init_from<E, B: BioOwns>(self, owns: impl FnOnce(&mut Bio) -> Result<B, E>) -> impl PinInit<Bio<B>, E> {
         let bio = self.0;
-        // SAFETY: the bio's there - its slot, checked
+        // SAFETY: the bio's there - its slot, checked - but what it owns
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Bio<B>| {
                 assert_eq!(slot.cast::<c::bio>(), bio, "BioInPlace: another bio's slot");
-                fill(&mut *slot.cast::<Bio>())
+                let owns = owns(&mut *slot.cast::<Bio>())?;
+                (&raw mut (*slot).owns).write(owns);
+                Ok(())
             })
         }
     }
@@ -182,6 +186,7 @@ impl BioLend {
 }
 
 unsafe impl BioField for BioLend {
+    type Owns = Data;
     const AT: usize = core::mem::offset_of!(BioLend, bio);
 }
 
@@ -326,10 +331,12 @@ pub struct BioPool {
     pool:      Mempool<Kmalloc>,
     #[pin]
     bvecs:     BvecMempool,
+    /* where in an element its bio is, and the element */
     front_pad: usize,
+    layout:    Layout,
 }
 
-/// A bioset of T's bios: a BioPool, its front_pad a T's.
+/// A bioset of T's bios: a BioPool, its elements T's.
 #[pin_data]
 #[repr(transparent)]
 pub struct BioSet<T: HasBio> {
@@ -338,19 +345,13 @@ pub struct BioSet<T: HasBio> {
     _t:  PhantomData<fn() -> T>,
 }
 
-/// A bio with @front_pad bytes before it: its allocation.
-fn bio_layout(front_pad: usize) -> Layout {
-    Layout::from_size_align(front_pad + size_of::<Bio>(), align_of::<Bio>())
-        .expect("a bio and what it's in")
-        .pad_to_align()
-}
-
 impl BioPool {
-    fn new(pool_size: u32, front_pad: usize) -> impl PinInit<Self, BchError> {
+    fn new(pool_size: u32, front_pad: usize, layout: Layout) -> impl PinInit<Self, BchError> {
         pin_init!(Self {
-            pool  <- Mempool::kmalloc(pool_size as usize, bio_layout(front_pad).size()),
+            pool  <- Mempool::kmalloc(pool_size as usize, layout.size()),
             bvecs <- BvecMempool::new(pool_size as usize),
             front_pad,
+            layout,
         }? BchError)
     }
 
@@ -362,7 +363,7 @@ impl BioPool {
     /// BIO_MAX_VECS, or where the pool can't wait - a NORECLAIM scope;
     /// otherwise it waits on the pool.
     pub fn alloc_raw(&self, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32, gfp: Flags) -> *mut c::bio {
-        let layout = bio_layout(self.front_pad);
+        let layout = self.layout;
         let Ok(p) = self.pool.alloc_gfp(layout, gfp) else {
             return core::ptr::null_mut();
         };
@@ -389,7 +390,7 @@ impl BioPool {
     /// @bio is this pool's, and nothing uses it after.
     unsafe fn free(&self, bio: *mut c::bio) {
         let p = unsafe { NonNull::new_unchecked(bio.byte_sub(self.front_pad)) };
-        unsafe { self.pool.deallocate(p.cast(), bio_layout(self.front_pad)) };
+        unsafe { self.pool.deallocate(p.cast(), self.layout) };
     }
 
     /*
@@ -505,11 +506,8 @@ impl<T: HasBio> BioSet<T> {
     /// @pool_size bios, with BIO_MAX_VECS bvecs each, held in reserve.
     /// Nothing to undo if it fails.
     pub fn new(pool_size: u32) -> impl PinInit<Self, BchError> {
-        // an element is front_pad bytes, then the bio
-        const { assert!(T::BIO_OFFSET + size_of::<Bio>() == size_of::<T>(), "a BioSet's T whose bio isn't last") };
-
         pin_init!(Self {
-            set <- BioPool::new(pool_size, T::BIO_OFFSET),
+            set <- BioPool::new(pool_size, T::BIO_OFFSET, Layout::new::<T>()),
             _t: PhantomData,
         }? BchError)
     }
@@ -528,43 +526,19 @@ impl<T: HasBio> BioSet<T> {
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        self.alloc_with(bdev, opf, nr_vecs, init)
-    }
-
-    /// alloc(), with its bvecs filled from @src: B's, released as the box is
-    /// dropped.
-    pub fn alloc_with<'a, B: Buffers, E, I>(&self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32,
-                                            src: B::Src<'_>, init: impl FnOnce(BioInPlace<'a>) -> I)
-        -> Result<BioBox<'a, T, B>, E>
-    where
-        I: PinInit<T, E>,
-        E: From<BchError>,
-    {
-        let bio = self.alloc_raw(bdev, B::nr_vecs(&src), opf, Flags::empty());
-        let mut b = Self::init_new(bio, init)?;
-        let buffers = B::fill(b.bio_mut(), src)?;
-        let t = core::mem::ManuallyDrop::new(b).t;
-        Ok(BioBox { t, buffers, alloc: Kmalloc, _init: PhantomData })
-    }
-
-    fn init_new<'a, E, I>(bio: *mut c::bio, init: impl FnOnce(BioInPlace<'a>) -> I) -> Result<BioBox<'a, T>, E>
-    where
-        I: PinInit<T, E>,
-        E: From<BchError>,
-    {
+        let bio = self.alloc_raw(bdev, nr_vecs, opf, Flags::empty());
         if bio.is_null() {
             return Err(BchError::from(c::ENOMEM).into());
         }
-        // SAFETY: front_pad bytes before it, a T's - by from_c()'s check
+        // SAFETY: front_pad bytes before it, a T's
         let t = unsafe { of_bio::<T>(bio) };
         // SAFETY: the T, its bio there, the rest for @init
         match unsafe { init_at(init(BioInPlace(bio, PhantomData)), t) } {
             // SAFETY: a bio's T
             Ok(()) => Ok(BioBox {
-                t:       unsafe { NonNull::new_unchecked(t) },
-                buffers: BioBuffersUnmanaged,
-                alloc:   Kmalloc,
-                _init:   PhantomData,
+                t:     unsafe { NonNull::new_unchecked(t) },
+                alloc: Kmalloc,
+                _init: PhantomData,
             }),
             Err(e) => {
                 unsafe { bio_put(bio) };
@@ -585,16 +559,15 @@ impl<T: HasBio> crate::util::late::LateInit for BioSet<T> {
 /// @A: what a box with its bvecs inline is freed to; a bioset's is put to its
 /// set. 'a: as long as what it was made of may be borrowed - a clone's
 /// source - for most, 'static.
-pub struct BioBox<'a, T: HasBio, B: Buffers = BioBuffersUnmanaged, A: Alloc = Kmalloc> {
-    t:       NonNull<T>,
-    buffers: B,
-    alloc:   A,
-    _init:   PhantomData<&'a ()>,
+pub struct BioBox<'a, T: HasBio, A: Alloc = Kmalloc> {
+    t:     NonNull<T>,
+    alloc: A,
+    _init: PhantomData<&'a ()>,
 }
 
 // SAFETY: a T, as a Box's: what has the box has the T
-unsafe impl<T: HasBio + Send, B: Buffers + Send, A: Alloc + Send> Send for BioBox<'_, T, B, A> {}
-unsafe impl<T: HasBio + Sync, B: Buffers + Sync, A: Alloc + Sync> Sync for BioBox<'_, T, B, A> {}
+unsafe impl<T: HasBio + Send, A: Alloc + Send> Send for BioBox<'_, T, A> {}
+unsafe impl<T: HasBio + Sync, A: Alloc + Sync> Sync for BioBox<'_, T, A> {}
 
 /// A bio submitted to a Gather: what its T makes of its IO's status, to put
 /// to the gather. It runs where the IO completes - softirq, or an interrupt -
@@ -603,9 +576,8 @@ pub trait Gathered<F: Fold>: HasBio {
     fn done(self: Pin<&mut Self>, status: Result<(), BchError>) -> F::Item;
 }
 
-// B is Default: it has nothing the bio doesn't, so the box is its bio; and
 // A has no state, so the endio has the box back from the bio alone
-impl<T: HasBio, B: Buffers + Default, A: Alloc> BioBox<'_, T, B, A> {
+impl<T: HasBio, A: Alloc> BioBox<'_, T, A> {
     /// Submitted, given up to the IO with its ref to @r's Gather: once it's
     /// done, what its T makes of the IO's status (Gathered) is put - after
     /// the box is dropped, so its bio's freed before the gather's waiter can
@@ -618,16 +590,15 @@ impl<T: HasBio, B: Buffers + Default, A: Alloc> BioBox<'_, T, B, A> {
         let bio = core::mem::ManuallyDrop::new(self).bio_mut().to_raw();
         unsafe {
             (*bio).bi_private = r.into_raw().cast_mut().cast();
-            (*bio).bi_end_io = Some(gathered_endio::<T, B, A, F, Wt, W>);
+            (*bio).bi_end_io = Some(gathered_endio::<T, A, F, Wt, W>);
             crate::os::blkdev::submit_bio(bio);
         }
     }
 }
 
-unsafe extern "C" fn gathered_endio<T, B, A, F, Wt, W>(bio: *mut c::bio)
+unsafe extern "C" fn gathered_endio<T, A, F, Wt, W>(bio: *mut c::bio)
 where
     T: Gathered<F>,
-    B: Buffers + Default,
     A: Alloc,
     F: Fold,
     Wt: Waiter,
@@ -635,12 +606,7 @@ where
 {
     let (r, mut b) = unsafe {
         (GatherRef::<F, Wt, W>::from_raw((*bio).bi_private.cast()),
-         BioBox::<T, B, A> {
-             t:       NonNull::new_unchecked(of_bio::<T>(bio)),
-             buffers: B::default(),
-             alloc:   stateless(),
-             _init:   PhantomData,
-         })
+         BioBox::<T, A> { t: NonNull::new_unchecked(of_bio::<T>(bio)), alloc: stateless(), _init: PhantomData })
     };
     let status = b.bio().status();
     let v = b.as_mut().done(status);
@@ -651,19 +617,19 @@ where
 /// A box submitted: given up to its IO till it's done, and then, awaited,
 /// given back - its bio's status its own. Dropped before that, it asserts.
 #[must_use = "a bio's IO is waited on, or awaited, to its end"]
-pub struct Submitted<'a, T: AtEnd, B: Buffers, A: Alloc, W: Waiter> {
+pub struct Submitted<'a, T: AtEnd, A: Alloc, W: Waiter> {
     /* first: its Done is the box's bi_private, so it's done before the box goes */
     c: Completion<'static, W>,
-    b: Option<BioBox<'a, T, B, A>>,
+    b: Option<BioBox<'a, T, A>>,
 }
 
 // moving it moves neither the box's allocation nor the Done in it
-impl<T: AtEnd, B: Buffers, A: Alloc, W: Waiter> Unpin for Submitted<'_, T, B, A, W> {}
+impl<T: AtEnd, A: Alloc, W: Waiter> Unpin for Submitted<'_, T, A, W> {}
 
-impl<'a, T: AtEnd, B: Buffers, A: Alloc> BioBox<'a, T, B, A> {
+impl<'a, T: AtEnd, A: Alloc> BioBox<'a, T, A> {
     /// Submitted, its T's at_end() run in the endio: Submitted's till it's
     /// awaited.
-    pub fn submit_owned<W: Waiter>(mut self, waiter: W) -> Submitted<'a, T, B, A, W> {
+    pub fn submit_owned<W: Waiter>(mut self, waiter: W) -> Submitted<'a, T, A, W> {
         let bio = self.bio_mut().to_raw();
         let c = unsafe {
             let c = Completion::init_at((&raw mut (*bio).bi_private).cast(), waiter);
@@ -675,8 +641,8 @@ impl<'a, T: AtEnd, B: Buffers, A: Alloc> BioBox<'a, T, B, A> {
     }
 }
 
-impl<'a, T: AtEnd, B: Buffers, A: Alloc> Resumable for Submitted<'a, T, B, A, waiter::Async> {
-    type Output = BioBox<'a, T, B, A>;
+impl<'a, T: AtEnd, A: Alloc> Resumable for Submitted<'a, T, A, waiter::Async> {
+    type Output = BioBox<'a, T, A>;
 
     fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -685,7 +651,7 @@ impl<'a, T: AtEnd, B: Buffers, A: Alloc> Resumable for Submitted<'a, T, B, A, wa
     }
 }
 
-impl<T: HasBio, B: Buffers, A: Alloc> Deref for BioBox<'_, T, B, A> {
+impl<T: HasBio, A: Alloc> Deref for BioBox<'_, T, A> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -694,7 +660,7 @@ impl<T: HasBio, B: Buffers, A: Alloc> Deref for BioBox<'_, T, B, A> {
     }
 }
 
-impl<T: HasBio, B: Buffers, A: Alloc> BioBox<'_, T, B, A> {
+impl<T: HasBio, A: Alloc> BioBox<'_, T, A> {
     /// The T, for an owner that keeps the box and reaches it by pointer.
     pub fn as_ptr(&self) -> *mut T {
         self.t.as_ptr()
@@ -704,11 +670,6 @@ impl<T: HasBio, B: Buffers, A: Alloc> BioBox<'_, T, B, A> {
         // SAFETY: the T, live while it's had, and the box's alone - a bio in
         // flight has given up its box; never moved from where its set made it
         unsafe { Pin::new_unchecked(self.t.as_mut()) }
-    }
-
-    /// What its bvecs point at.
-    pub fn buffers(&self) -> &B {
-        &self.buffers
     }
 }
 
@@ -726,7 +687,7 @@ impl<'a, T: HasBio> BioBox<'a, T> {
     }
 }
 
-impl<'a, T: HasBio, A: Alloc> BioBox<'a, T, BioBuffersUnmanaged, A> {
+impl<'a, T: HasBio, A: Alloc> BioBox<'a, T, A> {
     /// new(), from @alloc - a pool, whose elements are its reserve - and its
     /// bvecs past its inline few from @bvecs.
     pub fn new_in<E, I>(alloc: A, bvecs: BvecAlloc, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
@@ -739,7 +700,7 @@ impl<'a, T: HasBio, A: Alloc> BioBox<'a, T, BioBuffersUnmanaged, A> {
         let p = alloc.allocate_zeroed(layout).map_err(|_| BchError::from(c::ENOMEM))?.cast::<T>();
         unsafe {
             match init_at(bio_in(bdev, nr_vecs, opf, bvecs, init), p.as_ptr()) {
-                Ok(()) => Ok(BioBox { t: p, buffers: BioBuffersUnmanaged, alloc, _init: PhantomData }),
+                Ok(()) => Ok(BioBox { t: p, alloc, _init: PhantomData }),
                 Err(e) => {
                     alloc.deallocate(p.cast(), layout);
                     Err(e)
@@ -787,52 +748,12 @@ where
     }
 }
 
-impl<'a, T: HasBio, B: Buffers> BioBox<'a, T, B> {
-    /// As BioSet::alloc_with(), from kmalloc().
-    pub fn new_with<E, I>(bdev: *mut crate::os::blkdev::BlockDevice, opf: u32, src: B::Src<'_>,
-                          init: impl FnOnce(BioInPlace<'a>) -> I) -> Result<Self, E>
-    where
-        I: PinInit<T, E>,
-        E: From<BchError>,
-    {
-        Self::new_with_in(Kmalloc, BvecAlloc::KMALLOC, bdev, opf, src, init)
-    }
-}
-
-impl<'a, T: HasBio, B: Buffers, A: Alloc + Copy> BioBox<'a, T, B, A> {
-    pub fn new_with_in<E, I>(alloc: A, bvecs: BvecAlloc, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32,
-                             src: B::Src<'_>, init: impl FnOnce(BioInPlace<'a>) -> I) -> Result<Self, E>
-    where
-        I: PinInit<T, E>,
-        E: From<BchError>,
-    {
-        let mut b = BioBox::<T, BioBuffersUnmanaged, A>::new_in(alloc, bvecs, bdev, B::nr_vecs(&src), opf, init)?;
-        let buffers = B::fill(b.bio_mut(), src)?;
-        let b = core::mem::ManuallyDrop::new(b);
-        Ok(BioBox { t: b.t, buffers, alloc: b.alloc, _init: PhantomData })
-    }
-}
-
-impl<T: HasBio, B: MapBuf> BioBox<'_, T, BioBuffersMapped<B>> {
-    pub fn buf(&self) -> &B::Target {
-        &self.buffers.0
-    }
-
-    pub fn buf_mut(&mut self) -> &mut B::Target
-    where
-        B: DerefMut,
-    {
-        &mut self.buffers.0
-    }
-}
-
-// An Option of one is None as its pointer is null, all zeroes; Unmanaged
-// buffers are nothing
+// An Option of one is None as its pointer is null, all zeroes
 unsafe impl<T: HasBio> ::pin_init::ZeroableOption for BioBox<'_, T> {}
 
 // SAFETY: the box's bio, its only ref
-unsafe impl<T: HasBio, B: Buffers, A: Alloc> BioOwner for BioBox<'_, T, B, A> {
-    type Buffers = B;
+unsafe impl<T: HasBio, A: Alloc> BioOwner for BioBox<'_, T, A> {
+    type Owns = T::Owns;
 
     fn bio(&self) -> &Bio {
         HasBio::bio(&**self)
@@ -843,11 +764,10 @@ unsafe impl<T: HasBio, B: Buffers, A: Alloc> BioOwner for BioBox<'_, T, B, A> {
     }
 }
 
-impl<T: HasBio, B: Buffers, A: Alloc> Drop for BioBox<'_, T, B, A> {
+impl<T: HasBio, A: Alloc> Drop for BioBox<'_, T, A> {
     fn drop(&mut self) {
         let t = self.t.as_ptr();
         let bio = bio_of(t);
-        self.buffers.release(unsafe { Bio::from_raw_mut(bio) });
         unsafe {
             let set = (*bio).bi_pool.cast::<BioPool>().as_ref();
             core::ptr::drop_in_place(t);

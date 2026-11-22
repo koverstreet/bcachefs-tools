@@ -18,7 +18,7 @@ use crate::locking::MemallocFlags;
 use crate::os::kernel::WRITE;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
 use crate::util::alloc::Kmalloc;
-use crate::util::bio::{Bio, BioBox, BioBuffersUnmanaged, BioRange, HasBio, Submitted};
+use crate::util::bio::{Bio, BioBox, BioRange, HasBio, Submitted};
 use crate::os::workqueue::Queue;
 use crate::util::task::{waiter, Resumable, Resume, ResumeAt};
 use core::ptr;
@@ -60,7 +60,7 @@ impl ReplicaErrs {
 /// A replica in flight, and what its end does besides its DevBio's: a nocow
 /// write's bucket to unlock, and whether it's to be flushed.
 struct Replica<'a> {
-    io:     Submitted<'a, DevBio, BioBuffersUnmanaged, Kmalloc, waiter::Async>,
+    io:     Submitted<'a, DevBio, Kmalloc, waiter::Async>,
     dev:    u8,
     nocow:  Option<(u64, bool)>,
 }

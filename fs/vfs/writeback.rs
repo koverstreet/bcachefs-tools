@@ -16,7 +16,7 @@ use crate::inode_opts;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{Box, Kmalloc};
 use crate::os::blkdev::plugged;
-use crate::util::bio::{Bio, BioBuffersUnmanaged, BioOwner, BvecMempool};
+use crate::util::bio::{Bio, BioOwner, BvecMempool, Data};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, Exclusive, Resume, Spawn, TaskSlot};
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
@@ -73,7 +73,7 @@ fn io_of(slot: &mut IoSlot) -> &mut Io {
 }
 
 unsafe impl BioOwner for Io {
-    type Buffers = BioBuffersUnmanaged;
+    type Owns = Data;
 
     fn bio(&self) -> &Bio {
         &self.wbio

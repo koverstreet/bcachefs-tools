@@ -726,7 +726,7 @@ use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
-use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioBuffersOwned, BioRange, HasBio};
+use crate::util::bio::{Bio, BioBox, BioOwns, BioRange, Buffer, Pages, Typed};
 use crate::os::kernel::{local_clock, unlikely, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::ratelimit::Ratelimit;
@@ -850,8 +850,6 @@ impl c::write_point {
     }
 }
 
-type WriteBio<B> = BioBox<'static, Bio, B>;
-
 /// An extent's data, which its replicas are clones of.
 pub(crate) enum ExtentData<'a> {
     /// A range of the op's, written in place
@@ -861,33 +859,32 @@ pub(crate) enum ExtentData<'a> {
 
 /// A bio of an extent's own, its data in it - freed, its buffers with it, as
 /// it's dropped, once its replicas are done.
-pub(crate) enum ExtentBio {
+pub(crate) type ExtentBio = BioBox<'static, Bio<ExtentBuf>>;
+
+pub(crate) enum ExtentBuf {
     /// Pages of its own, the extent's data bounced into them: to compress,
     /// checksum or encrypt
-    Bounce(WriteBio<BioBuffersOwned<'static>>),
+    Bounce(Pages<'static>),
     /// The write point's EC stripe buffer, mapped
-    Stripe(WriteBio<BioBuffersMapped<&'static mut [u8]>>),
+    Stripe(Buffer<&'static mut [u8]>),
 }
 
-impl ExtentBio {
-    pub(crate) fn bio(&self) -> &Bio {
+impl BioOwns for ExtentBuf {
+    type Bvec = c::bio_vec;
+
+    fn release(&mut self, bio: &mut c::bio) {
         match self {
-            ExtentBio::Bounce(b) => b,
-            ExtentBio::Stripe(b) => b,
+            ExtentBuf::Bounce(p) => p.release(bio),
+            ExtentBuf::Stripe(b) => b.release(bio),
         }
     }
 
-    pub(crate) fn bio_mut(&mut self) -> &mut Bio {
-        match self {
-            ExtentBio::Bounce(b) => HasBio::bio_mut(b.as_mut()),
-            ExtentBio::Stripe(b) => HasBio::bio_mut(b.as_mut()),
-        }
-    }
-
-    pub(crate) fn range(&self) -> BioRange<'_> {
-        self.bio().range()
+    fn allows_op(op: u32) -> bool {
+        Pages::allows_op(op) && Buffer::<&mut [u8]>::allows_op(op)
     }
 }
+
+impl Typed for ExtentBuf {}
 
 /// A pass's extents of their own bios: their replicas, in flight, borrow them
 /// till the pass is waited on.

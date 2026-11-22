@@ -680,7 +680,7 @@ pub struct Fs {
     #[init(crate::data::read::retry_pool(), ENOMEM_fs_other_alloc)]
     pub read_retry_pool: crate::util::mempool::Mempool<crate::util::alloc::Kmalloc>,
     #[late(BioSet::new(1), ENOMEM_bio_write_init)]
-    pub bio_write: Late<BioSet<Bio>>,
+    pub(crate) bio_write: Late<BioSet<Bio<crate::data::write::ExtentBuf>>>,
     #[pin]
     #[init(crate::util::bio::pages::BouncePool::new(options), ENOMEM_bio_bounce_pages_init)]
     pub(crate) bio_bounce: crate::util::bio::pages::BouncePool,

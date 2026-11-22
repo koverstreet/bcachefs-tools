@@ -26,7 +26,7 @@ use crate::locking::{Guard as _, Locked, Mut, Mutex, Ref};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
 use crate::util::alloc::{init_at, kvzalloc, AllocError, Flags, KVVec};
-use crate::util::bio::{io_buf, Bio, BioBox, BioBuffersMapped, BioOwner, IoBuf};
+use crate::util::bio::{io_buf, Bio, BioBox, BioOwner, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
@@ -747,29 +747,30 @@ fn bucket_seqs_monotonic(bucket_seq: &[u64], head: usize, out: &mut Printbuf) ->
 }
 
 /// @bytes of @ca from @sector into @bio's buffer: what it read.
-fn read_at<'b>(ca: &Dev, bio: &'b mut BioBox<Bio, BioBuffersMapped<IoBuf>>, sector: u64, bytes: usize)
+fn read_at<'b>(ca: &Dev, bio: &'b mut BioBox<Bio<Buffer<IoBuf>>>, sector: u64, bytes: usize)
     -> Result<&'b mut [u8], BchError>
 {
     bio.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ);
     bio.bio_mut().set_sector(sector);
     bio.bio_mut().shrink(bytes.try_into().expect("a journal read of 4G or more"));
     bio.submit_wait()?;
-    Ok(unsafe { assume_init_mut(&mut bio.buf_mut()[..bytes]) })
+    Ok(unsafe { assume_init_mut(&mut bio.as_mut().get_mut().buf_mut()[..bytes]) })
 }
 
 struct DevReader<'a> {
     fs:   &'a Fs,
     ca:   &'a Dev,
     ring: &'a mut JournalRing,
-    bio:  BioBox<'static, Bio, BioBuffersMapped<IoBuf>>,
+    bio:  BioBox<'static, Bio<Buffer<IoBuf>>>,
 }
 
 impl<'a> DevReader<'a> {
     fn new(fs: &'a Fs, ca: &'a Dev, ring: &'a mut JournalRing) -> Result<Self, BchError> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
         let buf = io_buf(bytes, Flags::empty()).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
-        let bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
-            ca.disk_sb.bdev, c::req_op_REQ_OP_READ, buf, |b| b.init())?;
+        let bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
+            ca.disk_sb.bdev, Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ,
+            |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
         Ok(DevReader { fs, ca, ring, bio })
     }
 

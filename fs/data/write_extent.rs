@@ -8,11 +8,11 @@ use crate::util::alloc::flags;
 use crate::c;
 use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce, Src};
 use crate::data::ptrs::{crc_is_compressed, extent_crc_append, extent_nonce};
-use crate::data::write::{write_op_error, ExtentBio, ExtentData};
+use crate::data::write::{write_op_error, ExtentBio, ExtentBuf, ExtentData};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
-use crate::util::bio::{BioBuffersOwned, BioInPlace, BioRange};
+use crate::util::bio::{pages, BioOwner, BioRange, Buffer, Pages};
 use crate::util::volatile::Out;
 use crate::os::kernel::{unlikely, PAGE_SIZE, WRITE};
 use c::WriteFlags as w;
@@ -82,8 +82,9 @@ fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u3
 
     if !buf.is_null() {
         let buf = unsafe { core::slice::from_raw_parts_mut(buf.cast::<u8>(), output_available as usize) };
-        return ExtentBio::Stripe(fs.bio_write.alloc_with(ptr::null_mut(), opf, buf, BioInPlace::init)
-            .unwrap_or_else(|e: BchError| panic!("a write's bio for its stripe: its bioset waits, but {e}")));
+        return fs.bio_write.alloc(ptr::null_mut(), Buffer::nr_vecs(&buf), opf,
+                                  |b| b.init_from(|bio| Ok(ExtentBuf::Stripe(Buffer::fill(bio, buf)))))
+            .unwrap_or_else(|e: BchError| panic!("a write's bio for its stripe: its bioset waits, but {e}"));
     }
 
     /*
@@ -99,14 +100,15 @@ fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u3
     let required = output_available.min(fs.opts().encoded_extent_max.get());
     let bounce = {
         let _noio = MemallocFlags::noio();
-        fs.bio_write.alloc_with::<BioBuffersOwned<'static>, BchError, _>(
-            ptr::null_mut(), opf,
-            (&fs.bio_bounce, block_size, output_available as usize, required as usize, flags::NOIO | flags::SKIP_ZERO),
-            BioInPlace::init)
+        let size = output_available as usize;
+        fs.bio_write.alloc(ptr::null_mut(), pages::nr_vecs(size), opf, |b| b.init_from(|bio| {
+            Pages::fill(bio, &fs.bio_bounce, block_size, size, required as usize, flags::NOIO | flags::SKIP_ZERO)
+                .map(ExtentBuf::Bounce)
+        }))
     }.unwrap_or_else(|e: BchError| panic!("a write's bounce pages, outside NORECLAIM: {e}"));
-    short.pool  = bounce.buffers().used_pool();
+    short.pool  = matches!(bounce.owns(), ExtentBuf::Bounce(p) if p.used_pool());
     short.pages = bounce.range().len() < output_available;
-    ExtentBio::Bounce(bounce)
+    bounce
 }
 
 fn write_rechecksum(fs: &Fs, op: &mut Op, data: &mut BioRange<'_>, mut new_csum_type: c::CsumType)
