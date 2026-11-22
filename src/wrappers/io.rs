@@ -15,7 +15,7 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode_opts;
 use bcachefs_kernel::util::alloc::init_at;
-use bcachefs_kernel::os::bio::{Bio, BioBox, BioInPlace, BioSubmit, Buffer, Data};
+use bcachefs_kernel::os::bio::{Bio, BioBox, BioInPlace, BioSubmit, Buffer};
 use bcachefs_kernel::util::sleep::Sleep;
 use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Resume, Spawn, TaskSlot, WaitSync};
 use bcachefs_kernel::util::vstructs::assume_init_mut;
@@ -100,10 +100,7 @@ pub fn read<'a>(
 
     let mut b = BioBox::new(Buffer::nr_vecs(&&mut *buf), c::req_op_REQ_OP_READ, |b| {
         let into = &mut *buf;
-        Rbio::new(fs, opts, inum.subvol as u32, None, b.init_from(move |bio| {
-            Buffer::fill(bio, into);
-            Ok(Data)
-        }))
+        Rbio::new(fs, opts, inum.subvol as u32, None, b.init_from(move |bio| Ok(Buffer::fill(bio, into))))
     })?;
     b.bio_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
     b.bio_mut().set_sector(offset >> 9);
@@ -113,7 +110,7 @@ pub fn read<'a>(
     let mut done = DoneWith::new();
     let (wait, r) = CompletionReturn::new(&mut done, waiter::Sync::current());
     let task = slot.init(Spawn::Queue(Queue::system_dfl()), fs.tasks(), async move |_: &()| {
-        r.complete(read::read(&b, inum, flags, ()).await);
+        r.complete(read::read(b.erased(), inum, flags, ()).await);
     }, None).expect("a queue's task: nothing in it fails");
     unsafe { task.start_unchecked() };
     wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read")?;

@@ -91,8 +91,8 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot};
 use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::os::bio::{pages, reset_bvec_offset, Bio, BioBox, BioFuture, BioLend, BioRange, BioSubmit,
-                       BvecMempool, HasBio, Lent, Pages};
+use crate::os::bio::{pages, reset_bvec_offset, Bio, BioBox, BioFuture, BioLend, BioOwns, BioRange, BioSubmit,
+                       BvecMempool, Data, HasBio, Lent, Pages, Typed};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Kmalloc};
@@ -146,10 +146,12 @@ pub struct ReadErrReport {
     pub errs: Locked<Mutex, ReadErrs>,
 }
 
+/// B is what its bio owns: nothing, or a page cache extent's folios - read as
+/// the plain Rbio (erased()).
 #[pin_data]
 #[derive(MaybeZeroable, TypeInfo)]
 #[repr(C)]
-pub struct Rbio {
+pub struct Rbio<B: BioOwns = Data> {
     pub c: *mut Fs,
     pub start_time: u64,
 
@@ -164,12 +166,12 @@ pub struct Rbio {
     pub err_report: Option<BackRef<ReadErrReport>>,
 
     #[pin]
-    pub bio: BioLend,
+    pub bio: BioLend<B>,
 }
-crate::has_bio!(Rbio, bio);
+crate::has_bio!(Rbio<B>, bio, owns B where B: BioOwns);
 
-unsafe impl Send for Rbio {}
-unsafe impl Sync for Rbio {}
+unsafe impl<B: BioOwns + Send> Send for Rbio<B> {}
+unsafe impl<B: BioOwns + Send> Sync for Rbio<B> {}
 
 impl Rbio {
     pub fn ret(&self) -> Result<(), BchError> {
@@ -200,26 +202,48 @@ impl Rbio {
         self.read_for != ReadFor::BCH_READ_FOR_update
     }
 
-    pub fn new<'a>(fs: &'a Fs, opts: c::bch_inode_opts, subvol: u32, err_report: Option<&'a ReadErrReport>,
-                   bio: impl PinInit<Bio, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a {
-        let err_report = err_report.map(|r| unsafe { BackRef::new(r) });
-        Self::with(fs.as_ptr(), local_clock(), ReadFor::BCH_READ_FOR_read, subvol, opts, err_report, bio)
-    }
-
     pub(crate) fn update<'a>(fs: &Fs, opts: c::bch_inode_opts, read_for: ReadFor,
                              bio: impl PinInit<Bio, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a
     {
         Self::with(fs.as_ptr(), local_clock(), read_for, 0, opts, None, bio)
     }
+}
 
+impl<B: Typed> Rbio<B> {
+    /// As the plain Rbio: the same bytes, but for what its bio owns, after
+    /// them.
+    pub fn erased(&self) -> &Rbio {
+        const {
+            let at = <Rbio as HasBio>::BIO_OFFSET;
+            assert!(Self::BIO_OFFSET == at && at + size_of::<Bio>() == size_of::<Rbio>(),
+                    "an Rbio not laid out as the plain one, but for its bio")
+        };
+        let () = Bio::<B>::ERASES;
+        unsafe { &*core::ptr::from_ref(self).cast() }
+    }
+}
+
+impl<B: BioOwns> Rbio<B> {
     /// The bio of a fragment of @orig's read: what the read is - its
     /// subvolume, options, error report - stays @orig's, and is read there.
-    fn fragment<'a>(orig: &'a Rbio, bio: impl PinInit<Bio, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a {
+    fn fragment<'a>(orig: &'a Rbio, bio: impl PinInit<Bio<B>, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a
+    where
+        B: 'a,
+    {
         Self::with(orig.c, orig.start_time, orig.read_for, 0, c::bch_inode_opts::default(), None, bio)
     }
 
+    pub fn new<'a>(fs: &'a Fs, opts: c::bch_inode_opts, subvol: u32, err_report: Option<&'a ReadErrReport>,
+                   bio: impl PinInit<Bio<B>, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a
+    where
+        B: 'a,
+    {
+        let err_report = err_report.map(|r| unsafe { BackRef::new(r) });
+        Self::with(fs.as_ptr(), local_clock(), ReadFor::BCH_READ_FOR_read, subvol, opts, err_report, bio)
+    }
+
     fn with(c: *mut Fs, start_time: u64, read_for: ReadFor, subvol: u32, opts: c::bch_inode_opts,
-            err_report: Option<BackRef<ReadErrReport>>, bio: impl PinInit<Bio, BchError>)
+            err_report: Option<BackRef<ReadErrReport>>, bio: impl PinInit<Bio<B>, BchError>)
         -> impl PinInit<Self, BchError>
     {
         pin_init!(Rbio {
@@ -232,10 +256,12 @@ impl Rbio {
             subvol,
             opts,
             err_report,
-            bio           <- BioLend::new::<BchError>(bio),
+            bio           <- BioLend::new(bio),
         }? BchError)
     }
+}
 
+impl Rbio {
     /// Only called on a top level bch_read_bio to complete an entire read
     /// request, not a split.
     fn done(&self) {
@@ -335,8 +361,7 @@ impl Rbio {
 enum Kind<'r> {
     Own(LentBio<'r>),
     Clone(BioBox<'r, Rbio, Pool>),
-    /// Bounced into the pages it has
-    Bounce(BioBox<'r, Rbio, Pool>, Pages<'r>),
+    Bounce(BioBox<'r, Rbio<Pages<'r>>, Pool>),
     /// The promote's bio, and its task, started with what was read once the
     /// bio's given back
     Promote(Lent<'r>, AwaitingRead<'r>),
@@ -351,14 +376,14 @@ impl Kind<'_> {
             Kind::Own(b) => b.rbio,
             Kind::Promote(_, task) => task.rbio(),
             Kind::Clone(b) => b,
-            Kind::Bounce(b, _) => b,
+            Kind::Bounce(b) => b.erased(),
             Kind::Home(h, _) => &h.rbio,
         }
     }
 }
 
 /// Submitted, whichever of its bios it has: none owns a buffer it could be
-/// remapped from - a bounce's pages, a home's.
+/// remapped from - a bounce's pages, a home's, the read's own bio's.
 impl BioSubmit for Kind<'_> {
     fn bio(&self) -> &Bio {
         self.rbio().bio()
@@ -368,7 +393,7 @@ impl BioSubmit for Kind<'_> {
         match self {
             Kind::Own(LentBio { bio, .. }) | Kind::Promote(bio, _) => bio.bio_mut(),
             Kind::Clone(b) => b.bio_mut(),
-            Kind::Bounce(b, _) => b.bio_mut(),
+            Kind::Bounce(b) => b.bio_mut(),
             Kind::Home(h, _) => h.as_mut().bio_mut(),
         }
     }
@@ -398,7 +423,7 @@ type Pool = &'static Mempool<Kmalloc>;
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<FragmentBio, FragmentFut<'static>, Pool>();
     Mempool::init_static(&FRAGMENTS, Mempool::kmalloc(1, size), m)?;
-    Mempool::init_static(&FRAGMENT_BIOS, Mempool::kmalloc(1, size_of::<Rbio>()), m)?;
+    Mempool::init_static(&FRAGMENT_BIOS, Mempool::kmalloc(1, size_of::<Rbio<Pages<'static>>>()), m)?;
     BvecMempool::init_static(&FRAGMENT_BVECS, 1, m)?;
     BvecMempool::init_static(&FRAGMENT_BIO_BVECS, 1, m)
 }
@@ -496,10 +521,6 @@ impl<'r> Fragment<'r> {
                 // given back before the promote's task, which writes from it, starts
                 drop(bio);
                 Some(task)
-            }
-            Kind::Bounce(mut b, pages) => {
-                pages.free_from(b.bio_mut());
-                None
             }
             Kind::Home(mut h, Some(pages)) => {
                 pages.free_from(h.as_mut().bio_mut());
@@ -1297,10 +1318,9 @@ impl<'r> Planned<'r, '_> {
             How::Promote(p) => Kind::Promote(p.rbio.bio.lend(), p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
-                let mut b = BioBox::new_in(pool, bvecs, pages::nr_vecs(size), 0,
-                                           |b| Rbio::fragment(orig, b.init()))?;
-                let pages = Pages::fill(b.bio_mut(), &fs.bio_bounce, bs, size, size, gfp)?;
-                Kind::Bounce(b, pages)
+                Kind::Bounce(BioBox::new_in(pool, bvecs, pages::nr_vecs(size), 0, |b| {
+                    Rbio::fragment(orig, b.init_from(|bio| Pages::fill(bio, &fs.bio_bounce, bs, size, size, gfp)))
+                })?)
             }
             How::Clone => Kind::Clone(BioBox::new_in(pool, bvecs, 0, 0,
                                                      |b| Rbio::fragment(orig, b.clone_of(plan.range)))?),
