@@ -231,10 +231,7 @@ impl<B: Typed> Deref for Bio<B> {
 }
 
 // XXX: through this, its bvecs can be swapped with another bio's - mem::swap()
-// of two &mut Bio - and its drop then releases what B never held. And Bio
-// still has pin_user_pages() and add_folio_part(), for the owners that aren't
-// typed yet - they go with their last; till then a Bio<B> could gain bvecs
-// that aren't B's through them.
+// of two &mut Bio - and its drop then releases what B never held.
 impl<B: Typed> DerefMut for Bio<B> {
     fn deref_mut(&mut self) -> &mut Bio {
         let () = Self::ERASES;
@@ -392,21 +389,6 @@ impl Bio {
         }
         self.sync(self.bio.bi_iter.bi_size + len32);
         Ok(())
-    }
-
-    /// @len bytes of @folio from @offset, its last bvec. Panics if the bio's
-    /// bvecs are full.
-    ///
-    /// # Safety
-    /// @folio stays held - pinned, or the caller's - till the bio's done with
-    /// it.
-    #[cfg(kernel)]
-    pub(crate) unsafe fn add_folio_part<A>(&mut self, folio: &crate::os::folio::Folio<A>, offset: usize, len: usize) {
-        assert!(offset + len <= folio.size(), "adding {len} bytes at {offset} of a folio of {}", folio.size());
-        assert!(self.vecs.len() < usize::from(self.max_vecs()), "adding a folio: the bio's bvecs are full");
-        self.vecs.push(c::bio_vec { bv_page: folio.as_ptr().cast(), bv_len: len as u32, bv_offset: offset as u32 })
-            .expect("a bvec, into the room it has");
-        self.sync(self.bio.bi_iter.bi_size + len as u32);
     }
 
     /// For another IO: bio_reset(), its bvecs kept - the buffers it was made

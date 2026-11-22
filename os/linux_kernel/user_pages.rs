@@ -124,73 +124,33 @@ impl<const PINNED: bool> UserPage for UserFolio<PINNED> {
     }
 }
 
-impl Bio {
-    /// Its bvecs the pages of @iter's next bytes - pinned, a user-backed
-    /// iter's - a run of one folio a bvec, as many as it has room for, @iter
-    /// advanced past them. Fails only if it got none. release_user_pages()
-    /// gives them back.
-    pub fn pin_user_pages(&mut self, iter: &mut IovIter<'_>) -> Result<(), BchError> {
-        if iter.user_backed() {
-            self.raw_mut().bi_flags |= 1 << c::BIO_PAGE_PINNED;
-        }
-        let start = self.nr_vecs();
-
-        while iter.count() != 0 && self.nr_vecs() < self.max_vecs() {
-            let mut pages = [core::ptr::null_mut::<c::page>(); EXTRACT_BATCH];
-            let mut p = pages.as_mut_ptr();
-            let mut offset = 0;
-            let room = usize::from(self.max_vecs() - self.nr_vecs()).min(EXTRACT_BATCH);
-            let max = (u32::MAX - self.raw().bi_iter.bi_size) as usize;
-
-            let got = unsafe { c::iov_iter_extract_pages(iter.as_ptr(), &mut p, max, room as c_uint, 0, &mut offset) };
-            if got <= 0 {
-                if self.nr_vecs() != start {
-                    break;
-                }
-                return Err(if got < 0 { BchError::from_raw(got as c_int) } else { c::EFAULT.into() });
-            }
-
-            let (mut left, mut i) = (got as usize, 0);
-            let pages = &pages[..(offset + left).div_ceil(PAGE_SIZE)];
-            while left != 0 {
-                let (page, folio) = (pages[i], unsafe { c::rust_page_folio(pages[i]) });
-                let folio_offset = unsafe { c::rust_folio_page_idx(folio, page) } as usize * PAGE_SIZE + offset;
-                let mut len = (unsafe { c::folio_size(folio) } - folio_offset).min(left);
-                let mut n = (offset + len).div_ceil(PAGE_SIZE);
-                if n > 1 {
-                    (n, len) = contig_folio_len(&pages[i..i + n], folio, left, offset);
-                }
-
-                unsafe { self.add_folio_part(Folio::<Any>::from_raw(NonNull::new_unchecked(folio)), folio_offset, len) };
-                left -= len;
-                i += n;
-                offset = 0;
-            }
-        }
-        Ok(())
+/// @folio dirtied, under its lock: folio_mark_dirty_lock().
+fn mark_dirty(folio: &Folio) {
+    unsafe {
+        c::folio_lock(folio.as_ptr());
+        c::folio_mark_dirty(folio.as_ptr());
+        c::folio_unlock(folio.as_ptr());
     }
+}
 
+impl<P: UserPage> Bio<Holds<P>> {
     /// Its pages dirtied, before it's read into: the user's.
     pub fn set_pages_dirty(&mut self) {
-        for f in self.range_all().folios() {
-            let folio = f.folio.as_ptr();
-            unsafe {
-                c::folio_lock(folio);
-                c::folio_mark_dirty(folio);
-                c::folio_unlock(folio);
-            }
+        for v in self.vecs() {
+            mark_dirty(v.folio());
         }
     }
 
-    /// The user's pages it pinned, given back - @dirtied, if set_pages_dirty()
-    /// dirtied them, as they're checked dirty still: those cleaned since are
-    /// dirtied again first, under their folio locks.
+    /// Its pages given back - @dirtied, if set_pages_dirty() dirtied them, as
+    /// they're checked dirty still: those cleaned since are dirtied again
+    /// first, under their folio locks, as bio_release_pages() does.
     pub async fn release_user_pages(&mut self, dirtied: bool) {
-        let redirty = dirtied && !self.range_all().folios()
-            .all(|f| unsafe { c::folio_test_dirty(f.folio.as_ptr()) });
-        if redirty {
+        if dirtied && !self.vecs().iter().all(|v| v.folio().dirty()) {
             requeue(Queue::system_dfl()).await;
+            for v in self.vecs().iter().filter(|v| !v.folio().dirty()) {
+                mark_dirty(v.folio());
+            }
         }
-        unsafe { c::bio_release_pages(self.raw_mut(), redirty) };
+        self.release();
     }
 }

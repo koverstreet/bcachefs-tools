@@ -19,9 +19,10 @@ use crate::fs::Fs;
 use crate::inode_opts::get_inode;
 use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
-use crate::os::bio::{Bio, BvecMempool, HasBio};
+use crate::os::bio::{Bio, BvecMempool, Holds};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::iov_iter::IovIter;
+use crate::os::user_pages::{Callers, Pinned, UserPage};
 use crate::os::kernel::unlikely;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
@@ -46,8 +47,12 @@ static DIO_BVECS: BvecMempool = ::pin_init::zeroed();
 static SPLIT_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    Mempool::init_static(&DIOS, Mempool::kmalloc(4, exclusive_size::<DioBio, DioFut<'static>, Pool>()), m)?;
-    Mempool::init_static(&SPLITS, Mempool::kmalloc(1, exclusive_size::<DioBio, SplitFut<'static>, Pool>()), m)?;
+    let dio = exclusive_size::<DioBio<Pinned>, DioFut<'static, Pinned>, Pool>()
+        .max(exclusive_size::<DioBio<Callers>, DioFut<'static, Callers>, Pool>());
+    let split = exclusive_size::<DioBio<Pinned>, SplitFut<'static, Pinned>, Pool>()
+        .max(exclusive_size::<DioBio<Callers>, SplitFut<'static, Callers>, Pool>());
+    Mempool::init_static(&DIOS, Mempool::kmalloc(4, dio), m)?;
+    Mempool::init_static(&SPLITS, Mempool::kmalloc(1, split), m)?;
     BvecMempool::init_static(&DIO_BVECS, 4, m)?;
     BvecMempool::init_static(&SPLIT_BVECS, 1, m)
 }
@@ -75,13 +80,21 @@ impl End {
     }
 }
 
+/// P is what its bio has of the user's pages: Pinned, a user-backed iter's,
+/// or the caller's.
 #[pin_data]
 #[repr(C)]
-struct DioBio {
+struct DioBio<P: UserPage> {
     #[pin]
-    rbio: Rbio,
+    rbio: Rbio<Holds<P>>,
 }
-crate::has_bio!(DioBio, rbio.bio);
+crate::has_bio!(DioBio<P>, rbio.bio, owns Holds<P> where P: UserPage);
+
+impl<P: UserPage> DioBio<P> {
+    fn pages(self: Pin<&mut Self>) -> &mut Bio<Holds<P>> {
+        self.get_mut().rbio.bio.get_mut()
+    }
+}
 
 struct CallersIter(NonNull<IovIter<'static>>);
 
@@ -101,12 +114,14 @@ impl CallersIter {
     }
 }
 
-fn set_up(b: &mut Bio, iter: &mut IovIter<'_>, offset: &mut u64, should_dirty: bool) -> Result<(), BchError> {
+fn set_up<P: UserPage>(b: &mut Bio<Holds<P>>, iter: &mut IovIter<'_>, offset: &mut u64, should_dirty: bool)
+    -> Result<(), BchError>
+{
     b.set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
     b.set_sector(*offset >> 9);
-    b.pin_user_pages(iter)?;
+    P::extract_pages(b, iter)?;
 
-    *offset += u64::from(b.raw().bi_iter.bi_size);
+    *offset += u64::from(b.range().len());
 
     if should_dirty {
         b.set_pages_dirty();
@@ -115,17 +130,17 @@ fn set_up(b: &mut Bio, iter: &mut IovIter<'_>, offset: &mut u64, should_dirty: b
 }
 
 #[in_place(SplitFut)]
-async fn split_task<'h>(mut split: Pin<&'h mut DioBio>, fs: &'h Fs, r: SplitRef, inum: c::subvol_inum, flags: F,
-                        should_dirty: bool) {
-    r.put(read::read(fs, &split.rbio, inum, flags).await);
-    split.as_mut().bio_mut().release_user_pages(should_dirty).await;
+async fn split_task<'h, P: UserPage>(mut split: Pin<&'h mut DioBio<P>>, fs: &'h Fs, r: SplitRef, inum: c::subvol_inum,
+                                     flags: F, should_dirty: bool) {
+    r.put(read::read(fs, split.rbio.erased(), inum, flags).await);
+    split.as_mut().pages().release_user_pages(should_dirty).await;
 }
 
 /// What's left of @iter past the dio's first bio, in splits.
 #[inline(never)]
 #[args_stored_once]
-async fn read_splits(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum: c::subvol_inum, flags: F,
-                     should_dirty: bool) -> Result<(), BchError> {
+async fn read_splits<P: UserPage>(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, mut offset: u64,
+                                  inum: c::subvol_inum, flags: F, should_dirty: bool) -> Result<(), BchError> {
     stack_pin_init!(let splits = Splits::new());
 
     // @iter is the caller's, and gone once this parks: it's walked before the
@@ -136,11 +151,11 @@ async fn read_splits(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, mut offset: u
     let started = {
         let err_report = rbio.err_report.as_deref();
         core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
-            let mut split = TaskSlot::exclusive_bio_in(&SPLITS, &SPLIT_BVECS, iter.get().bio_vecs(),
+            let mut split = TaskSlot::exclusive_bio_in(&SPLITS, &SPLIT_BVECS, iter.get().bio_pages(),
                                                        c::req_op_REQ_OP_READ, |b| {
-                pin_init!(DioBio { rbio <- Rbio::new(rbio.opts, rbio.subvol, err_report, b.init()) }? BchError)
+                pin_init!(DioBio::<P> { rbio <- Rbio::new(rbio.opts, rbio.subvol, err_report, b.init()) }? BchError)
             }).expect("a split's box: its pool waits for an element, and an Rbio's init can't fail");
-            set_up(split.home().bio_mut(), iter.get(), &mut offset, should_dirty).map(|()| split)
+            set_up(split.home().pages(), iter.get(), &mut offset, should_dirty).map(|()| split)
         }))
         .try_for_each(|split| {
             let r = splits.get();
@@ -156,20 +171,20 @@ async fn read_splits(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, mut offset: u
 
 #[in_place(DioFut)]
 #[allow(clippy::too_many_arguments)]
-async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, fs: &'h Fs, end: End, mut iter: CallersIter, mut offset: u64,
-                      inum: c::subvol_inum, flags: F, count: usize) {
+async fn dio_task<'h, P: UserPage>(mut dio: Pin<&'h mut DioBio<P>>, fs: &'h Fs, end: End, mut iter: CallersIter,
+                                   mut offset: u64, inum: c::subvol_inum, flags: F, count: usize) {
     let should_dirty = iter.get().user_backed();
 
-    let ret = match set_up(dio.as_mut().bio_mut(), iter.get(), &mut offset, should_dirty) {
+    let ret = match set_up(dio.as_mut().pages(), iter.get(), &mut offset, should_dirty) {
         Err(e) => Err(e),
         Ok(()) => {
-            let rbio = &dio.rbio;
+            let rbio = dio.rbio.erased();
 
             let first = pin!(read::read(fs, rbio, inum, flags));
             let first = crate::eager!(first);
 
             let splits = if unlikely(iter.get().count() != 0) {
-                read_splits(fs, rbio, &mut iter, offset, inum, flags, should_dirty).await
+                read_splits::<P>(fs, rbio, &mut iter, offset, inum, flags, should_dirty).await
             } else {
                 Ok(())
             };
@@ -187,11 +202,20 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, fs: &'h Fs, end: End, mut it
         Err(e) if !flags.contains(F::no_poison_check) => Err(e),
         _ => Ok(count),
     });
-    dio.as_mut().bio_mut().release_user_pages(should_dirty).await;
+    dio.as_mut().pages().release_user_pages(should_dirty).await;
 }
 
 fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_report: Option<&ReadErrReport>)
     -> Result<usize, BchError>
+{
+    match iter.user_backed() {
+        true  => read_of::<Pinned>(req, iter, flags, err_report),
+        false => read_of::<Callers>(req, iter, flags, err_report),
+    }
+}
+
+fn read_of<P: UserPage>(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F,
+                        err_report: Option<&ReadErrReport>) -> Result<usize, BchError>
 {
     let inode = req.inode();
     let fs = inode.fs();
@@ -215,8 +239,8 @@ fn read(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, flags: F, err_re
     let inum = inode.inum();
     let subvol = inum.subvol as u32;
 
-    let dio = TaskSlot::exclusive_bio_in(&DIOS, &DIO_BVECS, iter.bio_vecs(), c::req_op_REQ_OP_READ, |b| {
-        pin_init!(DioBio { rbio <- Rbio::new(opts, subvol, err_report, b.init()) }? BchError)
+    let dio = TaskSlot::exclusive_bio_in(&DIOS, &DIO_BVECS, iter.bio_pages(), c::req_op_REQ_OP_READ, |b| {
+        pin_init!(DioBio::<P> { rbio <- Rbio::new(opts, subvol, err_report, b.init()) }? BchError)
     })?;
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped | flags;
 
