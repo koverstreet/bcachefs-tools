@@ -185,8 +185,7 @@ pub enum VecsAt {
     Own,
     /// A clone's parent's, or a table its owner keeps - init_borrowed()'s
     Borrowed,
-    /// An ITER_BVEC's, which pinning its pages made the bio's, till it's
-    /// cleared for the next
+    /// An ITER_BVEC's, which pinning its pages made the bio's
     Iter,
 }
 
@@ -250,9 +249,9 @@ impl<B: Typed> Deref for Bio<B> {
 
 // XXX: through this, its bvecs can be swapped with another bio's - mem::swap()
 // of two &mut Bio - and its drop then releases what B never held. And Bio
-// still has map(), add_folio(), truncate_vecs(), clear() and pin_user_pages(),
-// for the owners that aren't typed yet - each goes with its last; till then a
-// Bio<B> could gain bvecs that aren't B's through them.
+// still has map(), add_folio(), truncate_vecs() and pin_user_pages(), for the
+// owners that aren't typed yet - each goes with its last; till then a Bio<B>
+// could gain bvecs that aren't B's through them.
 impl<B: Typed> DerefMut for Bio<B> {
     fn deref_mut(&mut self) -> &mut Bio {
         let () = Self::ERASES;
@@ -454,15 +453,6 @@ impl Bio {
         let bio = self.raw_mut();
         assert!(bio.bi_vcnt < bio.bi_max_vecs, "adding a folio: the bio's bvecs are full");
         unsafe { c::bio_add_folio_nofail(bio, folio.as_ptr(), folio.size(), 0) }
-    }
-
-    /// Emptied, for another IO from scratch: bio_reset(), its bvecs and its
-    /// position gone - a bio whose pages are new each IO, a dio's.
-    pub fn clear(&mut self, opf: u32) {
-        if self.vecs_at == VecsAt::Iter {
-            self.vecs_at = VecsAt::Own;
-        }
-        unsafe { crate::os::bio::reset(self.raw_mut(), core::ptr::null_mut(), opf) };
     }
 
     /// For another IO: bio_reset(), its bvecs kept - the buffers it was made
@@ -687,8 +677,8 @@ pub const fn bio_field_at<F: BioField<Owns = O>, O: BioOwns>(_: *const F) -> usi
 /// HasBio asks of a struct with #[pin_data].
 #[macro_export]
 macro_rules! has_bio {
-    ($t:ty, $($f:ident).+ $(, owns $o:ty)?) => {
-        unsafe impl $crate::util::bio::HasBio for $t {
+    ($t:ty, $($f:ident).+ $(, owns $o:ty)? $(where $($g:ident: $b:path),*)?) => {
+        unsafe impl<$($($g: $b),*)?> $crate::util::bio::HasBio for $t {
             type Owns = $crate::has_bio!(@owns $($o)?);
             const BIO_OFFSET: usize = {
                 let t = ::core::mem::MaybeUninit::<$t>::uninit();

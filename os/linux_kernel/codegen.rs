@@ -170,7 +170,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // vfs/aops.rs: the kernel's, in an inode's table
     "filemap_migrate_folio", "generic_error_remove_folio",
     // os/linux_kernel/user_pages.rs
-    "folio_mark_dirty",
+    "folio_mark_dirty", "iov_iter_extract_pages", "iov_iter_npages", "unpin_user_folio",
     // vfs/pagecache.rs
     "__filemap_get_folio", "folio_attach_private", "folio_test_writeback", "folio_wait_stable",
     "rust_folio_mapping", "folio_test_locked", "invalidate_inode_pages2_range",

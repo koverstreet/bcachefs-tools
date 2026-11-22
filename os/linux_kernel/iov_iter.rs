@@ -53,6 +53,14 @@ impl<'a> IovIter<'a> {
         unsafe { c::bio_iov_vecs_to_alloc(self.0, c::BIO_MAX_VECS as core::ffi::c_int) as u16 }
     }
 
+    /// The bvecs a bio of its next pages, a page each, wants - up to
+    /// BIO_MAX_VECS: iov_iter_npages(), as bio_iov_vecs_to_alloc() is but
+    /// for a bvec iter, which C's bio borrows the bvecs of.
+    #[cfg(kernel)]
+    pub fn bio_pages(&mut self) -> u16 {
+        unsafe { c::iov_iter_npages(self.0, c::BIO_MAX_VECS as c_int) as u16 }
+    }
+
     /// user_backed_iter(): its pages are the user's.
     pub fn user_backed(&self) -> bool {
         let ty = self.0.iter_type;
@@ -117,6 +125,11 @@ impl HeldIovIter {
     /// iter_is_iovec()
     pub fn is_iovec(&self) -> bool {
         self.iter.iter_type == c::iter_type_ITER_IOVEC as u8
+    }
+
+    /// iov_iter_is_bvec()
+    pub fn is_bvec(&self) -> bool {
+        self.iter.iter_type == c::iter_type_ITER_BVEC as u8
     }
 
     fn nr_segs(&self) -> usize {
