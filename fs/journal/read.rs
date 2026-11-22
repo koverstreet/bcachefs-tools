@@ -26,7 +26,7 @@ use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
 use crate::util::alloc::{init_at, kvzalloc, AllocError, Flags, KVVec};
 use crate::util::bio::{io_buf, Bio, BioBox, BioBuffersMapped, BioOwner, IoBuf};
-use crate::os::kernel::local_clock;
+use crate::os::kernel::{ktime_get_ns, local_clock};
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
 use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated, Validated,
@@ -1000,6 +1000,7 @@ fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::DevReadRef
             let ca: &Dev = ca;
             let ring = unsafe { journal_ring(ca) };
             s.spawn(format_args!("journal read {}", ca), move || {
+                let start = ktime_get_ns();
                 let ret = if ring.nr() == 0 {
                     Ok(())
                 } else {
@@ -1007,8 +1008,8 @@ fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::DevReadRef
                 };
 
                 match &ret {
-                    Ok(())  => if fs.opts.verbose.get() != 0 { bch_info_dev!(ca, "journal read done") },
-                    Err(e)  => bch_err_dev!(ca, "journal read error {}", e),
+                    Ok(())  => bch_info_dev!(ca, "journal read done, elapsed {} ns", ktime_get_ns() - start),
+                    Err(e)  => bch_err_dev!(ca, "journal read error {} after {} ns", e, ktime_get_ns() - start),
                 }
                 ret
             })?;
