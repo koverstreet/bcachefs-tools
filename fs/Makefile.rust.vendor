@@ -227,7 +227,7 @@ $(vr-arch-gen-rs): $(VRD)/rust/kernel/%.rs: $(VENDOR)/kernel/%.rs.S FORCE
 	$(Q)mkdir -p $(@D)
 	$(call if_changed,bch_rscpp)
 
-$(VRD)/kernel.o: private rs-flags := $(vr-kernel-deps) \
+$(VRD)/kernel.o: private rs-flags := $(vr-kernel-deps) $(bch-linux-version-cfgs) \
 	--extern build_error=$(VRD)/libbuild_error.rmeta --extern macros=$(VRD)/libmacros.so \
 	--extern bindings=$(VRD)/libbindings.rmeta --extern uapi=$(VRD)/libuapi.rmeta \
 	--extern zerocopy=$(VRD)/libzerocopy.rmeta --extern zerocopy_derive=$(VRD)/libzerocopy_derive.so

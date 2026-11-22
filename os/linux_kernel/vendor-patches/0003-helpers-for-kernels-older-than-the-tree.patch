@@ -28,6 +28,9 @@ bcachefs.ko carries this stack to kernels built without Rust, back to
     before, the filesystems defined them, as EBADMSG and EUCLEAN, which
     the bindings do there. EFTYPE is a new errno in 7.2 (cf1b04aaef8b),
     so error::code has no EFTYPE: an older kernel has no such error.
+  - ARCH_WARN_ASM, which warn_on!'s asm embeds the bug table entry with,
+    is 6.17's on every arch (rust-6.17): before, warn_on! is the WARN_ON()
+    helper, as on LoongArch and ARM. Srcu's drop is its user.
 
 Each goes when the oldest kernel bcachefs supports has what it stands in
 for.
@@ -230,6 +233,36 @@ index 6aed13292313..b98188151ed7 100644
  }
  
  __rust_helper bool rust_helper_is_vmalloc_addr(const void *x)
+diff --git a/kernel/bug.rs b/kernel/bug.rs
+index 3b40b0bd37b5..feeb8803a8be 100644
+--- a/kernel/bug.rs
++++ b/kernel/bug.rs
+@@ -10,6 +10,7 @@
+ #[doc(hidden)]
+ #[cfg(not(testlib))]
+ #[cfg(all(CONFIG_BUG, not(CONFIG_UML), not(CONFIG_LOONGARCH), not(CONFIG_ARM)))]
++#[cfg(linux_ge = "6.17")]
+ #[cfg(CONFIG_DEBUG_BUGVERBOSE)]
+ macro_rules! warn_flags {
+     ($file:expr, $flags:expr) => {
+@@ -50,6 +51,7 @@ macro_rules! warn_flags {
+ #[doc(hidden)]
+ #[cfg(not(testlib))]
+ #[cfg(all(CONFIG_BUG, not(CONFIG_UML), not(CONFIG_LOONGARCH), not(CONFIG_ARM)))]
++#[cfg(linux_ge = "6.17")]
+ #[cfg(not(CONFIG_DEBUG_BUGVERBOSE))]
+ macro_rules! warn_flags {
+     ($file:expr, $flags:expr) => {
+@@ -106,7 +108,8 @@ macro_rules! warn_flags {
+ #[macro_export]
+ #[doc(hidden)]
+ #[cfg(not(testlib))]
+-#[cfg(all(CONFIG_BUG, any(CONFIG_LOONGARCH, CONFIG_ARM)))]
++// vendored: and before 6.17, which has no ARCH_WARN_ASM for the asm above
++#[cfg(all(CONFIG_BUG, any(CONFIG_LOONGARCH, CONFIG_ARM, all(not(CONFIG_UML), not(linux_ge = "6.17")))))]
+ macro_rules! warn_flags {
+     ($file:expr, $flags:expr) => {
+         if false {
 diff --git a/kernel/error.rs b/kernel/error.rs
 index 9003a1b86da8..008c58744bd2 100644
 --- a/kernel/error.rs

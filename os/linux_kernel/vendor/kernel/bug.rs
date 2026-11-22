@@ -10,6 +10,7 @@
 #[doc(hidden)]
 #[cfg(not(testlib))]
 #[cfg(all(CONFIG_BUG, not(CONFIG_UML), not(CONFIG_LOONGARCH), not(CONFIG_ARM)))]
+#[cfg(linux_ge = "6.17")]
 #[cfg(CONFIG_DEBUG_BUGVERBOSE)]
 macro_rules! warn_flags {
     ($file:expr, $flags:expr) => {
@@ -50,6 +51,7 @@ macro_rules! warn_flags {
 #[doc(hidden)]
 #[cfg(not(testlib))]
 #[cfg(all(CONFIG_BUG, not(CONFIG_UML), not(CONFIG_LOONGARCH), not(CONFIG_ARM)))]
+#[cfg(linux_ge = "6.17")]
 #[cfg(not(CONFIG_DEBUG_BUGVERBOSE))]
 macro_rules! warn_flags {
     ($file:expr, $flags:expr) => {
@@ -106,7 +108,8 @@ macro_rules! warn_flags {
 #[macro_export]
 #[doc(hidden)]
 #[cfg(not(testlib))]
-#[cfg(all(CONFIG_BUG, any(CONFIG_LOONGARCH, CONFIG_ARM)))]
+// vendored: and before 6.17, which has no ARCH_WARN_ASM for the asm above
+#[cfg(all(CONFIG_BUG, any(CONFIG_LOONGARCH, CONFIG_ARM, all(not(CONFIG_UML), not(linux_ge = "6.17")))))]
 macro_rules! warn_flags {
     ($file:expr, $flags:expr) => {
         if false {
