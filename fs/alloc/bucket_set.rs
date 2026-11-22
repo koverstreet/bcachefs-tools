@@ -61,6 +61,7 @@ impl c::alloc_request<'_, '_> {
     /// coded as it is.
     fn want_bucket(&self, ob: &OpenBucketRef) -> bool {
         self.devs_may_alloc.d.test(ob.id().dev().into()) &&
+            !self.move_dev_stalled(ob.id().dev().into()) &&
             ob.data_type.get() == self.data_type.0 as u8 &&
             self.bits.ec() == !ob.ec.load(Relaxed).is_null()
     }
@@ -169,13 +170,14 @@ impl TransAttempt<'_, '_> {
     /// it got before an error. Running out of devices, the last one's error,
     /// or insufficient_devices, traced. A restart, a blocked allocation or no
     /// open buckets end it at once: no other device will do better.
-    pub fn bucket_alloc_set(&self, req: &mut c::alloc_request, stripe: &mut c::dev_stripe_state)
-        -> Result<(), BchError>
+    pub fn bucket_alloc_set(&self, req: &mut c::alloc_request, stripe: &mut c::dev_stripe_state,
+                            wp_ptrs: &c::open_buckets) -> Result<(), BchError>
     {
         let fs = self.fs();
         assert!(req.nr_effective < u32::from(req.nr_replicas), "allocating for a request already complete");
 
         fs.dev_alloc_list(stripe, req);
+        fs.move_avoid_busy_devs(req, wp_ptrs);
         // the whole allocation's, for tracing and bailing: not to flip as the
         // list shrinks
         if req.devs_sorted.nr <= 1 {
@@ -212,6 +214,7 @@ impl TransAttempt<'_, '_> {
                 break;
             }
             fs.dev_alloc_list(stripe, req);
+            fs.move_avoid_busy_devs(req, wp_ptrs);
         }
 
         ret?;
@@ -247,7 +250,7 @@ impl TransAttempt<'_, '_> {
         }
         match req.bits.ec() {
             true  => self.bucket_alloc_from_stripe(req, wp),
-            false => self.bucket_alloc_set(req, &mut wp.stripe),
+            false => self.bucket_alloc_set(req, &mut wp.stripe, &wp.ptrs),
         }
     }
 
@@ -291,7 +294,7 @@ impl TransAttempt<'_, '_> {
         // a cached copy spends no durable space
         req.devs_required = None;
 
-        let ret = self.bucket_alloc_set(req, &mut wp.stripe);
+        let ret = self.bucket_alloc_set(req, &mut wp.stripe, &wp.ptrs);
 
         req.nr_replicas = nr_replicas;
         req.wait = wait;
