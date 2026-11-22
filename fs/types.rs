@@ -278,6 +278,9 @@ pub struct Dev {
      */
     pub mi: crate::util::projections::Volatile<c::bch_member_cpu>,
     pub btree_allocated_bitmap_gc: crate::util::projections::Volatile<u64>,
+    /// What gc's bitmap is at: its own, apart from the member's, as gc rebuilds
+    /// it from exact node pointers and may end up finer.
+    pub btree_allocated_bitmap_gc_shift: crate::util::projections::Volatile<u8>,
     pub errors: [AtomicI64; c::MemberErrorType::NR as usize],
     /// Written racing C's plain reads and stores, as C's are: atomic here,
     /// so Rust's are through a shared bch_dev.

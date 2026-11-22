@@ -26,7 +26,7 @@ use crate::data_structures::strided::{Strided, StridedMut};
 use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, InPlace, Unsized, Unvalidated, Validated};
 use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::PhantomData;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{fence, Ordering};
 use cstruct_macros::{MaybeZeroable, TypeInfo};
 use super::io::*;
 use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
@@ -704,11 +704,27 @@ pub fn fs_mi_field_upgrades(fs: &Fs) {
 // whole devices: a bit per 1 << btree_bitmap_shift sectors, 64 of them, set
 // for every range a btree node has been written to. The shift grows - the
 // bitmap coarsens - as nodes are written further out. gc rebuilds it into
-// ca->btree_allocated_bitmap_gc, and replaces it.
+// ca->btree_allocated_bitmap_gc - at its own shift, so a bitmap that had
+// coarsened can get fine again - and replaces it.
 
 /// The bits of a bitmap at @shift that cover sectors [@start, @end).
 fn bitmap_bits(start: u64, end: u64, shift: u8) -> u64 {
     (start >> shift..).take_while(|&bit| bit << shift < end).fold(0, |b, bit| b | 1 << bit)
+}
+
+/// @bitmap at @shift marked for [@start, @end), coarsened first if it doesn't
+/// reach that far.
+fn bitmap_mark(bitmap: &mut u64, shift: &mut u8, start: u64, end: u64) {
+    let resize = end.next_power_of_two().trailing_zeros() as i32 - (i32::from(*shift) + 6);
+    if resize > 0 {
+        *bitmap = bitmap_coarsen(*bitmap, resize as u32);
+        *shift += resize as u8;
+    }
+
+    assert!(u32::from(*shift) < c::BCH_MI_BTREE_BITMAP_SHIFT_MAX);
+    assert!(end <= 64u64 << *shift);
+
+    *bitmap |= bitmap_bits(start, end, *shift);
 }
 
 /// @bitmap, its shift grown by @by: each bit folded into the one now covering it.
@@ -727,9 +743,29 @@ impl Dev {
             return false;
         }
 
-        let gc = if with_gc { self.btree_allocated_bitmap_gc.get() } else { !0 };
         let want = bitmap_bits(start, end, shift);
-        self.mi.get().btree_allocated_bitmap & gc & want == want
+        if self.mi.get().btree_allocated_bitmap & want != want {
+            return false;
+        }
+        if !with_gc {
+            return true;
+        }
+
+        /*
+         * gc's bitmap and shift are read without sb_lock, apart: set_btree_bitmap_gc()
+         * clears the bitmap while it changes the shift, so that a torn read is
+         * a shift that moved - or a bitmap of nothing - and unmarked, which
+         * the caller then settles under the lock.
+         */
+        let gc_shift = self.btree_allocated_bitmap_gc_shift.get();
+        fence(Ordering::Acquire);
+        let gc = self.btree_allocated_bitmap_gc.get();
+        fence(Ordering::Acquire);
+        if self.btree_allocated_bitmap_gc_shift.get() != gc_shift || end > 64u64 << gc_shift {
+            return false;
+        }
+        let want = bitmap_bits(start, end, gc_shift);
+        gc & want == want
     }
 
     /// Whether any of [@start, @start + @sectors) is marked in its member's
@@ -748,8 +784,15 @@ impl Dev {
 
     /// ca->btree_allocated_bitmap_gc made @v: written under sb_lock, @_sb,
     /// and read without it, as ca->mi.
-    fn set_btree_bitmap_gc(&self, _sb: &SbLockGuard<'_>, v: u64) {
-        self.btree_allocated_bitmap_gc.set(v)
+    fn set_btree_bitmap_gc(&self, _sb: &SbLockGuard<'_>, v: u64, shift: u8) {
+        if self.btree_allocated_bitmap_gc_shift.get() != shift {
+            // see btree_bitmap_marked_sectors(): readers don't take sb_lock
+            self.btree_allocated_bitmap_gc.set(0);
+            fence(Ordering::Release);
+            self.btree_allocated_bitmap_gc_shift.set(shift);
+            fence(Ordering::Release);
+        }
+        self.btree_allocated_bitmap_gc.set(v);
     }
 
     /// [@start, @start + @sectors) marked in its member's bitmap, and in gc's
@@ -757,30 +800,30 @@ impl Dev {
     /// member changed.
     fn btree_bitmap_mark_sectors(&self, sb: &mut SbLockGuard<'_>, start: u64, sectors: u32) -> bool {
         let end = start + u64::from(sectors);
-        let mut gc = self.btree_allocated_bitmap_gc.get();
-        let mut dirty = false;
 
         let m = sb.fs_member_mut(self.dev_idx.into());
+        let (old_bitmap, old_shift) = (m.btree_allocated_bitmap.get(), m.btree_bitmap_shift);
+        let (mut bitmap, mut shift) = (old_bitmap, old_shift);
+        bitmap_mark(&mut bitmap, &mut shift, start, end);
 
-        let resize = end.next_power_of_two().trailing_zeros() as i32 - (i32::from(m.btree_bitmap_shift) + 6);
-        if resize > 0 {
-            m.btree_allocated_bitmap = bitmap_coarsen(m.btree_allocated_bitmap.get(), resize as u32).into();
-            m.btree_bitmap_shift += resize as u8;
-            gc = bitmap_coarsen(gc, resize as u32);
-            dirty = true;
+        let dirty = bitmap != old_bitmap || shift != old_shift;
+        if dirty {
+            m.btree_allocated_bitmap = bitmap.into();
+            m.btree_bitmap_shift = shift;
         }
 
-        let shift = m.btree_bitmap_shift;
-        assert!(u32::from(shift) < c::BCH_MI_BTREE_BITMAP_SHIFT_MAX);
-        assert!(end <= 64u64 << shift);
-
-        let bits = bitmap_bits(start, end, shift);
-        let old = m.btree_allocated_bitmap.get();
-        dirty |= old | bits != old;
-        m.btree_allocated_bitmap = (old | bits).into();
-
-        self.set_btree_bitmap_gc(sb, gc | bits);
+        let (mut gc, mut gc_shift) = (self.btree_allocated_bitmap_gc.get(), self.btree_allocated_bitmap_gc_shift.get());
+        bitmap_mark(&mut gc, &mut gc_shift, start, end);
+        self.set_btree_bitmap_gc(sb, gc, gc_shift);
         dirty
+    }
+
+    /// @k's node marked in gc's bitmap only, from its exact pointer: the member's
+    /// is replaced by it when gc finishes, and mustn't be touched before.
+    fn btree_bitmap_gc_mark_sectors(&self, sb: &SbLockGuard<'_>, start: u64, sectors: u32) {
+        let (mut gc, mut gc_shift) = (self.btree_allocated_bitmap_gc.get(), self.btree_allocated_bitmap_gc_shift.get());
+        bitmap_mark(&mut gc, &mut gc_shift, start, start + u64::from(sectors));
+        self.set_btree_bitmap_gc(sb, gc, gc_shift);
     }
 }
 
@@ -816,9 +859,16 @@ impl Fs {
         }
     }
 
-    fn btree_bitmap_mark_if_unmarked(&self, k: BkeySC<'_>) {
-        if !self.btree_bitmap_marked(k, true) {
-            self.btree_bitmap_mark(k);
+    /// @k's node marked in each of its devices' gc bitmaps - not in the
+    /// members': gc replaces those when it's done, at its own shift.
+    fn btree_bitmap_gc_mark(&self, k: BkeySC<'_>) {
+        let Some(k) = k.arm::<Ptrs>() else { return };
+        let sb = self.sb_lock();
+        let rcu = read_lock();
+        for p in k.ptrs(self) {
+            if let Some(ca) = self.dev_rcu(p.dev().into(), &rcu) {
+                ca.btree_bitmap_gc_mark_sectors(&sb, p.offset(), self.btree_sectors());
+            }
         }
     }
 
@@ -832,7 +882,7 @@ impl Fs {
             let sb = self.sb_lock();
             let rcu = read_lock();
             for ca in self.devs_rcu(&rcu) {
-                ca.set_btree_bitmap_gc(&sb, 0);
+                ca.set_btree_bitmap_gc(&sb, 0, 0);
             }
         }
 
@@ -843,7 +893,7 @@ impl Fs {
                 for level in 1..c::BTREE_MAX_DEPTH {
                     BtreeIter::new_level(&trans, btree, POS_MIN, level, BtreeIterFlags::PREFETCH)
                         .for_each(&trans, |t, iter, k| {
-                            self.btree_bitmap_mark_if_unmarked(k);
+                            self.btree_bitmap_gc_mark(k);
                             progress.update(t, iter)
                         })?;
                 }
@@ -853,7 +903,7 @@ impl Fs {
                                                   BtreeIterFlags::empty());
                 lockrestart_do(&trans, |t| {
                     let b = iter.peek(t)?.expect("the root node");
-                    self.btree_bitmap_mark_if_unmarked(b.contents().key_i().as_sc());
+                    self.btree_bitmap_gc_mark(b.contents().key_i().as_sc());
                     Ok(())
                 })?;
             }
@@ -868,9 +918,12 @@ impl Fs {
                     let shift = ca.mi.get().btree_bitmap_shift;
                     old += u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << shift;
                     let gc = ca.btree_allocated_bitmap_gc.get();
-                    new += u64::from(gc.count_ones()) << shift;
+                    let gc_shift = ca.btree_allocated_bitmap_gc_shift.get();
+                    new += u64::from(gc.count_ones()) << gc_shift;
 
-                    sb.fs_member_mut(ca.dev_idx.into()).btree_allocated_bitmap = gc.into();
+                    let m = sb.fs_member_mut(ca.dev_idx.into());
+                    m.btree_allocated_bitmap = gc.into();
+                    m.btree_bitmap_shift = gc_shift;
                 }
             }
             self.write_super(&mut sb);

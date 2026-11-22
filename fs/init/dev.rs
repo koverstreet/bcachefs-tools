@@ -585,6 +585,7 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
 
     ca.mi.set(member.to_cpu());
     ca.btree_allocated_bitmap_gc.set(member.btree_allocated_bitmap.get());
+    ca.btree_allocated_bitmap_gc_shift.set(member.btree_bitmap_shift);
 
     for (e, m) in ca.errors.iter().zip(member.errors.iter()) {
         e.store(m.get() as i64, Relaxed);
