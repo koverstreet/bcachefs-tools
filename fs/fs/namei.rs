@@ -575,12 +575,35 @@ pub fn rename_trans(
     }
 
     if !same_dir {
-        if reinherit_attrs(src_inode_u, dst_dir_u!()) && src_inode_u.is_dir() {
+        let tmpdir = crate::inode_opts::InodeOpt::of(c::InodeOptId::tmpdir);
+        let tmpdir_before = tmpdir.get(src_inode_u);
+        let reinherited = reinherit_attrs(src_inode_u, dst_dir_u!());
+        let tmpdir_after = tmpdir.get(src_inode_u);
+
+        if reinherited && src_inode_u.is_dir() {
             return Err(BchError::from(c::EXDEV));
         }
 
-        if mode == BCH_RENAME_EXCHANGE &&
-           reinherit_attrs(dst_inode_u, src_dir_u) && dst_inode_u.is_dir() {
+        if mode == BCH_RENAME_EXCHANGE {
+            let dst_tmpdir_before = tmpdir.get(dst_inode_u);
+            let dst_reinherited = reinherit_attrs(dst_inode_u, src_dir_u);
+
+            if dst_reinherited && dst_inode_u.is_dir() {
+                return Err(BchError::from(c::EXDEV));
+            }
+
+            // Don't allow tmpdirs to do this with another directory that's not
+            // a tmpdir because the files aren't made durable
+            if dst_tmpdir_before != 0 && tmpdir.get(dst_inode_u) == 0 {
+                return Err(BchError::from(c::EXDEV));
+            }
+        }
+
+        // Don't allow renaming from a tmpdir to a non-tmpdir because users
+        // will expect the file outside the tmpdir to be durable. tmpdirs don't
+        // make files durable so that guarantee outside the tmpdir won't be
+        // there.
+        if tmpdir_before != 0 && tmpdir_after == 0 {
             return Err(BchError::from(c::EXDEV));
         }
 

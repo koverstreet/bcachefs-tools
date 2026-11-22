@@ -640,6 +640,7 @@ xmacro! {
         (ec_alloc_failed_transient, ec_alloc_failed_stripe_alloc, 609),
         (ec_alloc_failed_transient, ec_alloc_failed_no_usable_block, 610),
         (ec_alloc_failed_transient, ec_alloc_failed_no_ec_bucket, 611),
+        (EOPNOTSUPP, tmpdir_opt_is_dir_only, 618),
         (EIO, mmap_emergency_ro, 613),
         (EINVAL, EINVAL_test_stripe_already_open, 614),
         (EINVAL, EINVAL_test_stripe_open_relock_not_invalidated, 615),

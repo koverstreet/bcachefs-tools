@@ -196,6 +196,9 @@ pub enum RecoveryPass {
     #[stable(27)] #[when(FSCK)]
     #[depends(check_inodes, delete_dead_snapshots)]
     check_dirents,
+    /// Unlink everything in tmpdirs
+    #[stable(52)] #[when(ALWAYS)]
+    unlink_tmpdirs,
     /// Validate xattr entries: owning inode exists in valid snapshot, hash
     /// correct; delete orphans
     #[stable(28)] #[when(FSCK)]

@@ -140,6 +140,10 @@ pub(super) fn fsync(inode: &InodeInfo, file: &File, start: c::loff_t, end: c::lo
     let start_time = ktime_get_ns();
     let mut flushed_seq = 0;
 
+    if inode_opts::InodeOpt::of(c::InodeOptId::tmpdir).get(&inode.inode()) != 0 {
+        return Ok(());
+    }
+
     let ret = file.write_and_wait_range(start as u64, end as u64)
         .and_then(|()| inode.vfs().sync_metadata())
         .and_then(|()| inode.flush(&mut flushed_seq))

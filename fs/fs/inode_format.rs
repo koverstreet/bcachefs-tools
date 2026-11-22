@@ -127,6 +127,7 @@ xmacro! {
         (bi_inodes_32bit, 8),
         (bi_casefold, 8),
         (bi_unused_ec_max_data_blocks, 8),
+        (bi_tmpdir, 8),
     }
 }
 
@@ -148,6 +149,7 @@ pub enum InodeOptId {
     #[bits(8)]  nocow,
     #[bits(8)]  inodes_32bit,
     #[bits(8)]  casefold,
+    #[bits(8)]  tmpdir,
 }
 
 /* bits 20+ reserved for packed fields below: */
