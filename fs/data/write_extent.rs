@@ -26,7 +26,6 @@ fn csum_differs(a: c::bch_csum, b: c::bch_csum) -> bool {
     ((a.lo.get() ^ b.lo.get()) | (a.hi.get() ^ b.hi.get())) != 0
 }
 
-
 fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bversion,
                       crc: c::bch_extent_crc_unpacked) {
     /*
@@ -544,11 +543,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
 
             #[cfg(CONFIG_BCACHEFS_DEBUG)]
             if write_corrupt_ratio != 0 && crate::os::kernel::random_u64_below(write_corrupt_ratio.into()) == 0 {
-                let b = dst.as_mut().expect("corrupting a bio of its own").bio_mut();
-                let s = b.range().len();
-                b.raw_mut().bi_iter.bi_size = dst_len;
-                b.corrupt();
-                b.raw_mut().bi_iter.bi_size = s;
+                dst.as_ref().expect("corrupting a bio of its own").range().take(dst_len).corrupt();
             }
 
             if let Some(d) = &mut dst {

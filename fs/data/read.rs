@@ -1562,7 +1562,7 @@ fn fragment_read_done(f: &mut Fragment<'_>) -> Result<(), BchError> {
         let ratio = read_corrupt_ratio.get();
         if ratio != 0 && (dev < 0 || dev == f.plan.pick.ptr.dev() as i32) &&
            crate::os::kernel::random_u64_below(ratio.into()) == 0 {
-            f.bio_mut().corrupt();
+            f.bio().range().corrupt();
         }
     }
 
