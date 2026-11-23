@@ -987,7 +987,9 @@ impl BtreeTrans<'_> {
         })
     }
 
-    fn commit_updates(&self, t: &TransAttempt<'_, '_>, mut flags: CommitOpts, lazy: bool) -> Result<(), BchError> {
+    fn commit_updates(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, mut flags: CommitOpts, lazy: bool)
+        -> Result<(), BchError>
+    {
         let fs = self.fs();
 
         self.verify_not_unlocked_or_in_restart();
@@ -1002,7 +1004,7 @@ impl BtreeTrans<'_> {
            likely(fs.journal.flags.get(Journal::replay_done)) &&
            unlikely(fs.btree.cache.should_throttle.load(Relaxed))
         {
-            self.commit_btree_write_ratelimit(t)?;
+            paths.lend(|| self.commit_btree_write_ratelimit(t))?;
         }
 
         /*
@@ -1010,11 +1012,11 @@ impl BtreeTrans<'_> {
          * throttles on - they have to be elevated before we take a journal
          * reservation, not just in the btree node alloc path.
          */
-        if self.commit_has_extents(&self.paths()) {
+        if self.commit_has_extents(paths) {
             flags = flags.watermark_hipri();
         }
 
-        run_trans_triggers(t)?;
+        run_trans_triggers(t, paths)?;
 
         let mut journal_u64s = 0;
 
@@ -1032,7 +1034,6 @@ impl BtreeTrans<'_> {
         let mut u64s_delta: i32 = 0;
         let mut dropped_noops = false;
         let (mut idx, mut dst) = (0, 0);
-        let mut paths = self.paths();
         let mut pu = paths.paths_and_updates();
         let mut next_leaf = None;
         while idx < pu.updates.len() {
@@ -1080,7 +1081,7 @@ impl BtreeTrans<'_> {
 
                     if unlikely(b.needs_merge(b.contents(), fs, u64s_delta)) {
                         drop(pu);
-                        self.commit_merge(t, &mut paths, flags, &mut idx, &mut dst)?;
+                        self.commit_merge(t, paths, flags, &mut idx, &mut dst)?;
                         pu = paths.paths_and_updates();
                         next_leaf = None;
                     }
@@ -1097,7 +1098,7 @@ impl BtreeTrans<'_> {
             return Ok(());
         }
 
-        self.verify_disk_res(&paths);
+        self.verify_disk_res(paths);
 
         if unlikely(self.extra_disk_res.get() != 0) {
             self.commit_extra_disk_res(t, flags)?;
@@ -1106,10 +1107,7 @@ impl BtreeTrans<'_> {
         let _write = if !has(flags, CommitFlags::NO_CHECK_RW) {
             match fs.writes.tryget_live() {
                 Some(w) => Some(w),
-                None    => {
-                    drop(paths);
-                    return self.commit_to_journal_replay(t, flags);
-                }
+                None    => return paths.lend(|| self.commit_to_journal_replay(t, flags)),
             }
         } else {
             None
@@ -1131,21 +1129,21 @@ impl BtreeTrans<'_> {
             self.journal_u64s.set((journal_u64s + self.journal_entries.get().u64s() +
                                    self.extra_journal_u64s.get() as usize) as u32);
 
-            let ret = self.do_commit(t, &mut paths, &mut res, flags, &mut errored_at);
+            let ret = self.do_commit(t, paths, &mut res, flags, &mut errored_at);
 
             /* make sure we didn't drop or screw up locks: */
-            self.verify_locks(&paths);
+            self.verify_locks(paths);
 
             match ret {
                 Ok(())   => break,
-                Err(err) => self.commit_error(t, &mut paths, &mut res, flags, errored_at, err)?,
+                Err(err) => self.commit_error(t, paths, &mut res, flags, errored_at, err)?,
             }
         }
 
         self.commit_count.set(self.commit_count.get().wrapping_add(1));
         drop(_write);
 
-        self.downgrade(&mut paths);
+        self.downgrade(paths);
 
         /*
          * Lazy commits signal success via transaction_restart_commit; a real
@@ -1159,8 +1157,9 @@ impl BtreeTrans<'_> {
     }
 
     pub(crate) fn commit_trans(&self, t: &TransAttempt<'_, '_>, flags: CommitOpts, lazy: bool) -> Result<(), BchError> {
-        let ret = self.commit_updates(t, flags, lazy);
-        self.reset_updates(&mut self.paths());
+        let mut paths = self.paths();
+        let ret = self.commit_updates(t, &mut paths, flags, lazy);
+        self.reset_updates(&mut paths);
         ret
     }
 }

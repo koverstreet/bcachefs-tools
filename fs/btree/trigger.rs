@@ -212,11 +212,9 @@ fn run_one_mem_trigger(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &c::btree
 /// run_one_trans_trigger(): the next of @i's transactional triggers not run -
 /// both at once where the old and new types share one, else the overwrite,
 /// then the insert - then its snapshot's count of keys. A trigger can queue
-/// more updates, so it's handed copies, and the updates aren't borrowed while
-/// it runs.
-fn run_one_trans_trigger(t: &TransAttempt<'_, '_>, idx: usize) -> Result<(), BchError> {
-    let mut paths = t.trans().paths();
-    verify_update_old_key(t, &paths, &paths.updates()[idx]);
+/// more updates, so it's handed copies, and the path table's lent across it.
+fn run_one_trans_trigger(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: usize) -> Result<(), BchError> {
+    verify_update_old_key(t, paths, &paths.updates()[idx]);
 
     let i = paths.update_mut(idx);
     let mut deleted = BkeyI::<c::Deleted>::at(i.key().k.p);
@@ -243,24 +241,14 @@ fn run_one_trans_trigger(t: &TransAttempt<'_, '_>, idx: usize) -> Result<(), Bch
         trigger = new_ops.trigger;
     }
     op.flags = flags;
-    drop(paths);
 
-    run_trigger(t, trigger, &mut op)?;
-    if op.btree.has_snapshots() {
-        crate::alloc::buckets::trigger_snapshot_nr_keys(t, &op)?;
-    }
-    Ok(())
-}
-
-fn nr_updates(t: &TransAttempt<'_, '_>) -> usize {
-    t.trans().nr_updates.get().into()
-}
-
-/// @t's update @idx, for @f - looked up by index each time, as C's loops do:
-/// a transactional trigger queues more, and a path it allocates can move them
-/// all, to a bigger array.
-fn with_update<R>(t: &TransAttempt<'_, '_>, idx: usize, f: impl FnOnce(&c::btree_insert_entry) -> R) -> R {
-    f(&t.trans().paths().updates()[idx])
+    paths.lend(|| {
+        run_trigger(t, trigger, &mut op)?;
+        if op.btree.has_snapshots() {
+            crate::alloc::buckets::trigger_snapshot_nr_keys(t, &op)?;
+        }
+        Ok(())
+    })
 }
 
 fn trans_triggers_run(i: &c::btree_insert_entry) -> bool {
@@ -271,11 +259,11 @@ fn trans_triggers_run(i: &c::btree_insert_entry) -> bool {
 
 /// The commit's transactional triggers - its updates', and those of the
 /// updates they queue.
-pub(crate) fn run_trans_triggers(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
+pub(crate) fn run_trans_triggers(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>) -> Result<(), BchError> {
     let mut sort_id_start = 0;
 
-    while sort_id_start < nr_updates(t) {
-        let sort_id = with_update(t, sort_id_start, |i| i.sort_order);
+    while sort_id_start < paths.updates().len() {
+        let sort_id = paths.updates()[sort_id_start].sort_order;
         let mut idx;
 
         /*
@@ -291,8 +279,13 @@ pub(crate) fn run_trans_triggers(t: &TransAttempt<'_, '_>) -> Result<(), BchErro
             let mut trans_trigger_run = false;
 
             idx = sort_id_start;
-            while idx < nr_updates(t) {
-                let (sort_order, run) = with_update(t, idx, |i| (i.sort_order, trans_triggers_run(i)));
+            while idx < paths.updates().len() {
+                /*
+                 * By index each time, as C's loops do: a trigger queues more,
+                 * and a path it allocates can move them all, to a bigger array.
+                 */
+                let i = &paths.updates()[idx];
+                let (sort_order, run) = (i.sort_order, trans_triggers_run(i));
                 if sort_order > sort_id {
                     break;
                 }
@@ -300,7 +293,7 @@ pub(crate) fn run_trans_triggers(t: &TransAttempt<'_, '_>) -> Result<(), BchErro
                 if sort_order < sort_id {
                     sort_id_start = idx;
                 } else if !run {
-                    run_one_trans_trigger(t, idx)?;
+                    run_one_trans_trigger(t, paths, idx)?;
                     trans_trigger_run = true;
                 }
                 idx += 1;
@@ -315,9 +308,9 @@ pub(crate) fn run_trans_triggers(t: &TransAttempt<'_, '_>) -> Result<(), BchErro
     }
 
     if cfg!(CONFIG_BCACHEFS_DEBUG) {
-        for idx in 0..nr_updates(t) {
-            assert!(with_update(t, idx, trans_triggers_run),
-                    "update {idx} of {}: transactional triggers not run", nr_updates(t));
+        let updates = paths.updates();
+        for (idx, i) in updates.iter().enumerate() {
+            assert!(trans_triggers_run(i), "update {idx} of {}: transactional triggers not run", updates.len());
         }
     }
     Ok(())
