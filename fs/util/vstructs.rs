@@ -65,6 +65,8 @@ macro_rules! plain {
     ($($t:ty),*) => { $(unsafe impl Plain for $t {})* };
 }
 plain!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128);
+// no bytes
+unsafe impl<T: ?Sized> Plain for PhantomData<T> {}
 unsafe impl<T: Plain, const N: usize> Plain for [T; N] {}
 unsafe impl<T: Plain> Plain for [T] {}
 

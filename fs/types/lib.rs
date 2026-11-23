@@ -25,16 +25,14 @@ pub const fn field_size<S, F>(_f: fn(S) -> F) -> u64 {
 macro_rules! le_int {
     ($($name:ident: $t:ty),*) => { $(
         #[repr(transparent)]
-        #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+        #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, cstruct_macros::Plain)]
+        #[plain(own_native)]
         pub struct $name<T = $t>($t, core::marker::PhantomData<T>);
 
         impl LeValue<$t> for $t {
             fn from_int(v: $t) -> Self { v }
             fn into_int(self) -> $t { self }
         }
-
-        // SAFETY: the integer, and nothing else
-        unsafe impl<T> crate::util::vstructs::Plain for $name<T> {}
 
         // SAFETY: the integer, and zero is one
         unsafe impl<T> ::pin_init::Zeroable for $name<T> {}
@@ -210,17 +208,8 @@ unsafe impl<T, I: crate::data_structures::fifo::FifoIdx + ::pin_init::Zeroable> 
 /// #[bitfield(u32, repr = NeBytes<3>, from = NeBytes::<3>::from_u32, into =
 /// NeBytes::<3>::to_u32)] type.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, cstruct_macros::Plain)]
 pub struct NeBytes<const N: usize>(pub [u8; N]);
-
-// SAFETY: bytes, and nothing else
-unsafe impl<const N: usize> crate::util::vstructs::Plain for NeBytes<N> {}
-
-impl<const N: usize> crate::util::vstructs::Native for NeBytes<N> {
-    type Native = Self;
-    fn to_native(self) -> Self { self }
-    fn from_native(n: Self) -> Self { n }
-}
 
 impl<const N: usize> Default for NeBytes<N> {
     fn default() -> Self { Self([0; N]) }
@@ -278,18 +267,8 @@ impl<const N: usize> NeBytes<N> {
 /// The storage of u64 bitfields C aligns to 8 - __aligned(8), which i386
 /// needs said: its u64 is 4-aligned. #[bitfield(u64, align = 8)] uses it.
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, cstruct_macros::Plain)]
 pub struct Align8U64(pub u64);
-
-// SAFETY: a u64, aligned to its own size - so nothing else
-unsafe impl crate::util::vstructs::Plain for Align8U64 {}
-
-impl crate::util::vstructs::Native for Align8U64 {
-    type Native = Self;
-    fn to_native(self) -> Self { self }
-    fn from_native(n: Self) -> Self { n }
-}
-const _: () = assert!(core::mem::size_of::<Align8U64>() == 8);
 
 impl Align8U64 {
     pub const fn from_u64(v: u64) -> Self { Self(v) }

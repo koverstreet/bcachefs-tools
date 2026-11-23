@@ -28,6 +28,12 @@ use crate::tokens::vs;
 /// definition's as written - #[unsized_vstruct]'s X_head - and then its tail's
 /// elements, Plain too, as the attribute checks.
 pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
+    let item: syn::DeriveInput = syn::parse2(input.clone()).map_err(|e| e.to_string())?;
+    if let syn::Data::Struct(s) = &item.data {
+        if !matches!(s.fields, syn::Fields::Named(_)) || !item.generics.params.is_empty() {
+            return plain_by_bounds(&item, &s.fields);
+        }
+    }
     let def = parse_cstruct(&input)?;
     let tys: Vec<&syn::Type> = def.fields.iter().map(|f| &f.ty).collect();
     Ok(match def.kind {
@@ -60,6 +66,56 @@ pub(crate) fn plain(name: &Ident, tys: &[impl ToTokens]) -> TokenStream {
     plain_impls(name, quote! {
         #(crate::util::vstructs::assert_plain::<#tys>();)*
         assert!(::core::mem::size_of::<#name>() == 0 #(+ ::core::mem::size_of::<#tys>())*, #msg);
+    })
+}
+
+/// #[derive(Plain)] on a tuple struct, or a generic one: each field Plain as
+/// a bound on the impls, which a generic type's can't be checked by in a
+/// const - and no padding, by a const for one that isn't generic, and for one
+/// that is, by being #[repr(transparent)]. #[plain(own_native)]: its Native
+/// is its own, not itself - a little-endian integer's.
+fn plain_by_bounds(item: &syn::DeriveInput, fields: &syn::Fields) -> Result<TokenStream, String> {
+    let name = &item.ident;
+    let tys: Vec<&syn::Type> = fields.iter().map(|f| &f.ty).collect();
+    let transparent = item.attrs.iter().any(|a| {
+        a.path().is_ident("repr") && a.parse_args::<Ident>().is_ok_and(|r| r == "transparent")
+    });
+    let own_native = item.attrs.iter().any(|a| {
+        a.path().is_ident("plain") && a.parse_args::<Ident>().is_ok_and(|r| r == "own_native")
+    });
+    let padding = if !item.generics.params.is_empty() {
+        if !transparent {
+            return Err(format!("{name}: generic, and not #[repr(transparent)] - its padding can't be checked"));
+        }
+        quote!()
+    } else {
+        let msg = format!("{name}: padding between its fields - it isn't Plain");
+        quote!(const _: () = assert!(::core::mem::size_of::<#name>() == 0 #(+ ::core::mem::size_of::<#tys>())*, #msg);)
+    };
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    let bounded = |tr: TokenStream| {
+        let mut w = where_clause.cloned().unwrap_or_else(|| parse_quote!(where));
+        w.predicates.extend(tys.iter().map(|t| -> syn::WherePredicate { parse_quote!(#t: #tr) }));
+        w
+    };
+    let plain = bounded(quote!(crate::util::vstructs::Plain));
+    let (from_bytes, as_bytes) = (bounded(quote!(::kernel::transmute::FromBytes)),
+                                  bounded(quote!(::kernel::transmute::AsBytes)));
+    let native = (!own_native).then(|| quote! {
+        impl #impl_generics crate::util::vstructs::Native for #name #ty_generics #where_clause {
+            type Native = Self;
+            fn to_native(self) -> Self { self }
+            fn from_native(n: Self) -> Self { n }
+        }
+    });
+    Ok(quote! {
+        unsafe impl #impl_generics crate::util::vstructs::Plain for #name #ty_generics #plain {}
+        #[cfg(kernel)]
+        unsafe impl #impl_generics ::kernel::transmute::FromBytes for #name #ty_generics #from_bytes {}
+        #[cfg(kernel)]
+        unsafe impl #impl_generics ::kernel::transmute::AsBytes for #name #ty_generics #as_bytes {}
+        #native
+        #padding
     })
 }
 

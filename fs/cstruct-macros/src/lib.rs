@@ -200,7 +200,7 @@ pub fn derive_to_text(input: proc_macro::TokenStream) -> proc_macro::TokenStream
 
 /// `#[derive(Plain)]`: util/vstructs.rs's Plain, checked at compile time -
 /// see vstructs.rs.
-#[proc_macro_derive(Plain)]
+#[proc_macro_derive(Plain, attributes(plain))]
 pub fn derive_plain(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[derive(Plain)]", || vstructs::derive_plain(input.into()))
 }
