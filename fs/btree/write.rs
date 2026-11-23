@@ -11,7 +11,7 @@ use crate::btree::node::sort::{
 use crate::btree::node::bset::MAX_BSETS;
 use crate::btree::node::{BtreeNode, NodeContents, NodeKey};
 use crate::btree::locking::BtreeNodeLockedType::BTREE_NODE_READ_LOCKED;
-use crate::btree::path::{LockedNode, PathIdx, Paths, PathsUpdates, Write};
+use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
 use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
@@ -692,52 +692,41 @@ pub(crate) fn node_write_locked(trans: &BtreeTrans<'_>, b: &mut LockedNode<'_, B
  * Initialize a new (unwritten) bset that can then be inserted into.
  *
  * Safe to call if there already is an unwritten bset - will only add a new bset
- * if @b doesn't already have one. If it sorted, the paths' iterators at @b are
- * reinitialized.
+ * if @b doesn't already have one. If it sorted, the paths' iterators at @b have
+ * to be reinitialized: whether it did.
  */
-pub(in crate::btree) fn init_next(t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>, idx: PathIdx,
-                                  level: usize) {
-    let trans = t.trans();
+pub(in crate::btree) fn init_next(trans: &BtreeTrans<'_>, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
     let fs = trans.fs();
+    let mut reinit_iter = false;
 
-    let reinit_iter = {
-        let mut b = pu.paths[idx].locked_btree_node_mut(level).expect("a node to start a bset in, write locked");
-        let b = &mut b;
-        let mut reinit_iter = false;
+    ebug_assert!(six_lock_counts(b.c.lock.six()).n[c::SixLockType::SIX_LOCK_write as usize] != 0);
+    let contents = b.contents();
+    assert!(!b.bset_written(&contents.set[1]));
+    assert!(!b.flags.just_written());
 
-        ebug_assert!(six_lock_counts(b.c.lock.six()).n[c::SixLockType::SIX_LOCK_write as usize] != 0);
-        let contents = b.contents();
-        assert!(!b.bset_written(&contents.set[1]));
-        assert!(!b.flags.just_written());
-
-        if contents.nsets as u32 == MAX_BSETS &&
-            !b.flags.write_in_flight() &&
-            contents.should_compact_all(fs)
-        {
-            node_write_locked(trans, b, BtreeWriteType::init_next_bset, BtreeWriteFlags::empty());
-            reinit_iter = true;
-        }
-
-        if b.contents().nsets as u32 == MAX_BSETS &&
-            btree_node_compact(fs, b)
-        {
-            reinit_iter = true;
-        }
-
-        let (n, contents) = (b.node(), b.contents_mut());
-        assert!((contents.nsets as u32) < MAX_BSETS);
-
-        if let Some(bne) = n.want_new_bset(contents, fs) {
-            n.keys_mut(contents).bset_init_next(bne);
-        }
-
-        build_aux_trees(n, contents);
-        reinit_iter
-    };
-
-    if reinit_iter {
-        trans.node_reinit_iter(t, pu, idx, level);
+    if contents.nsets as u32 == MAX_BSETS &&
+        !b.flags.write_in_flight() &&
+        contents.should_compact_all(fs)
+    {
+        node_write_locked(trans, b, BtreeWriteType::init_next_bset, BtreeWriteFlags::empty());
+        reinit_iter = true;
     }
+
+    if b.contents().nsets as u32 == MAX_BSETS &&
+        btree_node_compact(fs, b)
+    {
+        reinit_iter = true;
+    }
+
+    let (n, contents) = (b.node(), b.contents_mut());
+    assert!((contents.nsets as u32) < MAX_BSETS);
+
+    if let Some(bne) = n.want_new_bset(contents, fs) {
+        n.keys_mut(contents).bset_init_next(bne);
+    }
+
+    build_aux_trees(n, contents);
+    reinit_iter
 }
 
 impl Fs {

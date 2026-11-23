@@ -235,23 +235,26 @@ impl BtreeTrans<'_> {
                                                 idx: PathIdx, level: usize) {
         let fs = self.fs();
 
-        let (reinit_iter, new_bset) = {
+        /*
+         * init_next() works on the node alone, and a reinit on the paths and
+         * updates at it alone: one reinit, after both, does for two.
+         */
+        let reinit_iter = {
             let mut b = pu.paths[idx].locked_btree_node_mut(level).expect("a node to prep for write, write locked");
-            let reinit_iter = unlikely(b.flags.just_written()) && post_write_cleanup(fs, &mut b);
+            let mut reinit_iter = unlikely(b.flags.just_written()) && post_write_cleanup(fs, &mut b);
 
             /*
              * If the last bset has been written, or if it's gotten too big - start
              * a new bset to insert into:
              */
-            (reinit_iter, b.want_new_bset(b.contents(), fs).is_some())
+            if b.want_new_bset(b.contents(), fs).is_some() {
+                reinit_iter |= init_next(self, &mut b);
+            }
+            reinit_iter
         };
 
         if reinit_iter {
             self.node_reinit_iter(t, pu, idx, level);
-        }
-
-        if new_bset {
-            init_next(t, pu, idx, level);
         }
     }
 
