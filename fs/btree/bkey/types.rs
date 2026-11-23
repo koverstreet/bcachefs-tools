@@ -872,7 +872,7 @@ macro_rules! bkey_family_conv {
             ['a]      [&'a mut TransBkey<'_, '_,] => [BkeyS<'a,]:   |k| BkeyS::<V>::from(k).cast();
             ['a]      [&'a TransBkey<'_, '_,]    => [&'a BkeyI<]:   |k| &*cast_unsized(k.as_ptr());
             ['a]      [&'a mut TransBkey<'_, '_,] => [&'a mut BkeyI<]:
-                |k| &mut *cast_unsized_mut(k.as_ptr()););
+                |k| &mut *cast_unsized_mut(k.as_mut_ptr()););
     };
 
     // each form, up to its V: Form<.., V>

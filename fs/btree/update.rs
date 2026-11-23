@@ -646,7 +646,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             bch2_cut_front_s(fs, new.k.p, BkeyS::from(&mut update));
 
-            self.update_by_path(&mut self.trans().paths(), iter.path, QueuedKey::from(&update),
+            self.update_by_path(&mut self.trans().paths(), iter.path, QueuedKey::from(update),
                                 UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | flags, crate::ret_ip!());
         }
 
@@ -834,7 +834,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             path_idx = iter.key_cache_path.get();
         }
 
-        let i = self.update_by_path(&mut paths, path_idx, QueuedKey::from(&key), flags, ip);
+        let i = self.update_by_path(&mut paths, path_idx, QueuedKey::from(key), flags, ip);
 
         /*
          * If a key is present in the key cache, it must also exist in the
@@ -845,7 +845,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
          */
         let u = &paths.updates()[i];
         if u.bits.cached() && (u.old_btree_u64s == 0 ||
-                               key.k().key_type().is_deleted() ||
+                               u.key().k.key_type().is_deleted() ||
                                paths[path_idx].locked_key_cached().expect("a cached update's key cache entry")
                                    .immediate_flush()) {
             drop(paths);
@@ -1060,7 +1060,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let u = paths.update_mut(i);
         let old = u.key().as_bytes();
         new.as_mut_u64s().as_mut_bytes()[..old.len()].copy_from_slice(old);
-        u.set_key(QueuedKey::from(&new));
+        let new = QueuedKey::from(new);
+        u.set_key(new);
         Ok(new.as_ptr())
     }
 
