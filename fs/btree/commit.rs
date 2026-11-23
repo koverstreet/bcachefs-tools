@@ -216,13 +216,13 @@ impl BtreeTrans<'_> {
                 }
             };
 
-            let mut ck = paths.intent_locked_key_cached(path);
-            let mut ck = ck.write_locked();
+            let PathsUpdates { paths, updates } = paths.paths_and_updates();
+            let mut ck = paths[path].locked_key_cached_mut().expect("a cached update's entry, write locked");
             let old_k = ck.contents().key();
             new_k.set_key(old_k);
             let (old_v, new_v) = ((&raw const old_k.v).cast(), (&raw const new_k.v).cast());
 
-            for i in paths.paths_and_updates().updates.iter_mut() {
+            for i in updates.iter_mut() {
                 if ptr::eq(i.old_v, old_v) {
                     i.old_v = new_v;
                 }

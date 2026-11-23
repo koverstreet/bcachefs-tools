@@ -194,7 +194,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut paths = trans.paths();
 
         trans.node_lock_write_nofail(&mut paths, iter.path, level);
-        paths.intent_locked_node(iter.path, level).write_locked().set_key(key.as_sc());
+        paths[iter.path].locked_btree_node_mut(level).expect("a node write locked for its key").set_key(key.as_sc());
         trans.node_unlock_write(&mut paths, iter.path, level);
     }
 }

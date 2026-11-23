@@ -98,8 +98,7 @@ fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     });
 
     trans.node_lock_write(paths, idx, level)?;
-    let mut b = paths.intent_locked_node(idx, level);
-    let mut b = b.write_locked();
+    let mut b = paths[idx].locked_btree_node_mut(level).expect("a node to repair, write locked");
     b.contents_mut().data_mut().min_key = new_min;
 
     let ret = journal_overlay::insert(&mut fs.not_rw(), Btree(b.c.btree_id.get().into()), level as u32 + 1, &*new);
@@ -128,8 +127,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     });
 
     trans.node_lock_write(paths, idx, level)?;
-    let mut b = paths.intent_locked_node(idx, level);
-    let mut b = b.write_locked();
+    let mut b = paths[idx].locked_btree_node_mut(level).expect("a node to repair, write locked");
 
     let mut not_rw = fs.not_rw();
     let ret = journal_overlay::delete(&mut not_rw, btree, level as u32 + 1, b.key().k.p).and_then(|()| {

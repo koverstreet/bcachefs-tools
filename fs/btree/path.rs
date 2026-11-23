@@ -296,27 +296,12 @@ impl<'t> Paths<'t> {
         })
     }
 
-    /// Path @idx's key cache entry, if it's a cached path holding it locked:
-    /// for the attempt, as held_btree_node()'s is.
-    pub(crate) fn held_key_cached(&self, idx: PathIdx) -> Option<LockedNode<'t, c::bkey_cached>> {
-        let ck = self[idx].locked_key_cached()?;
-        Some(unsafe { LockedNode::new(&*ptr::from_ref(ck.node())) })
-    }
-
     /// held_btree_node(), of a node the path holds for intent.
     pub(crate) fn intent_locked_node(&self, idx: PathIdx, level: usize) -> LockedNode<'t, BtreeNode, Intent> {
         assert!(self[idx].locked_type_nowrite(level) == BTREE_NODE_INTENT_LOCKED,
                 "path {idx} doesn't hold level {level} for intent");
         let b = self.held_btree_node(idx, level).expect("an intent locked path's node is a btree node");
         LockedNode { node: b.node(), _mode: PhantomData }
-    }
-
-    /// held_key_cached(), of an entry the path holds for intent.
-    pub(crate) fn intent_locked_key_cached(&self, idx: PathIdx) -> LockedNode<'t, c::bkey_cached, Intent> {
-        assert!(self[idx].locked_type_nowrite(0) == BTREE_NODE_INTENT_LOCKED,
-                "path {idx} doesn't hold its key cache entry for intent");
-        let ck = self.held_key_cached(idx).expect("an intent locked cached path's entry");
-        LockedNode { node: ck.node(), _mode: PhantomData }
     }
 }
 
@@ -1210,6 +1195,29 @@ impl BtreePath {
     #[inline(always)]
     pub(crate) fn locked_key_cached(&self) -> Option<LockedNode<'_, c::bkey_cached>> {
         self.downcast::<c::bkey_cached>()?.locked_node(0)
+    }
+
+    /// The level's node, to write: a btree node the path holds for intent,
+    /// that the transaction holds write locked - through this path or another
+    /// at the node.
+    #[inline(always)]
+    pub(crate) fn locked_btree_node_mut(&mut self, level: usize) -> Option<LockedNode<'_, BtreeNode, Write>> {
+        self.locked_node_mut(level)
+    }
+
+    /// Its key cache entry, to write: locked_btree_node_mut()'s, of a cached
+    /// path.
+    #[inline(always)]
+    pub(crate) fn locked_key_cached_mut(&mut self) -> Option<LockedNode<'_, c::bkey_cached, Write>> {
+        self.locked_node_mut(0)
+    }
+
+    #[inline(always)]
+    fn locked_node_mut<T: PathNode>(&mut self, level: usize) -> Option<LockedNode<'_, T, Write>> {
+        let node = self.downcast::<T>()?.locked_node(level)?.node();
+        (self.locked_type_nowrite(level) == BTREE_NODE_INTENT_LOCKED &&
+         six_lock_write_held(node.common().lock.six()))
+            .then(|| LockedNode { node, _mode: PhantomData })
     }
 
     /// The level's locked node, and its iterator to move: the node isn't the
