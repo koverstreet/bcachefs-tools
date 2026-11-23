@@ -105,7 +105,7 @@ use crate::btree::bkey::{bkey_val_to_text, val_to_text, BkeyI, BkeySC, BkeyVal, 
 use crate::data_structures::dst_room::DstRoom;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::bset::BsetStats;
-use crate::btree::node::BtreeNode;
+use crate::btree::node::{BtreeNode, NodeContents};
 use crate::util::alloc::{Box, KVmalloc};
 use crate::util::place::{Contained, PlacedDrop};
 use crate::os::shrinker::{Shrink, Shrinker};
@@ -396,8 +396,7 @@ pub fn bch2_btree_pos_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
 }
 
 #[cold]
-pub fn btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
-    let contents = unsafe { b.contents() };
+pub fn btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode, contents: &NodeContents) {
     let mut stats = BsetStats::default();
     b.keys(contents).btree_keys_stats(&mut stats);
 

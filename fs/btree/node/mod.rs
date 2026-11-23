@@ -16,6 +16,7 @@ pub mod sort;
 
 use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::cache::NodeBufs;
+use crate::btree::path::LockedNode;
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::data_structures::dst_room::DstRoom;
@@ -267,13 +268,21 @@ impl PublishedKeyWriter {
     }
 }
 
-impl<'b, 'f> BtreeNode {
-    pub fn to_text(&'b self, fs: &'f Fs) -> BtreeNodeToText<'b, 'f> {
-        BtreeNodeToText { b: self, fs }
+impl<M> LockedNode<'_, BtreeNode, M> {
+    pub fn to_text<'f>(&self, fs: &'f Fs) -> BtreeNodeToText<'_, 'f> {
+        let b = self.held();
+        b.node().to_text(b.contents(), fs)
     }
 
-    pub fn ondisk_to_text(&'b self, fs: &'f Fs) -> BtreeNodeOndiskToText<'b, 'f> {
-        BtreeNodeOndiskToText { b: self, fs }
+    pub fn ondisk_to_text<'f>(&self, fs: &'f Fs) -> BtreeNodeOndiskToText<'_, 'f> {
+        let b = self.held();
+        BtreeNodeOndiskToText { b: b.node(), contents: b.contents(), fs }
+    }
+}
+
+impl<'b, 'f> BtreeNode {
+    pub fn to_text(&'b self, contents: &'b NodeContents, fs: &'f Fs) -> BtreeNodeToText<'b, 'f> {
+        BtreeNodeToText { b: self, contents, fs }
     }
 
     pub fn pos_to_text(&'b self, fs: &'f Fs) -> BtreeNodePosToText<'b, 'f> {
@@ -572,25 +581,27 @@ impl BtreeNode {
 }
 
 pub struct BtreeNodeToText<'b, 'f> {
-    b:  &'b BtreeNode,
-    fs: &'f Fs,
+    b:        &'b BtreeNode,
+    contents: &'b NodeContents,
+    fs:       &'f Fs,
 }
 
 impl ToText for BtreeNodeToText<'_, '_> {
     fn to_text(&self, out: &mut Printbuf) {
-        crate::btree::cache::btree_node_to_text(out, self.fs, self.b)
+        crate::btree::cache::btree_node_to_text(out, self.fs, self.b, self.contents)
     }
 }
 crate::display_via_to_text!(BtreeNodeToText<'_, '_>);
 
 pub struct BtreeNodeOndiskToText<'b, 'f> {
-    b:  &'b BtreeNode,
-    fs: &'f Fs,
+    b:        &'b BtreeNode,
+    contents: &'b NodeContents,
+    fs:       &'f Fs,
 }
 
 impl ToText for BtreeNodeOndiskToText<'_, '_> {
     fn to_text(&self, out: &mut Printbuf) {
-        crate::btree::read::node_ondisk_to_text(out, self.fs, self.b)
+        crate::btree::read::node_ondisk_to_text(out, self.fs, self.b, self.contents)
     }
 }
 crate::display_via_to_text!(BtreeNodeOndiskToText<'_, '_>);

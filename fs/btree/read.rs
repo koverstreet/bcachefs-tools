@@ -497,8 +497,7 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
 }
 
 #[cold]
-pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
-    let contents = unsafe { b.contents() };
+pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode, contents: &NodeContents) {
     let k = BkeySC::from(b.key(contents));
 
     let dev = match k.pick_read_device(fs, None, 0, c::ReadFlags::empty()) {

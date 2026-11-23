@@ -159,7 +159,7 @@ impl KeyIter {
         let b = keys.node();
 
         fs.event_inc_trace(events::bkey_pack_pos_fail, |out| {
-            prt!(out, "{}", b.to_text(fs));
+            prt!(out, "{}", b.to_text(keys.contents(), fs));
             prt!(out, "failed to pack {search}");
         });
 
