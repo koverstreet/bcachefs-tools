@@ -514,8 +514,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
 
             trans.node_unlock_write(paths, idx, level);
 
-            let b = paths.btree_node_hold(idx, level).expect("the node, locked by node_locked_do()");
-            node_write_if_need(&trans, paths, b);
+            node_write_if_need(&trans, paths, idx, level);
             Ok(())
         });
     }
@@ -532,8 +531,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
          * write kicked.
          */
         let _ = trans.node_locked_do(&b.c, SIX_LOCK_read, 0, |paths, idx| {
-            let b = paths.btree_node_hold(idx, b.c.level.get().into()).expect("the node, locked by node_locked_do()");
-            node_write_if_need(&trans, paths, b);
+            node_write_if_need(&trans, paths, idx, b.c.level.get().into());
             Ok(())
         });
     }

@@ -284,24 +284,20 @@ impl<'t> Paths<'t> {
         Some(unsafe { LockedNode::new(&*ptr::from_ref(b.node())) })
     }
 
-    /// held_btree_node(), as the level holds it: a write lock's had through
-    /// the Intent, by write_locked().
-    pub(crate) fn btree_node_hold(&self, idx: PathIdx, level: usize) -> Option<NodeHold<'t, BtreeNode>> {
-        let node = self.held_btree_node(idx, level)?.node();
-        Some(match self[idx].locked_type(level) {
-            BTREE_NODE_READ_LOCKED   => NodeHold::Read(LockedNode { node, _mode: PhantomData }),
-            BTREE_NODE_INTENT_LOCKED |
-            BTREE_NODE_WRITE_LOCKED  => NodeHold::Intent(LockedNode { node, _mode: PhantomData }),
-            BTREE_NODE_UNLOCKED      => unreachable!("held_btree_node() of an unlocked level"),
-        })
-    }
-
     /// held_btree_node(), of a node the path holds for intent.
     pub(crate) fn intent_locked_node(&self, idx: PathIdx, level: usize) -> LockedNode<'t, BtreeNode, Intent> {
         assert!(self[idx].locked_type_nowrite(level) == BTREE_NODE_INTENT_LOCKED,
                 "path {idx} doesn't hold level {level} for intent");
         let b = self.held_btree_node(idx, level).expect("an intent locked path's node is a btree node");
         LockedNode { node: b.node(), _mode: PhantomData }
+    }
+
+    /// Path @idx's node at @level, which it holds for intent, write locked too
+    /// if no one holds it for read: for as long as the guard lives.
+    pub(crate) fn try_write_node(&mut self, idx: PathIdx, level: usize) -> Option<WriteLocked<'_, 't, BtreeNode>> {
+        let node = self.intent_locked_node(idx, level).node();
+        six_trylock_ip(node.c.lock.six(), SixLockType::SIX_LOCK_write, crate::ret_ip!())
+            .then(|| WriteLocked { node: LockedNode { node, _mode: PhantomData }, paths: self })
     }
 }
 
@@ -1697,19 +1693,11 @@ impl PathNodeContents for c::bkey_cached {
     }
 }
 
-/// How a LockedNode's node is held: Held any way, its contents had by &; Read
-/// or Intent, as a path level holds it; or for Write, its contents by &mut.
+/// How a LockedNode's node is held: Held any way, its contents had by &;
+/// Intent, as a path level holds it; or for Write, its contents by &mut.
 pub struct Held;
-pub struct Read;
 pub struct Intent;
 pub struct Write;
-
-/// A path level's node, as the level holds it: SixHold, borrowed from the
-/// path.
-pub enum NodeHold<'p, T: PathNode> {
-    Read(LockedNode<'p, T, Read>),
-    Intent(LockedNode<'p, T, Intent>),
-}
 
 /// A node a path has locked, borrowed from the attempt as a key is: good until
 /// the attempt's next unlock or error, which nothing checks (see TransRef).
@@ -1768,47 +1756,6 @@ impl<'p, T: PathNode> LockedNode<'p, T, Write> {
     }
 }
 
-impl<T: PathNode> LockedNode<'_, T, Read> {
-    /// Intent, if no one else holds it, for as long as the guard lives: read
-    /// again after.
-    pub fn try_upgrade(&mut self) -> Option<Upgraded<'_, T>> {
-        let lock = &self.node.common().lock;
-        match unsafe { SixHold::from_raw(lock, SixLockType::SIX_LOCK_read) }.try_upgrade() {
-            Ok(intent) => {
-                intent.into_raw();
-                Some(Upgraded(LockedNode { node: self.node, _mode: PhantomData }))
-            }
-            Err(read) => {
-                read.into_raw();
-                None
-            }
-        }
-    }
-}
-
-/// A node held for read, upgraded: back to read as this is dropped.
-pub struct Upgraded<'a, T: PathNode>(LockedNode<'a, T, Intent>);
-
-impl<'a, T: PathNode> Deref for Upgraded<'a, T> {
-    type Target = LockedNode<'a, T, Intent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T: PathNode> DerefMut for Upgraded<'_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<T: PathNode> Drop for Upgraded<'_, T> {
-    fn drop(&mut self) {
-        unsafe { SixHold::from_raw(&self.0.node.common().lock, SixLockType::SIX_LOCK_intent) }.downgrade().into_raw();
-    }
-}
-
 impl<T: PathNode> LockedNode<'_, T, Intent> {
     /// Write, as the transaction holds it write locked too - node_lock_write()'s,
     /// through this path or another at the node: an update to a leaf another
@@ -1816,12 +1763,6 @@ impl<T: PathNode> LockedNode<'_, T, Intent> {
     pub fn write_locked(&mut self) -> LockedNode<'_, T, Write> {
         assert!(six_lock_write_held(self.node.common().lock.six()), "a node held for intent isn't write locked");
         LockedNode { node: self.node, _mode: PhantomData }
-    }
-
-    /// Write too, if no one holds it for read, for as long as the guard lives.
-    pub fn try_write<'a, 't>(&'a mut self, paths: &'a mut Paths<'t>) -> Option<WriteLocked<'a, 't, T>> {
-        six_trylock_ip(self.node.common().lock.six(), SixLockType::SIX_LOCK_write, crate::ret_ip!())
-            .then(|| WriteLocked { node: LockedNode { node: self.node, _mode: PhantomData }, paths })
     }
 }
 

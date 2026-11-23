@@ -10,7 +10,8 @@ use crate::btree::node::sort::{
 };
 use crate::btree::node::bset::MAX_BSETS;
 use crate::btree::node::{BtreeNode, NodeContents, NodeKey};
-use crate::btree::path::{Intent, LockedNode, NodeHold, Paths, PathsUpdates, Write};
+use crate::btree::locking::BtreeNodeLockedType::BTREE_NODE_READ_LOCKED;
+use crate::btree::path::{LockedNode, PathIdx, Paths, PathsUpdates, Write};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
 use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
@@ -641,36 +642,39 @@ pub fn post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> 
 }
 
 /// btree_node_write_if_need()
-pub(crate) fn node_write_if_need(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: NodeHold<'_, BtreeNode>) {
-    node_write_trans(trans, paths, b, BtreeWriteType::initial, BtreeWriteFlags::only_if_need)
+pub(crate) fn node_write_if_need(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
+    node_write_trans(trans, paths, idx, level, BtreeWriteType::initial, BtreeWriteFlags::only_if_need)
 }
 
-pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: NodeHold<'_, BtreeNode>,
+/// Path @idx's node at @level written. Held for read, the path's level is
+/// upgraded to intent for it, if it can be, and downgraded after: the path
+/// says what's held throughout.
+pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
                                ty: BtreeWriteType, flags: BtreeWriteFlags) {
-    match b {
-        NodeHold::Read(mut b) => {
-            if let Some(mut b) = b.try_upgrade() {
-                return node_write_intent(trans, paths, &mut b, ty, flags);
-            }
-            node_write(trans.fs(), b.held(), ty, flags);
-        }
-        NodeHold::Intent(mut b) => {
-            assert!(!six_lock_write_held(b.c.lock.six()), "node_write_trans() of a node held for write: node_write_locked()");
-            node_write_intent(trans, paths, &mut b, ty, flags)
-        }
-    }
-}
-
-fn node_write_intent(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &mut LockedNode<'_, BtreeNode, Intent>,
-                     ty: BtreeWriteType, flags: BtreeWriteFlags) {
     let fs = trans.fs();
-    node_write(fs, b.held(), ty, flags);
+    let read = paths[idx].locked_type(level) == BTREE_NODE_READ_LOCKED;
+
+    if read && !paths[idx].try_upgrade_level(level) {
+        node_write(fs, paths[idx].locked_btree_node(level).expect("a node to write, held by its path"), ty, flags);
+        return;
+    }
+
+    let just_written = {
+        let b = paths[idx].locked_btree_node(level).expect("a node to write, held by its path");
+        assert!(!six_lock_write_held(b.c.lock.six()), "node_write_trans() of a node held for write: node_write_locked()");
+        node_write(fs, b, ty, flags);
+        b.flags.just_written()
+    };
 
     /* don't cycle lock unnecessarily: */
-    if b.flags.just_written() {
-        if let Some(mut w) = b.try_write(paths) {
+    if just_written {
+        if let Some(mut w) = paths.try_write_node(idx, level) {
             post_write_cleanup(fs, &mut w);
         }
+    }
+
+    if read {
+        paths[idx].downgrade_level(level);
     }
 }
 

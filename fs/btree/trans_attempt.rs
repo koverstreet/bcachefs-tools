@@ -926,10 +926,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
 
         let idx = iter.raw.path;
-        let mut paths = trans.paths();
-        let b = paths.btree_node_hold(idx, level as usize).expect("a node, peeked");
-
-        node_write_trans(trans, &mut paths, b, BtreeWriteType::interior, BtreeWriteFlags::empty());
+        node_write_trans(trans, &mut trans.paths(), idx, level as usize, BtreeWriteType::interior, BtreeWriteFlags::empty());
         Ok(())
     }
 
