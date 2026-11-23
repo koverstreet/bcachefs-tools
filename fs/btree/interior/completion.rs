@@ -7,14 +7,14 @@
 
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
-use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut};
+use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
 use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
-                         UpdateTriggerFlags, Watermark};
+                         TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::LockedNode;
-use crate::btree::trigger::{key_trigger, TriggerOp};
+use crate::btree::trigger::{deleted_room, key_trigger, TriggerOp};
 use crate::btree::write::{node_write_if_need, node_write_locked, BtreeWriteFlags};
 use crate::cstructs::c::BtreeWriteType;
 use crate::c;
@@ -195,11 +195,9 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
     for i in u.owned.borrow().old_nodes.iter() {
         let level = u32::from(i.level) + 1;
         let old = BkeySC::from(&*i.key);
-        let mut deleted = BkeyI::<c::Deleted>::at(old.k.p);
-        let deleted_u64s = deleted.k.u64s.into();
-        let mut op = TriggerOp::new(btree, level, old, BkeyS::from(deleted.as_mut()),
-                                    UpdateTriggerFlags::OVERWRITE | UpdateTriggerFlags::TRANSACTIONAL,
-                                    deleted_u64s);
+        let mut deleted = deleted_room(old.k.p);
+        let mut op = TriggerOp::new(btree, level, old, TransBkey::from_room(&mut deleted),
+                                    UpdateTriggerFlags::OVERWRITE | UpdateTriggerFlags::TRANSACTIONAL);
         key_trigger(t, &mut op)?;
 
         t.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8, &*i.key)?;
@@ -242,10 +240,9 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
             }
         }
 
-        let buf_u64s = k.buf_u64s();
         let deleted = BkeyI::<c::Deleted>::at(k.k().p);
-        let mut op = TriggerOp::new(btree, level + 1, BkeySC::from(deleted.as_ref()), k.as_s(),
-                                    UpdateTriggerFlags::INSERT | UpdateTriggerFlags::TRANSACTIONAL, buf_u64s);
+        let mut op = TriggerOp::new(btree, level + 1, BkeySC::from(deleted.as_ref()), k.reborrow(),
+                                    UpdateTriggerFlags::INSERT | UpdateTriggerFlags::TRANSACTIONAL);
         key_trigger(t, &mut op)?;
         i.key.set_key(k.as_sc());
 

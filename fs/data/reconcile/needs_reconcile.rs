@@ -401,9 +401,9 @@ const SET_NEEDS_RECONCILE_ROOM: u32 = 1 + c::BCH_REPLICAS_MAX;
 /// fragments don't reserve it - @op's @new repointed, if the key was grown.
 /// Its io options are looked up each time:
 /// bch2_extent_trigger_set_needs_reconcile().
-pub(crate) fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+pub(crate) fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     let opts = get_io_opts(t, None, BkeySC::from(&op.new).untyped())?;
-    let needed = u32::from(op.new.k.u64s) + SET_NEEDS_RECONCILE_ROOM;
+    let needed = u32::from(op.new.k().u64s) + SET_NEEDS_RECONCILE_ROOM;
     op.new_with_room(t, needed)?
         .set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)
 }

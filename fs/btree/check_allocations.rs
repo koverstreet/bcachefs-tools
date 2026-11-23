@@ -64,9 +64,7 @@ fn gc_mark_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, iter: &BtreeI
     let deleted = BkeyI::<c::Deleted>::at(k.k.p);
     let old = BkeySC::from(deleted.as_ref());
     let mut new = t.bkey_reassemble_room(k, 0)?;
-    let buf_u64s = new.buf_u64s();
-    let mut op = TriggerOp::new(btree, level, old, new.as_s(), UpdateTriggerFlags::GC | UpdateTriggerFlags::INSERT,
-                                buf_u64s);
+    let mut op = TriggerOp::new(btree, level, old, new.reborrow(), UpdateTriggerFlags::GC | UpdateTriggerFlags::INSERT);
     key_trigger(t, &mut op)
 }
 

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
+use crate::btree::bkey::{BkeyI, BkeySC, BKEY_U64S};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::journal_overlay;
 use crate::btree::path::Paths;
 use crate::btree::update::peek_slot_exact;
 use crate::c;
+use crate::data_structures::dst_room::DstRoom;
 use crate::errcode::BchError;
-use crate::format::{Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType};
 use crate::prt;
 use crate::util::Printbuf;
 use core::marker::PhantomData;
@@ -23,45 +24,48 @@ use core::marker::PhantomData;
 /// bch2_trigger_get_mutable_new() moves the queued update to a bigger buffer
 /// mid-commit, and refuses in the atomic phase. That isn't necessarily safe,
 /// and a trigger shouldn't have to.
-pub struct TriggerOp<'a> {
+pub struct TriggerOp<'a, 't> {
     pub btree: Btree,
     pub level: u32,
     pub old:   BkeySC<'a>,
-    pub new:   BkeyS<'a>,
+    /// The key going in, and its room.
+    pub new:   TransBkey<'a, 't>,
     pub flags: UpdateTriggerFlags,
-    /// The room @new has
-    new_buf_u64s: u32,
 }
 
-impl<'a> TriggerOp<'a> {
-    /// @old overwritten by @new, at @level of @btree, @new with @new_buf_u64s
-    /// of room to grow into.
-    pub(crate) fn new(btree: Btree, level: u32, old: BkeySC<'a>, new: BkeyS<'a>, flags: UpdateTriggerFlags,
-                      new_buf_u64s: u32) -> Self {
-        TriggerOp { btree, level, old, new, flags, new_buf_u64s }
+impl<'a, 't> TriggerOp<'a, 't> {
+    /// @old overwritten by @new, at @level of @btree.
+    pub(crate) fn new(btree: Btree, level: u32, old: BkeySC<'a>, new: TransBkey<'a, 't>,
+                      flags: UpdateTriggerFlags) -> Self {
+        TriggerOp { btree, level, old, new, flags }
     }
 
-    /// @new with room for @needed_u64s, to edit: the queued update moved to a
-    /// bigger buffer if it hasn't the room - bch2_trigger_get_mutable_new() -
-    /// and @new repointed there. An insert's, outside the atomic phase.
-    ///
-    /// The key borrows the op: it can be @new itself.
-    pub fn new_with_room<'s, 't>(&'s mut self, t: &TransAttempt<'s, 't>, needed_u64s: u32)
-        -> Result<TransBkey<'s, 't>, BchError>
+    /// @new with room for @needed_u64s, to edit: in place, if it has the
+    /// room. An insert's.
+    pub fn new_with_room(&mut self, t: &TransAttempt<'_, '_>, needed_u64s: u32)
+        -> Result<TransBkey<'_, 't>, BchError>
     {
         assert!(self.flags.contains(UpdateTriggerFlags::INSERT), "growing the key of a trigger that isn't an insert's");
 
-        if needed_u64s > self.new_buf_u64s {
-            assert!(!self.flags.contains(UpdateTriggerFlags::ATOMIC), "growing a trigger's key in the atomic phase");
-
-            let k = unsafe { &mut *t.update_grow(self.btree, self.level, self.new.k.p, needed_u64s)? };
-            self.new = BkeyS { k: &mut k.k, v: (&raw mut k.v).cast(), val: PhantomData };
-            self.new_buf_u64s = needed_u64s;
+        if needed_u64s > self.new.buf_u64s() {
+            self.grow(t, needed_u64s)?;
         }
+        Ok(self.new.reborrow())
+    }
 
-        // SAFETY: @new, @new_buf_u64s long, the trigger's to edit while the
-        // attempt runs
-        Ok(unsafe { TransBkey::from_raw_room(t, core::ptr::from_mut(self.new.k).cast(), self.new_buf_u64s) })
+    /// The queued update moved to a buffer with @needed_u64s of room -
+    /// bch2_trigger_get_mutable_new() - and @new repointed there. Not in the
+    /// atomic phase.
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self, t: &TransAttempt<'_, '_>, needed_u64s: u32) -> Result<(), BchError> {
+        assert!(!self.flags.contains(UpdateTriggerFlags::ATOMIC), "growing a trigger's key in the atomic phase");
+
+        let k = t.update_grow(self.btree, self.level, self.new.k().p, needed_u64s)?;
+        // SAFETY: the update's key now, @needed_u64s long, the trigger's to
+        // edit while the attempt runs
+        self.new = unsafe { TransBkey::from_raw_room(t, k, needed_u64s) };
+        Ok(())
     }
 
     /// Run @f on the key going out, as an overwrite, then on the key coming
@@ -74,7 +78,7 @@ impl<'a> TriggerOp<'a> {
         if !self.old.k.key_type().is_deleted() {
             f(self.old, self.flags - UpdateTriggerFlags::INSERT)?;
         }
-        if !self.new.k.key_type().is_deleted() {
+        if !self.new.k().key_type().is_deleted() {
             f(BkeySC::from(&self.new).untyped(), self.flags - UpdateTriggerFlags::OVERWRITE)?;
         }
         Ok(())
@@ -84,7 +88,7 @@ impl<'a> TriggerOp<'a> {
 /// A key type's trigger - a static: types share a trigger, and an update from
 /// one to another of them runs it once, with both keys, so it's compared by
 /// address, which a static's is unique to it and a fn's isn't.
-pub struct Trigger(pub fn(&TransAttempt<'_, '_>, &mut TriggerOp<'_>) -> Result<(), BchError>);
+pub struct Trigger(pub fn(&TransAttempt<'_, '_>, &mut TriggerOp<'_, '_>) -> Result<(), BchError>);
 
 /// The same trigger - or none, both.
 fn same_trigger(a: Option<&'static Trigger>, b: Option<&'static Trigger>) -> bool {
@@ -94,7 +98,7 @@ fn same_trigger(a: Option<&'static Trigger>, b: Option<&'static Trigger>) -> boo
     }
 }
 
-fn run_trigger(t: &TransAttempt<'_, '_>, trigger: Option<&'static Trigger>, op: &mut TriggerOp<'_>)
+fn run_trigger(t: &TransAttempt<'_, '_>, trigger: Option<&'static Trigger>, op: &mut TriggerOp<'_, '_>)
     -> Result<(), BchError>
 {
     trigger.map_or(Ok(()), |trigger| (trigger.0)(t, op))
@@ -102,9 +106,9 @@ fn run_trigger(t: &TransAttempt<'_, '_>, trigger: Option<&'static Trigger>, op: 
 
 /// bch2_key_trigger(): @op's key's trigger - the old key's type's, the new
 /// key's if it's a deletion - then its snapshot's count of keys.
-pub(crate) fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+pub(crate) fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     let ty = match op.old.k.key_type() {
-        BkeyType::deleted => op.new.k.key_type(),
+        BkeyType::deleted => op.new.k().key_type(),
         ty => ty,
     };
     run_trigger(t, ty.ops().trigger, op)?;
@@ -154,17 +158,25 @@ pub(crate) fn verify_update_old_key(t: &TransAttempt<'_, '_>, paths: &Paths<'_>,
 /// out - a trigger can queue updates, and move the entry.
 ///
 /// # Safety
-/// @i is queued: its key is the triggers' to edit while the commit runs, and
-/// may be one the update's caller lent.
-unsafe fn update_op<'a>(i: &c::btree_insert_entry, old_k: &'a c::bkey, flags: UpdateTriggerFlags) -> TriggerOp<'a> {
+/// @i is queued: its key is the triggers' to edit while the commit runs.
+unsafe fn update_op<'a, 't>(t: &TransAttempt<'_, 't>, i: &c::btree_insert_entry, old_k: &'a c::bkey,
+                            flags: UpdateTriggerFlags) -> TriggerOp<'a, 't> {
     TriggerOp {
-        btree:        i.bits.btree_id(),
-        level:        i.bits.level().into(),
-        old:          BkeySC { k: old_k, v: i.old_v, iter: PhantomData, val: PhantomData },
-        new:          BkeyS::from(unsafe { &mut *BkeyI::from_raw_mut(i.key_ptr()) }),
+        btree: i.bits.btree_id(),
+        level: i.bits.level().into(),
+        old:   BkeySC { k: old_k, v: i.old_v, iter: PhantomData, val: PhantomData },
+        new:   unsafe { TransBkey::from_raw_room(t, i.key_ptr(), i.key_buf_u64s()) },
         flags,
-        new_buf_u64s: i.key_buf_u64s(),
     }
+}
+
+/// A deletion at @p: an op's new key, where it has none.
+pub(crate) fn deleted_room(p: Bpos) -> DstRoom<BkeyI, [u64; BKEY_U64S]> {
+    let mut room = DstRoom::<BkeyI, [u64; BKEY_U64S]>::zeroed();
+    let k = room.head_mut_rest().0;
+    *k = c::bkey::new();
+    k.p = p;
+    room
 }
 
 /// run_one_mem_trigger(): @i's triggers in the atomic phase, or gc's, with
@@ -177,11 +189,11 @@ fn run_one_mem_trigger(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &c::btree
     verify_update_old_key(t, paths, i);
 
     let p = i.key().k.p;
-    let (no_old, mut no_new) = (BkeyI::<c::Deleted>::at(p), BkeyI::<c::Deleted>::at(p));
+    let (no_old, mut no_new) = (BkeyI::<c::Deleted>::at(p), deleted_room(p));
     let old_k = i.old_k;
-    let mut op = unsafe { update_op(i, &old_k, flags) };
+    let mut op = unsafe { update_op(t, i, &old_k, flags) };
     let old = op.old;
-    let (old_ops, new_ops) = (old.k.key_type().ops(), op.new.k.key_type().ops());
+    let (old_ops, new_ops) = (old.k.key_type().ops(), op.new.k().key_type().ops());
 
     // a net count, old to new: before the split below rewrites @op
     if op.btree.has_snapshots() {
@@ -200,10 +212,9 @@ fn run_one_mem_trigger(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &c::btree
     }
 
     if old_ops.trigger.is_some() {
-        op.flags        = flags | UpdateTriggerFlags::OVERWRITE;
-        op.old          = old;
-        op.new          = BkeyS::from(no_new.as_mut());
-        op.new_buf_u64s = 0;
+        op.flags = flags | UpdateTriggerFlags::OVERWRITE;
+        op.old   = old;
+        op.new   = TransBkey::from_room(&mut no_new);
         run_trigger(t, old_ops.trigger, &mut op)?;
     }
     Ok(())
@@ -217,11 +228,11 @@ fn run_one_trans_trigger(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: u
     verify_update_old_key(t, paths, &paths.updates()[idx]);
 
     let i = paths.update_mut(idx);
-    let mut deleted = BkeyI::<c::Deleted>::at(i.key().k.p);
+    let mut deleted = deleted_room(i.key().k.p);
     let old_k = i.old_k;
     let mut flags = UpdateTriggerFlags::from_bits_retain(i.flags) | UpdateTriggerFlags::TRANSACTIONAL;
-    let mut op = unsafe { update_op(i, &old_k, flags) };
-    let (old_ops, new_ops) = (old_k.key_type().ops(), op.new.k.key_type().ops());
+    let mut op = unsafe { update_op(t, i, &old_k, flags) };
+    let (old_ops, new_ops) = (old_k.key_type().ops(), op.new.k().key_type().ops());
 
     let mut trigger = old_ops.trigger;
     if !i.bits.insert_trigger_run() && !i.bits.overwrite_trigger_run() &&
@@ -232,12 +243,11 @@ fn run_one_trans_trigger(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: u
     } else if !i.bits.overwrite_trigger_run() {
         i.bits.set_overwrite_trigger_run(true);
         flags |= UpdateTriggerFlags::OVERWRITE;
-        op.new = BkeyS::from(deleted.as_mut());
-        op.new_buf_u64s = 0;
+        op.new = TransBkey::from_room(&mut deleted);
     } else if !i.bits.insert_trigger_run() {
         i.bits.set_insert_trigger_run(true);
         flags |= UpdateTriggerFlags::INSERT;
-        op.old = BkeySC::from(deleted.as_ref());
+        op.old = BkeySC::from(&*deleted);
         trigger = new_ops.trigger;
     }
     op.flags = flags;
