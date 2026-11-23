@@ -436,7 +436,10 @@ impl Dev {
         if rw == READ {
             self.fs().devs_online.clear(self.dev_idx.into());
         }
+        self.io_ref_drain(rw);
+    }
 
+    fn io_ref_drain(&self, rw: usize) {
         if !self.io_ref(rw).is_zero() {
             self.io_ref(rw).stop();
             self.io_ref(rw).wait();
@@ -596,7 +599,12 @@ impl core::ops::Deref for NewDev {
 impl Drop for NewDev {
     fn drop(&mut self) {
         if let Some(ca) = self.0.take() {
-            dev_free(into_ref(ca));
+            let ca = into_ref(ca);
+            /* attach_bdev()'s undone - not by io_ref_stop(): its dev_idx
+             * isn't its own till attach(), and devs_online's bit is another's */
+            ca.io_ref_drain(READ);
+            ca.sb_close();
+            dev_free(ca);
         }
     }
 }
