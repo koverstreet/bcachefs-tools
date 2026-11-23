@@ -7,6 +7,8 @@ use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::ptr;
 
+use pin_init::PinInit;
+
 use super::pages::{self, BouncePool};
 use super::{buf_nr_bvecs, Bio, BioInPlace, BioOwns, BioVecs};
 use crate::c;
@@ -76,29 +78,19 @@ impl BioOwns for Pages<'_> {
 }
 
 impl<'p> Bio<Pages<'p>> {
-    /// bio_init() of a Bio at @bio owning @size bytes of pages, from the page
-    /// allocator alone, each allocation a multiple of @bs - failing as it
-    /// does, with nothing made: a data update's, whose read and write bios
-    /// borrow its bvecs.
-    ///
-    /// # Safety
-    /// @bio is room for one, not in flight.
-    pub unsafe fn init_pages(bio: *mut Self, pool: &'p BouncePool, bs: u32, size: usize, gfp: Flags)
-        -> Result<(), BchError>
-    {
-        unsafe {
-            BioInPlace::own_at(bio.cast(), ptr::null_mut(), pages::nr_vecs(size), 0)?;
-            let b = &mut *bio.cast::<Bio>();
+    /// A Bio owning @size bytes of pages, from the page allocator alone, each
+    /// allocation a multiple of @bs - failing as it does, with nothing made: a
+    /// data update's, whose read and write bios borrow its bvecs.
+    pub fn new(pool: &'p BouncePool, bs: u32, size: usize, gfp: Flags) -> impl PinInit<Self, BchError> + 'p {
+        BioInPlace::own(ptr::null_mut(), pages::nr_vecs(size), 0, move |at| at.init_from(move |b| {
             if let Err(e) = pages::alloc_pages(&mut b.vecs, bs, size, gfp) {
-                pages::free_pages_pool(pool, &mut b.vecs);
-                ptr::drop_in_place(b);
+                unsafe { pages::free_pages_pool(pool, &mut b.vecs) };
                 return Err(e);
             }
             b.sync();
             b.raw_mut().bi_iter.bi_size = size as u32;
-            (&raw mut (*bio).owns).write(Pages { pool, used_pool: false });
-        }
-        Ok(())
+            Ok(Pages { pool, used_pool: false })
+        }))
     }
 
     /// Its pages freed now, before it's dropped: a data update's, once its

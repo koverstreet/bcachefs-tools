@@ -52,11 +52,11 @@ pub fn write(
     let p = state.as_mut_ptr();
     let mut state = unsafe {
         let bio = &raw mut (*p).op.wbio.bio;
-        let at = BioInPlace::own_at(bio.cast(), std::ptr::null_mut(), Buffer::nr_vecs(&data), c::req_op_REQ_OP_WRITE)?;
-        init_at(at.init_from(|b| {
+        let fill = |at: BioInPlace<'static>| at.init_from(|b| {
             Buffer::fill(b, data);
             Ok::<_, BchError>(Data)
-        }), bio)?;
+        });
+        init_at(BioInPlace::own(std::ptr::null_mut(), Buffer::nr_vecs(&data), c::req_op_REQ_OP_WRITE, fill), bio)?;
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };

@@ -60,18 +60,17 @@ impl BioInPlace<'static> {
         BioInPlace(bio, PhantomData)
     }
 
-    /// bio_init() of the bio at @bio, with room for @nr_vecs bvecs of its own
-    /// - past its inline few, kmalloc()'s - in a struct no bio owner made: a
-    /// data update's, the tools' write's.
-    ///
-    /// # Safety
-    /// @bio is room for a Bio, not in flight, and the bio field init() is
-    /// given.
-    pub unsafe fn own_at(bio: *mut c::bio, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32)
-        -> Result<Self, BchError>
+    /// A Bio<B> in a struct no bio owner made - a data update's, the tools'
+    /// write's - @init's, of what bio_init() makes: room for @nr_vecs bvecs of
+    /// its own, past its inline few kmalloc()'s.
+    pub fn own<B, E, I>(bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
+                        init: impl FnOnce(Self) -> I) -> impl PinInit<Bio<B>, E>
+    where
+        B: BioOwns,
+        I: PinInit<Bio<B>, E>,
+        E: From<BchError>,
     {
-        unsafe { bio_init(bio.cast(), bdev, nr_vecs, opf, BvecAlloc::KMALLOC)? };
-        Ok(BioInPlace(bio, PhantomData))
+        bio_in(bdev, nr_vecs, opf, BvecAlloc::KMALLOC, init)
     }
 
     /// For what's built in it to borrow for 'a: a task's home, which its

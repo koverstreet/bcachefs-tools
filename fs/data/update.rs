@@ -403,8 +403,8 @@ impl c::data_update {
 
         // SAFETY: its bios, and the pages just made for them
         unsafe {
-            Bio::<Pages>::init_pages(&raw mut self.pages, &fs.bio_bounce, block_size, buf_bytes as usize,
-                                     Flags::empty())?;
+            init_at(Bio::<Pages>::new(&fs.bio_bounce, block_size, buf_bytes as usize, Flags::empty()),
+                    &raw mut self.pages)?;
             Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), core::ptr::null_mut(), &mut self.pages,
                                c::req_op_REQ_OP_READ);
             Bio::init_borrowed(&raw mut self.op.wbio.bio, core::ptr::null_mut(), &mut self.pages, 0);
