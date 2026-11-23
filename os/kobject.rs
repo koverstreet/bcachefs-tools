@@ -35,6 +35,14 @@ unsafe impl TryRefcount for Kobject {
 
 use super::{GroupList, Groups, KobjOwner, KobjPlace, Kobject};
 use crate::os::sysfs::Dir;
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
+use crate::util::refcount::{ARef, AlwaysRefCounted};
+
+/// @b's T, owned from here by its kobject's refs: the ref Kobject::new() made
+/// is the ARef's, and the last put frees it as @b's drop would have.
+pub(crate) fn into_aref<T: KobjOwner + AlwaysRefCounted>(b: MaybeRcuAlloc<T>) -> ARef<T> {
+    unsafe { ARef::from_raw(b.into_raw()) }
+}
 
 /// A directory with no files of its own, in a static - /sys/fs/bcachefs. Its
 /// release is nothing: there's nothing to free, and its children's refs on it

@@ -36,6 +36,7 @@ use crate::util::{Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
 use core::convert::Infallible;
 use core::ffi::c_uint;
+use core::pin::Pin;
 use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, Plain, TypeInfo, bch_enum, BitfieldMembers};
 use core::cell::Cell;
@@ -1031,21 +1032,22 @@ impl Dev {
 
     /// Its usage counters and bucket generations, as it's set up:
     /// bch2_dev_buckets_alloc().
-    pub fn buckets_alloc(&mut self) -> Result<(), BchError> {
+    pub fn buckets_alloc(self: Pin<&mut Self>) -> Result<(), BchError> {
+        let this = self.project();
         match PerCpu::alloc() {
-            Ok(u)  => self.usage = u,
-            Err(_) => return self.fs().throw(Errcode::ENOMEM_usage_init),
+            Ok(u)  => *this.usage = u,
+            Err(_) => return this.fs.throw(Errcode::ENOMEM_usage_init),
         }
         // a new device: no old gens to keep, no backpointer bitmaps to resize
-        let mi = self.mi.get();
+        let mi = this.mi.get();
         let head = c::BucketGensHead {
             first_bucket:         mi.first_bucket,
             nbuckets_minus_first: (mi.nbuckets - u64::from(mi.first_bucket)) as usize,
         };
-        let gens = self.bucket_gens.published_writer_mut();
+        let gens = this.bucket_gens.published_writer_mut();
         debug_assert!(gens.read_head(&read_lock()).is_none(), "bucket gens allocated twice");
         if gens.rebuild_head(mi.nbuckets as usize, head, |_, _| Ok::<(), Infallible>(())).is_err() {
-            return self.fs().throw(Errcode::ENOMEM_bucket_gens);
+            return this.fs.throw(Errcode::ENOMEM_bucket_gens);
         }
         Ok(())
     }

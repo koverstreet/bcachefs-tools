@@ -229,10 +229,11 @@ use crate::locking::MemallocFlags;
 use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
-use crate::util::alloc::{alloc_pinned, free_pinned, kbox_pin_init};
+use crate::util::alloc::{free_pinned, kbox_pin_init};
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::file::read_file;
 use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
-use crate::os::kobject::{GroupList, KobjOwner, Kobject};
+use crate::os::kobject::{into_aref, GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_dev, log_no_fs, LogLevel};
 use crate::os::percpu::PerCpu;
 use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
@@ -561,7 +562,7 @@ impl StateLockWrite<'_> {
 
 /// A device not yet in c->devs[]: freed if it's dropped, until attach()
 /// publishes it.
-struct NewDev(Option<ARef<Dev>>);
+struct NewDev(Option<MaybeRcuAlloc<Dev>>);
 
 impl core::ops::Deref for NewDev {
     type Target = Dev;
@@ -574,14 +575,13 @@ impl core::ops::Deref for NewDev {
 impl Drop for NewDev {
     fn drop(&mut self) {
         if let Some(ca) = self.0.take() {
-            dev_free(ca);
+            dev_free(into_aref(ca));
         }
     }
 }
 
 fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
-    let p = alloc_pinned(Dev::init(fs)).ok()?;
-    let ca = unsafe { &mut *p };
+    let mut ca = NewDev(Some(MaybeRcuAlloc::new(Dev::init(fs)).ok()?));
 
     ca.mi.set(member.to_cpu());
     ca.btree_allocated_bitmap_gc.set(member.btree_allocated_bitmap.get());
@@ -590,37 +590,40 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
         e.store(m.get() as i64, Relaxed);
     }
 
-    ca.uuid = member.uuid;
+    {
+        let mut this = ca.as_pin_mut().project();
+        *this.uuid = member.uuid;
+        *this.nr_btree_reserve =
+            c::BTREE_NODE_RESERVE.div_ceil(u32::from(this.mi.get().bucket_size) / fs.btree_sectors());
+        this.sb_read_scratch.set(Some(Pin::into_inner(kbox_pin_init(SbReadScratch::new()).ok()?)));
+    }
+    ca.as_pin_mut().buckets_alloc().ok()?;
+    *ca.as_pin_mut().project().io_done = PerCpu::alloc().ok()?;
 
-    ca.nr_btree_reserve = c::BTREE_NODE_RESERVE.div_ceil(u32::from(ca.mi.get().bucket_size) / fs.btree_sectors());
-
-    let ok = kbox_pin_init(SbReadScratch::new())
-            .map(|s| ca.sb_read_scratch = Some(Pin::into_inner(s))).is_ok() &&
-        ca.buckets_alloc().is_ok() &&
-        PerCpu::alloc().map(|io_done| ca.io_done = io_done).is_ok();
-
-    // Kobject::new()'s ref
-    let ca = NewDev(Some(unsafe { ARef::from_raw(NonNull::new_unchecked(p)) }));
-    ok.then_some(ca)
+    Some(ca)
 }
 
 impl NewDev {
+    fn as_pin_mut(&mut self) -> Pin<&mut Dev> {
+        self.0.as_mut().expect("a NewDev not yet attached").as_pin_mut()
+    }
+
     /// Into c->devs[@dev_idx], which owns it from here.
     fn attach(mut self, state: &StateLockWrite<'_>, dev_idx: u32) -> ARef<Dev> {
-        let ca = self.0.take().expect("a NewDev attached twice");
         {
-            let ca = unsafe { &mut *ca.as_ptr() };
+            let this = self.as_pin_mut().project();
 
-            ca.dev_idx = dev_idx as u8;
-            ca.self_mask.d.set(dev_idx as usize);
+            *this.dev_idx = dev_idx as u8;
+            this.self_mask.d.set(dev_idx as usize);
 
-            if ca.name[0] == 0 {
+            if this.name[0] == 0 {
                 let mut name = Printbuf::new();
                 prt!(&mut name, "dev-{dev_idx}");
-                strscpy(&mut ca.name, name.as_bytes());
+                strscpy(this.name, name.as_bytes());
             }
         }
 
+        let ca = into_aref(self.0.take().expect("a NewDev attached twice"));
         state.devs()[dev_idx as usize].publish(ca.clone());
 
         if ca.sysfs_online().is_err() {

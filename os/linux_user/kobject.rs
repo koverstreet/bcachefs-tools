@@ -26,6 +26,7 @@ use crate::util::Printbuf;
 #[path = "../kobject.rs"]
 mod common;
 pub use common::StaticKobject;
+pub(crate) use common::into_aref;
 
 /// /sys/fs: a kernel's - our sysfs has no parent above ours.
 pub fn fs_kobj() -> Option<&'static Kobject> {
@@ -154,7 +155,8 @@ impl<A: Place<Type = Self, Base: Enclosing<Visible = A::Base>>> KobjPlace for Pl
 ///
 /// # Safety
 /// Its Dir's kobject was made with Kobject::new::<Self>(); release() frees
-/// what it's given.
+/// what it's given, as the MaybeRcuAlloc it's in, if it's in one. An
+/// AlwaysRefCounted owner's refs are its kobject's.
 pub(crate) unsafe trait KobjOwner: Sized + 'static {
     const GROUPS: GroupList<Self::Dir>;
     type Dir: Dir<Obj = Self>;
