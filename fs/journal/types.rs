@@ -320,7 +320,7 @@ pub struct journal_bio {
     pub buf: *mut c::journal_buf,
     pub submit_time: u64,
 
-    pub bio: c::bio,
+    pub bio: crate::util::bio::Bio,
 }
 crate::has_bio!(journal_bio, bio);
 

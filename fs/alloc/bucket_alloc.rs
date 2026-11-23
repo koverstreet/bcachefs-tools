@@ -26,7 +26,7 @@
 //! journal entry not on disk yet; and checked against its alloc key before
 //! it's opened.
 //!
-//! With nothing free, a request waits on freelist_wait and retries, its wake
+//! With nothing free, a request waits on freelist_events and retries, its wake
 //! counter snapshot saying whether a wake was for it - or bails, committing
 //! the copies it has, when waiting won't help: alloc_should_bail().
 
@@ -459,7 +459,7 @@ impl TransAttempt<'_, '_> {
 
     /// A bucket for @req on @ca, with a pin. With none free: freelist_empty if
     /// @req may not block, bucket_alloc_no_progress if it should bail -
-    /// otherwise its closure waits on freelist_wait, and it looks once more:
+    /// otherwise it waits on freelist_events, and it looks once more:
     /// bucket_alloc_blocked if there's still none.
     pub fn bucket_alloc(&self, req: &mut c::alloc_request, ca: &Dev) -> Result<OpenBucket, BchError> {
         let fs = self.fs();
@@ -496,7 +496,7 @@ impl TransAttempt<'_, '_> {
                 copygc_can_make_progress = can_make_progress(ca, &fs.mark_lock().read());
                 if copygc_can_make_progress {
                     req.bits.set_copygc_can_make_progress(true);
-                    fs.copygc_wakeup();
+                    fs.copygc_wakeup_for_pressure();
                 }
 
                 fs.times.get(c::TimeStat::blocked_allocate as usize).track_event_change(true);
@@ -509,7 +509,7 @@ impl TransAttempt<'_, '_> {
                 } else if fs.alloc_should_bail(ca, req) {
                     Errcode::bucket_alloc_no_progress
                 } else if !waiting {
-                    req.block_on(fs, &fs.allocator.freelist_wait, Blocked::Freelist);
+                    req.block_on(fs, Blocked::Freelist);
                     waiting = true;
                     continue;
                 } else {

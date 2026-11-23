@@ -65,6 +65,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, LoopFlow, Tr
 use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::c::Errcode;
+use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
 use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -87,7 +88,8 @@ use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_msg, fs_fatal_error};
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
+use core::sync::atomic::{AtomicBool, AtomicI32, Ordering::{Acquire, Relaxed}};
+use crate::data::update::IOPRIO_BE_LOWEST;
 use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use crate::util::futex::EventCount;
@@ -110,6 +112,13 @@ pub struct bch_fs_copygc {
     pub wait: Volatile<i64>,
     pub running: Volatile<bool>,
     pub run_count: Volatile<u32>,
+    /// An allocation or a move needing space asked for copygc: its next run is
+    /// for pressure, and runs at best-effort IO priority - it's what forward
+    /// progress waits on - where the rest of copygc stays idle
+    pub pressure_pending: AtomicBool,
+    pub current_run_pressure: Volatile<bool>,
+    pub last_run_pressure: Volatile<bool>,
+    pub pressure_run_count: Volatile<u32>,
     /// Woken as a run ends: data/copygc.rs
     pub run_done: EventCount,
 
@@ -314,6 +323,12 @@ struct CopygcDev {
 
 fn fragmentation_lru(dev: u32) -> core::ops::RangeInclusive<LruPos> {
     LruPos::range(LruId::Fragmentation { dev })
+}
+
+/// The stripe lru past its empty stripes, which are the delete worker's.
+fn stripe_lru() -> core::ops::RangeInclusive<LruPos> {
+    let lru = LruPos::range(LruId::StripeFragmentation);
+    LruPos::new(LruId::StripeFragmentation.id(), STRIPE_LRU_POS_EMPTY + 1, 0)..=*lru.end()
 }
 
 /// The pass's batch is full: 16 buckets, or a quarter of those in flight.
@@ -522,12 +537,12 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let Some(s) = s_k.arm::<c::Stripe>() else { return Ok(None) };
 
         /* write buffer race? */
-        Ok((s.v().lru_pos() == lru.time).then_some(s))
+        Ok((s.v().fragmentation_lru_pos() == lru.time).then_some(s))
     }
 
     fn get_stripe_buckets(&self, batch: &mut Batch<'f>) -> Result<(), BchError> {
         let trans = self.trans();
-        let lru = LruPos::range(LruId::Stripes);
+        let lru = stripe_lru();
         let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
         iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
@@ -559,27 +574,17 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// buckets is always right.
     fn should_do_ec(&self, devs: &KVVec<CopygcDev>) -> bool {
         let trans = self.trans();
-        let lru = LruPos::range(LruId::Stripes);
+        let lru = stripe_lru();
         let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
+        // a stripe's time is how full it is, on the bucket fragmentation
+        // lrus' scale: Stripe::fragmentation_lru_pos()
         let stripe_frag_ratio = iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
             let mut s_iter = BtreeIter::new(t, Btree::stripes, Bpos::default(), BtreeIterFlags::empty());
-            let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
-
-            let v = s.v();
-            let nr_data = v.nr_data();
-            let blocks_nonempty = s.data_blocks().filter(|b| b.sectors() != 0).count() as u64;
-
-            /* stripe is pending delete */
-            if blocks_nonempty == 0 {
-                return Ok(LoopFlow::Continue);
-            }
-
-            /* This matches the calculation in alloc_lru_idx_fragmentation, so we can
-             * directly compare without actually looking up the bucket pointed to by the
-             * bucket fragmentation lru:
-             */
-            Ok(LoopFlow::Break((blocks_nonempty << 31) / u64::from(nr_data)))
+            Ok(match Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? {
+                Some(_) => LoopFlow::Break(LruPos::from_bpos(lru_k.k.p).time),
+                None    => LoopFlow::Continue,
+            })
         }).unwrap_or(0);
 
         /*
@@ -650,6 +655,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let data_opts = c::data_update_opts {
             type_:        c::DataUpdateType::copygc,
             commit_flags: c::TransCommitFlags::from_bits_retain(c::Watermark::copygc as u32),
+            ioprio:       if self.fs.copygc.current_run_pressure.get() { IOPRIO_BE_LOWEST } else { 0 },
             ..::pin_init::zeroed()
         };
 
@@ -801,9 +807,17 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
         kick = me.kicks();
         fs.copygc.wait.set(0);
 
+        let pressure = fs.copygc.pressure_pending.swap(false, Relaxed);
+        if pressure {
+            fs.copygc.pressure_run_count.set(fs.copygc.pressure_run_count.get().wrapping_add(1));
+        }
+        fs.copygc.current_run_pressure.set(pressure);
+
         fs.copygc.running.set(true);
         let (r, did_work) = cg.copygc_pass(&mut devs);
         fs.copygc.running.set(false);
+        fs.copygc.last_run_pressure.set(pressure);
+        fs.copygc.current_run_pressure.set(false);
         fs.copygc.run_count.set(fs.copygc.run_count.get().wrapping_add(1));
         fs.copygc.run_done.wake();
         ret = r;
@@ -824,6 +838,13 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
 impl Fs {
     pub fn copygc_wakeup(&self) {
         self.copygc.thread.kick();
+    }
+
+    /// copygc_wakeup() for an allocation or move that's out of space: the run
+    /// is a pressure run.
+    pub fn copygc_wakeup_for_pressure(&self) {
+        self.copygc.pressure_pending.store(true, Relaxed);
+        self.copygc_wakeup();
     }
 
     /// And its workqueue, for the btree updates of its moves.
@@ -870,6 +891,10 @@ impl Fs {
 
         out.tabstop_push(32);
         write!(out, "running:\t{}\n", u32::from(cg.running.get()));
+        write!(out, "pressure pending:\t{}\n", u32::from(cg.pressure_pending.load(Relaxed)));
+        write!(out, "current run pressure:\t{}\n", u32::from(cg.current_run_pressure.get()));
+        write!(out, "last run pressure:\t{}\n", u32::from(cg.last_run_pressure.get()));
+        write!(out, "pressure run count:\t{}\n", cg.pressure_run_count.get());
         write!(out, "run count:\t{}\n", cg.run_count.get());
         write!(out, "copygc_wait:\t{}\n", cg.wait.get() as u64);
         write!(out, "copygc_wait_at:\t{}\n", cg.wait_at.get() as u64);

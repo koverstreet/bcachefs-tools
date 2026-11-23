@@ -5,9 +5,8 @@
 //! runs it, a mover's (moving_update.rs) or a promote's (promote.rs) - its
 //! future.
 //!
-//! The update is pinned in the box. C holds pointers into it - the read path
-//! into rbio, the write path into op - and the endios get from those to its
-//! Dones by container_of.
+//! The update is pinned in the box: its IO holds pointers into it - the read
+//! into rbio, the write into op.
 //!
 //! Each step of its life has a type:
 //! - spawn() makes the box, with the update zeroed and no task yet: Spawned.
@@ -20,15 +19,11 @@
 //! - The body holds the update as a Body, and writes with what its read came
 //!   to (ReadDone): write()'s input, not fields of the update.
 //!
-//! Body derefs to the data_update, and Ready to its Body. While C's IO is in
-//! flight C writes the update, so no Rust reference to it may be live then:
-//! write() takes the Body by &mut until the IO is done, and each deref makes
-//! a new reference from the raw pointer.
-//!
-//! write() waits on C's IO through a Completion, started on its Done before
-//! the IO's issued, and completed by its endio. When the write path is a
-//! task, write() will await it instead, as a mover's read is, and the Done,
-//! the endio shim and op.end_io go away.
+//! Body derefs to the data_update, and Ready to its Body. While its IO is in
+//! flight the IO writes the update, so no other reference to it may be live
+//! then: write() takes the Body by &mut until the IO is done - lending the op
+//! to the write path's write(), awaited as a mover's read() is - and each
+//! deref makes a new reference from the raw pointer.
 //!
 //! An update in flight is on the data_update async object list, which
 //! debugfs walks under RCU: so the task's memory is freed a grace period after it's done, as every
@@ -44,9 +39,8 @@ use crate::data::update::Held;
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::util::task::{Completion, Done};
 use crate::util::gather::Gather;
-use crate::util::task::{waiter, Resumable, Resume, Spawn};
+use crate::util::task::{waiter, Resume, Spawn};
 use crate::util::task::{TaskBox, TaskList, TaskSlot};
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
@@ -69,8 +63,6 @@ unsafe impl Sync for Update {}
 
 #[pin_data(PinnedDrop)]
 pub struct Update {
-    /// Born with its waiter, as the write's submitted
-    write:     Done,
     /// A promote's read, as it came to: written as its task's started
     read:      UnsafeCell<Option<ReadDone>>,
     /// A mover's turn to write - moving_update.rs; a promote's is never used
@@ -99,7 +91,6 @@ where
     let fs = t.fs();
     t.allocate_dropping_locks(|| {
         let init = pin_init!(Update {
-            write:     Done::completed(),
             read:      UnsafeCell::new(None),
             turn <- Gather::new(),
             found:     None,
@@ -127,7 +118,7 @@ where
     for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
 {
     /// Sets the update up with data_update::init() and readies it for its
-    /// read: sets op.end_io, and lists it. On error the box is dropped.
+    /// read: lists it. On error the box is dropped.
     #[allow(clippy::too_many_arguments)]
     pub fn init(mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>, moving: Option<&Moving<'_>>,
                 wp: c::write_point_specifier, io_opts: &c::bch_inode_opts, data_opts: c::data_update_opts,
@@ -137,7 +128,6 @@ where
         unsafe {
             let u = &mut *up.u.get().cast::<c::data_update>();
             let held = u.init(t, iter, moving, wp, io_opts, data_opts, btree, k)?;
-            u.op.end_io = Some(write_done);
             *up.as_mut().project().held = Some(held);
         }
         // SAFETY: the box's home, pinned
@@ -190,6 +180,11 @@ impl AwaitingRead<'_> {
         unsafe { &(*self.0.u.get()).assume_init_ref().rbio }
     }
 
+    /// Its rbio, the task not started: the read's, reading into it.
+    pub fn rbio_mut(&mut self) -> &mut Rbio {
+        unsafe { &mut (*self.0.u.get()).assume_init_mut().rbio }
+    }
+
     /// # Safety
     /// spawn()'s: its queue, and what the body borrows, outlive it.
     pub unsafe fn start(self, read: ReadDone) {
@@ -234,24 +229,13 @@ impl c::data_update {
     }
 }
 
-/// # Safety
-/// @op is an Update's update's write op.
-unsafe fn write_done(op: *mut c::bch_write_op) {
-    // SAFETY: the caller's. The Body is waiting, holding no reference; we
-    // touch only the slot
-    unsafe {
-        let u = op.byte_sub(core::mem::offset_of!(c::data_update, op)).cast::<c::data_update>();
-        (*Update::of(u)).write.complete();
-    }
-}
-
 #[pinned_drop]
 impl PinnedDrop for Update {
     fn drop(self: Pin<&mut Self>) {
         // exit() leaves the key buffer for here, as the list's walk may still
         // be reading it. Zeroed, for an update never init()ed, it's valid too
         // SAFETY: a raw place, as the update may be zeroed
-        unsafe { (*self.u.get().cast::<c::data_update>()).k.exit_rcu() };
+        unsafe { (*self.u.get().cast::<c::data_update>()).index.k.exit_rcu() };
     }
 }
 
@@ -305,15 +289,13 @@ impl Body {
         unsafe { (*self.update().read.get()).take() }.expect("a data update's read, given as its task started")
     }
 
-    /// Issues the write of what @read read, if read_done() says there is
-    /// one, and waits for it.
+    /// The write of what @read read, if read_done() says there is one,
+    /// resumed @resume once it's done.
     pub async fn write(&mut self, read: ReadDone, resume: Resume<'_>) {
         if self.read_done(read) {
-            let waiter = waiter::Async::current().await;
-            // SAFETY: not tied to the Body, which the write is lent
-            let write = Completion::new(unsafe { &mut (*self.up.as_ptr()).write }, waiter);
-            c::data_update::write(self);
-            write.resume_on(resume).await
+            let u = &mut **self;
+            crate::data::write::write(&mut u.op, &mut u.wbio, crate::data::write::WriteFor::Update(&u.index), resume)
+                .await
         }
     }
 

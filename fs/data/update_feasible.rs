@@ -85,7 +85,7 @@ impl Fs {
                 ret.durability += if cached { 1 } else { ca.rw_durability() };
             } else if copygc::can_make_progress(ca, &mark) {
                 ret.need_copygc = true;
-                self.copygc_wakeup();
+                self.copygc_wakeup_for_pressure();
             }
 
             if let Some(out) = trace.as_deref_mut() {

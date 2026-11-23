@@ -48,10 +48,11 @@ pub(crate) fn bcachefs_exit(m: &ModuleExit) {
     #[cfg(not(NO_BCACHEFS_FS))]
     {
         crate::vfs::direct::pools_exit(&q);
+        crate::vfs::direct_write::pools_exit(&q);
+        crate::vfs::writeback::pools_exit(&q);
         crate::vfs::buffered::pools_exit(&q);
     }
     crate::data::read::pools_exit(&q);
-    crate::data::write_replicas::pools_exit(&q);
     crate::btree::read::pools_exit(&q);
     crate::btree::write::pools_exit(&q);
     crate::util::task::TASKS.exit(&q);
@@ -70,7 +71,6 @@ pub(crate) fn bcachefs_init(m: &ThisModule) -> Result<(), BchError> {
     crate::util::maybe_rcu_alloc::free_init()?;
     crate::util::task::TASKS.init(m)?;
     crate::data::read::pools_init(m)?;
-    crate::data::write_replicas::pools_init(m)?;
     crate::btree::read::pools_init(m)?;
     crate::btree::write::pools_init(m)?;
     BCACHEFS_KOBJ.kobj().add(fs_kobj(), c"bcachefs")?;
