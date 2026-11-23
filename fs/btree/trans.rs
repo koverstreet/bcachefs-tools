@@ -293,18 +293,19 @@ impl<'f> BtreeTrans<'f> {
     /// __bch2_trans_commit()'s @lazy. journal_seq and flush are set, as C's
     /// every commit does: a C commit before ours, in the same transaction, may
     /// have left a pointer to its stack there.
-    pub(super) fn commit_inner(
+    pub(super) fn commit_inner<R>(
         &self,
-        t:        &TransAttempt<'_, '_>,
-        disk_res: Option<&DiskReservation<'_>>,
-        flush:    Option<&mut Option<Flush<'_>>>,
-        flags:    CommitOpts,
-        lazy:     bool,
-    ) -> Result<(), BchError> {
+        t:         &TransAttempt<'_, '_>,
+        disk_res:  Option<&DiskReservation<'_>>,
+        flush:     Option<&mut Option<Flush<'_>>>,
+        flags:     CommitOpts,
+        lazy:      bool,
+        committed: impl FnOnce(&Paths<'_>) -> R,
+    ) -> Result<R, BchError> {
         self.disk_res.set(disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr()));
         self.journal_seq.set(core::ptr::null_mut());
         self.flush.set(flush.map_or(core::ptr::null_mut(), |f| core::ptr::from_mut(f).cast()));
-        self.commit_trans(t, flags, lazy)
+        self.commit_trans(t, flags, lazy, committed)
     }
 }
 

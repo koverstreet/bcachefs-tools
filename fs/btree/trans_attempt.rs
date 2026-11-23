@@ -412,7 +412,20 @@ impl<'a, 't> TransAttempt<'a, 't> {
         flags:    impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
         assert!(self.live.get(), "commit in an attempt that ended");
-        self.trans.commit_inner(self, disk_res, None, flags.into(), false)
+        self.trans.commit_inner(self, disk_res, None, flags.into(), false, |_| ())
+    }
+
+    /// commit(), then @committed handed the updates as committed - their keys
+    /// as their triggers left them - before they're reset: for what has to
+    /// follow an update's key past its commit.
+    pub(crate) fn commit_then<R>(
+        &self,
+        disk_res:  Option<&DiskReservation<'_>>,
+        flags:     impl Into<CommitOpts>,
+        committed: impl FnOnce(&Paths<'_>) -> R,
+    ) -> Result<R, BchError> {
+        assert!(self.live.get(), "commit in an attempt that ended");
+        self.trans.commit_inner(self, disk_res, None, flags.into(), false, committed)
     }
 
     /// commit(), its journal entry flushed: @flush taken and attached to the
@@ -424,7 +437,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         flags:    impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
         assert!(self.live.get(), "commit in an attempt that ended");
-        self.trans.commit_inner(self, disk_res, flush, flags.into(), false)
+        self.trans.commit_inner(self, disk_res, flush, flags.into(), false, |_| ())
     }
 
     /// Commit what's queued, if anything - and having committed, return
@@ -437,7 +450,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return Ok(());
         }
 
-        self.trans.commit_inner(self, disk_res, None, flags.into(), true)
+        self.trans.commit_inner(self, disk_res, None, flags.into(), true, |_| ())
     }
 
     /// End this attempt for @f, work that runs loops of its own: commit what's

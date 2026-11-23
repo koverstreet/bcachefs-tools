@@ -1156,9 +1156,13 @@ impl BtreeTrans<'_> {
         Ok(())
     }
 
-    pub(crate) fn commit_trans(&self, t: &TransAttempt<'_, '_>, flags: CommitOpts, lazy: bool) -> Result<(), BchError> {
+    /// The commit, then @committed handed the updates as committed - their
+    /// keys as their triggers left them - before they're reset.
+    pub(crate) fn commit_trans<R>(&self, t: &TransAttempt<'_, '_>, flags: CommitOpts, lazy: bool,
+                                  committed: impl FnOnce(&Paths<'_>) -> R) -> Result<R, BchError> {
         let mut paths = self.paths();
         let ret = self.commit_updates(t, &mut paths, flags, lazy);
+        let ret = ret.map(|()| committed(&paths));
         self.reset_updates(&mut paths);
         ret
     }
