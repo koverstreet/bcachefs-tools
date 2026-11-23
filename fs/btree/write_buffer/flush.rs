@@ -201,14 +201,12 @@ fn flush_one<'a>(
     ebug_assert!(wb.k().k.p == paths[iter.path].pos);
 
     let seq = wb.seq();
-    trans.insert_key_leaf(t, &mut paths.paths_and_updates(), iter.path, iter.path, wb.k_mut(), seq);
+    trans.insert_key_leaf(t, &mut paths.paths_and_updates(), iter.path, iter.path, wb.k_mut(), seq, |b| {
+        if b.needs_merge(b.contents(), fs, 0) {
+            fs.async_btree_op(b.node(), b.contents(), AsyncBtreeOp::Merge);
+        }
+    });
     cnt.fast += 1;
-
-    let b = paths[iter.path].locked_btree_node(0).expect("a traversed path has its leaf");
-    let contents = b.contents();
-    if b.needs_merge(contents, fs, 0) {
-        fs.async_btree_op(b.node(), contents, AsyncBtreeOp::Merge);
-    }
 
     Ok(())
 }

@@ -321,18 +321,16 @@ impl BtreeTrans<'_> {
 
     /// Insert one key into a leaf node: path @idx is at @insert's pos, path
     /// @locked holds the node write locked - @idx, or another path at it - and
-    /// @journal_seq is the sequence number of the journal reservation.
+    /// @journal_seq is the sequence number of the journal reservation. @under
+    /// sees the node after the insert, under its Write view.
     #[inline]
     pub(in crate::btree) fn insert_key_leaf(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
-                                            locked: PathIdx, idx: PathIdx, insert: &mut BkeyI, journal_seq: u64) {
-        let fs = self.fs();
+                                            locked: PathIdx, idx: PathIdx, insert: &mut BkeyI, journal_seq: u64,
+                                            under: impl FnOnce(&LockedNode<'_, BtreeNode, Write>)) {
         let paths = &mut pu.paths;
         let level = paths[idx].level() as usize;
         ebug_assert!(level != 0 || insert.k.p == paths[idx].pos);
         ebug_assert!(paths[locked].node(level) == paths[idx].node(level));
-
-        let set_u64s = |c: &NodeContents| c.last_set().u64s() as isize;
-        let live_u64s = |c: &NodeContents| c.nr.live_u64s as isize;
 
         let pos = paths[idx].pos;
         let node_iter = paths[idx].l[level].iter;
@@ -348,15 +346,34 @@ impl BtreeTrans<'_> {
         } else {
             (paths[locked].locked_btree_node_mut(level).expect("a node to insert into, write locked"), None)
         };
+
+        let ins = self.insert_key_leaf_in(t, &mut b, &node_iter, own_iter, &pos, insert, journal_seq);
+        under(&b);
+        self.insert_key_leaf_fix(t, pu, locked, idx, level, ins);
+    }
+
+    /// insert_key_leaf()'s insert into @b, at @node_iter's position, under its
+    /// Write view: @own_iter, the iterator of the path that write locked @b if
+    /// it's the one at @pos, fixed for it. What changed for the other paths'
+    /// iterators, and whether @b was compacted - None if nothing did.
+    fn insert_key_leaf_in(&self, t: &TransAttempt<'_, '_>, b: &mut LockedNode<'_, BtreeNode, Write>,
+                          node_iter: &KeyIter, own_iter: Option<&mut KeyIter>, pos: &Bpos,
+                          insert: &mut BkeyI, journal_seq: u64) -> Option<(KeyInsert, bool)> {
+        let fs = self.fs();
+        let level = b.c.level.get();
+
+        let set_u64s = |c: &NodeContents| c.last_set().u64s() as isize;
+        let live_u64s = |c: &NodeContents| c.nr.live_u64s as isize;
         let (old_u64s, old_live_u64s) = (set_u64s(b.contents()), live_u64s(b.contents()));
 
-        let Some(ow) = bset_overwrite(&mut b, &node_iter, insert) else { return };
-        let ins = bset_insert(&mut b, &node_iter, insert, ow);
+        let ow = bset_overwrite(b, node_iter, insert)?;
+        let ins = bset_insert(b, node_iter, insert, ow);
 
-        let fixed = own_iter.filter(|_| ins.needs_fix()).map(|iter| {
-            ins.fix(iter, &b.keys(b.contents()), &pos);
-            idx
-        });
+        if ins.needs_fix() {
+            if let Some(iter) = own_iter {
+                ins.fix(iter, &b.keys(b.contents()), pos);
+            }
+        }
 
         /*
          * The other paths' iterators are fixed for the insert after, unless the
@@ -392,13 +409,22 @@ impl BtreeTrans<'_> {
                 }
             }
 
-            u64s_added > live_u64s_added && unlikely(maybe_compact_whiteouts(&mut b))
+            u64s_added > live_u64s_added && unlikely(maybe_compact_whiteouts(b))
         };
+        Some((ins, compacted))
+    }
 
-        if compacted {
-            self.node_reinit_iter(t, pu, idx, level);
-        } else if ins.needs_fix() {
-            self.node_iter_fix(paths, idx, level, ins, fixed);
+    /// The iterators of the paths at path @idx's node at @level fixed for
+    /// insert_key_leaf_in()'s @ins - but @locked's, if it's @idx, which that
+    /// fixed.
+    #[inline]
+    fn insert_key_leaf_fix(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
+                           locked: PathIdx, idx: PathIdx, level: usize, ins: Option<(KeyInsert, bool)>) {
+        match ins {
+            Some((_, true)) => self.node_reinit_iter(t, pu, idx, level),
+            Some((ins, false)) if ins.needs_fix() =>
+                self.node_iter_fix(&mut pu.paths, idx, level, ins, (locked == idx).then_some(idx)),
+            _ => {}
         }
     }
 }
