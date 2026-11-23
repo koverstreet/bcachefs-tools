@@ -21,7 +21,7 @@ use crate::data_structures::dst_room::DstRoom;
 use crate::fs::Fs;
 use crate::journal::pins::Pin;
 use crate::locking::LockedBy;
-use crate::util::projections::Volatile;
+use crate::util::projections::{Publish, Volatile};
 use crate::util::vstructs::Head;
 use crate::util::{Printbuf, ToText};
 use crate::data_structures::list::ListLinks;
@@ -29,6 +29,7 @@ use core::ffi::c_void;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
+use core::ptr;
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
 use crate::format::BkeyType;
@@ -119,8 +120,9 @@ pub struct BtreeNode {
     #[init(fs.opts.btree_node_size.get().ilog2() as u8)]
     pub byte_order: u8,
 
-    #[init(LockedBy::new(NodeContents::new(), ()))]
-    pub contents: LockedBy<NodeContents>,
+    /* Key/pointer for this btree node: its published half */
+    #[init(LockedBy::new(NodeContents::new(), PublishedKey::new()))]
+    pub contents: LockedBy<NodeContents, PublishedKey>,
 
     /* the journal pins of its current write and the one before */
     pub writes: [Pin; 2],
@@ -165,7 +167,7 @@ pub struct BtreeNode {
     _pin: PhantomData<PhantomPinned>,
 }
 
-/// A node's keys, their buffer, their format and its key: the node lock's -
+/// A node's keys, their buffer and their format: the node lock's -
 /// written with it held for write, read with it held any way.
 #[repr(C)]
 #[derive(MaybeZeroable)]
@@ -219,9 +221,51 @@ pub struct NodeContents {
      */
     pub sib_u64s: [Volatile<u16>; 2],
     pub unpack_fn_len: u8,
+}
 
-    /* Key/pointer for this btree node */
-    pub key: DstRoom<BkeyI, [u64; BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX]>,
+pub type NodeKey = DstRoom<BkeyI, [u64; NODE_KEY_U64S]>;
+
+const NODE_KEY_U64S: usize = BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX as usize;
+
+/// A node's key, published: stored word by word with the node held for
+/// write, read with it held any way - and peeked at without it.
+#[repr(transparent)]
+pub struct PublishedKey([Volatile<u64>; NODE_KEY_U64S]);
+
+/// A PublishedKey, as its node's write lock holder has it.
+#[repr(transparent)]
+pub struct PublishedKeyWriter(PublishedKey);
+
+// its words' stores are atomic
+impl Publish for PublishedKey {
+    type Writer = PublishedKeyWriter;
+}
+
+impl PublishedKey {
+    /// A new node's: an empty btree_ptr.
+    fn new() -> Self {
+        let mut k = NodeKey::default();
+        k.k.set_key_type(BkeyType::btree_ptr);
+        PublishedKey(core::array::from_fn(|i| Volatile::new(k.elems()[i])))
+    }
+
+    /// A copy, unlocked: torn, if an update's storing it meanwhile.
+    pub fn peek(&self) -> NodeKey {
+        let mut k = NodeKey::default();
+        for (v, w) in k.elems_mut().iter_mut().zip(&self.0) {
+            *v = w.get();
+        }
+        k
+    }
+}
+
+impl PublishedKeyWriter {
+    /// @k's room, every word of it.
+    pub fn store(&self, k: &NodeKey) {
+        for (w, &v) in self.0.0.iter().zip(k.elems()) {
+            w.set(v);
+        }
+    }
 }
 
 impl<'b, 'f> BtreeNode {
@@ -255,6 +299,39 @@ impl BtreeNode {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn contents_mut(&self) -> &mut NodeContents {
         unsafe { self.contents.protected_mut() }
+    }
+
+    fn key_room<'a>(&'a self, contents: &'a NodeContents) -> &'a NodeKey {
+        self.own_contents(contents);
+        unsafe { &*ptr::from_ref(&*self.contents).cast::<NodeKey>() }
+    }
+
+    pub fn key<'a>(&'a self, contents: &'a NodeContents) -> &'a BkeyI {
+        self.key_room(contents)
+    }
+
+    /// Its key changed by @f, by @contents' lock held for write: on a copy,
+    /// stored whole, as a peek may be reading it meanwhile.
+    pub fn update_key<R>(&self, contents: &mut NodeContents, f: impl FnOnce(&mut NodeKey) -> R) -> R {
+        let mut k = *self.key_room(contents);
+        let ret = f(&mut k);
+        unsafe { self.contents.published_writer() }.store(&k);
+        ret
+    }
+
+    pub fn set_key(&self, contents: &mut NodeContents, k: impl BkeyV) {
+        self.update_key(contents, |room| room.set_key(k))
+    }
+
+    /// Its key, unlocked: a copy an update may tear.
+    pub fn key_peek(&self) -> NodeKey {
+        self.contents.peek()
+    }
+
+    pub fn reset_sib_u64s(&self, contents: &NodeContents) {
+        let live = contents.nr.live_u64s;
+        contents.sib_u64s[0].set(if contents.data().min_key != POS_MIN { live } else { u16::MAX });
+        contents.sib_u64s[1].set(if self.key(contents).k.p != SPOS_MAX { live } else { u16::MAX });
     }
 
     pub fn is_fake(&self) -> bool {
@@ -308,12 +385,9 @@ impl BtreeNode {
 }
 
 impl NodeContents {
-    /// A new node's: no keys, no buffer, and its key an empty btree_ptr.
+    /// A new node's: no keys, no buffer.
     fn new() -> Self {
-        let mut contents: Self = ::pin_init::zeroed();
-        contents.key.k = c::bkey::new();
-        contents.key.k.set_key_type(BkeyType::btree_ptr);
-        contents
+        ::pin_init::zeroed()
     }
 
     pub fn data(&self) -> &Head<cs::btree_node> {
@@ -322,14 +396,6 @@ impl NodeContents {
 
     pub fn data_mut(&mut self) -> &mut Head<cs::btree_node> {
         unsafe { &mut *self.data }
-    }
-
-    pub fn key_i(&self) -> &BkeyI {
-        &self.key
-    }
-
-    pub fn set_key(&mut self, k: impl BkeyV) {
-        self.key.set_key(k)
     }
 
     pub fn sets(&self) -> &[BsetTree] {
@@ -354,12 +420,6 @@ impl NodeContents {
     pub fn should_compact_all(&self, fs: &Fs) -> bool {
         let mid_u64s_bits = (fs.btree_max_u64s().ilog2() + WRITE_SET_U64S_BITS) / 2;
         self.set[1].u64s() > 1 << mid_u64s_bits
-    }
-
-    pub fn reset_sib_u64s(&self) {
-        let live = self.nr.live_u64s;
-        self.sib_u64s[0].set(if self.data().min_key != POS_MIN { live } else { u16::MAX });
-        self.sib_u64s[1].set(if self.key.k.p != SPOS_MAX { live } else { u16::MAX });
     }
 }
 

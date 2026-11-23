@@ -55,8 +55,8 @@ impl BtreeNode {
                      "btree node buffer at {data:p}, not {L1_CACHE_BYTES} byte aligned");
     }
 
-    fn own_contents(&self, contents: *const NodeContents) {
-        ebug_assert!(core::ptr::eq(contents, (&raw const self.contents).cast()), "another node's contents");
+    pub(super) fn own_contents(&self, contents: *const NodeContents) {
+        ebug_assert!(core::ptr::eq(contents, self.contents.data_ptr()), "another node's contents");
     }
 
     #[inline]

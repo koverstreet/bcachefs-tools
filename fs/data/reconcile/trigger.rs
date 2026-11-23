@@ -469,14 +469,14 @@ pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut Btre
         if b.will_make_reachable() {
             return Ok(None);
         }
-        let k = BkeySC::from(b.contents().key_i());
+        let k = BkeySC::from(b.key());
         if k.arm::<Ptrs>().map_or(pos(0, 0), |k| k.reconcile_bp_pos(fs)) == bp.k.p {
             return Ok(Some(BkeyBuf::from_key(k)));
         }
     }
 
     let node_key = Msg(|out: &mut Printbuf| match b {
-        Some(b) => prt!(out, "{}", BkeySC::from(b.contents().key_i()).to_text(fs)),
+        Some(b) => prt!(out, "{}", BkeySC::from(b.key()).to_text(fs)),
         None    => prt!(out, "(no key)"),
     });
     if fsck_err!(t, id::reconcile_bp_to_missing_btree_ptr, "reconcile backpointer to missing/incorrect btree ptr\n{}\n{}",

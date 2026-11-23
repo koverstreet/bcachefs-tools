@@ -853,7 +853,7 @@ impl Fs {
                                                   BtreeIterFlags::empty());
                 lockrestart_do(&trans, |t| {
                     let b = iter.peek(t)?.expect("the root node");
-                    self.btree_bitmap_mark_if_unmarked(b.contents().key_i().as_sc());
+                    self.btree_bitmap_mark_if_unmarked(b.key().as_sc());
                     Ok(())
                 })?;
             }

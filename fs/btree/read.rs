@@ -91,6 +91,10 @@ impl ReadInFlightNode {
         unsafe { self.node.contents.protected() }
     }
 
+    pub fn key(&self) -> &BkeyI {
+        self.node.key(self.contents())
+    }
+
     pub fn parts(&mut self) -> (&BtreeNode, &mut NodeContents) {
         let b = &*self.node;
         (b, unsafe { b.contents.protected_mut() })
@@ -204,7 +208,7 @@ impl NodeRead<'_> {
 
     fn next_replica(&mut self) -> bool {
         let fs = self.fs;
-        let k = BkeySC::from(self.node.contents().key_i());
+        let k = BkeySC::from(self.node.key());
         let Ok(Some(pick)) = k.pick_read_device(fs, Some(&self.failed), 0, c::ReadFlags::empty()) else {
             return false;
         };
@@ -255,7 +259,7 @@ impl NodeRead<'_> {
 
             b.flags.set_read_error(true);
             let _ = btree_lost_data(fs, &mut msg, btree);
-            note_lost_extents(fs, btree, self.node.contents().key_i().into());
+            note_lost_extents(fs, btree, self.node.key().into());
             prt!(&mut msg, "error {}\n", err.msg());
         } else if !self.failed.is_empty() {
             /* Separate ratelimit states for soft vs. hard errors */
@@ -295,7 +299,7 @@ impl NodeRead<'_> {
     fn maybe_merge(&self) {
         let (fs, contents) = (self.fs, self.node.contents());
         if !crate::debug::params::btree_node_merging_disabled() &&
-           (contents.data().min_key != POS_MIN || contents.key.k.p != SPOS_MAX) &&
+           (contents.data().min_key != POS_MIN || self.node.key().k.p != SPOS_MAX) &&
            contents.nr.live_u64s < fs.btree.foreground_merge_threshold / 2 {
             /* Ensure very empty btree nodes get merged, in case they're
              * being read but never written to - but with a very low
@@ -495,7 +499,7 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
 #[cold]
 pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     let contents = unsafe { b.contents() };
-    let k = BkeySC::from(contents.key_i());
+    let k = BkeySC::from(b.key(contents));
 
     let dev = match k.pick_read_device(fs, None, 0, c::ReadFlags::empty()) {
         Ok(Some(pick)) => pick.ptr.dev().into(),
@@ -806,7 +810,7 @@ fn validate_vals(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resul
 
 fn node_read_done(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Result<(), BchError> {
     let (fs, b) = (v.fs, v.b);
-    let p = NodePtr::new(fs, contents.key_i().into());
+    let p = NodePtr::new(fs, b.key(contents).into());
 
     /* We might get called multiple times on read retry: */
     b.written.set(0);
@@ -845,7 +849,7 @@ fn node_read_done(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resu
 
     b.keys_mut(contents).bset_build_aux_tree(0, false);
 
-    contents.reset_sib_u64s();
+    b.reset_sib_u64s(contents);
 
     if p.range_updated {
         drop_keys_outside_node(b, contents);
@@ -895,7 +899,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
     /* for a sync read's wait, after the read has the node */
     let b = unsafe { BackRef::new(&*node) };
     let btree = Btree(b.c.btree_id.get().into());
-    let key = BkeySC::from(node.contents().key_i());
+    let key = BkeySC::from(node.key());
 
     fs.event_inc_trace(events::btree_node_read, |out| prt!(out, "{}", b.pos_to_text(fs)));
 
@@ -963,7 +967,7 @@ impl Fs {
         trans.btree_cache_cannibalize_unlock();
 
         let mut n = b.unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
-        unsafe { n.contents_mut() }.set_key(k);
+        n.locked().set_key(k);
         n.set_id(id, level as usize);
         let (b, held) = n.hash(c::BtreeNodeCacheState::CLEAN)
             .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}"));

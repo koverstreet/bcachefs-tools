@@ -653,7 +653,7 @@ fn check_btree_root_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToB
     }
 
     let level = u32::from(b.c.level.get());
-    check_extent_to_backpointers(t, s, btree, level + 1, BkeySC::from(b.contents().key_i()))?;
+    check_extent_to_backpointers(t, s, btree, level + 1, BkeySC::from(b.key()))?;
     Ok(level)
 }
 

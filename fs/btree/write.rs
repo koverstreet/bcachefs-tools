@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_validate, BkeyI, BkeyS, BkeySC, ValidateFlags, BKEY_U64S};
+use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags};
 use crate::btree::cache::Bounce;
 use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::sort::{
@@ -9,7 +9,7 @@ use crate::btree::node::sort::{
     sort_whiteouts, CompactMode, WriteSortRuns,
 };
 use crate::btree::node::bset::MAX_BSETS;
-use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::node::{BtreeNode, NodeContents, NodeKey};
 use crate::btree::path::{Intent, LockedNode, NodeHold, Paths, PathsUpdates, Write};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
@@ -18,7 +18,6 @@ use crate::btree_trans;
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::cstructs::c::{BtreeNodeFlags, BtreeWriteType};
-use crate::data_structures::dst_room::DstRoom;
 use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write_replicas::{wbio_in_place, write_replicas};
 use crate::data_structures::list::Walk;
@@ -61,8 +60,6 @@ type WriteBio = c::bch_write_bio<c::DevReadRefKind>;
  * and REQ_IDLE set...
  */
 const WRITE_OPF: u32 = c::req_op_REQ_OP_WRITE | c::REQ_META | c::REQ_SYNC | c::REQ_IDLE;
-
-type NodeKey = DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>;
 
 /// The module's, not the filesystem's: a write's box is freed a grace period
 /// after its write, when the filesystem may be gone. A mempool: node writes
@@ -137,7 +134,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, key: &NodeKey, failed: &c::bch_io_
 {
     let fs = t.fs();
 
-    let mut iter = match unsafe { BtreeNodeIter::at_node(t, b) } {
+    let mut iter = match BtreeNodeIter::at_node(t, b) {
         Err(e) if e == BchError::from(c::Errcode::btree_node_dying) => return Ok(()),
         r => r?,
     };
@@ -271,8 +268,8 @@ fn report_write_error(fs: &Fs, b: &BtreeNode, ret: Result<(), BchError>, failed:
     match ret {
         Ok(()) => {
             prt!(&mut *msg, "wrote degraded to ");
-            let key = BkeySC::from(unsafe { b.contents() }.key_i());
-            let d = key.arm::<Ptrs>().expect("a btree node pointer, with pointers").devs(fs);
+            let key = b.key_peek();
+            let d = BkeySC::from(&*key).arm::<Ptrs>().expect("a btree node pointer, with pointers").devs(fs);
             fs.devs_list_to_text(&mut msg, &d);
             msg.newline();
         }
@@ -299,7 +296,7 @@ fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, conte
     from.bits.set_from(c::BkeyValidateFrom::btree_node);
     from.bits.set_flags(ValidateFlags::write);
 
-    let k = BkeySC::from(contents.key_i());
+    let k = BkeySC::from(b.key(contents));
     if let Err(e) = bkey_validate(&BkeyValidate::new(fs, k, &from)) {
         fs_inconsistent!(fs, "invalid btree node key before write");
         return Err(e);
@@ -389,7 +386,7 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
     });
 
     let mut key = NodeKey::default();
-    key.set_key(contents.key_i());
+    key.set_key(b.key());
 
     let sector_offset = b.written.get();
     b.written.set(b.written.get() + w.sectors);
@@ -527,7 +524,7 @@ impl BsetWrite {
         let bytes_to_write = keys_at + size_of::<Head<c::bset>>() + i.u64s() * size_of::<u64>();
         let sectors_to_write = (bytes_to_write.next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
 
-        if let Some(v2) = BkeySC::from(contents.key_i()).arm::<c::BtreePtrV2>().filter(|_| first) {
+        if let Some(v2) = BkeySC::from(b.key(contents)).arm::<c::BtreePtrV2>().filter(|_| first) {
             assert!(v2.v().sectors_written.get() == sectors_to_write);
         }
 

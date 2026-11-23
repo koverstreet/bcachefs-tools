@@ -246,7 +246,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
             }
 
             found = true;
-            let key = b.contents().key_i();
+            let key = b.key();
             let k = BkeySC::from(key);
             let ptrs = key.arm::<Ptrs>();
 

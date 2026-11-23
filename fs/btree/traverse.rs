@@ -274,7 +274,7 @@ impl BtreeTrans<'_> {
             match self.node_lock(paths, idx, &b.c, level, lock_type) {
                 Ok(hold) if packed == root_packed(fs, btree) && !race_fault() => {
                     let b = unsafe { LockedNode::new(b) };
-                    if b.contents().data().min_key != POS_MIN || b.contents().key_i().k.p != SPOS_MAX {
+                    if b.contents().data().min_key != POS_MIN || b.key().k.p != SPOS_MAX {
                         let err = self.node_root_err(&b);
                         drop(hold);
                         return Err(err);
@@ -381,7 +381,7 @@ impl BtreeTrans<'_> {
         prt!(&mut *msg, "node not found at pos: {}", path.pos);
         prt!(&mut *msg, "\n  within parent node ");
         let b = path.locked_btree_node(path.level() as usize).expect("a path goes down from a locked node");
-        bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(b.contents().key_i()));
+        bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(b.key()));
         prt!(&mut *msg, "\n");
 
         fs.topology_error(&mut msg)
@@ -422,7 +422,7 @@ impl BtreeTrans<'_> {
             prt!(&mut *msg, " {} - {}\n", contents.data().min_key, contents.data().max_key);
 
             prt!(&mut *msg, "parent key:  ");
-            bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(contents.key_i()));
+            bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(b.key()));
             prt!(&mut *msg, "\nselected:   ");
             bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(k));
             prt!(&mut *msg, "\n");

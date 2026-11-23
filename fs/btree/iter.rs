@@ -629,7 +629,7 @@ impl<'t> BtreeIter<'t> {
         });
 
         if let Ok(Some(n)) = &b {
-            let max_key = n.contents().key_i().k.p;
+            let max_key = n.key().k.p;
             assert!(max_key >= self.pos, "node ending at {}, before the iterator's position {}", max_key, self.pos);
 
             /* unread, had under READ_ERRORS: no data to start from */
@@ -699,7 +699,7 @@ impl<'t> BtreeIter<'t> {
     fn trans_peek_updates(&mut self, paths: &Paths<'_>, search_key: Bpos, k: &mut Option<KeyVal>) {
         let path = &paths[self.path];
         let b = path.locked_btree_node(path.level() as usize).expect("a path peeked is locked");
-        let end = b.contents().key_i().k.p;
+        let end = b.key().k.p;
         let btree = self.btree();
         let level = u32::from(self.min_depth);
 
@@ -757,7 +757,7 @@ impl<'t> BtreeIter<'t> {
             self.k.p
         } else {
             let path = &paths[self.path];
-            path.locked_btree_node(path.level() as usize).expect("a path peeked is locked").contents().key_i().k.p
+            path.locked_btree_node(path.level() as usize).expect("a path peeked is locked").key().k.p
         };
         if let Some(next_journal) = self.journal_peek(t, paths, search_key, end) {
             *k = Some(self.found_i(next_journal));
@@ -915,7 +915,7 @@ impl<'t> BtreeIter<'t> {
                  * precise comparison against @end */
             } else {
                 let path = &paths[self.path];
-                let node_max = path.locked_btree_node(level).expect("a path peeked is locked").contents().key_i().k.p;
+                let node_max = path.locked_btree_node(level).expect("a path peeked is locked").key().k.p;
 
                 if bkey_le(node_max, last_leaf) && node_max < SPOS_MAX {
                     /* Advance to next leaf node: */
@@ -1679,7 +1679,7 @@ impl<'t> BtreeIter<'t> {
                 break;
             }
 
-            return Ok(Some(NonNull::from(b.contents().key_i())));
+            return Ok(Some(NonNull::from(b.key())));
         }
 
         Ok(None)
@@ -2327,13 +2327,12 @@ impl<'t> BtreeNodeIter<'t> {
         Ok(self.peek(t)?.map(BtreeNodeRef::from))
     }
 
-    /// At node @b, intent locked; btree_node_dying if @b's been freed.
-    ///
-    /// # Safety
-    /// @b's key is stable: the caller holds @b, or is writing it.
-    pub(crate) unsafe fn at_node(t: &TransAttempt<'t, 't>, b: &BtreeNode) -> Result<Self, BchError> {
+    /// At node @b, intent locked; btree_node_dying if @b's been freed. @b's key
+    /// is stable - the caller holds @b, or is writing it - or what's found may
+    /// be another node.
+    pub(crate) fn at_node(t: &TransAttempt<'t, 't>, b: &BtreeNode) -> Result<Self, BchError> {
         let level = usize::from(b.c.level.get());
-        let pos = unsafe { b.contents() }.key.k.p;
+        let pos = b.key_peek().k.p;
         let mut iter = BtreeNodeIter::new(t, b.c.btree_id.get(), pos, c::BTREE_MAX_DEPTH, b.c.level.get().into(),
                                           BtreeIterFlags::INTENT);
         iter.raw.traverse(t)?;
@@ -2378,7 +2377,10 @@ impl BtreeNodeRef {
 
     pub(crate) fn key(&self) -> &BkeyI {
         // SAFETY: a node we hold
-        unsafe { self.raw.as_ref().contents() }.key_i()
+        unsafe {
+            let b = self.raw.as_ref();
+            b.key(b.contents())
+        }
     }
 
     pub(crate) fn key_sc(&self) -> BkeySC<'_, BtreePtrs> {

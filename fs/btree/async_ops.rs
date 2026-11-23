@@ -175,7 +175,7 @@ impl Fs {
     /// are.
     pub(crate) fn async_btree_op(&self, b: &BtreeNode, contents: &NodeContents, op: AsyncBtreeOp) {
         let r = &self.btree.async_ops;
-        let pos = NodePos { btree: Btree(b.c.btree_id.get().into()), level: b.c.level.get().into(), pos: contents.key.k.p };
+        let pos = NodePos { btree: Btree(b.c.btree_id.get().into()), level: b.c.level.get().into(), pos: b.key(contents).k.p };
 
         /*
          * Dedup: the triggers fire repeatedly (e.g. every write buffer key

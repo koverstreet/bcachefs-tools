@@ -82,7 +82,7 @@ fn gc_btree_root(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(), BchError>
 
     let level = u32::from(level) + 1;
     fs.gc.set_pos(c::gc_pos::in_btree(btree, level as u16, SPOS_MAX));
-    gc_mark_key(t, btree, level, iter.iter(), BkeySC::from(b.contents().key_i()))
+    gc_mark_key(t, btree, level, iter.iter(), BkeySC::from(b.key()))
 }
 
 fn gc_btree(trans: &BtreeTrans<'_>, progress: &Progress<'_>, btree: Btree, target_depth: u32)

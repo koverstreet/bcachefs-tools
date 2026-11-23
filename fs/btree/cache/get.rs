@@ -42,7 +42,7 @@ fn btree_bad_header(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
     prt!(msg, "cached btree node header doesn't match expected (memory corruption?)\nexpected: ");
     bch2_btree_id_level_to_text(&mut msg, Btree(b.c.btree_id.get().into()), b.c.level.get().into());
     prt!(msg, "\nptr: ");
-    bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(contents.key_i()));
+    bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(b.key()));
 
     prt!(msg, "\ngot: ");
     bch2_btree_id_level_to_text(&mut msg, data.btree_id(), data.level() as u32);
@@ -56,7 +56,7 @@ fn btree_bad_header(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
 fn btree_check_header(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
     let contents = b.contents();
     let data = contents.data();
-    let k = BkeySC::from(contents.key_i());
+    let k = BkeySC::from(b.key());
 
     if Btree(b.c.btree_id.get().into()) != data.btree_id() ||
         b.c.level.get() != data.level() ||

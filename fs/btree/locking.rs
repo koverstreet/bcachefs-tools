@@ -231,7 +231,7 @@ impl BtreeTrans<'_> {
 
 pub(crate) fn btree_node_pos(b: &c::btree_bkey_cached_common) -> Bpos {
     match BtreeNode::from_common(b) {
-        Some(b) => unsafe { b.contents() }.key.k.p,
+        Some(b) => b.key_peek().k.p,
         None    => c::bkey_cached::from_common(b).expect("a path node, neither btree node nor key cache entry").key.get().pos,
     }
 }

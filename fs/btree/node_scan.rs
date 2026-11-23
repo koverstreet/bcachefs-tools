@@ -265,7 +265,9 @@ impl<'f> DevScan<'f> {
         }
 
         let b = self.buf.node();
-        b.contents.get_mut().set_key(n.to_key().as_bkey_i());
+        let mut k = b.key_peek();
+        k.set_key(n.to_key().as_bkey_i());
+        b.contents.published_writer_mut().store(&k);
 
         let mut err = Printbuf::new();
         if read_done(fs, ca, &mut unsafe { ReadInFlightNode::new(b) }, None, &mut err).is_err() {
@@ -464,7 +466,7 @@ pub(crate) fn btree_node_is_stale(fs: &Fs, b: LockedNode<'_, BtreeNode>) -> bool
     let contents = b.contents();
     let bn = contents.data();
 
-    in_range(&nodes, Btree(b.c.btree_id.get().into()), b.c.level.get(), bn.min_key, contents.key.k.p)
+    in_range(&nodes, Btree(b.c.btree_id.get().into()), b.c.level.get(), bn.min_key, b.key().k.p)
         .any(|n| n.seq > bn.seq())
 }
 

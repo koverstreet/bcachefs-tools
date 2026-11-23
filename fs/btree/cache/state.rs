@@ -49,7 +49,7 @@ impl BtreeNode {
 /* Pinning */
 
 fn node_pinned(lists: &BtreeCacheLists, b: &BtreeNode) -> bool {
-    let pos = c::bbpos { btree: Btree(b.c.btree_id.get().into()), pos: unsafe { b.contents() }.key_i().k.p };
+    let pos = c::bbpos { btree: Btree(b.c.btree_id.get().into()), pos: b.key_peek().k.p };
 
     let mask = lists.pinned_nodes_mask[(b.c.level.get() != 0) as usize];
 
@@ -117,7 +117,7 @@ impl Fs {
             b.flags.set_pinned(p);
             pinned = p as usize;
 
-            b.set_hash_val(lists, node_key_hash_val(&unsafe { b.contents() }.key));
+            b.set_hash_val(lists, node_key_hash_val(&b.key_peek()));
             ret = match bc.table.insert_new(unsafe { Entry::new(NonNull::from(b)) }) {
                 Ok(Ok(()))  => Ok(()),
                 Ok(Err(_))  => Err(Errcode::EEXIST_btree_node_cache_insert.into()),

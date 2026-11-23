@@ -69,7 +69,7 @@ fn err_msg(out: &mut Printbuf, ca: Option<&Dev>, b: &BtreeNode, at: ErrAt, msg: 
     }
 
     prt!(out, "node offset {}/{}", b.written.get(),
-         ptr_sectors_written(unsafe { b.contents() }.key_i().into()));
+         ptr_sectors_written(BkeySC::from(&*b.key_peek())));
     if let Some(u64s) = at.bset_u64s {
         prt!(out, " bset u64s {u64s}");
     }
@@ -117,7 +117,7 @@ impl NodeValidate<'_> {
             NodeIo::Read { ca, failed, err_msg: out } => {
                 err_msg(out, Some(ca), b, at, msg);
 
-                let have_retry = matches!(BkeySC::from(unsafe { b.contents() }.key_i())
+                let have_retry = matches!(BkeySC::from(&*b.key_peek())
                                               .pick_read_device(fs, failed.as_deref(), 0, c::ReadFlags::empty()),
                                           Ok(Some(_)));
 
@@ -296,7 +296,7 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
 
     if let Some(bn) = n.node() {
         let big_endian = bn.keys.big_endian();
-        let v2 = BkeySC::from(contents.key_i()).arm::<c::BtreePtrV2>();
+        let v2 = BkeySC::from(b.key(contents)).arm::<c::BtreePtrV2>();
 
         /* These indicate that we read the wrong btree node: */
 
@@ -335,7 +335,7 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
                 }
 
                 bn.min_key = bp.min_key;
-                bn.max_key = contents.key.k.p;
+                bn.max_key = b.key(contents).k.p;
             }
 
             btree_err_on!(v, bn.min_key != bp.min_key,
@@ -346,7 +346,7 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
                           bn.min_key, bp.min_key)?;
         }
 
-        btree_err_on!(v, bn.max_key != contents.key.k.p,
+        btree_err_on!(v, bn.max_key != b.key(contents).k.p,
                       FsckFlags::empty(),
                       ErrAt::bset(&bn.keys),
                       id::btree_node_bad_max_key,
@@ -561,7 +561,7 @@ pub fn validate_bset_keys<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &
         keys_at:       H::KEYS,
         version:       i.version.get(),
         big_endian:    i.big_endian(),
-        updated_range: ptr_range_updated(contents.key_i()),
+        updated_range: ptr_range_updated(v.b.key(contents)),
         from:          validate_from(v.b, if v.writing() { ValidateFlags::write } else { ValidateFlags::empty() }),
     };
     let (mut at, mut prev) = (0, None);

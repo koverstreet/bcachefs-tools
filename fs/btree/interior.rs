@@ -191,7 +191,7 @@ type NodeKey = DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>
 
 fn node_key(b: LockedNode<'_, BtreeNode>) -> NodeKey {
     let mut key = NodeKey::default();
-    key.set_key(b.contents().key_i());
+    key.set_key(b.key());
     key
 }
 
@@ -778,7 +778,7 @@ impl<'t> InteriorUpdate<'t> {
     /// gets.
     pub(crate) fn link(&self, n: &mut NewNode<'_>) {
         self.emit_new_node_key(n);
-        self.push_parent_key(n.contents().key_i());
+        self.push_parent_key(n.key());
     }
 
     /// The pointer at @pos to a node at @level deleted from the parent, and

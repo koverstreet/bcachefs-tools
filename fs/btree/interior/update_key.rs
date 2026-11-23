@@ -81,7 +81,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let btree = Btree(b.c.btree_id.get().into());
         if !fs.btree_id_root(btree.into()).is_some_and(|r| ptr::eq(r, b.node())) {
-            let mut parent = BtreeNodeIter::new(self, btree, b.contents().key.k.p, 0, level as u32 + 1,
+            let mut parent = BtreeNodeIter::new(self, btree, b.key().k.p, 0, level as u32 + 1,
                                                 BtreeIterFlags::INTENT);
             parent.iter().traverse(self)?;
             let flags = if skip_triggers { UpdateTriggerFlags::NORUN } else { UpdateTriggerFlags::empty() };
@@ -116,7 +116,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             if !skip_triggers {
                 let buf_u64s = key.buf_u64s;
-                let mut op = TriggerOp::new(btree, level as u32 + 1, BkeySC::from(b.contents().key_i()), key.as_s(),
+                let mut op = TriggerOp::new(btree, level as u32 + 1, BkeySC::from(b.key()), key.as_s(),
                                             UpdateTriggerFlags::INSERT |
                                             UpdateTriggerFlags::OVERWRITE |
                                             UpdateTriggerFlags::TRANSACTIONAL,
@@ -125,7 +125,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             }
 
             self.journal_entry_add(c::JsetEntryType::overwrite, b.c.btree_id.get() as u8, b.c.level.get() + 1,
-                                   b.contents().key_i())?;
+                                   b.key())?;
             self.journal_entry_add(c::JsetEntryType::btree_root, b.c.btree_id.get() as u8, b.c.level.get(), key.as_ref())?;
 
             /*
@@ -189,7 +189,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut paths = trans.paths();
 
         trans.node_lock_write_nofail(&mut paths, iter.path, level);
-        paths.intent_locked_node(iter.path, level).write_locked().contents_mut().set_key(key.as_sc());
+        paths.intent_locked_node(iter.path, level).write_locked().set_key(key.as_sc());
         trans.node_unlock_write(&mut paths, iter.path, level);
     }
 }

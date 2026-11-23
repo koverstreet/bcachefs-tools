@@ -97,7 +97,7 @@ pub(crate) fn insert_keys_interior(t: &TransAttempt<'_, '_>, paths: &mut Paths<'
         }
     }
 
-    let end = b.contents().key_i().k().p;
+    let end = b.key().k().p;
     let mut inserted = 0;
     for k in keys_mut(list.as_u64s_mut()).take_while(|k| k.k().p <= end) {
         inserted += usize::from(k.k().u64s);
@@ -173,7 +173,7 @@ pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mu
     let contents = b.contents();
     let data = contents.data();
 
-    if let Some(p) = BkeySC::from(contents.key_i()).arm::<c::BtreePtrV2>() {
+    if let Some(p) = BkeySC::from(b.key()).arm::<c::BtreePtrV2>() {
         assert!(p.v().min_key == data.min_key, "a node whose btree_ptr_v2 min_key {} isn't its own, {}",
                 p.v().min_key, data.min_key);
     }
@@ -229,7 +229,7 @@ pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mu
         return Err(topology_err(fs, b, out));
     };
 
-    if end != contents.key.k.p {
+    if end != b.key().k.p {
         prt!(out, "last child node doesn't end at end of parent node\nchild: {}\n",
              BkeySC::from(prev.as_ref()).to_text(fs));
         count_fsck_err(fs, SbErrorId::btree_node_topology_bad_max_key, out);
@@ -442,10 +442,10 @@ fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, paths: &mut Paths<'_>, srcs: &[
     // a 32 bit counter, which wraps
     let seq = srcs.iter().map(|s| s.contents().data().seq()).max().unwrap_or(0).wrapping_add(1);
     let mut n = update.alloc_node(paths, usize::from(srcs[0].c.level.get()));
-    let contents = n.contents_mut();
+    let (node, contents) = (n.node(), n.contents_mut());
     assert!(contents.nsets == 1, "packing into a node with {} bsets", contents.nsets);
 
-    super::reserve::set_range(contents, min_key, max_key);
+    super::reserve::set_range(node, contents, min_key, max_key);
 
     let data = contents.data_mut();
     data.set_seq(seq);
@@ -501,7 +501,7 @@ fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNo
     }
 
     for n in dsts.iter_mut() {
-        n.contents().reset_sib_u64s();
+        n.reset_sib_u64s(n.contents());
         n.keys_mut().verify_btree_nr_keys();
 
         assert!(check_topology(t, n.held()).is_ok(), "a packed node's topology bad:\n{}", n.to_text(t.fs()));
@@ -783,7 +783,7 @@ fn merge_btree_node_one<'t>(t: &TransAttempt<'_, 't>, progress: &Progress<'_>, i
     progress.update(t, iter.iter())?;
 
     if !b.needs_merge(b.contents(), t.fs(), 0) {
-        let end = b.contents().key_i().k.p;
+        let end = b.key().k.p;
         if end == SPOS_MAX {
             return Ok(true);
         }
@@ -1032,7 +1032,7 @@ fn merge_fail_reset_sib_u64s(fs: &Fs, paths: &Paths<'_>, b: Node<'_>, srcs: &[Sr
          * the pivot's keyspace at path_get time, so it never overlaps.
          */
         let before = match s.b {
-            Some(sb) => sb.contents().key.k.p < contents.key.k.p,
+            Some(sb) => sb.key().k.p < b.key().k.p,
             None     => paths[s.path].pos < contents.data().min_key,
         };
         let mut sib_u64s = usize::from(contents.nr.live_u64s) + usize::from(s.live_u64s);
@@ -1349,7 +1349,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
         }
 
         assert!(check_topology(update.t(), n.held()).is_ok(), "a merged node's topology bad:\n{}", n.to_text(fs));
-        n.contents().reset_sib_u64s();
+        n.reset_sib_u64s(n.contents());
     } else {
         let dsts: &mut [NewNode<'_>; 2] = dsts.as_mut_slice().try_into().expect("a merge into two nodes");
         pack_into_dsts(update.t(), &nodes, dsts);
@@ -1381,7 +1381,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
      * journal record) need each surviving delete; unlink() emits them
      * together.
      */
-    let pos = |b: Node<'_>| b.contents().key.k.p;
+    let pos = |b: Node<'_>| b.key().k.p;
     let (mut si, mut di) = (0, 0);
     while si < nodes.len() || di < dsts.len() {
         let src_p = nodes.get(si).map(|&s| pos(s));
@@ -1460,7 +1460,7 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
 
     let mut n = update.alloc_root(paths, path, level + 1);
 
-    update.push_parent_key(b.contents().key_i());
+    update.push_parent_key(b.key());
     if let Err(e) = update.insert_parent_keys(paths, path, &mut n) {
         trans.node_unlock(paths, path, level + 1);
         return Err(e);

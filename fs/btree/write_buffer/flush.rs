@@ -292,7 +292,7 @@ fn flush_sorted_range(
 
         if write_locked {
             let mut paths = trans.paths();
-            let leaf_end = paths[iter.path].locked_btree_node(0).expect("write locked").contents().key.k.p;
+            let leaf_end = paths[iter.path].locked_btree_node(0).expect("write locked").key().k.p;
 
             if k.k().k.p > leaf_end {
                 trans.node_unlock_write(&mut paths, iter.path, 0);

@@ -16,7 +16,7 @@ use crate::btree::interior::{check_topology as node_check_topology, root_alloc_f
 use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter, CommitFlags, TransAttempt};
 use crate::btree::journal_overlay::{self, shoot_down_journal_keys, BtreeAndJournalIter};
 use crate::btree::node::iter::KeyIter;
-use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::node::BtreeNode;
 use crate::btree::node_scan::{btree_has_scanned_nodes, btree_node_is_stale, get_scanned_nodes};
 use crate::btree::path::{DownKey, LockedNode, NodePtr, PathIdx, Paths};
 use crate::btree::read::drop_keys_outside_node;
@@ -45,10 +45,11 @@ enum Repair {
     DropPrev,
 }
 
-/// @contents' key as a btree_ptr_v2 - a v1's converted - with its header and
+/// @b's key as a btree_ptr_v2 - a v1's converted - with its header and
 /// value's head as @f leaves them.
-fn btree_ptr_to_v2(contents: &NodeContents, f: impl FnOnce(&mut c::bkey, &mut c::BtreePtrV2)) -> DownKey {
-    let src = BkeySC::from(contents.key_i());
+fn btree_ptr_to_v2(b: Node<'_>, f: impl FnOnce(&mut c::bkey, &mut c::BtreePtrV2)) -> DownKey {
+    let contents = b.contents();
+    let src = BkeySC::from(b.key());
     let val = src.val_bytes();
     let mut v = c::BtreePtrV2::default();
 
@@ -88,10 +89,10 @@ fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     let b = paths.held_btree_node(idx, level).expect("a node to repair, held by its path");
 
     if fs.opts.verbose.get() != 0 {
-        bch_info!(fs, "set_node_min(): {} -> {new_min}", BkeySC::from(b.contents().key_i()).to_text(fs));
+        bch_info!(fs, "set_node_min(): {} -> {new_min}", BkeySC::from(b.key()).to_text(fs));
     }
 
-    let new = btree_ptr_to_v2(b.contents(), |_, v| {
+    let new = btree_ptr_to_v2(b, |_, v| {
         v.min_key = new_min;
         v.set_range_updated(true);
     });
@@ -104,7 +105,7 @@ fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     let ret = journal_overlay::insert(&mut fs.not_rw(), Btree(b.c.btree_id.get().into()), level as u32 + 1, &*new);
     if ret.is_ok() {
         drop_keys_outside_node(b.node(), b.contents_mut());
-        b.contents_mut().key.set_key(&*new);
+        b.set_key(&*new);
     }
 
     trans.node_unlock_write(paths, idx, level);
@@ -118,10 +119,10 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     let btree = Btree(b.c.btree_id.get().into());
 
     if fs.opts.verbose.get() != 0 {
-        bch_info!(fs, "set_node_max(): {} -> {new_max}", BkeySC::from(b.contents().key_i()).to_text(fs));
+        bch_info!(fs, "set_node_max(): {} -> {new_max}", BkeySC::from(b.key()).to_text(fs));
     }
 
-    let new = btree_ptr_to_v2(b.contents(), |k, v| {
+    let new = btree_ptr_to_v2(b, |k, v| {
         k.p = new_max;
         v.set_range_updated(true);
     });
@@ -131,7 +132,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     let mut b = b.write_locked();
 
     let mut not_rw = fs.not_rw();
-    let ret = journal_overlay::delete(&mut not_rw, btree, level as u32 + 1, b.contents().key_i().k.p).and_then(|()| {
+    let ret = journal_overlay::delete(&mut not_rw, btree, level as u32 + 1, b.key().k.p).and_then(|()| {
         b.contents_mut().data_mut().max_key = new_max;
         journal_overlay::insert(&mut not_rw, btree, level as u32 + 1, &*new)
     });
@@ -154,7 +155,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
         /* unhash, rehash */
         fs.btree_node_transition_state(b.node(), c::BtreeNodeCacheState::FREEABLE)
             .expect("a node leaving the hash table, write locked");
-        b.contents_mut().key.set_key(&*new);
+        b.set_key(&*new);
         fs.btree_node_transition_state(b.node(), b.live_state()).expect("a node back into the hash table, write locked");
 
         /*
@@ -213,11 +214,11 @@ fn check_node_boundaries(t: &TransAttempt<'_, '_>, b: Node<'_>,
     let cur_min = cur.b.contents().data().min_key;
     let expected_start = match &prev {
         None    => b_data.min_key,
-        Some(p) => p.b.contents().key_i().k.p.successor(),
+        Some(p) => p.b.key().k.p.successor(),
     };
     let mut buf = Printbuf::new();
 
-    assert!(BkeySC::from(b.contents().key_i()).arm::<c::BtreePtrV2>()
+    assert!(BkeySC::from(b.key()).arm::<c::BtreePtrV2>()
             .is_none_or(|p| p.v().min_key == b_data.min_key),
             "a btree_ptr_v2's min_key not its node's");
 
@@ -225,13 +226,13 @@ fn check_node_boundaries(t: &TransAttempt<'_, '_>, b: Node<'_>,
         return Ok(Repair::None);
     }
 
-    prt!(&mut buf, " at btree={btree} level={}:\nparent: {}", b.c.level.get(), BkeySC::from(b.contents().key_i()).to_text(fs));
+    prt!(&mut buf, " at btree={btree} level={}:\nparent: {}", b.c.level.get(), BkeySC::from(b.key()).to_text(fs));
 
     if let Some(p) = &prev {
-        prt!(&mut buf, "\nprev: {}", BkeySC::from(p.b.contents().key_i()).to_text(fs));
+        prt!(&mut buf, "\nprev: {}", BkeySC::from(p.b.key()).to_text(fs));
     }
 
-    prt!(&mut buf, "\nnext: {}\n", BkeySC::from(cur.b.contents().key_i()).to_text(fs));
+    prt!(&mut buf, "\nnext: {}\n", BkeySC::from(cur.b.key()).to_text(fs));
 
     if expected_start < cur_min {								/* gap */
         let mut nodes_found = 0;
@@ -352,8 +353,8 @@ fn repair_node_end(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &
         let paths = t.trans().paths();
         (held(&paths, &parent).b, held(&paths, &child))
     };
-    let end = b.contents().key_i().k.p;
-    let child_end = child.b.contents().key_i().k.p;
+    let end = b.key().k.p;
+    let child_end = child.b.key().k.p;
 
     if child_end == end {
         return Ok(Repair::None);
@@ -361,7 +362,7 @@ fn repair_node_end(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &
 
     let mut buf = Printbuf::new();
     prt!(&mut buf, "\nat: btree={btree} level={level}\nparent: {}\nchild: {}",
-         BkeySC::from(b.contents().key_i()).to_text(fs), BkeySC::from(child.b.contents().key_i()).to_text(fs));
+         BkeySC::from(b.key()).to_text(fs), BkeySC::from(child.b.key()).to_text(fs));
 
     let mut nodes_found = 0;
     if level == 1 {
@@ -561,7 +562,7 @@ fn check_root_boundaries(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(usiz
     let (level, root_k) = {
         let b = fs.btree_id_root(btree.0).expect("a root, after topology_check_root()");
         /* unlocked: recovery runs alone, and the root stays put */
-        (usize::from(b.c.level.get()), BkeyBuf::from_key(BkeySC::from(unsafe { b.contents() }.key_i())))
+        (usize::from(b.c.level.get()), BkeyBuf::from_key(BkeySC::from(&*b.key_peek())))
     };
 
     let iter = node_at(t, btree, level, &root_k, BtreeIterFlags::INTENT)?;
@@ -569,7 +570,7 @@ fn check_root_boundaries(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(usiz
     let Held { idx, b } = held(&t.trans().paths(), &iter);
     let data = b.contents().data();
 
-    assert!(BkeySC::from(b.contents().key_i()).arm::<c::BtreePtrV2>()
+    assert!(BkeySC::from(b.key()).arm::<c::BtreePtrV2>()
             .is_none_or(|p| p.v().min_key == data.min_key),
             "a btree_ptr_v2's min_key not its node's");
 
@@ -586,7 +587,7 @@ fn check_root_boundaries(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(usiz
         set_node_max(t.trans(), &mut t.trans().paths(), idx, level, SPOS_MAX)?;
     }
 
-    Ok((level, BkeyBuf::from_key(BkeySC::from(b.contents().key_i()))))
+    Ok((level, BkeyBuf::from_key(BkeySC::from(b.key()))))
 }
 
 /// The root at @k, at @level, emptied by repair: out of the cache, and out of

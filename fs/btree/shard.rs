@@ -107,7 +107,7 @@ pub(crate) fn key_is_shard_boundary(fs: &Fs, btree: Btree, key: Bpos) -> bool {
 impl BtreeNode {
     pub fn shard(&self, contents: &NodeContents, fs: &Fs) -> Option<usize> {
         let bits = fs.opts().shard_inode_numbers_bits.get() as u32;
-        let field = shard_field(Btree(self.c.btree_id.get().into()), contents.key.k.p)?;
+        let field = shard_field(Btree(self.c.btree_id.get().into()), self.key(contents).k.p)?;
         (bits != 0).then(|| ((field << 1) >> (64 - bits)) as usize)
     }
 
@@ -148,7 +148,7 @@ fn split_at_shard_boundary(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos) ->
         let paths = trans.paths();
         let b = paths.held_btree_node(path, 0).expect("the leaf its iterator traversed to");
         let pivot = b.shard_pivot(b.contents(), t.fs());
-        if pivot == POS_MIN || pivot == b.contents().key_i().k.p {
+        if pivot == POS_MIN || pivot == b.key().k.p {
             return Ok(false);
         }
     }

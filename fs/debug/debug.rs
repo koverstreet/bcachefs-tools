@@ -90,7 +90,7 @@ impl DebugFile for Formats {
                                                   BtreeIterFlags::empty());
                 let full = iter.for_each(&trans, |b| {
                     prt!(out, "{}", b.to_text(fs));
-                    let end = b.contents().key.k.p;
+                    let end = b.key().k.p;
                     from = if end != SPOS_MAX { end.successor() } else { end };
 
                     // C's drop_locks_do(): the next level's iterator is made
@@ -135,7 +135,7 @@ impl DebugFile for BfloatFailed {
                 // SAFETY: used before the unlock below
                 if let Some(l) = unsafe { iter.leaf(t) } {
                     let b = l.node();
-                    let end = b.contents().key.k.p;
+                    let end = b.key().k.p;
                     if end > prev_node {
                         prt!(out, "{}", b.to_text(fs));
                         prev_node = end;
@@ -167,9 +167,7 @@ fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
 
     let mut out = out.indent(2);
 
-    // XXX: unlocked, as C's is - a key update racing with this prints a torn
-    // key; contents() wants the node lock held
-    prt!(out, "{}\n", unsafe { b.contents() }.key_i().to_text(fs));
+    prt!(out, "{}\n", (&*b.key_peek()).to_text(fs));
 
     prt!(out, "flags:\t{}\n", b.flags);
 

@@ -141,17 +141,19 @@ pub(crate) fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level:
 
     let mut locked = b.locked();
     let n = locked.node();
-    let contents = locked.contents_mut();
-    let k = contents.key.init();
-    k.k.set_key_type(BkeyType::btree_ptr);
-    k.k.p = SPOS_MAX;
-    contents.key.elems_mut()[crate::btree::bkey::BKEY_U64S] = u64::MAX - u64::from(btree.0);
+    locked.update_key(|room| {
+        let k = room.init();
+        k.k.set_key_type(BkeyType::btree_ptr);
+        k.k.p = SPOS_MAX;
+        room.elems_mut()[crate::btree::bkey::BKEY_U64S] = u64::MAX - u64::from(btree.0);
+    });
 
+    let contents = locked.contents_mut();
     n.keys_mut(contents).bset_init_first();
     build_aux_trees(n, contents);
 
     contents.data_mut().flags = Default::default();
-    reserve::set_range(contents, POS_MIN, SPOS_MAX);
+    reserve::set_range(n, contents, POS_MIN, SPOS_MAX);
     let format = n.calc_format(contents);
     contents.data_mut().format = format;
     contents.set_format(format);

@@ -77,7 +77,7 @@ impl BtreeCachePins<'_> {
                 }
                 mem_may_pin -= b.buf_bytes() as i64;
                 if mem_may_pin <= 0 {
-                    pinned_end = c::bbpos { btree: Btree(btree), pos: b.contents().key.k.p };
+                    pinned_end = c::bbpos { btree: Btree(btree), pos: b.key().k.p };
                     fs.btree.cache.lock.lock().pinned_nodes_end = pinned_end;
                     return Ok(ControlFlow::Break(()));
                 }

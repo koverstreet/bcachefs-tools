@@ -511,7 +511,7 @@ impl<'t> BtreeNodeIter<'t> {
         loop {
             let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
                 let Some(b) = self.raw.peek_node_in(t, paths)? else { return Ok(None) };
-                let end = b.contents().key.k.p;
+                let end = b.key().k.p;
                 Ok(Some((end, paths.lend(|| f(b))?.into_step())))
             })?;
 

@@ -390,8 +390,8 @@ pub fn btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level: c_uin
 }
 
 pub fn bch2_btree_pos_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
-    let k = BkeySC::from(unsafe { b.contents() }.key_i());
-    btree_pos_to_text(out, fs, Btree(b.c.btree_id.get().into()), b.c.level.get().into(), k)
+    let k = b.key_peek();
+    btree_pos_to_text(out, fs, Btree(b.c.btree_id.get().into()), b.c.level.get().into(), BkeySC::from(&*k))
 }
 
 #[cold]
@@ -403,7 +403,7 @@ pub fn btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     let data = contents.data();
     prt!(out, "l {} {} - {}:\n", b.c.level.get(), data.min_key, data.max_key);
     prt!(out, "    ptrs: ");
-    val_to_text(out, Some(fs), BkeySC::from(contents.key_i()));
+    val_to_text(out, Some(fs), BkeySC::from(b.key(contents)));
     out.newline();
 
     prt!(out, "    format: ");

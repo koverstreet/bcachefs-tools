@@ -65,8 +65,7 @@ fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         );
 
         iter.for_each(&trans, |b| {
-            let contents = b.contents();
-            if contents.key.k.p > opt.end {
+            if b.key().k.p > opt.end {
                 return Ok(ControlFlow::Break(()));
             }
 
@@ -91,12 +90,11 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         );
 
         iter.for_each(&trans, |b| {
-            let contents = b.contents();
-            if contents.key.k.p > opt.end {
+            if b.key().k.p > opt.end {
                 return Ok(ControlFlow::Break(()));
             }
 
-            println!("{}", contents.key_i().to_text(fs));
+            println!("{}", b.key().to_text(fs));
             Ok(ControlFlow::Continue(()))
         })?;
     }
@@ -117,8 +115,7 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         );
 
         iter.for_each(&trans, |b| {
-            let contents = b.contents();
-            if contents.key.k.p > opt.end {
+            if b.key().k.p > opt.end {
                 return Ok(ControlFlow::Break(()));
             }
 

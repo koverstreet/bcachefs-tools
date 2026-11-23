@@ -60,12 +60,11 @@ impl InteriorUpdate<'_> {
      */
     pub(super) fn emit_new_node_key(&self, n: &mut NewNode<'_>) {
         let fs = self.fs();
-        let contents = n.contents_mut();
-        let sectors = (contents.data().bytes().next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
+        let sectors = (n.contents().data().bytes().next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
 
-        if let Some(mut p) = (&mut *contents.key).as_s().arm::<c::BtreePtrV2>() {
+        n.update_key(|k| if let Some(mut p) = (&mut **k).as_s().arm::<c::BtreePtrV2>() {
             p.v_mut().sectors_written = crate::types::Le16::new(sectors);
-        }
+        });
     }
 
     /*
@@ -240,7 +239,7 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
             let Pointee::Node { b, update_node_key, .. } = &mut i.to else {
                 panic!("a deleted pointer with reconcile state")
             };
-            match unsafe { BtreeNodeIter::at_node(t, b.as_ref()) } {
+            match BtreeNodeIter::at_node(t, unsafe { b.as_ref() }) {
                 Ok(_)                                                                => *update_node_key = true,
                 Err(e) if e == BchError::from(Errcode::btree_node_dying) => strip_reconcile(fs, k.as_s()),
                 Err(e)                                                               => return Err(e),
@@ -407,7 +406,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
             let b = unsafe { b.as_ref() };
 
             if update_node_key {
-                unsafe { b.contents_mut() }.key.set_key(&*i.key);
+                b.set_key(unsafe { b.contents_mut() }, &*i.key);
             }
 
             b.will_make_reachable.clear(update);

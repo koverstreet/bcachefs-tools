@@ -352,7 +352,7 @@ impl BtreeTrans<'_> {
             r => r?,
         };
 
-        n.locked().contents_mut().set_key(k);
+        n.locked().set_key(k);
         n.set_id(btree, level);
 
         let ret = match n.hash(State::CLEAN) {

@@ -4,14 +4,14 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BKEY_U64S};
+use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BkeyV, BKEY_U64S};
 use crate::btree::cache::bch2_btree_id_level_to_text;
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::key_cache::EntryContents;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::{Keys, KeysMut};
 use crate::btree::locking::BtreeNodeLockedType::{self, *};
-use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::node::{BtreeNode, NodeContents, NodeKey, PublishedKey};
 use crate::btree::traverse::advance_to_pos;
 use crate::c;
 use crate::cstructs::c as cs;
@@ -1279,7 +1279,7 @@ impl BtreePath {
 
     #[inline(always)]
     pub(crate) fn pos_after_node(&self, b: LockedNode<'_, BtreeNode>) -> bool {
-        self.pos > b.contents().key_i().k.p
+        self.pos > b.key().k.p
     }
 }
 
@@ -1304,7 +1304,7 @@ impl BtreePath {
         prt!(out, " pos {}", self.pos);
 
         if let Some(b) = self.locked_btree_node(self.level() as usize) {
-            prt!(out, " {}-{}", b.contents().data().min_key, b.contents().key_i().k.p);
+            prt!(out, " {}-{}", b.contents().data().min_key, b.key().k.p);
         }
 
         #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
@@ -1531,7 +1531,7 @@ impl BtreeTrans<'_> {
             }
 
             if let Some(b) = path.locked_btree_node(0) {
-                if bkey_ge(pos, b.contents().data().min_key) && bkey_le(pos, b.contents().key_i().k.p) {
+                if bkey_ge(pos, b.contents().data().min_key) && bkey_le(pos, b.key().k.p) {
                     return;
                 }
             } else if bkey_eq(pos, path.pos) {
@@ -1667,20 +1667,23 @@ impl BtreePath {
 /// lock reaches.
 pub trait PathNodeContents: PathNode {
     type Contents;
+    type Published;
 
-    fn locked_contents(&self) -> &LockedBy<Self::Contents>;
+    fn locked_contents(&self) -> &LockedBy<Self::Contents, Self::Published>;
 }
 
 impl PathNodeContents for BtreeNode {
     type Contents = NodeContents;
+    type Published = PublishedKey;
 
-    fn locked_contents(&self) -> &LockedBy<NodeContents> {
+    fn locked_contents(&self) -> &LockedBy<NodeContents, PublishedKey> {
         &self.contents
     }
 }
 
 impl PathNodeContents for c::bkey_cached {
     type Contents = EntryContents;
+    type Published = ();
 
     fn locked_contents(&self) -> &LockedBy<EntryContents> {
         &self.contents
@@ -1840,10 +1843,30 @@ impl<T: PathNode> Drop for WriteLocked<'_, '_, T> {
     }
 }
 
+impl<'p> LockedNode<'p, BtreeNode> {
+    pub fn key(&self) -> &'p BkeyI {
+        self.node.key(self.contents())
+    }
+}
+
 impl LockedNode<'_, BtreeNode, Write> {
     pub fn keys_mut(&mut self) -> KeysMut<'_> {
         let b = self.node;
         b.keys_mut(self.contents_mut())
+    }
+
+    pub fn key(&self) -> &BkeyI {
+        self.node.key(self.contents())
+    }
+
+    pub fn set_key(&mut self, k: impl BkeyV) {
+        let b = self.node;
+        b.set_key(self.contents_mut(), k)
+    }
+
+    pub fn update_key<R>(&mut self, f: impl FnOnce(&mut NodeKey) -> R) -> R {
+        let b = self.node;
+        b.update_key(self.contents_mut(), f)
     }
 }
 

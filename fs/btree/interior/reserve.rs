@@ -64,12 +64,13 @@ fn node_free(fs: &Fs, b: &BtreeNode) {
 }
 
 /// A new node's range: its key's, and its data's.
-pub(super) fn set_range(contents: &mut crate::btree::node::NodeContents, min: Bpos, max: Bpos) {
-    let mut k = &mut *contents.key;
-    if let Some(mut p) = k.as_s().arm::<c::BtreePtrV2>() {
-        p.v_mut().min_key = min;
-    }
-    k.k.p = max;
+pub(super) fn set_range(b: &BtreeNode, contents: &mut crate::btree::node::NodeContents, min: Bpos, max: Bpos) {
+    b.update_key(contents, |k| {
+        if let Some(mut p) = (&mut **k).as_s().arm::<c::BtreePtrV2>() {
+            p.v_mut().min_key = min;
+        }
+        k.k.p = max;
+    });
 
     let data = contents.data_mut();
     data.min_key = min;
@@ -229,7 +230,6 @@ impl<'t> InteriorUpdate<'t> {
             };
 
             let mut n = b.locked();
-            let contents = n.contents_mut();
 
             let mut cache = fs.btree.reserve_cache.lock.lock();
             while cache.nr != 0 {
@@ -245,7 +245,7 @@ impl<'t> InteriorUpdate<'t> {
                     0
                 };
                 if can_use_btree_node(fs, &self.disk_res, target, BkeySC::from(&*a.k)) {
-                    contents.key.set_key(&*a.k);
+                    n.set_key(&*a.k);
                     ob = core::mem::take(&mut a.ob);
                     return Ok(());
                 }
@@ -254,11 +254,13 @@ impl<'t> InteriorUpdate<'t> {
             }
             drop(cache);
 
-            let k = contents.key.init();
-            k.k.set_key_type(BkeyType::btree_ptr_v2);
-            k.set_val_u64s(size_of::<c::BtreePtrV2>() / size_of::<u64>())
-                .expect("a btree node's key with room for a btree_ptr_v2");
-            wp.append_ptrs(k, fs.btree_sectors(), false);
+            n.update_key(|k| {
+                let k = k.init();
+                k.k.set_key_type(BkeyType::btree_ptr_v2);
+                k.set_val_u64s(size_of::<c::BtreePtrV2>() / size_of::<u64>())
+                    .expect("a btree node's key with room for a btree_ptr_v2");
+                wp.append_ptrs(k, fs.btree_sectors(), false);
+            });
 
             wp.open_buckets_get(&mut ob);
             Ok(())
@@ -314,12 +316,12 @@ impl<'t> InteriorUpdate<'t> {
         data.set_level(level as u8);
         let seq = data.keys.seq;
 
-        if let Some(mut p) = (&mut *contents.key).as_s().arm::<c::BtreePtrV2>() {
+        n.update_key(contents, |k| if let Some(mut p) = (&mut **k).as_s().arm::<c::BtreePtrV2>() {
             let v = p.v_mut();
             v.mem_ptr.set(0);
             v.seq             = seq;
             v.sectors_written = Default::default();
-        }
+        });
 
         contents.data_mut().set_new_extent_overwrite(true);
 
@@ -349,18 +351,18 @@ impl<'t> InteriorUpdate<'t> {
             format = b_contents.format;
         }
 
-        let contents = n.contents_mut();
+        let (node, contents) = (n.node(), n.contents_mut());
         // a 32 bit counter, which wraps
         contents.data_mut().set_seq(b_contents.data().seq().wrapping_add(1));
 
-        set_range(contents, b_contents.data().min_key, b_contents.data().max_key);
+        set_range(node, contents, b_contents.data().min_key, b_contents.data().max_key);
 
         contents.data_mut().format = format;
         contents.set_format(format);
 
         btree_sort_into(fs, &mut n, b);
 
-        n.contents().reset_sib_u64s();
+        n.reset_sib_u64s(n.contents());
         n
     }
 
@@ -369,8 +371,8 @@ impl<'t> InteriorUpdate<'t> {
     pub(crate) fn alloc_root(&self, paths: &mut Paths<'_>, path: PathIdx, level: usize) -> NewNode<'_> {
         let mut n = self.alloc_node(paths, level);
 
-        let contents = n.contents_mut();
-        set_range(contents, POS_MIN, SPOS_MAX);
+        let (node, contents) = (n.node(), n.contents_mut());
+        set_range(node, contents, POS_MIN, SPOS_MAX);
         let format = n.calc_format(n.contents());
 
         let contents = n.contents_mut();
@@ -392,7 +394,7 @@ impl<'t> InteriorUpdate<'t> {
     /// A path to @n, holding it, for as long as the update has @n: the update
     /// puts it.
     pub(crate) fn take_path(&self, paths: &mut Paths<'_>, n: &NewNode<'_>) -> PathIdx {
-        let pos = n.contents().key_i().k().p;
+        let pos = n.key().k().p;
         let idx = self.trans().path_get_unlocked_mut(paths, crate::format::Btree(n.c.btree_id.get().into()),
                                                      n.c.level.get().into(), pos, false, crate::ret_ip!());
         self.take_node(paths, idx, n);
@@ -463,7 +465,7 @@ impl BtreeUpdate {
                     cache.nr += 1;
                     let a = &mut cache.data[nr];
                     a.ob = core::mem::take(&mut r.ob);
-                    a.k.set_key(unsafe { b.contents() }.key_i());
+                    a.k.set_key(&*b.key_peek());
                 } else {
                     r.ob.drain(fs).for_each(drop);
                 }
