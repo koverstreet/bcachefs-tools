@@ -27,7 +27,7 @@ use crate::fs::Fs;
 use crate::fs_fatal_error;
 use crate::types::Le64;
 use crate::util::alloc::Box;
-use crate::util::vstructs::SelfSized;
+use crate::util::vstructs::{Head, SelfSized};
 use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
             UPDATE_NODES_MAX};
 
@@ -286,7 +286,7 @@ fn btree_node_seq_matches(b: &BtreeNode, seq: Le64) -> bool {
         return false;
     }
 
-    let data = unsafe { ptr::read_volatile(&raw const (*b.contents.data_ptr()).data) };
+    let data = unsafe { ptr::read_volatile(&raw const (*b.contents.data_ptr()).bufs.data) }.cast::<Head<c::btree_node>>();
     let b_seq = if data.is_null() { Le64::default() } else { unsafe { ptr::read_volatile(&raw const (*data).keys.seq) } };
     b_seq == seq
 }

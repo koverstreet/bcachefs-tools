@@ -439,7 +439,7 @@ impl BsetHolder for c::btree_node_entry<Unvalidated> {
 /// # Safety
 /// The read has the node - read_in_flight - and nothing else has its buffer.
 unsafe fn node_buf<'a>(b: &BtreeNode, contents: &NodeContents) -> &'a mut [u8] {
-    unsafe { core::slice::from_raw_parts_mut(contents.data.cast::<u8>(), b.buf_bytes()) }
+    unsafe { core::slice::from_raw_parts_mut(contents.bufs.data.cast::<u8>(), b.buf_bytes()) }
 }
 
 fn node_header(buf: &[u8]) -> Head<c::btree_node> {

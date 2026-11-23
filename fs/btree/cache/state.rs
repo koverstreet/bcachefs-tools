@@ -75,7 +75,7 @@ impl Fs {
         let old = b.cache_state(lists);
         let mut pinned = b.flags.pinned() as usize;
         let mut ret = Ok(());
-        let data = unsafe { (*b.contents.data_ptr()).data };
+        let data = unsafe { (*b.contents.data_ptr()).bufs.data };
 
         /*
          * Write lock required for transitions that touch the data buffer or

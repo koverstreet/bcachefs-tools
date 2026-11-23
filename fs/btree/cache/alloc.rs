@@ -192,9 +192,9 @@ impl BtreeTrans<'_> {
         let bc = &fs.btree.cache;
         let start_time = local_clock();
 
-        let (b, held) = 'got_mem: {
-            if let Some(got) = fs.btree_node_grab(|l| &mut l.freeable, pcpu_read_locks) {
-                break 'got_mem got;
+        let (b, held, new_bufs) = 'got_mem: {
+            if let Some((b, held)) = fs.btree_node_grab(|l| &mut l.freeable, pcpu_read_locks) {
+                break 'got_mem (b, held, None);
             }
 
             /*
@@ -206,8 +206,8 @@ impl BtreeTrans<'_> {
             if unlikely(fs.system_memory_usage_high()) {
                 bc.nr_self_reclaim.fetch_add(1, Relaxed);
                 let live = pcpu_read_locks as usize;
-                if let Some(got) = fs.btree_node_grab(|l| &mut l.live[live].clean, pcpu_read_locks) {
-                    break 'got_mem got;
+                if let Some((b, held)) = fs.btree_node_grab(|l| &mut l.live[live].clean, pcpu_read_locks) {
+                    break 'got_mem (b, held, None);
                 }
             }
 
@@ -247,18 +247,14 @@ impl BtreeTrans<'_> {
                     }
                 };
 
-                unsafe {
-                    b.contents_mut().data = bufs.data.cast();
-                    (*core::ptr::from_ref(b).cast_mut()).aux_data = bufs.aux_data;
-                }
-                break 'got_mem (b, held);
+                break 'got_mem (b, held, Some(bufs));
             }
 
             /* Try to cannibalize another cached btree node: */
             if bc.alloc_lock.load(Relaxed) == current() {
-                let got = self.btree_node_cannibalize(paths, pcpu_read_locks);
+                let (b, held) = self.btree_node_cannibalize(paths, pcpu_read_locks);
                 fs.event_inc_trace(events::btree_cache_cannibalize, |out| prt!(out, "{}", self.fn_name()));
-                break 'got_mem got;
+                break 'got_mem (b, held, None);
             }
 
             fs.times.get(c::TimeStat::btree_node_mem_alloc as usize).update(start_time);
@@ -269,7 +265,6 @@ impl BtreeTrans<'_> {
         assert!(b.hash_val() == 0, "a hashed node allocated");
         assert!(!b.flags.dirty(), "a dirty node allocated");
         assert!(!b.flags.write_in_flight(), "a node allocated with a write in flight");
-        assert!(!LockedNode::of_hold(b, &held).contents().data.is_null(), "a node allocated with no buffer");
 
         /* @b may have been a node our paths still have cached: */
         self.node_forget(paths, b);
@@ -280,6 +275,10 @@ impl BtreeTrans<'_> {
         b.written.set(0);
         let mut locked = n.locked();
         let contents = locked.contents_mut();
+        if let Some(bufs) = new_bufs {
+            contents.bufs = bufs;
+        }
+        assert!(!contents.bufs.data.is_null(), "a node allocated with no buffer");
         contents.nsets = 0;
         contents.sib_u64s[0].set(0);
         contents.sib_u64s[1].set(0);

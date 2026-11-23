@@ -68,11 +68,11 @@ fn btree_check_header(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
 
 #[inline(always)]
 fn prefetch_aux(b: LockedNode<'_, BtreeNode>) {
-    prefetch(b.aux_data);
-
     let contents = b.contents();
+    prefetch(contents.bufs.aux_data);
+
     for t in &contents.set[..contents.nsets as usize] {
-        let p = b.aux_data.cast::<u64>().wrapping_add(t.aux_data_offset as usize).cast::<u8>();
+        let p = contents.bufs.aux_data.cast::<u64>().wrapping_add(t.aux_data_offset as usize).cast::<u8>();
 
         prefetch(p.wrapping_add(L1_CACHE_BYTES * 0));
         prefetch(p.wrapping_add(L1_CACHE_BYTES * 1));

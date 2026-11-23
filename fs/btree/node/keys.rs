@@ -62,13 +62,13 @@ impl BtreeNode {
     #[inline]
     pub fn keys<'a>(&'a self, contents: &'a NodeContents) -> Keys<'a> {
         self.own_contents(contents);
-        Self::buf_aligned(contents.data);
+        Self::buf_aligned(contents.bufs.data.cast());
         unsafe {
             Keys {
                 node:          self,
                 sets:          contents.sets(),
-                buf:           core::slice::from_raw_parts(contents.data.cast::<u64>(), self.buf_bytes() / size_of::<u64>()),
-                aux:           core::slice::from_raw_parts(self.aux_data.cast::<u64>(), self.aux_data_u64s()),
+                buf:           core::slice::from_raw_parts(contents.bufs.data.cast::<u64>(), self.buf_bytes() / size_of::<u64>()),
+                aux:           core::slice::from_raw_parts(contents.bufs.aux_data.cast::<u64>(), self.aux_data_u64s()),
                 unpack_fn_len: contents.unpack_fn_len,
             }
         }
@@ -77,9 +77,9 @@ impl BtreeNode {
     /// The buffer and the aux trees are the contents', had mutably with them.
     pub fn keys_mut<'a>(&'a self, contents: &'a mut NodeContents) -> KeysMut<'a> {
         self.own_contents(contents);
-        Self::buf_aligned(contents.data);
+        Self::buf_aligned(contents.bufs.data.cast());
         let (buf_u64s, aux_u64s) = (self.buf_bytes() / size_of::<u64>(), self.aux_data_u64s());
-        let NodeContents { data, format, nr_key_bits, unpack_fn_len, set, nsets, nr, .. } = contents;
+        let NodeContents { bufs, format, nr_key_bits, unpack_fn_len, set, nsets, nr, .. } = contents;
         unsafe {
             KeysMut {
                 node:          self,
@@ -88,8 +88,8 @@ impl BtreeNode {
                 unpack_fn_len: *unpack_fn_len,
                 sets:          Sets { set, nr: nsets },
                 nr,
-                buf:           core::slice::from_raw_parts_mut(data.cast::<u64>(), buf_u64s),
-                aux:           core::slice::from_raw_parts_mut(self.aux_data.cast::<u64>(), aux_u64s),
+                buf:           core::slice::from_raw_parts_mut(bufs.data.cast::<u64>(), buf_u64s),
+                aux:           core::slice::from_raw_parts_mut(bufs.aux_data.cast::<u64>(), aux_u64s),
             }
         }
     }

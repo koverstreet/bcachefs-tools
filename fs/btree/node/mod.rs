@@ -15,6 +15,7 @@ pub mod keys;
 pub mod sort;
 
 use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::cache::NodeBufs;
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::data_structures::dst_room::DstRoom;
@@ -25,7 +26,6 @@ use crate::util::projections::{Publish, Volatile};
 use crate::util::vstructs::Head;
 use crate::util::{Printbuf, ToText};
 use crate::data_structures::list::ListLinks;
-use core::ffi::c_void;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
@@ -116,7 +116,6 @@ pub struct BtreeNode {
     pub written: Volatile<u16>,
     pub whiteout_u64s: Volatile<u16>,
 
-    pub aux_data: *mut c_void,
     #[init(fs.opts.btree_node_size.get().ilog2() as u8)]
     pub byte_order: u8,
 
@@ -172,8 +171,8 @@ pub struct BtreeNode {
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct NodeContents {
-    /* swapped for a sort's bounce buffer, with the node held for write */
-    pub data: *mut Head<cs::btree_node>,
+    /* data swapped for a sort's bounce buffer, with the node held for write */
+    pub bufs: NodeBufs,
 
     pub nsets: u8,
     pub nr_key_bits: u8,
@@ -391,11 +390,11 @@ impl NodeContents {
     }
 
     pub fn data(&self) -> &Head<cs::btree_node> {
-        unsafe { &*self.data }
+        unsafe { &*self.bufs.data.cast() }
     }
 
     pub fn data_mut(&mut self) -> &mut Head<cs::btree_node> {
-        unsafe { &mut *self.data }
+        unsafe { &mut *self.bufs.data.cast() }
     }
 
     pub fn sets(&self) -> &[BsetTree] {

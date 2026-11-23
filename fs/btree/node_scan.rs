@@ -158,7 +158,7 @@ impl NodeBuf {
     }
 
     fn bytes(&mut self, bytes: usize) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.node().contents.get_mut().data.cast::<u8>(), bytes) }
+        unsafe { core::slice::from_raw_parts_mut(self.node().contents.get_mut().bufs.data.cast::<u8>(), bytes) }
     }
 }
 

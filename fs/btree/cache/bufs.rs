@@ -13,6 +13,7 @@ use crate::util::maybe_rcu_alloc::alloc_at;
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::ptr::NonNull;
+use cstruct_macros::MaybeZeroable;
 
 /// The bounce pool's elements, kvmalloc()'d as a bounce buffer is: accounted
 /// and reclaimable.
@@ -63,8 +64,8 @@ impl<'f> Bounce<'f> {
         assert!(self.bytes == b.buf_bytes(), "swapping a {} byte bounce for a {} byte node buffer",
                 self.bytes, b.buf_bytes());
 
-        let old = core::mem::replace(&mut contents.data, self.p.as_ptr().cast());
-        btree_node_buf_swap_account(self.fs, old.cast(), contents.data.cast());
+        let old = core::mem::replace(&mut contents.bufs.data, self.p.as_ptr().cast());
+        btree_node_buf_swap_account(self.fs, old.cast(), contents.bufs.data.cast());
         self.p = NonNull::new(old.cast()).expect("a node's buffer");
     }
 }
@@ -140,9 +141,10 @@ unsafe fn free_raw(p: *mut c_void, bytes: usize) {
 
 /// A node's buffers, allocated before the node they're for: its data and
 /// aux_data, for a node of 1 << byte_order bytes.
-pub(crate) struct NodeBufs {
-    pub(super) data:     *mut c_void,
-    pub(super) aux_data: *mut c_void,
+#[derive(MaybeZeroable)]
+pub struct NodeBufs {
+    pub(crate) data:     *mut c_void,
+    pub(crate) aux_data: *mut c_void,
     byte_order:          u32,
 }
 
@@ -274,10 +276,7 @@ fn node_with_bufs(fs: &Fs, struct_alloc: fn(&Fs, bool, Flags) -> Option<NonNull<
         bufs.free();
         return None;
     };
-    unsafe {
-        (*b.as_ptr()).contents_mut().data = bufs.data.cast();
-        (*b.as_ptr()).aux_data = bufs.aux_data;
-    }
+    unsafe { (*b.as_ptr()).contents_mut().bufs = bufs };
     Some(b)
 }
 
@@ -301,14 +300,8 @@ pub unsafe fn node_data_free(b: NonNull<BtreeNode>) {
     let p = b.as_ptr();
     ebug_assert!(!unsafe { (*p).flags.write_in_flight() }, "freeing the buffers of a node with a write in flight");
 
-    let mut bufs = unsafe {
-        NodeBufs {
-            data:       (*p).contents_mut().data.cast(),
-            aux_data:   (*p).aux_data,
-            byte_order: (*p).byte_order as u32,
-        }
-    };
-    if bufs.data.is_null() {
+    let contents = unsafe { (*p).contents_mut() };
+    if contents.bufs.data.is_null() {
         return;
     }
 
@@ -319,17 +312,13 @@ pub unsafe fn node_data_free(b: NonNull<BtreeNode>) {
      */
     unsafe {
         crate::os::kernel::account_reclaimed((*p).buf_bytes());
-        if !bufs.aux_data.is_null() {
+        if !contents.bufs.aux_data.is_null() {
             crate::os::kernel::account_reclaimed((*p).aux_data_bytes());
         }
     }
 
-    unsafe {
-        (*p).flags.set_just_written(false);
-        (*p).contents_mut().data = core::ptr::null_mut();
-        (*p).aux_data = core::ptr::null_mut();
-    }
-    bufs.free();
+    unsafe { (*p).flags.set_just_written(false) };
+    contents.bufs.free();
 }
 
 /// @b, a struct btree node_struct_alloc() made, freed: its buffers already
