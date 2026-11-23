@@ -27,13 +27,13 @@
 //! Readers read() it under a guard. Its one writer is had from the lock that
 //! publishes it - a Locked's or LockedBy's published writer (Publish).
 //!
-//! - RcuPtr<P> publishes a P, an RcuPointer, and owns what P owns. An
-//!   RcuOwner - ARef - owns its target, which readers read whole: so it must
-//!   be dropped a grace period on - an RcuDropMember's or an
+//! - RcuPtr<P> publishes a P, an RcuPointer - a single-word pointer whose
+//!   drop frees its target as the target says: a MaybeRcuAlloc, an ARef, a
+//!   ref on a placed count. Readers read the target whole, so it must be
+//!   dropped a grace period on - an RcuDropMember's or an
 //!   RcuDropWorkMember's, a build error if not - and what's taken out may be
-//!   dropped at once. A NonNull owns nothing, and publishing one is unsafe: a
-//!   promise that it stays valid until a grace period after it's taken out.
-//!   Its writer, an RcuPtrWriter, publishes, takes and get()s.
+//!   dropped at once. Its writer, an RcuPtrWriter, publishes, takes and
+//!   get()s.
 //! - RcuBuf<T> is a buffer its writer replaces whole, kvfree_rcu()ing the
 //!   old; RcuArray<T, H> is one of C's `{ rcu_head; nr; H; T s[] }`, read as
 //!   a &[T] and grown by copy and replace - its elements RcuElements, plain
@@ -47,8 +47,8 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::c;
 use crate::data_structures::dst_array::{DstArray, DstHead};
-use crate::util::alloc::{AllocError, KVmalloc};
-use crate::util::maybe_rcu_alloc::RcuFreeing;
+use crate::util::alloc::{Alloc, AllocError, KVmalloc};
+use crate::util::maybe_rcu_alloc::{MaybeRcuAlloc, RcuFreeing};
 use crate::util::projections::Publish;
 use crate::util::place::{At, Field, FieldOf, Here, Path, Placed};
 use crate::util::refcount::{ARef, AlwaysRefCounted, RefGuard, Refcount};
@@ -282,9 +282,13 @@ impl<T> NoDetach<T> {
 
 // ── RcuPtr ───────────────────────────────────────────────────────────────
 
-/// into_raw() gives itself up as a pointer to the target, which from_raw()
-/// takes back.
-pub trait RcuPointer: Sized {
+/// A single-word pointer to its target: into_raw() gives it up as a raw one,
+/// which from_raw() takes back.
+///
+/// # Safety
+/// The target lives as long as Self does, and is dropped and freed only as
+/// its type says: a grace period on, if its members say so.
+pub unsafe trait RcuPointer: Sized {
     type Target;
 
     fn into_raw(self) -> NonNull<Self::Target>;
@@ -294,24 +298,19 @@ pub trait RcuPointer: Sized {
     unsafe fn from_raw(p: NonNull<Self::Target>) -> Self;
 }
 
-/// # Safety
-/// The target lives as long as Self does, and is dropped and freed only as
-/// its type says: a grace period on, if its members say so.
-pub unsafe trait RcuOwner: RcuPointer {}
-
-impl<T> RcuPointer for NonNull<T> {
+unsafe impl<T, A: Alloc> RcuPointer for MaybeRcuAlloc<T, A> {
     type Target = T;
 
     fn into_raw(self) -> NonNull<T> {
-        self
+        MaybeRcuAlloc::into_raw(self)
     }
 
     unsafe fn from_raw(p: NonNull<T>) -> Self {
-        p
+        unsafe { MaybeRcuAlloc::from_raw(p) }
     }
 }
 
-impl<T: AlwaysRefCounted> RcuPointer for ARef<T> {
+unsafe impl<T: AlwaysRefCounted> RcuPointer for ARef<T> {
     type Target = T;
 
     fn into_raw(self) -> NonNull<T> {
@@ -323,11 +322,9 @@ impl<T: AlwaysRefCounted> RcuPointer for ARef<T> {
     }
 }
 
-unsafe impl<T: AlwaysRefCounted> RcuOwner for ARef<T> {}
-
 /// A ref on a count placed in what it keeps, as a pointer to that: had back
 /// by the path to the count, its field.
-impl<C, B, const N: u64> RcuPointer for RefGuard<Placed<C, At<B, N>>>
+unsafe impl<C, B, const N: u64> RcuPointer for RefGuard<Placed<C, At<B, N>>>
 where
     B: Field<N, Type = Placed<C, At<B, N>>> + 'static,
     Placed<C, At<B, N>>: Refcount<Target = B>,
@@ -345,12 +342,9 @@ where
     }
 }
 
-unsafe impl<C, B, const N: u64> RcuOwner for RefGuard<Placed<C, At<B, N>>>
-where
-    B: Field<N, Type = Placed<C, At<B, N>>> + 'static,
-    Placed<C, At<B, N>>: Refcount<Target = B>,
-{}
-
+/// A pointer walked under the RCU read lock alone. Its target is RCU-freed -
+/// !FreeAnytime - which publish() checks, a build error if not: Rust has no
+/// negative bound to say it here.
 #[repr(transparent)]
 pub struct RcuPtr<P: RcuPointer> {
     p:  AtomicPtr<P::Target>,
@@ -402,25 +396,13 @@ impl<P: RcuPointer> core::ops::Deref for RcuPtrWriter<P> {
     }
 }
 
-impl<P: RcuOwner> RcuPtrWriter<P> {
+impl<P: RcuPointer> RcuPtrWriter<P> {
     /// Into an empty slot.
     pub fn publish(&self, p: P) {
         <P::Target as RcuFreeing>::assert_rcu_freed();
         self.0.fill(p);
     }
-}
 
-impl<T> RcuPtrWriter<NonNull<T>> {
-    /// Into an empty slot.
-    ///
-    /// # Safety
-    /// @p stays valid until a grace period after it's taken out.
-    pub unsafe fn publish(&self, p: NonNull<T>) {
-        self.0.fill(p);
-    }
-}
-
-impl<P: RcuPointer> RcuPtrWriter<P> {
     pub fn take(&self) -> Option<P> {
         self.0.swap(None)
     }
