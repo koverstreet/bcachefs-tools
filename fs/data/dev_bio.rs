@@ -7,10 +7,13 @@
 //! waiter's, by finish().
 
 use core::pin::Pin;
+use core::sync::atomic::{AtomicU16, AtomicUsize, Ordering::Relaxed};
 
 use pin_init::{pin_data, pin_init, PinInit};
 
 use crate::c;
+use crate::data_structures::array_vec::ArrayVec;
+use crate::util::gather::Fold;
 use crate::os::kernel::{local_clock, READ, WRITE};
 use crate::sb::members::BlockDev;
 use crate::errcode::BchError;
@@ -93,6 +96,41 @@ impl<B: BioOwns> HoldsDev for DevBio<B> {
 impl<B: BioOwns> Gathered<()> for DevBio<B> {
     fn done(self: Pin<&mut Self>, _: Result<(), BchError>) {
         self.end();
+    }
+}
+
+/// The devices a gather of DevBios failed on, and their status.
+#[derive(Default)]
+pub struct DevErrs<const N: usize>(pub ArrayVec<(u8, c::blk_status_t), N>);
+
+impl<const N: usize> Fold for DevErrs<N> {
+    type Item = Option<(u8, c::blk_status_t)>;
+    /// How many have failed, and each one's device and status, packed
+    type Acc = (AtomicUsize, [AtomicU16; N]);
+
+    fn acc() -> impl PinInit<Self::Acc> {
+        (AtomicUsize::new(0), core::array::from_fn(|_| AtomicU16::new(0)))
+    }
+
+    fn fold(acc: &Self::Acc, v: Self::Item) {
+        if let Some((dev, status)) = v {
+            let i = acc.0.fetch_add(1, Relaxed);
+            acc.1[i].store(u16::from(dev) << 8 | u16::from(status), Relaxed);
+        }
+    }
+
+    fn result(acc: &Self::Acc) -> Self {
+        let n = acc.0.load(Relaxed);
+        DevErrs(acc.1[..n].iter().map(|e| e.load(Relaxed)).map(|e| ((e >> 8) as u8, e as u8)).collect())
+    }
+}
+
+/// Gathered with others, its failure put: its device and status, if it
+/// failed.
+impl<B: BioOwns, const N: usize> Gathered<DevErrs<N>> for DevBio<B> {
+    fn done(self: Pin<&mut Self>, _: Result<(), BchError>) -> Option<(u8, c::blk_status_t)> {
+        let (ca, status) = self.end();
+        (status != 0).then_some((ca.dev_idx, status))
     }
 }
 
