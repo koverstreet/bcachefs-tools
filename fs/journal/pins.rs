@@ -26,6 +26,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, PercpuRwSem, SharedGuard, SpinLockIrq};
+use crate::os::kernel::unlikely;
 use crate::debug::trace::events;
 use crate::util::alloc::{init_at, AllocError, KVVec};
 use crate::util::place::{up, FieldPath};
@@ -313,20 +314,21 @@ impl c::journal {
         false
     }
 
+    #[inline(never)]
     pub fn pin_set(&self, seq: u64, pin: &Pin, ty: PinType) {
         self.pins().set(seq, pin, ty)
     }
 
     pub fn pin_add(&self, seq: u64, pin: &Pin, ty: PinType) {
         let held = pin.seq();
-        if held == 0 || held > seq {
+        if unlikely(held == 0 || held > seq) {
             self.pin_set(seq, pin, ty)
         }
     }
 
     pub fn pin_update(&self, seq: u64, pin: &Pin, ty: PinType) {
         let held = pin.seq();
-        if held == 0 || held < seq {
+        if unlikely(held == 0 || held < seq) {
             self.pin_set(seq, pin, ty)
         }
     }
