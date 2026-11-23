@@ -166,8 +166,7 @@ impl Fs {
         if bits == 0 {
             return 0;
         }
-        let pid = unsafe { sched::task_pid(sched::current()) };
-        crate::util::hash::hash_64(pid as u64, bits.into())
+        crate::util::hash::hash_64(sched::current_pid() as u64, bits.into())
     }
 
     /// Never unset once set

@@ -63,6 +63,10 @@ pub unsafe fn task_pid(task: *mut c::task_struct) -> core::ffi::c_int {
     unsafe { c::bch2_task_pid(task) }
 }
 
+pub fn current_pid() -> core::ffi::c_int {
+    unsafe { task_pid(current()) }
+}
+
 /// The CPU this task's to be woken on next, for the scheduler.
 pub fn set_current_wake_cpu(cpu: core::ffi::c_int) {
     unsafe { c::bch2_set_current_wake_cpu(cpu) }

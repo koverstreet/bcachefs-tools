@@ -425,7 +425,7 @@ fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
 
     c.with_trans_list(|list| {
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            let pid = unsafe { sched::task_pid(sched::current()) };
+            let pid = sched::current_pid();
 
             unsafe { (*p).locking_wait.task.store(sched::current(), Ordering::Relaxed) };
 

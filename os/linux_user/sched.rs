@@ -88,6 +88,10 @@ pub unsafe fn task_pid(task: *mut c::task_struct) -> c_int {
     unsafe { (*task).pid }
 }
 
+pub fn current_pid() -> c_int {
+    unsafe { task_pid(current()) }
+}
+
 /// Nothing to tell a scheduler here.
 pub fn set_current_wake_cpu(_cpu: c_int) {}
 
