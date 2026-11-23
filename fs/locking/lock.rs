@@ -4,6 +4,7 @@ use crate::os::lockdep::LockClass;
 use crate::util::place::{Contained, Field, FieldOf, Here, Path, Place, Placed, RefValue};
 use crate::util::refcount::AtomicRef;
 use crate::util::projections::Publish;
+use crate::util::sharing::{self, Sharing};
 use core::cell::UnsafeCell;
 use core::ffi::{c_ulong, CStr};
 use core::marker::{PhantomData, PhantomPinned};
@@ -809,26 +810,43 @@ where
 /// Which lock that is, @L names: its place - at!(Fs.sb), of a Placed<Locked>
 /// - whose guards have it, as a Guard. With none, () - only the owner knows,
 /// and has it only unsafely.
+///
+/// Shared by default; Unshared, there's no lock, and G is had by get().
+///
+/// No Send or Sync impls: one for LockedBy<.., Shared> would leave Unshared
+/// with none. Shared's Sync is its LockCell's.
 #[repr(C)]
-pub struct LockedBy<G, P = (), L = ()> {
-    protected: UnsafeCell<G>,
+pub struct LockedBy<G, P = (), L = (), S: Sharing = sharing::Shared> {
+    protected: S::Cell<G>,
     published: P,
     _lock:     PhantomData<fn() -> L>,
 }
 
-// As Locked's.
-unsafe impl<G: Send, P: Send, L> Send for LockedBy<G, P, L> {}
-unsafe impl<G: Send, P: Sync, L> Sync for LockedBy<G, P, L> {}
+unsafe impl<G, P: ::pin_init::Zeroable, L, S: Sharing> ::pin_init::Zeroable for LockedBy<G, P, L, S>
+where
+    S::Cell<G>: ::pin_init::Zeroable,
+{}
 
-unsafe impl<G: ::pin_init::Zeroable, P: ::pin_init::Zeroable, L> ::pin_init::Zeroable for LockedBy<G, P, L> {}
+impl<G, P, L, S: Sharing> LockedBy<G, P, L, S> {
+    pub fn new(protected: G, published: P) -> Self {
+        LockedBy { protected: S::cell(protected), published, _lock: PhantomData }
+    }
+
+    /// G, had through the only reference to its owner.
+    pub fn get_mut(&mut self) -> &mut G {
+        S::cell_get_mut(&mut self.protected)
+    }
+}
+
+impl<G, P, L> LockedBy<G, P, L, sharing::Unshared> {
+    pub fn get(&self) -> &G {
+        &self.protected
+    }
+}
 
 impl<G, P, L> LockedBy<G, P, L> {
     /// Where the G is in a LockedBy.
     pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
-
-    pub const fn new(protected: G, published: P) -> Self {
-        LockedBy { protected: UnsafeCell::new(protected), published, _lock: PhantomData }
-    }
 
     /// What it protects, unlocked: for a racy peek, as Locked::data_ptr().
     pub fn data_ptr(&self) -> *const G {
@@ -847,11 +865,6 @@ impl<G, P, L> LockedBy<G, P, L> {
     /// lives, and nothing else refers to it.
     pub unsafe fn protected_mut(&self) -> &mut G {
         unsafe { &mut *self.protected.get() }
-    }
-
-    /// G, had through the only reference to its owner.
-    pub fn get_mut(&mut self) -> &mut G {
-        self.protected.get_mut()
     }
 }
 
@@ -880,7 +893,7 @@ unsafe fn as_writer<P: Publish>(p: &P) -> &P::Writer {
     unsafe { &*core::ptr::from_ref(p).cast::<P::Writer>() }
 }
 
-impl<G, P, L> Deref for LockedBy<G, P, L> {
+impl<G, P, L, S: Sharing> Deref for LockedBy<G, P, L, S> {
     type Target = P;
 
     fn deref(&self) -> &P {
@@ -906,7 +919,7 @@ impl<G, P, L> AsLockedBy for LockedBy<G, P, L> {
 }
 
 // Opaque to TypeInfo, size only: G is the owner's to read.
-impl<G, P, L> crate::typeinfo::TypeInfo for LockedBy<G, P, L> {
+impl<G, P, L, S: Sharing> crate::typeinfo::TypeInfo for LockedBy<G, P, L, S> {
     const INFO: &'static crate::typeinfo::StructInfo = &crate::typeinfo::StructInfo {
         name:   "LockedBy",
         size:   core::mem::size_of::<Self>(),

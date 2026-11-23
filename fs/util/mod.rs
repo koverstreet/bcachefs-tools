@@ -31,6 +31,7 @@ pub mod ratelimit;
 pub mod rcu;
 pub mod rcu_pending;
 pub mod refcount;
+pub mod sharing;
 pub mod siphash;
 pub mod sleep;
 pub mod task;
