@@ -1459,11 +1459,10 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
                                        StartOpts { split: true, commit, ..Default::default() })?;
 
     trans.node_lock_write(paths, path, level)?;
-    let b = paths.held_btree_node(path, level).expect("the old root, write locked");
 
     let mut n = update.alloc_root(paths, path, level + 1);
 
-    update.push_parent_key(b.key());
+    update.push_parent_key(paths[path].locked_btree_node(level).expect("the old root, write locked").key());
     if let Err(e) = update.insert_parent_keys(paths, path, &mut n) {
         trans.node_unlock(paths, path, level + 1);
         return Err(e);
@@ -1484,7 +1483,7 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
     {
         let _noio = MemallocFlags::noio();
         let _lists = fs.btree.cache.lock.lock();
-        b.flags.set_permanent(false);
+        paths[path].locked_btree_node(level).expect("the old root, held by its path").flags.set_permanent(false);
     }
 
     trans.verify_locks(paths);
