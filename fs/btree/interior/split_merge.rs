@@ -569,21 +569,23 @@ fn btree_node_op_log(out: &mut Printbuf, fs: &Fs, srcs: &[Node<'_>], dsts: &[New
 /// - and the new nodes made visible, in the parent or as a new root. With
 /// @insert_parent_keys, the update's parent keys go in first: @b is a parent
 /// they didn't fit in.
-fn btree_split(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
+/// The node path @path holds at @level split, or compacted.
+fn btree_split(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
                insert_parent_keys: bool) -> Result<(), BchError> {
-    let ret = btree_split_in(update, paths, path, b, insert_parent_keys);
+    let ret = btree_split_in(update, paths, path, level, insert_parent_keys);
     update.trans().verify_locks(paths);
     ret
 }
 
-fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
+fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
                   insert_parent_keys: bool) -> Result<(), BchError> {
     let trans = update.trans();
     let fs = trans.fs();
-    let level = usize::from(b.c.level.get());
     let has_parent = paths[path].locked_btree_node(level + 1).is_some();
 
     trans.verify_paths(paths);
+
+    let b = paths[path].locked_btree_node(level).expect("a node to split, held by its path");
 
     b.keys(b.contents()).verify_btree_nr_keys();
     assert!(has_parent || fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|r| ptr::eq(r, b.node())),
@@ -681,6 +683,7 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
         None
     };
 
+    let b = paths[path].locked_btree_node(level).expect("a node to split, held by its path");
     let log = |out: &mut Printbuf| btree_node_op_log(out, fs, &[b], &nodes);
     if nodes.len() == 2 {
         fs.event_inc_trace(events::btree_node_split, log);
@@ -740,8 +743,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
             });
             Err(trans.restart(Errcode::transaction_restart_split_race))
         } else {
-            let b = paths.held_btree_node(path, level).expect("an interior update's node, write locked");
-            btree_split(update, paths, path, b, true)
+            btree_split(update, paths, path, level, true)
         };
         trans.verify_locks(paths);
         return ret;
@@ -782,8 +784,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     update.updated_node(paths[path].locked_btree_node(level).expect("an interior update's node").node());
     trans.node_unlock_write(paths, path, level);
 
-    let b = paths.held_btree_node(path, level).expect("an interior update's node");
-    trans.revalidate_updates_in_node(update.t(), &mut paths.paths_and_updates(), b);
+    trans.revalidate_updates_at(update.t(), &mut paths.paths_and_updates(), path, level);
     Ok(())
 }
 
@@ -1457,14 +1458,12 @@ pub(crate) fn split_leaf(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: 
                          commit: CommitOpts) -> Result<(), BchError> {
     let trans = t.trans();
     let level = usize::from(paths[path].level());
-    /* btree_split & merge may both cause paths array to be reallocated */
-    let b = paths.held_btree_node(path, level).expect("a leaf its path holds");
 
     let update = InteriorUpdate::start(t, paths, path, level,
                                        StartOpts { split: true, commit, new_key_u64s, ..Default::default() })?;
 
     trans.node_lock_write(paths, path, level)?;
-    btree_split(&update, paths, path, b, false)?;
+    btree_split(&update, paths, path, level, false)?;
     update.done(paths);
 
     let mut l = level + 1;
@@ -1545,7 +1544,7 @@ fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &m
     let update = InteriorUpdate::start(t, paths, iter.path, level, opts)?;
 
     trans.node_lock_write(paths, iter.path, level)?;
-    let b = paths.held_btree_node(iter.path, level).expect("a rewrite's node, held by its path");
+    let b = paths[iter.path].locked_btree_node(level).expect("a rewrite's node, held by its path");
     ebug_assert!(ptr::eq(b.node(), node), "rewriting a node its path doesn't hold");
 
     let mut n = update.alloc_replacement(b);
@@ -1559,7 +1558,10 @@ fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &m
         update.set_root(paths, iter.path, &mut n);
     }
 
-    fs.event_inc_trace(events::btree_node_rewrite, |out| crate::prt!(out, "{}", b.pos_to_text(fs)));
+    fs.event_inc_trace(events::btree_node_rewrite, |out| {
+        let b = paths[iter.path].locked_btree_node(level).expect("a rewrite's node, held by its path");
+        crate::prt!(out, "{}", b.pos_to_text(fs))
+    });
 
     update.replace(paths, level, &[iter.path], &mut [n]);
     update.done(paths);

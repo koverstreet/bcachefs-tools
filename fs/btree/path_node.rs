@@ -63,6 +63,13 @@ impl BtreeTrans<'_> {
         }
     }
 
+    /// revalidate_updates_in_node(), of the node path @idx holds at @level.
+    pub(in crate::btree) fn revalidate_updates_at(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
+                                                  idx: PathIdx, level: usize) {
+        let b = pu.paths.held_btree_node(idx, level).expect("a node changed, held by its path");
+        self.revalidate_updates_in_node(t, pu, b);
+    }
+
     pub(in crate::btree) fn revalidate_updates_in_node(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                                        b: LockedNode<'_, BtreeNode>) {
         let data = b.contents().data();
