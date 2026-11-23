@@ -33,6 +33,47 @@ impl Drop for BdevFile {
     }
 }
 
+/// What a device's exclusive holder is to the block layer, which calls it as
+/// the device goes away, or to sync: get(), under bd_holder_lock - which keeps
+/// the holder live - for what outlives the lock, then the call with that, the
+/// lock dropped. holder_ops::<Self>() are its blk_holder_ops.
+pub trait HolderOps: Sized {
+    type Ref;
+
+    fn get(&self) -> Option<Self::Ref>;
+    fn mark_dead(r: Self::Ref, bdev: &BlockDevice, surprise: bool);
+    fn sync(r: Self::Ref);
+}
+
+/// The blk_holder_ops of a device opened with an @H as its holder.
+pub const fn holder_ops<H: HolderOps>() -> c::blk_holder_ops {
+    c::blk_holder_ops {
+        mark_dead: Some(holder_mark_dead::<H>),
+        sync:      Some(holder_sync::<H>),
+        ..::pin_init::zeroed()
+    }
+}
+
+/// # Safety
+/// @bdev's holder is an @H, and bd_holder_lock is held: this drops it.
+unsafe fn holder_get<H: HolderOps>(bdev: *mut BlockDevice) -> Option<H::Ref> {
+    let r = unsafe { (*(*bdev).bd_holder.cast::<H>()).get() };
+    unsafe { c::mutex_unlock((&raw mut (*bdev).bd_holder_lock).cast()) };
+    r
+}
+
+unsafe extern "C" fn holder_mark_dead<H: HolderOps>(bdev: *mut BlockDevice, surprise: bool) {
+    if let Some(r) = unsafe { holder_get::<H>(bdev) } {
+        H::mark_dead(r, unsafe { &*bdev }, surprise)
+    }
+}
+
+unsafe extern "C" fn holder_sync<H: HolderOps>(bdev: *mut BlockDevice) {
+    if let Some(r) = unsafe { holder_get::<H>(bdev) } {
+        H::sync(r)
+    }
+}
+
 /// @path opened, as @mode says: bdev_file_open_by_path(). @holder, if
 /// BLK_OPEN_EXCL, is the exclusive claim, and @ops the block layer's calls
 /// into it - the device going away, a sync.

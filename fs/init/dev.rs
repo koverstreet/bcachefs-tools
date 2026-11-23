@@ -1725,78 +1725,72 @@ impl Dev {
 // ── blk_holder_ops ────────────────────────────────────────────────────────
 
 #[cfg(kernel)]
-pub(crate) static HOLDER_OPS: c::blk_holder_ops = c::blk_holder_ops {
-    mark_dead: Some(bdev_mark_dead),
-    sync: Some(bdev_sync),
-    ..::pin_init::zeroed()
-};
+pub(crate) static HOLDER_OPS: c::blk_holder_ops = crate::os::blkdev::holder_ops::<Holder>();
 
-/// # Safety
-/// bd_holder_lock is held; this drops it
+/// @r's filesystem, once it's started - or none, if it stopped first: our ref
+/// is what bch2_fs_stop() waits for.
 #[cfg(kernel)]
-unsafe fn bdev_get_fs(bdev: *mut crate::os::blkdev::BlockDevice) -> Option<RoRef> {
-    let r = unsafe {
-        let holder = (*bdev).bd_holder.cast::<Holder>();
-        (*holder).fs.load(Acquire).as_ref().and_then(|fs: &Fs| fs.ro_ref.tryget())
-    };
-    unsafe { c::mutex_unlock((&raw mut (*bdev).bd_holder_lock).cast()) };
-
-    let r = r?;
+fn holder_started(r: RoRef) -> Option<RoRef> {
     let fs: &Fs = &r;
     let started = |fs: &Fs| fs.flags.get(c::FsFlag::started);
     let Ok(()) = fs.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
         (started(fs) || fs.flags.get(c::FsFlag::stopping)).then_some(())
     });
-    // stopped without starting: our ref is what bch2_fs_stop() waits for
     started(fs).then_some(r)
 }
 
 #[cfg(kernel)]
-unsafe extern "C" fn bdev_mark_dead(bdev: *mut crate::os::blkdev::BlockDevice, surprise: bool) {
-    let Some(r) = (unsafe { bdev_get_fs(bdev) }) else { return };
-    let fs: &Fs = &r;
+impl crate::os::blkdev::HolderOps for Holder {
+    type Ref = RoRef;
 
-    // Not necessary, c->ro_ref guards against the filesystem being unmounted -
-    // we only take this to avoid a warning in sync_filesystem
-    let sb = fs.vfs_super();
-    let _umount = sb.map(|sb| sb.umount().read());
-    let state = fs.state_lock_write();
-    let Some(ca) = fs.members().find(|ca| ca.disk_sb.bdev.get() == bdev) else { return };
+    fn get(&self) -> Option<RoRef> {
+        unsafe { self.fs.load(Acquire).as_ref() }.and_then(|fs: &Fs| fs.ro_ref.tryget())
+    }
 
-    let mut msg = Printbuf::new();
-    log_msg_start(&mut msg, ca.name().as_cstr());
-    prt!(&mut msg, "offline from block layer\n");
+    fn mark_dead(r: RoRef, bdev: &crate::os::blkdev::BlockDevice, surprise: bool) {
+        let Some(r) = holder_started(r) else { return };
+        let fs: &Fs = &r;
 
-    let dev = state.dev_may_offline(&ca, c::BCH_FORCE_IF_DEGRADED, &mut msg).is_ok();
-    if !dev {
-        if let Some(sb) = sb {
-            unsafe {
+        // Not necessary, c->ro_ref guards against the filesystem being unmounted -
+        // we only take this to avoid a warning in sync_filesystem
+        let sb = fs.vfs_super();
+        let umount = sb.map(|sb| (sb, sb.umount().read()));
+        let state = fs.state_lock_write();
+        let Some(ca) = fs.members().find(|ca| ca.disk_sb.bdev.get().cast_const() == core::ptr::from_ref(bdev))
+        else { return };
+
+        let mut msg = Printbuf::new();
+        log_msg_start(&mut msg, ca.name().as_cstr());
+        prt!(&mut msg, "offline from block layer\n");
+
+        let dev = state.dev_may_offline(&ca, c::BCH_FORCE_IF_DEGRADED, &mut msg).is_ok();
+        if !dev {
+            if let Some((sb, umount)) = &umount {
                 if !surprise {
-                    c::sync_filesystem(sb.as_ptr());
+                    // Ignored, as C ignored it
+                    let _ = sb.sync(umount);
                 }
-                c::shrink_dcache_sb(sb.as_ptr());
-                c::evict_inodes(sb.as_ptr());
+                sb.evict_all(umount);
             }
+            let _ = fs.journal_flush();
         }
-        let _ = fs.journal_flush();
+        let print = dev || fs.emergency_read_only(&mut msg);
+
+        state.dev_offline(&ca);
+
+        if print {
+            print_str(&fs, LogLevel::ERR, &mut msg);
+        }
     }
-    let print = dev || fs.emergency_read_only(&mut msg);
 
-    state.dev_offline(&ca);
+    fn sync(r: RoRef) {
+        let Some(r) = holder_started(r) else { return };
+        let fs: &Fs = &r;
 
-    if print {
-        print_str(&fs, LogLevel::ERR, &mut msg);
-    }
-}
-
-#[cfg(kernel)]
-unsafe extern "C" fn bdev_sync(bdev: *mut crate::os::blkdev::BlockDevice) {
-    let Some(r) = (unsafe { bdev_get_fs(bdev) }) else { return };
-    let fs: &Fs = &r;
-
-    if let Some(sb) = fs.vfs_super() {
-        let _umount = sb.umount().read();
-        unsafe { c::sync_filesystem(sb.as_ptr()) };
+        if let Some(sb) = fs.vfs_super() {
+            // Ignored, as C ignored it
+            let _ = sb.sync(&sb.umount().read());
+        }
     }
 }
 

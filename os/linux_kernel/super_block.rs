@@ -131,6 +131,20 @@ impl<T> SuperBlock<T> {
         unsafe { c::sync_inodes_sb(self.as_ptr()) }
     }
 
+    /// sync_filesystem().
+    pub fn sync(&self, _umount: &SharedGuard<'_, RwSem>) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::sync_filesystem(self.as_ptr()) })
+    }
+
+    /// Its dentries shrunk and its inodes evicted, the device under them
+    /// gone: shrink_dcache_sb(), evict_inodes().
+    pub fn evict_all(&self, _umount: &SharedGuard<'_, RwSem>) {
+        unsafe {
+            c::shrink_dcache_sb(self.as_ptr());
+            c::evict_inodes(self.as_ptr());
+        }
+    }
+
     /// Whether @uid and @gid are ids in its user namespace:
     /// kuid_has_mapping(), kgid_has_mapping().
     pub fn maps_ids(&self, uid: c::kuid_t, gid: c::kgid_t) -> bool {
