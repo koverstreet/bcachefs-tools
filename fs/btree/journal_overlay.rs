@@ -48,7 +48,9 @@ use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
 use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Mutex, Ref};
 use crate::util::projections::VolatilePublish;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::{Box, KVVec, Kmalloc};
+use crate::util::thin::ThinBox;
+use crate::util::vstructs::SelfSized;
 use crate::data_structures::gap_buffer::GapBuffer;
 use crate::os::kernel::cond_resched;
 use crate::util::log::{LogLevel, LogMsg};
@@ -57,9 +59,8 @@ use crate::util::rcu::{self, ReadGuard, RcuArray, RcuElement};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::{bch_err, field, prt, new_lock, published};
 use core::cmp::Ordering;
-use core::mem::size_of;
+use core::mem::{size_of, ManuallyDrop};
 use core::pin::Pin;
-use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{bitfield, MaybeZeroable, Init, BitfieldMembers};
 use c::Errcode as e;
@@ -104,7 +105,6 @@ nest! {
     #[repr(C)]
     pub struct journal_key {
         #>[repr(C)]
-        #>[derive(Clone, Copy)]
         pub src: pub union journal_key_src {
             #>[repr(C)]
             #>[derive(Clone, Copy)]
@@ -112,7 +112,7 @@ nest! {
                 pub journal_seq_offset: u32,
                 pub journal_offset: u32,
             },
-            pub allocated_k: *mut c::bkey_i,
+            pub allocated_k: ManuallyDrop<KeyBox>,
         },
         #[members]
         #>[derive(MaybeZeroable)]-
@@ -231,29 +231,41 @@ impl c::journal_key {
         self.overwritten_range.get_acquire()
     }
 
-    /// For @k, kmalloc()'d, a key of its own.
-    fn new_allocated(btree: Btree, level: u32, k: *mut c::bkey_i) -> Self {
-        let mut n: Self = ::pin_init::zeroed();
-        n.id = c::journal_key_id::new().with_btree_id(btree).with_level(level as u8);
-        n.flags = c::journal_key_flags::new().with_allocated(true);
-        n.src.allocated_k = k;
-        n
+    fn new(src: c::journal_key_src, id: c::journal_key_id, flags: c::journal_key_flags) -> Self {
+        c::journal_key { src, id, flags, overwritten: ::pin_init::zeroed(), overwritten_range: ::pin_init::zeroed() }
+    }
+
+    /// For @k, a key of its own.
+    fn new_allocated(btree: Btree, level: u32, k: KeyBox) -> Self {
+        Self::new(c::journal_key_src { allocated_k: ManuallyDrop::new(k) },
+                  c::journal_key_id::new().with_btree_id(btree).with_level(level as u8),
+                  c::journal_key_flags::new().with_allocated(true))
     }
 
     /// Where in the journal it was read from: None for a key inserted since.
     pub(crate) fn journal_pos(&self) -> Option<c::journal_key_journal_pos> {
         (!self.allocated()).then(|| unsafe { self.src.journal })
     }
+
+    /// Its own key, to edit: a key inserted since the journal was read.
+    fn own_key_mut(&mut self) -> &mut BkeyI {
+        assert!(self.allocated(), "a journal key's own key, of one read from the journal");
+        // SAFETY: allocated: new_allocated()'s
+        unsafe { &mut self.src.allocated_k }
+    }
 }
 
 impl Drop for c::journal_key {
     fn drop(&mut self) {
         if self.allocated() {
-            // SAFETY: new_allocated()'s, kmalloc()'d: its own
-            unsafe { crate::util::alloc::kfree_unsized(self.src.allocated_k.cast()) };
+            // SAFETY: allocated: new_allocated()'s, dropped once
+            unsafe { ManuallyDrop::drop(&mut self.src.allocated_k) }
         }
     }
 }
+
+/// A key a journal key has of its own, inserted since the journal was read.
+type KeyBox = ThinBox<BkeyI, Kmalloc>;
 
 /// Of a key at @level in @btree and key @r: which btree and level sorts
 /// first.
@@ -274,12 +286,12 @@ impl c::journal_keys {
     /// Key @k: its own, or in the journal entry it was read from -
     /// journal_key_k().
     #[inline]
-    fn key_k(&self, k: &c::journal_key) -> *mut c::bkey_i {
+    fn key_k(&self, k: &c::journal_key) -> *mut () {
         // SAFETY: a key read from the journal is in an entry that lives as
         // long as the keys, at its offset
         unsafe {
             if k.allocated() {
-                return k.src.allocated_k;
+                return ThinBox::as_ptr(&k.src.allocated_k).as_ptr();
             }
             let pos = k.src.journal;
             let i = self.entries().at_offset(pos.journal_seq_offset).expect("a journal key's entry");
@@ -289,7 +301,7 @@ impl c::journal_keys {
 
     #[inline]
     pub(crate) fn key<'a>(&'a self, k: &'a c::journal_key) -> &'a BkeyI {
-        unsafe { &*BkeyI::from_raw(self.key_k(k)) }
+        unsafe { &*BkeyI::from_thin(self.key_k(k)) }
     }
 
     #[inline]
@@ -480,7 +492,7 @@ impl c::journal_keys {
     /// Key @k, to edit in place: its own, or in the journal entry it was read
     /// from - had alone, not rw.
     pub(crate) fn key_mut<'a>(&'a self, _not_rw: &'a mut NotRw<'_>, k: &c::journal_key) -> &'a mut BkeyI {
-        unsafe { &mut *BkeyI::from_raw_mut(self.key_k(k)) }
+        unsafe { &mut *BkeyI::from_thin(self.key_k(k)).cast_mut() }
     }
 }
 
@@ -649,36 +661,32 @@ pub(crate) fn journal_key_overwrite(jk: &c::journal_keys, btree: Btree, level: u
 // ── Inserts, by recovery before the btree's read-write ───────────────────
 
 /// @k inserted, as @btree and @level's key, replacing an equal key - adding
-/// to it, for accounting - or before it. Taking @k, whose kfree() is the
-/// keys' from here on - on error too. Before the btree runs, into pre_sort,
-/// which sorting merges in.
-///
-/// # Safety
-/// @k is a key, kmalloc()'d, the caller's to give.
-unsafe fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: *mut c::bkey_i) -> Result<(), BchError> {
+/// to it, for accounting - or before it. Taking @k: the keys' from here on -
+/// on error too. Before the btree runs, into pre_sort, which sorting merges
+/// in.
+fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: KeyBox) -> Result<(), BchError> {
     let fs = not_rw.fs;
     let jk = fs.journal_keys_get().expect("journal keys inserted after recovery was done with them");
     let jk = jk.value();
-    let n = c::journal_key::new_allocated(btree, level, k);
+    let mut n = c::journal_key::new_allocated(btree, level, k);
 
     if !fs.flags.get(f::btree_running) {
         return not_rw.get_mut_of(&jk.pre_sort).push(n)
             .map_err(|_| fs.err(e::ENOMEM_journal_key_insert));
     }
 
-    // SAFETY: the caller's
-    let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
-    let idx = jk.search(btree, level, k.k.p);
+    let idx = jk.search(btree, level, jk.key_pos(&n));
 
     let keys = not_rw.get_mut_of(&jk.keys);
 
     if let Some(o) = keys.get_mut(idx).filter(|o| jk.key_cmp(&n, o).is_eq()) {
         let ok = jk.key(o);
-        let accounting = k.k.key_type() == BkeyType::accounting && ok.k.key_type() == BkeyType::accounting;
+        let accounting = jk.key(&n).k.key_type() == BkeyType::accounting &&
+            ok.k.key_type() == BkeyType::accounting;
 
         if !(accounting && !o.allocated()) {
             if accounting {
-                accounting::accumulate(k, BkeySC::from(ok));
+                accounting::accumulate(n.own_key_mut(), BkeySC::from(ok));
             }
             *o = n;
             return Ok(());
@@ -697,13 +705,8 @@ unsafe fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: *mut 
 
 /// insert_take() of a copy of @k.
 pub(crate) fn insert(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
-    let bytes = k.k.bytes();
-    let n = crate::util::alloc::kmalloc(bytes).map_err(|_| not_rw.fs.err(e::ENOMEM_journal_key_insert))?;
-    // SAFETY: @bytes of key, into as many of ours; then ours to hand over
-    unsafe {
-        ptr::copy_nonoverlapping(k.as_bytes().as_ptr(), n.as_ptr(), bytes);
-        insert_take(not_rw, btree, level, n.as_ptr().cast())
-    }
+    let k = Box::try_clone_from_ref_in(k, Kmalloc).map_err(|_| not_rw.fs.err(e::ENOMEM_journal_key_insert))?;
+    insert_take(not_rw, btree, level, ThinBox::new(k))
 }
 
 /// A deleted key at @pos: what's there in the btree, gone.
@@ -987,16 +990,16 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
             }
 
             for k in entry_keys {
-                let mut n = ::pin_init::zeroed::<c::journal_key>();
-                n.id = c::journal_key_id::new()
-                    .with_btree_id(Btree(entry.btree_id.into()))
-                    .with_level(entry.level);
-                n.flags = c::journal_key_flags::new().with_rewind(rewind);
-                n.src.journal = c::journal_key_journal_pos {
-                    journal_seq_offset: (seq - fs.journal_entries_base_seq.get()) as u32,
-                    journal_offset: ((k.as_bytes().as_ptr() as usize - (&raw const i.j._data) as usize)
-                                     / size_of::<u64>()) as u32,
-                };
+                let n = c::journal_key::new(
+                    c::journal_key_src { journal: c::journal_key_journal_pos {
+                        journal_seq_offset: (seq - fs.journal_entries_base_seq.get()) as u32,
+                        journal_offset: ((k.as_bytes().as_ptr() as usize - (&raw const i.j._data) as usize)
+                                         / size_of::<u64>()) as u32,
+                    } },
+                    c::journal_key_id::new()
+                        .with_btree_id(Btree(entry.btree_id.into()))
+                        .with_level(entry.level),
+                    c::journal_key_flags::new().with_rewind(rewind));
 
                 if keys.reserve().is_err() {
                     sort_dedup(jk, keys);

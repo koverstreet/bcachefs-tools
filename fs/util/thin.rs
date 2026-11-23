@@ -132,6 +132,12 @@ impl<T: ?Sized + SelfSized, A: Alloc> ThinBox<T, A> {
         ManuallyDrop::new(b).p
     }
 
+    /// Its address, still its own - as into_raw()'s, its Box's: for a holder
+    /// that hands its T out mutably by its own means.
+    pub fn as_ptr(b: &Self) -> NonNull<()> {
+        b.p
+    }
+
     /// # Safety
     /// @p is a T that's had by nothing else: into_raw()'s, of a ThinBox<T, A>,
     /// this the one from_raw() of it - or A's allocation of a T, at
