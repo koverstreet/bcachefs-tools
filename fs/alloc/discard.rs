@@ -473,7 +473,7 @@ impl<'a> Worker<'a> {
 
     /// @a, its bucket discarded or on a device that doesn't discard, committed
     /// free - the one path a bucket takes to free from need_discard.
-    fn mark_free_key<'t>(&self, t: &TransAttempt<'_, 't>, iter: &BtreeIter<'_>, mut a: TransBkey<'_, 't, c::AllocV4>)
+    fn mark_free_key<'b, 't>(&self, t: &TransAttempt<'b, 't>, iter: &BtreeIter<'b>, mut a: TransBkey<'b, 't, c::AllocV4>)
         -> Result<(), BchError>
     {
         let fs = t.fs();

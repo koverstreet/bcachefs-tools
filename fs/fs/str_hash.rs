@@ -300,12 +300,12 @@ fn slot_in_snapshot<'i, 'a, 't, T: HashTable>(
 
 /// In inode @inum as seen in @snapshot: where it went. EEXIST_str_hash_set if
 /// its name is taken.
-pub fn set_in_snapshot<'t, T: HashTable>(
-    t:            &TransAttempt<'_, 't>,
+pub fn set_in_snapshot<'a, 't, T: HashTable>(
+    t:            &TransAttempt<'a, 't>,
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
     snapshot:     u32,
-    mut insert:   TransBkey<'_, 't, TableVal<T>>,
+    mut insert:   TransBkey<'a, 't, TableVal<T>>,
     set_flags:    SetFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<Bpos, BchError> {
@@ -321,11 +321,11 @@ pub fn set_in_snapshot<'t, T: HashTable>(
 
 /// In subvolume and inode @inum: where it went. EEXIST_str_hash_set if its
 /// name is taken.
-pub fn set<'t, T: HashTable>(
-    t:            &TransAttempt<'_, 't>,
+pub fn set<'a, 't, T: HashTable>(
+    t:            &TransAttempt<'a, 't>,
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
-    mut insert:   TransBkey<'_, 't, TableVal<T>>,
+    mut insert:   TransBkey<'a, 't, TableVal<T>>,
     set_flags:    SetFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<Bpos, BchError> {

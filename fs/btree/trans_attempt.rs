@@ -870,7 +870,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// The pointer at @level of @btree, at @key's position, made @key and
     /// committed, its triggers not run: for a repair or an injection that does
     /// the accounting itself, or none.
-    pub fn btree_node_update_key_at_pos_raw(&self, btree: Btree, level: u32, key: TransBkey<'_, 't>)
+    pub fn btree_node_update_key_at_pos_raw(&self, btree: Btree, level: u32, key: TransBkey<'a, 't>)
         -> Result<(), BchError>
     {
         let mut node_iter = BtreeNodeIter::new(self, btree, key.k().p, 0, level - 1, BtreeIterFlags::INTENT);
@@ -1116,6 +1116,13 @@ impl<'a, 't> TransBkey<'a, 't> {
         debug_assert!(self.k().key_type().is::<V>());
         debug_assert!(self.buf_u64s as usize * size_of::<u64>() >= size_of::<BkeyI<V>>());
         unsafe { self.cast() }
+    }
+}
+
+impl<'a, 't, V: ?Sized + ValidatedVal> TransBkey<'a, 't, V> {
+    /// Any key's, as it's queued: validated, as AsRef<BkeyI> reads it.
+    pub fn into_any(self) -> TransBkey<'a, 't> {
+        TransBkey { ptr: self.ptr, buf_u64s: self.buf_u64s, t: PhantomData, v: PhantomData }
     }
 }
 
