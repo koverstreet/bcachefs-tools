@@ -73,7 +73,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by_self, from_bytes_mut, vstruct,
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by_self, from_bytes_mut,
                             FakeFlexArray, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VStructError,
                             ViewEntries, VstructMut, VstructRef};
 use crate::btree::bkey::{AnyKey, BkeyPHeader};
@@ -273,7 +273,6 @@ pub struct bkey_packed {
      */
     pub pad: [u8; core::mem::size_of::<c::bkey>() - 3],
 }
-vstruct!(bkey_packed, u64s, start = 0);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
