@@ -292,11 +292,10 @@ pub fn create_snapshot(
         DirentTarget::Inode(inum)          => inum,
     };
 
-    let mut k = create_key(t, &hash_info, dir_inum, d_type, name, None, target)?;
-    let ret = str_hash::set_in_snapshot::<Dirents>(t, &hash_info, dir_inum, snapshot, &mut k,
-                                                   set_flags, update_flags);
-    *dir_offset = k.k().p.offset;
-    ret
+    let k = create_key(t, &hash_info, dir_inum, d_type, name, None, target)?;
+    *dir_offset = str_hash::set_in_snapshot::<Dirents>(t, &hash_info, dir_inum, snapshot, k,
+                                                       set_flags, update_flags)?.offset;
+    Ok(())
 }
 
 /// Create dirent @name in directory @dir, pointing at @target - for
@@ -316,10 +315,9 @@ pub fn create(
 ) -> Result<(), BchError> {
     let hash_info = str_hash::hash_info_init(t.fs(), dir_u)?;
 
-    let mut k = create_key(t, &hash_info, dir, d_type, name, None, target)?;
-    let ret = str_hash::set::<Dirents>(t, &hash_info, dir, &mut k, set_flags, update_flags);
-    *dir_offset = k.k().p.offset;
-    ret
+    let k = create_key(t, &hash_info, dir, d_type, name, None, target)?;
+    *dir_offset = str_hash::set::<Dirents>(t, &hash_info, dir, k, set_flags, update_flags)?.offset;
+    Ok(())
 }
 
 // ── Casefolding ──────────────────────────────────────────────────────────
@@ -718,7 +716,7 @@ pub fn rename(
             if mode == BCH_RENAME_EXCHANGE {
                 set_subvol_parent(&mut new_src, src_dir);
             }
-            t.update(&dst_iter, &new_dst, UpdateTriggerFlags::empty())?;
+            t.update(&dst_iter, new_dst, UpdateTriggerFlags::empty())?;
             (new_src, dst_pos)
         }
     };
@@ -732,7 +730,7 @@ pub fn rename(
     let delete_dst = old_dst.is_some_and(|o| o.is_subvol() && new_dst_pos.snapshot != o.snapshot);
 
     if !delete_src || !new_src_deleted {
-        t.update(&src_iter, &new_src, UpdateTriggerFlags::empty())?;
+        t.update(&src_iter, new_src, UpdateTriggerFlags::empty())?;
     }
 
     if delete_src {

@@ -452,7 +452,7 @@ pub fn pending_mod(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k
     if level == 0 {
         let mut n = t.bkey_reassemble_room(k, c::BKEY_EXTENT_U64s_MAX as usize * size_of::<u64>())?;
         set_pending(&mut n);
-        t.update(iter, &n, UpdateTriggerFlags::empty())?;
+        t.update(iter, n, UpdateTriggerFlags::empty())?;
         return t.commit(Some(&DiskReservation::new(fs)), CommitFlags::NO_ENOSPC);
     }
 

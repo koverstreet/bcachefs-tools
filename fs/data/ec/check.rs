@@ -35,9 +35,11 @@ use crate::format::{Bpos, Btree, BkeyType};
 fn bucket_stripe_ref_mod(t: &TransAttempt<'_, '_>, bucket: Bpos, stripe: u64, set: bool)
     -> Result<(), BchError>
 {
-    let mut a = t.start_alloc_update(bucket, UpdateTriggerFlags::empty())?;
-    let r = &mut a.v_mut().stripe_refcount;
-    *r = if set { r.wrapping_add(1) } else { r.wrapping_sub(1) };
+    t.start_alloc_update(bucket, UpdateTriggerFlags::empty(), |a| {
+        let r = &mut a.v_mut().stripe_refcount;
+        *r = if set { r.wrapping_add(1) } else { r.wrapping_sub(1) };
+        Ok(())
+    })?;
 
     t.bit_mod(Btree::bucket_to_stripe, pos(bucket_to_u64(bucket), stripe), set)
 }

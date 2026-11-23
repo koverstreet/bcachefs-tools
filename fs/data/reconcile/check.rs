@@ -411,7 +411,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
         let mut bp = t.bkey_alloc_typed::<c::Backpointer>()?;
         bp.k_mut().p = iter.pos();
         *bp.v_mut() = want;
-        t.update(iter, &bp, UpdateTriggerFlags::empty())
+        t.update(iter, bp, UpdateTriggerFlags::empty())
     };
 
     if !is_bp {
@@ -485,8 +485,8 @@ fn check_stripe_can_widen_one(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k:
 
     if fsck_err!(t, id::stripe_can_widen_wrong, "stripe can_widen={}, should be {}\n{}",
                  v.can_widen(), correct, k.to_text(fs))? {
-        let mut u = t.bkey_make_mut(iter, s, UpdateTriggerFlags::empty())?;
-        u.v_mut().bits.set_can_widen(correct);
+        t.bkey_make_mut(iter, s, UpdateTriggerFlags::empty(),
+                        |u| Ok(u.v_mut().bits.set_can_widen(correct)))?;
     }
     Ok(())
 }

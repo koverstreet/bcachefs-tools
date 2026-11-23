@@ -211,7 +211,7 @@ fn reattach_via_descendant_dirent<'a, 't>(
             let mut iter = BtreeIter::new(t, Btree::dirents, pos,
                                           BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
             iter.traverse(t)?;
-            t.update(&iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+            t.update(&iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         }
         DstSlot::Taken => {
             bch_err!(t.fs(),

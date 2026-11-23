@@ -214,7 +214,7 @@ async fn poison_task(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, read_p
             return Ok(());
         }
         h.flags |= c::BCH_INLINE_DATA_POISONED;
-        t.update(&iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+        t.update(&iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
         if record {
             damage::record(t, read_pos, id::data_read_csum_err)?;

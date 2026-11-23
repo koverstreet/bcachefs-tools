@@ -237,12 +237,13 @@ bitflags! {
     }
 }
 
-/// In inode @inum as seen in @snapshot. With SetFlags::MUST_CREATE, a key
-/// of the same name already there is returned, through @iter, and nothing
-/// inserted; with MUST_REPLACE, there must be one. None if it was inserted
-/// (queued).
+/// Where @insert goes, in inode @inum as seen in @snapshot: None, with @iter
+/// at its slot and @insert's position set, for the caller to queue it there
+/// with @update_flags. With SetFlags::MUST_CREATE, a key of the same name
+/// already there is returned instead, through @iter; with MUST_REPLACE, there
+/// must be one.
 #[allow(clippy::too_many_arguments)]
-pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
+fn slot_in_snapshot<'i, 'a, 't, T: HashTable>(
     t:            &'i TransAttempt<'a, 't>,
     iter:         &'i mut BtreeIter<'a>,
     hash_info:    &c::bch_hash_info,
@@ -294,38 +295,40 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
     }
 
     insert.k_mut().p = iter.pos();
-    t.update(iter, insert, update_flags)?;
     Ok(None)
 }
 
-/// In inode @inum as seen in @snapshot. EEXIST_str_hash_set if its name is
-/// taken.
+/// In inode @inum as seen in @snapshot: where it went. EEXIST_str_hash_set if
+/// its name is taken.
 pub fn set_in_snapshot<'t, T: HashTable>(
     t:            &TransAttempt<'_, 't>,
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
     snapshot:     u32,
-    insert:       &mut TransBkey<'_, 't, TableVal<T>>,
+    mut insert:   TransBkey<'_, 't, TableVal<T>>,
     set_flags:    SetFlags,
     update_flags: UpdateTriggerFlags,
-) -> Result<(), BchError> {
+) -> Result<Bpos, BchError> {
     let mut iter = BtreeIter::uninit(t.trans());
-    match set_or_get_in_snapshot::<T>(t, &mut iter, hash_info, inum, snapshot, insert,
-                                      set_flags, update_flags)? {
-        Some(_) => Err(t.fs().err(Errcode::EEXIST_str_hash_set)),
-        None    => Ok(()),
+    if slot_in_snapshot::<T>(t, &mut iter, hash_info, inum, snapshot, &mut insert,
+                             set_flags, update_flags)?.is_some() {
+        return Err(t.fs().err(Errcode::EEXIST_str_hash_set));
     }
+    let p = insert.k().p;
+    t.update(&iter, insert, update_flags)?;
+    Ok(p)
 }
 
-/// In subvolume and inode @inum. EEXIST_str_hash_set if its name is taken.
+/// In subvolume and inode @inum: where it went. EEXIST_str_hash_set if its
+/// name is taken.
 pub fn set<'t, T: HashTable>(
     t:            &TransAttempt<'_, 't>,
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
-    insert:       &mut TransBkey<'_, 't, TableVal<T>>,
+    mut insert:   TransBkey<'_, 't, TableVal<T>>,
     set_flags:    SetFlags,
     update_flags: UpdateTriggerFlags,
-) -> Result<(), BchError> {
+) -> Result<Bpos, BchError> {
     insert.k_mut().p.inode = inum.inum;
 
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
@@ -340,7 +343,7 @@ pub fn delete_at<'t, T: HashTable>(
     flags:     UpdateTriggerFlags,
 ) -> Result<(), BchError> {
     let k = deletion(t, iter.pos(), needs_whiteout::<T>(t, hash_info, iter)?)?;
-    t.update(iter, &k, flags)
+    t.update(iter, k, flags)
 }
 
 /// A key deleting @pos: a whiteout, if a later key in its probe sequence needs
@@ -659,13 +662,14 @@ impl Repair<'_, '_> {
             dirent::init_name(fs, new.key_mut(), self.hash_info, name.as_os_str(), None)?;
 
             let mut iter = BtreeIter::uninit(t.trans());
-            match set_or_get_in_snapshot::<Dirents>(t, &mut iter, self.hash_info, dir,
-                                                    old.k.p.snapshot, &mut new,
-                                                    SetFlags::MUST_CREATE,
-                                                    UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
+            match slot_in_snapshot::<Dirents>(t, &mut iter, self.hash_info, dir,
+                                              old.k.p.snapshot, &mut new,
+                                              SetFlags::MUST_CREATE,
+                                              UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
                 None => {
                     *self.updated_before_k_pos |= new.k().p < old.k.p;
-                    return self.update_backpointers::<Dirents>(t, old.k.p, new.as_ref());
+                    self.update_backpointers::<Dirents>(t, old.k.p, new.as_ref())?;
+                    return t.update(&iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE);
                 }
                 // name taken - record a sample of the dirents that hold them
                 Some(dup) if i < 10 => prt!(msg, "\n{}", dup.to_text(fs)),
@@ -733,22 +737,24 @@ impl Repair<'_, '_> {
         let mut iter = BtreeIter::uninit(t.trans());
         let dir = c::subvol_inum { subvol: 0, inum: k.k.p.inode };
 
-        if let Some(dup) = set_or_get_in_snapshot::<T>(t, &mut iter, self.hash_info, dir,
-                                                       k.k.p.snapshot, &mut new,
-                                                       SetFlags::MUST_CREATE,
-                                                       UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
+        if let Some(dup) = slot_in_snapshot::<T>(t, &mut iter, self.hash_info, dir,
+                                                 k.k.p.snapshot, &mut new,
+                                                 SetFlags::MUST_CREATE,
+                                                 UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
             return self.dup_entries::<T>(t, k, dup);
         }
+        let new_pos = new.k().p;
+        self.update_backpointers::<T>(t, k.k.p, new.as_ref())?;
+        t.update(&iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
-        *self.updated_before_k_pos |= new.k().p < k.k.p;
+        *self.updated_before_k_pos |= new_pos < k.k.p;
 
-        t.insert_snapshot_whiteouts(btree, k.k.p, new.k().p)?;
+        t.insert_snapshot_whiteouts(btree, k.k.p, new_pos)?;
 
         let mut k_iter = BtreeIter::new(t, btree, k.k.p, BtreeIterFlags::SLOTS);
         k_iter.traverse(t)?;
         delete_at::<T>(t, self.hash_info, &mut k_iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
-        self.update_backpointers::<T>(t, k.k.p, new.as_ref())?;
         t.commit_lazy(None, CommitFlags::NO_ENOSPC)
     }
 

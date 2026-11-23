@@ -115,7 +115,7 @@ impl TransAttempt<'_, '_> {
         let mut n = BkeyI::<c::Cookie>::at(p);
         n.v.cookie = (cookie_generation(k) + 1).into();
         let n = self.bkey_copy(n.as_ref())?;
-        self.update(&iter, &n, UpdateTriggerFlags::empty())
+        self.update(&iter, n, UpdateTriggerFlags::empty())
     }
 
     /// Whether @scan is requested: its cookie's there.
@@ -431,8 +431,8 @@ fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
         let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
         let want = cache.can_widen(fs, s.v())?;
         if s.v().can_widen() != want {
-            let mut u = t.bkey_make_mut(iter, s, UpdateTriggerFlags::empty())?;
-            u.v_mut().bits.set_can_widen(want);
+            t.bkey_make_mut(iter, s, UpdateTriggerFlags::empty(),
+                            |u| Ok(u.v_mut().bits.set_can_widen(want)))?;
         }
         Ok(())
     })

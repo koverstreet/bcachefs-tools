@@ -381,7 +381,7 @@ fn extent_drop_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_
     }
 
     t.relock()?;
-    t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    t.update(iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(Some(&res), CommitFlags::NO_ENOSPC)
 }
 

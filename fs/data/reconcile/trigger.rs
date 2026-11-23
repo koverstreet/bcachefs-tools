@@ -238,7 +238,7 @@ pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u3
     let mut bp = t.bkey_alloc_typed::<c::Backpointer>()?;
     bp.k_mut().p = iter.pos();
     *bp.v_mut() = rb_bp(btree, level, k);
-    t.update(&iter, &bp, UpdateTriggerFlags::empty())?;
+    t.update(&iter, bp, UpdateTriggerFlags::empty())?;
     Ok(iter.pos())
 }
 

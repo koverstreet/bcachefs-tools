@@ -264,7 +264,7 @@ fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys,
         t.set_journal_seq_to_pin(seq);
     }
 
-    t.update(iter.iter(), &new, UpdateTriggerFlags::NORUN)
+    t.update(iter.iter(), new, UpdateTriggerFlags::NORUN)
 }
 
 fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize) -> Result<(), BchError> {
@@ -316,7 +316,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize
     }
 
     let new = t.bkey_make_mut_noupdate(BkeySC::from(bk))?;
-    t.update(iter.iter(), &new, update_flags)
+    t.update(iter.iter(), new, update_flags)
 }
 
 #[cold]

@@ -713,7 +713,7 @@ fn cmd_update(
                 };
             }
 
-            t.update(&iter, &new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
+            t.update(&iter, new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
         },
     );
 
@@ -794,7 +794,7 @@ fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, level: u32, assigns
             let mut new = t.bkey_reassemble(k)?;
             new.k_mut().p = new_pos;
 
-            t.update(&new_iter, &new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
+            t.update(&new_iter, new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
         },
     );
 
@@ -887,7 +887,7 @@ fn cmd_set(
 
             set_fields(fs, &mut new, assigns, false, &mut user_err)?;
 
-            t.update(&iter, &new, update_flags)
+            t.update(&iter, new, update_flags)
         },
     );
 

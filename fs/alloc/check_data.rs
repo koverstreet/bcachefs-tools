@@ -120,7 +120,7 @@ pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: Btree, level
 
     let mut iter = BtreeNodeIter::new(t, btree, n.k().p, 0, level, BtreeIterFlags::INTENT);
     iter.iter().traverse(t)?;
-    t.update(iter.iter(), &n, UpdateTriggerFlags::empty())
+    t.update(iter.iter(), n, UpdateTriggerFlags::empty())
 }
 
 /// Whether @k's replica on @dev was bad, and dropped: read back, its checksum
@@ -357,7 +357,9 @@ fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: Btree, k: B
     let mut iter = BtreeNodeIter::new(t, btree, new.k().p, 0, 0,
                                       BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
     iter.iter().traverse(t)?;
-    t.update(iter.iter(), &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN)?;
+    // the update is its own key: a copy, so @new can be returned
+    let u = t.bkey_reassemble(new.as_sc())?;
+    t.update(iter.iter(), u, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN)?;
     Ok(new)
 }
 
@@ -510,7 +512,7 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
     // insert, GH #910), and - since gc_pos is already at this key - also mark
     // it into gc state before gc has marked the old key.
     if level == 0 {
-        return t.update(iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN);
+        return t.update(iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN);
     }
 
     t.btree_node_update_key_at_pos_raw(btree, level, new)?;

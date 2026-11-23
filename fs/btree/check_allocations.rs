@@ -290,7 +290,7 @@ fn alloc_write_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, ca: &Dev, k: 
         a.v_mut().io_time[READ] = (fs.io_clock[READ].now.load(Relaxed) as u64).max(1);
     }
 
-    t.update(iter, &a, UpdateTriggerFlags::NORUN)
+    t.update(iter, a, UpdateTriggerFlags::NORUN)
 }
 
 fn gc_alloc_done(fs: &Fs) -> Result<(), BchError> {
@@ -359,7 +359,7 @@ fn gc_write_stripes_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeyS
             *count = Le16::new(if i < nr_data { block_sectors(i) } else { 0 });
         }
 
-        t.update(iter, &new, UpdateTriggerFlags::empty())?;
+        t.update(iter, new, UpdateTriggerFlags::empty())?;
     }
 
     Ok(())

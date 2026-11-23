@@ -121,7 +121,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
         /* Check that we're not violating cache coherency rules: */
         assert!(!btree_k.k.key_type().is_deleted(), "flushing a cached key over a deleted btree key");
 
-        t.update(b_iter, &k,
+        t.update(b_iter, k,
                  UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE |
                  UpdateTriggerFlags::KEY_CACHE_RECLAIM |
                  UpdateTriggerFlags::NORUN)?;

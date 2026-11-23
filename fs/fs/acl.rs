@@ -281,8 +281,8 @@ mod vfs {
         }
 
         if let Some(acl) = acl {
-            let mut k = acl.to_xattr(t, ty)?;
-            str_hash::set::<Xattrs>(t, &hash_info, inum, &mut k, str_hash::SetFlags::empty(),
+            let k = acl.to_xattr(t, ty)?;
+            str_hash::set::<Xattrs>(t, &hash_info, inum, k, str_hash::SetFlags::empty(),
                                     UpdateTriggerFlags::empty())?;
             inode.set_flag(ty.inode_flag(), true);
         } else {
@@ -354,7 +354,7 @@ mod vfs {
 
         let mut new = acl.to_xattr(t, AclType::Access)?;
         new.k_mut().p = iter.pos();
-        t.update(&iter, &new, UpdateTriggerFlags::empty())?;
+        t.update(&iter, new, UpdateTriggerFlags::empty())?;
         Ok(Some(acl))
     }
 }

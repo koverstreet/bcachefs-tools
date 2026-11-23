@@ -20,7 +20,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
-use crate::debug::trace::events;
+use crate::debug::trace::{events, TraceEvent};
 use crate::sb::errors::FsckFlags;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::Validated;
@@ -224,10 +224,14 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
     }
 
     n.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)?;
-    t.update(iter, &n, UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
+    let traced = <events::stripe_update_extent as TraceEvent>::trace_enabled()
+        .then(|| BkeyBuf::from_key(n.as_sc()));
+    t.update(iter, n, UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
 
     count(&mut u.stats.done, bp);
-    fs.event_inc_trace(events::stripe_update_extent, |out| prt!(out, "{}", n.as_sc().to_text(fs)));
+    fs.event_inc_trace(events::stripe_update_extent, |out| if let Some(n) = &traced {
+        prt!(out, "{}", BkeySC::from(n).to_text(fs));
+    });
     Ok(())
 }
 

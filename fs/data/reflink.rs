@@ -286,7 +286,7 @@ fn gc_write_reflink_key(
         } else {
             *new.refcount_mut() = (r_refcount as u64).into();
         }
-        t.update(iter, &new, UpdateTriggerFlags::empty())?;
+        t.update(iter, new, UpdateTriggerFlags::empty())?;
     }
     Ok(())
 }
@@ -667,7 +667,7 @@ fn trans_trigger_reflink_p_segment(
     *refcount = if overwrite { refcount.get() - 1 } else { refcount.get() + 1 }.into();
 
     iter.set_pos_to_extent_start();
-    t.update(&iter, &new, UpdateTriggerFlags::empty())
+    t.update(&iter, new, UpdateTriggerFlags::empty())
 }
 
 /// @p's references, taken or dropped - transactionally, a segment at a time,
@@ -761,13 +761,13 @@ static INDIRECT_INLINE_DATA: Trigger = Trigger(trigger_indirect_inline_data);
 
 /// Make @orig indirect, and update it: its data moves to a new indirect
 /// extent in the reflink btree, and @orig becomes a reflink_p to it, in its
-/// buffer - which has to have room for one.
+/// buffer - which has to have room for one. The reflink_p is returned.
 pub fn make_extent_indirect<'a, 't>(
     t:                               &TransAttempt<'a, 't>,
     extent_iter:                     &BtreeIter<'a>,
-    orig:                            &mut TransBkey<'a, 't>,
+    mut orig:                        TransBkey<'a, 't>,
     reflink_p_may_update_opts_field: bool,
-) -> Result<(), BchError> {
+) -> Result<BkeyI<c::ReflinkP>, BchError> {
     let fs = t.fs();
 
     if orig.k().key_type() == BkeyType::inline_data {
@@ -784,7 +784,7 @@ pub fn make_extent_indirect<'a, 't>(
      * or the inode's options match the defaults, this is a no-op.) The
      * allocation below reserves room for the entry + invalid-device padding.
      */
-    let opts = crate::inode_opts::get_io_opts(t, None, BkeySC::from(&*orig))?;
+    let opts = crate::inode_opts::get_io_opts(t, None, BkeySC::from(&orig))?;
 
     let mut reflink_iter = BtreeIter::new(t, Btree::reflink, POS_MAX, BtreeIterFlags::INTENT);
     reflink_iter.peek_prev(t)?;
@@ -812,15 +812,14 @@ pub fn make_extent_indirect<'a, 't>(
     /* The refcount, zero, then the extent's value */
     let (refcount, val) = r_v.val_bytes_mut().split_at_mut(size_of::<Le64>());
     refcount.fill(0);
-    val.copy_from_slice(BkeySC::from(&*orig).val_bytes());
+    val.copy_from_slice(BkeySC::from(&orig).val_bytes());
 
     r_v.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)?;
 
-    t.update(&reflink_iter, &r_v, UpdateTriggerFlags::empty())?;
+    let r_v_start = r_v.k().start_offset();
+    t.update(&reflink_iter, r_v, UpdateTriggerFlags::empty())?;
 
     /* orig, rewritten in place as the reflink_p - in the room the caller gave it */
-    let r_v_start = r_v.k().start_offset();
-
     orig.set_val_u64s(size_of::<c::ReflinkP>() / size_of::<u64>())
         .unwrap_or_else(|e| panic!("no room in {} for a reflink_p: {e}", orig.k()));
     orig.k_mut().set_key_type(BkeyType::reflink_p);
@@ -832,7 +831,9 @@ pub fn make_extent_indirect<'a, 't>(
     if reflink_p_may_update_opts_field {
         r_p.v_mut().set_may_update_options(true);
     }
-    t.update(extent_iter, orig, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    let r_p = BkeyI::from_key(orig.as_sc()).expect("a reflink_p, as just made");
+    t.update(extent_iter, orig, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    Ok(r_p)
 }
 
 // ── remap ────────────────────────────────────────────────────────────────
@@ -908,17 +909,16 @@ pub fn remap_range(
                 return fpunch_one(t, &mut dst_iter, dst_inum, end, Some(&mut *i_sectors_delta)).map(|_| ());
             }
 
-            let mut src = src.expect("source data: the source iterator didn't move past it");
+            let src = src.expect("source data: the source iterator didn't move past it");
 
-            if src.k().key_type() != BkeyType::reflink_p {
+            let src_p = if src.k().key_type() != BkeyType::reflink_p {
                 src_iter.set_pos_to_extent_start();
 
-                make_extent_indirect(t, &src_iter, &mut src, reflink_p_may_update_opts_field)?;
+                make_extent_indirect(t, &src_iter, src, reflink_p_may_update_opts_field)?
+            } else {
+                BkeyI::from_key(src.as_sc()).expect("a reflink_p")
+            };
 
-                assert!(src.k().key_type() == BkeyType::reflink_p);
-            }
-
-            let src_p = src.as_ref().arm::<c::ReflinkP>().expect("a reflink_p");
             let mut dst_p = t.bkey_alloc_typed::<c::ReflinkP>()?;
 
             dst_p.v_mut().set_idx(src_p.v.idx() + (src_want.offset - src_p.k.start_offset()));

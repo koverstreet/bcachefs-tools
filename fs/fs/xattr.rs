@@ -294,8 +294,9 @@ pub fn set_key(
     set_flags.set(str_hash::SetFlags::MUST_CREATE,  flags & XATTR_CREATE != 0);
     set_flags.set(str_hash::SetFlags::MUST_REPLACE, flags & XATTR_REPLACE != 0);
 
-    str_hash::set::<Xattrs>(t, hash_info, inum, &mut k, set_flags,
-                            UpdateTriggerFlags::empty())
+    str_hash::set::<Xattrs>(t, hash_info, inum, k, set_flags,
+                            UpdateTriggerFlags::empty())?;
+    Ok(())
 }
 
 /// Set xattr @name of @ty on inode @inum to @value, or with None remove it,

@@ -494,7 +494,7 @@ impl<'a> Worker<'a> {
         v.journal_seq_empty = 0;
         v.set_data_type(DataType::free);
 
-        t.update(iter, &a, UpdateTriggerFlags::IS_DISCARD)?;
+        t.update(iter, a, UpdateTriggerFlags::IS_DISCARD)?;
         t.commit(None, CommitOpts::new().watermark(Watermark::reclaim)
                  .flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC))?;
 
@@ -845,7 +845,7 @@ fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &Dev, bp: BkeySC<'_, c::Backp
     };
     let Some(k) = k.arm::<Ptrs>() else { return Ok(()) };
 
-    let mut n = t.bkey_make_mut(iter, k, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    let mut n = t.bkey_make_mut_noupdate(k)?;
     n.drop_device_noerror(fs, ca.dev_idx.into());
     let mut n: TransBkey<'_, '_> = n.into();
 
@@ -853,7 +853,7 @@ fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &Dev, bp: BkeySC<'_, c::Backp
         n.set_error(fs, ErrorKeyReason::device_removed);
         damage::record_data_loss(t, Btree(bp.v().btree_id.into()), n.k().p, id::data_lost_device_removed)?;
     }
-    Ok(())
+    t.update(iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 /// Invalidate @bucket of generation @generation: drop @ca's pointers from what each

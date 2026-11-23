@@ -932,7 +932,7 @@ mod vfs {
             new_quota.v.c[Q_INO].hardlimit = qdq.d_ino_hardlimit.into();
         }
 
-        t.update(&iter, &t.bkey_copy(new_quota.as_ref())?, UpdateTriggerFlags::empty())
+        t.update(&iter, t.bkey_copy(new_quota.as_ref())?, UpdateTriggerFlags::empty())
     }
 
     fn set_quota(fs: &Fs, rdonly: bool, kqid: c::kqid, qdq: &c::qc_dqblk) -> Result<(), BchError> {

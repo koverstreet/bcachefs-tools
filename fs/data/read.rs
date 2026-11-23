@@ -984,7 +984,7 @@ fn narrow_crcs_update(t: &TransAttempt<'_, '_>, p: &Plan<'_>, new: c::bch_extent
     if !narrowed {
         return Err(fail());
     }
-    t.update(&iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    t.update(&iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 fn mark_failure(pick: &c::extent_ptr_decoded, failed: &mut c::bch_io_failures, e: BchError) -> BchError {
@@ -1072,11 +1072,12 @@ fn maybe_poison_extent(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, fla
                                              size_of::<c::bch_extent_flags>())?;
     new.reborrow().arm::<PtrsMut>().expect("poisoning an extent whose entries can't be edited")
         .extent_flags_set(fs, extent_flags | c::ExtentFlags::poisoned).expect("room for an extent flags entry: made for it");
-    t.update(&iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    let poisoned = read.is_update().then(|| BkeyBuf::from_key(new.as_sc()));
+    t.update(&iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(Some(&DiskReservation::new(fs)), CommitFlags::empty())?;
 
-    if read.is_update() {
-        failed.poisoned = Some(BkeyBuf::from_key(new.as_sc()));
+    if let Some(k) = poisoned {
+        failed.poisoned = Some(k);
     }
 
     fs.event_inc_trace(events::data_read_fail_and_poison, |out| {

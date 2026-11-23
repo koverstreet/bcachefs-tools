@@ -121,7 +121,7 @@ fn flush_one_slowpath<'a>(t: &TransAttempt<'a, 'a>, iter: &BtreeIter<'a>, wb: &m
 
     t.set_journal_seq_to_pin(wb.seq());
 
-    t.update(iter, &t.bkey_copy(wb.k())?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    t.update(iter, t.bkey_copy(wb.k())?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(None, CommitOpts::new()
              .watermark(Watermark::reclaim)
              .flags(CommitFlags::NO_ENOSPC |
@@ -229,7 +229,7 @@ fn btree_write_buffered_insert(t: &TransAttempt<'_, '_>, btree: Btree, wb: &mut 
     t.set_journal_seq_to_pin(wb.seq());
 
     iter.traverse(t)?;
-    t.update(&iter, &t.bkey_copy(wb.k())?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    t.update(&iter, t.bkey_copy(wb.k())?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 /// The flush's leave to begin attempts, which is trans_attempt.rs's alone

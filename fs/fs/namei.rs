@@ -427,10 +427,9 @@ pub fn unlink_trans(
 fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
     -> Result<(), BchError>
 {
-    let mut s = t.bkey_get_mut::<c::Subvolume>(Btree::subvolumes, pos(0, subvol as u64),
-                                               BtreeIterFlags::CACHED, UpdateTriggerFlags::empty())?;
-    s.v_mut().fs_path_parent = new_parent.into();
-    Ok(())
+    t.bkey_get_mut::<c::Subvolume, _>(Btree::subvolumes, pos(0, subvol as u64),
+                                      BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
+                                      |s| Ok(s.v_mut().fs_path_parent = new_parent.into()))
 }
 
 /// Rename @src_name in directory @src_dir to @dst_name in @dst_dir - for
@@ -1088,7 +1087,7 @@ fn __check_dirent_target(
             v.target.d_inum = target.bi_inum.into();
         }
 
-        t.update(dirent_iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+        t.update(dirent_iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     }
 
     Ok(())

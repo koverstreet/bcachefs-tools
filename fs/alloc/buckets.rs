@@ -535,8 +535,8 @@ fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC
     }
 
     if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        let mut a = t.start_alloc_update(bucket, UpdateTriggerFlags::empty())?;
-        mark_pointer(t, &ca, k, p, sectors, bp_data_type, a.v_mut(), insert)?;
+        t.start_alloc_update(bucket, UpdateTriggerFlags::empty(),
+                             |a| mark_pointer(t, &ca, k, p, sectors, bp_data_type, a.v_mut(), insert))?;
         bucket_backpointer_mod(t, k, &mut bp, insert)?;
     }
 
@@ -578,18 +578,13 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
         // the stripe, queued as its update: bch2_bkey_get_mut_typed()
         let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx),
                                       BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
-        let s = match iter.peek_slot(t)?.and_then(|s| s.arm::<c::Stripe>()) {
-            Some(s) => Some(t.bkey_make_mut_noupdate(s)?),
-            None    => None,
-        };
-        if let Some(s) = &s {
-            t.update(&iter, s, UpdateTriggerFlags::empty())?;
-        }
-
         // gone, or not this extent's: either way, not part of the stripe
-        let Some(mut s) = s.filter(|s| ptr_matches_stripe(s.as_sc(), p)) else {
+        let Some(s) = iter.peek_slot(t)?
+            .and_then(|s| s.arm::<c::Stripe>())
+            .filter(|s| ptr_matches_stripe(*s, p)) else {
             return mark_stripe_ptr_no_match(t, k, idx);
         };
+        let mut s = t.bkey_make_mut_noupdate(s)?;
 
         s.v().csum_type_check(fs)?;
         // wrapping to a u16, as C's
@@ -597,6 +592,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
         n.set((i64::from(n.get()) + sectors) as u16);
 
         let acct = bkey_replicas_acct(fs, s.as_sc().untyped(), data_type);
+        t.update(&iter, s, UpdateTriggerFlags::empty())?;
         return accounting::add_at(t, &acct, &[sectors], false);
     }
 
@@ -840,7 +836,7 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64,
     if cur != data_type || a.v().dirty_sectors != sectors {
         a.v_mut().data_type.set(data_type);
         a.v_mut().dirty_sectors = sectors;
-        t.update(&iter, &a, UpdateTriggerFlags::empty())?;
+        t.update(&iter, a, UpdateTriggerFlags::empty())?;
     }
     Ok(())
 }

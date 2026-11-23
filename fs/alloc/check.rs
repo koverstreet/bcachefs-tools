@@ -257,7 +257,7 @@ fn check_alloc_key<'t>(
             }
         };
         g.v_mut().gens[gens_pos.idx] = a.v().generation;
-        t.update(bucket_gens_iter, &g, UpdateTriggerFlags::empty())?;
+        t.update(bucket_gens_iter, g, UpdateTriggerFlags::empty())?;
     }
 
     let nr_stripes = t.bucket_nr_stripes(bucket)?;
@@ -266,7 +266,7 @@ fn check_alloc_key<'t>(
                     "alloc key with incorrect stripe_refcount, should be {}\n{}",
                     nr_stripes, alloc_k.to_text(fs))? {
         a.v_mut().stripe_refcount = nr_stripes;
-        t.update(alloc_iter, &a, UpdateTriggerFlags::empty())?;
+        t.update(alloc_iter, a, UpdateTriggerFlags::empty())?;
     }
     Ok(())
 }
@@ -297,7 +297,7 @@ fn check_alloc_hole_freespace<'t>(
         let mut u = t.bkey_alloc_typed::<c::Set>()?;
         u.k_mut().p = pos(p.inode, p.offset + size);
         u.k_mut().size = size as u32;
-        t.update(freespace_iter, &u, UpdateTriggerFlags::empty())?;
+        t.update(freespace_iter, u, UpdateTriggerFlags::empty())?;
     }
     Ok(())
 }
@@ -340,7 +340,7 @@ fn check_alloc_hole_bucket_gens<'t>(
         if need_update {
             let mut u = t.bkey_reassemble(g)?;
             u.v_mut().gens = gens;
-            t.update(bucket_gens_iter, &u, UpdateTriggerFlags::empty())?;
+            t.update(bucket_gens_iter, u, UpdateTriggerFlags::empty())?;
         }
     }
 
@@ -612,7 +612,7 @@ fn check_bucket_gens_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: Bkey
     if need_update {
         let mut u = t.bkey_reassemble(g)?;
         u.v_mut().gens = gens;
-        t.update(iter, &u, UpdateTriggerFlags::empty())?;
+        t.update(iter, u, UpdateTriggerFlags::empty())?;
     }
     Ok(())
 }
@@ -702,8 +702,8 @@ fn check_alloc_to_lru_ref<'t>(
                         "cached bucket with read_time 0\n{}", alloc_k.to_text(fs))? {
             let mut a_mut = t.alloc_to_v4_mut(alloc_k)?;
             a_mut.v_mut().io_time[READ] = fs.current_io_time(READ);
-            t.update(alloc_iter, &a_mut, UpdateTriggerFlags::NORUN)?;
             a = *a_mut.v();
+            t.update(alloc_iter, a_mut, UpdateTriggerFlags::NORUN)?;
         }
 
         lru_check_set(t, LruPos::new(LruId::Read { dev }.id(), a.io_time[READ], target), alloc_k,
