@@ -1193,9 +1193,7 @@ impl BtreePath {
         self.downcast::<c::bkey_cached>()?.locked_node(0)
     }
 
-    /// The level's node, to write: a btree node the path holds for intent,
-    /// that the transaction holds write locked - through this path or another
-    /// at the node.
+    /// The level's node, to write: a btree node the path holds write locked.
     #[inline(always)]
     pub(crate) fn locked_btree_node_mut(&mut self, level: usize) -> Option<LockedNode<'_, BtreeNode, Write>> {
         self.locked_node_mut(level)
@@ -1211,9 +1209,7 @@ impl BtreePath {
     #[inline(always)]
     fn locked_node_mut<T: PathNode>(&mut self, level: usize) -> Option<LockedNode<'_, T, Write>> {
         let node = self.downcast::<T>()?.locked_node(level)?.node();
-        (self.locked_type_nowrite(level) == BTREE_NODE_INTENT_LOCKED &&
-         six_lock_write_held(node.common().lock.six()))
-            .then(|| LockedNode { node, _mode: PhantomData })
+        (self.locked_type(level) == BTREE_NODE_WRITE_LOCKED).then(|| LockedNode { node, _mode: PhantomData })
     }
 
     /// The level's locked node, and its iterator to move: the node isn't the

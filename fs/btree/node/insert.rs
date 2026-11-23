@@ -300,21 +300,23 @@ impl BtreeTrans<'_> {
         bad
     }
 
-    /// Insert one key into a leaf node: path @idx is at @insert's pos, and
+    /// Insert one key into a leaf node: path @idx is at @insert's pos, path
+    /// @locked holds the node write locked - @idx, or another path at it - and
     /// @journal_seq is the sequence number of the journal reservation.
     #[inline]
     pub(in crate::btree) fn insert_key_leaf(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
-                                            idx: PathIdx, insert: &mut BkeyI, journal_seq: u64) {
+                                            locked: PathIdx, idx: PathIdx, insert: &mut BkeyI, journal_seq: u64) {
         let fs = self.fs();
         let paths = &mut pu.paths;
         let level = paths[idx].level() as usize;
         ebug_assert!(level != 0 || insert.k.p == paths[idx].pos);
+        ebug_assert!(paths[locked].node(level) == paths[idx].node(level));
 
         let set_u64s = |c: &NodeContents| c.last_set().u64s() as isize;
         let live_u64s = |c: &NodeContents| c.nr.live_u64s as isize;
 
         let node_iter = paths[idx].l[level].iter;
-        let mut b = paths[idx].locked_btree_node_mut(level).expect("a node to insert into, write locked");
+        let mut b = paths[locked].locked_btree_node_mut(level).expect("a node to insert into, write locked");
         let (old_u64s, old_live_u64s) = (set_u64s(b.contents()), live_u64s(b.contents()));
 
         let Some(ow) = bset_overwrite(&mut b, &node_iter, insert) else { return };

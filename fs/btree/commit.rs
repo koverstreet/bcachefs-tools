@@ -893,12 +893,21 @@ impl BtreeTrans<'_> {
 
         let seq = self.journal_res_seq.get();
         let mut pu = paths.paths_and_updates();
+        let mut locked: PathIdx = 0;
         for idx in 0..pu.updates.len() {
             let i = &pu.updates[idx];
 
+            /*
+             * lock_updates_write() write locks a leaf through its first update's
+             * path: the leaf's other updates, after it, insert through that one.
+             */
+            if pu.paths[i.path].write_locked(i.level().into()) {
+                locked = i.path;
+            }
+
             if !i.cached() {
                 let (path, k) = (i.path, i.key_ptr());
-                self.insert_key_leaf(t, &mut pu, path, unsafe { &mut *<BkeyI>::from_raw_mut(k) }, seq);
+                self.insert_key_leaf(t, &mut pu, locked, path, unsafe { &mut *<BkeyI>::from_raw_mut(k) }, seq);
             } else if !i.key_cache_already_flushed() {
                 bch2_btree_insert_key_cached(t, &mut pu.paths, i);
             } else {
