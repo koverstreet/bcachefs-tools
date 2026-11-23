@@ -32,7 +32,7 @@ fn push_whiteout(b: &mut LockedNode<'_, BtreeNode, Write>, pos: Bpos) {
     assert!(b.keys_u64s_remaining(b.contents()) >= BKEY_U64S, "no room in a node for a whiteout");
     ebug_assert!(!b.flags.just_written());
 
-    let mut k = pack_pos_or_unpacked(b.node(), pos);
+    let mut k = pack_pos_or_unpacked(b.contents(), pos);
     let (buf, at) = k.as_buf_mut();
     let k = &mut buf[usize::from(at)..];
     let p = BkeyP::from_slice_mut(k).expect("a key just packed");
@@ -163,7 +163,7 @@ impl BtreeTrans<'_> {
                 let mut keys = b.keys_mut();
                 let set = keys.as_keys().bkey_to_bset(k);
 
-                keys.nr.account_key_drop(set, key_at(keys.buf, k));
+                keys.contents.nr.account_key_drop(set, key_at(keys.buf, k));
 
                 let key = keys.key_at_mut(k);
                 key.set_key_type(BkeyType::deleted);
@@ -201,7 +201,7 @@ impl BtreeTrans<'_> {
             } else {
                 let where_ = match k {
                     Some(k) if k_writeable => k,
-                    _ => unsafe { &*node_iter }.bset_pos(keys.sets.last().expect("a node has a bset")),
+                    _ => unsafe { &*node_iter }.bset_pos(keys.contents.sets().last().expect("a node has a bset")),
                 };
 
                 keys.bset_insert(where_, insert, clobber_u64s);

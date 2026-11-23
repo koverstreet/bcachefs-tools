@@ -4,7 +4,7 @@
 
 use super::bset::{AuxTreeType, BsetTree, BSET_CACHELINE, BSET_NO_AUX_TREE_VAL, BSET_RW_AUX_TREE_VAL};
 use super::keys::{bkey_p_next, key_at, keys_between, set_keys, Keys, KeysMut};
-use super::{check_lookups, BtreeNode, NodeContents};
+use super::{check_lookups, NodeContents};
 use crate::btree::bkey::{BkeyP, HIGH_BIT_OFFSET};
 use crate::c;
 use crate::format::Bpos;
@@ -153,13 +153,13 @@ impl RoAuxTree<'_> {
  * For the write set - the one we're currently inserting keys into - we don't
  * maintain a full search tree, we just keep a simple lookup table in t->prev.
  */
-fn rw_aux_tree_entry(node: &BtreeNode, buf: &[u64], t: &BsetTree, k: u16) -> RwAuxEntry {
-    ebug_assert!(k < t.end_offset);
+fn rw_aux_tree_entry(contents: &NodeContents, buf: &[u64], end_offset: u16, k: u16) -> RwAuxEntry {
+    ebug_assert!(k < end_offset);
 
     RwAuxEntry {
         offset: k,
         _pad:   0,
-        k:      unsafe { node.contents.protected() }.unpack_pos_at(buf, k),
+        k:      contents.unpack_pos_at(buf, k),
     }
 }
 
@@ -317,11 +317,11 @@ fn bkey_mantissa_search(k: &c::bkey_packed, f: &BkeyFloat) -> u16 {
 }
 
 /// @pos packed, if it packs, or unpacked: a bound for make_bfloat().
-pub(super) fn pack_pos_or_unpacked(node: &BtreeNode, pos: Bpos) -> c::bkey_packed_padded {
+pub(super) fn pack_pos_or_unpacked(contents: &NodeContents, pos: Bpos) -> c::bkey_packed_padded {
     let mut k = ::pin_init::zeroed::<c::bkey_packed_padded>();
     let (buf, at) = k.as_buf_mut();
 
-    if !unsafe { node.contents.protected() }.pack_pos(buf, at, pos) {
+    if !contents.pack_pos(buf, at, pos) {
         let u = c::bkey { p: pos, ..c::bkey::new() };
         plain_bytes_mut(&mut k.k).copy_from_slice(plain_bytes(&u));
     }
@@ -330,7 +330,7 @@ pub(super) fn pack_pos_or_unpacked(node: &BtreeNode, pos: Bpos) -> c::bkey_packe
 
 impl KeysMut<'_> {
     fn make_bfloat(&mut self, set: usize, j: usize, min_key: &BkeyP, max_key: &BkeyP) {
-        let t = self.sets[set];
+        let t = self.contents.sets()[set];
         let f: &mut [BkeyFloat] = aux_slice_mut(self.aux, &t);
         let ro = RoAuxTree { eytz: t.eytzinger(), f: &*f };
 
@@ -352,13 +352,13 @@ impl KeysMut<'_> {
          */
 
         if !l.is_packed() || !r.is_packed() || !key_at(self.buf, m).is_packed() ||
-           self.nr_key_bits == 0 {
+           self.contents.nr_key_bits == 0 {
             f[j].exponent = BFLOAT_FAILED_UNPACKED;
             return;
         }
 
-        let nr_key_bits = self.nr_key_bits as i32;
-        let key_u64s = self.format.key_u64s as i32;
+        let nr_key_bits = self.contents.nr_key_bits as i32;
+        let key_u64s = self.contents.format.key_u64s as i32;
 
         /*
          * The greatest differing bit of l and r is the first bit we must
@@ -370,7 +370,7 @@ impl KeysMut<'_> {
          * Note that this may be negative - we may be running off the low end
          * of the key: we handle this later:
          */
-        let differing = self.format.greatest_differing_bit(self.nr_key_bits.into(), l, r);
+        let differing = self.contents.format.greatest_differing_bit(self.contents.nr_key_bits.into(), l, r);
         let high_bit = (differing as i32).max(nr_key_bits.min(BKEY_MANTISSA_BITS as i32) - 1);
         let exponent = high_bit - (BKEY_MANTISSA_BITS as i32 - 1);
 
@@ -409,42 +409,44 @@ impl KeysMut<'_> {
     fn __bset_tree_capacity(&self, set: usize) -> usize {
         self.as_keys().bset_aux_tree_verify();
 
-        (self.aux.len() - self.sets[set].aux_data_offset as usize) * size_of::<u64>()
+        (self.aux.len() - self.contents.sets()[set].aux_data_offset as usize) * size_of::<u64>()
     }
 
     #[inline(never)]
     fn __build_rw_aux_tree(&mut self, set: usize) {
         let capacity = self.__bset_tree_capacity(set) / size_of::<RwAuxEntry>();
-        let t = &mut self.sets[set];
-        let rw: &mut [RwAuxEntry] = aux_slice_mut(self.aux, t);
+        let mut t = self.contents.sets()[set];
+        let rw: &mut [RwAuxEntry] = aux_slice_mut(self.aux, &t);
 
         t.size = 1;
         t.extra = BSET_RW_AUX_TREE_VAL;
         rw[0].offset = t.first_offset();
 
-        for (k, _) in set_keys(self.buf, t) {
+        for (k, _) in set_keys(self.buf, &t) {
             if t.size as usize == capacity {
                 break;
             }
 
             if (k - rw[t.size as usize - 1].offset) as usize * size_of::<u64>() > L1_CACHE_BYTES {
-                rw[t.size as usize] = rw_aux_tree_entry(self.node, self.buf, t, k);
+                rw[t.size as usize] = rw_aux_tree_entry(self.contents, self.buf, t.end_offset, k);
                 t.size += 1;
             }
         }
+        self.contents.sets_mut()[set] = t;
     }
 
     #[inline(never)]
     fn __build_ro_aux_tree(&mut self, set: usize) {
         let capacity = self.__bset_tree_capacity(set) / size_of::<BkeyFloat>();
-        let t = &mut self.sets[set];
-        let f: &mut [BkeyFloat] = aux_slice_mut(self.aux, t);
+        let mut t = self.contents.sets()[set];
+        let f: &mut [BkeyFloat] = aux_slice_mut(self.aux, &t);
 
         t.size = t.bkey_to_cacheline(t.end_offset).min(capacity) as u16;
         'retry: loop {
             if t.size < 2 {
                 t.size = 0;
                 t.extra = BSET_NO_AUX_TREE_VAL;
+                self.contents.sets_mut()[set] = t;
                 return;
             }
 
@@ -468,15 +470,16 @@ impl KeysMut<'_> {
                 f[j].key_offset = t.bkey_to_cacheline_offset(cacheline, k);
                 cacheline += 1;
 
-                ebug_assert!(RoAuxTree { eytz: t.eytzinger(), f: &*f }.tree_to_bkey(t, j) == k);
+                ebug_assert!(RoAuxTree { eytz: t.eytzinger(), f: &*f }.tree_to_bkey(&t, j) == k);
             }
             break;
         }
+        self.contents.sets_mut()[set] = t;
 
         let eytz = t.eytzinger();
         let header = self.as_keys().header();
-        let min_key = pack_pos_or_unpacked(self.node, header.min_key);
-        let max_key = pack_pos_or_unpacked(self.node, header.max_key);
+        let min_key = pack_pos_or_unpacked(self.contents, header.min_key);
+        let max_key = pack_pos_or_unpacked(self.contents, header.max_key);
         let min_key = BkeyP::from_packed(&min_key.k).expect("a packed position").cast();
         let max_key = BkeyP::from_packed(&max_key.k).expect("a packed position").cast();
 
@@ -488,22 +491,22 @@ impl KeysMut<'_> {
 
     fn bset_alloc_tree(&mut self, set: usize) {
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            for (i, t) in self.sets[..set].iter().enumerate() {
+            for (i, t) in self.contents.sets()[..set].iter().enumerate() {
                 assert!(!t.has_rw_aux_tree(), "set {i} has a rw aux tree, before set {set}'s");
             }
         }
 
-        self.sets.set_no_aux_tree(set);
+        self.contents.set_no_aux_tree(set);
 
         /* round up to next cacheline: */
         let start = self.as_keys().aux_tree_buf_start(set);
-        self.sets[set].aux_data_offset = start.next_multiple_of(SMP_CACHE_BYTES / size_of::<u64>()) as u16;
+        self.contents.sets_mut()[set].aux_data_offset = start.next_multiple_of(SMP_CACHE_BYTES / size_of::<u64>()) as u16;
 
         self.as_keys().bset_aux_tree_verify();
     }
 
     pub fn bset_build_aux_tree(&mut self, set: usize, writeable: bool) {
-        let t = &self.sets[set];
+        let t = &self.contents.sets()[set];
         let has = if writeable { t.has_rw_aux_tree() } else { t.has_ro_aux_tree() };
         if has {
             return;
@@ -527,8 +530,8 @@ impl KeysMut<'_> {
     /* Insert */
 
     fn rw_aux_tree_insert_entry(&mut self, set: usize, idx: usize) {
-        let t = &mut self.sets[set];
-        let rw: &mut [RwAuxEntry] = aux_slice_mut(self.aux, t);
+        let t = self.contents.sets()[set];
+        let rw: &mut [RwAuxEntry] = aux_slice_mut(self.aux, &t);
         let size = t.size as usize;
 
         ebug_assert!(idx != 0 && idx <= size);
@@ -542,16 +545,16 @@ impl KeysMut<'_> {
 
             if let Some((k, _)) = k {
                 rw.copy_within(idx..size, idx + 1);
-                t.size += 1;
-                rw[idx] = rw_aux_tree_entry(self.node, self.buf, t, k);
+                rw[idx] = rw_aux_tree_entry(self.contents, self.buf, t.end_offset, k);
+                self.contents.sets_mut()[set].size += 1;
             }
         }
     }
 
     fn __bset_fix_lookup_table(&mut self, set: usize, where_: u16, clobber_u64s: u16, new_u64s: u16) {
         let shift = new_u64s as i32 - clobber_u64s as i32;
-        let t = &mut self.sets[set];
-        let rw: &mut [RwAuxEntry] = aux_slice_mut(self.aux, t);
+        let mut t = self.contents.sets()[set];
+        let rw: &mut [RwAuxEntry] = aux_slice_mut(self.aux, &t);
 
         ebug_assert!(!t.has_ro_aux_tree());
 
@@ -562,17 +565,18 @@ impl KeysMut<'_> {
         }
 
         /* returns first entry >= where */
-        let mut idx = rw_aux_tree_bsearch(t, &rw[..t.size as usize], where_);
+        let mut idx = rw_aux_tree_bsearch(&t, &rw[..t.size as usize], where_);
 
         if rw[idx].offset == where_ {
             if idx == 0 { /* never delete first entry */
                 idx += 1;
             } else if where_ < t.end_offset {
-                rw[idx] = rw_aux_tree_entry(self.node, self.buf, t, where_);
+                rw[idx] = rw_aux_tree_entry(self.contents, self.buf, t.end_offset, where_);
                 idx += 1;
             } else {
                 ebug_assert!(where_ == t.end_offset);
                 t.size -= 1;
+                self.contents.sets_mut()[set] = t;
                 let size = t.size as usize;
                 self.rw_aux_tree_insert_entry(set, size);
                 return;
@@ -592,13 +596,14 @@ impl KeysMut<'_> {
 
         ebug_assert!(idx == t.size as usize || rw[idx].offset != rw[idx - 1].offset);
 
+        self.contents.sets_mut()[set] = t;
         self.rw_aux_tree_insert_entry(set, idx);
     }
 
     pub(super) fn bset_fix_lookup_table(&mut self, set: usize, where_: u16, clobber_u64s: u16, new_u64s: u16) {
-        if self.sets[set].has_rw_aux_tree() {
+        if self.contents.sets()[set].has_rw_aux_tree() {
             self.__bset_fix_lookup_table(set, where_, clobber_u64s, new_u64s);
-            self.as_keys().bset_verify_rw_aux_tree(&self.sets[set]);
+            self.as_keys().bset_verify_rw_aux_tree(&self.contents.sets()[set]);
             self.as_keys().bset_aux_tree_verify();
         }
     }

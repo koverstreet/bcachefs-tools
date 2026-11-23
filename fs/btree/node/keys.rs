@@ -5,18 +5,16 @@
 //! are referred to, as in C, by their offsets in u64s from the node's start.
 
 use super::bset::BsetTree;
-use super::{BtreeNode, BtreeNrKeys, NodeContents};
+use super::{BtreeNode, NodeContents};
 use crate::types::L1_CACHE_BYTES;
 use crate::btree::bkey::{BkeyP, BkeySC};
 use crate::c;
-use crate::cstructs::c as cs;
 use crate::format::Bpos;
 use crate::util::vstructs::{cast_plain, plain_bytes, Head};
-use core::ops::{Deref, DerefMut};
 
 pub struct Keys<'a> {
-    /// For the fast paths, which read only its format and unpack constants.
     node:              &'a BtreeNode,
+    contents:          &'a NodeContents,
     pub sets:          &'a [BsetTree],
     /// The node's buffer, 1 << byte_order bytes: its bsets, and the
     /// unwritten whiteouts at its end.
@@ -26,25 +24,12 @@ pub struct Keys<'a> {
     pub unpack_fn_len: u8,
 }
 
-/// Keys, to change: the node's parts, borrowed apart.
+/// Keys, to change: the contents, and the buffers they point to.
 pub struct KeysMut<'a> {
-    /// For the fast paths, which read only its format, borrowed below, and
-    /// unpack constants.
-    pub(super) node:   &'a BtreeNode,
-    pub format:        &'a c::bkey_format,
-    pub nr_key_bits:   u8,
-    pub unpack_fn_len: u8,
-    pub sets:          Sets<'a>,
-    pub nr:            &'a mut BtreeNrKeys,
-    pub buf:           &'a mut [u64],
-    pub aux:           &'a mut [u64],
-}
-
-/// The node's sets, the first nsets of them: nsets and the array are apart
-/// in NodeContents.
-pub struct Sets<'a> {
-    set: &'a mut [BsetTree; cs::MAX_BSETS as usize],
-    nr:  &'a mut u8,
+    pub(super) node: &'a BtreeNode,
+    pub contents:    &'a mut NodeContents,
+    pub buf:         &'a mut [u64],
+    pub aux:         &'a mut [u64],
 }
 
 impl BtreeNode {
@@ -66,6 +51,7 @@ impl BtreeNode {
         unsafe {
             Keys {
                 node:          self,
+                contents,
                 sets:          contents.sets(),
                 buf:           core::slice::from_raw_parts(contents.bufs.data.cast::<u64>(), self.buf_bytes() / size_of::<u64>()),
                 aux:           core::slice::from_raw_parts(contents.bufs.aux_data.cast::<u64>(), self.aux_data_u64s()),
@@ -79,17 +65,13 @@ impl BtreeNode {
         self.own_contents(contents);
         Self::buf_aligned(contents.bufs.data.cast());
         let (buf_u64s, aux_u64s) = (self.buf_bytes() / size_of::<u64>(), self.aux_data_u64s());
-        let NodeContents { bufs, format, nr_key_bits, unpack_fn_len, set, nsets, nr, .. } = contents;
+        let (data, aux_data) = (contents.bufs.data, contents.bufs.aux_data);
         unsafe {
             KeysMut {
-                node:          self,
-                format,
-                nr_key_bits:   *nr_key_bits,
-                unpack_fn_len: *unpack_fn_len,
-                sets:          Sets { set, nr: nsets },
-                nr,
-                buf:           core::slice::from_raw_parts_mut(bufs.data.cast::<u64>(), buf_u64s),
-                aux:           core::slice::from_raw_parts_mut(bufs.aux_data.cast::<u64>(), aux_u64s),
+                node: self,
+                contents,
+                buf:  core::slice::from_raw_parts_mut(data.cast::<u64>(), buf_u64s),
+                aux:  core::slice::from_raw_parts_mut(aux_data.cast::<u64>(), aux_u64s),
             }
         }
     }
@@ -179,11 +161,8 @@ impl<'a> Keys<'a> {
         self.node
     }
 
-    /// For its format fields: through a KeysMut's view, what that borrows
-    /// mutably isn't read through this. A Keys is made from the node's
-    /// contents, so the node is locked while it lives.
     pub fn contents(&self) -> &'a NodeContents {
-        unsafe { self.node().contents.protected() }
+        self.contents
     }
 
     #[inline(always)]
@@ -260,14 +239,16 @@ impl<'a> Keys<'a> {
 
 impl KeysMut<'_> {
     pub fn as_keys(&self) -> Keys<'_> {
-        Keys { node: self.node, sets: &self.sets, buf: self.buf, aux: self.aux, unpack_fn_len: self.unpack_fn_len }
+        let contents = &*self.contents;
+        Keys { node: self.node, contents, sets: contents.sets(), buf: self.buf, aux: self.aux,
+               unpack_fn_len: contents.unpack_fn_len }
     }
 
     /// Every set's keys, set by set, mutably: the sets are in buffer order.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut BkeyP> {
         let (mut rest, mut base) = (&mut *self.buf, 0);
 
-        self.sets.iter().flat_map(move |t| {
+        self.contents.sets().iter().flat_map(move |t| {
             let (first, end) = (t.first_offset() as usize, t.end_offset as usize);
             let (set, tail) = core::mem::take(&mut rest)[first - base..].split_at_mut(end - first);
 
@@ -288,58 +269,18 @@ impl KeysMut<'_> {
 
     /// Set @set's bset is at @data_offset.
     pub fn set_bset(&mut self, set: usize, data_offset: u16) {
-        self.sets[set].data_offset = data_offset;
+        self.contents.sets_mut()[set].data_offset = data_offset;
         self.set_bset_end(set);
     }
 
     /// Set @set's end, from its bset's u64s.
     pub fn set_bset_end(&mut self, set: usize) {
-        let t = &self.sets[set];
+        let t = &self.contents.sets()[set];
         let end = t.first_offset() as usize + self.as_keys().bset(t).u64s();
 
         invariant!(end <= u16::MAX as usize);
-        self.sets[set].end_offset = u16::try_from(end)
+        self.contents.sets_mut()[set].end_offset = u16::try_from(end)
             .unwrap_or_else(|_| crate::invariant_failed("a bset past the last offset"));
     }
 }
 
-impl Sets<'_> {
-    /// A new set, at the end: its index.
-    pub fn push(&mut self) -> usize {
-        let i = *self.nr as usize;
-        assert!(i < self.set.len(), "a btree node with {i} bsets, of at most {}", self.set.len());
-        *self.nr += 1;
-        i
-    }
-
-    /// No sets: none with a bset, none with an aux tree.
-    pub fn clear(&mut self) {
-        *self.nr = 0;
-        for t in self.set.iter_mut() {
-            t.data_offset = u16::MAX;
-        }
-        self.set_no_aux_tree(0);
-    }
-
-    /// From set @from on, to the last there could be: none has an aux tree.
-    pub fn set_no_aux_tree(&mut self, from: usize) {
-        for t in &mut self.set[from..] {
-            t.set_no_aux_tree();
-        }
-    }
-}
-
-impl Deref for Sets<'_> {
-    type Target = [BsetTree];
-
-    fn deref(&self) -> &[BsetTree] {
-        invariant!(*self.nr as usize <= self.set.len());
-        &self.set[..*self.nr as usize]
-    }
-}
-
-impl DerefMut for Sets<'_> {
-    fn deref_mut(&mut self) -> &mut [BsetTree] {
-        &mut self.set[..*self.nr as usize]
-    }
-}

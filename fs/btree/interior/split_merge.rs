@@ -462,7 +462,7 @@ fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, paths: &mut Paths<'_>, srcs: &[
 fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNode<'_>; 2]) {
     let pivot = dsts[0].contents().data().max_key;
     let mut out = dsts.each_mut().map(|n| n.keys_mut());
-    let mut at = out.each_ref().map(|keys| keys.sets[0].first_offset() as usize);
+    let mut at = out.each_ref().map(|keys| keys.contents.sets()[0].first_offset() as usize);
 
     for src in srcs {
         let src_contents = src.contents();
@@ -477,7 +477,7 @@ fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNo
 
             let room = &mut dst.buf[at[side]..];
             let k_f = if k.is_packed() { &src_contents.format } else { &BKEY_FORMAT_CURRENT };
-            if bkey::transform(dst.format, room, k_f, k) {
+            if bkey::transform(&dst.contents.format, room, k_f, k) {
                 BkeyP::from_slice_mut(room).expect("a transformed key").set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
             } else {
                 k.unpack_into(src_contents, room);
@@ -487,7 +487,7 @@ fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNo
             k.set_needs_whiteout(false);
 
             let k = &*k;
-            dst.nr.account_key_add(0, k.cast());
+            dst.contents.nr.account_key_add(0, k.cast());
             at[side] += k.u64s();
 
             iter.advance(&src_keys);
@@ -495,7 +495,7 @@ fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNo
     }
 
     for (side, mut keys) in out.into_iter().enumerate() {
-        let t = keys.sets[0];
+        let t = keys.contents.sets()[0];
         keys.bset_head_mut(t.data_offset).set_u64s(at[side] - t.first_offset() as usize);
         keys.set_bset_end(0);
     }

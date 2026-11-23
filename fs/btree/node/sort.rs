@@ -397,7 +397,7 @@ pub fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactM
         }
 
         let (mut k, end) = (t.first_offset() as usize, t.end_offset as usize);
-        let first = keys.sets[set].first_offset() as usize;
+        let first = keys.contents.sets()[set].first_offset() as usize;
         let mut out = first;
 
         while k != end {
@@ -413,10 +413,10 @@ pub fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactM
             k += u64s;
         }
 
-        let data_offset = keys.sets[set].data_offset;
+        let data_offset = keys.contents.sets()[set].data_offset;
         keys.bset_head_mut(data_offset).set_u64s(out - first);
         keys.set_bset_end(set);
-        keys.sets.set_no_aux_tree(set);
+        keys.contents.set_no_aux_tree(set);
         ret = true;
     }
 
@@ -490,7 +490,7 @@ pub fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, star
     let mut keys = b.keys_mut(contents);
     keys.bset_head_mut(start_offset).set_u64s(u64s);
     keys.set_bset_end(start_idx);
-    keys.sets.set_no_aux_tree(start_idx);
+    keys.contents.set_no_aux_tree(start_idx);
 
     drop(out);
 
@@ -504,7 +504,7 @@ pub fn btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src:
     assert!(nsets == 1, "sorting into a node with {nsets} bsets");
 
     let mut dst = dst.keys_mut();
-    dst.sets.set_no_aux_tree(0);
+    dst.contents.set_no_aux_tree(0);
 
     let src_contents = src.contents();
     let src_keys = src.keys(src_contents);
@@ -512,9 +512,9 @@ pub fn btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src:
     src_iter.init_from_start(&src_keys);
 
     /* Sort + repack in a new format: */
-    let (in_f, out_f) = (&src_contents.format, dst.format);
+    let (in_f, out_f) = (&src_contents.format, &dst.contents.format);
     let transform = plain_bytes(out_f) != plain_bytes(in_f);
-    let t = dst.sets[0];
+    let t = dst.contents.sets()[0];
     let mut out = t.end_offset as usize;
 
     while let Some(i) = src_iter.peek(&src_keys) {
@@ -541,7 +541,7 @@ pub fn btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src:
         k.set_needs_whiteout(false);
 
         let k = &*k;
-        dst.nr.account_key_add(0, k.cast());
+        dst.contents.nr.account_key_add(0, k.cast());
         out += k.u64s();
     }
 

@@ -552,7 +552,7 @@ pub fn drop_keys_outside_node(b: &BtreeNode, contents: &mut NodeContents) {
      * Always rebuild search trees: eytzinger search tree nodes directly
      * depend on the values of min/max key:
      */
-    keys.sets.set_no_aux_tree(0);
+    keys.contents.set_no_aux_tree(0);
     build_aux_trees(b, contents);
     contents.nr = b.keys(contents).btree_node_count_keys();
 

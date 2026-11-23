@@ -514,8 +514,8 @@ impl Keys<'_> {
 
 impl KeysMut<'_> {
     pub fn btree_keys_init(&mut self) {
-        self.sets.clear();
-        *self.nr = BtreeNrKeys::default();
+        self.contents.clear_sets();
+        self.contents.nr = BtreeNrKeys::default();
     }
 
     pub(crate) fn bset_head_mut(&mut self, offset: u16) -> &mut Head<c::bset> {
@@ -526,8 +526,8 @@ impl KeysMut<'_> {
 
     /// Every set's keys before @min and after @max gone.
     pub fn drop_keys_outside(&mut self, min: Bpos, max: Bpos) {
-        for set in 0..self.sets.len() {
-            let t = self.sets[set];
+        for set in 0..self.contents.sets().len() {
+            let t = self.contents.sets()[set];
             let keys = self.as_keys();
             let k = keys.keys_between(t.first_offset(), t.end_offset)
                 .find(|&(at, _)| keys.unpack_pos(at) >= min)
@@ -541,7 +541,7 @@ impl KeysMut<'_> {
                 self.set_bset_end(set);
             }
 
-            let t = self.sets[set];
+            let t = self.contents.sets()[set];
             let keys = self.as_keys();
             let past = keys.keys_between(t.first_offset(), t.end_offset)
                 .find(|&(at, _)| keys.unpack_pos(at) > max)
@@ -562,13 +562,13 @@ impl KeysMut<'_> {
         i.seq = seq;
         i.set_big_endian(cfg!(target_endian = "big") as _);
 
-        let set = self.sets.push();
+        let set = self.contents.push_set();
         self.set_bset(set, offset);
     }
 
     /// The node's first bset, in its header.
     pub fn bset_init_first(&mut self) {
-        assert!(self.sets.is_empty(), "first bset of a node with {} already", self.sets.len());
+        assert!(self.contents.sets().is_empty(), "first bset of a node with {} already", self.contents.sets().len());
 
         let offset = offset_of!(Head<c::btree_node>, keys) / size_of::<u64>();
         self.bset_init(offset as u16, Le64::new(random_u64()));
@@ -576,24 +576,24 @@ impl KeysMut<'_> {
 
     /// @bne the offset of a btree_node_entry, its bset after its csum.
     pub fn bset_init_next(&mut self, bne: u16) {
-        let last_end = self.sets.last().expect("a btree node with no bsets").end_offset;
+        let last_end = self.contents.sets().last().expect("a btree node with no bsets").end_offset;
 
         assert!((bne as usize) < self.buf.len(), "btree node entry at {bne}, past a {} u64 node", self.buf.len());
         assert!(bne >= last_end, "btree node entry at {bne}, before the last bset's end at {last_end}");
-        assert!(self.sets.len() < MAX_BSETS as usize, "a btree node's {} bsets, full", self.sets.len());
+        assert!(self.contents.sets().len() < MAX_BSETS as usize, "a btree node's {} bsets, full", self.contents.sets().len());
 
-        let seq = self.as_keys().bset(&self.sets[0]).seq;
+        let seq = self.as_keys().bset(&self.contents.sets()[0]).seq;
         let keys = offset_of!(Head<c::btree_node_entry>, keys) / size_of::<u64>();
         self.bset_init(bne + keys as u16, seq);
     }
 
     pub fn bset_insert(&mut self, where_: u16, insert: &BkeyI, clobber_u64s: u16) {
-        let f = self.format;
-        let set = self.sets.len() - 1;
+        let f = &self.contents.format;
+        let set = self.contents.sets().len() - 1;
         let insert_p: &BkeyP = insert.into();
         let mut packed = ::pin_init::zeroed::<c::bkey_packed>();
 
-        self.as_keys().bset_verify_rw_aux_tree(&self.sets[set]);
+        self.as_keys().bset_verify_rw_aux_tree(&self.contents.sets()[set]);
         self.as_keys().verify_insert_pos(where_, insert_p, clobber_u64s);
 
         let words = cast_plain_slice_mut(plain_bytes_mut(&mut packed)).expect("a bkey_packed is whole u64s");
@@ -607,7 +607,7 @@ impl KeysMut<'_> {
         let (w, clobber, u64s) = (where_ as usize, clobber_u64s as usize, src_u64s as usize);
 
         if src_u64s != clobber_u64s {
-            let t = self.sets[set];
+            let t = self.contents.sets()[set];
 
             ebug_assert!(t.u64s() as isize >= clobber as isize - u64s as isize);
 
@@ -618,10 +618,10 @@ impl KeysMut<'_> {
         }
 
         self.buf[w..w + src_key.len()].copy_from_slice(src_key);
-        self.buf[w + src_key.len()..w + u64s].copy_from_slice(insert_p.val(f));
+        self.buf[w + src_key.len()..w + u64s].copy_from_slice(insert_p.val(&self.contents.format));
 
         if !insert.k.key_type().is_deleted() {
-            self.nr.account_key_add(set, key_at(self.buf, where_));
+            self.contents.nr.account_key_add(set, key_at(self.buf, where_));
         }
 
         if src_u64s != clobber_u64s {
@@ -632,8 +632,8 @@ impl KeysMut<'_> {
     }
 
     pub fn bset_delete(&mut self, where_: u16, clobber_u64s: u16) {
-        let set = self.sets.len() - 1;
-        let t = self.sets[set];
+        let set = self.contents.sets().len() - 1;
+        let t = self.contents.sets()[set];
         let (w, clobber) = (where_ as usize, clobber_u64s as usize);
 
         self.as_keys().bset_verify_rw_aux_tree(&t);
@@ -650,7 +650,7 @@ impl KeysMut<'_> {
 
     pub(crate) fn verify_btree_nr_keys(&self) {
         if cfg!(CONFIG_BCACHEFS_DEBUG) && debug_check_btree_accounting() {
-            self.as_keys().__verify_btree_nr_keys(self.nr);
+            self.as_keys().__verify_btree_nr_keys(&self.contents.nr);
         }
     }
 }

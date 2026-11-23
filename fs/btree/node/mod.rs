@@ -402,6 +402,35 @@ impl NodeContents {
         &self.set[..self.nsets as usize]
     }
 
+    pub fn sets_mut(&mut self) -> &mut [BsetTree] {
+        invariant!(self.nsets as usize <= self.set.len());
+        &mut self.set[..self.nsets as usize]
+    }
+
+    /// A new set, at the end: its index.
+    pub fn push_set(&mut self) -> usize {
+        let i = self.nsets as usize;
+        assert!(i < self.set.len(), "a btree node with {i} bsets, of at most {}", self.set.len());
+        self.nsets += 1;
+        i
+    }
+
+    /// No sets: none with a bset, none with an aux tree.
+    pub fn clear_sets(&mut self) {
+        self.nsets = 0;
+        for t in self.set.iter_mut() {
+            t.data_offset = u16::MAX;
+        }
+        self.set_no_aux_tree(0);
+    }
+
+    /// From set @from on, to the last there could be: none has an aux tree.
+    pub fn set_no_aux_tree(&mut self, from: usize) {
+        for t in &mut self.set[from..] {
+            t.set_no_aux_tree();
+        }
+    }
+
     pub fn last_set(&self) -> &BsetTree {
         self.sets().last().expect("a btree node with no bsets")
     }
