@@ -56,7 +56,7 @@ use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, RunQueue, WaitSync, Waiter};
+use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, WaitSync, Waiter};
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
@@ -385,11 +385,6 @@ impl<T: Fold, W: Width> Gather<T, waiter::Async, W> {
     /// Wait for every ref to be put, resumed @at, for the result.
     pub fn wait<'a>(&'a self, at: Resume<'a>) -> Resumed<'a, GatherWait<'a, T, W>> {
         GatherWait { c: None, w: self.begin_wait() }.resume_on(at)
-    }
-
-    /// wait(), resumed on @rq, a RunQueue::worked() one.
-    pub fn wait_on_run_queue<'a>(&'a self, rq: Pin<&'a RunQueue>) -> Resumed<'a, GatherWait<'a, T, W>> {
-        GatherWait { c: None, w: self.begin_wait() }.resume_on_run_queue(rq)
     }
 }
 

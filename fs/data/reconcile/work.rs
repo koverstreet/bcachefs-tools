@@ -92,6 +92,7 @@ use c::Errcode as err;
 use c::ReconcileWorkId as w;
 use core::cell::Cell;
 use core::ops::ControlFlow;
+use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
@@ -659,14 +660,26 @@ fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
 /// do_reconcile_phys().
 fn reconcile_phys(fs: &Fs, phase: &'static Phase) -> Result<(), BchError> {
     let mut devs = KVVec::new();
+    let (mut considered, mut skipped_empty) = (0u64, 0u64);
     for ca in fs.members().filter(|ca| ca.mi.get().rotational && ca.is_online()) {
-        devs.push(u32::from(ca.dev_idx))?;
+        considered += 1;
+        let dev = u32::from(ca.dev_idx);
+        // not a thread, for a device with nothing queued - and one that can't
+        // be probed gets its thread, which fails or doesn't as it did
+        if !phys_dev_has_work(fs, phase, dev).unwrap_or(true) {
+            skipped_empty += 1;
+            continue;
+        }
+        devs.push(dev)?;
     }
     let name = fs.name().to_str().unwrap_or("?");
 
-    par::scope_freezable(Backend::Kthreads, fs.tasks(), |sc| {
+    let started = AtomicU64::new(0);
+    let ret = par::scope_freezable(Backend::Kthreads, fs.tasks(), |sc| {
         for &dev in devs.iter() {
+            let started = &started;
             sc.spawn(format_args!("bch-reconcile/{name}:{dev}"), move || {
+                started.fetch_add(1, Relaxed);
                 if let Err(e) = phys_dev(fs, phase, dev) {
                     bch_err!(fs, "reconcile phys thread for device {dev}: {e}");
                 }
@@ -674,7 +687,20 @@ fn reconcile_phys(fs: &Fs, phase: &'static Phase) -> Result<(), BchError> {
             })?;
         }
         Ok(())
-    })
+    });
+    // together, after the phase: status reads one phase's
+    fs.reconcile.phys_workers_considered.store(considered, Relaxed);
+    fs.reconcile.phys_workers_started.store(started.load(Relaxed), Relaxed);
+    fs.reconcile.phys_workers_skipped_empty.store(skipped_empty, Relaxed);
+    ret
+}
+
+/// Whether @phase's work btree has an entry for @dev.
+fn phys_dev_has_work(fs: &Fs, phase: &Phase, dev: u32) -> Result<bool, BchError> {
+    let trans = crate::btree_trans!(fs);
+    let found = next_key(&trans, phase.btree, pos(dev.into(), 0), pos(dev.into(), u64::MAX),
+                         |k| (k.k.key_type() == BkeyType::set).then_some(()))?;
+    Ok(found.is_some())
 }
 
 // ── A pass ───────────────────────────────────────────────────────────────
@@ -1104,6 +1130,11 @@ impl Fs {
                 write!(out, "\n");
             }
         }
+
+        prt!(out, "phys workers last phase: considered {} started {} skipped empty {}\n",
+             self.reconcile.phys_workers_considered.load(Relaxed),
+             self.reconcile.phys_workers_started.load(Relaxed),
+             self.reconcile.phys_workers_skipped_empty.load(Relaxed));
 
         write!(out, "\n");
         let exit_ret = self.reconcile.thread_exit_ret.load(Relaxed);

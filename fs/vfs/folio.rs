@@ -13,6 +13,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, SpinLockIrq};
 use crate::os::folio;
+use crate::util::bio::FolioHold;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{AcqRel, Relaxed};
@@ -108,17 +109,26 @@ impl FolioGuard<'_> {
 pub struct Writeback(&'static Folio);
 
 impl Writeback {
-    /// A count for an io the folio's added to, given back by from_io().
-    pub fn share(&self) {
+    /// A count for an io the folio's added to.
+    pub fn share(&self) -> Writeback {
         self.private().expect("a folio in writeback with no bch_folio").write_count.fetch_add(1, Relaxed);
+        Writeback(self.0)
+    }
+}
+
+// ended by whichever thread finishes the io it's in
+unsafe impl Send for Writeback {}
+
+// a count on its writeback, which keeps it
+unsafe impl FolioHold for Writeback {
+    type A = InodeInfo;
+
+    fn folio(&self) -> NonNull<c::folio> {
+        NonNull::from(self.0).cast()
     }
 
-    /// An io's count, share()'s, from the io's bio as it ends.
-    ///
-    /// # Safety
-    /// @folio is one share() counted for this io, taken back once.
-    pub unsafe fn from_io(folio: NonNull<c::folio>) -> Self {
-        Writeback(unsafe { Folio::from_raw(folio) })
+    unsafe fn release(folio: NonNull<c::folio>, _: usize, _: usize) {
+        drop(Writeback(unsafe { Folio::from_raw(folio) }));
     }
 }
 
@@ -135,6 +145,99 @@ impl Drop for Writeback {
         let s = self.private().expect("a folio in writeback with no bch_folio");
         if s.write_count.fetch_sub(1, AcqRel) == 1 {
             unsafe { c::folio_end_writeback(self.0.as_ptr()) }
+        }
+    }
+}
+
+impl FolioGuard<'static> {
+    /// Its lock the read's, held by the read's count. Panics if it has no
+    /// bcachefs state, or a read in flight.
+    pub fn start_read(self) -> ReadPart {
+        let s = self.private().expect("a folio read with no bch_folio");
+        assert!(s.read_count.load(Relaxed) == 0, "a folio with a read in flight, read again");
+        s.read_count.store(1, Relaxed);
+        ReadPart(unsafe { Folio::from_raw(self.keep_locked()) })
+    }
+}
+
+/// A count on a folio's read, read_count's: start_read()'s, and one for each
+/// extent's bio it's in, share()'s. The last ends the read: uptodate if the
+/// window covered it and no extent's read of it failed.
+pub struct ReadPart(&'static Folio);
+
+impl ReadPart {
+    /// A read of @folio, whose lock stays the caller's: the last count
+    /// leaves it locked, and not uptodate - the caller marks it, from what
+    /// the read returned. Panics as start_read().
+    ///
+    /// # Safety
+    /// The caller holds @folio locked until every count is dropped: it waits
+    /// for each extent's read it's in.
+    pub unsafe fn callers(folio: &FolioLocked) -> ReadPart {
+        let s = folio.private().expect("a folio read with no bch_folio");
+        assert!(s.read_count.load(Relaxed) == 0, "a folio with a read in flight, read again");
+        s.read_count.store(1, Relaxed);
+        s.read_callers.store(true, Relaxed);
+        ReadPart(unsafe { Folio::from_raw(NonNull::from(folio).cast()) })
+    }
+
+    /// A count for an extent's bio the folio's in.
+    pub fn share(&self) -> ReadPart {
+        self.private().expect("a folio read with no bch_folio").read_count.fetch_add(1, Relaxed);
+        ReadPart(self.0)
+    }
+
+    /// The window handed out all of it, from read_from on.
+    pub fn covered(&self) {
+        self.private().expect("a folio read with no bch_folio").read_covered.store(true, Relaxed);
+    }
+}
+
+impl Folio {
+    /// An extent's read of part of it failed: its read ends not uptodate.
+    pub fn read_failed(&self) {
+        self.private().expect("a folio read with no bch_folio").read_failed.store(true, Relaxed);
+    }
+}
+
+// ended by whichever thread finishes the last extent's read it's in
+unsafe impl Send for ReadPart {}
+
+// a count on its read, whose lock keeps it
+unsafe impl FolioHold for ReadPart {
+    type A = InodeInfo;
+
+    fn folio(&self) -> NonNull<c::folio> {
+        NonNull::from(self.0).cast()
+    }
+
+    unsafe fn release(folio: NonNull<c::folio>, _: usize, _: usize) {
+        drop(ReadPart(unsafe { Folio::from_raw(folio) }));
+    }
+}
+
+impl Deref for ReadPart {
+    type Target = Folio;
+
+    fn deref(&self) -> &Folio {
+        self.0
+    }
+}
+
+impl Drop for ReadPart {
+    fn drop(&mut self) {
+        let s = self.private().expect("a folio read with no bch_folio");
+        if s.read_count.fetch_sub(1, AcqRel) != 1 {
+            return;
+        }
+        let failed = s.read_failed.swap(false, Relaxed);
+        let uptodate = s.read_covered.swap(false, Relaxed) && !failed;
+        /* what partially_uptodate says was read may be what failed: */
+        if uptodate || failed {
+            s.partially_uptodate.store(0, Relaxed);
+        }
+        if !s.read_callers.swap(false, Relaxed) {
+            unsafe { FolioGuard::adopt(NonNull::from(self.0).cast()) }.end_read(uptodate);
         }
     }
 }

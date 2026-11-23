@@ -11,7 +11,7 @@ use crate::new_lock;
 use crate::data::reconcile::work::StripesPending;
 use crate::os::kthread::Daemon;
 use crate::os::power_supply::PowerNotifier;
-use core::sync::atomic::{AtomicBool, AtomicI32};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU64};
 use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -37,6 +37,14 @@ pub struct bch_fs_reconcile {
     pub(crate) status: SeqLock<Status>,
     pub work_stats: c::MoveStats,
     pub progress: c::progress_indicator,
+    /// The last phys phase's devices: rotational and online, those started
+    /// - threads that did start - and those skipped for having no work
+    #[init(AtomicU64::new(0))]
+    pub(crate) phys_workers_considered: AtomicU64,
+    #[init(AtomicU64::new(0))]
+    pub(crate) phys_workers_started: AtomicU64,
+    #[init(AtomicU64::new(0))]
+    pub(crate) phys_workers_skipped_empty: AtomicU64,
     pub scan_stats: c::MoveStats,
 
     /*

@@ -22,7 +22,7 @@ use crate::format::{BkeyTypeFlags, Btree};
 use crate::fs::{Dev, Fs, WriteRef};
 use crate::os::workqueue::Queue;
 use crate::sb::members::DevIoRef;
-use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioOwner};
+use crate::util::bio::{Bio, BioBox, BioOwner, Buffer};
 use crate::util::task::{spawn_static, waiter, Resumable, Resume};
 use crate::util::vstructs::{cast_plain, Head, Unvalidated};
 use crate::util::{backref::BackRef, refcount::TryRefcount, Printbuf};
@@ -95,7 +95,7 @@ pub type Replicas<T> = ArrayVec<T, { c::BCH_BKEY_PTRS_MAX as usize }>;
 pub struct ReplicaRead<'f> {
     fs:             &'f Fs,
     ca:             DevIoRef<c::DevReadRefKind>,
-    pub(super) bio: BioBox<Bio, BioBuffersMapped<Bounce<'f>>>,
+    pub(super) bio: BioBox<'static, Bio<Buffer<Bounce<'f>>>>,
     pub ptr_bit:    u32,
 }
 
@@ -109,8 +109,10 @@ impl<'f> ReplicaRead<'f> {
             .ok_or_else(|| fs.err(c::Errcode::device_offline))?;
 
         let bytes = fs.opts.btree_node_size.get() as usize;
-        let mut bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
-            ca.disk_sb.bdev, c::req_op_REQ_OP_READ, Bounce::new(fs, bytes), |b| b.init())?;
+        let buf = Bounce::new(fs, bytes);
+        let mut bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
+            ca.disk_sb.bdev, Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ,
+            |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
         bio.bio_mut().set_sector(pick.ptr.offset());
 
         Ok(Some(Self { fs, ca, bio, ptr_bit }))

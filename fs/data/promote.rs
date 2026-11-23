@@ -36,7 +36,6 @@ use crate::util::refcount::TryRefcount;
 use crate::util::task::{Resume, Spawn};
 use crate::os::workqueue::Queue;
 use core::ffi::c_int;
-use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::args_stored_once;
 use crate::format::{Btree, BkeyType};
@@ -104,7 +103,7 @@ async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
         return u.exit(-(c::EIO as c_int));
     }
     {
-        let k = BkeySC::from(u.k.key());
+        let k = BkeySC::from(u.index.k.key());
         fs.event_add_trace(events::data_read_promote, k.k.size.into(), |out| prt!(out, "{}", k.to_text(fs)));
     }
 
@@ -138,10 +137,8 @@ fn should_promote(fs: &Fs, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<()
     Ok(())
 }
 
-fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
-                   orig: &'r Rbio, opts: &c::bch_inode_opts,
-                   failed: Option<&mut c::bch_io_failures>) -> Result<(&'r Rbio, AwaitingRead<'r>), BchError> {
-    let fs = t.fs();
+fn promote_new<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, btree: Btree, k: BkeySC<'_>, opts: &c::bch_inode_opts,
+                   failed: Option<&mut c::bch_io_failures>) -> Result<AwaitingRead<'r>, BchError> {
 
     if failed.is_none() {
         should_promote(fs, k, opts)?;
@@ -182,23 +179,20 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     // SAFETY: the task borrows nothing, and promote_wq is drained before the
     // filesystem is freed
     let task = unsafe {
-        update_task::spawn(t, Spawn::Queue(orig.fs().promote_wq()), orig.fs().tasks(), Errcode::nopromote_enomem)
+        update_task::spawn(t, Spawn::Queue(fs.promote_wq()), fs.tasks(), Errcode::nopromote_enomem)
     }?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
     // box is dropped
-    let mut u = task.init(t, None, None, c::write_point_specifier::hashed(current_id()), opts, update_opts, btree, k)?;
+    let u = task.init(t, None, None, c::write_point_specifier::hashed(current_id()), opts, update_opts, btree, k)?;
 
-    let rbio = NonNull::from(&mut u.rbio);
-    let task = u.awaiting_read(move |b| async move |_: &Update| run(b, in_flight, start_time).await);
-    Ok((unsafe { rbio.as_ref() }, task))
+    Ok(u.awaiting_read(move |b| async move |_: &Update| run(b, in_flight, start_time).await))
 }
 
-/// A promote made: its read bio, the read's to read into as its bounce, and
-/// its task, which the read starts with what it read when it's done with the
-/// bio; and whether the read's to be of the whole extent - a self-heal, or
-/// promote_whole_extents.
+/// A promote made: its task, whose read bio the read's to read into as its
+/// bounce, and which the read starts with what it read when it's done with
+/// the bio; and whether the read's to be of the whole extent - a self-heal,
+/// or promote_whole_extents.
 pub(crate) struct Promoted<'r> {
-    pub rbio:  &'r Rbio,
     pub task:  AwaitingRead<'r>,
     pub whole: bool,
 }
@@ -209,11 +203,10 @@ pub(crate) struct Promoted<'r> {
 // Out of line: inlined, the update's setup - its opts, copied into the task -
 // is in the frame of every read's fragment_of()
 #[inline(never)]
-pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, orig: &'r Rbio,
+pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, k: BkeySC<'_>, orig: &'r Rbio,
                                 opts: &c::bch_inode_opts, failed: Option<&mut c::bch_io_failures>)
     -> Result<Option<Promoted<'r>>, BchError>
 {
-    let fs = t.fs();
     let self_healing = failed.is_some();
     let btree = if k.k.key_type() == BkeyType::reflink_v {
         Btree::reflink
@@ -221,12 +214,12 @@ pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, orig: &
         Btree::extents
     };
 
-    match promote_new(t, btree, k, orig, opts, failed) {
-        Ok((rbio, task)) => {
+    match promote_new(t, fs, btree, k, opts, failed) {
+        Ok(task) => {
             if self_healing {
                 orig.self_healing.store(true, Relaxed);
             }
-            Ok(Some(Promoted { rbio, task, whole: self_healing || fs.opts().promote_whole_extents.get() != 0 }))
+            Ok(Some(Promoted { task, whole: self_healing || fs.opts().promote_whole_extents.get() != 0 }))
         }
         // not swallowed: it'd leave the transaction poisoned, for a panic at
         // bch2_trans_put()

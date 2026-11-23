@@ -56,7 +56,6 @@ obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
 	vendor/closure.o			\
-	../os/linux_kernel/bio_iov_iter.o	\
 	../os/linux_kernel/shim.o
 
 ifdef KBUILD_EXTMOD

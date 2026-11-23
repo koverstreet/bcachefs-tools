@@ -361,7 +361,7 @@ impl Discard {
         let mut bio = fs.discards.bioset
             .alloc::<BchError, _>(bdev, 0, c::req_op_REQ_OP_DISCARD, |b| pin_init!(DiscardBio {
                 discard: Some(self),
-                bio      <- b.init::<BchError>(),
+                bio      <- b.init::<BchError, _>(),
             }? BchError))
             .expect("a discard bio: the mempool waits rather than fail");
 

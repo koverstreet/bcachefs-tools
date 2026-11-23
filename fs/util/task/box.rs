@@ -112,7 +112,7 @@ where
     where
         BchError: From<E>,
     {
-        let home = unsafe { alloc_mem::<H, FutureOf<M, H>, A, E, _>(alloc, Layout::new::<()>(), |_| home)? };
+        let home = unsafe { alloc_mem::<H, FutureOf<M, H>, A, E>(alloc, home)? };
         Ok(Self { home, free: free_slot::<H, FutureOf<M, H>, A>, _p: PhantomData })
     }
 
@@ -144,18 +144,7 @@ where
     where
         BchError: From<E>,
     {
-        Self::exclusive_tail_in(alloc, Layout::new::<()>(), |_| home)
-    }
-
-    /// exclusive_in(), with @tail after the box, in the same allocation - a
-    /// bio's bvecs - the home made by @home from where it is.
-    pub fn exclusive_tail_in<E, I>(alloc: A, tail: Layout, home: impl FnOnce(NonNull<u8>) -> I)
-        -> Result<Self, BchError>
-    where
-        I: PinInit<H, E>,
-        BchError: From<E>,
-    {
-        let home = unsafe { alloc_mem::<H, FutureOfMut<M, H>, A, E, I>(alloc, tail, home)? };
+        let home = unsafe { alloc_mem::<H, FutureOfMut<M, H>, A, E>(alloc, home)? };
         Ok(Self { home, free: free_slot::<H, FutureOfMut<M, H>, A>, _p: PhantomData })
     }
 
@@ -178,16 +167,10 @@ where
     }
 }
 
-/// The size of an Exclusive box of @H and @F's task, from @A, with @tail:
-/// what a pool's elements are, for one.
-pub fn exclusive_size<H, F: Future<Output = ()>, A: Alloc + Copy>(tail: Layout) -> usize {
-    box_layout::<H, F, A>(tail).0.size()
-}
-
-/// A box with @tail after it, and where the tail is.
-fn box_layout<'q, H, F: Future<Output = ()>, A: Alloc + Copy>(tail: Layout) -> (Layout, usize) {
-    let (layout, at) = Layout::new::<WithTask<'q, H, F, A>>().extend(tail).expect("a box and its tail");
-    (layout.pad_to_align(), at)
+/// The size of an Exclusive box of @H and @F's task, from @A: what a pool's
+/// elements are, for one.
+pub fn exclusive_size<H, F: Future<Output = ()>, A: Alloc + Copy>() -> usize {
+    size_of::<WithTask<'static, H, F, A>>()
 }
 
 impl<H, M, A: Alloc + Copy, K> TaskSlot<'_, H, M, A, K> {
@@ -203,27 +186,25 @@ impl<H, M, A: Alloc + Copy, K> Drop for TaskSlot<'_, H, M, A, K> {
     }
 }
 
-/// The memory of a box from @alloc, and @tail after it - A and the size it
-/// gave written in for its free - and the home made in it, by what @home
-/// makes of where the tail is. Not zeroed: each of its fields is written, and
-/// a pool's element is as big as a bio with BIO_MAX_VECS bvecs.
+/// The memory of a box from @alloc - A and the size it gave written in for
+/// its free - and the home made in it by @home. Not zeroed: each of its fields
+/// is written.
 ///
 /// # Safety
 /// F is the future the box's task will be.
-unsafe fn alloc_mem<'q, H, F: Future<Output = ()>, A: Alloc + Copy, E, I>(
-    alloc: A, tail: Layout, home: impl FnOnce(NonNull<u8>) -> I,
+unsafe fn alloc_mem<'q, H, F: Future<Output = ()>, A: Alloc + Copy, E>(
+    alloc: A, home: impl PinInit<H, E>,
 ) -> Result<NonNull<H>, BchError>
 where
-    I: PinInit<H, E>,
     BchError: From<E>,
 {
-    let (layout, at) = box_layout::<H, F, A>(tail);
+    let layout = Layout::new::<WithTask<'q, H, F, A>>();
     let mem = alloc.allocate(layout)?;
     let w = mem.cast::<WithTask<'q, H, F, A>>().as_ptr();
     unsafe {
         (&raw mut (*w).alloc).write(alloc);
         (&raw mut (*w).given).write(mem.len());
-        if let Err(e) = init_at(home(mem.cast::<u8>().add(at)), &raw mut (*w).home) {
+        if let Err(e) = init_at(home, &raw mut (*w).home) {
             alloc.deallocate(mem.cast(), Layout::from_size_align_unchecked(mem.len(), layout.align()));
             return Err(e.into());
         }
