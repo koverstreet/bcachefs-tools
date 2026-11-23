@@ -32,10 +32,11 @@ use crate::init::error::{id, BkeyValidate};
 use crate::types::Le16;
 use crate::util::alloc::KVVec;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::{cast_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
+use crate::util::vstructs::{cast_mut, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
                             plain_bytes_mut, Validated};
 use crate::util::Printbuf;
 use crate::data_structures::array_vec::ArrayVec;
+use crate::data_structures::dst_room::DstRoom;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
 
@@ -479,22 +480,13 @@ pub(crate) fn shape(s: BkeySC<'_, c::Stripe<Validated>>) -> Shape {
 pub struct StripeKey([u64; c::BKEY_U64s_MAX as usize]);
 
 impl StripeKey {
-    fn room(&self) -> &[u8] {
-        plain_bytes(&self.0)
-    }
-
     fn room_mut(&mut self) -> &mut [u8] {
         plain_bytes_mut(&mut self.0)
     }
 
     /// Its stripe: the key, as long as its u64s say.
     pub(crate) fn stripe(&self) -> BkeySC<'_, c::Stripe<Validated>> {
-        let room = self.room();
-        let len = cast_plain::<c::bkey>(&room[..size_of::<c::bkey>()]).expect("a key's header").bytes();
-        assert!(len <= room.len(), "a stripe key of {len} bytes, in {} of room", room.len());
-
-        // SAFETY: a key, all its u64s in @room - which we have borrowed
-        let k: &BkeyI = unsafe { &*BkeyI::from_raw(room.as_ptr().cast()) };
+        let k: &BkeyI = DstRoom::<BkeyI>::from_elems(&self.0);
         BkeySC::from(k).arm::<c::Stripe>().expect("a StripeKey's key is a stripe")
     }
 
