@@ -68,7 +68,6 @@ use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Deref, Range};
 use core::pin::Pin;
-use core::ptr;
 use core::sync::atomic::{fence, Ordering::SeqCst};
 use cstruct_macros::in_place;
 use pin_init::{pin_data, pin_init};
@@ -196,13 +195,12 @@ impl NodeRead<'_> {
         let fs = self.fs;
         let Some(ca) = &self.ca else { return Err(fs.err(blk_status_to_bch_err(c::BLK_STS_REMOVED))) };
 
-        self.io.reset(ca.disk_sb.bdev.get(), c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
-        self.io.bio_mut().set_sector(self.pick.ptr.offset());
+        self.io.reset(c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
         /* read_done() may have swapped the node's buffer for its sort's */
         let buf = unsafe { node_buf(&self.node, self.node.contents()) };
         let resume = Resume::queue(&fs.btree.read_complete_wq);
         let status = self.io.remap_read(buf).expect("a node's buffer, into a bio with a bvec for each of its pages")
-            .submit(waiter).resume_on(resume).await;
+            .submit(ca.bdev(), self.pick.ptr.offset(), waiter).resume_on(resume).await;
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         if status.is_ok() {
             maybe_corrupt(buf, self.pick.ptr.dev() as i32);
@@ -517,7 +515,7 @@ pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode, contents:
         return;
     };
 
-    if let Err(e) = r.bio.submit_wait() {
+    if let Err(e) = r.bio.submit_wait(r.ca.bdev(), r.sector) {
         prt!(out, "IO error reading btree node: {e}\n");
         return;
     }
@@ -946,7 +944,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
          * Not buf_nr_bvecs(): a retry maps the bio onto the buffer read_done()
          * swapped in, which may be vmalloc where this one is direct mapped
          */
-        TaskSlot::exclusive_bio_in(&NODE_READS, &NODE_READ_BVECS, ptr::null_mut(), bytes.div_ceil(PAGE_SIZE) as u16,
+        TaskSlot::exclusive_bio_in(&NODE_READS, &NODE_READ_BVECS, bytes.div_ceil(PAGE_SIZE) as u16,
                                    c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META,
                                    |bio| pin_init!(NodeReadBio { bio <- bio.init::<BchError, _>() }? BchError))
     }.expect("a node read's box: its pool waits for an element");

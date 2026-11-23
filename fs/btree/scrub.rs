@@ -93,10 +93,11 @@ pub fn node_replica_good(fs: &Fs, k: BkeySC<'_>, buf: &[u8], err: &mut Printbuf)
 pub type Replicas<T> = ArrayVec<T, { c::BCH_BKEY_PTRS_MAX as usize }>;
 
 pub struct ReplicaRead<'f> {
-    fs:             &'f Fs,
-    ca:             DevIoRef<c::DevReadRefKind>,
-    pub(super) bio: BioBox<'static, Bio<Buffer<Bounce<'f>>>>,
-    pub ptr_bit:    u32,
+    fs:                &'f Fs,
+    pub(super) ca:     DevIoRef<c::DevReadRefKind>,
+    pub(super) sector: u64,
+    pub(super) bio:    BioBox<'static, Bio<Buffer<Bounce<'f>>>>,
+    pub ptr_bit:       u32,
 }
 
 impl<'f> ReplicaRead<'f> {
@@ -110,12 +111,10 @@ impl<'f> ReplicaRead<'f> {
 
         let bytes = fs.opts.btree_node_size.get() as usize;
         let buf = Bounce::new(fs, bytes);
-        let mut bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
-            ca.disk_sb.bdev.get(), Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ,
-            |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
-        bio.bio_mut().set_sector(pick.ptr.offset());
+        let bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
+            Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ, |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
 
-        Ok(Some(Self { fs, ca, bio, ptr_bit }))
+        Ok(Some(Self { fs, ca, sector: pick.ptr.offset(), bio, ptr_bit }))
     }
 
     pub fn good(&self, read: Result<(), BchError>, key: &BtreeKeyBuf, action: &str) -> bool {
@@ -147,7 +146,7 @@ pub async fn read_replicas(reads: &mut [ReplicaRead<'_>], q: &Queue) -> Replicas
     let waiter = waiter::Async::current().await;
     let mut submitted = Replicas::new();
     for r in reads.iter_mut() {
-        submitted.push(r.bio.submit(waiter));
+        submitted.push(r.bio.submit(r.ca.bdev(), r.sector, waiter));
     }
 
     let mut ret = Replicas::new();

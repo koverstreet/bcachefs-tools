@@ -978,27 +978,28 @@ pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_b
         n.wbio.bits.set_nocow(nocow.into());
         n.wbio.submit_time  = local_clock();
         n.wbio.inode_offset = k.k().start_offset();
-        n.bio_mut().set_sector(ptr.offset());
 
-        let bdev = ca.as_deref().map(|ca| {
+        /* its device, open by the io ref the bio holds through its IO */
+        let bdev = ca.as_ref().map(|ca| {
             if nocow {
                 n.wbio.nocow_bucket = ca.ptr_bucket(ptr);
             }
             ca.io_done_add(WRITE, ty, (n.bio.range().len() >> 9).into());
-            ca.disk_sb.bdev.get()
+            core::ptr::from_ref(ca.bdev()).cast_mut()
         });
         /* the bio's, till its endio takes it back */
         n.ca = ca;
 
         if let Some(bdev) = bdev {
-            n.bio_mut().set_dev(bdev);
-
             if ty != DataType::btree && unlikely(fs.opts().no_data_io.get() != 0) {
                 unsafe { crate::os::bio::sys::endio(n.bio_mut().raw_mut()) };
                 continue;
             }
 
-            unsafe { crate::os::blkdev::submit_bio(n.bio_mut().raw_mut()) };
+            let b = n.bio_mut().raw_mut();
+            b.bi_iter.bi_sector = ptr.offset();
+            crate::os::blkdev::bio_set_dev(b, bdev);
+            unsafe { crate::os::blkdev::submit_bio(b) };
         } else {
             n.bio_mut().set_status(c::BLK_STS_REMOVED);
             unsafe { crate::os::bio::sys::endio(n.bio_mut().raw_mut()) };

@@ -21,7 +21,8 @@ use crate::{inode, inode_opts};
 use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
-use crate::os::bio::{Bio, Gathered};
+use crate::os::bio::{Bio, Gathered, HoldsDev};
+use crate::os::blkdev::BlockDevice;
 use crate::os::file::File;
 use crate::os::folio::FsMapping;
 use super::file::InodeFile;
@@ -45,11 +46,23 @@ use crate::os::vfs_inode::VfsInode;
 #[pin_data]
 #[repr(C)]
 pub(crate) struct NocowFlush {
-    ca:   DevIoRef<c::DevWriteRefKind>,
+    ca:   Option<DevIoRef<c::DevWriteRefKind>>,
     #[pin]
     bio:  Bio,
 }
 has_bio!(NocowFlush, bio);
+
+impl HoldsDev for NocowFlush {
+    type Dev = DevIoRef<c::DevWriteRefKind>;
+
+    fn hold(self: Pin<&mut Self>, ca: Self::Dev) {
+        *self.project().ca = Some(ca);
+    }
+
+    fn bdev(&self) -> &BlockDevice {
+        self.ca.as_ref().expect("a nocow flush's device, before it's submitted").bdev()
+    }
+}
 
 impl Gathered<()> for NocowFlush {
     fn done(self: Pin<&mut Self>, _: Result<(), BchError>) {}
@@ -78,15 +91,14 @@ impl InodeInfo {
         for dev in devs.d.iter() {
             let ca = fs.dev_rcu(dev as u32, &read_lock()).and_then(|ca| fs.io_ref_tryget::<c::DevWriteRefKind>(ca));
             let Some(ca) = ca else { continue };
-            let bdev = ca.disk_sb.bdev.get();
 
             let bio = fs.vfs.nocow_flush_bioset
-                .alloc::<BchError, _>(bdev, 0, c::req_op_REQ_OP_WRITE | c::REQ_PREFLUSH, |b| pin_init!(NocowFlush {
-                    ca,
+                .alloc::<BchError, _>(0, c::req_op_REQ_OP_WRITE | c::REQ_PREFLUSH, |b| pin_init!(NocowFlush {
+                    ca: None,
                     bio <- b.init::<BchError, _>(),
                 }? BchError))
                 .expect("a nocow flush bio: the bioset's mempool waits rather than fail");
-            bio.submit_gathered(g.get());
+            bio.submit_gathered(ca, 0, g.get());
         }
         g.wait_sync(Sleep::IDLE);
     }

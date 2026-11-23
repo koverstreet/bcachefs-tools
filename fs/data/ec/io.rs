@@ -19,7 +19,8 @@ use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::data::dev_bio::DevBio;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
-use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, BioSubmit, Buffer, Gathered};
+use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, Buffer, Gathered, HoldsDev};
+use crate::os::blkdev::BlockDevice;
 use crate::util::gather::{Fold, Gather};
 use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
@@ -92,6 +93,18 @@ pub struct EcBio {
 }
 
 crate::has_bio!(EcBio, dev.bio, owns Buffer<&'static mut [u8]>);
+
+impl HoldsDev for EcBio {
+    type Dev = BlockDev;
+
+    fn hold(self: Pin<&mut Self>, ca: BlockDev) {
+        self.project().dev.hold(ca)
+    }
+
+    fn bdev(&self) -> &BlockDevice {
+        self.dev.bdev()
+    }
+}
 
 /// A round's bio done: its IO accounted against the device, and its block's
 /// error folded into the round's Gather - the device's, or its pointer gone
@@ -198,15 +211,14 @@ where
             // SAFETY: the block's buffer, which the round has until its wait,
             // after this bio's endio
             let chunk: &'static mut [u8] = unsafe { core::slice::from_raw_parts_mut(base.wrapping_add(offset), b) };
-            let mut bio = set.alloc::<BchError, _>(core::ptr::null_mut(), nr_vecs as u16, opf, |at| pin_init!(EcBio {
+            let bio = set.alloc::<BchError, _>(nr_vecs as u16, opf, |at| pin_init!(EcBio {
                 ptr,
                 idx: idx as u8,
                 dev <- DevBio::new(at.init_from(|bio| Ok::<_, BchError>(Buffer::fill(bio, chunk)))),
             }? BchError)).expect("a bio from the stripe bioset's mempool");
 
-            bio.bio_mut().set_sector(ptr.offset() + u64::from(sector_offset) + (offset >> 9) as u64);
-            bio.as_mut().project().dev.for_dev(ca.clone());
-            bio.submit_gathered(this.done.get());
+            bio.submit_gathered(ca.clone().into(), ptr.offset() + u64::from(sector_offset) + (offset >> 9) as u64,
+                                this.done.get());
             offset += b;
         }
     }
@@ -318,7 +330,8 @@ pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut
                                 pick: &c::extent_ptr_decoded, flags: c::ReadFlags, msg: &mut Printbuf)
     -> Result<(), BchError>
 {
-    let (key, mut buf, block) = reconstruct_start(fs, btree, data_pos, bio.raw().bi_iter, pick, flags, msg)?;
+    let iter = c::bvec_iter { bi_sector: pick.ptr.offset(), ..bio.raw().bi_iter };
+    let (key, mut buf, block) = reconstruct_start(fs, btree, data_pos, iter, pick, flags, msg)?;
     {
         stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, &mut buf));
         {
@@ -329,7 +342,7 @@ pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut
         }
         io.as_mut().wait(Resume::queue(Queue::system_dfl())).await;
     }
-    reconstruct_finish(fs, &key, &mut buf, block, bio, flags, msg)
+    reconstruct_finish(fs, &key, &mut buf, block, bio, iter, flags, msg)
 }
 
 /// The stripe looked up and checked, and its buffer: everything before the IO.
@@ -406,11 +419,11 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
     Ok((key, buf, block))
 }
 
-/// The IO done: what it read checked, and @block's copied into @bio.
+/// The IO done: what it read checked, and @block's copied into @bio - @iter
+/// its position, at the pick's sector.
 fn reconstruct_finish(fs: &Fs, key: &BkeyBuf, buf: &mut StripeBuf, block: usize, bio: &mut Bio,
-                      flags: c::ReadFlags, msg: &mut Printbuf) -> Result<(), BchError> {
+                      iter: c::bvec_iter, flags: c::ReadFlags, msg: &mut Printbuf) -> Result<(), BchError> {
     let s = BkeySC::from(key).arm::<c::Stripe>().expect("a stripe, as looked up");
-    let iter = bio.raw().bi_iter;
     let (sectors, offset) = (iter.bi_size >> 9, (iter.bi_sector - s.v().block_ptrs()[block].offset()) as u32);
 
     // A block went stale under us: the stripe was deleted or replaced, so

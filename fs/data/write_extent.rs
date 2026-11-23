@@ -76,7 +76,7 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: &c::bio, buf: *mut c
 
     let pages = (output_available + offset).div_ceil(PAGE_SIZE as u32);
 
-    let bio = fs.bio_write.alloc_raw(core::ptr::null_mut(), pages as _, 0, flags::NOIO);
+    let bio = fs.bio_write.alloc_raw(pages as _, 0, flags::NOIO);
     let wbio = unsafe { wbio_init::<c::DevWriteRefKind>(bio) };
     wbio.wbio.bits.set_put_bio(1);
     /* copy WRITE_SYNC flag */

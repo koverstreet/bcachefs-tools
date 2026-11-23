@@ -808,8 +808,8 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
              * returns one bio.
              */
             let bio = unsafe {
-                ja.bio_set.map_and_chain(ca.disk_sb.bdev.get(), w.data.as_ptr().cast(), (sectors << 9) as usize, *offset,
-                                         opf, flags::NOIO)
+                ja.bio_set.map_and_chain(ca.bdev(), w.data.as_ptr().cast(), (sectors << 9) as usize, *offset, opf,
+                                         flags::NOIO)
             };
             let jbio = unsafe { jbio_of(bio) };
 
@@ -851,7 +851,7 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
             }
 
             let ja = &ca.journal;
-            let bio = ja.bio_set.alloc_raw(ca.disk_sb.bdev.get(), 0,
+            let bio = ja.bio_set.alloc_raw(0,
                                            c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META |
                                            c::REQ_PREFLUSH,
                                            flags::NOIO);
@@ -863,6 +863,7 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
             let raw = jbio.bio.raw_mut();
             raw.bi_end_io = Some(write_preflush_endio);
             raw.bi_private = ptr::from_ref::<Dev>(&ca).cast_mut().cast();
+            crate::os::blkdev::bio_set_dev(raw, ptr::from_ref(ca.bdev()).cast_mut());
 
             /* the bio's ref, which write_preflush_endio() takes back - its
              * slot as the bioset left it, written, not dropped: */

@@ -395,7 +395,6 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
         }
 
         let bio = fs.vfs.dio_write_bioset.alloc_raw(
-            core::ptr::null_mut(),
             unsafe { c::bio_iov_vecs_to_alloc(it.as_ptr(), c::BIO_MAX_VECS as i32) } as u16,
             c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE,
             crate::util::alloc::Flags::empty());

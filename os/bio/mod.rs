@@ -5,7 +5,8 @@
 //!
 //! - A bio describes one block IO: device, op, sector, a position in its
 //!   data, and its bvecs - (page, offset, len), its own, or a clone's
-//!   source's. Its c::bio is private, read through raw().
+//!   source's. Its c::bio is private, read through raw(). The device and
+//!   sector are given only as it's submitted.
 //! - Its data is what the bvecs point at. A position is a bvec_iter: a bvec,
 //!   an offset into it, and the bytes left. The bio's own is bi_iter, which
 //!   the block layer advances as the IO completes. A BioRange is a position
@@ -56,6 +57,7 @@ use core::task::{ready, Context, Poll};
 use crate::c;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::errcode::BchError;
+use crate::os::blkdev::BlockDevice;
 use crate::util::backtrace::prt_symbol;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::sleep::Sleep;
@@ -110,7 +112,7 @@ pub use buffers::{io_buf, Buffer, IoBuf, MapBuf, Pages};
 #[cfg(kernel)]
 pub use bvec::{Bvec, FolioHold, Holds};
 pub use owned::{bio_put, submit_gathered_borrowed, BioBox, BioInPlace, BioLend, BioPool, BioSet, BvecAlloc,
-                BvecMempool, Gathered, Lent, Submitted};
+                BvecMempool, Gathered, HoldsDev, Lent, Submitted};
 
 fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)
@@ -264,8 +266,13 @@ impl<B: BioOwns> Bio<B> {
         req_op(self.bio.bi_opf)
     }
 
-    pub fn set_dev(&mut self, bdev: *mut crate::os::blkdev::BlockDevice) {
-        crate::os::blkdev::bio_set_dev(self.raw_mut(), bdev)
+    /// For its IO, at @sector of @bdev: each submit's, as it goes out, from
+    /// what has the device open for as long as the IO.
+    fn aim(&mut self, bdev: *const BlockDevice, sector: u64) -> *mut c::bio {
+        let bio = self.raw_mut();
+        bio.bi_iter.bi_sector = sector;
+        crate::os::blkdev::bio_set_dev(bio, bdev.cast_mut());
+        bio
     }
 
     /// After its bvecs change: C's view of them, and its size.
@@ -330,13 +337,12 @@ impl Bio {
     /// # Safety
     /// @bio is room for a Bio, not in flight; @table outlives the bio, and
     /// its bvecs don't change while the bio's IO is in flight.
-    pub unsafe fn init_borrowed<B: Typed<Bvec = c::bio_vec>>(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice,
-                                                            table: &mut Bio<B>, opf: u32) {
+    pub unsafe fn init_borrowed<B: Typed<Bvec = c::bio_vec>>(bio: *mut Bio, table: &mut Bio<B>, opf: u32) {
         let nr = table.vecs.len() as u16;
         unsafe {
             (&raw mut (*bio).vecs).write(BioVecs::<Data>::new_in(BvecAlloc::NONE));
             (&raw mut (*bio).vecs_at).write(VecsAt::Borrowed(NonNull::from(&**table)));
-            crate::os::bio::sys::init(bio.cast(), bdev, table.vecs.as_mut_ptr(), nr, opf);
+            crate::os::bio::sys::init(bio.cast(), core::ptr::null_mut(), table.vecs.as_mut_ptr(), nr, opf);
             (*bio).bio.bi_vcnt = nr;
         }
     }
@@ -445,10 +451,10 @@ impl Bio {
     /// with - and its position all of them again, from the table: after an IO
     /// bi_iter is the block layer's. Panics on a clone, whose bvecs aren't its
     /// own. BioOwner::reset(), which checks the buffers serve @opf.
-    pub(super) fn reset(&mut self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
+    pub(super) fn reset(&mut self, opf: u32) {
         let size = self.range_all().len();
         // SAFETY: had by &mut, so not in flight
-        unsafe { crate::os::bio::sys::reset(self.raw_mut(), bdev, opf) };
+        unsafe { crate::os::bio::sys::reset(self.raw_mut(), core::ptr::null_mut(), opf) };
         self.sync(size);
     }
 
@@ -500,6 +506,8 @@ impl Bio {
         self.raw_mut().bi_status = status;
     }
 
+    /// A read's request position, in the file; a device's sector is its
+    /// submit's.
     pub fn set_sector(&mut self, sector: u64) {
         self.raw_mut().bi_iter.bi_sector = sector;
     }
@@ -690,16 +698,17 @@ pub trait BioSubmit {
     // A typestate parameter on Bio, the owners generic over it, would make
     // it static - if one comes for something else.
     /// submit(), waited on by this thread, asleep as IO wait: its status.
-    fn submit_wait(&mut self) -> Result<(), BchError> {
-        self.submit(waiter::Sync::current()).wait_sync(Sleep::UNINTERRUPTIBLE.io())
+    fn submit_wait(&mut self, bdev: &BlockDevice, sector: u64) -> Result<(), BchError> {
+        self.submit(bdev, sector, waiter::Sync::current()).wait_sync(Sleep::UNINTERRUPTIBLE.io())
     }
 
-    /// Submitted, its IO's Completion made here for @waiter: the endio's end in
-    /// bi_private, the waiter's the BioFuture - awaited or waited on, now or
-    /// later, for the IO's status.
-    fn submit<W: Waiter>(&mut self, waiter: W) -> BioFuture<'_, W> {
+    /// Submitted to @bdev at @sector, its IO's Completion made here for
+    /// @waiter: the endio's end in bi_private, the waiter's the BioFuture -
+    /// awaited or waited on, now or later, for the IO's status. The device is
+    /// borrowed as long as the bio is.
+    fn submit<'a, W: Waiter>(&'a mut self, bdev: &'a BlockDevice, sector: u64, waiter: W) -> BioFuture<'a, W> {
         let bio = self.bio_mut();
-        let raw: *mut c::bio = bio.raw_mut();
+        let raw = bio.aim(bdev, sector);
         unsafe {
             let c = Completion::init_at((&raw mut (*raw).bi_private).cast(), waiter);
             (*raw).bi_end_io = Some(done_endio::<W>);
@@ -719,9 +728,9 @@ pub unsafe trait BioOwner: BioSubmit {
 
     /// For another IO, of @opf, to or from the same buffers: Bio::reset().
     /// Panics if they can't serve it - a buffer borrowed shared, for a read.
-    fn reset(&mut self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
+    fn reset(&mut self, opf: u32) {
         assert!(Self::Owns::allows_op(req_op(opf)), "resetting a bio for an op its buffers can't serve");
-        self.bio_mut().reset(bdev, opf)
+        self.bio_mut().reset(opf)
     }
 
     /// Panics on a clone.
@@ -774,16 +783,16 @@ impl<O: BioOwner, B> Remapped<'_, O, B> {
         self.owner.bio()
     }
 
-    pub fn submit_wait(&mut self) -> Result<(), BchError> {
-        self.owner.submit_wait()
+    pub fn submit_wait(&mut self, bdev: &BlockDevice, sector: u64) -> Result<(), BchError> {
+        self.owner.submit_wait(bdev, sector)
     }
 
-    pub fn submit<W: Waiter>(&mut self, waiter: W) -> BioFuture<'_, W> {
-        self.owner.submit(waiter)
+    pub fn submit<'b, W: Waiter>(&'b mut self, bdev: &'b BlockDevice, sector: u64, waiter: W) -> BioFuture<'b, W> {
+        self.owner.submit(bdev, sector, waiter)
     }
 
-    /// Submitted, @r put when it completes. The mapping stays until the bio's
-    /// next one.
+    /// Submitted to @bdev at @sector, @r put when it completes. The mapping
+    /// stays until the bio's next one.
     ///
     /// sb/io's alone: the bio isn't given up, as an async submit's is, so
     /// it's reachable in flight. It goes once the superblock's IO consumes
@@ -792,10 +801,10 @@ impl<O: BioOwner, B> Remapped<'_, O, B> {
     /// # Safety
     /// Nothing touches the bio, or the buffer it's mapped to, until @r's
     /// Gather has been waited on; nor walks or submits the bio until its next
-    /// reset().
-    pub unsafe fn submit_gathered(self, r: GatherRef<(), waiter::Sync>) {
+    /// reset(); @bdev stays open till then.
+    pub unsafe fn submit_gathered(self, bdev: &BlockDevice, sector: u64, r: GatherRef<(), waiter::Sync>) {
         let mut this = core::mem::ManuallyDrop::new(self);
-        let bio: *mut c::bio = this.owner.bio_mut().raw_mut();
+        let bio = this.owner.bio_mut().aim(bdev, sector);
         // SAFETY: the owner's, built for this IO; the caller keeps it, and
         // the buffer, from being touched until it's done
         unsafe {

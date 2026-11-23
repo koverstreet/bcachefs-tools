@@ -68,7 +68,7 @@ use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KVVec;
 use crate::util::atomic::try_update;
-use crate::os::bio::{Bio, BioSubmit, Gathered};
+use crate::os::bio::{Bio, BioSubmit, Gathered, HoldsDev};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::task::{waiter, WaitSync};
@@ -159,6 +159,18 @@ pub(crate) struct DiscardBio {
     bio:     Bio,
 }
 has_bio!(DiscardBio, bio);
+
+impl HoldsDev for DiscardBio {
+    type Dev = Discard;
+
+    fn hold(self: Pin<&mut Self>, d: Discard) {
+        *self.project().discard = Some(d);
+    }
+
+    fn bdev(&self) -> &blkdev::BlockDevice {
+        self.discard.as_ref().expect("a discard bio's discard, before it's submitted").ca.bdev()
+    }
+}
 
 // ── to_text ──────────────────────────────────────────────────────────────
 
@@ -355,21 +367,19 @@ impl Discard {
     /// Issue it, to be put to its worker's Discards by @done.
     fn submit(self, fs: &Fs, done: GatherRef<KVVec<Discard>, waiter::Sync>) {
         let ca = &self.ca;
-        let bdev = ca.disk_sb.bdev.get();
         let sector = ca.bucket_to_sector(u64_to_bucket(self.dev_bucket).offset);
         let size = u32::from(ca.mi.get().bucket_size) << 9;
         // as C's GFP_NOIO: what this waits on mustn't be our own IO
         let _noio = MemallocFlags::noio();
         let mut bio = fs.discards.bioset
-            .alloc::<BchError, _>(bdev, 0, c::req_op_REQ_OP_DISCARD, |b| pin_init!(DiscardBio {
-                discard: Some(self),
+            .alloc::<BchError, _>(0, c::req_op_REQ_OP_DISCARD, |b| pin_init!(DiscardBio {
+                discard: None,
                 bio      <- b.init::<BchError, _>(),
             }? BchError))
             .expect("a discard bio: the mempool waits rather than fail");
 
-        bio.bio_mut().set_sector(sector);
         bio.bio_mut().set_size(size);
-        bio.submit_gathered(done);
+        bio.submit_gathered(self, sector, done);
     }
 }
 

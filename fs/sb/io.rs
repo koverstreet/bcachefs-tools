@@ -1098,9 +1098,8 @@ impl c::bch_sb_io {
                 return Ok(());
             }
 
-            let bio = BioBox::<Bio>::new::<BchError, _>(core::ptr::null_mut(),
-                                                        nr.try_into().expect("a superblock's worth of bvecs"),
-                                                        0, |b| b.init())
+            let bio = BioBox::<Bio>::new::<BchError, _>(nr.try_into().expect("a superblock's worth of bvecs"), 0,
+                                                        |b| b.init())
                 .map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_bio_realloc))?;
             self.bio = Some(bio);
         }
@@ -1209,29 +1208,27 @@ impl core::ops::DerefMut for bch_sb_handle {
 // ── Reading a device's superblock ────────────────────────────────────────
 
 impl c::bch_sb_io {
-    /// The bio, set up for an IO by @opf at @sector of @bdev - with the
-    /// buffer it maps, borrowed apart.
-    fn bio(&mut self, bdev: &BlockDevice, opf: u32, sector: u64) -> (&mut BioBox<'static, Bio>, &mut [u8]) {
+    /// The bio, set up for an IO by @opf - with the buffer it maps, borrowed
+    /// apart.
+    fn bio(&mut self, opf: u32) -> (&mut BioBox<'static, Bio>, &mut [u8]) {
         let bio = self.bio.as_mut().expect("superblock IO without a bio: have_bio wasn't set");
-        bio.reset(core::ptr::from_ref(bdev).cast_mut(), opf);
-        bio.bio_mut().set_sector(sector);
+        bio.reset(opf);
         (bio, self.buf.buffer_mut())
     }
 
     /// @bytes from @sector of @bdev into the buffer.
     fn read(&mut self, bdev: &BlockDevice, sector: u64, bytes: usize) -> Result<(), BchError> {
-        let (bio, buf) = self.bio(bdev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META, sector);
+        let (bio, buf) = self.bio(c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
         // bound, so the Remapped drops before the bio it borrows
-        let ret = bio.remap_read(&mut buf[..bytes]).expect(SB_BIO_FITS).submit_wait();
+        let ret = bio.remap_read(&mut buf[..bytes]).expect(SB_BIO_FITS).submit_wait(bdev, sector);
         ret
     }
 
     /// The buffer's first @bytes to @sector of @bdev, FUA.
     fn write_fua(&mut self, bdev: &BlockDevice, sector: u64, bytes: usize) -> Result<(), BchError> {
-        let (bio, buf) = self.bio(bdev, c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA,
-                                  sector);
+        let (bio, buf) = self.bio(c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA);
         // as read()'s
-        let ret = bio.remap_write(&buf[..bytes]).expect(SB_BIO_FITS).submit_wait();
+        let ret = bio.remap_write(&buf[..bytes]).expect(SB_BIO_FITS).submit_wait(bdev, sector);
         ret
     }
 }
@@ -2172,14 +2169,15 @@ impl<'a> SbIos<'a> {
         let f = this.frozen.last_mut().expect("just pushed");
         let r = this.gather.get();
 
-        let (bio, sb_buf) = f.sb.io.bio(f.sb.bdev, opf, sector);
+        let bdev = f.sb.bdev;
+        let (bio, sb_buf) = f.sb.io.bio(opf);
         // frozen: nothing reaches its bio, buffer or scratch until wait() has
-        // waited on the gather
+        // waited on the gather, nor closes its device
         unsafe {
             if f.read {
-                bio.remap_read(f.sb.scratch).expect(SB_BIO_FITS).submit_gathered(r)
+                bio.remap_read(f.sb.scratch).expect(SB_BIO_FITS).submit_gathered(bdev, sector, r)
             } else {
-                bio.remap_write(&sb_buf[..bytes]).expect(SB_BIO_FITS).submit_gathered(r)
+                bio.remap_write(&sb_buf[..bytes]).expect(SB_BIO_FITS).submit_gathered(bdev, sector, r)
             }
         }
     }

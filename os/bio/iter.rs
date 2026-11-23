@@ -590,7 +590,7 @@ mod tests {
     #[test]
     fn ranges_and_chunks() {
         let (mut a, mut b, mut c_) = ([1u8; 8], [2u8; 4], [3u8; 6]);
-        let mut buf = BioBox::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 3, 0, |bio| bio.init()).unwrap();
+        let mut buf = BioBox::<Bio>::new::<BchError, _>(3, 0, |bio| bio.init()).unwrap();
         for x in [&mut a[..], &mut b[..], &mut c_[..]] {
             // SAFETY: a buffer that outlives the bio, into one of its 3 bvecs
             unsafe { buf.bio_mut().map(x.as_mut_ptr(), x.len()).expect("a bvec of the three it has room for") };
@@ -636,8 +636,7 @@ mod tests {
     #[test]
     fn remapping_ends_with_its_borrow() {
         let buf = [5u8; 512];
-        let mut bio = BioBox::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 1,
-                                                        c::req_op_REQ_OP_WRITE, |b| b.init()).unwrap();
+        let mut bio = BioBox::<Bio>::new::<BchError, _>(1, c::req_op_REQ_OP_WRITE, |b| b.init()).unwrap();
         let m = bio.remap_write(&buf).expect("one bvec, into a bio with room for one");
         assert_eq!(m.owner.range_all().len(), 512);
         drop(m);

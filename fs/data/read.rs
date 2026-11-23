@@ -90,7 +90,7 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot};
 use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::os::bio::{pages, reset_bvec_offset, Bio, BioBox, BioInPlace, BioLend, BioRange, BioSubmit,
+use crate::os::bio::{pages, reset_bvec_offset, Bio, BioBox, BioFuture, BioInPlace, BioLend, BioRange, BioSubmit,
                        BvecMempool, HasBio, Lent, Pages};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
@@ -350,6 +350,14 @@ impl Kind<'_> {
             Kind::Home(h, _) => &h.rbio,
         }
     }
+}
+
+/// Submitted, whichever of its bios it has: none owns a buffer it could be
+/// remapped from - a bounce's pages, a home's.
+impl BioSubmit for Kind<'_> {
+    fn bio(&self) -> &Bio {
+        self.rbio().bio()
+    }
 
     fn bio_mut(&mut self) -> &mut Bio {
         match self {
@@ -405,11 +413,9 @@ struct Fragment<'r> {
     plan:   Plan<'r>,
 }
 
-/// Submitted, whichever of its bios it has: none owns a buffer it could be
-/// remapped from - a bounce's pages, a home's.
 impl BioSubmit for Fragment<'_> {
     fn bio(&self) -> &Bio {
-        self.rbio().bio()
+        self.kind.bio()
     }
 
     fn bio_mut(&mut self) -> &mut Bio {
@@ -421,6 +427,13 @@ impl<'r> Fragment<'r> {
     fn new(fs: &Fs, kind: Kind<'r>, plan: Plan<'r>) -> Self {
         let listed = unsafe { AsyncObjSlot::new(fs, kind.rbio()) };
         Fragment { listed, kind, ca: None, plan }
+    }
+
+    /// Its bio submitted to the pick's device, which its io ref holds open:
+    /// device_read_start()'s next.
+    fn submit_read(&mut self, waiter: waiter::Async) -> BioFuture<'_, waiter::Async> {
+        let ca = self.ca.as_ref().expect("a fragment's read submitted with no device");
+        self.kind.submit(ca.bdev(), self.plan.pick.ptr.offset(), waiter)
     }
 
     fn rbio(&self) -> &Rbio {
@@ -1270,17 +1283,17 @@ impl<'r> Planned<'r, '_> {
         let opf = orig.bio().raw().bi_opf;
 
         let _noio = MemallocFlags::noio();
-        let (pool, bvecs, bdev) = (&FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc(), core::ptr::null_mut());
+        let (pool, bvecs) = (&FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc());
         let kind = match how {
             How::Promote(p) => Kind::Promote(p.rbio.bio.lend(), p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
-                let mut b = BioBox::new_in(pool, bvecs, bdev, pages::nr_vecs(size), 0,
+                let mut b = BioBox::new_in(pool, bvecs, pages::nr_vecs(size), 0,
                                            |b| Rbio::fragment(orig, b.init()))?;
                 let pages = Pages::fill(b.bio_mut(), &fs.bio_bounce, bs, size, size, gfp)?;
                 Kind::Bounce(b, pages)
             }
-            How::Clone => Kind::Clone(BioBox::new_in(pool, bvecs, bdev, 0, 0,
+            How::Clone => Kind::Clone(BioBox::new_in(pool, bvecs, 0, 0,
                                                      |b| Rbio::fragment(orig, b.clone_of(plan.range)))?),
             How::Own => Kind::Own(orig.lend()),
         };
@@ -1301,7 +1314,6 @@ impl<'r> Planned<'r, '_> {
 
         f.ca = ca;
         f.bio_mut().set_opf(opf);
-        f.bio_mut().set_sector(plan.pick.ptr.offset());
         trace_fragment(orig, f.rbio(), &plan, f.bounced(), k);
         Ok(())
     }
@@ -1328,12 +1340,12 @@ impl<'r> Planned<'r, '_> {
         let opf = orig.bio().raw().bi_opf;
 
         let _noio = MemallocFlags::noio();
-        let (home, null) = (&FRAGMENTS, core::ptr::null_mut());
+        let home = &FRAGMENTS;
         let mut slot = match bounce {
-            Some((size, _)) => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, null, pages::nr_vecs(size), 0, |b| {
+            Some((size, _)) => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, pages::nr_vecs(size), 0, |b| {
                 pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b.init()) }? BchError)
             }),
-            None => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, null, 0, 0, |b| {
+            None => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, 0, 0, |b| {
                 let b = unsafe { b.borrowing() };
                 pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b.clone_of(plan.range)) }? BchError)
             }),
@@ -1341,9 +1353,7 @@ impl<'r> Planned<'r, '_> {
         let bs = fs.opts().block_size.get().into();
         let buffers = bounce.map(|(size, gfp)| Pages::fill(slot.home().bio_mut(), &fs.bio_bounce, bs, size, size, gfp))
             .transpose()?;
-        let bio = slot.home().bio_mut();
-        bio.set_opf(opf);
-        bio.set_sector(plan.pick.ptr.offset());
+        slot.home().bio_mut().set_opf(opf);
         let rb = &slot.home().into_ref().get_ref().rbio;
         trace_fragment(orig, rb, &plan, bounce.is_some(), k);
         if split_trace {
@@ -1446,9 +1456,7 @@ use boxed::{ec_read, retry_owned, RetryOwnedFut};
 
 fn device_read_start(f: &mut Fragment<'_>, fs: &Fs) -> Result<u64, BchError> {
     let Some(ca) = f.ca.as_deref() else { return Err(fs.err(err::data_read_retry_device_offline)) };
-    let bdev = ca.disk_sb.bdev.get();
     ca.io_done_add(READ, DataType::user, (f.bio().raw().bi_iter.bi_size >> 9).into());
-    f.bio_mut().set_dev(bdev);
     Ok(local_clock())
 }
 
@@ -1479,7 +1487,7 @@ async fn fragment_io(f: &mut Fragment<'_>, read: &Rbio, target: Resume<'static>,
         let status = if fs.opts().no_data_io.get() != 0 {
             Ok(())
         } else {
-            f.submit(waiter::Async::current().await).resume_on(Resume::INLINE).await
+            f.submit_read(waiter::Async::current().await).resume_on(Resume::INLINE).await
         };
         let ret = device_read_done(f, fs, submit_time, status);
         if let ResumeAt::Queue(q) = target.get() {
@@ -1753,7 +1761,7 @@ async fn fragment_task<'r>(r: ReadRef, mut f: Fragment<'r>, read: &'r Rbio) {
                 let status = if read.fs().opts().no_data_io.get() != 0 {
                     Ok(())
                 } else {
-                    f.submit(waiter::Async::current().await).resume_on(Resume::INLINE).await
+                    f.submit_read(waiter::Async::current().await).resume_on(Resume::INLINE).await
                 };
                 let ret = device_read_done(&f, read.fs(), submit_time, status);
                 if let ResumeAt::Queue(q) = resume_target(&f).get() {

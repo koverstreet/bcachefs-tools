@@ -405,9 +405,8 @@ impl c::data_update {
         unsafe {
             init_at(Bio::<Pages>::new(&fs.bio_bounce, block_size, buf_bytes as usize, Flags::empty()),
                     &raw mut self.pages)?;
-            Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), core::ptr::null_mut(), &mut self.pages,
-                               c::req_op_REQ_OP_READ);
-            Bio::init_borrowed(&raw mut self.op.wbio.bio, core::ptr::null_mut(), &mut self.pages, 0);
+            Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), &mut self.pages, c::req_op_REQ_OP_READ);
+            Bio::init_borrowed(&raw mut self.op.wbio.bio, &mut self.pages, 0);
         }
         self.op.wbio.bio_mut().set_size(buf_bytes);
 

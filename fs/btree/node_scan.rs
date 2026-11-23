@@ -18,12 +18,13 @@ use crate::c::{self, Errcode, BtreePtrV2};
 use crate::data::ptrs::extent_ptr_to_text;
 use crate::errcode::BchError;
 use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
-use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Dev, Fs};
+use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
+use crate::sb::members::DevIoRef;
 use crate::init::passes;
 use crate::locking::{Locked, Mutex};
 use crate::types::{Le16, Le64};
 use crate::util::alloc::KVVec;
-use crate::os::bio::{Bio, BioBox, BioOwner, BioSubmit};
+use crate::os::bio::{Bio, BioBox, BioOwner};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::heap::{MinHeap, PeekMut};
 use crate::os::kernel::{cond_resched, jiffies, local_clock, sort_nonatomic, time_after, HZ, PAGE_SIZE};
@@ -173,13 +174,13 @@ impl Drop for NodeBuf {
 
 struct DevScan<'f> {
     fs:  &'f Fs,
-    ca:  &'f Dev,
+    ca:  &'f DevIoRef<c::DevReadRefKind>,
     buf: NodeBuf,
     bio: BioBox<'static, Bio>,
 }
 
 impl<'f> DevScan<'f> {
-    fn new(fs: &'f Fs, ca: &'f Dev) -> Result<Self, BchError> {
+    fn new(fs: &'f Fs, ca: &'f DevIoRef<c::DevReadRefKind>) -> Result<Self, BchError> {
         let Some(buf) = NodeBuf::alloc(fs) else {
             bch_err!(fs, "read_btree_nodes_worker: error allocating buf");
             return Err(c::ENOMEM.into());
@@ -188,7 +189,7 @@ impl<'f> DevScan<'f> {
         /* not buf_nr_bvecs(): it's remapped onto what read_done swaps in, which may be vmalloc */
         let nr_vecs = (fs.opts.btree_node_size.get() as usize).div_ceil(PAGE_SIZE)
             .try_into().expect("bvecs for a btree node");
-        let Ok(bio) = BioBox::<Bio>::new::<BchError, _>(ca.disk_sb.bdev.get(), nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
+        let Ok(bio) = BioBox::<Bio>::new::<BchError, _>(nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
         else {
             bch_err!(fs, "read_btree_nodes_worker: error allocating bio");
             return Err(c::ENOMEM.into());
@@ -200,13 +201,12 @@ impl<'f> DevScan<'f> {
     fn read(&mut self, offset: u64, bytes: usize) -> Result<(), BchError> {
         let DevScan { ca, buf, bio, .. } = self;
 
-        bio.reset(ca.disk_sb.bdev.get(), c::req_op_REQ_OP_READ);
-        bio.bio_mut().set_sector(offset);
+        bio.reset(c::req_op_REQ_OP_READ);
 
         let submit_time = local_clock();
         // remapped each read: read_done swaps the node's buffer
         let ret = bio.remap_read(buf.bytes(bytes))
-            .expect("a node's buffer, into a bio with a bvec for each of its pages").submit_wait();
+            .expect("a node's buffer, into a bio with a bvec for each of its pages").submit_wait(ca.bdev(), offset);
         ca.account_io_completion(c::MemberErrorType::read, submit_time, ret.is_ok());
         ret
     }

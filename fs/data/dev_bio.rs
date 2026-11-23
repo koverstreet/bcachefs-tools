@@ -13,12 +13,13 @@ use pin_init::{pin_data, pin_init, PinInit};
 use crate::c;
 use crate::os::kernel::{local_clock, READ, WRITE};
 use crate::sb::members::BlockDev;
-use crate::os::bio::{AtEnd, Bio, BioBox, BioOwns, Data};
+use crate::os::bio::{AtEnd, Bio, BioBox, BioOwns, Data, HoldsDev};
+use crate::os::blkdev::BlockDevice;
 
 #[pin_data]
 #[repr(C)]
 pub struct DevBio<B: BioOwns = Data> {
-    /* the bio's, from for_dev() till its end */
+    /* the bio's, from its submit till its end */
     ca:          Option<BlockDev>,
     submit_time: u64,
     /* a write with data, not FUA, which the device may hold in its cache */
@@ -35,18 +36,6 @@ impl<B: BioOwns> DevBio<B> {
     /// yet.
     pub fn new<E>(bio: impl PinInit<Bio<B>, E>) -> impl PinInit<Self, E> {
         pin_init!(Self { ca: None, submit_time: 0, unflushed: false, bio <- bio }? E)
-    }
-
-    /// For an IO to @ca, from now - its bvecs and position set: the bio's
-    /// for @ca's device, and holds its io ref till it's done.
-    pub fn for_dev(self: Pin<&mut Self>, ca: impl Into<BlockDev>) {
-        let ca = ca.into();
-        let mut this = self.project();
-        this.bio.as_mut().set_dev(ca.disk_sb.bdev.get());
-        *this.unflushed = this.bio.op() == c::req_op_REQ_OP_WRITE && this.bio.raw().bi_iter.bi_size != 0 &&
-            this.bio.raw().bi_opf & c::REQ_FUA == 0;
-        *this.submit_time = local_clock();
-        *this.ca = Some(ca);
     }
 
     /// Its IO done - submit_owned() and awaited - the rest of its end: its
@@ -69,7 +58,7 @@ impl<B: BioOwns> DevBio<B> {
     /// Its result accounted against its device: the device, and its status.
     fn take_end(self: Pin<&mut Self>) -> (BlockDev, c::blk_status_t) {
         let this = self.project();
-        let ca = this.ca.take().expect("a DevBio submitted for no device: for_dev() first");
+        let ca = this.ca.take().expect("a DevBio's end, with no device: it wasn't submitted");
         let status = this.bio.raw().bi_status;
         // by the op, not the ref's kind: a btree node write holds a read ref
         let ty = if this.bio.op() == c::req_op_REQ_OP_WRITE { c::MemberErrorType::write } else { c::MemberErrorType::read };
@@ -78,6 +67,24 @@ impl<B: BioOwns> DevBio<B> {
             ca.write_unflushed();
         }
         (ca, status)
+    }
+}
+
+/// Its submit's io ref, from now - its bvecs and position set: held till the
+/// bio's done.
+impl<B: BioOwns> HoldsDev for DevBio<B> {
+    type Dev = BlockDev;
+
+    fn hold(self: Pin<&mut Self>, ca: BlockDev) {
+        let this = self.project();
+        *this.unflushed = this.bio.op() == c::req_op_REQ_OP_WRITE && this.bio.raw().bi_iter.bi_size != 0 &&
+            this.bio.raw().bi_opf & c::REQ_FUA == 0;
+        *this.submit_time = local_clock();
+        *this.ca = Some(ca);
+    }
+
+    fn bdev(&self) -> &BlockDevice {
+        self.ca.as_ref().expect("a DevBio's device, before it's submitted").bdev()
     }
 }
 

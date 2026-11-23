@@ -17,14 +17,15 @@ use crate::locking::MemallocFlags;
 use crate::os::kernel::{local_clock, WRITE};
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::util::alloc::{Alloc, AllocError, Allocator, Kmalloc};
-use crate::os::bio::{submit_gathered_borrowed, BioBox, BioInPlace, BvecMempool, Gathered, HasBio};
+use crate::os::bio::{submit_gathered_borrowed, BioBox, BioInPlace, BvecMempool, Gathered, HasBio, HoldsDev};
+use crate::os::blkdev::BlockDevice;
 use crate::util::gather::{Fold, Gather};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::task::{waiter, Resume};
 use core::alloc::Layout;
 use core::pin::Pin;
-use core::ptr::{self, NonNull};
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU16, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::args_stored_once;
 use pin_init::{stack_pin_init, PinInit};
@@ -125,6 +126,18 @@ impl<R: IoRefIdx> Gathered<ReplicaErrs> for c::bch_write_bio<R> {
     }
 }
 
+impl<R: IoRefIdx> HoldsDev for c::bch_write_bio<R> {
+    type Dev = DevIoRef<R>;
+
+    fn hold(self: Pin<&mut Self>, ca: DevIoRef<R>) {
+        *self.project().ca = Some(ca);
+    }
+
+    fn bdev(&self) -> &BlockDevice {
+        self.ca.as_ref().expect("a replica's device, before it's submitted").bdev()
+    }
+}
+
 /// A write bio, made where its box has it - a clone's, or a btree node write
 /// task's: its bio there already.
 pub(crate) fn wbio_in_place<R: IoRefIdx>(_: BioInPlace) -> impl PinInit<c::bch_write_bio<R>, BchError> {
@@ -191,26 +204,24 @@ fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write
             n.wbio.bits.set_nocow(nocow.into());
             n.wbio.submit_time  = local_clock();
             n.wbio.inode_offset = k.k().start_offset();
-            n.bio.set_sector(ptr.offset());
 
-            let bdev = ca.as_deref().map(|ca| {
+            if let Some(ca) = &ca {
                 if nocow {
                     n.wbio.nocow_bucket = ca.ptr_bucket(ptr);
                 }
                 ca.io_done_add(WRITE, ty, (n.bio.range().len() >> 9).into());
-                ca.disk_sb.bdev.get()
-            });
-            /* the bio's, till its endio takes it back */
-            *n.ca = ca;
+            }
 
-            match bdev {
-                Some(bdev) => {
-                    n.bio.set_dev(bdev);
-                    !(ty != DataType::btree && fs.opts().no_data_io.get() != 0)
-                }
-                None => {
-                    n.bio.set_status(c::BLK_STS_REMOVED);
-                    false
+            /* the io ref to submit with, which the bio holds till its end - or,
+             * not submitted, the bio's now */
+            match ca {
+                Some(ca) if !(ty != DataType::btree && fs.opts().no_data_io.get() != 0) => Some(ca),
+                ca => {
+                    if ca.is_none() {
+                        n.bio.set_status(c::BLK_STS_REMOVED);
+                    }
+                    *n.ca = ca;
+                    None
                 }
             }
         };
@@ -219,17 +230,16 @@ fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write
             let opf = wbio.bio.raw().bi_opf;
             let mut n = {
                 let _noio = MemallocFlags::noio();
-                BioBox::new_in(ReplicaClones, REPLICA_CLONE_BVECS.alloc(), ptr::null_mut(), 0, opf,
+                BioBox::new_in(ReplicaClones, REPLICA_CLONE_BVECS.alloc(), 0, opf,
                                |b| c::bch_write_bio::<R>::clone_of(b, HasBio::bio(&*wbio).range()))
             }.expect("a replica's clone: its pool waits for an element");
 
-            if set_up(n.as_mut()) {
-                unsafe { n.submit_gathered_unchecked(g.get()) };
-            } else {
-                g.get().put(n.as_mut().done(Ok(())));
+            match set_up(n.as_mut()) {
+                Some(ca) => unsafe { n.submit_gathered_unchecked(ca, ptr.offset(), g.get()) },
+                None     => g.get().put(n.as_mut().done(Ok(()))),
             }
-        } else if set_up(wbio.as_mut()) {
-            unsafe { submit_gathered_borrowed(wbio.as_mut(), g.get()) };
+        } else if let Some(ca) = set_up(wbio.as_mut()) {
+            unsafe { submit_gathered_borrowed(wbio.as_mut(), ca, ptr.offset(), g.get()) };
         } else {
             g.get().put(wbio.as_mut().done(Ok(())));
         }

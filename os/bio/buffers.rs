@@ -5,7 +5,6 @@
 
 use core::mem::MaybeUninit;
 use core::ops::Deref;
-use core::ptr;
 
 use pin_init::PinInit;
 
@@ -79,7 +78,7 @@ impl<'p> Bio<Pages<'p>> {
     /// allocation a multiple of @bs - failing as it does, with nothing made: a
     /// data update's, whose read and write bios borrow its bvecs.
     pub fn new(pool: &'p BouncePool, bs: u32, size: usize, gfp: Flags) -> impl PinInit<Self, BchError> + 'p {
-        BioInPlace::own(ptr::null_mut(), pages::nr_vecs(size), 0, move |at| at.init_from(move |b| {
+        BioInPlace::own(pages::nr_vecs(size), 0, move |at| at.init_from(move |b| {
             if let Err(e) = pages::alloc_pages(&mut b.vecs, bs, size, gfp) {
                 unsafe { pages::free_pages_pool(pool, &mut b.vecs) };
                 return Err(e);

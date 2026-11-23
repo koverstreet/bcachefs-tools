@@ -747,30 +747,28 @@ fn bucket_seqs_monotonic(bucket_seq: &[u64], head: usize, out: &mut Printbuf) ->
 }
 
 /// @bytes of @ca from @sector into @bio's buffer: what it read.
-fn read_at<'b>(ca: &Dev, bio: &'b mut BioBox<Bio<Buffer<IoBuf>>>, sector: u64, bytes: usize)
+fn read_at<'b>(ca: &DevIoRef<c::DevReadRefKind>, bio: &'b mut BioBox<Bio<Buffer<IoBuf>>>, sector: u64, bytes: usize)
     -> Result<&'b mut [u8], BchError>
 {
-    bio.reset(ca.disk_sb.bdev.get(), c::req_op_REQ_OP_READ);
-    bio.bio_mut().set_sector(sector);
+    bio.reset(c::req_op_REQ_OP_READ);
     bio.bio_mut().shrink(bytes.try_into().expect("a journal read of 4G or more"));
-    bio.submit_wait()?;
+    bio.submit_wait(ca.bdev(), sector)?;
     Ok(unsafe { assume_init_mut(&mut bio.as_mut().get_mut().buf_mut()[..bytes]) })
 }
 
 struct DevReader<'a> {
     fs:   &'a Fs,
-    ca:   &'a Dev,
+    ca:   &'a DevIoRef<c::DevReadRefKind>,
     ring: &'a mut JournalRing,
     bio:  BioBox<'static, Bio<Buffer<IoBuf>>>,
 }
 
 impl<'a> DevReader<'a> {
-    fn new(fs: &'a Fs, ca: &'a Dev, ring: &'a mut JournalRing) -> Result<Self, BchError> {
+    fn new(fs: &'a Fs, ca: &'a DevIoRef<c::DevReadRefKind>, ring: &'a mut JournalRing) -> Result<Self, BchError> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
         let buf = io_buf(bytes, Flags::empty()).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
         let bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
-            ca.disk_sb.bdev.get(), Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ,
-            |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
+            Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ, |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
         Ok(DevReader { fs, ca, ring, bio })
     }
 
@@ -942,7 +940,7 @@ impl<'a> DevReader<'a> {
             let mut msg = LogMsg::new(self.fs);
             prt!(&mut msg, "{}: journal bucket seqs not monotonic\n  \
                             last_seq bucket {} write head bucket {} seq {}:\n",
-                 self.ca, last_seq_idx, max_bucket, bucket_seq[max_bucket]);
+                 &**self.ca, last_seq_idx, max_bucket, bucket_seq[max_bucket]);
             violations.to_text(&mut msg);
             crate::init::error::sb_error_count(self.fs, id::journal_bucket_seq_not_monotonic);
         }
@@ -998,14 +996,14 @@ impl<'a> DevReader<'a> {
 fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::DevReadRefKind>>,
                 full_read: bool) -> Result<(), BchError> {
     par::scope(Backend::Workqueue(Queue::system_dfl()), fs.tasks(), |s| {
-        for ca in devs.iter() {
-            let ca: &Dev = ca;
+        for io in devs.iter() {
+            let ca: &Dev = io;
             let ring = unsafe { journal_ring(ca) };
             s.spawn(format_args!("journal read {}", ca), move || {
                 let ret = if ring.nr() == 0 {
                     Ok(())
                 } else {
-                    DevReader::new(fs, ca, ring).and_then(|mut r| r.read_device(read, full_read))
+                    DevReader::new(fs, io, ring).and_then(|mut r| r.read_device(read, full_read))
                 };
 
                 match &ret {

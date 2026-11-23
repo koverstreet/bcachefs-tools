@@ -56,7 +56,7 @@ pub fn write(
             Buffer::fill(b, data);
             Ok::<_, BchError>(Data)
         });
-        init_at(BioInPlace::own(std::ptr::null_mut(), Buffer::nr_vecs(&data), c::req_op_REQ_OP_WRITE, fill), bio)?;
+        init_at(BioInPlace::own(Buffer::nr_vecs(&data), c::req_op_REQ_OP_WRITE, fill), bio)?;
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };
@@ -91,7 +91,7 @@ pub fn read<'a>(
     type F = c::ReadFlags;
     let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
-    let mut b = BioBox::new(std::ptr::null_mut(), Buffer::nr_vecs(&&mut *buf), c::req_op_REQ_OP_READ, |b| {
+    let mut b = BioBox::new(Buffer::nr_vecs(&&mut *buf), c::req_op_REQ_OP_READ, |b| {
         let into = &mut *buf;
         Rbio::new(fs, opts, inum.subvol as u32, None, b.init_from(move |bio| {
             Buffer::fill(bio, into);
