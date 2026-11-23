@@ -441,7 +441,7 @@ impl<'a> Worker<'a> {
         };
 
         if !discard_opt_enabled(fs, &ca) ||
-           blkdev::max_discard_sectors(ca.disk_sb.bdev()) == 0 ||
+           blkdev::max_discard_sectors(ca.bdev()) == 0 ||
            fs.opts.nochanges.get() != 0 {
             return self.mark_free_key(t, &iter, a);
         }

@@ -230,7 +230,7 @@ use crate::util::projections::Volatile;
 use crate::util::sharing::Unshared;
 use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
-                         sb_member_alloc, DevKobjRef, DevName, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
+                         sb_member_alloc, DevIoRef, DevKobjRef, DevName, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::util::alloc::kbox_pin_init;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::file::read_file;
@@ -249,13 +249,12 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 #[cfg(kernel)]
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
-     crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
-     core::sync::atomic::Ordering::Acquire};
+     crate::util::sleep::Sleep, core::sync::atomic::Ordering::Acquire};
 use crate::types::bits_to_longs;
 use crate::os::bio::{Bio, BioBox, IoBuf};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
-use crate::util::refcount::WaitableRef;
+use crate::util::refcount::{TryRefcount, WaitableRef};
 use nestify::nest;
 
 /// A superblock in memory, in a buffer that grows: a power of two, zeroes past
@@ -371,9 +370,19 @@ impl bch_sb_handle {
         &self.0
     }
 
-    pub fn parts_mut(&mut self) -> (&mut bch_sb_io, &bch_sb_bdev) {
+    /// Its block device, which it has open: from read_super() till attaching
+    /// it takes it.
+    pub fn bdev(&self) -> &crate::os::blkdev::BlockDevice {
+        self.bdev_if_open().expect("a superblock handle with no device open")
+    }
+
+    fn bdev_if_open(&self) -> Option<&crate::os::blkdev::BlockDevice> {
+        unsafe { self.0.bdev.get().as_ref() }
+    }
+
+    pub fn parts_mut(&mut self) -> (&mut bch_sb_io, Option<&crate::os::blkdev::BlockDevice>) {
         let (io, dev) = self.0.split_mut();
-        (io, dev)
+        (io, unsafe { dev.bdev.get().as_ref() })
     }
 }
 
@@ -446,8 +455,11 @@ impl Dev {
          * code doesn't appear to provide a good method and block/holder.c is
          * susceptible as well:
          */
-        if self.kobj.in_sysfs() && !self.disk_sb.bdev.get().is_null() {
-            let b = self.disk_sb.kobj();
+        if !self.kobj.in_sysfs() {
+            return;
+        }
+        if let Some(ca) = self.io_ref_read.tryget() {
+            let b = crate::os::blkdev::kobj(ca.bdev());
             if b.in_sysfs() {
                 b.unlink(c"bcachefs");
                 self.kobj.unlink(c"block");
@@ -470,8 +482,8 @@ impl Dev {
             self.kobj.add(Some(&fs.kobj), name.as_c_str())?;
         }
 
-        if !self.disk_sb.bdev.get().is_null() {
-            let block = self.disk_sb.kobj();
+        if let Some(ca) = self.io_ref_read.tryget() {
+            let block = crate::os::blkdev::kobj(ca.bdev());
 
             block.link(&self.kobj, c"bcachefs")?;
             self.kobj.link(block, c"block")?;
@@ -530,8 +542,9 @@ pub(crate) fn dev_free(ca: DevKobjRef) {
     }
 }
 
-/// An attached device freed: its reads stopped, its superblock closed.
+/// An attached device freed: its IO stopped, its superblock closed.
 pub(crate) fn dev_exit(ca: DevKobjRef) {
+    ca.io_ref_stop(WRITE);
     ca.io_ref_stop(READ);
     ca.sb_close();
     dev_free(ca);
@@ -561,9 +574,10 @@ impl StateLockWrite<'_> {
 
         self.dev_read_only(ca);
 
-        ca.io_ref_stop(READ);
-
+        /* its links reach the block device by a read ref: before they stop */
         ca.unlink();
+
+        ca.io_ref_stop(READ);
 
         ca.sb_close();
         unsafe { ca.journal.bio_set.unmake() };
@@ -720,7 +734,7 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice
         return Ok(());
     }
 
-    let dev_bdev = Some(sb.dev().bdev());
+    let dev_bdev = Some(sb.bdev());
     let seq_from_fs = sb_member(fs, dev.dev_idx.into()).map_or(0, |m| m.seq.get());
 
     if fs.seq == dev.seq && fs.write_time != dev.write_time {
@@ -770,7 +784,7 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
         return fs.throw(Errcode::device_already_online);
     }
 
-    let capacity = sb.dev().capacity();
+    let capacity = crate::os::blkdev::capacity(sb.bdev());
     if capacity < u64::from(mi.bucket_size) * mi.nbuckets {
         prt!(err, "Cannot online {}: device too small (capacity {} filesystem size {} nbuckets {})\n",
              sb.io().name().to_str().unwrap_or("?"), capacity, u64::from(mi.bucket_size) * mi.nbuckets, mi.nbuckets);
@@ -784,8 +798,8 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
     ca.journal_init(state)?;
 
     let mut name = Printbuf::new();
-    prt_bdevname(&mut name, Some(sb.dev().bdev()));
-    let dev = crate::os::blkdev::dev(sb.dev().bdev());
+    prt_bdevname(&mut name, Some(sb.bdev()));
+    let dev = crate::os::blkdev::dev(sb.bdev());
 
     /* Commit: */
     ca.sb_layout.set(sb.sb().layout);
@@ -1270,9 +1284,8 @@ impl Fs {
         bch_err_fn!(self, (|| -> Result<(), BchError> {
             let state = self.state_lock_write();
 
+            let identity = crate::sb::members::identity(sb.bdev());
             attach_bdev(&state, &ca, &mut sb, err)?;
-
-            let identity = ca.identity();
 
             if started {
                 /*
@@ -1356,12 +1369,13 @@ impl Fs {
              * We just changed the superblock UUID, invalidate cache and send a
              * uevent to update /dev/disk/by-uuid
              */
-            crate::os::blkdev::invalidate(ca.disk_sb.bdev());
+            let ca = ca.io_ref_read.tryget().expect("a device just attached, under state_lock");
+            crate::os::blkdev::invalidate(ca.bdev());
 
             let mut uuid_str = Printbuf::new();
             prt!(&mut uuid_str, "UUID={}", uuid::Uuid::from_bytes(self.sb.uuid.each_ref().map(|b| b.get())));
 
-            let _ = ca.disk_sb.kobj().uevent_change(&[c"CHANGE=uuid", uuid_str.as_c_str()]);
+            let _ = crate::os::blkdev::kobj(ca.bdev()).uevent_change(&[c"CHANGE=uuid", uuid_str.as_c_str()]);
             Ok(())
         })())?;
 
@@ -1400,7 +1414,9 @@ impl Fs {
         let ca = state.devs()[dev_idx as usize].get().expect("a device just attached");
         let ca: &Dev = &ca;
 
-        ca.mi_field_upgrades();
+        if let Some(ca) = ca.io_ref_read.tryget() {
+            ca.mi_field_upgrades();
+        }
 
         /*
          * A member can arrive here with its add never finished: the filesystem
@@ -1513,8 +1529,8 @@ impl Fs {
         }
 
         let bucket_size = u64::from(ca.mi.get().bucket_size);
-        if ca.is_online() {
-            let capacity = ca.disk_sb.capacity();
+        if let Some(ca) = ca.io_ref_read.tryget() {
+            let capacity = crate::os::blkdev::capacity(ca.bdev());
             if capacity < bucket_size * nbuckets {
                 prt!(err, "New size {} larger than device size {}\n", bucket_size * nbuckets, capacity);
                 return self.throw(Errcode::device_size_too_small);
@@ -1790,10 +1806,10 @@ unsafe extern "C" fn bdev_sync(bdev: *mut crate::os::blkdev::BlockDevice) {
 
 // ── Resizing on mount ────────────────────────────────────────────────────
 
-impl Dev {
+impl DevIoRef<c::DevReadRefKind> {
     /// The disk it's on, in sectors: get_capacity()
     fn disk_sectors(&self) -> u64 {
-        self.disk_sb.capacity()
+        crate::os::blkdev::capacity(self.bdev())
     }
 
     fn will_resize_on_mount(&self) -> bool {

@@ -471,7 +471,7 @@ impl Fs {
         if self.sb.multi_device.get() {
             prt!(&mut name, "{}", self.sb.user_uuid());
         } else {
-            prt_bdevname(&mut name, Some(sbs[0].dev().bdev()));
+            prt_bdevname(&mut name, Some(sbs[0].bdev()));
         }
         if name.allocation_failure() {
             return Err(Errcode::ENOMEM_fs_name_alloc.into());
@@ -825,15 +825,16 @@ impl Fs {
 
             self.state_lock_write().read_only();
 
+            /* their links reach the block devices by read refs: before they stop */
+            for ca in self.members() {
+                ca.unlink();
+            }
+
             for i in 0..self.nr_devices() as usize {
                 let ca = self.state_lock_write().devs()[i].get();
                 if let Some(ca) = ca {
                     ca.io_ref_stop(READ);
                 }
-            }
-
-            for ca in self.members() {
-                ca.unlink();
             }
 
             self.kobj.del();
@@ -959,7 +960,7 @@ pub fn filter_dead(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts,
     let mut dead = KVVec::from_elem(false, sbs.len())?;
     for i in (0..sbs.len()).rev() {
         let name = sbs[i].io().name().to_str().unwrap_or("?");
-        match dev_in_fs(sbs[best].sb(), Some(sbs[best].dev().bdev()), &sbs[i], opts) {
+        match dev_in_fs(sbs[best].sb(), Some(sbs[best].bdev()), &sbs[i], opts) {
             Ok(()) => {}
             Err(e) if e.matches(Errcode::device_has_been_removed) ||
                       e.matches(Errcode::device_splitbrain) => {

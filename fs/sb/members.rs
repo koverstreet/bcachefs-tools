@@ -1233,7 +1233,7 @@ impl DevRef {
 /// DevWriteRefKind for io_ref_write.
 pub trait IoRefIdx: 'static {
     const RW: usize;
-    type Count: TryRefcount<Target = Dev>;
+    type Count: DevIoCount;
 
     fn count(ca: &Dev) -> &Self::Count;
 }
@@ -1254,6 +1254,43 @@ impl IoRefIdx for c::DevWriteRefKind {
     fn count(ca: &Dev) -> &Self::Count {
         &ca.io_ref_write
     }
+}
+
+/// A count whose refs keep the device's block device open: an io ref's.
+///
+/// # Safety
+/// While a ref on it is held, the device's block device is published and
+/// open: sb_close()'s callers stop both io refs first.
+pub unsafe trait DevIoCount: TryRefcount<Target = Dev> {}
+
+unsafe impl DevIoCount for <c::DevReadRefKind as IoRefIdx>::Count {}
+unsafe impl DevIoCount for <c::DevWriteRefKind as IoRefIdx>::Count {}
+
+impl<C: DevIoCount> RefGuard<C> {
+    /// Its block device: open, as the ref is held.
+    pub fn bdev(&self) -> &crate::os::blkdev::BlockDevice {
+        unsafe { self.disk_sb.bdev.get().as_ref() }.expect("an io ref on a device with no block device")
+    }
+
+    /// Its block device's name, model and serial, and whether it's
+    /// rotational, recorded in its member.
+    pub fn mi_field_upgrades(&self) {
+        let id = identity(self.bdev());
+
+        let fs = self.fs();
+        let mut sb = fs.sb_lock();
+        if mi_field_upgrades(&mut sb, self.dev_idx.into(), &id) {
+            fs.write_super(&mut sb);
+        }
+    }
+}
+
+/// @bdev's name, model and serial, and whether it's rotational.
+pub(crate) fn identity(bdev: &crate::os::blkdev::BlockDevice) -> c::bch_dev_identity {
+    let mut id = ::pin_init::zeroed::<c::bch_dev_identity>();
+    crate::init::dev::read_identity(bdev, &mut id);
+    id.rotational = crate::os::blkdev::rotational(bdev);
+    id
 }
 
 /// What a guard of @N covers on each of its filesystem's devices - each
@@ -1359,6 +1396,15 @@ impl From<DevIoRef<c::DevReadRefKind>> for BlockDev {
 impl From<DevIoRef<c::DevWriteRefKind>> for BlockDev {
     fn from(ca: DevIoRef<c::DevWriteRefKind>) -> Self {
         BlockDev::Write(ca)
+    }
+}
+
+impl BlockDev {
+    pub fn bdev(&self) -> &crate::os::blkdev::BlockDevice {
+        match self {
+            BlockDev::Read(ca)  => ca.bdev(),
+            BlockDev::Write(ca) => ca.bdev(),
+        }
     }
 }
 
@@ -1516,25 +1562,6 @@ impl Dev {
         let f = c::DevFlag::unflushed_writes;
         if !self.flags.get(f) {
             self.flags.set(f, true);
-        }
-    }
-
-    /// Its block device's name, model and serial, and whether it's rotational.
-    pub(crate) fn identity(&self) -> c::bch_dev_identity {
-        let mut id = ::pin_init::zeroed::<c::bch_dev_identity>();
-        crate::init::dev::read_identity(self.disk_sb.bdev(), &mut id);
-        id.rotational = crate::os::blkdev::rotational(self.disk_sb.bdev());
-        id
-    }
-
-    /// Its identity, recorded in its member.
-    pub fn mi_field_upgrades(&self) {
-        let id = self.identity();
-
-        let fs = self.fs();
-        let mut sb = fs.sb_lock();
-        if mi_field_upgrades(&mut sb, self.dev_idx.into(), &id) {
-            fs.write_super(&mut sb);
         }
     }
 

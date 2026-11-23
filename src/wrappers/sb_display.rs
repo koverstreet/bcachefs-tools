@@ -48,7 +48,7 @@ fn print_one_member(
 
     if let Some((_, sb_handle)) = dev {
         use crate::wrappers::bdev;
-        let fd = sb_handle.dev().bdev().fd().as_raw_fd();
+        let fd = sb_handle.bdev().fd().as_raw_fd();
         let model = bdev::fd_to_dev_model(fd);
         write!(out, "{}", model);
         if let Some(serial) = bdev::fd_to_dev_serial(fd) {

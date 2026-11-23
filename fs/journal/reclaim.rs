@@ -371,7 +371,7 @@ impl c::journal {
         let _d = ca.journal.discard_lock.lock();
 
         while let Some(bucket) = self.bucket_to_discard(&ca) {
-            let bdev = ca.disk_sb.bdev();
+            let bdev = ca.bdev();
             if fs.opts().nochanges.get() == 0 &&
                 discard_opt_enabled(fs, &ca) &&
                 blkdev::max_discard_sectors(bdev) != 0 {

@@ -256,14 +256,14 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                     continue;
                 }
 
-                let Some(ca) = fs.dev_get(dev) else {
+                let Some(ca) = fs.dev_get_ioref::<c::DevReadRefKind>(dev) else {
                     continue;
                 };
 
                 eprintln!("damaging btree node ({:?}) on dev {} {} l={}\n  {}",
                     cli.error, dev, kill.btree, kill.level, k.to_text(&fs));
 
-                let fd = ca.disk_sb.bdev().fd();
+                let fd = ca.bdev().fd();
                 let offset = ptr.offset() << 9;
 
                 let damage = || -> Result<()> {

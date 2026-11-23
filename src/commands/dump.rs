@@ -1,5 +1,6 @@
 use bcachefs_kernel::format::BkeyType;
 use bcachefs_kernel::fs::Dev;
+use bcachefs_kernel::sb::members::DevIoRef;
 use bcachefs_kernel::btree::bkey::prelude::*;
 use std::os::fd::AsFd;
 use std::path::Path;
@@ -510,7 +511,7 @@ fn write_sanitized_ranges(
 #[allow(clippy::too_many_arguments)]
 fn write_dev_image(
     fs: &Fs,
-    ca: &Dev,
+    ca: &DevIoRef<c::DevReadRefKind>,
     path: &str,
     force: bool,
     sanitize: bool,
@@ -530,7 +531,7 @@ fn write_dev_image(
     let outfile = open_opts.open(path)
         .map_err(|e| anyhow!("{}: {}", path, e))?;
 
-    let infd = ca.disk_sb.bdev().fd();
+    let infd = ca.bdev().fd();
     let mut img = Qcow2Image::new(infd, outfile.as_fd(), block_size)?;
 
     img.write_ranges(&mut d.sb)?;
