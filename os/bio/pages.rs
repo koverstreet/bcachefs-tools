@@ -147,6 +147,11 @@ pub fn nr_vecs(size: usize) -> u16 {
     size.div_ceil(POOL_LEN).try_into().expect("a bio's pages in more than 64k allocations")
 }
 
+/// The most bytes nr_vecs() fits in @nr_vecs bvecs.
+pub fn max_size(nr_vecs: u16) -> usize {
+    usize::from(nr_vecs) * POOL_LEN
+}
+
 /// Frees what alloc_pages() and the bounce pool put on @vecs, and empties
 /// them.
 ///

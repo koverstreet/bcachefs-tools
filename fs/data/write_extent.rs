@@ -61,19 +61,16 @@ struct AllocShort {
 /// @opf: bounced into pages of its own, or the write point's stripe buffer.
 fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u32, short: &mut AllocShort,
                    buf: *mut c_void) -> ExtentBio {
-    let mut output_available = (wp.sectors_free() << 9).min(len);
-    let offset = if buf.is_null() { 0 } else { (buf.addr() & (PAGE_SIZE - 1)) as u32 };
-
     /*
-     * XXX: we'll want to delete this later, there's no reason we can't
-     * issue > 2MB bios if we're allocating high order pages
-     *
-     * But bch2_bio_alloc_pages() BUGS() if we ask it to allocate more pages
-     * than fit in the bio, and we're using bio_alloc_bioset() which is
-     * limited to BIO_MAX_VECS - and a vmalloc'd @buf not on a page boundary,
-     * an ec stripe's, takes a page more than its size:
+     * bio_alloc_bioset() is limited to BIO_MAX_VECS: bounce pages are high
+     * order, but the stripe buffer is mapped a page a bvec - and a vmalloc'd
+     * one not on a page boundary takes a page more than its size:
      */
-    output_available = output_available.min(c::BIO_MAX_VECS * PAGE_SIZE as u32 - offset);
+    let max = match buf.is_null() {
+        true  => pages::max_size(c::BIO_MAX_VECS as u16) as u32,
+        false => c::BIO_MAX_VECS * PAGE_SIZE as u32 - (buf.addr() & (PAGE_SIZE - 1)) as u32,
+    };
+    let output_available = (wp.sectors_free() << 9).min(len).min(max);
 
     let block_size = u32::from(fs.opts().block_size.get());
     assert!(output_available & (block_size - 1) == 0, "a write bio of {output_available} bytes, not whole blocks");
