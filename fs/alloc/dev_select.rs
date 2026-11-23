@@ -20,6 +20,7 @@
 use crate::fs::Dev;
 use crate::c;
 use crate::fs::Fs;
+use crate::format::DataType;
 use crate::debug::trace::events;
 use crate::os::kernel::likely;
 use crate::util::projections::Volatile;
@@ -30,6 +31,16 @@ const NR_DEVS: usize = c::BCH_SB_MEMBERS_MAX as usize;
 const HAND_RESCALE: u64 = 1 << 62;    /* rescale past this */
 const HAND_MAX: u64     = 1 << 56;    /* the most, after a rescale */
 const HAND_INV: u64     = 1 << 52;    /* the most an allocation adds: no free space */
+
+/*
+ * Move allocations steer background relocation away from devices that are
+ * already slow. A rotational device stays throughput-limited for seconds after
+ * a bad sample, so congestion decays slower here than in the read path's
+ * target check.
+ */
+const MOVE_CONGESTION_DECAY_SHIFT: u32 = 24;
+const MOVE_STALLED_THRESHOLD: u32      = c::CONGESTED_MAX >> 3;
+const MOVE_BUSY_BUCKET_WEIGHT: u32     = c::CONGESTED_MAX >> 1;
 
 impl c::dev_stripe_state {
     /// @devs the devices it's choosing between: those new to it join at the
@@ -116,6 +127,16 @@ impl c::alloc_request<'_, '_> {
     }
 }
 
+impl c::alloc_request<'_, '_> {
+    /// Whether @dev, for a move's data, is too stalled to take an open
+    /// bucket of: another's not - and placement doesn't require it.
+    pub(crate) fn move_dev_stalled(&self, dev: usize) -> bool {
+        self.flags.contains(c::WriteFlags::update) && self.data_type == DataType::user &&
+            !self.devs_required().is_some_and(|r| r.test(dev)) &&
+            self.move_has_alternative && self.move_pressure[dev] >= MOVE_STALLED_THRESHOLD
+    }
+}
+
 impl Fs {
     /// @req's domain_keys, for every device it may allocate from - recomputed
     /// as each copy's chosen, which changes what the next should avoid. For
@@ -143,6 +164,96 @@ impl Fs {
         self.domain_keys_update(req);
         let required = req.devs_required();
         stripe.alloc_list(&req.devs_may_alloc, &req.domain_keys, required.as_ref(), &mut req.devs_sorted);
+    }
+
+    /// @req's move_pressure for every device in devs_sorted: what other
+    /// writers' open buckets add to its congestion - not the ones @wp_ptrs,
+    /// the write point's own, are on. One scan of the open buckets, so that
+    /// want_bucket() needn't repeat it under freelist_lock.
+    fn move_pressure_update(&self, req: &mut c::alloc_request, wp_ptrs: &c::open_buckets) {
+        let nr = req.devs_sorted.nr as usize;
+        for &dev in &req.devs_sorted.data[..nr] {
+            req.move_pressure[usize::from(dev)] = 0;
+        }
+
+        for ob in &self.allocator.open_buckets[1..] {
+            // most slots are free: skipped unlocked, rechecked under the lock
+            if !ob.id().valid() {
+                continue;
+            }
+            let _g = ob.lock.lock();
+            if !ob.id().valid() || ob.data_type.get() != DataType::user.0 as u8 ||
+               !req.devs_may_alloc.d.test(usize::from(ob.id().dev())) ||
+               wp_ptrs.v[..usize::from(wp_ptrs.nr)].contains(&Some(ob.idx())) {
+                continue;
+            }
+            let p = &mut req.move_pressure[usize::from(ob.id().dev())];
+            *p = (*p + MOVE_BUSY_BUCKET_WEIGHT).min(2 * MOVE_BUSY_BUCKET_WEIGHT);
+        }
+    }
+
+    /// A move allocation's devices, devs_sorted, with those visibly falling
+    /// behind sunk below less stalled ones: else a much larger, mostly empty
+    /// disk keeps winning move allocations until it's saturated hard enough
+    /// to leave move writes stuck in the block layer. While devices aren't
+    /// congested, the free space weighted order stands. Their pressure's left
+    /// in move_pressure, for want_bucket() to refuse a stalled device's open
+    /// bucket - if another's not stalled.
+    pub(crate) fn move_avoid_busy_devs(&self, req: &mut c::alloc_request, wp_ptrs: &c::open_buckets) {
+        req.move_has_alternative = false;
+        if !req.flags.contains(c::WriteFlags::update) || req.data_type != DataType::user ||
+           req.devs_sorted.nr <= 1 {
+            return;
+        }
+
+        self.move_pressure_update(req, wp_ptrs);
+        #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+        let now = crate::os::kernel::local_clock();
+        let rcu = read_lock();
+        let nr = req.devs_sorted.nr as usize;
+
+        for i in 0..nr {
+            let dev = usize::from(req.devs_sorted.data[i]);
+            let Some(ca) = self.dev_rcu(dev as u32, &rcu) else {
+                req.move_pressure[dev] = u32::MAX;
+                continue;
+            };
+
+            req.usage = ca.usage_read_fast();
+            if ca.free_buckets_at(&req.usage, req.watermark) == 0 {
+                req.move_pressure[dev] = u32::MAX;
+                continue;
+            }
+
+            #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+            let congested = (ca.congested_read_decay(now, MOVE_CONGESTION_DECAY_SHIFT) +
+                             ca.write_latency_over(MOVE_STALLED_THRESHOLD)).min(c::CONGESTED_MAX);
+            #[cfg(CONFIG_BCACHEFS_NO_LATENCY_ACCT)]
+            let congested = 0;
+            req.move_pressure[dev] += congested;
+            if req.move_pressure[dev] < MOVE_STALLED_THRESHOLD {
+                req.move_has_alternative = true;
+            }
+        }
+        drop(rcu);
+
+        // an insertion sort, stable: a stalled device moves behind each one
+        // after it of the same domain and requirement that's less so
+        let required = req.devs_required();
+        for j in 1..nr {
+            let mut i = j;
+            while i != 0 {
+                let (a, b) = (usize::from(req.devs_sorted.data[i - 1]), usize::from(req.devs_sorted.data[i]));
+                if req.domain_keys[a] != req.domain_keys[b] ||
+                   required.is_some_and(|r| r.test(a) != r.test(b)) ||
+                   req.move_pressure[a] < MOVE_STALLED_THRESHOLD ||
+                   req.move_pressure[a] <= req.move_pressure[b] {
+                    break;
+                }
+                req.devs_sorted.data.swap(i - 1, i);
+                i -= 1;
+            }
+        }
     }
 
     /// The devices a replicated write of @req's has to put a copy on: when

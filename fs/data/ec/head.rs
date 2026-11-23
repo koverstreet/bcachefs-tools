@@ -32,7 +32,6 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt};
 use core::ffi::c_ulong;
-use core::ptr::NonNull;
 use pin_init::pin_init;
 
 // ── A stripe's devices ───────────────────────────────────────────────────
@@ -489,8 +488,7 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
     t.allocate_dropping_locks_big(|| {
         if i.new_buf.is_none() {
             let wait = match req.wait {
-                AllocWait::Never       => MemWait::Never,
-                AllocWait::Closure(cl) => MemWait::Closure(NonNull::from(cl).cast()),
+                AllocWait::Never => MemWait::Never,
                 AllocWait::Sync(_) | AllocWait::Async(_) => MemWait::Blocked,
             };
             let seen = Blocked::StripeBuf.events(fs).snapshot();

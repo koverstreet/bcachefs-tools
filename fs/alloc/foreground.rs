@@ -34,8 +34,8 @@
 //! bucket opened or closed while we look may be seen or missed: a caller for
 //! whom that matters looks again under the lock, bucket_is_open_safe().
 //!
-//! A request that finds nothing free waits - on freelist_wait for buckets,
-//! open_buckets_wait for open buckets - and retries when a wake may be for
+//! A request that finds nothing free waits - on freelist_events for buckets,
+//! open_buckets_events for open buckets - and retries when a wake may be for
 //! it: its trace records each attempt, with the device's wake counter as it
 //! was, and a wake is for it if one it tried has moved since.
 
@@ -73,8 +73,6 @@ use crate::percpu_field;
 use crate::debug::trace::events;
 use crate::sb::members::data_types_to_text;
 use crate::util::alloc::init_at;
-use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up};
-use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
 use crate::util::hash::{hash_64, Fold};
 use crate::data_structures::inline_vec::InlineVec;
@@ -141,12 +139,9 @@ pub enum AllocBtreeBitmap {
 
 /// How an allocation that can't be had now waits for one that can.
 #[derive(Clone, Copy)]
-pub enum AllocWait<'r> {
+pub enum AllocWait {
     /// It doesn't: it fails.
     Never,
-    /// The write path's closure, put on the waitlist: the write continues
-    /// when it's woken.
-    Closure(&'r Opaque<c::closure>),
     /// Its caller's thread, in wait_on_allocator(): once it's blocked, on
     /// what, and that count's snapshot from before the check that failed.
     Sync(Option<(Blocked, u32)>),
@@ -195,7 +190,7 @@ impl Blocked {
 
 nest! {
     pub struct alloc_request<'r, 'f> {
-        pub wait: AllocWait<'r>,
+        pub wait: AllocWait,
         pub wake_all_counter_snapshot: u32,
         pub nr_replicas: u8,
         pub ec_replicas: u8,
@@ -237,6 +232,9 @@ nest! {
         /* bch2_bucket_alloc_set_trans(): */
         pub devs_sorted: c::dev_alloc_list,
         pub domain_keys: [u64; c::BCH_SB_MEMBERS_MAX as usize],
+        /* scratch for move_avoid_busy_devs(), as long-lived as devs_sorted */
+        pub move_pressure: [u32; c::BCH_SB_MEMBERS_MAX as usize],
+        pub move_has_alternative: bool,
         pub usage: c::bch_dev_usage,
 
         /*
@@ -623,7 +621,7 @@ impl Fs {
 
     /// Bucket @bucket of @ca, of generation @generation, opened: None if it's
     /// open already. Err with the pool down to @req's watermark's reserve -
-    /// blocked, with @req's closure on open_buckets_wait.
+    /// blocked, on open_buckets_events.
     pub(crate) fn try_alloc_bucket_locked(&self, ca: &Dev, req: &mut c::alloc_request, bucket: u64,
                                           generation: u8) -> Result<Option<OpenBucket>, BchError>
     {
@@ -635,7 +633,7 @@ impl Fs {
 
         if unlikely(u32::from(a.freelist_lock.open_buckets_nr_free.get()) <= open_buckets_reserved(req.watermark)) {
             times(c::TimeStat::blocked_allocate_open_bucket).track_event_change(true);
-            return Err(self.err(match req.block_on(self, &a.open_buckets_wait, Blocked::OpenBuckets) {
+            return Err(self.err(match req.block_on(self, Blocked::OpenBuckets) {
                 true  => Errcode::open_bucket_alloc_blocked,
                 false => Errcode::open_buckets_empty,
             }));
@@ -714,7 +712,6 @@ impl Fs {
         // freelist_lock dropped, so j->lock doesn't nest under it
         self.journal.set_open_buckets_watermark(self.open_buckets_starved_watermark());
 
-        closure_wake_up(&self.allocator.open_buckets_wait);
         self.allocator.open_buckets_events.wake();
     }
 
@@ -736,7 +733,6 @@ impl Fs {
             *nr.open_buckets_partial_nr.place() += 1;
         }
 
-        closure_wake_up(&a.open_buckets_wait);
         a.open_buckets_events.wake();
         if let Some(ca) = self.dev_rcu(dev, &read_lock()) {
             ca.alloc_wake();
@@ -795,9 +791,9 @@ impl Fs {
 // ── Waking allocations ───────────────────────────────────────────────────
 
 /*
- * freelist_wait wake helpers. Every wake_up site on
- * c->allocator.freelist_wait should go through these so the wake counters
- * are maintained in lockstep with waitlist wakeups — they're the signal
+ * freelist_events wake helpers. Every wake of
+ * c->allocator.freelist_events should go through these so the wake counters
+ * are maintained in lockstep with its wakeups — they're the signal
  * waiters use to filter spurious wakes they don't care about.
  */
 
@@ -807,7 +803,6 @@ impl Dev {
     pub fn alloc_wake(&self) {
         self.alloc_wake_counter.fetch_add(1, Relaxed);
         let a = &self.fs().allocator;
-        closure_wake_up(&a.freelist_wait);
         a.freelist_events.wake();
     }
 }
@@ -817,14 +812,12 @@ impl Fs {
     /// in no waiter's trace may have changed - a new one.
     pub fn alloc_wake_all(&self) {
         self.allocator.wake_all_counter.fetch_add(1, Relaxed);
-        closure_wake_up(&self.allocator.freelist_wait);
         self.allocator.freelist_events.wake();
     }
 
     /// Wake the freelist's waiters with no counter bumped: the only way off a
     /// waitlist for one giving up. The rest wait again.
     pub fn alloc_waiters_unpark(&self) {
-        closure_wake_up(&self.allocator.freelist_wait);
         self.allocator.freelist_events.wake();
     }
 }
@@ -842,7 +835,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     #[allow(clippy::too_many_arguments)]
     pub fn alloc_request(&self, target: u32, erasure_code: bool, devs_have: Option<&'a c::bch_devs_list>,
                          nr_replicas: u32, ec_replicas: u32, watermark: c::Watermark,
-                         flags: c::WriteFlags, wait: AllocWait<'a>)
+                         flags: c::WriteFlags, wait: AllocWait)
         -> Result<AllocRequest<'a, 't>, BchError>
     {
         let req = c::alloc_request::new(self.fs(), target, erasure_code, devs_have, nr_replicas, ec_replicas,
@@ -871,7 +864,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
     #[allow(clippy::too_many_arguments)]
     fn new(fs: &Fs, target: u32, erasure_code: bool, devs_have: Option<&'r c::bch_devs_list>, nr_replicas: u32,
            ec_replicas: u32, watermark: c::Watermark, flags: c::WriteFlags,
-           wait: AllocWait<'r>)
+           wait: AllocWait)
         -> impl ::pin_init::Init<Self, Infallible>
     {
         // SAFETY: zeroed - each of its fields but the trace valid zeroed, its
@@ -961,19 +954,12 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
         !matches!(self.wait, AllocWait::Never)
     }
 
-    /// Blocked on @list - or for a thread, @on's count - to retry when it's
-    /// woken: false if it's not to block. Called under the lock the failed
-    /// check was, or before a recheck, so the snapshot is from before what
-    /// would wake it.
-    pub fn block_on(&mut self, fs: &Fs, list: &c::closure_waitlist, on: Blocked) -> bool {
+    /// Blocked on @on's count, to retry when it's woken: false if it's not to
+    /// block. Called under the lock the failed check was, or before a
+    /// recheck, so the snapshot is from before what would wake it.
+    pub fn block_on(&mut self, fs: &Fs, on: Blocked) -> bool {
         match &mut self.wait {
             AllocWait::Never => false,
-            AllocWait::Closure(cl) => {
-                // SAFETY: its caller's closure, which outlives the request -
-                // or already waiting, as C's closure_wait() allows
-                unsafe { closure_wait(list, NonNull::from(*cl).cast()) };
-                true
-            }
             AllocWait::Sync(blocked) | AllocWait::Async(blocked) => {
                 *blocked = Some((on, on.events(fs).snapshot()));
                 true
@@ -1221,10 +1207,6 @@ impl Fs {
 
 // ── Debug ────────────────────────────────────────────────────────────────
 
-fn waiting_to_text(list: &c::closure_waitlist) -> &'static str {
-    if closure_has_waiters(list) { "waiting" } else { "empty" }
-}
-
 /// @v, a value per replica count from 1.
 fn per_replicas_to_text(out: &mut Printbuf, name: &str, v: impl IntoIterator<Item = u64>) {
     write!(out, "{name}\n");
@@ -1256,7 +1238,6 @@ impl Fs {
         for (i, n) in nr.into_iter().enumerate().filter(|&(_, n)| n != 0) {
             write!(out, "open_buckets {}:\t{n}\n", data_type_str(DataType(i as u32)));
         }
-        write!(out, "open_buckets_wait\t{}\n", waiting_to_text(&a.open_buckets_wait));
     }
 
     /// Capacity, usage and reservations, and the free space by the replica
@@ -1293,7 +1274,6 @@ impl Fs {
             self.capacity.sectors_available.iter().map(|s| s.load(Relaxed)));
 
         writeln!(out);
-        write!(out, "freelist_wait\t{}\n", waiting_to_text(&self.allocator.freelist_wait));
         write!(out, "btree reserve cache\t{}\n", self.btree.reserve_cache.lock.lock().nr);
         writeln!(out);
     }

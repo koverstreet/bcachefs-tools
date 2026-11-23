@@ -63,7 +63,7 @@ fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripe: &m
         req.data_type = data_type;
         req.target_frac = blocks_centroid(fs, v, blocks);
 
-        let ret = t.bucket_alloc_set(req, stripe);
+        let ret = t.bucket_alloc_set(req, stripe, &c::open_buckets::default());
         for ob in req.ptrs.drain(fs) {
             let j = slots.clone().find(|&j| !blocks[j].gotten()).expect("a block left to fill");
             req.devs_may_alloc.d.clear(ob.id().dev().into());

@@ -250,7 +250,7 @@ use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, 
      crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
      core::sync::atomic::Ordering::Acquire};
 use crate::types::bits_to_longs;
-use crate::util::bio::{Bio, BioBox, IoBuf};
+use crate::util::bio::{Bio, BioBox, BioSet, IoBuf};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
 use crate::util::refcount::{ARef, AlwaysRefCounted, WaitableRef};
@@ -292,7 +292,7 @@ impl core::ops::DerefMut for bch_fs_sb {
     }
 }
 
-pub type SbBio = Option<BioBox<Bio>>;
+pub type SbBio = Option<BioBox<'static, Bio>>;
 
 nest! {
     /// A device's superblock, and what reads and writes it: what changes
@@ -555,6 +555,7 @@ impl StateLockWrite<'_> {
         unsafe {
             ca.sb_handle().free();
             ca.journal.bio_set.unmake();
+            ca.write_clones.unmake();
         }
     }
 }
@@ -770,6 +771,8 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
     let ca_p = ca.as_ptr();
     crate::journal::buckets::load(&ca, sb.io.buf.sb())?;
     ca.journal_init(state)?;
+    /* a write waits for one only with none held: the reserve's for progress */
+    ca.write_clones.init(state, || BioSet::new(4)).map_err(|_| fs.err(Errcode::ENOMEM_dev_write_clones_init))?;
 
     let mut name = Printbuf::new();
     prt_bdevname(&mut name, Some(sb.dev.bdev()));
@@ -1600,12 +1603,41 @@ impl Dev {
     /// what bch2_latency_acct() added for IO over the latency threshold,
     /// decayed by the time since.
     pub fn congested_read(&self, now: u64) -> u32 {
+        self.congested_read_decay(now, 12)
+    }
+
+    /// congested_read() with the time since its last IO over threshold
+    /// counted @decay_shift bits down: slower, the larger that is.
+    pub fn congested_read_decay(&self, now: u64, decay_shift: u32) -> u32 {
         let mut congested = i64::from(self.congested.load(Relaxed));
         let last = self.congested_last.load(Relaxed);
         if crate::os::kernel::time_after64(now, last) {
-            congested -= (now.wrapping_sub(last) >> 12) as i64;
+            congested -= (now.wrapping_sub(last) >> decay_shift) as i64;
         }
         congested.clamp(0, c::CONGESTED_MAX.into()) as u32
+    }
+
+    /// How far its write latency is over what's typical for it, out of @max:
+    /// 0 till 32 writes are counted, and till the current latency is 8 times
+    /// the typical one, then rising to @max at twice that.
+    pub fn write_latency_over(&self, max: u32) -> u32 {
+        let stats = *self.io_latency.get(WRITE).stats().stats.lock.lock();
+        let typical = stats.duration_stats_weighted.median();
+        if stats.duration_stats.n < 32 || typical <= 0 {
+            return 0;
+        }
+
+        let latency = self.cur_latency[WRITE].load(Relaxed) as u64;
+        let threshold = (typical as u64) << 3;
+        if latency <= threshold {
+            return 0;
+        }
+
+        let over = latency - threshold;
+        if over >= threshold {
+            return max;
+        }
+        ((over * u64::from(max) / threshold) as u32).max(1)
     }
 
     fn congested_acct(&self, io_latency: u64, now: u64, rw: usize) {

@@ -49,9 +49,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/fs_context.h",		// struct fs_context, logfc(): os/linux_kernel/fs_context.rs's - the kernel crate's is opaque
     "linux/percpu-refcount.h",		// percpu_ref_get(), _put(): a DevRef's ca->ref, static inlines
     "linux/console.h",			// console_trylock(): util/log.rs holds the console across a message
-    "linux/bio.h",			// bio_set_dev(), util/bio.rs's; bio_iov_vecs_to_alloc(),
-					// os/linux_kernel/iov_iter.rs's; bio_release_pages(),
-					// os/linux_kernel/user_pages.rs's - static inlines
+    "linux/bio.h",			// bio_set_dev(), util/bio.rs's - a static inline
     "linux/task_io_accounting_ops.h",	// task_io_account_write(): vfs/direct_write.rs's
     "linux/kthread.h",			// kthread_use_mm(): an async DIO write's continuation
     "linux/swap.h",			// mm_account_reclaimed_pages(): btree/cache.rs's node buffers
@@ -62,8 +60,7 @@ const KERNEL_HEADERS: &[&str] = &[
 
 /// Headers bound by path from fs/ - which the clang args have as an -I:
 /// vendored library code, and codegen.h's wrappers of kernel macros.
-const VENDORED_HEADERS: &[&str] = &["vendor/closure.h",
-                                    "../os/linux_kernel/bio_iov_iter.h", "../os/linux_kernel/codegen.h",
+const VENDORED_HEADERS: &[&str] = &["vendor/closure.h", "../os/linux_kernel/codegen.h",
                                     "../os/linux_kernel/shim.h"];
 
 /// Under the kernel include trees, what isn't blocklisted: uapi/ (see
@@ -161,7 +158,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "folio_get", "folio_put", "folio_detach_private", "folio_test_uptodate", "folio_test_dirty",
     "folio_mark_uptodate", "folio_end_read", "filemap_add_folio", "readahead_gfp_mask",
     "mapping_min_folio_order", "mapping_max_folio_order", "__readahead_folio", "xa_load", "xa_is_value",
-    "bio_add_folio_nofail", "folio_unlock", "filemap_lock_folio",
+    "folio_unlock", "filemap_lock_folio",
     "folio_zero_segment", "folio_zero_range", "folio_zero_segments", "flush_dcache_folio",
     "mapping_writably_mapped", "mapping_gfp_mask",
     "folio_mkclean", "filemap_dirty_folio",
@@ -170,7 +167,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // vfs/aops.rs: the kernel's, in an inode's table
     "filemap_migrate_folio", "generic_error_remove_folio",
     // os/linux_kernel/user_pages.rs
-    "folio_mark_dirty",
+    "folio_mark_dirty", "iov_iter_extract_pages", "iov_iter_npages", "unpin_user_folio",
     // vfs/pagecache.rs
     "__filemap_get_folio", "folio_attach_private", "folio_test_writeback", "folio_wait_stable",
     "rust_folio_mapping", "folio_test_locked", "invalidate_inode_pages2_range",
@@ -179,7 +176,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "fault_in_writeable",
     "fault_in_readable", "filemap_write_and_wait_range", "filemap_flush",
     "totalram_pages", "si_mem_available", "set_freezable", "freezing", "try_to_freeze",
-    "bio_set_dev", "bio_iov_vecs_to_alloc", "bio_release_pages",
+    "bio_set_dev",
     // util/bio/owned.rs
     "bio_inc_remaining",
     // vfs/direct_write.rs: static inlines, and the VFS's write checks
@@ -259,7 +256,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "perf_trace_buf_alloc", "perf_trace_run_bpf_submit", "bpf_prog_array_valid", "bpf_trace_run2",
     "rust_srcu_read_lock_fast_notrace", "rust_srcu_read_unlock_fast_notrace",
     "rust_preempt_disable_notrace", "rust_preempt_enable_notrace", "rust_perf_fetch_caller_regs",
-    // the C shims: os/linux_kernel's shim.c and bio_iov_iter.c
+    // the C shim: os/linux_kernel's shim.c
     "rust_.*", "bch2_.*",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
