@@ -299,7 +299,7 @@ impl<'t> Paths<'t> {
     /// Path @idx's key cache entry, if it's a cached path holding it locked:
     /// for the attempt, as held_btree_node()'s is.
     pub(crate) fn held_key_cached(&self, idx: PathIdx) -> Option<LockedNode<'t, c::bkey_cached>> {
-        let ck = self[idx].downcast::<c::bkey_cached>()?.locked_node(0)?;
+        let ck = self[idx].locked_key_cached()?;
         Some(unsafe { LockedNode::new(&*ptr::from_ref(ck.node())) })
     }
 
@@ -1204,6 +1204,12 @@ impl BtreePath {
     #[inline(always)]
     pub(crate) fn locked_btree_node(&self, level: usize) -> Option<LockedNode<'_, BtreeNode>> {
         self.downcast::<BtreeNode>()?.locked_node(level)
+    }
+
+    /// Its key cache entry, if it's a cached path holding it locked.
+    #[inline(always)]
+    pub(crate) fn locked_key_cached(&self) -> Option<LockedNode<'_, c::bkey_cached>> {
+        self.downcast::<c::bkey_cached>()?.locked_node(0)
     }
 
     /// The level's locked node, and its iterator to move: the node isn't the

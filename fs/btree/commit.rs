@@ -66,8 +66,8 @@ fn same_leaf_as_next(paths: &Paths<'_>, u: &[c::btree_insert_entry], idx: usize)
     idx + 1 < u.len() && insert_l(paths, &u[idx]) == insert_l(paths, &u[idx + 1])
 }
 
-fn leaf<'t>(paths: &Paths<'t>, i: &c::btree_insert_entry) -> LockedNode<'t, BtreeNode> {
-    paths.held_btree_node(i.path, i.level().into()).expect("an update's path has its node locked")
+fn leaf<'p>(paths: &'p Paths<'_>, i: &c::btree_insert_entry) -> LockedNode<'p, BtreeNode> {
+    paths[i.path].locked_btree_node(i.level().into()).expect("an update's path has its node locked")
 }
 
 /// The transaction's journal entries are its own, made by its updates: trusted,
@@ -191,7 +191,7 @@ impl BtreeTrans<'_> {
     {
         let fs = self.fs();
         let btree = paths[path].btree_id();
-        let room = paths.held_key_cached(path).expect("a cached update's path holds its entry").contents().key_room();
+        let room = paths[path].locked_key_cached().expect("a cached update's path holds its entry").contents().key_room();
 
         if u64s > room {
             let new_u64s = (u64s + u64s / 2).next_power_of_two();
@@ -232,7 +232,7 @@ impl BtreeTrans<'_> {
         }
 
         if watermark(flags) < c::Watermark::reclaim as u32 &&
-           !paths.held_key_cached(path).expect("a cached update's path holds its entry").dirty() &&
+           !paths[path].locked_key_cached().expect("a cached update's path holds its entry").dirty() &&
            fs.btree.key_cache.must_wait() &&
            fs.journal.flags.get(Journal::replay_done)
         {
@@ -244,7 +244,7 @@ impl BtreeTrans<'_> {
 
     #[inline]
     fn key_can_insert_cached(paths: &Paths<'_>, path: PathIdx, u64s: usize) -> bool {
-        let ck = paths.held_key_cached(path).expect("a cached update's path holds its entry");
+        let ck = paths[path].locked_key_cached().expect("a cached update's path holds its entry");
 
         likely(u64s <= ck.contents().key_room() && ck.dirty())
     }

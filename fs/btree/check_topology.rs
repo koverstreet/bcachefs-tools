@@ -86,7 +86,7 @@ fn btree_ptr_to_v2(b: Node<'_>, f: impl FnOnce(&mut c::bkey, &mut c::BtreePtrV2)
 fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
                 new_min: Bpos) -> Result<(), BchError> {
     let fs = trans.fs();
-    let b = paths.held_btree_node(idx, level).expect("a node to repair, held by its path");
+    let b = paths[idx].locked_btree_node(level).expect("a node to repair, held by its path");
 
     if fs.opts.verbose.get() != 0 {
         bch_info!(fs, "set_node_min(): {} -> {new_min}", BkeySC::from(b.key()).to_text(fs));
@@ -115,7 +115,7 @@ fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
 fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
                 new_max: Bpos) -> Result<(), BchError> {
     let fs = trans.fs();
-    let b = paths.held_btree_node(idx, level).expect("a node to repair, held by its path");
+    let b = paths[idx].locked_btree_node(level).expect("a node to repair, held by its path");
     let btree = Btree(b.c.btree_id.get().into());
 
     if fs.opts.verbose.get() != 0 {

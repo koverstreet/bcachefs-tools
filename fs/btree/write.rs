@@ -234,7 +234,7 @@ async fn write_task<'h>(wbio: Pin<&'h mut WriteBio>, fs: BackRef<Fs>, b: BackRef
         let idx = trans.node_lock_with_path(&mut trans.paths(), &b.c, c::SixLockType::SIX_LOCK_read, 0)?;
         let mut paths = trans.paths();
         let level = b.c.level.get() as usize;
-        write_done(fs, paths.held_btree_node(idx, level).expect("the node, locked by node_lock_with_path()"));
+        write_done(fs, paths[idx].locked_btree_node(level).expect("the node, locked by node_lock_with_path()"));
         trans.node_unlock(&mut paths, idx, level);
         trans.path_put(&mut paths, idx, true);
         Ok(())

@@ -973,7 +973,7 @@ fn merge_sibling<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: Path
                 return Err(trans.restart(Errcode::transaction_restart_lock_node_reused));
             }
 
-            let sib_parent = paths.held_btree_node(path, level + 1).expect("a sibling's parent, relocked");
+            let sib_parent = paths[path].locked_btree_node(level + 1).expect("a sibling's parent, relocked");
             let hash = paths[path].l[level + 1].iter.peek_all().map(|i| {
                 let keys = sib_parent.keys(sib_parent.contents());
                 let mut u = c::bkey::new();

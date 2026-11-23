@@ -83,11 +83,11 @@ impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
                 })
             });
 
-            let held = trans.paths().held_btree_node(path_idx, self.c.level.get().into())
+            let mut paths = trans.paths();
+            let held = paths[path_idx].locked_btree_node(self.c.level.get().into())
                 .expect("the node, locked by node_lock_with_path()");
             node_write(fs, held, BtreeWriteType::initial, BtreeWriteFlags::only_if_need);
 
-            let mut paths = trans.paths();
             trans.node_unlock(&mut paths, path_idx, self.c.level.get().into());
             trans.path_put(&mut paths, path_idx, true);
             Ok(())

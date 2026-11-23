@@ -345,7 +345,7 @@ impl BtreeTrans<'_> {
 
             if f.dirty() {
                 self.node_lock_write(paths, idx, level)?;
-                let held = paths.held_btree_node(idx, level).expect("a write locked path's node");
+                let held = paths[idx].locked_btree_node(level).expect("a write locked path's node");
                 node_write(self.fs(), held, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
                 self.node_unlock_write(paths, idx, level);
             } else if !f.read_in_flight() && !f.write_in_flight() {

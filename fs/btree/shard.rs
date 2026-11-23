@@ -146,7 +146,7 @@ fn split_at_shard_boundary(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos) ->
     let trans = t.trans();
     {
         let paths = trans.paths();
-        let b = paths.held_btree_node(path, 0).expect("the leaf its iterator traversed to");
+        let b = paths[path].locked_btree_node(0).expect("the leaf its iterator traversed to");
         let pivot = b.shard_pivot(b.contents(), t.fs());
         if pivot == POS_MIN || pivot == b.key().k.p {
             return Ok(false);

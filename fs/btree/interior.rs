@@ -642,7 +642,7 @@ impl<'t> InteriorUpdate<'t> {
 
             trans.path_upgrade(paths, path, level_end + 1, crate::ret_ip!())?;
 
-            let Some(b) = paths.held_btree_node(path, level_end) else {
+            let Some(b) = paths[path].locked_btree_node(level_end) else {
                 /* Allocating new root? */
                 nr_nodes[1] += usize::from(split);
                 level_end = c::BTREE_MAX_DEPTH as usize;
@@ -667,7 +667,7 @@ impl<'t> InteriorUpdate<'t> {
         let gc_lock = gc_read_lock(trans, paths, fs_ref)?;
 
         let node = {
-            let b = paths.held_btree_node(path, level_start).expect("an interior update's node");
+            let b = paths[path].locked_btree_node(level_start).expect("an interior update's node");
             let contents = b.contents();
             let data = contents.data();
             let (start, end) = range.unwrap_or((data.min_key, data.max_key));

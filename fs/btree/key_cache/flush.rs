@@ -187,7 +187,7 @@ impl PinHolder<crate::field!(journal)> for c::bkey_cached {
         let ret = lockrestart_do(&trans, |t| {
             let mut paths = trans.paths();
             let path_idx = trans.node_lock_with_path(&mut paths, &self.c, SIX_LOCK_intent, 0)?;
-            let ck = paths.held_key_cached(path_idx).expect("an entry just locked");
+            let ck = paths[path_idx].locked_key_cached().expect("an entry just locked");
             let key = ck.key.get();
             let ck_seq = ck.contents().seq;
 
