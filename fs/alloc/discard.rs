@@ -68,7 +68,7 @@ use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KVVec;
 use crate::util::atomic::try_update;
-use crate::util::bio::{Bio, BioOwner, Gathered};
+use crate::util::bio::{Bio, BioSubmit, Gathered};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::task::{waiter, WaitSync};

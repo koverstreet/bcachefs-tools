@@ -652,27 +652,12 @@ pub unsafe fn of_bio<T: HasBio>(bio: *mut c::bio) -> *mut T {
 }
 
 
-/// # Safety
-/// bio() is the implementor's own, which nothing else has - in flight, or
-/// to build on - while it's had.
-pub unsafe trait BioOwner {
-    type Owns: BioOwns;
-
+/// What has a bio of its own to submit, as the erased Bio: a read's fragment,
+/// whichever of its bios it has, and every BioOwner.
+pub trait BioSubmit {
     fn bio(&self) -> &Bio;
 
     fn bio_mut(&mut self) -> &mut Bio;
-
-    /// For another IO, of @opf, to or from the same buffers: Bio::reset().
-    /// Panics if they can't serve it - a buffer borrowed shared, for a read.
-    fn reset(&mut self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
-        assert!(Self::Owns::allows_op(req_op(opf)), "resetting a bio for an op its buffers can't serve");
-        self.bio_mut().reset(bdev, opf)
-    }
-
-    /// Panics on a clone.
-    fn range_all(&self) -> BioRange<'_> {
-        self.bio().range_all()
-    }
 
     // TODO: once submitted, a bio's bi_iter is undefined - the block layer
     // advances and splits it - till its owner sets it again, and nothing
@@ -697,6 +682,27 @@ pub unsafe trait BioOwner {
             crate::os::blkdev::submit_bio(raw);
             BioFuture { c, bio }
         }
+    }
+}
+
+/// An owner of a bio, and of what it owns: its buffers, Owns, to reset for
+/// another IO - or, if it owns none, to remap.
+///
+/// # Safety
+/// Owns is what its bio owns.
+pub unsafe trait BioOwner: BioSubmit {
+    type Owns: BioOwns;
+
+    /// For another IO, of @opf, to or from the same buffers: Bio::reset().
+    /// Panics if they can't serve it - a buffer borrowed shared, for a read.
+    fn reset(&mut self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
+        assert!(Self::Owns::allows_op(req_op(opf)), "resetting a bio for an op its buffers can't serve");
+        self.bio_mut().reset(bdev, opf)
+    }
+
+    /// Panics on a clone.
+    fn range_all(&self) -> BioRange<'_> {
+        self.bio().range_all()
     }
 
     /// The bio mapped to @buf for one IO, in place of what it was: for a bio

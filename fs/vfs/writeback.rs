@@ -14,7 +14,7 @@ use crate::inode_opts;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Box;
 use crate::os::blkdev::plugged;
-use crate::util::bio::{bio_put, Bio, BioOwner, Data};
+use crate::util::bio::{bio_put, Bio, BioOwner, BioSubmit, Data};
 use crate::util::closure;
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::util::sleep::Sleep;
@@ -43,9 +43,7 @@ impl c::bch_writepage_io {
     }
 }
 
-unsafe impl BioOwner for c::bch_writepage_io {
-    type Owns = Data;
-
+impl BioSubmit for c::bch_writepage_io {
     fn bio(&self) -> &Bio {
         &self.op.wbio.bio
     }
@@ -53,6 +51,10 @@ unsafe impl BioOwner for c::bch_writepage_io {
     fn bio_mut(&mut self) -> &mut Bio {
         self.op.wbio.bio_mut()
     }
+}
+
+unsafe impl BioOwner for c::bch_writepage_io {
+    type Owns = Data;
 }
 
 /// The io of a write op's end_io.

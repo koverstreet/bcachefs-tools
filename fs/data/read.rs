@@ -90,8 +90,8 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot};
 use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::util::bio::{pages, reset_bvec_offset, Bio, BioBox, BioInPlace, BioLend, BioOwner, BioRange,
-                       BvecMempool, Data, HasBio, Lent, Pages};
+use crate::util::bio::{pages, reset_bvec_offset, Bio, BioBox, BioInPlace, BioLend, BioRange, BioSubmit,
+                       BvecMempool, HasBio, Lent, Pages};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, Flags, Box, Kmalloc};
@@ -405,11 +405,9 @@ struct Fragment<'r> {
     plan:   Plan<'r>,
 }
 
-// XXX: Data is what its bio's had as, not what it owns - a bounce's or a
-// home's pages are held beside it, which remap_*() would leak
-unsafe impl BioOwner for Fragment<'_> {
-    type Owns = Data;
-
+/// Submitted, whichever of its bios it has: none owns a buffer it could be
+/// remapped from - a bounce's pages, a home's.
+impl BioSubmit for Fragment<'_> {
     fn bio(&self) -> &Bio {
         self.rbio().bio()
     }

@@ -33,7 +33,8 @@ use pin_init::{pin_data, pin_init, PinInit};
 
 use core::task::{ready, Context, Poll};
 
-use super::{bio_of, of_bio, AtEnd, Bio, BioField, BioOwner, BioOwns, BioRange, BioVecs, Data, HasBio, VecsAt};
+use super::{bio_of, of_bio, AtEnd, Bio, BioField, BioOwner, BioOwns, BioRange, BioSubmit, BioVecs, Data, HasBio,
+            VecsAt};
 use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{waiter, Completion, Exclusive, Resumable, TaskSlot, Waiter};
 use crate::c;
@@ -834,10 +835,7 @@ where
 // An Option of one is None as its pointer is null, all zeroes
 unsafe impl<T: HasBio> ::pin_init::ZeroableOption for BioBox<'_, T> {}
 
-// SAFETY: the box's bio, its only ref
-unsafe impl<T: HasBio, A: Alloc> BioOwner for BioBox<'_, T, A> {
-    type Owns = T::Owns;
-
+impl<T: HasBio, A: Alloc> BioSubmit for BioBox<'_, T, A> {
     fn bio(&self) -> &Bio {
         HasBio::bio(&**self)
     }
@@ -845,6 +843,11 @@ unsafe impl<T: HasBio, A: Alloc> BioOwner for BioBox<'_, T, A> {
     fn bio_mut(&mut self) -> &mut Bio {
         HasBio::bio_mut(self.as_mut())
     }
+}
+
+// SAFETY: has_bio!() checks T's Owns is its bio's
+unsafe impl<T: HasBio, A: Alloc> BioOwner for BioBox<'_, T, A> {
+    type Owns = T::Owns;
 }
 
 impl<T: HasBio, A: Alloc> Drop for BioBox<'_, T, A> {

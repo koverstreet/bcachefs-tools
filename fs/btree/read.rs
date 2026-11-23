@@ -51,7 +51,7 @@ use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
-use crate::util::bio::{Bio, BioOwner, BvecMempool, Data, HasBio};
+use crate::util::bio::{Bio, BioOwner, BioSubmit, BvecMempool, Data, HasBio};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::{random_u64, random_u64_below};
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, PAGE_SIZE, READ};
@@ -128,9 +128,7 @@ crate::has_bio!(NodeReadBio, bio);
 
 struct NodeReadIo<'h>(Pin<&'h mut NodeReadBio>);
 
-unsafe impl BioOwner for NodeReadIo<'_> {
-    type Owns = Data;
-
+impl BioSubmit for NodeReadIo<'_> {
     fn bio(&self) -> &Bio {
         &self.0.bio
     }
@@ -138,6 +136,10 @@ unsafe impl BioOwner for NodeReadIo<'_> {
     fn bio_mut(&mut self) -> &mut Bio {
         self.0.as_mut().bio_mut()
     }
+}
+
+unsafe impl BioOwner for NodeReadIo<'_> {
+    type Owns = Data;
 }
 
 /// The module's, not the filesystem's: a box is freed a grace period after its

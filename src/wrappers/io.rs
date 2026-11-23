@@ -17,7 +17,7 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode_opts;
 use bcachefs_kernel::util::alloc::init_at;
-use bcachefs_kernel::util::bio::{BioBox, BioInPlace, BioOwner, Buffer, Data};
+use bcachefs_kernel::util::bio::{BioBox, BioInPlace, BioSubmit, Buffer, Data};
 use bcachefs_kernel::util::closure;
 use bcachefs_kernel::util::sleep::Sleep;
 use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Spawn, TaskSlot, WaitSync};

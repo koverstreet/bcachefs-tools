@@ -160,7 +160,7 @@ use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
 use crate::util::alloc::{Arc, Flags, KVec, KVVec};
 use core::sync::atomic::AtomicPtr;
-use crate::util::bio::{io_buf, Bio, BioBox, BioOwner};
+use crate::util::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit};
 use crate::util::gather::Gather;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, WaitSync};

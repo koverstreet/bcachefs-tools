@@ -584,7 +584,7 @@ impl<'a> BioRange<'a> {
 
 #[cfg(all(test, not(kernel)))]
 mod tests {
-    use super::super::{Bio, BioBox, BioOwner, BioRange};
+    use super::super::{Bio, BioBox, BioOwner, BioRange, BioSubmit};
     use crate::c;
     use crate::errcode::BchError;
 
