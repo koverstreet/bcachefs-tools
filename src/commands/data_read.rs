@@ -23,7 +23,7 @@ use bcachefs_kernel::c;
 use clap::Parser;
 
 use bcachefs_kernel::util::alloc::Flags;
-use bcachefs_kernel::util::bio::io_buf;
+use bcachefs_kernel::os::bio::io_buf;
 use crate::wrappers::ioctl::{ioctl_rw, BCHFS_IOC_PREAD_RAW};
 
 const SECTOR_SIZE: u64 = 512;

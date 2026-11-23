@@ -18,7 +18,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::inode_opts::get_inode;
 use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
-use crate::util::bio::{Bio, BvecMempool, HasBio};
+use crate::os::bio::{Bio, BvecMempool, HasBio};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::iov_iter::IovIter;
 use crate::os::kernel::unlikely;

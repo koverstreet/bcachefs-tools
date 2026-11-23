@@ -40,7 +40,7 @@ use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
 use crate::util::alloc::Flags;
-use crate::util::bio::{io_buf, Bio, BioBox, BioSubmit, Buffer};
+use crate::os::bio::{io_buf, Bio, BioBox, BioSubmit, Buffer};
 use crate::util::vstructs::assume_init_ref;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;

@@ -23,7 +23,7 @@ use crate::init::passes;
 use crate::locking::{Locked, Mutex};
 use crate::types::{Le16, Le64};
 use crate::util::alloc::KVVec;
-use crate::util::bio::{Bio, BioBox, BioOwner, BioSubmit};
+use crate::os::bio::{Bio, BioBox, BioOwner, BioSubmit};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::heap::{MinHeap, PeekMut};
 use crate::os::kernel::{cond_resched, jiffies, local_clock, sort_nonatomic, time_after, HZ, PAGE_SIZE};

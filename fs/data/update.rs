@@ -37,7 +37,7 @@ use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::{init_at, Flags};
-use crate::util::bio::{Bio, BioInPlace, HasBio, Pages};
+use crate::os::bio::{Bio, BioInPlace, HasBio, Pages};
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::locking::MemallocFlags;

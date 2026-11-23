@@ -13,7 +13,7 @@ use pin_init::{pin_data, pin_init, PinInit};
 use crate::c;
 use crate::os::kernel::{local_clock, READ, WRITE};
 use crate::sb::members::BlockDev;
-use crate::util::bio::{AtEnd, Bio, BioBox, BioOwns, Data};
+use crate::os::bio::{AtEnd, Bio, BioBox, BioOwns, Data};
 
 #[pin_data]
 #[repr(C)]

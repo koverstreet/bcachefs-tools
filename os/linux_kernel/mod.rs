@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 pub mod alloc;
+#[path = "../bio/mod.rs"]
 pub mod bio;
 pub mod blkdev;
 pub mod checksum;

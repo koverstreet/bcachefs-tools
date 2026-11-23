@@ -34,7 +34,7 @@ use crate::journal::validate::jset_validate;
 use crate::locking::MemallocFlags;
 use crate::sb::members::DevIoRef;
 use crate::os::blkdev::plugged;
-use crate::util::bio::bio_put;
+use crate::os::bio::bio_put;
 use crate::util::closure::Running;
 use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies, time_after_eq, unlikely,
                           WRITE};

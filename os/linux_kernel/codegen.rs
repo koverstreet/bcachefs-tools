@@ -49,7 +49,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/fs_context.h",		// struct fs_context, logfc(): os/linux_kernel/fs_context.rs's - the kernel crate's is opaque
     "linux/percpu-refcount.h",		// percpu_ref_get(), _put(): a DevRef's ca->ref, static inlines
     "linux/console.h",			// console_trylock(): util/log.rs holds the console across a message
-    "linux/bio.h",			// bio_set_dev(), util/bio.rs's; bio_iov_vecs_to_alloc(),
+    "linux/bio.h",			// bio_set_dev(), os/bio's; bio_iov_vecs_to_alloc(),
 					// os/linux_kernel/iov_iter.rs's; bio_release_pages(),
 					// os/linux_kernel/user_pages.rs's - static inlines
     "linux/task_io_accounting_ops.h",	// task_io_account_write(): vfs/direct_write.rs's
@@ -179,7 +179,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "fault_in_readable", "filemap_write_and_wait_range", "filemap_flush",
     "totalram_pages", "si_mem_available", "set_freezable", "freezing", "try_to_freeze",
     "bio_set_dev", "bio_iov_vecs_to_alloc", "bio_release_pages",
-    // util/bio/owned.rs
+    // os/bio/owned.rs
     "bio_inc_remaining",
     // os/linux_kernel/bio.rs: a bvec of memory, which a Bio pushes - static
     // inlines, and an export

@@ -11,7 +11,7 @@ use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::os::kobject::Kobject;
 use crate::util::projections::Volatile;
-use crate::util::bio::BioSet;
+use crate::os::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::place::Placed;
 use crate::util::time_stats::TimeStatsArray;
@@ -684,8 +684,8 @@ pub struct Fs {
     #[late(BioSet::new(4), ENOMEM_bio_write_init)]
     pub replica_set: Late<BioSet<c::bch_write_bio>>,
     #[pin]
-    #[init(crate::util::bio::pages::BouncePool::new(options), ENOMEM_bio_bounce_pages_init)]
-    pub(crate) bio_bounce: crate::util::bio::pages::BouncePool,
+    #[init(crate::os::bio::pages::BouncePool::new(options), ENOMEM_bio_bounce_pages_init)]
+    pub(crate) bio_bounce: crate::os::bio::pages::BouncePool,
     #[pin]
     #[init(crate::data::nocow_locking::NocowLocks::new())]
     pub(crate) nocow_locks: crate::data::nocow_locking::NocowLocks,

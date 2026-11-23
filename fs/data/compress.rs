@@ -49,7 +49,8 @@ use crate::errcode::BchError;
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
-use crate::util::{alloc::{Box, KVmalloc}, bio::{BioRange, Mapped},
+use crate::os::bio::{BioRange, Mapped};
+use crate::util::{alloc::{Box, KVmalloc},
                   late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::{Out, VolatileSlice}, Printbuf, ToText};
 use crate::os::compress::{lz4, zlib, zstd};

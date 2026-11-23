@@ -24,7 +24,7 @@ use crate::fs::Fs;
 use crate::sb::errors::SbErrorId;
 use crate::util::{raid, Printbuf};
 use crate::util::alloc::{kbox_pin_init, Flags, KBox};
-use crate::util::bio::{io_buf, IoBuf};
+use crate::os::bio::{io_buf, IoBuf};
 use crate::util::backref::BackRef;
 use crate::util::closure::{closure_wait, closure_wake_up};
 use crate::util::log::{LogLevel, LogMsg};

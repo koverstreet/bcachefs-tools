@@ -10,7 +10,7 @@ use crate::fs::Fs;
 use crate::locking::{ByteLock, Locked, Lockdep, Mutex, SpinLockIrq};
 use crate::new_lock;
 use crate::util::alloc::{KBox, KVVec};
-use crate::util::bio::BioSet;
+use crate::os::bio::BioSet;
 use crate::data_structures::cuckoo::Cuckoo;
 use crate::util::futex::EventCount;
 use crate::data_structures::genradix::SharedGenRadix;

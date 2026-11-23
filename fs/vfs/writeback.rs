@@ -14,7 +14,7 @@ use crate::inode_opts;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Box;
 use crate::os::blkdev::plugged;
-use crate::util::bio::{bio_put, Bio, BioOwner, BioSubmit, Data};
+use crate::os::bio::{bio_put, Bio, BioOwner, BioSubmit, Data};
 use crate::util::closure;
 use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::util::sleep::Sleep;
@@ -152,7 +152,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
                       sector: u64, nr_replicas: u32, res_nr_replicas: u32) {
     let bio = fs.vfs.writepage_bioset.alloc_raw(core::ptr::null_mut(), c::BIO_MAX_VECS as u16,
                                                 c::req_op_REQ_OP_WRITE, crate::util::alloc::Flags::empty());
-    let io = unsafe { crate::util::bio::of_bio::<Io>(bio) };
+    let io = unsafe { crate::os::bio::of_bio::<Io>(bio) };
     let i = unsafe { &mut *io };
 
     i.inode = inode.raw();

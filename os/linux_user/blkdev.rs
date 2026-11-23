@@ -7,7 +7,7 @@
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::os::kobject::Kobject;
-use crate::util::bio::Bio;
+use crate::os::bio::Bio;
 use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
 use crate::util::Printbuf;
@@ -293,7 +293,7 @@ unsafe fn complete(bio: *mut c::bio, ret: i32) {
         if if rw { ret != (*bio).bi_iter.bi_size as i32 } else { ret < 0 } {
             (*bio).bi_status = if ret == -(c::ENOSPC as i32) { c::BLK_STS_NOSPC } else { c::BLK_STS_IOERR };
         }
-        super::bio::endio(bio);
+        super::bio::sys::endio(bio);
     }
 }
 
@@ -399,7 +399,7 @@ unsafe fn submit_sync(bio: *mut c::bio) {
     if let Err(e) = preflush {
         eprintln!("fsync error: {}", std::io::Error::from(e));
         b.bi_status = c::BLK_STS_IOERR;
-        unsafe { super::bio::endio(bio) };
+        unsafe { super::bio::sys::endio(bio) };
         return;
     }
 

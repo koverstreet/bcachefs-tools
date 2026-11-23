@@ -12,7 +12,7 @@ use crate::data::write::{to_wbio, wbio_init, write_op_error};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
-use crate::util::bio::{bio_put, pages, Bio, Pages};
+use crate::os::bio::{bio_put, pages, Bio, Pages};
 use crate::util::volatile::Out;
 use crate::os::kernel::{unlikely, PAGE_SIZE, WRITE};
 use c::WriteFlags as w;
@@ -191,7 +191,7 @@ fn write_op_decode(op: &mut Op) -> Result<(), BchError> {
 
     let iter = op.wbio.bio.raw().bi_iter;
     unsafe {
-        crate::util::bio::memcpy_to_bio(op.wbio.bio_mut().raw_mut(), iter,
+        crate::os::bio::memcpy_to_bio(op.wbio.bio_mut().raw_mut(), iter,
                                         dst_buf.as_ptr().add((crc.offset as usize) << 9).cast());
     }
 

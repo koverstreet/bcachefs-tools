@@ -10,7 +10,7 @@ use crate::util::alloc::KVVec;
 use crate::locking::{ByteLock, Locked, Lockdep, Mutex, SeqLock, SpinLockIrq};
 use crate::{new_lock, new_work};
 use crate::types::CacheAligned;
-use crate::util::bio::BioSet;
+use crate::os::bio::BioSet;
 use crate::os::workqueue::ReffedWork;
 use crate::os::percpu::{Counters, PerCpu};
 use crate::util::futex::EventCount;

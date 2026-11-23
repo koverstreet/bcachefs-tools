@@ -34,7 +34,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::io::{SbFieldOps, SbResize};
 use crate::types::{Le32, Le64};
-use crate::util::bio::{Bio, BioRange};
+use crate::os::bio::{Bio, BioRange};
 use crate::util::Printbuf;
 use crate::format::{Bversion, Nonce};
 use crate::os::checksum::{Checksum, Crc32c, Crc64, Xxh64};

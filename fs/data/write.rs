@@ -729,7 +729,7 @@ use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::snapshots::subvolume;
-use crate::util::bio::{bio_put, of_bio, Bio, Pages};
+use crate::os::bio::{bio_put, of_bio, Bio, Pages};
 use crate::util::closure::{ClosureRef, HasClosure, Running};
 use crate::util::ffi::Opaque;
 use crate::os::kernel::{current_runtime, local_clock, unlikely, WRITE};
@@ -966,7 +966,7 @@ pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_b
             n.wbio.bits.set_bounce(0);
             n.wbio.bits.set_put_bio(1);
             n.bio_mut().set_opf(wbio.bio.raw().bi_opf);
-            unsafe { crate::os::bio::inc_remaining(wbio.bio_mut().raw_mut()) };
+            unsafe { crate::os::bio::sys::inc_remaining(wbio.bio_mut().raw_mut()) };
             n
         } else {
             wbio.wbio.bits.set_split(0);
@@ -994,14 +994,14 @@ pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_b
             n.bio_mut().set_dev(bdev);
 
             if ty != DataType::btree && unlikely(fs.opts().no_data_io.get() != 0) {
-                unsafe { crate::os::bio::endio(n.bio_mut().raw_mut()) };
+                unsafe { crate::os::bio::sys::endio(n.bio_mut().raw_mut()) };
                 continue;
             }
 
             unsafe { crate::os::blkdev::submit_bio(n.bio_mut().raw_mut()) };
         } else {
             n.bio_mut().set_status(c::BLK_STS_REMOVED);
-            unsafe { crate::os::bio::endio(n.bio_mut().raw_mut()) };
+            unsafe { crate::os::bio::sys::endio(n.bio_mut().raw_mut()) };
         }
     }
 }
@@ -1290,7 +1290,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     }
 
     match parent {
-        Some(parent) => unsafe { crate::os::bio::endio((&raw mut (*parent).bio).cast()) },
+        Some(parent) => unsafe { crate::os::bio::sys::endio((&raw mut (*parent).bio).cast()) },
         None => drop(unsafe { ClosureRef::adopt(&*cl) }),
     }
 }

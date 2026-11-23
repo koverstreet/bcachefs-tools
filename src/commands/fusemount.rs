@@ -74,7 +74,7 @@ use bcachefs_kernel::snapshots::subvolume;
 
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
-use bcachefs_kernel::util::bio::io_buf;
+use bcachefs_kernel::os::bio::io_buf;
 
 /// Guard that calls rcu_unregister_thread on drop (i.e. thread exit).
 struct RcuGuard;

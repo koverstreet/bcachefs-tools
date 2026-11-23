@@ -14,7 +14,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, StateLockWrite};
 use crate::init::error::id;
-use crate::util::bio::BioSet;
+use crate::os::bio::BioSet;
 use crate::os::kernel::jiffies;
 use crate::util::sleep::Sleep;
 use crate::{bch_err, fsck_err_on, warn_on};

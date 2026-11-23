@@ -51,7 +51,7 @@ use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
-use crate::util::bio::{Bio, BioOwner, BioSubmit, BvecMempool, Data, HasBio};
+use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool, Data, HasBio};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::{random_u64, random_u64_below};
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, PAGE_SIZE, READ};

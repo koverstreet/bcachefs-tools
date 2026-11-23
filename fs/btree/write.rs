@@ -32,7 +32,7 @@ use crate::types::{Le16, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
 use crate::util::backref::BackRef;
-use crate::util::bio::BvecMempool;
+use crate::os::bio::BvecMempool;
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::workqueue::Queue;

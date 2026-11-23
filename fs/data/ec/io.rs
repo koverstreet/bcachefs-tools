@@ -19,7 +19,7 @@ use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::data::dev_bio::DevBio;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
-use crate::util::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, BioSubmit, Buffer, Gathered};
+use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, BioSubmit, Buffer, Gathered};
 use crate::util::gather::{Fold, Gather};
 use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;

@@ -21,7 +21,7 @@ use crate::{inode, inode_opts};
 use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
-use crate::util::bio::{Bio, Gathered};
+use crate::os::bio::{Bio, Gathered};
 use crate::os::file::File;
 use crate::os::folio::FsMapping;
 use super::file::InodeFile;

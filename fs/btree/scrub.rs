@@ -22,7 +22,7 @@ use crate::format::{BkeyTypeFlags, Btree};
 use crate::fs::{Dev, Fs, WriteRef};
 use crate::os::workqueue::Queue;
 use crate::sb::members::DevIoRef;
-use crate::util::bio::{Bio, BioBox, BioSubmit, Buffer};
+use crate::os::bio::{Bio, BioBox, BioSubmit, Buffer};
 use crate::util::task::{spawn_static, waiter, Resumable, Resume};
 use crate::util::vstructs::{cast_plain, Head, Unvalidated};
 use crate::util::{backref::BackRef, refcount::TryRefcount, Printbuf};

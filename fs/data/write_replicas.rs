@@ -17,7 +17,7 @@ use crate::locking::MemallocFlags;
 use crate::os::kernel::{local_clock, WRITE};
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::util::alloc::{Alloc, AllocError, Allocator, Kmalloc};
-use crate::util::bio::{submit_gathered_borrowed, BioBox, BioInPlace, BvecMempool, Gathered, HasBio};
+use crate::os::bio::{submit_gathered_borrowed, BioBox, BioInPlace, BvecMempool, Gathered, HasBio};
 use crate::util::gather::{Fold, Gather};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;

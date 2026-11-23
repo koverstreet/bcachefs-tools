@@ -2,7 +2,6 @@ pub mod alloc;
 pub mod atomic;
 pub mod backref;
 pub mod backtrace;
-pub mod bio;
 pub mod clock;
 pub mod closure;
 pub mod demangle;

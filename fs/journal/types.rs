@@ -25,7 +25,7 @@ use crate::os::kernel::PAGE_SIZE;
 use crate::data_structures::list::ListLinks;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Mutex, PercpuRwSem, SpinLockIrq};
 use core::cell::Cell;
-use crate::util::bio::BioSet;
+use crate::os::bio::BioSet;
 use crate::util::futex::EventCount;
 use crate::os::kthread::Daemon;
 use crate::util::late::Late;
@@ -320,7 +320,7 @@ pub struct journal_bio {
     pub buf: *mut c::journal_buf,
     pub submit_time: u64,
 
-    pub bio: crate::util::bio::Bio,
+    pub bio: crate::os::bio::Bio,
 }
 crate::has_bio!(journal_bio, bio);
 

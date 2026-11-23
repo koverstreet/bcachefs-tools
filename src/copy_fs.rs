@@ -34,7 +34,7 @@ use bcachefs_kernel::fs::Fs;
 
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
-use bcachefs_kernel::util::bio::io_buf;
+use bcachefs_kernel::os::bio::io_buf;
 
 const BCACHEFS_ROOT_INO: u64 = 4096;
 const BCACHEFS_ROOT_SUBVOL: u64 = 1;

@@ -55,7 +55,7 @@ use clap::Parser;
 use bcachefs_kernel::format::{Bpos, Btree};
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
-use bcachefs_kernel::util::bio::io_buf;
+use bcachefs_kernel::os::bio::io_buf;
 
 use crate::util::write_all_at;
 

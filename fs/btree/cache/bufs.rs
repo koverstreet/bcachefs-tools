@@ -88,7 +88,7 @@ impl core::ops::DerefMut for Bounce<'_> {
 
 // Its buffer, until it's dropped: swap() trades it, but isn't reached
 // through the bytes
-unsafe impl crate::util::bio::MapBuf for Bounce<'_> {
+unsafe impl crate::os::bio::MapBuf for Bounce<'_> {
     fn as_raw(&self) -> (*mut u8, usize) {
         (self.p.as_ptr().cast(), self.bytes)
     }

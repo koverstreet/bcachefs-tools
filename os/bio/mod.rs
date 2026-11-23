@@ -116,7 +116,12 @@ fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)
 }
 
-pub use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs};
+/* the OS's half: bio_init() and the rest of C's, and a buffer's bvecs */
+#[cfg_attr(kernel, path = "../linux_kernel/bio.rs")]
+#[cfg_attr(not(kernel), path = "../linux_user/bio.rs")]
+pub(crate) mod sys;
+
+pub use sys::{buf_bio_bytes, buf_nr_bvecs};
 
 pub const BIO_INLINE_VECS: usize = 4;
 
@@ -182,7 +187,7 @@ impl<B: BioOwns> PinnedDrop for Bio<B> {
     fn drop(self: Pin<&mut Self>) {
         let this = self.get_mut();
         this.owns.release(&mut this.vecs);
-        unsafe { crate::os::bio::uninit(&mut this.bio) };
+        unsafe { crate::os::bio::sys::uninit(&mut this.bio) };
         drop(core::mem::replace(&mut this.vecs, BioVecs::<B>::new_in(BvecAlloc::NONE)));
     }
 }
@@ -319,7 +324,7 @@ impl Bio {
         unsafe {
             (&raw mut (*bio).vecs).write(BioVecs::<Data>::new_in(BvecAlloc::NONE));
             (&raw mut (*bio).vecs_at).write(VecsAt::Borrowed(NonNull::from(&**table)));
-            crate::os::bio::init(bio.cast(), bdev, table.vecs.as_mut_ptr(), nr, opf);
+            crate::os::bio::sys::init(bio.cast(), bdev, table.vecs.as_mut_ptr(), nr, opf);
             (*bio).bio.bi_vcnt = nr;
         }
     }
@@ -393,7 +398,7 @@ impl Bio {
     /// its place in the bvecs; nothing has the bio in flight.
     pub unsafe fn map(&mut self, buf: *mut u8, len: usize) {
         let len32 = u32::try_from(len).expect("mapping a buffer of 4G or more into a bio");
-        for bv in unsafe { crate::os::bio::bvecs(buf, len) } {
+        for bv in unsafe { crate::os::bio::sys::bvecs(buf, len) } {
             self.vecs.push(bv).unwrap_or_else(|_| panic!("mapping {len} bytes into a bio: no room for its bvecs"));
         }
         self.sync();
@@ -420,7 +425,7 @@ impl Bio {
     /// position gone - a bio whose pages are new each IO, a dio's.
     pub fn clear(&mut self, opf: u32) {
         self.vecs.clear();
-        unsafe { crate::os::bio::reset(self.raw_mut(), core::ptr::null_mut(), opf) };
+        unsafe { crate::os::bio::sys::reset(self.raw_mut(), core::ptr::null_mut(), opf) };
         self.sync();
     }
 
@@ -431,7 +436,7 @@ impl Bio {
     pub(super) fn reset(&mut self, bdev: *mut crate::os::blkdev::BlockDevice, opf: u32) {
         let size = self.range_all().len();
         // SAFETY: had by &mut, so not in flight
-        unsafe { crate::os::bio::reset(self.raw_mut(), bdev, opf) };
+        unsafe { crate::os::bio::sys::reset(self.raw_mut(), bdev, opf) };
         self.sync();
         self.raw_mut().bi_iter.bi_size = size;
     }
@@ -627,16 +632,16 @@ pub const fn bio_field_at<F: BioField<Owns = O>, O: BioOwns>(_: *const F) -> usi
 #[macro_export]
 macro_rules! has_bio {
     ($t:ty, $($f:ident).+ $(, owns $o:ty)? $(where $($g:ident: $b:path),*)?) => {
-        unsafe impl<$($($g: $b),*)?> $crate::util::bio::HasBio for $t {
+        unsafe impl<$($($g: $b),*)?> $crate::os::bio::HasBio for $t {
             type Owns = $crate::has_bio!(@owns $($o)?);
             const BIO_OFFSET: usize = {
                 let t = ::core::mem::MaybeUninit::<$t>::uninit();
                 let field = unsafe { &raw const (*t.as_ptr()).$($f).+ };
-                ::core::mem::offset_of!($t, $($f).+) + $crate::util::bio::bio_field_at::<_, Self::Owns>(field)
+                ::core::mem::offset_of!($t, $($f).+) + $crate::os::bio::bio_field_at::<_, Self::Owns>(field)
             };
         }
     };
-    (@owns) => { $crate::util::bio::Data };
+    (@owns) => { $crate::os::bio::Data };
     (@owns $o:ty) => { $o };
 }
 

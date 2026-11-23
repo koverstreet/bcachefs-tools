@@ -36,7 +36,7 @@ use crate::inode_opts::get_inode;
 use crate::types::Fifo;
 use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
-use crate::util::bio::{bvec_offset, Bio, BioRange, BvecMempool, HasBio, Lent};
+use crate::os::bio::{bvec_offset, Bio, BioRange, BvecMempool, HasBio, Lent};
 use crate::os::kernel::PAGE_SIZE;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;

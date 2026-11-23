@@ -8,7 +8,7 @@
 
 use bcachefs_shim::c::atomic_t;
 
-pub use super::bio::{bio_vec, bvec_iter};
+pub use super::bio::sys::{bio_vec, bvec_iter};
 pub use super::blkdev::{blk_holder_ops, MINORBITS};
 pub use super::fs::*;
 pub use super::jump_label::static_key_false;

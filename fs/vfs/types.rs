@@ -6,7 +6,9 @@ use crate::cstructs::c;
 #[cfg(not(NO_BCACHEFS_FS))]
 use crate::os::workqueue::{Workqueue, WqFlags};
 #[cfg(not(NO_BCACHEFS_FS))]
-use crate::util::{alloc::KVmalloc, bio::BioSet, late::Late, mempool::Mempool};
+use crate::os::bio::BioSet;
+#[cfg(not(NO_BCACHEFS_FS))]
+use crate::util::{alloc::KVmalloc, late::Late, mempool::Mempool};
 use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
 use pin_init::pin_data;
 

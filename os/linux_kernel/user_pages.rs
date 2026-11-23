@@ -15,7 +15,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::os::file::Any;
 use crate::os::folio::Folio;
-use crate::util::bio::Bio;
+use crate::os::bio::Bio;
 use crate::util::task::requeue;
 use crate::os::workqueue::Queue;
 use core::ffi::{c_int, c_uint};

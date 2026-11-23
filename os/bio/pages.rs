@@ -122,7 +122,7 @@ pub fn alloc_pages(vecs: &mut BioVecs, bs: u32, size: usize, gfp: Flags) -> Resu
 /// @len bytes at @p, a fresh allocation in the direct map - one bvec - pushed
 /// where one was reserved.
 fn push_alloc(vecs: &mut BioVecs, p: *mut u8, len: usize) {
-    for bv in unsafe { crate::os::bio::bvecs(p, len) } {
+    for bv in unsafe { crate::os::bio::sys::bvecs(p, len) } {
         vecs.push(bv).expect("pushing a bvec reserved");
     }
 }

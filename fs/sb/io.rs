@@ -160,7 +160,7 @@ use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
 use crate::util::alloc::{Arc, Flags, KVec, KVVec};
 use core::sync::atomic::AtomicPtr;
-use crate::util::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit};
+use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit};
 use crate::util::gather::Gather;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, WaitSync};
@@ -1105,7 +1105,7 @@ impl c::bch_sb_io {
 
         if self.bits.have_bio() != 0 {
             let buf = self.buf.buffer();
-            let nr = crate::util::bio::buf_nr_bvecs(buf.as_ptr().cast_mut(), buf.len());
+            let nr = crate::os::bio::buf_nr_bvecs(buf.as_ptr().cast_mut(), buf.len());
             if self.bio.as_ref().is_some_and(|b| usize::from(b.bio().max_vecs()) >= nr) {
                 return Ok(());
             }

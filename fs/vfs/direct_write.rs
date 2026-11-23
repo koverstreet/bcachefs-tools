@@ -17,7 +17,7 @@ use crate::fs::Fs;
 use crate::inode_opts;
 use crate::snapshots::subvolume;
 use crate::util::alloc::KVec;
-use crate::util::bio::{bio_put, Bio};
+use crate::os::bio::{bio_put, Bio};
 use crate::util::closure;
 use crate::os::iov_iter::{IovIter, IovIterFields};
 use crate::os::kernel::{current_id, likely, task_io_account_write, unlikely, Mm};
@@ -399,7 +399,7 @@ pub fn direct_write(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'_>) -> isize
             unsafe { c::bio_iov_vecs_to_alloc(it.as_ptr(), c::BIO_MAX_VECS as i32) } as u16,
             c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE,
             crate::util::alloc::Flags::empty());
-        let dio = unsafe { crate::util::bio::of_bio::<Dio>(bio) };
+        let dio = unsafe { crate::os::bio::of_bio::<Dio>(bio) };
         let d = unsafe { &mut *dio };
         d.req           = k.as_ptr();
         d.mapping       = mapping;

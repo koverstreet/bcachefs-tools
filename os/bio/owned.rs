@@ -324,7 +324,7 @@ unsafe fn bio_init(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, nr_
         (&raw mut (*bio).vecs_at).write(VecsAt::Own);
         let vecs = &mut *(&raw mut (*bio).vecs);
         let max = vecs.capacity().min(c::BIO_MAX_VECS as usize) as u16;
-        crate::os::bio::init(bio.cast(), bdev, vecs.as_mut_ptr(), max, opf);
+        crate::os::bio::sys::init(bio.cast(), bdev, vecs.as_mut_ptr(), max, opf);
     }
     Ok(())
 }
@@ -501,7 +501,7 @@ unsafe fn chain(bio: *mut c::bio, parent: *mut c::bio) {
     unsafe {
         (*bio).bi_private = parent.cast();
         (*bio).bi_end_io  = Some(chain_endio);
-        crate::os::bio::inc_remaining(parent);
+        crate::os::bio::sys::inc_remaining(parent);
     }
 }
 
@@ -512,7 +512,7 @@ unsafe extern "C" fn chain_endio(bio: *mut c::bio) {
             (*parent).bi_status = (*bio).bi_status;
         }
         bio_put(bio);
-        crate::os::bio::endio(parent);
+        crate::os::bio::sys::endio(parent);
     }
 }
 

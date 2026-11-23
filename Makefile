@@ -282,7 +282,7 @@ BCACHEFS_DEPS=libbcachefs.a
 # and the shim's generates the bindings. Leaving one out meant editing it
 # changed nothing until something else happened to make cargo run - a stale
 # binary that looks like a rebuilt one.
-RUST_SRCS:=$(shell find src fs os/linux_user -type f -iname '*.rs') build.rs
+RUST_SRCS:=$(shell find src fs os/linux_user os/bio -type f -iname '*.rs') build.rs
 
 bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 	$(Q)$(CARGO_BUILD)
@@ -436,12 +436,13 @@ install_dracut: dracut/90bcachefs/module-setup.sh
 # outside fs/, and build.vars.
 # Source mtimes are kept, so kbuild rebuilds only what changed.
 define bch-stage-module
-	$(Q)mkdir -p $(1)/src/fs/bcachefs $(1)/src/fs/os/linux_kernel
+	$(Q)mkdir -p $(1)/src/fs/bcachefs $(1)/src/fs/os/linux_kernel $(1)/src/fs/os/bio
 	$(Q)tar -C fs --exclude='*/.*' --exclude='*.o' --exclude='*.d' -cf - . | \
 		tar -C $(1)/src/fs/bcachefs --no-same-owner -xf -
 	$(Q)tar -C os/linux_kernel --exclude='*/.*' --exclude='*.o' --exclude='*.d' -cf - . | \
 		tar -C $(1)/src/fs/os/linux_kernel --no-same-owner -xf -
 	$(Q)cp -p os/*.rs $(1)/src/fs/os/
+	$(Q)cp -p os/bio/*.rs $(1)/src/fs/os/bio/
 	$(Q)cp -p dkms/Makefile $(1)/
 	$(Q)cp -p dkms/module-version.c version.h $(1)/src/fs/bcachefs/
 	$(Q)cp -p signing/bcachefs-signing-ca.pem $(1)/src/fs/bcachefs/scripts/

@@ -76,14 +76,14 @@ nest! {
         pub ca: Option<DevIoRef<K>>,
 
         #[pin]
-        pub bio: crate::util::bio::Bio,
+        pub bio: crate::os::bio::Bio,
     }
 }
 
 impl<K: IoRefIdx> c::bch_write_bio<K> {
     /// A clone of @src, made where @b is: borrowing @src's bvecs for its box's
     /// life.
-    pub fn clone_of<'a>(b: crate::util::bio::BioInPlace<'a>, src: crate::util::bio::BioRange<'a>)
+    pub fn clone_of<'a>(b: crate::os::bio::BioInPlace<'a>, src: crate::os::bio::BioRange<'a>)
         -> impl ::pin_init::PinInit<Self, crate::errcode::BchError> + 'a
     {
         ::pin_init::pin_init!(Self {
@@ -95,15 +95,15 @@ impl<K: IoRefIdx> c::bch_write_bio<K> {
 }
 
 // SAFETY: its bio, its last field, where it is in either kind's - below
-unsafe impl<R: IoRefIdx> crate::util::bio::HasBio for c::bch_write_bio<R> {
-    type Owns = crate::util::bio::Data;
+unsafe impl<R: IoRefIdx> crate::os::bio::HasBio for c::bch_write_bio<R> {
+    type Owns = crate::os::bio::Data;
     const BIO_OFFSET: usize = core::mem::offset_of!(c::bch_write_bio, bio);
 }
 
 // no thread's, as its bio is: submitted on one, completed on another
 unsafe impl<R: IoRefIdx> Send for c::bch_write_bio<R> {}
 
-const _: () = assert!(core::mem::offset_of!(c::bch_write_bio, bio) + size_of::<crate::util::bio::Bio>() ==
+const _: () = assert!(core::mem::offset_of!(c::bch_write_bio, bio) + size_of::<crate::os::bio::Bio>() ==
                       size_of::<c::bch_write_bio>(), "bch_write_bio: its bio isn't last");
 
 // One bioset clones both kinds' bios - the replica set - and to_wbio() finds

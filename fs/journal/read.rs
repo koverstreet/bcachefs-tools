@@ -26,7 +26,7 @@ use crate::locking::{Guard as _, Locked, Mut, Mutex, Ref};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
 use crate::util::alloc::{init_at, kvzalloc, AllocError, Flags, KVVec};
-use crate::util::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
+use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
