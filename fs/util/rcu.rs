@@ -23,13 +23,13 @@
 //!
 //! # Publishing
 //!
-//! A pointer readers follow, laid out as C's `T __rcu *` so C reads it too.
-//! Readers read() it under a guard. Its one writer is had from the lock that
-//! publishes it - a Locked's or LockedBy's published writer (Publish).
+//! A pointer readers follow. Readers read() it under a guard. Its one writer
+//! is had from the lock that publishes it - a Locked's or LockedBy's
+//! published writer (Publish).
 //!
 //! - RcuPtr<P> publishes a P, an RcuPointer - a single-word pointer whose
-//!   drop frees its target as the target says: a MaybeRcuAlloc, an ARef, a
-//!   ref on a placed count. Readers read the target whole, so it must be
+//!   drop frees its target as the target says: a MaybeRcuAlloc, a ref on a
+//!   count. Readers read the target whole, so it must be
 //!   dropped a grace period on - an RcuDropMember's or an
 //!   RcuDropWorkMember's, a build error if not - and what's taken out may be
 //!   dropped at once. Its writer, an RcuPtrWriter, publishes, takes and
@@ -43,14 +43,15 @@
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::ops::Deref;
+use core::sync::atomic::{fence, AtomicPtr, Ordering};
 
 use crate::c;
 use crate::data_structures::dst_array::{DstArray, DstHead};
 use crate::util::alloc::{Alloc, AllocError, KVmalloc};
+use crate::util::vstructs::NonZeroWord;
 use crate::util::maybe_rcu_alloc::{MaybeRcuAlloc, RcuFreeing};
-use crate::util::projections::Publish;
-use crate::util::place::{At, Field, FieldOf, Here, Path, Placed};
+use crate::util::projections::{Publish, Volatile};
 use crate::util::refcount::{ARef, AlwaysRefCounted, RefGuard, Refcount};
 
 // ── Reading, and grace periods ───────────────────────────────────────────
@@ -282,102 +283,39 @@ impl<T> NoDetach<T> {
 
 // ── RcuPtr ───────────────────────────────────────────────────────────────
 
-/// A single-word pointer to its target: into_raw() gives it up as a raw one,
-/// which from_raw() takes back.
+/// A pointer that owns what it derefs to, in a word - a NonZeroWord, so an
+/// Option of it is one too.
 ///
 /// # Safety
-/// The target lives as long as Self does, and is dropped and freed only as
-/// its type says: a grace period on, if its members say so.
-pub unsafe trait RcuPointer: Sized {
-    type Target;
+/// Its target lives as long as Self does, in place, and is dropped and freed
+/// only as its type says: a grace period on, if its members say so.
+pub unsafe trait RcuPointer: Deref + NonZeroWord {}
 
-    fn into_raw(self) -> NonNull<Self::Target>;
+unsafe impl<T, A: Alloc> RcuPointer for MaybeRcuAlloc<T, A> {}
 
-    /// # Safety
-    /// @p is into_raw()'s, and taken back once.
-    unsafe fn from_raw(p: NonNull<Self::Target>) -> Self;
-}
-
-unsafe impl<T, A: Alloc> RcuPointer for MaybeRcuAlloc<T, A> {
-    type Target = T;
-
-    fn into_raw(self) -> NonNull<T> {
-        MaybeRcuAlloc::into_raw(self)
-    }
-
-    unsafe fn from_raw(p: NonNull<T>) -> Self {
-        unsafe { MaybeRcuAlloc::from_raw(p) }
-    }
-}
-
-unsafe impl<T: AlwaysRefCounted> RcuPointer for ARef<T> {
-    type Target = T;
-
-    fn into_raw(self) -> NonNull<T> {
-        ARef::into_raw(self)
-    }
-
-    unsafe fn from_raw(p: NonNull<T>) -> Self {
-        unsafe { ARef::from_raw(p) }
-    }
-}
-
-/// A ref on a count placed in what it keeps, as a pointer to that: had back
-/// by the path to the count, its field.
-unsafe impl<C, B, const N: u64> RcuPointer for RefGuard<Placed<C, At<B, N>>>
-where
-    B: Field<N, Type = Placed<C, At<B, N>>> + 'static,
-    Placed<C, At<B, N>>: Refcount<Target = B>,
-{
-    type Target = B;
-
-    fn into_raw(self) -> NonNull<B> {
-        let b = NonNull::from(&*self);
-        self.leak();
-        b
-    }
-
-    unsafe fn from_raw(p: NonNull<B>) -> Self {
-        unsafe { RefGuard::adopt(<FieldOf<Here, N> as Path<B>>::get(p.as_ref())) }
-    }
-}
+unsafe impl<T: Refcount> RcuPointer for RefGuard<T> {}
 
 /// A pointer walked under the RCU read lock alone. Its target is RCU-freed -
 /// !FreeAnytime - which publish() checks, a build error if not: Rust has no
 /// negative bound to say it here.
 #[repr(transparent)]
-pub struct RcuPtr<P: RcuPointer> {
-    p:  AtomicPtr<P::Target>,
-    _p: PhantomData<P>,
-}
+pub struct RcuPtr<P: RcuPointer>(Volatile<Option<P>>);
 
 unsafe impl<P: RcuPointer> ::pin_init::Zeroable for RcuPtr<P> {}
 
 impl<P: RcuPointer> RcuPtr<P> {
+    /// Loaded relaxed, as rcu_dereference() is: its target is ordered after
+    /// by the address dependency.
     pub fn read<'a>(&'a self, _g: &'a ReadGuard) -> Option<&'a P::Target> {
-        unsafe { rcu_dereference(&self.p).as_ref() }
+        unsafe { self.unguarded() }
     }
 
-    /// For C: its holder's lock, or a ref, keeps what it points to alive -
-    /// not this.
-    pub fn as_ptr(&self) -> *mut P::Target {
-        self.p.load(Ordering::Relaxed)
-    }
-
-    fn swap(&self, new: Option<P>) -> Option<P> {
-        let new = new.map_or(core::ptr::null_mut(), |p| P::into_raw(p).as_ptr());
-        NonNull::new(self.p.swap(new, Ordering::Release)).map(|old| unsafe { P::from_raw(old) })
-    }
-
-    fn fill(&self, p: P) {
-        let old = self.swap(Some(p));
-        assert!(old.is_none(), "publishing into a slot already holding one");
-    }
-}
-
-impl<P: RcuPointer> Drop for RcuPtr<P> {
-    fn drop(&mut self) {
-        drop(self.swap(None));
+    /// Its target, read without the RCU read lock.
+    ///
+    /// # Safety
+    /// Its holder's lock, or a ref, keeps the target alive while it's used.
+    pub unsafe fn unguarded(&self) -> Option<&P::Target> {
+        unsafe { self.0.get_unowned().as_deref().map(|t| &*core::ptr::from_ref(t)) }
     }
 }
 
@@ -397,14 +335,20 @@ impl<P: RcuPointer> core::ops::Deref for RcuPtrWriter<P> {
 }
 
 impl<P: RcuPointer> RcuPtrWriter<P> {
-    /// Into an empty slot.
-    pub fn publish(&self, p: P) {
+    /// Into an empty slot: released, as rcu_assign_pointer() is, so a reader
+    /// that sees it sees what was written to its target first.
+    pub fn publish(&self, p: P)
+    where
+        P::Target: Sized,
+    {
         <P::Target as RcuFreeing>::assert_rcu_freed();
-        self.0.fill(p);
+        fence(Ordering::Release);
+        let old = self.0 .0.replace(Some(p));
+        assert!(old.is_none(), "publishing into a slot already holding one");
     }
 
     pub fn take(&self) -> Option<P> {
-        self.0.swap(None)
+        self.0 .0.replace(None)
     }
 
     /// An owner of its own, not a borrow - which a take() by its own writer
@@ -414,8 +358,7 @@ impl<P: RcuPointer> RcuPtrWriter<P> {
         P: Clone,
     {
         // no writer but us, to take it while we clone it
-        let p = core::mem::ManuallyDrop::new(unsafe { P::from_raw(NonNull::new(self.0.as_ptr())?) });
-        Some((*p).clone())
+        Option::<P>::clone(&*unsafe { self.0 .0.get_unowned() })
     }
 }
 

@@ -304,9 +304,8 @@ impl OpenBucketRef {
     /// Its device, which it keeps: device removal stops its open buckets
     /// before the device goes.
     pub fn ca(&self) -> &Dev {
-        let p = self.fs().devs[usize::from(self.id().dev())].as_ptr();
         // SAFETY: an open bucket's device outlives it, as above
-        unsafe { p.as_ref() }.expect("an open bucket's device")
+        unsafe { self.fs().devs[usize::from(self.id().dev())].unguarded() }.expect("an open bucket's device")
     }
 
     /// Where its free space starts.

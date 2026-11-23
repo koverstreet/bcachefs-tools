@@ -42,6 +42,8 @@ pub(crate) fn alloc_at<T, A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T
     }
 }
 
+#[repr(transparent)]
+#[derive(cstruct_macros::NonZeroWord)]
 pub struct MaybeRcuAlloc<T, A: Alloc = KVmalloc> {
     p:  NonNull<T>,
     _p: PhantomData<(T, A)>,

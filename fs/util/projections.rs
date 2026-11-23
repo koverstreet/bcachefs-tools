@@ -362,6 +362,26 @@ impl<T: Copy + NoUninit> Volatile<T> {
     }
 }
 
+impl<T: NoUninit> Volatile<T> {
+    /// What it holds, copied but not owned: it's still the cell's, and drops
+    /// with it.
+    ///
+    /// # Safety
+    /// What the copy refers to stays alive while it's used - the cell's value
+    /// isn't replaced and dropped meanwhile, or not freed till a grace period
+    /// on.
+    pub unsafe fn get_unowned(&self) -> ManuallyDrop<T> {
+        ManuallyDrop::new(unsafe { Whole::load(self.0.get()) })
+    }
+
+    /// @v in, what it held out: one atomic swap, so two writers can't both
+    /// take the same value.
+    pub fn replace(&self, v: T) -> T {
+        let (p, v) = (self.0.get(), ManuallyDrop::new(v));
+        unsafe { with_atomic!(T, p, |a| transmute_copy(&a.swap(transmute_copy(&*v), Relaxed))) }
+    }
+}
+
 impl<T: Copy + NoUninit> FakePlaceRead for Volatile<T> {
     type Value = T;
 

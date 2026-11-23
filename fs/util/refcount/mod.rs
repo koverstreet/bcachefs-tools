@@ -100,6 +100,7 @@ pub unsafe trait TryRefcount: Refcount {
 /// A ref on T's count: T, kept by it.
 #[must_use = "the ref is put as soon as it's dropped"]
 #[repr(transparent)]
+#[derive(cstruct_macros::NonZeroWord)]
 pub struct RefGuard<T: Refcount + ?Sized> {
     t: NonNull<T>,
 }
