@@ -355,7 +355,8 @@ impl BtreeTrans<'_> {
             }
 
             jiter.advance();
-            let Some(k) = jiter.peek() else { break };
+            let b = paths[idx].locked_btree_node(level).expect("a node prefetched from, relocked");
+            let Some(k) = jiter.peek(b) else { break };
 
             tmp.reassemble(k);
             ret = self.node_prefetch(paths, idx, &tmp, level);
@@ -473,16 +474,18 @@ impl BtreeTrans<'_> {
                                   flags: BtreeIterFlags) -> Result<(), BchError>
     {
         let fs = self.fs();
-        let path = &paths[idx];
-        let level = path.level() as usize;
-        let b = paths.held_btree_node(idx, level).expect("a path goes down from a locked node");
+        let (level, pos) = (paths[idx].level() as usize, paths[idx].pos);
 
-        let mut jiter = BtreeAndJournalIter::new(t, b, path.l[level].iter, path.pos);
-
-        let Some(k) = jiter.peek() else {
-            return Err(self.node_missing_err(paths, idx));
+        let (mut jiter, found) = {
+            let (b, iter, down) = paths.level_and_down_key_mut(idx, level)
+                .expect("a path goes down from a locked node");
+            let mut jiter = BtreeAndJournalIter::new(t, b, *iter, pos);
+            let found = jiter.peek(b).map(|k| set_down_key(down, k)).is_some();
+            (jiter, found)
         };
-        set_down_key(paths.down_key_mut(), k);
+        if !found {
+            return Err(self.node_missing_err(paths, idx));
+        }
 
         if flags.contains(BtreeIterFlags::PREFETCH) && fs.opts.btree_node_prefetch.get() != 0 {
             return self.path_prefetch_j(paths, idx, &mut jiter);

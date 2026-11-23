@@ -287,24 +287,34 @@ fn node_at<'t>(t: &TransAttempt<'t, 't>, btree: Btree, level: usize, k: &BkeyI,
     Ok(iter)
 }
 
-/// The child key of @b at or after @pos: from its keys and the journal's.
-fn child_key(t: &TransAttempt<'_, '_>, b: Node<'_>, pos: Bpos) -> Option<BkeyBuf> {
+/// The child key of @parent's node at or after @pos: from its keys and the
+/// journal's.
+fn child_key(t: &TransAttempt<'_, '_>, parent: &BtreeNodeIter<'_>, pos: Bpos) -> Result<Option<BkeyBuf>, BchError> {
     let fs = t.fs();
-    let pos = pos.max(b.contents().data().min_key);
-    let mut node_iter = KeyIter::default();
-    node_iter.init(fs, &b.keys(b.contents()), &pos);
+    let trans = t.trans();
+    let mut paths = trans.paths();
+    let idx = parent.raw.path;
+    let level = usize::from(paths[idx].level());
 
-    let mut iter = BtreeAndJournalIter::new(t, b, node_iter, pos);
-    iter.prefetch = true;
+    let mut iter = {
+        let b = paths[idx].locked_btree_node(level).expect("a node, peeked");
+        let pos = pos.max(b.contents().data().min_key);
+        let mut node_iter = KeyIter::default();
+        node_iter.init(fs, &b.keys(b.contents()), &pos);
+        BtreeAndJournalIter::new(t, b, node_iter, pos)
+    };
+    iter.prefetch(&mut paths, idx);
+    trans.relock_from(&mut paths)?;
 
-    let k = iter.peek()?;
+    let b = paths[idx].locked_btree_node(level).expect("a node, peeked");
+    let Some(k) = iter.peek(b) else { return Ok(None) };
     let data = b.contents().data();
     assert!(k.k.p >= data.min_key && k.k.p <= data.max_key,
             "a child key at {}, outside its parent's {} - {}", k.k.p, data.min_key, data.max_key);
 
     let mut buf = BkeyBuf::new();
     buf.reassemble(k);
-    Some(buf)
+    Ok(Some(buf))
 }
 
 /// The child of @node at or after @pos, checked against the one before it:
@@ -314,8 +324,8 @@ fn check_child(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &Bkey
     let fs = t.fs();
     let parent = node_at(t, btree, level, node, BtreeIterFlags::empty())?;
 
+    let Some(cur_k) = child_key(t, &parent, pos)? else { return Ok(None) };
     let b = held(&t.trans().paths(), &parent).b;
-    let Some(cur_k) = child_key(t, b, pos) else { return Ok(None) };
 
     let cur = bch_err_msg!(fs, node_at(t, btree, level - 1, &cur_k,
                                        BtreeIterFlags::INTENT | BtreeIterFlags::READ_ERRORS),
@@ -433,8 +443,7 @@ fn next_child(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &BkeyI
               pos: Bpos) -> Result<Option<BkeyBuf>, BchError> {
     let parent = node_at(t, btree, level, node, BtreeIterFlags::empty())?;
 
-    let b = held(&t.trans().paths(), &parent).b;
-    let Some(k) = child_key(t, b, pos) else { return Ok(None) };
+    let Some(k) = child_key(t, &parent, pos)? else { return Ok(None) };
 
     bch_err_msg!(t.fs(), node_at(t, btree, level - 1, &k, BtreeIterFlags::empty()), "getting btree node")?;
     Ok(Some(k))

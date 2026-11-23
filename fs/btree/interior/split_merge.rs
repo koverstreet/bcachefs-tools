@@ -237,7 +237,7 @@ pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mu
     let mut iter = BtreeAndJournalIter::new(t, b, node_iter, data.min_key);
     let mut prev = BkeyBuf::new();
 
-    while let Some(k) = iter.peek() {
+    while let Some(k) = iter.peek(b) {
         let Some(bp) = k.arm::<c::BtreePtrV2>() else { return Ok(()) };
 
         let expected_min = match prev_end(&prev) {

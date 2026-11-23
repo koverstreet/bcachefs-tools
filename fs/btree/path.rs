@@ -359,10 +359,6 @@ impl Paths<'_> {
         unsafe { self.trans.btree_path_down.protected() }
     }
 
-    pub(crate) fn down_key_mut(&mut self) -> &mut DownKey {
-        unsafe { self.trans.btree_path_down.protected_mut() }
-    }
-
     /// Path @idx's level @level, as locked_level_mut(), and the down key: the
     /// node a path goes down from, and the key it goes down by.
     pub(crate) fn level_and_down_key_mut(&mut self, idx: PathIdx, level: usize)

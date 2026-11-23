@@ -41,7 +41,7 @@ use crate::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::node::{iter::KeyIter, BtreeNode};
-use crate::btree::path::LockedNode;
+use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::{btree_id_is_alloc, Fs};
@@ -778,32 +778,29 @@ impl c::journal_iter {
 pub(crate) struct BtreeAndJournalIter<'a, 't> {
     trans: &'a BtreeTrans<'t>,
     jk: Option<&'a c::journal_keys>,
-    b: LockedNode<'a, BtreeNode>,
     node_iter: KeyIter,
     unpacked: c::bkey,
 
     journal: c::journal_iter,
     pos: Bpos,
     at_end: bool,
-    pub(crate) prefetch: bool,
     pub(crate) fail_if_too_many_whiteouts: bool,
 }
 
 impl<'a, 't> BtreeAndJournalIter<'a, 't> {
-    /// Over node @b's keys, from @node_iter, and the journal's from @pos.
-    pub(crate) fn new(t: &TransAttempt<'a, 't>, b: LockedNode<'a, BtreeNode>, node_iter: KeyIter,
+    /// Over node @b's keys, from @node_iter, and the journal's from @pos: @b
+    /// given again to each peek().
+    pub(crate) fn new(t: &TransAttempt<'a, 't>, b: LockedNode<'_, BtreeNode>, node_iter: KeyIter,
                       pos: Bpos) -> Self {
         let jk = t.journal_keys();
         let mut iter = Self {
             trans: t.trans(),
             jk,
-            b,
             node_iter,
             unpacked: c::bkey::new(),
             journal: c::journal_iter::default(),
             pos: b.contents().data().min_key,
             at_end: false,
-            prefetch: false,
             fail_if_too_many_whiteouts: false,
         };
 
@@ -821,36 +818,37 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
         }
     }
 
-    /// The next few keys' nodes read ahead, from a copy of the iterator.
-    fn prefetch(&self) {
+    /// The next few keys' nodes read ahead, from a copy of the iterator: over
+    /// path @idx's node, borrowed for each key. A read ahead's allocation can
+    /// drop the transaction's locks, and give up: the caller relocks.
+    pub(crate) fn prefetch(&self, paths: &mut Paths<'_>, idx: PathIdx) {
         let fs = self.trans.fs();
         let mut iter = *self;
         let level = iter.journal.level;
+        if level == 0 {
+            return;
+        }
         let nr = if fs.flags.get(f::started) { if level > 1 { 0 } else { 2 } } else if level > 1 { 1 } else { 16 };
 
-        iter.prefetch = false;
         iter.fail_if_too_many_whiteouts = true;
 
         let mut tmp = BkeyBuf::new();
         for _ in 0..nr {
             iter.advance();
-            let Some(k) = iter.peek() else { break };
+            let Some(b) = paths[idx].locked_btree_node(level as usize) else { break };
+            let Some(k) = iter.peek(b) else { break };
 
             tmp.reassemble(k);
-            let _ = self.trans.btree_node_prefetch(&mut self.trans.paths(), None, tmp.as_ref(),
-                                                   iter.journal.btree_id, level as usize - 1);
+            let _ = self.trans.btree_node_prefetch(paths, None, tmp.as_ref(), iter.journal.btree_id, level as usize - 1);
         }
     }
 
-    /// The next key at or after pos, the btree node's or the journal's,
-    /// whichever's first - the journal's if both - skipping whiteouts. Good
-    /// until the iterator moves.
-    pub(crate) fn peek(&mut self) -> Option<BkeySC<'_>> {
+    /// The next key at or after pos, @b's or the journal's, whichever's first -
+    /// the journal's if both - skipping whiteouts. Good until the iterator
+    /// moves.
+    pub(crate) fn peek<'s>(&'s mut self, b: LockedNode<'s, BtreeNode>) -> Option<BkeySC<'s>> {
         let mut iters = 0;
 
-        if self.prefetch && self.journal.level != 0 {
-            self.prefetch();
-        }
         loop {
             if self.at_end {
                 return None;
@@ -862,7 +860,7 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
             }
 
             let btree_k = loop {
-                let keys = self.b.keys(self.b.contents());
+                let keys = b.keys(b.contents());
                 match self.node_iter.peek_unpack(&keys, &mut self.unpacked) {
                     Some(k) if k.k.p < self.pos => self.node_iter.advance(&keys),
                     k => break k,
@@ -880,7 +878,7 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
             let k = match (journal_k, btree_k) {
                 (Some(j), b) if b.is_none_or(|b| j.k.p <= b.k.p) => Some(j),
                 (_, b) => b,
-            }.filter(|k| k.k.p <= self.b.contents().data().max_key);
+            }.filter(|k| k.k.p <= b.contents().data().max_key);
 
             let Some(k) = k else {
                 self.pos = SPOS_MAX;
