@@ -9,8 +9,7 @@ use crate::btree::node::NodeContents;
 use crate::c;
 use crate::format::{Bpos, BkeyType};
 use crate::os::kernel::likely;
-use crate::util::vstructs::{cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, vstruct,
-                            Unsized, Unvalidated, VstructMut, VstructRef};
+use crate::util::vstructs::{cast_plain_slice, plain_bytes, plain_bytes_mut, Unsized, Unvalidated};
 use cstruct_macros::Plain;
 
 /// V, as a BkeyI's, is the key's type and state - only a marker: where the
@@ -23,8 +22,8 @@ pub struct BkeyP<V: ?Sized = FamilyVal<AllTypes>> {
 
 /// A packed key's first u64, its u64s, format and type the first three bytes:
 /// bkey_packed itself is padded to a bkey's size, so a reference to one
-/// reaches past a short key. What every key has, so the entry a bset's keys
-/// are walked by.
+/// reaches past a short key. What every key has, so what's read of a key
+/// before its u64s are checked.
 #[repr(C, align(8))]
 #[derive(Plain)]
 pub struct BkeyPHeader {
@@ -33,7 +32,6 @@ pub struct BkeyPHeader {
     pub(super) type_:       u8,
     _key:                   [u8; 5],
 }
-vstruct!(BkeyPHeader, u64s, start = 0);
 
 impl BkeyPHeader {
     pub(super) fn of(w: &u64) -> &Self {
@@ -100,21 +98,6 @@ impl BkeyP {
         let u64s = s.first()?.to_ne_bytes()[0] as usize;
         let s = s.get_mut(..u64s).filter(|s| !s.is_empty())?;
         Some(unsafe { &mut *(s as *mut [u64] as *mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) })
-    }
-}
-
-const WALKED: &str = "a walked key: whole u64s, all of it there";
-
-/// A key walked out of a bset, its u64s checked against what was left.
-impl<'a> VstructRef<'a, BkeyPHeader> {
-    pub fn key(&self) -> &'a BkeyP<FamilyVal<AllTypes, Unvalidated>> {
-        BkeyP::from_slice(cast_plain_slice(self.as_bytes()).expect(WALKED)).expect(WALKED)
-    }
-}
-
-impl<'a> VstructMut<'a, BkeyPHeader> {
-    pub fn into_key_mut(self) -> &'a mut BkeyP<FamilyVal<AllTypes, Unvalidated>> {
-        BkeyP::from_slice_mut(cast_plain_slice_mut(self.into_bytes()).expect(WALKED)).expect(WALKED)
     }
 }
 

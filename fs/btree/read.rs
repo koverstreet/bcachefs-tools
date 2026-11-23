@@ -483,8 +483,7 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
 
     let mut out = out.indent(2);
     let mut at = 0;
-    while let Some(Ok(k)) = i.key_at(at) {
-        let k = k.key();
+    while let Some(k) = i.key_at(at) {
         if k.u64s() == 0 {
             prt!(out, "zero length key at byte {at}\n");
             break;
@@ -771,7 +770,7 @@ fn validate_vals(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resul
     let mut at = 0;
 
     while let Some(k) = i.key_at_mut(at) {
-        let k = k.expect("a sorted key").into_key_mut().cast_mut::<FamilyVal<AllTypes>>();
+        let k = k.cast_mut::<FamilyVal<AllTypes>>();
 
         let drop_key = {
             let mut tmp = c::bkey::default();
