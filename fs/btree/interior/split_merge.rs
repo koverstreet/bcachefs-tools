@@ -71,7 +71,7 @@ fn insert_fixup_btree_ptr(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path:
         }
     }
 
-    unsafe { trans.bset_insert_key(paths, path, b, node_iter, insert) };
+    trans.bset_insert_key(paths, path, b, node_iter, insert);
 
     let _ = b.flags.fetch_update(SeqCst, Relaxed, |f| {
         Some(f.with_write_type(BtreeWriteType::interior).with_need_write(true))
@@ -695,7 +695,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     let mut b = paths.intent_locked_node(path, level);
     let mut b = b.write_locked();
 
-    trans.node_prep_for_write(update.t(), &mut paths.paths_and_updates(), &mut b);
+    trans.node_prep_for_write(update.t(), &mut paths.paths_and_updates(), path, &mut b);
 
     let u64s = update.parent_keys_u64s();
     if !b.insert_fits(b.contents(), u64s) {
@@ -746,7 +746,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
 
     let added_dead_u64s = u64s + usize::from(old_live_u64s) > old_u64s + usize::from(live_u64s);
     if added_dead_u64s && maybe_compact_whiteouts(&mut b) {
-        trans.node_reinit_iter(update.t(), &mut paths.paths_and_updates(), b.held());
+        trans.node_reinit_iter(update.t(), &mut paths.paths_and_updates(), path, level);
     }
 
     update.updated_node(&b);

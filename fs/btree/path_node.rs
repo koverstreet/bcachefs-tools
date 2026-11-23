@@ -8,7 +8,7 @@ use core::ptr;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::btree::journal_overlay::peek_slot;
 use crate::btree::locking::BtreeNodeLockedType::*;
-use crate::btree::node::iter::KeyIter;
+use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{KeyVal, LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::c;
@@ -23,39 +23,11 @@ impl BtreeTrans<'_> {
         paths[idx].has_node(b.c.level.get() as usize, &b.c, b.c.lock.six().seq.get())
     }
 
-    pub(crate) fn path_fix_key_modified(&self, paths: &mut Paths<'_>, b: LockedNode<'_, BtreeNode>, where_: u16) {
-        let level = b.c.level.get() as usize;
+    /// The iterators of the paths at path @idx's node at @level, for its key at
+    /// @where_ marked deleted in place.
+    pub(crate) fn path_fix_key_modified(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, where_: u16) {
+        let b = paths.held_btree_node(idx, level).expect("a node changed, held by its path");
         let keys = b.keys(b.contents());
-
-        for idx in self.path_idxs() {
-            if !self.path_at_node(paths, idx, &b) {
-                continue;
-            }
-
-            let pos = paths[idx].pos;
-            paths[idx].l[level].iter.fix_key_modified(&keys, where_, &pos);
-            self.path_verify_level(paths, idx, level);
-        }
-    }
-
-    /// # Safety
-    /// @node_iter is path @idx's iterator at @b's level, or one of the
-    /// caller's.
-    pub(crate) unsafe fn node_iter_fix(&self, paths: &mut Paths<'_>, idx: PathIdx, b: LockedNode<'_, BtreeNode>,
-                                       node_iter: *mut KeyIter, where_: u16, clobber_u64s: u16, new_u64s: u16) {
-        let level = b.c.level.get() as usize;
-        let keys = b.keys(b.contents());
-        let t = keys.bkey_to_bset(where_);
-
-        if !ptr::eq(node_iter, &paths[idx].l[level].iter) {
-            let pos = paths[idx].pos;
-            let iter = unsafe { &mut *node_iter };
-            iter.fix(&keys, b.c.level.get(), t, where_, clobber_u64s, new_u64s, &pos);
-
-            if self.verify_iterators() {
-                iter.verify(&keys);
-            }
-        }
 
         for linked in self.path_idxs() {
             if !self.path_at_node(paths, linked, &b) {
@@ -63,7 +35,25 @@ impl BtreeTrans<'_> {
             }
 
             let pos = paths[linked].pos;
-            paths[linked].l[level].iter.fix(&keys, b.c.level.get(), t, where_, clobber_u64s, new_u64s, &pos);
+            paths[linked].l[level].iter.fix_key_modified(&keys, where_, &pos);
+            self.path_verify_level(paths, linked, level);
+        }
+    }
+
+    /// The iterators of the paths at path @idx's node at @level, for @insert.
+    pub(crate) fn node_iter_fix(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, insert: KeyInsert) {
+        let b = paths.held_btree_node(idx, level).expect("a node changed, held by its path");
+        let keys = b.keys(b.contents());
+        let t = keys.bkey_to_bset(insert.where_);
+
+        for linked in self.path_idxs() {
+            if !self.path_at_node(paths, linked, &b) {
+                continue;
+            }
+
+            let pos = paths[linked].pos;
+            paths[linked].l[level].iter.fix(&keys, b.c.level.get(), t, insert.where_,
+                                             insert.clobber_u64s, insert.new_u64s, &pos);
             self.path_verify_level(paths, linked, level);
         }
     }
@@ -179,9 +169,9 @@ impl BtreeTrans<'_> {
      * them:
      */
     pub(in crate::btree) fn node_reinit_iter(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
-                                             b: LockedNode<'_, BtreeNode>) {
-        let level = b.c.level.get() as usize;
+                                             idx: PathIdx, level: usize) {
         let paths = &mut pu.paths;
+        let b = paths.held_btree_node(idx, level).expect("a node changed, held by its path");
 
         for idx in self.path_idxs() {
             if self.path_at_node(paths, idx, &b) {

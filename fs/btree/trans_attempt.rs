@@ -893,7 +893,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         trans.node_lock_write(&mut paths, idx, lvl)?;
         let mut b = paths.intent_locked_node(idx, lvl);
         let mut b = b.write_locked();
-        trans.node_prep_for_write(self, &mut paths.paths_and_updates(), &mut b);
+        trans.node_prep_for_write(self, &mut paths.paths_and_updates(), idx, &mut b);
 
         if usize::from(key.k().u64s) > b.keys_u64s_remaining(b.contents()) {
             trans.node_unlock_write(&mut paths, idx, lvl);
@@ -903,7 +903,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut node_iter = KeyIter::default();
         node_iter.init(fs, &b.keys(b.contents()), &key.k().p);
 
-        unsafe { trans.bset_insert_key(&mut paths, idx, &mut b, &mut node_iter, key.as_mut()) };
+        trans.bset_insert_key(&mut paths, idx, &mut b, &mut node_iter, key.as_mut());
 
         let set = b.contents().last_set().data_offset;
         let mut keys = b.keys_mut();

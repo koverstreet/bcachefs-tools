@@ -190,7 +190,7 @@ fn flush_one<'a>(
         trans.node_lock_write(&mut paths, iter.path, 0)?;
 
         let mut w = paths.intent_locked_node(iter.path, 0);
-        trans.node_prep_for_write(t, &mut paths.paths_and_updates(), &mut w.write_locked());
+        trans.node_prep_for_write(t, &mut paths.paths_and_updates(), iter.path, &mut w.write_locked());
         *write_locked = true;
     }
 

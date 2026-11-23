@@ -695,7 +695,7 @@ pub(crate) fn node_write_locked(trans: &BtreeTrans<'_>, b: &mut LockedNode<'_, B
  * if @b doesn't already have one. If it sorted, the paths' iterators at @b are
  * reinitialized.
  */
-pub(in crate::btree) fn init_next(t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
+pub(in crate::btree) fn init_next(t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>, idx: PathIdx,
                                              b: &mut LockedNode<'_, BtreeNode, Write>) {
     let trans = t.trans();
     let fs = trans.fs();
@@ -730,7 +730,7 @@ pub(in crate::btree) fn init_next(t: &TransAttempt<'_, '_>, pu: &mut PathsUpdate
     build_aux_trees(n, contents);
 
     if reinit_iter {
-        trans.node_reinit_iter(t, pu, b.held());
+        trans.node_reinit_iter(t, pu, idx, b.c.level.get().into());
     }
 }
 
