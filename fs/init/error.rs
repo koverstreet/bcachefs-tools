@@ -961,15 +961,9 @@ impl Fs {
 }
 
 fn panic_after_error(fs: &Fs) -> ! {
-    #[cfg(kernel)]
-    {
-        let mut msg = Printbuf::new();
-        write!(msg, "bcachefs ({}): panic after error\n", fs.name().to_str().unwrap_or("?"));
-        // SAFETY: a format, and the string it takes
-        unsafe { c::panic(c"%s".as_ptr().cast(), msg.as_c_str().as_ptr()) }
-    }
-    #[cfg(not(kernel))]
-    panic!("{}: panic after error", fs.name().to_str().unwrap_or("?"))
+    let mut msg = Printbuf::new();
+    write!(msg, "bcachefs ({}): panic after error\n", fs.name().to_str().unwrap_or("?"));
+    crate::os::kernel::panic(msg.as_c_str())
 }
 
 /// The inconsistency @msg says - in @t, whose queued updates go with it -

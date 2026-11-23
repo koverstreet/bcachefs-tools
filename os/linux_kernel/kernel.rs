@@ -9,6 +9,11 @@ pub use common::*;
 pub const PAGE_SIZE: usize = kernel::page::PAGE_SIZE;
 pub const MAX_FILE_SIZE: u64 = c::MAX_LFS_FILESIZE as u64;
 
+/// The kernel panicked, with @msg: panic().
+pub fn panic(msg: &core::ffi::CStr) -> ! {
+    unsafe { c::panic(c"%s".as_ptr().cast(), msg.as_ptr()) }
+}
+
 /// The @i'th CPU of a spread across the online CPUs, NUMA-local ones first:
 /// as cpumask_local_spread(i, NUMA_NO_NODE).
 pub fn cpumask_local_spread(i: u32) -> u32 {

@@ -8,6 +8,11 @@ pub const PAGE_SIZE: usize = 4096;
 /// A file offset is an i64.
 pub const MAX_FILE_SIZE: u64 = i64::MAX as u64;
 
+/// The kernel's panic(), as a Rust panic: the process's, with @msg.
+pub fn panic(msg: &core::ffi::CStr) -> ! {
+    panic!("{}", msg.to_string_lossy())
+}
+
 /// Userspace has no vmalloc: its is_vmalloc_addr() was a macro, 0.
 pub fn is_vmalloc_addr<T>(_p: *const T) -> bool {
     false
