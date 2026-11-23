@@ -38,6 +38,7 @@ use crate::util::ffi::c_char;
 use crate::os::kernel::READ;
 use crate::os::sched;
 use crate::os::kobject::{GroupList, KobjOwner, Kobject};
+use crate::os::module::ModuleRef;
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::percpu::PerCpu;
@@ -449,9 +450,7 @@ impl Fs {
         *self.as_mut().project().holder = Some(holder);
         self.stdio.store(opts.stdio as usize as *mut _, Relaxed);
         self.recovery_task.store(sched::current(), Relaxed);
-
-        #[cfg(kernel)]
-        unsafe { c::__module_get(&raw mut kernel::bindings::__this_module) };
+        *self.as_mut().project().module_ref = Some(ModuleRef::get());
 
         allocator_foreground_init(&self);
 
@@ -910,9 +909,10 @@ unsafe impl KobjOwner for Fs {
 
     fn release(mut this: MaybeRcuAlloc<Fs>) {
         teardown(&mut this);
+        // after teardown(): what held &Fs - its threads, its work - is gone
+        let module_ref = this.as_pin_mut().project().module_ref.take();
         drop(this);
-        #[cfg(kernel)]
-        unsafe { c::module_put(&raw mut kernel::bindings::__this_module) };
+        drop(module_ref);
     }
 }
 

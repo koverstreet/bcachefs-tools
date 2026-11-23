@@ -474,6 +474,9 @@ pub struct Fs {
     #[pin]
     #[init(None)]
     pub(crate) holder: Option<crate::util::alloc::Arc<crate::sb::io::Holder>>,
+    /* from init_early(), put by its release, after it's dropped */
+    #[init(None)]
+    pub(crate) module_ref: Option<crate::os::module::ModuleRef>,
     pub name: [c_char; 40],
 
     /// This, stdio_filter and stdio_user_only: set as a redirect attaches and

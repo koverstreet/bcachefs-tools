@@ -24,6 +24,25 @@ impl ThisModule {
     }
 }
 
+/// A ref on the module, which its unload waits out: __module_get(), put as it
+/// drops. Userspace has no modules, so it's nothing.
+pub struct ModuleRef(());
+
+impl ModuleRef {
+    pub fn get() -> Self {
+        #[cfg(kernel)]
+        unsafe { crate::c::__module_get(&raw mut kernel::bindings::__this_module) };
+        ModuleRef(())
+    }
+}
+
+impl Drop for ModuleRef {
+    fn drop(&mut self) {
+        #[cfg(kernel)]
+        unsafe { crate::c::module_put(&raw mut kernel::bindings::__this_module) };
+    }
+}
+
 impl ModuleExit {
     pub(super) const fn new() -> Self {
         ModuleExit(())
