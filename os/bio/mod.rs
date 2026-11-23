@@ -152,6 +152,17 @@ impl BioOwns for Data {
 
 pub(crate) type BioVecs<B = Data> = InlineVec<<B as BioOwns>::Bvec, BIO_INLINE_VECS, u16, BvecAlloc>;
 
+/// Room made on @vecs for @additional more bvecs, which can then be pushed
+/// without failing: past BIO_MAX_VECS there's none, as bio_add_page() fails.
+fn reserve_bvecs<V>(vecs: &mut InlineVec<V, BIO_INLINE_VECS, u16, BvecAlloc>, additional: usize)
+    -> Result<(), BchError>
+{
+    if vecs.len() + additional > c::BIO_MAX_VECS as usize {
+        return Err(c::Errcode::bio_full.into());
+    }
+    Ok(vecs.reserve(additional)?)
+}
+
 /// Where a bio's bvec table is: its own BioVecs, or another bio's - a clone's
 /// source's, init_borrowed()'s table's - read where they are now, as they
 /// move or grow. bi_io_vec is only ever where they were when the bio last
@@ -389,20 +400,22 @@ impl Bio {
             .contains(&self.op())
     }
 
-    /// @len bytes of @buf mapped, pushed onto its bvecs. Panics if there's no
-    /// room for them. For a buffer kept by other means than the bio - a
-    /// write's, by write_replicas(); a Buffer holds one.
+    /// @len bytes of @buf mapped, pushed onto its bvecs - or with no room for
+    /// them, as reserve_bvecs() says, none of it. For a buffer kept by other
+    /// means than the bio - a write's, by write_replicas(); a Buffer holds one.
     ///
     /// # Safety
     /// @buf is the allocators' - in the direct map, or vmalloc - and outlives
     /// its place in the bvecs; nothing has the bio in flight.
-    pub unsafe fn map(&mut self, buf: *mut u8, len: usize) {
+    pub unsafe fn map(&mut self, buf: *mut u8, len: usize) -> Result<(), BchError> {
         let len32 = u32::try_from(len).expect("mapping a buffer of 4G or more into a bio");
+        reserve_bvecs(&mut self.vecs, buf_nr_bvecs(buf, len))?;
         for bv in unsafe { crate::os::bio::sys::bvecs(buf, len) } {
-            self.vecs.push(bv).unwrap_or_else(|_| panic!("mapping {len} bytes into a bio: no room for its bvecs"));
+            self.vecs.push(bv).expect("a buffer's bvecs, reserved");
         }
         self.sync();
         self.raw_mut().bi_iter.bi_size += len32;
+        Ok(())
     }
 
     /// @len bytes of @folio from @offset, its last bvec. Panics if the bio's
@@ -715,27 +728,28 @@ pub unsafe trait BioOwner: BioSubmit {
     /// buffer and the read-back's; node scan's, whose node's buffer read_done
     /// swaps. A bio's buffer is otherwise the one it's made with,
     /// a Buffer. The bvecs are the owner's to replace: its bio owns nothing
-    /// there. Panics if the bio isn't a read, or hasn't the bvecs for @buf.
-    fn remap_read<'a>(&'a mut self, buf: &'a mut [u8]) -> Remapped<'a, Self, &'a mut [u8]>
+    /// there. Panics if the bio isn't a read; fails as map() does, the bio
+    /// left with no bvecs.
+    fn remap_read<'a>(&'a mut self, buf: &'a mut [u8]) -> Result<Remapped<'a, Self, &'a mut [u8]>, BchError>
     where
         Self: Sized + BioOwner<Owns = Data>,
     {
         assert_eq!(self.bio().op(), c::req_op_REQ_OP_READ, "remap_read() of a bio for another op");
         self.bio_mut().truncate_vecs(0);
         // SAFETY: @buf's borrowed as long as the mapping is
-        unsafe { self.bio_mut().map(buf.as_mut_ptr(), buf.len()) };
-        Remapped { owner: self, _buf: PhantomData }
+        unsafe { self.bio_mut().map(buf.as_mut_ptr(), buf.len())? };
+        Ok(Remapped { owner: self, _buf: PhantomData })
     }
 
-    /// Panics if the bio isn't a write, or hasn't the bvecs for @buf.
-    fn remap_write<'a>(&'a mut self, buf: &'a [u8]) -> Remapped<'a, Self, &'a [u8]>
+    /// Panics if the bio isn't a write; fails as remap_read() does.
+    fn remap_write<'a>(&'a mut self, buf: &'a [u8]) -> Result<Remapped<'a, Self, &'a [u8]>, BchError>
     where
         Self: Sized + BioOwner<Owns = Data>,
     {
         assert_eq!(self.bio().op(), c::req_op_REQ_OP_WRITE, "remap_write() of a bio for another op");
         self.bio_mut().truncate_vecs(0);
-        unsafe { self.bio_mut().map(buf.as_ptr().cast_mut(), buf.len()) };
-        Remapped { owner: self, _buf: PhantomData }
+        unsafe { self.bio_mut().map(buf.as_ptr().cast_mut(), buf.len())? };
+        Ok(Remapped { owner: self, _buf: PhantomData })
     }
 }
 

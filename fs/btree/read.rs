@@ -201,7 +201,8 @@ impl NodeRead<'_> {
         /* read_done() may have swapped the node's buffer for its sort's */
         let buf = unsafe { node_buf(&self.node, self.node.contents()) };
         let resume = Resume::queue(&fs.btree.read_complete_wq);
-        let status = self.io.remap_read(buf).submit(waiter).resume_on(resume).await;
+        let status = self.io.remap_read(buf).expect("a node's buffer, into a bio with a bvec for each of its pages")
+            .submit(waiter).resume_on(resume).await;
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         if status.is_ok() {
             maybe_corrupt(buf, self.pick.ptr.dev() as i32);

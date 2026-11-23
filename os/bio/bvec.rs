@@ -11,7 +11,7 @@
 use super::{Bio, BioOwns};
 use crate::c;
 use crate::os::folio::Folio;
-use crate::util::alloc::AllocError;
+use crate::errcode::BchError;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ptr::{self, NonNull};
@@ -95,10 +95,12 @@ impl<H: FolioHold> BioOwns for Holds<H> {
 impl<H: FolioHold> super::Typed for Holds<H> {}
 
 impl<H: FolioHold> Bio<Holds<H>> {
-    /// @v, last: grown into, from its BvecAlloc, past what it has room for.
-    pub fn push(&mut self, v: Bvec<H>) -> Result<(), AllocError> {
+    /// @v, last: grown into, from its BvecAlloc, past what it has room for -
+    /// failing as reserve_bvecs() does, @v dropped.
+    pub fn push(&mut self, v: Bvec<H>) -> Result<(), BchError> {
         let len = v.len();
-        self.vecs.push(v)?;
+        super::reserve_bvecs(&mut self.vecs, 1)?;
+        self.vecs.push(v).expect("a bvec, reserved");
         self.sync();
         self.raw_mut().bi_iter.bi_size += len;
         Ok(())

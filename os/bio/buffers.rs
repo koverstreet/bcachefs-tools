@@ -83,7 +83,7 @@ impl<'p> Bio<Pages<'p>> {
     /// # Safety
     /// @bio is room for one, not in flight.
     pub unsafe fn init_pages(bio: *mut Self, pool: &'p BouncePool, bs: u32, size: usize, gfp: Flags)
-        -> Result<(), AllocError>
+        -> Result<(), BchError>
     {
         unsafe {
             BioInPlace::own_at(bio.cast(), ptr::null_mut(), pages::nr_vecs(size), 0)?;
@@ -184,7 +184,7 @@ impl<M: MapBuf> Buffer<M> {
     pub fn fill(bio: &mut Bio, buf: M) -> Self {
         assert!(M::allows_op(bio.op()), "mapping a buffer into a bio for an op it can't serve");
         let (p, len) = buf.as_raw();
-        unsafe { bio.map(p, len) };
+        unsafe { bio.map(p, len).expect("a buffer, into a fresh bio made with room for its nr_vecs()") };
         Self(buf)
     }
 }

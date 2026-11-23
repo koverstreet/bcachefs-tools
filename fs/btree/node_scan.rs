@@ -205,7 +205,8 @@ impl<'f> DevScan<'f> {
 
         let submit_time = local_clock();
         // remapped each read: read_done swaps the node's buffer
-        let ret = bio.remap_read(buf.bytes(bytes)).submit_wait();
+        let ret = bio.remap_read(buf.bytes(bytes))
+            .expect("a node's buffer, into a bio with a bvec for each of its pages").submit_wait();
         ca.account_io_completion(c::MemberErrorType::read, submit_time, ret.is_ok());
         ret
     }

@@ -68,7 +68,7 @@ impl BioInPlace<'static> {
     /// @bio is room for a Bio, not in flight, and the bio field init() is
     /// given.
     pub unsafe fn own_at(bio: *mut c::bio, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32)
-        -> Result<Self, AllocError>
+        -> Result<Self, BchError>
     {
         unsafe { bio_init(bio.cast(), bdev, nr_vecs, opf, BvecAlloc::KMALLOC)? };
         Ok(BioInPlace(bio, PhantomData))
@@ -311,14 +311,16 @@ unsafe impl Allocator for BvecAlloc {
 
 unsafe impl Alloc for BvecAlloc {}
 
-/// Fails as @bvecs does, in the task's memalloc scope.
+/// Fails as @bvecs does, in the task's memalloc scope, or past BIO_MAX_VECS,
+/// as bvec_alloc() does: so a buffer whose bvecs it was made with room for
+/// fits.
 ///
 /// # Safety
 /// @bio is room for a Bio, not in flight.
 unsafe fn bio_init(bio: *mut Bio, bdev: *mut crate::os::blkdev::BlockDevice, nr_vecs: u16, opf: u32,
-                   bvecs: BvecAlloc) -> Result<(), AllocError> {
+                   bvecs: BvecAlloc) -> Result<(), BchError> {
     let mut vecs = BioVecs::<Data>::new_in(bvecs);
-    vecs.reserve(nr_vecs.into())?;
+    super::reserve_bvecs(&mut vecs, nr_vecs.into())?;
     unsafe {
         (&raw mut (*bio).vecs).write(vecs);
         (&raw mut (*bio).vecs_at).write(VecsAt::Own);
@@ -468,7 +470,8 @@ impl BioPool {
             opf &= !c::REQ_PREFLUSH; /* only on the first bio */
 
             unsafe {
-                Bio::from_raw_mut(bio).map(base, chunk_size);
+                Bio::from_raw_mut(bio).map(base, chunk_size)
+                    .expect("a chunk of buf_bio_bytes(), into a bio with room for its bvecs");
                 (*bio).bi_iter.bi_sector = sector;
 
                 if !tail.is_null() {
@@ -805,7 +808,7 @@ where
     unsafe {
         ::pin_init::pin_init_from_closure(move |t: *mut T| {
             let bio = bio_of(t);
-            bio_init(bio.cast(), bdev, nr_vecs, opf, bvecs).map_err(|_| BchError::from(c::ENOMEM))?;
+            bio_init(bio.cast(), bdev, nr_vecs, opf, bvecs)?;
             init_at(init(BioInPlace(bio, PhantomData)), t).inspect_err(|_| core::ptr::drop_in_place(bio.cast::<Bio>()))
         })
     }

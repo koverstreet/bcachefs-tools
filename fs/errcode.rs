@@ -661,6 +661,7 @@ xmacro! {
         (ENOMEM, ENOMEM_inode_cache_insert, 633),
         (ENOMEM, ENOMEM_btree_node_cache_insert, 634),
         (EEXIST, EEXIST_btree_node_cache_insert, 635),
+        (EINVAL, bio_full, 637),
     }
 }
 

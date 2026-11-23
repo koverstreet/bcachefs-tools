@@ -151,7 +151,10 @@ pub async fn write_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::
     assert_eq!(wbio.bio.op(), c::req_op_REQ_OP_WRITE, "write_replicas() of a bio for another op");
     assert_eq!(wbio.bio.nr_vecs(), 0, "write_replicas() of a bio with buffers mapped already");
     /* mapped while @buf's borrowed: emptied once every replica's done */
-    unsafe { wbio.as_mut().bio_mut().map(buf.as_ptr().cast_mut(), buf.len()) };
+    unsafe {
+        wbio.as_mut().bio_mut().map(buf.as_ptr().cast_mut(), buf.len())
+            .expect("a write's buffer, into a bio with room for its bvecs")
+    };
 
     stack_pin_init!(let g = Gather::<ReplicaErrs, waiter::Async>::new());
     submit_replicas(fs, wbio.as_mut(), ty, k, cas, &g);

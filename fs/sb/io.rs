@@ -1087,6 +1087,8 @@ impl c::bch_sb_bdev {
     }
 }
 
+const SB_BIO_FITS: &str = "the superblock's buffer, or the scratch, into the bio realloc() sized for the buffer";
+
 impl c::bch_sb_io {
     /// Room for a superblock of @u64s - 0, the minimum - in a buffer a power
     /// of two, at least @dev's logical block; past what its layout allows,
@@ -1242,7 +1244,7 @@ impl c::bch_sb_io {
     fn read(&mut self, dev: &c::bch_sb_bdev, sector: u64, bytes: usize) -> Result<(), BchError> {
         let (bio, buf) = self.bio(dev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META, sector);
         // bound, so the Remapped drops before the bio it borrows
-        let ret = bio.remap_read(&mut buf[..bytes]).submit_wait();
+        let ret = bio.remap_read(&mut buf[..bytes]).expect(SB_BIO_FITS).submit_wait();
         ret
     }
 
@@ -1251,7 +1253,7 @@ impl c::bch_sb_io {
         let (bio, buf) = self.bio(dev, c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA,
                                   sector);
         // as read()'s
-        let ret = bio.remap_write(&buf[..bytes]).submit_wait();
+        let ret = bio.remap_write(&buf[..bytes]).expect(SB_BIO_FITS).submit_wait();
         ret
     }
 }
@@ -2181,9 +2183,9 @@ impl<'a> SbIos<'a> {
         // waited on the gather
         unsafe {
             if f.read {
-                bio.remap_read(f.sb.scratch).submit_gathered(r)
+                bio.remap_read(f.sb.scratch).expect(SB_BIO_FITS).submit_gathered(r)
             } else {
-                bio.remap_write(&sb_buf[..bytes]).submit_gathered(r)
+                bio.remap_write(&sb_buf[..bytes]).expect(SB_BIO_FITS).submit_gathered(r)
             }
         }
     }

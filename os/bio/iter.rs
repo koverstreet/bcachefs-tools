@@ -599,7 +599,7 @@ mod tests {
         let mut buf = BioBox::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 3, 0, |bio| bio.init()).unwrap();
         for x in [&mut a[..], &mut b[..], &mut c_[..]] {
             // SAFETY: a buffer that outlives the bio, into one of its 3 bvecs
-            unsafe { buf.bio_mut().map(x.as_mut_ptr(), x.len()) };
+            unsafe { buf.bio_mut().map(x.as_mut_ptr(), x.len()).expect("a bvec of the three it has room for") };
         }
         let lens = |r: BioRange<'_>| r.into_iter().map(|s| s.len()).collect::<Vec<_>>();
         assert_eq!(lens(buf.range_all()), [8, 4, 6]);
@@ -644,7 +644,7 @@ mod tests {
         let buf = [5u8; 512];
         let mut bio = BioBox::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 1,
                                                         c::req_op_REQ_OP_WRITE, |b| b.init()).unwrap();
-        let m = bio.remap_write(&buf);
+        let m = bio.remap_write(&buf).expect("one bvec, into a bio with room for one");
         assert_eq!(m.owner.range_all().len(), 512);
         drop(m);
         assert_eq!(bio.range_all().len(), 0);

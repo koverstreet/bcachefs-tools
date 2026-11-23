@@ -83,7 +83,10 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: &c::bio, buf: *mut c
     wbio.bio_mut().set_opf(src.bi_opf);
 
     if !buf.is_null() {
-        unsafe { Bio::from_raw_mut(bio).map(buf.cast(), output_available as usize) };
+        unsafe {
+            Bio::from_raw_mut(bio).map(buf.cast(), output_available as usize)
+                .expect("a buffer, into a bio made with room for its pages")
+        };
         return bio;
     }
 
