@@ -11,7 +11,7 @@ use crate::format::{BkeyType, Btree, MetadataVersion};
 use crate::fs::{Dev, Fs};
 use crate::init::{error::{id, BkeyValidate}, passes::RecoveryPass};
 use crate::sb::errors::{FsckFlags, SbErrorId};
-use crate::util::vstructs::{Head, Unvalidated, VStructError};
+use crate::util::vstructs::{Head, Unvalidated};
 use crate::util::{log::LogMsg, Printbuf, ToText};
 use crate::{bkey_fsck_err_on, prt};
 use core::cmp::Ordering;
@@ -400,8 +400,7 @@ fn bset_key_validate(fs: &Fs, contents: &NodeContents, k: BkeySC<'_>, updated_ra
 
 fn bkey_packed_valid(fs: &Fs, b: &BtreeNode, contents: &NodeContents, i: &c::bset<Unvalidated>,
                      at: usize) -> bool {
-    let Some(Ok(k)) = i.key_at(at) else { return false };
-    let k = k.key();
+    let Some(k) = i.key_at(at) else { return false };
 
     if k.format() as u32 > c::KEY_FORMAT_CURRENT {
         return false;
@@ -478,10 +477,7 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<U
         return Ok(Key::Drop(u64s));
     }
 
-    let k = i.key_at_mut(at)
-        .expect("a key, before the end of its bset")
-        .expect("a key, its u64s checked against the bset's end")
-        .into_key_mut();
+    let k = i.key_at_mut(at).expect("a key, its u64s checked against the bset's end");
 
     if !v.writing() {
         bkey_compat(v, ks.version, ks.big_endian, k);
@@ -500,7 +496,7 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<U
     }
 
     if let Some(p) = prev {
-        let key = |at| i.key_at(at).and_then(Result::ok).expect("a key validated already").key()
+        let key = |at| i.key_at(at).expect("a key validated already")
             .cast::<FamilyVal<AllTypes>>();
         let (pk, kk) = (key(p), key(at));
 
@@ -567,8 +563,8 @@ pub fn validate_bset_keys<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, cont
     };
     let (mut at, mut prev) = (0, None);
 
-    while let Some(walk) = i.key_at(at) {
-        if btree_err_on!(v, matches!(walk, Err(VStructError::Overrun { .. })),
+    while let Some(h) = i.key_header(at) {
+        if btree_err_on!(v, at + h.u64s() * 8 > i.u64s() * 8,
                          FsckFlags::CAN_FIX,
                          ErrAt::key(i, ks.keys_at + at),
                          id::btree_node_bkey_past_bset_end,

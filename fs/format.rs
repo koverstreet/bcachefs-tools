@@ -73,10 +73,10 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by_self, from_bytes_mut,
-                            FakeFlexArray, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VStructError,
-                            ViewEntries, VstructMut, VstructRef};
-use crate::btree::bkey::{AnyKey, BkeyPHeader};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut,
+                            floored_by_self, from_bytes_mut, FakeFlexArray, Head, Unvalidated,
+                            UnvalidatedEntriesMut, Validated, ViewEntries};
+use crate::btree::bkey::{AllTypes, AnyKey, BkeyP, BkeyPHeader, FamilyVal};
 use core::mem::offset_of;
 use cstruct_macros::{bitfield, bch_enum, grown, tagged_union, unsized_vstruct, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 
@@ -1914,6 +1914,8 @@ impl bset_head {
     }
 }
 
+const KEY_OFFSET: &str = "a bset's keys start and end on a u64, and so does each";
+
 /// Validated in place: its keys walked by offset, and it shortened - its
 /// count, and the reference made over, so it still reaches all of it and
 /// nothing past. The bytes past stay what holds it's.
@@ -1927,16 +1929,14 @@ impl bset<Unvalidated> {
         &mut self.as_bytes_mut()[offset_of!(Head<bset>, start)..]
     }
 
-    /// The key at byte @at of its keys, its u64s checked against what's left:
-    /// None at their end.
-    pub fn key_at(&self, at: usize) -> Option<Result<VstructRef<'_, BkeyPHeader>, VStructError>> {
-        let keys = self.start_bytes();
-        (at < keys.len()).then(|| VstructRef::new(&keys[at..]))
+    /// The key at byte @at of its keys, if all of it is there: None at their
+    /// end, or if what's there runs past it.
+    pub fn key_at(&self, at: usize) -> Option<&BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
+        BkeyP::from_slice(cast_plain_slice(self.start_bytes().get(at..)?).expect(KEY_OFFSET))
     }
 
-    pub fn key_at_mut(&mut self, at: usize) -> Option<Result<VstructMut<'_, BkeyPHeader>, VStructError>> {
-        let keys = self.start_bytes_mut();
-        (at < keys.len()).then(|| VstructMut::new(&mut keys[at..]))
+    pub fn key_at_mut(&mut self, at: usize) -> Option<&mut BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
+        BkeyP::from_slice_mut(cast_plain_slice_mut(self.start_bytes_mut().get_mut(at..)?).expect(KEY_OFFSET))
     }
 
     /// The first word of the key at byte @at, whatever its u64s say.

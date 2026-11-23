@@ -53,7 +53,7 @@
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val, MaybeUninit};
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
 
 /// Every byte of every value initialized - no padding, and no variant that
 /// leaves some unwritten, as a None in a niche can - so a value can be
@@ -595,56 +595,6 @@ impl<'a, E: Plain + FakeDst + 'a> Iterator for VstructRefEntries<'a, E> {
             }
         }
     }
-}
-
-/// A VstructRef, mutably.
-pub struct VstructMut<'a, T, S: State = Unvalidated> {
-    bytes: &'a mut [u8],
-    _t:    PhantomData<(&'a mut T, S)>,
-}
-
-impl<T, S: State> Deref for VstructMut<'_, T, S> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        // SAFETY: as VstructRef's
-        unsafe { &*self.bytes.as_ptr().cast::<T>() }
-    }
-}
-
-impl<T, S: State> DerefMut for VstructMut<'_, T, S> {
-    fn deref_mut(&mut self) -> &mut T {
-        // SAFETY: as deref()
-        unsafe { &mut *self.bytes.as_mut_ptr().cast::<T>() }
-    }
-}
-
-impl<'a, T: Plain + FakeDst> VstructMut<'a, T> {
-    /// As VstructRef::new(), mutably.
-    pub fn new(bytes: &'a mut [u8]) -> Result<Self, VStructError> {
-        let len = checked_bytes::<T>(bytes)?;
-        Ok(Self { bytes: &mut bytes[..len], _t: PhantomData })
-    }
-}
-
-impl<T, S: State> VstructMut<'_, T, S> {
-    /// A pointer to it that reaches all its bytes: one from the &T reaches
-    /// only the header.
-    pub fn as_mut_ptr(&mut self) -> *mut T {
-        self.bytes.as_mut_ptr().cast()
-    }
-}
-
-impl<'a, T, S: State> VstructMut<'a, T, S> {
-    /// Its bytes, header and tail.
-    pub fn into_bytes(self) -> &'a mut [u8] {
-        self.bytes
-    }
-}
-
-impl<'a, T, S: State> InState for VstructMut<'a, T, S> {
-    type In<U: State> = VstructMut<'a, T, U>;
-    type State = S;
 }
 
 /// A walk over entries that knows where it is: offset() is where the entry
