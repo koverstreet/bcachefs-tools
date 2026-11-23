@@ -32,7 +32,7 @@ use crate::util::Printbuf;
 use crate::os::kernel::local_clock;
 use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};
 use crate::locking::{Locked, LockedBy};
-use crate::locking::six::{six_lock_increment_ip, six_lock_write_held, six_trylock_ip, SixHold};
+use crate::locking::six::{six_lock_increment_ip, six_trylock_ip, SixHold};
 use crate::c::SixLockType;
 use core::cmp::Ordering;
 use core::ffi::{c_int, c_ulong};
@@ -284,18 +284,12 @@ impl<'t> Paths<'t> {
         Some(unsafe { LockedNode::new(&*ptr::from_ref(b.node())) })
     }
 
-    /// held_btree_node(), of a node the path holds for intent.
-    pub(crate) fn intent_locked_node(&self, idx: PathIdx, level: usize) -> LockedNode<'t, BtreeNode, Intent> {
-        assert!(self[idx].locked_type_nowrite(level) == BTREE_NODE_INTENT_LOCKED,
-                "path {idx} doesn't hold level {level} for intent");
-        let b = self.held_btree_node(idx, level).expect("an intent locked path's node is a btree node");
-        LockedNode { node: b.node(), _mode: PhantomData }
-    }
-
     /// Path @idx's node at @level, which it holds for intent, write locked too
     /// if no one holds it for read: for as long as the guard lives.
     pub(crate) fn try_write_node(&mut self, idx: PathIdx, level: usize) -> Option<WriteLocked<'_, 't, BtreeNode>> {
-        let node = self.intent_locked_node(idx, level).node();
+        assert!(self[idx].locked_type_nowrite(level) == BTREE_NODE_INTENT_LOCKED,
+                "path {idx} doesn't hold level {level} for intent");
+        let node = self.held_btree_node(idx, level).expect("an intent locked path's node is a btree node").node();
         six_trylock_ip(node.c.lock.six(), SixLockType::SIX_LOCK_write, crate::ret_ip!())
             .then(|| WriteLocked { node: LockedNode { node, _mode: PhantomData }, paths: self })
     }
@@ -1689,17 +1683,15 @@ impl PathNodeContents for c::bkey_cached {
     }
 }
 
-/// How a LockedNode's node is held: Held any way, its contents had by &;
-/// Intent, as a path level holds it; or for Write, its contents by &mut.
+/// How a LockedNode's node is held: Held any way, its contents had by &; or
+/// for Write, its contents by &mut.
 pub struct Held;
-pub struct Intent;
 pub struct Write;
 
 /// A node a path has locked, borrowed from the attempt as a key is: good until
 /// the attempt's next unlock or error, which nothing checks (see TransRef).
-// XXX: nor does anything stop two Intents of one node, and so two Writes: the
-// path table's getters hand them out for the attempt, as the writes under them
-// need the table
+// XXX: a Write is borrowed from its path mutably, but a Held view for the
+// attempt, from held_btree_node(), can still be beside one of the same node
 // XXX: node() is the view's lifetime, though a btree node lives as long as its
 // Fs: with the Fs's lifetime there, a view wouldn't be held for the attempt
 // only for the node's identity and flags (the key cache's flush and drop)
@@ -1749,16 +1741,6 @@ impl<'p, T: PathNode> LockedNode<'p, T, Write> {
         T: PathNodeContents,
     {
         unsafe { self.node.locked_contents().protected_mut() }
-    }
-}
-
-impl<T: PathNode> LockedNode<'_, T, Intent> {
-    /// Write, as the transaction holds it write locked too - node_lock_write()'s,
-    /// through this path or another at the node: an update to a leaf another
-    /// update's path locked - for as long as this is borrowed.
-    pub fn write_locked(&mut self) -> LockedNode<'_, T, Write> {
-        assert!(six_lock_write_held(self.node.common().lock.six()), "a node held for intent isn't write locked");
-        LockedNode { node: self.node, _mode: PhantomData }
     }
 }
 
