@@ -8,9 +8,10 @@
 //! heap it's a DstVec, a pointer, its low bit clear; inline, that word's low
 //! bytes are an @L holding the length shifted up past a set low bit, and the
 //! elements follow. So an inline length is at most @L's half, and N may be no
-//! more. Spilling is a DstVec's allocation, and fallible - an AllocError,
-//! where darray_make_room() is -ENOMEM. Once on the heap it stays there:
-//! shrinking back would move the elements again for nothing.
+//! more. Spilling is a DstVec's allocation, from @A - kept beside the union
+//! for the first, and in the DstVec after - and fallible: an AllocError, where
+//! darray_make_room() is -ENOMEM. Once on the heap it stays there: shrinking
+//! back would move the elements again for nothing.
 //!
 //! Its elements are a slice, Deref'd: the slice's methods - iteration,
 //! indexing, sort_unstable - are its. Growing it is reserve(), push() and
@@ -25,7 +26,7 @@
 use crate::data_structures::array_vec::LenUint;
 use crate::data_structures::dst_array::assert_rcu_freed;
 use crate::data_structures::dst_vec::{DstVec, DstVecHead};
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{Alloc, AllocError, KVmalloc};
 use crate::util::rcu;
 use core::mem::{offset_of, ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
@@ -33,14 +34,15 @@ use core::ptr;
 use core::slice;
 use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Release}};
 
-#[repr(transparent)]
-pub struct InlineVec<T, const N: usize, L: LenUint = u32> {
-    repr: Repr<T, N, L>,
+#[repr(C)]
+pub struct InlineVec<T, const N: usize, L: LenUint = u32, A: Alloc + Copy = KVmalloc> {
+    repr:  Repr<T, N, L, A>,
+    alloc: A,
 }
 
 #[repr(C)]
-union Repr<T, const N: usize, L: LenUint> {
-    heap: ManuallyDrop<DstVec<T, L>>,
+union Repr<T, const N: usize, L: LenUint, A: Alloc + Copy> {
+    heap: ManuallyDrop<DstVec<T, L, A>>,
     inline: ManuallyDrop<Inline<T, N, L>>,
 }
 
@@ -52,15 +54,12 @@ struct Inline<T, const N: usize, L: LenUint> {
     elems: [MaybeUninit<T>; N],
 }
 
-unsafe impl<T: Send, const N: usize, L: LenUint> Send for InlineVec<T, N, L> {}
-unsafe impl<T: Sync, const N: usize, L: LenUint> Sync for InlineVec<T, N, L> {}
+unsafe impl<T: Send, const N: usize, L: LenUint, A: Alloc + Copy + Send> Send for InlineVec<T, N, L, A> {}
+unsafe impl<T: Sync, const N: usize, L: LenUint, A: Alloc + Copy + Sync> Sync for InlineVec<T, N, L, A> {}
 
 impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
     pub const fn new() -> Self {
-        const { assert!(N <= L::MAX >> 1, "InlineVec: its inline capacity doesn't fit its length type") };
-
-        let inline = Inline { pad: L::WORD_PAD, tag: L::ONE, elems: [const { MaybeUninit::uninit() }; N] };
-        Self { repr: Repr { inline: ManuallyDrop::new(inline) } }
+        Self::new_in(KVmalloc)
     }
 
     /// new(), its inline room zeroes: so what an RCU reader may see before
@@ -73,7 +72,17 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
         const { assert!(N <= L::MAX >> 1, "InlineVec: its inline capacity doesn't fit its length type") };
 
         let inline = Inline { pad: L::WORD_PAD, tag: L::ONE, elems: [const { MaybeUninit::zeroed() }; N] };
-        Self { repr: Repr { inline: ManuallyDrop::new(inline) } }
+        Self { repr: Repr { inline: ManuallyDrop::new(inline) }, alloc: KVmalloc }
+    }
+}
+
+impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
+    /// new(), spilling into what @alloc gives.
+    pub const fn new_in(alloc: A) -> Self {
+        const { assert!(N <= L::MAX >> 1, "InlineVec: its inline capacity doesn't fit its length type") };
+
+        let inline = Inline { pad: L::WORD_PAD, tag: L::ONE, elems: [const { MaybeUninit::uninit() }; N] };
+        Self { repr: Repr { inline: ManuallyDrop::new(inline) }, alloc }
     }
 
     /// Whether its elements are on the heap.
@@ -94,6 +103,16 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
         if self.spilled() { unsafe { self.repr.heap.capacity() } } else { N }
     }
 
+    /// Where its elements are, all capacity() of them: for what writes them
+    /// in place, the length its own - C's.
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        if self.spilled() {
+            unsafe { (*self.repr.heap).as_mut_ptr() }
+        } else {
+            unsafe { (*self.repr.inline).elems.as_mut_ptr().cast() }
+        }
+    }
+
     /// # Safety
     /// It isn't spilled; the first @len are initialized, and @len is at most N.
     unsafe fn set_inline_len(&mut self, len: usize) {
@@ -106,7 +125,7 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
             return Err(AllocError);
         }
         let len = self.len();
-        let mut heap = DstVec::with_capacity(cap.max(N.saturating_mul(2)).min(L::MAX))?;
+        let mut heap = DstVec::with_capacity_in(cap.max(N.saturating_mul(2)).min(L::MAX), self.alloc)?;
         unsafe {
             ptr::copy_nonoverlapping(self.repr.inline.elems.as_ptr().cast(), heap.as_mut_ptr(), len);
             heap.set_len(len);
@@ -118,15 +137,15 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
     /// @heap where its elements are now: the first word alone written, by a
     /// release - an RCU reader may be in the elements it had, and has to see
     /// what was copied into @heap once it sees @heap.
-    fn set_heap(&mut self, heap: DstVec<T, L>) {
-        let word = unsafe { AtomicPtr::from_ptr((&raw mut self.repr.heap).cast::<*mut DstVecHead<L>>()) };
+    fn set_heap(&mut self, heap: DstVec<T, L, A>) {
+        let word = unsafe { AtomicPtr::from_ptr((&raw mut self.repr.heap).cast::<*mut DstVecHead<L, A>>()) };
         word.store(heap.into_raw().as_ptr(), Release);
     }
 
     /// Its elements moved into @into, if it has more room - allocated before,
     /// as under a spinlock it must be - and what they were in freed, as they
     /// say; else @into back.
-    pub fn grow_into(&mut self, mut into: DstVec<T, L>) -> Result<(), DstVec<T, L>> {
+    pub fn grow_into(&mut self, mut into: DstVec<T, L, A>) -> Result<(), DstVec<T, L, A>> {
         let len = self.len();
         if into.capacity() <= self.capacity() || !into.is_empty() {
             return Err(into);
@@ -166,8 +185,8 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
             if tag & 1 != 0 {
                 slice::from_raw_parts((&raw const (*inline).elems).cast::<T>(), tag >> 1)
             } else {
-                let word = AtomicPtr::from_ptr((&raw const (*v).repr.heap).cast::<*mut DstVecHead<L>>().cast_mut());
-                DstVec::<T, L>::read_rcu(word.load(Acquire))
+                let word = AtomicPtr::from_ptr((&raw const (*v).repr.heap).cast::<*mut DstVecHead<L, A>>().cast_mut());
+                DstVec::<T, L, A>::read_rcu(word.load(Acquire))
             }
         }
     }
@@ -246,7 +265,7 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
     }
 }
 
-impl<T, const N: usize, L: LenUint> Drop for InlineVec<T, N, L> {
+impl<T, const N: usize, L: LenUint, A: Alloc + Copy> Drop for InlineVec<T, N, L, A> {
     fn drop(&mut self) {
         if self.spilled() {
             unsafe { ManuallyDrop::drop(&mut self.repr.heap) };
@@ -262,7 +281,7 @@ impl<T, const N: usize, L: LenUint> Default for InlineVec<T, N, L> {
     }
 }
 
-impl<T, const N: usize, L: LenUint> Deref for InlineVec<T, N, L> {
+impl<T, const N: usize, L: LenUint, A: Alloc + Copy> Deref for InlineVec<T, N, L, A> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
@@ -274,7 +293,7 @@ impl<T, const N: usize, L: LenUint> Deref for InlineVec<T, N, L> {
     }
 }
 
-impl<T, const N: usize, L: LenUint> DerefMut for InlineVec<T, N, L> {
+impl<T, const N: usize, L: LenUint, A: Alloc + Copy> DerefMut for InlineVec<T, N, L, A> {
     fn deref_mut(&mut self) -> &mut [T] {
         let len = self.len();
         if self.spilled() {

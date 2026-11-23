@@ -63,7 +63,7 @@ use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::repair::{stripe_repair, StripeRepair};
-use crate::data::moving::{key_sectors, IoMark, MoveStats, MovingCtxt};
+use crate::data::moving::{key_sectors, target_has_rotational, IoMark, MoveStats, MovingCtxt, RotationalLimit};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::plan::{move_err_parks, park, pending_mod, plan, ParkReason, Plan};
@@ -479,6 +479,7 @@ impl<'a, 'f> Walker<'a, 'f> {
            k: BkeySC<'_>, read_dev: Option<u32>) -> Result<Moved, BchError>
     {
         let ctxt = self.ctxt;
+        ctxt.reset_limits();
         if k.k.key_type() == BkeyType::stripe {
             return reconcile_stripe(ctxt, t, k, Some(&mut self.retry)).map(|()| None);
         }
@@ -514,6 +515,13 @@ impl<'a, 'f> Walker<'a, 'f> {
         if let Some(dev) = read_dev {
             d.read_dev = dev;
             d.read_flags = c::ReadFlags::soft_require_read_device;
+        }
+        if read_dev.is_some_and(|dev| fs.dev_rotational(dev)) || target_has_rotational(fs, d.target.into()) {
+            ctxt.set_rotational_limits(if matches!(work.btree, Btree::reconcile_hipri | Btree::reconcile_hipri_phys) {
+                RotationalLimit::Hipri
+            } else {
+                RotationalLimit::Background
+            });
         }
 
         if work.btree == Btree::reconcile_pending {

@@ -92,6 +92,13 @@ pub fn key_sectors(fs: &Fs, k: BkeySC<'_>) -> u64 {
     if k.k.is_btree_ptr() { fs.btree_sectors().into() } else { k.k.size.into() }
 }
 
+/// Whether @target, as data_update_opts has it, has a rotational device a
+/// write could go to.
+pub(crate) fn target_has_rotational(fs: &Fs, target: u32) -> bool {
+    let devs = fs.target_rw_devs(DataType::user, crate::alloc::disk_groups::Target::decode(target));
+    devs.d.iter().any(|i| fs.dev_rotational(i as u32))
+}
+
 /// A point in a context's IO: io_done() says whether everything issued
 /// before it has completed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,7 +123,9 @@ pub struct InFlightUpdate {
  *  - write_sectors/write_ios: then -> write completion
  *
  * Moving::ratelimit() blocks the caller until all counters are below
- * c->opts.move_bytes_in_flight / move_ios_in_flight.
+ * c->opts.move_bytes_in_flight / move_ios_in_flight - or, for moves to or
+ * from rotational devices, the smaller windows of set_rotational_limits():
+ * a hard drive's throughput is lost to seeking between many moves in flight.
  *
  * Moves (Moving::move_extent()) and stripe repairs (ec/repair.rs)
  * both account through these counters.
@@ -137,6 +146,8 @@ pub struct MovingContext {
     in_flight:      Gather<(), waiter::Sync>,
 
     io:             IoCounts,
+    /* Its window's caps for rotational devices: the mover's thread's alone */
+    rotational:     Cell<RotationalCaps>,
 
     /*
      * Its updates' tasks, run in its waits - data/moving_update.rs - whose
@@ -151,6 +162,32 @@ pub struct MovingContext {
      */
     updates:        UnsafeCell<Fifo<InFlightUpdate, u64>>,
     write_next:     Cell<u64>,
+}
+
+/// How much a mover's moves to or from rotational devices have in flight at a
+/// time, on top of the filesystem's limits: 0 is no cap.
+#[derive(Clone, Copy, Default)]
+pub struct RotationalCaps {
+    sectors: u32,
+    ios:     u32,
+}
+
+/// A rotational device's window, by how urgent its work is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RotationalLimit {
+    /// Background work: the tightest, for the least seeking
+    Background,
+    /// Work reconcile's hipri btrees found
+    Hipri,
+}
+
+impl RotationalLimit {
+    fn caps(self) -> RotationalCaps {
+        match self {
+            Self::Background => RotationalCaps { sectors: (1 << 20) >> 9,  ios: 8 },
+            Self::Hipri      => RotationalCaps { sectors: (16 << 20) >> 9, ios: 128 },
+        }
+    }
 }
 
 /* In flight: what ratelimit() throttles on, and flush_all() waits out */
@@ -242,6 +279,7 @@ impl<'a> MovingCtxt<'a> {
             wait_on_copygc,
             in_flight <- Gather::new(),
             io:             Default::default(),
+            rotational:     Cell::new(RotationalCaps::default()),
             runq:           pin_init::zeroed(),
             updates:        UnsafeCell::new(Fifo::new()),
             write_next:     Cell::new(0),
@@ -298,6 +336,27 @@ impl<'a> Moving<'a> {
 
     pub(crate) fn io(&self) -> &IoCounts {
         &self.0.io
+    }
+
+    /// Moves from here on limited by the filesystem's windows alone, for work
+    /// that isn't on rotational devices.
+    pub fn reset_limits(&self) {
+        self.0.rotational.set(RotationalCaps::default());
+    }
+
+    /// Moves from here on limited to @limit's window as well, for work to or
+    /// from a rotational device.
+    pub fn set_rotational_limits(&self, limit: RotationalLimit) {
+        self.0.rotational.set(limit.caps());
+    }
+
+    /// Its caps, for a caller to put back with restore_limits().
+    pub(crate) fn limits(&self) -> RotationalCaps {
+        self.0.rotational.get()
+    }
+
+    pub(crate) fn restore_limits(&self, caps: RotationalCaps) {
+        self.0.rotational.set(caps);
     }
 
     pub(crate) fn write_point(&self) -> c::write_point_specifier {
@@ -391,10 +450,11 @@ impl<'a> Moving<'a> {
             Kthread::try_to_freeze();
         }
 
-        // XXX: these limits really ought to be per device, SSDs and hard
-        // drives will want different limits
         let opts = fs.opts();
-        let (sectors, ios) = (opts.move_bytes_in_flight.get() >> 9, opts.move_ios_in_flight.get());
+        let caps = self.0.rotational.get();
+        let cap = |n: u32| if n != 0 { n } else { u32::MAX };
+        let sectors = (opts.move_bytes_in_flight.get() >> 9).min(cap(caps.sectors));
+        let ios = opts.move_ios_in_flight.get().min(cap(caps.ios));
         // compared unsigned, so a count gone negative is over the limit
         let under = |n: &core::sync::atomic::AtomicI32, max: u32| (n.load(Relaxed) as u32) < max;
         let io = self.io();
@@ -466,7 +526,7 @@ impl<'a> Moving<'a> {
     }
 }
 
-impl c::data_update {
+impl c::data_update_index {
     /// The moving context the update is in flight in, if it's a mover's.
     pub(crate) fn moving(&self) -> Option<&Moving<'_>> {
         // SAFETY: an update is in flight in its context from init() to exit(),

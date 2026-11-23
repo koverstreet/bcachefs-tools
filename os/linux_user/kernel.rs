@@ -84,11 +84,6 @@ pub fn jiffies() -> core::ffi::c_ulong {
     nsecs_to_jiffies(local_clock())
 }
 
-/// What this task has run, as of @now: 0, with no scheduler to say.
-pub fn current_runtime(_now: u64) -> u64 {
-    0
-}
-
 /// A number identifying this thread while it lives, for hashing by task.
 pub fn current_id() -> usize {
     std::thread_local!(static ME: u8 = const { 0 });

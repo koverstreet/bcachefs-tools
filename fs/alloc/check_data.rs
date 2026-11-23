@@ -40,7 +40,7 @@ use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
 use crate::util::alloc::Flags;
-use crate::util::bio::{io_buf, Bio, BioBox, BioBuffersMapped, BioOwner};
+use crate::util::bio::{io_buf, Bio, BioBox, BioOwner, Buffer};
 use crate::util::vstructs::assume_init_ref;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
@@ -151,8 +151,9 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     };
     let buf = io_buf(bytes, Flags::empty()).map_err(|_| BchError::from(c::ENOMEM))?;
 
-    let mut bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
-        ca.disk_sb.bdev, c::req_op_REQ_OP_READ as u32, buf, |b| b.init())?;
+    let mut bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
+        ca.disk_sb.bdev, Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ as u32,
+        |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
     bio.bio_mut().set_sector(p.ptr.offset());
     bio.submit_wait()?;
     // the read's

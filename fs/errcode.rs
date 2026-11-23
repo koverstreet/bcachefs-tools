@@ -154,6 +154,7 @@ xmacro! {
         (ENOMEM, ENOMEM_btree_cache_cannibalize_lock, 87),
         (ENOMEM, ENOMEM_set_nr_journal_buckets, 88),
         (ENOMEM, ENOMEM_dev_journal_init, 89),
+        (ENOMEM, ENOMEM_dev_write_clones_init, 636),
         (ENOMEM, ENOMEM_journal_pin_fifo, 90),
         (ENOMEM, ENOMEM_journal_buf, 91),
         (ENOMEM, ENOMEM_gc_start, 92),

@@ -456,6 +456,9 @@ pub struct Mapping<A = Any>(NonNull<c::address_space>, PhantomData<fn() -> A>);
 // Not derived: that would bound A
 impl<A> Clone for Mapping<A> { fn clone(&self) -> Self { *self } }
 impl<A> Copy for Mapping<A> {}
+// the page cache is any thread's to use; what it hands out is A's
+unsafe impl<A: Sync> Send for Mapping<A> {}
+unsafe impl<A: Sync> Sync for Mapping<A> {}
 impl<A> PartialEq for Mapping<A> { fn eq(&self, other: &Self) -> bool { self.0 == other.0 } }
 impl<A> Eq for Mapping<A> {}
 impl<A> PartialOrd for Mapping<A> { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }

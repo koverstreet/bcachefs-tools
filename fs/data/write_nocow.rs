@@ -3,24 +3,24 @@
 //! The write path's in place writes, over extents that allow them: nocow.
 
 use crate::btree::bkey::prelude::*;
-use crate::util::alloc::Flags;
 use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
+use crate::journal::flush_wait::Flush;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
-use crate::data::write::{index_update_wq, to_wbio, wbio_init, submit_wbio_replicas, write_done,
-                         write_endio, write_op_error, DevWriteRef};
+use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, WriteFor};
+use crate::data::write_replicas::{InFlight, ReplicaErrs};
+use crate::data_structures::array_vec::ArrayVec;
+use crate::util::bio::{Bio, BioRange};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::format::{Btree, DataType, BkeyType};
-use crate::journal::flush_wait::Flush;
 use crate::snapshots::subvolume;
-use crate::util::closure::Running;
-use crate::util::task::Unarmed;
 use crate::os::kernel::unlikely;
 use crate::util::rcu::read_lock;
+use crate::util::task::Resume;
 use crate::{btree_trans, fs_inconsistent, inode};
 use c::WriteFlags as w;
 use core::ops::ControlFlow;
@@ -87,7 +87,7 @@ fn nocow_write_convert_one_unwritten<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeI
     t.update(iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)
 }
 
-fn nocow_write_convert_unwritten(op: &mut Op) {
+fn nocow_write_convert_unwritten(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
 
     let ret = {
@@ -103,11 +103,10 @@ fn nocow_write_convert_unwritten(op: &mut Op) {
             let mut iter = BtreeIter::new(&trans, Btree::extents, orig.k().start_pos(),
                                           BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
             iter.for_each_max(&trans, orig.k().p, |t, iter, k| {
-                let flush = op.has(w::flush) && is_last && bkey_ge(k.k.p, orig.k().p);
+                let flush = flush.as_deref_mut().filter(|_| is_last && bkey_ge(k.k.p, orig.k().p));
 
                 nocow_write_convert_one_unwritten(t, iter, op, orig, k)?;
-                let mut f = flush.then(|| unsafe { Flush::new(&op.flush_entry, Unarmed::for_closure(&op.cl)) });
-                t.commit_flush(Some(&op.res), Some(&mut f), CommitFlags::NO_ENOSPC)?;
+                t.commit_flush(Some(&op.res), flush, CommitFlags::NO_ENOSPC)?;
                 Ok(ControlFlow::<()>::Continue(()))
             }).map(|_| ())
         })
@@ -116,23 +115,19 @@ fn nocow_write_convert_unwritten(op: &mut Op) {
     if let Err(e) = ret {
         if !e.matches(c::EROFS) {
             let insert = op.insert_keys.front().expect("keys left by an index update's error");
-            write_op_error(op, insert.k().start_offset(), format_args!("btree update error: {e}"));
+            write_op_error(op, None, insert.k().start_offset(), format_args!("btree update error: {e}"));
         }
         op.set_error(e);
     }
 }
 
-fn __nocow_write_done(op: &mut Op) {
+/// With w::flush, the last asking for the write's journal flush.
+fn nocow_write_done(op: &mut Op, flush: Option<&mut Option<Flush<'_>>>) {
     if unlikely(op.io_error != 0) {
         op.set_error(op.fs().err(Errcode::data_write_io));
     } else if unlikely(op.has(w::convert_unwritten)) {
-        nocow_write_convert_unwritten(op);
+        nocow_write_convert_unwritten(op, flush.filter(|_| op.has(w::submitted)));
     }
-}
-
-extern "C" fn nocow_write_done(mut op: Running<Op>) {
-    __nocow_write_done(&mut op);
-    write_done(op);
 }
 
 /*
@@ -164,10 +159,25 @@ fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) ->
     })
 }
 
-/// The op's bio written in place, as much as its extents allow, in @t: the
-/// pointers overwritten written, each bio submitted, and the keys to convert
-/// from unwritten on the keylist. Stops, falling back, at what can't be.
-fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<(), BchError> {
+/// An extent written in place: its part of the op's data, the key it
+/// overwrites, and an io ref for each of its pointers, its buckets locked.
+struct NocowExtent<'a> {
+    data: BioRange<'a>,
+    k:    DstRoom<BkeyI, [u64; c::BKEY_EXTENT_U64s_MAX as usize]>,
+    cas:  [Option<DevWriteRef>; c::BCH_BKEY_PTRS_MAX as usize],
+    nr:   usize,
+}
+
+type NocowExtents<'a> = ArrayVec<NocowExtent<'a>, { c::BCH_BKEY_PTRS_MAX as usize }>;
+
+/// The write's data - @data, a position in its bio, advanced past what's
+/// done - written in place, as much as its extents allow, in @t: each extent
+/// to write in @extents, its buckets locked, and the keys to convert from
+/// unwritten on the keylist. Stops, falling back, at what can't be - or,
+/// true, for another pass, with as many as @extents holds.
+fn nocow_write_submit<'a>(t: &TransAttempt<'_, '_>, op: &mut Op, data: &mut BioRange<'a>,
+                          extents: &mut NocowExtents<'a>) -> Result<bool, BchError>
+{
     let fs = t.fs();
 
     let snapshot = subvolume::get_snapshot(t, op.subvol)?;
@@ -181,18 +191,18 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
     let mut iter = BtreeIter::new(t, Btree::extents, spos(op.pos.inode, op.pos.offset, snapshot),
                                   BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM);
     loop {
-        let sectors = u64::from(op.wbio.bio.range().len() >> 9);
+        let sectors = u64::from(data.len() >> 9);
 
         t.relock()?;
 
         iter.set_pos(spos(op.pos.inode, op.pos.offset, snapshot));
         let Some(k) = iter.peek_slot_max(t, pos(op.pos.inode, op.pos.offset + sectors))? else {
-            return Ok(());
+            return Ok(false);
         };
 
         /* fall back to normal cow write path? */
         if unlikely(k.k.p.snapshot != snapshot || !extent_is_writeable(op, k)) {
-            return Ok(());
+            return Ok(false);
         }
 
         /*
@@ -202,19 +212,19 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
          */
         if k.k.p.offset < op.pos.offset + sectors &&
            (k.k.p.offset - op.pos.offset) & (u64::from(fs.block_sectors()) - 1) != 0 {
-            return Ok(());
+            return Ok(false);
         }
 
         if op.insert_keys.reserve(k.k.u64s.into()).is_err() {
-            return Ok(());
+            return Ok(false);
         }
 
         /* Get iorefs before dropping btree locks: */
-        let mut cas = [const { None }; c::BCH_BKEY_PTRS_MAX as usize];
-        let Some(nr_cas) = bkey_get_dev_iorefs(fs, k.arm::<Ptrs>().expect("a writeable extent"), &mut cas) else {
-            return Ok(());
+        let mut refs = [const { None }; c::BCH_BKEY_PTRS_MAX as usize];
+        let Some(nr_cas) = bkey_get_dev_iorefs(fs, k.arm::<Ptrs>().expect("a writeable extent"), &mut refs) else {
+            return Ok(false);
         };
-        let cas = &mut cas[..nr_cas];
+        let cas = &refs[..nr_cas];
         let devs: [Option<&Dev>; c::BCH_BKEY_PTRS_MAX as usize] =
             core::array::from_fn(|i| cas.get(i).and_then(Option::as_deref));
         let devs = &devs[..nr_cas];
@@ -222,7 +232,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
         /* Unlock before taking nocow locks, doing IO: */
         let mut copy = DstRoom::<BkeyI, [u64; c::BKEY_EXTENT_U64s_MAX as usize]>::default();
         if copy.reassemble(k).is_err() {
-            return Ok(());
+            return Ok(false);
         }
         let k = BkeySC::from(&*copy);
 
@@ -262,88 +272,105 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
             }
         }
 
-        let bio: *mut c::bio = if k.k.p.offset < op.pos.offset + sectors {
-            unsafe {
-                let bio = fs.bio_write.split(op.wbio.bio_mut().raw_mut(), (k.k.p.offset - op.pos.offset) as u32,
-                                             Flags::empty());
-                wbio_init::<c::DevWriteRefKind>(bio).wbio.bits.set_put_bio(1);
-                (*bio).bi_opf = op.wbio.bio.raw().bi_opf;
-                bio
-            }
+        let bytes = if k.k.p.offset < op.pos.offset + sectors {
+            ((k.k.p.offset - op.pos.offset) as u32) << 9
         } else {
             op.set(w::submitted);
-            op.wbio.bio_mut().raw_mut()
+            data.len()
         };
+        let range = data.take(bytes);
+        data.advance(bytes);
 
-        let bio = unsafe { &mut *bio };
-        let bio_sectors = bio.bi_iter.bi_size >> 9;
-        op.pos.offset += u64::from(bio_sectors);
-        op.written += bio_sectors;
-
-        bio.bi_end_io  = Some(write_endio);
-        bio.bi_private = op.closure().into_ref().as_ptr().cast();
-        bio.bi_opf    |= c::req_op_REQ_OP_WRITE;
-        if op.has(w::flush) {
-            bio.bi_opf |= c::REQ_FUA;
-        }
-
-        op.closure().get().leak();
-
-        unsafe { submit_wbio_replicas(to_wbio::<c::DevWriteRefKind>(bio), op.fs(), DataType::user, &*copy, Some(cas)) };
+        op.pos.offset += u64::from(bytes >> 9);
+        op.written += bytes >> 9;
 
         if op.has(w::convert_unwritten) {
             op.insert_keys.push_key(&copy);
         }
+
+        extents.push(NocowExtent { data: range, k: copy, cas: refs, nr: nr_cas });
+
         if op.has(w::submitted) {
-            return Ok(());
+            return Ok(false);
+        }
+        if extents.is_full() {
+            return Ok(true);
         }
     }
 }
 
-/// The op written in place - Ok, its closure's continued - or, where it
-/// can't be, given back for the cow write path.
-///
-/// Not inlined: in __write() its locals were 1.5K of a 2K frame, on every
-/// cow write too.
-#[inline(never)]
-pub(crate) fn nocow_write(mut op: Running<Op>) -> Result<(), Running<Op>> {
-    let fs = op.fs();
+/// A pass of the op's in-place write, as write_pass() is of a cow write's:
+/// its extents, from @data, a position in its bio, written - true if it
+/// stopped with @extents full, for the next pass to go on from. What waiting
+/// it does is resumed @at.
+async fn nocow_write_pass<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32, at: Resume<'_>)
+    -> (bool, ReplicaErrs)
+{
+    let mut extents = NocowExtents::new();
+    let ret = {
+        let trans = btree_trans!(op.fs());
+        lockrestart_do(&trans, |t| nocow_write_submit(t, op, data, &mut extents))
+    };
+    // its transaction gone first: the error's message has one of its own
+    let more = ret.unwrap_or_else(|e| {
+        write_op_error(op, None, op.pos.offset, format_args!("bch2_nocow_write(): btree lookup error: {e}"));
+        op.set_error(e);
+        op.set(w::submitted);
+        false
+    });
 
+    /* what was taken before an error is written still: its buckets are locked */
+    let mut opf = opf | c::req_op_REQ_OP_WRITE;
+    if op.has(w::flush) {
+        opf |= c::REQ_FUA;
+    }
+    let mut io = InFlight::new(op.fs());
+    for e in extents.iter_mut() {
+        io.submit::<c::DevWriteRefKind>(e.data, opf, DataType::user, &e.k, Some(&mut e.cas[..e.nr]), at).await;
+    }
+    (more, io.wait(at).await)
+}
+
+/// The op written in place, a pass at a time: true - or, where it can't be,
+/// false, for the cow write path to write the rest. @in_caller cleared once
+/// it's waited for IO.
+pub(crate) async fn nocow_write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>,
+                                mut flush: Option<&mut Option<Flush<'_>>>, in_caller: &mut bool) -> bool
+{
     if op.has(w::update) {
-        return Err(op);
+        return false;
     }
 
     op.clear(w::convert_unwritten);
 
-    let ret = {
-        let trans = btree_trans!(fs);
-        lockrestart_do(&trans, |t| nocow_write_submit(t, &mut op))
-    };
-
-    if let Err(e) = ret {
-        write_op_error(&op, op.pos.offset, format_args!("bch2_nocow_write(): btree lookup error: {e}"));
-        op.set_error(e);
-        op.set(w::submitted);
-    }
-
-    if !op.has(w::submitted) {
-        /* fallback to cow write path */
-        op.sync();
-        __nocow_write_done(&mut op);
-        op.insert_keys.clear();
-        Err(op)
-    } else if op.has(w::sync) {
-        op.sync();
-        nocow_write_done(op);
-        Ok(())
-    } else {
+    loop {
         /*
          * XXX
          * needs to run out of process context because ei_quota_lock is
          * a mutex
          */
-        let wq = index_update_wq(&op);
-        op.continue_at(nocow_write_done, Some(wq));
-        Ok(())
+        let at = Resume::queue(index_update_wq(op));
+        let (more, errs, pos) = {
+            let (mut data, opf) = (wbio.range(), wbio.raw().bi_opf);
+            let (more, errs) = nocow_write_pass(op, &mut data, opf, at).await;
+            (more, errs, data.pos())
+        };
+        wbio.raw_mut().bi_iter = pos;
+        errs.record(op, of);
+        if op.written != 0 {
+            *in_caller = false;
+        }
+
+        nocow_write_done(op, flush.as_deref_mut());
+
+        if op.has(w::submitted) {
+            return true;
+        }
+
+        op.insert_keys.clear();
+        if !more {
+            /* fallback to cow write path */
+            return false;
+        }
     }
 }
