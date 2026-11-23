@@ -189,7 +189,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut paths = trans.paths();
 
         trans.node_lock_write_nofail(&mut paths, iter.path, level);
-        paths.write_locked_node(iter.path, level).contents_mut().set_key(key.as_sc());
+        paths.intent_locked_node(iter.path, level).write_locked().contents_mut().set_key(key.as_sc());
         trans.node_unlock_write(&mut paths, iter.path, level);
     }
 }

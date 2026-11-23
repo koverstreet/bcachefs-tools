@@ -119,8 +119,8 @@ impl BtreeTrans<'_> {
             }
 
             if !i.cached() {
-                let mut b = pu.paths.write_locked_node(i.path, i.level().into());
-                self.node_prep_for_write(t, &mut pu, &mut b);
+                let mut b = pu.paths.intent_locked_node(i.path, i.level().into());
+                self.node_prep_for_write(t, &mut pu, &mut b.write_locked());
             }
         }
 
@@ -216,7 +216,8 @@ impl BtreeTrans<'_> {
                 }
             };
 
-            let mut ck = paths.write_locked_key_cached(path);
+            let mut ck = paths.intent_locked_key_cached(path);
+            let mut ck = ck.write_locked();
             let old_k = ck.contents().key();
             new_k.set_key(old_k);
             let (old_v, new_v) = ((&raw const old_k.v).cast(), (&raw const new_k.v).cast());

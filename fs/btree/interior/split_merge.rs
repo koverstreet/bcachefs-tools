@@ -692,7 +692,8 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     }
 
     trans.node_lock_write(paths, path, level)?;
-    let mut b = paths.write_locked_node(path, level);
+    let mut b = paths.intent_locked_node(path, level);
+    let mut b = b.write_locked();
 
     trans.node_prep_for_write(update.t(), &mut paths.paths_and_updates(), &mut b);
 

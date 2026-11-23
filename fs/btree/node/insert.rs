@@ -239,7 +239,8 @@ impl BtreeTrans<'_> {
         let fs = self.fs();
         let paths = &mut pu.paths;
         let level = paths[idx].level() as usize;
-        let mut b = paths.write_locked_node(idx, level);
+        let mut b = paths.intent_locked_node(idx, level);
+        let mut b = b.write_locked();
         let node_iter = &raw mut paths[idx].l[level].iter;
 
         let set_u64s = |c: &NodeContents| c.last_set().u64s() as isize;

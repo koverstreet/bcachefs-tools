@@ -494,7 +494,8 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
                 assert!(b.flags.dirty(), "an interior update's node not dirty");
 
                 if ret.is_ok() {
-                    let mut w = paths.write_locked_node(idx, level);
+                    let mut w = paths.intent_locked_node(idx, level);
+                    let mut w = w.write_locked();
                     let t = *w.contents().last_set();
                     let mut keys = w.keys_mut();
                     let last = keys.bset_head_mut(t.data_offset);

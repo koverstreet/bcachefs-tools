@@ -28,7 +28,7 @@ use crate::fs::Fs;
 use crate::format::{Btree, DataType};
 use crate::init::error::BkeyValidate;
 use crate::inode_opts::get_io_opts;
-use crate::locking::six::six_lock_counts;
+use crate::locking::six::{six_lock_counts, six_lock_write_held};
 use crate::types::{Le16, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
@@ -654,8 +654,10 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b:
             }
             node_write(trans.fs(), b.held(), ty, flags);
         }
-        NodeHold::Intent(mut b) => node_write_intent(trans, paths, &mut b, ty, flags),
-        NodeHold::Write(_) => panic!("node_write_trans() of a node held for write: node_write_locked()"),
+        NodeHold::Intent(mut b) => {
+            assert!(!six_lock_write_held(b.c.lock.six()), "node_write_trans() of a node held for write: node_write_locked()");
+            node_write_intent(trans, paths, &mut b, ty, flags)
+        }
     }
 }
 

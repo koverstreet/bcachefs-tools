@@ -304,7 +304,8 @@ impl Fs {
 pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, i: &c::btree_insert_entry) {
     let fs = t.fs();
     let bc = &fs.btree.key_cache;
-    let mut ck = paths.write_locked_key_cached(i.path);
+    let mut ck = paths.intent_locked_key_cached(i.path);
+    let mut ck = ck.write_locked();
     let insert = i.key();
     let mut kick_reclaim = false;
 
