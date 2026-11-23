@@ -43,8 +43,6 @@
 #[path = "types.rs"] pub mod types;
 #[path = "util/two_state_shared_lock_types.rs"] pub mod util_two_state_shared_lock_types;
 #[path = "util/util_types.rs"] pub mod util_util_types;
-#[path = "vfs/buffered_types.rs"] pub mod vfs_buffered_types;
-#[path = "vfs/direct_types.rs"] pub mod vfs_direct_types;
 #[path = "vfs/fdm_types.rs"] pub mod vfs_fdm_types;
 #[path = "vfs/fs_types.rs"] pub mod vfs_fs_types;
 #[path = "vfs/io_types.rs"] pub mod vfs_io_types;
@@ -131,7 +129,8 @@ pub mod c {
     pub use super::data_reconcile_types::*;
     pub use crate::data::reconcile::work::ReconcileScan;
     pub use super::data_reflink_format::*;
-    pub use crate::data::update::{ DataUpdateType, data_update, data_update_key, data_update_opts, data_update_opts_bits};
+    pub use crate::data::update::{ DataUpdateType, data_update, data_update_index, data_update_key, data_update_opts,
+                                   data_update_opts_bits};
     pub(crate) use crate::data::update::{__data_update_opts_bits_forward};
     pub use super::data_write_types::*;
     pub use crate::debug::async_objs::{ async_obj_list, AsyncObjKind};
@@ -190,10 +189,6 @@ pub mod c {
     pub use crate::util::time_stats::{NR_QUANTILES, TIME_STATS_MV_WEIGHT, TimeStatsLocked, bch2_time_stats, bch2_time_stats_quantiles, quantile_entry, quantiles, time_stat_buffer, time_stat_buffer_entry};
     pub use super::util_two_state_shared_lock_types::*;
     pub use super::util_util_types::*;
-    #[cfg(not(NO_BCACHEFS_FS))]
-    pub use super::vfs_buffered_types::*;
-    #[cfg(not(NO_BCACHEFS_FS))]
-    pub use super::vfs_direct_types::*;
     pub use super::vfs_fdm_types::*;
     pub use super::vfs_fs_types::*;
     #[cfg(not(NO_BCACHEFS_FS))]

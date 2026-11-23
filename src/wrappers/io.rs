@@ -2,24 +2,21 @@
 //
 // IO operations on a bcachefs filesystem.
 //
-// read() runs the read path's read() on a task and waits for it.
-//
-// write() is still synchronous pending the same treatment.
+// read() and write() each run the read or write path's on a task, and wait
+// for it.
 
 use std::mem::MaybeUninit;
-use std::ptr::NonNull;
 
 use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::spos;
 use bcachefs_kernel::data::read::{self, Rbio};
-use bcachefs_kernel::data::write::bch2_write;
+use bcachefs_kernel::data::write;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode_opts;
 use bcachefs_kernel::util::bio::{Bio, BioBox, BioOwner};
-use bcachefs_kernel::util::closure;
 use bcachefs_kernel::util::sleep::Sleep;
-use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Spawn, TaskSlot, WaitSync};
+use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Resume, Spawn, TaskSlot, WaitSync};
 use bcachefs_kernel::util::vstructs::assume_init_mut;
 use bcachefs_kernel::os::workqueue::Queue;
 
@@ -37,10 +34,15 @@ pub struct WriteResult {
 // bio points into it.
 struct WriteState {
     op:    c::bch_write_op,
+    wbio:  Bio,
     bvecs: [c::bio_vec; MAX_BVECS],
 }
 
-/// @data written at @offset of inode @inum, done when this returns.
+// handed to the write's task: its bvecs map the caller's @data, which the
+// caller holds till the task's done
+unsafe impl Send for WriteState {}
+
+/// @data written at @offset of inode @inum, by a task, waited for.
 pub fn write(
     fs: &Fs,
     inum: u64,
@@ -50,14 +52,13 @@ pub fn write(
     data: &[u8],
     new_i_size: u64,
 ) -> Result<WriteResult, BchError> {
-    // Made in place: the op's bio first, which the op's init() leaves be
+    // Made in place: the write bio's bio, then the op
     let mut state = Box::new(std::mem::MaybeUninit::<WriteState>::zeroed());
     let p = state.as_mut_ptr();
     let mut state = unsafe {
-        let bio = (&raw mut (*p).op.wbio.bio).cast::<c::bio>();
-        bcachefs_kernel::os::bio::init(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(),
-                                       MAX_BVECS as u16, 0);
-        Bio::from_raw_mut(bio).map(data.as_ptr().cast_mut(), data.len());
+        let bio = &raw mut (*p).wbio;
+        Bio::init_borrowed(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(), MAX_BVECS as u16, 0);
+        Bio::from_raw_mut(bio.cast()).map(data.as_ptr().cast_mut(), data.len());
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };
@@ -67,16 +68,23 @@ pub fn write(
     op.subvol      = subvol;
     op.pos         = spos(inum, offset >> 9, u32::MAX);
     op.new_i_size  = new_i_size;
-    op.set(c::WriteFlags::sync);
 
     op.res.add((data.len() >> 9) as u64, replicas, c::ReservationFlags::empty())?;
-    // BCH_WRITE_sync: done when this returns, so @data outlives it
-    unsafe { closure::call(NonNull::from(&mut *op), bch2_write, None) };
 
-    match op.error as i32 {
-        0     => Ok(WriteResult { sectors_delta: op.i_sectors_delta }),
-        error => Err(BchError::from_raw(-error)),
-    }
+    let slot = TaskSlot::alloc(())?;
+    let mut done = DoneWith::new();
+    let (wait, r) = CompletionReturn::new(&mut done, waiter::Sync::current());
+    let task = slot.init(Spawn::Queue(Queue::system_dfl()), fs.tasks(), async move |_: &()| {
+        let mut state = state;
+        let WriteState { op, wbio, .. } = &mut *state;
+        write::write(op, wbio, write::WriteFor::Tools, Resume::queue(Queue::system_dfl())).await;
+        r.complete(match op.error as i32 {
+            0     => Ok(WriteResult { sectors_delta: op.i_sectors_delta }),
+            error => Err(BchError::from_raw(-error)),
+        });
+    }, None).expect("a queue's task: nothing in it fails");
+    unsafe { task.start_unchecked() };
+    wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a write's task, ended with what it wrote")
 }
 
 /// @buf read from @offset of inode @inum, by a task, waited for: the buffer
@@ -93,7 +101,7 @@ pub fn read<'a>(
     let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
     let mut b = BioBox::new(std::ptr::null_mut(), 1, c::req_op_REQ_OP_READ,
-                            |b| Rbio::new(fs, opts, inum.subvol as u32, None, b))?;
+                            |b| Rbio::new(opts, inum.subvol as u32, None, b.init()))?;
     b.bio_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
     b.bio_mut().set_sector(offset >> 9);
     unsafe { b.bio_mut().map(buf.as_mut_ptr().cast(), buf.len()) };
@@ -103,7 +111,7 @@ pub fn read<'a>(
     let mut done = DoneWith::new();
     let (wait, r) = CompletionReturn::new(&mut done, waiter::Sync::current());
     let task = slot.init(Spawn::Queue(Queue::system_dfl()), fs.tasks(), async move |_: &()| {
-        r.complete(read::read(&b, inum, flags, ()).await);
+        r.complete(read::read(fs, &b, inum, flags).await);
     }, None).expect("a queue's task: nothing in it fails");
     unsafe { task.start_unchecked() };
     wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read")?;

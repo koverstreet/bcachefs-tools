@@ -122,7 +122,7 @@ impl<'a> BioRange<'a> {
         self.len() == 0
     }
 
-    /// Where it starts, to save for range_at().
+    /// Where it starts.
     pub fn pos(&self) -> c::bvec_iter {
         self.iter
     }
@@ -248,6 +248,19 @@ impl<'a> BioRange<'a> {
         for chunk in *self {
             chunk.zero();
         }
+    }
+
+    /// A random u64 of it overwritten: the debug corrupt ratios'.
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    pub fn corrupt(&self) {
+        use crate::os::kernel::{random_u64, random_u64_below};
+        let u64s = self.len() / 8;
+        if u64s == 0 {
+            return;
+        }
+        let mut r = *self;
+        r.advance(random_u64_below(u64s.into()) as u32 * 8);
+        r.take(8).copy_from(&random_u64().to_ne_bytes());
     }
 
     // ── bvec.h's arithmetic, on the position: each as the function named ──
@@ -598,12 +611,11 @@ mod tests {
         r.advance(10);
         assert_eq!(lens(r), [2, 6]);
 
-        let pos = r.pos();
+        let saved = r;
         let mut out = [0u8; 8];
         assert_eq!(r.copy_to(&mut out), 8);
         assert_eq!(out, [2, 2, 3, 3, 3, 3, 3, 3]);
-        // SAFETY: a position of this bio, just taken
-        assert_eq!(unsafe { buf.bio().range_at(pos) }.copy_from(&[9; 3]), 3);
+        assert_eq!(saved.copy_from(&[9; 3]), 3);
 
         let mut chunks = buf.range_all().into_iter();
         chunks.next();

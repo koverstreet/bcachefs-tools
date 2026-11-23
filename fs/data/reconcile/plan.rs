@@ -57,6 +57,7 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, BtreeIter, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
+use crate::data::update::IOPRIO_BE_LOWEST;
 use crate::data::ptrs::{brand, BkeyVPtrs, Branded, ExtentEntryMut, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::rb_bit;
 use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};
@@ -115,6 +116,12 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
         write_flags: w::alloc_nowait,
         ..::pin_init::zeroed()
     };
+    // Idle-priority moves stall behind every other idle consumer of the
+    // device, and make no progress under IO pressure: a hipri move - draining
+    // an evacuating device - is best-effort instead
+    if r.hipri() != 0 {
+        d.ioprio = IOPRIO_BE_LOWEST;
+    }
     // Replicas can't be added to or dropped from btree nodes incrementally:
     // they always need to be able to spill over to the whole filesystem
     if r.hipri() == 0 && !k.k.is_btree_ptr() {

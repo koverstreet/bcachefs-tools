@@ -1106,7 +1106,7 @@ impl c::bch_sb_io {
         if self.bits.have_bio() != 0 {
             let buf = self.buf.buffer();
             let nr = crate::util::bio::buf_nr_bvecs(buf.as_ptr().cast_mut(), buf.len());
-            if self.bio.as_ref().is_some_and(|b| usize::from(b.bio().raw().bi_max_vecs) >= nr) {
+            if self.bio.as_ref().is_some_and(|b| usize::from(b.bio().max_vecs()) >= nr) {
                 return Ok(());
             }
 
@@ -1231,7 +1231,7 @@ impl Drop for bch_sb_handle {
 impl c::bch_sb_io {
     /// The bio, set up for an IO by @opf at @sector of @dev - with the
     /// buffer it maps, borrowed apart.
-    fn bio(&mut self, dev: &c::bch_sb_bdev, opf: u32, sector: u64) -> (&mut BioBox<Bio>, &mut [u8]) {
+    fn bio(&mut self, dev: &c::bch_sb_bdev, opf: u32, sector: u64) -> (&mut BioBox<'static, Bio>, &mut [u8]) {
         let bio = self.bio.as_mut().expect("superblock IO without a bio: have_bio wasn't set");
         bio.reset(dev.bdev, opf);
         bio.bio_mut().set_sector(sector);

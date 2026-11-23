@@ -1567,7 +1567,7 @@ impl Filesystem for BcachefsFs {
         let replicas = std::cmp::max(opts.data_replicas as u32, 1);
 
         // Write aligned buffer. new_i_size is the file's size after the write,
-        // not where this write ends: bch2_write() drops whatever of the buffer
+        // not where this write ends: write() drops whatever of the buffer
         // lies past it, and a write into the middle of the file would lose the
         // rest of its last block (stored as a short inline extent).
         let new_i_size = std::cmp::max(bi.bi_size, offset + size as u64);
