@@ -230,32 +230,44 @@ impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
 }
 
 impl BtreeTrans<'_> {
+    /// Path @idx's node at @level, which it holds for intent, write locked and
+    /// prepped for an insert: node_lock_write() and node_prep_for_write().
     #[inline]
-    pub(in crate::btree) fn node_prep_for_write(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
-                                                idx: PathIdx, level: usize) {
-        let fs = self.fs();
-
-        /*
-         * init_next() works on the node alone, and a reinit on the paths and
-         * updates at it alone: one reinit, after both, does for two.
-         */
-        let reinit_iter = {
-            let mut b = pu.paths[idx].locked_btree_node_mut(level).expect("a node to prep for write, write locked");
-            let mut reinit_iter = unlikely(b.flags.just_written()) && post_write_cleanup(fs, &mut b);
-
-            /*
-             * If the last bset has been written, or if it's gotten too big - start
-             * a new bset to insert into:
-             */
-            if b.want_new_bset(b.contents(), fs).is_some() {
-                reinit_iter |= init_next(self, &mut b);
+    pub(in crate::btree) fn node_lock_write_prep(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
+                                                 idx: PathIdx, level: usize) -> Result<(), BchError> {
+        let ip = crate::ret_ip!();
+        let fast = pu.paths[idx].try_lock_write::<BtreeNode>(level, ip).map(|mut b| self.prep_for_write(&mut b));
+        let reinit_iter = match fast {
+            Some(reinit_iter) => reinit_iter,
+            None => {
+                self.node_lock_write_wait(&mut pu.paths, idx, level, false, ip)?;
+                self.prep_for_write(&mut pu.paths[idx].locked_btree_node_mut(level).expect("a node just write locked"))
             }
-            reinit_iter
         };
 
         if reinit_iter {
             self.node_reinit_iter(t, pu, idx, level);
         }
+        Ok(())
+    }
+
+    /// @b, just write locked, prepped for an insert: whether the paths'
+    /// iterators at it need reinitializing.
+    #[inline(always)]
+    fn prep_for_write(&self, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
+        let fs = self.fs();
+        let mut reinit_iter = unlikely(b.flags.just_written()) && post_write_cleanup(fs, b);
+
+        /*
+         * If the last bset has been written, or if it's gotten too big - start
+         * a new bset to insert into. init_next() works on the node alone, and
+         * a reinit on the paths and updates at it alone: one reinit, after
+         * both, does for two.
+         */
+        if b.want_new_bset(b.contents(), fs).is_some() {
+            reinit_iter |= init_next(self, b);
+        }
+        reinit_iter
     }
 
     /// Handle overwrites and do insert, for non extents - at @node_iter's

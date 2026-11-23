@@ -1200,6 +1200,24 @@ impl BtreePath {
         self.locked_node_mut(0)
     }
 
+    /// The level, held for intent, write locked too if no one holds it for
+    /// read: its node's Write view. It's marked write locked first - the cycle
+    /// detector has to see that before the lock's taken - and left so if the
+    /// lock wasn't had, for node_lock_write_wait().
+    #[inline(always)]
+    pub(crate) fn try_lock_write<T: PathNode>(&mut self, level: usize, ip: c_ulong) -> Option<LockedNode<'_, T, Write>> {
+        assert!(self.locked(level), "write locking a node the path doesn't hold");
+        ebug_assert!(self.intent_locked(level));
+        self.mark_locked_noreset(level, BTREE_NODE_WRITE_LOCKED);
+
+        let node = self.downcast::<T>().expect("write locking a node as another type")
+            .locked_node(level).expect("a level just marked write locked").node();
+        ebug_assert!(self.l[level].lock_seq == node.common().lock.six().seq.get());
+
+        six_trylock_ip(node.common().lock.six(), SixLockType::SIX_LOCK_write, ip)
+            .then(|| LockedNode { node, _mode: PhantomData })
+    }
+
     #[inline(always)]
     fn locked_node_mut<T: PathNode>(&mut self, level: usize) -> Option<LockedNode<'_, T, Write>> {
         let node = self.downcast::<T>()?.locked_node(level)?.node();

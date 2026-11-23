@@ -130,14 +130,15 @@ impl BtreeTrans<'_> {
                 continue;
             }
 
-            if let Err(e) = self.node_lock_write(&mut pu.paths, i.path, i.level().into()) {
+            let (path, level) = (i.path, i.level().into());
+            let ret = if !i.cached() {
+                self.node_lock_write_prep(t, &mut pu, path, level)
+            } else {
+                self.node_lock_write(&mut pu.paths, path, level)
+            };
+            if let Err(e) = ret {
                 self.lock_write_fail(&mut pu, idx);
                 return Err(e);
-            }
-
-            if !i.cached() {
-                let (path, level) = (i.path, i.level().into());
-                self.node_prep_for_write(t, &mut pu, path, level);
             }
         }
 

@@ -723,8 +723,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
         return Err(BchError::from(c::EIO));
     }
 
-    trans.node_lock_write(paths, path, level)?;
-    trans.node_prep_for_write(update.t(), &mut paths.paths_and_updates(), path, level);
+    trans.node_lock_write_prep(update.t(), &mut paths.paths_and_updates(), path, level)?;
 
     let u64s = update.parent_keys_u64s();
     let b = paths[path].locked_btree_node(level).expect("an interior update's node, write locked");

@@ -17,7 +17,7 @@ use crate::debug::params::debug_check_btree_locking;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
-use crate::locking::six::{__six_lock_init, six_lock_counts, six_trylock_ip, SixHold};
+use crate::locking::six::{__six_lock_init, six_lock_counts, SixHold};
 use crate::locking::{memalloc_flags_restore, memalloc_flags_save, AsLocked, Exclusive, ExclusiveGuard, Locked, Mutex, RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::util::place::Placed;
 use crate::prt;
@@ -456,23 +456,26 @@ impl BtreeTrans<'_> {
     fn node_lock_write_may_fail(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, lock_may_not_fail: bool)
         -> Result<(), BchError>
     {
-        let b = paths[idx].locked_node(level).expect("write locking a node the path doesn't hold");
-        let b = unsafe { &*ptr::from_ref(b.node()) };
-        ebug_assert!(paths[idx].l[level].lock_seq == b.lock.six().seq.get());
-        ebug_assert!(paths[idx].intent_locked(level));
-
         /*
          * six locks are unfair, and read locks block while a thread wants a
          * write lock: thus, we need to tell the cycle detector we have a write
-         * lock _before_ taking the lock:
+         * lock _before_ taking the lock - try_lock_write() does:
          */
-        paths[idx].mark_locked_noreset(level, BtreeNodeLockedType::BTREE_NODE_WRITE_LOCKED);
-
-        if six_trylock_ip(b.lock.six(), c::SixLockType::SIX_LOCK_write, crate::ret_ip!()) {
+        let ip = crate::ret_ip!();
+        if paths[idx].try_lock_write::<c::btree_bkey_cached_common>(level, ip).is_some() {
             Ok(())
         } else {
-            self.node_lock_write_contended(paths, idx, b, lock_may_not_fail, crate::ret_ip!())
+            self.node_lock_write_wait(paths, idx, level, lock_may_not_fail, ip)
         }
+    }
+
+    /// The wait for a write lock BtreePath::try_lock_write() didn't get: @ip is
+    /// lockdep's.
+    pub(crate) fn node_lock_write_wait(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
+                                       lock_may_not_fail: bool, ip: c_ulong) -> Result<(), BchError> {
+        let b = paths[idx].locked_node(level).expect("write locking a node the path doesn't hold");
+        let b = unsafe { &*ptr::from_ref(b.node()) };
+        self.node_lock_write_contended(paths, idx, b, lock_may_not_fail, ip)
     }
 
     /// @ip is lockdep's: C's _RET_IP_.

@@ -891,8 +891,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let idx = iter.raw.path;
         let mut paths = trans.paths();
 
-        trans.node_lock_write(&mut paths, idx, lvl)?;
-        trans.node_prep_for_write(self, &mut paths.paths_and_updates(), idx, lvl);
+        trans.node_lock_write_prep(self, &mut paths.paths_and_updates(), idx, lvl)?;
 
         let pos = paths[idx].pos;
         let ins = {
