@@ -284,7 +284,7 @@ fn trigger_dev_counters(t: &TransAttempt<'_, '_>, sectors: Option<u32>, k: BkeyS
 /// - or a btree node pointer's reconcile backpointer, moved to its new work
 /// id's and recorded in its reconcile_bp entry - then the reconcile_work
 /// accounting and dev_leaving counters.
-pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     let fs = t.fs();
     let old_r = op.old.arm::<Ptrs>().and_then(|k| k.reconcile_opts(fs).copied());
     let new_r = BkeySC::from(&op.new).untyped().arm::<Ptrs>().and_then(|k| k.reconcile_opts(fs).copied());
@@ -303,7 +303,7 @@ pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut Trigge
         if op.level == 0 {
             if old_work != new_work {
                 // the work btrees index reflink and stripes ahead of extents
-                let pos = data_to_rb_work_pos(op.btree, op.new.k.p);
+                let pos = data_to_rb_work_pos(op.btree, op.new.k().p);
                 for (w, set) in [(old_work, false), (new_work, true)] {
                     if let Some(btree) = w.btree() {
                         t.bit_mod_buffered(btree, pos, set)?;
@@ -322,7 +322,7 @@ pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut Trigge
 
             if flags.contains(UpdateTriggerFlags::INSERT) {
                 let (btree, level) = (op.btree, op.level);
-                let needed = u32::from(op.new.k.u64s) +
+                let needed = u32::from(op.new.k().u64s) +
                     (size_of::<c::bch_extent_reconcile_bp>() / size_of::<u64>()) as u32;
                 let k = op.new_with_room(t, needed)?;
 

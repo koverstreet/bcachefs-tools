@@ -360,17 +360,17 @@ fn mark_stripe_buckets(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new: 
 /// bit. With gc as well: reconcile work, fragmentation and parity replicas
 /// accounting - gc's copy of the stripe made - and each changed block's
 /// bucket and backpointer. Atomic: a stripe gone empty kicks the deleter.
-fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     use UpdateTriggerFlags as F;
     let fs = t.fs();
     let flags = op.flags;
     let gc = flags.contains(F::GC);
-    let idx = op.new.k.p.offset;
+    let idx = op.new.k().p.offset;
 
     // before anything reads the new key: its csum check, below, doesn't
     // look at can_widen
     if flags.contains(F::TRANSACTIONAL) {
-        refresh_can_widen(fs, &mut op.new);
+        refresh_can_widen(fs, &mut op.new.as_s());
     }
 
     let old = stripe_of(op.old);
@@ -402,13 +402,13 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
         // bypass it, and trip the commit's assert. The btree's delete runs
         // this trigger again, which cleans up after it.
         if unlikely(new_lru == STRIPE_LRU_POS_EMPTY) && !fs.stripe_is_open(idx) {
-            return t.delete(Btree::stripes, op.new.k.p, F::OVERWRITE_TRIGGERED);
+            return t.delete(Btree::stripes, op.new.k().p, F::OVERWRITE_TRIGGERED);
         }
 
         lru_change(t, LruId::Stripes, idx, old_lru, new_lru)?;
 
         if needs_reconcile_delta != 0 {
-            t.bit_mod_buffered(Btree::reconcile_hipri, data_to_rb_work_pos(Btree::stripes, op.new.k.p),
+            t.bit_mod_buffered(Btree::reconcile_hipri, data_to_rb_work_pos(Btree::stripes, op.new.k().p),
                                needs_reconcile_delta > 0)?;
         }
     }

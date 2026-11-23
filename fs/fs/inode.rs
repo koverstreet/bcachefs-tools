@@ -1200,7 +1200,7 @@ fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: Bpos, have_child: boo
 ///    it's no longer; an inode made or deleted in a snapshot with a parent
 ///    updates has_child_snapshot on the version it inherited, and one first
 ///    written here, its own.
-pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     let fs = t.fs();
 
     if op.flags.contains(UpdateTriggerFlags::ATOMIC) &&
@@ -1210,7 +1210,7 @@ pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), B
         op.new.as_s().arm::<Inodes>().expect("inserting an inode").set_journal_seq(seq);
     }
 
-    let nr = op.new.k.is_inode() as i64 - op.old.k.is_inode() as i64;
+    let nr = op.new.k().is_inode() as i64 - op.old.k.is_inode() as i64;
     if op.flags.intersects(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::GC) && nr != 0 {
         crate::accounting::add(t, crate::accounting::NrInodes {}, crate::accounting::NrInodesCounters { nr },
                                op.flags.contains(UpdateTriggerFlags::GC))?;
@@ -1220,7 +1220,7 @@ pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), B
         let unlinked = |k: BkeySC<'_>| k.arm::<Inodes>().is_some_and(|k| is_unlinked(k.flags()));
         let unlinked_delta = unlinked(op.new.as_sc()) as i32 - unlinked(op.old) as i32;
         if unlinked_delta != 0 {
-            t.bit_mod_buffered(Btree::deleted_inodes, op.new.k.p, unlinked_delta > 0)?;
+            t.bit_mod_buffered(Btree::deleted_inodes, op.new.k().p, unlinked_delta > 0)?;
         }
 
         // Creating or deleting an inode at this snapshot ID, with maybe an
@@ -1228,8 +1228,8 @@ pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), B
         // has_child_snapshot flag on the parent.
         let deleted_delta = nr;
         if deleted_delta != 0 &&
-           fs.snapshots.parent(op.new.k.p.snapshot).is_some() {
-            update_parent_has_children(t, op.new.k.p, deleted_delta > 0)?;
+           fs.snapshots.parent(op.new.k().p.snapshot).is_some() {
+            update_parent_has_children(t, op.new.k().p, deleted_delta > 0)?;
         }
 
         // When an inode is first updated in a new snapshot, we may need to

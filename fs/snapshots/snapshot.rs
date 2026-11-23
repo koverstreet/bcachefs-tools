@@ -1218,7 +1218,7 @@ impl BkeyOps for c::Snapshot {
     const TRIGGER: Option<&'static Trigger> = Some(&SNAPSHOT);
 }
 
-fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
+fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_, '_>) -> Result<(), BchError> {
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
         passes::clear_btree_clean(t.fs(), Btree::snapshots);
     }

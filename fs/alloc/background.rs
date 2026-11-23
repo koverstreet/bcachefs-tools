@@ -1285,11 +1285,11 @@ fn is(t: DataType) -> impl Fn(&c::AllocV4) -> bool {
 
 /// @k's value, all of today's alloc_v4, to edit - None if it's another
 /// type, or a v4 shorter than today's.
-fn alloc_v4_whole_mut<'k>(k: &'k mut BkeyS<'_>) -> Option<&'k mut c::AllocV4> {
+fn alloc_v4_whole_mut(k: BkeyS<'_>) -> Option<&mut c::AllocV4> {
     if !k.k.key_type().is::<c::AllocV4>() {
         return None;
     }
-    <c::AllocV4 as ArmRef>::arm_mut(k.as_s().into_val_bytes_mut())
+    <c::AllocV4 as ArmRef>::arm_mut(k.into_val_bytes_mut())
 }
 
 /// A copy of the trigger's new key as it's been edited, header @k and value
@@ -1432,11 +1432,11 @@ fn alloc_check_no_stripe_refs(t: &TransAttempt<'_, '_>, old: BkeySC<'_>, new: Bk
 
 /// The alloc key going in, @op.new, edited in place - see the top of the
 /// section.
-fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     use UpdateTriggerFlags as F;
     let fs = t.fs();
     let flags = op.flags;
-    let hdr = *op.new.k;
+    let hdr = *op.new.k();
     let p = hdr.p;
     let (dev, b) = (p.inode as u32, p.offset);
 
@@ -1457,7 +1457,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         copy = alloc_to_v4(BkeySC::from(&op.new));
         &mut copy
     } else {
-        match alloc_v4_whole_mut(&mut op.new) {
+        match alloc_v4_whole_mut(op.new.as_s()) {
             Some(a) => a,
             None => {
                 let mut msg = LogMsg::new(fs);

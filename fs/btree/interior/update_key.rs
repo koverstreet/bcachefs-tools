@@ -124,12 +124,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
             trans.set_has_interior_updates(true);
 
             if !skip_triggers {
-                let buf_u64s = key.buf_u64s();
-                let mut op = TriggerOp::new(btree, level as u32 + 1, BkeySC::from(&*old), key.as_s(),
+                let mut op = TriggerOp::new(btree, level as u32 + 1, BkeySC::from(&*old), key.reborrow(),
                                             UpdateTriggerFlags::INSERT |
                                             UpdateTriggerFlags::OVERWRITE |
-                                            UpdateTriggerFlags::TRANSACTIONAL,
-                                            buf_u64s);
+                                            UpdateTriggerFlags::TRANSACTIONAL);
                 key_trigger(self, &mut op)?;
             }
 

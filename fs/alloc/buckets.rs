@@ -711,7 +711,7 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
 /// The trigger of every key type with pointers: each key's pointers and
 /// accounting - the old one's out, the new one's in - if its pointers
 /// changed, and reconcile's part: bch2_trigger_extent().
-pub(crate) fn trigger_extent(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+pub(crate) fn trigger_extent(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     {
         let (old, new) = (op.old.arm::<Ptrs>(), BkeySC::from(&op.new).untyped().arm::<Ptrs>());
         let old_entries = old.as_ref().map_or(&[][..], |k| k.entry_bytes());
@@ -727,7 +727,7 @@ pub(crate) fn trigger_extent(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -
 
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::INSERT) &&
        !op.flags.contains(UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE) &&
-       op.level == 0 && !op.new.k.key_type().is_deleted() {
+       op.level == 0 && !op.new.k().key_type().is_deleted() {
         extent_trigger_set_needs_reconcile(t, op)?;
     }
 
@@ -749,7 +749,7 @@ pub(crate) static EXTENT: Trigger = Trigger(trigger_extent);
 /// pointers, so the snapshot's sectors, summed from extents' pointers, never
 /// had them. Its key counted here, with them, as an extent's is, not by
 /// trigger_snapshot_nr_keys(): bch2_trigger_reservation().
-fn trigger_reservation(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
+fn trigger_reservation(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_, '_>) -> Result<(), BchError> {
     if !op.flags.intersects(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::GC) {
         return Ok(());
     }
@@ -789,13 +789,13 @@ fn snapshot_key_counted(k: &c::bkey) -> bool {
 /// key to its new - the transactional dispatch passes a deleted key for the
 /// side not running, the gc and mem dispatch both real keys at once. Not in
 /// the atomic phase, which only applies deltas already staged.
-pub(crate) fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
+pub(crate) fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_, '_>) -> Result<(), BchError> {
     if op.level != 0 || op.flags.contains(UpdateTriggerFlags::ATOMIC) {
         return Ok(());
     }
 
     let counted = |k: &c::bkey| snapshot_key_counted(k).then(|| k.bytes() as i64);
-    let (new, old) = (counted(op.new.k), counted(op.old.k));
+    let (new, old) = (counted(op.new.k()), counted(op.old.k));
 
     let nr    = i64::from(new.is_some()) - i64::from(old.is_some());
     let bytes = new.unwrap_or(0) - old.unwrap_or(0);
@@ -804,7 +804,7 @@ pub(crate) fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<
     }
 
     // extents and reservations count sectors
-    accounting::add(t, accounting::Snapshot { id: op.new.k.p.snapshot, btree: op.btree.0 },
+    accounting::add(t, accounting::Snapshot { id: op.new.k().p.snapshot, btree: op.btree.0 },
                     accounting::SnapshotCounters { keys: nr, key_bytes: bytes, sectors: 0 },
                     op.flags.contains(UpdateTriggerFlags::GC))
 }

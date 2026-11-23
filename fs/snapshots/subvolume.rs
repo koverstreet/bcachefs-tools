@@ -360,7 +360,7 @@ fn children_mod(t: &TransAttempt<'_, '_>, p: Bpos, set: bool) -> Result<(), BchE
     t.bit_mod(Btree::subvolume_children, p, set)
 }
 
-fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
+fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_, '_>) -> Result<(), BchError> {
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
         passes::clear_btree_clean(t.fs(), Btree::subvolumes);
 

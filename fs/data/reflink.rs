@@ -703,9 +703,9 @@ fn set_pads(k: &mut BkeyS<'_>, front_pad: Le32, back_pad: Le32) {
  * from the const key it walks - and the pads the walk ends with are written
  * back to @op.new.
  */
-fn trigger_reflink_p(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+fn trigger_reflink_p(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::INSERT) {
-        set_pads(&mut op.new, 0.into(), 0.into());
+        set_pads(&mut op.new.as_s(), 0.into(), 0.into());
     }
 
     let mut new_pads = None;
@@ -720,7 +720,7 @@ fn trigger_reflink_p(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result
     })?;
 
     if let Some((front_pad, back_pad)) = new_pads {
-        set_pads(&mut op.new, front_pad, back_pad);
+        set_pads(&mut op.new.as_s(), front_pad, back_pad);
     }
     Ok(())
 }
@@ -730,17 +730,18 @@ static REFLINK_P: Trigger = Trigger(trigger_reflink_p);
 // ── indirect extent trigger ──────────────────────────────────────────────
 
 /// An indirect extent whose refcount reaches zero is deleted, not inserted.
-fn check_indirect_extent_deleting(op: &mut TriggerOp<'_>) {
+fn check_indirect_extent_deleting(op: &mut TriggerOp<'_, '_>) {
     if op.flags.contains(UpdateTriggerFlags::INSERT) &&
        BkeySC::from(&op.new).arm::<Indirect>().expect("an indirect extent").refcount().get() == 0 {
-        op.new.k.set_key_type(BkeyType::deleted);
-        op.new.k.size  = 0;
-        op.new.k.set_val_bytes(0);
+        let k = op.new.k_mut();
+        k.set_key_type(BkeyType::deleted);
+        k.size  = 0;
+        k.set_val_bytes(0);
         op.flags -= UpdateTriggerFlags::INSERT;
     }
 }
 
-fn trigger_reflink_v(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+fn trigger_reflink_v(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::INSERT) {
         check_indirect_extent_deleting(op);
     }
@@ -750,7 +751,7 @@ fn trigger_reflink_v(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result
 
 static REFLINK_V: Trigger = Trigger(trigger_reflink_v);
 
-fn trigger_indirect_inline_data(_t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+fn trigger_indirect_inline_data(_t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     check_indirect_extent_deleting(op);
     Ok(())
 }

@@ -1110,13 +1110,19 @@ impl<'a, 't, V: BkeyWhole> TransBkey<'a, 't, V> {
 }
 
 impl<'a, 't> TransBkey<'a, 't> {
+    /// @room's key: one outside the attempt's memory, as a trigger's stand-in
+    /// for the side of an update that has none.
+    pub(crate) fn from_room(room: &'a mut DstRoom<BkeyI>) -> Self {
+        TransBkey { room, t: PhantomData, v: PhantomData }
+    }
+
     /// A key C has with room past its own u64s - @buf_u64s long, for what
     /// grows it: in @t's memory, or a trigger's update's.
     ///
     /// # Safety
     /// @ptr is a key valid and the caller's to edit while @t's attempt runs,
     /// and @buf_u64s u64s there are its.
-    pub(crate) unsafe fn from_raw_room(_t: &TransAttempt<'a, 't>, ptr: *mut c::bkey_i, buf_u64s: u32) -> Self {
+    pub(crate) unsafe fn from_raw_room(_t: &TransAttempt<'_, '_>, ptr: *mut c::bkey_i, buf_u64s: u32) -> Self {
         assert!(!ptr.is_null(), "a key with room");
         let room = core::ptr::slice_from_raw_parts_mut(ptr.cast::<u64>(), buf_u64s as usize);
         let k = TransBkey { room: unsafe { &mut *DstRoom::from_elems_raw(room) }, t: PhantomData, v: PhantomData };
