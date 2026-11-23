@@ -891,9 +891,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut paths = trans.paths();
 
         trans.node_lock_write(&mut paths, idx, lvl)?;
+        trans.node_prep_for_write(self, &mut paths.paths_and_updates(), idx, lvl);
         let mut b = paths.intent_locked_node(idx, lvl);
         let mut b = b.write_locked();
-        trans.node_prep_for_write(self, &mut paths.paths_and_updates(), idx, &mut b);
 
         if usize::from(key.k().u64s) > b.keys_u64s_remaining(b.contents()) {
             trans.node_unlock_write(&mut paths, idx, lvl);

@@ -119,9 +119,8 @@ impl BtreeTrans<'_> {
             }
 
             if !i.cached() {
-                let path = i.path;
-                let mut b = pu.paths.intent_locked_node(path, i.level().into());
-                self.node_prep_for_write(t, &mut pu, path, &mut b.write_locked());
+                let (path, level) = (i.path, i.level().into());
+                self.node_prep_for_write(t, &mut pu, path, level);
             }
         }
 

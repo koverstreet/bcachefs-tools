@@ -692,10 +692,10 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     }
 
     trans.node_lock_write(paths, path, level)?;
+    trans.node_prep_for_write(update.t(), &mut paths.paths_and_updates(), path, level);
+
     let mut b = paths.intent_locked_node(path, level);
     let mut b = b.write_locked();
-
-    trans.node_prep_for_write(update.t(), &mut paths.paths_and_updates(), path, &mut b);
 
     let u64s = update.parent_keys_u64s();
     if !b.insert_fits(b.contents(), u64s) {

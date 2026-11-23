@@ -232,20 +232,26 @@ impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
 impl BtreeTrans<'_> {
     #[inline]
     pub(in crate::btree) fn node_prep_for_write(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
-                                                idx: PathIdx, b: &mut LockedNode<'_, BtreeNode, Write>) {
+                                                idx: PathIdx, level: usize) {
         let fs = self.fs();
-        let level = b.c.level.get().into();
 
-        if unlikely(b.flags.just_written()) && post_write_cleanup(fs, b) {
+        let (reinit_iter, new_bset) = {
+            let mut b = pu.paths[idx].locked_btree_node_mut(level).expect("a node to prep for write, write locked");
+            let reinit_iter = unlikely(b.flags.just_written()) && post_write_cleanup(fs, &mut b);
+
+            /*
+             * If the last bset has been written, or if it's gotten too big - start
+             * a new bset to insert into:
+             */
+            (reinit_iter, b.want_new_bset(b.contents(), fs).is_some())
+        };
+
+        if reinit_iter {
             self.node_reinit_iter(t, pu, idx, level);
         }
 
-        /*
-         * If the last bset has been written, or if it's gotten too big - start
-         * a new bset to insert into:
-         */
-        if b.want_new_bset(b.contents(), fs).is_some() {
-            init_next(t, pu, idx, b);
+        if new_bset {
+            init_next(t, pu, idx, level);
         }
     }
 
