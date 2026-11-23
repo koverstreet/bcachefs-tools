@@ -48,6 +48,7 @@ use crate::util::refcount::{RefGuard, WaitableRef};
 use crate::util::{place::Placed, refcount::AtomicRef};
 use core::ffi::CStr;
 use core::future::Future;
+use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 pub use crate::sb::members::DevRef;
@@ -427,11 +428,11 @@ impl Fs {
 fn alloc(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Holder>,
          user_key: Option<&c::bch_key>, out: &mut Printbuf) -> Result<OpenFs, BchError> {
     let c = crate::util::alloc::alloc_pinned_or(Fs::init(opts), Errcode::ENOMEM_fs_alloc)?;
-    let fs = unsafe {
-        (*c).holder = Some(holder);
-        OpenFs::from_raw(NonNull::new_unchecked(c))
-    };
-    fs.init_from(sbs, opts, user_key, out)?;
+    // nothing else reaches it till init_from() registers it - the OpenFs
+    // isn't used till then, but exits it if init_early() fails
+    let (fs, this) = unsafe { (OpenFs::from_raw(NonNull::new_unchecked(c)), Pin::new_unchecked(&mut *c)) };
+    this.init_early(sbs, opts, holder)?;
+    fs.init_from(sbs, user_key, out)?;
     Ok(fs)
 }
 
@@ -441,30 +442,31 @@ fn alloc(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Hold
 const BCH_FS_DEFAULT_UTF8_ENCODING: c_uint = (12 << 16) | (1 << 8);
 
 impl Fs {
-    fn init_from(&self, sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, user_key: Option<&c::bch_key>,
-                 out: &mut Printbuf) -> Result<(), BchError> {
-        let p = self.as_ptr();
-
+    /// What's set while nothing else can reach it: its @holder, its counters -
+    /// before any error's thrown - its superblock, and its name.
+    fn init_early(mut self: Pin<&mut Self>, sbs: &KVVec<c::bch_sb_handle>, opts: &c::bch_opts,
+                  holder: Arc<Holder>) -> Result<(), BchError> {
+        *self.as_mut().project().holder = Some(holder);
         self.stdio.store(opts.stdio as usize as *mut _, Relaxed);
         self.recovery_task.store(sched::current(), Relaxed);
 
         #[cfg(kernel)]
         unsafe { c::__module_get(&raw mut kernel::bindings::__this_module) };
 
-        allocator_foreground_init(self);
+        allocator_foreground_init(&self);
 
         /* must be initialized before we throw any errors */
-        let now = PerCpu::alloc().map_err(|_| BchError::from(Errcode::ENOMEM_fs_counters_init))?;
-        unsafe { (*p).counters.now = now };
+        self.as_mut().project().counters.now =
+            PerCpu::alloc().map_err(|_| BchError::from(Errcode::ENOMEM_fs_counters_init))?;
 
         {
             let mut sb = self.sb_lock();
-            sb_to_fs(self, &mut sb, sbs[0].sb())?;
+            sb_to_fs(&self, &mut sb, sbs[0].sb())?;
             self.sb_resize(&mut sb).members_v2_init()
                 .ok_or_else(|| self.err(Errcode::ENOSPC_sb_members_v2))?;
         }
 
-        shard_cpu_init(self);
+        shard_cpu_init(&self);
 
         let mut name = Printbuf::new();
         if self.sb.multi_device.get() {
@@ -476,13 +478,18 @@ impl Fs {
             return Err(Errcode::ENOMEM_fs_name_alloc.into());
         }
         // strscpy()
-        let dst = unsafe { &mut (*p).name };
+        let dst = self.as_mut().project().name;
         let len = name.as_bytes().len().min(dst.len() - 1);
         for (d, &s) in dst.iter_mut().zip(&name.as_bytes()[..len]) {
             *d = s as c_char;
         }
         dst[len] = 0;
+        Ok(())
+    }
 
+    fn init_from(&self, sbs: &mut KVVec<c::bch_sb_handle>, user_key: Option<&c::bch_key>, out: &mut Printbuf)
+        -> Result<(), BchError>
+    {
         blacklist_table_initialize(self)?;
         crate::debug::async_objs::lists::async_obj_init(self)?;
         unsafe { self.btree.cache.nodes.init() }?;
