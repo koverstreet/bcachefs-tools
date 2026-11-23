@@ -82,17 +82,24 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
 
     c_iter.traverse(t)?;
 
-    let Some(ck) = trans.paths().held_key_cached(c_iter.path) else {
-        return Ok(());
+    let flush = {
+        let paths = trans.paths();
+        let Some(ck) = paths[c_iter.path].locked_key_cached() else {
+            return Ok(());
+        };
+
+        if !ck.dirty() {
+            None
+        } else if journal_seq != 0 && ck.journal.seq() != journal_seq {
+            return Ok(());
+        } else {
+            bkey_cached_check_pin(fs, ck);
+            Some((ck.journal.seq(), t.bkey_copy(ck.contents().key())?))
+        }
     };
 
-    if ck.dirty() {
-        if journal_seq != 0 && ck.journal.seq() != journal_seq {
-            return Ok(());
-        }
-
-        bkey_cached_check_pin(fs, ck);
-        t.set_journal_seq_to_pin(ck.journal.seq());
+    if let Some((pin_seq, k)) = flush {
+        t.set_journal_seq_to_pin(pin_seq);
 
         /*
          * If we're at the end of the journal, we really want to free up space
@@ -101,10 +108,10 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
          * the update
          */
         let last_seq = j.lock.last_seq.get();
-        let watermark = if ck.journal.seq() == last_seq { Watermark::reclaim } else { Watermark::btree };
+        let watermark = if pin_seq == last_seq { Watermark::reclaim } else { Watermark::btree };
 
         let mut commit_flags = commit_flags;
-        if ck.journal.seq() != last_seq || !journal_low_on_space(fs) {
+        if pin_seq != last_seq || !journal_low_on_space(fs) {
             commit_flags |= CommitFlags::NO_JOURNAL_RES;
         }
 
@@ -113,7 +120,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
         /* Check that we're not violating cache coherency rules: */
         assert!(!btree_k.k.key_type().is_deleted(), "flushing a cached key over a deleted btree key");
 
-        t.update(b_iter, &t.bkey_copy(ck.contents().key())?,
+        t.update(b_iter, &k,
                  UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE |
                  UpdateTriggerFlags::KEY_CACHE_RECLAIM |
                  UpdateTriggerFlags::NORUN)?;
@@ -124,12 +131,13 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
                         CommitFlags::NO_SKIP_NOOPS |
                         commit_flags))?;
 
-        j.pin_drop(&ck.journal);
-
-        assert!(trans.paths()[c_iter.path].locked(0), "a flushed cached path not locked");
+        j.pin_drop(&trans.paths()[c_iter.path].locked_key_cached()
+                   .expect("a flushed cached path not locked").journal);
     }
 
     if !evict {
+        let paths = trans.paths();
+        let ck = paths[c_iter.path].locked_key_cached().expect("a flushed cached path not locked");
         if ck.dirty() {
             ck.clear_flag(c::BKEY_CACHED_DIRTY);
             bc.nr_dirty.fetch_sub(1, Relaxed);
@@ -147,14 +155,14 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
 
         trans.node_lock_write_nofail(&mut paths, path, 0);
 
+        let (node, held) = paths[path].take_level(0).expect("a flushed cached path not locked");
+        let mut ck = LockedEntry::new(c::bkey_cached::from_common(node).expect("a flushed path's btree node"), held);
         if ck.dirty() {
             ck.clear_flag(c::BKEY_CACHED_DIRTY);
             bc.nr_dirty.fetch_sub(1, Relaxed);
         }
-        bkey_cached_check_pin(fs, ck);
+        bkey_cached_check_pin(fs, ck.held());
 
-        let (node, held) = paths[path].take_level(0).expect("a flushed cached path not locked");
-        let mut ck = LockedEntry::new(c::bkey_cached::from_common(node).expect("a flushed path's btree node"), held);
         if bc.bkey_cached_evict(&mut ck) {
             bc.bkey_cached_free(trans, ck);
         }
