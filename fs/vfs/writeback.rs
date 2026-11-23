@@ -19,7 +19,7 @@ use crate::os::blkdev::plugged;
 use crate::os::bio::{Bio, BioSubmit, Bvec, BvecMempool, Holds};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, Exclusive, Resume, Spawn, TaskSlot};
-use crate::os::kernel::{local_clock, unlikely, PAGE_SIZE};
+use crate::os::kernel::{local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::workqueue::Queue;
 use crate::util::sleep::Sleep;
@@ -83,19 +83,6 @@ impl BioSubmit for Io {
 
 fn bio_full(bio: &Bio, len: u32) -> bool {
     bio.nr_vecs() >= bio.max_vecs() || bio.range().len() > u32::MAX - len
-}
-
-/*
- * Determine when a writepage io is full. We have to limit writepage bios to a
- * single page per bvec (i.e. 1MB with 4k pages) because that is the limit to
- * what the bounce path in bch2_write_extent() can handle. In theory we could
- * loosen this restriction for non-bounce I/O, but we don't have that context
- * here. Ideally, we can up this limit and make it configurable in the future
- * when the bounce path can be enhanced to accommodate larger source bios.
- */
-fn io_full(io: &Io, len: u32) -> bool {
-    let bio = &io.wbio;
-    bio_full(bio, len) || bio.range().len() + len > c::BIO_MAX_VECS * PAGE_SIZE as u32
 }
 
 /// Every sector of each of the io's folios left with no replicas - after
@@ -331,7 +318,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
             let bio = io.wbio.raw();
             if u32::from(io.op.bits.nr_replicas()) != nr_replicas_this_write ||
                io.op.res.nr_replicas.get() != res_nr_replicas ||
-               io_full(io, (sectors << 9) as u32) ||
+               bio_full(&io.wbio, (sectors << 9) as u32) ||
                bio.bi_iter.bi_sector + u64::from(bio.bi_iter.bi_size >> 9) != sector {
                 writepage_do_io(w);
             }
@@ -344,7 +331,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
         let io = io_of(w.io.as_mut().expect("an io, just made"));
         assert!(io.mapping == mapping, "a writepage io of another inode");
         io.wbio.push(Bvec::new(folio.share(), offset << 9, sectors << 9))
-            .expect("a writepage io's bvecs: room for BIO_MAX_VECS, and io_full() checked");
+            .expect("a writepage io's bvecs: room for BIO_MAX_VECS, and bio_full() checked");
 
         io.op.res.sectors.set(io.op.res.sectors.get() + reserved_sectors);
         io.op.i_sectors_delta -= i64::from(dirty_sectors);
