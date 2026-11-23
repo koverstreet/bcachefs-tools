@@ -233,10 +233,15 @@ pub unsafe trait TearSafe {}
 
 /// How a Volatile loads and stores a T: whole, by one atomic of its size - a
 /// build error if it's more than a word at its alignment - or, if it's
-/// TearSafe, a word at a time. As integers either way: T is NoUninit.
-trait Whole: Sized {
+/// TearSafe, a word at a time, as integers: T is NoUninit. Or, derived with
+/// TearSafe, field by field, each as its own Volatile would: its padding
+/// never read.
+///
+/// # Safety
+/// load() and store() read and write @p only by atomics, of what it is.
+pub unsafe trait VolatileValue: Sized {
     /// # Safety
-    /// @p is a live T, accessed only through Whole meanwhile.
+    /// @p is a live T, accessed only through VolatileValue meanwhile.
     unsafe fn load(p: *mut Self) -> Self;
     /// # Safety
     /// As load()'s.
@@ -264,7 +269,7 @@ macro_rules! with_atomic {
     };
 }
 
-impl<T: NoUninit> Whole for T {
+unsafe impl<T: NoUninit> VolatileValue for T {
     default unsafe fn load(p: *mut T) -> T {
         unsafe { with_atomic!(T, p, |a| transmute_copy(&a.load(Relaxed))) }
     }
@@ -294,8 +299,8 @@ macro_rules! with_word {
 }
 
 /// # Safety
-/// @src and @dst are @n words each, aligned, as Whole::load()'s.
-unsafe fn load_words<W: Whole>(src: *mut W, dst: *mut W, n: usize) {
+/// @src and @dst are @n words each, aligned, as VolatileValue::load()'s.
+unsafe fn load_words<W: VolatileValue>(src: *mut W, dst: *mut W, n: usize) {
     for i in 0..n {
         unsafe { dst.add(i).write(W::load(src.add(i))) }
     }
@@ -303,14 +308,14 @@ unsafe fn load_words<W: Whole>(src: *mut W, dst: *mut W, n: usize) {
 
 /// # Safety
 /// As load_words()'s.
-unsafe fn store_words<W: Whole>(src: *const W, dst: *mut W, n: usize) {
+unsafe fn store_words<W: VolatileValue>(src: *const W, dst: *mut W, n: usize) {
     for i in 0..n {
         unsafe { W::store(dst.add(i), src.add(i).read()) }
     }
 }
 
-impl<T: NoUninit + TearSafe> Whole for T {
-    unsafe fn load(p: *mut T) -> T {
+unsafe impl<T: NoUninit + TearSafe> VolatileValue for T {
+    default unsafe fn load(p: *mut T) -> T {
         let mut v = MaybeUninit::<T>::uninit();
         let (dst, n) = (v.as_mut_ptr(), size_of::<T>() / word::<T>());
         unsafe {
@@ -319,7 +324,7 @@ impl<T: NoUninit + TearSafe> Whole for T {
         }
     }
 
-    unsafe fn store(p: *mut T, v: T) {
+    default unsafe fn store(p: *mut T, v: T) {
         let v = ManuallyDrop::new(v);
         let (src, n) = (core::ptr::from_ref(&*v), size_of::<T>() / word::<T>());
         unsafe { with_word!(T, |W| store_words::<W>(src.cast(), p.cast(), n)) }
@@ -356,14 +361,14 @@ impl<T> Volatile<T> {
     }
 }
 
-impl<T: Copy + NoUninit> Volatile<T> {
+impl<T: Copy + VolatileValue> Volatile<T> {
     pub fn get(&self) -> T {
-        unsafe { Whole::load(self.0.get()) }
+        unsafe { VolatileValue::load(self.0.get()) }
     }
 
     /// Store @v, by its one writer.
     pub fn set(&self, v: T) {
-        unsafe { Whole::store(self.0.get(), v) }
+        unsafe { VolatileValue::store(self.0.get(), v) }
     }
 }
 
@@ -376,7 +381,7 @@ impl<T: NoUninit> Volatile<T> {
     /// isn't replaced and dropped meanwhile, or not freed till a grace period
     /// on.
     pub unsafe fn get_unowned(&self) -> ManuallyDrop<T> {
-        ManuallyDrop::new(unsafe { Whole::load(self.0.get()) })
+        ManuallyDrop::new(unsafe { VolatileValue::load(self.0.get()) })
     }
 
     /// @v in, what it held out: one atomic swap, so two writers can't both
@@ -387,7 +392,7 @@ impl<T: NoUninit> Volatile<T> {
     }
 }
 
-impl<T: Copy + NoUninit> FakePlaceRead for Volatile<T> {
+impl<T: Copy + VolatileValue> FakePlaceRead for Volatile<T> {
     type Value = T;
 
     fn get(&self) -> T {
@@ -396,7 +401,7 @@ impl<T: Copy + NoUninit> FakePlaceRead for Volatile<T> {
 }
 
 /// Not Copy - it's read while it's written - so a copy is a load, spelled out.
-impl<T: Copy + NoUninit> Clone for Volatile<T> {
+impl<T: Copy + VolatileValue> Clone for Volatile<T> {
     fn clone(&self) -> Self {
         Self::new(self.get())
     }
@@ -421,7 +426,7 @@ impl<T> Publish for Volatile<T> {
 #[repr(transparent)]
 pub struct VolatileWriter<T>(Volatile<T>);
 
-impl<T: Copy + NoUninit> VolatileWriter<T> {
+impl<T: Copy + VolatileValue> VolatileWriter<T> {
     pub fn get(&self) -> T {
         self.0.get()
     }
@@ -437,7 +442,7 @@ impl<T: Copy + NoUninit> VolatileWriter<T> {
     }
 }
 
-impl<T: Copy + NoUninit> FakePlaceRead for VolatileWriter<T> {
+impl<T: Copy + VolatileValue> FakePlaceRead for VolatileWriter<T> {
     type Value = T;
 
     fn get(&self) -> T {
@@ -445,7 +450,7 @@ impl<T: Copy + NoUninit> FakePlaceRead for VolatileWriter<T> {
     }
 }
 
-impl<T: Copy + NoUninit> FakePlaceWrite for VolatileWriter<T> {
+impl<T: Copy + VolatileValue> FakePlaceWrite for VolatileWriter<T> {
     fn set(&self, v: T) {
         VolatileWriter::set(self, v)
     }
@@ -457,7 +462,7 @@ impl<T: Copy + NoUninit> FakePlaceWrite for VolatileWriter<T> {
 #[derive(::pin_init::Zeroable)]
 pub struct VolatilePublish<T, G>(Volatile<T>, PhantomData<fn() -> G>);
 
-impl<T: Copy + NoUninit, G> VolatilePublish<T, G> {
+impl<T: Copy + VolatileValue, G> VolatilePublish<T, G> {
     pub fn get(&self) -> T {
         self.0.get()
     }

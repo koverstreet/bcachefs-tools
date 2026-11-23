@@ -190,8 +190,10 @@ impl PartialEq for Bitmap {
 impl Eq for Bitmap {}
 
 /// A fixed-size Bitmap, of @W words: C's `unsigned long d[W]`.
+// Written under a lock and read without it - a preference, the allocator's
+// placement - it can be read mid-write, each word as before or after
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, cstruct_macros::TearSafe)]
 pub struct BitArray<const W: usize>([usize; W]);
 
 // SAFETY: integers; all zeroes is empty

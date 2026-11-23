@@ -155,6 +155,44 @@ pub(crate) fn derive_non_zero_word(input: TokenStream) -> Result<TokenStream, St
     })
 }
 
+/// #[derive(TearSafe)], on a struct: a Volatile of it loads and stores it field
+/// by field - an array's element by element - each as its own Volatile would,
+/// so a torn one is each field of some value, and its padding is never read.
+/// That its readers can take one is what deriving it says.
+pub(crate) fn derive_tear_safe(input: TokenStream) -> Result<TokenStream, String> {
+    let item: syn::DeriveInput = syn::parse2(input).map_err(|e| e.to_string())?;
+    let name = &item.ident;
+    let syn::Data::Struct(s) = &item.data else {
+        return Err(format!("{name}: not a struct"));
+    };
+    let vv = quote!(crate::util::projections::VolatileValue);
+    let (loads, stores): (Vec<_>, Vec<_>) = s.fields.iter().enumerate().map(|(i, f)| {
+        let m: syn::Member = f.ident.clone().map_or_else(|| syn::Index::from(i).into(), Into::into);
+        match &f.ty {
+            syn::Type::Array(a) => {
+                let elem = &a.elem;
+                (quote!(#m: ::core::array::from_fn(|i| #vv::load((&raw mut (*p).#m).cast::<#elem>().add(i)))),
+                 quote!(for (i, e) in v.#m.into_iter().enumerate() {
+                     #vv::store((&raw mut (*p).#m).cast::<#elem>().add(i), e)
+                 }))
+            }
+            _ => (quote!(#m: #vv::load(&raw mut (*p).#m)), quote!(#vv::store(&raw mut (*p).#m, v.#m);)),
+        }
+    }).unzip();
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    Ok(quote! {
+        unsafe impl #impl_generics crate::util::projections::TearSafe for #name #ty_generics #where_clause {}
+        unsafe impl #impl_generics #vv for #name #ty_generics #where_clause {
+            unsafe fn load(p: *mut Self) -> Self {
+                unsafe { Self { #(#loads),* } }
+            }
+            unsafe fn store(p: *mut Self, v: Self) {
+                unsafe { #(#stores)* }
+            }
+        }
+    })
+}
+
 fn has_attr(item: &syn::DeriveInput, attr: &str, arg: &str) -> bool {
     item.attrs.iter().any(|a| a.path().is_ident(attr) && a.parse_args::<Ident>().is_ok_and(|r| r == arg))
 }

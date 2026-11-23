@@ -149,12 +149,12 @@ use crate::locking::Guard as _;
 use crate::sb::errors::SbErrorId;
 use crate::sb::members;
 use crate::data_structures::bitmap::LeBitmap;
-use crate::util::projections::{Volatile, VolatileWriter, PublishedOnce};
+use crate::util::projections::{Volatile, VolatileValue, VolatileWriter, PublishedOnce};
 use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InPlace, InState, NoUninit, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntriesMut};
+use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InPlace, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntriesMut};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
@@ -2727,12 +2727,12 @@ pub fn sb_field_u64s<F: SbSection<Arm: Unsized> + ?Sized>(nr: usize) -> u32 {
 // ── The filesystem's copies ──────────────────────────────────────────────
 
 /// c->sb's words of @a, as they are.
-fn get_all<T: Copy + NoUninit, const N: usize>(a: &[Volatile<T>; N]) -> [T; N] {
+fn get_all<T: Copy + VolatileValue, const N: usize>(a: &[Volatile<T>; N]) -> [T; N] {
     a.each_ref().map(Volatile::get)
 }
 
 /// c->sb's words of @a set to @v: @a as sb_lock's holder has it.
-pub(crate) fn set_all<T: Copy + NoUninit, const N: usize>(a: &[VolatileWriter<T>; N], v: [T; N]) {
+pub(crate) fn set_all<T: Copy + VolatileValue, const N: usize>(a: &[VolatileWriter<T>; N], v: [T; N]) {
     for (w, v) in a.iter().zip(v) {
         w.set(v);
     }
