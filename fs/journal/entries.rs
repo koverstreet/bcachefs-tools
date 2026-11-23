@@ -8,7 +8,7 @@ use core::mem::size_of;
 
 use crate::c;
 use crate::types::ArmOf;
-use crate::util::vstructs::{plain_bytes, Head, Plain, VStruct};
+use crate::util::vstructs::{plain_bytes, FakeVStruct, Head, Plain};
 use zerocopy::IntoBytes;
 
 /// No room left in the buffer for the entry.

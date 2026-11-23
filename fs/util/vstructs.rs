@@ -14,8 +14,8 @@
 //! What a variable-size type can be, most general first:
 //!  - FakeDst: sized, its own bytes say how far past them it runs - a DST
 //!    typed as its header, to be converted. A #[counted_by] array's
-//!    FlexArray is; extent entries aren't - the superblock sizes those.
-//!  - VStruct: a FakeDst by a count of u64s, vstructs.h's, 8 byte aligned:
+//!    FakeFlexArray is; extent entries aren't - the superblock sizes those.
+//!  - FakeVStruct: a FakeDst by a count of u64s, vstructs.h's, 8 byte aligned:
 //!    vstruct!().
 //!  - Unsized: a DST of ours, its reference fat - an unsized vstruct, a
 //!    #[counted] array, a #[whole] or #[grown] value. SelfSized, if its head
@@ -42,7 +42,7 @@
 //!
 //! vstructs.h, and where it goes:
 //!  - vstruct_bytes(), replicas_entry_bytes(): FakeDst::bytes(), SelfSized::bytes()
-//!  - devs[]: #[counted]; FlexArray where it's read by stride
+//!  - devs[]: #[counted]; FakeFlexArray where it's read by stride
 //!  - vstruct_for_each(), vstruct_next(), vstruct_last(): entries()
 //!
 //! What's trusted: Plain, that any bytes are a valid value - which
@@ -214,13 +214,19 @@ pub trait FakeDst {
 }
 
 /// vstructs.h's: a FakeDst by a count of u64s.
-pub trait VStruct: FakeDst {
+///
+/// XXX: on the header, as FakeDst is; it goes for VStruct, a SelfSized DST
+/// counted in u64s.
+pub trait FakeVStruct: FakeDst {
     /// Set the count; panics if its field can't hold @u64s.
     fn set_val_u64s(&mut self, u64s: usize);
 }
 
 /// A type ending in a flexible array member, C's `T name[]`.
-pub trait FlexArray {
+///
+/// XXX: sized, its array past its size_of, as FakeDst is; it goes for
+/// FlexArray, a SelfSized DST counted in elements.
+pub trait FakeFlexArray {
     /// What the array holds.
     type Elem: Plain;
     /// Where it starts: offset_of!(), not size_of - a flexible array can
@@ -230,7 +236,7 @@ pub trait FlexArray {
     fn nr(&self) -> usize;
 }
 
-impl<T: FlexArray> FakeDst for T {
+impl<T: FakeFlexArray> FakeDst for T {
     #[inline]
     fn bytes(&self) -> usize {
         T::TAIL + self.nr() * size_of::<T::Elem>()
@@ -294,7 +300,7 @@ pub(crate) use floored_by_self;
 /// has it - and each state's length is its reference's, size_of_val(). A
 /// count of its own reads as u64s(), on the header, which each state derefs
 /// to; it's no field to set but the container's, which has the room for it -
-/// VStruct, on the header, builds one.
+/// FakeVStruct, on the header, builds one.
 macro_rules! vstruct {
     (unsized $head:ident, $($args:tt)*) => {
         $crate::util::vstructs::vstruct!($head, $($args)*);
@@ -341,7 +347,7 @@ macro_rules! vstruct {
             }
         }
 
-        impl $crate::util::vstructs::VStruct for $t {
+        impl $crate::util::vstructs::FakeVStruct for $t {
             fn set_val_u64s(&mut self, u64s: usize) {
                 self.$($count).+ = $crate::util::vstructs::Count::from_count(u64s)
                     .unwrap_or_else(|| panic!(concat!(stringify!($t), ": {} u64s don't fit in its ",
@@ -1167,7 +1173,7 @@ macro_rules! vstruct_family {
 /// holds a value's bytes to hand it out as: an ioctl's buffer, Unvalidated,
 /// the count checked against them; a tagged union whose arm it is, in the
 /// union's state.
-pub trait CountedHead: FlexArray + Plain {
+pub trait CountedHead: FakeFlexArray + Plain {
     type Of<S: State>: ?Sized;
 }
 
@@ -1704,7 +1710,7 @@ where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag>
 /// # Safety
 /// As from_arm()'s.
 pub unsafe fn from_arm_tailed<U, D, A>(arm: A, tail: &[A::Elem], at: usize) -> Result<U, VStructError>
-where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag> + FlexArray
+where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag> + FakeFlexArray
 {
     assert_eq!(arm.nr(), tail.len(), "{}: its header's count, and the elements given",
                core::any::type_name::<A>());

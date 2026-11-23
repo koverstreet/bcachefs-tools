@@ -14,8 +14,8 @@ use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::SbErrorId;
 use crate::sb::members::DevName;
 use crate::util::log::LogMsg;
-use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef, Head,
-                            FakeDst, Unvalidated, VStruct, VStructError, from_bytes};
+use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef, FakeDst,
+                            FakeVStruct, Head, Unvalidated, VStructError, from_bytes};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
 

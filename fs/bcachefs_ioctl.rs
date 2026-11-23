@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
-use cstruct_macros::{bch_enum, ioctl, counted, MaybeZeroable, Plain, TypeInfo, FlexArray};
+use cstruct_macros::{bch_enum, ioctl, counted, MaybeZeroable, Plain, TypeInfo, FakeFlexArray};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -860,7 +860,7 @@ pub struct bch_ioctl_snapshot_node {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, FlexArray, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, FakeFlexArray, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_tree_query {
     pub tree_id: u32, /* in: 0 = infer from fd's subvol */
     pub master_subvol: u32, /* out */
@@ -897,7 +897,7 @@ pub struct bch_ioctl_snapshot_node_v2 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, FlexArray, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, FakeFlexArray, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_tree_query_v2 {
     pub tree_id: u32, /* in: 0 = infer from fd's subvol */
     pub master_subvol: u32, /* out */

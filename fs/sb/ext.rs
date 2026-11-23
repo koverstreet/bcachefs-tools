@@ -62,7 +62,7 @@ mod tests {
     use super::*;
     use crate::btree::types::btree_id_str;
     use crate::types::Le32;
-    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, Unvalidated, VStruct};
+    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, FakeVStruct, Head, Unvalidated};
 
     /// An ext section of @u64s, @buf's first, as the superblock's printer
     /// prints it - by its type.

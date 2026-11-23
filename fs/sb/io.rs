@@ -154,7 +154,7 @@ use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, FakeDst, Head, InPlace, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntriesMut};
+use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, FakeDst, FakeVStruct, Head, InPlace, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, Validated, ValidatedEntriesMut};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
@@ -3000,7 +3000,7 @@ mod tests {
     use crate::btree::bkey::ValidateFlags;
     use crate::c;
     use crate::types::Le32;
-    use crate::util::vstructs::{Head, SelfSized, Unvalidated, Validated, VStruct, VStructError};
+    use crate::util::vstructs::{FakeVStruct, Head, SelfSized, Unvalidated, Validated, VStructError};
     use crate::util::Printbuf;
     use core::ffi::c_int;
 

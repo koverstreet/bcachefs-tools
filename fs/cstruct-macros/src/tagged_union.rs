@@ -1053,7 +1053,7 @@ impl Gen<'_> {
                 /// elements as the arm's header says: an error if the storage can't
                 /// hold them.
                 #vis fn from_arm_tailed<A>(arm: A, tail: &[A::Elem]) -> Result<Self, #vs::VStructError>
-                where A: crate::types::ArmOf<#s_ty, Tag = #tag_ty> + #vs::FlexArray
+                where A: crate::types::ArmOf<#s_ty, Tag = #tag_ty> + #vs::FakeFlexArray
                 {
                     // SAFETY: as from_arm()'s
                     unsafe { #vs::from_arm_tailed::<#s_ty, #determinant, A>(arm, tail, #payload_offset) }

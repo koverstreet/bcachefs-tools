@@ -52,7 +52,7 @@ pub(crate) struct FieldDef {
     /// struct's too.
     pub(crate) bitfield: bool,
     /// #[counted_by(FIELD)], on a trailing `[T; 0]`: the field its length
-    /// is, as the struct's FlexArray impl.
+    /// is, as the struct's FakeFlexArray impl.
     pub(crate) counted_by: Option<syn::Ident>,
     /// #[placed_at]: the field #[placed] added, its place's At - which
     /// #[derive(Init)]'s init() takes. (cstruct-macros' place.rs.)
