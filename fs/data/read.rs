@@ -1280,7 +1280,7 @@ impl<'r> Planned<'r, '_> {
     fn make(self, orig: &'r Rbio, into: &mut Option<Fragment<'r>>) -> Result<(), BchError> {
         let Planned { how, plan, ca, k } = self;
         let fs = orig.fs();
-        let opf = orig.bio().raw().bi_opf;
+        let opf = orig.bio().opf();
 
         let _noio = MemallocFlags::noio();
         let (pool, bvecs) = (&FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc());
@@ -1337,7 +1337,7 @@ impl<'r> Planned<'r, '_> {
             How::Bounce(size, gfp) => Some((size, gfp)),
             How::Own | How::Promote(_) => unreachable!("a fragment start() made or started above"),
         };
-        let opf = orig.bio().raw().bi_opf;
+        let opf = orig.bio().opf();
 
         let _noio = MemallocFlags::noio();
         let home = &FRAGMENTS;

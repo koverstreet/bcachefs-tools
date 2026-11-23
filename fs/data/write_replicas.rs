@@ -114,7 +114,7 @@ impl<R: IoRefIdx> Gathered<ReplicaErrs> for c::bch_write_bio<R> {
 
         if let Some(ca) = &ca {
             ca.account_io_completion(c::MemberErrorType::write, w.wbio.submit_time, status == 0);
-            if w.bio.raw().bi_opf & c::REQ_FUA == 0 {
+            if w.bio.opf() & c::REQ_FUA == 0 {
                 ca.write_unflushed();
             }
             if w.wbio.bits.nocow() != 0 {
@@ -227,7 +227,7 @@ fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write
         };
 
         if i + 1 != last {
-            let opf = wbio.bio.raw().bi_opf;
+            let opf = wbio.bio.opf();
             let mut n = {
                 let _noio = MemallocFlags::noio();
                 BioBox::new_in(ReplicaClones, REPLICA_CLONE_BVECS.alloc(), 0, opf,

@@ -79,7 +79,7 @@ impl<B: BioOwns> HoldsDev for DevBio<B> {
     fn hold(self: Pin<&mut Self>, ca: BlockDev) {
         let this = self.project();
         *this.unflushed = this.bio.op() == c::req_op_REQ_OP_WRITE && this.bio.raw().bi_iter.bi_size != 0 &&
-            this.bio.raw().bi_opf & c::REQ_FUA == 0;
+            this.bio.opf() & c::REQ_FUA == 0;
         *this.submit_time = local_clock();
         *this.ca = Some(ca);
     }

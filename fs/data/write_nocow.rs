@@ -267,7 +267,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
                 let bio = fs.bio_write.split(op.wbio.bio_mut().raw_mut(), (k.k.p.offset - op.pos.offset) as u32,
                                              Flags::empty());
                 wbio_init::<c::DevWriteRefKind>(bio).wbio.bits.set_put_bio(1);
-                (*bio).bi_opf = op.wbio.bio.raw().bi_opf;
+                (*bio).bi_opf = op.wbio.bio.opf();
                 bio
             }
         } else {

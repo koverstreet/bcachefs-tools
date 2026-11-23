@@ -965,7 +965,7 @@ pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_b
             n.wbio.bits.set_split(1);
             n.wbio.bits.set_bounce(0);
             n.wbio.bits.set_put_bio(1);
-            n.bio_mut().set_opf(wbio.bio.raw().bi_opf);
+            n.bio_mut().set_opf(wbio.bio.opf());
             unsafe { crate::os::bio::sys::inc_remaining(wbio.bio_mut().raw_mut()) };
             n
         } else {
@@ -1255,7 +1255,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let fs = wbio.fs();
     let ca = wbio.ca.take();
     let status = wbio.bio.raw().bi_status;
-    let fua = wbio.bio.raw().bi_opf & c::REQ_FUA != 0;
+    let fua = wbio.bio.opf() & c::REQ_FUA != 0;
 
     if let Some(ca) = &ca {
         ca.account_io_completion(c::MemberErrorType::write, wbio.wbio.submit_time,

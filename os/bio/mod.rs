@@ -262,6 +262,10 @@ impl<B: BioOwns> Bio<B> {
         &mut self.bio
     }
 
+    pub fn opf(&self) -> u32 {
+        self.bio.bi_opf
+    }
+
     pub(crate) fn op(&self) -> u32 {
         req_op(self.bio.bi_opf)
     }
