@@ -18,7 +18,7 @@ use crate::locking::MemallocFlags;
 use crate::os::kernel::WRITE;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
 use crate::util::alloc::Kmalloc;
-use crate::os::bio::{BioBox, BioOwner, BioRange, Data, Remapped, Submitted};
+use crate::os::bio::{BioBox, BioOwner, BioRange, BioSet, Data, HasBio, Remapped, Submitted};
 use crate::os::workqueue::Queue;
 use crate::util::task::{waiter, Resumable, Resume, ResumeAt};
 use cstruct_macros::args_stored_once;
@@ -73,24 +73,41 @@ const IN_FLIGHT: usize = 2 * PTRS;
 /// takes the next only if the set has it now, and otherwise waits for those
 /// it holds first. So no two writes wait for each other's clones.
 pub(crate) struct InFlight<'a> {
-    fs:   &'static Fs,
-    bios: ArrayVec<Replica<'a>, IN_FLIGHT>,
-    errs: ReplicaErrs,
+    fs:     &'static Fs,
+    /* the set a device's clones are from, and their priority */
+    clones: fn(&Dev) -> &BioSet<DevBio>,
+    ioprio: u16,
+    bios:   ArrayVec<Replica<'a>, IN_FLIGHT>,
+    errs:   ReplicaErrs,
+}
+
+/// The io refs a write's replicas are submitted with, each of R's: a btree
+/// node write's a read ref, a data write's or the journal's a write ref.
+pub(crate) enum Refs<'r, R: IoRefIdx> {
+    /// Each device's, got for the write
+    Get,
+    /// The caller's, one per pointer
+    Given(&'r mut [Option<DevIoRef<R>>]),
+    /// A nocow write's, one per pointer: its buckets, locked, unlocked as each
+    /// replica's done
+    Nocow(&'r mut [Option<DevIoRef<R>>]),
 }
 
 impl<'a> InFlight<'a> {
     pub fn new(fs: &'static Fs) -> Self {
-        InFlight { fs, bios: ArrayVec::new(), errs: ReplicaErrs::default() }
+        Self::with(fs, |ca| &ca.write_clones, 0)
+    }
+
+    /// Its clones from the set @clones picks, at @ioprio: a journal write's.
+    pub fn with(fs: &'static Fs, clones: fn(&Dev) -> &BioSet<DevBio>, ioprio: u16) -> Self {
+        InFlight { fs, clones, ioprio, bios: ArrayVec::new(), errs: ReplicaErrs::default() }
     }
 
     /// @src - @k's data, with @opf - written to each device of @k's pointers,
-    /// each holding an io ref of R's: a btree node write's a read ref, a data
-    /// write's a write ref. With @cas, a nocow write's io refs, one per
-    /// pointer, which the clones are given. What waiting it does - for its
-    /// own clones, then a set - is resumed @at: not inline, as a set's wait
-    /// may follow.
+    /// with @refs. What waiting it does - for its own clones, then a set - is
+    /// resumed @at: not inline, as a set's wait may follow.
     pub async fn submit<R: IoRefIdx>(&mut self, src: BioRange<'a>, opf: u32, ty: DataType, k: &BkeyI,
-                                     mut cas: Option<&mut [Option<DevIoRef<R>>]>, at: Resume<'_>)
+                                     mut refs: Refs<'_, R>, at: Resume<'_>)
     where
         DevIoRef<R>: Into<BlockDev>,
     {
@@ -106,14 +123,15 @@ impl<'a> InFlight<'a> {
         };
         assert!(!devs.is_empty(), "writing with no devices");
 
-        let nocow = cas.is_some();
+        let nocow = matches!(refs, Refs::Nocow(_));
         let fua = opf & c::REQ_FUA != 0;
         let waiter = waiter::Async::current().await;
 
         for (i, ptr) in devs.iter().enumerate() {
-            let ca = match &mut cas {
-                Some(cas) => Some(cas[i].take().expect("a nocow write without its io refs")),
-                None      => fs.dev_get_ioref::<R>(ptr.dev().into()),
+            let ca = match &mut refs {
+                Refs::Get => fs.dev_get_ioref::<R>(ptr.dev().into()),
+                Refs::Given(cas) | Refs::Nocow(cas) =>
+                    Some(cas[i].take().expect("a write's io refs, one per pointer")),
             };
             let Some(ca) = ca else {
                 self.errs.fail(ptr.dev(), c::BLK_STS_REMOVED);
@@ -121,7 +139,7 @@ impl<'a> InFlight<'a> {
             };
             ca.io_done_add(WRITE, ty, (src.len() >> 9).into());
             let nocow = nocow.then(|| (ca.ptr_bucket(ptr), !fua));
-            if ty != DataType::btree && fs.opts().no_data_io.get() != 0 {
+            if !matches!(ty, DataType::btree | DataType::journal) && fs.opts().no_data_io.get() != 0 {
                 if let Some((bucket, _)) = nocow {
                     fs.nocow_locks.unlock_bucket(pos(ptr.dev().into(), bucket), NocowKind::Update);
                 }
@@ -147,12 +165,16 @@ impl<'a> InFlight<'a> {
     fn clone_of(&self, ca: &Dev, src: BioRange<'a>, opf: u32) -> Option<BioBox<'a, DevBio>> {
         let _noio = MemallocFlags::noio();
         let _nowait = (!self.bios.is_empty()).then(MemallocFlags::noreclaim);
-        ca.write_clones.alloc::<BchError, _>(0, opf, |b| DevBio::new(b.clone_of(src))).ok()
+        let mut n = (self.clones)(ca).alloc::<BchError, _>(0, opf, |b| DevBio::new(b.clone_of(src))).ok()?;
+        if self.ioprio != 0 {
+            n.as_mut().bio_mut().set_ioprio(self.ioprio);
+        }
+        Some(n)
     }
 
     /// Every replica in flight done, and its end: resumed @at.
     async fn drain(&mut self, at: Resume<'_>) {
-        let Self { fs, bios, errs } = self;
+        let Self { fs, bios, errs, .. } = self;
         for r in bios.drain(..) {
             let b = r.io.resume_on(at).await;
             if let Some((dev, status)) = DevBio::finish(b) {
@@ -186,7 +208,7 @@ pub async fn write_replicas<O: BioOwner<Owns = Data>>(fs: &'static Fs, bio: Rema
      * XXX: btree writes should be using io_ref[WRITE], but we aren't retrying
      * failed btree writes yet (due to device removal/ro):
      */
-    io.submit::<c::DevReadRefKind>(bio.bio().range(), bio.bio().opf(), ty, k, None,
+    io.submit::<c::DevReadRefKind>(bio.bio().range(), bio.bio().opf(), ty, k, Refs::Get,
                                    Resume::queue(Queue::system_dfl()))
         .await;
     io.wait(at).await

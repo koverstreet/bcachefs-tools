@@ -11,7 +11,7 @@ use crate::data_structures::dst_room::DstRoom;
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
 use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, WriteFor};
-use crate::data::write_replicas::{InFlight, ReplicaErrs};
+use crate::data::write_replicas::{InFlight, Refs, ReplicaErrs};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::os::bio::{Bio, BioRange};
 use crate::errcode::{Errcode, BchError};
@@ -326,7 +326,7 @@ async fn nocow_write_pass<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32, at
     }
     let mut io = InFlight::new(op.fs());
     for e in extents.iter_mut() {
-        io.submit::<c::DevWriteRefKind>(e.data, opf, DataType::user, &e.k, Some(&mut e.cas[..e.nr]), at).await;
+        io.submit::<c::DevWriteRefKind>(e.data, opf, DataType::user, &e.k, Refs::Nocow(&mut e.cas[..e.nr]), at).await;
     }
     (more, io.wait(at).await)
 }

@@ -719,7 +719,7 @@ use crate::data::keylist::Keylist;
 use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write_extent::{write_extent, Extent};
 use crate::data::write_nocow::nocow_write;
-use crate::data::write_replicas::{InFlight, ReplicaErrs};
+use crate::data::write_replicas::{InFlight, Refs, ReplicaErrs};
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
@@ -1238,7 +1238,7 @@ async fn write_pass<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: 
             ExtentData::Own(b)     => owned.next().expect("more extents in a pass than it holds").insert(b).range(),
         };
         let k = op.insert_keys.iter_from(key_to_write_offset).next().expect("a write with no key");
-        io.submit::<c::DevWriteRefKind>(range, opf, DataType::user, k, None, at).await;
+        io.submit::<c::DevWriteRefKind>(range, opf, DataType::user, k, Refs::Get, at).await;
 
         /* a reserve's memory is the next extent's only once this one's done */
         if !more || reserved {
