@@ -4,6 +4,8 @@ use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
+use crate::data_structures::dst_room::DstRoom;
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef,
     CommitFlags, TransAttempt, UpdateTriggerFlags,
@@ -747,13 +749,9 @@ fn bkey_buf_test_key(buf: &mut [u64], seed: u64) -> BkeySC<'_> {
     h.u64s = u64s as u8;
     h.p.offset = seed;
 
-    let p = buf.as_mut_ptr().cast::<c::bkey_i>();
-    // SAFETY: the header written at the start of @buf, its u64s all of @buf
-    let k = unsafe {
-        (&raw mut (*p).k).write(h);
-        &*BkeyI::from_raw(p)
-    };
-    BkeySC::from(k)
+    plain_bytes_mut(&mut buf[..BKEY_U64S]).copy_from_slice(plain_bytes(&h));
+    let buf: &[u64] = buf;
+    BkeySC::from(&**DstRoom::<BkeyI>::from_elems(buf))
 }
 
 fn bkey_buf_holds(b: &BkeyBuf, k: BkeySC<'_>) -> bool {
