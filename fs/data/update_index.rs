@@ -46,9 +46,10 @@ use crate::init::error::{count_fsck_err, id};
 use crate::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::util::log::LogMsg;
-use crate::util::{Printbuf, ToText};
+use crate::util::Printbuf;
 use crate::{bch_err_fn, log_msg_ratelimited};
 use core::mem::size_of;
+use core::ops::ControlFlow;
 use core::sync::atomic::{fence, Ordering};
 use crate::format::{Bpos, BkeyType};
 
@@ -101,14 +102,14 @@ pub(crate) fn remap_bits(fs: &Fs, old: BkeySC<'_>, bits: u32, new: BkeySC<'_>) -
 /// that went wrong: @new, the key in the btree, @wrote, what the write wrote,
 /// cut to it, @insert, what was going in.
 #[cold]
-fn key_to_text(out: &mut Printbuf, fs: &Fs, u: &c::data_update, new: BkeySC<'_>, wrote: BkeySC<'_>,
-               insert: BkeySC<'_>) {
+fn key_to_text(out: &mut Printbuf, fs: &Fs, op: &c::bch_write_op, u: &c::data_update_index, new: BkeySC<'_>,
+               wrote: BkeySC<'_>, insert: BkeySC<'_>) {
     let old = BkeySC::from(u.k.key());
 
     write!(out, "rewrites found:\t{:b}", remap_bits(fs, old, u.opts.ptrs_kill.into(), insert));
     out.newline();
 
-    fs.data_update_opts_to_text(out, &u.op.opts, &u.opts);
+    fs.data_update_opts_to_text(out, &op.opts, &u.opts);
 
     write!(out, "\nold:    {}", old.to_text(fs));
     write!(out, "\nnew:    {}", new.to_text(fs));
@@ -119,7 +120,8 @@ fn key_to_text(out: &mut Printbuf, fs: &Fs, u: &c::data_update, new: BkeySC<'_>,
 /// A key the update skipped, counted in its stats and traced.
 #[cold]
 #[inline(never)]
-fn count_key_fail(fs: &Fs, u: &c::data_update, new: BkeySC<'_>, wrote: BkeySC<'_>, insert: BkeySC<'_>, msg: &str) {
+fn count_key_fail(fs: &Fs, op: &c::bch_write_op, u: &c::data_update_index, new: BkeySC<'_>, wrote: BkeySC<'_>,
+                  insert: BkeySC<'_>, msg: &str) {
     if let Some(stats) = u.moving().map(|m| m.stats()) {
         stats.keys_raced.fetch_add(1, Ordering::Relaxed);
         stats.sectors_raced.fetch_add(insert.k.size.into(), Ordering::Relaxed);
@@ -127,13 +129,146 @@ fn count_key_fail(fs: &Fs, u: &c::data_update, new: BkeySC<'_>, wrote: BkeySC<'_
 
     fs.event_add_trace(events::data_update_key_fail, insert.k.size.into(), |out| {
         write!(out, "{msg}\n");
-        key_to_text(out, fs, u, new, wrote, insert);
+        key_to_text(out, fs, op, u, new, wrote, insert);
     });
+}
+
+/// @new's pointers, what the write wrote, into @insert, what's there - matched
+/// with @old - and what isn't needed dropped: the options that went by, or
+/// where the walk goes on from if the key's skipped. Not inlined: its
+/// iterators and decoded pointers aren't needed in the frame the update's
+/// commit runs under.
+#[inline(never)]
+fn merge_ptrs<'t>(t: &TransAttempt<'_, 't>, op: &c::bch_write_op, u: &c::data_update_index, old: BkeySC<'_, Ptrs>,
+                  k: BkeySC<'_>, front: BkeySC<'_>, new: &mut TransBkey<'_, 't>, insert: &mut TransBkey<'_, 't>,
+                  next_pos: Bpos)
+    -> Result<ControlFlow<Bpos, c::bch_inode_opts>, BchError>
+{
+    let fs = t.fs();
+
+    /* Don't replace non-cached replicas with cached: */
+    let replacing_non_cached = with_remapped(fs, old, insert, u.opts.ptrs_kill,
+                                             |i, kill| i.ptrs_in(fs, kill).any(|p| p.cached() == 0));
+
+    if replacing_non_cached && ptrs(fs, new).ptrs(fs).any(|p| p.cached() != 0) {
+        let mut msg = log_msg_ratelimited!(fs);
+        write!(msg, "data update tried to replace non cached data with cached:\n");
+        key_to_text(&mut msg, fs, op, u, k, new.as_sc(), insert.as_sc());
+        return Ok(ControlFlow::Break(next_pos));
+    }
+
+    if !u.opts.bits.no_devs_have() {
+        /*
+         * Drop replicas in the existing extent that conflict with what we just
+         * wrote - but only if they were explicitly specified in ptrs_kill: a
+         * replica that we just wrote might conflict with a replica that we
+         * want to keep, due to racing with another move:
+         */
+        let new_p = ptrs(fs, new);
+        with_remapped(fs, old, insert, u.opts.ptrs_kill, |i, kill| {
+            let conflicts = i.on_devs_of(fs, &new_p, |_| true) & kill;
+            i.drop_ptrs_mask(fs, conflicts);
+        });
+
+        /*
+         * Any conflicts that are left over were useless writes - perhaps due
+         * to a copygc race. But a new durable pointer doesn't conflict with a
+         * cached pointer on the same device - it replaces it:
+         */
+        let insert_p = ptrs(fs, insert);
+        let conflicted = brand(ptrs_mut(fs, new), |n| {
+            let conflicts = n.on_devs_of(fs, &insert_p, |p| p.cached() == 0);
+            if !conflicts.is_empty() {
+                fs.event_add_trace(events::data_update_useless_write_fail,
+                                   u64::from(k.k.size) * u64::from(conflicts.bits().count_ones()), |out| {
+                    ptr_bits_to_text(out, conflicts.bits(), "conflicted");
+                    write!(out, "wrote: {}", n.key().to_text(fs));
+                    out.newline();
+                    u.to_text(out, op);
+                });
+                n.drop_ptrs_mask(fs, conflicts);
+            }
+            !conflicts.is_empty()
+        });
+
+        if conflicted && new.as_sc().val_bytes().is_empty() {
+            count_key_fail(fs, op, u, k, front, insert.as_sc(), "new replicas conflicted:");
+            return Ok(ControlFlow::Break(k.k.p));
+        }
+    }
+
+    /*
+     * Drop all conflicts from the existing extent, not the newly written
+     * replicas:
+     *
+     * When converting an extent to erasure coding, we don't disallow the
+     * write from allocating on the extent's existing devices: we just want a
+     * new replica that will have a stripe pointer added asynchronously by
+     * erasure coding, and it can overwrite whichever device it happens to
+     * land on
+     *
+     * XXX: make sure drop_extra_replicas does not drop the new replica
+     */
+    let new_p = ptrs(fs, new);
+    brand(ptrs_mut(fs, insert), |i| {
+        let conflicts = i.on_devs_of(fs, &new_p, |_| true);
+        i.drop_ptrs_mask(fs, conflicts);
+    });
+
+    let mut i = ptrs_mut(fs, insert);
+    for p in new_p.ptrs_decoded(fs) {
+        i.insert_decoded_ptr(fs, &p.p).unwrap_or_else(|e| {
+            panic!("data update: {e}, adding the pointers of {} to {}", new_p.to_text(fs), i.to_text(fs))
+        });
+    }
+
+    let opts = get_io_opts(t, None, k)?;
+
+    let old_durability = k.durability(t)?;
+    let new_durability = insert.as_sc().durability(t)?;
+    let want = op.opts.data_replicas.min(opts.data_replicas);
+
+    if new_durability.total < old_durability.total && new_durability.total < want {
+        /*
+         * This can happen when a move - evacuate or copygc - races with an
+         * extent being erasure coded: we replaced a pointer with one on the
+         * same device (so we have to drop it early, to avoid conflicts) which
+         * is no longer erasure coded.
+         *
+         * XXX: trace this
+         */
+        return Ok(ControlFlow::Break(next_pos));
+    }
+
+    with_remapped(fs, old, insert, u.opts.ptrs_io_error, |i, m| drop_extra_durability(t, &opts, i, m, true))?;
+    with_remapped(fs, old, insert, u.opts.ptrs_kill_ec, |mut i, m| drop_extra_ec_durability(t, &opts, &mut i, m))?;
+    with_remapped(fs, old, insert, u.opts.ptrs_kill, |i, m| drop_extra_durability(t, &opts, i, m, false))?;
+
+    /* Prefer to drop existing replicas over new - we don't want to drop the
+     * new replica being erasure coded*/
+    // XXX (C's): else prefer to drop new replicas, and if we did, trace that we
+    // did useless work - break up drop_extra_durability() so we can trace what
+    // we're doing (or have it return a mask)
+    if u.opts.bits.no_devs_have() {
+        brand(ptrs_mut(fs, insert), |i| {
+            let m = i.except(fs, i.on_devs_of(fs, &new_p, |_| true));
+            drop_extra_durability(t, &opts, i, m, false)
+        })?;
+    }
+
+    brand(ptrs_mut(fs, insert), |i| { let all = i.all(fs); drop_extra_durability(t, &opts, i, all, false) })?;
+
+    let mut i = ptrs_mut(fs, insert);
+    i.drop_extra_cached_ptrs(fs, &opts);
+    i.propagate_incompressible(fs, k);
+
+    Ok(ControlFlow::Continue(opts))
 }
 
 /// The update of @k, the slot at @iter, by the front of @u's keylist; where
 /// the walk goes on from.
-fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &BtreeIter<'t>, k: BkeySC<'_>)
+fn index_update_key<'t>(t: &TransAttempt<'_, 't>, op: &c::bch_write_op, u: &c::data_update_index, iter: &BtreeIter<'t>,
+                        k: BkeySC<'_>)
     -> Result<Bpos, BchError>
 {
     let fs = t.fs();
@@ -142,7 +277,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
     /* make a local copy, so that we can trace it after the transaction commit: */
     let k = t.bkey_make_mut_noupdate(k)?;
 
-    let front = BkeySC::from(u.op.insert_keys.front().expect("an index update of an empty keylist"));
+    let front = BkeySC::from(op.insert_keys.front().expect("an index update of an empty keylist"));
     let mut new: TransBkey<'_, '_> = t.bkey_reassemble_room(front, front.k.bytes() + RECONCILE_ROOM)?;
     // and room for @new's pointers
     let mut insert: TransBkey<'_, '_> =
@@ -161,131 +296,21 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
     let next_pos = insert.k().p;
 
     if !extents_match(fs, k.as_sc(), old) {
-        count_key_fail(fs, u, k.as_sc(), new.as_sc(), insert.as_sc(), "no match:");
+        count_key_fail(fs, op, u, k.as_sc(), new.as_sc(), insert.as_sc(), "no match:");
         return Ok(next_pos);
     }
 
     let old = old.arm::<Ptrs>().unwrap_or_else(|| panic!("data update of a key without pointers: {}", old.to_text(fs)));
 
-    /* Don't replace non-cached replicas with cached: */
-    let replacing_non_cached = with_remapped(fs, old, &mut insert, u.opts.ptrs_kill,
-                                             |i, kill| i.ptrs_in(fs, kill).any(|p| p.cached() == 0));
-
-    if replacing_non_cached && ptrs(fs, &new).ptrs(fs).any(|p| p.cached() != 0) {
-        let mut msg = log_msg_ratelimited!(fs);
-        write!(msg, "data update tried to replace non cached data with cached:\n");
-        key_to_text(&mut msg, fs, u, k.as_sc(), new.as_sc(), insert.as_sc());
-        return Ok(next_pos);
-    }
-
-    if !u.opts.bits.no_devs_have() {
-        /*
-         * Drop replicas in the existing extent that conflict with what we just
-         * wrote - but only if they were explicitly specified in ptrs_kill: a
-         * replica that we just wrote might conflict with a replica that we
-         * want to keep, due to racing with another move:
-         */
-        let new_p = ptrs(fs, &new);
-        with_remapped(fs, old, &mut insert, u.opts.ptrs_kill, |i, kill| {
-            let conflicts = i.on_devs_of(fs, &new_p, |_| true) & kill;
-            i.drop_ptrs_mask(fs, conflicts);
-        });
-
-        /*
-         * Any conflicts that are left over were useless writes - perhaps due
-         * to a copygc race. But a new durable pointer doesn't conflict with a
-         * cached pointer on the same device - it replaces it:
-         */
-        let insert_p = ptrs(fs, &insert);
-        let conflicted = brand(ptrs_mut(fs, &mut new), |n| {
-            let conflicts = n.on_devs_of(fs, &insert_p, |p| p.cached() == 0);
-            if !conflicts.is_empty() {
-                fs.event_add_trace(events::data_update_useless_write_fail,
-                                   u64::from(k.k().size) * u64::from(conflicts.bits().count_ones()), |out| {
-                    ptr_bits_to_text(out, conflicts.bits(), "conflicted");
-                    write!(out, "wrote: {}", n.key().to_text(fs));
-                    out.newline();
-                    u.to_text(out);
-                });
-                n.drop_ptrs_mask(fs, conflicts);
-            }
-            !conflicts.is_empty()
-        });
-
-        if conflicted && new.as_sc().val_bytes().is_empty() {
-            count_key_fail(fs, u, k.as_sc(), front, insert.as_sc(), "new replicas conflicted:");
-            return Ok(k.k().p);
-        }
-    }
-
-    /*
-     * Drop all conflicts from the existing extent, not the newly written
-     * replicas:
-     *
-     * When converting an extent to erasure coding, we don't disallow the
-     * write from allocating on the extent's existing devices: we just want a
-     * new replica that will have a stripe pointer added asynchronously by
-     * erasure coding, and it can overwrite whichever device it happens to
-     * land on
-     *
-     * XXX: make sure drop_extra_replicas does not drop the new replica
-     */
-    let new_p = ptrs(fs, &new);
-    brand(ptrs_mut(fs, &mut insert), |i| {
-        let conflicts = i.on_devs_of(fs, &new_p, |_| true);
-        i.drop_ptrs_mask(fs, conflicts);
-    });
-
-    let mut i = ptrs_mut(fs, &mut insert);
-    for p in new_p.ptrs_decoded(fs) {
-        i.insert_decoded_ptr(fs, &p.p).unwrap_or_else(|e| {
-            panic!("data update: {e}, adding the pointers of {} to {}", new_p.to_text(fs), i.to_text(fs))
-        });
-    }
-
-    let opts = get_io_opts(t, None, k.as_sc())?;
-
-    let old_durability = k.as_sc().durability(t)?;
-    let new_durability = insert.as_sc().durability(t)?;
-    let want = u.op.opts.data_replicas.min(opts.data_replicas);
-
-    if new_durability.total < old_durability.total && new_durability.total < want {
-        /*
-         * This can happen when a move - evacuate or copygc - races with an
-         * extent being erasure coded: we replaced a pointer with one on the
-         * same device (so we have to drop it early, to avoid conflicts) which
-         * is no longer erasure coded.
-         *
-         * XXX: trace this
-         */
-        return Ok(next_pos);
-    }
-
-    with_remapped(fs, old, &mut insert, u.opts.ptrs_io_error, |i, m| drop_extra_durability(t, &opts, i, m, true))?;
-    with_remapped(fs, old, &mut insert, u.opts.ptrs_kill_ec, |mut i, m| drop_extra_ec_durability(t, &opts, &mut i, m))?;
-    with_remapped(fs, old, &mut insert, u.opts.ptrs_kill, |i, m| drop_extra_durability(t, &opts, i, m, false))?;
-
-    /* Prefer to drop existing replicas over new - we don't want to drop the
-     * new replica being erasure coded*/
-    // XXX (C's): else prefer to drop new replicas, and if we did, trace that we
-    // did useless work - break up drop_extra_durability() so we can trace what
-    // we're doing (or have it return a mask)
-    if u.opts.bits.no_devs_have() {
-        brand(ptrs_mut(fs, &mut insert), |i| {
-            let m = i.except(fs, i.on_devs_of(fs, &new_p, |_| true));
-            drop_extra_durability(t, &opts, i, m, false)
-        })?;
-    }
-
-    brand(ptrs_mut(fs, &mut insert), |i| { let all = i.all(fs); drop_extra_durability(t, &opts, i, all, false) })?;
-
-    let mut i = ptrs_mut(fs, &mut insert);
-    i.drop_extra_cached_ptrs(fs, &opts);
-    i.propagate_incompressible(fs, k.as_sc());
+    let opts = match merge_ptrs(t, op, u, old, k.as_sc(), front, &mut new, &mut insert, next_pos)? {
+        ControlFlow::Continue(opts) => opts,
+        ControlFlow::Break(next) => return Ok(next),
+    };
+    let want = op.opts.data_replicas.min(opts.data_replicas);
 
     let s = t.sum_sector_overwrites(iter, insert.as_ref())?;
 
-    let res = &u.op.res;
+    let res = &op.res;
     if s.disk_sectors_delta > res.sectors() as i64 {
         res.add_physical((s.disk_sectors_delta - res.sectors() as i64) as u64, s.new_nr_replicas,
                          if s.usage_increasing { c::ReservationFlags::empty() }
@@ -305,9 +330,9 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
      * existing extent
      */
     new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
-                            u.op.opts.change_cookie)?;
+                            op.opts.change_cookie)?;
 
-    if u.op.opts.change_cookie == fs.opt_change_cookie.get() {
+    if op.opts.change_cookie == fs.opt_change_cookie.get() {
         let old_durability = k.as_sc().durability(t)?;
         let new_durability = insert.as_sc().durability(t)?;
 
@@ -315,14 +340,14 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
             new_durability.total == 0) &&
             {
                 fence(Ordering::SeqCst);
-                u.op.opts.change_cookie == fs.opt_change_cookie.get()
+                op.opts.change_cookie == fs.opt_change_cookie.get()
             }
         {
             let mut msg = LogMsg::new(fs);
             write!(msg, "Data update would have reduced extent durability:\n");
             write!(msg, "Old extent {}, new {}, option specifies {}\n",
                    old_durability.total, new_durability.total, opts.data_replicas);
-            key_to_text(&mut msg, fs, u, k.as_sc(), new.as_sc(), insert.as_sc());
+            key_to_text(&mut msg, fs, op, u, k.as_sc(), new.as_sc(), insert.as_sc());
             fs.emergency_read_only(&mut msg);
             return fs.throw(Errcode::emergency_ro);
         }
@@ -330,7 +355,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
 
     /* This is the real set_needs_reconcile() call */
     insert.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
-                               u.op.opts.change_cookie)?;
+                               op.opts.change_cookie)?;
 
     t.update(iter, &insert, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
     t.commit(Some(res), CommitOpts::from(u.opts.commit_flags)
@@ -360,9 +385,13 @@ fn insert_is_extent(fs: &Fs, insert: &BkeyI) -> bool {
     false
 }
 
-pub(crate) fn index_update(trans: &BtreeTrans<'_>, u: &mut c::data_update) -> Result<(), BchError> {
+/// @op's keys, its update's - @u's - new pointers, put into the extent it
+/// rewrote.
+pub(crate) fn index_update(trans: &BtreeTrans<'_>, op: &mut c::bch_write_op, u: &c::data_update_index)
+    -> Result<(), BchError>
+{
     let fs = trans.fs();
-    let Some(front) = u.op.insert_keys.front().filter(|k| insert_is_extent(fs, k)) else { return Ok(()) };
+    let Some(front) = op.insert_keys.front().filter(|k| insert_is_extent(fs, k)) else { return Ok(()) };
 
     /*
      * Slots, not BTREE_ITER_trim: each key must be whole. Where @insert ends
@@ -375,14 +404,14 @@ pub(crate) fn index_update(trans: &BtreeTrans<'_>, u: &mut c::data_update) -> Re
                                   BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
 
     iter.for_each(trans, |t, iter, k| {
-        let next = index_update_key(t, u, iter, k)?;
+        let next = index_update_key(t, op, u, iter, k)?;
 
-        while u.op.insert_keys.front().is_some_and(|k| bkey_le(k.k().p, next)) {
-            u.op.insert_keys.pop_front();
+        while op.insert_keys.front().is_some_and(|k| bkey_le(k.k().p, next)) {
+            op.insert_keys.pop_front();
         }
 
         // the next key's checked before the walk peeks for it, as C's loop
-        Ok(match u.op.insert_keys.front() {
+        Ok(match op.insert_keys.front() {
             Some(front) if insert_is_extent(fs, front) => LoopFlow::ContinueFrom(next),
             _ => LoopFlow::Break(()),
         })
@@ -390,7 +419,7 @@ pub(crate) fn index_update(trans: &BtreeTrans<'_>, u: &mut c::data_update) -> Re
 }
 
 /// @f on each slot @u's extent covered, an attempt and a commit each.
-fn for_each_old_slot<'t, F>(trans: &'t TransGuard<'t>, u: &c::data_update, res: Option<&DiskReservation<'_>>,
+fn for_each_old_slot<'t, F>(trans: &'t TransGuard<'t>, u: &c::data_update_index, res: Option<&DiskReservation<'_>>,
                             mut f: F) -> Result<(), BchError>
 where
     F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, BkeySC<'k>) -> Result<(), BchError>,
@@ -411,27 +440,27 @@ where
 /// read failed on every replica: drops its ptrs_kill, and logs it.
 pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -> Result<(), BchError> {
     let fs = trans.fs();
-    let old = BkeySC::from(u.k.key());
+    let old = BkeySC::from(u.index.k.key());
     let old_p = old.arm::<Ptrs>().unwrap_or_else(|| panic!("data update of a key without pointers: {}", old.to_text(fs)));
 
     let mut msg = LogMsg::new(fs);
     write!(msg, "data_update_index_update_nowrite():\n");
     write!(msg, "old: {}", old.to_text(fs));
     msg.newline();
-    ptr_bits_to_text(&mut msg, u.opts.ptrs_kill, "ptrs_kill");
+    ptr_bits_to_text(&mut msg, u.index.opts.ptrs_kill, "ptrs_kill");
 
     let res = DiskReservation::new(fs);
 
-    assert_eq!(u.opts.ptrs_kill_ec, 0, "a nowrite data update dropping stripe pointers");
-    assert_ne!(u.opts.ptrs_kill, 0, "a nowrite data update with nothing to drop");
+    assert_eq!(u.index.opts.ptrs_kill_ec, 0, "a nowrite data update dropping stripe pointers");
+    assert_ne!(u.index.opts.ptrs_kill, 0, "a nowrite data update with nothing to drop");
 
-    for_each_old_slot(trans, u, Some(&res), |t, iter, k| {
+    for_each_old_slot(trans, &u.index, Some(&res), |t, iter, k| {
         write!(msg, "k: {}", k.to_text(fs));
         msg.newline();
 
         let Some(kp) = k.arm::<Ptrs>().filter(|_| extents_match(fs, k, old)) else { return Ok(()) };
         let Some(new) = brand(old_p, |o| brand(kp, |kb| -> Result<_, BchError> {
-            let kill = o.remap(fs, o.assume(fs, u.opts.ptrs_kill.into()), &kb);
+            let kill = o.remap(fs, o.assume(fs, u.index.opts.ptrs_kill.into()), &kb);
             if kill.is_empty() {
                 return Ok(None);
             }
@@ -459,10 +488,10 @@ pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -
 fn park_update(u: &c::data_update, why: ParkReason<'_>) -> Result<bool, BchError> {
     let fs = u.op.fs();
     let trans = crate::btree_trans!(fs);
-    let old = BkeySC::from(u.k.key());
+    let old = BkeySC::from(u.index.k.key());
     let mut parked = false;
 
-    bch_err_fn!(fs, for_each_old_slot(&trans, u, None, |t, iter, k| {
+    bch_err_fn!(fs, for_each_old_slot(&trans, &u.index, None, |t, iter, k| {
         if !extents_match(fs, k, old) {
             return Ok(());
         }
@@ -480,7 +509,7 @@ fn park_update(u: &c::data_update, why: ParkReason<'_>) -> Result<bool, BchError
 pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
     let fs = u.op.fs();
     let err = BchError::from_raw(-i32::from(u.op.error));
-    let parked = park_update(u, ParkReason::UpdateFailed { err, opts: &u.op.opts, data_opts: &u.opts });
+    let parked = park_update(u, ParkReason::UpdateFailed { err, opts: &u.op.opts, data_opts: &u.index.opts });
 
     /*
      * Nothing matched: the extent we were reconciling was rewritten or
@@ -498,7 +527,7 @@ pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
 /// it's back already, and the next try can read it.
 pub(crate) fn no_device_to_read_from(u: &c::data_update) {
     let fs = u.op.fs();
-    let devs = offline_devs(fs, BkeySC::from(u.k.key()));
+    let devs = offline_devs(fs, BkeySC::from(u.index.k.key()));
     if !devs.d.is_empty() {
         let _ = fs.park_for_devs(&devs, || park_update(u, ParkReason::DevsOffline(devs)));
     }

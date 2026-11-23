@@ -148,6 +148,9 @@ pub fn uuid_to_fsid(uuid: &[u8; 16]) -> c::__kernel_fsid_t {
 #[derive(Clone, Copy)]
 pub struct Mm(core::ptr::NonNull<c::mm_struct>);
 
+// for another thread to use: what it's for
+unsafe impl Send for Mm {}
+
 impl Mm {
     /// This task's: None for a kthread's.
     pub fn current() -> Option<Self> {
@@ -170,25 +173,6 @@ pub struct KthreadMm(Mm);
 impl Drop for KthreadMm {
     fn drop(&mut self) {
         unsafe { c::kthread_unuse_mm(self.0.0.as_ptr()) }
-    }
-}
-
-/// What this task has run, as of @now: 0 where the scheduler doesn't say.
-pub fn current_runtime(now: u64) -> u64 {
-    #[cfg(not(any(CONFIG_SCHED_ALT, CONFIG_SCHED_MUQSS)))]
-    {
-        let se = unsafe { &(*crate::os::sched::current()).se };
-        se.sum_exec_runtime.wrapping_add(now.wrapping_sub(se.exec_start))
-    }
-    /*
-     * BMQ/PDS (CONFIG_SCHED_ALT) and MuQSS replace CFS and drop
-     * task_struct.se; this is only write-point runtime accounting,
-     * so skip it there.
-     */
-    #[cfg(any(CONFIG_SCHED_ALT, CONFIG_SCHED_MUQSS))]
-    {
-        let _ = now;
-        0
     }
 }
 

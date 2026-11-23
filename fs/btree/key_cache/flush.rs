@@ -16,7 +16,7 @@ use crate::journal::pins::PinHolder;
 use crate::util::alloc::{flags, KVVec};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
-use crate::{fs_fatal_error, prt};
+use crate::{bch_err_ratelimited, fs_fatal_error, prt};
 use c::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
 use c::SixLockType::SIX_LOCK_intent;
 use core::ffi::c_int;
@@ -184,7 +184,7 @@ impl PinHolder<crate::field!(journal)> for c::bkey_cached {
 
         let trans = crate::btree_trans!(fs);
 
-        let ret = lockrestart_do(&trans, |t| {
+        let attempt = |commit_flags: CommitFlags| lockrestart_do(&trans, |t| {
             let mut paths = trans.paths();
             let path_idx = trans.node_lock_with_path(&mut paths, &self.c, SIX_LOCK_intent, 0)?;
             let ck = paths.held_key_cached(path_idx).expect("an entry just locked");
@@ -205,11 +205,32 @@ impl PinHolder<crate::field!(journal)> for c::bkey_cached {
             drop(paths);
 
             if do_flush {
-                btree_key_cache_flush_pos(t, key, seq, CommitFlags::JOURNAL_RECLAIM, false)
+                btree_key_cache_flush_pos(t, key, seq, commit_flags, false)
             } else {
                 Ok(())
             }
         });
+
+        let mut ret = attempt(CommitFlags::JOURNAL_RECLAIM);
+        if ret.as_ref().is_err_and(|e| e.matches(Errcode::journal_reclaim_would_deadlock)) {
+            // A fresh journal reservation would block reclaim: retry with
+            // none - the key goes into the leaf under the pin it has, which
+            // moves to the dirty node
+            ret = attempt(CommitFlags::JOURNAL_RECLAIM | CommitFlags::NO_JOURNAL_RES);
+
+            /*
+             * no_journal_res only skips taking a journal reservation in the
+             * commit; it doesn't clear the watermark guard in
+             * btree_update_start() that throws this same error for a btree
+             * node split or alloc, so the retry can still legitimately hit it
+             * again. Not fatal - the pin stays dirty and reclaim retries it
+             * next pass - but logged, so it isn't indistinguishable from the
+             * expected first-attempt case.
+             */
+            if ret.as_ref().is_err_and(|e| e.matches(Errcode::journal_reclaim_would_deadlock)) {
+                bch_err_ratelimited!(fs, "key cache flush: the no_journal_res retry also hit journal_reclaim_would_deadlock (btree node reserve below the reclaim watermark)");
+            }
+        }
 
         if let Err(e) = &ret {
             if !e.matches(Errcode::journal_reclaim_would_deadlock) && fs.journal.error().is_ok() {

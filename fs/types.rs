@@ -11,13 +11,13 @@ use crate::util::alloc::KVVec;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::os::kobject::Kobject;
 use crate::util::projections::Volatile;
-use crate::util::bio::BioSet;
+use crate::util::bio::{Bio, BioSet};
 use crate::util::late::Late;
 use crate::util::place::Placed;
 use crate::util::time_stats::TimeStatsArray;
 use crate::util::refcount::AtomicRef;
 use crate::os::workqueue::{ReffedWork, Workqueue, WqFlags};
-use crate::locking::{Locked, LockedBy, Mutex, MutexNoio, PercpuRwsemNoio, RwSem, SpinLockIrq};
+use crate::locking::{Locked, LockedBy, Mutex, MutexNoio, PercpuRwsemNoio, RwSem};
 use crate::os::percpu::{Counters, PerCpu};
 use crate::os::unicode::UnicodeMap;
 #[cfg(kernel)]
@@ -331,8 +331,8 @@ pub struct Dev {
 
     /*
      * Incremented by alloc_wake() at every site that wakes
-     * freelist_wait for a specific device. Waiters on
-     * c->allocator.freelist_wait snapshot the counters for the devices
+     * freelist_events for a specific device. Waiters on
+     * c->allocator.freelist_events snapshot the counters for the devices
      * they need at park time and compare on wake: if none have advanced,
      * the wake didn't concern this waiter and it re-parks without the
      * full alloc retry. Fs-wide wakes bump allocator.wake_all_counter
@@ -381,6 +381,9 @@ pub struct Dev {
     #[pin]
     pub journal: c::journal_device,
     pub prev_journal_sector: Volatile<u64>,
+
+    /// The bios of writes' replicas on it: write_replicas.rs's
+    pub(crate) write_clones: Late<BioSet<crate::data::dev_bio::DevBio>>,
 
     #[pin]
     pub(crate) io_error_work: ReffedWork<io_error_work, crate::field!(ref_outer)>,
@@ -649,9 +652,6 @@ pub struct Fs {
     #[pin]
     pub snapshots: c::bch_fs_snapshots,
 
-    #[pin]
-    #[init(new_lock!((), "&c->write_error_lock"))]
-    pub write_error_lock: Locked<SpinLockIrq>,
     /*
      * Use a dedicated wq for write ref holder tasks. Required to avoid
      * dependency problems with other wq tasks that can block on ref
@@ -680,9 +680,7 @@ pub struct Fs {
     #[init(crate::data::read::retry_pool(), ENOMEM_fs_other_alloc)]
     pub read_retry_pool: crate::util::mempool::Mempool<crate::util::alloc::Kmalloc>,
     #[late(BioSet::new(1), ENOMEM_bio_write_init)]
-    pub bio_write: Late<BioSet<c::bch_write_bio>>,
-    #[late(BioSet::new(4), ENOMEM_bio_write_init)]
-    pub replica_set: Late<BioSet<c::bch_write_bio>>,
+    pub(crate) bio_write: Late<BioSet<Bio<crate::data::write::ExtentBuf>>>,
     #[pin]
     #[init(crate::util::bio::pages::BouncePool::new(options), ENOMEM_bio_bounce_pages_init)]
     pub(crate) bio_bounce: crate::util::bio::pages::BouncePool,
