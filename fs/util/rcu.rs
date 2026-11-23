@@ -50,7 +50,8 @@ use crate::data_structures::dst_array::{DstArray, DstHead};
 use crate::util::alloc::{AllocError, KVmalloc};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::projections::Publish;
-use crate::util::refcount::{ARef, AlwaysRefCounted};
+use crate::util::place::{At, Field, FieldOf, Here, Path, Placed};
+use crate::util::refcount::{ARef, AlwaysRefCounted, RefGuard, Refcount};
 
 // ── Reading, and grace periods ───────────────────────────────────────────
 
@@ -323,6 +324,32 @@ impl<T: AlwaysRefCounted> RcuPointer for ARef<T> {
 }
 
 unsafe impl<T: AlwaysRefCounted> RcuOwner for ARef<T> {}
+
+/// A ref on a count placed in what it keeps, as a pointer to that: had back
+/// by the path to the count, its field.
+impl<C, B, const N: u64> RcuPointer for RefGuard<Placed<C, At<B, N>>>
+where
+    B: Field<N, Type = Placed<C, At<B, N>>> + 'static,
+    Placed<C, At<B, N>>: Refcount<Target = B>,
+{
+    type Target = B;
+
+    fn into_raw(self) -> NonNull<B> {
+        let b = NonNull::from(&*self);
+        self.leak();
+        b
+    }
+
+    unsafe fn from_raw(p: NonNull<B>) -> Self {
+        unsafe { RefGuard::adopt(<FieldOf<Here, N> as Path<B>>::get(p.as_ref())) }
+    }
+}
+
+unsafe impl<C, B, const N: u64> RcuOwner for RefGuard<Placed<C, At<B, N>>>
+where
+    B: Field<N, Type = Placed<C, At<B, N>>> + 'static,
+    Placed<C, At<B, N>>: Refcount<Target = B>,
+{}
 
 #[repr(transparent)]
 pub struct RcuPtr<P: RcuPointer> {

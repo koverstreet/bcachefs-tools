@@ -230,12 +230,12 @@ use crate::util::projections::Volatile;
 use crate::util::sharing::Unshared;
 use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
-                         sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
+                         sb_member_alloc, DevKobjRef, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::util::alloc::kbox_pin_init;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::file::read_file;
 use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
-use crate::os::kobject::{into_aref, GroupList, KobjOwner, Kobject};
+use crate::os::kobject::{into_ref, GroupList, KobjOwner};
 use crate::util::log::{log_dev, log_no_fs, LogLevel};
 use crate::os::percpu::PerCpu;
 use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
@@ -244,7 +244,6 @@ use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err_fn, prt};
 use core::ffi::CStr;
 use core::pin::Pin;
-use core::ptr::NonNull;
 use pin_init::pinned_drop;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
@@ -256,7 +255,7 @@ use crate::types::bits_to_longs;
 use crate::os::bio::{Bio, BioBox, IoBuf};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
-use crate::util::refcount::{ARef, AlwaysRefCounted, WaitableRef};
+use crate::util::refcount::WaitableRef;
 use nestify::nest;
 
 /// A superblock in memory, in a buffer that grows: a power of two, zeroes past
@@ -503,19 +502,9 @@ impl PinnedDrop for Dev {
     }
 }
 
-unsafe impl AlwaysRefCounted for Dev {
-    fn inc_ref(&self) {
-        self.kobj.get()
-    }
-
-    unsafe fn dec_ref(obj: NonNull<Self>) {
-        unsafe { Kobject::put((&raw const (*obj.as_ptr()).kobj).cast()) }
-    }
-}
-
 /// @ca, out of c->devs[] and past readers: its sysfs gone, and freed with its
 /// last ref.
-pub(crate) fn dev_free(ca: ARef<Dev>) {
+pub(crate) fn dev_free(ca: DevKobjRef) {
     /*
      * ref_outer holders (io_error_work, ioctl lookups) may block on
      * state_lock before noticing the device is going away - so we must
@@ -542,7 +531,7 @@ pub(crate) fn dev_free(ca: ARef<Dev>) {
 }
 
 /// An attached device freed: its reads stopped, its superblock closed.
-pub(crate) fn dev_exit(ca: ARef<Dev>) {
+pub(crate) fn dev_exit(ca: DevKobjRef) {
     ca.io_ref_stop(READ);
     ca.sb_close();
     dev_free(ca);
@@ -596,7 +585,7 @@ impl core::ops::Deref for NewDev {
 impl Drop for NewDev {
     fn drop(&mut self) {
         if let Some(ca) = self.0.take() {
-            dev_free(into_aref(ca));
+            dev_free(into_ref(ca));
         }
     }
 }
@@ -630,7 +619,7 @@ impl NewDev {
     }
 
     /// Into c->devs[@dev_idx], which owns it from here.
-    fn attach(mut self, state: &StateLockWrite<'_>, dev_idx: u32) -> ARef<Dev> {
+    fn attach(mut self, state: &StateLockWrite<'_>, dev_idx: u32) -> DevKobjRef {
         {
             let this = self.as_pin_mut().project();
 
@@ -644,7 +633,7 @@ impl NewDev {
             }
         }
 
-        let ca = into_aref(self.0.take().expect("a NewDev attached twice"));
+        let ca = into_ref(self.0.take().expect("a NewDev attached twice"));
         state.devs()[dev_idx as usize].publish(ca.clone());
 
         if ca.sysfs_online().is_err() {
@@ -660,7 +649,7 @@ impl Fs {
 
         let ca = dev_alloc(self, &member).ok_or_else(|| self.err(Errcode::ENOMEM_dev_alloc))?;
 
-        ca.attach(&self.state_lock_write(), dev_idx);
+        drop(ca.attach(&self.state_lock_write(), dev_idx));
         Ok(())
     }
 }
@@ -1029,7 +1018,7 @@ impl StateLockWrite<'_> {
     }
 
     fn dev_remove_locked(&self, ca: &Dev, fast_device_removal: bool, flags: u32,
-                         err: &mut Printbuf) -> Result<ARef<Dev>, BchError> {
+                         err: &mut Printbuf) -> Result<DevKobjRef, BchError> {
         let fs = self.fs();
 
         let r = (|| {

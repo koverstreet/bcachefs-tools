@@ -533,7 +533,7 @@ pub struct Fs {
     pub(crate) read_only_work: ReffedWork<read_only_work, crate::field!(ro_ref)>,
 
     /// Written under state_lock: StateLockWrite::devs().
-    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<crate::util::refcount::ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize],
+    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<crate::sb::members::DevKobjRef>; c::BCH_SB_MEMBERS_MAX as usize],
                        crate::at!(Fs.state_lock)>,
     pub devs_online: c::AtomicDevsMask,
     pub devs_removed: c::AtomicDevsMask,

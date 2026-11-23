@@ -28,7 +28,7 @@ use crate::locking::{Exclusive, ExclusiveGuard, Guard, Mutex, Noio, PercpuRwsemN
 use crate::{bch_verbose, prt};
 use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, Holder};
-use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevPieces, SbMembersMut};
+use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevKobjRef, DevPieces, SbMembersMut};
 use crate::sb::version::prep_for_start;
 use crate::util::Printbuf;
 use crate::util::alloc::{Arc, KVVec};
@@ -43,7 +43,7 @@ use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::percpu::PerCpu;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::{read_lock, RcuPtrWriter};
-use crate::util::refcount::{ARef, RefGuard, WaitableRef};
+use crate::util::refcount::{RefGuard, WaitableRef};
 #[cfg(kernel)]
 use crate::util::{place::Placed, refcount::AtomicRef};
 use core::ffi::CStr;
@@ -101,7 +101,7 @@ impl<'a> StateLockWrite<'a> {
     }
 
     /// c->devs[], as their writer has them.
-    pub(crate) fn devs(&self) -> &[RcuPtrWriter<ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize] {
+    pub(crate) fn devs(&self) -> &[RcuPtrWriter<DevKobjRef>; c::BCH_SB_MEMBERS_MAX as usize] {
         self.writer::<crate::field!(devs)>()
     }
 }

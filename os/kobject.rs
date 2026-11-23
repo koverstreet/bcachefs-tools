@@ -36,7 +36,8 @@ unsafe impl TryRefcount for Kobject {
 use super::{GroupList, Groups, KobjOwner, KobjPlace, Kobject};
 use crate::os::sysfs::Dir;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
-use crate::util::refcount::{ARef, AlwaysRefCounted};
+use crate::util::place::{At, Field, FieldOf, Here, Path, Placed};
+use crate::util::refcount::RefGuard;
 
 /// What holds a KobjOwner - a MaybeRcuAlloc, or the static it's in - given up
 /// to its kobject's refs, and had back whole by their last put.
@@ -59,12 +60,15 @@ impl<T: 'static> KobjAlloc<T> for &'static T {
 }
 
 /// @b's T, owned from here by its kobject's refs: the ref Kobject::new() made
-/// is the ARef's, and the last put gives @b back to its release.
-pub(crate) fn into_aref<T>(b: MaybeRcuAlloc<T>) -> ARef<T>
+/// is the one returned, and the last put gives @b back to its release.
+pub(crate) fn into_ref<T, const N: u64>(b: MaybeRcuAlloc<T>) -> RefGuard<Placed<Kobject, At<T, N>>>
 where
-    T: KobjOwner<Alloc = MaybeRcuAlloc<T>> + AlwaysRefCounted,
+    T: KobjOwner<Alloc = MaybeRcuAlloc<T>> + Field<N, Type = Placed<Kobject, At<T, N>>>,
+    T::Dir: Dir<Kobj = Placed<Kobject, At<T, N>>>,
+    Placed<Kobject, At<T, N>>: Refcount<Target = T>,
 {
-    unsafe { ARef::from_raw(b.into_raw()) }
+    let t = b.into_raw();
+    unsafe { RefGuard::adopt(<FieldOf<Here, N> as Path<T>>::get(t.as_ref())) }
 }
 
 /// A directory with no files of its own, in a static - /sys/fs/bcachefs. Its

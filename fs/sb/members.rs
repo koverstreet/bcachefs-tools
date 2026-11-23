@@ -1218,6 +1218,9 @@ pub type DevRef = RefGuard<Placed<PercpuRef, crate::at!(Dev.ref_)>>;
 /// lock before touching member state.
 pub type DevOuterRef = RefGuard<Placed<AtomicRef<()>, crate::at!(Dev.ref_outer)>>;
 
+/// A ref on a device's kobject, as c->devs[] owns it: the last put frees it.
+pub type DevKobjRef = RefGuard<Placed<crate::os::kobject::Kobject, crate::at!(Dev.kobj)>>;
+
 impl DevRef {
     /// An outer ref on it - bch2_dev_get_outer(): this ref holds ref_outer
     /// above zero, removal draining ref_ first.
