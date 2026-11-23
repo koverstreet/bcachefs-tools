@@ -448,12 +448,35 @@ impl KeyIter {
         self.sort(keys);
     }
 
+    /// The front entry moved past its key, unsorted: for fix(), which sorts
+    /// after.
+    fn advance_unsorted(&mut self, keys: &Keys<'_>) {
+        self.data[0].k = keys.bkey_p_next(self.__peek_all());
+
+        if self.__set_end(0) {
+            self.set_drop(0);
+        }
+    }
+
+    /// Fixed for a change of @clobber_u64s to @new_u64s at @where_ in bset @t -
+    /// and for @modified, a key in a written bset marked deleted in place
+    /// before it, as fix_key_modified() would have been first. Its advance is
+    /// decided on the entries as they were, and nothing reads an entry the
+    /// change moved until the one sort, a full sort over a total order, after
+    /// both.
     pub fn fix(&mut self, keys: &Keys<'_>, level: u8, t: usize, where_: u16, clobber_u64s: u16, new_u64s: u16,
-               pos: &Bpos) {
+               modified: Option<u16>, pos: &Bpos) {
         let end = keys.sets[t].end_offset;
         let offset = where_;
         let shift = i32::from(new_u64s) - i32::from(clobber_u64s);
         let old_end = (i32::from(end) - shift) as u16;
+        let mut sort = modified.is_some();
+
+        if let Some(k) = modified {
+            if self.peek_all() == Some(k) && keys.bkey_iter_pos_cmp(k, pos).is_lt() {
+                self.advance_unsorted(keys);
+            }
+        }
 
         match self.set_find(old_end) {
             None => {
@@ -467,7 +490,8 @@ impl KeyIter {
                  * on), and the rewind is what catches that.
                  */
                 if new_u64s != 0 && keys.bkey_iter_pos_cmp(where_, pos).is_ge() {
-                    self.push(keys, where_, end);
+                    self.__push(keys, where_, end);
+                    sort = true;
                 }
             }
             Some(i) => {
@@ -493,9 +517,13 @@ impl KeyIter {
                         self.data[i].k = (i32::from(self.data[i].k) + shift) as u16;
                     }
 
-                    self.sort(keys);
+                    sort = true;
                 }
             }
+        }
+
+        if sort {
+            self.sort(keys);
         }
 
         /*

@@ -61,17 +61,23 @@ impl Overwrite {
     }
 }
 
-/// What an insert changed in a node's last bset, for the iterators at it.
+/// What an insert changed in a node, for the iterators at it: its last bset,
+/// and the key it overwrote if that was in a written bset, deleted in place.
 #[derive(Clone, Copy)]
 pub(crate) struct KeyInsert {
     pub(crate) where_:       u16,
     pub(crate) clobber_u64s: u16,
     pub(crate) new_u64s:     u16,
+    pub(crate) modified:     Option<u16>,
 }
 
 impl KeyInsert {
-    fn moved(&self) -> bool {
+    pub(crate) fn moved(&self) -> bool {
         self.clobber_u64s != self.new_u64s
+    }
+
+    fn needs_fix(&self) -> bool {
+        self.moved() || self.modified.is_some()
     }
 }
 
@@ -144,6 +150,7 @@ fn bset_overwrite(b: &mut LockedNode<'_, BtreeNode, Write>, node_iter: &KeyIter,
 #[inline(always)]
 fn bset_insert(b: &mut LockedNode<'_, BtreeNode, Write>, node_iter: &KeyIter, insert: &mut BkeyI,
                ow: Overwrite) -> KeyInsert {
+    let modified = ow.modified();
     let Overwrite { deleting, k, k_writeable, clobber_u64s } = ow;
     let mut keys = b.keys_mut();
 
@@ -163,7 +170,7 @@ fn bset_insert(b: &mut LockedNode<'_, BtreeNode, Write>, node_iter: &KeyIter, in
         (where_, key_at(keys.buf, where_).u64s() as u16)
     };
 
-    KeyInsert { where_, clobber_u64s, new_u64s }
+    KeyInsert { where_, clobber_u64s, new_u64s, modified }
 }
 
 impl BtreeNode {
@@ -253,19 +260,18 @@ impl BtreeTrans<'_> {
         ebug_assert!(level != 0 || insert.k.p == paths[idx].pos);
 
         let Some(ow) = bset_overwrite(b, node_iter, insert) else { return };
-        if let Some(k) = ow.modified().filter(|_| in_paths) {
-            self.path_fix_key_modified(paths, idx, level.into(), k);
+        let ins = bset_insert(b, node_iter, insert, ow);
+
+        if in_paths && ins.needs_fix() {
+            self.node_iter_fix(paths, idx, level.into(), ins);
         }
 
-        let ins = bset_insert(b, node_iter, insert, ow);
         if ins.moved() {
-            if in_paths {
-                self.node_iter_fix(paths, idx, level.into(), ins);
-            }
-
             let keys = b.keys(b.contents());
             let pos = paths[idx].pos;
-            node_iter.fix(&keys, level, keys.bkey_to_bset(ins.where_), ins.where_, ins.clobber_u64s, ins.new_u64s, &pos);
+            /* as in C, the caller's iterator isn't fixed for the key modified */
+            node_iter.fix(&keys, level, keys.bkey_to_bset(ins.where_), ins.where_, ins.clobber_u64s, ins.new_u64s,
+                          None, &pos);
 
             if self.verify_iterators() {
                 node_iter.verify(&keys);
@@ -301,19 +307,11 @@ impl BtreeTrans<'_> {
         let set_u64s = |c: &NodeContents| c.last_set().u64s() as isize;
         let live_u64s = |c: &NodeContents| c.nr.live_u64s as isize;
 
-        let mut node_iter = paths[idx].l[level].iter;
+        let node_iter = paths[idx].l[level].iter;
         let mut b = paths[idx].locked_btree_node_mut(level).expect("a node to insert into, write locked");
         let (old_u64s, old_live_u64s) = (set_u64s(b.contents()), live_u64s(b.contents()));
 
         let Some(ow) = bset_overwrite(&mut b, &node_iter, insert) else { return };
-
-        if let Some(k) = ow.modified() {
-            drop(b);
-            self.path_fix_key_modified(paths, idx, level, k);
-            node_iter = paths[idx].l[level].iter;
-            b = paths[idx].locked_btree_node_mut(level).expect("a node to insert into, write locked");
-        }
-
         let ins = bset_insert(&mut b, &node_iter, insert, ow);
 
         /*
@@ -354,7 +352,7 @@ impl BtreeTrans<'_> {
 
         if compacted {
             self.node_reinit_iter(t, pu, idx, level);
-        } else if ins.moved() {
+        } else if ins.needs_fix() {
             self.node_iter_fix(paths, idx, level, ins);
         }
     }

@@ -23,23 +23,6 @@ impl BtreeTrans<'_> {
         paths[idx].has_node(b.c.level.get() as usize, &b.c, b.c.lock.six().seq.get())
     }
 
-    /// The iterators of the paths at path @idx's node at @level, for its key at
-    /// @where_ marked deleted in place.
-    pub(crate) fn path_fix_key_modified(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, where_: u16) {
-        let b = paths.held_btree_node(idx, level).expect("a node changed, held by its path");
-        let keys = b.keys(b.contents());
-
-        for linked in self.path_idxs() {
-            if !self.path_at_node(paths, linked, &b) {
-                continue;
-            }
-
-            let pos = paths[linked].pos;
-            paths[linked].l[level].iter.fix_key_modified(&keys, where_, &pos);
-            self.path_verify_level(paths, linked, level);
-        }
-    }
-
     /// The iterators of the paths at path @idx's node at @level, for @insert.
     pub(crate) fn node_iter_fix(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, insert: KeyInsert) {
         let b = paths.held_btree_node(idx, level).expect("a node changed, held by its path");
@@ -52,8 +35,13 @@ impl BtreeTrans<'_> {
             }
 
             let pos = paths[linked].pos;
-            paths[linked].l[level].iter.fix(&keys, b.c.level.get(), t, insert.where_,
-                                             insert.clobber_u64s, insert.new_u64s, &pos);
+            let iter = &mut paths[linked].l[level].iter;
+            if insert.moved() {
+                iter.fix(&keys, b.c.level.get(), t, insert.where_, insert.clobber_u64s, insert.new_u64s,
+                         insert.modified, &pos);
+            } else if let Some(k) = insert.modified {
+                iter.fix_key_modified(&keys, k, &pos);
+            }
             self.path_verify_level(paths, linked, level);
         }
     }
