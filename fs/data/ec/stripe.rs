@@ -32,7 +32,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::types::Le16;
 use crate::util::alloc::KVVec;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::{cast_mut, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
+use crate::util::vstructs::{cast_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
                             plain_bytes_mut, Validated};
 use crate::util::Printbuf;
 use crate::data_structures::array_vec::ArrayVec;
@@ -477,17 +477,12 @@ pub(crate) fn shape(s: BkeySC<'_, c::Stripe<Validated>>) -> Shape {
 /// are allocated. Zeroed, it's a deleted key, no stripe.
 #[repr(C)]
 #[derive(Clone, ::pin_init::Zeroable)]
-pub struct StripeKey([u64; c::BKEY_U64s_MAX as usize]);
+pub struct StripeKey(DstRoom<BkeyI, [u64; c::BKEY_U64s_MAX as usize]>);
 
 impl StripeKey {
-    fn room_mut(&mut self) -> &mut [u8] {
-        plain_bytes_mut(&mut self.0)
-    }
-
     /// Its stripe: the key, as long as its u64s say.
     pub(crate) fn stripe(&self) -> BkeySC<'_, c::Stripe<Validated>> {
-        let k: &BkeyI = DstRoom::<BkeyI>::from_elems(&self.0);
-        BkeySC::from(k).arm::<c::Stripe>().expect("a StripeKey's key is a stripe")
+        BkeySC::from(&*self.0).arm::<c::Stripe>().expect("a StripeKey's key is a stripe")
     }
 
     /// Its slot: the stripe's index.
@@ -502,12 +497,7 @@ impl StripeKey {
 
     /// Make it @k: bkey_reassemble().
     pub fn set(&mut self, k: BkeySC<'_, c::Stripe<Validated>>) {
-        let (hdr, val) = (size_of::<c::bkey>(), k.val_bytes());
-        let room = self.room_mut();
-        assert!(hdr + val.len() <= room.len(), "a stripe of {} bytes, too big for a key", val.len());
-
-        room[..hdr].copy_from_slice(plain_bytes(k.k));
-        room[hdr..hdr + val.len()].copy_from_slice(val);
+        self.0.set_key(k)
     }
 
     /// Make it a new stripe, @v its header: bkey_stripe_init(), and the value
@@ -518,20 +508,17 @@ impl StripeKey {
         k.set_key_type(BkeyType::stripe);
         k.set_val_bytes(v.val_u64s() as usize * size_of::<u64>());
 
-        let (hdr, room) = (size_of::<c::bkey>(), self.room_mut());
-        assert!(k.bytes() <= room.len(), "a new stripe of {} bytes, too big for a key", k.bytes());
-        room[..hdr].copy_from_slice(plain_bytes(&k));
-        room[hdr..hdr + size_of::<c::Stripe>()].copy_from_slice(plain_bytes(v));
+        self.0.k = k;
+        plain_bytes_mut(self.0.val_mut())[..size_of::<c::Stripe>()].copy_from_slice(plain_bytes(v));
     }
 
     /// Its header, to edit: its position, say.
     pub(crate) fn k_mut(&mut self) -> &mut c::bkey {
-        cast_plain_mut(&mut self.room_mut()[..size_of::<c::bkey>()]).expect("a key's header")
+        &mut self.0.k
     }
 
     /// Its stripe's value, to edit.
     pub(crate) fn stripe_mut(&mut self) -> &mut c::Stripe<Validated> {
-        let (hdr, len) = (size_of::<c::bkey>(), self.stripe().val_bytes().len());
-        cast_mut(&mut self.room_mut()[hdr..hdr + len]).expect("a stripe's value")
+        cast_mut(plain_bytes_mut(self.0.val_mut())).expect("a stripe's value")
     }
 }
