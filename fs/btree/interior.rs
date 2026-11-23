@@ -437,7 +437,7 @@ impl BtreeUpdate {
 
     /// @b's entry in the new nodes, its key made @k: btree_node_update_key()'s,
     /// on a node the update will make reachable.
-    pub(crate) fn new_node_key_set(&self, commit_lock: &mut CommitGuard<'_>, b: &BtreeNode,
+    pub(crate) fn new_node_key_set(&self, commit_lock: &mut CommitGuard<'_>, b: *const BtreeNode,
                                    k: impl BkeyV) {
         self.new_nodes_locked(commit_lock).iter_mut()
             .find(|n| n.node_ptr().is_some_and(|nb| ptr::eq(nb.as_ptr(), b)))

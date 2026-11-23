@@ -8,8 +8,6 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::btree::node::BtreeNode;
-use crate::btree::path::LockedNode;
 use crate::btree::trigger::{key_trigger, TriggerOp};
 use crate::c;
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
@@ -69,19 +67,23 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let trans = self.trans();
         let fs = self.fs();
         let level = node.level() as usize;
-        let b = trans.paths().held_btree_node(iter.path, level)
-            .filter(|b| ptr::eq(b.node(), node.as_ptr()))
-            .expect("updating the key of a node its iterator doesn't hold");
-        assert!(!b.is_fake(), "updating a fake node's key");
-        assert!(trans.paths()[iter.path].intent_locked(level), "updating the key of a node not intent locked");
+        let (btree, new_node, old) = {
+            let paths = trans.paths();
+            let b = paths[iter.path].locked_btree_node(level)
+                .filter(|b| ptr::eq(b.node(), node.as_ptr()))
+                .expect("updating the key of a node its iterator doesn't hold");
+            assert!(!b.is_fake(), "updating a fake node's key");
+            assert!(paths[iter.path].intent_locked(level), "updating the key of a node not intent locked");
 
-        if b.will_make_reachable() {
-            return self.new_node_update_key(iter, b, key);
+            (Btree(b.c.btree_id.get().into()), b.will_make_reachable(), b.key_peek())
+        };
+
+        if new_node {
+            return self.new_node_update_key(iter, node, key);
         }
 
-        let btree = Btree(b.c.btree_id.get().into());
-        if !fs.btree_id_root(btree.into()).is_some_and(|r| ptr::eq(r, b.node())) {
-            let mut parent = BtreeNodeIter::new(self, btree, b.key().k.p, 0, level as u32 + 1,
+        if !fs.btree_id_root(btree.into()).is_some_and(|r| ptr::eq(r, node.as_ptr())) {
+            let mut parent = BtreeNodeIter::new(self, btree, old.k.p, 0, level as u32 + 1,
                                                 BtreeIterFlags::INTENT);
             parent.iter().traverse(self)?;
             let flags = if skip_triggers { UpdateTriggerFlags::NORUN } else { UpdateTriggerFlags::empty() };
@@ -116,7 +118,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             if !skip_triggers {
                 let buf_u64s = key.buf_u64s;
-                let mut op = TriggerOp::new(btree, level as u32 + 1, BkeySC::from(b.key()), key.as_s(),
+                let mut op = TriggerOp::new(btree, level as u32 + 1, BkeySC::from(&*old), key.as_s(),
                                             UpdateTriggerFlags::INSERT |
                                             UpdateTriggerFlags::OVERWRITE |
                                             UpdateTriggerFlags::TRANSACTIONAL,
@@ -124,9 +126,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 key_trigger(self, &mut op)?;
             }
 
-            self.journal_entry_add(c::JsetEntryType::overwrite, b.c.btree_id.get() as u8, b.c.level.get() + 1,
-                                   b.key())?;
-            self.journal_entry_add(c::JsetEntryType::btree_root, b.c.btree_id.get() as u8, b.c.level.get(), key.as_ref())?;
+            self.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8 + 1, &*old)?;
+            self.journal_entry_add(c::JsetEntryType::btree_root, btree.0 as u8, level as u8, key.as_ref())?;
 
             /*
              * propagated back to c->btree.roots[].key by
@@ -137,32 +138,37 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let res = DiskReservation::new(fs);
         self.commit(Some(&res), flags)?;
 
-        let new_b = trans.paths().held_btree_node(iter.path, level).expect("a node held across the commit");
-        if !ptr::eq(new_b.node(), b.node()) {
-            /*
-             * We were asked to update the key for a node that was
-             * also modified during the commit (due to triggers),
-             * and that node was freed:
-             */
-            assert!(new_b.will_make_reachable(), "a node replaced in its key's commit, by one not yet reachable");
-            return Ok(());
+        {
+            let paths = trans.paths();
+            let new_b = paths[iter.path].locked_btree_node(level).expect("a node held across the commit");
+            if !ptr::eq(new_b.node(), node.as_ptr()) {
+                /*
+                 * We were asked to update the key for a node that was
+                 * also modified during the commit (due to triggers),
+                 * and that node was freed:
+                 */
+                assert!(new_b.will_make_reachable(), "a node replaced in its key's commit, by one not yet reachable");
+                return Ok(());
+            }
         }
 
-        self.node_key_set(iter, b, &key);
+        self.node_key_set(iter, level, &key);
         Ok(())
     }
 
     /// A new node's key: not in its parent yet - the update that will make it
     /// reachable has its key, and commits it.
-    fn new_node_update_key(&self, iter: &BtreeIter<'a>, b: LockedNode<'_, BtreeNode>, mut key: TransBkey<'_, 't>)
+    fn new_node_update_key(&self, iter: &BtreeIter<'a>, node: BtreeNodeRef, mut key: TransBkey<'_, 't>)
         -> Result<(), BchError>
     {
         let trans = self.trans();
         let fs = self.fs();
+        let level = node.level() as usize;
 
         let mut commit_lock = trans.mutex_lock(&mut trans.paths(), &fs.btree.interior_updates.commit_lock)?;
 
-        let Some(update) = b.will_make_reachable.update() else {
+        let Some(update) = trans.paths()[iter.path].locked_btree_node(level)
+            .expect("a new node, held by its path").will_make_reachable.update() else {
             return Err(trans.restart(Errcode::transaction_restart_nested));
         };
 
@@ -176,16 +182,15 @@ impl<'a, 't> TransAttempt<'a, 't> {
          */
         strip_reconcile(fs, key.as_s());
 
-        self.node_key_set(iter, b, &key);
+        self.node_key_set(iter, level, &key);
 
-        unsafe { update.as_ref() }.new_node_key_set(&mut commit_lock, b.node(), key.as_sc());
+        unsafe { update.as_ref() }.new_node_key_set(&mut commit_lock, node.as_ptr(), key.as_sc());
         Ok(())
     }
 
-    /// @b's own copy of its key made @key, under its write lock.
-    fn node_key_set(&self, iter: &BtreeIter<'a>, b: LockedNode<'_, BtreeNode>, key: &TransBkey<'_, 't>) {
+    /// The node at @level's own copy of its key made @key, under its write lock.
+    fn node_key_set(&self, iter: &BtreeIter<'a>, level: usize, key: &TransBkey<'_, 't>) {
         let trans = self.trans();
-        let level = usize::from(b.c.level.get());
         let mut paths = trans.paths();
 
         trans.node_lock_write_nofail(&mut paths, iter.path, level);
