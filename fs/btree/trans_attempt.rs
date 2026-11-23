@@ -55,6 +55,7 @@ use core::mem::{size_of, ManuallyDrop};
 use core::ptr::NonNull;
 use core::slice;
 use crate::btree::cache::btree_ptr_hash_val;
+use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::write::{node_write_trans, BtreeWriteFlags};
 use crate::cstructs::c::BtreeWriteType;
@@ -892,25 +893,37 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         trans.node_lock_write(&mut paths, idx, lvl)?;
         trans.node_prep_for_write(self, &mut paths.paths_and_updates(), idx, lvl);
-        let mut b = paths.intent_locked_node(idx, lvl);
-        let mut b = b.write_locked();
 
-        if usize::from(key.k().u64s) > b.keys_u64s_remaining(b.contents()) {
+        let pos = paths[idx].pos;
+        let ins = {
+            let mut b = paths[idx].locked_btree_node_mut(lvl).expect("a node to inject into, write locked");
+
+            if usize::from(key.k().u64s) > b.keys_u64s_remaining(b.contents()) {
+                None
+            } else {
+                let mut node_iter = KeyIter::default();
+                node_iter.init(fs, &b.keys(b.contents()), &key.k().p);
+
+                let ins = trans.bset_insert_key(&mut b, &mut node_iter, &pos, key.as_mut());
+
+                let set = b.contents().last_set().data_offset;
+                let mut keys = b.keys_mut();
+                let i = keys.bset_head_mut(set);
+                i.journal_seq = Le64::new(fs.journal.lock.seq_ondisk.get().max(i.journal_seq.get()));
+
+                fs.btree_node_set_dirty(b.node());
+                Some(ins)
+            }
+        };
+
+        let Some(ins) = ins else {
             trans.node_unlock_write(&mut paths, idx, lvl);
             return Err(fs.err(Errcode::btree_insert_btree_node_full));
+        };
+
+        if let Some(ins) = ins.filter(KeyInsert::needs_fix) {
+            trans.node_iter_fix(&mut paths, idx, lvl, ins);
         }
-
-        let mut node_iter = KeyIter::default();
-        node_iter.init(fs, &b.keys(b.contents()), &key.k().p);
-
-        trans.bset_insert_key(&mut paths, idx, &mut b, &mut node_iter, key.as_mut());
-
-        let set = b.contents().last_set().data_offset;
-        let mut keys = b.keys_mut();
-        let i = keys.bset_head_mut(set);
-        i.journal_seq = Le64::new(fs.journal.lock.seq_ondisk.get().max(i.journal_seq.get()));
-
-        fs.btree_node_set_dirty(b.node());
         trans.node_unlock_write(&mut paths, idx, lvl);
         Ok(())
     }

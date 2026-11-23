@@ -14,7 +14,7 @@ use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
-use crate::btree::path::{LockedNode, PathIdx, Paths, PathsUpdates, Write};
+use crate::btree::path::{LockedNode, PathIdx, PathsUpdates, Write};
 use crate::btree::types::BtreeWriteType;
 use crate::btree::write::{init_next, node_write, post_write_cleanup, BtreeWriteFlags};
 use crate::c;
@@ -76,7 +76,7 @@ impl KeyInsert {
         self.clobber_u64s != self.new_u64s
     }
 
-    fn needs_fix(&self) -> bool {
+    pub(crate) fn needs_fix(&self) -> bool {
         self.moved() || self.modified.is_some()
     }
 }
@@ -259,33 +259,27 @@ impl BtreeTrans<'_> {
     }
 
     /// Handle overwrites and do insert, for non extents - at @node_iter's
-    /// position: an iterator of the caller's, fixed after, with the iterators
-    /// of the paths at @b if it's path @idx's node.
-    pub(crate) fn bset_insert_key(&self, paths: &mut Paths<'_>, idx: PathIdx,
-                                  b: &mut LockedNode<'_, BtreeNode, Write>, node_iter: &mut KeyIter,
-                                  insert: &mut BkeyI) {
+    /// position: an iterator of the caller's, fixed for it as at @pos. What
+    /// changed, for the iterators of any paths at @b - None, if nothing did.
+    pub(crate) fn bset_insert_key(&self, b: &mut LockedNode<'_, BtreeNode, Write>, node_iter: &mut KeyIter,
+                                  pos: &Bpos, insert: &mut BkeyI) -> Option<KeyInsert> {
         let level = b.c.level.get();
-        let in_paths = self.path_at_node(paths, idx, b.node());
-        ebug_assert!(level != 0 || insert.k.p == paths[idx].pos);
+        ebug_assert!(level != 0 || insert.k.p == *pos);
 
-        let Some(ow) = bset_overwrite(b, node_iter, insert) else { return };
+        let ow = bset_overwrite(b, node_iter, insert)?;
         let ins = bset_insert(b, node_iter, insert, ow);
-
-        if in_paths && ins.needs_fix() {
-            self.node_iter_fix(paths, idx, level.into(), ins);
-        }
 
         if ins.moved() {
             let keys = b.keys(b.contents());
-            let pos = paths[idx].pos;
             /* as in C, the caller's iterator isn't fixed for the key modified */
             node_iter.fix(&keys, level, keys.bkey_to_bset(ins.where_), ins.where_, ins.clobber_u64s, ins.new_u64s,
-                          None, &pos);
+                          None, pos);
 
             if self.verify_iterators() {
                 node_iter.verify(&keys);
             }
         }
+        Some(ins)
     }
 
     #[inline(never)]

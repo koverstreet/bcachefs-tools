@@ -46,6 +46,19 @@ impl BtreeTrans<'_> {
         }
     }
 
+    /// The iterators of the paths at path @idx's node at @level peeked: past
+    /// the deleted keys they're at.
+    pub(crate) fn node_iter_peek(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
+        let b = paths.held_btree_node(idx, level).expect("a node changed, held by its path");
+        let keys = b.keys(b.contents());
+
+        for linked in self.path_idxs() {
+            if self.path_at_node(paths, linked, &b) {
+                paths[linked].l[level].iter.peek(&keys);
+            }
+        }
+    }
+
     pub(in crate::btree) fn revalidate_updates_in_node(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                                        b: LockedNode<'_, BtreeNode>) {
         let data = b.contents().data();

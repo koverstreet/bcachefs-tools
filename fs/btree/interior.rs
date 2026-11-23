@@ -790,16 +790,15 @@ impl<'t> InteriorUpdate<'t> {
     }
 
     /// The parent keys that go in @n inserted into it, @path's at its level.
-    fn insert_parent_keys(&self, paths: &mut Paths<'_>, path: PathIdx, n: &mut NewNode<'_>) -> Result<(), BchError> {
-        split_merge::split_insert_keys(self.t, paths, path, n, &mut self.owned.borrow_mut().parent_keys)
+    fn insert_parent_keys(&self, paths: &Paths<'_>, path: PathIdx, n: &mut NewNode<'_>) -> Result<(), BchError> {
+        split_merge::split_insert_keys(self.t, &paths[path].pos, n, &mut self.owned.borrow_mut().parent_keys)
     }
 
-    /// The parent keys that go in @b inserted into it from @path's iterator
-    /// there: @b is the node @path holds at its level.
-    fn insert_parent_keys_at(&self, paths: &mut Paths<'_>, path: PathIdx,
-                             b: &mut LockedNode<'_, BtreeNode, Write>) -> Result<(), BchError> {
-        let node_iter = paths[path].l[usize::from(b.c.level.get())].iter;
-        split_merge::insert_keys_interior(self.t, paths, path, b, node_iter,
+    /// The parent keys that go in the node path @path holds at @level inserted
+    /// into it from the path's iterator there.
+    fn insert_parent_keys_at(&self, paths: &mut Paths<'_>, path: PathIdx, level: usize) -> Result<(), BchError> {
+        let node_iter = paths[path].l[level].iter;
+        split_merge::insert_keys_interior(self.t, paths, path, level, node_iter,
                                           &mut self.owned.borrow_mut().parent_keys)
     }
 

@@ -12,6 +12,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIte
                          TransAttempt, Watermark};
 use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal, BtreeAndJournalIter};
 use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::sort::{btree_sort_into, build_aux_trees, maybe_compact_whiteouts};
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
@@ -42,8 +43,10 @@ use super::{InteriorUpdate, NewNode, ParentKeys, StartOpts};
 /// A btree node held locked: by a path, or new from the update's reserve.
 type Node<'n> = LockedNode<'n, BtreeNode>;
 
-fn insert_fixup_btree_ptr(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
-                          b: &mut LockedNode<'_, BtreeNode, Write>, node_iter: &mut KeyIter, insert: &mut BkeyI) {
+/// @insert put in @b at @node_iter, moved to it: what changed, for the paths'
+/// iterators at @b.
+fn insert_fixup_btree_ptr(t: &TransAttempt<'_, '_>, b: &mut LockedNode<'_, BtreeNode, Write>,
+                          node_iter: &mut KeyIter, pos: &Bpos, insert: &mut BkeyI) -> Option<KeyInsert> {
     let trans = t.trans();
     let fs = trans.fs();
     let k = BkeySC::from(&*insert);
@@ -71,39 +74,59 @@ fn insert_fixup_btree_ptr(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path:
         }
     }
 
-    trans.bset_insert_key(paths, path, b, node_iter, insert);
+    let ins = trans.bset_insert_key(b, node_iter, pos, insert);
 
     let _ = b.flags.fetch_update(SeqCst, Relaxed, |f| {
         Some(f.with_write_type(BtreeWriteType::interior).with_need_write(true))
     });
+    ins
 }
 
-/// The keys at the front of @list that go in interior node @b - up to its end
-/// - inserted from @node_iter, @path's at @b's level, and taken off the list.
-pub(crate) fn insert_keys_interior(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
-                                   b: &mut LockedNode<'_, BtreeNode, Write>, mut node_iter: KeyIter,
-                                   list: &mut ParentKeys) -> Result<(), BchError> {
-    let fs = t.fs();
+/// @node_iter, in interior node @b, rewound to @list's first key; and @b's
+/// end, up to which @list's keys go in it.
+fn interior_insert_range(b: Node<'_>, node_iter: &mut KeyIter, list: &ParentKeys) -> Bpos {
     assert!(b.c.level.get() > 0, "inserting pointers into a leaf");
 
     let front = list.front().expect("inserting no keys").k().p;
-    {
-        let contents = b.contents();
-        let node_keys = b.keys(contents);
-        while let Some(i) = node_iter.prev_all(&node_keys) {
-            if node_keys.unpack_pos(i) < front {
-                break;
-            }
+    let contents = b.contents();
+    let node_keys = b.keys(contents);
+    while let Some(i) = node_iter.prev_all(&node_keys) {
+        if node_keys.unpack_pos(i) < front {
+            break;
         }
     }
 
-    let end = b.key().k().p;
+    b.key().k().p
+}
+
+/// The keys at the front of @list that go in interior node @b - path @path's at
+/// @level, which it holds write locked - inserted from @node_iter, and taken
+/// off the list.
+pub(crate) fn insert_keys_interior(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
+                                   mut node_iter: KeyIter, list: &mut ParentKeys) -> Result<(), BchError> {
+    let trans = t.trans();
+    let pos = paths[path].pos;
+    let end = interior_insert_range(paths[path].locked_btree_node(level).expect("a node to insert into"),
+                                    &mut node_iter, list);
+
     let mut inserted = 0;
     for k in keys_mut(list.as_u64s_mut()).take_while(|k| k.k().p <= end) {
         inserted += usize::from(k.k().u64s);
-        insert_fixup_btree_ptr(t, paths, path, b, &mut node_iter, k);
+        let mut b = paths[path].locked_btree_node_mut(level).expect("a node to insert into, write locked");
+        if let Some(ins) = insert_fixup_btree_ptr(t, &mut b, &mut node_iter, &pos, k).filter(KeyInsert::needs_fix) {
+            trans.node_iter_fix(paths, path, level, ins);
+        }
     }
 
+    interior_insert_done(t, paths[path].locked_btree_node(level).expect("a node inserted into"), list, inserted)
+}
+
+/// @list's first @inserted, inserted into @b, taken off it - once @b's topology
+/// is checked.
+fn interior_insert_done(t: &TransAttempt<'_, '_>, b: Node<'_>, list: &mut ParentKeys, inserted: usize)
+    -> Result<(), BchError>
+{
+    let fs = t.fs();
     let mut msg = LogMsg::new(fs);
     msg.set_suppressed(true);
 
@@ -135,10 +158,11 @@ pub(crate) fn insert_keys_interior(t: &TransAttempt<'_, '_>, paths: &mut Paths<'
  * nodes that were coalesced, and thus in the middle of a child node post
  * coalescing:
  */
-pub(crate) fn split_insert_keys(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
-                                b: &mut LockedNode<'_, BtreeNode, Write>, list: &mut ParentKeys)
-    -> Result<(), BchError>
-{
+///
+/// @b is a new node, from the update's reserve: no path is at it yet, for its
+/// iterators to be fixed - @node_iter is fixed as at @pos, the split path's.
+pub(crate) fn split_insert_keys(t: &TransAttempt<'_, '_>, pos: &Bpos, b: &mut LockedNode<'_, BtreeNode, Write>,
+                                list: &mut ParentKeys) -> Result<(), BchError> {
     let Some(front) = list.front().map(|k| k.k().p) else { return Ok(()) };
 
     let contents = b.contents();
@@ -148,7 +172,15 @@ pub(crate) fn split_insert_keys(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>,
 
     let mut node_iter = KeyIter::default();
     node_iter.init(t.fs(), &b.keys(contents), &front);
-    insert_keys_interior(t, paths, path, b, node_iter, list)
+    let end = interior_insert_range(b.held(), &mut node_iter, list);
+
+    let mut inserted = 0;
+    for k in keys_mut(list.as_u64s_mut()).take_while(|k| k.k().p <= end) {
+        inserted += usize::from(k.k().u64s);
+        insert_fixup_btree_ptr(t, b, &mut node_iter, pos, k);
+    }
+
+    interior_insert_done(t, b.held(), list, inserted)
 }
 
 fn topology_err(fs: &Fs, b: Node<'_>, out: &mut Printbuf) -> BchError {
@@ -694,10 +726,8 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     trans.node_lock_write(paths, path, level)?;
     trans.node_prep_for_write(update.t(), &mut paths.paths_and_updates(), path, level);
 
-    let mut b = paths.intent_locked_node(path, level);
-    let mut b = b.write_locked();
-
     let u64s = update.parent_keys_u64s();
+    let b = paths[path].locked_btree_node(level).expect("an interior update's node, write locked");
     if !b.insert_fits(b.contents(), u64s) {
         /*
          * We could attempt to avoid the transaction restart, by calling
@@ -711,48 +741,50 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
             });
             Err(trans.restart(Errcode::transaction_restart_split_race))
         } else {
-            btree_split(update, paths, path, b.held(), true)
+            let b = paths.held_btree_node(path, level).expect("an interior update's node, write locked");
+            btree_split(update, paths, path, b, true)
         };
         trans.verify_locks(paths);
         return ret;
     }
 
-    let ret = check_topology(update.t(), b.held()).and_then(|()| update.insert_parent_keys_at(paths, path, &mut b));
+    let ret = check_topology(update.t(), b).and_then(|()| update.insert_parent_keys_at(paths, path, level));
     if let Err(e) = ret {
         trans.verify_locks(paths);
         return Err(e);
     }
 
-    if !b.flags.dirty() {
-        fs.btree_node_set_dirty(b.node());
-    }
-
-    for idx in trans.path_idxs() {
-        if trans.path_at_node(paths, idx, &b) {
-            let keys = b.keys(b.contents());
-            paths[idx].l[level].iter.peek(&keys);
-        }
-    }
-
+    trans.node_iter_peek(paths, path, level);
     trans.verify_paths(paths);
 
-    let (u64s, live_u64s) = u64s_and_live(&b, b.contents());
-    let shrunk = old_live_u64s.saturating_sub(live_u64s);
-    for sib in &b.contents().sib_u64s {
-        if sib.get() != u16::MAX {
-            sib.set(sib.get().saturating_sub(shrunk));
-        }
-    }
+    let compacted = {
+        let mut b = paths[path].locked_btree_node_mut(level).expect("an interior update's node, write locked");
 
-    let added_dead_u64s = u64s + usize::from(old_live_u64s) > old_u64s + usize::from(live_u64s);
-    if added_dead_u64s && maybe_compact_whiteouts(&mut b) {
+        if !b.flags.dirty() {
+            fs.btree_node_set_dirty(b.node());
+        }
+
+        let (u64s, live_u64s) = u64s_and_live(&b, b.contents());
+        let shrunk = old_live_u64s.saturating_sub(live_u64s);
+        for sib in &b.contents().sib_u64s {
+            if sib.get() != u16::MAX {
+                sib.set(sib.get().saturating_sub(shrunk));
+            }
+        }
+
+        let added_dead_u64s = u64s + usize::from(old_live_u64s) > old_u64s + usize::from(live_u64s);
+        added_dead_u64s && maybe_compact_whiteouts(&mut b)
+    };
+
+    if compacted {
         trans.node_reinit_iter(update.t(), &mut paths.paths_and_updates(), path, level);
     }
 
-    update.updated_node(&b);
+    update.updated_node(paths[path].locked_btree_node(level).expect("an interior update's node").node());
     trans.node_unlock_write(paths, path, level);
 
-    trans.revalidate_updates_in_node(update.t(), &mut paths.paths_and_updates(), b.held());
+    let b = paths.held_btree_node(path, level).expect("an interior update's node");
+    trans.revalidate_updates_in_node(update.t(), &mut paths.paths_and_updates(), b);
     Ok(())
 }
 
