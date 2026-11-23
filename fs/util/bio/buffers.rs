@@ -141,6 +141,18 @@ unsafe impl MapBuf for &[u8] {
     }
 }
 
+/// A caller's buffer for a read to fill: not written from, as what's in it
+/// isn't initialized.
+unsafe impl MapBuf for &mut [MaybeUninit<u8>] {
+    fn allows_op(op: u32) -> bool {
+        op == c::req_op_REQ_OP_READ
+    }
+
+    fn as_raw(&self) -> (*mut u8, usize) {
+        (self.as_ptr().cast::<u8>().cast_mut(), self.len())
+    }
+}
+
 unsafe impl<const A: usize> MapBuf for AlignedBox<[MaybeUninit<u8>], A> {
     fn as_raw(&self) -> (*mut u8, usize) {
         (self.as_ptr().cast::<u8>().cast_mut(), self.len())

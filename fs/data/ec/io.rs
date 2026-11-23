@@ -19,7 +19,7 @@ use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::data::dev_bio::DevBio;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
-use crate::util::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, BioOwner, Gathered};
+use crate::util::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, BioOwner, Buffer, Gathered};
 use crate::util::gather::{Fold, Gather};
 use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
@@ -88,10 +88,10 @@ pub struct EcBio {
     ptr: c::bch_extent_ptr,
     idx: u8,
     #[pin]
-    dev: DevBio,
+    dev: DevBio<Buffer<&'static mut [u8]>>,
 }
 
-crate::has_bio!(EcBio, dev.bio);
+crate::has_bio!(EcBio, dev.bio, owns Buffer<&'static mut [u8]>);
 
 /// A round's bio done: its IO accounted against the device, and its block's
 /// error folded into the round's Gather - the device's, or its pointer gone
@@ -195,16 +195,16 @@ where
             // page says how much it maps
             let b = buf_bio_bytes(base.wrapping_add(offset), bytes - offset);
             let nr_vecs = buf_nr_bvecs(base.wrapping_add(offset), b);
+            // SAFETY: the block's buffer, which the round has until its wait,
+            // after this bio's endio
+            let chunk: &'static mut [u8] = unsafe { core::slice::from_raw_parts_mut(base.wrapping_add(offset), b) };
             let mut bio = set.alloc::<BchError, _>(core::ptr::null_mut(), nr_vecs as u16, opf, |at| pin_init!(EcBio {
                 ptr,
                 idx: idx as u8,
-                dev <- DevBio::new(at.init::<BchError, _>()),
+                dev <- DevBio::new(at.init_from(|bio| Ok::<_, BchError>(Buffer::fill(bio, chunk)))),
             }? BchError)).expect("a bio from the stripe bioset's mempool");
 
             bio.bio_mut().set_sector(ptr.offset() + u64::from(sector_offset) + (offset >> 9) as u64);
-            // SAFETY: the block's buffer, which the round has until its wait,
-            // after this bio's endio
-            unsafe { bio.bio_mut().map(base.wrapping_add(offset), b) };
             bio.as_mut().project().dev.for_dev(ca.clone());
             bio.submit_gathered(this.done.get());
             offset += b;

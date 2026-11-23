@@ -13,11 +13,11 @@ use pin_init::{pin_data, pin_init, PinInit};
 use crate::c;
 use crate::os::kernel::{local_clock, READ, WRITE};
 use crate::sb::members::BlockDev;
-use crate::util::bio::{AtEnd, Bio, BioBox};
+use crate::util::bio::{AtEnd, Bio, BioBox, BioOwns, Data};
 
 #[pin_data]
 #[repr(C)]
-pub struct DevBio {
+pub struct DevBio<B: BioOwns = Data> {
     /* the bio's, from for_dev() till its end */
     ca:          Option<BlockDev>,
     submit_time: u64,
@@ -25,15 +25,15 @@ pub struct DevBio {
     unflushed:   bool,
 
     #[pin]
-    pub bio:     Bio,
+    pub bio:     Bio<B>,
 }
 
-crate::has_bio!(DevBio, bio);
+crate::has_bio!(DevBio<B>, bio, owns B where B: BioOwns);
 
-impl DevBio {
+impl<B: BioOwns> DevBio<B> {
     /// Made around @bio, where its bioset or its owner has it, for no device
     /// yet.
-    pub fn new<E>(bio: impl PinInit<Bio, E>) -> impl PinInit<Self, E> {
+    pub fn new<E>(bio: impl PinInit<Bio<B>, E>) -> impl PinInit<Self, E> {
         pin_init!(Self { ca: None, submit_time: 0, unflushed: false, bio <- bio }? E)
     }
 
@@ -81,7 +81,7 @@ impl DevBio {
     }
 }
 
-impl AtEnd for DevBio {
+impl<B: BioOwns> AtEnd for DevBio<B> {
     fn at_end(&self) {
         if let Some(ca) = &self.ca {
             let rw = if self.bio.op() == c::req_op_REQ_OP_WRITE { WRITE } else { READ };

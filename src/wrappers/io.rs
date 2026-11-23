@@ -16,7 +16,8 @@ use bcachefs_kernel::data::write::bch2_write;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode_opts;
-use bcachefs_kernel::util::bio::{Bio, BioBox, BioInPlace, BioOwner};
+use bcachefs_kernel::util::alloc::init_at;
+use bcachefs_kernel::util::bio::{BioBox, BioInPlace, BioOwner, Buffer, Data};
 use bcachefs_kernel::util::closure;
 use bcachefs_kernel::util::sleep::Sleep;
 use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Spawn, TaskSlot, WaitSync};
@@ -25,8 +26,6 @@ use bcachefs_kernel::os::workqueue::Queue;
 
 /// Maximum single IO size.
 pub const MAX_IO_SIZE: usize = 1 << 20;
-const PAGE_SIZE: usize = 4096;
-const MAX_BVECS: usize = MAX_IO_SIZE / PAGE_SIZE;
 
 /// Result of a write operation.
 pub struct WriteResult {
@@ -53,8 +52,11 @@ pub fn write(
     let p = state.as_mut_ptr();
     let mut state = unsafe {
         let bio = &raw mut (*p).op.wbio.bio;
-        BioInPlace::own_at(bio.cast(), std::ptr::null_mut(), MAX_BVECS as u16, 0)?;
-        Bio::from_raw_mut(bio.cast()).map(data.as_ptr().cast_mut(), data.len());
+        let at = BioInPlace::own_at(bio.cast(), std::ptr::null_mut(), Buffer::nr_vecs(&data), c::req_op_REQ_OP_WRITE)?;
+        init_at(at.init_from(|b| {
+            Buffer::fill(b, data);
+            Ok::<_, BchError>(Data)
+        }), bio)?;
         c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };
@@ -89,11 +91,15 @@ pub fn read<'a>(
     type F = c::ReadFlags;
     let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
-    let mut b = BioBox::new(std::ptr::null_mut(), 1, c::req_op_REQ_OP_READ,
-                            |b| Rbio::new(fs, opts, inum.subvol as u32, None, b.init()))?;
+    let mut b = BioBox::new(std::ptr::null_mut(), Buffer::nr_vecs(&&mut *buf), c::req_op_REQ_OP_READ, |b| {
+        let into = &mut *buf;
+        Rbio::new(fs, opts, inum.subvol as u32, None, b.init_from(move |bio| {
+            Buffer::fill(bio, into);
+            Ok(Data)
+        }))
+    })?;
     b.bio_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
     b.bio_mut().set_sector(offset >> 9);
-    unsafe { b.bio_mut().map(buf.as_mut_ptr().cast(), buf.len()) };
 
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped;
     let slot = TaskSlot::alloc(())?;

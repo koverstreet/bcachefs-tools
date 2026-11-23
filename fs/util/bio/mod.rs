@@ -230,6 +230,28 @@ impl<B: BioOwns> Bio<B> {
         &self.owns
     }
 
+    pub fn raw(&self) -> &c::bio {
+        &self.bio
+    }
+
+    /// For its own methods, and C's: bi_io_vec pointed at its bvecs, where
+    /// they are now.
+    pub(crate) fn raw_mut(&mut self) -> &mut c::bio {
+        bi_io_vec!(self.bio) = match self.vecs_at {
+            VecsAt::Own         => self.vecs.as_mut_ptr().cast(),
+            VecsAt::Borrowed(s) => unsafe { s.as_ref() }.bvecs().as_ptr().cast_mut(),
+        };
+        &mut self.bio
+    }
+
+    pub(crate) fn op(&self) -> u32 {
+        req_op(self.bio.bi_opf)
+    }
+
+    pub fn set_dev(&mut self, bdev: *mut crate::os::blkdev::BlockDevice) {
+        crate::os::blkdev::bio_set_dev(self.raw_mut(), bdev)
+    }
+
     /// After its bvecs change: C's view of them.
     fn sync(&mut self) {
         assert!(matches!(self.vecs_at, VecsAt::Own), "changing the bvecs of a bio whose table isn't its own");
@@ -302,10 +324,6 @@ impl Bio {
         }
     }
 
-    pub fn raw(&self) -> &c::bio {
-        &self.bio
-    }
-
     /// A clone has none of its own: its source's are its, from its position.
     fn bvecs(&self) -> &[c::bio_vec] {
         if self.cloned() { &[] } else { &self.vecs_owner().vecs }
@@ -317,16 +335,6 @@ impl Bio {
 
     pub fn max_vecs(&self) -> u16 {
         self.vecs.capacity().min(c::BIO_MAX_VECS as usize) as u16
-    }
-
-    /// For its own methods, and C's: bi_io_vec pointed at its bvecs, where
-    /// they are now.
-    pub(crate) fn raw_mut(&mut self) -> &mut c::bio {
-        bi_io_vec!(self.bio) = match self.vecs_at {
-            VecsAt::Own         => self.vecs.as_mut_ptr(),
-            VecsAt::Borrowed(s) => unsafe { s.as_ref() }.bvecs().as_ptr().cast_mut(),
-        };
-        &mut self.bio
     }
 
     fn vecs_owner(&self) -> &Bio {
@@ -376,13 +384,9 @@ impl Bio {
             .contains(&self.op())
     }
 
-    pub(crate) fn op(&self) -> u32 {
-        req_op(self.bio.bi_opf)
-    }
-
     /// @len bytes of @buf mapped, pushed onto its bvecs. Panics if there's no
-    /// room for them. For a buffer kept by other means than the bio - a stripe
-    /// buffer's blocks, kept by the IO's round; a Buffer holds it.
+    /// room for them. For a buffer kept by other means than the bio - a
+    /// write's, by write_replicas(); a Buffer holds one.
     ///
     /// # Safety
     /// @buf is the allocators' - in the direct map, or vmalloc - and outlives
@@ -451,10 +455,6 @@ impl Bio {
         let iter = &mut self.raw_mut().bi_iter;
         assert!(bytes <= iter.bi_size, "shrinking a bio of {} bytes to {bytes}", iter.bi_size);
         iter.bi_size = bytes;
-    }
-
-    pub fn set_dev(&mut self, bdev: *mut crate::os::blkdev::BlockDevice) {
-        crate::os::blkdev::bio_set_dev(self.raw_mut(), bdev)
     }
 
     /// # Safety
@@ -626,8 +626,8 @@ pub const fn bio_field_at<F: BioField<Owns = O>, O: BioOwns>(_: *const F) -> usi
 /// HasBio asks of a struct with #[pin_data].
 #[macro_export]
 macro_rules! has_bio {
-    ($t:ty, $($f:ident).+ $(, owns $o:ty)?) => {
-        unsafe impl $crate::util::bio::HasBio for $t {
+    ($t:ty, $($f:ident).+ $(, owns $o:ty)? $(where $($g:ident: $b:path),*)?) => {
+        unsafe impl<$($($g: $b),*)?> $crate::util::bio::HasBio for $t {
             type Owns = $crate::has_bio!(@owns $($o)?);
             const BIO_OFFSET: usize = {
                 let t = ::core::mem::MaybeUninit::<$t>::uninit();
@@ -737,6 +737,12 @@ pub struct Remapped<'a, O: BioOwner, B> {
 }
 
 impl<O: BioOwner, B> Remapped<'_, O, B> {
+    /// Its bio, mapped to the buffer: for clones of it, borrowing it no longer
+    /// than the mapping.
+    pub fn bio(&self) -> &Bio {
+        self.owner.bio()
+    }
+
     pub fn submit_wait(&mut self) -> Result<(), BchError> {
         self.owner.submit_wait()
     }
