@@ -198,7 +198,7 @@ fn submit_replicas<R: IoRefIdx>(fs: &'static Fs, mut wbio: Pin<&mut c::bch_write
                     n.wbio.nocow_bucket = ca.ptr_bucket(ptr);
                 }
                 ca.io_done_add(WRITE, ty, (n.bio.range().len() >> 9).into());
-                ca.disk_sb.bdev
+                ca.disk_sb.bdev.get()
             });
             /* the bio's, till its endio takes it back */
             *n.ca = ca;

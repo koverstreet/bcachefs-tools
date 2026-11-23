@@ -16,6 +16,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
+use crate::locking::Guard as _;
 use crate::prt;
 use crate::debug::trace::events;
 use crate::os::kernel::{ktime_get_ns, uuid_to_fsid};
@@ -112,12 +113,13 @@ impl SuperOps for Fs {
     }
 
     fn show_devname(&self, m: &SeqFile, _root: Dentry<'_>) -> Result<(), BchError> {
+        let sb = self.sb_lock();
         let rcu = read_lock();
         for (i, ca) in self.online_devs_rcu(&rcu).enumerate() {
             if i > 0 {
                 m.write(b":");
             }
-            m.write(ca.disk_sb.name().to_bytes());
+            m.write(sb.get_of(&ca.disk_sb).name().to_bytes());
         }
         Ok(())
     }

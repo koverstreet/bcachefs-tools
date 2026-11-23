@@ -196,7 +196,7 @@ impl NodeRead<'_> {
         let fs = self.fs;
         let Some(ca) = &self.ca else { return Err(fs.err(blk_status_to_bch_err(c::BLK_STS_REMOVED))) };
 
-        self.io.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
+        self.io.reset(ca.disk_sb.bdev.get(), c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
         self.io.bio_mut().set_sector(self.pick.ptr.offset());
         /* read_done() may have swapped the node's buffer for its sort's */
         let buf = unsafe { node_buf(&self.node, self.node.contents()) };

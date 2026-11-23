@@ -188,7 +188,7 @@ impl<'f> DevScan<'f> {
         /* not buf_nr_bvecs(): it's remapped onto what read_done swaps in, which may be vmalloc */
         let nr_vecs = (fs.opts.btree_node_size.get() as usize).div_ceil(PAGE_SIZE)
             .try_into().expect("bvecs for a btree node");
-        let Ok(bio) = BioBox::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
+        let Ok(bio) = BioBox::<Bio>::new::<BchError, _>(ca.disk_sb.bdev.get(), nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
         else {
             bch_err!(fs, "read_btree_nodes_worker: error allocating bio");
             return Err(c::ENOMEM.into());
@@ -200,7 +200,7 @@ impl<'f> DevScan<'f> {
     fn read(&mut self, offset: u64, bytes: usize) -> Result<(), BchError> {
         let DevScan { ca, buf, bio, .. } = self;
 
-        bio.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ);
+        bio.reset(ca.disk_sb.bdev.get(), c::req_op_REQ_OP_READ);
         bio.bio_mut().set_sector(offset);
 
         let submit_time = local_clock();

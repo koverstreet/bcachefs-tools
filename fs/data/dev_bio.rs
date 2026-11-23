@@ -42,7 +42,7 @@ impl<B: BioOwns> DevBio<B> {
     pub fn for_dev(self: Pin<&mut Self>, ca: impl Into<BlockDev>) {
         let ca = ca.into();
         let mut this = self.project();
-        this.bio.as_mut().set_dev(ca.disk_sb.bdev);
+        this.bio.as_mut().set_dev(ca.disk_sb.bdev.get());
         *this.unflushed = this.bio.op() == c::req_op_REQ_OP_WRITE && this.bio.raw().bi_iter.bi_size != 0 &&
             this.bio.raw().bi_opf & c::REQ_FUA == 0;
         *this.submit_time = local_clock();

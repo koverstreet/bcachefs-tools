@@ -459,7 +459,7 @@ impl Fs {
 
         {
             let mut sb = self.sb_lock();
-            sb_to_fs(self, &mut sb, sbs[0].io.buf.sb())?;
+            sb_to_fs(self, &mut sb, sbs[0].sb())?;
             self.sb_resize(&mut sb).members_v2_init()
                 .ok_or_else(|| self.err(Errcode::ENOSPC_sb_members_v2))?;
         }
@@ -470,7 +470,7 @@ impl Fs {
         if self.sb.multi_device.get() {
             prt!(&mut name, "{}", self.sb.user_uuid());
         } else {
-            prt_bdevname(&mut name, Some(sbs[0].dev.bdev()));
+            prt_bdevname(&mut name, Some(sbs[0].dev().bdev()));
         }
         if name.allocation_failure() {
             return Err(Errcode::ENOMEM_fs_name_alloc.into());
@@ -755,7 +755,7 @@ pub struct Claimed {
 impl Claimed {
     /// A multi-device filesystem's UUID
     pub fn uuid(&self) -> Option<[u8; 16]> {
-        let sb = self.sbs[0].io.buf.sb();
+        let sb = self.sbs[0].sb();
         sb.multi_device().then_some(sb.uuid.b)
     }
 
@@ -953,14 +953,14 @@ pub fn newest<'a>(sbs: impl IntoIterator<Item = &'a c::bch_sb>) -> Option<usize>
 /// Newest first, without those removed from the filesystem or split from it
 pub fn filter_dead(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts,
                    mut out: Option<&mut Printbuf>) -> Result<(), BchError> {
-    let Some(best) = newest(sbs.iter().map(|h| h.io.buf.sb())) else {
+    let Some(best) = newest(sbs.iter().map(|h| h.sb())) else {
         return Ok(());
     };
 
     let mut dead = KVVec::from_elem(false, sbs.len())?;
     for i in (0..sbs.len()).rev() {
-        let name = sbs[i].dev.name().to_str().unwrap_or("?");
-        match dev_in_fs(sbs[best].io.buf.sb(), Some(sbs[best].dev.bdev()), &sbs[i], opts) {
+        let name = sbs[i].io().name().to_str().unwrap_or("?");
+        match dev_in_fs(sbs[best].sb(), Some(sbs[best].dev().bdev()), &sbs[i], opts) {
             Ok(()) => {}
             Err(e) if e.matches(Errcode::device_has_been_removed) ||
                       e.matches(Errcode::device_splitbrain) => {

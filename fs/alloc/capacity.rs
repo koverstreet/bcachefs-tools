@@ -131,9 +131,7 @@ pub(crate) fn recalc_capacity(fs: &Fs) {
 pub(crate) fn fs_ra_pages(fs: &Fs) -> usize {
     let per_dev = (fs.opts.dev_readahead.get() >> kernel::page::PAGE_SHIFT) as usize;
     let rcu = read_lock();
-    // SAFETY: a pointer, read whole - as C's READ_ONCE(): set and cleared
-    // as the device comes and goes
-    let online = |ca: &Dev| !unsafe { core::ptr::read_volatile(&raw const ca.disk_sb.bdev) }.is_null();
+    let online = |ca: &Dev| !ca.disk_sb.bdev.get().is_null();
     match fs.devs_rcu(&rcu).filter(|ca| online(ca)).count() * per_dev {
         // VM_READAHEAD_PAGES
         0 => (128 << 10) >> kernel::page::PAGE_SHIFT,

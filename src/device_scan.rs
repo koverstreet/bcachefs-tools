@@ -222,7 +222,7 @@ fn read_sbs_matching_label(
 }
 
 fn sb_handle_path(sb: &bch_sb_handle) -> PathBuf {
-	PathBuf::from(OsString::from_vec(sb.dev.name().to_bytes().to_vec()))
+	PathBuf::from(OsString::from_vec(sb.io().name().to_bytes().to_vec()))
 }
 
 pub fn filter_current_sbs(

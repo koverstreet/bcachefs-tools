@@ -1446,7 +1446,7 @@ use boxed::{ec_read, retry_owned, RetryOwnedFut};
 
 fn device_read_start(f: &mut Fragment<'_>, fs: &Fs) -> Result<u64, BchError> {
     let Some(ca) = f.ca.as_deref() else { return Err(fs.err(err::data_read_retry_device_offline)) };
-    let bdev = ca.disk_sb.bdev;
+    let bdev = ca.disk_sb.bdev.get();
     ca.io_done_add(READ, DataType::user, (f.bio().raw().bi_iter.bi_size >> 9).into());
     f.bio_mut().set_dev(bdev);
     Ok(local_clock())

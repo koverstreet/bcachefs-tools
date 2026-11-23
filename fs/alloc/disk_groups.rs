@@ -352,7 +352,7 @@ impl Fs {
                 let rcu = read_lock();
 
                 match self.dev_rcu(d, &rcu) {
-                    Some(ca) if !ca.disk_sb.bdev.is_null() => {
+                    Some(ca) if !ca.disk_sb.bdev.get().is_null() => {
                         write!(out, "/dev/{ca}");
                     }
                     Some(_) => write!(out, "offline device {d}"),

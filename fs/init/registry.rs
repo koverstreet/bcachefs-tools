@@ -123,7 +123,7 @@ impl Registry {
         let rcu = read_lock();
         let fs = self.open.iter().find(|fs| match key {
             Key::Devs(devs) => devs.iter().all(|&dev| {
-                fs.devs_rcu(&rcu).any(|ca| !ca.disk_sb.bdev.is_null() && ca.dev == dev)
+                fs.devs_rcu(&rcu).any(|ca| !ca.disk_sb.bdev.get().is_null() && ca.dev == dev)
             }),
             Key::Uuid(uuid) => fs.sb.multi_device.get() && fs_uuid(fs) == uuid,
         });

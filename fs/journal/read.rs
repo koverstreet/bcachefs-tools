@@ -750,7 +750,7 @@ fn bucket_seqs_monotonic(bucket_seq: &[u64], head: usize, out: &mut Printbuf) ->
 fn read_at<'b>(ca: &Dev, bio: &'b mut BioBox<Bio<Buffer<IoBuf>>>, sector: u64, bytes: usize)
     -> Result<&'b mut [u8], BchError>
 {
-    bio.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ);
+    bio.reset(ca.disk_sb.bdev.get(), c::req_op_REQ_OP_READ);
     bio.bio_mut().set_sector(sector);
     bio.bio_mut().shrink(bytes.try_into().expect("a journal read of 4G or more"));
     bio.submit_wait()?;
@@ -769,7 +769,7 @@ impl<'a> DevReader<'a> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
         let buf = io_buf(bytes, Flags::empty()).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
         let bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
-            ca.disk_sb.bdev, Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ,
+            ca.disk_sb.bdev.get(), Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ,
             |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
         Ok(DevReader { fs, ca, ring, bio })
     }

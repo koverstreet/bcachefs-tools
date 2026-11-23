@@ -1054,7 +1054,7 @@ impl bch_sb_buf {
 
 impl c::bch_sb_bdev {
     pub fn bdev(&self) -> &BlockDevice {
-        unsafe { &*self.bdev }
+        unsafe { &*self.bdev.get() }
     }
 
     /// The device's size, in 512 byte sectors.
@@ -1066,14 +1066,11 @@ impl c::bch_sb_bdev {
     pub fn kobj(&self) -> &crate::os::kobject::Kobject {
         crate::os::blkdev::kobj(self.bdev())
     }
+}
 
-    /// The path it was opened by
-    pub fn name(&self) -> &CStr {
-        self.sb_name.as_deref().map_or(c"", |n| CStr::from_bytes_with_nul(n).expect("a device's name, NUL-terminated"))
-    }
-
-    /// The device closed, and its holder put.
-    fn free(&mut self) {
+/// The device closed, and its holder put.
+impl Drop for c::bch_sb_io {
+    fn drop(&mut self) {
         use core::ptr::NonNull;
 
         if let Some(file) = NonNull::new(self.s_bdev_file) {
@@ -1090,13 +1087,18 @@ impl c::bch_sb_bdev {
 const SB_BIO_FITS: &str = "the superblock's buffer, or the scratch, into the bio realloc() sized for the buffer";
 
 impl c::bch_sb_io {
+    /// The path it was opened by
+    pub fn name(&self) -> &CStr {
+        self.sb_name.as_deref().map_or(c"", |n| CStr::from_bytes_with_nul(n).expect("a device's name, NUL-terminated"))
+    }
+
     /// Room for a superblock of @u64s - 0, the minimum - in a buffer a power
     /// of two, at least @dev's logical block; past what its layout allows,
     /// -ENOSPC. And with it, a bio of as many bvecs as that maps to: made
     /// apart from the buffer, so one that failed is made again next time.
     fn realloc(&mut self, dev: &c::bch_sb_bdev, u64s: u32) -> Result<(), BchError> {
         let mut bytes = size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>();
-        if !dev.bdev.is_null() {
+        if !dev.bdev.get().is_null() {
             bytes = bytes.max(crate::os::blkdev::logical_block_size(dev.bdev()) as usize);
         }
         let size = bytes.next_power_of_two();
@@ -1139,16 +1141,16 @@ impl c::bch_sb_io {
         self.buf.grow(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
     }
 
-    /// The buffer and bio freed.
-    fn free(&mut self) {
-        self.bio = None;
-        self.buf.free();
+    /// The buffer and bio freed and the device closed: it zeroed.
+    pub(crate) fn free(&mut self) {
+        *self = Self::default();
     }
 }
 
 impl bch_sb_handle {
     pub fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
-        self.io.realloc(&self.dev, u64s)
+        let (io, dev) = self.parts_mut();
+        io.realloc(dev, u64s)
     }
 
     /// The defaults an older version left unset, filled in - before the
@@ -1211,20 +1213,13 @@ impl core::ops::Deref for bch_sb_handle {
     type Target = bch_sb_buf;
 
     fn deref(&self) -> &bch_sb_buf {
-        &self.io.buf
+        &self.io().buf
     }
 }
 
 impl core::ops::DerefMut for bch_sb_handle {
     fn deref_mut(&mut self) -> &mut bch_sb_buf {
-        &mut self.io.buf
-    }
-}
-
-impl Drop for bch_sb_handle {
-    fn drop(&mut self) {
-        self.io.free();
-        self.dev.free();
+        &mut self.io_mut().buf
     }
 }
 
@@ -1235,7 +1230,7 @@ impl c::bch_sb_io {
     /// buffer it maps, borrowed apart.
     fn bio(&mut self, dev: &c::bch_sb_bdev, opf: u32, sector: u64) -> (&mut BioBox<'static, Bio>, &mut [u8]) {
         let bio = self.bio.as_mut().expect("superblock IO without a bio: have_bio wasn't set");
-        bio.reset(dev.bdev, opf);
+        bio.reset(dev.bdev.get(), opf);
         bio.bio_mut().set_sector(sector);
         (bio, self.buf.buffer_mut())
     }
@@ -1273,10 +1268,11 @@ impl bch_sb<Unvalidated> {
 /// and its checksum. Not validated.
 fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Result<(), BchError> {
     loop {
-        let len = sb.io.buf.buffer_size();
-        sb.io.read(&sb.dev, offset, len).inspect_err(|e| prt!(err, "IO error: {}", -e.raw()))?;
+        let (io, dev) = sb.parts_mut();
+        let len = io.buf.buffer_size();
+        io.read(dev, offset, len).inspect_err(|e| prt!(err, "IO error: {}", -e.raw()))?;
 
-        let buf: &[u8] = sb.io.buf.buffer_mut();
+        let buf: &[u8] = io.buf.buffer_mut();
         let h = cast_plain::<Head<bch_sb>>(buf).expect("a superblock buffer, holding a header");
 
         sb_err_on!(err, h.magic.b != BCACHE_MAGIC && h.magic.b != BCHFS_MAGIC, invalid_sb_magic,
@@ -1308,7 +1304,7 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
             return Err(Errcode::invalid_sb_csum.into());
         }
 
-        sb.io.seq = h.seq.get();
+        io.seq = h.seq.get();
         return Ok(());
     }
 }
@@ -1316,8 +1312,9 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
 /// The layout, from its own sector - read through @sb's buffer, aligned for
 /// IO as one on the stack isn't - and validated.
 fn read_layout_sector(sb: &mut bch_sb_handle, err: &mut Printbuf) -> Result<c::bch_sb_layout, BchError> {
-    sb.io.read(&sb.dev, c::BCH_SB_LAYOUT_SECTOR.into(), size_of::<c::bch_sb_layout>())?;
-    let layout = read_past::<c::bch_sb_layout>(sb.io.buf.buffer_mut(), 0);
+    let (io, dev) = sb.parts_mut();
+    io.read(dev, c::BCH_SB_LAYOUT_SECTOR.into(), size_of::<c::bch_sb_layout>())?;
+    let layout = read_past::<c::bch_sb_layout>(io.buf.buffer_mut(), 0);
     validate_layout(&layout, err)?;
     Ok(layout)
 }
@@ -1339,7 +1336,7 @@ fn read_layout_sector(sb: &mut bch_sb_handle, err: &mut Printbuf) -> Result<c::b
 fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary_valid: bool,
                       err: &mut Printbuf) -> Result<u64, BchError> {
     let primary = layout.sb_offset[0].get();
-    let mut best_seq = if primary_valid { sb.io.seq } else { 0 };
+    let mut best_seq = if primary_valid { sb.io().seq } else { 0 };
     let mut best = primary;
     let mut last_read = if primary_valid { primary } else { 0 };
     let mut any_valid = primary_valid;
@@ -1359,8 +1356,8 @@ fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary
         }
 
         any_valid = true;
-        if sb.io.seq >= best_seq {
-            best_seq = sb.io.seq;
+        if sb.io().seq >= best_seq {
+            best_seq = sb.io().seq;
             best = offset;
         }
     }
@@ -1380,15 +1377,16 @@ fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary
 /// the next superblock write - which reads back slot 0 first, and would take
 /// a torn primary for another writer's.
 fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
-    let s = sb.io.buf.sb_mut();
+    let (io, dev) = sb.parts_mut();
+    let s = io.buf.sb_mut();
     s.offset = s.layout.sb_offset[0];
     let sector = s.offset.get();
-    let csum = sb.io.buf.sb().as_unvalidated().checksum();
-    sb.io.buf.sb_mut().csum = csum;
+    let csum = io.buf.sb().as_unvalidated().checksum();
+    io.buf.sb_mut().csum = csum;
 
-    let bytes = sb.io.buf.sb_bytes().len()
-        .next_multiple_of(crate::os::blkdev::logical_block_size(sb.dev.bdev()) as usize);
-    sb.io.write_fua(&sb.dev, sector, bytes)
+    let bytes = io.buf.sb_bytes().len()
+        .next_multiple_of(crate::os::blkdev::logical_block_size(dev.bdev()) as usize);
+    io.write_fua(dev, sector, bytes)
 }
 
 /// The shim's buffered open, without direct_io: nothing, in the kernel.
@@ -1420,28 +1418,29 @@ fn buffered_instead(opts: &mut c::bch_opts) -> bool {
 
 /// The header of what read_one_super() read, in @sb's buffer.
 fn header(sb: &mut bch_sb_handle) -> &Head<bch_sb> {
-    cast_plain(sb.io.buf.buffer_mut()).expect("a superblock buffer, holding a header")
+    cast_plain(sb.io_mut().buf.buffer_mut()).expect("a superblock buffer, holding a header")
 }
 
 fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&Arc<Holder>>,
                           err: &mut Printbuf) -> Result<bch_sb_handle, BchError>
 {
     let mut sb = bch_sb_handle::default();
-    sb.dev.mode = c::BLK_OPEN_READ;
-    sb.io.bits.set_have_bio(1);
+    let io = sb.io_mut();
+    io.mode = c::BLK_OPEN_READ;
+    io.bits.set_have_bio(1);
 
     let enomem = |_| BchError::from(c::ENOMEM);
-    sb.dev.holder = holder.map_or(core::ptr::null(), |h| Arc::into_raw(h.clone()));
+    io.holder = holder.map_or(core::ptr::null(), |h| Arc::into_raw(h.clone()));
     let mut name = KVec::new();
     name.extend_from_slice(path.to_bytes_with_nul()).map_err(enomem)?;
-    sb.dev.sb_name = Some(name.into_boxed_slice());
+    io.sb_name = Some(name.into_boxed_slice());
 
-    sb.dev.mode |= open_buffered(opts);
+    io.mode |= open_buffered(opts);
     if !opts.noexcl_or_default() {
-        sb.dev.mode |= c::BLK_OPEN_EXCL;
+        io.mode |= c::BLK_OPEN_EXCL;
     }
     if !opts.nochanges_or_default() {
-        sb.dev.mode |= c::BLK_OPEN_WRITE;
+        io.mode |= c::BLK_OPEN_WRITE;
     }
 
     let open = |mode: c::blk_mode_t, holder: *const Holder| {
@@ -1455,10 +1454,10 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
         crate::os::blkdev::open_by_path(path, mode, holder.cast(), ops)
     };
 
-    let mut file = open(sb.dev.mode, sb.dev.holder);
+    let mut file = open(io.mode, io.holder);
     if matches!(&file, Err(e) if e.raw() == c::EACCES as i32) && opts.read_only_or_default() {
-        sb.dev.mode &= !c::BLK_OPEN_WRITE;
-        file = open(sb.dev.mode, sb.dev.holder);
+        io.mode &= !c::BLK_OPEN_WRITE;
+        file = open(io.mode, io.holder);
         if file.is_ok() {
             opts.set_nochanges(true);
         }
@@ -1471,8 +1470,8 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
         // what we asked the block layer for, since that - not the device -
         // is usually what's wrong.
         prt!(err, "  requested {}{}\n",
-             if sb.dev.mode & c::BLK_OPEN_WRITE != 0 { "read-write" } else { "read-only" },
-             if sb.dev.mode & c::BLK_OPEN_EXCL != 0 { ", exclusive" } else { "" });
+             if io.mode & c::BLK_OPEN_WRITE != 0 { "read-write" } else { "read-only" },
+             if io.mode & c::BLK_OPEN_EXCL != 0 { ", exclusive" } else { "" });
 
         if e.raw() == c::EACCES as i32 {
             prt!(err, "  insufficient privilege (try root), or a write protected device\n  (check blockdev --getro)\n");
@@ -1481,9 +1480,9 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
         }
     })?;
 
-    sb.dev.s_bdev_file = file.as_ptr();
+    io.s_bdev_file = file.as_ptr();
     // SAFETY: the file just opened
-    sb.dev.bdev = unsafe { crate::os::blkdev::file_bdev(file) };
+    sb.dev().bdev.set(unsafe { crate::os::blkdev::file_bdev(file) });
 
     sb.sb_realloc(0)?;
 
@@ -1499,11 +1498,11 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
         let mut primary_err = Printbuf::new();
         match read_one_super(&mut sb, c::BCH_SB_SECTOR.into(), &mut primary_err) {
             Ok(()) => {
-                let primary_seq = sb.io.seq;
+                let primary_seq = sb.io().seq;
                 let layout = header(&mut sb).layout;
                 validate_layout(&layout, err)?;
                 let offset = read_backup_supers(&mut sb, &layout, true, err)?;
-                (offset, primary_seq < sb.io.seq)
+                (offset, primary_seq < sb.io().seq)
             }
             Err(_) => {
                 prt!(err, "primary superblock unreadable: ");
@@ -1516,7 +1515,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
     };
 
     let block_bytes = u32::from(header(&mut sb).block_size.get()) << 9;
-    let dev_block = crate::os::blkdev::logical_block_size(sb.dev.bdev());
+    let dev_block = crate::os::blkdev::logical_block_size(sb.dev().bdev());
     if block_bytes < dev_block && opts.direct_io_or_default() {
         if buffered_instead(opts) {
             return Err(c::EINTR.into());
@@ -1525,10 +1524,10 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
         return Err(Errcode::block_size_too_small.into());
     }
 
-    sb.io.bits.set_have_layout(1);
+    sb.io_mut().bits.set_have_layout(1);
     validate_bytes(sb.buffer_mut(), opts, sb_offset, ValidateFlags::empty(), err)?;
 
-    if primary_bad && sb.dev.mode & c::BLK_OPEN_WRITE != 0 {
+    if primary_bad && sb.io().mode & c::BLK_OPEN_WRITE != 0 {
         match rewrite_primary_super(&mut sb) {
             Ok(())  => prt!(err, "rewrote primary superblock from backup at {sb_offset}\n"),
             Err(e)  => prt!(err, "error rewriting primary superblock from backup at {sb_offset}: {e}\n"),
@@ -2066,6 +2065,10 @@ impl DevSbMut<'_> {
         let ret = f(layout);
         self.ca.sb_layout.set(*layout);
         ret
+    }
+
+    pub fn set_dev_idx(&mut self, dev_idx: u8) {
+        self.io.buf.sb_mut().dev_idx = dev_idx;
     }
 
     /// bch_sb_buf::edit_header(), for the tools: of what's shared, the next
@@ -2725,10 +2728,6 @@ impl Fs {
         }
     }
 }
-
-
-const _: () = assert!(size_of::<c::bch_sb_handle>() == size_of::<crate::locking::LockedBy<c::bch_sb_io, c::bch_sb_bdev>>(),
-                      "ca->disk_sb is a struct bch_sb_handle to C");
 
 /// The u64s section @F's arm is with @nr of its tail's entries: for
 /// field_resize() and field_get_minsize().

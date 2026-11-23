@@ -78,7 +78,7 @@ impl InodeInfo {
         for dev in devs.d.iter() {
             let ca = fs.dev_rcu(dev as u32, &read_lock()).and_then(|ca| fs.io_ref_tryget::<c::DevWriteRefKind>(ca));
             let Some(ca) = ca else { continue };
-            let bdev = ca.disk_sb.bdev;
+            let bdev = ca.disk_sb.bdev.get();
 
             let bio = fs.vfs.nocow_flush_bioset
                 .alloc::<BchError, _>(bdev, 0, c::req_op_REQ_OP_WRITE | c::REQ_PREFLUSH, |b| pin_init!(NocowFlush {

@@ -353,7 +353,7 @@ impl Discard {
     /// Issue it, to be put to its worker's Discards by @done.
     fn submit(self, fs: &Fs, done: GatherRef<KVVec<Discard>, waiter::Sync>) {
         let ca = &self.ca;
-        let bdev = ca.disk_sb.bdev;
+        let bdev = ca.disk_sb.bdev.get();
         let sector = ca.bucket_to_sector(u64_to_bucket(self.dev_bucket).offset);
         let size = u32::from(ca.mi.get().bucket_size) << 9;
         // as C's GFP_NOIO: what this waits on mustn't be our own IO

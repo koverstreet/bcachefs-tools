@@ -985,7 +985,7 @@ pub(crate) unsafe fn submit_wbio_replicas<R: IoRefIdx>(wbio: &mut c::bch_write_b
                 n.wbio.nocow_bucket = ca.ptr_bucket(ptr);
             }
             ca.io_done_add(WRITE, ty, (n.bio.range().len() >> 9).into());
-            ca.disk_sb.bdev
+            ca.disk_sb.bdev.get()
         });
         /* the bio's, till its endio takes it back */
         n.ca = ca;

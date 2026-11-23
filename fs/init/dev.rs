@@ -225,7 +225,9 @@ use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
-use crate::locking::MemallocFlags;
+use crate::locking::{Guard as _, LockedBy, MemallocFlags};
+use crate::util::projections::Volatile;
+use crate::util::sharing::Unshared;
 use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
@@ -296,8 +298,9 @@ impl core::ops::DerefMut for bch_fs_sb {
 pub type SbBio = Option<BioBox<'static, Bio>>;
 
 nest! {
-    /// A device's superblock, and what reads and writes it: what changes
-    /// while the device is a filesystem's, under its sb_lock.
+    /// A device's superblock, what reads and writes it, and the block device
+    /// it's on as it was opened: what changes while the device is a
+    /// filesystem's, under its sb_lock. Dropped, the device is closed.
     #[repr(C)]
     #[derive(MaybeZeroable, BitfieldMembers, TypeInfo)]
     pub struct bch_sb_io {
@@ -313,41 +316,65 @@ nest! {
         },
         /// The last seq written
         pub seq: u64,
+        pub s_bdev_file: *mut crate::os::blkdev::BdevFile,
+        /// The path it was opened by, NUL-terminated
+        pub sb_name: Option<crate::util::alloc::Box<[u8], crate::util::alloc::Kmalloc>>,
+        /// A ref, the handle's
+        pub holder: *const crate::sb::io::Holder,
+        pub mode: c::blk_mode_t,
     }
 }
 
 impl Default for bch_sb_io {
     fn default() -> Self {
-        bch_sb_io { buf: Default::default(), bio: None, bits: bch_sb_handle_bits::new(), seq: 0 }
+        bch_sb_io {
+            buf:         Default::default(),
+            bio:         None,
+            bits:        bch_sb_handle_bits::new(),
+            seq:         0,
+            s_bdev_file: core::ptr::null_mut(),
+            sb_name:     None,
+            holder:      core::ptr::null(),
+            mode:        0,
+        }
     }
 }
 
-/// The block device a superblock was read from, open: fixed while the
-/// device is a filesystem's.
-#[repr(C)]
-#[derive(MaybeZeroable, TypeInfo)]
-pub struct bch_sb_bdev {
-    pub s_bdev_file: *mut crate::os::blkdev::BdevFile,
-    pub bdev: *mut crate::os::blkdev::BlockDevice,
-    /// The path it was opened by, NUL-terminated
-    pub sb_name: Option<crate::util::alloc::Box<[u8], crate::util::alloc::Kmalloc>>,
-    /// A ref, the handle's
-    pub holder: *const crate::sb::io::Holder,
-    pub mode: c::blk_mode_t,
+crate::published! {
+    /// The block device a superblock was read from, open: fixed while the
+    /// device is a filesystem's, and read without sb_lock.
+    #[derive(MaybeZeroable)]
+    pub struct bch_sb_bdev {
+        pub bdev: Volatile<*mut crate::os::blkdev::BlockDevice>,
+    }
 }
 
-/// A superblock read from a device: bch2_read_super()'s. To C, one struct
-/// of both halves' members.
-#[repr(C)]
-#[derive(MaybeZeroable, TypeInfo)]
-pub struct bch_sb_handle {
-    pub io: bch_sb_io,
-    pub dev: bch_sb_bdev,
-}
+/// A superblock read from a device and held alone: bch2_read_super()'s. A
+/// device's is Dev.disk_sb, the same LockedBy, Shared.
+pub struct bch_sb_handle(LockedBy<bch_sb_io, bch_sb_bdev, (), Unshared>);
 
 impl Default for bch_sb_handle {
     fn default() -> Self {
-        bch_sb_handle { io: Default::default(), dev: ::pin_init::zeroed() }
+        bch_sb_handle(LockedBy::new(Default::default(), ::pin_init::zeroed()))
+    }
+}
+
+impl bch_sb_handle {
+    pub fn io(&self) -> &bch_sb_io {
+        self.0.get()
+    }
+
+    pub fn io_mut(&mut self) -> &mut bch_sb_io {
+        self.0.get_mut()
+    }
+
+    pub fn dev(&self) -> &bch_sb_bdev {
+        &self.0
+    }
+
+    pub fn parts_mut(&mut self) -> (&mut bch_sb_io, &bch_sb_bdev) {
+        let (io, dev) = self.0.split_mut();
+        (io, dev)
     }
 }
 
@@ -391,14 +418,13 @@ fn may_add(fs: &Fs, sb: &c::bch_sb) -> Result<(), BchError> {
 /* Device startup/shutdown: */
 
 impl Dev {
-    /// disk_sb whole, as C's struct bch_sb_handle: to attach a superblock, or
-    /// close it.
-    ///
-    /// # Safety
-    /// Nothing else refers to it: state_lock is held for write, and the IO
-    /// refs are stopped.
-    unsafe fn sb_handle(&self) -> &mut c::bch_sb_handle {
-        unsafe { &mut *(&raw const self.disk_sb).cast::<c::bch_sb_handle>().cast_mut() }
+    /// With its IO refs stopped: what dereferences the block device holds one.
+    /// What reads it without either only tests it, and sees it unpublished
+    /// before it's closed.
+    fn sb_close(&self) {
+        let mut sb = self.fs().sb_lock();
+        sb.writer_of(&self.disk_sb).bdev.set(core::ptr::null_mut());
+        sb.get_mut_of(&self.disk_sb).free();
     }
 
     pub fn io_ref_stop(&self, rw: usize) {
@@ -421,7 +447,7 @@ impl Dev {
          * code doesn't appear to provide a good method and block/holder.c is
          * susceptible as well:
          */
-        if self.kobj.in_sysfs() && !self.disk_sb.bdev.is_null() {
+        if self.kobj.in_sysfs() && !self.disk_sb.bdev.get().is_null() {
             let b = self.disk_sb.kobj();
             if b.in_sysfs() {
                 b.unlink(c"bcachefs");
@@ -445,7 +471,7 @@ impl Dev {
             self.kobj.add(Some(&fs.kobj), name.as_c_str())?;
         }
 
-        if !self.disk_sb.bdev.is_null() {
+        if !self.disk_sb.bdev.get().is_null() {
             let block = self.disk_sb.kobj();
 
             block.link(&self.kobj, c"bcachefs")?;
@@ -473,7 +499,7 @@ impl PinnedDrop for Dev {
         ca.bucket_backpointer_mismatch.free();
         ca.bucket_backpointer_empty.free();
 
-        unsafe { ca.sb_handle().free() };
+        ca.disk_sb.get_mut().free();
 
         ca.io_done.free();
         ca.buckets_free();
@@ -521,7 +547,7 @@ pub(crate) fn dev_free(ca: ARef<Dev>) {
 /// An attached device freed: its reads stopped, its superblock closed.
 pub(crate) fn dev_exit(ca: ARef<Dev>) {
     ca.io_ref_stop(READ);
-    unsafe { ca.sb_handle().free() };
+    ca.sb_close();
     dev_free(ca);
 }
 
@@ -553,10 +579,8 @@ impl StateLockWrite<'_> {
 
         ca.unlink();
 
-        unsafe {
-            ca.sb_handle().free();
-            ca.journal.bio_set.unmake();
-        }
+        ca.sb_close();
+        unsafe { ca.journal.bio_set.unmake() };
     }
 }
 
@@ -690,7 +714,7 @@ pub fn read_identity(bdev: &crate::os::blkdev::BlockDevice, id: &mut c::bch_dev_
 /// @fs. A device that diverged from @fs - split brain - is reported.
 pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice>, sb: &c::bch_sb_handle,
                  opts: &c::bch_opts) -> Result<(), BchError> {
-    let dev = sb.io.buf.sb();
+    let dev = sb.sb();
     if core::ptr::eq(fs, dev) {
         return Ok(());
     }
@@ -710,7 +734,7 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice
         return Ok(());
     }
 
-    let dev_bdev = Some(sb.dev.bdev());
+    let dev_bdev = Some(sb.dev().bdev());
     let seq_from_fs = sb_member(fs, dev.dev_idx.into()).map_or(0, |m| m.seq.get());
 
     if fs.seq == dev.seq && fs.write_time != dev.write_time {
@@ -756,14 +780,14 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
 
     if ca.is_online() {
         prt!(err, "Cannot attach {}: already have device {} online in slot {}\n",
-             sb.dev.name().to_str().unwrap_or("?"), ca, sb.sb().dev_idx);
+             sb.io().name().to_str().unwrap_or("?"), ca, sb.sb().dev_idx);
         return fs.throw(Errcode::device_already_online);
     }
 
-    let capacity = sb.dev.capacity();
+    let capacity = sb.dev().capacity();
     if capacity < u64::from(mi.bucket_size) * mi.nbuckets {
         prt!(err, "Cannot online {}: device too small (capacity {} filesystem size {} nbuckets {})\n",
-             sb.dev.name().to_str().unwrap_or("?"), capacity, u64::from(mi.bucket_size) * mi.nbuckets, mi.nbuckets);
+             sb.io().name().to_str().unwrap_or("?"), capacity, u64::from(mi.bucket_size) * mi.nbuckets, mi.nbuckets);
         return fs.throw(Errcode::device_size_too_small);
     }
 
@@ -771,18 +795,23 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
     assert!(ca.io_ref_write.is_zero(), "attaching device {ca} with write refs");
 
     let ca_p = ca.as_ptr();
-    crate::journal::buckets::load(&ca, sb.io.buf.sb())?;
+    crate::journal::buckets::load(&ca, sb.sb())?;
     ca.journal_init(state)?;
 
     let mut name = Printbuf::new();
-    prt_bdevname(&mut name, Some(sb.dev.bdev()));
+    prt_bdevname(&mut name, Some(sb.dev().bdev()));
 
     /* Commit: */
+    ca.sb_layout.set(sb.sb().layout);
+    {
+        let mut fs_sb = fs.sb_lock();
+        *fs_sb.get_mut_of(&ca.disk_sb) = core::mem::take(sb.io_mut());
+        fs_sb.writer_of(&ca.disk_sb).bdev.set(sb.dev().bdev.get());
+        sb.dev().bdev.set(core::ptr::null_mut());
+    }
+
     unsafe {
         strscpy(&mut (*ca_p).name, name.as_bytes());
-
-        ca.sb_layout.set(sb.sb().layout);
-        *ca.sb_handle() = core::mem::take(sb);
 
         (*ca_p).dev = crate::os::blkdev::dev(ca.disk_sb.bdev());
     }
@@ -1290,7 +1319,9 @@ impl Fs {
 
                 *w.fs_member_mut(dev_idx) = dev_mi;
 
-                unsafe { ca.sb_handle() }.sb_mut().dev_idx = dev_idx as u8;
+                self.dev_sb_mut(&mut w, &ca)
+                    .expect("a device just attached has its superblock")
+                    .set_dev_idx(dev_idx as u8);
                 let ca = ca.attach(&state, dev_idx);
 
                 self.devs_online.set(dev_idx as usize);
@@ -1735,7 +1766,7 @@ unsafe extern "C" fn bdev_mark_dead(bdev: *mut crate::os::blkdev::BlockDevice, s
     let sb = fs.vfs_super();
     let _umount = sb.map(|sb| sb.umount().read());
     let state = fs.state_lock_write();
-    let Some(ca) = fs.members().find(|ca| ca.disk_sb.bdev == bdev) else { return };
+    let Some(ca) = fs.members().find(|ca| ca.disk_sb.bdev.get() == bdev) else { return };
 
     let mut msg = Printbuf::new();
     log_msg_start(&mut msg, ca.name());

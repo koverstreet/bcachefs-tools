@@ -152,7 +152,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     let buf = io_buf(bytes, Flags::empty()).map_err(|_| BchError::from(c::ENOMEM))?;
 
     let mut bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
-        ca.disk_sb.bdev, Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ as u32,
+        ca.disk_sb.bdev.get(), Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ as u32,
         |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
     bio.bio_mut().set_sector(p.ptr.offset());
     bio.submit_wait()?;

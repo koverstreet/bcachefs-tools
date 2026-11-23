@@ -836,6 +836,10 @@ impl<G, P, L, S: Sharing> LockedBy<G, P, L, S> {
     pub fn get_mut(&mut self) -> &mut G {
         S::cell_get_mut(&mut self.protected)
     }
+
+    pub fn split_mut(&mut self) -> (&mut G, &mut P) {
+        (S::cell_get_mut(&mut self.protected), &mut self.published)
+    }
 }
 
 impl<G, P, L> LockedBy<G, P, L, sharing::Unshared> {

@@ -808,7 +808,7 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
              * returns one bio.
              */
             let bio = unsafe {
-                ja.bio_set.map_and_chain(ca.disk_sb.bdev, w.data.as_ptr().cast(), (sectors << 9) as usize, *offset,
+                ja.bio_set.map_and_chain(ca.disk_sb.bdev.get(), w.data.as_ptr().cast(), (sectors << 9) as usize, *offset,
                                          opf, flags::NOIO)
             };
             let jbio = unsafe { jbio_of(bio) };
@@ -851,7 +851,7 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
             }
 
             let ja = &ca.journal;
-            let bio = ja.bio_set.alloc_raw(ca.disk_sb.bdev, 0,
+            let bio = ja.bio_set.alloc_raw(ca.disk_sb.bdev.get(), 0,
                                            c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META |
                                            c::REQ_PREFLUSH,
                                            flags::NOIO);

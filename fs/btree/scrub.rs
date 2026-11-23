@@ -111,7 +111,7 @@ impl<'f> ReplicaRead<'f> {
         let bytes = fs.opts.btree_node_size.get() as usize;
         let buf = Bounce::new(fs, bytes);
         let mut bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
-            ca.disk_sb.bdev, Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ,
+            ca.disk_sb.bdev.get(), Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ,
             |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
         bio.bio_mut().set_sector(pick.ptr.offset());
 
