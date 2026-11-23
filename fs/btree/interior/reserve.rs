@@ -277,7 +277,7 @@ impl<'t> InteriorUpdate<'t> {
         Ok(Reserved { b: b.into_raw(), ob })
     }
 
-    pub(crate) fn alloc_node(&self, _paths: &mut Paths<'_>, level: usize) -> NewNode<'_> {
+    pub(crate) fn alloc_node(&self, level: usize) -> NewNode<'_> {
         let fs = self.fs();
 
         assert!(level < c::BTREE_MAX_DEPTH as usize, "allocating a node at level {level}");
@@ -337,9 +337,9 @@ impl<'t> InteriorUpdate<'t> {
     }
 
     /// A copy of @b, compacted.
-    pub(crate) fn alloc_replacement(&self, paths: &mut Paths<'_>, b: LockedNode<'_, BtreeNode>) -> NewNode<'_> {
+    pub(crate) fn alloc_replacement(&self, b: LockedNode<'_, BtreeNode>) -> NewNode<'_> {
         let fs = self.fs();
-        let mut n = self.alloc_node(paths, b.c.level.get().into());
+        let mut n = self.alloc_node(b.c.level.get().into());
         let b_contents = b.contents();
         let mut format = b.calc_format(b_contents);
 
@@ -369,7 +369,7 @@ impl<'t> InteriorUpdate<'t> {
     /// A new root at @level, @path holding it above what it held, with no
     /// siblings to merge with.
     pub(crate) fn alloc_root(&self, paths: &mut Paths<'_>, path: PathIdx, level: usize) -> NewNode<'_> {
-        let mut n = self.alloc_node(paths, level);
+        let mut n = self.alloc_node(level);
 
         let (node, contents) = (n.node(), n.contents_mut());
         set_range(node, contents, POS_MIN, SPOS_MAX);
@@ -429,15 +429,17 @@ impl<'t> InteriorUpdate<'t> {
     }
 
     /// @b, freed by the update, freed in memory: @path holds it write locked.
-    pub(super) fn node_free_inmem(&self, paths: &mut Paths<'_>, path: PathIdx, b: LockedNode<'_, BtreeNode>) {
+    pub(super) fn node_free_inmem(&self, paths: &mut Paths<'_>, path: PathIdx, level: usize) {
         let fs = self.fs();
 
-        assert!(paths[path].write_locked(b.c.level.get().into()), "freeing a node not write locked");
+        assert!(paths[path].write_locked(level), "freeing a node not write locked");
 
+        let b = paths[path].locked_btree_node(level).expect("a node to free, held by its path");
         node_free(fs, &b);
 
         let _ = fs.btree_node_transition_state(&b, c::BtreeNodeCacheState::FREEABLE);
-        self.trans().node_forget(paths, &b);
+        let b = ptr::from_ref(b.node());
+        self.trans().node_forget(paths, b);
     }
 }
 

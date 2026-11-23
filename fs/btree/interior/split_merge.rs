@@ -469,11 +469,11 @@ impl SplitLayout {
     }
 }
 
-fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, paths: &mut Paths<'_>, srcs: &[Node<'_>],
+fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, srcs: &[Node<'_>],
                  DstLayout { format, min_key, max_key }: DstLayout) -> NewNode<'u> {
     // a 32 bit counter, which wraps
     let seq = srcs.iter().map(|s| s.contents().data().seq()).max().unwrap_or(0).wrapping_add(1);
-    let mut n = update.alloc_node(paths, usize::from(srcs[0].c.level.get()));
+    let mut n = update.alloc_node(usize::from(srcs[0].c.level.get()));
     let (node, contents) = (n.node(), n.contents_mut());
     assert!(contents.nsets == 1, "packing into a node with {} bsets", contents.nsets);
 
@@ -631,12 +631,12 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
     let mut nodes: ArrayVec<NewNode<'_>, 2> = if split {
         let layout = split_layout(update.t(), b, insert_parent_keys.then_some(update));
         let data = b.contents().data();
-        let mut dsts = layout.dsts(data.min_key, data.max_key).map(|l| alloc_dst(update, paths, &[b], l));
+        let mut dsts = layout.dsts(data.min_key, data.max_key).map(|l| alloc_dst(update, &[b], l));
 
         pack_into_dsts(update.t(), &[b], &mut dsts);
         dsts.into_iter().collect()
     } else {
-        [update.alloc_replacement(paths, b)].into_iter().collect()
+        [update.alloc_replacement(b)].into_iter().collect()
     };
 
     if insert_parent_keys {
@@ -689,7 +689,7 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
     }
 
     let mut new: ArrayVec<_, 3> = n3.into_iter().chain(nodes.into_iter().rev()).collect();
-    update.replace(paths, &[(path, b)], &mut new);
+    update.replace(paths, level, &[path], &mut new);
     Ok(())
 }
 
@@ -1375,7 +1375,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
      * Allocate destination nodes: 1 for plain N->1, 2 for the 3->2 case,
      * each set up with the format and range merge_layouts() gave it.
      */
-    let mut dsts: ArrayVec<NewNode<'_>, 2> = layouts.iter().map(|&l| alloc_dst(update, paths, &nodes, l)).collect();
+    let mut dsts: ArrayVec<NewNode<'_>, 2> = layouts.iter().map(|&l| alloc_dst(update, &nodes, l)).collect();
 
     if let [n] = &mut dsts[..] {
         for &s in &nodes {
@@ -1444,8 +1444,8 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
 
     fs.event_inc_trace(events::btree_node_merge, |out| btree_node_op_log(out, fs, &nodes, &dsts));
 
-    let old: ArrayVec<_, 3> = srcs.iter().map(|s| s.path).zip(nodes.iter().copied()).collect();
-    update.replace(paths, &old, &mut dsts);
+    let old: ArrayVec<_, 3> = srcs.iter().map(|s| s.path).collect();
+    update.replace(paths, level, &old, &mut dsts);
 
     trans.verify_paths(paths);
     Ok(())
@@ -1500,7 +1500,7 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
     }
 
     update.set_root(paths, path, &mut n);
-    update.replace(paths, &[], &mut [n]);
+    update.replace(paths, level, &[], &mut [n]);
 
     trans.node_unlock_write(paths, path, level);
 
@@ -1548,7 +1548,7 @@ fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &m
     let b = paths.held_btree_node(iter.path, level).expect("a rewrite's node, held by its path");
     ebug_assert!(ptr::eq(b.node(), node), "rewriting a node its path doesn't hold");
 
-    let mut n = update.alloc_replacement(paths, b);
+    let mut n = update.alloc_replacement(b);
     build_aux_trees(n.node(), n.contents_mut());
     update.take_path(paths, &n);
 
@@ -1561,7 +1561,7 @@ fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &m
 
     fs.event_inc_trace(events::btree_node_rewrite, |out| crate::prt!(out, "{}", b.pos_to_text(fs)));
 
-    update.replace(paths, &[(iter.path, b)], &mut [n]);
+    update.replace(paths, level, &[iter.path], &mut [n]);
     update.done(paths);
     Ok(())
 }

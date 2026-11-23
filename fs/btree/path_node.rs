@@ -139,19 +139,17 @@ impl BtreeTrans<'_> {
      *
      * Paths holding @b locked are left alone: bch2_trans_node_add() migrates them.
      */
-    pub(crate) fn node_forget(&self, paths: &mut Paths<'_>, b: &BtreeNode) {
+    pub(crate) fn node_forget(&self, paths: &mut Paths<'_>, b: *const BtreeNode) {
         for idx in self.path_idxs() {
             for l in 0..c::BTREE_MAX_DEPTH as usize {
-                if paths[idx].l[l].b.is(&b.c) && !paths[idx].locked(l) {
+                if paths[idx].l[l].b.is(b.cast()) && !paths[idx].locked(l) {
                     paths[idx].l[l].b = NodePtr::err(Errcode::no_btree_node_drop.into());
                 }
             }
         }
     }
 
-    pub(crate) fn node_verify_not_in_iters(&self, paths: &Paths<'_>, b: &BtreeNode) {
-        let level = b.c.level.get() as usize;
-
+    pub(crate) fn node_verify_not_in_iters(&self, paths: &Paths<'_>, level: usize, b: *const BtreeNode) {
         /*
          * Unlocked references were dropped by bch2_trans_node_forget(), locked
          * ones migrated by bch2_trans_node_add(): a path still holding a lock
@@ -159,7 +157,8 @@ impl BtreeTrans<'_> {
          */
         for idx in self.path_idxs() {
             let path = &paths[idx];
-            if path.l[level].b.is(&b.c) && path.locked(level) {
+            if path.l[level].b.is(b.cast()) && path.locked(level) {
+                let b = path.locked_btree_node(level).expect("a node a path holds locked");
                 let mut buf = Printbuf::new();
                 prt!(&mut buf, "path still references btree node being freed, level {}:\n{}\n",
                      level, b.pos_to_text(self.fs()));

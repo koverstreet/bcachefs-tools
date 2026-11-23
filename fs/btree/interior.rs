@@ -814,26 +814,28 @@ impl<'t> InteriorUpdate<'t> {
         split_merge::insert_node(self, paths, path, level + 1)
     }
 
-    /// @old - each held by its path - swapped for @new, linked in: the old
+    /// The nodes at @level of paths @old swapped for @new, linked in: the old
     /// nodes freed in memory before the new are visible to the transaction's
     /// other paths, so nothing relocks an old node and sees what the new one
     /// replaced. @new in the order they're written.
-    pub(crate) fn replace(&self, paths: &mut Paths<'_>, old: &[(PathIdx, LockedNode<'_, BtreeNode>)],
-                          new: &mut [NewNode<'_>]) {
-        for &(_, b) in old {
+    pub(crate) fn replace(&self, paths: &mut Paths<'_>, level: usize, old: &[PathIdx], new: &mut [NewNode<'_>]) {
+        let mut freed: ArrayVec<*const BtreeNode, UPDATE_NODES_MAX> = ArrayVec::new();
+        for &idx in old {
+            let b = paths[idx].locked_btree_node(level).expect("a node to replace, held by its path");
             self.will_free_node(b);
+            freed.push(ptr::from_ref(b.node()));
         }
         for n in new.iter_mut() {
             self.write_new_node(n);
         }
-        for &(idx, b) in old {
-            self.node_free_inmem(paths, idx, b);
+        for &idx in old {
+            self.node_free_inmem(paths, idx, level);
         }
         for n in new {
             self.trans().node_add(self.t, &mut paths.paths_and_updates(), n.held());
         }
-        for &(_, b) in old {
-            self.trans().node_verify_not_in_iters(paths, &b);
+        for &b in &freed {
+            self.trans().node_verify_not_in_iters(paths, level, b);
         }
     }
 
