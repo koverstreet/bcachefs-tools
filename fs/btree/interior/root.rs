@@ -135,12 +135,13 @@ pub(crate) fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level:
 
     let mut b = b?;
     b.set_id(btree, level as usize);
-    let n: &BtreeNode = &b;
 
-    n.flags.set_fake(true);
-    n.flags.set_need_rewrite(true);
+    b.flags.set_fake(true);
+    b.flags.set_need_rewrite(true);
 
-    let contents = unsafe { n.contents_mut() };
+    let mut locked = b.locked();
+    let n = locked.node();
+    let contents = locked.contents_mut();
     let k = contents.key.init();
     k.k.set_key_type(BkeyType::btree_ptr);
     k.k.p = SPOS_MAX;
@@ -155,7 +156,7 @@ pub(crate) fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level:
     contents.data_mut().format = format;
     contents.set_format(format);
 
-    let state = n.live_state();
+    let state = b.live_state();
     let (n, held) = b.hash(state).unwrap_or_else(|e| panic!("a fake root's transition to live: {e}"));
 
     set_root_inmem(fs, n);

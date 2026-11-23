@@ -216,8 +216,7 @@ impl<'t> InteriorUpdate<'t> {
         let trans = t.trans();
         let fs = self.fs();
 
-        let b = trans.btree_node_mem_alloc(paths, interior)?;
-        let n: &BtreeNode = &b;
+        let mut b = trans.btree_node_mem_alloc(paths, interior)?;
         let mut ob = c::open_buckets::default();
 
         let ret: Result<(), BchError> = (|| {
@@ -229,7 +228,8 @@ impl<'t> InteriorUpdate<'t> {
                 wp.retire_short(fs.btree_sectors());
             };
 
-            let contents = unsafe { n.contents_mut() };
+            let mut n = b.locked();
+            let contents = n.contents_mut();
 
             let mut cache = fs.btree.reserve_cache.lock.lock();
             while cache.nr != 0 {
