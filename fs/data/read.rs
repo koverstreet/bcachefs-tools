@@ -535,7 +535,7 @@ impl WalkPos for BioIter {
     }
 
     fn set(&mut self, read: &Rbio, iter: c::bvec_iter) {
-        unsafe { read.bio.lend().bio_mut().set_iter(iter) }
+        read.bio.lend().bio_mut().set_iter(iter)
     }
 }
 
@@ -1503,7 +1503,7 @@ fn fragment_read_done(f: &mut Fragment<'_>, read: &Rbio) -> Result<(), BchError>
     } else {
         f.plan.range.pos()
     };
-    unsafe { f.bio_mut().set_iter(iter) };
+    f.bio_mut().set_iter(iter);
 
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     {

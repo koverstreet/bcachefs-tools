@@ -28,17 +28,13 @@ use crate::c;
 use crate::os::kernel::PAGE_SIZE;
 
 /// Page @n of the run starting at @page: in the kernel, one struct page after
-/// another, as bvec_iter_page(); in userspace, a page is its address.
-///
-/// # Safety
-/// @page is a bvec's, which has at least n + 1 pages.
-pub(crate) unsafe fn nth_page(page: *mut c::page, n: usize) -> *mut c::page {
-    // SAFETY: the caller's
+/// another, as bvec_iter_page(); in userspace, a page is its address. Only
+/// arithmetic: what uses the page is what needs it to be one.
+pub(crate) fn nth_page(page: *mut c::page, n: usize) -> *mut c::page {
     #[cfg(kernel)]
-    return unsafe { page.add(n) };
-    // SAFETY: the caller's
+    return page.wrapping_add(n);
     #[cfg(not(kernel))]
-    return unsafe { page.byte_add(n * PAGE_SIZE) };
+    return page.wrapping_byte_add(n * PAGE_SIZE);
 }
 
 /// # Safety
@@ -317,8 +313,7 @@ impl BioRange<'_> {
             return None;
         }
         let mp_offset = self.mp_offset() as usize;
-        // SAFETY: a page of the bvec it starts in
-        let page = unsafe { nth_page(self.bvec().bv_page, mp_offset / PAGE_SIZE) };
+        let page = nth_page(self.bvec().bv_page, mp_offset / PAGE_SIZE);
         let page = NonNull::new(page).expect("a bvec's page");
         Some((page, (mp_offset % PAGE_SIZE) as u32, self.mp_len()))
     }
@@ -570,8 +565,7 @@ impl<'a> BioRange<'a> {
         let mut i = 0;
         for s in self.segments() {
             for n in 0..pages_of(&s) {
-                // SAFETY: the segment's pages
-                pages[i] = unsafe { nth_page(s.page.as_ptr(), n) };
+                pages[i] = nth_page(s.page.as_ptr(), n);
                 i += 1;
             }
         }

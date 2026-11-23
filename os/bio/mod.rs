@@ -475,9 +475,18 @@ impl Bio {
         iter.bi_size = bytes;
     }
 
-    /// # Safety
-    /// @iter is a position of its bvecs.
-    pub unsafe fn set_iter(&mut self, iter: c::bvec_iter) {
+    /// At @iter: a position of its bvecs - its own, or a clone's source's.
+    /// Panics if it isn't.
+    pub fn set_iter(&mut self, iter: c::bvec_iter) {
+        let vecs = &self.vecs_owner().vecs;
+        let (idx, done) = (iter.bi_idx as usize, u64::from(bi_offset!(iter)));
+        let left = vecs.get(idx..).map_or(0, |v| v.iter().map(|bv| u64::from(bv.bv_len)).sum::<u64>());
+        assert!(self.no_advance_iter() ||
+                (iter.bi_size == 0 && idx <= vecs.len()) ||
+                (vecs.get(idx).is_some_and(|bv| done < u64::from(bv.bv_len)) &&
+                 done + u64::from(iter.bi_size) <= left),
+                "a bio's position at bvec {idx} + {done}, {} bytes: it has {} bvecs, {left} bytes from there",
+                iter.bi_size, vecs.len());
         self.raw_mut().bi_iter = iter;
     }
 
