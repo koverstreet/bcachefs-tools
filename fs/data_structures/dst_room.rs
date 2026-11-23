@@ -166,6 +166,20 @@ impl<T: ?Sized, B: ?Sized + Storage> DstRoom<T, B> {
     }
 }
 
+// Out of line: every deref checks, and a panic's message is a call's worth
+// of arguments
+#[cold]
+#[inline(never)]
+fn room_short(cap: usize, min: usize, what: &str) -> ! {
+    panic!("a room of {cap} bytes, short of the {min} a {what} is at least")
+}
+
+#[cold]
+#[inline(never)]
+fn room_overrun(bytes: usize, cap: usize) -> ! {
+    panic!("a value of {bytes} bytes in a room of {cap}")
+}
+
 impl<T: ?Sized + Unsized, B: ?Sized + Storage> DstRoom<T, B>
 where
     T::Head: Plain + FakeDst,
@@ -176,13 +190,36 @@ where
     fn check(&self) -> *const T::Head {
         let () = Self::ALIGNED;
         let cap = self.capacity();
-        assert!(T::MIN_BYTES <= cap, "a room of {cap} bytes, short of the {} a {} is at least",
-                T::MIN_BYTES, core::any::type_name::<T>());
+        if T::MIN_BYTES > cap {
+            room_short(cap, T::MIN_BYTES, core::any::type_name::<T>());
+        }
 
         let head = self.buf.elems().as_ptr().cast::<T::Head>();
         let bytes = unsafe { (*head).bytes() };
-        assert!(bytes <= cap, "a value of {bytes} bytes in a room of {cap}");
+        if bytes > cap {
+            room_overrun(bytes, cap);
+        }
         head
+    }
+
+    /// The elements a head takes.
+    const HEAD_ELEMS: usize = size_of::<T::Head>().div_ceil(size_of::<B::Elem>());
+
+    /// Its T's head, whatever it says - which may be being set: for a T made
+    /// or edited in place.
+    pub fn head(&self) -> &T::Head {
+        let () = Self::ALIGNED;
+        let h = &self.buf.elems()[..Self::HEAD_ELEMS];
+        // SAFETY: a head's worth of plain storage, aligned for one
+        unsafe { &*h.as_ptr().cast() }
+    }
+
+    /// head(), to edit, and the storage past it.
+    pub fn head_mut_rest(&mut self) -> (&mut T::Head, &mut [B::Elem]) {
+        let () = Self::ALIGNED;
+        let (h, rest) = self.buf.elems_mut().split_at_mut(Self::HEAD_ELEMS);
+        // SAFETY: as head()'s
+        (unsafe { &mut *h.as_mut_ptr().cast() }, rest)
     }
 }
 

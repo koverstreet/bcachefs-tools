@@ -242,7 +242,7 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
             }
         }
 
-        let buf_u64s = k.buf_u64s;
+        let buf_u64s = k.buf_u64s();
         let deleted = BkeyI::<c::Deleted>::at(k.k().p);
         let mut op = TriggerOp::new(btree, level + 1, BkeySC::from(deleted.as_ref()), k.as_s(),
                                     UpdateTriggerFlags::INSERT | UpdateTriggerFlags::TRANSACTIONAL, buf_u64s);

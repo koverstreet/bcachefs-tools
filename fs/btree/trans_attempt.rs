@@ -53,13 +53,13 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop};
 use core::ptr::NonNull;
-use core::slice;
 use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::write::{node_write_trans, BtreeWriteFlags};
 use crate::cstructs::c::BtreeWriteType;
-use crate::util::vstructs::{plain_bytes_mut, State};
+use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes_mut, State};
+use crate::data_structures::dst_room::DstRoom;
 use crate::btree::bkey_buf::copy_key;
 use crate::format::{Bpos, Btree, BkeyType};
 
@@ -260,10 +260,9 @@ impl TransGuard<'_> {
 /// never moved - what won't fit is NoRoom. Typed, its value is a whole @V;
 /// untyped, any key.
 pub struct TransBkey<'a, 't, V: ?Sized = FamilyVal<AllTypes>> {
-    ptr:      NonNull<c::bkey_i>,
-    pub(crate) buf_u64s: u32,
-    t:        PhantomData<&'a mut TransAttempt<'a, 't>>,
-    v:        PhantomData<*const V>,
+    room: &'a mut DstRoom<BkeyI>,
+    t:    PhantomData<&'a mut TransAttempt<'a, 't>>,
+    v:    PhantomData<*const V>,
 }
 
 /// A key that won't fit: @need_u64s, header and all, where its buffer - or a
@@ -707,25 +706,20 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     pub fn bkey_alloc(&self, u64s: u32) -> Result<TransBkey<'a, 't>, BchError> {
-        let bytes = u64s as usize * size_of::<u64>();
-        let ptr = self.kmalloc_raw(bytes)? as *mut c::bkey_i;
+        let bytes = self.kmalloc(u64s as usize * size_of::<u64>())?;
+        let words = cast_plain_slice_mut::<u64>(bytes).expect("transaction memory, word aligned");
 
-        Ok(TransBkey {
-            ptr:      NonNull::new(ptr).expect("transaction memory at NULL"),
-            buf_u64s: u64s,
-            t:        PhantomData,
-            v:        PhantomData,
-        })
+        Ok(TransBkey { room: DstRoom::from_elems_mut(words), t: PhantomData, v: PhantomData })
     }
 
     pub fn bkey_alloc_typed<K: BkeyWhole>(&self) -> Result<TransBkey<'a, 't, K>, BchError> {
         debug_assert_eq!(size_of::<BkeyI<K>>() % size_of::<u64>(), 0);
 
         let u64s = (size_of::<BkeyI<K>>() / size_of::<u64>()) as u32;
-        let k = self.bkey_alloc(u64s)?;
+        let mut k = self.bkey_alloc(u64s)?;
 
         unsafe {
-            k.as_ptr().cast::<BkeyI<K>>().write(BkeyI::new());
+            k.as_mut_ptr().cast::<BkeyI<K>>().write(BkeyI::new());
         }
 
         Ok(unsafe { k.whole_unchecked() })
@@ -747,7 +741,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
         copy_key(dst.as_mut_u64s(), k.k, k.val_bytes());
 
-        debug_assert!(dst.buf_u64s as usize * size_of::<u64>() >= V::MIN_BYTES);
+        debug_assert!(dst.buf_u64s() as usize * size_of::<u64>() >= V::MIN_BYTES);
         Ok(unsafe { dst.cast() })
     }
 
@@ -799,8 +793,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let k_u64s = k.k.u64s as usize;
         let u64s   = k_u64s.max(min_bytes.div_ceil(size_of::<u64>()));
 
-        let mut dst = self.bkey_alloc(u64s as u32 + 1)?;
-        dst.buf_u64s = u64s as u32;
+        let mut dst = self.bkey_alloc(u64s as u32 + 1)?.room_cut(u64s);
         copy_key(dst.as_mut_u64s(), k.k, k.val_bytes());
         Ok(unsafe { dst.cast() })
     }
@@ -812,7 +805,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<TransBkey<'a, 't, V>, BchError>
     {
         let mut dst = self.reassemble_room(k, min_bytes)?;
-        dst.k_mut().u64s = dst.buf_u64s as u8;
+        dst.k_mut().u64s = dst.buf_u64s() as u8;
         Ok(dst)
     }
 
@@ -1003,8 +996,30 @@ impl<'a, 't> TransAttempt<'a, 't> {
 }
 
 impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
-    pub fn as_ptr(&self) -> *mut c::bkey_i {
-        self.ptr.as_ptr()
+    pub fn as_ptr(&self) -> *const c::bkey_i {
+        self.room.elems().as_ptr().cast()
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut c::bkey_i {
+        self.room.elems_mut().as_mut_ptr().cast()
+    }
+
+    /// The key, given up: where it is, and its room, in u64s - for an update
+    /// to queue.
+    pub(crate) fn into_raw(self) -> (NonNull<c::bkey_i>, u32) {
+        let u64s = self.buf_u64s();
+        (NonNull::from(self.room).cast(), u64s)
+    }
+
+    /// Its room, in u64s: what it may grow to.
+    pub fn buf_u64s(&self) -> u32 {
+        self.room.elems().len() as u32
+    }
+
+    /// Its room cut to @u64s: what's past them isn't its to grow into.
+    fn room_cut(self, u64s: usize) -> Self {
+        let TransBkey { room, .. } = self;
+        TransBkey { room: DstRoom::from_elems_mut(&mut room.elems_mut()[..u64s]), t: PhantomData, v: PhantomData }
     }
 
     /// The key as a @W's, unchecked: whole_unchecked(), arm(), for a @W that
@@ -1013,22 +1028,22 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
     /// # Safety
     /// As whole_unchecked()'s, for a @W that's a BkeyWhole.
     pub(crate) unsafe fn cast<W: ?Sized>(self) -> TransBkey<'a, 't, W> {
-        TransBkey { ptr: self.ptr, buf_u64s: self.buf_u64s, t: PhantomData, v: PhantomData }
+        TransBkey { room: self.room, t: PhantomData, v: PhantomData }
     }
 
     /// The key, borrowed from this handle: to arm, or edit, where the caller
     /// keeps the key.
     pub fn reborrow(&mut self) -> TransBkey<'_, 't, V> {
-        TransBkey { ptr: self.ptr, buf_u64s: self.buf_u64s, t: PhantomData, v: PhantomData }
+        TransBkey { room: &mut *self.room, t: PhantomData, v: PhantomData }
     }
 
     /// Its header - whatever its u64s say, which may be being set.
     pub fn k(&self) -> &c::bkey {
-        unsafe { &(*self.ptr.as_ptr()).k }
+        self.room.head()
     }
 
     pub fn k_mut(&mut self) -> &mut c::bkey {
-        unsafe { &mut (*self.ptr.as_ptr()).k }
+        self.room.head_mut_rest().0
     }
 
     /// Make it a deletion - KEY_TYPE_deleted, no value - in place, wherever
@@ -1041,11 +1056,11 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
 
     /// Its buffer, all buf_u64s of it - the room the key has, not its u64s.
     pub fn as_u64s(&self) -> &[u64] {
-        unsafe { slice::from_raw_parts(self.ptr.as_ptr() as *const u64, self.buf_u64s as usize) }
+        self.room.elems()
     }
 
     pub fn as_mut_u64s(&mut self) -> &mut [u64] {
-        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr() as *mut u64, self.buf_u64s as usize) }
+        self.room.elems_mut()
     }
 }
 
@@ -1059,7 +1074,7 @@ impl<'a, 't, F: 'static, S: State> TransBkey<'a, 't, FamilyVal<F, S>> {
     /// u64s, can't hold it.
     pub fn set_val_u64s(&mut self, val_u64s: usize) -> Result<(), NoRoom> {
         let need_u64s = BKEY_U64S + val_u64s;
-        let have_u64s = (self.buf_u64s as usize).min(u8::MAX.into());
+        let have_u64s = (self.buf_u64s() as usize).min(u8::MAX.into());
         if need_u64s > have_u64s {
             return Err(NoRoom { need_u64s, have_u64s });
         }
@@ -1077,12 +1092,12 @@ impl<'a, 't, V: BkeyWhole> TransBkey<'a, 't, V> {
     /// The key, as a @V's: all of its value there, as the typed constructors
     /// make it.
     pub fn key(&self) -> &BkeyI<V> {
-        unsafe { &*self.ptr.as_ptr().cast() }
+        unsafe { &*self.as_ptr().cast() }
     }
 
     /// key(), to edit.
     pub fn key_mut(&mut self) -> &mut BkeyI<V> {
-        unsafe { &mut *self.ptr.as_ptr().cast() }
+        unsafe { &mut *self.as_mut_ptr().cast() }
     }
 
     pub fn v(&self) -> &V {
@@ -1102,10 +1117,11 @@ impl<'a, 't> TransBkey<'a, 't> {
     /// @ptr is a key valid and the caller's to edit while @t's attempt runs,
     /// and @buf_u64s u64s there are its.
     pub(crate) unsafe fn from_raw_room(_t: &TransAttempt<'a, 't>, ptr: *mut c::bkey_i, buf_u64s: u32) -> Self {
-        let ptr = NonNull::new(ptr).expect("a key with room");
-        assert!(buf_u64s >= unsafe { ptr.as_ref().k.u64s }.into(),
-                "a key's buffer of {buf_u64s} u64s, shorter than it is");
-        TransBkey { buf_u64s, ptr, t: PhantomData, v: PhantomData }
+        assert!(!ptr.is_null(), "a key with room");
+        let room = core::ptr::slice_from_raw_parts_mut(ptr.cast::<u64>(), buf_u64s as usize);
+        let k = TransBkey { room: unsafe { &mut *DstRoom::from_elems_raw(room) }, t: PhantomData, v: PhantomData };
+        assert!(buf_u64s >= k.k().u64s.into(), "a key's buffer of {buf_u64s} u64s, shorter than it is");
+        k
     }
 
     /// The key as a @V's, whole, unchecked.
@@ -1114,7 +1130,7 @@ impl<'a, 't> TransBkey<'a, 't> {
     /// It's of @V's type, and the buffer holds a whole BkeyI<@V>.
     pub(crate) unsafe fn whole_unchecked<V: BkeyWhole>(self) -> TransBkey<'a, 't, V> {
         debug_assert!(self.k().key_type().is::<V>());
-        debug_assert!(self.buf_u64s as usize * size_of::<u64>() >= size_of::<BkeyI<V>>());
+        debug_assert!(self.buf_u64s() as usize * size_of::<u64>() >= size_of::<BkeyI<V>>());
         unsafe { self.cast() }
     }
 }
@@ -1122,7 +1138,7 @@ impl<'a, 't> TransBkey<'a, 't> {
 impl<'a, 't, V: ?Sized + ValidatedVal> TransBkey<'a, 't, V> {
     /// Any key's, as it's queued: validated, as AsRef<BkeyI> reads it.
     pub fn into_any(self) -> TransBkey<'a, 't> {
-        TransBkey { ptr: self.ptr, buf_u64s: self.buf_u64s, t: PhantomData, v: PhantomData }
+        TransBkey { room: self.room, t: PhantomData, v: PhantomData }
     }
 }
 
@@ -1146,28 +1162,34 @@ impl<V: ?Sized + BkeyVal> BkeyVMut for TransBkey<'_, '_, V> {
     }
 }
 
+/// The header, and where the value starts.
+fn room_sc(room: &DstRoom<BkeyI>) -> (&c::bkey, *const c::bch_val) {
+    (room.head(), room.elems()[BKEY_U64S..].as_ptr().cast())
+}
+
 /// The key, done with editing, to read for as long as the attempt's memory is
 /// there.
 impl<'a, V: ?Sized + BkeyVal> From<TransBkey<'a, '_, V>> for BkeySC<'a, V> {
     fn from(k: TransBkey<'a, '_, V>) -> Self {
-        let p = k.ptr.as_ptr();
-        BkeySC { k: unsafe { &(*p).k }, v: unsafe { &raw const (*p).v }, iter: PhantomData, val: PhantomData }
+        let room: &'a DstRoom<BkeyI> = k.room;
+        let (k, v) = room_sc(room);
+        BkeySC { k, v, iter: PhantomData, val: PhantomData }
     }
 }
 
 /// The key, to read, keeping its type.
 impl<'k, V: ?Sized + BkeyVal> From<&'k TransBkey<'_, '_, V>> for BkeySC<'k, V> {
     fn from(k: &'k TransBkey<'_, '_, V>) -> Self {
-        let p = k.ptr.as_ptr();
-        BkeySC { k: unsafe { &(*p).k }, v: unsafe { &raw const (*p).v }, iter: PhantomData, val: PhantomData }
+        let (k, v) = room_sc(k.room);
+        BkeySC { k, v, iter: PhantomData, val: PhantomData }
     }
 }
 
 /// The key, to edit, keeping its type.
 impl<'k, V: ?Sized + BkeyVal> From<&'k mut TransBkey<'_, '_, V>> for BkeyS<'k, V> {
     fn from(k: &'k mut TransBkey<'_, '_, V>) -> Self {
-        let p = k.ptr.as_ptr();
-        BkeyS { k: unsafe { &mut (*p).k }, v: unsafe { &raw mut (*p).v }, val: PhantomData }
+        let (k, v) = k.room.head_mut_rest();
+        BkeyS { k, v: v.as_mut_ptr().cast(), val: PhantomData }
     }
 }
 
@@ -1176,13 +1198,13 @@ impl<'k, V: ?Sized + BkeyVal> From<&'k mut TransBkey<'_, '_, V>> for BkeyS<'k, V
 /// them - grows the key, in its buffer - takes it again after.
 impl<V: ?Sized + ValidatedVal> AsRef<BkeyI> for TransBkey<'_, '_, V> {
     fn as_ref(&self) -> &BkeyI {
-        unsafe { &*cast_unsized(self.ptr.as_ptr()) }
+        &**self.room
     }
 }
 
 impl<V: ?Sized + ValidatedVal> AsMut<BkeyI> for TransBkey<'_, '_, V> {
     fn as_mut(&mut self) -> &mut BkeyI {
-        unsafe { &mut *cast_unsized_mut(self.ptr.as_ptr()) }
+        &mut **self.room
     }
 }
 
