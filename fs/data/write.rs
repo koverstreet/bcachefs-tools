@@ -1271,8 +1271,8 @@ fn write_opf(op: &Op) -> u32 {
 /// The op's data written, and its index updated, a pass at a time: what one
 /// couldn't write - its write point full, its open buckets used up, the
 /// allocator blocked - the next does, back @at.
-async fn __write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>, mut pages: Option<&mut Bio<Pages<'_>>>,
-                 at: Resume<'_>, mut flush: Option<&mut Option<Flush<'_>>>) {
+async fn __write(op: &mut Op, wbio: &mut WriteBio<'_>, of: WriteFor<'_>, at: Resume<'_>,
+                 mut flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
     let update = of.update();
     let mut retried_for_encoded = false;
@@ -1289,7 +1289,7 @@ async fn __write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>, mut pages: Optio
     let mut stuck = false;
 
     if unlikely(op.opts.nocow != 0 && fs.opts().nocow_enabled.get() != 0) &&
-       nocow_write(op, wbio, of, flush.as_deref_mut(), &mut in_caller).await {
+       nocow_write(op, wbio.bio_mut(), of, flush.as_deref_mut(), &mut in_caller).await {
         return;
     }
 
@@ -1298,7 +1298,8 @@ async fn __write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>, mut pages: Optio
 
         let (pass, pos) = {
             let mut owned: Owned = [const { None }; c::BCH_BKEY_PTRS_MAX as usize];
-            let (mut data, opf) = (wbio.range(), wbio.opf());
+            let bio = wbio.bio_mut();
+            let (mut data, opf) = (bio.range(), bio.opf());
             let mut io = InFlight::new(fs);
             let pass = write_pass(op, &mut data, opf, update, in_caller, stuck, &mut retried_for_encoded,
                                   &mut owned.iter_mut(), &mut io, at).await;
@@ -1309,9 +1310,9 @@ async fn __write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>, mut pages: Optio
             }
             (pass, data.pos())
         };
-        wbio.set_iter(pos);
+        wbio.bio_mut().set_iter(pos);
 
-        if let (true, Some(pages)) = (op.has(w::submitted), pages.as_deref_mut()) {
+        if let (true, WriteBio::Update(pages)) = (op.has(w::submitted), &mut *wbio) {
             pages.free_pages();
         }
 
@@ -1411,6 +1412,22 @@ impl<'a> WriteFor<'a> {
     }
 }
 
+/// A write's bio: its caller's, or a data update's, which owns the pages its
+/// data is in - given back once it's written, before the index update.
+pub enum WriteBio<'a> {
+    Bio(&'a mut Bio),
+    Update(&'a mut Bio<Pages<'static>>),
+}
+
+impl WriteBio<'_> {
+    fn bio_mut(&mut self) -> &mut Bio {
+        match self {
+            WriteBio::Bio(b) => b,
+            WriteBio::Update(b) => b,
+        }
+    }
+}
+
 /**
  * write() - handle a write to a cache device or flash only volume
  *
@@ -1429,17 +1446,15 @@ impl<'a> WriteFor<'a> {
 /// and index update complete on its write point's index updates, where its
 /// buckets are put, so no allocation waits on the completions queued behind
 /// it. Done, its task resumed @at - not left where its last wait was.
-///
-/// @pages: an update's, which @wbio's bvecs are - freed once its data's
-/// written, before the index update.
-pub async fn write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>, pages: Option<&mut Bio<Pages<'_>>>,
-                   at: Resume<'_>) {
+pub async fn write(op: &mut Op, mut wbio: WriteBio<'_>, of: WriteFor<'_>, at: Resume<'_>) {
     let fs = op.fs();
-    let sectors = u64::from(wbio.range().len() >> 9);
     let update = of.update();
 
     assert!(update.is_some() == op.has(w::update), "a write's update and its w::update flag disagree");
-    assert!(update.is_some() == pages.is_some(), "a write's update and its pages disagree");
+    assert!(update.is_some() == matches!(wbio, WriteBio::Update(_)), "a write's update and its bio disagree");
+
+    let len = wbio.bio_mut().range().len();
+    let sectors = u64::from(len >> 9);
 
     if update.is_none() {
         fs.event_add_trace(events::data_write, sectors, |out| data_write_trace(out, op, update));
@@ -1458,7 +1473,7 @@ pub async fn write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>, pages: Option<
     op.start_time = local_clock();
 
     let ret = (|| -> Result<(), BchError> {
-        if unlikely(wbio.range().len() & (fs.opts().block_size.get() as u32 - 1) != 0) {
+        if unlikely(len & (fs.opts().block_size.get() as u32 - 1) != 0) {
             write_op_error(op, update, op.pos.offset, format_args!("misaligned write"));
             crate::warn_on!(true);
             return Err(fs.err(Errcode::data_write_misaligned));
@@ -1488,12 +1503,12 @@ pub async fn write(op: &mut Op, wbio: &mut Bio, of: WriteFor<'_>, pages: Option<
         false => None,
     };
 
-    let data_len = u64::from(wbio.range().len()).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
+    let data_len = u64::from(len).min(op.new_i_size.wrapping_sub(op.pos.offset << 9));
 
     if fs.opts().inline_data.get() != 0 && data_len <= u64::from((fs.block_bytes() / 2).min(1024)) {
-        write_data_inline(op, wbio, update, data_len as u32, Some(&mut flush));
+        write_data_inline(op, wbio.bio_mut(), update, data_len as u32, Some(&mut flush));
     } else {
-        __write(op, wbio, of, pages, at, Some(&mut flush)).await;
+        __write(op, &mut wbio, of, at, Some(&mut flush)).await;
     }
 
     // if no commit took it, none had anything to flush: there's nothing to wait for

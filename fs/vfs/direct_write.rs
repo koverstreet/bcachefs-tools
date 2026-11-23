@@ -14,7 +14,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::btree_trans;
 use crate::c;
 use crate::data::durability::BkeyVDurability;
-use crate::data::write::{write, WriteFor};
+use crate::data::write::{write, WriteBio, WriteFor};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
@@ -290,7 +290,8 @@ async fn dio_write_loop<P: UserPage>(d: &mut Dio<P>) -> Result<(), BchError> {
 
         task_io_account_write(d.wbio.range().len() as usize);
 
-        write(&mut d.op, &mut d.wbio, WriteFor::Inode(&inode.ei_devs_need_flush), None, Resume::queue(Queue::system_dfl()))
+        write(&mut d.op, WriteBio::Bio(&mut d.wbio), WriteFor::Inode(&inode.ei_devs_need_flush),
+              Resume::queue(Queue::system_dfl()))
             .await;
 
         dio_write_end(d);

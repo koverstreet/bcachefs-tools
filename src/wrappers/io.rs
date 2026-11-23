@@ -75,7 +75,7 @@ pub fn write(
     let task = slot.init(Spawn::Queue(Queue::system_dfl()), fs.tasks(), async move |_: &()| {
         let mut state = state;
         let WriteState { op, wbio, .. } = &mut *state;
-        write::write(op, wbio, write::WriteFor::Tools, None, Resume::queue(Queue::system_dfl())).await;
+        write::write(op, write::WriteBio::Bio(wbio), write::WriteFor::Tools, Resume::queue(Queue::system_dfl())).await;
         r.complete(match op.error as i32 {
             0     => Ok(WriteResult { sectors_delta: op.i_sectors_delta }),
             error => Err(BchError::from_raw(-error)),

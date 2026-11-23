@@ -9,7 +9,7 @@
 
 use crate::btree::bkey::pos;
 use crate::c;
-use crate::data::write::{write, WriteFor};
+use crate::data::write::{write, WriteBio, WriteFor};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
@@ -161,7 +161,8 @@ mod task {
         let io = io.get_mut();
         let mapping = io.mapping;
         let inode = mapping.inode();
-        write(&mut io.op, &mut io.wbio, WriteFor::Inode(&inode.ei_devs_need_flush), None, Resume::queue(Queue::system_dfl()))
+        write(&mut io.op, WriteBio::Bio(&mut io.wbio), WriteFor::Inode(&inode.ei_devs_need_flush),
+              Resume::queue(Queue::system_dfl()))
             .await;
         writepage_io_done(io);
     }

@@ -10,7 +10,7 @@
 //! caller reads into rbio, and read_done() decides whether there's a write.
 //!
 //! The read and write paths hold pointers into the update - into rbio, op and
-//! wbio - so it doesn't move after init(). It's freed an RCU grace period
+//! pages - so it doesn't move after init(). It's freed an RCU grace period
 //! after exit(), as in-flight table lookups may still be reading its key.
 //!
 //! The in-flight table allows one update per position, except that copygc
@@ -38,7 +38,7 @@ use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::{init_at, Flags};
-use crate::os::bio::{Bio, BioInPlace, HasBio, Pages};
+use crate::os::bio::{Bio, BioInPlace, Pages};
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::locking::MemallocFlags;
@@ -149,8 +149,7 @@ pub struct data_update {
 
     pub rbio: Rbio,
     pub op: c::bch_write_op,
-    pub wbio: Bio,
-    /* both bios' bvecs, and their pages: what the read reads, the write writes */
+    /* the bio the write's of, owning the pages the read reads into */
     pub pages: Bio<Pages<'static>>,
 }
 
@@ -417,41 +416,41 @@ impl c::data_update {
         BkeySC::from(self.index.k.as_ref())
     }
 
-    /// The read and write bios share bvecs and pages: the write writes what
-    /// the read filled in.
+    /// The pages the update's data is read into, and written from: its pages'
+    /// bio, which the write is of, and the read's bio, a clone of it.
     fn bios_init(&mut self, io_opts: &c::bch_inode_opts, buf_bytes: u32) -> Result<(), BchError> {
         let fs = self.fs();
         let block_size = u32::from(fs.opts().block_size.get());
         let buf_bytes = buf_bytes.next_multiple_of(block_size);
-
-        // SAFETY: its bios, and the pages just made for them
-        unsafe {
-            init_at(Bio::<Pages>::new(&fs.bio_bounce, block_size, buf_bytes as usize, Flags::empty()),
-                    &raw mut self.pages)?;
-            Bio::init_borrowed(self.rbio.bio.as_ptr().cast(), &mut self.pages, c::req_op_REQ_OP_READ);
-            Bio::init_borrowed(&raw mut self.wbio, &mut self.pages, 0);
-        }
-        self.wbio.set_size(buf_bytes);
-
         let read_for = if self.index.opts.type_ == Type::scrub {
             ReadFor::BCH_READ_FOR_scrub
         } else {
             ReadFor::BCH_READ_FOR_update
         };
-        let rbio = Rbio::update(fs, *io_opts, read_for, unsafe { BioInPlace::at(self.rbio.bio.as_ptr()) });
-        if let Err(e) = unsafe { init_at(rbio, &raw mut self.rbio) } {
-            self.bios_free();
-            return Err(e);
+
+        // SAFETY: the update's, zeroed till here: its pages, and its read, of
+        // a clone of their bio - in the update with it, freed after it
+        unsafe {
+            init_at(Bio::<Pages>::new(&fs.bio_bounce, block_size, buf_bytes as usize, Flags::empty()),
+                    &raw mut self.pages)?;
+            let clone = BioInPlace::own(0, c::req_op_REQ_OP_READ,
+                                        |at| at.borrowing().clone_of(self.pages.range()));
+            if let Err(e) = init_at(Rbio::update(fs, *io_opts, read_for, clone), &raw mut self.rbio) {
+                core::ptr::drop_in_place(&raw mut self.pages);
+                return Err(e);
+            }
         }
 
-        let iter = c::bvec_iter { bi_sector: self.key().k.start_offset(), bi_size: buf_bytes, ..Default::default() };
-        self.rbio.bio.get_mut().set_iter(iter);
-        self.wbio.set_ioprio(IOPRIO_IDLE);
+        let sector = self.key().k.start_offset();
+        self.rbio.bio.get_mut().set_sector(sector);
+        self.pages.set_ioprio(IOPRIO_IDLE);
         Ok(())
     }
 
-    /// The pages bios_init() made, and their bio, freed.
+    /// The pages bios_init() made, and their bio, freed - the read's clone of
+    /// it ended first, if read_done() hasn't.
     fn bios_free(&mut self) {
+        self.rbio.bio.get_mut().end_clone();
         // SAFETY: bios_init()'s, dropped once: neither bio is in flight
         unsafe { core::ptr::drop_in_place(&raw mut self.pages) };
     }
@@ -817,8 +816,15 @@ impl c::data_update {
     /// it was poisoned - and says whether there's a write for write() to
     /// issue, of what it read, by its replica's crc. There isn't for a failed
     /// read, a scrub with nothing to repair, or IO errors that leave nothing
-    /// to write: then op.error is the update's result.
+    /// to write: then op.error is the update's result. The read's clone of the
+    /// pages' bio ends here: the write has them after, by &mut.
     pub fn read_done(&mut self, read: ReadDone) -> bool {
+        let write = self.read_result(read);
+        self.rbio.bio.get_mut().end_clone();
+        write
+    }
+
+    fn read_result(&mut self, read: ReadDone) -> bool {
         let fs = self.fs();
         let ReadDone { mut ret, pick, ptrs_io_error, poisoned } = read;
         let mut crc = pick.map(|p| p.crc);
@@ -843,9 +849,7 @@ impl c::data_update {
                     self.key().arm::<Ptrs>().is_some_and(|k| k.poisoned(fs))) {
             if let Some(crc) = &mut crc {
                 let nonce = crate::data::ptrs::extent_nonce(self.key().k.bversion, crc);
-                // what was read is at the buffer's start, whatever the bio's
-                // iter was left at
-                let data = self.rbio.bio().range().take(crc.compressed_size << 9);
+                let data = self.pages.range().take(crc.compressed_size << 9);
                 crc.csum = fs.checksum_range(crc.csum_type.get(), nonce, data);
                 ret = Ok(());
             }
@@ -875,7 +879,7 @@ impl c::data_update {
         assert!(self.pages.nr_vecs() != 0, "a data update's write without its pages");
 
         self.op.crc = crc;
-        self.wbio.set_size(crc.compressed_size << 9);
+        self.pages.shrink(crc.compressed_size << 9);
         true
     }
 

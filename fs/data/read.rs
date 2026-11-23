@@ -91,7 +91,7 @@ use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot};
 use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::os::bio::{pages, reset_bvec_offset, Bio, BioBox, BioFuture, BioInPlace, BioLend, BioRange, BioSubmit,
+use crate::os::bio::{pages, reset_bvec_offset, Bio, BioBox, BioFuture, BioLend, BioRange, BioSubmit,
                        BvecMempool, HasBio, Lent, Pages};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::{local_clock, READ};
@@ -206,10 +206,10 @@ impl Rbio {
         Self::with(fs.as_ptr(), local_clock(), ReadFor::BCH_READ_FOR_read, subvol, opts, err_report, bio)
     }
 
-    pub(crate) fn update(fs: &Fs, opts: c::bch_inode_opts, read_for: ReadFor, bio: BioInPlace)
-        -> impl PinInit<Self, BchError>
+    pub(crate) fn update<'a>(fs: &Fs, opts: c::bch_inode_opts, read_for: ReadFor,
+                             bio: impl PinInit<Bio, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a
     {
-        Self::with(fs.as_ptr(), local_clock(), read_for, 0, opts, None, bio.init())
+        Self::with(fs.as_ptr(), local_clock(), read_for, 0, opts, None, bio)
     }
 
     /// The bio of a fragment of @orig's read: what the read is - its

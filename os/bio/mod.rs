@@ -165,15 +165,14 @@ fn reserve_bvecs<V>(vecs: &mut InlineVec<V, BIO_INLINE_VECS, u16, BvecAlloc>, ad
     Ok(vecs.reserve(additional)?)
 }
 
-/// Where a bio's bvec table is: its own BioVecs, or another bio's - a clone's
-/// source's, init_borrowed()'s table's - read where they are now, as they
-/// move or grow. bi_io_vec is only ever where they were when the bio last
-/// went out to C: raw_mut() writes it, and nothing reads it.
+/// Where a bio's bvec table is: its own BioVecs, or a clone's source's - read
+/// where they are now, as they move or grow. bi_io_vec is only ever where
+/// they were when the bio last went out to C: raw_mut() writes it, and
+/// nothing reads it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum VecsAt {
     Own,
-    /// A clone's, or a table its owner keeps - init_borrowed()'s: the bio
-    /// whose bvecs they are, which outlives it
+    /// A clone's: the bio whose bvecs they are, which outlives it
     Borrowed(NonNull<Bio>),
 }
 
@@ -257,7 +256,7 @@ impl<B: BioOwns> Bio<B> {
     pub(crate) fn raw_mut(&mut self) -> &mut c::bio {
         bi_io_vec!(self.bio) = match self.vecs_at {
             VecsAt::Own         => self.vecs.as_mut_ptr().cast(),
-            VecsAt::Borrowed(s) => unsafe { s.as_ref() }.bvecs().as_ptr().cast_mut(),
+            VecsAt::Borrowed(s) => unsafe { s.as_ref() }.vecs.as_ptr().cast_mut(),
         };
         &mut self.bio
     }
@@ -334,30 +333,9 @@ impl Bio {
         unsafe { &mut *ptr.cast() }
     }
 
-    /// bio_init() of a Bio at @bio whose bvecs are @table's, all of them,
-    /// which it doesn't own: a data update's read and write bios share its
-    /// pages' bio's.
-    ///
-    /// # Safety
-    /// @bio is room for a Bio, not in flight; @table outlives the bio, and
-    /// its bvecs don't change while the bio's IO is in flight.
-    pub unsafe fn init_borrowed<B: Typed<Bvec = c::bio_vec>>(bio: *mut Bio, table: &mut Bio<B>, opf: u32) {
-        let nr = table.vecs.len() as u16;
-        unsafe {
-            (&raw mut (*bio).vecs).write(BioVecs::<Data>::new_in(BvecAlloc::NONE));
-            (&raw mut (*bio).vecs_at).write(VecsAt::Borrowed(NonNull::from(&**table)));
-            crate::os::bio::sys::init(bio.cast(), core::ptr::null_mut(), table.vecs.as_mut_ptr(), nr, opf);
-            (*bio).bio.bi_vcnt = nr;
-        }
-    }
-
-    /// A clone has none of its own: its source's are its, from its position.
-    fn bvecs(&self) -> &[c::bio_vec] {
-        if self.cloned() { &[] } else { &self.vecs_owner().vecs }
-    }
-
+    /// Its own bvecs: none, a clone's.
     pub fn nr_vecs(&self) -> u16 {
-        self.bvecs().len() as u16
+        self.vecs.len() as u16
     }
 
     pub fn max_vecs(&self) -> u16 {
@@ -393,7 +371,7 @@ impl Bio {
     /// Panics on a clone.
     pub(crate) fn range_all(&self) -> BioRange<'_> {
         assert!(!self.cloned(), "the _all walk of a cloned bio: its bvecs are its parent's");
-        let size = self.bvecs().iter().map(|bv| bv.bv_len).sum();
+        let size = self.vecs.iter().map(|bv| bv.bv_len).sum();
         // INVARIANT: from its first bvec, all of them
         BioRange {
             data: &self.data,
@@ -528,10 +506,22 @@ impl Bio {
         self.bio.bi_flags & (1 << c::BIO_CLONED as u32) != 0
     }
 
+    /// A clone's borrow of its source ended, its IO done: a bio of its own,
+    /// with no bvecs, so nothing reaches the source through it - which may
+    /// change after. Nothing, on a bio that isn't a clone.
+    pub fn end_clone(&mut self) {
+        if let VecsAt::Borrowed(_) = self.vecs_at {
+            self.vecs_at = VecsAt::Own;
+            self.bio.bi_flags &= !(1 << c::BIO_CLONED);
+            self.bio.bi_iter = Default::default();
+            self.sync(0);
+        }
+    }
+
     /// Its bvec @idx: its own, or a clone's source's as they are now. Panics
     /// past them - a clone's source emptied under it.
     fn bvec(&self, idx: u32) -> c::bio_vec {
-        let vecs = self.vecs_owner().bvecs();
+        let vecs = &self.vecs_owner().vecs;
         *vecs.get(idx as usize).unwrap_or_else(|| {
             let whose = if self.cloned() { "a clone, of its source's" } else { "a bio" };
             panic!("reading bvec {idx} of {whose} {}", vecs.len())

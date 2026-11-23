@@ -52,15 +52,6 @@ use crate::util::mempool::Mempool;
 pub struct BioInPlace<'a>(*mut c::bio, PhantomData<fn(&'a ()) -> &'a ()>);
 
 impl BioInPlace<'static> {
-    /// The bio at @bio, bio_init()'s, in a struct no bio owner made - a data
-    /// update's.
-    ///
-    /// # Safety
-    /// @bio is initialized, and is the bio field init() is given.
-    pub unsafe fn at(bio: *mut c::bio) -> Self {
-        BioInPlace(bio, PhantomData)
-    }
-
     /// A Bio<B> in a struct no bio owner made - a data update's, the tools'
     /// write's - @init's, of what bio_init() makes: room for @nr_vecs bvecs of
     /// its own, past its inline few kmalloc()'s.
@@ -101,7 +92,7 @@ impl<'a> BioInPlace<'a> {
         self.init_from(move |b| {
             let owner = src.bio().vecs_owner();
             b.vecs_at = VecsAt::Borrowed(NonNull::from(owner));
-            let table = owner.bvecs().as_ptr().cast_mut();
+            let table = owner.vecs.as_ptr().cast_mut();
             let (b, s) = (&mut b.bio, &src.bio().bio);
             assert!(b.bi_bdev.is_null(), "a clone made for a device: it's its submit's");
             b.bi_flags |= 1 << c::BIO_CLONED;
