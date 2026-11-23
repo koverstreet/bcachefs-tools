@@ -572,6 +572,9 @@ pub struct BioBox<'a, T: HasBio, A: Alloc = Kmalloc> {
 unsafe impl<T: HasBio + Send, A: Alloc + Send> Send for BioBox<'_, T, A> {}
 unsafe impl<T: HasBio + Sync, A: Alloc + Sync> Sync for BioBox<'_, T, A> {}
 
+// its T is where it was allocated, however the box moves
+unsafe impl<T: HasBio, A: Alloc> stable_deref_trait::StableDeref for BioBox<'_, T, A> {}
+
 /// A bio submitted to a Gather: what its T makes of its IO's status, to put
 /// to the gather. It runs where the IO completes - softirq, or an interrupt -
 /// so it may not sleep, nor may T's Drop: what would goes to a workqueue.

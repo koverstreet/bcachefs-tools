@@ -5,15 +5,17 @@
 
 use core::mem::MaybeUninit;
 use core::ops::Deref;
+use core::ptr::NonNull;
 
 use pin_init::PinInit;
+use yoke::Yoke;
 
 use super::pages::{self, BouncePool};
-use super::{buf_nr_bvecs, Bio, BioInPlace, BioOwns, BioVecs};
+use super::{buf_nr_bvecs, Bio, BioBox, BioInPlace, BioOwns, BioVecs, HasBio, Mapped};
 use crate::c;
 use crate::errcode::BchError;
 use crate::os::kernel::PAGE_SIZE;
-use crate::util::alloc::{AlignedBox, AllocError, Flags};
+use crate::util::alloc::{flags, AlignedBox, AllocError, Flags};
 
 /// Pages of the bio's own, from the page allocator - or what it can't give
 /// from the bounce pool, which waits rather than fails, but in a NORECLAIM
@@ -34,7 +36,7 @@ impl<'p> Pages<'p> {
         assert!(bio.vecs.is_empty(), "bouncing into a bio with {} bvecs already: freed as pages, after", bio.vecs.len());
         let ret = pages::alloc_pages_pool(pool, &mut bio.vecs, bs, size, at_least, gfp);
         if ret.is_err() {
-            unsafe { pages::free_pages_pool(pool, &mut bio.vecs) };
+            unsafe { pages::free_pages_pool(Some(pool), &mut bio.vecs) };
         }
         /* the pool's whole elements may come to more */
         let covers = pages::vecs_len(&bio.vecs).min(if matches!(ret, Ok(true)) { at_least } else { size });
@@ -45,7 +47,7 @@ impl<'p> Pages<'p> {
     /// What it holds freed, from @bio, which they were put on beside it, not
     /// owned by it: a fragment task's home's.
     pub fn free_from(self, bio: &mut Bio) {
-        unsafe { pages::free_pages_pool(self.pool, &mut bio.vecs) };
+        unsafe { pages::free_pages_pool(Some(self.pool), &mut bio.vecs) };
         bio.sync(0);
     }
 
@@ -60,7 +62,7 @@ impl BioOwns for Pages<'_> {
     type Bvec = c::bio_vec;
 
     fn release(&mut self, vecs: &mut BioVecs) {
-        unsafe { pages::free_pages_pool(self.pool, vecs) }
+        unsafe { pages::free_pages_pool(Some(self.pool), vecs) }
     }
 }
 
@@ -71,7 +73,7 @@ impl<'p> Bio<Pages<'p>> {
     pub fn new(pool: &'p BouncePool, bs: u32, size: usize, gfp: Flags) -> impl PinInit<Self, BchError> + 'p {
         BioInPlace::own(pages::nr_vecs(size), 0, move |at| at.init_from(move |b| {
             if let Err(e) = pages::alloc_pages(&mut b.vecs, bs, size, gfp) {
-                unsafe { pages::free_pages_pool(pool, &mut b.vecs) };
+                unsafe { pages::free_pages_pool(Some(pool), &mut b.vecs) };
                 return Err(e);
             }
             b.sync(size as u32);
@@ -82,8 +84,89 @@ impl<'p> Bio<Pages<'p>> {
     /// Its pages freed now, before it's dropped: a data update's, once its
     /// write's data is written, before the index update.
     pub fn free_pages(&mut self) {
-        unsafe { pages::free_pages_pool(self.owns.pool, &mut self.vecs) };
+        unsafe { pages::free_pages_pool(Some(self.owns.pool), &mut self.vecs) };
         self.sync(0);
+    }
+}
+
+/// A bio's own pages, from the page allocator - in high order allocations,
+/// so a few bvecs cover a lot - and the same pages as one buffer for the CPU:
+/// vmapped, where they aren't one already. For a buffer the CPU fills and a
+/// bio's clones write - a journal entry's: written through &mut, so never
+/// while a clone of the bio has it.
+pub struct MappedPages(Yoke<Mapped<'static>, BioBox<'static, Bio<AllocPages>>>);
+
+// its mapping is of its own pages, the vmap or where they are: they go where
+// it goes
+unsafe impl Send for MappedPages {}
+
+/// Pages of the bio's own from alloc_pages() alone, none the bounce pool's:
+/// each freed as it was allocated.
+pub struct AllocPages;
+
+impl BioOwns for AllocPages {
+    type Bvec = c::bio_vec;
+
+    fn release(&mut self, vecs: &mut BioVecs) {
+        unsafe { pages::free_pages_pool(None, vecs) }
+    }
+}
+
+impl MappedPages {
+    /// @size bytes of them, zeroed - failing as the page allocator does, or
+    /// vmap() does.
+    pub fn new(size: usize, gfp: Flags) -> Result<Self, BchError> {
+        let gfp = gfp | flags::ZERO;
+        let bio = BioBox::<Bio<AllocPages>>::new(pages::nr_vecs(size), 0, |at: BioInPlace<'static>| {
+            at.init_from(move |b| {
+                if let Err(e) = pages::alloc_pages(&mut b.vecs, PAGE_SIZE as u32, size, gfp) {
+                    unsafe { pages::free_pages_pool(None, &mut b.vecs) };
+                    return Err(e);
+                }
+                b.sync(size as u32);
+                Ok(AllocPages)
+            })
+        })?;
+
+        let m = Yoke::<Mapped<'static>, _>::try_attach_to_cart(bio, |b: &Bio<AllocPages>| {
+            HasBio::bio(b).range().map().ok_or(BchError::from(c::ENOMEM))
+        })?;
+        #[cfg(kernel)]
+        if let Mapped::Vmap { offset, .. } = m.get() {
+            assert!(*offset == 0, "alloc_pages()'s pages, vmapped {offset} bytes into the first");
+        }
+        Ok(MappedPages(m))
+    }
+
+    /// Where it's mapped as one: the vmap, or where its pages already are.
+    fn data(&self) -> NonNull<u8> {
+        NonNull::new(self.0.get().data().as_ptr()).expect("a mapping at NULL")
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.get().data().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: our pages, mapped at data() while we live; what IO has them
+        // - a clone of the bio, borrowing it - writes them out, reading them
+        unsafe { core::slice::from_raw_parts(self.data().as_ptr(), self.len()) }
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: as as_slice()'s, borrowed mutably: no clone of the bio has
+        // them
+        unsafe { core::slice::from_raw_parts_mut(self.data().as_ptr(), self.len()) }
+    }
+
+    /// Its bio, over all of it: to write some of it from, by clones that
+    /// borrow it - a write's, which only read the pages.
+    pub(crate) fn bio(&self) -> &Bio {
+        HasBio::bio(&**self.0.backing_cart())
     }
 }
 

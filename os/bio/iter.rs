@@ -493,6 +493,31 @@ impl Mapped<'_> {
     }
 }
 
+// Mapped<'a> is covariant in 'a: transform()'s and transform_owned()'s bodies,
+// which are the lifetime casts, compile only if it is
+unsafe impl<'a> yoke::Yokeable<'a> for Mapped<'static> {
+    type Output = Mapped<'a>;
+
+    fn transform(&'a self) -> &'a Mapped<'a> {
+        self
+    }
+
+    fn transform_owned(self) -> Mapped<'a> {
+        self
+    }
+
+    unsafe fn make(from: Mapped<'a>) -> Self {
+        unsafe { core::mem::transmute::<Mapped<'a>, Self>(from) }
+    }
+
+    fn transform_mut<F>(&'a mut self, f: F)
+    where
+        F: 'static + for<'b> FnOnce(&'b mut Self::Output),
+    {
+        unsafe { f(core::mem::transmute::<&mut Self, &mut Mapped<'a>>(self)) }
+    }
+}
+
 impl<'a> BioRange<'a> {
     /// None if it can't be: not virtually contiguous, nor whole pages but
     /// where it starts and ends.
