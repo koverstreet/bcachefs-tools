@@ -121,9 +121,9 @@ impl Fs {
         READ_ONLY_EVENTS.wake();
 
         /*
-         * Wake threads parked in wait_on_allocator(): going-RO won't
-         * complete while they hold open closures on freelist_wait, and they
-         * won't otherwise notice the fs is shutting down.
+         * Wake writes parked on the allocator: going-RO won't complete
+         * while they wait on freelist_events, and they won't otherwise
+         * notice the fs is shutting down.
          */
         self.alloc_wake_all();
 
@@ -243,6 +243,7 @@ impl StateLockWrite<'_> {
         }
 
         fs.init_late(self).map_err(|e| fs.err(e))?;
+        fs.write_points_index_updates_init(self);
         unsafe {
             btree_init_rw(p)?;
             (*p).journal.init_rw()?;
@@ -255,7 +256,10 @@ impl StateLockWrite<'_> {
         Ok(())
     }
 
-    pub(crate) fn start_rw(&self) -> Result<(), BchError> {
+    /// @early: before journal replay, from recovery: the scans that offline
+    /// evacuations asked for wait for a later one - a reservation to queue
+    /// one blocks on journal space, which unreplayed entries still pin.
+    pub(crate) fn start_rw(&self, early: bool) -> Result<(), BchError> {
         let fs = self.fs();
 
         assert!(fs.flags.get(Flag::may_go_rw));
@@ -282,6 +286,9 @@ impl StateLockWrite<'_> {
         }
 
         if fs.flags.get(Flag::rw) {
+            if !early && fs.opts().read_only.get() == 0 {
+                fs.start_member_reconcile_scans();
+            }
             return Ok(());
         }
 
@@ -350,6 +357,10 @@ impl StateLockWrite<'_> {
             return ret;
         }
 
+        if !early && fs.opts().read_only.get() == 0 {
+            fs.start_member_reconcile_scans();
+        }
+
         /* copygc was started before recovery, and waits for BCH_FS_rw: */
         fs.copygc_wakeup();
         fs.do_discards_async();
@@ -378,7 +389,7 @@ impl StateLockWrite<'_> {
             return fs.throw(Errcode::erofs_no_alloc_info);
         }
 
-        self.start_rw()
+        self.start_rw(false)
     }
 }
 

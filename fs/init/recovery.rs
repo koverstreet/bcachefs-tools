@@ -642,7 +642,7 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
             reconstruct_alloc(fs);
         }
 
-        return fs.state_lock_write().start_rw();
+        return fs.state_lock_write().start_rw(true);
     }
     Ok(())
 }
@@ -1106,6 +1106,9 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
 
     set_may_go_rw(fs)?;
     journal_replay(fs)?;
+    if fs.opts.read_only.get() == 0 {
+        fs.start_member_reconcile_scans();
+    }
     subvolume::initialize(fs)?;
     snapshots_read(fs)?;
     fs.presplit_shard_boundaries();

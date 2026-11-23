@@ -250,7 +250,7 @@ use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, 
      crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
      core::sync::atomic::Ordering::Acquire};
 use crate::types::bits_to_longs;
-use crate::util::bio::{Bio, BioBox, IoBuf};
+use crate::util::bio::{Bio, BioBox, BioSet, IoBuf};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
 use crate::util::refcount::{ARef, AlwaysRefCounted, WaitableRef};
@@ -292,7 +292,7 @@ impl core::ops::DerefMut for bch_fs_sb {
     }
 }
 
-pub type SbBio = Option<BioBox<Bio>>;
+pub type SbBio = Option<BioBox<'static, Bio>>;
 
 nest! {
     /// A device's superblock, and what reads and writes it: what changes
@@ -555,6 +555,7 @@ impl StateLockWrite<'_> {
         unsafe {
             ca.sb_handle().free();
             ca.journal.bio_set.unmake();
+            ca.write_clones.unmake();
         }
     }
 }
@@ -770,6 +771,8 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
     let ca_p = ca.as_ptr();
     crate::journal::buckets::load(&ca, sb.io.buf.sb())?;
     ca.journal_init(state)?;
+    /* a write waits for one only with none held: the reserve's for progress */
+    ca.write_clones.init(state, || BioSet::new(4)).map_err(|_| fs.err(Errcode::ENOMEM_dev_write_clones_init))?;
 
     let mut name = Printbuf::new();
     prt_bdevname(&mut name, Some(sb.dev.bdev()));
@@ -1118,6 +1121,36 @@ impl StateLockWrite<'_> {
 }
 
 impl Fs {
+    /// The reconcile scans that offline set-state to evacuating asked for,
+    /// queued - and their marks cleared, once the queued scan is durable: a
+    /// crash before costs the mark, kept, not the scan. Best effort: a
+    /// failure is logged and doesn't fail the read-write transition, and the
+    /// mark kept retries it on the next.
+    pub fn start_member_reconcile_scans(&self) {
+        let fs = self;
+        let nr_devices = fs.nr_devices();
+
+        for dev in 0..nr_devices {
+            let marked = fs.sb_lock().member_mut(dev).is_some_and(|m| m.needs_reconcile_scan());
+            if !marked {
+                continue;
+            }
+
+            let ret = fs.request_scan(c::ReconcileScan::device(dev), true)
+                .and_then(|()| fs.journal.flush());
+            if let Err(e) = ret {
+                crate::bch_err_fn!(fs, Err::<(), _>(e)).ok();
+                continue;
+            }
+
+            let mut sb = fs.sb_lock();
+            if let Some(m) = sb.member_mut(dev) {
+                m.set_needs_reconcile_scan(false);
+            }
+            fs.write_super(&mut sb);
+        }
+    }
+
     pub fn dev_set_state(&self, ca: &Dev, new_state: MemberState, flags: u32,
                          err: Option<&mut Printbuf>) -> Result<(), BchError>
     {

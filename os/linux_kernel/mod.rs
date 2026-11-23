@@ -59,7 +59,7 @@ pub mod timer;
 pub mod tracepoint;
 #[path = "../unicode.rs"]
 pub mod unicode;
-mod user_pages;
+pub mod user_pages;
 pub mod vfs_inode;
 pub mod vm;
 pub mod vmap;

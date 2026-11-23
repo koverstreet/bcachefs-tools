@@ -8,13 +8,15 @@ use crate::alloc::discard::{do_discards_work, DiscardBio, DiscardState};
 use crate::format::DataType;
 use crate::util::alloc::KVVec;
 use crate::locking::{ByteLock, Locked, Lockdep, Mutex, SeqLock, SpinLockIrq};
-use crate::{new_lock, new_work};
+use crate::new_lock;
 use crate::types::CacheAligned;
 use crate::util::bio::BioSet;
 use crate::os::workqueue::ReffedWork;
 use crate::os::percpu::{Counters, PerCpu};
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
+use crate::util::late::Late;
+use crate::util::task::RunQueue;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64, AtomicU8};
@@ -256,17 +258,6 @@ pub struct dev_stripe_state {
     pub cached_devs: c::bch_devs_mask,
 }
 
-#[bch_enum(closed)]
-#[nr]
-#[repr(u32)]
-pub enum WritePointStatus {
-    stopped,
-    waiting_io,
-    waiting_work,
-    runnable,
-    running,
-}
-
 /* the write point lock's: what a write allocating from it uses */
 #[repr(C)]
 #[derive(MaybeZeroable)]
@@ -315,45 +306,13 @@ pub struct write_point {
     #[pin]
     #[init(write_point_alloc::init(data_type))]
     pub alloc: write_point_alloc,
-    #[pin]
-    #[init(write_point_io::init())]
-    pub io: write_point_io,
-}
-
-/* writes_lock's: the writes waiting for their index updates, and the clock of
- * the write point's state */
-#[repr(C)]
-#[derive(MaybeZeroable)]
-pub struct WritePointWrites {
-    pub writes: c::WriteOpList,
-    pub last_state_change: u64,
-    pub last_runtime: u64,
-}
-
-
-published! {
-    /// What state the write point's writes are in, and how long it's spent
-    /// in each: written under writes_lock, read without it - the state by
-    /// bch2_write_queue()'s check, the times by write_points_to_text().
-    #[derive(MaybeZeroable)]
-    pub struct WritePointState {
-        pub state: Volatile<u32>,
-        pub time: [Volatile<u64>; c::WritePointStatus::NR as usize],
-    }
-}
-
-#[pin_data]
-#[repr(C)]
-#[derive(MaybeZeroable, Init)]
-pub struct write_point_io {
     pub __align: CacheAligned,
+    /*
+     * its writes, their IO done, run by its work item: their index updates -
+     * made with the queue it runs on, when that's made
+     */
     #[pin]
-    #[init(new_work!(crate::data::write::write_point_do_index_updates, "&wp->index_update_work"))]
-    pub index_update_work: c::work_struct,
-
-    #[pin]
-    #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->writes_lock"))]
-    pub writes_lock: Locked<SpinLockIrq, WritePointWrites, WritePointState>,
+    pub index_updates: Late<RunQueue>,
 }
 
 #[repr(C)]
@@ -449,12 +408,10 @@ pub struct bch_fs_allocator {
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&c->allocator.freelist_lock"))]
     pub freelist_lock: Locked<SpinLockIrq, OpenBucketsFree, OpenBucketsFreeNr>,
-    pub freelist_wait: c::closure_waitlist,
     pub freelist_events: EventCount,
     /* jiffies at the last allocator stuck dump; claimed by cmpxchg */
     pub last_stuck: crate::data_structures::bitmap::AtomicULong,
 
-    pub open_buckets_wait: c::closure_waitlist,
     pub open_buckets_events: EventCount,
     #[pin]
     pub open_buckets: [c::open_bucket; c::OPEN_BUCKETS_COUNT as usize],

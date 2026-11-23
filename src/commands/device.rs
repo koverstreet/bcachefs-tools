@@ -372,7 +372,10 @@ fn set_state_offline(device: &str, new_state: c::MemberState) -> Result<()> {
 
     {
         let mut sb = fs.sb_lock();
-        sb.fs_member_mut(dev_idx).set_state(new_state);
+        let member = sb.fs_member_mut(dev_idx);
+        member.set_state(new_state);
+        // the scan is queued at the next read-write mount
+        member.set_needs_reconcile_scan(new_state == c::MemberState::evacuating);
         fs.write_super_ret(&mut sb)
             .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }

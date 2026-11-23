@@ -3,7 +3,11 @@
 //! The VFS's iov_iter: a read's or a write's buffer, walked as it's used.
 
 use crate::c;
+#[cfg(kernel)]
+use crate::data_structures::inline_vec::InlineVec;
 use crate::errcode::{ret_to_result_void, BchError};
+#[cfg(kernel)]
+use crate::util::alloc::AllocError;
 use core::ffi::{c_int, c_void};
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
@@ -43,10 +47,12 @@ impl<'a> IovIter<'a> {
         unsafe { self.0.__bindgen_anon_1.__bindgen_anon_1.as_mut().count = count }
     }
 
-    /// bio_iov_vecs_to_alloc(): the bvecs a bio of its next pages wants, up to
-    /// BIO_MAX_VECS.
-    pub fn bio_vecs(&mut self) -> u16 {
-        unsafe { c::bio_iov_vecs_to_alloc(self.0, c::BIO_MAX_VECS as core::ffi::c_int) as u16 }
+    /// The bvecs a bio of its next pages, a page each, wants - up to
+    /// BIO_MAX_VECS: iov_iter_npages(), as bio_iov_vecs_to_alloc() is but
+    /// for a bvec iter, which C's bio borrows the bvecs of and ours copies.
+    #[cfg(kernel)]
+    pub fn bio_pages(&mut self) -> u16 {
+        unsafe { c::iov_iter_npages(self.0, c::BIO_MAX_VECS as c_int) as u16 }
     }
 
     /// user_backed_iter(): its pages are the user's.
@@ -68,9 +74,10 @@ impl<'a> IovIter<'a> {
         unsafe { c::iov_iter_single_seg_count(&*self.0) }
     }
 
+    /// iov_iter_revert(): back over the last @bytes taken.
     #[cfg(kernel)]
     pub fn revert(&mut self, bytes: usize) {
-        IovIterFields::revert(self.0, bytes)
+        unsafe { c::iov_iter_revert(self.0, bytes) }
     }
 
     /// Its last @n bytes held back till the guard's dropped: iov_iter_truncate(),
@@ -83,64 +90,74 @@ impl<'a> IovIter<'a> {
     }
 }
 
-/// An iov_iter's fields, as a DIO write reads its copy of the VFS's, held for
-/// an IO that outlives the call.
+/// An iov_iter held for an IO that outlives the call it was passed to: a copy
+/// of the VFS's, its iovecs the caller's till keep_iovecs() copies them in.
 #[cfg(kernel)]
-pub trait IovIterFields {
-    fn count(&self) -> usize;
-
-    /// iter_is_ubuf(): one buffer, held in the iter itself.
-    fn is_ubuf(&self) -> bool;
-
-    /// iter_is_iovec()
-    fn is_iovec(&self) -> bool;
-
-    fn nr_segs(&self) -> usize;
-
-    /// An iovec iter's iovecs.
-    fn iov(&self) -> &[kernel::bindings::iovec];
-
-    /// # Safety
-    /// An iovec iter's, @iov a copy of its iovecs, which lives as long as it's
-    /// used.
-    unsafe fn set_iov(&mut self, iov: *const kernel::bindings::iovec);
-
-    /// iov_iter_revert(): back over the last @bytes taken.
-    fn revert(&mut self, bytes: usize);
+pub struct HeldIovIter {
+    iter: c::iov_iter,
+    iov:  InlineVec<kernel::bindings::iovec, 2>,
 }
 
+// its buffers are user addresses, and its iovecs its own, or the caller's
+// while it waits
 #[cfg(kernel)]
-impl IovIterFields for c::iov_iter {
-    fn count(&self) -> usize {
-        unsafe { self.__bindgen_anon_1.__bindgen_anon_1.as_ref().count }
+unsafe impl Send for HeldIovIter {}
+
+#[cfg(kernel)]
+impl HeldIovIter {
+    /// # Safety
+    /// @i's iovecs outlive every use of it before keep_iovecs().
+    pub unsafe fn new(i: &mut IovIter<'_>) -> Self {
+        Self { iter: unsafe { core::ptr::read(&*i.0) }, iov: InlineVec::new() }
     }
 
-    fn is_ubuf(&self) -> bool {
-        self.iter_type == c::iter_type_ITER_UBUF as u8
+    /// iter_is_ubuf(): one buffer, held in the iter itself.
+    pub fn is_ubuf(&self) -> bool {
+        self.iter.iter_type == c::iter_type_ITER_UBUF as u8
     }
 
-    fn is_iovec(&self) -> bool {
-        self.iter_type == c::iter_type_ITER_IOVEC as u8
+    /// iter_is_iovec()
+    pub fn is_iovec(&self) -> bool {
+        self.iter.iter_type == c::iter_type_ITER_IOVEC as u8
+    }
+
+    /// iov_iter_is_bvec()
+    pub fn is_bvec(&self) -> bool {
+        self.iter.iter_type == c::iter_type_ITER_BVEC as u8
     }
 
     fn nr_segs(&self) -> usize {
-        unsafe { self.__bindgen_anon_2.nr_segs as usize }
+        unsafe { self.iter.__bindgen_anon_2.nr_segs as usize }
     }
 
-    fn iov(&self) -> &[kernel::bindings::iovec] {
-        assert!(self.is_iovec(), "the iovecs of an iter of type {}", self.iter_type);
-        unsafe {
-            core::slice::from_raw_parts(self.__bindgen_anon_1.__bindgen_anon_1.as_ref().__bindgen_anon_1.__iov,
-                                        self.nr_segs())
+    fn iov_ptr(&mut self) -> &mut *const kernel::bindings::iovec {
+        unsafe { &mut self.iter.__bindgen_anon_1.__bindgen_anon_1.as_mut().__bindgen_anon_1.__iov }
+    }
+
+    /// The iter, its position in its own iovecs - wherever they've moved to
+    /// with it - if they're its own.
+    pub fn get(&mut self) -> IovIter<'_> {
+        if !self.iov.is_empty() {
+            // an iovec iter's position is its segments left, ending the array
+            let at = self.iov.len() - self.nr_segs();
+            *self.iov_ptr() = self.iov[at..].as_ptr();
         }
+        IovIter(&mut self.iter)
     }
 
-    unsafe fn set_iov(&mut self, iov: *const kernel::bindings::iovec) {
-        unsafe { self.__bindgen_anon_1.__bindgen_anon_1.as_mut().__bindgen_anon_1.__iov = iov }
-    }
+    /// An iovec iter's iovecs left copied in, so it no longer needs the
+    /// caller's.
+    pub fn keep_iovecs(&mut self) -> Result<(), AllocError> {
+        assert!(self.is_iovec() && self.iov.is_empty(), "keeping the iovecs of an iter of type {}, kept already: {}",
+                self.iter.iter_type, !self.iov.is_empty());
 
-    fn revert(&mut self, bytes: usize) {
-        unsafe { c::iov_iter_revert(self, bytes) }
+        let src = unsafe { core::slice::from_raw_parts(*self.iov_ptr(), self.nr_segs()) };
+        self.iov.reserve(src.len())?;
+        for v in src {
+            // the kernel's iovec isn't Copy
+            self.iov.push(kernel::bindings::iovec { iov_base: v.iov_base, iov_len: v.iov_len })?;
+        }
+        Ok(())
     }
 }
 

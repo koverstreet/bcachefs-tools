@@ -60,8 +60,8 @@ impl InodeInfo {
         let fs = self.fs();
 
         /*
-         * Fetch-and-clear must be atomic: bch2_write_endio() sets bits here
-         * from bio completion, with no serialization against us. A plain
+         * Fetch-and-clear must be atomic: the write path sets bits here as
+         * a nocow write's IO completes, with no serialization against us. A plain
          * copy + memset can erase a bit set in between - fsync would then
          * complete without flushing a device that had a completed write.
          * Bits set after the exchange belong to the next flush.
@@ -83,7 +83,7 @@ impl InodeInfo {
             let bio = fs.vfs.nocow_flush_bioset
                 .alloc::<BchError, _>(bdev, 0, c::req_op_REQ_OP_WRITE | c::REQ_PREFLUSH, |b| pin_init!(NocowFlush {
                     ca,
-                    bio <- b.init::<BchError>(),
+                    bio <- b.init::<BchError, _>(),
                 }? BchError))
                 .expect("a nocow flush bio: the bioset's mempool waits rather than fail");
             bio.submit_gathered(g.get());
