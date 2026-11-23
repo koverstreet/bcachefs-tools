@@ -230,7 +230,7 @@ use crate::util::projections::Volatile;
 use crate::util::sharing::Unshared;
 use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
-                         sb_member_alloc, DevKobjRef, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
+                         sb_member_alloc, DevKobjRef, DevName, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::util::alloc::kbox_pin_init;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::file::read_file;
@@ -626,10 +626,10 @@ impl NewDev {
             *this.dev_idx = dev_idx as u8;
             this.self_mask.d.set(dev_idx as usize);
 
-            if this.name[0] == 0 {
+            if this.name.get_mut().is_empty() {
                 let mut name = Printbuf::new();
                 prt!(&mut name, "dev-{dev_idx}");
-                strscpy(this.name, name.as_bytes());
+                *this.name.get_mut() = DevName::new(name.as_bytes());
             }
         }
 
@@ -780,12 +780,12 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
     assert!(ca.io_ref_read.is_zero(), "attaching device {ca} with read refs");
     assert!(ca.io_ref_write.is_zero(), "attaching device {ca} with write refs");
 
-    let ca_p = ca.as_ptr();
     crate::journal::buckets::load(&ca, sb.sb())?;
     ca.journal_init(state)?;
 
     let mut name = Printbuf::new();
     prt_bdevname(&mut name, Some(sb.dev().bdev()));
+    let dev = crate::os::blkdev::dev(sb.dev().bdev());
 
     /* Commit: */
     ca.sb_layout.set(sb.sb().layout);
@@ -796,11 +796,8 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
         sb.dev().bdev.set(core::ptr::null_mut());
     }
 
-    unsafe {
-        strscpy(&mut (*ca_p).name, name.as_bytes());
-
-        (*ca_p).dev = crate::os::blkdev::dev(ca.disk_sb.bdev());
-    }
+    ca.name.set(DevName::new(name.as_bytes()));
+    ca.dev.set(dev);
 
     ca.io_ref_read.start();
 
@@ -1755,7 +1752,7 @@ unsafe extern "C" fn bdev_mark_dead(bdev: *mut crate::os::blkdev::BlockDevice, s
     let Some(ca) = fs.members().find(|ca| ca.disk_sb.bdev.get() == bdev) else { return };
 
     let mut msg = Printbuf::new();
-    log_msg_start(&mut msg, ca.name());
+    log_msg_start(&mut msg, ca.name().as_cstr());
     prt!(&mut msg, "offline from block layer\n");
 
     let dev = state.dev_may_offline(&ca, c::BCH_FORCE_IF_DEGRADED, &mut msg).is_ok();

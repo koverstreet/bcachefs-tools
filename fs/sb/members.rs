@@ -1299,6 +1299,47 @@ where
 }
 
 
+/// A device's name, C's char array: published, as attaching it renames it,
+/// so a reader has a copy - torn, if it raced the rename: each byte some
+/// name's, and the last a NUL, as every name's is.
+#[repr(transparent)]
+#[derive(Clone, Copy, ::pin_init::Zeroable, cstruct_macros::Plain)]
+pub struct DevName([c_char; c::BDEVNAME_SIZE as usize]);
+
+unsafe impl crate::util::projections::TearSafe for DevName {}
+
+impl DevName {
+    /// @s, up to a NUL in it, truncated to leave room for its own.
+    pub fn new(s: &[u8]) -> Self {
+        let mut n = Self([0; c::BDEVNAME_SIZE as usize]);
+        crate::util::ffi::strscpy(&mut n.0, s);
+        n
+    }
+
+    /// Up to its NUL, or empty if it has none.
+    pub fn as_cstr(&self) -> &CStr {
+        crate::util::ffi::cstr_in(&self.0)
+    }
+
+    pub fn to_str(&self) -> Result<&str, core::str::Utf8Error> {
+        self.as_cstr().to_str()
+    }
+
+    pub fn to_bytes(&self) -> &[u8] {
+        self.as_cstr().to_bytes()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0[0] == 0
+    }
+}
+
+impl core::fmt::Display for DevName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.to_str().unwrap_or("?"))
+    }
+}
+
 /// An io ref on a device - for reading or writing, as R is: its block
 /// device is open while it's held.
 pub type DevIoRef<R> = RefGuard<<R as IoRefIdx>::Count>;
@@ -1512,10 +1553,9 @@ impl Dev {
         b.wrapping_sub(self.mi.get().first_bucket.into()) < self.mi.get().nbuckets_minus_first
     }
 
-    /// The block device's name - sdX and the like: up to its NUL, within the
-    /// buffer, or empty if it has none.
-    pub fn name(&self) -> &CStr {
-        crate::util::ffi::cstr_in(&self.name)
+    /// The block device's name - sdX and the like - as it was a moment ago.
+    pub fn name(&self) -> DevName {
+        self.name.get()
     }
 
     /// For C functions taking *mut bch_dev.

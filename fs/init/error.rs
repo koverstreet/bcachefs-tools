@@ -1047,7 +1047,7 @@ pub(crate) fn io_error_work(ca: &Dev) {
     }
 
     let mut buf = Printbuf::new();
-    log_msg_start(&mut buf, ca.name());
+    log_msg_start(&mut buf, ca.name().as_cstr());
     write!(buf, "writes erroring for {timeout} seconds\n");
 
     let dev = state.dev_set_state(ca, MemberState::ro,

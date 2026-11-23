@@ -179,8 +179,10 @@ impl Fs {
 
             let rcu = read_lock();
             for i in required.iter() {
-                let name = self.dev_rcu(i as u32, &rcu).map_or(c"(missing)", |ca| ca.name());
-                write!(out, " {i} ({})", name.to_str().unwrap_or("?"));
+                match self.dev_rcu(i as u32, &rcu) {
+                    Some(ca) => write!(out, " {i} ({})", ca.name()),
+                    None     => write!(out, " {i} ((missing))"),
+                };
             }
         });
     }

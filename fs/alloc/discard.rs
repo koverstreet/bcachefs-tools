@@ -213,8 +213,10 @@ impl Fs {
         let rcu = read_lock();
         for &b in in_flight.iter() {
             let b = u64_to_bucket(b);
-            let name = self.dev_rcu(b.inode as u32, &rcu).map_or(c"?", |ca| ca.name());
-            prt!(out, "{}:{}\n", name.to_str().unwrap_or("?"), { b.offset });
+            match self.dev_rcu(b.inode as u32, &rcu) {
+                Some(ca) => prt!(out, "{}:{}\n", ca.name(), { b.offset }),
+                None     => prt!(out, "?:{}\n", { b.offset }),
+            }
         }
     }
 }

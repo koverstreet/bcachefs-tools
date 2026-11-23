@@ -12,6 +12,7 @@ use crate::btree::bkey::{AnyKey, AnyKeySC, BkeyP, BkeySC, ValidateFlags};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::SbErrorId;
+use crate::sb::members::DevName;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef, Head,
                             SelfSized, Unvalidated, VStruct, VStructError, from_bytes};
@@ -591,8 +592,8 @@ pub(crate) fn jset_validate_entries(fs: &Fs, j: &mut [u8], flags: ValidateFlags)
     Ok(())
 }
 
-fn dev_or_fs_name<'a>(fs: &'a Fs, ca: Option<&'a Dev>) -> &'a str {
-    ca.map_or_else(|| fs.name(), Dev::name).to_str().unwrap_or("?")
+fn dev_or_fs_name<'a>(fs: &'a Fs, dev: &'a Option<DevName>) -> &'a str {
+    dev.as_ref().map_or(fs.name(), DevName::as_cstr).to_str().unwrap_or("?")
 }
 
 /// Jset @j - its bytes, as long as its u64s says - checked, its entries
@@ -608,7 +609,8 @@ pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64
     }
 
     let ctx = Ctx::jset(fs, h, flags);
-    let name = dev_or_fs_name(fs, ca);
+    let dev = ca.map(Dev::name);
+    let name = dev_or_fs_name(fs, &dev);
 
     if journal_entry_err_on!(ctx, !version.compatible(), jset_unsupported_version,
                              "{} sector {} seq {}: incompatible journal entry version {}.{}",
@@ -654,7 +656,8 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<c::jse
     }
 
     let ctx = Ctx::jset(fs, h, ValidateFlags::empty());
-    let name = dev_or_fs_name(fs, ca);
+    let dev = ca.map(Dev::name);
+    let name = dev_or_fs_name(fs, &dev);
 
     if journal_entry_err_on!(ctx, !version.compatible(), jset_unsupported_version,
                              "{} sector {} seq {}: unknown journal entry version {}.{}",

@@ -463,8 +463,10 @@ fn errs_to_text_one(out: &mut Printbuf, fs: &Fs, s: BkeySC<'_, c::Stripe<Validat
         let Some(error) = buf.err[e][i] else { continue };
 
         let ca = fs.dev_get(v.block_ptrs()[i].dev().into());
-        let name = ca.as_ref().map_or("(invalid device)", |ca| ca.name().to_str().unwrap_or("?"));
-        write!(out, "block {i} {name}: {error}");
+        match &ca {
+            Some(ca) => write!(out, "block {i} {}: {error}", ca.name()),
+            None     => write!(out, "block {i} (invalid device): {error}"),
+        };
 
         if error == Errcode::stripe_read_csum_err.into() {
             let ty = v.csum_type.get();

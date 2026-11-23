@@ -349,6 +349,11 @@ impl<T> Volatile<T> {
     pub const fn new(v: T) -> Self {
         Self(UnsafeCell::new(v))
     }
+
+    /// It, had whole: through a &mut, nothing reads it meanwhile.
+    pub fn get_mut(&mut self) -> &mut T {
+        self.0.get_mut()
+    }
 }
 
 impl<T: Copy + NoUninit> Volatile<T> {

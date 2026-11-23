@@ -579,7 +579,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     for ca in fs.online_members() {
         if (sanitize || cli.single_replica) && (ca.mi.get().bucket_size as u32) % (block_size >> 9) != 0 {
             return Err(anyhow!("{} has unaligned buckets, cannot sanitize or de-replicate",
-                               ca.name().to_string_lossy()));
+                               ca.name()));
         }
 
         get_sb_journal(fs, &ca, entire_journal, &mut devs[ca.dev_idx as usize]);

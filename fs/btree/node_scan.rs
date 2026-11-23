@@ -330,7 +330,7 @@ fn read_btree_nodes(fs: &Fs) -> Result<(), BchError> {
         prt!(&mut msg, "scanning for btree nodes on");
 
         for ca in fs.online_members().filter(|ca| ca.mi.get().data_allowed.contains(DataType::btree.into())) {
-            let name = ca.name().to_str().unwrap_or("?");
+            let name = ca.name();
             let job_ca = ca.clone();
 
             sc.spawn(format_args!("read_btree_nodes/{name}"), move || DevScan::new(fs, &job_ca)?.run())

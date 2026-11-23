@@ -379,7 +379,7 @@ fn disk_get_idx(fs: &Fs, arg: c::bch_ioctl_disk_get_idx) -> Result<c_int, BchErr
     }
 
     let rcu = read_lock();
-    let idx = fs.online_devs_rcu(&rcu).find(|ca| ca.dev == dev).map(|ca| ca.dev_idx);
+    let idx = fs.online_devs_rcu(&rcu).find(|ca| ca.dev.get() == dev).map(|ca| ca.dev_idx);
     match idx {
         Some(idx) => Ok(idx.into()),
         None      => fs.throw(Errcode::ENOENT_dev_idx_not_found),

@@ -568,7 +568,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
     let allowed = if copygc { ca.mi.get().nbuckets >> 7 } else { 0 };
 
     let mut buf = Printbuf::new();
-    log_msg_start(&mut buf, ca.name());
+    log_msg_start(&mut buf, ca.name().as_cstr());
     prt!(&mut buf, "Detected missing backpointers in bucket {bucket}, now have {nr}/{} with missing\n",
          { ca.mi.get().nbuckets });
 

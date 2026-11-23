@@ -285,7 +285,7 @@ pub struct Dev {
     pub flags: AtomicBitflags<c::DevFlag>,
 
     pub uuid: c::__uuid_t,
-    pub name: [c_char; c::BDEVNAME_SIZE as usize],
+    pub name: crate::util::projections::Volatile<crate::sb::members::DevName>,
     #[pin]
     #[init(unsafe { Kobject::new::<Dev>() })]
     pub(crate) kobj: Placed<Kobject, crate::at!(Dev.kobj)>,
@@ -302,7 +302,7 @@ pub struct Dev {
     #[pin]
     #[init(None)]
     pub(crate) sb_read_scratch: Option<crate::util::alloc::KBox<crate::sb::io::SbReadScratch>>,
-    pub dev: c::dev_t,
+    pub dev: crate::util::projections::Volatile<c::dev_t>,
 
     pub self_mask: c::bch_devs_mask,
 
