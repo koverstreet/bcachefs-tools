@@ -58,8 +58,8 @@ use crate::c;
 use crate::format::{BkeyType, BkeyTypeFlags, Bpos};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
-use crate::util::vstructs::{ArmRef, InState, SizedArm, State, Unsized, Unvalidated, UnvalidatedSized, Validated,
-                            Whole};
+use crate::util::vstructs::{ArmRef, FakeDst, InState, SizedArm, State, Unsized, Unvalidated, UnvalidatedSized,
+                            Validated, Whole};
 use core::marker::PhantomData;
 
 #[repr(C)]
@@ -108,7 +108,7 @@ pub type AnyKeySC<'a, S> = BkeySC<'a, FamilyVal<AllTypes, S>>;
 
 /* a zeroed key, its u64s 0, is a header with no value - as val_bytes() has it */
 unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
-    type Head = c::bkey_i;
+    type Head = c::bkey;
     type Elem = V::Elem;
     const TAIL: usize = size_of::<c::bkey>() + V::TAIL;
     const MIN_BYTES: usize = (size_of::<c::bkey>() + V::MIN_BYTES).next_multiple_of(align_of::<c::bkey>());
@@ -121,6 +121,12 @@ unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
     fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {
         let v = V::from_raw_mut(p.wrapping_add(size_of::<c::bkey>()), bytes.saturating_sub(size_of::<c::bkey>()));
         v.wrapping_byte_sub(size_of::<c::bkey>()) as *mut Self
+    }
+}
+
+impl FakeDst for c::bkey {
+    fn bytes(&self) -> usize {
+        c::bkey::bytes(self)
     }
 }
 
