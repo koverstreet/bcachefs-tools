@@ -37,12 +37,10 @@ impl<'p> Pages<'p> {
         if ret.is_err() {
             unsafe { pages::free_pages_pool(pool, &mut bio.vecs) };
         }
-        bio.sync();
-        let used_pool = ret?;
         /* the pool's whole elements may come to more */
-        let covers = pages::vecs_len(&bio.vecs).min(if used_pool { at_least } else { size });
-        bio.raw_mut().bi_iter.bi_size = covers as u32;
-        Ok(Self { pool, used_pool })
+        let covers = pages::vecs_len(&bio.vecs).min(if matches!(ret, Ok(true)) { at_least } else { size });
+        bio.sync(covers as u32);
+        Ok(Self { pool, used_pool: ret? })
     }
 
     /// The pages fill() put on a raw bounce bio, which kept no Pages of them:
@@ -58,8 +56,7 @@ impl<'p> Pages<'p> {
     /// owned by it: a fragment task's home's.
     pub fn free_from(self, bio: &mut Bio) {
         unsafe { pages::free_pages_pool(self.pool, &mut bio.vecs) };
-        bio.sync();
-        bio.raw_mut().bi_iter.bi_size = 0;
+        bio.sync(0);
     }
 
     /// Whether the pool made some of it up: its elements may be its reserve,
@@ -87,8 +84,7 @@ impl<'p> Bio<Pages<'p>> {
                 unsafe { pages::free_pages_pool(pool, &mut b.vecs) };
                 return Err(e);
             }
-            b.sync();
-            b.raw_mut().bi_iter.bi_size = size as u32;
+            b.sync(size as u32);
             Ok(Pages { pool, used_pool: false })
         }))
     }
@@ -97,8 +93,7 @@ impl<'p> Bio<Pages<'p>> {
     /// write's data is written, before the index update.
     pub fn free_pages(&mut self) {
         unsafe { pages::free_pages_pool(self.owns.pool, &mut self.vecs) };
-        self.sync();
-        self.raw_mut().bi_iter.bi_size = 0;
+        self.sync(0);
     }
 }
 

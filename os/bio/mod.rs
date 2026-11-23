@@ -268,13 +268,14 @@ impl<B: BioOwns> Bio<B> {
         crate::os::blkdev::bio_set_dev(self.raw_mut(), bdev)
     }
 
-    /// After its bvecs change: C's view of them.
-    fn sync(&mut self) {
+    /// After its bvecs change: C's view of them, and its size.
+    fn sync(&mut self, size: u32) {
         assert!(matches!(self.vecs_at, VecsAt::Own), "changing the bvecs of a bio whose table isn't its own");
         let (nr, max) = (self.vecs.len() as u16, self.vecs.capacity().min(c::BIO_MAX_VECS as usize) as u16);
         bi_io_vec!(self.bio) = self.vecs.as_mut_ptr().cast();
         self.bio.bi_vcnt = nr;
         self.bio.bi_max_vecs = max;
+        self.bio.bi_iter.bi_size = size;
     }
 }
 
@@ -413,8 +414,7 @@ impl Bio {
         for bv in unsafe { crate::os::bio::sys::bvecs(buf, len) } {
             self.vecs.push(bv).expect("a buffer's bvecs, reserved");
         }
-        self.sync();
-        self.raw_mut().bi_iter.bi_size += len32;
+        self.sync(self.bio.bi_iter.bi_size + len32);
         Ok(())
     }
 
@@ -430,8 +430,7 @@ impl Bio {
         assert!(self.vecs.len() < usize::from(self.max_vecs()), "adding a folio: the bio's bvecs are full");
         self.vecs.push(c::bio_vec { bv_page: folio.as_ptr().cast(), bv_len: len as u32, bv_offset: offset as u32 })
             .expect("a bvec, into the room it has");
-        self.sync();
-        self.raw_mut().bi_iter.bi_size += len as u32;
+        self.sync(self.bio.bi_iter.bi_size + len as u32);
     }
 
     /// Emptied, for another IO from scratch: bio_reset(), its bvecs and its
@@ -439,7 +438,7 @@ impl Bio {
     pub fn clear(&mut self, opf: u32) {
         self.vecs.clear();
         unsafe { crate::os::bio::sys::reset(self.raw_mut(), core::ptr::null_mut(), opf) };
-        self.sync();
+        self.sync(0);
     }
 
     /// For another IO: bio_reset(), its bvecs kept - the buffers it was made
@@ -450,8 +449,7 @@ impl Bio {
         let size = self.range_all().len();
         // SAFETY: had by &mut, so not in flight
         unsafe { crate::os::bio::sys::reset(self.raw_mut(), bdev, opf) };
-        self.sync();
-        self.raw_mut().bi_iter.bi_size = size;
+        self.sync(size);
     }
 
     /// Panics if @range isn't this bio's.
@@ -516,8 +514,7 @@ impl Bio {
     pub fn truncate_vecs(&mut self, nr: u16) {
         assert!(usize::from(nr) <= self.vecs.len(), "truncating a bio to more bvecs than it has");
         self.vecs.truncate(nr.into());
-        self.sync();
-        self.raw_mut().bi_iter.bi_size = 0;
+        self.sync(0);
     }
 
     /// Its completed IO's result: a BLK_STS_* errcode on failure.

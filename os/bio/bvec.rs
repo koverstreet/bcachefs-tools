@@ -101,8 +101,7 @@ impl<H: FolioHold> Bio<Holds<H>> {
         let len = v.len();
         super::reserve_bvecs(&mut self.vecs, 1)?;
         self.vecs.push(v).expect("a bvec, reserved");
-        self.sync();
-        self.raw_mut().bi_iter.bi_size += len;
+        self.sync(self.bio.bi_iter.bi_size + len);
         Ok(())
     }
 
@@ -114,7 +113,6 @@ impl<H: FolioHold> Bio<Holds<H>> {
     /// emptied with them.
     pub fn release(&mut self) {
         self.vecs.clear();
-        self.sync();
-        self.raw_mut().bi_iter.bi_size = 0;
+        self.sync(0);
     }
 }
