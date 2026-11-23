@@ -11,7 +11,7 @@ use bcachefs_kernel::c::{
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};
-use bcachefs_kernel::util::vstructs::{plain_bytes, FlexArray, Plain, VstructRefEntries};
+use bcachefs_kernel::util::vstructs::{plain_bytes, FakeFlexArray, Plain, VstructRefEntries};
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl, IoctlBuf,
@@ -178,7 +178,7 @@ const BCH_SUBVOLUME_UNLINKED: u32 = 1 << 2;
 
 /// A header-plus-flexible-array ioctl with capacity/total retry protocol:
 /// nr in is capacity, ERANGE reports the required total.
-trait FlexArrayIoctl: FlexArray + Plain + Copy {
+trait FlexArrayIoctl: FakeFlexArray + Plain + Copy {
     type Ioc: Ioctl<Arg = Self>;
     fn set_capacity(&mut self, n: u32);
     fn total(&self) -> u32;

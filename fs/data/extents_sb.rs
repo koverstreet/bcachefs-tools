@@ -92,7 +92,7 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s<Validated> {
 mod tests {
     use super::*;
     use crate::types::Le32;
-    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, VStruct};
+    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, FakeVStruct, Head};
 
     /// A section of @sizes, in @buf, as read: Unvalidated.
     fn section<'a>(buf: &'a mut [u64], sizes: &[u8]) -> &'a c::bch_sb_field_extent_type_u64s<Unvalidated> {

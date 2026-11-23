@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 //! What util/vstructs.rs's traits need of a type, from its
 //! definition: #[derive(Plain)] - and #[bitfield], every one of which is -
-//! #[derive(FlexArray)], from #[counted_by(FIELD)], #[derive(View)], its
+//! #[derive(FakeFlexArray)], from #[counted_by(FIELD)], #[derive(View)], its
 //! fields' projections on a View of it, and the families, a type's X<S> in
 //! each state: #[unsized_vstruct], an unsized vstruct's, and #[counted], a
 //! header and the array it counts - X<S> its own definition in every state;
@@ -626,7 +626,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
 /// attribute says - as #[unsized_vstruct]'s, `tail = [E]`, the states'
 /// `_tail`, or `tail = NAME: [E]`, a field of a field the states call NAME.
 ///
-/// The head gets FlexArray from the count - its size, TAIL and the
+/// The head gets FakeFlexArray from the count - its size, TAIL and the
 /// elements past it - and CountedHead, the way to its Unvalidated definition
 /// from what holds its bytes.
 pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
@@ -810,7 +810,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     // X is generated: a derive vstruct_family! doesn't forward would be
     // X_whole's alone, out of X's reach. Ours of the struct as written are
     // X_whole's
-    let of_whole = ["MaybeZeroable", "BitfieldMembers", "FlexArray"];
+    let of_whole = ["MaybeZeroable", "BitfieldMembers", "FakeFlexArray"];
     if let Some(d) = derives.iter()
         .find(|d| !of_whole.iter().chain(WHOLE_DERIVES).any(|w| d == w)) {
         return Err(format!("{name}: #[derive({d})], but {name} - {name}<Whole> - is generated, and has \
@@ -1041,7 +1041,7 @@ fn rename_struct(item: TokenStream, def: &StructDef, to: &Ident) -> Result<Token
     Ok(out)
 }
 
-/// #[derive(FlexArray)], from #[counted_by(FIELD)] on the trailing `[T; 0]`.
+/// #[derive(FakeFlexArray)], from #[counted_by(FIELD)] on the trailing `[T; 0]`.
 pub(crate) fn flex_array(def: &StructDef) -> Result<TokenStream, String> {
     let name = &def.ident;
     let Some((i, f, count)) = def.fields.iter().enumerate().find_map(|(i, f)| Some((i, f, f.counted_by.as_ref()?)))
@@ -1059,14 +1059,14 @@ pub(crate) fn flex_array(def: &StructDef) -> Result<TokenStream, String> {
     Ok(flex_impl(name, &quote!(::core::mem::offset_of!(#name, #field)), elem, std::slice::from_ref(count)))
 }
 
-/// FlexArray for @name: @elem from @tail_at, as many as @count, a field's
+/// FakeFlexArray for @name: @elem from @tail_at, as many as @count, a field's
 /// path, says.
 fn flex_impl(name: &Ident, tail_at: &TokenStream, elem: &syn::Type, count: &[Ident]) -> TokenStream {
     let vs = vs();
     // the count by value: a reference to a packed struct's field may be
     // unaligned
     quote! {
-        impl #vs::FlexArray for #name {
+        impl #vs::FakeFlexArray for #name {
             type Elem = #elem;
             const TAIL: usize = #tail_at;
             #[inline]

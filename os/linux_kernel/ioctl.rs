@@ -19,7 +19,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::KVVec;
 use crate::util::ioctl::{dir, Ioctl};
-use crate::util::vstructs::{FlexArray, Head, Unsized};
+use crate::util::vstructs::{FakeFlexArray, Head, Unsized};
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -176,11 +176,11 @@ pub struct UserVstruct<T: ?Sized> {
     _t: PhantomData<T>,
 }
 
-impl<T: ?Sized + Unsized> UserVstruct<T> where Head<T>: FlexArray {
+impl<T: ?Sized + Unsized> UserVstruct<T> where Head<T>: FakeFlexArray {
     /// The array after the head, as long as @head says.
-    pub fn tail(&self, head: &Head<T>) -> UserArray<<Head<T> as FlexArray>::Elem> {
+    pub fn tail(&self, head: &Head<T>) -> UserArray<<Head<T> as FakeFlexArray>::Elem> {
         UserArray {
-            at: self.at.wrapping_byte_add(<Head<T> as FlexArray>::TAIL),
+            at: self.at.wrapping_byte_add(<Head<T> as FakeFlexArray>::TAIL),
             nr: head.nr(),
             _e: PhantomData,
         }

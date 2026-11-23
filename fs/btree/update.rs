@@ -23,8 +23,8 @@ use core::cmp::Ordering;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::unlikely;
-use crate::util::vstructs::{plain_bytes, Container, EntryWalk, FakeDst, Head, Plain, Unsized, Validated,
-                            ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut, VStruct};
+use crate::util::vstructs::{plain_bytes, Container, EntryWalk, FakeDst, FakeVStruct, Head, Plain, Unsized,
+                            Validated, ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::ffi::c_ulong;

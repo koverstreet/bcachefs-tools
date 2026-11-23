@@ -15,7 +15,7 @@ use std::os::fd::AsFd;
 
 pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
-use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, plain_bytes, plain_bytes_mut, read_past, CountedHead, FlexArray, Plain, Unsized, Unvalidated, VStructError};
+use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, plain_bytes, plain_bytes_mut, read_past, CountedHead, FakeFlexArray, Plain, Unsized, Unvalidated, VStructError};
 
 /// Ioctl @I as rustix calls one: its opcode, its argument's address, and
 /// whether the kernel writes through it - rustix's own patterns take the
@@ -154,7 +154,7 @@ impl<H> IoctlBuf<H> {
     }
 }
 
-impl<H: FlexArray + Plain> IoctlBuf<H> {
+impl<H: FakeFlexArray + Plain> IoctlBuf<H> {
     /// Room for the header and @nr elements of its array.
     pub fn new(nr: usize) -> Self {
         Self::alloc(H::TAIL + nr * std::mem::size_of::<H::Elem>())

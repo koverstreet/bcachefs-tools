@@ -74,7 +74,7 @@
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by_self, from_bytes_mut, vstruct,
-                            Head, FlexArray, Unvalidated, UnvalidatedEntriesMut, Validated, VStructError,
+                            FakeFlexArray, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VStructError,
                             ViewEntries, VstructMut, VstructRef};
 use crate::btree::bkey::{AnyKey, BkeyPHeader};
 use core::mem::offset_of;
@@ -318,7 +318,7 @@ pub struct bkey_i {
 
 /// _data, as long as k.u64s says - its own count is its bkey's, a field of a
 /// field, which #[vstruct] doesn't take: FakeDst::bytes() is bkey_bytes().
-impl FlexArray for bkey_i {
+impl FakeFlexArray for bkey_i {
     type Elem = u64;
     const TAIL: usize = core::mem::offset_of!(bkey_i, _data);
 
