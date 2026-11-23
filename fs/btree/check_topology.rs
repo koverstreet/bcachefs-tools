@@ -321,7 +321,7 @@ fn child_key(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, parent: &BtreeNode
             "a child key at {}, outside its parent's {} - {}", k.k.p, data.min_key, data.max_key);
 
     let mut buf = BkeyBuf::new();
-    buf.reassemble(k);
+    buf.set_key(k);
     Ok(Some(buf))
 }
 

@@ -771,19 +771,19 @@ fn test_bkey_buf(_fs: &Fs, _nr: u64) -> TestRet {
     assert!(b.as_ref().k.key_type().is_deleted());
 
     let k = bkey_buf_test_key(&mut small, 100);
-    b.reassemble(k);
+    b.set_key(k);
     let b = core::hint::black_box(b);
     assert!(bkey_buf_holds(&b, k));
 
     let mut b = b;
     let k = bkey_buf_test_key(&mut big, 1000);
-    b.reassemble(k);
+    b.set_key(k);
     let mut b = core::hint::black_box(b);
     assert!(bkey_buf_holds(&b, k));
 
     // Back to a small key, from the heap:
     let k = bkey_buf_test_key(&mut small, 100);
-    b.reassemble(k);
+    b.set_key(k);
     assert!(bkey_buf_holds(&b, k));
     Ok(())
 }

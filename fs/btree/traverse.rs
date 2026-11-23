@@ -325,7 +325,7 @@ impl BtreeTrans<'_> {
                 let Some(k) = node_iter.peek(&keys) else { break };
 
                 let mut u = c::bkey::new();
-                tmp.reassemble(keys.disassemble(k, &mut u));
+                tmp.set_key(keys.disassemble(k, &mut u));
             }
             self.node_prefetch(paths, idx, &tmp, level)?;
         }
@@ -357,7 +357,7 @@ impl BtreeTrans<'_> {
             let b = paths[idx].locked_btree_node(level).expect("a node prefetched from, relocked");
             let Some(k) = jiter.peek(b) else { break };
 
-            tmp.reassemble(k);
+            tmp.set_key(k);
             ret = self.node_prefetch(paths, idx, &tmp, level);
             if ret.is_err() {
                 break;

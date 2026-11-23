@@ -153,7 +153,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
         parent_iter.set_pos(pos(0, parent as u64));
         match parent_iter.peek_slot(t)? {
             Some(pk) if pk.arm::<c::Subvolume>().is_some() => {
-                cur.reassemble(pk);
+                cur.set_key(pk);
             }
             _ => {
                 if inode_fsck_err!(t, inode_pos, id::subvol_unreachable,

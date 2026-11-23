@@ -606,7 +606,7 @@ impl WbFlush<'_> {
             let mut did_work = false;
             flush_seq(trans, fs.journal_cur_seq(), &mut did_work, Caller::maybe)?;
 
-            f.last_flushed.reassemble(BkeySC::from(&tmp));
+            f.last_flushed.set_key(BkeySC::from(&tmp));
             /* after the flush: it commits, and those commits are not a repair */
             f.flushed_commit_count = trans.commit_count();
             f.nr_flushes += 1;
