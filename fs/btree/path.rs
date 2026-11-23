@@ -275,26 +275,6 @@ impl Paths<'_> {
     }
 }
 
-impl<'t> Paths<'t> {
-    /// Path @idx's node at @level, if it's a btree node the path holds locked:
-    /// for the attempt, as PathLeaf::node()'s is - good until its next unlock
-    /// or error, which nothing checks.
-    pub(crate) fn held_btree_node(&self, idx: PathIdx, level: usize) -> Option<LockedNode<'t, BtreeNode>> {
-        let b = self[idx].locked_btree_node(level)?;
-        Some(unsafe { LockedNode::new(&*ptr::from_ref(b.node())) })
-    }
-
-    /// Path @idx's node at @level, which it holds for intent, write locked too
-    /// if no one holds it for read: for as long as the guard lives.
-    pub(crate) fn try_write_node(&mut self, idx: PathIdx, level: usize) -> Option<WriteLocked<'_, 't, BtreeNode>> {
-        assert!(self[idx].locked_type_nowrite(level) == BTREE_NODE_INTENT_LOCKED,
-                "path {idx} doesn't hold level {level} for intent");
-        let node = self.held_btree_node(idx, level).expect("an intent locked path's node is a btree node").node();
-        six_trylock_ip(node.c.lock.six(), SixLockType::SIX_LOCK_write, crate::ret_ip!())
-            .then(|| WriteLocked { node: LockedNode { node, _mode: PhantomData }, paths: self })
-    }
-}
-
 impl Drop for Paths<'_> {
     #[inline]
     fn drop(&mut self) {
@@ -1226,6 +1206,21 @@ impl BtreePath {
             .then(|| LockedNode { node, _mode: PhantomData })
     }
 
+    /// The level, held for intent, write locked too if that's had without
+    /// waiting: its node's Write view. Marked write locked after - nothing
+    /// waits on it, for the cycle detector to see.
+    pub(crate) fn trylock_write<T: PathNode>(&mut self, level: usize, ip: c_ulong) -> Option<LockedNode<'_, T, Write>> {
+        assert!(self.locked_type(level) == BTREE_NODE_INTENT_LOCKED,
+                "write locking a node the path doesn't hold for intent only");
+        let node = self.downcast::<T>().expect("write locking a node as another type").locked_node(level)?.node();
+        if !six_trylock_ip(node.common().lock.six(), SixLockType::SIX_LOCK_write, ip) {
+            return None;
+        }
+
+        self.mark_locked_noreset(level, BTREE_NODE_WRITE_LOCKED);
+        self.locked_node_mut(level)
+    }
+
     #[inline(always)]
     fn locked_node_mut<T: PathNode>(&mut self, level: usize) -> Option<LockedNode<'_, T, Write>> {
         let node = self.downcast::<T>()?.locked_node(level)?.node();
@@ -1750,8 +1745,9 @@ impl NodeMode for Write {
 
 /// A node a path has locked, borrowed from the attempt as a key is: good until
 /// the attempt's next unlock or error, which nothing checks (see TransRef).
-// XXX: a Write is borrowed from its path mutably, but a Held view for the
-// attempt, from held_btree_node(), can still be beside one of the same node
+// XXX: a Write is borrowed from its path mutably, but a Held view not borrowed
+// from a path - BtreeNodeIter::peek()'s, PathLeaf::node()'s - can still be
+// beside one of the same node
 // XXX: node() is the view's lifetime, though a btree node lives as long as its
 // Fs: with the Fs's lifetime there, a view wouldn't be held for the attempt
 // only for the node's identity and flags (the key cache's flush and drop)
@@ -1801,34 +1797,6 @@ impl<'p, T: PathNode> LockedNode<'p, T, Write> {
         T: PathNodeContents,
     {
         unsafe { self.node.locked_contents().protected_mut() }
-    }
-}
-
-/// A node held for intent, write locked too: released as it's dropped, the
-/// paths that have the node keeping their lock seqs.
-pub struct WriteLocked<'a, 't, T: PathNode> {
-    node:  LockedNode<'a, T, Write>,
-    paths: &'a mut Paths<'t>,
-}
-
-impl<'a, T: PathNode> Deref for WriteLocked<'a, '_, T> {
-    type Target = LockedNode<'a, T, Write>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.node
-    }
-}
-
-impl<T: PathNode> DerefMut for WriteLocked<'_, '_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.node
-    }
-}
-
-impl<T: PathNode> Drop for WriteLocked<'_, '_, T> {
-    fn drop(&mut self) {
-        let trans = self.paths.trans;
-        trans.node_unlock_write_pathless(self.paths, self.node.node.common());
     }
 }
 

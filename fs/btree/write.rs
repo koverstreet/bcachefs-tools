@@ -668,8 +668,9 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, id
 
     /* don't cycle lock unnecessarily: */
     if just_written {
-        if let Some(mut w) = paths.try_write_node(idx, level) {
-            post_write_cleanup(fs, &mut w);
+        if let Some(mut b) = paths[idx].trylock_write::<BtreeNode>(level, crate::ret_ip!()) {
+            post_write_cleanup(fs, &mut b);
+            trans.node_unlock_write(paths, idx, level);
         }
     }
 
