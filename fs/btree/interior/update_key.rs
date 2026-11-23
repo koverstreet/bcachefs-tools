@@ -21,12 +21,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// The pointer to the node at @level of @btree, at @key's position, made
     /// @key, committed.
     pub fn btree_node_update_key_at_pos<V: ?Sized + BkeyVal<State = Validated>>(
-        &self, btree: Btree, level: u32, key: TransBkey<'_, 't, V>,
+        &self, btree: Btree, level: u32, key: TransBkey<'a, 't, V>,
     ) -> Result<(), BchError> {
         self.node_update_key_at_pos(btree, level, key.untyped())
     }
 
-    fn node_update_key_at_pos(&self, btree: Btree, level: u32, key: TransBkey<'_, 't>) -> Result<(), BchError> {
+    fn node_update_key_at_pos(&self, btree: Btree, level: u32, key: TransBkey<'a, 't>) -> Result<(), BchError> {
         assert!(key.k().is_btree_ptr(), "a node's key made one that isn't a btree pointer");
 
         let mut iter = BtreeNodeIter::new(self, btree, key.k().p, 0, level - 1, BtreeIterFlags::empty());
@@ -40,14 +40,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         &self,
         iter:          &mut BtreeIter<'a>,
         node:          BtreeNodeRef,
-        key:           TransBkey<'_, 't, V>,
+        key:           TransBkey<'a, 't, V>,
         flags:         impl Into<CommitOpts>,
         skip_triggers: bool,
     ) -> Result<(), BchError> {
         self.node_update_key(iter, node, key.untyped(), flags.into(), skip_triggers)
     }
 
-    fn node_update_key(&self, iter: &mut BtreeIter<'a>, node: BtreeNodeRef, key: TransBkey<'_, 't>,
+    fn node_update_key(&self, iter: &mut BtreeIter<'a>, node: BtreeNodeRef, key: TransBkey<'a, 't>,
                        flags: CommitOpts, skip_triggers: bool) -> Result<(), BchError> {
         let trans = self.trans();
         {
@@ -67,7 +67,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         ret
     }
 
-    fn node_update_key_in(&self, iter: &mut BtreeIter<'a>, node: BtreeNodeRef, mut key: TransBkey<'_, 't>,
+    fn node_update_key_in(&self, iter: &mut BtreeIter<'a>, node: BtreeNodeRef, mut key: TransBkey<'a, 't>,
                           flags: CommitOpts, skip_triggers: bool) -> Result<(), BchError> {
         let trans = self.trans();
         let fs = self.fs();
