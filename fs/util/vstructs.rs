@@ -53,13 +53,60 @@ use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 
+/// Every byte of every value initialized - no padding, and no variant that
+/// leaves some unwritten, as a None in a niche can - so a value can be
+/// loaded as an integer, as a Volatile's word is. Plain is; so are a bool,
+/// a closed enum and a pointer, which not every bit pattern is a value of.
+/// #[derive(NoUninit)] checks a struct's fields as #[derive(Plain)] does.
+/// A marker, so its impls may overlap: every Plain is one, and so is an
+/// array of any.
+///
+/// # Safety
+/// Every byte of every value of Self is initialized.
+#[marker]
+pub unsafe trait NoUninit {}
+
+unsafe impl<T: Plain + ?Sized> NoUninit for T {}
+
+macro_rules! no_uninit {
+    ($($t:ty),*) => { $(unsafe impl NoUninit for $t {})* };
+}
+no_uninit!(bool, usize, isize);
+unsafe impl<T> NoUninit for *mut T {}
+unsafe impl<T> NoUninit for *const T {}
+unsafe impl<T: NoUninit, const N: usize> NoUninit for [T; N] {}
+unsafe impl<T: NoUninit> NoUninit for [T] {}
+
+/// Nothing, at compile time, if @T is NoUninit: what #[derive(NoUninit)]
+/// checks a type's fields with.
+pub const fn assert_no_uninit<T: NoUninit>() {}
+
+/// Never all zeroes, and all of it says so: an Option of it is as long, None
+/// its zeroes - so that's NoUninit too. NonNull, a reference and NonZero are;
+/// #[derive(NonZeroWord)] checks a #[repr(transparent)] struct over one.
+///
+/// # Safety
+/// All zeroes isn't a Self, and Option<Self> is laid out as Self with None
+/// all zeroes.
+pub unsafe trait NonZeroWord {}
+
+unsafe impl<T> NonZeroWord for core::ptr::NonNull<T> {}
+unsafe impl<T> NonZeroWord for &T {}
+
+macro_rules! non_zero_word {
+    ($($t:ty),*) => { $(unsafe impl NonZeroWord for core::num::NonZero<$t> {})* };
+}
+non_zero_word!(u8, u16, u32, u64, usize);
+
+unsafe impl<T: NonZeroWord> NoUninit for Option<T> {}
+
 /// Plain data: any bytes are a valid value, and every byte of one is part of
 /// a field - so a value can be read from bytes, and its bytes read back.
 ///
 /// # Safety
 /// Every bit pattern of size_of::<Self>() bytes must be a valid Self, and
 /// Self must have no padding.
-pub unsafe trait Plain {}
+pub unsafe trait Plain: NoUninit {}
 
 macro_rules! plain {
     ($($t:ty),*) => { $(unsafe impl Plain for $t {})* };

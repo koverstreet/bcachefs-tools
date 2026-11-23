@@ -16,6 +16,7 @@ use core::ptr;
 use core::sync::atomic::{fence, AtomicI32, Ordering::{Acquire, Relaxed, Release, SeqCst}};
 
 use pin_init::{pin_data, PinInit, Zeroable};
+use cstruct_macros::NoUninit;
 
 use crate::c;
 use crate::c::JournalPinType as PinType;
@@ -116,11 +117,10 @@ impl core::fmt::Display for Symbol {
 
 /* The devices an entry was written to: a word, so never seen torn */
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, Zeroable)]
+#[derive(Clone, Copy, Default, Zeroable, NoUninit)]
 pub struct PinDevs {
     nr:   u8,
     devs: [u8; c::BCH_REPLICAS_MAX as usize],
-    /* a word is loaded as an integer: no padding, every byte initialized */
     _pad: [u8; 7 - c::BCH_REPLICAS_MAX as usize],
 }
 

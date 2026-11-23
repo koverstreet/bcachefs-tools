@@ -205,6 +205,20 @@ pub fn derive_plain(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[derive(Plain)]", || vstructs::derive_plain(input.into()))
 }
 
+/// `#[derive(NoUninit)]`: util/vstructs.rs's NoUninit, checked at compile
+/// time - see vstructs.rs.
+#[proc_macro_derive(NoUninit)]
+pub fn derive_no_uninit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(NoUninit)]", || vstructs::derive_no_uninit(input.into()))
+}
+
+/// `#[derive(NonZeroWord)]`: util/vstructs.rs's NonZeroWord, checked at
+/// compile time - see vstructs.rs.
+#[proc_macro_derive(NonZeroWord)]
+pub fn derive_non_zero_word(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(NonZeroWord)]", || vstructs::derive_non_zero_word(input.into()))
+}
+
 /// `#[derive(SizedVal)]`: a key value that's itself in place, any bytes of it
 /// a valid one - btree/bkey/types.rs's SizedVal, what a sized key type's
 /// value is.

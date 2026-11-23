@@ -77,30 +77,20 @@ pub(crate) fn plain(name: &Ident, tys: &[impl ToTokens]) -> TokenStream {
 fn plain_by_bounds(item: &syn::DeriveInput, fields: &syn::Fields) -> Result<TokenStream, String> {
     let name = &item.ident;
     let tys: Vec<&syn::Type> = fields.iter().map(|f| &f.ty).collect();
-    let transparent = item.attrs.iter().any(|a| {
-        a.path().is_ident("repr") && a.parse_args::<Ident>().is_ok_and(|r| r == "transparent")
-    });
-    let own_native = item.attrs.iter().any(|a| {
-        a.path().is_ident("plain") && a.parse_args::<Ident>().is_ok_and(|r| r == "own_native")
-    });
     let padding = if !item.generics.params.is_empty() {
-        if !transparent {
+        if !has_attr(item, "repr", "transparent") {
             return Err(format!("{name}: generic, and not #[repr(transparent)] - its padding can't be checked"));
         }
         quote!()
     } else {
-        let msg = format!("{name}: padding between its fields - it isn't Plain");
-        quote!(const _: () = assert!(::core::mem::size_of::<#name>() == 0 #(+ ::core::mem::size_of::<#tys>())*, #msg);)
+        no_padding(name, &tys, "Plain")
     };
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
-    let bounded = |tr: TokenStream| {
-        let mut w = where_clause.cloned().unwrap_or_else(|| parse_quote!(where));
-        w.predicates.extend(tys.iter().map(|t| -> syn::WherePredicate { parse_quote!(#t: #tr) }));
-        w
-    };
+    let bounded = |tr: TokenStream| bounded(where_clause, &tys, tr);
     let plain = bounded(quote!(crate::util::vstructs::Plain));
     let (from_bytes, as_bytes) = (bounded(quote!(::kernel::transmute::FromBytes)),
                                   bounded(quote!(::kernel::transmute::AsBytes)));
+    let own_native = has_attr(item, "plain", "own_native");
     let native = (!own_native).then(|| quote! {
         impl #impl_generics crate::util::vstructs::Native for #name #ty_generics #where_clause {
             type Native = Self;
@@ -117,6 +107,67 @@ fn plain_by_bounds(item: &syn::DeriveInput, fields: &syn::Fields) -> Result<Toke
         #native
         #padding
     })
+}
+
+/// #[derive(NoUninit)], on a struct: each field NoUninit, and no padding
+/// between them, as Plain's checks - a compile error if not.
+pub(crate) fn derive_no_uninit(input: TokenStream) -> Result<TokenStream, String> {
+    let def = parse_cstruct(&input)?;
+    if let StructKind::Union = def.kind {
+        return Err("a union: a shorter arm, written, leaves bytes uninitialized".into());
+    }
+    let name = &def.ident;
+    let tys: Vec<&syn::Type> = def.fields.iter().map(|f| &f.ty).collect();
+    let padding = no_padding(name, &tys, "NoUninit");
+    Ok(quote! {
+        unsafe impl crate::util::vstructs::NoUninit for #name {}
+        const _: () = { #(crate::util::vstructs::assert_no_uninit::<#tys>();)* };
+        #padding
+    })
+}
+
+/// #[derive(NonZeroWord)]: on a #[repr(transparent)] struct whose first field
+/// is a NonZeroWord and whose others are PhantomData - so it's that field, all
+/// of it, and an Option of it is laid out as the field's, as the language
+/// promises. Checked: an impl only where the field is one.
+pub(crate) fn derive_non_zero_word(input: TokenStream) -> Result<TokenStream, String> {
+    let item: syn::DeriveInput = syn::parse2(input).map_err(|e| e.to_string())?;
+    let name = &item.ident;
+    if !has_attr(&item, "repr", "transparent") {
+        return Err(format!("{name}: not #[repr(transparent)] - nothing promises an Option of it is laid out as its field's"));
+    }
+    let syn::Data::Struct(s) = &item.data else {
+        return Err(format!("{name}: not a struct"));
+    };
+    let mut fields = s.fields.iter();
+    let word = &fields.next().ok_or_else(|| format!("{name}: no field"))?.ty;
+    for f in fields {
+        let phantom = matches!(&f.ty, syn::Type::Path(p)
+            if p.path.segments.last().is_some_and(|s| s.ident == "PhantomData"));
+        if !phantom {
+            return Err(format!("{name}: a field after the first that isn't PhantomData"));
+        }
+    }
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    let where_clause = bounded(where_clause, &[word], quote!(crate::util::vstructs::NonZeroWord));
+    Ok(quote! {
+        unsafe impl #impl_generics crate::util::vstructs::NonZeroWord for #name #ty_generics #where_clause {}
+    })
+}
+
+fn has_attr(item: &syn::DeriveInput, attr: &str, arg: &str) -> bool {
+    item.attrs.iter().any(|a| a.path().is_ident(attr) && a.parse_args::<Ident>().is_ok_and(|r| r == arg))
+}
+
+fn bounded(where_clause: Option<&syn::WhereClause>, tys: &[&syn::Type], tr: TokenStream) -> syn::WhereClause {
+    let mut w = where_clause.cloned().unwrap_or_else(|| parse_quote!(where));
+    w.predicates.extend(tys.iter().map(|t| -> syn::WherePredicate { parse_quote!(#t: #tr) }));
+    w
+}
+
+fn no_padding(name: &Ident, tys: &[&syn::Type], what: &str) -> TokenStream {
+    let msg = format!("{name}: padding between its fields - it isn't {what}");
+    quote!(const _: () = assert!(::core::mem::size_of::<#name>() == 0 #(+ ::core::mem::size_of::<#tys>())*, #msg);)
 }
 
 /// Plain for union @name, whose arms are of types @tys: each Plain, and as

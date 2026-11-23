@@ -46,14 +46,14 @@ use core::ffi::{c_uint, c_ulong};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
-use cstruct_macros::{placed, Init, MaybeZeroable, TypeInfo};
+use cstruct_macros::{placed, Init, MaybeZeroable, NoUninit, TypeInfo};
 use pin_init::{pin_data, pin_init, PinInit};
 
 pub(crate) type KeyTable = Cuckoo<Entry<c::bkey_cached>, GoldenRatio>;
 
 #[allow(non_camel_case_types)]
 #[repr(C, align(4))]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable, NoUninit)]
 pub struct bkey_cached_key {
     pub btree_id: u32,
     pub pos: Bpos,

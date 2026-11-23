@@ -62,7 +62,7 @@ use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicPtr, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering, Ordering::Relaxed};
 
 use crate::locking::{ExclusiveGuard, RawLock};
-use crate::util::vstructs::{Native, Plain};
+use crate::util::vstructs::{Native, NoUninit, Plain};
 
 // ── Places ───────────────────────────────────────────────────────────────
 
@@ -218,7 +218,7 @@ macro_rules! published {
 /// A value whose readers are fine with seeing it torn - each word as some
 /// write left it, not all from the same one: a position read for progress,
 /// say. A Volatile of it is loaded and stored a word at a time - of its
-/// alignment, up to a u64.
+/// alignment, up to a u64 - so it's NoUninit too.
 ///
 /// Its words are only ever stored whole, from values of it: a torn one is
 /// each word of some value, never bytes no value had. So a bool field is
@@ -233,7 +233,7 @@ pub unsafe trait TearSafe {}
 
 /// How a Volatile loads and stores a T: whole, by one atomic of its size - a
 /// build error if it's more than a word at its alignment - or, if it's
-/// TearSafe, a word at a time.
+/// TearSafe, a word at a time. As integers either way: T is NoUninit.
 trait Whole: Sized {
     /// # Safety
     /// @p is a live T, accessed only through Whole meanwhile.
@@ -264,7 +264,7 @@ macro_rules! with_atomic {
     };
 }
 
-impl<T> Whole for T {
+impl<T: NoUninit> Whole for T {
     default unsafe fn load(p: *mut T) -> T {
         unsafe { with_atomic!(T, p, |a| transmute_copy(&a.load(Relaxed))) }
     }
@@ -309,7 +309,7 @@ unsafe fn store_words<W: Whole>(src: *const W, dst: *mut W, n: usize) {
     }
 }
 
-impl<T: TearSafe> Whole for T {
+impl<T: NoUninit + TearSafe> Whole for T {
     unsafe fn load(p: *mut T) -> T {
         let mut v = MaybeUninit::<T>::uninit();
         let (dst, n) = (v.as_mut_ptr(), size_of::<T>() / word::<T>());
@@ -351,7 +351,7 @@ impl<T> Volatile<T> {
     }
 }
 
-impl<T: Copy> Volatile<T> {
+impl<T: Copy + NoUninit> Volatile<T> {
     pub fn get(&self) -> T {
         unsafe { Whole::load(self.0.get()) }
     }
@@ -362,7 +362,7 @@ impl<T: Copy> Volatile<T> {
     }
 }
 
-impl<T: Copy> FakePlaceRead for Volatile<T> {
+impl<T: Copy + NoUninit> FakePlaceRead for Volatile<T> {
     type Value = T;
 
     fn get(&self) -> T {
@@ -371,7 +371,7 @@ impl<T: Copy> FakePlaceRead for Volatile<T> {
 }
 
 /// Not Copy - it's read while it's written - so a copy is a load, spelled out.
-impl<T: Copy> Clone for Volatile<T> {
+impl<T: Copy + NoUninit> Clone for Volatile<T> {
     fn clone(&self) -> Self {
         Self::new(self.get())
     }
@@ -384,6 +384,7 @@ impl<T: Default> Default for Volatile<T> {
 }
 
 unsafe impl<T: crate::util::vstructs::Plain> crate::util::vstructs::Plain for Volatile<T> {}
+unsafe impl<T: NoUninit> NoUninit for Volatile<T> {}
 
 // VolatileWriter is a Volatile; its stores are atomic
 impl<T> Publish for Volatile<T> {
@@ -395,7 +396,7 @@ impl<T> Publish for Volatile<T> {
 #[repr(transparent)]
 pub struct VolatileWriter<T>(Volatile<T>);
 
-impl<T: Copy> VolatileWriter<T> {
+impl<T: Copy + NoUninit> VolatileWriter<T> {
     pub fn get(&self) -> T {
         self.0.get()
     }
@@ -411,7 +412,7 @@ impl<T: Copy> VolatileWriter<T> {
     }
 }
 
-impl<T: Copy> FakePlaceRead for VolatileWriter<T> {
+impl<T: Copy + NoUninit> FakePlaceRead for VolatileWriter<T> {
     type Value = T;
 
     fn get(&self) -> T {
@@ -419,7 +420,7 @@ impl<T: Copy> FakePlaceRead for VolatileWriter<T> {
     }
 }
 
-impl<T: Copy> FakePlaceWrite for VolatileWriter<T> {
+impl<T: Copy + NoUninit> FakePlaceWrite for VolatileWriter<T> {
     fn set(&self, v: T) {
         VolatileWriter::set(self, v)
     }
@@ -431,7 +432,7 @@ impl<T: Copy> FakePlaceWrite for VolatileWriter<T> {
 #[derive(::pin_init::Zeroable)]
 pub struct VolatilePublish<T, G>(Volatile<T>, PhantomData<fn() -> G>);
 
-impl<T: Copy, G> VolatilePublish<T, G> {
+impl<T: Copy + NoUninit, G> VolatilePublish<T, G> {
     pub fn get(&self) -> T {
         self.0.get()
     }

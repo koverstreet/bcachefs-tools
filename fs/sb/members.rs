@@ -27,7 +27,7 @@ use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, InPlace, Unsized, U
 use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
-use cstruct_macros::{MaybeZeroable, TypeInfo};
+use cstruct_macros::{MaybeZeroable, NoUninit, TypeInfo};
 use super::io::*;
 use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
 
@@ -41,13 +41,14 @@ pub struct bch_dev_identity {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, NoUninit, TypeInfo)]
 pub struct bch_member_cpu {
     pub nbuckets: u64, /* device size */
     pub nbuckets_minus_first: u64,
     pub first_bucket: u16, /* index of first bucket used */
     pub bucket_size: u16, /* sectors */
     pub failure_domain: u16,
+    _pad0: [u8; 2],
     pub data_allowed: DataTypes,
     pub state: MemberState,
     pub discard: bool,
@@ -57,6 +58,7 @@ pub struct bch_member_cpu {
     pub resize_on_mount: bool,
     pub rotational: bool,
     pub btree_bitmap_shift: u8,
+    _pad1: [u8; 4],
     pub btree_allocated_bitmap: u64,
 }
 
@@ -619,6 +621,7 @@ impl c::bch_member {
             rotational:             self.rotational(),
             btree_bitmap_shift:     self.btree_bitmap_shift,
             btree_allocated_bitmap: self.btree_allocated_bitmap.get(),
+            ..Default::default()
         }
     }
 }

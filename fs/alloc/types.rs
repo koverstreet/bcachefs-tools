@@ -18,7 +18,7 @@ use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64, AtomicU8};
-use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Fieldwise, Init, TypeInfo, BitfieldMembers};
+use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Fieldwise, Init, NonZeroWord, TypeInfo, BitfieldMembers};
 use pin_init::pin_data;
 use nestify::nest;
 
@@ -56,7 +56,7 @@ pub type open_bucket_idx_t = u16;
 /// is an Option<OpenBucketIdx>, laid out the same. A count stays an
 /// open_bucket_idx_t.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, NonZeroWord)]
 pub struct OpenBucketIdx(core::num::NonZero<c::open_bucket_idx_t>);
 
 // SAFETY: None is all zeroes, as an Option of a NonZero is
@@ -79,7 +79,7 @@ impl OpenBucketIdx {
 /// A write point's index in c->allocator.write_points, plus one: a link in
 /// the write point hash, which C has as a u8, 0 for none.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, NonZeroWord)]
 pub struct WritePointIdx(core::num::NonZero<u8>);
 
 // SAFETY: None is all zeroes, as an Option of a NonZero is

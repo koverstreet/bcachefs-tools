@@ -44,7 +44,7 @@
 // own features are: the kernel build has RUSTC_BOOTSTRAP=1, and so does ours
 // (.cargo/config.toml).
 #![feature(auto_traits, negative_impls, min_specialization, rustc_attrs, context_ext, local_waker,
-           type_alias_impl_trait, async_fn_traits, unboxed_closures, allocator_api)]
+           type_alias_impl_trait, async_fn_traits, unboxed_closures, allocator_api, marker_trait_attr)]
 #![allow(internal_features)]
 // A type's record says which type each name it writes is: type_name(), const.
 // ret_ip!(), C's _RET_IP_ - see os/linux_kernel/kernel.rs.

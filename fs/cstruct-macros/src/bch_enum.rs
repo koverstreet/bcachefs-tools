@@ -568,6 +568,11 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
         });
     }
 
+    // any kind is its integer, all of it
+    out.extend(quote! {
+        unsafe impl crate::util::vstructs::NoUninit for #name {}
+    });
+
     out
 }
 
