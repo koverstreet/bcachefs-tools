@@ -58,12 +58,30 @@ fn insert_l(paths: &Paths<'_>, i: &c::btree_insert_entry) -> NodePtr<cs::btree_b
     paths[i.path].node(i.level().into())
 }
 
-fn same_leaf_as_prev(paths: &Paths<'_>, u: &[c::btree_insert_entry], idx: usize) -> bool {
-    idx != 0 && insert_l(paths, &u[idx]) == insert_l(paths, &u[idx - 1])
+/// Whether update @i's leaf is the one before's: @prev carries it from call to
+/// call, for the updates in order, each leaf loaded once.
+fn same_leaf_as_prev(paths: &Paths<'_>, i: &c::btree_insert_entry,
+                     prev: &mut NodePtr<cs::btree_bkey_cached_common>) -> bool {
+    let leaf = insert_l(paths, i);
+    core::mem::replace(prev, leaf) == leaf
 }
 
-fn same_leaf_as_next(paths: &Paths<'_>, u: &[c::btree_insert_entry], idx: usize) -> bool {
-    idx + 1 < u.len() && insert_l(paths, &u[idx]) == insert_l(paths, &u[idx + 1])
+/// Whether update @idx's leaf is the one after's: @next carries the one after's
+/// to the next call, for the updates in order, each leaf loaded once.
+fn same_leaf_as_next(paths: &Paths<'_>, u: &[c::btree_insert_entry], idx: usize,
+                     next: &mut Option<(usize, NodePtr<cs::btree_bkey_cached_common>)>) -> bool {
+    let leaf = match next.take() {
+        Some((n, l)) if n == idx => l,
+        _ => insert_l(paths, &u[idx]),
+    };
+    *next = u.get(idx + 1).map(|n| (idx + 1, insert_l(paths, n)));
+    next.is_some_and(|(_, l)| l == leaf)
+}
+
+/// Whether update @i is the first of its leaf's, with the leaves write
+/// locked: lock_updates_write() locks each through its first update's path.
+fn first_update_of_leaf(paths: &Paths<'_>, i: &c::btree_insert_entry) -> bool {
+    paths[i.path].write_locked(i.level().into())
 }
 
 fn leaf<'p>(paths: &'p Paths<'_>, i: &c::btree_insert_entry) -> LockedNode<'p, BtreeNode> {
@@ -94,12 +112,10 @@ impl BtreeTrans<'_> {
     #[inline(never)]
     fn lock_write_fail(&self, pu: &mut PathsUpdates<'_, '_>, end: usize) {
         let PathsUpdates { paths, updates } = pu;
-        for (idx, i) in updates[..end].iter().enumerate().rev() {
-            if same_leaf_as_prev(paths, updates, idx) {
-                continue;
+        for i in updates[..end].iter().rev() {
+            if first_update_of_leaf(paths, i) {
+                self.node_unlock_write(paths, i.path, i.level().into());
             }
-
-            self.node_unlock_write(paths, i.path, i.level().into());
         }
     }
 
@@ -107,12 +123,13 @@ impl BtreeTrans<'_> {
         ebug_assert!(!self.write_locked());
 
         let mut pu = paths.paths_and_updates();
+        let mut prev = NodePtr::null();
         for idx in 0..pu.updates.len() {
-            if same_leaf_as_prev(&pu.paths, pu.updates, idx) {
+            let i = &pu.updates[idx];
+            if same_leaf_as_prev(&pu.paths, i, &mut prev) {
                 continue;
             }
 
-            let i = &pu.updates[idx];
             if let Err(e) = self.node_lock_write(&mut pu.paths, i.path, i.level().into()) {
                 self.lock_write_fail(&mut pu, idx);
                 return Err(e);
@@ -748,12 +765,12 @@ impl BtreeTrans<'_> {
         let mut u64s = 0;
         let mut pu = paths.paths_and_updates();
         for idx in 0..pu.updates.len() {
+            let i = &pu.updates[idx];
+
             /* Multiple inserts might go to same leaf: */
-            if !same_leaf_as_prev(&pu.paths, pu.updates, idx) {
+            if first_update_of_leaf(&pu.paths, i) {
                 u64s = 0;
             }
-
-            let i = &pu.updates[idx];
             u64s += usize::from(i.key().k.u64s);
 
             let ret = if !i.cached() {
@@ -897,11 +914,8 @@ impl BtreeTrans<'_> {
         for idx in 0..pu.updates.len() {
             let i = &pu.updates[idx];
 
-            /*
-             * lock_updates_write() write locks a leaf through its first update's
-             * path: the leaf's other updates, after it, insert through that one.
-             */
-            if pu.paths[i.path].write_locked(i.level().into()) {
+            /* a leaf's other updates insert through its first's path, which locked it */
+            if first_update_of_leaf(&pu.paths, i) {
                 locked = i.path;
             }
 
@@ -1019,6 +1033,7 @@ impl BtreeTrans<'_> {
         let (mut idx, mut dst) = (0, 0);
         let mut paths = self.paths();
         let mut pu = paths.paths_and_updates();
+        let mut next_leaf = None;
         while idx < pu.updates.len() {
             if unlikely(Self::update_is_noop(&pu.updates[idx], flags)) {
                 self.path_put(&mut pu.paths, pu.updates[idx].path, true);
@@ -1059,13 +1074,14 @@ impl BtreeTrans<'_> {
                 u64s_delta += if !k.k.key_type().is_deleted() { i32::from(k.k.u64s) } else { 0 };
                 u64s_delta -= i32::from(i.old_btree_u64s);
 
-                if !same_leaf_as_next(&pu.paths, pu.updates, idx) && !self.has_interior_updates() {
+                if !same_leaf_as_next(&pu.paths, pu.updates, idx, &mut next_leaf) && !self.has_interior_updates() {
                     let b = leaf(&pu.paths, i);
 
                     if unlikely(b.needs_merge(b.contents(), fs, u64s_delta)) {
                         drop(pu);
                         self.commit_merge(t, &mut paths, flags, &mut idx, &mut dst)?;
                         pu = paths.paths_and_updates();
+                        next_leaf = None;
                     }
 
                     u64s_delta = 0;
