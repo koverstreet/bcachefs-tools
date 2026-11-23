@@ -222,7 +222,7 @@ async fn write_task<'h>(wbio: Pin<&'h mut WriteBio>, fs: BackRef<Fs>, b: BackRef
         }
 
         if ret.is_err_and(|e| !e.matches(c::EROFS)) || !failed.is_empty() {
-            report_write_error(fs, &b, ret, &failed);
+            report_write_error(fs, &b, &key, ret, &failed);
         }
     }
 
@@ -242,7 +242,7 @@ async fn write_task<'h>(wbio: Pin<&'h mut WriteBio>, fs: BackRef<Fs>, b: BackRef
 
 /// A write's key update that failed, or replicas it lost, reported - the
 /// filesystem going read-only for the first.
-fn report_write_error(fs: &Fs, b: &BtreeNode, ret: Result<(), BchError>, failed: &c::bch_io_failures) {
+fn report_write_error(fs: &Fs, b: &BtreeNode, key: &NodeKey, ret: Result<(), BchError>, failed: &c::bch_io_failures) {
     /*
      * Writing degraded because a device was removed is not
      * news: the removal was reported when it happened, and
@@ -268,8 +268,10 @@ fn report_write_error(fs: &Fs, b: &BtreeNode, ret: Result<(), BchError>, failed:
     match ret {
         Ok(()) => {
             prt!(&mut *msg, "wrote degraded to ");
-            let key = b.key_peek();
-            let d = BkeySC::from(&*key).arm::<Ptrs>().expect("a btree node pointer, with pointers").devs(fs);
+            let mut d = BkeySC::from(&**key).arm::<Ptrs>().expect("a btree node pointer, with pointers").devs(fs);
+            for f in failed.devs() {
+                d.drop(f.dev);
+            }
             fs.devs_list_to_text(&mut msg, &d);
             msg.newline();
         }
