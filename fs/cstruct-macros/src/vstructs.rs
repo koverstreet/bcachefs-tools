@@ -371,9 +371,25 @@ fn vstruct_of(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStre
         return Err(format!("{name}: start = without u64s = - it's where the u64s count from"));
     }
     let start = args.start.as_ref().map(|s| quote!(, start = #s));
-    let u64s = args.u64s.as_ref().map(|c| quote!(#vs::vstruct!(unsized #head, #c #start);));
+    let u64s = args.u64s.as_ref().map(|c| {
+        let impls = states().map(|st| quote! {
+            impl #vs::VStruct for #name<#vs::#st> {
+                fn u64s(&self) -> usize {
+                    // the count by value: a packed header's field can't be borrowed
+                    #vs::Count::count(&{ (**self).#c })
+                }
+            }
+        });
+        quote!(#vs::vstruct!(unsized #head, #c #start); #(#impls)*)
+    });
     let entries = args.entries.as_ref().map(|e| quote!(#vs::vstruct_container!(#name, #head, #e);));
     Ok(quote!(#u64s #entries))
+}
+
+/// The states an own-count family's X<S> is SelfSized in: those it's had
+/// in place, Whole being Validated.
+fn states() -> impl Iterator<Item = Ident> {
+    ["Unvalidated", "Validated"].into_iter().map(|s| format_ident!("{s}"))
 }
 
 /// A field of the struct as written, as a state's definition has it, inline:
@@ -658,6 +674,17 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     let mut out = rename_struct(item, &def, &written)?;
     let msg = format!("{name}: its elements aren't a whole number of its alignment");
     out.extend(flex_impl(&written, &tail_at, &elem, &count));
+    let count_path = quote!(#(#count).*);
+    out.extend(states().map(|st| quote! {
+        impl #vs::FlexArray for #name<#vs::#st> {
+            type Elem = #elem;
+
+            fn nr(&self) -> usize {
+                // the count by value: a packed header's field can't be borrowed
+                #vs::Count::count(&{ (**self).#count_path })
+            }
+        }
+    }));
     out.extend(quote! {
         impl #vs::CountedHead for #written {
             type Of<S: #vs::State> = #name<S>;
