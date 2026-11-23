@@ -13,7 +13,8 @@ use pin_init::{pin_data, pin_init, PinInit};
 use crate::c;
 use crate::os::kernel::{local_clock, READ, WRITE};
 use crate::sb::members::BlockDev;
-use crate::os::bio::{AtEnd, Bio, BioBox, BioOwns, Data, HoldsDev};
+use crate::errcode::BchError;
+use crate::os::bio::{AtEnd, Bio, BioBox, BioOwns, Data, Gathered, HoldsDev};
 use crate::os::blkdev::BlockDevice;
 
 #[pin_data]
@@ -85,6 +86,13 @@ impl<B: BioOwns> HoldsDev for DevBio<B> {
 
     fn bdev(&self) -> &BlockDevice {
         self.ca.as_ref().expect("a DevBio's device, before it's submitted").bdev()
+    }
+}
+
+/// Gathered alone - a flush's: its end is all of it.
+impl<B: BioOwns> Gathered<()> for DevBio<B> {
+    fn done(self: Pin<&mut Self>, _: Result<(), BchError>) {
+        self.end();
     }
 }
 

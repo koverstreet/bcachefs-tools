@@ -31,7 +31,7 @@ pub struct bch_fs_vfs {
     pub dio_write_bioset: Late<BioSet<c::dio_write>>,
     #[cfg(not(NO_BCACHEFS_FS))]
     #[late(BioSet::new(1), ENOMEM_nocow_flush_bioset_init)]
-    pub nocow_flush_bioset: Late<BioSet<crate::vfs::io::NocowFlush>>,
+    pub nocow_flush_bioset: Late<BioSet<crate::data::dev_bio::DevBio>>,
     #[cfg(not(NO_BCACHEFS_FS))]
     #[late(Mempool::kvmalloc(4, c::BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
     pub writepage_buf_pool: Late<Mempool<KVmalloc>>,

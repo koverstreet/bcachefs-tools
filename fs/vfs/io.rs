@@ -2,14 +2,14 @@
 
 use core::ffi::c_int;
 use core::ops::ControlFlow;
-use core::pin::Pin;
 use kernel::page::PAGE_SHIFT;
 
-use pin_init::{pin_data, pin_init, stack_pin_init};
+use pin_init::stack_pin_init;
 
 use crate::btree::bkey::{bkey_ge, pos};
 use crate::btree::iter::{lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
+use crate::data::dev_bio::DevBio;
 use crate::data::durability::BkeyVDurability;
 use crate::data::extents::BkeyVExtents;
 use crate::data::{io_misc, reflink};
@@ -19,10 +19,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::{inode, inode_opts};
 use crate::debug::trace::events;
-use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
-use crate::os::bio::{Bio, Gathered, HoldsDev};
-use crate::os::blkdev::BlockDevice;
 use crate::os::file::File;
 use crate::os::folio::FsMapping;
 use super::file::InodeFile;
@@ -35,38 +32,13 @@ use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, WaitSync};
 use crate::util::Nsecs;
-use crate::{fsck_err_on, has_bio, prt};
+use crate::{fsck_err_on, prt};
 
 use crate::os::iattr::Iattr;
 use crate::os::idmap::MntIdmap;
 use super::inode::{InodeInfo, QuotaReservation};
 use crate::os::iattr::{ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::vfs_inode::VfsInode;
-
-#[pin_data]
-#[repr(C)]
-pub(crate) struct NocowFlush {
-    ca:   Option<DevIoRef<c::DevWriteRefKind>>,
-    #[pin]
-    bio:  Bio,
-}
-has_bio!(NocowFlush, bio);
-
-impl HoldsDev for NocowFlush {
-    type Dev = DevIoRef<c::DevWriteRefKind>;
-
-    fn hold(self: Pin<&mut Self>, ca: Self::Dev) {
-        *self.project().ca = Some(ca);
-    }
-
-    fn bdev(&self) -> &BlockDevice {
-        self.ca.as_ref().expect("a nocow flush's device, before it's submitted").bdev()
-    }
-}
-
-impl Gathered<()> for NocowFlush {
-    fn done(self: Pin<&mut Self>, _: Result<(), BchError>) {}
-}
 
 impl InodeInfo {
     fn flush_nocow_writes(&self) {
@@ -93,12 +65,9 @@ impl InodeInfo {
             let Some(ca) = ca else { continue };
 
             let bio = fs.vfs.nocow_flush_bioset
-                .alloc::<BchError, _>(0, c::req_op_REQ_OP_WRITE | c::REQ_PREFLUSH, |b| pin_init!(NocowFlush {
-                    ca: None,
-                    bio <- b.init::<BchError, _>(),
-                }? BchError))
+                .alloc::<BchError, _>(0, c::req_op_REQ_OP_WRITE | c::REQ_PREFLUSH, |b| DevBio::new(b.init()))
                 .expect("a nocow flush bio: the bioset's mempool waits rather than fail");
-            bio.submit_gathered(ca, 0, g.get());
+            bio.submit_gathered(ca.into(), 0, g.get());
         }
         g.wait_sync(Sleep::IDLE);
     }
