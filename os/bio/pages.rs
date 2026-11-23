@@ -160,6 +160,13 @@ pub fn bytes(bio: &Bio) -> usize {
 /// Each of @vecs is a whole allocation of one of them, done with: no bio of
 /// them in flight.
 pub(super) unsafe fn free_pages_pool(pool: &BouncePool, vecs: &mut BioVecs) {
+    for (i, bv) in vecs.iter().enumerate() {
+        // at offset 0 in the kernel, whole pages; in userspace, an allocation
+        // is anywhere in its first page
+        assert!((cfg!(not(kernel)) || bv.bv_offset == 0) && bv.bv_len != 0 && bv.bv_len as usize <= POOL_LEN,
+                "freeing bounce bvec {i} of {}: page {:p} +{}, {} bytes - not one of its allocations",
+                vecs.len(), bv.bv_page, bv.bv_offset, bv.bv_len);
+    }
     for bv in vecs.iter() {
         // SAFETY: the caller's: an allocation of bv_len, at its page's address
         unsafe {

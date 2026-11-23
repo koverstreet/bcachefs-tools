@@ -30,6 +30,7 @@ impl<'p> Pages<'p> {
     pub fn fill(bio: &mut Bio, pool: &'p BouncePool, bs: u32, size: usize, at_least: usize, gfp: Flags)
         -> Result<Self, BchError>
     {
+        assert!(bio.vecs.is_empty(), "bouncing into a bio with {} bvecs already: freed as pages, after", bio.vecs.len());
         let ret = pages::alloc_pages_pool(pool, &mut bio.vecs, bs, size, at_least, gfp);
         if ret.is_err() {
             unsafe { pages::free_pages_pool(pool, &mut bio.vecs) };
@@ -183,6 +184,7 @@ impl<M: MapBuf> Buffer<M> {
     /// Panics if the bio's op isn't one M allows.
     pub fn fill(bio: &mut Bio, buf: M) -> Self {
         assert!(M::allows_op(bio.op()), "mapping a buffer into a bio for an op it can't serve");
+        assert!(bio.vecs.is_empty(), "mapping a buffer into a bio with {} bvecs already", bio.vecs.len());
         let (p, len) = buf.as_raw();
         unsafe { bio.map(p, len).expect("a buffer, into a fresh bio made with room for its nr_vecs()") };
         Self(buf)
