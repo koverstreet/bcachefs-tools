@@ -64,23 +64,21 @@ fn level_unpack(keys: &Keys<'_>, k: Option<u16>, u: &mut c::bkey) -> Option<KeyV
     }
 }
 
-impl BtreePath {
-    #[inline]
-    pub(crate) fn level_init_iter(&mut self, fs: &Fs, level: usize, b: LockedNode<'_, BtreeNode>) {
-        let keys = b.keys(b.contents());
-        let iter = &mut self.l[level].iter;
+/// @iter, a path's at @pos in @keys' node at @level, initialized.
+#[inline]
+pub(crate) fn level_init_iter(iter: &mut KeyIter, fs: &Fs, keys: &Keys<'_>, pos: &Bpos, level: usize) {
+    iter.init(fs, keys, pos);
 
-        iter.init(fs, &keys, &self.pos);
-
-        /*
-         * Iterators to interior nodes should always be pointed at the first non
-         * whiteout:
-         */
-        if level != 0 {
-            iter.peek(&keys);
-        }
+    /*
+     * Iterators to interior nodes should always be pointed at the first non
+     * whiteout:
+     */
+    if level != 0 {
+        iter.peek(keys);
     }
+}
 
+impl BtreePath {
     pub(crate) fn level_peek_all(&self, u: &mut c::bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
         let b = self.locked_btree_node(level).expect("a path peeked is locked");
@@ -114,7 +112,7 @@ impl BtreeTrans<'_> {
         if unread {
             path.l[level].iter = KeyIter::default();
         } else {
-            path.level_init_iter(self.fs(), level, b);
+            level_init_iter(&mut path.l[level].iter, self.fs(), &b.keys(b.contents()), &path.pos, level);
         }
     }
 

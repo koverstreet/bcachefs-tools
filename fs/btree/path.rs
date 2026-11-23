@@ -353,6 +353,18 @@ impl Paths<'_> {
         }
     }
 
+    /// Path @idx's node at @level, which it holds, and path @linked's iterator
+    /// there: @idx's own, if it's @linked.
+    pub(crate) fn node_and_iter_mut(&mut self, idx: PathIdx, level: usize, linked: PathIdx)
+        -> Option<(LockedNode<'_, BtreeNode>, &mut KeyIter)>
+    {
+        if linked == idx {
+            return self[idx].locked_level_mut(level);
+        }
+        let (src, dst) = self.pair(idx, linked);
+        Some((src.locked_btree_node(level)?, &mut dst.l[level].iter))
+    }
+
     /// The key of the node a path goes down to next: the transaction's, the
     /// path table's holder's to write.
     pub(crate) fn down_key(&self) -> &BkeyI {

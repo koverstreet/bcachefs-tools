@@ -11,6 +11,7 @@ use crate::btree::locking::BtreeNodeLockedType::*;
 use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{KeyVal, LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
+use crate::btree::traverse::level_init_iter;
 use crate::c;
 use crate::errcode::Errcode;
 use crate::format::Btree;
@@ -18,30 +19,33 @@ use crate::locking::six::{six_lock_increment_ip, SixHold};
 use crate::prt;
 use crate::util::Printbuf;
 
-impl BtreeTrans<'_> {
-    pub(crate) fn path_at_node(&self, paths: &Paths<'_>, idx: PathIdx, b: &BtreeNode) -> bool {
-        paths[idx].has_node(b.c.level.get() as usize, &b.c, b.c.lock.six().seq.get())
-    }
+/// The lock seq of path @idx's node at @level, which it holds: the paths at the
+/// node are those that have it as of that seq, locked or not.
+fn node_lock_seq(paths: &Paths<'_>, idx: PathIdx, level: usize) -> u32 {
+    paths[idx].locked_btree_node(level).expect("a node changed, held by its path").c.lock.six().seq.get()
+}
 
+impl BtreeTrans<'_> {
     /// The iterators of the paths at path @idx's node at @level, but @fixed's,
-    /// fixed for @insert: the node had from the path only if another's at it.
+    /// fixed for @insert: the node's seq had only if another path has the node.
     pub(crate) fn node_iter_fix(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, insert: KeyInsert,
                                 fixed: Option<PathIdx>) {
         let node = paths[idx].node(level);
-        let mut b = None;
+        let mut seq = None;
 
         for linked in self.path_idxs() {
             if Some(linked) == fixed || paths[linked].node(level) != node {
                 continue;
             }
 
-            let b = *b.get_or_insert_with(|| paths.held_btree_node(idx, level).expect("a node changed, held by its path"));
-            if !self.path_at_node(paths, linked, &b) {
+            let seq = *seq.get_or_insert_with(|| node_lock_seq(paths, idx, level));
+            if paths[linked].l[level].lock_seq != seq {
                 continue;
             }
 
             let pos = paths[linked].pos;
-            insert.fix(&mut paths[linked].l[level].iter, &b.keys(b.contents()), &pos);
+            let (b, iter) = paths.node_and_iter_mut(idx, level, linked).expect("a node changed, held by its path");
+            insert.fix(iter, &b.keys(b.contents()), &pos);
             self.path_verify_level(paths, linked, level);
         }
 
@@ -53,12 +57,12 @@ impl BtreeTrans<'_> {
     /// The iterators of the paths at path @idx's node at @level peeked: past
     /// the deleted keys they're at.
     pub(crate) fn node_iter_peek(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
-        let b = paths.held_btree_node(idx, level).expect("a node changed, held by its path");
-        let keys = b.keys(b.contents());
+        let (node, seq) = (paths[idx].node(level), node_lock_seq(paths, idx, level));
 
         for linked in self.path_idxs() {
-            if self.path_at_node(paths, linked, &b) {
-                paths[linked].l[level].iter.peek(&keys);
+            if paths[linked].node(level) == node && paths[linked].l[level].lock_seq == seq {
+                let (b, iter) = paths.node_and_iter_mut(idx, level, linked).expect("a node changed, held by its path");
+                iter.peek(&b.keys(b.contents()));
             }
         }
     }
@@ -66,15 +70,16 @@ impl BtreeTrans<'_> {
     /// revalidate_updates_in_node(), of the node path @idx holds at @level.
     pub(in crate::btree) fn revalidate_updates_at(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                                   idx: PathIdx, level: usize) {
-        let b = pu.paths.held_btree_node(idx, level).expect("a node changed, held by its path");
-        self.revalidate_updates_in_node(t, pu, b);
+        let paths = &*pu.paths;
+        let b = paths[idx].locked_btree_node(level).expect("a node changed, held by its path");
+        self.revalidate_updates_in_node(t, paths, pu.updates, b);
     }
 
-    pub(in crate::btree) fn revalidate_updates_in_node(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
+    pub(in crate::btree) fn revalidate_updates_in_node(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>,
+                                                       updates: &mut [c::btree_insert_entry],
                                                        b: LockedNode<'_, BtreeNode>) {
         let data = b.contents().data();
         let btree = Btree(b.c.btree_id.get().into());
-        let PathsUpdates { paths, updates } = pu;
 
         for e in updates.iter_mut() {
             let pos = e.key().k.p;
@@ -132,7 +137,7 @@ impl BtreeTrans<'_> {
             self.path_level_init(paths, idx, level, b);
         }
 
-        self.revalidate_updates_in_node(t, pu, b);
+        self.revalidate_updates_in_node(t, pu.paths, pu.updates, b);
     }
 
     /*
@@ -181,15 +186,18 @@ impl BtreeTrans<'_> {
      */
     pub(in crate::btree) fn node_reinit_iter(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                              idx: PathIdx, level: usize) {
-        let paths = &mut pu.paths;
-        let b = paths.held_btree_node(idx, level).expect("a node changed, held by its path");
+        let fs = self.fs();
+        let paths = &mut *pu.paths;
+        let (node, seq) = (paths[idx].node(level), node_lock_seq(paths, idx, level));
 
-        for idx in self.path_idxs() {
-            if self.path_at_node(paths, idx, &b) {
-                paths[idx].level_init_iter(self.fs(), level, b);
+        for linked in self.path_idxs() {
+            if paths[linked].node(level) == node && paths[linked].l[level].lock_seq == seq {
+                let pos = paths[linked].pos;
+                let (b, iter) = paths.node_and_iter_mut(idx, level, linked).expect("a node changed, held by its path");
+                level_init_iter(iter, fs, &b.keys(b.contents()), &pos, level);
             }
         }
 
-        self.revalidate_updates_in_node(t, pu, b);
+        self.revalidate_updates_at(t, pu, idx, level);
     }
 }
