@@ -215,7 +215,7 @@ fn check_dirent_parent_subvol<'t>(
     // snapshot node - dirents in old snapshots need this repair too:
     let mut n = t.bkey_reassemble(k)?;
     n.v_mut().set_parent_subvol(new_parent);
-    t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    t.update(iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
     // The fs_path_parent check next repairs the subvolume to agree with the dirent:
     // the one just written, or each fsck after moves one to match the other's
@@ -269,7 +269,7 @@ fn check_dirent_to_subvol<'t>(
             // shorter than the field
             let mut n = t.bkey_make_mut_noupdate(s)?;
             n.v_mut().fs_path_parent = parent.into();
-            t.update(&subvol_iter, &n, UpdateTriggerFlags::empty())?;
+            t.update(&subvol_iter, n, UpdateTriggerFlags::empty())?;
         }
     }
 

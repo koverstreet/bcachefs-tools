@@ -34,7 +34,7 @@ fn fix_reflink_p_key<'t>(
     v.front_pad = 0.into();
     v.back_pad  = 0.into();
 
-    t.update(iter, &u, UpdateTriggerFlags::NORUN)
+    t.update(iter, u, UpdateTriggerFlags::NORUN)
 }
 
 fn fix_reflink_p(fs: &Fs) -> Result<(), BchError> {

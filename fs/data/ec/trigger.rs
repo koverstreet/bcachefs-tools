@@ -287,8 +287,8 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     let bucket = ca.ptr_bucket_pos(ptr);
 
     if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        let mut a = t.start_alloc_update(bucket, UpdateTriggerFlags::empty())?;
-        mark_stripe_bucket_alloc(t, &ca, s, i, deleting, bucket, a.v_mut(), flags)?;
+        t.start_alloc_update(bucket, UpdateTriggerFlags::empty(),
+                             |a| mark_stripe_bucket_alloc(t, &ca, s, i, deleting, bucket, a.v_mut(), flags))?;
     }
 
     if flags.contains(UpdateTriggerFlags::GC) {

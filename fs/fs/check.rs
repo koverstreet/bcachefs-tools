@@ -704,25 +704,26 @@ pub fn reconstruct_subvol(
     v.set_state(c::SubvolumeState::live);
     t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())?;
 
-    let mut s = bch_err_msg!(fs,
-        t.bkey_get_mut::<c::Snapshot>(Btree::snapshots, pos(0, snapshot as u64),
-                                       BtreeIterFlags::empty(), UpdateTriggerFlags::empty()),
+    let tree = bch_err_msg!(fs,
+        t.bkey_get_mut::<c::Snapshot, _>(Btree::snapshots, pos(0, snapshot as u64),
+                                          BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |s| {
+            let s = s.v_mut();
+            s.subvol = subvol.into();
+            s.set_state(c::SnapshotState::live);
+            Ok(s.tree())
+        }),
         "getting snapshot {snapshot}")?;
-    let s = s.v_mut();
-    let tree = s.tree();
-    s.subvol = subvol.into();
-    s.set_state(c::SnapshotState::live);
 
-    let mut st = bch_err_msg!(fs,
-        t.bkey_get_mut::<c::SnapshotTree>(Btree::snapshot_trees, pos(0, tree as u64),
-                                           BtreeIterFlags::empty(), UpdateTriggerFlags::empty()),
-        "getting snapshot tree {tree}")?;
-    let st = st.v_mut();
-    if st.master_subvol == 0 {
-        st.master_subvol = subvol.into();
-    }
-
-    Ok(())
+    bch_err_msg!(fs,
+        t.bkey_get_mut::<c::SnapshotTree, _>(Btree::snapshot_trees, pos(0, tree as u64),
+                                              BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |st| {
+            let st = st.v_mut();
+            if st.master_subvol == 0 {
+                st.master_subvol = subvol.into();
+            }
+            Ok(())
+        }),
+        "getting snapshot tree {tree}")
 }
 
 /// Whether an inode of mode @mode can own keys in @btree.

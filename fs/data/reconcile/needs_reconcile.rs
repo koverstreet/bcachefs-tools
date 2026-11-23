@@ -430,7 +430,7 @@ pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_sna
         let room = u32::from(k.k.u64s) + SET_NEEDS_RECONCILE_ROOM;
         let mut n = t.bkey_reassemble_room(k, room as usize * size_of::<u64>())?;
         n.set_needs_reconcile(t, s, opts, ctx, 0)?;
-        return t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE);
+        return t.update(iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE);
     }
 
     t.btree_node_edit_key(iter.btree(), level, iter.pos(), |n| n.set_needs_reconcile(t, s, opts, ctx, 0))?;

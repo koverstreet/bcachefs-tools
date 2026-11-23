@@ -312,7 +312,7 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
 
     // The update points at its key until commit: copied, as @bp is the caller's
     let n = t.bkey_copy(bp.as_ref())?;
-    t.update(&iter, &n, UpdateTriggerFlags::empty())
+    t.update(&iter, n, UpdateTriggerFlags::empty())
 }
 
 /// Also its reconcile phys btree entry. Deleting turns @bp into a deletion.

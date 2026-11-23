@@ -1261,9 +1261,11 @@ pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree,
         })
 }
 
-/// At an unused id, queued for the commit, for the caller to fill in.
-pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
-    -> Result<TransBkey<'a, 't, c::SnapshotTree>, BchError>
+/// At an unused id, for @fill to fill in - its id the key's offset - then
+/// queued for the commit.
+pub fn tree_create<'a, 't, R>(t: &TransAttempt<'a, 't>,
+                              fill: impl FnOnce(&mut TransBkey<'a, 't, c::SnapshotTree>) -> Result<R, BchError>)
+    -> Result<R, BchError>
 {
     let mut iter = BtreeIter::uninit(t.trans());
     match t.bkey_get_empty_slot(&mut iter, Btree::snapshot_trees, POS_MIN,
@@ -1275,8 +1277,7 @@ pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
 
     let mut k = t.bkey_alloc_typed::<c::SnapshotTree>()?;
     k.k_mut().p = iter.pos();
-    t.update(&iter, &k, UpdateTriggerFlags::empty())?;
-    Ok(k)
+    t.edit_update(&iter, k, UpdateTriggerFlags::empty(), fill)
 }
 
 // ── Node creation ────────────────────────────────────────────────────────
@@ -1322,8 +1323,8 @@ fn create_snapids(
 
         v.set_state(c::SnapshotState::live);
 
-        t.update(&iter, &n, UpdateTriggerFlags::empty())?;
         mark_snapshot(fs, BkeySC::from(n.as_ref()))?;
+        t.update(&iter, n, UpdateTriggerFlags::empty())?;
 
         *new_id = p.offset as u32;
     }
@@ -1339,42 +1340,43 @@ fn node_create_children(
 ) -> Result<(), BchError> {
     let fs = t.fs();
 
-    let mut n_parent: TransBkey<'_, '_, c::Snapshot> =
-        match t.bkey_get_mut(Btree::snapshots, pos(0, parent as u64),
-                             BtreeIterFlags::empty(), UpdateTriggerFlags::empty()) {
-            Err(e) if e.matches(c::ENOENT) => {
-                bch_err!(fs, "snapshot {parent} not found");
-                return Err(e);
-            }
-            r => r?,
-        };
+    let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, parent as u64), BtreeIterFlags::INTENT);
+    let n_parent = match iter.peek_slot_typed::<c::Snapshot>(t) {
+        Err(e) if e.matches(c::ENOENT) => {
+            bch_err!(fs, "snapshot {parent} not found");
+            return Err(e);
+        }
+        k => t.bkey_make_mut_noupdate(k?)?,
+    };
 
-    if n_parent.v().children() != [0, 0] {
-        bch_err!(fs, "Trying to add child snapshot nodes to parent that already has children");
-        return fs.throw(Errcode::EINVAL_snapshot_parent_already_has_children);
-    }
+    t.edit_update(&iter, n_parent, UpdateTriggerFlags::empty(), |n_parent| {
+        if n_parent.v().children() != [0, 0] {
+            bch_err!(fs, "Trying to add child snapshot nodes to parent that already has children");
+            return fs.throw(Errcode::EINVAL_snapshot_parent_already_has_children);
+        }
 
-    create_snapids(t, parent, n_parent.v().tree(), new_snapids, subvols)?;
+        create_snapids(t, parent, n_parent.v().tree(), new_snapids, subvols)?;
 
-    let v = n_parent.v_mut();
-    v.children = [new_snapids[0].into(), new_snapids[1].into()];
-    v.subvol   = 0u32.into();
-    v.set_state(c::SnapshotState::live);
-    Ok(())
+        let v = n_parent.v_mut();
+        v.children = [new_snapids[0].into(), new_snapids[1].into()];
+        v.subvol   = 0u32.into();
+        v.set_state(c::SnapshotState::live);
+        Ok(())
+    })
 }
 
 /// One new node, the root of a new tree.
 fn node_create_tree(t: &TransAttempt<'_, '_>, new_snapids: &mut [u32], subvols: &[u32])
     -> Result<(), BchError>
 {
-    let mut n_tree = tree_create(t)?;
+    tree_create(t, |n_tree| {
+        create_snapids(t, 0, n_tree.k().p.offset as u32, new_snapids, subvols)?;
 
-    create_snapids(t, 0, n_tree.k().p.offset as u32, new_snapids, subvols)?;
-
-    let v = n_tree.v_mut();
-    v.master_subvol = subvols[0].into();
-    v.root_snapshot = new_snapids[0].into();
-    Ok(())
+        let v = n_tree.v_mut();
+        v.master_subvol = subvols[0].into();
+        v.root_snapshot = new_snapids[0].into();
+        Ok(())
+    })
 }
 
 /// New snapshot nodes, one for each of @subvols: two children of @parent, or

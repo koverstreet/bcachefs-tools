@@ -148,7 +148,7 @@ pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: Bpos, end: Bpos) -> Result
             .cut_back(end).expect("peek_max() of an extents btree stops at end: iter.pos() < end");
 
         t.extent_trim_atomic(iter, &mut delete)?;
-        t.update(iter, &delete, UpdateTriggerFlags::empty())
+        t.update(iter, delete, UpdateTriggerFlags::empty())
     })
 }
 
@@ -362,12 +362,11 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
     src_iter.traverse(t)?;
 
     /* Made a reflink_p in place: a one pointer extent's value is smaller */
-    let mut orig = t.bkey_reassemble_room(k, k.k.u64s as usize * size_of::<u64>() + size_of::<c::ReflinkP>())?;
+    let orig = t.bkey_reassemble_room(k, k.k.u64s as usize * size_of::<u64>() + size_of::<c::ReflinkP>())?;
 
-    reflink::make_extent_indirect(t, &src_iter, &mut orig, reflink_p_may_update_opts)?;
-
-    /* @orig is now the ancestor's reflink_p, queued as its update */
-    t.bkey_make_mut_noupdate(BkeySC::from(&orig))
+    /* the ancestor's reflink_p, queued as its update */
+    let r_p = reflink::make_extent_indirect(t, &src_iter, orig, reflink_p_may_update_opts)?;
+    t.bkey_make_mut_noupdate(BkeySC::<c::ReflinkP>::from(&r_p).untyped())
 }
 
 /*

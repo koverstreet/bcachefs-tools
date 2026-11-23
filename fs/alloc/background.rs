@@ -689,11 +689,15 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(a)
     }
 
-    /// The alloc key of bucket @pos, queued as its update, to edit - the
-    /// update already queued, if there is one: bch2_trans_start_alloc_update().
-    pub fn start_alloc_update(&self, pos: Bpos, flags: UpdateTriggerFlags)
-        -> Result<TransBkey<'a, 't, c::AllocV4>, BchError>
-    {
+    /// The alloc key of bucket @pos for @edit, then queued as its update - the
+    /// update already queued, if there is one, edited in place:
+    /// bch2_trans_start_alloc_update().
+    pub fn start_alloc_update<R>(
+        &self,
+        pos:   Bpos,
+        flags: UpdateTriggerFlags,
+        edit:  impl FnOnce(&mut TransBkey<'a, 't, c::AllocV4>) -> Result<R, BchError>,
+    ) -> Result<R, BchError> {
         let mut iter = BtreeIter::new(self, Btree::alloc, pos,
                                       BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
         let k = iter.peek_slot(self)?.expect("a slot always has a key");
@@ -707,12 +711,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
             // SAFETY: a key in our memory, its value at @k.v, with @u64s u64s of room
             let a = unsafe { TransBkey::from_raw_room(self, key.cast(), u64s) };
             // SAFETY: all of an alloc_v4
-            return Ok(unsafe { a.whole_unchecked() });
+            return edit(&mut unsafe { a.whole_unchecked() });
         }
 
         let a = self.alloc_to_v4_mut(k)?;
-        self.update(&iter, &a, flags)?;
-        Ok(a)
+        self.edit_update(&iter, a, flags, edit)
     }
 }
 
@@ -1358,7 +1361,7 @@ fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, generation: u8) -> 
         }
     };
     g.v_mut().gens[pos.idx] = generation;
-    t.update(&iter, &g, UpdateTriggerFlags::empty())
+    t.update(&iter, g, UpdateTriggerFlags::empty())
 }
 
 fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &Dev, data_type: DataType,
@@ -1720,7 +1723,7 @@ fn bucket_io_time_reset(t: &TransAttempt<'_, '_>, bucket: Bpos, rw: usize) -> Re
     }
     a.v_mut().io_time[rw] = now;
 
-    t.update(&iter, &a, UpdateTriggerFlags::empty())?;
+    t.update(&iter, a, UpdateTriggerFlags::empty())?;
     t.commit(None, CommitFlags::empty())
 }
 

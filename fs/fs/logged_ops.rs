@@ -185,7 +185,7 @@ pub fn start(t: &TransAttempt<'_, '_>, k: &mut BkeyI) -> Result<(), BchError> {
 
     k.k.p = iter.pos();
 
-    t.update(&iter, &t.bkey_copy(k)?, UpdateTriggerFlags::empty())
+    t.update(&iter, t.bkey_copy(k)?, UpdateTriggerFlags::empty())
 }
 
 /// Fails once if logged_op_fail_next is armed for @ty, standing in for a crash

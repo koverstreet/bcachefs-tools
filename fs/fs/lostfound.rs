@@ -300,7 +300,7 @@ fn maybe_delete_dirent(t: &TransAttempt<'_, '_>, d_pos: Bpos, snapshot: u32)
     // uncommitted dirent, which iterators couldn't when this was written.
     // XXX: they can now - switch once fault injection covers this path.
     let whiteout = t.bkey_alloc_init::<c::Whiteout>(0, iter.pos())?;
-    t.update(&iter, &whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    t.update(&iter, whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 /// Link @inode into lost+found.
@@ -314,11 +314,11 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     if inode.bi_subvol != 0 {
         inode.bi_parent_subvol = c::BCACHEFS_ROOT_SUBVOL;
 
-        let mut s = t.bkey_get_mut::<c::Subvolume>(Btree::subvolumes,
-                                                   pos(0, inode.bi_subvol as u64),
-                                                   BtreeIterFlags::empty(),
-                                                   UpdateTriggerFlags::empty())?;
-        s.v_mut().fs_path_parent = c::BCACHEFS_ROOT_SUBVOL.into();
+        t.bkey_get_mut::<c::Subvolume, _>(Btree::subvolumes,
+                                          pos(0, inode.bi_subvol as u64),
+                                          BtreeIterFlags::empty(),
+                                          UpdateTriggerFlags::empty(),
+                                          |s| Ok(s.v_mut().fs_path_parent = c::BCACHEFS_ROOT_SUBVOL.into()))?;
 
         dirent_snapshot = subvolume::get_snapshot(t, inode.bi_parent_subvol)?;
         write!(name, "subvol-{}", inode.bi_subvol);

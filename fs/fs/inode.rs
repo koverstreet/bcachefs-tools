@@ -709,7 +709,7 @@ pub fn write_flags<'t>(
 ) -> Result<(), BchError> {
     let mut k = pack_trans(t, inode)?;
     k.k_mut().p.snapshot = iter.snapshot();
-    t.update(iter, &k, flags)
+    t.update(iter, k, flags)
 }
 
 /// Queue writing @inode back through @iter, which peeked it: as
@@ -968,10 +968,10 @@ fn cursor_range(fs: &Fs, idx: u64) -> (u64, u64) {
 
 /// The cursor to allocate from - below 2^31 with @is_32bit, otherwise this
 /// thread's shard's - updated to its current shard bits, and to its range:
-/// wrapped, a new generation, if it's at the end. Queued as an update, so
-/// what the caller does to it is committed. Its range, too.
+/// wrapped, a new generation, if it's at the end - not yet queued, with the
+/// iterator to queue it at. Its range, too.
 fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
-    -> Result<(TransBkey<'a, 't, c::InodeAllocCursor>, u64, u64), BchError>
+    -> Result<(BtreeIter<'a>, TransBkey<'a, 't, c::InodeAllocCursor>, u64, u64), BchError>
 {
     let fs = t.fs();
     let idx = if is_32bit { 0 } else { 1 + fs.inode_shard_idx() };
@@ -979,20 +979,14 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
 
     let cursor_pos = pos(c::LoggedOpsInum::LOGGED_OPS_INUM_inode_cursors.0 as u64, idx);
 
-    let cursor = t.bkey_get_mut::<c::InodeAllocCursor>(Btree::logged_ops, cursor_pos,
-                                                       BtreeIterFlags::CACHED,
-                                                       UpdateTriggerFlags::empty());
-    let mut cursor = match cursor.found()? {
-        Some(cursor) => cursor,
+    let mut iter = BtreeIter::new(t, Btree::logged_ops, cursor_pos,
+                                  BtreeIterFlags::INTENT | BtreeIterFlags::CACHED);
+    let mut cursor = match iter.peek_slot_typed::<c::InodeAllocCursor>(t).found()? {
+        Some(cursor) => t.bkey_make_mut_noupdate(cursor)?,
         None => {
             // No cursor there yet:
-            let mut iter = BtreeIter::new(t, Btree::logged_ops, cursor_pos,
-                                          BtreeIterFlags::INTENT | BtreeIterFlags::CACHED);
-            iter.traverse(t)?;
-
             let mut k = t.bkey_alloc_typed::<c::InodeAllocCursor>()?;
             k.k_mut().p = cursor_pos;
-            t.update(&iter, &k, UpdateTriggerFlags::empty())?;
             k
         }
     };
@@ -1009,7 +1003,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
         v.generation = v.generation.get().wrapping_add(1).into();
     }
 
-    Ok((cursor, min, max))
+    Ok((iter, cursor, min, max))
 }
 
 /// Give @inode a free inode number in @snapshot, below 2^31 with @is_32bit,
@@ -1028,8 +1022,8 @@ pub fn create<'a>(
     is_32bit: bool,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let (mut cursor, min, max) = alloc_cursor_get(t, is_32bit)?;
-    let cursor = cursor.v_mut();
+    let (cursor_iter, mut cursor_k, min, max) = alloc_cursor_get(t, is_32bit)?;
+    let cursor = cursor_k.v_mut();
 
     let mut start = cursor.idx.get();
     let mut inum = start;
@@ -1053,7 +1047,8 @@ pub fn create<'a>(
                 cursor.idx          = (inum + 1).into();
 
                 iter.set_pos(spos(0, inum, snapshot));
-                return iter.traverse(t);
+                iter.traverse(t)?;
+                return t.update(&cursor_iter, cursor_k, UpdateTriggerFlags::empty());
             }
 
             inum += 1;
@@ -1188,9 +1183,9 @@ fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: Bpos, have_child: boo
     if have_child != f.contains(c::InodeFlags::has_child_snapshot) {
         // As bch2_bkey_make_mut(): a copy, queued as the update.
         let mut u = t.bkey_make_mut_noupdate(k)?;
-        t.update(&iter, &u, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         f.set(c::InodeFlags::has_child_snapshot, have_child);
         BkeyS::from(&mut u).set_flags(f);
+        t.update(&iter, u, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     }
     Ok(())
 }
@@ -1393,7 +1388,7 @@ fn delete_keys(trans: &TransGuard<'_>, inum: c::subvol_inum, btree: Btree)
         if iter.is_extents() {
             delete.k_mut().resize(k.k.size);
         }
-        t.update(iter, &delete, UpdateTriggerFlags::empty())
+        t.update(iter, delete, UpdateTriggerFlags::empty())
     })
 }
 

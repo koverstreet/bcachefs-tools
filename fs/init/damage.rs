@@ -175,7 +175,7 @@ pub fn record(t: &TransAttempt<'_, '_>, pos: Bpos, err: SbErrorId) -> Result<(),
         dst[idx] = Entry::new(err, 1, now, now);
     }
 
-    t.update(&iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    t.update(&iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 /// record(), for a key at @pos in @btree: damage is keyed by inode, and only

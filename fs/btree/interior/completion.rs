@@ -267,7 +267,7 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
              * XXX: we shouldn't be logging overwrites here, need a
              * flag for that
              */
-            t.update(parent.iter(), &k, UpdateTriggerFlags::NORUN)?;
+            t.update(parent.iter(), k, UpdateTriggerFlags::NORUN)?;
         }
     }
 

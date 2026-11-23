@@ -172,7 +172,7 @@ fn drop_block_extent(t: &TransAttempt<'_, '_>, idx: u64, block: u32, bp: BkeySC<
         damage::record_key(t, Btree::extents, k.k.p, SbErrorId::stripe_reconstruct_failed)?;
     }
 
-    t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    t.update(iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 /// Every extent of block @block of stripe @s taken out of it.

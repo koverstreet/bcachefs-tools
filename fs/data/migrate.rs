@@ -137,7 +137,7 @@ impl DevDrop<'_> {
         if n.k().key_type().is_deleted() {
             n.k_mut().size = 0;
         }
-        t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+        t.update(iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
     }
 
     /// Stripe @k, at @iter, intent locked, without its blocks on the device -
@@ -237,21 +237,22 @@ impl DevDrop<'_> {
         };
         let sectors: i64 = counts.iter().map(|n| i64::from(n.get())).sum();
 
-        let mut s = t.bkey_make_mut(iter, old, UpdateTriggerFlags::empty())?;
-        s.set_needs_reconcile(t, None, &inode_opts::get_fs(fs, false),
-                              c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+        t.bkey_make_mut(iter, old, UpdateTriggerFlags::empty(), |s| {
+            s.set_needs_reconcile(t, None, &inode_opts::get_fs(fs, false),
+                                  c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
 
-        let user = DataType::user;
-        accounting::add_at(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[-sectors], false)?;
+            let user = DataType::user;
+            accounting::add_at(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[-sectors], false)?;
 
-        for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
-            p.set_dev(c::BCH_SB_MEMBER_INVALID as u8);
-        }
-        // degraded, so it needs rebuilding, whatever set_needs_reconcile()
-        // made of the device
-        s.v_mut().bits.set_needs_reconcile(1u8.into());
+            for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
+                p.set_dev(c::BCH_SB_MEMBER_INVALID as u8);
+            }
+            // degraded, so it needs rebuilding, whatever set_needs_reconcile()
+            // made of the device
+            s.v_mut().bits.set_needs_reconcile(1u8.into());
 
-        accounting::add_at(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[sectors], false)
+            accounting::add_at(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[sectors], false)
+        })
     }
 
     fn usrdata(&mut self, fs: &Fs, progress: &Progress<'_>) -> Result<(), BchError> {

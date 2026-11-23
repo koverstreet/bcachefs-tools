@@ -198,9 +198,7 @@ fn extents_to_reflink<'a>(t: &TransAttempt<'a, '_>, e1: &DupExtent<'_>, e2: &Dup
         e.cut_back_in_place(spos(p1.inode, e1.overlap.end, p1.snapshot));
     }
 
-    make_extent_indirect(t, &iter1, &mut k1_mut, false)?;
-
-    let r_v_idx = k1_mut.as_ref().arm::<c::ReflinkP>().expect("a reflink_p, as just made").v.idx();
+    let r_v_idx = make_extent_indirect(t, &iter1, k1_mut, false)?.v.idx();
 
     let p2 = e2.k.k.p;
     let mut iter2 = BtreeIter::new_level(t, e2.btree, p2, e2.level.into(), BtreeIterFlags::INTENT);
@@ -213,7 +211,7 @@ fn extents_to_reflink<'a>(t: &TransAttempt<'a, '_>, e1: &DupExtent<'_>, e2: &Dup
     k.bversion = e2.k.k.bversion;
     rp.v_mut().set_idx(r_v_idx);
 
-    t.update(&iter2, &rp, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    t.update(&iter2, rp, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut BkeyI<c::Backpointer>,
@@ -723,16 +721,17 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &Dev, bucket: u64) -> 
 
     let Some(data_type) = data_type.filter(|_| !mixed) else { return Ok(()) };
 
-    let mut new = t.start_alloc_update(bucket, UpdateTriggerFlags::empty())?;
-    let a = new.v_mut();
-    a.data_type.set(DataType::free);
-    a.set_data_type(data_type);
+    t.start_alloc_update(bucket, UpdateTriggerFlags::empty(), |new| {
+        let a = new.v_mut();
+        a.data_type.set(DataType::free);
+        a.set_data_type(data_type);
 
-    let mut msg = LogMsg::new(fs);
-    prt!(&mut msg, "bucket {}:{}: double allocation resolved, data type multiple -> ",
-         { bucket.inode }, { bucket.offset });
-    a.data_type().to_text(&mut msg);
-    Ok(())
+        let mut msg = LogMsg::new(fs);
+        prt!(&mut msg, "bucket {}:{}: double allocation resolved, data type multiple -> ",
+             { bucket.inode }, { bucket.offset });
+        a.data_type().to_text(&mut msg);
+        Ok(())
+    })
 }
 
 /// Buckets with none don't count - theirs are recreated without looking. A

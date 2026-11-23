@@ -177,7 +177,7 @@ fn stripe_key_update(t: &TransAttempt<'_, '_>, k: BkeySC<'_, c::Stripe<Validated
         fs_inconsistent!(fs, "error creating stripe: got existing key\n{}", old.to_text(fs));
         return fs.throw(Errcode::EINVAL_ec_stripe_create_existing_key);
     }
-    t.update(&iter, &new, UpdateTriggerFlags::empty())
+    t.update(&iter, new, UpdateTriggerFlags::empty())
 }
 
 /// What the task works on: its stripe's keys and buffers, and what create

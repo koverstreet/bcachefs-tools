@@ -355,7 +355,7 @@ impl<'t> TransAttempt<'_, 't> {
             inode_update_flags = UpdateTriggerFlags::empty();
         }
 
-        self.update(&iter, &k_mut, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | inode_update_flags)
+        self.update(&iter, k_mut, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | inode_update_flags)
     }
 
     /// @k written at @iter and committed, with the inode's update: i_size
@@ -411,7 +411,7 @@ impl<'t> TransAttempt<'_, 't> {
 
         k.set_needs_reconcile(self, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                               change_cookie)?;
-        self.update(iter, &k, UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
+        self.update(iter, k, UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
 
         self.commit_flush(Some(disk_res), flush, CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC)?;
 

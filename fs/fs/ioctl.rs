@@ -659,8 +659,8 @@ pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: c::subvol_inum) -> Result<()
         // before the commit: it's the key's last use
         let (opts, range) = (get_io_opts(t, None, k)?, p.refd());
 
-        let mut n = t.bkey_make_mut(iter, p, UpdateTriggerFlags::empty())?;
-        n.v_mut().set_may_update_options(true);
+        t.bkey_make_mut(iter, p, UpdateTriggerFlags::empty(),
+                        |n| Ok(n.v_mut().set_may_update_options(true)))?;
         t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
 
         t.ignore_restarts(|trans| propagate_to_reflink_v(fs, trans, &opts, range))
@@ -704,7 +704,7 @@ fn unpoison_extent(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>
     let room = (usize::from(k.k.u64s) + size_of::<c::bch_extent_flags>() / size_of::<u64>()) * size_of::<u64>();
     let mut n = t.bkey_reassemble_room(k, room)?;
     n.extent_flags_set(fs, flags - c::ExtentFlags::poisoned).expect("room for a flags entry: reassembled with it");
-    t.update(iter, &n, UpdateTriggerFlags::empty())
+    t.update(iter, n, UpdateTriggerFlags::empty())
 }
 
 /// unpoison_extent() each indirect extent reflink_p @p maps.

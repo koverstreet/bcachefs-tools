@@ -25,7 +25,7 @@ use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, KeyFn,
-    Keys, LoopControl, TransAttempt, UpdateTriggerFlags,
+    Keys, LoopControl, TransAttempt, TransBkey, UpdateTriggerFlags,
 };
 use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::DiskReservation;
@@ -629,29 +629,41 @@ crate::recovery_pass!(check_subvol_children => check_subvol_children);
 
 // ── Unlinking, deleting ──────────────────────────────────────────────────
 
-/// Already queued as an update.
-fn get_mut<'a, 't>(t: &TransAttempt<'a, 't>, subvol: u32)
-    -> Result<crate::btree::iter::TransBkey<'a, 't, c::Subvolume>, BchError>
+/// @subvol's key to edit, not yet queued, and the iterator to queue it at.
+fn lookup_mut<'a, 't>(t: &TransAttempt<'a, 't>, subvol: u32)
+    -> Result<(BtreeIter<'a>, TransBkey<'a, 't, c::Subvolume>), BchError>
 {
-    let ret = t.bkey_get_mut::<c::Subvolume>(Btree::subvolumes, pos(0, subvol as u64),
-                                             BtreeIterFlags::CACHED, UpdateTriggerFlags::empty());
-    if let Err(e) = &ret {
-        if e.matches(c::ENOENT) {
+    let mut iter = BtreeIter::new(t, Btree::subvolumes, pos(0, subvol as u64),
+                                  BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
+    let k = match iter.peek_slot_typed::<c::Subvolume>(t) {
+        Err(e) if e.matches(c::ENOENT) => {
             missing(t.fs(), subvol)?;
+            return Err(e);
         }
-    }
-    ret
+        r => t.bkey_make_mut_noupdate(r?)?,
+    };
+    Ok((iter, k))
+}
+
+/// @subvol's key for @edit, then queued for update.
+fn edit<'a, 't, R>(t: &TransAttempt<'a, 't>, subvol: u32,
+                   edit: impl FnOnce(&mut TransBkey<'a, 't, c::Subvolume>) -> Result<R, BchError>)
+    -> Result<R, BchError>
+{
+    let (iter, k) = lookup_mut(t, subvol)?;
+    t.edit_update(&iter, k, UpdateTriggerFlags::empty(), edit)
 }
 
 /// For unlinking and deleting: also takes it out of the filesystem tree.
 fn set_state_trans(t: &TransAttempt<'_, '_>, subvol: u32, state: c::SubvolumeState)
     -> Result<(), BchError>
 {
-    let mut k = get_mut(t, subvol)?;
-    let s = k.v_mut();
-    s.set_state(state);
-    s.fs_path_parent = 0.into();
-    Ok(())
+    edit(t, subvol, |k| {
+        let s = k.v_mut();
+        s.set_state(state);
+        s.fs_path_parent = 0.into();
+        Ok(())
+    })
 }
 
 /// @old is being deleted: subvolumes created from it name @new instead.
@@ -670,9 +682,8 @@ fn reparent(
         return Ok(());
     }
 
-    let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty())?;
-    u.v_mut().creation_parent = new.into();
-    Ok(())
+    t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(),
+                    |u| Ok(u.v_mut().creation_parent = new.into()))
 }
 
 /// Point @subvol's snapshots at @subvol's own creation_parent.
@@ -719,8 +730,8 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
         })?;
 
     if tk.v().master_subvol.get() == subvol {
-        let mut u = t.bkey_make_mut(tree_iter, tk, UpdateTriggerFlags::empty())?;
-        u.v_mut().master_subvol = 0.into();
+        t.bkey_make_mut(tree_iter, tk, UpdateTriggerFlags::empty(),
+                        |u| Ok(u.v_mut().master_subvol = 0.into()))?;
     }
 
     set_state_trans(t, subvol, c::SubvolumeState::deleted)?;
@@ -823,16 +834,17 @@ pub fn create(
     let mut src_k = None;
     let mut parent_snapshot = 0;
     if src != 0 {
-        let k = get_mut(t, src)?;
+        let (iter, k) = lookup_mut(t, src)?;
         parent_snapshot = k.v().snapshot.get();
-        src_k = Some(k);
+        src_k = Some((iter, k));
     }
 
     let nr = if src != 0 { 2 } else { 1 };
     snapshot::node_create(t, parent_snapshot, &mut new_nodes[..nr], &snapshot_subvols[..nr])?;
 
-    if let Some(mut k) = src_k {
-        k.v_mut().snapshot = new_nodes[1].into();
+    if let Some((iter, k)) = src_k {
+        t.edit_update(&iter, k, UpdateTriggerFlags::empty(),
+                      |k| Ok(k.v_mut().snapshot = new_nodes[1].into()))?;
     }
 
     let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
@@ -850,7 +862,7 @@ pub fn create(
     v.set_state(c::SubvolumeState::live);
     let v = *k.v();
 
-    t.update(&dst_iter, &k, UpdateTriggerFlags::empty())?;
+    t.update(&dst_iter, k, UpdateTriggerFlags::empty())?;
 
     Ok(Created { subvol: new_id, snapshot: new_nodes[0], v })
 }

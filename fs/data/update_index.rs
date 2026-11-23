@@ -44,7 +44,8 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode_opts::get_io_opts;
-use crate::debug::trace::events;
+use crate::btree::bkey_buf::BkeyBuf;
+use crate::debug::trace::{events, TraceEvent};
 use crate::util::log::LogMsg;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err_fn, log_msg_ratelimited};
@@ -332,14 +333,19 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
     insert.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                                u.op.opts.change_cookie)?;
 
-    t.update(iter, &insert, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
+    let traced = <events::data_update_key as TraceEvent>::trace_enabled()
+        .then(|| BkeyBuf::from_key(insert.as_sc()));
+
+    t.update(iter, insert, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
     t.commit(Some(res), CommitOpts::from(u.opts.commit_flags)
                         .flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC))?;
 
     fs.event_add_trace(events::data_update_key, new.k().size.into(), |out| {
         write!(out, "\nold: {}", old.to_text(fs));
         write!(out, "\nk:   {}", k.as_sc().to_text(fs));
-        write!(out, "\nnew: {}", insert.as_sc().to_text(fs));
+        if let Some(insert) = &traced {
+            write!(out, "\nnew: {}", BkeySC::from(insert).to_text(fs));
+        }
     });
 
     Ok(next_pos)
@@ -445,11 +451,10 @@ pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -
         let opts = get_io_opts(t, None, k)?;
         new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                                 u.op.opts.change_cookie.wrapping_sub(1))?;
-        t.update(iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
-
         write!(msg, "new: {}", new.as_sc().to_text(fs));
         msg.newline();
-        Ok(())
+
+        t.update(iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)
     })
 }
 

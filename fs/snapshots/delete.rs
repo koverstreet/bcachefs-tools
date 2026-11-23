@@ -201,15 +201,19 @@ impl Fs {
 
 // ── Node state ───────────────────────────────────────────────────────────
 
-/// Node @id's key, queued for update; missing is an inconsistency.
-fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32)
-    -> Result<TransBkey<'a, 't, c::Snapshot>, BchError>
+/// Node @id's key for @edit, then queued for update; missing is an
+/// inconsistency.
+fn edit_node<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
+                        edit: impl FnOnce(&mut TransBkey<'a, 't, c::Snapshot>) -> Result<R, BchError>)
+    -> Result<R, BchError>
 {
-    t.bkey_get_mut(Btree::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
-                   UpdateTriggerFlags::empty())
+    let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, id as u64), BtreeIterFlags::INTENT);
+    let k = iter.peek_slot_typed::<c::Snapshot>(t)
         .inspect_err(|e| if e.matches(c::ENOENT) {
             fs_inconsistent!(t.fs(), "missing snapshot {id}");
-        })
+        })?;
+    let k = t.bkey_make_mut_noupdate(k)?;
+    t.edit_update(&iter, k, UpdateTriggerFlags::empty(), edit)
 }
 
 /// Missing is an inconsistency.
@@ -238,17 +242,17 @@ fn only_child(v: &c::Snapshot) -> Option<u32> {
 
 /// Node @id's subvolume is being deleted: mark it will_delete, if it's live.
 pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
-    let mut s = get_mut_node(t, id)?;
+    edit_node(t, id, |s| {
+        if state(s.v()) != c::SnapshotState::live {
+            return Ok(());
+        }
 
-    if state(s.v()) != c::SnapshotState::live {
-        return Ok(());
-    }
-
-    // The backref is retained: it now points at the subvolume's tombstone,
-    // and deletion checks it - a will_delete leaf without a subvolume
-    // pointing back is an invalid state (check_should_delete_leaf):
-    s.v_mut().set_state(c::SnapshotState::will_delete);
-    Ok(())
+        // The backref is retained: it now points at the subvolume's tombstone,
+        // and deletion checks it - a will_delete leaf without a subvolume
+        // pointing back is an invalid state (check_should_delete_leaf):
+        s.v_mut().set_state(c::SnapshotState::will_delete);
+        Ok(())
+    })
 }
 
 /// Keys stranded in @btrees: schedule the content pass for each, which is what
@@ -416,9 +420,7 @@ fn node_set_no_keys(t: &TransAttempt<'_, '_>, id: u32, run: &Run<'_>) -> Result<
     /* Before the get_mut below queues anything - see check_deletable() */
     check_no_data(t, id, "set_no_keys", Some(run))?;
 
-    let mut s = get_mut_node(t, id)?;
-    s.v_mut().set_state(c::SnapshotState::no_keys);
-    Ok(())
+    edit_node(t, id, |s| Ok(s.v_mut().set_state(c::SnapshotState::no_keys)))
 }
 
 fn normalize_child_pointers(s: &mut c::Snapshot) {
@@ -432,7 +434,7 @@ fn normalize_child_pointers(s: &mut c::Snapshot) {
 /// touching anything.
 ///
 /// These have to be answered before the deletion starts, never partway
-/// through it. bkey_get_mut() queues its update the moment it's called, so a
+/// through it. edit_node() queues each node's update as its edit returns, so a
 /// refusal after the first one leaves the transaction holding a fragment of a
 /// deletion, which the caller then drops on the floor.
 ///
@@ -524,7 +526,7 @@ fn refusal_to_text(trans: &TransGuard<'_>, ret: &Result<(), BchError>, id: u32, 
 fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let fs = t.fs();
 
-    let mut s = get_mut_node(t, id)?;
+    let s = lookup_node(t, id)?;
 
     if s.v().subvol() != 0 {
         t.delete(Btree::subvolumes, pos(0, s.v().subvol() as u64),
@@ -535,34 +537,34 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let child_id  = s.v().children()[0];
 
     if parent_id != 0 {
-        let mut parent = get_mut_node(t, parent_id)?;
+        edit_node(t, parent_id, |parent| {
+            let Some(i) = parent.v().children().iter().position(|&c| c == id) else {
+                fs_inconsistent!(fs, "snapshot {parent_id} missing child pointer to {id}");
+                return fs.throw(Errcode::ENOENT_snapshot);
+            };
 
-        let Some(i) = parent.v().children().iter().position(|&c| c == id) else {
-            fs_inconsistent!(fs, "snapshot {parent_id} missing child pointer to {id}");
-            return fs.throw(Errcode::ENOENT_snapshot);
-        };
-
-        parent.v_mut().children[i] = child_id.into();
-        normalize_child_pointers(parent.v_mut());
+            parent.v_mut().children[i] = child_id.into();
+            normalize_child_pointers(parent.v_mut());
+            Ok(())
+        })?;
     }
 
     if child_id != 0 {
-        let mut child = get_mut_node(t, child_id)?;
-        child.v_mut().parent = parent_id.into();
+        edit_node(t, child_id, |child| Ok(child.v_mut().parent = parent_id.into()))?;
     }
 
     if parent_id == 0 {
         // We're deleting the root of a snapshot tree: update the
         // snapshot_tree entry to point to the new root, or delete it if this
         // is the last snapshot ID in this tree:
-        let mut s_t: TransBkey<'_, '_, c::SnapshotTree> =
-            t.bkey_get_mut(Btree::snapshot_trees, pos(0, s.v().tree() as u64),
-                           BtreeIterFlags::empty(), UpdateTriggerFlags::empty())?;
-
+        let tree = pos(0, s.v().tree() as u64);
         if child_id != 0 {
-            s_t.v_mut().root_snapshot = child_id.into();
+            t.bkey_get_mut::<c::SnapshotTree, _>(Btree::snapshot_trees, tree, BtreeIterFlags::empty(),
+                                                 UpdateTriggerFlags::empty(),
+                                                 |s_t| Ok(s_t.v_mut().root_snapshot = child_id.into()))?;
         } else {
-            s_t.set_deleted();
+            t.bkey_get_val::<c::SnapshotTree>(Btree::snapshot_trees, tree, BtreeIterFlags::empty())?;
+            t.delete(Btree::snapshot_trees, tree, UpdateTriggerFlags::empty())?;
         }
     }
 
@@ -570,13 +572,16 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
             MetadataVersion::snapshot_deletion_v2).is_ok() {
         // Retain parent/child pointers; don't destroy information if we have
         // to repair:
-        let v = s.v_mut();
-        v.subvol = 0u32.into();
-        v.depth  = 0u32.into();
-        v.skip   = [0u32.into(); 3];
-        v.set_state(c::SnapshotState::deleted);
+        edit_node(t, id, |s| {
+            let v = s.v_mut();
+            v.subvol = 0u32.into();
+            v.depth  = 0u32.into();
+            v.skip   = [0u32.into(); 3];
+            v.set_state(c::SnapshotState::deleted);
+            Ok(())
+        })?;
     } else {
-        s.set_deleted();
+        t.delete(Btree::snapshots, pos(0, id as u64), UpdateTriggerFlags::empty())?;
     }
 
     // Nothing here touches this snapshot's accounting. Accounting is
@@ -630,15 +635,17 @@ fn relink_target(t: &TransAttempt<'_, '_>, mut child_id: u32) -> Result<u32, Bch
     Ok(0)
 }
 
-/// Node @id's key queued for update, if it exists.
-fn get_mut_node_opt<'a, 't>(t: &TransAttempt<'a, 't>, id: u32)
-    -> Result<Option<TransBkey<'a, 't, c::Snapshot>>, BchError>
+/// Node @id's key for @edit, then queued for update - None if there's no node.
+fn edit_node_opt<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
+                            edit: impl FnOnce(&mut TransBkey<'a, 't, c::Snapshot>) -> Result<R, BchError>)
+    -> Result<Option<R>, BchError>
 {
-    match t.bkey_get_mut(Btree::snapshots, pos(0, id as u64),
-                         BtreeIterFlags::empty(), UpdateTriggerFlags::empty()) {
-        Err(e) if e.matches(c::ENOENT) => Ok(None),
-        r => r.map(Some),
-    }
+    let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, id as u64), BtreeIterFlags::INTENT);
+    let k = match iter.peek_slot_typed::<c::Snapshot>(t) {
+        Err(e) if e.matches(c::ENOENT) => return Ok(None),
+        k => t.bkey_make_mut_noupdate(k?)?,
+    };
+    t.edit_update(&iter, k, UpdateTriggerFlags::empty(), edit).map(Some)
 }
 
 fn cannot_undelete<T>(fs: &Fs, msg: &mut LogMsg<'_>, why: &str) -> Result<T, BchError> {
@@ -688,22 +695,24 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
         // checks' business, as for any node that revives unlinked.
         let parent_id = u.v().parent();
         if parent_id != 0 {
-            let Some(mut parent) = get_mut_node_opt(t, parent_id)? else {
+            let relinked = edit_node_opt(t, parent_id, |parent| {
+                if !in_tree(parent.v()) {
+                    return cannot_undelete(fs, &mut msg, "parent is itself deleted");
+                }
+
+                let pc = parent.v().children();
+                if !pc.contains(&id) {
+                    let Some(i) = pc.iter().position(|&c| c == 0) else {
+                        return cannot_undelete(fs, &mut msg, "parent's child slots are full");
+                    };
+
+                    parent.v_mut().children[i] = id.into();
+                    normalize_child_pointers(parent.v_mut());
+                }
+                Ok(())
+            })?;
+            if relinked.is_none() {
                 return cannot_undelete(fs, &mut msg, "parent no longer exists");
-            };
-
-            if !in_tree(parent.v()) {
-                return cannot_undelete(fs, &mut msg, "parent is itself deleted");
-            }
-
-            let pc = parent.v().children();
-            if !pc.contains(&id) {
-                let Some(i) = pc.iter().position(|&c| c == 0) else {
-                    return cannot_undelete(fs, &mut msg, "parent's child slots are full");
-                };
-
-                parent.v_mut().children[i] = id.into();
-                normalize_child_pointers(parent.v_mut());
             }
         }
 
@@ -711,49 +720,55 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
         return Ok(());
     }
 
-    let Some(mut child) = get_mut_node_opt(t, child_id)? else {
+    let child = edit_node_opt(t, child_id, |child| {
+        prt!(&mut msg, "attaching to child  {}\n", child.to_text(fs));
+
+        let parent_id = child.v().parent();
+        if parent_id != 0 && parent_id <= id {
+            return cannot_undelete(fs, &mut msg, "parent of child < node to undelete");
+        }
+
+        child.v_mut().parent = id.into();
+        Ok((parent_id, child.v().tree))
+    })?;
+    let Some((parent_id, tree)) = child else {
         bch_err!(fs, "cannot undelete: child no longer exists");
         return fs.throw(Errcode::fsck_repair_unimplemented);
     };
 
-    prt!(&mut msg, "attaching to child  {}\n", child.to_text(fs));
-
-    let parent_id = child.v().parent();
-    if parent_id != 0 && parent_id <= id {
-        return cannot_undelete(fs, &mut msg, "parent of child < node to undelete");
-    }
-
-    child.v_mut().parent = id.into();
-
     if parent_id != 0 {
-        let Some(mut parent) = get_mut_node_opt(t, parent_id)? else {
+        let relinked = edit_node_opt(t, parent_id, |parent| {
+            prt!(&mut msg, "attaching to parent {}\n", parent.to_text(fs));
+
+            if !in_tree(parent.v()) {
+                return cannot_undelete(fs, &mut msg, "parent is itself deleted");
+            }
+
+            if let Some(i) = parent.v().children().iter().position(|&c| c == child_id) {
+                parent.v_mut().children[i] = id.into();
+                normalize_child_pointers(parent.v_mut());
+            }
+            Ok(())
+        })?;
+        if relinked.is_none() {
             return cannot_undelete(fs, &mut msg, "parent no longer exists");
-        };
-
-        prt!(&mut msg, "attaching to parent {}\n", parent.to_text(fs));
-
-        if !in_tree(parent.v()) {
-            return cannot_undelete(fs, &mut msg, "parent is itself deleted");
         }
-
-        if let Some(i) = parent.v().children().iter().position(|&c| c == child_id) {
-            parent.v_mut().children[i] = id.into();
-            normalize_child_pointers(parent.v_mut());
-        }
-    } else if child.v().tree() != 0 {
-        match t.bkey_get_mut::<c::SnapshotTree>(
-                Btree::snapshot_trees, pos(0, child.v().tree() as u64),
-                BtreeIterFlags::empty(), UpdateTriggerFlags::empty()) {
-            Err(e) if e.matches(c::ENOENT) => {}
-            Err(e) => return Err(e),
-            Ok(mut s_t) => if s_t.v().root_snapshot.get() == child_id {
+    } else if tree.get() != 0 {
+        let r = t.bkey_get_mut::<c::SnapshotTree, _>(
+                Btree::snapshot_trees, pos(0, tree.get() as u64),
+                BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |s_t| {
+            if s_t.v().root_snapshot.get() == child_id {
                 s_t.v_mut().root_snapshot = id.into();
                 prt!(&mut msg, "updated tree {}\n", s_t.to_text(fs));
-            },
+            }
+            Ok(())
+        });
+        match r {
+            Err(e) if e.matches(c::ENOENT) => {}
+            r => r?,
         }
     }
 
-    let tree = child.v().tree;
     let v = u.v_mut();
     v.parent = parent_id.into();
     v.tree   = tree;
@@ -837,13 +852,13 @@ pub fn delete_dead_key<'a, 't>(
                 // hold counts recorded after the descendant's key was created,
                 // so "descendant overwrote it" never applies:
                 let new = damage::keys_merge(t, dst, dst_k, k)?;
-                t.update(&dst_iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+                t.update(&dst_iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
             }
             Some(dst_k) if !dst_k.k.key_type().is_deleted() => {}
             _ => {
                 let mut new = t.bkey_make_mut_noupdate(k)?;
                 new.k_mut().p = dst;
-                t.update(&dst_iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+                t.update(&dst_iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
             }
         }
     }
@@ -1258,7 +1273,7 @@ fn fix_child_of_deleted_snapshot(
         v.skip = skip.map(Into::into);
     }
 
-    t.update(iter, &s, UpdateTriggerFlags::empty())
+    t.update(iter, s, UpdateTriggerFlags::empty())
 }
 
 // ── Deletion ─────────────────────────────────────────────────────────────

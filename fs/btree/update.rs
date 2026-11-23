@@ -519,41 +519,57 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(())
     }
 
-    /// The @K at @pos in @btree, as a mutable copy already queued as its
-    /// update, grown to all of its value - ENOENT_bkey_type_mismatch if it
-    /// isn't a @K. @iter_flags for the lookup - BtreeIterFlags::CACHED, for a
-    /// btree read through the key cache - and @flags for the update: C passes
-    /// both in one enum.
-    pub fn bkey_get_mut<K: BkeyWhole>(
+    /// The @K at @pos in @btree, as a mutable copy grown to all of its value,
+    /// for @edit - then queued as its update, the update's from there.
+    /// ENOENT_bkey_type_mismatch if it isn't a @K; nothing queued if @edit
+    /// fails. @iter_flags for the lookup - BtreeIterFlags::CACHED, for a btree
+    /// read through the key cache - and @flags for the update: C passes both
+    /// in one enum.
+    pub fn bkey_get_mut<K: BkeyWhole, R>(
         &self,
         btree:      Btree,
         pos:        Bpos,
         iter_flags: BtreeIterFlags,
         flags:      UpdateTriggerFlags,
-    ) -> Result<TransBkey<'a, 't, K>, BchError>
+        edit:       impl FnOnce(&mut TransBkey<'a, 't, K>) -> Result<R, BchError>,
+    ) -> Result<R, BchError>
     where
         K::Validated: MutBkey<Mut = K>,
     {
         let mut iter = BtreeIter::new(self, btree, pos, iter_flags | BtreeIterFlags::INTENT);
         let k = self.bkey_make_mut_noupdate(iter.peek_slot_typed::<K>(self)?)?;
-        self.update(&iter, &k, flags)?;
-        Ok(k)
+        self.edit_update(&iter, k, flags, edit)
     }
 
-    /// @k, the key at @iter, as bkey_make_mut_noupdate() makes it, already
-    /// queued as its update: edits to it go in with the commit.
-    pub fn bkey_make_mut<V: MutBkey + ?Sized>(
+    /// @k, @edit's to edit, then queued as its update at @iter: nothing
+    /// queued if @edit fails.
+    pub fn edit_update<V: ?Sized + ValidatedVal, R>(
+        &self,
+        iter:  &BtreeIter<'a>,
+        mut k: TransBkey<'a, 't, V>,
+        flags: UpdateTriggerFlags,
+        edit:  impl FnOnce(&mut TransBkey<'a, 't, V>) -> Result<R, BchError>,
+    ) -> Result<R, BchError> {
+        let r = edit(&mut k)?;
+        self.update(iter, k, flags)?;
+        Ok(r)
+    }
+
+    /// @k, the key at @iter, as bkey_make_mut_noupdate() makes it, for @edit -
+    /// then queued as its update, the update's from there. Nothing queued if
+    /// @edit fails.
+    pub fn bkey_make_mut<V: MutBkey + ?Sized, R>(
         &self,
         iter:  &BtreeIter<'a>,
         k:     BkeySC<'_, V>,
         flags: UpdateTriggerFlags,
-    ) -> Result<TransBkey<'a, 't, V::Mut>, BchError>
+        edit:  impl FnOnce(&mut TransBkey<'a, 't, V::Mut>) -> Result<R, BchError>,
+    ) -> Result<R, BchError>
     where
         V::Mut: ValidatedVal,
     {
         let k = self.bkey_make_mut_noupdate(k)?;
-        self.update(iter, &k, flags)?;
-        Ok(k)
+        self.edit_update(iter, k, flags, edit)
     }
 
     /// Overwrite @old, the extent at @iter, with @new where they overlap.
@@ -735,7 +751,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                         update.k_mut().p.snapshot = it.snapshot();
                         update.k_mut().set_key_type(whiteout_type);
 
-                        self.update(it, &update, UpdateTriggerFlags::empty())?;
+                        self.update(it, update, UpdateTriggerFlags::empty())?;
                     }
                 } else {
                     self.update_extent_overwrite(it, flags, k, insert.as_sc())?;
@@ -809,16 +825,15 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// Queue @key as an update at @iter's position. Takes the iterator
     /// shared: it doesn't move it - what it sets up there, the key cache
-    /// path, is the iterator's own business. @key is borrowed too: it's in
-    /// transaction memory, where the update points, and the caller can go on
-    /// reading it - where it went, say.
+    /// path, is the iterator's own business. @key is the update's from here:
+    /// what reads or edits it does so first.
     pub fn update<V: ?Sized + ValidatedVal>(
         &self,
         iter:  &BtreeIter<'a>,
-        key:   &TransBkey<'_, 't, V>,
+        key:   TransBkey<'_, 't, V>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
-        self.update_ip(iter, UpdateKey::borrowed(key), flags, crate::ret_ip!())
+        self.update_ip(iter, UpdateKey::borrowed(&key), flags, crate::ret_ip!())
     }
 
     fn update_ip(&self, iter: &BtreeIter<'a>, mut key: UpdateKey<'_, 'a, 't>,
@@ -1142,7 +1157,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 k.p = pos;
                 k.set_key_type(BkeyType::whiteout);
 
-                self.update(it, &update, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+                self.update(it, update, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
             }
         }
 
@@ -1204,7 +1219,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             h.resize(1);
         }
 
-        self.update(iter, &k, UpdateTriggerFlags::empty())
+        self.update(iter, k, UpdateTriggerFlags::empty())
     }
 
     /// @key, for write buffered @btree, through the write buffer: as
@@ -1292,7 +1307,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut k = self.bkey_alloc(BKEY_U64S as u32)?;
         *k.k_mut() = c::bkey::new();
         k.k_mut().p = iter.pos();
-        self.update(iter, &k, flags)
+        self.update(iter, k, flags)
     }
 
     pub fn delete(
@@ -1376,6 +1391,6 @@ fn delete_range_one<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>, end:
         delete.k_mut().resize((end.min(k.k.p).offset - it.pos().offset) as u32);
     }
 
-    t.update(it, &delete, flags)?;
+    t.update(it, delete, flags)?;
     t.commit(Some(&res), CommitFlags::NO_ENOSPC)
 }

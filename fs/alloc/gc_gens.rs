@@ -76,7 +76,7 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
 
             let mut a = t.alloc_to_v4_mut(k)?;
             a.v_mut().oldest_gen = oldest_gen;
-            t.update(iter, &a, UpdateTriggerFlags::empty())
+            t.update(iter, a, UpdateTriggerFlags::empty())
         })?;
 
     fs.gc_gens.pos.set(c::bbpos::default());

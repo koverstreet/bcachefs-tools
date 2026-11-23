@@ -59,12 +59,14 @@ fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<BkeyI<c::Snap
     snapshot::lookup_key(t, id).found()
 }
 
-/// Snapshot node @id's key, as a mutable copy queued for the commit.
-fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32)
-    -> Result<TransBkey<'a, 't, c::Snapshot>, BchError>
+/// Snapshot node @id's key, as a mutable copy for @edit, then queued for the
+/// commit.
+fn edit_node<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
+                        edit: impl FnOnce(&mut TransBkey<'a, 't, c::Snapshot>) -> Result<R, BchError>)
+    -> Result<R, BchError>
 {
     t.bkey_get_mut(Btree::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
-                   UpdateTriggerFlags::empty())
+                   UpdateTriggerFlags::empty(), edit)
 }
 
 /// The id - offset - of the first key in @btree @pred accepts: for the
@@ -113,13 +115,10 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
     }
 
     let Some(oldest) = fs.snapshots.oldest_subvol(root) else { return Ok(None) };
-    let Some(mut u) = t.bkey_get_mut::<c::Subvolume>(Btree::subvolumes, pos(0, oldest as u64),
-                                                     BtreeIterFlags::empty(),
-                                                     UpdateTriggerFlags::empty()).found()? else {
-        return Ok(None);
-    };
-    u.v_mut().set_snap(false);
-    Ok(Some(oldest))
+    let made = t.bkey_get_mut::<c::Subvolume, _>(Btree::subvolumes, pos(0, oldest as u64),
+                                                 BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
+                                                 |u| Ok(u.v_mut().set_snap(false))).found()?;
+    Ok(made.map(|()| oldest))
 }
 
 /// Tree key @k must name a root that points back, or it's deleted; and its
@@ -181,9 +180,7 @@ fn check_snapshot_tree<'t>(
         return Ok(());   /* nothing to be done here */
     };
 
-    let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty())?;
-    u.v_mut().master_subvol = subvol.into();
-    Ok(())
+    t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(), |u| Ok(u.v_mut().master_subvol = subvol.into()))
 }
 
 fn check_snapshot_trees(fs: &Fs) -> Result<(), BchError> {
@@ -566,8 +563,7 @@ fn topmost_dead_ancestor(t: &TransAttempt<'_, '_>, mut id: u32) -> Result<Option
 fn undelete_ancestors(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let Some(topmost) = topmost_dead_ancestor(t, id)? else { return Ok(()) };
 
-    let mut u = get_mut_node(t, topmost)?;
-    undelete_owns_data(t, &mut u)?;
+    edit_node(t, topmost, |u| undelete_owns_data(t, u))?;
     edge_repair_commit(t)
 }
 
@@ -801,16 +797,26 @@ fn check_edge<'a, 't>(
     other_id: u32,
 ) -> Result<(), BchError> {
     let Some(repair) = edge_repair(t, n, role, other_id)? else { return Ok(()) };
+    let id = n.id();
 
+    if let EdgeRepair::Retarget(new) = repair {
+        set_ptr(n.v_mut(t)?, role, other_id, new);
+        n.queue(t)?;
+        return edge_repair_commit(t);
+    }
+
+    // @n's repairs before the edge's: that may edit @n's key too - an
+    // undelete relinks through the parent - and of two updates of a key, the
+    // later's the one committed
+    n.queue(t)?;
     match repair {
         EdgeRepair::Undelete(id) =>
-            undelete_owns_data(t, &mut get_mut_node(t, id)?)?,
-        EdgeRepair::Retarget(new) =>
-            set_ptr(n.v_mut(t)?, role, other_id, new),
+            edit_node(t, id, |u| undelete_owns_data(t, u))?,
         EdgeRepair::Complete(old) =>
-            set_ptr(get_mut_node(t, other_id)?.v_mut(), role.other(), old, n.id()),
+            edit_node(t, other_id, |u| Ok(set_ptr(u.v_mut(), role.other(), old, id)))?,
         EdgeRepair::Resurrect =>
-            resurrect_child(t, n.id(), other_id)?,
+            resurrect_child(t, id, other_id)?,
+        EdgeRepair::Retarget(_) => unreachable!("repaired above"),
     }
     edge_repair_commit(t)
 }
@@ -840,14 +846,15 @@ fn tree_ptr_repair<'a, 't>(
 
     let tree = snapshot::tree_lookup(t, tree_id).found()?;
     if tree.is_none_or(|st| st.root_snapshot.get() != root_id) {
-        let mut new = snapshot::tree_create(t)?;
-        let v = new.v_mut();
-        v.master_subvol = fs.snapshots.oldest_subvol(root_id).unwrap_or(0).into();
-        v.root_snapshot = root_id.into();
-        tree_id = new.k().p.offset as u32;
+        tree_id = snapshot::tree_create(t, |new| {
+            let v = new.v_mut();
+            v.master_subvol = fs.snapshots.oldest_subvol(root_id).unwrap_or(0).into();
+            v.root_snapshot = root_id.into();
+            Ok(new.k().p.offset as u32)
+        })?;
 
         if root_id != id {
-            get_mut_node(t, root_id)?.v_mut().tree = tree_id.into();
+            edit_node(t, root_id, |u| Ok(u.v_mut().tree = tree_id.into()))?;
         }
     }
 
@@ -1054,7 +1061,7 @@ fn check_snapshot<'a, 't>(
     check_has_data(t, &mut n)?;
 
     if check_deleted(t, &mut n)? {
-        return Ok(());
+        return n.finish(t);
     }
 
     let parent = n.v().parent();
@@ -1075,7 +1082,8 @@ fn check_snapshot<'a, 't>(
 
     check_depth(t, &mut n)?;
     check_skiplists(t, &mut n)?;
-    check_to_subvol(t, &mut n)
+    check_to_subvol(t, &mut n)?;
+    n.finish(t)
 }
 
 /// check_snapshots, in @trans: also for snapshot deletion, which runs it
@@ -1173,11 +1181,10 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
 
     let tree_id = match tree_id {
         Some(tree_id) => tree_id,
-        None => {
-            let mut tree = snapshot::tree_create(t)?;
+        None => snapshot::tree_create(t, |tree| {
             tree.v_mut().root_snapshot = id.into();
-            tree.k().p.offset as u32
-        }
+            Ok(tree.k().p.offset as u32)
+        })?,
     };
 
     let mut n = t.bkey_alloc_typed::<c::Snapshot>()?;

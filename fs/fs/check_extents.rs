@@ -175,7 +175,7 @@ fn overwrite_extent<'a, 't>(
 ) -> Result<(), BchError> {
     if old.k().key_type() == BkeyType::extent_whiteout {
         old.k_mut().set_key_type(BkeyType::whiteout);
-        t.update(iter, &old, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+        t.update(iter, old, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
     } else {
         let d = new.durability_safe(t.fs());
         t.extra_disk_res_add(d.sectors_compressed as u64, d.nr_replicas as u32);

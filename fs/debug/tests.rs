@@ -101,7 +101,7 @@ fn test_delete(fs: &Fs, _nr: u64) -> TestRet {
         let mut k = trans_cookie_alloc(t)?;
         k.k_mut().p.snapshot = u32::MAX;
         iter.traverse(t)?;
-        t.update(&iter, &k, UpdateTriggerFlags::empty())
+        t.update(&iter, k, UpdateTriggerFlags::empty())
     })?;
 
     commit_do(&trans, None, NO_ENOSPC, |t| {
@@ -128,7 +128,7 @@ fn test_delete_written(fs: &Fs, _nr: u64) -> TestRet {
         let mut k = trans_cookie_alloc(t)?;
         k.k_mut().p.snapshot = u32::MAX;
         iter.traverse(t)?;
-        t.update(&iter, &k, UpdateTriggerFlags::empty())
+        t.update(&iter, k, UpdateTriggerFlags::empty())
     })?;
 
     trans.unlock();
@@ -613,7 +613,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
                 sp.update_block(|b| b + 1);
             }
 
-            t.update(&iter, &u, UpdateTriggerFlags::NORUN)?;
+            t.update(&iter, u, UpdateTriggerFlags::NORUN)?;
             t.commit(None, NO_ENOSPC)?;
             Ok(Some(true))
         })?;
@@ -656,7 +656,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
             let idx = k.k.p.offset;
 
             let u = t.bkey_make_mut_noupdate(k)?;
-            t.update(&u_iter, &u, UpdateTriggerFlags::NORUN)?;
+            t.update(&u_iter, u, UpdateTriggerFlags::NORUN)?;
             Ok(idx)
         })?;
 
@@ -908,7 +908,7 @@ fn rand_mixed(fs: &Fs, nr: u64) -> TestRet {
             if (i & 3) == 0 && found {
                 let mut cookie = trans_cookie_alloc(t)?;
                 cookie.k_mut().p = iter.pos();
-                t.update(&iter, &cookie, UpdateTriggerFlags::empty())?;
+                t.update(&iter, cookie, UpdateTriggerFlags::empty())?;
             }
 
             Ok(())
@@ -962,7 +962,7 @@ fn seq_overwrite(fs: &Fs, _nr: u64) -> TestRet {
                 return Ok(true);
             };
             let u = t.bkey_reassemble(k)?;
-            t.update(&iter, &u, UpdateTriggerFlags::empty())?;
+            t.update(&iter, u, UpdateTriggerFlags::empty())?;
             t.commit(None, NO_ENOSPC)?;
             Ok(false)
         })?;

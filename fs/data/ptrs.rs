@@ -1062,8 +1062,8 @@ pub fn drop_stale_ptrs<'a, 't>(
         return Ok(());
     };
 
-    t.bkey_make_mut(iter, k, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?.drop_stale_ptrs(fs);
-    Ok(())
+    t.bkey_make_mut(iter, k, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE,
+                    |u| Ok(u.drop_stale_ptrs(fs)))
 }
 
 // ── queries ──────────────────────────────────────────────────────────────
