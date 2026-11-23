@@ -777,13 +777,16 @@ fn merge_btree_node_one<'t>(t: &TransAttempt<'_, 't>, progress: &Progress<'_>, i
 
     let trans = t.trans();
     let path = iter.iter().path;
-    let level = usize::from(trans.paths()[path].level());
-    let Some(b) = trans.paths().held_btree_node(path, level) else { return Ok(true) };
+    let (level, needs_merge, end) = {
+        let paths = trans.paths();
+        let level = usize::from(paths[path].level());
+        let Some(b) = paths[path].locked_btree_node(level) else { return Ok(true) };
+        (level, b.needs_merge(b.contents(), t.fs(), 0), b.key().k.p)
+    };
 
     progress.update(t, iter.iter())?;
 
-    if !b.needs_merge(b.contents(), t.fs(), 0) {
-        let end = b.key().k.p;
+    if !needs_merge {
         if end == SPOS_MAX {
             return Ok(true);
         }
