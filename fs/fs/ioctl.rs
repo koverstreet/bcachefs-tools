@@ -192,7 +192,7 @@ fn readdir_plain(fs: &Fs, dir: c::subvol_inum, flags: u32, out: &mut Entries, po
         let next = k.k.p.offset + 1;
 
         if readdir_filter(t, flags, dir, view, d, target)? &&
-           !out.emit(t, d.name().as_bytes(), |reclen| c::bch_ioctl_readdir_entry {
+           !out.emit(t, d.name().as_bytes(), |reclen| c::bch_ioctl_readdir_entry_head {
                reclen, d_type: d.d_type(), inum: target.inum, ..Default::default()
            })? {
             return Ok(ControlFlow::Break(()));
@@ -248,7 +248,7 @@ where
             return Ok(Emitted::Skipped);
         }
 
-        let hdr = |reclen| c::bch_ioctl_readdir_entry { reclen, d_type, inum: n.inum, ..Default::default() };
+        let hdr = |reclen| c::bch_ioctl_readdir_entry_head { reclen, d_type, inum: n.inum, ..Default::default() };
         Ok(if self.out.emit(t, name, hdr)? { Emitted::Yes } else { Emitted::Full })
     }
 
@@ -417,7 +417,7 @@ where
 
             if found {
                 let otime = fs.time_to_timespec(s.otime.lo.get() as i64);
-                let hdr = |reclen| c::bch_ioctl_subvol_dirent {
+                let hdr = |reclen| c::bch_ioctl_subvol_dirent_head {
                     reclen,
                     subvolid:        child,
                     flags:           s.flags.into_bits().get(),

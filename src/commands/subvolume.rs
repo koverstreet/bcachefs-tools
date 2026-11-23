@@ -11,7 +11,7 @@ use bcachefs_kernel::c::{
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};
-use bcachefs_kernel::util::vstructs::{plain_bytes, FakeFlexArray, Plain, VstructRefEntries};
+use bcachefs_kernel::util::vstructs::{plain_bytes, FakeFlexArray, Plain, UnvalidatedEntries, Unvalidated};
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl, IoctlBuf,
@@ -263,11 +263,10 @@ fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
         anyhow!("BCH_IOCTL_SUBVOLUME_LIST: {} bytes used, of {}", arg.used, arg.buf_size)
     })?;
 
-    VstructRefEntries::<bch_ioctl_subvol_dirent>::new(reply)
+    UnvalidatedEntries::<bch_ioctl_subvol_dirent<Unvalidated>>::new(reply)
         .map(|d| {
             let d = d?;
-            let path = &d.as_bytes()[mem::offset_of!(bch_ioctl_subvol_dirent, path)..];
-            let path = CStr::from_bytes_until_nul(path)
+            let path = CStr::from_bytes_until_nul(plain_bytes(&d.path))
                 .map_err(|_| anyhow!("subvolume {}: path not NUL-terminated", d.subvolid))?;
 
             Ok(SubvolEntry {

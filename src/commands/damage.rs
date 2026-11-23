@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::sb::errors::SbErrorId;
-use bcachefs_kernel::util::vstructs::{plain_bytes, Head, VstructRefEntries};
+use bcachefs_kernel::util::vstructs::{plain_bytes, Head, UnvalidatedEntries, Unvalidated};
 use clap::{Parser, Subcommand};
 
 use crate::util::open_dir;
@@ -150,11 +150,10 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Ent
     let reply = plain_bytes(&buf[..]).get(..arg.used as usize)
         .ok_or_else(|| anyhow!("{} bytes used, of {}", arg.used, arg.buf_size))?;
 
-    VstructRefEntries::<c::bch_ioctl_readdir_entry>::new(reply)
+    UnvalidatedEntries::<c::bch_ioctl_readdir_entry<Unvalidated>>::new(reply)
         .map(|e| {
             let e = e?;
-            let name = &e.as_bytes()[mem::offset_of!(c::bch_ioctl_readdir_entry, name)..];
-            let name = CStr::from_bytes_until_nul(name)
+            let name = CStr::from_bytes_until_nul(&e.name)
                 .map_err(|_| anyhow!("inode {}: name not NUL-terminated", e.inum))?;
             ensure!(!name.is_empty(), "inode {}: empty name", e.inum);
 

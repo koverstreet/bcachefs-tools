@@ -302,12 +302,16 @@ struct FamilyArgs {
     /// they start if not past its header - vstruct!()'s.
     u64s: Option<TokenStream>,
     start: Option<TokenStream>,
+    /// `bytes = FIELD`: an unsized type's length in bytes, its header's
+    /// included - an ioctl reply record's reclen.
+    bytes: Option<Ident>,
     /// `entries = [thin] E`: what its entries are - vstruct_container!()'s.
     entries: Option<TokenStream>,
 }
 
 /// @attr, a family attribute's arguments: an error for one it doesn't take -
-/// @takes, of "count", "tail", "from", "bkey", "u64s", "start" and "entries" -
+/// @takes, of "count", "tail", "from", "bkey", "u64s", "start", "bytes" and
+/// "entries" -
 /// or one not written as its kind is. The caller names the attribute and the
 /// struct.
 fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> {
@@ -340,6 +344,10 @@ fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> 
                     }
                     "u64s"    => ("u64s", args.u64s.replace(v).is_some()),
                     "start"   => ("start", args.start.replace(v).is_some()),
+                    "bytes"   => {
+                        let bytes = syn::parse2(v).map_err(|_| format!("({part}): bytes = FIELD"))?;
+                        ("bytes", args.bytes.replace(bytes).is_some())
+                    }
                     "entries" => ("entries", args.entries.replace(v).is_some()),
                     k => return Err(format!("no argument {k}")),
                 }
@@ -364,12 +372,22 @@ fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> 
 
 /// @name's vstruct!() and vstruct_container!(), from its attribute's `u64s =
 /// PATH[, start = EXPR]` and `entries = [thin] E`: an unsized type's, with
-/// @head, counted by its header.
+/// @head, counted by its header - or, `bytes = FIELD`, its length in bytes.
 fn vstruct_of(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStream, String> {
     let vs = vs();
     if args.start.is_some() && args.u64s.is_none() {
         return Err(format!("{name}: start = without u64s = - it's where the u64s count from"));
     }
+    if args.bytes.is_some() && args.u64s.is_some() {
+        return Err(format!("{name}: bytes = and u64s = - its length is one or the other"));
+    }
+    let bytes = args.bytes.as_ref().map(|c| quote! {
+        impl #vs::FakeDst for #head {
+            fn bytes(&self) -> usize {
+                #vs::Count::count(&{ self.#c })
+            }
+        }
+    });
     let start = args.start.as_ref().map(|s| quote!(, start = #s));
     let u64s = args.u64s.as_ref().map(|c| {
         let impls = states().map(|st| quote! {
@@ -383,7 +401,7 @@ fn vstruct_of(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStre
         quote!(#vs::vstruct!(unsized #head, #c #start); #(#impls)*)
     });
     let entries = args.entries.as_ref().map(|e| quote!(#vs::vstruct_container!(#name, #head, #e);));
-    Ok(quote!(#u64s #entries))
+    Ok(quote!(#u64s #bytes #entries))
 }
 
 /// The states an own-count family's X<S> is SelfSized in: those it's had
@@ -597,18 +615,22 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
 /// its header; a btree node's, its bset's keys - or `tail = NAME: [E]`, an
 /// array X calls NAME.
 ///
-/// `u64s = PATH[, start = EXPR]` is its count, vstruct!()'s; `entries = [thin]
-/// E`, what its entries are, vstruct_container!()'s.
+/// `u64s = PATH[, start = EXPR]` is its count, vstruct!()'s; `bytes = FIELD`,
+/// its length in bytes, its header's included, FIELD private in each state's
+/// definition as a #[counted] count is; `entries = [thin] E`, what its entries
+/// are, vstruct_container!()'s.
 pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item)?;
     let name = &def.ident;
     let last = def.fields.last().ok_or_else(|| format!("{name}: an unsized vstruct has fields"))?;
-    let args = family_args(attr, &["tail", "u64s", "start", "entries"]).map_err(|e| format!("{name}: {e}"))?;
+    let args = family_args(attr, &["tail", "u64s", "start", "bytes", "entries"])
+        .map_err(|e| format!("{name}: {e}"))?;
     let written = crate::tokens::derived(name, "head");
     let vstruct = vstruct_of(name, &written, &args)?;
+    let private = args.bytes.iter().cloned().collect();
     let (tail, elem, fields) = own_tail(&def, args.tail, "unsized_vstruct")?;
     let last = &last.ident;
-    let shape = Shape { repr: repr_attrs(&def), fields, private: Vec::new(), head: written.clone(),
+    let shape = Shape { repr: repr_attrs(&def), fields, private, head: written.clone(),
                         deref: written.clone(), tail, elem, tail_at: None };
 
     let mut out = rename_struct(item, &def, &written)?;

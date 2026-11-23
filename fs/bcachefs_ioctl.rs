@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
-use cstruct_macros::{bch_enum, ioctl, counted, MaybeZeroable, Plain, TypeInfo, FakeFlexArray};
+use cstruct_macros::{bch_enum, ioctl, counted, unsized_vstruct, MaybeZeroable, Plain, TypeInfo, FakeFlexArray};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -190,6 +190,7 @@ pub struct bch_ioctl_readdir_flags {
  * Deliberately knows nothing about the filters that selected it: damage
  * details come from BCHFS_IOC_GET_DAMAGE on the file itself.
  */
+#[unsized_vstruct(bytes = reclen)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_readdir_entry {
@@ -198,13 +199,6 @@ pub struct bch_ioctl_readdir_entry {
     pub pad: [u8; 3],
     pub inum: u64,
     pub name: [u8; 0],
-}
-
-impl crate::util::vstructs::FakeDst for bch_ioctl_readdir_entry {
-    /// reclen: the header, the name and its NUL, padding to 8.
-    fn bytes(&self) -> usize {
-        self.reclen as usize
-    }
 }
 
 #[repr(C)]
@@ -756,6 +750,7 @@ pub struct bch_ioctl_query_counters {
     pub d: [u64; 0],
 }
 
+#[unsized_vstruct(bytes = reclen)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_subvol_dirent {
@@ -767,13 +762,6 @@ pub struct bch_ioctl_subvol_dirent {
     pub otime_nsec: u32,
     pub pad: u32,
     pub path: [c_char; 0],
-}
-
-impl crate::util::vstructs::FakeDst for bch_ioctl_subvol_dirent {
-    /// reclen: the header, the path and its NUL, padding to 8.
-    fn bytes(&self) -> usize {
-        self.reclen as usize
-    }
 }
 
 /*

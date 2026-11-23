@@ -53,7 +53,6 @@
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val, MaybeUninit};
-use core::ops::Deref;
 
 /// Every byte of every value initialized - no padding, and no variant that
 /// leaves some unwritten, as a None in a niche can - so a value can be
@@ -445,7 +444,7 @@ macro_rules! vstruct_container {
 }
 pub(crate) use vstruct_container;
 
-// ---- VstructRef: bytes whose counts haven't been checked ---------------
+// ---- Bytes whose counts haven't been checked ---------------------------
 
 /// Bytes that can't be the value read from them: they don't hold its header,
 /// aligned, or as many as its count says. What from_bytes() and the checked
@@ -512,91 +511,6 @@ pub fn read_plain<T: Plain>(b: &[u8]) -> Result<T, VStructError> {
     Ok(unsafe { b.as_ptr().cast::<T>().read_unaligned() })
 }
 
-/// A thin entry - a T whose header says how long it is: a key - and its
-/// bytes, in state S: its container's, walked out of one, or Unvalidated,
-/// bytes from outside - off a device, from the kernel. Its header's count is
-/// checked against them when it's made, an overrun an error; then it's those
-/// bytes exactly, header and tail, and the header's fields are fields.
-pub struct VstructRef<'a, T, S: State = Unvalidated> {
-    bytes: &'a [u8],
-    _t:    PhantomData<(&'a T, S)>,
-}
-
-impl<T, S: State> Clone for VstructRef<'_, T, S> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T, S: State> Copy for VstructRef<'_, T, S> {}
-
-impl<T, S: State> Deref for VstructRef<'_, T, S> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        // SAFETY: its maker checked the header is there, aligned, and T is Plain
-        unsafe { &*self.bytes.as_ptr().cast::<T>() }
-    }
-}
-
-impl<'a, T: Plain + FakeDst> VstructRef<'a, T> {
-    /// The T at the start of @bytes from outside, as many of them as its
-    /// header says.
-    pub fn new(bytes: &'a [u8]) -> Result<Self, VStructError> {
-        let len = checked_bytes::<T>(bytes)?;
-        Ok(Self { bytes: &bytes[..len], _t: PhantomData })
-    }
-}
-
-impl<'a, T, S: State> VstructRef<'a, T, S> {
-    /// Its bytes, header and tail.
-    pub fn as_bytes(&self) -> &'a [u8] {
-        self.bytes
-    }
-}
-
-impl<'a, T, S: State> InState for VstructRef<'a, T, S> {
-    type In<U: State> = VstructRef<'a, T, U>;
-    type State = S;
-}
-
-/// An unsized container's thin entries, keys - each an VstructRef of
-/// its own bytes, checked against what's left: an Unvalidated
-/// jset_entry's entries().
-pub struct VstructRefEntries<'a, E> {
-    /// None after an error
-    rest:   Option<&'a [u8]>,
-    at:     usize,
-    _entry: PhantomData<&'a E>,
-}
-
-impl<'a, E> VstructRefEntries<'a, E> {
-    /// The entries in @rest: an unsized container's, from its start[] - or
-    /// an ioctl's reply, keys one after another.
-    pub fn new(rest: &'a [u8]) -> Self {
-        Self { rest: Some(rest), at: 0, _entry: PhantomData }
-    }
-}
-
-impl<'a, E: Plain + FakeDst + 'a> Iterator for VstructRefEntries<'a, E> {
-    type Item = Result<VstructRef<'a, E>, VStructError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let rest = self.rest.filter(|r| !r.is_empty())?;
-        match VstructRef::<E>::new(rest) {
-            Ok(e) => {
-                self.rest = Some(&rest[e.bytes.len()..]);
-                self.at += e.bytes.len();
-                Some(Ok(e))
-            }
-            Err(err) => {
-                self.rest = None;
-                Some(Err(err))
-            }
-        }
-    }
-}
-
 /// A walk over entries that knows where it is: offset() is where the entry
 /// next() returns starts, in bytes from where the walk did - as an entry's
 /// own length is.
@@ -617,12 +531,6 @@ impl<I: EntryWalk> Iterator for WithOffsets<I> {
     fn next(&mut self) -> Option<Self::Item> {
         let at = self.0.offset();
         self.0.next().map(|e| (at, e))
-    }
-}
-
-impl<'a, E: Plain + FakeDst + 'a> EntryWalk for VstructRefEntries<'a, E> {
-    fn offset(&self) -> usize {
-        self.at
     }
 }
 
