@@ -667,14 +667,14 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
  * for leaf nodes -- inserts into interior nodes have to be atomic.
  */
 pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx,
-                          b: Node<'_>) -> Result<(), BchError> {
+                          level: usize) -> Result<(), BchError> {
     let trans = update.trans();
     let fs = trans.fs();
-    let level = usize::from(b.c.level.get());
 
     let u64s_and_live = |b: &BtreeNode, contents: &NodeContents| {
         (b.keys(contents).bset(contents.last_set()).u64s(), contents.nr.live_u64s)
     };
+    let b = paths[path].locked_btree_node(level).expect("an interior update's node with no parent");
     let (old_u64s, old_live_u64s) = u64s_and_live(&b, b.contents());
 
     assert!(level > 0, "inserting pointers into a leaf");

@@ -812,8 +812,7 @@ impl<'t> InteriorUpdate<'t> {
     /// it, and up, if it doesn't fit.
     pub(crate) fn insert_into_parent(&self, paths: &mut Paths<'_>, path: PathIdx,
                                      level: usize) -> Result<(), BchError> {
-        let parent = paths.held_btree_node(path, level + 1).expect("an interior update's node with no parent");
-        split_merge::insert_node(self, paths, path, parent)
+        split_merge::insert_node(self, paths, path, level + 1)
     }
 
     /// @old - each held by its path - swapped for @new, linked in: the old

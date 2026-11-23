@@ -78,11 +78,11 @@ fn gc_btree_root(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(), BchError>
     if !iter.peek(t)?.is_some_and(|b| fs.btree_id_root(btree.0).is_some_and(|r| ptr::eq(r, &*b))) {
         return Err(t.restart(Errcode::transaction_restart_lock_root_race));
     }
-    let b = t.trans().paths().held_btree_node(iter.iter().path, level.into()).expect("the node it peeked");
+    let key = t.trans().paths()[iter.iter().path].locked_btree_node(level.into()).expect("the node it peeked").key_peek();
 
     let level = u32::from(level) + 1;
     fs.gc.set_pos(c::gc_pos::in_btree(btree, level as u16, SPOS_MAX));
-    gc_mark_key(t, btree, level, iter.iter(), BkeySC::from(b.key()))
+    gc_mark_key(t, btree, level, iter.iter(), BkeySC::from(&*key))
 }
 
 fn gc_btree(trans: &BtreeTrans<'_>, progress: &Progress<'_>, btree: Btree, target_depth: u32)
