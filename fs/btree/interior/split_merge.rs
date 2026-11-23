@@ -114,7 +114,7 @@ pub(crate) fn insert_keys_interior(t: &TransAttempt<'_, '_>, paths: &mut Paths<'
         inserted += usize::from(k.k().u64s);
         let mut b = paths[path].locked_btree_node_mut(level).expect("a node to insert into, write locked");
         if let Some(ins) = insert_fixup_btree_ptr(t, &mut b, &mut node_iter, &pos, k).filter(KeyInsert::needs_fix) {
-            trans.node_iter_fix(paths, path, level, ins);
+            trans.node_iter_fix(paths, path, level, ins, None);
         }
     }
 

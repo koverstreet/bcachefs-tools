@@ -7,7 +7,7 @@ use core::sync::atomic::Ordering::Relaxed;
 
 use super::aux_tree::pack_pos_or_unpacked;
 use super::iter::KeyIter;
-use super::keys::key_at;
+use super::keys::{key_at, Keys};
 use super::sort::maybe_compact_whiteouts;
 use super::{BtreeNode, NodeContents};
 use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
@@ -78,6 +78,16 @@ impl KeyInsert {
 
     pub(crate) fn needs_fix(&self) -> bool {
         self.moved() || self.modified.is_some()
+    }
+
+    /// @iter, a path's at @keys' node, which is at @pos, fixed for the insert.
+    pub(crate) fn fix(&self, iter: &mut KeyIter, keys: &Keys<'_>, pos: &Bpos) {
+        if self.moved() {
+            iter.fix(keys, keys.node().c.level.get(), keys.bkey_to_bset(self.where_), self.where_,
+                     self.clobber_u64s, self.new_u64s, self.modified, pos);
+        } else if let Some(k) = self.modified {
+            iter.fix_key_modified(keys, k, pos);
+        }
     }
 }
 
@@ -324,16 +334,34 @@ impl BtreeTrans<'_> {
         let set_u64s = |c: &NodeContents| c.last_set().u64s() as isize;
         let live_u64s = |c: &NodeContents| c.nr.live_u64s as isize;
 
+        let pos = paths[idx].pos;
         let node_iter = paths[idx].l[level].iter;
-        let mut b = paths[locked].locked_btree_node_mut(level).expect("a node to insert into, write locked");
+
+        /*
+         * With the path's own iterator, if it's the path that write locked the
+         * node: that's fixed for the insert under the Write view, the other
+         * paths' after.
+         */
+        let (mut b, own_iter) = if locked == idx {
+            let (b, iter) = paths[idx].locked_level_write(level).expect("a node to insert into, write locked");
+            (b, Some(iter))
+        } else {
+            (paths[locked].locked_btree_node_mut(level).expect("a node to insert into, write locked"), None)
+        };
         let (old_u64s, old_live_u64s) = (set_u64s(b.contents()), live_u64s(b.contents()));
 
         let Some(ow) = bset_overwrite(&mut b, &node_iter, insert) else { return };
         let ins = bset_insert(&mut b, &node_iter, insert, ow);
 
+        let fixed = own_iter.filter(|_| ins.needs_fix()).map(|iter| {
+            ins.fix(iter, &b.keys(b.contents()), &pos);
+            idx
+        });
+
         /*
-         * The paths' iterators are fixed for the insert after, unless the node
-         * was compacted, which reinits them: nothing between moves its keys.
+         * The other paths' iterators are fixed for the insert after, unless the
+         * node was compacted, which reinits them all: nothing between moves its
+         * keys.
          */
         let compacted = if unlikely(level != 0 && self.insert_topology_check(t, b.held())) {
             false
@@ -370,7 +398,7 @@ impl BtreeTrans<'_> {
         if compacted {
             self.node_reinit_iter(t, pu, idx, level);
         } else if ins.needs_fix() {
-            self.node_iter_fix(paths, idx, level, ins);
+            self.node_iter_fix(paths, idx, level, ins, fixed);
         }
     }
 }

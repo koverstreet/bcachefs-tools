@@ -921,7 +921,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         };
 
         if let Some(ins) = ins.filter(KeyInsert::needs_fix) {
-            trans.node_iter_fix(&mut paths, idx, lvl, ins);
+            trans.node_iter_fix(&mut paths, idx, lvl, ins, None);
         }
         trans.node_unlock_write(&mut paths, idx, lvl);
         Ok(())

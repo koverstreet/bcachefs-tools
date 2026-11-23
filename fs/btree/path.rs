@@ -1228,8 +1228,25 @@ impl BtreePath {
     /// path's memory, and with only the iterator borrowed it stays locked.
     #[inline(always)]
     pub(crate) fn locked_level_mut(&mut self, level: usize) -> Option<(LockedNode<'_, BtreeNode>, &mut KeyIter)> {
+        self.locked_level_as(level)
+    }
+
+    /// locked_level_mut(), of a node the path holds write locked: its Write
+    /// view.
+    #[inline(always)]
+    pub(crate) fn locked_level_write(&mut self, level: usize)
+        -> Option<(LockedNode<'_, BtreeNode, Write>, &mut KeyIter)>
+    {
+        self.locked_level_as(level)
+    }
+
+    #[inline(always)]
+    fn locked_level_as<M: NodeMode>(&mut self, level: usize) -> Option<(LockedNode<'_, BtreeNode, M>, &mut KeyIter)> {
+        if !M::held_by(self.locked_type(level)) {
+            return None;
+        }
         let b = ptr::from_ref(self.locked_btree_node(level)?.node());
-        Some((unsafe { LockedNode::new(&*b) }, &mut self.l[level].iter))
+        Some((LockedNode { node: unsafe { &*b }, _mode: PhantomData }, &mut self.l[level].iter))
     }
 
     /// A cached path's key cache entry, which it holds locked: None if it's
@@ -1705,6 +1722,23 @@ impl PathNodeContents for c::bkey_cached {
 /// for Write, its contents by &mut.
 pub struct Held;
 pub struct Write;
+
+/// A LockedNode mode, by what a path level has to hold for it.
+trait NodeMode {
+    fn held_by(locked: BtreeNodeLockedType) -> bool;
+}
+
+impl NodeMode for Held {
+    fn held_by(locked: BtreeNodeLockedType) -> bool {
+        locked != BTREE_NODE_UNLOCKED
+    }
+}
+
+impl NodeMode for Write {
+    fn held_by(locked: BtreeNodeLockedType) -> bool {
+        locked == BTREE_NODE_WRITE_LOCKED
+    }
+}
 
 /// A node a path has locked, borrowed from the attempt as a key is: good until
 /// the attempt's next unlock or error, which nothing checks (see TransRef).
