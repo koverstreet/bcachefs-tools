@@ -139,7 +139,6 @@ pub struct InodeUnpackedBiFlags {
     str_hash: c::StrHashKind,
     __:       u8,
 }
-crate::one_word!(InodeUnpackedBiFlags);
 
 macro_rules! __V3_FIELDS_MAX_BYTES {
     ($(($_name:tt, $_bits:tt)),* $(,)?) => {

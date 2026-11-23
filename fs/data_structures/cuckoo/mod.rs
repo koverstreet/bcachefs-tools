@@ -63,7 +63,7 @@ impl<I> Contents<I> {
 /// What a table's slots hold, a word each.
 ///
 /// XXX: not cuckoo's. Atomic, load() and store() are util/projections'
-/// AtomicWord again, with orderings, and Contents for the words that aren't
+/// Volatile again, with orderings, and Contents for the words that aren't
 /// items. And target() is Borrow, but for an entry's deref being unsafe -
 /// which is the RCU types' to say: see Entry.
 ///

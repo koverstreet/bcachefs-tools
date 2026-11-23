@@ -149,7 +149,7 @@ use crate::locking::Guard as _;
 use crate::sb::errors::SbErrorId;
 use crate::sb::members;
 use crate::data_structures::bitmap::LeBitmap;
-use crate::util::projections::{AtomicWord, Volatile, VolatileWriter, PublishedOnce};
+use crate::util::projections::{Volatile, VolatileWriter, PublishedOnce};
 use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
@@ -2739,12 +2739,12 @@ pub fn sb_field_u64s<F: SbSection<Arm: Unsized> + ?Sized>(nr: usize) -> u32 {
 // ── The filesystem's copies ──────────────────────────────────────────────
 
 /// c->sb's words of @a, as they are.
-fn get_all<T: AtomicWord, const N: usize>(a: &[Volatile<T>; N]) -> [T; N] {
+fn get_all<T: Copy, const N: usize>(a: &[Volatile<T>; N]) -> [T; N] {
     a.each_ref().map(Volatile::get)
 }
 
 /// c->sb's words of @a set to @v: @a as sb_lock's holder has it.
-pub(crate) fn set_all<T: AtomicWord, const N: usize>(a: &[VolatileWriter<T>; N], v: [T; N]) {
+pub(crate) fn set_all<T: Copy, const N: usize>(a: &[VolatileWriter<T>; N], v: [T; N]) {
     for (w, v) in a.iter().zip(v) {
         w.set(v);
     }

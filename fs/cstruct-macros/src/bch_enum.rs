@@ -462,7 +462,6 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
         }
         // SAFETY: its integer, every value of which is one
         unsafe impl crate::util::vstructs::Plain for #name {}
-        crate::one_word!(#name);
         #(#le_values)*
     });
     out.extend(match e.kind {

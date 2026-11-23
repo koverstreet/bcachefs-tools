@@ -14,7 +14,7 @@ use crate::util::alloc::{Flags, init_at};
 use crate::util::ffi::c_char;
 use crate::os::kernel::time_after64;
 use crate::os::percpu::{CpuGuard, PerCpu};
-use crate::util::projections::{AtomicWord, Volatile};
+use crate::util::projections::Volatile;
 use crate::util::rcu::{self, FreeAnytime};
 use crate::os::sched;
 use crate::util::sleep::{sleep_until, Sleep};
@@ -23,7 +23,7 @@ use core::ffi::{c_int, c_uint, c_ulong, CStr};
 use core::mem::ManuallyDrop;
 use core::ptr::{self, null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
-use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr, AtomicU32};
+use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr};
 use cstruct_macros::{bch_enum, MaybeZeroable};
 
 #[bch_enum(closed)]
@@ -32,19 +32,6 @@ pub enum SixLockType {
     SIX_LOCK_read,
     SIX_LOCK_intent,
     SIX_LOCK_write,
-}
-
-/* C's enum, a u32: zeroes are SIX_LOCK_read, and it's only ever set() to one */
-unsafe impl AtomicWord for SixLockType {
-    type Atomic = AtomicU32;
-
-    fn load(a: &AtomicU32) -> Self {
-        SixLockType::from_bits(a.load(Relaxed))
-    }
-
-    fn store(a: &AtomicU32, ty: Self) {
-        a.store(ty as u32, Relaxed)
-    }
 }
 
 /* its own thread's, read by the waker and by other threads' cycle detectors */

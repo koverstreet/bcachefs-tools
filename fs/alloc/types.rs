@@ -64,7 +64,6 @@ unsafe impl pin_init::ZeroableOption for OpenBucketIdx {}
 
 // SAFETY: a u16, any of which is an Option of one - 0 None
 unsafe impl crate::util::vstructs::Plain for Option<OpenBucketIdx> {}
-crate::one_word!(Option<OpenBucketIdx>);
 
 impl OpenBucketIdx {
     /// Slot @idx's index - None for 0, the sentinel's.
@@ -88,7 +87,6 @@ unsafe impl pin_init::ZeroableOption for WritePointIdx {}
 
 // SAFETY: a u8, any of which is an Option of one - 0 None
 unsafe impl crate::util::vstructs::Plain for Option<WritePointIdx> {}
-crate::one_word!(Option<WritePointIdx>);
 
 impl WritePointIdx {
     pub fn new(idx: usize) -> Self {
@@ -205,19 +203,6 @@ pub struct OpenBucketId {
     pub dev: u8,
     pub generation: u8,
     pub bucket: u47,
-}
-
-// SAFETY: a u64, as AtomicU64 is laid out; zeroes are one, not valid
-unsafe impl crate::util::projections::AtomicWord for OpenBucketId {
-    type Atomic = AtomicU64;
-
-    fn load(a: &AtomicU64) -> Self {
-        Self::from_bits(a.load(core::sync::atomic::Ordering::Relaxed))
-    }
-
-    fn store(a: &AtomicU64, v: Self) {
-        a.store(v.into_bits(), core::sync::atomic::Ordering::Relaxed)
-    }
 }
 
 published! {

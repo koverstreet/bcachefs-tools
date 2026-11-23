@@ -28,7 +28,7 @@ use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, PercpuRwSe
 use crate::debug::trace::events;
 use crate::util::alloc::{init_at, AllocError, KVVec};
 use crate::util::place::{up, FieldPath};
-use crate::util::projections::{TearSafe, Volatile};
+use crate::util::projections::Volatile;
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt, warn_once};
 
@@ -116,15 +116,13 @@ impl core::fmt::Display for Symbol {
 
 /* The devices an entry was written to: a word, so never seen torn */
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Zeroable)]
 pub struct PinDevs {
     nr:   u8,
     devs: [u8; c::BCH_REPLICAS_MAX as usize],
     /* a word is loaded as an integer: no padding, every byte initialized */
     _pad: [u8; 7 - c::BCH_REPLICAS_MAX as usize],
 }
-
-unsafe impl TearSafe for PinDevs {}
 
 impl PinDevs {
     /*

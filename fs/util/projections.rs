@@ -57,10 +57,9 @@
 
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
-use core::mem::{align_of, size_of, MaybeUninit};
+use core::mem::{align_of, size_of, transmute_copy, ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
-                         AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering, Ordering::Relaxed};
 
 use crate::locking::{ExclusiveGuard, RawLock};
 use crate::util::vstructs::{Native, Plain};
@@ -216,44 +215,10 @@ macro_rules! published {
 
 // ── Volatile words ───────────────────────────────────────────────────────
 
-/// A value with an atomic of its own size: what a Volatile is stored as - or,
-/// for a TearSafe value, Torn.
-///
-/// # Safety
-/// Atomic is laid out as Self is, and all zeroes is a Self: a Volatile in
-/// zeroed memory - as C allocates its structs - is a valid one.
-pub unsafe trait AtomicWord: Copy {
-    type Atomic;
-
-    fn load(a: &Self::Atomic) -> Self;
-    fn store(a: &Self::Atomic, v: Self);
-}
-
-macro_rules! atomic_word {
-    ($($t:ty => $a:ty),* $(,)?) => { $(
-        // SAFETY: core's atomic of the same type; zeroes are 0, or false
-        unsafe impl AtomicWord for $t {
-            type Atomic = $a;
-
-            fn load(a: &$a) -> $t {
-                a.load(Ordering::Relaxed)
-            }
-
-            fn store(a: &$a, v: $t) {
-                a.store(v, Ordering::Relaxed)
-            }
-        }
-    )* };
-}
-atomic_word!(bool => AtomicBool, u8 => AtomicU8, u16 => AtomicU16, u32 => AtomicU32, u64 => AtomicU64,
-             usize => AtomicUsize, i8 => AtomicI8, i16 => AtomicI16, i32 => AtomicI32, i64 => AtomicI64,
-             isize => AtomicIsize);
-
 /// A value whose readers are fine with seeing it torn - each word as some
 /// write left it, not all from the same one: a position read for progress,
-/// say. An AtomicWord whose storage is Torn, so a Volatile of it is read and
-/// written a word at a time. One word at its alignment can't tear:
-/// one_word!() says so, checked.
+/// say. A Volatile of it is loaded and stored a word at a time - of its
+/// alignment, up to a u64.
 ///
 /// Its words are only ever stored whole, from values of it: a torn one is
 /// each word of some value, never bytes no value had. So a bool field is
@@ -261,133 +226,111 @@ atomic_word!(bool => AtomicBool, u8 => AtomicU8, u16 => AtomicU16, u32 => Atomic
 /// rule it out.
 ///
 /// # Safety
-/// All zeroes is a value of it; so is any value whose every word is the same
-/// word of some value; and a torn value is one its readers can take.
-pub unsafe trait TearSafe: Copy {}
+/// Any value whose every word is the same word of some value is a value of
+/// it, and one its readers can take.
+#[rustc_specialization_trait]
+pub unsafe trait TearSafe {}
 
-/// A TearSafe value as a Volatile holds it: loaded and stored a word at a
-/// time - of its alignment, up to a u64 - by relaxed atomics.
-#[repr(transparent)]
-pub struct Torn<T>(UnsafeCell<T>);
-
-// SAFETY: every access is a word's atomic load or store
-unsafe impl<T: TearSafe + Send> Sync for Torn<T> {}
-
-trait Word: Copy {
+/// How a Volatile loads and stores a T: whole, by one atomic of its size - a
+/// build error if it's more than a word at its alignment - or, if it's
+/// TearSafe, a word at a time.
+trait Whole: Sized {
     /// # Safety
-    /// @p is an aligned, live word, accessed only atomically meanwhile.
+    /// @p is a live T, accessed only through Whole meanwhile.
     unsafe fn load(p: *mut Self) -> Self;
     /// # Safety
     /// As load()'s.
     unsafe fn store(p: *mut Self, v: Self);
 }
 
-macro_rules! word {
-    ($($t:ty => $a:ty),*) => { $(
-        impl Word for $t {
-            unsafe fn load(p: *mut $t) -> $t {
-                // SAFETY: the caller's
-                unsafe { <$a>::from_ptr(p) }.load(Ordering::Relaxed)
-            }
-
-            unsafe fn store(p: *mut $t, v: $t) {
-                // SAFETY: the caller's
-                unsafe { <$a>::from_ptr(p) }.store(v, Ordering::Relaxed)
-            }
-        }
-    )* };
+/// T's size, one word at its alignment - or a build error.
+const fn one_word<T>() -> usize {
+    assert!(size_of::<T>() == align_of::<T>() && size_of::<T>() <= size_of::<u64>(),
+            "a Volatile of more than a word at its alignment: is it TearSafe?");
+    size_of::<T>()
 }
-word!(u8 => AtomicU8, u16 => AtomicU16, u32 => AtomicU32, u64 => AtomicU64);
+
+/// @body, @a the atomic of @T's size at @p: unsafe, as from_ptr() is. A
+/// pointer-sized @T's is an AtomicPtr, so a pointer keeps its provenance.
+macro_rules! with_atomic {
+    ($t:ty, $p:expr, |$a:ident| $body:expr) => {
+        match const { one_word::<$t>() } {
+            n if n == size_of::<usize>() => { let $a = AtomicPtr::<u8>::from_ptr($p.cast()); $body }
+            1 => { let $a = AtomicU8::from_ptr($p.cast()); $body }
+            2 => { let $a = AtomicU16::from_ptr($p.cast()); $body }
+            4 => { let $a = AtomicU32::from_ptr($p.cast()); $body }
+            _ => { let $a = AtomicU64::from_ptr($p.cast()); $body }
+        }
+    };
+}
+
+impl<T> Whole for T {
+    default unsafe fn load(p: *mut T) -> T {
+        unsafe { with_atomic!(T, p, |a| transmute_copy(&a.load(Relaxed))) }
+    }
+
+    default unsafe fn store(p: *mut T, v: T) {
+        let v = ManuallyDrop::new(v);
+        unsafe { with_atomic!(T, p, |a| a.store(transmute_copy(&*v), Relaxed)) }
+    }
+}
+
+/// A TearSafe T's word: its alignment, up to a u64's - which a T is a whole
+/// number of.
+const fn word<T>() -> usize {
+    if align_of::<T>() < size_of::<u64>() { align_of::<T>() } else { size_of::<u64>() }
+}
+
+/// @body, @W the integer of a TearSafe @T's word.
+macro_rules! with_word {
+    ($t:ty, |$w:ident| $body:expr) => {
+        match word::<$t>() {
+            1 => { type $w = u8; $body }
+            2 => { type $w = u16; $body }
+            4 => { type $w = u32; $body }
+            _ => { type $w = u64; $body }
+        }
+    };
+}
 
 /// # Safety
-/// @src and @dst are @n word-aligned words each.
-unsafe fn load_words<W: Word>(src: *mut W, dst: *mut W, n: usize) {
+/// @src and @dst are @n words each, aligned, as Whole::load()'s.
+unsafe fn load_words<W: Whole>(src: *mut W, dst: *mut W, n: usize) {
     for i in 0..n {
-        // SAFETY: the caller's
         unsafe { dst.add(i).write(W::load(src.add(i))) }
     }
 }
 
 /// # Safety
 /// As load_words()'s.
-unsafe fn store_words<W: Word>(src: *const W, dst: *mut W, n: usize) {
+unsafe fn store_words<W: Whole>(src: *const W, dst: *mut W, n: usize) {
     for i in 0..n {
-        // SAFETY: the caller's
         unsafe { W::store(dst.add(i), src.add(i).read()) }
     }
 }
 
-impl<T> Torn<T> {
-    /// A word: T's alignment, up to a u64's - which a T is a whole number of.
-    const WORD: usize = if align_of::<T>() < size_of::<u64>() { align_of::<T>() } else { size_of::<u64>() };
-    pub const WORDS: usize = size_of::<T>() / Self::WORD;
-}
-
-impl<T: TearSafe> Torn<T> {
-    pub fn load(&self) -> T {
+impl<T: TearSafe> Whole for T {
+    unsafe fn load(p: *mut T) -> T {
         let mut v = MaybeUninit::<T>::uninit();
-        let (src, dst) = (self.0.get(), v.as_mut_ptr());
-        // SAFETY: the cell's words, aligned as T is, into @v's; each word is
-        // as a store() of a T or zeroing left it, so the words are a T's: T
-        // is TearSafe
+        let (dst, n) = (v.as_mut_ptr(), size_of::<T>() / word::<T>());
         unsafe {
-            match Self::WORD {
-                1 => load_words::<u8>(src.cast(), dst.cast(), Self::WORDS),
-                2 => load_words::<u16>(src.cast(), dst.cast(), Self::WORDS),
-                4 => load_words::<u32>(src.cast(), dst.cast(), Self::WORDS),
-                _ => load_words::<u64>(src.cast(), dst.cast(), Self::WORDS),
-            }
+            with_word!(T, |W| load_words::<W>(p.cast(), dst.cast(), n));
             v.assume_init()
         }
     }
 
-    pub fn store(&self, v: T) {
-        let (src, dst) = (core::ptr::from_ref(&v), self.0.get());
-        // SAFETY: @v's words, into the cell's, as load()'s
-        unsafe {
-            match Self::WORD {
-                1 => store_words::<u8>(src.cast(), dst.cast(), Self::WORDS),
-                2 => store_words::<u16>(src.cast(), dst.cast(), Self::WORDS),
-                4 => store_words::<u32>(src.cast(), dst.cast(), Self::WORDS),
-                _ => store_words::<u64>(src.cast(), dst.cast(), Self::WORDS),
-            }
-        }
+    unsafe fn store(p: *mut T, v: T) {
+        let v = ManuallyDrop::new(v);
+        let (src, n) = (core::ptr::from_ref(&*v), size_of::<T>() / word::<T>());
+        unsafe { with_word!(T, |W| store_words::<W>(src.cast(), p.cast(), n)) }
     }
-}
-
-// SAFETY: Torn is laid out as @T is, and @T is TearSafe: zeroes are one
-unsafe impl<T: TearSafe> AtomicWord for T {
-    type Atomic = Torn<T>;
-
-    fn load(a: &Torn<T>) -> T {
-        a.load()
-    }
-
-    fn store(a: &Torn<T>, v: T) {
-        a.store(v)
-    }
-}
-
-/// @T, Plain and one word at its alignment, is TearSafe: a Volatile of it is
-/// loaded and stored whole.
-#[macro_export]
-macro_rules! one_word {
-    ($($t:ty),* $(,)?) => { $(
-        const _: () = assert!($crate::util::projections::Torn::<$t>::WORDS == 1,
-                              ::core::concat!(::core::stringify!($t),
-                                              ": more than a word at its alignment - unsafe impl TearSafe"));
-        /* Plain is what makes zeroes one: a closed enum without a 0 isn't */
-        const _: fn() = || {
-            fn plain<T: $crate::util::vstructs::Plain>() {}
-            plain::<$t>();
-        };
-        unsafe impl $crate::util::projections::TearSafe for $t {}
-    )* };
 }
 
 /// A @T read by anyone, a word at a time, as C reads its fields. Relaxed
 /// loads and stores, as C's plain ones: a reader sees each word as it was
-/// written, not two of them as of one moment. To C, a plain @T.
+/// written, not two of them as of one moment. To C, a plain @T. A @T of
+/// one word at its alignment is loaded and stored whole; one of more is
+/// TearSafe.
 ///
 /// Volatile, not atomic: its writers don't race each other, only its
 /// readers. set() is a store, for a field with one writer - a thread's own
@@ -397,26 +340,29 @@ macro_rules! one_word {
 /// atomic, written with its fetch_add()s, and never a FakePlaceWrite: a
 /// place's load and store would lose another writer's update between them.
 #[repr(transparent)]
-pub struct Volatile<T: AtomicWord>(T::Atomic);
+#[derive(::pin_init::Zeroable)]
+pub struct Volatile<T>(UnsafeCell<T>);
 
-impl<T: AtomicWord> Volatile<T> {
-    pub fn new(v: T) -> Self {
-        let r: Self = ::pin_init::zeroed();
-        r.set(v);
-        r
+unsafe impl<T: Send> Sync for Volatile<T> {}
+
+impl<T> Volatile<T> {
+    pub const fn new(v: T) -> Self {
+        Self(UnsafeCell::new(v))
     }
+}
 
+impl<T: Copy> Volatile<T> {
     pub fn get(&self) -> T {
-        T::load(&self.0)
+        unsafe { Whole::load(self.0.get()) }
     }
 
     /// Store @v, by its one writer.
     pub fn set(&self, v: T) {
-        T::store(&self.0, v)
+        unsafe { Whole::store(self.0.get(), v) }
     }
 }
 
-impl<T: AtomicWord> FakePlaceRead for Volatile<T> {
+impl<T: Copy> FakePlaceRead for Volatile<T> {
     type Value = T;
 
     fn get(&self) -> T {
@@ -424,37 +370,32 @@ impl<T: AtomicWord> FakePlaceRead for Volatile<T> {
     }
 }
 
-// SAFETY: AtomicWord's - zeroes are a @T
-unsafe impl<T: AtomicWord> ::pin_init::Zeroable for Volatile<T> {}
-
-/// Not Copy - an atomic can't be - so a copy is a load, spelled out.
-impl<T: AtomicWord> Clone for Volatile<T> {
+/// Not Copy - it's read while it's written - so a copy is a load, spelled out.
+impl<T: Copy> Clone for Volatile<T> {
     fn clone(&self) -> Self {
         Self::new(self.get())
     }
 }
 
-impl<T: AtomicWord + Default> Default for Volatile<T> {
+impl<T: Default> Default for Volatile<T> {
     fn default() -> Self {
         Self::new(T::default())
     }
 }
 
-// SAFETY: its atomic is laid out as @T is - AtomicWord's - and any bytes are a
-// Plain @T
-unsafe impl<T: AtomicWord + crate::util::vstructs::Plain> crate::util::vstructs::Plain for Volatile<T> {}
+unsafe impl<T: crate::util::vstructs::Plain> crate::util::vstructs::Plain for Volatile<T> {}
 
 // VolatileWriter is a Volatile; its stores are atomic
-impl<T: AtomicWord> Publish for Volatile<T> {
+impl<T> Publish for Volatile<T> {
     type Writer = VolatileWriter<T>;
 }
 
 /// A Volatile, as its writer has it: the other writers excluded, so a
 /// read-modify-write through place() is whole.
 #[repr(transparent)]
-pub struct VolatileWriter<T: AtomicWord>(Volatile<T>);
+pub struct VolatileWriter<T>(Volatile<T>);
 
-impl<T: AtomicWord> VolatileWriter<T> {
+impl<T: Copy> VolatileWriter<T> {
     pub fn get(&self) -> T {
         self.0.get()
     }
@@ -470,7 +411,7 @@ impl<T: AtomicWord> VolatileWriter<T> {
     }
 }
 
-impl<T: AtomicWord> FakePlaceRead for VolatileWriter<T> {
+impl<T: Copy> FakePlaceRead for VolatileWriter<T> {
     type Value = T;
 
     fn get(&self) -> T {
@@ -478,7 +419,7 @@ impl<T: AtomicWord> FakePlaceRead for VolatileWriter<T> {
     }
 }
 
-impl<T: AtomicWord> FakePlaceWrite for VolatileWriter<T> {
+impl<T: Copy> FakePlaceWrite for VolatileWriter<T> {
     fn set(&self, v: T) {
         VolatileWriter::set(self, v)
     }
@@ -488,9 +429,9 @@ impl<T: AtomicWord> FakePlaceWrite for VolatileWriter<T> {
 /// set by whoever shows its guard.
 #[repr(transparent)]
 #[derive(::pin_init::Zeroable)]
-pub struct VolatilePublish<T: AtomicWord, G>(Volatile<T>, PhantomData<fn() -> G>);
+pub struct VolatilePublish<T, G>(Volatile<T>, PhantomData<fn() -> G>);
 
-impl<T: AtomicWord, G> VolatilePublish<T, G> {
+impl<T: Copy, G> VolatilePublish<T, G> {
     pub fn get(&self) -> T {
         self.0.get()
     }

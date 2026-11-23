@@ -39,8 +39,6 @@ macro_rules! le_int {
         // SAFETY: the integer, and zero is one
         unsafe impl<T> ::pin_init::Zeroable for $name<T> {}
 
-        unsafe impl<T: Copy> crate::util::projections::TearSafe for $name<T> {}
-
         impl crate::util::vstructs::Native for $name {
             type Native = $t;
             fn to_native(self) -> $t { self.get() }

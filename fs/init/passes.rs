@@ -164,14 +164,12 @@ use crate::util::names;
 use crate::os::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
 use crate::os::kthread::Kthread;
 use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
-use crate::util::projections::AtomicWord;
 use crate::util::vstructs::{Head, Validated, Unvalidated};
 use crate::util::place::Contained;
 use crate::os::workqueue::Queue;
 use crate::util::{DateTime, Nsecs, Printbuf};
 use crate::{bch_err, bch_info, here, inode, message, prt};
 use core::mem::size_of;
-use core::sync::atomic::{AtomicU32, Ordering};
 
 pub use crate::cstructs::init_passes_format::{PassFlags, RecoveryPass, RecoveryPassStable};
 
@@ -466,20 +464,6 @@ type Recovery<'a> = ExclusiveGuard<'a, SpinLockIrq, Runner, RecoveryWords>;
 
 fn lock(fs: &Fs) -> Recovery<'_> {
     fs.recovery.runner.lock()
-}
-
-// SAFETY: C's enum, a u32; zeroes are pass 0, NONE - and it's only ever set()
-// to a Pass
-unsafe impl AtomicWord for Pass {
-    type Atomic = AtomicU32;
-
-    fn load(a: &AtomicU32) -> Pass {
-        Pass::from_bits(a.load(Ordering::Relaxed))
-    }
-
-    fn store(a: &AtomicU32, pass: Pass) {
-        a.store(pass as u32, Ordering::Relaxed)
-    }
 }
 
 /// Whether recovery has @pass still to run, or running: as

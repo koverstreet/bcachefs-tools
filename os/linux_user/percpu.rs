@@ -78,7 +78,7 @@ use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::vstructs::Plain;
-use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
+use crate::util::projections::{FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
 /// Don't assume that we have real percpu variables available in userspace.
 pub const SIX_PERCPU_READERS: bool = false;
@@ -823,7 +823,7 @@ impl<T: PerCpuWord + From<u8>> PerCpuRef<'_, T> {
 pub unsafe trait CpuShared {}
 
 // SAFETY: every access atomic
-unsafe impl<T: AtomicWord> CpuShared for Volatile<T> {}
+unsafe impl<T> CpuShared for Volatile<T> {}
 // SAFETY: each element's
 unsafe impl<T: CpuShared, const N: usize> CpuShared for [T; N] {}
 // SAFETY: an UnsafeCell's
