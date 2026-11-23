@@ -247,7 +247,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
     /// # Safety
     /// @len is at most its capacity, and the first @len are initialized: as
     /// Vec::set_len().
-    pub unsafe fn set_len(&mut self, len: usize) {
+    unsafe fn set_len(&mut self, len: usize) {
         if self.spilled() {
             unsafe { (*self.repr.heap).set_len(len) };
         } else {

@@ -123,18 +123,13 @@ pub(crate) type BioVecs = InlineVec<c::bio_vec, BIO_INLINE_VECS, u16, BvecAlloc>
 /// Where a bio's bvec table is: its own BioVecs, or another bio's - a clone's
 /// source's, init_borrowed()'s table's - read where they are now, as they
 /// grow. bi_io_vec is only ever where they were when the bio last went out to
-/// C: raw_mut() writes it, and nothing reads it but an ITER_BVEC's, which is
-/// the iter's table.
+/// C: raw_mut() writes it, and nothing reads it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VecsAt {
     Own,
     /// A clone's, or a table its owner keeps - init_borrowed()'s: the bio
     /// whose bvecs they are, which outlives it
     Borrowed(NonNull<Bio>),
-    /// An ITER_BVEC's, which pinning its pages made the bio's, till it's
-    /// cleared for the next: the iter's table, which doesn't move - C's view
-    /// the one place its bvecs are
-    Iter,
 }
 
 #[pin_data(PinnedDrop)]
@@ -233,14 +228,9 @@ impl Bio {
         &self.bio
     }
 
-    /// An ITER_BVEC's are the iter's. A clone has none of its own: its
-    /// source's are its, from its position.
+    /// A clone has none of its own: its source's are its, from its position.
     fn bvecs(&self) -> &[c::bio_vec] {
-        match self.vecs_at {
-            VecsAt::Iter       => unsafe { core::slice::from_raw_parts(self.table(), self.bio.bi_vcnt.into()) },
-            _ if self.cloned() => &[],
-            _                  => &self.vecs_owner().vecs,
-        }
+        if self.cloned() { &[] } else { &self.vecs_owner().vecs }
     }
 
     pub fn nr_vecs(&self) -> u16 {
@@ -255,43 +245,17 @@ impl Bio {
     /// its bvecs, where they are now.
     pub(crate) fn raw_mut(self: Pin<&mut Self>) -> &mut c::bio {
         let this = self.project();
-        match *this.vecs_at {
-            VecsAt::Own         => bi_io_vec!(*this.bio) = this.vecs.as_mut_ptr(),
-            VecsAt::Borrowed(s) => bi_io_vec!(*this.bio) = unsafe { s.as_ref() }.bvecs().as_ptr().cast_mut(),
-            VecsAt::Iter        => {}
-        }
+        bi_io_vec!(*this.bio) = match *this.vecs_at {
+            VecsAt::Own         => this.vecs.as_mut_ptr(),
+            VecsAt::Borrowed(s) => unsafe { s.as_ref() }.bvecs().as_ptr().cast_mut(),
+        };
         this.bio
     }
 
     fn vecs_owner(&self) -> &Bio {
         match self.vecs_at {
-            VecsAt::Own | VecsAt::Iter => self,
-            VecsAt::Borrowed(s)        => unsafe { s.as_ref() },
-        }
-    }
-
-    /// bi_io_vec, for an ITER_BVEC's table: from 7.4 a union's, so unsafe to
-    /// read, for a bio no dma-buf has - none of ours.
-    #[allow(unused_unsafe)]
-    fn table(&self) -> *mut c::bio_vec {
-        unsafe { bi_io_vec!(self.bio) }
-    }
-
-    /// After C has filled it, pinning its pages: what C pushed onto its vec,
-    /// in the room past its length, now its own - or, an ITER_BVEC's, C took
-    /// the iter's table for it, which is its table till it's done.
-    #[cfg(kernel)]
-    pub(crate) fn raw_filled(self: Pin<&mut Self>) {
-        let table = self.table();
-        let this = self.project();
-        match *this.vecs_at {
-            VecsAt::Own if table == this.vecs.as_mut_ptr() => {
-                let nr = usize::from(this.bio.bi_vcnt);
-                assert!(nr >= this.vecs.len() && nr <= this.vecs.capacity(), "C filled a bio past its vec's room");
-                unsafe { this.vecs.set_len(nr) };
-            }
-            VecsAt::Own => *this.vecs_at = VecsAt::Iter,
-            _ => {}
+            VecsAt::Own         => self,
+            VecsAt::Borrowed(s) => unsafe { s.as_ref() },
         }
     }
 
@@ -360,10 +324,11 @@ impl Bio {
     /// bvecs are full.
     ///
     /// # Safety
-    /// @folio stays locked, or in writeback, till the bio's done with it.
+    /// @folio stays held - locked, in writeback, pinned, or the caller's - till
+    /// the bio's done with it.
     #[cfg(kernel)]
-    pub unsafe fn add_folio_part<A>(mut self: Pin<&mut Self>, folio: &crate::os::folio::Folio<A>, offset: usize,
-                                    len: usize) {
+    pub(crate) unsafe fn add_folio_part<A>(mut self: Pin<&mut Self>, folio: &crate::os::folio::Folio<A>,
+                                           offset: usize, len: usize) {
         assert!(offset + len <= folio.size(), "adding {len} bytes at {offset} of a folio of {}", folio.size());
         assert!(self.vecs.len() < usize::from(self.max_vecs()), "adding a folio: the bio's bvecs are full");
         self.as_mut().project().vecs
@@ -376,11 +341,7 @@ impl Bio {
     /// Emptied, for another IO from scratch: bio_reset(), its bvecs and its
     /// position gone - a bio whose pages are new each IO, a dio's.
     pub fn clear(mut self: Pin<&mut Self>, opf: u32) {
-        let this = self.as_mut().project();
-        if *this.vecs_at == VecsAt::Iter {
-            *this.vecs_at = VecsAt::Own;
-        }
-        this.vecs.clear();
+        self.as_mut().project().vecs.clear();
         unsafe { crate::os::bio::reset(self.as_mut().raw_mut(), core::ptr::null_mut(), opf) };
         self.sync();
     }
