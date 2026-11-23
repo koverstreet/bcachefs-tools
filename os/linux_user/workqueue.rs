@@ -162,8 +162,8 @@ impl Queue {
         unsafe { Self::from_raw(&raw mut queues::EVENTS_LONG) }
     }
 
-    /// system_wq: per-cpu, what schedule_work_on() queues on.
-    pub fn system() -> &'static Queue {
+    /// system_percpu_wq: per-cpu, what schedule_work_on() queues on.
+    pub fn system_percpu() -> &'static Queue {
         // SAFETY: the system's
         unsafe { Self::from_raw(&raw mut queues::EVENTS) }
     }
