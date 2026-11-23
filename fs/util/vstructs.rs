@@ -25,7 +25,7 @@
 //!
 //! An unsized vstruct is a Family of definitions, one per State, written by
 //! #[unsized_vstruct]; jset<S> picks one. Validated, the default, is what's
-//! been read and validated (SelfSized::from_thin()): its counts are trusted.
+//! been read and validated (assume_validated()): its counts are trusted.
 //! Unvalidated is bytes from outside - off a device, from the kernel
 //! (from_bytes()): its count is checked against them, its entries' as
 //! they're walked. Each derefs to its header, Head<T>. The count
@@ -1916,13 +1916,13 @@ mod tests {
         buf
     }
 
-    /// A validated jset - as from_thin() makes one - is as long as its count
-    /// says, and so is each of its entries.
+    /// A validated jset is as long as its count says, and so is each of its
+    /// entries.
     #[test]
     fn entries_walk_variable_size_entries() {
         let buf = jset(3);
-        // SAFETY: the buffer's, as long as its count says
-        let j = unsafe { &*c::jset::<Validated>::from_thin(buf.as_ptr().cast()) };
+        // SAFETY: valid, as built
+        let j = unsafe { c::jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(j.as_bytes().len(), buf.len() * 8);
         let es: Vec<_> = j.entries().collect();
         assert_eq!(es.len(), 2);
@@ -1941,8 +1941,8 @@ mod tests {
         put(&mut buf, 0, &e);
         buf[1] = 77;                            // v
         buf[2] = 1 | 2 << 8 | 1 << 16 | 3 << 24 | 5 << 32; // r: data_type, nr_devs 2, nr_required, devs 3, 5
-        // SAFETY: the buffer's, as long as its count says
-        let e = unsafe { &*c::jset_entry::<Validated>::from_thin(buf.as_ptr().cast()) };
+        // SAFETY: valid, as built
+        let e = unsafe { c::jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         let Ok(c::JsetEntryRef::data_usage(u)) = e.typed() else { panic!("a data_usage entry") };
         assert_eq!((u.v.get(), u.as_bytes().len()), (77, 16));
         assert_eq!(&u._rest[..u.r.nr_devs as usize], [3, 5]);
@@ -1951,7 +1951,7 @@ mod tests {
         e.type_ = c::JsetEntryType::data_usage.0 as u8;
         put(&mut buf, 0, &e);
         // SAFETY: as above
-        let e = unsafe { &*c::jset_entry::<Validated>::from_thin(buf.as_ptr().cast()) };
+        let e = unsafe { c::jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(e.as_bytes().len(), 16);
         assert!(e.typed().is_err());
     }
@@ -1960,8 +1960,9 @@ mod tests {
     #[test]
     fn entries_stop_at_an_overrun() {
         let buf = jset(4);
-        // SAFETY: the buffer's, as long as its count says
-        let j = unsafe { &*c::jset::<Validated>::from_thin(buf.as_ptr().cast()) };
+        // SAFETY: valid, as built - but for the entry past it, which the walk
+        // ends at
+        let j = unsafe { c::jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(j.entries().count(), 1);
     }
 
@@ -2000,13 +2001,13 @@ mod tests {
     #[test]
     fn entries_end_at_a_zero_length_entry() {
         let buf = sb(0);
-        // SAFETY: the buffer's, as long as its count says
-        let sb = unsafe { &*c::bch_sb::<Validated>::from_thin(buf.as_ptr().cast()) };
+        // SAFETY: valid, as built - but for the field that ends the walk
+        let sb = unsafe { c::bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(sb.entries().count(), 0);
 
         let buf = self::sb(1);
         // SAFETY: as above
-        let sb = unsafe { &*c::bch_sb::<Validated>::from_thin(buf.as_ptr().cast()) };
+        let sb = unsafe { c::bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(sb.entries().count(), 1);
     }
 
@@ -2053,8 +2054,8 @@ mod tests {
         f.type_ = Le32::new(c::SbFieldType::clean.0);
         put(&mut buf, 0, &f);
         put(&mut buf, hdr + start, &entry(1));
-        // SAFETY: the buffer's, as long as its count says
-        let f = unsafe { &*c::bch_sb_field::<Validated>::from_thin(buf.as_ptr().cast()) };
+        // SAFETY: valid, as built
+        let f = unsafe { c::bch_sb_field::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         let clean = f.arm::<c::bch_sb_field_clean<Validated>>().expect("a clean section");
         assert_eq!(clean.as_bytes().len(), buf.len() * 8 - hdr);
         let es: Vec<_> = clean.entries().collect();
@@ -2130,6 +2131,7 @@ mod tests {
 mod unsized_tests {
     use super::*;
     use crate::types::{Le16, Le32};
+    use crate::util::thin::ThinRef;
     use cstruct_macros::{unsized_vstruct, MaybeZeroable, Plain};
 
     /// A container of tents: 8 bytes of header, its u64s counting what follows.
@@ -2192,9 +2194,10 @@ mod unsized_tests {
             .unwrap();
         assert_eq!(e, [(1, 8), (2, 24), (3, 16)]);
 
-        // from a pointer to its header - validated, trusted
-        // SAFETY: the buffer's, as long as its count says
-        let c = unsafe { &*tcont::<Validated>::from_thin(buf.as_ptr().cast()) };
+        // validated, through a thin pointer - its address alone
+        // SAFETY: valid, as built
+        let c = unsafe { c.assume_validated() };
+        let c = ThinRef::from(c).get();
         assert_eq!(c.as_bytes().len(), 56);
         assert_eq!(c.entries().map(|e| e.ty).collect::<Vec<_>>(), [1, 2, 3]);
         assert_eq!(c.as_bytes().as_ptr(), buf.as_ptr().cast::<u8>());
@@ -2218,8 +2221,9 @@ mod unsized_tests {
         let r: Vec<_> = c.entries().collect();
         assert!(matches!(r.as_slice(), [Ok(_), Err(VStructError::Overrun { want: 40, have: 24, .. })]));
 
-        // SAFETY: the buffer's, as long as its count says
-        let c = unsafe { &*tcont::<Validated>::from_thin(buf.as_ptr().cast()) };
+        // SAFETY: valid, as built - but for the entry past it, which the walk
+        // ends at
+        let c = unsafe { c.assume_validated() };
         assert_eq!(c.entries().count(), 1);
     }
 
