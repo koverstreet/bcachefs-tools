@@ -96,11 +96,16 @@ fn gc_btree(trans: &BtreeTrans<'_>, progress: &Progress<'_>, btree: Btree, targe
             fs.gc.set_pos(c::gc_pos::in_btree(btree, level as u16, k.k.p));
             progress.update(t, iter)?;
 
-            let b = t.trans().paths().held_btree_node(iter.path, level as usize).expect("the node its key is in");
-            if prev != Some(NonNull::from(&*b)) {
-                check_topology(t, b)?;
-            }
-            prev = Some(NonNull::from(&*b));
+            let node = {
+                let paths = t.trans().paths();
+                let b = paths[iter.path].locked_btree_node(level as usize).expect("the node its key is in");
+                let node = NonNull::from(&*b);
+                if prev != Some(node) {
+                    check_topology(t, b)?;
+                }
+                node
+            };
+            prev = Some(node);
 
             gc_mark_key(t, btree, level, iter, k)
         })?;
