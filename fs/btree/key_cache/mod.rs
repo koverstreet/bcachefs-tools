@@ -221,6 +221,10 @@ impl<'a> LockedEntry<'a> {
         (self.ck.node(), self.held)
     }
 
+    fn held(&self) -> LockedNode<'_, c::bkey_cached> {
+        self.ck.held()
+    }
+
     fn contents(&self) -> &EntryContents {
         self.ck.contents()
     }

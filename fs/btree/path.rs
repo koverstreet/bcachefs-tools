@@ -1963,7 +1963,7 @@ impl<T: PathNode> BtreePath<T> {
     /// The level's hold, through @f - which has what the level holds after:
     /// None, unlocked, its node and lock_seq kept for a relock.
     fn change_level(&mut self, level: usize, f: impl FnOnce(SixHold<'_>) -> Option<SixHold<'_>>) {
-        let Some(hold) = self.take_level(level) else { return };
+        let Some((_, hold)) = self.take_level(level) else { return };
 
         let locked = f(hold).map_or(BTREE_NODE_UNLOCKED, |hold| BtreeNodeLockedType::from_six(hold.into_raw()));
         self.mark_locked_noreset(level, locked);
@@ -1991,16 +1991,17 @@ impl<T: PathNode> BtreePath<T> {
         let _ = level;
     }
 
-    /// The level's hold, the path's no more: its node and lock_seq kept for a
-    /// relock.
-    pub fn take_level(&mut self, level: usize) -> Option<SixHold<'_>> {
+    /// The level's node and its hold, the path's no more: its node and lock_seq
+    /// kept for a relock.
+    pub fn take_level(&mut self, level: usize) -> Option<(&T, SixHold<'_>)> {
         let locked = self.locked_type(level);
         if locked == BTREE_NODE_UNLOCKED {
             return None;
         }
 
         self.mark_locked_noreset(level, BTREE_NODE_UNLOCKED);
-        Some(unsafe { SixHold::from_raw(self.held_lock(level), locked.six()) })
+        let node = self.held_node(level);
+        Some(unsafe { (node.as_ref(), SixHold::from_raw(self.held_lock(level), locked.six())) })
     }
 
     /// Whether there was a lock to drop.

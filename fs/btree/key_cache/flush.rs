@@ -4,7 +4,7 @@ use super::LockedEntry;
 use crate::btree::bkey::BkeySC;
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, UpdateTriggerFlags, Watermark};
-use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths};
+use crate::btree::path::{LockedNode, NodePtr, PathIdx, PathNode, Paths};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::c;
@@ -20,6 +20,7 @@ use crate::{fs_fatal_error, prt};
 use c::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
 use c::SixLockType::SIX_LOCK_intent;
 use core::ffi::c_int;
+use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
 
 /*
@@ -152,7 +153,8 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
         }
         bkey_cached_check_pin(fs, ck);
 
-        let mut ck = LockedEntry::new(ck.node(), paths[path].take_level(0).expect("a flushed cached path not locked"));
+        let (node, held) = paths[path].take_level(0).expect("a flushed cached path not locked");
+        let mut ck = LockedEntry::new(c::bkey_cached::from_common(node).expect("a flushed path's btree node"), held);
         if bc.bkey_cached_evict(&mut ck) {
             bc.bkey_cached_free(trans, ck);
         }
@@ -362,10 +364,13 @@ pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<
 
 /// # Safety
 /// @idx is a cached path holding its entry write locked.
+#[inline(never)]
 pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx) {
     let fs = trans.fs();
     let bc = &fs.btree.key_cache;
-    let ck = paths.held_key_cached(idx).expect("a key cache drop with no entry locked");
+    let (dropped, held) = paths[idx].take_level(0).expect("a key cache drop of an entry not locked");
+    let mut ck = LockedEntry::new(c::bkey_cached::from_common(dropped).expect("a key cache drop of a btree node"), held);
+    let dropped = ptr::from_ref(dropped);
 
     /*
      * We just did an update to the btree, bypassing the key cache: the key
@@ -376,14 +381,13 @@ pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Path
         bc.nr_dirty.fetch_sub(1, Relaxed);
         fs.journal.pin_drop(&ck.journal);
     }
-    bkey_cached_check_pin(fs, ck);
+    bkey_cached_check_pin(fs, ck.held());
 
-    let mut locked = LockedEntry::new(ck.node(), paths[idx].take_level(0).expect("a key cache drop of an entry not locked"));
-    bc.bkey_cached_evict(&mut locked);
-    bc.bkey_cached_free(trans, locked);
+    bc.bkey_cached_evict(&mut ck);
+    bc.bkey_cached_free(trans, ck);
 
     for i in trans.path_idxs() {
-        if paths[i].l[0].b.is(&ck.c) {
+        if paths[i].l[0].b.is(dropped) {
             /*
              * It's safe to clear should_be_locked here because
              * we're evicting from the key cache, and we still have
