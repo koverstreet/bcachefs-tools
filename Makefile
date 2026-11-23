@@ -157,7 +157,8 @@ CFLAGS+=$(call cc-disable-warning, zero-length-array)
 CFLAGS+=$(call cc-disable-warning, shift-overflow)
 CFLAGS+=$(call cc-disable-warning, enum-conversion)
 CFLAGS+=$(call cc-disable-warning, gnu-variable-sized-type-not-at-end)
-export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries
+# Cold paths out of line, as the module's are: fs/Makefile.rust
+export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries -C llvm-args=-hot-cold-split=true
 
 PKGCONFIG_LIBS="blkid uuid liburcu zlib liblz4 libzstd libudev libunwind"
 

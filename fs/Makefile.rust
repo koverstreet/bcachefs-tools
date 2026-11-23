@@ -173,6 +173,11 @@ ifdef CONFIG_X86_64
 RUSTFLAGS_mod.o += -Ctarget-feature=+fsrm -Cllvm-args=-x86-use-fsrm-for-memcpy
 endif
 
+# What leads only to a cold call - a panic's message formatted, an expect(),
+# a failed bounds check, invariant_failed() - out of the function it's in, into
+# one of its own in .text.unlikely: the code that runs is denser.
+RUSTFLAGS_mod.o += -Cllvm-args=-hot-cold-split=true
+
 # Our crate is edition 2024; kbuild's flags have the kernel's, 2021, and rustc
 # takes one --edition.
 RUSTFLAGS_REMOVE_mod.o += --edition=2021
