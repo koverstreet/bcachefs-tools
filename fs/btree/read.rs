@@ -664,13 +664,13 @@ fn read_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, contents: &mut No
         v.keys_lost();
     }
 
-    validate_bset(v, n, written as u32)?;
+    validate_bset(v, contents, n, written as u32)?;
 
     if let Some(bn) = n.node() {
         contents.set_format(bn.format);
     }
 
-    validate_bset_keys(v, n)?;
+    validate_bset_keys(v, contents, n)?;
 
     let i = n.bset_mut();
     i.set_big_endian(cfg!(target_endian = "big"));

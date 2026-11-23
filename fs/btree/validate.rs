@@ -216,9 +216,9 @@ macro_rules! btree_err_on {
 }
 pub(crate) use {btree_err, btree_err_on};
 
-/// @v's key inside @b's range.
-pub fn bkey_in_btree_node(v: &BkeyValidate<'_, '_>, b: &BtreeNode) -> Result<(), BchError> {
-    let data = unsafe { b.contents() }.data();
+/// @v's key inside the range of the node @contents are.
+pub fn bkey_in_btree_node(v: &BkeyValidate<'_, '_>, contents: &NodeContents) -> Result<(), BchError> {
+    let data = contents.data();
 
     bkey_fsck_err_on!(v, v.k.k.p < data.min_key, id::bkey_before_start_of_btree_node,
                       "key before start of btree node")?;
@@ -234,9 +234,9 @@ fn compat_btree_node(big_endian: bool, bn: &mut c::btree_node<Unvalidated>) {
     }
 }
 
-pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H, offset: u32) -> Result<(), BchError> {
+pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, contents: &NodeContents, n: &mut H,
+                                             offset: u32) -> Result<(), BchError> {
     let (fs, b) = (v.fs, v.b);
-    let contents = unsafe { b.contents() };
     let write = v.writing();
     let i = n.bset_mut();
     let version = i.version.get();
@@ -384,13 +384,13 @@ pub fn btree_node_bkey_val_validate(fs: &Fs, b: &BtreeNode, k: BkeySC<'_>,
     bkey_val_validate(&BkeyValidate::new(fs, k, &validate_from(b, flags)))
 }
 
-fn bset_key_validate(fs: &Fs, b: &BtreeNode, k: BkeySC<'_>, updated_range: bool,
+fn bset_key_validate(fs: &Fs, contents: &NodeContents, k: BkeySC<'_>, updated_range: bool,
                      from: &c::bkey_validate_context) -> Result<(), BchError> {
     let v = BkeyValidate::new(fs, k, from);
 
     bkey_header_validate(&v)?;
     if !updated_range {
-        bkey_in_btree_node(&v, b)?;
+        bkey_in_btree_node(&v, contents)?;
     }
     if from.bits.flags().contains(ValidateFlags::write) {
         bkey_val_validate(&v)?;
@@ -455,7 +455,7 @@ enum Key {
 /// write - and against the key before it, at @prev.
 fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<Unvalidated>,
                   at: usize, prev: Option<usize>) -> Result<Key, BchError> {
-    let (fs, b, contents) = (v.fs, v.b, ks.contents);
+    let (fs, contents) = (v.fs, ks.contents);
     let h = i.key_header(at).expect("a key's first word, before the end of its bset");
     let (u64s, format, key_u64s) = (h.u64s(), h.format(), h.key_u64s(&contents.format));
     let here = ErrAt::key(i, ks.keys_at + at);
@@ -490,7 +490,7 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<U
     let mut tmp = c::bkey::default();
     let u = k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut tmp);
 
-    match bset_key_validate(fs, b, u, ks.updated_range, &ks.from) {
+    match bset_key_validate(fs, contents, u, ks.updated_range, &ks.from) {
         Err(err) if err == BchError::from(e::fsck_delete_bkey) => return Ok(Key::Drop(u64s)),
         r => r?,
     }
@@ -553,8 +553,9 @@ fn bset_key_drop<'i>(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &'i mut c::
     i.remove(at, next_good_key * 8)
 }
 
-pub fn validate_bset_keys<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H) -> Result<(), BchError> {
-    let contents = unsafe { v.b.contents() };
+pub fn validate_bset_keys<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, contents: &NodeContents, n: &mut H)
+    -> Result<(), BchError>
+{
     let mut i = n.bset_mut();
     let ks = BsetKeys {
         contents,

@@ -305,8 +305,8 @@ fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, conte
     }
 
     let mut v = NodeValidate { fs, b, io: NodeIo::Write };
-    let ret = validate_bset_keys(&mut v, n)
-        .and_then(|()| validate_bset(&mut v, n, b.written.get().into()));
+    let ret = validate_bset_keys(&mut v, contents, n)
+        .and_then(|()| validate_bset(&mut v, contents, n, b.written.get().into()));
     if ret.is_err() {
         fs.inconsistent();
         dump_stack();
